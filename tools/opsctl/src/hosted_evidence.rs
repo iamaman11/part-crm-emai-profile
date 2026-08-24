@@ -615,8 +615,9 @@ fn render_artifact(
 #[cfg(test)]
 mod tests {
     use super::{
-        claim_sha256_for_record, seal_operational_credential_json,
-        verify_external_review_attestations_json, verify_operational_credential_json,
+        HostedEvidenceAdapterError, claim_sha256_for_record, object_string, record_string,
+        seal_operational_credential_json, verify_external_review_attestations_json,
+        verify_operational_credential_json,
     };
     use serde_json::{Value, json};
 
@@ -671,16 +672,17 @@ mod tests {
         record
     }
 
-    fn observed_record(record: Value) -> Value {
-        let reference = record["review"]["review_reference"]
-            .as_str()
-            .expect("fixture review reference")
-            .to_owned();
-        let digest = claim_sha256_for_record(&record).expect("fixture claim digest");
-        let evidence_id = record["evidence_id"].as_str().expect("fixture evidence id");
-        let gate = record["gate"].as_str().expect("fixture gate");
-        let status = record["status"].as_str().expect("fixture status");
-        json!({
+    fn observed_record(record: Value) -> Result<Value, HostedEvidenceAdapterError> {
+        let review = record
+            .get("review")
+            .and_then(Value::as_object)
+            .ok_or_else(|| HostedEvidenceAdapterError::new("fixture review object missing"))?;
+        let reference = object_string(review, "review_reference", "fixture.review")?.to_owned();
+        let digest = claim_sha256_for_record(&record)?;
+        let evidence_id = record_string(&record, "evidence_id")?.to_owned();
+        let gate = record_string(&record, "gate")?.to_owned();
+        let status = record_string(&record, "status")?.to_owned();
+        Ok(json!({
             "record": record,
             "review_repository": "acme/profile-platform",
             "review_reference": reference,
@@ -692,7 +694,7 @@ mod tests {
                 ),
                 "effective_timestamp": "2026-08-06T14:40:00Z"
             }
-        })
+        }))
     }
 
     fn review_batch(records: Vec<Value>) -> Value {
@@ -788,20 +790,21 @@ mod tests {
             None,
         );
         let result = verify_external_review_attestations_json(
-            &review_batch(vec![observed_record(record)]).to_string(),
+            &review_batch(vec![observed_record(record)?]).to_string(),
         )?;
         assert!(result.contains("\"verified_records\": 1"));
         Ok(())
     }
 
     #[test]
-    fn external_review_adapter_rejects_unknown_or_legacy_observation_fields() {
+    fn external_review_adapter_rejects_unknown_or_legacy_observation_fields()
+    -> Result<(), Box<dyn std::error::Error>> {
         let record = terminal_record(
             "ev-20260806-terminal",
             "https://github.com/acme/profile-platform/issues/9#issuecomment-101",
             None,
         );
-        let mut unknown = review_batch(vec![observed_record(record)]);
+        let mut unknown = review_batch(vec![observed_record(record)?]);
         unknown["token"] = Value::String("must-not-cross-boundary".to_owned());
         assert!(verify_external_review_attestations_json(&unknown.to_string()).is_err());
 
@@ -812,16 +815,18 @@ mod tests {
             "records": []
         });
         assert!(verify_external_review_attestations_json(&legacy.to_string()).is_err());
+        Ok(())
     }
 
     #[test]
-    fn external_review_adapter_rejects_provider_mutation_and_foreign_binding() {
+    fn external_review_adapter_rejects_provider_mutation_and_foreign_binding()
+    -> Result<(), Box<dyn std::error::Error>> {
         let record = terminal_record(
             "ev-20260806-terminal",
             "https://github.com/acme/profile-platform/issues/9#issuecomment-101",
             None,
         );
-        let observed = observed_record(record);
+        let observed = observed_record(record)?;
 
         let mut wrong_body = review_batch(vec![observed.clone()]);
         wrong_body["records"][0]["provider_object"]["body"] =
@@ -845,6 +850,7 @@ mod tests {
         let mut foreign = review_batch(vec![observed]);
         foreign["records"][0]["review_repository"] = Value::String("other/repository".to_owned());
         assert!(verify_external_review_attestations_json(&foreign.to_string()).is_err());
+        Ok(())
     }
 
     #[test]
@@ -861,10 +867,10 @@ mod tests {
             "https://github.com/acme/profile-platform/issues/9#issuecomment-505",
             Some(old_id),
         );
-        let mut old_observed = observed_record(old);
+        let mut old_observed = observed_record(old)?;
         old_observed["provider_object"]["available"] = Value::Bool(false);
         let result = verify_external_review_attestations_json(
-            &review_batch(vec![old_observed, observed_record(replacement)]).to_string(),
+            &review_batch(vec![old_observed, observed_record(replacement)?]).to_string(),
         )?;
         assert!(result.contains("\"verified_records\": 1"));
         Ok(())
