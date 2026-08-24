@@ -20,7 +20,7 @@ OPSCTL_SOURCE = Path("tools/opsctl/src")
 ADR = Path("docs/adr/ADR-0001-fingerprint-stability-policy.md")
 AR10_EVIDENCE = Path("docs/ARCHITECTURE_REBASELINE_V3_AR10.md")
 AR10_ACCEPTANCE_EVIDENCE = Path("docs/evidence/2026-08-19-ar10-final-acceptance.json")
-AR10_AUTHORITY = Path("architecture/runtime-cutover-ar10.json")
+RETIRED_RUNTIME_CUTOVER = Path("architecture/runtime-cutover-ar10.json")
 LEGACY_EXECUTABLES = {
     "check_mail.py",
     "profile_manager.py",
@@ -45,7 +45,7 @@ EXPECTED_LOCK: dict[str, Any] = {
     "fingerprint_policy_version": "profile-stability-v1",
     "python": "3.12",
     "python_source": {
-        "commit": "cd83f7fd2fdf631dfde0c7eb53bd3d30f102ec4a",
+        "commit": "cd83f7fd2fdf631df0c7eb53bd3d30f102ec4a",
         "repository": "daijro/camoufox",
     },
     "runtime_role": "real_camoufox",
@@ -378,6 +378,12 @@ def validate_legacy_retirement(root: Path) -> None:
                     )
 
 
+def validate_retired_runtime_authority(root: Path) -> None:
+    path = root / RETIRED_RUNTIME_CUTOVER
+    if path.exists() or path.is_symlink():
+        fail("retired AR-10 runtime-cutover semantic authority was reintroduced")
+
+
 def validate_acceptance_projection(root: Path) -> None:
     adr = read_regular(root, ADR)
     if "**Статус:** accepted" not in adr:
@@ -392,15 +398,6 @@ def validate_acceptance_projection(root: Path) -> None:
     ):
         if marker not in adr:
             fail(f"ADR-0001 lost required policy class/upgrade invariant: {marker}")
-    authority = json.loads(read_regular(root, AR10_AUTHORITY))
-    if authority.get("schema_version") != 1 or authority.get("status") != "accepted":
-        fail("AR-10 runtime-cutover machine authority must be accepted after guarded merge")
-    if authority.get("production_mutation") is not False or authority.get("production_ready") is not False:
-        fail("AR-10 must remain production fail-closed")
-    if authority.get("legacy_executables_remaining") != 0:
-        fail("AR-10 authority must project zero historical direct executables")
-    if authority.get("real_runtime", {}).get("production_certified") is not False:
-        fail("repository integration must not masquerade as external production certification")
     read_regular(root, AR10_EVIDENCE)
     evidence = json.loads(read_regular(root, AR10_ACCEPTANCE_EVIDENCE))
     if evidence.get("kind") != "AR10_FINAL_ACCEPTANCE" or evidence.get("implementation_merge") != "7ab5edf583f541d08ff732624af25881d430d427":
@@ -411,6 +408,7 @@ def validate_acceptance_projection(root: Path) -> None:
 
 def validate_preflight(root: Path) -> None:
     """Validate the supported runtime boundary before runtime parity proof."""
+    validate_retired_runtime_authority(root)
     validate_runtime_lock(root)
     validate_real_runtime(root)
     validate_synthetic_runtime(root)
