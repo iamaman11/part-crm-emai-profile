@@ -2,7 +2,7 @@ use crate::canonical::{canonical_json, canonical_pretty_json, parse_strict_json,
 use opsctl_core::hosted_evidence::{
     EvidenceBindingV1, EvidenceEnvironment, EvidenceIssuer, EvidenceOutcome, EvidencePolicyError,
     EvidencePolicyV3, EvidenceSource, EvidenceSubject, EvidenceTarget, EvidenceTrustState,
-    HostedEvidenceEnvelopeV3, HostedEvidenceObservationV3,
+    ExpectedAccountBindingV1, HostedEvidenceEnvelopeV3, HostedEvidenceObservationV3,
     OperationalCredentialAccountObservationV1, OperationalCredentialAttestationObservationV1,
     OperationalCredentialPolicyObservationV1, OperationalCredentialReadObservationV3,
     OperationalCredentialTokenVerifyObservationV1, ReviewAttestationObservationV1,
@@ -567,8 +567,10 @@ fn operational_credential_policy(
         OPERATIONAL_CREDENTIAL_ID,
         OPERATIONAL_CREDENTIAL_ATTESTATION_KIND,
         OPERATIONAL_CREDENTIAL_ATTESTATION_SOURCE,
-        OPERATIONAL_CREDENTIAL_ACCOUNT_ID,
-        OPERATIONAL_CREDENTIAL_ACCOUNT_NAME,
+        ExpectedAccountBindingV1::new(
+            OPERATIONAL_CREDENTIAL_ACCOUNT_ID,
+            OPERATIONAL_CREDENTIAL_ACCOUNT_NAME,
+        )?,
         OPERATIONAL_CREDENTIAL_MUTATION_PROBE,
     )
     .map_err(Into::into)
