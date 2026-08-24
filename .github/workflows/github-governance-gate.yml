@@ -288,7 +288,7 @@ jobs:
             npx --yes wrangler@4.94.0 queues info "$queue_name" \
               > "$RUNNER_TEMP/ar11-observe-queue.txt"
           CLOUDFLARE_API_TOKEN="$CLOUDFLARE_OBSERVE_API_TOKEN" CLOUDFLARE_ACCOUNT_ID="$account_id" \
-            npx --yes wrangler@4.94.0 secret list --name "$worker_name" --json \
+            npx --yes wrangler@4.94.0 secret list --name "$worker_name" --format json \
               > "$RUNNER_TEMP/ar11-observe-secret-list.json"
 
           jq -n '{
