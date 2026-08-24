@@ -4,6 +4,7 @@ USAGE:
     opsctl [--root PATH] <COMMAND>
     opsctl [--root PATH] credentials <ACTION>
     opsctl [--root PATH] hosted-evidence operational-credential <seal|verify> [HOSTED EVIDENCE OPTIONS]
+    opsctl [--root PATH] hosted-evidence external-review-attestation verify --observation-json PATH
     opsctl [--root PATH] d1 repository
     opsctl [--root PATH] d1 <ACTION> --component COMPONENT --ledger-json PATH [D1 OPTIONS]
     opsctl [--root PATH] release finalize --request-json PATH
@@ -20,6 +21,8 @@ COMMANDS:
                                Turn one secret-free staging observation into typed canonical hosted evidence
     hosted-evidence operational-credential verify
                                Verify canonical digest, binding, trust, freshness and replay policy
+    hosted-evidence external-review-attestation verify
+                               Verify active terminal GitHub review observations with typed Rust policy
     d1 repository              Project typed D1 policy and SQL-derived repository identity
     d1 status                  Classify a saved D1 migration ledger against canonical history
     d1 plan                    Build a deterministic migration/rollback plan
@@ -34,11 +37,11 @@ COMMANDS:
     promotion verify           Verify observed state after provider mutation
 
 HOSTED EVIDENCE OPTIONS:
-    --observation-json PATH     Secret-free strict observation DTO; seal only
-    --artifact-json PATH        Canonical durable HostedEvidenceArtifact; verify only
+    --observation-json PATH     Secret-free strict observation DTO; operational-credential seal or external-review-attestation verify
+    --artifact-json PATH        Canonical durable HostedEvidenceArtifact; operational-credential verify only
     --evaluated-at-unix-seconds N
-                               Explicit outer clock observation used for freshness/replay policy
-    --expected-subject SHA      Exact accepted-source 40-character lowercase Git commit SHA
+                               Explicit outer clock observation used for operational-credential freshness/replay policy
+    --expected-subject SHA      Exact accepted-source 40-character lowercase Git commit SHA for operational-credential evidence
 
 D1 OPTIONS:
     --component ID              catalog or resolver
@@ -79,4 +82,4 @@ STATUS OPTIONS:
     --acceptance-evidence-json PATH
                                Strict local observation DTO from the outer Git/GitHub shell
 
-AR-11/PF-2 operator commands remain local, read-only and metadata/artifact-verification-only. Hosted evidence consumes only explicit secret-free observation bytes, an explicit evaluation timestamp and an exact accepted-source subject; opsctl never reads the system clock, provider state or credentials for that decision. Release finalization consumes only explicit local packaging observations plus canonical repository inputs and writes only its machine-readable result to stdout. opsctl never executes Python, Node, npx, Wrangler, provider APIs, database mutation, secret access, deployment, or customer-state mutation. GitHub Actions/Environments retain orchestration/approval and publication authority, and provider executors retain actual mutation authority.
+AR-11/PF-2 operator commands remain local, read-only and metadata/artifact-verification-only. Hosted evidence consumes only explicit secret-free observation bytes and, where freshness is part of the consumer contract, an explicit evaluation timestamp plus exact accepted-source subject; opsctl never reads the system clock, provider state or credentials for that decision. External review attestation verification consumes only a strict observation DTO captured by the outer GitHub shell and owns repository/reference/reviewer/timestamp/canonical-claim semantics in typed Rust. Release finalization consumes only explicit local packaging observations plus canonical repository inputs and writes only its machine-readable result to stdout. opsctl never executes Python, Node, npx, Wrangler, provider APIs, database mutation, secret access, deployment, or customer-state mutation. GitHub Actions/Environments retain orchestration/approval and publication authority, and provider executors retain actual mutation authority.
