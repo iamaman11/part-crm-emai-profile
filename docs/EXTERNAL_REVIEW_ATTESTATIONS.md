@@ -92,9 +92,19 @@ Python-адаптером в semantic verdict; эти observations переда�
 
 ## 4. Identity, Timestamp И Recovery
 
+Expected repository не объявляется observation DTO. Canonical project binding
+принадлежит existing `opsctl` adapter и равен
+`iamaman11/part-crm-emai-profile`. Поле batch `repository` остаётся observed/declarative
+metadata: adapter строго парсит его и требует case-insensitive совпадения с
+canonical project target до policy evaluation. Pure policy получает уже canonical
+expected repository. Поэтому конструкция `expected := observation.repository`
+запрещена, а self-consistent foreign DTO (`repository=other/repository` вместе с
+`review_repository=other/repository`) fail closed.
+
 Typed Rust verifier требует для каждого **active terminal leaf**:
 
-- observed review repository совпадает с expected repository case-insensitively;
+- declared batch repository совпадает с independent canonical project target;
+- observed review repository совпадает с canonical expected repository case-insensitively;
 - observed exact reference совпадает с `review.review_reference`;
 - provider object существует;
 - API `user.login` совпадает с `review.github_login` case-insensitively;
@@ -201,7 +211,9 @@ Observer fixtures доказывают:
 
 Typed Rust tests отдельно доказывают fail-closed rejection для:
 
-- foreign repository/reference drift;
+- ordinary observed foreign repository drift при canonical batch repository;
+- self-consistent foreign batch/observed repository substitution;
+- reference drift;
 - missing/deleted provider object;
 - wrong reviewer;
 - edited timestamp;
@@ -227,8 +239,8 @@ second executable/main = 0
 ```
 
 GitHub/workflow/Python outer shell владеет только acquisition effects. Existing
-`opsctl` adapter владеет strict DTO parsing/canonicalization. Pure Rust policy
-владеет semantic decision.
+`opsctl` adapter владеет strict DTO parsing/canonicalization и independent canonical
+project binding. Pure Rust policy владеет semantic decision.
 
 ## 9. Ограничения
 
