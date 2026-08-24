@@ -147,7 +147,7 @@ jobs:
 
   hosted-state:
     name: GitHub Governance Hosted State
-    if: github.event_name != 'pull_request'
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
     needs: contract
     runs-on: ubuntu-24.04
     permissions:
@@ -196,7 +196,7 @@ jobs:
 
   operational-credential-state:
     name: Operational Credential Hosted State
-    if: github.event_name != 'pull_request'
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
     needs: contract
     runs-on: ubuntu-24.04
     environment: staging
@@ -264,33 +264,32 @@ jobs:
 
           account_id="$(jq -r '.control_plane.account_id // .account_id' "$RUNNER_TEMP/ar11-observe-deploy-manifest.json")"
           worker_name="$(jq -r '.control_plane.worker_name // .worker_name' "$RUNNER_TEMP/ar11-observe-deploy-manifest.json")"
+          d1_database_name="$(jq -r '.control_plane.d1_database_name // .d1_database_name' "$RUNNER_TEMP/ar11-observe-deploy-manifest.json")"
           r2_bucket="$(jq -r '.control_plane.r2_bucket_name // .r2_bucket_name' "$RUNNER_TEMP/ar11-observe-deploy-manifest.json")"
           queue_name="$(jq -r '.control_plane.integration_events_queue // .integration_events_queue' "$RUNNER_TEMP/ar11-observe-deploy-manifest.json")"
           test -n "$account_id"
           test -n "$worker_name"
+          test -n "$d1_database_name"
           test -n "$r2_bucket"
           test -n "$queue_name"
-
-          python scripts/release-core-overlay-ar11.py \
-            --source-config deploy/cloudflare/wrangler.jsonc \
-            --release-root . \
-            --deploy-manifest "$RUNNER_TEMP/ar11-observe-deploy-manifest.json" \
-            --environment staging \
-            --output "$RUNNER_TEMP/ar11-observe-wrangler.staging.json"
 
           deployments_code="$(curl --silent --show-error --output "$RUNNER_TEMP/ar11-observe-deployments.json" --write-out '%{http_code}' \
             -H "Authorization: Bearer $CLOUDFLARE_OBSERVE_API_TOKEN" \
             "https://api.cloudflare.com/client/v4/accounts/$account_id/workers/scripts/$worker_name/deployments")"
           test "$deployments_code" = 200 -o "$deployments_code" = 404
-          npx --yes wrangler@4.94.0 d1 execute CATALOG_DB --remote \
-            --command 'SELECT name FROM d1_migrations ORDER BY name' --json \
-            --config "$RUNNER_TEMP/ar11-observe-wrangler.staging.json" --env staging > "$RUNNER_TEMP/ar11-observe-d1.json"
-          npx --yes wrangler@4.94.0 r2 bucket info "$r2_bucket" --json \
-            --config "$RUNNER_TEMP/ar11-observe-wrangler.staging.json" --env staging > "$RUNNER_TEMP/ar11-observe-r2.json"
-          npx --yes wrangler@4.94.0 queues info "$queue_name" \
-            --config "$RUNNER_TEMP/ar11-observe-wrangler.staging.json" --env staging > "$RUNNER_TEMP/ar11-observe-queue.txt"
-          npx --yes wrangler@4.94.0 secret list --name "$worker_name" --json \
-            --config "$RUNNER_TEMP/ar11-observe-wrangler.staging.json" --env staging > "$RUNNER_TEMP/ar11-observe-secret-list.json"
+          CLOUDFLARE_API_TOKEN="$CLOUDFLARE_OBSERVE_API_TOKEN" CLOUDFLARE_ACCOUNT_ID="$account_id" \
+            npx --yes wrangler@4.94.0 d1 execute "$d1_database_name" --remote \
+              --command 'SELECT name FROM d1_migrations ORDER BY name' --json \
+              > "$RUNNER_TEMP/ar11-observe-d1.json"
+          CLOUDFLARE_API_TOKEN="$CLOUDFLARE_OBSERVE_API_TOKEN" CLOUDFLARE_ACCOUNT_ID="$account_id" \
+            npx --yes wrangler@4.94.0 r2 bucket info "$r2_bucket" --json \
+              > "$RUNNER_TEMP/ar11-observe-r2.json"
+          CLOUDFLARE_API_TOKEN="$CLOUDFLARE_OBSERVE_API_TOKEN" CLOUDFLARE_ACCOUNT_ID="$account_id" \
+            npx --yes wrangler@4.94.0 queues info "$queue_name" \
+              > "$RUNNER_TEMP/ar11-observe-queue.txt"
+          CLOUDFLARE_API_TOKEN="$CLOUDFLARE_OBSERVE_API_TOKEN" CLOUDFLARE_ACCOUNT_ID="$account_id" \
+            npx --yes wrangler@4.94.0 secret list --name "$worker_name" --json \
+              > "$RUNNER_TEMP/ar11-observe-secret-list.json"
 
           jq -n '{
             schema_version: 1,
