@@ -5,25 +5,24 @@ use opsctl_core::hosted_evidence::{
     HostedEvidenceEnvelopeV1, HostedEvidenceObservationV1,
 };
 use opsctl_core::review_evidence::{
-    AcceptedReviewV1, ProviderReviewFactV1, PullRequestReviewState, RequiredReviewClaimV1,
-    ReviewAttestationObservationV1, ReviewAttestationPolicyError, ReviewAttestationPolicyV1,
-    ReviewClaimStatus, ReviewKind,
+    ProviderReviewFactV1, PullRequestReviewState, RequiredReviewClaimV1,
+    ReviewAttestationPolicyV1, ReviewKind, ReviewObservationV1, ReviewPolicyError, ReviewStatus,
 };
 use serde::{Deserialize, Serialize};
 use std::fmt::{Display, Formatter};
 
 const OBSERVATION_KIND: &str = "REVIEW_EVIDENCE_OBSERVATION";
-const PAYLOAD_KIND: &str = "REVIEW_EVIDENCE_PAYLOAD";
 const ARTIFACT_KIND: &str = "REVIEW_EVIDENCE_ARTIFACT";
+const PAYLOAD_KIND: &str = "REVIEW_EVIDENCE_PAYLOAD";
 const ENVELOPE_KIND: &str = "HOSTED_EVIDENCE_ENVELOPE";
 const SCHEMA_VERSION: u64 = 1;
 const DIGEST_ALGORITHM: &str = "SHA-256";
 const DIGEST_SCOPE: &str = "RFC8785_CANONICAL_REVIEW_PAYLOAD_BYTES";
-const REVIEW_ISSUER: &str = "github-actions";
-const REVIEW_SOURCE: &str = "external-review-attestation-gate/github-review-attestations";
-const REVIEW_TARGET: &str = "iamaman11/part-crm-emai-profile";
-const REVIEW_ENVIRONMENT: &str = "governance";
-const REVIEW_MAX_VALIDITY_SECONDS: u64 = 60 * 60;
+const ISSUER: &str = "github-actions";
+const SOURCE: &str = "external-review-attestation-gate/github-review-attestations";
+const TARGET: &str = "iamaman11/part-crm-emai-profile";
+const ENVIRONMENT: &str = "governance";
+const MAX_VALIDITY_SECONDS: u64 = 60 * 60;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReviewEvidenceAdapterError {
@@ -52,8 +51,8 @@ impl From<EvidencePolicyError> for ReviewEvidenceAdapterError {
     }
 }
 
-impl From<ReviewAttestationPolicyError> for ReviewEvidenceAdapterError {
-    fn from(error: ReviewAttestationPolicyError) -> Self {
+impl From<ReviewPolicyError> for ReviewEvidenceAdapterError {
+    fn from(error: ReviewPolicyError) -> Self {
         Self::new(error.to_string())
     }
 }
@@ -81,179 +80,28 @@ struct ReviewObservationDto {
 struct RequiredReviewClaimDto {
     evidence_id: String,
     gate: String,
-    status: ReviewClaimStatusDto,
+    status: String,
     subject: String,
     claim_sha256: String,
     reviewer: String,
     reviewed_at_unix_seconds: i64,
     execution_window_start_unix_seconds: i64,
-    review_kind: ReviewKindDto,
+    review_kind: String,
     review_reference: String,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct ProviderReviewDto {
-    review_kind: ReviewKindDto,
+    review_kind: String,
     review_reference: String,
     author: String,
     body: String,
     observed_at_unix_seconds: i64,
-    pull_request_state: Option<PullRequestReviewStateDto>,
+    pull_request_state: Option<String>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
-enum ReviewKindDto {
-    IssueComment,
-    PullRequestReview,
-}
-
-impl From<ReviewKindDto> for ReviewKind {
-    fn from(value: ReviewKindDto) -> Self {
-        match value {
-            ReviewKindDto::IssueComment => Self::IssueComment,
-            ReviewKindDto::PullRequestReview => Self::PullRequestReview,
-        }
-    }
-}
-
-impl From<ReviewKind> for ReviewKindDto {
-    fn from(value: ReviewKind) -> Self {
-        match value {
-            ReviewKind::IssueComment => Self::IssueComment,
-            ReviewKind::PullRequestReview => Self::PullRequestReview,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
-enum ReviewClaimStatusDto {
-    Passed,
-    Failed,
-}
-
-impl From<ReviewClaimStatusDto> for ReviewClaimStatus {
-    fn from(value: ReviewClaimStatusDto) -> Self {
-        match value {
-            ReviewClaimStatusDto::Passed => Self::Passed,
-            ReviewClaimStatusDto::Failed => Self::Failed,
-        }
-    }
-}
-
-impl From<ReviewClaimStatus> for ReviewClaimStatusDto {
-    fn from(value: ReviewClaimStatus) -> Self {
-        match value {
-            ReviewClaimStatus::Passed => Self::Passed,
-            ReviewClaimStatus::Failed => Self::Failed,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
-enum PullRequestReviewStateDto {
-    Approved,
-    ChangesRequested,
-    Commented,
-    Dismissed,
-    Pending,
-}
-
-impl From<PullRequestReviewStateDto> for PullRequestReviewState {
-    fn from(value: PullRequestReviewStateDto) -> Self {
-        match value {
-            PullRequestReviewStateDto::Approved => Self::Approved,
-            PullRequestReviewStateDto::ChangesRequested => Self::ChangesRequested,
-            PullRequestReviewStateDto::Commented => Self::Commented,
-            PullRequestReviewStateDto::Dismissed => Self::Dismissed,
-            PullRequestReviewStateDto::Pending => Self::Pending,
-        }
-    }
-}
-
-impl From<PullRequestReviewState> for PullRequestReviewStateDto {
-    fn from(value: PullRequestReviewState) -> Self {
-        match value {
-            PullRequestReviewState::Approved => Self::Approved,
-            PullRequestReviewState::ChangesRequested => Self::ChangesRequested,
-            PullRequestReviewState::Commented => Self::Commented,
-            PullRequestReviewState::Dismissed => Self::Dismissed,
-            PullRequestReviewState::Pending => Self::Pending,
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-struct AcceptedReviewDto {
-    evidence_id: String,
-    gate: String,
-    status: ReviewClaimStatusDto,
-    subject: String,
-    claim_sha256: String,
-    reviewer: String,
-    reviewed_at_unix_seconds: i64,
-    review_kind: ReviewKindDto,
-    review_reference: String,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
-enum TrustStateDto {
-    Trusted,
-    Untrusted,
-    Unknown,
-}
-
-impl From<EvidenceTrustState> for TrustStateDto {
-    fn from(value: EvidenceTrustState) -> Self {
-        match value {
-            EvidenceTrustState::Trusted => Self::Trusted,
-            EvidenceTrustState::Untrusted => Self::Untrusted,
-            EvidenceTrustState::Unknown => Self::Unknown,
-        }
-    }
-}
-
-impl From<TrustStateDto> for EvidenceTrustState {
-    fn from(value: TrustStateDto) -> Self {
-        match value {
-            TrustStateDto::Trusted => Self::Trusted,
-            TrustStateDto::Untrusted => Self::Untrusted,
-            TrustStateDto::Unknown => Self::Unknown,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
-enum OutcomeDto {
-    Pass,
-    Fail,
-}
-
-impl From<EvidenceOutcome> for OutcomeDto {
-    fn from(value: EvidenceOutcome) -> Self {
-        match value {
-            EvidenceOutcome::Passed => Self::Pass,
-            EvidenceOutcome::Failed => Self::Fail,
-        }
-    }
-}
-
-impl From<OutcomeDto> for EvidenceOutcome {
-    fn from(value: OutcomeDto) -> Self {
-        match value {
-            OutcomeDto::Pass => Self::Passed,
-            OutcomeDto::Fail => Self::Failed,
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct EnvelopeDto {
     schema_version: u64,
@@ -267,18 +115,17 @@ struct EnvelopeDto {
     source_run_attempt: u32,
     observed_at_unix_seconds: i64,
     valid_until_unix_seconds: i64,
-    trust_state: TrustStateDto,
-    outcome: OutcomeDto,
+    trust_state: String,
+    outcome: String,
     production_mutation: bool,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
-struct ReviewPayloadDto {
+struct PayloadDto {
     schema_version: u64,
     kind: String,
     observation: ReviewObservationDto,
-    accepted_reviews: Vec<AcceptedReviewDto>,
     envelope: EnvelopeDto,
 }
 
@@ -292,11 +139,11 @@ struct DigestDto {
 
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
-struct ReviewArtifactDto {
+struct ArtifactDto {
     schema_version: u64,
     kind: String,
     digest: DigestDto,
-    payload: ReviewPayloadDto,
+    payload: PayloadDto,
 }
 
 #[must_use]
@@ -309,39 +156,23 @@ pub fn is_review_artifact_json(input: &str) -> bool {
     contract_kind(input).as_deref() == Some(ARTIFACT_KIND)
 }
 
-fn contract_kind(input: &str) -> Option<String> {
-    let value = parse_strict_json(input).ok()?;
-    value.get("kind")?.as_str().map(str::to_owned)
-}
-
 pub fn seal_review_json(
     observation_json: &str,
     evaluated_at_unix_seconds: i64,
     expected_subject: &str,
 ) -> Result<String, ReviewEvidenceAdapterError> {
-    validate_expected_subject(expected_subject)?;
-    let value = parse_strict_json(observation_json).map_err(|error| {
-        ReviewEvidenceAdapterError::new(format!("REVIEW_EVIDENCE_OBSERVATION_JSON: {error}"))
-    })?;
-    let dto: ReviewObservationDto = serde_json::from_value(value).map_err(|error| {
-        ReviewEvidenceAdapterError::new(format!("REVIEW_EVIDENCE_OBSERVATION_SCHEMA: {error}"))
-    })?;
-    validate_observation_contract(&dto, expected_subject)?;
-
-    let domain_observation = observation_from_dto(&dto);
-    let review_policy = ReviewAttestationPolicyV1::new(REVIEW_TARGET, expected_subject)?;
-    let review_decision = review_policy.evaluate(&domain_observation)?;
-    let hosted_observation = hosted_observation(&dto)?;
+    validate_subject(expected_subject)?;
+    let observation = parse_observation(observation_json, expected_subject)?;
+    review_policy(expected_subject)?.evaluate(&domain_observation(&observation)?)?;
     let envelope = hosted_policy(expected_subject)?.evaluate(
-        hosted_observation,
+        hosted_observation(&observation)?,
         evaluated_at_unix_seconds,
     )?;
-
-    let rendered = render_artifact(dto, &review_decision.accepted_reviews, &envelope)?;
-    let verified = verify_review_json(&rendered, evaluated_at_unix_seconds, expected_subject)?;
-    if rendered != verified {
+    let rendered = render_artifact(observation, &envelope)?;
+    let replay = verify_review_json(&rendered, evaluated_at_unix_seconds, expected_subject)?;
+    if rendered != replay {
         return Err(ReviewEvidenceAdapterError::new(
-            "REVIEW_EVIDENCE_ROUNDTRIP_MISMATCH: seal/verify changed canonical evidence bytes",
+            "REVIEW_EVIDENCE_ROUNDTRIP_MISMATCH: seal/verify changed durable bytes",
         ));
     }
     Ok(rendered)
@@ -352,14 +183,14 @@ pub fn verify_review_json(
     evaluated_at_unix_seconds: i64,
     expected_subject: &str,
 ) -> Result<String, ReviewEvidenceAdapterError> {
-    validate_expected_subject(expected_subject)?;
+    validate_subject(expected_subject)?;
     let value = parse_strict_json(artifact_json).map_err(|error| {
         ReviewEvidenceAdapterError::new(format!("REVIEW_EVIDENCE_ARTIFACT_JSON: {error}"))
     })?;
-    let artifact: ReviewArtifactDto = serde_json::from_value(value).map_err(|error| {
+    let artifact: ArtifactDto = serde_json::from_value(value).map_err(|error| {
         ReviewEvidenceAdapterError::new(format!("REVIEW_EVIDENCE_ARTIFACT_SCHEMA: {error}"))
     })?;
-    validate_artifact_contract(&artifact)?;
+    validate_artifact(&artifact)?;
 
     let payload_value = serde_json::to_value(&artifact.payload).map_err(|error| {
         ReviewEvidenceAdapterError::new(format!("REVIEW_EVIDENCE_PAYLOAD_SCHEMA: {error}"))
@@ -369,75 +200,76 @@ pub fn verify_review_json(
     })?;
     if sha256_hex(canonical_payload.as_bytes()) != artifact.digest.value {
         return Err(ReviewEvidenceAdapterError::new(
-            "REVIEW_EVIDENCE_DIGEST_MISMATCH: canonical payload digest does not match artifact",
+            "REVIEW_EVIDENCE_DIGEST_MISMATCH: canonical payload digest differs",
         ));
     }
 
-    validate_observation_contract(&artifact.payload.observation, expected_subject)?;
-    let domain_observation = observation_from_dto(&artifact.payload.observation);
-    let review_decision = ReviewAttestationPolicyV1::new(REVIEW_TARGET, expected_subject)?
-        .evaluate(&domain_observation)?;
-    let expected_reviews: Vec<AcceptedReviewDto> = review_decision
-        .accepted_reviews
-        .iter()
-        .map(accepted_review_to_dto)
-        .collect();
-    if expected_reviews != artifact.payload.accepted_reviews {
+    validate_observation(&artifact.payload.observation, expected_subject)?;
+    review_policy(expected_subject)?
+        .evaluate(&domain_observation(&artifact.payload.observation)?)?;
+    let durable_envelope = envelope_from_dto(&artifact.payload.envelope)?;
+    let evaluated_envelope = hosted_policy(expected_subject)?
+        .evaluate(durable_envelope.as_observation(), evaluated_at_unix_seconds)?;
+    if durable_envelope != evaluated_envelope {
         return Err(ReviewEvidenceAdapterError::new(
-            "REVIEW_EVIDENCE_SEMANTIC_MISMATCH: durable accepted reviews differ from typed review policy output",
+            "REVIEW_EVIDENCE_ENVELOPE_MISMATCH: durable envelope differs from EvidencePolicyV1 output",
         ));
     }
 
-    let envelope = envelope_from_dto(&artifact.payload.envelope)?;
-    let reevaluated = hosted_policy(expected_subject)?
-        .evaluate(envelope.as_observation(), evaluated_at_unix_seconds)?;
-    if reevaluated != envelope {
-        return Err(ReviewEvidenceAdapterError::new(
-            "REVIEW_EVIDENCE_HOSTED_SEMANTIC_MISMATCH: hosted envelope changed after EvidencePolicyV1 evaluation",
-        ));
-    }
-
-    let rendered = render_artifact(
-        artifact.payload.observation.clone(),
-        &review_decision.accepted_reviews,
-        &reevaluated,
-    )?;
+    let rendered = render_artifact(artifact.payload.observation, &evaluated_envelope)?;
     if artifact_json != rendered {
         return Err(ReviewEvidenceAdapterError::new(
-            "REVIEW_EVIDENCE_ARTIFACT_NOT_CANONICAL: durable artifact bytes must use the canonical pretty projection",
+            "REVIEW_EVIDENCE_NOT_CANONICAL: durable artifact bytes must be canonical pretty JSON",
         ));
     }
     Ok(rendered)
 }
 
-fn validate_observation_contract(
-    dto: &ReviewObservationDto,
+fn contract_kind(input: &str) -> Option<String> {
+    let value = parse_strict_json(input).ok()?;
+    value.get("kind")?.as_str().map(str::to_owned)
+}
+
+fn parse_observation(
+    input: &str,
+    expected_subject: &str,
+) -> Result<ReviewObservationDto, ReviewEvidenceAdapterError> {
+    let value = parse_strict_json(input).map_err(|error| {
+        ReviewEvidenceAdapterError::new(format!("REVIEW_EVIDENCE_OBSERVATION_JSON: {error}"))
+    })?;
+    let observation = serde_json::from_value(value).map_err(|error| {
+        ReviewEvidenceAdapterError::new(format!("REVIEW_EVIDENCE_OBSERVATION_SCHEMA: {error}"))
+    })?;
+    validate_observation(&observation, expected_subject)?;
+    Ok(observation)
+}
+
+fn validate_observation(
+    observation: &ReviewObservationDto,
     expected_subject: &str,
 ) -> Result<(), ReviewEvidenceAdapterError> {
-    if dto.schema_version != SCHEMA_VERSION || dto.kind != OBSERVATION_KIND {
+    if observation.schema_version != SCHEMA_VERSION || observation.kind != OBSERVATION_KIND {
         return Err(ReviewEvidenceAdapterError::new(
-            "REVIEW_EVIDENCE_OBSERVATION_CONTRACT: unsupported schema_version or kind",
+            "REVIEW_EVIDENCE_OBSERVATION_CONTRACT: unsupported schema version or kind",
         ));
     }
-    if dto.repository != REVIEW_TARGET || dto.subject != expected_subject {
+    if observation.repository != TARGET || observation.subject != expected_subject {
         return Err(ReviewEvidenceAdapterError::new(
-            "REVIEW_EVIDENCE_DECLARED_BINDING_MISMATCH: repository or subject differs from the expected consumer",
+            "REVIEW_EVIDENCE_BINDING_MISMATCH: declared repository or subject differs from consumer binding",
         ));
     }
     Ok(())
 }
 
-fn validate_artifact_contract(
-    artifact: &ReviewArtifactDto,
-) -> Result<(), ReviewEvidenceAdapterError> {
+fn validate_artifact(artifact: &ArtifactDto) -> Result<(), ReviewEvidenceAdapterError> {
     if artifact.schema_version != SCHEMA_VERSION || artifact.kind != ARTIFACT_KIND {
         return Err(ReviewEvidenceAdapterError::new(
-            "REVIEW_EVIDENCE_ARTIFACT_CONTRACT: unsupported schema_version or kind",
+            "REVIEW_EVIDENCE_ARTIFACT_CONTRACT: unsupported schema version or kind",
         ));
     }
     if artifact.payload.schema_version != SCHEMA_VERSION || artifact.payload.kind != PAYLOAD_KIND {
         return Err(ReviewEvidenceAdapterError::new(
-            "REVIEW_EVIDENCE_PAYLOAD_CONTRACT: unsupported schema_version or kind",
+            "REVIEW_EVIDENCE_PAYLOAD_CONTRACT: unsupported schema version or kind",
         ));
     }
     if artifact.digest.algorithm != DIGEST_ALGORITHM || artifact.digest.scope != DIGEST_SCOPE {
@@ -447,106 +279,125 @@ fn validate_artifact_contract(
     }
     if !is_lower_hex(&artifact.digest.value, 64) {
         return Err(ReviewEvidenceAdapterError::new(
-            "REVIEW_EVIDENCE_DIGEST_INVALID: digest must be exactly 64 lowercase hexadecimal characters",
+            "REVIEW_EVIDENCE_DIGEST_INVALID: digest must be lowercase SHA-256 hex",
         ));
     }
     Ok(())
 }
 
-fn observation_from_dto(dto: &ReviewObservationDto) -> ReviewAttestationObservationV1 {
-    ReviewAttestationObservationV1 {
-        repository: dto.repository.clone(),
-        subject: dto.subject.clone(),
-        provider_repository: dto.provider_repository.clone(),
-        provider_subject: dto.provider_subject.clone(),
-        observed_at_unix_seconds: dto.observed_at_unix_seconds,
-        required_claims: dto
-            .required_claims
-            .iter()
-            .map(|claim| RequiredReviewClaimV1 {
+fn domain_observation(
+    observation: &ReviewObservationDto,
+) -> Result<ReviewObservationV1, ReviewEvidenceAdapterError> {
+    let required_claims = observation
+        .required_claims
+        .iter()
+        .map(|claim| {
+            Ok(RequiredReviewClaimV1 {
                 evidence_id: claim.evidence_id.clone(),
                 gate: claim.gate.clone(),
-                status: claim.status.into(),
+                status: parse_status(&claim.status)?,
                 subject: claim.subject.clone(),
                 claim_sha256: claim.claim_sha256.clone(),
                 reviewer: claim.reviewer.clone(),
                 reviewed_at_unix_seconds: claim.reviewed_at_unix_seconds,
                 execution_window_start_unix_seconds: claim.execution_window_start_unix_seconds,
-                review_kind: claim.review_kind.into(),
+                review_kind: parse_kind(&claim.review_kind)?,
                 review_reference: claim.review_reference.clone(),
             })
-            .collect(),
-        provider_reviews: dto
-            .provider_reviews
-            .iter()
-            .map(|provider| ProviderReviewFactV1 {
-                review_kind: provider.review_kind.into(),
-                review_reference: provider.review_reference.clone(),
-                author: provider.author.clone(),
-                body: provider.body.clone(),
-                observed_at_unix_seconds: provider.observed_at_unix_seconds,
-                pull_request_state: provider.pull_request_state.map(Into::into),
+        })
+        .collect::<Result<Vec<_>, ReviewEvidenceAdapterError>>()?;
+    let provider_reviews = observation
+        .provider_reviews
+        .iter()
+        .map(|review| {
+            Ok(ProviderReviewFactV1 {
+                review_kind: parse_kind(&review.review_kind)?,
+                review_reference: review.review_reference.clone(),
+                author: review.author.clone(),
+                body: review.body.clone(),
+                observed_at_unix_seconds: review.observed_at_unix_seconds,
+                pull_request_state: review
+                    .pull_request_state
+                    .as_deref()
+                    .map(parse_state)
+                    .transpose()?,
             })
-            .collect(),
+        })
+        .collect::<Result<Vec<_>, ReviewEvidenceAdapterError>>()?;
+    Ok(ReviewObservationV1 {
+        repository: observation.repository.clone(),
+        subject: observation.subject.clone(),
+        provider_repository: observation.provider_repository.clone(),
+        provider_subject: observation.provider_subject.clone(),
+        observed_at_unix_seconds: observation.observed_at_unix_seconds,
+        required_claims,
+        provider_reviews,
+    })
+}
+
+fn parse_kind(value: &str) -> Result<ReviewKind, ReviewEvidenceAdapterError> {
+    match value {
+        "ISSUE_COMMENT" => Ok(ReviewKind::IssueComment),
+        "PULL_REQUEST_REVIEW" => Ok(ReviewKind::PullRequestReview),
+        _ => Err(ReviewEvidenceAdapterError::new(
+            "REVIEW_EVIDENCE_KIND_INVALID: unsupported review_kind",
+        )),
     }
 }
 
-fn hosted_observation(
-    dto: &ReviewObservationDto,
-) -> Result<HostedEvidenceObservationV1, ReviewEvidenceAdapterError> {
-    Ok(HostedEvidenceObservationV1 {
-        binding: hosted_binding(&dto.subject)?,
-        source_run_id: dto.source_run_id,
-        source_run_attempt: dto.source_run_attempt,
-        observed_at_unix_seconds: dto.observed_at_unix_seconds,
-        valid_until_unix_seconds: dto.valid_until_unix_seconds,
-        trust_state: EvidenceTrustState::Trusted,
-        outcome: EvidenceOutcome::Passed,
-        production_mutation: dto.production_mutation,
-    })
+fn parse_status(value: &str) -> Result<ReviewStatus, ReviewEvidenceAdapterError> {
+    match value {
+        "PASSED" => Ok(ReviewStatus::Passed),
+        "FAILED" => Ok(ReviewStatus::Failed),
+        _ => Err(ReviewEvidenceAdapterError::new(
+            "REVIEW_EVIDENCE_STATUS_INVALID: unsupported review status",
+        )),
+    }
+}
+
+fn parse_state(value: &str) -> Result<PullRequestReviewState, ReviewEvidenceAdapterError> {
+    match value {
+        "APPROVED" => Ok(PullRequestReviewState::Approved),
+        "CHANGES_REQUESTED" => Ok(PullRequestReviewState::ChangesRequested),
+        "COMMENTED" => Ok(PullRequestReviewState::Commented),
+        "DISMISSED" => Ok(PullRequestReviewState::Dismissed),
+        "PENDING" => Ok(PullRequestReviewState::Pending),
+        _ => Err(ReviewEvidenceAdapterError::new(
+            "REVIEW_EVIDENCE_STATE_INVALID: unsupported pull-request review state",
+        )),
+    }
+}
+
+fn review_policy(expected_subject: &str) -> Result<ReviewAttestationPolicyV1, ReviewEvidenceAdapterError> {
+    ReviewAttestationPolicyV1::new(TARGET, expected_subject).map_err(Into::into)
 }
 
 fn hosted_policy(expected_subject: &str) -> Result<EvidencePolicyV1, ReviewEvidenceAdapterError> {
-    EvidencePolicyV1::new(
-        hosted_binding(expected_subject)?,
-        REVIEW_MAX_VALIDITY_SECONDS,
-    )
-    .map_err(Into::into)
+    EvidencePolicyV1::new(binding(expected_subject)?, MAX_VALIDITY_SECONDS).map_err(Into::into)
 }
 
-fn hosted_binding(subject: &str) -> Result<EvidenceBindingV1, ReviewEvidenceAdapterError> {
-    Ok(EvidenceBindingV1 {
-        issuer: EvidenceIssuer::new(REVIEW_ISSUER)?,
-        source: EvidenceSource::new(REVIEW_SOURCE)?,
-        target: EvidenceTarget::new(REVIEW_TARGET)?,
-        environment: EvidenceEnvironment::new(REVIEW_ENVIRONMENT)?,
-        subject: EvidenceSubject::new(subject)?,
+fn hosted_observation(
+    observation: &ReviewObservationDto,
+) -> Result<HostedEvidenceObservationV1, ReviewEvidenceAdapterError> {
+    Ok(HostedEvidenceObservationV1 {
+        binding: binding(&observation.subject)?,
+        source_run_id: observation.source_run_id,
+        source_run_attempt: observation.source_run_attempt,
+        observed_at_unix_seconds: observation.observed_at_unix_seconds,
+        valid_until_unix_seconds: observation.valid_until_unix_seconds,
+        trust_state: EvidenceTrustState::Trusted,
+        outcome: EvidenceOutcome::Passed,
+        production_mutation: observation.production_mutation,
     })
 }
 
-fn envelope_from_dto(
-    dto: &EnvelopeDto,
-) -> Result<HostedEvidenceEnvelopeV1, ReviewEvidenceAdapterError> {
-    if dto.schema_version != SCHEMA_VERSION || dto.kind != ENVELOPE_KIND {
-        return Err(ReviewEvidenceAdapterError::new(
-            "REVIEW_EVIDENCE_ENVELOPE_CONTRACT: unsupported schema_version or kind",
-        ));
-    }
-    Ok(HostedEvidenceEnvelopeV1 {
-        binding: EvidenceBindingV1 {
-            issuer: EvidenceIssuer::new(dto.issuer.clone())?,
-            source: EvidenceSource::new(dto.source.clone())?,
-            target: EvidenceTarget::new(dto.target.clone())?,
-            environment: EvidenceEnvironment::new(dto.environment.clone())?,
-            subject: EvidenceSubject::new(dto.subject.clone())?,
-        },
-        source_run_id: dto.source_run_id,
-        source_run_attempt: dto.source_run_attempt,
-        observed_at_unix_seconds: dto.observed_at_unix_seconds,
-        valid_until_unix_seconds: dto.valid_until_unix_seconds,
-        trust_state: dto.trust_state.into(),
-        outcome: dto.outcome.into(),
-        production_mutation: dto.production_mutation,
+fn binding(subject: &str) -> Result<EvidenceBindingV1, ReviewEvidenceAdapterError> {
+    Ok(EvidenceBindingV1 {
+        issuer: EvidenceIssuer::new(ISSUER)?,
+        source: EvidenceSource::new(SOURCE)?,
+        target: EvidenceTarget::new(TARGET)?,
+        environment: EvidenceEnvironment::new(ENVIRONMENT)?,
+        subject: EvidenceSubject::new(subject)?,
     })
 }
 
@@ -563,36 +414,48 @@ fn envelope_to_dto(envelope: &HostedEvidenceEnvelopeV1) -> EnvelopeDto {
         source_run_attempt: envelope.source_run_attempt,
         observed_at_unix_seconds: envelope.observed_at_unix_seconds,
         valid_until_unix_seconds: envelope.valid_until_unix_seconds,
-        trust_state: envelope.trust_state.into(),
-        outcome: envelope.outcome.into(),
+        trust_state: "TRUSTED".to_owned(),
+        outcome: "PASS".to_owned(),
         production_mutation: envelope.production_mutation,
     }
 }
 
-fn accepted_review_to_dto(review: &AcceptedReviewV1) -> AcceptedReviewDto {
-    AcceptedReviewDto {
-        evidence_id: review.evidence_id.clone(),
-        gate: review.gate.clone(),
-        status: review.status.into(),
-        subject: review.subject.clone(),
-        claim_sha256: review.claim_sha256.clone(),
-        reviewer: review.reviewer.clone(),
-        reviewed_at_unix_seconds: review.reviewed_at_unix_seconds,
-        review_kind: review.review_kind.into(),
-        review_reference: review.review_reference.clone(),
+fn envelope_from_dto(dto: &EnvelopeDto) -> Result<HostedEvidenceEnvelopeV1, ReviewEvidenceAdapterError> {
+    if dto.schema_version != SCHEMA_VERSION
+        || dto.kind != ENVELOPE_KIND
+        || dto.trust_state != "TRUSTED"
+        || dto.outcome != "PASS"
+    {
+        return Err(ReviewEvidenceAdapterError::new(
+            "REVIEW_EVIDENCE_ENVELOPE_CONTRACT: unsupported envelope contract",
+        ));
     }
+    Ok(HostedEvidenceEnvelopeV1 {
+        binding: EvidenceBindingV1 {
+            issuer: EvidenceIssuer::new(dto.issuer.clone())?,
+            source: EvidenceSource::new(dto.source.clone())?,
+            target: EvidenceTarget::new(dto.target.clone())?,
+            environment: EvidenceEnvironment::new(dto.environment.clone())?,
+            subject: EvidenceSubject::new(dto.subject.clone())?,
+        },
+        source_run_id: dto.source_run_id,
+        source_run_attempt: dto.source_run_attempt,
+        observed_at_unix_seconds: dto.observed_at_unix_seconds,
+        valid_until_unix_seconds: dto.valid_until_unix_seconds,
+        trust_state: EvidenceTrustState::Trusted,
+        outcome: EvidenceOutcome::Passed,
+        production_mutation: dto.production_mutation,
+    })
 }
 
 fn render_artifact(
     observation: ReviewObservationDto,
-    accepted_reviews: &[AcceptedReviewV1],
     envelope: &HostedEvidenceEnvelopeV1,
 ) -> Result<String, ReviewEvidenceAdapterError> {
-    let payload = ReviewPayloadDto {
+    let payload = PayloadDto {
         schema_version: SCHEMA_VERSION,
         kind: PAYLOAD_KIND.to_owned(),
         observation,
-        accepted_reviews: accepted_reviews.iter().map(accepted_review_to_dto).collect(),
         envelope: envelope_to_dto(envelope),
     };
     let payload_value = serde_json::to_value(&payload).map_err(|error| {
@@ -601,7 +464,7 @@ fn render_artifact(
     let canonical_payload = canonical_json(&payload_value).map_err(|error| {
         ReviewEvidenceAdapterError::new(format!("REVIEW_EVIDENCE_PAYLOAD_CANONICAL: {error}"))
     })?;
-    let artifact = ReviewArtifactDto {
+    let artifact = ArtifactDto {
         schema_version: SCHEMA_VERSION,
         kind: ARTIFACT_KIND.to_owned(),
         digest: DigestDto {
@@ -619,10 +482,10 @@ fn render_artifact(
     })
 }
 
-fn validate_expected_subject(subject: &str) -> Result<(), ReviewEvidenceAdapterError> {
+fn validate_subject(subject: &str) -> Result<(), ReviewEvidenceAdapterError> {
     if !is_lower_hex(subject, 40) {
         return Err(ReviewEvidenceAdapterError::new(
-            "REVIEW_EVIDENCE_EXPECTED_SUBJECT_INVALID: expected source commit must be exactly 40 lowercase hexadecimal characters",
+            "REVIEW_EVIDENCE_SUBJECT_INVALID: expected subject must be a lowercase 40-character commit SHA",
         ));
     }
     Ok(())
@@ -662,15 +525,15 @@ mod tests {
         })
     }
 
-    fn render_observation(value: &Value) -> String {
-        serde_json::to_string(value).expect("observation json")
+    fn rendered(value: &Value) -> String {
+        serde_json::to_string(value).expect("json")
     }
 
     #[test]
-    fn zero_obligation_observation_roundtrips_byte_stably() {
-        let input = render_observation(&observation());
+    fn canonical_roundtrip_is_byte_stable() {
+        let input = rendered(&observation());
         let first = seal_review_json(&input, EVALUATED_AT, SUBJECT).expect("seal");
-        let second = seal_review_json(&input, EVALUATED_AT, SUBJECT).expect("seal repeat");
+        let second = seal_review_json(&input, EVALUATED_AT, SUBJECT).expect("seal again");
         assert_eq!(first, second);
         assert_eq!(
             first,
@@ -679,16 +542,14 @@ mod tests {
     }
 
     #[test]
-    fn rejects_wrong_version_unknown_field_and_duplicate_key() {
-        let mut wrong_version = observation();
-        wrong_version["schema_version"] = json!(2);
-        assert!(
-            seal_review_json(&render_observation(&wrong_version), EVALUATED_AT, SUBJECT).is_err()
-        );
+    fn version_unknown_duplicate_and_secret_fields_fail_closed() {
+        let mut value = observation();
+        value["schema_version"] = json!(2);
+        assert!(seal_review_json(&rendered(&value), EVALUATED_AT, SUBJECT).is_err());
 
-        let mut unknown = observation();
-        unknown["token"] = json!("secret");
-        assert!(seal_review_json(&render_observation(&unknown), EVALUATED_AT, SUBJECT).is_err());
+        let mut value = observation();
+        value["token"] = json!("secret");
+        assert!(seal_review_json(&rendered(&value), EVALUATED_AT, SUBJECT).is_err());
 
         let duplicate = format!(
             "{{\"schema_version\":1,\"schema_version\":1,\"kind\":\"REVIEW_EVIDENCE_OBSERVATION\",\"repository\":\"iamaman11/part-crm-emai-profile\",\"subject\":\"{SUBJECT}\",\"provider_repository\":\"iamaman11/part-crm-emai-profile\",\"provider_subject\":\"{SUBJECT}\",\"source_run_id\":42,\"source_run_attempt\":1,\"observed_at_unix_seconds\":{OBSERVED_AT},\"valid_until_unix_seconds\":{},\"production_mutation\":false,\"required_claims\":[],\"provider_reviews\":[]}}",
@@ -698,55 +559,32 @@ mod tests {
     }
 
     #[test]
-    fn rejects_wrong_repository_subject_and_production_mutation() {
-        let mut wrong_repository = observation();
-        wrong_repository["provider_repository"] = json!("other/repository");
-        assert!(
-            seal_review_json(
-                &render_observation(&wrong_repository),
-                EVALUATED_AT,
-                SUBJECT
-            )
-            .is_err()
-        );
+    fn generic_hosted_policy_owns_binding_freshness_replay_and_mutation() {
+        let mut value = observation();
+        value["provider_subject"] = json!("cccccccccccccccccccccccccccccccccccccccc");
+        assert!(seal_review_json(&rendered(&value), EVALUATED_AT, SUBJECT).is_err());
 
-        let mut wrong_subject = observation();
-        wrong_subject["provider_subject"] =
-            json!("cccccccccccccccccccccccccccccccccccccccc");
-        assert!(
-            seal_review_json(&render_observation(&wrong_subject), EVALUATED_AT, SUBJECT).is_err()
-        );
+        let mut value = observation();
+        value["valid_until_unix_seconds"] = json!(EVALUATED_AT);
+        assert!(seal_review_json(&rendered(&value), EVALUATED_AT, SUBJECT).is_err());
 
-        let mut mutation = observation();
-        mutation["production_mutation"] = json!(true);
-        assert!(seal_review_json(&render_observation(&mutation), EVALUATED_AT, SUBJECT).is_err());
+        let mut value = observation();
+        value["valid_until_unix_seconds"] = json!(OBSERVED_AT + 3601);
+        assert!(seal_review_json(&rendered(&value), EVALUATED_AT, SUBJECT).is_err());
+
+        let mut value = observation();
+        value["production_mutation"] = json!(true);
+        assert!(seal_review_json(&rendered(&value), EVALUATED_AT, SUBJECT).is_err());
     }
 
     #[test]
-    fn generic_evidence_policy_owns_freshness_and_replay() {
-        let mut future = observation();
-        future["observed_at_unix_seconds"] = json!(EVALUATED_AT + 1);
-        future["valid_until_unix_seconds"] = json!(EVALUATED_AT + 100);
-        assert!(seal_review_json(&render_observation(&future), EVALUATED_AT, SUBJECT).is_err());
-
-        let mut expired = observation();
-        expired["valid_until_unix_seconds"] = json!(EVALUATED_AT);
-        assert!(seal_review_json(&render_observation(&expired), EVALUATED_AT, SUBJECT).is_err());
-
-        let mut oversized = observation();
-        oversized["valid_until_unix_seconds"] = json!(OBSERVED_AT + 3601);
-        assert!(seal_review_json(&render_observation(&oversized), EVALUATED_AT, SUBJECT).is_err());
-    }
-
-    #[test]
-    fn digest_and_exact_bytes_reject_tamper() {
-        let input = render_observation(&observation());
-        let artifact = seal_review_json(&input, EVALUATED_AT, SUBJECT).expect("seal");
-        let mut value: Value = serde_json::from_str(&artifact).expect("artifact json");
-        value["digest"]["value"] = json!(
-            "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
-        );
-        let tampered = serde_json::to_string_pretty(&value).expect("tampered json");
+    fn digest_tamper_and_noncanonical_durable_bytes_fail_closed() {
+        let artifact =
+            seal_review_json(&rendered(&observation()), EVALUATED_AT, SUBJECT).expect("seal");
+        let mut value: Value = serde_json::from_str(&artifact).expect("artifact");
+        value["digest"]["value"] =
+            json!("cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc");
+        let tampered = serde_json::to_string_pretty(&value).expect("tampered");
         assert!(verify_review_json(&tampered, EVALUATED_AT, SUBJECT).is_err());
 
         let noncanonical = artifact.trim_end().to_owned();

@@ -12,8 +12,8 @@ pub mod promotion;
 pub mod readiness;
 pub mod recovery;
 pub mod release;
-pub mod review_evidence;
 mod repository;
+pub mod review_evidence;
 mod status;
 
 pub use cli::{CredentialsAction, HELP, Invocation, ReadCommand, parse_invocation};

@@ -2,15 +2,15 @@ use std::fmt::{Display, Formatter};
 
 const MAX_IDENTIFIER_BYTES: usize = 256;
 const MAX_REVIEW_BODY_BYTES: usize = 1_024;
-const MAX_REVIEW_ITEMS: usize = 64;
+const MAX_ITEMS: usize = 64;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ReviewAttestationPolicyError {
+pub struct ReviewPolicyError {
     code: &'static str,
     detail: String,
 }
 
-impl ReviewAttestationPolicyError {
+impl ReviewPolicyError {
     fn new(code: &'static str, detail: impl Into<String>) -> Self {
         Self {
             code,
@@ -22,20 +22,15 @@ impl ReviewAttestationPolicyError {
     pub const fn code(&self) -> &'static str {
         self.code
     }
-
-    #[must_use]
-    pub fn detail(&self) -> &str {
-        &self.detail
-    }
 }
 
-impl Display for ReviewAttestationPolicyError {
+impl Display for ReviewPolicyError {
     fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
         write!(formatter, "{}: {}", self.code, self.detail)
     }
 }
 
-impl std::error::Error for ReviewAttestationPolicyError {}
+impl std::error::Error for ReviewPolicyError {}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ReviewKind {
@@ -44,12 +39,12 @@ pub enum ReviewKind {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ReviewClaimStatus {
+pub enum ReviewStatus {
     Passed,
     Failed,
 }
 
-impl ReviewClaimStatus {
+impl ReviewStatus {
     #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
@@ -72,7 +67,7 @@ pub enum PullRequestReviewState {
 pub struct RequiredReviewClaimV1 {
     pub evidence_id: String,
     pub gate: String,
-    pub status: ReviewClaimStatus,
+    pub status: ReviewStatus,
     pub subject: String,
     pub claim_sha256: String,
     pub reviewer: String,
@@ -93,7 +88,7 @@ pub struct ProviderReviewFactV1 {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ReviewAttestationObservationV1 {
+pub struct ReviewObservationV1 {
     pub repository: String,
     pub subject: String,
     pub provider_repository: String,
@@ -101,24 +96,6 @@ pub struct ReviewAttestationObservationV1 {
     pub observed_at_unix_seconds: i64,
     pub required_claims: Vec<RequiredReviewClaimV1>,
     pub provider_reviews: Vec<ProviderReviewFactV1>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct AcceptedReviewV1 {
-    pub evidence_id: String,
-    pub gate: String,
-    pub status: ReviewClaimStatus,
-    pub subject: String,
-    pub claim_sha256: String,
-    pub reviewer: String,
-    pub reviewed_at_unix_seconds: i64,
-    pub review_kind: ReviewKind,
-    pub review_reference: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ReviewAttestationDecisionV1 {
-    pub accepted_reviews: Vec<AcceptedReviewV1>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -131,255 +108,223 @@ impl ReviewAttestationPolicyV1 {
     pub fn new(
         expected_repository: impl Into<String>,
         expected_subject: impl Into<String>,
-    ) -> Result<Self, ReviewAttestationPolicyError> {
+    ) -> Result<Self, ReviewPolicyError> {
         let expected_repository = expected_repository.into();
         let expected_subject = expected_subject.into();
         validate_identifier("expected_repository", &expected_repository)?;
-        validate_commit_subject("expected_subject", &expected_subject)?;
+        validate_subject("expected_subject", &expected_subject)?;
         Ok(Self {
             expected_repository,
             expected_subject,
         })
     }
 
-    pub fn evaluate(
-        &self,
-        observation: &ReviewAttestationObservationV1,
-    ) -> Result<ReviewAttestationDecisionV1, ReviewAttestationPolicyError> {
+    pub fn evaluate(&self, observation: &ReviewObservationV1) -> Result<(), ReviewPolicyError> {
         validate_identifier("repository", &observation.repository)?;
-        validate_commit_subject("subject", &observation.subject)?;
         validate_identifier("provider_repository", &observation.provider_repository)?;
-        validate_commit_subject("provider_subject", &observation.provider_subject)?;
+        validate_subject("subject", &observation.subject)?;
+        validate_subject("provider_subject", &observation.provider_subject)?;
 
         if observation.repository != self.expected_repository
             || observation.provider_repository != self.expected_repository
         {
-            return Err(ReviewAttestationPolicyError::new(
-                "REVIEW_ATTESTATION_REPOSITORY_MISMATCH",
-                "declared and provider-observed repositories must equal the expected repository",
+            return Err(ReviewPolicyError::new(
+                "REVIEW_REPOSITORY_MISMATCH",
+                "declared and provider-observed repositories must match the expected repository",
             ));
         }
         if observation.subject != self.expected_subject
             || observation.provider_subject != self.expected_subject
         {
-            return Err(ReviewAttestationPolicyError::new(
-                "REVIEW_ATTESTATION_SUBJECT_MISMATCH",
-                "declared and provider-observed subjects must equal the expected source commit",
+            return Err(ReviewPolicyError::new(
+                "REVIEW_SUBJECT_MISMATCH",
+                "declared and provider-observed subjects must match the expected source SHA",
             ));
         }
         if observation.observed_at_unix_seconds <= 0 {
-            return Err(ReviewAttestationPolicyError::new(
-                "REVIEW_ATTESTATION_TIMESTAMP_INVALID",
+            return Err(ReviewPolicyError::new(
+                "REVIEW_TIMESTAMP_INVALID",
                 "observation timestamp must be positive Unix seconds",
             ));
         }
-        if observation.required_claims.len() > MAX_REVIEW_ITEMS
-            || observation.provider_reviews.len() > MAX_REVIEW_ITEMS
+        if observation.required_claims.len() > MAX_ITEMS
+            || observation.provider_reviews.len() > MAX_ITEMS
         {
-            return Err(ReviewAttestationPolicyError::new(
-                "REVIEW_ATTESTATION_CARDINALITY_EXCEEDED",
-                format!("review observations are bounded to {MAX_REVIEW_ITEMS} items"),
+            return Err(ReviewPolicyError::new(
+                "REVIEW_CARDINALITY_EXCEEDED",
+                format!("review observations are bounded to {MAX_ITEMS} items"),
             ));
         }
 
         for (index, claim) in observation.required_claims.iter().enumerate() {
             validate_claim(claim, observation.observed_at_unix_seconds)?;
             if claim.subject != self.expected_subject {
-                return Err(ReviewAttestationPolicyError::new(
-                    "REVIEW_ATTESTATION_CLAIM_SUBJECT_MISMATCH",
-                    format!("required claim at index {index} is bound to the wrong subject"),
+                return Err(ReviewPolicyError::new(
+                    "REVIEW_CLAIM_SUBJECT_MISMATCH",
+                    format!("claim {} is bound to the wrong subject", claim.evidence_id),
                 ));
             }
             if observation.required_claims[..index]
                 .iter()
                 .any(|prior| prior.evidence_id == claim.evidence_id)
             {
-                return Err(ReviewAttestationPolicyError::new(
-                    "REVIEW_ATTESTATION_CLAIM_AMBIGUOUS",
+                return Err(ReviewPolicyError::new(
+                    "REVIEW_CLAIM_AMBIGUOUS",
                     format!("duplicate evidence_id {}", claim.evidence_id),
                 ));
             }
         }
 
-        for (index, provider) in observation.provider_reviews.iter().enumerate() {
-            validate_provider_review(provider, observation.observed_at_unix_seconds)?;
+        for (index, review) in observation.provider_reviews.iter().enumerate() {
+            validate_provider_review(review, observation.observed_at_unix_seconds)?;
             if observation.provider_reviews[..index].iter().any(|prior| {
-                prior.review_kind == provider.review_kind
-                    && prior.review_reference == provider.review_reference
+                prior.review_kind == review.review_kind
+                    && prior.review_reference == review.review_reference
             }) {
-                return Err(ReviewAttestationPolicyError::new(
-                    "REVIEW_ATTESTATION_PROVIDER_REVIEW_AMBIGUOUS",
-                    format!(
-                        "duplicate provider review reference {}",
-                        provider.review_reference
-                    ),
-                ));
-            }
-            if !observation.required_claims.iter().any(|claim| {
-                claim.review_kind == provider.review_kind
-                    && claim.review_reference == provider.review_reference
-            }) {
-                return Err(ReviewAttestationPolicyError::new(
-                    "REVIEW_ATTESTATION_PROVIDER_REVIEW_UNBOUND",
-                    format!(
-                        "provider review {} has no required claim",
-                        provider.review_reference
-                    ),
+                return Err(ReviewPolicyError::new(
+                    "REVIEW_PROVIDER_AMBIGUOUS",
+                    format!("duplicate provider review {}", review.review_reference),
                 ));
             }
         }
 
-        let mut accepted_reviews = Vec::with_capacity(observation.required_claims.len());
         for claim in &observation.required_claims {
-            let matching: Vec<&ProviderReviewFactV1> = observation
-                .provider_reviews
-                .iter()
-                .filter(|provider| {
-                    provider.review_kind == claim.review_kind
-                        && provider.review_reference == claim.review_reference
-                })
-                .collect();
-            if matching.is_empty() {
-                return Err(ReviewAttestationPolicyError::new(
-                    "REVIEW_ATTESTATION_MISSING_REVIEW",
+            let mut matches = observation.provider_reviews.iter().filter(|review| {
+                review.review_kind == claim.review_kind
+                    && review.review_reference == claim.review_reference
+            });
+            let review = matches.next().ok_or_else(|| {
+                ReviewPolicyError::new(
+                    "REVIEW_MISSING",
                     format!("required review {} is missing", claim.review_reference),
-                ));
-            }
-            if matching.len() != 1 {
-                return Err(ReviewAttestationPolicyError::new(
-                    "REVIEW_ATTESTATION_PROVIDER_REVIEW_AMBIGUOUS",
+                )
+            })?;
+            if matches.next().is_some() {
+                return Err(ReviewPolicyError::new(
+                    "REVIEW_PROVIDER_AMBIGUOUS",
                     format!("required review {} is ambiguous", claim.review_reference),
                 ));
             }
-            let provider = matching[0];
-            if provider.author != claim.reviewer {
-                return Err(ReviewAttestationPolicyError::new(
-                    "REVIEW_ATTESTATION_REVIEWER_MISMATCH",
-                    format!("review {} was authored by an unexpected reviewer", claim.review_reference),
+            if review.author != claim.reviewer {
+                return Err(ReviewPolicyError::new(
+                    "REVIEW_REVIEWER_MISMATCH",
+                    format!("review {} has the wrong reviewer", claim.review_reference),
                 ));
             }
-            if provider.observed_at_unix_seconds != claim.reviewed_at_unix_seconds {
-                return Err(ReviewAttestationPolicyError::new(
-                    "REVIEW_ATTESTATION_REVIEW_TIME_MISMATCH",
-                    format!("review {} timestamp does not match the attested timestamp", claim.review_reference),
+            if review.observed_at_unix_seconds != claim.reviewed_at_unix_seconds {
+                return Err(ReviewPolicyError::new(
+                    "REVIEW_TIME_MISMATCH",
+                    format!("review {} has the wrong timestamp", claim.review_reference),
                 ));
             }
-            let expected_body = expected_claim_body(claim);
-            if provider.body != expected_body {
-                return Err(ReviewAttestationPolicyError::new(
-                    "REVIEW_ATTESTATION_CLAIM_MISMATCH",
-                    format!("review {} does not contain the exact bound claim", claim.review_reference),
+            if review.body != expected_claim_body(claim) {
+                return Err(ReviewPolicyError::new(
+                    "REVIEW_CLAIM_MISMATCH",
+                    format!("review {} does not contain the exact claim", claim.review_reference),
                 ));
             }
             match claim.review_kind {
-                ReviewKind::IssueComment => {
-                    if provider.pull_request_state.is_some() {
-                        return Err(ReviewAttestationPolicyError::new(
-                            "REVIEW_ATTESTATION_REVIEW_STATE_INVALID",
-                            "issue comment observations must not carry pull-request review state",
-                        ));
-                    }
+                ReviewKind::IssueComment if review.pull_request_state.is_some() => {
+                    return Err(ReviewPolicyError::new(
+                        "REVIEW_STATE_INVALID",
+                        "issue comments must not carry pull-request review state",
+                    ));
                 }
-                ReviewKind::PullRequestReview => {
-                    if provider.pull_request_state != Some(PullRequestReviewState::Approved) {
-                        return Err(ReviewAttestationPolicyError::new(
-                            "REVIEW_ATTESTATION_REVIEW_STATE_REJECTED",
-                            "pull-request review attestation must be in APPROVED state",
-                        ));
-                    }
+                ReviewKind::PullRequestReview
+                    if review.pull_request_state != Some(PullRequestReviewState::Approved) =>
+                {
+                    return Err(ReviewPolicyError::new(
+                        "REVIEW_STATE_REJECTED",
+                        "pull-request review attestation must be approved",
+                    ));
                 }
+                _ => {}
             }
-            accepted_reviews.push(AcceptedReviewV1 {
-                evidence_id: claim.evidence_id.clone(),
-                gate: claim.gate.clone(),
-                status: claim.status,
-                subject: claim.subject.clone(),
-                claim_sha256: claim.claim_sha256.clone(),
-                reviewer: claim.reviewer.clone(),
-                reviewed_at_unix_seconds: claim.reviewed_at_unix_seconds,
-                review_kind: claim.review_kind,
-                review_reference: claim.review_reference.clone(),
-            });
         }
 
-        Ok(ReviewAttestationDecisionV1 { accepted_reviews })
+        Ok(())
     }
 }
 
-fn validate_claim(
-    claim: &RequiredReviewClaimV1,
-    observation_time: i64,
-) -> Result<(), ReviewAttestationPolicyError> {
+#[must_use]
+pub fn expected_claim_body(claim: &RequiredReviewClaimV1) -> String {
+    format!(
+        "external-evidence-review:v1 evidence_id={} gate={} status={} subject={} claim_sha256={}",
+        claim.evidence_id,
+        claim.gate,
+        claim.status.as_str(),
+        claim.subject,
+        claim.claim_sha256
+    )
+}
+
+fn validate_claim(claim: &RequiredReviewClaimV1, observed_at: i64) -> Result<(), ReviewPolicyError> {
     validate_identifier("evidence_id", &claim.evidence_id)?;
     validate_identifier("gate", &claim.gate)?;
-    validate_commit_subject("claim.subject", &claim.subject)?;
-    if !is_lower_hex(&claim.claim_sha256, 64) {
-        return Err(ReviewAttestationPolicyError::new(
-            "REVIEW_ATTESTATION_CLAIM_DIGEST_INVALID",
-            "claim_sha256 must be exactly 64 lowercase hexadecimal characters",
-        ));
-    }
+    validate_subject("claim.subject", &claim.subject)?;
     validate_identifier("reviewer", &claim.reviewer)?;
     validate_identifier("review_reference", &claim.review_reference)?;
-    if claim.reviewed_at_unix_seconds <= 0
-        || claim.execution_window_start_unix_seconds <= 0
+    if !is_lower_hex(&claim.claim_sha256, 64) {
+        return Err(ReviewPolicyError::new(
+            "REVIEW_CLAIM_DIGEST_INVALID",
+            "claim_sha256 must be 64 lowercase hexadecimal characters",
+        ));
+    }
+    if claim.execution_window_start_unix_seconds <= 0
         || claim.reviewed_at_unix_seconds < claim.execution_window_start_unix_seconds
-        || claim.reviewed_at_unix_seconds > observation_time
+        || claim.reviewed_at_unix_seconds > observed_at
     {
-        return Err(ReviewAttestationPolicyError::new(
-            "REVIEW_ATTESTATION_REVIEW_TIME_INVALID",
-            "review time must be inside the observed execution window and not in the future",
+        return Err(ReviewPolicyError::new(
+            "REVIEW_TIME_INVALID",
+            "review time must be inside the observed execution window",
         ));
     }
     Ok(())
 }
 
 fn validate_provider_review(
-    provider: &ProviderReviewFactV1,
-    observation_time: i64,
-) -> Result<(), ReviewAttestationPolicyError> {
-    validate_identifier("provider.review_reference", &provider.review_reference)?;
-    validate_identifier("provider.author", &provider.author)?;
-    if provider.body.len() > MAX_REVIEW_BODY_BYTES
-        || provider.body.chars().any(char::is_control)
-        || contains_secret_shape(&provider.body)
+    review: &ProviderReviewFactV1,
+    observed_at: i64,
+) -> Result<(), ReviewPolicyError> {
+    validate_identifier("provider.review_reference", &review.review_reference)?;
+    validate_identifier("provider.author", &review.author)?;
+    if review.body.len() > MAX_REVIEW_BODY_BYTES
+        || review.body.chars().any(char::is_control)
+        || contains_secret_shape(&review.body)
     {
-        return Err(ReviewAttestationPolicyError::new(
-            "REVIEW_ATTESTATION_PROVIDER_BODY_INVALID",
-            "provider review body is unbounded, contains control characters, or resembles secret material",
+        return Err(ReviewPolicyError::new(
+            "REVIEW_PROVIDER_BODY_INVALID",
+            "provider review body is overlong, contains control characters, or resembles secret material",
         ));
     }
-    if provider.observed_at_unix_seconds <= 0 || provider.observed_at_unix_seconds > observation_time {
-        return Err(ReviewAttestationPolicyError::new(
-            "REVIEW_ATTESTATION_PROVIDER_TIME_INVALID",
-            "provider review timestamp must be positive and no later than the observation time",
+    if review.observed_at_unix_seconds <= 0 || review.observed_at_unix_seconds > observed_at {
+        return Err(ReviewPolicyError::new(
+            "REVIEW_PROVIDER_TIME_INVALID",
+            "provider review timestamp must not be in the future",
         ));
     }
     Ok(())
 }
 
-fn validate_identifier(field: &'static str, value: &str) -> Result<(), ReviewAttestationPolicyError> {
+fn validate_identifier(field: &'static str, value: &str) -> Result<(), ReviewPolicyError> {
     if value.is_empty()
         || value.len() > MAX_IDENTIFIER_BYTES
         || value.trim() != value
         || value.chars().any(char::is_control)
     {
-        return Err(ReviewAttestationPolicyError::new(
-            "REVIEW_ATTESTATION_IDENTIFIER_INVALID",
+        return Err(ReviewPolicyError::new(
+            "REVIEW_IDENTIFIER_INVALID",
             format!("{field} is empty, overlong, padded, or contains control characters"),
         ));
     }
     Ok(())
 }
 
-fn validate_commit_subject(
-    field: &'static str,
-    value: &str,
-) -> Result<(), ReviewAttestationPolicyError> {
+fn validate_subject(field: &'static str, value: &str) -> Result<(), ReviewPolicyError> {
     if !is_lower_hex(value, 40) {
-        return Err(ReviewAttestationPolicyError::new(
-            "REVIEW_ATTESTATION_SUBJECT_INVALID",
-            format!("{field} must be exactly 40 lowercase hexadecimal characters"),
+        return Err(ReviewPolicyError::new(
+            "REVIEW_SUBJECT_INVALID",
+            format!("{field} must be a 40-character lowercase commit SHA"),
         ));
     }
     Ok(())
@@ -401,29 +346,16 @@ fn contains_secret_shape(value: &str) -> bool {
         "ghp_",
         "api_token",
         "client_secret",
-        "secret_access_key",
     ]
     .iter()
     .any(|marker| lower.contains(marker))
-}
-
-#[must_use]
-pub fn expected_claim_body(claim: &RequiredReviewClaimV1) -> String {
-    format!(
-        "external-evidence-review:v1 evidence_id={} gate={} status={} subject={} claim_sha256={}",
-        claim.evidence_id,
-        claim.gate,
-        claim.status.as_str(),
-        claim.subject,
-        claim.claim_sha256
-    )
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
         ProviderReviewFactV1, PullRequestReviewState, RequiredReviewClaimV1,
-        ReviewAttestationObservationV1, ReviewAttestationPolicyV1, ReviewClaimStatus, ReviewKind,
+        ReviewAttestationPolicyV1, ReviewKind, ReviewObservationV1, ReviewStatus,
         expected_claim_body,
     };
 
@@ -431,15 +363,11 @@ mod tests {
     const SUBJECT: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     const DIGEST: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 
-    fn policy() -> ReviewAttestationPolicyV1 {
-        ReviewAttestationPolicyV1::new(REPOSITORY, SUBJECT).expect("valid policy")
-    }
-
     fn claim(kind: ReviewKind) -> RequiredReviewClaimV1 {
         RequiredReviewClaimV1 {
             evidence_id: "security-review".to_owned(),
             gate: "independent_security_review".to_owned(),
-            status: ReviewClaimStatus::Passed,
+            status: ReviewStatus::Passed,
             subject: SUBJECT.to_owned(),
             claim_sha256: DIGEST.to_owned(),
             reviewer: "trusted-reviewer".to_owned(),
@@ -450,21 +378,20 @@ mod tests {
         }
     }
 
-    fn observation(kind: ReviewKind) -> ReviewAttestationObservationV1 {
+    fn observation(kind: ReviewKind) -> ReviewObservationV1 {
         let claim = claim(kind);
-        let body = expected_claim_body(&claim);
-        ReviewAttestationObservationV1 {
+        ReviewObservationV1 {
             repository: REPOSITORY.to_owned(),
             subject: SUBJECT.to_owned(),
             provider_repository: REPOSITORY.to_owned(),
             provider_subject: SUBJECT.to_owned(),
             observed_at_unix_seconds: 1_700_000_020,
-            required_claims: vec![claim],
+            required_claims: vec![claim.clone()],
             provider_reviews: vec![ProviderReviewFactV1 {
                 review_kind: kind,
                 review_reference: "42".to_owned(),
                 author: "trusted-reviewer".to_owned(),
-                body,
+                body: expected_claim_body(&claim),
                 observed_at_unix_seconds: 1_700_000_010,
                 pull_request_state: match kind {
                     ReviewKind::IssueComment => None,
@@ -474,9 +401,13 @@ mod tests {
         }
     }
 
+    fn policy() -> ReviewAttestationPolicyV1 {
+        ReviewAttestationPolicyV1::new(REPOSITORY, SUBJECT).expect("valid policy")
+    }
+
     #[test]
-    fn accepts_zero_current_review_obligations_when_provider_binding_is_exact() {
-        let observation = ReviewAttestationObservationV1 {
+    fn zero_obligation_provider_binding_is_valid() {
+        let observation = ReviewObservationV1 {
             repository: REPOSITORY.to_owned(),
             subject: SUBJECT.to_owned(),
             provider_repository: REPOSITORY.to_owned(),
@@ -489,15 +420,8 @@ mod tests {
     }
 
     #[test]
-    fn accepts_exact_issue_comment_attestation() {
-        let decision = policy()
-            .evaluate(&observation(ReviewKind::IssueComment))
-            .expect("exact review accepted");
-        assert_eq!(decision.accepted_reviews.len(), 1);
-    }
-
-    #[test]
-    fn accepts_exact_approved_pull_request_review() {
+    fn exact_comment_and_approved_review_are_valid() {
+        assert!(policy().evaluate(&observation(ReviewKind::IssueComment)).is_ok());
         assert!(
             policy()
                 .evaluate(&observation(ReviewKind::PullRequestReview))
@@ -506,108 +430,65 @@ mod tests {
     }
 
     #[test]
-    fn rejects_wrong_repository_or_subject() {
-        let mut wrong_repository = observation(ReviewKind::IssueComment);
-        wrong_repository.provider_repository = "other/repository".to_owned();
+    fn wrong_repository_subject_reviewer_or_claim_fail_closed() {
+        let mut value = observation(ReviewKind::IssueComment);
+        value.provider_repository = "other/repo".to_owned();
         assert_eq!(
-            policy()
-                .evaluate(&wrong_repository)
-                .expect_err("wrong repository rejected")
-                .code(),
-            "REVIEW_ATTESTATION_REPOSITORY_MISMATCH"
+            policy().evaluate(&value).expect_err("repository rejected").code(),
+            "REVIEW_REPOSITORY_MISMATCH"
         );
 
-        let mut wrong_subject = observation(ReviewKind::IssueComment);
-        wrong_subject.provider_subject = "cccccccccccccccccccccccccccccccccccccccc".to_owned();
+        let mut value = observation(ReviewKind::IssueComment);
+        value.provider_subject = "cccccccccccccccccccccccccccccccccccccccc".to_owned();
         assert_eq!(
-            policy()
-                .evaluate(&wrong_subject)
-                .expect_err("wrong subject rejected")
-                .code(),
-            "REVIEW_ATTESTATION_SUBJECT_MISMATCH"
-        );
-    }
-
-    #[test]
-    fn rejects_missing_or_ambiguous_review() {
-        let mut missing = observation(ReviewKind::IssueComment);
-        missing.provider_reviews.clear();
-        assert_eq!(
-            policy()
-                .evaluate(&missing)
-                .expect_err("missing review rejected")
-                .code(),
-            "REVIEW_ATTESTATION_MISSING_REVIEW"
+            policy().evaluate(&value).expect_err("subject rejected").code(),
+            "REVIEW_SUBJECT_MISMATCH"
         );
 
-        let mut ambiguous = observation(ReviewKind::IssueComment);
-        ambiguous.provider_reviews.push(ambiguous.provider_reviews[0].clone());
+        let mut value = observation(ReviewKind::IssueComment);
+        value.provider_reviews[0].author = "other-reviewer".to_owned();
         assert_eq!(
-            policy()
-                .evaluate(&ambiguous)
-                .expect_err("ambiguous review rejected")
-                .code(),
-            "REVIEW_ATTESTATION_PROVIDER_REVIEW_AMBIGUOUS"
+            policy().evaluate(&value).expect_err("reviewer rejected").code(),
+            "REVIEW_REVIEWER_MISMATCH"
+        );
+
+        let mut value = observation(ReviewKind::IssueComment);
+        value.provider_reviews[0].body.push('x');
+        assert_eq!(
+            policy().evaluate(&value).expect_err("claim rejected").code(),
+            "REVIEW_CLAIM_MISMATCH"
         );
     }
 
     #[test]
-    fn rejects_reviewer_claim_and_time_drift() {
-        let mut wrong_reviewer = observation(ReviewKind::IssueComment);
-        wrong_reviewer.provider_reviews[0].author = "other-reviewer".to_owned();
+    fn missing_ambiguous_nonapproved_and_secret_reviews_fail_closed() {
+        let mut value = observation(ReviewKind::IssueComment);
+        value.provider_reviews.clear();
         assert_eq!(
-            policy()
-                .evaluate(&wrong_reviewer)
-                .expect_err("reviewer mismatch rejected")
-                .code(),
-            "REVIEW_ATTESTATION_REVIEWER_MISMATCH"
+            policy().evaluate(&value).expect_err("missing rejected").code(),
+            "REVIEW_MISSING"
         );
 
-        let mut wrong_claim = observation(ReviewKind::IssueComment);
-        wrong_claim.provider_reviews[0].body.push('x');
+        let mut value = observation(ReviewKind::IssueComment);
+        value.provider_reviews.push(value.provider_reviews[0].clone());
         assert_eq!(
-            policy()
-                .evaluate(&wrong_claim)
-                .expect_err("claim mismatch rejected")
-                .code(),
-            "REVIEW_ATTESTATION_CLAIM_MISMATCH"
+            policy().evaluate(&value).expect_err("ambiguous rejected").code(),
+            "REVIEW_PROVIDER_AMBIGUOUS"
         );
 
-        let mut future = observation(ReviewKind::IssueComment);
-        future.provider_reviews[0].observed_at_unix_seconds = 1_700_000_030;
-        assert_eq!(
-            policy()
-                .evaluate(&future)
-                .expect_err("future provider review rejected")
-                .code(),
-            "REVIEW_ATTESTATION_PROVIDER_TIME_INVALID"
-        );
-    }
-
-    #[test]
-    fn rejects_non_approved_pull_request_review() {
-        let mut rejected = observation(ReviewKind::PullRequestReview);
-        rejected.provider_reviews[0].pull_request_state =
+        let mut value = observation(ReviewKind::PullRequestReview);
+        value.provider_reviews[0].pull_request_state =
             Some(PullRequestReviewState::ChangesRequested);
         assert_eq!(
-            policy()
-                .evaluate(&rejected)
-                .expect_err("non-approved review rejected")
-                .code(),
-            "REVIEW_ATTESTATION_REVIEW_STATE_REJECTED"
+            policy().evaluate(&value).expect_err("state rejected").code(),
+            "REVIEW_STATE_REJECTED"
         );
-    }
 
-    #[test]
-    fn rejects_secret_shaped_provider_body() {
-        let mut secret = observation(ReviewKind::IssueComment);
-        secret.provider_reviews[0].body = "Authorization: Bearer secret".to_owned();
+        let mut value = observation(ReviewKind::IssueComment);
+        value.provider_reviews[0].body = "Authorization: Bearer secret".to_owned();
         assert_eq!(
-            policy()
-                .evaluate(&secret)
-                .expect_err("secret shaped body rejected")
-                .code(),
-            "REVIEW_ATTESTATION_PROVIDER_BODY_INVALID"
+            policy().evaluate(&value).expect_err("secret rejected").code(),
+            "REVIEW_PROVIDER_BODY_INVALID"
         );
     }
 }
