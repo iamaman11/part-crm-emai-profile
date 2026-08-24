@@ -22,12 +22,15 @@ sys.modules[SPEC.name] = MODULE
 SPEC.loader.exec_module(MODULE)
 
 claim_body = MODULE.claim_body
+claim_sha256 = MODULE.claim_sha256
 load_active_terminal_records = MODULE.load_active_terminal_records
 observe_tree = MODULE.observe_tree
+parse_record = MODULE.parse_record
 
 REPOSITORY = "acme/profile-platform"
 REVIEWER = "reviewer-one"
 TIMESTAMP = "2026-08-06T14:40:00Z"
+CLAIM_GOLDEN_SHA256 = "567d13f69124f651b797b3a77dfdf954caf67cff7695432a15277dc50ed98147"
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -133,6 +136,16 @@ def record_observation(observation: dict[str, Any], evidence_id: str) -> dict[st
 
 
 def main() -> int:
+    golden = terminal_data(
+        "ev-20260806-claim-golden",
+        "product_license",
+        "passed",
+        "https://github.com/acme/profile-platform/issues/9#issuecomment-101",
+    )
+    golden_record = parse_record(Path("claim-golden.json"), golden)
+    assert golden_record is not None
+    assert claim_sha256(golden_record) == CLAIM_GOLDEN_SHA256
+
     Handler.responses = {}
     Handler.requests_seen = []
     server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
