@@ -21,7 +21,7 @@ const DIGEST_ALGORITHM: &str = "SHA-256";
 const DIGEST_SCOPE: &str = "RFC8785_CANONICAL_ENVELOPE_BYTES";
 const OPERATIONAL_CREDENTIAL_ISSUER: &str = "github-actions";
 const OPERATIONAL_CREDENTIAL_SOURCE: &str = "github-governance-gate/operational-credential-state";
-const OPERATIONAL_CREDENTIAL_TARGET: &str = "iamaman11/part-crm-emai-profile";
+const HOSTED_EVIDENCE_TARGET: &str = "iamaman11/part-crm-emai-profile";
 const OPERATIONAL_CREDENTIAL_ENVIRONMENT: &str = "staging";
 const OPERATIONAL_CREDENTIAL_MAX_VALIDITY_SECONDS: u64 = 6 * 60 * 60;
 
@@ -305,7 +305,16 @@ pub fn verify_external_review_attestations_json(
         ));
     }
 
-    let expected_repository = EvidenceTarget::new(dto.repository)?;
+    let declared_repository = EvidenceTarget::new(dto.repository)?;
+    let expected_repository = EvidenceTarget::new(HOSTED_EVIDENCE_TARGET)?;
+    if !declared_repository
+        .as_str()
+        .eq_ignore_ascii_case(expected_repository.as_str())
+    {
+        return Err(HostedEvidenceAdapterError::new(
+            "HOSTED_REVIEW_ATTESTATION_REPOSITORY_BINDING_MISMATCH: observation repository does not match the canonical hosted-evidence target",
+        ));
+    }
     let mut seen_ids = HashSet::new();
     let mut superseded_ids = HashSet::new();
     for observed in &dto.records {
@@ -511,7 +520,7 @@ fn operational_credential_policy(
     let binding = EvidenceBindingV1 {
         issuer: EvidenceIssuer::new(OPERATIONAL_CREDENTIAL_ISSUER)?,
         source: EvidenceSource::new(OPERATIONAL_CREDENTIAL_SOURCE)?,
-        target: EvidenceTarget::new(OPERATIONAL_CREDENTIAL_TARGET)?,
+        target: EvidenceTarget::new(HOSTED_EVIDENCE_TARGET)?,
         environment: EvidenceEnvironment::new(OPERATIONAL_CREDENTIAL_ENVIRONMENT)?,
         subject: EvidenceSubject::new(expected_subject)?,
     };
@@ -624,6 +633,7 @@ mod tests {
     const SUBJECT: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     const OBSERVED_AT: i64 = 1_700_000_000;
     const EVALUATED_AT: i64 = 1_700_000_010;
+    const REVIEW_REPOSITORY: &str = "iamaman11/part-crm-emai-profile";
 
     fn observation() -> Value {
         json!({
@@ -684,7 +694,7 @@ mod tests {
         let status = record_string(&record, "status")?.to_owned();
         Ok(json!({
             "record": record,
-            "review_repository": "acme/profile-platform",
+            "review_repository": REVIEW_REPOSITORY,
             "review_reference": reference,
             "provider_object": {
                 "available": true,
@@ -701,7 +711,7 @@ mod tests {
         json!({
             "schema_version": 1,
             "kind": "EXTERNAL_REVIEW_ATTESTATION_OBSERVATION",
-            "repository": "acme/profile-platform",
+            "repository": REVIEW_REPOSITORY,
             "records": records
         })
     }
@@ -786,7 +796,7 @@ mod tests {
     -> Result<(), Box<dyn std::error::Error>> {
         let record = terminal_record(
             "ev-20260806-terminal",
-            "https://github.com/acme/profile-platform/issues/9#issuecomment-101",
+            "https://github.com/iamaman11/part-crm-emai-profile/issues/9#issuecomment-101",
             None,
         );
         let result = verify_external_review_attestations_json(
@@ -801,7 +811,7 @@ mod tests {
     -> Result<(), Box<dyn std::error::Error>> {
         let record = terminal_record(
             "ev-20260806-terminal",
-            "https://github.com/acme/profile-platform/issues/9#issuecomment-101",
+            "https://github.com/iamaman11/part-crm-emai-profile/issues/9#issuecomment-101",
             None,
         );
         let mut unknown = review_batch(vec![observed_record(record)?]);
@@ -811,7 +821,7 @@ mod tests {
         let legacy = json!({
             "schema_version": 0,
             "kind": "EXTERNAL_REVIEW_OBSERVATION",
-            "repository": "acme/profile-platform",
+            "repository": REVIEW_REPOSITORY,
             "records": []
         });
         assert!(verify_external_review_attestations_json(&legacy.to_string()).is_err());
@@ -823,7 +833,7 @@ mod tests {
     -> Result<(), Box<dyn std::error::Error>> {
         let record = terminal_record(
             "ev-20260806-terminal",
-            "https://github.com/acme/profile-platform/issues/9#issuecomment-101",
+            "https://github.com/iamaman11/part-crm-emai-profile/issues/9#issuecomment-101",
             None,
         );
         let observed = observed_record(record)?;
@@ -854,17 +864,40 @@ mod tests {
     }
 
     #[test]
+    fn external_review_adapter_rejects_self_consistent_foreign_repository()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let record = terminal_record(
+            "ev-20260806-terminal",
+            "https://github.com/other/repository/issues/9#issuecomment-101",
+            None,
+        );
+        let mut observed = observed_record(record)?;
+        observed["review_repository"] = Value::String("other/repository".to_owned());
+        let mut foreign = review_batch(vec![observed]);
+        foreign["repository"] = Value::String("other/repository".to_owned());
+
+        let error = verify_external_review_attestations_json(&foreign.to_string())
+            .expect_err("self-consistent foreign repository must fail closed");
+        assert!(
+            error
+                .to_string()
+                .contains("HOSTED_REVIEW_ATTESTATION_REPOSITORY_BINDING_MISMATCH")
+        );
+        Ok(())
+    }
+
+    #[test]
     fn external_review_adapter_owns_active_terminal_selection()
     -> Result<(), Box<dyn std::error::Error>> {
         let old_id = "ev-20260806-old-terminal";
         let old = terminal_record(
             old_id,
-            "https://github.com/acme/profile-platform/issues/9#issuecomment-404",
+            "https://github.com/iamaman11/part-crm-emai-profile/issues/9#issuecomment-404",
             None,
         );
         let replacement = terminal_record(
             "ev-20260806-active-replacement",
-            "https://github.com/acme/profile-platform/issues/9#issuecomment-505",
+            "https://github.com/iamaman11/part-crm-emai-profile/issues/9#issuecomment-505",
             Some(old_id),
         );
         let mut old_observed = observed_record(old)?;
