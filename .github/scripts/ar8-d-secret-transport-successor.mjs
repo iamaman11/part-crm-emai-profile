@@ -143,7 +143,7 @@ function promotionPolicyErrors(promotion) {
     }
   }
   for (const marker of [
-    'wrangler@4.94.0 secret list',
+    'wrangler@4.94.0 secret list --name "$worker_name" --format json',
     'promotion preflight',
     'promotion verify',
     'release-set-promotion-staging',

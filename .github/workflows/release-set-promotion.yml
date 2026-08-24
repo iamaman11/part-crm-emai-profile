@@ -274,7 +274,7 @@ jobs:
           npx --yes wrangler@4.94.0 queues info "$queue_name" \
             --config "$WRANGLER_CONFIG" --env staging >/dev/null
           jq -n --arg name "$queue_name" '{name:$name}' > "$RUNNER_TEMP/queue-info.json"
-          npx --yes wrangler@4.94.0 secret list --name "$worker_name" --json \
+          npx --yes wrangler@4.94.0 secret list --name "$worker_name" --format json \
             --config "$WRANGLER_CONFIG" --env staging > "$RUNNER_TEMP/secret-list.json"
           echo "custom_domain=$custom_domain" >> "$GITHUB_OUTPUT"
 
@@ -656,7 +656,7 @@ jobs:
             --config "$WRANGLER_CONFIG" --env staging > "$RUNNER_TEMP/post-r2-info.json"
           npx --yes wrangler@4.94.0 queues info "$queue_name" --config "$WRANGLER_CONFIG" --env staging >/dev/null
           jq -n --arg name "$queue_name" '{name:$name}' > "$RUNNER_TEMP/post-queue-info.json"
-          npx --yes wrangler@4.94.0 secret list --name "$worker_name" --json \
+          npx --yes wrangler@4.94.0 secret list --name "$worker_name" --format json \
             --config "$WRANGLER_CONFIG" --env staging > "$RUNNER_TEMP/post-secret-list.json"
           python scripts/deployment-snapshot-ar11.py \
             --environment staging --collected-at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \

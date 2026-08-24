@@ -138,6 +138,7 @@ function validateWorkflow(text) {
     'workers/scripts/$resolver_name/subdomain',
     '.result.enabled == false',
     '.result.previews_enabled == false',
+    'wrangler@4.94.0 secret list --name "$worker_name" --format json',
     'AR11_CORE_MAILBOX_HOSTED_DISABLED',
   ];
   for (const fragment of required) requireFragment(text, fragment, 'GitHub Governance Gate');
@@ -222,6 +223,12 @@ async function selfTest() {
     workflow,
     'MAILBOX_SECRET_RESOLVER',
     'UNREVIEWED_BINDING',
+  );
+  await expectWorkflowRejected(
+    'unsupported Wrangler secret-list JSON flag',
+    workflow,
+    'secret list --name "$worker_name" --format json',
+    'secret list --name "$worker_name" --json',
   );
   await expectCredentialRejected('observe credential gains mutator', credential, (copy) => {
     copy.credentials[0].allowed_mutator = 'github-governance-gate';
