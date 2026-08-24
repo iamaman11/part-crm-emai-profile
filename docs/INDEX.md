@@ -11,11 +11,10 @@ Navigation only. This file creates no program/lifecycle/semantic authority.
 F1/F2  ACCEPTED
 N1     ACCEPTED
 #454   ACCEPTED
-N2     CURRENT / IN PROGRESS
-N3     BLOCKED on N2
-N4     BLOCKED on N3
-N5     BLOCKED on N4
-PF-1   BLOCKED on N5 + fresh #430 entry reread
+N2–N5  ACCEPTED
+PF-1   ACCEPTED (#466)
+PF-2   CURRENT (#471)
+PF-3   BLOCKED on PF-2
 AR-12  NOT STARTED
 ```
 
@@ -25,12 +24,11 @@ Production remains fail-closed and `source_present != production_enabled` remain
 
 1. [`ARCHITECTURE_REBASELINE_V3_PLAN.md`](ARCHITECTURE_REBASELINE_V3_PLAN.md) — canonical current program authority.
 2. [`APPLICATION_ARCHITECTURE_MANDATORY_REQUIREMENTS.md`](APPLICATION_ARCHITECTURE_MANDATORY_REQUIREMENTS.md) + [`ARCHITECTURE_EVOLUTION_QUALITY_CONTRACT.md`](ARCHITECTURE_EVOLUTION_QUALITY_CONTRACT.md) — permanent architecture/quality rules.
-3. [`PRE_PF1_AUTHORITY_ESTATE_NORMALIZATION.md`](PRE_PF1_AUTHORITY_ESTATE_NORMALIZATION.md) — detailed #454/N2–N5 retirement contract.
-4. #441 — live mutable pre-PF-1 execution state; #454 — accepted Release Set v2 correction; N2 — current normalization transaction.
-5. [`PF1_CANONICAL_ARCHITECTURE_INVENTORY_CUTOVER.md`](PF1_CANONICAL_ARCHITECTURE_INVENTORY_CUTOVER.md) / #430 — PF-1.
-6. [`PF3_ARCHITECTURE_FITNESS_BASELINE.md`](PF3_ARCHITECTURE_FITNESS_BASELINE.md) / #431 — PF-3.
-7. [`POST_AR11_FUNCTIONAL_CLOSURE_PLAN.md`](POST_AR11_FUNCTIONAL_CLOSURE_PLAN.md), #399, #421 — Functional Closure.
-8. Bounded subject authorities: Rust/SQL/provider-native/runtime/release/security contracts and ADRs.
+3. #471 — the single live PF-2 execution tracker; PF-2 has no duplicate Markdown plan.
+4. [`PF3_ARCHITECTURE_FITNESS_BASELINE.md`](PF3_ARCHITECTURE_FITNESS_BASELINE.md) / #431 — PF-3.
+5. [`POST_AR11_FUNCTIONAL_CLOSURE_PLAN.md`](POST_AR11_FUNCTIONAL_CLOSURE_PLAN.md), #399, #421 — Functional Closure.
+6. Accepted historical contracts/provenance: [`PRE_PF1_AUTHORITY_ESTATE_NORMALIZATION.md`](PRE_PF1_AUTHORITY_ESTATE_NORMALIZATION.md) / #441 and [`PF1_CANONICAL_ARCHITECTURE_INVENTORY_CUTOVER.md`](PF1_CANONICAL_ARCHITECTURE_INVENTORY_CUTOVER.md) / #430 / #466.
+7. Bounded subject authorities: Rust/SQL/provider-native/runtime/release/security contracts and ADRs.
 
 Open PRs, generated projections and historical AR documents never outrank accepted protected `main` plus this hierarchy.
 
@@ -46,8 +44,7 @@ Open PRs, generated projections and historical AR documents never outrank accept
 ## Current execution path
 
 ```text
-N2 -> N3 -> N4 -> N5
--> PF-1 -> PF-2 -> PF-3
+PF-2 -> PF-3
 -> FC-6 preflight (fresh #399/#421 live re-baseline)
 -> FC-6 staging proof
 -> FC-7 closeout
@@ -60,7 +57,7 @@ N2 -> N3 -> N4 -> N5
 -> PC-1 Production Core v1
 ```
 
-N2–N5 are sequential delete/simplify transactions, not new architecture programs. Their repository-wide caller discovery is one read-only ephemeral pass; internal validators/workflows are cutover callers, not durable consumers. PF-3 is a provisional fitness baseline and accepted AR-15 establishes final architecture-form freeze. `fresh #399/#421 re-baseline` is FC-6 preflight, not another implementation phase. FC-7 is closeout unless proof exposes a real defect.
+N2–N5 and PF-1 are accepted historical cutovers. PF-2 stays a minimal evidence pipeline: provider/GitHub/network/credential effects remain outside `opsctl`, which accepts strict secret-free observations and owns pure policy only. PF-3 is a provisional fitness baseline and accepted AR-15 establishes final architecture-form freeze. `fresh #399/#421 re-baseline` is FC-6 preflight, not another implementation phase. FC-7 is closeout unless proof exposes a real defect.
 
 ## Projection/history rules
 

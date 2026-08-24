@@ -125,6 +125,11 @@ function validateConfigs(core, resolver) {
   if (!Array.isArray(staging.routes) || staging.routes.length !== 0) {
     fail('resolver staging routes must remain empty');
   }
+  if (!object(staging.triggers)
+      || !Array.isArray(staging.triggers.crons)
+      || staging.triggers.crons.length !== 0) {
+    fail('resolver staging cron triggers must remain explicitly disabled');
+  }
 }
 
 function validateWorkflow(text) {
@@ -133,7 +138,10 @@ function validateWorkflow(text) {
     OBSERVE_SECRET,
     'workers/scripts/$worker_name/settings',
     'MAILBOX_SECRET_RESOLVER',
+    'MAILBOX_JOBS',
+    'MAILBOX_RESOLVER_CALLER_AUTH_KEY',
     'workers/scripts/$resolver_name/schedules',
+    '(.env.staging.triggers.crons | length) == 0',
     '(.result.schedules | length) == 0',
     'workers/scripts/$resolver_name/subdomain',
     '.result.enabled == false',
@@ -213,6 +221,12 @@ async function selfTest() {
     '(.result.schedules | length) >= 0',
   );
   await expectWorkflowRejected(
+    'missing source cron-disablement proof',
+    workflow,
+    '(.env.staging.triggers.crons | length) == 0',
+    '(.env.staging.triggers.crons | length) >= 0',
+  );
+  await expectWorkflowRejected(
     'workers.dev enabled accepted',
     workflow,
     '.result.enabled == false',
@@ -223,6 +237,12 @@ async function selfTest() {
     workflow,
     'MAILBOX_SECRET_RESOLVER',
     'UNREVIEWED_BINDING',
+  );
+  await expectWorkflowRejected(
+    'control-plane caller-auth secret proof removed',
+    workflow,
+    'MAILBOX_RESOLVER_CALLER_AUTH_KEY',
+    'UNREVIEWED_CALLER_AUTH_SECRET',
   );
   await expectWorkflowRejected(
     'unsupported Wrangler secret-list JSON flag',

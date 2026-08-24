@@ -1,12 +1,12 @@
 # PF-1 — Canonical Architecture Inventory + Lifecycle Policy Cutover
 
-**Document status:** SUBORDINATE_PREREQUISITE_SPEC  
+**Document status:** ACCEPTED_HISTORICAL_STAGE_CONTRACT
 **Program authority:** `docs/ARCHITECTURE_REBASELINE_V3_PLAN.md`  
 **Pre-PF-1 prerequisite:** `docs/PRE_PF1_AUTHORITY_ESTATE_NORMALIZATION.md`  
-**Issue:** #430  
+**Issue / accepted implementation:** #430 / #466
 **Production authorization:** NONE
 
-PF-1 replaces transitional lifecycle/inventory machinery with a small typed composition layer. It is not a generic architecture authority framework and does not start AR-12.
+PF-1 replaced transitional lifecycle/inventory machinery with a small typed composition layer. This document preserves its accepted boundary and anti-regression requirements; it is not mutable current execution authority and does not start AR-12.
 
 ## 1. Entry gate
 
