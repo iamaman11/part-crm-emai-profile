@@ -6,6 +6,7 @@ use opsctl_core::external_evidence::{
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
+use std::borrow::Cow;
 use std::collections::BTreeSet;
 use std::fmt::{Display, Formatter};
 use std::fs;
@@ -76,6 +77,14 @@ fn repository_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
 }
 
+fn normalize_repository_text(value: &str) -> Cow<'_, str> {
+    if value.contains('\r') {
+        Cow::Owned(value.replace("\r\n", "\n").replace('\r', "\n"))
+    } else {
+        Cow::Borrowed(value)
+    }
+}
+
 fn validate_tree(root: &Path) -> Result<ExternalReadinessSummaryV1, AdapterError> {
     let records_dir = root.join("evidence/external/records");
     if !records_dir.is_dir() {
@@ -85,7 +94,9 @@ fn validate_tree(root: &Path) -> Result<ExternalReadinessSummaryV1, AdapterError
         )));
     }
     let mut paths = fs::read_dir(&records_dir)
-        .map_err(|error| AdapterError::new(format!("cannot read {}: {error}", records_dir.display())))?
+        .map_err(|error| {
+            AdapterError::new(format!("cannot read {}: {error}", records_dir.display()))
+        })?
         .map(|entry| entry.map(|value| value.path()))
         .collect::<Result<Vec<_>, _>>()
         .map_err(|error| AdapterError::new(format!("cannot enumerate records: {error}")))?;
@@ -94,7 +105,9 @@ fn validate_tree(root: &Path) -> Result<ExternalReadinessSummaryV1, AdapterError
     let mut records = Vec::new();
     for path in paths {
         let Some(name) = path.file_name().and_then(|value| value.to_str()) else {
-            return Err(AdapterError::new("external evidence path is not valid UTF-8"));
+            return Err(AdapterError::new(
+                "external evidence path is not valid UTF-8",
+            ));
         };
         if matches!(name, "README.md" | ".gitkeep") {
             continue;
@@ -126,7 +139,7 @@ fn parse_record(path: &Path) -> Result<ExternalEvidenceRecordV1, AdapterError> {
         .map_err(|error| AdapterError::new(format!("{}: {error}", path.display())))?;
     let canonical = canonical_pretty_json(&value)
         .map_err(|error| AdapterError::new(format!("{}: {error}", path.display())))?;
-    if raw != canonical {
+    if normalize_repository_text(raw).as_ref() != canonical.as_str() {
         return Err(AdapterError::new(format!(
             "{} is not canonical pretty JSON",
             path.display()
@@ -153,7 +166,10 @@ fn parse_record(path: &Path) -> Result<ExternalEvidenceRecordV1, AdapterError> {
     let status = ExternalEvidenceStatus::parse(&dto.status)
         .ok_or_else(|| AdapterError::new(format!("unsupported evidence status {}", dto.status)))?;
     let environment = ExternalEnvironment::parse(&dto.scope.environment).ok_or_else(|| {
-        AdapterError::new(format!("unsupported evidence environment {}", dto.scope.environment))
+        AdapterError::new(format!(
+            "unsupported evidence environment {}",
+            dto.scope.environment
+        ))
     })?;
     validate_subject_id(&dto.scope.subject_id)?;
     let (observed_at_sort_key, observed_date) = parse_timestamp(&dto.observed_at)?;
@@ -170,13 +186,17 @@ fn parse_record(path: &Path) -> Result<ExternalEvidenceRecordV1, AdapterError> {
     )?;
     for digest in &dto.artifact_digests_sha256 {
         if !is_lower_hex(digest, 64) {
-            return Err(AdapterError::new("invalid external evidence SHA-256 digest"));
+            return Err(AdapterError::new(
+                "invalid external evidence SHA-256 digest",
+            ));
         }
     }
     validate_bounded_unique_strings(&dto.limitations, 0, 20, "limitations")?;
     for limitation in &dto.limitations {
         if !is_token(limitation) {
-            return Err(AdapterError::new("external evidence limitation must be a bounded token"));
+            return Err(AdapterError::new(
+                "external evidence limitation must be a bounded token",
+            ));
         }
     }
 
@@ -188,7 +208,9 @@ fn parse_record(path: &Path) -> Result<ExternalEvidenceRecordV1, AdapterError> {
                 AdapterError::new(format!("unsupported check outcome {}", check.outcome))
             })?;
             if !is_token(&check.code) {
-                return Err(AdapterError::new("external evidence check code is malformed"));
+                return Err(AdapterError::new(
+                    "external evidence check code is malformed",
+                ));
             }
             Ok(ExternalEvidenceCheck {
                 code: check.code,
@@ -199,7 +221,9 @@ fn parse_record(path: &Path) -> Result<ExternalEvidenceRecordV1, AdapterError> {
 
     let reviewed_at_sort_key = if let Some(review) = &dto.review {
         if !is_github_login(&review.github_login) {
-            return Err(AdapterError::new("external evidence reviewer login is malformed"));
+            return Err(AdapterError::new(
+                "external evidence reviewer login is malformed",
+            ));
         }
         validate_reference(&review.review_reference, true)?;
         Some(parse_timestamp(&review.reviewed_at)?.0)
@@ -209,7 +233,9 @@ fn parse_record(path: &Path) -> Result<ExternalEvidenceRecordV1, AdapterError> {
     if let Some(supersedes) = &dto.supersedes {
         validate_evidence_id(supersedes)?;
         if supersedes == &dto.evidence_id {
-            return Err(AdapterError::new("external evidence cannot supersede itself"));
+            return Err(AdapterError::new(
+                "external evidence cannot supersede itself",
+            ));
         }
     }
 
@@ -229,13 +255,16 @@ fn parse_record(path: &Path) -> Result<ExternalEvidenceRecordV1, AdapterError> {
     })
 }
 
-fn validate_projection(root: &Path, summary: &ExternalReadinessSummaryV1) -> Result<(), AdapterError> {
+fn validate_projection(
+    root: &Path,
+    summary: &ExternalReadinessSummaryV1,
+) -> Result<(), AdapterError> {
     let expected = render_summary(summary)?;
     let summary_path = root.join("docs/external-evidence-summary.json");
     let actual = fs::read_to_string(&summary_path).map_err(|error| {
         AdapterError::new(format!("cannot read {}: {error}", summary_path.display()))
     })?;
-    if actual != expected {
+    if normalize_repository_text(&actual).as_ref() != expected.as_str() {
         return Err(AdapterError::new(format!(
             "{} differs from typed Rust readiness projection",
             summary_path.display()
@@ -317,7 +346,9 @@ fn render_summary(summary: &ExternalReadinessSummaryV1) -> Result<String, Adapte
 
 fn validate_evidence_id(value: &str) -> Result<u32, AdapterError> {
     let Some(rest) = value.strip_prefix("ev-") else {
-        return Err(AdapterError::new("external evidence id must start with ev-"));
+        return Err(AdapterError::new(
+            "external evidence id must start with ev-",
+        ));
     };
     let Some((date, suffix)) = rest.split_once('-') else {
         return Err(AdapterError::new("external evidence id is missing suffix"));
@@ -334,7 +365,9 @@ fn validate_evidence_id(value: &str) -> Result<u32, AdapterError> {
             .first()
             .is_some_and(u8::is_ascii_alphanumeric)
     {
-        return Err(AdapterError::new("external evidence id suffix is malformed"));
+        return Err(AdapterError::new(
+            "external evidence id suffix is malformed",
+        ));
     }
     date.parse::<u32>()
         .map_err(|error| AdapterError::new(format!("invalid evidence date: {error}")))
@@ -351,14 +384,9 @@ fn validate_subject_id(value: &str) -> Result<(), AdapterError> {
 
 fn is_token(value: &str) -> bool {
     (3..=96).contains(&value.len())
-        && value
-            .as_bytes()
-            .first()
-            .is_some_and(u8::is_ascii_lowercase)
+        && value.as_bytes().first().is_some_and(u8::is_ascii_lowercase)
         && value.bytes().all(|byte| {
-            byte.is_ascii_lowercase()
-                || byte.is_ascii_digit()
-                || matches!(byte, b'.' | b'_' | b'-')
+            byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'.' | b'_' | b'-')
         })
 }
 
@@ -376,12 +404,15 @@ fn is_github_login(value: &str) -> bool {
 
 fn validate_reference(value: &str, terminal_review: bool) -> Result<(), AdapterError> {
     if let Some(path) = value.strip_prefix("https://github.com/") {
-        if path.contains('?') || path.contains('@') || path.contains("/../") || path.contains("/./") {
+        if path.contains('?') || path.contains('@') || path.contains("/../") || path.contains("/./")
+        {
             return Err(AdapterError::new("unsafe GitHub evidence reference"));
         }
         let parts = path.split('/').filter(|part| !part.is_empty()).count();
         if parts < 4 {
-            return Err(AdapterError::new("GitHub evidence reference is not reviewable"));
+            return Err(AdapterError::new(
+                "GitHub evidence reference is not reviewable",
+            ));
         }
         if terminal_review
             && !(value.contains("#issuecomment-")
@@ -425,7 +456,9 @@ fn validate_bounded_unique_strings(
     }
     let unique = values.iter().map(String::as_str).collect::<BTreeSet<_>>();
     if unique.len() != values.len() {
-        return Err(AdapterError::new(format!("{field} contains duplicate values")));
+        return Err(AdapterError::new(format!(
+            "{field} contains duplicate values"
+        )));
     }
     Ok(())
 }
@@ -439,10 +472,9 @@ fn parse_timestamp(value: &str) -> Result<(u64, u32), AdapterError> {
         || bytes[13] != b':'
         || bytes[16] != b':'
         || bytes[19] != b'Z'
-        || bytes
-            .iter()
-            .enumerate()
-            .any(|(index, byte)| !matches!(index, 4 | 7 | 10 | 13 | 16 | 19) && !byte.is_ascii_digit())
+        || bytes.iter().enumerate().any(|(index, byte)| {
+            !matches!(index, 4 | 7 | 10 | 13 | 16 | 19) && !byte.is_ascii_digit()
+        })
     {
         return Err(AdapterError::new(
             "timestamp must use exact whole-second YYYY-MM-DDTHH:MM:SSZ",
@@ -461,7 +493,9 @@ fn parse_timestamp(value: &str) -> Result<(u64, u32), AdapterError> {
         || minute > 59
         || second > 59
     {
-        return Err(AdapterError::new("timestamp contains an invalid UTC calendar value"));
+        return Err(AdapterError::new(
+            "timestamp contains an invalid UTC calendar value",
+        ));
     }
     let date = year * 10_000 + month * 100 + day;
     let sort_key = u64::from(date) * 1_000_000
@@ -511,7 +545,10 @@ fn reject_sensitive_text(raw: &str, path: &Path) -> Result<(), AdapterError> {
     }
     for token in raw.split(|character: char| {
         !(character.is_ascii_alphanumeric()
-            || matches!(character, '@' | '.' | '_' | '%' | '+' | '-' | ':' | '[' | ']'))
+            || matches!(
+                character,
+                '@' | '.' | '_' | '%' | '+' | '-' | ':' | '[' | ']'
+            ))
     }) {
         if token.contains('@') && token.contains('.') {
             return Err(AdapterError::new(format!(
@@ -520,7 +557,9 @@ fn reject_sensitive_text(raw: &str, path: &Path) -> Result<(), AdapterError> {
             )));
         }
         let address_candidate = token.trim_matches(['[', ']']);
-        if Ipv4Addr::from_str(address_candidate).is_ok() || Ipv6Addr::from_str(address_candidate).is_ok() {
+        if Ipv4Addr::from_str(address_candidate).is_ok()
+            || Ipv6Addr::from_str(address_candidate).is_ok()
+        {
             return Err(AdapterError::new(format!(
                 "{} contains a raw IP address",
                 path.display()
@@ -538,12 +577,17 @@ fn is_lower_hex(value: &str, expected_length: usize) -> bool {
 }
 
 fn format_date(value: u32) -> String {
-    format!("{:04}-{:02}-{:02}", value / 10_000, (value / 100) % 100, value % 100)
+    format!(
+        "{:04}-{:02}-{:02}",
+        value / 10_000,
+        (value / 100) % 100,
+        value % 100
+    )
 }
 
 #[test]
-fn current_repository_external_evidence_uses_typed_rust_authority()
--> Result<(), Box<dyn std::error::Error>> {
+fn current_repository_external_evidence_uses_typed_rust_authority(
+) -> Result<(), Box<dyn std::error::Error>> {
     let root = repository_root();
     let summary = validate_tree(&root)?;
     validate_projection(&root, &summary)?;
@@ -557,6 +601,25 @@ fn positive_external_evidence_fixtures_pass() -> Result<(), Box<dyn std::error::
     for fixture in ["valid", "valid-passed"] {
         validate_tree(&root.join("tests/external-evidence/fixtures").join(fixture))?;
     }
+    Ok(())
+}
+
+#[test]
+fn repository_line_endings_normalize_without_weakening_canonical_text(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let root = repository_root().join("tests/external-readiness/fixtures/empty");
+    let summary = validate_tree(&root)?;
+    let canonical = render_summary(&summary)?;
+    let crlf = canonical.replace('\n', "\r\n");
+    let cr = canonical.replace('\n', "\r");
+    assert_eq!(normalize_repository_text(&crlf).as_ref(), canonical.as_str());
+    assert_eq!(normalize_repository_text(&cr).as_ref(), canonical.as_str());
+
+    let noncanonical = canonical.replacen("\"active_records\":", "\"active_records\" :", 1);
+    assert_ne!(
+        normalize_repository_text(&noncanonical).as_ref(),
+        canonical.as_str()
+    );
     Ok(())
 }
 
@@ -581,12 +644,16 @@ fn unsafe_and_semantically_invalid_external_evidence_fixtures_fail() {
 }
 
 #[test]
-fn empty_readiness_projection_matches_existing_contract() -> Result<(), Box<dyn std::error::Error>> {
+fn empty_readiness_projection_matches_existing_contract() -> Result<(), Box<dyn std::error::Error>>
+{
     let root = repository_root().join("tests/external-readiness/fixtures/empty");
     let summary = validate_tree(&root)?;
     let expected = render_summary(&summary)?;
     let committed = fs::read_to_string(root.join("expected-summary.json"))?;
-    assert_eq!(expected, committed);
+    assert_eq!(
+        expected.as_str(),
+        normalize_repository_text(&committed).as_ref()
+    );
     let status = fs::read_to_string(root.join("status.json"))?;
     let status_path = root.join("docs/status.json");
     fs::create_dir_all(root.join("docs"))?;
