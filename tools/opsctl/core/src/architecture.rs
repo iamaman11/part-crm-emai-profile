@@ -20,6 +20,27 @@ pub struct ProgramSlice {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ValidatedProgramSequence {
+    slices: Vec<ProgramSlice>,
+    baseline_index: usize,
+}
+
+impl ValidatedProgramSequence {
+    pub fn new(slices: Vec<ProgramSlice>) -> Result<Self, LifecycleEvaluationError> {
+        let baseline_index = validate_sequence(&slices)?;
+        Ok(Self {
+            slices,
+            baseline_index,
+        })
+    }
+
+    #[must_use]
+    pub fn slices(&self) -> &[ProgramSlice] {
+        &self.slices
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AcceptanceObservationV1 {
     pub record_schema_version: u64,
     pub slice: String,
@@ -51,7 +72,6 @@ pub struct AcceptanceObservationV1 {
 pub struct RawArchitectureAcceptanceEvidenceV1 {
     pub schema_version: u64,
     pub source_branch: String,
-    pub sequence: Vec<ProgramSlice>,
     pub acceptance_observations: Vec<AcceptanceObservationV1>,
 }
 
@@ -92,6 +112,7 @@ pub struct LifecycleEvaluator;
 
 impl LifecycleEvaluator {
     pub fn evaluate(
+        sequence: &ValidatedProgramSequence,
         evidence: &RawArchitectureAcceptanceEvidenceV1,
     ) -> Result<DerivedLifecycleStateV1, LifecycleEvaluationError> {
         if evidence.schema_version != RAW_ACCEPTANCE_EVIDENCE_SCHEMA_VERSION {
@@ -107,7 +128,6 @@ impl LifecycleEvaluator {
             )));
         }
 
-        let baseline_index = validate_sequence(&evidence.sequence)?;
         let mut observations = BTreeMap::new();
         for observation in &evidence.acceptance_observations {
             if observations
@@ -122,8 +142,8 @@ impl LifecycleEvaluator {
         }
 
         for observation in &evidence.acceptance_observations {
-            let index = evidence
-                .sequence
+            let index = sequence
+                .slices
                 .iter()
                 .position(|slice| slice.id == observation.slice)
                 .ok_or_else(|| {
@@ -132,7 +152,7 @@ impl LifecycleEvaluator {
                         observation.slice
                     ))
                 })?;
-            if index <= baseline_index {
+            if index <= sequence.baseline_index {
                 return Err(LifecycleEvaluationError::new(format!(
                     "ACCEPTANCE_OBSERVATION_PRECEDES_TYPED_BASELINE: {}",
                     observation.slice
@@ -140,9 +160,14 @@ impl LifecycleEvaluator {
             }
         }
 
-        let mut accepted_index = baseline_index;
+        let mut accepted_index = sequence.baseline_index;
         let mut gap_seen = false;
-        for (index, slice) in evidence.sequence.iter().enumerate().skip(baseline_index + 1) {
+        for (index, slice) in sequence
+            .slices
+            .iter()
+            .enumerate()
+            .skip(sequence.baseline_index + 1)
+        {
             match observations.get(slice.id.as_str()) {
                 Some(observation) => {
                     if gap_seen {
@@ -158,7 +183,7 @@ impl LifecycleEvaluator {
             }
         }
 
-        let accepted = &evidence.sequence[accepted_index];
+        let accepted = &sequence.slices[accepted_index];
         let expected = expected_state(&accepted.id);
         Ok(DerivedLifecycleStateV1 {
             schema_version: 1,
@@ -393,7 +418,7 @@ mod tests {
     use super::{
         ACCEPTANCE_RECORD_SCHEMA_VERSION, AcceptanceObservationV1, DerivedLifecycleStateV1,
         LifecycleEvaluationError, LifecycleEvaluator, ProductionCoreGate, ProgramSlice,
-        RawArchitectureAcceptanceEvidenceV1,
+        RawArchitectureAcceptanceEvidenceV1, ValidatedProgramSequence,
     };
 
     const A: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
@@ -401,18 +426,20 @@ mod tests {
     const C: &str = "cccccccccccccccccccccccccccccccccccccccc";
     const D: &str = "dddddddddddddddddddddddddddddddddddddddd";
 
-    fn sequence() -> Vec<ProgramSlice> {
+    fn sequence() -> Result<ValidatedProgramSequence, LifecycleEvaluationError> {
         let ids = [
             "AR-10", "AR-11", "AR-12", "AR-13", "AR-14", "AR-15", "AR-16", "AR-17",
         ];
-        ids.iter()
+        let slices = ids
+            .iter()
             .enumerate()
             .map(|(index, id)| ProgramSlice {
                 id: (*id).to_owned(),
                 predecessor: index.checked_sub(1).map(|previous| ids[previous].to_owned()),
                 successor: ids.get(index + 1).map(|next| (*next).to_owned()),
             })
-            .collect()
+            .collect();
+        ValidatedProgramSequence::new(slices)
     }
 
     fn observation(slice: &str) -> AcceptanceObservationV1 {
@@ -453,7 +480,6 @@ mod tests {
         RawArchitectureAcceptanceEvidenceV1 {
             schema_version: 1,
             source_branch: "main".to_owned(),
-            sequence: sequence(),
             acceptance_observations: observations,
         }
     }
@@ -461,7 +487,8 @@ mod tests {
     #[test]
     fn baseline_without_new_acceptance_derives_ar12_current(
     ) -> Result<(), LifecycleEvaluationError> {
-        let state = LifecycleEvaluator::evaluate(&evidence(Vec::new()))?;
+        let sequence = sequence()?;
+        let state = LifecycleEvaluator::evaluate(&sequence, &evidence(Vec::new()))?;
         assert_eq!(
             state,
             DerivedLifecycleStateV1 {
@@ -479,7 +506,8 @@ mod tests {
 
     #[test]
     fn contiguous_acceptance_advances_one_slice() -> Result<(), LifecycleEvaluationError> {
-        let state = LifecycleEvaluator::evaluate(&evidence(vec![observation("AR-12")]))?;
+        let sequence = sequence()?;
+        let state = LifecycleEvaluator::evaluate(&sequence, &evidence(vec![observation("AR-12")]))?;
         assert_eq!(state.accepted_checkpoint, "AR-12");
         assert_eq!(state.current_slice.as_deref(), Some("AR-13"));
         Ok(())
@@ -487,7 +515,8 @@ mod tests {
 
     #[test]
     fn gap_before_later_acceptance_fails_closed() -> Result<(), LifecycleEvaluationError> {
-        let Err(error) = LifecycleEvaluator::evaluate(&evidence(vec![observation("AR-13")])) else {
+        let sequence = sequence()?;
+        let Err(error) = LifecycleEvaluator::evaluate(&sequence, &evidence(vec![observation("AR-13")])) else {
             return Err(LifecycleEvaluationError::new(
                 "expected non-contiguous acceptance rejection",
             ));
@@ -498,8 +527,9 @@ mod tests {
 
     #[test]
     fn duplicate_acceptance_fails_closed() -> Result<(), LifecycleEvaluationError> {
+        let sequence = sequence()?;
         let ar12 = observation("AR-12");
-        let Err(error) = LifecycleEvaluator::evaluate(&evidence(vec![ar12.clone(), ar12])) else {
+        let Err(error) = LifecycleEvaluator::evaluate(&sequence, &evidence(vec![ar12.clone(), ar12])) else {
             return Err(LifecycleEvaluationError::new(
                 "expected duplicate acceptance rejection",
             ));
@@ -510,9 +540,10 @@ mod tests {
 
     #[test]
     fn incomplete_hosted_verification_fails_closed() -> Result<(), LifecycleEvaluationError> {
+        let sequence = sequence()?;
         let mut ar12 = observation("AR-12");
         ar12.required_status_contexts_success -= 1;
-        let Err(error) = LifecycleEvaluator::evaluate(&evidence(vec![ar12])) else {
+        let Err(error) = LifecycleEvaluator::evaluate(&sequence, &evidence(vec![ar12])) else {
             return Err(LifecycleEvaluationError::new(
                 "expected incomplete hosted verification rejection",
             ));
@@ -523,9 +554,10 @@ mod tests {
 
     #[test]
     fn wrong_candidate_tree_fails_closed() -> Result<(), LifecycleEvaluationError> {
+        let sequence = sequence()?;
         let mut ar12 = observation("AR-12");
         ar12.observed_candidate_tree = B.to_owned();
-        let Err(error) = LifecycleEvaluator::evaluate(&evidence(vec![ar12])) else {
+        let Err(error) = LifecycleEvaluator::evaluate(&sequence, &evidence(vec![ar12])) else {
             return Err(LifecycleEvaluationError::new(
                 "expected candidate tree rejection",
             ));
@@ -536,9 +568,10 @@ mod tests {
 
     #[test]
     fn premature_authorization_fails_closed() -> Result<(), LifecycleEvaluationError> {
+        let sequence = sequence()?;
         let mut ar12 = observation("AR-12");
         ar12.production_core_gate = ProductionCoreGate::Authorized;
-        let Err(error) = LifecycleEvaluator::evaluate(&evidence(vec![ar12])) else {
+        let Err(error) = LifecycleEvaluator::evaluate(&sequence, &evidence(vec![ar12])) else {
             return Err(LifecycleEvaluationError::new(
                 "expected premature authorization rejection",
             ));
@@ -550,11 +583,12 @@ mod tests {
     #[test]
     fn ar17_is_the_only_architecture_authorization_boundary(
     ) -> Result<(), LifecycleEvaluationError> {
+        let sequence = sequence()?;
         let observations = ["AR-12", "AR-13", "AR-14", "AR-15", "AR-16", "AR-17"]
             .into_iter()
             .map(observation)
             .collect();
-        let state = LifecycleEvaluator::evaluate(&evidence(observations))?;
+        let state = LifecycleEvaluator::evaluate(&sequence, &evidence(observations))?;
         assert_eq!(state.accepted_checkpoint, "AR-17");
         assert_eq!(state.current_slice, None);
         assert!(state.architecture_complete);
