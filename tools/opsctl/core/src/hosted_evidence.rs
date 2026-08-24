@@ -323,14 +323,20 @@ mod tests {
         let mut source_drift = observation()?;
         source_drift.binding.source = EvidenceSource::new("other-source")?;
         assert_eq!(
-            policy()?.evaluate(source_drift, 1_700_000_010).err().map(|error| error.code()),
+            policy()?
+                .evaluate(source_drift, 1_700_000_010)
+                .err()
+                .map(|error| error.code()),
             Some("HOSTED_EVIDENCE_BINDING_MISMATCH")
         );
 
         let mut target_drift = observation()?;
         target_drift.binding.target = EvidenceTarget::new("other/repository")?;
         assert_eq!(
-            policy()?.evaluate(target_drift, 1_700_000_010).err().map(|error| error.code()),
+            policy()?
+                .evaluate(target_drift, 1_700_000_010)
+                .err()
+                .map(|error| error.code()),
             Some("HOSTED_EVIDENCE_BINDING_MISMATCH")
         );
         Ok(())
@@ -341,59 +347,85 @@ mod tests {
         let mut mutated = observation()?;
         mutated.production_mutation = true;
         assert_eq!(
-            policy()?.evaluate(mutated, 1_700_000_010).err().map(|error| error.code()),
+            policy()?
+                .evaluate(mutated, 1_700_000_010)
+                .err()
+                .map(|error| error.code()),
             Some("HOSTED_EVIDENCE_PRODUCTION_MUTATION_FORBIDDEN")
         );
         Ok(())
     }
 
     #[test]
-    fn rejects_untrusted_failed_and_unknown_observations() -> Result<(), Box<dyn std::error::Error>> {
+    fn rejects_untrusted_failed_and_unknown_observations() -> Result<(), Box<dyn std::error::Error>>
+    {
         let mut untrusted = observation()?;
         untrusted.trust_state = EvidenceTrustState::Untrusted;
         assert_eq!(
-            policy()?.evaluate(untrusted, 1_700_000_010).err().map(|error| error.code()),
+            policy()?
+                .evaluate(untrusted, 1_700_000_010)
+                .err()
+                .map(|error| error.code()),
             Some("HOSTED_EVIDENCE_UNTRUSTED")
         );
 
         let mut unknown = observation()?;
         unknown.trust_state = EvidenceTrustState::Unknown;
         assert_eq!(
-            policy()?.evaluate(unknown, 1_700_000_010).err().map(|error| error.code()),
+            policy()?
+                .evaluate(unknown, 1_700_000_010)
+                .err()
+                .map(|error| error.code()),
             Some("HOSTED_EVIDENCE_UNTRUSTED")
         );
 
         let mut failed = observation()?;
         failed.outcome = EvidenceOutcome::Failed;
         assert_eq!(
-            policy()?.evaluate(failed, 1_700_000_010).err().map(|error| error.code()),
+            policy()?
+                .evaluate(failed, 1_700_000_010)
+                .err()
+                .map(|error| error.code()),
             Some("HOSTED_EVIDENCE_OUTCOME_REJECTED")
         );
         Ok(())
     }
 
     #[test]
-    fn rejects_impossible_oversized_future_and_replayed_freshness() -> Result<(), Box<dyn std::error::Error>> {
+    fn rejects_impossible_oversized_future_and_replayed_freshness()
+    -> Result<(), Box<dyn std::error::Error>> {
         let mut impossible = observation()?;
         impossible.valid_until_unix_seconds = impossible.observed_at_unix_seconds;
         assert_eq!(
-            policy()?.evaluate(impossible, 1_700_000_010).err().map(|error| error.code()),
+            policy()?
+                .evaluate(impossible, 1_700_000_010)
+                .err()
+                .map(|error| error.code()),
             Some("HOSTED_EVIDENCE_FRESHNESS_WINDOW_INVALID")
         );
 
         let mut oversized = observation()?;
         oversized.valid_until_unix_seconds = oversized.observed_at_unix_seconds + 3_601;
         assert_eq!(
-            policy()?.evaluate(oversized, 1_700_000_010).err().map(|error| error.code()),
+            policy()?
+                .evaluate(oversized, 1_700_000_010)
+                .err()
+                .map(|error| error.code()),
             Some("HOSTED_EVIDENCE_FRESHNESS_WINDOW_TOO_LARGE")
         );
 
         assert_eq!(
-            policy()?.evaluate(observation()?, 1_699_999_999).err().map(|error| error.code()),
+            policy()?
+                .evaluate(observation()?, 1_699_999_999)
+                .err()
+                .map(|error| error.code()),
             Some("HOSTED_EVIDENCE_OBSERVATION_FROM_FUTURE")
         );
         assert_eq!(
-            policy()?.evaluate(observation()?, 1_700_003_600).err().map(|error| error.code()),
+            policy()?
+                .evaluate(observation()?, 1_700_003_600)
+                .err()
+                .map(|error| error.code()),
             Some("HOSTED_EVIDENCE_EXPIRED_OR_REPLAYED")
         );
         Ok(())
