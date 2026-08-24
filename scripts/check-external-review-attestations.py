@@ -278,6 +278,17 @@ def review_reference_from_record(data: dict[str, Any]) -> str | None:
     return reference if isinstance(reference, str) and reference else None
 
 
+def superseded_evidence_ids(
+    records: list[tuple[Path, dict[str, Any]]],
+) -> set[str]:
+    """Network prefilter only; Rust recomputes active leaves for acceptance."""
+    return {
+        value
+        for _path, data in records
+        if isinstance((value := data.get("supersedes")), str) and value
+    }
+
+
 def observe_tree(
     root: Path,
     repository_value: str | None,
@@ -285,10 +296,15 @@ def observe_tree(
     token: str | None,
 ) -> dict[str, Any]:
     repository = parse_repository(repository_value)
+    records = load_all_records(root)
+    superseded = superseded_evidence_ids(records)
     observed_records: list[dict[str, Any]] = []
-    for _path, data in load_all_records(root):
+    for _path, data in records:
+        evidence_id = data.get("evidence_id")
         reference = review_reference_from_record(data)
-        if reference is None:
+        if reference is None or (isinstance(evidence_id, str) and evidence_id in superseded):
+            # Keep the complete record in the DTO so Rust can independently derive
+            # active leaves. Skipping a GET here can only cause Rust to fail closed.
             observed_records.append(
                 {
                     "record": data,
