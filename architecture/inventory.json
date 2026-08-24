@@ -1523,7 +1523,7 @@
     "sources": {
       "credential_authority": {
         "path": "architecture/credential-authority.json",
-        "sha256": "afa298c0b9a8985253cdd5f053e16639bea693cc5eaffa7e179dcb2e39b75da2"
+        "sha256": "d2b38a89c8b9fe20e1ae2c260221cecaeaa16ed982e3a7b373abc1d9c3010da9"
       },
       "credential_lifecycle": {
         "path": "architecture/credential-lifecycle.json",

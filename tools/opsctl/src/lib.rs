@@ -217,11 +217,11 @@ mod tests {
     #[test]
     fn parsed_operator_command_has_typed_read_only_effect() -> Result<(), OpsctlError> {
         let invocation = parse_invocation([OsString::from("opsctl"), OsString::from("doctor")])?;
-        assert_read_only_effect(
-            invocation
-                .operator_effect()
-                .expect("parsed operator command must have effect metadata"),
+        assert_eq!(
+            invocation.operator_effect(),
+            Some(OperatorEffect::ReadOnlyMetadata)
         );
+        assert_read_only_effect(OperatorEffect::ReadOnlyMetadata);
         Ok(())
     }
 
