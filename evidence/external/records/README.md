@@ -26,8 +26,10 @@ Rules:
    create only canonical `pending` drafts; it cannot create terminal evidence;
 9. `scripts/check-external-readiness-summary.py` regenerates the canonical active
    record/readiness projection;
-10. `scripts/check-external-review-attestations.py` verifies every terminal record
-    against the exact GitHub API object.
+10. `scripts/check-external-review-attestations.py` is the outer GitHub observation
+    adapter only on the acceptance path; typed Rust `opsctl hosted-evidence
+    external-review-attestation verify` owns active-terminal selection and the
+    repository/reference/reviewer/timestamp/canonical-claim validity decision.
 
 Inspect the exact accepted gate/check/environment contract before external work:
 
@@ -56,18 +58,26 @@ keep that record immutable and create a newer terminal record with `supersedes`;
 the terminal facts must come from actual evidence and review, never from the draft
 tool.
 
-Every local terminal review must run the full sequence from repository root:
+Every local terminal review must run the full sequence from repository root. The
+Python shell acquires provider facts first; Rust then makes the semantic decision:
 
 ```text
 python scripts/check-external-evidence.py
 python scripts/check-external-evidence-scope.py
 python scripts/check-external-readiness-summary.py --write
 python scripts/check-external-review-attestations.py \
-  --repository iamaman11/part-crm-emai-profile
+  --repository iamaman11/part-crm-emai-profile \
+  --output-observation-json /tmp/external-review-attestation-observation.json
+cargo run --quiet --manifest-path tools/opsctl/Cargo.toml --locked -- \
+  --root . \
+  hosted-evidence external-review-attestation verify \
+  --observation-json /tmp/external-review-attestation-observation.json
 ```
 
-Use `python scripts/check-external-review-attestations.py --print-claims` to obtain
-the exact bounded claim body before posting the final GitHub review/comment.
+Use `python scripts/check-external-review-attestations.py --print-claims` only as a
+non-authoritative bounded operator renderer before posting the final GitHub
+review/comment. Acceptance never trusts that renderer: the typed Rust verifier
+recomputes the RFC8785 canonical claim digest and fails closed on any mismatch.
 
 Permanent External Evidence, External Readiness and External Review Attestation
 workflows enforce these boundaries independently. See
