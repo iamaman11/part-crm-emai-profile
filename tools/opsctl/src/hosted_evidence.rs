@@ -1,11 +1,12 @@
 use crate::canonical::{canonical_json, canonical_pretty_json, parse_strict_json, sha256_hex};
 use opsctl_core::hosted_evidence::{
     EvidenceBindingV1, EvidenceEnvironment, EvidenceIssuer, EvidenceOutcome, EvidencePolicyError,
-    EvidencePolicyV2, EvidenceSource, EvidenceSubject, EvidenceTarget, EvidenceTrustState,
-    HostedEvidenceEnvelopeV2, HostedEvidenceObservationV2,
-    OperationalCredentialAttestationObservationV1, OperationalCredentialPolicyObservationV1,
-    OperationalCredentialReadObservationV1, OperationalCredentialTokenVerifyObservationV1,
-    ReviewAttestationObservationV1, ReviewAttestationPolicyV1, ReviewAttestationStatus,
+    EvidencePolicyV3, EvidenceSource, EvidenceSubject, EvidenceTarget, EvidenceTrustState,
+    ExpectedAccountBindingV1, HostedEvidenceEnvelopeV3, HostedEvidenceObservationV3,
+    OperationalCredentialAccountObservationV1, OperationalCredentialAttestationObservationV1,
+    OperationalCredentialPolicyObservationV1, OperationalCredentialReadObservationV3,
+    OperationalCredentialTokenVerifyObservationV1, ReviewAttestationObservationV1,
+    ReviewAttestationPolicyV1, ReviewAttestationStatus,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
@@ -18,12 +19,12 @@ const ENVELOPE_KIND: &str = "HOSTED_EVIDENCE_ENVELOPE";
 const REVIEW_OBSERVATION_KIND: &str = "EXTERNAL_REVIEW_ATTESTATION_OBSERVATION";
 const REVIEW_RESULT_KIND: &str = "EXTERNAL_REVIEW_ATTESTATION_RESULT";
 const REVIEW_CLAIM_DOMAIN: &str = "external-evidence-review-v1";
-const OBSERVATION_SCHEMA_VERSION: u64 = 2;
-const ARTIFACT_SCHEMA_VERSION: u64 = 2;
-const ENVELOPE_SCHEMA_VERSION: u64 = 2;
+const OBSERVATION_SCHEMA_VERSION: u64 = 3;
+const ARTIFACT_SCHEMA_VERSION: u64 = 3;
+const ENVELOPE_SCHEMA_VERSION: u64 = 3;
 const REVIEW_SCHEMA_VERSION: u64 = 1;
 const DIGEST_ALGORITHM: &str = "SHA-256";
-const DIGEST_SCOPE: &str = "RFC8785_CANONICAL_OPERATIONAL_CREDENTIAL_EVIDENCE_V2_BYTES";
+const DIGEST_SCOPE: &str = "RFC8785_CANONICAL_OPERATIONAL_CREDENTIAL_EVIDENCE_V3_BYTES";
 const OPERATIONAL_CREDENTIAL_ISSUER: &str = "github-actions";
 const OPERATIONAL_CREDENTIAL_SOURCE: &str = "github-governance-gate/operational-credential-state";
 const HOSTED_EVIDENCE_TARGET: &str = "iamaman11/part-crm-emai-profile";
@@ -33,6 +34,8 @@ const OPERATIONAL_CREDENTIAL_ID: &str = "cloudflare.staging-observation-api";
 const OPERATIONAL_CREDENTIAL_ATTESTATION_KIND: &str =
     "AR11_CLOUDFLARE_OBSERVE_TOKEN_POLICY_ATTESTATION";
 const OPERATIONAL_CREDENTIAL_ATTESTATION_SOURCE: &str = "CLOUDFLARE_TOKEN_ISSUANCE_POLICY";
+const OPERATIONAL_CREDENTIAL_ACCOUNT_ID: &str = "a94259ab73151da7058613fe8ec17b4d";
+const OPERATIONAL_CREDENTIAL_ACCOUNT_NAME: &str = "pvisakp";
 const OPERATIONAL_CREDENTIAL_MUTATION_PROBE: &str = "FORBIDDEN_NOT_EXECUTED";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -99,6 +102,7 @@ struct OperationalCredentialAttestationDto {
     environment: String,
     token_id: String,
     account_id: String,
+    account_name: String,
     permission_names: Vec<String>,
     production_scope: bool,
     mutation_capability: bool,
@@ -110,22 +114,37 @@ struct OperationalCredentialAttestationDto {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct TokenVerifyDto {
-    http_status: u16,
-    success: bool,
-    error_count: usize,
-    token_id: String,
-    status: String,
+    http_status: Option<u16>,
+    success: Option<bool>,
+    error_count: Option<usize>,
+    token_id: Option<String>,
+    status: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct AccountObservationDto {
+    http_status: Option<u16>,
+    success: Option<bool>,
+    error_count: Option<usize>,
+    account_id: Option<String>,
+    account_name: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct ReadObservationsDto {
-    workers_deployments_read: bool,
-    d1_catalog_read: bool,
-    r2_bucket_read: bool,
-    queue_read: bool,
-    worker_secret_names_read: bool,
-    mutation_probe: String,
+    workers_deployments_http_status: Option<u16>,
+    workers_deployments_success: Option<bool>,
+    workers_deployments_error_count: Option<usize>,
+    workers_deployments_response_digest_sha256: Option<String>,
+    d1_catalog_exit_code: Option<i32>,
+    d1_catalog_output_digest_sha256: Option<String>,
+    r2_bucket_exit_code: Option<i32>,
+    r2_bucket_output_digest_sha256: Option<String>,
+    queue_exit_code: Option<i32>,
+    worker_secret_names_exit_code: Option<i32>,
+    mutation_probe: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -145,6 +164,7 @@ struct ObservationDto {
     credential_policy: CredentialPolicyDto,
     attestation: OperationalCredentialAttestationDto,
     token_verify: TokenVerifyDto,
+    account: AccountObservationDto,
     deployment_account_id: String,
     reads: ReadObservationsDto,
     production_mutation: bool,
@@ -370,8 +390,8 @@ fn validate_artifact_contract(dto: &ArtifactDto) -> Result<(), HostedEvidenceAda
 
 fn observation_from_dto(
     dto: &ObservationDto,
-) -> Result<HostedEvidenceObservationV2, HostedEvidenceAdapterError> {
-    Ok(HostedEvidenceObservationV2 {
+) -> Result<HostedEvidenceObservationV3, HostedEvidenceAdapterError> {
+    Ok(HostedEvidenceObservationV3 {
         binding: EvidenceBindingV1 {
             issuer: EvidenceIssuer::new(dto.issuer.clone())?,
             source: EvidenceSource::new(dto.source.clone())?,
@@ -405,6 +425,7 @@ fn observation_from_dto(
             environment: dto.attestation.environment.clone(),
             token_id: dto.attestation.token_id.clone(),
             account_id: dto.attestation.account_id.clone(),
+            account_name: dto.attestation.account_name.clone(),
             permission_names: dto.attestation.permission_names.clone(),
             production_scope: dto.attestation.production_scope,
             mutation_capability: dto.attestation.mutation_capability,
@@ -419,13 +440,28 @@ fn observation_from_dto(
             token_id: dto.token_verify.token_id.clone(),
             status: dto.token_verify.status.clone(),
         },
+        account: OperationalCredentialAccountObservationV1 {
+            http_status: dto.account.http_status,
+            success: dto.account.success,
+            error_count: dto.account.error_count,
+            account_id: dto.account.account_id.clone(),
+            account_name: dto.account.account_name.clone(),
+        },
         deployment_account_id: dto.deployment_account_id.clone(),
-        reads: OperationalCredentialReadObservationV1 {
-            workers_deployments_read: dto.reads.workers_deployments_read,
-            d1_catalog_read: dto.reads.d1_catalog_read,
-            r2_bucket_read: dto.reads.r2_bucket_read,
-            queue_read: dto.reads.queue_read,
-            worker_secret_names_read: dto.reads.worker_secret_names_read,
+        reads: OperationalCredentialReadObservationV3 {
+            workers_deployments_http_status: dto.reads.workers_deployments_http_status,
+            workers_deployments_success: dto.reads.workers_deployments_success,
+            workers_deployments_error_count: dto.reads.workers_deployments_error_count,
+            workers_deployments_response_digest_sha256: dto
+                .reads
+                .workers_deployments_response_digest_sha256
+                .clone(),
+            d1_catalog_exit_code: dto.reads.d1_catalog_exit_code,
+            d1_catalog_output_digest_sha256: dto.reads.d1_catalog_output_digest_sha256.clone(),
+            r2_bucket_exit_code: dto.reads.r2_bucket_exit_code,
+            r2_bucket_output_digest_sha256: dto.reads.r2_bucket_output_digest_sha256.clone(),
+            queue_exit_code: dto.reads.queue_exit_code,
+            worker_secret_names_exit_code: dto.reads.worker_secret_names_exit_code,
             mutation_probe: dto.reads.mutation_probe.clone(),
         },
         production_mutation: dto.production_mutation,
@@ -434,13 +470,13 @@ fn observation_from_dto(
 
 fn envelope_from_dto(
     dto: &EnvelopeDto,
-) -> Result<HostedEvidenceEnvelopeV2, HostedEvidenceAdapterError> {
+) -> Result<HostedEvidenceEnvelopeV3, HostedEvidenceAdapterError> {
     if dto.schema_version != ENVELOPE_SCHEMA_VERSION || dto.kind != ENVELOPE_KIND {
         return Err(HostedEvidenceAdapterError::new(
             "HOSTED_EVIDENCE_ENVELOPE_CONTRACT: unsupported schema_version or kind",
         ));
     }
-    Ok(HostedEvidenceEnvelopeV2 {
+    Ok(HostedEvidenceEnvelopeV3 {
         binding: EvidenceBindingV1 {
             issuer: EvidenceIssuer::new(dto.issuer.clone())?,
             source: EvidenceSource::new(dto.source.clone())?,
@@ -458,7 +494,7 @@ fn envelope_from_dto(
     })
 }
 
-fn envelope_to_dto(envelope: &HostedEvidenceEnvelopeV2) -> EnvelopeDto {
+fn envelope_to_dto(envelope: &HostedEvidenceEnvelopeV3) -> EnvelopeDto {
     EnvelopeDto {
         schema_version: ENVELOPE_SCHEMA_VERSION,
         kind: ENVELOPE_KIND.to_owned(),
@@ -493,7 +529,7 @@ fn evidence_digest(
 
 fn render_artifact(
     observation: &ObservationDto,
-    envelope: &HostedEvidenceEnvelopeV2,
+    envelope: &HostedEvidenceEnvelopeV3,
 ) -> Result<String, HostedEvidenceAdapterError> {
     let envelope = envelope_to_dto(envelope);
     let artifact = ArtifactDto {
@@ -517,7 +553,7 @@ fn render_artifact(
 
 fn operational_credential_policy(
     expected_subject: &str,
-) -> Result<EvidencePolicyV2, HostedEvidenceAdapterError> {
+) -> Result<EvidencePolicyV3, HostedEvidenceAdapterError> {
     let binding = EvidenceBindingV1 {
         issuer: EvidenceIssuer::new(OPERATIONAL_CREDENTIAL_ISSUER)?,
         source: EvidenceSource::new(OPERATIONAL_CREDENTIAL_SOURCE)?,
@@ -525,12 +561,16 @@ fn operational_credential_policy(
         environment: EvidenceEnvironment::new(OPERATIONAL_CREDENTIAL_ENVIRONMENT)?,
         subject: EvidenceSubject::new(expected_subject)?,
     };
-    EvidencePolicyV2::new(
+    EvidencePolicyV3::new(
         binding,
         OPERATIONAL_CREDENTIAL_MAX_VALIDITY_SECONDS,
         OPERATIONAL_CREDENTIAL_ID,
         OPERATIONAL_CREDENTIAL_ATTESTATION_KIND,
         OPERATIONAL_CREDENTIAL_ATTESTATION_SOURCE,
+        ExpectedAccountBindingV1::new(
+            OPERATIONAL_CREDENTIAL_ACCOUNT_ID,
+            OPERATIONAL_CREDENTIAL_ACCOUNT_NAME,
+        )?,
         OPERATIONAL_CREDENTIAL_MUTATION_PROBE,
     )
     .map_err(Into::into)
@@ -758,16 +798,11 @@ mod tests {
     const OBSERVED_AT: i64 = 1_700_000_000;
     const EVALUATED_AT: i64 = 1_700_000_010;
     const REVIEW_REPOSITORY: &str = "iamaman11/part-crm-emai-profile";
+    const ACCOUNT_ID: &str = "a94259ab73151da7058613fe8ec17b4d";
 
     fn observation() -> Value {
-        let required = json!([
-            "D1 Read",
-            "Queues Read",
-            "Workers R2 Storage Read",
-            "Workers Scripts Read"
-        ]);
         json!({
-            "schema_version": 2,
+            "schema_version": 3,
             "kind": "HOSTED_EVIDENCE_RAW_OBSERVATION",
             "issuer": "github-actions",
             "source": "github-governance-gate/operational-credential-state",
@@ -785,7 +820,12 @@ mod tests {
                 "allowed_mutator": "NONE",
                 "mutation_allowed": false,
                 "provider_mutation_forbidden": true,
-                "required_provider_permissions": required,
+                "required_provider_permissions": [
+                    "D1 Read",
+                    "Queues Read",
+                    "Workers R2 Storage Read",
+                    "Workers Scripts Read"
+                ],
                 "forbidden_provider_permission_classes": [
                     "API Tokens Write",
                     "D1 Write",
@@ -799,7 +839,8 @@ mod tests {
                 "kind": "AR11_CLOUDFLARE_OBSERVE_TOKEN_POLICY_ATTESTATION",
                 "environment": "staging",
                 "token_id": "observe-token-id-1234",
-                "account_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "account_id": ACCOUNT_ID,
+                "account_name": "pvisakp",
                 "permission_names": [
                     "D1 Read",
                     "Queues Read",
@@ -819,81 +860,212 @@ mod tests {
                 "token_id": "observe-token-id-1234",
                 "status": "active"
             },
-            "deployment_account_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "account": {
+                "http_status": 200,
+                "success": true,
+                "error_count": 0,
+                "account_id": ACCOUNT_ID,
+                "account_name": "pvisakp"
+            },
+            "deployment_account_id": ACCOUNT_ID,
             "reads": {
-                "workers_deployments_read": true,
-                "d1_catalog_read": true,
-                "r2_bucket_read": true,
-                "queue_read": true,
-                "worker_secret_names_read": true,
+                "workers_deployments_http_status": 200,
+                "workers_deployments_success": true,
+                "workers_deployments_error_count": 0,
+                "workers_deployments_response_digest_sha256": "11".repeat(32),
+                "d1_catalog_exit_code": 0,
+                "d1_catalog_output_digest_sha256": "22".repeat(32),
+                "r2_bucket_exit_code": 0,
+                "r2_bucket_output_digest_sha256": "33".repeat(32),
+                "queue_exit_code": 0,
+                "worker_secret_names_exit_code": 0,
                 "mutation_probe": "FORBIDDEN_NOT_EXECUTED"
             },
             "production_mutation": false
         })
     }
 
-    fn seal(value: &Value) -> Result<String, super::HostedEvidenceAdapterError> {
+    fn seal(value: &Value) -> Result<String, HostedEvidenceAdapterError> {
         seal_operational_credential_json(&value.to_string(), EVALUATED_AT, SUBJECT)
     }
 
+    fn assert_rejected(value: &Value) {
+        assert!(seal(value).is_err());
+    }
+
     #[test]
-    fn raw_facts_roundtrip_to_derived_verdict() -> Result<(), Box<dyn std::error::Error>> {
+    fn raw_v3_roundtrips_to_rust_derived_verdict() -> Result<(), Box<dyn std::error::Error>> {
         let artifact = seal(&observation())?;
         let verified = verify_operational_credential_json(&artifact, EVALUATED_AT, SUBJECT)?;
         assert_eq!(artifact, verified);
         assert!(artifact.contains("\"trust_state\": \"TRUSTED\""));
         assert!(artifact.contains("\"outcome\": \"PASS\""));
-        assert!(artifact.contains("\"production_mutation\": false"));
+        assert!(artifact.contains("\"account_name\": \"pvisakp\""));
+        assert!(artifact.contains("\"workers_deployments_response_digest_sha256\""));
         Ok(())
     }
 
     #[test]
-    fn raw_observation_rejects_injected_verdict_and_unknown_fields() {
+    fn raw_v3_rejects_injected_verdict_legacy_shapes_unknown_fields_and_malformed_json() {
         let mut verdict = observation();
         verdict["trust_state"] = Value::String("TRUSTED".to_owned());
         verdict["outcome"] = Value::String("PASS".to_owned());
-        assert!(seal(&verdict).is_err());
+        assert_rejected(&verdict);
+
+        let mut legacy = observation();
+        legacy["schema_version"] = json!(2);
+        legacy["reads"] = json!({
+            "workers_deployments_read": true,
+            "d1_catalog_read": true,
+            "r2_bucket_read": true,
+            "queue_read": true,
+            "worker_secret_names_read": true,
+            "mutation_probe": "FORBIDDEN_NOT_EXECUTED"
+        });
+        assert_rejected(&legacy);
 
         let mut secret = observation();
         secret["token"] = Value::String("must-not-cross-boundary".to_owned());
-        assert!(seal(&secret).is_err());
+        assert_rejected(&secret);
+
+        assert!(seal_operational_credential_json("{not-json", EVALUATED_AT, SUBJECT).is_err());
     }
 
     #[test]
-    fn raw_facts_fail_closed_on_permission_token_read_and_mutation_drift() {
-        let mut permission = observation();
-        permission["attestation"]["permission_names"] = json!(["D1 Read"]);
-        assert!(seal(&permission).is_err());
+    fn production_path_rejects_binding_run_and_freshness_drift() {
+        let mut repository = observation();
+        repository["target"] = json!("other/repository");
+        assert_rejected(&repository);
 
-        let mut token = observation();
-        token["token_verify"]["status"] = Value::String("disabled".to_owned());
-        assert!(seal(&token).is_err());
+        let mut subject = observation();
+        subject["subject"] = json!("b".repeat(40));
+        assert_rejected(&subject);
 
-        let mut read = observation();
-        read["reads"]["d1_catalog_read"] = Value::Bool(false);
-        assert!(seal(&read).is_err());
+        let mut environment = observation();
+        environment["environment"] = json!("production");
+        assert_rejected(&environment);
 
-        let mut mutation = observation();
-        mutation["credential_policy"]["mutation_allowed"] = Value::Bool(true);
-        assert!(seal(&mutation).is_err());
+        let mut attempt = observation();
+        attempt["source_run_attempt"] = json!(0);
+        assert_rejected(&attempt);
+
+        assert!(
+            seal_operational_credential_json(
+                &observation().to_string(),
+                OBSERVED_AT + 3600,
+                SUBJECT
+            )
+            .is_err()
+        );
+        assert!(
+            seal_operational_credential_json(&observation().to_string(), OBSERVED_AT - 1, SUBJECT)
+                .is_err()
+        );
     }
 
     #[test]
-    fn rejects_v1_verdict_bearing_observation_and_bad_artifact_digest()
+    fn production_path_rejects_http_failure_classes_and_nonzero_wrangler_exit() {
+        for status in [401, 403, 404, 429, 500, 503] {
+            let mut value = observation();
+            value["reads"]["workers_deployments_http_status"] = json!(status);
+            assert_rejected(&value);
+        }
+
+        let mut wrangler = observation();
+        wrangler["reads"]["r2_bucket_exit_code"] = json!(1);
+        assert_rejected(&wrangler);
+    }
+
+    #[test]
+    fn production_path_rejects_missing_results_invalid_digests_and_account_drift() {
+        let mut missing = observation();
+        missing["reads"]["workers_deployments_success"] = Value::Null;
+        assert_rejected(&missing);
+
+        let mut invalid_digest = observation();
+        invalid_digest["reads"]["d1_catalog_output_digest_sha256"] = json!("ABC");
+        assert_rejected(&invalid_digest);
+
+        let mut wrong_live_account = observation();
+        wrong_live_account["account"]["account_name"] = json!("majakojh");
+        assert_rejected(&wrong_live_account);
+
+        let mut wrong_mapping = observation();
+        wrong_mapping["attestation"]["account_name"] = json!("majakojh");
+        wrong_mapping["account"]["account_name"] = json!("majakojh");
+        assert_rejected(&wrong_mapping);
+
+        let mut wrong_account_id = observation();
+        wrong_account_id["account"]["account_id"] = json!("b".repeat(32));
+        assert_rejected(&wrong_account_id);
+
+        let mut coordinated_wrong_account_id = observation();
+        coordinated_wrong_account_id["attestation"]["account_id"] = json!("b".repeat(32));
+        coordinated_wrong_account_id["deployment_account_id"] = json!("b".repeat(32));
+        coordinated_wrong_account_id["account"]["account_id"] = json!("b".repeat(32));
+        assert_rejected(&coordinated_wrong_account_id);
+    }
+
+    #[test]
+    fn production_path_rejects_permission_token_and_mutation_authority_drift() {
+        let mut missing_permission = observation();
+        missing_permission["attestation"]["permission_names"] =
+            json!(["D1 Read", "Queues Read", "Workers R2 Storage Read"]);
+        assert_rejected(&missing_permission);
+
+        let mut forbidden_permission = observation();
+        forbidden_permission["attestation"]["permission_names"] = json!([
+            "D1 Read",
+            "Queues Read",
+            "Workers R2 Storage Read",
+            "Workers Scripts Read",
+            "Workers Scripts Write"
+        ]);
+        assert_rejected(&forbidden_permission);
+
+        let mut disabled = observation();
+        disabled["token_verify"]["status"] = json!("disabled");
+        assert_rejected(&disabled);
+
+        let mut token_mismatch = observation();
+        token_mismatch["token_verify"]["token_id"] = json!("different-token-id-1234");
+        assert_rejected(&token_mismatch);
+
+        let mut mutation_probe = observation();
+        mutation_probe["reads"]["mutation_probe"] = json!("EXECUTED");
+        assert_rejected(&mutation_probe);
+
+        let mut production_mutation = observation();
+        production_mutation["production_mutation"] = json!(true);
+        assert_rejected(&production_mutation);
+
+        let mut credential_mutation = observation();
+        credential_mutation["credential_policy"]["mutation_allowed"] = json!(true);
+        assert_rejected(&credential_mutation);
+
+        let mut token_management = observation();
+        token_management["attestation"]["token_management_capability"] = json!(true);
+        assert_rejected(&token_management);
+
+        let mut plaintext_token = observation();
+        plaintext_token["attestation"]["plaintext_token_included"] = json!(true);
+        assert_rejected(&plaintext_token);
+    }
+
+    #[test]
+    fn artifact_digest_and_observed_safe_digest_are_tamper_evident()
     -> Result<(), Box<dyn std::error::Error>> {
-        let legacy = json!({
-            "schema_version": 1,
-            "kind": "HOSTED_EVIDENCE_OBSERVATION",
-            "issuer": "github-actions",
-            "trust_state": "TRUSTED",
-            "outcome": "PASS"
-        });
-        assert!(seal(&legacy).is_err());
-
         let artifact = seal(&observation())?;
-        let mut value: Value = serde_json::from_str(&artifact)?;
-        value["digest"]["value"] = Value::String("0".repeat(64));
-        let tampered = serde_json::to_string_pretty(&value)? + "\n";
+
+        let mut artifact_digest_tamper: Value = serde_json::from_str(&artifact)?;
+        artifact_digest_tamper["digest"]["value"] = Value::String("0".repeat(64));
+        let tampered = serde_json::to_string_pretty(&artifact_digest_tamper)? + "\n";
+        assert!(verify_operational_credential_json(&tampered, EVALUATED_AT, SUBJECT).is_err());
+
+        let mut observed_digest_tamper: Value = serde_json::from_str(&artifact)?;
+        observed_digest_tamper["observation"]["reads"]["d1_catalog_output_digest_sha256"] =
+            Value::String("4".repeat(64));
+        let tampered = serde_json::to_string_pretty(&observed_digest_tamper)? + "\n";
         assert!(verify_operational_credential_json(&tampered, EVALUATED_AT, SUBJECT).is_err());
         Ok(())
     }
