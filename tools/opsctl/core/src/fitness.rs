@@ -374,9 +374,7 @@ mod tests {
     #[test]
     fn duplicate_supersession_predecessor_fails() {
         let (rules, supersession) = valid_supersession();
-        assert!(
-            validate_candidate_registry(&rules, &[supersession, supersession]).is_err()
-        );
+        assert!(validate_candidate_registry(&rules, &[supersession, supersession]).is_err());
     }
 
     #[test]
