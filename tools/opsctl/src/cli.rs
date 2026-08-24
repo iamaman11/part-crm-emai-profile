@@ -381,9 +381,19 @@ where
 {
     let action = iterator
         .next()
-        .ok_or_else(|| OpsctlError::new("hosted-evidence", "missing external review attestation action"))?
+        .ok_or_else(|| {
+            OpsctlError::new(
+                "hosted-evidence",
+                "missing external review attestation action",
+            )
+        })?
         .into_string()
-        .map_err(|_| OpsctlError::new("hosted-evidence", "external review attestation action must be valid UTF-8"))?;
+        .map_err(|_| {
+            OpsctlError::new(
+                "hosted-evidence",
+                "external review attestation action must be valid UTF-8",
+            )
+        })?;
     if action != "verify" {
         return Err(OpsctlError::new(
             "hosted-evidence",
@@ -392,9 +402,19 @@ where
     }
     let flag = iterator
         .next()
-        .ok_or_else(|| OpsctlError::new("hosted-evidence", "external review attestation verify requires --observation-json"))?
+        .ok_or_else(|| {
+            OpsctlError::new(
+                "hosted-evidence",
+                "external review attestation verify requires --observation-json",
+            )
+        })?
         .into_string()
-        .map_err(|_| OpsctlError::new("hosted-evidence", "external review attestation flag must be valid UTF-8"))?;
+        .map_err(|_| {
+            OpsctlError::new(
+                "hosted-evidence",
+                "external review attestation flag must be valid UTF-8",
+            )
+        })?;
     if flag != "--observation-json" {
         return Err(OpsctlError::new(
             "hosted-evidence",
