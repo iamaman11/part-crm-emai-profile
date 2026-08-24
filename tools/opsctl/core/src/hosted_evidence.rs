@@ -228,6 +228,7 @@ pub struct EvidencePolicyV3 {
     expected_credential_id: String,
     expected_attestation_kind: String,
     expected_attestation_source: String,
+    expected_account_id: String,
     expected_account_name: String,
     expected_mutation_probe: String,
 }
@@ -239,6 +240,7 @@ impl EvidencePolicyV3 {
         expected_credential_id: impl Into<String>,
         expected_attestation_kind: impl Into<String>,
         expected_attestation_source: impl Into<String>,
+        expected_account_id: impl Into<String>,
         expected_account_name: impl Into<String>,
         expected_mutation_probe: impl Into<String>,
     ) -> Result<Self, EvidencePolicyError> {
@@ -252,6 +254,16 @@ impl EvidencePolicyV3 {
             return Err(EvidencePolicyError::new(
                 "HOSTED_EVIDENCE_POLICY_INVALID",
                 "max validity must be greater than zero",
+            ));
+        }
+        let expected_account_id = validate_identifier(
+            "expected_account_id",
+            expected_account_id.into(),
+        )?;
+        if !is_lower_hex(&expected_account_id, 32) {
+            return Err(EvidencePolicyError::new(
+                "HOSTED_EVIDENCE_POLICY_INVALID",
+                "expected account id must be exactly 32 lowercase hexadecimal characters",
             ));
         }
         Ok(Self {
@@ -269,6 +281,7 @@ impl EvidencePolicyV3 {
                 "expected_attestation_source",
                 expected_attestation_source.into(),
             )?,
+            expected_account_id,
             expected_account_name: validate_identifier(
                 "expected_account_name",
                 expected_account_name.into(),
@@ -475,11 +488,12 @@ fn validate_attestation(
     }
     if !is_lower_hex(&attestation.account_id, 32)
         || !is_lower_hex(&observation.deployment_account_id, 32)
+        || attestation.account_id != policy.expected_account_id
         || attestation.account_id != observation.deployment_account_id
     {
         return Err(EvidencePolicyError::new(
             "HOSTED_EVIDENCE_ACCOUNT_SCOPE_MISMATCH",
-            "attested account must exactly match the observed deployment account",
+            "attested and deployment account ids must exactly match the expected staging account id",
         ));
     }
     if attestation.account_name != policy.expected_account_name {
@@ -577,12 +591,13 @@ fn validate_account_observation(
         )
     })?;
     if !is_lower_hex(account_id, 32)
+        || account_id != policy.expected_account_id
         || account_id != observation.deployment_account_id
         || account_id != observation.attestation.account_id
     {
         return Err(EvidencePolicyError::new(
             "HOSTED_EVIDENCE_ACCOUNT_SCOPE_MISMATCH",
-            "live Cloudflare account id must exactly match deployment and issuance-attestation account ids",
+            "live Cloudflare account id must exactly match the expected, deployment and issuance-attestation account ids",
         ));
     }
     let account_name = account.account_name.as_deref().ok_or_else(|| {
@@ -984,6 +999,7 @@ mod tests {
             "cloudflare.staging-observation-api",
             "AR11_CLOUDFLARE_OBSERVE_TOKEN_POLICY_ATTESTATION",
             "CLOUDFLARE_TOKEN_ISSUANCE_POLICY",
+            "a".repeat(32),
             "pvisakp",
             "FORBIDDEN_NOT_EXECUTED",
         )?)
@@ -1056,6 +1072,13 @@ mod tests {
         let mut wrong_id = observation()?;
         wrong_id.account.account_id = Some("b".repeat(32));
         let error = policy_error(policy()?.evaluate(wrong_id, 1_700_000_010))?;
+        assert_eq!(error.code(), "HOSTED_EVIDENCE_ACCOUNT_SCOPE_MISMATCH");
+
+        let mut coordinated_wrong_id = observation()?;
+        coordinated_wrong_id.attestation.account_id = "b".repeat(32);
+        coordinated_wrong_id.deployment_account_id = "b".repeat(32);
+        coordinated_wrong_id.account.account_id = Some("b".repeat(32));
+        let error = policy_error(policy()?.evaluate(coordinated_wrong_id, 1_700_000_010))?;
         assert_eq!(error.code(), "HOSTED_EVIDENCE_ACCOUNT_SCOPE_MISMATCH");
         Ok(())
     }
