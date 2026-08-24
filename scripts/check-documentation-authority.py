@@ -3,8 +3,8 @@
 
 Architecture acceptance/current-slice state is owned exclusively by the generic Git acceptance
 protocol. This checker intentionally does not re-derive Git history: it validates static program
-policy, projection-only semantics, fail-closed compatibility projections and the identities of
-current specialized AR-9/10/11 authorities. Historical lifecycle engines are not imported.
+policy, projection-only semantics, fail-closed compatibility projections and current specialized
+repository authorities. Historical lifecycle engines are not imported.
 """
 
 from __future__ import annotations
@@ -27,7 +27,6 @@ TRANSITION = Path("architecture/architecture-rebaseline-v3-transition.json")
 INVENTORY = Path("architecture/inventory.json")
 PLAN = Path("docs/ARCHITECTURE_REBASELINE_V3_PLAN.md")
 PROTOCOL = Path("docs/ARCHITECTURE_ACCEPTANCE_PROTOCOL.md")
-AR10_AUTHORITY = Path("architecture/runtime-cutover-ar10.json")
 AR11_AUTHORITY = Path("architecture/release-architecture-ar11.json")
 IMPLEMENTATION_STUB = Path("IMPLEMENTATION_PLAN.md")
 PROFILE_LIFECYCLE_STUB = Path("PROFILE_LIFECYCLE_PLAN.md")
@@ -294,15 +293,6 @@ def validate_owned_authorities(root: Path) -> None:
         or d1.get("production_mutation") is not False
     ):
         fail("typed SQL-derived D1 repository identity/state drifted")
-
-    ar10 = load_json(root, AR10_AUTHORITY)
-    if (
-        ar10.get("kind") != "RUNTIME_CUTOVER_AUTHORITY"
-        or ar10.get("status") != "accepted"
-        or ar10.get("legacy_executables_remaining") != 0
-        or ar10.get("production_mutation") is not False
-    ):
-        fail("accepted AR-10 runtime authority identity/state drifted")
 
     ar11 = load_json(root, AR11_AUTHORITY)
     if (
