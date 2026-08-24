@@ -876,13 +876,12 @@ mod tests {
         let mut foreign = review_batch(vec![observed]);
         foreign["repository"] = Value::String("other/repository".to_owned());
 
-        let error = verify_external_review_attestations_json(&foreign.to_string())
-            .expect_err("self-consistent foreign repository must fail closed");
-        assert!(
+        let result = verify_external_review_attestations_json(&foreign.to_string());
+        assert!(result.err().is_some_and(|error| {
             error
                 .to_string()
                 .contains("HOSTED_REVIEW_ATTESTATION_REPOSITORY_BINDING_MISMATCH")
-        );
+        }));
         Ok(())
     }
 
