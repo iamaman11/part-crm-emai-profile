@@ -1,5 +1,6 @@
 use crate::OpsctlError;
 use crate::d1;
+use crate::hosted_evidence::HostedEvidenceAction;
 use crate::promotion;
 use crate::release;
 use std::ffi::OsString;
@@ -52,6 +53,13 @@ pub enum Invocation {
     Credentials {
         root: Option<PathBuf>,
         action: CredentialsAction,
+    },
+    HostedEvidence {
+        root: Option<PathBuf>,
+        action: HostedEvidenceAction,
+        input_json: PathBuf,
+        evaluated_at_unix_seconds: i64,
+        expected_subject: String,
     },
     D1 {
         root: Option<PathBuf>,
@@ -136,6 +144,7 @@ where
 
     match command.as_str() {
         "status" => parse_status_invocation(root, iterator),
+        "hosted-evidence" => parse_hosted_evidence_invocation(root, iterator),
         "d1" => parse_d1_invocation(root, iterator),
         "release" => parse_release_invocation(root, iterator),
         "promotion" => parse_promotion_invocation(root, iterator),
@@ -188,6 +197,169 @@ where
         ));
     }
     Ok(Invocation::Credentials { root, action })
+}
+
+fn parse_hosted_evidence_invocation<I>(
+    root: Option<PathBuf>,
+    mut iterator: I,
+) -> Result<Invocation, OpsctlError>
+where
+    I: Iterator<Item = OsString>,
+{
+    let consumer = iterator
+        .next()
+        .ok_or_else(|| OpsctlError::new("hosted-evidence", "missing hosted evidence consumer"))?
+        .into_string()
+        .map_err(|_| OpsctlError::new("hosted-evidence", "consumer must be valid UTF-8"))?;
+    if consumer != "operational-credential" {
+        return Err(OpsctlError::new(
+            "hosted-evidence",
+            format!("unsupported hosted evidence consumer: {consumer}"),
+        ));
+    }
+
+    let action_value = iterator
+        .next()
+        .ok_or_else(|| OpsctlError::new("hosted-evidence", "missing hosted evidence action"))?;
+    let action_text = action_value
+        .to_str()
+        .ok_or_else(|| OpsctlError::new("hosted-evidence", "action must be valid UTF-8"))?;
+    let action = match action_text {
+        "seal" => HostedEvidenceAction::SealOperationalCredential,
+        "verify" => HostedEvidenceAction::VerifyOperationalCredential,
+        other => {
+            return Err(OpsctlError::new(
+                "hosted-evidence",
+                format!("unsupported hosted evidence action: {other}"),
+            ));
+        }
+    };
+
+    let mut observation_json: Option<PathBuf> = None;
+    let mut artifact_json: Option<PathBuf> = None;
+    let mut evaluated_at_unix_seconds: Option<i64> = None;
+    let mut expected_subject: Option<String> = None;
+
+    while let Some(argument) = iterator.next() {
+        let flag = argument.to_str().ok_or_else(|| {
+            OpsctlError::new("hosted-evidence", "hosted evidence flags must be valid UTF-8")
+        })?;
+        match flag {
+            "--observation-json" => {
+                let value = iterator.next().ok_or_else(|| {
+                    OpsctlError::new("hosted-evidence", "--observation-json requires a path")
+                })?;
+                set_once(
+                    &mut observation_json,
+                    PathBuf::from(value),
+                    "--observation-json",
+                )?;
+            }
+            "--artifact-json" => {
+                let value = iterator.next().ok_or_else(|| {
+                    OpsctlError::new("hosted-evidence", "--artifact-json requires a path")
+                })?;
+                set_once(&mut artifact_json, PathBuf::from(value), "--artifact-json")?;
+            }
+            "--evaluated-at-unix-seconds" => {
+                let value = iterator
+                    .next()
+                    .ok_or_else(|| {
+                        OpsctlError::new(
+                            "hosted-evidence",
+                            "--evaluated-at-unix-seconds requires a value",
+                        )
+                    })?
+                    .into_string()
+                    .map_err(|_| {
+                        OpsctlError::new(
+                            "hosted-evidence",
+                            "evaluation timestamp must be valid UTF-8",
+                        )
+                    })?;
+                let value = value.parse::<i64>().map_err(|_| {
+                    OpsctlError::new(
+                        "hosted-evidence",
+                        "--evaluated-at-unix-seconds must be a signed integer",
+                    )
+                })?;
+                set_once(
+                    &mut evaluated_at_unix_seconds,
+                    value,
+                    "--evaluated-at-unix-seconds",
+                )?;
+            }
+            "--expected-subject" => {
+                let value = iterator
+                    .next()
+                    .ok_or_else(|| {
+                        OpsctlError::new("hosted-evidence", "--expected-subject requires a value")
+                    })?
+                    .into_string()
+                    .map_err(|_| {
+                        OpsctlError::new("hosted-evidence", "expected subject must be valid UTF-8")
+                    })?;
+                set_once(&mut expected_subject, value, "--expected-subject")?;
+            }
+            other => {
+                return Err(OpsctlError::new(
+                    "hosted-evidence",
+                    format!("unsupported hosted evidence argument: {other}"),
+                ));
+            }
+        }
+    }
+
+    let input_json = match action {
+        HostedEvidenceAction::SealOperationalCredential => {
+            if artifact_json.is_some() {
+                return Err(OpsctlError::new(
+                    "hosted-evidence",
+                    "hosted-evidence operational-credential seal accepts --observation-json only",
+                ));
+            }
+            observation_json.ok_or_else(|| {
+                OpsctlError::new(
+                    "hosted-evidence",
+                    "hosted-evidence operational-credential seal requires --observation-json",
+                )
+            })?
+        }
+        HostedEvidenceAction::VerifyOperationalCredential => {
+            if observation_json.is_some() {
+                return Err(OpsctlError::new(
+                    "hosted-evidence",
+                    "hosted-evidence operational-credential verify accepts --artifact-json only",
+                ));
+            }
+            artifact_json.ok_or_else(|| {
+                OpsctlError::new(
+                    "hosted-evidence",
+                    "hosted-evidence operational-credential verify requires --artifact-json",
+                )
+            })?
+        }
+    };
+    let evaluated_at_unix_seconds = evaluated_at_unix_seconds.ok_or_else(|| {
+        OpsctlError::new(
+            "hosted-evidence",
+            "hosted evidence requires --evaluated-at-unix-seconds from the outer clock observation",
+        )
+    })?;
+    let expected_subject = expected_subject.ok_or_else(|| {
+        OpsctlError::new(
+            "hosted-evidence",
+            "hosted evidence requires --expected-subject from the exact accepted-source checkout",
+        )
+    })?;
+
+    Ok(Invocation::HostedEvidence {
+        root,
+        action,
+        input_json,
+        evaluated_at_unix_seconds,
+        expected_subject,
+    })
 }
 
 fn parse_status_invocation<I>(
@@ -800,6 +972,7 @@ fn set_once<T>(slot: &mut Option<T>, value: T, flag: &str) -> Result<(), OpsctlE
 mod tests {
     use super::{CredentialsAction, Invocation, ReadCommand, parse_invocation};
     use crate::d1::D1Action;
+    use crate::hosted_evidence::HostedEvidenceAction;
     use crate::release::ReleaseAction;
     use std::ffi::OsString;
     use std::path::PathBuf;
@@ -871,6 +1044,42 @@ mod tests {
                 root: None,
                 action: CredentialsAction::RotationPlan,
             })
+        );
+    }
+
+    #[test]
+    fn parses_bounded_operational_credential_hosted_evidence_surface() {
+        assert_eq!(
+            parse_invocation(args(&[
+                "opsctl",
+                "--root",
+                "/repo",
+                "hosted-evidence",
+                "operational-credential",
+                "seal",
+                "--observation-json",
+                "observation.json",
+                "--evaluated-at-unix-seconds",
+                "1700000010",
+                "--expected-subject",
+                "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            ])),
+            Ok(Invocation::HostedEvidence {
+                root: Some(PathBuf::from("/repo")),
+                action: HostedEvidenceAction::SealOperationalCredential,
+                input_json: PathBuf::from("observation.json"),
+                evaluated_at_unix_seconds: 1_700_000_010,
+                expected_subject: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_owned(),
+            })
+        );
+        assert!(
+            parse_invocation(args(&[
+                "opsctl",
+                "hosted-evidence",
+                "generic-provider",
+                "seal",
+            ]))
+            .is_err()
         );
     }
 
