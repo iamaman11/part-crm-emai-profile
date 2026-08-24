@@ -7,7 +7,7 @@ on:
       - main
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: release-architecture-gate-${{ github.workflow }}-${{ github.ref }}
@@ -23,26 +23,12 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           fetch-depth: 0
-          persist-credentials: true
+          persist-credentials: false
 
       - name: Verify exact source checkout
         env:
           EXPECTED_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: python -c "import os, subprocess; actual = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(); expected = os.environ['EXPECTED_SOURCE_SHA']; assert actual == expected, f'expected {expected}, got {actual}'"
-
-      - name: Apply exact opsctl-core rustfmt to this PF-2 branch
-        if: github.event_name == 'pull_request' && github.head_ref == 'codex/pf2-hosted-evidence-authority-convergence'
-        run: |
-          cargo fmt --manifest-path tools/opsctl/Cargo.toml --package opsctl-core
-          if git diff --quiet -- tools/opsctl/core/src; then
-            echo "opsctl-core already matches exact rustfmt output"
-            exit 0
-          fi
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add tools/opsctl/core/src
-          git commit -m "style(pf2): apply exact opsctl-core rustfmt"
-          git push origin HEAD:${{ github.head_ref }}
 
       - name: Validate canonical release architecture source
         run: |
