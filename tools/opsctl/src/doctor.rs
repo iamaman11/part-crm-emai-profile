@@ -32,11 +32,11 @@ pub(crate) fn run(root: &Path) -> Result<String, OpsctlError> {
 
     let checks = CHECKS
         .iter()
-        .map(|check| format!(r#"{{\"id\":\"{}\",\"status\":\"pass\"}}"#, check.as_str()))
+        .map(|check| format!(r#"{{"id":"{}","status":"pass"}}"#, check.as_str()))
         .collect::<Vec<_>>()
         .join(",");
     Ok(format!(
-        r#"{{\"schema_version\":2,\"command\":\"doctor\",\"status\":\"ok\",\"mode\":\"read-only\",\"mutation_executed\":false,\"checks\":[{checks}]}}
+        r#"{{"schema_version":2,"command":"doctor","status":"ok","mode":"read-only","mutation_executed":false,"checks":[{checks}]}}
 "#
     ))
 }
