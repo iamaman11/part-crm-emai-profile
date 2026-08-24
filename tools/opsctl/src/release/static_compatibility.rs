@@ -100,10 +100,7 @@ fn public_api_contract_matches(
     resolved: &[ResolvedReleaseInput],
     observed_sha256: &str,
 ) -> Result<bool, ReleaseModelError> {
-    Ok(resolved_input(resolved, "public_api_root")?
-        .sha256
-        .as_str()
-        == observed_sha256)
+    Ok(resolved_input(resolved, "public_api_root")?.sha256.as_str() == observed_sha256)
 }
 
 fn protocols_match(
