@@ -12,6 +12,7 @@ pub mod promotion;
 pub mod readiness;
 pub mod recovery;
 pub mod release;
+pub mod review_evidence;
 mod repository;
 mod status;
 
@@ -122,21 +123,40 @@ pub fn execute(invocation: Invocation) -> Result<String, OpsctlError> {
             })?;
             match action {
                 HostedEvidenceAction::SealOperationalCredential => {
-                    hosted_evidence::seal_operational_credential_json(
-                        &input,
-                        evaluated_at_unix_seconds,
-                        &expected_subject,
-                    )
+                    if review_evidence::is_review_observation_json(&input) {
+                        review_evidence::seal_review_json(
+                            &input,
+                            evaluated_at_unix_seconds,
+                            &expected_subject,
+                        )
+                        .map_err(|error| OpsctlError::new("hosted-evidence", error.to_string()))
+                    } else {
+                        hosted_evidence::seal_operational_credential_json(
+                            &input,
+                            evaluated_at_unix_seconds,
+                            &expected_subject,
+                        )
+                        .map_err(|error| OpsctlError::new("hosted-evidence", error.to_string()))
+                    }
                 }
                 HostedEvidenceAction::VerifyOperationalCredential => {
-                    hosted_evidence::verify_operational_credential_json(
-                        &input,
-                        evaluated_at_unix_seconds,
-                        &expected_subject,
-                    )
+                    if review_evidence::is_review_artifact_json(&input) {
+                        review_evidence::verify_review_json(
+                            &input,
+                            evaluated_at_unix_seconds,
+                            &expected_subject,
+                        )
+                        .map_err(|error| OpsctlError::new("hosted-evidence", error.to_string()))
+                    } else {
+                        hosted_evidence::verify_operational_credential_json(
+                            &input,
+                            evaluated_at_unix_seconds,
+                            &expected_subject,
+                        )
+                        .map_err(|error| OpsctlError::new("hosted-evidence", error.to_string()))
+                    }
                 }
             }
-            .map_err(|error| OpsctlError::new("hosted-evidence", error.to_string()))
         }
         Invocation::D1 {
             root,
