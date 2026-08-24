@@ -249,13 +249,13 @@ fn validate_record(record: &ExternalEvidenceRecordV1) -> Result<(), ExternalEvid
             ),
         ));
     }
-    if let Some(reviewed_at) = record.reviewed_at_sort_key {
-        if reviewed_at < record.observed_at_sort_key {
-            return Err(ExternalEvidencePolicyError::new(
-                "EXTERNAL_EVIDENCE_REVIEW_PRECEDES_OBSERVATION",
-                format!("{} review predates observation", record.evidence_id),
-            ));
-        }
+    if let Some(reviewed_at) = record.reviewed_at_sort_key
+        && reviewed_at < record.observed_at_sort_key
+    {
+        return Err(ExternalEvidencePolicyError::new(
+            "EXTERNAL_EVIDENCE_REVIEW_PRECEDES_OBSERVATION",
+            format!("{} review predates observation", record.evidence_id),
+        ));
     }
 
     let required = required_checks(record.gate);
