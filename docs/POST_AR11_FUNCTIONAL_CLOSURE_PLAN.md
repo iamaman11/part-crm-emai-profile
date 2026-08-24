@@ -56,6 +56,8 @@ v2 -> v3 semantic coercion = 0
 
 Current target and known-good identities are always observed fresh at FC-6 execution time.
 
+`NONE` is valid only when the provider observation proves that no deployment exists. A live deployment without exactly one supported Release Set/profile annotation is `UNKNOWN`/`BLOCKED`; secret-triggered or legacy deployments must never be relabelled, guessed or treated as a clean environment.
+
 ## 4. FC-6 — one typed staging ceremony
 
 FC-6 starts with a read-only preflight that is the fresh #399/#421 re-baseline:

@@ -277,6 +277,8 @@ Live trackers: #399 and #421.
 
 The next FC-6 run begins with a fresh read-only observation of accepted protected `main`, governance, workflows, credential scope/readiness, current staging identity, known-good identity, current Release Sets and hosted evidence.
 
+`expected_current=NONE` means provider-proven absence of a deployment, never missing/legacy/secret-triggered identity metadata. Any live deployment without exactly one supported Release Set/profile identity is `UNKNOWN` and blocks before credential exposure or mutation; operators may not guess, relabel or use promotion as diagnosis.
+
 Credential readiness means provider-verified status, exact account/resource scope, expected permission set, protected binding names and a sufficient validity window for the complete ceremony. Exportable static credentials are bounded to a maximum provider lifetime of six calendar months; non-expiring exportable static credentials fail readiness. Short-lived or federated identity is preferred where the provider supports it. Secret value readback and production credential reuse remain forbidden.
 
 ```text
