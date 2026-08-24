@@ -376,7 +376,11 @@ fn validate_observation(
 }
 
 fn validate_git_identity(value: &str, label: &str) -> Result<(), LifecycleEvaluationError> {
-    if value.len() != 40 || !value.bytes().all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase()) {
+    if value.len() != 40
+        || !value
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+    {
         return Err(LifecycleEvaluationError::new(format!(
             "INVALID_GIT_IDENTITY: {label} must be exact lowercase 40-hex"
         )));
@@ -388,7 +392,8 @@ fn validate_git_identity(value: &str, label: &str) -> Result<(), LifecycleEvalua
 mod tests {
     use super::{
         ACCEPTANCE_RECORD_SCHEMA_VERSION, AcceptanceObservationV1, DerivedLifecycleStateV1,
-        LifecycleEvaluator, ProductionCoreGate, ProgramSlice, RawArchitectureAcceptanceEvidenceV1,
+        LifecycleEvaluationError, LifecycleEvaluator, ProductionCoreGate, ProgramSlice,
+        RawArchitectureAcceptanceEvidenceV1,
     };
 
     const A: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
@@ -454,8 +459,9 @@ mod tests {
     }
 
     #[test]
-    fn baseline_without_new_acceptance_derives_ar12_current() {
-        let state = LifecycleEvaluator::evaluate(&evidence(Vec::new())).expect("valid lifecycle");
+    fn baseline_without_new_acceptance_derives_ar12_current(
+    ) -> Result<(), LifecycleEvaluationError> {
+        let state = LifecycleEvaluator::evaluate(&evidence(Vec::new()))?;
         assert_eq!(
             state,
             DerivedLifecycleStateV1 {
@@ -468,70 +474,93 @@ mod tests {
                 production_mutation: false,
             }
         );
+        Ok(())
     }
 
     #[test]
-    fn contiguous_acceptance_advances_one_slice() {
-        let state = LifecycleEvaluator::evaluate(&evidence(vec![observation("AR-12")]))
-            .expect("valid lifecycle");
+    fn contiguous_acceptance_advances_one_slice() -> Result<(), LifecycleEvaluationError> {
+        let state = LifecycleEvaluator::evaluate(&evidence(vec![observation("AR-12")]))?;
         assert_eq!(state.accepted_checkpoint, "AR-12");
         assert_eq!(state.current_slice.as_deref(), Some("AR-13"));
+        Ok(())
     }
 
     #[test]
-    fn gap_before_later_acceptance_fails_closed() {
-        let error = LifecycleEvaluator::evaluate(&evidence(vec![observation("AR-13")]))
-            .expect_err("gap must fail");
+    fn gap_before_later_acceptance_fails_closed() -> Result<(), LifecycleEvaluationError> {
+        let Err(error) = LifecycleEvaluator::evaluate(&evidence(vec![observation("AR-13")])) else {
+            return Err(LifecycleEvaluationError::new(
+                "expected non-contiguous acceptance rejection",
+            ));
+        };
         assert!(error.to_string().contains("NON_CONTIGUOUS_ACCEPTANCE"));
+        Ok(())
     }
 
     #[test]
-    fn duplicate_acceptance_fails_closed() {
+    fn duplicate_acceptance_fails_closed() -> Result<(), LifecycleEvaluationError> {
         let ar12 = observation("AR-12");
-        let error = LifecycleEvaluator::evaluate(&evidence(vec![ar12.clone(), ar12]))
-            .expect_err("duplicate must fail");
+        let Err(error) = LifecycleEvaluator::evaluate(&evidence(vec![ar12.clone(), ar12])) else {
+            return Err(LifecycleEvaluationError::new(
+                "expected duplicate acceptance rejection",
+            ));
+        };
         assert!(error.to_string().contains("DUPLICATE_ACCEPTANCE_OBSERVATION"));
+        Ok(())
     }
 
     #[test]
-    fn incomplete_hosted_verification_fails_closed() {
+    fn incomplete_hosted_verification_fails_closed() -> Result<(), LifecycleEvaluationError> {
         let mut ar12 = observation("AR-12");
         ar12.required_status_contexts_success -= 1;
-        let error = LifecycleEvaluator::evaluate(&evidence(vec![ar12]))
-            .expect_err("missing check must fail");
+        let Err(error) = LifecycleEvaluator::evaluate(&evidence(vec![ar12])) else {
+            return Err(LifecycleEvaluationError::new(
+                "expected incomplete hosted verification rejection",
+            ));
+        };
         assert!(error.to_string().contains("INCOMPLETE_REQUIRED_STATUS_CONTEXTS"));
+        Ok(())
     }
 
     #[test]
-    fn wrong_candidate_tree_fails_closed() {
+    fn wrong_candidate_tree_fails_closed() -> Result<(), LifecycleEvaluationError> {
         let mut ar12 = observation("AR-12");
         ar12.observed_candidate_tree = B.to_owned();
-        let error = LifecycleEvaluator::evaluate(&evidence(vec![ar12]))
-            .expect_err("tree mismatch must fail");
+        let Err(error) = LifecycleEvaluator::evaluate(&evidence(vec![ar12])) else {
+            return Err(LifecycleEvaluationError::new(
+                "expected candidate tree rejection",
+            ));
+        };
         assert!(error.to_string().contains("CANDIDATE_TREE_IDENTITY_MISMATCH"));
+        Ok(())
     }
 
     #[test]
-    fn premature_authorization_fails_closed() {
+    fn premature_authorization_fails_closed() -> Result<(), LifecycleEvaluationError> {
         let mut ar12 = observation("AR-12");
         ar12.production_core_gate = ProductionCoreGate::Authorized;
-        let error = LifecycleEvaluator::evaluate(&evidence(vec![ar12]))
-            .expect_err("premature authorization must fail");
+        let Err(error) = LifecycleEvaluator::evaluate(&evidence(vec![ar12])) else {
+            return Err(LifecycleEvaluationError::new(
+                "expected premature authorization rejection",
+            ));
+        };
         assert!(error.to_string().contains("INVALID_ACCEPTANCE_STATE"));
+        Ok(())
     }
 
     #[test]
-    fn ar17_is_the_only_architecture_authorization_boundary() {
+    fn ar17_is_the_only_architecture_authorization_boundary(
+    ) -> Result<(), LifecycleEvaluationError> {
         let observations = ["AR-12", "AR-13", "AR-14", "AR-15", "AR-16", "AR-17"]
             .into_iter()
             .map(observation)
             .collect();
-        let state = LifecycleEvaluator::evaluate(&evidence(observations)).expect("valid closeout");
+        let state = LifecycleEvaluator::evaluate(&evidence(observations))?;
         assert_eq!(state.accepted_checkpoint, "AR-17");
         assert_eq!(state.current_slice, None);
         assert!(state.architecture_complete);
         assert_eq!(state.production_core_gate, ProductionCoreGate::Authorized);
         assert!(!state.production_ready);
         assert!(!state.production_mutation);
+        Ok(())
     }
 }
