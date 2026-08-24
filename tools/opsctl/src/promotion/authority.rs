@@ -41,8 +41,7 @@ pub fn load_closure(root: &Path, profile_id: &str) -> Result<DeploymentClosure, 
     let root_object = object(&value, "release architecture")?;
     if required_u64(root_object, "schema_version")? != 1
         || required_string(root_object, "kind")? != "AR11_RELEASE_ARCHITECTURE_SOURCE"
-        || required_string(root_object, "canonical_projection")?
-            != "architecture/inventory.json::release_architecture"
+        || required_string(root_object, "authority_role")? != "NATURAL_OWNER"
     {
         return Err(ReleaseModelError::new(
             "release architecture identity/version drifted",

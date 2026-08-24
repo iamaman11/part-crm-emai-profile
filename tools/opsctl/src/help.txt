@@ -11,8 +11,8 @@ USAGE:
 
 COMMANDS:
     doctor                     Validate canonical repository authorities
-    status                     Print canonical docs/status.json
-    inventory                  Print canonical architecture/inventory.json
+    status --acceptance-evidence-json PATH
+                               Derive lifecycle state from explicit observations
     credentials status         Print canonical credential lifecycle metadata
     credentials rotation-plan  Print canonical operator rotation/recovery metadata
     d1 repository              Project typed D1 policy and SQL-derived repository identity
@@ -62,5 +62,9 @@ GLOBAL OPTIONS:
     -h, --help   Print help
     -V, --version
                  Print version
+
+STATUS OPTIONS:
+    --acceptance-evidence-json PATH
+                               Strict local observation DTO from the outer Git/GitHub shell
 
 AR-11 release commands remain local, read-only and metadata/artifact-verification-only. Release finalization consumes only explicit local packaging observations plus canonical repository inputs and writes only its machine-readable result to stdout. opsctl never executes Python, Node, npx, Wrangler, provider APIs, database mutation, secret access, deployment, or customer-state mutation. GitHub Actions/Environments retain orchestration/approval authority and provider executors retain actual mutation authority.

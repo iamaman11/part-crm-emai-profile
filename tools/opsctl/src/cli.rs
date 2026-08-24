@@ -10,8 +10,6 @@ pub const HELP: &str = include_str!("help.txt");
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ReadCommand {
     Doctor,
-    Status,
-    Inventory,
 }
 
 impl ReadCommand {
@@ -19,8 +17,6 @@ impl ReadCommand {
     pub const fn name(self) -> &'static str {
         match self {
             Self::Doctor => "doctor",
-            Self::Status => "status",
-            Self::Inventory => "inventory",
         }
     }
 }
@@ -48,6 +44,10 @@ pub enum Invocation {
     Run {
         root: Option<PathBuf>,
         command: ReadCommand,
+    },
+    Status {
+        root: Option<PathBuf>,
+        acceptance_evidence_json: PathBuf,
     },
     Credentials {
         root: Option<PathBuf>,
@@ -135,6 +135,7 @@ where
     }
 
     match command.as_str() {
+        "status" => parse_status_invocation(root, iterator),
         "d1" => parse_d1_invocation(root, iterator),
         "release" => parse_release_invocation(root, iterator),
         "promotion" => parse_promotion_invocation(root, iterator),
@@ -187,6 +188,49 @@ where
         ));
     }
     Ok(Invocation::Credentials { root, action })
+}
+
+fn parse_status_invocation<I>(
+    root: Option<PathBuf>,
+    mut iterator: I,
+) -> Result<Invocation, OpsctlError>
+where
+    I: Iterator<Item = OsString>,
+{
+    let mut acceptance_evidence_json: Option<PathBuf> = None;
+    while let Some(argument) = iterator.next() {
+        let flag = argument
+            .to_str()
+            .ok_or_else(|| OpsctlError::new("status", "status flags must be valid UTF-8"))?;
+        match flag {
+            "--acceptance-evidence-json" => {
+                let value = iterator.next().ok_or_else(|| {
+                    OpsctlError::new("status", "--acceptance-evidence-json requires a path")
+                })?;
+                set_once(
+                    &mut acceptance_evidence_json,
+                    PathBuf::from(value),
+                    "--acceptance-evidence-json",
+                )?;
+            }
+            other => {
+                return Err(OpsctlError::new(
+                    "status",
+                    format!("unsupported status argument: {other}"),
+                ));
+            }
+        }
+    }
+    let acceptance_evidence_json = acceptance_evidence_json.ok_or_else(|| {
+        OpsctlError::new(
+            "status",
+            "status requires --acceptance-evidence-json from the outer observation shell",
+        )
+    })?;
+    Ok(Invocation::Status {
+        root,
+        acceptance_evidence_json,
+    })
 }
 
 fn parse_d1_invocation<I>(root: Option<PathBuf>, mut iterator: I) -> Result<Invocation, OpsctlError>
@@ -733,8 +777,6 @@ fn reject_if_present_promotion<T>(
 fn parse_command(value: &str) -> Result<ReadCommand, OpsctlError> {
     match value {
         "doctor" => Ok(ReadCommand::Doctor),
-        "status" => Ok(ReadCommand::Status),
-        "inventory" => Ok(ReadCommand::Inventory),
         other => Err(OpsctlError::new(
             "parse",
             format!("unsupported command: {other}"),
@@ -767,32 +809,51 @@ mod tests {
     }
 
     #[test]
-    fn parses_existing_read_only_surface() {
-        for (name, expected) in [
-            ("doctor", ReadCommand::Doctor),
-            ("status", ReadCommand::Status),
-            ("inventory", ReadCommand::Inventory),
-        ] {
-            assert_eq!(
-                parse_invocation(args(&["opsctl", name])),
-                Ok(Invocation::Run {
-                    root: None,
-                    command: expected,
-                })
-            );
-        }
+    fn parses_doctor_surface() {
+        assert_eq!(
+            parse_invocation(args(&["opsctl", "doctor"])),
+            Ok(Invocation::Run {
+                root: None,
+                command: ReadCommand::Doctor,
+            })
+        );
     }
 
     #[test]
-    fn parses_read_command_with_root() {
-        let invocation = parse_invocation(args(&["opsctl", "--root", ".", "inventory"]));
+    fn parses_status_with_explicit_acceptance_evidence() {
         assert_eq!(
-            invocation,
-            Ok(Invocation::Run {
-                root: Some(PathBuf::from(".")),
-                command: ReadCommand::Inventory,
+            parse_invocation(args(&[
+                "opsctl",
+                "--root",
+                "/repo",
+                "status",
+                "--acceptance-evidence-json",
+                "evidence.json",
+            ])),
+            Ok(Invocation::Status {
+                root: Some(PathBuf::from("/repo")),
+                acceptance_evidence_json: PathBuf::from("evidence.json"),
             })
         );
+    }
+
+    #[test]
+    fn status_rejects_implicit_or_hidden_lifecycle_input() {
+        assert!(parse_invocation(args(&["opsctl", "status"])).is_err());
+        assert!(
+            parse_invocation(args(&[
+                "opsctl",
+                "status",
+                "--lifecycle-json",
+                "legacy.json",
+            ]))
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn retired_tracked_inventory_surface_is_rejected() {
+        assert!(parse_invocation(args(&["opsctl", "inventory"])).is_err());
     }
 
     #[test]

@@ -16,12 +16,12 @@ An accepted AR preserves required outcomes and provenance, not a permanent right
 
 ## Current subject-domain authorities
 
-- `inventory.json` — tracked **generated architecture projection**. It is output only and must never be used as semantic input for the facts it projects.
+- `architecture-program-sequence.json` — static program order only. Accepted/current lifecycle state is derived by the pure `opsctl-core` evaluator from explicit immutable observations.
 - `credential-authority.json` — current bounded credential composition root. It references accepted AR-8B provenance and current lifecycle/profile-security contracts; it is not a global repository authority bag.
 - `credential-lifecycle.json` — current bounded replacement / verification / activation / retirement / rollback / recovery contract for governed credentials and application OAuth credentials. Its long-term representation remains subject to the owning cutover; it is not permission to duplicate executable semantics.
 - `profile-security.json` — current bounded Browser Profile / Camoufox security classification/ownership contract. It remains subject-domain data, not a global architecture registry.
 - provider/resource topology — current executable ownership is provider-native Wrangler configuration + Product Rust, not an AR-qualified runtime-topology JSON.
-- application/runtime/operator/release semantics — current executable semantics belong to their natural Rust/domain/runtime owners; generated JSON may project them but may not authorize them.
+- application/runtime/operator/release semantics — current executable semantics belong to their natural Rust/domain/runtime owners; no global tracked inventory projects or authorizes them.
 
 ## Transitional current artifacts scheduled for normalization
 

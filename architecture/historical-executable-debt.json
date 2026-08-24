@@ -17,8 +17,8 @@
   "entries": [
     {
       "path": "scripts/generate-architecture-inventory.py",
-      "classification": "CURRENT_INVARIANT",
-      "expected_present": true,
+      "classification": "DEAD",
+      "expected_present": false,
       "standalone_entrypoint": false,
       "proves": "current repository architecture inventory consistency",
       "duplicate_or_successor": "Git acceptance owns live AR state; frozen lifecycle projection remains separate cleanup debt",
@@ -27,12 +27,12 @@
       "materializes_retired_code": false,
       "runtime_mutation_authority": false,
       "remote_mutation_authority": false,
-      "disposition": "KEEP_AND_NORMALIZE_LIFECYCLE_PROJECTION"
+      "disposition": "DELETED_BY_PF1_AFTER_TYPED_CALLER_CUTOVER"
     },
     {
       "path": "scripts/generate-architecture-inventory-engine.py",
-      "classification": "CURRENT_INVARIANT",
-      "expected_present": true,
+      "classification": "DEAD",
+      "expected_present": false,
       "standalone_entrypoint": false,
       "proves": "base inventory, documentation and drift invariants",
       "duplicate_or_successor": "AR-8-era lifecycle globals are compatibility debt; generic acceptance is live authority",
@@ -41,12 +41,12 @@
       "materializes_retired_code": false,
       "runtime_mutation_authority": false,
       "remote_mutation_authority": false,
-      "disposition": "KEEP_INVARIANTS_REMOVE_LIFECYCLE_SNAPSHOT_OWNERSHIP"
+      "disposition": "DELETED_BY_PF1_WITHOUT_PORTING_GLOBAL_TABLES"
     },
     {
       "path": "scripts/generate-ar8-completion-status.py",
-      "classification": "CURRENT_INVARIANT",
-      "expected_present": true,
+      "classification": "DEAD",
+      "expected_present": false,
       "standalone_entrypoint": false,
       "proves": "immutable AR-8/9/10 compatibility provenance and fail-closed boundaries",
       "duplicate_or_successor": "PR 378 retired source-writing lifecycle ownership",
@@ -55,12 +55,12 @@
       "materializes_retired_code": false,
       "runtime_mutation_authority": false,
       "remote_mutation_authority": false,
-      "disposition": "KEEP_READ_ONLY_COMPATIBILITY_VALIDATOR"
+      "disposition": "DELETED_BY_PF1_AFTER_LIFECYCLE_OWNER_CUTOVER"
     },
     {
       "path": "scripts/check-documentation-authority.py",
-      "classification": "CURRENT_INVARIANT",
-      "expected_present": true,
+      "classification": "DEAD",
+      "expected_present": false,
       "standalone_entrypoint": false,
       "proves": "current documentation authority and projection boundaries",
       "duplicate_or_successor": "current-state replacement accepted in PR 377",
@@ -69,7 +69,7 @@
       "materializes_retired_code": false,
       "runtime_mutation_authority": false,
       "remote_mutation_authority": false,
-      "disposition": "KEEP"
+      "disposition": "DELETED_BY_PF1_AFTER_PROJECTION_RETIREMENT"
     },
     {
       "path": "scripts/check-documentation-authority-legacy.py",

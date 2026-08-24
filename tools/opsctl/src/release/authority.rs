@@ -73,7 +73,7 @@ impl ReleaseArchitecture {
                 "status",
                 "owning_slice",
                 "owning_issue",
-                "canonical_projection",
+                "authority_role",
                 "source_path",
                 "production_mutation",
                 "architecture_complete",
@@ -101,8 +101,7 @@ impl ReleaseArchitecture {
         }
         if required_string(root, "kind")? != "AR11_RELEASE_ARCHITECTURE_SOURCE"
             || required_string(root, "owning_slice")? != "AR-11"
-            || required_string(root, "canonical_projection")?
-                != "architecture/inventory.json::release_architecture"
+            || required_string(root, "authority_role")? != "NATURAL_OWNER"
         {
             return Err(ReleaseAuthorityError::new(
                 "release architecture identity/ownership drifted",
@@ -545,7 +544,7 @@ mod tests {
           "status":"fixture",
           "owning_slice":"AR-11",
           "owning_issue":372,
-          "canonical_projection":"architecture/inventory.json::release_architecture",
+          "authority_role":"NATURAL_OWNER",
           "source_path":"fixture",
           "production_mutation":false,
           "architecture_complete":false,
@@ -580,7 +579,7 @@ mod tests {
           "status":"fixture",
           "owning_slice":"AR-11",
           "owning_issue":372,
-          "canonical_projection":"architecture/inventory.json::release_architecture",
+          "authority_role":"NATURAL_OWNER",
           "source_path":"fixture",
           "production_mutation":false,
           "architecture_complete":false,

@@ -4,7 +4,7 @@
   "status": "current_candidate",
   "owning_slice": "AR-11",
   "owning_issue": 372,
-  "canonical_projection": "architecture/inventory.json::release_architecture",
+  "authority_role": "NATURAL_OWNER",
   "source_path": "architecture/release-architecture-ar11.json",
   "production_mutation": false,
   "architecture_complete": false,

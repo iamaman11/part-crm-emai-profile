@@ -23,6 +23,7 @@ LOCK = Path("tools/opsctl/Cargo.lock")
 HELP = Path("tools/opsctl/src/help.txt")
 WORKSPACE_CARGO = Path("Cargo.toml")
 REQUIRED_SOURCE_FILES = {
+    "architecture.rs",
     "canonical.rs",
     "cli.rs",
     "credentials/mod.rs",
@@ -36,13 +37,13 @@ REQUIRED_SOURCE_FILES = {
     "d1/util.rs",
     "d1/verify.rs",
     "doctor.rs",
-    "inventory.rs",
     "lib.rs",
     "main.rs",
     "repository.rs",
     "status.rs",
 }
 REQUIRED_CORE_SOURCE_FILES = {
+    "architecture.rs",
     "lib.rs",
     "release.rs",
 }

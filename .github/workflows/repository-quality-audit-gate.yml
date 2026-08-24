@@ -44,10 +44,8 @@ jobs:
           python -m py_compile scripts/check-mailbox-binding-worker-application-boundary.py
           python -m py_compile scripts/check-mailbox-job-worker-application-boundary.py
           python -m py_compile scripts/check-frontend-feature-boundaries.py
-          python -m py_compile scripts/generate-architecture-inventory.py
           python -m py_compile scripts/check-historical-executable-debt.py
           python -m py_compile scripts/check-opsctl-readonly.py
-          python -m py_compile scripts/test-architecture-inventory-negative.py
           python -m py_compile scripts/check-phase1a-event-boundaries.py
           python -m py_compile scripts/check-phase1b-notification-boundaries.py
           python -m py_compile scripts/check-phase2a-client-boundaries.py
@@ -203,12 +201,6 @@ jobs:
 
       - name: Prove sibling feature internals are rejected
         run: python scripts/check-frontend-feature-boundaries.py --self-test
-
-      - name: Verify architecture inventory and documentation consistency
-        run: python scripts/generate-architecture-inventory.py --check
-
-      - name: Prove architecture inventory drift is rejected
-        run: python scripts/test-architecture-inventory-negative.py
 
       - name: Classify historical executable debt
         run: |

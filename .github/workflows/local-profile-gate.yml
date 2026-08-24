@@ -84,20 +84,15 @@ jobs:
           if (-not (Test-Path $bin)) {
             throw "opsctl.exe was not produced"
           }
-          foreach ($command in @('doctor', 'status', 'inventory')) {
-            $output = (& $bin --root . $command) -join "`n"
-            if ($LASTEXITCODE -ne 0) {
-              throw "opsctl $command failed with exit code $LASTEXITCODE"
-            }
-            $parsed = $output | ConvertFrom-Json
-            if ($null -eq $parsed) {
-              throw "opsctl $command did not return JSON"
-            }
-            if ($command -eq 'doctor') {
-              if ($parsed.status -ne 'ok' -or $parsed.mode -ne 'read-only' -or $parsed.mutation_executed -ne $false) {
-                throw "opsctl doctor lost the AR-6 read-only contract"
-              }
-            }
+          $doctor = ((& $bin --root . doctor) -join "`n") | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0 -or $doctor.status -ne 'ok' -or $doctor.mode -ne 'read-only' -or $doctor.mutation_executed -ne $false) {
+            throw "opsctl doctor lost the read-only contract"
+          }
+          '{"schema_version":1,"source_branch":"main","acceptance_observations":[]}' |
+            Set-Content -Encoding utf8 acceptance-evidence.json
+          $status = ((& $bin --root . status --acceptance-evidence-json acceptance-evidence.json) -join "`n") | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0 -or $status.accepted_checkpoint -ne 'AR-11' -or $status.current_slice -ne 'AR-12') {
+            throw "opsctl status lost the typed lifecycle contract"
           }
 
       - name: Verify Windows Profile Bridge artifact

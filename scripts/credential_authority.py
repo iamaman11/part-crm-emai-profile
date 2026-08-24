@@ -98,8 +98,6 @@ def validate_composition(root: Path, value: dict[str, Any]) -> tuple[str, str, s
         or value.get("status") != "current"
     ):
         raise ValueError("current credential authority identity/version/status drifted")
-    if value.get("canonical_inventory") != "architecture/inventory.json":
-        raise ValueError("current credential authority must project through architecture/inventory.json")
     sources = {
         "registry_source": EXPECTED_REGISTRY,
         "credential_lifecycle_source": EXPECTED_LIFECYCLE,

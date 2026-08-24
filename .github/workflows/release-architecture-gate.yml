@@ -61,7 +61,6 @@ jobs:
           text = path.read_text(encoding='utf-8').replace('\r\n', '\n').replace('\r', '\n')
           print(f'AR-11 release architecture sha256={hashlib.sha256(text.encode("utf-8")).hexdigest()}')
           PY
-          python scripts/generate-architecture-inventory.py --check
 
       - name: Verify native opsctl release policy foundation
         run: |

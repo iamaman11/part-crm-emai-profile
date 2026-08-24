@@ -68,10 +68,13 @@ jobs:
       - name: Validate AR-11 Core mailbox hosted disablement contract
         run: node .github/scripts/ar11-core-mailbox-hosted-disablement.mjs
 
-      - name: Validate one-merge architecture acceptance contract
+      - name: Derive lifecycle through the typed PF-1 owner
         run: |
-          node .github/scripts/architecture-acceptance.mjs contract
-          node .github/scripts/architecture-acceptance.mjs derive | python -m json.tool
+          node .github/scripts/architecture-acceptance-observer.mjs evidence > acceptance-evidence.json
+          cargo run --locked --quiet --manifest-path tools/opsctl/Cargo.toml -- \
+            --root . status --acceptance-evidence-json acceptance-evidence.json \
+            > lifecycle-state.json
+          python -m json.tool lifecycle-state.json >/dev/null
 
       - name: Validate architecture-slice premerge identity
         if: github.event_name == 'pull_request'
@@ -81,16 +84,24 @@ jobs:
           PR_BASE_REF: ${{ github.event.pull_request.base.ref }}
           PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
           PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-        run: >-
-          node .github/scripts/architecture-acceptance.mjs premerge
-          --title "$PR_TITLE"
-          --head-ref "$PR_HEAD_REF"
-          --base-ref "$PR_BASE_REF"
-          --base "$PR_BASE_SHA"
-          --head "$PR_HEAD_SHA"
+        run: |
+          node .github/scripts/architecture-acceptance-observer.mjs premerge \
+            --title "$PR_TITLE" \
+            --head-ref "$PR_HEAD_REF" \
+            --base-ref "$PR_BASE_REF" \
+            --base "$PR_BASE_SHA" \
+            --head "$PR_HEAD_SHA" \
+            > premerge-observation.json
+          python - <<'PY'
+          import json
+          premerge = json.load(open('premerge-observation.json', encoding='utf-8'))
+          state = json.load(open('lifecycle-state.json', encoding='utf-8'))
+          if premerge['architecture_slice'] and premerge['slice'] != state['current_slice']:
+              raise SystemExit(f"architecture slice {premerge['slice']} is not current {state['current_slice']}")
+          PY
 
-      - name: Prove architecture acceptance drift fails closed
-        run: node .github/scripts/architecture-acceptance.mjs self-test
+      - name: Prove typed lifecycle drift fails closed
+        run: cargo test --locked --manifest-path tools/opsctl/Cargo.toml architecture
 
       - name: Validate current GitHub governance desired state
         run: node .github/scripts/github-governance.mjs contract

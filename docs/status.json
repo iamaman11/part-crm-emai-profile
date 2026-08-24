@@ -87,7 +87,7 @@
       },
       "runtime_topology_evidence": "docs/ARCHITECTURE_REBASELINE_V3_AR2.md",
       "application_architecture_evidence": "docs/ARCHITECTURE_REBASELINE_V3_AR4C.md",
-      "application_architecture_projection": "architecture/inventory.json::application_architecture",
+      "application_architecture_owner": "Cargo workspace module graph",
       "application_architecture_base_evidence": "docs/ARCHITECTURE_REBASELINE_V3_AR3.md",
       "ar4a_acceptance": {
         "issue": 279,
@@ -264,7 +264,7 @@
         "slice": "AR-12",
         "name": "Fresh Rehearsal Environment",
         "status": "NOT_STARTED",
-        "lifecycle_authority": ".github/scripts/architecture-acceptance.mjs derive",
+        "lifecycle_authority": "tools/opsctl/core/src/architecture.rs::LifecycleEvaluator",
         "projection_role": "NON_AUTHORITATIVE_LIFECYCLE_COMPATIBILITY_SNAPSHOT",
         "production_mutation": false,
         "architecture_complete": false,
@@ -300,8 +300,7 @@
     "current_delivery_map": {
       "schema_version": 2,
       "projection_role": "NON_AUTHORITATIVE_LIFECYCLE_COMPATIBILITY_SNAPSHOT",
-      "lifecycle_authority": ".github/scripts/architecture-acceptance.mjs derive",
-      "projection_policy": "architecture/lifecycle-projection-policy.json",
+      "lifecycle_authority": "tools/opsctl/core/src/architecture.rs::LifecycleEvaluator",
       "program": "Architecture Re-baseline v3",
       "accepted_checkpoint": "AR-11",
       "current_work": "AR-12",
@@ -331,7 +330,7 @@
           "AR-10",
           "AR-11"
         ],
-        "acceptance_authority": ".github/scripts/architecture-acceptance.mjs derive"
+        "acceptance_authority": "tools/opsctl/core/src/architecture.rs::LifecycleEvaluator"
       },
       "staging_live": {
         "status": "PARTIAL",
@@ -381,7 +380,7 @@
       "program_tracking_issue": 266,
       "authority": "docs/ARCHITECTURE_REBASELINE_V3_PLAN.md",
       "previous_acceptance_checkpoint": "AR-11",
-      "lifecycle_authority": ".github/scripts/architecture-acceptance.mjs derive",
+      "lifecycle_authority": "tools/opsctl/core/src/architecture.rs::LifecycleEvaluator",
       "projection_role": "NON_AUTHORITATIVE_LIFECYCLE_COMPATIBILITY_SNAPSHOT"
     }
   },
@@ -507,7 +506,7 @@
       "squash_merge": "3ddde2f48ddf82decf66c933ae5326a4455263e5"
     }
   ],
-  "historical_status_note": "repository_step, next_repository_step, accepted_steps and legacy evidence fields preserve historical Repository Steps 0-10 and earlier repository-local evidence; current program authority is current.architecture_program + architecture/inventory.json + architecture/accepted-phases.json",
+  "historical_status_note": "repository_step, next_repository_step, accepted_steps and legacy evidence fields preserve historical Repository Steps 0-10 and earlier repository-local evidence; current program order is architecture/architecture-program-sequence.json and lifecycle is derived from immutable acceptance observations by opsctl",
   "historical_device_authority_note": "synthetic_device_authorization, synthetic_device_grant_journal and synthetic_two_device_contract are historical Repository Step 10 evidence labels for the removed certification-local model; they are not current production authority. Current ownership is current.device_authorization_ownership.",
   "historical_pre_ar_v3_projection": "history/status_pre_ar_v3_2026-08-15.json",
   "product": {

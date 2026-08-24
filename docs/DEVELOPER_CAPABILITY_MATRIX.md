@@ -27,7 +27,7 @@ No level by itself means production readiness.
 
 ## 2A. CURRENT_DELIVERY_MAP
 
-Canonical machine projection: `architecture/inventory.json::current_delivery_map`. This section is a human-readable projection, not a second roadmap or release authority.
+Lifecycle state is derived by `opsctl status` from the static program sequence and explicit immutable acceptance observations. This section is human-readable orientation, not a second roadmap or release authority.
 
 | Delivery dimension | Current status | Scope / gate |
 |---|---|---|

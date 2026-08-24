@@ -18,11 +18,10 @@ const RESOLVER_HISTORICAL_DIGEST: &str =
 const RESOLVER_FUTURE_REVISION: &str = "0005_post_epoch_probe.sql";
 const CANONICAL_ROOT_SENTINELS: &[&str] = &[
     "Cargo.toml",
-    "architecture/inventory.json",
+    "architecture/architecture-program-sequence.json",
     "architecture/credential-authority.json",
     "architecture/credential-lifecycle.json",
     "architecture/profile-security.json",
-    "scripts/generate-architecture-inventory.py",
 ];
 
 fn repo_root() -> PathBuf {
