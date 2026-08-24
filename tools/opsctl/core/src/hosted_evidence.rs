@@ -148,17 +148,28 @@ pub struct OperationalCredentialTokenVerifyObservationV1 {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct OperationalCredentialReadObservationV1 {
-    pub workers_deployments_read: bool,
-    pub d1_catalog_read: bool,
-    pub r2_bucket_read: bool,
-    pub queue_read: bool,
-    pub worker_secret_names_read: bool,
+pub struct OperationalCredentialAccountObservationV1 {
+    pub http_status: u16,
+    pub success: bool,
+    pub error_count: usize,
+    pub account_id: String,
+    pub account_name: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OperationalCredentialReadObservationV2 {
+    pub workers_deployments_http_status: u16,
+    pub workers_deployments_success: bool,
+    pub workers_deployments_error_count: usize,
+    pub d1_catalog_exit_code: i32,
+    pub r2_bucket_exit_code: i32,
+    pub queue_exit_code: i32,
+    pub worker_secret_names_exit_code: i32,
     pub mutation_probe: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct HostedEvidenceObservationV2 {
+pub struct HostedEvidenceObservationV3 {
     pub binding: EvidenceBindingV1,
     pub source_run_id: u64,
     pub source_run_attempt: u32,
@@ -167,13 +178,14 @@ pub struct HostedEvidenceObservationV2 {
     pub credential_policy: OperationalCredentialPolicyObservationV1,
     pub attestation: OperationalCredentialAttestationObservationV1,
     pub token_verify: OperationalCredentialTokenVerifyObservationV1,
+    pub account: OperationalCredentialAccountObservationV1,
     pub deployment_account_id: String,
-    pub reads: OperationalCredentialReadObservationV1,
+    pub reads: OperationalCredentialReadObservationV2,
     pub production_mutation: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct HostedEvidenceEnvelopeV2 {
+pub struct HostedEvidenceEnvelopeV3 {
     pub binding: EvidenceBindingV1,
     pub source_run_id: u64,
     pub source_run_attempt: u32,
@@ -185,22 +197,24 @@ pub struct HostedEvidenceEnvelopeV2 {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct EvidencePolicyV2 {
+pub struct EvidencePolicyV3 {
     expected_binding: EvidenceBindingV1,
     max_validity_seconds: i64,
     expected_credential_id: String,
     expected_attestation_kind: String,
     expected_attestation_source: String,
+    expected_account_name: String,
     expected_mutation_probe: String,
 }
 
-impl EvidencePolicyV2 {
+impl EvidencePolicyV3 {
     pub fn new(
         expected_binding: EvidenceBindingV1,
         max_validity_seconds: u64,
         expected_credential_id: impl Into<String>,
         expected_attestation_kind: impl Into<String>,
         expected_attestation_source: impl Into<String>,
+        expected_account_name: impl Into<String>,
         expected_mutation_probe: impl Into<String>,
     ) -> Result<Self, EvidencePolicyError> {
         let max_validity_seconds = i64::try_from(max_validity_seconds).map_err(|_| {
@@ -230,6 +244,10 @@ impl EvidencePolicyV2 {
                 "expected_attestation_source",
                 expected_attestation_source.into(),
             )?,
+            expected_account_name: validate_identifier(
+                "expected_account_name",
+                expected_account_name.into(),
+            )?,
             expected_mutation_probe: validate_identifier(
                 "expected_mutation_probe",
                 expected_mutation_probe.into(),
@@ -239,9 +257,9 @@ impl EvidencePolicyV2 {
 
     pub fn evaluate(
         &self,
-        observation: HostedEvidenceObservationV2,
+        observation: HostedEvidenceObservationV3,
         evaluated_at_unix_seconds: i64,
-    ) -> Result<HostedEvidenceEnvelopeV2, EvidencePolicyError> {
+    ) -> Result<HostedEvidenceEnvelopeV3, EvidencePolicyError> {
         if observation.binding != self.expected_binding {
             return Err(EvidencePolicyError::new(
                 "HOSTED_EVIDENCE_BINDING_MISMATCH",
@@ -267,9 +285,10 @@ impl EvidencePolicyV2 {
         validate_credential_policy(self, &observation)?;
         validate_attestation(self, &observation)?;
         validate_token_verify(&observation)?;
+        validate_account_observation(self, &observation)?;
         validate_read_observations(self, &observation)?;
 
-        Ok(HostedEvidenceEnvelopeV2 {
+        Ok(HostedEvidenceEnvelopeV3 {
             binding: observation.binding,
             source_run_id: observation.source_run_id,
             source_run_attempt: observation.source_run_attempt,
@@ -343,8 +362,8 @@ fn validate_freshness(
 }
 
 fn validate_credential_policy(
-    policy: &EvidencePolicyV2,
-    observation: &HostedEvidenceObservationV2,
+    policy: &EvidencePolicyV3,
+    observation: &HostedEvidenceObservationV3,
 ) -> Result<(), EvidencePolicyError> {
     let credential = &observation.credential_policy;
     if credential.credential_id != policy.expected_credential_id {
@@ -394,8 +413,8 @@ fn validate_credential_policy(
 }
 
 fn validate_attestation(
-    policy: &EvidencePolicyV2,
-    observation: &HostedEvidenceObservationV2,
+    policy: &EvidencePolicyV3,
+    observation: &HostedEvidenceObservationV3,
 ) -> Result<(), EvidencePolicyError> {
     let attestation = &observation.attestation;
     if attestation.schema_version != 1
@@ -468,7 +487,7 @@ fn validate_attestation(
 }
 
 fn validate_token_verify(
-    observation: &HostedEvidenceObservationV2,
+    observation: &HostedEvidenceObservationV3,
 ) -> Result<(), EvidencePolicyError> {
     let verify = &observation.token_verify;
     if verify.http_status != 200 || !verify.success || verify.error_count != 0 {
@@ -492,20 +511,60 @@ fn validate_token_verify(
     Ok(())
 }
 
-fn validate_read_observations(
-    policy: &EvidencePolicyV2,
-    observation: &HostedEvidenceObservationV2,
+fn validate_account_observation(
+    policy: &EvidencePolicyV3,
+    observation: &HostedEvidenceObservationV3,
 ) -> Result<(), EvidencePolicyError> {
-    let reads = &observation.reads;
-    if !(reads.workers_deployments_read
-        && reads.d1_catalog_read
-        && reads.r2_bucket_read
-        && reads.queue_read
-        && reads.worker_secret_names_read)
+    let account = &observation.account;
+    if account.http_status != 200 || !account.success || account.error_count != 0 {
+        return Err(EvidencePolicyError::new(
+            "HOSTED_EVIDENCE_ACCOUNT_OBSERVATION_FAILED",
+            "Cloudflare account observation must return HTTP 200 with success=true and no provider errors",
+        ));
+    }
+    if !is_lower_hex(&account.account_id, 32)
+        || account.account_id != observation.deployment_account_id
+        || account.account_id != observation.attestation.account_id
     {
         return Err(EvidencePolicyError::new(
-            "HOSTED_EVIDENCE_REQUIRED_READ_INCOMPLETE",
-            "all required provider read observations must succeed",
+            "HOSTED_EVIDENCE_ACCOUNT_SCOPE_MISMATCH",
+            "live Cloudflare account id must exactly match deployment and issuance-attestation account ids",
+        ));
+    }
+    if account.account_name != policy.expected_account_name {
+        return Err(EvidencePolicyError::new(
+            "HOSTED_EVIDENCE_ACCOUNT_NAME_MISMATCH",
+            format!(
+                "live Cloudflare account name must exactly match expected staging account {}",
+                policy.expected_account_name
+            ),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_read_observations(
+    policy: &EvidencePolicyV3,
+    observation: &HostedEvidenceObservationV3,
+) -> Result<(), EvidencePolicyError> {
+    let reads = &observation.reads;
+    if reads.workers_deployments_http_status != 200
+        || !reads.workers_deployments_success
+        || reads.workers_deployments_error_count != 0
+    {
+        return Err(EvidencePolicyError::new(
+            "HOSTED_EVIDENCE_WORKERS_DEPLOYMENTS_READ_FAILED",
+            "Workers deployments observation must return HTTP 200 with success=true and no provider errors",
+        ));
+    }
+    if reads.d1_catalog_exit_code != 0
+        || reads.r2_bucket_exit_code != 0
+        || reads.queue_exit_code != 0
+        || reads.worker_secret_names_exit_code != 0
+    {
+        return Err(EvidencePolicyError::new(
+            "HOSTED_EVIDENCE_WRANGLER_READ_FAILED",
+            "every pinned Wrangler read-only observation must exit with code zero",
         ));
     }
     if reads.mutation_probe != policy.expected_mutation_probe {
@@ -682,12 +741,12 @@ impl ReviewAttestationPolicyV1 {
 #[cfg(test)]
 mod tests {
     use super::{
-        EvidenceBindingV1, EvidenceEnvironment, EvidenceIssuer, EvidenceOutcome, EvidencePolicyV2,
+        EvidenceBindingV1, EvidenceEnvironment, EvidenceIssuer, EvidenceOutcome, EvidencePolicyV3,
         EvidenceSource, EvidenceSubject, EvidenceTarget, EvidenceTrustState,
-        HostedEvidenceObservationV2, OperationalCredentialAttestationObservationV1,
-        OperationalCredentialPolicyObservationV1, OperationalCredentialReadObservationV1,
-        OperationalCredentialTokenVerifyObservationV1, ReviewAttestationObservationV1,
-        ReviewAttestationPolicyV1, ReviewAttestationStatus,
+        HostedEvidenceObservationV3, OperationalCredentialAccountObservationV1,
+        OperationalCredentialAttestationObservationV1, OperationalCredentialPolicyObservationV1,
+        OperationalCredentialReadObservationV2, OperationalCredentialTokenVerifyObservationV1,
+        ReviewAttestationObservationV1, ReviewAttestationPolicyV1, ReviewAttestationStatus,
     };
 
     fn binding(subject: &str) -> Result<EvidenceBindingV1, Box<dyn std::error::Error>> {
@@ -700,14 +759,14 @@ mod tests {
         })
     }
 
-    fn observation() -> Result<HostedEvidenceObservationV2, Box<dyn std::error::Error>> {
+    fn observation() -> Result<HostedEvidenceObservationV3, Box<dyn std::error::Error>> {
         let required = vec![
             "D1 Read".to_owned(),
             "Queues Read".to_owned(),
             "Workers R2 Storage Read".to_owned(),
             "Workers Scripts Read".to_owned(),
         ];
-        Ok(HostedEvidenceObservationV2 {
+        Ok(HostedEvidenceObservationV3 {
             binding: binding("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")?,
             source_run_id: 42,
             source_run_attempt: 1,
@@ -749,28 +808,151 @@ mod tests {
                 token_id: "observe-token-id-1234".to_owned(),
                 status: "active".to_owned(),
             },
+            account: OperationalCredentialAccountObservationV1 {
+                http_status: 200,
+                success: true,
+                error_count: 0,
+                account_id: "a".repeat(32),
+                account_name: "pvisakp".to_owned(),
+            },
             deployment_account_id: "a".repeat(32),
-            reads: OperationalCredentialReadObservationV1 {
-                workers_deployments_read: true,
-                d1_catalog_read: true,
-                r2_bucket_read: true,
-                queue_read: true,
-                worker_secret_names_read: true,
+            reads: OperationalCredentialReadObservationV2 {
+                workers_deployments_http_status: 200,
+                workers_deployments_success: true,
+                workers_deployments_error_count: 0,
+                d1_catalog_exit_code: 0,
+                r2_bucket_exit_code: 0,
+                queue_exit_code: 0,
+                worker_secret_names_exit_code: 0,
                 mutation_probe: "FORBIDDEN_NOT_EXECUTED".to_owned(),
             },
             production_mutation: false,
         })
     }
 
-    fn policy() -> Result<EvidencePolicyV2, Box<dyn std::error::Error>> {
-        Ok(EvidencePolicyV2::new(
+    fn policy() -> Result<EvidencePolicyV3, Box<dyn std::error::Error>> {
+        Ok(EvidencePolicyV3::new(
             binding("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")?,
             3_600,
             "cloudflare.staging-observation-api",
             "AR11_CLOUDFLARE_OBSERVE_TOKEN_POLICY_ATTESTATION",
             "CLOUDFLARE_TOKEN_ISSUANCE_POLICY",
+            "pvisakp",
             "FORBIDDEN_NOT_EXECUTED",
         )?)
+    }
+
+    #[test]
+    fn derives_trusted_passed_only_from_raw_provider_facts()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let envelope = policy()?.evaluate(observation()?, 1_700_000_010)?;
+        assert_eq!(envelope.trust_state, EvidenceTrustState::Trusted);
+        assert_eq!(envelope.outcome, EvidenceOutcome::Passed);
+        assert!(!envelope.production_mutation);
+        Ok(())
+    }
+
+    #[test]
+    fn rejects_live_account_name_or_scope_drift() -> Result<(), Box<dyn std::error::Error>> {
+        let mut wrong_name = observation()?;
+        wrong_name.account.account_name = "other-account".to_owned();
+        assert_eq!(
+            policy()?
+                .evaluate(wrong_name, 1_700_000_010)
+                .err()
+                .map(|error| error.code()),
+            Some("HOSTED_EVIDENCE_ACCOUNT_NAME_MISMATCH")
+        );
+
+        let mut wrong_id = observation()?;
+        wrong_id.account.account_id = "b".repeat(32);
+        assert_eq!(
+            policy()?
+                .evaluate(wrong_id, 1_700_000_010)
+                .err()
+                .map(|error| error.code()),
+            Some("HOSTED_EVIDENCE_ACCOUNT_SCOPE_MISMATCH")
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn rejects_deployments_404_and_nonzero_wrangler_exit()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let mut not_found = observation()?;
+        not_found.reads.workers_deployments_http_status = 404;
+        not_found.reads.workers_deployments_success = false;
+        assert_eq!(
+            policy()?
+                .evaluate(not_found, 1_700_000_010)
+                .err()
+                .map(|error| error.code()),
+            Some("HOSTED_EVIDENCE_WORKERS_DEPLOYMENTS_READ_FAILED")
+        );
+
+        let mut wrangler_failed = observation()?;
+        wrangler_failed.reads.d1_catalog_exit_code = 1;
+        assert_eq!(
+            policy()?
+                .evaluate(wrangler_failed, 1_700_000_010)
+                .err()
+                .map(|error| error.code()),
+            Some("HOSTED_EVIDENCE_WRANGLER_READ_FAILED")
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn rejects_binding_permission_token_mutation_and_freshness_drift()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let mut foreign = observation()?;
+        foreign.binding.target = EvidenceTarget::new("other/repository")?;
+        assert_eq!(
+            policy()?
+                .evaluate(foreign, 1_700_000_010)
+                .err()
+                .map(|error| error.code()),
+            Some("HOSTED_EVIDENCE_BINDING_MISMATCH")
+        );
+
+        let mut permission = observation()?;
+        permission.attestation.permission_names.pop();
+        assert_eq!(
+            policy()?
+                .evaluate(permission, 1_700_000_010)
+                .err()
+                .map(|error| error.code()),
+            Some("HOSTED_EVIDENCE_PERMISSION_MISMATCH")
+        );
+
+        let mut inactive = observation()?;
+        inactive.token_verify.status = "disabled".to_owned();
+        assert_eq!(
+            policy()?
+                .evaluate(inactive, 1_700_000_010)
+                .err()
+                .map(|error| error.code()),
+            Some("HOSTED_EVIDENCE_TOKEN_INACTIVE")
+        );
+
+        let mut mutation = observation()?;
+        mutation.credential_policy.mutation_allowed = true;
+        assert_eq!(
+            policy()?
+                .evaluate(mutation, 1_700_000_010)
+                .err()
+                .map(|error| error.code()),
+            Some("HOSTED_EVIDENCE_CREDENTIAL_MUTATION_AUTHORITY_FORBIDDEN")
+        );
+
+        assert_eq!(
+            policy()?
+                .evaluate(observation()?, 1_700_003_600)
+                .err()
+                .map(|error| error.code()),
+            Some("HOSTED_EVIDENCE_EXPIRED_OR_REPLAYED")
+        );
+        Ok(())
     }
 
     fn review_observation() -> Result<ReviewAttestationObservationV1, Box<dyn std::error::Error>> {
@@ -798,173 +980,9 @@ mod tests {
     }
 
     #[test]
-    fn derives_trusted_passed_only_from_raw_facts() -> Result<(), Box<dyn std::error::Error>> {
-        let envelope = policy()?.evaluate(observation()?, 1_700_000_010)?;
-        assert_eq!(envelope.trust_state, EvidenceTrustState::Trusted);
-        assert_eq!(envelope.outcome, EvidenceOutcome::Passed);
-        assert!(!envelope.production_mutation);
-        Ok(())
-    }
-
-    #[test]
-    fn rejects_binding_policy_and_permission_drift() -> Result<(), Box<dyn std::error::Error>> {
-        let mut foreign = observation()?;
-        foreign.binding.target = EvidenceTarget::new("other/repository")?;
-        assert_eq!(
-            policy()?
-                .evaluate(foreign, 1_700_000_010)
-                .err()
-                .map(|error| error.code()),
-            Some("HOSTED_EVIDENCE_BINDING_MISMATCH")
-        );
-
-        let mut mutable = observation()?;
-        mutable.credential_policy.mutation_allowed = true;
-        assert_eq!(
-            policy()?
-                .evaluate(mutable, 1_700_000_010)
-                .err()
-                .map(|error| error.code()),
-            Some("HOSTED_EVIDENCE_CREDENTIAL_MUTATION_AUTHORITY_FORBIDDEN")
-        );
-
-        let mut permission_drift = observation()?;
-        permission_drift.attestation.permission_names.pop();
-        assert_eq!(
-            policy()?
-                .evaluate(permission_drift, 1_700_000_010)
-                .err()
-                .map(|error| error.code()),
-            Some("HOSTED_EVIDENCE_PERMISSION_MISMATCH")
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn rejects_token_account_read_and_mutation_drift() -> Result<(), Box<dyn std::error::Error>> {
-        let mut inactive = observation()?;
-        inactive.token_verify.status = "disabled".to_owned();
-        assert_eq!(
-            policy()?
-                .evaluate(inactive, 1_700_000_010)
-                .err()
-                .map(|error| error.code()),
-            Some("HOSTED_EVIDENCE_TOKEN_INACTIVE")
-        );
-
-        let mut foreign_account = observation()?;
-        foreign_account.deployment_account_id = "b".repeat(32);
-        assert_eq!(
-            policy()?
-                .evaluate(foreign_account, 1_700_000_010)
-                .err()
-                .map(|error| error.code()),
-            Some("HOSTED_EVIDENCE_ACCOUNT_SCOPE_MISMATCH")
-        );
-
-        let mut read_failed = observation()?;
-        read_failed.reads.d1_catalog_read = false;
-        assert_eq!(
-            policy()?
-                .evaluate(read_failed, 1_700_000_010)
-                .err()
-                .map(|error| error.code()),
-            Some("HOSTED_EVIDENCE_REQUIRED_READ_INCOMPLETE")
-        );
-
-        let mut probe = observation()?;
-        probe.reads.mutation_probe = "EXECUTED".to_owned();
-        assert_eq!(
-            policy()?
-                .evaluate(probe, 1_700_000_010)
-                .err()
-                .map(|error| error.code()),
-            Some("HOSTED_EVIDENCE_MUTATION_PROBE_INVALID")
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn rejects_impossible_oversized_future_and_replayed_freshness()
-    -> Result<(), Box<dyn std::error::Error>> {
-        let mut impossible = observation()?;
-        impossible.valid_until_unix_seconds = impossible.observed_at_unix_seconds;
-        assert_eq!(
-            policy()?
-                .evaluate(impossible, 1_700_000_010)
-                .err()
-                .map(|error| error.code()),
-            Some("HOSTED_EVIDENCE_FRESHNESS_WINDOW_INVALID")
-        );
-
-        let mut oversized = observation()?;
-        oversized.valid_until_unix_seconds = oversized.observed_at_unix_seconds + 3_601;
-        assert_eq!(
-            policy()?
-                .evaluate(oversized, 1_700_000_010)
-                .err()
-                .map(|error| error.code()),
-            Some("HOSTED_EVIDENCE_FRESHNESS_WINDOW_TOO_LARGE")
-        );
-
-        assert_eq!(
-            policy()?
-                .evaluate(observation()?, 1_699_999_999)
-                .err()
-                .map(|error| error.code()),
-            Some("HOSTED_EVIDENCE_OBSERVATION_FROM_FUTURE")
-        );
-        assert_eq!(
-            policy()?
-                .evaluate(observation()?, 1_700_003_600)
-                .err()
-                .map(|error| error.code()),
-            Some("HOSTED_EVIDENCE_EXPIRED_OR_REPLAYED")
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn identifiers_reject_ambiguous_whitespace() {
-        assert!(EvidenceIssuer::new(" github-actions").is_err());
-        assert!(EvidenceSource::new("").is_err());
-    }
-
-    #[test]
-    fn review_attestation_accepts_exact_provider_observation()
+    fn review_attestation_preserves_exact_provider_observation_policy()
     -> Result<(), Box<dyn std::error::Error>> {
         ReviewAttestationPolicyV1.evaluate(&review_observation()?)?;
-        Ok(())
-    }
-
-    #[test]
-    fn review_attestation_rejects_provider_binding_drift() -> Result<(), Box<dyn std::error::Error>>
-    {
-        let mut foreign_repository = review_observation()?;
-        foreign_repository.observed_repository = EvidenceTarget::new("other/repository")?;
-        assert_eq!(
-            ReviewAttestationPolicyV1
-                .evaluate(&foreign_repository)
-                .err()
-                .map(|error| error.code()),
-            Some("HOSTED_REVIEW_ATTESTATION_REPOSITORY_MISMATCH")
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn review_attestation_rejects_unavailable_or_mutated_provider_object()
-    -> Result<(), Box<dyn std::error::Error>> {
-        let mut unavailable = review_observation()?;
-        unavailable.provider_object_available = false;
-        assert_eq!(
-            ReviewAttestationPolicyV1
-                .evaluate(&unavailable)
-                .err()
-                .map(|error| error.code()),
-            Some("HOSTED_REVIEW_ATTESTATION_PROVIDER_OBJECT_UNAVAILABLE")
-        );
-
         let mut wrong_body = review_observation()?;
         wrong_body.observed_body = Some("external-evidence-review-v1\nwrong=true".to_owned());
         assert_eq!(
