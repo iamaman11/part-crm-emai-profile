@@ -50,9 +50,7 @@ jobs:
 
       - name: Fetch exact Camoufox browser release
         run: |
-          python3.12 -m camoufox sync
-          python3.12 -m camoufox set official/stable/152.0.4-beta.28
-          python3.12 -m camoufox fetch
+          python3.12 -m camoufox fetch official/stable/152.0.4-beta.28
           python3.12 -m camoufox active | grep -F '152.0.4-beta.28'
 
       - name: Compile AR-10 runtime sources
