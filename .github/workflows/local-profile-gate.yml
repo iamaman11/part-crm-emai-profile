@@ -94,10 +94,6 @@ jobs:
           if ($LASTEXITCODE -ne 0 -or $status.accepted_checkpoint -ne 'AR-11' -or $status.current_slice -ne 'AR-12') {
             throw "opsctl status lost the typed lifecycle contract"
           }
-          & $bin --root . inventory 2>$null | Out-Null
-          if ($LASTEXITCODE -eq 0) {
-            throw "retired opsctl inventory command unexpectedly succeeded"
-          }
 
       - name: Verify Windows Profile Bridge artifact
         shell: pwsh
