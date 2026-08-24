@@ -873,15 +873,26 @@ impl ReviewAttestationPolicyV1 {
 mod tests {
     use super::{
         EvidenceBindingV1, EvidenceEnvironment, EvidenceIssuer, EvidenceOutcome,
-        EvidencePolicyDisposition, EvidencePolicyV3, EvidenceSource, EvidenceSubject,
-        EvidenceTarget, EvidenceTrustState, HostedEvidenceObservationV3,
-        OperationalCredentialAccountObservationV1, OperationalCredentialAttestationObservationV1,
-        OperationalCredentialPolicyObservationV1, OperationalCredentialReadObservationV3,
-        OperationalCredentialTokenVerifyObservationV1, ReviewAttestationObservationV1,
-        ReviewAttestationPolicyV1, ReviewAttestationStatus,
+        EvidencePolicyDisposition, EvidencePolicyError, EvidencePolicyV3, EvidenceSource,
+        EvidenceSubject, EvidenceTarget, EvidenceTrustState, HostedEvidenceEnvelopeV3,
+        HostedEvidenceObservationV3, OperationalCredentialAccountObservationV1,
+        OperationalCredentialAttestationObservationV1, OperationalCredentialPolicyObservationV1,
+        OperationalCredentialReadObservationV3, OperationalCredentialTokenVerifyObservationV1,
+        ReviewAttestationObservationV1, ReviewAttestationPolicyV1, ReviewAttestationStatus,
     };
 
-    fn binding(subject: &str) -> Result<EvidenceBindingV1, Box<dyn std::error::Error>> {
+    type TestResult<T> = Result<T, Box<dyn std::error::Error>>;
+
+    fn policy_error(
+        result: Result<HostedEvidenceEnvelopeV3, EvidencePolicyError>,
+    ) -> TestResult<EvidencePolicyError> {
+        match result {
+            Err(error) => Ok(error),
+            Ok(_) => Err(std::io::Error::other("expected hosted evidence policy failure").into()),
+        }
+    }
+
+    fn binding(subject: &str) -> TestResult<EvidenceBindingV1> {
         Ok(EvidenceBindingV1 {
             issuer: EvidenceIssuer::new("github-actions")?,
             source: EvidenceSource::new("github-governance-gate/operational-credential-state")?,
@@ -891,7 +902,7 @@ mod tests {
         })
     }
 
-    fn observation() -> Result<HostedEvidenceObservationV3, Box<dyn std::error::Error>> {
+    fn observation() -> TestResult<HostedEvidenceObservationV3> {
         let required = vec![
             "D1 Read".to_owned(),
             "Queues Read".to_owned(),
@@ -966,7 +977,7 @@ mod tests {
         })
     }
 
-    fn policy() -> Result<EvidencePolicyV3, Box<dyn std::error::Error>> {
+    fn policy() -> TestResult<EvidencePolicyV3> {
         Ok(EvidencePolicyV3::new(
             binding("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")?,
             3_600,
@@ -979,8 +990,7 @@ mod tests {
     }
 
     #[test]
-    fn derives_trusted_passed_only_from_raw_provider_facts()
-    -> Result<(), Box<dyn std::error::Error>> {
+    fn derives_trusted_passed_only_from_raw_provider_facts() -> TestResult<()> {
         let envelope = policy()?.evaluate(observation()?, 1_700_000_010)?;
         assert_eq!(envelope.trust_state, EvidenceTrustState::Trusted);
         assert_eq!(envelope.outcome, EvidenceOutcome::Passed);
@@ -989,22 +999,18 @@ mod tests {
     }
 
     #[test]
-    fn classifies_http_failures_in_pure_core() -> Result<(), Box<dyn std::error::Error>> {
+    fn classifies_http_failures_in_pure_core() -> TestResult<()> {
         for status in [401, 403, 404] {
             let mut rejected = observation()?;
             rejected.reads.workers_deployments_http_status = Some(status);
-            let error = policy()?
-                .evaluate(rejected, 1_700_000_010)
-                .expect_err("rejected HTTP status must fail");
+            let error = policy_error(policy()?.evaluate(rejected, 1_700_000_010))?;
             assert_eq!(error.code(), "HOSTED_EVIDENCE_PROVIDER_REJECTED");
             assert_eq!(error.disposition(), EvidencePolicyDisposition::Rejected);
         }
         for status in [429, 500, 503, 599] {
             let mut retryable = observation()?;
             retryable.reads.workers_deployments_http_status = Some(status);
-            let error = policy()?
-                .evaluate(retryable, 1_700_000_010)
-                .expect_err("retryable HTTP status must fail the current observation");
+            let error = policy_error(policy()?.evaluate(retryable, 1_700_000_010))?;
             assert_eq!(error.code(), "HOSTED_EVIDENCE_PROVIDER_RETRYABLE");
             assert_eq!(error.disposition(), EvidencePolicyDisposition::Retryable);
         }
@@ -1012,128 +1018,73 @@ mod tests {
     }
 
     #[test]
-    fn rejects_missing_provider_result_invalid_digest_and_nonzero_wrangler_exit()
-    -> Result<(), Box<dyn std::error::Error>> {
+    fn rejects_missing_provider_result_invalid_digest_and_nonzero_wrangler_exit() -> TestResult<()> {
         let mut missing = observation()?;
         missing.reads.workers_deployments_success = None;
+        let error = policy_error(policy()?.evaluate(missing, 1_700_000_010))?;
         assert_eq!(
-            policy()?
-                .evaluate(missing, 1_700_000_010)
-                .expect_err("missing provider result must fail")
-                .code(),
+            error.code(),
             "HOSTED_EVIDENCE_WORKERS_DEPLOYMENTS_READ_FAILED"
         );
 
         let mut invalid_digest = observation()?;
         invalid_digest.reads.d1_catalog_output_digest_sha256 = Some("ABC".to_owned());
-        assert_eq!(
-            policy()?
-                .evaluate(invalid_digest, 1_700_000_010)
-                .expect_err("invalid digest must fail")
-                .code(),
-            "HOSTED_EVIDENCE_READ_DIGEST_INVALID"
-        );
+        let error = policy_error(policy()?.evaluate(invalid_digest, 1_700_000_010))?;
+        assert_eq!(error.code(), "HOSTED_EVIDENCE_READ_DIGEST_INVALID");
 
         let mut wrangler_failed = observation()?;
         wrangler_failed.reads.d1_catalog_exit_code = Some(1);
-        assert_eq!(
-            policy()?
-                .evaluate(wrangler_failed, 1_700_000_010)
-                .expect_err("non-zero Wrangler exit must fail")
-                .code(),
-            "HOSTED_EVIDENCE_WRANGLER_READ_REJECTED"
-        );
+        let error = policy_error(policy()?.evaluate(wrangler_failed, 1_700_000_010))?;
+        assert_eq!(error.code(), "HOSTED_EVIDENCE_WRANGLER_READ_REJECTED");
         Ok(())
     }
 
     #[test]
-    fn rejects_account_binding_drift_including_majakojh() -> Result<(), Box<dyn std::error::Error>>
-    {
+    fn rejects_account_binding_drift_including_majakojh() -> TestResult<()> {
         let mut wrong_live_name = observation()?;
         wrong_live_name.account.account_name = Some("majakojh".to_owned());
-        assert_eq!(
-            policy()?
-                .evaluate(wrong_live_name, 1_700_000_010)
-                .expect_err("wrong live account must fail")
-                .code(),
-            "HOSTED_EVIDENCE_ACCOUNT_NAME_MISMATCH"
-        );
+        let error = policy_error(policy()?.evaluate(wrong_live_name, 1_700_000_010))?;
+        assert_eq!(error.code(), "HOSTED_EVIDENCE_ACCOUNT_NAME_MISMATCH");
 
         let mut wrong_attested_name = observation()?;
         wrong_attested_name.attestation.account_name = "majakojh".to_owned();
         wrong_attested_name.account.account_name = Some("majakojh".to_owned());
-        assert_eq!(
-            policy()?
-                .evaluate(wrong_attested_name, 1_700_000_010)
-                .expect_err("wrong accepted mapping must fail")
-                .code(),
-            "HOSTED_EVIDENCE_ACCOUNT_NAME_MISMATCH"
-        );
+        let error = policy_error(policy()?.evaluate(wrong_attested_name, 1_700_000_010))?;
+        assert_eq!(error.code(), "HOSTED_EVIDENCE_ACCOUNT_NAME_MISMATCH");
 
         let mut wrong_id = observation()?;
         wrong_id.account.account_id = Some("b".repeat(32));
-        assert_eq!(
-            policy()?
-                .evaluate(wrong_id, 1_700_000_010)
-                .expect_err("wrong account id must fail")
-                .code(),
-            "HOSTED_EVIDENCE_ACCOUNT_SCOPE_MISMATCH"
-        );
+        let error = policy_error(policy()?.evaluate(wrong_id, 1_700_000_010))?;
+        assert_eq!(error.code(), "HOSTED_EVIDENCE_ACCOUNT_SCOPE_MISMATCH");
         Ok(())
     }
 
     #[test]
-    fn rejects_binding_run_freshness_permission_token_and_mutation_drift()
-    -> Result<(), Box<dyn std::error::Error>> {
+    fn rejects_binding_run_freshness_permission_token_and_mutation_drift() -> TestResult<()> {
         let mut foreign_repository = observation()?;
         foreign_repository.binding.target = EvidenceTarget::new("other/repository")?;
-        assert_eq!(
-            policy()?
-                .evaluate(foreign_repository, 1_700_000_010)
-                .expect_err("wrong repository must fail")
-                .code(),
-            "HOSTED_EVIDENCE_BINDING_MISMATCH"
-        );
+        let error = policy_error(policy()?.evaluate(foreign_repository, 1_700_000_010))?;
+        assert_eq!(error.code(), "HOSTED_EVIDENCE_BINDING_MISMATCH");
 
         let mut foreign_subject = observation()?;
         foreign_subject.binding.subject = EvidenceSubject::new("b".repeat(40))?;
-        assert_eq!(
-            policy()?
-                .evaluate(foreign_subject, 1_700_000_010)
-                .expect_err("wrong subject must fail")
-                .code(),
-            "HOSTED_EVIDENCE_BINDING_MISMATCH"
-        );
+        let error = policy_error(policy()?.evaluate(foreign_subject, 1_700_000_010))?;
+        assert_eq!(error.code(), "HOSTED_EVIDENCE_BINDING_MISMATCH");
 
         let mut foreign_environment = observation()?;
         foreign_environment.binding.environment = EvidenceEnvironment::new("production")?;
-        assert_eq!(
-            policy()?
-                .evaluate(foreign_environment, 1_700_000_010)
-                .expect_err("wrong environment must fail")
-                .code(),
-            "HOSTED_EVIDENCE_BINDING_MISMATCH"
-        );
+        let error = policy_error(policy()?.evaluate(foreign_environment, 1_700_000_010))?;
+        assert_eq!(error.code(), "HOSTED_EVIDENCE_BINDING_MISMATCH");
 
         let mut invalid_attempt = observation()?;
         invalid_attempt.source_run_attempt = 0;
-        assert_eq!(
-            policy()?
-                .evaluate(invalid_attempt, 1_700_000_010)
-                .expect_err("invalid run attempt must fail")
-                .code(),
-            "HOSTED_EVIDENCE_RUN_IDENTITY_INVALID"
-        );
+        let error = policy_error(policy()?.evaluate(invalid_attempt, 1_700_000_010))?;
+        assert_eq!(error.code(), "HOSTED_EVIDENCE_RUN_IDENTITY_INVALID");
 
         let mut permission_missing = observation()?;
         permission_missing.attestation.permission_names.pop();
-        assert_eq!(
-            policy()?
-                .evaluate(permission_missing, 1_700_000_010)
-                .expect_err("missing permission must fail")
-                .code(),
-            "HOSTED_EVIDENCE_PERMISSION_MISMATCH"
-        );
+        let error = policy_error(policy()?.evaluate(permission_missing, 1_700_000_010))?;
+        assert_eq!(error.code(), "HOSTED_EVIDENCE_PERMISSION_MISMATCH");
 
         let mut forbidden_permission = observation()?;
         forbidden_permission
@@ -1148,87 +1099,60 @@ mod tests {
 
         let mut inactive = observation()?;
         inactive.token_verify.status = Some("disabled".to_owned());
-        assert_eq!(
-            policy()?
-                .evaluate(inactive, 1_700_000_010)
-                .expect_err("disabled token must fail")
-                .code(),
-            "HOSTED_EVIDENCE_TOKEN_INACTIVE"
-        );
+        let error = policy_error(policy()?.evaluate(inactive, 1_700_000_010))?;
+        assert_eq!(error.code(), "HOSTED_EVIDENCE_TOKEN_INACTIVE");
 
         let mut token_mismatch = observation()?;
         token_mismatch.token_verify.token_id = Some("different-token-id-1234".to_owned());
-        assert_eq!(
-            policy()?
-                .evaluate(token_mismatch, 1_700_000_010)
-                .expect_err("token id mismatch must fail")
-                .code(),
-            "HOSTED_EVIDENCE_TOKEN_BINDING_MISMATCH"
-        );
+        let error = policy_error(policy()?.evaluate(token_mismatch, 1_700_000_010))?;
+        assert_eq!(error.code(), "HOSTED_EVIDENCE_TOKEN_BINDING_MISMATCH");
 
         let mut mutation_probe = observation()?;
         mutation_probe.reads.mutation_probe = Some("EXECUTED".to_owned());
-        assert_eq!(
-            policy()?
-                .evaluate(mutation_probe, 1_700_000_010)
-                .expect_err("mutation probe execution must fail")
-                .code(),
-            "HOSTED_EVIDENCE_MUTATION_PROBE_INVALID"
-        );
+        let error = policy_error(policy()?.evaluate(mutation_probe, 1_700_000_010))?;
+        assert_eq!(error.code(), "HOSTED_EVIDENCE_MUTATION_PROBE_INVALID");
 
         let mut production_mutation = observation()?;
         production_mutation.production_mutation = true;
+        let error = policy_error(policy()?.evaluate(production_mutation, 1_700_000_010))?;
         assert_eq!(
-            policy()?
-                .evaluate(production_mutation, 1_700_000_010)
-                .expect_err("production mutation must fail")
-                .code(),
+            error.code(),
             "HOSTED_EVIDENCE_PRODUCTION_MUTATION_FORBIDDEN"
         );
 
         let mut credential_mutation = observation()?;
         credential_mutation.credential_policy.mutation_allowed = true;
+        let error = policy_error(policy()?.evaluate(credential_mutation, 1_700_000_010))?;
         assert_eq!(
-            policy()?
-                .evaluate(credential_mutation, 1_700_000_010)
-                .expect_err("credential mutation authority must fail")
-                .code(),
+            error.code(),
             "HOSTED_EVIDENCE_CREDENTIAL_MUTATION_AUTHORITY_FORBIDDEN"
         );
 
         let mut token_management = observation()?;
         token_management.attestation.token_management_capability = true;
+        let error = policy_error(policy()?.evaluate(token_management, 1_700_000_010))?;
         assert_eq!(
-            policy()?
-                .evaluate(token_management, 1_700_000_010)
-                .expect_err("token-management authority must fail")
-                .code(),
+            error.code(),
             "HOSTED_EVIDENCE_ATTESTATION_AUTHORITY_INVALID"
         );
 
         let mut plaintext = observation()?;
         plaintext.attestation.plaintext_token_included = true;
+        let error = policy_error(policy()?.evaluate(plaintext, 1_700_000_010))?;
         assert_eq!(
-            policy()?
-                .evaluate(plaintext, 1_700_000_010)
-                .expect_err("plaintext-token field must fail")
-                .code(),
+            error.code(),
             "HOSTED_EVIDENCE_ATTESTATION_AUTHORITY_INVALID"
         );
 
-        let expired = policy()?
-            .evaluate(observation()?, 1_700_003_600)
-            .expect_err("expired evidence must fail");
-        assert_eq!(expired.code(), "HOSTED_EVIDENCE_EXPIRED_OR_REPLAYED");
+        let error = policy_error(policy()?.evaluate(observation()?, 1_700_003_600))?;
+        assert_eq!(error.code(), "HOSTED_EVIDENCE_EXPIRED_OR_REPLAYED");
 
-        let future = policy()?
-            .evaluate(observation()?, 1_699_999_999)
-            .expect_err("future observation must fail");
-        assert_eq!(future.code(), "HOSTED_EVIDENCE_OBSERVATION_FROM_FUTURE");
+        let error = policy_error(policy()?.evaluate(observation()?, 1_699_999_999))?;
+        assert_eq!(error.code(), "HOSTED_EVIDENCE_OBSERVATION_FROM_FUTURE");
         Ok(())
     }
 
-    fn review_observation() -> Result<ReviewAttestationObservationV1, Box<dyn std::error::Error>> {
+    fn review_observation() -> TestResult<ReviewAttestationObservationV1> {
         let digest = "11".repeat(32);
         Ok(ReviewAttestationObservationV1 {
             expected_repository: EvidenceTarget::new("acme/profile-platform")?,
@@ -1253,8 +1177,7 @@ mod tests {
     }
 
     #[test]
-    fn review_attestation_preserves_exact_provider_observation_policy()
-    -> Result<(), Box<dyn std::error::Error>> {
+    fn review_attestation_preserves_exact_provider_observation_policy() -> TestResult<()> {
         ReviewAttestationPolicyV1.evaluate(&review_observation()?)?;
         let mut wrong_body = review_observation()?;
         wrong_body.observed_body = Some("external-evidence-review-v1\nwrong=true".to_owned());
