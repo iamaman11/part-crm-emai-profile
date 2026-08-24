@@ -45,7 +45,7 @@ EXPECTED_LOCK: dict[str, Any] = {
     "fingerprint_policy_version": "profile-stability-v1",
     "python": "3.12",
     "python_source": {
-        "commit": "cd83f7fd2fdf631df0c7eb53bd3d30f102ec4a",
+        "commit": "cd83f7fd2fdf631dfde0c7eb53bd3d30f102ec4a",
         "repository": "daijro/camoufox",
     },
     "runtime_role": "real_camoufox",
