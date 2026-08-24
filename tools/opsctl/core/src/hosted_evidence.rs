@@ -1047,8 +1047,8 @@ mod tests {
     }
 
     #[test]
-    fn rejects_account_binding_drift_including_majakojh()
-    -> Result<(), Box<dyn std::error::Error>> {
+    fn rejects_account_binding_drift_including_majakojh() -> Result<(), Box<dyn std::error::Error>>
+    {
         let mut wrong_live_name = observation()?;
         wrong_live_name.account.account_name = Some("majakojh".to_owned());
         assert_eq!(
@@ -1228,8 +1228,7 @@ mod tests {
         Ok(())
     }
 
-    fn review_observation()
-    -> Result<ReviewAttestationObservationV1, Box<dyn std::error::Error>> {
+    fn review_observation() -> Result<ReviewAttestationObservationV1, Box<dyn std::error::Error>> {
         let digest = "11".repeat(32);
         Ok(ReviewAttestationObservationV1 {
             expected_repository: EvidenceTarget::new("acme/profile-platform")?,
