@@ -974,10 +974,7 @@ mod tests {
     #[test]
     fn production_path_rejects_missing_results_invalid_digests_and_account_drift() {
         let mut missing = observation();
-        missing["reads"]
-            .as_object_mut()
-            .expect("reads object")
-            .remove("workers_deployments_success");
+        missing["reads"]["workers_deployments_success"] = Value::Null;
         assert_rejected(&missing);
 
         let mut invalid_digest = observation();
@@ -1006,10 +1003,13 @@ mod tests {
         assert_rejected(&missing_permission);
 
         let mut forbidden_permission = observation();
-        forbidden_permission["attestation"]["permission_names"]
-            .as_array_mut()
-            .expect("permission array")
-            .push(json!("Workers Scripts Write"));
+        forbidden_permission["attestation"]["permission_names"] = json!([
+            "D1 Read",
+            "Queues Read",
+            "Workers R2 Storage Read",
+            "Workers Scripts Read",
+            "Workers Scripts Write"
+        ]);
         assert_rejected(&forbidden_permission);
 
         let mut disabled = observation();
