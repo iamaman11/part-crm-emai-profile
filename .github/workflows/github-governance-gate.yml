@@ -103,6 +103,9 @@ jobs:
       - name: Prove typed lifecycle drift fails closed
         run: cargo test --locked --manifest-path tools/opsctl/Cargo.toml architecture
 
+      - name: Prove typed hosted evidence policy and adapter fail closed
+        run: cargo test --locked --manifest-path tools/opsctl/Cargo.toml hosted_evidence
+
       - name: Validate current GitHub governance desired state
         run: node .github/scripts/github-governance.mjs contract
 
@@ -364,3 +367,70 @@ jobs:
           fi
 
           echo "AR11_CORE_MAILBOX_HOSTED_DISABLED control_plane=$worker_name resolver=$resolver_name service_binding=absent cron_triggers=0 workers_dev=false previews=false production_mutation=false"
+
+      - name: Seal typed PF-2 operational credential hosted evidence
+        env:
+          SOURCE_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          test "$GITHUB_EVENT_NAME" != pull_request
+          test "$GITHUB_REF" = refs/heads/main
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          observed_at="$(date -u +%s)"
+          evaluated_at="$(date -u +%s)"
+          valid_until="$((observed_at + 21600))"
+          observation="$RUNNER_TEMP/pf2-operational-credential-observation.json"
+          evidence_dir="artifacts/pf2-operational-credential-hosted-evidence"
+          evidence="$evidence_dir/evidence.json"
+          replay="$RUNNER_TEMP/pf2-operational-credential-evidence-replay.json"
+          mkdir -p "$evidence_dir"
+
+          jq -n \
+            --arg issuer github-actions \
+            --arg source github-governance-gate/operational-credential-state \
+            --arg target "$GITHUB_REPOSITORY" \
+            --arg environment staging \
+            --arg subject "$SOURCE_SHA" \
+            --argjson source_run_id "$GITHUB_RUN_ID" \
+            --argjson source_run_attempt "$GITHUB_RUN_ATTEMPT" \
+            --argjson observed_at "$observed_at" \
+            --argjson valid_until "$valid_until" \
+            '{
+              schema_version: 1,
+              kind: "HOSTED_EVIDENCE_OBSERVATION",
+              issuer: $issuer,
+              source: $source,
+              target: $target,
+              environment: $environment,
+              subject: $subject,
+              source_run_id: $source_run_id,
+              source_run_attempt: $source_run_attempt,
+              observed_at_unix_seconds: $observed_at,
+              valid_until_unix_seconds: $valid_until,
+              trust_state: "TRUSTED",
+              outcome: "PASS",
+              production_mutation: false
+            }' > "$observation"
+
+          cargo run --locked --quiet --manifest-path tools/opsctl/Cargo.toml -- \
+            --root . hosted-evidence operational-credential seal \
+            --observation-json "$observation" \
+            --evaluated-at-unix-seconds "$evaluated_at" \
+            --expected-subject "$SOURCE_SHA" \
+            > "$evidence"
+
+          cargo run --locked --quiet --manifest-path tools/opsctl/Cargo.toml -- \
+            --root . hosted-evidence operational-credential verify \
+            --artifact-json "$evidence" \
+            --evaluated-at-unix-seconds "$evaluated_at" \
+            --expected-subject "$SOURCE_SHA" \
+            > "$replay"
+          cmp --silent "$evidence" "$replay"
+
+      - name: Publish immutable typed PF-2 hosted evidence artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: pf2-operational-credential-hosted-evidence-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.sha }}
+          path: artifacts/pf2-operational-credential-hosted-evidence
+          if-no-files-found: error
+          retention-days: 90
