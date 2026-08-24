@@ -1,6 +1,7 @@
 use std::fmt::{Display, Formatter};
 
 const MAX_IDENTIFIER_BYTES: usize = 256;
+const REVIEW_CLAIM_DOMAIN: &str = "external-evidence-review-v1";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EvidencePolicyError {
@@ -272,12 +273,141 @@ impl EvidencePolicyV1 {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReviewAttestationStatus {
+    Passed,
+    Failed,
+}
+
+impl ReviewAttestationStatus {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Passed => "passed",
+            Self::Failed => "failed",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReviewAttestationObservationV1 {
+    pub expected_repository: EvidenceTarget,
+    pub observed_repository: EvidenceTarget,
+    pub evidence_id: EvidenceSubject,
+    pub gate: EvidenceSource,
+    pub status: ReviewAttestationStatus,
+    pub expected_reference: String,
+    pub observed_reference: String,
+    pub expected_reviewer: String,
+    pub observed_reviewer: Option<String>,
+    pub expected_reviewed_at: String,
+    pub observed_reviewed_at: Option<String>,
+    pub claim_sha256: String,
+    pub observed_body: Option<String>,
+    pub provider_object_available: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct ReviewAttestationPolicyV1;
+
+impl ReviewAttestationPolicyV1 {
+    pub fn evaluate(
+        self,
+        observation: &ReviewAttestationObservationV1,
+    ) -> Result<(), EvidencePolicyError> {
+        if !observation.provider_object_available {
+            return Err(EvidencePolicyError::new(
+                "HOSTED_REVIEW_ATTESTATION_PROVIDER_OBJECT_UNAVAILABLE",
+                "the exact referenced GitHub review/comment object is unavailable",
+            ));
+        }
+        if !observation
+            .expected_repository
+            .as_str()
+            .eq_ignore_ascii_case(observation.observed_repository.as_str())
+        {
+            return Err(EvidencePolicyError::new(
+                "HOSTED_REVIEW_ATTESTATION_REPOSITORY_MISMATCH",
+                "the observed review object belongs to a different repository",
+            ));
+        }
+        if observation.expected_reference != observation.observed_reference {
+            return Err(EvidencePolicyError::new(
+                "HOSTED_REVIEW_ATTESTATION_REFERENCE_MISMATCH",
+                "the observed provider object does not match the record review reference",
+            ));
+        }
+        let observed_reviewer = observation.observed_reviewer.as_deref().ok_or_else(|| {
+            EvidencePolicyError::new(
+                "HOSTED_REVIEW_ATTESTATION_REVIEWER_MISSING",
+                "the observed provider object has no reviewer identity",
+            )
+        })?;
+        if !observation
+            .expected_reviewer
+            .eq_ignore_ascii_case(observed_reviewer)
+        {
+            return Err(EvidencePolicyError::new(
+                "HOSTED_REVIEW_ATTESTATION_REVIEWER_MISMATCH",
+                "the observed reviewer does not match the terminal evidence record",
+            ));
+        }
+        let observed_reviewed_at = observation
+            .observed_reviewed_at
+            .as_deref()
+            .ok_or_else(|| {
+                EvidencePolicyError::new(
+                    "HOSTED_REVIEW_ATTESTATION_TIMESTAMP_MISSING",
+                    "the observed provider object has no effective review timestamp",
+                )
+            })?;
+        if observation.expected_reviewed_at != observed_reviewed_at {
+            return Err(EvidencePolicyError::new(
+                "HOSTED_REVIEW_ATTESTATION_TIMESTAMP_MISMATCH",
+                "the observed review timestamp does not match the terminal evidence record",
+            ));
+        }
+        if observation.claim_sha256.len() != 64
+            || !observation
+                .claim_sha256
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        {
+            return Err(EvidencePolicyError::new(
+                "HOSTED_REVIEW_ATTESTATION_CLAIM_DIGEST_INVALID",
+                "claim_sha256 must be exactly 64 lowercase hexadecimal characters",
+            ));
+        }
+        let observed_body = observation.observed_body.as_deref().ok_or_else(|| {
+            EvidencePolicyError::new(
+                "HOSTED_REVIEW_ATTESTATION_BODY_MISSING",
+                "the observed provider object has no review body",
+            )
+        })?;
+        let expected_body = format!(
+            "{REVIEW_CLAIM_DOMAIN}\nevidence_id={}\ngate={}\nstatus={}\nclaim_sha256={}",
+            observation.evidence_id.as_str(),
+            observation.gate.as_str(),
+            observation.status.as_str(),
+            observation.claim_sha256,
+        );
+        if observed_body != expected_body {
+            return Err(EvidencePolicyError::new(
+                "HOSTED_REVIEW_ATTESTATION_BODY_MISMATCH",
+                "the observed GitHub review body does not match the canonical terminal claim",
+            ));
+        }
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
         EvidenceBindingV1, EvidenceEnvironment, EvidenceIssuer, EvidenceOutcome, EvidencePolicyV1,
         EvidenceSource, EvidenceSubject, EvidenceTarget, EvidenceTrustState,
-        HostedEvidenceObservationV1,
+        HostedEvidenceObservationV1, ReviewAttestationObservationV1, ReviewAttestationPolicyV1,
+        ReviewAttestationStatus,
     };
 
     fn binding(subject: &str) -> Result<EvidenceBindingV1, Box<dyn std::error::Error>> {
@@ -308,6 +438,31 @@ mod tests {
             binding("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")?,
             3_600,
         )?)
+    }
+
+    fn review_observation()
+    -> Result<ReviewAttestationObservationV1, Box<dyn std::error::Error>> {
+        let digest = "11".repeat(32);
+        Ok(ReviewAttestationObservationV1 {
+            expected_repository: EvidenceTarget::new("acme/profile-platform")?,
+            observed_repository: EvidenceTarget::new("acme/profile-platform")?,
+            evidence_id: EvidenceSubject::new("ev-20260806-terminal")?,
+            gate: EvidenceSource::new("product_license")?,
+            status: ReviewAttestationStatus::Passed,
+            expected_reference:
+                "https://github.com/acme/profile-platform/issues/9#issuecomment-101".to_owned(),
+            observed_reference:
+                "https://github.com/acme/profile-platform/issues/9#issuecomment-101".to_owned(),
+            expected_reviewer: "reviewer-one".to_owned(),
+            observed_reviewer: Some("Reviewer-One".to_owned()),
+            expected_reviewed_at: "2026-08-06T14:40:00Z".to_owned(),
+            observed_reviewed_at: Some("2026-08-06T14:40:00Z".to_owned()),
+            claim_sha256: digest.clone(),
+            observed_body: Some(format!(
+                "external-evidence-review-v1\nevidence_id=ev-20260806-terminal\ngate=product_license\nstatus=passed\nclaim_sha256={digest}"
+            )),
+            provider_object_available: true,
+        })
     }
 
     #[test]
@@ -435,5 +590,98 @@ mod tests {
     fn identifiers_reject_ambiguous_whitespace() {
         assert!(EvidenceIssuer::new(" github-actions").is_err());
         assert!(EvidenceSource::new("").is_err());
+    }
+
+    #[test]
+    fn review_attestation_accepts_exact_provider_observation()
+    -> Result<(), Box<dyn std::error::Error>> {
+        ReviewAttestationPolicyV1.evaluate(&review_observation()?)?;
+        Ok(())
+    }
+
+    #[test]
+    fn review_attestation_rejects_provider_binding_drift()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let mut foreign_repository = review_observation()?;
+        foreign_repository.observed_repository = EvidenceTarget::new("other/repository")?;
+        assert_eq!(
+            ReviewAttestationPolicyV1
+                .evaluate(&foreign_repository)
+                .err()
+                .map(|error| error.code()),
+            Some("HOSTED_REVIEW_ATTESTATION_REPOSITORY_MISMATCH")
+        );
+
+        let mut wrong_reference = review_observation()?;
+        wrong_reference.observed_reference =
+            "https://github.com/acme/profile-platform/issues/9#issuecomment-999".to_owned();
+        assert_eq!(
+            ReviewAttestationPolicyV1
+                .evaluate(&wrong_reference)
+                .err()
+                .map(|error| error.code()),
+            Some("HOSTED_REVIEW_ATTESTATION_REFERENCE_MISMATCH")
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn review_attestation_rejects_unavailable_or_mutated_provider_object()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let mut unavailable = review_observation()?;
+        unavailable.provider_object_available = false;
+        assert_eq!(
+            ReviewAttestationPolicyV1
+                .evaluate(&unavailable)
+                .err()
+                .map(|error| error.code()),
+            Some("HOSTED_REVIEW_ATTESTATION_PROVIDER_OBJECT_UNAVAILABLE")
+        );
+
+        let mut wrong_reviewer = review_observation()?;
+        wrong_reviewer.observed_reviewer = Some("another-reviewer".to_owned());
+        assert_eq!(
+            ReviewAttestationPolicyV1
+                .evaluate(&wrong_reviewer)
+                .err()
+                .map(|error| error.code()),
+            Some("HOSTED_REVIEW_ATTESTATION_REVIEWER_MISMATCH")
+        );
+
+        let mut edited_timestamp = review_observation()?;
+        edited_timestamp.observed_reviewed_at = Some("2026-08-06T14:41:00Z".to_owned());
+        assert_eq!(
+            ReviewAttestationPolicyV1
+                .evaluate(&edited_timestamp)
+                .err()
+                .map(|error| error.code()),
+            Some("HOSTED_REVIEW_ATTESTATION_TIMESTAMP_MISMATCH")
+        );
+
+        let mut wrong_body = review_observation()?;
+        wrong_body.observed_body = Some("external-evidence-review-v1\nwrong=true".to_owned());
+        assert_eq!(
+            ReviewAttestationPolicyV1
+                .evaluate(&wrong_body)
+                .err()
+                .map(|error| error.code()),
+            Some("HOSTED_REVIEW_ATTESTATION_BODY_MISMATCH")
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn review_attestation_rejects_noncanonical_claim_digest()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let mut invalid = review_observation()?;
+        invalid.claim_sha256 = "AA".repeat(32);
+        assert_eq!(
+            ReviewAttestationPolicyV1
+                .evaluate(&invalid)
+                .err()
+                .map(|error| error.code()),
+            Some("HOSTED_REVIEW_ATTESTATION_CLAIM_DIGEST_INVALID")
+        );
+        Ok(())
     }
 }
