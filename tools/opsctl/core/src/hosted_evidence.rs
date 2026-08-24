@@ -872,12 +872,13 @@ impl ReviewAttestationPolicyV1 {
 #[cfg(test)]
 mod tests {
     use super::{
-        EvidenceBindingV1, EvidenceEnvironment, EvidenceIssuer, EvidenceOutcome, EvidencePolicyDisposition,
-        EvidencePolicyV3, EvidenceSource, EvidenceSubject, EvidenceTarget, EvidenceTrustState,
-        HostedEvidenceObservationV3, OperationalCredentialAccountObservationV1,
-        OperationalCredentialAttestationObservationV1, OperationalCredentialPolicyObservationV1,
-        OperationalCredentialReadObservationV3, OperationalCredentialTokenVerifyObservationV1,
-        ReviewAttestationObservationV1, ReviewAttestationPolicyV1, ReviewAttestationStatus,
+        EvidenceBindingV1, EvidenceEnvironment, EvidenceIssuer, EvidenceOutcome,
+        EvidencePolicyDisposition, EvidencePolicyV3, EvidenceSource, EvidenceSubject,
+        EvidenceTarget, EvidenceTrustState, HostedEvidenceObservationV3,
+        OperationalCredentialAccountObservationV1, OperationalCredentialAttestationObservationV1,
+        OperationalCredentialPolicyObservationV1, OperationalCredentialReadObservationV3,
+        OperationalCredentialTokenVerifyObservationV1, ReviewAttestationObservationV1,
+        ReviewAttestationPolicyV1, ReviewAttestationStatus,
     };
 
     fn binding(subject: &str) -> Result<EvidenceBindingV1, Box<dyn std::error::Error>> {
@@ -1139,9 +1140,11 @@ mod tests {
             .attestation
             .permission_names
             .push("Workers Scripts Write".to_owned());
-        assert!(policy()?
-            .evaluate(forbidden_permission, 1_700_000_010)
-            .is_err());
+        assert!(
+            policy()?
+                .evaluate(forbidden_permission, 1_700_000_010)
+                .is_err()
+        );
 
         let mut inactive = observation()?;
         inactive.token_verify.status = Some("disabled".to_owned());
@@ -1225,7 +1228,8 @@ mod tests {
         Ok(())
     }
 
-    fn review_observation() -> Result<ReviewAttestationObservationV1, Box<dyn std::error::Error>> {
+    fn review_observation()
+    -> Result<ReviewAttestationObservationV1, Box<dyn std::error::Error>> {
         let digest = "11".repeat(32);
         Ok(ReviewAttestationObservationV1 {
             expected_repository: EvidenceTarget::new("acme/profile-platform")?,
