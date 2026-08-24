@@ -1,108 +1,43 @@
 # External Evidence Operator Workflow
 
-**Status:** normative preparation workflow  
+**Status:** normative external-operation guidance  
 **Tracking:** issue #69, parent external-gates issue #3
 
 ## Purpose
 
-External production gates require real provider, physical-host, signing, recovery,
-policy or independent-review actions outside repository CI. Repository tooling may
-prepare a safe metadata envelope, but it must never manufacture a terminal
-`passed`/`failed` claim.
+External production gates require real provider, physical-host, signing, recovery, policy or independent-review actions outside repository CI. Repository records are sanitized observations of that work; repository tooling must never manufacture a terminal `passed`/`failed` claim.
 
-`scripts/prepare-external-evidence.py` is the operator entry point for that
-preparation boundary. It reads the accepted gate/check catalog directly from
-`scripts/check-external-evidence.py` and the allowed environment catalog directly
-from `scripts/check-external-evidence-scope.py`. It does not maintain a third copy
-of the security contract.
+The current semantic authority is typed Rust in `tools/opsctl/core/src/external_evidence.rs`. It owns gate identities, required checks, allowed environments, terminal-state validity, supersession lineage and mandatory production-review requirements. `tools/opsctl/tests/external_evidence_policy.rs` is the strict repository adapter/permanent enforcement caller. There is no separate Python gate/readiness semantic catalog or pending-draft generator.
 
-For the real provider/host/policy operation itself, use
-[`EXTERNAL_GATE_EXECUTION_RUNBOOK.md`](EXTERNAL_GATE_EXECUTION_RUNBOOK.md). Its
-coverage is checked against the same validator-derived gate catalog; the runbook
-never replaces `describe` as the source of exact checks or allowed environments.
+For the real operation, use [`EXTERNAL_GATE_EXECUTION_RUNBOOK.md`](EXTERNAL_GATE_EXECUTION_RUNBOOK.md). Before acting, inspect the exact accepted typed gate contract on the same source revision that will carry the evidence.
 
-## Inspect the accepted gate contract
+## Observation flow
 
-List all external gates, allowed environments and required terminal check codes:
+1. Perform the real external operation through the approved provider, physical host, signing service, policy/review process or recovery environment.
+2. Keep credentials, host paths, logs, screenshots, browser/mailbox payloads, certificates, account identifiers, raw network identities and key material outside Git.
+3. Create a new canonical metadata-only JSON record under `evidence/external/records/`; never mutate accepted evidence in place.
+4. Use an evidence ID whose UTC date matches `observed_at`, one typed-policy-approved environment, an opaque subject ID, sanitized references and bounded limitations.
+5. For `passed`, include every typed-policy-required gate check as `pass`, at least one SHA-256 identity of a sanitized review artifact, and an exact same-repository GitHub terminal review object.
+6. For `failed`, include a terminal review and at least one required check with outcome `fail`.
+7. For a newer observation, point `supersedes` at the prior immutable record. Forks, cycles, dangling parents, cross-gate supersession and non-newer successors fail closed.
+8. Run the permanent typed Rust validation before requesting acceptance.
 
-```bash
-python scripts/prepare-external-evidence.py describe
-```
+A `pending` record is deliberately non-evidentiary: it has no terminal review, cannot contain a final failed check and satisfies no mandatory production-review requirement.
 
-Inspect one gate:
+## Repository validation
+
+From repository root:
 
 ```bash
-python scripts/prepare-external-evidence.py describe \
-  --gate cloudflare_environment
+cargo test --locked --manifest-path tools/opsctl/Cargo.toml -p opsctl-core external_evidence
+cargo test --locked --manifest-path tools/opsctl/Cargo.toml --test external_evidence_policy
 ```
 
-The output is informational JSON. `draft_status` is always `pending_only`.
+The first command tests the pure semantic owner. The second exercises strict JSON decoding, duplicate-key/canonical-byte rejection, privacy/scope lexical boundaries, typed policy integration, lineage fixtures, deterministic readiness projection and `production_ready` fail-closed behavior.
 
-## Create a pending draft
+## Terminal GitHub review observation
 
-Choose an evidence ID whose UTC date equals `observed_at`, an allowed environment,
-an opaque subject ID and a sanitized reviewable reference. Example:
-
-```bash
-python scripts/prepare-external-evidence.py draft \
-  --gate cloudflare_environment \
-  --evidence-id ev-20260807-cloudflare-staging-draft \
-  --observed-at 2026-08-07T19:15:00Z \
-  --environment staging \
-  --subject-id cloudflare-staging-control-plane \
-  --reference https://github.com/iamaman11/part-crm-emai-profile/issues/3 \
-  --limitation external-operation-pending \
-  --output evidence/external/records/ev-20260807-cloudflare-staging-draft.json
-```
-
-A generated draft is deliberately non-evidentiary:
-
-- `status` is exactly `pending`;
-- `checks` is empty;
-- `artifact_digests_sha256` is empty;
-- there is no terminal `review` object;
-- the file is canonical JSON and is prevalidated by both accepted validators;
-- an existing evidence file is never overwritten.
-
-The CLI refuses terminal status generation. It cannot be used to create a
-repository-approved `passed` or `failed` external claim.
-
-## Perform the real external operation
-
-After a pending draft exists, the actual gate work happens outside Git according
-to the gate-specific procedure in `EXTERNAL_GATE_EXECUTION_RUNBOOK.md`. Raw
-credentials, host paths, logs, screenshots, browser/mailbox payloads, certificates
-and key material remain in approved external storage and are never copied into the
-repository record.
-
-For a real terminal observation:
-
-1. preserve the pending record as immutable history;
-2. create a **newer** record with `supersedes` pointing to the pending record;
-3. add only the exact required gate checks with measured `pass`/`fail` outcomes;
-4. add only SHA-256 identities of sanitized review artifacts;
-5. obtain the exact same-repository GitHub terminal review attestation;
-6. validate evidence, scope, readiness projection and the typed Rust GitHub
-   attestation policy before merge.
-
-The terminal record is intentionally not generated by this preparation CLI because
-its truth depends on the external operation and human/reviewer evidence.
-
-## Local verification
-
-From repository root, run the repository-only validators first:
-
-```bash
-python tests/external-evidence-tooling/test-draft-tool.py
-python tests/external-evidence-tooling/test-runbook-coverage.py
-python scripts/check-external-evidence.py
-python scripts/check-external-evidence-scope.py
-python scripts/check-external-runbook.py
-python scripts/check-external-readiness-summary.py
-```
-
-For a terminal record, acquire the GitHub provider observation separately and pass
-that secret-free DTO to the existing typed `opsctl` policy path:
+Provider/GitHub acquisition remains outside pure core. For terminal records, collect the exact GitHub review/comment object with the observer-only Python adapter and pass its secret-free DTO to typed Rust:
 
 ```bash
 python scripts/check-external-review-attestations.py \
@@ -114,34 +49,10 @@ cargo run --quiet --manifest-path tools/opsctl/Cargo.toml --locked -- \
   --observation-json /tmp/external-review-attestation-observation.json
 ```
 
-The Python step owns GitHub GET acquisition only. It must not make the
-repository/reference/reviewer/timestamp/body acceptance decision or select active
-terminal evidence. Typed Rust owns that semantic verdict. `opsctl` itself does not
-perform provider network access or read GitHub credentials.
-
-The permanent `External Evidence Gate` recompiles the validators/tooling, proves
-pending-draft behavior for every accepted gate, verifies that the execution runbook
-covers exactly the validator-derived gate catalog, and exercises negative fail-closed
-cases. The permanent `External Review Attestations` required check separately proves
-the observer + typed Rust attestation boundary on the exact PR head.
+The Python step owns GitHub GET acquisition only. It does not decide active lineage, repository binding, reviewer identity, timestamps, canonical claim validity or readiness. `opsctl` itself performs no provider/GitHub network access and reads no provider credentials.
 
 ## Safety properties
 
-The tooling rejects:
+The permanent checks reject unknown fields/duplicate JSON keys, noncanonical records, unsafe/sensitive identifiers and references, unsupported gates/statuses/environments/checks, evidence-ID/UTC-date mismatch, invalid terminal state, incomplete passed evidence, unsafe supersession lineage, false readiness projection and `production_ready=true` when mandatory external evidence is incomplete.
 
-- any requested status other than `pending`;
-- unknown gates and disallowed gate/environment pairs;
-- evidence-ID / UTC-date mismatches;
-- unsafe or unsupported references;
-- invalid opaque subject IDs or bounded limitation tokens;
-- noncanonical output filenames;
-- overwrite of any existing evidence record;
-- missing, duplicate or unknown external-gate runbook sections;
-- a runbook gate section that omits its exact validator-derived `describe` command;
-- active terminal review observations whose provider object is missing, foreign,
-  edited or mismatched with repository/reference/reviewer/timestamp/canonical claim.
-
-A generated pending draft and a passing runbook coverage check do not satisfy a
-mandatory readiness requirement and do not change `docs/status.json`. Production
-readiness remains false until the separate external-evidence and residual-risk
-process is actually completed.
+A passing repository validator proves only the integrity of recorded observations. It does not prove that an external operation occurred, does not authorize production and does not weaken the independent Production Core gate.
