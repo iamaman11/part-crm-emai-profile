@@ -7,6 +7,7 @@ pub mod credentials;
 pub mod d1;
 mod doctor;
 mod error;
+pub mod hosted_evidence;
 pub mod promotion;
 pub mod readiness;
 pub mod recovery;
@@ -16,6 +17,7 @@ mod status;
 
 pub use cli::{CredentialsAction, HELP, Invocation, ReadCommand, parse_invocation};
 pub use error::OpsctlError;
+pub use hosted_evidence::HostedEvidenceAction;
 
 use repository::{resolve_d1_repository_root, resolve_repo_root};
 
@@ -62,6 +64,7 @@ impl Invocation {
             Self::Run { .. }
             | Self::Status { .. }
             | Self::Credentials { .. }
+            | Self::HostedEvidence { .. }
             | Self::D1 { .. }
             | Self::D1Repository { .. }
             | Self::ReleaseFinalize { .. }
@@ -99,6 +102,41 @@ pub fn execute(invocation: Invocation) -> Result<String, OpsctlError> {
                 CredentialsAction::Status => credentials::lifecycle(&repo_root),
                 CredentialsAction::RotationPlan => credentials::rotation_plan(&repo_root),
             }
+        }
+        Invocation::HostedEvidence {
+            root,
+            action,
+            input_json,
+            evaluated_at_unix_seconds,
+            expected_subject,
+        } => {
+            let _repo_root = resolve_repo_root(root.as_deref(), "hosted-evidence")?;
+            let input = std::fs::read_to_string(&input_json).map_err(|error| {
+                OpsctlError::new(
+                    "hosted-evidence",
+                    format!(
+                        "HOSTED_EVIDENCE_INPUT_UNAVAILABLE: {}: {error}",
+                        input_json.display()
+                    ),
+                )
+            })?;
+            match action {
+                HostedEvidenceAction::SealOperationalCredential => {
+                    hosted_evidence::seal_operational_credential_json(
+                        &input,
+                        evaluated_at_unix_seconds,
+                        &expected_subject,
+                    )
+                }
+                HostedEvidenceAction::VerifyOperationalCredential => {
+                    hosted_evidence::verify_operational_credential_json(
+                        &input,
+                        evaluated_at_unix_seconds,
+                        &expected_subject,
+                    )
+                }
+            }
+            .map_err(|error| OpsctlError::new("hosted-evidence", error.to_string()))
         }
         Invocation::D1 {
             root,
@@ -223,6 +261,28 @@ mod tests {
     #[test]
     fn parsed_operator_command_has_typed_read_only_effect() -> Result<(), OpsctlError> {
         let invocation = parse_invocation([OsString::from("opsctl"), OsString::from("doctor")])?;
+        assert_eq!(
+            invocation.operator_effect(),
+            Some(OperatorEffect::ReadOnlyMetadata)
+        );
+        assert_read_only_effect(OperatorEffect::ReadOnlyMetadata);
+        Ok(())
+    }
+
+    #[test]
+    fn hosted_evidence_surface_preserves_zero_effect_authority() -> Result<(), OpsctlError> {
+        let invocation = parse_invocation([
+            OsString::from("opsctl"),
+            OsString::from("hosted-evidence"),
+            OsString::from("operational-credential"),
+            OsString::from("seal"),
+            OsString::from("--observation-json"),
+            OsString::from("observation.json"),
+            OsString::from("--evaluated-at-unix-seconds"),
+            OsString::from("1700000010"),
+            OsString::from("--expected-subject"),
+            OsString::from("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+        ])?;
         assert_eq!(
             invocation.operator_effect(),
             Some(OperatorEffect::ReadOnlyMetadata)
