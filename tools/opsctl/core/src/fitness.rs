@@ -360,11 +360,14 @@ mod tests {
     #[test]
     fn required_predecessor_cannot_be_superseded_by_advisory_rule() {
         let (mut rules, supersession) = valid_supersession();
-        let successor = rules
-            .iter_mut()
-            .find(|rule| rule.id == supersession.successor)
-            .expect("successor must exist in valid fixture");
-        successor.requiredness = FitnessRequiredness::Advisory;
+        let mut successor_found = false;
+        for rule in &mut rules {
+            if rule.id == supersession.successor {
+                rule.requiredness = FitnessRequiredness::Advisory;
+                successor_found = true;
+            }
+        }
+        assert!(successor_found);
         assert!(validate_candidate_registry(&rules, &[supersession]).is_err());
     }
 
