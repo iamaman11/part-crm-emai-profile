@@ -256,7 +256,9 @@ impl EvidencePolicyV2 {
             evaluated_at_unix_seconds,
             self.max_validity_seconds,
         )?;
-        if observation.production_mutation || observation.credential_policy.extension_production_mutation {
+        if observation.production_mutation
+            || observation.credential_policy.extension_production_mutation
+        {
             return Err(EvidencePolicyError::new(
                 "HOSTED_EVIDENCE_PRODUCTION_MUTATION_FORBIDDEN",
                 "PF-2 hosted evidence must prove production_mutation=false at observation and credential-policy boundaries",
@@ -446,7 +448,10 @@ fn validate_attestation(
             .forbidden_provider_permission_classes,
         "forbidden_provider_permission_classes",
     )?;
-    let attested = unique_nonempty_set(&attestation.permission_names, "attestation.permission_names")?;
+    let attested = unique_nonempty_set(
+        &attestation.permission_names,
+        "attestation.permission_names",
+    )?;
     if attested != required {
         return Err(EvidencePolicyError::new(
             "HOSTED_EVIDENCE_PERMISSION_MISMATCH",
@@ -462,7 +467,9 @@ fn validate_attestation(
     Ok(())
 }
 
-fn validate_token_verify(observation: &HostedEvidenceObservationV2) -> Result<(), EvidencePolicyError> {
+fn validate_token_verify(
+    observation: &HostedEvidenceObservationV2,
+) -> Result<(), EvidencePolicyError> {
     let verify = &observation.token_verify;
     if verify.http_status != 200 || !verify.success || verify.error_count != 0 {
         return Err(EvidencePolicyError::new(
@@ -625,12 +632,13 @@ impl ReviewAttestationPolicyV1 {
                 "the observed reviewer does not match the terminal evidence record",
             ));
         }
-        let observed_reviewed_at = observation.observed_reviewed_at.as_deref().ok_or_else(|| {
-            EvidencePolicyError::new(
-                "HOSTED_REVIEW_ATTESTATION_TIMESTAMP_MISSING",
-                "the observed provider object has no effective review timestamp",
-            )
-        })?;
+        let observed_reviewed_at =
+            observation.observed_reviewed_at.as_deref().ok_or_else(|| {
+                EvidencePolicyError::new(
+                    "HOSTED_REVIEW_ATTESTATION_TIMESTAMP_MISSING",
+                    "the observed provider object has no effective review timestamp",
+                )
+            })?;
         if observation.expected_reviewed_at != observed_reviewed_at {
             return Err(EvidencePolicyError::new(
                 "HOSTED_REVIEW_ATTESTATION_TIMESTAMP_MISMATCH",
@@ -675,10 +683,11 @@ impl ReviewAttestationPolicyV1 {
 mod tests {
     use super::{
         EvidenceBindingV1, EvidenceEnvironment, EvidenceIssuer, EvidenceOutcome, EvidencePolicyV2,
-        EvidenceSource, EvidenceSubject, EvidenceTarget, EvidenceTrustState, HostedEvidenceObservationV2,
-        OperationalCredentialAttestationObservationV1, OperationalCredentialPolicyObservationV1,
-        OperationalCredentialReadObservationV1, OperationalCredentialTokenVerifyObservationV1,
-        ReviewAttestationObservationV1, ReviewAttestationPolicyV1, ReviewAttestationStatus,
+        EvidenceSource, EvidenceSubject, EvidenceTarget, EvidenceTrustState,
+        HostedEvidenceObservationV2, OperationalCredentialAttestationObservationV1,
+        OperationalCredentialPolicyObservationV1, OperationalCredentialReadObservationV1,
+        OperationalCredentialTokenVerifyObservationV1, ReviewAttestationObservationV1,
+        ReviewAttestationPolicyV1, ReviewAttestationStatus,
     };
 
     fn binding(subject: &str) -> Result<EvidenceBindingV1, Box<dyn std::error::Error>> {
@@ -802,21 +811,30 @@ mod tests {
         let mut foreign = observation()?;
         foreign.binding.target = EvidenceTarget::new("other/repository")?;
         assert_eq!(
-            policy()?.evaluate(foreign, 1_700_000_010).err().map(|error| error.code()),
+            policy()?
+                .evaluate(foreign, 1_700_000_010)
+                .err()
+                .map(|error| error.code()),
             Some("HOSTED_EVIDENCE_BINDING_MISMATCH")
         );
 
         let mut mutable = observation()?;
         mutable.credential_policy.mutation_allowed = true;
         assert_eq!(
-            policy()?.evaluate(mutable, 1_700_000_010).err().map(|error| error.code()),
+            policy()?
+                .evaluate(mutable, 1_700_000_010)
+                .err()
+                .map(|error| error.code()),
             Some("HOSTED_EVIDENCE_CREDENTIAL_MUTATION_AUTHORITY_FORBIDDEN")
         );
 
         let mut permission_drift = observation()?;
         permission_drift.attestation.permission_names.pop();
         assert_eq!(
-            policy()?.evaluate(permission_drift, 1_700_000_010).err().map(|error| error.code()),
+            policy()?
+                .evaluate(permission_drift, 1_700_000_010)
+                .err()
+                .map(|error| error.code()),
             Some("HOSTED_EVIDENCE_PERMISSION_MISMATCH")
         );
         Ok(())
@@ -827,28 +845,40 @@ mod tests {
         let mut inactive = observation()?;
         inactive.token_verify.status = "disabled".to_owned();
         assert_eq!(
-            policy()?.evaluate(inactive, 1_700_000_010).err().map(|error| error.code()),
+            policy()?
+                .evaluate(inactive, 1_700_000_010)
+                .err()
+                .map(|error| error.code()),
             Some("HOSTED_EVIDENCE_TOKEN_INACTIVE")
         );
 
         let mut foreign_account = observation()?;
         foreign_account.deployment_account_id = "b".repeat(32);
         assert_eq!(
-            policy()?.evaluate(foreign_account, 1_700_000_010).err().map(|error| error.code()),
+            policy()?
+                .evaluate(foreign_account, 1_700_000_010)
+                .err()
+                .map(|error| error.code()),
             Some("HOSTED_EVIDENCE_ACCOUNT_SCOPE_MISMATCH")
         );
 
         let mut read_failed = observation()?;
         read_failed.reads.d1_catalog_read = false;
         assert_eq!(
-            policy()?.evaluate(read_failed, 1_700_000_010).err().map(|error| error.code()),
+            policy()?
+                .evaluate(read_failed, 1_700_000_010)
+                .err()
+                .map(|error| error.code()),
             Some("HOSTED_EVIDENCE_REQUIRED_READ_INCOMPLETE")
         );
 
         let mut probe = observation()?;
         probe.reads.mutation_probe = "EXECUTED".to_owned();
         assert_eq!(
-            policy()?.evaluate(probe, 1_700_000_010).err().map(|error| error.code()),
+            policy()?
+                .evaluate(probe, 1_700_000_010)
+                .err()
+                .map(|error| error.code()),
             Some("HOSTED_EVIDENCE_MUTATION_PROBE_INVALID")
         );
         Ok(())
@@ -860,23 +890,35 @@ mod tests {
         let mut impossible = observation()?;
         impossible.valid_until_unix_seconds = impossible.observed_at_unix_seconds;
         assert_eq!(
-            policy()?.evaluate(impossible, 1_700_000_010).err().map(|error| error.code()),
+            policy()?
+                .evaluate(impossible, 1_700_000_010)
+                .err()
+                .map(|error| error.code()),
             Some("HOSTED_EVIDENCE_FRESHNESS_WINDOW_INVALID")
         );
 
         let mut oversized = observation()?;
         oversized.valid_until_unix_seconds = oversized.observed_at_unix_seconds + 3_601;
         assert_eq!(
-            policy()?.evaluate(oversized, 1_700_000_010).err().map(|error| error.code()),
+            policy()?
+                .evaluate(oversized, 1_700_000_010)
+                .err()
+                .map(|error| error.code()),
             Some("HOSTED_EVIDENCE_FRESHNESS_WINDOW_TOO_LARGE")
         );
 
         assert_eq!(
-            policy()?.evaluate(observation()?, 1_699_999_999).err().map(|error| error.code()),
+            policy()?
+                .evaluate(observation()?, 1_699_999_999)
+                .err()
+                .map(|error| error.code()),
             Some("HOSTED_EVIDENCE_OBSERVATION_FROM_FUTURE")
         );
         assert_eq!(
-            policy()?.evaluate(observation()?, 1_700_003_600).err().map(|error| error.code()),
+            policy()?
+                .evaluate(observation()?, 1_700_003_600)
+                .err()
+                .map(|error| error.code()),
             Some("HOSTED_EVIDENCE_EXPIRED_OR_REPLAYED")
         );
         Ok(())
@@ -896,7 +938,8 @@ mod tests {
     }
 
     #[test]
-    fn review_attestation_rejects_provider_binding_drift() -> Result<(), Box<dyn std::error::Error>> {
+    fn review_attestation_rejects_provider_binding_drift() -> Result<(), Box<dyn std::error::Error>>
+    {
         let mut foreign_repository = review_observation()?;
         foreign_repository.observed_repository = EvidenceTarget::new("other/repository")?;
         assert_eq!(

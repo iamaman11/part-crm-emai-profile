@@ -481,18 +481,51 @@ fn build_readiness(
 #[must_use]
 pub const fn mandatory_requirements() -> &'static [(ExternalGate, ExternalEnvironment)] {
     &[
-        (ExternalGate::CloudflareEnvironment, ExternalEnvironment::Production),
-        (ExternalGate::IndependentSecurityReview, ExternalEnvironment::None),
-        (ExternalGate::LegacyCredentialRotation, ExternalEnvironment::None),
-        (ExternalGate::OfflineKeyEscrowRestore, ExternalEnvironment::Production),
-        (ExternalGate::PrivacyRetentionApproval, ExternalEnvironment::None),
+        (
+            ExternalGate::CloudflareEnvironment,
+            ExternalEnvironment::Production,
+        ),
+        (
+            ExternalGate::IndependentSecurityReview,
+            ExternalEnvironment::None,
+        ),
+        (
+            ExternalGate::LegacyCredentialRotation,
+            ExternalEnvironment::None,
+        ),
+        (
+            ExternalGate::OfflineKeyEscrowRestore,
+            ExternalEnvironment::Production,
+        ),
+        (
+            ExternalGate::PrivacyRetentionApproval,
+            ExternalEnvironment::None,
+        ),
         (ExternalGate::ProductLicense, ExternalEnvironment::None),
-        (ExternalGate::ProductionDeviceKeyUnwrap, ExternalEnvironment::Production),
-        (ExternalGate::RealFingerprintCertification, ExternalEnvironment::Production),
-        (ExternalGate::RemoteR2D1Atomicity, ExternalEnvironment::Production),
-        (ExternalGate::TrustedWindowsSigning, ExternalEnvironment::Production),
-        (ExternalGate::WindowsPrimaryHost, ExternalEnvironment::Production),
-        (ExternalGate::WindowsSecondaryHost, ExternalEnvironment::Production),
+        (
+            ExternalGate::ProductionDeviceKeyUnwrap,
+            ExternalEnvironment::Production,
+        ),
+        (
+            ExternalGate::RealFingerprintCertification,
+            ExternalEnvironment::Production,
+        ),
+        (
+            ExternalGate::RemoteR2D1Atomicity,
+            ExternalEnvironment::Production,
+        ),
+        (
+            ExternalGate::TrustedWindowsSigning,
+            ExternalEnvironment::Production,
+        ),
+        (
+            ExternalGate::WindowsPrimaryHost,
+            ExternalEnvironment::Production,
+        ),
+        (
+            ExternalGate::WindowsSecondaryHost,
+            ExternalEnvironment::Production,
+        ),
     ]
 }
 
@@ -660,7 +693,10 @@ mod tests {
             .collect::<Vec<_>>();
         let summary = validate_external_evidence(&records)?;
         assert!(summary.eligible_for_production_review);
-        assert_eq!(summary.satisfied_requirements, summary.mandatory_requirements);
+        assert_eq!(
+            summary.satisfied_requirements,
+            summary.mandatory_requirements
+        );
         Ok(())
     }
 
