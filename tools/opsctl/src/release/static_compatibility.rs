@@ -281,8 +281,8 @@ mod tests {
     }
 
     #[test]
-    fn public_api_protocol_digest_uses_root_contract_not_contract_inventory(
-    ) -> Result<(), ReleaseModelError> {
+    fn public_api_protocol_digest_uses_root_contract_not_contract_inventory()
+    -> Result<(), ReleaseModelError> {
         let repository_root = root();
         let topology = ReleaseInputTopology::load(&repository_root)?;
         let resolved = topology.resolve(&repository_root)?;
@@ -303,11 +303,15 @@ mod tests {
                 })
             })
             .collect::<Vec<_>>();
-        let canonical = canonical_json(&Value::Array(canonical_entries)).map_err(ReleaseModelError::new)?;
+        let canonical =
+            canonical_json(&Value::Array(canonical_entries)).map_err(ReleaseModelError::new)?;
         let aggregate_contracts_sha256 = sha256_hex(canonical.as_bytes());
 
         assert_ne!(public_api_root.sha256, aggregate_contracts_sha256);
-        assert!(public_api_contract_matches(&resolved, &public_api_root.sha256)?);
+        assert!(public_api_contract_matches(
+            &resolved,
+            &public_api_root.sha256
+        )?);
         assert!(!public_api_contract_matches(
             &resolved,
             &aggregate_contracts_sha256
