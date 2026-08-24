@@ -252,6 +252,7 @@ mod tests {
     use super::{public_api_contract_matches, resolved_input};
     use crate::release::digest::{canonical_json, sha256_hex};
     use crate::release::input_topology::ReleaseInputTopology;
+    use crate::release::model::ReleaseModelError;
     use serde_json::{Value, json};
     use std::collections::BTreeMap;
     use std::path::PathBuf;
@@ -280,15 +281,12 @@ mod tests {
     }
 
     #[test]
-    fn public_api_protocol_digest_uses_root_contract_not_contract_inventory() {
+    fn public_api_protocol_digest_uses_root_contract_not_contract_inventory(
+    ) -> Result<(), ReleaseModelError> {
         let repository_root = root();
-        let topology = ReleaseInputTopology::load(&repository_root)
-            .expect("canonical release input topology must load");
-        let resolved = topology
-            .resolve(&repository_root)
-            .expect("canonical release inputs must resolve");
-        let public_api_root = resolved_input(&resolved, "public_api_root")
-            .expect("public API root must be a canonical release input");
+        let topology = ReleaseInputTopology::load(&repository_root)?;
+        let resolved = topology.resolve(&repository_root)?;
+        let public_api_root = resolved_input(&resolved, "public_api_root")?;
 
         let contracts = resolved
             .iter()
@@ -305,18 +303,15 @@ mod tests {
                 })
             })
             .collect::<Vec<_>>();
-        let canonical = canonical_json(&Value::Array(canonical_entries))
-            .expect("contract inventory identity must canonicalize");
+        let canonical = canonical_json(&Value::Array(canonical_entries)).map_err(ReleaseModelError::new)?;
         let aggregate_contracts_sha256 = sha256_hex(canonical.as_bytes());
 
         assert_ne!(public_api_root.sha256, aggregate_contracts_sha256);
-        assert!(
-            public_api_contract_matches(&resolved, &public_api_root.sha256)
-                .expect("public API digest comparison must succeed")
-        );
-        assert!(
-            !public_api_contract_matches(&resolved, &aggregate_contracts_sha256)
-                .expect("aggregate contract digest comparison must succeed")
-        );
+        assert!(public_api_contract_matches(&resolved, &public_api_root.sha256)?);
+        assert!(!public_api_contract_matches(
+            &resolved,
+            &aggregate_contracts_sha256
+        )?);
+        Ok(())
     }
 }
