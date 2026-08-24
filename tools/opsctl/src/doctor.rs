@@ -1,46 +1,44 @@
 use crate::OpsctlError;
-use crate::repository::canonical_json_document;
-use serde_json::Value;
 use std::fs;
 use std::path::Path;
 
-const AUTHORITIES: [&str; 5] = [
-    "architecture/architecture-program-sequence.json",
-    "architecture/credential-authority.json",
-    "architecture/credential-lifecycle.json",
-    "architecture/profile-security.json",
-    "docs/status.json",
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DoctorCheckId {
+    WorkspaceManifest,
+    CatalogMigrations,
+    ResolverMigrations,
+}
+
+impl DoctorCheckId {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::WorkspaceManifest => "workspace_manifest",
+            Self::CatalogMigrations => "catalog_migrations",
+            Self::ResolverMigrations => "resolver_migrations",
+        }
+    }
+}
+
+const CHECKS: [DoctorCheckId; 3] = [
+    DoctorCheckId::WorkspaceManifest,
+    DoctorCheckId::CatalogMigrations,
+    DoctorCheckId::ResolverMigrations,
 ];
 
-const INTERNAL_NATIVE_IMPLEMENTATION_CONTRACT: &str =
-    "{\"mode\":\"native-read-only\",\"child_processes\":0}";
-
 pub(crate) fn run(root: &Path) -> Result<String, OpsctlError> {
-    let native_contract: Value = serde_json::from_str(INTERNAL_NATIVE_IMPLEMENTATION_CONTRACT)
-        .map_err(|error| {
-            OpsctlError::new("doctor", format!("native doctor contract invalid: {error}"))
-        })?;
-    if native_contract.get("mode").and_then(Value::as_str) != Some("native-read-only")
-        || native_contract
-            .get("child_processes")
-            .and_then(Value::as_u64)
-            != Some(0)
-    {
-        return Err(OpsctlError::new(
-            "doctor",
-            "native doctor implementation contract is invalid",
-        ));
-    }
+    require_regular_file(root, "Cargo.toml")?;
+    require_directory(root, "migrations/d1")?;
+    require_directory(root, "migrations/resolver-d1")?;
 
-    for relative in AUTHORITIES {
-        require_regular_file(root, relative)?;
-    }
-
-    for relative in AUTHORITIES {
-        validate_json_authority(root, relative)?;
-    }
-
-    Ok("{\"schema_version\":1,\"command\":\"doctor\",\"status\":\"ok\",\"mode\":\"read-only\",\"mutation_executed\":false,\"authorities\":[\"architecture/architecture-program-sequence.json\",\"architecture/credential-authority.json\",\"architecture/credential-lifecycle.json\",\"architecture/profile-security.json\",\"docs/status.json\"]}\n".to_owned())
+    let checks = CHECKS
+        .iter()
+        .map(|check| format!(r#"{{"id":"{}","status":"pass"}}"#, check.as_str()))
+        .collect::<Vec<_>>()
+        .join(",");
+    Ok(format!(
+        r#"{{"schema_version":2,"command":"doctor","status":"ok","mode":"read-only","mutation_executed":false,"checks":[{checks}]}}
+"#
+    ))
 }
 
 fn require_regular_file(root: &Path, relative: &str) -> Result<(), OpsctlError> {
@@ -48,45 +46,30 @@ fn require_regular_file(root: &Path, relative: &str) -> Result<(), OpsctlError> 
     let metadata = fs::symlink_metadata(&path).map_err(|error| {
         OpsctlError::new(
             "doctor",
-            format!("required canonical file is missing: {relative}: {error}"),
+            format!("required local file is missing: {relative}: {error}"),
         )
     })?;
     if metadata.file_type().is_symlink() || !metadata.is_file() {
         return Err(OpsctlError::new(
             "doctor",
-            format!("required canonical file is not a regular file: {relative}"),
+            format!("required local file is not a regular file: {relative}"),
         ));
     }
     Ok(())
 }
 
-fn validate_json_authority(root: &Path, relative: &str) -> Result<(), OpsctlError> {
-    let document = canonical_json_document(root, relative, "doctor")?;
-    let value: Value = serde_json::from_str(&document).map_err(|error| {
+fn require_directory(root: &Path, relative: &str) -> Result<(), OpsctlError> {
+    let path = root.join(relative);
+    let metadata = fs::symlink_metadata(&path).map_err(|error| {
         OpsctlError::new(
             "doctor",
-            format!("canonical JSON authority cannot be parsed: {relative}: {error}"),
+            format!("required local directory is missing: {relative}: {error}"),
         )
     })?;
-    let object = value.as_object().ok_or_else(|| {
-        OpsctlError::new(
-            "doctor",
-            format!("canonical JSON authority is not an object: {relative}"),
-        )
-    })?;
-    let schema_version = object
-        .get("schema_version")
-        .and_then(Value::as_u64)
-        .ok_or_else(|| {
-            OpsctlError::new(
-                "doctor",
-                format!("canonical JSON authority lacks numeric schema_version: {relative}"),
-            )
-        })?;
-    if schema_version == 0 {
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
         return Err(OpsctlError::new(
             "doctor",
-            format!("canonical JSON authority has invalid schema_version: {relative}"),
+            format!("required local directory is not a directory: {relative}"),
         ));
     }
     Ok(())
@@ -95,60 +78,84 @@ fn validate_json_authority(root: &Path, relative: &str) -> Result<(), OpsctlErro
 #[cfg(test)]
 mod tests {
     use super::run;
-    use serde_json::Value;
+    use serde_json::{Value, json};
     use std::fs;
     use std::path::PathBuf;
     use std::time::{SystemTime, UNIX_EPOCH};
 
     fn root() -> Result<PathBuf, Box<dyn std::error::Error>> {
         let nonce = SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos();
-        let root =
-            std::env::temp_dir().join(format!("opsctl-n4-doctor-{}-{nonce}", std::process::id()));
-        for directory in ["architecture", "docs"] {
-            fs::create_dir_all(root.join(directory))?;
-        }
-        for relative in [
-            "architecture/architecture-program-sequence.json",
-            "architecture/credential-authority.json",
-            "architecture/credential-lifecycle.json",
-            "architecture/profile-security.json",
-            "docs/status.json",
-        ] {
-            fs::write(root.join(relative), b"{\"schema_version\":1}\n")?;
-        }
+        let root = std::env::temp_dir().join(format!(
+            "opsctl-pf3-doctor-{}-{nonce}",
+            std::process::id()
+        ));
+        fs::create_dir_all(root.join("migrations/d1"))?;
+        fs::create_dir_all(root.join("migrations/resolver-d1"))?;
+        fs::write(root.join("Cargo.toml"), b"[workspace]\n")?;
         Ok(root)
     }
 
     #[test]
-    fn doctor_is_native_and_reads_only_current_authorities()
-    -> Result<(), Box<dyn std::error::Error>> {
+    fn doctor_has_no_semantic_authority_catalog() -> Result<(), Box<dyn std::error::Error>> {
         let root = root()?;
         let output = run(&root)?;
         let parsed: Value = serde_json::from_str(&output)?;
-        assert_eq!(parsed["schema_version"], 1);
+        assert_eq!(parsed["schema_version"], 2);
         assert_eq!(parsed["command"], "doctor");
         assert_eq!(parsed["status"], "ok");
         assert_eq!(parsed["mode"], "read-only");
         assert_eq!(parsed["mutation_executed"], false);
-        assert!(parsed.get("implementation").is_none());
-        assert!(parsed.get("child_processes").is_none());
-        assert!(parsed.get("validators_execution").is_none());
-        assert_eq!(parsed["authorities"].as_array().map(Vec::len), Some(5));
-        assert!(!output.contains("operator-contract"));
-        assert!(!root.join("architecture/operator-contract.json").exists());
+        assert_eq!(
+            parsed["checks"],
+            json!([
+                {"id": "workspace_manifest", "status": "pass"},
+                {"id": "catalog_migrations", "status": "pass"},
+                {"id": "resolver_migrations", "status": "pass"}
+            ])
+        );
+        for forbidden in [
+            "authorities",
+            "architecture/inventory.json",
+            "implementation",
+            "child_processes",
+            "validators_execution",
+        ] {
+            assert!(!output.contains(forbidden));
+        }
         fs::remove_dir_all(root)?;
         Ok(())
     }
 
     #[test]
-    fn malformed_authority_fails_closed() -> Result<(), Box<dyn std::error::Error>> {
+    fn missing_required_local_structure_fails_closed() -> Result<(), Box<dyn std::error::Error>> {
         let root = root()?;
-        fs::write(
-            root.join("architecture/architecture-program-sequence.json"),
-            b"{not-json}\n",
-        )?;
+        fs::remove_dir_all(root.join("migrations/resolver-d1"))?;
         assert!(run(&root).is_err());
         fs::remove_dir_all(root)?;
         Ok(())
+    }
+
+    #[test]
+    fn doctor_source_has_no_forbidden_semantic_or_effect_dependencies() {
+        let production = include_str!("doctor.rs")
+            .split("#[cfg(test)]")
+            .next()
+            .unwrap_or_default();
+        for forbidden in [
+            "AUTHORITIES",
+            "INTERNAL_NATIVE_IMPLEMENTATION_CONTRACT",
+            "canonical_json_document",
+            "serde_json::Value",
+            "architecture/inventory.json",
+            "std::process",
+            "Command::new",
+            "std::net",
+            "reqwest",
+        ] {
+            assert!(
+                !production.contains(forbidden),
+                "doctor production source contains forbidden marker: {forbidden}"
+            );
+        }
     }
 }
