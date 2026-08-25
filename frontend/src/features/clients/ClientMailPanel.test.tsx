@@ -75,7 +75,7 @@ describe('ClientMailPanel mailbox scoping', () => {
             relationshipVersion: 1,
           };
         default:
-          return undefined;
+          throw new Error(`unexpected mailbox association lookup: ${bindingId}`);
       }
     });
   });
