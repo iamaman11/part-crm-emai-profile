@@ -2,8 +2,15 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 pub const PROFILE_STATUSES: [&str; 9] = [
-    "DRAFT", "QUARANTINED", "READY", "IN_USE", "DIRTY_LOCAL", "SYNCING", "SUSPENDED",
-    "DELETING", "DELETED",
+    "DRAFT",
+    "QUARANTINED",
+    "READY",
+    "IN_USE",
+    "DIRTY_LOCAL",
+    "SYNCING",
+    "SUSPENDED",
+    "DELETING",
+    "DELETED",
 ];
 pub const PROFILE_GRANT_ROLES: [&str; 2] = ["PROFILE_VIEWER", "PROFILE_OPERATOR"];
 pub const GENERATION_STATUSES: [&str; 3] = ["REGISTERED", "VERIFIED", "QUARANTINED"];
@@ -236,7 +243,10 @@ mod tests {
 
     #[test]
     fn profile_mutations_are_strict_and_reject_legacy_request_digest() {
-        assert!(serde_json::from_str::<ProfileCreateRequest>(r#"{"profileId":"profile_01JTEST"}"#).is_ok());
+        assert!(
+            serde_json::from_str::<ProfileCreateRequest>(r#"{"profileId":"profile_01JTEST"}"#)
+                .is_ok()
+        );
         for value in [
             r#"{"profileId":"profile_01JTEST","requestDigest":"legacy"}"#,
             r#"{"assignmentId":"assignment_01JTEST","clientId":"client_01JTEST","reason":"assign","expectedProfileVersion":1,"futureField":true}"#,
@@ -244,7 +254,12 @@ mod tests {
         ] {
             assert!(serde_json::from_str::<serde_json::Value>(value).is_ok());
         }
-        assert!(serde_json::from_str::<ProfileCreateRequest>(r#"{"profileId":"profile_01JTEST","requestDigest":"legacy"}"#).is_err());
+        assert!(
+            serde_json::from_str::<ProfileCreateRequest>(
+                r#"{"profileId":"profile_01JTEST","requestDigest":"legacy"}"#
+            )
+            .is_err()
+        );
         assert!(serde_json::from_str::<ProfileAssignmentRequest>(r#"{"assignmentId":"assignment_01JTEST","clientId":"client_01JTEST","reason":"assign","expectedProfileVersion":1,"futureField":true}"#).is_err());
         assert!(serde_json::from_str::<ProfileGrantRequest>(r#"{"role":"PROFILE_VIEWER","reason":"grant","expectedProfileVersion":1,"requestDigest":"legacy"}"#).is_err());
     }
@@ -282,13 +297,27 @@ mod tests {
         assert_eq!(document["paths"], json!({}));
         let schemas = &document["components"]["schemas"];
         for name in [
-            "ProfileProjectionDto", "ProfileCreateRequestDto", "ProfileAssignmentRequest",
-            "ProfileGrantRequestDto", "GenerationProjectionDto", "RegisterGenerationRequest",
-            "VerifyGenerationRequest", "ProfileGenerationVersionRequest", "QuarantineGenerationRequest",
+            "ProfileProjectionDto",
+            "ProfileCreateRequestDto",
+            "ProfileAssignmentRequest",
+            "ProfileGrantRequestDto",
+            "GenerationProjectionDto",
+            "RegisterGenerationRequest",
+            "VerifyGenerationRequest",
+            "ProfileGenerationVersionRequest",
+            "QuarantineGenerationRequest",
         ] {
             assert!(schemas[name].is_object(), "missing schema {name}");
         }
-        assert!(schemas["RegisterGenerationRequest"]["properties"].get("metadataDigest").is_some());
-        assert!(schemas["RegisterGenerationRequest"]["properties"].get("requestDigest").is_none());
+        assert!(
+            schemas["RegisterGenerationRequest"]["properties"]
+                .get("metadataDigest")
+                .is_some()
+        );
+        assert!(
+            schemas["RegisterGenerationRequest"]["properties"]
+                .get("requestDigest")
+                .is_none()
+        );
     }
 }
