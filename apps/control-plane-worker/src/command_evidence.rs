@@ -92,7 +92,11 @@ fn oauth_callback_evidence(
     let digest = hex_digest(material.as_bytes());
     let idempotency_key = IdempotencyKey::parse(format!("oauthcb_{digest}"))
         .map_err(|error| Error::RustError(error.to_string()))?;
-    evidence(actor, idempotency_key, payload_fingerprint(material.as_bytes())?)
+    evidence(
+        actor,
+        idempotency_key,
+        payload_fingerprint(material.as_bytes())?,
+    )
 }
 
 fn request_idempotency_key(request: &Request) -> Result<IdempotencyKey> {
@@ -103,9 +107,13 @@ fn request_idempotency_key(request: &Request) -> Result<IdempotencyKey> {
     IdempotencyKey::parse(key).map_err(|error| Error::RustError(error.to_string()))
 }
 
-fn fingerprint_typed_request<T: Serialize>(request: &Request, payload: &T) -> Result<PayloadFingerprint> {
-    let payload_bytes = serde_json::to_vec(payload)
-        .map_err(|error| Error::RustError(format!("typed command serialization failed: {error}")))?;
+fn fingerprint_typed_request<T: Serialize>(
+    request: &Request,
+    payload: &T,
+) -> Result<PayloadFingerprint> {
+    let payload_bytes = serde_json::to_vec(payload).map_err(|error| {
+        Error::RustError(format!("typed command serialization failed: {error}"))
+    })?;
     let method = request.method().as_ref().as_bytes();
     let path = request.path();
     let mut material = Vec::with_capacity(
