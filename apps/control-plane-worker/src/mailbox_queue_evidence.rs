@@ -56,7 +56,7 @@ fn execution_fingerprint(dispatch: &MailboxJobDispatch) -> Result<PayloadFingerp
         &mut hasher,
         &dispatch.expected_version().value().to_be_bytes(),
     )?;
-    PayloadFingerprint::parse(lowercase_hex(&hasher.finalize())).map_err(identifier_error)
+    PayloadFingerprint::parse(lowercase_hex(&hasher.finalize())).map_err(payload_fingerprint_error)
 }
 
 fn append_field(hasher: &mut Sha256, value: &[u8]) -> Result<()> {
@@ -78,6 +78,12 @@ fn lowercase_hex(bytes: &[u8]) -> String {
 }
 
 fn identifier_error(error: profile_platform_primitives::ParseOpaqueIdError) -> Error {
+    Error::RustError(error.to_string())
+}
+
+fn payload_fingerprint_error(
+    error: profile_platform_primitives::ParsePayloadFingerprintError,
+) -> Error {
     Error::RustError(error.to_string())
 }
 
