@@ -23,7 +23,7 @@ EXPIRES = 2000
 
 
 def raw_const(source: str, name: str) -> str:
-    match = re.search(rf'const\\s+{re.escape(name)}:\\s*&str\\s*=\\s*r#"(.*?)"#;', source, re.DOTALL)
+    match = re.search(rf'const\s+{re.escape(name)}:\s*&str\s*=\s*r#"(.*?)"#;', source, re.DOTALL)
     if match is None:
         raise AssertionError(f"missing Rust SQL constant {name}")
     return match.group(1)
@@ -34,7 +34,7 @@ def visible_client_query() -> str:
     method = source.split("pub async fn find_visible_client", 1)
     if len(method) != 2:
         raise AssertionError("missing grant-safe find_visible_client query")
-    match = re.search(r'query!\\(.*?r#"(.*?)"#,', method[1], re.DOTALL)
+    match = re.search(r'query!\(.*?r#"(.*?)"#,', method[1], re.DOTALL)
     if match is None:
         raise AssertionError("could not extract find_visible_client SQL")
     return match.group(1)
@@ -107,7 +107,15 @@ def execute_create(
     )
     connection.execute(
         sql["IDEMPOTENCY_CREATE"],
-        (TENANT, actor, idem, client, NOW, EXPIRES),
+        (
+            TENANT,
+            actor,
+            idem,
+            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            client,
+            NOW,
+            EXPIRES,
+        ),
     )
     connection.execute(
         sql["AUDIT_CREATE"],
@@ -128,3 +136,149 @@ def count(connection: sqlite3.Connection, table: str, column: str, value: str) -
 def assert_application_policy_is_inner_owned() -> None:
     policy = CREATE_POLICY.read_text(encoding="utf-8")
     adapter = CLIENT_ADAPTER.read_text(encoding="utf-8")
+    for marker in (
+        "pub trait ClientCreateGrantSpec",
+        "ClientGrantRole::Editor",
+        'CLIENT_CREATOR_GRANT_REASON: &str = "client creator access"',
+        "must persist the Client, this creator grant and command evidence",
+    ):
+        assert marker in policy, f"application-owned creator policy missing {marker!r}"
+    for marker in (
+        "write.creator_grant_role()",
+        "write.creator_grant_reason()",
+        "catalog_creator_grant_role(write.creator_grant_role())",
+    ):
+        assert marker in adapter, f"D1 adapter is not consuming inner creator policy: {marker!r}"
+    create_block = adapter.split("async fn create_client", 1)[1].split("async fn find_visible_client", 1)[0]
+    assert "CatalogClientGrantRole::Editor" not in create_block, "D1 create path must not choose creator ACL policy"
+
+
+def assert_success(sql: dict[str, str]) -> None:
+    connection = sqlite3.connect(":memory:")
+    load_schema(connection)
+    seed(connection)
+    with connection:
+        execute_create(
+            connection,
+            sql,
+            actor=MEMBER,
+            client="client_A1_success",
+            idem="idem_A1_success",
+            audit="audit_A1_success",
+            outbox="outbox_A1_success",
+        )
+
+    grant = connection.execute(
+        """
+        SELECT actor_id, role, granted_by_actor_id, reason
+        FROM client_grants
+        WHERE tenant_id = ? AND client_id = ?
+        """,
+        (TENANT, "client_A1_success"),
+    ).fetchall()
+    assert grant == [(MEMBER, "CLIENT_EDITOR", MEMBER, "client creator access")]
+    assert count(connection, "client_grants", "actor_id", OTHER) == 0
+    assert count(connection, "clients", "client_id", "client_A1_success") == 1
+    assert count(connection, "idempotency_records", "idempotency_key", "idem_A1_success") == 1
+    assert count(connection, "audit_events", "audit_event_id", "audit_A1_success") == 1
+    assert count(connection, "outbox_events", "outbox_event_id", "outbox_A1_success") == 1
+
+    visibility = visible_client_query()
+    creator_row = connection.execute(
+        visibility,
+        (TENANT, "client_A1_success", 0, MEMBER),
+    ).fetchone()
+    unrelated_row = connection.execute(
+        visibility,
+        (TENANT, "client_A1_success", 0, OTHER),
+    ).fetchone()
+    assert creator_row is not None, "creator grant must make the new Client immediately visible"
+    assert unrelated_row is None, "same-tenant unrelated Member must not see creator-owned Client"
+    connection.close()
+
+
+def assert_membership_race_rolls_back(sql: dict[str, str]) -> None:
+    connection = sqlite3.connect(":memory:")
+    load_schema(connection)
+    seed(connection)
+    connection.execute(
+        "UPDATE memberships SET status = 'SUSPENDED', version = 2, updated_at_ms = ? WHERE tenant_id = ? AND actor_id = ?",
+        (NOW + 1, TENANT, RACED),
+    )
+    connection.commit()
+
+    try:
+        with connection:
+            execute_create(
+                connection,
+                sql,
+                actor=RACED,
+                client="client_A1_raced",
+                idem="idem_A1_raced",
+                audit="audit_A1_raced",
+                outbox="outbox_A1_raced",
+            )
+    except sqlite3.IntegrityError as exc:
+        assert "client_grant_membership_not_active" in str(exc)
+    else:
+        raise AssertionError("suspended creator unexpectedly received a Client/grant")
+
+    assert count(connection, "clients", "client_id", "client_A1_raced") == 0
+    assert count(connection, "client_grants", "client_id", "client_A1_raced") == 0
+    assert count(connection, "idempotency_records", "idempotency_key", "idem_A1_raced") == 0
+    assert count(connection, "audit_events", "audit_event_id", "audit_A1_raced") == 0
+    assert count(connection, "outbox_events", "outbox_event_id", "outbox_A1_raced") == 0
+    connection.close()
+
+
+def assert_late_failure_rolls_back(sql: dict[str, str]) -> None:
+    connection = sqlite3.connect(":memory:")
+    load_schema(connection)
+    seed(connection)
+    connection.execute(
+        """
+        INSERT INTO audit_events(
+            tenant_id, audit_event_id, correlation_id, actor_id, action,
+            resource_type, resource_id, result_code, occurred_at_ms
+        ) VALUES (?, ?, ?, ?, 'fixture', 'client', ?, 'fixture', ?)
+        """,
+        (TENANT, "audit_A1_latefail", "corr_A1_fixture", MEMBER, "client_A1_fixture", NOW),
+    )
+    connection.commit()
+
+    try:
+        with connection:
+            execute_create(
+                connection,
+                sql,
+                actor=MEMBER,
+                client="client_A1_latefail",
+                idem="idem_A1_latefail",
+                audit="audit_A1_latefail",
+                outbox="outbox_A1_latefail",
+            )
+    except sqlite3.IntegrityError as exc:
+        assert "UNIQUE constraint failed" in str(exc)
+    else:
+        raise AssertionError("late audit collision unexpectedly committed Client/grant half-state")
+
+    assert count(connection, "clients", "client_id", "client_A1_latefail") == 0
+    assert count(connection, "client_grants", "client_id", "client_A1_latefail") == 0
+    assert count(connection, "idempotency_records", "idempotency_key", "idem_A1_latefail") == 0
+    assert count(connection, "outbox_events", "outbox_event_id", "outbox_A1_latefail") == 0
+    assert count(connection, "audit_events", "audit_event_id", "audit_A1_latefail") == 1
+    connection.close()
+
+
+def main() -> int:
+    assert_application_policy_is_inner_owned()
+    sql = sql_contract()
+    assert_success(sql)
+    assert_membership_race_rolls_back(sql)
+    assert_late_failure_rolls_back(sql)
+    print("A1 Client creator-grant policy, visibility and atomic D1 invariants passed.")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
