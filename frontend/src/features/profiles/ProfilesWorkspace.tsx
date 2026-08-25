@@ -14,7 +14,7 @@ import {
   setProfileGrant,
   verifyGeneration,
 } from './api';
-import { newIdempotencyKey } from '../../shared/api/client';
+import { newIdempotencyKey } from '../../shared/api/idempotency';
 import type { CoordinatorResponse, GenerationProjection, ProfileProjection } from './api';
 import { ConfirmAction } from '../../shared/ui/ConfirmAction';
 import { StatusMessage } from '../../shared/ui/StatusMessage';
