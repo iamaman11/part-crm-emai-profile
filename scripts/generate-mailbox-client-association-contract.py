@@ -48,6 +48,19 @@ def export_document() -> dict[str, Any]:
 
 
 def schema_type(schema: dict[str, Any]) -> str:
+    if "nullable" in schema:
+        raise ValueError("legacy OpenAPI nullable is forbidden in association producer output")
+
+    variants = schema.get("oneOf")
+    if isinstance(variants, list):
+        if len(variants) != 2 or not all(isinstance(value, dict) for value in variants):
+            raise ValueError(f"unsupported association oneOf schema: {schema!r}")
+        null_variants = [value for value in variants if value.get("type") == "null"]
+        non_null_variants = [value for value in variants if value.get("type") != "null"]
+        if len(null_variants) != 1 or len(non_null_variants) != 1:
+            raise ValueError(f"unsupported association oneOf schema: {schema!r}")
+        return f"{schema_type(non_null_variants[0])} | null"
+
     reference = schema.get("$ref")
     if isinstance(reference, str):
         prefix = "#/components/schemas/"
@@ -66,8 +79,6 @@ def schema_type(schema: dict[str, Any]) -> str:
         rendered = "boolean"
     else:
         raise ValueError(f"unsupported association schema property: {schema!r}")
-    if schema.get("nullable") is True:
-        rendered += " | null"
     return rendered
 
 
