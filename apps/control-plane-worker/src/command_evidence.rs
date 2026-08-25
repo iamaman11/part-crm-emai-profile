@@ -10,6 +10,7 @@ use worker::{Date, Error, Request, Result};
 const IDEMPOTENCY_HEADER: &str = "Idempotency-Key";
 const IDEMPOTENCY_TTL_MS: u64 = 86_400_000;
 const FINGERPRINT_DOMAIN: &[u8] = b"part-crm:payload-fingerprint:v1";
+const MAX_FINGERPRINT_PAYLOAD_BYTES: usize = 1_048_576;
 const HEX: &[u8; 16] = b"0123456789abcdef";
 
 /// Builds command execution evidence only after a request has been decoded into its typed DTO.
@@ -111,16 +112,29 @@ fn fingerprint_typed_request<T: Serialize>(
     request: &Request,
     payload: &T,
 ) -> Result<PayloadFingerprint> {
+    let request_method = request.method();
+    let path = request.path();
+    fingerprint_typed_parts(request_method.as_ref(), path.as_str(), payload)
+}
+
+fn fingerprint_typed_parts<T: Serialize>(
+    method: &str,
+    path: &str,
+    payload: &T,
+) -> Result<PayloadFingerprint> {
     let payload_bytes = serde_json::to_vec(payload).map_err(|error| {
         Error::RustError(format!("typed command serialization failed: {error}"))
     })?;
-    let method = request.method().as_ref().as_bytes();
-    let path = request.path();
+    if payload_bytes.len() > MAX_FINGERPRINT_PAYLOAD_BYTES {
+        return Err(Error::RustError(
+            "typed command serialization exceeds payload fingerprint bound".to_owned(),
+        ));
+    }
     let mut material = Vec::with_capacity(
         FINGERPRINT_DOMAIN.len() + method.len() + path.len() + payload_bytes.len() + 32,
     );
     append_field(&mut material, FINGERPRINT_DOMAIN)?;
-    append_field(&mut material, method)?;
+    append_field(&mut material, method.as_bytes())?;
     append_field(&mut material, path.as_bytes())?;
     append_field(&mut material, &payload_bytes)?;
     payload_fingerprint(&material)
@@ -180,13 +194,53 @@ fn evidence(
 
 #[cfg(test)]
 mod tests {
-    use super::{hex_digest, payload_fingerprint};
+    use super::{fingerprint_typed_parts, hex_digest, payload_fingerprint};
+    use serde::Serialize;
+
+    #[derive(Serialize)]
+    #[serde(rename_all = "camelCase")]
+    struct ExampleCommand<'a> {
+        resource_id: &'a str,
+        expected_version: u64,
+    }
 
     #[test]
     fn fingerprint_hash_is_stable_and_strongly_typed() -> Result<(), Box<dyn std::error::Error>> {
         let fingerprint = payload_fingerprint(b"stable")?;
         assert_eq!(fingerprint.as_str(), hex_digest(b"stable"));
         assert_eq!(fingerprint.as_str().len(), 64);
+        Ok(())
+    }
+
+    #[test]
+    fn typed_fingerprint_is_deterministic_and_binds_operation_identity()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let payload = ExampleCommand {
+            resource_id: "resource_01JFP",
+            expected_version: 7,
+        };
+        let same = fingerprint_typed_parts("POST", "/api/v1/resources/1", &payload)?;
+        assert_eq!(
+            same,
+            fingerprint_typed_parts("POST", "/api/v1/resources/1", &payload)?
+        );
+
+        let changed_payload = ExampleCommand {
+            resource_id: "resource_01JFP",
+            expected_version: 8,
+        };
+        assert_ne!(
+            same,
+            fingerprint_typed_parts("POST", "/api/v1/resources/1", &changed_payload)?
+        );
+        assert_ne!(
+            same,
+            fingerprint_typed_parts("PUT", "/api/v1/resources/1", &payload)?
+        );
+        assert_ne!(
+            same,
+            fingerprint_typed_parts("POST", "/api/v1/resources/2", &payload)?
+        );
         Ok(())
     }
 
