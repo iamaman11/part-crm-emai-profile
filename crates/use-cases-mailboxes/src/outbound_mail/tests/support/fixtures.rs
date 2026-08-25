@@ -49,7 +49,11 @@ pub(crate) fn evidence(
 
 fn fixture_payload_fingerprint(seed: &str) -> TestResult<PayloadFingerprint> {
     const HEX: &[u8; 16] = b"0123456789abcdef";
-    let bytes = if seed.is_empty() { b"fixture" } else { seed.as_bytes() };
+    let bytes = if seed.is_empty() {
+        b"fixture"
+    } else {
+        seed.as_bytes()
+    };
     let mut encoded = String::with_capacity(64);
     for index in 0..32 {
         let byte = bytes[index % bytes.len()];
