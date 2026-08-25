@@ -1,0 +1,209 @@
+{
+  "paths": {
+    "/api/v1/tenants/{tenantId}/profiles/{profileId}/coordinator": {
+      "get": {
+        "operationId": "getProfileCoordinator",
+        "security": [
+          {"cloudflareAccessJwt": []}
+        ],
+        "parameters": [
+          {"$ref": "#/components/parameters/TenantPath"},
+          {"$ref": "#/components/parameters/ProfilePath"},
+          {"$ref": "#/components/parameters/CorrelationHeader"}
+        ],
+        "responses": {
+          "200": {
+            "description": "Current coordinator projection",
+            "content": {
+              "application/json": {
+                "schema": {"$ref": "#/components/schemas/CoordinatorResponseDto"}
+              }
+            }
+          },
+          "404": {"$ref": "#/components/responses/NeutralNotFound"},
+          "500": {"$ref": "#/components/responses/InternalFailure"}
+        }
+      },
+      "post": {
+        "operationId": "issueProfileCoordinatorCommand",
+        "security": [
+          {"cloudflareAccessJwt": []}
+        ],
+        "parameters": [
+          {"$ref": "#/components/parameters/TenantPath"},
+          {"$ref": "#/components/parameters/ProfilePath"},
+          {"$ref": "#/components/parameters/CorrelationHeader"}
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {"$ref": "#/components/schemas/CoordinatorCommandRequestDto"}
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Coordinator command result",
+            "content": {
+              "application/json": {
+                "schema": {"$ref": "#/components/schemas/CoordinatorResponseDto"}
+              }
+            }
+          },
+          "400": {"$ref": "#/components/responses/InvalidRequest"},
+          "404": {"$ref": "#/components/responses/NeutralNotFound"},
+          "409": {"$ref": "#/components/responses/Conflict"},
+          "500": {"$ref": "#/components/responses/InternalFailure"},
+          "503": {"$ref": "#/components/responses/DependencyUnavailable"}
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "CoordinatorReleaseDispositionDto": {
+        "type": "string",
+        "enum": ["clean", "dirty", "uncertain"]
+      },
+      "CoordinatorStatusDto": {
+        "type": "string",
+        "enum": ["idle", "active", "draining", "dirty", "uncertain"]
+      },
+      "CoordinatorOutcomeDto": {
+        "type": "string",
+        "enum": [
+          "snapshot",
+          "launch_intent_issued",
+          "lease_claimed",
+          "heartbeat_accepted",
+          "released",
+          "drain_started",
+          "timed_out",
+          "launch_intent_expired",
+          "recovered",
+          "no_change"
+        ]
+      },
+      "CoordinatorCommandDto": {
+        "oneOf": [
+          {
+            "type": "object",
+            "required": ["type", "launch_intent_id", "device_id", "expires_in_ms"],
+            "properties": {
+              "type": {"type": "string", "const": "issue_launch_intent"},
+              "launch_intent_id": {"type": "string"},
+              "device_id": {"type": "string"},
+              "expires_in_ms": {"type": "integer", "minimum": 1000, "maximum": 300000}
+            }
+          },
+          {
+            "type": "object",
+            "required": ["type", "launch_intent_id", "device_id", "session_id"],
+            "properties": {
+              "type": {"type": "string", "const": "claim"},
+              "launch_intent_id": {"type": "string"},
+              "device_id": {"type": "string"},
+              "session_id": {"type": "string"}
+            }
+          },
+          {
+            "type": "object",
+            "required": ["type", "session_id", "epoch", "fencing_token"],
+            "properties": {
+              "type": {"type": "string", "const": "heartbeat"},
+              "session_id": {"type": "string"},
+              "epoch": {"type": "integer", "minimum": 0},
+              "fencing_token": {"type": "string"}
+            }
+          },
+          {
+            "type": "object",
+            "required": ["type", "session_id", "epoch", "fencing_token", "disposition"],
+            "properties": {
+              "type": {"type": "string", "const": "release"},
+              "session_id": {"type": "string"},
+              "epoch": {"type": "integer", "minimum": 0},
+              "fencing_token": {"type": "string"},
+              "disposition": {"$ref": "#/components/schemas/CoordinatorReleaseDispositionDto"}
+            }
+          },
+          {
+            "type": "object",
+            "required": ["type"],
+            "properties": {
+              "type": {"type": "string", "const": "begin_drain"}
+            }
+          },
+          {
+            "type": "object",
+            "required": ["type"],
+            "properties": {
+              "type": {"type": "string", "const": "mark_recovered"}
+            }
+          }
+        ]
+      },
+      "CoordinatorCommandRequestDto": {
+        "type": "object",
+        "required": ["idempotency_key", "sequence", "expected_version", "command"],
+        "properties": {
+          "idempotency_key": {"type": "string"},
+          "sequence": {"type": "integer", "minimum": 1},
+          "expected_version": {"type": "integer", "minimum": 1},
+          "command": {"$ref": "#/components/schemas/CoordinatorCommandDto"}
+        }
+      },
+      "CoordinatorResponseDto": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["outcome", "version", "sequence", "replayed", "fencing_token", "epoch", "projection"],
+        "properties": {
+          "outcome": {"$ref": "#/components/schemas/CoordinatorOutcomeDto"},
+          "version": {"type": "integer", "minimum": 1},
+          "sequence": {"type": "integer", "minimum": 0},
+          "replayed": {"type": "boolean"},
+          "fencing_token": {"oneOf": [{"type": "string"}, {"type": "null"}]},
+          "epoch": {"oneOf": [{"type": "integer", "minimum": 0}, {"type": "null"}]},
+          "projection": {"$ref": "#/components/schemas/CoordinatorProjectionDto"}
+        }
+      },
+      "CoordinatorProjectionDto": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "tenant_id",
+          "profile_id",
+          "status",
+          "version",
+          "sequence",
+          "next_epoch",
+          "active_session_id",
+          "active_device_id",
+          "active_epoch",
+          "idle_expires_at_ms",
+          "hard_expires_at_ms",
+          "drain_deadline_ms",
+          "pending_launch_intent_id",
+          "pending_intent_expires_at_ms"
+        ],
+        "properties": {
+          "tenant_id": {"type": "string"},
+          "profile_id": {"type": "string"},
+          "status": {"$ref": "#/components/schemas/CoordinatorStatusDto"},
+          "version": {"type": "integer", "minimum": 1},
+          "sequence": {"type": "integer", "minimum": 0},
+          "next_epoch": {"type": "integer", "minimum": 0},
+          "active_session_id": {"oneOf": [{"type": "string"}, {"type": "null"}]},
+          "active_device_id": {"oneOf": [{"type": "string"}, {"type": "null"}]},
+          "active_epoch": {"oneOf": [{"type": "integer", "minimum": 0}, {"type": "null"}]},
+          "idle_expires_at_ms": {"oneOf": [{"type": "integer", "minimum": 0}, {"type": "null"}]},
+          "hard_expires_at_ms": {"oneOf": [{"type": "integer", "minimum": 0}, {"type": "null"}]},
+          "drain_deadline_ms": {"oneOf": [{"type": "integer", "minimum": 0}, {"type": "null"}]},
+          "pending_launch_intent_id": {"oneOf": [{"type": "string"}, {"type": "null"}]},
+          "pending_intent_expires_at_ms": {"oneOf": [{"type": "integer", "minimum": 0}, {"type": "null"}]}
+        }
+      }
+    }
+  }
+}
