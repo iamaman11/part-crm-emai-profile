@@ -3,13 +3,13 @@ use serde_json::{Value, json};
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct StartGmailOAuthRequestDto {
+pub struct StartMicrosoftGraphOAuthRequestDto {
     pub expected_version: u64,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct GmailOAuthStartReceiptDto {
+pub struct MicrosoftGraphOAuthStartReceiptDto {
     pub onboarding_id: String,
     pub expected_version: u64,
     pub ceremony_id: String,
@@ -19,7 +19,7 @@ pub struct GmailOAuthStartReceiptDto {
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct GmailOAuthCallbackReceiptDto {
+pub struct MicrosoftGraphOAuthCallbackReceiptDto {
     pub result_code: String,
     pub onboarding_id: String,
     pub onboarding_version: u64,
@@ -29,20 +29,20 @@ pub struct GmailOAuthCallbackReceiptDto {
 pub fn openapi_fragment() -> Value {
     json!({
         "paths": {
-            "/api/v1/tenants/{tenantId}/mailbox-onboardings/{onboardingId}/gmail-oauth": {
+            "/api/v1/tenants/{tenantId}/mailbox-onboardings/{onboardingId}/microsoft-graph-oauth": {
                 "post": {
-                    "operationId": "startGmailOAuthOnboarding",
+                    "operationId": "startMicrosoftGraphOAuthOnboarding",
                     "parameters": onboarding_path_parameters(),
                     "requestBody": {
                         "required": true,
                         "content": {
                             "application/json": {
-                                "schema": schema_ref("StartGmailOAuthRequestDto")
+                                "schema": schema_ref("StartMicrosoftGraphOAuthRequestDto")
                             }
                         }
                     },
                     "responses": {
-                        "200": json_response("Short-lived Gmail authorization ceremony", "GmailOAuthStartReceiptDto"),
+                        "200": json_response("Short-lived Microsoft Graph authorization ceremony", "MicrosoftGraphOAuthStartReceiptDto"),
                         "400": problem_response(),
                         "404": problem_response(),
                         "409": problem_response(),
@@ -51,12 +51,12 @@ pub fn openapi_fragment() -> Value {
                     }
                 }
             },
-            "/api/v1/mailbox/gmail/oauth/callback": {
+            "/api/v1/mailbox/microsoft-graph/oauth/callback": {
                 "get": {
-                    "operationId": "completeGmailOAuthOnboarding",
+                    "operationId": "completeMicrosoftGraphOAuthOnboarding",
                     "parameters": callback_parameters(),
                     "responses": {
-                        "200": json_response("Bounded Gmail OAuth completion result", "GmailOAuthCallbackReceiptDto"),
+                        "200": json_response("Bounded Microsoft Graph OAuth completion result", "MicrosoftGraphOAuthCallbackReceiptDto"),
                         "400": problem_response(),
                         "404": problem_response(),
                         "409": problem_response(),
@@ -69,7 +69,7 @@ pub fn openapi_fragment() -> Value {
         },
         "components": {
             "schemas": {
-                "StartGmailOAuthRequestDto": {
+                "StartMicrosoftGraphOAuthRequestDto": {
                     "type": "object",
                     "additionalProperties": false,
                     "required": ["expectedVersion"],
@@ -77,7 +77,7 @@ pub fn openapi_fragment() -> Value {
                         "expectedVersion": version_schema()
                     }
                 },
-                "GmailOAuthStartReceiptDto": {
+                "MicrosoftGraphOAuthStartReceiptDto": {
                     "type": "object",
                     "additionalProperties": false,
                     "required": ["onboardingId", "expectedVersion", "ceremonyId", "authorizationUrl", "expiresAtMs"],
@@ -89,7 +89,7 @@ pub fn openapi_fragment() -> Value {
                         "expiresAtMs": timestamp_schema()
                     }
                 },
-                "GmailOAuthCallbackReceiptDto": {
+                "MicrosoftGraphOAuthCallbackReceiptDto": {
                     "type": "object",
                     "additionalProperties": false,
                     "required": ["resultCode", "onboardingId", "onboardingVersion"],
@@ -187,14 +187,15 @@ fn problem_response() -> Value {
 #[cfg(test)]
 mod tests {
     use super::{
-        GmailOAuthCallbackReceiptDto, GmailOAuthStartReceiptDto, StartGmailOAuthRequestDto,
-        openapi_fragment,
+        MicrosoftGraphOAuthCallbackReceiptDto, MicrosoftGraphOAuthStartReceiptDto,
+        StartMicrosoftGraphOAuthRequestDto, openapi_fragment,
     };
 
     #[test]
-    fn public_dtos_reject_credential_and_token_fields() -> Result<(), Box<dyn std::error::Error>> {
+    fn public_dtos_reject_token_and_secret_fields() -> Result<(), Box<dyn std::error::Error>> {
         assert!(
-            serde_json::from_str::<StartGmailOAuthRequestDto>(r#"{"expectedVersion":1}"#).is_ok()
+            serde_json::from_str::<StartMicrosoftGraphOAuthRequestDto>(r#"{"expectedVersion":1}"#)
+                .is_ok()
         );
         for forbidden in [
             "accessToken",
@@ -203,46 +204,62 @@ mod tests {
             "pkceVerifier",
             "clientSecret",
             "secretHandle",
-            "gmailSendScope",
+            "mailSendScope",
         ] {
             let invalid = format!(r#"{{"expectedVersion":1,"{forbidden}":"forbidden"}}"#);
-            assert!(serde_json::from_str::<StartGmailOAuthRequestDto>(&invalid).is_err());
+            assert!(serde_json::from_str::<StartMicrosoftGraphOAuthRequestDto>(&invalid).is_err());
         }
-        let _ = GmailOAuthStartReceiptDto {
-            onboarding_id: "onboarding_01JC2GMAIL".to_owned(),
+        let _ = MicrosoftGraphOAuthStartReceiptDto {
+            onboarding_id: "onboarding_01JC3GRAPH".to_owned(),
             expected_version: 1,
-            ceremony_id: "ceremony_01JC2GMAIL".to_owned(),
-            authorization_url: "https://accounts.google.com/o/oauth2/v2/auth".to_owned(),
+            ceremony_id: "ceremony_01JC3GRAPH".to_owned(),
+            authorization_url: "https://login.microsoftonline.com/common/oauth2/v2.0/authorize"
+                .to_owned(),
             expires_at_ms: 1,
         };
-        let _ = GmailOAuthCallbackReceiptDto {
+        let _ = MicrosoftGraphOAuthCallbackReceiptDto {
             result_code: "activated".to_owned(),
-            onboarding_id: "onboarding_01JC2GMAIL".to_owned(),
+            onboarding_id: "onboarding_01JC3GRAPH".to_owned(),
             onboarding_version: 2,
         };
         Ok(())
     }
 
     #[test]
-    fn fragment_contains_only_start_and_fixed_callback_surfaces() {
+    fn fragment_is_graph_specific_read_onboarding_without_secret_surface() {
         let fragment = openapi_fragment();
         let paths = &fragment["paths"];
         assert!(paths.as_object().is_some_and(|value| value.len() == 2));
         assert!(
             paths
-                .get("/api/v1/tenants/{tenantId}/mailbox-onboardings/{onboardingId}/gmail-oauth")
+                .get("/api/v1/tenants/{tenantId}/mailbox-onboardings/{onboardingId}/microsoft-graph-oauth")
                 .is_some()
         );
-        assert!(paths.get("/api/v1/mailbox/gmail/oauth/callback").is_some());
+        assert!(
+            paths
+                .get("/api/v1/mailbox/microsoft-graph/oauth/callback")
+                .is_some()
+        );
         let encoded = fragment.to_string();
         for forbidden in [
             "accessToken",
             "refreshToken",
             "pkceVerifier",
             "clientSecret",
-            "gmail.send",
+            "Mail.Send",
+            "IMAP.AccessAsUser.All",
+            "SMTP.Send",
         ] {
             assert!(!encoded.contains(forbidden), "fragment leaked {forbidden}");
         }
+    }
+
+    #[test]
+    fn fragment_matches_the_generated_artifact_byte_for_byte() {
+        let generated = openapi_fragment().to_string();
+        let accepted =
+            include_str!("../../../openapi/v1/fragments/mailbox-microsoft-graph-onboarding.json")
+                .trim_end();
+        assert_eq!(generated, accepted);
     }
 }

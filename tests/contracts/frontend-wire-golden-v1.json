@@ -1,0 +1,42 @@
+{
+  "schemaVersion": 1,
+  "wireVectors": [
+    {
+      "kind": "get",
+      "operationId": "getMailboxBinding",
+      "method": "GET",
+      "path": "/api/v1/tenants/{tenantId}/mailboxes/{bindingId}",
+      "requiredRequestHeaders": ["X-Correlation-Id"],
+      "security": ["cloudflareAccessJwt"],
+      "successStatus": "200",
+      "successMediaType": "application/json"
+    },
+    {
+      "kind": "mutation",
+      "operationId": "createMailboxBinding",
+      "method": "POST",
+      "path": "/api/v1/tenants/{tenantId}/mailboxes",
+      "requiredRequestHeaders": ["Idempotency-Key", "X-Correlation-Id"],
+      "security": ["cloudflareAccessJwt"],
+      "successStatus": "201",
+      "successMediaType": "application/json"
+    },
+    {
+      "kind": "declared-204",
+      "operationId": "revokeClientAccess",
+      "status": "204"
+    },
+    {
+      "kind": "declared-problem",
+      "operationId": "createMailboxBinding",
+      "status": "400",
+      "mediaType": "application/problem+json"
+    },
+    {
+      "kind": "required-response-headers",
+      "operationId": "startMicrosoftGraphOAuthOnboarding",
+      "status": "200",
+      "headers": ["Cache-Control"]
+    }
+  ]
+}

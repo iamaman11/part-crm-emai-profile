@@ -457,23 +457,91 @@ N2…PF-3 cumulative current plan + validator + projection + compatibility surfa
 new parallel roadmap / 1:1 registry / global authority catalog = 0
 ```
 
+## 16.1 Mandatory change envelope and hard-fail rules
+
+Before implementation starts, every materially changing transaction must record the following envelope
+in Git-visible normative documentation and/or the bounded PR so that acceptance does not depend on
+chat history or agent memory:
+
+```text
+Concern:
+Failed scenario / required capability:
+Natural semantic owner:
+Current duplicate/predecessor:
+Target dependency direction:
+Changed public contracts:
+Breaking change:
+Data migration:
+Provider mutation:
+Files/mechanisms to delete:
+Explicit non-goals:
+Positive acceptance:
+Negative acceptance:
+Rollback/recovery impact:
+```
+
+`NONE` is valid only as an explicit bounded conclusion. Missing or merely implied fields are not
+acceptance evidence.
+
+The following conditions are non-negotiable failures even when CI is otherwise green:
+
+```text
+two semantic owners                          = FAIL
+parallel active runtime path                 = FAIL
+fallback "temporarily keep it"              = FAIL
+handwritten generated code                   = FAIL
+network payload trusted/cast as T            = FAIL
+unsupported schema degraded to any/unknown   = FAIL
+CI repaired by weakening/changing architecture = FAIL
+cleanup deferred to an indefinite future     = FAIL
+unrelated redesign                           = FAIL
+merge after the proven head changed          = FAIL
+```
+
+A predecessor may coexist with an incomplete successor only inside a working branch and only when the
+bounded transaction has not accepted the replacement yet. Protected `main` must never contain two
+accepted active runtime paths, two semantic owners or a fallback. A bounded multi-merge program may
+separate contract/governance closure from runtime cutover only when the earlier merge introduces no
+parallel active runtime path and explicitly names the later atomic cutover/deletion transaction.
+
+Complexity is governed by ownership and active mechanisms rather than raw line count:
+
+```text
+replace mechanism
+-> accept successor only with predecessor deletion in the same replacement transaction
+
+add capability
+-> growth is allowed only inside its natural owner and required adapters/tests
+
+generated code
+-> measure separately from human-owned semantic complexity
+
+further deletion makes ownership or execution flow less clear
+-> stop deleting
+```
+
+A CI failure is diagnostic evidence. Fix the defect at its natural owner or test/tool boundary; do not
+change architecture merely to satisfy a gate. A gate itself changes only when its assertion is proved
+obsolete and the same transaction removes the obsolete mechanism without weakening the invariant.
+
 ## 17. Definition of Done for materially changed architecture
 
 Every materially changing bounded candidate proves on one exact head:
 
 1. fresh protected-main/trackers/competing-PR re-baseline;
-2. explicit natural owner and bounded context;
-3. explicit contracts/effects/observation boundaries;
-4. positive + negative tests at lowest sufficient layer;
-5. no duplicate authority/global bag/hidden production-enable path;
-6. predecessor disposition + zero callers/unique invariants for cutovers;
-7. internal compatibility ceremony deleted with the predecessor unless a durable exact-format consumer is named;
-8. before/after authority and plan/validator/projection footprint proves the applicable simplification budget;
-9. affected product acceptance scenario(s) and user-visible outcome identified and proved;
-10. cross-platform semantic equivalence where required;
-11. all applicable permanent workflows/protected contexts green;
-12. `behind_by=0`, blocking reviews=0, unresolved threads=0;
-13. guarded merge bound to exact proven head;
-14. accepted-main reread before next transaction.
+2. complete mandatory change envelope recorded before implementation/acceptance;
+3. explicit natural owner and bounded context;
+4. explicit contracts/effects/observation boundaries;
+5. positive + negative tests at lowest sufficient layer;
+6. no duplicate authority/global bag/hidden production-enable path;
+7. predecessor disposition + zero callers/unique invariants for cutovers;
+8. internal compatibility ceremony deleted with the predecessor unless a durable exact-format consumer is named;
+9. before/after authority and plan/validator/projection footprint proves the applicable simplification budget;
+10. affected product acceptance scenario(s) and user-visible outcome identified and proved;
+11. cross-platform semantic equivalence where required;
+12. all applicable permanent workflows/protected contexts green;
+13. `behind_by=0`, blocking reviews=0, unresolved threads=0;
+14. guarded merge bound to exact proven head;
+15. accepted-main reread before next transaction.
 
 These rules are mandatory quality constraints, not authorization for a repository-wide aesthetic rewrite. Correct untouched code remains untouched; touched scope converges.

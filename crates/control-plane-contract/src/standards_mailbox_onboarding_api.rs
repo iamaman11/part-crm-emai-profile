@@ -223,7 +223,11 @@ fn json_response(description: &str, schema: &str) -> Value {
 fn problem_response() -> Value {
     json!({
         "description": "Problem response",
-        "content": {"application/problem+json": {"schema": {"type": "object"}}}
+        "content": {
+            "application/problem+json": {
+                "schema": schema_ref("Problem")
+            }
+        }
     })
 }
 

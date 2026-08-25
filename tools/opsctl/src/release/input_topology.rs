@@ -472,7 +472,7 @@ mod tests {
                 .ends_with("control-plane.yaml")
         }));
         let resolved = topology.resolve(&root())?;
-        assert_eq!(resolved.len(), 18);
+        assert_eq!(resolved.len(), 17);
         Ok(())
     }
 

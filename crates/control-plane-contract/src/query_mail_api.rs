@@ -60,8 +60,8 @@ pub fn openapi_fragment() -> Value {
                     "required": ["mailboxBindingId", "term", "cursor", "limit"],
                     "properties": {
                         "mailboxBindingId": {"type": "string", "minLength": 8, "maxLength": 96},
-                        "term": {"type": "string", "nullable": true, "minLength": 1, "maxLength": 200},
-                        "cursor": {"type": "string", "nullable": true, "minLength": 1, "maxLength": 512},
+                        "term": nullable_bounded_string_schema(1, 200),
+                        "cursor": nullable_bounded_string_schema(1, 512),
                         "limit": {"type": "integer", "minimum": 1, "maximum": 100}
                     }
                 },
@@ -80,8 +80,8 @@ pub fn openapi_fragment() -> Value {
                     "required": ["reference", "subject", "sender", "receivedAtMs"],
                     "properties": {
                         "reference": schema_ref("MailboxMessageReferenceDto"),
-                        "subject": {"type": "string", "nullable": true},
-                        "sender": {"type": "string", "nullable": true},
+                        "subject": nullable_string_schema(),
+                        "sender": nullable_string_schema(),
                         "receivedAtMs": {"type": "integer", "minimum": 0}
                     }
                 },
@@ -95,7 +95,7 @@ pub fn openapi_fragment() -> Value {
                             "maxItems": 100,
                             "items": schema_ref("MailMessageSummaryDto")
                         },
-                        "nextCursor": {"type": "string", "nullable": true, "maxLength": 512}
+                        "nextCursor": nullable_max_string_schema(512)
                     }
                 },
                 "MailMessageBodyDto": {
@@ -104,8 +104,8 @@ pub fn openapi_fragment() -> Value {
                     "required": ["summary", "textBody", "htmlBody"],
                     "properties": {
                         "summary": schema_ref("MailMessageSummaryDto"),
-                        "textBody": {"type": "string", "nullable": true, "maxLength": 1048576},
-                        "htmlBody": {"type": "string", "nullable": true, "maxLength": 1048576}
+                        "textBody": nullable_max_string_schema(1048576),
+                        "htmlBody": nullable_max_string_schema(1048576)
                     }
                 }
             }
@@ -159,10 +159,41 @@ fn schema_ref(name: &str) -> Value {
     json!({"$ref": format!("#/components/schemas/{name}")})
 }
 
+fn nullable_string_schema() -> Value {
+    json!({
+        "oneOf": [
+            {"type": "string"},
+            {"type": "null"}
+        ]
+    })
+}
+
+fn nullable_bounded_string_schema(min_length: u64, max_length: u64) -> Value {
+    json!({
+        "oneOf": [
+            {"type": "string", "minLength": min_length, "maxLength": max_length},
+            {"type": "null"}
+        ]
+    })
+}
+
+fn nullable_max_string_schema(max_length: u64) -> Value {
+    json!({
+        "oneOf": [
+            {"type": "string", "maxLength": max_length},
+            {"type": "null"}
+        ]
+    })
+}
+
 fn problem_response() -> Value {
     json!({
         "description": "Problem response",
-        "content": {"application/problem+json": {"schema": {"type": "object"}}}
+        "content": {
+            "application/problem+json": {
+                "schema": schema_ref("Problem")
+            }
+        }
     })
 }
 

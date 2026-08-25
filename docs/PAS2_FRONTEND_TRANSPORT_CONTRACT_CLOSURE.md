@@ -1,167 +1,295 @@
 # PAS-2/TC-1 — Executable Frontend Transport Contract Closure
 
-**Document status:** BOUNDED_EXECUTION_CONTRACT
-**Program authority:** `docs/ARCHITECTURE_REBASELINE_V3_PLAN.md`
-**Product scenario:** PAS-2 — Client and browser-profile workflow
-**Architecture contracts:** `docs/APPLICATION_ARCHITECTURE_MANDATORY_REQUIREMENTS.md`, `docs/ARCHITECTURE_EVOLUTION_QUALITY_CONTRACT.md`
-**Public contract policy:** `docs/CONTRACT_POLICY.md`
-**Production authorization:** NONE
+**Document status:** BOUNDED_EXECUTION_CONTRACT  
+**Program authority:** `docs/ARCHITECTURE_REBASELINE_V3_PLAN.md`  
+**Product scenario:** PAS-2 — Client and browser-profile workflow  
+**Architecture contracts:** `docs/APPLICATION_ARCHITECTURE_MANDATORY_REQUIREMENTS.md`, `docs/ARCHITECTURE_EVOLUTION_QUALITY_CONTRACT.md`  
+**Public contract policy:** `docs/CONTRACT_POLICY.md`  
+**Production authorization:** NONE  
 **FC-6 execution:** NOT AUTHORIZED BY THIS CONTRACT
 
-This is one bounded correction for a demonstrated PAS-2 transport-contract failure. It is not a new
-roadmap, generic SDK program, frontend rewrite or permission to redesign unrelated UI, backend,
-Cloudflare, Profile Bridge or `opsctl` architecture.
+PAS-2/TC-1 fixes one demonstrated transport-contract boundary. It is not a generic SDK program, a
+frontend rewrite permission, a production rollout, or authority to redesign unrelated Cloudflare,
+Profile Bridge, Camoufox, mailbox or `opsctl` architecture.
 
 ## 1. Demonstrated defect
 
-The current browser path is:
+The active browser path still duplicates endpoint method/path/body/status assumptions and can move an
+untrusted HTTP payload into application/UI code through generic JSON parsing plus caller-selected
+TypeScript casts. The target must have one executable contract chain and runtime proof at the network
+boundary.
+
+The target chain is:
 
 ```text
 capability-owned Rust contract
--> partial/mixed OpenAPI artifacts
--> generated TypeScript DTO shapes only
--> feature-owned handwritten path/method/body/status assumptions
--> requestJson<T>()
--> JSON.parse() -> unknown -> payload as T
--> application/UI
+        ↓ deterministic export
+canonical OpenAPI 3.1
+        ↓ strict non-repairing validator/compiler
+generated capability-grouped leaf operations + runtime validators
+        ↓
+effect-only HTTP transport
+        ↓
+feature adapters
+        ↓
+application/UI
 ```
 
-This fails PAS-2 contract integrity in two ways:
+Rust remains the natural semantic author. OpenAPI is the canonical versioned wire projection and sole
+frontend compiler input. Generated TypeScript and compiler IR are mechanical projections, never a
+second semantic authority.
 
-1. path, method, parameters, request encoding, accepted status/content type and response shape do
-   not have one executable frontend input;
-2. an untrusted successful HTTP representation can cross into feature/application code as a caller-
-   selected `T` without runtime proof.
+## 2. Idempotency ownership decision
 
-Current contract inputs also require closure before runtime generation: the public root declares
-OpenAPI 3.1 while retained generated/schema-only artifacts contain mixed 3.0-style semantics,
-frontend-consumed operations and response headers are not represented uniformly, and common problem
-responses are not uniformly strict enough to generate one trustworthy decoder path.
+`requestDigest` is historical protocol debt and is not part of the target browser contract.
+The application is not in production and has no external compatible clients. Therefore PAS-2 uses an
+explicit one-time pre-production destructive re-baseline rather than a compatibility adapter, optional
+legacy field, v2 island or fallback runtime.
 
-This is a concrete failed product boundary, not an aesthetic reason to reopen the whole architecture.
-
-## 2. Binding ownership decision
+Target command execution:
 
 ```text
-capability-owned Rust contract modules
-        = natural semantic authoring owners
-                    |
-                    v deterministic export/merge/lint
-canonical versioned OpenAPI 3.1 wire artifact
-        = sole executable frontend compiler input
-                    |
-                    v deterministic contract compiler
-generated capability-grouped leaf operations
-        + request encoders
-        + response/error/header decoders
-        + runtime validators
-                    |
-                    v
-feature-owned infrastructure adapters
-                    |
-                    v
-feature application/presentation models where semantically required
-                    |
-                    v
-UI
+feature/application
+  allocates one Idempotency-Key per logical command
+  and retains the same key for retries
+        ↓
+generated operation
+  encodes method/path/headers/body
+        ↓
+server application boundary
+  strictly decodes the typed command
+        ↓
+server computes internal PayloadFingerprint
+        ↓
+idempotency store
+  same key + same fingerprint      -> replay
+  same key + different fingerprint -> conflict
 ```
 
-OpenAPI is the single versioned executable wire artifact and the only frontend compiler input. It is
-not a second manually edited semantic owner beside Rust. Generated TypeScript, validators and any
-compiler IR are mechanical projections. Compiler IR is ephemeral, untracked and never a contract,
-registry or runtime input.
+`PayloadFingerprint` is server-owned implementation evidence. It:
 
-## 3. Layer boundaries
+- is computed after strict typed command decoding;
+- is never supplied by the browser or any external client;
+- is absent from OpenAPI request DTOs;
+- is not a release, contract, artifact or evidence digest authority;
+- may use SHA-256 over one normalized typed-command representation owned by the server application
+  boundary;
+- must not create another cross-component canonical-JSON protocol.
 
-| Layer | Owns | Must not own |
-| --- | --- | --- |
-| Capability Rust contract | Public DTO and operation semantics | Frontend implementation |
-| Canonical OpenAPI | Versioned wire projection/compatibility surface | Product/use-case policy |
-| Contract compiler | Strict mechanical transformation | Handwritten endpoint decisions |
-| Generated operation | Method, path/query/header/body encoding, declared statuses/media types/headers and decoders | Business workflows, UI state, retry policy |
-| Contract runtime | Bounded parsing and generated validation primitives | Endpoint registry or operation policy |
-| HTTP transport | Fetch effect, credentials plumbing, abort/timeout, bounded response bytes, raw status/headers | JSON/DTO schemas, endpoint paths, success semantics |
-| Feature adapter | Wire DTO to feature/application adaptation and error mapping | Duplicated URL/method/status/JSON contract |
-| Application/UI | Product and presentation semantics | Raw HTTP data or transport assertions |
+Transaction A removes the newly introduced browser/compiler `requestDigest` authority
+(`x-part-crm-request-digest`, `part-crm-json-v1`, frontend canonicalization and digest golden vectors)
+but does **not** yet change the active runtime DTO. Transaction B deletes `requestDigest` end-to-end in
+one atomic cutover and introduces the internal `PayloadFingerprint` at the server idempotency boundary.
 
-Generated operations are leaf infrastructure artifacts. They do not form a global application SDK,
-service container, feature facade or business service layer. Physical output may be grouped by
-capability to avoid a file-per-operation estate, but every exported operation remains independently
-importable and tree-shakeable.
+## 3. Compiler rule: validate, never repair
 
-## 4. Required execution order
+The compiler consumes producer output exactly as emitted. It must fail closed instead of rewriting it.
+In particular it must not:
 
-Staging-baseline adoption was completed under temporary #486 authority and that mechanism was removed
-by #487. The resulting readiness audit recorded `FC-6 READY TO BEGIN / NOT STARTED`. PAS-2/TC-1 is the
-subsequently discovered bounded repository correction and finishes before readiness is decided again:
+- convert OpenAPI 3.0 `nullable` into JSON Schema 2020-12 unions;
+- replace permissive `application/problem+json` schemas with another schema;
+- insert request-digest, response-header or browser-policy repair extensions;
+- repair missing parameters, statuses, media types, security or response semantics;
+- resolve network references or silently accept unsupported constructs.
+
+An invalid producer is fixed at the capability-owned Rust/OpenAPI producer. The validator/compiler may
+normalize only its own untracked internal representation after semantic validation; it may not change
+wire meaning or emit a repaired canonical contract.
+
+For PAS-2 generated operations, a declared OpenAPI response header is treated as part of the declared
+response contract and is validated by the generated operation. This project rule is documented here
+rather than encoded through a compiler-inserted side extension.
+
+## 4. Transaction order
 
 ```text
-fresh accepted-main/provider re-baseline
--> Transaction A: canonical OpenAPI contract closure
--> accepted-main exact-head green
--> Transaction B: destructive frontend transport cutover
--> accepted-main exact-head green
+fresh accepted-main re-baseline
+-> Transaction A: canonical contract/governance closure
+-> merge only after exact-head permanent CI is green
+-> Transaction B: atomic runtime cutover + requestDigest deletion
+-> merge only after exact-head permanent CI is green
 -> fresh FC-6 read-only readiness audit
 -> only a separate explicit instruction may start FC-6
 ```
 
-Two meaningful transactions are permitted; a series of tiny mechanism/validator/cleanup PRs is not.
-Transaction A introduces no parallel frontend runtime. Transaction B may use temporary candidate-only
-bridges while under development, but accepted `main` receives the complete active-frontend cutover and
-predecessor deletion together.
+### 4.1 Transaction A — current PR
 
-### 4.1 Transaction A — canonical OpenAPI contract closure
+Transaction A must:
 
-1. Discover every active browser HTTP consumer and every Rust/OpenAPI producer without creating a
-   permanent inventory.
-2. Classify the composed `openapi/v1` tree, auxiliary generated OpenAPI files, frontend TypeScript
-   outputs, generators, tests, CI callers and release/digest consumers.
-3. Preserve historical immutable Release Set assets. Change current v1 only through the existing
-   compatibility policy; a breaking change requires a governed version/migration decision.
-4. Establish one strictly linted OpenAPI 3.1 compiler input. Unsupported/mixed dialect semantics,
-   unresolved or network `$ref`, duplicate operation IDs, incomplete path parameters and unsupported
-   serialization/media types fail closed.
-5. Close frontend-consumed operation coverage, including declared request headers, idempotency,
-   response headers, exact success response alternatives, no-body semantics and common problem
-   responses. When OpenAPI 3.1 cannot express required response-header presence, use one documented
-   project-prefixed extension emitted by the Rust owner and consumed directly by the compiler, or move
-   the value into a governed response body; do not create a side registry.
-6. Make capability-owned Rust exporters reproduce the accepted current contract representation;
-   do not introduce a central handwritten operation registry.
-7. Delete superseded schema-only OpenAPI/TypeScript generators and artifacts whose only consumers are
-   their own tests, drift gates or documentation. Retain only a named durable exact-byte consumer.
-8. Prove deterministic merge/export twice and run compatibility plus deliberately breaking fixtures.
+1. keep the active frontend runtime unchanged;
+2. establish deterministic canonical OpenAPI 3.1 as the sole compiler input;
+3. make validation fail closed without producer repair;
+4. remove the candidate-only browser `requestDigest` canonicalizer, extension and golden authority;
+5. preserve `Idempotency-Key` as application-owned logical-command identity;
+6. delete `contracts/generated/control-plane.openapi.json` and never restore it;
+7. delete `frontend_control_plane_openapi_projection` from release topology and delete
+   verification-only consumers/drift gates whose sole purpose was keeping that projection alive;
+8. remove the consumed Pre-2J B4/C2/C3/C3G one-shot contract-authority checkers and machine authority
+   artifacts; D3 and C5/C6 are not implicitly included;
+9. keep one permanent current-contract evolution verifier: compatible additive v1 is accepted,
+   ordinary breaking v1 is rejected, and a destructive migration requires an explicit governed
+   decision;
+10. prove deterministic export twice, deliberate negative fixtures, compatibility checks and all
+    permanent exact-head CI.
 
-Transaction A does not add a new frontend client, decoder path or runtime bypass.
+Historical Release Set assets remain immutable exact bytes. `contracts/baseline/` remains immutable
+compatibility evidence. Neither category requires retaining obsolete executable checkers or generated
+projections in current architecture.
 
-### 4.2 Transaction B — destructive frontend cutover
+### 4.2 Transaction B — atomic full-stack cutover
 
-1. Introduce one effect-only HTTP transport returning raw status, headers and streaming-size-bounded
-   bytes. It must not classify operation success, parse JSON or know endpoint DTOs.
-2. Compile capability-grouped leaf operations from the canonical OpenAPI input. Each operation owns
-   request path/query/header/body encoding and declared response status/content-type/header/body
-   decoding.
-3. Validate outbound operation inputs where their values originate at runtime; compile-time TypeScript
-   alone is not proof of user/runtime input.
-4. Validate every inbound success and declared error representation in every build mode, including
-   production. No development-only validation switch is permitted.
-5. Switch all active feature API adapters. Feature/application/UI code receives only validated wire
-   results or feature-owned models/errors.
-6. Add feature models only where frontend semantics actually differ. Mechanical copies of every wire
-   DTO are forbidden; direct component imports of generated transport internals are also forbidden.
-7. Delete `requestJson<T>`, network-boundary `payload as T`, generic path/method mutation helpers,
-   handwritten migrated operation metadata and direct browser API `fetch` callers.
-8. Replace predecessor-preserving string/path gates with the smallest specialized anti-bypass checks
-   and executable negative fixtures. Do not create a generic linter framework or checker registry.
-9. Inspect the complete diff and prove the human-owned semantic/checker/generator/predecessor surface
-   is smaller. Record generated bytes/module count and production bundle impact; unexplained or
-   unbounded growth blocks acceptance.
+Transaction B is accepted only as one complete vertical change:
 
-## 5. Runtime result and error contract
+```text
+new generated operation introduced
++ caller switched
++ old endpoint metadata/runtime path deleted
++ requestDigest deleted end-to-end
++ server-owned PayloadFingerprint installed
+```
 
-The operation layer, not the generic transport, decides whether a response matches the contract.
+It must:
 
-Minimum distinct failures:
+1. remove `requestDigest` from Rust transport DTOs, canonical OpenAPI, frontend inputs and server ingress;
+2. add internal server-owned `PayloadFingerprint` to idempotency/replay comparison;
+3. preserve one application-allocated `Idempotency-Key` across retries of the same logical command;
+4. compile capability-grouped leaf operations with request encoders and strict success/error/header
+   runtime validators;
+5. introduce one effect-only HTTP transport returning bounded raw status/headers/bytes;
+6. switch all active feature API adapters;
+7. delete `requestJson<T>`, network-boundary `payload as T`, `endpoint.ts`, migrated handwritten route
+   literals/metadata and direct browser API `fetch` callers;
+8. leave no compatibility adapter, optional legacy digest field, dual client or fallback path.
+
+Because there is no production deployment or external compatible client, current `/api/v1` may be
+destructively re-baselined once by this explicitly governed Transaction B. The superseded v1 remains
+only in Git history and immutable historical Release Set artifacts; it is not an active runtime
+contract, rollback target or CI authority after the cutover.
+
+### 4.3 Mandatory change envelopes
+
+These envelopes are normative for PAS-2 and exist so that acceptance does not depend on chat history,
+agent memory or inference from scattered files. `NONE` means an explicit bounded conclusion, not a
+missing answer.
+
+#### Transaction A envelope
+
+```text
+Concern:
+  PAS-2 frontend transport contract authority closure before runtime cutover.
+Failed scenario / required capability:
+  Browser endpoint semantics are duplicated and network payload shape is not executable at runtime;
+  first establish one strict canonical compiler input and retire obsolete contract authorities.
+Natural semantic owner:
+  Capability-owned Rust contract semantics; canonical OpenAPI 3.1 is their versioned browser wire
+  projection and sole frontend compiler input.
+Current duplicate/predecessor:
+  Superseded generated OpenAPI projections, one-shot Pre-2J contract authority checkers, candidate-only
+  requestDigest compiler/browser authority, and self-only drift machinery. The active handwritten
+  frontend runtime remains predecessor for Transaction B and is not replaced by A.
+Target dependency direction:
+  capability Rust -> canonical OpenAPI -> strict mechanical compiler boundary. No active runtime edge
+  changes in A.
+Changed public contracts:
+  Current OpenAPI v1 becomes precise OpenAPI 3.1 producer output; ordinary compatible evolution only.
+  Active runtime requestDigest wire removal is explicitly not part of A.
+Breaking change:
+  NO active runtime breaking cutover in A. Candidate-only requestDigest compiler authority is retired.
+Data migration:
+  NONE.
+Provider mutation:
+  NONE; Cloudflare/staging/production/credentials/secrets are outside scope.
+Files/mechanisms to delete:
+  contracts/generated/control-plane.openapi.json and superseded auxiliary generated OpenAPI copies;
+  frontend_control_plane_openapi_projection and its self-only drift consumer; consumed B4/C2/C3/C3G
+  one-shot authority scripts/machine records; candidate-only requestDigest browser/compiler lineage.
+Explicit non-goals:
+  No frontend runtime switch, no generated-operation adoption, no PayloadFingerprint runtime change,
+  no FC-6, no production/staging mutation, no unrelated Cloudflare/Bridge/Camoufox/mailbox/opsctl redesign.
+Positive acceptance:
+  Deterministic byte-identical producer/export validation; exact OpenAPI 3.1; permanent compatibility
+  policy; required wire vectors; deletion set complete; exact-head permanent CI and protected contexts green.
+Negative acceptance:
+  nullable, network/unresolved references, unsupported schema/media/security semantics, permissive
+  problem bodies, repair extensions, producer mutation, duplicate operationId, incomplete path
+  parameters, restored obsolete projections/checkers, parallel active frontend runtime, or changed
+  merge head all fail.
+Rollback/recovery impact:
+  No runtime rollback surface changes in A. Historical Release Set bytes and contracts/baseline remain
+  immutable; Git history preserves deleted current machinery without keeping it active.
+```
+
+#### Transaction B envelope
+
+```text
+Concern:
+  PAS-2 atomic executable frontend transport runtime cutover.
+Failed scenario / required capability:
+  Active browser path still owns handwritten operation semantics and can trust JSON through generic
+  TypeScript typing instead of runtime contract proof.
+Natural semantic owner:
+  Capability-owned Rust for semantics; canonical OpenAPI for browser wire projection; generated leaf
+  operations for mechanical encoding/decoding; feature/application for product workflow and logical
+  Idempotency-Key lifecycle; server application boundary for PayloadFingerprint.
+Current duplicate/predecessor:
+  requestJson<T>, network-boundary payload as T, endpoint.ts/handwritten method/path/status metadata,
+  direct browser API fetch callers, and requestDigest wire/server-ingress protocol debt.
+Target dependency direction:
+  capability Rust -> canonical OpenAPI -> generated leaf operation/runtime validator -> effect-only
+  HTTP transport -> feature adapter -> application/UI; server ingress -> typed command -> internal
+  PayloadFingerprint -> idempotency store.
+Changed public contracts:
+  requestDigest removed from current /api/v1 request DTOs; generated operations become the only active
+  browser HTTP operation contract path.
+Breaking change:
+  YES — one explicitly governed pre-production destructive current-v1 re-baseline; no compatibility
+  adapter, optional legacy field or v2 island.
+Data migration:
+  No durable data migration unless implementation discovery proves persisted requestDigest-dependent
+  state; if such state exists, B is blocked until the migration is explicitly added to this envelope.
+Provider mutation:
+  NONE as part of PAS-2 code/contract cutover.
+Files/mechanisms to delete:
+  requestJson<T>, endpoint.ts and migrated handwritten endpoint metadata/literals, direct browser API
+  fetch callers, requestDigest DTO/OpenAPI/frontend/server-ingress ownership, and every superseded
+  runtime helper with zero remaining callers/unique invariants.
+Explicit non-goals:
+  No global SDK/service layer, generic retry framework, browser Protobuf island, second digest lineage,
+  provider/staging/production mutation, or unrelated redesign.
+Positive acceptance:
+  Whole active frontend uses generated validated operations; declared success/error/header/body
+  contracts are runtime-proved; same Idempotency-Key + same PayloadFingerprint replays, same key +
+  different fingerprint conflicts; old caller count and old unique-current-invariant count are zero;
+  exact-head permanent CI/protected contexts green.
+Negative acceptance:
+  Two active runtime paths, fallback, handwritten generated code, network payload trusted/cast as T,
+  unsupported schema degraded to any/unknown, missing response validation, changed merge head, retained
+  requestDigest wire authority or indefinite predecessor cleanup all fail.
+Rollback/recovery impact:
+  Superseded requestDigest v1 is not an active rollback contract after B. Historical exact Release Set
+  artifacts remain immutable evidence; post-cutover accepted current v1/baseline becomes the active
+  compatibility floor through the governed acceptance step.
+```
+
+## 5. Layer boundaries
+
+| Layer | Owns | Must not own |
+| --- | --- | --- |
+| Capability Rust contract | Public DTO and operation semantics | Frontend implementation |
+| Canonical OpenAPI | Versioned wire projection | Product/use-case policy |
+| Contract compiler | Strict mechanical validation/transformation | Producer repair or endpoint policy |
+| Generated operation | Method/path/query/header/body encoding, declared response decoding/validation | Business workflow/retry policy |
+| HTTP transport | Fetch effect, credentials, abort/timeout, bounded bytes, raw status/headers | DTO schemas or endpoint success semantics |
+| Feature adapter | Wire-to-feature adaptation and error mapping | Duplicated endpoint metadata |
+| Application/UI | Product semantics and logical-command idempotency-key lifecycle | Raw HTTP trust/casts |
+| Server application boundary | Typed command semantics and internal payload fingerprint | Client-controlled digest protocol |
+
+Generated operations remain leaf infrastructure artifacts. They do not become a global SDK, service
+container, endpoint registry or business-service layer.
+
+## 6. Runtime result/error contract for Transaction B
+
+Minimum transport/contract failures remain distinct:
 
 ```text
 NetworkError
@@ -174,76 +302,20 @@ MalformedBodyError
 ContractDecodeError
 ```
 
-Declared non-2xx representations are also generated and validated. Invalid error payloads are
-contract failures; they are not fabricated into a trusted application problem. Unexpected `2xx` is
-not success. `204` succeeds only for a declared no-body response and never returns a fabricated body.
-A required body missing at any declared body-bearing status fails closed.
+Unexpected `2xx` is not success. `204` succeeds only when declared as no-body. Declared non-2xx
+representations are validated. Missing required bodies/headers, malformed JSON and schema-invalid JSON
+fail closed before application/UI code.
 
-Diagnostics may contain bounded `operationId`, status, normalized media type, validation path,
-contract fingerprint, generator version and correlation ID. Raw response/request bodies, secrets and
-PII are not logged by default.
+Generic automatic retry is forbidden in the HTTP transport. Retry belongs to application policy and
+must reuse the same `Idempotency-Key` for the same logical command.
 
-Generic automatic retry is outside this concern and forbidden in the HTTP transport. Any later retry
-requires explicit operation idempotency evidence plus feature/application policy.
+## 7. Acceptance
 
-## 6. Technology and representation constraints
+Transaction A is accepted only when one unchanged exact head proves its non-repairing compiler input,
+negative fixtures, deletion set, permanent compatibility governance and all applicable protected CI.
+Transaction B is accepted only when the whole active frontend is on generated validated operations,
+`requestDigest` has zero live runtime/contract/frontend/server-ingress ownership, the server-owned
+fingerprint replay/conflict matrix is tested, predecessor paths have zero callers and all permanent CI
+is green.
 
-- Browser HTTP remains OpenAPI 3.1 + JSON. Protobuf is reserved for a genuine independently justified
-  process/binary boundary and is not introduced as a browser transport workaround.
-- Accepted Release Set, contract and evidence identities remain on the repository's SHA-256
-  discipline. BLAKE3 does not become a second authoritative digest lineage.
-- `opsctl` and `opsctl-core` do not participate in product runtime or frontend contract generation.
-- Python may remain a bounded deterministic build adapter/orchestrator, but it does not become an
-  OpenAPI semantic owner, runtime validator or second contract registry.
-- A pinned OpenAPI 3.1/JSON Schema-capable compiler/validator may be adopted only after a bounded spike
-  proves supported-subset correctness, deterministic output, browser/CSP compatibility and acceptable
-  bundle impact. Unsupported constructs fail generation; `any` or validation omission is forbidden.
-- Generated validation assertions are allowed only inside generated code after successful proof.
-  Handwritten network-boundary assertions are forbidden.
-- Generated files contain no timestamps, random IDs, absolute paths, filesystem-dependent ordering or
-  machine-dependent formatting.
-
-## 7. Acceptance proofs
-
-PAS-2/TC-1 is accepted only when one unchanged exact head proves all applicable items:
-
-1. same contract + compiler version produces byte-identical generated output on repeated runs;
-2. malformed JSON at a declared success status yields `MalformedBodyError`;
-3. valid JSON with the wrong schema yields `ContractDecodeError` and never reaches UI success state;
-4. unexpected `2xx`, wrong content type, missing required body and an undeclared body-bearing response
-   status fail closed;
-5. declared response headers and declared problem bodies are validated;
-6. method, path parameters, query serialization, headers, request body, status and media type are
-   derived from the canonical OpenAPI input;
-7. unsupported OpenAPI construct/dialect/reference and duplicate operation ID fail generation;
-8. raw `fetch` is confined to the concrete HTTP transport; non-HTTP realtime parsing remains governed
-   by its existing strict boundary;
-9. active feature/UI code contains no `requestJson<T>`, response-bound `as T`, manual migrated route
-   literal or direct generated-transport-internal import;
-10. old runtime/generator/checker paths have zero live callers and zero unique current invariants, then
-    are deleted in the owning transaction;
-11. feature ownership, sibling-feature isolation, confidentiality and capability admission remain
-    unchanged;
-12. generated and production-bundle footprint is measured; human-owned authority/compatibility/
-    checker surface is net smaller;
-13. frontend unit/component tests prove malformed success cannot enter UI success state;
-14. existing backend contract/route, security, compatibility, release and cross-component suites pass;
-15. all applicable permanent exact-head CI and protected required contexts are green, `behind_by=0`,
-    reviews/threads are clear, and accepted `main` is reread before FC-6 readiness.
-
-## 8. Stop conditions
-
-Stop `BLOCKED` rather than widening scope when:
-
-- canonical Rust and accepted public contract semantics cannot be reconciled without a governed
-  breaking-version decision;
-- a proposed compiler silently accepts unsupported OpenAPI 3.1/JSON Schema semantics;
-- the change requires a global SDK, registry, DI/plugin framework or duplicated application model;
-- accepted `main` would retain two active frontend transport implementations;
-- predecessor deletion is deferred to an unspecified cleanup phase;
-- generated/bundle growth is unexplained or the simplification ledger is not net positive;
-- the change touches unrelated backend/domain/UI/Cloudflare/Bridge/`opsctl` architecture;
-- staging or production mutation is proposed as part of this repository-only contract correction.
-
-PAS-2/TC-1 ends at executable transport-contract closure. It does not start FC-6, authorize
-production, freeze the final architecture form or create a reusable redesign exception.
+Neither transaction authorizes staging, production, provider mutation, credentials, FC-6 or FC-7.
