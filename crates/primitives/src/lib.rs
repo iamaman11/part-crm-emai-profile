@@ -136,7 +136,8 @@ pub struct ParsePayloadFingerprintError;
 
 impl fmt::Display for ParsePayloadFingerprintError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str("payload fingerprint must be exactly 64 lowercase hexadecimal characters")
+        formatter
+            .write_str("payload fingerprint must be exactly 64 lowercase hexadecimal characters")
     }
 }
 
@@ -282,7 +283,8 @@ mod tests {
     }
 
     #[test]
-    fn payload_fingerprint_is_fixed_lowercase_sha256_hex() -> Result<(), Box<dyn std::error::Error>> {
+    fn payload_fingerprint_is_fixed_lowercase_sha256_hex() -> Result<(), Box<dyn std::error::Error>>
+    {
         let value = "a".repeat(SHA256_HEX_LENGTH);
         let fingerprint = PayloadFingerprint::parse(value.clone())?;
         assert_eq!(fingerprint.as_str(), value);
