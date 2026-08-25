@@ -23,7 +23,7 @@ INSERT INTO browser_mailbox_execution_bind_commands (
 
 const IDEMPOTENCY_CREATE: &str = r#"
 INSERT INTO idempotency_records (
-    tenant_id, actor_id, idempotency_key, command_name, request_digest,
+    tenant_id, actor_id, idempotency_key, command_name, payload_fingerprint,
     result_code, result_reference, created_at_ms, expires_at_ms
 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 "#;
@@ -84,7 +84,7 @@ impl BrowserMailboxExecutionBindingApplicationPort for D1BrowserMailboxExecution
                 actor.actor_id(),
                 evidence.idempotency_key(),
                 command_name,
-                evidence.request_digest(),
+                evidence.payload_fingerprint(),
                 evidence.now(),
             )
             .await
@@ -128,7 +128,7 @@ impl BrowserMailboxExecutionBindingApplicationPort for D1BrowserMailboxExecution
             actor_id,
             evidence.idempotency_key().as_str(),
             "mailbox.browser_execution_bind",
-            evidence.request_digest(),
+            evidence.payload_fingerprint().as_str(),
             "bound",
             write.binding_id().as_str(),
             now,
