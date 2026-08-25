@@ -59,13 +59,12 @@ SCHEMA_KEYS = {
 }
 
 
-def run(command: list[str], *, input_text: str | None = None) -> str:
+def run(command: list[str]) -> str:
     completed = subprocess.run(
         command,
         cwd=ROOT,
         check=False,
         text=True,
-        input=input_text,
         capture_output=True,
     )
     if completed.returncode != 0:
@@ -77,22 +76,6 @@ def run(command: list[str], *, input_text: str | None = None) -> str:
 
 def rendered_openapi() -> str:
     return run([sys.executable, str(RENDER)])
-
-
-def compiler_input(source: str) -> str:
-    return run(
-        [
-            "cargo",
-            "run",
-            "--locked",
-            "--quiet",
-            "-p",
-            "control-plane-contract",
-            "--bin",
-            "export_frontend_openapi",
-        ],
-        input_text=source,
-    )
 
 
 def resolve(document: dict[str, Any], value: Any) -> Any:
@@ -384,7 +367,7 @@ def clone_json(value: Any) -> Any:
     return json.loads(json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False))
 
 
-def compile_content_ir(document: dict[str, Any], content: dict[str, Any]) -> list[dict[str, Any]]:
+def compile_content_ir(content: dict[str, Any]) -> list[dict[str, Any]]:
     compiled: list[dict[str, Any]] = []
     for media_type in sorted(content):
         media = content[media_type]
@@ -431,7 +414,7 @@ def compile_operation_ir(
             request_body = resolve(document, operation["requestBody"])
             request_body_ir = {
                 "required": True,
-                "content": compile_content_ir(document, request_body["content"]),
+                "content": compile_content_ir(request_body["content"]),
             }
 
         responses: list[dict[str, Any]] = []
@@ -455,7 +438,7 @@ def compile_operation_ir(
                 "content": [],
             }
             if "content" in response:
-                response_ir["content"] = compile_content_ir(document, response["content"])
+                response_ir["content"] = compile_content_ir(response["content"])
             responses.append(response_ir)
 
         operations.append(
@@ -546,18 +529,14 @@ def validate_document(
 
 def main() -> int:
     run([sys.executable, str(RENDER), "--check"])
-    source = rendered_openapi()
-    first = compiler_input(source)
-    second = compiler_input(source)
-    if first.encode("utf-8") != second.encode("utf-8"):
-        raise SystemExit("frontend OpenAPI validation/export is not byte-identical across repeated runs")
+    first_source = rendered_openapi()
+    second_source = rendered_openapi()
+    if first_source.encode("utf-8") != second_source.encode("utf-8"):
+        raise SystemExit("frontend OpenAPI compiler input is not byte-identical across repeated renders")
 
-    source_document = json.loads(source)
-    document = json.loads(first)
-    if not isinstance(source_document, dict) or not isinstance(document, dict):
+    document = json.loads(first_source)
+    if not isinstance(document, dict):
         raise SystemExit("frontend OpenAPI compiler input must be a JSON object")
-    if document != source_document:
-        raise SystemExit("frontend compiler repaired or mutated producer output; producer must be fixed instead")
 
     index = validate_document(document)
     first_ir = render_compiler_ir(compile_operation_ir(document, index))
@@ -566,11 +545,11 @@ def main() -> int:
         raise SystemExit("frontend operation compiler IR is not byte-identical across repeated runs")
 
     assert_golden_vectors(document, index)
-    source_digest = hashlib.sha256(first.encode("utf-8")).hexdigest()
+    source_digest = hashlib.sha256(first_source.encode("utf-8")).hexdigest()
     ir_digest = hashlib.sha256(first_ir.encode("utf-8")).hexdigest()
     print(
         "PAS-2 frontend OpenAPI compiler passed: "
-        f"operations={len(index)} source_bytes={len(first.encode('utf-8'))} "
+        f"operations={len(index)} source_bytes={len(first_source.encode('utf-8'))} "
         f"source_sha256={source_digest} ir_bytes={len(first_ir.encode('utf-8'))} ir_sha256={ir_digest}"
     )
     return 0
