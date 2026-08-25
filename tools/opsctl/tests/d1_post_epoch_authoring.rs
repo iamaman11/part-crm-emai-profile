@@ -8,12 +8,12 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-const CATALOG_HISTORICAL_REVISION: &str = "0026_outbound_mail_intents.sql";
-const CATALOG_HISTORICAL_DIGEST: &str =
+const CATALOG_BASELINE_REVISION: &str = "0027_pas2_payload_fingerprint.sql";
+const CATALOG_FROZEN_EPOCH_DIGEST: &str =
     "4d1d8b8d3bba5d0903385d05fc18e0036628ff1123e0e26e9a080a340f7b5e2e";
-const CATALOG_FUTURE_REVISION: &str = "0027_post_epoch_probe.sql";
-const RESOLVER_HISTORICAL_REVISION: &str = "0004_refresh_owner_hmac_version.sql";
-const RESOLVER_HISTORICAL_DIGEST: &str =
+const CATALOG_FUTURE_REVISION: &str = "0028_post_epoch_probe.sql";
+const RESOLVER_BASELINE_REVISION: &str = "0004_refresh_owner_hmac_version.sql";
+const RESOLVER_FROZEN_EPOCH_DIGEST: &str =
     "98fd6f91a839223b06c441df4901dbd4fda8e69f2f90606f00e43faad91877ec";
 const RESOLVER_FUTURE_REVISION: &str = "0005_post_epoch_probe.sql";
 const CANONICAL_ROOT_SENTINELS: &[&str] = &[
@@ -108,24 +108,18 @@ fn copy_directory(source: &Path, target: &Path) -> Result<(), Box<dyn Error>> {
 
 fn patch_future_specs(root: &Path) -> Result<(), Box<dyn Error>> {
     let path = root.join("tools/opsctl/src/d1/catalog.rs");
-    let source = fs::read_to_string(&path)?.replace("\r\n", "\n");
-    let current = r#"    const fn future_migrations(self) -> &'static [MigrationSpec] {
+    let mut source = fs::read_to_string(&path)?.replace("\r\n", "\n");
+
+    let current_future = r#"    const fn future_migrations(self) -> &'static [MigrationSpec] {
         match self {
-            Self::Catalog | Self::Resolver => &[],
+            Self::Catalog => CATALOG_POST_EPOCH_MIGRATIONS,
+            Self::Resolver => &[],
         }
     }
 "#;
-    let future = r#"    const fn future_migrations(self) -> &'static [MigrationSpec] {
+    let patched_future = r#"    const fn future_migrations(self) -> &'static [MigrationSpec] {
         match self {
-            Self::Catalog => &[MigrationSpec {
-                revision: "0027_post_epoch_probe.sql",
-                migration_class: MigrationClass::Expand,
-                rollout_order: RolloutOrder::MigrateBeforeCode,
-                fail_forward_required: false,
-                destructive: false,
-                code_rollback_allowed: true,
-                contract_preconditions: &[],
-            }],
+            Self::Catalog => CATALOG_POST_EPOCH_MIGRATIONS,
             Self::Resolver => &[MigrationSpec {
                 revision: "0005_post_epoch_probe.sql",
                 migration_class: MigrationClass::Expand,
@@ -138,43 +132,74 @@ fn patch_future_specs(root: &Path) -> Result<(), Box<dyn Error>> {
         }
     }
 "#;
-    if source.matches(current).count() != 1 {
-        return Err(
-            "canonical empty future-migration sentinel changed; update the post-epoch proof".into(),
-        );
+    if source.matches(current_future).count() != 1 {
+        return Err("canonical future-migration dispatch changed; update the post-epoch proof".into());
     }
-    fs::write(path, source.replacen(current, future, 1))?;
+    source = source.replacen(current_future, patched_future, 1);
+
+    let current_catalog = r#"const CATALOG_POST_EPOCH_MIGRATIONS: &[MigrationSpec] = &[MigrationSpec {
+    revision: "0027_pas2_payload_fingerprint.sql",
+    migration_class: MigrationClass::Contract,
+    rollout_order: RolloutOrder::SeparateContractRelease,
+    fail_forward_required: true,
+    destructive: true,
+    code_rollback_allowed: false,
+    contract_preconditions: &[
+        "server_owned_payload_fingerprint_active",
+        "request_digest_readers_writers_retired",
+    ],
+}];
+"#;
+    let patched_catalog = r#"const CATALOG_POST_EPOCH_MIGRATIONS: &[MigrationSpec] = &[
+    MigrationSpec {
+        revision: "0027_pas2_payload_fingerprint.sql",
+        migration_class: MigrationClass::Contract,
+        rollout_order: RolloutOrder::SeparateContractRelease,
+        fail_forward_required: true,
+        destructive: true,
+        code_rollback_allowed: false,
+        contract_preconditions: &[
+            "server_owned_payload_fingerprint_active",
+            "request_digest_readers_writers_retired",
+        ],
+    },
+    MigrationSpec {
+        revision: "0028_post_epoch_probe.sql",
+        migration_class: MigrationClass::Expand,
+        rollout_order: RolloutOrder::MigrateBeforeCode,
+        fail_forward_required: false,
+        destructive: false,
+        code_rollback_allowed: true,
+        contract_preconditions: &[],
+    },
+];
+"#;
+    if source.matches(current_catalog).count() != 1 {
+        return Err("canonical Catalog post-epoch policy changed; update the authoring proof".into());
+    }
+    source = source.replacen(current_catalog, patched_catalog, 1);
+    fs::write(path, source)?;
     Ok(())
 }
 
 fn install_future_sql(root: &Path) -> Result<(), Box<dyn Error>> {
     let source = repo_root();
-    copy_file(
-        &source,
-        root,
-        "tests/d1-evolution/post-epoch/catalog/0027_post_epoch_probe.sql",
+    fs::copy(
+        source.join("tests/d1-evolution/post-epoch/catalog/0027_post_epoch_probe.sql"),
+        root.join("migrations/d1/0028_post_epoch_probe.sql"),
     )?;
-    copy_file(
-        &source,
-        root,
-        "tests/d1-evolution/post-epoch/resolver/0005_post_epoch_probe.sql",
-    )?;
-    fs::rename(
-        root.join("tests/d1-evolution/post-epoch/catalog/0027_post_epoch_probe.sql"),
-        root.join("migrations/d1/0027_post_epoch_probe.sql"),
-    )?;
-    fs::rename(
-        root.join("tests/d1-evolution/post-epoch/resolver/0005_post_epoch_probe.sql"),
+    fs::copy(
+        source.join("tests/d1-evolution/post-epoch/resolver/0005_post_epoch_probe.sql"),
         root.join("migrations/resolver-d1/0005_post_epoch_probe.sql"),
     )?;
     Ok(())
 }
 
-fn historical_names(
+fn baseline_names(
     root: &Path,
     migration_root: &str,
     future_revision: &str,
-    historical_revision: &str,
+    baseline_revision: &str,
 ) -> Result<Vec<String>, Box<dyn Error>> {
     let mut names = fs::read_dir(root.join(migration_root))?
         .map(|entry| {
@@ -187,9 +212,9 @@ fn historical_names(
         .collect::<Result<Vec<_>, _>>()?;
     names.retain(|name| name != future_revision);
     names.sort();
-    if names.last().map(String::as_str) != Some(historical_revision) {
+    if names.last().map(String::as_str) != Some(baseline_revision) {
         return Err(format!(
-            "historical revision changed for {migration_root}; update the post-epoch proof"
+            "baseline revision changed for {migration_root}; update the post-epoch proof"
         )
         .into());
     }
@@ -253,9 +278,10 @@ fn component<'a>(projection: &'a Value, id: &str) -> Result<&'a Value, Box<dyn E
 struct FutureCase {
     component: &'static str,
     migration_root: &'static str,
-    historical_revision: &'static str,
-    historical_digest: &'static str,
+    baseline_revision: &'static str,
+    frozen_epoch_digest: &'static str,
     future_revision: &'static str,
+    expected_post_epoch_count: u64,
 }
 
 fn prove_future_case(
@@ -263,20 +289,23 @@ fn prove_future_case(
     projection: &Value,
     case: &FutureCase,
 ) -> Result<(), Box<dyn Error>> {
-    let historical = historical_names(
+    let baseline = baseline_names(
         root,
         case.migration_root,
         case.future_revision,
-        case.historical_revision,
+        case.baseline_revision,
     )?;
     let projected = component(projection, case.component)?;
-    assert_eq!(projected["migration_count"], historical.len() + 1);
-    assert_eq!(projected["post_epoch_migration_count"], 1);
+    assert_eq!(projected["migration_count"], baseline.len() + 1);
+    assert_eq!(
+        projected["post_epoch_migration_count"],
+        case.expected_post_epoch_count
+    );
     assert_eq!(
         projected["current_repository_revision"],
         case.future_revision
     );
-    assert_ne!(projected["history_digest"], case.historical_digest);
+    assert_ne!(projected["history_digest"], case.frozen_epoch_digest);
 
     let target_contract = projected["release_schema_contract"].clone();
     assert_eq!(
@@ -293,9 +322,9 @@ fn prove_future_case(
     );
 
     let mut current_contract = target_contract.clone();
-    current_contract["target_schema_revision"] = json!(case.historical_revision);
-    current_contract["supported_schema_min"] = json!(case.historical_revision);
-    current_contract["supported_schema_max"] = json!(case.historical_revision);
+    current_contract["target_schema_revision"] = json!(case.baseline_revision);
+    current_contract["supported_schema_min"] = json!(case.baseline_revision);
+    current_contract["supported_schema_max"] = json!(case.baseline_revision);
 
     let mut known_good_contract = current_contract.clone();
     known_good_contract["supported_schema_max"] = json!(case.future_revision);
@@ -309,9 +338,9 @@ fn prove_future_case(
     write_manifest(&root.join(&target_manifest), target_contract)?;
     write_manifest(&root.join(&current_manifest), current_contract)?;
     write_manifest(&root.join(&known_good_manifest), known_good_contract)?;
-    write_ledger(&root.join(&before_ledger), &historical)?;
+    write_ledger(&root.join(&before_ledger), &baseline)?;
 
-    let mut after = historical.clone();
+    let mut after = baseline.clone();
     after.push(case.future_revision.to_owned());
     write_ledger(&root.join(&after_ledger), &after)?;
 
@@ -392,7 +421,7 @@ fn prove_future_case(
 }
 
 #[test]
-fn first_post_epoch_catalog_and_resolver_migrations_run_through_real_authoring_path()
+fn next_catalog_and_first_resolver_migrations_run_through_real_authoring_path()
 -> Result<(), Box<dyn Error>> {
     let repository = TempRepository::from_current()?;
     let root = repository.root();
@@ -408,35 +437,44 @@ fn first_post_epoch_catalog_and_resolver_migrations_run_through_real_authoring_p
         FutureCase {
             component: "catalog",
             migration_root: "migrations/d1",
-            historical_revision: CATALOG_HISTORICAL_REVISION,
-            historical_digest: CATALOG_HISTORICAL_DIGEST,
+            baseline_revision: CATALOG_BASELINE_REVISION,
+            frozen_epoch_digest: CATALOG_FROZEN_EPOCH_DIGEST,
             future_revision: CATALOG_FUTURE_REVISION,
+            expected_post_epoch_count: 2,
         },
         FutureCase {
             component: "resolver",
             migration_root: "migrations/resolver-d1",
-            historical_revision: RESOLVER_HISTORICAL_REVISION,
-            historical_digest: RESOLVER_HISTORICAL_DIGEST,
+            baseline_revision: RESOLVER_BASELINE_REVISION,
+            frozen_epoch_digest: RESOLVER_FROZEN_EPOCH_DIGEST,
             future_revision: RESOLVER_FUTURE_REVISION,
+            expected_post_epoch_count: 1,
         },
     ] {
         prove_future_case(root, &first_projection, &case)?;
     }
 
     let canonical_projection: Value = serde_json::from_str(&repository_projection(&repo_root())?)?;
+    let canonical_catalog = component(&canonical_projection, "catalog")?;
+    assert_eq!(canonical_catalog["migration_count"], 27);
+    assert_eq!(canonical_catalog["post_epoch_migration_count"], 1);
     assert_eq!(
-        component(&canonical_projection, "catalog")?["post_epoch_migration_count"],
-        0
+        canonical_catalog["current_repository_revision"],
+        CATALOG_BASELINE_REVISION
     );
+    let canonical_resolver = component(&canonical_projection, "resolver")?;
+    assert_eq!(canonical_resolver["migration_count"], 4);
+    assert_eq!(canonical_resolver["post_epoch_migration_count"], 0);
     assert_eq!(
-        component(&canonical_projection, "resolver")?["post_epoch_migration_count"],
-        0
+        canonical_resolver["current_repository_revision"],
+        RESOLVER_BASELINE_REVISION
     );
     assert!(
-        !repo_root()
-            .join("migrations/d1/0027_post_epoch_probe.sql")
-            .exists()
+        repo_root()
+            .join("migrations/d1/0027_pas2_payload_fingerprint.sql")
+            .is_file()
     );
+    assert!(!repo_root().join("migrations/d1/0028_post_epoch_probe.sql").exists());
     assert!(
         !repo_root()
             .join("migrations/resolver-d1/0005_post_epoch_probe.sql")
