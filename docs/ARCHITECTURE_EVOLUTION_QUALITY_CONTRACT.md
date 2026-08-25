@@ -9,6 +9,7 @@
 **Pre-PF-1 normalization:** `docs/PRE_PF1_AUTHORITY_ESTATE_NORMALIZATION.md`  
 **PF-1:** `docs/PF1_CANONICAL_ARCHITECTURE_INVENTORY_CUTOVER.md`  
 **PF-3:** `docs/PF3_ARCHITECTURE_FITNESS_BASELINE.md`  
+**PAS-2 frontend transport:** `docs/PAS2_FRONTEND_TRANSPORT_CONTRACT_CLOSURE.md`
 **Production authorization:** NONE
 
 This contract records permanent prospective architecture/development rules. It is not a second roadmap, lifecycle authority, capability registry, architecture inventory or generic framework specification.
@@ -328,6 +329,35 @@ Keep I/O/decode/contract/policy-decision/infrastructure errors distinct. A seman
 
 Machine stdout contracts are versioned; stderr is diagnostics.
 
+## 14.1 Browser executable transport boundary
+
+The frontend consumes browser HTTP through one executable contract chain:
+
+```text
+capability-owned Rust contract semantics
+-> deterministic canonical OpenAPI 3.1 wire artifact
+-> generated capability-grouped leaf operations + runtime validators
+-> effect-only HTTP transport
+-> feature-owned adapter
+-> application/UI
+```
+
+OpenAPI is the only frontend compiler input, not a second manually maintained semantic owner. Compiler
+IR is ephemeral. Generated operations own method/path/parameter/body encoding and exact declared
+status/media-type/header/body decoding. The shared transport owns only network effects, abort/timeout,
+credentials plumbing and bounded raw bytes.
+
+No successful or declared-error payload crosses into feature/application code without runtime proof.
+Unexpected `2xx`, malformed JSON, wrong content type, missing required body, invalid declared error body
+and schema mismatch fail at the operation boundary. Production validation may not be disabled.
+
+Do not create a global SDK/application-service layer, handwritten Zod/schema mirror, operation registry,
+generic retry policy, Protobuf browser island or second digest lineage. Feature adapters retain product
+semantics and add separate frontend models only where a real frontend invariant requires them.
+
+The current demonstrated PAS-2 defect is governed by
+`docs/PAS2_FRONTEND_TRANSPORT_CONTRACT_CLOSURE.md`; that contract authorizes no unrelated redesign.
+
 ## 15. Canonical external JSON and digest discipline
 
 Use the accepted F2 canonical external JSON/digest foundation where content addressing/attestation requires semantic identity.
@@ -421,7 +451,7 @@ compatibility shim without proved consumer/durable obligation = 0
 manual AR-qualified application ownership registry current authority = 0
 ```
 
-Accepted PF-3 is the Architecture Re-baseline v3 **provisional fitness baseline**. After it, FC/AR work may not introduce a new generic architecture layer, global authority/registry, duplicate lifecycle/evidence/fitness engine or speculative compatibility framework. A concrete failed product acceptance scenario or rehearsal may justify only the smallest bounded correction; the same transaction must identify the scenario, preserve one natural owner, update anti-weakening enforcement and avoid a parallel compatibility surface.
+Accepted PF-3 is the Architecture Re-baseline v3 **provisional fitness baseline**. After it, FC/AR work may not introduce a new generic architecture layer, global authority/registry, duplicate lifecycle/evidence/fitness engine or speculative compatibility framework. The demonstrated PAS-2 browser type-forgery/split-operation-ownership defect authorizes only PAS-2/TC-1 before FC-6. Any other concrete failed product acceptance scenario or rehearsal may justify only the smallest bounded correction; the same transaction must identify the scenario, preserve one natural owner, update anti-weakening enforcement and avoid a parallel compatibility surface.
 
 Final architecture-form freeze occurs after accepted AR-15 proves the real Windows delivery/updater/recovery scenarios. PF-3 and AR-15 do **not** set `architecture_complete=true` or authorize production. AR-16 remains audit-only and AR-17 qualification/authorization-only. A genuine post-AR-15 material architecture change requires the explicit governed architecture-change/anti-weakening path rather than being hidden inside a roadmap phase.
 

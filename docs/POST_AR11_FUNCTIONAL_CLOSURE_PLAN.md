@@ -21,14 +21,17 @@ F1/F2 ACCEPTED
 -> PF-1 ACCEPTED (#466)
 -> PF-2 ACCEPTED + semantic-authority correction #477 + raw-provider-observation correction #480 ACCEPTED (#471 provenance)
 -> PF-3 ACCEPTED provisional + truthfulness correction ACCEPTED (#478 / #431)
--> current-state documentation convergence
+-> staging-baseline adoption ACCEPTED under temporary #486 authority
+-> temporary adoption mechanism removed (#487)
+-> fresh audit recorded FC-6 READY TO BEGIN / NOT STARTED
+-> PAS-2/TC-1 executable frontend transport contract closure
 -> final read-only readiness audit
--> FC-6 NEXT PERMITTED / NOT STARTED BY THIS TRANSACTION
+-> FC-6 BLOCKED UNTIL FRESH READINESS + SEPARATE INSTRUCTION / NOT STARTED
 -> FC-7 closeout
 -> AR-12 implementation entry
 ```
 
-A historical read-only FC-6 re-baseline found a Release Set v2/v3 rehearsal-verifier mismatch; #476 corrected that repository-only verifier and performed no staging mutation. PF-2/PF-3 were subsequently corrected, with #480 completing PF-2 raw-provider-observation convergence. FC-6 may not resume from historical observations or prerequisite proof. A new FC-6 execution begins only after a separate explicit instruction and a fresh read-only re-baseline.
+A historical read-only FC-6 re-baseline found a Release Set v2/v3 rehearsal-verifier mismatch; #476 corrected that repository-only verifier and performed no staging mutation. PF-2/PF-3 were subsequently corrected, with #480 completing PF-2 raw-provider-observation convergence. Staging-baseline adoption then completed under temporary #486 authority, #487 removed that mechanism, and the fresh tracker audit recorded `FC-6 READY TO BEGIN / NOT STARTED`. The subsequently demonstrated PAS-2/TC-1 defect must now be removed before readiness is decided again. FC-6 may not resume from historical observations or prerequisite proof. A new FC-6 execution begins only after accepted PAS-2/TC-1, a separate explicit instruction and a fresh read-only re-baseline.
 
 ## 2. Functional Closure guarantees
 
@@ -59,6 +62,12 @@ Current target and known-good identities are always observed fresh at FC-6 execu
 `NONE` is valid only when the provider observation proves that no deployment exists. A live deployment without exactly one supported Release Set/profile annotation is `UNKNOWN`/`BLOCKED`; secret-triggered or legacy deployments must never be relabelled, guessed or treated as a clean environment.
 
 ## 4. FC-6 — one typed staging ceremony
+
+FC-6 entry additionally requires accepted PAS-2/TC-1. The current browser path can otherwise accept a
+successful JSON representation as a caller-selected TypeScript type without runtime proof and manually
+duplicates operation metadata in feature adapters. That contradicts the PAS-2 stable-validation proof
+assigned to Functional Closure. The bounded correction is owned by
+`docs/PAS2_FRONTEND_TRANSPORT_CONTRACT_CLOSURE.md`; it authorizes no FC-6 or provider mutation.
 
 FC-6 starts with a read-only preflight that is the fresh #399/#421 re-baseline:
 
@@ -119,6 +128,7 @@ Exact-head CI/review/guarded-merge rules are owned by `docs/ARCHITECTURE_ACCEPTA
 ## 7. Post-FC semantics
 
 ```text
+PAS-2/TC-1 = executable frontend transport closure; bounded pre-FC-6 correction only
 FC-6 / FC-7 = proof and closeout; no generic redesign
 AR-12 = fresh-environment rehearsal
 AR-13 = rotation rehearsal: account/service-owned short-lived automation identity where supported; GitHub App short-lived tokens instead of durable PAT authority; observation/deploy, Access, R2, OAuth and runtime-key overlap/cutover/retirement; remove obsolete bundle/bootstrap bindings only after verified successors
@@ -131,4 +141,7 @@ PC-1  = first Production Core release
 
 Production remains fail-closed until its owning gates explicitly authorize it.
 
-Canonical references: `docs/ARCHITECTURE_REBASELINE_V3_PLAN.md`, `docs/ARCHITECTURE_EVOLUTION_QUALITY_CONTRACT.md`, #399, #421, #431/#478, #471/#477/#480.
+Canonical references: `docs/ARCHITECTURE_REBASELINE_V3_PLAN.md`,
+`docs/ARCHITECTURE_EVOLUTION_QUALITY_CONTRACT.md`,
+`docs/PAS2_FRONTEND_TRANSPORT_CONTRACT_CLOSURE.md`, #399, #421, #431/#478,
+#471/#477/#480 and #486/#487.
