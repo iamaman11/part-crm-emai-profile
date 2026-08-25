@@ -75,18 +75,13 @@ pub fn openapi_fragment() -> Value {
                     "properties": {
                         "mailboxBindingId": {"type": "string", "minLength": 8, "maxLength": 96},
                         "operation": schema_ref("ClientMailSendOperationDto"),
-                        "sourceProviderReference": {
-                            "type": "string",
-                            "nullable": true,
-                            "minLength": 1,
-                            "maxLength": 512
-                        },
+                        "sourceProviderReference": nullable_string(1, 512),
                         "to": address_array(),
                         "cc": address_array(),
                         "bcc": address_array(),
-                        "subject": {"type": "string", "nullable": true, "maxLength": 998},
-                        "textBody": {"type": "string", "nullable": true, "maxLength": 1048576},
-                        "htmlBody": {"type": "string", "nullable": true, "maxLength": 1048576}
+                        "subject": nullable_string(0, 998),
+                        "textBody": nullable_string(0, 1048576),
+                        "htmlBody": nullable_string(0, 1048576)
                     }
                 },
                 "ClientMailSendStateDto": {
@@ -119,7 +114,13 @@ pub fn openapi_fragment() -> Value {
 fn post_operation() -> Value {
     json!({
         "operationId": "sendClientMail",
-        "parameters": [path_parameter("tenantId"), path_parameter("clientId")],
+        "security": [{"cloudflareAccessJwt": []}],
+        "parameters": [
+            path_parameter("tenantId"),
+            path_parameter("clientId"),
+            component_parameter("CorrelationHeader"),
+            component_parameter("IdempotencyHeader")
+        ],
         "requestBody": {
             "required": true,
             "content": {
@@ -155,6 +156,19 @@ fn path_parameter(name: &str) -> Value {
     })
 }
 
+fn component_parameter(name: &str) -> Value {
+    json!({"$ref": format!("#/components/parameters/{name}")})
+}
+
+fn nullable_string(min_length: u64, max_length: u64) -> Value {
+    json!({
+        "oneOf": [
+            {"type": "string", "minLength": min_length, "maxLength": max_length},
+            {"type": "null"}
+        ]
+    })
+}
+
 fn address_array() -> Value {
     json!({
         "type": "array",
@@ -170,7 +184,7 @@ fn schema_ref(name: &str) -> Value {
 fn problem_response(description: &str) -> Value {
     json!({
         "description": description,
-        "content": {"application/problem+json": {"schema": {"type": "object"}}}
+        "content": {"application/problem+json": {"schema": schema_ref("Problem")}}
     })
 }
 
@@ -199,17 +213,25 @@ mod tests {
     }
 
     #[test]
-    fn send_contract_keeps_message_content_out_of_url_parameters()
+    fn send_contract_has_governed_idempotent_browser_semantics()
     -> Result<(), Box<dyn std::error::Error>> {
         let document = openapi_fragment();
         let operation =
             &document["paths"]["/api/v1/tenants/{tenantId}/clients/{clientId}/mail/send"]["post"];
         let Some(parameters) = operation["parameters"].as_array() else {
-            return Err(std::io::Error::other("path parameters missing").into());
+            return Err(std::io::Error::other("operation parameters missing").into());
         };
-        assert_eq!(parameters.len(), 2);
-        assert!(parameters.iter().all(|parameter| parameter["in"] == "path"));
+        assert_eq!(parameters.len(), 4);
+        assert_eq!(operation["security"][0]["cloudflareAccessJwt"], json!([]));
+        assert_eq!(
+            parameters[3]["$ref"],
+            "#/components/parameters/IdempotencyHeader"
+        );
         assert!(operation["requestBody"].is_object());
+        assert_eq!(
+            operation["responses"]["409"]["content"]["application/problem+json"]["schema"]["$ref"],
+            "#/components/schemas/Problem"
+        );
         Ok(())
     }
 }
