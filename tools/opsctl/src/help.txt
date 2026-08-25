@@ -35,6 +35,8 @@ COMMANDS:
     promotion plan             Build a deterministic no-mutation transition plan
     promotion preflight        Fail-closed gate before provider credential exposure
     promotion verify           Verify observed state after provider mutation
+    promotion baseline-adoption-preflight
+                               Evaluate one fenced UNKNOWN staging baseline before credential exposure
 
 HOSTED EVIDENCE OPTIONS:
     --observation-json PATH     Secret-free strict observation DTO; operational-credential seal or external-review-attestation verify
@@ -71,6 +73,13 @@ PROMOTION OPTIONS:
     --current-release-set PATH  Optional current Release Set
     --known-good-release-set PATH  Rollback candidate for preflight
     --expected-current ID       Stale-plan fence (use NONE for fresh state)
+    --baseline-adoption-observation PATH
+                               Strict metadata-only UNKNOWN legacy deployment observation
+    --expected-account-id ID    Exact staging account fence for baseline adoption
+    --expected-deployment-id ID Exact legacy deployment fence for baseline adoption
+    --expected-version-id ID    Exact legacy Worker version/rollback fence for baseline adoption
+    --request-id ID             Bounded operator request identifier for baseline adoption
+    --confirmation TEXT         `<release>:<deployment>:<version>:<request>` for baseline adoption
 
 GLOBAL OPTIONS:
     --root PATH  Explicit current policy repository root
