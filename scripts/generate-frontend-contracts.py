@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Generate canonical OpenAPI fragments from capability-owned Rust contracts.
+"""Regenerate Rust-owned canonical OpenAPI fragments.
 
 PAS-2 Transaction B deliberately removes the historical Rust -> TypeScript schema projection.
 Canonical OpenAPI is the sole frontend compiler input; TypeScript runtime operations are generated
-separately from the validated composed OpenAPI document.
+separately from the validated composed OpenAPI document. Fragments whose authority has moved directly
+to canonical OpenAPI are intentionally not regenerated from retired Rust OpenAPI builders here.
 """
 
 from __future__ import annotations
@@ -20,7 +21,6 @@ ROOT = Path(__file__).resolve().parents[1]
 CLIENT_REGISTRY_OPENAPI_PATH = ROOT / "openapi" / "v1" / "fragments" / "client-registry.json"
 QUERY_MAIL_OPENAPI_PATH = ROOT / "openapi" / "v1" / "fragments" / "query-mail.json"
 OPERATOR_QUERY_OPENAPI_PATH = ROOT / "openapi" / "v1" / "fragments" / "operator-query.json"
-CLIENT_MAIL_SEND_OPENAPI_PATH = ROOT / "openapi" / "v1" / "fragments" / "client-mail-send.json"
 
 
 def run_export(bin_name: str, *arguments: str) -> dict[str, Any]:
@@ -102,7 +102,6 @@ def main() -> int:
     compatibility_registry = run_export("export_client_registry", "compatibility")
     query_mail = run_export("export_query_mail")
     operator_query = run_export("export_operator_query")
-    client_mail_send = run_export("export_client_mail_send")
 
     results = [
         check_or_write(
@@ -112,7 +111,6 @@ def main() -> int:
         ),
         check_or_write(QUERY_MAIL_OPENAPI_PATH, compact_json(query_mail), args.check),
         check_or_write(OPERATOR_QUERY_OPENAPI_PATH, compact_json(operator_query), args.check),
-        check_or_write(CLIENT_MAIL_SEND_OPENAPI_PATH, compact_json(client_mail_send), args.check),
     ]
     if not all(results):
         return 1
