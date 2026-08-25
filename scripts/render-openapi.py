@@ -24,15 +24,34 @@ def load_checker() -> ModuleType:
     return module
 
 
+def render(checker: ModuleType, root: Path) -> str:
+    document, _root_path = checker.load_openapi_tree(root)
+    return json.dumps(document, indent=2, ensure_ascii=False) + "\n"
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--root", type=Path, default=ROOT)
     parser.add_argument("--output", type=Path)
+    parser.add_argument(
+        "--check",
+        action="store_true",
+        help="prove repeated canonical composition is byte-identical without writing output",
+    )
     args = parser.parse_args()
 
+    if args.check and args.output is not None:
+        parser.error("--check and --output are mutually exclusive")
+
     checker = load_checker()
-    document, _root_path = checker.load_openapi_tree(args.root)
-    rendered = json.dumps(document, indent=2, ensure_ascii=False) + "\n"
+    rendered = render(checker, args.root)
+    if args.check:
+        repeated = render(checker, args.root)
+        if rendered.encode("utf-8") != repeated.encode("utf-8"):
+            raise SystemExit("canonical OpenAPI render is not byte-identical across repeated composition")
+        print("Canonical OpenAPI render is deterministic and current")
+        return 0
+
     if args.output is None:
         print(rendered, end="")
     else:
