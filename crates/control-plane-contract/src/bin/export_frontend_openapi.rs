@@ -12,7 +12,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     io::stdin().read_to_string(&mut input)?;
     let value: serde_json::Value = serde_json::from_str(&input)?;
 
-    frontend_transport::validate_compiler_input(&value)?;
+    if let Err(error) = frontend_transport::validate_compiler_input(&value) {
+        eprintln!("Error: {error}");
+        std::process::exit(1);
+    }
 
     let mut rendered = serde_json::to_string_pretty(&value)?;
     rendered.push('\n');
