@@ -23,7 +23,6 @@ import type {
   RevokeMailboxBindingRequest,
   RunMailboxJobRequest,
 } from '../../shared/api/generated/operations';
-import { newIdempotencyKey } from '../../shared/api/idempotency';
 
 export type CreateMailboxBindingInput = CreateMailboxBindingRequest;
 export type RevokeMailboxBindingInput = RevokeMailboxBindingRequest;
@@ -85,11 +84,12 @@ export function getMailboxBinding(
 export function createMailboxBinding(
   tenantId: string,
   input: CreateMailboxBindingInput,
+  idempotencyKey: string,
 ): Promise<MutationReceipt> {
   return createMailboxBindingOperation({
     tenantId,
     body: input,
-    idempotencyKey: newIdempotencyKey(),
+    idempotencyKey,
   });
 }
 
@@ -97,12 +97,13 @@ export function revokeMailboxBinding(
   tenantId: string,
   bindingId: string,
   expectedBindingVersion: number,
+  idempotencyKey: string,
 ): Promise<MutationReceipt> {
   return revokeMailboxBindingOperation({
     tenantId,
     bindingId,
     body: { expectedBindingVersion },
-    idempotencyKey: newIdempotencyKey(),
+    idempotencyKey,
   });
 }
 
@@ -117,12 +118,13 @@ export function changeMailboxClientAssociation(
   tenantId: string,
   bindingId: string,
   input: ChangeMailboxClientAssociationInput,
+  idempotencyKey: string,
 ): Promise<MailboxClientAssociationMutationReceipt> {
   return changeMailboxClientAssociationOperation({
     tenantId,
     bindingId,
     body: input,
-    idempotencyKey: newIdempotencyKey(),
+    idempotencyKey,
   });
 }
 
@@ -138,12 +140,13 @@ export function createMailboxJob(
   tenantId: string,
   bindingId: string,
   input: CreateMailboxJobInput,
+  idempotencyKey: string,
 ): Promise<MutationReceipt> {
   return createMailboxJobOperation({
     tenantId,
     bindingId,
     body: input,
-    idempotencyKey: newIdempotencyKey(),
+    idempotencyKey,
   });
 }
 
@@ -152,12 +155,13 @@ export function runMailboxJob(
   bindingId: string,
   jobId: string,
   expectedJobVersion: number,
+  idempotencyKey: string,
 ): Promise<MutationReceipt> {
   return runMailboxJobOperation({
     tenantId,
     bindingId,
     jobId,
     body: { expectedJobVersion },
-    idempotencyKey: newIdempotencyKey(),
+    idempotencyKey,
   });
 }

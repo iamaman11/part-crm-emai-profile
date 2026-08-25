@@ -7,38 +7,40 @@ import {
   updateMembershipStatus as updateMembershipStatusOperation,
 } from '../../shared/api/generated/operations';
 import type { MemberListPageDto } from '../../shared/api/generated/operations';
-import { newIdempotencyKey } from '../../shared/api/idempotency';
 
 export function bootstrapOwner(
   tenantId: string,
   input: { actorId: string; identityId: string; tenantDisplayName: string },
+  idempotencyKey: string,
 ) {
   return bootstrapTenantOwnerOperation({
     tenantId,
     body: input,
-    idempotencyKey: newIdempotencyKey(),
+    idempotencyKey,
   });
 }
 
 export function transferOwner(
   tenantId: string,
   input: { nextOwnerActorId: string; currentOwnerVersion: number; nextOwnerVersion: number },
+  idempotencyKey: string,
 ) {
   return transferTenantOwnerOperation({
     tenantId,
     body: input,
-    idempotencyKey: newIdempotencyKey(),
+    idempotencyKey,
   });
 }
 
 export function createInvitation(
   tenantId: string,
   input: { invitationId: string; invitedContactHmac: string; expiresAtMs: number; expectedTenantVersion: number },
+  idempotencyKey: string,
 ) {
   return createTenantInvitationOperation({
     tenantId,
     body: input,
-    idempotencyKey: newIdempotencyKey(),
+    idempotencyKey,
   });
 }
 
@@ -46,12 +48,13 @@ export function acceptInvitation(
   tenantId: string,
   invitationId: string,
   input: { identityId: string; actorId: string },
+  idempotencyKey: string,
 ) {
   return acceptTenantInvitationOperation({
     tenantId,
     invitationId,
     body: input,
-    idempotencyKey: newIdempotencyKey(),
+    idempotencyKey,
   });
 }
 
@@ -73,11 +76,12 @@ export function updateMembershipStatus(
   tenantId: string,
   actorId: string,
   input: { status: 'ACTIVE' | 'SUSPENDED' | 'REVOKED'; expectedVersion: number },
+  idempotencyKey: string,
 ) {
   return updateMembershipStatusOperation({
     tenantId,
     actorId,
     body: input,
-    idempotencyKey: newIdempotencyKey(),
+    idempotencyKey,
   });
 }

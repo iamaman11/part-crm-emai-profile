@@ -20,6 +20,7 @@ import type {
 } from './api';
 import { ConfirmAction } from '../../shared/ui/ConfirmAction';
 import { StatusMessage } from '../../shared/ui/StatusMessage';
+import { useLogicalCommandMutation } from '../../shared/ui/useLogicalCommandMutation';
 
 function field(data: FormData, name: string): string {
   return String(data.get(name) ?? '').trim();
@@ -53,34 +54,25 @@ export function MailboxesWorkspace() {
       setOverviewCursor(data.nextCursor);
     },
   });
-  const bindingCreate = useMutation({
-    mutationFn: (input: { bindingId: string; provider: 'GMAIL_API' | 'IMAP' | 'BROWSER_FALLBACK'; secretHandle: string }) => createMailboxBinding(tenantId, input),
-  });
-  const bindingRevoke = useMutation({
-    mutationFn: (version: number) => revokeMailboxBinding(tenantId, bindingId, version),
-  });
-  const associationChange = useMutation({
-    mutationFn: (input: { bindingId: string; clientId: string | null; expectedRelationshipVersion: number }) =>
+  const bindingCreate = useLogicalCommandMutation((input: { bindingId: string; provider: 'GMAIL_API' | 'IMAP' | 'BROWSER_FALLBACK'; secretHandle: string }, idempotencyKey) => createMailboxBinding(tenantId, input, idempotencyKey));
+  const bindingRevoke = useLogicalCommandMutation((version: number, idempotencyKey) => revokeMailboxBinding(tenantId, bindingId, version, idempotencyKey));
+  const associationChange = useLogicalCommandMutation((input: { bindingId: string; clientId: string | null; expectedRelationshipVersion: number }, idempotencyKey) =>
       changeMailboxClientAssociation(tenantId, input.bindingId, {
         clientId: input.clientId,
         expectedRelationshipVersion: input.expectedRelationshipVersion,
-      }),
-    onSuccess: (_data, variables) => {
-      associationLookup.mutate(variables.bindingId);
+      }, idempotencyKey), {
+    onSuccess: (_data, input) => {
+      associationLookup.mutate(input.bindingId);
       relationshipOverview.mutate(null);
     },
-    onError: (_error, variables) => associationLookup.mutate(variables.bindingId),
+    onError: (_error, input) => associationLookup.mutate(input.bindingId),
   });
   const jobLookup = useMutation({
     mutationFn: (input: { bindingId: string; jobId: string }) => getMailboxJob(tenantId, input.bindingId, input.jobId),
     onSuccess: (data) => setJob(data ?? null),
   });
-  const jobCreate = useMutation({
-    mutationFn: (input: { jobId: string; cursor: string | null; delayMs: number; maxAttempts: number }) => createMailboxJob(tenantId, bindingId, input),
-  });
-  const jobRun = useMutation({
-    mutationFn: (version: number) => runMailboxJob(tenantId, bindingId, jobId, version),
-  });
+  const jobCreate = useLogicalCommandMutation((input: { jobId: string; cursor: string | null; delayMs: number; maxAttempts: number }, idempotencyKey) => createMailboxJob(tenantId, bindingId, input, idempotencyKey));
+  const jobRun = useLogicalCommandMutation((version: number, idempotencyKey) => runMailboxJob(tenantId, bindingId, jobId, version, idempotencyKey));
 
   const enabled = tenantId.length > 0;
   const bindingLoaded = enabled && bindingId.length > 0;

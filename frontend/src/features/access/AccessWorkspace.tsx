@@ -1,9 +1,9 @@
-import { useMutation } from '@tanstack/react-query';
 import { type FormEvent } from 'react';
 import { useTenant } from '../../app/TenantContext';
 import { acceptInvitation, createInvitation, transferOwner, updateMembershipStatus } from './api';
 import { ConfirmAction } from '../../shared/ui/ConfirmAction';
 import { StatusMessage } from '../../shared/ui/StatusMessage';
+import { useLogicalCommandMutation } from '../../shared/ui/useLogicalCommandMutation';
 
 function field(data: FormData, name: string): string {
   return String(data.get(name) ?? '').trim();
@@ -11,10 +11,10 @@ function field(data: FormData, name: string): string {
 
 export function AccessWorkspace() {
   const { tenantId } = useTenant();
-  const invitation = useMutation({ mutationFn: (input: { invitationId: string; invitedContactHmac: string; expiresAtMs: number; expectedTenantVersion: number }) => createInvitation(tenantId, input) });
-  const accept = useMutation({ mutationFn: (input: { invitationId: string; identityId: string; actorId: string }) => acceptInvitation(tenantId, input.invitationId, { identityId: input.identityId, actorId: input.actorId }) });
-  const membership = useMutation({ mutationFn: (input: { actorId: string; status: 'ACTIVE' | 'SUSPENDED' | 'REVOKED'; expectedVersion: number }) => updateMembershipStatus(tenantId, input.actorId, { status: input.status, expectedVersion: input.expectedVersion }) });
-  const owner = useMutation({ mutationFn: (input: { nextOwnerActorId: string; currentOwnerVersion: number; nextOwnerVersion: number }) => transferOwner(tenantId, input) });
+  const invitation = useLogicalCommandMutation((input: { invitationId: string; invitedContactHmac: string; expiresAtMs: number; expectedTenantVersion: number }, idempotencyKey) => createInvitation(tenantId, input, idempotencyKey));
+  const accept = useLogicalCommandMutation((input: { invitationId: string; identityId: string; actorId: string }, idempotencyKey) => acceptInvitation(tenantId, input.invitationId, { identityId: input.identityId, actorId: input.actorId }, idempotencyKey));
+  const membership = useLogicalCommandMutation((input: { actorId: string; status: 'ACTIVE' | 'SUSPENDED' | 'REVOKED'; expectedVersion: number }, idempotencyKey) => updateMembershipStatus(tenantId, input.actorId, { status: input.status, expectedVersion: input.expectedVersion }, idempotencyKey));
+  const owner = useLogicalCommandMutation((input: { nextOwnerActorId: string; currentOwnerVersion: number; nextOwnerVersion: number }, idempotencyKey) => transferOwner(tenantId, input, idempotencyKey));
   const enabled = tenantId.length > 0;
 
   return (

@@ -1,4 +1,3 @@
-import { useMutation } from '@tanstack/react-query';
 import { useState, type FormEvent } from 'react';
 import {
   archiveClient,
@@ -10,6 +9,7 @@ import {
 import type { ClientProjection } from './api';
 import { ConfirmAction } from '../../shared/ui/ConfirmAction';
 import { StatusMessage } from '../../shared/ui/StatusMessage';
+import { useLogicalCommandMutation } from '../../shared/ui/useLogicalCommandMutation';
 
 function field(form: FormData, name: string): string {
   return String(form.get(name) ?? '').trim();
@@ -38,45 +38,30 @@ export function ClientMutationPanels({
     targetVersion: 1,
     reason: '',
   });
-  const update = useMutation({
-    mutationFn: (displayName: string) => updateClient(tenantId, client.clientId, {
+  const update = useLogicalCommandMutation((displayName: string, idempotencyKey) => updateClient(tenantId, client.clientId, {
       displayName,
       expectedClientVersion: client.version,
-    }),
-    onSuccess: onMutated,
-  });
-  const archive = useMutation({
-    mutationFn: () => archiveClient(tenantId, client.clientId, {
+    }, idempotencyKey), { onSuccess: onMutated });
+  const archive = useLogicalCommandMutation((_input: undefined, idempotencyKey) => archiveClient(tenantId, client.clientId, {
       expectedClientVersion: client.version,
-    }),
-    onSuccess: onMutated,
-  });
-  const contact = useMutation({
-    mutationFn: (input: { contactPointId: string; kind: ContactKind; value: string }) =>
+    }, idempotencyKey), { onSuccess: onMutated });
+  const contact = useLogicalCommandMutation((input: { contactPointId: string; kind: ContactKind; value: string }, idempotencyKey) =>
       upsertClientContact(tenantId, client.clientId, input.contactPointId, {
         kind: input.kind,
         value: input.value,
         expectedClientVersion: client.version,
-      }),
-    onSuccess: onMutated,
-  });
-  const contactArchive = useMutation({
-    mutationFn: (input: { contactPointId: string; kind: ContactKind }) =>
+      }, idempotencyKey), { onSuccess: onMutated });
+  const contactArchive = useLogicalCommandMutation((input: { contactPointId: string; kind: ContactKind }, idempotencyKey) =>
       archiveClientContact(tenantId, client.clientId, input.contactPointId, {
         kind: input.kind,
         expectedClientVersion: client.version,
-      }),
-    onSuccess: onMutated,
-  });
-  const merge = useMutation({
-    mutationFn: (input: MergeInput) => mergeClient(tenantId, client.clientId, {
+      }, idempotencyKey), { onSuccess: onMutated });
+  const merge = useLogicalCommandMutation((input: MergeInput, idempotencyKey) => mergeClient(tenantId, client.clientId, {
       targetClientId: input.targetClientId,
       expectedSourceVersion: client.version,
       expectedTargetVersion: input.targetVersion,
       reason: input.reason,
-    }),
-    onSuccess: onMutated,
-  });
+    }, idempotencyKey), { onSuccess: onMutated });
 
   const ownerMutationDisabled = client.status !== 'ACTIVE';
   return (
@@ -106,7 +91,7 @@ export function ClientMutationPanels({
           label="archive client"
           consequence="The client becomes inactive. This does not merge the client and does not grant access elsewhere."
           disabled={ownerMutationDisabled || archive.isPending}
-          onConfirm={async () => { await archive.mutateAsync(); }}
+          onConfirm={async () => { await archive.mutateAsync(undefined); }}
         />
         <StatusMessage state={update.error ?? archive.error ?? update.data?.resultCode ?? archive.data?.resultCode ?? null} />
       </section>

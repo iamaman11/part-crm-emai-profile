@@ -167,6 +167,15 @@ def inspect_feature_source(
     source_feature = source_path.relative_to(features_root).parts[0]
     text = source_path.read_text(encoding="utf-8")
 
+    if source_path.name in {"api.ts", "api.tsx"} and "newIdempotencyKey" in text:
+        violations.append(
+            Violation(
+                source_path,
+                "newIdempotencyKey",
+                "feature API must receive application-owned logical-command identity and must not allocate an Idempotency-Key",
+            )
+        )
+
     for specifier in sorted(import_specifiers(text)):
         if specifier.startswith("."):
             candidate = (source_path.parent / specifier).resolve()
@@ -377,6 +386,35 @@ def shared_api_registry_negative_self_test() -> bool:
         return False
 
 
+def feature_adapter_idempotency_negative_self_test() -> bool:
+    with tempfile.TemporaryDirectory(prefix="frontend-feature-idempotency-") as directory:
+        root = Path(directory)
+        frontend = root / "frontend"
+        feature = frontend / "src" / "features" / "clients"
+        shared_api = frontend / "src" / "shared" / "api"
+        app = frontend / "src" / "app"
+        feature.mkdir(parents=True)
+        shared_api.mkdir(parents=True)
+        app.mkdir(parents=True)
+        (frontend / "package.json").write_text("{}\n", encoding="utf-8")
+        (feature / "api.ts").write_text(
+            "import { newIdempotencyKey } from '../../shared/api/idempotency';\n"
+            "export const command = newIdempotencyKey();\n",
+            encoding="utf-8",
+        )
+        (shared_api / "transport.ts").write_text("export const transport = true;\n", encoding="utf-8")
+        (shared_api / "openapi-runtime.ts").write_text("export const runtime = true;\n", encoding="utf-8")
+        (shared_api / "idempotency.ts").write_text("export const idempotency = true;\n", encoding="utf-8")
+        (app / "router.tsx").write_text("export const router = true;\n", encoding="utf-8")
+        violations = scan(root)
+        if any("must not allocate an Idempotency-Key" in item.reason for item in violations):
+            print("feature API idempotency-allocation negative fixture rejected as expected")
+            return True
+        print("feature API idempotency-allocation negative fixture was not rejected", file=sys.stderr)
+        print_violations(root, violations)
+        return False
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--root", type=Path, default=REPO_ROOT)
@@ -403,6 +441,7 @@ def main() -> int:
             ),
             root_route_negative_self_test(),
             shared_api_registry_negative_self_test(),
+            feature_adapter_idempotency_negative_self_test(),
         ]
         return 0 if all(results) else 1
 

@@ -29,7 +29,6 @@ import type {
   RegisterProfileGenerationRequest,
   VerifyProfileGenerationRequest,
 } from '../../shared/api/generated/operations';
-import { newIdempotencyKey } from '../../shared/api/idempotency';
 
 export type CreateProfileInput = ProfileCreateRequest;
 export type AssignProfileInput = AssignmentRequest;
@@ -62,11 +61,11 @@ export function getProfile(tenantId: string, profileId: string): Promise<Profile
   return getProfileMetadataOperation({ tenantId, profileId });
 }
 
-export function createProfile(tenantId: string, profileId: string): Promise<MutationReceipt> {
+export function createProfile(tenantId: string, profileId: string, idempotencyKey: string): Promise<MutationReceipt> {
   return createProfileMetadataOperation({
     tenantId,
     body: { profileId },
-    idempotencyKey: newIdempotencyKey(),
+    idempotencyKey,
   });
 }
 
@@ -74,12 +73,13 @@ export function assignProfile(
   tenantId: string,
   profileId: string,
   input: AssignProfileInput,
+  idempotencyKey: string,
 ): Promise<MutationReceipt> {
   return assignProfileToClientOperation({
     tenantId,
     profileId,
     body: input,
-    idempotencyKey: newIdempotencyKey(),
+    idempotencyKey,
   });
 }
 
@@ -88,6 +88,7 @@ export function setProfileGrant(
   profileId: string,
   actorId: string,
   input: SetProfileGrantInput,
+  idempotencyKey: string,
   revoke = false,
 ): Promise<MutationReceipt | undefined> {
   const command = {
@@ -95,7 +96,7 @@ export function setProfileGrant(
     profileId,
     actorId,
     body: input,
-    idempotencyKey: newIdempotencyKey(),
+    idempotencyKey,
   };
   return revoke ? revokeProfileAccessOperation(command) : grantProfileAccessOperation(command);
 }
@@ -112,12 +113,13 @@ export function registerGeneration(
   tenantId: string,
   profileId: string,
   input: RegisterGenerationInput,
+  idempotencyKey: string,
 ): Promise<MutationReceipt> {
   return registerProfileGenerationOperation({
     tenantId,
     profileId,
     body: input,
-    idempotencyKey: newIdempotencyKey(),
+    idempotencyKey,
   });
 }
 
@@ -126,13 +128,14 @@ export function verifyGeneration(
   profileId: string,
   generationId: string,
   input: VerifyGenerationInput,
+  idempotencyKey: string,
 ): Promise<MutationReceipt> {
   return verifyProfileGenerationOperation({
     tenantId,
     profileId,
     generationId,
     body: input,
-    idempotencyKey: newIdempotencyKey(),
+    idempotencyKey,
   });
 }
 
@@ -142,13 +145,14 @@ export function changeGenerationActivation(
   generationId: string,
   expectedProfileVersion: number,
   activate: boolean,
+  idempotencyKey: string,
 ): Promise<MutationReceipt> {
   const command = {
     tenantId,
     profileId,
     generationId,
     body: { expectedProfileVersion },
-    idempotencyKey: newIdempotencyKey(),
+    idempotencyKey,
   };
   return activate
     ? activateProfileGenerationOperation(command)
@@ -160,13 +164,14 @@ export function quarantineGeneration(
   profileId: string,
   generationId: string,
   expectedGenerationVersion: number,
+  idempotencyKey: string,
 ): Promise<MutationReceipt> {
   return quarantineProfileGenerationOperation({
     tenantId,
     profileId,
     generationId,
     body: { expectedGenerationVersion },
-    idempotencyKey: newIdempotencyKey(),
+    idempotencyKey,
   });
 }
 

@@ -33,7 +33,6 @@ import type {
   MailboxMessageReferenceDto,
   MutationReceipt,
 } from '../../shared/api/generated/operations';
-import { newIdempotencyKey } from '../../shared/api/idempotency';
 
 export type CreateClientInput = ClientCreateRequest;
 export type SetClientGrantInput = ClientGrantRequest;
@@ -77,11 +76,11 @@ export function getClientHistory(
   });
 }
 
-export function createClient(tenantId: string, input: CreateClientInput): Promise<MutationReceipt> {
+export function createClient(tenantId: string, input: CreateClientInput, idempotencyKey: string): Promise<MutationReceipt> {
   return createClientOperation({
     tenantId,
     body: input,
-    idempotencyKey: newIdempotencyKey(),
+    idempotencyKey,
   });
 }
 
@@ -89,12 +88,13 @@ export function updateClient(
   tenantId: string,
   clientId: string,
   input: UpdateClientInput,
+  idempotencyKey: string,
 ): Promise<MutationReceipt> {
   return updateClientOperation({
     tenantId,
     clientId,
     body: input,
-    idempotencyKey: newIdempotencyKey(),
+    idempotencyKey,
   });
 }
 
@@ -102,12 +102,13 @@ export function archiveClient(
   tenantId: string,
   clientId: string,
   input: ArchiveClientInput,
+  idempotencyKey: string,
 ): Promise<MutationReceipt> {
   return archiveClientOperation({
     tenantId,
     clientId,
     body: input,
-    idempotencyKey: newIdempotencyKey(),
+    idempotencyKey,
   });
 }
 
@@ -116,13 +117,14 @@ export function upsertClientContact(
   clientId: string,
   contactPointId: string,
   input: UpsertClientContactInput,
+  idempotencyKey: string,
 ): Promise<MutationReceipt> {
   return upsertClientContactOperation({
     tenantId,
     clientId,
     contactPointId,
     body: input,
-    idempotencyKey: newIdempotencyKey(),
+    idempotencyKey,
   });
 }
 
@@ -131,13 +133,14 @@ export function archiveClientContact(
   clientId: string,
   contactPointId: string,
   input: ArchiveClientContactInput,
+  idempotencyKey: string,
 ): Promise<MutationReceipt> {
   return archiveClientContactOperation({
     tenantId,
     clientId,
     contactPointId,
     body: input,
-    idempotencyKey: newIdempotencyKey(),
+    idempotencyKey,
   });
 }
 
@@ -145,12 +148,13 @@ export function mergeClient(
   tenantId: string,
   sourceClientId: string,
   input: MergeClientInput,
+  idempotencyKey: string,
 ): Promise<MutationReceipt> {
   return mergeClientOperation({
     tenantId,
     clientId: sourceClientId,
     body: input,
-    idempotencyKey: newIdempotencyKey(),
+    idempotencyKey,
   });
 }
 
@@ -159,6 +163,7 @@ export function setClientGrant(
   clientId: string,
   actorId: string,
   input: SetClientGrantInput,
+  idempotencyKey: string,
   revoke = false,
 ): Promise<MutationReceipt | undefined> {
   const command = {
@@ -166,7 +171,7 @@ export function setClientGrant(
     clientId,
     actorId,
     body: input,
-    idempotencyKey: newIdempotencyKey(),
+    idempotencyKey,
   };
   return revoke ? revokeClientAccessOperation(command) : grantClientAccessOperation(command);
 }
