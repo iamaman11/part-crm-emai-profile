@@ -107,7 +107,7 @@ impl IdentityCeremonyApplicationPort for D1IdentityCeremonyApplicationRepository
                 actor_id,
                 evidence.idempotency_key(),
                 command_name,
-                evidence.request_digest(),
+                evidence.payload_fingerprint(),
                 evidence.now(),
             )
             .await
