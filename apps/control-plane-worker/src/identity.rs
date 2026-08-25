@@ -426,7 +426,8 @@ mod tests {
 
         let membership = r#"{"status":"SUSPENDED","expectedVersion":1}"#;
         assert!(serde_json::from_str::<MembershipStatusRequest>(membership).is_ok());
-        let membership_unknown = r#"{"status":"SUSPENDED","expectedVersion":1,"legacyIgnoredField":true}"#;
+        let membership_unknown =
+            r#"{"status":"SUSPENDED","expectedVersion":1,"legacyIgnoredField":true}"#;
         assert!(serde_json::from_str::<MembershipStatusRequest>(membership_unknown).is_err());
         Ok(())
     }
