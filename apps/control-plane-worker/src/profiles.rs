@@ -16,8 +16,8 @@ use use_cases::profile_assignments::{
     authorize_profile_assignment, execute_assign_profile, next_profile_assignment_version,
 };
 use use_cases::profile_grants::{
-    ExecuteProfileGrantCommand, ProfileGrantAction, ProfileGrantOperationError, ProfileGrantOutcome,
-    authorize_profile_grant, execute_profile_grant,
+    ExecuteProfileGrantCommand, ProfileGrantAction, ProfileGrantOperationError,
+    ProfileGrantOutcome, authorize_profile_grant, execute_profile_grant,
 };
 use use_cases::profiles::{
     ExecuteCreateProfileCommand, ProfileDetails, ProfileMutationOutcome, ProfileOperationError,
