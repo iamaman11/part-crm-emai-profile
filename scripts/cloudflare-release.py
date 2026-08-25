@@ -152,14 +152,14 @@ def inventory_repo_files(root: Path, files: Iterable[Path]) -> dict[str, Any]:
 
 
 def contract_inventory(root: Path) -> dict[str, Any]:
-    roots = (
-        root / "openapi" / "v1",
-        root / "contracts" / "generated",
-        root / "frontend" / "src" / "shared" / "api" / "generated",
-    )
+    # Canonical OpenAPI is the sole current browser wire authority.  The
+    # frontend runtime projections are generated during the frontend build and
+    # must not become tracked release-provenance inputs; the former
+    # contracts/generated tree was retired by PAS-2 Transaction A.
+    roots = (root / "openapi" / "v1",)
     paths: list[Path] = []
     for directory in roots:
-        require_directory(directory, "generated contract directory")
+        require_directory(directory, "canonical contract directory")
         for path in directory.rglob("*"):
             if path.is_symlink():
                 fail(f"contract identity must not follow symlinks: {path}")
@@ -764,12 +764,6 @@ def create_mock_repo(root: Path) -> None:
     (root / "openapi" / "v1" / "fragments").mkdir(parents=True)
     (root / "openapi" / "v1" / "openapi.json").write_text('{"openapi":"3.1.0"}\n', encoding="utf-8")
     (root / "openapi" / "v1" / "fragments" / "fixture.json").write_text('{"fixture":true}\n', encoding="utf-8")
-    (root / "contracts" / "generated").mkdir(parents=True)
-    (root / "contracts" / "generated" / "fixture.openapi.json").write_text('{"fixture":true}\n', encoding="utf-8")
-    (root / "frontend" / "src" / "shared" / "api" / "generated").mkdir(parents=True)
-    (root / "frontend" / "src" / "shared" / "api" / "generated" / "fixture.ts").write_text(
-        "export type Fixture = true;\n", encoding="utf-8"
-    )
     shutil.copytree(ROOT / "migrations" / "d1", root / "migrations" / "d1")
     shutil.copytree(ROOT / "migrations" / "resolver-d1", root / "migrations" / "resolver-d1")
     (root / "frontend" / "package.json").write_text(
@@ -834,9 +828,9 @@ def self_test() -> None:
         schema_contract = first.get("schema_contract")
         if not isinstance(schema_contract, dict) or not (
             schema_contract.get("database_component") == "catalog"
-            and schema_contract.get("target_schema_revision") == "0026_outbound_mail_intents.sql"
-            and schema_contract.get("supported_schema_min") == "0026_outbound_mail_intents.sql"
-            and schema_contract.get("supported_schema_max") == "0026_outbound_mail_intents.sql"
+            and schema_contract.get("target_schema_revision") == "0027_pas2_payload_fingerprint.sql"
+            and schema_contract.get("supported_schema_min") == "0027_pas2_payload_fingerprint.sql"
+            and schema_contract.get("supported_schema_max") == "0027_pas2_payload_fingerprint.sql"
         ):
             fail("Catalog fixture release did not bind the exact conservative schema contract")
 

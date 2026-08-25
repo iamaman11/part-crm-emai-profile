@@ -531,8 +531,7 @@ mod tests {
         assert!(document["paths"]["/api/v1/session"]["get"].is_object());
         assert!(document["paths"]["/api/v1/tenants/{tenantId}/clients"]["post"].is_object());
         assert!(
-            document["paths"]["/api/v1/tenants/{tenantId}/notifications/events"]["get"]
-                .is_object()
+            document["paths"]["/api/v1/tenants/{tenantId}/notifications/events"]["get"].is_object()
         );
         assert!(
             document["paths"]["/api/v1/tenants/{tenantId}/notifications/replays"]["post"]
@@ -551,8 +550,7 @@ mod tests {
             assert!(problem_type.starts_with("urn:part-crm:problem:"));
             if code != "internal_failure" {
                 assert_ne!(
-                    problem_type,
-                    "urn:part-crm:problem:internal-failure",
+                    problem_type, "urn:part-crm:problem:internal-failure",
                     "known problem code {code} fell through"
                 );
             }
