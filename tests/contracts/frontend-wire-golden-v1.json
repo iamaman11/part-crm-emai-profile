@@ -33,7 +33,7 @@
     },
     {
       "kind": "declared-204",
-      "operationId": "revokeClientGrant",
+      "operationId": "revokeClientAccess",
       "status": "204"
     },
     {
