@@ -56,7 +56,8 @@ impl D1Component {
 
     const fn future_migrations(self) -> &'static [MigrationSpec] {
         match self {
-            Self::Catalog | Self::Resolver => &[],
+            Self::Catalog => CATALOG_POST_EPOCH_MIGRATIONS,
+            Self::Resolver => &[],
         }
     }
 }
@@ -78,6 +79,19 @@ struct MigrationSpec {
     code_rollback_allowed: bool,
     contract_preconditions: &'static [&'static str],
 }
+
+const CATALOG_POST_EPOCH_MIGRATIONS: &[MigrationSpec] = &[MigrationSpec {
+    revision: "0027_pas2_payload_fingerprint.sql",
+    migration_class: MigrationClass::Contract,
+    rollout_order: RolloutOrder::SeparateContractRelease,
+    fail_forward_required: true,
+    destructive: true,
+    code_rollback_allowed: false,
+    contract_preconditions: &[
+        "server_owned_payload_fingerprint_active",
+        "request_digest_readers_writers_retired",
+    ],
+}];
 
 impl MigrationSpec {
     fn to_contract(self) -> Result<MigrationContract, D1Error> {
@@ -534,7 +548,9 @@ fn compatibility_policy_digest() -> Result<String, D1Error> {
 
 #[cfg(test)]
 mod tests {
-    use super::{D1Component, RepositoryMigrationCatalog, component_authority};
+    use super::{
+        D1Component, MigrationClass, RepositoryMigrationCatalog, RolloutOrder, component_authority,
+    };
     use std::fs;
     use std::path::{Path, PathBuf};
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -584,15 +600,41 @@ mod tests {
         let root = repository_root();
         let catalog = component_authority(&root, "catalog")?;
         let resolver = component_authority(&root, "resolver")?;
-        assert_eq!(catalog.ordered_history.len(), 26);
+
+        assert_eq!(catalog.historical_len, 26);
+        assert_eq!(catalog.ordered_history.len(), 27);
+        assert_eq!(resolver.historical_len, 4);
         assert_eq!(resolver.ordered_history.len(), 4);
         assert_eq!(
-            catalog.current_repository_revision,
+            catalog.ordered_history[25],
             "0026_outbound_mail_intents.sql"
+        );
+        assert_eq!(
+            catalog.current_repository_revision,
+            "0027_pas2_payload_fingerprint.sql"
         );
         assert_eq!(
             resolver.current_repository_revision,
             "0004_refresh_owner_hmac_version.sql"
+        );
+
+        assert_eq!(catalog.post_epoch.len(), 1);
+        let contract = &catalog.post_epoch[0];
+        assert_eq!(contract.migration_file, "0027_pas2_payload_fingerprint.sql");
+        assert_eq!(contract.migration_class, MigrationClass::Contract);
+        assert_eq!(
+            contract.rollout_order,
+            RolloutOrder::SeparateContractRelease
+        );
+        assert!(contract.fail_forward_required);
+        assert!(contract.destructive);
+        assert!(!contract.code_rollback_allowed);
+        assert_eq!(
+            contract.contract_preconditions,
+            vec![
+                "server_owned_payload_fingerprint_active".to_owned(),
+                "request_digest_readers_writers_retired".to_owned(),
+            ]
         );
         Ok(())
     }
