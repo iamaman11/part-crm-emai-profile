@@ -286,10 +286,11 @@ def test_owner_transfer_and_last_owner(connection: sqlite3.Connection) -> None:
         connection.execute(
             """
             INSERT INTO idempotency_records (
-                tenant_id, actor_id, idempotency_key, command_name, request_digest,
+                tenant_id, actor_id, idempotency_key, command_name, payload_fingerprint,
                 result_code, result_reference, created_at_ms, expires_at_ms
             ) VALUES (?, ?, 'idem_transfer_step4', 'membership.owner_transfer',
-                      '0123456789abcdef', 'transferred', ?, 410, 1000)
+                      '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef',
+                      'transferred', ?, 410, 1000)
             """,
             (TENANT, OWNER, MEMBER),
         )
