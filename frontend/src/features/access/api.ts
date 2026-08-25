@@ -1,26 +1,45 @@
-import { requestJson } from '../../shared/api/client';
-import { mutate, pagedPath, segment } from '../../shared/api/endpoint';
-import type { MemberListPageDto } from '../../shared/api/generated/operator-query';
+import {
+  acceptTenantInvitation as acceptTenantInvitationOperation,
+  bootstrapTenantOwner as bootstrapTenantOwnerOperation,
+  createTenantInvitation as createTenantInvitationOperation,
+  listMembers as listMembersOperation,
+  transferTenantOwner as transferTenantOwnerOperation,
+  updateMembershipStatus as updateMembershipStatusOperation,
+} from '../../shared/api/generated/operations';
+import type { MemberListPageDto } from '../../shared/api/generated/operations';
+import { newIdempotencyKey } from '../../shared/api/idempotency';
 
 export function bootstrapOwner(
   tenantId: string,
   input: { actorId: string; identityId: string; tenantDisplayName: string },
 ) {
-  return mutate(`/api/v1/tenants/${segment(tenantId)}/owner/bootstrap`, tenantId, 'POST', input);
+  return bootstrapTenantOwnerOperation({
+    tenantId,
+    body: input,
+    idempotencyKey: newIdempotencyKey(),
+  });
 }
 
 export function transferOwner(
   tenantId: string,
   input: { nextOwnerActorId: string; currentOwnerVersion: number; nextOwnerVersion: number },
 ) {
-  return mutate(`/api/v1/tenants/${segment(tenantId)}/owner/transfer`, tenantId, 'POST', input);
+  return transferTenantOwnerOperation({
+    tenantId,
+    body: input,
+    idempotencyKey: newIdempotencyKey(),
+  });
 }
 
 export function createInvitation(
   tenantId: string,
   input: { invitationId: string; invitedContactHmac: string; expiresAtMs: number; expectedTenantVersion: number },
 ) {
-  return mutate(`/api/v1/tenants/${segment(tenantId)}/invitations`, tenantId, 'POST', input);
+  return createTenantInvitationOperation({
+    tenantId,
+    body: input,
+    idempotencyKey: newIdempotencyKey(),
+  });
 }
 
 export function acceptInvitation(
@@ -28,7 +47,12 @@ export function acceptInvitation(
   invitationId: string,
   input: { identityId: string; actorId: string },
 ) {
-  return mutate(`/api/v1/tenants/${segment(tenantId)}/invitations/${segment(invitationId)}/accept`, tenantId, 'POST', input);
+  return acceptTenantInvitationOperation({
+    tenantId,
+    invitationId,
+    body: input,
+    idempotencyKey: newIdempotencyKey(),
+  });
 }
 
 export function listMembers(
@@ -36,11 +60,13 @@ export function listMembers(
   signal?: AbortSignal,
   cursor?: string | null,
   limit = 50,
-): Promise<MemberListPageDto | undefined> {
-  return requestJson<MemberListPageDto>(
-    pagedPath(`/api/v1/tenants/${segment(tenantId)}/members`, cursor, limit),
-    { tenantId, signal },
-  );
+): Promise<MemberListPageDto> {
+  return listMembersOperation({
+    tenantId,
+    limit,
+    ...(cursor === null || cursor === undefined ? {} : { cursor }),
+    ...(signal === undefined ? {} : { signal }),
+  });
 }
 
 export function updateMembershipStatus(
@@ -48,5 +74,10 @@ export function updateMembershipStatus(
   actorId: string,
   input: { status: 'ACTIVE' | 'SUSPENDED' | 'REVOKED'; expectedVersion: number },
 ) {
-  return mutate(`/api/v1/tenants/${segment(tenantId)}/members/${segment(actorId)}/status`, tenantId, 'PUT', input);
+  return updateMembershipStatusOperation({
+    tenantId,
+    actorId,
+    body: input,
+    idempotencyKey: newIdempotencyKey(),
+  });
 }
