@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""PAS-2 Transaction A: prove one deterministic fail-closed frontend OpenAPI input."""
+"""PAS-2 Transaction A: prove one deterministic, non-repairing frontend OpenAPI input."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ import re
 import subprocess
 import sys
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
 RENDER = ROOT / "scripts" / "render-openapi.py"
@@ -17,28 +17,10 @@ GOLDEN = ROOT / "tests" / "contracts" / "frontend-wire-golden-v1.json"
 HTTP_METHODS = {"get", "post", "put", "patch", "delete"}
 ALLOWED_SECURITY = {"cloudflareAccessJwt"}
 ALLOWED_MEDIA_TYPES = {"application/json", "application/problem+json"}
-BROWSER_EXTENSION = "x-part-crm-browser-transport"
-DIGEST_EXTENSION = "x-part-crm-request-digest"
-REQUIRED_HEADERS_EXTENSION = "x-part-crm-required-response-headers"
-EXPECTED_BROWSER_POLICY = {
-    "allowedPathPrefix": "/api/v1/",
-    "absoluteUrls": "forbidden",
-    "credentials": "same-origin",
-    "openapiServers": "documentation-only",
-    "redirect": "error",
-}
-EXPECTED_DIGEST_POLICY = {
-    "algorithm": "sha-256",
-    "canonicalization": "part-crm-json-v1",
-    "encoding": "lowercase-hex",
-    "source": "request-body-without-requestDigest",
-    "rules": {
-        "arrays": "preserve-order",
-        "numbers": "integers-only",
-        "objectKeys": "unicode-codepoint-ascending",
-        "textEncoding": "utf-8",
-        "whitespace": "none",
-    },
+FORBIDDEN_REPAIR_EXTENSIONS = {
+    "x-part-crm-request-digest",
+    "x-part-crm-required-response-headers",
+    "x-part-crm-browser-transport",
 }
 SCHEMA_KEYS = {
     "$ref",
@@ -74,7 +56,6 @@ SCHEMA_KEYS = {
     "maxProperties",
     "readOnly",
     "writeOnly",
-    DIGEST_EXTENSION,
 }
 
 
@@ -94,12 +75,11 @@ def run(command: list[str], *, input_text: str | None = None) -> str:
     return completed.stdout
 
 
-def rendered_compatibility_openapi() -> str:
+def rendered_openapi() -> str:
     return run([sys.executable, str(RENDER)])
 
 
-def closed_compiler_input() -> str:
-    merged = rendered_compatibility_openapi()
+def compiler_input(source: str) -> str:
     return run(
         [
             "cargo",
@@ -111,7 +91,7 @@ def closed_compiler_input() -> str:
             "--bin",
             "export_frontend_openapi",
         ],
-        input_text=merged,
+        input_text=source,
     )
 
 
@@ -136,34 +116,33 @@ def resolve(document: dict[str, Any], value: Any) -> Any:
     return merged
 
 
+def reject_repair_extensions(value: Any, location: str = "root") -> None:
+    if isinstance(value, dict):
+        for key, child in value.items():
+            if key in FORBIDDEN_REPAIR_EXTENSIONS:
+                raise ValueError(f"{location}: obsolete compiler repair extension is forbidden: {key}")
+            reject_repair_extensions(child, f"{location}.{key}")
+    elif isinstance(value, list):
+        for index, child in enumerate(value):
+            reject_repair_extensions(child, f"{location}[{index}]")
+
+
 def validate_schema(document: dict[str, Any], schema: Any, location: str) -> None:
     if not isinstance(schema, dict):
         raise ValueError(f"{location}: schema must be an object")
-    unknown = sorted(
-        key
-        for key in schema
-        if key not in SCHEMA_KEYS and not key.startswith("x-part-crm-")
-    )
+    unknown = sorted(key for key in schema if key not in SCHEMA_KEYS and not key.startswith("x-"))
     if unknown:
         raise ValueError(f"{location}: unsupported schema keywords {unknown}")
     if "nullable" in schema:
-        raise ValueError(f"{location}: OpenAPI 3.0 nullable is forbidden")
+        raise ValueError(f"{location}: OpenAPI 3.0 nullable is forbidden; producer must emit JSON Schema 2020-12")
     if "$ref" in schema:
         resolve(document, schema)
-    if schema.get(DIGEST_EXTENSION) is not None and schema[DIGEST_EXTENSION] != EXPECTED_DIGEST_POLICY:
-        raise ValueError(f"{location}: request digest extension differs from Rust authority")
     properties = schema.get("properties", {})
     if properties is not None:
         if not isinstance(properties, dict):
             raise ValueError(f"{location}: properties must be an object")
         for name, child in properties.items():
             validate_schema(document, child, f"{location}.properties.{name}")
-            if name == "requestDigest":
-                resolved = child
-                if not isinstance(resolved, dict) or resolved.get(DIGEST_EXTENSION) != EXPECTED_DIGEST_POLICY:
-                    raise ValueError(
-                        f"{location}.properties.requestDigest: missing Rust-authored {DIGEST_EXTENSION}"
-                    )
     for keyword in ("items", "not", "additionalProperties"):
         child = schema.get(keyword)
         if isinstance(child, dict):
@@ -177,7 +156,13 @@ def validate_schema(document: dict[str, Any], schema: Any, location: str) -> Non
                 validate_schema(document, child, f"{location}.{keyword}[{index}]")
 
 
-def validate_content(document: dict[str, Any], content: Any, location: str, *, problem_only: bool = False) -> None:
+def validate_content(
+    document: dict[str, Any],
+    content: Any,
+    location: str,
+    *,
+    problem_only: bool = False,
+) -> None:
     if not isinstance(content, dict) or not content:
         raise ValueError(f"{location}: content must be a non-empty object")
     for media_type, media in content.items():
@@ -188,10 +173,21 @@ def validate_content(document: dict[str, Any], content: Any, location: str, *, p
             raise ValueError(f"{location}: declared problem response must be application/problem+json")
         if not isinstance(media, dict) or "schema" not in media:
             raise ValueError(f"{location}.{media_type}: schema is required")
-        validate_schema(document, media["schema"], f"{location}.{media_type}.schema")
+        schema = media["schema"]
+        validate_schema(document, schema, f"{location}.{media_type}.schema")
+        if normalized == "application/problem+json":
+            resolved = resolve(document, schema)
+            if isinstance(resolved, dict) and (
+                not resolved or (len(resolved) == 1 and resolved.get("type") == "object")
+            ):
+                raise ValueError(
+                    f"{location}.{media_type}: permissive problem schema is forbidden; fix producer output"
+                )
 
 
-def operation_index(document: dict[str, Any]) -> dict[str, tuple[str, str, dict[str, Any], dict[str, Any]]]:
+def operation_index(
+    document: dict[str, Any],
+) -> dict[str, tuple[str, str, dict[str, Any], dict[str, Any]]]:
     paths = document.get("paths")
     if not isinstance(paths, dict):
         raise ValueError("paths must be an object")
@@ -227,10 +223,12 @@ def operation_index(document: dict[str, Any]) -> dict[str, tuple[str, str, dict[
                 parameter = resolve(document, parameter_value)
                 if not isinstance(parameter, dict):
                     raise ValueError(f"{operation_id}: parameter must resolve to an object")
-                location = parameter.get("in")
-                if location not in {"path", "query", "header"}:
-                    raise ValueError(f"{operation_id}: unsupported parameter location {location!r}")
-                if location == "path":
+                parameter_location = parameter.get("in")
+                if parameter_location not in {"path", "query", "header"}:
+                    raise ValueError(
+                        f"{operation_id}: unsupported parameter location {parameter_location!r}"
+                    )
+                if parameter_location == "path":
                     if parameter.get("required") is not True:
                         raise ValueError(f"{operation_id}: path parameter must be required")
                     name = parameter.get("name")
@@ -239,11 +237,19 @@ def operation_index(document: dict[str, Any]) -> dict[str, tuple[str, str, dict[
                     path_parameters.add(name)
                 style = parameter.get("style")
                 if style is not None:
-                    expected = {"path": "simple", "header": "simple", "query": "form"}[location]
+                    expected = {"path": "simple", "header": "simple", "query": "form"}[
+                        parameter_location
+                    ]
                     if style != expected:
-                        raise ValueError(f"{operation_id}: unsupported {location} style {style!r}")
+                        raise ValueError(
+                            f"{operation_id}: unsupported {parameter_location} style {style!r}"
+                        )
                 if "schema" in parameter:
-                    validate_schema(document, parameter["schema"], f"{operation_id}.parameter.{parameter.get('name')}")
+                    validate_schema(
+                        document,
+                        parameter["schema"],
+                        f"{operation_id}.parameter.{parameter.get('name')}",
+                    )
             if path_parameters != placeholders:
                 raise ValueError(
                     f"{operation_id}: path parameter coverage mismatch placeholders={sorted(placeholders)!r} declared={sorted(path_parameters)!r}"
@@ -258,7 +264,9 @@ def operation_index(document: dict[str, Any]) -> dict[str, tuple[str, str, dict[
                         raise ValueError(f"{operation_id}: security requirement must be an object")
                     unsupported = set(requirement) - ALLOWED_SECURITY
                     if unsupported:
-                        raise ValueError(f"{operation_id}: unsupported security schemes {sorted(unsupported)}")
+                        raise ValueError(
+                            f"{operation_id}: unsupported security schemes {sorted(unsupported)}"
+                        )
 
             request_body = operation.get("requestBody")
             if request_body is not None:
@@ -279,14 +287,8 @@ def operation_index(document: dict[str, Any]) -> dict[str, tuple[str, str, dict[
                 if str(status) == "204" and "content" in response:
                     raise ValueError(f"{operation_id}: declared 204 must not contain a body")
                 headers = response.get("headers", {})
-                if headers:
-                    if not isinstance(headers, dict):
-                        raise ValueError(f"{operation_id} {status}: response headers must be an object")
-                    required = response.get(REQUIRED_HEADERS_EXTENSION)
-                    if required != sorted(headers):
-                        raise ValueError(
-                            f"{operation_id} {status}: required response-header extension must exactly match declared headers"
-                        )
+                if headers and not isinstance(headers, dict):
+                    raise ValueError(f"{operation_id} {status}: response headers must be an object")
                 content = response.get("content")
                 if content is not None:
                     validate_content(document, content, f"{operation_id}.responses.{status}")
@@ -300,7 +302,9 @@ def operation_index(document: dict[str, Any]) -> dict[str, tuple[str, str, dict[
     return index
 
 
-def required_request_headers(document: dict[str, Any], operation: dict[str, Any], path_item: dict[str, Any]) -> list[str]:
+def required_request_headers(
+    document: dict[str, Any], operation: dict[str, Any], path_item: dict[str, Any]
+) -> list[str]:
     result: list[str] = []
     for owner in (path_item, operation):
         for raw in owner.get("parameters", []):
@@ -319,71 +323,18 @@ def security_names(operation: dict[str, Any], document: dict[str, Any]) -> list[
 
 def media_types(document: dict[str, Any], response_value: Any) -> list[str]:
     response = resolve(document, response_value)
-    content = response.get("content", {})
-    return sorted(content)
+    return sorted(response.get("content", {}))
 
 
-def canonical_json_v1(value: Any, *, root: bool = True) -> str:
-    if value is None:
-        return "null"
-    if value is True:
-        return "true"
-    if value is False:
-        return "false"
-    if isinstance(value, int):
-        return str(value)
-    if isinstance(value, float):
-        raise ValueError("part-crm-json-v1 forbids floating-point numbers")
-    if isinstance(value, str):
-        return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
-    if isinstance(value, list):
-        return "[" + ",".join(canonical_json_v1(child, root=False) for child in value) + "]"
-    if isinstance(value, dict):
-        keys = sorted(key for key in value if not (root and key == "requestDigest"))
-        return "{" + ",".join(
-            json.dumps(key, ensure_ascii=False, separators=(",", ":"))
-            + ":"
-            + canonical_json_v1(value[key], root=False)
-            for key in keys
-        ) + "}"
-    raise ValueError(f"unsupported JSON value: {type(value).__name__}")
-
-
-def assert_golden_vectors(document: dict[str, Any], index: dict[str, tuple[str, str, dict[str, Any], dict[str, Any]]]) -> None:
+def assert_golden_vectors(
+    document: dict[str, Any],
+    index: dict[str, tuple[str, str, dict[str, Any], dict[str, Any]]],
+) -> None:
     golden = json.loads(GOLDEN.read_text(encoding="utf-8"))
     if golden.get("schemaVersion") != 1:
         raise ValueError("frontend wire golden schemaVersion must be 1")
-    digest = golden["requestDigest"]
-    canonical = canonical_json_v1(digest["input"])
-    if canonical != digest["canonicalUtf8"]:
-        raise ValueError("Python cross-language digest material differs from golden vector")
-    actual_digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
-    if actual_digest != digest["sha256"]:
-        raise ValueError("Python cross-language SHA-256 differs from golden vector")
-    rust = json.loads(
-        run(
-            [
-                "cargo",
-                "run",
-                "--locked",
-                "--quiet",
-                "-p",
-                "control-plane-contract",
-                "--bin",
-                "export_frontend_openapi",
-                "--",
-                "--digest-material",
-            ],
-            input_text=json.dumps(digest["input"], ensure_ascii=False, separators=(",", ":")),
-        )
-    )
-    expected_rust_material = {
-        "algorithm": "sha-256",
-        "canonicalUtf8": digest["canonicalUtf8"],
-        "encoding": "lowercase-hex",
-    }
-    if rust != expected_rust_material:
-        raise ValueError(f"Rust digest material differs from cross-language golden vector: {rust!r}")
+    if "requestDigest" in golden:
+        raise ValueError("frontend wire golden must not own requestDigest semantics")
 
     for vector in golden["wireVectors"]:
         operation_id = vector["operationId"]
@@ -413,17 +364,19 @@ def assert_golden_vectors(document: dict[str, Any], index: dict[str, tuple[str, 
                 raise ValueError(f"{operation_id}: golden problem media type mismatch")
         elif kind == "required-response-headers":
             response = resolve(document, operation["responses"].get(vector["status"]))
-            if response.get(REQUIRED_HEADERS_EXTENSION) != vector["headers"]:
-                raise ValueError(f"{operation_id}: golden required response headers mismatch")
+            headers = response.get("headers", {}) if isinstance(response, dict) else {}
+            if not isinstance(headers, dict) or sorted(headers) != vector["headers"]:
+                raise ValueError(f"{operation_id}: golden declared response headers mismatch")
         else:
             raise ValueError(f"unknown golden vector kind: {kind}")
 
 
-def validate_document(document: dict[str, Any]) -> dict[str, tuple[str, str, dict[str, Any], dict[str, Any]]]:
+def validate_document(
+    document: dict[str, Any],
+) -> dict[str, tuple[str, str, dict[str, Any], dict[str, Any]]]:
     if document.get("openapi") != "3.1.0":
         raise ValueError("frontend compiler input must be exactly OpenAPI 3.1.0")
-    if document.get(BROWSER_EXTENSION) != EXPECTED_BROWSER_POLICY:
-        raise ValueError("browser transport extension differs from Rust authority")
+    reject_repair_extensions(document)
     components = document.get("components")
     if not isinstance(components, dict):
         raise ValueError("components must be an object")
@@ -433,24 +386,34 @@ def validate_document(document: dict[str, Any]) -> dict[str, tuple[str, str, dic
     unsupported_security = set(security_schemes) - ALLOWED_SECURITY
     if unsupported_security:
         raise ValueError(f"unsupported security schemes: {sorted(unsupported_security)}")
-    for name, schema in components.get("schemas", {}).items():
+    schemas = components.get("schemas", {})
+    if not isinstance(schemas, dict):
+        raise ValueError("components.schemas must be an object")
+    for name, schema in schemas.items():
         validate_schema(document, schema, f"components.schemas.{name}")
     return operation_index(document)
 
 
 def main() -> int:
-    first = closed_compiler_input()
-    second = closed_compiler_input()
+    run([sys.executable, str(RENDER), "--check"])
+    source = rendered_openapi()
+    first = compiler_input(source)
+    second = compiler_input(source)
     if first.encode("utf-8") != second.encode("utf-8"):
-        raise SystemExit("frontend OpenAPI generation is not byte-identical across repeated runs")
+        raise SystemExit("frontend OpenAPI validation/export is not byte-identical across repeated runs")
+
+    source_document = json.loads(source)
     document = json.loads(first)
-    if not isinstance(document, dict):
+    if not isinstance(source_document, dict) or not isinstance(document, dict):
         raise SystemExit("frontend OpenAPI compiler input must be a JSON object")
+    if document != source_document:
+        raise SystemExit("frontend compiler repaired or mutated producer output; producer must be fixed instead")
+
     index = validate_document(document)
     assert_golden_vectors(document, index)
     digest = hashlib.sha256(first.encode("utf-8")).hexdigest()
     print(
-        f"PAS-2 frontend OpenAPI compiler input passed: operations={len(index)} bytes={len(first.encode('utf-8'))} sha256={digest}"
+        f"PAS-2 frontend OpenAPI validation passed: operations={len(index)} bytes={len(first.encode('utf-8'))} sha256={digest}"
     )
     return 0
 

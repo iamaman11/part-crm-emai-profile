@@ -2,35 +2,29 @@
 set -euo pipefail
 
 if [[ "${GITHUB_EVENT_NAME:-}" != "pull_request" ]]; then
-  echo "Phase 2I release-candidate freeze is enforced on pull requests."
+  echo "Phase 2I accepted evidence protections are enforced on pull requests."
   exit 0
 fi
 
 base_ref="${GITHUB_BASE_REF:?GITHUB_BASE_REF is required for pull requests}"
 git fetch --no-tags --depth=1 origin "${base_ref}"
 
-hard_frozen_roots=(
-  "proto"
+immutable_evidence_roots=(
   "contracts/baseline"
 )
 
-if ! git diff --quiet "origin/${base_ref}" -- "${hard_frozen_roots[@]}"; then
-  echo "Phase 2I accepted hard-frozen contract authority was violated." >&2
-  echo "Frozen contract roots: ${hard_frozen_roots[*]}" >&2
-  git diff --stat "origin/${base_ref}" -- "${hard_frozen_roots[@]}" >&2
+if ! git diff --quiet "origin/${base_ref}" -- "${immutable_evidence_roots[@]}"; then
+  echo "Accepted contract baseline evidence is immutable." >&2
+  echo "Immutable evidence roots: ${immutable_evidence_roots[*]}" >&2
+  git diff --stat "origin/${base_ref}" -- "${immutable_evidence_roots[@]}" >&2
   exit 1
 fi
 
-echo "Phase 2I accepted baseline/protobuf roots are unchanged."
+echo "Accepted contract baseline evidence is unchanged."
 
-python scripts/check-pre2j-b4-contract-authority.py --self-test
-python scripts/check-pre2j-b4-contract-authority.py --authority-only --base-ref "origin/${base_ref}"
-python scripts/check-pre2j-c2-contract-authority.py --self-test
-python scripts/check-pre2j-c2-contract-authority.py --authority-only --base-ref "origin/${base_ref}"
-python scripts/check-pre2j-c3-contract-authority.py --self-test
-python scripts/check-pre2j-c3-contract-authority.py --authority-only --base-ref "origin/${base_ref}"
-python scripts/check-pre2j-c3g-contract-authority.py --self-test
-python scripts/check-pre2j-c3g-contract-authority.py --base-ref "origin/${base_ref}"
+# Pre-2J B4/C2/C3/C3G one-shot contract authorities are retired. Current
+# OpenAPI/protobuf evolution is governed by check-contract-compatibility.py.
+# D3 is a separate resolver/bootstrap provenance concern and remains intact.
 python scripts/check-pre2j-d3-resolver-bootstrap-authority.py --self-test
 if git cat-file -e "origin/${base_ref}:architecture/pre2j-d3-resolver-bootstrap-authority.json" 2>/dev/null; then
   python scripts/check-pre2j-d3-resolver-bootstrap-authority.py \
@@ -150,7 +144,10 @@ fi
 test ! -e .github/workflows/mailbox-secret-resolver-promotion.yml
 test ! -e .github/scripts/ar8-completion-lifecycle.mjs
 
+# One permanent current-contract evolution verifier governs both OpenAPI and proto.
+# Compatible additive current-v1 evolution is allowed; ordinary breaking change is
+# rejected unless an explicit governed migration/re-baseline decision says otherwise.
 python scripts/check-contract-compatibility.py
 python scripts/test-d1-schema.py
 
-echo "Phase 2I public contract freeze, immutable consumed B4/C2/C3 authorities, static Pre-2J D3 provenance/current successor validation, current AR-8-derived lifecycle authorities, pending C3G governed provider migration authority, and immutable-prefix D1 migration policy are valid."
+echo "Immutable contract baseline evidence, permanent current OpenAPI/protobuf compatibility, static Pre-2J D3 provenance/current successor validation, current AR-8-derived lifecycle authorities, and immutable-prefix D1 migration policy are valid."

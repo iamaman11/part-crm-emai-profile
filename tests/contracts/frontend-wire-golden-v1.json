@@ -1,15 +1,5 @@
 {
   "schemaVersion": 1,
-  "requestDigest": {
-    "input": {
-      "displayName": "Alice",
-      "requestDigest": "ignored",
-      "kind": "PERSON",
-      "clientId": "client_01"
-    },
-    "canonicalUtf8": "{\"clientId\":\"client_01\",\"displayName\":\"Alice\",\"kind\":\"PERSON\"}",
-    "sha256": "5fdffe953c92975bef4141aaf2a665db4e07a0358f015c9d78fd81687621726d"
-  },
   "wireVectors": [
     {
       "kind": "get",

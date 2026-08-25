@@ -6,7 +6,6 @@ from __future__ import annotations
 import json
 import runpy
 import subprocess
-import sys
 from pathlib import Path
 from typing import Any
 
@@ -34,8 +33,8 @@ def expect_validation_failure(
         raise AssertionError(f"breaking fixture unexpectedly passed: {expected_fragment}")
 
 
-def expect_rust_closure_failure(document: dict[str, Any], expected_fragment: str) -> None:
-    completed = subprocess.run(
+def run_rust(document: dict[str, Any]) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
         [
             "cargo",
             "run",
@@ -52,12 +51,16 @@ def expect_rust_closure_failure(document: dict[str, Any], expected_fragment: str
         capture_output=True,
         check=False,
     )
+
+
+def expect_rust_validation_failure(document: dict[str, Any], expected_fragment: str) -> None:
+    completed = run_rust(document)
     if completed.returncode == 0:
-        raise AssertionError(f"Rust closure accepted breaking fixture: {expected_fragment}")
+        raise AssertionError(f"Rust validator accepted breaking fixture: {expected_fragment}")
     diagnostics = f"{completed.stdout}\n{completed.stderr}"
     if expected_fragment not in diagnostics:
         raise AssertionError(
-            f"Rust closure failed for the wrong reason; expected {expected_fragment!r}, got {diagnostics!r}"
+            f"Rust validator failed for the wrong reason; expected {expected_fragment!r}, got {diagnostics!r}"
         )
 
 
@@ -68,7 +71,7 @@ def operation(operation_id: str) -> dict[str, Any]:
     }
 
 
-def valid_root(browser_policy: dict[str, Any]) -> dict[str, Any]:
+def valid_root() -> dict[str, Any]:
     return {
         "openapi": "3.1.0",
         "info": {"title": "PAS-2 negative fixture", "version": "1.0.0"},
@@ -78,6 +81,8 @@ def valid_root(browser_policy: dict[str, Any]) -> dict[str, Any]:
                 "Problem": {
                     "type": "object",
                     "additionalProperties": False,
+                    "required": ["type"],
+                    "properties": {"type": {"type": "string"}},
                 }
             },
             "securitySchemes": {
@@ -88,29 +93,27 @@ def valid_root(browser_policy: dict[str, Any]) -> dict[str, Any]:
                 }
             },
         },
-        "x-part-crm-browser-transport": browser_policy,
     }
 
 
 def main() -> int:
     symbols = checker_symbols()
     validate_document = symbols["validate_document"]
-    browser_policy = symbols["EXPECTED_BROWSER_POLICY"]
 
-    duplicate = valid_root(browser_policy)
+    duplicate = valid_root()
     duplicate["paths"] = {
         "/api/v1/alpha": {"get": operation("duplicateOperation")},
         "/api/v1/beta": {"get": operation("duplicateOperation")},
     }
     expect_validation_failure(validate_document, duplicate, "duplicate operationId")
 
-    incomplete_path = valid_root(browser_policy)
+    incomplete_path = valid_root()
     incomplete_path["paths"] = {
         "/api/v1/things/{thingId}": {"get": operation("getThing")}
     }
     expect_validation_failure(validate_document, incomplete_path, "path parameter coverage mismatch")
 
-    unsupported_media = valid_root(browser_policy)
+    unsupported_media = valid_root()
     unsupported_media["paths"] = {
         "/api/v1/media": {
             "get": {
@@ -118,9 +121,7 @@ def main() -> int:
                 "responses": {
                     "200": {
                         "description": "Unsupported media",
-                        "content": {
-                            "text/plain": {"schema": {"type": "string"}}
-                        },
+                        "content": {"text/plain": {"schema": {"type": "string"}}},
                     }
                 },
             }
@@ -128,7 +129,7 @@ def main() -> int:
     }
     expect_validation_failure(validate_document, unsupported_media, "unsupported media type")
 
-    unsupported_security = valid_root(browser_policy)
+    unsupported_security = valid_root()
     unsupported_security["paths"] = {
         "/api/v1/security": {
             "get": {
@@ -139,34 +140,72 @@ def main() -> int:
     }
     expect_validation_failure(validate_document, unsupported_security, "unsupported security schemes")
 
-    expect_rust_closure_failure(
+    expect_rust_validation_failure(
         {"openapi": "3.0.3", "info": {"title": "mixed", "version": "1"}, "paths": {}},
-        "UnsupportedDialect",
+        "must be exactly 3.1.0",
     )
-    expect_rust_closure_failure(
+    expect_rust_validation_failure(
         {
             "openapi": "3.1.0",
             "info": {"title": "network-ref", "version": "1"},
             "paths": {},
             "components": {
-                "schemas": {
-                    "Remote": {"$ref": "https://example.invalid/schema.json"}
-                }
+                "schemas": {"Remote": {"$ref": "https://example.invalid/schema.json"}}
             },
         },
-        "NetworkReference",
+        "network OpenAPI reference is forbidden",
     )
-    expect_rust_closure_failure(
+    expect_rust_validation_failure(
         {
             "openapi": "3.1.0",
             "info": {"title": "nullable", "version": "1"},
             "paths": {},
             "components": {
-                "schemas": {"Ambiguous": {"nullable": True, "oneOf": [{"type": "string"}]}}
+                "schemas": {"Legacy": {"type": "string", "nullable": True}}
             },
         },
-        "UnsupportedNullable",
+        "legacy OpenAPI nullable is forbidden",
     )
+    expect_rust_validation_failure(
+        {
+            "openapi": "3.1.0",
+            "info": {"title": "problem", "version": "1"},
+            "paths": {
+                "/api/v1/problem": {
+                    "get": {
+                        "operationId": "getProblem",
+                        "responses": {
+                            "400": {
+                                "description": "problem",
+                                "content": {
+                                    "application/problem+json": {
+                                        "schema": {"type": "object"}
+                                    }
+                                },
+                            }
+                        },
+                    }
+                }
+            },
+        },
+        "permissive application/problem+json schema is forbidden",
+    )
+    expect_rust_validation_failure(
+        {
+            "openapi": "3.1.0",
+            "info": {"title": "legacy-repair", "version": "1"},
+            "paths": {},
+            "x-part-crm-request-digest": {"canonicalization": "part-crm-json-v1"},
+        },
+        "compiler repair extension is forbidden",
+    )
+
+    pass_through = valid_root()
+    completed = run_rust(pass_through)
+    if completed.returncode != 0:
+        raise AssertionError(completed.stderr)
+    if json.loads(completed.stdout) != pass_through:
+        raise AssertionError("Rust validator mutated valid producer output")
 
     print("PAS-2 deliberately breaking frontend OpenAPI fixtures rejected as expected")
     return 0
