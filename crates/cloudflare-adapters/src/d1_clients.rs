@@ -57,7 +57,7 @@ impl ClientApplicationPort for D1ClientApplicationRepository {
                 actor.actor_id(),
                 evidence.idempotency_key(),
                 command_name,
-                evidence.request_digest(),
+                evidence.payload_fingerprint(),
                 evidence.now(),
             )
             .await
@@ -78,7 +78,7 @@ impl ClientApplicationPort for D1ClientApplicationRepository {
             creator_grant_role: catalog_creator_grant_role(write.creator_grant_role()),
             creator_grant_reason: write.creator_grant_reason(),
             idempotency_key: evidence.idempotency_key(),
-            request_digest: evidence.request_digest(),
+            payload_fingerprint: evidence.payload_fingerprint(),
             audit_event_id: evidence.audit_event_id(),
             outbox_event_id: evidence.outbox_event_id(),
             event_payload_json: write.event_payload_json(),
@@ -121,7 +121,7 @@ impl ClientGrantApplicationPort for D1ClientApplicationRepository {
                 actor.actor_id(),
                 evidence.idempotency_key(),
                 command_name,
-                evidence.request_digest(),
+                evidence.payload_fingerprint(),
                 evidence.now(),
             )
             .await
@@ -176,7 +176,7 @@ fn mutation_envelope<'a>(
 ) -> MutationEnvelope<'a> {
     MutationEnvelope {
         idempotency_key: evidence.idempotency_key(),
-        request_digest: evidence.request_digest(),
+        payload_fingerprint: evidence.payload_fingerprint(),
         audit_event_id: evidence.audit_event_id(),
         outbox_event_id: evidence.outbox_event_id(),
         payload_json,
