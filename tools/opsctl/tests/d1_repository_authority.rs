@@ -26,6 +26,11 @@ fn component<'a>(projection: &'a Value, id: &str) -> Result<&'a Value, Box<dyn E
         .ok_or_else(|| format!("D1 repository projection is missing component {id}").into())
 }
 
+fn identity_digest(identity: &[Value]) -> Result<String, Box<dyn Error>> {
+    let canonical = canonical_json(&Value::Array(identity.to_vec()))?;
+    Ok(sha256_hex(canonical.as_bytes()))
+}
+
 fn migration_identity(root: &Path, relative: &str) -> Result<(Vec<Value>, String), Box<dyn Error>> {
     let mut entries = fs::read_dir(root.join(relative))?
         .map(|entry| entry.map(|entry| entry.path()))
@@ -50,8 +55,8 @@ fn migration_identity(root: &Path, relative: &str) -> Result<(Vec<Value>, String
         }));
     }
 
-    let canonical = canonical_json(&Value::Array(identity.clone()))?;
-    Ok((identity, sha256_hex(canonical.as_bytes())))
+    let digest = identity_digest(&identity)?;
+    Ok((identity, digest))
 }
 
 struct TempRepository {
@@ -123,38 +128,69 @@ fn cargo_manifests(root: &Path, relative: &str) -> Result<Vec<PathBuf>, Box<dyn 
 }
 
 #[test]
-fn accepted_epoch_projection_is_derived_from_real_sql_bytes() -> Result<(), Box<dyn Error>> {
+fn frozen_epoch_and_current_projection_are_derived_from_real_sql_bytes()
+-> Result<(), Box<dyn Error>> {
     let root = repo_root();
     let projection: Value = serde_json::from_str(&repository_projection(&root)?)?;
 
-    for (id, migration_root, count, revision, accepted_digest) in [
+    for (
+        id,
+        migration_root,
+        historical_count,
+        historical_revision,
+        current_count,
+        current_revision,
+        post_epoch_count,
+        accepted_digest,
+    ) in [
         (
             "catalog",
             "migrations/d1",
-            26_u64,
+            26_usize,
             "0026_outbound_mail_intents.sql",
+            27_u64,
+            "0027_pas2_payload_fingerprint.sql",
+            1_u64,
             CATALOG_EPOCH_DIGEST,
         ),
         (
             "resolver",
             "migrations/resolver-d1",
+            4_usize,
+            "0004_refresh_owner_hmac_version.sql",
             4_u64,
             "0004_refresh_owner_hmac_version.sql",
+            0_u64,
             RESOLVER_EPOCH_DIGEST,
         ),
     ] {
-        let (files, computed_digest) = migration_identity(&root, migration_root)?;
-        let component = component(&projection, id)?;
-        assert_eq!(files.len() as u64, count);
-        assert_eq!(component["migration_count"], count);
-        assert_eq!(component["current_repository_revision"], revision);
-        assert_eq!(component["history_digest"], computed_digest);
-        assert_eq!(component["history_digest"], accepted_digest);
+        let (files, computed_current_digest) = migration_identity(&root, migration_root)?;
+        let current = component(&projection, id)?;
+        let historical = &files[..historical_count];
+        let computed_historical_digest = identity_digest(historical)?;
+
+        assert_eq!(files.len() as u64, current_count);
         assert_eq!(
-            component["historical_epoch"]["accepted_history_digest"],
+            historical.last().and_then(|value| value["name"].as_str()),
+            Some(historical_revision)
+        );
+        assert_eq!(computed_historical_digest, accepted_digest);
+        assert_eq!(current["migration_count"], current_count);
+        assert_eq!(current["current_repository_revision"], current_revision);
+        assert_eq!(current["history_digest"], computed_current_digest);
+        assert_eq!(current["post_epoch_migration_count"], post_epoch_count);
+        assert_eq!(
+            current["historical_epoch"]["migration_count"],
+            historical_count as u64
+        );
+        assert_eq!(
+            current["historical_epoch"]["final_revision"],
+            historical_revision
+        );
+        assert_eq!(
+            current["historical_epoch"]["accepted_history_digest"],
             accepted_digest
         );
-        assert_eq!(component["post_epoch_migration_count"], 0);
     }
     Ok(())
 }
@@ -210,7 +246,7 @@ fn historical_sql_tampering_fails_closed_for_each_component() -> Result<(), Box<
 fn unowned_post_epoch_sql_fails_closed_for_each_component() -> Result<(), Box<dyn Error>> {
     let source = repo_root();
     for (label, relative) in [
-        ("catalog-post-epoch", "migrations/d1/0027_unowned.sql"),
+        ("catalog-post-epoch", "migrations/d1/0028_unowned.sql"),
         (
             "resolver-post-epoch",
             "migrations/resolver-d1/0005_unowned.sql",
@@ -222,21 +258,39 @@ fn unowned_post_epoch_sql_fails_closed_for_each_component() -> Result<(), Box<dy
             Ok(_) => return Err(format!("unowned {label} migration unexpectedly passed").into()),
             Err(error) => error,
         };
-        assert!(error.to_string().contains("migration/spec count mismatch"));
+        assert!(
+            error
+                .to_string()
+                .contains("post-epoch migration/spec count mismatch"),
+            "unexpected fail-closed reason for {label}: {error}"
+        );
     }
     Ok(())
 }
 
 #[test]
-fn first_post_epoch_migration_requires_a_new_real_repository_proof() -> Result<(), Box<dyn Error>> {
+fn catalog_0027_is_the_typed_first_post_epoch_revision() -> Result<(), Box<dyn Error>> {
     let projection: Value = serde_json::from_str(&repository_projection(&repo_root())?)?;
+    let catalog = component(&projection, "catalog")?;
+    let resolver = component(&projection, "resolver")?;
+
+    assert_eq!(catalog["historical_epoch"]["migration_count"], 26);
     assert_eq!(
-        component(&projection, "catalog")?["post_epoch_migration_count"],
-        0
+        catalog["historical_epoch"]["final_revision"],
+        "0026_outbound_mail_intents.sql"
     );
+    assert_eq!(catalog["migration_count"], 27);
+    assert_eq!(catalog["post_epoch_migration_count"], 1);
     assert_eq!(
-        component(&projection, "resolver")?["post_epoch_migration_count"],
-        0
+        catalog["current_repository_revision"],
+        "0027_pas2_payload_fingerprint.sql"
+    );
+
+    assert_eq!(resolver["historical_epoch"]["migration_count"], 4);
+    assert_eq!(resolver["post_epoch_migration_count"], 0);
+    assert_eq!(
+        resolver["current_repository_revision"],
+        "0004_refresh_owner_hmac_version.sql"
     );
     Ok(())
 }
