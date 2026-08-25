@@ -119,7 +119,7 @@ def schema_type(schema: dict[str, Any]) -> str:
             return "Readonly<Record<string, unknown>>"
         return object_type
 
-    return "unknown"
+    raise ValueError(f"schema has no supported precise TypeScript projection: {schema!r}")
 
 
 def parameter_argument(parameter: dict[str, Any]) -> tuple[str | None, str | None]:
@@ -296,7 +296,7 @@ def render_operation(operation: dict[str, Any]) -> list[str]:
         if not response["content"]:
             lines.append("      if (result.payload !== undefined) {")
             lines.append(
-                f"        throw new ApiProtocolError({json.dumps(operation_id)}, 'declared no-body success returned a payload');"
+                f"        throw new ContractDecodeError({json.dumps(operation_id)}, 'declared no-body success returned a payload');"
             )
             lines.append("      }")
             lines.append("      return undefined;")
@@ -304,13 +304,13 @@ def render_operation(operation: dict[str, Any]) -> list[str]:
             name = guard_name(operation_id, status)
             lines.append(f"      if (!{name}(result.payload)) {{")
             lines.append(
-                f"        throw new ApiProtocolError({json.dumps(operation_id)}, 'validated success payload did not satisfy generated type guard');"
+                f"        throw new ContractDecodeError({json.dumps(operation_id)}, 'validated success payload did not satisfy generated type guard');"
             )
             lines.append("      }")
             lines.append("      return result.payload;")
     lines.append("    default:")
     lines.append(
-        f"      throw new ApiProtocolError({json.dumps(operation_id)}, `runtime returned unexpected success status ${{result.status}}`);"
+        f"      throw new UnexpectedStatusError({json.dumps(operation_id)}, result.status);"
     )
     lines.extend(["  }", "}", ""])
     return lines
@@ -331,7 +331,7 @@ def render_typescript(document: dict[str, Any], ir: dict[str, Any]) -> str:
         f"// Generated through: {GENERATED_BY}",
         "// Regenerate with: npm --prefix frontend run generate:api",
         "",
-        "import { ApiProtocolError, invokeOperation, matchesSchema } from '../openapi-runtime';",
+        "import { ContractDecodeError, UnexpectedStatusError, invokeOperation, matchesSchema } from '../openapi-runtime';",
         "import type { JsonSchema, RuntimeOperationSpec } from '../openapi-runtime';",
         "",
     ]
