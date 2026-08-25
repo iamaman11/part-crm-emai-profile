@@ -133,7 +133,9 @@ fn patch_future_specs(root: &Path) -> Result<(), Box<dyn Error>> {
     }
 "#;
     if source.matches(current_future).count() != 1 {
-        return Err("canonical future-migration dispatch changed; update the post-epoch proof".into());
+        return Err(
+            "canonical future-migration dispatch changed; update the post-epoch proof".into(),
+        );
     }
     source = source.replacen(current_future, patched_future, 1);
 
@@ -175,7 +177,9 @@ fn patch_future_specs(root: &Path) -> Result<(), Box<dyn Error>> {
 ];
 "#;
     if source.matches(current_catalog).count() != 1 {
-        return Err("canonical Catalog post-epoch policy changed; update the authoring proof".into());
+        return Err(
+            "canonical Catalog post-epoch policy changed; update the authoring proof".into(),
+        );
     }
     source = source.replacen(current_catalog, patched_catalog, 1);
     fs::write(path, source)?;
@@ -474,7 +478,11 @@ fn next_catalog_and_first_resolver_migrations_run_through_real_authoring_path()
             .join("migrations/d1/0027_pas2_payload_fingerprint.sql")
             .is_file()
     );
-    assert!(!repo_root().join("migrations/d1/0028_post_epoch_probe.sql").exists());
+    assert!(
+        !repo_root()
+            .join("migrations/d1/0028_post_epoch_probe.sql")
+            .exists()
+    );
     assert!(
         !repo_root()
             .join("migrations/resolver-d1/0005_post_epoch_probe.sql")
