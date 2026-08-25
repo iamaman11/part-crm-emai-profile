@@ -2,7 +2,7 @@ use crate::request_evidence::{audit_event_id, outbox_event_id};
 use application_ports::CommandExecutionEvidence;
 use application_ports::mailbox_scheduling::MailboxJobDispatch;
 use profile_platform_primitives::{
-    ActorContext, CorrelationId, IdempotencyKey, TenantScope, UnixMillis,
+    ActorContext, CorrelationId, IdempotencyKey, PayloadFingerprint, TenantScope, UnixMillis,
 };
 use sha2::{Digest, Sha256};
 use worker::{Error, Result};
@@ -14,11 +14,11 @@ pub fn actor_and_evidence(
     dispatch: &MailboxJobDispatch,
     now: UnixMillis,
 ) -> Result<(ActorContext, CommandExecutionEvidence)> {
-    let digest = execution_digest(dispatch)?;
-    let idempotency_key =
-        IdempotencyKey::parse(format!("mailboxq_{digest}")).map_err(identifier_error)?;
-    let correlation_id =
-        CorrelationId::parse(format!("corr_{digest}")).map_err(identifier_error)?;
+    let fingerprint = execution_fingerprint(dispatch)?;
+    let idempotency_key = IdempotencyKey::parse(format!("mailboxq_{}", fingerprint.as_str()))
+        .map_err(identifier_error)?;
+    let correlation_id = CorrelationId::parse(format!("corr_{}", fingerprint.as_str()))
+        .map_err(identifier_error)?;
     let actor = ActorContext::new(
         TenantScope::new(dispatch.tenant_id().clone()),
         dispatch.actor_id().clone(),
@@ -36,7 +36,7 @@ pub fn actor_and_evidence(
         actor,
         CommandExecutionEvidence::new(
             idempotency_key,
-            digest,
+            fingerprint,
             audit_event_id,
             outbox_event_id,
             now,
@@ -45,7 +45,7 @@ pub fn actor_and_evidence(
     ))
 }
 
-fn execution_digest(dispatch: &MailboxJobDispatch) -> Result<String> {
+fn execution_fingerprint(dispatch: &MailboxJobDispatch) -> Result<PayloadFingerprint> {
     let mut hasher = Sha256::new();
     append_field(&mut hasher, MAILBOX_QUEUE_DOMAIN)?;
     append_field(&mut hasher, dispatch.tenant_id().as_str().as_bytes())?;
@@ -56,7 +56,7 @@ fn execution_digest(dispatch: &MailboxJobDispatch) -> Result<String> {
         &mut hasher,
         &dispatch.expected_version().value().to_be_bytes(),
     )?;
-    Ok(lowercase_hex(&hasher.finalize()))
+    PayloadFingerprint::parse(lowercase_hex(&hasher.finalize())).map_err(identifier_error)
 }
 
 fn append_field(hasher: &mut Sha256, value: &[u8]) -> Result<()> {
@@ -83,7 +83,7 @@ fn identifier_error(error: profile_platform_primitives::ParseOpaqueIdError) -> E
 
 #[cfg(test)]
 mod tests {
-    use super::{actor_and_evidence, execution_digest};
+    use super::{actor_and_evidence, execution_fingerprint};
     use application_ports::mailbox_scheduling::MailboxJobDispatch;
     use profile_platform_primitives::{
         ActorId, AggregateVersion, MailboxBindingId, MailboxJobId, TenantId, UnixMillis,
@@ -108,10 +108,13 @@ mod tests {
         let second = actor_and_evidence(&version_four, UnixMillis::new(200))?;
         assert_eq!(first.0, second.0);
         assert_eq!(first.1.idempotency_key(), second.1.idempotency_key());
-        assert_eq!(first.1.request_digest(), second.1.request_digest());
+        assert_eq!(
+            first.1.payload_fingerprint(),
+            second.1.payload_fingerprint()
+        );
         assert_ne!(
-            execution_digest(&version_four)?,
-            execution_digest(&dispatch(5)?)?
+            execution_fingerprint(&version_four)?,
+            execution_fingerprint(&dispatch(5)?)?
         );
         Ok(())
     }
