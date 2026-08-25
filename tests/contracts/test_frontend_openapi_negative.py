@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Deliberately breaking PAS-2 frontend OpenAPI fixtures."""
+"""Deliberately breaking PAS-2 frontend OpenAPI/compiler fixtures."""
 
 from __future__ import annotations
 
@@ -99,6 +99,8 @@ def valid_root() -> dict[str, Any]:
 def main() -> int:
     symbols = checker_symbols()
     validate_document = symbols["validate_document"]
+    compile_operation_ir = symbols["compile_operation_ir"]
+    render_compiler_ir = symbols["render_compiler_ir"]
 
     duplicate = valid_root()
     duplicate["paths"] = {
@@ -139,6 +141,111 @@ def main() -> int:
         }
     }
     expect_validation_failure(validate_document, unsupported_security, "unsupported security schemes")
+
+    unsupported_schema = valid_root()
+    unsupported_schema["components"]["schemas"]["Conditional"] = {
+        "type": "object",
+        "if": {"properties": {"kind": {"const": "alpha"}}},
+    }
+    expect_validation_failure(validate_document, unsupported_schema, "unsupported schema keywords")
+
+    unsupported_explode = valid_root()
+    unsupported_explode["paths"] = {
+        "/api/v1/search": {
+            "get": {
+                "operationId": "getUnsupportedExplode",
+                "parameters": [
+                    {
+                        "name": "q",
+                        "in": "query",
+                        "explode": False,
+                        "schema": {"type": "string"},
+                    }
+                ],
+                "responses": {"204": {"description": "No content"}},
+            }
+        }
+    }
+    expect_validation_failure(validate_document, unsupported_explode, "unsupported query explode")
+
+    unsupported_response_header = valid_root()
+    unsupported_response_header["paths"] = {
+        "/api/v1/header": {
+            "get": {
+                "operationId": "getUnsupportedResponseHeader",
+                "responses": {
+                    "204": {
+                        "description": "No content",
+                        "headers": {
+                            "X-Unsupported": {
+                                "content": {
+                                    "application/json": {"schema": {"type": "string"}}
+                                }
+                            }
+                        },
+                    }
+                },
+            }
+        }
+    }
+    expect_validation_failure(
+        validate_document,
+        unsupported_response_header,
+        "header content serialization is unsupported",
+    )
+
+    deterministic = valid_root()
+    deterministic["paths"] = {
+        "/api/v1/things/{thingId}": {
+            "get": {
+                "operationId": "getThing",
+                "parameters": [
+                    {
+                        "name": "thingId",
+                        "in": "path",
+                        "required": True,
+                        "schema": {"type": "string"},
+                    },
+                    {
+                        "name": "expand",
+                        "in": "query",
+                        "schema": {"type": "boolean"},
+                    },
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Thing",
+                        "headers": {
+                            "ETag": {"schema": {"type": "string"}}
+                        },
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "additionalProperties": False,
+                                    "required": ["thingId"],
+                                    "properties": {"thingId": {"type": "string"}},
+                                }
+                            }
+                        },
+                    }
+                },
+            }
+        }
+    }
+    deterministic_index = validate_document(deterministic)
+    first_ir = render_compiler_ir(compile_operation_ir(deterministic, deterministic_index))
+    second_ir = render_compiler_ir(compile_operation_ir(deterministic, deterministic_index))
+    if first_ir != second_ir:
+        raise AssertionError("compiler IR is not deterministic for identical validated input")
+    decoded_ir = json.loads(first_ir)
+    if decoded_ir.get("schemaVersion") != 1 or len(decoded_ir.get("operations", [])) != 1:
+        raise AssertionError("compiler IR lost operation structure")
+    compiled_operation = decoded_ir["operations"][0]
+    if compiled_operation["operationId"] != "getThing":
+        raise AssertionError("compiler IR lost operation identity")
+    if compiled_operation["responses"][0]["headers"][0]["name"] != "ETag":
+        raise AssertionError("compiler IR lost declared response-header validation semantics")
 
     expect_rust_validation_failure(
         {"openapi": "3.0.3", "info": {"title": "mixed", "version": "1"}, "paths": {}},
@@ -207,7 +314,7 @@ def main() -> int:
     if json.loads(completed.stdout) != pass_through:
         raise AssertionError("Rust validator mutated valid producer output")
 
-    print("PAS-2 deliberately breaking frontend OpenAPI fixtures rejected as expected")
+    print("PAS-2 deliberately breaking frontend OpenAPI/compiler fixtures rejected as expected")
     return 0
 
 
