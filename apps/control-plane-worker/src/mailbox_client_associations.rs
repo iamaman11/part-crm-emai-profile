@@ -3,10 +3,12 @@ use crate::access_session::{
 };
 use crate::command_evidence;
 use crate::mailbox_client_association_composition::mailbox_client_association_application;
+use control_plane_contract::mailbox_client_association_api::{
+    ChangeMailboxClientAssociationRequestDto, MailboxClientAssociationMutationReceiptDto,
+    MailboxClientAssociationProjectionDto,
+};
 use identity_access_domain::MembershipRole;
 use profile_platform_primitives::{ActorContext, ClientId, MailboxBindingId};
-use serde::{Deserialize, Serialize};
-use serde_json::Value;
 use use_cases_mailboxes::client_association_queries::{
     MailboxClientAssociationDetails, get_mailbox_client_association,
 };
@@ -15,34 +17,6 @@ use use_cases_mailboxes::client_associations::{
     MailboxClientAssociationOutcome, execute_mailbox_client_association,
 };
 use worker::{Env, Method, Request, Response, Result};
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct ChangeMailboxClientAssociationRequest {
-    client_id: Value,
-    expected_relationship_version: u64,
-    request_digest: String,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct MailboxClientAssociationProjection {
-    binding_id: String,
-    client_id: Option<String>,
-    relationship_version: u64,
-    mailbox_executable: bool,
-    can_manage: bool,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct MailboxClientAssociationMutationReceipt {
-    result_code: String,
-    binding_id: String,
-    client_id: Option<String>,
-    relationship_version: u64,
-    replayed: bool,
-}
 
 #[must_use]
 pub fn is_client_association_path(path: &str) -> bool {
@@ -113,27 +87,27 @@ async fn change_association(
     binding_id: MailboxBindingId,
 ) -> Result<Response> {
     let body = match request
-        .json::<ChangeMailboxClientAssociationRequest>()
+        .json::<ChangeMailboxClientAssociationRequestDto>()
         .await
     {
         Ok(value) => value,
         Err(_) => return invalid_request(actor.correlation_id().as_str()),
     };
-    if !valid_digest(&body.request_digest) {
-        return invalid_request(actor.correlation_id().as_str());
-    }
-    let client_id = match parse_nullable_client_id(body.client_id) {
-        Ok(value) => value,
-        Err(()) => return invalid_request(actor.correlation_id().as_str()),
-    };
-    let evidence = match command_evidence::from_request(request, actor, body.request_digest) {
-        Ok(value) => value,
-        Err(_) => return invalid_request(actor.correlation_id().as_str()),
+    let client_id = match body.client_id.as_ref() {
+        Some(value) => match ClientId::parse(value.clone()) {
+            Ok(value) => Some(value),
+            Err(_) => return invalid_request(actor.correlation_id().as_str()),
+        },
+        None => None,
     };
     let expected_version =
         application_ports::mailbox_client_associations::MailboxClientAssociationVersion::new(
             body.expected_relationship_version,
         );
+    let evidence = match command_evidence::from_request(request, actor, &body) {
+        Ok(value) => value,
+        Err(_) => return invalid_request(actor.correlation_id().as_str()),
+    };
     let command = match client_id {
         Some(client_id) => ExecuteMailboxClientAssociationCommand::associate(
             binding_id,
@@ -152,19 +126,11 @@ async fn change_association(
     }
 }
 
-fn parse_nullable_client_id(value: Value) -> Result<Option<ClientId>, ()> {
-    match value {
-        Value::Null => Ok(None),
-        Value::String(value) => ClientId::parse(value).map(Some).map_err(|_| ()),
-        _ => Err(()),
-    }
-}
-
 fn projection(
     details: &MailboxClientAssociationDetails,
     role: MembershipRole,
-) -> MailboxClientAssociationProjection {
-    MailboxClientAssociationProjection {
+) -> MailboxClientAssociationProjectionDto {
+    MailboxClientAssociationProjectionDto {
         binding_id: details.binding_id().as_str().to_owned(),
         client_id: details.client_id().map(|value| value.as_str().to_owned()),
         relationship_version: details.relationship_version().value(),
@@ -173,8 +139,8 @@ fn projection(
     }
 }
 
-fn receipt(outcome: &MailboxClientAssociationOutcome) -> MailboxClientAssociationMutationReceipt {
-    MailboxClientAssociationMutationReceipt {
+fn receipt(outcome: &MailboxClientAssociationOutcome) -> MailboxClientAssociationMutationReceiptDto {
+    MailboxClientAssociationMutationReceiptDto {
         result_code: outcome.result_code().to_owned(),
         binding_id: outcome.binding_id().as_str().to_owned(),
         client_id: outcome.client_id().map(|value| value.as_str().to_owned()),
@@ -220,20 +186,10 @@ fn invalid_request(correlation_id: &str) -> Result<Response> {
     problem(correlation_id, 400, "invalid_request", "Invalid Request")
 }
 
-fn valid_digest(value: &str) -> bool {
-    value.len() == 64
-        && value
-            .bytes()
-            .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{
-        ChangeMailboxClientAssociationRequest, is_client_association_path,
-        parse_nullable_client_id, valid_digest,
-    };
-    use serde_json::{Value, json};
+    use super::is_client_association_path;
+    use control_plane_contract::mailbox_client_association_api::ChangeMailboxClientAssociationRequestDto;
 
     #[test]
     fn association_route_is_exact_and_does_not_capture_sibling_mailbox_paths() {
@@ -250,32 +206,18 @@ mod tests {
     }
 
     #[test]
-    fn change_wire_requires_explicit_client_id_and_rejects_sensitive_or_unknown_fields()
-    -> Result<(), Box<dyn std::error::Error>> {
-        let digest = "a".repeat(64);
-        let missing = format!(r#"{{"expectedRelationshipVersion":0,"requestDigest":"{digest}"}}"#);
-        assert!(serde_json::from_str::<ChangeMailboxClientAssociationRequest>(&missing).is_err());
-        let unbind = format!(
-            r#"{{"clientId":null,"expectedRelationshipVersion":0,"requestDigest":"{digest}"}}"#
-        );
-        assert!(serde_json::from_str::<ChangeMailboxClientAssociationRequest>(&unbind).is_ok());
+    fn change_wire_requires_explicit_client_id_and_rejects_legacy_digest_and_unknown_fields() {
+        let missing = r#"{"expectedRelationshipVersion":0}"#;
+        assert!(serde_json::from_str::<ChangeMailboxClientAssociationRequestDto>(missing).is_err());
+        let unbind = r#"{"clientId":null,"expectedRelationshipVersion":0}"#;
+        assert!(serde_json::from_str::<ChangeMailboxClientAssociationRequestDto>(unbind).is_ok());
+        let legacy = r#"{"clientId":null,"expectedRelationshipVersion":0,"requestDigest":"legacy"}"#;
+        assert!(serde_json::from_str::<ChangeMailboxClientAssociationRequestDto>(legacy).is_err());
         for forbidden in ["secretHandle", "password", "providerToken", "profileId"] {
             let invalid = format!(
-                r#"{{"clientId":null,"expectedRelationshipVersion":0,"requestDigest":"{digest}","{forbidden}":"forbidden"}}"#
+                r#"{{"clientId":null,"expectedRelationshipVersion":0,"{forbidden}":"forbidden"}}"#
             );
-            assert!(
-                serde_json::from_str::<ChangeMailboxClientAssociationRequest>(&invalid).is_err()
-            );
+            assert!(serde_json::from_str::<ChangeMailboxClientAssociationRequestDto>(&invalid).is_err());
         }
-        assert!(valid_digest(&digest));
-        assert!(!valid_digest(&"A".repeat(64)));
-        Ok(())
-    }
-
-    #[test]
-    fn nullable_client_parser_accepts_only_null_or_opaque_client_id() {
-        assert_eq!(parse_nullable_client_id(Value::Null), Ok(None));
-        assert!(parse_nullable_client_id(json!("client_01JASSOCIATION")).is_ok());
-        assert_eq!(parse_nullable_client_id(json!(42)), Err(()));
     }
 }
