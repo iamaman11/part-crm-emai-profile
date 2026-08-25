@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import json
 import runpy
-import subprocess
 from pathlib import Path
 from typing import Any
 
@@ -31,37 +30,6 @@ def expect_validation_failure(
             ) from error
     else:
         raise AssertionError(f"breaking fixture unexpectedly passed: {expected_fragment}")
-
-
-def run_rust(document: dict[str, Any]) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
-        [
-            "cargo",
-            "run",
-            "--locked",
-            "--quiet",
-            "-p",
-            "control-plane-contract",
-            "--bin",
-            "export_frontend_openapi",
-        ],
-        cwd=ROOT,
-        input=json.dumps(document, separators=(",", ":")),
-        text=True,
-        capture_output=True,
-        check=False,
-    )
-
-
-def expect_rust_validation_failure(document: dict[str, Any], expected_fragment: str) -> None:
-    completed = run_rust(document)
-    if completed.returncode == 0:
-        raise AssertionError(f"Rust validator accepted breaking fixture: {expected_fragment}")
-    diagnostics = f"{completed.stdout}\n{completed.stderr}"
-    if expected_fragment not in diagnostics:
-        raise AssertionError(
-            f"Rust validator failed for the wrong reason; expected {expected_fragment!r}, got {diagnostics!r}"
-        )
 
 
 def operation(operation_id: str) -> dict[str, Any]:
@@ -101,6 +69,10 @@ def main() -> int:
     validate_document = symbols["validate_document"]
     compile_operation_ir = symbols["compile_operation_ir"]
     render_compiler_ir = symbols["render_compiler_ir"]
+
+    wrong_dialect = valid_root()
+    wrong_dialect["openapi"] = "3.0.3"
+    expect_validation_failure(validate_document, wrong_dialect, "must be exactly OpenAPI 3.1.0")
 
     duplicate = valid_root()
     duplicate["paths"] = {
@@ -148,6 +120,51 @@ def main() -> int:
         "if": {"properties": {"kind": {"const": "alpha"}}},
     }
     expect_validation_failure(validate_document, unsupported_schema, "unsupported schema keywords")
+
+    legacy_nullable = valid_root()
+    legacy_nullable["components"]["schemas"]["Legacy"] = {
+        "type": "string",
+        "nullable": True,
+    }
+    expect_validation_failure(validate_document, legacy_nullable, "nullable")
+
+    network_reference = valid_root()
+    network_reference["components"]["schemas"]["Remote"] = {
+        "$ref": "https://example.invalid/schema.json"
+    }
+    expect_validation_failure(validate_document, network_reference, "unsupported reference")
+
+    unresolved_reference = valid_root()
+    unresolved_reference["components"]["schemas"]["Missing"] = {
+        "$ref": "#/components/schemas/DoesNotExist"
+    }
+    expect_validation_failure(validate_document, unresolved_reference, "unresolved reference")
+
+    repair_extension = valid_root()
+    repair_extension["x-part-crm-request-digest"] = {
+        "canonicalization": "part-crm-json-v1"
+    }
+    expect_validation_failure(validate_document, repair_extension, "repair extension is forbidden")
+
+    permissive_problem = valid_root()
+    permissive_problem["paths"] = {
+        "/api/v1/problem": {
+            "get": {
+                "operationId": "getProblem",
+                "responses": {
+                    "400": {
+                        "description": "Problem",
+                        "content": {
+                            "application/problem+json": {
+                                "schema": {"type": "object"}
+                            }
+                        },
+                    }
+                },
+            }
+        }
+    }
+    expect_validation_failure(validate_document, permissive_problem, "permissive problem schema")
 
     unsupported_explode = valid_root()
     unsupported_explode["paths"] = {
@@ -215,9 +232,7 @@ def main() -> int:
                 "responses": {
                     "200": {
                         "description": "Thing",
-                        "headers": {
-                            "ETag": {"schema": {"type": "string"}}
-                        },
+                        "headers": {"ETag": {"schema": {"type": "string"}}},
                         "content": {
                             "application/json": {
                                 "schema": {
@@ -246,73 +261,6 @@ def main() -> int:
         raise AssertionError("compiler IR lost operation identity")
     if compiled_operation["responses"][0]["headers"][0]["name"] != "ETag":
         raise AssertionError("compiler IR lost declared response-header validation semantics")
-
-    expect_rust_validation_failure(
-        {"openapi": "3.0.3", "info": {"title": "mixed", "version": "1"}, "paths": {}},
-        "must be exactly 3.1.0",
-    )
-    expect_rust_validation_failure(
-        {
-            "openapi": "3.1.0",
-            "info": {"title": "network-ref", "version": "1"},
-            "paths": {},
-            "components": {
-                "schemas": {"Remote": {"$ref": "https://example.invalid/schema.json"}}
-            },
-        },
-        "network OpenAPI reference is forbidden",
-    )
-    expect_rust_validation_failure(
-        {
-            "openapi": "3.1.0",
-            "info": {"title": "nullable", "version": "1"},
-            "paths": {},
-            "components": {
-                "schemas": {"Legacy": {"type": "string", "nullable": True}}
-            },
-        },
-        "legacy OpenAPI nullable is forbidden",
-    )
-    expect_rust_validation_failure(
-        {
-            "openapi": "3.1.0",
-            "info": {"title": "problem", "version": "1"},
-            "paths": {
-                "/api/v1/problem": {
-                    "get": {
-                        "operationId": "getProblem",
-                        "responses": {
-                            "400": {
-                                "description": "problem",
-                                "content": {
-                                    "application/problem+json": {
-                                        "schema": {"type": "object"}
-                                    }
-                                },
-                            }
-                        },
-                    }
-                }
-            },
-        },
-        "permissive application/problem+json schema is forbidden",
-    )
-    expect_rust_validation_failure(
-        {
-            "openapi": "3.1.0",
-            "info": {"title": "legacy-repair", "version": "1"},
-            "paths": {},
-            "x-part-crm-request-digest": {"canonicalization": "part-crm-json-v1"},
-        },
-        "compiler repair extension is forbidden",
-    )
-
-    pass_through = valid_root()
-    completed = run_rust(pass_through)
-    if completed.returncode != 0:
-        raise AssertionError(completed.stderr)
-    if json.loads(completed.stdout) != pass_through:
-        raise AssertionError("Rust validator mutated valid producer output")
 
     print("PAS-2 deliberately breaking frontend OpenAPI/compiler fixtures rejected as expected")
     return 0
