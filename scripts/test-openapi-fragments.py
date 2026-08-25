@@ -90,8 +90,8 @@ def assert_generation_fragment_surface() -> None:
     deactivate = schemas["DeactivateProfileGenerationRequest"]
     assert deactivate["type"] == "object"
     assert deactivate["additionalProperties"] is False
-    assert set(deactivate["required"]) == {"expectedProfileVersion", "requestDigest"}
-    assert set(deactivate["properties"]) == {"expectedProfileVersion", "requestDigest"}
+    assert set(deactivate["required"]) == {"expectedProfileVersion"}
+    assert set(deactivate["properties"]) == {"expectedProfileVersion"}
 
     dependency = fragment["components"]["responses"]["DependencyUnavailable"]
     assert "application/problem+json" in dependency["content"]
