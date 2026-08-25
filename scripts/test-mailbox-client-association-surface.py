@@ -191,8 +191,9 @@ def main() -> int:
         "changeMailboxClientAssociation as changeMailboxClientAssociationOperation",
         "getMailboxClientAssociation as getMailboxClientAssociationOperation",
         "from '../../shared/api/generated/operations'",
+        "ChangeMailboxClientAssociationInput = ChangeMailboxClientAssociationRequestDto",
+        "body: input",
         "idempotencyKey: newIdempotencyKey()",
-        "expectedRelationshipVersion",
         "listMailboxRelationshipOverview",
         "Promise.all",
     ]:
