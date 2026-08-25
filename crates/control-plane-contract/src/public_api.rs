@@ -402,45 +402,66 @@ mod tests {
     };
 
     #[test]
-    fn canonical_transport_models_keep_wire_field_names() -> Result<(), Box<dyn std::error::Error>> {
+    fn canonical_transport_models_keep_wire_field_names() -> Result<(), Box<dyn std::error::Error>>
+    {
         let session = serde_json::to_value(ActorSession {
-            tenant_id: "tenant_01JCONTRACT".to_owned(), actor_id: "actor_01JCONTRACT".to_owned(), role: "TENANT_OWNER".to_owned(),
+            tenant_id: "tenant_01JCONTRACT".to_owned(),
+            actor_id: "actor_01JCONTRACT".to_owned(),
+            role: "TENANT_OWNER".to_owned(),
         })?;
         assert!(session.get("tenantId").is_some());
         assert!(session.get("actorId").is_some());
 
         let receipt = serde_json::to_value(MutationReceipt {
-            result_code: "created".to_owned(), resource_id: "client_01JCONTRACT".to_owned(), aggregate_version: 1,
+            result_code: "created".to_owned(),
+            resource_id: "client_01JCONTRACT".to_owned(),
+            aggregate_version: 1,
         })?;
         assert!(receipt.get("resultCode").is_some());
         assert!(receipt.get("resourceId").is_some());
         assert!(receipt.get("aggregateVersion").is_some());
 
         let client = serde_json::to_value(ClientProjection {
-            client_id: "client_01JCONTRACT".to_owned(), kind: "PERSON".to_owned(), display_name: "Client".to_owned(), status: "ACTIVE".to_owned(), version: 1,
+            client_id: "client_01JCONTRACT".to_owned(),
+            kind: "PERSON".to_owned(),
+            display_name: "Client".to_owned(),
+            status: "ACTIVE".to_owned(),
+            version: 1,
         })?;
         assert!(client.get("clientId").is_some());
         assert!(client.get("displayName").is_some());
 
         let event = serde_json::to_value(NotificationEventProjection {
-            event_id: "outbox_01JCONTRACT".to_owned(), aggregate_type: "client".to_owned(), aggregate_id: "client_01JCONTRACT".to_owned(),
-            event_type: "client.created.v1".to_owned(), occurred_at_ms: 10,
+            event_id: "outbox_01JCONTRACT".to_owned(),
+            aggregate_type: "client".to_owned(),
+            aggregate_id: "client_01JCONTRACT".to_owned(),
+            event_type: "client.created.v1".to_owned(),
+            occurred_at_ms: 10,
         })?;
         assert!(event.get("eventId").is_some());
         assert!(event.get("occurredAtMs").is_some());
         assert!(event.get("payload").is_none());
 
         let operations = serde_json::to_value(NotificationOperationsProjection {
-            ready_count: 1, retry_scheduled_count: 2, delivered_count: 3, dead_letter_count: 4,
-            pending_replay_count: 5, max_attempt_count: 6, oldest_open_age_ms: Some(7), catch_up_lag_count: 8,
+            ready_count: 1,
+            retry_scheduled_count: 2,
+            delivered_count: 3,
+            dead_letter_count: 4,
+            pending_replay_count: 5,
+            max_attempt_count: 6,
+            oldest_open_age_ms: Some(7),
+            catch_up_lag_count: 8,
         })?;
         assert!(operations.get("deadLetterCount").is_some());
         assert!(operations.get("oldestOpenAgeMs").is_some());
         assert!(operations.get("eventId").is_none());
 
         let problem = serde_json::to_value(ProblemPayload {
-            problem_type: "urn:part-crm:problem:not-found".to_owned(), title: "Not Found".to_owned(), status: 404,
-            code: "not_found".to_owned(), correlation_id: "corr_01JCONTRACT".to_owned(),
+            problem_type: "urn:part-crm:problem:not-found".to_owned(),
+            title: "Not Found".to_owned(),
+            status: 404,
+            code: "not_found".to_owned(),
+            correlation_id: "corr_01JCONTRACT".to_owned(),
         })?;
         assert!(problem.get("type").is_some());
         assert!(problem.get("correlation_id").is_some());
@@ -459,14 +480,21 @@ mod tests {
 
     #[test]
     fn notification_requests_keep_bounded_metadata_only_shapes() {
-        assert!(serde_json::from_str::<NotificationCatchUpAckRequest>(r#"{"eventId":"outbox_01JCONTRACT"}"#).is_ok());
-        let replay = serde_json::from_str::<NotificationReplayRequest>(r#"{
+        assert!(
+            serde_json::from_str::<NotificationCatchUpAckRequest>(
+                r#"{"eventId":"outbox_01JCONTRACT"}"#
+            )
+            .is_ok()
+        );
+        let replay = serde_json::from_str::<NotificationReplayRequest>(
+            r#"{
             "replayId":"replay_01JCONTRACT",
             "consumerId":"consumer_01JCONTRACT",
             "eventId":"outbox_01JCONTRACT",
             "auditEventId":"audit_01JCONTRACT",
             "reasonClass":"OPERATOR_REMEDIATION"
-        }"#);
+        }"#,
+        );
         assert!(replay.is_ok());
     }
 
@@ -475,19 +503,45 @@ mod tests {
         let document = openapi_document();
         let schemas = &document["components"]["schemas"];
         for name in [
-            "ActorSession", "MutationReceipt", "ClientProjection", "ClientCreateRequest", "ClientGrantRequest",
-            "NotificationEventProjection", "NotificationCatchUpProjection", "NotificationCatchUpAckRequest",
-            "NotificationReplayRequest", "NotificationReplayReceipt", "NotificationOperationsProjection", "ProblemPayload",
+            "ActorSession",
+            "MutationReceipt",
+            "ClientProjection",
+            "ClientCreateRequest",
+            "ClientGrantRequest",
+            "NotificationEventProjection",
+            "NotificationCatchUpProjection",
+            "NotificationCatchUpAckRequest",
+            "NotificationReplayRequest",
+            "NotificationReplayReceipt",
+            "NotificationOperationsProjection",
+            "ProblemPayload",
         ] {
             assert!(schemas.get(name).is_some(), "missing schema {name}");
         }
-        assert!(schemas["ClientCreateRequest"]["properties"].get("requestDigest").is_none());
-        assert!(schemas["ClientGrantRequest"]["properties"].get("requestDigest").is_none());
+        assert!(
+            schemas["ClientCreateRequest"]["properties"]
+                .get("requestDigest")
+                .is_none()
+        );
+        assert!(
+            schemas["ClientGrantRequest"]["properties"]
+                .get("requestDigest")
+                .is_none()
+        );
         assert!(document["paths"]["/api/v1/session"]["get"].is_object());
         assert!(document["paths"]["/api/v1/tenants/{tenantId}/clients"]["post"].is_object());
-        assert!(document["paths"]["/api/v1/tenants/{tenantId}/notifications/events"]["get"].is_object());
-        assert!(document["paths"]["/api/v1/tenants/{tenantId}/notifications/replays"]["post"].is_object());
-        assert!(document["paths"]["/api/v1/tenants/{tenantId}/notifications/operations"]["get"].is_object());
+        assert!(
+            document["paths"]["/api/v1/tenants/{tenantId}/notifications/events"]["get"]
+                .is_object()
+        );
+        assert!(
+            document["paths"]["/api/v1/tenants/{tenantId}/notifications/replays"]["post"]
+                .is_object()
+        );
+        assert!(
+            document["paths"]["/api/v1/tenants/{tenantId}/notifications/operations"]["get"]
+                .is_object()
+        );
     }
 
     #[test]
@@ -496,10 +550,20 @@ mod tests {
             let problem_type = problem_type_for_code(code);
             assert!(problem_type.starts_with("urn:part-crm:problem:"));
             if code != "internal_failure" {
-                assert_ne!(problem_type, "urn:part-crm:problem:internal-failure", "known problem code {code} fell through");
+                assert_ne!(
+                    problem_type,
+                    "urn:part-crm:problem:internal-failure",
+                    "known problem code {code} fell through"
+                );
             }
         }
-        assert_eq!(problem_type_for_code("internal_failure"), "urn:part-crm:problem:internal-failure");
-        assert_eq!(problem_type_for_code("unknown_code"), "urn:part-crm:problem:internal-failure");
+        assert_eq!(
+            problem_type_for_code("internal_failure"),
+            "urn:part-crm:problem:internal-failure"
+        );
+        assert_eq!(
+            problem_type_for_code("unknown_code"),
+            "urn:part-crm:problem:internal-failure"
+        );
     }
 }
