@@ -2,7 +2,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { render, screen } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { TenantProvider } from '../../app/TenantContext';
-import { ApiProblem } from '../../shared/api/client';
+import { ApiProblem } from '../../shared/api/openapi-runtime';
 import { getSession } from './api';
 import { SessionPanel } from './SessionPanel';
 
