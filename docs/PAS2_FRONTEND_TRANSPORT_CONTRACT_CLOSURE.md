@@ -166,6 +166,111 @@ destructively re-baselined once by this explicitly governed Transaction B. The s
 only in Git history and immutable historical Release Set artifacts; it is not an active runtime
 contract, rollback target or CI authority after the cutover.
 
+### 4.3 Mandatory change envelopes
+
+These envelopes are normative for PAS-2 and exist so that acceptance does not depend on chat history,
+agent memory or inference from scattered files. `NONE` means an explicit bounded conclusion, not a
+missing answer.
+
+#### Transaction A envelope
+
+```text
+Concern:
+  PAS-2 frontend transport contract authority closure before runtime cutover.
+Failed scenario / required capability:
+  Browser endpoint semantics are duplicated and network payload shape is not executable at runtime;
+  first establish one strict canonical compiler input and retire obsolete contract authorities.
+Natural semantic owner:
+  Capability-owned Rust contract semantics; canonical OpenAPI 3.1 is their versioned browser wire
+  projection and sole frontend compiler input.
+Current duplicate/predecessor:
+  Superseded generated OpenAPI projections, one-shot Pre-2J contract authority checkers, candidate-only
+  requestDigest compiler/browser authority, and self-only drift machinery. The active handwritten
+  frontend runtime remains predecessor for Transaction B and is not replaced by A.
+Target dependency direction:
+  capability Rust -> canonical OpenAPI -> strict mechanical compiler boundary. No active runtime edge
+  changes in A.
+Changed public contracts:
+  Current OpenAPI v1 becomes precise OpenAPI 3.1 producer output; ordinary compatible evolution only.
+  Active runtime requestDigest wire removal is explicitly not part of A.
+Breaking change:
+  NO active runtime breaking cutover in A. Candidate-only requestDigest compiler authority is retired.
+Data migration:
+  NONE.
+Provider mutation:
+  NONE; Cloudflare/staging/production/credentials/secrets are outside scope.
+Files/mechanisms to delete:
+  contracts/generated/control-plane.openapi.json and superseded auxiliary generated OpenAPI copies;
+  frontend_control_plane_openapi_projection and its self-only drift consumer; consumed B4/C2/C3/C3G
+  one-shot authority scripts/machine records; candidate-only requestDigest browser/compiler lineage.
+Explicit non-goals:
+  No frontend runtime switch, no generated-operation adoption, no PayloadFingerprint runtime change,
+  no FC-6, no production/staging mutation, no unrelated Cloudflare/Bridge/Camoufox/mailbox/opsctl redesign.
+Positive acceptance:
+  Deterministic byte-identical producer/export validation; exact OpenAPI 3.1; permanent compatibility
+  policy; required wire vectors; deletion set complete; exact-head permanent CI and protected contexts green.
+Negative acceptance:
+  nullable, network/unresolved references, unsupported schema/media/security semantics, permissive
+  problem bodies, repair extensions, producer mutation, duplicate operationId, incomplete path
+  parameters, restored obsolete projections/checkers, parallel active frontend runtime, or changed
+  merge head all fail.
+Rollback/recovery impact:
+  No runtime rollback surface changes in A. Historical Release Set bytes and contracts/baseline remain
+  immutable; Git history preserves deleted current machinery without keeping it active.
+```
+
+#### Transaction B envelope
+
+```text
+Concern:
+  PAS-2 atomic executable frontend transport runtime cutover.
+Failed scenario / required capability:
+  Active browser path still owns handwritten operation semantics and can trust JSON through generic
+  TypeScript typing instead of runtime contract proof.
+Natural semantic owner:
+  Capability-owned Rust for semantics; canonical OpenAPI for browser wire projection; generated leaf
+  operations for mechanical encoding/decoding; feature/application for product workflow and logical
+  Idempotency-Key lifecycle; server application boundary for PayloadFingerprint.
+Current duplicate/predecessor:
+  requestJson<T>, network-boundary payload as T, endpoint.ts/handwritten method/path/status metadata,
+  direct browser API fetch callers, and requestDigest wire/server-ingress protocol debt.
+Target dependency direction:
+  capability Rust -> canonical OpenAPI -> generated leaf operation/runtime validator -> effect-only
+  HTTP transport -> feature adapter -> application/UI; server ingress -> typed command -> internal
+  PayloadFingerprint -> idempotency store.
+Changed public contracts:
+  requestDigest removed from current /api/v1 request DTOs; generated operations become the only active
+  browser HTTP operation contract path.
+Breaking change:
+  YES — one explicitly governed pre-production destructive current-v1 re-baseline; no compatibility
+  adapter, optional legacy field or v2 island.
+Data migration:
+  No durable data migration unless implementation discovery proves persisted requestDigest-dependent
+  state; if such state exists, B is blocked until the migration is explicitly added to this envelope.
+Provider mutation:
+  NONE as part of PAS-2 code/contract cutover.
+Files/mechanisms to delete:
+  requestJson<T>, endpoint.ts and migrated handwritten endpoint metadata/literals, direct browser API
+  fetch callers, requestDigest DTO/OpenAPI/frontend/server-ingress ownership, and every superseded
+  runtime helper with zero remaining callers/unique invariants.
+Explicit non-goals:
+  No global SDK/service layer, generic retry framework, browser Protobuf island, second digest lineage,
+  provider/staging/production mutation, or unrelated redesign.
+Positive acceptance:
+  Whole active frontend uses generated validated operations; declared success/error/header/body
+  contracts are runtime-proved; same Idempotency-Key + same PayloadFingerprint replays, same key +
+  different fingerprint conflicts; old caller count and old unique-current-invariant count are zero;
+  exact-head permanent CI/protected contexts green.
+Negative acceptance:
+  Two active runtime paths, fallback, handwritten generated code, network payload trusted/cast as T,
+  unsupported schema degraded to any/unknown, missing response validation, changed merge head, retained
+  requestDigest wire authority or indefinite predecessor cleanup all fail.
+Rollback/recovery impact:
+  Superseded requestDigest v1 is not an active rollback contract after B. Historical exact Release Set
+  artifacts remain immutable evidence; post-cutover accepted current v1/baseline becomes the active
+  compatibility floor through the governed acceptance step.
+```
+
 ## 5. Layer boundaries
 
 | Layer | Owns | Must not own |
