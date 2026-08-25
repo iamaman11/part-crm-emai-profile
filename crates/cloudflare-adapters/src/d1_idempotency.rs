@@ -49,6 +49,27 @@ impl D1IdempotencyRepository {
         payload_fingerprint: &PayloadFingerprint,
         now: UnixMillis,
     ) -> Result<IdempotencyDecision> {
+        let now_i64 = i64::try_from(now.value())
+            .map_err(|_| Error::RustError("idempotency decision time overflow".to_owned()))?;
+
+        // PAS-2 legacy rows deliberately carry no trusted fingerprint. They block key reuse
+        // until expiry and are then removed so a current server-owned command can establish
+        // a new idempotency record under the same opaque key.
+        query!(
+            &self.database,
+            r#"
+            DELETE FROM idempotency_records
+            WHERE tenant_id = ? AND actor_id = ? AND idempotency_key = ?
+              AND payload_fingerprint IS NULL AND expires_at_ms <= ?
+            "#,
+            scope.tenant_id().as_str(),
+            actor_id.as_str(),
+            key.as_str(),
+            now_i64
+        )?
+        .run()
+        .await?;
+
         let row = query!(
             &self.database,
             r#"
@@ -72,7 +93,7 @@ impl D1IdempotencyRepository {
 #[derive(Deserialize)]
 struct IdempotencyRow {
     command_name: String,
-    payload_fingerprint: String,
+    payload_fingerprint: Option<String>,
     result_code: String,
     result_reference: Option<String>,
     expires_at_ms: i64,
@@ -84,9 +105,12 @@ fn decide_row(
     payload_fingerprint: &PayloadFingerprint,
     now: UnixMillis,
 ) -> Result<IdempotencyDecision> {
+    let Some(stored_fingerprint) = row.payload_fingerprint else {
+        return Ok(IdempotencyDecision::Conflict);
+    };
     let expires_at = u64::try_from(row.expires_at_ms)
         .map_err(|_| Error::RustError("negative idempotency expiry".to_owned()))?;
-    let stored_fingerprint = PayloadFingerprint::parse(row.payload_fingerprint)
+    let stored_fingerprint = PayloadFingerprint::parse(stored_fingerprint)
         .map_err(|error| Error::RustError(error.to_string()))?;
     if row.command_name != command_name
         || stored_fingerprint != *payload_fingerprint
@@ -112,7 +136,7 @@ mod tests {
     fn row() -> IdempotencyRow {
         IdempotencyRow {
             command_name: "profile_generation.activate".to_owned(),
-            payload_fingerprint: "a".repeat(64),
+            payload_fingerprint: Some("a".repeat(64)),
             result_code: "activated".to_owned(),
             result_reference: Some("generation_01JIDEMPOTENCY".to_owned()),
             expires_at_ms: 100,
@@ -157,6 +181,23 @@ mod tests {
                 "profile_generation.activate",
                 &same,
                 UnixMillis::new(100),
+            )?,
+            IdempotencyDecision::Conflict
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn live_legacy_tombstone_never_replays() -> Result<(), Box<dyn std::error::Error>> {
+        let current = fingerprint('a')?;
+        let mut legacy = row();
+        legacy.payload_fingerprint = None;
+        assert_eq!(
+            decide_row(
+                legacy,
+                "profile_generation.activate",
+                &current,
+                UnixMillis::new(99),
             )?,
             IdempotencyDecision::Conflict
         );
