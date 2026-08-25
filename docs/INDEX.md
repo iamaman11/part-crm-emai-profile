@@ -11,21 +11,25 @@ Navigation only. This file creates no program/lifecycle/semantic authority. Fres
 PF-1   ACCEPTED (#466)
 PF-2   ACCEPTED; semantic-authority correction #477 + raw-provider-observation correction #480 ACCEPTED (#471 provenance)
 PF-3   ACCEPTED provisional; truthfulness correction ACCEPTED (#478 / #431)
-FC-6   NEXT PERMITTED / NOT STARTED BY THIS TRANSACTION
+STAGING BASELINE ACCEPTED (#486); TEMPORARY MECHANISM REMOVED (#487)
+PAS-2/TC-1 CURRENT PREREQUISITE BEFORE FC-6
+FC-6   DEFERRED / NOT STARTED; PRE-PAS-2 AUDIT RECORDED READY
 AR-12  NOT STARTED
 production_mutation = false
 ```
 
-Accepted code checkpoint before this documentation-only convergence: `a8af2120255f117a7cf58ab86ff79963005f58a0`. The current protected-main SHA must always be reread from GitHub; this projection never overrides it.
+The current protected-main SHA and live provider state must always be reread; this projection never
+overrides them.
 
 ## Authority hierarchy
 
 1. [`ARCHITECTURE_REBASELINE_V3_PLAN.md`](ARCHITECTURE_REBASELINE_V3_PLAN.md) — canonical current program authority.
 2. [`APPLICATION_ARCHITECTURE_MANDATORY_REQUIREMENTS.md`](APPLICATION_ARCHITECTURE_MANDATORY_REQUIREMENTS.md) + [`ARCHITECTURE_EVOLUTION_QUALITY_CONTRACT.md`](ARCHITECTURE_EVOLUTION_QUALITY_CONTRACT.md) — permanent architecture/quality rules.
 3. [`POST_AR11_FUNCTIONAL_CLOSURE_PLAN.md`](POST_AR11_FUNCTIONAL_CLOSURE_PLAN.md), #399, #421 — live Functional Closure obligations.
-4. [`PF3_ARCHITECTURE_FITNESS_BASELINE.md`](PF3_ARCHITECTURE_FITNESS_BASELINE.md), #431, #478 — accepted provisional PF-3 baseline and correction.
-5. Accepted historical prerequisites: #471/#477/#480 for PF-2; #441, #430, #466 and their historical contracts for pre-PF-1/PF-1.
-6. Bounded subject authorities: Rust/SQL/provider-native/runtime/release/security contracts and ADRs.
+4. [`PAS2_FRONTEND_TRANSPORT_CONTRACT_CLOSURE.md`](PAS2_FRONTEND_TRANSPORT_CONTRACT_CLOSURE.md) — bounded pre-FC-6 PAS-2 correction.
+5. [`PF3_ARCHITECTURE_FITNESS_BASELINE.md`](PF3_ARCHITECTURE_FITNESS_BASELINE.md), #431, #478 — accepted provisional PF-3 baseline and correction.
+6. Accepted historical prerequisites: #471/#477/#480 for PF-2; #441, #430, #466 and their historical contracts for pre-PF-1/PF-1.
+7. Bounded subject authorities: Rust/SQL/provider-native/runtime/release/security contracts and ADRs.
 
 Closed trackers and historical evidence never become a second current-state authority merely because they contain old `CURRENT` text.
 
@@ -44,7 +48,10 @@ Closed trackers and historical evidence never become a second current-state auth
 ```text
 accepted PF-2 semantic-authority + raw-provider-observation corrections
 -> accepted PF-3 truthfulness correction
--> current-state documentation convergence
+-> staging-baseline adoption accepted under temporary #486 authority
+-> temporary adoption mechanism removed (#487)
+-> fresh audit recorded FC-6 READY TO BEGIN / NOT STARTED
+-> PAS-2/TC-1 executable frontend transport contract closure
 -> final read-only readiness audit
 -> FC-6 may begin only after a separate explicit instruction
 -> FC-7 closeout

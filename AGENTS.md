@@ -67,9 +67,11 @@ An internal caller, validator, generator, drift gate, self-test or documentation
 
 ## 5. Current stage and freeze discipline
 
-PF-1, PF-2 and PF-3 are accepted prerequisites. PF-2 semantic-authority convergence #477 and raw-provider-observation correction #480 are accepted; PF-3 truthfulness correction #478 is accepted. PF-3 remains provisional.
+PF-1, PF-2 and PF-3 are accepted prerequisites. PF-2 semantic-authority convergence #477 and raw-provider-observation correction #480 are accepted; PF-3 truthfulness correction #478 is accepted. PF-3 remains provisional. Staging-baseline adoption completed through the temporary #486 authority, #487 removed that temporary mechanism, and the fresh tracker audit recorded `FC-6 READY TO BEGIN / NOT STARTED` on accepted main. Those observations must still be reread rather than inferred from repository code.
 
-FC-6 is the next permitted stage only after final readiness audit and a **separate explicit user instruction**. Historical read-only FC-6 work/#476 does not authorize continuation during prerequisite/documentation closeout.
+The subsequently demonstrated PAS-2 frontend transport-contract defect is governed only by `docs/PAS2_FRONTEND_TRANSPORT_CONTRACT_CLOSURE.md`. PAS-2/TC-1 contract closure and destructive frontend cutover must be accepted before a new FC-6 readiness decision. This is one bounded scenario-driven correction, not a new roadmap or general redesign permission.
+
+FC-6 may start only after accepted PAS-2/TC-1, a fresh final readiness audit and a **separate explicit user instruction**. Historical read-only FC-6 work/#476 does not authorize continuation during prerequisite/documentation closeout.
 
 FC-6…AR-15 may make only the smallest correction required by a named failed product/rehearsal scenario. Final architecture-form freeze follows accepted AR-15; AR-16 audits and AR-17 qualifies/authorizes.
 

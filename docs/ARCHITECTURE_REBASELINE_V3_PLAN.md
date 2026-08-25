@@ -7,8 +7,10 @@
 **FC-6 execution tracker:** #421  
 **Accepted PF-2 corrections:** #480 / #477 / #471  
 **Accepted PF-3 truthfulness correction:** #478 / #431  
-**Accepted code checkpoint before this documentation-only convergence:** `a8af2120255f117a7cf58ab86ff79963005f58a0`  
-**Next permitted stage:** FC-6 — READY TO BEGIN ONLY AFTER FINAL READ-ONLY AUDIT AND A SEPARATE EXPLICIT INSTRUCTION  
+**Accepted staging-baseline closeout:** #486 ADOPTION + #487 TEMPORARY-MECHANISM REMOVAL
+**Bounded PAS-2 correction:** `docs/PAS2_FRONTEND_TRANSPORT_CONTRACT_CLOSURE.md`
+**Current prerequisite order:** PAS-2/TC-1 -> FRESH FC-6 READINESS
+**FC-6 state:** DEFERRED / NOT STARTED; PRE-PAS-2 AUDIT RECORDED READY
 **FC-6 execution in this transaction:** NOT STARTED  
 **Next AR slice:** AR-12 — Fresh Rehearsal Environment — BLOCKED / NOT STARTED  
 **Production authorization:** NONE  
@@ -34,7 +36,8 @@ All future PF/FC/AR/PC work is governed by this document together with:
 - `docs/ARCHITECTURE_EVOLUTION_QUALITY_CONTRACT.md`;
 - `docs/OPSCTL_ARCHITECTURE_BOUNDARY.md`;
 - `docs/OPSCTL_DOCTOR_CONTRACT.md`;
-- `docs/PYTHON_USAGE_BOUNDARY.md`.
+- `docs/PYTHON_USAGE_BOUNDARY.md`;
+- `docs/PAS2_FRONTEND_TRANSPORT_CONTRACT_CLOSURE.md` for the one authorized bounded PAS-2 correction.
 
 Permanent shape:
 
@@ -168,14 +171,24 @@ F1/F2 ACCEPTED
 -> PF-1 ACCEPTED (#466)
 -> PF-2 ACCEPTED + semantic-authority correction #477 + raw-provider-observation correction #480 ACCEPTED (#471 provenance)
 -> PF-3 ACCEPTED provisional + truthfulness correction ACCEPTED (#478 / #431)
--> documentation convergence
+-> staging-baseline adoption ACCEPTED under temporary #486 authority
+-> temporary adoption mechanism removed (#487)
+-> fresh audit recorded FC-6 READY TO BEGIN / NOT STARTED
+-> PAS-2/TC-1 executable frontend transport contract closure
 -> final read-only readiness audit
--> FC-6 next permitted stage
+-> FC-6 eligible only after fresh readiness + separate instruction
 ```
 
 A historical read-only FC-6 re-baseline and the repository-only rehearsal-verifier correction #476 occurred before the later PF corrections. #476 removed a Release Set v2/v3 verifier mismatch and performed no staging mutation. #480 subsequently completed PF-2 raw-provider-observation convergence. That history does not authorize resuming FC-6 inside the current correction/documentation work.
 
-FC-6 may begin only after a fresh explicit user instruction following readiness acceptance.
+Staging-baseline adoption completed under temporary #486 authority, #487 removed the temporary
+mechanism, and the fresh tracker audit recorded `FC-6 READY TO BEGIN / NOT STARTED` on accepted main.
+The subsequently demonstrated PAS-2 frontend type-forgery/split-operation-ownership defect is now the
+only authorized repository architecture correction before FC-6. Its bounded contract is
+`docs/PAS2_FRONTEND_TRANSPORT_CONTRACT_CLOSURE.md`.
+
+FC-6 may begin only after accepted PAS-2/TC-1 and a fresh explicit user instruction following
+readiness acceptance.
 
 ## 5. Permanent `opsctl` boundary
 
@@ -271,9 +284,19 @@ There is no semantic fitness JSON, global fitness registry, architecture DSL or 
 
 PF-3 remains provisional. FC-6 through AR-15 may make only the smallest scenario-driven correction required by concrete failing evidence. Final architecture-form freeze follows accepted AR-15 Windows delivery/updater/recovery proof; `architecture_complete` remains false until AR-17 qualification.
 
-## 11. FC-6 / Functional Closure boundary
+## 11. PAS-2/TC-1 and FC-6 / Functional Closure boundary
 
 Live trackers: #399 and #421.
+
+PAS-2/TC-1 is a concrete pre-FC-6 correction: the current browser boundary can convert untrusted
+successful JSON to a caller-selected TypeScript `T`, while feature adapters manually duplicate
+operation semantics. The correction is limited to canonical OpenAPI 3.1 contract closure, generated
+leaf operations/runtime validation, effect-only HTTP transport, feature-adapter cutover and physical
+predecessor deletion. Capability-owned Rust remains the semantic authoring owner; OpenAPI is the sole
+versioned executable frontend compiler input. No global SDK, second schema registry, Protobuf browser
+rewrite, alternative digest lineage or generic frontend redesign is permitted.
+
+Binding detail and DoD: `docs/PAS2_FRONTEND_TRANSPORT_CONTRACT_CLOSURE.md`.
 
 The next FC-6 run begins with a fresh read-only observation of accepted protected `main`, governance, workflows, credential scope/readiness, current staging identity, known-good identity, current Release Sets and hosted evidence.
 
@@ -282,7 +305,8 @@ The next FC-6 run begins with a fresh read-only observation of accepted protecte
 Credential readiness means provider-verified status, exact account/resource scope, expected permission set, protected binding names and a sufficient validity window for the complete ceremony. Exportable static credentials are bounded to a maximum provider lifetime of six calendar months; non-expiring exportable static credentials fail readiness. Short-lived or federated identity is preferred where the provider supports it. Secret value readback and production credential reuse remain forbidden.
 
 ```text
-fresh read-only #399/#421 re-baseline
+accepted PAS-2/TC-1
+-> fresh read-only #399/#421 re-baseline
 -> typed READY | BLOCKED
 -> only READY may expose deploy-capable credentials or permit staging mutation
 -> exact accepted bits / same-bits staging proof
@@ -306,6 +330,7 @@ Current documentation/PF corrections perform none of those operations.
 ## 12. Post-PF-3 phase semantics and final freeze
 
 ```text
+PAS-2/TC-1      executable frontend transport contract closure; bounded pre-FC-6 correction only
 FC-6 / FC-7     functional closure + staging proof; bounded scenario correction only
 AR-12           fresh-environment rehearsal from canonical inputs; prove no hidden credential/config state and no legacy JSON bundle consumer
 AR-13           rotation rehearsal for every active exportable secret: issue -> validate -> bind -> switch -> verify -> retire; six-calendar-month maximum; account/service-owned Cloudflare automation and GitHub App short-lived identity where supported; atomic Access/R2/OAuth/runtime-key overlap and rollback; retire obsolete bootstraps/bundle bindings only after verified successors
@@ -337,7 +362,7 @@ Source presence does not grant production exposure.
 | ID | Scenario | Required outcome |
 | --- | --- | --- |
 | PAS-1 | Identity and governed access | Owner/sign-in/membership/authorization work end to end; unauthorized/revoked/stale access fails before mutation. |
-| PAS-2 | Client and browser-profile workflow | Real UI/API create/update/bind/grant/bulk flow with stable validation/audit. |
+| PAS-2 | Client and browser-profile workflow | Real UI/API create/update/bind/grant/bulk flow; inbound HTTP data is runtime-proved against the canonical operation contract before feature/UI success, with stable validation/audit. |
 | PAS-3 | Encrypted profile lifecycle | Generation encrypt/persist/open/close/restore without plaintext/identity ambiguity. |
 | PAS-4 | Real Windows browser execution | Profile Bridge launches pinned real Camoufox through versioned IPC, enforces single writer and safe update/rollback. |
 | PAS-5 | Failure/retry/recovery | Crash/timeout/duplicate/partial failure is fenced/idempotent and recoverable with actionable observability. |
@@ -347,6 +372,7 @@ Source presence does not grant production exposure.
 Phase mapping:
 
 ```text
+PAS-2/TC-1 -> PAS-2 executable frontend transport boundary
 FC-6/FC-7 -> PAS-1,2,3,6,7
 AR-12     -> PAS-1,2,3,6
 AR-13     -> PAS-3,5,7
@@ -398,10 +424,14 @@ For the current prerequisite closeout, the required checkpoint is:
 ```text
 PF-2 semantic-authority + raw-provider-observation corrections accepted
 + PF-3 truthfulness correction accepted
-+ current documentation converged
++ staging-baseline adoption completed under temporary #486 authority
++ temporary adoption mechanism removed (#487)
++ PAS-2/TC-1 contract closure + destructive cutover accepted
 + protected-main acceptance evidence read fresh
 + final read-only audit
-= FC-6 next permitted stage, but not started
+= FC-6 eligibility gate, but not started
 ```
 
-A separate explicit user instruction is required to begin FC-6. Until then no FC-6 branch, preflight execution, rehearsal, promotion, deployment, rollback, staging mutation or production mutation is authorized.
+A separate explicit user instruction is required to begin FC-6. PAS-2/TC-1 authorizes no staging or
+production mutation. Until its acceptance and the later readiness decision, no FC-6 branch, preflight
+execution, rehearsal, promotion, deployment, rollback or production mutation is authorized.

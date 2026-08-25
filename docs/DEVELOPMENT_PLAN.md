@@ -18,14 +18,17 @@ source_present != production_enabled
 PF-1   ACCEPTED (#466)
 PF-2   ACCEPTED; semantic-authority correction #477 + raw-provider-observation correction #480 ACCEPTED (#471 provenance)
 PF-3   ACCEPTED provisional; truthfulness correction ACCEPTED (#478 / #431)
-FC-6   NEXT PERMITTED / NOT STARTED BY THIS TRANSACTION
+STAGING BASELINE ACCEPTED (#486); TEMPORARY MECHANISM REMOVED (#487)
+PAS-2/TC-1 CURRENT PREREQUISITE BEFORE FC-6
+FC-6   DEFERRED / NOT STARTED; PRE-PAS-2 AUDIT RECORDED READY
 AR-12  NOT STARTED
 architecture_form_frozen = false
 architecture_complete = false
 production_mutation = false
 ```
 
-Accepted code checkpoint before this documentation-only convergence: `a8af2120255f117a7cf58ab86ff79963005f58a0`. Re-read protected `main` before every transaction; do not copy this SHA forward as an execution assumption.
+Do not copy a checkpoint SHA into execution assumptions. Re-read protected `main`, live trackers and
+provider state before every transaction.
 
 ## 2. One bounded transaction discipline
 
@@ -112,14 +115,26 @@ objective invariant
 
 Do not rebuild a generic rule engine, metadata registry, DSL, plugin/DI/linter framework or fitness JSON. PF-3 remains provisional; final architecture-form freeze follows accepted AR-15.
 
-## 5. Functional Closure
+## 5. PAS-2/TC-1 and Functional Closure
 
-FC-6 is the next permitted stage after final readiness audit, but this transaction does not start it.
+Staging-baseline adoption completed under temporary #486 authority, #487 removed that mechanism, and
+the fresh tracker audit recorded `FC-6 READY TO BEGIN / NOT STARTED`. The subsequently demonstrated
+PAS-2/TC-1 defect now closes frontend transport type-forgery and split operation ownership before
+readiness is decided again. It uses canonical OpenAPI 3.1,
+generated leaf operations/runtime validators, an effect-only HTTP transport and feature adapters, then
+deletes `requestJson<T>`, manual migrated operation metadata and direct API `fetch` bypasses. It does not
+create a global SDK, second schema registry, browser Protobuf transport or new digest lineage.
+
+Binding contract: `docs/PAS2_FRONTEND_TRANSPORT_CONTRACT_CLOSURE.md`.
+
+FC-6 becomes the next permitted stage only after accepted PAS-2/TC-1 and a final readiness audit; this
+transaction does not start it.
 
 A historical read-only FC-6 re-baseline already found and fixed the Release Set v2/v3 rehearsal-verifier defect in #476. It did not perform staging mutation. Current FC-6 execution still requires a fresh read-only re-baseline of accepted `main`, governance, credentials, provider state, staging identity, known-good identity and Release Sets, producing typed `READY | BLOCKED` before any mutation. The hosted-evidence prerequisite consumed by that re-baseline is the strict raw-observation/Rust-policy path accepted through #480; historical or pre-classified read verdicts are not valid substitutes.
 
 ```text
-fresh #399/#421 re-baseline
+PAS-2/TC-1 accepted
+-> fresh #399/#421 re-baseline
 -> typed READY | BLOCKED
 -> only READY may expose deploy-capable credentials or permit staging mutation
 -> exact accepted bits / same-bits staging proof
@@ -171,6 +186,7 @@ PC-1 enables only accepted Production Core capabilities through Release / Capabi
 - `docs/APPLICATION_ARCHITECTURE_MANDATORY_REQUIREMENTS.md` — permanent architecture contract;
 - `docs/ARCHITECTURE_EVOLUTION_QUALITY_CONTRACT.md` — quality/anti-weakening contract;
 - `docs/PF3_ARCHITECTURE_FITNESS_BASELINE.md` / #431 / #478 — PF-3;
+- `docs/PAS2_FRONTEND_TRANSPORT_CONTRACT_CLOSURE.md` — bounded pre-FC-6 executable frontend transport correction;
 - #471 / #477 / #480 — accepted PF-2 provenance;
 - `docs/POST_AR11_FUNCTIONAL_CLOSURE_PLAN.md` / #399 / #421 — Functional Closure;
 - `docs/ARCHITECTURE_ACCEPTANCE_PROTOCOL.md` — exact-head/merge discipline;

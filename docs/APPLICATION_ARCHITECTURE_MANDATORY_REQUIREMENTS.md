@@ -7,6 +7,7 @@
 **opsctl boundary:** `docs/OPSCTL_ARCHITECTURE_BOUNDARY.md`  
 **opsctl doctor:** `docs/OPSCTL_DOCTOR_CONTRACT.md`  
 **Python boundary:** `docs/PYTHON_USAGE_BOUNDARY.md`  
+**PAS-2 frontend transport:** `docs/PAS2_FRONTEND_TRANSPORT_CONTRACT_CLOSURE.md`
 **Production authorization:** NONE
 
 These are mandatory prospective requirements for every PF/FC/AR/PC change. Accepted AR-0…AR-11 history is not reopened. The product remains one modular application with one protected `main`, one architecture hierarchy, one schema/compatibility lineage and one Release / Capability Profile authority for production admission.
@@ -354,6 +355,47 @@ Python must not become a second semantic owner or ungoverned provider mutation a
 
 The real Camouhost adapter is legitimate Product Runtime outer adapter. Synthetic Camouhost is test-only. Historical Python estate registry/overlays are not permanent current authority.
 
+## 15.1 Executable frontend transport contract
+
+For browser HTTP, capability-owned Rust contract modules remain the natural semantic authoring owners.
+Their deterministic canonical OpenAPI 3.1 artifact is the sole executable frontend compiler input.
+Generated TypeScript types, operation descriptors, request encoders and runtime decoders are mechanical
+projections; handwritten feature endpoint metadata and handwritten sibling schemas are not authorities.
+
+```text
+capability Rust contract
+-> canonical versioned OpenAPI
+-> deterministic generated leaf operation + validator
+-> effect-only HTTP transport
+-> validated wire result
+-> feature adapter
+-> application/UI
+```
+
+Permanent requirements:
+
+```text
+unvalidated network representation crossing feature/application boundary = 0
+caller-selected generic response T at network boundary = 0
+direct browser API fetch outside the concrete HTTP transport = 0
+manual duplicate method/path/status/media-type for migrated operations = 0
+generated operation without runtime success/error validation = 0
+unsupported OpenAPI construct silently mapped to any/unknown success = 0
+parallel active frontend transport implementations after cutover = 0
+```
+
+The generic HTTP transport owns effects, abort/timeout, credentials plumbing and bounded raw bytes. It
+does not own endpoint paths, JSON semantics, accepted status, media type or DTO validation. Operation-
+specific retry is not a generic transport policy.
+
+Browser HTTP remains OpenAPI + JSON. Protobuf requires a genuine process/binary boundary and may not be
+introduced to route around this contract closure. Existing SHA-256 release/contract/evidence identity
+remains singular; no BLAKE3 parallel authority is introduced. `opsctl` does not participate. Python may
+orchestrate deterministic generation but may not become the contract owner or runtime validator.
+
+The bounded correction and exact acceptance proofs are owned by
+`docs/PAS2_FRONTEND_TRANSPORT_CONTRACT_CLOSURE.md`.
+
 ## 16. PF-1 / PF-2 / PF-3 application and architecture freeze
 
 PF-1 consumes bounded typed projections and explicit raw lifecycle observations. It must not build a global raw authority bag or keep Node/Python semantic predecessors after cutover. `opsctl doctor`/repository-root are mandatory callers in that cutover. N2…N5 must have already resolved their own subject authority ambiguities; PF-1 is not a catch-all cleanup phase.
@@ -364,11 +406,18 @@ PF-3 owns fitness semantics in typed Rust `FitnessRuleRegistry` or equivalent. A
 
 **PF-3 acceptance is a provisional machine-enforced fitness baseline.** It does not authorize production, does not set `architecture_complete=true`, and does not claim that the architecture has survived real staging/recovery/Windows delivery. After PF-3, new generic layers, global authority frameworks, duplicate lifecycle engines, generic compatibility frameworks and open-ended redesign buckets are forbidden.
 
-FC-6 through AR-15 may make only the smallest correction required by a failed product acceptance scenario or rehearsal. The correction names the failed scenario, preserves single ownership, updates the relevant fitness rule/negative proof in the same transaction and does not create a parallel compatibility or registry surface. Accepted AR-15, after its Windows delivery/recovery scenario proof, is the final architecture-form freeze point. AR-16 remains audit-only and AR-17 qualification/authorization-only.
+The demonstrated PAS-2 frontend transport-contract failure authorizes only PAS-2/TC-1 before FC-6.
+FC-6 through AR-15 may otherwise make only the smallest
+correction required by a failed product acceptance scenario or rehearsal. Every correction names the
+failed scenario, preserves single ownership, updates the relevant specialized enforcement/negative
+proof in the same transaction and does not create a parallel compatibility or registry surface.
+Accepted AR-15, after its Windows delivery/recovery scenario proof, is the final architecture-form
+freeze point. AR-16 remains audit-only and AR-17 qualification/authorization-only.
 
 Post-PF-3 roles are fixed:
 
 ```text
+PAS-2/TC-1         bounded executable frontend transport-contract correction only
 FC-6 / FC-7     functional closure/staging proof; bounded scenario-driven correction only
 AR-12..AR-15    rehearsal/delivery; bounded scenario-driven correction only
 AR-16           audit only

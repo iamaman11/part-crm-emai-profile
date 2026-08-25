@@ -107,6 +107,33 @@ not own domain policy. Frontend, Bridge and future CRM adapters consume versione
 contracts; domain crates remain independent of HTTP, protobuf runtime and provider
 SDK types.
 
+### 6.1 Executable browser contract
+
+Capability-owned Rust contract modules are the natural semantic authoring owners.
+The deterministically exported and merged OpenAPI 3.1 document is the sole
+versioned executable frontend compiler input. Generated TypeScript types,
+operations, encoders and validators are projections and may not be edited as a
+second authority.
+
+The PAS-2/TC-1 cutover must first reconcile the retained mixed-dialect and
+schema-only predecessor artifacts through the normal v1 compatibility policy. It
+may not reinterpret a breaking v1 change as generator cleanup. Historical Release
+Set assets remain immutable. A current breaking wire change still requires a
+governed migration or new major root.
+
+The frontend compiler fails closed on unsupported OpenAPI/JSON Schema constructs,
+unresolved or network references, duplicate operation IDs, invalid path-parameter
+coverage and unsupported serialization/media types. It must never substitute
+`any`, skip runtime validation or accept a type-only operation.
+
+Browser HTTP remains OpenAPI + JSON. Protobuf remains reserved for genuine
+independent process/binary boundaries. SHA-256 remains the singular authoritative
+contract/release/evidence digest; no parallel BLAKE3 identity is introduced by the
+frontend cutover.
+
+Binding execution contract:
+`docs/PAS2_FRONTEND_TRANSPORT_CONTRACT_CLOSURE.md`.
+
 ## 7. Pre-2J B4 one-shot additive v1 authority
 
 The Phase 2I release freeze remains the default during the active pre-2J
