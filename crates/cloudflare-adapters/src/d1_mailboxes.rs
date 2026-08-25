@@ -42,7 +42,7 @@ INSERT INTO mailbox_job_run_commands_v2 (
 
 const IDEMPOTENCY_CREATE: &str = r#"
 INSERT INTO idempotency_records (
-    tenant_id, actor_id, idempotency_key, command_name, request_digest,
+    tenant_id, actor_id, idempotency_key, command_name, payload_fingerprint,
     result_code, result_reference, created_at_ms, expires_at_ms
 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 "#;
@@ -544,7 +544,7 @@ fn idempotency_statement(
         actor_id,
         envelope.idempotency_key.as_str(),
         command_name,
-        envelope.request_digest,
+        envelope.payload_fingerprint.as_str(),
         result_code,
         result_reference,
         now,
