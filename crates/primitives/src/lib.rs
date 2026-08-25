@@ -265,7 +265,7 @@ impl UnixMillis {
 mod tests {
     use super::{
         ActorContext, ActorId, AggregateVersion, ContactPointId, CorrelationId, OpaqueId,
-        PayloadFingerprint, TenantId, TenantScope,
+        PayloadFingerprint, SHA256_HEX_LENGTH, TenantId, TenantScope,
     };
 
     #[test]

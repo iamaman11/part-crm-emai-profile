@@ -320,7 +320,7 @@ mod tests {
     use identity_access_domain::MembershipRole;
     use profile_platform_primitives::{
         ActorContext, ActorId, AggregateVersion, AuditEventId, ClientId, CorrelationId,
-        IdempotencyKey, OutboxEventId, TenantId, TenantScope, UnixMillis,
+        IdempotencyKey, OutboxEventId, PayloadFingerprint, TenantId, TenantScope, UnixMillis,
     };
     use std::cell::{Cell, RefCell};
     use std::future::Future;
@@ -399,7 +399,7 @@ mod tests {
     fn evidence() -> Result<CommandExecutionEvidence, Box<dyn std::error::Error>> {
         Ok(CommandExecutionEvidence::new(
             IdempotencyKey::parse("idem_01JCLIENTAPP")?,
-            "digest_01JCLIENTAPP",
+            PayloadFingerprint::parse("a".repeat(64))?,
             AuditEventId::parse("audit_01JCLIENTAPP")?,
             OutboxEventId::parse("outbox_01JCLIENTAPP")?,
             UnixMillis::new(10),
