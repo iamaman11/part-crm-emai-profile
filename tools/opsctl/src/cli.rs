@@ -105,12 +105,6 @@ pub enum Invocation {
         current_release_set: Option<PathBuf>,
         known_good_release_set: Option<PathBuf>,
         expected_current_release_set_id: Option<String>,
-        baseline_adoption_observation: Option<PathBuf>,
-        expected_account_id: Option<String>,
-        expected_deployment_id: Option<String>,
-        expected_version_id: Option<String>,
-        request_id: Option<String>,
-        confirmation: Option<String>,
     },
 }
 
@@ -848,7 +842,6 @@ where
         "plan" => promotion::PromotionAction::Plan,
         "preflight" => promotion::PromotionAction::Preflight,
         "verify" => promotion::PromotionAction::Verify,
-        "baseline-adoption-preflight" => promotion::PromotionAction::BaselineAdoptionPreflight,
         other => {
             return Err(OpsctlError::new(
                 "promotion",
@@ -866,12 +859,6 @@ where
     let mut current_release_set: Option<PathBuf> = None;
     let mut known_good_release_set: Option<PathBuf> = None;
     let mut expected_current_release_set_id: Option<String> = None;
-    let mut baseline_adoption_observation: Option<PathBuf> = None;
-    let mut expected_account_id: Option<String> = None;
-    let mut expected_deployment_id: Option<String> = None;
-    let mut expected_version_id: Option<String> = None;
-    let mut request_id: Option<String> = None;
-    let mut confirmation: Option<String> = None;
 
     while let Some(argument) = iterator.next() {
         let flag = argument
@@ -956,79 +943,6 @@ where
                     "--expected-current",
                 )?;
             }
-            "--baseline-adoption-observation" => {
-                let value = iterator.next().ok_or_else(|| {
-                    OpsctlError::new(
-                        "promotion",
-                        "--baseline-adoption-observation requires a value",
-                    )
-                })?;
-                set_once(
-                    &mut baseline_adoption_observation,
-                    PathBuf::from(value),
-                    "--baseline-adoption-observation",
-                )?;
-            }
-            "--expected-account-id" => {
-                let value = iterator
-                    .next()
-                    .ok_or_else(|| {
-                        OpsctlError::new("promotion", "--expected-account-id requires a value")
-                    })?
-                    .into_string()
-                    .map_err(|_| {
-                        OpsctlError::new("promotion", "expected account id must be valid UTF-8")
-                    })?;
-                set_once(&mut expected_account_id, value, "--expected-account-id")?;
-            }
-            "--expected-deployment-id" => {
-                let value = iterator
-                    .next()
-                    .ok_or_else(|| {
-                        OpsctlError::new("promotion", "--expected-deployment-id requires a value")
-                    })?
-                    .into_string()
-                    .map_err(|_| {
-                        OpsctlError::new("promotion", "expected deployment id must be valid UTF-8")
-                    })?;
-                set_once(
-                    &mut expected_deployment_id,
-                    value,
-                    "--expected-deployment-id",
-                )?;
-            }
-            "--expected-version-id" => {
-                let value = iterator
-                    .next()
-                    .ok_or_else(|| {
-                        OpsctlError::new("promotion", "--expected-version-id requires a value")
-                    })?
-                    .into_string()
-                    .map_err(|_| {
-                        OpsctlError::new("promotion", "expected version id must be valid UTF-8")
-                    })?;
-                set_once(&mut expected_version_id, value, "--expected-version-id")?;
-            }
-            "--request-id" => {
-                let value = iterator
-                    .next()
-                    .ok_or_else(|| OpsctlError::new("promotion", "--request-id requires a value"))?
-                    .into_string()
-                    .map_err(|_| OpsctlError::new("promotion", "request id must be valid UTF-8"))?;
-                set_once(&mut request_id, value, "--request-id")?;
-            }
-            "--confirmation" => {
-                let value = iterator
-                    .next()
-                    .ok_or_else(|| {
-                        OpsctlError::new("promotion", "--confirmation requires a value")
-                    })?
-                    .into_string()
-                    .map_err(|_| {
-                        OpsctlError::new("promotion", "confirmation must be valid UTF-8")
-                    })?;
-                set_once(&mut confirmation, value, "--confirmation")?;
-            }
             other => {
                 return Err(OpsctlError::new(
                     "promotion",
@@ -1077,34 +991,6 @@ where
                 action,
             )?;
         }
-        promotion::PromotionAction::BaselineAdoptionPreflight => {
-            if baseline_adoption_observation.is_none()
-                || expected_account_id.is_none()
-                || expected_deployment_id.is_none()
-                || expected_version_id.is_none()
-                || request_id.is_none()
-                || confirmation.is_none()
-            {
-                return Err(OpsctlError::new(
-                    "promotion",
-                    format!(
-                        "baseline adoption preflight requires observation, account/deployment/version fences, request id and confirmation for promotion {}",
-                        action.name()
-                    ),
-                ));
-            }
-            reject_if_present_promotion(&current_release_set, "--current-release-set", action)?;
-            reject_if_present_promotion(
-                &known_good_release_set,
-                "--known-good-release-set",
-                action,
-            )?;
-            reject_if_present_promotion(
-                &expected_current_release_set_id,
-                "--expected-current",
-                action,
-            )?;
-        }
     }
 
     Ok(Invocation::Promotion {
@@ -1119,12 +1005,6 @@ where
         current_release_set,
         known_good_release_set,
         expected_current_release_set_id,
-        baseline_adoption_observation,
-        expected_account_id,
-        expected_deployment_id,
-        expected_version_id,
-        request_id,
-        confirmation,
     })
 }
 

@@ -220,12 +220,6 @@ pub fn execute(invocation: Invocation) -> Result<String, OpsctlError> {
             current_release_set,
             known_good_release_set,
             expected_current_release_set_id,
-            baseline_adoption_observation,
-            expected_account_id,
-            expected_deployment_id,
-            expected_version_id,
-            request_id,
-            confirmation,
         } => {
             let repo_root = resolve_repo_root(root.as_deref(), "promotion")?;
             let release_source_root = source_root.as_deref().unwrap_or(&repo_root);
@@ -241,12 +235,6 @@ pub fn execute(invocation: Invocation) -> Result<String, OpsctlError> {
                 current_release_set: current_release_set.as_deref(),
                 known_good_release_set: known_good_release_set.as_deref(),
                 expected_current_release_set_id: expected_current_release_set_id.as_deref(),
-                baseline_adoption_observation: baseline_adoption_observation.as_deref(),
-                expected_account_id: expected_account_id.as_deref(),
-                expected_deployment_id: expected_deployment_id.as_deref(),
-                expected_version_id: expected_version_id.as_deref(),
-                request_id: request_id.as_deref(),
-                confirmation: confirmation.as_deref(),
             })
             .map_err(|error| OpsctlError::new("promotion", error.to_string()))
         }
