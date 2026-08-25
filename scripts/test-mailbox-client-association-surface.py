@@ -193,12 +193,13 @@ def main() -> int:
         "from '../../shared/api/generated/operations'",
         "ChangeMailboxClientAssociationInput = ChangeMailboxClientAssociationRequestDto",
         "body: input",
-        "idempotencyKey: newIdempotencyKey()",
+        "idempotencyKey: string",
+        "idempotencyKey,",
         "listMailboxRelationshipOverview",
         "Promise.all",
     ]:
         require(frontend_api, needle, str(FRONTEND_API.relative_to(ROOT)))
-    for forbidden in [EXPECTED_PATH, "requestDigest", "requestJson", "fetch(", "payload as"]:
+    for forbidden in [EXPECTED_PATH, "requestDigest", "requestJson", "fetch(", "payload as", "newIdempotencyKey"]:
         reject(frontend_api, forbidden, str(FRONTEND_API.relative_to(ROOT)))
 
     frontend_ui = FRONTEND_UI.read_text(encoding="utf-8")
