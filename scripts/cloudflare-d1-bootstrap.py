@@ -6,8 +6,9 @@ it concatenates the exact accepted migration inventory with the canonical d1_mig
 result can be sent through Wrangler's remote SQL-file import path. It never upgrades a non-empty DB.
 
 AR-9 extends the existing bootstrap authority with a convergence proof for both D1 components. The
-historical Catalog bootstrap bytes/evidence format remain unchanged; the same builder is exercised for
-Catalog and Resolver and compared with sequential migrations using a normalized final schema state.
+historical Catalog remote proof remains immutable and pinned to the exact source, bootstrap identity,
+and migration ledger that were externally executed; current migration authority is proved separately
+through deterministic bootstrap/sequential convergence on every run.
 """
 
 from __future__ import annotations
@@ -36,6 +37,36 @@ FORBIDDEN_FK_DISABLE_RE = re.compile(r"\bpragma\s+foreign_keys\s*=\s*(?:off|0)\b
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 COMMIT_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 REMOTE_PROOF_SOURCE_SHA = "493d399b9531776aa8208242a5d1c05681764231"
+REMOTE_PROOF_BOOTSTRAP_BYTES = 261937
+REMOTE_PROOF_BOOTSTRAP_SHA256 = "de1acf24f30084ba95c43bdb6f2463b068b54e27e9ec0834753dc6383efef069"
+REMOTE_PROOF_MIGRATION_NAMES = [
+    "0001_catalog.sql",
+    "0002_identity_acl.sql",
+    "0003_governed_commands.sql",
+    "0004_profile_coordinator_projection.sql",
+    "0005_profile_generation_state_guards.sql",
+    "0006_profile_generation_registry.sql",
+    "0007_profile_generation_integrity_guards.sql",
+    "0008_profile_generation_deactivation.sql",
+    "0009_governed_mutation_error_taxonomy.sql",
+    "0010_mailbox_vertical_slice.sql",
+    "0011_mailbox_governed_guards.sql",
+    "0012_integration_event_foundation.sql",
+    "0013_notification_delivery_hardening.sql",
+    "0014_client_contact_protection.sql",
+    "0015_client_merge_assignment_history.sql",
+    "0016_mailbox_cloud_lane.sql",
+    "0017_mailbox_queue_coordination.sql",
+    "0018_device_authorizations_and_jobs.sql",
+    "0019_device_actor_bindings.sql",
+    "0020_browser_mailbox_execution_bindings.sql",
+    "0021_device_generation_commit.sql",
+    "0022_profile_creator_grant.sql",
+    "0023_mailbox_client_associations.sql",
+    "0024_mailbox_onboarding_lifecycle.sql",
+    "0025_microsoft_graph_provider.sql",
+    "0026_outbound_mail_intents.sql",
+]
 LEDGER_NAME = "d1_migrations"
 REMOTE_D1_SYSTEM_TYPE = "table"
 REMOTE_D1_SYSTEM_NAME = "_cf_KV"
@@ -446,10 +477,12 @@ def verify_remote_evidence_document(document: Any) -> None:
     if evidence["wrangler_version"] != "4.94.0" or evidence["region"] != "EEUR":
         fail("remote bootstrap evidence toolchain or region differs from the proved authority")
 
-    payload = build_bootstrap_bytes()
     bootstrap = require_exact_keys(evidence["bootstrap"], {"bytes", "sha256"}, "bootstrap identity")
-    if bootstrap["bytes"] != len(payload) or bootstrap["sha256"] != sha256_bytes(payload):
-        fail("remote proof bootstrap identity differs from exact current migration authority")
+    if (
+        bootstrap["bytes"] != REMOTE_PROOF_BOOTSTRAP_BYTES
+        or bootstrap["sha256"] != REMOTE_PROOF_BOOTSTRAP_SHA256
+    ):
+        fail("remote proof bootstrap identity differs from the accepted historical execution authority")
     if not isinstance(bootstrap["sha256"], str) or SHA256_RE.fullmatch(bootstrap["sha256"]) is None:
         fail("remote proof bootstrap SHA-256 is malformed")
     if evidence["fresh_target_schema"] != [REMOTE_D1_SYSTEM_SCHEMA_ROW]:
@@ -468,14 +501,14 @@ def verify_remote_evidence_document(document: Any) -> None:
         ):
             fail(f"remote bootstrap first import {key} must be a positive integer")
 
-    expected_names = [path.name for path in validated_migrations()]
+    expected_names = REMOTE_PROOF_MIGRATION_NAMES
     ledger = require_exact_keys(
         evidence["migration_ledger"], {"count", "ordered_names", "latest"}, "migration ledger"
     )
     if ledger["count"] != len(expected_names) or ledger["ordered_names"] != expected_names:
-        fail("remote bootstrap ledger differs from exact ordered migration authority")
+        fail("remote bootstrap ledger differs from the accepted historical execution authority")
     if ledger["latest"] != expected_names[-1]:
-        fail("remote bootstrap latest ledger row differs from migration authority")
+        fail("remote bootstrap latest ledger row differs from the accepted historical authority")
 
     foundation = require_exact_keys(
         evidence["integration_event_foundation"], {"objects", "outbox_columns"}, "0012 evidence"
@@ -772,7 +805,7 @@ def main() -> int:
         return 0
     if args.command == "verify-evidence":
         verify_remote_evidence_file(args.file)
-        print("Verified sanitized remote empty-D1 bootstrap evidence against current authority.")
+        print("Verified sanitized remote empty-D1 bootstrap evidence against pinned historical authority.")
         return 0
     fail(f"unsupported command: {args.command}")
 
