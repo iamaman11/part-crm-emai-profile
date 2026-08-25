@@ -1,9 +1,11 @@
-use profile_platform_primitives::{AuditEventId, IdempotencyKey, OutboxEventId, UnixMillis};
+use profile_platform_primitives::{
+    AuditEventId, IdempotencyKey, OutboxEventId, PayloadFingerprint, UnixMillis,
+};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CommandExecutionEvidence {
     idempotency_key: IdempotencyKey,
-    request_digest: String,
+    payload_fingerprint: PayloadFingerprint,
     audit_event_id: AuditEventId,
     outbox_event_id: OutboxEventId,
     now: UnixMillis,
@@ -12,9 +14,9 @@ pub struct CommandExecutionEvidence {
 
 impl CommandExecutionEvidence {
     #[must_use]
-    pub fn new(
+    pub const fn new(
         idempotency_key: IdempotencyKey,
-        request_digest: impl Into<String>,
+        payload_fingerprint: PayloadFingerprint,
         audit_event_id: AuditEventId,
         outbox_event_id: OutboxEventId,
         now: UnixMillis,
@@ -22,7 +24,7 @@ impl CommandExecutionEvidence {
     ) -> Self {
         Self {
             idempotency_key,
-            request_digest: request_digest.into(),
+            payload_fingerprint,
             audit_event_id,
             outbox_event_id,
             now,
@@ -36,8 +38,8 @@ impl CommandExecutionEvidence {
     }
 
     #[must_use]
-    pub fn request_digest(&self) -> &str {
-        &self.request_digest
+    pub const fn payload_fingerprint(&self) -> &PayloadFingerprint {
+        &self.payload_fingerprint
     }
 
     #[must_use]
