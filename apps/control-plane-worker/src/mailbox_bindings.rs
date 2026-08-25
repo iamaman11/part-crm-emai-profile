@@ -360,9 +360,8 @@ mod tests {
             "secretHandle",
             "requestDigest",
         ] {
-            let invalid = format!(
-                r#"{{"profileId":"profile_01JTRANSPORT","{forbidden}":"forbidden"}}"#
-            );
+            let invalid =
+                format!(r#"{{"profileId":"profile_01JTRANSPORT","{forbidden}":"forbidden"}}"#);
             assert!(
                 serde_json::from_str::<BindBrowserMailboxExecutionRequestDto>(&invalid).is_err()
             );

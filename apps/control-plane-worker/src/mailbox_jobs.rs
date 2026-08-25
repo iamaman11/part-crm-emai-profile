@@ -259,7 +259,8 @@ mod tests {
         assert!(serde_json::from_str::<CreateMailboxJobRequestDto>(unknown).is_err());
         let legacy_digest = r#"{"jobId":"mailjob_01JTEST","cursor":null,"delayMs":0,"maxAttempts":3,"requestDigest":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}"#;
         assert!(serde_json::from_str::<CreateMailboxJobRequestDto>(legacy_digest).is_err());
-        let domain_invalid_but_transport_valid = r#"{"jobId":"mailjob_01JTEST","cursor":null,"delayMs":604800001,"maxAttempts":3}"#;
+        let domain_invalid_but_transport_valid =
+            r#"{"jobId":"mailjob_01JTEST","cursor":null,"delayMs":604800001,"maxAttempts":3}"#;
         assert!(
             serde_json::from_str::<CreateMailboxJobRequestDto>(domain_invalid_but_transport_valid)
                 .is_ok(),

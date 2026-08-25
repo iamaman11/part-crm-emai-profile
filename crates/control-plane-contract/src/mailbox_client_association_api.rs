@@ -37,9 +37,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        ChangeMailboxClientAssociationRequestDto, MailboxClientAssociationProjectionDto,
-    };
+    use super::{ChangeMailboxClientAssociationRequestDto, MailboxClientAssociationProjectionDto};
     use serde_json::Value;
 
     #[test]
@@ -53,7 +51,10 @@ mod tests {
         assert!(serde_json::from_str::<ChangeMailboxClientAssociationRequestDto>(missing).is_err());
 
         let legacy_digest = r#"{"clientId":null,"expectedRelationshipVersion":2,"requestDigest":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}"#;
-        assert!(serde_json::from_str::<ChangeMailboxClientAssociationRequestDto>(legacy_digest).is_err());
+        assert!(
+            serde_json::from_str::<ChangeMailboxClientAssociationRequestDto>(legacy_digest)
+                .is_err()
+        );
         for forbidden in [
             "secretHandle",
             "password",
@@ -64,7 +65,9 @@ mod tests {
             let invalid = format!(
                 r#"{{"clientId":null,"expectedRelationshipVersion":2,"{forbidden}":"forbidden"}}"#
             );
-            assert!(serde_json::from_str::<ChangeMailboxClientAssociationRequestDto>(&invalid).is_err());
+            assert!(
+                serde_json::from_str::<ChangeMailboxClientAssociationRequestDto>(&invalid).is_err()
+            );
         }
         Ok(())
     }

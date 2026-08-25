@@ -139,7 +139,9 @@ fn projection(
     }
 }
 
-fn receipt(outcome: &MailboxClientAssociationOutcome) -> MailboxClientAssociationMutationReceiptDto {
+fn receipt(
+    outcome: &MailboxClientAssociationOutcome,
+) -> MailboxClientAssociationMutationReceiptDto {
     MailboxClientAssociationMutationReceiptDto {
         result_code: outcome.result_code().to_owned(),
         binding_id: outcome.binding_id().as_str().to_owned(),
@@ -211,13 +213,16 @@ mod tests {
         assert!(serde_json::from_str::<ChangeMailboxClientAssociationRequestDto>(missing).is_err());
         let unbind = r#"{"clientId":null,"expectedRelationshipVersion":0}"#;
         assert!(serde_json::from_str::<ChangeMailboxClientAssociationRequestDto>(unbind).is_ok());
-        let legacy = r#"{"clientId":null,"expectedRelationshipVersion":0,"requestDigest":"legacy"}"#;
+        let legacy =
+            r#"{"clientId":null,"expectedRelationshipVersion":0,"requestDigest":"legacy"}"#;
         assert!(serde_json::from_str::<ChangeMailboxClientAssociationRequestDto>(legacy).is_err());
         for forbidden in ["secretHandle", "password", "providerToken", "profileId"] {
             let invalid = format!(
                 r#"{{"clientId":null,"expectedRelationshipVersion":0,"{forbidden}":"forbidden"}}"#
             );
-            assert!(serde_json::from_str::<ChangeMailboxClientAssociationRequestDto>(&invalid).is_err());
+            assert!(
+                serde_json::from_str::<ChangeMailboxClientAssociationRequestDto>(&invalid).is_err()
+            );
         }
     }
 }

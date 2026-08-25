@@ -17,8 +17,8 @@ pub fn actor_and_evidence(
     let fingerprint = execution_fingerprint(dispatch)?;
     let idempotency_key = IdempotencyKey::parse(format!("mailboxq_{}", fingerprint.as_str()))
         .map_err(identifier_error)?;
-    let correlation_id = CorrelationId::parse(format!("corr_{}", fingerprint.as_str()))
-        .map_err(identifier_error)?;
+    let correlation_id =
+        CorrelationId::parse(format!("corr_{}", fingerprint.as_str())).map_err(identifier_error)?;
     let actor = ActorContext::new(
         TenantScope::new(dispatch.tenant_id().clone()),
         dispatch.actor_id().clone(),

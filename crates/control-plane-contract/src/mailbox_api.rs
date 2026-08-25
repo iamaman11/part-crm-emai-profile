@@ -251,7 +251,8 @@ mod tests {
 
     #[test]
     fn mailbox_requests_reject_unknown_sensitive_and_legacy_digest_fields() {
-        let valid_binding = r#"{"bindingId":"mailbox_01JTEST","provider":"IMAP","secretHandle":"secret_01JTEST"}"#;
+        let valid_binding =
+            r#"{"bindingId":"mailbox_01JTEST","provider":"IMAP","secretHandle":"secret_01JTEST"}"#;
         assert!(serde_json::from_str::<CreateMailboxBindingRequestDto>(valid_binding).is_ok());
         for forbidden in ["password", "messageBody", "requestDigest"] {
             let invalid = format!(
