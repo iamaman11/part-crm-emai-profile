@@ -1,7 +1,8 @@
 use crate::access_identity::VerifiedExternalIdentity;
 use profile_platform_primitives::{
     ActorContext, ActorId, AggregateVersion, AuditEventId, ClientId, CorrelationId, IdempotencyKey,
-    IdentityId, InvitationId, OutboxEventId, PayloadFingerprint, ProfileId, TenantScope, UnixMillis,
+    IdentityId, InvitationId, OutboxEventId, PayloadFingerprint, ProfileId, TenantScope,
+    UnixMillis,
 };
 use serde::Deserialize;
 use worker::d1::{D1Database, D1Result};
