@@ -1,4 +1,4 @@
-import { newIdempotencyKey, requestJson, sha256Hex } from './client';
+import { newIdempotencyKey, requestJson } from './client';
 import type { MutationReceipt } from './generated/control-plane';
 
 export function segment(value: string): string {
@@ -17,20 +17,16 @@ export function pagedPath(path: string, cursor?: string | null, limit = 50): str
   return `${path}?${search.toString()}`;
 }
 
-async function mutationBody<T extends object>(body: T): Promise<T & { requestDigest: string }> {
-  return { ...body, requestDigest: await sha256Hex(body) };
-}
-
 export function mutate<T extends object>(
   path: string,
   tenantId: string,
   method: 'POST' | 'PUT' | 'PATCH' | 'DELETE',
   body: T,
 ): Promise<MutationReceipt | undefined> {
-  return mutationBody(body).then((payload) => requestJson<MutationReceipt>(path, {
+  return requestJson<MutationReceipt>(path, {
     tenantId,
     method,
-    body: payload,
+    body,
     idempotencyKey: newIdempotencyKey(),
-  }));
+  });
 }
