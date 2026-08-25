@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Generate committed OpenAPI and TypeScript from canonical Rust contracts.
+"""Generate active TypeScript DTOs and accepted compatibility fragments from Rust contracts.
 
-The accepted base public contract remains byte-stable. Capability-owned additive surfaces are emitted
-as generated OpenAPI artifacts plus separate generated TypeScript modules. `--check` fails closed and
-prints a unified diff for drift so fixes never require temporary generation workflows.
+The accepted public contract remains byte-stable. Active schema-only TypeScript predecessors stay
+Rust-derived until Transaction B cuts over the runtime, while superseded auxiliary OpenAPI copies are
+not emitted as parallel current contract surfaces. `--check` fails closed and prints a unified diff.
 """
 
 from __future__ import annotations
@@ -17,7 +17,6 @@ from pathlib import Path
 from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
-OPENAPI_PATH = ROOT / "contracts" / "generated" / "control-plane.openapi.json"
 TYPESCRIPT_PATH = ROOT / "frontend" / "src" / "shared" / "api" / "generated" / "control-plane.ts"
 CLIENT_REGISTRY_OPENAPI_PATH = ROOT / "openapi" / "v1" / "fragments" / "client-registry.json"
 CLIENT_REGISTRY_TYPESCRIPT_PATH = (
@@ -31,15 +30,12 @@ OPERATOR_QUERY_OPENAPI_PATH = ROOT / "openapi" / "v1" / "fragments" / "operator-
 OPERATOR_QUERY_TYPESCRIPT_PATH = (
     ROOT / "frontend" / "src" / "shared" / "api" / "generated" / "operator-query.ts"
 )
-PROFILE_GENERATION_OPENAPI_PATH = ROOT / "contracts" / "generated" / "profile-generation.openapi.json"
 PROFILE_GENERATION_TYPESCRIPT_PATH = (
     ROOT / "frontend" / "src" / "shared" / "api" / "generated" / "profile-generation.ts"
 )
-MAILBOX_OPENAPI_PATH = ROOT / "contracts" / "generated" / "mailbox.openapi.json"
 MAILBOX_TYPESCRIPT_PATH = (
     ROOT / "frontend" / "src" / "shared" / "api" / "generated" / "mailbox.ts"
 )
-COORDINATOR_OPENAPI_PATH = ROOT / "contracts" / "generated" / "coordinator.openapi.json"
 COORDINATOR_TYPESCRIPT_PATH = (
     ROOT / "frontend" / "src" / "shared" / "api" / "generated" / "coordinator.ts"
 )
@@ -389,7 +385,7 @@ def main() -> int:
 
     self_test_discriminated_unions()
 
-    base_document, base_openapi = run_export("export_openapi")
+    base_document, _ = run_export("export_openapi")
     base_typescript = render_typescript(base_document, source_path=SOURCE_PATH)
     canonical_registry, _ = run_export("export_client_registry", "canonical")
     compatibility_registry, _ = run_export("export_client_registry", "compatibility")
@@ -415,21 +411,18 @@ def main() -> int:
         support_nullable=True,
     )
     profile_generation, _ = run_export("export_profile_generation")
-    profile_generation_openapi = compact_json(profile_generation)
     profile_generation_typescript = render_typescript(
         profile_generation,
         source_path=PROFILE_GENERATION_SOURCE_PATH,
         support_nullable=True,
     )
     mailbox, _ = run_export("export_mailbox")
-    mailbox_openapi = compact_json(mailbox)
     mailbox_typescript = render_typescript(
         mailbox,
         source_path=MAILBOX_SOURCE_PATH,
         support_nullable=True,
     )
     coordinator, _ = run_export("export_coordinator")
-    coordinator_openapi = compact_json(coordinator)
     coordinator_typescript = render_typescript(
         coordinator,
         source_path=COORDINATOR_SOURCE_PATH,
@@ -437,7 +430,6 @@ def main() -> int:
     )
 
     results = [
-        check_or_write(OPENAPI_PATH, base_openapi, args.check),
         check_or_write(TYPESCRIPT_PATH, base_typescript, args.check),
         check_or_write(
             CLIENT_REGISTRY_OPENAPI_PATH,
@@ -458,18 +450,11 @@ def main() -> int:
             args.check,
         ),
         check_or_write(
-            PROFILE_GENERATION_OPENAPI_PATH,
-            profile_generation_openapi,
-            args.check,
-        ),
-        check_or_write(
             PROFILE_GENERATION_TYPESCRIPT_PATH,
             profile_generation_typescript,
             args.check,
         ),
-        check_or_write(MAILBOX_OPENAPI_PATH, mailbox_openapi, args.check),
         check_or_write(MAILBOX_TYPESCRIPT_PATH, mailbox_typescript, args.check),
-        check_or_write(COORDINATOR_OPENAPI_PATH, coordinator_openapi, args.check),
         check_or_write(COORDINATOR_TYPESCRIPT_PATH, coordinator_typescript, args.check),
     ]
     if not all(results):
