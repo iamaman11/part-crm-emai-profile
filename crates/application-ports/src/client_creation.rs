@@ -29,7 +29,8 @@ mod tests {
     use crate::clients::{ClientCreateWrite, ClientGrantRole};
     use client_domain::{ClientKind, ClientRecord};
     use profile_platform_primitives::{
-        AuditEventId, ClientId, IdempotencyKey, OutboxEventId, TenantId, UnixMillis,
+        AuditEventId, ClientId, IdempotencyKey, OutboxEventId, PayloadFingerprint, TenantId,
+        UnixMillis,
     };
 
     #[test]
@@ -45,7 +46,9 @@ mod tests {
             "Creator Grant Client",
             CommandExecutionEvidence::new(
                 IdempotencyKey::parse("idem_01JCREATORGRANT")?,
-                "digest_01JCREATORGRANT",
+                PayloadFingerprint::parse(
+                    "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                )?,
                 AuditEventId::parse("audit_01JCREATORGRANT")?,
                 OutboxEventId::parse("outbox_01JCREATORGRANT")?,
                 UnixMillis::new(10),
