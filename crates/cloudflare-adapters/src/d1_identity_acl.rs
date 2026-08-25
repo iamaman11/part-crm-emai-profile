@@ -1,7 +1,7 @@
 use crate::access_identity::VerifiedExternalIdentity;
 use profile_platform_primitives::{
     ActorContext, ActorId, AggregateVersion, AuditEventId, ClientId, CorrelationId, IdempotencyKey,
-    IdentityId, InvitationId, OutboxEventId, ProfileId, TenantScope, UnixMillis,
+    IdentityId, InvitationId, OutboxEventId, PayloadFingerprint, ProfileId, TenantScope, UnixMillis,
 };
 use serde::Deserialize;
 use worker::d1::{D1Database, D1Result};
@@ -34,7 +34,7 @@ INSERT INTO memberships (
 
 const IDEMPOTENCY_CREATE: &str = r#"
 INSERT INTO idempotency_records (
-    tenant_id, actor_id, idempotency_key, command_name, request_digest,
+    tenant_id, actor_id, idempotency_key, command_name, payload_fingerprint,
     result_code, result_reference, created_at_ms, expires_at_ms
 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 "#;
@@ -190,7 +190,7 @@ impl ClientGrantValue {
 
 pub struct MutationEnvelope<'a> {
     pub idempotency_key: &'a IdempotencyKey,
-    pub request_digest: &'a str,
+    pub payload_fingerprint: &'a PayloadFingerprint,
     pub audit_event_id: &'a AuditEventId,
     pub outbox_event_id: &'a OutboxEventId,
     pub payload_json: &'a str,
@@ -529,7 +529,7 @@ fn idempotency_statement(
         actor_id,
         envelope.idempotency_key.as_str(),
         command_name,
-        envelope.request_digest,
+        envelope.payload_fingerprint.as_str(),
         result_code,
         result_reference,
         now,
