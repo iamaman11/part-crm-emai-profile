@@ -24,10 +24,18 @@ use worker::{Env, Request, Response, Result};
 
 pub async fn dispatch(route: RouteClass, request: &mut Request, env: &Env) -> Result<Response> {
     let path = request.path();
-    let segments: Vec<&str> = path.trim_matches('/').split('/').filter(|segment| !segment.is_empty()).collect();
+    let segments: Vec<&str> = path
+        .trim_matches('/')
+        .split('/')
+        .filter(|segment| !segment.is_empty())
+        .collect();
     let tenant_id = segments.get(3).copied().unwrap_or_default();
-    let profile_id = segments.get(5).and_then(|value| ProfileId::parse((*value).to_owned()).ok());
-    let generation_id = segments.get(7).and_then(|value| GenerationId::parse((*value).to_owned()).ok());
+    let profile_id = segments
+        .get(5)
+        .and_then(|value| ProfileId::parse((*value).to_owned()).ok());
+    let generation_id = segments
+        .get(7)
+        .and_then(|value| GenerationId::parse((*value).to_owned()).ok());
 
     let Some(actor) = resolve_active_request_actor(request, env, Some(tenant_id)).await? else {
         return neutral_not_found(&correlation_hint(request));
@@ -66,7 +74,16 @@ pub async fn dispatch(route: RouteClass, request: &mut Request, env: &Env) -> Re
             let (Some(profile_id), Some(generation_id)) = (profile_id, generation_id) else {
                 return neutral_not_found(actor.actor().correlation_id().as_str());
             };
-            change_profile_generation(request, env, actor.actor(), role, profile_id, generation_id, true).await
+            change_profile_generation(
+                request,
+                env,
+                actor.actor(),
+                role,
+                profile_id,
+                generation_id,
+                true,
+            )
+            .await
         }
         RouteClass::ProfileGenerationDeactivateApi => {
             if let Err(error) = authorize_generation_mutation(role) {
@@ -75,7 +92,16 @@ pub async fn dispatch(route: RouteClass, request: &mut Request, env: &Env) -> Re
             let (Some(profile_id), Some(generation_id)) = (profile_id, generation_id) else {
                 return neutral_not_found(actor.actor().correlation_id().as_str());
             };
-            change_profile_generation(request, env, actor.actor(), role, profile_id, generation_id, false).await
+            change_profile_generation(
+                request,
+                env,
+                actor.actor(),
+                role,
+                profile_id,
+                generation_id,
+                false,
+            )
+            .await
         }
         RouteClass::ProfileGenerationQuarantineApi => {
             if let Err(error) = authorize_generation_mutation(role) {
@@ -84,7 +110,8 @@ pub async fn dispatch(route: RouteClass, request: &mut Request, env: &Env) -> Re
             let (Some(profile_id), Some(generation_id)) = (profile_id, generation_id) else {
                 return neutral_not_found(actor.actor().correlation_id().as_str());
             };
-            quarantine_generation(request, env, actor.actor(), role, profile_id, generation_id).await
+            quarantine_generation(request, env, actor.actor(), role, profile_id, generation_id)
+                .await
         }
         _ => neutral_not_found(actor.actor().correlation_id().as_str()),
     }
@@ -105,7 +132,11 @@ async fn register_generation(
         Ok(value) => value,
         Err(_) => return invalid_request(actor.correlation_id().as_str()),
     };
-    if let Err(error) = validate_generation_registration(&body.object_key, &body.metadata_digest, &body.container_digest) {
+    if let Err(error) = validate_generation_registration(
+        &body.object_key,
+        &body.metadata_digest,
+        &body.container_digest,
+    ) {
         return operation_failure(actor.correlation_id().as_str(), error);
     }
     let evidence = match command_evidence::from_request(request, actor, &body) {
@@ -125,7 +156,9 @@ async fn register_generation(
             container_digest: body.container_digest,
             evidence,
         },
-    ).await {
+    )
+    .await
+    {
         Ok(outcome) => mutation_receipt(&outcome, 201),
         Err(error) => operation_failure(actor.correlation_id().as_str(), error),
     }
@@ -141,7 +174,9 @@ async fn get_generation(
     let application = profile_generation_application(env)?;
     match get_visible_generation(actor, role, &application, profile_id, generation_id).await {
         Ok(generation) => Response::from_json(&generation_projection(&generation)),
-        Err(GenerationOperationError::NotFound) => neutral_not_found(actor.correlation_id().as_str()),
+        Err(GenerationOperationError::NotFound) => {
+            neutral_not_found(actor.correlation_id().as_str())
+        }
         Err(error) => operation_failure(actor.correlation_id().as_str(), error),
     }
 }
@@ -158,7 +193,8 @@ async fn verify_generation(
         Ok(value) => value,
         Err(_) => return invalid_request(actor.correlation_id().as_str()),
     };
-    let expected_generation_version = match AggregateVersion::new(body.expected_generation_version) {
+    let expected_generation_version = match AggregateVersion::new(body.expected_generation_version)
+    {
         Ok(value) => value,
         Err(_) => return invalid_request(actor.correlation_id().as_str()),
     };
@@ -184,7 +220,9 @@ async fn verify_generation(
             verification_reference: body.verification_reference,
             evidence,
         },
-    ).await {
+    )
+    .await
+    {
         Ok(outcome) => mutation_receipt(&outcome, 200),
         Err(error) => operation_failure(actor.correlation_id().as_str(), error),
     }
@@ -244,7 +282,8 @@ async fn quarantine_generation(
         Ok(value) => value,
         Err(_) => return invalid_request(actor.correlation_id().as_str()),
     };
-    let expected_generation_version = match AggregateVersion::new(body.expected_generation_version) {
+    let expected_generation_version = match AggregateVersion::new(body.expected_generation_version)
+    {
         Ok(value) => value,
         Err(_) => return invalid_request(actor.correlation_id().as_str()),
     };
@@ -266,7 +305,9 @@ async fn quarantine_generation(
             expected_generation_version,
             evidence,
         },
-    ).await {
+    )
+    .await
+    {
         Ok(outcome) => mutation_receipt(&outcome, 200),
         Err(error) => operation_failure(actor.correlation_id().as_str(), error),
     }
@@ -274,14 +315,32 @@ async fn quarantine_generation(
 
 fn operation_failure(correlation_id: &str, error: GenerationOperationError) -> Result<Response> {
     match error {
-        GenerationOperationError::InvalidRequest => problem(correlation_id, 400, "invalid_request", "Invalid Request"),
+        GenerationOperationError::InvalidRequest => {
+            problem(correlation_id, 400, "invalid_request", "Invalid Request")
+        }
         GenerationOperationError::NotFound => neutral_not_found(correlation_id),
-        GenerationOperationError::VersionConflict => problem(correlation_id, 409, "version_conflict", "Version Conflict"),
-        GenerationOperationError::InvalidState => problem(correlation_id, 409, "invalid_state", "Invalid State"),
+        GenerationOperationError::VersionConflict => {
+            problem(correlation_id, 409, "version_conflict", "Version Conflict")
+        }
+        GenerationOperationError::InvalidState => {
+            problem(correlation_id, 409, "invalid_state", "Invalid State")
+        }
         GenerationOperationError::Conflict => problem(correlation_id, 409, "conflict", "Conflict"),
-        GenerationOperationError::IntegrityFailure => problem(correlation_id, 500, "integrity_failure", "Integrity Failure"),
-        GenerationOperationError::InternalFailure => problem(correlation_id, 500, "internal_failure", "Internal Failure"),
-        GenerationOperationError::DependencyUnavailable => problem(correlation_id, 503, "dependency_unavailable", "Dependency Unavailable"),
+        GenerationOperationError::IntegrityFailure => problem(
+            correlation_id,
+            500,
+            "integrity_failure",
+            "Integrity Failure",
+        ),
+        GenerationOperationError::InternalFailure => {
+            problem(correlation_id, 500, "internal_failure", "Internal Failure")
+        }
+        GenerationOperationError::DependencyUnavailable => problem(
+            correlation_id,
+            503,
+            "dependency_unavailable",
+            "Dependency Unavailable",
+        ),
     }
 }
 
@@ -294,7 +353,8 @@ fn mutation_receipt(outcome: &GenerationMutationOutcome, status: u16) -> Result<
         result_code: outcome.result_code().to_owned(),
         resource_id: outcome.resource_id().to_owned(),
         aggregate_version: outcome.aggregate_version().value(),
-    }).map(|response| response.with_status(status))
+    })
+    .map(|response| response.with_status(status))
 }
 
 fn generation_projection(generation: &GenerationReadModel) -> GenerationProjectionDto {
@@ -325,9 +385,15 @@ mod tests {
     #[test]
     fn domain_status_mapping_covers_every_public_generation_status() {
         for (domain, wire) in [
-            (GenerationStatus::Registered, GenerationStatusDto::Registered),
+            (
+                GenerationStatus::Registered,
+                GenerationStatusDto::Registered,
+            ),
             (GenerationStatus::Verified, GenerationStatusDto::Verified),
-            (GenerationStatus::Quarantined, GenerationStatusDto::Quarantined),
+            (
+                GenerationStatus::Quarantined,
+                GenerationStatusDto::Quarantined,
+            ),
         ] {
             assert_eq!(generation_status(domain), wire);
         }
