@@ -181,9 +181,10 @@ def test_complete_envelope_rolls_back_on_late_evidence_failure(
             connection.execute(
                 """
                 INSERT INTO idempotency_records (
-                    tenant_id, actor_id, idempotency_key, command_name, request_digest,
+                    tenant_id, actor_id, idempotency_key, command_name, payload_fingerprint,
                     result_code, result_reference, created_at_ms, expires_at_ms
-                ) VALUES (?, ?, ?, 'profile.create', 'digest_rollback_commands',
+                ) VALUES (?, ?, ?, 'profile.create',
+                          '0000000000000000000000000000000000000000000000000000000000000000',
                           'created', ?, 125, 1000)
                 """,
                 (TENANT, MEMBER, key, ROLLBACK_PROFILE),
@@ -233,14 +234,14 @@ def test_concurrent_winner_allows_only_exact_live_replay(
     connection: sqlite3.Connection,
 ) -> None:
     key = "idem_concurrent_commands"
-    digest = "digest_concurrent_commands"
+    fingerprint = "1111111111111111111111111111111111111111111111111111111111111111"
     audit_id = "audit_concurrent_commands"
     outbox_id = "outbox_concurrent_commands"
 
     def replay_row() -> sqlite3.Row | None:
         return connection.execute(
             """
-            SELECT command_name, request_digest, result_code, result_reference,
+            SELECT command_name, payload_fingerprint, result_code, result_reference,
                    expires_at_ms
             FROM idempotency_records
             WHERE tenant_id = ? AND actor_id = ? AND idempotency_key = ?
@@ -265,11 +266,11 @@ def test_concurrent_winner_allows_only_exact_live_replay(
         connection.execute(
             """
             INSERT INTO idempotency_records (
-                tenant_id, actor_id, idempotency_key, command_name, request_digest,
+                tenant_id, actor_id, idempotency_key, command_name, payload_fingerprint,
                 result_code, result_reference, created_at_ms, expires_at_ms
             ) VALUES (?, ?, ?, 'profile.create', ?, 'created', ?, 126, 1000)
             """,
-            (TENANT, MEMBER, key, digest, CONCURRENT_PROFILE),
+            (TENANT, MEMBER, key, fingerprint, CONCURRENT_PROFILE),
         )
         connection.execute(
             """
@@ -307,24 +308,28 @@ def test_concurrent_winner_allows_only_exact_live_replay(
     row = replay_row()
     assert row is not None
     assert row["command_name"] == "profile.create"
-    assert row["request_digest"] == digest
+    assert row["payload_fingerprint"] == fingerprint
     assert row["result_code"] == "created"
     assert row["result_reference"] == CONCURRENT_PROFILE
     assert 999 < row["expires_at_ms"] + 1
 
-    def exact_live(command_name: str, request_digest: str, now_ms: int) -> bool:
+    def exact_live(command_name: str, payload_fingerprint: str, now_ms: int) -> bool:
         current = replay_row()
         assert current is not None
         return (
             current["command_name"] == command_name
-            and current["request_digest"] == request_digest
+            and current["payload_fingerprint"] == payload_fingerprint
             and now_ms < current["expires_at_ms"]
         )
 
-    assert exact_live("profile.create", digest, 999)
-    assert not exact_live("profile.assign_client", digest, 999)
-    assert not exact_live("profile.create", "different_digest_commands", 999)
-    assert not exact_live("profile.create", digest, 1000)
+    assert exact_live("profile.create", fingerprint, 999)
+    assert not exact_live("profile.assign_client", fingerprint, 999)
+    assert not exact_live(
+        "profile.create",
+        "2222222222222222222222222222222222222222222222222222222222222222",
+        999,
+    )
+    assert not exact_live("profile.create", fingerprint, 1000)
     assert (
         connection.execute(
             "SELECT COUNT(*) FROM browser_profiles WHERE tenant_id = ? AND profile_id = ?",
