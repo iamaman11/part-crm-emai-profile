@@ -31,7 +31,10 @@ impl fmt::Display for FrontendTransportContractError {
                 "legacy OpenAPI nullable is forbidden; fix the capability-owned producer"
             ),
             Self::NetworkReference(reference) => {
-                write!(formatter, "network OpenAPI reference is forbidden: {reference}")
+                write!(
+                    formatter,
+                    "network OpenAPI reference is forbidden: {reference}"
+                )
             }
             Self::UnresolvedReference(reference) => {
                 write!(formatter, "unresolved local OpenAPI reference: {reference}")
@@ -72,10 +75,7 @@ pub fn validate_compiler_input(document: &Value) -> Result<(), FrontendTransport
     validate_value(document, document)
 }
 
-fn validate_value(
-    document: &Value,
-    value: &Value,
-) -> Result<(), FrontendTransportContractError> {
+fn validate_value(document: &Value, value: &Value) -> Result<(), FrontendTransportContractError> {
     match value {
         Value::Object(map) => {
             if map.contains_key("nullable") {
@@ -96,7 +96,8 @@ fn validate_value(
             }
 
             if let Some(Value::Object(content)) = map.get("content") {
-                if let Some(Value::Object(problem_media)) = content.get("application/problem+json") {
+                if let Some(Value::Object(problem_media)) = content.get("application/problem+json")
+                {
                     let schema = problem_media
                         .get("schema")
                         .ok_or(FrontendTransportContractError::PermissiveProblemSchema)?;
@@ -104,8 +105,7 @@ fn validate_value(
                     let permissive = resolved.as_object().is_some_and(|object| {
                         object.is_empty()
                             || (object.len() == 1
-                                && object.get("type")
-                                    == Some(&Value::String("object".to_owned())))
+                                && object.get("type") == Some(&Value::String("object".to_owned())))
                     });
                     if permissive {
                         return Err(FrontendTransportContractError::PermissiveProblemSchema);
@@ -158,9 +158,9 @@ fn resolve_schema<'a>(
     let pointer = reference
         .strip_prefix('#')
         .ok_or_else(|| FrontendTransportContractError::NetworkReference(reference.to_owned()))?;
-    document.pointer(pointer).ok_or_else(|| {
-        FrontendTransportContractError::UnresolvedReference(reference.to_owned())
-    })
+    document
+        .pointer(pointer)
+        .ok_or_else(|| FrontendTransportContractError::UnresolvedReference(reference.to_owned()))
 }
 
 #[cfg(test)]
@@ -226,8 +226,8 @@ mod tests {
     #[test]
     fn permissive_problem_schema_fails_closed() {
         let mut document = strict_document();
-        document["paths"]["/api/v1/fixture"]["get"]["responses"]["400"]["content"]
-            ["application/problem+json"]["schema"] = json!({"type": "object"});
+        document["paths"]["/api/v1/fixture"]["get"]["responses"]["400"]["content"]["application/problem+json"]
+            ["schema"] = json!({"type": "object"});
         assert_eq!(
             validate_compiler_input(&document),
             Err(FrontendTransportContractError::PermissiveProblemSchema)
@@ -240,9 +240,11 @@ mod tests {
         document["x-part-crm-request-digest"] = json!({"canonicalization": "part-crm-json-v1"});
         assert_eq!(
             validate_compiler_input(&document),
-            Err(FrontendTransportContractError::ForbiddenCompilerRepairExtension(
-                "x-part-crm-request-digest".to_owned()
-            ))
+            Err(
+                FrontendTransportContractError::ForbiddenCompilerRepairExtension(
+                    "x-part-crm-request-digest".to_owned()
+                )
+            )
         );
     }
 
