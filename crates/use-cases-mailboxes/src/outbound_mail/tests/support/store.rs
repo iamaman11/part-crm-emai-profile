@@ -5,13 +5,13 @@ use application_ports::outbound_mail::{
     OutboundMailIntentState, OutboundMailProviderOutcome, OutboundMailReserveDecision,
     ProviderMessageReference,
 };
-use profile_platform_primitives::{ActorContext, OutboxEventId};
+use profile_platform_primitives::{ActorContext, OutboxEventId, PayloadFingerprint};
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 struct StoredIntent {
     idempotency_key: String,
-    request_digest: String,
+    payload_fingerprint: PayloadFingerprint,
     intent_id: OutboxEventId,
     state: OutboundMailIntentState,
     attempt_count: u8,
@@ -58,7 +58,7 @@ impl OutboundMailIntentApplicationPort for FakeStore {
         let mut stored = self.stored.lock().map_err(|_| internal_failure())?;
         if let Some(existing) = stored.as_ref() {
             if existing.idempotency_key == evidence.idempotency_key().as_str()
-                && existing.request_digest == evidence.request_digest()
+                && &existing.payload_fingerprint == evidence.payload_fingerprint()
             {
                 return Ok(OutboundMailReserveDecision::Existing(existing.receipt()));
             }
@@ -66,7 +66,7 @@ impl OutboundMailIntentApplicationPort for FakeStore {
         }
         *stored = Some(StoredIntent {
             idempotency_key: evidence.idempotency_key().as_str().to_owned(),
-            request_digest: evidence.request_digest().to_owned(),
+            payload_fingerprint: evidence.payload_fingerprint().clone(),
             intent_id: evidence.outbox_event_id().clone(),
             state: OutboundMailIntentState::Pending,
             attempt_count: 0,
