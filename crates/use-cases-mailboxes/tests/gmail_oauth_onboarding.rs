@@ -14,7 +14,7 @@ use mailbox_domain::{
 };
 use profile_platform_primitives::{
     ActorContext, ActorId, AuditEventId, CorrelationId, IdempotencyKey, MailboxOnboardingId,
-    OutboxEventId, SecretHandle, TenantId, TenantScope, UnixMillis,
+    OutboxEventId, PayloadFingerprint, SecretHandle, TenantId, TenantScope, UnixMillis,
 };
 use std::cell::{Cell, RefCell};
 use std::future::{Future, ready};
@@ -528,7 +528,9 @@ fn authorization_code() -> Result<GmailOAuthAuthorizationCode, Box<dyn std::erro
 fn evidence() -> Result<CommandExecutionEvidence, Box<dyn std::error::Error>> {
     Ok(CommandExecutionEvidence::new(
         IdempotencyKey::parse("idem_C2_callback")?,
-        "digest_C2_callback",
+        PayloadFingerprint::parse(
+            "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        )?,
         AuditEventId::parse("audit_C2_callback")?,
         OutboxEventId::parse("outbox_C2_callback")?,
         UnixMillis::new(1_000),
