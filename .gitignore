@@ -27,6 +27,7 @@ lock
 /frontend/dist/
 /frontend/coverage/
 /frontend/*.tsbuildinfo
+/frontend/src/shared/api/generated/operations.ts
 
 # Secrets & Environment Variables
 .env
