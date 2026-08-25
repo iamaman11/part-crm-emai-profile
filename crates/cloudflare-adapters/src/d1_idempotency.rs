@@ -120,7 +120,8 @@ mod tests {
     }
 
     #[test]
-    fn replay_requires_same_live_command_and_fingerprint() -> Result<(), Box<dyn std::error::Error>> {
+    fn replay_requires_same_live_command_and_fingerprint() -> Result<(), Box<dyn std::error::Error>>
+    {
         let same = fingerprint('a')?;
         let different = fingerprint('b')?;
         assert!(matches!(
