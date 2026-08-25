@@ -1,6 +1,6 @@
 import { render, screen } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
-import { ApiProblem } from '../api/client';
+import { ApiProblem } from '../api/openapi-runtime';
 import { StatusMessage } from './StatusMessage';
 
 describe('StatusMessage', () => {
