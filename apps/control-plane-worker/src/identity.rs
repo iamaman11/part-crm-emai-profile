@@ -55,11 +55,11 @@ async fn bootstrap_owner(request: &mut Request, env: &Env, tenant_id: &str) -> R
         Ok(value) => value,
         Err(_) => return invalid_request(correlation_id),
     };
-    let actor_id = match ActorId::parse(body.actor_id) {
+    let actor_id = match ActorId::parse(body.actor_id.clone()) {
         Ok(value) => value,
         Err(_) => return invalid_request(correlation_id),
     };
-    let identity_id = match IdentityId::parse(body.identity_id) {
+    let identity_id = match IdentityId::parse(body.identity_id.clone()) {
         Ok(value) => value,
         Err(_) => return invalid_request(correlation_id),
     };
@@ -68,11 +68,10 @@ async fn bootstrap_owner(request: &mut Request, env: &Env, tenant_id: &str) -> R
         actor_id.clone(),
         verified.correlation_id().clone(),
     );
-    let evidence =
-        match command_evidence::from_request(request, &evidence_actor, body.request_digest) {
-            Ok(value) => value,
-            Err(_) => return invalid_request(correlation_id),
-        };
+    let evidence = match command_evidence::from_request(request, &evidence_actor, &body) {
+        Ok(value) => value,
+        Err(_) => return invalid_request(correlation_id),
+    };
     let snapshot = VerifiedIdentitySnapshot::new(
         verified.identity().subject(),
         verified.identity().contact_hint().map(str::to_owned),
@@ -109,7 +108,7 @@ async fn transfer_owner(request: &mut Request, env: &Env, tenant_id: &str) -> Re
         Ok(value) => value,
         Err(_) => return invalid_request(actor.actor().correlation_id().as_str()),
     };
-    let next_owner_actor_id = match ActorId::parse(body.next_owner_actor_id) {
+    let next_owner_actor_id = match ActorId::parse(body.next_owner_actor_id.clone()) {
         Ok(value) => value,
         Err(_) => return invalid_request(actor.actor().correlation_id().as_str()),
     };
@@ -121,8 +120,7 @@ async fn transfer_owner(request: &mut Request, env: &Env, tenant_id: &str) -> Re
         Ok(value) => value,
         Err(_) => return invalid_request(actor.actor().correlation_id().as_str()),
     };
-    let evidence = match command_evidence::from_request(request, actor.actor(), body.request_digest)
-    {
+    let evidence = match command_evidence::from_request(request, actor.actor(), &body) {
         Ok(value) => value,
         Err(_) => return invalid_request(actor.actor().correlation_id().as_str()),
     };
@@ -157,7 +155,7 @@ async fn create_invitation(request: &mut Request, env: &Env, tenant_id: &str) ->
         Ok(value) => value,
         Err(_) => return invalid_request(actor.actor().correlation_id().as_str()),
     };
-    let invitation_id = match InvitationId::parse(body.invitation_id) {
+    let invitation_id = match InvitationId::parse(body.invitation_id.clone()) {
         Ok(value) => value,
         Err(_) => return invalid_request(actor.actor().correlation_id().as_str()),
     };
@@ -165,8 +163,7 @@ async fn create_invitation(request: &mut Request, env: &Env, tenant_id: &str) ->
         Ok(value) => value,
         Err(_) => return invalid_request(actor.actor().correlation_id().as_str()),
     };
-    let evidence = match command_evidence::from_request(request, actor.actor(), body.request_digest)
-    {
+    let evidence = match command_evidence::from_request(request, actor.actor(), &body) {
         Ok(value) => value,
         Err(_) => return invalid_request(actor.actor().correlation_id().as_str()),
     };
@@ -208,11 +205,11 @@ async fn accept_invitation(
         Ok(value) => value,
         Err(_) => return invalid_request(correlation_id),
     };
-    let identity_id = match IdentityId::parse(body.identity_id) {
+    let identity_id = match IdentityId::parse(body.identity_id.clone()) {
         Ok(value) => value,
         Err(_) => return invalid_request(correlation_id),
     };
-    let actor_id = match ActorId::parse(body.actor_id) {
+    let actor_id = match ActorId::parse(body.actor_id.clone()) {
         Ok(value) => value,
         Err(_) => return invalid_request(correlation_id),
     };
@@ -221,11 +218,10 @@ async fn accept_invitation(
         actor_id.clone(),
         verified.correlation_id().clone(),
     );
-    let evidence =
-        match command_evidence::from_request(request, &evidence_actor, body.request_digest) {
-            Ok(value) => value,
-            Err(_) => return invalid_request(correlation_id),
-        };
+    let evidence = match command_evidence::from_request(request, &evidence_actor, &body) {
+        Ok(value) => value,
+        Err(_) => return invalid_request(correlation_id),
+    };
     let snapshot = VerifiedIdentitySnapshot::new(
         verified.identity().subject(),
         verified.identity().contact_hint().map(str::to_owned),
@@ -270,8 +266,7 @@ async fn update_membership_status(
         Ok(value) => value,
         Err(_) => return invalid_request(actor.actor().correlation_id().as_str()),
     };
-    let evidence = match command_evidence::from_request(request, actor.actor(), body.request_digest)
-    {
+    let evidence = match command_evidence::from_request(request, actor.actor(), &body) {
         Ok(value) => value,
         Err(_) => return invalid_request(actor.actor().correlation_id().as_str()),
     };
@@ -358,48 +353,43 @@ fn ceremony_receipt(outcome: &IdentityCeremonyOutcome, status: u16) -> Result<Re
     .map(|response| response.with_status(status))
 }
 
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct OwnerBootstrapRequest {
     actor_id: String,
     identity_id: String,
     tenant_display_name: String,
-    request_digest: String,
 }
 
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct OwnerTransferRequest {
     next_owner_actor_id: String,
     current_owner_version: u64,
     next_owner_version: u64,
-    request_digest: String,
 }
 
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct InvitationCreateRequest {
     invitation_id: String,
     invited_contact_hmac: String,
     expires_at_ms: u64,
     expected_tenant_version: u64,
-    request_digest: String,
 }
 
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct InvitationAcceptRequest {
     identity_id: String,
     actor_id: String,
-    request_digest: String,
 }
 
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct MembershipStatusRequest {
     status: String,
     expected_version: u64,
-    request_digest: String,
 }
 
 #[cfg(test)]
@@ -407,7 +397,7 @@ mod tests {
     use super::{InvitationCreateRequest, MembershipStatusRequest, MutationReceipt};
 
     #[test]
-    fn transport_models_keep_legacy_camel_case_and_unknown_field_tolerance()
+    fn transport_models_are_strict_and_reject_legacy_request_digest()
     -> Result<(), Box<dyn std::error::Error>> {
         let receipt = serde_json::to_value(MutationReceipt {
             result_code: "updated",
@@ -422,19 +412,22 @@ mod tests {
             "invitationId":"invitation_01JIDENTITYTRANSPORT",
             "invitedContactHmac":"contact-hmac",
             "expiresAtMs":100,
-            "expectedTenantVersion":1,
-            "requestDigest":"request-digest-01JIDENTITYTRANSPORT",
-            "legacyIgnoredField":"still-tolerated"
+            "expectedTenantVersion":1
         }"#;
         assert!(serde_json::from_str::<InvitationCreateRequest>(invitation).is_ok());
-
-        let membership = r#"{
-            "status":"SUSPENDED",
-            "expectedVersion":1,
-            "requestDigest":"request-digest-01JIDENTITYTRANSPORT",
-            "legacyIgnoredField":"still-tolerated"
+        let invitation_with_digest = r#"{
+            "invitationId":"invitation_01JIDENTITYTRANSPORT",
+            "invitedContactHmac":"contact-hmac",
+            "expiresAtMs":100,
+            "expectedTenantVersion":1,
+            "requestDigest":"legacy"
         }"#;
+        assert!(serde_json::from_str::<InvitationCreateRequest>(invitation_with_digest).is_err());
+
+        let membership = r#"{"status":"SUSPENDED","expectedVersion":1}"#;
         assert!(serde_json::from_str::<MembershipStatusRequest>(membership).is_ok());
+        let membership_unknown = r#"{"status":"SUSPENDED","expectedVersion":1,"legacyIgnoredField":true}"#;
+        assert!(serde_json::from_str::<MembershipStatusRequest>(membership_unknown).is_err());
         Ok(())
     }
 }
