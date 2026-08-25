@@ -558,13 +558,35 @@ def validate_composition_surfaces() -> None:
             "mailbox job persistence application adapter",
         ),
         (
-            "frontend/src/shared/api/endpoint.ts",
-            ("segment", "pagedPath", "mutate", "requestJson<MutationReceipt>"),
-            "React shared transport helpers",
+            "frontend/src/shared/api/transport.ts",
+            (
+                "executeTransport",
+                "same-origin /api/v1/ path",
+                "credentials: 'same-origin'",
+                "MAX_RESPONSE_BYTES",
+                "new Uint8Array(await response.arrayBuffer())",
+            ),
+            "React effect-only transport boundary",
+        ),
+        (
+            "frontend/src/shared/api/openapi-runtime.ts",
+            (
+                "invokeOperation",
+                "ApiProblem",
+                "validateResponseHeaders",
+                "request body failed its OpenAPI schema",
+                "received undeclared HTTP status",
+            ),
+            "React generated-operation runtime boundary",
+        ),
+        (
+            "frontend/src/shared/api/idempotency.ts",
+            ("newIdempotencyKey",),
+            "React logical-command idempotency owner",
         ),
         (
             "frontend/src/features/session/api.ts",
-            ("getSession", "requestJson<ActorSession>"),
+            ("getSession", "getSessionOperation"),
             "Session frontend API ownership",
         ),
         (
@@ -588,16 +610,6 @@ def validate_composition_surfaces() -> None:
             "Mailbox frontend API ownership",
         ),
         (
-            "frontend/src/shared/api/client.ts",
-            (
-                "same-origin /api/v1/ path",
-                "credentials: 'same-origin'",
-                "MAX_RESPONSE_BYTES",
-                "ApiProblem",
-            ),
-            "React transport boundary",
-        ),
-        (
             "frontend/src/shared/ui/StatusMessage.test.tsx",
             ("not_found", "forbidden", "Resource unavailable"),
             "neutral UI disclosure test",
@@ -611,12 +623,14 @@ def validate_composition_surfaces() -> None:
         fail("legacy api.rs must remain removed after identity application-boundary migration")
 
     for obsolete_frontend_facade in (
+        "frontend/src/shared/api/client.ts",
+        "frontend/src/shared/api/endpoint.ts",
         "frontend/src/shared/api/endpoints.ts",
         "frontend/src/shared/api/types.ts",
         "frontend/src/shared/api/clientMail.ts",
     ):
         if (ROOT / obsolete_frontend_facade).exists():
-            fail(f"central frontend capability facade must remain removed: {obsolete_frontend_facade}")
+            fail(f"superseded frontend transport owner must remain removed: {obsolete_frontend_facade}")
 
     forbid_all(
         read("apps/control-plane-worker/src/identity.rs"),
