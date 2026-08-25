@@ -935,8 +935,7 @@
         "required": [
           "actorId",
           "identityId",
-          "tenantDisplayName",
-          "requestDigest"
+          "tenantDisplayName"
         ],
         "properties": {
           "actorId": {
@@ -949,11 +948,6 @@
             "type": "string",
             "minLength": 1,
             "maxLength": 200
-          },
-          "requestDigest": {
-            "type": "string",
-            "minLength": 16,
-            "maxLength": 256
           }
         }
       },
@@ -963,8 +957,7 @@
         "required": [
           "nextOwnerActorId",
           "currentOwnerVersion",
-          "nextOwnerVersion",
-          "requestDigest"
+          "nextOwnerVersion"
         ],
         "properties": {
           "nextOwnerActorId": {
@@ -975,11 +968,6 @@
           },
           "nextOwnerVersion": {
             "$ref": "#/components/schemas/AggregateVersion"
-          },
-          "requestDigest": {
-            "type": "string",
-            "minLength": 16,
-            "maxLength": 256
           }
         }
       },
@@ -990,8 +978,7 @@
           "invitationId",
           "invitedContactHmac",
           "expiresAtMs",
-          "expectedTenantVersion",
-          "requestDigest"
+          "expectedTenantVersion"
         ],
         "properties": {
           "invitationId": {
@@ -1009,11 +996,6 @@
           },
           "expectedTenantVersion": {
             "$ref": "#/components/schemas/AggregateVersion"
-          },
-          "requestDigest": {
-            "type": "string",
-            "minLength": 16,
-            "maxLength": 256
           }
         }
       },
@@ -1022,8 +1004,7 @@
         "additionalProperties": false,
         "required": [
           "identityId",
-          "actorId",
-          "requestDigest"
+          "actorId"
         ],
         "properties": {
           "identityId": {
@@ -1031,11 +1012,6 @@
           },
           "actorId": {
             "$ref": "#/components/schemas/OpaqueId"
-          },
-          "requestDigest": {
-            "type": "string",
-            "minLength": 16,
-            "maxLength": 256
           }
         }
       },
@@ -1044,8 +1020,7 @@
         "additionalProperties": false,
         "required": [
           "status",
-          "expectedVersion",
-          "requestDigest"
+          "expectedVersion"
         ],
         "properties": {
           "status": {
@@ -1058,11 +1033,6 @@
           },
           "expectedVersion": {
             "$ref": "#/components/schemas/AggregateVersion"
-          },
-          "requestDigest": {
-            "type": "string",
-            "minLength": 16,
-            "maxLength": 256
           }
         }
       },
@@ -1072,8 +1042,7 @@
         "required": [
           "clientId",
           "kind",
-          "displayName",
-          "requestDigest"
+          "displayName"
         ],
         "properties": {
           "clientId": {
@@ -1090,11 +1059,6 @@
             "type": "string",
             "minLength": 1,
             "maxLength": 200
-          },
-          "requestDigest": {
-            "type": "string",
-            "minLength": 16,
-            "maxLength": 256
           }
         }
       },
@@ -1141,8 +1105,7 @@
         "required": [
           "role",
           "reason",
-          "expectedClientVersion",
-          "requestDigest"
+          "expectedClientVersion"
         ],
         "properties": {
           "role": {
@@ -1159,11 +1122,6 @@
           },
           "expectedClientVersion": {
             "$ref": "#/components/schemas/AggregateVersion"
-          },
-          "requestDigest": {
-            "type": "string",
-            "minLength": 16,
-            "maxLength": 256
           }
         }
       },
@@ -1171,17 +1129,11 @@
         "type": "object",
         "additionalProperties": false,
         "required": [
-          "profileId",
-          "requestDigest"
+          "profileId"
         ],
         "properties": {
           "profileId": {
             "$ref": "#/components/schemas/OpaqueId"
-          },
-          "requestDigest": {
-            "type": "string",
-            "minLength": 16,
-            "maxLength": 256
           }
         }
       },
@@ -1233,8 +1185,7 @@
           "assignmentId",
           "clientId",
           "reason",
-          "expectedProfileVersion",
-          "requestDigest"
+          "expectedProfileVersion"
         ],
         "properties": {
           "assignmentId": {
@@ -1250,11 +1201,6 @@
           },
           "expectedProfileVersion": {
             "$ref": "#/components/schemas/AggregateVersion"
-          },
-          "requestDigest": {
-            "type": "string",
-            "minLength": 16,
-            "maxLength": 256
           }
         }
       },
@@ -1264,8 +1210,7 @@
         "required": [
           "role",
           "reason",
-          "expectedProfileVersion",
-          "requestDigest"
+          "expectedProfileVersion"
         ],
         "properties": {
           "role": {
@@ -1282,11 +1227,6 @@
           },
           "expectedProfileVersion": {
             "$ref": "#/components/schemas/AggregateVersion"
-          },
-          "requestDigest": {
-            "type": "string",
-            "minLength": 16,
-            "maxLength": 256
           }
         }
       },
