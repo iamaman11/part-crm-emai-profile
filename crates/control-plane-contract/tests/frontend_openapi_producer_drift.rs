@@ -1,7 +1,4 @@
 #[allow(dead_code)]
-#[path = "../src/mailbox_client_association_api.rs"]
-mod mailbox_client_association_api;
-#[allow(dead_code)]
 #[path = "../src/mailbox_gmail_oauth_api.rs"]
 mod mailbox_gmail_oauth_api;
 #[allow(dead_code)]
@@ -16,11 +13,7 @@ fn assert_fragment(generated: serde_json::Value, accepted: &str) {
 }
 
 #[test]
-fn capability_openapi_fragments_match_rust_producers_byte_for_byte() {
-    assert_fragment(
-        mailbox_client_association_api::openapi_fragment(),
-        include_str!("../../../openapi/v1/fragments/mailbox-client-association.json"),
-    );
+fn rust_owned_capability_openapi_fragments_match_accepted_projections_byte_for_byte() {
     assert_fragment(
         mailbox_gmail_oauth_api::openapi_fragment(),
         include_str!("../../../openapi/v1/fragments/mailbox-gmail-oauth.json"),
