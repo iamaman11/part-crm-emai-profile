@@ -103,7 +103,7 @@ function deepEqual(left: unknown, right: unknown): boolean {
     const rightKeys = Object.keys(right).sort();
     return (
       leftKeys.length === rightKeys.length &&
-      leftKeys.every((key, index) => key === rightKeys[index] && deepEqual(left[key], right[key]))
+      leftKeys.every((key, index) => key === rightKeys[index] && deepEqual(left[key], rightKeys[index] === key ? right[key] : undefined))
     );
   }
   return false;
@@ -284,8 +284,8 @@ export function matchesSchema(
   return matchesSchemaInternal(schema, value, components, 0);
 }
 
-function opaqueRequestId(prefix: 'corr' | 'idem'): string {
-  return `${prefix}_${crypto.randomUUID().replaceAll('-', '')}`;
+function opaqueCorrelationId(): string {
+  return `corr_${crypto.randomUUID().replaceAll('-', '')}`;
 }
 
 function inputValue(input: object, name: string): unknown {
@@ -356,11 +356,8 @@ function appendQuery(search: URLSearchParams, parameter: RuntimeParameterSpec, v
 }
 
 function parameterValue(parameter: RuntimeParameterSpec, input: object): unknown {
-  if (parameter.source === 'correlation') return opaqueRequestId('corr');
-  if (parameter.source === 'idempotency') {
-    const provided = inputValue(input, 'idempotencyKey');
-    return provided === undefined ? opaqueRequestId('idem') : provided;
-  }
+  if (parameter.source === 'correlation') return opaqueCorrelationId();
+  if (parameter.source === 'idempotency') return inputValue(input, 'idempotencyKey');
   if (parameter.argumentName === undefined) return undefined;
   return inputValue(input, parameter.argumentName);
 }
