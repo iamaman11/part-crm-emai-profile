@@ -144,7 +144,12 @@ fn opaque_id_schema() -> Value {
 }
 
 fn nullable_opaque_id_schema() -> Value {
-    json!({"type": "string", "nullable": true, "minLength": 8, "maxLength": 96})
+    json!({
+        "oneOf": [
+            {"type": "string", "minLength": 8, "maxLength": 96},
+            {"type": "null"}
+        ]
+    })
 }
 
 fn relationship_version_schema() -> Value {
@@ -165,7 +170,11 @@ fn json_response(description: &str, schema: &str) -> Value {
 fn problem_response() -> Value {
     json!({
         "description": "Problem response",
-        "content": {"application/problem+json": {"schema": {"type": "object"}}}
+        "content": {
+            "application/problem+json": {
+                "schema": schema_ref("Problem")
+            }
+        }
     })
 }
 

@@ -185,7 +185,7 @@ pub fn openapi_fragment() -> Value {
                         "attempt": {"type": "integer", "minimum": 0},
                         "maxAttempts": {"type": "integer", "minimum": 1, "maximum": 10},
                         "nextRunAtMs": {"type": "integer", "minimum": 0},
-                        "providerStatus": {"type": "string", "nullable": true},
+                        "providerStatus": nullable_string_schema(),
                         "boundedItemCount": {"type": "integer", "minimum": 0},
                         "version": positive_version_schema()
                     }
@@ -196,7 +196,7 @@ pub fn openapi_fragment() -> Value {
                     "required": ["jobId", "cursor", "delayMs", "maxAttempts", "requestDigest"],
                     "properties": {
                         "jobId": string_schema(),
-                        "cursor": {"type": "string", "nullable": true, "maxLength": 512},
+                        "cursor": nullable_cursor_schema(),
                         "delayMs": {"type": "integer", "minimum": 0, "maximum": 604800000},
                         "maxAttempts": {"type": "integer", "minimum": 1, "maximum": 10},
                         "requestDigest": sha256_schema()
@@ -226,6 +226,24 @@ fn string_enum(values: &[&str]) -> Value {
 
 fn string_schema() -> Value {
     json!({"type": "string"})
+}
+
+fn nullable_string_schema() -> Value {
+    json!({
+        "oneOf": [
+            {"type": "string"},
+            {"type": "null"}
+        ]
+    })
+}
+
+fn nullable_cursor_schema() -> Value {
+    json!({
+        "oneOf": [
+            {"type": "string", "maxLength": 512},
+            {"type": "null"}
+        ]
+    })
 }
 
 fn positive_version_schema() -> Value {

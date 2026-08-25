@@ -174,7 +174,7 @@ pub fn openapi_fragment() -> Value {
                         "containerDigest": sha256_schema(),
                         "status": schema_ref("GenerationStatusDto"),
                         "version": positive_version_schema(),
-                        "verificationReference": {"type": "string", "nullable": true, "minLength": 8, "maxLength": 256, "pattern": "^[A-Za-z0-9_:-]+$"}
+                        "verificationReference": nullable_verification_reference_schema()
                     }
                 },
                 "RegisterGenerationRequest": {
@@ -235,7 +235,26 @@ fn opaque_id_schema() -> Value {
 }
 
 fn nullable_opaque_id_schema() -> Value {
-    json!({"type": "string", "nullable": true, "minLength": 8, "maxLength": 96})
+    json!({
+        "oneOf": [
+            {"type": "string", "minLength": 8, "maxLength": 96},
+            {"type": "null"}
+        ]
+    })
+}
+
+fn nullable_verification_reference_schema() -> Value {
+    json!({
+        "oneOf": [
+            {
+                "type": "string",
+                "minLength": 8,
+                "maxLength": 256,
+                "pattern": "^[A-Za-z0-9_:-]+$"
+            },
+            {"type": "null"}
+        ]
+    })
 }
 
 fn positive_version_schema() -> Value {

@@ -80,6 +80,17 @@ def run_export(bin_name: str, *arguments: str) -> tuple[dict[str, Any], str]:
 
 
 def schema_type(schema: dict[str, Any], *, support_nullable: bool = False) -> str:
+    variants = schema.get("oneOf")
+    if isinstance(variants, list) and len(variants) == 2 and all(
+        isinstance(value, dict) for value in variants
+    ):
+        null_variants = [value for value in variants if value.get("type") == "null"]
+        non_null_variants = [value for value in variants if value.get("type") != "null"]
+        if len(null_variants) == 1 and len(non_null_variants) == 1:
+            return (
+                f"{schema_type(non_null_variants[0], support_nullable=support_nullable)} | null"
+            )
+
     reference = schema.get("$ref")
     if isinstance(reference, str):
         prefix = "#/components/schemas/"
@@ -333,6 +344,30 @@ def self_test_discriminated_unions() -> None:
         raise ValueError("discriminated union negative self-test accepted a non-literal discriminator")
 
 
+def self_test_nullable_one_of() -> None:
+    nullable = {
+        "oneOf": [
+            {"type": "string", "minLength": 1, "maxLength": 96},
+            {"type": "null"},
+        ]
+    }
+    if schema_type(nullable) != "string | null":
+        raise ValueError("JSON Schema nullable oneOf self-test lost nullability")
+
+    ambiguous = {
+        "oneOf": [
+            {"type": "string"},
+            {"type": "integer"},
+        ]
+    }
+    try:
+        schema_type(ambiguous)
+    except ValueError:
+        pass
+    else:
+        raise ValueError("anonymous non-nullable oneOf must fail closed")
+
+
 def print_diff(path: Path, actual: str, expected: str) -> None:
     display = str(path.relative_to(ROOT))
     diff = difflib.unified_diff(
@@ -384,6 +419,7 @@ def main() -> int:
     args = parser.parse_args()
 
     self_test_discriminated_unions()
+    self_test_nullable_one_of()
 
     base_document, _ = run_export("export_openapi")
     base_typescript = render_typescript(base_document, source_path=SOURCE_PATH)

@@ -94,8 +94,8 @@ pub fn openapi_fragment() -> Value {
                         "profileId": {"type": "string", "minLength": 8, "maxLength": 96},
                         "status": schema_ref("OperatorProfileStatus"),
                         "version": {"type": "integer", "minimum": 1},
-                        "linkedClientId": {"type": "string", "nullable": true, "minLength": 8, "maxLength": 96},
-                        "activeGenerationId": {"type": "string", "nullable": true, "minLength": 8, "maxLength": 96}
+                        "linkedClientId": nullable_opaque_id_schema(),
+                        "activeGenerationId": nullable_opaque_id_schema()
                     }
                 },
                 "ProfileListPageDto": {
@@ -211,14 +211,32 @@ fn string_enum(values: &[&str]) -> Value {
     json!({"type": "string", "enum": values})
 }
 
+fn nullable_opaque_id_schema() -> Value {
+    json!({
+        "oneOf": [
+            {"type": "string", "minLength": 8, "maxLength": 96},
+            {"type": "null"}
+        ]
+    })
+}
+
 fn nullable_cursor_schema() -> Value {
-    json!({"type": "string", "nullable": true, "maxLength": 512})
+    json!({
+        "oneOf": [
+            {"type": "string", "maxLength": 512},
+            {"type": "null"}
+        ]
+    })
 }
 
 fn problem_response() -> Value {
     json!({
         "description": "Problem response",
-        "content": {"application/problem+json": {"schema": {"type": "object"}}}
+        "content": {
+            "application/problem+json": {
+                "schema": schema_ref("Problem")
+            }
+        }
     })
 }
 

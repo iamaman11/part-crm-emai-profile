@@ -364,7 +364,7 @@ fn extend_openapi_in_place(document: &mut Value) -> Result<(), ClientRegistryOpe
                 "profileId": {"type": "string"},
                 "status": schema_ref("ClientAssignmentStatus"),
                 "assignedAtMs": non_negative_time_schema(),
-                "closedAtMs": {"type": "integer", "format": "uint64", "minimum": 0, "nullable": true},
+                "closedAtMs": nullable_non_negative_time_schema(),
                 "reason": {"type": "string"}
             }),
         ),
@@ -449,6 +449,15 @@ fn positive_version_schema() -> Value {
 
 fn non_negative_time_schema() -> Value {
     json!({"type": "integer", "format": "uint64", "minimum": 0})
+}
+
+fn nullable_non_negative_time_schema() -> Value {
+    json!({
+        "oneOf": [
+            {"type": "integer", "format": "uint64", "minimum": 0},
+            {"type": "null"}
+        ]
+    })
 }
 
 fn digest_schema() -> Value {
