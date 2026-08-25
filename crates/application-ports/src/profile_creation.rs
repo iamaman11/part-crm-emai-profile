@@ -29,7 +29,8 @@ mod tests {
     use crate::profiles::{ProfileCreateWrite, ProfileGrantRole};
     use profile_domain::BrowserProfile;
     use profile_platform_primitives::{
-        AuditEventId, IdempotencyKey, OutboxEventId, ProfileId, TenantId, UnixMillis,
+        AuditEventId, IdempotencyKey, OutboxEventId, PayloadFingerprint, ProfileId, TenantId,
+        UnixMillis,
     };
 
     #[test]
@@ -42,7 +43,9 @@ mod tests {
             ),
             CommandExecutionEvidence::new(
                 IdempotencyKey::parse("idem_01JPROFILECREATOR")?,
-                "digest_01JPROFILECREATOR",
+                PayloadFingerprint::parse(
+                    "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                )?,
                 AuditEventId::parse("audit_01JPROFILECREATOR")?,
                 OutboxEventId::parse("outbox_01JPROFILECREATOR")?,
                 UnixMillis::new(10),
