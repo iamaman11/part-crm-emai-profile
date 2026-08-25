@@ -65,12 +65,11 @@ async fn create_profile(request: &mut Request, env: &Env, tenant_id: &str) -> Re
         Ok(value) => value,
         Err(_) => return invalid_request(actor.actor().correlation_id().as_str()),
     };
-    let profile_id = match ProfileId::parse(body.profile_id) {
+    let profile_id = match ProfileId::parse(body.profile_id.clone()) {
         Ok(value) => value,
         Err(_) => return invalid_request(actor.actor().correlation_id().as_str()),
     };
-    let evidence = match command_evidence::from_request(request, actor.actor(), body.request_digest)
-    {
+    let evidence = match command_evidence::from_request(request, actor.actor(), &body) {
         Ok(value) => value,
         Err(_) => return invalid_request(actor.actor().correlation_id().as_str()),
     };
@@ -140,11 +139,11 @@ async fn assign_profile(
         Ok(value) => value,
         Err(_) => return invalid_request(actor.actor().correlation_id().as_str()),
     };
-    let assignment_id = match AssignmentId::parse(body.assignment_id) {
+    let assignment_id = match AssignmentId::parse(body.assignment_id.clone()) {
         Ok(value) => value,
         Err(_) => return invalid_request(actor.actor().correlation_id().as_str()),
     };
-    let client_id = match ClientId::parse(body.client_id) {
+    let client_id = match ClientId::parse(body.client_id.clone()) {
         Ok(value) => value,
         Err(_) => return invalid_request(actor.actor().correlation_id().as_str()),
     };
@@ -155,8 +154,7 @@ async fn assign_profile(
     if let Err(error) = next_profile_assignment_version(expected_profile_version) {
         return assignment_failure(actor.actor().correlation_id().as_str(), error);
     }
-    let evidence = match command_evidence::from_request(request, actor.actor(), body.request_digest)
-    {
+    let evidence = match command_evidence::from_request(request, actor.actor(), &body) {
         Ok(value) => value,
         Err(_) => return invalid_request(actor.actor().correlation_id().as_str()),
     };
@@ -212,8 +210,7 @@ async fn update_profile_grant(
         Ok(value) => value,
         Err(_) => return invalid_request(actor.actor().correlation_id().as_str()),
     };
-    let evidence = match command_evidence::from_request(request, actor.actor(), body.request_digest)
-    {
+    let evidence = match command_evidence::from_request(request, actor.actor(), &body) {
         Ok(value) => value,
         Err(_) => return invalid_request(actor.actor().correlation_id().as_str()),
     };
@@ -249,88 +246,34 @@ fn operation_failure(correlation_id: &str, error: ProfileOperationError) -> Resu
     match error {
         ProfileOperationError::NotFound => neutral_not_found(correlation_id),
         ProfileOperationError::Conflict => problem(correlation_id, 409, "conflict", "Conflict"),
-        ProfileOperationError::IntegrityFailure => problem(
-            correlation_id,
-            500,
-            "integrity_failure",
-            "Integrity Failure",
-        ),
-        ProfileOperationError::InternalFailure => {
-            problem(correlation_id, 500, "internal_failure", "Internal Failure")
-        }
-        ProfileOperationError::DependencyUnavailable => problem(
-            correlation_id,
-            503,
-            "dependency_unavailable",
-            "Dependency Unavailable",
-        ),
+        ProfileOperationError::IntegrityFailure => problem(correlation_id, 500, "integrity_failure", "Integrity Failure"),
+        ProfileOperationError::InternalFailure => problem(correlation_id, 500, "internal_failure", "Internal Failure"),
+        ProfileOperationError::DependencyUnavailable => problem(correlation_id, 503, "dependency_unavailable", "Dependency Unavailable"),
     }
 }
 
-fn assignment_failure(
-    correlation_id: &str,
-    error: ProfileAssignmentOperationError,
-) -> Result<Response> {
+fn assignment_failure(correlation_id: &str, error: ProfileAssignmentOperationError) -> Result<Response> {
     match error {
         ProfileAssignmentOperationError::NotFound => neutral_not_found(correlation_id),
-        ProfileAssignmentOperationError::VersionConflict => {
-            problem(correlation_id, 409, "version_conflict", "Version Conflict")
-        }
-        ProfileAssignmentOperationError::InvalidState => {
-            problem(correlation_id, 409, "invalid_state", "Invalid State")
-        }
-        ProfileAssignmentOperationError::Conflict => {
-            problem(correlation_id, 409, "conflict", "Conflict")
-        }
-        ProfileAssignmentOperationError::IntegrityFailure => problem(
-            correlation_id,
-            500,
-            "integrity_failure",
-            "Integrity Failure",
-        ),
-        ProfileAssignmentOperationError::InternalFailure => {
-            problem(correlation_id, 500, "internal_failure", "Internal Failure")
-        }
-        ProfileAssignmentOperationError::DependencyUnavailable => problem(
-            correlation_id,
-            503,
-            "dependency_unavailable",
-            "Dependency Unavailable",
-        ),
+        ProfileAssignmentOperationError::VersionConflict => problem(correlation_id, 409, "version_conflict", "Version Conflict"),
+        ProfileAssignmentOperationError::InvalidState => problem(correlation_id, 409, "invalid_state", "Invalid State"),
+        ProfileAssignmentOperationError::Conflict => problem(correlation_id, 409, "conflict", "Conflict"),
+        ProfileAssignmentOperationError::IntegrityFailure => problem(correlation_id, 500, "integrity_failure", "Integrity Failure"),
+        ProfileAssignmentOperationError::InternalFailure => problem(correlation_id, 500, "internal_failure", "Internal Failure"),
+        ProfileAssignmentOperationError::DependencyUnavailable => problem(correlation_id, 503, "dependency_unavailable", "Dependency Unavailable"),
     }
 }
 
-fn profile_grant_failure(
-    correlation_id: &str,
-    error: ProfileGrantOperationError,
-) -> Result<Response> {
+fn profile_grant_failure(correlation_id: &str, error: ProfileGrantOperationError) -> Result<Response> {
     match error {
         ProfileGrantOperationError::InvalidRequest => invalid_request(correlation_id),
         ProfileGrantOperationError::NotFound => neutral_not_found(correlation_id),
-        ProfileGrantOperationError::VersionConflict => {
-            problem(correlation_id, 409, "version_conflict", "Version Conflict")
-        }
-        ProfileGrantOperationError::InvalidState => {
-            problem(correlation_id, 409, "invalid_state", "Invalid State")
-        }
-        ProfileGrantOperationError::Conflict => {
-            problem(correlation_id, 409, "conflict", "Conflict")
-        }
-        ProfileGrantOperationError::IntegrityFailure => problem(
-            correlation_id,
-            500,
-            "integrity_failure",
-            "Integrity Failure",
-        ),
-        ProfileGrantOperationError::InternalFailure => {
-            problem(correlation_id, 500, "internal_failure", "Internal Failure")
-        }
-        ProfileGrantOperationError::DependencyUnavailable => problem(
-            correlation_id,
-            503,
-            "dependency_unavailable",
-            "Dependency Unavailable",
-        ),
+        ProfileGrantOperationError::VersionConflict => problem(correlation_id, 409, "version_conflict", "Version Conflict"),
+        ProfileGrantOperationError::InvalidState => problem(correlation_id, 409, "invalid_state", "Invalid State"),
+        ProfileGrantOperationError::Conflict => problem(correlation_id, 409, "conflict", "Conflict"),
+        ProfileGrantOperationError::IntegrityFailure => problem(correlation_id, 500, "integrity_failure", "Integrity Failure"),
+        ProfileGrantOperationError::InternalFailure => problem(correlation_id, 500, "internal_failure", "Internal Failure"),
+        ProfileGrantOperationError::DependencyUnavailable => problem(correlation_id, 503, "dependency_unavailable", "Dependency Unavailable"),
     }
 }
 
@@ -375,9 +318,7 @@ fn profile_projection(profile: &ProfileDetails) -> ProfileProjectionDto {
         profile_id: profile.profile_id().as_str().to_owned(),
         status: profile_status(profile.status()),
         version: profile.version().value(),
-        linked_client_id: profile
-            .linked_client_id()
-            .map(|value| value.as_str().to_owned()),
+        linked_client_id: profile.linked_client_id().map(|value| value.as_str().to_owned()),
     }
 }
 
