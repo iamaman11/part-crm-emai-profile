@@ -119,8 +119,6 @@ def schema_type(schema: dict[str, Any]) -> str:
             return "Readonly<Record<string, unknown>>"
         return object_type
 
-    # A schema containing only assertion combinators/annotations is intentionally not
-    # widened to any. The runtime checker still validates it; compile-time remains unknown.
     return "unknown"
 
 
@@ -177,11 +175,12 @@ def runtime_operation(operation: dict[str, Any]) -> dict[str, Any]:
 
 def input_fields(operation: dict[str, Any]) -> tuple[list[tuple[str, str, bool]], bool]:
     fields: dict[str, tuple[str, bool]] = {}
-    has_idempotency = False
+    idempotency_required: bool | None = None
     for parameter in operation["parameters"]:
         argument_name, source = parameter_argument(parameter)
         if source == "idempotency":
-            has_idempotency = True
+            required = bool(parameter["required"])
+            idempotency_required = required or bool(idempotency_required)
             continue
         if source == "correlation":
             continue
@@ -205,8 +204,8 @@ def input_fields(operation: dict[str, Any]) -> tuple[list[tuple[str, str, bool]]
         fields["body"] = (" | ".join(f"({value})" for value in body_types), True)
 
     rendered = [(name, value[0], value[1]) for name, value in sorted(fields.items())]
-    if has_idempotency:
-        rendered.append(("idempotencyKey", "string", False))
+    if idempotency_required is not None:
+        rendered.append(("idempotencyKey", "string", idempotency_required))
     rendered.append(("signal", "AbortSignal", False))
     required_input = any(required for _, _, required in rendered)
     return rendered, required_input
