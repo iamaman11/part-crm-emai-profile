@@ -9,10 +9,16 @@
     "npm": "11.17.0"
   },
   "scripts": {
+    "generate:api": "python ../scripts/generate-frontend-openapi-runtime.py",
+    "prebuild": "npm run generate:api",
     "build": "tsc -b && vite build",
+    "pretest": "npm run generate:api",
     "test": "vitest run",
+    "pretest:watch": "npm run generate:api",
     "test:watch": "vitest",
+    "pretypecheck": "npm run generate:api",
     "typecheck": "tsc -b --pretty false",
+    "predev": "npm run generate:api",
     "dev": "vite"
   },
   "dependencies": {
