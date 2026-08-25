@@ -6,22 +6,10 @@ import {
   useState,
   type ReactNode,
 } from 'react';
+import { getSession, type ActivationUnit } from '../features/session/api';
 import { useTenant } from './TenantContext';
 
-export type ActivationUnit =
-  | 'foundation'
-  | 'identity'
-  | 'clients'
-  | 'browser_profiles'
-  | 'profile_runtime'
-  | 'camoufox'
-  | 'notifications'
-  | 'mailbox_admin'
-  | 'mailbox_client_binding'
-  | 'mailbox_browser_binding'
-  | 'mailbox_read'
-  | 'mailbox_jobs'
-  | 'outbound_mail';
+export type { ActivationUnit };
 
 interface CapabilityContextValue {
   profileId: string | null;
@@ -33,39 +21,6 @@ interface CapabilityContextValue {
 }
 
 const CapabilityContext = createContext<CapabilityContextValue | null>(null);
-const KNOWN_ACTIVATION_UNITS = new Set<ActivationUnit>([
-  'foundation',
-  'identity',
-  'clients',
-  'browser_profiles',
-  'profile_runtime',
-  'camoufox',
-  'notifications',
-  'mailbox_admin',
-  'mailbox_client_binding',
-  'mailbox_browser_binding',
-  'mailbox_read',
-  'mailbox_jobs',
-  'outbound_mail',
-]);
-
-function requestId(): string {
-  return `corr_${crypto.randomUUID().replaceAll('-', '')}`;
-}
-
-function parseCapabilities(raw: string | null): Set<ActivationUnit> {
-  if (raw === null || raw.trim() === '') return new Set();
-  const values = raw.split(',').map((value) => value.trim()).filter(Boolean);
-  const result = new Set<ActivationUnit>();
-  for (const value of values) {
-    if (!KNOWN_ACTIVATION_UNITS.has(value as ActivationUnit)) {
-      throw new TypeError(`Unknown capability projection: ${value}`);
-    }
-    result.add(value as ActivationUnit);
-  }
-  return result;
-}
-
 export function CapabilityProvider({ children }: { children: ReactNode }) {
   const { tenantId } = useTenant();
   const [profileId, setProfileId] = useState<string | null>(null);
@@ -88,31 +43,13 @@ export function CapabilityProvider({ children }: { children: ReactNode }) {
 
     void (async () => {
       try {
-        const response = await fetch('/api/v1/session', {
-          method: 'GET',
-          headers: {
-            Accept: 'application/json',
-            'X-Tenant-Id': tenantId,
-            'X-Correlation-Id': requestId(),
-          },
-          credentials: 'same-origin',
-          redirect: 'error',
-          signal: controller.signal,
-        });
-        if (!response.ok) throw new TypeError(`Capability projection unavailable (${response.status})`);
-        const nextProfileId = response.headers.get('x-release-profile');
-        const nextProfileDigest = response.headers.get('x-release-profile-digest');
-        if (!nextProfileId || !nextProfileDigest) {
-          throw new TypeError('Capability projection headers are missing');
-        }
-        const nextCapabilities = parseCapabilities(
-          response.headers.get('x-effective-capabilities'),
-        );
+        const session = await getSession(tenantId, controller.signal);
+        const nextCapabilities = new Set<ActivationUnit>(session.capabilities);
         if (!nextCapabilities.has('foundation')) {
           throw new TypeError('Capability projection is missing foundation');
         }
-        setProfileId(nextProfileId);
-        setProfileDigest(nextProfileDigest);
+        setProfileId(session.profileId);
+        setProfileDigest(session.profileDigest);
         setCapabilities(nextCapabilities);
         setReady(true);
       } catch (caught) {

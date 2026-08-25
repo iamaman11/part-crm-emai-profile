@@ -31,6 +31,16 @@ pub struct ActorSession {
     pub tenant_id: String,
     pub actor_id: String,
     pub role: String,
+    pub profile_id: String,
+    pub profile_digest: String,
+    pub capabilities: Vec<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HealthResponse {
+    pub status: String,
+    pub contract_version: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -408,9 +418,15 @@ mod tests {
             tenant_id: "tenant_01JCONTRACT".to_owned(),
             actor_id: "actor_01JCONTRACT".to_owned(),
             role: "TENANT_OWNER".to_owned(),
+            profile_id: "rehearsal-core-v1".to_owned(),
+            profile_digest: "a".repeat(64),
+            capabilities: vec!["foundation".to_owned()],
         })?;
         assert!(session.get("tenantId").is_some());
         assert!(session.get("actorId").is_some());
+        assert!(session.get("profileId").is_some());
+        assert!(session.get("profileDigest").is_some());
+        assert!(session.get("capabilities").is_some());
 
         let receipt = serde_json::to_value(MutationReceipt {
             result_code: "created".to_owned(),

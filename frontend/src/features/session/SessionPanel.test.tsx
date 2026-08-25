@@ -35,6 +35,9 @@ describe('SessionPanel', () => {
       tenantId: 'tenant_01JTEST',
       actorId: 'actor_01JTEST',
       role: 'TENANT_OWNER',
+      profileId: 'rehearsal-core-v1',
+      profileDigest: 'a'.repeat(64),
+      capabilities: ['foundation'],
     });
 
     renderPanel();

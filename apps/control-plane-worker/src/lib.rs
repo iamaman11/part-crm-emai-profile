@@ -43,9 +43,10 @@ use cloudflare_adapters::d1_idempotency::D1IdempotencyRepository;
 use cloudflare_adapters::d1_identity_acl::D1IdentityAclRepository;
 use cloudflare_adapters::d1_mailboxes::D1MailboxRepository;
 use cloudflare_adapters::d1_notification_operations::D1NotificationOperationsRepository;
+use control_plane_contract::public_api::HealthResponse;
 use control_plane_contract::{
     D1_CATALOG_BINDING, PROFILE_COORDINATOR_BINDING, R2_PROFILES_BINDING, RouteClass,
-    STATIC_ASSETS_BINDING, classify_route,
+    STATIC_ASSETS_BINDING, classify_route, health_payload,
 };
 use profile_platform_primitives::{ActorId, ProfileId, TenantId};
 use session_domain::coordinator::coordinator_object_name;
@@ -74,7 +75,7 @@ pub async fn main(mut request: Request, env: Env, _context: Context) -> Result<R
     }
 
     match route {
-        RouteClass::HealthApi => Response::ok("control-plane-ready"),
+        RouteClass::HealthApi => health_response(),
         RouteClass::BindingProbeApi => binding_probe(&env),
         RouteClass::DynamicRouteNotFound | RouteClass::BridgeDeniedByDefault => {
             Response::error("Not Found", 404)
@@ -221,22 +222,16 @@ pub async fn control_plane_schedule(_event: ScheduledEvent, env: Env, _context: 
 }
 
 async fn capability_session_response(request: &Request, env: &Env) -> Result<Response> {
-    let mut response = session_response(request, env).await?;
-    if response.status_code() == 200 {
-        let profile = capability_gate::active_profile(env)?;
-        response
-            .headers_mut()
-            .set(capability_gate::RELEASE_PROFILE_HEADER, profile.id)?;
-        response.headers_mut().set(
-            capability_gate::RELEASE_PROFILE_DIGEST_HEADER,
-            profile.digest,
-        )?;
-        response.headers_mut().set(
-            capability_gate::EFFECTIVE_CAPABILITIES_HEADER,
-            &profile.capabilities.enabled_ids(),
-        )?;
-    }
-    Ok(response)
+    let profile = capability_gate::active_profile(env)?;
+    session_response(request, env, profile).await
+}
+
+fn health_response() -> Result<Response> {
+    let payload = health_payload();
+    Response::from_json(&HealthResponse {
+        status: payload.status.to_owned(),
+        contract_version: payload.contract_version.to_owned(),
+    })
 }
 
 async fn dispatch_profile_coordinator(request: &mut Request, env: &Env) -> Result<Response> {
@@ -291,5 +286,5 @@ fn binding_probe(env: &Env) -> Result<Response> {
         ))?;
     let _notification_hub_stub = notification_hub_id.get_stub()?;
     let _ = profile_objects;
-    Response::ok("bindings-ready")
+    health_response()
 }

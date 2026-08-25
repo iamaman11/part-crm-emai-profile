@@ -4,9 +4,6 @@ use worker::{Env, Error, Result};
 pub const CANONICAL_ENVIRONMENT_VAR: &str = "CANONICAL_ENVIRONMENT";
 pub const CAPABILITY_PROFILE_ID_VAR: &str = "CAPABILITY_PROFILE_ID";
 pub const CAPABILITY_PROFILE_DIGEST_VAR: &str = "CAPABILITY_PROFILE_DIGEST";
-pub const RELEASE_PROFILE_HEADER: &str = "X-Release-Profile";
-pub const RELEASE_PROFILE_DIGEST_HEADER: &str = "X-Release-Profile-Digest";
-pub const EFFECTIVE_CAPABILITIES_HEADER: &str = "X-Effective-Capabilities";
 
 pub const PRODUCTION_CORE_V1_DIGEST: &str =
     "92ccb88e7b74c89e4f39a5349eb5bf0da6a2d6f9ccc4a89d72ab462cb08e0868";
@@ -126,14 +123,14 @@ impl EffectiveCapabilities {
     }
 
     #[must_use]
-    pub fn enabled_ids(self) -> String {
+    pub fn enabled_ids(self) -> Vec<String> {
         ALL_ACTIVATION_UNITS
             .iter()
             .copied()
             .filter(|unit| self.enabled(*unit))
             .map(ActivationUnit::id)
-            .collect::<Vec<_>>()
-            .join(",")
+            .map(str::to_owned)
+            .collect()
     }
 }
 
@@ -398,9 +395,7 @@ mod tests {
             .unwrap_or_else(|error| panic!("runtime profile {profile_id} missing: {error:?}"))
             .capabilities
             .enabled_ids()
-            .split(',')
-            .filter(|value| !value.is_empty())
-            .map(str::to_owned)
+            .into_iter()
             .collect()
     }
 
@@ -429,7 +424,8 @@ mod tests {
             profile
                 .capabilities
                 .enabled_ids()
-                .contains("browser_profiles")
+                .iter()
+                .any(|value| value == "browser_profiles")
         );
         Ok(())
     }
