@@ -1,9 +1,13 @@
+#[allow(dead_code)]
 #[path = "../src/mailbox_client_association_api.rs"]
 mod mailbox_client_association_api;
+#[allow(dead_code)]
 #[path = "../src/mailbox_gmail_oauth_api.rs"]
 mod mailbox_gmail_oauth_api;
+#[allow(dead_code)]
 #[path = "../src/mailbox_microsoft_graph_onboarding_api.rs"]
 mod mailbox_microsoft_graph_onboarding_api;
+#[allow(dead_code)]
 #[path = "../src/standards_mailbox_onboarding_api.rs"]
 mod standards_mailbox_onboarding_api;
 
