@@ -38,6 +38,9 @@ jobs:
       - name: Verify generated C7 client mail contract
         run: python scripts/generate-c7-contracts.py --check
 
+      - name: Verify PAS-2 frontend OpenAPI compiler input
+        run: python scripts/check-frontend-openapi.py
+
       - name: Set up Node 24 LTS
         uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
         with:

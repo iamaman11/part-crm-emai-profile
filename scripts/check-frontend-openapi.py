@@ -372,13 +372,18 @@ def assert_golden_vectors(document: dict[str, Any], index: dict[str, tuple[str, 
                 "--bin",
                 "export_frontend_openapi",
                 "--",
-                "--digest",
+                "--digest-material",
             ],
             input_text=json.dumps(digest["input"], ensure_ascii=False, separators=(",", ":")),
         )
     )
-    if rust != {"canonicalUtf8": digest["canonicalUtf8"], "sha256": digest["sha256"]}:
-        raise ValueError(f"Rust digest output differs from cross-language golden vector: {rust!r}")
+    expected_rust_material = {
+        "algorithm": "sha-256",
+        "canonicalUtf8": digest["canonicalUtf8"],
+        "encoding": "lowercase-hex",
+    }
+    if rust != expected_rust_material:
+        raise ValueError(f"Rust digest material differs from cross-language golden vector: {rust!r}")
 
     for vector in golden["wireVectors"]:
         operation_id = vector["operationId"]
