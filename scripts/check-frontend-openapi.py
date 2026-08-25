@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""PAS-2 Transaction A: prove one deterministic, non-repairing frontend OpenAPI input."""
+"""PAS-2 Transaction A: prove one deterministic, non-repairing frontend OpenAPI compiler boundary."""
 
 from __future__ import annotations
 
@@ -185,6 +185,58 @@ def validate_content(
                 )
 
 
+def validate_parameter_serialization(parameter: dict[str, Any], operation_id: str) -> None:
+    parameter_location = parameter["in"]
+    expected_style = {"path": "simple", "header": "simple", "query": "form"}[
+        parameter_location
+    ]
+    style = parameter.get("style", expected_style)
+    if style != expected_style:
+        raise ValueError(
+            f"{operation_id}: unsupported {parameter_location} style {style!r}"
+        )
+    expected_explode = parameter_location == "query"
+    explode = parameter.get("explode", expected_explode)
+    if explode is not expected_explode:
+        raise ValueError(
+            f"{operation_id}: unsupported {parameter_location} explode={explode!r}"
+        )
+
+
+def validate_response_headers(
+    document: dict[str, Any], headers: Any, operation_id: str, status: str
+) -> None:
+    if headers is None:
+        return
+    if not isinstance(headers, dict):
+        raise ValueError(f"{operation_id} {status}: response headers must be an object")
+    for name, header_value in headers.items():
+        header = resolve(document, header_value)
+        if not isinstance(name, str) or not name:
+            raise ValueError(f"{operation_id} {status}: response header name is invalid")
+        if not isinstance(header, dict):
+            raise ValueError(f"{operation_id} {status} header {name}: must resolve to an object")
+        if "content" in header:
+            raise ValueError(
+                f"{operation_id} {status} header {name}: header content serialization is unsupported"
+            )
+        if header.get("style", "simple") != "simple":
+            raise ValueError(
+                f"{operation_id} {status} header {name}: unsupported header style"
+            )
+        if header.get("explode", False) is not False:
+            raise ValueError(
+                f"{operation_id} {status} header {name}: unsupported header explode"
+            )
+        if "schema" not in header:
+            raise ValueError(f"{operation_id} {status} header {name}: schema is required")
+        validate_schema(
+            document,
+            header["schema"],
+            f"{operation_id}.responses.{status}.headers.{name}.schema",
+        )
+
+
 def operation_index(
     document: dict[str, Any],
 ) -> dict[str, tuple[str, str, dict[str, Any], dict[str, Any]]]:
@@ -235,20 +287,16 @@ def operation_index(
                     if not isinstance(name, str):
                         raise ValueError(f"{operation_id}: path parameter name is required")
                     path_parameters.add(name)
-                style = parameter.get("style")
-                if style is not None:
-                    expected = {"path": "simple", "header": "simple", "query": "form"}[
-                        parameter_location
-                    ]
-                    if style != expected:
-                        raise ValueError(
-                            f"{operation_id}: unsupported {parameter_location} style {style!r}"
-                        )
+                validate_parameter_serialization(parameter, operation_id)
                 if "schema" in parameter:
                     validate_schema(
                         document,
                         parameter["schema"],
                         f"{operation_id}.parameter.{parameter.get('name')}",
+                    )
+                else:
+                    raise ValueError(
+                        f"{operation_id}: parameter {parameter.get('name')!r} requires a schema"
                     )
             if path_parameters != placeholders:
                 raise ValueError(
@@ -267,6 +315,11 @@ def operation_index(
                         raise ValueError(
                             f"{operation_id}: unsupported security schemes {sorted(unsupported)}"
                         )
+                    for scheme, scopes in requirement.items():
+                        if not isinstance(scopes, list) or scopes:
+                            raise ValueError(
+                                f"{operation_id}: apiKey security {scheme} must declare empty scopes"
+                            )
 
             request_body = operation.get("requestBody")
             if request_body is not None:
@@ -286,9 +339,12 @@ def operation_index(
                     raise ValueError(f"{operation_id} {status}: response must resolve to an object")
                 if str(status) == "204" and "content" in response:
                     raise ValueError(f"{operation_id}: declared 204 must not contain a body")
-                headers = response.get("headers", {})
-                if headers and not isinstance(headers, dict):
-                    raise ValueError(f"{operation_id} {status}: response headers must be an object")
+                validate_response_headers(
+                    document,
+                    response.get("headers", {}),
+                    operation_id,
+                    str(status),
+                )
                 content = response.get("content")
                 if content is not None:
                     validate_content(document, content, f"{operation_id}.responses.{status}")
@@ -324,6 +380,102 @@ def security_names(operation: dict[str, Any], document: dict[str, Any]) -> list[
 def media_types(document: dict[str, Any], response_value: Any) -> list[str]:
     response = resolve(document, response_value)
     return sorted(response.get("content", {}))
+
+
+def clone_json(value: Any) -> Any:
+    return json.loads(json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False))
+
+
+def compile_content_ir(document: dict[str, Any], content: dict[str, Any]) -> list[dict[str, Any]]:
+    compiled: list[dict[str, Any]] = []
+    for media_type in sorted(content):
+        media = content[media_type]
+        compiled.append(
+            {
+                "mediaType": media_type.split(";", 1)[0].strip().lower(),
+                "schema": clone_json(media["schema"]),
+            }
+        )
+    return compiled
+
+
+def compile_parameter_ir(document: dict[str, Any], raw: Any) -> dict[str, Any]:
+    parameter = resolve(document, raw)
+    location = parameter["in"]
+    expected_style = {"path": "simple", "header": "simple", "query": "form"}[location]
+    expected_explode = location == "query"
+    return {
+        "name": parameter["name"],
+        "in": location,
+        "required": parameter.get("required", False),
+        "style": parameter.get("style", expected_style),
+        "explode": parameter.get("explode", expected_explode),
+        "schema": clone_json(parameter["schema"]),
+    }
+
+
+def compile_operation_ir(
+    document: dict[str, Any],
+    index: dict[str, tuple[str, str, dict[str, Any], dict[str, Any]]],
+) -> dict[str, Any]:
+    operations: list[dict[str, Any]] = []
+    for operation_id in sorted(index):
+        method, path, operation, path_item = index[operation_id]
+        parameters: list[dict[str, Any]] = []
+        for owner in (path_item, operation):
+            parameters.extend(
+                compile_parameter_ir(document, raw) for raw in owner.get("parameters", [])
+            )
+        parameters.sort(key=lambda value: (value["in"], value["name"]))
+
+        request_body_ir: dict[str, Any] | None = None
+        if "requestBody" in operation:
+            request_body = resolve(document, operation["requestBody"])
+            request_body_ir = {
+                "required": True,
+                "content": compile_content_ir(document, request_body["content"]),
+            }
+
+        responses: list[dict[str, Any]] = []
+        for status in sorted(operation["responses"], key=lambda value: int(str(value))):
+            response = resolve(document, operation["responses"][status])
+            headers: list[dict[str, Any]] = []
+            for name in sorted(response.get("headers", {}), key=str.lower):
+                header = resolve(document, response["headers"][name])
+                headers.append(
+                    {
+                        "name": name,
+                        "required": True,
+                        "style": header.get("style", "simple"),
+                        "explode": header.get("explode", False),
+                        "schema": clone_json(header["schema"]),
+                    }
+                )
+            response_ir: dict[str, Any] = {
+                "status": str(status),
+                "headers": headers,
+                "content": [],
+            }
+            if "content" in response:
+                response_ir["content"] = compile_content_ir(document, response["content"])
+            responses.append(response_ir)
+
+        operations.append(
+            {
+                "operationId": operation_id,
+                "method": method,
+                "path": path,
+                "security": security_names(operation, document),
+                "parameters": parameters,
+                "requestBody": request_body_ir,
+                "responses": responses,
+            }
+        )
+    return {"schemaVersion": 1, "operations": operations}
+
+
+def render_compiler_ir(ir: dict[str, Any]) -> str:
+    return json.dumps(ir, sort_keys=True, separators=(",", ":"), ensure_ascii=False) + "\n"
 
 
 def assert_golden_vectors(
@@ -410,10 +562,20 @@ def main() -> int:
         raise SystemExit("frontend compiler repaired or mutated producer output; producer must be fixed instead")
 
     index = validate_document(document)
+    first_ir = render_compiler_ir(compile_operation_ir(document, index))
+    second_ir = render_compiler_ir(compile_operation_ir(document, index))
+    if first_ir.encode("utf-8") != second_ir.encode("utf-8"):
+        raise SystemExit("frontend operation compiler IR is not byte-identical across repeated runs")
+    if "\"any\"" in first_ir or "\"unknown\"" in first_ir:
+        raise SystemExit("frontend operation compiler IR degraded an unsupported contract to any/unknown")
+
     assert_golden_vectors(document, index)
-    digest = hashlib.sha256(first.encode("utf-8")).hexdigest()
+    source_digest = hashlib.sha256(first.encode("utf-8")).hexdigest()
+    ir_digest = hashlib.sha256(first_ir.encode("utf-8")).hexdigest()
     print(
-        f"PAS-2 frontend OpenAPI validation passed: operations={len(index)} bytes={len(first.encode('utf-8'))} sha256={digest}"
+        "PAS-2 frontend OpenAPI compiler passed: "
+        f"operations={len(index)} source_bytes={len(first.encode('utf-8'))} "
+        f"source_sha256={source_digest} ir_bytes={len(first_ir.encode('utf-8'))} ir_sha256={ir_digest}"
     )
     return 0
 
