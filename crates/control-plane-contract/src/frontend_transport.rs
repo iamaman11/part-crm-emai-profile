@@ -23,7 +23,10 @@ impl fmt::Display for FrontendTransportContractError {
         match self {
             Self::InvalidRoot => write!(formatter, "frontend OpenAPI root must be an object"),
             Self::UnsupportedDialect(value) => {
-                write!(formatter, "frontend OpenAPI dialect must be exactly 3.1.0, got {value:?}")
+                write!(
+                    formatter,
+                    "frontend OpenAPI dialect must be exactly 3.1.0, got {value:?}"
+                )
             }
             Self::UnsupportedNullable => write!(
                 formatter,
@@ -38,13 +41,19 @@ impl fmt::Display for FrontendTransportContractError {
                 "application/problem+json closure requires components.schemas.ProblemPayload"
             ),
             Self::NetworkReference(reference) => {
-                write!(formatter, "network OpenAPI reference is forbidden: {reference}")
+                write!(
+                    formatter,
+                    "network OpenAPI reference is forbidden: {reference}"
+                )
             }
             Self::UnresolvedReference(reference) => {
                 write!(formatter, "unresolved local OpenAPI reference: {reference}")
             }
             Self::ExtensionConflict(extension) => {
-                write!(formatter, "conflicting generated OpenAPI extension: {extension}")
+                write!(
+                    formatter,
+                    "conflicting generated OpenAPI extension: {extension}"
+                )
             }
             Self::Serialization(message) => {
                 write!(formatter, "canonical JSON serialization failed: {message}")
@@ -83,9 +92,7 @@ pub fn browser_transport_extension() -> Value {
     })
 }
 
-pub fn canonical_digest_material(
-    value: &Value,
-) -> Result<Vec<u8>, FrontendTransportContractError> {
+pub fn canonical_digest_material(value: &Value) -> Result<Vec<u8>, FrontendTransportContractError> {
     let mut bytes = Vec::new();
     write_canonical_json(value, &mut bytes, true)?;
     Ok(bytes)
@@ -100,7 +107,9 @@ fn write_canonical_json(
         Value::Null | Value::Bool(_) | Value::String(_) => {
             output.extend_from_slice(
                 serde_json::to_string(value)
-                    .map_err(|error| FrontendTransportContractError::Serialization(error.to_string()))?
+                    .map_err(|error| {
+                        FrontendTransportContractError::Serialization(error.to_string())
+                    })?
                     .as_bytes(),
             );
         }
@@ -153,9 +162,7 @@ fn write_canonical_json(
     Ok(())
 }
 
-pub fn close_compiler_input(
-    mut document: Value,
-) -> Result<Value, FrontendTransportContractError> {
+pub fn close_compiler_input(mut document: Value) -> Result<Value, FrontendTransportContractError> {
     let dialect = document
         .get("openapi")
         .and_then(Value::as_str)
@@ -308,9 +315,8 @@ fn validate_local_references(
 #[cfg(test)]
 mod tests {
     use super::{
-        BROWSER_TRANSPORT_EXTENSION, REQUEST_DIGEST_EXTENSION,
-        REQUIRED_RESPONSE_HEADERS_EXTENSION, FrontendTransportContractError,
-        canonical_digest_material, close_compiler_input,
+        BROWSER_TRANSPORT_EXTENSION, FrontendTransportContractError, REQUEST_DIGEST_EXTENSION,
+        REQUIRED_RESPONSE_HEADERS_EXTENSION, canonical_digest_material, close_compiler_input,
     };
     use serde_json::json;
 
@@ -402,8 +408,8 @@ mod tests {
             json!(["X-Correlation-Id"])
         );
         assert_eq!(
-            closed["paths"]["/api/v1/fixture"]["post"]["responses"]["400"]["content"]
-                ["application/problem+json"]["schema"]["$ref"],
+            closed["paths"]["/api/v1/fixture"]["post"]["responses"]["400"]["content"]["application/problem+json"]
+                ["schema"]["$ref"],
             "#/components/schemas/ProblemPayload"
         );
         Ok(())
