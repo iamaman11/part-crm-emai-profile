@@ -1,0 +1,266 @@
+{
+  "paths": {
+    "/api/v1/tenants/{tenantId}/clients/{clientId}/mail/send": {
+      "post": {
+        "operationId": "sendClientMail",
+        "security": [
+          {
+            "cloudflareAccessJwt": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "tenantId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 8,
+              "maxLength": 96
+            }
+          },
+          {
+            "name": "clientId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 8,
+              "maxLength": 96
+            }
+          },
+          {
+            "$ref": "#/components/parameters/CorrelationHeader"
+          },
+          {
+            "$ref": "#/components/parameters/IdempotencyHeader"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ClientMailSendRequestDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Retry-safe Client Mail send receipt",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClientMailSendReceiptDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Idempotency conflict",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal failure",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Dependency unavailable",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "ClientMailSendOperationDto": {
+        "type": "string",
+        "enum": [
+          "NEW",
+          "REPLY",
+          "REPLY_ALL",
+          "FORWARD"
+        ]
+      },
+      "ClientMailSendRequestDto": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "mailboxBindingId",
+          "operation",
+          "sourceProviderReference",
+          "to",
+          "cc",
+          "bcc",
+          "subject",
+          "textBody",
+          "htmlBody"
+        ],
+        "properties": {
+          "mailboxBindingId": {
+            "type": "string",
+            "minLength": 8,
+            "maxLength": 96
+          },
+          "operation": {
+            "$ref": "#/components/schemas/ClientMailSendOperationDto"
+          },
+          "sourceProviderReference": {
+            "oneOf": [
+              {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 512
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "to": {
+            "type": "array",
+            "maxItems": 100,
+            "items": {
+              "type": "string",
+              "minLength": 3,
+              "maxLength": 320
+            }
+          },
+          "cc": {
+            "type": "array",
+            "maxItems": 100,
+            "items": {
+              "type": "string",
+              "minLength": 3,
+              "maxLength": 320
+            }
+          },
+          "bcc": {
+            "type": "array",
+            "maxItems": 100,
+            "items": {
+              "type": "string",
+              "minLength": 3,
+              "maxLength": 320
+            }
+          },
+          "subject": {
+            "oneOf": [
+              {
+                "type": "string",
+                "minLength": 0,
+                "maxLength": 998
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "textBody": {
+            "oneOf": [
+              {
+                "type": "string",
+                "minLength": 0,
+                "maxLength": 1048576
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "htmlBody": {
+            "oneOf": [
+              {
+                "type": "string",
+                "minLength": 0,
+                "maxLength": 1048576
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      "ClientMailSendStateDto": {
+        "type": "string",
+        "enum": [
+          "PENDING",
+          "DISPATCHING",
+          "RETRYABLE",
+          "SENT",
+          "AMBIGUOUS",
+          "REJECTED"
+        ]
+      },
+      "ClientMailSendReceiptDto": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "intentId",
+          "state",
+          "attemptCount",
+          "replayed"
+        ],
+        "properties": {
+          "intentId": {
+            "type": "string",
+            "minLength": 8,
+            "maxLength": 96
+          },
+          "state": {
+            "$ref": "#/components/schemas/ClientMailSendStateDto"
+          },
+          "attemptCount": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 255
+          },
+          "replayed": {
+            "type": "boolean"
+          }
+        }
+      }
+    }
+  }
+}
