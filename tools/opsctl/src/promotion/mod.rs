@@ -4,6 +4,7 @@
 //! orchestration authority; provider executors remain outside this policy module.
 
 pub mod authority;
+pub mod baseline_adoption;
 pub mod commands;
 pub mod model;
 pub mod plan;
@@ -16,6 +17,7 @@ pub enum PromotionAction {
     Plan,
     Preflight,
     Verify,
+    BaselineAdoptionPreflight,
 }
 
 impl PromotionAction {
@@ -25,11 +27,13 @@ impl PromotionAction {
             Self::Plan => "plan",
             Self::Preflight => "preflight",
             Self::Verify => "verify",
+            Self::BaselineAdoptionPreflight => "baseline-adoption-preflight",
         }
     }
 }
 
-pub const TARGET_COMMANDS: &[&str] = &["plan", "preflight", "verify"];
+pub const TARGET_COMMANDS: &[&str] =
+    &["plan", "preflight", "verify", "baseline-adoption-preflight"];
 pub const ACTIVATION_OWNER: &str = "AR-11";
 pub const GITHUB_APPROVAL_AUTHORITY: bool = false;
 pub const PROVIDER_MUTATION_AUTHORITY: bool = false;
