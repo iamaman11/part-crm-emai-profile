@@ -19,15 +19,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             rendered.push('\n');
             print!("{rendered}");
         }
-        "--digest" => {
+        "--digest-material" => {
             let material = frontend_transport::canonical_digest_material(&value)?;
             let material_utf8 = String::from_utf8(material)?;
-            let digest = frontend_transport::request_digest(&value)?;
             println!(
                 "{}",
                 serde_json::to_string(&json!({
+                    "algorithm": "sha-256",
                     "canonicalUtf8": material_utf8,
-                    "sha256": digest
+                    "encoding": "lowercase-hex"
                 }))?
             );
         }

@@ -1,6 +1,5 @@
 use serde_json::{Value, json};
-use sha2::{Digest, Sha256};
-use std::fmt::{self, Write as _};
+use std::fmt;
 
 pub const REQUEST_DIGEST_EXTENSION: &str = "x-part-crm-request-digest";
 pub const REQUIRED_RESPONSE_HEADERS_EXTENSION: &str = "x-part-crm-required-response-headers";
@@ -47,7 +46,9 @@ impl fmt::Display for FrontendTransportContractError {
             Self::ExtensionConflict(extension) => {
                 write!(formatter, "conflicting generated OpenAPI extension: {extension}")
             }
-            Self::Serialization(message) => write!(formatter, "canonical JSON serialization failed: {message}"),
+            Self::Serialization(message) => {
+                write!(formatter, "canonical JSON serialization failed: {message}")
+            }
         }
     }
 }
@@ -80,18 +81,6 @@ pub fn browser_transport_extension() -> Value {
         "openapiServers": "documentation-only",
         "redirect": "error"
     })
-}
-
-pub fn request_digest(value: &Value) -> Result<String, FrontendTransportContractError> {
-    let mut bytes = Vec::new();
-    write_canonical_json(value, &mut bytes, true)?;
-    let digest = Sha256::digest(&bytes);
-    let mut encoded = String::with_capacity(64);
-    for byte in digest {
-        write!(&mut encoded, "{byte:02x}")
-            .map_err(|error| FrontendTransportContractError::Serialization(error.to_string()))?;
-    }
-    Ok(encoded)
 }
 
 pub fn canonical_digest_material(
@@ -151,9 +140,11 @@ fn write_canonical_json(
                         .as_bytes(),
                 );
                 output.push(b':');
-                let child = map
-                    .get(key)
-                    .ok_or_else(|| FrontendTransportContractError::Serialization("missing object member".to_owned()))?;
+                let child = map.get(key).ok_or_else(|| {
+                    FrontendTransportContractError::Serialization(
+                        "missing canonical JSON object member".to_owned(),
+                    )
+                })?;
                 write_canonical_json(child, output, false)?;
             }
             output.push(b'}');
@@ -217,26 +208,27 @@ fn close_value(
                 }
             }
 
-            if map.contains_key("description") {
-                if let Some(Value::Object(headers)) = map.get("headers") {
-                    if !headers.is_empty() {
-                        let mut names: Vec<String> = headers.keys().cloned().collect();
-                        names.sort_unstable();
-                        insert_generated_extension(
-                            map,
-                            REQUIRED_RESPONSE_HEADERS_EXTENSION,
-                            json!(names),
-                        )?;
-                    }
+            if let Some(Value::Object(headers)) = map.get("headers") {
+                if !headers.is_empty() {
+                    let mut names: Vec<String> = headers.keys().cloned().collect();
+                    names.sort_unstable();
+                    insert_generated_extension(
+                        map,
+                        REQUIRED_RESPONSE_HEADERS_EXTENSION,
+                        json!(names),
+                    )?;
                 }
             }
 
             if let Some(Value::Object(content)) = map.get_mut("content") {
-                if let Some(Value::Object(problem_media)) = content.get_mut("application/problem+json") {
+                if let Some(Value::Object(problem_media)) =
+                    content.get_mut("application/problem+json")
+                {
                     if let Some(schema) = problem_media.get_mut("schema") {
-                        let is_permissive_object = schema
-                            .as_object()
-                            .is_some_and(|object| object.len() == 1 && object.get("type") == Some(&Value::String("object".to_owned())));
+                        let is_permissive_object = schema.as_object().is_some_and(|object| {
+                            object.len() == 1
+                                && object.get("type") == Some(&Value::String("object".to_owned()))
+                        });
                         if is_permissive_object {
                             if !has_problem_payload {
                                 return Err(FrontendTransportContractError::MissingProblemPayload);
@@ -290,9 +282,9 @@ fn validate_local_references(
                         reference.clone(),
                     ));
                 }
-                let pointer = reference
-                    .strip_prefix('#')
-                    .ok_or_else(|| FrontendTransportContractError::NetworkReference(reference.clone()))?;
+                let pointer = reference.strip_prefix('#').ok_or_else(|| {
+                    FrontendTransportContractError::NetworkReference(reference.clone())
+                })?;
                 if document.pointer(pointer).is_none() {
                     return Err(FrontendTransportContractError::UnresolvedReference(
                         reference.clone(),
@@ -318,12 +310,12 @@ mod tests {
     use super::{
         BROWSER_TRANSPORT_EXTENSION, REQUEST_DIGEST_EXTENSION,
         REQUIRED_RESPONSE_HEADERS_EXTENSION, FrontendTransportContractError,
-        canonical_digest_material, close_compiler_input, request_digest,
+        canonical_digest_material, close_compiler_input,
     };
     use serde_json::json;
 
     #[test]
-    fn request_digest_is_order_independent_and_excludes_digest_field()
+    fn digest_material_is_order_independent_and_excludes_digest_field()
     -> Result<(), Box<dyn std::error::Error>> {
         let first = json!({
             "displayName": "Alice",
@@ -336,19 +328,16 @@ mod tests {
             "kind": "PERSON",
             "displayName": "Alice"
         });
-        assert_eq!(canonical_digest_material(&first)?, br#"{"clientId":"client_01","displayName":"Alice","kind":"PERSON"}"#);
-        assert_eq!(request_digest(&first)?, request_digest(&second)?);
-        assert_eq!(
-            request_digest(&first)?,
-            "5fdffe953c92975bef4141aaf2a665db4e07a0358f015c9d78fd81687621726d"
-        );
+        let expected = br#"{"clientId":"client_01","displayName":"Alice","kind":"PERSON"}"#;
+        assert_eq!(canonical_digest_material(&first)?, expected);
+        assert_eq!(canonical_digest_material(&second)?, expected);
         Ok(())
     }
 
     #[test]
-    fn request_digest_rejects_floating_point_numbers() {
+    fn digest_material_rejects_floating_point_numbers() {
         assert_eq!(
-            request_digest(&json!({"value": 1.5})),
+            canonical_digest_material(&json!({"value": 1.5})),
             Err(FrontendTransportContractError::UnsupportedNumber)
         );
     }
