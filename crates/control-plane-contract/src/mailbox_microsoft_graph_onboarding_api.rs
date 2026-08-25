@@ -207,15 +207,14 @@ mod tests {
             "mailSendScope",
         ] {
             let invalid = format!(r#"{{"expectedVersion":1,"{forbidden}":"forbidden"}}"#);
-            assert!(
-                serde_json::from_str::<StartMicrosoftGraphOAuthRequestDto>(&invalid).is_err()
-            );
+            assert!(serde_json::from_str::<StartMicrosoftGraphOAuthRequestDto>(&invalid).is_err());
         }
         let _ = MicrosoftGraphOAuthStartReceiptDto {
             onboarding_id: "onboarding_01JC3GRAPH".to_owned(),
             expected_version: 1,
             ceremony_id: "ceremony_01JC3GRAPH".to_owned(),
-            authorization_url: "https://login.microsoftonline.com/common/oauth2/v2.0/authorize".to_owned(),
+            authorization_url: "https://login.microsoftonline.com/common/oauth2/v2.0/authorize"
+                .to_owned(),
             expires_at_ms: 1,
         };
         let _ = MicrosoftGraphOAuthCallbackReceiptDto {
@@ -258,10 +257,9 @@ mod tests {
     #[test]
     fn fragment_matches_the_generated_artifact_byte_for_byte() {
         let generated = openapi_fragment().to_string();
-        let accepted = include_str!(
-            "../../../openapi/v1/fragments/mailbox-microsoft-graph-onboarding.json"
-        )
-        .trim_end();
+        let accepted =
+            include_str!("../../../openapi/v1/fragments/mailbox-microsoft-graph-onboarding.json")
+                .trim_end();
         assert_eq!(generated, accepted);
     }
 }
