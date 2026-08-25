@@ -109,7 +109,7 @@ async fn create_client(request: &mut Request, env: &Env, tenant_id: &str) -> Res
         Ok(value) => value,
         Err(_) => return invalid_request(actor.actor().correlation_id().as_str()),
     };
-    let client_id = match ClientId::parse(body.client_id) {
+    let client_id = match ClientId::parse(body.client_id.clone()) {
         Ok(value) => value,
         Err(_) => return invalid_request(actor.actor().correlation_id().as_str()),
     };
@@ -117,8 +117,7 @@ async fn create_client(request: &mut Request, env: &Env, tenant_id: &str) -> Res
         Some(value) => value,
         None => return invalid_request(actor.actor().correlation_id().as_str()),
     };
-    let evidence = match command_evidence::from_request(request, actor.actor(), body.request_digest)
-    {
+    let evidence = match command_evidence::from_request(request, actor.actor(), &body) {
         Ok(value) => value,
         Err(_) => return invalid_request(actor.actor().correlation_id().as_str()),
     };
@@ -204,8 +203,7 @@ async fn update_client(
         Ok(value) => value,
         Err(_) => return invalid_request(actor.actor().correlation_id().as_str()),
     };
-    let evidence = match command_evidence::from_request(request, actor.actor(), body.request_digest)
-    {
+    let evidence = match command_evidence::from_request(request, actor.actor(), &body) {
         Ok(value) => value,
         Err(_) => return invalid_request(actor.actor().correlation_id().as_str()),
     };
@@ -248,8 +246,7 @@ async fn archive_client(
         Ok(value) => value,
         Err(_) => return invalid_request(actor.actor().correlation_id().as_str()),
     };
-    let evidence = match command_evidence::from_request(request, actor.actor(), body.request_digest)
-    {
+    let evidence = match command_evidence::from_request(request, actor.actor(), &body) {
         Ok(value) => value,
         Err(_) => return invalid_request(actor.actor().correlation_id().as_str()),
     };
@@ -308,11 +305,10 @@ async fn update_client_contact(
             Some(value) => value,
             None => return invalid_request(actor.actor().correlation_id().as_str()),
         };
-        let evidence =
-            match command_evidence::from_request(request, actor.actor(), body.request_digest) {
-                Ok(value) => value,
-                Err(_) => return invalid_request(actor.actor().correlation_id().as_str()),
-            };
+        let evidence = match command_evidence::from_request(request, actor.actor(), &body) {
+            Ok(value) => value,
+            Err(_) => return invalid_request(actor.actor().correlation_id().as_str()),
+        };
         return match execute_archive_contact(
             actor.actor(),
             role,
@@ -348,8 +344,7 @@ async fn update_client_contact(
         Some(value) => value,
         None => return invalid_request(actor.actor().correlation_id().as_str()),
     };
-    let evidence = match command_evidence::from_request(request, actor.actor(), body.request_digest)
-    {
+    let evidence = match command_evidence::from_request(request, actor.actor(), &body) {
         Ok(value) => value,
         Err(_) => return invalid_request(actor.actor().correlation_id().as_str()),
     };
@@ -396,7 +391,7 @@ async fn merge_client(
         Ok(value) => value,
         Err(_) => return neutral_not_found(actor.actor().correlation_id().as_str()),
     };
-    let target_client_id = match ClientId::parse(body.target_client_id) {
+    let target_client_id = match ClientId::parse(body.target_client_id.clone()) {
         Ok(value) => value,
         Err(_) => return invalid_request(actor.actor().correlation_id().as_str()),
     };
@@ -408,8 +403,7 @@ async fn merge_client(
         Ok(value) => value,
         Err(_) => return invalid_request(actor.actor().correlation_id().as_str()),
     };
-    let evidence = match command_evidence::from_request(request, actor.actor(), body.request_digest)
-    {
+    let evidence = match command_evidence::from_request(request, actor.actor(), &body) {
         Ok(value) => value,
         Err(_) => return invalid_request(actor.actor().correlation_id().as_str()),
     };
@@ -492,8 +486,7 @@ async fn update_client_grant(
         Ok(value) => value,
         Err(_) => return invalid_request(actor.actor().correlation_id().as_str()),
     };
-    let evidence = match command_evidence::from_request(request, actor.actor(), body.request_digest)
-    {
+    let evidence = match command_evidence::from_request(request, actor.actor(), &body) {
         Ok(value) => value,
         Err(_) => return invalid_request(actor.actor().correlation_id().as_str()),
     };
@@ -835,15 +828,27 @@ mod tests {
     }
 
     #[test]
-    fn client_grant_request_preserves_legacy_unknown_field_tolerance() {
-        let payload = r#"{
+    fn client_grant_request_is_strict_and_rejects_legacy_request_digest() {
+        let valid = r#"{
             "role":"CLIENT_VIEWER",
-            "reason":"legacy-compatible",
-            "expectedClientVersion":1,
-            "requestDigest":"request-digest-01JCLIENTTRANSPORT",
-            "legacyIgnoredField":"still-tolerated"
+            "reason":"current-contract",
+            "expectedClientVersion":1
         }"#;
-        assert!(serde_json::from_str::<ClientGrantRequest>(payload).is_ok());
+        assert!(serde_json::from_str::<ClientGrantRequest>(valid).is_ok());
+        let legacy_digest = r#"{
+            "role":"CLIENT_VIEWER",
+            "reason":"legacy",
+            "expectedClientVersion":1,
+            "requestDigest":"request-digest-01JCLIENTTRANSPORT"
+        }"#;
+        assert!(serde_json::from_str::<ClientGrantRequest>(legacy_digest).is_err());
+        let unknown = r#"{
+            "role":"CLIENT_VIEWER",
+            "reason":"unknown",
+            "expectedClientVersion":1,
+            "legacyIgnoredField":"forbidden"
+        }"#;
+        assert!(serde_json::from_str::<ClientGrantRequest>(unknown).is_err());
     }
 
     #[test]
