@@ -31,7 +31,11 @@ export async function executeTransport(request: TransportRequest): Promise<Trans
     credentials: 'same-origin',
     redirect: 'error',
   };
-  if (request.body !== undefined) init.body = request.body;
+  if (request.body !== undefined) {
+    const body = new Uint8Array(request.body.byteLength);
+    body.set(request.body);
+    init.body = body.buffer;
+  }
   if (request.signal !== undefined) init.signal = request.signal;
 
   const response = await fetch(request.path, init);
