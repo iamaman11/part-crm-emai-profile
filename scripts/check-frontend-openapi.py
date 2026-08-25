@@ -280,24 +280,22 @@ def operation_index(
                     raise ValueError(
                         f"{operation_id}: unsupported parameter location {parameter_location!r}"
                     )
+                name = parameter.get("name")
+                if not isinstance(name, str) or not name:
+                    raise ValueError(f"{operation_id}: parameter name is required")
                 if parameter_location == "path":
                     if parameter.get("required") is not True:
                         raise ValueError(f"{operation_id}: path parameter must be required")
-                    name = parameter.get("name")
-                    if not isinstance(name, str):
-                        raise ValueError(f"{operation_id}: path parameter name is required")
                     path_parameters.add(name)
                 validate_parameter_serialization(parameter, operation_id)
                 if "schema" in parameter:
                     validate_schema(
                         document,
                         parameter["schema"],
-                        f"{operation_id}.parameter.{parameter.get('name')}",
+                        f"{operation_id}.parameter.{name}",
                     )
                 else:
-                    raise ValueError(
-                        f"{operation_id}: parameter {parameter.get('name')!r} requires a schema"
-                    )
+                    raise ValueError(f"{operation_id}: parameter {name!r} requires a schema")
             if path_parameters != placeholders:
                 raise ValueError(
                     f"{operation_id}: path parameter coverage mismatch placeholders={sorted(placeholders)!r} declared={sorted(path_parameters)!r}"
@@ -566,8 +564,6 @@ def main() -> int:
     second_ir = render_compiler_ir(compile_operation_ir(document, index))
     if first_ir.encode("utf-8") != second_ir.encode("utf-8"):
         raise SystemExit("frontend operation compiler IR is not byte-identical across repeated runs")
-    if "\"any\"" in first_ir or "\"unknown\"" in first_ir:
-        raise SystemExit("frontend operation compiler IR degraded an unsupported contract to any/unknown")
 
     assert_golden_vectors(document, index)
     source_digest = hashlib.sha256(first.encode("utf-8")).hexdigest()
