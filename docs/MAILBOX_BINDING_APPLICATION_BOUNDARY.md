@@ -33,7 +33,8 @@ The binding vertical preserves the accepted fail-closed behavior:
 2. only a tenant owner may use binding create/get/revoke; non-owner disclosure remains neutral `not_found`;
 3. malformed binding IDs remain disclosure-neutral after actor/owner resolution;
 4. create/revoke request DTOs deny unknown fields;
-5. `requestDigest` remains exactly 64 lowercase hexadecimal characters;
+5. the browser supplies an application-owned `Idempotency-Key`, while the server derives the internal
+   `PayloadFingerprint` after strict typed request decoding; no browser request digest is accepted;
 6. the command may carry a typed opaque `SecretHandle`, but application read models and HTTP responses contain no secret handle;
 7. password/message-body style fields are rejected rather than accepted as loose JSON;
 8. provider/storage errors are translated into stable application classes and are not relabeled as business `not_found` or ordinary conflict.
@@ -82,7 +83,7 @@ The application read model contains only:
 The vertical reuses `application-ports::CommandExecutionEvidence` for:
 
 - idempotency key;
-- strict request digest after transport validation;
+- server-owned payload fingerprint after transport decoding;
 - deterministic audit event ID;
 - deterministic outbox event ID;
 - command timestamp;
