@@ -9,6 +9,11 @@ The root app router may compose feature routes only through those same public fe
 not import feature-internal workspaces/components. Unknown non-relative imports from feature source
 are rejected. TypeScript `paths` and custom Vite `resolve` configuration are also rejected until
 this checker explicitly understands their resolved targets, so aliases cannot become bypasses.
+
+PAS-2 closes the shared API root around three transport primitives only: the effect-only HTTP
+transport, the OpenAPI runtime validator/executor, and opaque idempotency-key creation. Operation
+semantics and DTOs belong to generated OpenAPI output; predecessor generic JSON/endpoint helpers are
+therefore rejected rather than grandfathered.
 """
 
 from __future__ import annotations
@@ -29,7 +34,11 @@ STATIC_IMPORT_RE = re.compile(
 )
 DYNAMIC_IMPORT_RE = re.compile(r"\bimport\s*\(\s*[\"']([^\"']+)[\"']\s*\)")
 VITE_RESOLVE_RE = re.compile(r"\bresolve\s*:")
-ALLOWED_SHARED_API_ROOT_SOURCE_FILES = {"client.ts", "client.test.ts", "endpoint.ts"}
+ALLOWED_SHARED_API_ROOT_SOURCE_FILES = {
+    "idempotency.ts",
+    "openapi-runtime.ts",
+    "transport.ts",
+}
 
 
 @dataclass(frozen=True)
@@ -217,10 +226,11 @@ def shared_api_ownership_violations(frontend_root: Path) -> list[Violation]:
             Violation(
                 path,
                 path.name,
-                "shared API root may contain transport primitives only; capability endpoints/types belong to feature ownership",
+                "shared API root may contain PAS-2 transport primitives only; operation semantics/types belong to generated OpenAPI ownership and predecessor generic helpers are forbidden",
             )
         )
     return violations
+
 
 def app_route_composition_violations(
     frontend_root: Path,
@@ -344,8 +354,11 @@ def shared_api_registry_negative_self_test() -> bool:
         (frontend / "package.json").write_text("{}\n", encoding="utf-8")
         (clients / "index.ts").write_text("export const clients = true;\n", encoding="utf-8")
         (app / "router.tsx").write_text("export const router = true;\n", encoding="utf-8")
-        (shared_api / "client.ts").write_text("export const transport = true;\n", encoding="utf-8")
-        (shared_api / "endpoint.ts").write_text("export const endpoint = true;\n", encoding="utf-8")
+        (shared_api / "transport.ts").write_text("export const transport = true;\n", encoding="utf-8")
+        (shared_api / "openapi-runtime.ts").write_text("export const runtime = true;\n", encoding="utf-8")
+        (shared_api / "idempotency.ts").write_text("export const idempotency = true;\n", encoding="utf-8")
+        (shared_api / "client.ts").write_text("export const legacyClient = true;\n", encoding="utf-8")
+        (shared_api / "endpoint.ts").write_text("export const legacyEndpoint = true;\n", encoding="utf-8")
         (shared_api / "endpoints.ts").write_text("export const createClient = true;\n", encoding="utf-8")
         (shared_api / "types.ts").write_text("export type Client = {};\n", encoding="utf-8")
 
@@ -353,14 +366,16 @@ def shared_api_registry_negative_self_test() -> bool:
         rejected = {
             item.path.name
             for item in violations
-            if "shared API root may contain transport primitives only" in item.reason
+            if "shared API root may contain PAS-2 transport primitives only" in item.reason
         }
-        if {"endpoints.ts", "types.ts"}.issubset(rejected):
-            print("central shared capability endpoint/type registries rejected as expected")
+        expected = {"client.ts", "endpoint.ts", "endpoints.ts", "types.ts"}
+        if expected.issubset(rejected) and not (ALLOWED_SHARED_API_ROOT_SOURCE_FILES & rejected):
+            print("predecessor/capability shared API registries rejected and PAS-2 primitives accepted as expected")
             return True
-        print("central shared capability registry negative fixture was not rejected", file=sys.stderr)
+        print("PAS-2 shared API ownership negative fixture was not rejected correctly", file=sys.stderr)
         print_violations(root, violations)
         return False
+
 
 def main() -> int:
     parser = argparse.ArgumentParser()
