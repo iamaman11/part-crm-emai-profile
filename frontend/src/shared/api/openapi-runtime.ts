@@ -62,6 +62,42 @@ export class ApiProtocolError extends TypeError {
   }
 }
 
+export class UnexpectedStatusError extends ApiProtocolError {
+  readonly status: number;
+
+  constructor(operationId: string, status: number) {
+    super(operationId, `received undeclared or non-success HTTP status ${status}`);
+    this.name = 'UnexpectedStatusError';
+    this.status = status;
+  }
+}
+
+export class UnexpectedContentTypeError extends ApiProtocolError {
+  readonly status: number;
+  readonly contentType: string;
+
+  constructor(operationId: string, status: number, contentType: string) {
+    super(operationId, `response ${status} used undeclared media type ${contentType || '<missing>'}`);
+    this.name = 'UnexpectedContentTypeError';
+    this.status = status;
+    this.contentType = contentType;
+  }
+}
+
+export class MalformedBodyError extends ApiProtocolError {
+  constructor(operationId: string, message: string) {
+    super(operationId, message);
+    this.name = 'MalformedBodyError';
+  }
+}
+
+export class ContractDecodeError extends ApiProtocolError {
+  constructor(operationId: string, message: string) {
+    super(operationId, message);
+    this.name = 'ContractDecodeError';
+  }
+}
+
 export class ApiProblem extends Error {
   readonly status: number;
   readonly code: string;
@@ -463,17 +499,17 @@ function validateResponseHeaders(
   for (const header of response.headers) {
     const raw = headers.get(header.name);
     if (raw === null) {
-      if (header.required) throw new ApiProtocolError(spec.operationId, `response ${response.status} omitted required header ${header.name}`);
+      if (header.required) throw new ContractDecodeError(spec.operationId, `response ${response.status} omitted required header ${header.name}`);
       continue;
     }
     if (!matchesSchema(header.schema, decodeHeaderValue(header.schema, raw), components)) {
-      throw new ApiProtocolError(spec.operationId, `response header ${header.name} failed its OpenAPI schema`);
+      throw new ContractDecodeError(spec.operationId, `response header ${header.name} failed its OpenAPI schema`);
     }
   }
 }
 
 function problemFromUnknown(spec: RuntimeOperationSpec, status: number, payload: unknown): ApiProblem {
-  if (!isRecord(payload)) throw new ApiProtocolError(spec.operationId, `declared error ${status} did not decode to a problem object`);
+  if (!isRecord(payload)) throw new ContractDecodeError(spec.operationId, `declared error ${status} did not decode to a problem object`);
   const type = payload.type;
   const title = payload.title;
   const problemStatus = payload.status;
@@ -487,10 +523,10 @@ function problemFromUnknown(spec: RuntimeOperationSpec, status: number, payload:
     typeof code !== 'string' ||
     typeof correlationId !== 'string'
   ) {
-    throw new ApiProtocolError(spec.operationId, `declared error ${status} is not a recognized problem payload`);
+    throw new ContractDecodeError(spec.operationId, `declared error ${status} is not a recognized problem payload`);
   }
   if (problemStatus !== status) {
-    throw new ApiProtocolError(spec.operationId, `problem status ${problemStatus} does not match HTTP status ${status}`);
+    throw new ContractDecodeError(spec.operationId, `problem status ${problemStatus} does not match HTTP status ${status}`);
   }
   return new ApiProblem({ type, title, status: problemStatus, code, correlation_id: correlationId });
 }
@@ -511,34 +547,34 @@ export async function invokeOperation(
 
   const response = spec.responses.find((candidate) => candidate.status === transport.status);
   if (response === undefined) {
-    throw new ApiProtocolError(spec.operationId, `received undeclared HTTP status ${transport.status}`);
+    throw new UnexpectedStatusError(spec.operationId, transport.status);
   }
   validateResponseHeaders(spec, response, transport.headers, components);
 
   let payload: unknown = undefined;
   if (response.content.length === 0) {
     if (transport.bytes.byteLength !== 0) {
-      throw new ApiProtocolError(spec.operationId, `response ${response.status} declared no body but returned bytes`);
+      throw new ContractDecodeError(spec.operationId, `response ${response.status} declared no body but returned bytes`);
     }
   } else {
     const contentType = normalizedContentType(transport.headers);
     const media = response.content.find((candidate) => candidate.mediaType === contentType);
     if (media === undefined) {
-      throw new ApiProtocolError(spec.operationId, `response ${response.status} used undeclared media type ${contentType || '<missing>'}`);
+      throw new UnexpectedContentTypeError(spec.operationId, response.status, contentType);
     }
     let text: string;
     try {
       text = textDecoder.decode(transport.bytes);
     } catch {
-      throw new ApiProtocolError(spec.operationId, 'response body is not valid UTF-8');
+      throw new MalformedBodyError(spec.operationId, 'response body is not valid UTF-8');
     }
     try {
       payload = JSON.parse(text) as unknown;
     } catch {
-      throw new ApiProtocolError(spec.operationId, 'response body is not valid JSON');
+      throw new MalformedBodyError(spec.operationId, 'response body is not valid JSON');
     }
     if (!matchesSchema(media.schema, payload, components)) {
-      throw new ApiProtocolError(spec.operationId, `response ${response.status} failed its OpenAPI schema`);
+      throw new ContractDecodeError(spec.operationId, `response ${response.status} failed its OpenAPI schema`);
     }
   }
 
