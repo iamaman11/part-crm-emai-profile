@@ -11,7 +11,7 @@ pub enum FrontendTransportContractError {
     UnsupportedDialect(String),
     UnsupportedNullable,
     UnsupportedNumber,
-    MissingProblemPayload,
+    MissingProblemSchema,
     NetworkReference(String),
     UnresolvedReference(String),
     ExtensionConflict(&'static str),
@@ -36,9 +36,9 @@ impl fmt::Display for FrontendTransportContractError {
                 formatter,
                 "part-crm-json-v1 request digests support integers only; floating-point JSON numbers are forbidden"
             ),
-            Self::MissingProblemPayload => write!(
+            Self::MissingProblemSchema => write!(
                 formatter,
-                "application/problem+json closure requires components.schemas.ProblemPayload"
+                "application/problem+json closure requires components.schemas.Problem"
             ),
             Self::NetworkReference(reference) => {
                 write!(
@@ -172,10 +172,8 @@ pub fn close_compiler_input(mut document: Value) -> Result<Value, FrontendTransp
             dialect.to_owned(),
         ));
     }
-    let has_problem_payload = document
-        .pointer("/components/schemas/ProblemPayload")
-        .is_some();
-    close_value(&mut document, has_problem_payload)?;
+    let has_problem_schema = document.pointer("/components/schemas/Problem").is_some();
+    close_value(&mut document, has_problem_schema)?;
     let root = document
         .as_object_mut()
         .ok_or(FrontendTransportContractError::InvalidRoot)?;
@@ -224,7 +222,7 @@ fn normalize_legacy_nullable(
 
 fn close_value(
     value: &mut Value,
-    has_problem_payload: bool,
+    has_problem_schema: bool,
 ) -> Result<(), FrontendTransportContractError> {
     match value {
         Value::Object(map) => {
@@ -269,22 +267,22 @@ fn close_value(
                                 && object.get("type") == Some(&Value::String("object".to_owned()))
                         });
                         if is_permissive_object {
-                            if !has_problem_payload {
-                                return Err(FrontendTransportContractError::MissingProblemPayload);
+                            if !has_problem_schema {
+                                return Err(FrontendTransportContractError::MissingProblemSchema);
                             }
-                            *schema = json!({"$ref": "#/components/schemas/ProblemPayload"});
+                            *schema = json!({"$ref": "#/components/schemas/Problem"});
                         }
                     }
                 }
             }
 
             for child in map.values_mut() {
-                close_value(child, has_problem_payload)?;
+                close_value(child, has_problem_schema)?;
             }
         }
         Value::Array(values) => {
             for child in values {
-                close_value(child, has_problem_payload)?;
+                close_value(child, has_problem_schema)?;
             }
         }
         _ => {}
@@ -419,7 +417,7 @@ mod tests {
             },
             "components": {
                 "schemas": {
-                    "ProblemPayload": {
+                    "Problem": {
                         "type": "object",
                         "additionalProperties": false
                     }
@@ -442,7 +440,7 @@ mod tests {
         assert_eq!(
             closed["paths"]["/api/v1/fixture"]["post"]["responses"]["400"]["content"]["application/problem+json"]
                 ["schema"]["$ref"],
-            "#/components/schemas/ProblemPayload"
+            "#/components/schemas/Problem"
         );
         Ok(())
     }
@@ -456,7 +454,7 @@ mod tests {
             "paths": {},
             "components": {
                 "schemas": {
-                    "ProblemPayload": {"type": "object", "additionalProperties": false},
+                    "Problem": {"type": "object", "additionalProperties": false},
                     "LegacyNullable": {"type": "string", "nullable": true, "maxLength": 32},
                     "LegacyNonNullable": {"type": "integer", "nullable": false}
                 }
@@ -487,7 +485,7 @@ mod tests {
             "paths": {},
             "components": {
                 "schemas": {
-                    "ProblemPayload": {"type": "object", "additionalProperties": false},
+                    "Problem": {"type": "object", "additionalProperties": false},
                     "LegacyNullable": {"nullable": true, "oneOf": [{"type": "string"}]}
                 }
             }
