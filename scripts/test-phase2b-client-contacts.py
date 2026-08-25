@@ -23,6 +23,7 @@ CONTACT_B = "contact_01_phase2b_b"
 TOKEN = bytes(range(32))
 CIPHERTEXT = bytes([0xA5]) * 48
 NONCE = bytes([0x5A]) * 24
+PAYLOAD_FINGERPRINT = "ec4213a3686e9f6bd4a7ac64b36e308dc0288fdd86c3f6185a53bb6cf3795792"
 
 
 def seeded_database() -> sqlite3.Connection:
@@ -328,12 +329,12 @@ def test_full_contact_mutation_commits_one_atomic_evidence_set() -> None:
     connection.execute(
         """
         INSERT INTO idempotency_records (
-            tenant_id, actor_id, idempotency_key, command_name, request_digest,
+            tenant_id, actor_id, idempotency_key, command_name, payload_fingerprint,
             result_code, result_reference, created_at_ms, expires_at_ms
-        ) VALUES (?, ?, 'idem_phase2b_success', 'client.contact_upsert', 'digest_phase2b_success',
+        ) VALUES (?, ?, 'idem_phase2b_success', 'client.contact_upsert', ?,
                   'contact_saved', ?, 200, 1000)
         """,
-        (TENANT_A, OWNER_A, CONTACT_A),
+        (TENANT_A, OWNER_A, PAYLOAD_FINGERPRINT, CONTACT_A),
     )
     connection.execute(
         """
