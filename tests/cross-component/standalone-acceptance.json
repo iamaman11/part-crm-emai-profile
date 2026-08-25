@@ -70,8 +70,11 @@
       "name": "react_operator_projection",
       "expectedOutcome": "same_origin_typed_ui_projection",
       "evidence": [
-        "frontend/src/shared/api/client.ts",
-        "frontend/src/shared/api/endpoint.ts",
+        "openapi/control-plane.yaml",
+        "frontend/src/generated/operations.ts",
+        "frontend/src/generated/runtime.ts",
+        "frontend/src/shared/api/openapi-runtime.ts",
+        "frontend/src/shared/api/transport.ts",
         "frontend/src/features/session/api.ts",
         "frontend/src/features/access/api.ts",
         "frontend/src/features/clients/api.ts",
