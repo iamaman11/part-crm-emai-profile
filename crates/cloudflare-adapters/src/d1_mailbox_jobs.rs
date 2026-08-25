@@ -39,7 +39,7 @@ impl MailboxJobApplicationPort for D1MailboxJobApplicationRepository {
                 actor.actor_id(),
                 evidence.idempotency_key(),
                 command_name,
-                evidence.request_digest(),
+                evidence.payload_fingerprint(),
                 evidence.now(),
             )
             .await
@@ -61,7 +61,7 @@ impl MailboxJobApplicationPort for D1MailboxJobApplicationRepository {
             max_attempts: write.max_attempts(),
             envelope: MutationEnvelope {
                 idempotency_key: evidence.idempotency_key(),
-                request_digest: evidence.request_digest(),
+                payload_fingerprint: evidence.payload_fingerprint(),
                 audit_event_id: evidence.audit_event_id(),
                 outbox_event_id: evidence.outbox_event_id(),
                 payload_json: write.event_payload_json(),
@@ -89,7 +89,7 @@ impl MailboxJobApplicationPort for D1MailboxJobApplicationRepository {
             prepared: write.prepared(),
             envelope: MutationEnvelope {
                 idempotency_key: evidence.idempotency_key(),
-                request_digest: evidence.request_digest(),
+                payload_fingerprint: evidence.payload_fingerprint(),
                 audit_event_id: evidence.audit_event_id(),
                 outbox_event_id: evidence.outbox_event_id(),
                 payload_json: write.event_payload_json(),
