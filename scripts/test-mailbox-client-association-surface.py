@@ -16,6 +16,7 @@ COMPOSITION = ROOT / "apps/control-plane-worker/src/mailbox_client_association_c
 FRONTEND_API = ROOT / "frontend/src/features/mailboxes/api.ts"
 FRONTEND_UI = ROOT / "frontend/src/features/mailboxes/MailboxesWorkspace.tsx"
 RUNTIME_GENERATOR = ROOT / "scripts/generate-frontend-openapi-runtime.py"
+TRANSPORT = ROOT / "frontend/src/shared/api/transport.ts"
 RUNTIME = ROOT / "frontend/src/shared/api/openapi-runtime.ts"
 RETIRED_GENERATOR = ROOT / "scripts/generate-mailbox-client-association-contract.py"
 RETIRED_EXPORTER = ROOT / "crates/control-plane-contract/src/bin/export_mailbox_client_association.rs"
@@ -164,18 +165,26 @@ def main() -> int:
         require(runtime_generator, needle, str(RUNTIME_GENERATOR.relative_to(ROOT)))
     reject(runtime_generator, "requestDigest", str(RUNTIME_GENERATOR.relative_to(ROOT)))
 
-    runtime = RUNTIME.read_text(encoding="utf-8")
+    transport = TRANSPORT.read_text(encoding="utf-8")
     for failure in [
         "NetworkError",
         "TimeoutError",
         "AbortedError",
         "ResponseTooLargeError",
+    ]:
+        require(transport, failure, str(TRANSPORT.relative_to(ROOT)))
+    for needle in ["executeTransport", "MAX_RESPONSE_BYTES", "credentials: 'same-origin'"]:
+        require(transport, needle, str(TRANSPORT.relative_to(ROOT)))
+
+    runtime = RUNTIME.read_text(encoding="utf-8")
+    for failure in [
         "UnexpectedStatusError",
         "UnexpectedContentTypeError",
         "MalformedBodyError",
         "ContractDecodeError",
     ]:
         require(runtime, failure, str(RUNTIME.relative_to(ROOT)))
+    require(runtime, "invokeOperation", str(RUNTIME.relative_to(ROOT)))
 
     frontend_api = FRONTEND_API.read_text(encoding="utf-8")
     for needle in [
