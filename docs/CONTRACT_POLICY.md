@@ -126,10 +126,18 @@ duplicate operation IDs, incomplete path parameters, unsupported serialization/m
 permissive problem schemas. It must not auto-convert `nullable`, substitute schemas, insert missing
 headers/statuses, or add compiler-owned protocol extensions.
 
+The frontend compiler is the **single current owner of compiler-supported-subset admission and its
+ephemeral operation IR**. Capability-owned Rust modules own product/public contract semantics;
+`scripts/check-contract-compatibility.py` owns current-version compatibility evolution; producer-drift
+checks prove only that canonical projections still match their natural Rust producers. Those
+mechanisms must not independently reimplement the frontend compiler's supported-subset policy. The
+compiler IR is deterministic, untracked and never a contract, release input, runtime input or second
+semantic authority.
+
 Generated TypeScript operations, encoders and runtime validators are mechanical projections and may
-not be edited into a second semantic authority. Python may orchestrate deterministic builds/checks but
-must not own product wire semantics. Browser HTTP remains OpenAPI 3.1 + JSON; protobuf is reserved for
-real process/binary boundaries.
+not be edited into a second semantic authority. Python may implement/orchestrate the deterministic
+compiler/build boundary but must not own product wire semantics. Browser HTTP remains OpenAPI 3.1 +
+JSON; protobuf is reserved for real process/binary boundaries.
 
 ## 8. Digest discipline
 
