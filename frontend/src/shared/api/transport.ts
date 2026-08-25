@@ -1,9 +1,10 @@
+export type TransportMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
+
 export interface TransportRequest {
-  method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
+  method: TransportMethod;
   path: string;
-  tenantId: string;
-  body?: unknown;
-  idempotencyKey?: string;
+  headers: Headers;
+  body?: Uint8Array;
   signal?: AbortSignal;
 }
 
@@ -24,32 +25,22 @@ function ensureApiPath(path: string): void {
 export async function executeTransport(request: TransportRequest): Promise<TransportResponse> {
   ensureApiPath(request.path);
 
-  const headers = new Headers({
-    Accept: 'application/json, application/problem+json',
-    'X-Tenant-Id': request.tenantId,
-    'X-Correlation-Id': `corr_${crypto.randomUUID().replaceAll('-', '')}`,
-  });
-
-  if (request.body !== undefined) {
-    headers.set('Content-Type', 'application/json');
-  }
-
-  if (request.idempotencyKey !== undefined) {
-    headers.set('Idempotency-Key', request.idempotencyKey);
-  }
-
-  const response = await fetch(request.path, {
+  const init: RequestInit = {
     method: request.method,
-    headers,
+    headers: request.headers,
     credentials: 'same-origin',
     redirect: 'error',
-    body: request.body === undefined ? undefined : JSON.stringify(request.body),
-    signal: request.signal,
-  });
+  };
+  if (request.body !== undefined) init.body = request.body;
+  if (request.signal !== undefined) init.signal = request.signal;
 
+  const response = await fetch(request.path, init);
   const contentLength = response.headers.get('content-length');
-  if (contentLength !== null && Number(contentLength) > MAX_RESPONSE_BYTES) {
-    throw new TypeError('API response exceeded the allowed size');
+  if (contentLength !== null) {
+    const advertised = Number(contentLength);
+    if (!Number.isFinite(advertised) || advertised < 0 || advertised > MAX_RESPONSE_BYTES) {
+      throw new TypeError('API response exceeded the allowed size');
+    }
   }
 
   const bytes = new Uint8Array(await response.arrayBuffer());
