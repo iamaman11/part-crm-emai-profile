@@ -1,7 +1,4 @@
 use crate::promotion::PromotionAction;
-use crate::promotion::baseline_adoption::{
-    BaselineAdoptionObservation, BaselineAdoptionRequest, evaluate as baseline_adoption,
-};
 use crate::promotion::plan::{PlanRequest, build};
 use crate::promotion::preflight::{PreflightRequest, evaluate as preflight};
 use crate::promotion::snapshot::DeploymentSnapshot;
@@ -24,12 +21,6 @@ pub struct PromotionRunRequest<'a> {
     pub current_release_set: Option<&'a Path>,
     pub known_good_release_set: Option<&'a Path>,
     pub expected_current_release_set_id: Option<&'a str>,
-    pub baseline_adoption_observation: Option<&'a Path>,
-    pub expected_account_id: Option<&'a str>,
-    pub expected_deployment_id: Option<&'a str>,
-    pub expected_version_id: Option<&'a str>,
-    pub request_id: Option<&'a str>,
-    pub confirmation: Option<&'a str>,
 }
 
 pub fn run(request: PromotionRunRequest<'_>) -> Result<String, ReleaseModelError> {
@@ -94,37 +85,6 @@ pub fn run(request: PromotionRunRequest<'_>) -> Result<String, ReleaseModelError
             request.profile_id,
             request.environment,
         ),
-        PromotionAction::BaselineAdoptionPreflight => {
-            let observation_path = request.baseline_adoption_observation.ok_or_else(|| {
-                ReleaseModelError::new("--baseline-adoption-observation is required")
-            })?;
-            let observation = BaselineAdoptionObservation::load(observation_path)?;
-            baseline_adoption(BaselineAdoptionRequest {
-                root: request.root,
-                source_root: request.source_root,
-                target: &target,
-                target_profile_id: request.profile_id,
-                environment: request.environment,
-                snapshot: &snapshot,
-                compatibility_evidence: &evidence,
-                observation: &observation,
-                expected_account_id: required_argument(
-                    request.expected_account_id,
-                    "--expected-account-id",
-                )?,
-                expected_deployment_id: required_argument(
-                    request.expected_deployment_id,
-                    "--expected-deployment-id",
-                )?,
-                expected_version_id: required_argument(
-                    request.expected_version_id,
-                    "--expected-version-id",
-                )?,
-                request_id: required_argument(request.request_id, "--request-id")?,
-                confirmation: required_argument(request.confirmation, "--confirmation")?,
-            })?
-            .machine_json(target.release_set_id(), request.profile_id, &observation)
-        }
     };
 
     serde_json::to_string_pretty(&value)
@@ -132,8 +92,4 @@ pub fn run(request: PromotionRunRequest<'_>) -> Result<String, ReleaseModelError
         .map_err(|error| {
             ReleaseModelError::new(format!("cannot serialize promotion output: {error}"))
         })
-}
-
-fn required_argument<'a>(value: Option<&'a str>, flag: &str) -> Result<&'a str, ReleaseModelError> {
-    value.ok_or_else(|| ReleaseModelError::new(format!("{flag} is required")))
 }
