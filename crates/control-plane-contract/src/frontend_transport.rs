@@ -30,7 +30,7 @@ impl fmt::Display for FrontendTransportContractError {
             }
             Self::UnsupportedNullable => write!(
                 formatter,
-                "OpenAPI 3.0 nullable is forbidden in the frontend compiler input"
+                "legacy nullable projection requires a boolean nullable value and an explicit JSON Schema type"
             ),
             Self::UnsupportedNumber => write!(
                 formatter,
@@ -188,15 +188,47 @@ pub fn close_compiler_input(mut document: Value) -> Result<Value, FrontendTransp
     Ok(document)
 }
 
+fn normalize_legacy_nullable(
+    map: &mut serde_json::Map<String, Value>,
+) -> Result<(), FrontendTransportContractError> {
+    let Some(nullable) = map.remove("nullable") else {
+        return Ok(());
+    };
+    let is_nullable = nullable
+        .as_bool()
+        .ok_or(FrontendTransportContractError::UnsupportedNullable)?;
+    if !is_nullable {
+        return Ok(());
+    }
+    let schema_type = map
+        .get_mut("type")
+        .ok_or(FrontendTransportContractError::UnsupportedNullable)?;
+    match schema_type {
+        Value::String(name) => {
+            if name != "null" {
+                *schema_type = json!([name.clone(), "null"]);
+            }
+        }
+        Value::Array(names) => {
+            if names.iter().any(|name| !name.is_string()) {
+                return Err(FrontendTransportContractError::UnsupportedNullable);
+            }
+            if !names.iter().any(|name| name.as_str() == Some("null")) {
+                names.push(Value::String("null".to_owned()));
+            }
+        }
+        _ => return Err(FrontendTransportContractError::UnsupportedNullable),
+    }
+    Ok(())
+}
+
 fn close_value(
     value: &mut Value,
     has_problem_payload: bool,
 ) -> Result<(), FrontendTransportContractError> {
     match value {
         Value::Object(map) => {
-            if map.contains_key("nullable") {
-                return Err(FrontendTransportContractError::UnsupportedNullable);
-            }
+            normalize_legacy_nullable(map)?;
             if let Some(Value::String(reference)) = map.get("$ref") {
                 if !reference.starts_with("#/") {
                     return Err(FrontendTransportContractError::NetworkReference(
@@ -413,6 +445,57 @@ mod tests {
             "#/components/schemas/ProblemPayload"
         );
         Ok(())
+    }
+
+    #[test]
+    fn compiler_input_normalizes_legacy_nullable_to_json_schema_31()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let document = json!({
+            "openapi": "3.1.0",
+            "info": {"title": "fixture", "version": "1.0.0"},
+            "paths": {},
+            "components": {
+                "schemas": {
+                    "ProblemPayload": {"type": "object", "additionalProperties": false},
+                    "LegacyNullable": {"type": "string", "nullable": true, "maxLength": 32},
+                    "LegacyNonNullable": {"type": "integer", "nullable": false}
+                }
+            }
+        });
+        let closed = close_compiler_input(document)?;
+        assert_eq!(
+            closed["components"]["schemas"]["LegacyNullable"]["type"],
+            json!(["string", "null"])
+        );
+        assert_eq!(
+            closed["components"]["schemas"]["LegacyNonNullable"]["type"],
+            json!("integer")
+        );
+        assert!(
+            closed["components"]["schemas"]["LegacyNullable"]
+                .get("nullable")
+                .is_none()
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn compiler_input_rejects_ambiguous_nullable_shape() {
+        let ambiguous = json!({
+            "openapi": "3.1.0",
+            "info": {"title": "fixture", "version": "1.0.0"},
+            "paths": {},
+            "components": {
+                "schemas": {
+                    "ProblemPayload": {"type": "object", "additionalProperties": false},
+                    "LegacyNullable": {"nullable": true, "oneOf": [{"type": "string"}]}
+                }
+            }
+        });
+        assert_eq!(
+            close_compiler_input(ambiguous),
+            Err(FrontendTransportContractError::UnsupportedNullable)
+        );
     }
 
     #[test]
