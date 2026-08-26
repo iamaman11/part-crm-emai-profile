@@ -42,7 +42,7 @@ impl ActiveOwnerGovernanceApplicationPort for D1IdentityGovernanceApplicationRep
                 actor.actor_id(),
                 evidence.idempotency_key(),
                 command_name,
-                evidence.request_digest(),
+                evidence.payload_fingerprint(),
                 evidence.now(),
             )
             .await
@@ -118,7 +118,7 @@ pub(crate) fn mutation_envelope<'a>(
 ) -> MutationEnvelope<'a> {
     MutationEnvelope {
         idempotency_key: evidence.idempotency_key(),
-        request_digest: evidence.request_digest(),
+        payload_fingerprint: evidence.payload_fingerprint(),
         audit_event_id: evidence.audit_event_id(),
         outbox_event_id: evidence.outbox_event_id(),
         payload_json,

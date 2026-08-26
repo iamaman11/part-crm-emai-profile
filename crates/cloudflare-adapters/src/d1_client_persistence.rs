@@ -7,7 +7,7 @@ use application_ports::clients::{
 };
 use client_domain::{ClientKind, ClientRecord, ClientStatus};
 use profile_platform_primitives::{
-    ActorContext, AggregateVersion, ClientId, TenantScope, UnixMillis,
+    ActorContext, AggregateVersion, ClientId, PayloadFingerprint, TenantScope, UnixMillis,
 };
 use serde::Deserialize;
 use worker::d1::D1Database;
@@ -70,7 +70,7 @@ WHERE tenant_id = ?
 
 const IDEMPOTENCY_CREATE: &str = r#"
 INSERT INTO idempotency_records (
-    tenant_id, actor_id, idempotency_key, command_name, request_digest,
+    tenant_id, actor_id, idempotency_key, command_name, payload_fingerprint,
     result_code, result_reference, created_at_ms, expires_at_ms
 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 "#;
@@ -108,7 +108,7 @@ impl D1ClientPersistenceRepository {
         let statement = query!(
             &self.database,
             r#"
-            SELECT command_name, request_digest, result_code,
+            SELECT command_name, payload_fingerprint, result_code,
                    result_reference, expires_at_ms
             FROM idempotency_records
             WHERE tenant_id = ? AND actor_id = ? AND idempotency_key = ?
@@ -127,8 +127,12 @@ impl D1ClientPersistenceRepository {
             return Ok(ClientReplayDecision::Miss);
         };
         let expires_at = u64::try_from(row.expires_at_ms).map_err(|_| integrity_failure())?;
+        let stored_fingerprint = row
+            .payload_fingerprint
+            .as_deref()
+            .and_then(|value| PayloadFingerprint::parse(value).ok());
         if row.command_name != command_name
-            || row.request_digest != evidence.request_digest()
+            || stored_fingerprint.as_ref() != Some(evidence.payload_fingerprint())
             || evidence.now().value() >= expires_at
         {
             return Ok(ClientReplayDecision::Conflict);
@@ -486,7 +490,7 @@ struct ClientRow {
 #[derive(Deserialize)]
 struct IdempotencyRow {
     command_name: String,
-    request_digest: String,
+    payload_fingerprint: Option<String>,
     result_code: String,
     result_reference: Option<String>,
     expires_at_ms: i64,
@@ -570,7 +574,7 @@ fn idempotency_statement(
         actor.actor_id().as_str(),
         evidence.idempotency_key().as_str(),
         command_name,
-        evidence.request_digest(),
+        evidence.payload_fingerprint().as_str(),
         result_code,
         result_reference,
         now,

@@ -399,8 +399,7 @@
           "generationId",
           "objectKey",
           "metadataDigest",
-          "containerDigest",
-          "requestDigest"
+          "containerDigest"
         ],
         "properties": {
           "generationId": {
@@ -414,9 +413,6 @@
           },
           "containerDigest": {
             "$ref": "#/components/schemas/Sha256Digest"
-          },
-          "requestDigest": {
-            "$ref": "#/components/schemas/Sha256Digest"
           }
         }
       },
@@ -425,8 +421,7 @@
         "additionalProperties": false,
         "required": [
           "expectedGenerationVersion",
-          "verificationReference",
-          "requestDigest"
+          "verificationReference"
         ],
         "properties": {
           "expectedGenerationVersion": {
@@ -435,9 +430,6 @@
           },
           "verificationReference": {
             "$ref": "#/components/schemas/VerificationReference"
-          },
-          "requestDigest": {
-            "$ref": "#/components/schemas/Sha256Digest"
           }
         }
       },
@@ -445,16 +437,12 @@
         "type": "object",
         "additionalProperties": false,
         "required": [
-          "expectedProfileVersion",
-          "requestDigest"
+          "expectedProfileVersion"
         ],
         "properties": {
           "expectedProfileVersion": {
             "type": "integer",
             "minimum": 1
-          },
-          "requestDigest": {
-            "$ref": "#/components/schemas/Sha256Digest"
           }
         }
       },
@@ -462,16 +450,12 @@
         "type": "object",
         "additionalProperties": false,
         "required": [
-          "expectedProfileVersion",
-          "requestDigest"
+          "expectedProfileVersion"
         ],
         "properties": {
           "expectedProfileVersion": {
             "type": "integer",
             "minimum": 1
-          },
-          "requestDigest": {
-            "$ref": "#/components/schemas/Sha256Digest"
           }
         }
       },
@@ -479,16 +463,12 @@
         "type": "object",
         "additionalProperties": false,
         "required": [
-          "expectedGenerationVersion",
-          "requestDigest"
+          "expectedGenerationVersion"
         ],
         "properties": {
           "expectedGenerationVersion": {
             "type": "integer",
             "minimum": 1
-          },
-          "requestDigest": {
-            "$ref": "#/components/schemas/Sha256Digest"
           }
         }
       },

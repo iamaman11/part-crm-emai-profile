@@ -1,5 +1,11 @@
 #!/usr/bin/env python3
-"""Permanent Phase 2H standalone UI, Client Mail and privacy boundary checks."""
+"""Permanent Phase 2H standalone UI, Client Mail and privacy boundary checks.
+
+The PAS-2 transport cutover deliberately removes route/method ownership from feature adapters.
+This policy therefore proves Client Mail operation semantics from canonical OpenAPI and proves that
+the feature adapter delegates to generated operations rather than searching feature source for
+handwritten route strings.
+"""
 
 from __future__ import annotations
 
@@ -29,10 +35,7 @@ FILES = {
     "realtime": Path("frontend/src/shared/realtime/NotificationRealtimeBridge.tsx"),
 }
 
-OBSOLETE_CLIENT_MAIL_FACADES = (
-    Path("frontend/src/shared/api/clientMail.ts"),
-)
-
+OBSOLETE_CLIENT_MAIL_FACADES = (Path("frontend/src/shared/api/clientMail.ts"),)
 ROUTE_MARKERS = (
     "path: '/clients'",
     "path: '/clients/$clientId'",
@@ -45,7 +48,6 @@ ROUTE_MARKERS = (
     "path: '/audit'",
     "path: '/settings'",
 )
-
 ROUTE_SOURCE_KEYS = (
     "clients_route",
     "profiles_route",
@@ -56,12 +58,10 @@ ROUTE_SOURCE_KEYS = (
     "audit_route",
     "settings_route",
 )
-
 MAIL_PATHS = (
     "/api/v1/tenants/{tenantId}/clients/{clientId}/mail/search",
     "/api/v1/tenants/{tenantId}/clients/{clientId}/mail/message",
 )
-
 BROWSER_PERSISTENCE_SINKS = (
     "localStorage",
     "sessionStorage",
@@ -75,7 +75,6 @@ def load_sources(root: Path) -> dict[str, str]:
     for relative in OBSOLETE_CLIENT_MAIL_FACADES:
         if (root / relative).exists():
             raise ValueError(f"obsolete shared Client Mail facade must remain removed: {relative}")
-
     sources: dict[str, str] = {}
     for key, relative in FILES.items():
         path = root / relative
@@ -134,11 +133,19 @@ def validate_sources(sources: dict[str, str]) -> list[str]:
             errors.append(f"Client Mail panel contains forbidden browser sink: {sink}")
 
     api = sources["client_mail_api"]
-    for suffix in ("/mail/search", "/mail/message"):
-        if suffix not in api:
-            errors.append(f"Client Mail API route missing: {suffix}")
-    if api.count("method: 'POST'") < 2 or "URLSearchParams" in api:
-        errors.append("Client Mail transport must keep confidential query inputs in POST bodies")
+    for marker in (
+        "searchClientMail as searchClientMailOperation",
+        "getClientMailMessage as getClientMailMessageOperation",
+        "return searchClientMailOperation({",
+        "return getClientMailMessageOperation({",
+        "body: input",
+        "body: reference",
+    ):
+        if marker not in api:
+            errors.append(f"Client Mail feature must delegate to generated OpenAPI operation: {marker}")
+    for forbidden in ("/mail/search", "/mail/message", "requestJson<", "method: 'POST'", "URLSearchParams"):
+        if forbidden in api:
+            errors.append(f"Client Mail feature must not own transport semantics: {forbidden}")
 
     contract = sources["query_mail_contract"]
     for marker in ("ClientMailSearchInput", "MailboxMessageReferenceDto", "MailMessageBodyDto"):
@@ -162,6 +169,8 @@ def validate_sources(sources: dict[str, str]) -> list[str]:
                 errors.append(f"generated query-mail POST path missing: {path}")
             elif any(parameter.get("in") == "query" for parameter in operation.get("parameters", [])):
                 errors.append(f"Client Mail confidential inputs must not be URL query parameters: {path}")
+            elif not isinstance(operation.get("requestBody"), dict):
+                errors.append(f"Client Mail confidential inputs must stay in POST body: {path}")
 
     worker = sources["worker_mail"]
     for marker in (
@@ -177,11 +186,7 @@ def validate_sources(sources: dict[str, str]) -> list[str]:
     for forbidden in ("SELECT ", "INSERT ", "UPDATE ", "DELETE FROM"):
         if forbidden in worker:
             errors.append(f"SQL must stay out of Client Mail Worker ingress: {forbidden}")
-    for forbidden in (
-        "D1ClientMailboxEligibilityRepository",
-        "D1QueryRepository",
-        "CloudMailboxQueryAdapter",
-    ):
+    for forbidden in ("D1ClientMailboxEligibilityRepository", "D1QueryRepository", "CloudMailboxQueryAdapter"):
         if forbidden in worker:
             errors.append(f"concrete Client Mail adapter must stay out of Worker ingress: {forbidden}")
 
@@ -227,9 +232,8 @@ def validate_sources(sources: dict[str, str]) -> list[str]:
             errors.append(f"safe mail body iframe boundary missing: {marker}")
 
     for key in ("client_mail_panel", "client_mail_api", "mail_html", "mail_body"):
-        source = sources[key]
         for sink in BROWSER_PERSISTENCE_SINKS:
-            if sink in source:
+            if sink in sources[key]:
                 errors.append(f"confidential mail source {key} contains forbidden sink: {sink}")
 
     realtime = sources["realtime"]
@@ -244,6 +248,7 @@ def self_test(sources: dict[str, str]) -> None:
     fixtures = [
         ("route", "settings_route", "path: '/settings'", "path: '/settings-broken'"),
         ("mail execution", "client_mail_panel", "SafeMailBody", "UnsafeMailBody"),
+        ("generated operation", "client_mail_api", "searchClientMailOperation", "searchClientMailBypass"),
         ("generated path", "query_mail_openapi", '"post"', '"get"'),
         ("authorization", "worker_mail", "resolve_active_request_actor", "resolve_actor_bypass"),
         ("sandbox", "mail_body", 'sandbox=""', 'sandbox="allow-scripts"'),
@@ -257,8 +262,13 @@ def self_test(sources: dict[str, str]) -> None:
         if not validate_sources(mutated):
             raise ValueError(f"Phase 2H negative fixture was not rejected: {label}")
 
+    leaked_route = dict(sources)
+    leaked_route["client_mail_api"] += "\nconst legacy = '/mail/search';\n"
+    if not validate_sources(leaked_route):
+        raise ValueError("Phase 2H negative fixture was not rejected: handwritten Client Mail route")
+
     leaked_adapter = dict(sources)
-    leaked_adapter["worker_mail"] = leaked_adapter["worker_mail"] + "\nCloudMailboxQueryAdapter"
+    leaked_adapter["worker_mail"] += "\nCloudMailboxQueryAdapter"
     if not validate_sources(leaked_adapter):
         raise ValueError("Phase 2H negative fixture was not rejected: Client Mail adapter leakage")
 
@@ -282,7 +292,7 @@ def main() -> int:
         for error in errors:
             print(error)
         return 1
-    print("Phase 2H standalone UI, Client Mail and privacy boundaries passed.")
+    print("Phase 2H standalone UI, generated Client Mail transport and privacy boundaries passed.")
     return 0
 
 

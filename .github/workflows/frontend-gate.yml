@@ -35,8 +35,8 @@ jobs:
       - name: Prove sibling feature internals are rejected
         run: python scripts/check-frontend-feature-boundaries.py --self-test
 
-      - name: Verify generated C7 client mail contract
-        run: python scripts/generate-c7-contracts.py --check
+      - name: Verify generated frontend OpenAPI runtime
+        run: python scripts/generate-frontend-openapi-runtime.py --check-render
 
       - name: Verify PAS-2 frontend OpenAPI compiler input
         run: python scripts/check-frontend-openapi.py

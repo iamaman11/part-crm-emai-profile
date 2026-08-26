@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import re
 import sqlite3
 from pathlib import Path
@@ -85,6 +86,11 @@ def seed(connection: sqlite3.Connection) -> None:
     connection.commit()
 
 
+def payload_fingerprint(*parts: object) -> str:
+    canonical = "\x1f".join("" if part is None else str(part) for part in parts)
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
 def execute_change(
     connection: sqlite3.Connection,
     sql: dict[str, str],
@@ -125,6 +131,21 @@ def execute_change(
         "DISABLE": "mailbox.onboarding_disabled.v1",
         "CONFIG_ERROR": "mailbox.onboarding_config_error.v1",
     }[operation]
+    fingerprint = payload_fingerprint(
+        "mailbox.onboarding_change",
+        TENANT,
+        actor,
+        onboarding,
+        provider,
+        expected,
+        next_version,
+        operation,
+        previous_status,
+        next_status,
+        previous_handle,
+        next_handle,
+        metadata,
+    )
     connection.execute(
         sql["ONBOARDING_COMMAND"],
         (
@@ -151,7 +172,7 @@ def execute_change(
             actor,
             f"idem_C1_{suffix}",
             "mailbox.onboarding_change",
-            f"digest_C1_{suffix}_0123456789abcdef",
+            fingerprint,
             result,
             onboarding,
             at,

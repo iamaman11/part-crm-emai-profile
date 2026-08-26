@@ -4,6 +4,7 @@ use core::fmt;
 
 const MIN_ID_LENGTH: usize = 8;
 const MAX_ID_LENGTH: usize = 96;
+const SHA256_HEX_LENGTH: usize = 64;
 
 /// Stable opaque identifier safe for API, metric and storage segments.
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -98,6 +99,49 @@ define_typed_id!(AuditEventId);
 define_typed_id!(OutboxEventId);
 define_typed_id!(FencingToken);
 define_typed_id!(SecretHandle);
+
+/// Internal server-owned SHA-256 fingerprint used only for idempotency payload comparison.
+///
+/// This type is intentionally not an opaque public identifier and is not part of any wire contract.
+#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct PayloadFingerprint(String);
+
+impl PayloadFingerprint {
+    pub fn parse(value: impl Into<String>) -> Result<Self, ParsePayloadFingerprintError> {
+        let value = value.into();
+        if value.len() != SHA256_HEX_LENGTH
+            || !value
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        {
+            return Err(ParsePayloadFingerprintError);
+        }
+        Ok(Self(value))
+    }
+
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Display for PayloadFingerprint {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.as_str())
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ParsePayloadFingerprintError;
+
+impl fmt::Display for ParsePayloadFingerprintError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .write_str("payload fingerprint must be exactly 64 lowercase hexadecimal characters")
+    }
+}
+
+impl std::error::Error for ParsePayloadFingerprintError {}
 
 /// Required scope for every tenant-owned repository operation.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -220,8 +264,8 @@ impl UnixMillis {
 #[cfg(test)]
 mod tests {
     use super::{
-        ActorContext, ActorId, AggregateVersion, ContactPointId, CorrelationId, OpaqueId, TenantId,
-        TenantScope,
+        ActorContext, ActorId, AggregateVersion, ContactPointId, CorrelationId, OpaqueId,
+        PayloadFingerprint, SHA256_HEX_LENGTH, TenantId, TenantScope,
     };
 
     #[test]
@@ -235,6 +279,18 @@ mod tests {
         assert_eq!(actor.tenant_scope().tenant_id(), &tenant_id);
         assert_eq!(actor.actor_id(), &actor_id);
         assert_eq!(actor.correlation_id(), &correlation_id);
+        Ok(())
+    }
+
+    #[test]
+    fn payload_fingerprint_is_fixed_lowercase_sha256_hex() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let value = "a".repeat(SHA256_HEX_LENGTH);
+        let fingerprint = PayloadFingerprint::parse(value.clone())?;
+        assert_eq!(fingerprint.as_str(), value);
+        assert!(PayloadFingerprint::parse("A".repeat(SHA256_HEX_LENGTH)).is_err());
+        assert!(PayloadFingerprint::parse("a".repeat(SHA256_HEX_LENGTH - 1)).is_err());
+        assert!(PayloadFingerprint::parse("g".repeat(SHA256_HEX_LENGTH)).is_err());
         Ok(())
     }
 

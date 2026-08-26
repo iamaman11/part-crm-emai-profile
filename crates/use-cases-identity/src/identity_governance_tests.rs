@@ -1,6 +1,7 @@
 use super::*;
 use profile_platform_primitives::{
-    AuditEventId, CorrelationId, IdempotencyKey, OutboxEventId, TenantId, TenantScope,
+    AuditEventId, CorrelationId, IdempotencyKey, OutboxEventId, PayloadFingerprint, TenantId,
+    TenantScope,
 };
 use std::cell::{Cell, RefCell};
 use std::future::Future;
@@ -104,7 +105,7 @@ fn actor() -> Result<ActorContext, Box<dyn std::error::Error>> {
 fn evidence() -> Result<CommandExecutionEvidence, Box<dyn std::error::Error>> {
     Ok(CommandExecutionEvidence::new(
         IdempotencyKey::parse("idem_01JIDENTITYGOV")?,
-        "request-digest-01JIDENTITYGOV",
+        PayloadFingerprint::parse("a".repeat(64))?,
         AuditEventId::parse("audit_01JIDENTITYGOV")?,
         OutboxEventId::parse("outbox_01JIDENTITYGOV")?,
         UnixMillis::new(10),

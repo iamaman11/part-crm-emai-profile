@@ -128,7 +128,7 @@ async fn register_generation(
         Ok(value) => value,
         Err(_) => return invalid_request(actor.correlation_id().as_str()),
     };
-    let generation_id = match GenerationId::parse(body.generation_id) {
+    let generation_id = match GenerationId::parse(body.generation_id.clone()) {
         Ok(value) => value,
         Err(_) => return invalid_request(actor.correlation_id().as_str()),
     };
@@ -139,7 +139,7 @@ async fn register_generation(
     ) {
         return operation_failure(actor.correlation_id().as_str(), error);
     }
-    let evidence = match command_evidence::from_request(request, actor, body.request_digest) {
+    let evidence = match command_evidence::from_request(request, actor, &body) {
         Ok(value) => value,
         Err(_) => return invalid_request(actor.correlation_id().as_str()),
     };
@@ -204,7 +204,7 @@ async fn verify_generation(
     if let Err(error) = next_generation_version(expected_generation_version) {
         return operation_failure(actor.correlation_id().as_str(), error);
     }
-    let evidence = match command_evidence::from_request(request, actor, body.request_digest) {
+    let evidence = match command_evidence::from_request(request, actor, &body) {
         Ok(value) => value,
         Err(_) => return invalid_request(actor.correlation_id().as_str()),
     };
@@ -248,7 +248,7 @@ async fn change_profile_generation(
     if let Err(error) = next_generation_version(expected_profile_version) {
         return operation_failure(actor.correlation_id().as_str(), error);
     }
-    let evidence = match command_evidence::from_request(request, actor, body.request_digest) {
+    let evidence = match command_evidence::from_request(request, actor, &body) {
         Ok(value) => value,
         Err(_) => return invalid_request(actor.correlation_id().as_str()),
     };
@@ -290,7 +290,7 @@ async fn quarantine_generation(
     if let Err(error) = next_generation_version(expected_generation_version) {
         return operation_failure(actor.correlation_id().as_str(), error);
     }
-    let evidence = match command_evidence::from_request(request, actor, body.request_digest) {
+    let evidence = match command_evidence::from_request(request, actor, &body) {
         Ok(value) => value,
         Err(_) => return invalid_request(actor.correlation_id().as_str()),
     };

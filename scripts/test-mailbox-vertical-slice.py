@@ -13,7 +13,7 @@ OWNER = "actor_owner_mailbox_slice"
 OWNER_IDENTITY = "identity_owner_mailbox_slice"
 BINDING = "mailbox_01_mailbox_slice"
 JOB = "mailjob_01_mailbox_slice"
-DIGEST = "a" * 64
+FINGERPRINT = "a" * 64
 
 
 def database() -> sqlite3.Connection:
@@ -114,7 +114,7 @@ def insert_evidence(
     connection.execute(
         """
         INSERT INTO idempotency_records (
-            tenant_id, actor_id, idempotency_key, command_name, request_digest,
+            tenant_id, actor_id, idempotency_key, command_name, payload_fingerprint,
             result_code, result_reference, created_at_ms, expires_at_ms
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
@@ -123,7 +123,7 @@ def insert_evidence(
             OWNER,
             key,
             command_name,
-            DIGEST,
+            FINGERPRINT,
             result_code,
             resource_id,
             now_ms,
@@ -209,7 +209,7 @@ def create_binding(connection: sqlite3.Connection) -> None:
 
     replay = connection.execute(
         """
-        SELECT command_name, request_digest, result_code, result_reference, expires_at_ms
+        SELECT command_name, payload_fingerprint, result_code, result_reference, expires_at_ms
         FROM idempotency_records
         WHERE tenant_id = ? AND actor_id = ? AND idempotency_key = ?
         """,
@@ -217,22 +217,22 @@ def create_binding(connection: sqlite3.Connection) -> None:
     ).fetchone()
     assert replay is not None
     assert replay["command_name"] == "mailbox.binding_create"
-    assert replay["request_digest"] == DIGEST
+    assert replay["payload_fingerprint"] == FINGERPRINT
     assert replay["result_code"] == "created"
     assert replay["result_reference"] == BINDING
     assert replay["expires_at_ms"] == 1000
 
-    def exact_live(command: str, digest: str, now_ms: int) -> bool:
+    def exact_live(command: str, fingerprint: str, now_ms: int) -> bool:
         return (
             replay["command_name"] == command
-            and replay["request_digest"] == digest
+            and replay["payload_fingerprint"] == fingerprint
             and now_ms < replay["expires_at_ms"]
         )
 
-    assert exact_live("mailbox.binding_create", DIGEST, 999)
-    assert not exact_live("mailbox.binding_revoke", DIGEST, 999)
+    assert exact_live("mailbox.binding_create", FINGERPRINT, 999)
+    assert not exact_live("mailbox.binding_revoke", FINGERPRINT, 999)
     assert not exact_live("mailbox.binding_create", "b" * 64, 999)
-    assert not exact_live("mailbox.binding_create", DIGEST, 1000)
+    assert not exact_live("mailbox.binding_create", FINGERPRINT, 1000)
 
 
 def create_job(connection: sqlite3.Connection) -> None:
@@ -487,11 +487,11 @@ def late_evidence_failure_rolls_back_complete_envelope(connection: sqlite3.Conne
             connection.execute(
                 """
                 INSERT INTO idempotency_records (
-                    tenant_id, actor_id, idempotency_key, command_name, request_digest,
+                    tenant_id, actor_id, idempotency_key, command_name, payload_fingerprint,
                     result_code, result_reference, created_at_ms, expires_at_ms
                 ) VALUES (?, ?, ?, 'mailbox.binding_create', ?, 'created', ?, 70, 1000)
                 """,
-                (TENANT, OWNER, key, DIGEST, rollback_binding),
+                (TENANT, OWNER, key, FINGERPRINT, rollback_binding),
             )
             connection.execute(
                 """

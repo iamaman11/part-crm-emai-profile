@@ -362,10 +362,11 @@ def test_optimistic_version_and_mutation_envelope() -> None:
             connection.execute(
                 """
                 INSERT INTO idempotency_records (
-                    tenant_id, actor_id, idempotency_key, command_name, request_digest,
+                    tenant_id, actor_id, idempotency_key, command_name, payload_fingerprint,
                     result_code, result_reference, created_at_ms, expires_at_ms
                 ) VALUES (?, ?, 'idem_rollback_catalog', 'client.update',
-                          '0123456789abcdef', 'updated', ?, 110, 1000)
+                          '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef',
+                          'updated', ?, 110, 1000)
                 """,
                 (TENANT_A, OWNER_A, CLIENT_A),
             )
@@ -437,10 +438,11 @@ def test_optimistic_version_and_mutation_envelope() -> None:
             connection.execute(
                 """
                 INSERT INTO idempotency_records (
-                    tenant_id, actor_id, idempotency_key, command_name, request_digest,
+                    tenant_id, actor_id, idempotency_key, command_name, payload_fingerprint,
                     result_code, result_reference, created_at_ms, expires_at_ms
                 ) VALUES (?, ?, 'idem_committed_catalog', 'client.update',
-                          'fedcba9876543210', 'updated', ?, 120, 1000)
+                          'fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210',
+                          'updated', ?, 120, 1000)
                 """,
                 (TENANT_A, OWNER_A, CLIENT_A),
             )

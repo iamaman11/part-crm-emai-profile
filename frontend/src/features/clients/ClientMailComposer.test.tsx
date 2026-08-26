@@ -2,8 +2,10 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
-import type { ClientMailSendReceiptDto } from '../../shared/api/generated/client-mail-send';
-import type { MailMessageBodyDto } from '../../shared/api/generated/query-mail';
+import type {
+  ClientMailSendReceiptDto,
+  MailMessageBodyDto,
+} from '../../shared/api/generated/operations';
 import { sendClientMail } from './api';
 import { ClientMailComposer } from './ClientMailComposer';
 

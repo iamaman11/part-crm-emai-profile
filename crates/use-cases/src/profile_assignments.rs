@@ -301,8 +301,8 @@ mod tests {
     use application_ports::profile_assignment_context::CurrentProfileAssignmentSnapshot;
     use client_domain::{ClientKind, ClientRecord, ClientStatus};
     use profile_platform_primitives::{
-        ActorId, AuditEventId, CorrelationId, IdempotencyKey, OutboxEventId, TenantId, TenantScope,
-        UnixMillis,
+        ActorId, AuditEventId, CorrelationId, IdempotencyKey, OutboxEventId, PayloadFingerprint,
+        TenantId, TenantScope, UnixMillis,
     };
     use std::cell::{Cell, RefCell};
     use std::future::Future;
@@ -401,7 +401,7 @@ mod tests {
     fn evidence(now: u64) -> Result<CommandExecutionEvidence, Box<dyn std::error::Error>> {
         Ok(CommandExecutionEvidence::new(
             IdempotencyKey::parse("idem_01JASSIGNAPP")?,
-            "request-digest-01JASSIGNAPP",
+            PayloadFingerprint::parse("a".repeat(64))?,
             AuditEventId::parse("audit_01JASSIGNAPP")?,
             OutboxEventId::parse("outbox_01JASSIGNAPP")?,
             UnixMillis::new(now),

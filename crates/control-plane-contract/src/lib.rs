@@ -4,6 +4,7 @@ pub mod client_mail_send_api;
 pub mod client_registry_api;
 pub mod coordinator_api;
 pub mod mailbox_api;
+pub mod mailbox_client_association_api;
 pub mod operator_query_api;
 pub mod profile_generation_api;
 pub mod public_api;

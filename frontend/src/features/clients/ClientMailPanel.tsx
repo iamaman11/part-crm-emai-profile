@@ -1,14 +1,14 @@
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { useState, type FormEvent } from 'react';
 import { useTenant } from '../../app/TenantContext';
-import type { ClientMailSendOperationDto } from '../../shared/api/generated/client-mail-send';
-import type { MailboxClientAssociationProjectionDto } from '../../shared/api/generated/mailbox-client-association';
-import type { MailboxListItemDto } from '../../shared/api/generated/operator-query';
 import type {
   ClientMailSearchInput,
+  ClientMailSendOperationDto,
+  MailboxClientAssociationProjectionDto,
+  MailboxListItemDto,
   MailMessageBodyDto,
   MailboxMessageReferenceDto,
-} from '../../shared/api/generated/query-mail';
+} from '../../shared/api/generated/operations';
 import { SafeMailBody } from '../../shared/mail/SafeMailBody';
 import { StatusMessage } from '../../shared/ui/StatusMessage';
 import { getMailboxClientAssociation, listMailboxes } from '../mailboxes';

@@ -1,4 +1,6 @@
-use profile_platform_primitives::{ActorId, IdempotencyKey, TenantScope, UnixMillis};
+use profile_platform_primitives::{
+    ActorId, IdempotencyKey, PayloadFingerprint, TenantScope, UnixMillis,
+};
 use serde::Deserialize;
 use worker::d1::D1Database;
 use worker::{Error, Result, query};
@@ -44,13 +46,34 @@ impl D1IdempotencyRepository {
         actor_id: &ActorId,
         key: &IdempotencyKey,
         command_name: &str,
-        request_digest: &str,
+        payload_fingerprint: &PayloadFingerprint,
         now: UnixMillis,
     ) -> Result<IdempotencyDecision> {
+        let now_i64 = i64::try_from(now.value())
+            .map_err(|_| Error::RustError("idempotency decision time overflow".to_owned()))?;
+
+        // PAS-2 legacy rows deliberately carry no trusted fingerprint. They block key reuse
+        // until expiry and are then removed so a current server-owned command can establish
+        // a new idempotency record under the same opaque key.
+        query!(
+            &self.database,
+            r#"
+            DELETE FROM idempotency_records
+            WHERE tenant_id = ? AND actor_id = ? AND idempotency_key = ?
+              AND payload_fingerprint IS NULL AND expires_at_ms <= ?
+            "#,
+            scope.tenant_id().as_str(),
+            actor_id.as_str(),
+            key.as_str(),
+            now_i64
+        )?
+        .run()
+        .await?;
+
         let row = query!(
             &self.database,
             r#"
-            SELECT command_name, request_digest, result_code,
+            SELECT command_name, payload_fingerprint, result_code,
                    result_reference, expires_at_ms
             FROM idempotency_records
             WHERE tenant_id = ? AND actor_id = ? AND idempotency_key = ?
@@ -61,7 +84,7 @@ impl D1IdempotencyRepository {
         )?
         .first::<IdempotencyRow>(None)
         .await?;
-        row.map(|row| decide_row(row, command_name, request_digest, now))
+        row.map(|row| decide_row(row, command_name, payload_fingerprint, now))
             .transpose()
             .map(|decision| decision.unwrap_or(IdempotencyDecision::Miss))
     }
@@ -70,7 +93,7 @@ impl D1IdempotencyRepository {
 #[derive(Deserialize)]
 struct IdempotencyRow {
     command_name: String,
-    request_digest: String,
+    payload_fingerprint: Option<String>,
     result_code: String,
     result_reference: Option<String>,
     expires_at_ms: i64,
@@ -79,13 +102,18 @@ struct IdempotencyRow {
 fn decide_row(
     row: IdempotencyRow,
     command_name: &str,
-    request_digest: &str,
+    payload_fingerprint: &PayloadFingerprint,
     now: UnixMillis,
 ) -> Result<IdempotencyDecision> {
+    let Some(stored_fingerprint) = row.payload_fingerprint else {
+        return Ok(IdempotencyDecision::Conflict);
+    };
     let expires_at = u64::try_from(row.expires_at_ms)
         .map_err(|_| Error::RustError("negative idempotency expiry".to_owned()))?;
+    let stored_fingerprint = PayloadFingerprint::parse(stored_fingerprint)
+        .map_err(|error| Error::RustError(error.to_string()))?;
     if row.command_name != command_name
-        || row.request_digest != request_digest
+        || stored_fingerprint != *payload_fingerprint
         || now.value() >= expires_at
     {
         return Ok(IdempotencyDecision::Conflict);
@@ -99,12 +127,16 @@ fn decide_row(
 #[cfg(test)]
 mod tests {
     use super::{IdempotencyDecision, IdempotencyRow, decide_row};
-    use profile_platform_primitives::UnixMillis;
+    use profile_platform_primitives::{PayloadFingerprint, UnixMillis};
+
+    fn fingerprint(byte: char) -> Result<PayloadFingerprint, Box<dyn std::error::Error>> {
+        Ok(PayloadFingerprint::parse(byte.to_string().repeat(64))?)
+    }
 
     fn row() -> IdempotencyRow {
         IdempotencyRow {
             command_name: "profile_generation.activate".to_owned(),
-            request_digest: "digest_01JIDEMPOTENCY".to_owned(),
+            payload_fingerprint: Some("a".repeat(64)),
             result_code: "activated".to_owned(),
             result_reference: Some("generation_01JIDEMPOTENCY".to_owned()),
             expires_at_ms: 100,
@@ -112,12 +144,15 @@ mod tests {
     }
 
     #[test]
-    fn replays_only_exact_live_request() -> Result<(), Box<dyn std::error::Error>> {
+    fn replay_requires_same_live_command_and_fingerprint() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let same = fingerprint('a')?;
+        let different = fingerprint('b')?;
         assert!(matches!(
             decide_row(
                 row(),
                 "profile_generation.activate",
-                "digest_01JIDEMPOTENCY",
+                &same,
                 UnixMillis::new(99),
             )?,
             IdempotencyDecision::Replay(_)
@@ -126,7 +161,7 @@ mod tests {
             decide_row(
                 row(),
                 "profile_generation.verify",
-                "digest_01JIDEMPOTENCY",
+                &same,
                 UnixMillis::new(99),
             )?,
             IdempotencyDecision::Conflict
@@ -135,7 +170,7 @@ mod tests {
             decide_row(
                 row(),
                 "profile_generation.activate",
-                "digest_other_01JIDEMPOTENCY",
+                &different,
                 UnixMillis::new(99),
             )?,
             IdempotencyDecision::Conflict
@@ -144,8 +179,25 @@ mod tests {
             decide_row(
                 row(),
                 "profile_generation.activate",
-                "digest_01JIDEMPOTENCY",
+                &same,
                 UnixMillis::new(100),
+            )?,
+            IdempotencyDecision::Conflict
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn live_legacy_tombstone_never_replays() -> Result<(), Box<dyn std::error::Error>> {
+        let current = fingerprint('a')?;
+        let mut legacy = row();
+        legacy.payload_fingerprint = None;
+        assert_eq!(
+            decide_row(
+                legacy,
+                "profile_generation.activate",
+                &current,
+                UnixMillis::new(99),
             )?,
             IdempotencyDecision::Conflict
         );

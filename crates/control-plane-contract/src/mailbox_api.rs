@@ -61,21 +61,18 @@ pub struct CreateMailboxBindingRequestDto {
     pub binding_id: String,
     pub provider: String,
     pub secret_handle: String,
-    pub request_digest: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RevokeMailboxBindingRequestDto {
     pub expected_binding_version: u64,
-    pub request_digest: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct BindBrowserMailboxExecutionRequestDto {
     pub profile_id: String,
-    pub request_digest: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -106,14 +103,12 @@ pub struct CreateMailboxJobRequestDto {
     pub cursor: Option<String>,
     pub delay_ms: u64,
     pub max_attempts: u32,
-    pub request_digest: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RunMailboxJobRequestDto {
     pub expected_job_version: u64,
-    pub request_digest: String,
 }
 
 #[must_use]
@@ -139,30 +134,27 @@ pub fn openapi_fragment() -> Value {
                 "CreateMailboxBindingRequestDto": {
                     "type": "object",
                     "additionalProperties": false,
-                    "required": ["bindingId", "provider", "secretHandle", "requestDigest"],
+                    "required": ["bindingId", "provider", "secretHandle"],
                     "properties": {
                         "bindingId": string_schema(),
                         "provider": schema_ref("MailboxProviderDto"),
-                        "secretHandle": string_schema(),
-                        "requestDigest": sha256_schema()
+                        "secretHandle": string_schema()
                     }
                 },
                 "RevokeMailboxBindingRequestDto": {
                     "type": "object",
                     "additionalProperties": false,
-                    "required": ["expectedBindingVersion", "requestDigest"],
+                    "required": ["expectedBindingVersion"],
                     "properties": {
-                        "expectedBindingVersion": positive_version_schema(),
-                        "requestDigest": sha256_schema()
+                        "expectedBindingVersion": positive_version_schema()
                     }
                 },
                 "BindBrowserMailboxExecutionRequestDto": {
                     "type": "object",
                     "additionalProperties": false,
-                    "required": ["profileId", "requestDigest"],
+                    "required": ["profileId"],
                     "properties": {
-                        "profileId": string_schema(),
-                        "requestDigest": sha256_schema()
+                        "profileId": string_schema()
                     }
                 },
                 "BrowserExecutionBindingReceiptDto": {
@@ -193,22 +185,20 @@ pub fn openapi_fragment() -> Value {
                 "CreateMailboxJobRequestDto": {
                     "type": "object",
                     "additionalProperties": false,
-                    "required": ["jobId", "cursor", "delayMs", "maxAttempts", "requestDigest"],
+                    "required": ["jobId", "cursor", "delayMs", "maxAttempts"],
                     "properties": {
                         "jobId": string_schema(),
                         "cursor": nullable_cursor_schema(),
                         "delayMs": {"type": "integer", "minimum": 0, "maximum": 604800000},
-                        "maxAttempts": {"type": "integer", "minimum": 1, "maximum": 10},
-                        "requestDigest": sha256_schema()
+                        "maxAttempts": {"type": "integer", "minimum": 1, "maximum": 10}
                     }
                 },
                 "RunMailboxJobRequestDto": {
                     "type": "object",
                     "additionalProperties": false,
-                    "required": ["expectedJobVersion", "requestDigest"],
+                    "required": ["expectedJobVersion"],
                     "properties": {
-                        "expectedJobVersion": positive_version_schema(),
-                        "requestDigest": sha256_schema()
+                        "expectedJobVersion": positive_version_schema()
                     }
                 }
             }
@@ -250,10 +240,6 @@ fn positive_version_schema() -> Value {
     json!({"type": "integer", "minimum": 1})
 }
 
-fn sha256_schema() -> Value {
-    json!({"type": "string", "pattern": "^[0-9a-f]{64}$"})
-}
-
 #[cfg(test)]
 mod tests {
     use super::{
@@ -264,28 +250,22 @@ mod tests {
     use serde_json::{Value, json};
 
     #[test]
-    fn mailbox_requests_reject_unknown_and_sensitive_fields() {
-        let digest = "a".repeat(64);
-        let valid_binding = format!(
-            r#"{{"bindingId":"mailbox_01JTEST","provider":"IMAP","secretHandle":"secret_01JTEST","requestDigest":"{digest}"}}"#
-        );
-        assert!(serde_json::from_str::<CreateMailboxBindingRequestDto>(&valid_binding).is_ok());
-        for forbidden in ["password", "messageBody"] {
+    fn mailbox_requests_reject_unknown_sensitive_and_legacy_digest_fields() {
+        let valid_binding =
+            r#"{"bindingId":"mailbox_01JTEST","provider":"IMAP","secretHandle":"secret_01JTEST"}"#;
+        assert!(serde_json::from_str::<CreateMailboxBindingRequestDto>(valid_binding).is_ok());
+        for forbidden in ["password", "messageBody", "requestDigest"] {
             let invalid = format!(
-                r#"{{"bindingId":"mailbox_01JTEST","provider":"IMAP","secretHandle":"secret_01JTEST","requestDigest":"{digest}","{forbidden}":"forbidden"}}"#
+                r#"{{"bindingId":"mailbox_01JTEST","provider":"IMAP","secretHandle":"secret_01JTEST","{forbidden}":"forbidden"}}"#
             );
             assert!(serde_json::from_str::<CreateMailboxBindingRequestDto>(&invalid).is_err());
         }
 
-        let browser = format!(
-            r#"{{"profileId":"profile_01JTEST","requestDigest":"{digest}","deviceId":"forbidden"}}"#
-        );
-        assert!(serde_json::from_str::<BindBrowserMailboxExecutionRequestDto>(&browser).is_err());
+        let browser = r#"{"profileId":"profile_01JTEST","requestDigest":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}"#;
+        assert!(serde_json::from_str::<BindBrowserMailboxExecutionRequestDto>(browser).is_err());
 
-        let job = format!(
-            r#"{{"jobId":"mailjob_01JTEST","cursor":null,"delayMs":0,"maxAttempts":3,"requestDigest":"{digest}","messageBody":"forbidden"}}"#
-        );
-        assert!(serde_json::from_str::<CreateMailboxJobRequestDto>(&job).is_err());
+        let job = r#"{"jobId":"mailjob_01JTEST","cursor":null,"delayMs":0,"maxAttempts":3,"requestDigest":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}"#;
+        assert!(serde_json::from_str::<CreateMailboxJobRequestDto>(job).is_err());
     }
 
     #[test]

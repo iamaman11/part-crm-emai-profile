@@ -1,4 +1,4 @@
-import { ApiProblem } from '../api/client';
+import { ApiProblem } from '../api/openapi-runtime';
 
 export function StatusMessage({ state }: { state: unknown }) {
   if (state === null || state === undefined || state === '') return null;

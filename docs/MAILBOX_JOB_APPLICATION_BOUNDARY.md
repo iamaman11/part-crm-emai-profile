@@ -31,9 +31,11 @@ The migrated transport preserves the accepted observable contract:
 2. only a tenant owner may use mailbox job create/get/run; non-owner disclosure remains neutral `not_found`;
 3. malformed binding/job path identifiers remain neutral after actor/owner resolution;
 4. request DTOs deny unknown fields;
-5. `requestDigest` remains exactly 64 lowercase hexadecimal characters;
-6. create keeps `jobId`, `cursor`, `delayMs`, `maxAttempts`, `requestDigest`;
-7. run keeps `expectedJobVersion`, `requestDigest`;
+5. the browser supplies one application-owned `Idempotency-Key` for a logical command; it does not
+   supply a request digest or payload fingerprint;
+6. create keeps `jobId`, `cursor`, `delayMs` and `maxAttempts`; the server derives the internal
+   `PayloadFingerprint` only after typed request decoding;
+7. run keeps `expectedJobVersion`; replay comparison uses that same server-owned fingerprint;
 8. create fresh and exact replay remain HTTP `201`; run fresh and exact replay remain HTTP `200`;
 9. visible job response remains `jobId`, `status`, `attempt`, `maxAttempts`, `nextRunAtMs`, `providerStatus`, `boundedItemCount`, `version`;
 10. message-body, raw credential and secret-handle data are absent from the job read/response model.

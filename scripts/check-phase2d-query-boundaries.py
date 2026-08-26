@@ -228,8 +228,13 @@ def enforce(root: Path) -> None:
             fail(f"fake Bridge mail adapter must not execute device/runtime side effects: {forbidden}")
 
     client_mail_ui = read(root / "frontend" / "src" / "features" / "clients" / "ClientMailPanel.tsx")
-    if "../../shared/api/generated/query-mail" not in client_mail_ui:
-        fail("Client Mail UI must consume the generated Rust-derived query contract")
+    client_mail_api = read(root / "frontend" / "src" / "features" / "clients" / "api.ts")
+    if (
+        "../../shared/api/generated/operations" not in client_mail_api
+        or "searchClientMailOperation" not in client_mail_api
+        or "getClientMailMessageOperation" not in client_mail_api
+    ):
+        fail("Client Mail feature adapter must consume canonical generated query operations")
     for sink in WEB_STORAGE_SINKS:
         if sink.lower() in client_mail_ui.lower():
             fail(f"Client Mail UI must not persist or log query/message data: {sink}")

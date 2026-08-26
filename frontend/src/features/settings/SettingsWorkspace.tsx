@@ -1,28 +1,15 @@
 import { useQuery } from '@tanstack/react-query';
 import { StatusMessage } from '../../shared/ui/StatusMessage';
-
-async function probe(path: string, signal: AbortSignal): Promise<string> {
-  const response = await fetch(path, {
-    method: 'GET',
-    credentials: 'same-origin',
-    cache: 'no-store',
-    signal,
-    headers: { Accept: 'text/plain' },
-  });
-  if (!response.ok) {
-    throw new Error(`Diagnostic probe failed with HTTP ${response.status}`);
-  }
-  return response.text();
-}
+import { getBindingProbe, getHealth } from './api';
 
 export function SettingsWorkspace() {
   const health = useQuery({
     queryKey: ['settings', 'health'],
-    queryFn: ({ signal }) => probe('/api/v1/health', signal),
+    queryFn: ({ signal }) => getHealth(signal),
   });
   const bindings = useQuery({
     queryKey: ['settings', 'bindings'],
-    queryFn: ({ signal }) => probe('/api/v1/bindings', signal),
+    queryFn: ({ signal }) => getBindingProbe(signal),
   });
 
   return (
@@ -39,7 +26,7 @@ export function SettingsWorkspace() {
         <article className="panel">
           <h3>Control-plane health</h3>
           <StatusMessage state={health.error ?? (health.isPending ? 'Checking health…' : null)} />
-          {health.data && <p><code>{health.data}</code></p>}
+          {health.data && <p><code>{health.data.status} ({health.data.contractVersion})</code></p>}
           <button type="button" onClick={() => void health.refetch()} disabled={health.isFetching}>
             Recheck health
           </button>
@@ -47,7 +34,7 @@ export function SettingsWorkspace() {
         <article className="panel">
           <h3>Required bindings</h3>
           <StatusMessage state={bindings.error ?? (bindings.isPending ? 'Checking bindings…' : null)} />
-          {bindings.data && <p><code>{bindings.data}</code></p>}
+          {bindings.data && <p><code>{bindings.data.status} ({bindings.data.contractVersion})</code></p>}
           <button type="button" onClick={() => void bindings.refetch()} disabled={bindings.isFetching}>
             Recheck bindings
           </button>

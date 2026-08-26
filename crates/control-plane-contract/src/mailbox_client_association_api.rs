@@ -1,5 +1,4 @@
 use serde::{Deserialize, Deserializer, Serialize};
-use serde_json::{Value, json};
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -17,7 +16,6 @@ pub struct ChangeMailboxClientAssociationRequestDto {
     #[serde(deserialize_with = "required_nullable_string")]
     pub client_id: Option<String>,
     pub expected_relationship_version: u64,
-    pub request_digest: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -37,170 +35,25 @@ where
     Option::<String>::deserialize(deserializer)
 }
 
-#[must_use]
-pub fn openapi_fragment() -> Value {
-    json!({
-        "paths": {
-            "/api/v1/tenants/{tenantId}/mailboxes/{bindingId}/client-association": {
-                "get": {
-                    "operationId": "getMailboxClientAssociation",
-                    "parameters": path_parameters(),
-                    "responses": {
-                        "200": json_response("Current mailbox Client association metadata", "MailboxClientAssociationProjectionDto"),
-                        "404": problem_response(),
-                        "500": problem_response(),
-                        "503": problem_response()
-                    }
-                },
-                "post": {
-                    "operationId": "changeMailboxClientAssociation",
-                    "parameters": path_parameters(),
-                    "requestBody": {
-                        "required": true,
-                        "content": {
-                            "application/json": {
-                                "schema": schema_ref("ChangeMailboxClientAssociationRequestDto")
-                            }
-                        }
-                    },
-                    "responses": {
-                        "200": json_response("Accepted bind, rebind or unbind result", "MailboxClientAssociationMutationReceiptDto"),
-                        "400": problem_response(),
-                        "404": problem_response(),
-                        "409": problem_response(),
-                        "500": problem_response(),
-                        "503": problem_response()
-                    }
-                }
-            }
-        },
-        "components": {
-            "schemas": {
-                "MailboxClientAssociationProjectionDto": {
-                    "type": "object",
-                    "additionalProperties": false,
-                    "required": ["bindingId", "clientId", "relationshipVersion", "mailboxExecutable", "canManage"],
-                    "properties": {
-                        "bindingId": opaque_id_schema(),
-                        "clientId": nullable_opaque_id_schema(),
-                        "relationshipVersion": relationship_version_schema(),
-                        "mailboxExecutable": {"type": "boolean"},
-                        "canManage": {"type": "boolean"}
-                    }
-                },
-                "ChangeMailboxClientAssociationRequestDto": {
-                    "type": "object",
-                    "additionalProperties": false,
-                    "required": ["clientId", "expectedRelationshipVersion", "requestDigest"],
-                    "properties": {
-                        "clientId": nullable_opaque_id_schema(),
-                        "expectedRelationshipVersion": relationship_version_schema(),
-                        "requestDigest": sha256_schema()
-                    }
-                },
-                "MailboxClientAssociationMutationReceiptDto": {
-                    "type": "object",
-                    "additionalProperties": false,
-                    "required": ["resultCode", "bindingId", "clientId", "relationshipVersion", "replayed"],
-                    "properties": {
-                        "resultCode": {
-                            "type": "string",
-                            "enum": ["bound", "rebound", "unbound"]
-                        },
-                        "bindingId": opaque_id_schema(),
-                        "clientId": nullable_opaque_id_schema(),
-                        "relationshipVersion": relationship_version_schema(),
-                        "replayed": {"type": "boolean"}
-                    }
-                }
-            }
-        }
-    })
-}
-
-fn path_parameters() -> Value {
-    json!([
-        {
-            "name": "tenantId",
-            "in": "path",
-            "required": true,
-            "schema": opaque_id_schema()
-        },
-        {
-            "name": "bindingId",
-            "in": "path",
-            "required": true,
-            "schema": opaque_id_schema()
-        }
-    ])
-}
-
-fn schema_ref(name: &str) -> Value {
-    json!({"$ref": format!("#/components/schemas/{name}")})
-}
-
-fn opaque_id_schema() -> Value {
-    json!({"type": "string", "minLength": 8, "maxLength": 96})
-}
-
-fn nullable_opaque_id_schema() -> Value {
-    json!({
-        "oneOf": [
-            {"type": "string", "minLength": 8, "maxLength": 96},
-            {"type": "null"}
-        ]
-    })
-}
-
-fn relationship_version_schema() -> Value {
-    json!({"type": "integer", "minimum": 0})
-}
-
-fn sha256_schema() -> Value {
-    json!({"type": "string", "pattern": "^[0-9a-f]{64}$"})
-}
-
-fn json_response(description: &str, schema: &str) -> Value {
-    json!({
-        "description": description,
-        "content": {"application/json": {"schema": schema_ref(schema)}}
-    })
-}
-
-fn problem_response() -> Value {
-    json!({
-        "description": "Problem response",
-        "content": {
-            "application/problem+json": {
-                "schema": schema_ref("Problem")
-            }
-        }
-    })
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{
-        ChangeMailboxClientAssociationRequestDto, MailboxClientAssociationProjectionDto,
-        openapi_fragment,
-    };
+    use super::{ChangeMailboxClientAssociationRequestDto, MailboxClientAssociationProjectionDto};
     use serde_json::Value;
 
     #[test]
-    fn association_change_is_strict_nullable_and_contains_no_credential_surface()
+    fn association_change_is_strict_required_nullable_and_rejects_legacy_digest()
     -> Result<(), Box<dyn std::error::Error>> {
-        let digest = "a".repeat(64);
-        let bind = format!(
-            r#"{{"clientId":"client_01JASSOCIATION","expectedRelationshipVersion":0,"requestDigest":"{digest}"}}"#
-        );
-        let unbind = format!(
-            r#"{{"clientId":null,"expectedRelationshipVersion":2,"requestDigest":"{digest}"}}"#
-        );
-        let missing = format!(r#"{{"expectedRelationshipVersion":2,"requestDigest":"{digest}"}}"#);
-        assert!(serde_json::from_str::<ChangeMailboxClientAssociationRequestDto>(&bind).is_ok());
-        assert!(serde_json::from_str::<ChangeMailboxClientAssociationRequestDto>(&unbind).is_ok());
+        let bind = r#"{"clientId":"client_01JASSOCIATION","expectedRelationshipVersion":0}"#;
+        let unbind = r#"{"clientId":null,"expectedRelationshipVersion":2}"#;
+        let missing = r#"{"expectedRelationshipVersion":2}"#;
+        assert!(serde_json::from_str::<ChangeMailboxClientAssociationRequestDto>(bind).is_ok());
+        assert!(serde_json::from_str::<ChangeMailboxClientAssociationRequestDto>(unbind).is_ok());
+        assert!(serde_json::from_str::<ChangeMailboxClientAssociationRequestDto>(missing).is_err());
+
+        let legacy_digest = r#"{"clientId":null,"expectedRelationshipVersion":2,"requestDigest":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}"#;
         assert!(
-            serde_json::from_str::<ChangeMailboxClientAssociationRequestDto>(&missing).is_err()
+            serde_json::from_str::<ChangeMailboxClientAssociationRequestDto>(legacy_digest)
+                .is_err()
         );
         for forbidden in [
             "secretHandle",
@@ -210,7 +63,7 @@ mod tests {
             "profileId",
         ] {
             let invalid = format!(
-                r#"{{"clientId":null,"expectedRelationshipVersion":2,"requestDigest":"{digest}","{forbidden}":"forbidden"}}"#
+                r#"{{"clientId":null,"expectedRelationshipVersion":2,"{forbidden}":"forbidden"}}"#
             );
             assert!(
                 serde_json::from_str::<ChangeMailboxClientAssociationRequestDto>(&invalid).is_err()
@@ -233,21 +86,5 @@ mod tests {
         assert!(value.get("clientId").is_some_and(Value::is_null));
         assert_eq!(value["canManage"], true);
         Ok(())
-    }
-
-    #[test]
-    fn public_fragment_is_one_resource_with_get_and_unified_change_command() {
-        let document = openapi_fragment();
-        let resource = &document["paths"]["/api/v1/tenants/{tenantId}/mailboxes/{bindingId}/client-association"];
-        assert_eq!(
-            resource["get"]["operationId"],
-            "getMailboxClientAssociation"
-        );
-        assert_eq!(
-            resource["post"]["operationId"],
-            "changeMailboxClientAssociation"
-        );
-        assert!(resource.get("put").is_none());
-        assert!(resource.get("delete").is_none());
     }
 }

@@ -1,9 +1,9 @@
-import { useMutation } from '@tanstack/react-query';
 import { useEffect, useState } from 'react';
 import { setClientGrant } from './api';
 import type { ClientProjection } from './api';
 import { ConfirmAction } from '../../shared/ui/ConfirmAction';
 import { StatusMessage } from '../../shared/ui/StatusMessage';
+import { useLogicalCommandMutation } from '../../shared/ui/useLogicalCommandMutation';
 
 type ClientGrantInput = {
   actorId: string;
@@ -31,8 +31,7 @@ export function ClientGrantPanel({
     setInput((current) => ({ ...current, expectedClientVersion: client.version }));
   }, [client.version]);
 
-  const apply = useMutation({
-    mutationFn: (value: ClientGrantInput) => setClientGrant(
+  const apply = useLogicalCommandMutation((value: ClientGrantInput, idempotencyKey) => setClientGrant(
       tenantId,
       client.clientId,
       value.actorId,
@@ -41,12 +40,10 @@ export function ClientGrantPanel({
         reason: value.reason,
         expectedClientVersion: value.expectedClientVersion,
       },
+      idempotencyKey,
       false,
-    ),
-    onSuccess: onMutated,
-  });
-  const revoke = useMutation({
-    mutationFn: (value: ClientGrantInput) => setClientGrant(
+    ), { onSuccess: onMutated });
+  const revoke = useLogicalCommandMutation((value: ClientGrantInput, idempotencyKey) => setClientGrant(
       tenantId,
       client.clientId,
       value.actorId,
@@ -55,10 +52,9 @@ export function ClientGrantPanel({
         reason: value.reason,
         expectedClientVersion: value.expectedClientVersion,
       },
+      idempotencyKey,
       true,
-    ),
-    onSuccess: onMutated,
-  });
+    ), { onSuccess: onMutated });
 
   const disabled = client.status === 'MERGED';
   return (

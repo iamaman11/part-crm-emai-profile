@@ -1,6 +1,7 @@
-# PAS-2/TC-1 — Executable Frontend Transport Contract Closure
+# PAS-2/TC-2 — Executable Frontend Transport Contract Closure
 
 **Document status:** BOUNDED_EXECUTION_CONTRACT  
+**Transaction B status:** Ready candidate in PR #490; completion is asserted only after protected merge and post-merge exact-head verification.
 **Program authority:** `docs/ARCHITECTURE_REBASELINE_V3_PLAN.md`  
 **Product scenario:** PAS-2 — Client and browser-profile workflow  
 **Architecture contracts:** `docs/APPLICATION_ARCHITECTURE_MANDATORY_REQUIREMENTS.md`, `docs/ARCHITECTURE_EVOLUTION_QUALITY_CONTRACT.md`  
@@ -8,7 +9,7 @@
 **Production authorization:** NONE  
 **FC-6 execution:** NOT AUTHORIZED BY THIS CONTRACT
 
-PAS-2/TC-1 fixes one demonstrated transport-contract boundary. It is not a generic SDK program, a
+PAS-2/TC-2 fixes one demonstrated transport-contract boundary. It is not a generic SDK program, a
 frontend rewrite permission, a production rollout, or authority to redesign unrelated Cloudflare,
 Profile Bridge, Camoufox, mailbox or `opsctl` architecture.
 
@@ -112,7 +113,7 @@ fresh accepted-main re-baseline
 -> only a separate explicit instruction may start FC-6
 ```
 
-### 4.1 Transaction A — current PR
+### 4.1 Transaction A — accepted predecessor
 
 Transaction A must:
 
@@ -136,7 +137,7 @@ Historical Release Set assets remain immutable exact bytes. `contracts/baseline/
 compatibility evidence. Neither category requires retaining obsolete executable checkers or generated
 projections in current architecture.
 
-### 4.2 Transaction B — atomic full-stack cutover
+### 4.2 Transaction B — current Draft PR #490
 
 Transaction B is accepted only as one complete vertical change:
 

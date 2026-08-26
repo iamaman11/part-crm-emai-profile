@@ -406,7 +406,7 @@ PF-3 owns fitness semantics in typed Rust `FitnessRuleRegistry` or equivalent. A
 
 **PF-3 acceptance is a provisional machine-enforced fitness baseline.** It does not authorize production, does not set `architecture_complete=true`, and does not claim that the architecture has survived real staging/recovery/Windows delivery. After PF-3, new generic layers, global authority frameworks, duplicate lifecycle engines, generic compatibility frameworks and open-ended redesign buckets are forbidden.
 
-The demonstrated PAS-2 frontend transport-contract failure authorizes only PAS-2/TC-1 before FC-6.
+The demonstrated PAS-2 frontend transport-contract failure authorizes only PAS-2/TC-2 before FC-6.
 FC-6 through AR-15 may otherwise make only the smallest
 correction required by a failed product acceptance scenario or rehearsal. Every correction names the
 failed scenario, preserves single ownership, updates the relevant specialized enforcement/negative
@@ -417,7 +417,7 @@ freeze point. AR-16 remains audit-only and AR-17 qualification/authorization-onl
 Post-PF-3 roles are fixed:
 
 ```text
-PAS-2/TC-1         bounded executable frontend transport-contract correction only
+PAS-2/TC-2         bounded executable frontend transport-contract correction only
 FC-6 / FC-7     functional closure/staging proof; bounded scenario-driven correction only
 AR-12..AR-15    rehearsal/delivery; bounded scenario-driven correction only
 AR-16           audit only

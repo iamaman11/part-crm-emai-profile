@@ -1,13 +1,13 @@
 import { useMutation } from '@tanstack/react-query';
 import { useState, type FormEvent } from 'react';
-import { newIdempotencyKey } from '../../shared/api/client';
 import type {
   ClientMailSendOperationDto,
   ClientMailSendReceiptDto,
   ClientMailSendRequestDto,
-} from '../../shared/api/generated/client-mail-send';
-import type { OperatorMailboxProvider } from '../../shared/api/generated/operator-query';
-import type { MailMessageBodyDto } from '../../shared/api/generated/query-mail';
+  MailMessageBodyDto,
+  OperatorMailboxProvider,
+} from '../../shared/api/generated/operations';
+import { newIdempotencyKey } from '../../shared/api/idempotency';
 import { StatusMessage } from '../../shared/ui/StatusMessage';
 import { sendClientMail } from './api';
 

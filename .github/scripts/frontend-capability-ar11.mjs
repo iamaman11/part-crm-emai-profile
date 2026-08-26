@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const files = {
   capabilityContext: 'frontend/src/app/CapabilityContext.tsx',
+  sessionApi: 'frontend/src/features/session/api.ts',
   router: 'frontend/src/app/router.tsx',
   clientsWorkspace: 'frontend/src/features/clients/ClientsWorkspace.tsx',
   clientMail: 'frontend/src/features/clients/ClientMailPanel.tsx',
@@ -22,6 +23,7 @@ function fail(message) {
 }
 
 const context = read(files.capabilityContext);
+const sessionApi = read(files.sessionApi);
 const router = read(files.router);
 const workspace = read(files.clientsWorkspace);
 const clientMail = read(files.clientMail);
@@ -30,13 +32,21 @@ const workerGate = read(files.workerGate);
 const worker = read(files.worker);
 
 for (const marker of [
-  "response.headers.get('x-release-profile')",
-  "response.headers.get('x-release-profile-digest')",
-  "response.headers.get('x-effective-capabilities')",
-  "KNOWN_ACTIVATION_UNITS",
-  "Capability projection headers are missing",
+  "import { getSession, type ActivationUnit } from '../features/session/api'",
+  'const session = await getSession(tenantId, controller.signal);',
+  'new Set<ActivationUnit>(session.capabilities)',
+  'setProfileId(session.profileId);',
+  'setProfileDigest(session.profileDigest);',
 ]) {
   if (!context.includes(marker)) fail(`frontend session projection marker missing: ${marker}`);
+}
+
+for (const marker of [
+  "getAuthenticatedSession as getSessionOperation",
+  'return getSessionOperation({',
+  '...(signal === undefined ? {} : { signal })',
+]) {
+  if (!sessionApi.includes(marker)) fail(`generated session operation marker missing: ${marker}`);
 }
 
 if (!main.includes('<CapabilityProvider>') || !main.includes('<TenantProvider>')) {
@@ -62,12 +72,9 @@ for (const marker of [
 }
 
 for (const marker of [
-  'X-Release-Profile',
-  'X-Release-Profile-Digest',
-  'X-Effective-Capabilities',
   'ProfileSelectionError::ProductionNotAuthorized',
 ]) {
-  if (!workerGate.includes(marker)) fail(`backend projection/fail-closed marker missing: ${marker}`);
+  if (!workerGate.includes(marker)) fail(`backend fail-closed marker missing: ${marker}`);
 }
 if (!worker.includes('capability_session_response') || !worker.includes('capability_gate::route_enabled')) {
   fail('backend session projection or pre-dispatch security gate is missing');

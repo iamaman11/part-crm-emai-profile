@@ -14,7 +14,7 @@ import {
   setProfileGrant,
   verifyGeneration,
 } from './api';
-import { newIdempotencyKey } from '../../shared/api/client';
+import { useLogicalCommandMutation } from '../../shared/ui/useLogicalCommandMutation';
 import type { CoordinatorResponse, GenerationProjection, ProfileProjection } from './api';
 import { ConfirmAction } from '../../shared/ui/ConfirmAction';
 import { StatusMessage } from '../../shared/ui/StatusMessage';
@@ -48,63 +48,57 @@ export function ProfilesWorkspace({
     mutationFn: (id: string) => getProfile(tenantId, id),
     onSuccess: (data) => setProfile(data ?? null),
   });
-  const create = useMutation({
-    mutationFn: (id: string) => createProfile(tenantId, id),
+  const create = useLogicalCommandMutation((id: string, idempotencyKey) => createProfile(tenantId, id, idempotencyKey), {
     onSuccess: (receipt) => {
       if (receipt?.resourceId) onProfileSelected(receipt.resourceId);
     },
   });
-  const assign = useMutation({
-    mutationFn: (input: { assignmentId: string; clientId: string; reason: string; expectedProfileVersion: number }) =>
-      assignProfile(tenantId, profileId, input),
+  const assign = useLogicalCommandMutation((input: { assignmentId: string; clientId: string; reason: string; expectedProfileVersion: number }, idempotencyKey) =>
+      assignProfile(tenantId, profileId, input, idempotencyKey), {
   });
-  const grant = useMutation({
-    mutationFn: (input: GrantDraft & { revoke: boolean }) => setProfileGrant(
+  const grant = useLogicalCommandMutation((input: GrantDraft & { revoke: boolean }, idempotencyKey) => setProfileGrant(
       tenantId,
       profileId,
       input.actorId,
       { role: input.role, reason: input.reason, expectedProfileVersion: input.expectedProfileVersion },
+      idempotencyKey,
       input.revoke,
-    ),
-  });
+    ), {});
   const generationLookup = useMutation({
     mutationFn: (id: string) => getGeneration(tenantId, profileId, id),
     onSuccess: (data) => setGeneration(data ?? null),
   });
-  const generationRegister = useMutation({
-    mutationFn: (input: { generationId: string; objectKey: string; metadataDigest: string; containerDigest: string }) => registerGeneration(tenantId, profileId, input),
-  });
-  const generationAction = useMutation({
-    mutationFn: (input:
+  const generationRegister = useLogicalCommandMutation((input: { generationId: string; objectKey: string; metadataDigest: string; containerDigest: string }, idempotencyKey) =>
+    registerGeneration(tenantId, profileId, input, idempotencyKey));
+  const generationAction = useLogicalCommandMutation((input:
       | { kind: 'verify'; expectedVersion: number; reference: string }
       | { kind: 'activate' | 'deactivate'; expectedVersion: number }
-      | { kind: 'quarantine'; expectedVersion: number }) => {
+      | { kind: 'quarantine'; expectedVersion: number }, idempotencyKey) => {
       if (input.kind === 'verify') {
         return verifyGeneration(tenantId, profileId, generationId, {
           expectedGenerationVersion: input.expectedVersion,
           verificationReference: input.reference,
-        });
+        }, idempotencyKey);
       }
       if (input.kind === 'quarantine') {
-        return quarantineGeneration(tenantId, profileId, generationId, input.expectedVersion);
+        return quarantineGeneration(tenantId, profileId, generationId, input.expectedVersion, idempotencyKey);
       }
-      return changeGenerationActivation(tenantId, profileId, generationId, input.expectedVersion, input.kind === 'activate');
+      return changeGenerationActivation(tenantId, profileId, generationId, input.expectedVersion, input.kind === 'activate', idempotencyKey);
     },
-  });
+  );
   const coordinatorLookup = useMutation({
     mutationFn: () => getCoordinator(tenantId, profileId),
     onSuccess: (data) => setCoordinator(data ?? null),
   });
-  const coordinatorCommand = useMutation({
-    mutationFn: (command: import('./api').CoordinatorCommandDto) => {
+  const coordinatorCommand = useLogicalCommandMutation((command: import('./api').CoordinatorCommandDto, idempotencyKey) => {
       if (!coordinator) throw new Error('Load the coordinator snapshot before issuing a command.');
       return commandCoordinator(tenantId, profileId, {
-        idempotency_key: newIdempotencyKey(),
+        idempotency_key: idempotencyKey,
         sequence: coordinator.sequence + 1,
         expected_version: coordinator.version,
         command,
       });
-    },
+    }, {
     onSuccess: (data) => setCoordinator(data ?? null),
   });
 

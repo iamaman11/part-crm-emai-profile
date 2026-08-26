@@ -87,11 +87,11 @@ async fn create_binding(
         Ok(value) => value,
         Err(_) => return invalid_request(actor.correlation_id().as_str()),
     };
-    let binding_id = match MailboxBindingId::parse(body.binding_id) {
+    let binding_id = match MailboxBindingId::parse(body.binding_id.clone()) {
         Ok(value) => value,
         Err(_) => return invalid_request(actor.correlation_id().as_str()),
     };
-    let secret_handle = match SecretHandle::parse(body.secret_handle) {
+    let secret_handle = match SecretHandle::parse(body.secret_handle.clone()) {
         Ok(value) => value,
         Err(_) => return invalid_request(actor.correlation_id().as_str()),
     };
@@ -99,10 +99,7 @@ async fn create_binding(
         Ok(value) => value,
         Err(_) => return invalid_request(actor.correlation_id().as_str()),
     };
-    if !valid_digest(&body.request_digest) {
-        return invalid_request(actor.correlation_id().as_str());
-    }
-    let evidence = match command_evidence::from_request(request, actor, body.request_digest) {
+    let evidence = match command_evidence::from_request(request, actor, &body) {
         Ok(value) => value,
         Err(_) => return invalid_request(actor.correlation_id().as_str()),
     };
@@ -151,10 +148,7 @@ async fn revoke_binding(
         Ok(value) => value,
         Err(_) => return invalid_request(actor.correlation_id().as_str()),
     };
-    if !valid_digest(&body.request_digest) {
-        return invalid_request(actor.correlation_id().as_str());
-    }
-    let evidence = match command_evidence::from_request(request, actor, body.request_digest) {
+    let evidence = match command_evidence::from_request(request, actor, &body) {
         Ok(value) => value,
         Err(_) => return invalid_request(actor.correlation_id().as_str()),
     };
@@ -186,14 +180,11 @@ async fn bind_browser_execution(
         Ok(value) => value,
         Err(_) => return invalid_request(actor.correlation_id().as_str()),
     };
-    let profile_id = match ProfileId::parse(body.profile_id) {
+    let profile_id = match ProfileId::parse(body.profile_id.clone()) {
         Ok(value) => value,
         Err(_) => return invalid_request(actor.correlation_id().as_str()),
     };
-    if !valid_digest(&body.request_digest) {
-        return invalid_request(actor.correlation_id().as_str());
-    }
-    let evidence = match command_evidence::from_request(request, actor, body.request_digest) {
+    let evidence = match command_evidence::from_request(request, actor, &body) {
         Ok(value) => value,
         Err(_) => return invalid_request(actor.correlation_id().as_str()),
     };
@@ -248,13 +239,6 @@ fn invalid_request(correlation_id: &str) -> Result<Response> {
     problem(correlation_id, 400, "invalid_request", "Invalid Request")
 }
 
-fn valid_digest(value: &str) -> bool {
-    value.len() == 64
-        && value
-            .bytes()
-            .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
-}
-
 fn mutation_receipt(outcome: &MailboxBindingMutationOutcome, status: u16) -> Result<Response> {
     Response::from_json(&MutationReceipt {
         result_code: outcome.result_code().to_owned(),
@@ -303,7 +287,7 @@ const fn mailbox_binding_status(status: MailboxBindingStatus) -> MailboxBindingS
 // Canonical Mailbox request DTOs own deny_unknown_fields; transport tests below prove the behavior.
 #[cfg(test)]
 mod tests {
-    use super::{mailbox_binding_status, mailbox_provider, valid_digest};
+    use super::{mailbox_binding_status, mailbox_provider};
     use application_ports::mailboxes::{MailboxBindingStatus, MailboxProvider};
     use control_plane_contract::{
         mailbox_api::{
@@ -314,40 +298,21 @@ mod tests {
     };
 
     #[test]
-    fn binding_transport_uses_canonical_strict_request_and_preserves_provider_error_sequencing()
+    fn binding_transport_is_strict_and_preserves_provider_validation_sequencing()
     -> Result<(), Box<dyn std::error::Error>> {
-        let digest = "a".repeat(64);
-        let valid = format!(
-            r#"{{"bindingId":"mailbox_01JTRANSPORT","provider":"IMAP","secretHandle":"secret_01JTRANSPORT","requestDigest":"{digest}"}}"#
-        );
-        assert!(serde_json::from_str::<CreateMailboxBindingRequestDto>(&valid).is_ok());
+        let valid = r#"{"bindingId":"mailbox_01JTRANSPORT","provider":"IMAP","secretHandle":"secret_01JTRANSPORT"}"#;
+        assert!(serde_json::from_str::<CreateMailboxBindingRequestDto>(valid).is_ok());
+        for forbidden in ["password", "messageBody", "requestDigest"] {
+            let invalid = format!(
+                r#"{{"bindingId":"mailbox_01JTRANSPORT","provider":"IMAP","secretHandle":"secret_01JTRANSPORT","{forbidden}":"forbidden"}}"#
+            );
+            assert!(serde_json::from_str::<CreateMailboxBindingRequestDto>(&invalid).is_err());
+        }
+        let unknown_provider = r#"{"bindingId":"mailbox_01JTRANSPORT","provider":"UNKNOWN","secretHandle":"secret_01JTRANSPORT"}"#;
         assert!(
-            serde_json::from_str::<CreateMailboxBindingRequestDto>(
-                &format!(
-                    r#"{{"bindingId":"mailbox_01JTRANSPORT","provider":"IMAP","secretHandle":"secret_01JTRANSPORT","requestDigest":"{digest}","password":"forbidden"}}"#
-                )
-            )
-            .is_err()
-        );
-        assert!(
-            serde_json::from_str::<CreateMailboxBindingRequestDto>(
-                &format!(
-                    r#"{{"bindingId":"mailbox_01JTRANSPORT","provider":"IMAP","secretHandle":"secret_01JTRANSPORT","requestDigest":"{digest}","messageBody":"forbidden"}}"#
-                )
-            )
-            .is_err()
-        );
-        let unknown_provider = format!(
-            r#"{{"bindingId":"mailbox_01JTRANSPORT","provider":"UNKNOWN","secretHandle":"secret_01JTRANSPORT","requestDigest":"{digest}"}}"#
-        );
-        assert!(
-            serde_json::from_str::<CreateMailboxBindingRequestDto>(&unknown_provider).is_ok(),
+            serde_json::from_str::<CreateMailboxBindingRequestDto>(unknown_provider).is_ok(),
             "provider validation must remain at the Worker/domain boundary"
         );
-
-        assert!(valid_digest(&digest));
-        assert!(!valid_digest(&"A".repeat(64)));
-        assert!(!valid_digest(&"a".repeat(63)));
 
         let mutation = serde_json::to_value(MutationReceipt {
             result_code: "created".to_owned(),
@@ -385,19 +350,18 @@ mod tests {
     #[test]
     fn browser_execution_binding_transport_is_metadata_only_and_strict()
     -> Result<(), Box<dyn std::error::Error>> {
-        let digest = "b".repeat(64);
-        let valid = format!(r#"{{"profileId":"profile_01JTRANSPORT","requestDigest":"{digest}"}}"#);
-        assert!(serde_json::from_str::<BindBrowserMailboxExecutionRequestDto>(&valid).is_ok());
+        let valid = r#"{"profileId":"profile_01JTRANSPORT"}"#;
+        assert!(serde_json::from_str::<BindBrowserMailboxExecutionRequestDto>(valid).is_ok());
         for forbidden in [
             "deviceId",
             "generationId",
             "query",
             "messageBody",
             "secretHandle",
+            "requestDigest",
         ] {
-            let invalid = format!(
-                r#"{{"profileId":"profile_01JTRANSPORT","requestDigest":"{digest}","{forbidden}":"forbidden"}}"#
-            );
+            let invalid =
+                format!(r#"{{"profileId":"profile_01JTRANSPORT","{forbidden}":"forbidden"}}"#);
             assert!(
                 serde_json::from_str::<BindBrowserMailboxExecutionRequestDto>(&invalid).is_err()
             );

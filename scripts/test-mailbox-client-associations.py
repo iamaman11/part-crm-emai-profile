@@ -31,6 +31,7 @@ MAILBOX_BROWSER = "mailbox_B_browser"
 MAILBOX_REVOKED = "mailbox_B_revoked"
 NOW = 1000
 EXPIRES = 5000
+PAYLOAD_FINGERPRINT = "0123456789abcdef" * 4
 
 
 def raw_const(source: str, name: str) -> str:
@@ -203,7 +204,7 @@ def change(
             OWNER,
             f"idem_assoc_{suffix}",
             "mailbox.client_association_change",
-            f"digest_assoc_{suffix}_0123456789abcdef",
+            PAYLOAD_FINGERPRINT,
             result,
             binding,
             at,
@@ -508,7 +509,7 @@ def assert_late_evidence_failure_rolls_back(sql: dict[str, str]) -> None:
                     OWNER,
                     "idem_assoc_late",
                     "mailbox.client_association_change",
-                    "digest_assoc_late_0123456789abcdef",
+                    PAYLOAD_FINGERPRINT,
                     "bound",
                     MAILBOX_A,
                     1500,

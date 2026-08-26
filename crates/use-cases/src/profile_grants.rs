@@ -264,8 +264,8 @@ fn map_port_error(error: ProfileGrantPortError) -> ProfileGrantOperationError {
 mod tests {
     use super::*;
     use profile_platform_primitives::{
-        AuditEventId, CorrelationId, IdempotencyKey, OutboxEventId, TenantId, TenantScope,
-        UnixMillis,
+        AuditEventId, CorrelationId, IdempotencyKey, OutboxEventId, PayloadFingerprint, TenantId,
+        TenantScope, UnixMillis,
     };
     use std::cell::{Cell, RefCell};
     use std::future::Future;
@@ -360,7 +360,7 @@ mod tests {
     fn evidence() -> Result<CommandExecutionEvidence, Box<dyn std::error::Error>> {
         Ok(CommandExecutionEvidence::new(
             IdempotencyKey::parse("idem_01JGRANTAPP")?,
-            "request-digest-01JGRANTAPP",
+            PayloadFingerprint::parse("a".repeat(64))?,
             AuditEventId::parse("audit_01JGRANTAPP")?,
             OutboxEventId::parse("outbox_01JGRANTAPP")?,
             UnixMillis::new(10),

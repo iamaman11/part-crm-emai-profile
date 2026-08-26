@@ -17,14 +17,11 @@ use control_plane_contract::client_mail_send_api::{
     ClientMailSendReceiptDto, ClientMailSendRequestDto, ClientMailSendStateDto,
 };
 use profile_platform_primitives::ClientId;
-use sha2::{Digest, Sha256};
 use use_cases_mailboxes::outbound_mail::{
     OutboundMailOperationError, OutboundMailOutcome, execute_outbound_mail,
 };
 use use_cases_query::QueryApplicationError;
 use worker::{Env, Request, Response, Result};
-
-const HEX: &[u8; 16] = b"0123456789abcdef";
 
 pub async fn dispatch(request: &mut Request, env: &Env) -> Result<Response> {
     let path = request.path();
@@ -84,11 +81,7 @@ pub async fn dispatch(request: &mut Request, env: &Env) -> Result<Response> {
         }
     }
 
-    let digest = match request_digest(&body) {
-        Ok(value) => value,
-        Err(()) => return invalid_request(actor.actor().correlation_id().as_str()),
-    };
-    let evidence = match command_evidence::from_request(request, actor.actor(), digest) {
+    let evidence = match command_evidence::from_request(request, actor.actor(), &body) {
         Ok(value) => value,
         Err(_) => return invalid_request(actor.actor().correlation_id().as_str()),
     };
@@ -111,21 +104,6 @@ pub async fn dispatch(request: &mut Request, env: &Env) -> Result<Response> {
         Ok(outcome) => receipt(&outcome),
         Err(error) => operation_failure(actor.actor().correlation_id().as_str(), error),
     }
-}
-
-fn request_digest(body: &ClientMailSendRequestDto) -> Result<String, ()> {
-    let bytes = serde_json::to_vec(body).map_err(|_| ())?;
-    Ok(hex_digest(&bytes))
-}
-
-fn hex_digest(bytes: &[u8]) -> String {
-    let digest = Sha256::digest(bytes);
-    let mut output = String::with_capacity(digest.len() * 2);
-    for byte in digest {
-        output.push(char::from(HEX[usize::from(byte >> 4)]));
-        output.push(char::from(HEX[usize::from(byte & 0x0f)]));
-    }
-    output
 }
 
 fn receipt(outcome: &OutboundMailOutcome) -> Result<Response> {
@@ -217,17 +195,7 @@ fn invalid_request(correlation_id: &str) -> Result<Response> {
 
 #[cfg(test)]
 mod tests {
-    use super::hex_digest;
     use application_ports::outbound_mail::OutboundMailProviderOutcome;
-
-    #[test]
-    fn digest_is_stable_and_content_is_not_retained() {
-        let first = hex_digest(b"same input");
-        let second = hex_digest(b"same input");
-        assert_eq!(first, second);
-        assert_eq!(first.len(), 64);
-        assert!(!first.contains("same input"));
-    }
 
     #[test]
     fn provider_outcome_import_remains_provider_neutral() {

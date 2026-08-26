@@ -86,14 +86,11 @@ async fn create_job(
     ) {
         return operation_failure(actor.correlation_id().as_str(), error);
     }
-    let job_id = match MailboxJobId::parse(body.job_id) {
+    let job_id = match MailboxJobId::parse(body.job_id.clone()) {
         Ok(value) => value,
         Err(_) => return invalid_request(actor.correlation_id().as_str()),
     };
-    if !valid_digest(&body.request_digest) {
-        return invalid_request(actor.correlation_id().as_str());
-    }
-    let evidence = match command_evidence::from_request(request, actor, body.request_digest) {
+    let evidence = match command_evidence::from_request(request, actor, &body) {
         Ok(value) => value,
         Err(_) => return invalid_request(actor.correlation_id().as_str()),
     };
@@ -154,10 +151,7 @@ async fn run_job(
     if let Err(error) = validate_mailbox_job_run_version(expected_version) {
         return operation_failure(actor.correlation_id().as_str(), error);
     }
-    if !valid_digest(&body.request_digest) {
-        return invalid_request(actor.correlation_id().as_str());
-    }
-    let evidence = match command_evidence::from_request(request, actor, body.request_digest) {
+    let evidence = match command_evidence::from_request(request, actor, &body) {
         Ok(value) => value,
         Err(_) => return invalid_request(actor.correlation_id().as_str()),
     };
@@ -212,13 +206,6 @@ fn invalid_request(correlation_id: &str) -> Result<Response> {
     problem(correlation_id, 400, "invalid_request", "Invalid Request")
 }
 
-fn valid_digest(value: &str) -> bool {
-    value.len() == 64
-        && value
-            .bytes()
-            .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
-}
-
 fn mailbox_job_projection(job: &MailboxJobDetails) -> MailboxJobProjectionDto {
     MailboxJobProjectionDto {
         job_id: job.job_id().as_str().to_owned(),
@@ -256,7 +243,7 @@ fn mutation_receipt(outcome: &MailboxJobMutationOutcome, status: u16) -> Result<
 
 #[cfg(test)]
 mod tests {
-    use super::{mailbox_job_status, valid_digest};
+    use super::mailbox_job_status;
     use application_ports::mailbox_jobs::MailboxJobStatus;
     use control_plane_contract::{
         mailbox_api::{CreateMailboxJobRequestDto, MailboxJobProjectionDto},
@@ -266,26 +253,19 @@ mod tests {
     #[test]
     fn mailbox_job_transport_uses_canonical_shape_and_keeps_domain_validation_order()
     -> Result<(), Box<dyn std::error::Error>> {
-        let digest = "a".repeat(64);
-        let valid = format!(
-            r#"{{"jobId":"mailjob_01JTEST","cursor":null,"delayMs":0,"maxAttempts":3,"requestDigest":"{digest}"}}"#
-        );
-        assert!(serde_json::from_str::<CreateMailboxJobRequestDto>(&valid).is_ok());
-        let unknown = format!(
-            r#"{{"jobId":"mailjob_01JTEST","cursor":null,"delayMs":0,"maxAttempts":3,"requestDigest":"{digest}","messageBody":"forbidden"}}"#
-        );
-        assert!(serde_json::from_str::<CreateMailboxJobRequestDto>(&unknown).is_err());
-        let domain_invalid_but_transport_valid = format!(
-            r#"{{"jobId":"mailjob_01JTEST","cursor":null,"delayMs":604800001,"maxAttempts":3,"requestDigest":"{digest}"}}"#
-        );
+        let valid = r#"{"jobId":"mailjob_01JTEST","cursor":null,"delayMs":0,"maxAttempts":3}"#;
+        assert!(serde_json::from_str::<CreateMailboxJobRequestDto>(valid).is_ok());
+        let unknown = r#"{"jobId":"mailjob_01JTEST","cursor":null,"delayMs":0,"maxAttempts":3,"messageBody":"forbidden"}"#;
+        assert!(serde_json::from_str::<CreateMailboxJobRequestDto>(unknown).is_err());
+        let legacy_digest = r#"{"jobId":"mailjob_01JTEST","cursor":null,"delayMs":0,"maxAttempts":3,"requestDigest":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}"#;
+        assert!(serde_json::from_str::<CreateMailboxJobRequestDto>(legacy_digest).is_err());
+        let domain_invalid_but_transport_valid =
+            r#"{"jobId":"mailjob_01JTEST","cursor":null,"delayMs":604800001,"maxAttempts":3}"#;
         assert!(
-            serde_json::from_str::<CreateMailboxJobRequestDto>(&domain_invalid_but_transport_valid)
+            serde_json::from_str::<CreateMailboxJobRequestDto>(domain_invalid_but_transport_valid)
                 .is_ok(),
             "job bounds must remain enforced by existing Worker/use-case validation sequencing"
         );
-        assert!(valid_digest(&digest));
-        assert!(!valid_digest(&"A".repeat(64)));
-        assert!(!valid_digest(&"a".repeat(63)));
 
         let receipt = serde_json::to_value(MutationReceipt {
             result_code: "created".to_owned(),

@@ -1,83 +1,115 @@
-import { requestJson } from '../../shared/api/client';
-import { mutate, segment } from '../../shared/api/endpoint';
-import type {
-  ClientCreateRequest,
-  ClientGrantRequest,
-  ClientProjection,
-  MutationReceipt,
-} from '../../shared/api/generated/control-plane';
+import {
+  archiveClient as archiveClientOperation,
+  archiveClientContact as archiveClientContactOperation,
+  createClient as createClientOperation,
+  getClient as getClientOperation,
+  getClientHistory as getClientHistoryOperation,
+  getClientMailMessage as getClientMailMessageOperation,
+  grantClientAccess as grantClientAccessOperation,
+  listClients as listClientsOperation,
+  mergeClient as mergeClientOperation,
+  revokeClientAccess as revokeClientAccessOperation,
+  searchClientMail as searchClientMailOperation,
+  sendClientMail as sendClientMailOperation,
+  updateClient as updateClientOperation,
+  upsertClientContact as upsertClientContactOperation,
+} from '../../shared/api/generated/operations';
 import type {
   ClientArchiveRequest,
   ClientContactArchiveRequest,
   ClientContactUpsertRequest,
+  ClientCreateRequest,
+  ClientGrantRequest,
   ClientHistoryProjection,
   ClientListProjection,
-  ClientMergeRequest,
-  ClientUpdateRequest,
-} from '../../shared/api/generated/client-registry';
-import type {
+  ClientMailSearchInput,
   ClientMailSendReceiptDto,
   ClientMailSendRequestDto,
-} from '../../shared/api/generated/client-mail-send';
-import type {
-  ClientMailSearchInput,
+  ClientMergeRequest,
+  ClientUpdateRequest,
+  ClientView,
   MailMessageBodyDto,
   MailMessageSearchPageDto,
   MailboxMessageReferenceDto,
-} from '../../shared/api/generated/query-mail';
+  MutationReceipt,
+} from '../../shared/api/generated/operations';
 
-export type CreateClientInput = Omit<ClientCreateRequest, 'requestDigest'>;
-export type SetClientGrantInput = Omit<ClientGrantRequest, 'requestDigest'>;
-export type UpdateClientInput = Omit<ClientUpdateRequest, 'requestDigest'>;
-export type ArchiveClientInput = Omit<ClientArchiveRequest, 'requestDigest'>;
-export type UpsertClientContactInput = Omit<ClientContactUpsertRequest, 'requestDigest'>;
-export type ArchiveClientContactInput = Omit<ClientContactArchiveRequest, 'requestDigest'>;
-export type MergeClientInput = Omit<ClientMergeRequest, 'requestDigest'>;
-export type { ClientProjection } from '../../shared/api/generated/control-plane';
-export type { ClientHistoryProjection, ClientListProjection } from '../../shared/api/generated/client-registry';
+export type CreateClientInput = ClientCreateRequest;
+export type SetClientGrantInput = ClientGrantRequest;
+export type UpdateClientInput = ClientUpdateRequest;
+export type ArchiveClientInput = ClientArchiveRequest;
+export type UpsertClientContactInput = ClientContactUpsertRequest;
+export type ArchiveClientContactInput = ClientContactArchiveRequest;
+export type MergeClientInput = ClientMergeRequest;
+export type ClientProjection = ClientView;
 export type {
+  ClientHistoryProjection,
+  ClientListProjection,
+  ClientMailSearchInput,
   ClientMailSendReceiptDto,
   ClientMailSendRequestDto,
-} from '../../shared/api/generated/client-mail-send';
-export type { ClientMailSearchInput, MailMessageBodyDto, MailMessageSearchPageDto, MailboxMessageReferenceDto } from '../../shared/api/generated/query-mail';
+  MailMessageBodyDto,
+  MailMessageSearchPageDto,
+  MailboxMessageReferenceDto,
+};
 
-export function listClients(tenantId: string, signal?: AbortSignal): Promise<ClientListProjection | undefined> {
-  return requestJson<ClientListProjection>(`/api/v1/tenants/${segment(tenantId)}/clients`, { tenantId, signal });
+export function listClients(tenantId: string, signal?: AbortSignal): Promise<ClientListProjection> {
+  return listClientsOperation({
+    tenantId,
+    ...(signal === undefined ? {} : { signal }),
+  });
 }
 
-export function getClient(tenantId: string, clientId: string): Promise<ClientProjection | undefined> {
-  return requestJson<ClientProjection>(`/api/v1/tenants/${segment(tenantId)}/clients/${segment(clientId)}`, { tenantId });
+export function getClient(tenantId: string, clientId: string): Promise<ClientProjection> {
+  return getClientOperation({ tenantId, clientId });
 }
 
 export function getClientHistory(
   tenantId: string,
   clientId: string,
   signal?: AbortSignal,
-): Promise<ClientHistoryProjection | undefined> {
-  return requestJson<ClientHistoryProjection>(
-    `/api/v1/tenants/${segment(tenantId)}/clients/${segment(clientId)}/history`,
-    { tenantId, signal },
-  );
+): Promise<ClientHistoryProjection> {
+  return getClientHistoryOperation({
+    tenantId,
+    clientId,
+    ...(signal === undefined ? {} : { signal }),
+  });
 }
 
-export function createClient(tenantId: string, input: CreateClientInput): Promise<MutationReceipt | undefined> {
-  return mutate(`/api/v1/tenants/${segment(tenantId)}/clients`, tenantId, 'POST', input);
+export function createClient(tenantId: string, input: CreateClientInput, idempotencyKey: string): Promise<MutationReceipt> {
+  return createClientOperation({
+    tenantId,
+    body: input,
+    idempotencyKey,
+  });
 }
 
 export function updateClient(
   tenantId: string,
   clientId: string,
   input: UpdateClientInput,
-): Promise<MutationReceipt | undefined> {
-  return mutate(`/api/v1/tenants/${segment(tenantId)}/clients/${segment(clientId)}`, tenantId, 'PATCH', input);
+  idempotencyKey: string,
+): Promise<MutationReceipt> {
+  return updateClientOperation({
+    tenantId,
+    clientId,
+    body: input,
+    idempotencyKey,
+  });
 }
 
 export function archiveClient(
   tenantId: string,
   clientId: string,
   input: ArchiveClientInput,
-): Promise<MutationReceipt | undefined> {
-  return mutate(`/api/v1/tenants/${segment(tenantId)}/clients/${segment(clientId)}/archive`, tenantId, 'POST', input);
+  idempotencyKey: string,
+): Promise<MutationReceipt> {
+  return archiveClientOperation({
+    tenantId,
+    clientId,
+    body: input,
+    idempotencyKey,
+  });
 }
 
 export function upsertClientContact(
@@ -85,13 +117,15 @@ export function upsertClientContact(
   clientId: string,
   contactPointId: string,
   input: UpsertClientContactInput,
-): Promise<MutationReceipt | undefined> {
-  return mutate(
-    `/api/v1/tenants/${segment(tenantId)}/clients/${segment(clientId)}/contacts/${segment(contactPointId)}`,
+  idempotencyKey: string,
+): Promise<MutationReceipt> {
+  return upsertClientContactOperation({
     tenantId,
-    'PUT',
-    input,
-  );
+    clientId,
+    contactPointId,
+    body: input,
+    idempotencyKey,
+  });
 }
 
 export function archiveClientContact(
@@ -99,26 +133,29 @@ export function archiveClientContact(
   clientId: string,
   contactPointId: string,
   input: ArchiveClientContactInput,
-): Promise<MutationReceipt | undefined> {
-  return mutate(
-    `/api/v1/tenants/${segment(tenantId)}/clients/${segment(clientId)}/contacts/${segment(contactPointId)}`,
+  idempotencyKey: string,
+): Promise<MutationReceipt> {
+  return archiveClientContactOperation({
     tenantId,
-    'DELETE',
-    input,
-  );
+    clientId,
+    contactPointId,
+    body: input,
+    idempotencyKey,
+  });
 }
 
 export function mergeClient(
   tenantId: string,
   sourceClientId: string,
   input: MergeClientInput,
-): Promise<MutationReceipt | undefined> {
-  return mutate(
-    `/api/v1/tenants/${segment(tenantId)}/clients/${segment(sourceClientId)}/merge`,
+  idempotencyKey: string,
+): Promise<MutationReceipt> {
+  return mergeClientOperation({
     tenantId,
-    'POST',
-    input,
-  );
+    clientId: sourceClientId,
+    body: input,
+    idempotencyKey,
+  });
 }
 
 export function setClientGrant(
@@ -126,14 +163,17 @@ export function setClientGrant(
   clientId: string,
   actorId: string,
   input: SetClientGrantInput,
+  idempotencyKey: string,
   revoke = false,
 ): Promise<MutationReceipt | undefined> {
-  return mutate(
-    `/api/v1/tenants/${segment(tenantId)}/clients/${segment(clientId)}/grants/${segment(actorId)}`,
+  const command = {
     tenantId,
-    revoke ? 'DELETE' : 'PUT',
-    input,
-  );
+    clientId,
+    actorId,
+    body: input,
+    idempotencyKey,
+  };
+  return revoke ? revokeClientAccessOperation(command) : grantClientAccessOperation(command);
 }
 
 export function searchClientMail(
@@ -141,11 +181,13 @@ export function searchClientMail(
   clientId: string,
   input: ClientMailSearchInput,
   signal?: AbortSignal,
-): Promise<MailMessageSearchPageDto | undefined> {
-  return requestJson<MailMessageSearchPageDto>(
-    `/api/v1/tenants/${segment(tenantId)}/clients/${segment(clientId)}/mail/search`,
-    { tenantId, method: 'POST', body: input, signal },
-  );
+): Promise<MailMessageSearchPageDto> {
+  return searchClientMailOperation({
+    tenantId,
+    clientId,
+    body: input,
+    ...(signal === undefined ? {} : { signal }),
+  });
 }
 
 export function getClientMailMessage(
@@ -153,11 +195,13 @@ export function getClientMailMessage(
   clientId: string,
   reference: MailboxMessageReferenceDto,
   signal?: AbortSignal,
-): Promise<MailMessageBodyDto | undefined> {
-  return requestJson<MailMessageBodyDto>(
-    `/api/v1/tenants/${segment(tenantId)}/clients/${segment(clientId)}/mail/message`,
-    { tenantId, method: 'POST', body: reference, signal },
-  );
+): Promise<MailMessageBodyDto> {
+  return getClientMailMessageOperation({
+    tenantId,
+    clientId,
+    body: reference,
+    ...(signal === undefined ? {} : { signal }),
+  });
 }
 
 export function sendClientMail(
@@ -166,9 +210,12 @@ export function sendClientMail(
   input: ClientMailSendRequestDto,
   idempotencyKey: string,
   signal?: AbortSignal,
-): Promise<ClientMailSendReceiptDto | undefined> {
-  return requestJson<ClientMailSendReceiptDto>(
-    `/api/v1/tenants/${segment(tenantId)}/clients/${segment(clientId)}/mail/send`,
-    { tenantId, method: 'POST', body: input, idempotencyKey, signal },
-  );
+): Promise<ClientMailSendReceiptDto> {
+  return sendClientMailOperation({
+    tenantId,
+    clientId,
+    body: input,
+    idempotencyKey,
+    ...(signal === undefined ? {} : { signal }),
+  });
 }

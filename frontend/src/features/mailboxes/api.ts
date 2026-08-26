@@ -1,36 +1,39 @@
-import { newIdempotencyKey, requestJson, sha256Hex } from '../../shared/api/client';
-import { mutate, pagedPath, segment } from '../../shared/api/endpoint';
-import type { MutationReceipt } from '../../shared/api/generated/control-plane';
+import {
+  changeMailboxClientAssociation as changeMailboxClientAssociationOperation,
+  createMailboxBinding as createMailboxBindingOperation,
+  createMailboxJob as createMailboxJobOperation,
+  getMailboxBinding as getMailboxBindingOperation,
+  getMailboxClientAssociation as getMailboxClientAssociationOperation,
+  getMailboxJob as getMailboxJobOperation,
+  listMailboxes as listMailboxesOperation,
+  revokeMailboxBinding as revokeMailboxBindingOperation,
+  runMailboxJob as runMailboxJobOperation,
+} from '../../shared/api/generated/operations';
 import type {
   ChangeMailboxClientAssociationRequestDto,
+  CreateMailboxBindingRequest,
+  CreateMailboxJobRequest,
+  MailboxBindingResponse,
   MailboxClientAssociationMutationReceiptDto,
   MailboxClientAssociationProjectionDto,
-} from '../../shared/api/generated/mailbox-client-association';
-import type {
-  CreateMailboxBindingRequestDto,
-  CreateMailboxJobRequestDto,
-  MailboxBindingProjectionDto,
-  MailboxJobProjectionDto,
-  RevokeMailboxBindingRequestDto,
-  RunMailboxJobRequestDto,
-} from '../../shared/api/generated/mailbox';
-import type {
+  MailboxJobResponse,
   MailboxListItemDto,
   MailboxListPageDto,
-} from '../../shared/api/generated/operator-query';
+  MutationReceipt,
+  RevokeMailboxBindingRequest,
+  RunMailboxJobRequest,
+} from '../../shared/api/generated/operations';
 
-export type CreateMailboxBindingInput = Omit<CreateMailboxBindingRequestDto, 'requestDigest'>;
-export type RevokeMailboxBindingInput = Omit<RevokeMailboxBindingRequestDto, 'requestDigest'>;
-export type CreateMailboxJobInput = Omit<CreateMailboxJobRequestDto, 'requestDigest'>;
-export type RunMailboxJobInput = Omit<RunMailboxJobRequestDto, 'requestDigest'>;
-export type ChangeMailboxClientAssociationInput = Omit<
-  ChangeMailboxClientAssociationRequestDto,
-  'requestDigest'
->;
-export type MailboxBindingProjection = MailboxBindingProjectionDto;
-export type MailboxJobProjection = MailboxJobProjectionDto;
+export type CreateMailboxBindingInput = CreateMailboxBindingRequest;
+export type RevokeMailboxBindingInput = RevokeMailboxBindingRequest;
+export type CreateMailboxJobInput = CreateMailboxJobRequest;
+export type RunMailboxJobInput = RunMailboxJobRequest;
+export type ChangeMailboxClientAssociationInput = ChangeMailboxClientAssociationRequestDto;
+export type MailboxBindingProjection = MailboxBindingResponse;
+export type MailboxJobProjection = MailboxJobResponse;
 export type MailboxClientAssociationProjection = MailboxClientAssociationProjectionDto;
 export type MailboxClientAssociationMutationReceipt = MailboxClientAssociationMutationReceiptDto;
+export type { MailboxListItemDto, MailboxListPageDto };
 
 export interface MailboxRelationshipOverviewItem {
   mailbox: MailboxListItemDto;
@@ -47,106 +50,104 @@ export function listMailboxes(
   signal?: AbortSignal,
   cursor?: string | null,
   limit = 50,
-): Promise<MailboxListPageDto | undefined> {
-  return requestJson<MailboxListPageDto>(
-    pagedPath(`/api/v1/tenants/${segment(tenantId)}/mailboxes`, cursor, limit),
-    { tenantId, signal },
-  );
+): Promise<MailboxListPageDto> {
+  return listMailboxesOperation({
+    tenantId,
+    limit,
+    ...(cursor === undefined || cursor === null ? {} : { cursor }),
+    ...(signal === undefined ? {} : { signal }),
+  });
 }
 
 export async function listMailboxRelationshipOverview(
   tenantId: string,
   cursor?: string | null,
   limit = 25,
-): Promise<MailboxRelationshipOverviewPage | undefined> {
+): Promise<MailboxRelationshipOverviewPage> {
   const page = await listMailboxes(tenantId, undefined, cursor, limit);
-  if (!page) return undefined;
   const items = await Promise.all(
-    page.mailboxes.map(async (mailbox) => {
-      const association = await getMailboxClientAssociation(tenantId, mailbox.bindingId);
-      if (!association) {
-        throw new Error('Mailbox Client association projection is missing.');
-      }
-      return { mailbox, association };
-    }),
+    page.mailboxes.map(async (mailbox) => ({
+      mailbox,
+      association: await getMailboxClientAssociation(tenantId, mailbox.bindingId),
+    })),
   );
   return { items, nextCursor: page.nextCursor };
 }
 
-export function getMailboxBinding(tenantId: string, bindingId: string): Promise<MailboxBindingProjection | undefined> {
-  return requestJson<MailboxBindingProjection>(
-    `/api/v1/tenants/${segment(tenantId)}/mailboxes/${segment(bindingId)}`,
-    { tenantId },
-  );
+export function getMailboxBinding(
+  tenantId: string,
+  bindingId: string,
+): Promise<MailboxBindingProjection> {
+  return getMailboxBindingOperation({ tenantId, bindingId });
 }
 
 export function createMailboxBinding(
   tenantId: string,
   input: CreateMailboxBindingInput,
-): Promise<MutationReceipt | undefined> {
-  return mutate(`/api/v1/tenants/${segment(tenantId)}/mailboxes`, tenantId, 'POST', input);
+  idempotencyKey: string,
+): Promise<MutationReceipt> {
+  return createMailboxBindingOperation({
+    tenantId,
+    body: input,
+    idempotencyKey,
+  });
 }
 
 export function revokeMailboxBinding(
   tenantId: string,
   bindingId: string,
   expectedBindingVersion: number,
-): Promise<MutationReceipt | undefined> {
-  const input: RevokeMailboxBindingInput = { expectedBindingVersion };
-  return mutate(`/api/v1/tenants/${segment(tenantId)}/mailboxes/${segment(bindingId)}/revoke`, tenantId, 'POST', input);
+  idempotencyKey: string,
+): Promise<MutationReceipt> {
+  return revokeMailboxBindingOperation({
+    tenantId,
+    bindingId,
+    body: { expectedBindingVersion },
+    idempotencyKey,
+  });
 }
 
 export function getMailboxClientAssociation(
   tenantId: string,
   bindingId: string,
-): Promise<MailboxClientAssociationProjection | undefined> {
-  return requestJson<MailboxClientAssociationProjection>(
-    `/api/v1/tenants/${segment(tenantId)}/mailboxes/${segment(bindingId)}/client-association`,
-    { tenantId },
-  );
+): Promise<MailboxClientAssociationProjection> {
+  return getMailboxClientAssociationOperation({ tenantId, bindingId });
 }
 
-export async function changeMailboxClientAssociation(
+export function changeMailboxClientAssociation(
   tenantId: string,
   bindingId: string,
   input: ChangeMailboxClientAssociationInput,
-): Promise<MailboxClientAssociationMutationReceipt | undefined> {
-  const command = {
-    clientId: input.clientId,
-    expectedRelationshipVersion: input.expectedRelationshipVersion,
-  };
-  const payload: ChangeMailboxClientAssociationRequestDto = {
-    ...command,
-    requestDigest: await sha256Hex(command),
-  };
-  return requestJson<MailboxClientAssociationMutationReceipt>(
-    `/api/v1/tenants/${segment(tenantId)}/mailboxes/${segment(bindingId)}/client-association`,
-    {
-      tenantId,
-      method: 'POST',
-      body: payload,
-      idempotencyKey: newIdempotencyKey(),
-    },
-  );
+  idempotencyKey: string,
+): Promise<MailboxClientAssociationMutationReceipt> {
+  return changeMailboxClientAssociationOperation({
+    tenantId,
+    bindingId,
+    body: input,
+    idempotencyKey,
+  });
 }
 
 export function getMailboxJob(
   tenantId: string,
   bindingId: string,
   jobId: string,
-): Promise<MailboxJobProjection | undefined> {
-  return requestJson<MailboxJobProjection>(
-    `/api/v1/tenants/${segment(tenantId)}/mailboxes/${segment(bindingId)}/jobs/${segment(jobId)}`,
-    { tenantId },
-  );
+): Promise<MailboxJobProjection> {
+  return getMailboxJobOperation({ tenantId, bindingId, jobId });
 }
 
 export function createMailboxJob(
   tenantId: string,
   bindingId: string,
   input: CreateMailboxJobInput,
-): Promise<MutationReceipt | undefined> {
-  return mutate(`/api/v1/tenants/${segment(tenantId)}/mailboxes/${segment(bindingId)}/jobs`, tenantId, 'POST', input);
+  idempotencyKey: string,
+): Promise<MutationReceipt> {
+  return createMailboxJobOperation({
+    tenantId,
+    bindingId,
+    body: input,
+    idempotencyKey,
+  });
 }
 
 export function runMailboxJob(
@@ -154,12 +155,13 @@ export function runMailboxJob(
   bindingId: string,
   jobId: string,
   expectedJobVersion: number,
-): Promise<MutationReceipt | undefined> {
-  const input: RunMailboxJobInput = { expectedJobVersion };
-  return mutate(
-    `/api/v1/tenants/${segment(tenantId)}/mailboxes/${segment(bindingId)}/jobs/${segment(jobId)}/run`,
+  idempotencyKey: string,
+): Promise<MutationReceipt> {
+  return runMailboxJobOperation({
     tenantId,
-    'POST',
-    input,
-  );
+    bindingId,
+    jobId,
+    body: { expectedJobVersion },
+    idempotencyKey,
+  });
 }

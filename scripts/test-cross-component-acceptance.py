@@ -476,6 +476,8 @@ def validate_composition_surfaces() -> None:
                 "pub struct BindBrowserMailboxExecutionRequestDto",
                 "pub struct CreateMailboxJobRequestDto",
                 "pub struct RunMailboxJobRequestDto",
+                "mailbox_requests_reject_unknown_sensitive_and_legacy_digest_fields",
+                'for forbidden in ["password", "messageBody", "requestDigest"]',
             ),
             "canonical mailbox transport contract",
         ),
@@ -484,8 +486,8 @@ def validate_composition_surfaces() -> None:
             (
                 "CreateMailboxBindingRequestDto",
                 "BindBrowserMailboxExecutionRequestDto",
-                '"password":"forbidden"',
-                '"messageBody":"forbidden"',
+                "browser_execution_binding_transport_is_metadata_only_and_strict",
+                "serde_json::from_str::<BindBrowserMailboxExecutionRequestDto>(&invalid).is_err()",
                 "SecretHandle::parse",
                 "execute_create_mailbox_binding",
                 "execute_revoke_mailbox_binding",
@@ -514,7 +516,8 @@ def validate_composition_surfaces() -> None:
             (
                 "CreateMailboxJobRequestDto",
                 "RunMailboxJobRequestDto",
-                '"messageBody":"forbidden"',
+                "mailbox_job_transport_uses_canonical_shape_and_keeps_domain_validation_order",
+                "serde_json::from_str::<CreateMailboxJobRequestDto>(unknown).is_err()",
                 "execute_create_mailbox_job",
                 "get_mailbox_job",
                 "execute_run_mailbox_job",
@@ -558,13 +561,37 @@ def validate_composition_surfaces() -> None:
             "mailbox job persistence application adapter",
         ),
         (
-            "frontend/src/shared/api/endpoint.ts",
-            ("segment", "pagedPath", "mutate", "requestJson<MutationReceipt>"),
-            "React shared transport helpers",
+            "frontend/src/shared/api/transport.ts",
+            (
+                "executeTransport",
+                "same-origin /api/v1/ path",
+                "credentials: 'same-origin'",
+                "MAX_RESPONSE_BYTES",
+                "REQUEST_TIMEOUT_MS",
+                "response.body.getReader()",
+                "await reader.cancel()",
+            ),
+            "React effect-only transport boundary",
+        ),
+        (
+            "frontend/src/shared/api/openapi-runtime.ts",
+            (
+                "invokeOperation",
+                "ApiProblem",
+                "validateResponseHeaders",
+                "request body failed its OpenAPI schema",
+                "UnexpectedStatusError",
+            ),
+            "React generated-operation runtime boundary",
+        ),
+        (
+            "frontend/src/shared/api/idempotency.ts",
+            ("newIdempotencyKey",),
+            "React logical-command idempotency owner",
         ),
         (
             "frontend/src/features/session/api.ts",
-            ("getSession", "requestJson<ActorSession>"),
+            ("getSession", "getSessionOperation"),
             "Session frontend API ownership",
         ),
         (
@@ -588,16 +615,6 @@ def validate_composition_surfaces() -> None:
             "Mailbox frontend API ownership",
         ),
         (
-            "frontend/src/shared/api/client.ts",
-            (
-                "same-origin /api/v1/ path",
-                "credentials: 'same-origin'",
-                "MAX_RESPONSE_BYTES",
-                "ApiProblem",
-            ),
-            "React transport boundary",
-        ),
-        (
             "frontend/src/shared/ui/StatusMessage.test.tsx",
             ("not_found", "forbidden", "Resource unavailable"),
             "neutral UI disclosure test",
@@ -611,12 +628,14 @@ def validate_composition_surfaces() -> None:
         fail("legacy api.rs must remain removed after identity application-boundary migration")
 
     for obsolete_frontend_facade in (
+        "frontend/src/shared/api/client.ts",
+        "frontend/src/shared/api/endpoint.ts",
         "frontend/src/shared/api/endpoints.ts",
         "frontend/src/shared/api/types.ts",
         "frontend/src/shared/api/clientMail.ts",
     ):
         if (ROOT / obsolete_frontend_facade).exists():
-            fail(f"central frontend capability facade must remain removed: {obsolete_frontend_facade}")
+            fail(f"superseded frontend transport owner must remain removed: {obsolete_frontend_facade}")
 
     forbid_all(
         read("apps/control-plane-worker/src/identity.rs"),

@@ -31,6 +31,16 @@ pub struct ActorSession {
     pub tenant_id: String,
     pub actor_id: String,
     pub role: String,
+    pub profile_id: String,
+    pub profile_digest: String,
+    pub capabilities: Vec<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HealthResponse {
+    pub status: String,
+    pub contract_version: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -52,21 +62,19 @@ pub struct ClientProjection {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ClientCreateRequest {
     pub client_id: String,
     pub kind: String,
     pub display_name: String,
-    pub request_digest: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ClientGrantRequest {
     pub role: String,
     pub reason: String,
     pub expected_client_version: u64,
-    pub request_digest: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -153,18 +161,12 @@ pub fn problem_type_for_code(code: &str) -> &'static str {
 pub fn openapi_document() -> Value {
     json!({
         "openapi": "3.0.3",
-        "info": {
-            "title": "Part CRM Control Plane Public API",
-            "version": "1.0.0"
-        },
+        "info": {"title": "Part CRM Control Plane Public API", "version": "1.0.0"},
         "paths": {
             "/api/v1/session": {
                 "get": {
                     "operationId": "getSession",
-                    "responses": {
-                        "200": json_response("ActorSession"),
-                        "404": problem_response()
-                    }
+                    "responses": {"200": json_response("ActorSession"), "404": problem_response()}
                 }
             },
             "/api/v1/tenants/{tenantId}/clients": {
@@ -198,11 +200,7 @@ pub fn openapi_document() -> Value {
             "/api/v1/tenants/{tenantId}/clients/{clientId}/grants/{actorId}": {
                 "put": {
                     "operationId": "setClientGrant",
-                    "parameters": [
-                        tenant_path_parameter(),
-                        opaque_path_parameter("clientId"),
-                        opaque_path_parameter("actorId")
-                    ],
+                    "parameters": [tenant_path_parameter(), opaque_path_parameter("clientId"), opaque_path_parameter("actorId")],
                     "requestBody": json_request("ClientGrantRequest"),
                     "responses": {
                         "200": json_response("MutationReceipt"),
@@ -215,11 +213,7 @@ pub fn openapi_document() -> Value {
                 },
                 "delete": {
                     "operationId": "revokeClientGrant",
-                    "parameters": [
-                        tenant_path_parameter(),
-                        opaque_path_parameter("clientId"),
-                        opaque_path_parameter("actorId")
-                    ],
+                    "parameters": [tenant_path_parameter(), opaque_path_parameter("clientId"), opaque_path_parameter("actorId")],
                     "requestBody": json_request("ClientGrantRequest"),
                     "responses": {
                         "204": {"description": "Grant revoked"},
@@ -237,10 +231,7 @@ pub fn openapi_document() -> Value {
                     "parameters": [tenant_path_parameter()],
                     "responses": {
                         "200": json_response("NotificationCatchUpProjection"),
-                        "403": problem_response(),
-                        "404": problem_response(),
-                        "500": problem_response(),
-                        "503": problem_response()
+                        "403": problem_response(), "404": problem_response(), "500": problem_response(), "503": problem_response()
                     }
                 }
             },
@@ -251,12 +242,8 @@ pub fn openapi_document() -> Value {
                     "requestBody": json_request("NotificationCatchUpAckRequest"),
                     "responses": {
                         "204": {"description": "Catch-up cursor advanced or already current"},
-                        "400": problem_response(),
-                        "403": problem_response(),
-                        "404": problem_response(),
-                        "409": problem_response(),
-                        "500": problem_response(),
-                        "503": problem_response()
+                        "400": problem_response(), "403": problem_response(), "404": problem_response(), "409": problem_response(),
+                        "500": problem_response(), "503": problem_response()
                     }
                 }
             },
@@ -267,12 +254,8 @@ pub fn openapi_document() -> Value {
                     "requestBody": json_request("NotificationReplayRequest"),
                     "responses": {
                         "200": json_response("NotificationReplayReceipt"),
-                        "400": problem_response(),
-                        "403": problem_response(),
-                        "404": problem_response(),
-                        "409": problem_response(),
-                        "500": problem_response(),
-                        "503": problem_response()
+                        "400": problem_response(), "403": problem_response(), "404": problem_response(), "409": problem_response(),
+                        "500": problem_response(), "503": problem_response()
                     }
                 }
             },
@@ -282,10 +265,7 @@ pub fn openapi_document() -> Value {
                     "parameters": [tenant_path_parameter()],
                     "responses": {
                         "200": json_response("NotificationOperationsProjection"),
-                        "403": problem_response(),
-                        "404": problem_response(),
-                        "500": problem_response(),
-                        "503": problem_response()
+                        "403": problem_response(), "404": problem_response(), "500": problem_response(), "503": problem_response()
                     }
                 }
             }
@@ -299,123 +279,70 @@ pub fn openapi_document() -> Value {
                 "NotificationReplayReason": string_enum(&NOTIFICATION_REPLAY_REASONS),
                 "ProblemCode": string_enum(&PROBLEM_CODES),
                 "ActorSession": {
-                    "type": "object",
-                    "additionalProperties": false,
+                    "type": "object", "additionalProperties": false,
                     "required": ["tenantId", "actorId", "role"],
-                    "properties": {
-                        "tenantId": {"type": "string"},
-                        "actorId": {"type": "string"},
-                        "role": schema_ref("MembershipRole")
-                    }
+                    "properties": {"tenantId": {"type": "string"}, "actorId": {"type": "string"}, "role": schema_ref("MembershipRole")}
                 },
                 "MutationReceipt": {
-                    "type": "object",
-                    "additionalProperties": false,
+                    "type": "object", "additionalProperties": false,
                     "required": ["resultCode", "resourceId", "aggregateVersion"],
                     "properties": {
-                        "resultCode": {"type": "string"},
-                        "resourceId": {"type": "string"},
+                        "resultCode": {"type": "string"}, "resourceId": {"type": "string"},
                         "aggregateVersion": {"type": "integer", "format": "uint64", "minimum": 1}
                     }
                 },
                 "ClientProjection": {
-                    "type": "object",
-                    "additionalProperties": false,
+                    "type": "object", "additionalProperties": false,
                     "required": ["clientId", "kind", "displayName", "status", "version"],
                     "properties": {
-                        "clientId": {"type": "string"},
-                        "kind": schema_ref("ClientKind"),
-                        "displayName": {"type": "string"},
-                        "status": schema_ref("ClientStatus"),
-                        "version": {"type": "integer", "format": "uint64", "minimum": 1}
+                        "clientId": {"type": "string"}, "kind": schema_ref("ClientKind"), "displayName": {"type": "string"},
+                        "status": schema_ref("ClientStatus"), "version": {"type": "integer", "format": "uint64", "minimum": 1}
                     }
                 },
                 "ClientCreateRequest": {
-                    "type": "object",
-                    "required": ["clientId", "kind", "displayName", "requestDigest"],
-                    "properties": {
-                        "clientId": {"type": "string"},
-                        "kind": schema_ref("ClientKind"),
-                        "displayName": {"type": "string"},
-                        "requestDigest": digest_schema()
-                    }
+                    "type": "object", "additionalProperties": false,
+                    "required": ["clientId", "kind", "displayName"],
+                    "properties": {"clientId": {"type": "string"}, "kind": schema_ref("ClientKind"), "displayName": {"type": "string"}}
                 },
                 "ClientGrantRequest": {
-                    "type": "object",
-                    "required": ["role", "reason", "expectedClientVersion", "requestDigest"],
+                    "type": "object", "additionalProperties": false,
+                    "required": ["role", "reason", "expectedClientVersion"],
                     "properties": {
-                        "role": schema_ref("ClientGrantRole"),
-                        "reason": {"type": "string"},
-                        "expectedClientVersion": {"type": "integer", "format": "uint64", "minimum": 1},
-                        "requestDigest": digest_schema()
+                        "role": schema_ref("ClientGrantRole"), "reason": {"type": "string"},
+                        "expectedClientVersion": {"type": "integer", "format": "uint64", "minimum": 1}
                     }
                 },
                 "NotificationEventProjection": {
-                    "type": "object",
-                    "additionalProperties": false,
+                    "type": "object", "additionalProperties": false,
                     "required": ["eventId", "aggregateType", "aggregateId", "eventType", "occurredAtMs"],
                     "properties": {
-                        "eventId": {"type": "string"},
-                        "aggregateType": {"type": "string"},
-                        "aggregateId": {"type": "string"},
-                        "eventType": {"type": "string"},
-                        "occurredAtMs": {"type": "integer", "format": "uint64", "minimum": 0}
+                        "eventId": {"type": "string"}, "aggregateType": {"type": "string"}, "aggregateId": {"type": "string"},
+                        "eventType": {"type": "string"}, "occurredAtMs": {"type": "integer", "format": "uint64", "minimum": 0}
                     }
                 },
                 "NotificationCatchUpProjection": {
-                    "type": "object",
-                    "additionalProperties": false,
-                    "required": ["events"],
-                    "properties": {
-                        "events": {
-                            "type": "array",
-                            "maxItems": 200,
-                            "items": schema_ref("NotificationEventProjection")
-                        }
-                    }
+                    "type": "object", "additionalProperties": false, "required": ["events"],
+                    "properties": {"events": {"type": "array", "maxItems": 200, "items": schema_ref("NotificationEventProjection")}}
                 },
                 "NotificationCatchUpAckRequest": {
-                    "type": "object",
-                    "additionalProperties": false,
-                    "required": ["eventId"],
-                    "properties": {
-                        "eventId": {"type": "string"}
-                    }
+                    "type": "object", "additionalProperties": false, "required": ["eventId"],
+                    "properties": {"eventId": {"type": "string"}}
                 },
                 "NotificationReplayRequest": {
-                    "type": "object",
-                    "additionalProperties": false,
+                    "type": "object", "additionalProperties": false,
                     "required": ["replayId", "consumerId", "eventId", "auditEventId", "reasonClass"],
                     "properties": {
-                        "replayId": {"type": "string"},
-                        "consumerId": {"type": "string"},
-                        "eventId": {"type": "string"},
-                        "auditEventId": {"type": "string"},
-                        "reasonClass": schema_ref("NotificationReplayReason")
+                        "replayId": {"type": "string"}, "consumerId": {"type": "string"}, "eventId": {"type": "string"},
+                        "auditEventId": {"type": "string"}, "reasonClass": schema_ref("NotificationReplayReason")
                     }
                 },
                 "NotificationReplayReceipt": {
-                    "type": "object",
-                    "additionalProperties": false,
-                    "required": ["replayId", "resultCode"],
-                    "properties": {
-                        "replayId": {"type": "string"},
-                        "resultCode": {"type": "string", "enum": ["prepared", "duplicate"]}
-                    }
+                    "type": "object", "additionalProperties": false, "required": ["replayId", "resultCode"],
+                    "properties": {"replayId": {"type": "string"}, "resultCode": {"type": "string", "enum": ["prepared", "duplicate"]}}
                 },
                 "NotificationOperationsProjection": {
-                    "type": "object",
-                    "additionalProperties": false,
-                    "required": [
-                        "readyCount",
-                        "retryScheduledCount",
-                        "deliveredCount",
-                        "deadLetterCount",
-                        "pendingReplayCount",
-                        "maxAttemptCount",
-                        "oldestOpenAgeMs",
-                        "catchUpLagCount"
-                    ],
+                    "type": "object", "additionalProperties": false,
+                    "required": ["readyCount", "retryScheduledCount", "deliveredCount", "deadLetterCount", "pendingReplayCount", "maxAttemptCount", "oldestOpenAgeMs", "catchUpLagCount"],
                     "properties": {
                         "readyCount": {"type": "integer", "format": "uint64", "minimum": 0},
                         "retryScheduledCount": {"type": "integer", "format": "uint64", "minimum": 0},
@@ -423,25 +350,17 @@ pub fn openapi_document() -> Value {
                         "deadLetterCount": {"type": "integer", "format": "uint64", "minimum": 0},
                         "pendingReplayCount": {"type": "integer", "format": "uint64", "minimum": 0},
                         "maxAttemptCount": {"type": "integer", "format": "uint16", "minimum": 0, "maximum": 64},
-                        "oldestOpenAgeMs": {
-                            "type": "integer",
-                            "format": "uint64",
-                            "minimum": 0,
-                            "nullable": true
-                        },
+                        "oldestOpenAgeMs": {"type": "integer", "format": "uint64", "minimum": 0, "nullable": true},
                         "catchUpLagCount": {"type": "integer", "format": "uint64", "minimum": 0}
                     }
                 },
                 "ProblemPayload": {
-                    "type": "object",
-                    "additionalProperties": false,
+                    "type": "object", "additionalProperties": false,
                     "required": ["type", "title", "status", "code", "correlation_id"],
                     "properties": {
-                        "type": {"type": "string"},
-                        "title": {"type": "string"},
+                        "type": {"type": "string"}, "title": {"type": "string"},
                         "status": {"type": "integer", "format": "uint16", "minimum": 400, "maximum": 599},
-                        "code": schema_ref("ProblemCode"),
-                        "correlation_id": {"type": "string"}
+                        "code": schema_ref("ProblemCode"), "correlation_id": {"type": "string"}
                     }
                 }
             }
@@ -463,54 +382,24 @@ fn string_enum(values: &[&str]) -> Value {
     json!({"type": "string", "enum": values})
 }
 
-fn digest_schema() -> Value {
-    json!({"type": "string", "pattern": "^[0-9a-f]{64}$"})
-}
-
 fn tenant_path_parameter() -> Value {
     opaque_path_parameter("tenantId")
 }
 
 fn opaque_path_parameter(name: &str) -> Value {
-    json!({
-        "name": name,
-        "in": "path",
-        "required": true,
-        "schema": {"type": "string"}
-    })
+    json!({"name": name, "in": "path", "required": true, "schema": {"type": "string"}})
 }
 
 fn json_request(schema: &str) -> Value {
-    json!({
-        "required": true,
-        "content": {
-            "application/json": {
-                "schema": schema_ref(schema)
-            }
-        }
-    })
+    json!({"required": true, "content": {"application/json": {"schema": schema_ref(schema)}}})
 }
 
 fn json_response(schema: &str) -> Value {
-    json!({
-        "description": "Successful response",
-        "content": {
-            "application/json": {
-                "schema": schema_ref(schema)
-            }
-        }
-    })
+    json!({"description": "Successful response", "content": {"application/json": {"schema": schema_ref(schema)}}})
 }
 
 fn problem_response() -> Value {
-    json!({
-        "description": "Problem response",
-        "content": {
-            "application/problem+json": {
-                "schema": schema_ref("ProblemPayload")
-            }
-        }
-    })
+    json!({"description": "Problem response", "content": {"application/problem+json": {"schema": schema_ref("ProblemPayload")}}})
 }
 
 #[cfg(test)]
@@ -529,9 +418,15 @@ mod tests {
             tenant_id: "tenant_01JCONTRACT".to_owned(),
             actor_id: "actor_01JCONTRACT".to_owned(),
             role: "TENANT_OWNER".to_owned(),
+            profile_id: "rehearsal-core-v1".to_owned(),
+            profile_digest: "a".repeat(64),
+            capabilities: vec!["foundation".to_owned()],
         })?;
         assert!(session.get("tenantId").is_some());
         assert!(session.get("actorId").is_some());
+        assert!(session.get("profileId").is_some());
+        assert!(session.get("profileDigest").is_some());
+        assert!(session.get("capabilities").is_some());
 
         let receipt = serde_json::to_value(MutationReceipt {
             result_code: "created".to_owned(),
@@ -590,31 +485,31 @@ mod tests {
     }
 
     #[test]
-    fn client_request_keeps_legacy_unknown_field_tolerance() {
-        let payload = r#"{
-            "clientId":"client_01JCONTRACT",
-            "kind":"PERSON",
-            "displayName":"Client",
-            "requestDigest":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-            "legacyIgnoredField":"still-tolerated"
-        }"#;
-        assert!(serde_json::from_str::<ClientCreateRequest>(payload).is_ok());
+    fn client_request_is_strict_and_rejects_legacy_request_digest() {
+        let valid = r#"{"clientId":"client_01JCONTRACT","kind":"PERSON","displayName":"Client"}"#;
+        assert!(serde_json::from_str::<ClientCreateRequest>(valid).is_ok());
+        let digest = r#"{"clientId":"client_01JCONTRACT","kind":"PERSON","displayName":"Client","requestDigest":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}"#;
+        assert!(serde_json::from_str::<ClientCreateRequest>(digest).is_err());
+        let unknown = r#"{"clientId":"client_01JCONTRACT","kind":"PERSON","displayName":"Client","legacyIgnoredField":true}"#;
+        assert!(serde_json::from_str::<ClientCreateRequest>(unknown).is_err());
     }
 
     #[test]
     fn notification_requests_keep_bounded_metadata_only_shapes() {
-        let ack = serde_json::from_str::<NotificationCatchUpAckRequest>(
-            r#"{"eventId":"outbox_01JCONTRACT"}"#,
+        assert!(
+            serde_json::from_str::<NotificationCatchUpAckRequest>(
+                r#"{"eventId":"outbox_01JCONTRACT"}"#
+            )
+            .is_ok()
         );
-        assert!(ack.is_ok());
         let replay = serde_json::from_str::<NotificationReplayRequest>(
             r#"{
-                "replayId":"replay_01JCONTRACT",
-                "consumerId":"consumer_01JCONTRACT",
-                "eventId":"outbox_01JCONTRACT",
-                "auditEventId":"audit_01JCONTRACT",
-                "reasonClass":"OPERATOR_REMEDIATION"
-            }"#,
+            "replayId":"replay_01JCONTRACT",
+            "consumerId":"consumer_01JCONTRACT",
+            "eventId":"outbox_01JCONTRACT",
+            "auditEventId":"audit_01JCONTRACT",
+            "reasonClass":"OPERATOR_REMEDIATION"
+        }"#,
         );
         assert!(replay.is_ok());
     }
@@ -639,6 +534,16 @@ mod tests {
         ] {
             assert!(schemas.get(name).is_some(), "missing schema {name}");
         }
+        assert!(
+            schemas["ClientCreateRequest"]["properties"]
+                .get("requestDigest")
+                .is_none()
+        );
+        assert!(
+            schemas["ClientGrantRequest"]["properties"]
+                .get("requestDigest")
+                .is_none()
+        );
         assert!(document["paths"]["/api/v1/session"]["get"].is_object());
         assert!(document["paths"]["/api/v1/tenants/{tenantId}/clients"]["post"].is_object());
         assert!(

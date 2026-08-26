@@ -1,4 +1,4 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { type FormEvent } from 'react';
 import { useCapabilities } from '../../app/CapabilityContext';
 import { useTenant } from '../../app/TenantContext';
@@ -9,6 +9,7 @@ import { ClientHistoryPanel } from './ClientHistoryPanel';
 import { ClientMailPanel } from './ClientMailPanel';
 import { ClientMutationPanels } from './ClientMutationPanels';
 import { ClientRegistryList } from './ClientRegistryList';
+import { useLogicalCommandMutation } from '../../shared/ui/useLogicalCommandMutation';
 
 function field(form: FormData, name: string): string {
   return String(form.get(name) ?? '').trim();
@@ -41,16 +42,16 @@ export function ClientsWorkspace({
     queryFn: ({ signal }) => getClientHistory(tenantId, selectedClientId ?? '', signal),
     enabled: requireTenant && selectedClientId !== null,
   });
-  const create = useMutation({
-    mutationFn: (input: { clientId: string; kind: 'PERSON' | 'ORGANIZATION'; displayName: string }) =>
-      createClient(tenantId, input),
-    onSuccess: async (receipt) => {
+  const create = useLogicalCommandMutation(
+    (input: { clientId: string; kind: 'PERSON' | 'ORGANIZATION'; displayName: string }, idempotencyKey) =>
+      createClient(tenantId, input, idempotencyKey),
+    { onSuccess: async (receipt) => {
       await queryClient.invalidateQueries({ queryKey: ['client-registry', tenantId] });
       if (receipt?.resourceId) {
         onClientSelected(receipt.resourceId);
       }
-    },
-  });
+    } },
+  );
 
   const refreshSelected = async () => {
     await queryClient.invalidateQueries({ queryKey: ['client-registry', tenantId] });

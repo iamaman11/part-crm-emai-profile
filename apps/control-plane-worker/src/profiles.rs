@@ -65,12 +65,11 @@ async fn create_profile(request: &mut Request, env: &Env, tenant_id: &str) -> Re
         Ok(value) => value,
         Err(_) => return invalid_request(actor.actor().correlation_id().as_str()),
     };
-    let profile_id = match ProfileId::parse(body.profile_id) {
+    let profile_id = match ProfileId::parse(body.profile_id.clone()) {
         Ok(value) => value,
         Err(_) => return invalid_request(actor.actor().correlation_id().as_str()),
     };
-    let evidence = match command_evidence::from_request(request, actor.actor(), body.request_digest)
-    {
+    let evidence = match command_evidence::from_request(request, actor.actor(), &body) {
         Ok(value) => value,
         Err(_) => return invalid_request(actor.actor().correlation_id().as_str()),
     };
@@ -140,11 +139,11 @@ async fn assign_profile(
         Ok(value) => value,
         Err(_) => return invalid_request(actor.actor().correlation_id().as_str()),
     };
-    let assignment_id = match AssignmentId::parse(body.assignment_id) {
+    let assignment_id = match AssignmentId::parse(body.assignment_id.clone()) {
         Ok(value) => value,
         Err(_) => return invalid_request(actor.actor().correlation_id().as_str()),
     };
-    let client_id = match ClientId::parse(body.client_id) {
+    let client_id = match ClientId::parse(body.client_id.clone()) {
         Ok(value) => value,
         Err(_) => return invalid_request(actor.actor().correlation_id().as_str()),
     };
@@ -155,8 +154,7 @@ async fn assign_profile(
     if let Err(error) = next_profile_assignment_version(expected_profile_version) {
         return assignment_failure(actor.actor().correlation_id().as_str(), error);
     }
-    let evidence = match command_evidence::from_request(request, actor.actor(), body.request_digest)
-    {
+    let evidence = match command_evidence::from_request(request, actor.actor(), &body) {
         Ok(value) => value,
         Err(_) => return invalid_request(actor.actor().correlation_id().as_str()),
     };
@@ -212,8 +210,7 @@ async fn update_profile_grant(
         Ok(value) => value,
         Err(_) => return invalid_request(actor.actor().correlation_id().as_str()),
     };
-    let evidence = match command_evidence::from_request(request, actor.actor(), body.request_digest)
-    {
+    let evidence = match command_evidence::from_request(request, actor.actor(), &body) {
         Ok(value) => value,
         Err(_) => return invalid_request(actor.actor().correlation_id().as_str()),
     };

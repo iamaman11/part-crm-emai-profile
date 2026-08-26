@@ -107,7 +107,15 @@ def execute_create(
     )
     connection.execute(
         sql["IDEMPOTENCY_CREATE"],
-        (TENANT, actor, idem, "0123456789abcdef0123456789abcdef", client, NOW, EXPIRES),
+        (
+            TENANT,
+            actor,
+            idem,
+            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            client,
+            NOW,
+            EXPIRES,
+        ),
     )
     connection.execute(
         sql["AUDIT_CREATE"],

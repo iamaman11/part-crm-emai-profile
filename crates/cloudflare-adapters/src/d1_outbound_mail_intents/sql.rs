@@ -7,13 +7,13 @@ FROM outbound_mail_intents
 WHERE tenant_id = ?
   AND command_actor_id = ?
   AND idempotency_key = ?
-  AND request_digest = ?
+  AND payload_fingerprint = ?
 LIMIT 1
 "#;
 
 pub(super) const INTENT_CREATE: &str = r#"
 INSERT INTO outbound_mail_intents (
-    tenant_id, intent_id, command_actor_id, idempotency_key, request_digest,
+    tenant_id, intent_id, command_actor_id, idempotency_key, payload_fingerprint,
     client_id, binding_id, operation, state, attempt_count,
     provider_message_reference, created_at_ms, updated_at_ms
 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'PENDING', 0, NULL, ?, ?)
@@ -21,7 +21,7 @@ INSERT INTO outbound_mail_intents (
 
 pub(super) const IDEMPOTENCY_CREATE: &str = r#"
 INSERT INTO idempotency_records (
-    tenant_id, actor_id, idempotency_key, command_name, request_digest,
+    tenant_id, actor_id, idempotency_key, command_name, payload_fingerprint,
     result_code, result_reference, created_at_ms, expires_at_ms
 ) VALUES (?, ?, ?, ?, ?, 'reserved', ?, ?, ?)
 "#;

@@ -425,8 +425,8 @@ mod tests {
     use super::*;
     use application_ports::generations::{GenerationReplayReceipt, GenerationStatus};
     use profile_platform_primitives::{
-        ActorId, AuditEventId, CorrelationId, IdempotencyKey, OutboxEventId, TenantId, TenantScope,
-        UnixMillis,
+        ActorId, AuditEventId, CorrelationId, IdempotencyKey, OutboxEventId, PayloadFingerprint,
+        TenantId, TenantScope, UnixMillis,
     };
     use std::cell::{Cell, RefCell};
     use std::future::Future;
@@ -552,7 +552,7 @@ mod tests {
     fn evidence() -> Result<CommandExecutionEvidence, Box<dyn std::error::Error>> {
         Ok(CommandExecutionEvidence::new(
             IdempotencyKey::parse("idem_01JGENAPP")?,
-            "a".repeat(64),
+            PayloadFingerprint::parse("a".repeat(64))?,
             AuditEventId::parse("audit_01JGENAPP")?,
             OutboxEventId::parse("outbox_01JGENAPP")?,
             UnixMillis::new(10),

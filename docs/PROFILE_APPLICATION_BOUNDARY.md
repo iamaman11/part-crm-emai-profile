@@ -60,8 +60,10 @@ The transport preserves the existing response shape:
 The accepted ordering and compatibility rules are:
 
 1. assignment remains tenant-owner-only and owner resolution happens before request-body parsing;
-2. `assignmentId`, path `profileId`, `clientId`, `reason`, `expectedProfileVersion` and generic `requestDigest` keep their existing protocol roles;
-3. the legacy request DTO remains tolerant of unknown fields; Phase 0G does not silently harden that public parsing contract;
+2. `assignmentId`, path `profileId`, `clientId`, `reason` and `expectedProfileVersion` keep their
+   typed protocol roles; browser `requestDigest` is rejected as an unknown legacy field;
+3. strict request DTO parsing rejects unknown fields before the server derives its internal
+   `PayloadFingerprint` for replay semantics;
 4. response aggregate version is `expectedProfileVersion + 1` using checked arithmetic; overflow fails before replay/write;
 5. exact pre-write idempotency replay skips the governed write;
 6. fresh assignment remains HTTP `200`, result code `assigned`, resource reference equal to the assignment ID;
@@ -78,7 +80,7 @@ Stable public failure classes remain neutral not-found, version conflict, invali
 The profile vertical reuses provider-neutral `application-ports::CommandExecutionEvidence` for:
 
 - idempotency key;
-- request digest;
+- server-owned payload fingerprint;
 - deterministic audit event ID;
 - deterministic outbox event ID;
 - command timestamp;

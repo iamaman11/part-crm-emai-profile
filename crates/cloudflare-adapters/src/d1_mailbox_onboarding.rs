@@ -25,7 +25,7 @@ INSERT INTO mailbox_onboarding_commands (
 
 const IDEMPOTENCY_CREATE: &str = r#"
 INSERT INTO idempotency_records (
-    tenant_id, actor_id, idempotency_key, command_name, request_digest,
+    tenant_id, actor_id, idempotency_key, command_name, payload_fingerprint,
     result_code, result_reference, created_at_ms, expires_at_ms
 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 "#;
@@ -72,7 +72,7 @@ impl MailboxOnboardingApplicationPort for D1MailboxOnboardingApplicationReposito
                 actor.actor_id(),
                 evidence.idempotency_key(),
                 command_name,
-                evidence.request_digest(),
+                evidence.payload_fingerprint(),
                 evidence.now(),
             )
             .await
@@ -356,7 +356,7 @@ fn idempotency_statement(
         actor_id,
         evidence.idempotency_key().as_str(),
         command_name,
-        evidence.request_digest(),
+        evidence.payload_fingerprint().as_str(),
         result_code,
         result_reference,
         now,

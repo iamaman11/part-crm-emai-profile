@@ -134,42 +134,38 @@
       "CreateMailboxBindingRequest": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["bindingId", "provider", "secretHandle", "requestDigest"],
+        "required": ["bindingId", "provider", "secretHandle"],
         "properties": {
           "bindingId": {"$ref": "#/components/schemas/OpaqueId"},
           "provider": {"$ref": "#/components/schemas/MailboxProvider"},
-          "secretHandle": {"$ref": "#/components/schemas/MailboxSecretHandle"},
-          "requestDigest": {"$ref": "#/components/schemas/Sha256Digest"}
+          "secretHandle": {"$ref": "#/components/schemas/MailboxSecretHandle"}
         }
       },
       "RevokeMailboxBindingRequest": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["expectedBindingVersion", "requestDigest"],
+        "required": ["expectedBindingVersion"],
         "properties": {
-          "expectedBindingVersion": {"type": "integer", "minimum": 1},
-          "requestDigest": {"$ref": "#/components/schemas/Sha256Digest"}
+          "expectedBindingVersion": {"type": "integer", "minimum": 1}
         }
       },
       "CreateMailboxJobRequest": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["jobId", "delayMs", "maxAttempts", "requestDigest"],
+        "required": ["jobId", "delayMs", "maxAttempts"],
         "properties": {
           "jobId": {"$ref": "#/components/schemas/OpaqueId"},
           "cursor": {"oneOf": [{"$ref": "#/components/schemas/MailboxCursor"}, {"type": "null"}]},
           "delayMs": {"type": "integer", "minimum": 0, "maximum": 604800000},
-          "maxAttempts": {"type": "integer", "minimum": 1, "maximum": 10},
-          "requestDigest": {"$ref": "#/components/schemas/Sha256Digest"}
+          "maxAttempts": {"type": "integer", "minimum": 1, "maximum": 10}
         }
       },
       "RunMailboxJobRequest": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["expectedJobVersion", "requestDigest"],
+        "required": ["expectedJobVersion"],
         "properties": {
-          "expectedJobVersion": {"type": "integer", "minimum": 1},
-          "requestDigest": {"$ref": "#/components/schemas/Sha256Digest"}
+          "expectedJobVersion": {"type": "integer", "minimum": 1}
         }
       },
       "MailboxBindingResponse": {

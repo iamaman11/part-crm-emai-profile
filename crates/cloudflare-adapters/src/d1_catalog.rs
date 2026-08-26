@@ -1,6 +1,6 @@
 use profile_platform_primitives::{
     ActorContext, AggregateVersion, AuditEventId, ClientId, IdempotencyKey, OutboxEventId,
-    TenantScope, UnixMillis,
+    PayloadFingerprint, TenantScope, UnixMillis,
 };
 use worker::d1::{D1Database, D1Result};
 use worker::{Error, Result, query};
@@ -20,7 +20,7 @@ INSERT INTO client_grants (
 
 const IDEMPOTENCY_CREATE: &str = r#"
 INSERT INTO idempotency_records (
-    tenant_id, actor_id, idempotency_key, command_name, request_digest,
+    tenant_id, actor_id, idempotency_key, command_name, payload_fingerprint,
     result_code, result_reference, created_at_ms, expires_at_ms
 ) VALUES (?, ?, ?, 'client.create', ?, 'created', ?, ?, ?)
 "#;
@@ -89,7 +89,7 @@ pub struct CreateClientMutation<'a> {
     pub creator_grant_role: CatalogClientGrantRole,
     pub creator_grant_reason: &'a str,
     pub idempotency_key: &'a IdempotencyKey,
-    pub request_digest: &'a str,
+    pub payload_fingerprint: &'a PayloadFingerprint,
     pub audit_event_id: &'a AuditEventId,
     pub outbox_event_id: &'a OutboxEventId,
     pub event_payload_json: &'a str,
@@ -181,7 +181,7 @@ impl D1CatalogRepository {
                 tenant_id,
                 actor_id,
                 mutation.idempotency_key.as_str(),
-                mutation.request_digest,
+                mutation.payload_fingerprint.as_str(),
                 mutation.client_id.as_str(),
                 now,
                 expires_at

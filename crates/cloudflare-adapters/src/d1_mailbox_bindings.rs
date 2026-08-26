@@ -41,7 +41,7 @@ impl MailboxBindingApplicationPort for D1MailboxBindingApplicationRepository {
                 actor.actor_id(),
                 evidence.idempotency_key(),
                 command_name,
-                evidence.request_digest(),
+                evidence.payload_fingerprint(),
                 evidence.now(),
             )
             .await
@@ -61,7 +61,7 @@ impl MailboxBindingApplicationPort for D1MailboxBindingApplicationRepository {
             secret_handle: write.binding().secret_handle(),
             envelope: MutationEnvelope {
                 idempotency_key: evidence.idempotency_key(),
-                request_digest: evidence.request_digest(),
+                payload_fingerprint: evidence.payload_fingerprint(),
                 audit_event_id: evidence.audit_event_id(),
                 outbox_event_id: evidence.outbox_event_id(),
                 payload_json: write.event_payload_json(),
@@ -87,7 +87,7 @@ impl MailboxBindingApplicationPort for D1MailboxBindingApplicationRepository {
             expected_binding_version: write.expected_version(),
             envelope: MutationEnvelope {
                 idempotency_key: evidence.idempotency_key(),
-                request_digest: evidence.request_digest(),
+                payload_fingerprint: evidence.payload_fingerprint(),
                 audit_event_id: evidence.audit_event_id(),
                 outbox_event_id: evidence.outbox_event_id(),
                 payload_json: write.event_payload_json(),

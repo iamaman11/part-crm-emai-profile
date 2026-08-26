@@ -44,7 +44,7 @@ impl D1OutboundMailIntentRepository {
             actor.tenant_scope().tenant_id().as_str(),
             actor.actor_id().as_str(),
             evidence.idempotency_key().as_str(),
-            evidence.request_digest(),
+            evidence.payload_fingerprint().as_str(),
         )
         .map_err(map_dependency_error)?
         .first::<OutboundMailIntentRow>(None)
@@ -73,7 +73,7 @@ impl D1OutboundMailIntentRepository {
             intent_id,
             actor_id,
             evidence.idempotency_key().as_str(),
-            evidence.request_digest(),
+            evidence.payload_fingerprint().as_str(),
             intent.client_id().as_str(),
             intent.binding_id().as_str(),
             intent.operation().kind_code(),
@@ -88,7 +88,7 @@ impl D1OutboundMailIntentRepository {
             actor_id,
             evidence.idempotency_key().as_str(),
             OUTBOUND_COMMAND,
-            evidence.request_digest(),
+            evidence.payload_fingerprint().as_str(),
             intent_id,
             now,
             expires_at,
@@ -146,7 +146,7 @@ impl D1OutboundMailIntentRepository {
                 actor.actor_id(),
                 evidence.idempotency_key(),
                 OUTBOUND_COMMAND,
-                evidence.request_digest(),
+                evidence.payload_fingerprint(),
                 evidence.now(),
             )
             .await
@@ -203,7 +203,7 @@ impl OutboundMailIntentApplicationPort for D1OutboundMailIntentRepository {
                 actor.actor_id(),
                 evidence.idempotency_key(),
                 OUTBOUND_COMMAND,
-                evidence.request_digest(),
+                evidence.payload_fingerprint(),
                 evidence.now(),
             )
             .await

@@ -225,7 +225,6 @@ REPOSITORY_REQUIRED = {
     "crates/control-plane-contract/src/mailbox_api.rs": (
         "pub struct BindBrowserMailboxExecutionRequestDto",
         "profile_id: String",
-        "request_digest: String",
         "deny_unknown_fields",
     ),
     "apps/control-plane-worker/src/composition.rs": (
@@ -599,6 +598,7 @@ def enforce_phase2f_ordering(root: Path, errors: list[str]) -> None:
             "query",
             "message_body",
             "secret_handle",
+            "request_digest",
         ):
             if forbidden in browser_bind_request:
                 errors.append(

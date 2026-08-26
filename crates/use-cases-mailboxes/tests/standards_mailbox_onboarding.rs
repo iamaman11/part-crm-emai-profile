@@ -19,7 +19,7 @@ use mailbox_domain::{
 };
 use profile_platform_primitives::{
     ActorContext, ActorId, AuditEventId, CorrelationId, IdempotencyKey, MailboxOnboardingId,
-    OutboxEventId, SecretHandle, TenantId, TenantScope, UnixMillis,
+    OutboxEventId, PayloadFingerprint, SecretHandle, TenantId, TenantScope, UnixMillis,
 };
 use std::cell::{Cell, RefCell};
 use std::future::{Future, ready};
@@ -692,7 +692,7 @@ fn authorization_code() -> TestResult<MicrosoftStandardsOAuthAuthorizationCode> 
 fn evidence(suffix: &str) -> TestResult<CommandExecutionEvidence> {
     Ok(CommandExecutionEvidence::new(
         IdempotencyKey::parse(format!("idem_C3_{suffix}"))?,
-        format!("digest_C3_{suffix}"),
+        PayloadFingerprint::parse(format!("{:064x}", suffix.len()))?,
         AuditEventId::parse(format!("audit_C3_{suffix}"))?,
         OutboxEventId::parse(format!("outbox_C3_{suffix}"))?,
         UnixMillis::new(1_000),

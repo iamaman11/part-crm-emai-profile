@@ -4,7 +4,7 @@ use application_ports::outbound_mail::{
 };
 use profile_platform_primitives::{
     ActorContext, ActorId, AuditEventId, ClientId, CorrelationId, IdempotencyKey, MailboxBindingId,
-    OutboxEventId, TenantId, TenantScope, UnixMillis,
+    OutboxEventId, PayloadFingerprint, TenantId, TenantScope, UnixMillis,
 };
 
 pub(crate) type TestResult<T = ()> = Result<T, Box<dyn std::error::Error>>;
@@ -34,15 +34,31 @@ pub(crate) fn intent() -> TestResult<OutboundMailIntent> {
 
 pub(crate) fn evidence(
     key: &str,
-    digest: &str,
+    fingerprint_seed: &str,
     suffix: &str,
 ) -> TestResult<CommandExecutionEvidence> {
     Ok(CommandExecutionEvidence::new(
         IdempotencyKey::parse(key)?,
-        digest,
+        fixture_payload_fingerprint(fingerprint_seed)?,
         AuditEventId::parse(format!("audit-{suffix}-c4"))?,
         OutboxEventId::parse(format!("outbox-{suffix}-c4"))?,
         UnixMillis::new(1_000),
         UnixMillis::new(86_401_000),
     ))
+}
+
+fn fixture_payload_fingerprint(seed: &str) -> TestResult<PayloadFingerprint> {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let bytes = if seed.is_empty() {
+        b"fixture"
+    } else {
+        seed.as_bytes()
+    };
+    let mut encoded = String::with_capacity(64);
+    for index in 0..32 {
+        let byte = bytes[index % bytes.len()];
+        encoded.push(char::from(HEX[usize::from(byte >> 4)]));
+        encoded.push(char::from(HEX[usize::from(byte & 0x0f)]));
+    }
+    Ok(PayloadFingerprint::parse(encoded)?)
 }
