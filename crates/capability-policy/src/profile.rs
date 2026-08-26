@@ -364,7 +364,10 @@ mod tests {
         ];
         for (profile_id, environment) in [
             (ProfileId::RehearsalCoreV1, CanonicalEnvironment::Staging),
-            (ProfileId::ProductionCoreV1, CanonicalEnvironment::Production),
+            (
+                ProfileId::ProductionCoreV1,
+                CanonicalEnvironment::Production,
+            ),
         ] {
             let result = effective_profile(profile_id, environment);
             assert!(result.is_ok());
