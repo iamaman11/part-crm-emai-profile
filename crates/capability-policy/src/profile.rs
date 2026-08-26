@@ -308,12 +308,7 @@ pub(crate) fn validate_catalog() -> Result<(), PolicyError> {
         for environment in definition.allowed_environments {
             let mut visiting = BTreeSet::new();
             let mut capabilities = BTreeSet::new();
-            apply_profile(
-                profile_id,
-                *environment,
-                &mut visiting,
-                &mut capabilities,
-            )?;
+            apply_profile(profile_id, *environment, &mut visiting, &mut capabilities)?;
             validate_effective_capabilities(&capabilities)?;
         }
     }

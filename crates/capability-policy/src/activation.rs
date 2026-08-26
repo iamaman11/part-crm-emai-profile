@@ -178,10 +178,7 @@ mod tests {
     #[test]
     fn catalog_is_complete_unique_and_acyclic() {
         assert!(validate_catalog().is_ok());
-        let ids: BTreeSet<&str> = ALL_ACTIVATION_UNITS
-            .iter()
-            .map(|unit| unit.id())
-            .collect();
+        let ids: BTreeSet<&str> = ALL_ACTIVATION_UNITS.iter().map(|unit| unit.id()).collect();
         assert_eq!(ids.len(), ALL_ACTIVATION_UNITS.len());
     }
 

@@ -66,14 +66,20 @@ pub enum PolicyError {
     EnvironmentNotAllowed,
     ProductionNotAuthorized,
     ActivationDependencyCycle,
-    ActivationSelfDependency { unit: ActivationUnit },
-    ActivationSelfIncompatibility { unit: ActivationUnit },
+    ActivationSelfDependency {
+        unit: ActivationUnit,
+    },
+    ActivationSelfIncompatibility {
+        unit: ActivationUnit,
+    },
     AsymmetricIncompatibility {
         left: ActivationUnit,
         right: ActivationUnit,
     },
     ProfileInheritanceCycle,
-    ProfileEnableDisableOverlap { unit: ActivationUnit },
+    ProfileEnableDisableOverlap {
+        unit: ActivationUnit,
+    },
     DependencyUnsatisfied {
         unit: ActivationUnit,
         dependency: ActivationUnit,
@@ -105,7 +111,11 @@ impl Display for PolicyError {
                 write!(formatter, "activation unit {} depends on itself", unit.id())
             }
             Self::ActivationSelfIncompatibility { unit } => {
-                write!(formatter, "activation unit {} conflicts with itself", unit.id())
+                write!(
+                    formatter,
+                    "activation unit {} conflicts with itself",
+                    unit.id()
+                )
             }
             Self::AsymmetricIncompatibility { left, right } => write!(
                 formatter,

@@ -118,7 +118,10 @@ mod tests {
 
     #[test]
     fn every_runtime_surface_has_unique_id_and_canonical_unit() {
-        let ids: BTreeSet<&str> = ALL_RUNTIME_SURFACES.iter().map(|surface| surface.id()).collect();
+        let ids: BTreeSet<&str> = ALL_RUNTIME_SURFACES
+            .iter()
+            .map(|surface| surface.id())
+            .collect();
         assert_eq!(ids.len(), ALL_RUNTIME_SURFACES.len());
         assert_eq!(
             RuntimeSurface::ResolverIngress.activation_unit(),
