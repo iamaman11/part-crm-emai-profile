@@ -118,17 +118,17 @@ self_test() {
 
   cp -a "$root/v3" "$root/v3-missing"
   rm "$root/v3-missing/capability-policy-v1.json"
-  if materialize current-v3 "$v3" "$root/v3-missing" "$root/should-fail-missing" >/dev/null 2>&1; then
+  if ( materialize current-v3 "$v3" "$root/v3-missing" "$root/should-fail-missing" ) >/dev/null 2>&1; then
     fail "v3 missing capability-policy fixture unexpectedly passed"
   fi
 
-  if materialize current-v3 "$v2" "$root/v2" "$root/should-fail-v2-target" >/dev/null 2>&1; then
+  if ( materialize current-v3 "$v2" "$root/v2" "$root/should-fail-v2-target" ) >/dev/null 2>&1; then
     fail "historical v2 fixture unexpectedly accepted as current target"
   fi
 
   cp -a "$root/v3" "$root/v3-extra"
   : > "$root/v3-extra/unexpected.bin"
-  if materialize current-v3 "$v3" "$root/v3-extra" "$root/should-fail-extra" >/dev/null 2>&1; then
+  if ( materialize current-v3 "$v3" "$root/v3-extra" "$root/should-fail-extra" ) >/dev/null 2>&1; then
     fail "unexpected GitHub Release asset fixture unexpectedly passed"
   fi
 
