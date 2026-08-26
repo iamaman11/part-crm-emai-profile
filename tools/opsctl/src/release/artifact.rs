@@ -228,12 +228,12 @@ mod tests {
         let expected =
             BTreeSet::from(["capability-policy-v1.json", "components/control-plane.tar"]);
         let observed = BTreeSet::from(["components/control-plane.tar"]);
-        let error = match verify_inventory_paths(&expected, &observed) {
-            Err(error) => error,
-            Ok(()) => panic!("candidate without capability policy manifest unexpectedly verified"),
-        };
-        assert!(error.to_string().contains("ARTIFACT_INVENTORY_MISMATCH"));
-        assert!(error.to_string().contains("capability-policy-v1.json"));
+        let result = verify_inventory_paths(&expected, &observed);
+        assert!(result.is_err(), "candidate without capability policy manifest unexpectedly verified");
+        if let Err(error) = result {
+            assert!(error.to_string().contains("ARTIFACT_INVENTORY_MISMATCH"));
+            assert!(error.to_string().contains("capability-policy-v1.json"));
+        }
     }
 
     #[test]
