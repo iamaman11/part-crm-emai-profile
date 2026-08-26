@@ -77,13 +77,9 @@ fn surface_enabled(profile: &EffectiveProfile, surface: RuntimeSurface) -> bool 
 pub async fn main(mut request: Request, env: Env, _context: Context) -> Result<Response> {
     let profile = match admitted_profile(&env) {
         Ok(profile) => profile,
-        Err(error) => {
-            worker::console_error!("resolver capability admission failed: {error}");
-            return error_response(503, "resolver_capability_unavailable");
-        }
+        Err(_) => return error_response(503, "resolver_capability_unavailable"),
     };
     if !surface_enabled(&profile, RuntimeSurface::ResolverIngress) {
-        worker::console_error!("resolver capability admission denied: CAPABILITY_DISABLED");
         return error_response(503, "resolver_capability_unavailable");
     }
     let now_ms = Date::now().as_millis();
@@ -122,13 +118,9 @@ pub async fn main(mut request: Request, env: Env, _context: Context) -> Result<R
 pub async fn scheduled(_event: ScheduledEvent, env: Env, _context: ScheduleContext) {
     let profile = match admitted_profile(&env) {
         Ok(profile) => profile,
-        Err(error) => {
-            worker::console_error!("resolver capability admission failed: {error}");
-            return;
-        }
+        Err(_) => return,
     };
     if !surface_enabled(&profile, RuntimeSurface::ResolverReconciliation) {
-        worker::console_error!("resolver capability admission denied: CAPABILITY_DISABLED");
         return;
     }
     assert!(
