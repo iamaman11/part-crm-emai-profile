@@ -353,12 +353,27 @@ mod tests {
     }
 
     #[test]
-    fn rehearsal_core_excludes_mail() {
-        let result = effective_profile(ProfileId::RehearsalCoreV1, CanonicalEnvironment::Staging);
-        assert!(result.is_ok());
-        if let Ok(profile) = result {
-            assert!(profile.capabilities.enabled(ActivationUnit::Clients));
-            assert!(!profile.capabilities.enabled(ActivationUnit::MailboxAdmin));
+    fn core_profiles_exclude_all_mailbox_capabilities() {
+        const MAILBOX_CAPABILITIES: [ActivationUnit; 6] = [
+            ActivationUnit::MailboxAdmin,
+            ActivationUnit::MailboxClientBinding,
+            ActivationUnit::MailboxBrowserBinding,
+            ActivationUnit::MailboxRead,
+            ActivationUnit::MailboxJobs,
+            ActivationUnit::OutboundMail,
+        ];
+        for (profile_id, environment) in [
+            (ProfileId::RehearsalCoreV1, CanonicalEnvironment::Staging),
+            (ProfileId::ProductionCoreV1, CanonicalEnvironment::Production),
+        ] {
+            let result = effective_profile(profile_id, environment);
+            assert!(result.is_ok());
+            if let Ok(profile) = result {
+                assert!(profile.capabilities.enabled(ActivationUnit::Clients));
+                for capability in MAILBOX_CAPABILITIES {
+                    assert!(!profile.capabilities.enabled(capability));
+                }
+            }
         }
     }
 
