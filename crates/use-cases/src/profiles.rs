@@ -319,7 +319,8 @@ mod tests {
     };
     use profile_platform_primitives::{
         ActorContext, ActorId, AggregateVersion, AuditEventId, ClientId, CorrelationId, DeviceId,
-        GenerationId, IdempotencyKey, OutboxEventId, ProfileId, TenantId, TenantScope, UnixMillis,
+        GenerationId, IdempotencyKey, OutboxEventId, PayloadFingerprint, ProfileId, TenantId,
+        TenantScope, UnixMillis,
     };
     use std::cell::{Cell, RefCell};
     use std::future::Future;
@@ -411,7 +412,7 @@ mod tests {
     fn evidence() -> Result<CommandExecutionEvidence, Box<dyn std::error::Error>> {
         Ok(CommandExecutionEvidence::new(
             IdempotencyKey::parse("idem_01JPROFILEAPP")?,
-            "digest_01JPROFILEAPP",
+            PayloadFingerprint::parse("a".repeat(64))?,
             AuditEventId::parse("audit_01JPROFILEAPP")?,
             OutboxEventId::parse("outbox_01JPROFILEAPP")?,
             UnixMillis::new(10),
