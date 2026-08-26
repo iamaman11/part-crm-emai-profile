@@ -108,18 +108,10 @@ jobs:
           asset_root="$RUNNER_TEMP/target-assets"
           release_root="$RUNNER_TEMP/target-release-set"
           policy_dir="$RUNNER_TEMP/release-policy-input"
-          mkdir -p "$asset_root" "$release_root/components" "$policy_dir"
+          mkdir -p "$asset_root" "$policy_dir"
           gh release download "$RELEASE_SET_ID" --repo "$GITHUB_REPOSITORY" --dir "$asset_root"
-          for name in release-set.json control-plane.tar secret-resolver.tar runtime-bundle.tar profile-bridge.zip; do
-            test -f "$asset_root/$name"
-          done
-          test "$(find "$asset_root" -maxdepth 1 -type f | wc -l)" -eq 5
-          cp "$asset_root/release-set.json" "$release_root/release-set.json"
-          cp "$asset_root/release-set.json" "$policy_dir/release-set.json"
-          cp "$asset_root/control-plane.tar" "$release_root/components/control-plane.tar"
-          cp "$asset_root/secret-resolver.tar" "$release_root/components/secret-resolver.tar"
-          cp "$asset_root/runtime-bundle.tar" "$release_root/components/runtime-bundle.tar"
-          cp "$asset_root/profile-bridge.zip" "$release_root/components/profile-bridge.zip"
+          bash scripts/release-set-assets-ar11.sh materialize current-v3 "$RELEASE_SET_ID" "$asset_root" "$release_root"
+          cp "$release_root/release-set.json" "$policy_dir/release-set.json"
           test "$(jq -r '.release_set_id' "$policy_dir/release-set.json")" = "$RELEASE_SET_ID"
           python scripts/accepted-source-evidence-ar11.py \
             --repository "$GITHUB_REPOSITORY" \
@@ -190,14 +182,10 @@ jobs:
           asset_root="$RUNNER_TEMP/target-assets"
           release_root="$RUNNER_TEMP/target-release-set"
           policy_dir="$RUNNER_TEMP/release-policy-input"
-          mkdir -p "$asset_root" "$release_root/components" "$policy_dir"
+          mkdir -p "$asset_root" "$policy_dir"
           gh release download "$RELEASE_SET_ID" --repo "$GITHUB_REPOSITORY" --dir "$asset_root"
-          cp "$asset_root/release-set.json" "$release_root/release-set.json"
-          cp "$asset_root/release-set.json" "$policy_dir/release-set.json"
-          cp "$asset_root/control-plane.tar" "$release_root/components/control-plane.tar"
-          cp "$asset_root/secret-resolver.tar" "$release_root/components/secret-resolver.tar"
-          cp "$asset_root/runtime-bundle.tar" "$release_root/components/runtime-bundle.tar"
-          cp "$asset_root/profile-bridge.zip" "$release_root/components/profile-bridge.zip"
+          bash scripts/release-set-assets-ar11.sh materialize current-v3 "$RELEASE_SET_ID" "$asset_root" "$release_root"
+          cp "$release_root/release-set.json" "$policy_dir/release-set.json"
           branch_json="$RUNNER_TEMP/protected-main.json"
           compare_json="$RUNNER_TEMP/accepted-source-compare.json"
           gh api "repos/$GITHUB_REPOSITORY/branches/main" > "$branch_json"
@@ -210,7 +198,8 @@ jobs:
           cargo run --locked --quiet --manifest-path tools/opsctl/Cargo.toml -- \
             --root . release verify --release-set "$policy_dir/release-set.json" \
             --source-root "$GITHUB_WORKSPACE/target-source" --artifact-root "$release_root" \
-            > "$RUNNER_TEMP/release-verify.json"
+            | tee "$RUNNER_TEMP/release-verify.json" \
+            | jq -e '.decision == "VALID" and .release_set_schema_version == 3 and .source_accepted == true and .mutation_executed == false' >/dev/null
           control_extract="$RUNNER_TEMP/control-release"
           mkdir -p "$control_extract"
           tar -xf "$release_root/components/control-plane.tar" -C "$control_extract"
@@ -296,14 +285,10 @@ jobs:
           asset_root="$RUNNER_TEMP/known-good-assets"
           release_root="$RUNNER_TEMP/known-good-release-set"
           policy_dir="$RUNNER_TEMP/known-good-policy"
-          mkdir -p "$asset_root" "$release_root/components" "$policy_dir"
+          mkdir -p "$asset_root" "$policy_dir"
           gh release download "$current_id" --repo "$GITHUB_REPOSITORY" --dir "$asset_root"
-          cp "$asset_root/release-set.json" "$release_root/release-set.json"
-          cp "$asset_root/release-set.json" "$policy_dir/release-set.json"
-          cp "$asset_root/control-plane.tar" "$release_root/components/control-plane.tar"
-          cp "$asset_root/secret-resolver.tar" "$release_root/components/secret-resolver.tar"
-          cp "$asset_root/runtime-bundle.tar" "$release_root/components/runtime-bundle.tar"
-          cp "$asset_root/profile-bridge.zip" "$release_root/components/profile-bridge.zip"
+          bash scripts/release-set-assets-ar11.sh materialize known-good-v2-v3 "$current_id" "$asset_root" "$release_root"
+          cp "$release_root/release-set.json" "$policy_dir/release-set.json"
           gh api "repos/$GITHUB_REPOSITORY/branches/main" > "$RUNNER_TEMP/kg-main.json"
           gh api "repos/$GITHUB_REPOSITORY/compare/$known_good_source...${{ needs.resolve-verify.outputs.main_sha }}" > "$RUNNER_TEMP/kg-compare.json"
           python scripts/accepted-source-evidence-ar11.py \
@@ -313,7 +298,7 @@ jobs:
           cargo run --locked --quiet --manifest-path tools/opsctl/Cargo.toml -- \
             --root . release verify --release-set "$policy_dir/release-set.json" \
             --source-root "$GITHUB_WORKSPACE/known-good-source" --artifact-root "$release_root" \
-            | jq -e '.decision == "VALID" and .source_accepted == true' >/dev/null
+            | jq -e '.decision == "VALID" and (.release_set_schema_version == 2 or .release_set_schema_version == 3) and .source_accepted == true and .mutation_executed == false' >/dev/null
           echo "CURRENT_RELEASE_MANIFEST=$policy_dir/release-set.json" >> "$GITHUB_ENV"
 
       - name: Build metadata-only DeploymentSnapshot v2
@@ -485,19 +470,12 @@ jobs:
           asset_root="$RUNNER_TEMP/target-assets"
           release_root="$RUNNER_TEMP/mutation-release-set"
           policy_dir="$RUNNER_TEMP/mutation-policy"
-          mkdir -p "$asset_root" "$release_root/components" "$policy_dir"
+          mkdir -p "$asset_root" "$policy_dir"
           gh release download "$RELEASE_SET_ID" --repo "$GITHUB_REPOSITORY" --dir "$asset_root"
-          for name in release-set.json control-plane.tar secret-resolver.tar runtime-bundle.tar profile-bridge.zip; do
-            test -f "$asset_root/$name"
-          done
-          test "$(find "$asset_root" -maxdepth 1 -type f | wc -l)" -eq 5
-          cmp --silent "$asset_root/release-set.json" "$preflight_root/release-set.json"
+          bash scripts/release-set-assets-ar11.sh materialize current-v3 "$RELEASE_SET_ID" "$asset_root" "$release_root"
+          cmp --silent "$release_root/release-set.json" "$preflight_root/release-set.json"
           cp "$preflight_root/release-set.json" "$policy_dir/release-set.json"
           cp "$preflight_root/accepted-source-evidence.json" "$policy_dir/accepted-source-evidence.json"
-          cp "$asset_root/control-plane.tar" "$release_root/components/control-plane.tar"
-          cp "$asset_root/secret-resolver.tar" "$release_root/components/secret-resolver.tar"
-          cp "$asset_root/runtime-bundle.tar" "$release_root/components/runtime-bundle.tar"
-          cp "$asset_root/profile-bridge.zip" "$release_root/components/profile-bridge.zip"
           cargo run --locked --quiet --manifest-path tools/opsctl/Cargo.toml -- \
             --root . release verify --release-set "$policy_dir/release-set.json" \
             --source-root "$GITHUB_WORKSPACE/target-source" --artifact-root "$release_root" \
@@ -505,7 +483,7 @@ jobs:
 
           control_extract="$RUNNER_TEMP/control-release"
           mkdir -p "$control_extract"
-          tar -xf "$asset_root/control-plane.tar" -C "$control_extract"
+          tar -xf "$release_root/components/control-plane.tar" -C "$control_extract"
           manifest="$(find "$control_extract" -type f -name release-manifest.json -print -quit)"
           test -n "$manifest"
           control_root="$(dirname "$manifest")"
@@ -612,12 +590,24 @@ jobs:
         run: |
           set -euo pipefail
           asset_root="$RUNNER_TEMP/target-assets"
-          mkdir -p "$asset_root"
+          release_root="$RUNNER_TEMP/post-release-set"
+          policy_dir="$RUNNER_TEMP/post-policy"
+          mkdir -p "$asset_root" "$policy_dir"
           gh release download "$RELEASE_SET_ID" --repo "$GITHUB_REPOSITORY" --dir "$asset_root"
+          bash scripts/release-set-assets-ar11.sh materialize current-v3 "$RELEASE_SET_ID" "$asset_root" "$release_root"
+          cmp --silent "$release_root/release-set.json" "$RUNNER_TEMP/preflight/release-set.json"
+          cp "$RUNNER_TEMP/preflight/release-set.json" "$policy_dir/release-set.json"
+          cp "$RUNNER_TEMP/preflight/accepted-source-evidence.json" "$policy_dir/accepted-source-evidence.json"
+          cargo run --locked --quiet --manifest-path tools/opsctl/Cargo.toml -- \
+            --root . release verify --release-set "$policy_dir/release-set.json" \
+            --source-root "$GITHUB_WORKSPACE/target-source" --artifact-root "$release_root" \
+            | tee "$RUNNER_TEMP/post-release-verify.json" \
+            | jq -e '.decision == "VALID" and .release_set_schema_version == 3 and .source_accepted == true and .mutation_executed == false' >/dev/null
           control_extract="$RUNNER_TEMP/control-release"
           mkdir -p "$control_extract"
-          tar -xf "$asset_root/control-plane.tar" -C "$control_extract"
+          tar -xf "$release_root/components/control-plane.tar" -C "$control_extract"
           manifest="$(find "$control_extract" -type f -name release-manifest.json -print -quit)"
+          test -n "$manifest"
           control_root="$(dirname "$manifest")"
           umask 077
           printf '%s' "$CLOUDFLARE_DEPLOY_MANIFEST_JSON" > "$RUNNER_TEMP/deploy-manifest.json"
@@ -684,6 +674,7 @@ jobs:
         with:
           name: release-set-promotion-staging-${{ inputs.release_set_id }}
           path: |
+            ${{ runner.temp }}/post-release-verify.json
             ${{ runner.temp }}/post-snapshot.json
             ${{ runner.temp }}/promotion-verify.json
           if-no-files-found: error
@@ -753,9 +744,22 @@ jobs:
           mkdir -p "$live"
           gh run download "$SOURCE_RUN_ID" --repo "$GITHUB_REPOSITORY" \
             --name "ar11-preflight-$RELEASE_SET_ID" --dir "$live"
-          for name in release-set.json release-verify.json compatibility-evidence.json promotion-plan.json promotion-preflight.json pre-snapshot.json; do
+          for name in release-set.json accepted-source-evidence.json release-verify.json compatibility-evidence.json promotion-plan.json promotion-preflight.json pre-snapshot.json; do
             test -f "$live/$name"
           done
+
+          asset_root="$RUNNER_TEMP/rollback-assets"
+          release_root="$RUNNER_TEMP/rollback-release-set"
+          mkdir -p "$asset_root"
+          gh release download "$RELEASE_SET_ID" --repo "$GITHUB_REPOSITORY" --dir "$asset_root"
+          bash scripts/release-set-assets-ar11.sh materialize current-v3 "$RELEASE_SET_ID" "$asset_root" "$release_root"
+          cmp --silent "$release_root/release-set.json" "$live/release-set.json"
+          cargo run --locked --quiet --manifest-path tools/opsctl/Cargo.toml -- \
+            --root . release verify --release-set "$live/release-set.json" \
+            --source-root "$GITHUB_WORKSPACE/target-source" --artifact-root "$release_root" \
+            | tee "$RUNNER_TEMP/rollback-release-verify.json" \
+            | jq -e '.decision == "VALID" and .release_set_schema_version == 3 and .source_accepted == true and .mutation_executed == false' >/dev/null
+
           jq -e --arg id "$RELEASE_SET_ID" '.decision == "VALID" and .release_set_id == $id and .source_accepted == true and .mutation_executed == false' "$live/release-verify.json" >/dev/null
           jq -e --arg id "$RELEASE_SET_ID" '.decision == "NO_CHANGE" and .observed_current_release_set_id == $id and .target_release_set_id == $id and (.actions | length) == 0 and .mutation_executed == false' "$live/promotion-plan.json" >/dev/null
           jq -e --arg id "$RELEASE_SET_ID" '.decision == "READY" and .ready == true and .target_release_set_id == $id and .rollback_compatibility == "COMPATIBLE" and .credential_values_accessed == false and .provider_mutation_executed == false and .mutation_executed == false' "$live/promotion-preflight.json" >/dev/null
@@ -798,6 +802,7 @@ jobs:
             ${{ runner.temp }}/source-run.json
             ${{ runner.temp }}/live-preflight/release-set.json
             ${{ runner.temp }}/live-preflight/release-verify.json
+            ${{ runner.temp }}/rollback-release-verify.json
             ${{ runner.temp }}/live-preflight/promotion-plan.json
             ${{ runner.temp }}/live-preflight/promotion-preflight.json
             ${{ runner.temp }}/live-preflight/pre-snapshot.json
