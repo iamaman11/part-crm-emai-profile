@@ -10,6 +10,7 @@ const BUILD = '.github/workflows/release-set-build.yml';
 const PROMOTION = '.github/workflows/release-set-promotion.yml';
 const TRANSPORT = '.github/workflows/ar11-fc6-operator-transport.yml';
 const OPERATOR = '.github/scripts/ar11-fc6-operator.mjs';
+const ASSET_MATERIALIZER = 'scripts/release-set-assets-ar11.sh';
 const REGISTRY = 'architecture/github-actions-registry.json';
 const AUTHORITY = 'architecture/release-architecture-ar11.json';
 const TRANSACTION = 'docs/evidence/ar11-fc6-operator-transaction.json';
@@ -65,9 +66,10 @@ function buildErrors(build) {
     'gh release download',
     'cmp --silent',
     'Publish once or prove byte-identical replay',
+    'cp "$RELEASE_DIR/capability-policy-v1.json" "$asset_dir/capability-policy-v1.json"',
     'cp "$RELEASE_DIR/components/"* "$asset_dir/"',
-    'test "$(find "$asset_dir" -maxdepth 1 -type f | wc -l)" -eq 5',
-    'test "$(find "$existing" -maxdepth 1 -type f | wc -l)" -eq 5',
+    'test "$(find "$asset_dir" -maxdepth 1 -type f | wc -l)" -eq 6',
+    'test "$(find "$existing" -maxdepth 1 -type f | wc -l)" -eq 6',
   ], 'Release Set build'));
   errors.push(...forbidMarkers(build, [
     'release-set-ar11.py build', 'release-set-v2-sha256-', '.release_set_schema_version == 2',
@@ -169,6 +171,8 @@ function promotionErrors(promotion) {
   ], 'Release Set promotion'));
   if (count(promotion, 'workflow_dispatch:') !== 1) errors.push('Release Set promotion must expose exactly one manual dispatch surface');
   if (count(promotion, 'secrets.CLOUDFLARE_API_TOKEN') !== 1) errors.push('deploy-capable Cloudflare token must be referenced exactly once, inside mutation executor');
+  if (count(promotion, 'materialize current-v3') !== 5) errors.push(`current v3 Release Set materialization must occur exactly five times, observed=${count(promotion, 'materialize current-v3')}`);
+  if (count(promotion, 'materialize known-good-v2-v3') !== 1) errors.push(`historical v2/v3 materialization must occur exactly once in known-good verification, observed=${count(promotion, 'materialize known-good-v2-v3')}`);
   errors.push(...forbidMarkers(promotion, [
     'workflow_run:', 'issue_comment:', 'pull_request_target:', 'pull_request:\n', 'operator-entrypoint:',
     'test "$source_sha" = "$main_sha"',
@@ -197,13 +201,14 @@ function promotionErrors(promotion) {
     'compare/$source_sha...$main_sha', 'Checkout current protected-main policy authority',
     'Checkout exact target source as read-only provenance input', 'path: target-source', 'accepted-source-evidence-ar11.py',
     'Download and verify immutable Release Set v3 target with no provider credentials',
-    'gh release download "$RELEASE_SET_ID"', 'for name in release-set.json control-plane.tar secret-resolver.tar runtime-bundle.tar profile-bridge.zip',
+    'gh release download "$RELEASE_SET_ID"',
+    'bash scripts/release-set-assets-ar11.sh materialize current-v3 "$RELEASE_SET_ID" "$asset_root" "$release_root"',
     'release verify', '--source-root "$GITHUB_WORKSPACE/target-source"',
-    '.release_set_schema_version == 3',
-    'test "$(find "$asset_root" -maxdepth 1 -type f | wc -l)" -eq 5', '.source_accepted == true',
+    '.release_set_schema_version == 3', '.source_accepted == true',
   ], 'promotion phase 1 resolve+verify'));
   errors.push(...forbidMarkers(resolve, [
     '[[ "$RELEASE_SET_ID" =~ ^release-set-v2-sha256-[0-9a-f]{64}$ ]]',
+    'materialize known-good-v2-v3',
     'test "$(jq -r \'.schema_version\' "$policy_dir/release-set.json")" = 2',
     '.release_set_schema_version == 2',
     'secrets.CLOUDFLARE_', 'environment: staging', 'wrangler deploy', 'wrangler d1 execute',
@@ -213,7 +218,11 @@ function promotionErrors(promotion) {
   errors.push(...requireMarkers(observe, [
     'needs: resolve-verify', 'environment: staging', 'TARGET_PROFILE: rehearsal-core-v1', 'TARGET_ENVIRONMENT: staging',
     'secrets.CLOUDFLARE_OBSERVE_API_TOKEN', 'Observe current provider state without mutation',
-    'Verify current/known-good immutable Release Set before rollback evaluation', 'Build metadata-only DeploymentSnapshot v2',
+    'bash scripts/release-set-assets-ar11.sh materialize current-v3 "$RELEASE_SET_ID" "$asset_root" "$release_root"',
+    'Verify current/known-good immutable Release Set before rollback evaluation',
+    'bash scripts/release-set-assets-ar11.sh materialize known-good-v2-v3 "$current_id" "$asset_root" "$release_root"',
+    '(.release_set_schema_version == 2 or .release_set_schema_version == 3)',
+    'Build metadata-only DeploymentSnapshot v2',
     'deployment-snapshot-ar11.py', 'release compatibility', 'promotion plan', 'promotion preflight', '--expected-current "$EXPECTED_CURRENT"',
     'mutation-fence.json', 'Materialize flat metadata-only preflight artifact contract',
     'cp "$RUNNER_TEMP/release-policy-input/release-set.json" "$RUNNER_TEMP/release-set.json"',
@@ -226,13 +235,14 @@ function promotionErrors(promotion) {
     'needs: [resolve-verify, observe-preflight]', "if: needs.observe-preflight.outputs.decision == 'PLAN'", 'environment: staging', 'deployments: write',
     'Checkout exact target source before mutation verification', 'Download and bind exact preflight authority before provider use',
     'Re-verify fence and exact immutable Release Set before credentials', 'mutation-fence.json', "'.preflight_sha256'", "'.plan_sha256'",
-    'cmp --silent "$asset_root/release-set.json" "$preflight_root/release-set.json"', 'release verify', '.release_set_schema_version == 3',
+    'bash scripts/release-set-assets-ar11.sh materialize current-v3 "$RELEASE_SET_ID" "$asset_root" "$release_root"',
+    'cmp --silent "$release_root/release-set.json" "$preflight_root/release-set.json"', 'release verify', '.release_set_schema_version == 3',
     'Activate deploy credential after READY and exact-byte verification', 'DEPLOY_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}',
     'Re-observe expected-current fence and deploy exact Release Set v3 bits', 'deployment-identity-ar11.py',
     'test "$current_id" = "$EXPECTED_CURRENT"', 'gh release download "$RELEASE_SET_ID"', '--dry-run',
     '--message "release_set=$RELEASE_SET_ID profile=rehearsal-core-v1"',
   ], 'promotion phase 3 protected mutation'));
-  errors.push(...forbidMarkers(mutate, ['.release_set_schema_version == 2', 'worker-build --release', 'cargo build', 'npm run build', 'release-set-ar11.py build', 'release compatibility', 'promotion plan', 'promotion preflight'], 'promotion phase 3 protected mutation'));
+  errors.push(...forbidMarkers(mutate, ['materialize known-good-v2-v3', '.release_set_schema_version == 2', 'worker-build --release', 'cargo build', 'npm run build', 'release-set-ar11.py build', 'release compatibility', 'promotion plan', 'promotion preflight'], 'promotion phase 3 protected mutation'));
   const nativeVerify = mutate.indexOf('Re-verify fence and exact immutable Release Set before credentials');
   const deployCredential = mutate.indexOf('DEPLOY_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}');
   const reobserveFence = mutate.indexOf('Re-observe expected-current fence and deploy exact Release Set v3 bits');
@@ -244,9 +254,12 @@ function promotionErrors(promotion) {
 
   errors.push(...requireMarkers(post, [
     'needs: [resolve-verify, observe-preflight, mutate]', "needs.mutate.result == 'success' || needs.mutate.result == 'skipped'",
-    'environment: staging', 'secrets.CLOUDFLARE_OBSERVE_API_TOKEN', 'deployment-snapshot-ar11.py', 'promotion verify', '.verified == true',
+    'environment: staging', 'secrets.CLOUDFLARE_OBSERVE_API_TOKEN',
+    'bash scripts/release-set-assets-ar11.sh materialize current-v3 "$RELEASE_SET_ID" "$asset_root" "$release_root"',
+    'post-release-verify.json', 'release verify', '.release_set_schema_version == 3',
+    'deployment-snapshot-ar11.py', 'promotion verify', '.verified == true',
   ], 'promotion phase 4 post-deploy observation'));
-  errors.push(...forbidMarkers(post, ['secrets.CLOUDFLARE_API_TOKEN', 'deployments: write', 'wrangler deploy'], 'promotion phase 4 post-deploy observation'));
+  errors.push(...forbidMarkers(post, ['materialize known-good-v2-v3', 'secrets.CLOUDFLARE_API_TOKEN', 'deployments: write', 'wrangler deploy'], 'promotion phase 4 post-deploy observation'));
 
   errors.push(...requireMarkers(rollbackNegative, [
     "if: github.event_name == 'workflow_dispatch' && inputs.operation == 'rollback-negative'", 'actions: read',
@@ -254,14 +267,17 @@ function promotionErrors(promotion) {
     '[[ "$RELEASE_SET_ID" =~ ^release-set-v3-sha256-[0-9a-f]{64}$ ]]',
     '.status == "completed"', '.conclusion == "success"',
     '.path == ".github/workflows/release-set-promotion.yml"', 'gh run download "$SOURCE_RUN_ID"',
-    'Download live A-to-A preflight evidence without provider credentials', '.decision == "NO_CHANGE"', '.rollback_compatibility == "COMPATIBLE"',
+    'Download live A-to-A preflight evidence without provider credentials', 'accepted-source-evidence.json',
+    'bash scripts/release-set-assets-ar11.sh materialize current-v3 "$RELEASE_SET_ID" "$asset_root" "$release_root"',
+    'rollback-release-verify.json', 'release verify', '.release_set_schema_version == 3',
+    '.decision == "NO_CHANGE"', '.rollback_compatibility == "COMPATIBLE"',
     "jq '.catalog_schema_revision = null'", 'Native rollback preflight must block UNKNOWN before credentials',
     '--known-good-release-set "$live/release-set.json"', '.decision == "BLOCKED"', '.rollback_compatibility == "UNKNOWN"',
     'ROLLBACK_COMPATIBILITY_UNKNOWN', '.credential_values_accessed == false', '.provider_mutation_executed == false', '.mutation_executed == false',
     'Upload credential-free rollback-negative evidence',
   ], 'promotion rollback-negative evidence'));
   errors.push(...forbidMarkers(rollbackNegative, [
-    '[[ "$RELEASE_SET_ID" =~ ^release-set-v2-sha256-[0-9a-f]{64}$ ]]',
+    '[[ "$RELEASE_SET_ID" =~ ^release-set-v2-sha256-[0-9a-f]{64}$ ]]', 'materialize known-good-v2-v3',
     'secrets.CLOUDFLARE_', 'CLOUDFLARE_API_TOKEN', 'CLOUDFLARE_DEPLOY_MANIFEST_JSON', 'environment: staging', 'deployments: write', 'wrangler deploy',
   ], 'promotion rollback-negative evidence'));
 
@@ -270,7 +286,7 @@ function promotionErrors(promotion) {
 
 function operationalErrors({ requireCutover = true } = {}) {
   const errors = [];
-  for (const relative of [BUILD, PROMOTION, TRANSPORT, OPERATOR, REGISTRY, AUTHORITY]) {
+  for (const relative of [BUILD, PROMOTION, TRANSPORT, OPERATOR, ASSET_MATERIALIZER, REGISTRY, AUTHORITY]) {
     if (!existsSync(path.join(ROOT, relative))) errors.push(`missing AR-11 operational authority: ${relative}`);
   }
   if (errors.length > 0) return errors;
@@ -317,6 +333,7 @@ function selfTest() {
   if (buildErrors(build).length !== 0 || promotionErrors(promotion).length !== 0 || transportErrors(transport).length !== 0 || operatorScriptErrors(operator).length !== 0) {
     throw new Error('canonical AR-11 operational workflow does not satisfy its own structural validator');
   }
+  execFileSync('bash', [path.join(ROOT, ASSET_MATERIALIZER), '--self-test'], { cwd: ROOT, stdio: 'inherit' });
   execFileSync(process.execPath, [path.join(ROOT, OPERATOR), '--self-test'], { cwd: ROOT, stdio: 'inherit' });
 
   const predecessorWriter = build.replace('release finalize --request-json', 'release-set-ar11.py build');
@@ -325,8 +342,14 @@ function selfTest() {
   const v2Writer = build.replace('release-set-v3-sha256-', 'release-set-v2-sha256-');
   if (!buildErrors(v2Writer).some((error) => error.includes('release-set-v2-sha256-'))) throw new Error('Release Set v2 current-writer fixture unexpectedly passed');
 
+  const staleFiveAssetBuild = build.replace('test "$(find "$asset_dir" -maxdepth 1 -type f | wc -l)" -eq 6', 'test "$(find "$asset_dir" -maxdepth 1 -type f | wc -l)" -eq 5');
+  if (!buildErrors(staleFiveAssetBuild).some((error) => error.includes('eq 6'))) throw new Error('five-asset current Release Set fixture unexpectedly passed');
+
   const v2Target = promotion.replaceAll('[[ "$RELEASE_SET_ID" =~ ^release-set-v3-sha256-[0-9a-f]{64}$ ]]', '[[ "$RELEASE_SET_ID" =~ ^release-set-v2-sha256-[0-9a-f]{64}$ ]]');
   if (!promotionErrors(v2Target).some((error) => error.includes('release-set-v2-sha256-') || error.includes('release-set-v3-sha256-'))) throw new Error('Release Set v2 current-target fixture unexpectedly passed');
+
+  const broadHistoricalMaterializer = promotion.replace('materialize current-v3 "$RELEASE_SET_ID"', 'materialize known-good-v2-v3 "$RELEASE_SET_ID"');
+  if (promotionErrors(broadHistoricalMaterializer).length === 0) throw new Error('historical v2/v3 materializer leaked into current target authority');
 
   const v2Operator = operator.replace("const RELEASE = 'release-set-v3-sha256-[0-9a-f]{64}'", "const RELEASE = 'release-set-v2-sha256-[0-9a-f]{64}'");
   if (!operatorScriptErrors(v2Operator).some((error) => error.includes('release-set-v2-sha256-') || error.includes('release-set-v3-sha256-'))) throw new Error('FC-6 v2 target authority fixture unexpectedly passed');
@@ -386,7 +409,7 @@ function selfTest() {
   const nestedArtifact = promotion.replace('${{ runner.temp }}/release-set.json\n            ${{ runner.temp }}/accepted-source-evidence.json', '${{ runner.temp }}/release-policy-input/release-set.json\n            ${{ runner.temp }}/release-policy-input/accepted-source-evidence.json');
   if (!promotionErrors(nestedArtifact).some((error) => error.includes('phase 2 observe+preflight'))) throw new Error('nested preflight artifact regression unexpectedly passed');
 
-  console.log('AR-11 trusted-main transport and structural release/promotion negative self-test passed.');
+  console.log('AR-11 trusted-main transport, six-asset Release Set v3, narrow historical v2/v3 verification, and structural promotion negative self-test passed.');
 }
 
 if (process.argv.includes('--self-test')) { selfTest(); process.exit(0); }
@@ -395,4 +418,4 @@ if (errors.length > 0) {
   console.error(`AR-11 operational policy failed:\n${errors.map((error) => `- ${error}`).join('\n')}`);
   process.exit(1);
 }
-console.log('AR-11 durable Release Set, trusted-main operator transport, and structural promotion policy passed.');
+console.log('AR-11 durable Release Set v3 (six immutable assets), trusted-main operator transport, and structural promotion policy passed.');
