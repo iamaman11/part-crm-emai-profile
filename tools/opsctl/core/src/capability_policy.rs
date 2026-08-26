@@ -1,5 +1,6 @@
 pub use ::capability_policy::{
-    ActivationGate, ActivationUnit, CanonicalEnvironment, EffectiveProfile, PolicyError, ProfileId,
+    ActivationGate, ActivationUnit, CanonicalEnvironment, CapabilityPolicySnapshotV1,
+    EffectiveProfile, PolicyError, ProfileId,
 };
 
 #[must_use]
@@ -17,7 +18,7 @@ pub fn effective_profile(
 }
 
 #[must_use]
-pub fn snapshot_v1() -> ::capability_policy::CapabilityPolicySnapshotV1 {
+pub fn snapshot_v1() -> CapabilityPolicySnapshotV1 {
     ::capability_policy::snapshot_v1()
 }
 
