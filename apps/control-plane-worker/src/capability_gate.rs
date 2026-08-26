@@ -133,4 +133,14 @@ mod tests {
             Some(ActivationUnit::OutboundMail)
         );
     }
+
+    #[test]
+    fn mailbox_job_route_maps_to_mailbox_jobs_capability() {
+        let surface = route_surface(RouteClass::MailboxJobRunApi, "/api/mailboxes/jobs/run");
+        assert_eq!(surface, Some(RuntimeSurface::HttpMailboxJobs));
+        assert_eq!(
+            surface.map(RuntimeSurface::activation_unit),
+            Some(ActivationUnit::MailboxJobs)
+        );
+    }
 }

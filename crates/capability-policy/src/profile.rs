@@ -333,9 +333,9 @@ fn validate_inheritance(
 mod tests {
     use super::{
         ALL_PROFILE_IDS, CanonicalEnvironment, ProfileId, effective_profile, profile_definition,
-        validate_catalog,
+        validate_catalog, validate_effective_capabilities,
     };
-    use crate::ActivationUnit;
+    use crate::{ActivationUnit, PolicyError};
     use std::collections::BTreeSet;
 
     #[test]
@@ -350,6 +350,18 @@ mod tests {
         for profile in ALL_PROFILE_IDS {
             assert_eq!(ProfileId::parse(profile.id()), Ok(profile));
         }
+    }
+
+    #[test]
+    fn missing_capability_dependency_is_rejected() {
+        let capabilities = BTreeSet::from([ActivationUnit::Camoufox]);
+        assert_eq!(
+            validate_effective_capabilities(&capabilities),
+            Err(PolicyError::DependencyUnsatisfied {
+                unit: ActivationUnit::Camoufox,
+                dependency: ActivationUnit::ProfileRuntime,
+            })
+        );
     }
 
     #[test]
