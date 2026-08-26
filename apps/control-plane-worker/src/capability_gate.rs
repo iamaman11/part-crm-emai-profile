@@ -1,43 +1,61 @@
 use control_plane_contract::RouteClass;
 use worker::{Env, Error, Result};
 
-pub use capability_policy::{ActivationUnit, CapabilityProfile};
-use capability_policy::{ProductionAuthorization, RuntimeSurface, admit_profile};
+pub use capability_policy::ActivationUnit;
+use capability_policy::{
+    AdmissionRequest, AuthorizationState, CanonicalEnvironment, EffectiveProfile, ProfileDigest,
+    ProfileId, RuntimeSurface, admit,
+};
 
 pub const CANONICAL_ENVIRONMENT_VAR: &str = "CANONICAL_ENVIRONMENT";
 pub const CAPABILITY_PROFILE_ID_VAR: &str = "CAPABILITY_PROFILE_ID";
 pub const CAPABILITY_PROFILE_DIGEST_VAR: &str = "CAPABILITY_PROFILE_DIGEST";
 
-pub fn active_profile(env: &Env) -> Result<CapabilityProfile> {
-    let environment = env.var(CANONICAL_ENVIRONMENT_VAR)?.to_string();
-    let profile_id = env.var(CAPABILITY_PROFILE_ID_VAR)?.to_string();
-    let digest = env.var(CAPABILITY_PROFILE_DIGEST_VAR)?.to_string();
-    admit_profile(
-        &environment,
-        &profile_id,
-        &digest,
-        ProductionAuthorization::NotAuthorized,
-    )
-    .map_err(|error| {
-        Error::RustError(format!(
-            "capability profile selection failed closed: {error}"
-        ))
-    })
+#[derive(Clone, Debug)]
+pub struct RuntimeCapabilityContext {
+    profile: EffectiveProfile,
 }
 
-pub fn unit_enabled(env: &Env, unit: ActivationUnit) -> Result<bool> {
-    Ok(active_profile(env)?.capabilities.enabled(unit))
+impl RuntimeCapabilityContext {
+    pub fn from_env(env: &Env) -> Result<Self> {
+        let environment = env.var(CANONICAL_ENVIRONMENT_VAR)?.to_string();
+        let profile_id = env.var(CAPABILITY_PROFILE_ID_VAR)?.to_string();
+        let digest = env.var(CAPABILITY_PROFILE_DIGEST_VAR)?.to_string();
+        let request = AdmissionRequest {
+            environment: CanonicalEnvironment::parse(&environment).map_err(policy_error)?,
+            profile_id: ProfileId::parse(&profile_id).map_err(policy_error)?,
+            presented_digest: ProfileDigest::parse_hex(&digest).map_err(policy_error)?,
+            authorization: AuthorizationState::NotAuthorized,
+        };
+        let profile = admit(request).map_err(policy_error)?;
+        Ok(Self { profile })
+    }
+
+    #[must_use]
+    pub const fn profile(&self) -> &EffectiveProfile {
+        &self.profile
+    }
+
+    #[must_use]
+    pub fn unit_enabled(&self, unit: ActivationUnit) -> bool {
+        self.profile.capabilities.enabled(unit)
+    }
+
+    #[must_use]
+    pub fn surface_enabled(&self, surface: RuntimeSurface) -> bool {
+        self.unit_enabled(surface.activation_unit())
+    }
+
+    #[must_use]
+    pub fn route_enabled(&self, route: RouteClass, path: &str) -> bool {
+        route_surface(route, path).is_none_or(|surface| self.surface_enabled(surface))
+    }
 }
 
-pub fn surface_enabled(env: &Env, surface: RuntimeSurface) -> Result<bool> {
-    unit_enabled(env, surface.activation_unit())
-}
-
-pub fn route_enabled(env: &Env, route: RouteClass, path: &str) -> Result<bool> {
-    let Some(surface) = route_surface(route, path) else {
-        return Ok(true);
-    };
-    surface_enabled(env, surface)
+fn policy_error(error: capability_policy::PolicyError) -> Error {
+    Error::RustError(format!(
+        "capability profile selection failed closed: {error}"
+    ))
 }
 
 #[must_use]

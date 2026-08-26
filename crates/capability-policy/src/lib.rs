@@ -25,37 +25,6 @@ pub use surface::{ALL_RUNTIME_SURFACES, RuntimeSurface};
 
 use std::fmt::{Display, Formatter};
 
-/// Transitional adapter for the existing runtime callers on this Draft branch.
-/// Removed in the consumer cutover commit; semantic evaluation stays in `admit`.
-pub type ProductionAuthorization = AuthorizationState;
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct CapabilityProfile {
-    pub id: &'static str,
-    pub digest: String,
-    pub capabilities: EffectiveCapabilities,
-}
-
-pub fn admit_profile(
-    environment: &str,
-    profile_id: &str,
-    profile_digest: &str,
-    production_authorization: ProductionAuthorization,
-) -> Result<CapabilityProfile, PolicyError> {
-    let request = AdmissionRequest {
-        environment: CanonicalEnvironment::parse(environment)?,
-        profile_id: ProfileId::parse(profile_id)?,
-        presented_digest: ProfileDigest::parse_hex(profile_digest)?,
-        authorization: production_authorization,
-    };
-    let profile = admit(request)?;
-    Ok(CapabilityProfile {
-        id: profile.profile_id.id(),
-        digest: profile.semantic_digest.to_hex(),
-        capabilities: profile.capabilities,
-    })
-}
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PolicyError {
     UnknownActivationUnit,
