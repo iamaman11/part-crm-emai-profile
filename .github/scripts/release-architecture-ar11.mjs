@@ -181,8 +181,12 @@ function validatePublicationWiring(authority) {
   for (const marker of [
     'capability-policy-manifest',
     'capability-policy-v1.json',
-    'CAPABILITY_POLICY_SHA256',
-    'CAPABILITY_POLICY_SIZE_BYTES',
+    'capability_policy_sha=',
+    'capability_policy_size=',
+    '.path == "capability-policy-v1.json"',
+    '.kind == "capability-policy"',
+    'cp "$capability_policy_json" "$release_dir/capability-policy-v1.json"',
+    'cp "$RELEASE_DIR/capability-policy-v1.json" "$asset_dir/capability-policy-v1.json"',
   ]) {
     if (!workflow.includes(marker)) fail(`Release Set build workflow lacks capability manifest wiring: ${marker}`);
   }
