@@ -5,9 +5,12 @@ mod tests;
 
 use crate::canonical::{canonical_json, sha256_hex};
 use crate::d1;
-use crate::release::authority::ReleaseArchitecture;
+use crate::release::capability_policy_manifest::{
+    self, CAPABILITY_POLICY_ARTIFACT_KIND, CAPABILITY_POLICY_MANIFEST_PATH,
+};
 use crate::release::input_topology::{ReleaseInputTopology, ResolvedReleaseInput};
 use crate::release::v3_output::render_release_set_v3;
+use opsctl_core::capability_policy;
 use opsctl_core::release as core;
 use request::ReleaseFinalizeRequestV1;
 use serde::Serialize;
@@ -79,15 +82,29 @@ fn compose_release_set(
     let public_api_root = resolved_input(&resolved, "public_api_root")?;
     let runtime_input = resolved_input(&resolved, "camouhost_runtime_lock")?;
     let runtime = runtime_lock::load(&runtime_input.absolute_path)?;
-    let architecture = ReleaseArchitecture::load(root).map_err(|error| {
-        ReleaseFinalizeError::new(format!("release architecture invalid: {error}"))
-    })?;
+    let capability_profiles = capability_policy::snapshot_v1()
+        .profiles
+        .into_iter()
+        .map(|profile| profile.profile_id.id().to_owned())
+        .collect();
     let catalog = d1_schema_window(root, "catalog")?;
     let resolver = d1_schema_window(root, "resolver")?;
     let d1_repository_identity_sha256 = d1::repository_identity_sha256(root).map_err(|error| {
         ReleaseFinalizeError::new(format!("typed D1 repository identity failed: {error}"))
     })?;
-    let (components, artifact_inventory) = component_identities(&request);
+    let (components, mut artifact_inventory) = component_identities(&request);
+    let capability_policy_bytes = capability_policy_manifest::render_bytes().map_err(|error| {
+        ReleaseFinalizeError::new(format!("capability policy projection failed: {error}"))
+    })?;
+    let capability_policy_size = u64::try_from(capability_policy_bytes.len()).map_err(|error| {
+        ReleaseFinalizeError::new(format!("capability policy artifact size overflow: {error}"))
+    })?;
+    artifact_inventory.push(core::ArtifactIdentity {
+        path: CAPABILITY_POLICY_MANIFEST_PATH.to_owned(),
+        sha256: sha256_hex(&capability_policy_bytes),
+        size_bytes: capability_policy_size,
+        kind: CAPABILITY_POLICY_ARTIFACT_KIND.to_owned(),
+    });
 
     core::ReleaseSetV3::new(core::ReleaseSetV3Parts {
         source: core::ReleaseSetSource {
@@ -115,7 +132,7 @@ fn compose_release_set(
             profile_format: runtime.profile_format,
             browser_identity_policy: runtime.browser_identity_policy,
         },
-        capability_profile_compatibility: architecture.profiles.keys().cloned().collect(),
+        capability_profile_compatibility: capability_profiles,
         build_provenance: core::BuildProvenanceIdentity {
             cargo_lock_sha256: resolved_input(&resolved, "cargo_lock")?.sha256.clone(),
             rust_toolchain_sha256: resolved_input(&resolved, "rust_toolchain")?.sha256.clone(),

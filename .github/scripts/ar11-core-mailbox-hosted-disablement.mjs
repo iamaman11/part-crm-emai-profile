@@ -39,14 +39,22 @@ function validateArchitecture(architecture) {
   if (architecture.production_mutation !== false || architecture.production_ready !== false) {
     fail('AR-11 must remain production-blocked');
   }
-  const mailboxUnits = new Set([
-    'mailbox_admin',
-    'mailbox_client_binding',
-    'mailbox_browser_binding',
-    'mailbox_read',
-    'mailbox_jobs',
-    'outbound_mail',
-  ]);
+  for (const forbidden of ['activation_units', 'release_profiles', 'execution_surfaces']) {
+    if (forbidden in architecture) {
+      fail(`${forbidden} must remain owned by crates/capability-policy, not AR-11 JSON`);
+    }
+  }
+  const projection = architecture.capability_policy_projection;
+  if (!object(projection)
+      || projection.semantic_owner !== 'crates/capability-policy'
+      || projection.typed_snapshot !== 'capability-policy::snapshot_v1'
+      || projection.generated_manifest !== 'capability-policy-v1.json'
+      || projection.generated_manifest_role !== 'IMMUTABLE_RELEASE_SET_PROJECTION_ONLY'
+      || projection.manifest_semantic_input !== false
+      || projection.runtime_authorization_from_manifest !== false) {
+    fail('capability-policy ownership/projection boundary drifted');
+  }
+
   const disabledResources = new Set([
     'mailbox_jobs',
     'mailbox_jobs_dlq',
@@ -55,15 +63,8 @@ function validateArchitecture(architecture) {
     'resolver_reconciliation_schedule',
     'mailbox_secret_resolver_service',
   ]);
-  const profiles = new Map((architecture.release_profiles ?? []).map((row) => [row.profile_id, row]));
   const closures = new Map((architecture.deployment_closures ?? []).map((row) => [row.closure_id, row]));
   for (const profileId of ['rehearsal-core-v1', 'production-core-v1']) {
-    const profile = profiles.get(profileId);
-    if (!object(profile)) fail(`missing Core profile ${profileId}`);
-    const disabled = new Set(profile.disabled_activation_units ?? []);
-    for (const unit of mailboxUnits) {
-      if (!disabled.has(unit)) fail(`${profileId} unexpectedly enables mailbox unit ${unit}`);
-    }
     const closure = closures.get(profileId);
     if (!object(closure)) fail(`missing Core deployment closure ${profileId}`);
     const optional = new Set(closure.optional_or_disabled_resources ?? []);
@@ -73,6 +74,10 @@ function validateArchitecture(architecture) {
     const requiredBindings = new Set(closure.required_bindings ?? []);
     if (requiredBindings.has('MAILBOX_SECRET_RESOLVER') || requiredBindings.has('MAILBOX_JOBS')) {
       fail(`${profileId} requires a mailbox operational binding`);
+    }
+    const requiredCredentials = new Set(closure.required_credentials ?? []);
+    if (requiredCredentials.has('MAILBOX_RESOLVER_CALLER_AUTH_KEY')) {
+      fail(`${profileId} requires a mailbox resolver caller credential`);
     }
   }
 }
@@ -174,8 +179,8 @@ async function readJson(root, relative) {
   return value;
 }
 
-async function validate(root, workflowOverride = null, credentialOverride = null) {
-  validateArchitecture(await readJson(root, ARCHITECTURE));
+async function validate(root, workflowOverride = null, credentialOverride = null, architectureOverride = null) {
+  validateArchitecture(architectureOverride ?? await readJson(root, ARCHITECTURE));
   validateCredentialAuthority(credentialOverride ?? await readJson(root, CREDENTIAL_EXTENSION));
   validateConfigs(await readJson(root, CORE_CONFIG), await readJson(root, RESOLVER_CONFIG));
   const workflow = workflowOverride ?? await readFile(path.join(root, WORKFLOW), 'utf8');
@@ -204,10 +209,22 @@ async function expectCredentialRejected(label, credential, mutate) {
   fail(`negative credential fixture unexpectedly passed: ${label}`);
 }
 
+async function expectArchitectureRejected(label, architecture, mutate) {
+  const candidate = structuredClone(architecture);
+  mutate(candidate);
+  try {
+    await validate(ROOT, null, null, candidate);
+  } catch {
+    return;
+  }
+  fail(`negative architecture fixture unexpectedly passed: ${label}`);
+}
+
 async function selfTest() {
   const workflow = await readFile(path.join(ROOT, WORKFLOW), 'utf8');
   const credential = await readJson(ROOT, CREDENTIAL_EXTENSION);
-  await validate(ROOT, workflow, credential);
+  const architecture = await readJson(ROOT, ARCHITECTURE);
+  await validate(ROOT, workflow, credential, architecture);
   await expectWorkflowRejected(
     'deploy credential in hosted audit',
     workflow,
@@ -263,7 +280,17 @@ async function selfTest() {
       (value) => value !== 'Workers Scripts Read',
     );
   });
-  console.log('AR-11 Core mailbox hosted-disablement workflow and credential-authority negative fixtures rejected as expected.');
+  await expectArchitectureRejected('legacy release profile catalog restored', architecture, (copy) => {
+    copy.release_profiles = [];
+  });
+  await expectArchitectureRejected('Core mailbox credential restored', architecture, (copy) => {
+    copy.deployment_closures.find((row) => row.closure_id === 'production-core-v1').required_credentials.push('MAILBOX_RESOLVER_CALLER_AUTH_KEY');
+  });
+  await expectArchitectureRejected('Core mailbox resource made required', architecture, (copy) => {
+    const closure = copy.deployment_closures.find((row) => row.closure_id === 'production-core-v1');
+    closure.optional_or_disabled_resources = closure.optional_or_disabled_resources.filter((value) => value !== 'mailbox_jobs');
+  });
+  console.log('AR-11 Core mailbox hosted-disablement workflow, operational topology, and credential-authority negative fixtures rejected as expected.');
 }
 
 async function main() {
@@ -273,7 +300,7 @@ async function main() {
   }
   if (process.argv.length > 2) fail(`unknown arguments: ${process.argv.slice(2).join(' ')}`);
   await validate(ROOT);
-  console.log('AR-11 Core mailbox hosted-disablement contract passed: Core has no mailbox binding, standalone resolver must have zero cron triggers and workers.dev/previews disabled, and every hosted read is declared by observe-only credential authority.');
+  console.log('AR-11 Core mailbox hosted-disablement contract passed: capability semantics remain owned by typed capability-policy, Core has no mailbox binding/credential, standalone resolver has zero cron triggers and workers.dev/previews disabled, and every hosted read is declared by observe-only credential authority.');
 }
 
 main().catch((error) => {

@@ -66,7 +66,6 @@ pub fn run(request: ReleaseRunRequest<'_>) -> Result<String, ReleaseModelError> 
                 .map(LoadedReleaseSet::load)
                 .transpose()?;
             evaluate(
-                request.root,
                 request.source_root,
                 &release_set,
                 &evidence,

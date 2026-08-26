@@ -5,7 +5,7 @@
 //! no provider credentials, network clients, deployment execution or production mutation authority.
 
 pub mod artifact;
-pub mod authority;
+pub mod capability_policy_manifest;
 pub mod commands;
 pub mod compatibility;
 pub mod component_manifest;
@@ -38,6 +38,5 @@ impl ReleaseAction {
 }
 
 pub const TARGET_COMMANDS: &[&str] = &["finalize", "inspect", "verify", "compatibility"];
-pub const ACTIVATION_OWNER: &str = "AR-11";
 pub const PROVIDER_MUTATION_AUTHORITY: bool = false;
 pub const NETWORK_AUTHORITY: bool = false;

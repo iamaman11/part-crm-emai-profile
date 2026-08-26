@@ -4,7 +4,8 @@
 Phase 2E source/runtime guarantees remain accepted even when AR-11 keeps mailbox
 capabilities production-disabled. The checker therefore proves both halves of the
 contract: mailbox code/ports/adapters still exist and remain safe, while the active
-Core deployment closure must not bind mailbox jobs or the secret resolver.
+Core deployment closure must not bind mailbox jobs or the secret resolver. Capability
+semantics themselves remain owned exclusively by the typed capability-policy crate.
 """
 
 from __future__ import annotations
@@ -49,14 +50,6 @@ INNER_RUNTIME_FRAGMENTS = (
     "Socket::",
     "MAILBOX_SECRET_RESOLVER",
 )
-MAILBOX_ACTIVATION_UNITS = {
-    "mailbox_admin",
-    "mailbox_client_binding",
-    "mailbox_browser_binding",
-    "mailbox_read",
-    "mailbox_jobs",
-    "outbound_mail",
-}
 CORE_DISABLED_MAILBOX_RESOURCES = {
     "mailbox_jobs",
     "mailbox_jobs_dlq",
@@ -124,33 +117,36 @@ def load_ar11_authority(root: Path) -> dict[str, object]:
     return value
 
 
+def assert_capability_policy_boundary(authority: dict[str, object]) -> None:
+    for forbidden in ("activation_units", "release_profiles", "execution_surfaces"):
+        if forbidden in authority:
+            fail(f"AR-11 must not own capability semantics: {forbidden}")
+    projection = authority.get("capability_policy_projection")
+    if not isinstance(projection, dict):
+        fail("AR-11 capability-policy projection reference is missing")
+    if (
+        projection.get("semantic_owner") != "crates/capability-policy"
+        or projection.get("typed_snapshot") != "capability-policy::snapshot_v1"
+        or projection.get("generated_manifest") != "capability-policy-v1.json"
+        or projection.get("generated_manifest_role") != "IMMUTABLE_RELEASE_SET_PROJECTION_ONLY"
+        or projection.get("manifest_semantic_input") is not False
+        or projection.get("runtime_authorization_from_manifest") is not False
+    ):
+        fail("AR-11 capability-policy ownership/projection boundary drifted")
+
+
 def assert_core_mailbox_disabled(root: Path, wrangler: str) -> None:
     authority = load_ar11_authority(root)
-    profiles_raw = authority.get("release_profiles")
+    assert_capability_policy_boundary(authority)
     closures_raw = authority.get("deployment_closures")
-    if not isinstance(profiles_raw, list) or not isinstance(closures_raw, list):
-        fail("AR-11 Core profile/deployment closure collections are malformed")
+    if not isinstance(closures_raw, list):
+        fail("AR-11 Core deployment closure collection is malformed")
 
-    profiles = {
-        item.get("profile_id"): item
-        for item in profiles_raw
-        if isinstance(item, dict) and isinstance(item.get("profile_id"), str)
-    }
     closures = {
         item.get("closure_id"): item
         for item in closures_raw
         if isinstance(item, dict) and isinstance(item.get("closure_id"), str)
     }
-    for profile_id in ("rehearsal-core-v1", "production-core-v1"):
-        profile = profiles.get(profile_id)
-        if not isinstance(profile, dict):
-            fail(f"AR-11 Core profile missing: {profile_id}")
-        disabled = profile.get("disabled_activation_units")
-        if not isinstance(disabled, list) or not MAILBOX_ACTIVATION_UNITS.issubset(set(disabled)):
-            fail(f"{profile_id} must keep every Phase 2E mailbox activation unit disabled")
-        if profile_id == "production-core-v1" and profile.get("current_authorization") != "BLOCKED":
-            fail("production-core-v1 must remain BLOCKED during AR-11")
-
     for closure_id in ("rehearsal-core-v1", "production-core-v1"):
         closure = closures.get(closure_id)
         if not isinstance(closure, dict):
@@ -478,6 +474,14 @@ def self_test() -> None:
     if not rejected:
         fail("Phase 2E Core mailbox-binding negative fixture unexpectedly passed")
 
+    rejected = False
+    try:
+        assert_capability_policy_boundary({"release_profiles": []})
+    except AssertionError:
+        rejected = True
+    if not rejected:
+        fail("Phase 2E legacy AR-11 capability-owner negative fixture unexpectedly passed")
+
 
 def main() -> int:
     parser = argparse.ArgumentParser()
@@ -490,7 +494,8 @@ def main() -> int:
         return 0
     enforce(args.root)
     print(
-        "Phase 2E mailbox source/runtime/privacy boundaries and AR-11 Core deployment disablement passed."
+        "Phase 2E mailbox source/runtime/privacy boundaries, single capability-policy ownership, "
+        "and AR-11 Core deployment disablement passed."
     )
     return 0
 

@@ -1,7 +1,9 @@
-use crate::release::authority::ReleaseArchitecture;
 use crate::release::document::{LoadedReleaseSet, supported_release_set_id};
 use crate::release::model::{CompatibilityDecision, ReleaseModelError};
 use crate::release::static_compatibility;
+use opsctl_core::capability_policy::{
+    ActivationUnit, CanonicalEnvironment, ProfileId, effective_profile, profile_definition,
+};
 use serde_json::{Map, Value, json};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -121,7 +123,6 @@ impl CompatibilityEvidence {
 }
 
 pub fn evaluate(
-    policy_root: &Path,
     source_root: &Path,
     release_set: &LoadedReleaseSet,
     evidence: &CompatibilityEvidence,
@@ -134,44 +135,48 @@ pub fn evaluate(
             "RELEASE_IDENTITY_MISMATCH: compatibility evidence targets another Release Set",
         ));
     }
+    let typed_profile_id = match ProfileId::parse(profile_id) {
+        Ok(profile_id) => profile_id,
+        Err(_) => return Ok(blocked("PROFILE_NOT_AUTHORIZED", current_release.is_some())),
+    };
     let manifest = release_set.semantic();
     if !manifest
         .capability_profile_compatibility
         .iter()
-        .any(|profile| profile == profile_id)
+        .any(|profile| profile == typed_profile_id.id())
     {
         return Ok(blocked("PROFILE_NOT_AUTHORIZED", current_release.is_some()));
     }
-    let authority = ReleaseArchitecture::load(policy_root)
-        .map_err(|error| ReleaseModelError::new(format!("release authority invalid: {error}")))?;
-    let effective = authority
-        .effective_profile(profile_id, environment)
+    let typed_environment = CanonicalEnvironment::parse(environment)
         .map_err(|error| ReleaseModelError::new(format!("PROFILE_NOT_AUTHORIZED: {error}")))?;
-    let profile = authority
-        .profiles
-        .get(profile_id)
-        .ok_or_else(|| ReleaseModelError::new("PROFILE_NOT_AUTHORIZED: profile disappeared"))?;
+    let effective = effective_profile(typed_profile_id, typed_environment)
+        .map_err(|error| ReleaseModelError::new(format!("PROFILE_NOT_AUTHORIZED: {error}")))?;
+    let profile = profile_definition(typed_profile_id);
     let mut blockers = Vec::new();
     let mut warnings = Vec::new();
     let mut required_steps = Vec::new();
-    if environment == "production" && profile.current_authorization != "AUTHORIZED" {
+    if typed_environment == CanonicalEnvironment::Production
+        && profile.production_authorization_required
+    {
         blockers.push("PROFILE_NOT_AUTHORIZED".to_owned());
         required_steps.push(format!(
             "complete activation gate {} before production execution",
-            profile.activation_gate
+            profile.activation_gate.id()
         ));
     }
-    let mailbox_admin = effective.is_enabled("mailbox_admin");
+    let mailbox_admin = effective.capabilities.enabled(ActivationUnit::MailboxAdmin);
     blockers.extend(static_compatibility::evaluate(
         source_root,
         manifest,
         mailbox_admin,
     )?);
-    let windows_delivery_present = authority
-        .activation_units
-        .values()
-        .any(|unit| unit.requires_windows_profile_bridge && effective.is_enabled(&unit.id));
-    let windows_required = environment == "production" && windows_delivery_present;
+    let windows_delivery_present = effective
+        .capabilities
+        .enabled_units()
+        .into_iter()
+        .any(|unit| unit.requires_windows_profile_bridge());
+    let windows_required =
+        typed_environment == CanonicalEnvironment::Production && windows_delivery_present;
     let required_dimensions = required_external_dimensions(mailbox_admin, windows_required);
     for name in required_dimensions {
         let dimension = evidence.dimensions.get(name).ok_or_else(|| {

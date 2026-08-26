@@ -44,6 +44,7 @@ REQUIRED_SOURCE_FILES = {
 }
 REQUIRED_CORE_SOURCE_FILES = {
     "architecture.rs",
+    "capability_policy.rs",
     "lib.rs",
     "release.rs",
 }
@@ -61,6 +62,9 @@ FORBIDDEN_CORE_DEPENDENCIES = FORBIDDEN_DEPENDENCY_CAPABILITIES | {
     "sha2",
 }
 FORBIDDEN_PRODUCT_DEPENDENCIES = {"opsctl", "opsctl-core"}
+APPROVED_PURE_CORE_PATH_DEPENDENCIES = {
+    "capability-policy": "../../../crates/capability-policy",
+}
 FORBIDDEN_RUNTIME_MARKERS = (
     "Command::new(",
     "std::process::Command",
@@ -252,6 +256,16 @@ def validate_core_dependencies(cargo: str, lock: str, root: Path = ROOT) -> None
                 dependency_path = spec.get("path")
                 if not isinstance(dependency_path, str):
                     fail(f"opsctl-core dependency {alias!r} has invalid local path")
+                approved_path = APPROVED_PURE_CORE_PATH_DEPENDENCIES.get(package_name)
+                if approved_path is not None:
+                    if alias != package_name or dependency_path != approved_path:
+                        fail(
+                            "opsctl-core pure policy dependency must use its canonical package/path: "
+                            f"{alias} -> {dependency_path}"
+                        )
+                    if f'name = "{package_name}"' not in lock:
+                        fail(f"opsctl lockfile lost local pure policy identity for {package_name}")
+                    continue
                 resolved = (root / CORE_CARGO.parent / dependency_path).resolve()
                 for product_root in (root / "apps", root / "crates"):
                     if resolved.is_relative_to(product_root.resolve()):
@@ -518,6 +532,17 @@ def self_test() -> None:
         1,
     )
     expect_core_rejected("representation dependency", core_sources, core_dependency, lock)
+    wrong_policy_dependency = core_cargo.replace(
+        'capability-policy = { path = "../../../crates/capability-policy" }',
+        'capability-policy = { path = "../../../crates/runtime-bundle-domain" }',
+        1,
+    )
+    expect_core_rejected(
+        "non-policy Product Runtime dependency",
+        core_sources,
+        wrong_policy_dependency,
+        lock,
+    )
     expect_product_manifest_rejected(
         "synthetic product manifest",
         '[package]\nname = "synthetic-runtime"\nversion = "0.0.0"\n\n[dependencies]\nopsctl-core = { path = "../../tools/opsctl/core" }\n',
@@ -532,8 +557,8 @@ def self_test() -> None:
         expect_projection_rejected("historical SQL substitution", fixture)
 
     print(
-        "opsctl shell/core purity, Product Runtime dependency direction, typed D1 catalog, "
-        "historical-anchor and dependency negative fixtures passed."
+        "opsctl shell/core purity, approved capability-policy dependency direction, Product Runtime "
+        "dependency isolation, typed D1 catalog, historical-anchor and dependency negative fixtures passed."
     )
 
 
@@ -546,9 +571,9 @@ def main() -> int:
     else:
         validate()
         print(
-            "opsctl remains native, read-only and provider-free; opsctl-core stays pure and "
-            "Product Runtime remains independent; D1 history is derived from canonical SQL "
-            "under compact typed historical anchors."
+            "opsctl remains native, read-only and provider-free; opsctl-core stays pure and consumes "
+            "only the approved capability-policy owner; Product Runtime remains independent; D1 history "
+            "is derived from canonical SQL under compact typed historical anchors."
         )
     return 0
 

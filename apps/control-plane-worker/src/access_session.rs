@@ -1,4 +1,4 @@
-use crate::capability_gate::CapabilityProfile;
+use capability_policy::EffectiveProfile;
 use cloudflare_adapters::access_identity::{AccessJwtConfig, VerifiedExternalIdentity};
 use cloudflare_adapters::access_webcrypto::{AccessJwks, verify_rs256};
 use cloudflare_adapters::d1_identity_acl::{
@@ -44,7 +44,7 @@ impl VerifiedRequestIdentity {
 pub async fn session_response(
     request: &Request,
     env: &Env,
-    profile: CapabilityProfile,
+    profile: &EffectiveProfile,
 ) -> Result<Response> {
     let Some(resolved) = resolve_active_request_actor(request, env, None).await? else {
         return neutral_not_found(&correlation_hint(request));
@@ -62,8 +62,8 @@ pub async fn session_response(
             ResolvedMembershipRole::Member => "MEMBER",
         }
         .to_owned(),
-        profile_id: profile.id.to_owned(),
-        profile_digest: profile.digest.to_owned(),
+        profile_id: profile.profile_id.id().to_owned(),
+        profile_digest: profile.semantic_digest.to_hex(),
         capabilities: profile.capabilities.enabled_ids(),
     })
 }

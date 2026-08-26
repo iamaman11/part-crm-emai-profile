@@ -1,4 +1,3 @@
-use crate::release::authority::DEFAULT_AUTHORITY_PATH;
 use crate::release::digest::sha256_reader_hex;
 use crate::release::model::ReleaseModelError;
 use serde_json::{Map, Value};
@@ -6,6 +5,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, File};
 use std::path::{Component, Path, PathBuf};
 
+const RELEASE_INPUT_TOPOLOGY_PATH: &str = "architecture/release-architecture-ar11.json";
 const SUPPORTED_SCHEMA_VERSION: u64 = 1;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -45,7 +45,7 @@ pub struct ReleaseInputTopology {
 
 impl ReleaseInputTopology {
     pub fn load(root: &Path) -> Result<Self, ReleaseModelError> {
-        let path = root.join(DEFAULT_AUTHORITY_PATH);
+        let path = root.join(RELEASE_INPUT_TOPOLOGY_PATH);
         let input = fs::read_to_string(&path).map_err(|error| {
             ReleaseModelError::new(format!(
                 "RELEASE_INPUT_AUTHORITY_UNAVAILABLE: {}: {error}",

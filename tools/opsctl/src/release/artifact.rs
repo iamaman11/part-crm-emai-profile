@@ -39,19 +39,7 @@ pub fn verify_artifacts(
     remove_verified_control_manifest(release_set, &mut observed)?;
     let expected_paths = expected.keys().copied().collect::<BTreeSet<_>>();
     let observed_paths = observed.keys().map(String::as_str).collect::<BTreeSet<_>>();
-    if expected_paths != observed_paths {
-        let missing = expected_paths
-            .difference(&observed_paths)
-            .copied()
-            .collect::<Vec<_>>();
-        let unexpected = observed_paths
-            .difference(&expected_paths)
-            .copied()
-            .collect::<Vec<_>>();
-        return Err(ReleaseModelError::new(format!(
-            "ARTIFACT_INVENTORY_MISMATCH: missing={missing:?} unexpected={unexpected:?}"
-        )));
-    }
+    verify_inventory_paths(&expected_paths, &observed_paths)?;
     let mut verified_bytes = 0_u64;
     for (relative, path) in observed {
         let artifact = expected.get(relative.as_str()).ok_or_else(|| {
@@ -80,6 +68,26 @@ pub fn verify_artifacts(
         verified_bytes,
         verified_components,
     })
+}
+
+fn verify_inventory_paths(
+    expected_paths: &BTreeSet<&str>,
+    observed_paths: &BTreeSet<&str>,
+) -> Result<(), ReleaseModelError> {
+    if expected_paths == observed_paths {
+        return Ok(());
+    }
+    let missing = expected_paths
+        .difference(observed_paths)
+        .copied()
+        .collect::<Vec<_>>();
+    let unexpected = observed_paths
+        .difference(expected_paths)
+        .copied()
+        .collect::<Vec<_>>();
+    Err(ReleaseModelError::new(format!(
+        "ARTIFACT_INVENTORY_MISMATCH: missing={missing:?} unexpected={unexpected:?}"
+    )))
 }
 
 fn remove_verified_control_manifest(
@@ -203,4 +211,60 @@ fn visit_directory(
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{verify_inventory_paths, verify_one};
+    use crate::canonical::sha256_hex;
+    use opsctl_core::release::ArtifactIdentity;
+    use std::collections::BTreeSet;
+    use std::fs;
+    use std::process;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn current_candidate_missing_capability_manifest_fails_inventory() {
+        let expected =
+            BTreeSet::from(["capability-policy-v1.json", "components/control-plane.tar"]);
+        let observed = BTreeSet::from(["components/control-plane.tar"]);
+        let result = verify_inventory_paths(&expected, &observed);
+        assert!(
+            result.is_err(),
+            "candidate without capability policy manifest unexpectedly verified"
+        );
+        if let Err(error) = result {
+            assert!(error.to_string().contains("ARTIFACT_INVENTORY_MISMATCH"));
+            assert!(error.to_string().contains("capability-policy-v1.json"));
+        }
+    }
+
+    #[test]
+    fn capability_manifest_hash_mismatch_fails_as_ordinary_artifact()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let nonce = SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "opsctl-capability-policy-artifact-{}-{nonce}",
+            process::id()
+        ));
+        fs::create_dir_all(&root)?;
+        let path = root.join("capability-policy-v1.json");
+        fs::write(&path, b"evil")?;
+        let identity = ArtifactIdentity {
+            path: "capability-policy-v1.json".to_owned(),
+            sha256: sha256_hex(b"good"),
+            size_bytes: 4,
+            kind: "capability-policy".to_owned(),
+        };
+
+        let result = verify_one(&path, &identity);
+        fs::remove_dir_all(&root)?;
+        let error = match result {
+            Err(error) => error,
+            Ok(()) => return Err("wrong capability policy bytes unexpectedly verified".into()),
+        };
+        assert!(error.to_string().contains("ARTIFACT_DIGEST_MISMATCH"));
+        assert!(error.to_string().contains("capability-policy-v1.json"));
+        Ok(())
+    }
 }

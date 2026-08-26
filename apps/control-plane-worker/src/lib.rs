@@ -36,7 +36,7 @@ pub use profile_coordinator::ProfileCoordinator;
 pub use realtime_notifications::NotificationHub;
 
 use access_session::session_response;
-use capability_gate::ActivationUnit;
+use capability_gate::{ActivationUnit, RuntimeCapabilityContext};
 use cloudflare_adapters::control_plane_queue::ControlPlaneQueueMessage;
 use cloudflare_adapters::d1_catalog::D1CatalogRepository;
 use cloudflare_adapters::d1_idempotency::D1IdempotencyRepository;
@@ -51,32 +51,40 @@ use control_plane_contract::{
 use profile_platform_primitives::{ActorId, ProfileId, TenantId};
 use session_domain::coordinator::coordinator_object_name;
 use worker::{
-    Context, Env, MessageBatch, MessageExt, Method, Request, Response, Result, ScheduleContext,
-    ScheduledEvent, event,
+    Context, Env, Error, MessageBatch, MessageExt, Method, Request, Response, Result,
+    ScheduleContext, ScheduledEvent, event,
 };
 
 #[event(fetch, respond_with_errors)]
 pub async fn main(mut request: Request, env: Env, _context: Context) -> Result<Response> {
     let path = request.path();
     let route = classify_route(request.method().as_ref(), &path);
-
-    if !matches!(
+    let capability_context = if matches!(
         route,
         RouteClass::HealthApi
             | RouteClass::DynamicRouteNotFound
             | RouteClass::BridgeDeniedByDefault
             | RouteClass::StaticAssets
     ) {
-        match capability_gate::route_enabled(&env, route, &path) {
-            Ok(true) => {}
-            Ok(false) => return Response::error("Not Found", 404),
+        None
+    } else {
+        match RuntimeCapabilityContext::from_env(&env) {
+            Ok(context) => Some(context),
             Err(_) => return Response::error("Capability Profile Unavailable", 503),
         }
+    };
+
+    if let Some(context) = capability_context.as_ref()
+        && !context.route_enabled(route, &path)
+    {
+        return Response::error("Not Found", 404);
     }
 
     match route {
         RouteClass::HealthApi => health_response(),
-        RouteClass::BindingProbeApi => binding_probe(&env),
+        RouteClass::BindingProbeApi => {
+            binding_probe(&env, require_capability_context(&capability_context)?)
+        }
         RouteClass::DynamicRouteNotFound | RouteClass::BridgeDeniedByDefault => {
             Response::error("Not Found", 404)
         }
@@ -85,7 +93,14 @@ pub async fn main(mut request: Request, env: Env, _context: Context) -> Result<R
                 .fetch_request(request)
                 .await
         }
-        RouteClass::AuthenticatedSessionApi => capability_session_response(&request, &env).await,
+        RouteClass::AuthenticatedSessionApi => {
+            capability_session_response(
+                &request,
+                &env,
+                require_capability_context(&capability_context)?,
+            )
+            .await
+        }
         RouteClass::ClientCollectionApi
         | RouteClass::ClientResourceApi
         | RouteClass::ClientArchiveApi
@@ -178,17 +193,18 @@ pub async fn control_plane_queue(
     env: Env,
     _context: Context,
 ) -> Result<()> {
+    let capability_context = RuntimeCapabilityContext::from_env(&env)?;
     for message in message_batch.messages()? {
         match message.body().clone() {
             ControlPlaneQueueMessage::IntegrationEvent(event) => {
-                if capability_gate::unit_enabled(&env, ActivationUnit::Notifications)? {
+                if capability_context.unit_enabled(ActivationUnit::Notifications) {
                     integration_events::consume_one(&message, event, &env).await?;
                 } else {
                     message.retry();
                 }
             }
             ControlPlaneQueueMessage::MailboxJob(job) => {
-                if capability_gate::unit_enabled(&env, ActivationUnit::MailboxJobs)? {
+                if capability_context.unit_enabled(ActivationUnit::MailboxJobs) {
                     mailbox_scheduling::consume_one(&message, job, &env).await?;
                 } else {
                     message.retry();
@@ -201,29 +217,39 @@ pub async fn control_plane_queue(
 
 #[event(scheduled)]
 pub async fn control_plane_schedule(_event: ScheduledEvent, env: Env, _context: ScheduleContext) {
-    match capability_gate::unit_enabled(&env, ActivationUnit::Notifications) {
-        Ok(true) => {
-            if integration_events::dispatch_pending(&env).await.is_err() {
-                worker::console_error!("notification scheduled operation failed");
-            }
+    let capability_context = match RuntimeCapabilityContext::from_env(&env) {
+        Ok(context) => context,
+        Err(_) => {
+            worker::console_error!("scheduled capability profile unavailable");
+            return;
         }
-        Ok(false) => {}
-        Err(_) => worker::console_error!("notification capability profile unavailable"),
+    };
+    if capability_context.unit_enabled(ActivationUnit::Notifications)
+        && integration_events::dispatch_pending(&env).await.is_err()
+    {
+        worker::console_error!("notification scheduled operation failed");
     }
-    match capability_gate::unit_enabled(&env, ActivationUnit::MailboxJobs) {
-        Ok(true) => {
-            if mailbox_scheduling::dispatch_pending(&env).await.is_err() {
-                worker::console_error!("mailbox scheduled operation failed");
-            }
-        }
-        Ok(false) => {}
-        Err(_) => worker::console_error!("mailbox capability profile unavailable"),
+    if capability_context.unit_enabled(ActivationUnit::MailboxJobs)
+        && mailbox_scheduling::dispatch_pending(&env).await.is_err()
+    {
+        worker::console_error!("mailbox scheduled operation failed");
     }
 }
 
-async fn capability_session_response(request: &Request, env: &Env) -> Result<Response> {
-    let profile = capability_gate::active_profile(env)?;
-    session_response(request, env, profile).await
+fn require_capability_context(
+    context: &Option<RuntimeCapabilityContext>,
+) -> Result<&RuntimeCapabilityContext> {
+    context.as_ref().ok_or_else(|| {
+        Error::RustError("capability context missing for governed runtime surface".to_owned())
+    })
+}
+
+async fn capability_session_response(
+    request: &Request,
+    env: &Env,
+    capability_context: &RuntimeCapabilityContext,
+) -> Result<Response> {
+    session_response(request, env, capability_context.profile()).await
 }
 
 fn health_response() -> Result<Response> {
@@ -246,7 +272,7 @@ async fn dispatch_profile_coordinator(request: &mut Request, env: &Env) -> Resul
     profile_coordinator_ingress::dispatch(request, env, tenant_id, profile_id).await
 }
 
-fn binding_probe(env: &Env) -> Result<Response> {
+fn binding_probe(env: &Env, capability_context: &RuntimeCapabilityContext) -> Result<Response> {
     let catalog = env.d1(D1_CATALOG_BINDING)?;
     let _catalog_repository = D1CatalogRepository::new(catalog);
     let identity_catalog = env.d1(D1_CATALOG_BINDING)?;
@@ -262,10 +288,10 @@ fn binding_probe(env: &Env) -> Result<Response> {
     let _generation_upload_signer = composition::generation_upload_capability_signer(env)?;
     let _integration_events_queue =
         env.queue(integration_events::INTEGRATION_EVENTS_QUEUE_BINDING)?;
-    if capability_gate::unit_enabled(env, ActivationUnit::MailboxJobs)? {
+    if capability_context.unit_enabled(ActivationUnit::MailboxJobs) {
         let _mailbox_jobs_queue = env.queue(mailbox_scheduling::MAILBOX_JOBS_QUEUE_BINDING)?;
     }
-    if capability_gate::unit_enabled(env, ActivationUnit::MailboxAdmin)? {
+    if capability_context.unit_enabled(ActivationUnit::MailboxAdmin) {
         let _mailbox_secret_resolver = env.service("MAILBOX_SECRET_RESOLVER")?;
     }
     let coordinator = env.durable_object(PROFILE_COORDINATOR_BINDING)?;
@@ -284,7 +310,7 @@ fn binding_probe(env: &Env) -> Result<Response> {
             &notification_tenant,
             &notification_actor,
         ))?;
-    let _notification_hub_stub = notification_hub_id.get_stub()?;
+    let _coordinator_stub = notification_hub_id.get_stub()?;
     let _ = profile_objects;
     health_response()
 }

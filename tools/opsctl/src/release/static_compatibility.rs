@@ -1,9 +1,9 @@
 use crate::d1;
-use crate::release::authority::ReleaseArchitecture;
 use crate::release::digest::{canonical_json, sha256_hex};
 use crate::release::document::{D1SchemaIdentity, ReleaseCompatibilityView};
 use crate::release::input_topology::{ReleaseInputTopology, ResolvedReleaseInput};
 use crate::release::model::ReleaseModelError;
+use opsctl_core::capability_policy::ProfileId;
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
 use std::fs;
@@ -47,7 +47,7 @@ pub fn evaluate(
     if !build_provenance_matches(&resolved, manifest)? {
         blockers.push("PROVENANCE_IDENTITY_MISMATCH".to_owned());
     }
-    if !profiles_match(root, manifest)? {
+    if !profiles_match(manifest) {
         blockers.push("PROFILE_NOT_AUTHORIZED".to_owned());
     }
 
@@ -221,16 +221,11 @@ fn build_provenance_matches(
     Ok(true)
 }
 
-fn profiles_match(
-    root: &Path,
-    manifest: &ReleaseCompatibilityView,
-) -> Result<bool, ReleaseModelError> {
-    let authority = ReleaseArchitecture::load(root)
-        .map_err(|error| ReleaseModelError::new(format!("release authority invalid: {error}")))?;
-    Ok(manifest
+fn profiles_match(manifest: &ReleaseCompatibilityView) -> bool {
+    manifest
         .capability_profile_compatibility
         .iter()
-        .all(|profile| authority.profiles.contains_key(profile)))
+        .all(|profile| ProfileId::parse(profile).is_ok())
 }
 
 fn resolved_input<'a>(

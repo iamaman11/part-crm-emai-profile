@@ -38,12 +38,50 @@ pub use storage::{
     EncryptedRecordStore, ReconciliationResult, RecordIdentity, RecordStoreError, StoredSecret,
 };
 
-use worker::{
-    Context, Date, Env, Request, Response, Result, ScheduleContext, ScheduledEvent, event,
+use capability_policy::{
+    AdmissionRequest, AuthorizationState, CanonicalEnvironment, EffectiveProfile, ProfileDigest,
+    ProfileId, RuntimeSurface, admit,
 };
+use worker::{
+    Context, Date, Env, Error, Request, Response, Result, ScheduleContext, ScheduledEvent, event,
+};
+
+const CANONICAL_ENVIRONMENT_VAR: &str = "CANONICAL_ENVIRONMENT";
+const CAPABILITY_PROFILE_ID_VAR: &str = "CAPABILITY_PROFILE_ID";
+const CAPABILITY_PROFILE_DIGEST_VAR: &str = "CAPABILITY_PROFILE_DIGEST";
+
+fn admitted_profile(env: &Env) -> Result<EffectiveProfile> {
+    let environment = env.var(CANONICAL_ENVIRONMENT_VAR)?.to_string();
+    let profile_id = env.var(CAPABILITY_PROFILE_ID_VAR)?.to_string();
+    let digest = env.var(CAPABILITY_PROFILE_DIGEST_VAR)?.to_string();
+    let request = AdmissionRequest {
+        environment: CanonicalEnvironment::parse(&environment).map_err(policy_error)?,
+        profile_id: ProfileId::parse(&profile_id).map_err(policy_error)?,
+        presented_digest: ProfileDigest::parse_hex(&digest).map_err(policy_error)?,
+        authorization: AuthorizationState::NotAuthorized,
+    };
+    admit(request).map_err(policy_error)
+}
+
+fn policy_error(error: capability_policy::PolicyError) -> Error {
+    Error::RustError(format!(
+        "resolver capability admission failed closed: {error}"
+    ))
+}
+
+fn surface_enabled(profile: &EffectiveProfile, surface: RuntimeSurface) -> bool {
+    profile.capabilities.enabled(surface.activation_unit())
+}
 
 #[event(fetch, respond_with_errors)]
 pub async fn main(mut request: Request, env: Env, _context: Context) -> Result<Response> {
+    let profile = match admitted_profile(&env) {
+        Ok(profile) => profile,
+        Err(_) => return error_response(503, "resolver_capability_unavailable"),
+    };
+    if !surface_enabled(&profile, RuntimeSurface::ResolverIngress) {
+        return error_response(503, "resolver_capability_unavailable");
+    }
     let now_ms = Date::now().as_millis();
     let authenticated = match authenticate_request(&mut request, &env, now_ms).await {
         Ok(value) => value,
@@ -78,6 +116,13 @@ pub async fn main(mut request: Request, env: Env, _context: Context) -> Result<R
 
 #[event(scheduled)]
 pub async fn scheduled(_event: ScheduledEvent, env: Env, _context: ScheduleContext) {
+    let profile = match admitted_profile(&env) {
+        Ok(profile) => profile,
+        Err(_) => return,
+    };
+    if !surface_enabled(&profile, RuntimeSurface::ResolverReconciliation) {
+        return;
+    }
     assert!(
         reconcile_encryption_keys(&env, Date::now().as_millis())
             .await

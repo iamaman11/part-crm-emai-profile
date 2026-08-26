@@ -72,12 +72,18 @@ for (const marker of [
 }
 
 for (const marker of [
-  'ProfileSelectionError::ProductionNotAuthorized',
+  'AdmissionRequest',
+  'admit(request)',
+  'RuntimeCapabilityContext',
 ]) {
-  if (!workerGate.includes(marker)) fail(`backend fail-closed marker missing: ${marker}`);
+  if (!workerGate.includes(marker)) fail(`backend capability-policy boundary marker missing: ${marker}`);
 }
-if (!worker.includes('capability_session_response') || !worker.includes('capability_gate::route_enabled')) {
-  fail('backend session projection or pre-dispatch security gate is missing');
+for (const marker of [
+  'RuntimeCapabilityContext::from_env(&env)',
+  '!context.route_enabled(route, &path)',
+  'capability_session_response',
+]) {
+  if (!worker.includes(marker)) fail(`backend session projection or pre-dispatch security gate marker missing: ${marker}`);
 }
 
 const frontendSources = [context, router, workspace, clientMail, main].join('\n');

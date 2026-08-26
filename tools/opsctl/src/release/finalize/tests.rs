@@ -1,5 +1,8 @@
 use super::{finalize_json, request};
-use crate::canonical::parse_strict_json;
+use crate::canonical::{parse_strict_json, sha256_hex};
+use crate::release::capability_policy_manifest::{
+    CAPABILITY_POLICY_ARTIFACT_KIND, CAPABILITY_POLICY_MANIFEST_PATH, render_bytes,
+};
 use serde_json::{Value, json};
 use std::path::PathBuf;
 
@@ -105,9 +108,29 @@ fn finalizes_through_pure_v3_core_and_v3_renderer() -> Result<(), String> {
         value["protocols"]["profile_bridge_protocol_version"].as_u64(),
         Some(1)
     );
+    let artifacts = value["artifact_inventory"]
+        .as_array()
+        .ok_or_else(|| "artifact inventory missing".to_owned())?;
+    assert_eq!(artifacts.len(), 5);
+    let expected_policy = render_bytes().map_err(|error| error.to_string())?;
+    let expected_policy_sha = sha256_hex(&expected_policy);
+    let expected_policy_size =
+        u64::try_from(expected_policy.len()).map_err(|error| error.to_string())?;
+    let policy_artifact = artifacts
+        .iter()
+        .find(|artifact| artifact["path"].as_str() == Some(CAPABILITY_POLICY_MANIFEST_PATH))
+        .ok_or_else(|| "new Release Set writer omitted capability policy manifest".to_owned())?;
     assert_eq!(
-        value["artifact_inventory"].as_array().map(Vec::len),
-        Some(4)
+        policy_artifact["kind"].as_str(),
+        Some(CAPABILITY_POLICY_ARTIFACT_KIND)
+    );
+    assert_eq!(
+        policy_artifact["sha256"].as_str(),
+        Some(expected_policy_sha.as_str())
+    );
+    assert_eq!(
+        policy_artifact["size_bytes"].as_u64(),
+        Some(expected_policy_size)
     );
     assert!(value.get("display_version").is_none());
     Ok(())

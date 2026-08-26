@@ -7,6 +7,7 @@ members = [
     "crates/application-ports",
     "crates/bridge-domain",
     "crates/browser-execution-domain",
+    "crates/capability-policy",
     "crates/certification-domain",
     "crates/client-domain",
     "crates/device-domain",
@@ -40,6 +41,7 @@ aes-gcm = { version = "=0.11.0", default-features = false, features = ["aes", "a
 application-ports = { path = "crates/application-ports" }
 bridge-domain = { path = "crates/bridge-domain" }
 browser-execution-domain = { path = "crates/browser-execution-domain" }
+capability-policy = { path = "crates/capability-policy" }
 certification-domain = { path = "crates/certification-domain" }
 chacha20poly1305 = { version = "=0.11.0", default-features = false, features = ["alloc", "zeroize"] }
 client-domain = { path = "crates/client-domain" }
