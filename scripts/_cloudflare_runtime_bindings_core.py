@@ -6,12 +6,14 @@ from __future__ import annotations
 import copy
 import json
 import re
+import subprocess
 import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 CONFIG = ROOT / "deploy" / "cloudflare" / "wrangler.jsonc"
 RELEASE_ARCHITECTURE = ROOT / "architecture" / "release-architecture-ar11.json"
+OPSCTL_MANIFEST = ROOT / "tools" / "opsctl" / "Cargo.toml"
 RUNTIME_RUST_ROOTS = (
     ROOT / "apps" / "control-plane-worker" / "src",
     ROOT / "crates" / "cloudflare-adapters" / "src",
@@ -167,25 +169,85 @@ def binding_names(items: object, label: str, *, optional: bool = False) -> set[s
 
 def release_profiles() -> dict[str, dict[str, object]]:
     try:
-        document = object_value(
+        architecture = object_value(
             json.loads(RELEASE_ARCHITECTURE.read_text(encoding="utf-8")),
             "release architecture",
         )
     except (OSError, json.JSONDecodeError) as error:
         raise BindingInventoryError(f"cannot read AR-11 release architecture: {error}") from error
     if (
-        document.get("kind") != "AR11_RELEASE_ARCHITECTURE_SOURCE"
-        or document.get("schema_version") != 1
-        or document.get("production_core_gate") != "BLOCKED"
+        architecture.get("kind") != "AR11_RELEASE_ARCHITECTURE_SOURCE"
+        or architecture.get("schema_version") != 1
+        or architecture.get("production_core_gate") != "BLOCKED"
     ):
         raise BindingInventoryError("AR-11 release architecture identity/state drifted")
+    projection = object_value(
+        architecture.get("capability_policy_projection"),
+        "capability policy projection",
+    )
+    if (
+        projection.get("semantic_owner") != "crates/capability-policy"
+        or projection.get("typed_snapshot") != "capability-policy::snapshot_v1"
+        or projection.get("generated_manifest") != "capability-policy-v1.json"
+        or projection.get("manifest_semantic_input") is not False
+        or projection.get("runtime_authorization_from_manifest") is not False
+    ):
+        raise BindingInventoryError("AR-11 capability-policy ownership projection drifted")
+
+    completed = subprocess.run(
+        [
+            "cargo",
+            "run",
+            "--locked",
+            "--quiet",
+            "--manifest-path",
+            OPSCTL_MANIFEST.relative_to(ROOT).as_posix(),
+            "--bin",
+            "capability-policy-manifest",
+        ],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    if completed.returncode != 0:
+        details = completed.stderr.strip() or completed.stdout.strip() or "unknown exporter failure"
+        raise BindingInventoryError(f"canonical capability-policy projection failed: {details}")
+    try:
+        manifest = object_value(json.loads(completed.stdout), "capability policy manifest")
+    except json.JSONDecodeError as error:
+        raise BindingInventoryError(f"canonical capability-policy projection is invalid JSON: {error}") from error
+    if (
+        manifest.get("kind") != "CAPABILITY_POLICY_MANIFEST"
+        or manifest.get("schema_version") != 1
+        or manifest.get("semantic_owner") != "crates/capability-policy"
+        or manifest.get("projection_source") != "capability-policy::snapshot_v1"
+    ):
+        raise BindingInventoryError("canonical capability-policy projection identity drifted")
+
     profiles: dict[str, dict[str, object]] = {}
-    for value in array_value(document.get("release_profiles"), "release_profiles"):
-        profile = object_value(value, "release profile")
+    for value in array_value(manifest.get("profiles"), "capability policy profiles"):
+        profile = object_value(value, "capability policy profile")
         profile_id = profile.get("profile_id")
+        semantic_digest = profile.get("semantic_digest")
         if not isinstance(profile_id, str) or not profile_id or profile_id in profiles:
-            raise BindingInventoryError("release profile identity set is invalid")
+            raise BindingInventoryError("capability profile identity set is invalid")
+        if not isinstance(semantic_digest, str) or re.fullmatch(r"[0-9a-f]{64}", semantic_digest) is None:
+            raise BindingInventoryError(f"capability profile {profile_id} semantic digest is malformed")
         profiles[profile_id] = profile
+
+    closure_profiles: set[str] = set()
+    for value in array_value(architecture.get("deployment_closures"), "deployment closures"):
+        closure = object_value(value, "deployment closure")
+        profile_id = closure.get("profile_id")
+        if not isinstance(profile_id, str) or not profile_id or profile_id in closure_profiles:
+            raise BindingInventoryError("deployment closure profile identity set is invalid")
+        closure_profiles.add(profile_id)
+    missing = sorted(closure_profiles - profiles.keys())
+    if missing:
+        raise BindingInventoryError(
+            f"AR-11 deployment closure references unknown capability profiles: {missing}"
+        )
     return profiles
 
 
@@ -206,19 +268,28 @@ def validate_profile_selection(
         )
     profile = profiles.get(expected_profile_id)
     if profile is None:
-        raise BindingInventoryError(f"selected profile is absent from AR-11 authority: {expected_profile_id}")
+        raise BindingInventoryError(
+            f"selected profile is absent from canonical capability policy: {expected_profile_id}"
+        )
     allowed = profile.get("allowed_environments")
     if not isinstance(allowed, list) or environment not in allowed:
         raise BindingInventoryError(
             f"selected profile {expected_profile_id} is not allowed in {environment}"
         )
+    semantic_digest = profile.get("semantic_digest")
     if not isinstance(profile_digest, str) or re.fullmatch(r"[0-9a-f]{64}", profile_digest) is None:
         raise BindingInventoryError(f"{environment} capability profile digest is malformed")
-    if environment == "production" and profile.get("current_authorization") != "BLOCKED":
-        raise BindingInventoryError("AR-11 production profile must remain BLOCKED")
+    if profile_digest != semantic_digest:
+        raise BindingInventoryError(
+            f"{environment} capability profile digest drifted from canonical capability policy"
+        )
 
 
-def validate_config(document: dict[str, object], source: dict[str, str]) -> None:
+def validate_config(
+    document: dict[str, object],
+    source: dict[str, str],
+    profiles: dict[str, dict[str, object]],
+) -> None:
     assets = object_value(document.get("assets"), "assets")
     if assets.get("binding") != source["asset"]:
         raise BindingInventoryError("Workers Static Assets binding drifted from runtime source")
@@ -227,7 +298,6 @@ def validate_config(document: dict[str, object], source: dict[str, str]) -> None
     if set(envs) != {"staging", "production"}:
         raise BindingInventoryError("runtime binding proof requires exactly staging and production")
 
-    profiles = release_profiles()
     expected_vars = {
         source["access_issuer"],
         source["access_audience"],
@@ -301,8 +371,9 @@ def validate_config(document: dict[str, object], source: dict[str, str]) -> None
 def main() -> int:
     try:
         source = source_inventory()
+        profiles = release_profiles()
         document = object_value(json.loads(CONFIG.read_text(encoding="utf-8")), "wrangler config")
-        validate_config(document, source)
+        validate_config(document, source, profiles)
 
         tampered = copy.deepcopy(document)
         production = object_value(object_value(tampered["env"], "env")["production"], "production")
@@ -314,7 +385,7 @@ def main() -> int:
             if object_value(entry, "durable binding").get("name") != source["notification_hub"]
         ]
         try:
-            validate_config(tampered, source)
+            validate_config(tampered, source, profiles)
         except BindingInventoryError:
             print(
                 "Cloudflare profile-aware runtime binding inventory and negative drift fixture passed."

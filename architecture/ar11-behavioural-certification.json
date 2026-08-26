@@ -201,7 +201,7 @@
       "case_id": "AR11-N-24",
       "requirement": "Candidate/preflight Release Set bytes must equal the exact mutation download.",
       "proofs": [
-        {"proof_kind":"node_gate","path":".github/scripts/release-operational-ar11.mjs","identifier":"cmp --silent \"$asset_root/release-set.json\" \"$preflight_root/release-set.json\""}
+        {"proof_kind":"node_gate","path":".github/scripts/release-operational-ar11.mjs","identifier":"cmp --silent \"$release_root/release-set.json\" \"$preflight_root/release-set.json\""}
       ]
     },
     {
