@@ -83,11 +83,8 @@ jobs:
           assert authority['production_core_gate'] == 'BLOCKED'
           assert authority['production_ready'] is False
           assert authority['production_mutation'] is False
-          core = next(p for p in authority['release_profiles'] if p['profile_id'] == 'production-core-v1')
-          assert core['current_authorization'] == 'BLOCKED'
-          assert 'AR-15_UNSATISFIED' in core['blockers']
-          assert 'AR-17_NOT_ACCEPTED' in core['blockers']
           PY
+          cargo test --locked --manifest-path crates/capability-policy/Cargo.toml production_fails_closed_without_authorization
 
   windows:
     name: Release policy Windows regression
