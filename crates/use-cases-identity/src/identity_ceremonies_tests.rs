@@ -8,7 +8,7 @@ use application_ports::identity_governance::{
     IdentityReplayReceipt,
 };
 use profile_platform_primitives::{
-    AuditEventId, IdempotencyKey, OutboxEventId, TenantId, UnixMillis,
+    AuditEventId, IdempotencyKey, OutboxEventId, PayloadFingerprint, TenantId, UnixMillis,
 };
 use std::cell::{Cell, RefCell};
 use std::future::Future;
@@ -127,7 +127,7 @@ fn actor_id() -> Result<ActorId, Box<dyn std::error::Error>> {
 fn evidence() -> Result<CommandExecutionEvidence, Box<dyn std::error::Error>> {
     Ok(CommandExecutionEvidence::new(
         IdempotencyKey::parse("idem_01JCEREMONY")?,
-        "request-digest-01JCEREMONY",
+        PayloadFingerprint::parse("a".repeat(64))?,
         AuditEventId::parse("audit_01JCEREMONY")?,
         OutboxEventId::parse("outbox_01JCEREMONY")?,
         UnixMillis::new(10),
