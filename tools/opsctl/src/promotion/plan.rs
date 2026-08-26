@@ -79,7 +79,6 @@ pub fn build(request: PlanRequest<'_>) -> Result<PromotionPlan, ReleaseModelErro
     let target = request.target.semantic();
     validate_release_components(target, &closure)?;
     let compatibility = evaluate(
-        request.root,
         request.source_root,
         request.target,
         request.compatibility_evidence,
