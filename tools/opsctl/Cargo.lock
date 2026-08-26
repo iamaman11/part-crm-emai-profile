@@ -12,6 +12,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "capability-policy"
+version = "0.1.0"
+
+[[package]]
 name = "cfg-if"
 version = "1.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -86,6 +90,9 @@ dependencies = [
 [[package]]
 name = "opsctl-core"
 version = "0.1.0"
+dependencies = [
+ "capability-policy",
+]
 
 [[package]]
 name = "proc-macro2"

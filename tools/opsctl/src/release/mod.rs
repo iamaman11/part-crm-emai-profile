@@ -5,7 +5,6 @@
 //! no provider credentials, network clients, deployment execution or production mutation authority.
 
 pub mod artifact;
-pub mod authority;
 pub mod commands;
 pub mod compatibility;
 pub mod component_manifest;
