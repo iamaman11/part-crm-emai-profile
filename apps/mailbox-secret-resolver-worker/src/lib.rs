@@ -10,9 +10,6 @@ mod provider;
 mod replay;
 mod storage;
 
-#[path = "../../../crates/capability-policy/src/lib.rs"]
-mod capability_policy;
-
 #[cfg(test)]
 mod ar8_refresh_invariants_tests;
 

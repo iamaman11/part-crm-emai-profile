@@ -1,6 +1,6 @@
 //! Canonical Capability Policy semantic owner.
 //!
-//! This module is provider-free and effect-free. Product Runtime and release tooling consume these
+//! This crate is provider-free and effect-free. Product Runtime and release tooling consume these
 //! typed definitions; serialized manifests and environment variables are projections/adapters only.
 
 use std::collections::BTreeSet;
@@ -71,12 +71,18 @@ impl ActivationUnit {
             Self::Notifications => &[Self::Foundation, Self::Identity],
             Self::MailboxAdmin => &[Self::Foundation, Self::Identity],
             Self::MailboxClientBinding => &[Self::MailboxAdmin, Self::Clients],
-            Self::MailboxBrowserBinding => {
-                &[Self::MailboxAdmin, Self::BrowserProfiles, Self::ProfileRuntime]
-            }
+            Self::MailboxBrowserBinding => &[
+                Self::MailboxAdmin,
+                Self::BrowserProfiles,
+                Self::ProfileRuntime,
+            ],
             Self::MailboxRead => &[Self::MailboxAdmin, Self::Clients],
             Self::MailboxJobs => &[Self::MailboxAdmin],
-            Self::OutboundMail => &[Self::MailboxAdmin, Self::MailboxClientBinding, Self::Clients],
+            Self::OutboundMail => &[
+                Self::MailboxAdmin,
+                Self::MailboxClientBinding,
+                Self::Clients,
+            ],
         }
     }
 
@@ -497,9 +503,9 @@ impl RuntimeSurface {
             Self::HttpProfileRuntimeDeviceJobs | Self::BridgeProfileRuntimeCommands => {
                 ActivationUnit::ProfileRuntime
             }
-            Self::HttpNotifications | Self::QueueIntegrationEvents | Self::ScheduleIntegrationEvents => {
-                ActivationUnit::Notifications
-            }
+            Self::HttpNotifications
+            | Self::QueueIntegrationEvents
+            | Self::ScheduleIntegrationEvents => ActivationUnit::Notifications,
             Self::BridgeCamoufoxLaunch => ActivationUnit::Camoufox,
         }
     }

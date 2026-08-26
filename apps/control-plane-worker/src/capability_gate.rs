@@ -1,8 +1,6 @@
 use control_plane_contract::RouteClass;
 use worker::{Env, Error, Result};
 
-#[path = "../../../crates/capability-policy/src/lib.rs"]
-pub mod capability_policy;
 pub use capability_policy::{ActivationUnit, CapabilityProfile};
 use capability_policy::{ProductionAuthorization, RuntimeSurface, admit_profile};
 
@@ -82,7 +80,9 @@ pub fn route_surface(route: RouteClass, path: &str) -> Option<RuntimeSurface> {
         RouteClass::MailboxBindingCollectionApi
         | RouteClass::MailboxBindingResourceApi
         | RouteClass::MailboxBindingRevokeApi => Some(RuntimeSurface::HttpMailboxAdmin),
-        RouteClass::MailboxBrowserExecutionBindApi => Some(RuntimeSurface::HttpMailboxBrowserBinding),
+        RouteClass::MailboxBrowserExecutionBindApi => {
+            Some(RuntimeSurface::HttpMailboxBrowserBinding)
+        }
         RouteClass::MailboxJobCollectionApi
         | RouteClass::MailboxJobResourceApi
         | RouteClass::MailboxJobRunApi => Some(RuntimeSurface::HttpMailboxJobs),
