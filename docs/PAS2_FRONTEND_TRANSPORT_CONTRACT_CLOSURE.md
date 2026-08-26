@@ -1,7 +1,7 @@
 # PAS-2/TC-2 — Executable Frontend Transport Contract Closure
 
 **Document status:** BOUNDED_EXECUTION_CONTRACT  
-**Transaction B status:** Draft implementation in PR #490; exact-head acceptance is pending.
+**Transaction B status:** Ready candidate in PR #490; completion is asserted only after protected merge and post-merge exact-head verification.
 **Program authority:** `docs/ARCHITECTURE_REBASELINE_V3_PLAN.md`  
 **Product scenario:** PAS-2 — Client and browser-profile workflow  
 **Architecture contracts:** `docs/APPLICATION_ARCHITECTURE_MANDATORY_REQUIREMENTS.md`, `docs/ARCHITECTURE_EVOLUTION_QUALITY_CONTRACT.md`  
