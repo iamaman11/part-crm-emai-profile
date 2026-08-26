@@ -1,7 +1,7 @@
 use super::{finalize_json, request};
-use crate::canonical::parse_strict_json;
+use crate::canonical::{parse_strict_json, sha256_hex};
 use crate::release::capability_policy_manifest::{
-    CAPABILITY_POLICY_ARTIFACT_KIND, CAPABILITY_POLICY_MANIFEST_PATH,
+    CAPABILITY_POLICY_ARTIFACT_KIND, CAPABILITY_POLICY_MANIFEST_PATH, render_bytes,
 };
 use serde_json::{Value, json};
 use std::path::PathBuf;
@@ -112,14 +112,26 @@ fn finalizes_through_pure_v3_core_and_v3_renderer() -> Result<(), String> {
         .as_array()
         .ok_or_else(|| "artifact inventory missing".to_owned())?;
     assert_eq!(artifacts.len(), 5);
-    assert!(artifacts.iter().any(|artifact| {
-        artifact["path"].as_str() == Some(CAPABILITY_POLICY_MANIFEST_PATH)
-            && artifact["kind"].as_str() == Some(CAPABILITY_POLICY_ARTIFACT_KIND)
-            && artifact["sha256"]
-                .as_str()
-                .is_some_and(|digest| digest.len() == 64)
-            && artifact["size_bytes"].as_u64().is_some_and(|size| size > 0)
-    }));
+    let expected_policy = render_bytes().map_err(|error| error.to_string())?;
+    let expected_policy_sha = sha256_hex(&expected_policy);
+    let expected_policy_size =
+        u64::try_from(expected_policy.len()).map_err(|error| error.to_string())?;
+    let policy_artifact = artifacts
+        .iter()
+        .find(|artifact| artifact["path"].as_str() == Some(CAPABILITY_POLICY_MANIFEST_PATH))
+        .ok_or_else(|| "new Release Set writer omitted capability policy manifest".to_owned())?;
+    assert_eq!(
+        policy_artifact["kind"].as_str(),
+        Some(CAPABILITY_POLICY_ARTIFACT_KIND)
+    );
+    assert_eq!(
+        policy_artifact["sha256"].as_str(),
+        Some(expected_policy_sha.as_str())
+    );
+    assert_eq!(
+        policy_artifact["size_bytes"].as_u64(),
+        Some(expected_policy_size)
+    );
     assert!(value.get("display_version").is_none());
     Ok(())
 }
