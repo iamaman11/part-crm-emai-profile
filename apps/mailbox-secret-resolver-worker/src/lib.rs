@@ -10,6 +10,9 @@ mod provider;
 mod replay;
 mod storage;
 
+#[path = "../../../crates/capability-policy/src/lib.rs"]
+mod capability_policy;
+
 #[cfg(test)]
 mod ar8_refresh_invariants_tests;
 
@@ -38,12 +41,35 @@ pub use storage::{
     EncryptedRecordStore, ReconciliationResult, RecordIdentity, RecordStoreError, StoredSecret,
 };
 
+use capability_policy::{ProductionAuthorization, RuntimeSurface, admit_profile};
 use worker::{
     Context, Date, Env, Request, Response, Result, ScheduleContext, ScheduledEvent, event,
 };
 
+const CANONICAL_ENVIRONMENT_VAR: &str = "CANONICAL_ENVIRONMENT";
+const CAPABILITY_PROFILE_ID_VAR: &str = "CAPABILITY_PROFILE_ID";
+const CAPABILITY_PROFILE_DIGEST_VAR: &str = "CAPABILITY_PROFILE_DIGEST";
+
+fn surface_enabled(env: &Env, surface: RuntimeSurface) -> Result<bool> {
+    let environment = env.var(CANONICAL_ENVIRONMENT_VAR)?.to_string();
+    let profile_id = env.var(CAPABILITY_PROFILE_ID_VAR)?.to_string();
+    let digest = env.var(CAPABILITY_PROFILE_DIGEST_VAR)?.to_string();
+    Ok(admit_profile(
+        &environment,
+        &profile_id,
+        &digest,
+        ProductionAuthorization::NotAuthorized,
+    )
+    .map(|profile| profile.capabilities.enabled(surface.activation_unit()))
+    .unwrap_or(false))
+}
+
 #[event(fetch, respond_with_errors)]
 pub async fn main(mut request: Request, env: Env, _context: Context) -> Result<Response> {
+    match surface_enabled(&env, RuntimeSurface::ResolverIngress) {
+        Ok(true) => {}
+        Ok(false) | Err(_) => return error_response(503, "resolver_capability_unavailable"),
+    }
     let now_ms = Date::now().as_millis();
     let authenticated = match authenticate_request(&mut request, &env, now_ms).await {
         Ok(value) => value,
@@ -78,6 +104,12 @@ pub async fn main(mut request: Request, env: Env, _context: Context) -> Result<R
 
 #[event(scheduled)]
 pub async fn scheduled(_event: ScheduledEvent, env: Env, _context: ScheduleContext) {
+    if !matches!(
+        surface_enabled(&env, RuntimeSurface::ResolverReconciliation),
+        Ok(true)
+    ) {
+        return;
+    }
     assert!(
         reconcile_encryption_keys(&env, Date::now().as_millis())
             .await
