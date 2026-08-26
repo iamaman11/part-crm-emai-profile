@@ -129,8 +129,8 @@ mod tests {
     use serde_json::Value;
 
     const GOLDEN_BYTES: &[u8] = include_bytes!("../../tests/fixtures/capability-policy-v1.golden");
-    const GOLDEN_SHA256: &str = "2360b6e82760d126dd29e617223e39a43127d908d966cd7a4adace9247c56060";
-    const GOLDEN_SIZE_BYTES: usize = 6159;
+    const GOLDEN_SHA256: &str = "66a9b29a14c1716b2d81be32d4bb41f783dc8c917cdffe494aa7cbfa18d5ef2c";
+    const GOLDEN_SIZE_BYTES: usize = 5995;
 
     #[test]
     fn manifest_matches_canonical_bytes_and_sha_golden_vector() -> Result<(), String> {

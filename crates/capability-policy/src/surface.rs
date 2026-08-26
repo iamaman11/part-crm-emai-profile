@@ -22,11 +22,9 @@ pub enum RuntimeSurface {
     ScheduleMailboxJobs,
     ResolverIngress,
     ResolverReconciliation,
-    BridgeProfileRuntimeCommands,
-    BridgeCamoufoxLaunch,
 }
 
-pub const ALL_RUNTIME_SURFACES: [RuntimeSurface; 22] = [
+pub const ALL_RUNTIME_SURFACES: [RuntimeSurface; 20] = [
     RuntimeSurface::HttpHealth,
     RuntimeSurface::HttpBindings,
     RuntimeSurface::HttpSession,
@@ -47,8 +45,6 @@ pub const ALL_RUNTIME_SURFACES: [RuntimeSurface; 22] = [
     RuntimeSurface::ScheduleMailboxJobs,
     RuntimeSurface::ResolverIngress,
     RuntimeSurface::ResolverReconciliation,
-    RuntimeSurface::BridgeProfileRuntimeCommands,
-    RuntimeSurface::BridgeCamoufoxLaunch,
 ];
 
 impl RuntimeSurface {
@@ -75,8 +71,6 @@ impl RuntimeSurface {
             Self::ScheduleMailboxJobs => "schedule.mailbox_jobs.dispatcher",
             Self::ResolverIngress => "service.mailbox_secret_resolver.ingress",
             Self::ResolverReconciliation => "schedule.mailbox_secret_resolver.reconciliation",
-            Self::BridgeProfileRuntimeCommands => "bridge.profile_runtime.commands",
-            Self::BridgeCamoufoxLaunch => "bridge.camoufox.launch",
         }
     }
 
@@ -97,13 +91,10 @@ impl RuntimeSurface {
             Self::HttpMailboxJobs | Self::QueueMailboxJobs | Self::ScheduleMailboxJobs => {
                 ActivationUnit::MailboxJobs
             }
-            Self::HttpProfileRuntimeDeviceJobs | Self::BridgeProfileRuntimeCommands => {
-                ActivationUnit::ProfileRuntime
-            }
+            Self::HttpProfileRuntimeDeviceJobs => ActivationUnit::ProfileRuntime,
             Self::HttpNotifications
             | Self::QueueIntegrationEvents
             | Self::ScheduleIntegrationEvents => ActivationUnit::Notifications,
-            Self::BridgeCamoufoxLaunch => ActivationUnit::Camoufox,
         }
     }
 }
@@ -128,8 +119,8 @@ mod tests {
             ActivationUnit::MailboxAdmin
         );
         assert_eq!(
-            RuntimeSurface::BridgeCamoufoxLaunch.activation_unit(),
-            ActivationUnit::Camoufox
+            RuntimeSurface::ScheduleMailboxJobs.activation_unit(),
+            ActivationUnit::MailboxJobs
         );
     }
 }
