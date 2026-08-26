@@ -1,6 +1,6 @@
 use crate::canonical::canonical_json;
 use opsctl_core::capability_policy::{self, CapabilityPolicySnapshotV1};
-use serde_json::{Value, json};
+use serde_json::json;
 use std::fmt::{Display, Formatter};
 
 pub const CAPABILITY_POLICY_MANIFEST_PATH: &str = "capability-policy-v1.json";
@@ -45,9 +45,7 @@ fn render_snapshot_json(
     snapshot
         .activation_units
         .sort_by_key(|entry| entry.unit.id());
-    snapshot
-        .profiles
-        .sort_by_key(|entry| entry.profile_id.id());
+    snapshot.profiles.sort_by_key(|entry| entry.profile_id.id());
     snapshot
         .runtime_surfaces
         .sort_by_key(|entry| entry.surface.id());
@@ -130,10 +128,8 @@ mod tests {
     use opsctl_core::capability_policy;
     use serde_json::Value;
 
-    const GOLDEN_BYTES: &[u8] =
-        include_bytes!("../../tests/fixtures/capability-policy-v1.golden");
-    const GOLDEN_SHA256: &str =
-        "2360b6e82760d126dd29e617223e39a43127d908d966cd7a4adace9247c56060";
+    const GOLDEN_BYTES: &[u8] = include_bytes!("../../tests/fixtures/capability-policy-v1.golden");
+    const GOLDEN_SHA256: &str = "2360b6e82760d126dd29e617223e39a43127d908d966cd7a4adace9247c56060";
     const GOLDEN_SIZE_BYTES: usize = 6159;
 
     #[test]
@@ -218,7 +214,9 @@ mod tests {
         let baseline = capability_policy::snapshot_v1();
         let mut changed = baseline.clone();
         let Some(first) = changed.activation_units.first_mut() else {
-            return Err("typed capability snapshot unexpectedly has no activation units".to_owned());
+            return Err(
+                "typed capability snapshot unexpectedly has no activation units".to_owned(),
+            );
         };
         first.requires_windows_profile_bridge = !first.requires_windows_profile_bridge;
 

@@ -225,13 +225,13 @@ mod tests {
 
     #[test]
     fn current_candidate_missing_capability_manifest_fails_inventory() {
-        let expected = BTreeSet::from([
-            "capability-policy-v1.json",
-            "components/control-plane.tar",
-        ]);
+        let expected =
+            BTreeSet::from(["capability-policy-v1.json", "components/control-plane.tar"]);
         let observed = BTreeSet::from(["components/control-plane.tar"]);
-        let error = verify_inventory_paths(&expected, &observed)
-            .expect_err("candidate without capability policy manifest unexpectedly verified");
+        let error = match verify_inventory_paths(&expected, &observed) {
+            Err(error) => error,
+            Ok(()) => panic!("candidate without capability policy manifest unexpectedly verified"),
+        };
         assert!(error.to_string().contains("ARTIFACT_INVENTORY_MISMATCH"));
         assert!(error.to_string().contains("capability-policy-v1.json"));
     }
@@ -256,7 +256,10 @@ mod tests {
 
         let result = verify_one(&path, &identity);
         fs::remove_dir_all(&root)?;
-        let error = result.expect_err("wrong capability policy bytes unexpectedly verified");
+        let error = match result {
+            Err(error) => error,
+            Ok(()) => return Err("wrong capability policy bytes unexpectedly verified".into()),
+        };
         assert!(error.to_string().contains("ARTIFACT_DIGEST_MISMATCH"));
         assert!(error.to_string().contains("capability-policy-v1.json"));
         Ok(())
