@@ -5,6 +5,9 @@ mod tests;
 
 use crate::canonical::{canonical_json, sha256_hex};
 use crate::d1;
+use crate::release::capability_policy_manifest::{
+    self, CAPABILITY_POLICY_ARTIFACT_KIND, CAPABILITY_POLICY_MANIFEST_PATH,
+};
 use crate::release::input_topology::{ReleaseInputTopology, ResolvedReleaseInput};
 use crate::release::v3_output::render_release_set_v3;
 use opsctl_core::capability_policy;
@@ -89,7 +92,19 @@ fn compose_release_set(
     let d1_repository_identity_sha256 = d1::repository_identity_sha256(root).map_err(|error| {
         ReleaseFinalizeError::new(format!("typed D1 repository identity failed: {error}"))
     })?;
-    let (components, artifact_inventory) = component_identities(&request);
+    let (components, mut artifact_inventory) = component_identities(&request);
+    let capability_policy_bytes = capability_policy_manifest::render_bytes().map_err(|error| {
+        ReleaseFinalizeError::new(format!("capability policy projection failed: {error}"))
+    })?;
+    let capability_policy_size = u64::try_from(capability_policy_bytes.len()).map_err(|error| {
+        ReleaseFinalizeError::new(format!("capability policy artifact size overflow: {error}"))
+    })?;
+    artifact_inventory.push(core::ArtifactIdentity {
+        path: CAPABILITY_POLICY_MANIFEST_PATH.to_owned(),
+        sha256: sha256_hex(&capability_policy_bytes),
+        size_bytes: capability_policy_size,
+        kind: CAPABILITY_POLICY_ARTIFACT_KIND.to_owned(),
+    });
 
     core::ReleaseSetV3::new(core::ReleaseSetV3Parts {
         source: core::ReleaseSetSource {

@@ -325,6 +325,22 @@ jobs:
               }
             }' > "$request_json"
 
+          capability_policy_json="$RUNNER_TEMP/capability-policy-v1.json"
+          capability_policy_replay="$RUNNER_TEMP/capability-policy-v1-replay.json"
+          cargo run --locked --quiet --manifest-path tools/opsctl/Cargo.toml \
+            --bin capability-policy-manifest > "$capability_policy_json"
+          cargo run --locked --quiet --manifest-path tools/opsctl/Cargo.toml \
+            --bin capability-policy-manifest > "$capability_policy_replay"
+          cmp --silent "$capability_policy_json" "$capability_policy_replay"
+          jq -e \
+            '.schema_version == 1
+              and .kind == "CAPABILITY_POLICY_MANIFEST"
+              and .semantic_owner == "crates/capability-policy"
+              and .projection_source == "capability-policy::snapshot_v1"' \
+            "$capability_policy_json" >/dev/null
+          capability_policy_sha="$(sha256_file "$capability_policy_json")"
+          capability_policy_size="$(size_bytes "$capability_policy_json")"
+
           release_json="$RUNNER_TEMP/release-set-v3.json"
           replay_json="$RUNNER_TEMP/release-set-v3-replay.json"
           cargo run --locked --quiet --manifest-path tools/opsctl/Cargo.toml -- \
@@ -336,10 +352,17 @@ jobs:
           jq -e \
             --arg repository "$GITHUB_REPOSITORY" \
             --arg source_sha "$SOURCE_SHA" \
+            --arg policy_sha "$capability_policy_sha" \
+            --argjson policy_size "$capability_policy_size" \
             '.schema_version == 3
               and .source.repository == $repository
               and .source.commit_sha == $source_sha
-              and .source.accepted_main == true' \
+              and .source.accepted_main == true
+              and any(.artifact_inventory[];
+                .path == "capability-policy-v1.json"
+                and .sha256 == $policy_sha
+                and .size_bytes == $policy_size
+                and .kind == "capability-policy")' \
             "$release_json" >/dev/null
           release_id="$(jq -er '.release_set_id' "$release_json")"
           [[ "$release_id" =~ ^release-set-v3-sha256-[0-9a-f]{64}$ ]]
@@ -348,11 +371,12 @@ jobs:
           test ! -e "$release_dir"
           mkdir -p "$release_dir/components"
           cp "$release_json" "$release_dir/release-set.json"
+          cp "$capability_policy_json" "$release_dir/capability-policy-v1.json"
           cp "$component_root/control-plane.tar" "$release_dir/components/control-plane.tar"
           cp "$component_root/secret-resolver.tar" "$release_dir/components/secret-resolver.tar"
           cp "$component_root/runtime-bundle.tar" "$release_dir/components/runtime-bundle.tar"
           cp "$component_root/profile-bridge.zip" "$release_dir/components/profile-bridge.zip"
-          test "$(find "$release_dir" -type f | wc -l)" -eq 5
+          test "$(find "$release_dir" -type f | wc -l)" -eq 6
 
           policy_dir="$RUNNER_TEMP/release-policy-input"
           mkdir -p "$policy_dir"
@@ -385,8 +409,9 @@ jobs:
           asset_dir="$RUNNER_TEMP/release-assets"
           mkdir -p "$asset_dir"
           cp "$RELEASE_DIR/release-set.json" "$asset_dir/release-set.json"
+          cp "$RELEASE_DIR/capability-policy-v1.json" "$asset_dir/capability-policy-v1.json"
           cp "$RELEASE_DIR/components/"* "$asset_dir/"
-          test "$(find "$asset_dir" -maxdepth 1 -type f | wc -l)" -eq 5
+          test "$(find "$asset_dir" -maxdepth 1 -type f | wc -l)" -eq 6
           if gh release view "$RELEASE_ID" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             existing="$RUNNER_TEMP/existing-release"
             mkdir -p "$existing"
@@ -396,7 +421,7 @@ jobs:
               test -f "$existing/$name"
               cmp --silent "$file" "$existing/$name"
             done
-            test "$(find "$existing" -maxdepth 1 -type f | wc -l)" -eq 5
+            test "$(find "$existing" -maxdepth 1 -type f | wc -l)" -eq 6
           else
             gh release create "$RELEASE_ID" \
               --repo "$GITHUB_REPOSITORY" \
@@ -412,6 +437,7 @@ jobs:
           name: release-set-evidence-${{ steps.release-set.outputs.release_id }}
           path: |
             ${{ steps.release-set.outputs.release_dir }}/release-set.json
+            ${{ steps.release-set.outputs.release_dir }}/capability-policy-v1.json
             ${{ steps.release-set.outputs.accepted_source_evidence }}
           if-no-files-found: error
           retention-days: 30

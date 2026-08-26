@@ -1,5 +1,8 @@
 use super::{finalize_json, request};
 use crate::canonical::parse_strict_json;
+use crate::release::capability_policy_manifest::{
+    CAPABILITY_POLICY_ARTIFACT_KIND, CAPABILITY_POLICY_MANIFEST_PATH,
+};
 use serde_json::{Value, json};
 use std::path::PathBuf;
 
@@ -105,10 +108,18 @@ fn finalizes_through_pure_v3_core_and_v3_renderer() -> Result<(), String> {
         value["protocols"]["profile_bridge_protocol_version"].as_u64(),
         Some(1)
     );
-    assert_eq!(
-        value["artifact_inventory"].as_array().map(Vec::len),
-        Some(4)
-    );
+    let artifacts = value["artifact_inventory"]
+        .as_array()
+        .ok_or_else(|| "artifact inventory missing".to_owned())?;
+    assert_eq!(artifacts.len(), 5);
+    assert!(artifacts.iter().any(|artifact| {
+        artifact["path"].as_str() == Some(CAPABILITY_POLICY_MANIFEST_PATH)
+            && artifact["kind"].as_str() == Some(CAPABILITY_POLICY_ARTIFACT_KIND)
+            && artifact["sha256"]
+                .as_str()
+                .is_some_and(|digest| digest.len() == 64)
+            && artifact["size_bytes"].as_u64().is_some_and(|size| size > 0)
+    }));
     assert!(value.get("display_version").is_none());
     Ok(())
 }
