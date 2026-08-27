@@ -17,7 +17,9 @@ use application_ports::query_global::{
 use application_ports::query_mail::{ClientMailEligibilityProjection, MailReadModelPort};
 use application_ports::query_mailboxes::{MailboxReadModelPort, MailboxReadProjection};
 use application_ports::query_members::{MemberReadModelPort, MemberReadProjection};
-use application_ports::query_profiles::{ProfileReadModelPort, ProfileReadProjection};
+use application_ports::query_profiles::{
+    ClientProfileReadModelPort, ProfileReadModelPort, ProfileReadProjection,
+};
 use core::fmt;
 use profile_platform_primitives::{ActorContext, ClientId};
 
@@ -74,6 +76,26 @@ where
     }
     projection
         .list_profiles(actor, page)
+        .await
+        .map_err(map_port_error)
+}
+
+pub async fn list_client_profiles<A, P>(
+    actor: &ActorContext,
+    authorization: &A,
+    projection: &P,
+    client_id: &ClientId,
+    page: &QueryPageRequest,
+) -> Result<QueryPage<ProfileReadProjection>, QueryApplicationError>
+where
+    A: QueryAuthorizationPort,
+    P: ClientProfileReadModelPort,
+{
+    if !authorize(actor, authorization, QueryCapability::Profiles).await? {
+        return Ok(QueryPage::empty());
+    }
+    projection
+        .list_profiles_for_client(actor, client_id, page)
         .await
         .map_err(map_port_error)
 }
