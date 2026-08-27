@@ -6,6 +6,7 @@ import {
   getClientHistory as getClientHistoryOperation,
   getClientMailMessage as getClientMailMessageOperation,
   grantClientAccess as grantClientAccessOperation,
+  listClientProfiles as listClientProfilesOperation,
   listClients as listClientsOperation,
   mergeClient as mergeClientOperation,
   revokeClientAccess as revokeClientAccessOperation,
@@ -32,6 +33,7 @@ import type {
   MailMessageSearchPageDto,
   MailboxMessageReferenceDto,
   MutationReceipt,
+  ProfileListPageDto,
 } from '../../shared/api/generated/operations';
 
 export type CreateClientInput = ClientCreateRequest;
@@ -51,6 +53,7 @@ export type {
   MailMessageBodyDto,
   MailMessageSearchPageDto,
   MailboxMessageReferenceDto,
+  ProfileListPageDto,
 };
 
 export function listClients(tenantId: string, signal?: AbortSignal): Promise<ClientListProjection> {
@@ -72,6 +75,22 @@ export function getClientHistory(
   return getClientHistoryOperation({
     tenantId,
     clientId,
+    ...(signal === undefined ? {} : { signal }),
+  });
+}
+
+export function listClientProfiles(
+  tenantId: string,
+  clientId: string,
+  signal?: AbortSignal,
+  cursor?: string | null,
+  limit = 50,
+): Promise<ProfileListPageDto> {
+  return listClientProfilesOperation({
+    tenantId,
+    clientId,
+    limit,
+    ...(cursor === undefined || cursor === null ? {} : { cursor }),
     ...(signal === undefined ? {} : { signal }),
   });
 }
