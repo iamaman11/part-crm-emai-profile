@@ -68,6 +68,9 @@ Use the natural owner's document when a transaction touches that boundary:
 - [Mailbox jobs](MAILBOX_JOB_APPLICATION_BOUNDARY.md)
 - [Realtime notifications](REALTIME_NOTIFICATIONS.md)
 - [D1 catalog](D1_CATALOG.md)
+- [Accepted immutable D3 resolver/bootstrap boundary](PRE2J_D3_RESOLVER_BOOTSTRAP_AUTHORITY.md) —
+  retained because its repository checker still enforces the accepted boundary; it does not authorize
+  a fresh provider mutation or select current work.
 
 ## Projection and history rules
 

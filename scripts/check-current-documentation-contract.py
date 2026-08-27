@@ -45,7 +45,6 @@ HISTORICAL_TOMBSTONES = {
     Path("docs/ARCHITECTURE_REBASELINE_V3_AR11.md"): "Historical Tombstone",
     Path("docs/POST_AR11_PRE_AR12_HARDENING_PLAN.md"): "Historical Tombstone",
     Path("docs/PRE2J_ARCHITECTURE_REMEDIATION_PLAN.md"): "Historical Tombstone",
-    Path("docs/PRE2J_D3_RESOLVER_BOOTSTRAP_AUTHORITY.md"): "Historical Tombstone",
     Path("docs/PRE2J_C3G_CONTRACT_MIGRATION.md"): "Historical Tombstone",
     Path("docs/CAMOUFOX_RUNTIME_CUTOVER_PLAN.md"): "Historical Tombstone",
     Path("docs/CAMOUHOST_RUNTIME_BUNDLE.md"): "Historical Tombstone",
