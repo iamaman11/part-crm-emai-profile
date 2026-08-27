@@ -319,6 +319,45 @@ source_present != production_enabled
 
 No second feature flag, env var, frontend visibility rule, Python helper or operator command independently authorizes production execution. Backend surfaces fail closed before mutation when admission is absent.
 
+### 13.1 Capability lifecycle: add, enable, disable, remove
+
+A capability is independently evolvable only when all four transitions are explicit. Source code and
+runtime permission remain separate at every transition:
+
+```text
+ADD SOURCE
+-> one natural bounded owner
+-> only required domain/application ports/adapters/composition/UI/tests
+-> disabled by default; reachable backend effects = 0
+
+ENABLE
+-> explicit product decision
+-> canonical Capability Profile / ActivationUnit mapping
+-> exact Release Candidate + target authorization envelope
+-> security, data-lifecycle and operation/failure evidence for the newly reachable surface
+
+DISABLE
+-> remove from the selected profile/effective set and every governed ingress
+-> fail closed before effects; drain/reconcile in-flight work
+-> preserve the accepted retention/recovery/revoke obligations for already created state
+
+REMOVE SOURCE
+-> disabled in every admitted environment first
+-> current runtime/UI/integration callers = 0
+-> persisted/external/legal obligations migrated, retained by an isolated contract or explicitly closed
+-> unique current invariants re-homed
+-> owner code + adapters + composition + UI + contracts + configuration + predecessor-only checks/docs deleted
+```
+
+Adding one capability must not require edits to unrelated bounded contexts unless a named versioned
+contract actually changes. Removing one must not leave a placeholder namespace, hidden enable flag,
+fallback runtime, dead adapter, compatibility-only checker or successor registry. Shared infrastructure
+is reused through narrow owned ports; it does not become a global feature framework.
+
+An enabled capability can be removed only through disable/drain/data-lifecycle closure, never by source
+deletion alone. Conversely, genuinely disabled and unreachable source does not block another exact
+candidate merely because it compiles in the same repository.
+
 ## 14. Cutover discipline
 
 ```text
@@ -414,6 +453,12 @@ Permanent zero/one budgets include:
 
 ```text
 semantic_owner_count_per_fact = 1
+production_enable_authority_count = 1
+disabled_capability_reachable_side_effects = 0
+unrelated_context_changes_without_named_contract = 0
+removed_capability_live_callers_adapters_checks = 0
+unclassified_workspace_crate_architecture_role = 0
+unowned_reachable_repository_script_effect = 0
 serde_json_value_crossing_into_opsctl_pure_core = 0
 filesystem/process/network/provider_in_opsctl_pure_core = 0
 runtime_dependency_on_opsctl = 0
@@ -521,14 +566,15 @@ Every materially changing bounded candidate proves on one exact head:
 4. explicit contracts/effects/observation boundaries;
 5. positive + negative tests at lowest sufficient layer;
 6. no duplicate authority/global bag/hidden production-enable path;
-7. predecessor disposition + zero callers/unique invariants for cutovers;
-8. internal compatibility ceremony deleted with the predecessor unless a durable exact-format consumer is named;
-9. before/after authority and plan/validator/projection footprint proves the applicable simplification budget;
-10. affected product acceptance scenario(s) and user-visible outcome identified and proved;
-11. cross-platform semantic equivalence where required;
-12. all applicable permanent workflows/protected contexts green;
-13. `behind_by=0`, blocking reviews=0, unresolved threads=0;
-14. guarded merge bound to exact proven head;
-15. accepted-main reread before next transaction.
+7. add/enable/disable/remove lifecycle impact and effective-set behavior are explicit when a capability changes;
+8. predecessor disposition + zero callers/unique invariants for cutovers;
+9. internal compatibility ceremony deleted with the predecessor unless a durable exact-format consumer is named;
+10. before/after authority and plan/validator/projection footprint proves the applicable simplification budget;
+11. affected product acceptance scenario(s) and user-visible outcome identified and proved;
+12. cross-platform semantic equivalence where required;
+13. all applicable permanent workflows/protected contexts green;
+14. `behind_by=0`, blocking reviews=0, unresolved threads=0;
+15. guarded merge bound to exact proven head;
+16. accepted-main reread before next transaction.
 
 These rules are mandatory quality constraints, not authorization for a repository-wide aesthetic rewrite. Correct untouched code remains untouched; touched scope converges.
