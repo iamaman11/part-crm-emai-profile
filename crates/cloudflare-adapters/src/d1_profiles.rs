@@ -1,7 +1,7 @@
 use crate::d1_governed_commands::D1GovernedCommandRepository;
 use crate::d1_idempotency::{D1IdempotencyRepository, IdempotencyDecision};
 use crate::d1_identity_acl::{
-    AssignProfileMutation, CreateProfileMutation, MutationEnvelope, ProfileGrantMutation,
+    CreateProfileMutation, MutationEnvelope, ProfileAssignmentMutation, ProfileGrantMutation,
     ProfileGrantValue, ResolvedMembershipRole,
 };
 use crate::d1_identity_queries::{D1IdentityQueryRepository, ProfileProjection};
@@ -10,9 +10,10 @@ use application_ports::profile_creation::ProfileCreateGrantSpec;
 use application_ports::profiles::{
     ProfileApplicationPort, ProfileAssignmentApplicationPort, ProfileAssignmentPortError,
     ProfileAssignmentPortErrorClass, ProfileAssignmentWrite, ProfileCreateWrite,
-    ProfileGrantApplicationPort, ProfileGrantPortError, ProfileGrantPortErrorClass,
-    ProfileGrantRole, ProfileGrantWrite, ProfilePortError, ProfilePortErrorClass, ProfileReadModel,
-    ProfileReplayDecision, ProfileReplayReceipt, ProfileStatus,
+    ProfileDetachmentWrite, ProfileGrantApplicationPort, ProfileGrantPortError,
+    ProfileGrantPortErrorClass, ProfileGrantRole, ProfileGrantWrite, ProfilePortError,
+    ProfilePortErrorClass, ProfileReadModel, ProfileReplayDecision, ProfileReplayReceipt,
+    ProfileStatus,
 };
 use identity_access_domain::MembershipRole;
 use profile_platform_primitives::{
@@ -128,7 +129,7 @@ impl ProfileAssignmentApplicationPort for D1ProfileApplicationRepository {
         write: &ProfileAssignmentWrite,
     ) -> Result<(), ProfileAssignmentPortError> {
         let evidence = write.evidence();
-        let mutation = AssignProfileMutation {
+        let mutation = ProfileAssignmentMutation {
             assignment_id: write.assignment_id(),
             profile_id: write.profile_id(),
             client_id: write.client_id(),
@@ -138,6 +139,27 @@ impl ProfileAssignmentApplicationPort for D1ProfileApplicationRepository {
         };
         self.governed
             .assign_profile(actor, mutation)
+            .await
+            .map(|_| ())
+            .map_err(map_assignment_write_error)
+    }
+
+    async fn detach_profile(
+        &self,
+        actor: &ActorContext,
+        write: &ProfileDetachmentWrite,
+    ) -> Result<(), ProfileAssignmentPortError> {
+        let evidence = write.evidence();
+        let mutation = ProfileAssignmentMutation {
+            assignment_id: write.assignment_id(),
+            profile_id: write.profile_id(),
+            client_id: write.client_id(),
+            expected_profile_version: write.expected_profile_version(),
+            reason: write.reason(),
+            envelope: mutation_envelope(evidence, write.event_payload_json()),
+        };
+        self.governed
+            .detach_profile(actor, mutation)
             .await
             .map(|_| ())
             .map_err(map_assignment_write_error)
@@ -333,6 +355,7 @@ fn classify_assignment_write_failure(message: &str) -> ProfileAssignmentPortErro
     if message.contains("time_regression")
         || message.contains("invalid_transition")
         || message.contains("grant_missing")
+        || message.contains("active_assignment_missing")
     {
         return ProfileAssignmentPortErrorClass::InvalidState;
     }
@@ -453,6 +476,10 @@ mod tests {
         assert_eq!(
             classify_assignment_write_failure("profile_assignment_profile_version_mismatch"),
             ProfileAssignmentPortErrorClass::VersionConflict
+        );
+        assert_eq!(
+            classify_assignment_write_failure("profile_assignment_active_assignment_missing"),
+            ProfileAssignmentPortErrorClass::InvalidState
         );
         assert_eq!(
             classify_assignment_write_failure(
