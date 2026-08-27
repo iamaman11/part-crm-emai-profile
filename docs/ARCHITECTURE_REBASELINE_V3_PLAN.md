@@ -245,6 +245,15 @@ V1 exit criteria:
 10. the permanent future-check standard remains one objective invariant -> one primary proof -> the
     cheapest sufficient lifecycle tier, with positive and negative proof and a retirement condition.
 
+V1 also gives the remaining transitional authority surfaces an exact executable-lifecycle verdict; it
+does not silently equate `CONDITIONAL` with permanent. In particular, `docs/status.json`, the frozen
+AR-program sequence/evaluator and their current callers are each included in the matrix. If a bounded
+surface reaches `current callers = 0` and `unique current invariants = 0`, it is deleted/demoted in the
+same transaction. Otherwise `KEEP`/`CONDITIONAL` names the durable consumer or missing proof, natural
+owner and one observable retirement trigger. A generated projection, self-test, historical document or
+checker that exists only to consume the predecessor is part of the deletion bundle, not retention
+evidence.
+
 Quality accountability is explicit rather than implied by tool count. The implementation author owns
 the complete diff and simplification ledger; the natural semantic owner owns the invariant; protected
 CI owns repeatable executable proof; the repository maintainer owns guarded acceptance. If a second
@@ -253,19 +262,106 @@ critical release, security, migration and runtime surfaces through an authorized
 Solo operation must not manufacture independence through self-approval. R1 records the actual named
 release/security/risk authorities and any required independent evidence for the exact candidate.
 
+### 5.4 External security, product/legal and privacy prerequisites
+
+These are inputs to the existing V2/R1/R3 gates, not a new architecture phase or a license/privacy
+policy invented by repository automation.
+
+1. **Legacy credential incident — hard gate.** Issue
+   [#1](https://github.com/iamaman11/part-crm-emai-profile/issues/1) remains a Production and
+   prototype-reuse blocker. R1 cannot finalize and R3 cannot issue GO/PILOT until provider-side
+   evidence proves the old credential was revoked/rotated and rejected, available usage/access logs and
+   incident scope were reviewed, the replacement is only in an approved secret store, and repository
+   scanning proves no reuse. The accepted record uses the existing `legacy_credential_rotation`
+   external-evidence owner and secret-free references/digests; raw credentials or logs never enter Git.
+2. **Privacy/retention applicability — exact target input.** Before V2 evidence is finalized, the
+   product/legal/privacy authority records the target jurisdictions/regions, user and customer model,
+   contractual promises and applicable retention, correction, revoke, delete, export, support-access
+   and subprocessor obligations. V2/R1 map those inputs to the exact enabled capability set and every
+   reachable copy. An unresolved applicable obligation blocks R1/R3; a newly discovered obligation
+   invalidates and repeats every affected candidate proof rather than being waived by a narrow UI
+   scope.
+3. **Distribution authorization — separate from runtime readiness.** R1 records whether the target is
+   private/internal use, bounded pilot or public/commercial distribution. Before any public/commercial
+   distribution, the product/legal owner must accept a compatible repository/product license or other
+   documented legal regime, third-party notices and redistribution restrictions. Missing authorization
+   forbids distribution even when runtime evidence is otherwise complete. The current typed external
+   readiness policy also requires `product_license`; changing that applicability requires a separate
+   reviewed policy transaction, never a synthetic passing record.
+
+Repository-local validation proves only the integrity of sanitized evidence. It cannot perform the
+provider incident response, determine applicable law, accept a contract or grant distribution rights.
+
 ## 6. Non-blocking owner-local convergence
 
 The following work may be performed only as separately authorized natural-owner transactions and must
-not become a second pre-Production program:
+not become a second pre-Production program. They may run before or after R3 only when dependency-
+independent from the active row. Reachable release/security/data obligations still block through V2/R1;
+the word `non-blocking` applies only to debt outside the exact release surface.
 
-- remaining CAP-06 documentation/ADR/history cleanup;
-- legacy AR program-sequence/acceptance projection retirement or reclassification after exact consumer
-  and invariant proof;
-- unsupported `opsctl` projection/report retirement after final consumer proof;
-- D1/promotion pure-core extraction only when those families are touched;
-- contract-floor and recovery-language reconciliation under CAP-07;
-- conditional compatibility/publication deletion after consumer and persisted-obligation proof;
-- future provider/capability work after an explicit product decision.
+### 6.1 Verification and executable-authority retirement
+
+- E4 retires the first proven CAP-05 bundle; V1 classifies the complete accepted CAP-05 estate. After
+  V1, every newly proven obsolete bundle is removed by a bounded natural-owner transaction until
+  `proven obsolete executable verification bundles = 0`. A conditional item survives only while its
+  named consumer/missing proof is real and is re-evaluated when its recorded trigger occurs.
+- `docs/status.json` is not deleted by date or aspiration. Its remaining callers are cut over and the
+  projection plus predecessor-only checks/docs are deleted in the first transaction that proves zero
+  durable callers and zero unique current invariants.
+- The frozen AR-0…AR-17 sequence/evaluator follows the same rule. Passive Git/Issue/evidence provenance
+  may remain; executable current-looking machinery does not remain merely to reproduce history.
+- CAP-07 contract-floor wording and recovery language are reconciled owner-locally: preserve immutable
+  baseline obligations, avoid freezing the whole living API, and name `rollback | roll-forward |
+  restore | compensate | abort-before-side-effect` per affected boundary. Compatibility/publication
+  paths retire only after current-consumer and persisted/external-obligation proof.
+
+### 6.2 `opsctl` command-family convergence
+
+`opsctl` remains one bounded read-only tool; completeness does not mean moving every function into
+`opsctl-core` or splitting the binary. Each touched command family applies the permanent boundary and
+CAP-04 disposition:
+
+- keep consumed D1/release/promotion/evidence families while their named risk and consumer remain;
+- perform the final consumer/durable-obligation proof for credentials `status`/`rotation-plan`, public
+  `d1 repository` and `release inspect`, then delete unsupported commands/projections and their
+  predecessor-only tests/docs;
+- decide hosted credential `seal/verify` retention only from the real evidence consumer;
+- keep recovery/readiness namespaces absent until a separate product/consumer decision;
+- extract pure D1/promotion semantics into `opsctl-core` only when the family is touched and physical
+  separation materially reduces effect/dependency ambiguity.
+
+No command-by-command cleanup is a release blocker unless the command is reachable from the exact
+candidate or violates the provider/network/process/secret/mutation boundary.
+
+### 6.3 Documentation and GitHub issue hygiene
+
+- Remaining CAP-06 cleanup converges toward `current-looking duplicate authority = 0`, not toward
+  deleting useful history or deduplicating every repeated term. A historical document survives only as
+  indexed bounded knowledge/provenance; otherwise it is demoted/removed when touched.
+- Before Issue #266 closes, Issues #3, #171, #203, #246, #399 and #421 receive a fresh disposition.
+  Close them as superseded only after each unresolved current obligation is transferred to its natural
+  current owner; keep one open only when it still owns a named blocker and link that fact from #266.
+  An `OPEN` historical tracker may not remain an accidental alternate roadmap.
+- Completed CAP research Issues are closed as research provenance after accepted permanent decisions
+  and every unresolved implementation/external obligation has a current owner/link. Closing research
+  never closes an unimplemented finding and never replaces Issue #1 or another real gate with prose.
+
+### 6.4 Future capability admission
+
+The first release is not required to complete disabled Mailboxes, Notifications, Automation, outbound,
+export or future CRM behavior. Before any later capability profile enables one of them, its bounded
+owner transaction must prove, for that newly reachable surface:
+
+```text
+data owner + purpose + copies
++ retention/delete/revoke/export/recovery obligations
++ retry/idempotency/concurrency/failure semantics for each effectful operation
++ positive and negative exact-path evidence
++ capability admission and retirement/recovery conditions
+```
+
+This closes CAP-09/CAP-10 incrementally without a central data platform, universal lifecycle registry,
+generic saga/idempotency engine or speculative implementation for disabled modules.
 
 ## 7. Program completion
 
@@ -275,7 +371,11 @@ The temporary program closes when:
 2. one exact candidate envelope is complete and all universal/reachable guarantees are decided;
 3. R2/R3 record the named authorization outcome;
 4. no temporary execution owner is still needed for ordinary feature development;
-5. permanent decisions live in their natural docs/code/checks and #266 is closed as provenance.
+5. permanent decisions live in their natural docs/code/checks, all historical/CAP trackers have the
+   dispositions required by section 6.3, and #266 is closed as provenance;
+6. any non-blocking `KEEP`/`CONDITIONAL` convergence remaining after R3 has a bounded natural-owner
+   Issue with its consumer/missing proof and observable trigger; there is no second roadmap or generic
+   debt registry.
 
 Until then, Issue #266 is the only live transaction pointer. Never copy its mutable state into README,
 AGENTS, projections or handoff documents.
