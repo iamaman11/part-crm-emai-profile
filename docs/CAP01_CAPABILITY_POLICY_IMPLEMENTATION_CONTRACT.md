@@ -107,6 +107,21 @@ production-mailbox-admin-v2
 production-analytics-v1
 ```
 
+Product scope и Capability Profile принадлежат разным natural owners, поэтому изменение product
+boundary требует явного handoff, а не изменения старого ID по месту:
+
+```text
+accepted product capability change
+-> selected effective-set impact disposition
+-> immutable existing profile preserved
+-> new versioned profile when semantics differ
+-> atomic current-selector cutover
+-> exact effective-set + disabled-ingress proof
+```
+
+Наличие старого profile в каталоге или immutable Release Set разрешает historical verification, но не
+создаёт fallback и не делает его current selector.
+
 ### 2.3 Выбор при deployment
 
 Deployment может выбрать только известный profile:
@@ -279,6 +294,8 @@ strict JSON/CLI DTO
 pub enum ActivationGate {
     Ar12OrLaterRehearsal,
     Pc1AfterAr17,
+    TargetAuthorization,
+    ProductionAuthorization,
     Pc2,
     Pc3,
     Pc4,
@@ -422,13 +439,18 @@ typed ProfileSemanticIdentityV1
 
 ### 8.2 Обязательные digest tests
 
-Проверить все пять текущих profiles:
+Сохранить отдельный exact digest vector для пяти исторически использованных v1 profiles:
 
 - `production-core-v1`;
 - `rehearsal-core-v1`;
 - `production-mailbox-admin-v1`;
 - `production-mailbox-jobs-v1`;
 - `production-outbound-mail-v1`.
+
+Новые versioned profiles получают собственный frozen vector; для текущего first-release cutover это:
+
+- `production-core-v2`;
+- `rehearsal-core-v2`.
 
 Дополнительно:
 
@@ -446,7 +468,7 @@ Capability profile определяет, требуется ли production auth
 
 Runtime не должен получать разрешение через `PRODUCTION_AUTHORIZED=true` или `ENABLE_PRODUCTION=true`.
 
-Текущий Worker adapter до AR-17 должен всегда передавать:
+До принятого target-authorization wiring Worker adapter должен всегда передавать:
 
 ```text
 AuthorizationState::NotAuthorized
@@ -461,7 +483,8 @@ profile semantics immutable
 authorization state mutable и внешний по отношению к digest
 ```
 
-Изменение `NotAuthorized -> Authorized` не создаёт `production-core-v2`. Изменение состава профиля — создаёт.
+Изменение `NotAuthorized -> Authorized` не требует нового profile ID/version. Изменение состава
+профиля требует нового versioned ID.
 
 ## 10. RuntimeSurface
 
@@ -783,7 +806,7 @@ Frontend продолжает получать только authenticated effect
 
 ```json
 {
-  "profile_id": "rehearsal-core-v1",
+  "profile_id": "rehearsal-core-v2",
   "profile_digest": "...",
   "capabilities": ["foundation", "identity", "clients"]
 }
@@ -821,7 +844,8 @@ Frontend продолжает получать только authenticated effect
 - profile в неправильном environment отклоняется;
 - production без authorization отклоняется;
 - rehearsal profile в staging разрешается;
-- все пять текущих digest совпадают;
+- пять исторических v1 digest остаются byte-exact, а каждый новый versioned profile имеет отдельный
+  frozen digest vector;
 - semantic change меняет digest;
 - authorization state не меняет profile digest;
 - все runtime surfaces имеют canonical activation unit.
@@ -885,7 +909,7 @@ DENIED
 {
   "event": "capability_admission",
   "environment": "staging",
-  "profile_id": "rehearsal-core-v1",
+  "profile_id": "rehearsal-core-v2",
   "surface": "queue.mailbox_jobs.consumer",
   "decision": "DENIED",
   "reason": "CAPABILITY_DISABLED",

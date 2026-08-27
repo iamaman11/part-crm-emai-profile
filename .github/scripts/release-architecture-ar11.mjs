@@ -97,8 +97,19 @@ function validateDeploymentClosures(authority) {
     }
   }
 
-  const core = closures.find((closure) => closure.closure_id === 'production-core-v1');
-  if (!core) fail('production-core-v1 deployment closure missing');
+  for (const profileId of [
+    'rehearsal-core-v1',
+    'production-core-v1',
+    'rehearsal-core-v2',
+    'production-core-v2',
+  ]) {
+    if (!closures.some((closure) => closure.closure_id === profileId)) {
+      fail(`${profileId} deployment closure missing`);
+    }
+  }
+
+  const core = closures.find((closure) => closure.closure_id === 'production-core-v2');
+  if (!core) fail('production-core-v2 deployment closure missing');
   for (const forbidden of ['MAILBOX_JOBS', 'MAILBOX_SECRET_RESOLVER']) {
     if (core.required_bindings.includes(forbidden)) fail(`core requires disabled mail binding ${forbidden}`);
   }
@@ -109,6 +120,16 @@ function validateDeploymentClosures(authority) {
   const wrangler = fs.readFileSync(wranglerPath, 'utf8');
   for (const forbidden of ['"MAILBOX_JOBS"', '"MAILBOX_SECRET_RESOLVER"', '"MAILBOX_RESOLVER_CALLER_AUTH_KEY"']) {
     if (wrangler.includes(forbidden)) fail(`core Wrangler overlay still contains disabled mail dependency ${forbidden}`);
+  }
+  for (const currentProfile of ['rehearsal-core-v2', 'production-core-v2']) {
+    if (!wrangler.includes(`"CAPABILITY_PROFILE_ID": "${currentProfile}"`)) {
+      fail(`Core Wrangler overlay does not select ${currentProfile}`);
+    }
+  }
+  for (const historicalProfile of ['rehearsal-core-v1', 'production-core-v1']) {
+    if (wrangler.includes(`"CAPABILITY_PROFILE_ID": "${historicalProfile}"`)) {
+      fail(`historical profile remains a current Wrangler selector: ${historicalProfile}`);
+    }
   }
 }
 
@@ -218,7 +239,7 @@ function selfTest(authority) {
 
   const forbiddenBinding = structuredClone(authority);
   forbiddenBinding.deployment_closures
-    .find((closure) => closure.closure_id === 'production-core-v1')
+    .find((closure) => closure.closure_id === 'production-core-v2')
     .required_bindings.push('MAILBOX_JOBS');
   rejected = false;
   try {

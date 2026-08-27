@@ -32,14 +32,18 @@ impl CanonicalEnvironment {
 pub enum ProfileId {
     ProductionCoreV1,
     RehearsalCoreV1,
+    ProductionCoreV2,
+    RehearsalCoreV2,
     ProductionMailboxAdminV1,
     ProductionMailboxJobsV1,
     ProductionOutboundMailV1,
 }
 
-pub const ALL_PROFILE_IDS: [ProfileId; 5] = [
+pub const ALL_PROFILE_IDS: [ProfileId; 7] = [
     ProfileId::ProductionCoreV1,
     ProfileId::RehearsalCoreV1,
+    ProfileId::ProductionCoreV2,
+    ProfileId::RehearsalCoreV2,
     ProfileId::ProductionMailboxAdminV1,
     ProfileId::ProductionMailboxJobsV1,
     ProfileId::ProductionOutboundMailV1,
@@ -59,6 +63,8 @@ impl ProfileId {
         match self {
             Self::ProductionCoreV1 => "production-core-v1",
             Self::RehearsalCoreV1 => "rehearsal-core-v1",
+            Self::ProductionCoreV2 => "production-core-v2",
+            Self::RehearsalCoreV2 => "rehearsal-core-v2",
             Self::ProductionMailboxAdminV1 => "production-mailbox-admin-v1",
             Self::ProductionMailboxJobsV1 => "production-mailbox-jobs-v1",
             Self::ProductionOutboundMailV1 => "production-outbound-mail-v1",
@@ -70,6 +76,8 @@ impl ProfileId {
 pub enum ActivationGate {
     Ar12OrLaterRehearsal,
     Pc1AfterAr17,
+    TargetAuthorization,
+    ProductionAuthorization,
     Pc2,
     Pc3,
     Pc4,
@@ -81,6 +89,8 @@ impl ActivationGate {
         match self {
             Self::Ar12OrLaterRehearsal => "AR-12_OR_LATER_REHEARSAL",
             Self::Pc1AfterAr17 => "PC-1_AFTER_AR17",
+            Self::TargetAuthorization => "TARGET_AUTHORIZATION",
+            Self::ProductionAuthorization => "PRODUCTION_AUTHORIZATION",
             Self::Pc2 => "PC-2",
             Self::Pc3 => "PC-3",
             Self::Pc4 => "PC-4",
@@ -100,7 +110,9 @@ pub struct CapabilityProfileDefinition {
     pub production_authorization_required: bool,
 }
 
-const CORE_ENABLED: &[ActivationUnit] = &[
+// V1 definitions are immutable historical Release Capability Profile semantics.
+// Do not reuse these lists for a later product boundary.
+const CORE_V1_ENABLED: &[ActivationUnit] = &[
     ActivationUnit::Foundation,
     ActivationUnit::Identity,
     ActivationUnit::Clients,
@@ -109,7 +121,24 @@ const CORE_ENABLED: &[ActivationUnit] = &[
     ActivationUnit::Camoufox,
     ActivationUnit::Notifications,
 ];
-const CORE_DISABLED: &[ActivationUnit] = &[
+const CORE_V1_DISABLED: &[ActivationUnit] = &[
+    ActivationUnit::MailboxAdmin,
+    ActivationUnit::MailboxClientBinding,
+    ActivationUnit::MailboxBrowserBinding,
+    ActivationUnit::MailboxRead,
+    ActivationUnit::MailboxJobs,
+    ActivationUnit::OutboundMail,
+];
+const FIRST_RELEASE_CORE_V2_ENABLED: &[ActivationUnit] = &[
+    ActivationUnit::Foundation,
+    ActivationUnit::Identity,
+    ActivationUnit::Clients,
+    ActivationUnit::BrowserProfiles,
+    ActivationUnit::ProfileRuntime,
+    ActivationUnit::Camoufox,
+];
+const FIRST_RELEASE_CORE_V2_DISABLED: &[ActivationUnit] = &[
+    ActivationUnit::Notifications,
     ActivationUnit::MailboxAdmin,
     ActivationUnit::MailboxClientBinding,
     ActivationUnit::MailboxBrowserBinding,
@@ -142,8 +171,8 @@ pub const fn profile_definition(id: ProfileId) -> CapabilityProfileDefinition {
             version: 1,
             allowed_environments: PRODUCTION_ONLY,
             extends: None,
-            enabled_activation_units: CORE_ENABLED,
-            disabled_activation_units: CORE_DISABLED,
+            enabled_activation_units: CORE_V1_ENABLED,
+            disabled_activation_units: CORE_V1_DISABLED,
             activation_gate: ActivationGate::Pc1AfterAr17,
             production_authorization_required: true,
         },
@@ -152,9 +181,29 @@ pub const fn profile_definition(id: ProfileId) -> CapabilityProfileDefinition {
             version: 1,
             allowed_environments: REHEARSAL_ENVIRONMENTS,
             extends: None,
-            enabled_activation_units: CORE_ENABLED,
-            disabled_activation_units: CORE_DISABLED,
+            enabled_activation_units: CORE_V1_ENABLED,
+            disabled_activation_units: CORE_V1_DISABLED,
             activation_gate: ActivationGate::Ar12OrLaterRehearsal,
+            production_authorization_required: false,
+        },
+        ProfileId::ProductionCoreV2 => CapabilityProfileDefinition {
+            id,
+            version: 2,
+            allowed_environments: PRODUCTION_ONLY,
+            extends: None,
+            enabled_activation_units: FIRST_RELEASE_CORE_V2_ENABLED,
+            disabled_activation_units: FIRST_RELEASE_CORE_V2_DISABLED,
+            activation_gate: ActivationGate::ProductionAuthorization,
+            production_authorization_required: true,
+        },
+        ProfileId::RehearsalCoreV2 => CapabilityProfileDefinition {
+            id,
+            version: 2,
+            allowed_environments: REHEARSAL_ENVIRONMENTS,
+            extends: None,
+            enabled_activation_units: FIRST_RELEASE_CORE_V2_ENABLED,
+            disabled_activation_units: FIRST_RELEASE_CORE_V2_DISABLED,
+            activation_gate: ActivationGate::TargetAuthorization,
             production_authorization_required: false,
         },
         ProfileId::ProductionMailboxAdminV1 => CapabilityProfileDefinition {
@@ -350,6 +399,10 @@ mod tests {
         for profile in ALL_PROFILE_IDS {
             assert_eq!(ProfileId::parse(profile.id()), Ok(profile));
         }
+        assert_eq!(
+            ProfileId::parse("production-core"),
+            Err(PolicyError::UnknownProfile)
+        );
     }
 
     #[test]
@@ -380,6 +433,11 @@ mod tests {
                 ProfileId::ProductionCoreV1,
                 CanonicalEnvironment::Production,
             ),
+            (ProfileId::RehearsalCoreV2, CanonicalEnvironment::Staging),
+            (
+                ProfileId::ProductionCoreV2,
+                CanonicalEnvironment::Production,
+            ),
         ] {
             let result = effective_profile(profile_id, environment);
             assert!(result.is_ok());
@@ -393,12 +451,70 @@ mod tests {
     }
 
     #[test]
+    fn first_release_core_v2_matches_the_accepted_capability_boundary() {
+        let expected = BTreeSet::from([
+            ActivationUnit::Foundation,
+            ActivationUnit::Identity,
+            ActivationUnit::Clients,
+            ActivationUnit::BrowserProfiles,
+            ActivationUnit::ProfileRuntime,
+            ActivationUnit::Camoufox,
+        ]);
+        for (profile_id, environment) in [
+            (ProfileId::RehearsalCoreV2, CanonicalEnvironment::Staging),
+            (
+                ProfileId::ProductionCoreV2,
+                CanonicalEnvironment::Production,
+            ),
+        ] {
+            let profile = effective_profile(profile_id, environment);
+            assert!(profile.is_ok());
+            if let Ok(profile) = profile {
+                assert_eq!(
+                    profile
+                        .capabilities
+                        .enabled_units()
+                        .into_iter()
+                        .collect::<BTreeSet<_>>(),
+                    expected
+                );
+                assert!(!profile.capabilities.enabled(ActivationUnit::Notifications));
+                assert!(!profile.capabilities.enabled(ActivationUnit::MailboxJobs));
+                assert!(!profile.capabilities.enabled(ActivationUnit::OutboundMail));
+            }
+        }
+    }
+
+    #[test]
+    fn historical_core_v1_semantics_remain_unchanged() {
+        for (profile_id, environment) in [
+            (ProfileId::RehearsalCoreV1, CanonicalEnvironment::Staging),
+            (
+                ProfileId::ProductionCoreV1,
+                CanonicalEnvironment::Production,
+            ),
+        ] {
+            let profile = effective_profile(profile_id, environment);
+            assert!(profile.is_ok());
+            if let Ok(profile) = profile {
+                assert!(profile.capabilities.enabled(ActivationUnit::Notifications));
+            }
+        }
+    }
+
+    #[test]
     fn typed_activation_gate_is_not_digest_state() {
         assert_eq!(
             profile_definition(ProfileId::ProductionCoreV1)
                 .activation_gate
                 .id(),
             "PC-1_AFTER_AR17"
+        );
+        assert_eq!(
+            profile_definition(ProfileId::ProductionCoreV2)
+                .activation_gate
+                .id(),
+            "PRODUCTION_AUTHORIZATION"
         );
     }
 }

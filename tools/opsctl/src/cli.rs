@@ -1387,7 +1387,7 @@ mod tests {
             "--release-set",
             "release-set.json",
             "--profile",
-            "rehearsal-core-v1",
+            "rehearsal-core-v2",
         ]));
         assert!(invocation.is_err());
     }
@@ -1405,7 +1405,7 @@ mod tests {
             "--source-root",
             "/historical-source",
             "--profile",
-            "rehearsal-core-v1",
+            "rehearsal-core-v2",
             "--environment",
             "staging",
             "--evidence-json",

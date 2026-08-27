@@ -58,10 +58,17 @@ def extract_identity(value: Any) -> tuple[str | None, str | None]:
 def self_test() -> None:
     v2 = "release-set-v2-sha256-" + "a" * 64
     v3 = "release-set-v3-sha256-" + "b" * 64
-    profile = "rehearsal-core-v1"
-    if extract_identity({"message": f"release_set={v2} profile={profile}"}) != (v2, profile):
+    historical_profile = "rehearsal-core-v1"
+    current_profile = "rehearsal-core-v2"
+    if extract_identity({"message": f"release_set={v2} profile={historical_profile}"}) != (
+        v2,
+        historical_profile,
+    ):
         raise ValueError("historical Release Set v2 identity was not observed")
-    if extract_identity({"message": f"release_set={v3} profile={profile}"}) != (v3, profile):
+    if extract_identity({"message": f"release_set={v3} profile={current_profile}"}) != (
+        v3,
+        current_profile,
+    ):
         raise ValueError("current Release Set v3 identity was not observed")
     if extract_identity({}) != (None, None):
         raise ValueError("an absent deployment did not remain NONE")
@@ -77,7 +84,7 @@ def self_test() -> None:
         "release-set-v3-sha256-deadbeef",
     ):
         try:
-            extract_identity({"message": f"release_set={invalid} profile={profile}"})
+            extract_identity({"message": f"release_set={invalid} profile={current_profile}"})
         except ValueError:
             continue
         raise ValueError(f"unsupported/malformed Release Set identity unexpectedly accepted: {invalid}")
@@ -85,8 +92,8 @@ def self_test() -> None:
         extract_identity(
             {
                 "deployments": [
-                {"message": f"release_set={v2} profile={profile}"},
-                {"message": f"release_set={v3} profile={profile}"},
+                {"message": f"release_set={v2} profile={historical_profile}"},
+                {"message": f"release_set={v3} profile={current_profile}"},
                 ]
             }
         )

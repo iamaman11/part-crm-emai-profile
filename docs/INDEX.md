@@ -12,7 +12,7 @@ workflow or readiness state.
 4. [Current CAP execution program](ARCHITECTURE_REBASELINE_V3_PLAN.md) — the single ordered
    implementation program.
 5. [Issue #266](https://github.com/iamaman11/part-crm-emai-profile/issues/266) — live transaction pointer
-   and accepted-main evidence.
+   and accepted-main evidence; from it open the one linked owning Issue for the current transaction.
 6. [AGENTS.md](../AGENTS.md) and [CONTRIBUTING.md](../CONTRIBUTING.md) — execution protocol.
 
 ## Knowledge owners
@@ -24,7 +24,8 @@ workflow or readiness state.
 | Mandatory architecture invariants | [APPLICATION_ARCHITECTURE_MANDATORY_REQUIREMENTS.md](APPLICATION_ARCHITECTURE_MANDATORY_REQUIREMENTS.md) |
 | Architecture change/simplification quality | [ARCHITECTURE_EVOLUTION_QUALITY_CONTRACT.md](ARCHITECTURE_EVOLUTION_QUALITY_CONTRACT.md) |
 | Temporary ordered execution | [ARCHITECTURE_REBASELINE_V3_PLAN.md](ARCHITECTURE_REBASELINE_V3_PLAN.md) |
-| Live active transaction and accepted evidence | [Issue #266](https://github.com/iamaman11/part-crm-emai-profile/issues/266) |
+| Live program position and accepted-main summary | [Issue #266](https://github.com/iamaman11/part-crm-emai-profile/issues/266) |
+| Bounded transaction record, change envelope and evidence | Exactly one current owning Issue linked from [Issue #266](https://github.com/iamaman11/part-crm-emai-profile/issues/266); durable provenance after close |
 | Research coverage and decisions | [CAP-INDEX #505](https://github.com/iamaman11/part-crm-emai-profile/issues/505) and owning CAP Issues |
 | Public contract evolution | [CONTRACT_POLICY.md](CONTRACT_POLICY.md) |
 | Exact-head acceptance | [ARCHITECTURE_ACCEPTANCE_PROTOCOL.md](ARCHITECTURE_ACCEPTANCE_PROTOCOL.md) |
@@ -42,7 +43,8 @@ workflow or readiness state.
 - **Temporary execution authority** lives only in the CAP execution program. It owns order and gates,
   not mutable completion state.
 - **Live state** lives in protected Git/GitHub/provider owners. Issue #266 is the sole live transaction
-  pointer; exact environment and candidate evidence lives with its owning R-stage evidence.
+  pointer; the one linked owning Issue contains bounded discovery/change/acceptance evidence and becomes
+  provenance after close; exact environment and candidate evidence lives with its owning R-stage evidence.
 - **Projection/navigation** may summarize canonical owners but cannot create status, readiness, order
   or authority. `DEVELOPMENT_PLAN.md`, generated status JSON and capability/evidence matrices are in
   this class unless a listed bounded contract explicitly assigns them a narrower role.

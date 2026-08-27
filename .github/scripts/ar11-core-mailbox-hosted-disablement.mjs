@@ -64,7 +64,7 @@ function validateArchitecture(architecture) {
     'mailbox_secret_resolver_service',
   ]);
   const closures = new Map((architecture.deployment_closures ?? []).map((row) => [row.closure_id, row]));
-  for (const profileId of ['rehearsal-core-v1', 'production-core-v1']) {
+  for (const profileId of ['rehearsal-core-v2', 'production-core-v2']) {
     const closure = closures.get(profileId);
     if (!object(closure)) fail(`missing Core deployment closure ${profileId}`);
     const optional = new Set(closure.optional_or_disabled_resources ?? []);
@@ -284,10 +284,10 @@ async function selfTest() {
     copy.release_profiles = [];
   });
   await expectArchitectureRejected('Core mailbox credential restored', architecture, (copy) => {
-    copy.deployment_closures.find((row) => row.closure_id === 'production-core-v1').required_credentials.push('MAILBOX_RESOLVER_CALLER_AUTH_KEY');
+    copy.deployment_closures.find((row) => row.closure_id === 'production-core-v2').required_credentials.push('MAILBOX_RESOLVER_CALLER_AUTH_KEY');
   });
   await expectArchitectureRejected('Core mailbox resource made required', architecture, (copy) => {
-    const closure = copy.deployment_closures.find((row) => row.closure_id === 'production-core-v1');
+    const closure = copy.deployment_closures.find((row) => row.closure_id === 'production-core-v2');
     closure.optional_or_disabled_resources = closure.optional_or_disabled_resources.filter((value) => value !== 'mailbox_jobs');
   });
   console.log('AR-11 Core mailbox hosted-disablement workflow, operational topology, and credential-authority negative fixtures rejected as expected.');

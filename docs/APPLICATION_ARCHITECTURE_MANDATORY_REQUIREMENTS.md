@@ -319,7 +319,29 @@ source_present != production_enabled
 
 No second feature flag, env var, frontend visibility rule, Python helper or operator command independently authorizes production execution. Backend surfaces fail closed before mutation when admission is absent.
 
-### 13.1 Capability lifecycle: add, enable, disable, remove
+### 13.1 Product scope -> selected profile reconciliation
+
+Every accepted product decision that adds, removes or reclassifies a capability must close its impact
+on the selected immutable Capability Profile before dependent implementation or candidate qualification:
+
+```text
+accepted product capability boundary changes
+-> mandatory change envelope classifies ADD / ENABLE / DISABLE / REMOVE
+-> compare the accepted boundary with the selected profile/effective set
+-> preserve every already-used profile ID and semantic digest unchanged
+-> create a new versioned profile ID when semantics differ
+-> enumerate current release, configuration and governed-ingress selectors
+-> atomically cut over those selectors without alias or fallback
+-> prove the exact effective set and disabled-surface rejection
+-> only then start the dependent feature/candidate stage
+```
+
+The change is incomplete if the product document and selected effective set disagree, if any current
+selector still chooses the superseded identity, or if two current profile identities can be selected
+through parallel/fallback paths. Historical Release Sets may retain their exact old identity only as an
+explicit compatibility obligation; their presence does not make that identity current.
+
+### 13.2 Capability lifecycle: add, enable, disable, remove
 
 A capability is independently evolvable only when all four transitions are explicit. Source code and
 runtime permission remain separate at every transition:
@@ -503,6 +525,8 @@ Current duplicate/predecessor:
 Target dependency direction:
 Changed public contracts:
 Breaking change:
+Capability lifecycle/profile impact (ADD / ENABLE / DISABLE / REMOVE / NONE):
+Selected profile/effective-set and current-selector disposition:
 Data migration:
 Provider mutation:
 Files/mechanisms to delete:

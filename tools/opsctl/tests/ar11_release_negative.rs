@@ -154,7 +154,7 @@ fn fixture_value() -> Result<Value, Box<dyn std::error::Error>> {
         "protocols": identity.protocols,
         "schemas": identity.schemas,
         "runtime_compatibility": identity.runtime,
-        "capability_profile_compatibility": ["rehearsal-core-v1"],
+        "capability_profile_compatibility": ["rehearsal-core-v2"],
         "build_provenance": identity.build,
         "artifact_inventory": [
             {"path":"components/control-plane.tar","sha256":SHA_A,"size_bytes":10,"kind":"component"},

@@ -147,7 +147,7 @@ def assert_core_mailbox_disabled(root: Path, wrangler: str) -> None:
         for item in closures_raw
         if isinstance(item, dict) and isinstance(item.get("closure_id"), str)
     }
-    for closure_id in ("rehearsal-core-v1", "production-core-v1"):
+    for closure_id in ("rehearsal-core-v2", "production-core-v2"):
         closure = closures.get(closure_id)
         if not isinstance(closure, dict):
             fail(f"AR-11 Core deployment closure missing: {closure_id}")
@@ -166,8 +166,8 @@ def assert_core_mailbox_disabled(root: Path, wrangler: str) -> None:
         wrangler,
         (
             '"binding": "INTEGRATION_EVENTS"',
-            '"CAPABILITY_PROFILE_ID": "rehearsal-core-v1"',
-            '"CAPABILITY_PROFILE_ID": "production-core-v1"',
+            '"CAPABILITY_PROFILE_ID": "rehearsal-core-v2"',
+            '"CAPABILITY_PROFILE_ID": "production-core-v2"',
         ),
     )
     assert_absent(
@@ -177,6 +177,8 @@ def assert_core_mailbox_disabled(root: Path, wrangler: str) -> None:
             '"binding": "MAILBOX_JOBS"',
             '"binding": "MAILBOX_SECRET_RESOLVER"',
             '"MAILBOX_RESOLVER_CALLER_AUTH_KEY"',
+            '"CAPABILITY_PROFILE_ID": "rehearsal-core-v1"',
+            '"CAPABILITY_PROFILE_ID": "production-core-v1"',
         ),
     )
 

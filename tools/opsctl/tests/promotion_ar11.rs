@@ -176,7 +176,7 @@ fn release_set() -> Result<LoadedReleaseSet, Box<dyn std::error::Error>> {
         "protocols": protocols,
         "schemas": schemas,
         "runtime_compatibility": runtime_compatibility,
-        "capability_profile_compatibility": ["rehearsal-core-v1", "production-core-v1"],
+        "capability_profile_compatibility": ["rehearsal-core-v2", "production-core-v2"],
         "build_provenance": build_provenance,
         "artifact_inventory": [
             {"path":"components/control-plane.tar","sha256":SHA_A,"size_bytes":10,"kind":"component"},
@@ -269,14 +269,14 @@ fn converged_staging_plan_is_no_change_and_preflight_ready()
 -> Result<(), Box<dyn std::error::Error>> {
     let root = repo_root();
     let target = release_set()?;
-    let snapshot = converged_snapshot("staging", "rehearsal-core-v1", &target)?;
+    let snapshot = converged_snapshot("staging", "rehearsal-core-v2", &target)?;
     let compatibility = evidence(target.release_set_id(), "UNKNOWN")?;
 
     let plan = build(PlanRequest {
         root: &root,
         source_root: &root,
         target: &target,
-        target_profile_id: "rehearsal-core-v1",
+        target_profile_id: "rehearsal-core-v2",
         environment: "staging",
         snapshot: &snapshot,
         compatibility_evidence: &compatibility,
@@ -290,7 +290,7 @@ fn converged_staging_plan_is_no_change_and_preflight_ready()
         root: &root,
         source_root: &root,
         target: &target,
-        target_profile_id: "rehearsal-core-v1",
+        target_profile_id: "rehearsal-core-v2",
         environment: "staging",
         snapshot: &snapshot,
         compatibility_evidence: &compatibility,
@@ -307,13 +307,13 @@ fn production_remains_blocked_even_with_compatible_saved_evidence()
 -> Result<(), Box<dyn std::error::Error>> {
     let root = repo_root();
     let target = release_set()?;
-    let snapshot = converged_snapshot("production", "production-core-v1", &target)?;
+    let snapshot = converged_snapshot("production", "production-core-v2", &target)?;
     let compatibility = evidence(target.release_set_id(), "COMPATIBLE")?;
     let plan = build(PlanRequest {
         root: &root,
         source_root: &root,
         target: &target,
-        target_profile_id: "production-core-v1",
+        target_profile_id: "production-core-v2",
         environment: "production",
         snapshot: &snapshot,
         compatibility_evidence: &compatibility,
@@ -339,13 +339,13 @@ fn stale_expected_current_is_rejected_before_plan_creation()
 -> Result<(), Box<dyn std::error::Error>> {
     let root = repo_root();
     let target = release_set()?;
-    let snapshot = converged_snapshot("staging", "rehearsal-core-v1", &target)?;
+    let snapshot = converged_snapshot("staging", "rehearsal-core-v2", &target)?;
     let compatibility = evidence(target.release_set_id(), "UNKNOWN")?;
     let result = build(PlanRequest {
         root: &root,
         source_root: &root,
         target: &target,
-        target_profile_id: "rehearsal-core-v1",
+        target_profile_id: "rehearsal-core-v2",
         environment: "staging",
         snapshot: &snapshot,
         compatibility_evidence: &compatibility,

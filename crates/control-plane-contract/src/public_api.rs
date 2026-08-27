@@ -418,7 +418,7 @@ mod tests {
             tenant_id: "tenant_01JCONTRACT".to_owned(),
             actor_id: "actor_01JCONTRACT".to_owned(),
             role: "TENANT_OWNER".to_owned(),
-            profile_id: "rehearsal-core-v1".to_owned(),
+            profile_id: "rehearsal-core-v2".to_owned(),
             profile_digest: "a".repeat(64),
             capabilities: vec!["foundation".to_owned()],
         })?;

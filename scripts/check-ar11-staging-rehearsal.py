@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any
 
 RELEASE_ID = re.compile(r"^release-set-v3-sha256-[0-9a-f]{64}$")
-PROFILE = "rehearsal-core-v1"
+PROFILE = "rehearsal-core-v2"
 ENVIRONMENT = "staging"
 
 

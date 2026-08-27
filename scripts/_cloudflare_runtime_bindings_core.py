@@ -261,7 +261,7 @@ def validate_profile_selection(
         raise BindingInventoryError(f"{environment} canonical environment identity drifted")
     profile_id = variables.get(source["capability_profile_id"])
     profile_digest = variables.get(source["capability_profile_digest"])
-    expected_profile_id = "rehearsal-core-v1" if environment == "staging" else "production-core-v1"
+    expected_profile_id = "rehearsal-core-v2" if environment == "staging" else "production-core-v2"
     if profile_id != expected_profile_id:
         raise BindingInventoryError(
             f"{environment} must select exactly {expected_profile_id}; observed {profile_id!r}"

@@ -408,8 +408,10 @@ def native_inspection_fixture(schema_version: int, release_set_id: str) -> dict[
 def self_test() -> None:
     v2 = "release-set-v2-sha256-" + "a" * 64
     v3 = "release-set-v3-sha256-" + "b" * 64
-    profile = "rehearsal-core-v1"
-    for release_id in (v2, v3):
+    for release_id, profile in (
+        (v2, "rehearsal-core-v1"),
+        (v3, "rehearsal-core-v2"),
+    ):
         if deployment_identity_from_output(
             {
                 "schema_version": 2,

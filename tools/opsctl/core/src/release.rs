@@ -639,7 +639,7 @@ mod tests {
                 profile_format: "camoufox-fingerprint-v1".to_owned(),
                 browser_identity_policy: "browser-identity-v1".to_owned(),
             },
-            capability_profile_compatibility: vec!["production-core-v1".to_owned()],
+            capability_profile_compatibility: vec!["production-core-v2".to_owned()],
             build_provenance: BuildProvenanceIdentity {
                 cargo_lock_sha256: SHA.to_owned(),
                 rust_toolchain_sha256: SHA.to_owned(),

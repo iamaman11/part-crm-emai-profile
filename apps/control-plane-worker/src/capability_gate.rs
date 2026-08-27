@@ -157,15 +157,17 @@ mod tests {
     -> Result<(), Box<dyn std::error::Error>> {
         let context = RuntimeCapabilityContext {
             profile: effective_profile(
-                ProfileId::RehearsalCoreV1,
+                ProfileId::RehearsalCoreV2,
                 CanonicalEnvironment::Rehearsal,
             )?,
         };
 
-        assert!(context.surface_enabled(RuntimeSurface::QueueIntegrationEvents));
-        assert!(context.surface_enabled(RuntimeSurface::ScheduleIntegrationEvents));
+        assert!(!context.surface_enabled(RuntimeSurface::QueueIntegrationEvents));
+        assert!(!context.surface_enabled(RuntimeSurface::ScheduleIntegrationEvents));
+        assert!(!context.surface_enabled(RuntimeSurface::HttpNotifications));
         assert!(!context.surface_enabled(RuntimeSurface::QueueMailboxJobs));
         assert!(!context.surface_enabled(RuntimeSurface::ScheduleMailboxJobs));
+        assert!(context.surface_enabled(RuntimeSurface::HttpClients));
         Ok(())
     }
 }
