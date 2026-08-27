@@ -7,7 +7,7 @@ pub(super) fn classify(method: &str, segments: &[&str]) -> Option<RouteClass> {
             Some(RouteClass::ClientCollectionApi)
         }
         ["api", "v1", "tenants", _, "clients", _, "profiles"] if method == "GET" => {
-            Some(RouteClass::ClientProfilesApi)
+            Some(RouteClass::ProfileCollectionApi)
         }
         ["api", "v1", "tenants", _, "clients", _] if matches!(method, "GET" | "PATCH") => {
             Some(RouteClass::ClientResourceApi)
