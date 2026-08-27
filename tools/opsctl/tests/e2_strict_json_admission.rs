@@ -11,10 +11,8 @@ fn fixture(name: &str) -> PathBuf {
 
 #[test]
 fn deployment_snapshot_load_rejects_duplicate_member_before_typed_decode() {
-    let error = DeploymentSnapshot::load(&fixture(
-        "e2-deployment-snapshot-duplicate-member.json",
-    ))
-    .expect_err("duplicate DeploymentSnapshot members must fail closed");
+    let error = DeploymentSnapshot::load(&fixture("e2-deployment-snapshot-duplicate-member.json"))
+        .expect_err("duplicate DeploymentSnapshot members must fail closed");
     let message = error.to_string();
     assert!(
         message.contains("DeploymentSnapshot strict JSON admission failed"),
