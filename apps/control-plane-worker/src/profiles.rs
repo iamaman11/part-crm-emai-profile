@@ -3,15 +3,17 @@ use crate::access_session::{
 };
 use crate::command_evidence;
 use crate::composition::profile_application;
+use crate::request_evidence;
 use application_ports::profiles::ProfileStatus;
 use control_plane_contract::RouteClass;
 use control_plane_contract::profile_generation_api::{
-    ProfileAssignmentRequest, ProfileCreateRequest, ProfileGrantRequest, ProfileProjectionDto,
-    ProfileStatusDto,
+    ProfileCreateRequest, ProfileGrantRequest, ProfileProjectionDto, ProfileStatusDto,
 };
-use control_plane_contract::profile_relationship_api::ProfileDetachmentRequest;
+use control_plane_contract::profile_relationship_api::{
+    ProfileAssignmentRequest, ProfileDetachmentRequest,
+};
 use control_plane_contract::public_api::MutationReceipt;
-use profile_platform_primitives::{ActorId, AggregateVersion, AssignmentId, ClientId, ProfileId};
+use profile_platform_primitives::{ActorId, AggregateVersion, ClientId, ProfileId};
 use use_cases::profile_assignments::{
     ExecuteAssignProfileCommand, ExecuteDetachProfileCommand, ProfileAssignmentOperationError,
     ProfileAssignmentOutcome, authorize_profile_assignment, execute_assign_profile,
@@ -145,10 +147,6 @@ async fn assign_profile(
         Ok(value) => value,
         Err(_) => return invalid_request(actor.actor().correlation_id().as_str()),
     };
-    let assignment_id = match AssignmentId::parse(body.assignment_id.clone()) {
-        Ok(value) => value,
-        Err(_) => return invalid_request(actor.actor().correlation_id().as_str()),
-    };
     let client_id = match ClientId::parse(body.client_id.clone()) {
         Ok(value) => value,
         Err(_) => return invalid_request(actor.actor().correlation_id().as_str()),
@@ -161,6 +159,14 @@ async fn assign_profile(
         return assignment_failure(actor.actor().correlation_id().as_str(), error);
     }
     let evidence = match command_evidence::from_request(request, actor.actor(), &body) {
+        Ok(value) => value,
+        Err(_) => return invalid_request(actor.actor().correlation_id().as_str()),
+    };
+    let assignment_id = match request_evidence::assignment_id(
+        actor.actor().tenant_scope().tenant_id(),
+        actor.actor().actor_id(),
+        evidence.idempotency_key(),
+    ) {
         Ok(value) => value,
         Err(_) => return invalid_request(actor.actor().correlation_id().as_str()),
     };

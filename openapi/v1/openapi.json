@@ -613,58 +613,6 @@
         }
       }
     },
-    "/api/v1/tenants/{tenantId}/profiles/{profileId}/assignment": {
-      "put": {
-        "operationId": "assignProfileToClient",
-        "security": [
-          {
-            "cloudflareAccessJwt": []
-          }
-        ],
-        "parameters": [
-          {
-            "$ref": "#/components/parameters/TenantPath"
-          },
-          {
-            "$ref": "#/components/parameters/ProfilePath"
-          },
-          {
-            "$ref": "#/components/parameters/CorrelationHeader"
-          },
-          {
-            "$ref": "#/components/parameters/IdempotencyHeader"
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/AssignmentRequest"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "Historical profile/client assignment updated without changing authorization",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MutationReceipt"
-                }
-              }
-            }
-          },
-          "404": {
-            "$ref": "#/components/responses/NeutralNotFound"
-          },
-          "409": {
-            "$ref": "#/components/responses/Conflict"
-          }
-        }
-      }
-    },
     "/api/v1/tenants/{tenantId}/profiles/{profileId}/grants/{actorId}": {
       "put": {
         "operationId": "grantProfileAccess",
@@ -1233,32 +1181,6 @@
                 "type": "null"
               }
             ]
-          }
-        }
-      },
-      "AssignmentRequest": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": [
-          "assignmentId",
-          "clientId",
-          "reason",
-          "expectedProfileVersion"
-        ],
-        "properties": {
-          "assignmentId": {
-            "$ref": "#/components/schemas/OpaqueId"
-          },
-          "clientId": {
-            "$ref": "#/components/schemas/OpaqueId"
-          },
-          "reason": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 500
-          },
-          "expectedProfileVersion": {
-            "$ref": "#/components/schemas/AggregateVersion"
           }
         }
       },
