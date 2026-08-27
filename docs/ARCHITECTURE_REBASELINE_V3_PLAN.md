@@ -247,6 +247,10 @@ V1 exit criteria:
 11. the permanent add/enable/disable/remove capability lifecycle is reflected in the bounded change
     protocol and its natural existing admission/owner checks; no generic feature registry or new
     required context is created merely to restate it.
+12. the existing architecture-check family classifies every workspace `crates/*` package as a governed
+    pure/domain/application package or an explicit outer adapter and rejects an unclassified addition;
+    canonical `capability-policy` receives the same generic pure-layer coverage. This closes the current
+    skip-on-unknown-crate gap without introducing a semantic registry or forcing one crate per feature.
 
 V1 also gives the remaining transitional authority surfaces an exact executable-lifecycle verdict; it
 does not silently equate `CONDITIONAL` with permanent. In particular, `docs/status.json`, the frozen

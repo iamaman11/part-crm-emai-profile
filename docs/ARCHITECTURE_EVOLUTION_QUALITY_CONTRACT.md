@@ -174,6 +174,30 @@ Every check states its owner, inputs, output, positive fixture, negative fixture
 status, cost tier and retirement trigger. Missing consumer/risk/retirement evidence rejects the new
 check. An old check is retired only after its objective invariant has a surviving primary proof.
 
+### 6.1 Control ownership and enforcement
+
+This is a responsibility map, not a per-file/check registry and not a copy of mutable required-context
+state. Exact files and workflow composition may change; the natural owner and protected invariant may
+not disappear during that change.
+
+| Invariant class | Natural semantic owner | Primary control | Acceptance rule |
+|---|---|---|---|
+| Rust dependency direction and bounded module ownership | owning domain/application contract plus Cargo/module boundary | compiler/type system, governed workspace-crate classification, architecture/module-layout checks and negative forbidden-dependency/import fixtures | an unclassified crate, provider dependency in a pure layer or duplicate application owner fails the existing architecture proof |
+| Capability add/enable/disable/remove and runtime admission | `crates/capability-policy` plus the owning runtime ingress/composition adapter | typed profile/surface catalog, dependency/digest/admission tests, ingress mapping tests and exact release/effective-set evidence | source alone never enables effects; unknown surface/profile/environment/authorization fails closed |
+| `opsctl` shell/core/effect boundary | `OPSCTL_ARCHITECTURE_BOUNDARY.md`, `opsctl-core` pure policy and `opsctl` adapters | `check-opsctl-readonly.py` positive/self-test family plus Rust dependency and behavior tests | provider/network/process/secret/mutation capability, Product Runtime dependency or representation/effect leakage into pure core fails |
+| Python and Node/MJS repository/runtime entrypoints | the bounded product, release, migration, governance or runtime concern they serve; language is not an owner | mandatory change envelope, derived current caller graph, explicit effect contract and owner-specific positive/negative proof | reachable effect with no owner/consumer/authority, duplicate semantics or bypass path fails; no hand-maintained language estate registry is created |
+| Worker/application/provider and D1/R2 boundaries | owning use case/port and concrete outer adapter | owner-local Worker/application, persistence, generation and failure fixtures, including direct-provider/direct-D1 negative cases | composition may select adapters; it may not absorb business policy or bypass an application owner |
+| Frontend feature and transport boundaries | capability contract/application owner plus generated transport projection | generated contract comparison, runtime response validation, feature-import/root-route negative fixtures | UI never becomes authorization or schema owner; sibling internals and handwritten duplicate transport fail |
+| Documentation/current-state authority | `INDEX.md` knowledge map plus each listed natural document/live owner | documentation authority checker and deliberately stale/missing/duplicate negative fixtures | a projection/history document cannot become current execution, readiness or semantic authority |
+| Verification lifecycle and complexity | this quality contract plus the invariant's natural owner | CAP-05 disposition, future-check standard, mandatory change envelope, complete diff and simplification ledger | checker-for-checker, ownerless required proof, predecessor-only caller or indefinite cleanup fails acceptance |
+
+Objective boundaries use executable positive and negative proof at the lowest sufficient tier. The
+implementation author records the change envelope and simplification ledger; the natural owner defines
+the invariant; protected CI repeats objective proof; the repository maintainer accepts only the exact
+proved candidate. Qualitative simplicity is not replaced by a gameable LOC/check-count score: it is
+decided from ownership, dependency direction, change radius and predecessor deletion, while every
+objective claim remains executable.
+
 ## 7. Bounded change protocol
 
 Every architecture-affecting transaction follows:
