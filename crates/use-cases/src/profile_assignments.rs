@@ -1,13 +1,14 @@
 use application_ports::CommandExecutionEvidence;
 use application_ports::profile_assignment_context::{
-    ProfileAssignmentContext, ProfileAssignmentContextPort,
+    ProfileAssignmentContext, ProfileAssignmentContextPort, ProfileDetachmentContext,
 };
 use application_ports::profiles::{
     ProfileAssignmentApplicationPort, ProfileAssignmentPortError, ProfileAssignmentPortErrorClass,
-    ProfileAssignmentWrite, ProfileReplayDecision, ProfileReplayReceipt,
+    ProfileAssignmentWrite, ProfileDetachmentWrite, ProfileReplayDecision, ProfileReplayReceipt,
 };
 use client_domain::{
-    AssignmentError, PrimaryReassignmentIntent, ProfileClientAssignment, plan_primary_reassignment,
+    AssignmentError, PrimaryReassignmentIntent, ProfileClientAssignment, plan_primary_detachment,
+    plan_primary_reassignment,
 };
 use core::fmt;
 use identity_access_domain::MembershipRole;
@@ -16,7 +17,9 @@ use profile_platform_primitives::{
 };
 
 const PROFILE_ASSIGN_COMMAND: &str = "profile.assign_client";
+const PROFILE_DETACH_COMMAND: &str = "profile.detach_client";
 const EVENT_PAYLOAD: &str = "{}";
+const MAX_RELATIONSHIP_REASON_LENGTH: usize = 500;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ExecuteAssignProfileCommand {
@@ -42,6 +45,31 @@ impl ExecuteAssignProfileCommand {
             assignment_id,
             profile_id,
             client_id,
+            expected_profile_version,
+            reason: reason.into(),
+            evidence,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ExecuteDetachProfileCommand {
+    profile_id: ProfileId,
+    expected_profile_version: AggregateVersion,
+    reason: String,
+    evidence: CommandExecutionEvidence,
+}
+
+impl ExecuteDetachProfileCommand {
+    #[must_use]
+    pub fn new(
+        profile_id: ProfileId,
+        expected_profile_version: AggregateVersion,
+        reason: impl Into<String>,
+        evidence: CommandExecutionEvidence,
+    ) -> Self {
+        Self {
+            profile_id,
             expected_profile_version,
             reason: reason.into(),
             evidence,
@@ -218,6 +246,88 @@ where
     }
 }
 
+pub async fn execute_detach_profile<P>(
+    actor: &ActorContext,
+    role: MembershipRole,
+    port: &P,
+    command: ExecuteDetachProfileCommand,
+) -> Result<ProfileAssignmentOutcome, ProfileAssignmentOperationError>
+where
+    P: ProfileAssignmentApplicationPort + ProfileAssignmentContextPort,
+{
+    authorize_profile_assignment(role)?;
+    let reason = normalize_relationship_reason(command.reason)?;
+    let next_version = next_profile_assignment_version(command.expected_profile_version)?;
+
+    match port
+        .decide_assignment_replay(actor, PROFILE_DETACH_COMMAND, &command.evidence)
+        .await
+        .map_err(map_port_error)?
+    {
+        ProfileReplayDecision::Miss => {}
+        ProfileReplayDecision::Replay(receipt) => {
+            return replay_detachment_outcome(next_version, &receipt);
+        }
+        ProfileReplayDecision::Conflict => return Err(ProfileAssignmentOperationError::Conflict),
+    }
+
+    let context = port
+        .load_profile_detachment_context(actor.tenant_scope(), &command.profile_id)
+        .await
+        .map_err(map_port_error)?
+        .ok_or(ProfileAssignmentOperationError::NotFound)?;
+
+    if context.profile_version() != command.expected_profile_version {
+        return Err(ProfileAssignmentOperationError::VersionConflict);
+    }
+
+    let current_snapshot = context
+        .current()
+        .ok_or(ProfileAssignmentOperationError::InvalidState)?;
+    let current = restore_current_snapshot(actor, &command.profile_id, current_snapshot)?;
+    let transition = plan_primary_detachment(
+        actor.tenant_scope().tenant_id(),
+        &command.profile_id,
+        &current,
+        command.evidence.now(),
+    )
+    .map_err(map_transition_error)?;
+    let closed = transition.closed();
+    let write = ProfileDetachmentWrite::new(
+        closed.assignment_id().clone(),
+        closed.profile_id().clone(),
+        closed.client_id().clone(),
+        context.profile_version(),
+        reason,
+        command.evidence,
+        EVENT_PAYLOAD,
+    );
+
+    match port.detach_profile(actor, &write).await {
+        Ok(()) => Ok(ProfileAssignmentOutcome {
+            result_code: "detached".to_owned(),
+            resource_id: write.assignment_id().as_str().to_owned(),
+            aggregate_version: next_version,
+            replayed: false,
+        }),
+        Err(error) if error.class() == ProfileAssignmentPortErrorClass::Conflict => {
+            match port
+                .decide_assignment_replay(actor, PROFILE_DETACH_COMMAND, write.evidence())
+                .await
+                .map_err(map_port_error)?
+            {
+                ProfileReplayDecision::Replay(receipt) => {
+                    replay_detachment_outcome(next_version, &receipt)
+                }
+                ProfileReplayDecision::Miss | ProfileReplayDecision::Conflict => {
+                    Err(ProfileAssignmentOperationError::Conflict)
+                }
+            }
+        }
+        Err(error) => Err(map_port_error(error)),
+    }
+}
+
 fn restore_current_assignment(
     actor: &ActorContext,
     profile_id: &ProfileId,
@@ -225,19 +335,35 @@ fn restore_current_assignment(
 ) -> Result<Option<ProfileClientAssignment>, ProfileAssignmentOperationError> {
     context
         .current()
-        .map(|current| {
-            ProfileClientAssignment::assign(
-                actor.tenant_scope().tenant_id(),
-                current.assignment_id().clone(),
-                profile_id.clone(),
-                current.client(),
-                current.assigned_by().clone(),
-                current.assigned_at(),
-                current.reason(),
-            )
-            .map_err(|_| ProfileAssignmentOperationError::IntegrityFailure)
-        })
+        .map(|current| restore_current_snapshot(actor, profile_id, current))
         .transpose()
+}
+
+fn restore_current_snapshot(
+    actor: &ActorContext,
+    profile_id: &ProfileId,
+    current: &application_ports::profile_assignment_context::CurrentProfileAssignmentSnapshot,
+) -> Result<ProfileClientAssignment, ProfileAssignmentOperationError> {
+    ProfileClientAssignment::assign(
+        actor.tenant_scope().tenant_id(),
+        current.assignment_id().clone(),
+        profile_id.clone(),
+        current.client(),
+        current.assigned_by().clone(),
+        current.assigned_at(),
+        current.reason(),
+    )
+    .map_err(|_| ProfileAssignmentOperationError::IntegrityFailure)
+}
+
+fn normalize_relationship_reason(
+    reason: String,
+) -> Result<String, ProfileAssignmentOperationError> {
+    let reason = reason.trim();
+    if reason.is_empty() || reason.len() > MAX_RELATIONSHIP_REASON_LENGTH {
+        return Err(ProfileAssignmentOperationError::InvalidState);
+    }
+    Ok(reason.to_owned())
 }
 
 fn map_transition_error(error: AssignmentError) -> ProfileAssignmentOperationError {
@@ -271,6 +397,24 @@ fn replay_outcome(
         aggregate_version: version,
         replayed: true,
     }
+}
+
+fn replay_detachment_outcome(
+    version: AggregateVersion,
+    receipt: &ProfileReplayReceipt,
+) -> Result<ProfileAssignmentOutcome, ProfileAssignmentOperationError> {
+    let resource_id = receipt
+        .result_reference()
+        .ok_or(ProfileAssignmentOperationError::IntegrityFailure)?;
+    if receipt.result_code() != "detached" {
+        return Err(ProfileAssignmentOperationError::IntegrityFailure);
+    }
+    Ok(ProfileAssignmentOutcome {
+        result_code: receipt.result_code().to_owned(),
+        resource_id: resource_id.to_owned(),
+        aggregate_version: version,
+        replayed: true,
+    })
 }
 
 fn map_port_error(error: ProfileAssignmentPortError) -> ProfileAssignmentOperationError {
@@ -323,11 +467,16 @@ mod tests {
     struct FakePort {
         replay: RefCell<Vec<ProfileReplayDecision>>,
         context: RefCell<Option<ProfileAssignmentContext>>,
+        detachment_context: RefCell<Option<ProfileDetachmentContext>>,
         replay_calls: Cell<u32>,
         context_calls: Cell<u32>,
+        detachment_context_calls: Cell<u32>,
         write_calls: Cell<u32>,
+        detach_write_calls: Cell<u32>,
         write_error: Cell<Option<ProfileAssignmentPortErrorClass>>,
+        detach_write_error: Cell<Option<ProfileAssignmentPortErrorClass>>,
         context_error: Cell<Option<ProfileAssignmentPortErrorClass>>,
+        detachment_context_error: Cell<Option<ProfileAssignmentPortErrorClass>>,
     }
 
     impl FakePort {
@@ -338,11 +487,16 @@ mod tests {
             Self {
                 replay: RefCell::new(replay),
                 context: RefCell::new(context),
+                detachment_context: RefCell::new(None),
                 replay_calls: Cell::new(0),
                 context_calls: Cell::new(0),
+                detachment_context_calls: Cell::new(0),
                 write_calls: Cell::new(0),
+                detach_write_calls: Cell::new(0),
                 write_error: Cell::new(None),
+                detach_write_error: Cell::new(None),
                 context_error: Cell::new(None),
+                detachment_context_error: Cell::new(None),
             }
         }
     }
@@ -373,6 +527,19 @@ mod tests {
                 None => Ok(()),
             }
         }
+
+        async fn detach_profile(
+            &self,
+            _actor: &ActorContext,
+            _write: &ProfileDetachmentWrite,
+        ) -> Result<(), ProfileAssignmentPortError> {
+            self.detach_write_calls
+                .set(self.detach_write_calls.get() + 1);
+            match self.detach_write_error.get() {
+                Some(class) => Err(ProfileAssignmentPortError::new(class)),
+                None => Ok(()),
+            }
+        }
     }
 
     impl ProfileAssignmentContextPort for FakePort {
@@ -386,6 +553,19 @@ mod tests {
             match self.context_error.get() {
                 Some(class) => Err(ProfileAssignmentPortError::new(class)),
                 None => Ok(self.context.borrow().clone()),
+            }
+        }
+
+        async fn load_profile_detachment_context(
+            &self,
+            _scope: &TenantScope,
+            _profile_id: &ProfileId,
+        ) -> Result<Option<ProfileDetachmentContext>, ProfileAssignmentPortError> {
+            self.detachment_context_calls
+                .set(self.detachment_context_calls.get() + 1);
+            match self.detachment_context_error.get() {
+                Some(class) => Err(ProfileAssignmentPortError::new(class)),
+                None => Ok(self.detachment_context.borrow().clone()),
             }
         }
     }
@@ -424,6 +604,19 @@ mod tests {
         ))
     }
 
+    fn detach_command(
+        version: AggregateVersion,
+        now: u64,
+        reason: &str,
+    ) -> Result<ExecuteDetachProfileCommand, Box<dyn std::error::Error>> {
+        Ok(ExecuteDetachProfileCommand::new(
+            ProfileId::parse("profile_01JASSIGNAPP")?,
+            version,
+            reason,
+            evidence(now)?,
+        ))
+    }
+
     fn client(
         client_id: &str,
         status: ClientStatus,
@@ -438,22 +631,24 @@ mod tests {
         )?)
     }
 
+    fn current_snapshot(
+        client_id: &str,
+    ) -> Result<CurrentProfileAssignmentSnapshot, Box<dyn std::error::Error>> {
+        Ok(CurrentProfileAssignmentSnapshot::new(
+            AssignmentId::parse("assignment_01JASSIGNAPP")?,
+            client(client_id, ClientStatus::Active)?,
+            ActorId::parse("actor_01JASSIGNAPP")?,
+            UnixMillis::new(10),
+            "initial assignment",
+        ))
+    }
+
     fn context(
         version: AggregateVersion,
         target_client_id: &str,
         current_client_id: Option<&str>,
     ) -> Result<ProfileAssignmentContext, Box<dyn std::error::Error>> {
-        let current = current_client_id
-            .map(|client_id| {
-                Ok::<_, Box<dyn std::error::Error>>(CurrentProfileAssignmentSnapshot::new(
-                    AssignmentId::parse("assignment_01JASSIGNAPP")?,
-                    client(client_id, ClientStatus::Active)?,
-                    ActorId::parse("actor_01JASSIGNAPP")?,
-                    UnixMillis::new(10),
-                    "initial assignment",
-                ))
-            })
-            .transpose()?;
+        let current = current_client_id.map(current_snapshot).transpose()?;
         Ok(ProfileAssignmentContext::new(
             version,
             client(target_client_id, ClientStatus::Active)?,
@@ -461,9 +656,18 @@ mod tests {
         ))
     }
 
+    fn detachment_context(
+        version: AggregateVersion,
+        current_client_id: Option<&str>,
+    ) -> Result<ProfileDetachmentContext, Box<dyn std::error::Error>> {
+        Ok(ProfileDetachmentContext::new(
+            version,
+            current_client_id.map(current_snapshot).transpose()?,
+        ))
+    }
+
     #[test]
-    fn member_is_rejected_before_replay_context_or_write() -> Result<(), Box<dyn std::error::Error>>
-    {
+    fn member_is_rejected_before_replay_context_or_write() -> Result<(), Box<dyn std::error::Error>> {
         let port = FakePort::new(
             vec![ProfileReplayDecision::Miss],
             Some(context(
@@ -477,7 +681,7 @@ mod tests {
                 &actor()?,
                 MembershipRole::Member,
                 &port,
-                command(AggregateVersion::INITIAL, "client_02JASSIGNAPP", 20,)?,
+                command(AggregateVersion::INITIAL, "client_02JASSIGNAPP", 20)?,
             )),
             Err(ProfileAssignmentOperationError::NotFound)
         );
@@ -537,8 +741,7 @@ mod tests {
     }
 
     #[test]
-    fn stale_expected_profile_version_fails_before_write() -> Result<(), Box<dyn std::error::Error>>
-    {
+    fn stale_expected_profile_version_fails_before_write() -> Result<(), Box<dyn std::error::Error>> {
         let port = FakePort::new(
             vec![ProfileReplayDecision::Miss],
             Some(context(
@@ -552,7 +755,7 @@ mod tests {
                 &actor()?,
                 MembershipRole::TenantOwner,
                 &port,
-                command(AggregateVersion::INITIAL, "client_02JASSIGNAPP", 20,)?,
+                command(AggregateVersion::INITIAL, "client_02JASSIGNAPP", 20)?,
             )),
             Err(ProfileAssignmentOperationError::VersionConflict)
         );
@@ -562,8 +765,7 @@ mod tests {
     }
 
     #[test]
-    fn reassignment_to_same_primary_client_is_domain_conflict()
-    -> Result<(), Box<dyn std::error::Error>> {
+    fn reassignment_to_same_primary_client_is_domain_conflict() -> Result<(), Box<dyn std::error::Error>> {
         let port = FakePort::new(
             vec![ProfileReplayDecision::Miss],
             Some(context(
@@ -577,7 +779,7 @@ mod tests {
                 &actor()?,
                 MembershipRole::TenantOwner,
                 &port,
-                command(AggregateVersion::INITIAL, "client_01JASSIGNAPP", 20,)?,
+                command(AggregateVersion::INITIAL, "client_01JASSIGNAPP", 20)?,
             )),
             Err(ProfileAssignmentOperationError::Conflict)
         );
@@ -586,8 +788,7 @@ mod tests {
     }
 
     #[test]
-    fn reassignment_time_regression_is_rejected_before_write()
-    -> Result<(), Box<dyn std::error::Error>> {
+    fn reassignment_time_regression_is_rejected_before_write() -> Result<(), Box<dyn std::error::Error>> {
         let port = FakePort::new(
             vec![ProfileReplayDecision::Miss],
             Some(context(
@@ -601,7 +802,7 @@ mod tests {
                 &actor()?,
                 MembershipRole::TenantOwner,
                 &port,
-                command(AggregateVersion::INITIAL, "client_02JASSIGNAPP", 5,)?,
+                command(AggregateVersion::INITIAL, "client_02JASSIGNAPP", 5)?,
             )),
             Err(ProfileAssignmentOperationError::InvalidState)
         );
@@ -624,7 +825,7 @@ mod tests {
                 &actor()?,
                 MembershipRole::TenantOwner,
                 &port,
-                command(AggregateVersion::INITIAL, "client_02JASSIGNAPP", 20,)?,
+                command(AggregateVersion::INITIAL, "client_02JASSIGNAPP", 20)?,
             )),
             Err(ProfileAssignmentOperationError::NotFound)
         );
@@ -633,8 +834,7 @@ mod tests {
     }
 
     #[test]
-    fn persisted_current_assignment_inconsistency_fails_closed()
-    -> Result<(), Box<dyn std::error::Error>> {
+    fn persisted_current_assignment_inconsistency_fails_closed() -> Result<(), Box<dyn std::error::Error>> {
         let current = CurrentProfileAssignmentSnapshot::new(
             AssignmentId::parse("assignment_01JASSIGNAPP")?,
             client("client_01JASSIGNAPP", ClientStatus::Archived)?,
@@ -655,7 +855,7 @@ mod tests {
                 &actor()?,
                 MembershipRole::TenantOwner,
                 &port,
-                command(AggregateVersion::INITIAL, "client_02JASSIGNAPP", 20,)?,
+                command(AggregateVersion::INITIAL, "client_02JASSIGNAPP", 20)?,
             )),
             Err(ProfileAssignmentOperationError::IntegrityFailure)
         );
@@ -705,13 +905,195 @@ mod tests {
                 &actor()?,
                 MembershipRole::TenantOwner,
                 &port,
-                command(AggregateVersion::INITIAL, "client_02JASSIGNAPP", 20,)?,
+                command(AggregateVersion::INITIAL, "client_02JASSIGNAPP", 20)?,
             )),
             Err(ProfileAssignmentOperationError::DependencyUnavailable)
         );
         assert_eq!(port.replay_calls.get(), 1);
         assert_eq!(port.context_calls.get(), 1);
         assert_eq!(port.write_calls.get(), 0);
+        Ok(())
+    }
+
+    #[test]
+    fn member_detach_is_rejected_before_replay_or_context() -> Result<(), Box<dyn std::error::Error>> {
+        let port = FakePort::new(vec![ProfileReplayDecision::Miss], None);
+        assert_eq!(
+            block_on(execute_detach_profile(
+                &actor()?,
+                MembershipRole::Member,
+                &port,
+                detach_command(AggregateVersion::INITIAL, 20, "detach")?,
+            )),
+            Err(ProfileAssignmentOperationError::NotFound)
+        );
+        assert_eq!(port.replay_calls.get(), 0);
+        assert_eq!(port.detachment_context_calls.get(), 0);
+        assert_eq!(port.detach_write_calls.get(), 0);
+        Ok(())
+    }
+
+    #[test]
+    fn fresh_detach_uses_server_owned_assignment_and_writes_once() -> Result<(), Box<dyn std::error::Error>> {
+        let port = FakePort::new(vec![ProfileReplayDecision::Miss], None);
+        *port.detachment_context.borrow_mut() = Some(detachment_context(
+            AggregateVersion::INITIAL,
+            Some("client_01JASSIGNAPP"),
+        )?);
+        let outcome = block_on(execute_detach_profile(
+            &actor()?,
+            MembershipRole::TenantOwner,
+            &port,
+            detach_command(AggregateVersion::INITIAL, 20, "  operator detach  ")?,
+        ))?;
+        assert_eq!(outcome.result_code(), "detached");
+        assert_eq!(outcome.resource_id(), "assignment_01JASSIGNAPP");
+        assert_eq!(outcome.aggregate_version(), AggregateVersion::new(2)?);
+        assert!(!outcome.replayed());
+        assert_eq!(port.detachment_context_calls.get(), 1);
+        assert_eq!(port.detach_write_calls.get(), 1);
+        Ok(())
+    }
+
+    #[test]
+    fn detach_without_active_assignment_is_invalid_state_without_write() -> Result<(), Box<dyn std::error::Error>> {
+        let port = FakePort::new(vec![ProfileReplayDecision::Miss], None);
+        *port.detachment_context.borrow_mut() = Some(detachment_context(
+            AggregateVersion::INITIAL,
+            None,
+        )?);
+        assert_eq!(
+            block_on(execute_detach_profile(
+                &actor()?,
+                MembershipRole::TenantOwner,
+                &port,
+                detach_command(AggregateVersion::INITIAL, 20, "detach")?,
+            )),
+            Err(ProfileAssignmentOperationError::InvalidState)
+        );
+        assert_eq!(port.detach_write_calls.get(), 0);
+        Ok(())
+    }
+
+    #[test]
+    fn stale_detach_version_fails_before_write() -> Result<(), Box<dyn std::error::Error>> {
+        let port = FakePort::new(vec![ProfileReplayDecision::Miss], None);
+        *port.detachment_context.borrow_mut() = Some(detachment_context(
+            AggregateVersion::new(2)?,
+            Some("client_01JASSIGNAPP"),
+        )?);
+        assert_eq!(
+            block_on(execute_detach_profile(
+                &actor()?,
+                MembershipRole::TenantOwner,
+                &port,
+                detach_command(AggregateVersion::INITIAL, 20, "detach")?,
+            )),
+            Err(ProfileAssignmentOperationError::VersionConflict)
+        );
+        assert_eq!(port.detach_write_calls.get(), 0);
+        Ok(())
+    }
+
+    #[test]
+    fn detachment_time_regression_and_invalid_reason_fail_before_write() -> Result<(), Box<dyn std::error::Error>> {
+        let port = FakePort::new(vec![ProfileReplayDecision::Miss], None);
+        *port.detachment_context.borrow_mut() = Some(detachment_context(
+            AggregateVersion::INITIAL,
+            Some("client_01JASSIGNAPP"),
+        )?);
+        assert_eq!(
+            block_on(execute_detach_profile(
+                &actor()?,
+                MembershipRole::TenantOwner,
+                &port,
+                detach_command(AggregateVersion::INITIAL, 5, "detach")?,
+            )),
+            Err(ProfileAssignmentOperationError::InvalidState)
+        );
+        assert_eq!(port.detach_write_calls.get(), 0);
+
+        let invalid = FakePort::new(vec![ProfileReplayDecision::Miss], None);
+        assert_eq!(
+            block_on(execute_detach_profile(
+                &actor()?,
+                MembershipRole::TenantOwner,
+                &invalid,
+                detach_command(AggregateVersion::INITIAL, 20, "   ")?,
+            )),
+            Err(ProfileAssignmentOperationError::InvalidState)
+        );
+        assert_eq!(invalid.replay_calls.get(), 0);
+        Ok(())
+    }
+
+    #[test]
+    fn exact_detach_replay_is_context_free_and_requires_detached_receipt() -> Result<(), Box<dyn std::error::Error>> {
+        let port = FakePort::new(
+            vec![ProfileReplayDecision::Replay(ProfileReplayReceipt::new(
+                "detached",
+                Some("assignment_01JASSIGNAPP".to_owned()),
+            ))],
+            None,
+        );
+        let outcome = block_on(execute_detach_profile(
+            &actor()?,
+            MembershipRole::TenantOwner,
+            &port,
+            detach_command(AggregateVersion::INITIAL, 20, "detach")?,
+        ))?;
+        assert!(outcome.replayed());
+        assert_eq!(outcome.resource_id(), "assignment_01JASSIGNAPP");
+        assert_eq!(port.detachment_context_calls.get(), 0);
+        assert_eq!(port.detach_write_calls.get(), 0);
+
+        let malformed = FakePort::new(
+            vec![ProfileReplayDecision::Replay(ProfileReplayReceipt::new(
+                "assigned",
+                Some("assignment_01JASSIGNAPP".to_owned()),
+            ))],
+            None,
+        );
+        assert_eq!(
+            block_on(execute_detach_profile(
+                &actor()?,
+                MembershipRole::TenantOwner,
+                &malformed,
+                detach_command(AggregateVersion::INITIAL, 20, "detach")?,
+            )),
+            Err(ProfileAssignmentOperationError::IntegrityFailure)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn detach_write_conflict_rechecks_exact_replay_once() -> Result<(), Box<dyn std::error::Error>> {
+        let port = FakePort::new(
+            vec![
+                ProfileReplayDecision::Miss,
+                ProfileReplayDecision::Replay(ProfileReplayReceipt::new(
+                    "detached",
+                    Some("assignment_01JASSIGNAPP".to_owned()),
+                )),
+            ],
+            None,
+        );
+        *port.detachment_context.borrow_mut() = Some(detachment_context(
+            AggregateVersion::INITIAL,
+            Some("client_01JASSIGNAPP"),
+        )?);
+        port.detach_write_error
+            .set(Some(ProfileAssignmentPortErrorClass::Conflict));
+        let outcome = block_on(execute_detach_profile(
+            &actor()?,
+            MembershipRole::TenantOwner,
+            &port,
+            detach_command(AggregateVersion::INITIAL, 20, "detach")?,
+        ))?;
+        assert!(outcome.replayed());
+        assert_eq!(port.replay_calls.get(), 2);
+        assert_eq!(port.detachment_context_calls.get(), 1);
+        assert_eq!(port.detach_write_calls.get(), 1);
         Ok(())
     }
 }
