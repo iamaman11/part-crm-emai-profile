@@ -1,10 +1,10 @@
 use control_plane_contract::RouteClass;
 use worker::{Env, Error, Result};
 
-pub use capability_policy::ActivationUnit;
+pub use capability_policy::{ActivationUnit, RuntimeSurface};
 use capability_policy::{
     AdmissionRequest, AuthorizationState, CanonicalEnvironment, EffectiveProfile, ProfileDigest,
-    ProfileId, RuntimeSurface, admit,
+    ProfileId, admit,
 };
 
 pub const CANONICAL_ENVIRONMENT_VAR: &str = "CANONICAL_ENVIRONMENT";
@@ -45,11 +45,6 @@ impl RuntimeCapabilityContext {
     pub fn surface_enabled(&self, surface: RuntimeSurface) -> bool {
         self.unit_enabled(surface.activation_unit())
     }
-
-    #[must_use]
-    pub fn route_enabled(&self, route: RouteClass, path: &str) -> bool {
-        route_surface(route, path).is_none_or(|surface| self.surface_enabled(surface))
-    }
 }
 
 fn policy_error(error: capability_policy::PolicyError) -> Error {
@@ -61,7 +56,7 @@ fn policy_error(error: capability_policy::PolicyError) -> Error {
 #[must_use]
 pub fn route_surface(route: RouteClass, path: &str) -> Option<RuntimeSurface> {
     match route {
-        RouteClass::HealthApi => Some(RuntimeSurface::HttpHealth),
+        RouteClass::HealthApi => None,
         RouteClass::BindingProbeApi => Some(RuntimeSurface::HttpBindings),
         RouteClass::AuthenticatedSessionApi => Some(RuntimeSurface::HttpSession),
         RouteClass::OwnerBootstrapApi
@@ -122,7 +117,10 @@ pub fn route_surface(route: RouteClass, path: &str) -> Option<RuntimeSurface> {
 
 #[cfg(test)]
 mod tests {
-    use super::{ActivationUnit, RouteClass, RuntimeSurface, route_surface};
+    use super::{
+        ActivationUnit, RouteClass, RuntimeCapabilityContext, RuntimeSurface, route_surface,
+    };
+    use capability_policy::{CanonicalEnvironment, ProfileId, effective_profile};
 
     #[test]
     fn route_adapter_delegates_semantics_to_capability_policy() {
@@ -142,5 +140,27 @@ mod tests {
             surface.map(RuntimeSurface::activation_unit),
             Some(ActivationUnit::MailboxJobs)
         );
+    }
+
+    #[test]
+    fn health_is_explicitly_outside_capability_profile_admission() {
+        assert_eq!(route_surface(RouteClass::HealthApi, "/health"), None);
+    }
+
+    #[test]
+    fn surface_admission_uses_effective_profile_for_queue_and_schedule()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let context = RuntimeCapabilityContext {
+            profile: effective_profile(
+                ProfileId::RehearsalCoreV1,
+                CanonicalEnvironment::Rehearsal,
+            )?,
+        };
+
+        assert!(context.surface_enabled(RuntimeSurface::QueueIntegrationEvents));
+        assert!(context.surface_enabled(RuntimeSurface::ScheduleIntegrationEvents));
+        assert!(!context.surface_enabled(RuntimeSurface::QueueMailboxJobs));
+        assert!(!context.surface_enabled(RuntimeSurface::ScheduleMailboxJobs));
+        Ok(())
     }
 }
