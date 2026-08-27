@@ -18,8 +18,8 @@ add application features and it does not authorize production readiness. The sli
 only when the checked-in contract and the live hosted GitHub configuration agree and negative
 paths fail closed.
 
-The canonical machine-readable candidate is
-[`architecture/github-governance-ar7.json`](../architecture/github-governance-ar7.json).
+The immutable accepted machine-readable candidate is preserved in the accepted merge
+[`architecture/github-governance-ar7.json`](https://github.com/iamaman11/part-crm-emai-profile/blob/3492273cb9237850e3fa27343cc5edbdb0f66aa1/architecture/github-governance-ar7.json).
 The permanent repository gate is
 [`.github/workflows/github-governance-gate.yml`](../.github/workflows/github-governance-gate.yml),
 with deterministic policy logic in
@@ -170,4 +170,3 @@ required slice.
 - direct-main negative probe: **HTTP 409** rejected, no sentinel persisted;
 - closeout authority issue: #300;
 - production mutation: none.
-

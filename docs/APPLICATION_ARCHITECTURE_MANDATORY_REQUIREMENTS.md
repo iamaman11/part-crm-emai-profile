@@ -3,14 +3,16 @@
 **Document status:** SUBORDINATE_NORMATIVE_CONTRACT  
 **Program authority:** `docs/ARCHITECTURE_REBASELINE_V3_PLAN.md`  
 **Quality contract:** `docs/ARCHITECTURE_EVOLUTION_QUALITY_CONTRACT.md`  
-**Pre-PF-1 normalization:** `docs/PRE_PF1_AUTHORITY_ESTATE_NORMALIZATION.md`  
 **opsctl boundary:** `docs/OPSCTL_ARCHITECTURE_BOUNDARY.md`  
 **opsctl doctor:** `docs/OPSCTL_DOCTOR_CONTRACT.md`  
 **Python boundary:** `docs/PYTHON_USAGE_BOUNDARY.md`  
 **PAS-2 frontend transport:** `docs/PAS2_FRONTEND_TRANSPORT_CONTRACT_CLOSURE.md`
 **Production authorization:** NONE
 
-These are mandatory prospective requirements for every PF/FC/AR/PC change. Accepted AR-0…AR-11 history is not reopened. The product remains one modular application with one protected `main`, one architecture hierarchy, one schema/compatibility lineage and one Release / Capability Profile authority for production admission.
+These are mandatory prospective requirements for every material change. Completed PF/PAS/FC/AR work is
+provenance and is not reopened as an execution program. The product remains one modular application with
+one protected `main`, one architecture hierarchy, one schema/compatibility lineage and one Release /
+Capability Profile authority for production admission.
 
 ## 0. Prospective architecture precedence
 
@@ -396,38 +398,19 @@ orchestrate deterministic generation but may not become the contract owner or ru
 The bounded correction and exact acceptance proofs are owned by
 `docs/PAS2_FRONTEND_TRANSPORT_CONTRACT_CLOSURE.md`.
 
-## 16. PF-1 / PF-2 / PF-3 application and architecture freeze
+## 16. Current CAP application and architecture-change boundary
 
-PF-1 consumes bounded typed projections and explicit raw lifecycle observations. It must not build a global raw authority bag or keep Node/Python semantic predecessors after cutover. `opsctl doctor`/repository-root are mandatory callers in that cutover. N2…N5 must have already resolved their own subject authority ambiguities; PF-1 is not a catch-all cleanup phase.
+Completed PF/PAS/FC/AR work is historical provenance. It cannot select current work, reopen an old
+phase or authorize Production. The binding CAP program owns the finite sequence; fresh Issue #266 owns
+the sole active transaction.
 
-PF-2 uses the same adapter/core boundary. GitHub/provider reads and clocks remain outer observations; typed Rust `EvidencePolicy` owns validity/freshness/trust semantics.
+Every later correction names the failed scenario/invariant, preserves one natural owner, updates the
+relevant specialized positive/negative proof in the same transaction and avoids a parallel
+compatibility/registry/runtime surface. A material architecture change outside the current program
+requires an explicit bounded architecture decision; it never hides inside feature work or a green-CI
+repair.
 
-PF-3 owns fitness semantics in typed Rust `FitnessRuleRegistry` or equivalent. A JSON fitness file may only be generated projection/index.
-
-**PF-3 acceptance is a provisional machine-enforced fitness baseline.** It does not authorize production, does not set `architecture_complete=true`, and does not claim that the architecture has survived real staging/recovery/Windows delivery. After PF-3, new generic layers, global authority frameworks, duplicate lifecycle engines, generic compatibility frameworks and open-ended redesign buckets are forbidden.
-
-The demonstrated PAS-2 frontend transport-contract failure authorizes only PAS-2/TC-2 before FC-6.
-FC-6 through AR-15 may otherwise make only the smallest
-correction required by a failed product acceptance scenario or rehearsal. Every correction names the
-failed scenario, preserves single ownership, updates the relevant specialized enforcement/negative
-proof in the same transaction and does not create a parallel compatibility or registry surface.
-Accepted AR-15, after its Windows delivery/recovery scenario proof, is the final architecture-form
-freeze point. AR-16 remains audit-only and AR-17 qualification/authorization-only.
-
-Post-PF-3 roles are fixed:
-
-```text
-PAS-2/TC-2         bounded executable frontend transport-contract correction only
-FC-6 / FC-7     functional closure/staging proof; bounded scenario-driven correction only
-AR-12..AR-15    rehearsal/delivery; bounded scenario-driven correction only
-AR-16           audit only
-AR-17           qualification/authorization decision only
-PC-1+           functional/capability development and production rollout on the architecture
-```
-
-If a later audit finds a violation, the violation is corrected under this architecture or through an explicit governed architecture change. AR-16/AR-17 do not become architecture-redesign phases.
-
-Minimum PF-3 zero/one budgets include:
+Permanent zero/one budgets include:
 
 ```text
 semantic_owner_count_per_fact = 1
@@ -449,13 +432,17 @@ checker_whose_primary_purpose_is_checking_another_checker = 0
 new_tracked_projection_without_durable_exact_byte_consumer = 0
 ```
 
-N2…PF-3 additionally obey a simplification budget:
+Every cutover additionally obeys a simplification budget:
 
 ```text
-each N2…N5 transaction strictly reduces its predecessor estate
-N2…PF-3 cumulative current plan + validator + projection + compatibility surface is net smaller
+replacement transaction strictly reduces its predecessor/duplicate authority estate
+current plan + validator + projection + compatibility surface is no larger without a named consumer
 new parallel roadmap / 1:1 registry / global authority catalog = 0
 ```
+
+The complete future-check creation standard and proof-tier/lifecycle rules live in
+`ARCHITECTURE_EVOLUTION_QUALITY_CONTRACT.md`. Production is authorized only by the CAP-08 exact
+Release Candidate + target-specific envelope and named R3 decision.
 
 ## 16.1 Mandatory change envelope and hard-fail rules
 

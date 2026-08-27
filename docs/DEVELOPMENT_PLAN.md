@@ -24,33 +24,12 @@ managed login
 The first slice excludes native CRM passwords, Mailboxes, Notifications, Automation, new providers,
 tenant-wide Audit, global Sessions UI, complex roles, mobile parity and generic export.
 
-## Delivery order
+## Delivery navigation
 
-```text
-E0 -> E1 -> E2 -> E3 -> E4
--> P1 -> P2 -> P3
--> V1 -> V2
--> R1 -> R2 -> R3
-```
-
-| ID | Developer outcome |
-|---|---|
-| E0 | One current documentation/execution authority. |
-| E1 | Every governed Worker ingress consumes canonical Capability Policy surface mapping. |
-| E2 | Release/promotion outer JSON is admitted strictly before typed decode. |
-| E3 | D1 outer JSON is admitted strictly before typed decode. |
-| E4 | First proven completed/duplicate verification authority is retired without invariant loss. |
-| P1 | Client card owns the complete visible Client/Profile relationship workflow. |
-| P2 | One authorized shipping path launches real Camoufox through Profile Bridge. |
-| P3 | Save is confirmed only after authoritative verified generation commit; reopen uses it. |
-| V1 | Exact reachable release verification runs at the accepted risk tiers. |
-| V2 | The complete CAP-12 scenario and negative/recovery cases pass on one candidate. |
-| R1 | Exact release/environment/capability/evidence envelope exists. |
-| R2 | A bounded pilot is explicitly decided with stop/recovery conditions. |
-| R3 | A named authority grants GO/PILOT or NO-GO for that unchanged candidate. |
-
-Do not infer the active row from this projection. Read the live pointer in #266 and the row's owning
-Issue after refreshing protected `main`.
+The ordered transactions and their exit criteria live only in the
+[execution program](ARCHITECTURE_REBASELINE_V3_PLAN.md). This projection records the user-facing path
+and development method, not a second stage table. Read fresh #266 and the owning bounded Issue after
+refreshing protected `main`; never infer the active row from this file.
 
 ## How to change the system
 

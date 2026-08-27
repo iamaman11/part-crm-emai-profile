@@ -36,6 +36,7 @@ def main() -> int:
     run("Rust formatting", ["cargo", "fmt", "--all", "--", "--check"])
 
     scripts = [
+        "check-current-documentation-contract.py",
         "check-architecture.py",
         "check-contract-compatibility.py",
         "check-d1-boundary.py",
@@ -49,6 +50,11 @@ def main() -> int:
     ]
     for script in scripts:
         run(script, [sys.executable, str(ROOT / "scripts" / script)])
+
+    run(
+        "documentation authority negative fixtures",
+        [sys.executable, str(ROOT / "scripts" / "check-current-documentation-contract.py"), "--self-test"],
+    )
 
     run(
         "architecture acceptance observation",

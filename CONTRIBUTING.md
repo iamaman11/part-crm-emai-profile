@@ -4,7 +4,7 @@
 
 Changes are delivered as bounded increments through a branch and pull request.
 
-Current execution order is governed by:
+Current work is discovered through:
 
 1. `docs/ARCHITECTURE_REBASELINE_V3_PLAN.md` — canonical program authority;
 2. protected `main` + live tracker #266 — mutable active-transaction and accepted-evidence state;
@@ -13,6 +13,39 @@ Current execution order is governed by:
 A projection, CAP research Issue, chat handoff or historical plan never overrides the canonical plan,
 Issue #266 or accepted protected `main`. Do not invent a numbered phase merely to continue development
 or isolate a bounded defect.
+
+## Local toolchain and first checkout
+
+The repository pins its build tools. Do not silently use a nearby major/minor version:
+
+| Tool | Required source/version |
+|---|---|
+| Rust | `rust-toolchain.toml` / Rust `1.97.1` |
+| Node.js | `frontend/.nvmrc` and `frontend/package.json` / `24.19.0` |
+| npm | `frontend/package.json` / `11.17.0` |
+| Python | CPython `3.12` for repository scripts and Camoufox CI/runtime tooling |
+
+Recommended first-checkout verification:
+
+```text
+rustc --version
+cargo --version
+cargo metadata --locked --no-deps
+
+python3.12 --version
+
+cd frontend
+nvm install
+nvm use
+npm install --global npm@11.17.0
+node --version
+npm --version
+npm ci
+```
+
+If the printed versions differ, correct the local toolchain before interpreting build/test failures.
+Normal repository verification requires no Cloudflare credentials or provider mutation. Provider,
+hosted-environment and Production actions belong only to their explicitly authorized workflow/stage.
 
 ## GitHub access in the current agent environment
 
@@ -62,6 +95,8 @@ Useful targeted commands include:
 
 ```text
 python -m py_compile scripts/*.py
+python scripts/check-current-documentation-contract.py
+python scripts/check-current-documentation-contract.py --self-test
 python scripts/check-architecture.py
 python scripts/check-contract-compatibility.py
 python scripts/check-d1-boundary.py

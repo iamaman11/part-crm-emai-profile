@@ -1,11 +1,13 @@
 # Architecture Map
 
 **Status:** normative target architecture  
-**Date:** 2026-08-10  
+**Date:** 2026-08-27
 **For:** developers, reviewers, operators and future CRM integration work
 
 This document defines stable architecture boundaries and invariants. It does **not** define
-implementation order; current execution order lives in [`DEVELOPMENT_PLAN.md`](./DEVELOPMENT_PLAN.md).
+implementation order. The sole repository owner of order/gates is
+[`ARCHITECTURE_REBASELINE_V3_PLAN.md`](./ARCHITECTURE_REBASELINE_V3_PLAN.md); fresh Issue #266 owns only
+the one active transaction and accepted-main evidence. `DEVELOPMENT_PLAN.md` is navigation/projection.
 
 ## 1. System Boundary
 
@@ -524,13 +526,15 @@ R2 generations, session state machine and Profile Bridge browser lifecycle remai
 ## 19. Documentation Authority / Reading Order
 
 1. [`INDEX.md`](./INDEX.md)
-2. [`DEVELOPMENT_PLAN.md`](./DEVELOPMENT_PLAN.md) for current execution order
+2. [`PRODUCT.md`](./PRODUCT.md) for stable product scope
 3. this `ARCHITECTURE.md` for stable boundaries
-4. relevant accepted ADR/security/data-classification document
-5. [`DEVELOPER_CAPABILITY_MATRIX.md`](./DEVELOPER_CAPABILITY_MATRIX.md) for actual accepted implementation/evidence level
-6. capability-specific contracts/tests/runbooks
-7. historical `DELIVERY_ROADMAP.md` / root `IMPLEMENTATION_PLAN.md` only when historical context is needed
+4. [`ARCHITECTURE_REBASELINE_V3_PLAN.md`](./ARCHITECTURE_REBASELINE_V3_PLAN.md) for current execution
+   order/gates plus fresh Issue #266 for the sole live transaction
+5. relevant accepted ADR/security/data-classification document and capability-specific contracts
+6. [`DEVELOPMENT_PLAN.md`](./DEVELOPMENT_PLAN.md) as navigation/projection and
+   [`TEST_EVIDENCE_INDEX.md`](./TEST_EVIDENCE_INDEX.md) for evidence-owner navigation
+7. historical `DELIVERY_ROADMAP.md` / root `IMPLEMENTATION_PLAN.md` only when provenance is needed
 
 If code and a normative invariant diverge, the gate should fail. Invariant changes are first
-recorded in architecture/ADR/contracts and only then implemented. Execution-order changes are
-made only in `DEVELOPMENT_PLAN.md`.
+recorded in architecture/ADR/contracts and only then implemented. Execution-order changes are made
+only in `ARCHITECTURE_REBASELINE_V3_PLAN.md`, with the live pointer updated in Issue #266.

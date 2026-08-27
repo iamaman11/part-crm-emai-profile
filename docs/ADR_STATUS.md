@@ -1,10 +1,11 @@
-# ADR Status Registry
+# ADR Status Snapshot — 2026-08-05
 
-**Статус:** normative status registry  
+**Статус:** HISTORICAL_PROJECTION / NOT_CURRENT_AUTHORITY
 **Дата:** 2026-08-05
 
-Этот файл устраняет неоднозначность между архитектурными документами. Текст ADR
-определяет решение; этот registry определяет текущий acceptance status и gate.
+Этот файл сохраняет ранний snapshot статусов. Текст и metadata каждого ADR определяют его решение;
+текущие product/architecture/program owners перечислены в [`INDEX.md`](INDEX.md). Этот snapshot не
+выбирает текущую работу, не создаёт Production blocker и не заменяет fresh evidence.
 
 | ADR | Решение | Статус | Разрешает | Блокирует |
 |---|---|---|---|---|
@@ -15,7 +16,7 @@
 | ADR-0005 | Cloudflare-native control plane | `accepted` | Cloudflare cold-build и standalone implementation | production promotion без account/recovery evidence |
 | ADR-0006 | cloud key hierarchy/recovery | `proposed`, production blocker | cryptographic design and test implementation | production cloud generations and multi-device key delivery |
 
-## Acceptance Rules
+## Historical Acceptance Rules
 
 1. `proposed` не трактуется как production policy.
 2. Implementation spike может начаться для получения evidence, если ADR явно это
@@ -27,7 +28,7 @@
 6. Изменение инварианта или security boundary требует нового ADR либо superseding
    ADR, а не тихой правки существующего решения.
 
-## Открытые Решения
+## Открытые На Момент Snapshot Решения
 
 До production необходимо дополнительно принять:
 
@@ -37,4 +38,6 @@
 - privacy/retention values and acceptable-use policy;
 - D1-to-PostgreSQL CRM cutover strategy.
 
-Machine-readable projection статусов находится в [`status.json`](status.json).
+Историческая machine-readable projection находится в [`status.json`](status.json). Она не является
+текущей factual, execution или Production authority; оставшиеся executable consumers выводятся только
+через отдельный E4/V1 cutover с доказательством нулевых callers/unique invariants.

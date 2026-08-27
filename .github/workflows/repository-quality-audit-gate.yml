@@ -315,14 +315,6 @@ jobs:
       - name: Prove D1 live profile state guards
         run: python scripts/test-profile-generation-state-guards.py
 
-      - name: Verify developer capability map exists
-        run: |
-          test -s docs/DEVELOPER_CAPABILITY_MATRIX.md
-          grep -q 'Composed' docs/DEVELOPER_CAPABILITY_MATRIX.md
-          grep -q 'Synthetic' docs/DEVELOPER_CAPABILITY_MATRIX.md
-          grep -q 'Target' docs/DEVELOPER_CAPABILITY_MATRIX.md
-          grep -q 'External' docs/DEVELOPER_CAPABILITY_MATRIX.md
-
       - name: Reject masked version overflow and direct ready transitions
         shell: bash
         run: |

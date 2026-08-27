@@ -32,19 +32,25 @@ workflow or readiness state.
 | Security and threats | [THREAT_MODEL.md](THREAT_MODEL.md) |
 | `opsctl` role/effects | [OPSCTL_ARCHITECTURE_BOUNDARY.md](OPSCTL_ARCHITECTURE_BOUNDARY.md), [OPSCTL_DOCTOR_CONTRACT.md](OPSCTL_DOCTOR_CONTRACT.md) |
 | Python role/effects | [PYTHON_USAGE_BOUNDARY.md](PYTHON_USAGE_BOUNDARY.md) |
-| Developer projection | [DEVELOPMENT_PLAN.md](DEVELOPMENT_PLAN.md) |
+| Developer workflow and local setup | [CONTRIBUTING.md](../CONTRIBUTING.md) plus component-local README files |
+| Developer projection | [DEVELOPMENT_PLAN.md](DEVELOPMENT_PLAN.md) — navigation only |
 
-## Ordered program
+## Authority classes
 
-```text
-E0 -> E1 -> E2 -> E3 -> E4
--> P1 -> P2 -> P3
--> V1 -> V2
--> R1 -> R2 -> R3
-```
+- **Permanent normative knowledge** lives in the natural owners listed above and changes only when its
+  product, architecture, security, contract or lifecycle meaning changes.
+- **Temporary execution authority** lives only in the CAP execution program. It owns order and gates,
+  not mutable completion state.
+- **Live state** lives in protected Git/GitHub/provider owners. Issue #266 is the sole live transaction
+  pointer; exact environment and candidate evidence lives with its owning R-stage evidence.
+- **Projection/navigation** may summarize canonical owners but cannot create status, readiness, order
+  or authority. `DEVELOPMENT_PLAN.md`, generated status JSON and capability/evidence matrices are in
+  this class unless a listed bounded contract explicitly assigns them a narrower role.
+- **History/provenance** explains accepted decisions and evidence but cannot select work or authorize
+  runtime, staging or Production effects.
 
-The meaning, gates and exit criteria of these IDs live only in the current execution program. Their
-active/completed state lives only in #266.
+The program sequence is intentionally not duplicated here. Read the current execution program for its
+meaning and fresh #266 for the single active transaction.
 
 ## Bounded contracts
 
@@ -62,11 +68,16 @@ Use the natural owner's document when a transaction touches that boundary:
 - [Mailbox jobs](MAILBOX_JOB_APPLICATION_BOUNDARY.md)
 - [Realtime notifications](REALTIME_NOTIFICATIONS.md)
 - [D1 catalog](D1_CATALOG.md)
+- [Accepted immutable D3 resolver/bootstrap boundary](PRE2J_D3_RESOLVER_BOOTSTRAP_AUTHORITY.md) —
+  retained because its repository checker still enforces the accepted boundary; it does not authorize
+  a fresh provider mutation or select current work.
 
 ## Projection and history rules
 
-Generated JSON/status files are projections only where their owning contract says so. A projection
-cannot promote readiness or become semantic input merely because it is tracked.
+Generated JSON/status files are projections only. Existing executable consumers of `status.json` are
+transition debt owned by an explicit E4/V1 cutover: the file must not be deleted until
+`old_current_callers=0` and `old_unique_current_invariants=0`, and its existence does not make it
+current factual or Production authority.
 
 Documents named for completed Phase, Pre-2J, AR, PF, PAS or Functional Closure work are historical
 provenance unless this index explicitly lists them as a current bounded contract. Historical documents
