@@ -70,10 +70,12 @@ mod tests {
 
     #[test]
     fn detachment_request_is_strict_and_keeps_relation_identity_server_owned() {
-        assert!(serde_json::from_str::<ProfileDetachmentRequest>(
-            r#"{"reason":"operator detach","expectedProfileVersion":3}"#
-        )
-        .is_ok());
+        assert!(
+            serde_json::from_str::<ProfileDetachmentRequest>(
+                r#"{"reason":"operator detach","expectedProfileVersion":3}"#
+            )
+            .is_ok()
+        );
         for invalid in [
             r#"{"reason":"operator detach","expectedProfileVersion":3,"assignmentId":"assignment_01JTEST"}"#,
             r#"{"reason":"operator detach","expectedProfileVersion":3,"clientId":"client_01JTEST"}"#,
@@ -87,8 +89,7 @@ mod tests {
     #[test]
     fn fragment_adds_only_detach_to_existing_assignment_resource() {
         let fragment = openapi_fragment();
-        let path = &fragment["paths"]
-            ["/api/v1/tenants/{tenantId}/profiles/{profileId}/assignment"];
+        let path = &fragment["paths"]["/api/v1/tenants/{tenantId}/profiles/{profileId}/assignment"];
         assert!(path.get("delete").is_some());
         assert!(path.get("put").is_none());
         assert_eq!(path["delete"]["operationId"], "detachProfileFromClient");
