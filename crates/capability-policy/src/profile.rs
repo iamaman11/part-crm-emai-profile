@@ -418,7 +418,7 @@ mod tests {
     }
 
     #[test]
-    fn all_core_profiles_exclude_all_mailbox_capabilities() {
+    fn core_profiles_exclude_all_mailbox_capabilities() {
         const MAILBOX_CAPABILITIES: [ActivationUnit; 6] = [
             ActivationUnit::MailboxAdmin,
             ActivationUnit::MailboxClientBinding,
