@@ -15,6 +15,7 @@ FORBIDDEN_PROFILE_TRANSPORT_TOKENS = (
     "D1IdempotencyRepository",
     "CreateProfileMutation",
     "AssignProfileMutation",
+    "ProfileAssignmentMutation",
     "ProfileGrantMutation",
     "D1Database",
 )
@@ -23,6 +24,7 @@ REQUIRED_PROFILE_TRANSPORT_TOKENS = (
     "execute_create_profile",
     "get_visible_profile",
     "execute_assign_profile",
+    "execute_detach_profile",
     "authorize_profile_assignment",
     "execute_profile_grant",
     "authorize_profile_grant",
@@ -35,12 +37,15 @@ LEGACY_PROFILE_API_TOKENS = (
     "async fn create_profile(",
     "async fn get_profile(",
     "async fn assign_profile(",
+    "async fn detach_profile(",
     "async fn update_profile_grant(",
     "struct ProfileCreateRequest",
     "struct ProfileResponse",
     "struct AssignmentRequest",
+    "struct ProfileDetachmentRequest",
     "struct ProfileGrantRequest",
     "AssignProfileMutation",
+    "ProfileAssignmentMutation",
     "ProfileGrantMutation",
     "ProfileGrantValue",
     "PROFILE_GRANT_COMMAND",
@@ -128,6 +133,7 @@ def validate(root: Path) -> list[str]:
         "pub trait ProfileApplicationPort",
         "pub trait ProfileAssignmentApplicationPort",
         "pub struct ProfileAssignmentWrite",
+        "pub struct ProfileDetachmentWrite",
         "pub trait ProfileGrantApplicationPort",
         "pub struct ProfileGrantWrite",
     ):
@@ -136,6 +142,7 @@ def validate(root: Path) -> list[str]:
     for token in (
         "pub trait ProfileAssignmentContextPort",
         "pub struct ProfileAssignmentContext",
+        "pub struct ProfileDetachmentContext",
         "pub struct CurrentProfileAssignmentSnapshot",
     ):
         if token not in context_ports:
@@ -148,11 +155,14 @@ def validate(root: Path) -> list[str]:
         errors.append("profile use cases must own create/query orchestration")
     for token in (
         "pub async fn execute_assign_profile",
+        "pub async fn execute_detach_profile",
         "pub fn authorize_profile_assignment",
         "pub fn next_profile_assignment_version",
         "decide_assignment_replay",
         "load_profile_assignment_context",
+        "load_profile_detachment_context",
         "plan_primary_reassignment",
+        "plan_primary_detachment",
     ):
         if token not in assignment_use_cases:
             errors.append(f"profile assignment use cases missing `{token}`")
@@ -171,8 +181,13 @@ def validate(root: Path) -> list[str]:
         errors.append("Cloudflare adapter must implement the inward profile assignment port")
     if "impl ProfileGrantApplicationPort for D1ProfileApplicationRepository" not in adapter:
         errors.append("Cloudflare adapter must implement the inward profile grant port")
-    if "AssignProfileMutation" not in adapter or ".assign_profile(actor, mutation)" not in adapter:
-        errors.append("Cloudflare profile adapter must own the atomic assignment mutation mapping")
+    for token in (
+        "ProfileAssignmentMutation",
+        ".assign_profile(actor, mutation)",
+        ".detach_profile(actor, mutation)",
+    ):
+        if token not in adapter:
+            errors.append(f"Cloudflare profile adapter missing assignment mapping token `{token}`")
     for token in (
         "ProfileGrantMutation",
         ".grant_profile(actor, mutation)",
@@ -186,6 +201,8 @@ def validate(root: Path) -> list[str]:
         "impl ProfileAssignmentApplicationPort for D1ProfileApplicationBundle",
         "impl ProfileGrantApplicationPort for D1ProfileApplicationBundle",
         "impl ProfileAssignmentContextPort for D1ProfileApplicationBundle",
+        "load_profile_assignment_context",
+        "load_profile_detachment_context",
         "profile.tenant_id = ?",
         "assignment.closed_at_ms IS NULL",
         "JOIN clients AS target",
@@ -214,8 +231,8 @@ def write_self_test_fixture(root: Path) -> None:
     (worker / "profiles.rs").write_text(
         "use cloudflare_adapters::d1_identity_queries::D1IdentityQueryRepository;\n"
         "fn route() { execute_create_profile(); get_visible_profile(); execute_assign_profile(); "
-        "authorize_profile_assignment(); execute_profile_grant(); authorize_profile_grant(); "
-        "profile_application(env); ProfileGrantMutation; }\n",
+        "execute_detach_profile(); authorize_profile_assignment(); execute_profile_grant(); "
+        "authorize_profile_grant(); profile_application(env); ProfileGrantMutation; }\n",
         encoding="utf-8",
     )
     (worker / "composition.rs").write_text(
@@ -237,6 +254,7 @@ def write_self_test_fixture(root: Path) -> None:
         "pub trait ProfileApplicationPort {}\n"
         "pub trait ProfileAssignmentApplicationPort {}\n"
         "pub struct ProfileAssignmentWrite;\n"
+        "pub struct ProfileDetachmentWrite;\n"
         "pub trait ProfileGrantApplicationPort {}\n"
         "pub struct ProfileGrantWrite;\n",
         encoding="utf-8",
@@ -244,6 +262,7 @@ def write_self_test_fixture(root: Path) -> None:
     (ports / "profile_assignment_context.rs").write_text(
         "pub trait ProfileAssignmentContextPort {}\n"
         "pub struct ProfileAssignmentContext;\n"
+        "pub struct ProfileDetachmentContext;\n"
         "pub struct CurrentProfileAssignmentSnapshot;\n",
         encoding="utf-8",
     )
@@ -254,6 +273,8 @@ def write_self_test_fixture(root: Path) -> None:
     (use_cases / "profile_assignments.rs").write_text(
         "pub async fn execute_assign_profile() { decide_assignment_replay(); "
         "load_profile_assignment_context(); plan_primary_reassignment(); }\n"
+        "pub async fn execute_detach_profile() { decide_assignment_replay(); "
+        "load_profile_detachment_context(); plan_primary_detachment(); }\n"
         "pub fn authorize_profile_assignment() {}\n"
         "pub fn next_profile_assignment_version() {}\n",
         encoding="utf-8",
@@ -269,9 +290,9 @@ def write_self_test_fixture(root: Path) -> None:
         "impl ProfileApplicationPort for D1ProfileApplicationRepository {}\n"
         "impl ProfileAssignmentApplicationPort for D1ProfileApplicationRepository {}\n"
         "impl ProfileGrantApplicationPort for D1ProfileApplicationRepository {}\n"
-        "fn write() { AssignProfileMutation; repo.assign_profile(actor, mutation); "
-        "ProfileGrantMutation; repo.grant_profile(actor, mutation); "
-        "repo.revoke_profile_grant(actor, mutation); }\n",
+        "fn write() { ProfileAssignmentMutation; repo.assign_profile(actor, mutation); "
+        "repo.detach_profile(actor, mutation); ProfileGrantMutation; "
+        "repo.grant_profile(actor, mutation); repo.revoke_profile_grant(actor, mutation); }\n",
         encoding="utf-8",
     )
     (adapters / "d1_profile_application.rs").write_text(
@@ -279,6 +300,7 @@ def write_self_test_fixture(root: Path) -> None:
         "impl ProfileAssignmentApplicationPort for D1ProfileApplicationBundle {}\n"
         "impl ProfileGrantApplicationPort for D1ProfileApplicationBundle {}\n"
         "impl ProfileAssignmentContextPort for D1ProfileApplicationBundle {}\n"
+        "fn load_profile_assignment_context() {} fn load_profile_detachment_context() {} "
         "JOIN clients AS target LEFT JOIN clients AS current_client "
         "profile.tenant_id = ? assignment.closed_at_ms IS NULL profile_grants\n",
         encoding="utf-8",
