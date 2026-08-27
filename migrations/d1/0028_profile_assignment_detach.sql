@@ -93,6 +93,29 @@ BEGIN
     );
 END;
 
+-- The 0015 history insert guard predates the operation discriminator. Rebind it explicitly
+-- to ASSIGN so DETACH can only authorize closing the proven active row and can never become
+-- authority for creating assignment history, even if a future schema change relaxes another
+-- identity constraint.
+DROP TRIGGER profile_assignment_history_insert_guard;
+CREATE TRIGGER profile_assignment_history_insert_guard
+BEFORE INSERT ON profile_client_assignments
+FOR EACH ROW
+BEGIN
+    SELECT RAISE(ABORT, 'profile_assignment_not_governed')
+    WHERE NOT EXISTS (
+        SELECT 1 FROM profile_assignment_commands
+        WHERE tenant_id = NEW.tenant_id
+          AND assignment_id = NEW.assignment_id
+          AND profile_id = NEW.profile_id
+          AND client_id = NEW.client_id
+          AND command_actor_id = NEW.assigned_by_actor_id
+          AND executed_at_ms = NEW.assigned_at_ms
+          AND trim(reason) = trim(NEW.reason)
+          AND operation = 'ASSIGN'
+    );
+END;
+
 -- Replace the legacy unconditional apply trigger with operation-specific branches. ASSIGN
 -- is byte-for-byte equivalent in business effect: close the previous active assignment,
 -- insert the next history row, then increment Profile version exactly once.
