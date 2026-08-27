@@ -667,7 +667,8 @@ mod tests {
     }
 
     #[test]
-    fn member_is_rejected_before_replay_context_or_write() -> Result<(), Box<dyn std::error::Error>> {
+    fn member_is_rejected_before_replay_context_or_write() -> Result<(), Box<dyn std::error::Error>>
+    {
         let port = FakePort::new(
             vec![ProfileReplayDecision::Miss],
             Some(context(
@@ -741,7 +742,8 @@ mod tests {
     }
 
     #[test]
-    fn stale_expected_profile_version_fails_before_write() -> Result<(), Box<dyn std::error::Error>> {
+    fn stale_expected_profile_version_fails_before_write() -> Result<(), Box<dyn std::error::Error>>
+    {
         let port = FakePort::new(
             vec![ProfileReplayDecision::Miss],
             Some(context(
@@ -765,7 +767,8 @@ mod tests {
     }
 
     #[test]
-    fn reassignment_to_same_primary_client_is_domain_conflict() -> Result<(), Box<dyn std::error::Error>> {
+    fn reassignment_to_same_primary_client_is_domain_conflict()
+    -> Result<(), Box<dyn std::error::Error>> {
         let port = FakePort::new(
             vec![ProfileReplayDecision::Miss],
             Some(context(
@@ -788,7 +791,8 @@ mod tests {
     }
 
     #[test]
-    fn reassignment_time_regression_is_rejected_before_write() -> Result<(), Box<dyn std::error::Error>> {
+    fn reassignment_time_regression_is_rejected_before_write()
+    -> Result<(), Box<dyn std::error::Error>> {
         let port = FakePort::new(
             vec![ProfileReplayDecision::Miss],
             Some(context(
@@ -834,7 +838,8 @@ mod tests {
     }
 
     #[test]
-    fn persisted_current_assignment_inconsistency_fails_closed() -> Result<(), Box<dyn std::error::Error>> {
+    fn persisted_current_assignment_inconsistency_fails_closed()
+    -> Result<(), Box<dyn std::error::Error>> {
         let current = CurrentProfileAssignmentSnapshot::new(
             AssignmentId::parse("assignment_01JASSIGNAPP")?,
             client("client_01JASSIGNAPP", ClientStatus::Archived)?,
@@ -916,7 +921,8 @@ mod tests {
     }
 
     #[test]
-    fn member_detach_is_rejected_before_replay_or_context() -> Result<(), Box<dyn std::error::Error>> {
+    fn member_detach_is_rejected_before_replay_or_context() -> Result<(), Box<dyn std::error::Error>>
+    {
         let port = FakePort::new(vec![ProfileReplayDecision::Miss], None);
         assert_eq!(
             block_on(execute_detach_profile(
@@ -934,7 +940,8 @@ mod tests {
     }
 
     #[test]
-    fn fresh_detach_uses_server_owned_assignment_and_writes_once() -> Result<(), Box<dyn std::error::Error>> {
+    fn fresh_detach_uses_server_owned_assignment_and_writes_once()
+    -> Result<(), Box<dyn std::error::Error>> {
         let port = FakePort::new(vec![ProfileReplayDecision::Miss], None);
         *port.detachment_context.borrow_mut() = Some(detachment_context(
             AggregateVersion::INITIAL,
@@ -956,12 +963,11 @@ mod tests {
     }
 
     #[test]
-    fn detach_without_active_assignment_is_invalid_state_without_write() -> Result<(), Box<dyn std::error::Error>> {
+    fn detach_without_active_assignment_is_invalid_state_without_write()
+    -> Result<(), Box<dyn std::error::Error>> {
         let port = FakePort::new(vec![ProfileReplayDecision::Miss], None);
-        *port.detachment_context.borrow_mut() = Some(detachment_context(
-            AggregateVersion::INITIAL,
-            None,
-        )?);
+        *port.detachment_context.borrow_mut() =
+            Some(detachment_context(AggregateVersion::INITIAL, None)?);
         assert_eq!(
             block_on(execute_detach_profile(
                 &actor()?,
@@ -996,7 +1002,8 @@ mod tests {
     }
 
     #[test]
-    fn detachment_time_regression_and_invalid_reason_fail_before_write() -> Result<(), Box<dyn std::error::Error>> {
+    fn detachment_time_regression_and_invalid_reason_fail_before_write()
+    -> Result<(), Box<dyn std::error::Error>> {
         let port = FakePort::new(vec![ProfileReplayDecision::Miss], None);
         *port.detachment_context.borrow_mut() = Some(detachment_context(
             AggregateVersion::INITIAL,
@@ -1028,7 +1035,8 @@ mod tests {
     }
 
     #[test]
-    fn exact_detach_replay_is_context_free_and_requires_detached_receipt() -> Result<(), Box<dyn std::error::Error>> {
+    fn exact_detach_replay_is_context_free_and_requires_detached_receipt()
+    -> Result<(), Box<dyn std::error::Error>> {
         let port = FakePort::new(
             vec![ProfileReplayDecision::Replay(ProfileReplayReceipt::new(
                 "detached",
@@ -1067,7 +1075,8 @@ mod tests {
     }
 
     #[test]
-    fn detach_write_conflict_rechecks_exact_replay_once() -> Result<(), Box<dyn std::error::Error>> {
+    fn detach_write_conflict_rechecks_exact_replay_once() -> Result<(), Box<dyn std::error::Error>>
+    {
         let port = FakePort::new(
             vec![
                 ProfileReplayDecision::Miss,
