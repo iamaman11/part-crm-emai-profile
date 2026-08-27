@@ -1,5 +1,5 @@
-use crate::canonical::parse_strict_json;
 use super::model::D1Error;
+use crate::canonical::parse_strict_json;
 use serde_json::Value;
 use std::collections::HashSet;
 use std::fs;
