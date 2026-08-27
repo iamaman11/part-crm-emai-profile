@@ -36,7 +36,7 @@ pub use profile_coordinator::ProfileCoordinator;
 pub use realtime_notifications::NotificationHub;
 
 use access_session::session_response;
-use capability_gate::{ActivationUnit, RuntimeCapabilityContext, RuntimeSurface, route_surface};
+use capability_gate::{ActivationUnit, RuntimeCapabilityContext, RuntimeSurface};
 use cloudflare_adapters::control_plane_queue::ControlPlaneQueueMessage;
 use cloudflare_adapters::d1_catalog::D1CatalogRepository;
 use cloudflare_adapters::d1_idempotency::D1IdempotencyRepository;
@@ -59,19 +59,26 @@ use worker::{
 pub async fn main(mut request: Request, env: Env, _context: Context) -> Result<Response> {
     let path = request.path();
     let route = classify_route(request.method().as_ref(), &path);
-    let capability_context = match route_surface(route, &path) {
-        None => None,
-        Some(surface) => {
-            let context = match RuntimeCapabilityContext::from_env(&env) {
-                Ok(context) => context,
-                Err(_) => return Response::error("Capability Profile Unavailable", 503),
-            };
-            if !context.surface_enabled(surface) {
-                return Response::error("Not Found", 404);
-            }
-            Some(context)
+    let capability_context = if matches!(
+        route,
+        RouteClass::HealthApi
+            | RouteClass::DynamicRouteNotFound
+            | RouteClass::BridgeDeniedByDefault
+            | RouteClass::StaticAssets
+    ) {
+        None
+    } else {
+        match RuntimeCapabilityContext::from_env(&env) {
+            Ok(context) => Some(context),
+            Err(_) => return Response::error("Capability Profile Unavailable", 503),
         }
     };
+
+    if let Some(context) = capability_context.as_ref()
+        && !context.route_enabled(route, &path)
+    {
+        return Response::error("Not Found", 404);
+    }
 
     match route {
         RouteClass::HealthApi => health_response(),
