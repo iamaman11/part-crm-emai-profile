@@ -136,6 +136,75 @@ impl ProfileAssignmentWrite {
     }
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ProfileDetachmentWrite {
+    assignment_id: AssignmentId,
+    profile_id: ProfileId,
+    client_id: ClientId,
+    expected_profile_version: AggregateVersion,
+    reason: String,
+    evidence: CommandExecutionEvidence,
+    event_payload_json: String,
+}
+
+impl ProfileDetachmentWrite {
+    #[must_use]
+    pub fn new(
+        assignment_id: AssignmentId,
+        profile_id: ProfileId,
+        client_id: ClientId,
+        expected_profile_version: AggregateVersion,
+        reason: impl Into<String>,
+        evidence: CommandExecutionEvidence,
+        event_payload_json: impl Into<String>,
+    ) -> Self {
+        Self {
+            assignment_id,
+            profile_id,
+            client_id,
+            expected_profile_version,
+            reason: reason.into(),
+            evidence,
+            event_payload_json: event_payload_json.into(),
+        }
+    }
+
+    #[must_use]
+    pub const fn assignment_id(&self) -> &AssignmentId {
+        &self.assignment_id
+    }
+
+    #[must_use]
+    pub const fn profile_id(&self) -> &ProfileId {
+        &self.profile_id
+    }
+
+    #[must_use]
+    pub const fn client_id(&self) -> &ClientId {
+        &self.client_id
+    }
+
+    #[must_use]
+    pub const fn expected_profile_version(&self) -> AggregateVersion {
+        self.expected_profile_version
+    }
+
+    #[must_use]
+    pub fn reason(&self) -> &str {
+        &self.reason
+    }
+
+    #[must_use]
+    pub const fn evidence(&self) -> &CommandExecutionEvidence {
+        &self.evidence
+    }
+
+    #[must_use]
+    pub fn event_payload_json(&self) -> &str {
+        &self.event_payload_json
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ProfileGrantRole {
     Viewer,
@@ -462,6 +531,12 @@ pub trait ProfileAssignmentApplicationPort {
         &self,
         actor: &ActorContext,
         write: &ProfileAssignmentWrite,
+    ) -> Result<(), ProfileAssignmentPortError>;
+
+    async fn detach_profile(
+        &self,
+        actor: &ActorContext,
+        write: &ProfileDetachmentWrite,
     ) -> Result<(), ProfileAssignmentPortError>;
 }
 
