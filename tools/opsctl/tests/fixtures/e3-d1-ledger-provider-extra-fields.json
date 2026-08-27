@@ -1,0 +1,12 @@
+{
+  "rows": [
+    {"id": 1, "name": "0001_resolver_security_boundary.sql", "applied_at": "2026-08-27T00:00:00Z"},
+    {"id": 2, "name": "0002_oauth_refresh_fencing.sql", "applied_at": "2026-08-27T00:00:01Z"},
+    {"id": 3, "name": "0003_lookup_hmac_versions.sql", "applied_at": "2026-08-27T00:00:02Z"},
+    {"id": 4, "name": "0004_refresh_owner_hmac_version.sql", "applied_at": "2026-08-27T00:00:03Z"}
+  ],
+  "provider_metadata": {
+    "source": "wrangler",
+    "duration_ms": 7
+  }
+}
