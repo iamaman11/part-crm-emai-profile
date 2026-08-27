@@ -1,7 +1,7 @@
 # Product Definition
 
 **Статус:** normative product boundary  
-**Дата:** 2026-08-23
+**Дата:** 2026-08-27
 
 ## 1. Назначение
 
@@ -56,60 +56,76 @@ accepted security/product contracts; browser-assisted mailbox flow допуск�
 как управляемый fallback. Платформа не дублирует полные письма без отдельного product,
 privacy и retention решения.
 
-## 4. Первый production release — PC-1 Production Core v1
+## 4. Первый production release — принятый CAP-12 vertical slice
 
-Первый production release не обязан ждать завершения всех capability, код которых
-уже присутствует в `main`.
-
-`PC-1 production-core-v1` включает только следующий production-enabled scope:
-
-- authentication / authorization / organization membership foundation;
-- users;
-- client/customer cards;
-- browser profiles;
-- single and bulk browser-profile operations;
-- client↔browser-profile bindings;
-- grants / access;
-- profile metadata, generations, sessions, devices и audit;
-- encrypted immutable cloud generations и restore, необходимые profile lifecycle;
-- real Camoufox runtime;
-- Windows-native Profile Bridge;
-- production-grade Windows Profile Bridge updater/publisher/delivery chain;
-- runtime/profile certification, необходимую accepted Core release profile;
-- health / readiness / observability;
-- notifications/recovery foundations, необходимые Core lifecycle.
-
-Cloudflare-native control plane и Windows/runtime artifacts должны быть взаимно
-совместимы в одном accepted Release / Capability Profile. Если PC-1 требует Windows
-Profile Bridge, отсутствие/устаревание/несовместимость обязательного AR-15 evidence
-блокирует production admission fail-closed.
-
-Добавление второго независимого tenant запрещено до отдельного isolation ADR.
-
-## 5. Source-present, но production-disabled в PC-1
-
-Следующие capability могут существовать, компилироваться и тестироваться в том же
-`main`, но в PC-1 остаются `production_enabled=false`:
-
-- mailbox administration;
-- bulk mailbox operations;
-- client↔mailbox bindings;
-- mailbox jobs / automation;
-- outbound mail/email side effects;
-- later CRM/communications capabilities.
-
-Плановая активация:
+Первый release не обязан ждать завершения всех capability, код которых присутствует
+в `main`. Его пользовательская capability конечна:
 
 ```text
-PC-1  Production Core v1
-PC-2  Mailbox Administration
-PC-3  Mailbox Jobs / Automation
-PC-4  Outbound / later capabilities
+managed login
+-> create/find/view/edit Client
+-> create Browser Profile
+-> attach Profile to Client
+-> see independently authorized attached Profiles in Client card
+-> launch through local Windows Profile Bridge and pinned real Camoufox
+-> controlled close and authoritative confirmed save
+-> reopen the last confirmed state from Client card
+-> detach or atomically reassign without deleting either entity
+-> logout
 ```
 
-Никакой `production-lite` ветки, mailbox fork, второй schema lineage или отдельной
-архитектуры для будущих capabilities не создаётся. Capability включается только
-через свой accepted Release / Capability Profile и backend admission.
+Принятые product semantics:
+
+- multi-user архитектура: один tenant owner и invited members;
+- для acceptance первого release достаточно одной product organization, без special-case
+  single-user архитектуры;
+- Cloudflare Access / managed external identity владеет credentials и account recovery;
+- приложение владеет membership lifecycle, resource authorization и revoke;
+- `Client 1 -> 0..N Profiles`, `Profile -> 0..1 Client`;
+- assignment не выдаёт ACL; видимость и launch требуют отдельной server authorization;
+- один active writer на Profile;
+- локальный workspace не является canonical backup;
+- `Saved` существует только после exact verification successor generation и authoritative commit;
+- hard profile purge не входит в первый release без отдельного product/legal решения.
+
+### 4.1 Обязательные supporting guarantees
+
+Supporting guarantee является release blocker только если он универсален либо достижим из
+выбранного effective capability set. Для принятого slice обязательны:
+
+- tenant membership, grants и fail-closed backend admission до side effects;
+- immutable encrypted generations, fencing/CAS и сохранение последней подтверждённой generation
+  при partial failure;
+- device trust, claim, lease/fence, workspace lock и один shipping Bridge/runtime path;
+- immutable Windows/Bridge/runtime identity, trusted distribution, rollback и recovery;
+- точные D1/R2/Durable Object/Bridge migration, integrity, backup и recovery evidence для
+  реально достижимых данных;
+- hosted login/logout/recovery и membership-revocation evidence;
+- health/error/incident observation, достаточная для принятого сценария;
+- один exact Release Candidate и target-specific Production Authorization envelope.
+
+Certification, audit, updater, notification или recovery infrastructure может быть supporting
+implementation detail только в объёме, необходимом перечисленным гарантиям. Это не превращает
+соответствующий полный пользовательский feature в scope первого release.
+
+Добавление второй независимой organization/tenant в product UX требует отдельного isolation/product
+решения; существующие tenant-safe boundaries при этом не ослабляются.
+
+## 5. Source-present, но production-disabled в первом release
+
+Следующие capability могут существовать, компилироваться и тестироваться в том же `main`, но не входят
+в выбранный effective set и не блокируют первый release своей независимой незавершённостью:
+
+- Mailboxes, OAuth mailbox administration и client↔mailbox bindings;
+- mailbox jobs, Notifications, Automation и outbound side effects;
+- bulk profile operations как отдельный product feature;
+- tenant-wide Audit UI, global Sessions UI и Certification UI;
+- complex roles, mobile parity, generic export и hard Profile purge;
+- new providers и будущая CRM/communications integration.
+
+Никакой `production-lite` ветки, mailbox fork, второй schema lineage или отдельной архитектуры для
+будущих capabilities не создаётся. Capability включается только через canonical Capability Policy,
+accepted Release Candidate и target-specific backend admission.
 
 ## 6. Не Цели
 
@@ -125,23 +141,32 @@ PC-4  Outbound / later capabilities
 
 ## 7. Definition Of Product Success
 
-### 7.1 PC-1 Production Core success
+### 7.1 Первый release
 
-PC-1 успешен, когда без CLI owner может управлять users, clients, profiles, grants,
-devices, sessions, generations, certification и audit; member видит только granted
-resources; dirty state не теряется; cloud restore и key recovery, необходимые Core
-profile lifecycle, доказаны; runtime updates подписаны и откатываемы; real Camoufox
-повторно открывает тот же профиль с сохранённым browser state и fingerprint identity;
-Windows/cloud release identities совместимы; production admission не может быть
-обойдён UI/env/Python/operator helper.
+Первый release успешен, когда все принятые CAP-12 B1–B10 доказаны на одном неизменном Release
+Candidate, Production target envelope содержит свежие universal/reachable evidence, named authority
+выдала GO/PILOT, а deployed candidate совпадает с авторизованным. Пользователь проходит весь сценарий
+без CLI; второй writer и unauthorized/replayed launch отвергаются; любая save failure сохраняет
+последнюю подтверждённую generation; UI не сообщает ложный `Saved`.
 
 ### 7.2 Full platform success
 
-Полный продуктовый roadmap успешен, когда последующие accepted capability profiles
-добавляют mailbox administration, mailbox jobs/automation, outbound и CRM integration
-без переписывания уже принятой domain/runtime architecture или создания второй
-истории данных/production-enable authority.
+Полный продукт развивается отдельными product decisions: последующие accepted capability profiles
+могут добавлять mailbox administration, mailbox jobs/automation, outbound и CRM integration без
+переписывания принятой domain/runtime architecture или создания второй истории данных/production-enable
+authority.
 
-Текущий фактический статус хранится в [`status.json`](status.json). Markdown не
-может повышать readiness без соответствующего CI/evidence и accepted Release /
-Capability Profile.
+## 8. Status And Execution Authority
+
+Этот документ владеет стабильным product scope, но не текущим статусом. Binding program живёт в
+[`ARCHITECTURE_REBASELINE_V3_PLAN.md`](ARCHITECTURE_REBASELINE_V3_PLAN.md), единственный live transaction
+pointer — fresh [Issue #266](https://github.com/iamaman11/part-crm-emai-profile/issues/266), а
+Production state — в exact candidate decision/evidence его natural owners. `status.json`, Markdown,
+старый roadmap или green CI сами по себе не могут повысить readiness или выдать Production Authorization.
+
+## 9. Product/Legal Input Before Distribution
+
+До публичной/коммерческой дистрибуции product owner должен выбрать и добавить совместимую repository
+и product license либо явно документировать иной legal режим. Автоматизированный агент не выбирает
+license по догадке. Отсутствие решения не расширяет source/runtime scope, но блокирует утверждение о
+разрешённой дистрибуции.

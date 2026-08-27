@@ -1,5 +1,6 @@
 # Phase 2I Repository-Local Disaster Recovery Runbook
 
+**Status:** HISTORICAL_REPOSITORY_LOCAL_DRILL / NOT CURRENT PRODUCTION RUNBOOK
 **Scope:** repository-local release-candidate drills only  
 **Phase:** 2I  
 **Production readiness:** unchanged; `production_ready=false`  

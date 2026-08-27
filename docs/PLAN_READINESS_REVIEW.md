@@ -6,7 +6,8 @@
 
 This document preserves an early Repository-Step readiness review. Statements below about the then-current step, next step, `DELIVERY_ROADMAP.md`, Phase 2J or future execution order are historical context only. They do **not** define current work.
 
-Current execution is governed by Architecture Re-baseline v3. As of the accepted pre-PF-1 normalization plan, the required continuation is `F1/F2 -> N1 -> N2 -> N3 -> N4 -> N5 -> PF-1 -> PF-2 -> PF-3 -> fresh #399/#421 re-baseline -> FC-6 -> FC-7 -> AR-12`. `DELIVERY_ROADMAP.md` is itself historical.
+Current execution is governed only by the binding Architecture Re-baseline v3 CAP program and fresh
+Issue #266. `DELIVERY_ROADMAP.md` and every sequence in the historical content below are provenance.
 
 ---
 

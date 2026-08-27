@@ -8,7 +8,10 @@ Before planning or changing anything:
 
 1. read current protected `main`, current branch, merge-base, ahead/behind and working-tree state when a local checkout is available;
 2. refresh GitHub PRs, issues, checks, reviews, review threads and branch governance through the available authenticated GitHub tooling;
-3. read `docs/ARCHITECTURE_REBASELINE_V3_PLAN.md`, Issue #266, `docs/APPLICATION_ARCHITECTURE_MANDATORY_REQUIREMENTS.md`, `docs/ARCHITECTURE_EVOLUTION_QUALITY_CONTRACT.md` and the one owning Issue for the live bounded transaction;
+3. read `docs/INDEX.md`, `docs/ARCHITECTURE_REBASELINE_V3_PLAN.md`, Issue #266,
+   `docs/APPLICATION_ARCHITECTURE_MANDATORY_REQUIREMENTS.md`,
+   `docs/ARCHITECTURE_EVOLUTION_QUALITY_CONTRACT.md` and the one owning Issue for the live bounded
+   transaction;
 4. read the relevant current bounded contracts linked from `docs/INDEX.md`, such as
    `docs/OPSCTL_ARCHITECTURE_BOUNDARY.md`, `docs/OPSCTL_DOCTOR_CONTRACT.md` or
    `docs/PYTHON_USAGE_BOUNDARY.md`;
@@ -70,16 +73,9 @@ An internal caller, validator, generator, drift gate, self-test or documentation
 
 ## 5. Current program and authorization discipline
 
-The binding order is defined only by `docs/ARCHITECTURE_REBASELINE_V3_PLAN.md`:
-
-```text
-E0 -> E1 -> E2 -> E3 -> E4
--> P1 -> P2 -> P3
--> V1 -> V2
--> R1 -> R2 -> R3
-```
-
-Do not infer the active row from this file. Read fresh Issue #266 and the owning bounded Issue. Each row
+The binding order, stage meaning and gates are defined only by
+`docs/ARCHITECTURE_REBASELINE_V3_PLAN.md`. Do not infer or copy them from this bootstrap file. Read
+fresh Issue #266 and the owning bounded Issue to discover the sole permitted transaction. Each row
 requires its own branch/PR, exact-head acceptance, protected-main reread and tracker update before the
 next row is selected.
 

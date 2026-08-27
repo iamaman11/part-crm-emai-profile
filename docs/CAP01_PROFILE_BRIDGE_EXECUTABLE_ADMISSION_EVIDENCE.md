@@ -1,12 +1,13 @@
 # CAP-01 Profile Bridge executable-admission evidence
 
-Status: **current implementation evidence for CAP-01**  
+Status: **CAP-01 EVIDENCE SNAPSHOT / VERIFY AGAINST FRESH MAIN**
 Audit date: **2026-08-26**  
 Repository: `iamaman11/part-crm-emai-profile`
 
-This record closes the Profile Bridge / Camoufox research obligation in
+This dated record closed the Profile Bridge / Camoufox research obligation in
 `CAP01_CAPABILITY_POLICY_IMPLEMENTATION_CONTRACT.md` §10.4 without inventing a runtime
-surface that has no production consumer.
+surface that had no production consumer at the audit baseline. It is provenance, not live execution or
+Production authority; P2/A0/V2 must prove the shipping path on their exact candidate.
 
 ## Question
 

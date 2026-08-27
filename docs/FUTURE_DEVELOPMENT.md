@@ -2,22 +2,11 @@
 
 **Status:** FUTURE_PRODUCT_EVOLUTION / NOT_ACTIVE_EXECUTION  
 **Current authority:** [`INDEX.md`](INDEX.md) -> [`ARCHITECTURE_REBASELINE_V3_PLAN.md`](ARCHITECTURE_REBASELINE_V3_PLAN.md)  
-**Planning prerequisite:** successful current AR/PC closeout plus a later explicit product/architecture decision
+**Planning prerequisite:** a later explicit product/architecture decision from then-current accepted `main`
 
 ## 1. Purpose
 
 This document records a future product-evolution option. It is not a roadmap competing with the current Architecture Re-baseline v3 / Production Capability program, cannot contain `NEXT`, and must not block the current path to Production Core.
-
-Current execution remains:
-
-```text
-F1/F2 -> N1 -> N2 -> N3 -> N4 -> N5
--> PF-1 -> PF-2 -> PF-3
--> fresh #399/#421 re-baseline
--> FC-6 -> FC-7
--> AR-12 -> ... -> AR-17
--> PC-1 Production Core v1
-```
 
 External CRM integration must be planned only from the then-current accepted architecture and capability state. This file does not authorize work to begin after any particular historical Phase 2J checkpoint.
 
@@ -48,9 +37,9 @@ Any later CRM initiative must still satisfy:
 - its own issue/ADR/branch/PR/evidence plan created from the then-current accepted `main` and capability model;
 - `source_present != production_enabled` remains binding throughout any CRM introduction.
 
-## 4. Explicit Non-Goals Of The Current Roadmap
+## 4. Explicit Non-Goals Of The Current Program
 
-The current F/N/PF/FC/AR/PC roadmap does not require or authorize:
+The current CAP program does not require or authorize:
 
 - CRM Party authority/cutover;
 - CRM OIDC migration;
@@ -58,4 +47,5 @@ The current F/N/PF/FC/AR/PC roadmap does not require or authorize:
 - CRM-specific UI/workflows;
 - any dependency that prevents the standalone application from operating independently.
 
-Until a future decision is accepted, external CRM integration remains future scope only and has no effect on current `production_ready`, AR progression or Production Core gating.
+Until a future decision is accepted, external CRM integration remains future scope only and has no
+effect on the active transaction, scenario completion or exact-candidate Production Authorization.

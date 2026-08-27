@@ -60,7 +60,9 @@ This acceptance does **not** prove or simulate:
 - external security/certification review;
 - remediation of the separately tracked legacy proxy credential/provider.
 
-`docs/status.json` remains authoritative for production readiness and must remain `production_code: false` / not production-ready after this repository-local acceptance.
+This historical repository-local acceptance never authorized Production. `docs/status.json` may retain
+a fail-closed projection for transitional consumers, but current Production authority belongs only to
+the CAP-08 exact candidate + target envelope and named R3 decision.
 
 ## Clean verification
 

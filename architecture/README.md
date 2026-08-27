@@ -29,22 +29,31 @@ An accepted AR preserves required outcomes and provenance, not a permanent right
 - provider/resource topology — current executable ownership is provider-native Wrangler configuration + Product Rust, not an AR-qualified runtime-topology JSON.
 - application/runtime/operator/release semantics — current executable semantics belong to their natural Rust/domain/runtime owners; no global tracked inventory projects or authorizes them.
 
-## Transitional current artifacts scheduled for normalization
+## Transitional and historical artifacts
 
-The following artifacts may still be reachable on the current pre-PF-1 branch of history, but they are **TRANSITIONAL_SEMANTIC_SOURCE** or provenance, not permanent architecture shape:
+The following artifacts may still have executable consumers or preserve accepted provenance. Historical
+N/AR scheduling is complete and does not select their next disposition:
 
-- `python-estate-ar6.json` and AR-10/AR-11 Python-estate overlays — retired by N2. There will be no successor 1:1 Python file registry.
-- `github-governance-ar7.json` and historical governance overlays — normalized by N3 so current desired governance + live observation + typed policy replace historical overlay reconstruction.
-- `operator-contract.json` — retired by N4; typed Rust `Invocation`/`OperatorEffect` metadata and the existing parser/composition root own current operator semantics.
-- `runtime-cutover-ar10.json` — N5 reassigns every still-current fact to Product Rust, `runtime-lock.json`, Camouhost/Bridge contracts, current governance or lifecycle/release owners, then retires the transitional document.
+- Python-estate AR overlays are provenance; Python roles/effects are owned by the current boundary and
+  natural executable callers, with no successor 1:1 file registry.
+- GitHub-governance AR overlays are provenance; current desired governance, live GitHub observation and
+  typed policy are separate owners.
+- `operator-contract.json` is retired provenance; typed Rust `Invocation`/`OperatorEffect` and the
+  parser/composition root own current operator semantics.
+- runtime-cutover AR overlays are provenance; current runtime identity belongs to Product Rust,
+  `runtime-lock.json`, Camouhost/Bridge contracts and release/lifecycle owners.
 
-These artifacts must not be copied into successor JSON/TOML/YAML or a giant Rust registry merely to preserve their historical shape.
+Any still-reachable predecessor is retired/reclassified only by E4/V1 after exact current-caller and
+unique-invariant proof. These artifacts must not be copied into successor JSON/TOML/YAML or a giant Rust
+registry merely to preserve their historical shape.
 
 ## Retired historical authorities
 
 AR-2 runtime-topology authority is already retired from current architecture. Provider-native Wrangler configuration and Product Rust own executable topology/workloads; bounded fitness rules preserve anti-regression and AR-2 provenance remains in `docs/ARCHITECTURE_REBASELINE_V3_AR2.md` plus Git history.
 
-As N2…N5 complete, the same rule applies: historical AR artifacts remain evidence of acceptance, while current semantics move to natural owners and obsolete executable intermediaries are deleted after zero-current-caller/zero-unique-invariant proof.
+Historical AR artifacts remain evidence of acceptance, while current semantics live in natural owners.
+Obsolete executable intermediaries are deleted only after zero-current-caller/zero-unique-invariant
+proof.
 
 ## AR-8 provenance and completion artifacts
 
@@ -79,4 +88,6 @@ security classifications            -> bounded profile-security owner
 production admission                -> Release / Capability Profile
 ```
 
-AR-13 owns profile-key rotation rehearsal; AR-14 remote recovery rehearsal; AR-15 Windows delivery/update chain. After PF-3 the architecture is frozen by design and those phases implement/rehearse the established architecture rather than creating new generic architecture mechanisms.
+AR-13/AR-14/AR-15 describe how profile-key rotation, recovery and Windows delivery obligations were
+previously framed. Current Windows/runtime work is selected only by the binding CAP program and must
+consume present natural-owner contracts/evidence rather than reopen an AR phase.

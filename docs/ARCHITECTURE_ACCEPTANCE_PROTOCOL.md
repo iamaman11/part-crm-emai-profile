@@ -39,6 +39,28 @@ The historical AR protocol appended:
 
 That suffix does not apply to CAP transaction selection or create a second source commit.
 
+## Candidate identity scopes
+
+An implementation PR candidate and a Production candidate are related but not identical concepts:
+
+```text
+PR exact candidate
+  = candidate commit/tree + exact-head CI/review/merge evidence
+
+ReleaseCandidateId
+  = accepted source/tree + immutable release artifacts + migrations/contracts
+    + selected capability profile/effective-set digest
+
+DeploymentAuthorizationEnvelope
+  = ReleaseCandidateId + exact target/config/bindings + target observations/evidence/risks/authority
+```
+
+V2, R1, R2 and R3 retain one `ReleaseCandidateId`. Rehearsal/staging and Production envelopes are
+target-specific; they must not be called identical merely because they reference the same release. A
+material release-identity change repeats affected V2 and R evidence. A target/config/evidence change
+invalidates and re-evaluates the affected envelope. The authorized and deployed Production pair must
+match exactly.
+
 ## Historical AR PR identity
 
 The historical AR protocol required an AR slice to identify itself twice and consistently:

@@ -1,7 +1,7 @@
 # Privacy And Retention Governance
 
-**Статус:** design baseline; numeric production retention values are not yet accepted  
-**Дата:** 2026-08-05
+**Статус:** normative lifecycle baseline; numeric values remain candidate-scoped product/legal inputs
+**Дата:** 2026-08-27
 
 Этот документ задаёт технические обязательства. Он не заменяет применимое
 юридическое заключение, договоры с пользователями или privacy notice.
@@ -21,21 +21,35 @@
 
 ## 2. Обязательные Retention Classes
 
-До production должны быть приняты числовые значения и legal basis для:
+Applicability определяется exact Production candidate:
+
+```text
+selected enabled capability set
+-> reachable data and every material copy
+-> owner + purpose + legal/contractual obligation
+-> retention/deletion/recovery rule + exact evidence
+```
+
+До Production должны быть приняты числовые значения и legal basis для каждого класса, реально
+достижимого из выбранного effective set. Для первого CAP-12 slice это как минимум применимые:
 
 - active verified profile generations;
 - superseded generations and rollback window;
 - quarantined/corrupt/orphan objects;
 - dirty local workspace and abandoned device state;
-- certification evidence;
 - security/business audit;
 - invitations, launch intents and idempotency records;
-- mailbox observations, message metadata and error artifacts;
-- deleted-profile tombstone;
 - backups, D1 Time Travel/export and offline key escrow inventories.
 
-Отсутствие принятого значения является production blocker, а не разрешением
-хранить данные бессрочно.
+Certification evidence, mailbox observations/message metadata, notification/queue copies and
+deleted-profile tombstones входят в gate только если соответствующая capability/guarantee enabled,
+reachable или отдельно обещана/обязательна. Наличие кода, migration или исторического документа не
+делает disabled capability Production blocker.
+
+Для применимого класса отсутствие принятого значения является Production blocker, а не разрешением
+хранить данные бессрочно. Закон, договор или принятая privacy promise может сделать требование
+обязательным независимо от UI scope; такое обязательство фиксируется явно, а не угадывается из source
+presence.
 
 ## 3. Technical Retention Rules
 
@@ -54,15 +68,18 @@
 
 ## 4. Data Subject And Owner Operations
 
-The application design must support governed workflows for:
+Для enabled/promised surfaces система должна поддерживать применимые governed workflows:
 
-- export of client/profile metadata without exposing unrelated tenant data;
 - correction of client card and contact points;
 - revoke of user/device access;
-- profile deletion with active-session and retention checks;
-- mailbox binding removal and token revocation;
 - inventory of local, D1, R2, backup and escrow references;
-- final reconciliation report and minimal non-PII tombstone.
+- recovery/reconciliation of valuable accepted state.
+
+Export, hard Profile deletion/purge, mailbox binding removal/provider token revocation and final
+tombstone workflows обязательны, когда они входят в enabled capability, accepted promise или
+legal/contractual obligation. CAP-12 исключает hard Profile purge и Mailboxes как пользовательские
+capabilities первого release; этот scope не отменяет применимый закон и не разрешает скрытое
+бессрочное хранение.
 
 Browser history or third-party site data may have separate legal/contractual
 constraints. The UI must not promise deletion from external websites or provider
@@ -80,12 +97,18 @@ systems.
 
 ## 6. Production Acceptance
 
-Production privacy gate requires:
+Production privacy gate for the exact candidate requires:
 
-1. accepted retention matrix with values, owner and rationale;
+1. reachable-data/copy inventory and accepted retention matrix with values, owner and rationale;
 2. privacy notice/acceptable-use policy appropriate to deployment;
 3. subprocessor and data-region inventory;
-4. tested export/delete/reconciliation workflow;
+4. tested revoke, correction, recovery/reconciliation and every applicable promised/legal
+   export/delete workflow;
 5. backup and escrow expiry handling;
 6. incident response and support-access runbooks;
-7. confirmation that mailbox/browser automation is authorized for intended use.
+7. confirmation that each enabled browser/provider/automation use is authorized for its intended use;
+8. proof that disabled independent capabilities cannot create data or side effects.
+
+Future lifecycle work for a genuinely disabled and unreachable capability does not block the current
+candidate. Shared stores are evaluated by semantic ownership and reachable records/copies, not by the
+fact that several contexts use one physical database or bucket.

@@ -13,16 +13,9 @@ PRODUCT.md
 -> AGENTS.md / CONTRIBUTING.md execution protocol
 ```
 
-The current implementation program is finite and sequential:
-
-```text
-E0 -> E1 -> E2 -> E3 -> E4
--> P1 -> P2 -> P3
--> V1 -> V2
--> R1 -> R2 -> R3
-```
-
-Only [ARCHITECTURE_REBASELINE_V3_PLAN.md](ARCHITECTURE_REBASELINE_V3_PLAN.md) defines those stages.
+The current implementation program is finite and sequential. Only
+[ARCHITECTURE_REBASELINE_V3_PLAN.md](ARCHITECTURE_REBASELINE_V3_PLAN.md) defines its order, stages and
+gates; navigation documents deliberately do not copy that sequence.
 Only [Issue #266](https://github.com/iamaman11/part-crm-emai-profile/issues/266) records which bounded
 transaction is live. Do not copy a moving SHA, workflow count, provider observation, readiness result or
 active-stage claim into another document.

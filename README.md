@@ -44,28 +44,13 @@ Permanent rules live in
 [architecture evolution quality contract](docs/ARCHITECTURE_EVOLUTION_QUALITY_CONTRACT.md),
 [contract policy](docs/CONTRACT_POLICY.md) and bounded owner documents linked from the index.
 
-## Ordered delivery
+## Current delivery program
 
-The accepted program is sequential:
-
-```text
-E0 documentation authority
--> E1 capability runtime mapping
--> E2 release/promotion strict JSON
--> E3 D1 strict JSON
--> E4 first verification retirement
--> P1 Client/Profile relationship
--> P2 authorized launch/Bridge
--> P3 confirmed save/reopen
--> V1 release verification convergence
--> V2 exact scenario acceptance
--> R1 exact candidate
--> R2 controlled pilot decision
--> R3 separate Production Authorization
-```
-
-Every item is a separate bounded Issue/PR and accepted-main reread. The detailed gates and exit criteria
-are owned only by the [current execution program](docs/ARCHITECTURE_REBASELINE_V3_PLAN.md).
+The complete ordered program, stage meanings and exit criteria have exactly one repository owner: the
+[current execution program](docs/ARCHITECTURE_REBASELINE_V3_PLAN.md). The sole active transaction and
+accepted-main evidence live in fresh [Issue #266](https://github.com/iamaman11/part-crm-emai-profile/issues/266).
+Every transaction uses its own bounded Issue/branch/PR and accepted-main reread; this README deliberately
+does not copy the mutable order.
 
 ## Historical material
 

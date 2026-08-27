@@ -1,20 +1,16 @@
 # opsctl Architecture Boundary
 
-**Document status:** SUBORDINATE_NORMATIVE_CONTRACT  
-**Program authority:** `docs/ARCHITECTURE_REBASELINE_V3_PLAN.md`  
-**Mandatory application requirements:** `docs/APPLICATION_ARCHITECTURE_MANDATORY_REQUIREMENTS.md`  
-**Pre-PF-1 normalization:** `docs/PRE_PF1_AUTHORITY_ESTATE_NORMALIZATION.md`  
-**Python boundary:** `docs/PYTHON_USAGE_BOUNDARY.md`  
-**PF-1 detailed specification:** `docs/PF1_CANONICAL_ARCHITECTURE_INVENTORY_CUTOVER.md`  
+**Document status:** SUBORDINATE_NORMATIVE_CONTRACT
+**Program authority:** [`ARCHITECTURE_REBASELINE_V3_PLAN.md`](ARCHITECTURE_REBASELINE_V3_PLAN.md)
 **Production authorization:** NONE
 
-This contract defines the permanent role and internal architecture boundary of standalone Rust `tools/opsctl`. It does not make `opsctl` Product Runtime, a daemon, provider client, deployment executor, hidden state store or shared application service.
+`tools/opsctl` is a standalone, project-specific Rust policy/planning/verification CLI over explicit
+local files and observations. It is not Product Runtime, a daemon, provider/GitHub client, deployment
+executor, secret resolver, browser launcher, hidden state store or shared application service.
 
-The key quality target is **not dependency count**. It is that representation and effects stop at adapters and do not leak into pure operational semantics.
+## 1. Role and effects
 
-## 1. Permanent role
-
-Allowed roles:
+Allowed semantic roles:
 
 ```text
 inspect
@@ -22,507 +18,152 @@ validate
 verify
 plan
 compatibility evaluation
-lifecycle/acceptance evaluation over explicit observations
-architecture inventory compilation
-fitness evaluation
+lifecycle/evidence evaluation over explicit observations
 canonical external-contract rendering
 ```
 
-Forbidden roles:
+Current effect capability:
 
 ```text
-product runtime
-background daemon
-RPC/server endpoint
-provider mutation executor
-GitHub/Cloudflare/Microsoft/Google network client
-secret resolver
-browser/Camouhost/Camoufox launcher
-deployment executor
-hidden local database/state backend
-product application dependency
+FilesystemRead + stdout/stderr presentation
 ```
 
-Outer GitHub Actions, official provider tools or explicitly owned adapters collect external observations. `opsctl` evaluates explicit bytes/files/stdin artifacts locally.
+Release finalization renders its result to stdout; an outer caller owns any artifact publication.
+Current commands have no network, provider, database/deployment/customer-state mutation, secret
+readback, system-clock, process execution or Production authorization authority.
 
-## 2. Required internal shape
+GitHub Actions/Environments own orchestration/approval. Official provider tools or explicitly owned
+outer adapters collect observations and perform an authorized mutation. `opsctl` evaluates only the
+explicit bytes it receives before/after that effect.
+
+## 2. Internal direction
 
 ```text
-CLI / composition root
-        ↓
-input adapters
-        ↓
-versioned external DTO decode
-        ↓
-typed semantic inputs
-        ↓
-PURE CORE
-        ↓
-typed semantic result
-        ↓
-output DTO
-        ↓
-canonical JSON / human rendering
+CLI / composition
+-> filesystem and strict JSON adapters
+-> closed versioned external DTOs
+-> typed semantic inputs
+-> PURE CORE
+-> typed results
+-> canonical JSON / human output adapters
 ```
 
-Conceptually:
+The internal `tools/opsctl/core` package exists where compile-time separation materially protects
+shared release/policy semantics. Not every module must move into it.
+
+Hard boundaries:
 
 ```text
-tools/opsctl
-├── cli + composition
-├── adapters
-│   ├── filesystem
-│   ├── JSON decode/encode
-│   ├── canonical JSON
-│   └── local artifact hashing
-├── contracts
-│   └── versioned external DTOs + conversion
-└── core
-    ├── architecture
-    ├── d1
-    ├── release
-    ├── promotion
-    ├── evidence
-    ├── fitness
-    └── typed semantic models
+serde_json::Value crossing adapter -> pure core = 0
+filesystem/process/network/provider types in pure semantic APIs = 0
+hidden clock/env/cwd/randomness in pure policy = 0
+Product Runtime -> opsctl or opsctl-core = 0
+opsctl -> Python/Node/Wrangler/git/gh = 0
 ```
 
-Physical paths may differ. Dependency direction may not.
+Filesystem paths are shell inputs, not semantic identities. Pure policy receives typed normalized
+identities/observations. Core reason codes and decisions are typed; rendering belongs to adapters.
 
-## 3. Internal `opsctl-core` boundary
-
-F2 introduced the small internal `tools/opsctl/core` (`opsctl-core`) boundary because Release Set semantics already required a real compile-time separation. This is accepted architecture, not a requirement to move every `opsctl` module into that crate immediately.
-
-Permanent direction:
-
-```text
-opsctl shell/adapters -> opsctl-core where a real pure semantic owner belongs there
-opsctl-core -X-> filesystem/network/process/provider/serde_json::Value
-Product Runtime -X-> opsctl-core
-```
-
-New modules move into or remain outside `opsctl-core` according to the effect/representation boundary, not for layering aesthetics. The core crate may use narrowly reviewed pure dependencies where needed. Zero dependencies is not a goal; zero hidden effects/representation leakage is.
-
-## 4. Hard pure-core invariant
-
-The following must not enter or appear in pure semantic APIs:
-
-```text
-serde_json::Value
-serde_json::Map
-std::fs
-std::process
-std::net
-std::env
-Path / PathBuf as semantic identity
-provider SDK/client types
-GitHub API response types
-Wrangler raw response types
-HTTP framework types
-```
-
-Canonical budget:
-
-```text
-serde_json::Value crossing adapter -> pure-core boundary = 0
-```
-
-Correct:
-
-```rust
-fn evaluate(
-    observation: D1LedgerObservation,
-    policy: &D1Policy,
-) -> Decision
-```
-
-Incorrect:
-
-```rust
-fn evaluate(value: serde_json::Value) -> serde_json::Value
-```
-
-Filesystem paths belong to the shell/adapter layer. A semantic repository-relative identity is represented by a typed normalized value, not an OS handle.
-
-Clock/time-sensitive policy receives an explicit typed observation; pure policy does not call `SystemTime::now()`. The same applies to randomness, current working directory, locale, timezone and environment.
-
-## 5. JSON and DTO boundary
-
-JSON is legitimate at external boundaries; it is not the internal semantic object graph.
-
-Required flow:
+## 3. Input, JSON and digest discipline
 
 ```text
 bounded UTF-8 bytes
-   ↓
-strict JSON decoder
-   ↓
-versioned DTO
-   ↓
-validation + conversion
-   ↓
-typed core model
+-> duplicate-member/depth/size admission
+-> closed versioned DTO
+-> validation + typed conversion
+-> semantic decision
 ```
 
-For release/security/evidence-critical JSON:
+Unknown fields fail closed unless the external contract defines an extension point. Breaking meaning
+bumps schema version. `serde_json::Value` may exist only in strict decoding/canonicalization adapters.
 
-- duplicate object member names fail closed before canonicalization;
-- unknown fields fail closed unless the contract defines an extension point;
-- input byte size and parser depth/complexity are bounded;
-- breaking shape/meaning changes bump schema version.
+Semantic JSON identity uses canonical semantic bytes + reviewed SHA-256. Exact artifact identity uses
+exact file bytes + SHA-256. Pretty output, semantic identity and artifact identity are separate scopes.
 
-`serde_json::Value` may be used inside narrowly scoped decode/canonicalization adapters. It must not be retained in semantic structs, stored as semantic identity payload, passed to compatibility/decision logic, or returned by core APIs.
+Every JSON artifact is exactly one of: versioned external contract/manifest, observation/evidence,
+generated output projection, or isolated historical input with a named current consumer. A generic
+authority bag, tracked projection used as semantic input or hidden `state.json` is forbidden.
 
-Using `serde` derives on external DTOs is allowed. Core models should remain representation-independent where that materially reduces coupling.
+## 4. Current command ownership
 
-Every JSON input/output used by `opsctl` must have exactly one declared role:
+The executable grammar is `tools/opsctl/src/help.txt`; `tools/opsctl/README.md` is navigation. Current
+families are:
+
+- `doctor` — minimal local repository structure only;
+- `status` — lifecycle projection from an explicit acceptance observation;
+- `credentials` — canonical lifecycle/rotation metadata projection;
+- `hosted-evidence` — typed verification/sealing of secret-free observations/artifacts;
+- `d1 repository/status/plan/compatibility/verify` — D1 policy over saved provider observations and
+  repository contracts, never migration apply;
+- `release finalize/inspect/verify/compatibility` — immutable Release Set construction/inspection,
+  exact-byte verification and policy;
+- `promotion plan/preflight/verify` — deterministic policy over saved target snapshots/evidence, never
+  deploy/promotion/rollback execution.
+
+Unknown/unowned commands fail in parsing; placeholder namespaces are forbidden. Command composition may
+sequence adapter reads and one typed policy call but cannot absorb a bounded owner's semantics.
+
+## 5. Observation and mutation boundary
 
 ```text
-versioned external DTO/manifest -> strict adapter -> typed core input
-observation/evidence            -> strict adapter -> typed policy input
-generated projection/report     <- typed result <- output adapter
-historical evidence             -> isolated verifier only when a named consumer exists
+outer protected workflow
+-> exact source/artifact/provider/environment observation
+-> strict DTO
+-> opsctl plan/preflight/verify
+-> explicit allowed/blocked decision
+-> separately authorized official executor
+-> post-state observation
+-> opsctl verification
 ```
 
-Forbidden roles are `JSON as internal semantic object graph`, `JSON as repository identity`, `tracked projection as input to rebuild its own semantics`, and `generic authority bag`. A local file being easy to parse does not make it a canonical authority.
+An `allowed` decision is not a provider mutation or human risk acceptance. `opsctl` never turns
+`expected_current` into an inferred value, observes live state itself or exposes credentials before the
+owning preflight permits the outer workflow to continue.
 
-## 6. Current audited convergence examples
+## 6. Repository discovery and projections
 
-### D1 — reference direction
+Repository-root discovery uses minimal durable source markers, not generated projections or retired
+AR/Python/Node sentinels. `doctor` follows its dedicated contract.
 
-Current D1 already demonstrates the desired split substantially:
+A report/inventory command survives only while a named current consumer needs its distinct output. A
+generator, drift gate, self-test or docs caller that exists only for a predecessor belongs to the same
+retirement set. Deletion requires zero current callers and zero unique current invariants; do not create
+a successor registry merely to preserve shape.
 
-```text
-d1/authority.rs
-  filesystem + external decode
-        ↓
-typed ReleaseSchemaContract / Preconditions / ledger observation
-        ↓
-d1/plan.rs::evaluate(...)
-  typed deterministic policy
-```
+## 7. Shared semantics
 
-Remaining command-shell `Path` fields are adapter/orchestration inputs and must not be mistaken for semantic model types.
-
-### Release — accepted F1/F2 reference direction
-
-F1/F2 moved the current Release Set writer/model to a typed v3 pure-core boundary. Generic JSON/canonical bytes remain adapter concerns; current semantic release shape is not owned by `serde_json::Value`.
-
-Historical v2 decoding is isolated from the current writer/model and is legitimate only while a concrete current historical consumer/durable obligation is proved. The bounded pre-N2 cleanup gate in `docs/PRE_PF1_AUTHORITY_ESTATE_NORMALIZATION.md` decides whether that executable compatibility remains necessary; historical evidence by itself is not sufficient.
-
-### Promotion — convergence debt
-
-Current DeploymentSnapshot loading still combines filesystem read, generic JSON parse and typed semantic construction in touched paths. Promotion code should converge, when its owning work touches it, to:
-
-```text
-filesystem adapter
--> DeploymentSnapshotVnDto
--> typed DeploymentObservation
--> pure promotion/preflight policy
-```
-
-This is touch-to-converge debt, not authorization for an unrelated repository-wide rewrite.
-
-### Repository root discovery — convergence debt
-
-N2 removed AR-6 Python-estate sentinels from repository-root discovery, and N4 removed the AR-8 operator predecessor from current operator semantics/diagnostics. Repository discovery still depends on the retained tracked inventory/generator while its non-N4 lifecycle compatibility consumer exists. Its later owning cutover must resolve that dependency so repository identity uses minimal durable workspace markers rather than generated projections.
-
-## 7. Command pipeline
-
-Every non-trivial command has five conceptual stages:
-
-```text
-1. parse CLI
-2. acquire allowed local inputs/effects
-3. decode/validate into typed semantic inputs
-4. call pure semantic operation
-5. render typed result
-```
-
-Command composition may orchestrate those stages. It is not the semantic owner of rules belonging to a core module.
-
-Pure-core tests receive only in-memory typed inputs and deterministic expected outputs. They do not require a fixture repository, filesystem, environment, subprocess or network.
-
-## 8. Explicit effect capability set
-
-Default allowed `opsctl` shell effects:
-
-```text
-FilesystemRead
-Stdout/Stderr presentation
-GeneratedProjectionWrite  # only explicitly bounded ownership such as PF-1 inventory
-```
-
-Forbidden without a future accepted architecture change:
-
-```text
-ProcessExecution
-NetworkAccess
-ProviderRead
-ProviderWrite
-DatabaseWrite
-DeploymentMutation
-SecretResolve
-RuntimeExecution
-```
-
-`GeneratedProjectionWrite` is not general filesystem mutation. PF-1 may own a bounded write only when pre-PF-1 discovery proves a durable consumer of exact tracked bytes; otherwise the write command and tracked projection retire. Workflow infrastructure owns hosted artifact publication/attestation.
-
-Provider/GitHub observations are gathered externally and passed in as versioned data.
-
-## 9. Python relationship
-
-`opsctl` must not call Python for policy, validation, observation or mutation.
-
-Forbidden:
-
-```text
-opsctl -> Python validator
-opsctl -> Python generator -> semantic decision
-opsctl -> Python provider observer
-opsctl -> Python mutation executor
-```
-
-This does not forbid developer helpers from calling `opsctl`, and it does not forbid Python outer observers executed by workflows before `opsctl` is invoked.
-
-The permanent direction is one-way:
-
-```text
-workflow / developer shell / Python observer
-        ↓
-explicit versioned data or CLI call
-        ↓
-opsctl
-```
-
-Never `opsctl -> Python` for semantic work.
-
-## 10. Typed identities and results
-
-Critical semantic strings should converge to newtypes/enums when this prevents real ambiguity, including as applicable:
-
-```text
-ReleaseSetId
-GitCommitSha
-Sha256Digest
-SchemaRevision
-MigrationRevision
-CapabilityProfileId
-RepositoryRelativePath
-EvidenceKind
-EvidenceSchemaVersion
-Environment
-ReasonCode
-```
-
-Core decisions/reason codes are typed; output adapters render string codes.
-
-Command-shell request types containing `Path`/CLI data are explicitly adapters/orchestration, not pure semantic models.
-
-## 11. Error taxonomy and machine output
-
-Keep these layers distinct:
-
-```text
-InputIoError
-DecodeError
-ContractValidationError
-SemanticPolicyError
-PolicyDecision::Blocked/Unknown/Incompatible
-OutputEncodingError
-```
-
-A blocked/unknown/incompatible semantic result is not collapsed into an input/I/O error.
-
-Pure core returns typed results. JSON strings are output-adapter products. Machine output contracts are explicitly versioned and stable by command contract.
-
-## 12. Canonical JSON and digest discipline
-
-F2 established the current canonical external JSON/digest foundation in the `opsctl` adapter layer:
-
-- pinned reviewed SHA-256 implementation (`sha2`);
-- RFC 8785/JCS canonicalization through a pinned canonicalizer;
-- duplicate-member rejection before canonicalization for strict inputs;
-- bounded JSON byte/depth parsing;
-- canonical bytes separated from pretty rendering;
-- independent digest/canonicalization vectors/tests.
-
-This layer is an **adapter/contract foundation**, not a semantic business/release authority. `serde_json::Value` remains confined to strict decoding/canonicalization adapters and does not cross into pure semantic models.
-
-Two digest scopes remain explicit:
-
-```text
-semantic JSON identity -> canonical semantic bytes -> SHA-256
-exact artifact identity -> exact file bytes -> SHA-256
-```
-
-Never hash Protobuf serialized bytes as a supposed universal canonical identity.
-
-Before PF-2 attestable evidence depends on additional contract kinds, those kinds must reuse this foundation and add their own closed/versioned DTO validation rather than invent another canonicalization/hash mechanism.
-
-## 13. Release Set version discipline
-
-A breaking external-contract change never retains the same schema version.
-
-The accepted current Release Set writer/model is v3 for the `d1_repository_identity_sha256` semantics. Historical v2 assets are immutable evidence/possible compatibility inputs and are never rewritten into v3.
-
-Accepted #454 removed `architecture/release-set-v2.json` from current authority, isolated minimum historical v2 source/artifact integrity verification from current writer semantics and made promotion/rollback targets v3-only. Historical verification must not expand into a second current model or v2-to-v3 semantic coercion path.
-
-## 14. Shared semantic crate extraction test
-
-Default is no Product Runtime / `opsctl` semantic sharing.
-
-A neutral shared semantic crate is allowed only when all are true:
-
-1. at least two real independent consumers exist;
-2. both require exactly the same invariant;
-3. without one owner a real duplicate semantic authority would exist;
-4. the crate is pure and narrow;
-5. it depends on neither consumer;
-6. it has no filesystem/network/provider/process/runtime effects;
-7. it cannot become a generic `common`/service/policy god crate.
+Default is no Product Runtime/opsctl sharing. A neutral pure crate is allowed only when at least two real
+independent consumers require exactly the same invariant and one owner prevents actual duplication. It
+depends on neither consumer and cannot become generic `common`/service/policy infrastructure.
 
 Forbidden:
 
 ```text
 Product Runtime -> opsctl
 Product Runtime <-> RPC/gRPC <-> opsctl
+opsctl provider client or deployment scheduler
+opsctl plugin/IaC framework
+opsctl persistent state backend
 ```
 
-A genuine independent process boundary may separately justify a versioned wire protocol such as Protobuf/`prost`.
+## 8. Output and error contract
 
-## 15. Inventory boundary
+Machine output is versioned and deterministic. Keep I/O, decode, contract validation, semantic
+`BLOCKED/UNKNOWN/INCOMPATIBLE` and output encoding failures distinct. Stdout is machine output; stderr
+is diagnostics. Never render secrets, raw provider payloads, uncontrolled PII or absolute paths unless
+an explicit human diagnostic contract permits them.
 
-PF-1 inventory compilation receives closed bounded projections, not raw authority documents:
+## 9. Change acceptance
 
-```text
-ValidatedInventoryInputs {
-  lifecycle,
-  d1,
-  runtime_topology,
-  application,
-  operator,
-  governance,
-  runtime,
-  credentials,
-  release,
-}
-```
+A new/changed command proves:
 
-Each bounded owner validates its own semantics and exports only the inventory facts needed by the compiler.
+1. named current consumer, objective invariant and natural owner;
+2. exact allowed effects and explicit forbidden effects;
+3. strict DTO/typed-core boundary and version behavior;
+4. deterministic positive and negative/fail-closed tests;
+5. no Product Runtime dependency, process/network/provider/secret/mutation authority;
+6. predecessor caller cutover/deletion or evidenced retirement condition;
+7. output schema/error compatibility and cross-platform behavior where applicable;
+8. checker lifecycle under `ARCHITECTURE_EVOLUTION_QUALITY_CONTRACT.md`.
 
-Forbidden:
-
-```text
-GlobalRepositoryAuthorityLoader
-GlobalAuthoritySet
-serde_json::Value authority bag
-inventory.json as semantic input
-inventory compiler reimplementing D1/release/runtime policy
-manual AR-qualified application ownership registry as compiler input
-```
-
-`opsctl inventory` is not entitled to survive merely because it currently prints `architecture/inventory.json`. Before PF-1 it must receive one explicit disposition:
-
-```text
-distinct current user/automation need for an on-demand view
--> compile from bounded typed natural-owner projections and render to stdout
-
-no distinct consumer/value
--> delete the command
-```
-
-It must not read a tracked projection and present those bytes as independent semantic truth. `--write`, freshness/drift checks and `doctor` requirements disappear when no durable exact-byte consumer justifies the tracked file.
-
-## 16. PF-2 evidence boundary
-
-PF-2 follows the same model:
-
-```text
-raw hosted/provider observation bytes
-        ↓
-external DTO decode
-        ↓
-typed normalized observation
-        ↓
-pure EvidencePolicy
-        ↓
-typed EvidenceDecision / envelope data
-        ↓
-canonical JSON adapter
-        ↓
-SHA-256 / hosted artifact attestation
-```
-
-GitHub/provider reads and clocks remain outer effects. Freshness/replay decisions receive explicit typed observations.
-
-## 17. PF-3 enforcement
-
-PF-3 must not make a hand-maintained JSON catalog the semantic fitness owner.
-
-Target:
-
-```text
-typed Rust FitnessRuleRegistry
-        ↓
-fitness evaluator / enforcement mapping
-        ↓
-optional generated machine projection/report
-```
-
-Minimum zero budgets include:
-
-```text
-serde_json_value_crossing_into_pure_core
-filesystem_import_in_pure_core
-process_execution_in_opsctl
-network_access_in_opsctl
-provider_sdk_dependency_in_opsctl
-runtime_dependency_on_opsctl
-opsctl_runtime_service_endpoint
-generated_projection_used_as_semantic_input
-global_authority_bag
-breaking_external_contract_change_without_version_bump
-unversioned_durable_external_contract
-duplicate_json_member_accepted_in_attestable_contract
-manual_architecture_semantic_json_authority_without_explicit_exception
-manual_AR_qualified_application_ownership_registry_current_authority
-compatibility_shim_without_proved_consumer_or_durable_obligation
-opsctl_python_child_process
-```
-
-PF-3 also enforces one semantic owner per fact and one mutation executor per owned mutation operation. Accepted PF-3 is the provisional fitness baseline described by `docs/PF3_ARCHITECTURE_FITNESS_BASELINE.md`; final architecture-form freeze follows accepted AR-15 rehearsal.
-
-## 18. Definition of Done
-
-Before PF-1 acceptance, the exact candidate must prove:
-
-```text
-serde_json::Value in pure-core semantic APIs = 0
-filesystem/process/network/provider effects in pure core = 0
-product runtime -> opsctl dependency = 0
-opsctl provider/network/process authority = 0
-opsctl -> Python semantic child process = 0
-pure-policy tests requiring filesystem/network/process = 0
-external durable contracts explicitly versioned = true
-breaking contract changes version-bumped = true
-canonical digest layer has independent vectors = true
-security/release/evidence duplicate-key ambiguity rejected = true
-inventory compiler consumes bounded typed projections = true
-manual AR-qualified application ownership registry current authority = 0
-operator command/effect semantic authority is Rust-owned = true
-legacy Node/Python lifecycle/inventory predecessors retired = true
-opsctl inventory = typed on-demand render with named consumer OR deleted
-tracked JSON projection without durable exact-byte consumer = 0
-```
-
-Developer mental model:
-
-```text
-Adapters read/observe/encode.
-Contracts transport/version data.
-Core decides.
-Composition wires.
-Workflows/official tools perform hosted/provider effects.
-Product Runtime never depends on opsctl.
-```
+`opsctl` may calculate policy and evidence; only the exact CAP-08 R3 decision can authorize Production.

@@ -2,15 +2,14 @@
 
 **Status:** historical accepted delivery record; not current execution order  
 **Date:** 2026-08-08  
-**Current execution plan:** [`DEVELOPMENT_PLAN.md`](./DEVELOPMENT_PLAN.md)
+**Current execution plan:** [`ARCHITECTURE_REBASELINE_V3_PLAN.md`](./ARCHITECTURE_REBASELINE_V3_PLAN.md)
 
 This document preserves the original Repository Step model and its acceptance discipline.
 It is useful for understanding how the standalone foundation was delivered, but it no
 longer defines what to implement next.
 
-For all post-composition work, `DEVELOPMENT_PLAN.md` is the only normative execution order.
-If this historical roadmap conflicts with that plan on sequencing or future scope, the
-current development plan wins.
+For all current work, `ARCHITECTURE_REBASELINE_V3_PLAN.md` is the only repository execution-order
+owner and fresh Issue #266 selects the sole live transaction. `DEVELOPMENT_PLAN.md` is navigation.
 
 `IMPLEMENTATION_PLAN.md` and the original lifecycle plans remain design/history inputs;
 they do not override the current post-composition plan.
@@ -91,8 +90,8 @@ rollback, orphan reconciliation and key/data recovery direction.
 Certification policy/matrix, device-scoped unwrap/revoke, multi-device direction and signed
 Bridge/runtime update/rollback model.
 
-Exact implementation/evidence level for any capability is read from
-`DEVELOPER_CAPABILITY_MATRIX.md`, not inferred from this historical summary.
+The dated `DEVELOPER_CAPABILITY_MATRIX.md` is also historical. Current implementation/evidence is read
+from fresh protected source, natural-owner tests and exact-candidate evidence, not either snapshot.
 
 ## 3. Superseded Future Step Sketches
 
@@ -100,17 +99,9 @@ The old roadmap also contained **Step 11 — Mailbox Operations** and **Step 12 
 Operations And CRM Adapter**. Those steps were planning sketches and are **superseded as an
 execution sequence**.
 
-Their useful requirements were not discarded; they were decomposed and reordered in the
-current `DEVELOPMENT_PLAN.md`:
-
-- mailbox/read-model/provider/device work -> current Phases 3–5;
-- event/outbox/DLQ foundations -> Phase 1;
-- realtime -> Phase 6;
-- complete UI/E2E -> Phases 7–8;
-- CRM boundary/cutover -> Phase 9;
-- production/external evidence -> Phase 10.
-
-Do not open a new implementation slice from the old Step 11/12 wording.
+Their useful requirements were not discarded; accepted current obligations live in their natural
+product/architecture/contracts and future capabilities require a fresh product decision. Do not open a
+new implementation slice from the old Step 11/12 wording.
 
 ## 4. External Evidence Gates
 
@@ -126,11 +117,11 @@ alone. They include, as applicable:
 - repository/product license decisions;
 - real provider/runtime/certification evidence.
 
-The authoritative current requirements for production promotion are in Phase 10 of
-`DEVELOPMENT_PLAN.md` and the repository's external-evidence governance.
+The authoritative current requirements for production admission are in the R-stages of the binding
+program and the repository's exact-candidate/external-evidence owners.
 
 ## 5. Historical Status Rule
 
 A historical step was accepted only after merge and green permanent workflows. A local or
 synthetic smoke test never promoted unrelated external claims. The same evidence discipline
-continues under the current phased plan.
+continues under the current binding program.
