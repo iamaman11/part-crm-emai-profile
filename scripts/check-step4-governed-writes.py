@@ -78,8 +78,11 @@ REQUIRED_PROFILE_APPLICATION_TOKENS = (
     "ProfileReplayDecision::Conflict",
 )
 REQUIRED_PROFILE_ASSIGNMENT_APPLICATION_TOKENS = (
-    'const PROFILE_ASSIGN_COMMAND: &str = "profile.assign_client";', "decide_assignment_replay",
-    "assign_profile(actor, &write)", "ProfileAssignmentPortErrorClass::Conflict",
+    'const PROFILE_ASSIGN_COMMAND: &str = "profile.assign_client";',
+    'const PROFILE_DETACH_COMMAND: &str = "profile.detach_client";',
+    "decide_assignment_replay", "load_profile_assignment_context", "load_profile_detachment_context",
+    "port.assign_profile(actor, &write)", "port.detach_profile(actor, &write)",
+    "ProfileAssignmentPortErrorClass::Conflict",
 )
 REQUIRED_PROFILE_GRANT_APPLICATION_TOKENS = (
     'const PROFILE_GRANT_COMMAND: &str = "profile.grant";',
@@ -88,16 +91,18 @@ REQUIRED_PROFILE_GRANT_APPLICATION_TOKENS = (
     "port.revoke_profile_grant(actor, &write)", "ProfileGrantPortErrorClass::Conflict",
 )
 REQUIRED_PROFILE_ADAPTER_TOKENS = (
-    "CreateProfileMutation", "AssignProfileMutation", "ProfileGrantMutation", "MutationEnvelope",
+    "CreateProfileMutation", "ProfileAssignmentMutation", "ProfileGrantMutation", "MutationEnvelope",
     "ProfileCreateGrantSpec", "map_profile_grant_role(write.creator_grant_role())",
     "write.creator_grant_reason()", ".create_profile(", ".assign_profile(actor, mutation)",
-    ".grant_profile(actor, mutation)", ".revoke_profile_grant(actor, mutation)",
+    ".detach_profile(actor, mutation)", ".grant_profile(actor, mutation)",
+    ".revoke_profile_grant(actor, mutation)",
 )
 REQUIRED_GOVERNED_TOKENS = (
     "owner_transfer_commands", "membership_status_commands", "invitation_create_commands",
     "profile_create_commands", "PROFILE_CREATOR_GRANT", "creator_grant_role.database_value()",
-    "creator_grant_reason", "profile_assignment_commands", "profile_grant_commands",
-    "client_grant_commands", "self.database.batch(statements).await",
+    "creator_grant_reason", "profile_assignment_commands", '"profile.assign_client"',
+    '"profile.detach_client"', '"profile.client_assigned.v1"', '"profile.client_detached.v1"',
+    "profile_grant_commands", "client_grant_commands", "self.database.batch(statements).await",
 )
 REQUIRED_ACCEPTANCE_TOKENS = (
     "invitation_acceptances", "INSERT INTO memberships", "INSERT INTO idempotency_records",
