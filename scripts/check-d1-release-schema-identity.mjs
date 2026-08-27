@@ -156,15 +156,23 @@ function expectSqlFailure(label, operation) {
   fail(`${label} negative D1 fixture unexpectedly passed`);
 }
 
+function assertPayloadFingerprintShape(database, label) {
+  const columns = database.prepare('PRAGMA table_info(idempotency_records)').all();
+  const columnNames = columns.map((column) => String(column.name));
+  if (columnNames.includes('request_digest')) fail(`${label} retained request_digest`);
+  const fingerprintColumn = columns.find((column) => column.name === 'payload_fingerprint');
+  if (!fingerprintColumn) fail(`${label} omitted payload_fingerprint`);
+  if (Number(fingerprintColumn.notnull) !== 0) {
+    fail(`${label} payload_fingerprint must permit migrated NULL tombstones`);
+  }
+}
+
 async function provePas2PayloadFingerprintCutover() {
   const names = (await readdir(MIGRATIONS_DIR))
     .filter((name) => /^\d{4}_[a-z0-9_]+\.sql$/u.test(name))
     .sort();
   const targetIndex = names.indexOf(PAS2_FINGERPRINT_MIGRATION);
   if (targetIndex < 0) fail(`missing ${PAS2_FINGERPRINT_MIGRATION}`);
-  if (targetIndex !== names.length - 1) {
-    fail(`${PAS2_FINGERPRINT_MIGRATION} must remain the current catalog migration while TC-2 is open`);
-  }
 
   const database = new DatabaseSync(':memory:');
   try {
@@ -209,15 +217,7 @@ async function provePas2PayloadFingerprintCutover() {
     `);
 
     database.exec(await readFile(path.join(MIGRATIONS_DIR, PAS2_FINGERPRINT_MIGRATION), 'utf8'));
-
-    const columns = database.prepare('PRAGMA table_info(idempotency_records)').all();
-    const columnNames = columns.map((column) => String(column.name));
-    if (columnNames.includes('request_digest')) fail('PAS-2 migration retained request_digest');
-    const fingerprintColumn = columns.find((column) => column.name === 'payload_fingerprint');
-    if (!fingerprintColumn) fail('PAS-2 migration omitted payload_fingerprint');
-    if (Number(fingerprintColumn.notnull) !== 0) {
-      fail('PAS-2 payload_fingerprint must permit migrated NULL tombstones');
-    }
+    assertPayloadFingerprintShape(database, 'PAS-2 migration');
 
     const legacy = database.prepare(`
       SELECT command_name, payload_fingerprint, result_code, result_reference,
@@ -298,6 +298,23 @@ async function provePas2PayloadFingerprintCutover() {
         120,
       );
     });
+
+    for (const name of names.slice(targetIndex + 1)) {
+      database.exec(await readFile(path.join(MIGRATIONS_DIR, name), 'utf8'));
+    }
+    assertPayloadFingerprintShape(database, 'post-PAS-2 migration history');
+
+    const durableLegacy = database.prepare(`
+      SELECT command_name, payload_fingerprint, result_code, result_reference,
+             created_at_ms, expires_at_ms
+      FROM idempotency_records
+      WHERE tenant_id = 'tenant_01JPAS2'
+        AND actor_id = 'actor_01JPAS2'
+        AND idempotency_key = 'idem_01JPAS2'
+    `).get();
+    if (!durableLegacy || durableLegacy.payload_fingerprint !== null) {
+      fail('later catalog migrations changed the PAS-2 legacy tombstone semantics');
+    }
 
     const violations = database.prepare('PRAGMA foreign_key_check').all();
     if (violations.length > 0) fail(`PAS-2 migration foreign_key_check failed: ${JSON.stringify(violations)}`);
