@@ -1,7 +1,7 @@
 use crate::d1_command_identity::command_journal_id;
 use crate::d1_identity_acl::{
-    AssignProfileMutation, ClientGrantMutation, CreateInvitationMutation, CreateProfileMutation,
-    MembershipStatusMutation, MutationEnvelope, OwnerTransferMutation, ProfileGrantMutation,
+    ClientGrantMutation, CreateInvitationMutation, CreateProfileMutation, MembershipStatusMutation,
+    MutationEnvelope, OwnerTransferMutation, ProfileAssignmentMutation, ProfileGrantMutation,
     ProfileGrantValue,
 };
 use profile_platform_primitives::{ActorContext, AggregateVersion};
@@ -44,8 +44,8 @@ INSERT INTO profile_grants (
 const PROFILE_ASSIGNMENT_COMMAND: &str = r#"
 INSERT INTO profile_assignment_commands (
     tenant_id, command_id, command_actor_id, assignment_id,
-    profile_id, client_id, expected_profile_version, reason, executed_at_ms
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    profile_id, client_id, operation, expected_profile_version, reason, executed_at_ms
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 "#;
 
 const PROFILE_GRANT_COMMAND: &str = r#"
@@ -384,8 +384,42 @@ impl D1GovernedCommandRepository {
     pub async fn assign_profile(
         &self,
         actor: &ActorContext,
-        mutation: AssignProfileMutation<'_>,
+        mutation: ProfileAssignmentMutation<'_>,
     ) -> Result<Vec<D1Result>> {
+        self.profile_relationship(actor, mutation, "ASSIGN").await
+    }
+
+    pub async fn detach_profile(
+        &self,
+        actor: &ActorContext,
+        mutation: ProfileAssignmentMutation<'_>,
+    ) -> Result<Vec<D1Result>> {
+        self.profile_relationship(actor, mutation, "DETACH").await
+    }
+
+    async fn profile_relationship(
+        &self,
+        actor: &ActorContext,
+        mutation: ProfileAssignmentMutation<'_>,
+        operation: &str,
+    ) -> Result<Vec<D1Result>> {
+        let (action, result_code, event_type) = match operation {
+            "ASSIGN" => (
+                "profile.assign_client",
+                "assigned",
+                "profile.client_assigned.v1",
+            ),
+            "DETACH" => (
+                "profile.detach_client",
+                "detached",
+                "profile.client_detached.v1",
+            ),
+            _ => {
+                return Err(Error::RustError(
+                    "unsupported profile relationship operation".to_owned(),
+                ));
+            }
+        };
         let tenant_id = actor.tenant_scope().tenant_id().as_str();
         let actor_id = actor.actor_id().as_str();
         let command_id = command_journal_id(
@@ -408,6 +442,7 @@ impl D1GovernedCommandRepository {
                 mutation.assignment_id.as_str(),
                 resource_id,
                 mutation.client_id.as_str(),
+                operation,
                 expected_version,
                 mutation.reason,
                 now
@@ -416,8 +451,8 @@ impl D1GovernedCommandRepository {
                 &self.database,
                 tenant_id,
                 actor_id,
-                "profile.assign_client",
-                "assigned",
+                action,
+                result_code,
                 mutation.assignment_id.as_str(),
                 &mutation.envelope,
                 now,
@@ -428,10 +463,10 @@ impl D1GovernedCommandRepository {
                 tenant_id,
                 actor.correlation_id().as_str(),
                 actor_id,
-                "profile.assign_client",
+                action,
                 "profile",
                 resource_id,
-                "assigned",
+                result_code,
                 &mutation.envelope,
                 now,
             )?,
@@ -441,7 +476,7 @@ impl D1GovernedCommandRepository {
                 "profile",
                 resource_id,
                 aggregate_version,
-                "profile.client_assigned.v1",
+                event_type,
                 &mutation.envelope,
                 now,
             )?,
