@@ -47,9 +47,7 @@ fn d1_release_manifest_rejects_duplicate_member_before_typed_interpretation() {
             root: Some(repo_root()),
             action: D1Action::Plan,
             component: "resolver".to_owned(),
-            ledger_json: PathBuf::from(
-                "tests/d1-evolution/valid-behind-resolver-ledger.json",
-            ),
+            ledger_json: PathBuf::from("tests/d1-evolution/valid-behind-resolver-ledger.json"),
             release_manifest: Some(fixture("e3-d1-release-duplicate-member.json")),
             current_manifest: None,
             known_good_manifest: None,
@@ -66,9 +64,7 @@ fn d1_preconditions_reject_duplicate_member_before_typed_interpretation() {
             root: Some(repo_root()),
             action: D1Action::Plan,
             component: "resolver".to_owned(),
-            ledger_json: PathBuf::from(
-                "tests/d1-evolution/valid-behind-resolver-ledger.json",
-            ),
+            ledger_json: PathBuf::from("tests/d1-evolution/valid-behind-resolver-ledger.json"),
             release_manifest: Some(PathBuf::from(
                 "tests/d1-evolution/resolver-release-compatible.json",
             )),
@@ -93,7 +89,8 @@ fn d1_ledger_preserves_provider_owned_extra_field_tolerance_after_strict_parse()
         preconditions_json: None,
     })
     .expect("provider-owned extra fields must remain tolerated after strict outer admission");
-    let value: Value = serde_json::from_str(&output).expect("D1 status output must remain valid JSON");
+    let value: Value =
+        serde_json::from_str(&output).expect("D1 status output must remain valid JSON");
     assert_eq!(value["ledger_state"], "EXACT");
     assert_eq!(value["decision"], "SAFE");
     assert_eq!(value["allowed"], true);
