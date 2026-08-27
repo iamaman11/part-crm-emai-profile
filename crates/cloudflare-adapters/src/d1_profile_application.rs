@@ -355,8 +355,8 @@ fn map_current_assignment(
                 required(client_status)?,
                 required(client_version)?,
             )?;
-            let assigned_by = ActorId::parse(required(assigned_by_actor_id)?)
-                .map_err(|_| integrity_error())?;
+            let assigned_by =
+                ActorId::parse(required(assigned_by_actor_id)?).map_err(|_| integrity_error())?;
             let assigned_at = unix_millis(required(assigned_at_ms)?)?;
             Ok(Some(CurrentProfileAssignmentSnapshot::new(
                 AssignmentId::parse(assignment_id).map_err(|_| integrity_error())?,
