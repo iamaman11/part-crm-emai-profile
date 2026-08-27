@@ -475,6 +475,10 @@ authorization state mutable и внешний по отношению к digest
 - Bridge command;
 - Camoufox launch.
 
+Health/liveness, which must remain observable when Capability Profile configuration is absent or
+invalid and which performs no product business side effect, is explicitly outside the governed
+`RuntimeSurface` catalog. Its availability and response contract remain owned by the health ingress.
+
 Policy crate владеет:
 
 ```text

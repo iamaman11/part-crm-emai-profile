@@ -36,7 +36,7 @@ pub use profile_coordinator::ProfileCoordinator;
 pub use realtime_notifications::NotificationHub;
 
 use access_session::session_response;
-use capability_gate::{ActivationUnit, RuntimeCapabilityContext};
+use capability_gate::{ActivationUnit, RuntimeCapabilityContext, RuntimeSurface};
 use cloudflare_adapters::control_plane_queue::ControlPlaneQueueMessage;
 use cloudflare_adapters::d1_catalog::D1CatalogRepository;
 use cloudflare_adapters::d1_idempotency::D1IdempotencyRepository;
@@ -195,20 +195,17 @@ pub async fn control_plane_queue(
 ) -> Result<()> {
     let capability_context = RuntimeCapabilityContext::from_env(&env)?;
     for message in message_batch.messages()? {
-        match message.body().clone() {
+        let body = message.body().clone();
+        if !capability_context.surface_enabled(queue_surface(&body)) {
+            message.retry();
+            continue;
+        }
+        match body {
             ControlPlaneQueueMessage::IntegrationEvent(event) => {
-                if capability_context.unit_enabled(ActivationUnit::Notifications) {
-                    integration_events::consume_one(&message, event, &env).await?;
-                } else {
-                    message.retry();
-                }
+                integration_events::consume_one(&message, event, &env).await?;
             }
             ControlPlaneQueueMessage::MailboxJob(job) => {
-                if capability_context.unit_enabled(ActivationUnit::MailboxJobs) {
-                    mailbox_scheduling::consume_one(&message, job, &env).await?;
-                } else {
-                    message.retry();
-                }
+                mailbox_scheduling::consume_one(&message, job, &env).await?;
             }
         }
     }
@@ -224,15 +221,22 @@ pub async fn control_plane_schedule(_event: ScheduledEvent, env: Env, _context: 
             return;
         }
     };
-    if capability_context.unit_enabled(ActivationUnit::Notifications)
+    if capability_context.surface_enabled(RuntimeSurface::ScheduleIntegrationEvents)
         && integration_events::dispatch_pending(&env).await.is_err()
     {
         worker::console_error!("notification scheduled operation failed");
     }
-    if capability_context.unit_enabled(ActivationUnit::MailboxJobs)
+    if capability_context.surface_enabled(RuntimeSurface::ScheduleMailboxJobs)
         && mailbox_scheduling::dispatch_pending(&env).await.is_err()
     {
         worker::console_error!("mailbox scheduled operation failed");
+    }
+}
+
+const fn queue_surface(message: &ControlPlaneQueueMessage) -> RuntimeSurface {
+    match message {
+        ControlPlaneQueueMessage::IntegrationEvent(_) => RuntimeSurface::QueueIntegrationEvents,
+        ControlPlaneQueueMessage::MailboxJob(_) => RuntimeSurface::QueueMailboxJobs,
     }
 }
 
@@ -313,4 +317,45 @@ fn binding_probe(env: &Env, capability_context: &RuntimeCapabilityContext) -> Re
     let _coordinator_stub = notification_hub_id.get_stub()?;
     let _ = profile_objects;
     health_response()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ControlPlaneQueueMessage, RuntimeSurface, queue_surface};
+    use serde_json::json;
+
+    #[test]
+    fn queue_messages_select_named_policy_surfaces() -> Result<(), Box<dyn std::error::Error>> {
+        let integration_event = serde_json::from_value::<ControlPlaneQueueMessage>(json!({
+            "envelope_version": 1,
+            "event_id": "outbox_01JSURFACE",
+            "tenant_id": "tenant_01JSURFACE",
+            "aggregate_type": "client",
+            "aggregate_id": "client_01JSURFACE",
+            "aggregate_version": 1,
+            "event_type": "client.created.v1",
+            "event_version": 1,
+            "payload_json": "{}",
+            "occurred_at_ms": 42
+        }))?;
+        assert_eq!(
+            queue_surface(&integration_event),
+            RuntimeSurface::QueueIntegrationEvents
+        );
+
+        let mailbox_job = serde_json::from_value::<ControlPlaneQueueMessage>(json!({
+            "envelope_version": 1,
+            "tenant_id": "tenant_01JSURFACE",
+            "actor_id": "actor_01JSURFACE",
+            "binding_id": "mailbox_01JSURFACE",
+            "job_id": "mailjob_01JSURFACE",
+            "expected_job_version": 1,
+            "due_at_ms": 42
+        }))?;
+        assert_eq!(
+            queue_surface(&mailbox_job),
+            RuntimeSurface::QueueMailboxJobs
+        );
+        Ok(())
+    }
 }

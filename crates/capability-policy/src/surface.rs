@@ -2,7 +2,6 @@ use crate::ActivationUnit;
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub enum RuntimeSurface {
-    HttpHealth,
     HttpBindings,
     HttpSession,
     HttpIdentity,
@@ -24,8 +23,7 @@ pub enum RuntimeSurface {
     ResolverReconciliation,
 }
 
-pub const ALL_RUNTIME_SURFACES: [RuntimeSurface; 20] = [
-    RuntimeSurface::HttpHealth,
+pub const ALL_RUNTIME_SURFACES: [RuntimeSurface; 19] = [
     RuntimeSurface::HttpBindings,
     RuntimeSurface::HttpSession,
     RuntimeSurface::HttpIdentity,
@@ -51,7 +49,6 @@ impl RuntimeSurface {
     #[must_use]
     pub const fn id(self) -> &'static str {
         match self {
-            Self::HttpHealth => "http.health",
             Self::HttpBindings => "http.bindings",
             Self::HttpSession => "http.session",
             Self::HttpIdentity => "http.identity",
@@ -77,7 +74,7 @@ impl RuntimeSurface {
     #[must_use]
     pub const fn activation_unit(self) -> ActivationUnit {
         match self {
-            Self::HttpHealth | Self::HttpBindings | Self::HttpSession => ActivationUnit::Foundation,
+            Self::HttpBindings | Self::HttpSession => ActivationUnit::Foundation,
             Self::HttpIdentity => ActivationUnit::Identity,
             Self::HttpClients => ActivationUnit::Clients,
             Self::HttpClientMailRead => ActivationUnit::MailboxRead,
@@ -119,8 +116,26 @@ mod tests {
             ActivationUnit::MailboxAdmin
         );
         assert_eq!(
+            RuntimeSurface::QueueIntegrationEvents.activation_unit(),
+            ActivationUnit::Notifications
+        );
+        assert_eq!(
+            RuntimeSurface::QueueMailboxJobs.activation_unit(),
+            ActivationUnit::MailboxJobs
+        );
+        assert_eq!(
+            RuntimeSurface::ScheduleIntegrationEvents.activation_unit(),
+            ActivationUnit::Notifications
+        );
+        assert_eq!(
             RuntimeSurface::ScheduleMailboxJobs.activation_unit(),
             ActivationUnit::MailboxJobs
+        );
+        assert!(
+            ALL_RUNTIME_SURFACES
+                .iter()
+                .all(|surface| surface.id() != "http.health"),
+            "health is deliberately observable without capability-profile admission"
         );
     }
 }
