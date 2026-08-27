@@ -1,7 +1,10 @@
-use profile_platform_primitives::{ActorId, AuditEventId, IdempotencyKey, OutboxEventId, TenantId};
+use profile_platform_primitives::{
+    ActorId, AssignmentId, AuditEventId, IdempotencyKey, OutboxEventId, TenantId,
+};
 use worker::{Error, Result};
 
 const EVIDENCE_DOMAIN: &[u8] = b"part-crm:evidence-id:v1";
+const ASSIGNMENT_DOMAIN: &[u8] = b"assignment";
 const AUDIT_DOMAIN: &[u8] = b"audit";
 const OUTBOX_DOMAIN: &[u8] = b"outbox";
 const SHA256_BLOCK_BYTES: usize = 64;
@@ -84,6 +87,21 @@ const SHA256_ROUND_CONSTANTS: [u32; 64] = [
     0xbef9_a3f7,
     0xc671_78f2,
 ];
+
+pub fn assignment_id(
+    tenant_id: &TenantId,
+    actor_id: &ActorId,
+    idempotency_key: &IdempotencyKey,
+) -> Result<AssignmentId> {
+    AssignmentId::parse(derived_id(
+        "assignment",
+        ASSIGNMENT_DOMAIN,
+        tenant_id,
+        actor_id,
+        idempotency_key,
+    )?)
+    .map_err(identifier_error)
+}
 
 pub fn audit_event_id(
     tenant_id: &TenantId,
@@ -256,7 +274,7 @@ fn identifier_error(error: profile_platform_primitives::ParseOpaqueIdError) -> E
 
 #[cfg(test)]
 mod tests {
-    use super::{audit_event_id, lowercase_hex, outbox_event_id, sha256};
+    use super::{assignment_id, audit_event_id, lowercase_hex, outbox_event_id, sha256};
     use profile_platform_primitives::{ActorId, IdempotencyKey, TenantId};
 
     #[test]
@@ -278,8 +296,13 @@ mod tests {
         let tenant = TenantId::parse("tenant_01JEVIDENCE")?;
         let actor = ActorId::parse("actor_01JEVIDENCE")?;
         let key = IdempotencyKey::parse("idempotency_01JEVIDENCE")?;
+        let assignment = assignment_id(&tenant, &actor, &key)?;
         let audit = audit_event_id(&tenant, &actor, &key)?;
         let outbox = outbox_event_id(&tenant, &actor, &key)?;
+        assert_eq!(
+            assignment.as_str(),
+            "assignment_553ef0c5ae4213ffc92b2d6a1ffbb67b5ac3065e12a027074d0e70679cfcceff"
+        );
         assert_eq!(
             audit.as_str(),
             "audit_321c7114771f4f170aaa54fae3062c7244932f1315e639eed743bc3f87a6fbd2"
@@ -288,9 +311,13 @@ mod tests {
             outbox.as_str(),
             "outbox_d32b31bc248b7df577b3a42604291461baff2ff43da595568022167b45ae0dab"
         );
+        assert_eq!(assignment, assignment_id(&tenant, &actor, &key)?);
         assert_eq!(audit, audit_event_id(&tenant, &actor, &key)?);
         assert_eq!(outbox, outbox_event_id(&tenant, &actor, &key)?);
+        assert_ne!(assignment.as_str(), audit.as_str());
+        assert_ne!(assignment.as_str(), outbox.as_str());
         assert_ne!(audit.as_str(), outbox.as_str());
+        assert!(assignment.as_str().len() <= 96);
         assert!(audit.as_str().len() <= 96);
         assert!(outbox.as_str().len() <= 96);
         Ok(())
@@ -304,6 +331,14 @@ mod tests {
         let shared_prefix = "x".repeat(90);
         let key_a = IdempotencyKey::parse(format!("{shared_prefix}AAAAAA"))?;
         let key_b = IdempotencyKey::parse(format!("{shared_prefix}BBBBBB"))?;
+        assert_ne!(
+            assignment_id(&tenant, &actor_a, &key_a)?,
+            assignment_id(&tenant, &actor_b, &key_a)?
+        );
+        assert_ne!(
+            assignment_id(&tenant, &actor_a, &key_a)?,
+            assignment_id(&tenant, &actor_a, &key_b)?
+        );
         assert_ne!(
             audit_event_id(&tenant, &actor_a, &key_a)?,
             audit_event_id(&tenant, &actor_b, &key_a)?
