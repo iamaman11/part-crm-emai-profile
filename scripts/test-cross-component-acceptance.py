@@ -360,7 +360,7 @@ def validate_composition_surfaces() -> None:
                 "impl ProfileApplicationPort for D1ProfileApplicationRepository",
                 "impl ProfileAssignmentApplicationPort for D1ProfileApplicationRepository",
                 "impl ProfileGrantApplicationPort for D1ProfileApplicationRepository",
-                "ProfileRelationshipMutation",
+                "ProfileAssignmentMutation",
                 ".assign_profile(actor, mutation)",
                 ".detach_profile(actor, mutation)",
                 "ProfileGrantMutation",
