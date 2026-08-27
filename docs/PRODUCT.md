@@ -123,6 +123,13 @@ implementation detail только в объёме, необходимом пе�
 - complex roles, mobile parity, generic export и hard Profile purge;
 - new providers и будущая CRM/communications integration.
 
+Изменение принятой product boundary само по себе не изменяет runtime admission. До зависящей
+feature/candidate стадии оно обязано пройти explicit profile-impact reconciliation по §13.1
+[`APPLICATION_ARCHITECTURE_MANDATORY_REQUIREMENTS.md`](APPLICATION_ARCHITECTURE_MANDATORY_REQUIREMENTS.md)
+и immutable-profile правилам
+[`CAP01_CAPABILITY_POLICY_IMPLEMENTATION_CONTRACT.md`](CAP01_CAPABILITY_POLICY_IMPLEMENTATION_CONTRACT.md).
+Product wording, наличие исходного кода, UI или binding сами по себе не изменяют effective set.
+
 Никакой `production-lite` ветки, mailbox fork, второй schema lineage или отдельной архитектуры для
 будущих capabilities не создаётся. Capability включается только через canonical Capability Policy,
 accepted Release Candidate и target-specific backend admission.

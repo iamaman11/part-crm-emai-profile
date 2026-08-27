@@ -209,7 +209,7 @@ def validate_environment_template(environment: str, config: dict[str, object]) -
             raise ConfigError(f"{environment} variable placeholder drifted for {key}")
     if variables.get("CANONICAL_ENVIRONMENT") != environment:
         raise ConfigError(f"{environment} canonical environment projection drifted")
-    expected_profile = "rehearsal-core-v1" if environment == "staging" else "production-core-v1"
+    expected_profile = "rehearsal-core-v2" if environment == "staging" else "production-core-v2"
     if variables.get("CAPABILITY_PROFILE_ID") != expected_profile:
         raise ConfigError(f"{environment} capability profile projection must select {expected_profile}")
     profile_digest = variables.get("CAPABILITY_PROFILE_DIGEST")
@@ -423,9 +423,9 @@ def self_test() -> None:
         raise ConfigError("staging R2 account identity diverged from deploy account")
     if production_vars["R2_GENERATION_ACCOUNT_ID"] != production["account_id"]:
         raise ConfigError("production R2 account identity diverged from deploy account")
-    if staging_vars["CAPABILITY_PROFILE_ID"] != "rehearsal-core-v1":
+    if staging_vars["CAPABILITY_PROFILE_ID"] != "rehearsal-core-v2":
         raise ConfigError("staging Core profile projection drifted")
-    if production_vars["CAPABILITY_PROFILE_ID"] != "production-core-v1":
+    if production_vars["CAPABILITY_PROFILE_ID"] != "production-core-v2":
         raise ConfigError("production Core profile projection drifted")
     if "services" in staging_env or "services" in production_env:
         raise ConfigError("Core render unexpectedly includes mailbox-secret-resolver service binding")

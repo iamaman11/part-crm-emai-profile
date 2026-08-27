@@ -177,6 +177,7 @@ function promotionErrors(promotion) {
     'workflow_run:', 'issue_comment:', 'pull_request_target:', 'pull_request:\n', 'operator-entrypoint:',
     'test "$source_sha" = "$main_sha"',
     'preflight_sha256256', 'environment: production', 'TARGET_PROFILE: production-',
+    'TARGET_PROFILE: rehearsal-core-v1', 'profile=rehearsal-core-v1', '--profile rehearsal-core-v1',
     'mailbox-secret-resolver-promotion.py', '_mailbox_secret_resolver_promotion_core.py',
     'wrangler d1 create', 'wrangler r2 bucket create', 'wrangler queues create',
     'CLOUDFLARE_RESOLVER_SECRETS_JSON', 'CLOUDFLARE_CONTROL_PLANE_SECRETS_JSON', 'terraform',
@@ -216,7 +217,7 @@ function promotionErrors(promotion) {
   ], 'promotion phase 1 resolve+verify'));
 
   errors.push(...requireMarkers(observe, [
-    'needs: resolve-verify', 'environment: staging', 'TARGET_PROFILE: rehearsal-core-v1', 'TARGET_ENVIRONMENT: staging',
+    'needs: resolve-verify', 'environment: staging', 'TARGET_PROFILE: rehearsal-core-v2', 'TARGET_ENVIRONMENT: staging',
     'secrets.CLOUDFLARE_OBSERVE_API_TOKEN', 'Observe current provider state without mutation',
     'bash scripts/release-set-assets-ar11.sh materialize current-v3 "$RELEASE_SET_ID" "$asset_root" "$release_root"',
     'Verify current/known-good immutable Release Set before rollback evaluation',
@@ -240,14 +241,14 @@ function promotionErrors(promotion) {
     'Activate deploy credential after READY and exact-byte verification', 'DEPLOY_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}',
     'Re-observe expected-current fence and deploy exact Release Set v3 bits', 'deployment-identity-ar11.py',
     'test "$current_id" = "$EXPECTED_CURRENT"', 'gh release download "$RELEASE_SET_ID"', '--dry-run',
-    '--message "release_set=$RELEASE_SET_ID profile=rehearsal-core-v1"',
+    '--message "release_set=$RELEASE_SET_ID profile=rehearsal-core-v2"',
   ], 'promotion phase 3 protected mutation'));
   errors.push(...forbidMarkers(mutate, ['materialize known-good-v2-v3', '.release_set_schema_version == 2', 'worker-build --release', 'cargo build', 'npm run build', 'release-set-ar11.py build', 'release compatibility', 'promotion plan', 'promotion preflight'], 'promotion phase 3 protected mutation'));
   const nativeVerify = mutate.indexOf('Re-verify fence and exact immutable Release Set before credentials');
   const deployCredential = mutate.indexOf('DEPLOY_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}');
   const reobserveFence = mutate.indexOf('Re-observe expected-current fence and deploy exact Release Set v3 bits');
   const currentFence = mutate.indexOf('test "$current_id" = "$EXPECTED_CURRENT"', reobserveFence);
-  const actualDeploy = mutate.indexOf('--message "release_set=$RELEASE_SET_ID profile=rehearsal-core-v1"', reobserveFence);
+  const actualDeploy = mutate.indexOf('--message "release_set=$RELEASE_SET_ID profile=rehearsal-core-v2"', reobserveFence);
   if (!(nativeVerify >= 0 && deployCredential > nativeVerify && reobserveFence > deployCredential && currentFence > reobserveFence && actualDeploy > currentFence)) {
     errors.push('mutation credential/fence ordering must be native verify -> credential activation -> expected-current re-observe -> deploy');
   }
@@ -347,6 +348,9 @@ function selfTest() {
 
   const v2Target = promotion.replaceAll('[[ "$RELEASE_SET_ID" =~ ^release-set-v3-sha256-[0-9a-f]{64}$ ]]', '[[ "$RELEASE_SET_ID" =~ ^release-set-v2-sha256-[0-9a-f]{64}$ ]]');
   if (!promotionErrors(v2Target).some((error) => error.includes('release-set-v2-sha256-') || error.includes('release-set-v3-sha256-'))) throw new Error('Release Set v2 current-target fixture unexpectedly passed');
+
+  const historicalProfileTarget = promotion.replaceAll('rehearsal-core-v2', 'rehearsal-core-v1');
+  if (!promotionErrors(historicalProfileTarget).some((error) => error.includes('rehearsal-core-v1') || error.includes('rehearsal-core-v2'))) throw new Error('historical capability profile current-target fixture unexpectedly passed');
 
   const broadHistoricalMaterializer = promotion.replace('materialize current-v3 "$RELEASE_SET_ID"', 'materialize known-good-v2-v3 "$RELEASE_SET_ID"');
   if (promotionErrors(broadHistoricalMaterializer).length === 0) throw new Error('historical v2/v3 materializer leaked into current target authority');

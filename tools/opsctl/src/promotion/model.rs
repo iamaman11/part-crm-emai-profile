@@ -178,7 +178,7 @@ mod tests {
             Environment::Rehearsal,
             "release-a",
             "release-b",
-            "rehearsal-core-v1",
+            "rehearsal-core-v2",
         )?;
         assert_eq!(request.decision(), PromotionDecision::Plan);
         Ok(())

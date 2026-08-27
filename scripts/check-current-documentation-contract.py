@@ -21,6 +21,38 @@ from pathlib import Path
 PROGRAM = Path("docs/ARCHITECTURE_REBASELINE_V3_PLAN.md")
 INDEX = Path("docs/INDEX.md")
 AGENT_BOOTSTRAP = Path("AGENTS.md")
+MANDATORY_REQUIREMENTS = Path("docs/APPLICATION_ARCHITECTURE_MANDATORY_REQUIREMENTS.md")
+AGENT_REQUIRED_MARKERS = (
+    "docs/INDEX.md",
+    "docs/PRODUCT.md",
+    "docs/ARCHITECTURE_REBASELINE_V3_PLAN.md",
+    "Issue #266",
+    "docs/APPLICATION_ARCHITECTURE_MANDATORY_REQUIREMENTS.md",
+    "docs/ARCHITECTURE_EVOLUTION_QUALITY_CONTRACT.md",
+    "mandatory change envelope",
+    "capability/profile impact disposition",
+    "source_present != production_enabled",
+    "exactly one owning Issue",
+    "Do not pre-create owning Issues for future rows",
+)
+PROGRAM_REQUIRED_MARKERS = (
+    "capability lifecycle/profile impact",
+    "selected profile/effective-set and current-selector disposition",
+    "Owning Issue lifecycle",
+    "exactly one owning GitHub Issue",
+    "Do not pre-create Issues for later rows",
+    "durable transaction provenance",
+    "Issue #266 alone owns mutable program position",
+)
+INDEX_REQUIRED_MARKERS = (
+    "Bounded transaction record, change envelope and evidence",
+    "Exactly one current owning Issue linked from",
+)
+MANDATORY_REQUIREMENTS_MARKERS = (
+    "Product scope -> selected profile reconciliation",
+    "Capability lifecycle/profile impact (ADD / ENABLE / DISABLE / REMOVE / NONE)",
+    "Selected profile/effective-set and current-selector disposition",
+)
 NAVIGATION = (
     Path("AGENTS.md"),
     Path("README.md"),
@@ -75,6 +107,14 @@ def read(root: Path, relative: Path, errors: list[str]) -> str:
         return ""
 
 
+def require_markers(relative: Path, text: str, markers: tuple[str, ...]) -> list[str]:
+    return [
+        f"{relative} is missing required authority marker: {marker}"
+        for marker in markers
+        if marker not in text
+    ]
+
+
 def tracked_markdown(root: Path) -> list[Path]:
     completed = subprocess.run(
         ["git", "ls-files", "--", "*.md"],
@@ -116,6 +156,7 @@ def check(root: Path, markdown_files: list[Path] | None = None) -> list[str]:
     program = read(root, PROGRAM, errors)
     index = read(root, INDEX, errors)
     agents = read(root, AGENT_BOOTSTRAP, errors)
+    mandatory_requirements = read(root, MANDATORY_REQUIREMENTS, errors)
 
     if "CURRENT TEMPORARY EXECUTION AUTHORITY" not in program or "Binding execution order" not in program:
         errors.append(f"{PROGRAM} must remain the single explicit temporary program/order owner")
@@ -124,9 +165,22 @@ def check(root: Path, markdown_files: list[Path] | None = None) -> list[str]:
     for marker in ("Permanent normative knowledge", "Temporary execution authority", "Live state", "Projection/navigation", "History/provenance"):
         if marker not in index:
             errors.append(f"{INDEX} is missing authority class: {marker}")
-    for marker in ("docs/INDEX.md", "docs/ARCHITECTURE_REBASELINE_V3_PLAN.md", "Issue #266"):
-        if marker not in agents:
-            errors.append(f"{AGENT_BOOTSTRAP} bootstrap is missing: {marker}")
+    errors.extend(
+        require_markers(AGENT_BOOTSTRAP, agents, AGENT_REQUIRED_MARKERS)
+    )
+    errors.extend(
+        require_markers(PROGRAM, program, PROGRAM_REQUIRED_MARKERS)
+    )
+    errors.extend(
+        require_markers(INDEX, index, INDEX_REQUIRED_MARKERS)
+    )
+    errors.extend(
+        require_markers(
+            MANDATORY_REQUIREMENTS,
+            mandatory_requirements,
+            MANDATORY_REQUIREMENTS_MARKERS,
+        )
+    )
 
     for relative in NAVIGATION:
         text = read(root, relative, errors)
@@ -199,6 +253,22 @@ def self_test() -> None:
         raise AssertionError("positive status.json authority claim was not detected")
     if any(pattern.search("status.json is a projection, not current authority") for pattern in FORBIDDEN_CURRENT_CLAIMS):
         raise AssertionError("negative status.json authority rule was rejected")
+    for relative, markers in (
+        (AGENT_BOOTSTRAP, AGENT_REQUIRED_MARKERS),
+        (PROGRAM, PROGRAM_REQUIRED_MARKERS),
+        (INDEX, INDEX_REQUIRED_MARKERS),
+        (MANDATORY_REQUIREMENTS, MANDATORY_REQUIREMENTS_MARKERS),
+    ):
+        complete = "\n".join(markers)
+        if require_markers(relative, complete, markers):
+            raise AssertionError(f"complete authority marker set was rejected: {relative}")
+        for marker in markers:
+            incomplete = complete.replace(marker, "", 1)
+            marker_errors = require_markers(relative, incomplete, markers)
+            if not any(marker in error for error in marker_errors):
+                raise AssertionError(
+                    f"missing authority marker was accepted: {relative}: {marker}"
+                )
 
 
 def main() -> int:

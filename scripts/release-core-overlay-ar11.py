@@ -139,7 +139,7 @@ def render(
         fail("selected environment vars are missing")
     if (
         vars_value.get("CANONICAL_ENVIRONMENT") != "staging"
-        or vars_value.get("CAPABILITY_PROFILE_ID") != "rehearsal-core-v1"
+        or vars_value.get("CAPABILITY_PROFILE_ID") != "rehearsal-core-v2"
     ):
         fail("selected immutable config is not the AR-11 rehearsal Core profile")
 

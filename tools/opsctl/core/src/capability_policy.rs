@@ -28,11 +28,16 @@ mod tests {
 
     #[test]
     fn release_tooling_consumes_the_typed_policy_owner() {
-        assert_eq!(snapshot_v1().profiles.len(), 5);
+        assert_eq!(snapshot_v1().profiles.len(), 7);
         assert_eq!(
-            effective_profile(ProfileId::RehearsalCoreV1, CanonicalEnvironment::Rehearsal)
+            effective_profile(ProfileId::RehearsalCoreV2, CanonicalEnvironment::Rehearsal)
                 .map(|profile| profile.capabilities.enabled(ActivationUnit::Camoufox)),
             Ok(true)
+        );
+        assert_eq!(
+            effective_profile(ProfileId::RehearsalCoreV2, CanonicalEnvironment::Rehearsal)
+                .map(|profile| profile.capabilities.enabled(ActivationUnit::Notifications)),
+            Ok(false)
         );
     }
 }

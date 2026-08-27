@@ -111,11 +111,41 @@ Every implementation Issue must state:
 
 - accepted finding or product obligation;
 - natural owner and exact affected surface;
+- capability lifecycle/profile impact (`ADD`, `ENABLE`, `DISABLE`, `REMOVE` or evidenced `NONE`),
+  including the selected profile/effective-set and current-selector disposition;
 - consumers and bounded blast radius;
 - predecessor deletion or evidenced retirement condition;
 - minimum tests/evidence and execution tier;
 - exit criteria, failure/recovery behavior and explicit non-goals;
 - whether external, governance or Production mutation is authorized.
+
+### 4.1 Owning Issue lifecycle
+
+Every executable program row has exactly one owning GitHub Issue. The Issue is created only after a
+fresh protected-main/GitHub re-baseline confirms that Issue #266 selected that row as the sole current
+transaction. Do not pre-create Issues for later rows: an unstarted future Issue looks like competing
+current work and becomes stale before its prerequisites are known.
+
+```text
+accepted-main reread + fresh GitHub re-baseline
+-> #266 selects one row as CURRENT (discovery only; no source/provider mutation yet)
+-> create or identify exactly one owning Issue: CAP-EXEC <ID> — <plan row title>
+-> link #266 <-> owning Issue and record the exact accepted base SHA
+-> complete the mandatory change envelope, consumers, blockers and acceptance plan
+-> only then create/mutate cap-exec/<id>-<bounded-slug>
+-> one PR accumulates exact-head candidate and CI evidence in the same Issue
+-> merge the proven head and reread protected main
+-> record accepted PR/head/tree/check evidence and final disposition in the owning Issue
+-> update #266: <ID> COMPLETE, accepted evidence, next permitted row
+-> close the owning Issue as durable transaction provenance
+```
+
+The owning Issue is bounded working memory and evidence for one transaction. It never becomes a
+second roadmap, stable product/architecture contract, release selector or current-program pointer.
+Permanent decisions must land in Git at their natural documentation/code/test owner in the same
+transaction; Issue #266 alone owns mutable program position. If discovery blocks or supersedes the
+row, the same Issue records the exact blocker/disposition and #266 is updated before it is closed or
+before any different row is considered. A second Issue for the same current row is forbidden.
 
 ## 5. Gates and stop rules
 

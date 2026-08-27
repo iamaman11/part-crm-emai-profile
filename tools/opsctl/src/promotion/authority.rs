@@ -260,7 +260,7 @@ mod tests {
     fn production_core_closure_excludes_mail_operational_dependencies()
     -> Result<(), Box<dyn std::error::Error>> {
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
-        let closure = load_closure(&root, "production-core-v1")?;
+        let closure = load_closure(&root, "production-core-v2")?;
         assert!(!closure.required_bindings.contains("MAILBOX_JOBS"));
         assert!(
             !closure

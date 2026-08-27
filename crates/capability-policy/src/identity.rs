@@ -231,7 +231,7 @@ mod tests {
     }
 
     #[test]
-    fn current_profile_digests_are_preserved_exactly() {
+    fn historical_v1_profile_digests_remain_byte_exact() {
         let expected = [
             (
                 ProfileId::ProductionCoreV1,
@@ -260,7 +260,28 @@ mod tests {
                 expected_digest
             );
         }
-        assert_eq!(ALL_PROFILE_IDS.len(), expected.len());
+        assert_eq!(expected.len(), 5);
+    }
+
+    #[test]
+    fn core_v2_profile_digests_are_frozen_separately() {
+        let expected = [
+            (
+                ProfileId::ProductionCoreV2,
+                "41288578863d5e2e9a96b8ea609bb55154f261b3e8b13c9420e3188fdb317830",
+            ),
+            (
+                ProfileId::RehearsalCoreV2,
+                "22be80b5718a3cb80f35c474d3f52421a98ffeb663cc8701c1acd6f2c47759e2",
+            ),
+        ];
+        for (profile_id, expected_digest) in expected {
+            assert_eq!(
+                semantic_digest_v1(profile_definition(profile_id)).to_hex(),
+                expected_digest
+            );
+        }
+        assert_eq!(ALL_PROFILE_IDS.len(), 7);
     }
 
     #[test]

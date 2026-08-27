@@ -47,11 +47,11 @@ mod tests {
 
     #[test]
     fn production_fails_closed_without_authorization() {
-        let definition = profile_definition(ProfileId::ProductionCoreV1);
+        let definition = profile_definition(ProfileId::ProductionCoreV2);
         assert_eq!(
             admit(AdmissionRequest {
                 environment: CanonicalEnvironment::Production,
-                profile_id: ProfileId::ProductionCoreV1,
+                profile_id: ProfileId::ProductionCoreV2,
                 presented_digest: semantic_digest_v1(definition),
                 authorization: AuthorizationState::NotAuthorized,
             }),
@@ -69,7 +69,7 @@ mod tests {
             assert_eq!(
                 admit(AdmissionRequest {
                     environment: CanonicalEnvironment::Staging,
-                    profile_id: ProfileId::RehearsalCoreV1,
+                    profile_id: ProfileId::RehearsalCoreV2,
                     presented_digest: wrong_digest,
                     authorization: AuthorizationState::NotAuthorized,
                 }),
@@ -77,11 +77,11 @@ mod tests {
             );
         }
 
-        let definition = profile_definition(ProfileId::RehearsalCoreV1);
+        let definition = profile_definition(ProfileId::RehearsalCoreV2);
         assert_eq!(
             admit(AdmissionRequest {
                 environment: CanonicalEnvironment::Production,
-                profile_id: ProfileId::RehearsalCoreV1,
+                profile_id: ProfileId::RehearsalCoreV2,
                 presented_digest: semantic_digest_v1(definition),
                 authorization: AuthorizationState::NotAuthorized,
             }),
@@ -91,11 +91,11 @@ mod tests {
 
     #[test]
     fn rehearsal_profile_is_admitted_in_staging() {
-        let definition = profile_definition(ProfileId::RehearsalCoreV1);
+        let definition = profile_definition(ProfileId::RehearsalCoreV2);
         assert!(
             admit(AdmissionRequest {
                 environment: CanonicalEnvironment::Staging,
-                profile_id: ProfileId::RehearsalCoreV1,
+                profile_id: ProfileId::RehearsalCoreV2,
                 presented_digest: semantic_digest_v1(definition),
                 authorization: AuthorizationState::NotAuthorized,
             })

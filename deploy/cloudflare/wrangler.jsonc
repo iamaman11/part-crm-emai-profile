@@ -42,8 +42,8 @@
         "R2_GENERATION_ACCOUNT_ID": "${STAGING_ACCOUNT_ID}",
         "R2_GENERATION_BUCKET_NAME": "${STAGING_R2_BUCKET_NAME}",
         "CANONICAL_ENVIRONMENT": "staging",
-        "CAPABILITY_PROFILE_ID": "rehearsal-core-v1",
-        "CAPABILITY_PROFILE_DIGEST": "40ebe3bc1d890757f00433d0ff814720be1ffcd691fff35aea5244a05fc1f45a"
+        "CAPABILITY_PROFILE_ID": "rehearsal-core-v2",
+        "CAPABILITY_PROFILE_DIGEST": "22be80b5718a3cb80f35c474d3f52421a98ffeb663cc8701c1acd6f2c47759e2"
       },
       "secrets": {
         "required": [
@@ -108,8 +108,8 @@
         "R2_GENERATION_ACCOUNT_ID": "${PRODUCTION_ACCOUNT_ID}",
         "R2_GENERATION_BUCKET_NAME": "${PRODUCTION_R2_BUCKET_NAME}",
         "CANONICAL_ENVIRONMENT": "production",
-        "CAPABILITY_PROFILE_ID": "production-core-v1",
-        "CAPABILITY_PROFILE_DIGEST": "92ccb88e7b74c89e4f39a5349eb5bf0da6a2d6f9ccc4a89d72ab462cb08e0868"
+        "CAPABILITY_PROFILE_ID": "production-core-v2",
+        "CAPABILITY_PROFILE_DIGEST": "41288578863d5e2e9a96b8ea609bb55154f261b3e8b13c9420e3188fdb317830"
       },
       "secrets": {
         "required": [

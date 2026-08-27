@@ -14,6 +14,10 @@ A projection, CAP research Issue, chat handoff or historical plan never override
 Issue #266 or accepted protected `main`. Do not invent a numbered phase merely to continue development
 or isolate a bounded defect.
 
+For each current program row, follow section 4.1 of the canonical plan: create exactly one owning Issue
+only after fresh #266 selection, complete its change envelope before branch mutation, and never
+pre-create Issues for future rows.
+
 ## Local toolchain and first checkout
 
 The repository pins its build tools. Do not silently use a nearby major/minor version:

@@ -144,7 +144,7 @@ jobs:
       GH_TOKEN: ${{ github.token }}
       RELEASE_SET_ID: ${{ inputs.release_set_id }}
       EXPECTED_CURRENT: ${{ inputs.expected_current_release_set_id }}
-      TARGET_PROFILE: rehearsal-core-v1
+      TARGET_PROFILE: rehearsal-core-v2
       TARGET_ENVIRONMENT: staging
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_OBSERVE_API_TOKEN }}
       CLOUDFLARE_DEPLOY_MANIFEST_JSON: ${{ secrets.CLOUDFLARE_DEPLOY_MANIFEST_JSON }}
@@ -547,7 +547,7 @@ jobs:
           test "$current_id" = "$EXPECTED_CURRENT"
           npx --yes wrangler@4.94.0 deploy \
             --config "$WRANGLER_CONFIG" --env staging --experimental-autoconfig=false \
-            --message "release_set=$RELEASE_SET_ID profile=rehearsal-core-v1"
+            --message "release_set=$RELEASE_SET_ID profile=rehearsal-core-v2"
 
   post-verify:
     name: Re-observe and prove convergence
@@ -658,7 +658,7 @@ jobs:
             --output "$RUNNER_TEMP/post-snapshot.json"
           cargo run --locked --quiet --manifest-path tools/opsctl/Cargo.toml -- \
             --root . promotion verify --release-set "$RUNNER_TEMP/preflight/release-set.json" \
-            --source-root "$GITHUB_WORKSPACE/target-source" --profile rehearsal-core-v1 --environment staging \
+            --source-root "$GITHUB_WORKSPACE/target-source" --profile rehearsal-core-v2 --environment staging \
             --snapshot "$RUNNER_TEMP/post-snapshot.json" --evidence-json "$RUNNER_TEMP/preflight/compatibility-evidence.json" \
             | tee "$RUNNER_TEMP/promotion-verify.json" \
             | jq -e '.verified == true and .decision == "VERIFIED" and .mutation_executed == false' >/dev/null
@@ -775,7 +775,7 @@ jobs:
             --root . promotion preflight \
             --release-set "$live/release-set.json" \
             --source-root "$GITHUB_WORKSPACE/target-source" \
-            --profile rehearsal-core-v1 \
+            --profile rehearsal-core-v2 \
             --environment staging \
             --snapshot "$RUNNER_TEMP/controlled-unknown-snapshot.json" \
             --evidence-json "$live/compatibility-evidence.json" \

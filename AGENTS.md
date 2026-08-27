@@ -8,7 +8,7 @@ Before planning or changing anything:
 
 1. read current protected `main`, current branch, merge-base, ahead/behind and working-tree state when a local checkout is available;
 2. refresh GitHub PRs, issues, checks, reviews, review threads and branch governance through the available authenticated GitHub tooling;
-3. read `docs/INDEX.md`, `docs/ARCHITECTURE_REBASELINE_V3_PLAN.md`, Issue #266,
+3. read `docs/INDEX.md`, `docs/PRODUCT.md`, `docs/ARCHITECTURE_REBASELINE_V3_PLAN.md`, Issue #266,
    `docs/APPLICATION_ARCHITECTURE_MANDATORY_REQUIREMENTS.md`,
    `docs/ARCHITECTURE_EVOLUTION_QUALITY_CONTRACT.md` and the one owning Issue for the live bounded
    transaction;
@@ -20,7 +20,13 @@ Before planning or changing anything:
 CAP-INDEX #505 and completed AR/PF/PAS/Functional Closure trackers are research/history provenance,
 not live execution state. Issue #266 is the sole live transaction pointer.
 
-Do not begin implementation until the current checkpoint and exactly one next permitted bounded concern are identified.
+Do not begin implementation until the current checkpoint and exactly one next permitted bounded concern are identified,
+and the mandatory change envelope records an explicit capability/profile impact disposition or `NONE`.
+
+For a binding program row, exactly one owning Issue must be linked from Issue #266 before branch
+mutation starts. Create it only after a fresh re-baseline confirms that #266 selected that row as the
+sole current transaction. Do not pre-create owning Issues for future rows. Follow the lifecycle in
+section 4.1 of the binding plan; the Issue is transaction memory/evidence, not a semantic owner.
 
 ## 2. One transaction at a time
 
@@ -68,6 +74,7 @@ An internal caller, validator, generator, drift gate, self-test or documentation
 - JSON is only a versioned external contract/manifest, observation/evidence, generated output projection or isolated historical input with a named consumer;
 - Python may adapt, observe, generate and test, and may host the owned Camouhost cross-language boundary; it may not become a second product/release/lifecycle/evidence/fitness authority or ungoverned provider mutation path;
 - GitHub/Cloudflare/provider effects remain in protected workflows, official provider tooling or explicitly owned outer adapters;
+- `source_present != production_enabled`; source, UI, bindings or a compiled adapter never grant runtime admission;
 - Release / Capability Profile is the sole production-enable authority;
 - PF-3 enforcement truth is the actual specialized production checker + executable negative proof + CI caller, not a decorative metadata registry.
 
@@ -103,4 +110,7 @@ When blocked, report the exact missing authority/evidence/permission. Do not inv
 
 ## 7. Completion and handoff
 
-After an accepted merge, reread protected `main`, update only existing live trackers whose mutable state changed, and record exact accepted source/head/tree, CI evidence, review/thread state and next permitted bounded concern. A handoff must instruct the next agent to repeat the fresh re-baseline rather than trust a copied SHA blindly.
+After an accepted merge, reread protected `main`; record exact accepted source/head/tree, CI evidence
+and final disposition in the owning Issue; update Issue #266 with the completed row and next permitted
+concern; then close the owning Issue as provenance. A handoff must instruct the next agent to repeat the
+fresh re-baseline rather than trust a copied SHA blindly.
