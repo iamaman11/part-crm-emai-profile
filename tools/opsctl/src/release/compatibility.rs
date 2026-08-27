@@ -1,3 +1,4 @@
+use crate::canonical::parse_strict_json;
 use crate::release::document::{LoadedReleaseSet, supported_release_set_id};
 use crate::release::model::{CompatibilityDecision, ReleaseModelError};
 use crate::release::static_compatibility;
@@ -46,8 +47,10 @@ impl CompatibilityEvidence {
     }
 
     pub fn parse_json(input: &str) -> Result<Self, ReleaseModelError> {
-        let value: Value = serde_json::from_str(input).map_err(|error| {
-            ReleaseModelError::new(format!("invalid compatibility evidence JSON: {error}"))
+        let value = parse_strict_json(input).map_err(|error| {
+            ReleaseModelError::new(format!(
+                "release compatibility evidence strict JSON admission failed: {error}"
+            ))
         })?;
         let root = object(&value, "compatibility evidence root")?;
         reject_unknown_fields(

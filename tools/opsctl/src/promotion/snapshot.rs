@@ -1,3 +1,4 @@
+use crate::canonical::parse_strict_json;
 use crate::release::model::ReleaseModelError;
 use serde_json::{Map, Value};
 use std::collections::BTreeSet;
@@ -41,8 +42,10 @@ impl DeploymentSnapshot {
     }
 
     pub fn parse_json(input: &str) -> Result<Self, ReleaseModelError> {
-        let value: Value = serde_json::from_str(input).map_err(|error| {
-            ReleaseModelError::new(format!("invalid DeploymentSnapshot JSON: {error}"))
+        let value = parse_strict_json(input).map_err(|error| {
+            ReleaseModelError::new(format!(
+                "DeploymentSnapshot strict JSON admission failed: {error}"
+            ))
         })?;
         reject_secret_material(&value, "snapshot")?;
         let root = object(&value, "DeploymentSnapshot")?;

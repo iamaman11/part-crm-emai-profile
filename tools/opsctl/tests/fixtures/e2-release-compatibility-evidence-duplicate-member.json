@@ -1,0 +1,23 @@
+{
+  "schema_version": 2,
+  "kind": "RELEASE_COMPATIBILITY_EVIDENCE",
+  "release_set_id": "release-set-v3-sha256-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "dimensions": {
+    "catalog_d1": {
+      "decision": "COMPATIBLE",
+      "decision": "UNKNOWN",
+      "evidence_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "policy_source": "opsctl.d1.compatibility"
+    },
+    "resolver_d1": {
+      "decision": "COMPATIBLE",
+      "evidence_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "policy_source": "opsctl.d1.compatibility"
+    },
+    "windows_profile_bridge": {
+      "decision": "UNKNOWN",
+      "evidence_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "policy_source": "external.windows.delivery"
+    }
+  }
+}

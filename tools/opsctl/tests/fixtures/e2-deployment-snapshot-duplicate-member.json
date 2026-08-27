@@ -1,0 +1,32 @@
+{
+  "schema_version": 2,
+  "kind": "DEPLOYMENT_SNAPSHOT",
+  "environment": "staging",
+  "environment": "production",
+  "collected_at": "2026-08-27T00:00:00Z",
+  "release_set_id": null,
+  "capability_profile_id": null,
+  "component_release_ids": {},
+  "workers": [],
+  "d1": [],
+  "r2": [],
+  "queues": [],
+  "dlqs": [],
+  "durable_objects": [],
+  "service_bindings": [],
+  "routes": [],
+  "schedules": [],
+  "credential_metadata": [],
+  "observed_logical_resources": [],
+  "observed_logical_bindings": [],
+  "observed_logical_credentials": [],
+  "observed_compatibility": {
+    "contracts_sha256": null,
+    "resolver_protocol": null,
+    "camouhost_ipc_version": null,
+    "profile_bridge_protocol_version": null,
+    "runtime_role": null,
+    "profile_format": null,
+    "browser_identity_policy": null
+  }
+}
