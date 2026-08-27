@@ -2,12 +2,13 @@ use crate::d1_profiles::D1ProfileApplicationRepository;
 use application_ports::CommandExecutionEvidence;
 use application_ports::profile_assignment_context::{
     CurrentProfileAssignmentSnapshot, ProfileAssignmentContext, ProfileAssignmentContextPort,
+    ProfileDetachmentContext,
 };
 use application_ports::profiles::{
     ProfileApplicationPort, ProfileAssignmentApplicationPort, ProfileAssignmentPortError,
     ProfileAssignmentPortErrorClass, ProfileAssignmentWrite, ProfileCreateWrite,
-    ProfileGrantApplicationPort, ProfileGrantPortError, ProfileGrantWrite, ProfilePortError,
-    ProfileReadModel, ProfileReplayDecision,
+    ProfileDetachmentWrite, ProfileGrantApplicationPort, ProfileGrantPortError, ProfileGrantWrite,
+    ProfilePortError, ProfileReadModel, ProfileReplayDecision,
 };
 use client_domain::{ClientKind, ClientRecord, ClientStatus};
 use identity_access_domain::MembershipRole;
@@ -95,6 +96,14 @@ impl ProfileAssignmentApplicationPort for D1ProfileApplicationBundle {
     ) -> Result<(), ProfileAssignmentPortError> {
         self.profiles.assign_profile(actor, write).await
     }
+
+    async fn detach_profile(
+        &self,
+        actor: &ActorContext,
+        write: &ProfileDetachmentWrite,
+    ) -> Result<(), ProfileAssignmentPortError> {
+        self.profiles.detach_profile(actor, write).await
+    }
 }
 
 impl ProfileGrantApplicationPort for D1ProfileApplicationBundle {
@@ -175,7 +184,50 @@ impl ProfileAssignmentContextPort for D1ProfileApplicationBundle {
         .await
         .map_err(|_| dependency_error())?;
 
-        row.map(|row| map_context(scope.tenant_id(), row))
+        row.map(|row| map_assignment_context(scope.tenant_id(), row))
+            .transpose()
+    }
+
+    async fn load_profile_detachment_context(
+        &self,
+        scope: &TenantScope,
+        profile_id: &ProfileId,
+    ) -> Result<Option<ProfileDetachmentContext>, ProfileAssignmentPortError> {
+        let row = query!(
+            &self.assignment_context_database,
+            r#"
+            SELECT
+                profile.version AS profile_version,
+                assignment.assignment_id AS current_assignment_id,
+                current_client.client_id AS current_client_id,
+                current_client.kind AS current_client_kind,
+                current_client.display_name AS current_client_display_name,
+                current_client.status AS current_client_status,
+                current_client.version AS current_client_version,
+                assignment.assigned_by_actor_id AS current_assigned_by_actor_id,
+                assignment.assigned_at_ms AS current_assigned_at_ms,
+                assignment.reason AS current_reason
+            FROM browser_profiles AS profile
+            LEFT JOIN profile_client_assignments AS assignment
+              ON assignment.tenant_id = profile.tenant_id
+             AND assignment.profile_id = profile.profile_id
+             AND assignment.closed_at_ms IS NULL
+            LEFT JOIN clients AS current_client
+              ON current_client.tenant_id = assignment.tenant_id
+             AND current_client.client_id = assignment.client_id
+            WHERE profile.tenant_id = ?
+              AND profile.profile_id = ?
+              AND profile.status <> 'DELETED'
+            "#,
+            scope.tenant_id().as_str(),
+            profile_id.as_str()
+        )
+        .map_err(|_| dependency_error())?
+        .first::<ProfileDetachmentContextRow>(None)
+        .await
+        .map_err(|_| dependency_error())?;
+
+        row.map(|row| map_detachment_context(scope.tenant_id(), row))
             .transpose()
     }
 }
@@ -199,7 +251,21 @@ struct ProfileAssignmentContextRow {
     current_reason: Option<String>,
 }
 
-fn map_context(
+#[derive(Deserialize)]
+struct ProfileDetachmentContextRow {
+    profile_version: i64,
+    current_assignment_id: Option<String>,
+    current_client_id: Option<String>,
+    current_client_kind: Option<String>,
+    current_client_display_name: Option<String>,
+    current_client_status: Option<String>,
+    current_client_version: Option<i64>,
+    current_assigned_by_actor_id: Option<String>,
+    current_assigned_at_ms: Option<i64>,
+    current_reason: Option<String>,
+}
+
+fn map_assignment_context(
     tenant_id: &TenantId,
     row: ProfileAssignmentContextRow,
 ) -> Result<ProfileAssignmentContext, ProfileAssignmentPortError> {
@@ -212,49 +278,95 @@ fn map_context(
         row.target_client_status,
         row.target_client_version,
     )?;
-
-    let current = match row.current_assignment_id {
-        None => {
-            if row.current_client_id.is_some()
-                || row.current_client_kind.is_some()
-                || row.current_client_display_name.is_some()
-                || row.current_client_status.is_some()
-                || row.current_client_version.is_some()
-                || row.current_assigned_by_actor_id.is_some()
-                || row.current_assigned_at_ms.is_some()
-                || row.current_reason.is_some()
-            {
-                return Err(integrity_error());
-            }
-            None
-        }
-        Some(assignment_id) => {
-            let current_client = client_record(
-                tenant_id,
-                required(row.current_client_id)?,
-                required(row.current_client_kind)?,
-                required(row.current_client_display_name)?,
-                required(row.current_client_status)?,
-                required(row.current_client_version)?,
-            )?;
-            let assigned_by = ActorId::parse(required(row.current_assigned_by_actor_id)?)
-                .map_err(|_| integrity_error())?;
-            let assigned_at = unix_millis(required(row.current_assigned_at_ms)?)?;
-            Some(CurrentProfileAssignmentSnapshot::new(
-                AssignmentId::parse(assignment_id).map_err(|_| integrity_error())?,
-                current_client,
-                assigned_by,
-                assigned_at,
-                required(row.current_reason)?,
-            ))
-        }
-    };
+    let current = map_current_assignment(
+        tenant_id,
+        row.current_assignment_id,
+        row.current_client_id,
+        row.current_client_kind,
+        row.current_client_display_name,
+        row.current_client_status,
+        row.current_client_version,
+        row.current_assigned_by_actor_id,
+        row.current_assigned_at_ms,
+        row.current_reason,
+    )?;
 
     Ok(ProfileAssignmentContext::new(
         profile_version,
         target_client,
         current,
     ))
+}
+
+fn map_detachment_context(
+    tenant_id: &TenantId,
+    row: ProfileDetachmentContextRow,
+) -> Result<ProfileDetachmentContext, ProfileAssignmentPortError> {
+    let profile_version = aggregate_version(row.profile_version)?;
+    let current = map_current_assignment(
+        tenant_id,
+        row.current_assignment_id,
+        row.current_client_id,
+        row.current_client_kind,
+        row.current_client_display_name,
+        row.current_client_status,
+        row.current_client_version,
+        row.current_assigned_by_actor_id,
+        row.current_assigned_at_ms,
+        row.current_reason,
+    )?;
+    Ok(ProfileDetachmentContext::new(profile_version, current))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn map_current_assignment(
+    tenant_id: &TenantId,
+    assignment_id: Option<String>,
+    client_id: Option<String>,
+    client_kind: Option<String>,
+    client_display_name: Option<String>,
+    client_status: Option<String>,
+    client_version: Option<i64>,
+    assigned_by_actor_id: Option<String>,
+    assigned_at_ms: Option<i64>,
+    reason: Option<String>,
+) -> Result<Option<CurrentProfileAssignmentSnapshot>, ProfileAssignmentPortError> {
+    match assignment_id {
+        None => {
+            if client_id.is_some()
+                || client_kind.is_some()
+                || client_display_name.is_some()
+                || client_status.is_some()
+                || client_version.is_some()
+                || assigned_by_actor_id.is_some()
+                || assigned_at_ms.is_some()
+                || reason.is_some()
+            {
+                return Err(integrity_error());
+            }
+            Ok(None)
+        }
+        Some(assignment_id) => {
+            let current_client = client_record(
+                tenant_id,
+                required(client_id)?,
+                required(client_kind)?,
+                required(client_display_name)?,
+                required(client_status)?,
+                required(client_version)?,
+            )?;
+            let assigned_by = ActorId::parse(required(assigned_by_actor_id)?)
+                .map_err(|_| integrity_error())?;
+            let assigned_at = unix_millis(required(assigned_at_ms)?)?;
+            Ok(Some(CurrentProfileAssignmentSnapshot::new(
+                AssignmentId::parse(assignment_id).map_err(|_| integrity_error())?,
+                current_client,
+                assigned_by,
+                assigned_at,
+                required(reason)?,
+            )))
+        }
+    }
 }
 
 fn client_record(
