@@ -5,6 +5,9 @@ mod mailbox_gmail_oauth_api;
 #[path = "../src/mailbox_microsoft_graph_onboarding_api.rs"]
 mod mailbox_microsoft_graph_onboarding_api;
 #[allow(dead_code)]
+#[path = "../src/profile_relationship_api.rs"]
+mod profile_relationship_api;
+#[allow(dead_code)]
 #[path = "../src/standards_mailbox_onboarding_api.rs"]
 mod standards_mailbox_onboarding_api;
 
@@ -25,5 +28,9 @@ fn rust_owned_capability_openapi_fragments_match_accepted_projections_byte_for_b
     assert_fragment(
         mailbox_microsoft_graph_onboarding_api::openapi_fragment(),
         include_str!("../../../openapi/v1/fragments/mailbox-microsoft-graph-onboarding.json"),
+    );
+    assert_fragment(
+        profile_relationship_api::openapi_fragment(),
+        include_str!("../../../openapi/v1/fragments/profile-relationship.json"),
     );
 }
