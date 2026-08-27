@@ -36,7 +36,7 @@ jobs:
       - name: Compile repository policy scripts
         run: >-
           python -m py_compile
-          scripts/check-documentation-authority.py
+          scripts/check-current-documentation-contract.py
           scripts/check-architecture.py
           scripts/check-contract-compatibility.py
           scripts/check-d1-boundary.py
@@ -83,8 +83,8 @@ jobs:
 
       - name: Enforce documentation and setup authority
         run: |
-          python scripts/check-documentation-authority.py
-          python scripts/check-documentation-authority.py --self-test
+          python scripts/check-current-documentation-contract.py
+          python scripts/check-current-documentation-contract.py --self-test
 
       - name: Prove forbidden dependency fixture is rejected
         run: |

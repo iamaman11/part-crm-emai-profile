@@ -95,8 +95,8 @@ Useful targeted commands include:
 
 ```text
 python -m py_compile scripts/*.py
-python scripts/check-documentation-authority.py
-python scripts/check-documentation-authority.py --self-test
+python scripts/check-current-documentation-contract.py
+python scripts/check-current-documentation-contract.py --self-test
 python scripts/check-architecture.py
 python scripts/check-contract-compatibility.py
 python scripts/check-d1-boundary.py

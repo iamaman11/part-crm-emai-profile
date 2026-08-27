@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Fail closed on documentation authority, navigation and local-link drift.
+"""Fail closed on the current documentation, navigation and local-setup contract.
 
 Owner/consumer: CAP-06 documentation authority; developers and the existing Quality Gate.
 Risk: copied mutable order or stale status/setup prose can select unauthorized work after context loss.
