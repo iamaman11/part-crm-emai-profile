@@ -244,6 +244,9 @@ V1 exit criteria:
    consumer and zero unique-invariant proof;
 10. the permanent future-check standard remains one objective invariant -> one primary proof -> the
     cheapest sufficient lifecycle tier, with positive and negative proof and a retirement condition.
+11. the permanent add/enable/disable/remove capability lifecycle is reflected in the bounded change
+    protocol and its natural existing admission/owner checks; no generic feature registry or new
+    required context is created merely to restate it.
 
 V1 also gives the remaining transitional authority surfaces an exact executable-lifecycle verdict; it
 does not silently equate `CONDITIONAL` with permanent. In particular, `docs/status.json`, the frozen
@@ -365,17 +368,27 @@ generic saga/idempotency engine or speculative implementation for disabled modul
 
 ## 7. Program completion
 
-The temporary program closes when:
+R3 is the first-release authorization boundary, not a demand to finish unrelated disabled-capability
+work or every non-blocking repository cleanup first. A valid GO/PILOT may therefore occur before this
+temporary CAP program is administratively closed. After R3, only the finite section 6 convergence
+transactions remain under #266; they do not retroactively block the released exact candidate unless a
+finding is reachable from it or invalidates its accepted evidence.
+
+The temporary program closes only when:
 
 1. E0–V2 have accepted evidence on protected `main`;
 2. one exact candidate envelope is complete and all universal/reachable guarantees are decided;
 3. R2/R3 record the named authorization outcome;
 4. no temporary execution owner is still needed for ordinary feature development;
 5. permanent decisions live in their natural docs/code/checks, all historical/CAP trackers have the
-   dispositions required by section 6.3, and #266 is closed as provenance;
-6. any non-blocking `KEEP`/`CONDITIONAL` convergence remaining after R3 has a bounded natural-owner
-   Issue with its consumer/missing proof and observable trigger; there is no second roadmap or generic
-   debt registry.
+   dispositions required by section 6.3;
+6. every accepted real finding is either `RETIRED/CLOSED` with evidence, `KEEP_NOT_A_DEFECT` with a
+   durable consumer/risk and permanent natural owner, or `FUTURE_CAPABILITY_GATED` by section 6.4;
+7. unresolved `UNKNOWN`, untriggered indefinite cleanup and `CONDITIONAL` debt are `0`; a conditional
+   item is proved current and reclassified `KEEP_NOT_A_DEFECT`, triggered and closed, or remains an
+   explicit blocker rather than disappearing into a backlog;
+8. there is no second roadmap or generic debt registry;
+9. #266 is closed as provenance only after criteria 1–8 hold.
 
 Until then, Issue #266 is the only live transaction pointer. Never copy its mutable state into README,
 AGENTS, projections or handoff documents.
