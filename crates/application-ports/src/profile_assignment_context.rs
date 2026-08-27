@@ -94,6 +94,35 @@ impl ProfileAssignmentContext {
     }
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ProfileDetachmentContext {
+    profile_version: AggregateVersion,
+    current: Option<CurrentProfileAssignmentSnapshot>,
+}
+
+impl ProfileDetachmentContext {
+    #[must_use]
+    pub const fn new(
+        profile_version: AggregateVersion,
+        current: Option<CurrentProfileAssignmentSnapshot>,
+    ) -> Self {
+        Self {
+            profile_version,
+            current,
+        }
+    }
+
+    #[must_use]
+    pub const fn profile_version(&self) -> AggregateVersion {
+        self.profile_version
+    }
+
+    #[must_use]
+    pub const fn current(&self) -> Option<&CurrentProfileAssignmentSnapshot> {
+        self.current.as_ref()
+    }
+}
+
 #[allow(async_fn_in_trait)]
 pub trait ProfileAssignmentContextPort {
     async fn load_profile_assignment_context(
@@ -102,4 +131,10 @@ pub trait ProfileAssignmentContextPort {
         profile_id: &ProfileId,
         target_client_id: &ClientId,
     ) -> Result<Option<ProfileAssignmentContext>, ProfileAssignmentPortError>;
+
+    async fn load_profile_detachment_context(
+        &self,
+        scope: &TenantScope,
+        profile_id: &ProfileId,
+    ) -> Result<Option<ProfileDetachmentContext>, ProfileAssignmentPortError>;
 }
