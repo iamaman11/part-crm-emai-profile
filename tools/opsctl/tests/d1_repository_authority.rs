@@ -148,9 +148,9 @@ fn frozen_epoch_and_current_projection_are_derived_from_real_sql_bytes()
             "migrations/d1",
             26_usize,
             "0026_outbound_mail_intents.sql",
-            27_u64,
-            "0027_pas2_payload_fingerprint.sql",
-            1_u64,
+            28_u64,
+            "0028_profile_assignment_detach.sql",
+            2_u64,
             CATALOG_EPOCH_DIGEST,
         ),
         (
@@ -246,7 +246,7 @@ fn historical_sql_tampering_fails_closed_for_each_component() -> Result<(), Box<
 fn unowned_post_epoch_sql_fails_closed_for_each_component() -> Result<(), Box<dyn Error>> {
     let source = repo_root();
     for (label, relative) in [
-        ("catalog-post-epoch", "migrations/d1/0028_unowned.sql"),
+        ("catalog-post-epoch", "migrations/d1/0029_unowned.sql"),
         (
             "resolver-post-epoch",
             "migrations/resolver-d1/0005_unowned.sql",
@@ -270,20 +270,30 @@ fn unowned_post_epoch_sql_fails_closed_for_each_component() -> Result<(), Box<dy
 
 #[test]
 fn catalog_0027_is_the_typed_first_post_epoch_revision() -> Result<(), Box<dyn Error>> {
-    let projection: Value = serde_json::from_str(&repository_projection(&repo_root())?)?;
+    let root = repo_root();
+    let projection: Value = serde_json::from_str(&repository_projection(&root)?)?;
     let catalog = component(&projection, "catalog")?;
     let resolver = component(&projection, "resolver")?;
+    let (catalog_files, _) = migration_identity(&root, "migrations/d1")?;
 
     assert_eq!(catalog["historical_epoch"]["migration_count"], 26);
     assert_eq!(
         catalog["historical_epoch"]["final_revision"],
         "0026_outbound_mail_intents.sql"
     );
-    assert_eq!(catalog["migration_count"], 27);
-    assert_eq!(catalog["post_epoch_migration_count"], 1);
+    assert_eq!(
+        catalog_files[26]["name"],
+        "0027_pas2_payload_fingerprint.sql"
+    );
+    assert_eq!(
+        catalog_files[27]["name"],
+        "0028_profile_assignment_detach.sql"
+    );
+    assert_eq!(catalog["migration_count"], 28);
+    assert_eq!(catalog["post_epoch_migration_count"], 2);
     assert_eq!(
         catalog["current_repository_revision"],
-        "0027_pas2_payload_fingerprint.sql"
+        "0028_profile_assignment_detach.sql"
     );
 
     assert_eq!(resolver["historical_epoch"]["migration_count"], 4);
