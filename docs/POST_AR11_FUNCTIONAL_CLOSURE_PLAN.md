@@ -1,10 +1,17 @@
 # Post-AR-11 Functional Closure Plan
 
-**Document status:** SUBORDINATE_FUNCTIONAL_CLOSURE_PLAN  
-**Program authority:** `docs/ARCHITECTURE_REBASELINE_V3_PLAN.md`  
-**Functional Closure umbrella:** #399  
-**FC-6 tracker:** #421  
-**Production authorization:** NONE
+**Document status:** HISTORICAL_PROVENANCE / SUPERSEDED EXECUTION PLAN
+
+**Current execution authority:** none; use `docs/ARCHITECTURE_REBASELINE_V3_PLAN.md` and Issue #266
+
+**Historical trackers:** #399 and #421
+
+**Operational/Production authorization:** none
+
+This document preserves Post-AR-11 Functional Closure rationale and historical obligations. Its stage
+order, readiness statements and FC-6 entry rules are not current execution authority. A current
+obligation applies only when its natural owner or the CAP execution program explicitly carries it
+forward.
 
 This document preserves AR-11 Functional Closure obligations without creating another architecture program. Fresh protected `main`, the canonical plan and current live observations outrank historical implementation shape.
 

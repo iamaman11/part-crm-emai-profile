@@ -1,6 +1,10 @@
 # Architecture authority map
 
-This directory is organized by **system subject**, not by remediation chronology. A developer should be able to locate the current architecture without reconstructing AR history.
+**Role:** subject navigation plus accepted AR provenance; not current execution authority.
+
+This directory is organized by **system subject**, not by remediation chronology. Use
+`docs/INDEX.md` for current knowledge owners and
+`docs/ARCHITECTURE_REBASELINE_V3_PLAN.md` plus Issue #266 for the CAP execution order.
 
 The governing precedence is defined by `docs/ARCHITECTURE_REBASELINE_V3_PLAN.md` and `docs/APPLICATION_ARCHITECTURE_MANDATORY_REQUIREMENTS.md`:
 
@@ -16,7 +20,9 @@ An accepted AR preserves required outcomes and provenance, not a permanent right
 
 ## Current subject-domain authorities
 
-- `architecture-program-sequence.json` — static program order only. Accepted/current lifecycle state is derived by the pure `opsctl-core` evaluator from explicit immutable observations.
+- `architecture-program-sequence.json` — frozen AR-0…AR-17 acceptance sequence consumed by legacy
+  architecture lifecycle tooling. It is not the current CAP execution sequence and does not select a
+  bounded transaction.
 - `credential-authority.json` — current bounded credential composition root. It references accepted AR-8B provenance and current lifecycle/profile-security contracts; it is not a global repository authority bag.
 - `credential-lifecycle.json` — current bounded replacement / verification / activation / retirement / rollback / recovery contract for governed credentials and application OAuth credentials. Its long-term representation remains subject to the owning cutover; it is not permission to duplicate executable semantics.
 - `profile-security.json` — current bounded Browser Profile / Camoufox security classification/ownership contract. It remains subject-domain data, not a global architecture registry.

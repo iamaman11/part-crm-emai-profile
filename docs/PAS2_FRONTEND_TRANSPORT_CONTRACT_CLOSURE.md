@@ -1,13 +1,21 @@
 # PAS-2/TC-2 — Executable Frontend Transport Contract Closure
 
-**Document status:** BOUNDED_EXECUTION_CONTRACT  
-**Transaction B status:** Ready candidate in PR #490; completion is asserted only after protected merge and post-merge exact-head verification.
-**Program authority:** `docs/ARCHITECTURE_REBASELINE_V3_PLAN.md`  
-**Product scenario:** PAS-2 — Client and browser-profile workflow  
-**Architecture contracts:** `docs/APPLICATION_ARCHITECTURE_MANDATORY_REQUIREMENTS.md`, `docs/ARCHITECTURE_EVOLUTION_QUALITY_CONTRACT.md`  
-**Public contract policy:** `docs/CONTRACT_POLICY.md`  
-**Production authorization:** NONE  
-**FC-6 execution:** NOT AUTHORIZED BY THIS CONTRACT
+**Document status:** HISTORICAL_PROVENANCE — accepted through PR #490
+
+**Current execution authority:** none; use `docs/ARCHITECTURE_REBASELINE_V3_PLAN.md` and Issue #266
+
+**Product scenario:** PAS-2 — Client and browser-profile workflow
+
+**Architecture contracts:** `docs/APPLICATION_ARCHITECTURE_MANDATORY_REQUIREMENTS.md`, `docs/ARCHITECTURE_EVOLUTION_QUALITY_CONTRACT.md`
+
+**Public contract policy:** `docs/CONTRACT_POLICY.md`
+
+**Production authorization:** NONE
+**Operational/Production authorization:** none
+
+This document preserves the bounded contract and acceptance rationale of completed PAS-2/TC-2. Its
+transaction order, readiness statements and successor-stage references are historical and must not be
+used to select current work.
 
 PAS-2/TC-2 fixes one demonstrated transport-contract boundary. It is not a generic SDK program, a
 frontend rewrite permission, a production rollout, or authority to redesign unrelated Cloudflare,
