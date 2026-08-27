@@ -7,12 +7,15 @@ This file is an execution guardrail, not a roadmap or semantic authority. It app
 Before planning or changing anything:
 
 1. read current protected `main`, current branch, merge-base, ahead/behind and working-tree state when a local checkout is available;
-2. refresh GitHub PRs, issues, checks, reviews, review threads and branch governance through the connected GitHub tooling;
-3. read `docs/ARCHITECTURE_REBASELINE_V3_PLAN.md`, `docs/APPLICATION_ARCHITECTURE_MANDATORY_REQUIREMENTS.md`, `docs/ARCHITECTURE_EVOLUTION_QUALITY_CONTRACT.md` and the live tracker(s) for the current stage;
-4. read relevant bounded contracts such as `docs/OPSCTL_ARCHITECTURE_BOUNDARY.md`, `docs/OPSCTL_DOCTOR_CONTRACT.md`, `docs/PYTHON_USAGE_BOUNDARY.md`, PF-3 or Functional Closure plans;
+2. refresh GitHub PRs, issues, checks, reviews, review threads and branch governance through the available authenticated GitHub tooling;
+3. read `docs/ARCHITECTURE_REBASELINE_V3_PLAN.md`, Issue #266, `docs/APPLICATION_ARCHITECTURE_MANDATORY_REQUIREMENTS.md`, `docs/ARCHITECTURE_EVOLUTION_QUALITY_CONTRACT.md` and the one owning Issue for the live bounded transaction;
+4. read the relevant current bounded contracts linked from `docs/INDEX.md`, such as
+   `docs/OPSCTL_ARCHITECTURE_BOUNDARY.md`, `docs/OPSCTL_DOCTOR_CONTRACT.md` or
+   `docs/PYTHON_USAGE_BOUNDARY.md`;
 5. treat fresh Git/GitHub facts as higher authority than memory, chat history, handoff text, stale prose or an old SHA.
 
-Current historical prerequisite trackers #441, #471 and #431 are provenance, not live execution state. PF-2 raw-provider-observation correction #480 is accepted source history; Functional Closure uses #399 and #421.
+CAP-INDEX #505 and completed AR/PF/PAS/Functional Closure trackers are research/history provenance,
+not live execution state. Issue #266 is the sole live transaction pointer.
 
 Do not begin implementation until the current checkpoint and exactly one next permitted bounded concern are identified.
 
@@ -65,15 +68,25 @@ An internal caller, validator, generator, drift gate, self-test or documentation
 - Release / Capability Profile is the sole production-enable authority;
 - PF-3 enforcement truth is the actual specialized production checker + executable negative proof + CI caller, not a decorative metadata registry.
 
-## 5. Current stage and freeze discipline
+## 5. Current program and authorization discipline
 
-PF-1, PF-2 and PF-3 are accepted prerequisites. PF-2 semantic-authority convergence #477 and raw-provider-observation correction #480 are accepted; PF-3 truthfulness correction #478 is accepted. PF-3 remains provisional. Staging-baseline adoption completed through the temporary #486 authority, #487 removed that temporary mechanism, and the fresh tracker audit recorded `FC-6 READY TO BEGIN / NOT STARTED` on accepted main. Those observations must still be reread rather than inferred from repository code.
+The binding order is defined only by `docs/ARCHITECTURE_REBASELINE_V3_PLAN.md`:
 
-The subsequently demonstrated PAS-2 frontend transport-contract defect is governed only by `docs/PAS2_FRONTEND_TRANSPORT_CONTRACT_CLOSURE.md`. PAS-2/TC-1 contract closure and destructive frontend cutover must be accepted before a new FC-6 readiness decision. This is one bounded scenario-driven correction, not a new roadmap or general redesign permission.
+```text
+E0 -> E1 -> E2 -> E3 -> E4
+-> P1 -> P2 -> P3
+-> V1 -> V2
+-> R1 -> R2 -> R3
+```
 
-FC-6 may start only after accepted PAS-2/TC-1, a fresh final readiness audit and a **separate explicit user instruction**. Historical read-only FC-6 work/#476 does not authorize continuation during prerequisite/documentation closeout.
+Do not infer the active row from this file. Read fresh Issue #266 and the owning bounded Issue. Each row
+requires its own branch/PR, exact-head acceptance, protected-main reread and tracker update before the
+next row is selected.
 
-FC-6…AR-15 may make only the smallest correction required by a named failed product/rehearsal scenario. Final architecture-form freeze follows accepted AR-15; AR-16 audits and AR-17 qualifies/authorizes.
+`CODE_COMPLETE != SCENARIO_COMPLETE != PRODUCTION_AUTHORIZED`. E/P/V work does not authorize
+provider, staging or Production mutation unless its owning Issue explicitly says so. Production requires
+a separate R3 decision by the named authority for one unchanged exact candidate. Historical FC/AR
+ceremonies and old readiness observations cannot substitute for that decision.
 
 ## 6. Prohibited shortcuts
 

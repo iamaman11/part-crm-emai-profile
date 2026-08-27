@@ -1,77 +1,73 @@
 # Browser Profile Platform
 
-Browser Profile Platform is one modular product for governed users, clients/customer cards, browser profiles, mailbox capabilities, devices and notifications. Rust control-plane code, Cloudflare adapters, Windows Profile Bridge, Camouhost and the React operator UI share one source/data/compatibility lineage while production exposure is controlled independently by Release / Capability Profiles.
+Browser Profile Platform is one modular product for governed users, client/customer cards, reusable
+browser profiles, local browser execution and independently enabled future capabilities.
 
 ```text
 source_present != production_enabled
 ```
 
-## Current execution state
+The first product slice is intentionally finite: managed login, Client creation/editing, persistent
+Browser Profile creation, Client/Profile attachment, authorized launch through Windows Profile Bridge
+and real Camoufox, confirmed save, reopen and logout. Mailboxes, Notifications, Automation and unknown
+future providers do not block that slice.
 
-Current accepted code checkpoint before this documentation-only convergence:
+## Start here
 
-```text
-protected main = a8af2120255f117a7cf58ab86ff79963005f58a0
-PF-1              ACCEPTED (#466)
-PF-2              ACCEPTED; semantic-authority correction #477 and raw-provider-observation correction #480 ACCEPTED (#471 provenance)
-PF-3              ACCEPTED provisional baseline; truthfulness correction ACCEPTED (#478 / #431)
-FC-6              NEXT PERMITTED STAGE / NOT STARTED BY THIS TRANSACTION
-AR-12             NOT STARTED
-architecture_complete = false
-architecture_form_frozen = false
-production_core_gate = BLOCKED
-production_ready = false
-production_mutation = false
-```
+1. [Documentation authority index](docs/INDEX.md)
+2. [Product definition](docs/PRODUCT.md)
+3. [Architecture](docs/ARCHITECTURE.md)
+4. [Current CAP execution program](docs/ARCHITECTURE_REBASELINE_V3_PLAN.md)
+5. [Repository agent contract](AGENTS.md) and [contributor guide](CONTRIBUTING.md)
 
-The authoritative moving SHA is always fresh protected `main`; a stale prose SHA never overrides GitHub. PF-2 and PF-3 are accepted prerequisites, not current implementation work. Their historical trackers remain #471 and #431. The live Functional Closure trackers are #399 and #421.
+[Issue #266](https://github.com/iamaman11/part-crm-emai-profile/issues/266) is the live transaction
+pointer. Always read fresh protected `main`, the tracker and the owning bounded Issue; README never
+duplicates a current SHA, provider/readiness observation or workflow state.
 
-A historical read-only FC-6 re-baseline and the repository-only Release Set v3 verifier correction #476 occurred before the later PF corrections. #480 subsequently completed PF-2 raw-provider-observation convergence. None of that history authorizes continuation here: this documentation transaction performs no FC-6 preflight execution, staging mutation, promotion, deployment or rollback.
-
-## Documentation authority
-
-Start with [`docs/INDEX.md`](docs/INDEX.md). Canonical current program authority is [`docs/ARCHITECTURE_REBASELINE_V3_PLAN.md`](docs/ARCHITECTURE_REBASELINE_V3_PLAN.md).
-
-Key references:
-
-- [`docs/APPLICATION_ARCHITECTURE_MANDATORY_REQUIREMENTS.md`](docs/APPLICATION_ARCHITECTURE_MANDATORY_REQUIREMENTS.md) — permanent architecture rules;
-- [`docs/ARCHITECTURE_EVOLUTION_QUALITY_CONTRACT.md`](docs/ARCHITECTURE_EVOLUTION_QUALITY_CONTRACT.md) — architecture-quality and anti-weakening rules;
-- [`docs/OPSCTL_ARCHITECTURE_BOUNDARY.md`](docs/OPSCTL_ARCHITECTURE_BOUNDARY.md) — Pure Core / Effect Shell boundary for `opsctl`;
-- [`docs/PYTHON_USAGE_BOUNDARY.md`](docs/PYTHON_USAGE_BOUNDARY.md) — Python role/effect policy;
-- [`docs/PF3_ARCHITECTURE_FITNESS_BASELINE.md`](docs/PF3_ARCHITECTURE_FITNESS_BASELINE.md) / #431 / #478 — provisional PF-3 fitness baseline and correction;
-- [`docs/POST_AR11_FUNCTIONAL_CLOSURE_PLAN.md`](docs/POST_AR11_FUNCTIONAL_CLOSURE_PLAN.md), #399, #421 — Functional Closure;
-- [`docs/DEVELOPMENT_PLAN.md`](docs/DEVELOPMENT_PLAN.md) — compact developer projection;
-- [`docs/ARCHITECTURE_ACCEPTANCE_PROTOCOL.md`](docs/ARCHITECTURE_ACCEPTANCE_PROTOCOL.md) — exact-head/guarded-merge acceptance discipline;
-- [`CONTRIBUTING.md`](CONTRIBUTING.md) and [`AGENTS.md`](AGENTS.md) — execution guardrails.
-
-Historical pre-PF-1/PF-1 evidence remains in #441, #430, #466 and their accepted contracts. Closed trackers and historical AR documents are provenance, not mutable current execution authority.
-
-## Architecture direction
+## Architecture invariants
 
 ```text
-one semantic fact -> one natural owner
-bounded contexts + inward dependencies
-Pure Core / Effect Shell
-observation != policy decision
-explicit typed effects/contracts
-context-owned persistence
-JSON only at explicit versioned boundaries
-cutover -> zero live callers -> delete predecessor
-specialized production checker + executable negative proof -> required CI
-no decorative registry as a second source of truth
-Release / Capability Profile = sole production-enable authority
+one semantic responsibility -> one natural owner
+domain -> application/ports -> adapters -> composition
+Rust contracts -> OpenAPI -> generated frontend operations -> feature UI
+source present != production enabled
+cut over callers -> prove zero predecessor use -> delete predecessor
+one objective invariant -> one primary proof at the cheapest sufficient tier
 ```
 
-PF-2 now consumes raw secret-free provider observations through Hosted Evidence v3 and derives trust/readiness/outcome in typed Rust, including exact staging-account binding. PF-3 no longer carries the decorative free-text fitness registry removed by #478: actual specialized production checkers, their executable negative fixtures/self-tests and required CI callers are the truthful enforcement surface.
+Backend owns authorization, capability admission, business validation and state transitions. Frontend
+is a generated-contract consumer and presentation/interaction layer. Product Runtime never depends on
+`opsctl`; operator tooling has no provider/network/mutation authority.
 
-PF-3 remains provisional. Final architecture-form freeze follows accepted AR-15 real Windows delivery/updater/LKG proof; AR-16 audits and AR-17 qualifies/authorizes.
+Permanent rules live in
+[mandatory architecture requirements](docs/APPLICATION_ARCHITECTURE_MANDATORY_REQUIREMENTS.md),
+[architecture evolution quality contract](docs/ARCHITECTURE_EVOLUTION_QUALITY_CONTRACT.md),
+[contract policy](docs/CONTRACT_POLICY.md) and bounded owner documents linked from the index.
 
-## Production capability model
+## Ordered delivery
 
-PC-1 is the first production release and is bounded to identity/users, clients/customer cards, browser profiles and bulk operations, client↔profile binding, grants/access, generations/sessions/devices, encrypted profile persistence/restore, real Camoufox, Windows Profile Bridge + AR-15 production-grade updater/delivery, and Core-required audit/health/readiness/observability/recovery foundations.
+The accepted program is sequential:
 
-Mailbox administration, mailbox jobs/automation and outbound mail may remain implemented/tested on the same protected `main` while production-disabled. Later capability profiles enable them through the same architecture and Release / Capability Profile authority.
+```text
+E0 documentation authority
+-> E1 capability runtime mapping
+-> E2 release/promotion strict JSON
+-> E3 D1 strict JSON
+-> E4 first verification retirement
+-> P1 Client/Profile relationship
+-> P2 authorized launch/Bridge
+-> P3 confirmed save/reopen
+-> V1 release verification convergence
+-> V2 exact scenario acceptance
+-> R1 exact candidate
+-> R2 controlled pilot decision
+-> R3 separate Production Authorization
+```
 
-## Verification discipline
+Every item is a separate bounded Issue/PR and accepted-main reread. The detailed gates and exit criteria
+are owned only by the [current execution program](docs/ARCHITECTURE_REBASELINE_V3_PLAN.md).
 
-Repository-local fast checks are useful during development, but acceptance is an unchanged exact candidate head under current protected governance. Never substitute an old SHA, old workflow count or stale document for fresh Git/GitHub state.
+## Historical material
+
+Completed AR, PF, PAS and Functional Closure documents and Issues are provenance. They may explain why a
+current invariant exists, but they do not select current work or authorize staging/Production actions.

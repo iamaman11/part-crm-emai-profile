@@ -1,193 +1,95 @@
-# Browser Profile Platform — Development Plan
+# Browser Profile Platform — Developer Projection
 
-**Document status:** GENERATED_PROJECTION  
-**Canonical program authority:** `docs/ARCHITECTURE_REBASELINE_V3_PLAN.md`  
-**Live Functional Closure trackers:** #399, #421  
-**Production Core gate:** `BLOCKED`  
-**Production readiness:** `false`
+**Role:** navigation/projection only
 
-This is a compact developer-facing projection, not a second roadmap. Protected `main`, current GitHub state and the canonical plan win over stale prose.
+**Execution authority:** [ARCHITECTURE_REBASELINE_V3_PLAN.md](ARCHITECTURE_REBASELINE_V3_PLAN.md) +
+[Issue #266](https://github.com/iamaman11/part-crm-emai-profile/issues/266)
 
-```text
-source_present != production_enabled
-```
+This file helps a developer find the right change path. It does not own mutable status, a current SHA,
+workflow/provider state or architecture decisions.
 
-## 1. Current state
+## Product slice
 
 ```text
-PF-1   ACCEPTED (#466)
-PF-2   ACCEPTED; semantic-authority correction #477 + raw-provider-observation correction #480 ACCEPTED (#471 provenance)
-PF-3   ACCEPTED provisional; truthfulness correction ACCEPTED (#478 / #431)
-STAGING BASELINE ACCEPTED (#486); TEMPORARY MECHANISM REMOVED (#487)
-PAS-2/TC-1 CURRENT PREREQUISITE BEFORE FC-6
-FC-6   DEFERRED / NOT STARTED; PRE-PAS-2 AUDIT RECORDED READY
-AR-12  NOT STARTED
-architecture_form_frozen = false
-architecture_complete = false
-production_mutation = false
+managed login
+-> Client create/view/edit
+-> persistent Browser Profile create
+-> attach/detach/reassign
+-> launch from Client card through the shipping Bridge
+-> controlled close and confirmed successor generation
+-> reopen confirmed state
+-> logout
 ```
 
-Do not copy a checkpoint SHA into execution assumptions. Re-read protected `main`, live trackers and
-provider state before every transaction.
+The first slice excludes native CRM passwords, Mailboxes, Notifications, Automation, new providers,
+tenant-wide Audit, global Sessions UI, complex roles, mobile parity and generic export.
 
-## 2. One bounded transaction discipline
+## Delivery order
 
 ```text
-fresh protected main + GitHub state
--> choose exactly one bounded concern
--> identify natural owner, effects, contracts, live callers and predecessor
--> implement the smallest coherent change
--> remove replaced predecessor and callers in the same transaction
--> inspect complete diff + simplification ledger
--> targeted tests
--> one unchanged exact candidate head
--> all applicable permanent CI and protected required contexts green
--> behind_by = 0
--> reviews/threads clear
--> guarded merge bound to exact head SHA
--> accepted-main reread
+E0 -> E1 -> E2 -> E3 -> E4
+-> P1 -> P2 -> P3
+-> V1 -> V2
+-> R1 -> R2 -> R3
 ```
 
-Rules:
+| ID | Developer outcome |
+|---|---|
+| E0 | One current documentation/execution authority. |
+| E1 | Every governed Worker ingress consumes canonical Capability Policy surface mapping. |
+| E2 | Release/promotion outer JSON is admitted strictly before typed decode. |
+| E3 | D1 outer JSON is admitted strictly before typed decode. |
+| E4 | First proven completed/duplicate verification authority is retired without invariant loss. |
+| P1 | Client card owns the complete visible Client/Profile relationship workflow. |
+| P2 | One authorized shipping path launches real Camoufox through Profile Bridge. |
+| P3 | Save is confirmed only after authoritative verified generation commit; reopen uses it. |
+| V1 | Exact reachable release verification runs at the accepted risk tiers. |
+| V2 | The complete CAP-12 scenario and negative/recovery cases pass on one candidate. |
+| R1 | Exact release/environment/capability/evidence envelope exists. |
+| R2 | A bounded pilot is explicitly decided with stop/recovery conditions. |
+| R3 | A named authority grants GO/PILOT or NO-GO for that unchanged candidate. |
 
-- fresh Git/GitHub state wins over old issues, old SHAs and saved CI;
-- one semantic fact has one owner;
-- a validator that independently recomputes business/policy semantics is a second authority;
-- no compatibility bridge without a named live consumer or durable obligation;
-- no successor registry merely to preserve a retired JSON/Python/Node/table authority;
-- no new current-plan/roadmap document when existing authorities suffice;
-- no checker whose primary purpose is checking another checker;
-- no tracked projection without a durable exact-byte consumer;
-- no CI weakening or branch/environment-protection bypass;
-- uncertainty fails closed.
+Do not infer the active row from this projection. Read the live pointer in #266 and the row's owning
+Issue after refreshing protected `main`.
 
-## 3. Permanent architecture boundaries
+## How to change the system
+
+1. Identify the bounded context and natural semantic/data/execution owner.
+2. Determine whether the change is internal or changes a public/generated contract.
+3. Enumerate callers, persisted obligations, side effects and the path being replaced.
+4. Create or use one bounded Issue with explicit exit criteria and non-goals.
+5. Implement one coherent vertical change; cut over callers and remove the predecessor.
+6. Run focused positive and negative proof at the cheapest sufficient CAP-05 tier.
+7. Accept only one unchanged exact PR head under protected governance.
+8. Reread accepted `main` before selecting another concern.
+
+A new provider of an existing responsibility normally adds an owner-local adapter/configuration,
+persistence migration only when data changes, a public contract only when exposed, capability admission
+only when independently controlled, and focused tests. It is not automatically a new bounded context or
+a reason for a plugin framework.
+
+## Completion levels
 
 ```text
-bounded contexts + inward dependencies
-Pure Core / Effect Shell
-observation != policy verdict
-strict versioned DTO at adapter boundary
-serde_json::Value crossing adapter -> pure core = 0
-filesystem/process/network/provider effects in pure core = 0
-Product Runtime -> opsctl/opsctl-core = 0
-opsctl provider/network/process/credential authority = 0
-Python duplicate product/release/lifecycle/evidence/fitness authority = 0
-generated projection used as semantic input = 0
-Release / Capability Profile = sole production-enable authority
+CODE_COMPLETE
+  implementation and local/integration proof are complete
+
+SCENARIO_COMPLETE
+  accepted user flow and required negative/recovery cases pass on one exact non-Production candidate
+
+PRODUCTION_AUTHORIZED
+  CAP-08 exact-candidate authority separately issues GO/PILOT
 ```
 
-JSON is allowed as an external/versioned contract, observation/evidence, artifact or generated projection. It is not an internal global business model or a second source of truth.
+One level never implies the next.
 
-## 4. Accepted prerequisite outcomes
+## Canonical references
 
-### PF-1
-
-Accepted through #466. Typed Rust owns lifecycle semantics; historical Node/Python lifecycle/inventory predecessors and tracked inventory authority remain retired.
-
-### PF-2
-
-Accepted through #472/#474, semantic-authority-corrected through #477, and raw-provider-observation-corrected through #480. The live path is:
-
-```text
-GitHub/provider read-only effects
--> raw secret-free HTTP/provider/process observations
--> strict Hosted Evidence v3 DTO
--> typed Rust policy
--> Rust-derived trust/readiness/outcome
--> deterministic evidence/artifact projection
-```
-
-Workflow/shell/Python/Node layers do not supply READY/PASS/TRUSTED or provider-read success booleans as semantic inputs. Rust owns acceptable HTTP/status/result classes, process-exit interpretation, credential/freshness/mutation boundaries and exact staging-account binding. The remaining external-review Python utility is observation acquisition only.
-
-### PF-3
-
-Accepted through #475 and truthfulness-corrected through #478. The decorative `FitnessRuleRegistry` metadata index was removed because free-text `enforcement_owner` and `negative_proof` strings were not executable linkage.
-
-The truthful baseline is now:
-
-```text
-objective invariant
--> natural specialized production checker
--> executable negative fixture/self-test using that checker path
--> permanent required CI caller where applicable
-```
-
-Do not rebuild a generic rule engine, metadata registry, DSL, plugin/DI/linter framework or fitness JSON. PF-3 remains provisional; final architecture-form freeze follows accepted AR-15.
-
-## 5. PAS-2/TC-1 and Functional Closure
-
-Staging-baseline adoption completed under temporary #486 authority, #487 removed that mechanism, and
-the fresh tracker audit recorded `FC-6 READY TO BEGIN / NOT STARTED`. The subsequently demonstrated
-PAS-2/TC-1 defect now closes frontend transport type-forgery and split operation ownership before
-readiness is decided again. It uses canonical OpenAPI 3.1,
-generated leaf operations/runtime validators, an effect-only HTTP transport and feature adapters, then
-deletes `requestJson<T>`, manual migrated operation metadata and direct API `fetch` bypasses. It does not
-create a global SDK, second schema registry, browser Protobuf transport or new digest lineage.
-
-Binding contract: `docs/PAS2_FRONTEND_TRANSPORT_CONTRACT_CLOSURE.md`.
-
-FC-6 becomes the next permitted stage only after accepted PAS-2/TC-1 and a final readiness audit; this
-transaction does not start it.
-
-A historical read-only FC-6 re-baseline already found and fixed the Release Set v2/v3 rehearsal-verifier defect in #476. It did not perform staging mutation. Current FC-6 execution still requires a fresh read-only re-baseline of accepted `main`, governance, credentials, provider state, staging identity, known-good identity and Release Sets, producing typed `READY | BLOCKED` before any mutation. The hosted-evidence prerequisite consumed by that re-baseline is the strict raw-observation/Rust-policy path accepted through #480; historical or pre-classified read verdicts are not valid substitutes.
-
-```text
-PAS-2/TC-1 accepted
--> fresh #399/#421 re-baseline
--> typed READY | BLOCKED
--> only READY may expose deploy-capable credentials or permit staging mutation
--> exact accepted bits / same-bits staging proof
--> verify
--> rollback or explicit NO_CHANGE
--> terminal machine-readable evidence
--> FC-7 closeout
-```
-
-No guessed `expected_current`, no promotion/deployment as a diagnostic, and no parallel provider authority are allowed.
-
-## 6. AR-12…AR-17
-
-- **AR-12 — Fresh Rehearsal Environment:** prove bootstrap/deploy/smoke/teardown/recreate from canonical inputs.
-- **AR-13 — Rotation Rehearsal:** prove real key/secret/credential rotation.
-- **AR-14 — Remote Recovery Rehearsal:** prove recovery from durable state/artifacts.
-- **AR-15 — Windows Delivery Program:** production-grade Profile Bridge/Camoufox updater, signed update contract, verification/key rotation, side-by-side staging, safe activation, health/LKG rollback, publisher integration and production-equivalent rehearsal. Accepted AR-15 establishes final architecture-form freeze.
-- **AR-16 — Final Whole-project Audit:** audit-only; findings block and are fixed in bounded defect PRs.
-- **AR-17 — Qualification / Production Core gate:** consumes accepted evidence and decides authorization; not a new closeout engine.
-
-## 7. Binding product scenarios
-
-```text
-PAS-1 governed identity/access
-PAS-2 client + browser-profile UI/API/bulk workflow
-PAS-3 encrypted generation/persist/open/restore lifecycle
-PAS-4 real Windows Profile Bridge + pinned Camoufox + updater/LKG
-PAS-5 crash/timeout/duplicate/partial-failure recovery and observability
-PAS-6 fresh same-bits staging delivery + rollback/recreate
-PAS-7 production-core admission + later-capability fail-closed negatives
-```
-
-Validators are necessary but do not substitute for assigned end-to-end scenario evidence.
-
-## 8. Production roadmap
-
-```text
-PC-1 Production Core v1
-PC-2 Mailbox Administration
-PC-3 Mailbox Jobs / Automation
-PC-4 Outbound / later capabilities
-```
-
-PC-1 enables only accepted Production Core capabilities through Release / Capability Profile authority. Mailbox administration/jobs/outbound code may remain source-present and tested while production-disabled.
-
-## 9. Canonical references
-
-- `docs/ARCHITECTURE_REBASELINE_V3_PLAN.md` — current program authority;
-- `docs/APPLICATION_ARCHITECTURE_MANDATORY_REQUIREMENTS.md` — permanent architecture contract;
-- `docs/ARCHITECTURE_EVOLUTION_QUALITY_CONTRACT.md` — quality/anti-weakening contract;
-- `docs/PF3_ARCHITECTURE_FITNESS_BASELINE.md` / #431 / #478 — PF-3;
-- `docs/PAS2_FRONTEND_TRANSPORT_CONTRACT_CLOSURE.md` — bounded pre-FC-6 executable frontend transport correction;
-- #471 / #477 / #480 — accepted PF-2 provenance;
-- `docs/POST_AR11_FUNCTIONAL_CLOSURE_PLAN.md` / #399 / #421 — Functional Closure;
-- `docs/ARCHITECTURE_ACCEPTANCE_PROTOCOL.md` — exact-head/merge discipline;
-- #441 / #430 / #466 — accepted historical pre-PF-1/PF-1 provenance.
+- [Product definition](PRODUCT.md)
+- [Architecture](ARCHITECTURE.md)
+- [Mandatory architecture requirements](APPLICATION_ARCHITECTURE_MANDATORY_REQUIREMENTS.md)
+- [Architecture evolution quality contract](ARCHITECTURE_EVOLUTION_QUALITY_CONTRACT.md)
+- [Current execution program](ARCHITECTURE_REBASELINE_V3_PLAN.md)
+- [Architecture acceptance protocol](ARCHITECTURE_ACCEPTANCE_PROTOCOL.md)
+- [Contract policy](CONTRACT_POLICY.md)
+- [Documentation index](INDEX.md)

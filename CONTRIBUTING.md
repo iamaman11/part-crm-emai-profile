@@ -7,10 +7,12 @@ Changes are delivered as bounded increments through a branch and pull request.
 Current execution order is governed by:
 
 1. `docs/ARCHITECTURE_REBASELINE_V3_PLAN.md` — canonical program authority;
-2. protected `main` + live tracker #441 — mutable pre-PF-1 execution state;
+2. protected `main` + live tracker #266 — mutable active-transaction and accepted-evidence state;
 3. `docs/DEVELOPMENT_PLAN.md` — compact developer-facing projection only.
 
-A projection never overrides the canonical plan or accepted protected `main`. Do not invent a numbered phase merely to continue development or to isolate a bounded defect.
+A projection, CAP research Issue, chat handoff or historical plan never overrides the canonical plan,
+Issue #266 or accepted protected `main`. Do not invent a numbered phase merely to continue development
+or isolate a bounded defect.
 
 ## GitHub access in the current agent environment
 

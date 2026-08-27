@@ -1,16 +1,22 @@
 # Architecture Acceptance Protocol
 
-**Status:** BINDING  
-**Program:** Architecture Re-baseline v3  
-**Tracking issue:** #375  
-**Machine policy:** `architecture/architecture-acceptance-policy.json`  
-**Static program order:** `architecture/architecture-program-sequence.json`
+**Status:** BINDING for exact-head acceptance; AR lifecycle sections are historical provenance
+
+**Current execution order:** `docs/ARCHITECTURE_REBASELINE_V3_PLAN.md` + Issue #266
+
+**Historical AR protocol:** Issue #375, `architecture/architecture-acceptance-policy.json`,
+`architecture/architecture-program-sequence.json`
 
 ## Purpose
 
-Architecture slices use one source history and one acceptance merge. Acceptance is no longer recorded by a per-slice closeout transformer, a CI workflow that rewrites its own PR branch, or a second source-changing PR whose only purpose is to say that the first PR was accepted.
+Every bounded transaction uses one source history and one acceptance merge. Acceptance is not recorded
+by a second source-changing PR whose only purpose is to say that the first PR was accepted.
 
-The forward protocol is:
+The exact-head/review/merge/reread rules below remain binding. References that derive `AR-12…AR-17`
+from the frozen static sequence describe the historical AR program only; they do not name or authorize
+the active CAP transaction.
+
+The binding protocol for every CAP transaction is:
 
 ```text
 exact candidate
@@ -22,22 +28,31 @@ exact candidate
   -> guarded squash merge bound to expected candidate head SHA
   -> accepted-main reread / merge is present in main history
   -> candidate tree == accepted merge tree
-  -> append-only immutable acceptance tag
-  -> derive accepted checkpoint / current slice from static program order
 ```
 
-## Architecture PR identity
+The historical AR protocol appended:
 
-From AR-12 forward an architecture slice must identify itself twice and consistently:
+```text
+-> immutable AR acceptance tag
+-> derive historical AR checkpoint/current slice from its static sequence
+```
+
+That suffix does not apply to CAP transaction selection or create a second source commit.
+
+## Historical AR PR identity
+
+The historical AR protocol required an AR slice to identify itself twice and consistently:
 
 ```text
 PR title:   AR-12: ...
 head branch agent/ar12-...
 ```
 
-The required `GitHub Governance Contract` rejects a mismatch, a single-sided architecture signal, a non-`main` base, a candidate behind the exact base, or a slice other than the state-machine-derived current slice. Non-architecture PRs remain ordinary repository changes and do not advance the architecture program.
+The related governance contract rejects malformed AR signals. CAP execution PRs are ordinary bounded
+repository changes: they follow Issue #266 and do not advance or derive authority from the frozen AR
+sequence.
 
-## Source and state model
+## Historical AR source and state model
 
 `main` is the only source history. `architecture/architecture-program-sequence.json` contains only the stable sequence and predecessor/successor relation; it must not contain mutable `accepted`, `current`, or equivalent lifecycle flags.
 
@@ -51,7 +66,7 @@ The tag points at the accepted `main` squash merge. Its message is a versioned J
 
 Tags are append-only. They may not be force-moved, overwritten or deleted by the acceptance procedure.
 
-## Generic recorder
+## Historical AR generic recorder
 
 `.github/workflows/architecture-acceptance-recorder.yml` is the only post-merge metadata writer. It runs only for merged `AR-N:` pull requests and has one allowed mutation boundary: create a new annotated acceptance tag and its `refs/tags/...` reference through the GitHub Git API.
 
@@ -59,7 +74,7 @@ It may not edit repository files, push a branch, mutate a GitHub Environment, re
 
 The workflow is classified separately as `POST_MERGE_METADATA`; it is neither a release/promotion mutator nor a manual operational authority.
 
-## AR-11 migration anchor
+## Historical AR-11 migration anchor
 
 AR-11 predates this generic protocol by one merge and is the bounded migration bootstrap:
 
@@ -74,7 +89,7 @@ AR-11 predates this generic protocol by one merge and is the bounded migration b
 
 The machine policy stores this exact bootstrap record. The permanent validator re-derives the accepted merge tree and first-parent identity from Git. Historical accepted state through AR-10 remains frozen provenance; acceptance tags become mandatory at AR-12.
 
-## Derived lifecycle state
+## Historical AR derived lifecycle state
 
 The accepted checkpoint is the highest contiguous accepted slice starting from the frozen historical baseline, the AR-11 migration anchor and then acceptance tags. A tag after a gap is invalid.
 
@@ -82,7 +97,7 @@ The current slice is the successor of that accepted checkpoint. Therefore `docs/
 
 Missing, conflicting, malformed or non-contiguous acceptance metadata fails closed.
 
-## Production state machine
+## Historical AR production state machine
 
 For accepted AR-12 through AR-16 the acceptance record must remain:
 
@@ -102,7 +117,8 @@ production_ready = false
 production_mutation = false
 ```
 
-AR-17 authorization still does not provision or enable production. `PC-1` remains the first stage allowed to perform Production Core provisioning/promotion and, only after its own protected evidence, set the applicable production-ready state.
+These historical AR state values do not authorize current Production. Current authorization is the
+separate CAP-08 exact-candidate R3 decision defined by the CAP execution program.
 
 ## Forbidden forward procedure
 
