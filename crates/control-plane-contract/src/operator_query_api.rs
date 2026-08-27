@@ -268,8 +268,7 @@ mod tests {
             assert!(document["paths"][path]["get"].is_object());
         }
         assert_eq!(
-            document["paths"]["/api/v1/tenants/{tenantId}/clients/{clientId}/profiles"]["get"]
-                ["operationId"],
+            document["paths"]["/api/v1/tenants/{tenantId}/clients/{clientId}/profiles"]["get"]["operationId"],
             "listClientProfiles"
         );
     }
