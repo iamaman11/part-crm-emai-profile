@@ -48,7 +48,8 @@ fn d1_ledger_rejects_duplicate_member_before_provider_interpretation() -> Result
 }
 
 #[test]
-fn d1_release_manifest_rejects_duplicate_member_before_typed_interpretation() -> Result<(), String> {
+fn d1_release_manifest_rejects_duplicate_member_before_typed_interpretation(
+) -> Result<(), String> {
     expect_duplicate_member(
         Invocation::D1 {
             root: Some(repo_root()),
