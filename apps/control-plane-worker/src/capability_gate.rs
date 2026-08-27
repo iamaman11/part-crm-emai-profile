@@ -45,6 +45,11 @@ impl RuntimeCapabilityContext {
     pub fn surface_enabled(&self, surface: RuntimeSurface) -> bool {
         self.unit_enabled(surface.activation_unit())
     }
+
+    #[must_use]
+    pub fn route_enabled(&self, route: RouteClass, path: &str) -> bool {
+        route_surface(route, path).is_none_or(|surface| self.surface_enabled(surface))
+    }
 }
 
 fn policy_error(error: capability_policy::PolicyError) -> Error {
