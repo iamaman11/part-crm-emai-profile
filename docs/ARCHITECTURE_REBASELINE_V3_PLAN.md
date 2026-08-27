@@ -74,14 +74,14 @@ because its code is easy or an earlier branch is green.
 | D0 | Documentation/setup authority convergence | CAP-06 natural owners: remove copied mutable order and stale authority/scope/setup claims; historical/projection material fails closed to current use. No runtime or hosted-setting mutation. |
 | E2 | Release/promotion strict JSON | CAP04-T1 adapters: duplicate-member/bounded admission precedes typed decode on current release/promotion inputs. |
 | E3 | D1 strict JSON | CAP04-T2 adapters: current D1 inputs use the same strict outer admission without changing provider/migration ownership. |
-| E4 | First CAP-05 retirement | Retire the first independently proven completed transition/duplicate authority bundle; preserve its objective current invariant and passive provenance. |
+| E4 | First CAP-05 retirement and scripting-governance cut | Retire the first independently proven completed transition/duplicate authority bundle; preserve its objective current invariant and passive provenance. Establish the prospective owner/effect/consumer/retirement rule for touched or new repository Node/MJS entrypoints without a per-file registry. |
 | C0 | First-release capability convergence | CAP-01/release owners: the selected Core profile and every reachable ingress include only the CAP-12 slice and required dependencies; Mailboxes, Notifications and Automation remain disabled; profile/effective-set identity is release-bound. |
 | P1 | CAP12-I1 Client/Profile relationship | Client card shows authorized attached Profiles; attach, detach and atomic reassign use the existing assignment owner; relation never grants access. |
 | P2 | CAP12-I2 authorized launch/Bridge | One server-authorized shipping path composes device trust, claim, lease/fence, workspace lock and pinned real Camoufox; replaced launch path is deleted. |
 | P3 | CAP12-I3 confirmed save/reopen | Controlled close commits an exactly verified encrypted successor before `Saved`; failure preserves the last confirmed generation; reopen uses authoritative active generation. |
 | A0 | Environment authorization wiring | Existing capability/release admission consumes a verified target authorization observation instead of a hard-coded `NotAuthorized`; rehearsal/staging may be admitted only by their exact envelope and Production stays fail-closed until R3. No second authorization owner. |
 | S0 | Windows shipping/recovery closure | Windows release owner: immutable Bridge/runtime artifact identity, trusted signing/distribution, SBOM/provenance, updater compatibility, rollback and clean-host recovery are candidate-bound and proven. No alternate launcher/updater. |
-| V1 | Release-facing verification convergence | Apply accepted CAP-05 risk tiers to the exact reachable release surface; retire/narrow only proven duplicate orchestration without losing an invariant. |
+| V1 | Release-facing verification and quality convergence | Apply accepted CAP-05 risk tiers to the exact reachable release surface; give every CAP-05 finding an evidenced disposition, resolve every `UNKNOWN`, and retire/narrow only proven duplicate orchestration without losing an invariant. |
 | V2 | CAP12-I4 exact scenario acceptance | On one immutable non-Production release identity prove B1–B10, including the positive path and negative, replay, concurrency, recovery, hosted identity and exact-environment evidence. |
 | R1 | Exact candidate and evidence | Freeze the release candidate identity and instantiate the CAP-08 target envelope: source/artifacts, migrations/contracts, target/config, capability digest/effective set, evidence, risks and named authorities. |
 | R2 | Pilot readiness package | Without Production mutation, bind cohort, blast radius, stop, rollback/recovery and expansion conditions to the unchanged release candidate and Production target envelope. Mandatory security/data guarantees cannot be waived. |
@@ -172,6 +172,86 @@ V2 cannot close until one evidence package maps every accepted blocker to its na
 
 B1–B6 are product/runtime closure, B7–B10 are candidate evidence. A passing subset does not imply
 `SCENARIO_COMPLETE`.
+
+### 5.3 CAP-05, repository scripting and complexity closure
+
+E4 is the first implementation cut, not a declaration that all verification debt is complete. Its
+owning Issue must start with the smallest high-confidence CAP-05 bundle: completed AR-11
+Actions-registration retirement machinery and its predecessor-only callers/manifests/self-tests. E4
+must preserve the generic current GitHub structural invariant in its natural governance proof and
+retain historical evidence only as passive provenance.
+
+Every touched or new repository Node/MJS entrypoint follows the same prospective ownership discipline
+as other effectful repository scripting without creating a global language owner or a hand-maintained
+per-file estate registry. Its owning Issue/PR must prove:
+
+```text
+one natural semantic/execution owner
++ exact allowed and forbidden effects
++ named current consumer
++ one objective invariant
++ versioned input/output contract when durable or cross-boundary
++ positive and negative/fail-closed proof
++ explicit provider/secret/mutation authority
++ predecessor cutover or retirement trigger
+```
+
+Language is not the owner. GitHub-governance MJS remains owned by GitHub governance, release MJS by the
+release boundary, D1 MJS by D1 evolution and runtime scripting by its runtime/composition owner. A new
+entrypoint with no named owner/consumer or an effect outside its owning stage fails closed. Do not
+replace retired Node/MJS/Python/JSON authority with an equivalent successor registry in another format.
+
+V1 cannot close with a qualitative statement that CI is simpler. It must publish an exact CAP-05
+disposition matrix covering every accepted finding and candidate from CAP-05 #496:
+
+```text
+RETIRED
+  -> callers = 0
+  -> unique current invariants = 0 or re-homed in one surviving primary proof
+
+KEEP
+  -> named current/durable consumer
+  -> concrete risk
+  -> natural semantic owner
+  -> cheapest sufficient primary proof and retirement trigger
+
+CONDITIONAL
+  -> named owner
+  -> missing proof/trigger
+  -> non-blocking or blocking effect stated explicitly
+  -> exact retirement condition
+```
+
+V1 exit criteria:
+
+1. every accepted CAP-05 finding is `RETIRED`, evidenced `KEEP` or evidenced `CONDITIONAL`;
+2. unresolved `UNKNOWN` findings are `0`, including `apps/foundation-check` caller ownership and the
+   independent standalone resolver-artifact consumer question;
+3. checker-for-checker and circular lifecycle retention are `0`;
+4. required contexts without a named current risk, objective invariant and primary proof are `0`;
+5. completed AR-8/AR-11 transition checks, live Release Set v2 compatibility, fixed workflow-count
+   authority, Resolver/FC-6 transition paths and aggregate orchestration each receive an exact
+   disposition rather than age-based deletion or permanent-by-existence retention;
+6. duplicate setup/build/test orchestration is removed or narrowed only after unique proofs are
+   preserved at the cheapest sufficient tier;
+7. before/after workflow, required-context, whole-file/byte and observed-duration evidence is recorded
+   without inventing unavailable p95/flakiness claims;
+8. any required-context or branch-protection change is independently justified, applied through its
+   authorized governance owner and reread from hosted state; green CI is never obtained by weakening an
+   invariant;
+9. current `opsctl`, Python and Node/MJS entrypoints on the exact reachable release surface conform to
+   their natural owner/effect boundaries; unsupported projections/reports retire only after zero
+   consumer and zero unique-invariant proof;
+10. the permanent future-check standard remains one objective invariant -> one primary proof -> the
+    cheapest sufficient lifecycle tier, with positive and negative proof and a retirement condition.
+
+Quality accountability is explicit rather than implied by tool count. The implementation author owns
+the complete diff and simplification ledger; the natural semantic owner owns the invariant; protected
+CI owns repeatable executable proof; the repository maintainer owns guarded acceptance. If a second
+qualified maintainer exists before release qualification, CODEOWNERS/approval policy may be enabled for
+critical release, security, migration and runtime surfaces through an authorized governance change.
+Solo operation must not manufacture independence through self-approval. R1 records the actual named
+release/security/risk authorities and any required independent evidence for the exact candidate.
 
 ## 6. Non-blocking owner-local convergence
 
