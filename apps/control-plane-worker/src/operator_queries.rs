@@ -73,14 +73,8 @@ pub async fn dispatch(route: RouteClass, request: &Request, env: &Env) -> Result
                             );
                         }
                     }
-                    list_client_profiles(
-                        actor.actor(),
-                        &repository,
-                        &repository,
-                        &client_id,
-                        &page,
-                    )
-                    .await
+                    list_client_profiles(actor.actor(), &repository, &repository, &client_id, &page)
+                        .await
                 }
                 Err(()) => {
                     return neutral_not_found(actor.actor().correlation_id().as_str());
@@ -181,7 +175,10 @@ fn page_request(request: &Request) -> Result<QueryPageRequest, ()> {
     Ok(QueryPageRequest::new(limit, cursor))
 }
 
-fn client_visibility_failure(correlation_id: &str, error: ClientOperationError) -> Result<Response> {
+fn client_visibility_failure(
+    correlation_id: &str,
+    error: ClientOperationError,
+) -> Result<Response> {
     match error {
         ClientOperationError::NotFound => neutral_not_found(correlation_id),
         ClientOperationError::InvalidRequest => {
