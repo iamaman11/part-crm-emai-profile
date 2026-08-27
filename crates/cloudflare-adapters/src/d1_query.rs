@@ -5,7 +5,9 @@ use application_ports::query::{
 use application_ports::query_clients::{ClientReadModelPort, ClientReadProjection};
 use application_ports::query_mailboxes::{MailboxReadModelPort, MailboxReadProjection};
 use application_ports::query_members::{MemberReadModelPort, MemberReadProjection};
-use application_ports::query_profiles::{ProfileReadModelPort, ProfileReadProjection};
+use application_ports::query_profiles::{
+    ClientProfileReadModelPort, ProfileReadModelPort, ProfileReadProjection,
+};
 use client_domain::{ClientKind, ClientStatus};
 use identity_access_domain::{MembershipRole, MembershipStatus};
 use mailbox_domain::{MailboxBindingStatus, MailboxProvider};
@@ -174,6 +176,68 @@ impl ProfileReadModelPort for D1QueryRepository {
             ORDER BY profile.profile_id
             LIMIT ?
             "#,
+            actor.tenant_scope().tenant_id().as_str(),
+            after.as_str(),
+            actor.actor_id().as_str(),
+            fetch_limit,
+        )
+        .map_err(dependency_error)?
+        .all()
+        .await
+        .map_err(dependency_error)?;
+
+        let rows = result.results::<ProfileRow>().map_err(dependency_error)?;
+        profile_page(rows, page)
+    }
+}
+
+impl ClientProfileReadModelPort for D1QueryRepository {
+    async fn list_profiles_for_client(
+        &self,
+        actor: &ActorContext,
+        client_id: &ClientId,
+        page: &QueryPageRequest,
+    ) -> Result<QueryPage<ProfileReadProjection>, QueryPortError> {
+        let after = profile_cursor(page)?;
+        let fetch_limit = fetch_limit(page);
+        let result = query!(
+            &self.database,
+            r#"
+            SELECT profile.profile_id, profile.status, profile.version,
+                   assignment.client_id AS linked_client_id,
+                   profile.active_generation_id
+            FROM browser_profiles AS profile
+            JOIN profile_client_assignments AS assignment
+              ON assignment.tenant_id = profile.tenant_id
+             AND assignment.profile_id = profile.profile_id
+             AND assignment.client_id = ?
+             AND assignment.closed_at_ms IS NULL
+            WHERE profile.tenant_id = ?
+              AND profile.profile_id > ?
+              AND EXISTS (
+                  SELECT 1
+                  FROM memberships AS membership
+                  WHERE membership.tenant_id = profile.tenant_id
+                    AND membership.actor_id = ?
+                    AND membership.status = 'ACTIVE'
+                    AND (
+                        membership.role = 'TENANT_OWNER'
+                        OR (
+                            membership.role = 'MEMBER'
+                            AND EXISTS (
+                                SELECT 1
+                                FROM profile_grants AS grant_row
+                                WHERE grant_row.tenant_id = profile.tenant_id
+                                  AND grant_row.actor_id = membership.actor_id
+                                  AND grant_row.profile_id = profile.profile_id
+                            )
+                        )
+                    )
+              )
+            ORDER BY profile.profile_id
+            LIMIT ?
+            "#,
+            client_id.as_str(),
             actor.tenant_scope().tenant_id().as_str(),
             after.as_str(),
             actor.actor_id().as_str(),
