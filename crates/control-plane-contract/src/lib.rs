@@ -249,6 +249,11 @@ mod tests {
                 RouteClass::ClientGrantApi,
             ),
             (
+                "GET",
+                "/api/v1/tenants/tenant_01/clients/client_01/profiles",
+                RouteClass::ProfileCollectionApi,
+            ),
+            (
                 "POST",
                 "/api/v1/tenants/tenant_01/profiles",
                 RouteClass::ProfileCollectionApi,
