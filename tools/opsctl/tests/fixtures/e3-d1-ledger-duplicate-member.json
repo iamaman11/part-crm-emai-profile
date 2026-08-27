@@ -1,0 +1,9 @@
+{
+  "rows": [
+    {
+      "id": 1,
+      "name": "0001_resolver_security_boundary.sql",
+      "name": "shadowed-migration.sql"
+    }
+  ]
+}

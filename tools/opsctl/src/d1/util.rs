@@ -1,4 +1,5 @@
 use super::model::D1Error;
+use crate::canonical::parse_strict_json;
 use serde_json::Value;
 use std::collections::HashSet;
 use std::fs;
@@ -60,6 +61,10 @@ pub(super) fn read_json(path: &Path, label: &str) -> Result<Value, D1Error> {
     let text = fs::read_to_string(path).map_err(|error| {
         D1Error::new(format!("cannot read {label} {}: {error}", path.display()))
     })?;
-    serde_json::from_str(&text)
-        .map_err(|error| D1Error::new(format!("cannot parse {label} {}: {error}", path.display())))
+    parse_strict_json(&text).map_err(|error| {
+        D1Error::new(format!(
+            "cannot parse {label} {}: strict JSON admission failed: {error}",
+            path.display()
+        ))
+    })
 }
