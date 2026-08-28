@@ -110,9 +110,6 @@ pub async fn verify_request_identity(
     let Some(correlation_value) = request.headers().get(CORRELATION_HEADER)? else {
         return Ok(None);
     };
-    let Some(token) = request.headers().get(ACCESS_TOKEN_HEADER)? else {
-        return Ok(None);
-    };
 
     let tenant_id = match TenantId::parse(tenant_value) {
         Ok(value) => value,
@@ -122,8 +119,31 @@ pub async fn verify_request_identity(
         Ok(value) => value,
         Err(_) => return Ok(None),
     };
+    let Some(identity) = verify_access_assertion(request, env, ACCESS_AUDIENCE_VAR).await? else {
+        return Ok(None);
+    };
+
+    Ok(Some(VerifiedRequestIdentity {
+        scope: TenantScope::new(tenant_id),
+        correlation_id,
+        identity,
+    }))
+}
+
+/// Verify a Cloudflare Access assertion against one explicit audience variable.
+///
+/// Human and machine ingress share this cryptographic owner, but callers choose distinct audiences
+/// and perform their own principal resolution after signature/issuer/time validation succeeds.
+pub(crate) async fn verify_access_assertion(
+    request: &Request,
+    env: &Env,
+    audience_var: &str,
+) -> Result<Option<VerifiedExternalIdentity>> {
+    let Some(token) = request.headers().get(ACCESS_TOKEN_HEADER)? else {
+        return Ok(None);
+    };
     let issuer = env.var(ACCESS_ISSUER_VAR)?.to_string();
-    let audience = env.var(ACCESS_AUDIENCE_VAR)?.to_string();
+    let audience = env.var(audience_var)?.to_string();
     let config = AccessJwtConfig::new(issuer.clone(), audience)
         .map_err(|error| Error::RustError(error.to_string()))?;
     let now_epoch_seconds = Date::now().as_millis() / 1000;
@@ -149,16 +169,10 @@ pub async fn verify_request_identity(
         return Ok(None);
     };
     let signature_valid = verify_rs256(&prepared, key).await?;
-    let identity = match config.accept_verified(prepared, signature_valid) {
-        Ok(value) => value,
-        Err(_) => return Ok(None),
-    };
-
-    Ok(Some(VerifiedRequestIdentity {
-        scope: TenantScope::new(tenant_id),
-        correlation_id,
-        identity,
-    }))
+    match config.accept_verified(prepared, signature_valid) {
+        Ok(identity) => Ok(Some(identity)),
+        Err(_) => Ok(None),
+    }
 }
 
 pub fn problem(
@@ -196,7 +210,13 @@ pub fn correlation_hint(request: &Request) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{PROBLEM_CONTENT_TYPE, problem_type_for_code};
+    use super::{ACCESS_AUDIENCE_VAR, PROBLEM_CONTENT_TYPE, problem_type_for_code};
+
+    #[test]
+    fn human_access_audience_remains_explicit_and_separate_from_machine_ingress() {
+        assert_eq!(ACCESS_AUDIENCE_VAR, "ACCESS_AUDIENCE");
+        assert_ne!(ACCESS_AUDIENCE_VAR, "BRIDGE_ACCESS_AUDIENCE");
+    }
 
     #[test]
     fn every_stable_problem_code_has_its_own_type() {
