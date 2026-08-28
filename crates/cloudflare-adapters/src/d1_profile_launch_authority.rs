@@ -1,7 +1,7 @@
 use application_ports::CommandExecutionEvidence;
 use application_ports::profile_launch::{
-    IssuedProfileLaunchAuthority, ProfileLaunchAuthorityError, ProfileLaunchAuthorityErrorClass,
-    ProfileLaunchAuthorityPort, RedeemedProfileLaunchAuthority,
+    IssuedProfileLaunchAuthority, ProfileLaunchAuthorityBinding, ProfileLaunchAuthorityError,
+    ProfileLaunchAuthorityErrorClass, ProfileLaunchAuthorityPort,
 };
 use hmac::{Hmac, KeyInit, Mac};
 use profile_platform_primitives::{
@@ -50,7 +50,7 @@ WHERE NOT EXISTS (
 RETURNING claim_digest
 "#;
 
-const REDEEM_AUTHORITY: &str = r#"
+const CONSUME_AUTHORITY: &str = r#"
 UPDATE profile_launch_claims
 SET redeemed_at_ms = ?
 WHERE claim_digest = ?
@@ -120,6 +120,37 @@ impl D1ProfileLaunchAuthority {
             .map_err(|_| integrity_failure())?;
         mac.update(canonical.as_bytes());
         Ok(hex_encode(mac.finalize().into_bytes().as_slice()))
+    }
+
+    async fn load_by_idempotency(
+        &self,
+        actor: &ActorContext,
+        idempotency_key: &str,
+    ) -> Result<Option<LaunchAuthorityRow>, ProfileLaunchAuthorityError> {
+        query!(
+            &self.database,
+            LOAD_BY_IDEMPOTENCY,
+            actor.tenant_scope().tenant_id().as_str(),
+            actor.actor_id().as_str(),
+            idempotency_key,
+        )
+        .map_err(map_worker_error)?
+        .first::<LaunchAuthorityRow>(None)
+        .await
+        .map_err(map_worker_error)
+    }
+
+    async fn load_by_claim(
+        &self,
+        claim_code: &str,
+    ) -> Result<Option<LaunchAuthorityRow>, ProfileLaunchAuthorityError> {
+        validate_claim_code(claim_code)?;
+        let claim_digest = digest_claim_code(claim_code);
+        query!(&self.database, LOAD_BY_DIGEST, claim_digest.as_str())
+            .map_err(map_worker_error)?
+            .first::<LaunchAuthorityRow>(None)
+            .await
+            .map_err(map_worker_error)
     }
 }
 
@@ -206,34 +237,42 @@ impl ProfileLaunchAuthorityPort for D1ProfileLaunchAuthority {
         )
     }
 
-    async fn redeem_profile_launch_authority(
+    async fn inspect_profile_launch_authority(
         &self,
         claim_code: &str,
         device_id: &DeviceId,
         now: UnixMillis,
-    ) -> Result<RedeemedProfileLaunchAuthority, ProfileLaunchAuthorityError> {
-        if claim_code.len() != 64
-            || !claim_code
-                .bytes()
-                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-        {
-            return Err(not_found());
-        }
+    ) -> Result<ProfileLaunchAuthorityBinding, ProfileLaunchAuthorityError> {
+        let row = self
+            .load_by_claim(claim_code)
+            .await?
+            .ok_or_else(not_found)?;
+        classify_redeemable(&row, device_id, now)?;
+        binding(&row)
+    }
+
+    async fn consume_profile_launch_authority(
+        &self,
+        claim_code: &str,
+        device_id: &DeviceId,
+        now: UnixMillis,
+    ) -> Result<ProfileLaunchAuthorityBinding, ProfileLaunchAuthorityError> {
+        validate_claim_code(claim_code)?;
         let claim_digest = digest_claim_code(claim_code);
         let row = self
-            .load_by_digest(&claim_digest)
+            .load_by_claim(claim_code)
             .await?
             .ok_or_else(not_found)?;
         classify_redeemable(&row, device_id, now)?;
 
-        let redeemed_at_ms = unix_to_i64(now)?;
+        let consumed_at_ms = unix_to_i64(now)?;
         let returned = query!(
             &self.database,
-            REDEEM_AUTHORITY,
-            redeemed_at_ms,
+            CONSUME_AUTHORITY,
+            consumed_at_ms,
             claim_digest.as_str(),
             device_id.as_str(),
-            redeemed_at_ms,
+            consumed_at_ms,
         )
         .map_err(map_worker_error)?
         .first::<String>(Some("claim_digest"))
@@ -242,44 +281,13 @@ impl ProfileLaunchAuthorityPort for D1ProfileLaunchAuthority {
 
         if returned.is_none() {
             let current = self
-                .load_by_digest(&claim_digest)
+                .load_by_claim(claim_code)
                 .await?
                 .ok_or_else(not_found)?;
             classify_redeemable(&current, device_id, now)?;
             return Err(integrity_failure());
         }
-        redemption(&row)
-    }
-}
-
-impl D1ProfileLaunchAuthority {
-    async fn load_by_idempotency(
-        &self,
-        actor: &ActorContext,
-        idempotency_key: &str,
-    ) -> Result<Option<LaunchAuthorityRow>, ProfileLaunchAuthorityError> {
-        query!(
-            &self.database,
-            LOAD_BY_IDEMPOTENCY,
-            actor.tenant_scope().tenant_id().as_str(),
-            actor.actor_id().as_str(),
-            idempotency_key,
-        )
-        .map_err(map_worker_error)?
-        .first::<LaunchAuthorityRow>(None)
-        .await
-        .map_err(map_worker_error)
-    }
-
-    async fn load_by_digest(
-        &self,
-        claim_digest: &str,
-    ) -> Result<Option<LaunchAuthorityRow>, ProfileLaunchAuthorityError> {
-        query!(&self.database, LOAD_BY_DIGEST, claim_digest)
-            .map_err(map_worker_error)?
-            .first::<LaunchAuthorityRow>(None)
-            .await
-            .map_err(map_worker_error)
+        binding(&row)
     }
 }
 
@@ -318,6 +326,17 @@ fn replay_issue(
     ))
 }
 
+fn validate_claim_code(claim_code: &str) -> Result<(), ProfileLaunchAuthorityError> {
+    if claim_code.len() != 64
+        || !claim_code
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        return Err(not_found());
+    }
+    Ok(())
+}
+
 fn classify_redeemable(
     row: &LaunchAuthorityRow,
     device_id: &DeviceId,
@@ -333,10 +352,10 @@ fn classify_redeemable(
     Ok(())
 }
 
-fn redemption(
+fn binding(
     row: &LaunchAuthorityRow,
-) -> Result<RedeemedProfileLaunchAuthority, ProfileLaunchAuthorityError> {
-    Ok(RedeemedProfileLaunchAuthority::new(
+) -> Result<ProfileLaunchAuthorityBinding, ProfileLaunchAuthorityError> {
+    Ok(ProfileLaunchAuthorityBinding::new(
         TenantId::parse(row.tenant_id.clone()).map_err(|_| integrity_failure())?,
         ActorId::parse(row.actor_id.clone()).map_err(|_| integrity_failure())?,
         DeviceId::parse(row.device_id.clone()).map_err(|_| integrity_failure())?,
@@ -391,7 +410,7 @@ fn map_worker_error(_error: worker::Error) -> ProfileLaunchAuthorityError {
 
 #[cfg(test)]
 mod tests {
-    use super::{CLAIM_DOMAIN, CLAIM_TTL_MS, INSERT_AUTHORITY, REDEEM_AUTHORITY};
+    use super::{CLAIM_DOMAIN, CLAIM_TTL_MS, CONSUME_AUTHORITY, INSERT_AUTHORITY, LOAD_BY_DIGEST};
 
     #[test]
     fn claim_storage_never_persists_raw_bearer_code() {
@@ -403,14 +422,21 @@ mod tests {
     }
 
     #[test]
-    fn redemption_is_atomic_device_bound_and_expiry_bound() {
+    fn inspection_is_read_only_and_precedes_consumption_by_contract() {
+        assert!(LOAD_BY_DIGEST.contains("SELECT"));
+        assert!(!LOAD_BY_DIGEST.contains("UPDATE"));
+        assert!(!LOAD_BY_DIGEST.contains("redeemed_at_ms ="));
+    }
+
+    #[test]
+    fn consumption_is_atomic_device_bound_and_expiry_bound() {
         for required in [
             "redeemed_at_ms IS NULL",
             "expires_at_ms > ?",
             "device_id = ?",
             "RETURNING claim_digest",
         ] {
-            assert!(REDEEM_AUTHORITY.contains(required));
+            assert!(CONSUME_AUTHORITY.contains(required));
         }
     }
 }

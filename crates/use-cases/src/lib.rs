@@ -8,6 +8,7 @@ pub mod profile_assignments;
 pub mod profile_grants;
 pub mod profile_launch;
 pub mod profile_launch_authority;
+pub mod profile_launch_redemption;
 pub mod profiles;
 
 pub use contracts::ProblemCode;

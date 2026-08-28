@@ -158,7 +158,7 @@ impl fmt::Debug for IssuedProfileLaunchAuthority {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct RedeemedProfileLaunchAuthority {
+pub struct ProfileLaunchAuthorityBinding {
     tenant_id: TenantId,
     actor_id: ActorId,
     device_id: DeviceId,
@@ -166,7 +166,7 @@ pub struct RedeemedProfileLaunchAuthority {
     generation_id: GenerationId,
 }
 
-impl RedeemedProfileLaunchAuthority {
+impl ProfileLaunchAuthorityBinding {
     #[must_use]
     pub const fn new(
         tenant_id: TenantId,
@@ -231,10 +231,21 @@ pub trait ProfileLaunchAuthorityPort {
         evidence: &CommandExecutionEvidence,
     ) -> Result<IssuedProfileLaunchAuthority, ProfileLaunchAuthorityError>;
 
-    async fn redeem_profile_launch_authority(
+    /// Read-only validation of a still-live authority. The caller must already have authenticated
+    /// the machine and supplies that authenticated device identity before any claim lookup.
+    async fn inspect_profile_launch_authority(
         &self,
         claim_code: &str,
         device_id: &DeviceId,
         now: UnixMillis,
-    ) -> Result<RedeemedProfileLaunchAuthority, ProfileLaunchAuthorityError>;
+    ) -> Result<ProfileLaunchAuthorityBinding, ProfileLaunchAuthorityError>;
+
+    /// Final one-time CAS. Security-sensitive current state must be revalidated by the use-case
+    /// immediately before this operation.
+    async fn consume_profile_launch_authority(
+        &self,
+        claim_code: &str,
+        device_id: &DeviceId,
+        now: UnixMillis,
+    ) -> Result<ProfileLaunchAuthorityBinding, ProfileLaunchAuthorityError>;
 }
