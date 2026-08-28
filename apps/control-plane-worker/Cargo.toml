@@ -13,7 +13,6 @@ application-ports.workspace = true
 capability-policy.workspace = true
 client-domain.workspace = true
 cloudflare-adapters.workspace = true
-contracts.workspace = true
 control-plane-contract = { path = "../../crates/control-plane-contract" }
 device-domain.workspace = true
 identity-access-domain.workspace = true
