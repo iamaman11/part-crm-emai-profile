@@ -9,6 +9,7 @@ publish = false
 application-ports.workspace = true
 client-domain.workspace = true
 contracts.workspace = true
+device-domain.workspace = true
 identity-access-domain.workspace = true
 profile-domain.workspace = true
 profile-platform-primitives.workspace = true
