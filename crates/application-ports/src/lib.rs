@@ -60,7 +60,7 @@ pub use device_jobs::{
     AuthenticatedDevicePort, DeviceExecutionBlocker, DeviceExecutionPreconditionPort,
     DeviceExecutionReadiness, DeviceJobAuthorizationPort, DeviceJobCapability,
     DeviceJobInsertOutcome, DeviceJobPortError, DeviceJobPortErrorClass, DeviceJobQueryPort,
-    DeviceJobRepositoryPort, DeviceJobWriteOutcome,
+    DeviceJobRepositoryPort, DeviceJobTarget, DeviceJobWriteOutcome,
 };
 pub use generation_objects::{
     GenerationObjectDescriptor, GenerationObjectDescriptorVerifyPort,
