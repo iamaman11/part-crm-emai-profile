@@ -9,6 +9,7 @@ import {
   getProfileMetadata as getProfileMetadataOperation,
   grantProfileAccess as grantProfileAccessOperation,
   issueProfileCoordinatorCommand as issueProfileCoordinatorCommandOperation,
+  launchProfile as launchProfileOperation,
   listProfiles as listProfilesOperation,
   quarantineProfileGeneration as quarantineProfileGenerationOperation,
   registerProfileGeneration as registerProfileGenerationOperation,
@@ -26,6 +27,7 @@ import type {
   ProfileDetachmentRequest,
   ProfileGenerationResponse,
   ProfileGrantRequest,
+  ProfileLaunchProjection,
   ProfileListPageDto,
   ProfileView,
   RegisterProfileGenerationRequest,
@@ -42,6 +44,7 @@ export type ChangeGenerationActivationInput = { readonly expectedProfileVersion:
 export type QuarantineGenerationInput = { readonly expectedGenerationVersion: number };
 export type ProfileProjection = ProfileView;
 export type GenerationProjection = ProfileGenerationResponse;
+export type ProfileLaunch = ProfileLaunchProjection;
 export type CoordinatorResponse = CoordinatorResponseDto;
 export type CoordinatorCommandDto = GeneratedCoordinatorCommandDto;
 export type { CoordinatorCommandRequestDto, ProfileListPageDto };
@@ -62,6 +65,14 @@ export function listProfiles(
 
 export function getProfile(tenantId: string, profileId: string): Promise<ProfileProjection> {
   return getProfileMetadataOperation({ tenantId, profileId });
+}
+
+export function launchProfile(
+  tenantId: string,
+  profileId: string,
+  idempotencyKey: string,
+): Promise<ProfileLaunch> {
+  return launchProfileOperation({ tenantId, profileId, idempotencyKey });
 }
 
 export function createProfile(tenantId: string, profileId: string, idempotencyKey: string): Promise<MutationReceipt> {
