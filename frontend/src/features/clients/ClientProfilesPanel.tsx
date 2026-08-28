@@ -1,6 +1,8 @@
 import { useInfiniteQuery, useQueryClient } from '@tanstack/react-query';
 import { useState, type FormEvent } from 'react';
-import { assignProfile, detachProfile, getProfile } from '../profiles';
+import { assignProfile, detachProfile, getProfile, launchProfile } from '../profiles';
+import { invokeProfileBridgeLaunch } from '../profiles/launchBridge';
+import { newIdempotencyKey } from '../../shared/api/idempotency';
 import { ConfirmAction } from '../../shared/ui/ConfirmAction';
 import { StatusMessage } from '../../shared/ui/StatusMessage';
 import { useLogicalCommandMutation } from '../../shared/ui/useLogicalCommandMutation';
@@ -21,6 +23,8 @@ export function ClientProfilesPanel({
 }) {
   const queryClient = useQueryClient();
   const [detachReason, setDetachReason] = useState('');
+  const [launchingProfileId, setLaunchingProfileId] = useState<string | null>(null);
+  const [launchError, setLaunchError] = useState<Error | null>(null);
   const queryKey = ['client-registry', tenantId, clientId, 'profiles'] as const;
 
   const profiles = useInfiniteQuery({
@@ -74,6 +78,19 @@ export function ClientProfilesPanel({
     { onSuccess: refreshRelationship },
   );
 
+  const requestLaunch = async (profileId: string) => {
+    setLaunchError(null);
+    setLaunchingProfileId(profileId);
+    try {
+      const launch = await launchProfile(tenantId, profileId, newIdempotencyKey());
+      invokeProfileBridgeLaunch(launch.launchUri);
+    } catch {
+      setLaunchError(new Error('Profile launch failed. Retry from this profile.'));
+    } finally {
+      setLaunchingProfileId(null);
+    }
+  };
+
   const visibleProfiles = profiles.data?.pages.flatMap((page) => page.profiles) ?? [];
 
   return (
@@ -82,11 +99,13 @@ export function ClientProfilesPanel({
       <h2>Browser profiles</h2>
       <p>
         This list contains only profiles independently visible to the active actor. Client visibility
-        and assignment never grant profile access.
+        and assignment never grant profile access. Launch authorization, device selection and generation
+        selection remain server-owned.
       </p>
       <StatusMessage
         state={
           profiles.error
+          ?? launchError
           ?? assign.error
           ?? detach.error
           ?? (profiles.isPending ? 'Loading attached profiles…' : null)
@@ -118,16 +137,26 @@ export function ClientProfilesPanel({
                     {profile.status} · version {profile.version}
                   </div>
                 </div>
-                <ConfirmAction
-                  label="detach profile"
-                  consequence="This closes only the active Client/Profile relationship. The Client, Profile and explicit ACL grants remain intact."
-                  disabled={detach.isPending || detachReason.trim().length === 0}
-                  onConfirm={() => detach.mutateAsync({
-                    profileId: profile.profileId,
-                    expectedProfileVersion: profile.version,
-                    reason: detachReason.trim(),
-                  }).then(() => undefined)}
-                />
+                <div className="row-actions">
+                  <button
+                    type="button"
+                    disabled={launchingProfileId !== null}
+                    aria-label={`Launch profile ${profile.profileId}`}
+                    onClick={() => void requestLaunch(profile.profileId)}
+                  >
+                    {launchingProfileId === profile.profileId ? 'Launching…' : 'Launch'}
+                  </button>
+                  <ConfirmAction
+                    label="detach profile"
+                    consequence="This closes only the active Client/Profile relationship. The Client, Profile and explicit ACL grants remain intact."
+                    disabled={detach.isPending || detachReason.trim().length === 0}
+                    onConfirm={() => detach.mutateAsync({
+                      profileId: profile.profileId,
+                      expectedProfileVersion: profile.version,
+                      reason: detachReason.trim(),
+                    }).then(() => undefined)}
+                  />
+                </div>
               </article>
             ))}
           </div>
