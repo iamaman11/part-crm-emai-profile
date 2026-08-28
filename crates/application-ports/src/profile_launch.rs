@@ -31,9 +31,6 @@ impl ProfileLaunchContext {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ProfileLaunchPortErrorClass {
-    Conflict,
-    NotFound,
-    ReplayRejected,
     IntegrityFailure,
     DependencyUnavailable,
 }
@@ -58,18 +55,63 @@ impl ProfileLaunchPortError {
 impl fmt::Display for ProfileLaunchPortError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(match self.class {
-            ProfileLaunchPortErrorClass::Conflict => "profile launch authority conflict",
-            ProfileLaunchPortErrorClass::NotFound => "profile launch authority not found",
-            ProfileLaunchPortErrorClass::ReplayRejected => "profile launch authority replay rejected",
-            ProfileLaunchPortErrorClass::IntegrityFailure => "profile launch authority integrity failure",
+            ProfileLaunchPortErrorClass::IntegrityFailure => {
+                "profile launch context integrity failure"
+            }
             ProfileLaunchPortErrorClass::DependencyUnavailable => {
-                "profile launch authority dependency unavailable"
+                "profile launch context dependency unavailable"
             }
         })
     }
 }
 
 impl std::error::Error for ProfileLaunchPortError {}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ProfileLaunchAuthorityErrorClass {
+    Conflict,
+    NotFound,
+    ReplayRejected,
+    IntegrityFailure,
+    DependencyUnavailable,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ProfileLaunchAuthorityError {
+    class: ProfileLaunchAuthorityErrorClass,
+}
+
+impl ProfileLaunchAuthorityError {
+    #[must_use]
+    pub const fn new(class: ProfileLaunchAuthorityErrorClass) -> Self {
+        Self { class }
+    }
+
+    #[must_use]
+    pub const fn class(self) -> ProfileLaunchAuthorityErrorClass {
+        self.class
+    }
+}
+
+impl fmt::Display for ProfileLaunchAuthorityError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self.class {
+            ProfileLaunchAuthorityErrorClass::Conflict => "profile launch authority conflict",
+            ProfileLaunchAuthorityErrorClass::NotFound => "profile launch authority not found",
+            ProfileLaunchAuthorityErrorClass::ReplayRejected => {
+                "profile launch authority replay rejected"
+            }
+            ProfileLaunchAuthorityErrorClass::IntegrityFailure => {
+                "profile launch authority integrity failure"
+            }
+            ProfileLaunchAuthorityErrorClass::DependencyUnavailable => {
+                "profile launch authority dependency unavailable"
+            }
+        })
+    }
+}
+
+impl std::error::Error for ProfileLaunchAuthorityError {}
 
 #[derive(Clone, Eq, PartialEq)]
 pub struct IssuedProfileLaunchAuthority {
@@ -187,12 +229,12 @@ pub trait ProfileLaunchAuthorityPort {
         generation_id: &GenerationId,
         device_id: &DeviceId,
         evidence: &CommandExecutionEvidence,
-    ) -> Result<IssuedProfileLaunchAuthority, ProfileLaunchPortError>;
+    ) -> Result<IssuedProfileLaunchAuthority, ProfileLaunchAuthorityError>;
 
     async fn redeem_profile_launch_authority(
         &self,
         claim_code: &str,
         device_id: &DeviceId,
         now: UnixMillis,
-    ) -> Result<RedeemedProfileLaunchAuthority, ProfileLaunchPortError>;
+    ) -> Result<RedeemedProfileLaunchAuthority, ProfileLaunchAuthorityError>;
 }
