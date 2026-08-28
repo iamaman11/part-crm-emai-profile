@@ -32,6 +32,8 @@ fn map_authority_error(error: ProfileLaunchAuthorityError) -> ApplicationError {
         ProfileLaunchAuthorityErrorClass::NotFound => ProblemCode::NotFound,
         ProfileLaunchAuthorityErrorClass::ReplayRejected => ProblemCode::ReplayRejected,
         ProfileLaunchAuthorityErrorClass::IntegrityFailure => ProblemCode::IntegrityFailure,
-        ProfileLaunchAuthorityErrorClass::DependencyUnavailable => ProblemCode::DependencyUnavailable,
+        ProfileLaunchAuthorityErrorClass::DependencyUnavailable => {
+            ProblemCode::DependencyUnavailable
+        }
     })
 }
