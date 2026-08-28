@@ -231,7 +231,8 @@ END;
 -- the Active invariant required by attach/reassign/detach reconstruction. Resolve the
 -- relationship first by DETACH or atomic reassign; then the existing Client archive path works
 -- unchanged. This extends the existing 0014 lifecycle admission owner rather than adding a
--- second lifecycle writer.
+-- second lifecycle writer. The error is classified by the existing identity-mismatch conflict
+-- taxonomy: the requested Client lifecycle state is incompatible with the active relationship.
 DROP TRIGGER client_lifecycle_command_validate;
 CREATE TRIGGER client_lifecycle_command_validate
 BEFORE INSERT ON client_lifecycle_commands
@@ -263,7 +264,7 @@ BEGIN
           AND updated_at_ms > NEW.executed_at_ms
     );
 
-    SELECT RAISE(ABORT, 'client_archive_active_assignment_conflict')
+    SELECT RAISE(ABORT, 'client_archive_active_assignment_identity_mismatch')
     WHERE NEW.operation = 'ARCHIVE'
       AND EXISTS (
         SELECT 1 FROM profile_client_assignments
