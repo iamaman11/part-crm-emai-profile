@@ -48,6 +48,7 @@ pub mod d1_profile_application;
 pub mod d1_profile_coordinator;
 pub mod d1_profile_generation_application;
 pub mod d1_profile_generations;
+pub mod d1_profile_launch;
 pub mod d1_profiles;
 pub mod d1_query;
 pub mod d1_realtime_notifications;
