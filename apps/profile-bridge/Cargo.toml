@@ -5,6 +5,20 @@ edition.workspace = true
 rust-version.workspace = true
 publish = false
 default-run = "profile-bridge"
+autobins = false
+
+[features]
+default = []
+synthetic-test-bin = []
+
+[[bin]]
+name = "profile-bridge"
+path = "src/main.rs"
+
+[[bin]]
+name = "profile-bridge-synthetic"
+path = "src/bin/profile-bridge-synthetic.rs"
+required-features = ["synthetic-test-bin"]
 
 [dependencies]
 application-ports.workspace = true
