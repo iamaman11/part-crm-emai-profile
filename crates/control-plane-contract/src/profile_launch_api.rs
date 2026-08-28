@@ -1,11 +1,53 @@
-use serde::{Deserialize, Serialize};
+use serde::de::Error as _;
+use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{Value, json};
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+const CLAIM_URI_PREFIX: &str = "profilebridge://claim/";
+const CLAIM_CODE_MIN_LENGTH: usize = 24;
+const CLAIM_CODE_MAX_LENGTH: usize = 96;
+const CLAIM_URI_PATTERN: &str = "^profilebridge://claim/[A-Za-z0-9_-]{24,96}$";
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ProfileLaunchProjection {
     pub launch_uri: String,
     pub expires_at_ms: u64,
+}
+
+impl<'de> Deserialize<'de> for ProfileLaunchProjection {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase", deny_unknown_fields)]
+        struct WireProjection {
+            launch_uri: String,
+            expires_at_ms: u64,
+        }
+
+        let wire = WireProjection::deserialize(deserializer)?;
+        if !valid_launch_uri(&wire.launch_uri) {
+            return Err(D::Error::custom("invalid Profile Bridge launch URI"));
+        }
+        if wire.expires_at_ms == 0 {
+            return Err(D::Error::custom("launch authority expiry must be positive"));
+        }
+        Ok(Self {
+            launch_uri: wire.launch_uri,
+            expires_at_ms: wire.expires_at_ms,
+        })
+    }
+}
+
+fn valid_launch_uri(value: &str) -> bool {
+    let Some(code) = value.strip_prefix(CLAIM_URI_PREFIX) else {
+        return false;
+    };
+    (CLAIM_CODE_MIN_LENGTH..=CLAIM_CODE_MAX_LENGTH).contains(&code.len())
+        && code
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'-')
 }
 
 #[must_use]
@@ -49,9 +91,9 @@ pub fn openapi_fragment() -> Value {
                     "properties": {
                         "launchUri": {
                             "type": "string",
-                            "minLength": 46,
-                            "maxLength": 118,
-                            "pattern": "^profilebridge://claim/[A-Za-z0-9_-]{24,96}$"
+                            "minLength": CLAIM_URI_PREFIX.len() + CLAIM_CODE_MIN_LENGTH,
+                            "maxLength": CLAIM_URI_PREFIX.len() + CLAIM_CODE_MAX_LENGTH,
+                            "pattern": CLAIM_URI_PATTERN
                         },
                         "expiresAtMs": {
                             "type": "integer",
@@ -76,6 +118,7 @@ mod tests {
             r#"{"launchUri":"profilebridge://claim/claim_01JBRIDGE_FEASIBILITY","expiresAtMs":1000,"deviceId":"device_01JTEST"}"#,
             r#"{"launchUri":"profilebridge://claim/short","expiresAtMs":1000}"#,
             r#"{"launchUri":"profilebridge://claim/claim_01JBRIDGE_FEASIBILITY?copy=true","expiresAtMs":1000}"#,
+            r#"{"launchUri":"profilebridge://claim/claim_01JBRIDGE_FEASIBILITY","expiresAtMs":0}"#,
         ] {
             assert!(serde_json::from_str::<ProfileLaunchProjection>(invalid).is_err());
         }
