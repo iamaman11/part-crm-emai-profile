@@ -1,0 +1,85 @@
+use crate::access_session::verify_access_assertion;
+use application_ports::DeviceJobPortErrorClass;
+use application_ports::profile_launch::ProfileLaunchMachineBinding;
+use cloudflare_adapters::d1_authenticated_device::D1AuthenticatedDevice;
+use control_plane_contract::D1_CATALOG_BINDING;
+use profile_platform_primitives::CorrelationId;
+use worker::{Env, Error, Request, Result};
+
+pub const BRIDGE_ACCESS_AUDIENCE_VAR: &str = "BRIDGE_ACCESS_AUDIENCE";
+
+/// Authenticate the dedicated Bridge perimeter and resolve the actual machine through the existing
+/// device-principal owner. Claim or coordinator payloads must not be parsed before this succeeds.
+pub async fn resolve_bridge_machine(
+    request: &Request,
+    env: &Env,
+    correlation_id: &CorrelationId,
+) -> Result<Option<ProfileLaunchMachineBinding>> {
+    let Some(_access_identity) =
+        verify_access_assertion(request, env, BRIDGE_ACCESS_AUDIENCE_VAR).await?
+    else {
+        return Ok(None);
+    };
+    let Some(machine_fingerprint) = verified_mtls_fingerprint(request) else {
+        return Ok(None);
+    };
+
+    let devices = D1AuthenticatedDevice::new(env.d1(D1_CATALOG_BINDING)?);
+    match devices
+        .resolve_machine_certificate_fingerprint(&machine_fingerprint)
+        .await
+    {
+        Ok(value) => Ok(value),
+        Err(error) => match error.class() {
+            DeviceJobPortErrorClass::AuthenticationFailed => Ok(None),
+            DeviceJobPortErrorClass::IntegrityFailure => Err(Error::RustError(format!(
+                "Bridge machine identity integrity failure ({})",
+                correlation_id.as_str()
+            ))),
+            DeviceJobPortErrorClass::DependencyUnavailable => Err(Error::RustError(format!(
+                "Bridge machine identity dependency unavailable ({})",
+                correlation_id.as_str()
+            ))),
+        },
+    }
+}
+
+fn verified_mtls_fingerprint(request: &Request) -> Option<String> {
+    let tls = request.cf()?.tls_client_auth()?;
+    if tls.cert_presented() != "1" || tls.cert_verified() != "SUCCESS" {
+        return None;
+    }
+    normalize_sha256_fingerprint(&tls.cert_fingerprint_sha256())
+}
+
+fn normalize_sha256_fingerprint(value: &str) -> Option<String> {
+    if value.len() != 64 || !value.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return None;
+    }
+    Some(value.to_ascii_lowercase())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{BRIDGE_ACCESS_AUDIENCE_VAR, normalize_sha256_fingerprint};
+
+    #[test]
+    fn bridge_machine_auth_uses_a_dedicated_access_audience() {
+        assert_eq!(BRIDGE_ACCESS_AUDIENCE_VAR, "BRIDGE_ACCESS_AUDIENCE");
+        assert_ne!(BRIDGE_ACCESS_AUDIENCE_VAR, "ACCESS_AUDIENCE");
+    }
+
+    #[test]
+    fn bridge_device_identity_accepts_only_exact_sha256_certificate_fingerprint() {
+        let lower = "a1".repeat(32);
+        let upper = lower.to_ascii_uppercase();
+        assert_eq!(normalize_sha256_fingerprint(&lower), Some(lower.clone()));
+        assert_eq!(normalize_sha256_fingerprint(&upper), Some(lower));
+        assert_eq!(normalize_sha256_fingerprint(&"a".repeat(63)), None);
+        assert_eq!(normalize_sha256_fingerprint(&"g".repeat(64)), None);
+        assert_eq!(
+            normalize_sha256_fingerprint(&format!("{}:", "a".repeat(63))),
+            None
+        );
+    }
+}

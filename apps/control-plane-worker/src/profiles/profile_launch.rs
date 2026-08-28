@@ -1,27 +1,29 @@
+mod bridge_machine;
+mod profile_launch_coordinator;
+
+use self::bridge_machine::resolve_bridge_machine;
+use self::profile_launch_coordinator::ensure_bridge_launch_intent;
 use crate::access_session::{
     correlation_hint, membership_role, neutral_not_found, problem, resolve_active_request_actor,
-    verify_access_assertion,
 };
 use crate::command_evidence;
 use crate::composition::{
     authenticated_device, device_execution_preconditions, device_job_authorization,
 };
-use application_ports::DeviceJobPortErrorClass;
 use cloudflare_adapters::d1_active_membership::D1ActiveMembership;
-use cloudflare_adapters::d1_authenticated_device::D1AuthenticatedDevice;
 use control_plane_contract::D1_CATALOG_BINDING;
 use control_plane_contract::profile_launch_api::ProfileLaunchProjection;
 use profile_platform_primitives::{CorrelationId, ProfileId, UnixMillis};
 use serde::{Deserialize, Serialize};
 use use_cases::profile_launch::authorize_profile_launch;
 use use_cases::profile_launch_authority::issue_profile_launch_authority;
-use use_cases::profile_launch_redemption::redeem_profile_launch_authority;
+use use_cases::profile_launch_redemption::{
+    consume_validated_profile_launch_redemption, validate_profile_launch_redemption,
+};
 use use_cases::{ApplicationError, ProblemCode};
 use worker::{Date, Env, Request, Response, Result};
 
 use super::profile_launch_composition::{launch_authority, launch_context};
-
-const BRIDGE_ACCESS_AUDIENCE_VAR: &str = "BRIDGE_ACCESS_AUDIENCE";
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -43,6 +45,7 @@ struct BridgeProfileLaunchRedemptionProjection {
     profile_id: String,
     generation_id: String,
     device_id: String,
+    launch_intent_id: String,
 }
 
 pub(super) async fn launch(
@@ -51,8 +54,6 @@ pub(super) async fn launch(
     tenant_id: &str,
     profile_id: &str,
 ) -> Result<Response> {
-    // Route classification admits exactly one POST Bridge path as ProfileLaunchApi. Keeping the
-    // authentication split inside the semantic launch owner prevents a second redemption owner.
     if request.path().starts_with("/bridge/") {
         return redeem_from_bridge(request, env).await;
     }
@@ -124,29 +125,9 @@ async fn redeem_from_bridge(request: &mut Request, env: &Env) -> Result<Response
         Err(_) => return neutral_not_found(&correlation_value),
     };
 
-    // Access is the perimeter proof for the dedicated Bridge audience; it is not the device
-    // identity owner. The actual machine must additionally prove possession of its client
-    // certificate at the TLS edge. Both checks happen before body parsing and before the launch
-    // authority adapter exists, so failed machine authentication cannot probe claim existence.
-    let Some(_access_identity) =
-        verify_access_assertion(request, env, BRIDGE_ACCESS_AUDIENCE_VAR).await?
-    else {
+    let Some(machine_binding) = resolve_bridge_machine(request, env, &correlation_id).await? else {
         return neutral_not_found(correlation_id.as_str());
     };
-    let Some(machine_fingerprint) = verified_mtls_fingerprint(request) else {
-        return neutral_not_found(correlation_id.as_str());
-    };
-
-    let machine_device = D1AuthenticatedDevice::new(env.d1(D1_CATALOG_BINDING)?);
-    let machine_binding = match machine_device
-        .resolve_machine_certificate_fingerprint(&machine_fingerprint)
-        .await
-    {
-        Ok(Some(value)) => value,
-        Ok(None) => return neutral_not_found(correlation_id.as_str()),
-        Err(error) => return machine_identity_failure(correlation_id.as_str(), error.class()),
-    };
-
     let body = match request.json::<BridgeProfileLaunchRedemptionRequest>().await {
         Ok(value) => value,
         Err(_) => return neutral_not_found(correlation_id.as_str()),
@@ -159,7 +140,7 @@ async fn redeem_from_bridge(request: &mut Request, env: &Env) -> Result<Response
     let authorization = device_job_authorization(env)?;
     let preconditions = device_execution_preconditions(env)?;
     let now = UnixMillis::new(Date::now().as_millis());
-    let redeemed = match redeem_profile_launch_authority(
+    let validated = match validate_profile_launch_redemption(
         &correlation_id,
         &body.claim_code,
         &machine_binding,
@@ -177,52 +158,63 @@ async fn redeem_from_bridge(request: &mut Request, env: &Env) -> Result<Response
         Err(error) => return application_failure(correlation_id.as_str(), error),
     };
 
+    let launch_intent_id = match ensure_bridge_launch_intent(
+        env,
+        validated.actor(),
+        validated.role(),
+        validated.binding().profile_id(),
+        validated.binding().device_id(),
+        &body.claim_code,
+    )
+    .await
+    {
+        Ok(value) => value,
+        Err(error) => return application_failure(correlation_id.as_str(), error),
+    };
+
+    let revalidated_at = UnixMillis::new(Date::now().as_millis());
+    let revalidated = match validate_profile_launch_redemption(
+        &correlation_id,
+        &body.claim_code,
+        &machine_binding,
+        revalidated_at,
+        &memberships,
+        &authority,
+        &context,
+        &device,
+        &authorization,
+        &preconditions,
+    )
+    .await
+    {
+        Ok(value) if value.binding() == validated.binding() => value,
+        Ok(_) => return neutral_not_found(correlation_id.as_str()),
+        Err(error) => return application_failure(correlation_id.as_str(), error),
+    };
+
+    let redeemed = match consume_validated_profile_launch_redemption(
+        &revalidated,
+        &body.claim_code,
+        revalidated_at,
+        &authority,
+    )
+    .await
+    {
+        Ok(value) => value,
+        Err(error) => return application_failure(correlation_id.as_str(), error),
+    };
+
     let mut response = Response::from_json(&BridgeProfileLaunchRedemptionProjection {
         tenant_id: redeemed.tenant_id().as_str().to_owned(),
         actor_id: redeemed.actor_id().as_str().to_owned(),
         profile_id: redeemed.profile_id().as_str().to_owned(),
         generation_id: redeemed.generation_id().as_str().to_owned(),
         device_id: redeemed.device_id().as_str().to_owned(),
+        launch_intent_id: launch_intent_id.as_str().to_owned(),
     })?;
     response.headers_mut().set("cache-control", "no-store")?;
     response.headers_mut().set("pragma", "no-cache")?;
     Ok(response)
-}
-
-fn verified_mtls_fingerprint(request: &Request) -> Option<String> {
-    let tls = request.cf()?.tls_client_auth()?;
-    if tls.cert_presented() != "1" || tls.cert_verified() != "SUCCESS" {
-        return None;
-    }
-    normalize_sha256_fingerprint(&tls.cert_fingerprint_sha256())
-}
-
-fn normalize_sha256_fingerprint(value: &str) -> Option<String> {
-    if value.len() != 64 || !value.bytes().all(|byte| byte.is_ascii_hexdigit()) {
-        return None;
-    }
-    Some(value.to_ascii_lowercase())
-}
-
-fn machine_identity_failure(
-    correlation_id: &str,
-    class: DeviceJobPortErrorClass,
-) -> Result<Response> {
-    match class {
-        DeviceJobPortErrorClass::AuthenticationFailed => neutral_not_found(correlation_id),
-        DeviceJobPortErrorClass::IntegrityFailure => problem(
-            correlation_id,
-            500,
-            "integrity_failure",
-            "Integrity Failure",
-        ),
-        DeviceJobPortErrorClass::DependencyUnavailable => problem(
-            correlation_id,
-            503,
-            "dependency_unavailable",
-            "Dependency Unavailable",
-        ),
-    }
 }
 
 fn application_failure(correlation_id: &str, error: ApplicationError) -> Result<Response> {
@@ -263,9 +255,7 @@ fn invalid_request(correlation_id: &str) -> Result<Response> {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        BRIDGE_ACCESS_AUDIENCE_VAR, ProfileLaunchCommandEvidence, normalize_sha256_fingerprint,
-    };
+    use super::ProfileLaunchCommandEvidence;
 
     #[test]
     fn launch_command_evidence_contains_no_device_selection()
@@ -277,25 +267,5 @@ mod tests {
         assert!(value.get("deviceId").is_none());
         assert!(value.get("generationId").is_none());
         Ok(())
-    }
-
-    #[test]
-    fn bridge_machine_auth_uses_a_dedicated_access_audience() {
-        assert_eq!(BRIDGE_ACCESS_AUDIENCE_VAR, "BRIDGE_ACCESS_AUDIENCE");
-        assert_ne!(BRIDGE_ACCESS_AUDIENCE_VAR, "ACCESS_AUDIENCE");
-    }
-
-    #[test]
-    fn bridge_device_identity_accepts_only_exact_sha256_certificate_fingerprint() {
-        let lower = "a1".repeat(32);
-        let upper = lower.to_ascii_uppercase();
-        assert_eq!(normalize_sha256_fingerprint(&lower), Some(lower.clone()));
-        assert_eq!(normalize_sha256_fingerprint(&upper), Some(lower));
-        assert_eq!(normalize_sha256_fingerprint(&"a".repeat(63)), None);
-        assert_eq!(normalize_sha256_fingerprint(&"g".repeat(64)), None);
-        assert_eq!(
-            normalize_sha256_fingerprint(&format!("{}:", "a".repeat(63))),
-            None
-        );
     }
 }

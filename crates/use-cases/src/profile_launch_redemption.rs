@@ -11,16 +11,37 @@ use application_ports::{
     AuthenticatedDevicePort, DeviceExecutionPreconditionPort, DeviceJobAuthorizationPort,
 };
 use contracts::ProblemCode;
-use profile_platform_primitives::{CorrelationId, TenantScope, UnixMillis};
+use identity_access_domain::MembershipRole;
+use profile_platform_primitives::{ActorContext, CorrelationId, TenantScope, UnixMillis};
 
-/// Redeem a launch authority after the Bridge-facing ingress has authenticated the local machine.
-///
-/// The claim is deliberately inspected without mutation first. The authenticated machine's exact
-/// tenant/actor/device binding is compared to the authority before current membership, profile/grant,
-/// server-owned device selection, active generation, device authorization and execution preconditions
-/// are revalidated through the same canonical launch authorization use-case used at issuance. Only an
-/// exact unchanged binding may reach the final one-time CAS consume.
-pub async fn redeem_profile_launch_authority<M, L, C, D, A, P>(
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ValidatedProfileLaunchRedemption {
+    binding: ProfileLaunchAuthorityBinding,
+    actor: ActorContext,
+    role: MembershipRole,
+}
+
+impl ValidatedProfileLaunchRedemption {
+    #[must_use]
+    pub const fn binding(&self) -> &ProfileLaunchAuthorityBinding {
+        &self.binding
+    }
+
+    #[must_use]
+    pub const fn actor(&self) -> &ActorContext {
+        &self.actor
+    }
+
+    #[must_use]
+    pub const fn role(&self) -> MembershipRole {
+        self.role
+    }
+}
+
+/// Validate a still-live launch authority after the Bridge-facing ingress has authenticated the
+/// actual machine. This phase is deliberately read-only: it proves the exact machine binding and
+/// reuses the canonical launch authorization/precondition owners without consuming the bearer.
+pub async fn validate_profile_launch_redemption<M, L, C, D, A, P>(
     correlation_id: &CorrelationId,
     claim_code: &str,
     authenticated_machine: &ProfileLaunchMachineBinding,
@@ -31,7 +52,7 @@ pub async fn redeem_profile_launch_authority<M, L, C, D, A, P>(
     authenticated_device: &D,
     device_authorization: &A,
     execution_preconditions: &P,
-) -> Result<ProfileLaunchAuthorityBinding, ApplicationError>
+) -> Result<ValidatedProfileLaunchRedemption, ApplicationError>
 where
     M: ActiveMembershipPort,
     L: ProfileLaunchAuthorityPort,
@@ -58,7 +79,7 @@ where
         .await
         .map_err(map_membership_error)?
         .ok_or_else(|| ApplicationError::new(ProblemCode::NotFound))?;
-    let actor = profile_platform_primitives::ActorContext::new(
+    let actor = ActorContext::new(
         scope,
         binding.actor_id().clone(),
         correlation_id.clone(),
@@ -82,11 +103,27 @@ where
         return Err(ApplicationError::new(ProblemCode::NotFound));
     }
 
+    Ok(ValidatedProfileLaunchRedemption {
+        binding,
+        actor,
+        role,
+    })
+}
+
+/// Final one-time consume after all security-sensitive current state has been revalidated and the
+/// bounded coordinator continuation has been prepared. The consumed binding must be byte-for-byte
+/// equivalent to the validated authority or the operation fails closed.
+pub async fn consume_validated_profile_launch_redemption<L: ProfileLaunchAuthorityPort>(
+    validated: &ValidatedProfileLaunchRedemption,
+    claim_code: &str,
+    now: UnixMillis,
+    authority: &L,
+) -> Result<ProfileLaunchAuthorityBinding, ApplicationError> {
     let consumed = authority
-        .consume_profile_launch_authority(claim_code, authenticated_machine.device_id(), now)
+        .consume_profile_launch_authority(claim_code, validated.binding().device_id(), now)
         .await
         .map_err(map_redemption_authority_error)?;
-    if consumed != binding {
+    if &consumed != validated.binding() {
         return Err(ApplicationError::new(ProblemCode::IntegrityFailure));
     }
     Ok(consumed)
