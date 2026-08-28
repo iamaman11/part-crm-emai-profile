@@ -11,6 +11,7 @@ pub mod dirty_generation_finalize;
 mod dirty_generation_local;
 pub mod dirty_generation_publish;
 pub mod fake_mail_query;
+pub mod launch_binding;
 pub mod local_profile;
 pub mod operator_flow;
 pub mod runtime_bundle;
