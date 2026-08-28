@@ -6,12 +6,11 @@ use crate::composition::{
     authenticated_device, device_execution_preconditions, device_job_authorization,
 };
 use control_plane_contract::profile_launch_api::ProfileLaunchProjection;
-use contracts::ProblemCode;
 use profile_platform_primitives::ProfileId;
 use serde::Serialize;
-use use_cases::ApplicationError;
 use use_cases::profile_launch::authorize_profile_launch;
 use use_cases::profile_launch_authority::issue_profile_launch_authority;
+use use_cases::{ApplicationError, ProblemCode};
 use worker::{Env, Request, Response, Result};
 
 use super::profile_launch_composition::{launch_authority, launch_context};
@@ -84,9 +83,7 @@ fn application_failure(correlation_id: &str, error: ApplicationError) -> Result<
     match error.code() {
         ProblemCode::NotFound | ProblemCode::Forbidden => neutral_not_found(correlation_id),
         ProblemCode::InvalidRequest => invalid_request(correlation_id),
-        ProblemCode::InvalidState => {
-            problem(correlation_id, 409, "invalid_state", "Invalid State")
-        }
+        ProblemCode::InvalidState => problem(correlation_id, 409, "invalid_state", "Invalid State"),
         ProblemCode::VersionConflict => {
             problem(correlation_id, 409, "version_conflict", "Version Conflict")
         }
