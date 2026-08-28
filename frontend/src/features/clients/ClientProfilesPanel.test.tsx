@@ -30,6 +30,7 @@ function profileItem(profileId: string, version: number) {
     status: 'READY' as const,
     version,
     linkedClientId: clientId,
+    activeGenerationId: null,
   };
 }
 
