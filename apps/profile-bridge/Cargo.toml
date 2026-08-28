@@ -21,8 +21,23 @@ path = "src/bin/profile-bridge-synthetic.rs"
 required-features = ["synthetic-test-bin"]
 
 [[test]]
+name = "ipc_protocol_failure_matrix"
+path = "tests/ipc_protocol_failure_matrix.rs"
+required-features = ["synthetic-test-bin"]
+
+[[test]]
 name = "operator_flow_acceptance"
 path = "tests/operator_flow_acceptance.rs"
+required-features = ["synthetic-test-bin"]
+
+[[test]]
+name = "runtime_failure_matrix"
+path = "tests/runtime_failure_matrix.rs"
+required-features = ["synthetic-test-bin"]
+
+[[test]]
+name = "synthetic_operator_cli"
+path = "tests/synthetic_operator_cli.rs"
 required-features = ["synthetic-test-bin"]
 
 [dependencies]
