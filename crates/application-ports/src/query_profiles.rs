@@ -65,3 +65,12 @@ pub trait ProfileReadModelPort {
         page: &QueryPageRequest,
     ) -> impl Future<Output = Result<QueryPage<ProfileReadProjection>, QueryPortError>>;
 }
+
+pub trait ClientProfileReadModelPort {
+    fn list_profiles_for_client(
+        &self,
+        actor: &ActorContext,
+        client_id: &ClientId,
+        page: &QueryPageRequest,
+    ) -> impl Future<Output = Result<QueryPage<ProfileReadProjection>, QueryPortError>>;
+}

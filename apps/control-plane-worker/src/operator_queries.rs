@@ -1,7 +1,8 @@
 use crate::access_session::{
-    correlation_hint, neutral_not_found, problem, resolve_active_request_actor,
+    correlation_hint, membership_role as request_membership_role, neutral_not_found, problem,
+    resolve_active_request_actor,
 };
-use crate::composition::query_repository;
+use crate::composition::{client_application, query_repository};
 use application_ports::query_mailboxes::{MailboxBindingStatus, MailboxProvider};
 use application_ports::query_profiles::ProfileStatus;
 use application_ports::{QueryCursor, QueryPageRequest, QueryPageSize};
@@ -11,7 +12,11 @@ use control_plane_contract::operator_query_api::{
     ProfileListItemDto, ProfileListPageDto,
 };
 use identity_access_domain::{MembershipRole, MembershipStatus};
-use use_cases_query::{QueryApplicationError, list_mailboxes, list_members, list_profiles};
+use profile_platform_primitives::ClientId;
+use use_cases_clients::clients::{ClientOperationError, get_visible_client};
+use use_cases_query::{
+    QueryApplicationError, list_client_profiles, list_mailboxes, list_members, list_profiles,
+};
 use worker::{Env, Method, Request, Response, Result};
 
 const DEFAULT_PAGE_SIZE: u16 = 50;
@@ -45,7 +50,36 @@ pub async fn dispatch(route: RouteClass, request: &Request, env: &Env) -> Result
 
     match route {
         RouteClass::ProfileCollectionApi => {
-            let result = list_profiles(actor.actor(), &repository, &repository, &page).await;
+            let result = match client_scope_for_profile_route(&segments) {
+                Ok(None) => list_profiles(actor.actor(), &repository, &repository, &page).await,
+                Ok(Some(client_id)) => {
+                    let clients = client_application(env)?;
+                    match get_visible_client(
+                        actor.actor(),
+                        request_membership_role(&actor),
+                        &clients,
+                        &client_id,
+                    )
+                    .await
+                    {
+                        Ok(_) => {}
+                        Err(ClientOperationError::NotFound) => {
+                            return neutral_not_found(actor.actor().correlation_id().as_str());
+                        }
+                        Err(error) => {
+                            return client_visibility_failure(
+                                actor.actor().correlation_id().as_str(),
+                                error,
+                            );
+                        }
+                    }
+                    list_client_profiles(actor.actor(), &repository, &repository, &client_id, &page)
+                        .await
+                }
+                Err(()) => {
+                    return neutral_not_found(actor.actor().correlation_id().as_str());
+                }
+            };
             match result {
                 Ok(page) => Response::from_json(&ProfileListPageDto {
                     profiles: page
@@ -109,6 +143,16 @@ pub async fn dispatch(route: RouteClass, request: &Request, env: &Env) -> Result
     }
 }
 
+fn client_scope_for_profile_route(segments: &[&str]) -> Result<Option<ClientId>, ()> {
+    match segments {
+        ["api", "v1", "tenants", _, "profiles"] => Ok(None),
+        ["api", "v1", "tenants", _, "clients", client_id, "profiles"] => {
+            ClientId::parse(*client_id).map(Some).map_err(|_| ())
+        }
+        _ => Err(()),
+    }
+}
+
 fn page_request(request: &Request) -> Result<QueryPageRequest, ()> {
     let url = request.url().map_err(|_| ())?;
     let mut limit = DEFAULT_PAGE_SIZE;
@@ -129,6 +173,34 @@ fn page_request(request: &Request) -> Result<QueryPageRequest, ()> {
     }
     let limit = QueryPageSize::new(limit).map_err(|_| ())?;
     Ok(QueryPageRequest::new(limit, cursor))
+}
+
+fn client_visibility_failure(
+    correlation_id: &str,
+    error: ClientOperationError,
+) -> Result<Response> {
+    match error {
+        ClientOperationError::NotFound => neutral_not_found(correlation_id),
+        ClientOperationError::InvalidRequest => {
+            problem(correlation_id, 400, "invalid_request", "Invalid Request")
+        }
+        ClientOperationError::Conflict => problem(correlation_id, 409, "conflict", "Conflict"),
+        ClientOperationError::IntegrityFailure => problem(
+            correlation_id,
+            500,
+            "integrity_failure",
+            "Integrity Failure",
+        ),
+        ClientOperationError::InternalFailure => {
+            problem(correlation_id, 500, "internal_failure", "Internal Failure")
+        }
+        ClientOperationError::DependencyUnavailable => problem(
+            correlation_id,
+            503,
+            "dependency_unavailable",
+            "Dependency Unavailable",
+        ),
+    }
 }
 
 fn query_failure(correlation_id: &str, error: QueryApplicationError) -> Result<Response> {
@@ -191,7 +263,8 @@ const fn mailbox_status(status: MailboxBindingStatus) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::{
-        mailbox_provider, mailbox_status, membership_role, membership_status, profile_status,
+        client_scope_for_profile_route, mailbox_provider, mailbox_status, membership_role,
+        membership_status, profile_status,
     };
     use application_ports::query_mailboxes::{MailboxBindingStatus, MailboxProvider};
     use application_ports::query_profiles::ProfileStatus;
@@ -210,5 +283,28 @@ mod tests {
             mailbox_status(MailboxBindingStatus::AuthRequired),
             "AUTH_REQUIRED"
         );
+    }
+
+    #[test]
+    fn profile_collection_route_scope_is_explicit() {
+        let global = ["api", "v1", "tenants", "tenant_01", "profiles"];
+        assert_eq!(client_scope_for_profile_route(&global), Ok(None));
+
+        let nested = [
+            "api",
+            "v1",
+            "tenants",
+            "tenant_01",
+            "clients",
+            "client_01JPROFILEQUERY",
+            "profiles",
+        ];
+        let client_id = client_scope_for_profile_route(&nested)
+            .expect("nested profile route")
+            .expect("client scope");
+        assert_eq!(client_id.as_str(), "client_01JPROFILEQUERY");
+
+        let unrelated = ["api", "v1", "tenants", "tenant_01", "members"];
+        assert_eq!(client_scope_for_profile_route(&unrelated), Err(()));
     }
 }

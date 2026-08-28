@@ -3,17 +3,21 @@ use crate::access_session::{
 };
 use crate::command_evidence;
 use crate::composition::profile_application;
+use crate::request_evidence;
 use application_ports::profiles::ProfileStatus;
 use control_plane_contract::RouteClass;
 use control_plane_contract::profile_generation_api::{
-    ProfileAssignmentRequest, ProfileCreateRequest, ProfileGrantRequest, ProfileProjectionDto,
-    ProfileStatusDto,
+    ProfileCreateRequest, ProfileGrantRequest, ProfileProjectionDto, ProfileStatusDto,
+};
+use control_plane_contract::profile_relationship_api::{
+    ProfileAssignmentRequest, ProfileDetachmentRequest,
 };
 use control_plane_contract::public_api::MutationReceipt;
-use profile_platform_primitives::{ActorId, AggregateVersion, AssignmentId, ClientId, ProfileId};
+use profile_platform_primitives::{ActorId, AggregateVersion, ClientId, ProfileId};
 use use_cases::profile_assignments::{
-    ExecuteAssignProfileCommand, ProfileAssignmentOperationError, ProfileAssignmentOutcome,
-    authorize_profile_assignment, execute_assign_profile, next_profile_assignment_version,
+    ExecuteAssignProfileCommand, ExecuteDetachProfileCommand, ProfileAssignmentOperationError,
+    ProfileAssignmentOutcome, authorize_profile_assignment, execute_assign_profile,
+    execute_detach_profile, next_profile_assignment_version,
 };
 use use_cases::profile_grants::{
     ExecuteProfileGrantCommand, ProfileGrantAction, ProfileGrantOperationError,
@@ -42,7 +46,11 @@ pub async fn dispatch(route: RouteClass, request: &mut Request, env: &Env) -> Re
         }
         RouteClass::ProfileAssignmentApi => {
             let profile_id = segments.get(5).copied().unwrap_or_default();
-            assign_profile(request, env, tenant_id, profile_id).await
+            match request.method().as_ref() {
+                "PUT" => assign_profile(request, env, tenant_id, profile_id).await,
+                "DELETE" => detach_profile(request, env, tenant_id, profile_id).await,
+                _ => neutral_not_found(&correlation_hint(request)),
+            }
         }
         RouteClass::ProfileGrantApi => {
             let profile_id = segments.get(5).copied().unwrap_or_default();
@@ -139,10 +147,6 @@ async fn assign_profile(
         Ok(value) => value,
         Err(_) => return invalid_request(actor.actor().correlation_id().as_str()),
     };
-    let assignment_id = match AssignmentId::parse(body.assignment_id.clone()) {
-        Ok(value) => value,
-        Err(_) => return invalid_request(actor.actor().correlation_id().as_str()),
-    };
     let client_id = match ClientId::parse(body.client_id.clone()) {
         Ok(value) => value,
         Err(_) => return invalid_request(actor.actor().correlation_id().as_str()),
@@ -158,6 +162,14 @@ async fn assign_profile(
         Ok(value) => value,
         Err(_) => return invalid_request(actor.actor().correlation_id().as_str()),
     };
+    let assignment_id = match request_evidence::assignment_id(
+        actor.actor().tenant_scope().tenant_id(),
+        actor.actor().actor_id(),
+        evidence.idempotency_key(),
+    ) {
+        Ok(value) => value,
+        Err(_) => return invalid_request(actor.actor().correlation_id().as_str()),
+    };
     let application = profile_application(env)?;
     match execute_assign_profile(
         actor.actor(),
@@ -167,6 +179,58 @@ async fn assign_profile(
             assignment_id,
             profile_id,
             client_id,
+            expected_profile_version,
+            body.reason,
+            evidence,
+        ),
+    )
+    .await
+    {
+        Ok(outcome) => assignment_receipt(&outcome),
+        Err(error) => assignment_failure(actor.actor().correlation_id().as_str(), error),
+    }
+}
+
+async fn detach_profile(
+    request: &mut Request,
+    env: &Env,
+    tenant_id: &str,
+    profile_id: &str,
+) -> Result<Response> {
+    let Some(actor) = resolve_active_request_actor(request, env, Some(tenant_id)).await? else {
+        return neutral_not_found(&correlation_hint(request));
+    };
+    let role = membership_role(&actor);
+    if let Err(error) = authorize_profile_assignment(role) {
+        return assignment_failure(actor.actor().correlation_id().as_str(), error);
+    }
+
+    let body = match request.json::<ProfileDetachmentRequest>().await {
+        Ok(value) => value,
+        Err(_) => return invalid_request(actor.actor().correlation_id().as_str()),
+    };
+    let profile_id = match ProfileId::parse(profile_id) {
+        Ok(value) => value,
+        Err(_) => return invalid_request(actor.actor().correlation_id().as_str()),
+    };
+    let expected_profile_version = match AggregateVersion::new(body.expected_profile_version) {
+        Ok(value) => value,
+        Err(_) => return invalid_request(actor.actor().correlation_id().as_str()),
+    };
+    if let Err(error) = next_profile_assignment_version(expected_profile_version) {
+        return assignment_failure(actor.actor().correlation_id().as_str(), error);
+    }
+    let evidence = match command_evidence::from_request(request, actor.actor(), &body) {
+        Ok(value) => value,
+        Err(_) => return invalid_request(actor.actor().correlation_id().as_str()),
+    };
+    let application = profile_application(env)?;
+    match execute_detach_profile(
+        actor.actor(),
+        role,
+        &application,
+        ExecuteDetachProfileCommand::new(
+            profile_id,
             expected_profile_version,
             body.reason,
             evidence,

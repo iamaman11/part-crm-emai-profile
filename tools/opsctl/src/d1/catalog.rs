@@ -80,18 +80,29 @@ struct MigrationSpec {
     contract_preconditions: &'static [&'static str],
 }
 
-const CATALOG_POST_EPOCH_MIGRATIONS: &[MigrationSpec] = &[MigrationSpec {
-    revision: "0027_pas2_payload_fingerprint.sql",
-    migration_class: MigrationClass::Contract,
-    rollout_order: RolloutOrder::SeparateContractRelease,
-    fail_forward_required: true,
-    destructive: true,
-    code_rollback_allowed: false,
-    contract_preconditions: &[
-        "server_owned_payload_fingerprint_active",
-        "request_digest_readers_writers_retired",
-    ],
-}];
+const CATALOG_POST_EPOCH_MIGRATIONS: &[MigrationSpec] = &[
+    MigrationSpec {
+        revision: "0027_pas2_payload_fingerprint.sql",
+        migration_class: MigrationClass::Contract,
+        rollout_order: RolloutOrder::SeparateContractRelease,
+        fail_forward_required: true,
+        destructive: true,
+        code_rollback_allowed: false,
+        contract_preconditions: &[
+            "server_owned_payload_fingerprint_active",
+            "request_digest_readers_writers_retired",
+        ],
+    },
+    MigrationSpec {
+        revision: "0028_profile_assignment_detach.sql",
+        migration_class: MigrationClass::Expand,
+        rollout_order: RolloutOrder::MigrateBeforeCode,
+        fail_forward_required: false,
+        destructive: false,
+        code_rollback_allowed: true,
+        contract_preconditions: &[],
+    },
+];
 
 impl MigrationSpec {
     fn to_contract(self) -> Result<MigrationContract, D1Error> {
@@ -602,7 +613,7 @@ mod tests {
         let resolver = component_authority(&root, "resolver")?;
 
         assert_eq!(catalog.historical_len, 26);
-        assert_eq!(catalog.ordered_history.len(), 27);
+        assert_eq!(catalog.ordered_history.len(), 28);
         assert_eq!(resolver.historical_len, 4);
         assert_eq!(resolver.ordered_history.len(), 4);
         assert_eq!(
@@ -611,14 +622,14 @@ mod tests {
         );
         assert_eq!(
             catalog.current_repository_revision,
-            "0027_pas2_payload_fingerprint.sql"
+            "0028_profile_assignment_detach.sql"
         );
         assert_eq!(
             resolver.current_repository_revision,
             "0004_refresh_owner_hmac_version.sql"
         );
 
-        assert_eq!(catalog.post_epoch.len(), 1);
+        assert_eq!(catalog.post_epoch.len(), 2);
         let contract = &catalog.post_epoch[0];
         assert_eq!(contract.migration_file, "0027_pas2_payload_fingerprint.sql");
         assert_eq!(contract.migration_class, MigrationClass::Contract);
@@ -636,6 +647,15 @@ mod tests {
                 "request_digest_readers_writers_retired".to_owned(),
             ]
         );
+
+        let detach = &catalog.post_epoch[1];
+        assert_eq!(detach.migration_file, "0028_profile_assignment_detach.sql");
+        assert_eq!(detach.migration_class, MigrationClass::Expand);
+        assert_eq!(detach.rollout_order, RolloutOrder::MigrateBeforeCode);
+        assert!(!detach.fail_forward_required);
+        assert!(!detach.destructive);
+        assert!(detach.code_rollback_allowed);
+        assert!(detach.contract_preconditions.is_empty());
         Ok(())
     }
 

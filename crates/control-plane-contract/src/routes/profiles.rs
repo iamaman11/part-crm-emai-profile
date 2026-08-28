@@ -11,7 +11,9 @@ pub(super) fn classify(method: &str, segments: &[&str]) -> Option<RouteClass> {
         {
             Some(RouteClass::ProfileCoordinatorApi)
         }
-        ["api", "v1", "tenants", _, "profiles", _, "assignment"] if method == "PUT" => {
+        ["api", "v1", "tenants", _, "profiles", _, "assignment"]
+            if matches!(method, "PUT" | "DELETE") =>
+        {
             Some(RouteClass::ProfileAssignmentApi)
         }
         ["api", "v1", "tenants", _, "profiles", _, "grants", _]

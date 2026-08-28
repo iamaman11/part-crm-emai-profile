@@ -8,6 +8,7 @@ import { ClientGrantPanel } from './ClientGrantPanel';
 import { ClientHistoryPanel } from './ClientHistoryPanel';
 import { ClientMailPanel } from './ClientMailPanel';
 import { ClientMutationPanels } from './ClientMutationPanels';
+import { ClientProfilesPanel } from './ClientProfilesPanel';
 import { ClientRegistryList } from './ClientRegistryList';
 import { useLogicalCommandMutation } from '../../shared/ui/useLogicalCommandMutation';
 
@@ -128,6 +129,11 @@ export function ClientsWorkspace({
 
       {selectedClient && (
         <>
+          <ClientProfilesPanel
+            tenantId={tenantId}
+            clientId={selectedClient.clientId}
+            onMutated={refreshSelected}
+          />
           <ClientMutationPanels
             key={`${selectedClient.clientId}:${selectedClient.version}`}
             tenantId={tenantId}

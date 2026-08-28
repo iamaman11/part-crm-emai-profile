@@ -183,6 +183,18 @@ impl PrimaryAssignmentTransition {
     }
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PrimaryDetachmentTransition {
+    closed: ProfileClientAssignment,
+}
+
+impl PrimaryDetachmentTransition {
+    #[must_use]
+    pub const fn closed(&self) -> &ProfileClientAssignment {
+        &self.closed
+    }
+}
+
 pub fn plan_primary_reassignment(
     profile_tenant_id: &TenantId,
     profile_id: &ProfileId,
@@ -203,14 +215,7 @@ pub fn plan_primary_reassignment(
     let closed_previous = match current {
         None => None,
         Some(previous) => {
-            if previous.tenant_id() != profile_tenant_id || previous.profile_id() != profile_id {
-                return Err(AssignmentError::CurrentScopeMismatch);
-            }
-            if previous.role() != AssignmentRole::Primary
-                || previous.status() != AssignmentStatus::Active
-            {
-                return Err(AssignmentError::CurrentNotActivePrimary);
-            }
+            validate_current_primary(profile_tenant_id, profile_id, previous)?;
             if previous.client_id() == next.client_id() {
                 return Err(AssignmentError::AlreadyPrimaryClient);
             }
@@ -225,6 +230,32 @@ pub fn plan_primary_reassignment(
         closed_previous,
         next,
     })
+}
+
+pub fn plan_primary_detachment(
+    profile_tenant_id: &TenantId,
+    profile_id: &ProfileId,
+    current: &ProfileClientAssignment,
+    closed_at: UnixMillis,
+) -> Result<PrimaryDetachmentTransition, AssignmentError> {
+    validate_current_primary(profile_tenant_id, profile_id, current)?;
+    let mut closed = current.clone();
+    closed.close(closed_at)?;
+    Ok(PrimaryDetachmentTransition { closed })
+}
+
+fn validate_current_primary(
+    profile_tenant_id: &TenantId,
+    profile_id: &ProfileId,
+    current: &ProfileClientAssignment,
+) -> Result<(), AssignmentError> {
+    if current.tenant_id() != profile_tenant_id || current.profile_id() != profile_id {
+        return Err(AssignmentError::CurrentScopeMismatch);
+    }
+    if current.role() != AssignmentRole::Primary || current.status() != AssignmentStatus::Active {
+        return Err(AssignmentError::CurrentNotActivePrimary);
+    }
+    Ok(())
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -264,7 +295,7 @@ impl std::error::Error for AssignmentError {}
 mod tests {
     use super::{
         AssignmentError, AssignmentRole, AssignmentStatus, PrimaryReassignmentIntent,
-        ProfileClientAssignment, plan_primary_reassignment,
+        ProfileClientAssignment, plan_primary_detachment, plan_primary_reassignment,
     };
     use crate::{ClientKind, ClientRecord, ClientStatus};
     use profile_platform_primitives::{
@@ -394,6 +425,72 @@ mod tests {
         assert_eq!(transition.next().profile_id(), &profile_id);
         assert_eq!(current.status(), AssignmentStatus::Active);
         assert_eq!(current.closed_at(), None);
+        Ok(())
+    }
+
+    #[test]
+    fn detachment_plan_closes_a_copy_and_preserves_current_history()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let client = active_client("client_01JCLIENT")?;
+        let current = initial_assignment(&client)?;
+        let profile_id = current.profile_id().clone();
+
+        let transition = plan_primary_detachment(
+            current.tenant_id(),
+            &profile_id,
+            &current,
+            UnixMillis::new(20),
+        )?;
+
+        assert_eq!(transition.closed().status(), AssignmentStatus::Closed);
+        assert_eq!(transition.closed().closed_at(), Some(UnixMillis::new(20)));
+        assert_eq!(transition.closed().assignment_id(), current.assignment_id());
+        assert_eq!(transition.closed().client_id(), current.client_id());
+        assert_eq!(current.status(), AssignmentStatus::Active);
+        assert_eq!(current.closed_at(), None);
+        Ok(())
+    }
+
+    #[test]
+    fn detachment_rejects_wrong_scope_closed_current_and_time_regression_without_mutation()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let client = active_client("client_01JCLIENT")?;
+        let current = initial_assignment(&client)?;
+
+        assert_eq!(
+            plan_primary_detachment(
+                current.tenant_id(),
+                &ProfileId::parse("profile_02JCLIENT")?,
+                &current,
+                UnixMillis::new(20),
+            ),
+            Err(AssignmentError::CurrentScopeMismatch)
+        );
+        assert_eq!(current.status(), AssignmentStatus::Active);
+
+        assert_eq!(
+            plan_primary_detachment(
+                current.tenant_id(),
+                current.profile_id(),
+                &current,
+                UnixMillis::new(5),
+            ),
+            Err(AssignmentError::InvalidCloseTime)
+        );
+        assert_eq!(current.status(), AssignmentStatus::Active);
+
+        let mut closed = current.clone();
+        closed.close(UnixMillis::new(15))?;
+        assert_eq!(
+            plan_primary_detachment(
+                closed.tenant_id(),
+                closed.profile_id(),
+                &closed,
+                UnixMillis::new(20),
+            ),
+            Err(AssignmentError::CurrentNotActivePrimary)
+        );
+        assert_eq!(closed.closed_at(), Some(UnixMillis::new(15)));
         Ok(())
     }
 

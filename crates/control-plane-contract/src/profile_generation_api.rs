@@ -54,15 +54,6 @@ pub struct ProfileCreateRequest {
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct ProfileAssignmentRequest {
-    pub assignment_id: String,
-    pub client_id: String,
-    pub reason: String,
-    pub expected_profile_version: u64,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ProfileGrantRequest {
     pub role: String,
     pub reason: String,
@@ -133,17 +124,6 @@ pub fn openapi_fragment() -> Value {
                     "additionalProperties": false,
                     "required": ["profileId"],
                     "properties": {"profileId": opaque_id_schema()}
-                },
-                "ProfileAssignmentRequest": {
-                    "type": "object",
-                    "additionalProperties": false,
-                    "required": ["assignmentId", "clientId", "reason", "expectedProfileVersion"],
-                    "properties": {
-                        "assignmentId": opaque_id_schema(),
-                        "clientId": opaque_id_schema(),
-                        "reason": {"type": "string"},
-                        "expectedProfileVersion": positive_version_schema()
-                    }
                 },
                 "ProfileGrantRequestDto": {
                     "type": "object",
@@ -236,8 +216,8 @@ fn sha256_schema() -> Value {
 #[cfg(test)]
 mod tests {
     use super::{
-        ProfileAssignmentRequest, ProfileCreateRequest, ProfileGrantRequest, ProfileProjectionDto,
-        ProfileStatusDto, RegisterGenerationRequest, openapi_fragment,
+        ProfileCreateRequest, ProfileGrantRequest, ProfileProjectionDto, ProfileStatusDto,
+        RegisterGenerationRequest, openapi_fragment,
     };
     use serde_json::{Value, json};
 
@@ -249,7 +229,6 @@ mod tests {
         );
         for value in [
             r#"{"profileId":"profile_01JTEST","requestDigest":"legacy"}"#,
-            r#"{"assignmentId":"assignment_01JTEST","clientId":"client_01JTEST","reason":"assign","expectedProfileVersion":1,"futureField":true}"#,
             r#"{"role":"PROFILE_VIEWER","reason":"grant","expectedProfileVersion":1,"requestDigest":"legacy"}"#,
         ] {
             assert!(serde_json::from_str::<serde_json::Value>(value).is_ok());
@@ -260,7 +239,6 @@ mod tests {
             )
             .is_err()
         );
-        assert!(serde_json::from_str::<ProfileAssignmentRequest>(r#"{"assignmentId":"assignment_01JTEST","clientId":"client_01JTEST","reason":"assign","expectedProfileVersion":1,"futureField":true}"#).is_err());
         assert!(serde_json::from_str::<ProfileGrantRequest>(r#"{"role":"PROFILE_VIEWER","reason":"grant","expectedProfileVersion":1,"requestDigest":"legacy"}"#).is_err());
     }
 
@@ -299,7 +277,6 @@ mod tests {
         for name in [
             "ProfileProjectionDto",
             "ProfileCreateRequestDto",
-            "ProfileAssignmentRequest",
             "ProfileGrantRequestDto",
             "GenerationProjectionDto",
             "RegisterGenerationRequest",

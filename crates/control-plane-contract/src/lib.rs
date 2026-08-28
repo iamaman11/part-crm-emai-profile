@@ -7,6 +7,7 @@ pub mod mailbox_api;
 pub mod mailbox_client_association_api;
 pub mod operator_query_api;
 pub mod profile_generation_api;
+pub mod profile_relationship_api;
 pub mod public_api;
 pub mod resolver_service_auth;
 mod routes;
@@ -248,6 +249,11 @@ mod tests {
                 RouteClass::ClientGrantApi,
             ),
             (
+                "GET",
+                "/api/v1/tenants/tenant_01/clients/client_01/profiles",
+                RouteClass::ProfileCollectionApi,
+            ),
+            (
                 "POST",
                 "/api/v1/tenants/tenant_01/profiles",
                 RouteClass::ProfileCollectionApi,
@@ -264,6 +270,11 @@ mod tests {
             ),
             (
                 "PUT",
+                "/api/v1/tenants/tenant_01/profiles/profile_01/assignment",
+                RouteClass::ProfileAssignmentApi,
+            ),
+            (
+                "DELETE",
                 "/api/v1/tenants/tenant_01/profiles/profile_01/assignment",
                 RouteClass::ProfileAssignmentApi,
             ),

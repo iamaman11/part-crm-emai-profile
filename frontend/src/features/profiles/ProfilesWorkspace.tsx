@@ -2,7 +2,6 @@ import { useMutation } from '@tanstack/react-query';
 import { useEffect, useState, type FormEvent } from 'react';
 import { useTenant } from '../../app/TenantContext';
 import {
-  assignProfile,
   changeGenerationActivation,
   commandCoordinator,
   createProfile,
@@ -52,9 +51,6 @@ export function ProfilesWorkspace({
     onSuccess: (receipt) => {
       if (receipt?.resourceId) onProfileSelected(receipt.resourceId);
     },
-  });
-  const assign = useLogicalCommandMutation((input: { assignmentId: string; clientId: string; reason: string; expectedProfileVersion: number }, idempotencyKey) =>
-      assignProfile(tenantId, profileId, input, idempotencyKey), {
   });
   const grant = useLogicalCommandMutation((input: GrantDraft & { revoke: boolean }, idempotencyKey) => setProfileGrant(
       tenantId,
@@ -161,25 +157,15 @@ export function ProfilesWorkspace({
       </section>
 
       <section className="panel">
-        <span className="eyebrow">Business relationship, not authorization</span>
-        <h2>Assign client</h2>
-        <form className="stack-form" onSubmit={(event) => {
-          event.preventDefault();
-          const data = new FormData(event.currentTarget);
-          assign.mutate({
-            assignmentId: field(data, 'assignmentId'),
-            clientId: field(data, 'clientId'),
-            reason: field(data, 'reason'),
-            expectedProfileVersion: Number(field(data, 'expectedVersion')),
-          });
-        }}>
-          <label>Assignment ID<input name="assignmentId" required disabled={!profileLoaded} /></label>
-          <label>Client ID<input name="clientId" required disabled={!profileLoaded} /></label>
-          <label>Expected profile version<input key={profile?.version ?? 1} name="expectedVersion" type="number" min="1" defaultValue={profile?.version ?? 1} required disabled={!profileLoaded} /></label>
-          <label>Reason<input name="reason" required disabled={!profileLoaded} /></label>
-          <button type="submit" disabled={!profileLoaded || assign.isPending}>Assign</button>
-        </form>
-        <StatusMessage state={assign.error ?? (assign.data ? `${assign.data.resultCode}: ${assign.data.resourceId}` : null)} />
+        <span className="eyebrow">Business relationship projection</span>
+        <h2>Client relationship</h2>
+        <p>
+          The linked Client is read-only here. Attach, detach and atomic reassign are owned by Client Detail,
+          while profile access remains governed only by explicit Profile grants.
+        </p>
+        <dl className="projection">
+          <div><dt>Client</dt><dd>{profile?.linkedClientId ?? 'Not assigned'}</dd></div>
+        </dl>
       </section>
 
       <section className="panel">

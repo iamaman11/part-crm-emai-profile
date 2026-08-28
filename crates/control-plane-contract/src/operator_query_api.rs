@@ -70,13 +70,16 @@ pub fn openapi_fragment() -> Value {
     json!({
         "paths": {
             "/api/v1/tenants/{tenantId}/profiles": {
-                "get": list_operation("listProfiles", "ProfileListPageDto")
+                "get": list_operation("listProfiles", "ProfileListPageDto", None)
+            },
+            "/api/v1/tenants/{tenantId}/clients/{clientId}/profiles": {
+                "get": list_operation("listClientProfiles", "ProfileListPageDto", Some("clientId"))
             },
             "/api/v1/tenants/{tenantId}/members": {
-                "get": list_operation("listMembers", "MemberListPageDto")
+                "get": list_operation("listMembers", "MemberListPageDto", None)
             },
             "/api/v1/tenants/{tenantId}/mailboxes": {
-                "get": list_operation("listMailboxes", "MailboxListPageDto")
+                "get": list_operation("listMailboxes", "MailboxListPageDto", None)
             }
         },
         "components": {
@@ -163,29 +166,38 @@ pub fn openapi_fragment() -> Value {
     })
 }
 
-fn list_operation(operation_id: &str, response_schema: &str) -> Value {
+fn list_operation(operation_id: &str, response_schema: &str, resource_id: Option<&str>) -> Value {
+    let mut parameters = vec![json!({
+        "name": "tenantId",
+        "in": "path",
+        "required": true,
+        "schema": {"type": "string"}
+    })];
+    if let Some(resource_id) = resource_id {
+        parameters.push(json!({
+            "name": resource_id,
+            "in": "path",
+            "required": true,
+            "schema": {"type": "string", "minLength": 8, "maxLength": 96}
+        }));
+    }
+    parameters.extend([
+        json!({
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {"type": "integer", "minimum": 1, "maximum": 100, "default": 50}
+        }),
+        json!({
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {"type": "string", "minLength": 1, "maxLength": 512}
+        }),
+    ]);
     json!({
         "operationId": operation_id,
-        "parameters": [
-            {
-                "name": "tenantId",
-                "in": "path",
-                "required": true,
-                "schema": {"type": "string"}
-            },
-            {
-                "name": "limit",
-                "in": "query",
-                "required": false,
-                "schema": {"type": "integer", "minimum": 1, "maximum": 100, "default": 50}
-            },
-            {
-                "name": "cursor",
-                "in": "query",
-                "required": false,
-                "schema": {"type": "string", "minLength": 1, "maxLength": 512}
-            }
-        ],
+        "parameters": parameters,
         "responses": {
             "200": {
                 "description": "Authorized bounded query page",
@@ -249,11 +261,16 @@ mod tests {
         let document = openapi_fragment();
         for path in [
             "/api/v1/tenants/{tenantId}/profiles",
+            "/api/v1/tenants/{tenantId}/clients/{clientId}/profiles",
             "/api/v1/tenants/{tenantId}/members",
             "/api/v1/tenants/{tenantId}/mailboxes",
         ] {
             assert!(document["paths"][path]["get"].is_object());
         }
+        assert_eq!(
+            document["paths"]["/api/v1/tenants/{tenantId}/clients/{clientId}/profiles"]["get"]["operationId"],
+            "listClientProfiles"
+        );
     }
 
     #[test]

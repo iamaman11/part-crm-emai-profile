@@ -241,7 +241,7 @@ pub struct CreateProfileMutation<'a> {
     pub envelope: MutationEnvelope<'a>,
 }
 
-pub struct AssignProfileMutation<'a> {
+pub struct ProfileAssignmentMutation<'a> {
     pub assignment_id: &'a profile_platform_primitives::AssignmentId,
     pub profile_id: &'a ProfileId,
     pub client_id: &'a ClientId,

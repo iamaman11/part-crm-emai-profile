@@ -3,6 +3,7 @@ import {
   assignProfileToClient as assignProfileToClientOperation,
   createProfileMetadata as createProfileMetadataOperation,
   deactivateProfileGeneration as deactivateProfileGenerationOperation,
+  detachProfileFromClient as detachProfileFromClientOperation,
   getProfileCoordinator as getProfileCoordinatorOperation,
   getProfileGeneration as getProfileGenerationOperation,
   getProfileMetadata as getProfileMetadataOperation,
@@ -22,6 +23,7 @@ import type {
   CoordinatorResponseDto,
   MutationReceipt,
   ProfileCreateRequest,
+  ProfileDetachmentRequest,
   ProfileGenerationResponse,
   ProfileGrantRequest,
   ProfileListPageDto,
@@ -32,6 +34,7 @@ import type {
 
 export type CreateProfileInput = ProfileCreateRequest;
 export type AssignProfileInput = AssignmentRequest;
+export type DetachProfileInput = ProfileDetachmentRequest;
 export type SetProfileGrantInput = ProfileGrantRequest;
 export type RegisterGenerationInput = RegisterProfileGenerationRequest;
 export type VerifyGenerationInput = VerifyProfileGenerationRequest;
@@ -76,6 +79,20 @@ export function assignProfile(
   idempotencyKey: string,
 ): Promise<MutationReceipt> {
   return assignProfileToClientOperation({
+    tenantId,
+    profileId,
+    body: input,
+    idempotencyKey,
+  });
+}
+
+export function detachProfile(
+  tenantId: string,
+  profileId: string,
+  input: DetachProfileInput,
+  idempotencyKey: string,
+): Promise<MutationReceipt> {
+  return detachProfileFromClientOperation({
     tenantId,
     profileId,
     body: input,
