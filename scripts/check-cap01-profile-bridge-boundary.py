@@ -12,6 +12,11 @@ PRODUCTION_MAIN = Path("apps/profile-bridge/src/main.rs")
 MANIFEST = Path("apps/profile-bridge/Cargo.toml")
 AUX_BIN_ROOT = Path("apps/profile-bridge/src/bin")
 ALLOWED_AUX_BINS = {"profile-bridge-synthetic.rs"}
+SHIPPING_BIN_NAME = "profile-bridge"
+SHIPPING_BIN_PATH = "src/main.rs"
+SYNTHETIC_BIN_NAME = "profile-bridge-synthetic"
+SYNTHETIC_BIN_PATH = "src/bin/profile-bridge-synthetic.rs"
+SYNTHETIC_FEATURE = "synthetic-test-bin"
 
 REQUIRED_MAIN_MARKERS = (
     "use bridge_domain::ClaimUri;",
@@ -47,6 +52,43 @@ def fail(message: str) -> None:
     raise BoundaryError(f"CAP-01 Profile Bridge production boundary failed: {message}")
 
 
+def validate_binary_inventory(manifest: dict) -> None:
+    package = manifest.get("package", {})
+    if package.get("default-run") != SHIPPING_BIN_NAME:
+        fail("package default-run must remain profile-bridge")
+    if package.get("autobins") is not False:
+        fail("Cargo automatic binary discovery must remain disabled")
+
+    features = manifest.get("features", {})
+    if features.get("default") != []:
+        fail("default feature set must remain empty")
+    if features.get(SYNTHETIC_FEATURE) != []:
+        fail("synthetic-test-bin feature must remain an empty opt-in gate")
+
+    bins = manifest.get("bin", [])
+    if not isinstance(bins, list):
+        fail("Cargo [[bin]] inventory must be an array")
+    observed = {entry.get("name"): entry for entry in bins if isinstance(entry, dict)}
+    expected_names = {SHIPPING_BIN_NAME, SYNTHETIC_BIN_NAME}
+    if set(observed) != expected_names or len(bins) != len(expected_names):
+        fail(
+            "explicit Cargo binary inventory changed: "
+            f"expected={sorted(expected_names)} observed={sorted(str(name) for name in observed)}"
+        )
+
+    shipping = observed[SHIPPING_BIN_NAME]
+    if shipping.get("path") != SHIPPING_BIN_PATH:
+        fail("shipping profile-bridge binary must point to src/main.rs")
+    if "required-features" in shipping:
+        fail("shipping profile-bridge binary must not be feature-gated")
+
+    synthetic = observed[SYNTHETIC_BIN_NAME]
+    if synthetic.get("path") != SYNTHETIC_BIN_PATH:
+        fail("synthetic binary must point to src/bin/profile-bridge-synthetic.rs")
+    if synthetic.get("required-features") != [SYNTHETIC_FEATURE]:
+        fail("synthetic binary must require only synthetic-test-bin")
+
+
 def validate(root: Path) -> None:
     main_path = root / PRODUCTION_MAIN
     manifest_path = root / MANIFEST
@@ -66,13 +108,7 @@ def validate(root: Path) -> None:
             fail(f"production entrypoint contains executable-effect marker: {marker}")
 
     manifest = tomllib.loads(manifest_path.read_text(encoding="utf-8"))
-    package = manifest.get("package", {})
-    if package.get("default-run") != "profile-bridge":
-        fail("package default-run must remain profile-bridge")
-    if package.get("autobins", True) is not True:
-        fail("Cargo automatic binary discovery changed; boundary inventory must be reviewed")
-    if manifest.get("bin"):
-        fail("explicit Cargo [[bin]] entries require a new executable-boundary review")
+    validate_binary_inventory(manifest)
     dependencies = manifest.get("dependencies", {})
     if "capability-policy" in dependencies:
         fail("decorative capability-policy dependency found without a production executor")
@@ -108,7 +144,18 @@ def write_fixture(root: Path) -> None:
         "name = \"profile-bridge\"\n"
         "version = \"0.1.0\"\n"
         "edition = \"2024\"\n"
-        "default-run = \"profile-bridge\"\n\n"
+        "default-run = \"profile-bridge\"\n"
+        "autobins = false\n\n"
+        "[features]\n"
+        "default = []\n"
+        "synthetic-test-bin = []\n\n"
+        "[[bin]]\n"
+        "name = \"profile-bridge\"\n"
+        "path = \"src/main.rs\"\n\n"
+        "[[bin]]\n"
+        "name = \"profile-bridge-synthetic\"\n"
+        "path = \"src/bin/profile-bridge-synthetic.rs\"\n"
+        "required-features = [\"synthetic-test-bin\"]\n\n"
         "[dependencies]\n"
         "bridge-domain = \"0.1\"\n",
         encoding="utf-8",
@@ -133,14 +180,39 @@ def self_test() -> None:
         validate(root)
 
         main = root / PRODUCTION_MAIN
-        safe = main.read_text(encoding="utf-8")
-        main.write_text(safe + "use profile_bridge::operator_flow::ProfileBridgeOperator;\n", encoding="utf-8")
+        safe_main = main.read_text(encoding="utf-8")
+        main.write_text(
+            safe_main + "use profile_bridge::operator_flow::ProfileBridgeOperator;\n",
+            encoding="utf-8",
+        )
         expect_rejected(root, "operator composition")
-        main.write_text(safe, encoding="utf-8")
+        main.write_text(safe_main, encoding="utf-8")
 
-        main.write_text(safe + 'fn effect() { let _ = std::process::Command::new("camouhost"); }\n', encoding="utf-8")
+        main.write_text(
+            safe_main + 'fn effect() { let _ = std::process::Command::new("camouhost"); }\n',
+            encoding="utf-8",
+        )
         expect_rejected(root, "direct process effect")
-        main.write_text(safe, encoding="utf-8")
+        main.write_text(safe_main, encoding="utf-8")
+
+        manifest = root / MANIFEST
+        safe_manifest = manifest.read_text(encoding="utf-8")
+        manifest.write_text(
+            safe_manifest.replace("autobins = false", "autobins = true"),
+            encoding="utf-8",
+        )
+        expect_rejected(root, "automatic binary discovery")
+        manifest.write_text(safe_manifest, encoding="utf-8")
+
+        manifest.write_text(
+            safe_manifest.replace(
+                'required-features = ["synthetic-test-bin"]\n',
+                "",
+            ),
+            encoding="utf-8",
+        )
+        expect_rejected(root, "ungated synthetic binary")
+        manifest.write_text(safe_manifest, encoding="utf-8")
 
         extra = root / AUX_BIN_ROOT / "profile-bridge-live.rs"
         extra.write_text("fn main() {}\n", encoding="utf-8")
@@ -161,7 +233,7 @@ def main() -> int:
             validate(args.root.resolve())
             print(
                 "CAP-01 Profile Bridge production entrypoint remains claim-only; "
-                "no independent Camoufox executor is published."
+                "explicit executable inventory is governed and no independent Camoufox executor is published."
             )
     except BoundaryError as error:
         print(error)
