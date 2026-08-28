@@ -20,6 +20,11 @@ name = "profile-bridge-synthetic"
 path = "src/bin/profile-bridge-synthetic.rs"
 required-features = ["synthetic-test-bin"]
 
+[[test]]
+name = "operator_flow_acceptance"
+path = "tests/operator_flow_acceptance.rs"
+required-features = ["synthetic-test-bin"]
+
 [dependencies]
 application-ports.workspace = true
 bridge-domain.workspace = true
