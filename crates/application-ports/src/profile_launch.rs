@@ -210,6 +210,39 @@ impl ProfileLaunchAuthorityBinding {
     }
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ProfileLaunchMachineBinding {
+    tenant_id: TenantId,
+    actor_id: ActorId,
+    device_id: DeviceId,
+}
+
+impl ProfileLaunchMachineBinding {
+    #[must_use]
+    pub const fn new(tenant_id: TenantId, actor_id: ActorId, device_id: DeviceId) -> Self {
+        Self {
+            tenant_id,
+            actor_id,
+            device_id,
+        }
+    }
+
+    #[must_use]
+    pub const fn tenant_id(&self) -> &TenantId {
+        &self.tenant_id
+    }
+
+    #[must_use]
+    pub const fn actor_id(&self) -> &ActorId {
+        &self.actor_id
+    }
+
+    #[must_use]
+    pub const fn device_id(&self) -> &DeviceId {
+        &self.device_id
+    }
+}
+
 #[allow(async_fn_in_trait)]
 pub trait ProfileLaunchContextPort {
     async fn load_profile_launch_context(
