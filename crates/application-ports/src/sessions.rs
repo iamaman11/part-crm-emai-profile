@@ -14,3 +14,7 @@ pub trait ProfileCoordinatorPort {
 
     fn close_lease(&mut self, lease: &ProfileLease) -> Result<(), Self::Error>;
 }
+
+pub trait ProfileCoordinatorRuntimePort: ProfileCoordinatorPort {
+    fn heartbeat_lease(&mut self, lease: &ProfileLease) -> Result<(), Self::Error>;
+}
