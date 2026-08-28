@@ -30,7 +30,6 @@ function profileItem(profileId: string, version: number) {
     status: 'READY' as const,
     version,
     linkedClientId: clientId,
-    activeGenerationId: null,
   };
 }
 
@@ -97,7 +96,6 @@ describe('ClientProfilesPanel P1 relationship workflow', () => {
       status: 'READY',
       version: 7,
       linkedClientId: 'client_01JOTHER',
-      activeGenerationId: null,
     });
 
     const user = userEvent.setup();
