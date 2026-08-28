@@ -204,6 +204,9 @@ mod tests {
         assert_eq!(reference.len(), MACHINE_EVIDENCE_PREFIX.len() + 64);
         assert!(!reference.contains(subject));
         assert_eq!(reference, machine_evidence_reference(subject));
-        assert_ne!(reference, machine_evidence_reference("service-token-machine-02"));
+        assert_ne!(
+            reference,
+            machine_evidence_reference("service-token-machine-02")
+        );
     }
 }
