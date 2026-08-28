@@ -828,9 +828,9 @@ def self_test() -> None:
         schema_contract = first.get("schema_contract")
         if not isinstance(schema_contract, dict) or not (
             schema_contract.get("database_component") == "catalog"
-            and schema_contract.get("target_schema_revision") == "0027_pas2_payload_fingerprint.sql"
-            and schema_contract.get("supported_schema_min") == "0027_pas2_payload_fingerprint.sql"
-            and schema_contract.get("supported_schema_max") == "0027_pas2_payload_fingerprint.sql"
+            and schema_contract.get("target_schema_revision") == "0028_profile_assignment_detach.sql"
+            and schema_contract.get("supported_schema_min") == "0028_profile_assignment_detach.sql"
+            and schema_contract.get("supported_schema_max") == "0028_profile_assignment_detach.sql"
         ):
             fail("Catalog fixture release did not bind the exact conservative schema contract")
 
