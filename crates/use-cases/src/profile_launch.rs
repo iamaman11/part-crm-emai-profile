@@ -151,6 +151,20 @@ mod tests {
         ActorContext, ActorId, CorrelationId, DeviceId, GenerationId, ProfileId, TenantId,
         TenantScope,
     };
+    use std::future::Future;
+    use std::task::{Context, Poll, Waker};
+
+    fn block_on<F: Future>(future: F) -> F::Output {
+        let waker = Waker::noop();
+        let mut context = Context::from_waker(waker);
+        let mut future = Box::pin(future);
+        loop {
+            match future.as_mut().poll(&mut context) {
+                Poll::Ready(output) => return output,
+                Poll::Pending => std::hint::spin_loop(),
+            }
+        }
+    }
 
     struct LaunchContextFake {
         context: Option<ProfileLaunchContext>,
@@ -260,7 +274,7 @@ mod tests {
                 ProfileGrantRole::Operator,
             )?),
         };
-        let result = futures_executor::block_on(authorize_profile_launch(
+        let result = block_on(authorize_profile_launch(
             &actor,
             MembershipRole::Member,
             &profile_id,
@@ -287,7 +301,7 @@ mod tests {
                 ProfileGrantRole::Viewer,
             )?),
         };
-        let error = futures_executor::block_on(authorize_profile_launch(
+        let error = block_on(authorize_profile_launch(
             &actor,
             MembershipRole::Member,
             &profile_id,
@@ -317,7 +331,7 @@ mod tests {
             DeviceExecutionBlocker::GenerationInactive,
             DeviceExecutionBlocker::CertificationIncomplete,
         ] {
-            let error = futures_executor::block_on(authorize_profile_launch(
+            let error = block_on(authorize_profile_launch(
                 &actor,
                 MembershipRole::Member,
                 &profile_id,
