@@ -7,8 +7,7 @@ const CLAIM_CODE_MIN_LENGTH: usize = 24;
 const CLAIM_CODE_MAX_LENGTH: usize = 96;
 const CLAIM_URI_PATTERN: &str = "^profilebridge://claim/[A-Za-z0-9_-]{24,96}$";
 
-pub const BRIDGE_PROFILE_LAUNCH_REDEMPTION_PATH: &str =
-    "/bridge/v1/profile-launch/redemptions";
+pub const BRIDGE_PROFILE_LAUNCH_REDEMPTION_PATH: &str = "/bridge/v1/profile-launch/redemptions";
 pub const BRIDGE_PROFILE_COORDINATOR_PATH_TEMPLATE: &str =
     "/bridge/v1/tenants/{tenantId}/profiles/{profileId}/coordinator";
 
