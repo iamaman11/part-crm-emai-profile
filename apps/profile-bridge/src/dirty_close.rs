@@ -203,7 +203,7 @@ mod tests {
     use application_ports::generations::GenerationPortError;
     use encrypted_generation_domain::{GenerationDek, KeyId, NoncePrefix};
     use profile_platform_primitives::{
-        ActorContext, ActorId, CorrelationId, DeviceId, FencingToken, GenerationId,
+        ActorContext, ActorId, CorrelationId, DeviceId, FencingToken, GenerationId, LaunchIntentId,
         MailboxBindingId, ProfileId, SessionId, TenantId, TenantScope, UnixMillis,
     };
     use session_domain::ProfileLease;
@@ -310,11 +310,12 @@ mod tests {
     impl ProfileCoordinatorPort for Coordinator {
         type Error = ();
 
-        fn acquire_lease(
+        fn claim_launch_intent(
             &mut self,
             _actor: &ActorContext,
             _profile_id: &ProfileId,
             _device_id: &DeviceId,
+            _launch_intent_id: &LaunchIntentId,
         ) -> Result<ProfileLease, Self::Error> {
             Err(())
         }

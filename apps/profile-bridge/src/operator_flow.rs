@@ -16,7 +16,8 @@ use application_ports::generation_objects::{
 };
 use bridge_domain::{CamouhostPort, ClaimUri, DeviceIdentityPort, DeviceKeyPort};
 use profile_platform_primitives::{
-    ActorContext, DeviceId, GenerationId, ProfileId, SessionId, TenantScope, UnixMillis,
+    ActorContext, DeviceId, GenerationId, LaunchIntentId, ProfileId, SessionId, TenantScope,
+    UnixMillis,
 };
 use session_domain::ProfileLease;
 use std::fmt;
@@ -66,6 +67,7 @@ pub struct OperatorEnrollment {
     actor: ActorContext,
     profile_id: ProfileId,
     generation_id: GenerationId,
+    launch_intent_id: LaunchIntentId,
 }
 
 impl OperatorEnrollment {
@@ -74,11 +76,13 @@ impl OperatorEnrollment {
         actor: ActorContext,
         profile_id: ProfileId,
         generation_id: GenerationId,
+        launch_intent_id: LaunchIntentId,
     ) -> Self {
         Self {
             actor,
             profile_id,
             generation_id,
+            launch_intent_id,
         }
     }
 
@@ -96,6 +100,11 @@ impl OperatorEnrollment {
     pub const fn generation_id(&self) -> &GenerationId {
         &self.generation_id
     }
+
+    #[must_use]
+    pub const fn launch_intent_id(&self) -> &LaunchIntentId {
+        &self.launch_intent_id
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -105,7 +114,7 @@ pub enum OperatorFailureStage {
     DeviceAuthentication,
     Enrollment,
     RuntimeBundle,
-    CoordinatorAcquire,
+    CoordinatorClaim,
     LeaseValidation,
     LocalWorkspace,
     BrowserPreflight,
@@ -332,8 +341,13 @@ where
             .map_err(|_| OperatorFlowError::Stage(OperatorFailureStage::RuntimeBundle))?;
         let lease = self
             .coordinator
-            .acquire_lease(enrollment.actor(), enrollment.profile_id(), &device_id)
-            .map_err(|_| OperatorFlowError::Stage(OperatorFailureStage::CoordinatorAcquire))?;
+            .claim_launch_intent(
+                enrollment.actor(),
+                enrollment.profile_id(),
+                &device_id,
+                enrollment.launch_intent_id(),
+            )
+            .map_err(|_| OperatorFlowError::Stage(OperatorFailureStage::CoordinatorClaim))?;
 
         if lease.tenant_id() != enrollment.actor().tenant_scope().tenant_id()
             || lease.profile_id() != enrollment.profile_id()
@@ -751,8 +765,8 @@ mod tests {
         ClaimUri, EnrollmentClaim,
     };
     use profile_platform_primitives::{
-        ActorContext, ActorId, CorrelationId, DeviceId, FencingToken, GenerationId, ProfileId,
-        SessionId, TenantId, TenantScope, UnixMillis,
+        ActorContext, ActorId, CorrelationId, DeviceId, FencingToken, GenerationId, LaunchIntentId,
+        ProfileId, SessionId, TenantId, TenantScope, UnixMillis,
     };
     use runtime_bundle_domain::{
         BundleRelativePath, InventoryEntry, RuntimeInventory, RuntimeManifest, RuntimePlatform,
@@ -811,23 +825,25 @@ mod tests {
     #[derive(Clone, Debug)]
     struct FakeCoordinator {
         lease: ProfileLease,
-        acquire_fail: bool,
+        expected_launch_intent_id: LaunchIntentId,
+        claim_fail: bool,
         close_fail: bool,
-        acquired: u64,
+        claimed: u64,
         closed: u64,
     }
 
     impl ProfileCoordinatorPort for FakeCoordinator {
         type Error = BridgePortError;
 
-        fn acquire_lease(
+        fn claim_launch_intent(
             &mut self,
             _actor: &ActorContext,
             _profile_id: &ProfileId,
             _device_id: &DeviceId,
+            launch_intent_id: &LaunchIntentId,
         ) -> Result<ProfileLease, Self::Error> {
-            self.acquired += 1;
-            if self.acquire_fail {
+            self.claimed += 1;
+            if self.claim_fail || launch_intent_id != &self.expected_launch_intent_id {
                 Err(BridgePortError::Unavailable)
             } else {
                 Ok(self.lease.clone())
@@ -964,6 +980,7 @@ mod tests {
         profile_id: ProfileId,
         generation_id: GenerationId,
         device_id: DeviceId,
+        launch_intent_id: LaunchIntentId,
         lease: ProfileLease,
     }
 
@@ -997,6 +1014,8 @@ mod tests {
                 counter.max(1),
                 FencingToken::parse(format!("fence_01JOPERATOR{counter}"))?,
             )?;
+            let launch_intent_id =
+                LaunchIntentId::parse(format!("launch_01JOPERATOR{counter}"))?;
             let claim_code = ClaimCode::parse(format!("claim_01JOPERATOR{counter:024}"))?;
             let claim_uri = ClaimUri::parse(&format!(
                 "profilebridge://claim/claim_01JOPERATOR{counter:024}"
@@ -1010,6 +1029,7 @@ mod tests {
                 profile_id,
                 generation_id,
                 device_id,
+                launch_intent_id,
                 lease,
             })
         }
@@ -1026,6 +1046,7 @@ mod tests {
                     self.actor.clone(),
                     self.profile_id.clone(),
                     self.generation_id.clone(),
+                    self.launch_intent_id.clone(),
                 ),
             })
         }
@@ -1033,9 +1054,10 @@ mod tests {
         fn coordinator(&self) -> FakeCoordinator {
             FakeCoordinator {
                 lease: self.lease.clone(),
-                acquire_fail: false,
+                expected_launch_intent_id: self.launch_intent_id.clone(),
+                claim_fail: false,
                 close_fail: false,
-                acquired: 0,
+                claimed: 0,
                 closed: 0,
             }
         }
@@ -1084,7 +1106,7 @@ mod tests {
             operator.active_local_state(),
             Some(LocalGenerationState::InUse)
         );
-        assert_eq!(operator.coordinator().acquired, 1);
+        assert_eq!(operator.coordinator().claimed, 1);
         assert_eq!(operator.coordinator().closed, 0);
         assert_eq!(
             operator.process().actions(),
@@ -1145,7 +1167,7 @@ mod tests {
                 OperatorFailureStage::DeviceAuthentication
             ))
         );
-        assert_eq!(operator.coordinator().acquired, 0);
+        assert_eq!(operator.coordinator().claimed, 0);
         assert!(operator.process().actions().is_empty());
         Ok(())
     }
@@ -1161,7 +1183,7 @@ mod tests {
             operator.open(&fixture.claim_uri, &fixture.root, UnixMillis::new(21)),
             Err(OperatorFlowError::Busy)
         );
-        assert_eq!(operator.coordinator().acquired, 1);
+        assert_eq!(operator.coordinator().claimed, 1);
         assert_eq!(operator.coordinator().closed, 0);
         Ok(())
     }

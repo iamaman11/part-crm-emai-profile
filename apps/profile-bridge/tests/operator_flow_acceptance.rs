@@ -12,8 +12,8 @@ use profile_bridge::{
     FakeCamouhost, FakeDeviceIdentity, FakeDeviceKeyStore, FakeProcessControl, ProcessAction,
 };
 use profile_platform_primitives::{
-    ActorContext, ActorId, CorrelationId, DeviceId, FencingToken, GenerationId, ProfileId,
-    SessionId, TenantId, TenantScope, UnixMillis,
+    ActorContext, ActorId, CorrelationId, DeviceId, FencingToken, GenerationId, LaunchIntentId,
+    ProfileId, SessionId, TenantId, TenantScope, UnixMillis,
 };
 use runtime_bundle_domain::{
     BundleRelativePath, InventoryEntry, RuntimeInventory, RuntimeManifest, RuntimePlatform,
@@ -83,23 +83,25 @@ impl EnrollmentPort for TestEnrollment {
 #[derive(Clone, Debug)]
 struct TestCoordinator {
     lease: ProfileLease,
-    acquire_fail: bool,
+    expected_launch_intent_id: LaunchIntentId,
+    claim_fail: bool,
     close_fail: bool,
-    acquired: u64,
+    claimed: u64,
     closed: u64,
 }
 
 impl ProfileCoordinatorPort for TestCoordinator {
     type Error = BridgePortError;
 
-    fn acquire_lease(
+    fn claim_launch_intent(
         &mut self,
         _actor: &ActorContext,
         _profile_id: &ProfileId,
         _device_id: &DeviceId,
+        launch_intent_id: &LaunchIntentId,
     ) -> Result<ProfileLease, Self::Error> {
-        self.acquired += 1;
-        if self.acquire_fail {
+        self.claimed += 1;
+        if self.claim_fail || launch_intent_id != &self.expected_launch_intent_id {
             Err(BridgePortError::Unavailable)
         } else {
             Ok(self.lease.clone())
@@ -172,6 +174,7 @@ struct Fixture {
     profile_id: ProfileId,
     generation_id: GenerationId,
     device_id: DeviceId,
+    launch_intent_id: LaunchIntentId,
     lease: ProfileLease,
 }
 
@@ -204,6 +207,7 @@ impl Fixture {
             counter.max(1),
             FencingToken::parse(format!("fence_01JACCEPT{counter}"))?,
         )?;
+        let launch_intent_id = LaunchIntentId::parse(format!("launch_01JACCEPT{counter}"))?;
         let claim_uri = ClaimUri::parse(&format!(
             "profilebridge://claim/claim_01JACCEPT{counter:024}"
         ))?;
@@ -219,6 +223,7 @@ impl Fixture {
             profile_id,
             generation_id,
             device_id,
+            launch_intent_id,
             lease,
         })
     }
@@ -234,6 +239,7 @@ impl Fixture {
                 self.actor.clone(),
                 self.profile_id.clone(),
                 self.generation_id.clone(),
+                self.launch_intent_id.clone(),
             ),
         })
     }
@@ -241,9 +247,10 @@ impl Fixture {
     fn coordinator(&self) -> TestCoordinator {
         TestCoordinator {
             lease: self.lease.clone(),
-            acquire_fail: false,
+            expected_launch_intent_id: self.launch_intent_id.clone(),
+            claim_fail: false,
             close_fail: false,
-            acquired: 0,
+            claimed: 0,
             closed: 0,
         }
     }
@@ -308,7 +315,7 @@ fn busy_invalid_and_replayed_claims_fail_before_second_ownership()
         operator.open(&fixture.other_claim_uri, &fixture.root, UnixMillis::new(10)),
         Err(OperatorFlowError::Stage(OperatorFailureStage::Enrollment))
     );
-    assert_eq!(operator.coordinator().acquired, 0);
+    assert_eq!(operator.coordinator().claimed, 0);
     assert!(operator.process().actions().is_empty());
 
     operator.open(&fixture.claim_uri, &fixture.root, UnixMillis::new(11))?;
@@ -322,13 +329,13 @@ fn busy_invalid_and_replayed_claims_fail_before_second_ownership()
         Err(OperatorFlowError::Busy)
     );
     assert!(operator.has_pending_dirty_close());
-    assert_eq!(operator.coordinator().acquired, 1);
+    assert_eq!(operator.coordinator().claimed, 1);
     assert_eq!(operator.coordinator().closed, 0);
     Ok(())
 }
 
 #[test]
-fn runtime_bundle_rejection_prevents_lease_and_runtime_mutation()
+fn runtime_bundle_rejection_prevents_coordinator_claim_and_runtime_mutation()
 -> Result<(), Box<dyn std::error::Error>> {
     let fixture = Fixture::new()?;
     let mut operator = ProfileBridgeOperator::new(
@@ -352,26 +359,44 @@ fn runtime_bundle_rejection_prevents_lease_and_runtime_mutation()
             OperatorFailureStage::RuntimeBundle
         ))
     );
-    assert_eq!(operator.coordinator().acquired, 0);
+    assert_eq!(operator.coordinator().claimed, 0);
     assert!(operator.process().actions().is_empty());
     Ok(())
 }
 
 #[test]
-fn coordinator_failure_starts_no_runtime_process() -> Result<(), Box<dyn std::error::Error>> {
+fn coordinator_claim_failure_starts_no_runtime_process() -> Result<(), Box<dyn std::error::Error>> {
     let fixture = Fixture::new()?;
     let mut coordinator = fixture.coordinator();
-    coordinator.acquire_fail = true;
+    coordinator.claim_fail = true;
     let mut operator = operator(&fixture, coordinator, FakeCamouhost::default())?;
 
     assert_eq!(
         operator.open(&fixture.claim_uri, &fixture.root, UnixMillis::new(10)),
         Err(OperatorFlowError::Stage(
-            OperatorFailureStage::CoordinatorAcquire
+            OperatorFailureStage::CoordinatorClaim
         ))
     );
-    assert_eq!(operator.coordinator().acquired, 1);
+    assert_eq!(operator.coordinator().claimed, 1);
     assert_eq!(operator.coordinator().closed, 0);
+    assert!(operator.process().actions().is_empty());
+    Ok(())
+}
+
+#[test]
+fn wrong_launch_intent_never_reaches_runtime() -> Result<(), Box<dyn std::error::Error>> {
+    let fixture = Fixture::new()?;
+    let mut coordinator = fixture.coordinator();
+    coordinator.expected_launch_intent_id = LaunchIntentId::parse("launch_wrong_intent")?;
+    let mut operator = operator(&fixture, coordinator, FakeCamouhost::default())?;
+
+    assert_eq!(
+        operator.open(&fixture.claim_uri, &fixture.root, UnixMillis::new(10)),
+        Err(OperatorFlowError::Stage(
+            OperatorFailureStage::CoordinatorClaim
+        ))
+    );
+    assert_eq!(operator.coordinator().claimed, 1);
     assert!(operator.process().actions().is_empty());
     Ok(())
 }
