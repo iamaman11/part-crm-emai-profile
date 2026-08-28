@@ -11,9 +11,12 @@ use crate::composition::{
 };
 use cloudflare_adapters::d1_active_membership::D1ActiveMembership;
 use control_plane_contract::D1_CATALOG_BINDING;
-use control_plane_contract::profile_launch_api::ProfileLaunchProjection;
+use control_plane_contract::profile_launch_api::{
+    BridgeProfileLaunchRedemptionProjection, BridgeProfileLaunchRedemptionRequest,
+    ProfileLaunchProjection,
+};
 use profile_platform_primitives::{CorrelationId, ProfileId, UnixMillis};
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use use_cases::profile_launch::authorize_profile_launch;
 use use_cases::profile_launch_authority::issue_profile_launch_authority;
 use use_cases::profile_launch_redemption::{
@@ -28,23 +31,6 @@ use super::profile_launch_composition::{launch_authority, launch_context};
 #[serde(rename_all = "camelCase")]
 struct ProfileLaunchCommandEvidence<'a> {
     profile_id: &'a str,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct BridgeProfileLaunchRedemptionRequest {
-    claim_code: String,
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct BridgeProfileLaunchRedemptionProjection {
-    tenant_id: String,
-    actor_id: String,
-    profile_id: String,
-    generation_id: String,
-    device_id: String,
-    launch_intent_id: String,
 }
 
 pub(super) async fn launch(
@@ -141,7 +127,7 @@ async fn redeem_from_bridge(request: &mut Request, env: &Env) -> Result<Response
     let now = UnixMillis::new(Date::now().as_millis());
     let validated = match validate_profile_launch_redemption(
         &correlation_id,
-        &body.claim_code,
+        body.claim_code(),
         &machine_binding,
         now,
         &memberships,
@@ -163,7 +149,7 @@ async fn redeem_from_bridge(request: &mut Request, env: &Env) -> Result<Response
         validated.role(),
         validated.binding().profile_id(),
         validated.binding().device_id(),
-        &body.claim_code,
+        body.claim_code(),
     )
     .await
     {
@@ -174,7 +160,7 @@ async fn redeem_from_bridge(request: &mut Request, env: &Env) -> Result<Response
     let revalidated_at = UnixMillis::new(Date::now().as_millis());
     let revalidated = match validate_profile_launch_redemption(
         &correlation_id,
-        &body.claim_code,
+        body.claim_code(),
         &machine_binding,
         revalidated_at,
         &memberships,
@@ -193,7 +179,7 @@ async fn redeem_from_bridge(request: &mut Request, env: &Env) -> Result<Response
 
     let redeemed = match consume_validated_profile_launch_redemption(
         &revalidated,
-        &body.claim_code,
+        body.claim_code(),
         revalidated_at,
         &authority,
     )

@@ -40,6 +40,35 @@ impl<'de> Deserialize<'de> for ProfileLaunchProjection {
     }
 }
 
+#[derive(Clone, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct BridgeProfileLaunchRedemptionRequest {
+    claim_code: String,
+}
+
+impl BridgeProfileLaunchRedemptionRequest {
+    #[must_use]
+    pub fn new(claim_code: String) -> Self {
+        Self { claim_code }
+    }
+
+    #[must_use]
+    pub fn claim_code(&self) -> &str {
+        &self.claim_code
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct BridgeProfileLaunchRedemptionProjection {
+    pub tenant_id: String,
+    pub actor_id: String,
+    pub profile_id: String,
+    pub generation_id: String,
+    pub device_id: String,
+    pub launch_intent_id: String,
+}
+
 fn valid_launch_uri(value: &str) -> bool {
     let Some(code) = value.strip_prefix(CLAIM_URI_PREFIX) else {
         return false;
@@ -108,7 +137,10 @@ pub fn openapi_fragment() -> Value {
 
 #[cfg(test)]
 mod tests {
-    use super::{ProfileLaunchProjection, openapi_fragment};
+    use super::{
+        BridgeProfileLaunchRedemptionProjection, BridgeProfileLaunchRedemptionRequest,
+        ProfileLaunchProjection, openapi_fragment,
+    };
 
     #[test]
     fn launch_projection_is_strict_and_contains_no_caller_selected_device() {
@@ -122,6 +154,47 @@ mod tests {
         ] {
             assert!(serde_json::from_str::<ProfileLaunchProjection>(invalid).is_err());
         }
+    }
+
+    #[test]
+    fn bridge_redemption_request_has_one_strict_secret_field()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let request = BridgeProfileLaunchRedemptionRequest::new(
+            "claim_01JBRIDGE_FEASIBILITY".to_owned(),
+        );
+        let value = serde_json::to_value(&request)?;
+        assert_eq!(value["claimCode"], "claim_01JBRIDGE_FEASIBILITY");
+        assert_eq!(request.claim_code(), "claim_01JBRIDGE_FEASIBILITY");
+        assert!(
+            serde_json::from_str::<BridgeProfileLaunchRedemptionRequest>(
+                r#"{"claimCode":"claim_01JBRIDGE_FEASIBILITY","extra":"rejected"}"#,
+            )
+            .is_err()
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn bridge_redemption_projection_is_strict_for_native_client_decode()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let valid = r#"{
+            "tenantId":"tenant_01JTEST",
+            "actorId":"actor_01JTEST",
+            "profileId":"profile_01JTEST",
+            "generationId":"generation_01JTEST",
+            "deviceId":"device_01JTEST",
+            "launchIntentId":"launch_intent_01JTEST"
+        }"#;
+        let decoded = serde_json::from_str::<BridgeProfileLaunchRedemptionProjection>(valid)?;
+        assert_eq!(decoded.device_id, "device_01JTEST");
+        let unknown = valid.replace(
+            "\"launchIntentId\":\"launch_intent_01JTEST\"",
+            "\"launchIntentId\":\"launch_intent_01JTEST\",\"extra\":true",
+        );
+        assert!(
+            serde_json::from_str::<BridgeProfileLaunchRedemptionProjection>(&unknown).is_err()
+        );
+        Ok(())
     }
 
     #[test]
