@@ -63,9 +63,11 @@ mod tests {
             "profilebridge://claim/claim_01JBRIDGE_FEASIBILITY".to_owned(),
         ]);
         assert_eq!(result, Err(BridgeCliError::CompositionUnavailable));
-        assert!(!BridgeCliError::CompositionUnavailable
-            .to_string()
-            .contains("01JBRIDGE"));
+        assert!(
+            !BridgeCliError::CompositionUnavailable
+                .to_string()
+                .contains("01JBRIDGE")
+        );
     }
 
     #[test]
