@@ -10,7 +10,6 @@ use cloudflare_adapters::coordinator_ingress::{
     CloudflareCoordinatorClock, CloudflareCoordinatorIngressApplication,
 };
 use cloudflare_adapters::d1_active_membership::D1ActiveMembership;
-use cloudflare_adapters::d1_identity_acl::ResolvedMembershipRole;
 use control_plane_contract::coordinator_api::{
     CoordinatorCommandDto, CoordinatorCommandRequestDto, CoordinatorOutcomeDto,
     CoordinatorProjectionDto, CoordinatorReleaseDispositionDto, CoordinatorResponseDto,
@@ -68,7 +67,7 @@ async fn dispatch_human(
         env,
         &profile_id,
         actor.actor(),
-        membership_role(actor.role()),
+        membership_role(&actor),
         None,
     )
     .await
@@ -245,13 +244,6 @@ fn membership_failure(
             "dependency_unavailable",
             "Dependency Unavailable",
         ),
-    }
-}
-
-fn membership_role(role: ResolvedMembershipRole) -> MembershipRole {
-    match role {
-        ResolvedMembershipRole::TenantOwner => MembershipRole::TenantOwner,
-        ResolvedMembershipRole::Member => MembershipRole::Member,
     }
 }
 
