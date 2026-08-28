@@ -1,3 +1,6 @@
+mod profile_launch;
+mod profile_launch_composition;
+
 use crate::access_session::{
     correlation_hint, membership_role, neutral_not_found, problem, resolve_active_request_actor,
 };
@@ -42,7 +45,11 @@ pub async fn dispatch(route: RouteClass, request: &mut Request, env: &Env) -> Re
         RouteClass::ProfileCollectionApi => create_profile(request, env, tenant_id).await,
         RouteClass::ProfileResourceApi => {
             let profile_id = segments.get(5).copied().unwrap_or_default();
-            get_profile(request, env, tenant_id, profile_id).await
+            if request.method().as_ref() == "POST" && segments.get(6).copied() == Some("launch") {
+                profile_launch::launch(request, env, tenant_id, profile_id).await
+            } else {
+                get_profile(request, env, tenant_id, profile_id).await
+            }
         }
         RouteClass::ProfileAssignmentApi => {
             let profile_id = segments.get(5).copied().unwrap_or_default();
