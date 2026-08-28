@@ -12,7 +12,9 @@ pub(super) fn launch_context(env: &Env) -> Result<D1ProfileLaunchContext> {
 pub(super) fn launch_authority(env: &Env) -> Result<D1ProfileLaunchAuthority> {
     let key = env.secret(PROFILE_LAUNCH_CLAIM_KEY)?.to_string();
     D1ProfileLaunchAuthority::new(env.d1(D1_CATALOG_BINDING)?, key).map_err(|error| {
-        Error::RustError(format!("profile launch authority configuration failed closed: {error}"))
+        Error::RustError(format!(
+            "profile launch authority configuration failed closed: {error}"
+        ))
     })
 }
 
