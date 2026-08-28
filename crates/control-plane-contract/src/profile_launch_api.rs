@@ -84,10 +84,13 @@ mod tests {
     #[test]
     fn fragment_owns_one_authenticated_additive_launch_operation() {
         let fragment = openapi_fragment();
-        let operation = &fragment["paths"]
-            ["/api/v1/tenants/{tenantId}/profiles/{profileId}/launch"]["post"];
+        let operation =
+            &fragment["paths"]["/api/v1/tenants/{tenantId}/profiles/{profileId}/launch"]["post"];
         assert_eq!(operation["operationId"], "launchProfile");
-        assert_eq!(operation["security"][0]["cloudflareAccessJwt"], serde_json::json!([]));
+        assert_eq!(
+            operation["security"][0]["cloudflareAccessJwt"],
+            serde_json::json!([])
+        );
         assert!(operation.get("requestBody").is_none());
         let parameters = operation["parameters"].as_array().expect("parameters");
         assert!(parameters.iter().all(|parameter| {
