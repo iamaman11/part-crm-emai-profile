@@ -132,13 +132,8 @@ impl ProfileLaunchAuthorityPort for D1ProfileLaunchAuthority {
         device_id: &DeviceId,
         evidence: &CommandExecutionEvidence,
     ) -> Result<IssuedProfileLaunchAuthority, ProfileLaunchAuthorityError> {
-        let claim_code = self.derive_claim_code(
-            actor,
-            profile_id,
-            generation_id,
-            device_id,
-            evidence,
-        )?;
+        let claim_code =
+            self.derive_claim_code(actor, profile_id, generation_id, device_id, evidence)?;
         let claim_digest = digest_claim_code(&claim_code);
 
         if let Some(row) = self
@@ -191,9 +186,7 @@ impl ProfileLaunchAuthorityPort for D1ProfileLaunchAuthority {
 
         if returned.is_some() {
             return Ok(IssuedProfileLaunchAuthority::new(
-                claim_code,
-                expires_at,
-                false,
+                claim_code, expires_at, false,
             ));
         }
 
@@ -321,9 +314,7 @@ fn replay_issue(
         let _redeemed_at = i64_to_unix(redeemed_at)?;
     }
     Ok(IssuedProfileLaunchAuthority::new(
-        claim_code,
-        expires_at,
-        true,
+        claim_code, expires_at, true,
     ))
 }
 
