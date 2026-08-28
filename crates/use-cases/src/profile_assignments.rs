@@ -1,6 +1,6 @@
 use application_ports::CommandExecutionEvidence;
 use application_ports::profile_assignment_context::{
-    ProfileAssignmentContext, ProfileAssignmentContextPort, ProfileDetachmentContext,
+    ProfileAssignmentContext, ProfileAssignmentContextPort,
 };
 use application_ports::profiles::{
     ProfileAssignmentApplicationPort, ProfileAssignmentPortError, ProfileAssignmentPortErrorClass,
@@ -442,7 +442,9 @@ fn map_port_error(error: ProfileAssignmentPortError) -> ProfileAssignmentOperati
 #[cfg(test)]
 mod tests {
     use super::*;
-    use application_ports::profile_assignment_context::CurrentProfileAssignmentSnapshot;
+    use application_ports::profile_assignment_context::{
+        CurrentProfileAssignmentSnapshot, ProfileDetachmentContext,
+    };
     use client_domain::{ClientKind, ClientRecord, ClientStatus};
     use profile_platform_primitives::{
         ActorId, AuditEventId, CorrelationId, IdempotencyKey, OutboxEventId, PayloadFingerprint,
