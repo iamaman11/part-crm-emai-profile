@@ -2,8 +2,13 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { assignProfile, detachProfile, getProfile, launchProfile } from '../profiles';
-import { invokeProfileBridgeLaunch } from '../profiles/launchBridge';
+import {
+  assignProfile,
+  detachProfile,
+  getProfile,
+  invokeProfileBridgeLaunch,
+  launchProfile,
+} from '../profiles';
 import { ClientProfilesPanel } from './ClientProfilesPanel';
 import { listClientProfiles } from './api';
 
@@ -11,11 +16,8 @@ vi.mock('../profiles', () => ({
   assignProfile: vi.fn(),
   detachProfile: vi.fn(),
   getProfile: vi.fn(),
-  launchProfile: vi.fn(),
-}));
-
-vi.mock('../profiles/launchBridge', () => ({
   invokeProfileBridgeLaunch: vi.fn(),
+  launchProfile: vi.fn(),
 }));
 
 vi.mock('./api', () => ({
