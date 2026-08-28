@@ -1,6 +1,6 @@
 use core::{fmt, future::Future};
-pub use device_domain::{DeviceClaimId, DeviceJobId};
-use device_domain::{DeviceJob, DeviceJobTarget};
+pub use device_domain::{DeviceClaimId, DeviceJobId, DeviceJobTarget};
+use device_domain::DeviceJob;
 use profile_platform_primitives::{ActorContext, AggregateVersion, DeviceId, TenantId, UnixMillis};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
