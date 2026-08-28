@@ -10,5 +10,6 @@ pub mod profile_launch;
 pub mod profile_launch_authority;
 pub mod profiles;
 
+pub use contracts::ProblemCode;
 pub use error::ApplicationError;
 pub use profiles::{OpenProfileCommand, OpenProfileDecision, decide_open_profile};
