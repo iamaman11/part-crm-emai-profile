@@ -82,6 +82,9 @@ pub fn route_surface(route: RouteClass, path: &str) -> Option<RuntimeSurface> {
         }
         RouteClass::ClientMailSendApi => Some(RuntimeSurface::HttpOutboundMail),
         RouteClass::ProfileLaunchApi => Some(RuntimeSurface::HttpProfileRuntimeLaunch),
+        RouteClass::ProfileCoordinatorApi if path.starts_with("/bridge/") => {
+            Some(RuntimeSurface::HttpProfileRuntimeLaunch)
+        }
         RouteClass::ProfileCollectionApi
         | RouteClass::ProfileResourceApi
         | RouteClass::ProfileAssignmentApi
@@ -153,6 +156,26 @@ mod tests {
             route_surface(
                 RouteClass::ProfileResourceApi,
                 "/api/v1/tenants/tenant_01/profiles/profile_01",
+            ),
+            Some(RuntimeSurface::HttpBrowserProfiles)
+        );
+    }
+
+    #[test]
+    fn bridge_coordinator_route_is_governed_by_profile_runtime_capability() {
+        let surface = route_surface(
+            RouteClass::ProfileCoordinatorApi,
+            "/bridge/v1/tenants/tenant_01/profiles/profile_01/coordinator",
+        );
+        assert_eq!(surface, Some(RuntimeSurface::HttpProfileRuntimeLaunch));
+        assert_eq!(
+            surface.map(RuntimeSurface::activation_unit),
+            Some(ActivationUnit::ProfileRuntime)
+        );
+        assert_eq!(
+            route_surface(
+                RouteClass::ProfileCoordinatorApi,
+                "/api/v1/tenants/tenant_01/profiles/profile_01/coordinator",
             ),
             Some(RuntimeSurface::HttpBrowserProfiles)
         );

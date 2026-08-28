@@ -18,6 +18,9 @@ pub(super) fn classify(method: &str, path: &str) -> RouteClass {
     if method == "POST" && path == BRIDGE_PROFILE_LAUNCH_REDEMPTION_PATH {
         return RouteClass::ProfileLaunchApi;
     }
+    if bridge_profile_coordinator_route(method, path) {
+        return RouteClass::ProfileCoordinatorApi;
+    }
     if is_bridge_namespace(path) {
         return RouteClass::BridgeDeniedByDefault;
     }
@@ -66,6 +69,22 @@ pub(super) fn classify(method: &str, path: &str) -> RouteClass {
 }
 
 #[must_use]
+fn bridge_profile_coordinator_route(method: &str, path: &str) -> bool {
+    if !matches!(method, "GET" | "POST") {
+        return false;
+    }
+    let segments: Vec<&str> = path
+        .trim_matches('/')
+        .split('/')
+        .filter(|segment| !segment.is_empty())
+        .collect();
+    matches!(
+        segments.as_slice(),
+        ["bridge", "v1", "tenants", _, "profiles", _, "coordinator"]
+    )
+}
+
+#[must_use]
 fn is_bridge_namespace(path: &str) -> bool {
     path == "/bridge" || path.starts_with("/bridge/")
 }
@@ -89,6 +108,22 @@ mod tests {
             ("POST", "/bridge/v1/profile-launch"),
         ] {
             assert_eq!(classify(method, path), RouteClass::BridgeDeniedByDefault);
+        }
+    }
+
+    #[test]
+    fn only_exact_bridge_profile_coordinator_surface_escapes_deny_default() {
+        let path = "/bridge/v1/tenants/tenant_01/profiles/profile_01/coordinator";
+        assert_eq!(classify("GET", path), RouteClass::ProfileCoordinatorApi);
+        assert_eq!(classify("POST", path), RouteClass::ProfileCoordinatorApi);
+        for (method, invalid) in [
+            ("DELETE", path),
+            ("PUT", path),
+            ("GET", "/bridge/v2/tenants/tenant_01/profiles/profile_01/coordinator"),
+            ("GET", "/bridge/v1/tenants/tenant_01/profiles/profile_01/coordinator/extra"),
+            ("GET", "/bridge/v1/tenants/tenant_01/profiles/coordinator"),
+        ] {
+            assert_eq!(classify(method, invalid), RouteClass::BridgeDeniedByDefault);
         }
     }
 }

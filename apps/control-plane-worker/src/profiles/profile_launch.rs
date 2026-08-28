@@ -1,11 +1,10 @@
-mod bridge_machine;
 mod profile_launch_coordinator;
 
-use self::bridge_machine::resolve_bridge_machine;
 use self::profile_launch_coordinator::ensure_bridge_launch_intent;
 use crate::access_session::{
     correlation_hint, membership_role, neutral_not_found, problem, resolve_active_request_actor,
 };
+use crate::bridge_machine::resolve_bridge_machine;
 use crate::command_evidence;
 use crate::composition::{
     authenticated_device, device_execution_preconditions, device_job_authorization,

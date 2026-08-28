@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 
 mod access_session;
+mod bridge_machine;
 mod capability_gate;
 mod client_mail_query;
 mod client_mail_send;
