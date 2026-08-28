@@ -4,11 +4,10 @@ use application_ports::device_jobs::{
 use application_ports::profile_launch::ProfileLaunchMachineBinding;
 use profile_platform_primitives::{ActorContext, ActorId, DeviceId, TenantId};
 use serde::Deserialize;
-use sha2::{Digest, Sha256};
 use worker::d1::D1Database;
 use worker::query;
 
-const MACHINE_EVIDENCE_PREFIX: &str = "cf_access_sub_sha256:";
+const MACHINE_EVIDENCE_PREFIX: &str = "mtls_cert_sha256:";
 
 const LOAD_ACTIVE_DEVICE_BINDING: &str = r#"
 SELECT binding.device_id, binding.version
@@ -61,17 +60,17 @@ impl D1AuthenticatedDevice {
         Self { database }
     }
 
-    /// Resolve a cryptographically verified Cloudflare Access machine subject through the
-    /// existing device-principal binding owner. Raw Access subjects/tokens are never persisted:
-    /// only a domain-tagged SHA-256 evidence reference is compared in D1.
-    pub async fn resolve_machine_subject(
+    /// Resolve an edge-verified mTLS client certificate through the existing device-principal
+    /// binding owner. The evidence reference is only the domain-tagged SHA-256 certificate
+    /// fingerprint; raw certificate material and private keys never enter D1 or this adapter.
+    pub async fn resolve_machine_certificate_fingerprint(
         &self,
-        verified_subject: &str,
+        verified_fingerprint_sha256: &str,
     ) -> Result<Option<ProfileLaunchMachineBinding>, DeviceJobPortError> {
-        if verified_subject.trim().is_empty() || verified_subject.len() > 512 {
+        if !valid_sha256_fingerprint(verified_fingerprint_sha256) {
             return Ok(None);
         }
-        let evidence_reference = machine_evidence_reference(verified_subject);
+        let evidence_reference = format!("{MACHINE_EVIDENCE_PREFIX}{verified_fingerprint_sha256}");
         let result = query!(
             &self.database,
             LOAD_ACTIVE_MACHINE_BINDING,
@@ -136,16 +135,11 @@ impl AuthenticatedDevicePort for D1AuthenticatedDevice {
     }
 }
 
-fn machine_evidence_reference(subject: &str) -> String {
-    const HEX: &[u8; 16] = b"0123456789abcdef";
-    let digest = Sha256::digest(subject.as_bytes());
-    let mut output = String::with_capacity(MACHINE_EVIDENCE_PREFIX.len() + digest.len() * 2);
-    output.push_str(MACHINE_EVIDENCE_PREFIX);
-    for byte in digest {
-        output.push(char::from(HEX[usize::from(byte >> 4)]));
-        output.push(char::from(HEX[usize::from(byte & 0x0f)]));
-    }
-    output
+fn valid_sha256_fingerprint(value: &str) -> bool {
+    value.len() == 64
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
 }
 
 fn authentication_failed() -> DeviceJobPortError {
@@ -164,7 +158,7 @@ fn map_worker_error(_error: worker::Error) -> DeviceJobPortError {
 mod tests {
     use super::{
         LOAD_ACTIVE_DEVICE_BINDING, LOAD_ACTIVE_MACHINE_BINDING, MACHINE_EVIDENCE_PREFIX,
-        machine_evidence_reference,
+        valid_sha256_fingerprint,
     };
 
     #[test]
@@ -197,16 +191,11 @@ mod tests {
     }
 
     #[test]
-    fn machine_evidence_reference_is_domain_tagged_digest_not_raw_subject() {
-        let subject = "service-token-machine-01";
-        let reference = machine_evidence_reference(subject);
-        assert!(reference.starts_with(MACHINE_EVIDENCE_PREFIX));
-        assert_eq!(reference.len(), MACHINE_EVIDENCE_PREFIX.len() + 64);
-        assert!(!reference.contains(subject));
-        assert_eq!(reference, machine_evidence_reference(subject));
-        assert_ne!(
-            reference,
-            machine_evidence_reference("service-token-machine-02")
-        );
+    fn machine_evidence_is_domain_tagged_verified_certificate_fingerprint() {
+        assert_eq!(MACHINE_EVIDENCE_PREFIX, "mtls_cert_sha256:");
+        assert!(valid_sha256_fingerprint(&"a1".repeat(32)));
+        assert!(!valid_sha256_fingerprint(&"A1".repeat(32)));
+        assert!(!valid_sha256_fingerprint(&"a".repeat(63)));
+        assert!(!valid_sha256_fingerprint(&"g".repeat(64)));
     }
 }

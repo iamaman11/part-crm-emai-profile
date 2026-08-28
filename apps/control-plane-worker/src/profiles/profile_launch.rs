@@ -124,17 +124,22 @@ async fn redeem_from_bridge(request: &mut Request, env: &Env) -> Result<Response
         Err(_) => return neutral_not_found(&correlation_value),
     };
 
-    // Machine authentication deliberately occurs before request-body parsing and before the launch
-    // authority adapter is even constructed. A failed machine assertion therefore cannot probe the
-    // claim store or learn whether a claim exists.
-    let Some(machine_identity) =
+    // Access is the perimeter proof for the dedicated Bridge audience; it is not the device
+    // identity owner. The actual machine must additionally prove possession of its client
+    // certificate at the TLS edge. Both checks happen before body parsing and before the launch
+    // authority adapter exists, so failed machine authentication cannot probe claim existence.
+    let Some(_access_identity) =
         verify_access_assertion(request, env, BRIDGE_ACCESS_AUDIENCE_VAR).await?
     else {
         return neutral_not_found(correlation_id.as_str());
     };
+    let Some(machine_fingerprint) = verified_mtls_fingerprint(request) else {
+        return neutral_not_found(correlation_id.as_str());
+    };
+
     let machine_device = D1AuthenticatedDevice::new(env.d1(D1_CATALOG_BINDING)?);
     let machine_binding = match machine_device
-        .resolve_machine_subject(machine_identity.subject())
+        .resolve_machine_certificate_fingerprint(&machine_fingerprint)
         .await
     {
         Ok(Some(value)) => value,
@@ -182,6 +187,21 @@ async fn redeem_from_bridge(request: &mut Request, env: &Env) -> Result<Response
     response.headers_mut().set("cache-control", "no-store")?;
     response.headers_mut().set("pragma", "no-cache")?;
     Ok(response)
+}
+
+fn verified_mtls_fingerprint(request: &Request) -> Option<String> {
+    let tls = request.cf()?.tls_client_auth()?;
+    if tls.cert_presented() != "1" || tls.cert_verified() != "SUCCESS" {
+        return None;
+    }
+    normalize_sha256_fingerprint(&tls.cert_fingerprint_sha256())
+}
+
+fn normalize_sha256_fingerprint(value: &str) -> Option<String> {
+    if value.len() != 64 || !value.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return None;
+    }
+    Some(value.to_ascii_lowercase())
 }
 
 fn machine_identity_failure(
@@ -243,7 +263,9 @@ fn invalid_request(correlation_id: &str) -> Result<Response> {
 
 #[cfg(test)]
 mod tests {
-    use super::{BRIDGE_ACCESS_AUDIENCE_VAR, ProfileLaunchCommandEvidence};
+    use super::{
+        BRIDGE_ACCESS_AUDIENCE_VAR, ProfileLaunchCommandEvidence, normalize_sha256_fingerprint,
+    };
 
     #[test]
     fn launch_command_evidence_contains_no_device_selection()
@@ -261,5 +283,16 @@ mod tests {
     fn bridge_machine_auth_uses_a_dedicated_access_audience() {
         assert_eq!(BRIDGE_ACCESS_AUDIENCE_VAR, "BRIDGE_ACCESS_AUDIENCE");
         assert_ne!(BRIDGE_ACCESS_AUDIENCE_VAR, "ACCESS_AUDIENCE");
+    }
+
+    #[test]
+    fn bridge_device_identity_accepts_only_exact_sha256_certificate_fingerprint() {
+        let lower = "a1".repeat(32);
+        let upper = lower.to_ascii_uppercase();
+        assert_eq!(normalize_sha256_fingerprint(&lower), Some(lower.clone()));
+        assert_eq!(normalize_sha256_fingerprint(&upper), Some(lower));
+        assert_eq!(normalize_sha256_fingerprint(&"a".repeat(63)), None);
+        assert_eq!(normalize_sha256_fingerprint(&"g".repeat(64)), None);
+        assert_eq!(normalize_sha256_fingerprint(&format!("{}:", "a".repeat(63))), None);
     }
 }
