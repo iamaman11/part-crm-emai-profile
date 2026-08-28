@@ -5,24 +5,25 @@ use application_ports::identity::{
 };
 use application_ports::profile_launch::{
     ProfileLaunchAuthorityBinding, ProfileLaunchAuthorityError, ProfileLaunchAuthorityErrorClass,
-    ProfileLaunchAuthorityPort, ProfileLaunchContextPort,
+    ProfileLaunchAuthorityPort, ProfileLaunchContextPort, ProfileLaunchMachineBinding,
 };
 use application_ports::{
     AuthenticatedDevicePort, DeviceExecutionPreconditionPort, DeviceJobAuthorizationPort,
 };
 use contracts::ProblemCode;
-use profile_platform_primitives::{CorrelationId, DeviceId, TenantScope, UnixMillis};
+use profile_platform_primitives::{CorrelationId, TenantScope, UnixMillis};
 
 /// Redeem a launch authority after the Bridge-facing ingress has authenticated the local machine.
 ///
-/// The claim is deliberately inspected without mutation first. Current membership, profile/grant,
-/// server-owned device selection, active generation, device authorization and execution
-/// preconditions are then revalidated through the same canonical launch authorization use-case
-/// used at issuance. Only an exact unchanged binding may reach the final one-time CAS consume.
+/// The claim is deliberately inspected without mutation first. The authenticated machine's exact
+/// tenant/actor/device binding is compared to the authority before current membership, profile/grant,
+/// server-owned device selection, active generation, device authorization and execution preconditions
+/// are revalidated through the same canonical launch authorization use-case used at issuance. Only an
+/// exact unchanged binding may reach the final one-time CAS consume.
 pub async fn redeem_profile_launch_authority<M, L, C, D, A, P>(
     correlation_id: &CorrelationId,
     claim_code: &str,
-    authenticated_machine_device_id: &DeviceId,
+    authenticated_machine: &ProfileLaunchMachineBinding,
     now: UnixMillis,
     memberships: &M,
     authority: &L,
@@ -40,11 +41,14 @@ where
     P: DeviceExecutionPreconditionPort,
 {
     let binding = authority
-        .inspect_profile_launch_authority(claim_code, authenticated_machine_device_id, now)
+        .inspect_profile_launch_authority(claim_code, authenticated_machine.device_id(), now)
         .await
         .map_err(map_redemption_authority_error)?;
 
-    if binding.device_id() != authenticated_machine_device_id {
+    if binding.tenant_id() != authenticated_machine.tenant_id()
+        || binding.actor_id() != authenticated_machine.actor_id()
+        || binding.device_id() != authenticated_machine.device_id()
+    {
         return Err(ApplicationError::new(ProblemCode::NotFound));
     }
 
@@ -79,7 +83,7 @@ where
     }
 
     let consumed = authority
-        .consume_profile_launch_authority(claim_code, authenticated_machine_device_id, now)
+        .consume_profile_launch_authority(claim_code, authenticated_machine.device_id(), now)
         .await
         .map_err(map_redemption_authority_error)?;
     if consumed != binding {
@@ -98,7 +102,7 @@ fn map_membership_error(error: ActiveMembershipPortError) -> ApplicationError {
 fn map_redemption_authority_error(error: ProfileLaunchAuthorityError) -> ApplicationError {
     ApplicationError::new(match error.class() {
         // Redemption is deliberately neutral for malformed, absent, expired, replayed, or
-        // device-mismatched bearer material. The Bridge receives no claim-existence oracle.
+        // machine/device-mismatched bearer material. The Bridge receives no claim-existence oracle.
         ProfileLaunchAuthorityErrorClass::Conflict
         | ProfileLaunchAuthorityErrorClass::NotFound
         | ProfileLaunchAuthorityErrorClass::ReplayRejected => ProblemCode::NotFound,
