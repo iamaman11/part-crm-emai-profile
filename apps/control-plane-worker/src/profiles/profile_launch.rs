@@ -293,6 +293,9 @@ mod tests {
         assert_eq!(normalize_sha256_fingerprint(&upper), Some(lower));
         assert_eq!(normalize_sha256_fingerprint(&"a".repeat(63)), None);
         assert_eq!(normalize_sha256_fingerprint(&"g".repeat(64)), None);
-        assert_eq!(normalize_sha256_fingerprint(&format!("{}:", "a".repeat(63))), None);
+        assert_eq!(
+            normalize_sha256_fingerprint(&format!("{}:", "a".repeat(63))),
+            None
+        );
     }
 }
