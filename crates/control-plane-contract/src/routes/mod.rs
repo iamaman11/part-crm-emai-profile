@@ -10,8 +10,14 @@ mod profiles;
 
 use crate::{RouteClass, is_dynamic_path};
 
+pub(crate) const BRIDGE_PROFILE_LAUNCH_REDEMPTION_PATH: &str =
+    "/bridge/v1/profile-launch/redemptions";
+
 #[must_use]
 pub(super) fn classify(method: &str, path: &str) -> RouteClass {
+    if method == "POST" && path == BRIDGE_PROFILE_LAUNCH_REDEMPTION_PATH {
+        return RouteClass::ProfileLaunchApi;
+    }
     if is_bridge_namespace(path) {
         return RouteClass::BridgeDeniedByDefault;
     }
@@ -62,4 +68,27 @@ pub(super) fn classify(method: &str, path: &str) -> RouteClass {
 #[must_use]
 fn is_bridge_namespace(path: &str) -> bool {
     path == "/bridge" || path.starts_with("/bridge/")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{BRIDGE_PROFILE_LAUNCH_REDEMPTION_PATH, classify};
+    use crate::RouteClass;
+
+    #[test]
+    fn only_exact_post_profile_launch_redemption_escapes_bridge_deny_default() {
+        assert_eq!(
+            classify("POST", BRIDGE_PROFILE_LAUNCH_REDEMPTION_PATH),
+            RouteClass::ProfileLaunchApi
+        );
+        for (method, path) in [
+            ("GET", BRIDGE_PROFILE_LAUNCH_REDEMPTION_PATH),
+            ("PUT", BRIDGE_PROFILE_LAUNCH_REDEMPTION_PATH),
+            ("POST", "/bridge/v2/profile-launch/redemptions"),
+            ("POST", "/bridge/v1/profile-launch/redemptions/extra"),
+            ("POST", "/bridge/v1/profile-launch"),
+        ] {
+            assert_eq!(classify(method, path), RouteClass::BridgeDeniedByDefault);
+        }
+    }
 }
