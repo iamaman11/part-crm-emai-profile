@@ -116,6 +116,52 @@ BEGIN
     );
 END;
 
+-- Rebind the 0015 history close guard to the operation discriminator as well. ASSIGN must
+-- still be able to close the previous active row before inserting a successor whose identity
+-- is necessarily different. DETACH, however, is authority only for the exact server-restored
+-- assignment/client identity carried by the command. This keeps the history table itself
+-- fail-closed even if a future caller attempts a broader UPDATE than the current apply trigger.
+DROP TRIGGER profile_assignment_history_update_guard;
+CREATE TRIGGER profile_assignment_history_update_guard
+BEFORE UPDATE ON profile_client_assignments
+FOR EACH ROW
+BEGIN
+    SELECT RAISE(ABORT, 'profile_assignment_identity_immutable')
+    WHERE NEW.tenant_id <> OLD.tenant_id
+       OR NEW.assignment_id <> OLD.assignment_id
+       OR NEW.profile_id <> OLD.profile_id
+       OR NEW.client_id <> OLD.client_id
+       OR NEW.assigned_by_actor_id <> OLD.assigned_by_actor_id
+       OR NEW.assigned_at_ms <> OLD.assigned_at_ms
+       OR NEW.reason <> OLD.reason;
+
+    SELECT RAISE(ABORT, 'profile_assignment_closed_history_immutable')
+    WHERE OLD.closed_at_ms IS NOT NULL
+      AND NEW.closed_at_ms IS NOT OLD.closed_at_ms;
+
+    SELECT RAISE(ABORT, 'profile_assignment_invalid_close_time')
+    WHERE NEW.closed_at_ms IS NOT NULL
+      AND NEW.closed_at_ms < OLD.assigned_at_ms;
+
+    SELECT RAISE(ABORT, 'profile_assignment_close_not_governed')
+    WHERE OLD.closed_at_ms IS NULL
+      AND NEW.closed_at_ms IS NOT NULL
+      AND NOT EXISTS (
+        SELECT 1 FROM profile_assignment_commands
+        WHERE tenant_id = OLD.tenant_id
+          AND profile_id = OLD.profile_id
+          AND executed_at_ms = NEW.closed_at_ms
+          AND (
+              operation = 'ASSIGN'
+              OR (
+                  operation = 'DETACH'
+                  AND assignment_id = OLD.assignment_id
+                  AND client_id = OLD.client_id
+              )
+          )
+    );
+END;
+
 -- Replace the legacy unconditional apply trigger with operation-specific branches. ASSIGN
 -- is byte-for-byte equivalent in business effect: close the previous active assignment,
 -- insert the next history row, then increment Profile version exactly once.
@@ -150,7 +196,8 @@ END;
 
 -- DETACH closes only the exact active assignment proven by the BEFORE trigger. It leaves
 -- Client and Profile rows intact, inserts no replacement assignment, and increments Profile
--- version exactly once. The 0015 history update guard remains the owner of close governance.
+-- version exactly once. The operation-aware history update guard independently enforces that
+-- DETACH cannot authorize closing any other relationship-history row.
 CREATE TRIGGER profile_assignment_command_apply_detach
 AFTER INSERT ON profile_assignment_commands
 FOR EACH ROW
