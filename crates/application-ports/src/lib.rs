@@ -33,6 +33,7 @@ pub mod notifications;
 pub mod outbound_mail;
 pub mod profile_assignment_context;
 pub mod profile_creation;
+pub mod profile_launch;
 pub mod profiles;
 pub mod query;
 pub mod query_clients;
