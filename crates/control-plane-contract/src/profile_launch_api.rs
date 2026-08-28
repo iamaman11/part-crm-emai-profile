@@ -159,9 +159,8 @@ mod tests {
     #[test]
     fn bridge_redemption_request_has_one_strict_secret_field()
     -> Result<(), Box<dyn std::error::Error>> {
-        let request = BridgeProfileLaunchRedemptionRequest::new(
-            "claim_01JBRIDGE_FEASIBILITY".to_owned(),
-        );
+        let request =
+            BridgeProfileLaunchRedemptionRequest::new("claim_01JBRIDGE_FEASIBILITY".to_owned());
         let value = serde_json::to_value(&request)?;
         assert_eq!(value["claimCode"], "claim_01JBRIDGE_FEASIBILITY");
         assert_eq!(request.claim_code(), "claim_01JBRIDGE_FEASIBILITY");
@@ -191,9 +190,7 @@ mod tests {
             "\"launchIntentId\":\"launch_intent_01JTEST\"",
             "\"launchIntentId\":\"launch_intent_01JTEST\",\"extra\":true",
         );
-        assert!(
-            serde_json::from_str::<BridgeProfileLaunchRedemptionProjection>(&unknown).is_err()
-        );
+        assert!(serde_json::from_str::<BridgeProfileLaunchRedemptionProjection>(&unknown).is_err());
         Ok(())
     }
 
