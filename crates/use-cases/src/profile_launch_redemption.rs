@@ -79,11 +79,7 @@ where
         .await
         .map_err(map_membership_error)?
         .ok_or_else(|| ApplicationError::new(ProblemCode::NotFound))?;
-    let actor = ActorContext::new(
-        scope,
-        binding.actor_id().clone(),
-        correlation_id.clone(),
-    );
+    let actor = ActorContext::new(scope, binding.actor_id().clone(), correlation_id.clone());
 
     let target = authorize_profile_launch(
         &actor,

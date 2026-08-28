@@ -119,8 +119,14 @@ mod tests {
         for (method, invalid) in [
             ("DELETE", path),
             ("PUT", path),
-            ("GET", "/bridge/v2/tenants/tenant_01/profiles/profile_01/coordinator"),
-            ("GET", "/bridge/v1/tenants/tenant_01/profiles/profile_01/coordinator/extra"),
+            (
+                "GET",
+                "/bridge/v2/tenants/tenant_01/profiles/profile_01/coordinator",
+            ),
+            (
+                "GET",
+                "/bridge/v1/tenants/tenant_01/profiles/profile_01/coordinator/extra",
+            ),
             ("GET", "/bridge/v1/tenants/tenant_01/profiles/coordinator"),
         ] {
             assert_eq!(classify(method, invalid), RouteClass::BridgeDeniedByDefault);

@@ -106,5 +106,6 @@ jobs:
 
       - name: Test and build Profile Bridge
         run: |
-          cargo test --locked -p browser-execution-domain -p runtime-bundle-domain -p profile-bridge
+          cargo test --locked -p browser-execution-domain -p runtime-bundle-domain
+          cargo test --locked -p profile-bridge --features synthetic-test-bin
           cargo build --locked --release -p profile-bridge

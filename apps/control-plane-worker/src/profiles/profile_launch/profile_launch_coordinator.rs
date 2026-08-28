@@ -5,7 +5,9 @@ use cloudflare_adapters::coordinator_ingress::{
 };
 use control_plane_contract::{D1_CATALOG_BINDING, PROFILE_COORDINATOR_BINDING};
 use identity_access_domain::MembershipRole;
-use profile_platform_primitives::{ActorContext, DeviceId, IdempotencyKey, LaunchIntentId, ProfileId};
+use profile_platform_primitives::{
+    ActorContext, DeviceId, IdempotencyKey, LaunchIntentId, ProfileId,
+};
 use sha2::{Digest, Sha256};
 use use_cases::coordinator_ingress::{
     CoordinatorCommandInput, CoordinatorIngressOperationError, CoordinatorIngressRequest,
@@ -128,7 +130,9 @@ fn map_coordinator_error(error: CoordinatorIngressOperationError) -> Application
         CoordinatorIngressOperationError::Conflict => ProblemCode::LeaseConflict,
         CoordinatorIngressOperationError::IntegrityFailure => ProblemCode::IntegrityFailure,
         CoordinatorIngressOperationError::InternalFailure => ProblemCode::InternalFailure,
-        CoordinatorIngressOperationError::DependencyUnavailable => ProblemCode::DependencyUnavailable,
+        CoordinatorIngressOperationError::DependencyUnavailable => {
+            ProblemCode::DependencyUnavailable
+        }
     })
 }
 
