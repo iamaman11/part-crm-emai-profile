@@ -383,3 +383,187 @@ mod tests {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod client_profile_tests {
+    use super::{QueryApplicationError, list_client_profiles};
+    use application_ports::query::{
+        QueryAuthorizationPort, QueryCapability, QueryPage, QueryPageRequest, QueryPageSize,
+        QueryPortError, QueryPortErrorClass,
+    };
+    use application_ports::query_profiles::{
+        ClientProfileReadModelPort, ProfileReadProjection, ProfileStatus,
+    };
+    use profile_platform_primitives::{
+        ActorContext, ActorId, AggregateVersion, ClientId, CorrelationId, ProfileId, TenantId,
+        TenantScope,
+    };
+    use std::cell::Cell;
+    use std::future::Future;
+    use std::task::{Context, Poll, Waker};
+
+    fn block_on<F: Future>(future: F) -> F::Output {
+        let waker = Waker::noop();
+        let mut context = Context::from_waker(waker);
+        let mut future = Box::pin(future);
+        loop {
+            match future.as_mut().poll(&mut context) {
+                Poll::Ready(value) => return value,
+                Poll::Pending => std::hint::spin_loop(),
+            }
+        }
+    }
+
+    struct ProfileAuthorization {
+        allowed: bool,
+        calls: Cell<u32>,
+        failure: Option<QueryPortErrorClass>,
+    }
+
+    impl QueryAuthorizationPort for ProfileAuthorization {
+        async fn is_query_authorized(
+            &self,
+            _actor: &ActorContext,
+            capability: QueryCapability,
+        ) -> Result<bool, QueryPortError> {
+            self.calls.set(self.calls.get() + 1);
+            assert_eq!(capability, QueryCapability::Profiles);
+            match self.failure {
+                Some(class) => Err(QueryPortError::new(class)),
+                None => Ok(self.allowed),
+            }
+        }
+    }
+
+    struct ClientProfilesProjection {
+        calls: Cell<u32>,
+        expected_client_id: ClientId,
+        failure: Option<QueryPortErrorClass>,
+    }
+
+    impl ClientProfileReadModelPort for ClientProfilesProjection {
+        async fn list_profiles_for_client(
+            &self,
+            _actor: &ActorContext,
+            client_id: &ClientId,
+            _page: &QueryPageRequest,
+        ) -> Result<QueryPage<ProfileReadProjection>, QueryPortError> {
+            self.calls.set(self.calls.get() + 1);
+            assert_eq!(client_id, &self.expected_client_id);
+            if let Some(class) = self.failure {
+                return Err(QueryPortError::new(class));
+            }
+            Ok(QueryPage::new(
+                vec![ProfileReadProjection::new(
+                    ProfileId::parse("profile_01JCLIENTQUERY")
+                        .map_err(|_| QueryPortError::new(QueryPortErrorClass::IntegrityFailure))?,
+                    ProfileStatus::Draft,
+                    AggregateVersion::INITIAL,
+                    Some(self.expected_client_id.clone()),
+                    None,
+                )],
+                None,
+            ))
+        }
+    }
+
+    fn actor() -> Result<ActorContext, Box<dyn std::error::Error>> {
+        Ok(ActorContext::new(
+            TenantScope::new(TenantId::parse("tenant_01JCLIENTQUERY")?),
+            ActorId::parse("actor_01JCLIENTQUERY")?,
+            CorrelationId::parse("corr_01JCLIENTQUERY")?,
+        ))
+    }
+
+    fn client_id() -> Result<ClientId, Box<dyn std::error::Error>> {
+        Ok(ClientId::parse("client_01JCLIENTQUERY")?)
+    }
+
+    fn page() -> Result<QueryPageRequest, Box<dyn std::error::Error>> {
+        Ok(QueryPageRequest::new(QueryPageSize::new(25)?, None))
+    }
+
+    #[test]
+    fn relationship_never_bypasses_independent_profile_authorization()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let authorization = ProfileAuthorization {
+            allowed: false,
+            calls: Cell::new(0),
+            failure: None,
+        };
+        let projection = ClientProfilesProjection {
+            calls: Cell::new(0),
+            expected_client_id: client_id()?,
+            failure: None,
+        };
+        let result = block_on(list_client_profiles(
+            &actor()?,
+            &authorization,
+            &projection,
+            &client_id()?,
+            &page()?,
+        ))?;
+        assert!(result.items().is_empty());
+        assert_eq!(authorization.calls.get(), 1);
+        assert_eq!(projection.calls.get(), 0);
+        Ok(())
+    }
+
+    #[test]
+    fn authorized_inverse_query_projects_only_the_requested_client_scope()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let authorization = ProfileAuthorization {
+            allowed: true,
+            calls: Cell::new(0),
+            failure: None,
+        };
+        let requested_client = client_id()?;
+        let projection = ClientProfilesProjection {
+            calls: Cell::new(0),
+            expected_client_id: requested_client.clone(),
+            failure: None,
+        };
+        let result = block_on(list_client_profiles(
+            &actor()?,
+            &authorization,
+            &projection,
+            &requested_client,
+            &page()?,
+        ))?;
+        assert_eq!(result.items().len(), 1);
+        assert_eq!(
+            result.items()[0].linked_client_id(),
+            Some(&requested_client)
+        );
+        assert_eq!(authorization.calls.get(), 1);
+        assert_eq!(projection.calls.get(), 1);
+        Ok(())
+    }
+
+    #[test]
+    fn profile_authorization_failure_never_touches_relationship_projection()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let authorization = ProfileAuthorization {
+            allowed: true,
+            calls: Cell::new(0),
+            failure: Some(QueryPortErrorClass::DependencyUnavailable),
+        };
+        let projection = ClientProfilesProjection {
+            calls: Cell::new(0),
+            expected_client_id: client_id()?,
+            failure: None,
+        };
+        assert_eq!(
+            block_on(list_client_profiles(
+                &actor()?,
+                &authorization,
+                &projection,
+                &client_id()?,
+                &page()?,
+            )),
+            Err(QueryApplicationError::DependencyUnavailable)
+        );
+        assert_eq!(projection.calls.get(), 0);
+        Ok(())
+    }
+}
