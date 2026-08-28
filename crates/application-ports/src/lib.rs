@@ -94,7 +94,7 @@ pub use query::{
     QueryAuthorizationPort, QueryCapability, QueryCursor, QueryInputError, QueryPage,
     QueryPageRequest, QueryPageSize, QueryPortError, QueryPortErrorClass,
 };
-pub use sessions::ProfileCoordinatorPort;
+pub use sessions::{ProfileCoordinatorPort, ProfileCoordinatorRuntimePort};
 
 impl core::fmt::Display for mailboxes::MailboxProviderPortError {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
