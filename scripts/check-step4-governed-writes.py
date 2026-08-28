@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import re
 import sqlite3
 import sys
 from pathlib import Path
@@ -27,6 +28,8 @@ PROFILE_ADAPTER = ROOT / "crates/cloudflare-adapters/src/d1_profiles.rs"
 PROFILE_USE_CASES = ROOT / "crates/use-cases/src/profiles.rs"
 PROFILE_ASSIGNMENT_USE_CASES = ROOT / "crates/use-cases/src/profile_assignments.rs"
 PROFILE_GRANT_USE_CASES = ROOT / "crates/use-cases/src/profile_grants.rs"
+QUERY_ADAPTER = ROOT / "crates/cloudflare-adapters/src/d1_query.rs"
+IDENTITY_QUERY_ADAPTER = ROOT / "crates/cloudflare-adapters/src/d1_identity_queries.rs"
 
 LEGACY_WRITE_TOKENS = (
     "OWNER_TRANSFER_DEMOTE", "OWNER_TRANSFER_PROMOTE", "INVITATION_ACCEPT_MEMBERSHIP",
@@ -118,6 +121,18 @@ def require_tokens(text: str, tokens: tuple[str, ...], label: str, errors: list[
             errors.append(f"{label} is missing required token: {token}")
 
 
+def extract_rust_raw_sql(path: Path, scope_marker: str, contains: str) -> str:
+    source = path.read_text(encoding="utf-8")
+    if scope_marker not in source:
+        raise AssertionError(f"missing Rust SQL scope marker {scope_marker!r} in {path}")
+    scope = source.split(scope_marker, 1)[1]
+    for match in re.finditer(r'r#"(.*?)"#', scope, re.DOTALL):
+        sql = match.group(1).strip()
+        if contains in sql:
+            return sql
+    raise AssertionError(f"missing production SQL containing {contains!r} in {path}")
+
+
 def expect_integrity_failure(
     database: sqlite3.Connection,
     statement: str,
@@ -160,6 +175,29 @@ def seed_profile_relationship_fixture(database: sqlite3.Connection) -> None:
             0,
         ),
     )
+    for suffix in ("profile", "client_only", "no_client"):
+        database.execute(
+            "INSERT INTO identities VALUES (?, ?, ?, ?)",
+            (
+                f"identity_member_{suffix}_p1",
+                f"p1-member-{suffix}-subject",
+                None,
+                0,
+            ),
+        )
+        database.execute(
+            "INSERT INTO memberships VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                "tenant_p1_fixture",
+                f"actor_member_{suffix}_p1",
+                f"identity_member_{suffix}_p1",
+                "MEMBER",
+                "ACTIVE",
+                1,
+                0,
+                0,
+            ),
+        )
     for client_id, display_name in (
         ("client_a_p1_fixture", "Client A"),
         ("client_b_p1_fixture", "Client B"),
@@ -193,6 +231,41 @@ def seed_profile_relationship_fixture(database: sqlite3.Connection) -> None:
             0,
         ),
     )
+    for actor_id in ("actor_member_profile_p1", "actor_member_client_only_p1"):
+        database.execute(
+            """
+            INSERT INTO client_grants (
+                tenant_id, actor_id, client_id, role,
+                granted_by_actor_id, reason, created_at_ms
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "tenant_p1_fixture",
+                actor_id,
+                "client_b_p1_fixture",
+                "CLIENT_VIEWER",
+                "actor_owner_p1_fixture",
+                "P1 inverse query client visibility proof",
+                0,
+            ),
+        )
+    database.execute(
+        """
+        INSERT INTO profile_grants (
+            tenant_id, actor_id, profile_id, role,
+            granted_by_actor_id, reason, created_at_ms
+        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            "tenant_p1_fixture",
+            "actor_member_profile_p1",
+            "profile_p1_fixture",
+            "PROFILE_VIEWER",
+            "actor_owner_p1_fixture",
+            "P1 inverse query profile visibility proof",
+            0,
+        ),
+    )
 
 
 def relationship_rows(database: sqlite3.Connection) -> list[tuple[str, str, int, int | None]]:
@@ -214,6 +287,16 @@ def profile_version(database: sqlite3.Connection) -> int:
     if row is None:
         raise AssertionError("P1 fixture profile disappeared")
     return int(row[0])
+
+
+def client_state(database: sqlite3.Connection, client_id: str) -> tuple[str, int]:
+    row = database.execute(
+        "SELECT status, version FROM clients WHERE tenant_id = ? AND client_id = ?",
+        ("tenant_p1_fixture", client_id),
+    ).fetchone()
+    if row is None:
+        raise AssertionError(f"P1 fixture Client disappeared: {client_id}")
+    return str(row[0]), int(row[1])
 
 
 def insert_relationship_command(
@@ -251,6 +334,51 @@ def insert_relationship_command(
         f"INSERT INTO profile_assignment_commands ({columns}, operation) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         values + (operation,),
     )
+
+
+def validate_inverse_relationship_acl(database: sqlite3.Connection, errors: list[str]) -> None:
+    client_sql = extract_rust_raw_sql(
+        IDENTITY_QUERY_ADAPTER,
+        "pub async fn find_visible_client(",
+        "FROM clients AS client",
+    )
+    profiles_sql = extract_rust_raw_sql(
+        QUERY_ADAPTER,
+        "impl ClientProfileReadModelPort for D1QueryRepository",
+        "FROM browser_profiles AS profile",
+    )
+    tenant_id = "tenant_p1_fixture"
+    client_id = "client_b_p1_fixture"
+
+    def visible_client(actor_id: str, owner: int) -> bool:
+        return database.execute(
+            client_sql,
+            (tenant_id, client_id, owner, actor_id),
+        ).fetchone() is not None
+
+    if not visible_client("actor_owner_p1_fixture", 1):
+        errors.append("TenantOwner lost Client visibility in P1 inverse relationship proof")
+    if not visible_client("actor_member_profile_p1", 0):
+        errors.append("member with explicit Client grant cannot enter P1 Client relationship view")
+    if not visible_client("actor_member_client_only_p1", 0):
+        errors.append("member with Client-only grant cannot enter visible Client card for P1 proof")
+    if visible_client("actor_member_no_client_p1", 0):
+        errors.append("member without Client grant can see Client relationship surface")
+
+    def visible_profiles(actor_id: str) -> list[tuple[object, ...]]:
+        return database.execute(
+            profiles_sql,
+            (client_id, tenant_id, "", actor_id, 26),
+        ).fetchall()
+
+    if len(visible_profiles("actor_owner_p1_fixture")) != 1:
+        errors.append("TenantOwner inverse Client->Profiles projection did not return the active relationship")
+    if len(visible_profiles("actor_member_profile_p1")) != 1:
+        errors.append("member with independent Client and Profile grants cannot see attached Profile")
+    if visible_profiles("actor_member_client_only_p1"):
+        errors.append("Client relationship leaked attached Profile without an independent Profile grant")
+    if visible_profiles("actor_member_no_client_p1"):
+        errors.append("relationship exposed attached Profile to a member with no resource grants")
 
 
 def validate_profile_relationship_d1_behavior(errors: list[str]) -> None:
@@ -329,6 +457,36 @@ def validate_profile_relationship_d1_behavior(errors: list[str]) -> None:
         if profile_version(database) != 3:
             errors.append("atomic reassign must bump Profile version exactly once")
 
+        # Execute the exact production SQL from both read adapters. Relationship is only
+        # projection data: Client visibility and Profile visibility remain independently granted.
+        validate_inverse_relationship_acl(database, errors)
+
+        client_lifecycle_insert = """
+            INSERT INTO client_lifecycle_commands (
+                tenant_id, command_id, command_actor_id, client_id,
+                operation, expected_client_version, next_display_name, executed_at_ms
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """
+        expect_integrity_failure(
+            database,
+            client_lifecycle_insert,
+            (
+                "tenant_p1_fixture",
+                "command_archive_blocked_p1_fixture",
+                "actor_owner_p1_fixture",
+                "client_b_p1_fixture",
+                "ARCHIVE",
+                1,
+                None,
+                25,
+            ),
+            "client_archive_active_assignment_identity_mismatch",
+            "archive Client with active Profile relationship",
+            errors,
+        )
+        if client_state(database, "client_b_p1_fixture") != ("ACTIVE", 1):
+            errors.append("blocked Client archive changed Client state while relationship remained active")
+
         command_insert = """
             INSERT INTO profile_assignment_commands (
                 tenant_id, command_id, command_actor_id, assignment_id, profile_id,
@@ -396,6 +554,23 @@ def validate_profile_relationship_d1_behavior(errors: list[str]) -> None:
             errors.append("DETACH must close only the exact active relationship and insert no successor")
         if profile_version(database) != 4:
             errors.append("DETACH must bump Profile version exactly once")
+
+        # Once the relationship is resolved, the existing Client archive command is valid again.
+        database.execute(
+            client_lifecycle_insert,
+            (
+                "tenant_p1_fixture",
+                "command_archive_after_detach_p1_fixture",
+                "actor_owner_p1_fixture",
+                "client_b_p1_fixture",
+                "ARCHIVE",
+                1,
+                None,
+                35,
+            ),
+        )
+        if client_state(database, "client_b_p1_fixture") != ("ARCHIVED", 2):
+            errors.append("Client archive did not resume after the active Profile relationship was detached")
 
         # A completed command cannot be reused as durable authority for a later direct history write.
         expect_integrity_failure(
