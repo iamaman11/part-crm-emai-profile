@@ -8,10 +8,7 @@ mod mailboxes;
 mod notifications;
 mod profiles;
 
-use crate::{
-    RouteClass, is_dynamic_path,
-    profile_launch_api::BRIDGE_PROFILE_LAUNCH_REDEMPTION_PATH,
-};
+use crate::{RouteClass, is_dynamic_path, profile_launch_api::BRIDGE_PROFILE_LAUNCH_REDEMPTION_PATH};
 
 #[must_use]
 pub(super) fn classify(method: &str, path: &str) -> RouteClass {
@@ -92,9 +89,7 @@ fn is_bridge_namespace(path: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::classify;
-    use crate::{
-        RouteClass, profile_launch_api::BRIDGE_PROFILE_LAUNCH_REDEMPTION_PATH,
-    };
+    use crate::{RouteClass, profile_launch_api::BRIDGE_PROFILE_LAUNCH_REDEMPTION_PATH};
 
     #[test]
     fn only_exact_post_profile_launch_redemption_escapes_bridge_deny_default() {
