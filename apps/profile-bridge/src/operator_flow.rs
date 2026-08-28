@@ -1014,8 +1014,7 @@ mod tests {
                 counter.max(1),
                 FencingToken::parse(format!("fence_01JOPERATOR{counter}"))?,
             )?;
-            let launch_intent_id =
-                LaunchIntentId::parse(format!("launch_01JOPERATOR{counter}"))?;
+            let launch_intent_id = LaunchIntentId::parse(format!("launch_01JOPERATOR{counter}"))?;
             let claim_code = ClaimCode::parse(format!("claim_01JOPERATOR{counter:024}"))?;
             let claim_uri = ClaimUri::parse(&format!(
                 "profilebridge://claim/claim_01JOPERATOR{counter:024}"
