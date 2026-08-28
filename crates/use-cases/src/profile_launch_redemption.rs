@@ -1,5 +1,5 @@
-use crate::profile_launch::authorize_profile_launch;
 use crate::ApplicationError;
+use crate::profile_launch::authorize_profile_launch;
 use application_ports::identity::{
     ActiveMembershipPort, ActiveMembershipPortError, ActiveMembershipPortErrorClass,
 };
@@ -107,6 +107,8 @@ fn map_redemption_authority_error(error: ProfileLaunchAuthorityError) -> Applica
         | ProfileLaunchAuthorityErrorClass::NotFound
         | ProfileLaunchAuthorityErrorClass::ReplayRejected => ProblemCode::NotFound,
         ProfileLaunchAuthorityErrorClass::IntegrityFailure => ProblemCode::IntegrityFailure,
-        ProfileLaunchAuthorityErrorClass::DependencyUnavailable => ProblemCode::DependencyUnavailable,
+        ProfileLaunchAuthorityErrorClass::DependencyUnavailable => {
+            ProblemCode::DependencyUnavailable
+        }
     })
 }
