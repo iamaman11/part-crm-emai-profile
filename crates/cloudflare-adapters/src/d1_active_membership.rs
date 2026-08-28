@@ -71,7 +71,12 @@ mod tests {
 
     #[test]
     fn membership_revalidation_is_identity_owned_and_active_only() {
-        for required in ["FROM memberships", "tenant_id = ?", "actor_id = ?", "status = 'ACTIVE'"] {
+        for required in [
+            "FROM memberships",
+            "tenant_id = ?",
+            "actor_id = ?",
+            "status = 'ACTIVE'",
+        ] {
             assert!(LOAD_ACTIVE_MEMBERSHIP.contains(required));
         }
         assert!(!LOAD_ACTIVE_MEMBERSHIP.contains("profile_launch_claims"));
