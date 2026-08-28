@@ -5,10 +5,9 @@ use application_ports::profile_launch::{
 use application_ports::{
     AuthenticatedDevicePort, DeviceExecutionBlocker, DeviceExecutionPreconditionPort,
     DeviceExecutionReadiness, DeviceJobAuthorizationPort, DeviceJobCapability, DeviceJobPortError,
-    DeviceJobPortErrorClass,
+    DeviceJobPortErrorClass, DeviceJobTarget,
 };
 use contracts::ProblemCode;
-use device_domain::DeviceJobTarget;
 use identity_access_domain::{Membership, MembershipRole, MembershipStatus};
 use profile_platform_primitives::{ActorContext, DeviceId, GenerationId, ProfileId};
 
@@ -141,10 +140,9 @@ mod tests {
     use application_ports::{
         AuthenticatedDevicePort, DeviceExecutionBlocker, DeviceExecutionPreconditionPort,
         DeviceExecutionReadiness, DeviceJobAuthorizationPort, DeviceJobCapability,
-        DeviceJobPortError,
+        DeviceJobPortError, DeviceJobTarget,
     };
     use contracts::ProblemCode;
-    use device_domain::DeviceJobTarget;
     use identity_access_domain::{MembershipRole, ProfileGrant, ProfileGrantRole};
     use profile_domain::{BrowserProfile, GenerationVerification, ProfileGeneration};
     use profile_platform_primitives::{
@@ -218,10 +216,8 @@ mod tests {
         }
     }
 
-    fn fixture() -> Result<
-        (ActorContext, ProfileId, GenerationId, DeviceId),
-        Box<dyn std::error::Error>,
-    > {
+    fn fixture()
+    -> Result<(ActorContext, ProfileId, GenerationId, DeviceId), Box<dyn std::error::Error>> {
         let tenant_id = TenantId::parse("tenant_01JLAUNCH")?;
         Ok((
             ActorContext::new(
@@ -241,10 +237,8 @@ mod tests {
         generation_id: &GenerationId,
         grant_role: ProfileGrantRole,
     ) -> Result<ProfileLaunchContext, Box<dyn std::error::Error>> {
-        let mut profile = BrowserProfile::create(
-            actor.tenant_scope().tenant_id().clone(),
-            profile_id.clone(),
-        );
+        let mut profile =
+            BrowserProfile::create(actor.tenant_scope().tenant_id().clone(), profile_id.clone());
         profile.activate_generation(&ProfileGeneration::new(
             actor.tenant_scope().tenant_id().clone(),
             profile_id.clone(),
