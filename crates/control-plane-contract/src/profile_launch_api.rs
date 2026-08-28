@@ -1,3 +1,4 @@
+use profile_platform_primitives::{ProfileId, TenantId};
 use serde::de::Error as _;
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{Value, json};
@@ -6,6 +7,18 @@ const CLAIM_URI_PREFIX: &str = "profilebridge://claim/";
 const CLAIM_CODE_MIN_LENGTH: usize = 24;
 const CLAIM_CODE_MAX_LENGTH: usize = 96;
 const CLAIM_URI_PATTERN: &str = "^profilebridge://claim/[A-Za-z0-9_-]{24,96}$";
+
+pub const BRIDGE_PROFILE_LAUNCH_REDEMPTION_PATH: &str =
+    "/bridge/v1/profile-launch/redemptions";
+
+#[must_use]
+pub fn bridge_profile_coordinator_path(tenant_id: &TenantId, profile_id: &ProfileId) -> String {
+    format!(
+        "/bridge/v1/tenants/{}/profiles/{}/coordinator",
+        tenant_id.as_str(),
+        profile_id.as_str()
+    )
+}
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -138,9 +151,34 @@ pub fn openapi_fragment() -> Value {
 #[cfg(test)]
 mod tests {
     use super::{
-        BridgeProfileLaunchRedemptionProjection, BridgeProfileLaunchRedemptionRequest,
-        ProfileLaunchProjection, openapi_fragment,
+        BRIDGE_PROFILE_LAUNCH_REDEMPTION_PATH, BridgeProfileLaunchRedemptionProjection,
+        BridgeProfileLaunchRedemptionRequest, ProfileLaunchProjection,
+        bridge_profile_coordinator_path, openapi_fragment,
     };
+    use crate::{RouteClass, classify_route};
+    use profile_platform_primitives::{ProfileId, TenantId};
+
+    #[test]
+    fn canonical_machine_routes_resolve_to_existing_ingress()
+    -> Result<(), Box<dyn std::error::Error>> {
+        assert_eq!(
+            classify_route("POST", BRIDGE_PROFILE_LAUNCH_REDEMPTION_PATH),
+            RouteClass::ProfileLaunchApi
+        );
+
+        let tenant_id = TenantId::parse("tenant_01JBRIDGE")?;
+        let profile_id = ProfileId::parse("profile_01JBRIDGE")?;
+        let coordinator = bridge_profile_coordinator_path(&tenant_id, &profile_id);
+        assert_eq!(
+            classify_route("POST", &coordinator),
+            RouteClass::ProfileCoordinatorApi
+        );
+        assert_eq!(
+            classify_route("GET", &coordinator),
+            RouteClass::ProfileCoordinatorApi
+        );
+        Ok(())
+    }
 
     #[test]
     fn launch_projection_is_strict_and_contains_no_caller_selected_device() {
