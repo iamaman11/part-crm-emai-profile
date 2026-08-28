@@ -175,7 +175,7 @@ def seed_profile_relationship_fixture(database: sqlite3.Connection) -> None:
             0,
         ),
     )
-    for suffix in ("profile", "client_only", "no_client"):
+    for suffix in ("profile", "profile_only", "client_only", "no_client"):
         database.execute(
             "INSERT INTO identities VALUES (?, ?, ?, ?)",
             (
@@ -217,20 +217,21 @@ def seed_profile_relationship_fixture(database: sqlite3.Connection) -> None:
                 0,
             ),
         )
-    database.execute(
-        "INSERT INTO browser_profiles VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        (
-            "tenant_p1_fixture",
-            "profile_p1_fixture",
-            "READY",
-            None,
-            1,
-            "actor_owner_p1_fixture",
-            "actor_owner_p1_fixture",
-            0,
-            0,
-        ),
-    )
+    for profile_id in ("profile_p1_fixture", "profile_concurrent_p1_fixture"):
+        database.execute(
+            "INSERT INTO browser_profiles VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                "tenant_p1_fixture",
+                profile_id,
+                "READY",
+                None,
+                1,
+                "actor_owner_p1_fixture",
+                "actor_owner_p1_fixture",
+                0,
+                0,
+            ),
+        )
     for actor_id in ("actor_member_profile_p1", "actor_member_client_only_p1"):
         database.execute(
             """
@@ -249,23 +250,24 @@ def seed_profile_relationship_fixture(database: sqlite3.Connection) -> None:
                 0,
             ),
         )
-    database.execute(
-        """
-        INSERT INTO profile_grants (
-            tenant_id, actor_id, profile_id, role,
-            granted_by_actor_id, reason, created_at_ms
-        ) VALUES (?, ?, ?, ?, ?, ?, ?)
-        """,
-        (
-            "tenant_p1_fixture",
-            "actor_member_profile_p1",
-            "profile_p1_fixture",
-            "PROFILE_VIEWER",
-            "actor_owner_p1_fixture",
-            "P1 inverse query profile visibility proof",
-            0,
-        ),
-    )
+    for actor_id in ("actor_member_profile_p1", "actor_member_profile_only_p1"):
+        database.execute(
+            """
+            INSERT INTO profile_grants (
+                tenant_id, actor_id, profile_id, role,
+                granted_by_actor_id, reason, created_at_ms
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "tenant_p1_fixture",
+                actor_id,
+                "profile_p1_fixture",
+                "PROFILE_VIEWER",
+                "actor_owner_p1_fixture",
+                "P1 inverse query profile visibility proof",
+                0,
+            ),
+        )
 
 
 def relationship_rows(database: sqlite3.Connection) -> list[tuple[str, str, int, int | None]]:
@@ -308,6 +310,7 @@ def insert_relationship_command(
     expected_version: int,
     executed_at_ms: int,
     operation: str | None,
+    profile_id: str = "profile_p1_fixture",
 ) -> None:
     columns = """
         tenant_id, command_id, command_actor_id, assignment_id, profile_id,
@@ -318,7 +321,7 @@ def insert_relationship_command(
         command_id,
         "actor_owner_p1_fixture",
         assignment_id,
-        "profile_p1_fixture",
+        profile_id,
         client_id,
         expected_version,
         "P1 relationship proof",
@@ -362,6 +365,8 @@ def validate_inverse_relationship_acl(database: sqlite3.Connection, errors: list
         errors.append("member with explicit Client grant cannot enter P1 Client relationship view")
     if not visible_client("actor_member_client_only_p1", 0):
         errors.append("member with Client-only grant cannot enter visible Client card for P1 proof")
+    if visible_client("actor_member_profile_only_p1", 0):
+        errors.append("member with Profile grant but without Client grant can enter nested Client relationship view")
     if visible_client("actor_member_no_client_p1", 0):
         errors.append("member without Client grant can see Client relationship surface")
 
@@ -375,6 +380,8 @@ def validate_inverse_relationship_acl(database: sqlite3.Connection, errors: list
         errors.append("TenantOwner inverse Client->Profiles projection did not return the active relationship")
     if len(visible_profiles("actor_member_profile_p1")) != 1:
         errors.append("member with independent Client and Profile grants cannot see attached Profile")
+    if len(visible_profiles("actor_member_profile_only_p1")) != 1:
+        errors.append("independent Profile grant should remain valid even when nested Client visibility fails closed")
     if visible_profiles("actor_member_client_only_p1"):
         errors.append("Client relationship leaked attached Profile without an independent Profile grant")
     if visible_profiles("actor_member_no_client_p1"):
@@ -410,8 +417,8 @@ def validate_profile_relationship_d1_behavior(errors: list[str]) -> None:
         if profile_version(database) != 2:
             errors.append("legacy ASSIGN must bump Profile version exactly once")
 
-        # A failure after the relationship command inside the same transaction must roll back the
-        # trigger effects, modelling the existing D1 batch all-or-nothing boundary.
+        # A failure after command + idempotency + audit + outbox inside one transaction must roll
+        # the complete governed mutation envelope back, modelling the production D1 batch boundary.
         database.commit()
         database.execute("BEGIN")
         try:
@@ -423,6 +430,44 @@ def validate_profile_relationship_d1_behavior(errors: list[str]) -> None:
                 expected_version=2,
                 executed_at_ms=20,
                 operation="ASSIGN",
+            )
+            database.execute(
+                """
+                INSERT INTO idempotency_records (
+                    tenant_id, actor_id, idempotency_key, command_name, payload_fingerprint,
+                    result_code, result_reference, created_at_ms, expires_at_ms
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    "tenant_p1_fixture", "actor_owner_p1_fixture", "idem_rollback_p1_fixture",
+                    "profile.assign_client", "a" * 64, "assigned",
+                    "assignment_b_rollback_p1_fixture", 20, 200,
+                ),
+            )
+            database.execute(
+                """
+                INSERT INTO audit_events (
+                    tenant_id, audit_event_id, correlation_id, actor_id, action,
+                    resource_type, resource_id, result_code, occurred_at_ms
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    "tenant_p1_fixture", "audit_rollback_p1_fixture", "corr_rollback_p1_fixture",
+                    "actor_owner_p1_fixture", "profile.assign_client", "profile",
+                    "profile_p1_fixture", "assigned", 20,
+                ),
+            )
+            database.execute(
+                """
+                INSERT INTO outbox_events (
+                    tenant_id, outbox_event_id, aggregate_type, aggregate_id,
+                    aggregate_version, event_type, payload_json, created_at_ms
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    "tenant_p1_fixture", "outbox_rollback_p1_fixture", "profile",
+                    "profile_p1_fixture", 3, "profile.client_assigned.v1", "{}", 20,
+                ),
             )
             database.execute("INSERT INTO p1_forced_failure_missing_table VALUES (1)")
         except sqlite3.DatabaseError:
@@ -439,6 +484,25 @@ def validate_profile_relationship_d1_behavior(errors: list[str]) -> None:
             ("command_reassign_rollback_p1_fixture",),
         ).fetchone()[0] != 0:
             errors.append("failed reassign transaction retained its governed command row")
+        rollback_envelope_count = sum(
+            database.execute(statement, parameters).fetchone()[0]
+            for statement, parameters in (
+                (
+                    "SELECT COUNT(*) FROM idempotency_records WHERE idempotency_key = ?",
+                    ("idem_rollback_p1_fixture",),
+                ),
+                (
+                    "SELECT COUNT(*) FROM audit_events WHERE audit_event_id = ?",
+                    ("audit_rollback_p1_fixture",),
+                ),
+                (
+                    "SELECT COUNT(*) FROM outbox_events WHERE outbox_event_id = ?",
+                    ("outbox_rollback_p1_fixture",),
+                ),
+            )
+        )
+        if rollback_envelope_count != 0:
+            errors.append("failed relationship transaction retained partial idempotency/audit/outbox state")
 
         insert_relationship_command(
             database,
@@ -493,6 +557,62 @@ def validate_profile_relationship_d1_behavior(errors: list[str]) -> None:
                 client_id, expected_profile_version, reason, executed_at_ms, operation
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """
+
+        # Two commands racing on one optimistic Profile version serialize so at most one can win.
+        insert_relationship_command(
+            database,
+            command_id="command_concurrent_first_p1_fixture",
+            assignment_id="assignment_concurrent_a_p1_fixture",
+            client_id="client_a_p1_fixture",
+            expected_version=1,
+            executed_at_ms=22,
+            operation="ASSIGN",
+            profile_id="profile_concurrent_p1_fixture",
+        )
+        expect_integrity_failure(
+            database,
+            command_insert,
+            (
+                "tenant_p1_fixture", "command_concurrent_second_p1_fixture",
+                "actor_owner_p1_fixture", "assignment_concurrent_b_p1_fixture",
+                "profile_concurrent_p1_fixture", "client_b_p1_fixture", 1,
+                "P1 negative proof", 23, "ASSIGN",
+            ),
+            "profile_assignment_version_mismatch",
+            "second concurrent assign with the same expected Profile version",
+            errors,
+        )
+        expect_integrity_failure(
+            database,
+            command_insert,
+            (
+                "tenant_p1_fixture", "command_concurrent_stale_detach_p1_fixture",
+                "actor_owner_p1_fixture", "assignment_concurrent_a_p1_fixture",
+                "profile_concurrent_p1_fixture", "client_a_p1_fixture", 1,
+                "P1 negative proof", 24, "DETACH",
+            ),
+            "profile_assignment_version_mismatch",
+            "detach after concurrent Profile version change",
+            errors,
+        )
+        concurrent_rows = database.execute(
+            """
+            SELECT assignment_id, client_id, assigned_at_ms, closed_at_ms
+            FROM profile_client_assignments
+            WHERE tenant_id = ? AND profile_id = ?
+            ORDER BY assigned_at_ms, assignment_id
+            """,
+            ("tenant_p1_fixture", "profile_concurrent_p1_fixture"),
+        ).fetchall()
+        concurrent_version = database.execute(
+            "SELECT version FROM browser_profiles WHERE tenant_id = ? AND profile_id = ?",
+            ("tenant_p1_fixture", "profile_concurrent_p1_fixture"),
+        ).fetchone()
+        if concurrent_rows != [
+            ("assignment_concurrent_a_p1_fixture", "client_a_p1_fixture", 22, None)
+        ] or concurrent_version != (2,):
+            errors.append("optimistic concurrency proof did not leave exactly one committed assignment and one version bump")
+
         base = (
             "tenant_p1_fixture",
             "actor_owner_p1_fixture",
@@ -518,7 +638,18 @@ def validate_profile_relationship_d1_behavior(errors: list[str]) -> None:
                 base[2], "client_b_p1_fixture", 3, base[3], 30, "DETACH",
             ),
             "profile_assignment_active_assignment_missing",
-            "wrong-identity detach",
+            "wrong-assignment detach",
+            errors,
+        )
+        expect_integrity_failure(
+            database,
+            command_insert,
+            (
+                base[0], "command_wrong_client_detach_p1_fixture", base[1], "assignment_b_p1_fixture",
+                base[2], "client_a_p1_fixture", 3, base[3], 30, "DETACH",
+            ),
+            "profile_assignment_active_assignment_missing",
+            "wrong-Client detach",
             errors,
         )
         expect_integrity_failure(
@@ -554,6 +685,23 @@ def validate_profile_relationship_d1_behavior(errors: list[str]) -> None:
             errors.append("DETACH must close only the exact active relationship and insert no successor")
         if profile_version(database) != 4:
             errors.append("DETACH must bump Profile version exactly once")
+
+        expect_integrity_failure(
+            database,
+            """
+            INSERT INTO profile_client_assignments (
+                tenant_id, assignment_id, profile_id, client_id, assigned_by_actor_id,
+                assigned_at_ms, closed_at_ms, reason
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "tenant_p1_fixture", "assignment_detach_successor_p1_fixture", "profile_p1_fixture",
+                "client_b_p1_fixture", "actor_owner_p1_fixture", 30, None, "P1 negative proof",
+            ),
+            "profile_assignment_not_governed",
+            "DETACH authority cannot insert a successor relationship",
+            errors,
+        )
 
         # Once the relationship is resolved, the existing Client archive command is valid again.
         database.execute(
@@ -596,7 +744,7 @@ def validate_profile_relationship_d1_behavior(errors: list[str]) -> None:
             "UPDATE profile_client_assignments SET closed_at_ms = ? WHERE tenant_id = ? AND assignment_id = ?",
             (40, "tenant_p1_fixture", "assignment_c_p1_fixture"),
             "profile_assignment_close_not_governed",
-            "consumed ASSIGN authority reuse",
+            "consumed ASSIGN cannot become standalone DETACH authority",
             errors,
         )
         if relationship_rows(database)[-1] != (
