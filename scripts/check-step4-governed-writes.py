@@ -3,12 +3,14 @@
 
 from __future__ import annotations
 
+import sqlite3
 import sys
 from pathlib import Path
 
 from test_step4_error_taxonomy import main as error_taxonomy_main
 
 ROOT = Path(__file__).resolve().parents[1]
+D1_MIGRATIONS = ROOT / "migrations/d1"
 IDENTITY_ADAPTER = ROOT / "crates/cloudflare-adapters/src/d1_identity_acl.rs"
 IDENTITY_GOVERNANCE_ADAPTER = ROOT / "crates/cloudflare-adapters/src/d1_identity_governance.rs"
 IDENTITY_CEREMONY_ADAPTER = ROOT / "crates/cloudflare-adapters/src/d1_identity_ceremonies.rs"
@@ -116,6 +118,325 @@ def require_tokens(text: str, tokens: tuple[str, ...], label: str, errors: list[
             errors.append(f"{label} is missing required token: {token}")
 
 
+def expect_integrity_failure(
+    database: sqlite3.Connection,
+    statement: str,
+    parameters: tuple[object, ...],
+    expected_reason: str,
+    label: str,
+    errors: list[str],
+) -> None:
+    before = database.total_changes
+    try:
+        database.execute(statement, parameters)
+    except sqlite3.IntegrityError as error:
+        if expected_reason not in str(error):
+            errors.append(f"{label} failed with unexpected reason: {error}")
+    else:
+        errors.append(f"{label} unexpectedly succeeded")
+    if database.total_changes != before:
+        errors.append(f"{label} mutated D1 state before failing")
+
+
+def seed_profile_relationship_fixture(database: sqlite3.Connection) -> None:
+    database.execute(
+        "INSERT INTO tenants VALUES (?, ?, ?, ?, ?, ?)",
+        ("tenant_p1_fixture", "P1 fixture", "ACTIVE", 1, 0, 0),
+    )
+    database.execute(
+        "INSERT INTO identities VALUES (?, ?, ?, ?)",
+        ("identity_p1_fixture", "p1-fixture-subject", None, 0),
+    )
+    database.execute(
+        "INSERT INTO memberships VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        (
+            "tenant_p1_fixture",
+            "actor_owner_p1_fixture",
+            "identity_p1_fixture",
+            "TENANT_OWNER",
+            "ACTIVE",
+            1,
+            0,
+            0,
+        ),
+    )
+    for client_id, display_name in (
+        ("client_a_p1_fixture", "Client A"),
+        ("client_b_p1_fixture", "Client B"),
+    ):
+        database.execute(
+            "INSERT INTO clients VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                "tenant_p1_fixture",
+                client_id,
+                "PERSON",
+                display_name,
+                "ACTIVE",
+                1,
+                "actor_owner_p1_fixture",
+                "actor_owner_p1_fixture",
+                0,
+                0,
+            ),
+        )
+    database.execute(
+        "INSERT INTO browser_profiles VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (
+            "tenant_p1_fixture",
+            "profile_p1_fixture",
+            "READY",
+            None,
+            1,
+            "actor_owner_p1_fixture",
+            "actor_owner_p1_fixture",
+            0,
+            0,
+        ),
+    )
+
+
+def relationship_rows(database: sqlite3.Connection) -> list[tuple[str, str, int, int | None]]:
+    return database.execute(
+        """
+        SELECT assignment_id, client_id, assigned_at_ms, closed_at_ms
+        FROM profile_client_assignments
+        WHERE tenant_id = 'tenant_p1_fixture' AND profile_id = 'profile_p1_fixture'
+        ORDER BY assigned_at_ms, assignment_id
+        """
+    ).fetchall()
+
+
+def profile_version(database: sqlite3.Connection) -> int:
+    row = database.execute(
+        "SELECT version FROM browser_profiles WHERE tenant_id = ? AND profile_id = ?",
+        ("tenant_p1_fixture", "profile_p1_fixture"),
+    ).fetchone()
+    if row is None:
+        raise AssertionError("P1 fixture profile disappeared")
+    return int(row[0])
+
+
+def insert_relationship_command(
+    database: sqlite3.Connection,
+    *,
+    command_id: str,
+    assignment_id: str,
+    client_id: str,
+    expected_version: int,
+    executed_at_ms: int,
+    operation: str | None,
+) -> None:
+    columns = """
+        tenant_id, command_id, command_actor_id, assignment_id, profile_id,
+        client_id, expected_profile_version, reason, executed_at_ms
+    """
+    values: tuple[object, ...] = (
+        "tenant_p1_fixture",
+        command_id,
+        "actor_owner_p1_fixture",
+        assignment_id,
+        "profile_p1_fixture",
+        client_id,
+        expected_version,
+        "P1 relationship proof",
+        executed_at_ms,
+    )
+    if operation is None:
+        database.execute(
+            f"INSERT INTO profile_assignment_commands ({columns}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            values,
+        )
+        return
+    database.execute(
+        f"INSERT INTO profile_assignment_commands ({columns}, operation) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        values + (operation,),
+    )
+
+
+def validate_profile_relationship_d1_behavior(errors: list[str]) -> None:
+    database = sqlite3.connect(":memory:")
+    database.execute("PRAGMA foreign_keys = ON")
+    try:
+        migrations = sorted(D1_MIGRATIONS.glob("*.sql"))
+        if not migrations or migrations[0].name != "0001_catalog.sql" or migrations[-1].name != "0028_profile_assignment_detach.sql":
+            errors.append("P1 D1 behavior proof requires the exact current Catalog migration range 0001..0028")
+            return
+
+        for migration in migrations:
+            database.executescript(migration.read_text(encoding="utf-8"))
+            if migration.name == "0001_catalog.sql":
+                seed_profile_relationship_fixture(database)
+
+        # Legacy callers omit operation; the additive migration must preserve ASSIGN as the default.
+        insert_relationship_command(
+            database,
+            command_id="command_attach_p1_fixture",
+            assignment_id="assignment_a_p1_fixture",
+            client_id="client_a_p1_fixture",
+            expected_version=1,
+            executed_at_ms=10,
+            operation=None,
+        )
+        if relationship_rows(database) != [("assignment_a_p1_fixture", "client_a_p1_fixture", 10, None)]:
+            errors.append("legacy ASSIGN no longer creates exactly one active Client/Profile relationship")
+        if profile_version(database) != 2:
+            errors.append("legacy ASSIGN must bump Profile version exactly once")
+
+        # A failure after the relationship command inside the same transaction must roll back the
+        # trigger effects, modelling the existing D1 batch all-or-nothing boundary.
+        database.commit()
+        database.execute("BEGIN")
+        try:
+            insert_relationship_command(
+                database,
+                command_id="command_reassign_rollback_p1_fixture",
+                assignment_id="assignment_b_rollback_p1_fixture",
+                client_id="client_b_p1_fixture",
+                expected_version=2,
+                executed_at_ms=20,
+                operation="ASSIGN",
+            )
+            database.execute("INSERT INTO p1_forced_failure_missing_table VALUES (1)")
+        except sqlite3.DatabaseError:
+            database.rollback()
+        else:
+            errors.append("P1 D1 rollback proof did not force the intended transaction failure")
+            database.rollback()
+        if relationship_rows(database) != [("assignment_a_p1_fixture", "client_a_p1_fixture", 10, None)]:
+            errors.append("failed reassign transaction changed relationship history")
+        if profile_version(database) != 2:
+            errors.append("failed reassign transaction changed Profile version")
+        if database.execute(
+            "SELECT COUNT(*) FROM profile_assignment_commands WHERE command_id = ?",
+            ("command_reassign_rollback_p1_fixture",),
+        ).fetchone()[0] != 0:
+            errors.append("failed reassign transaction retained its governed command row")
+
+        insert_relationship_command(
+            database,
+            command_id="command_reassign_p1_fixture",
+            assignment_id="assignment_b_p1_fixture",
+            client_id="client_b_p1_fixture",
+            expected_version=2,
+            executed_at_ms=20,
+            operation="ASSIGN",
+        )
+        if relationship_rows(database) != [
+            ("assignment_a_p1_fixture", "client_a_p1_fixture", 10, 20),
+            ("assignment_b_p1_fixture", "client_b_p1_fixture", 20, None),
+        ]:
+            errors.append("atomic reassign must close exactly the previous row and leave one active successor")
+        if profile_version(database) != 3:
+            errors.append("atomic reassign must bump Profile version exactly once")
+
+        command_insert = """
+            INSERT INTO profile_assignment_commands (
+                tenant_id, command_id, command_actor_id, assignment_id, profile_id,
+                client_id, expected_profile_version, reason, executed_at_ms, operation
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """
+        base = (
+            "tenant_p1_fixture",
+            "actor_owner_p1_fixture",
+            "profile_p1_fixture",
+            "P1 negative proof",
+        )
+        expect_integrity_failure(
+            database,
+            command_insert,
+            (
+                base[0], "command_stale_detach_p1_fixture", base[1], "assignment_b_p1_fixture",
+                base[2], "client_b_p1_fixture", 2, base[3], 30, "DETACH",
+            ),
+            "profile_assignment_version_mismatch",
+            "stale-version detach",
+            errors,
+        )
+        expect_integrity_failure(
+            database,
+            command_insert,
+            (
+                base[0], "command_wrong_detach_p1_fixture", base[1], "assignment_a_p1_fixture",
+                base[2], "client_b_p1_fixture", 3, base[3], 30, "DETACH",
+            ),
+            "profile_assignment_active_assignment_missing",
+            "wrong-identity detach",
+            errors,
+        )
+        expect_integrity_failure(
+            database,
+            command_insert,
+            (
+                base[0], "command_time_regression_p1_fixture", base[1], "assignment_b_p1_fixture",
+                base[2], "client_b_p1_fixture", 3, base[3], 19, "DETACH",
+            ),
+            "profile_assignment_time_regression",
+            "time-regressing detach",
+            errors,
+        )
+        if relationship_rows(database) != [
+            ("assignment_a_p1_fixture", "client_a_p1_fixture", 10, 20),
+            ("assignment_b_p1_fixture", "client_b_p1_fixture", 20, None),
+        ] or profile_version(database) != 3:
+            errors.append("failed detach preconditions changed the previous valid relationship")
+
+        insert_relationship_command(
+            database,
+            command_id="command_detach_p1_fixture",
+            assignment_id="assignment_b_p1_fixture",
+            client_id="client_b_p1_fixture",
+            expected_version=3,
+            executed_at_ms=30,
+            operation="DETACH",
+        )
+        if relationship_rows(database) != [
+            ("assignment_a_p1_fixture", "client_a_p1_fixture", 10, 20),
+            ("assignment_b_p1_fixture", "client_b_p1_fixture", 20, 30),
+        ]:
+            errors.append("DETACH must close only the exact active relationship and insert no successor")
+        if profile_version(database) != 4:
+            errors.append("DETACH must bump Profile version exactly once")
+
+        # A completed command cannot be reused as durable authority for a later direct history write.
+        expect_integrity_failure(
+            database,
+            "UPDATE profile_client_assignments SET closed_at_ms = ? WHERE tenant_id = ? AND assignment_id = ?",
+            (20, "tenant_p1_fixture", "assignment_b_p1_fixture"),
+            "profile_assignment_closed_history_immutable",
+            "closed history mutation",
+            errors,
+        )
+
+        insert_relationship_command(
+            database,
+            command_id="command_attach_again_p1_fixture",
+            assignment_id="assignment_c_p1_fixture",
+            client_id="client_a_p1_fixture",
+            expected_version=4,
+            executed_at_ms=40,
+            operation="ASSIGN",
+        )
+        expect_integrity_failure(
+            database,
+            "UPDATE profile_client_assignments SET closed_at_ms = ? WHERE tenant_id = ? AND assignment_id = ?",
+            (40, "tenant_p1_fixture", "assignment_c_p1_fixture"),
+            "profile_assignment_close_not_governed",
+            "consumed ASSIGN authority reuse",
+            errors,
+        )
+        if relationship_rows(database)[-1] != (
+            "assignment_c_p1_fixture",
+            "client_a_p1_fixture",
+            40,
+            None,
+        ) or profile_version(database) != 5:
+            errors.append("history-guard negative proof corrupted the active relationship")
+    except (AssertionError, OSError, sqlite3.DatabaseError) as error:
+        errors.append(f"P1 governed relationship D1 behavior proof failed: {error}")
+    finally:
+        database.close()
+
+
 def main() -> int:
     identity = IDENTITY_ADAPTER.read_text(encoding="utf-8")
     governance_adapter = IDENTITY_GOVERNANCE_ADAPTER.read_text(encoding="utf-8")
@@ -158,6 +479,8 @@ def main() -> int:
         errors.append("legacy governed command tables must use exactly seven actor-bound journal IDs")
     if generation.count("let command_id = command_journal_id(") != 5 or generation.count("command_id.as_str(),") != 5:
         errors.append("profile generation command tables must use exactly five actor-bound journal IDs")
+
+    validate_profile_relationship_d1_behavior(errors)
 
     if errors:
         for error in errors:
