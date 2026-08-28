@@ -1,7 +1,12 @@
 import { useInfiniteQuery, useQueryClient } from '@tanstack/react-query';
 import { useState, type FormEvent } from 'react';
-import { assignProfile, detachProfile, getProfile, launchProfile } from '../profiles';
-import { invokeProfileBridgeLaunch } from '../profiles/launchBridge';
+import {
+  assignProfile,
+  detachProfile,
+  getProfile,
+  invokeProfileBridgeLaunch,
+  launchProfile,
+} from '../profiles';
 import { newIdempotencyKey } from '../../shared/api/idempotency';
 import { ConfirmAction } from '../../shared/ui/ConfirmAction';
 import { StatusMessage } from '../../shared/ui/StatusMessage';
