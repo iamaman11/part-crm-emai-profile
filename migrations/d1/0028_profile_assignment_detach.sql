@@ -225,3 +225,50 @@ BEGIN
     WHERE tenant_id = NEW.tenant_id
       AND profile_id = NEW.profile_id;
 END;
+
+-- A Client with a current Profile assignment cannot be archived. Otherwise the canonical
+-- relationship owner could be left with an active assignment whose Client no longer satisfies
+-- the Active invariant required by attach/reassign/detach reconstruction. Resolve the
+-- relationship first by DETACH or atomic reassign; then the existing Client archive path works
+-- unchanged. This extends the existing 0014 lifecycle admission owner rather than adding a
+-- second lifecycle writer.
+DROP TRIGGER client_lifecycle_command_validate;
+CREATE TRIGGER client_lifecycle_command_validate
+BEFORE INSERT ON client_lifecycle_commands
+FOR EACH ROW
+BEGIN
+    SELECT RAISE(ABORT, 'client_lifecycle_owner_required')
+    WHERE NOT EXISTS (
+        SELECT 1 FROM memberships
+        WHERE tenant_id = NEW.tenant_id
+          AND actor_id = NEW.command_actor_id
+          AND role = 'TENANT_OWNER'
+          AND status = 'ACTIVE'
+    );
+
+    SELECT RAISE(ABORT, 'client_lifecycle_version_mismatch')
+    WHERE NOT EXISTS (
+        SELECT 1 FROM clients
+        WHERE tenant_id = NEW.tenant_id
+          AND client_id = NEW.client_id
+          AND status = 'ACTIVE'
+          AND version = NEW.expected_client_version
+    );
+
+    SELECT RAISE(ABORT, 'client_lifecycle_time_regression')
+    WHERE EXISTS (
+        SELECT 1 FROM clients
+        WHERE tenant_id = NEW.tenant_id
+          AND client_id = NEW.client_id
+          AND updated_at_ms > NEW.executed_at_ms
+    );
+
+    SELECT RAISE(ABORT, 'client_archive_active_assignment_conflict')
+    WHERE NEW.operation = 'ARCHIVE'
+      AND EXISTS (
+        SELECT 1 FROM profile_client_assignments
+        WHERE tenant_id = NEW.tenant_id
+          AND client_id = NEW.client_id
+          AND closed_at_ms IS NULL
+    );
+END;
