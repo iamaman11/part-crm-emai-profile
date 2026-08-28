@@ -7,6 +7,7 @@ pub mod identity_acl;
 pub mod profile_assignments;
 pub mod profile_grants;
 pub mod profile_launch;
+pub mod profile_launch_authority;
 pub mod profiles;
 
 pub use error::ApplicationError;
