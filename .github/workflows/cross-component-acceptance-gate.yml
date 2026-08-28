@@ -125,7 +125,7 @@ jobs:
           assert targets['profile-bridge'].get('required-features', []) == []
           assert targets['profile-bridge-synthetic'].get('required-features', []) == ['synthetic-test-bin']
           PY
-          cargo test --locked -p profile-bridge --all-targets
+          cargo test --locked -p profile-bridge --all-targets --features synthetic-test-bin
           root="$RUNNER_TEMP/cross-component-profile"
           rm -rf "$root"
           cargo run --locked -p profile-bridge --features synthetic-test-bin --bin profile-bridge-synthetic -- \
