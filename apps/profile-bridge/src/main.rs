@@ -7,10 +7,7 @@ use std::process::ExitCode;
 
 fn main() -> ExitCode {
     match run(env::args()) {
-        Ok(message) => {
-            println!("{message}");
-            ExitCode::SUCCESS
-        }
+        Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
             eprintln!("{error}");
             ExitCode::from(2)
@@ -18,7 +15,7 @@ fn main() -> ExitCode {
     }
 }
 
-fn run<I>(arguments: I) -> Result<&'static str, BridgeCliError>
+fn run<I>(arguments: I) -> Result<(), BridgeCliError>
 where
     I: IntoIterator<Item = String>,
 {
@@ -29,7 +26,7 @@ where
         return Err(BridgeCliError::UnexpectedArgument);
     }
     ClaimUri::parse(&uri).map_err(|_| BridgeCliError::InvalidClaimUri)?;
-    Ok("claim-uri-accepted")
+    Err(BridgeCliError::CompositionUnavailable)
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -37,6 +34,7 @@ enum BridgeCliError {
     MissingClaimUri,
     UnexpectedArgument,
     InvalidClaimUri,
+    CompositionUnavailable,
 }
 
 impl fmt::Display for BridgeCliError {
@@ -45,6 +43,9 @@ impl fmt::Display for BridgeCliError {
             Self::MissingClaimUri => "a single Profile Bridge claim URI is required",
             Self::UnexpectedArgument => "unexpected additional argument",
             Self::InvalidClaimUri => "claim URI is invalid",
+            Self::CompositionUnavailable => {
+                "authorized Profile Bridge composition is unavailable; launch refused"
+            }
         })
     }
 }
@@ -56,14 +57,15 @@ mod tests {
     use super::{BridgeCliError, run};
 
     #[test]
-    fn accepted_cli_result_never_echoes_claim_code() -> Result<(), Box<dyn std::error::Error>> {
+    fn valid_claim_never_reports_success_before_authorized_composition_exists() {
         let result = run([
             "profile-bridge".to_owned(),
             "profilebridge://claim/claim_01JBRIDGE_FEASIBILITY".to_owned(),
-        ])?;
-        assert_eq!(result, "claim-uri-accepted");
-        assert!(!result.contains("01JBRIDGE"));
-        Ok(())
+        ]);
+        assert_eq!(result, Err(BridgeCliError::CompositionUnavailable));
+        assert!(!BridgeCliError::CompositionUnavailable
+            .to_string()
+            .contains("01JBRIDGE"));
     }
 
     #[test]
