@@ -123,13 +123,14 @@ mod tests {
     use super::ProfileLaunchCommandEvidence;
 
     #[test]
-    fn launch_command_evidence_contains_no_device_selection() {
+    fn launch_command_evidence_contains_no_device_selection()
+    -> Result<(), Box<dyn std::error::Error>> {
         let value = serde_json::to_value(ProfileLaunchCommandEvidence {
             profile_id: "profile_01JLAUNCH",
-        })
-        .expect("serialize launch evidence");
+        })?;
         assert_eq!(value["profileId"], "profile_01JLAUNCH");
         assert!(value.get("deviceId").is_none());
         assert!(value.get("generationId").is_none());
+        Ok(())
     }
 }
