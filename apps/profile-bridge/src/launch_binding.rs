@@ -37,10 +37,10 @@ pub fn bind_operator_enrollment(
     local_device_id: &DeviceId,
     correlation_id: CorrelationId,
 ) -> Result<OperatorEnrollment, LaunchBindingError> {
-    let tenant_id = TenantId::parse(tenant_id.to_owned())
-        .map_err(|_| LaunchBindingError::InvalidProjection)?;
-    let actor_id = ActorId::parse(actor_id.to_owned())
-        .map_err(|_| LaunchBindingError::InvalidProjection)?;
+    let tenant_id =
+        TenantId::parse(tenant_id.to_owned()).map_err(|_| LaunchBindingError::InvalidProjection)?;
+    let actor_id =
+        ActorId::parse(actor_id.to_owned()).map_err(|_| LaunchBindingError::InvalidProjection)?;
     let profile_id = ProfileId::parse(profile_id.to_owned())
         .map_err(|_| LaunchBindingError::InvalidProjection)?;
     let generation_id = GenerationId::parse(generation_id.to_owned())
@@ -81,10 +81,19 @@ mod tests {
             &device_id,
             CorrelationId::parse("corr_01JBRIDGEBIND")?,
         )?;
-        assert_eq!(enrollment.actor().tenant_scope().tenant_id().as_str(), "tenant_01JBRIDGEBIND");
+        assert_eq!(
+            enrollment.actor().tenant_scope().tenant_id().as_str(),
+            "tenant_01JBRIDGEBIND"
+        );
         assert_eq!(enrollment.profile_id().as_str(), "profile_01JBRIDGEBIND");
-        assert_eq!(enrollment.generation_id().as_str(), "generation_01JBRIDGEBIND");
-        assert_eq!(enrollment.launch_intent_id().as_str(), "launch_01JBRIDGEBIND");
+        assert_eq!(
+            enrollment.generation_id().as_str(),
+            "generation_01JBRIDGEBIND"
+        );
+        assert_eq!(
+            enrollment.launch_intent_id().as_str(),
+            "launch_01JBRIDGEBIND"
+        );
         Ok(())
     }
 

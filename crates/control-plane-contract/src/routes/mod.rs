@@ -8,7 +8,9 @@ mod mailboxes;
 mod notifications;
 mod profiles;
 
-use crate::{RouteClass, is_dynamic_path, profile_launch_api::BRIDGE_PROFILE_LAUNCH_REDEMPTION_PATH};
+use crate::{
+    RouteClass, is_dynamic_path, profile_launch_api::BRIDGE_PROFILE_LAUNCH_REDEMPTION_PATH,
+};
 
 #[must_use]
 pub(super) fn classify(method: &str, path: &str) -> RouteClass {

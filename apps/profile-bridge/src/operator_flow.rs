@@ -1218,8 +1218,8 @@ mod tests {
     }
 
     #[test]
-    fn lost_heartbeat_stops_runtime_and_enters_recovery()
-    -> Result<(), Box<dyn std::error::Error>> {
+    fn lost_heartbeat_stops_runtime_and_enters_recovery() -> Result<(), Box<dyn std::error::Error>>
+    {
         let fixture = Fixture::new()?;
         let mut coordinator = fixture.coordinator();
         coordinator.heartbeat_fail = true;
