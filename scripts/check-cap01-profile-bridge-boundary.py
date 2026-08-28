@@ -21,20 +21,18 @@ SYNTHETIC_FEATURE = "synthetic-test-bin"
 REQUIRED_MAIN_MARKERS = (
     "use bridge_domain::ClaimUri;",
     "ClaimUri::parse(&uri)",
-    'Ok("claim-uri-accepted")',
 )
 
-FORBIDDEN_PRODUCTION_MARKERS = (
-    "profile_bridge::",
-    "ProfileBridgeOperator",
-    "RuntimeSessionOrchestrator",
-    "ManagedCamouhostProcess",
-    "camouhost_process",
-    "operator_flow",
-    "browser_execution_domain",
-    "runtime_bundle_domain",
-    "application_ports",
-    "session_domain",
+FORBIDDEN_CLAIM_ONLY_SUCCESS_MARKERS = (
+    'Ok("claim-uri-accepted")',
+    'println!("claim-uri-accepted")',
+)
+
+FORBIDDEN_UNGOVERNED_EFFECT_MARKERS = (
+    "profile_bridge::Fake",
+    "profile-bridge-synthetic",
+    "FakeCamouhost",
+    "FakeProcessControl",
     "tokio::process",
     "std::process::Command",
     "Command::new(",
@@ -102,10 +100,13 @@ def validate(root: Path) -> None:
     main = main_path.read_text(encoding="utf-8").replace("\r\n", "\n")
     for marker in REQUIRED_MAIN_MARKERS:
         if marker not in main:
-            fail(f"claim-only entrypoint marker missing: {marker}")
-    for marker in FORBIDDEN_PRODUCTION_MARKERS:
+            fail(f"shipping ingress marker missing: {marker}")
+    for marker in FORBIDDEN_CLAIM_ONLY_SUCCESS_MARKERS:
         if marker in main:
-            fail(f"production entrypoint contains executable-effect marker: {marker}")
+            fail(f"claim-only shipping success is forbidden: {marker}")
+    for marker in FORBIDDEN_UNGOVERNED_EFFECT_MARKERS:
+        if marker in main:
+            fail(f"production entrypoint contains ungoverned effect marker: {marker}")
 
     manifest = tomllib.loads(manifest_path.read_text(encoding="utf-8"))
     validate_binary_inventory(manifest)
@@ -131,9 +132,9 @@ def write_fixture(root: Path) -> None:
     main.parent.mkdir(parents=True, exist_ok=True)
     main.write_text(
         "use bridge_domain::ClaimUri;\n"
-        "fn run(uri: String) -> Result<&'static str, ()> {\n"
+        "fn run(uri: String) -> Result<(), ()> {\n"
         "    ClaimUri::parse(&uri).map_err(|_| ())?;\n"
-        "    Ok(\"claim-uri-accepted\")\n"
+        "    Err(())\n"
         "}\n",
         encoding="utf-8",
     )
@@ -181,11 +182,19 @@ def self_test() -> None:
 
         main = root / PRODUCTION_MAIN
         safe_main = main.read_text(encoding="utf-8")
+
         main.write_text(
             safe_main + "use profile_bridge::operator_flow::ProfileBridgeOperator;\n",
             encoding="utf-8",
         )
-        expect_rejected(root, "operator composition")
+        validate(root)
+        main.write_text(safe_main, encoding="utf-8")
+
+        main.write_text(
+            safe_main + 'fn predecessor() -> Result<&\'static str, ()> { Ok("claim-uri-accepted") }\n',
+            encoding="utf-8",
+        )
+        expect_rejected(root, "claim-only success predecessor")
         main.write_text(safe_main, encoding="utf-8")
 
         main.write_text(
@@ -193,6 +202,13 @@ def self_test() -> None:
             encoding="utf-8",
         )
         expect_rejected(root, "direct process effect")
+        main.write_text(safe_main, encoding="utf-8")
+
+        main.write_text(
+            safe_main + "use profile_bridge::FakeCamouhost;\n",
+            encoding="utf-8",
+        )
+        expect_rejected(root, "synthetic runtime import")
         main.write_text(safe_main, encoding="utf-8")
 
         manifest = root / MANIFEST
@@ -232,8 +248,8 @@ def main() -> int:
         else:
             validate(args.root.resolve())
             print(
-                "CAP-01 Profile Bridge production entrypoint remains claim-only; "
-                "explicit executable inventory is governed and no independent Camoufox executor is published."
+                "CAP-01 Profile Bridge keeps one governed shipping ingress; "
+                "claim-only success is forbidden and synthetic executors remain production-unreachable."
             )
     except BoundaryError as error:
         print(error)
