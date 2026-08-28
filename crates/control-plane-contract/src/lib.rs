@@ -41,6 +41,7 @@ pub enum RouteClass {
     ClientMailSendApi,
     ProfileCollectionApi,
     ProfileResourceApi,
+    ProfileLaunchApi,
     ProfileAssignmentApi,
     ProfileGrantApi,
     ProfileCoordinatorApi,
@@ -272,7 +273,7 @@ mod tests {
             (
                 "POST",
                 "/api/v1/tenants/tenant_01/profiles/profile_01/launch",
-                RouteClass::ProfileResourceApi,
+                RouteClass::ProfileLaunchApi,
             ),
             (
                 "PUT",

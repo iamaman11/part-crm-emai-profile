@@ -81,9 +81,7 @@ pub fn route_surface(route: RouteClass, path: &str) -> Option<RuntimeSurface> {
             Some(RuntimeSurface::HttpClientMailRead)
         }
         RouteClass::ClientMailSendApi => Some(RuntimeSurface::HttpOutboundMail),
-        RouteClass::ProfileResourceApi if path.ends_with("/launch") => {
-            Some(RuntimeSurface::HttpProfileRuntimeLaunch)
-        }
+        RouteClass::ProfileLaunchApi => Some(RuntimeSurface::HttpProfileRuntimeLaunch),
         RouteClass::ProfileCollectionApi
         | RouteClass::ProfileResourceApi
         | RouteClass::ProfileAssignmentApi
@@ -143,7 +141,7 @@ mod tests {
     #[test]
     fn profile_launch_route_maps_to_profile_runtime_not_browser_profiles() {
         let launch = route_surface(
-            RouteClass::ProfileResourceApi,
+            RouteClass::ProfileLaunchApi,
             "/api/v1/tenants/tenant_01/profiles/profile_01/launch",
         );
         assert_eq!(launch, Some(RuntimeSurface::HttpProfileRuntimeLaunch));

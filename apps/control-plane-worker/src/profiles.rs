@@ -45,11 +45,11 @@ pub async fn dispatch(route: RouteClass, request: &mut Request, env: &Env) -> Re
         RouteClass::ProfileCollectionApi => create_profile(request, env, tenant_id).await,
         RouteClass::ProfileResourceApi => {
             let profile_id = segments.get(5).copied().unwrap_or_default();
-            if request.method().as_ref() == "POST" && segments.get(6).copied() == Some("launch") {
-                profile_launch::launch(request, env, tenant_id, profile_id).await
-            } else {
-                get_profile(request, env, tenant_id, profile_id).await
-            }
+            get_profile(request, env, tenant_id, profile_id).await
+        }
+        RouteClass::ProfileLaunchApi => {
+            let profile_id = segments.get(5).copied().unwrap_or_default();
+            profile_launch::launch(request, env, tenant_id, profile_id).await
         }
         RouteClass::ProfileAssignmentApi => {
             let profile_id = segments.get(5).copied().unwrap_or_default();

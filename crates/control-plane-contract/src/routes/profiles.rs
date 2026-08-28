@@ -7,7 +7,7 @@ pub(super) fn classify(method: &str, segments: &[&str]) -> Option<RouteClass> {
             Some(RouteClass::ProfileCollectionApi)
         }
         ["api", "v1", "tenants", _, "profiles", _, "launch"] if method == "POST" => {
-            Some(RouteClass::ProfileResourceApi)
+            Some(RouteClass::ProfileLaunchApi)
         }
         ["api", "v1", "tenants", _, "profiles", _, "coordinator"]
             if matches!(method, "GET" | "POST") =>
