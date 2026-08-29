@@ -352,7 +352,11 @@ mod tests {
         let scope = TenantScope::new(TenantId::parse("tenant_download_capability_01")?);
         let signing_time = R2GenerationDownloadSigningTime::parse("20260829T120000Z")?;
         let capability = signer()?.sign_get(&scope, &descriptor()?, &signing_time, 300)?;
-        assert!(capability.url().contains("/generation_download_capability_01.bpgc?"));
+        assert!(
+            capability
+                .url()
+                .contains("/generation_download_capability_01.bpgc?")
+        );
         assert!(capability.url().contains("X-Amz-Expires=300"));
         assert!(capability.url().contains("X-Amz-SignedHeaders=host"));
         assert!(capability.url().contains("X-Amz-Signature="));
@@ -373,8 +377,16 @@ mod tests {
             "e".repeat(64),
             4096,
         );
-        assert!(signer()?.sign_get(&scope, &invalid, &signing_time, 300).is_err());
-        assert!(signer()?.sign_get(&scope, &descriptor()?, &signing_time, 301).is_err());
+        assert!(
+            signer()?
+                .sign_get(&scope, &invalid, &signing_time, 300)
+                .is_err()
+        );
+        assert!(
+            signer()?
+                .sign_get(&scope, &descriptor()?, &signing_time, 301)
+                .is_err()
+        );
         Ok(())
     }
 }
