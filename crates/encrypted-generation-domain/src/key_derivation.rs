@@ -109,6 +109,7 @@ impl<'a> GenerationKeyDerivationContext<'a> {
 
 pub struct DerivedGenerationMaterial {
     dek: GenerationDek,
+    dek_secret: Zeroizing<[u8; 32]>,
     nonce_prefix: NoncePrefix,
 }
 
@@ -121,6 +122,13 @@ impl DerivedGenerationMaterial {
     #[must_use]
     pub const fn nonce_prefix(&self) -> NoncePrefix {
         self.nonce_prefix
+    }
+
+    /// Returns a zeroizing copy for the bounded authenticated machine-secret transport only.
+    /// The root key remains inside the Cloudflare keyring adapter and is never exposed.
+    #[must_use]
+    pub fn copy_dek_secret(&self) -> Zeroizing<[u8; 32]> {
+        Zeroizing::new(*self.dek_secret)
     }
 
     #[must_use]
@@ -159,6 +167,7 @@ pub fn derive_generation_material(
     nonce_prefix.copy_from_slice(&nonce_bytes[..16]);
     Ok(DerivedGenerationMaterial {
         dek: GenerationDek::new(key_id, dek_bytes),
+        dek_secret: Zeroizing::new(dek_bytes),
         nonce_prefix: NoncePrefix::new(nonce_prefix),
     })
 }
@@ -234,6 +243,7 @@ mod tests {
             GenerationRootKeyVersion::from_key_id(material.key_id())?,
             version
         );
+        assert_eq!(*material.copy_dek_secret(), derive_prf(&root, DEK_DOMAIN, context)?);
         Ok(())
     }
 
