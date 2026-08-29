@@ -12,7 +12,7 @@ jobs:
   refresh-lock:
     runs-on: ubuntu-latest
     env:
-      EXPECTED_PARENT_SHA: 35e7fa7ae9e5bb470a2885a020826b5ed2a1603c
+      EXPECTED_PARENT_SHA: dd721d4cfff215ad57dad6c1f2c956f570bee96f
       TARGET_BRANCH: cap-exec/p2-authorized-launch
     steps:
       - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
@@ -64,7 +64,8 @@ jobs:
 
           old = set(before_packages[target].get("dependencies", []))
           new = set(after_packages[target].get("dependencies", []))
-          if new - old != {"control-plane-contract", "serde_json"}:
+          expected = {"control-plane-contract", "serde", "serde_json"}
+          if new - old != expected:
               raise SystemExit(f"unexpected profile-bridge dependency additions: {sorted(new-old)}")
           if old - new:
               raise SystemExit(f"unexpected profile-bridge dependency removals: {sorted(old-new)}")
