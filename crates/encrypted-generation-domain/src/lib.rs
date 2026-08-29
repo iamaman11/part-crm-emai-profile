@@ -21,9 +21,29 @@ pub use lifecycle::{
 };
 
 use core::fmt;
+use profile_platform_primitives::{GenerationId, ProfileId, TenantId};
 
 pub const CONTAINER_VERSION: u16 = 1;
 pub const ALGORITHM_SUITE: &str = "XCHACHA20-POLY1305-SHA256-V1";
+pub const MAX_GENERATION_CONTAINER_BYTES: usize = 83_886_080;
+
+/// Canonical immutable object identity for an encrypted profile generation.
+///
+/// R2 adapters, Worker validation, and the Bridge reopen path must reuse this owner rather than
+/// reconstructing object keys independently.
+#[must_use]
+pub fn canonical_generation_object_key(
+    tenant_id: &TenantId,
+    profile_id: &ProfileId,
+    generation_id: &GenerationId,
+) -> String {
+    format!(
+        "tenants/{}/profiles/{}/generations/{}.bpgc",
+        tenant_id.as_str(),
+        profile_id.as_str(),
+        generation_id.as_str()
+    )
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum EncryptedGenerationError {
