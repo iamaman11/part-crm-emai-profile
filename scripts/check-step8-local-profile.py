@@ -11,6 +11,7 @@ SOURCE_ROOT = Path("apps/profile-bridge/src")
 SOURCE_ENTRY = SOURCE_ROOT / "local_profile.rs"
 SOURCE_MODULE = SOURCE_ROOT / "local_profile"
 DIRTY_GENERATION_SOURCE = SOURCE_ROOT / "dirty_generation.rs"
+GENERATION_SNAPSHOT_SOURCE = SOURCE_ROOT / "generation_snapshot.rs"
 DIRTY_PUBLISH_SOURCE = SOURCE_ROOT / "dirty_generation_publish.rs"
 DIRTY_CLOSE_SOURCE = SOURCE_ROOT / "dirty_close.rs"
 
@@ -42,14 +43,35 @@ DIRTY_REQUIRED_FRAGMENTS = (
     "DirtyGenerationError::CandidateMatchesBase",
     "RecoveryClone::create",
     "clone.verify_clone_only()?",
+    "crate::generation_snapshot",
     "encode_workspace_snapshot",
     "Some(base_generation_id.clone())",
     "seal_generation",
     "SourceChanged",
-    "MAX_SNAPSHOT_BYTES",
 )
 
 DIRTY_FORBIDDEN_FRAGMENTS = (
+    "D1Database",
+    "worker::",
+    "R2Bucket",
+    "PROFILE_GENERATIONS",
+    "GenerationObjectUploadPort",
+    "const SNAPSHOT_MAGIC",
+    "const MAX_SNAPSHOT_BYTES",
+    "fn encode_workspace_snapshot(",
+)
+
+SNAPSHOT_REQUIRED_FRAGMENTS = (
+    'WORKSPACE_SNAPSHOT_MAGIC: &[u8; 8] = b"BPGW0001"',
+    "MAX_WORKSPACE_SNAPSHOT_BYTES: usize = 67_108_864",
+    "pub(crate) fn encode_workspace_snapshot(",
+    "pub(crate) fn materialize_workspace_snapshot(",
+    "fn parse_workspace_snapshot(",
+    "validate_windows_relative_path",
+    "TargetAlreadyExists",
+)
+
+SNAPSHOT_FORBIDDEN_FRAGMENTS = (
     "D1Database",
     "worker::",
     "R2Bucket",
@@ -140,15 +162,42 @@ def dirty_generation_failures(source: str) -> list[str]:
             failures.append(f"missing dirty-generation invariant: {fragment}")
     for fragment in DIRTY_FORBIDDEN_FRAGMENTS:
         if fragment in production:
-            failures.append(f"dirty-generation candidate must remain local-only: {fragment}")
+            failures.append(
+                f"dirty-generation candidate must delegate canonical snapshot/provider ownership: {fragment}"
+            )
     return failures
 
 
 def dirty_generation_self_test(source: str) -> list[str]:
     fixture = source.split("#[cfg(test)]", 1)[0] + "\nuse worker::d1::D1Database;\n"
     failures = dirty_generation_failures(fixture)
-    if not any("local-only: D1Database" in failure for failure in failures):
+    if not any("ownership: D1Database" in failure for failure in failures):
         return ["dirty-generation negative storage fixture unexpectedly passed"]
+    return []
+
+
+def generation_snapshot_failures(source: str) -> list[str]:
+    production = source.split("#[cfg(test)]", 1)[0]
+    failures: list[str] = []
+    for fragment in SNAPSHOT_REQUIRED_FRAGMENTS:
+        if fragment not in production:
+            failures.append(f"missing canonical generation-snapshot invariant: {fragment}")
+    for fragment in SNAPSHOT_FORBIDDEN_FRAGMENTS:
+        if fragment in production:
+            failures.append(
+                f"canonical generation snapshot must remain local/provider-independent: {fragment}"
+            )
+    return failures
+
+
+def generation_snapshot_self_test(source: str) -> list[str]:
+    fixture = source.replace("67_108_864", "67_108_865", 1)
+    failures = generation_snapshot_failures(fixture)
+    if not any(
+        "MAX_WORKSPACE_SNAPSHOT_BYTES: usize = 67_108_864" in failure
+        for failure in failures
+    ):
+        return ["generation-snapshot max-size drift fixture unexpectedly passed"]
     return []
 
 
@@ -297,6 +346,8 @@ def check(root: Path) -> list[str]:
             failures.append("Profile Bridge does not expose the local_profile module")
         if "pub mod dirty_generation;" not in bridge_lib_text:
             failures.append("Profile Bridge does not expose the dirty_generation module")
+        if "mod generation_snapshot;" not in bridge_lib_text:
+            failures.append("Profile Bridge does not own the canonical generation_snapshot module")
         if "pub mod dirty_generation_publish;" not in bridge_lib_text:
             failures.append("Profile Bridge does not expose the dirty_generation_publish module")
         if "pub mod dirty_close;" not in bridge_lib_text:
@@ -309,6 +360,14 @@ def check(root: Path) -> list[str]:
         dirty_text = dirty_source.read_text(encoding="utf-8")
         failures.extend(dirty_generation_failures(dirty_text))
         failures.extend(dirty_generation_self_test(dirty_text))
+
+    snapshot_source = root / GENERATION_SNAPSHOT_SOURCE
+    if not snapshot_source.is_file():
+        failures.append(f"missing canonical generation-snapshot source: {GENERATION_SNAPSHOT_SOURCE}")
+    else:
+        snapshot_text = snapshot_source.read_text(encoding="utf-8")
+        failures.extend(generation_snapshot_failures(snapshot_text))
+        failures.extend(generation_snapshot_self_test(snapshot_text))
 
     publish_source = root / DIRTY_PUBLISH_SOURCE
     if not publish_source.is_file():
@@ -339,7 +398,7 @@ def main() -> int:
         for failure in failures:
             print(f"ERROR: {failure}")
         return 1
-    print("Repository Step 8 local profile, dirty-generation and retained-close policy passed.")
+    print("Repository Step 8 local profile, canonical snapshot, dirty-generation and retained-close policy passed.")
     return 0
 
 
