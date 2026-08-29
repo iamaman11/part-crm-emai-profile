@@ -303,7 +303,9 @@ pub fn generation_download_capability_signer(
         env.secret(R2_GENERATION_SECRET_ACCESS_KEY_BINDING)?
             .to_string(),
     )
-    .map_err(|_| Error::RustError("invalid R2 generation download signing configuration".to_owned()))
+    .map_err(|_| {
+        Error::RustError("invalid R2 generation download signing configuration".to_owned())
+    })
 }
 
 #[must_use]
