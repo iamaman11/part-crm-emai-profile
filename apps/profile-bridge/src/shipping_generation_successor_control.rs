@@ -315,6 +315,9 @@ mod tests {
     };
     use session_domain::ProfileLease;
     use std::collections::VecDeque;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static FIXTURE_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 
     #[derive(Default)]
     struct Transport {
@@ -379,17 +382,18 @@ mod tests {
 
     impl Fixture {
         fn new() -> Result<Self, Box<dyn std::error::Error>> {
+            let sequence = FIXTURE_SEQUENCE.fetch_add(1, Ordering::Relaxed);
             let root_path = std::env::temp_dir().join(format!(
-                "profile-bridge-successor-control-{}",
+                "profile-bridge-successor-control-{}-{sequence}",
                 std::process::id()
             ));
-            let _ = std::fs::remove_dir_all(&root_path);
             let root = MaterializationRoot::open_or_create(root_path.clone())?;
-            let tenant = TenantId::parse("tenant_successor_control_01")?;
-            let profile = ProfileId::parse("profile_successor_control_01")?;
-            let base = GenerationId::parse("generation_successor_control_base_01")?;
-            let candidate = GenerationId::parse("generation_successor_control_next_01")?;
-            let device = DeviceId::parse("device_successor_control_01")?;
+            let tenant = TenantId::parse(format!("tenant_successor_control_{sequence}"))?;
+            let profile = ProfileId::parse(format!("profile_successor_control_{sequence}"))?;
+            let base = GenerationId::parse(format!("generation_successor_control_base_{sequence}"))?;
+            let candidate =
+                GenerationId::parse(format!("generation_successor_control_next_{sequence}"))?;
+            let device = DeviceId::parse(format!("device_successor_control_{sequence}"))?;
             let workspace = root.create_generation(&tenant, &profile, &base)?;
             std::fs::write(workspace.path().join("prefs.js"), b"save")?;
             let mut record = LocalGenerationRecord::new(base.clone(), 4, UnixMillis::new(1));
@@ -409,10 +413,10 @@ mod tests {
             let lease = ProfileLease::issue(
                 tenant.clone(),
                 profile.clone(),
-                SessionId::parse("session_successor_control_01")?,
+                SessionId::parse(format!("session_successor_control_{sequence}"))?,
                 device,
                 4,
-                FencingToken::parse("fence_successor_control_01")?,
+                FencingToken::parse(format!("fence_successor_control_{sequence}"))?,
             )?;
             Ok(Self {
                 root_path,
