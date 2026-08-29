@@ -44,6 +44,7 @@ use cloudflare_adapters::d1_profile_generation_application::D1ProfileGenerationA
 use cloudflare_adapters::d1_query::D1QueryRepository;
 use cloudflare_adapters::generation_keyring::CloudflareGenerationRootKeyring;
 use cloudflare_adapters::microsoft_graph_authorization::D1MicrosoftGraphAuthorization;
+use cloudflare_adapters::r2_generation_download_capability::R2GenerationDownloadCapabilitySigner;
 use cloudflare_adapters::r2_generation_objects::R2GenerationObjects;
 use cloudflare_adapters::r2_generation_upload_capability::{
     R2GenerationUploadCapabilitySigner, R2SigV4Credentials,
@@ -290,6 +291,19 @@ pub fn generation_upload_capability_signer(
         credentials,
     )
     .map_err(|_| Error::RustError("invalid R2 generation upload signing configuration".to_owned()))
+}
+
+pub fn generation_download_capability_signer(
+    env: &Env,
+) -> Result<R2GenerationDownloadCapabilitySigner> {
+    R2GenerationDownloadCapabilitySigner::new(
+        env.var(R2_GENERATION_ACCOUNT_ID_BINDING)?.to_string(),
+        env.var(R2_GENERATION_BUCKET_NAME_BINDING)?.to_string(),
+        env.secret(R2_GENERATION_ACCESS_KEY_ID_BINDING)?.to_string(),
+        env.secret(R2_GENERATION_SECRET_ACCESS_KEY_BINDING)?
+            .to_string(),
+    )
+    .map_err(|_| Error::RustError("invalid R2 generation download signing configuration".to_owned()))
 }
 
 #[must_use]
