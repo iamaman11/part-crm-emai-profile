@@ -1,5 +1,6 @@
 use crate::r2_generation_objects::{
-    META_CONTAINER_DIGEST, META_GENERATION_ID, META_METADATA_DIGEST, META_PROFILE_ID, META_TENANT_ID,
+    META_CONTAINER_DIGEST, META_GENERATION_ID, META_METADATA_DIGEST, META_PROFILE_ID,
+    META_TENANT_ID,
 };
 use application_ports::generation_objects::GenerationObjectDescriptor;
 use core::fmt;
