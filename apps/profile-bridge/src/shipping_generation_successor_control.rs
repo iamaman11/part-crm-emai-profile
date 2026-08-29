@@ -370,7 +370,6 @@ mod tests {
 
     struct Fixture {
         root_path: std::path::PathBuf,
-        root: MaterializationRoot,
         tenant: TenantId,
         profile: ProfileId,
         base: GenerationId,
@@ -417,7 +416,6 @@ mod tests {
             )?;
             Ok(Self {
                 root_path,
-                root,
                 tenant,
                 profile,
                 base,
