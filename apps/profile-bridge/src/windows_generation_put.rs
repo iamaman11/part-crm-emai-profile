@@ -216,7 +216,9 @@ mod tests {
             "https://0123456789abcdef0123456789abcdef.r2.cloudflarestorage.com/bucket/object?X-Amz-Signature=abc"
         ));
         assert!(!valid_direct_https_url("http://example.invalid/object"));
-        assert!(!valid_direct_https_url("https://example.invalid/object#fragment"));
+        assert!(!valid_direct_https_url(
+            "https://example.invalid/object#fragment"
+        ));
         assert!(!valid_direct_https_url("https://example.invalid/bad url"));
     }
 
