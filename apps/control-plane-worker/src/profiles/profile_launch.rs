@@ -20,7 +20,8 @@ use serde::Serialize;
 use use_cases::profile_launch::authorize_profile_launch;
 use use_cases::profile_launch_authority::issue_profile_launch_authority;
 use use_cases::profile_launch_redemption::{
-    consume_validated_profile_launch_redemption, validate_profile_launch_redemption,
+    ProfileLaunchRedemptionInput, consume_validated_profile_launch_redemption,
+    validate_profile_launch_redemption,
 };
 use use_cases::{ApplicationError, ProblemCode};
 use worker::{Date, Env, Request, Response, Result};
@@ -126,10 +127,12 @@ async fn redeem_from_bridge(request: &mut Request, env: &Env) -> Result<Response
     let preconditions = device_execution_preconditions(env)?;
     let now = UnixMillis::new(Date::now().as_millis());
     let validated = match validate_profile_launch_redemption(
-        &correlation_id,
-        body.claim_code(),
-        &machine_binding,
-        now,
+        ProfileLaunchRedemptionInput::new(
+            &correlation_id,
+            body.claim_code(),
+            &machine_binding,
+            now,
+        ),
         &memberships,
         &authority,
         &context,
@@ -159,10 +162,12 @@ async fn redeem_from_bridge(request: &mut Request, env: &Env) -> Result<Response
 
     let revalidated_at = UnixMillis::new(Date::now().as_millis());
     let revalidated = match validate_profile_launch_redemption(
-        &correlation_id,
-        body.claim_code(),
-        &machine_binding,
-        revalidated_at,
+        ProfileLaunchRedemptionInput::new(
+            &correlation_id,
+            body.claim_code(),
+            &machine_binding,
+            revalidated_at,
+        ),
         &memberships,
         &authority,
         &context,
