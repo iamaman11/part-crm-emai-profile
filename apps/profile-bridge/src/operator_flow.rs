@@ -2,9 +2,9 @@ use crate::ProcessControlPort;
 use crate::authoritative_generation::ensure_authoritative_generation;
 #[cfg(any(test, feature = "synthetic-test-bin"))]
 use crate::browser_mail_query::BrowserMailExecutionProof;
-use crate::dirty_close::{DirtyCloseCompletion, DirtyCloseLocalOutcome, RetainedDirtyClose};
 #[cfg(any(test, feature = "synthetic-test-bin"))]
 use crate::dirty_close::RetainedDirtyCloseError;
+use crate::dirty_close::{DirtyCloseCompletion, DirtyCloseLocalOutcome, RetainedDirtyClose};
 use crate::dirty_generation::GenerationSealingMaterialPort;
 #[cfg(any(test, feature = "synthetic-test-bin"))]
 use crate::dirty_generation::PreparedDirtyGeneration;
