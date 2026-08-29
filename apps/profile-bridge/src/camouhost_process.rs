@@ -557,7 +557,8 @@ fn exchange_shared(
         .as_ref()
         .ok_or(BridgePortError::Unavailable)?;
     let response = receive_response(responses, timeout)?;
-    let parsed = CamouhostMessage::parse(&response).map_err(|_| BridgePortError::InvalidResponse)?;
+    let parsed =
+        CamouhostMessage::parse(&response).map_err(|_| BridgePortError::InvalidResponse)?;
     parsed
         .validate_version()
         .map_err(|_| BridgePortError::InvalidResponse)?;
@@ -824,11 +825,13 @@ mod tests {
             })?,
             format!("observe_close|{}", session_id.as_str())
         );
-        assert!(request_frame(&CamouhostMessage::CloseObserved {
-            session_id,
-            controlled: true,
-        })
-        .is_err());
+        assert!(
+            request_frame(&CamouhostMessage::CloseObserved {
+                session_id,
+                controlled: true,
+            })
+            .is_err()
+        );
         Ok(())
     }
 
