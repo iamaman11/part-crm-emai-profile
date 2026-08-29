@@ -42,6 +42,7 @@ use cloudflare_adapters::d1_notifications::D1NotificationRepository;
 use cloudflare_adapters::d1_profile_application::D1ProfileApplicationBundle;
 use cloudflare_adapters::d1_profile_generation_application::D1ProfileGenerationApplicationRepository;
 use cloudflare_adapters::d1_query::D1QueryRepository;
+use cloudflare_adapters::generation_keyring::CloudflareGenerationRootKeyring;
 use cloudflare_adapters::microsoft_graph_authorization::D1MicrosoftGraphAuthorization;
 use cloudflare_adapters::r2_generation_objects::R2GenerationObjects;
 use cloudflare_adapters::r2_generation_upload_capability::{
@@ -55,6 +56,7 @@ use worker::{Env, Error, Result};
 
 #[cfg(target_arch = "wasm32")]
 const CLIENT_CONTACT_PROTECTION_KEYRING_BINDING: &str = "CLIENT_CONTACT_PROTECTION_KEYRING";
+const GENERATION_ROOT_KEYRING_BINDING: &str = "PROFILE_GENERATION_ROOT_KEYRING";
 const R2_GENERATION_ACCOUNT_ID_BINDING: &str = "R2_GENERATION_ACCOUNT_ID";
 const R2_GENERATION_BUCKET_NAME_BINDING: &str = "R2_GENERATION_BUCKET_NAME";
 const R2_GENERATION_ACCESS_KEY_ID_BINDING: &str = "R2_GENERATION_ACCESS_KEY_ID";
@@ -264,6 +266,11 @@ pub fn device_generation_replay_probe(env: &Env) -> Result<D1DeviceGenerationCom
 
 pub fn generation_object_verifier(env: &Env) -> Result<R2GenerationObjects> {
     Ok(R2GenerationObjects::new(env.bucket(R2_PROFILES_BINDING)?))
+}
+
+pub fn generation_root_keyring(env: &Env) -> Result<CloudflareGenerationRootKeyring> {
+    CloudflareGenerationRootKeyring::from_env(env, GENERATION_ROOT_KEYRING_BINDING)
+        .map_err(|_| Error::RustError("generation root-key keyring unavailable".to_owned()))
 }
 
 pub fn generation_upload_capability_signer(
