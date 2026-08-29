@@ -35,7 +35,7 @@ EXPECTED_LOCK: dict[str, Any] = {
         "repository": "daijro/camoufox",
         "version": "152.0.4-beta.28",
     },
-    "camouhost_ipc_version": 1,
+    "camouhost_ipc_version": 2,
     "components": {
         "browserforge": "1.2.4",
         "camoufox_python": "0.5.5",
