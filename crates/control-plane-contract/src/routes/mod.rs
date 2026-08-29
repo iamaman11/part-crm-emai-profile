@@ -105,7 +105,7 @@ fn bridge_profile_successor_route(method: &str, path: &str) -> bool {
             "profiles",
             _,
             "generation-successor",
-            "upload-capability" | "commit"
+            "upload-capability" | "sealing-material" | "commit"
         ]
     )
 }
@@ -163,6 +163,7 @@ mod tests {
     fn only_exact_bridge_profile_successor_posts_escape_deny_default() {
         for path in [
             "/bridge/v1/tenants/tenant_01/profiles/profile_01/generation-successor/upload-capability",
+            "/bridge/v1/tenants/tenant_01/profiles/profile_01/generation-successor/sealing-material",
             "/bridge/v1/tenants/tenant_01/profiles/profile_01/generation-successor/commit",
         ] {
             assert_eq!(classify("POST", path), RouteClass::ProfileCoordinatorApi);
