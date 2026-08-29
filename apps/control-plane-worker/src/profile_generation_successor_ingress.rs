@@ -1,9 +1,9 @@
 use crate::access_session::problem;
 use crate::composition::{
     device_execution_preconditions, device_job_authorization, generation_object_verifier,
-    generation_upload_capability_signer, profile_generation_successor_commit,
+    generation_root_keyring, generation_upload_capability_signer,
+    profile_generation_successor_commit,
 };
-use application_ports::DeviceJobPortErrorClass;
 use application_ports::device_jobs::{DeviceJobAuthorizationPort, DeviceJobCapability};
 use application_ports::generation_objects::{
     GenerationObjectDescriptor, GenerationObjectDescriptorVerifyPort,
@@ -15,8 +15,16 @@ use application_ports::profile_generation_successor::{
     ProfileGenerationSuccessorCommitRequest, ProfileGenerationSuccessorVersionPort,
     ProfileGenerationWriterAuthorityPort, ProfileGenerationWriterAuthorityRequest,
 };
+use application_ports::{
+    DeviceExecutionBlocker, DeviceExecutionPreconditionPort, DeviceExecutionReadiness,
+    DeviceJobPortErrorClass,
+};
 use cloudflare_adapters::r2_generation_upload_capability::{
     R2GenerationUploadCapabilityError, R2GenerationUploadSigningTime,
+};
+use control_plane_contract::generation_key_api::{
+    BridgeGenerationSealingMaterialRequest, BridgeGenerationSealingMaterialResponse,
+    GENERATION_SEALING_CHUNK_BYTES,
 };
 use control_plane_contract::profile_generation_api::{
     BridgeGenerationSuccessorCommitOutcomeDto, BridgeGenerationSuccessorCommitResponse,
@@ -34,6 +42,7 @@ type SigningTimeResult =
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum BridgeSuccessorOperation {
+    SealingMaterial,
     UploadCapability,
     Commit,
 }
@@ -49,6 +58,16 @@ pub(crate) fn operation(path: &str, method: Method) -> Option<BridgeSuccessorOpe
         .filter(|segment| !segment.is_empty())
         .collect();
     match segments.as_slice() {
+        [
+            "bridge",
+            "v1",
+            "tenants",
+            _,
+            "profiles",
+            _,
+            "generation-successor",
+            "sealing-material",
+        ] => Some(BridgeSuccessorOperation::SealingMaterial),
         [
             "bridge",
             "v1",
@@ -81,6 +100,10 @@ pub(crate) async fn dispatch_authorized(
     device_id: &DeviceId,
     operation: BridgeSuccessorOperation,
 ) -> Result<Response> {
+    if operation == BridgeSuccessorOperation::SealingMaterial {
+        return dispatch_sealing_material(request, env, profile_id, actor, device_id).await;
+    }
+
     let body = match request
         .json::<BridgeProfileGenerationSuccessorRequest>()
         .await
@@ -168,6 +191,7 @@ pub(crate) async fn dispatch_authorized(
 
     let verifier = generation_object_verifier(env)?;
     match operation {
+        BridgeSuccessorOperation::SealingMaterial => unreachable!("handled before successor DTO"),
         BridgeSuccessorOperation::UploadCapability => {
             let successor = profile_generation_successor_commit(env);
             if let Err(error) = successor
@@ -306,6 +330,113 @@ pub(crate) async fn dispatch_authorized(
     }
 }
 
+async fn dispatch_sealing_material(
+    request: &mut Request,
+    env: &Env,
+    profile_id: &ProfileId,
+    actor: &ActorContext,
+    device_id: &DeviceId,
+) -> Result<Response> {
+    let body = match request
+        .json::<BridgeGenerationSealingMaterialRequest>()
+        .await
+    {
+        Ok(value) => value,
+        Err(_) => return invalid_request(actor.correlation_id().as_str()),
+    };
+    let base_generation_id = match GenerationId::parse(body.base_generation_id().to_owned()) {
+        Ok(value) => value,
+        Err(_) => return invalid_request(actor.correlation_id().as_str()),
+    };
+    let generation_id = match GenerationId::parse(body.generation_id().to_owned()) {
+        Ok(value) => value,
+        Err(_) => return invalid_request(actor.correlation_id().as_str()),
+    };
+    if generation_id == base_generation_id || body.coordinator_epoch() == 0 {
+        return invalid_request(actor.correlation_id().as_str());
+    }
+    let plaintext_digest = match decode_lower_sha256(body.plaintext_digest()) {
+        Some(value) => value,
+        None => return invalid_request(actor.correlation_id().as_str()),
+    };
+    let session_id = match SessionId::parse(body.coordinator_session_id().to_owned()) {
+        Ok(value) => value,
+        Err(_) => return invalid_request(actor.correlation_id().as_str()),
+    };
+    let fencing_token = match FencingToken::parse(body.coordinator_fencing_token().to_owned()) {
+        Ok(value) => value,
+        Err(_) => return invalid_request(actor.correlation_id().as_str()),
+    };
+    let target = DeviceJobTarget::new(
+        actor.tenant_scope().tenant_id().clone(),
+        device_id.clone(),
+        profile_id.clone(),
+        base_generation_id,
+    );
+
+    let preconditions = device_execution_preconditions(env)?;
+    match preconditions.evaluate_device_execution(actor, &target).await {
+        Ok(DeviceExecutionReadiness::Ready) => {}
+        Ok(DeviceExecutionReadiness::Blocked(
+            DeviceExecutionBlocker::DeviceUnauthorized,
+        ))
+        | Err(DeviceJobPortErrorClass::AuthenticationFailed) => {
+            return forbidden(actor.correlation_id().as_str());
+        }
+        Ok(DeviceExecutionReadiness::Blocked(
+            DeviceExecutionBlocker::GenerationInactive,
+        )) => return version_conflict(actor.correlation_id().as_str()),
+        Ok(DeviceExecutionReadiness::Blocked(
+            DeviceExecutionBlocker::CertificationIncomplete,
+        )) => return verification_conflict(actor.correlation_id().as_str()),
+        Err(DeviceJobPortErrorClass::IntegrityFailure) => {
+            return integrity_failure(actor.correlation_id().as_str());
+        }
+        Err(DeviceJobPortErrorClass::DependencyUnavailable) => {
+            return dependency(actor.correlation_id().as_str());
+        }
+    }
+
+    let successor = profile_generation_successor_commit(env);
+    if let Err(error) = successor
+        .prove_profile_generation_writer_authority(
+            actor,
+            &ProfileGenerationWriterAuthorityRequest::new(
+                device_id.clone(),
+                profile_id.clone(),
+                session_id,
+                fencing_token,
+                body.coordinator_epoch(),
+            ),
+        )
+        .await
+    {
+        return successor_failure(actor.correlation_id().as_str(), error.class());
+    }
+
+    let keyring = match generation_root_keyring(env) {
+        Ok(value) => value,
+        Err(_) => return integrity_failure(actor.correlation_id().as_str()),
+    };
+    let material = match keyring.derive_active(
+        actor.tenant_scope().tenant_id(),
+        profile_id,
+        &generation_id,
+        plaintext_digest,
+    ) {
+        Ok(value) => value,
+        Err(_) => return integrity_failure(actor.correlation_id().as_str()),
+    };
+    let dek_secret = material.copy_dek_secret();
+    let nonce_prefix = material.nonce_prefix().bytes();
+    machine_json(&BridgeGenerationSealingMaterialResponse::new(
+        material.key_id().as_str(),
+        lower_hex(&dek_secret[..]),
+        lower_hex(&nonce_prefix),
+        GENERATION_SEALING_CHUNK_BYTES,
+    ))
+}
+
 async fn device_authorized(
     env: &Env,
     actor: &ActorContext,
@@ -343,6 +474,38 @@ fn lower_sha256(value: &str) -> bool {
         && value
             .bytes()
             .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
+
+fn decode_lower_sha256(value: &str) -> Option<[u8; 32]> {
+    if !lower_sha256(value) {
+        return None;
+    }
+    let bytes = value.as_bytes();
+    let mut decoded = [0_u8; 32];
+    for (index, output) in decoded.iter_mut().enumerate() {
+        let high = lower_hex_nibble(bytes[index * 2])?;
+        let low = lower_hex_nibble(bytes[index * 2 + 1])?;
+        *output = (high << 4) | low;
+    }
+    Some(decoded)
+}
+
+const fn lower_hex_nibble(value: u8) -> Option<u8> {
+    match value {
+        b'0'..=b'9' => Some(value - b'0'),
+        b'a'..=b'f' => Some(value - b'a' + 10),
+        _ => None,
+    }
+}
+
+fn lower_hex(bytes: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut encoded = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        encoded.push(char::from(HEX[usize::from(byte >> 4)]));
+        encoded.push(char::from(HEX[usize::from(byte & 0x0f)]));
+    }
+    encoded
 }
 
 fn server_now() -> UnixMillis {
@@ -464,7 +627,9 @@ fn dependency(correlation_id: &str) -> Result<Response> {
 
 #[cfg(test)]
 mod tests {
-    use super::{BridgeSuccessorOperation, descriptor_shape_is_canonical, operation};
+    use super::{
+        BridgeSuccessorOperation, decode_lower_sha256, descriptor_shape_is_canonical, operation,
+    };
     use profile_platform_primitives::{
         ActorContext, ActorId, CorrelationId, GenerationId, ProfileId, TenantId, TenantScope,
     };
@@ -472,6 +637,13 @@ mod tests {
 
     #[test]
     fn only_exact_successor_posts_are_recognized() {
+        assert_eq!(
+            operation(
+                "/bridge/v1/tenants/tenant_01/profiles/profile_01/generation-successor/sealing-material",
+                Method::Post,
+            ),
+            Some(BridgeSuccessorOperation::SealingMaterial)
+        );
         assert_eq!(
             operation(
                 "/bridge/v1/tenants/tenant_01/profiles/profile_01/generation-successor/upload-capability",
@@ -502,6 +674,14 @@ mod tests {
         ] {
             assert_eq!(operation(path, method), None);
         }
+    }
+
+    #[test]
+    fn plaintext_digest_transport_is_exact_lowercase_sha256() {
+        assert_eq!(decode_lower_sha256(&"0f".repeat(32)), Some([0x0f; 32]));
+        assert_eq!(decode_lower_sha256(&"0F".repeat(32)), None);
+        assert_eq!(decode_lower_sha256(&"0f".repeat(31)), None);
+        assert_eq!(decode_lower_sha256(&format!("{}g0", "0f".repeat(31))), None);
     }
 
     #[test]
