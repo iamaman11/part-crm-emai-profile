@@ -33,6 +33,7 @@ pub mod notifications;
 pub mod outbound_mail;
 pub mod profile_assignment_context;
 pub mod profile_creation;
+pub mod profile_generation_successor;
 pub mod profile_launch;
 pub mod profiles;
 pub mod query;
@@ -88,6 +89,11 @@ pub use notifications::{
     NotificationPortErrorClass, NotificationReplayIntent, NotificationReplayRepositoryPort,
     NotificationRetentionOutcome, NotificationRetentionRepositoryPort, PendingNotificationReplay,
     ReplayPreparationOutcome, ReplayReasonClass,
+};
+pub use profile_generation_successor::{
+    ProfileGenerationCommitWitness, ProfileGenerationSuccessorCommitError,
+    ProfileGenerationSuccessorCommitErrorClass, ProfileGenerationSuccessorCommitOutcome,
+    ProfileGenerationSuccessorCommitPort, ProfileGenerationSuccessorCommitRequest,
 };
 pub use profiles::ProfileRepository;
 pub use query::{
