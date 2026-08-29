@@ -414,6 +414,24 @@ impl ProcessControlPort for ManagedCamouhostProcess {
         Ok(())
     }
 
+    fn is_running(&mut self, session_id: &SessionId) -> Result<bool, BridgePortError> {
+        let mut state = self
+            .shared
+            .lock()
+            .map_err(|_| BridgePortError::Unavailable)?;
+        if state.active_session.as_ref() != Some(session_id) {
+            return Err(BridgePortError::InvalidResponse);
+        }
+        let child = state
+            .child
+            .as_mut()
+            .ok_or(BridgePortError::InvalidResponse)?;
+        child
+            .try_wait()
+            .map(|status| status.is_none())
+            .map_err(|_| BridgePortError::Unavailable)
+    }
+
     fn request_graceful_close(&mut self, session_id: &SessionId) -> Result<(), BridgePortError> {
         let state = self
             .shared

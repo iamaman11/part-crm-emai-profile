@@ -450,36 +450,13 @@ where
             .ok_or(OperatorFlowError::Stage(
                 OperatorFailureStage::CoordinatorHeartbeat,
             ))?;
+        if !matches!(self.process.is_running(lease.session_id()), Ok(true)) {
+            return Err(self.fail_active_runtime(OperatorFailureStage::RuntimeAbort, now));
+        }
         if self.coordinator.heartbeat_lease(&lease).is_ok() {
             return Ok(());
         }
-
-        let Some(mut session) = self.active.take() else {
-            return Err(OperatorFlowError::Stage(
-                OperatorFailureStage::CoordinatorHeartbeat,
-            ));
-        };
-        let process_failed = self
-            .process
-            .force_terminate(session.lease.session_id())
-            .is_err();
-        if session.local_record.observe_crash(now).is_err() {
-            return Err(self.finish_failed_session(
-                OperatorFailureStage::CoordinatorHeartbeat,
-                session,
-                process_failed,
-            ));
-        }
-        let cleanup = self.cleanup_active_session(&mut session, process_failed);
-        self.record_terminal(&session.lease, &session.local_record, cleanup);
-        if cleanup.any() {
-            self.cleanup_blocked = true;
-        }
-        Err(OperatorFlowError::Terminal {
-            stage: OperatorFailureStage::CoordinatorHeartbeat,
-            local_state: session.local_record.state(),
-            cleanup,
-        })
+        Err(self.fail_active_runtime(OperatorFailureStage::CoordinatorHeartbeat, now))
     }
 
     pub fn close(&mut self, now: UnixMillis) -> Result<(), OperatorFlowError> {
@@ -651,6 +628,11 @@ where
         &self.process
     }
 
+    #[cfg(test)]
+    fn process_mut(&mut self) -> &mut P {
+        &mut self.process
+    }
+
     fn fail_before_local_use(
         &mut self,
         stage: OperatorFailureStage,
@@ -695,6 +677,22 @@ where
         } else {
             OperatorFlowError::Stage(stage)
         }
+    }
+
+    fn fail_active_runtime(
+        &mut self,
+        stage: OperatorFailureStage,
+        now: UnixMillis,
+    ) -> OperatorFlowError {
+        let Some(mut session) = self.active.take() else {
+            return OperatorFlowError::Stage(stage);
+        };
+        let process_failed = self
+            .process
+            .force_terminate(session.lease.session_id())
+            .is_err();
+        let _ = session.local_record.observe_crash(now);
+        self.finish_failed_session(stage, session, process_failed)
     }
 
     fn cleanup_after_local_use(
@@ -1213,6 +1211,40 @@ mod tests {
         assert_eq!(
             operator.process().actions(),
             [ProcessAction::Spawn(fixture.lease.session_id().clone())]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn dead_runtime_is_fenced_before_coordinator_heartbeat()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let fixture = Fixture::new()?;
+        let mut operator = operator(&fixture, FakeCamouhost::default())?;
+        operator.open(&fixture.claim_uri, &fixture.root, UnixMillis::new(10))?;
+        operator
+            .process_mut()
+            .simulate_exit(fixture.lease.session_id())?;
+        assert_eq!(
+            operator.heartbeat(UnixMillis::new(11)),
+            Err(OperatorFlowError::Terminal {
+                stage: OperatorFailureStage::RuntimeAbort,
+                local_state: LocalGenerationState::RecoveryRequired,
+                cleanup: super::CleanupFailures::none(),
+            })
+        );
+        assert_eq!(operator.coordinator().heartbeats, 0);
+        assert_eq!(operator.coordinator().closed, 1);
+        assert_eq!(operator.active_session_id(), None);
+        assert_eq!(
+            operator.last_terminal().map(|value| value.local_state()),
+            Some(LocalGenerationState::RecoveryRequired)
+        );
+        assert_eq!(
+            operator.process().actions(),
+            [
+                ProcessAction::Spawn(fixture.lease.session_id().clone()),
+                ProcessAction::ForceTerminate(fixture.lease.session_id().clone()),
+            ]
         );
         Ok(())
     }
