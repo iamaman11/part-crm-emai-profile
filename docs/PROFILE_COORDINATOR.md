@@ -65,7 +65,7 @@ The browser/operator route remains:
 
 Before resolving the Durable Object stub, the Worker verifies the external user identity, active
 membership and explicit Profile authorization through the existing ACL owner. Missing, cross-tenant
-and unauthorized Profiles retain neutral disclosure behavior.
+and unauthorized Profiles share the accepted **neutral disclosure response**.
 
 Browser/operator ingress may expose the commands appropriate to its authenticated application role.
 It does not weaken the separate machine boundary below.
@@ -124,8 +124,8 @@ Durable Object storage is authoritative for command ordering, lease epoch and fe
 tenant-scoped Profile/session projections and immutable outbox evidence. Projection lag is detectable by
 comparing object sequence/version with projected sequence/version, and repair is idempotent.
 
-The implementation never claims atomicity across Durable Objects and D1. It preserves replayable object
-evidence, idempotent projection writes and explicit reconciliation state instead.
+The implementation **must not claim atomicity across Durable Objects and D1**. It preserves replayable
+object evidence, idempotent projection writes and explicit reconciliation state instead.
 
 ## Authorization
 
