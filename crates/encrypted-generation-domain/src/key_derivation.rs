@@ -243,7 +243,10 @@ mod tests {
             GenerationRootKeyVersion::from_key_id(material.key_id())?,
             version
         );
-        assert_eq!(*material.copy_dek_secret(), derive_prf(&root, DEK_DOMAIN, context)?);
+        assert_eq!(
+            *material.copy_dek_secret(),
+            derive_prf(&root, DEK_DOMAIN, context)?
+        );
         Ok(())
     }
 
