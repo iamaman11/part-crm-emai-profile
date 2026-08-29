@@ -1,16 +1,14 @@
 use crate::{GenerationDek, KeyId, NoncePrefix, PlaintextDigest};
 use core::fmt;
-use hmac::{Hmac, KeyInit as HmacKeyInit, Mac};
 use profile_platform_primitives::{GenerationId, ProfileId, TenantId};
-use sha2::Sha256;
-use zeroize::Zeroize;
+use sha2::{Digest, Sha256};
+use zeroize::{Zeroize, Zeroizing};
 
 const KDF_CONTEXT_DOMAIN: &[u8] = b"profile-generation-kdf-context-v1";
 const DEK_DOMAIN: &[u8] = b"profile-generation-dek-v1";
 const NONCE_PREFIX_DOMAIN: &[u8] = b"profile-generation-nonce-prefix-v1";
 const ROOT_KEY_ID_PREFIX: &str = "profile-generation-root-v1-";
-
-type HmacSha256 = Hmac<Sha256>;
+const HMAC_SHA256_BLOCK_BYTES: usize = 64;
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct GenerationRootKeyVersion(u32);
@@ -132,11 +130,8 @@ pub fn derive_generation_material(
     root: &GenerationRootKey,
     context: GenerationKeyDerivationContext<'_>,
 ) -> Result<DerivedGenerationMaterial, GenerationKeyDerivationError> {
-    let key_id = KeyId::parse(format!(
-        "{ROOT_KEY_ID_PREFIX}{}",
-        root.version().value()
-    ))
-    .map_err(|_| GenerationKeyDerivationError::InvalidKeyIdentity)?;
+    let key_id = KeyId::parse(format!("{ROOT_KEY_ID_PREFIX}{}", root.version().value()))
+        .map_err(|_| GenerationKeyDerivationError::InvalidKeyIdentity)?;
     let dek_bytes = derive_prf(root, DEK_DOMAIN, context)?;
     let nonce_bytes = derive_prf(root, NONCE_PREFIX_DOMAIN, context)?;
     let mut nonce_prefix = [0_u8; 16];
@@ -152,36 +147,46 @@ fn derive_prf(
     purpose: &[u8],
     context: GenerationKeyDerivationContext<'_>,
 ) -> Result<[u8; 32], GenerationKeyDerivationError> {
-    let mut mac = <HmacSha256 as HmacKeyInit>::new_from_slice(&root.bytes)
-        .map_err(|_| GenerationKeyDerivationError::InvalidContext)?;
-    update_frame(&mut mac, KDF_CONTEXT_DOMAIN)?;
-    update_frame(&mut mac, purpose)?;
-    update_frame(&mut mac, &root.version().value().to_be_bytes())?;
-    update_frame(&mut mac, context.tenant_id.as_str().as_bytes())?;
-    update_frame(&mut mac, context.profile_id.as_str().as_bytes())?;
-    update_frame(&mut mac, context.generation_id.as_str().as_bytes())?;
-    update_frame(&mut mac, &context.plaintext_digest.bytes())?;
-    let output = mac.finalize().into_bytes();
-    let mut bytes = [0_u8; 32];
-    bytes.copy_from_slice(output.as_slice());
-    Ok(bytes)
+    let mut inner_pad = Zeroizing::new([0x36_u8; HMAC_SHA256_BLOCK_BYTES]);
+    let mut outer_pad = Zeroizing::new([0x5c_u8; HMAC_SHA256_BLOCK_BYTES]);
+    for (index, key_byte) in root.bytes.iter().copied().enumerate() {
+        inner_pad[index] ^= key_byte;
+        outer_pad[index] ^= key_byte;
+    }
+
+    let mut inner = Sha256::new();
+    inner.update(&inner_pad[..]);
+    update_frame(&mut inner, KDF_CONTEXT_DOMAIN)?;
+    update_frame(&mut inner, purpose)?;
+    update_frame(&mut inner, &root.version().value().to_be_bytes())?;
+    update_frame(&mut inner, context.tenant_id.as_str().as_bytes())?;
+    update_frame(&mut inner, context.profile_id.as_str().as_bytes())?;
+    update_frame(&mut inner, context.generation_id.as_str().as_bytes())?;
+    update_frame(&mut inner, &context.plaintext_digest.bytes())?;
+    let inner_digest = Zeroizing::new(<[u8; 32]>::from(inner.finalize()));
+
+    let mut outer = Sha256::new();
+    outer.update(&outer_pad[..]);
+    outer.update(&inner_digest[..]);
+    Ok(outer.finalize().into())
 }
 
 fn update_frame(
-    mac: &mut HmacSha256,
+    digest: &mut Sha256,
     value: &[u8],
 ) -> Result<(), GenerationKeyDerivationError> {
-    let length = u64::try_from(value.len()).map_err(|_| GenerationKeyDerivationError::InvalidContext)?;
-    mac.update(&length.to_be_bytes());
-    mac.update(value);
+    let length =
+        u64::try_from(value.len()).map_err(|_| GenerationKeyDerivationError::InvalidContext)?;
+    digest.update(length.to_be_bytes());
+    digest.update(value);
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
-        DEK_DOMAIN, NONCE_PREFIX_DOMAIN, GenerationKeyDerivationContext, GenerationRootKey,
-        GenerationRootKeyVersion, derive_generation_material, derive_prf,
+        DEK_DOMAIN, GenerationKeyDerivationContext, GenerationRootKey, GenerationRootKeyVersion,
+        NONCE_PREFIX_DOMAIN, derive_generation_material, derive_prf,
     };
     use crate::PlaintextDigest;
     use profile_platform_primitives::{GenerationId, ProfileId, TenantId};
@@ -230,7 +235,10 @@ mod tests {
             PlaintextDigest::calculate(b"snapshot-v2"),
         );
 
-        assert_ne!(derive_prf(&root, DEK_DOMAIN, first)?, derive_prf(&root, DEK_DOMAIN, second)?);
+        assert_ne!(
+            derive_prf(&root, DEK_DOMAIN, first)?,
+            derive_prf(&root, DEK_DOMAIN, second)?
+        );
         assert_ne!(
             derive_prf(&root, NONCE_PREFIX_DOMAIN, first)?,
             derive_prf(&root, NONCE_PREFIX_DOMAIN, second)?
@@ -252,18 +260,10 @@ mod tests {
         let digest = PlaintextDigest::calculate(b"snapshot");
         let root_v1 = GenerationRootKey::new(GenerationRootKeyVersion::new(1)?, [0x55; 32]);
         let root_v2 = GenerationRootKey::new(GenerationRootKeyVersion::new(2)?, [0x55; 32]);
-        let context_a = GenerationKeyDerivationContext::new(
-            &tenant_a,
-            &profile,
-            &generation,
-            digest,
-        );
-        let context_b = GenerationKeyDerivationContext::new(
-            &tenant_b,
-            &profile,
-            &generation,
-            digest,
-        );
+        let context_a =
+            GenerationKeyDerivationContext::new(&tenant_a, &profile, &generation, digest);
+        let context_b =
+            GenerationKeyDerivationContext::new(&tenant_b, &profile, &generation, digest);
 
         assert_ne!(
             derive_prf(&root_v1, DEK_DOMAIN, context_a)?,
@@ -281,14 +281,13 @@ mod tests {
     }
 
     #[test]
-    fn zero_root_version_is_rejected_and_debug_redacts_secret() {
+    fn zero_root_version_is_rejected_and_debug_redacts_secret()
+    -> Result<(), Box<dyn std::error::Error>> {
         assert!(GenerationRootKeyVersion::new(0).is_err());
-        let root = GenerationRootKey::new(
-            GenerationRootKeyVersion::new(1).expect("positive version"),
-            [0xab; 32],
-        );
+        let root = GenerationRootKey::new(GenerationRootKeyVersion::new(1)?, [0xab; 32]);
         let debug = format!("{root:?}");
         assert!(debug.contains("[REDACTED]"));
         assert!(!debug.contains("abababab"));
+        Ok(())
     }
 }
