@@ -11,6 +11,8 @@ UNIT_TEST = Path("apps/profile-bridge/src/operator_flow.rs")
 ACCEPTANCE_TEST = Path("apps/profile-bridge/tests/operator_flow_acceptance.rs")
 SYNTHETIC = Path("apps/profile-bridge/src/bin/profile-bridge-synthetic.rs")
 
+AUTHORITATIVE_OPEN = "pub fn open_authoritative"
+SINGLE_OPEN_BODY = "fn open_with_materialization"
 OPEN_PENDING_GUARD = "self.active.is_some() || self.retained_dirty.is_some()"
 RETAINED_FIELD = "retained_dirty: Option<RetainedDirtyClose>"
 RETAINED_HANDOFF = "RetainedDirtyClose::begin_after_browser_close("
@@ -71,11 +73,17 @@ def failures_for_sources(
     failures: list[str] = []
     production = operator.split("#[cfg(test)]", 1)[0]
 
-    for fragment in (RETAINED_FIELD, OPEN_PENDING_GUARD, FINALIZE_METHOD):
+    for fragment in (
+        RETAINED_FIELD,
+        AUTHORITATIVE_OPEN,
+        SINGLE_OPEN_BODY,
+        OPEN_PENDING_GUARD,
+        FINALIZE_METHOD,
+    ):
         if fragment not in production:
             failures.append(f"missing retained operator invariant: {fragment}")
 
-    open_flow = function_body(production, "pub fn open(")
+    open_flow = function_body(production, SINGLE_OPEN_BODY)
     pending_guard = open_flow.find(OPEN_PENDING_GUARD)
     device_identity = open_flow.find(".device_identity")
     enrollment = open_flow.find(".redeem_claim(")
@@ -83,7 +91,15 @@ def failures_for_sources(
         pending_guard < device_identity < enrollment
     ):
         failures.append(
-            "pending dirty ownership must block before device/enrollment claim processing"
+            "pending dirty ownership must block in the single launch body before device/enrollment claim processing"
+        )
+
+    authoritative_flow = function_body(production, AUTHORITATIVE_OPEN)
+    delegate = authoritative_flow.find("self.open_with_materialization(")
+    rematerialize = authoritative_flow.find("ensure_authoritative_generation(")
+    if min(delegate, rematerialize) < 0 or delegate >= rematerialize:
+        failures.append(
+            "production launch must delegate to the single launch body with authoritative generation rematerialization"
         )
 
     close_flow = function_body(production, "pub fn close(")
@@ -154,6 +170,11 @@ def self_test(root: Path) -> list[str]:
     rejected = failures_for_sources(fixture, unit_test, acceptance_test, synthetic)
     if not any("pending dirty ownership" in failure or OPEN_PENDING_GUARD in failure for failure in rejected):
         return ["retained-operator premature second-ownership fixture unexpectedly passed"]
+
+    fixture = operator.replace("ensure_authoritative_generation(", "removed_rematerialization(", 1)
+    rejected = failures_for_sources(fixture, unit_test, acceptance_test, synthetic)
+    if not any("authoritative generation rematerialization" in failure for failure in rejected):
+        return ["retained-operator missing authoritative rematerialization fixture unexpectedly passed"]
 
     fixture = operator.replace(RETAINED_HANDOFF, "RetainedDirtyClose::removed_handoff(", 1)
     rejected = failures_for_sources(fixture, unit_test, acceptance_test, synthetic)
