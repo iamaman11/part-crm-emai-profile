@@ -42,7 +42,7 @@ pub enum GenerationStatusDto {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ProfileProjectionDto {
     pub profile_id: String,
     pub status: ProfileStatusDto,
@@ -121,6 +121,32 @@ pub struct BridgeProfileGenerationSuccessorRequest {
 }
 
 impl BridgeProfileGenerationSuccessorRequest {
+    #[allow(clippy::too_many_arguments)]
+    #[must_use]
+    pub fn new(
+        base_generation_id: &str,
+        generation_id: &str,
+        object_key: &str,
+        metadata_digest: &str,
+        container_digest: &str,
+        container_bytes: u64,
+        coordinator_session_id: &str,
+        coordinator_fencing_token: &str,
+        coordinator_epoch: u64,
+    ) -> Self {
+        Self {
+            base_generation_id: base_generation_id.to_owned(),
+            generation_id: generation_id.to_owned(),
+            object_key: object_key.to_owned(),
+            metadata_digest: metadata_digest.to_owned(),
+            container_digest: container_digest.to_owned(),
+            container_bytes,
+            coordinator_session_id: coordinator_session_id.to_owned(),
+            coordinator_fencing_token: coordinator_fencing_token.to_owned(),
+            coordinator_epoch,
+        }
+    }
+
     #[must_use]
     pub fn base_generation_id(&self) -> &str {
         &self.base_generation_id
@@ -418,6 +444,30 @@ mod tests {
                 "forbidden Bridge successor field unexpectedly accepted: {forbidden}"
             );
         }
+    }
+
+    #[test]
+    fn bridge_successor_request_constructor_serializes_the_canonical_wire_shape()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let request = BridgeProfileGenerationSuccessorRequest::new(
+            "generation_bridge_base_01",
+            "generation_bridge_next_01",
+            "tenants/tenant_bridge_01/profiles/profile_bridge_01/generations/generation_bridge_next_01.bpgc",
+            &"a".repeat(64),
+            &"b".repeat(64),
+            4096,
+            "session_bridge_01",
+            "fence_bridge_01",
+            3,
+        );
+        let value = serde_json::to_value(request)?;
+        assert_eq!(value["baseGenerationId"], "generation_bridge_base_01");
+        assert_eq!(value["generationId"], "generation_bridge_next_01");
+        assert_eq!(value["containerBytes"], 4096);
+        assert_eq!(value["coordinatorSessionId"], "session_bridge_01");
+        assert_eq!(value["coordinatorFencingToken"], "fence_bridge_01");
+        assert_eq!(value["coordinatorEpoch"], 3);
+        Ok(())
     }
 
     #[test]
