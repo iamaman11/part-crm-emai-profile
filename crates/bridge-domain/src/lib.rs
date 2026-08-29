@@ -360,9 +360,7 @@ pub enum ProcessCloseOutcome {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum SupervisedProcessState {
-    Idle {
-        session_id: SessionId,
-    },
+    Idle,
     Starting {
         session_id: SessionId,
         start_deadline: UnixMillis,
@@ -389,9 +387,7 @@ impl ProcessSupervisor {
     #[must_use]
     pub const fn new() -> Self {
         Self {
-            state: SupervisedProcessState::Idle {
-                session_id: SessionId::const_new("session_unset"),
-            },
+            state: SupervisedProcessState::Idle,
         }
     }
 
@@ -401,7 +397,7 @@ impl ProcessSupervisor {
         now: UnixMillis,
         start_timeout_ms: u64,
     ) -> Result<(), ProcessSupervisorError> {
-        if !matches!(self.state, SupervisedProcessState::Idle { .. }) || start_timeout_ms == 0 {
+        if !matches!(self.state, SupervisedProcessState::Idle) || start_timeout_ms == 0 {
             return Err(ProcessSupervisorError::InvalidTransition);
         }
         let start_deadline = add_millis(now, start_timeout_ms)?;
@@ -489,7 +485,7 @@ impl ProcessSupervisor {
                 }
                 ProcessCloseOutcome::Crash
             }
-            SupervisedProcessState::Idle { .. } | SupervisedProcessState::Closed { .. } => {
+            SupervisedProcessState::Idle | SupervisedProcessState::Closed { .. } => {
                 return Err(ProcessSupervisorError::InvalidTransition);
             }
         };
