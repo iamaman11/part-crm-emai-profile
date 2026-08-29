@@ -16,10 +16,21 @@ pub enum GenerationSuccessorCommitOutcome {
     AlreadyActive,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct InvalidSignedGenerationUploadCapability;
+
+impl fmt::Display for InvalidSignedGenerationUploadCapability {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("signed generation upload capability is not canonical UTF-8")
+    }
+}
+
+impl std::error::Error for InvalidSignedGenerationUploadCapability {}
+
 #[derive(Eq, PartialEq)]
 pub struct SignedGenerationUploadCapability {
-    url: String,
-    headers: Vec<(String, String)>,
+    url: Vec<u8>,
+    headers: Vec<(Vec<u8>, Vec<u8>)>,
     expires_seconds: u32,
 }
 
@@ -27,20 +38,33 @@ impl SignedGenerationUploadCapability {
     #[must_use]
     pub fn new(url: String, headers: Vec<(String, String)>, expires_seconds: u32) -> Self {
         Self {
-            url,
-            headers,
+            url: url.into_bytes(),
+            headers: headers
+                .into_iter()
+                .map(|(name, value)| (name.into_bytes(), value.into_bytes()))
+                .collect(),
             expires_seconds,
         }
     }
 
-    #[must_use]
-    pub fn url(&self) -> &str {
-        &self.url
+    pub fn url(&self) -> Result<&str, InvalidSignedGenerationUploadCapability> {
+        std::str::from_utf8(&self.url).map_err(|_| InvalidSignedGenerationUploadCapability)
     }
 
-    #[must_use]
-    pub fn headers(&self) -> &[(String, String)] {
-        &self.headers
+    pub fn headers(
+        &self,
+    ) -> Result<Vec<(&str, &str)>, InvalidSignedGenerationUploadCapability> {
+        self.headers
+            .iter()
+            .map(|(name, value)| {
+                Ok((
+                    std::str::from_utf8(name)
+                        .map_err(|_| InvalidSignedGenerationUploadCapability)?,
+                    std::str::from_utf8(value)
+                        .map_err(|_| InvalidSignedGenerationUploadCapability)?,
+                ))
+            })
+            .collect()
     }
 
     #[must_use]
@@ -62,21 +86,12 @@ impl fmt::Debug for SignedGenerationUploadCapability {
 
 impl Drop for SignedGenerationUploadCapability {
     fn drop(&mut self) {
-        unsafe_zeroize_string(&mut self.url);
+        self.url.fill(0);
         for (name, value) in &mut self.headers {
-            unsafe_zeroize_string(name);
-            unsafe_zeroize_string(value);
+            name.fill(0);
+            value.fill(0);
         }
     }
-}
-
-fn unsafe_zeroize_string(value: &mut String) {
-    // `String::as_mut_vec` is unsafe and forbidden in this crate. Replacing with an equal-length
-    // zero-filled allocation prevents the secret from remaining reachable through this owner;
-    // allocator-level memory sanitization is provided by the process boundary, while no secret is
-    // ever exposed through Debug/Display. The function name intentionally documents the limitation.
-    let length = value.len();
-    *value = "\0".repeat(length);
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -193,6 +208,7 @@ impl<C: std::error::Error, U: std::error::Error> std::error::Error
 {
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn prepare_retained_generation_successor<C>(
     base_record: &LocalGenerationRecord,
     source_workspace: &GenerationWorkspace,
@@ -205,13 +221,14 @@ pub fn prepare_retained_generation_successor<C>(
 where
     C: GenerationSuccessorControlPort,
 {
-    if lease.tenant_id() != tenant_id
-        || lease.profile_id() != profile_id
-        || base_record.generation_id() == &successor_generation_id(lease)?
-    {
+    if lease.tenant_id() != tenant_id || lease.profile_id() != profile_id {
         return Err(ShippingGenerationSaveError::InvalidRetainedAuthority);
     }
-    let candidate_generation_id = successor_generation_id(lease)?;
+    let candidate_generation_id = successor_generation_id_for_lease(lease)
+        .map_err(|_| ShippingGenerationSaveError::CandidateIdentity)?;
+    if base_record.generation_id() == &candidate_generation_id {
+        return Err(ShippingGenerationSaveError::InvalidRetainedAuthority);
+    }
     prepare_dirty_generation_candidate(
         base_record,
         source_workspace,
@@ -224,6 +241,7 @@ where
     .map_err(ShippingGenerationSaveError::Prepare)
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn publish_verify_and_commit_successor<C, U>(
     tenant_id: &TenantId,
     profile_id: &ProfileId,
@@ -237,22 +255,10 @@ where
     C: GenerationSuccessorControlPort,
     U: SignedGenerationObjectPutPort,
 {
-    validate_prepared_descriptor(
-        tenant_id,
-        profile_id,
-        base_generation_id,
-        prepared,
-        lease,
-    )?;
+    validate_prepared_descriptor(tenant_id, profile_id, base_generation_id, prepared, lease)?;
 
     match control
-        .upload_authorization(
-            tenant_id,
-            profile_id,
-            base_generation_id,
-            prepared,
-            lease,
-        )
+        .upload_authorization(tenant_id, profile_id, base_generation_id, prepared, lease)
         .map_err(ShippingGenerationSaveError::Control)?
     {
         GenerationUploadAuthorization::Verified => {}
@@ -281,13 +287,7 @@ where
     }
 
     let outcome = control
-        .commit_successor(
-            tenant_id,
-            profile_id,
-            base_generation_id,
-            prepared,
-            lease,
-        )
+        .commit_successor(tenant_id, profile_id, base_generation_id, prepared, lease)
         .map_err(ShippingGenerationSaveError::Control)?;
     let container_bytes = u64::try_from(prepared.sealed().container().len())
         .map_err(|_| ShippingGenerationSaveError::DescriptorMismatch)?;
@@ -322,9 +322,12 @@ fn validate_prepared_descriptor<C, U>(
     Ok(())
 }
 
-fn successor_generation_id<C, U>(
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct CandidateGenerationIdError;
+
+fn successor_generation_id_for_lease(
     lease: &ProfileLease,
-) -> Result<GenerationId, ShippingGenerationSaveError<C, U>> {
+) -> Result<GenerationId, CandidateGenerationIdError> {
     let mut hasher = Sha256::new();
     append_len_prefixed(&mut hasher, SUCCESSOR_ID_DOMAIN);
     append_len_prefixed(&mut hasher, lease.tenant_id().as_str().as_bytes());
@@ -334,7 +337,7 @@ fn successor_generation_id<C, U>(
     append_len_prefixed(&mut hasher, lease.fencing_token().as_str().as_bytes());
     let digest: [u8; 32] = hasher.finalize().into();
     GenerationId::parse(format!("generation_{}", lower_hex(&digest)))
-        .map_err(|_| ShippingGenerationSaveError::CandidateIdentity)
+        .map_err(|_| CandidateGenerationIdError)
 }
 
 fn append_len_prefixed(hasher: &mut Sha256, value: &[u8]) {
@@ -360,7 +363,8 @@ mod tests {
         SignedGenerationUploadCapability, publish_verify_and_commit_successor,
     };
     use crate::dirty_generation::{
-        GenerationSealingMaterial, GenerationSealingMaterialPort, prepare_dirty_generation_candidate,
+        GenerationSealingMaterial, GenerationSealingMaterialPort,
+        prepare_dirty_generation_candidate,
     };
     use crate::local_profile::{LocalGenerationRecord, MaterializationRoot};
     use encrypted_generation_domain::{GenerationDek, KeyId, NoncePrefix};
@@ -369,7 +373,28 @@ mod tests {
     };
     use session_domain::ProfileLease;
     use std::cell::RefCell;
+    use std::fmt;
     use std::rc::Rc;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static TEMP_COUNTER: AtomicU64 = AtomicU64::new(1);
+
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    struct TestError;
+
+    impl fmt::Display for TestError {
+        fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+            formatter.write_str("test error")
+        }
+    }
+
+    impl std::error::Error for TestError {}
+
+    impl From<encrypted_generation_domain::KeyIdError> for TestError {
+        fn from(_: encrypted_generation_domain::KeyIdError) -> Self {
+            Self
+        }
+    }
 
     struct Control {
         events: Rc<RefCell<Vec<&'static str>>>,
@@ -445,80 +470,122 @@ mod tests {
             capability: &SignedGenerationUploadCapability,
             container: &[u8],
         ) -> Result<(), Self::Error> {
-            assert!(!capability.url().is_empty());
-            assert!(!capability.headers().is_empty());
+            assert!(!capability.url().map_err(|_| TestError)?.is_empty());
+            assert!(!capability.headers().map_err(|_| TestError)?.is_empty());
             assert!(!container.is_empty());
             self.events.borrow_mut().push("upload");
             Ok(())
         }
     }
 
-    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-    struct TestError;
+    struct Fixture {
+        root_path: std::path::PathBuf,
+        root: MaterializationRoot,
+        tenant: TenantId,
+        profile: ProfileId,
+        base: GenerationId,
+        candidate: GenerationId,
+        record: LocalGenerationRecord,
+        lease: ProfileLease,
+    }
 
-    impl fmt::Display for TestError {
-        fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-            formatter.write_str("test error")
+    impl Fixture {
+        fn new(label: &str) -> Result<Self, Box<dyn std::error::Error>> {
+            let counter = TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
+            let root_path = std::env::temp_dir().join(format!(
+                "profile-bridge-shipping-save-{label}-{}-{counter}",
+                std::process::id()
+            ));
+            let root = MaterializationRoot::open_or_create(root_path.clone())?;
+            let tenant = TenantId::parse(format!("tenant_shipping_save_{counter}"))?;
+            let profile = ProfileId::parse(format!("profile_shipping_save_{counter}"))?;
+            let base = GenerationId::parse(format!("generation_shipping_base_{counter}"))?;
+            let candidate = GenerationId::parse(format!("generation_shipping_next_{counter}"))?;
+            let workspace = root.create_generation(&tenant, &profile, &base)?;
+            std::fs::write(workspace.path().join("prefs.js"), b"save")?;
+            let mut record = LocalGenerationRecord::new(base.clone(), 4, UnixMillis::new(1));
+            record.set_locked(true)?;
+            record.begin_use(UnixMillis::new(2))?;
+            record.graceful_close(UnixMillis::new(3))?;
+            let lease = ProfileLease::issue(
+                tenant.clone(),
+                profile.clone(),
+                SessionId::parse(format!("session_shipping_save_{counter}"))?,
+                DeviceId::parse(format!("device_shipping_save_{counter}"))?,
+                3,
+                FencingToken::parse(format!("fence_shipping_save_{counter}"))?,
+            )?;
+            Ok(Self {
+                root_path,
+                root,
+                tenant,
+                profile,
+                base,
+                candidate,
+                record,
+                lease,
+            })
+        }
+
+        fn prepared(
+            &self,
+            control: &mut impl GenerationSealingMaterialPort<Error = TestError>,
+        ) -> Result<crate::dirty_generation::PreparedDirtyGeneration, Box<dyn std::error::Error>>
+        {
+            let workspace = self
+                .root
+                .open_generation(&self.tenant, &self.profile, &self.base)?;
+            Ok(prepare_dirty_generation_candidate(
+                &self.record,
+                &workspace,
+                &self.root,
+                &self.tenant,
+                &self.profile,
+                &self.candidate,
+                control,
+            )?)
         }
     }
 
-    impl std::error::Error for TestError {}
-
-    impl From<encrypted_generation_domain::KeyIdError> for TestError {
-        fn from(_: encrypted_generation_domain::KeyIdError) -> Self {
-            Self
+    impl Drop for Fixture {
+        fn drop(&mut self) {
+            let _ = crate::test_support::remove_test_root(&self.root_path);
         }
+    }
+
+    #[test]
+    fn signed_upload_capability_redacts_debug_and_preserves_canonical_utf8()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let capability = SignedGenerationUploadCapability::new(
+            "https://example.invalid/object?secret=1".to_owned(),
+            vec![("x-secret".to_owned(), "value".to_owned())],
+            300,
+        );
+        assert!(capability.url()?.contains("secret=1"));
+        assert_eq!(capability.headers()?, vec![("x-secret", "value")]);
+        let debug = format!("{capability:?}");
+        assert!(!debug.contains("secret=1"));
+        assert!(!debug.contains("value"));
+        Ok(())
     }
 
     #[test]
     fn upload_is_followed_by_server_exact_verify_before_commit()
     -> Result<(), Box<dyn std::error::Error>> {
-        let root_path = std::env::temp_dir().join(format!(
-            "profile-bridge-shipping-save-{}",
-            std::process::id()
-        ));
-        let _ = std::fs::remove_dir_all(&root_path);
-        let root = MaterializationRoot::open_or_create(root_path.clone())?;
-        let tenant = TenantId::parse("tenant_shipping_save_01")?;
-        let profile = ProfileId::parse("profile_shipping_save_01")?;
-        let base = GenerationId::parse("generation_shipping_base_01")?;
-        let candidate = GenerationId::parse("generation_shipping_next_01")?;
-        let device = DeviceId::parse("device_shipping_save_01")?;
-        let workspace = root.create_generation(&tenant, &profile, &base)?;
-        std::fs::write(workspace.path().join("prefs.js"), b"save")?;
-        let mut record = LocalGenerationRecord::new(base.clone(), 4, UnixMillis::new(1));
-        record.set_locked(true)?;
-        record.begin_use(UnixMillis::new(2))?;
-        record.graceful_close(UnixMillis::new(3))?;
-        let lease = ProfileLease::issue(
-            tenant.clone(),
-            profile.clone(),
-            SessionId::parse("session_shipping_save_01")?,
-            device,
-            3,
-            FencingToken::parse("fence_shipping_save_01")?,
-        )?;
+        let fixture = Fixture::new("positive")?;
         let events = Rc::new(RefCell::new(Vec::new()));
         let mut control = Control {
             events: Rc::clone(&events),
             verified: false,
             commit: GenerationSuccessorCommitOutcome::Activated,
         };
-        let prepared = prepare_dirty_generation_candidate(
-            &record,
-            &workspace,
-            &root,
-            &tenant,
-            &profile,
-            &candidate,
-            &mut control,
-        )?;
+        let prepared = fixture.prepared(&mut control)?;
         let result = publish_verify_and_commit_successor(
-            &tenant,
-            &profile,
-            &base,
+            &fixture.tenant,
+            &fixture.profile,
+            &fixture.base,
             &prepared,
-            &lease,
+            &fixture.lease,
             &mut control,
             &mut Put {
                 events: Rc::clone(&events),
@@ -528,16 +595,21 @@ mod tests {
             events.borrow().as_slice(),
             &["verify", "upload", "verify", "commit"]
         );
-        assert_eq!(result.outcome(), GenerationSuccessorCommitOutcome::Activated);
-        let _ = crate::test_support::remove_test_root(&root_path);
+        assert_eq!(
+            result.outcome(),
+            GenerationSuccessorCommitOutcome::Activated
+        );
         Ok(())
     }
 
     #[test]
-    fn commit_is_impossible_until_server_reports_exact_verified() -> Result<(), Box<dyn std::error::Error>> {
+    fn commit_is_impossible_until_server_reports_exact_verified()
+    -> Result<(), Box<dyn std::error::Error>> {
         struct NeverVerified(Control);
+
         impl GenerationSealingMaterialPort for NeverVerified {
             type Error = TestError;
+
             fn material_for(
                 &mut self,
                 tenant_id: &TenantId,
@@ -555,6 +627,7 @@ mod tests {
                 )
             }
         }
+
         impl GenerationSuccessorControlPort for NeverVerified {
             fn upload_authorization(
                 &mut self,
@@ -573,6 +646,7 @@ mod tests {
                     ),
                 ))
             }
+
             fn commit_successor(
                 &mut self,
                 _tenant_id: &TenantId,
@@ -586,51 +660,20 @@ mod tests {
             }
         }
 
-        let root_path = std::env::temp_dir().join(format!(
-            "profile-bridge-shipping-save-negative-{}",
-            std::process::id()
-        ));
-        let _ = std::fs::remove_dir_all(&root_path);
-        let root = MaterializationRoot::open_or_create(root_path.clone())?;
-        let tenant = TenantId::parse("tenant_shipping_save_02")?;
-        let profile = ProfileId::parse("profile_shipping_save_02")?;
-        let base = GenerationId::parse("generation_shipping_base_02")?;
-        let candidate = GenerationId::parse("generation_shipping_next_02")?;
-        let workspace = root.create_generation(&tenant, &profile, &base)?;
-        std::fs::write(workspace.path().join("prefs.js"), b"save")?;
-        let mut record = LocalGenerationRecord::new(base.clone(), 4, UnixMillis::new(1));
-        record.set_locked(true)?;
-        record.begin_use(UnixMillis::new(2))?;
-        record.graceful_close(UnixMillis::new(3))?;
-        let lease = ProfileLease::issue(
-            tenant.clone(),
-            profile.clone(),
-            SessionId::parse("session_shipping_save_02")?,
-            DeviceId::parse("device_shipping_save_02")?,
-            3,
-            FencingToken::parse("fence_shipping_save_02")?,
-        )?;
+        let fixture = Fixture::new("negative")?;
         let events = Rc::new(RefCell::new(Vec::new()));
         let mut control = NeverVerified(Control {
             events: Rc::clone(&events),
             verified: false,
             commit: GenerationSuccessorCommitOutcome::Activated,
         });
-        let prepared = prepare_dirty_generation_candidate(
-            &record,
-            &workspace,
-            &root,
-            &tenant,
-            &profile,
-            &candidate,
-            &mut control,
-        )?;
+        let prepared = fixture.prepared(&mut control)?;
         let result = publish_verify_and_commit_successor(
-            &tenant,
-            &profile,
-            &base,
+            &fixture.tenant,
+            &fixture.profile,
+            &fixture.base,
             &prepared,
-            &lease,
+            &fixture.lease,
             &mut control,
             &mut Put {
                 events: Rc::clone(&events),
@@ -641,7 +684,6 @@ mod tests {
             Err(ShippingGenerationSaveError::VerificationNotProven)
         ));
         assert_eq!(events.borrow().as_slice(), &["verify", "upload", "verify"]);
-        let _ = crate::test_support::remove_test_root(&root_path);
         Ok(())
     }
 }
