@@ -231,11 +231,15 @@ mod tests {
             serde_json::json!([])
         );
         assert!(operation.get("requestBody").is_none());
-        assert!(operation["parameters"].as_array().is_some_and(|parameters| {
-            parameters.iter().all(|parameter| {
-                parameter["$ref"] != "#/components/parameters/DevicePath"
-                    && parameter["$ref"] != "#/components/parameters/DeviceHeader"
-            })
-        }));
+        assert!(
+            operation["parameters"]
+                .as_array()
+                .is_some_and(|parameters| {
+                    parameters.iter().all(|parameter| {
+                        parameter["$ref"] != "#/components/parameters/DevicePath"
+                            && parameter["$ref"] != "#/components/parameters/DeviceHeader"
+                    })
+                })
+        );
     }
 }
