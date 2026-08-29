@@ -17,7 +17,8 @@ pub(super) fn classify(method: &str, path: &str) -> RouteClass {
     if method == "POST" && path == BRIDGE_PROFILE_LAUNCH_REDEMPTION_PATH {
         return RouteClass::ProfileLaunchApi;
     }
-    if bridge_profile_coordinator_route(method, path) || bridge_profile_successor_route(method, path)
+    if bridge_profile_coordinator_route(method, path)
+        || bridge_profile_successor_route(method, path)
     {
         return RouteClass::ProfileCoordinatorApi;
     }
