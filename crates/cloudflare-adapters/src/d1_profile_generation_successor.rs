@@ -154,8 +154,7 @@ impl D1ProfileGenerationSuccessorCommitJournal {
                     .load(actor.tenant_scope().tenant_id(), request)
                     .await?
                     .ok_or_else(integrity_failure)?;
-                if exact_row(&row, actor, request, &token_digest)
-                    && committed_state_is_exact(&row)
+                if exact_row(&row, actor, request, &token_digest) && committed_state_is_exact(&row)
                 {
                     Ok(ProfileGenerationSuccessorCommitOutcome::Activated)
                 } else {
