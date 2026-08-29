@@ -1,0 +1,50 @@
+name: P2 Control Plane Timing One Shot
+
+on:
+  push:
+    branches:
+      - cap-exec/p2-authorized-launch
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    env:
+      EXPECTED_PARENT_SHA: 7d7717c371bc481089606e738c09f4df1bb20725
+      TARGET_BRANCH: cap-exec/p2-authorized-launch
+    steps:
+      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        with:
+          fetch-depth: 2
+
+      - name: Verify exact source
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD^)" = "$EXPECTED_PARENT_SHA"
+          test "$GITHUB_REF_NAME" = "$TARGET_BRANCH"
+          test -f .github/scripts/p2_control_plane_timing_patch.py
+
+      - name: Apply and verify patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          python .github/scripts/p2_control_plane_timing_patch.py
+          cargo fmt --all
+          cargo fmt --all -- --check
+          cargo test --locked -p profile-bridge shipping_control_plane::tests
+          python -c "import subprocess; expected=['apps/profile-bridge/src/shipping_control_plane.rs']; actual=sorted(filter(None,subprocess.check_output(['git','diff','--name-only'],text=True).splitlines())); assert actual == expected, (actual, expected)"
+          git diff --check
+
+      - name: Commit product change and remove one-shot harness
+        shell: bash
+        run: |
+          set -euo pipefail
+          git rm .github/workflows/p2-control-plane-timing-patch.yml .github/scripts/p2_control_plane_timing_patch.py
+          git add apps/profile-bridge/src/shipping_control_plane.rs
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "feat(p2): follow server-owned coordinator lease timing"
+          git push origin "HEAD:$TARGET_BRANCH"
