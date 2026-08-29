@@ -1,9 +1,7 @@
 #![cfg(windows)]
 #![forbid(unsafe_code)]
 
-use crate::generation_reopen::{
-    SignedGenerationObjectGetPort, SignedGenerationObjectGetResponse,
-};
+use crate::generation_reopen::{SignedGenerationObjectGetPort, SignedGenerationObjectGetResponse};
 use crate::operator_flow::DeviceAuthenticationPort;
 use crate::shipping_control_plane::{MachineHttpMethod, MachineHttpPort, MachineHttpResponse};
 use bridge_domain::{BridgePortError, DeviceIdentityPort, DeviceKeyPort};
@@ -423,9 +421,13 @@ mod tests {
     fn signed_generation_get_accepts_only_direct_https_url_shape() {
         let good = "https://0123456789abcdef0123456789abcdef.r2.cloudflarestorage.com/bucket/object?X-Amz-Signature=abc";
         assert!(valid_direct_https_url(good));
-        assert!(!valid_direct_https_url(&good.replacen("https://", "http://", 1)));
+        assert!(!valid_direct_https_url(
+            &good.replacen("https://", "http://", 1)
+        ));
         assert!(!valid_direct_https_url(&format!("{good}#fragment")));
         assert!(!valid_direct_https_url("https://"));
-        assert!(!valid_direct_https_url("https://example.com/object\r\nheader:value"));
+        assert!(!valid_direct_https_url(
+            "https://example.com/object\r\nheader:value"
+        ));
     }
 }
