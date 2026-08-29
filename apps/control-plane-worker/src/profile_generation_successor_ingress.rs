@@ -1,12 +1,13 @@
 use crate::access_session::problem;
 use crate::composition::{
-    device_execution_preconditions, device_job_authorization, generation_object_verifier,
-    generation_root_keyring, generation_upload_capability_signer,
+    device_execution_preconditions, device_job_authorization, generation_download_capability_signer,
+    generation_object_verifier, generation_root_keyring, generation_upload_capability_signer,
     profile_generation_successor_commit,
 };
 use application_ports::device_jobs::{DeviceJobAuthorizationPort, DeviceJobCapability};
 use application_ports::generation_objects::{
-    GenerationObjectDescriptor, GenerationObjectDescriptorVerifyPort,
+    ActiveGenerationObjectReferencePort, GenerationObjectDescriptor,
+    GenerationObjectDescriptorReadPort, GenerationObjectDescriptorVerifyPort,
 };
 use application_ports::generations::GenerationPortErrorClass;
 use application_ports::profile_generation_successor::{
@@ -19,12 +20,18 @@ use application_ports::{
     DeviceExecutionBlocker, DeviceExecutionPreconditionPort, DeviceExecutionReadiness,
     DeviceJobPortErrorClass,
 };
+use cloudflare_adapters::r2_generation_download_capability::{
+    R2GenerationDownloadCapabilityError, R2GenerationDownloadSigningTime,
+};
 use cloudflare_adapters::r2_generation_upload_capability::{
     R2GenerationUploadCapabilityError, R2GenerationUploadSigningTime,
 };
 use control_plane_contract::generation_key_api::{
     BridgeGenerationSealingMaterialRequest, BridgeGenerationSealingMaterialResponse,
     GENERATION_SEALING_CHUNK_BYTES,
+};
+use control_plane_contract::generation_reopen_api::{
+    BridgeGenerationDownloadCapabilityRequest, BridgeGenerationDownloadCapabilityResponse,
 };
 use control_plane_contract::profile_generation_api::{
     BridgeGenerationSuccessorCommitOutcomeDto, BridgeGenerationSuccessorCommitResponse,
@@ -37,18 +44,21 @@ use profile_platform_primitives::{
 use worker::{Date, Env, Method, Request, Response, Result};
 
 const CAPABILITY_EXPIRES_SECONDS: u32 = 300;
-type SigningTimeResult =
+type UploadSigningTimeResult =
     core::result::Result<R2GenerationUploadSigningTime, R2GenerationUploadCapabilityError>;
+type DownloadSigningTimeResult =
+    core::result::Result<R2GenerationDownloadSigningTime, R2GenerationDownloadCapabilityError>;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum BridgeSuccessorOperation {
+pub(crate) enum BridgeGenerationMachineOperation {
     SealingMaterial,
     UploadCapability,
     Commit,
+    DownloadCapability,
 }
 
 #[must_use]
-pub(crate) fn operation(path: &str, method: Method) -> Option<BridgeSuccessorOperation> {
+pub(crate) fn operation(path: &str, method: Method) -> Option<BridgeGenerationMachineOperation> {
     if method != Method::Post {
         return None;
     }
@@ -67,7 +77,7 @@ pub(crate) fn operation(path: &str, method: Method) -> Option<BridgeSuccessorOpe
             _,
             "generation-successor",
             "sealing-material",
-        ] => Some(BridgeSuccessorOperation::SealingMaterial),
+        ] => Some(BridgeGenerationMachineOperation::SealingMaterial),
         [
             "bridge",
             "v1",
@@ -77,7 +87,7 @@ pub(crate) fn operation(path: &str, method: Method) -> Option<BridgeSuccessorOpe
             _,
             "generation-successor",
             "upload-capability",
-        ] => Some(BridgeSuccessorOperation::UploadCapability),
+        ] => Some(BridgeGenerationMachineOperation::UploadCapability),
         [
             "bridge",
             "v1",
@@ -87,7 +97,17 @@ pub(crate) fn operation(path: &str, method: Method) -> Option<BridgeSuccessorOpe
             _,
             "generation-successor",
             "commit",
-        ] => Some(BridgeSuccessorOperation::Commit),
+        ] => Some(BridgeGenerationMachineOperation::Commit),
+        [
+            "bridge",
+            "v1",
+            "tenants",
+            _,
+            "profiles",
+            _,
+            "generation-reopen",
+            "download-capability",
+        ] => Some(BridgeGenerationMachineOperation::DownloadCapability),
         _ => None,
     }
 }
@@ -98,10 +118,13 @@ pub(crate) async fn dispatch_authorized(
     profile_id: &ProfileId,
     actor: &ActorContext,
     device_id: &DeviceId,
-    operation: BridgeSuccessorOperation,
+    operation: BridgeGenerationMachineOperation,
 ) -> Result<Response> {
-    if operation == BridgeSuccessorOperation::SealingMaterial {
+    if operation == BridgeGenerationMachineOperation::SealingMaterial {
         return dispatch_sealing_material(request, env, profile_id, actor, device_id).await;
+    }
+    if operation == BridgeGenerationMachineOperation::DownloadCapability {
+        return dispatch_download_capability(request, env, profile_id, actor, device_id).await;
     }
 
     let body = match request
@@ -191,8 +214,11 @@ pub(crate) async fn dispatch_authorized(
 
     let verifier = generation_object_verifier(env)?;
     match operation {
-        BridgeSuccessorOperation::SealingMaterial => unreachable!("handled before successor DTO"),
-        BridgeSuccessorOperation::UploadCapability => {
+        BridgeGenerationMachineOperation::SealingMaterial
+        | BridgeGenerationMachineOperation::DownloadCapability => {
+            unreachable!("handled before successor DTO")
+        }
+        BridgeGenerationMachineOperation::UploadCapability => {
             let successor = profile_generation_successor_commit(env);
             if let Err(error) = successor
                 .prove_profile_generation_writer_authority(
@@ -227,7 +253,7 @@ pub(crate) async fn dispatch_authorized(
                 Ok(value) => value,
                 Err(_) => return integrity_failure(actor.correlation_id().as_str()),
             };
-            let signing_time = match server_signing_time() {
+            let signing_time = match server_upload_signing_time() {
                 Ok(value) => value,
                 Err(_) => return integrity_failure(actor.correlation_id().as_str()),
             };
@@ -246,7 +272,7 @@ pub(crate) async fn dispatch_authorized(
                 capability.expires_seconds(),
             ))
         }
-        BridgeSuccessorOperation::Commit => {
+        BridgeGenerationMachineOperation::Commit => {
             match verifier
                 .verify_generation_object_descriptor_exact(actor.tenant_scope(), &descriptor)
                 .await
@@ -328,6 +354,134 @@ pub(crate) async fn dispatch_authorized(
             })
         }
     }
+}
+
+async fn dispatch_download_capability(
+    request: &mut Request,
+    env: &Env,
+    profile_id: &ProfileId,
+    actor: &ActorContext,
+    device_id: &DeviceId,
+) -> Result<Response> {
+    let body = match request
+        .json::<BridgeGenerationDownloadCapabilityRequest>()
+        .await
+    {
+        Ok(value) => value,
+        Err(_) => return invalid_request(actor.correlation_id().as_str()),
+    };
+    if body.coordinator_epoch() == 0 {
+        return invalid_request(actor.correlation_id().as_str());
+    }
+    let session_id = match SessionId::parse(body.coordinator_session_id().to_owned()) {
+        Ok(value) => value,
+        Err(_) => return invalid_request(actor.correlation_id().as_str()),
+    };
+    let fencing_token = match FencingToken::parse(body.coordinator_fencing_token().to_owned()) {
+        Ok(value) => value,
+        Err(_) => return invalid_request(actor.correlation_id().as_str()),
+    };
+
+    let preconditions = device_execution_preconditions(env)?;
+    let reference = match preconditions
+        .load_active_verified_generation_object(actor.tenant_scope(), profile_id)
+        .await
+    {
+        Ok(Some(value)) => value,
+        Ok(None) => return verification_conflict(actor.correlation_id().as_str()),
+        Err(error) => {
+            return object_verify_failure(actor.correlation_id().as_str(), error.class());
+        }
+    };
+    let target = DeviceJobTarget::new(
+        actor.tenant_scope().tenant_id().clone(),
+        device_id.clone(),
+        profile_id.clone(),
+        reference.generation_id().clone(),
+    );
+    match preconditions
+        .evaluate_device_execution(actor, &target)
+        .await
+    {
+        Ok(DeviceExecutionReadiness::Ready) => {}
+        Ok(DeviceExecutionReadiness::Blocked(DeviceExecutionBlocker::DeviceUnauthorized)) => {
+            return forbidden(actor.correlation_id().as_str());
+        }
+        Ok(DeviceExecutionReadiness::Blocked(DeviceExecutionBlocker::GenerationInactive)) => {
+            return version_conflict(actor.correlation_id().as_str());
+        }
+        Ok(DeviceExecutionReadiness::Blocked(DeviceExecutionBlocker::CertificationIncomplete)) => {
+            return verification_conflict(actor.correlation_id().as_str());
+        }
+        Err(error) => match error.class() {
+            DeviceJobPortErrorClass::AuthenticationFailed => {
+                return forbidden(actor.correlation_id().as_str());
+            }
+            DeviceJobPortErrorClass::IntegrityFailure => {
+                return integrity_failure(actor.correlation_id().as_str());
+            }
+            DeviceJobPortErrorClass::DependencyUnavailable => {
+                return dependency(actor.correlation_id().as_str());
+            }
+        },
+    }
+
+    let successor = profile_generation_successor_commit(env);
+    if let Err(error) = successor
+        .prove_profile_generation_writer_authority(
+            actor,
+            &ProfileGenerationWriterAuthorityRequest::new(
+                device_id.clone(),
+                profile_id.clone(),
+                session_id,
+                fencing_token,
+                body.coordinator_epoch(),
+            ),
+        )
+        .await
+    {
+        return successor_failure(actor.correlation_id().as_str(), error.class());
+    }
+
+    let objects = generation_object_verifier(env)?;
+    let descriptor = match objects
+        .load_generation_object_descriptor_exact(actor.tenant_scope(), &reference)
+        .await
+    {
+        Ok(Some(value)) => value,
+        Ok(None) => return verification_conflict(actor.correlation_id().as_str()),
+        Err(error) => {
+            return object_verify_failure(actor.correlation_id().as_str(), error.class());
+        }
+    };
+    let signer = match generation_download_capability_signer(env) {
+        Ok(value) => value,
+        Err(_) => return integrity_failure(actor.correlation_id().as_str()),
+    };
+    let signing_time = match server_download_signing_time() {
+        Ok(value) => value,
+        Err(_) => return integrity_failure(actor.correlation_id().as_str()),
+    };
+    let capability = match signer.sign_get(
+        actor.tenant_scope(),
+        &descriptor,
+        &signing_time,
+        CAPABILITY_EXPIRES_SECONDS,
+    ) {
+        Ok(value) => value,
+        Err(error) => {
+            return download_signing_failure(actor.correlation_id().as_str(), error);
+        }
+    };
+    machine_json(&BridgeGenerationDownloadCapabilityResponse::new(
+        descriptor.generation_id().as_str(),
+        descriptor.object_key(),
+        descriptor.metadata_digest(),
+        descriptor.container_digest(),
+        descriptor.container_bytes(),
+        capability.url(),
+        capability.expires_seconds(),
+    ))
 }
 
 async fn dispatch_sealing_material(
@@ -517,9 +671,22 @@ fn server_now() -> UnixMillis {
     UnixMillis::new(Date::now().as_millis())
 }
 
-fn server_signing_time() -> SigningTimeResult {
+fn server_upload_signing_time() -> UploadSigningTimeResult {
     let now: worker::js_sys::Date = Date::now().into();
     R2GenerationUploadSigningTime::parse(format!(
+        "{:04}{:02}{:02}T{:02}{:02}{:02}Z",
+        now.get_utc_full_year(),
+        now.get_utc_month() + 1,
+        now.get_utc_date(),
+        now.get_utc_hours(),
+        now.get_utc_minutes(),
+        now.get_utc_seconds(),
+    ))
+}
+
+fn server_download_signing_time() -> DownloadSigningTimeResult {
+    let now: worker::js_sys::Date = Date::now().into();
+    R2GenerationDownloadSigningTime::parse(format!(
         "{:04}{:02}{:02}T{:02}{:02}{:02}Z",
         now.get_utc_full_year(),
         now.get_utc_month() + 1,
@@ -587,6 +754,22 @@ fn signing_failure(
     }
 }
 
+fn download_signing_failure(
+    correlation_id: &str,
+    error: R2GenerationDownloadCapabilityError,
+) -> Result<Response> {
+    match error {
+        R2GenerationDownloadCapabilityError::InvalidAccountId
+        | R2GenerationDownloadCapabilityError::InvalidBucketName
+        | R2GenerationDownloadCapabilityError::InvalidCredentials
+        | R2GenerationDownloadCapabilityError::InvalidSigningTime
+        | R2GenerationDownloadCapabilityError::InvalidExpiry
+        | R2GenerationDownloadCapabilityError::InvalidDescriptor => {
+            integrity_failure(correlation_id)
+        }
+    }
+}
+
 fn invalid_request(correlation_id: &str) -> Result<Response> {
     problem(correlation_id, 400, "invalid_request", "Invalid Request")
 }
@@ -633,7 +816,8 @@ fn dependency(correlation_id: &str) -> Result<Response> {
 #[cfg(test)]
 mod tests {
     use super::{
-        BridgeSuccessorOperation, decode_lower_sha256, descriptor_shape_is_canonical, operation,
+        BridgeGenerationMachineOperation, decode_lower_sha256, descriptor_shape_is_canonical,
+        operation,
     };
     use profile_platform_primitives::{
         ActorContext, ActorId, CorrelationId, GenerationId, ProfileId, TenantId, TenantScope,
@@ -641,32 +825,43 @@ mod tests {
     use worker::Method;
 
     #[test]
-    fn only_exact_successor_posts_are_recognized() {
+    fn only_exact_generation_machine_posts_are_recognized() {
         assert_eq!(
             operation(
                 "/bridge/v1/tenants/tenant_01/profiles/profile_01/generation-successor/sealing-material",
                 Method::Post,
             ),
-            Some(BridgeSuccessorOperation::SealingMaterial)
+            Some(BridgeGenerationMachineOperation::SealingMaterial)
         );
         assert_eq!(
             operation(
                 "/bridge/v1/tenants/tenant_01/profiles/profile_01/generation-successor/upload-capability",
                 Method::Post,
             ),
-            Some(BridgeSuccessorOperation::UploadCapability)
+            Some(BridgeGenerationMachineOperation::UploadCapability)
         );
         assert_eq!(
             operation(
                 "/bridge/v1/tenants/tenant_01/profiles/profile_01/generation-successor/commit",
                 Method::Post,
             ),
-            Some(BridgeSuccessorOperation::Commit)
+            Some(BridgeGenerationMachineOperation::Commit)
+        );
+        assert_eq!(
+            operation(
+                "/bridge/v1/tenants/tenant_01/profiles/profile_01/generation-reopen/download-capability",
+                Method::Post,
+            ),
+            Some(BridgeGenerationMachineOperation::DownloadCapability)
         );
         for (method, path) in [
             (
                 Method::Get,
                 "/bridge/v1/tenants/tenant_01/profiles/profile_01/generation-successor/commit",
+            ),
+            (
+                Method::Get,
+                "/bridge/v1/tenants/tenant_01/profiles/profile_01/generation-reopen/download-capability",
             ),
             (
                 Method::Post,
@@ -675,6 +870,10 @@ mod tests {
             (
                 Method::Post,
                 "/bridge/v2/tenants/tenant_01/profiles/profile_01/generation-successor/commit",
+            ),
+            (
+                Method::Post,
+                "/bridge/v2/tenants/tenant_01/profiles/profile_01/generation-reopen/download-capability",
             ),
         ] {
             assert_eq!(operation(path, method), None);
