@@ -34,7 +34,9 @@ impl fmt::Display for GenerationSnapshotError {
             Self::UnsafePath => "workspace snapshot contains an unsafe Windows path",
             Self::SourceChanged => "workspace changed while canonical snapshot was encoded",
             Self::TargetAlreadyExists => "authoritative generation already exists locally",
-            Self::Local(error) => return write!(formatter, "workspace snapshot local failure: {error}"),
+            Self::Local(error) => {
+                return write!(formatter, "workspace snapshot local failure: {error}");
+            }
         })
     }
 }
@@ -93,7 +95,11 @@ pub(crate) fn encode_workspace_snapshot(
             .map_err(LocalProfileError::from)?;
     }
 
-    if workspace.inventory().map_err(GenerationSnapshotError::Local)? != *expected_inventory {
+    if workspace
+        .inventory()
+        .map_err(GenerationSnapshotError::Local)?
+        != *expected_inventory
+    {
         return Err(GenerationSnapshotError::SourceChanged);
     }
     Ok(output)
@@ -182,12 +188,9 @@ fn create_staging_workspace(
 ) -> Result<GenerationWorkspace, GenerationSnapshotError> {
     for _ in 0..STAGING_ATTEMPTS {
         let sequence = STAGING_SEQUENCE.fetch_add(1, Ordering::Relaxed);
-        let staging_id = GenerationId::parse(format!(
-            "reopen_stage_{}_{}",
-            std::process::id(),
-            sequence
-        ))
-        .map_err(|_| GenerationSnapshotError::InvalidFormat)?;
+        let staging_id =
+            GenerationId::parse(format!("reopen_stage_{}_{}", std::process::id(), sequence))
+                .map_err(|_| GenerationSnapshotError::InvalidFormat)?;
         match root.create_generation(tenant_id, profile_id, &staging_id) {
             Ok(workspace) => return Ok(workspace),
             Err(LocalProfileError::TargetAlreadyExists) => continue,
@@ -492,9 +495,10 @@ mod tests {
         let fixture = Fixture::new()?;
         let source_id = GenerationId::parse("generation_snapshot_source")?;
         let target_id = GenerationId::parse("generation_snapshot_target")?;
-        let source = fixture
-            .root
-            .create_generation(&fixture.tenant_id, &fixture.profile_id, &source_id)?;
+        let source =
+            fixture
+                .root
+                .create_generation(&fixture.tenant_id, &fixture.profile_id, &source_id)?;
         fs::create_dir_all(source.path().join("storage/default"))?;
         fs::write(source.path().join("prefs.js"), b"prefs")?;
         fs::write(source.path().join("storage/default/state.bin"), b"state")?;
@@ -573,9 +577,10 @@ mod tests {
     -> Result<(), Box<dyn std::error::Error>> {
         let fixture = Fixture::new()?;
         let target_id = GenerationId::parse("generation_snapshot_existing")?;
-        let existing = fixture
-            .root
-            .create_generation(&fixture.tenant_id, &fixture.profile_id, &target_id)?;
+        let existing =
+            fixture
+                .root
+                .create_generation(&fixture.tenant_id, &fixture.profile_id, &target_id)?;
         fs::write(existing.path().join("prefs.js"), b"old")?;
         assert_eq!(
             materialize_workspace_snapshot(
