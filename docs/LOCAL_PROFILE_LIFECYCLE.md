@@ -1,86 +1,119 @@
 # Local Profile Lifecycle Boundary
 
-**Status:** Repository Step 8 implementation candidate  
-**Tracking issue:** #26  
-**Baseline:** `ef8777b69ff6c89c176b79b04adecce17bc6c68e`
+**Status:** current bounded local Profile Bridge lifecycle contract  
+**Production authorization:** not granted by this document
 
 ## 1. Scope
 
-This boundary governs repository-local materialization, inventory, writer locking,
-clone-only recovery, dirty-state preservation, forgotten-window decisions, quota
-planning and privacy-safe support metadata for Profile Bridge.
+This boundary governs local materialization, exact generation selection, writer locking, browser/runtime
+preflight, dirty-state preservation, clone-only recovery, quota planning and privacy-safe support metadata
+for Profile Bridge.
 
-It is intentionally provider-free and operates only on synthetic test
-generations created beneath an explicitly marked local root. It does not read,
-repair, migrate or execute the legacy profile corpus.
+It does not own Profile ACL, server device authorization, coordinator state, cloud generation commit or
+Release/Capability admission. Those concerns are composed through their natural owners.
 
-## 2. Safe Materialization Root
+## 2. Shipping Launch Ordering
 
-A local root must be absolute, must be a real directory rather than a symbolic
-link, and must contain the exact `.profile-platform-root` marker. A non-empty
-unmarked directory is rejected rather than adopted.
+The shipping Bridge reaches local mutation only after the remote launch authority has been redeemed and
+an exact coordinator lease has been claimed:
 
-Generation paths are composed only from opaque typed tenant, profile and
-generation IDs:
+```text
+profilebridge://claim/<opaque-code>
+-> strict URI parse
+-> native device identity/key handle
+-> machine-authenticated Control Plane redemption
+-> exact tenant/Profile/device/generation/launch-intent binding
+-> coordinator claim -> exact lease epoch/fence
+-> open exact materialized generation
+-> acquire local writer lock
+-> validate materialization + runtime + network preflight
+-> start managed Camouhost / real Camoufox
+```
+
+The claim URI is a bounded one-time handoff, not a local authorization source. Local code does not choose
+a different Profile, generation or trusted device after redemption.
+
+There is one shipping executable/composition path. Synthetic binaries/fakes may exist only behind an
+explicit test-only feature and must remain production-unreachable.
+
+## 3. Safe Materialization Root
+
+A local root must be absolute, must be a real directory rather than a symbolic link, and must contain the
+owned root marker. A non-empty unmarked directory is rejected rather than silently adopted.
+
+Generation paths are composed only from opaque typed tenant, Profile and generation IDs:
 
 ```text
 <marked-root>/<tenant-id>/<profile-id>/<generation-id>/
 ```
 
-Each generation contains an exact `.profile-generation` marker. Existing targets,
-symlinked path components, missing markers and marker mismatch fail closed.
-Email addresses and user-selected labels are never path segments.
+Each generation carries the expected owned marker. Existing unexpected targets, symlinked path
+components, missing markers and marker mismatch fail closed. Email addresses and user-selected labels
+are never path segments.
 
-## 3. Bridge Writer Lock
+## 4. Bridge Writer Lock
 
-Profile Bridge owns only `.profile-platform.lock`. Acquisition uses atomic
-create-new semantics and records the typed device ID plus monotonic local epoch.
-A second writer receives `LockBusy`.
+Profile Bridge owns only its application lock. Acquisition uses atomic create-new semantics and records
+the typed device ID plus lease epoch. A second writer receives `LockBusy`.
 
-Release is explicit and verifies exact ownership content before deleting the
-Bridge-owned lock. There is deliberately no automatic `Drop` cleanup: a crash
-leaves evidence instead of silently declaring the workspace clean.
+Release is explicit and verifies exact ownership before deleting the Bridge-owned lock. There is no
+automatic `Drop` cleanup that could silently declare a crashed writer clean.
 
-Browser-owned lock files such as `.parentlock`, `parent.lock` and `lock` are
-ordinary inventory entries. Application code does not delete them. A permanent
-negative policy fixture proves that browser-lock deletion is rejected.
+Browser-owned lock files such as `.parentlock`, `parent.lock` and `lock` are ordinary browser state and
+are never deleted merely to acquire ownership. Ambiguous writer state fails closed as busy/recovery.
 
-## 4. Deterministic Inventory
+The coordinator lease is acquired before the local writer lock; launch failure after either acquisition
+runs bounded cleanup in reverse ownership order. Unresolved cleanup blocks a later session rather than
+creating parallel ownership.
 
-Inventory recursively accepts regular files and directories only. It rejects
-symbolic links, non-UTF-8/unsafe relative paths, special files, excessive path
-length and excessive file count.
+## 5. Pinned Materialization And Runtime Preflight
 
-Entries are sorted by normalized `/` relative path and contain:
+A shipping launch does not approve arbitrary local runtime bytes merely because they can be hashed.
+The selected local runtime manifest/inventory must match the authoritative browser materialization
+identity for the exact redeemed generation before process start.
 
-- relative path;
-- byte length;
-- deterministic standard-library content digest.
+The accepted preflight binds at least:
 
-The aggregate inventory includes total bytes and a deterministic digest over the
-ordered entries. The accepted Step 8 digest is a repository-test identity aid,
-not a cryptographic authenticity claim. Encrypted cloud generations in Step 9
-must use reviewed cryptographic digests and AEAD.
+- exact tenant/Profile/generation workspace identity;
+- exact device and local writer epoch;
+- expected browser identity compatibility version;
+- expected runtime version and runtime inventory digest;
+- exact runtime entrypoint/runtime-lock bytes;
+- expected fingerprint configuration/probe identity;
+- current bounded network identity observation under the accepted network policy.
 
-Bridge control files are excluded from logical inventory. Browser-owned lock
-files remain included.
+Any missing, stale or mismatched binding fails before real browser launch. Runtime/process configuration
+is an outer adapter concern and may not weaken the materialization identity comparison.
 
-## 5. Clone-Only Recovery
+## 6. Runtime Supervision And Coordinator Heartbeat
 
-`RecoveryClone::create` records the source inventory, creates a new generation
-with a new generation ID, copies only accepted regular-file inventory entries,
-and compares clone inventory with the recorded source inventory.
+`ProfileBridgeOperator` is the local runtime orchestration owner. The shipping composition creates the
+concrete adapters and calls it; `main.rs` does not duplicate its lifecycle algorithm.
 
-The source is inventoried again after clone creation. Any source change fails the
-operation. Subsequent integrity verification is exposed only through
-`RecoveryClone::verify_clone_only`; mutation of the clone is detected while the
-source remains unchanged.
+While a browser is active:
 
-This step does not claim browser SQLite semantic repair. Real database integrity,
-recovery open and compatibility checks remain future work and must still execute
-on a clone.
+1. the supervised process must still belong to the exact active session;
+2. the Bridge heartbeats the exact coordinator lease/session/epoch/fence;
+3. heartbeat success preserves ownership;
+4. process loss or heartbeat/fence loss force-terminates the runtime and enters recovery/terminal cleanup;
+5. the browser never continues running after distributed ownership is lost.
 
-## 6. Local Generation State Machine
+A failed force termination, local-lock release or coordinator release is retained as explicit cleanup
+failure and blocks new ownership until recovered.
+
+## 7. Deterministic Inventory
+
+Inventory recursively accepts regular files and directories only. It rejects symbolic links,
+non-UTF-8/unsafe relative paths, special files, excessive path length and excessive file count.
+
+Entries are deterministic and contain relative path, byte length and content digest. Security-critical
+runtime/generation identities use their accepted cryptographic/versioned contracts; older local
+repository-test identities are not promoted into cryptographic authority merely by reuse.
+
+Bridge control files are excluded from logical browser inventory. Browser-owned lock files remain part
+of browser state.
+
+## 8. Local Generation State Machine
 
 The local record uses explicit states:
 
@@ -96,82 +129,59 @@ IN_USE
   -> MATERIALIZED_CLEAN | QUARANTINED
 ```
 
-Opening requires a held local lock. Graceful close produces `DIRTY_LOCAL`, not a
-clean or evictable state. Crash produces `RECOVERY_REQUIRED`. Recovery completion
-requires an explicit clone-integrity result. Eviction is accepted only from
-`SYNCED_EVICTABLE` while unlocked.
+Opening requires exact distributed/local ownership and a successful preflight. Graceful browser close
+produces `DIRTY_LOCAL`, not a clean or evictable state. Crash, process loss or coordinator ownership loss
+produces `RECOVERY_REQUIRED`.
 
-## 7. Forgotten-Window Policy
+A controlled dirty close retains the local writer lock and coordinator ownership until the immutable
+successor is uploaded, exactly verified and authoritatively committed, or until an explicit recovery
+outcome is recorded. The confirmed-save/reopen semantics are owned by the subsequent save/reopen
+application transaction, not by launch admission itself.
 
-A valid policy requires strictly increasing non-zero thresholds:
+## 9. Clone-Only Recovery
 
-```text
-warn-after < drain-after < hard-ttl
-```
+Recovery never mutates the source generation in place merely to obtain a launchable workspace. A fresh
+recovery clone records the source inventory, copies only accepted entries and proves source/clone
+integrity under the owned recovery contract.
 
-For an active generation, the decision is monotonic:
+Browser database semantic repair, when required, executes only on an isolated recovery candidate and
+must not silently rewrite the last confirmed generation.
 
-- no action before the warning threshold;
-- warn after idle warning threshold;
-- typed drain after idle drain threshold;
-- force-close decision at hard session TTL.
+## 10. Forgotten-Window And Quota Policy
 
-A clock regression fails closed.
+Forgotten-window thresholds are strictly ordered and bounded. Clock regression fails closed. An active
+session progresses from no action to warning, drain and hard-stop decisions without inventing a second
+ownership authority.
 
-## 8. Quota Policy
+Quota planning selects only unlocked `SYNCED_EVICTABLE` generations. `IN_USE`, `DIRTY_LOCAL`,
+`RECOVERY_REQUIRED`, `QUARANTINED` and locked generations are never broadened into eviction candidates
+when space is insufficient.
 
-Quota planning calculates total local bytes and selects only unlocked
-`SYNCED_EVICTABLE` generations. Candidates are deterministic: oldest activity
-first, then generation ID.
+## 11. Privacy And Secret Boundary
 
-The following are never quota candidates:
+Support summaries contain aggregate local state/failure metadata only. They do not emit Profile contents,
+paths, credentials, proxy secrets, device private keys or launch claim material.
 
-- `IN_USE`;
-- `DIRTY_LOCAL`;
-- `RECOVERY_REQUIRED`;
-- `QUARANTINED`;
-- any locked generation.
+The one-time claim remains redacted in domain/debug formatting and is exposed only through the narrowly
+named transport serializer. Native machine transport sends the redemption JSON body through stdin to the
+owned HTTPS client process rather than placing raw claim material in process arguments. Application
+errors remain generic and must not echo the claim.
 
-A quota plan reports whether enough safe bytes are reclaimable; it does not
-silently broaden eligibility when the quota cannot be satisfied.
+## 12. Permanent Evidence
 
-## 9. Privacy-Safe Support Summary
+Repository and protected CI prove the boundary at multiple tiers:
 
-The support summary accepts local state records and failure counts only. Its
-stable text output contains aggregate generation counts, aggregate bytes, state
-counts and inventory-failure count.
+- local lifecycle and writer-lock positive/negative tests on Linux/Windows;
+- runtime/materialization mismatch tests;
+- operator tests for exact launch intent, lease binding, heartbeat loss, crash cleanup and unresolved
+  cleanup blocking;
+- shipping machine-client tests for redemption -> coordinator claim -> heartbeat -> release and stale
+  fence rejection;
+- production-boundary checks rejecting claim-only success, direct duplicate process execution, extra
+  shipping binaries and production-reachable synthetic runtime;
+- real Camoufox cold-launch/managed IPC proof on exact source;
+- Windows release Bridge build/regression proof.
 
-It does not accept or emit generation IDs, paths, filenames, email addresses,
-profile contents, proxy values, tokens or secret handles.
-
-## 10. Permanent Evidence
-
-`.github/workflows/local-profile-gate.yml` runs on pull requests and `main`:
-
-- Step 8 policy compilation and positive enforcement;
-- deliberate browser-lock deletion negative fixture;
-- rustfmt and Clippy with warnings denied;
-- local lifecycle tests on Linux and Windows;
-- Windows release Profile Bridge build and non-empty executable check.
-
-The existing repository Quality Gate continues to run the complete workspace,
-D1, Worker, Windows and prior-step regression suite.
-
-## 11. Explicit Limitations
-
-This boundary does not prove:
-
-- real Camoufox execution or compatibility;
-- mutation, repair or migration of any legacy profile;
-- production filesystem snapshot semantics;
-- browser SQLite/IndexedDB semantic recovery;
-- cryptographic inventory authenticity;
-- production device-key protection;
-- trusted Windows signing or installer behavior;
-- encrypted R2 generations, restore or rollback;
-- physical multi-device behavior;
-- production readiness.
-
-`docs/status.json` remains unchanged until the implementation PR has exact-head
-green permanent workflows, review is complete and a separate evidence-sync PR is
-accepted.
+These are repository/candidate proofs. Trusted installer/signing/distribution/updater/rollback and exact
+environment authorization remain separately owned later release stages; their absence may not be hidden
+by claiming repository tests are Production evidence.

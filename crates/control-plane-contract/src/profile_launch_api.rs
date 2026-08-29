@@ -1,0 +1,245 @@
+use serde::de::Error as _;
+use serde::{Deserialize, Deserializer, Serialize};
+use serde_json::{Value, json};
+
+const CLAIM_URI_PREFIX: &str = "profilebridge://claim/";
+const CLAIM_CODE_MIN_LENGTH: usize = 24;
+const CLAIM_CODE_MAX_LENGTH: usize = 96;
+const CLAIM_URI_PATTERN: &str = "^profilebridge://claim/[A-Za-z0-9_-]{24,96}$";
+
+pub const BRIDGE_PROFILE_LAUNCH_REDEMPTION_PATH: &str = "/bridge/v1/profile-launch/redemptions";
+pub const BRIDGE_PROFILE_COORDINATOR_PATH_TEMPLATE: &str =
+    "/bridge/v1/tenants/{tenantId}/profiles/{profileId}/coordinator";
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProfileLaunchProjection {
+    pub launch_uri: String,
+    pub expires_at_ms: u64,
+}
+
+impl<'de> Deserialize<'de> for ProfileLaunchProjection {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase", deny_unknown_fields)]
+        struct WireProjection {
+            launch_uri: String,
+            expires_at_ms: u64,
+        }
+
+        let wire = WireProjection::deserialize(deserializer)?;
+        if !valid_launch_uri(&wire.launch_uri) {
+            return Err(D::Error::custom("invalid Profile Bridge launch URI"));
+        }
+        if wire.expires_at_ms == 0 {
+            return Err(D::Error::custom("launch authority expiry must be positive"));
+        }
+        Ok(Self {
+            launch_uri: wire.launch_uri,
+            expires_at_ms: wire.expires_at_ms,
+        })
+    }
+}
+
+#[derive(Clone, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct BridgeProfileLaunchRedemptionRequest {
+    claim_code: String,
+}
+
+impl BridgeProfileLaunchRedemptionRequest {
+    #[must_use]
+    pub fn new(claim_code: String) -> Self {
+        Self { claim_code }
+    }
+
+    #[must_use]
+    pub fn claim_code(&self) -> &str {
+        &self.claim_code
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct BridgeProfileLaunchRedemptionProjection {
+    pub tenant_id: String,
+    pub actor_id: String,
+    pub profile_id: String,
+    pub generation_id: String,
+    pub device_id: String,
+    pub launch_intent_id: String,
+}
+
+fn valid_launch_uri(value: &str) -> bool {
+    let Some(code) = value.strip_prefix(CLAIM_URI_PREFIX) else {
+        return false;
+    };
+    (CLAIM_CODE_MIN_LENGTH..=CLAIM_CODE_MAX_LENGTH).contains(&code.len())
+        && code
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'-')
+}
+
+#[must_use]
+pub fn openapi_fragment() -> Value {
+    json!({
+        "paths": {
+            "/api/v1/tenants/{tenantId}/profiles/{profileId}/launch": {
+                "post": {
+                    "operationId": "launchProfile",
+                    "security": [{"cloudflareAccessJwt": []}],
+                    "parameters": [
+                        {"$ref": "#/components/parameters/TenantPath"},
+                        {"$ref": "#/components/parameters/ProfilePath"},
+                        {"$ref": "#/components/parameters/CorrelationHeader"},
+                        {"$ref": "#/components/parameters/IdempotencyHeader"}
+                    ],
+                    "responses": {
+                        "200": {
+                            "description": "Bounded single-use Profile Bridge launch authority",
+                            "content": {
+                                "application/json": {
+                                    "schema": {"$ref": "#/components/schemas/ProfileLaunchProjection"}
+                                }
+                            }
+                        },
+                        "400": {"$ref": "#/components/responses/InvalidRequest"},
+                        "404": {"$ref": "#/components/responses/NeutralNotFound"},
+                        "409": {"$ref": "#/components/responses/Conflict"},
+                        "500": {"$ref": "#/components/responses/InternalFailure"},
+                        "503": {"$ref": "#/components/responses/DependencyUnavailable"}
+                    }
+                }
+            }
+        },
+        "components": {
+            "schemas": {
+                "ProfileLaunchProjection": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["launchUri", "expiresAtMs"],
+                    "properties": {
+                        "launchUri": {
+                            "type": "string",
+                            "minLength": CLAIM_URI_PREFIX.len() + CLAIM_CODE_MIN_LENGTH,
+                            "maxLength": CLAIM_URI_PREFIX.len() + CLAIM_CODE_MAX_LENGTH,
+                            "pattern": CLAIM_URI_PATTERN
+                        },
+                        "expiresAtMs": {
+                            "type": "integer",
+                            "minimum": 1
+                        }
+                    }
+                }
+            }
+        }
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        BRIDGE_PROFILE_COORDINATOR_PATH_TEMPLATE, BRIDGE_PROFILE_LAUNCH_REDEMPTION_PATH,
+        BridgeProfileLaunchRedemptionProjection, BridgeProfileLaunchRedemptionRequest,
+        ProfileLaunchProjection, openapi_fragment,
+    };
+    use crate::{RouteClass, classify_route};
+
+    #[test]
+    fn canonical_machine_routes_resolve_to_existing_ingress() {
+        assert_eq!(
+            classify_route("POST", BRIDGE_PROFILE_LAUNCH_REDEMPTION_PATH),
+            RouteClass::ProfileLaunchApi
+        );
+
+        let coordinator = BRIDGE_PROFILE_COORDINATOR_PATH_TEMPLATE
+            .replace("{tenantId}", "tenant_01JBRIDGE")
+            .replace("{profileId}", "profile_01JBRIDGE");
+        assert_eq!(
+            classify_route("POST", &coordinator),
+            RouteClass::ProfileCoordinatorApi
+        );
+        assert_eq!(
+            classify_route("GET", &coordinator),
+            RouteClass::ProfileCoordinatorApi
+        );
+    }
+
+    #[test]
+    fn launch_projection_is_strict_and_contains_no_caller_selected_device() {
+        let valid = r#"{"launchUri":"profilebridge://claim/claim_01JBRIDGE_FEASIBILITY","expiresAtMs":1000}"#;
+        assert!(serde_json::from_str::<ProfileLaunchProjection>(valid).is_ok());
+        for invalid in [
+            r#"{"launchUri":"profilebridge://claim/claim_01JBRIDGE_FEASIBILITY","expiresAtMs":1000,"deviceId":"device_01JTEST"}"#,
+            r#"{"launchUri":"profilebridge://claim/short","expiresAtMs":1000}"#,
+            r#"{"launchUri":"profilebridge://claim/claim_01JBRIDGE_FEASIBILITY?copy=true","expiresAtMs":1000}"#,
+            r#"{"launchUri":"profilebridge://claim/claim_01JBRIDGE_FEASIBILITY","expiresAtMs":0}"#,
+        ] {
+            assert!(serde_json::from_str::<ProfileLaunchProjection>(invalid).is_err());
+        }
+    }
+
+    #[test]
+    fn bridge_redemption_request_has_one_strict_secret_field()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let request =
+            BridgeProfileLaunchRedemptionRequest::new("claim_01JBRIDGE_FEASIBILITY".to_owned());
+        let value = serde_json::to_value(&request)?;
+        assert_eq!(value["claimCode"], "claim_01JBRIDGE_FEASIBILITY");
+        assert_eq!(request.claim_code(), "claim_01JBRIDGE_FEASIBILITY");
+        assert!(
+            serde_json::from_str::<BridgeProfileLaunchRedemptionRequest>(
+                r#"{"claimCode":"claim_01JBRIDGE_FEASIBILITY","extra":"rejected"}"#,
+            )
+            .is_err()
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn bridge_redemption_projection_is_strict_for_native_client_decode()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let valid = r#"{
+            "tenantId":"tenant_01JTEST",
+            "actorId":"actor_01JTEST",
+            "profileId":"profile_01JTEST",
+            "generationId":"generation_01JTEST",
+            "deviceId":"device_01JTEST",
+            "launchIntentId":"launch_intent_01JTEST"
+        }"#;
+        let decoded = serde_json::from_str::<BridgeProfileLaunchRedemptionProjection>(valid)?;
+        assert_eq!(decoded.device_id, "device_01JTEST");
+        let unknown = valid.replace(
+            "\"launchIntentId\":\"launch_intent_01JTEST\"",
+            "\"launchIntentId\":\"launch_intent_01JTEST\",\"extra\":true",
+        );
+        assert!(serde_json::from_str::<BridgeProfileLaunchRedemptionProjection>(&unknown).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn fragment_owns_one_authenticated_additive_launch_operation() {
+        let fragment = openapi_fragment();
+        let operation =
+            &fragment["paths"]["/api/v1/tenants/{tenantId}/profiles/{profileId}/launch"]["post"];
+        assert_eq!(operation["operationId"], "launchProfile");
+        assert_eq!(
+            operation["security"][0]["cloudflareAccessJwt"],
+            serde_json::json!([])
+        );
+        assert!(operation.get("requestBody").is_none());
+        assert!(
+            operation["parameters"]
+                .as_array()
+                .is_some_and(|parameters| {
+                    parameters.iter().all(|parameter| {
+                        parameter["$ref"] != "#/components/parameters/DevicePath"
+                            && parameter["$ref"] != "#/components/parameters/DeviceHeader"
+                    })
+                })
+        );
+    }
+}

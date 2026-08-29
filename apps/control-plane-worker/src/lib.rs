@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 
 mod access_session;
+mod bridge_machine;
 mod capability_gate;
 mod client_mail_query;
 mod client_mail_send;
@@ -117,6 +118,7 @@ pub async fn main(mut request: Request, env: Env, _context: Context) -> Result<R
         }
         RouteClass::ProfileCollectionApi
         | RouteClass::ProfileResourceApi
+        | RouteClass::ProfileLaunchApi
         | RouteClass::ProfileAssignmentApi
         | RouteClass::ProfileGrantApi => profiles::dispatch(route, &mut request, &env).await,
         RouteClass::ProfileCoordinatorApi => dispatch_profile_coordinator(&mut request, &env).await,

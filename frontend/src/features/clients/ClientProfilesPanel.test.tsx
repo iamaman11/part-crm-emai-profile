@@ -2,7 +2,13 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { assignProfile, detachProfile, getProfile } from '../profiles';
+import {
+  assignProfile,
+  detachProfile,
+  getProfile,
+  invokeProfileBridgeLaunch,
+  launchProfile,
+} from '../profiles';
 import { ClientProfilesPanel } from './ClientProfilesPanel';
 import { listClientProfiles } from './api';
 
@@ -10,6 +16,8 @@ vi.mock('../profiles', () => ({
   assignProfile: vi.fn(),
   detachProfile: vi.fn(),
   getProfile: vi.fn(),
+  invokeProfileBridgeLaunch: vi.fn(),
+  launchProfile: vi.fn(),
 }));
 
 vi.mock('./api', () => ({
@@ -19,6 +27,8 @@ vi.mock('./api', () => ({
 const mockedAssignProfile = vi.mocked(assignProfile);
 const mockedDetachProfile = vi.mocked(detachProfile);
 const mockedGetProfile = vi.mocked(getProfile);
+const mockedLaunchProfile = vi.mocked(launchProfile);
+const mockedInvokeProfileBridgeLaunch = vi.mocked(invokeProfileBridgeLaunch);
 const mockedListClientProfiles = vi.mocked(listClientProfiles);
 
 const tenantId = 'tenant_01JCLIENTPROFILES';
@@ -48,7 +58,7 @@ function renderPanel(onMutated = vi.fn().mockResolvedValue(undefined)) {
   };
 }
 
-describe('ClientProfilesPanel P1 relationship workflow', () => {
+describe('ClientProfilesPanel P1 relationship and P2 launch workflow', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockedListClientProfiles.mockResolvedValue({ profiles: [], nextCursor: null });
@@ -61,6 +71,10 @@ describe('ClientProfilesPanel P1 relationship workflow', () => {
       resultCode: 'detached',
       resourceId: 'assignment_01JCLIENTPROFILES',
       aggregateVersion: 5,
+    });
+    mockedLaunchProfile.mockResolvedValue({
+      launchUri: 'profilebridge://claim/claim_0123456789abcdef0123456789abcdef',
+      expiresAtMs: 1_000,
     });
   });
 
@@ -89,6 +103,51 @@ describe('ClientProfilesPanel P1 relationship workflow', () => {
     expect(mockedListClientProfiles.mock.calls[0]?.[0]).toBe(tenantId);
     expect(mockedListClientProfiles.mock.calls[0]?.[1]).toBe(clientId);
     expect(mockedListClientProfiles.mock.calls[1]?.[3]).toBe('profiles:profile_01JCLIENTPROFILES_A');
+  });
+
+  it('launches an attached profile without client-selected device or generation and immediately hands off the bounded URI', async () => {
+    const profileId = 'profile_01JCLIENTPROFILES_LAUNCH';
+    mockedListClientProfiles.mockResolvedValue({
+      profiles: [profileItem(profileId, 4)],
+      nextCursor: null,
+    });
+
+    const user = userEvent.setup();
+    renderPanel();
+
+    expect(await screen.findByText(profileId)).toBeTruthy();
+    await user.click(screen.getByRole('button', { name: `Launch profile ${profileId}` }));
+
+    await waitFor(() => expect(mockedLaunchProfile).toHaveBeenCalledTimes(1));
+    const [actualTenantId, actualProfileId, idempotencyKey] = mockedLaunchProfile.mock.calls[0] ?? [];
+    expect(actualTenantId).toBe(tenantId);
+    expect(actualProfileId).toBe(profileId);
+    expect(typeof idempotencyKey).toBe('string');
+    expect(idempotencyKey).not.toContain('device');
+    expect(idempotencyKey).not.toContain('generation');
+    expect(mockedInvokeProfileBridgeLaunch).toHaveBeenCalledWith(
+      'profilebridge://claim/claim_0123456789abcdef0123456789abcdef',
+    );
+    expect(screen.queryByText(/claim_0123456789abcdef/u)).toBeNull();
+  });
+
+  it('surfaces a neutral launch failure without exposing bearer material', async () => {
+    const profileId = 'profile_01JCLIENTPROFILES_LAUNCH_FAIL';
+    mockedListClientProfiles.mockResolvedValue({
+      profiles: [profileItem(profileId, 4)],
+      nextCursor: null,
+    });
+    mockedLaunchProfile.mockRejectedValue(new Error('profilebridge://claim/secret-claim-must-not-render'));
+
+    const user = userEvent.setup();
+    renderPanel();
+
+    expect(await screen.findByText(profileId)).toBeTruthy();
+    await user.click(screen.getByRole('button', { name: `Launch profile ${profileId}` }));
+
+    expect(await screen.findByText('Profile launch failed. Retry from this profile.')).toBeTruthy();
+    expect(screen.queryByText(/secret-claim-must-not-render/u)).toBeNull();
+    expect(mockedInvokeProfileBridgeLaunch).not.toHaveBeenCalled();
   });
 
   it('loads the profile through its own visibility boundary before attach or atomic reassign', async () => {

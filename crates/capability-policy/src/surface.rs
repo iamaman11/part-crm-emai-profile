@@ -9,6 +9,7 @@ pub enum RuntimeSurface {
     HttpClientMailRead,
     HttpOutboundMail,
     HttpBrowserProfiles,
+    HttpProfileRuntimeLaunch,
     HttpMailboxAdmin,
     HttpMailboxClientBinding,
     HttpMailboxBrowserBinding,
@@ -23,7 +24,7 @@ pub enum RuntimeSurface {
     ResolverReconciliation,
 }
 
-pub const ALL_RUNTIME_SURFACES: [RuntimeSurface; 19] = [
+pub const ALL_RUNTIME_SURFACES: [RuntimeSurface; 20] = [
     RuntimeSurface::HttpBindings,
     RuntimeSurface::HttpSession,
     RuntimeSurface::HttpIdentity,
@@ -31,6 +32,7 @@ pub const ALL_RUNTIME_SURFACES: [RuntimeSurface; 19] = [
     RuntimeSurface::HttpClientMailRead,
     RuntimeSurface::HttpOutboundMail,
     RuntimeSurface::HttpBrowserProfiles,
+    RuntimeSurface::HttpProfileRuntimeLaunch,
     RuntimeSurface::HttpMailboxAdmin,
     RuntimeSurface::HttpMailboxClientBinding,
     RuntimeSurface::HttpMailboxBrowserBinding,
@@ -56,6 +58,7 @@ impl RuntimeSurface {
             Self::HttpClientMailRead => "http.client_mail_read",
             Self::HttpOutboundMail => "http.outbound_mail",
             Self::HttpBrowserProfiles => "http.browser_profiles",
+            Self::HttpProfileRuntimeLaunch => "http.profile_runtime_launch",
             Self::HttpMailboxAdmin => "http.mailbox_admin",
             Self::HttpMailboxClientBinding => "http.mailbox_client_binding",
             Self::HttpMailboxBrowserBinding => "http.mailbox_browser_binding",
@@ -80,6 +83,9 @@ impl RuntimeSurface {
             Self::HttpClientMailRead => ActivationUnit::MailboxRead,
             Self::HttpOutboundMail => ActivationUnit::OutboundMail,
             Self::HttpBrowserProfiles => ActivationUnit::BrowserProfiles,
+            Self::HttpProfileRuntimeLaunch | Self::HttpProfileRuntimeDeviceJobs => {
+                ActivationUnit::ProfileRuntime
+            }
             Self::HttpMailboxAdmin | Self::ResolverIngress | Self::ResolverReconciliation => {
                 ActivationUnit::MailboxAdmin
             }
@@ -88,7 +94,6 @@ impl RuntimeSurface {
             Self::HttpMailboxJobs | Self::QueueMailboxJobs | Self::ScheduleMailboxJobs => {
                 ActivationUnit::MailboxJobs
             }
-            Self::HttpProfileRuntimeDeviceJobs => ActivationUnit::ProfileRuntime,
             Self::HttpNotifications
             | Self::QueueIntegrationEvents
             | Self::ScheduleIntegrationEvents => ActivationUnit::Notifications,
@@ -111,6 +116,10 @@ mod tests {
             .map(|surface| surface.id())
             .collect();
         assert_eq!(ids.len(), ALL_RUNTIME_SURFACES.len());
+        assert_eq!(
+            RuntimeSurface::HttpProfileRuntimeLaunch.activation_unit(),
+            ActivationUnit::ProfileRuntime
+        );
         assert_eq!(
             RuntimeSurface::ResolverIngress.activation_unit(),
             ActivationUnit::MailboxAdmin

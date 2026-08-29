@@ -1,16 +1,14 @@
 #![forbid(unsafe_code)]
 
 use bridge_domain::ClaimUri;
+use profile_bridge::shipping_composition::run_claim;
 use std::env;
 use std::fmt;
 use std::process::ExitCode;
 
 fn main() -> ExitCode {
     match run(env::args()) {
-        Ok(message) => {
-            println!("{message}");
-            ExitCode::SUCCESS
-        }
+        Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
             eprintln!("{error}");
             ExitCode::from(2)
@@ -18,7 +16,15 @@ fn main() -> ExitCode {
     }
 }
 
-fn run<I>(arguments: I) -> Result<&'static str, BridgeCliError>
+fn run<I>(arguments: I) -> Result<(), BridgeCliError>
+where
+    I: IntoIterator<Item = String>,
+{
+    let claim = parse_claim(arguments)?;
+    run_claim(&claim).map_err(|_| BridgeCliError::LaunchFailed)
+}
+
+fn parse_claim<I>(arguments: I) -> Result<ClaimUri, BridgeCliError>
 where
     I: IntoIterator<Item = String>,
 {
@@ -28,8 +34,7 @@ where
     if arguments.next().is_some() {
         return Err(BridgeCliError::UnexpectedArgument);
     }
-    ClaimUri::parse(&uri).map_err(|_| BridgeCliError::InvalidClaimUri)?;
-    Ok("claim-uri-accepted")
+    ClaimUri::parse(&uri).map_err(|_| BridgeCliError::InvalidClaimUri)
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -37,6 +42,7 @@ enum BridgeCliError {
     MissingClaimUri,
     UnexpectedArgument,
     InvalidClaimUri,
+    LaunchFailed,
 }
 
 impl fmt::Display for BridgeCliError {
@@ -45,6 +51,7 @@ impl fmt::Display for BridgeCliError {
             Self::MissingClaimUri => "a single Profile Bridge claim URI is required",
             Self::UnexpectedArgument => "unexpected additional argument",
             Self::InvalidClaimUri => "claim URI is invalid",
+            Self::LaunchFailed => "authorized Profile Bridge launch failed closed",
         })
     }
 }
@@ -53,25 +60,30 @@ impl std::error::Error for BridgeCliError {}
 
 #[cfg(test)]
 mod tests {
-    use super::{BridgeCliError, run};
+    use super::{BridgeCliError, parse_claim};
 
     #[test]
-    fn accepted_cli_result_never_echoes_claim_code() -> Result<(), Box<dyn std::error::Error>> {
-        let result = run([
+    fn valid_claim_crosses_only_the_cli_boundary() -> Result<(), Box<dyn std::error::Error>> {
+        let claim = parse_claim([
             "profile-bridge".to_owned(),
             "profilebridge://claim/claim_01JBRIDGE_FEASIBILITY".to_owned(),
         ])?;
-        assert_eq!(result, "claim-uri-accepted");
-        assert!(!result.contains("01JBRIDGE"));
+        assert!(!format!("{claim:?}").contains("claim_01JBRIDGE_FEASIBILITY"));
         Ok(())
     }
 
     #[test]
     fn invalid_cli_input_returns_generic_error() {
-        let error = run([
+        let error = parse_claim([
             "profile-bridge".to_owned(),
             "profilebridge://claim/secret?leak=true".to_owned(),
         ]);
         assert_eq!(error, Err(BridgeCliError::InvalidClaimUri));
+        assert!(
+            !BridgeCliError::InvalidClaimUri
+                .to_string()
+                .contains("secret")
+        );
+        assert!(!BridgeCliError::LaunchFailed.to_string().contains("claim_"));
     }
 }

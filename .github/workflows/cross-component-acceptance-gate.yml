@@ -109,10 +109,26 @@ jobs:
 
       - name: Test and execute synthetic Profile Bridge operator flow
         run: |
-          cargo test --locked -p profile-bridge --all-targets
+          cargo metadata --locked --no-deps --format-version 1 > "$RUNNER_TEMP/profile-bridge-metadata.json"
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          metadata = json.loads(Path(os.environ['RUNNER_TEMP'], 'profile-bridge-metadata.json').read_text())
+          package = next(package for package in metadata['packages'] if package['name'] == 'profile-bridge')
+          targets = {target['name']: target for target in package['targets']}
+          assert set(name for name, target in targets.items() if 'bin' in target['kind']) == {
+              'profile-bridge',
+              'profile-bridge-synthetic',
+          }
+          assert targets['profile-bridge'].get('required-features', []) == []
+          assert targets['profile-bridge-synthetic'].get('required-features', []) == ['synthetic-test-bin']
+          PY
+          cargo test --locked -p profile-bridge --all-targets --features synthetic-test-bin
           root="$RUNNER_TEMP/cross-component-profile"
           rm -rf "$root"
-          cargo run --locked -p profile-bridge --bin profile-bridge-synthetic -- \
+          cargo run --locked -p profile-bridge --features synthetic-test-bin --bin profile-bridge-synthetic -- \
             'profilebridge://claim/claim_0123456789abcdef0123456789abcdef' "$root" \
             | tee "$RUNNER_TEMP/profile-bridge-synthetic.out"
           grep -Fxq 'synthetic-operator-complete state=DIRTY_LOCAL_COMMITTED_GENERATION' "$RUNNER_TEMP/profile-bridge-synthetic.out"

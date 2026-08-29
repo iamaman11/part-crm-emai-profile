@@ -11,9 +11,14 @@ pub mod dirty_generation_finalize;
 mod dirty_generation_local;
 pub mod dirty_generation_publish;
 pub mod fake_mail_query;
+pub mod launch_binding;
 pub mod local_profile;
 pub mod operator_flow;
 pub mod runtime_bundle;
+pub mod shipping_composition;
+pub mod shipping_control_plane;
+pub mod shipping_network;
+pub mod shipping_preflight;
 
 #[cfg(test)]
 mod test_support;
@@ -21,18 +26,24 @@ mod test_support;
 #[cfg(windows)]
 pub mod windows_native;
 
+use bridge_domain::BridgePortError;
+#[cfg(any(test, feature = "synthetic-test-bin"))]
 use bridge_domain::{
-    BridgePortError, CAMOUHOST_IPC_VERSION, CamouhostMessage, CamouhostPort, DeviceIdentityPort,
-    DeviceKeyPort,
+    CAMOUHOST_IPC_VERSION, CamouhostMessage, CamouhostPort, DeviceIdentityPort, DeviceKeyPort,
 };
-use profile_platform_primitives::{DeviceId, SessionId};
+#[cfg(any(test, feature = "synthetic-test-bin"))]
+use profile_platform_primitives::DeviceId;
+use profile_platform_primitives::SessionId;
+#[cfg(any(test, feature = "synthetic-test-bin"))]
 use std::collections::BTreeMap;
 
+#[cfg(any(test, feature = "synthetic-test-bin"))]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct FakeDeviceIdentity {
     device_id: DeviceId,
 }
 
+#[cfg(any(test, feature = "synthetic-test-bin"))]
 impl FakeDeviceIdentity {
     #[must_use]
     pub const fn new(device_id: DeviceId) -> Self {
@@ -40,17 +51,20 @@ impl FakeDeviceIdentity {
     }
 }
 
+#[cfg(any(test, feature = "synthetic-test-bin"))]
 impl DeviceIdentityPort for FakeDeviceIdentity {
     fn device_id(&self) -> Result<DeviceId, BridgePortError> {
         Ok(self.device_id.clone())
     }
 }
 
+#[cfg(any(test, feature = "synthetic-test-bin"))]
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct FakeDeviceKeyStore {
     handles: BTreeMap<DeviceId, String>,
 }
 
+#[cfg(any(test, feature = "synthetic-test-bin"))]
 impl DeviceKeyPort for FakeDeviceKeyStore {
     fn ensure_key_handle(&mut self, device_id: &DeviceId) -> Result<String, BridgePortError> {
         if let Some(handle) = self.handles.get(device_id) {
@@ -62,12 +76,14 @@ impl DeviceKeyPort for FakeDeviceKeyStore {
     }
 }
 
+#[cfg(any(test, feature = "synthetic-test-bin"))]
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct FakeCamouhost {
     negotiated: bool,
     active_session: Option<SessionId>,
 }
 
+#[cfg(any(test, feature = "synthetic-test-bin"))]
 impl CamouhostPort for FakeCamouhost {
     fn exchange(
         &mut self,
@@ -104,11 +120,13 @@ impl CamouhostPort for FakeCamouhost {
 
 pub trait ProcessControlPort {
     fn spawn(&mut self, session_id: &SessionId) -> Result<(), BridgePortError>;
+    fn is_running(&mut self, session_id: &SessionId) -> Result<bool, BridgePortError>;
     fn request_graceful_close(&mut self, session_id: &SessionId) -> Result<(), BridgePortError>;
     fn confirm_stopped(&mut self, session_id: &SessionId) -> Result<(), BridgePortError>;
     fn force_terminate(&mut self, session_id: &SessionId) -> Result<(), BridgePortError>;
 }
 
+#[cfg(any(test, feature = "synthetic-test-bin"))]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ProcessAction {
     Spawn(SessionId),
@@ -117,27 +135,47 @@ pub enum ProcessAction {
     ForceTerminate(SessionId),
 }
 
+#[cfg(any(test, feature = "synthetic-test-bin"))]
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct FakeProcessControl {
     active_session: Option<SessionId>,
+    running: bool,
     actions: Vec<ProcessAction>,
 }
 
+#[cfg(any(test, feature = "synthetic-test-bin"))]
 impl FakeProcessControl {
     #[must_use]
     pub fn actions(&self) -> &[ProcessAction] {
         &self.actions
     }
+
+    pub fn simulate_exit(&mut self, session_id: &SessionId) -> Result<(), BridgePortError> {
+        if self.active_session.as_ref() != Some(session_id) {
+            return Err(BridgePortError::InvalidResponse);
+        }
+        self.running = false;
+        Ok(())
+    }
 }
 
+#[cfg(any(test, feature = "synthetic-test-bin"))]
 impl ProcessControlPort for FakeProcessControl {
     fn spawn(&mut self, session_id: &SessionId) -> Result<(), BridgePortError> {
         if self.active_session.is_some() {
             return Err(BridgePortError::Unavailable);
         }
         self.active_session = Some(session_id.clone());
+        self.running = true;
         self.actions.push(ProcessAction::Spawn(session_id.clone()));
         Ok(())
+    }
+
+    fn is_running(&mut self, session_id: &SessionId) -> Result<bool, BridgePortError> {
+        if self.active_session.as_ref() != Some(session_id) {
+            return Err(BridgePortError::InvalidResponse);
+        }
+        Ok(self.running)
     }
 
     fn request_graceful_close(&mut self, session_id: &SessionId) -> Result<(), BridgePortError> {
@@ -155,6 +193,7 @@ impl ProcessControlPort for FakeProcessControl {
         }
         self.actions
             .push(ProcessAction::ConfirmStopped(session_id.clone()));
+        self.running = false;
         self.active_session = None;
         Ok(())
     }
@@ -165,6 +204,7 @@ impl ProcessControlPort for FakeProcessControl {
         }
         self.actions
             .push(ProcessAction::ForceTerminate(session_id.clone()));
+        self.running = false;
         self.active_session = None;
         Ok(())
     }
@@ -254,6 +294,7 @@ mod tests {
         let session_id = SessionId::parse("session_01JPROCESS")?;
         let mut process = FakeProcessControl::default();
         process.spawn(&session_id)?;
+        assert!(process.is_running(&session_id)?);
         process.request_graceful_close(&session_id)?;
         process.force_terminate(&session_id)?;
         assert_eq!(

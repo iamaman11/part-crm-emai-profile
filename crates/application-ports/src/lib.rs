@@ -33,6 +33,7 @@ pub mod notifications;
 pub mod outbound_mail;
 pub mod profile_assignment_context;
 pub mod profile_creation;
+pub mod profile_launch;
 pub mod profiles;
 pub mod query;
 pub mod query_clients;
@@ -59,7 +60,7 @@ pub use device_jobs::{
     AuthenticatedDevicePort, DeviceExecutionBlocker, DeviceExecutionPreconditionPort,
     DeviceExecutionReadiness, DeviceJobAuthorizationPort, DeviceJobCapability,
     DeviceJobInsertOutcome, DeviceJobPortError, DeviceJobPortErrorClass, DeviceJobQueryPort,
-    DeviceJobRepositoryPort, DeviceJobWriteOutcome,
+    DeviceJobRepositoryPort, DeviceJobTarget, DeviceJobWriteOutcome,
 };
 pub use generation_objects::{
     GenerationObjectDescriptor, GenerationObjectDescriptorVerifyPort,
@@ -94,6 +95,7 @@ pub use query::{
     QueryPageRequest, QueryPageSize, QueryPortError, QueryPortErrorClass,
 };
 pub use sessions::ProfileCoordinatorPort;
+pub use sessions::ProfileCoordinatorRuntimePort;
 
 impl core::fmt::Display for mailboxes::MailboxProviderPortError {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {

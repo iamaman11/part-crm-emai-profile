@@ -5,14 +5,51 @@ edition.workspace = true
 rust-version.workspace = true
 publish = false
 default-run = "profile-bridge"
+autobins = false
+
+[features]
+default = []
+synthetic-test-bin = []
+
+[[bin]]
+name = "profile-bridge"
+path = "src/main.rs"
+
+[[bin]]
+name = "profile-bridge-synthetic"
+path = "src/bin/profile-bridge-synthetic.rs"
+required-features = ["synthetic-test-bin"]
+
+[[test]]
+name = "ipc_protocol_failure_matrix"
+path = "tests/ipc_protocol_failure_matrix.rs"
+required-features = ["synthetic-test-bin"]
+
+[[test]]
+name = "operator_flow_acceptance"
+path = "tests/operator_flow_acceptance.rs"
+required-features = ["synthetic-test-bin"]
+
+[[test]]
+name = "runtime_failure_matrix"
+path = "tests/runtime_failure_matrix.rs"
+required-features = ["synthetic-test-bin"]
+
+[[test]]
+name = "synthetic_operator_cli"
+path = "tests/synthetic_operator_cli.rs"
+required-features = ["synthetic-test-bin"]
 
 [dependencies]
 application-ports.workspace = true
 bridge-domain.workspace = true
 browser-execution-domain.workspace = true
+control-plane-contract = { path = "../../crates/control-plane-contract" }
 encrypted-generation-domain.workspace = true
 profile-platform-primitives.workspace = true
 runtime-bundle-domain.workspace = true
+serde = { version = "=1.0.229", features = ["derive"] }
+serde_json = "=1.0.151"
 session-domain.workspace = true
 sha2.workspace = true
 

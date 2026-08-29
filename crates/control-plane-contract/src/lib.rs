@@ -7,6 +7,7 @@ pub mod mailbox_api;
 pub mod mailbox_client_association_api;
 pub mod operator_query_api;
 pub mod profile_generation_api;
+pub mod profile_launch_api;
 pub mod profile_relationship_api;
 pub mod public_api;
 pub mod resolver_service_auth;
@@ -40,6 +41,7 @@ pub enum RouteClass {
     ClientMailSendApi,
     ProfileCollectionApi,
     ProfileResourceApi,
+    ProfileLaunchApi,
     ProfileAssignmentApi,
     ProfileGrantApi,
     ProfileCoordinatorApi,
@@ -267,6 +269,11 @@ mod tests {
                 "GET",
                 "/api/v1/tenants/tenant_01/profiles/profile_01",
                 RouteClass::ProfileResourceApi,
+            ),
+            (
+                "POST",
+                "/api/v1/tenants/tenant_01/profiles/profile_01/launch",
+                RouteClass::ProfileLaunchApi,
             ),
             (
                 "PUT",
@@ -543,6 +550,10 @@ mod tests {
                 "/api/v1/tenants/tenant_01/mailboxes/mailbox_01/jobs/mailjob_01/run",
             ),
             ("DELETE", "/api/v1/tenants/tenant_01/notifications/events"),
+            (
+                "GET",
+                "/api/v1/tenants/tenant_01/profiles/profile_01/launch",
+            ),
         ] {
             assert_eq!(
                 classify_route(method, path),

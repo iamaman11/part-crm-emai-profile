@@ -26,7 +26,6 @@ REPOSITORY_REQUIRED = {
     ),
     "apps/profile-bridge/src/main.rs": (
         "ClaimUri::parse",
-        'Ok("claim-uri-accepted")',
         "InvalidClaimUri",
     ),
     "apps/profile-bridge/src/lib.rs": (
@@ -296,6 +295,11 @@ FORBIDDEN_PURE_MARKERS = (
     "rusqlite",
 )
 
+FORBIDDEN_CLAIM_ONLY_SUCCESS_MARKERS = (
+    'Ok("claim-uri-accepted")',
+    'println!("claim-uri-accepted")',
+)
+
 DELETION_MARKERS = (
     "remove_file",
     "remove_dir_all",
@@ -363,6 +367,23 @@ def struct_body(source: str, struct_name: str) -> str:
         return ""
     end = source.find("\n}", start + len(marker))
     return source[start : end + 2 if end >= 0 else len(source)]
+
+
+def reject_claim_only_success(errors: list[str], source: str, label: str) -> None:
+    for marker in FORBIDDEN_CLAIM_ONLY_SUCCESS_MARKERS:
+        if marker in source:
+            errors.append(f"claim-only shipping success is forbidden in {label}: {marker}")
+
+
+def claim_only_success_self_test(errors: list[str]) -> None:
+    probe: list[str] = []
+    reject_claim_only_success(
+        probe,
+        'fn predecessor() -> Result<&\'static str, ()> { Ok("claim-uri-accepted") }',
+        "negative predecessor fixture",
+    )
+    if not probe:
+        errors.append("Step 6 negative claim-only-success fixture unexpectedly passed")
 
 
 def browser_lock_tainted_identifiers(source: str) -> set[str]:
@@ -724,6 +745,7 @@ def main() -> int:
                 errors.append(f"provider/runtime API escaped into Bridge domain: {marker}")
 
     browser_lock_deletion_self_test(errors)
+    claim_only_success_self_test(errors)
     for path in source_files(root, repository_root):
         rel = relative(root, path)
         if rel == POLICY_PATH or (repository_root and rel.startswith(FIXTURE_PREFIX)):
@@ -736,6 +758,9 @@ def main() -> int:
         for forbidden in FORBIDDEN_PHASE2F_PATHS:
             if (root / forbidden).exists():
                 errors.append(f"temporary Phase 2F materializer artifact remains: {forbidden}")
+
+        production_main = (root / "apps/profile-bridge/src/main.rs").read_text(encoding="utf-8")
+        reject_claim_only_success(errors, production_main, "apps/profile-bridge/src/main.rs")
 
         for rel, markers in REPOSITORY_REQUIRED.items():
             path = root / rel

@@ -746,9 +746,12 @@ dependencies = [
  "application-ports",
  "bridge-domain",
  "browser-execution-domain",
+ "control-plane-contract",
  "encrypted-generation-domain",
  "profile-platform-primitives",
  "runtime-bundle-domain",
+ "serde",
+ "serde_json",
  "session-domain",
  "sha2",
 ]

@@ -10,13 +10,14 @@ use crate::local_profile::{
 use crate::runtime_bundle::{
     ApprovedRuntimeBundle, RuntimeLaunchError, RuntimeSessionOrchestrator,
 };
-use application_ports::ProfileCoordinatorPort;
 use application_ports::generation_objects::{
     GenerationObjectExactVerifyPort, GenerationObjectUploadPort,
 };
+use application_ports::{ProfileCoordinatorPort, ProfileCoordinatorRuntimePort};
 use bridge_domain::{CamouhostPort, ClaimUri, DeviceIdentityPort, DeviceKeyPort};
 use profile_platform_primitives::{
-    ActorContext, DeviceId, GenerationId, ProfileId, SessionId, TenantScope, UnixMillis,
+    ActorContext, DeviceId, GenerationId, LaunchIntentId, ProfileId, SessionId, TenantScope,
+    UnixMillis,
 };
 use session_domain::ProfileLease;
 use std::fmt;
@@ -66,6 +67,7 @@ pub struct OperatorEnrollment {
     actor: ActorContext,
     profile_id: ProfileId,
     generation_id: GenerationId,
+    launch_intent_id: LaunchIntentId,
 }
 
 impl OperatorEnrollment {
@@ -74,11 +76,13 @@ impl OperatorEnrollment {
         actor: ActorContext,
         profile_id: ProfileId,
         generation_id: GenerationId,
+        launch_intent_id: LaunchIntentId,
     ) -> Self {
         Self {
             actor,
             profile_id,
             generation_id,
+            launch_intent_id,
         }
     }
 
@@ -96,6 +100,11 @@ impl OperatorEnrollment {
     pub const fn generation_id(&self) -> &GenerationId {
         &self.generation_id
     }
+
+    #[must_use]
+    pub const fn launch_intent_id(&self) -> &LaunchIntentId {
+        &self.launch_intent_id
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -105,7 +114,8 @@ pub enum OperatorFailureStage {
     DeviceAuthentication,
     Enrollment,
     RuntimeBundle,
-    CoordinatorAcquire,
+    CoordinatorClaim,
+    CoordinatorHeartbeat,
     LeaseValidation,
     LocalWorkspace,
     BrowserPreflight,
@@ -332,8 +342,13 @@ where
             .map_err(|_| OperatorFlowError::Stage(OperatorFailureStage::RuntimeBundle))?;
         let lease = self
             .coordinator
-            .acquire_lease(enrollment.actor(), enrollment.profile_id(), &device_id)
-            .map_err(|_| OperatorFlowError::Stage(OperatorFailureStage::CoordinatorAcquire))?;
+            .claim_launch_intent(
+                enrollment.actor(),
+                enrollment.profile_id(),
+                &device_id,
+                enrollment.launch_intent_id(),
+            )
+            .map_err(|_| OperatorFlowError::Stage(OperatorFailureStage::CoordinatorClaim))?;
 
         if lease.tenant_id() != enrollment.actor().tenant_scope().tenant_id()
             || lease.profile_id() != enrollment.profile_id()
@@ -422,6 +437,26 @@ where
             runtime_bundle,
         });
         Ok(())
+    }
+
+    pub fn heartbeat(&mut self, now: UnixMillis) -> Result<(), OperatorFlowError>
+    where
+        C: ProfileCoordinatorRuntimePort,
+    {
+        let lease = self
+            .active
+            .as_ref()
+            .map(|session| session.lease.clone())
+            .ok_or(OperatorFlowError::Stage(
+                OperatorFailureStage::CoordinatorHeartbeat,
+            ))?;
+        if !matches!(self.process.is_running(lease.session_id()), Ok(true)) {
+            return Err(self.fail_active_runtime(OperatorFailureStage::RuntimeAbort, now));
+        }
+        if self.coordinator.heartbeat_lease(&lease).is_ok() {
+            return Ok(());
+        }
+        Err(self.fail_active_runtime(OperatorFailureStage::CoordinatorHeartbeat, now))
     }
 
     pub fn close(&mut self, now: UnixMillis) -> Result<(), OperatorFlowError> {
@@ -593,6 +628,11 @@ where
         &self.process
     }
 
+    #[cfg(test)]
+    fn process_mut(&mut self) -> &mut P {
+        &mut self.process
+    }
+
     fn fail_before_local_use(
         &mut self,
         stage: OperatorFailureStage,
@@ -637,6 +677,22 @@ where
         } else {
             OperatorFlowError::Stage(stage)
         }
+    }
+
+    fn fail_active_runtime(
+        &mut self,
+        stage: OperatorFailureStage,
+        now: UnixMillis,
+    ) -> OperatorFlowError {
+        let Some(mut session) = self.active.take() else {
+            return OperatorFlowError::Stage(stage);
+        };
+        let process_failed = self
+            .process
+            .force_terminate(session.lease.session_id())
+            .is_err();
+        let _ = session.local_record.observe_crash(now);
+        self.finish_failed_session(stage, session, process_failed)
     }
 
     fn cleanup_after_local_use(
@@ -745,14 +801,14 @@ mod tests {
     use crate::{
         FakeCamouhost, FakeDeviceIdentity, FakeDeviceKeyStore, FakeProcessControl, ProcessAction,
     };
-    use application_ports::ProfileCoordinatorPort;
+    use application_ports::{ProfileCoordinatorPort, ProfileCoordinatorRuntimePort};
     use bridge_domain::{
         BridgePortError, CAMOUHOST_IPC_VERSION, CamouhostMessage, CamouhostPort, ClaimCode,
         ClaimUri, EnrollmentClaim,
     };
     use profile_platform_primitives::{
-        ActorContext, ActorId, CorrelationId, DeviceId, FencingToken, GenerationId, ProfileId,
-        SessionId, TenantId, TenantScope, UnixMillis,
+        ActorContext, ActorId, CorrelationId, DeviceId, FencingToken, GenerationId, LaunchIntentId,
+        ProfileId, SessionId, TenantId, TenantScope, UnixMillis,
     };
     use runtime_bundle_domain::{
         BundleRelativePath, InventoryEntry, RuntimeInventory, RuntimeManifest, RuntimePlatform,
@@ -811,23 +867,27 @@ mod tests {
     #[derive(Clone, Debug)]
     struct FakeCoordinator {
         lease: ProfileLease,
-        acquire_fail: bool,
+        expected_launch_intent_id: LaunchIntentId,
+        claim_fail: bool,
+        heartbeat_fail: bool,
         close_fail: bool,
-        acquired: u64,
+        claimed: u64,
+        heartbeats: u64,
         closed: u64,
     }
 
     impl ProfileCoordinatorPort for FakeCoordinator {
         type Error = BridgePortError;
 
-        fn acquire_lease(
+        fn claim_launch_intent(
             &mut self,
             _actor: &ActorContext,
             _profile_id: &ProfileId,
             _device_id: &DeviceId,
+            launch_intent_id: &LaunchIntentId,
         ) -> Result<ProfileLease, Self::Error> {
-            self.acquired += 1;
-            if self.acquire_fail {
+            self.claimed += 1;
+            if self.claim_fail || launch_intent_id != &self.expected_launch_intent_id {
                 Err(BridgePortError::Unavailable)
             } else {
                 Ok(self.lease.clone())
@@ -837,6 +897,17 @@ mod tests {
         fn close_lease(&mut self, _lease: &ProfileLease) -> Result<(), Self::Error> {
             self.closed += 1;
             if self.close_fail {
+                Err(BridgePortError::Unavailable)
+            } else {
+                Ok(())
+            }
+        }
+    }
+
+    impl ProfileCoordinatorRuntimePort for FakeCoordinator {
+        fn heartbeat_lease(&mut self, _lease: &ProfileLease) -> Result<(), Self::Error> {
+            self.heartbeats += 1;
+            if self.heartbeat_fail {
                 Err(BridgePortError::Unavailable)
             } else {
                 Ok(())
@@ -964,6 +1035,7 @@ mod tests {
         profile_id: ProfileId,
         generation_id: GenerationId,
         device_id: DeviceId,
+        launch_intent_id: LaunchIntentId,
         lease: ProfileLease,
     }
 
@@ -997,6 +1069,7 @@ mod tests {
                 counter.max(1),
                 FencingToken::parse(format!("fence_01JOPERATOR{counter}"))?,
             )?;
+            let launch_intent_id = LaunchIntentId::parse(format!("launch_01JOPERATOR{counter}"))?;
             let claim_code = ClaimCode::parse(format!("claim_01JOPERATOR{counter:024}"))?;
             let claim_uri = ClaimUri::parse(&format!(
                 "profilebridge://claim/claim_01JOPERATOR{counter:024}"
@@ -1010,6 +1083,7 @@ mod tests {
                 profile_id,
                 generation_id,
                 device_id,
+                launch_intent_id,
                 lease,
             })
         }
@@ -1026,6 +1100,7 @@ mod tests {
                     self.actor.clone(),
                     self.profile_id.clone(),
                     self.generation_id.clone(),
+                    self.launch_intent_id.clone(),
                 ),
             })
         }
@@ -1033,9 +1108,12 @@ mod tests {
         fn coordinator(&self) -> FakeCoordinator {
             FakeCoordinator {
                 lease: self.lease.clone(),
-                acquire_fail: false,
+                expected_launch_intent_id: self.launch_intent_id.clone(),
+                claim_fail: false,
+                heartbeat_fail: false,
                 close_fail: false,
-                acquired: 0,
+                claimed: 0,
+                heartbeats: 0,
                 closed: 0,
             }
         }
@@ -1084,7 +1162,7 @@ mod tests {
             operator.active_local_state(),
             Some(LocalGenerationState::InUse)
         );
-        assert_eq!(operator.coordinator().acquired, 1);
+        assert_eq!(operator.coordinator().claimed, 1);
         assert_eq!(operator.coordinator().closed, 0);
         assert_eq!(
             operator.process().actions(),
@@ -1119,6 +1197,108 @@ mod tests {
     }
 
     #[test]
+    fn healthy_heartbeat_preserves_active_runtime_ownership()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let fixture = Fixture::new()?;
+        let mut operator = operator(&fixture, FakeCamouhost::default())?;
+        operator.open(&fixture.claim_uri, &fixture.root, UnixMillis::new(10))?;
+        operator.heartbeat(UnixMillis::new(11))?;
+        assert_eq!(operator.coordinator().heartbeats, 1);
+        assert_eq!(
+            operator.active_session_id(),
+            Some(fixture.lease.session_id())
+        );
+        assert_eq!(
+            operator.process().actions(),
+            [ProcessAction::Spawn(fixture.lease.session_id().clone())]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn dead_runtime_is_fenced_before_coordinator_heartbeat()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let fixture = Fixture::new()?;
+        let mut operator = operator(&fixture, FakeCamouhost::default())?;
+        operator.open(&fixture.claim_uri, &fixture.root, UnixMillis::new(10))?;
+        operator
+            .process_mut()
+            .simulate_exit(fixture.lease.session_id())?;
+        assert_eq!(
+            operator.heartbeat(UnixMillis::new(11)),
+            Err(OperatorFlowError::Terminal {
+                stage: OperatorFailureStage::RuntimeAbort,
+                local_state: LocalGenerationState::RecoveryRequired,
+                cleanup: super::CleanupFailures::none(),
+            })
+        );
+        assert_eq!(operator.coordinator().heartbeats, 0);
+        assert_eq!(operator.coordinator().closed, 1);
+        assert_eq!(operator.active_session_id(), None);
+        assert_eq!(
+            operator.last_terminal().map(|value| value.local_state()),
+            Some(LocalGenerationState::RecoveryRequired)
+        );
+        assert_eq!(
+            operator.process().actions(),
+            [
+                ProcessAction::Spawn(fixture.lease.session_id().clone()),
+                ProcessAction::ForceTerminate(fixture.lease.session_id().clone()),
+            ]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn lost_heartbeat_stops_runtime_and_enters_recovery() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let fixture = Fixture::new()?;
+        let mut coordinator = fixture.coordinator();
+        coordinator.heartbeat_fail = true;
+        let mut operator = ProfileBridgeOperator::new(
+            FakeDeviceIdentity::new(fixture.device_id.clone()),
+            FakeDeviceKeyStore::default(),
+            FakeDeviceAuthentication { allow: true },
+            fixture.enrollment()?,
+            coordinator,
+            FakeRuntimeBundles {
+                bundle: approved_bundle()?,
+                allow: true,
+            },
+            FakeBrowserPreflight {
+                allow: true,
+                calls: 0,
+            },
+            FakeProcessControl::default(),
+            FakeCamouhost::default(),
+        );
+        operator.open(&fixture.claim_uri, &fixture.root, UnixMillis::new(10))?;
+        assert_eq!(
+            operator.heartbeat(UnixMillis::new(11)),
+            Err(OperatorFlowError::Terminal {
+                stage: OperatorFailureStage::CoordinatorHeartbeat,
+                local_state: LocalGenerationState::RecoveryRequired,
+                cleanup: super::CleanupFailures::none(),
+            })
+        );
+        assert_eq!(operator.coordinator().heartbeats, 1);
+        assert_eq!(operator.coordinator().closed, 1);
+        assert_eq!(operator.active_session_id(), None);
+        assert_eq!(
+            operator.last_terminal().map(|value| value.local_state()),
+            Some(LocalGenerationState::RecoveryRequired)
+        );
+        assert_eq!(
+            operator.process().actions(),
+            [
+                ProcessAction::Spawn(fixture.lease.session_id().clone()),
+                ProcessAction::ForceTerminate(fixture.lease.session_id().clone()),
+            ]
+        );
+        Ok(())
+    }
+
+    #[test]
     fn authentication_failure_prevents_coordinator_and_runtime_mutation()
     -> Result<(), Box<dyn std::error::Error>> {
         let fixture = Fixture::new()?;
@@ -1145,7 +1325,7 @@ mod tests {
                 OperatorFailureStage::DeviceAuthentication
             ))
         );
-        assert_eq!(operator.coordinator().acquired, 0);
+        assert_eq!(operator.coordinator().claimed, 0);
         assert!(operator.process().actions().is_empty());
         Ok(())
     }
@@ -1161,7 +1341,7 @@ mod tests {
             operator.open(&fixture.claim_uri, &fixture.root, UnixMillis::new(21)),
             Err(OperatorFlowError::Busy)
         );
-        assert_eq!(operator.coordinator().acquired, 1);
+        assert_eq!(operator.coordinator().claimed, 1);
         assert_eq!(operator.coordinator().closed, 0);
         Ok(())
     }

@@ -35,8 +35,8 @@ use profile_bridge::operator_flow::{
 use profile_bridge::runtime_bundle::ApprovedRuntimeBundle;
 use profile_bridge::{FakeCamouhost, FakeDeviceIdentity, FakeDeviceKeyStore, FakeProcessControl};
 use profile_platform_primitives::{
-    ActorContext, ActorId, CorrelationId, DeviceId, FencingToken, GenerationId, MailboxBindingId,
-    ProfileId, SessionId, TenantId, TenantScope, UnixMillis,
+    ActorContext, ActorId, CorrelationId, DeviceId, FencingToken, GenerationId, LaunchIntentId,
+    MailboxBindingId, ProfileId, SessionId, TenantId, TenantScope, UnixMillis,
 };
 use runtime_bundle_domain::{
     BundleRelativePath, InventoryEntry, RuntimeInventory, RuntimeManifest, RuntimePlatform,
@@ -400,6 +400,7 @@ struct SyntheticFixture {
     profile_id: ProfileId,
     generation_id: GenerationId,
     device_id: DeviceId,
+    launch_intent_id: LaunchIntentId,
 }
 
 impl SyntheticFixture {
@@ -420,6 +421,8 @@ impl SyntheticFixture {
             generation_id: GenerationId::parse("generation_01JSYNTHETICOPERATOR")
                 .map_err(|_| SyntheticOperatorError::FixtureIdentity)?,
             device_id: DeviceId::parse("device_01JSYNTHETICOPERATOR")
+                .map_err(|_| SyntheticOperatorError::FixtureIdentity)?,
+            launch_intent_id: LaunchIntentId::parse("launch_01JSYNTHETICOPERATOR")
                 .map_err(|_| SyntheticOperatorError::FixtureIdentity)?,
         })
     }
@@ -458,6 +461,7 @@ impl SyntheticEnrollment {
                 fixture.actor.clone(),
                 fixture.profile_id.clone(),
                 fixture.generation_id.clone(),
+                fixture.launch_intent_id.clone(),
             ),
         })
     }
@@ -481,6 +485,7 @@ impl EnrollmentPort for SyntheticEnrollment {
 
 struct SyntheticCoordinator {
     lease: ProfileLease,
+    expected_launch_intent_id: LaunchIntentId,
     active: bool,
 }
 
@@ -488,6 +493,7 @@ impl SyntheticCoordinator {
     fn new(fixture: &SyntheticFixture) -> Result<Self, SyntheticOperatorError> {
         Ok(Self {
             lease: synthetic_lease(fixture)?,
+            expected_launch_intent_id: fixture.launch_intent_id.clone(),
             active: false,
         })
     }
@@ -496,13 +502,14 @@ impl SyntheticCoordinator {
 impl ProfileCoordinatorPort for SyntheticCoordinator {
     type Error = BridgePortError;
 
-    fn acquire_lease(
+    fn claim_launch_intent(
         &mut self,
         _actor: &ActorContext,
         _profile_id: &ProfileId,
         _device_id: &DeviceId,
+        launch_intent_id: &LaunchIntentId,
     ) -> Result<ProfileLease, Self::Error> {
-        if self.active {
+        if self.active || launch_intent_id != &self.expected_launch_intent_id {
             return Err(BridgePortError::Unavailable);
         }
         self.active = true;

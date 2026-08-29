@@ -1,13 +1,15 @@
 use crate::access_session::{
-    correlation_hint, neutral_not_found, problem, resolve_active_request_actor,
+    correlation_hint, membership_role, neutral_not_found, problem, resolve_active_request_actor,
 };
+use crate::bridge_machine::resolve_bridge_machine;
 use application_ports::coordinator_ingress::{
     CoordinatorProjectionSnapshot, CoordinatorRuntimeOutcome, CoordinatorRuntimeResult,
 };
+use application_ports::identity::{ActiveMembershipPort, ActiveMembershipPortErrorClass};
 use cloudflare_adapters::coordinator_ingress::{
     CloudflareCoordinatorClock, CloudflareCoordinatorIngressApplication,
 };
-use cloudflare_adapters::d1_identity_acl::ResolvedMembershipRole;
+use cloudflare_adapters::d1_active_membership::D1ActiveMembership;
 use control_plane_contract::coordinator_api::{
     CoordinatorCommandDto, CoordinatorCommandRequestDto, CoordinatorOutcomeDto,
     CoordinatorProjectionDto, CoordinatorReleaseDispositionDto, CoordinatorResponseDto,
@@ -16,8 +18,8 @@ use control_plane_contract::coordinator_api::{
 use control_plane_contract::{D1_CATALOG_BINDING, PROFILE_COORDINATOR_BINDING};
 use identity_access_domain::MembershipRole;
 use profile_platform_primitives::{
-    AggregateVersion, DeviceId, FencingToken, IdempotencyKey, LaunchIntentId, ProfileId, SessionId,
-    TenantId,
+    ActorContext, AggregateVersion, CorrelationId, DeviceId, FencingToken, IdempotencyKey,
+    LaunchIntentId, ProfileId, SessionId, TenantId, TenantScope,
 };
 use session_domain::coordinator::{CoordinatorStatus, ReleaseDisposition};
 use use_cases::coordinator_ingress::{
@@ -26,7 +28,25 @@ use use_cases::coordinator_ingress::{
 };
 use worker::{Env, Error, Method, Request, Response, Result};
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum BridgeCommandPolicy {
+    Claim,
+    ActiveSession,
+}
+
 pub async fn dispatch(
+    request: &mut Request,
+    env: &Env,
+    tenant_value: &str,
+    profile_value: &str,
+) -> Result<Response> {
+    if request.path().starts_with("/bridge/") {
+        return dispatch_bridge(request, env, tenant_value, profile_value).await;
+    }
+    dispatch_human(request, env, tenant_value, profile_value).await
+}
+
+async fn dispatch_human(
     request: &mut Request,
     env: &Env,
     tenant_value: &str,
@@ -42,37 +62,133 @@ pub async fn dispatch(
     let Some(actor) = resolve_active_request_actor(request, env, Some(tenant_value)).await? else {
         return neutral_not_found(&correlation_hint(request));
     };
-    let role = membership_role(actor.role());
+    execute_authorized(
+        request,
+        env,
+        &profile_id,
+        actor.actor(),
+        membership_role(&actor),
+        None,
+    )
+    .await
+}
+
+async fn dispatch_bridge(
+    request: &mut Request,
+    env: &Env,
+    tenant_value: &str,
+    profile_value: &str,
+) -> Result<Response> {
+    let correlation_value = correlation_hint(request);
+    let correlation_id = match CorrelationId::parse(correlation_value.clone()) {
+        Ok(value) => value,
+        Err(_) => return neutral_not_found(&correlation_value),
+    };
+    let tenant_id = match TenantId::parse(tenant_value.to_owned()) {
+        Ok(value) => value,
+        Err(_) => return neutral_not_found(correlation_id.as_str()),
+    };
+    let profile_id = match ProfileId::parse(profile_value.to_owned()) {
+        Ok(value) => value,
+        Err(_) => return neutral_not_found(correlation_id.as_str()),
+    };
+
+    let Some(machine) = resolve_bridge_machine(request, env, &correlation_id).await? else {
+        return neutral_not_found(correlation_id.as_str());
+    };
+    if machine.tenant_id() != &tenant_id {
+        return neutral_not_found(correlation_id.as_str());
+    }
+
+    let actor = ActorContext::new(
+        TenantScope::new(tenant_id),
+        machine.actor_id().clone(),
+        correlation_id,
+    );
+    let memberships = D1ActiveMembership::new(env.d1(D1_CATALOG_BINDING)?);
+    let role = match memberships
+        .active_membership_role(actor.tenant_scope(), actor.actor_id())
+        .await
+    {
+        Ok(Some(value)) => value,
+        Ok(None) => return neutral_not_found(actor.correlation_id().as_str()),
+        Err(error) => return membership_failure(actor.correlation_id().as_str(), error.class()),
+    };
+
+    execute_authorized(
+        request,
+        env,
+        &profile_id,
+        &actor,
+        role,
+        Some(machine.device_id()),
+    )
+    .await
+}
+
+async fn execute_authorized(
+    request: &mut Request,
+    env: &Env,
+    profile_id: &ProfileId,
+    actor: &ActorContext,
+    role: MembershipRole,
+    bridge_device: Option<&DeviceId>,
+) -> Result<Response> {
     let application = CloudflareCoordinatorIngressApplication::new(
         env,
         D1_CATALOG_BINDING,
         PROFILE_COORDINATOR_BINDING,
     );
-    let access =
-        match prepare_coordinator_ingress(actor.actor(), role, &profile_id, &application).await {
-            Ok(value) => value,
-            Err(error) => return operation_error(error, actor.actor().correlation_id().as_str()),
-        };
+    let access = match prepare_coordinator_ingress(actor, role, profile_id, &application).await {
+        Ok(value) => value,
+        Err(error) => return operation_error(error, actor.correlation_id().as_str()),
+    };
 
-    let command = match request.method() {
-        Method::Get => CoordinatorIngressRequest::Snapshot,
+    let (command, bridge_policy) = match request.method() {
+        Method::Get => (CoordinatorIngressRequest::Snapshot, None),
         Method::Post => {
             let body = match request.json::<CoordinatorCommandRequestDto>().await {
                 Ok(value) => value,
-                Err(_) => return invalid_request(actor.actor().correlation_id().as_str()),
+                Err(_) => return invalid_request(actor.correlation_id().as_str()),
+            };
+            let bridge_policy = match bridge_device {
+                Some(device_id) => match bridge_command_policy(&body.command, device_id) {
+                    Ok(value) => Some(value),
+                    Err(()) => return neutral_not_found(actor.correlation_id().as_str()),
+                },
+                None => None,
             };
             let command = match into_application(body) {
                 Ok(value) => value,
-                Err(()) => return invalid_request(actor.actor().correlation_id().as_str()),
+                Err(()) => return invalid_request(actor.correlation_id().as_str()),
             };
-            CoordinatorIngressRequest::Command(command)
+            (CoordinatorIngressRequest::Command(command), bridge_policy)
         }
-        _ => return neutral_not_found(actor.actor().correlation_id().as_str()),
+        _ => return neutral_not_found(actor.correlation_id().as_str()),
     };
 
     let clock = CloudflareCoordinatorClock;
+    if bridge_policy == Some(BridgeCommandPolicy::ActiveSession) {
+        let snapshot = match execute_prepared_coordinator_ingress(
+            actor,
+            role,
+            &access,
+            &application,
+            &clock,
+            CoordinatorIngressRequest::Snapshot,
+        )
+        .await
+        {
+            Ok(value) => value,
+            Err(error) => return operation_error(error, actor.correlation_id().as_str()),
+        };
+        if snapshot.projection().active_device_id() != bridge_device {
+            return neutral_not_found(actor.correlation_id().as_str());
+        }
+    }
+
     let result = match execute_prepared_coordinator_ingress(
-        actor.actor(),
+        actor,
         role,
         &access,
         &application,
@@ -82,15 +198,52 @@ pub async fn dispatch(
     .await
     {
         Ok(value) => value,
-        Err(error) => return operation_error(error, actor.actor().correlation_id().as_str()),
+        Err(error) => return operation_error(error, actor.correlation_id().as_str()),
     };
-    Response::from_json(&coordinator_response(&result))
+    let mut response = Response::from_json(&coordinator_response(&result))?;
+    if bridge_device.is_some() {
+        response.headers_mut().set("cache-control", "no-store")?;
+        response.headers_mut().set("pragma", "no-cache")?;
+    }
+    Ok(response)
 }
 
-fn membership_role(role: ResolvedMembershipRole) -> MembershipRole {
-    match role {
-        ResolvedMembershipRole::TenantOwner => MembershipRole::TenantOwner,
-        ResolvedMembershipRole::Member => MembershipRole::Member,
+fn bridge_command_policy(
+    command: &CoordinatorCommandDto,
+    device_id: &DeviceId,
+) -> Result<BridgeCommandPolicy, ()> {
+    match command {
+        CoordinatorCommandDto::Claim {
+            device_id: claimed_device,
+            ..
+        } if claimed_device == device_id.as_str() => Ok(BridgeCommandPolicy::Claim),
+        CoordinatorCommandDto::Heartbeat { .. } | CoordinatorCommandDto::Release { .. } => {
+            Ok(BridgeCommandPolicy::ActiveSession)
+        }
+        CoordinatorCommandDto::IssueLaunchIntent { .. }
+        | CoordinatorCommandDto::Claim { .. }
+        | CoordinatorCommandDto::BeginDrain
+        | CoordinatorCommandDto::MarkRecovered => Err(()),
+    }
+}
+
+fn membership_failure(
+    correlation_id: &str,
+    class: ActiveMembershipPortErrorClass,
+) -> Result<Response> {
+    match class {
+        ActiveMembershipPortErrorClass::IntegrityFailure => problem(
+            correlation_id,
+            500,
+            "integrity_failure",
+            "Integrity Failure",
+        ),
+        ActiveMembershipPortErrorClass::DependencyUnavailable => problem(
+            correlation_id,
+            503,
+            "dependency_unavailable",
+            "Dependency Unavailable",
+        ),
     }
 }
 
@@ -244,12 +397,16 @@ const fn coordinator_outcome(value: CoordinatorRuntimeOutcome) -> CoordinatorOut
 
 #[cfg(test)]
 mod tests {
-    use super::{coordinator_outcome, coordinator_status, into_application, release_disposition};
+    use super::{
+        BridgeCommandPolicy, bridge_command_policy, coordinator_outcome, coordinator_status,
+        into_application, release_disposition,
+    };
     use application_ports::coordinator_ingress::CoordinatorRuntimeOutcome;
     use control_plane_contract::coordinator_api::{
-        CoordinatorCommandRequestDto, CoordinatorOutcomeDto, CoordinatorReleaseDispositionDto,
-        CoordinatorStatusDto,
+        CoordinatorCommandDto, CoordinatorCommandRequestDto, CoordinatorOutcomeDto,
+        CoordinatorReleaseDispositionDto, CoordinatorStatusDto,
     };
+    use profile_platform_primitives::DeviceId;
     use session_domain::coordinator::{CoordinatorStatus, ReleaseDisposition};
 
     #[test]
@@ -264,6 +421,43 @@ mod tests {
         let decoded = serde_json::from_str::<CoordinatorCommandRequestDto>(body)
             .expect("wire DTO remains tolerant and defers application validation");
         assert!(into_application(decoded).is_err());
+    }
+
+    #[test]
+    fn bridge_machine_can_only_claim_its_device_or_continue_its_active_session()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let device = DeviceId::parse("device_01JBRIDGE")?;
+        let claim = CoordinatorCommandDto::Claim {
+            launch_intent_id: "launch_01JBRIDGE".to_owned(),
+            device_id: device.as_str().to_owned(),
+            session_id: "session_01JBRIDGE".to_owned(),
+        };
+        assert_eq!(
+            bridge_command_policy(&claim, &device),
+            Ok(BridgeCommandPolicy::Claim)
+        );
+        let wrong_device = CoordinatorCommandDto::Claim {
+            launch_intent_id: "launch_01JBRIDGE".to_owned(),
+            device_id: "device_02JBRIDGE".to_owned(),
+            session_id: "session_01JBRIDGE".to_owned(),
+        };
+        assert_eq!(bridge_command_policy(&wrong_device, &device), Err(()));
+        assert_eq!(
+            bridge_command_policy(
+                &CoordinatorCommandDto::Heartbeat {
+                    session_id: "session_01JBRIDGE".to_owned(),
+                    epoch: 1,
+                    fencing_token: "fence_01JBRIDGE".to_owned(),
+                },
+                &device,
+            ),
+            Ok(BridgeCommandPolicy::ActiveSession)
+        );
+        assert_eq!(
+            bridge_command_policy(&CoordinatorCommandDto::BeginDrain, &device),
+            Err(())
+        );
+        Ok(())
     }
 
     #[test]

@@ -102,6 +102,15 @@ const CATALOG_POST_EPOCH_MIGRATIONS: &[MigrationSpec] = &[
         code_rollback_allowed: true,
         contract_preconditions: &[],
     },
+    MigrationSpec {
+        revision: "0029_profile_launch_authority.sql",
+        migration_class: MigrationClass::Expand,
+        rollout_order: RolloutOrder::MigrateBeforeCode,
+        fail_forward_required: false,
+        destructive: false,
+        code_rollback_allowed: true,
+        contract_preconditions: &[],
+    },
 ];
 
 impl MigrationSpec {
@@ -134,14 +143,14 @@ impl MigrationSpec {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 struct MigrationFile {
     revision: u32,
     name: String,
     sha256: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct RepositoryMigrationCatalog {
     component: D1Component,
     migrations: Vec<MigrationFile>,
@@ -613,7 +622,7 @@ mod tests {
         let resolver = component_authority(&root, "resolver")?;
 
         assert_eq!(catalog.historical_len, 26);
-        assert_eq!(catalog.ordered_history.len(), 28);
+        assert_eq!(catalog.ordered_history.len(), 29);
         assert_eq!(resolver.historical_len, 4);
         assert_eq!(resolver.ordered_history.len(), 4);
         assert_eq!(
@@ -622,14 +631,14 @@ mod tests {
         );
         assert_eq!(
             catalog.current_repository_revision,
-            "0028_profile_assignment_detach.sql"
+            "0029_profile_launch_authority.sql"
         );
         assert_eq!(
             resolver.current_repository_revision,
             "0004_refresh_owner_hmac_version.sql"
         );
 
-        assert_eq!(catalog.post_epoch.len(), 2);
+        assert_eq!(catalog.post_epoch.len(), 3);
         let contract = &catalog.post_epoch[0];
         assert_eq!(contract.migration_file, "0027_pas2_payload_fingerprint.sql");
         assert_eq!(contract.migration_class, MigrationClass::Contract);
@@ -656,6 +665,15 @@ mod tests {
         assert!(!detach.destructive);
         assert!(detach.code_rollback_allowed);
         assert!(detach.contract_preconditions.is_empty());
+
+        let launch = &catalog.post_epoch[2];
+        assert_eq!(launch.migration_file, "0029_profile_launch_authority.sql");
+        assert_eq!(launch.migration_class, MigrationClass::Expand);
+        assert_eq!(launch.rollout_order, RolloutOrder::MigrateBeforeCode);
+        assert!(!launch.fail_forward_required);
+        assert!(!launch.destructive);
+        assert!(launch.code_rollback_allowed);
+        assert!(launch.contract_preconditions.is_empty());
         Ok(())
     }
 

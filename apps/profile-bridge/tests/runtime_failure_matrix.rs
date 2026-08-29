@@ -37,6 +37,8 @@ fn approved_bundle() -> Result<ApprovedRuntimeBundle, Box<dyn std::error::Error>
 #[derive(Default)]
 struct TrackingProcess {
     actions: Vec<ProcessAction>,
+    active_session: Option<SessionId>,
+    running: bool,
     spawn_error: Option<BridgePortError>,
     graceful_error: Option<BridgePortError>,
     confirm_error: Option<BridgePortError>,
@@ -46,7 +48,19 @@ struct TrackingProcess {
 impl ProcessControlPort for TrackingProcess {
     fn spawn(&mut self, session_id: &SessionId) -> Result<(), BridgePortError> {
         self.actions.push(ProcessAction::Spawn(session_id.clone()));
-        self.spawn_error.map_or(Ok(()), Err)
+        if let Some(error) = self.spawn_error {
+            return Err(error);
+        }
+        self.active_session = Some(session_id.clone());
+        self.running = true;
+        Ok(())
+    }
+
+    fn is_running(&mut self, session_id: &SessionId) -> Result<bool, BridgePortError> {
+        if self.active_session.as_ref() != Some(session_id) {
+            return Err(BridgePortError::InvalidResponse);
+        }
+        Ok(self.running)
     }
 
     fn request_graceful_close(&mut self, session_id: &SessionId) -> Result<(), BridgePortError> {
@@ -58,13 +72,23 @@ impl ProcessControlPort for TrackingProcess {
     fn confirm_stopped(&mut self, session_id: &SessionId) -> Result<(), BridgePortError> {
         self.actions
             .push(ProcessAction::ConfirmStopped(session_id.clone()));
-        self.confirm_error.map_or(Ok(()), Err)
+        if let Some(error) = self.confirm_error {
+            return Err(error);
+        }
+        self.running = false;
+        self.active_session = None;
+        Ok(())
     }
 
     fn force_terminate(&mut self, session_id: &SessionId) -> Result<(), BridgePortError> {
         self.actions
             .push(ProcessAction::ForceTerminate(session_id.clone()));
-        self.force_error.map_or(Ok(()), Err)
+        if let Some(error) = self.force_error {
+            return Err(error);
+        }
+        self.running = false;
+        self.active_session = None;
+        Ok(())
     }
 }
 
