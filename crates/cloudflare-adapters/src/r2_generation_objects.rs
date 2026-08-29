@@ -1,7 +1,8 @@
 use application_ports::generation_objects::{
-    GenerationObjectCatalogReference, GenerationObjectDescriptor, GenerationObjectDescriptorReadPort,
-    GenerationObjectDescriptorVerifyPort, GenerationObjectExactVerifyPort,
-    GenerationObjectUploadOutcome, GenerationObjectUploadPort, ImmutableGenerationObject,
+    GenerationObjectCatalogReference, GenerationObjectDescriptor,
+    GenerationObjectDescriptorReadPort, GenerationObjectDescriptorVerifyPort,
+    GenerationObjectExactVerifyPort, GenerationObjectUploadOutcome, GenerationObjectUploadPort,
+    ImmutableGenerationObject,
 };
 use application_ports::generations::{GenerationPortError, GenerationPortErrorClass};
 use profile_platform_primitives::TenantScope;
