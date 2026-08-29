@@ -304,7 +304,8 @@ mod tests {
             &AuthorizationFake(true),
             &PreconditionsFake(DeviceExecutionReadiness::Ready),
         ))
-        .expect_err("viewer launch must fail");
+        .err()
+        .ok_or_else(|| std::io::Error::other("viewer launch unexpectedly succeeded"))?;
         assert_eq!(error.code(), ProblemCode::NotFound);
         Ok(())
     }
@@ -334,7 +335,8 @@ mod tests {
                 &AuthorizationFake(true),
                 &PreconditionsFake(DeviceExecutionReadiness::Blocked(blocker)),
             ))
-            .expect_err("blocked launch must fail");
+            .err()
+            .ok_or_else(|| std::io::Error::other("blocked launch unexpectedly succeeded"))?;
             assert_eq!(error.code(), ProblemCode::InvalidState);
         }
         Ok(())
