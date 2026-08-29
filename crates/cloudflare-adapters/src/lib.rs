@@ -57,6 +57,7 @@ pub mod d1_query;
 pub mod d1_realtime_notifications;
 pub mod device_generation_commit_runtime;
 pub mod fake_mail_query;
+pub mod generation_keyring;
 mod gmail_mail_query;
 pub mod gmail_mailbox;
 pub mod gmail_oauth_provisioning;
