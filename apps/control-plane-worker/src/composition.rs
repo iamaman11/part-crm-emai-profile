@@ -20,6 +20,7 @@ use cloudflare_adapters::contact_protection::{
 };
 use cloudflare_adapters::coordinator_ingress::{
     CloudflareCoordinatorIngressApplication, CloudflareDeviceGenerationCommitPort,
+    CloudflareProfileGenerationSuccessorCommitPort,
 };
 use cloudflare_adapters::d1_authenticated_device::D1AuthenticatedDevice;
 use cloudflare_adapters::d1_browser_mail_execution::D1BrowserMailboxExecutionBinding;
@@ -296,4 +297,11 @@ pub fn coordinator_ingress_application(env: &Env) -> CloudflareCoordinatorIngres
 #[must_use]
 pub fn device_generation_commit(env: &Env) -> CloudflareDeviceGenerationCommitPort<'_> {
     CloudflareDeviceGenerationCommitPort::new(env, PROFILE_COORDINATOR_BINDING)
+}
+
+#[must_use]
+pub fn profile_generation_successor_commit(
+    env: &Env,
+) -> CloudflareProfileGenerationSuccessorCommitPort<'_> {
+    CloudflareProfileGenerationSuccessorCommitPort::new(env, PROFILE_COORDINATOR_BINDING)
 }
