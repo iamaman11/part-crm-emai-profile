@@ -2,10 +2,12 @@ use crate::ProcessControlPort;
 use crate::authoritative_generation::ensure_authoritative_generation;
 #[cfg(any(test, feature = "synthetic-test-bin"))]
 use crate::browser_mail_query::BrowserMailExecutionProof;
-use crate::dirty_close::{
-    DirtyCloseCompletion, DirtyCloseLocalOutcome, RetainedDirtyClose, RetainedDirtyCloseError,
-};
-use crate::dirty_generation::{GenerationSealingMaterialPort, PreparedDirtyGeneration};
+use crate::dirty_close::{DirtyCloseCompletion, DirtyCloseLocalOutcome, RetainedDirtyClose};
+#[cfg(any(test, feature = "synthetic-test-bin"))]
+use crate::dirty_close::RetainedDirtyCloseError;
+use crate::dirty_generation::GenerationSealingMaterialPort;
+#[cfg(any(test, feature = "synthetic-test-bin"))]
+use crate::dirty_generation::PreparedDirtyGeneration;
 #[cfg(any(test, feature = "synthetic-test-bin"))]
 use crate::dirty_generation_finalize::DirtyGenerationCommitClientPort;
 use crate::generation_reopen::{GenerationObjectDownloadPort, GenerationReopenControlPort};
@@ -645,9 +647,12 @@ where
             return Err(OperatorFlowError::CleanupRequired);
         }
         let (lease, base_record, workspace) = {
-            let retained = self.retained_dirty.as_ref().ok_or(OperatorFlowError::Stage(
-                OperatorFailureStage::GenerationSave,
-            ))?;
+            let retained = self
+                .retained_dirty
+                .as_ref()
+                .ok_or(OperatorFlowError::Stage(
+                    OperatorFailureStage::GenerationSave,
+                ))?;
             let workspace = retained
                 .open_base_workspace(root)
                 .map_err(|_| OperatorFlowError::Stage(OperatorFailureStage::GenerationSave))?;
