@@ -28,13 +28,14 @@ REQUIRED_MAIN_MARKERS = (
 
 REQUIRED_COMPOSITION_MARKERS = (
     "WindowsSchannelMachineHttp::from_system(",
+    "WindowsSignedGenerationObjectGet::from_system(",
     "ControlPlaneEnrollment::new(",
     "ControlPlaneCoordinator::new(",
     "FilesystemRuntimeBundleSelection::open(",
     "ShippingBrowserLaunchPreflight::new(",
     "ManagedCamouhostProcess::pair(",
     "ProfileBridgeOperator::new(",
-    ".open(claim, &materialization_root",
+    ".open_authoritative(",
     ".runtime_timing()",
     ".heartbeat(now()?)",
     "RuntimeDisplayMode::Headful",
@@ -191,13 +192,14 @@ def write_fixture(root: Path) -> None:
     composition = root / PRODUCTION_COMPOSITION
     composition.write_text(
         "// WindowsSchannelMachineHttp::from_system(\n"
+        "// WindowsSignedGenerationObjectGet::from_system(\n"
         "// ControlPlaneEnrollment::new(\n"
         "// ControlPlaneCoordinator::new(\n"
         "// FilesystemRuntimeBundleSelection::open(\n"
         "// ShippingBrowserLaunchPreflight::new(\n"
         "// ManagedCamouhostProcess::pair(\n"
         "// ProfileBridgeOperator::new(\n"
-        "// .open(claim, &materialization_root\n"
+        "// .open_authoritative(\n"
         "// .runtime_timing()\n"
         "// .heartbeat(now()?)\n"
         "// RuntimeDisplayMode::Headful\n"
@@ -298,6 +300,13 @@ def self_test() -> None:
         composition.write_text(safe_composition, encoding="utf-8")
 
         composition.write_text(
+            safe_composition.replace("// .open_authoritative(\n", "// .open(\n"),
+            encoding="utf-8",
+        )
+        expect_rejected(root, "shipping local-only open predecessor")
+        composition.write_text(safe_composition, encoding="utf-8")
+
+        composition.write_text(
             safe_composition + "// FakeCamouhost\n",
             encoding="utf-8",
         )
@@ -341,8 +350,8 @@ def main() -> int:
         else:
             validate(args.root.resolve())
             print(
-                "CAP-01 Profile Bridge keeps one real governed shipping composition; "
-                "claim-only success is forbidden and synthetic executors remain production-unreachable."
+                "CAP-01 Profile Bridge keeps one real governed authoritative shipping composition; "
+                "claim-only/local-only success is forbidden and synthetic executors remain production-unreachable."
             )
     except BoundaryError as error:
         print(error)
