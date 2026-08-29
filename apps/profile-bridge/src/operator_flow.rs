@@ -363,7 +363,12 @@ where
         mut ensure_materialized: F,
     ) -> Result<(), OperatorFlowError>
     where
-        F: FnMut(&mut C, &profile_platform_primitives::TenantId, &ProfileId, &GenerationId) -> Result<(), ()>,
+        F: FnMut(
+            &mut C,
+            &profile_platform_primitives::TenantId,
+            &ProfileId,
+            &GenerationId,
+        ) -> Result<(), ()>,
     {
         if self.cleanup_blocked {
             return Err(OperatorFlowError::CleanupRequired);
