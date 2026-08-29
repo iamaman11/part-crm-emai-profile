@@ -87,8 +87,8 @@ mod tests {
     };
 
     #[test]
-    fn request_contains_no_generation_or_object_selection()
-    -> Result<(), Box<dyn std::error::Error>> {
+    fn request_contains_no_generation_or_object_selection() -> Result<(), Box<dyn std::error::Error>>
+    {
         let request = BridgeGenerationDownloadCapabilityRequest::new(
             "session_reopen_01",
             "fence_reopen_01",
@@ -109,7 +109,10 @@ mod tests {
             "serverVersion",
             "clientClock",
         ] {
-            assert!(value.get(forbidden).is_none(), "forbidden selection field: {forbidden}");
+            assert!(
+                value.get(forbidden).is_none(),
+                "forbidden selection field: {forbidden}"
+            );
         }
         Ok(())
     }
@@ -120,7 +123,9 @@ mod tests {
             r#"{"coordinatorSessionId":"session_reopen_01","coordinatorFencingToken":"fence_reopen_01","coordinatorEpoch":4,"generationId":"generation_stale_01"}"#,
             r#"{"coordinatorSessionId":"session_reopen_01","coordinatorFencingToken":"fence_reopen_01","coordinatorEpoch":4,"clientClock":123}"#,
         ] {
-            assert!(serde_json::from_str::<BridgeGenerationDownloadCapabilityRequest>(body).is_err());
+            assert!(
+                serde_json::from_str::<BridgeGenerationDownloadCapabilityRequest>(body).is_err()
+            );
         }
     }
 
