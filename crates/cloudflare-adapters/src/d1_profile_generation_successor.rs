@@ -106,7 +106,8 @@ impl D1ProfileGenerationSuccessorCommitJournal {
         &self,
         actor: &ActorContext,
         request: &ProfileGenerationSuccessorCommitRequest,
-    ) -> Result<ProfileGenerationSuccessorCommitOutcome, ProfileGenerationSuccessorCommitError> {
+    ) -> Result<ProfileGenerationSuccessorCommitOutcome, ProfileGenerationSuccessorCommitError>
+    {
         validate_request(actor, request)?;
         let token_digest = fencing_token_digest(request.coordinator().fencing_token());
 
@@ -153,7 +154,9 @@ impl D1ProfileGenerationSuccessorCommitJournal {
                     .load(actor.tenant_scope().tenant_id(), request)
                     .await?
                     .ok_or_else(integrity_failure)?;
-                if exact_row(&row, actor, request, &token_digest) && committed_state_is_exact(&row) {
+                if exact_row(&row, actor, request, &token_digest)
+                    && committed_state_is_exact(&row)
+                {
                     Ok(ProfileGenerationSuccessorCommitOutcome::Activated)
                 } else {
                     Err(integrity_failure())
@@ -175,7 +178,8 @@ impl ProfileGenerationSuccessorCommitPort for D1ProfileGenerationSuccessorCommit
         &self,
         actor: &ActorContext,
         request: &ProfileGenerationSuccessorCommitRequest,
-    ) -> Result<ProfileGenerationSuccessorCommitOutcome, ProfileGenerationSuccessorCommitError> {
+    ) -> Result<ProfileGenerationSuccessorCommitOutcome, ProfileGenerationSuccessorCommitError>
+    {
         self.apply_interactive(actor, request).await
     }
 }
@@ -300,7 +304,11 @@ fn validate_request(
         || object.container_bytes() == 0
         || !is_sha256_hex(object.metadata_digest())
         || !is_sha256_hex(object.container_digest())
-        || request.expected_profile_version().value().checked_add(1).is_none()
+        || request
+            .expected_profile_version()
+            .value()
+            .checked_add(1)
+            .is_none()
         || request.coordinator().epoch() == 0
         || request.coordinator().coordinator_sequence() == 0
         || request.coordinator().coordinator_version() != expected_coordinator_version
