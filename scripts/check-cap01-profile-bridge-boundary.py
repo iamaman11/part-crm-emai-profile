@@ -9,6 +9,7 @@ import tomllib
 from pathlib import Path
 
 PRODUCTION_MAIN = Path("apps/profile-bridge/src/main.rs")
+PRODUCTION_COMPOSITION = Path("apps/profile-bridge/src/shipping_composition.rs")
 MANIFEST = Path("apps/profile-bridge/Cargo.toml")
 AUX_BIN_ROOT = Path("apps/profile-bridge/src/bin")
 ALLOWED_AUX_BINS = {"profile-bridge-synthetic.rs"}
@@ -20,12 +21,30 @@ SYNTHETIC_FEATURE = "synthetic-test-bin"
 
 REQUIRED_MAIN_MARKERS = (
     "use bridge_domain::ClaimUri;",
+    "use profile_bridge::shipping_composition::run_claim;",
     "ClaimUri::parse(&uri)",
+    "run_claim(&claim)",
+)
+
+REQUIRED_COMPOSITION_MARKERS = (
+    "WindowsSchannelMachineHttp::from_system(",
+    "ControlPlaneEnrollment::new(",
+    "ControlPlaneCoordinator::new(",
+    "FilesystemRuntimeBundleSelection::open(",
+    "ShippingBrowserLaunchPreflight::new(",
+    "ManagedCamouhostProcess::pair(",
+    "ProfileBridgeOperator::new(",
+    ".open(claim, &materialization_root",
+    ".runtime_timing()",
+    ".heartbeat(now()?)",
+    "RuntimeDisplayMode::Headful",
+    "Err(ShippingCompositionError::UnsupportedPlatform)",
 )
 
 FORBIDDEN_CLAIM_ONLY_SUCCESS_MARKERS = (
     'Ok("claim-uri-accepted")',
     'println!("claim-uri-accepted")',
+    "CompositionUnavailable",
 )
 
 FORBIDDEN_UNGOVERNED_EFFECT_MARKERS = (
@@ -34,6 +53,18 @@ FORBIDDEN_UNGOVERNED_EFFECT_MARKERS = (
     "FakeCamouhost",
     "FakeProcessControl",
     "tokio::process",
+    "std::process::Command",
+    "Command::new(",
+    ".spawn(",
+    "std::net::",
+    "reqwest::",
+)
+
+FORBIDDEN_COMPOSITION_MARKERS = (
+    "CompositionUnavailable",
+    "profile-bridge-synthetic",
+    "FakeCamouhost",
+    "FakeProcessControl",
     "std::process::Command",
     "Command::new(",
     ".spawn(",
@@ -89,11 +120,16 @@ def validate_binary_inventory(manifest: dict) -> None:
 
 def validate(root: Path) -> None:
     main_path = root / PRODUCTION_MAIN
+    composition_path = root / PRODUCTION_COMPOSITION
     manifest_path = root / MANIFEST
     if not main_path.is_file():
         fail(f"missing production entrypoint: {PRODUCTION_MAIN}")
     if main_path.is_symlink():
         fail(f"production entrypoint must not be a symlink: {PRODUCTION_MAIN}")
+    if not composition_path.is_file():
+        fail(f"missing production composition: {PRODUCTION_COMPOSITION}")
+    if composition_path.is_symlink():
+        fail(f"production composition must not be a symlink: {PRODUCTION_COMPOSITION}")
     if not manifest_path.is_file():
         fail(f"missing manifest: {MANIFEST}")
 
@@ -103,10 +139,18 @@ def validate(root: Path) -> None:
             fail(f"shipping ingress marker missing: {marker}")
     for marker in FORBIDDEN_CLAIM_ONLY_SUCCESS_MARKERS:
         if marker in main:
-            fail(f"claim-only shipping success is forbidden: {marker}")
+            fail(f"claim-only shipping predecessor is forbidden: {marker}")
     for marker in FORBIDDEN_UNGOVERNED_EFFECT_MARKERS:
         if marker in main:
             fail(f"production entrypoint contains ungoverned effect marker: {marker}")
+
+    composition = composition_path.read_text(encoding="utf-8").replace("\r\n", "\n")
+    for marker in REQUIRED_COMPOSITION_MARKERS:
+        if marker not in composition:
+            fail(f"shipping composition marker missing: {marker}")
+    for marker in FORBIDDEN_COMPOSITION_MARKERS:
+        if marker in composition:
+            fail(f"shipping composition contains forbidden alternate/effect marker: {marker}")
 
     manifest = tomllib.loads(manifest_path.read_text(encoding="utf-8"))
     validate_binary_inventory(manifest)
@@ -115,11 +159,15 @@ def validate(root: Path) -> None:
         fail("decorative capability-policy dependency found without a production executor")
 
     bin_root = root / AUX_BIN_ROOT
-    observed_aux = {
-        path.relative_to(bin_root).as_posix()
-        for path in bin_root.rglob("*.rs")
-        if path.is_file()
-    } if bin_root.is_dir() else set()
+    observed_aux = (
+        {
+            path.relative_to(bin_root).as_posix()
+            for path in bin_root.rglob("*.rs")
+            if path.is_file()
+        }
+        if bin_root.is_dir()
+        else set()
+    )
     if observed_aux != ALLOWED_AUX_BINS:
         fail(
             "published auxiliary binary inventory changed: "
@@ -132,10 +180,28 @@ def write_fixture(root: Path) -> None:
     main.parent.mkdir(parents=True, exist_ok=True)
     main.write_text(
         "use bridge_domain::ClaimUri;\n"
+        "use profile_bridge::shipping_composition::run_claim;\n"
         "fn run(uri: String) -> Result<(), ()> {\n"
-        "    ClaimUri::parse(&uri).map_err(|_| ())?;\n"
-        "    Err(())\n"
+        "    let claim = ClaimUri::parse(&uri).map_err(|_| ())?;\n"
+        "    run_claim(&claim).map_err(|_| ())?;\n"
+        "    Ok(())\n"
         "}\n",
+        encoding="utf-8",
+    )
+    composition = root / PRODUCTION_COMPOSITION
+    composition.write_text(
+        "// WindowsSchannelMachineHttp::from_system(\n"
+        "// ControlPlaneEnrollment::new(\n"
+        "// ControlPlaneCoordinator::new(\n"
+        "// FilesystemRuntimeBundleSelection::open(\n"
+        "// ShippingBrowserLaunchPreflight::new(\n"
+        "// ManagedCamouhostProcess::pair(\n"
+        "// ProfileBridgeOperator::new(\n"
+        "// .open(claim, &materialization_root\n"
+        "// .runtime_timing()\n"
+        "// .heartbeat(now()?)\n"
+        "// RuntimeDisplayMode::Headful\n"
+        "// Err(ShippingCompositionError::UnsupportedPlatform)\n",
         encoding="utf-8",
     )
     manifest = root / MANIFEST
@@ -171,7 +237,9 @@ def expect_rejected(root: Path, label: str) -> None:
         validate(root)
     except BoundaryError:
         return
-    raise BoundaryError(f"CAP-01 Profile Bridge boundary self-test failed: {label} unexpectedly passed")
+    raise BoundaryError(
+        f"CAP-01 Profile Bridge boundary self-test failed: {label} unexpectedly passed"
+    )
 
 
 def self_test() -> None:
@@ -182,6 +250,8 @@ def self_test() -> None:
 
         main = root / PRODUCTION_MAIN
         safe_main = main.read_text(encoding="utf-8")
+        composition = root / PRODUCTION_COMPOSITION
+        safe_composition = composition.read_text(encoding="utf-8")
 
         main.write_text(
             safe_main + "use profile_bridge::operator_flow::ProfileBridgeOperator;\n",
@@ -191,14 +261,23 @@ def self_test() -> None:
         main.write_text(safe_main, encoding="utf-8")
 
         main.write_text(
-            safe_main + 'fn predecessor() -> Result<&\'static str, ()> { Ok("claim-uri-accepted") }\n',
+            safe_main.replace("run_claim(&claim).map_err(|_| ())?;", "let _ = &claim;"),
+            encoding="utf-8",
+        )
+        expect_rejected(root, "claim-only predecessor without shipping composition")
+        main.write_text(safe_main, encoding="utf-8")
+
+        main.write_text(
+            safe_main
+            + 'fn predecessor() -> Result<&\'static str, ()> { Ok("claim-uri-accepted") }\n',
             encoding="utf-8",
         )
         expect_rejected(root, "claim-only success predecessor")
         main.write_text(safe_main, encoding="utf-8")
 
         main.write_text(
-            safe_main + 'fn effect() { let _ = std::process::Command::new("camouhost"); }\n',
+            safe_main
+            + 'fn effect() { let _ = std::process::Command::new("camouhost"); }\n',
             encoding="utf-8",
         )
         expect_rejected(root, "direct process effect")
@@ -210,6 +289,20 @@ def self_test() -> None:
         )
         expect_rejected(root, "synthetic runtime import")
         main.write_text(safe_main, encoding="utf-8")
+
+        composition.write_text(
+            safe_composition.replace("// ManagedCamouhostProcess::pair(\n", ""),
+            encoding="utf-8",
+        )
+        expect_rejected(root, "missing real managed Camouhost composition")
+        composition.write_text(safe_composition, encoding="utf-8")
+
+        composition.write_text(
+            safe_composition + "// FakeCamouhost\n",
+            encoding="utf-8",
+        )
+        expect_rejected(root, "synthetic runtime in shipping composition")
+        composition.write_text(safe_composition, encoding="utf-8")
 
         manifest = root / MANIFEST
         safe_manifest = manifest.read_text(encoding="utf-8")
@@ -248,7 +341,7 @@ def main() -> int:
         else:
             validate(args.root.resolve())
             print(
-                "CAP-01 Profile Bridge keeps one governed shipping ingress; "
+                "CAP-01 Profile Bridge keeps one real governed shipping composition; "
                 "claim-only success is forbidden and synthetic executors remain production-unreachable."
             )
     except BoundaryError as error:
