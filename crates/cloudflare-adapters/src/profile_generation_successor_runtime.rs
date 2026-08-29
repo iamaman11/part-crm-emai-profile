@@ -2,6 +2,7 @@ use application_ports::generation_objects::GenerationObjectDescriptor;
 use application_ports::profile_generation_successor::{
     ProfileGenerationCommitWitness, ProfileGenerationSuccessorCommitError,
     ProfileGenerationSuccessorCommitErrorClass, ProfileGenerationSuccessorCommitRequest,
+    ProfileGenerationWriterAuthorityRequest,
 };
 use profile_platform_primitives::{
     ActorContext, ActorId, AggregateVersion, CorrelationId, DeviceId, FencingToken, GenerationId,
@@ -11,6 +12,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 pub const PROFILE_GENERATION_SUCCESSOR_COMMIT_PATH: &str = "/profile-generation-successor";
+pub const PROFILE_GENERATION_WRITER_AUTHORITY_PATH: &str = "/profile-generation-writer-authority";
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -135,6 +137,60 @@ impl ProfileGenerationSuccessorInternalRequest {
     }
 }
 
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProfileGenerationWriterAuthorityInternalRequest {
+    tenant_id: String,
+    actor_id: String,
+    correlation_id: String,
+    device_id: String,
+    profile_id: String,
+    coordinator_session_id: String,
+    coordinator_fencing_token: String,
+    coordinator_epoch: u64,
+}
+
+impl ProfileGenerationWriterAuthorityInternalRequest {
+    #[must_use]
+    pub fn from_domain(actor: &ActorContext, request: &ProfileGenerationWriterAuthorityRequest) -> Self {
+        Self {
+            tenant_id: actor.tenant_scope().tenant_id().as_str().to_owned(),
+            actor_id: actor.actor_id().as_str().to_owned(),
+            correlation_id: actor.correlation_id().as_str().to_owned(),
+            device_id: request.device_id().as_str().to_owned(),
+            profile_id: request.profile_id().as_str().to_owned(),
+            coordinator_session_id: request.session_id().as_str().to_owned(),
+            coordinator_fencing_token: request.fencing_token().as_str().to_owned(),
+            coordinator_epoch: request.epoch(),
+        }
+    }
+
+    pub fn into_domain(
+        self,
+    ) -> Result<
+        (ActorContext, ProfileGenerationWriterAuthorityRequest),
+        ProfileGenerationSuccessorCommitError,
+    > {
+        let tenant_id = TenantId::parse(self.tenant_id).map_err(|_| integrity_failure())?;
+        let actor = ActorContext::new(
+            TenantScope::new(tenant_id),
+            ActorId::parse(self.actor_id).map_err(|_| integrity_failure())?,
+            CorrelationId::parse(self.correlation_id).map_err(|_| integrity_failure())?,
+        );
+        let request = ProfileGenerationWriterAuthorityRequest::new(
+            DeviceId::parse(self.device_id).map_err(|_| integrity_failure())?,
+            ProfileId::parse(self.profile_id).map_err(|_| integrity_failure())?,
+            SessionId::parse(self.coordinator_session_id).map_err(|_| integrity_failure())?,
+            FencingToken::parse(self.coordinator_fencing_token).map_err(|_| integrity_failure())?,
+            self.coordinator_epoch,
+        );
+        if request.epoch() == 0 {
+            return Err(integrity_failure());
+        }
+        Ok((actor, request))
+    }
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ProfileGenerationSuccessorInternalOutcome {
@@ -155,6 +211,13 @@ pub enum ProfileGenerationSuccessorInternalErrorClass {
 #[serde(deny_unknown_fields)]
 pub struct ProfileGenerationSuccessorInternalResponse {
     pub outcome: ProfileGenerationSuccessorInternalOutcome,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProfileGenerationWriterAuthorityInternalResponse {
+    pub coordinator_version: u64,
+    pub coordinator_sequence: u64,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -185,26 +248,34 @@ const fn integrity_failure() -> ProfileGenerationSuccessorCommitError {
 
 #[cfg(test)]
 mod tests {
-    use super::ProfileGenerationSuccessorInternalRequest;
+    use super::{
+        ProfileGenerationSuccessorInternalRequest,
+        ProfileGenerationWriterAuthorityInternalRequest,
+    };
     use application_ports::generation_objects::GenerationObjectDescriptor;
     use application_ports::profile_generation_successor::{
         ProfileGenerationCommitWitness, ProfileGenerationSuccessorCommitRequest,
+        ProfileGenerationWriterAuthorityRequest,
     };
     use profile_platform_primitives::{
         ActorContext, ActorId, AggregateVersion, CorrelationId, DeviceId, FencingToken,
         GenerationId, ProfileId, SessionId, TenantId, TenantScope, UnixMillis,
     };
 
+    fn actor() -> Result<ActorContext, Box<dyn std::error::Error>> {
+        Ok(ActorContext::new(
+            TenantScope::new(TenantId::parse("tenant_successor_runtime_01")?),
+            ActorId::parse("actor_successor_runtime_01")?,
+            CorrelationId::parse("corr_successor_runtime_01")?,
+        ))
+    }
+
     #[test]
     fn internal_shape_round_trips_without_client_clock_authority()
     -> Result<(), Box<dyn std::error::Error>> {
-        let tenant_id = TenantId::parse("tenant_successor_runtime_01")?;
+        let actor = actor()?;
+        let tenant_id = actor.tenant_scope().tenant_id().clone();
         let profile_id = ProfileId::parse("profile_successor_runtime_01")?;
-        let actor = ActorContext::new(
-            TenantScope::new(tenant_id.clone()),
-            ActorId::parse("actor_successor_runtime_01")?,
-            CorrelationId::parse("corr_successor_runtime_01")?,
-        );
         let domain = ProfileGenerationSuccessorCommitRequest::new(
             DeviceId::parse("device_successor_runtime_01")?,
             profile_id.clone(),
@@ -242,6 +313,33 @@ mod tests {
         assert_eq!(round_domain.observed_at(), UnixMillis::new(200));
         assert_eq!(round_domain.object(), domain.object());
         assert_eq!(round_domain.coordinator(), domain.coordinator());
+        Ok(())
+    }
+
+    #[test]
+    fn writer_authority_shape_contains_raw_witness_but_no_client_clock_or_version()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let actor = actor()?;
+        let domain = ProfileGenerationWriterAuthorityRequest::new(
+            DeviceId::parse("device_successor_runtime_01")?,
+            ProfileId::parse("profile_successor_runtime_01")?,
+            SessionId::parse("session_successor_runtime_01")?,
+            FencingToken::parse("fence_successor_runtime_01")?,
+            3,
+        );
+        let internal = ProfileGenerationWriterAuthorityInternalRequest::from_domain(&actor, &domain);
+        let serialized = serde_json::to_string(&internal)?;
+        for forbidden in [
+            "observed_at",
+            "client_clock",
+            "coordinator_version",
+            "coordinator_sequence",
+        ] {
+            assert!(!serialized.contains(forbidden));
+        }
+        let (round_actor, round_domain) = internal.into_domain()?;
+        assert_eq!(round_actor, actor);
+        assert_eq!(round_domain, domain);
         Ok(())
     }
 }
