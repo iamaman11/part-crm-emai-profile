@@ -3,8 +3,8 @@ use crate::local_profile::{
     LocalProfileError, MaterializationRoot, RecoveryClone,
 };
 use encrypted_generation_domain::{
-    GenerationDek, GenerationIdentity, GenerationMetadata, NoncePrefix, SealedGeneration,
-    seal_generation,
+    GenerationDek, GenerationIdentity, GenerationMetadata, NoncePrefix, PlaintextDigest,
+    SealedGeneration, seal_generation,
 };
 use profile_platform_primitives::{GenerationId, ProfileId, TenantId};
 use std::fmt;
@@ -81,7 +81,9 @@ pub trait GenerationSealingMaterialPort {
         &mut self,
         tenant_id: &TenantId,
         profile_id: &ProfileId,
+        base_generation_id: &GenerationId,
         generation_id: &GenerationId,
+        plaintext_digest: [u8; 32],
     ) -> Result<GenerationSealingMaterial, Self::Error>;
 }
 
@@ -163,9 +165,16 @@ pub fn prepare_dirty_generation_candidate<K: GenerationSealingMaterialPort>(
     if clone.verify_clone_only()? != candidate_inventory {
         return Err(DirtyGenerationError::SourceChanged);
     }
+    let plaintext_digest = PlaintextDigest::calculate(&snapshot).bytes();
 
     let material = keys
-        .material_for(tenant_id, profile_id, candidate_generation_id)
+        .material_for(
+            tenant_id,
+            profile_id,
+            base_generation_id,
+            candidate_generation_id,
+            plaintext_digest,
+        )
         .map_err(|_| DirtyGenerationError::KeyUnavailable)?;
     let metadata = GenerationMetadata::for_plaintext(
         GenerationIdentity::new(
@@ -296,7 +305,11 @@ mod tests {
 
     static TEMP_COUNTER: AtomicU64 = AtomicU64::new(1);
 
-    struct FakeKeys;
+    #[derive(Default)]
+    struct FakeKeys {
+        observed_base_generation_id: Option<GenerationId>,
+        observed_plaintext_digest: Option<[u8; 32]>,
+    }
 
     impl GenerationSealingMaterialPort for FakeKeys {
         type Error = ();
@@ -305,8 +318,12 @@ mod tests {
             &mut self,
             _tenant_id: &TenantId,
             _profile_id: &ProfileId,
+            base_generation_id: &GenerationId,
             _generation_id: &GenerationId,
+            plaintext_digest: [u8; 32],
         ) -> Result<GenerationSealingMaterial, Self::Error> {
+            self.observed_base_generation_id = Some(base_generation_id.clone());
+            self.observed_plaintext_digest = Some(plaintext_digest);
             Ok(GenerationSealingMaterial::new(
                 GenerationDek::new(
                     KeyId::parse("key_dirty_generation_01").map_err(|_| ())?,
@@ -376,7 +393,7 @@ mod tests {
         fs::write(source.path().join("storage/default/state.bin"), b"state-v2")?;
         let source_before = source.inventory()?;
         let record = dirty_record(fixture.base_generation_id.clone())?;
-        let mut keys = FakeKeys;
+        let mut keys = FakeKeys::default();
 
         let prepared = prepare_dirty_generation_candidate(
             &record,
@@ -390,6 +407,14 @@ mod tests {
 
         assert_eq!(source.inventory()?, source_before);
         assert_eq!(prepared.candidate_inventory(), &source_before);
+        assert_eq!(
+            keys.observed_base_generation_id.as_ref(),
+            Some(&fixture.base_generation_id)
+        );
+        assert_eq!(
+            keys.observed_plaintext_digest,
+            Some(prepared.sealed().metadata().plaintext_digest().bytes())
+        );
         assert_eq!(prepared.metadata_digest().len(), 64);
         assert_eq!(
             prepared.metadata_digest(),
@@ -432,7 +457,7 @@ mod tests {
         )?;
         let clean =
             LocalGenerationRecord::new(fixture.base_generation_id.clone(), 0, UnixMillis::new(10));
-        let mut keys = FakeKeys;
+        let mut keys = FakeKeys::default();
         assert_eq!(
             prepare_dirty_generation_candidate(
                 &clean,
