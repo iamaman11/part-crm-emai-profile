@@ -511,7 +511,7 @@ fn runtime_result(
             projection.active_epoch,
             projection.idle_expires_at_ms.map(UnixMillis::new),
             projection.hard_expires_at_ms.map(UnixMillis::new),
-            projection.drain_deadline_ms.map(UnixMillis::value),
+            projection.drain_deadline_ms.map(UnixMillis::new),
             projection
                 .pending_launch_intent_id
                 .map(LaunchIntentId::parse)
