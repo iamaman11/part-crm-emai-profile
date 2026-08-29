@@ -14,6 +14,10 @@ pub const PROFILE_STATUSES: [&str; 9] = [
 ];
 pub const PROFILE_GRANT_ROLES: [&str; 2] = ["PROFILE_VIEWER", "PROFILE_OPERATOR"];
 pub const GENERATION_STATUSES: [&str; 3] = ["REGISTERED", "VERIFIED", "QUARANTINED"];
+pub const BRIDGE_PROFILE_GENERATION_UPLOAD_CAPABILITY_PATH_TEMPLATE: &str =
+    "/bridge/v1/tenants/{tenantId}/profiles/{profileId}/generation-successor/upload-capability";
+pub const BRIDGE_PROFILE_GENERATION_COMMIT_PATH_TEMPLATE: &str =
+    "/bridge/v1/tenants/{tenantId}/profiles/{profileId}/generation-successor/commit";
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
@@ -97,6 +101,140 @@ pub struct ProfileGenerationVersionRequest {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct QuarantineGenerationRequest {
     pub expected_generation_version: u64,
+}
+
+/// Canonical machine request for both immutable successor upload preparation and final commit.
+/// Machine identity, actor, tenant/profile path identity, optimistic profile version and coordinator
+/// version/sequence are intentionally server-owned and therefore absent from this DTO.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct BridgeProfileGenerationSuccessorRequest {
+    base_generation_id: String,
+    generation_id: String,
+    object_key: String,
+    metadata_digest: String,
+    container_digest: String,
+    container_bytes: u64,
+    coordinator_session_id: String,
+    coordinator_fencing_token: String,
+    coordinator_epoch: u64,
+}
+
+impl BridgeProfileGenerationSuccessorRequest {
+    #[must_use]
+    pub const fn base_generation_id(&self) -> &str {
+        &self.base_generation_id
+    }
+
+    #[must_use]
+    pub const fn generation_id(&self) -> &str {
+        &self.generation_id
+    }
+
+    #[must_use]
+    pub const fn object_key(&self) -> &str {
+        &self.object_key
+    }
+
+    #[must_use]
+    pub const fn metadata_digest(&self) -> &str {
+        &self.metadata_digest
+    }
+
+    #[must_use]
+    pub const fn container_digest(&self) -> &str {
+        &self.container_digest
+    }
+
+    #[must_use]
+    pub const fn container_bytes(&self) -> u64 {
+        self.container_bytes
+    }
+
+    #[must_use]
+    pub const fn coordinator_session_id(&self) -> &str {
+        &self.coordinator_session_id
+    }
+
+    #[must_use]
+    pub const fn coordinator_fencing_token(&self) -> &str {
+        &self.coordinator_fencing_token
+    }
+
+    #[must_use]
+    pub const fn coordinator_epoch(&self) -> u64 {
+        self.coordinator_epoch
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct BridgeGenerationUploadHeader {
+    pub name: String,
+    pub value: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct BridgeGenerationUploadCapabilityResponse {
+    pub state: String,
+    pub method: Option<String>,
+    pub url: Option<String>,
+    pub headers: Vec<BridgeGenerationUploadHeader>,
+    pub expires_seconds: Option<u32>,
+}
+
+impl BridgeGenerationUploadCapabilityResponse {
+    #[must_use]
+    pub const fn verified() -> Self {
+        Self {
+            state: String::new(),
+            method: None,
+            url: None,
+            headers: Vec::new(),
+            expires_seconds: None,
+        }
+    }
+
+    #[must_use]
+    pub fn exact_verified() -> Self {
+        Self {
+            state: "verified".to_owned(),
+            method: None,
+            url: None,
+            headers: Vec::new(),
+            expires_seconds: None,
+        }
+    }
+
+    #[must_use]
+    pub fn upload_required(url: &str, headers: &[(String, String)], expires_seconds: u32) -> Self {
+        Self {
+            state: "uploadRequired".to_owned(),
+            method: Some("PUT".to_owned()),
+            url: Some(url.to_owned()),
+            headers: headers
+                .iter()
+                .map(|(name, value)| BridgeGenerationUploadHeader {
+                    name: name.clone(),
+                    value: value.clone(),
+                })
+                .collect(),
+            expires_seconds: Some(expires_seconds),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum BridgeGenerationSuccessorCommitOutcomeDto {
+    Activated,
+    AlreadyActive,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct BridgeGenerationSuccessorCommitResponse {
+    pub outcome: BridgeGenerationSuccessorCommitOutcomeDto,
 }
 
 #[must_use]
@@ -216,6 +354,7 @@ fn sha256_schema() -> Value {
 #[cfg(test)]
 mod tests {
     use super::{
+        BridgeGenerationUploadCapabilityResponse, BridgeProfileGenerationSuccessorRequest,
         ProfileCreateRequest, ProfileGrantRequest, ProfileProjectionDto, ProfileStatusDto,
         RegisterGenerationRequest, openapi_fragment,
     };
@@ -254,6 +393,53 @@ mod tests {
         assert!(serde_json::from_str::<RegisterGenerationRequest>(valid).is_ok());
         let legacy = r#"{"generationId":"generation_01JTEST","objectKey":"profiles/v1/generation.enc","metadataDigest":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","containerDigest":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","requestDigest":"legacy"}"#;
         assert!(serde_json::from_str::<RegisterGenerationRequest>(legacy).is_err());
+    }
+
+    #[test]
+    fn bridge_successor_request_is_metadata_only_and_rejects_server_authority_fields() {
+        let base = r#"{
+            "baseGenerationId":"generation_bridge_base_01",
+            "generationId":"generation_bridge_next_01",
+            "objectKey":"tenants/tenant_bridge_01/profiles/profile_bridge_01/generations/generation_bridge_next_01.bpgc",
+            "metadataDigest":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "containerDigest":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "containerBytes":4096,
+            "coordinatorSessionId":"session_bridge_01",
+            "coordinatorFencingToken":"fence_bridge_01",
+            "coordinatorEpoch":3
+        }"#;
+        assert!(serde_json::from_str::<BridgeProfileGenerationSuccessorRequest>(base).is_ok());
+        for forbidden in [
+            "tenantId",
+            "actorId",
+            "profileId",
+            "deviceId",
+            "expectedProfileVersion",
+            "coordinatorVersion",
+            "coordinatorSequence",
+            "observedAt",
+            "clientClock",
+            "ciphertext",
+            "container",
+            "rawDek",
+        ] {
+            let tampered = base.replacen('}', &format!(r#", "{forbidden}": 1}}"#), 1);
+            assert!(
+                serde_json::from_str::<BridgeProfileGenerationSuccessorRequest>(&tampered).is_err(),
+                "forbidden Bridge successor field unexpectedly accepted: {forbidden}"
+            );
+        }
+    }
+
+    #[test]
+    fn verified_upload_response_contains_no_capability() -> Result<(), Box<dyn std::error::Error>> {
+        let json = serde_json::to_value(BridgeGenerationUploadCapabilityResponse::exact_verified())?;
+        assert_eq!(json["state"], "verified");
+        assert!(json["method"].is_null());
+        assert!(json["url"].is_null());
+        assert_eq!(json["headers"], serde_json::json!([]));
+        assert!(json["expiresSeconds"].is_null());
+        Ok(())
     }
 
     #[test]
