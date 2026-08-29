@@ -5,9 +5,10 @@ mod key_derivation;
 mod lifecycle;
 
 pub use container::{
-    ContainerDigest, GenerationDek, GenerationIdentity, GenerationMetadata, KeyId, MetadataDigest,
-    NoncePrefix, OpenedGeneration, PlaintextDigest, SealedGeneration, open_generation,
-    open_generation_expected, seal_generation,
+    ContainerDigest, GenerationDek, GenerationIdentity, GenerationMetadata,
+    InspectedGenerationMetadataPrelude, KeyId, MAX_GENERATION_METADATA_PRELUDE_BYTES,
+    MetadataDigest, NoncePrefix, OpenedGeneration, PlaintextDigest, SealedGeneration,
+    inspect_generation_metadata_prelude, open_generation, open_generation_expected, seal_generation,
 };
 pub use key_derivation::{
     DerivedGenerationMaterial, GenerationKeyDerivationContext, GenerationKeyDerivationError,
