@@ -185,18 +185,7 @@ pub struct BridgeGenerationUploadCapabilityResponse {
 
 impl BridgeGenerationUploadCapabilityResponse {
     #[must_use]
-    pub const fn verified() -> Self {
-        Self {
-            state: String::new(),
-            method: None,
-            url: None,
-            headers: Vec::new(),
-            expires_seconds: None,
-        }
-    }
-
-    #[must_use]
-    pub fn exact_verified() -> Self {
+    pub fn verified() -> Self {
         Self {
             state: "verified".to_owned(),
             method: None,
@@ -433,7 +422,8 @@ mod tests {
 
     #[test]
     fn verified_upload_response_contains_no_capability() -> Result<(), Box<dyn std::error::Error>> {
-        let json = serde_json::to_value(BridgeGenerationUploadCapabilityResponse::exact_verified())?;
+        let json =
+            serde_json::to_value(BridgeGenerationUploadCapabilityResponse::verified())?;
         assert_eq!(json["state"], "verified");
         assert!(json["method"].is_null());
         assert!(json["url"].is_null());
