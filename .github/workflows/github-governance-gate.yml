@@ -139,10 +139,191 @@ jobs:
       - name: Prove Profile/Camoufox security and proxy-handle leakage fail closed
         run: node .github/scripts/profile-security-authority-check.mjs --self-test
 
+  recover_stale_p2_actions:
+    name: Governance Recovery Stale P2 Actions
+    if: >-
+      github.event_name == 'push' &&
+      github.ref == 'refs/heads/main' &&
+      github.event.before == '4d4e18019cc28a8f0a04bcfdd3d42e909cb3ccf1'
+    needs: contract
+    runs-on: ubuntu-24.04
+    permissions:
+      actions: write
+      contents: read
+    steps:
+      - name: Checkout exact accepted recovery source
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 2
+          persist-credentials: false
+
+      - name: Prove and disable exact stale P2 Actions registrations
+        env:
+          ACTIONS_WRITE_TOKEN: ${{ github.token }}
+          EXPECTED_BEFORE_SHA: 4d4e18019cc28a8f0a04bcfdd3d42e909cb3ccf1
+          EVENT_BEFORE_SHA: ${{ github.event.before }}
+        run: |
+          set -euo pipefail
+          test "$GITHUB_EVENT_NAME" = push
+          test "$GITHUB_REF" = refs/heads/main
+          test "$EVENT_BEFORE_SHA" = "$EXPECTED_BEFORE_SHA"
+          test "$(git rev-parse HEAD^)" = "$EXPECTED_BEFORE_SHA"
+          test -n "$ACTIONS_WRITE_TOKEN"
+
+          api="https://api.github.com/repos/$GITHUB_REPOSITORY"
+          auth_header="Authorization: Bearer $ACTIONS_WRITE_TOKEN"
+          accept_header="Accept: application/vnd.github+json"
+          version_header="X-GitHub-Api-Version: 2022-11-28"
+
+          fetch_workflows() {
+            output="$1"
+            pages="$RUNNER_TEMP/actions-registry-pages"
+            rm -rf "$pages"
+            mkdir -p "$pages"
+            page=1
+            while :; do
+              response="$pages/page-$page.json"
+              curl --fail --silent --show-error \
+                -H "$auth_header" \
+                -H "$accept_header" \
+                -H "$version_header" \
+                "$api/actions/workflows?per_page=100&page=$page" \
+                > "$response"
+              jq -e '.workflows | type == "array"' "$response" >/dev/null
+              count="$(jq '.workflows | length' "$response")"
+              jq '.workflows' "$response" > "$pages/array-$page.json"
+              if [ "$count" -lt 100 ]; then
+                break
+              fi
+              page=$((page + 1))
+              test "$page" -le 20
+            done
+            jq -s 'add' "$pages"/array-*.json > "$output"
+          }
+
+          cat > "$RUNNER_TEMP/expected-stale.tsv" <<'EOF'
+          345054009	.github/workflows/p2-control-plane-timing-patch.yml
+          345045213	.github/workflows/p2-format-fix.yml
+          345042173	.github/workflows/p2-lock-refresh.yml
+          345046804	.github/workflows/p2-process-liveness-patch.yml
+          EOF
+          sed -i 's/^          //' "$RUNNER_TEMP/expected-stale.tsv"
+          sort -n -k1,1 "$RUNNER_TEMP/expected-stale.tsv" > "$RUNNER_TEMP/expected-stale-sorted.tsv"
+
+          jq -r '.active_registrations[].path' architecture/github-actions-registry.json \
+            | LC_ALL=C sort > "$RUNNER_TEMP/canonical-paths.txt"
+          test "$(wc -l < "$RUNNER_TEMP/canonical-paths.txt" | tr -d ' ')" = 23
+          test "$(LC_ALL=C sort -u "$RUNNER_TEMP/canonical-paths.txt" | wc -l | tr -d ' ')" = 23
+
+          fetch_workflows "$RUNNER_TEMP/workflows-before.json"
+          jq -r '.[] | select(.state == "active") | [(.id | tostring), .path] | @tsv' \
+            "$RUNNER_TEMP/workflows-before.json" \
+            | sort -n -k1,1 > "$RUNNER_TEMP/active-before.tsv"
+          test "$(wc -l < "$RUNNER_TEMP/active-before.tsv" | tr -d ' ')" = 27
+
+          cut -f2 "$RUNNER_TEMP/active-before.tsv" | LC_ALL=C sort > "$RUNNER_TEMP/active-paths-all.txt"
+          if [ -n "$(uniq -d "$RUNNER_TEMP/active-paths-all.txt")" ]; then
+            echo 'duplicate active workflow path detected' >&2
+            uniq -d "$RUNNER_TEMP/active-paths-all.txt" >&2
+            exit 1
+          fi
+          cp "$RUNNER_TEMP/active-paths-all.txt" "$RUNNER_TEMP/active-paths.txt"
+          comm -13 "$RUNNER_TEMP/active-paths.txt" "$RUNNER_TEMP/canonical-paths.txt" > "$RUNNER_TEMP/missing-canonical.txt"
+          test ! -s "$RUNNER_TEMP/missing-canonical.txt"
+          comm -23 "$RUNNER_TEMP/active-paths.txt" "$RUNNER_TEMP/canonical-paths.txt" > "$RUNNER_TEMP/unexpected-paths.txt"
+          test "$(wc -l < "$RUNNER_TEMP/unexpected-paths.txt" | tr -d ' ')" = 4
+          cut -f2 "$RUNNER_TEMP/expected-stale-sorted.tsv" | LC_ALL=C sort > "$RUNNER_TEMP/expected-stale-paths.txt"
+          cmp --silent "$RUNNER_TEMP/expected-stale-paths.txt" "$RUNNER_TEMP/unexpected-paths.txt"
+
+          awk -F '\t' 'NR==FNR {wanted[$1]=1; next} ($2 in wanted) {print}' \
+            "$RUNNER_TEMP/unexpected-paths.txt" "$RUNNER_TEMP/active-before.tsv" \
+            | sort -n -k1,1 > "$RUNNER_TEMP/observed-stale.tsv"
+          cmp --silent "$RUNNER_TEMP/expected-stale-sorted.tsv" "$RUNNER_TEMP/observed-stale.tsv"
+
+          : > "$RUNNER_TEMP/run-counts-before.tsv"
+          while IFS=$'\t' read -r workflow_id workflow_path; do
+            workflow_json="$RUNNER_TEMP/workflow-$workflow_id-before.json"
+            curl --fail --silent --show-error \
+              -H "$auth_header" \
+              -H "$accept_header" \
+              -H "$version_header" \
+              "$api/actions/workflows/$workflow_id" > "$workflow_json"
+            jq -e --argjson id "$workflow_id" --arg path "$workflow_path" \
+              '.id == $id and .path == $path and .state == "active"' \
+              "$workflow_json" >/dev/null
+
+            runs_json="$RUNNER_TEMP/workflow-$workflow_id-runs-before.json"
+            curl --fail --silent --show-error \
+              -H "$auth_header" \
+              -H "$accept_header" \
+              -H "$version_header" \
+              "$api/actions/workflows/$workflow_id/runs?per_page=1" > "$runs_json"
+            printf '%s\t%s\n' "$workflow_id" "$(jq -r '.total_count' "$runs_json")" \
+              >> "$RUNNER_TEMP/run-counts-before.tsv"
+          done < "$RUNNER_TEMP/expected-stale-sorted.tsv"
+
+          while IFS=$'\t' read -r workflow_id workflow_path; do
+            response="$RUNNER_TEMP/workflow-$workflow_id-disable.json"
+            http_code="$(curl --silent --show-error \
+              --output "$response" \
+              --write-out '%{http_code}' \
+              --request PUT \
+              -H "$auth_header" \
+              -H "$accept_header" \
+              -H "$version_header" \
+              "$api/actions/workflows/$workflow_id/disable")"
+            if [ "$http_code" != 204 ]; then
+              echo "failed to disable workflow id=$workflow_id path=$workflow_path http=$http_code" >&2
+              cat "$response" >&2 || true
+              exit 1
+            fi
+          done < "$RUNNER_TEMP/expected-stale-sorted.tsv"
+
+          fetch_workflows "$RUNNER_TEMP/workflows-after.json"
+          jq -r '.[] | select(.state == "active") | [(.id | tostring), .path] | @tsv' \
+            "$RUNNER_TEMP/workflows-after.json" \
+            | sort -n -k1,1 > "$RUNNER_TEMP/active-after.tsv"
+          test "$(wc -l < "$RUNNER_TEMP/active-after.tsv" | tr -d ' ')" = 23
+          cut -f2 "$RUNNER_TEMP/active-after.tsv" | LC_ALL=C sort > "$RUNNER_TEMP/active-after-paths.txt"
+          cmp --silent "$RUNNER_TEMP/canonical-paths.txt" "$RUNNER_TEMP/active-after-paths.txt"
+
+          : > "$RUNNER_TEMP/run-counts-after.tsv"
+          while IFS=$'\t' read -r workflow_id workflow_path; do
+            workflow_json="$RUNNER_TEMP/workflow-$workflow_id-after.json"
+            curl --fail --silent --show-error \
+              -H "$auth_header" \
+              -H "$accept_header" \
+              -H "$version_header" \
+              "$api/actions/workflows/$workflow_id" > "$workflow_json"
+            jq -e --argjson id "$workflow_id" --arg path "$workflow_path" \
+              '.id == $id and .path == $path and .state == "disabled_manually"' \
+              "$workflow_json" >/dev/null
+
+            runs_json="$RUNNER_TEMP/workflow-$workflow_id-runs-after.json"
+            curl --fail --silent --show-error \
+              -H "$auth_header" \
+              -H "$accept_header" \
+              -H "$version_header" \
+              "$api/actions/workflows/$workflow_id/runs?per_page=1" > "$runs_json"
+            printf '%s\t%s\n' "$workflow_id" "$(jq -r '.total_count' "$runs_json")" \
+              >> "$RUNNER_TEMP/run-counts-after.tsv"
+          done < "$RUNNER_TEMP/expected-stale-sorted.tsv"
+          cmp --silent "$RUNNER_TEMP/run-counts-before.tsv" "$RUNNER_TEMP/run-counts-after.tsv"
+
+          echo 'GOVERNANCE_RECOVERY stale_active=0 canonical_active=23 disabled_manually=4 history_preserved=true'
+
   hosted-state:
     name: GitHub Governance Hosted State
-    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
-    needs: contract
+    if: >-
+      always() &&
+      github.event_name != 'pull_request' &&
+      github.ref == 'refs/heads/main' &&
+      needs.contract.result == 'success' &&
+      (needs.recover_stale_p2_actions.result == 'success' || needs.recover_stale_p2_actions.result == 'skipped')
+    needs:
+      - contract
+      - recover_stale_p2_actions
     runs-on: ubuntu-24.04
     permissions:
       actions: read
