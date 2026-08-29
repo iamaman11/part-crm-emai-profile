@@ -98,11 +98,12 @@ impl MaterializationRoot {
 
     /// Remove an invalid post-commit local candidate from its canonical generation path.
     ///
-    /// This operation is intentionally narrow: it is for a successor that the server has already
-    /// committed as authoritative but whose local candidate failed exact post-seal validation.
-    /// The exact generation directory is first validated and atomically renamed to a non-canonical
-    /// sibling before best-effort destruction. Therefore a cleanup error after the rename cannot
-    /// make the invalid bytes eligible for the normal authoritative-local reopen fast path.
+    /// This is intentionally different from normal generation open: the exact canonical directory
+    /// may already be corrupted (including a missing generation marker). The safe tenant/profile
+    /// parents and exact generation segment are still validated, symbolic links/non-directories
+    /// are rejected, and any active Bridge writer lock blocks removal. The real directory is first
+    /// atomically renamed away from the canonical generation path before best-effort destruction,
+    /// so a cleanup failure cannot make its bytes eligible for authoritative-local reopen.
     pub fn reject_generation_for_rematerialization(
         &self,
         tenant_id: &TenantId,
@@ -112,8 +113,14 @@ impl MaterializationRoot {
         let tenant_path = open_directory(&self.canonical_path, tenant_id.as_str())?;
         let profile_path = open_directory(&tenant_path, profile_id.as_str())?;
         let generation_path = profile_path.join(generation_id.as_str());
-        let workspace = GenerationWorkspace::open(generation_path.clone())?;
-        let bridge_lock = workspace.path().join(BRIDGE_LOCK_FILE);
+        let metadata = fs::symlink_metadata(&generation_path)?;
+        if metadata.file_type().is_symlink() {
+            return Err(LocalProfileError::SymbolicLinkRejected);
+        }
+        if !metadata.is_dir() {
+            return Err(LocalProfileError::RootIsNotDirectory);
+        }
+        let bridge_lock = generation_path.join(BRIDGE_LOCK_FILE);
         match fs::symlink_metadata(&bridge_lock) {
             Ok(_) => return Err(LocalProfileError::LockBusy),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
@@ -639,11 +646,17 @@ mod tests {
     -> Result<(), Box<dyn std::error::Error>> {
         let (path, root, tenant, profile, generation) = fixture()?;
         let workspace = root.create_generation(&tenant, &profile, &generation)?;
-        std::fs::write(workspace.path().join("candidate.bin"), b"invalid-after-commit")?;
+        std::fs::write(
+            workspace.path().join("candidate.bin"),
+            b"invalid-after-commit",
+        )?;
 
         root.reject_generation_for_rematerialization(&tenant, &profile, &generation)?;
 
-        assert!(root.open_generation(&tenant, &profile, &generation).is_err());
+        assert!(
+            root.open_generation(&tenant, &profile, &generation)
+                .is_err()
+        );
         assert!(!workspace.path().exists());
         let _ = crate::test_support::remove_test_root(&path);
         Ok(())
@@ -664,6 +677,20 @@ mod tests {
         assert!(root.open_generation(&tenant, &profile, &generation).is_ok());
 
         lock.release()?;
+        let _ = crate::test_support::remove_test_root(&path);
+        Ok(())
+    }
+
+    #[test]
+    fn corrupted_marker_still_cannot_keep_committed_bytes_on_canonical_path()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let (path, root, tenant, profile, generation) = fixture()?;
+        let workspace = root.create_generation(&tenant, &profile, &generation)?;
+        std::fs::remove_file(workspace.path().join(".profile-generation"))?;
+
+        root.reject_generation_for_rematerialization(&tenant, &profile, &generation)?;
+
+        assert!(!workspace.path().exists());
         let _ = crate::test_support::remove_test_root(&path);
         Ok(())
     }
