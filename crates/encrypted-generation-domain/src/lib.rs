@@ -1,12 +1,17 @@
 #![forbid(unsafe_code)]
 
 mod container;
+mod key_derivation;
 mod lifecycle;
 
 pub use container::{
     ContainerDigest, GenerationDek, GenerationIdentity, GenerationMetadata, KeyId, MetadataDigest,
     NoncePrefix, OpenedGeneration, PlaintextDigest, SealedGeneration, open_generation,
     open_generation_expected, seal_generation,
+};
+pub use key_derivation::{
+    DerivedGenerationMaterial, GenerationKeyDerivationContext, GenerationKeyDerivationError,
+    GenerationRootKey, GenerationRootKeyVersion, derive_generation_material,
 };
 pub use lifecycle::{
     CloudGenerationRecord, CloudGenerationRepository, CloudGenerationStatus, OrphanPlan,
