@@ -79,7 +79,11 @@ mod tests {
             "profilebridge://claim/secret?leak=true".to_owned(),
         ]);
         assert_eq!(error, Err(BridgeCliError::InvalidClaimUri));
-        assert!(!BridgeCliError::InvalidClaimUri.to_string().contains("secret"));
+        assert!(
+            !BridgeCliError::InvalidClaimUri
+                .to_string()
+                .contains("secret")
+        );
         assert!(!BridgeCliError::LaunchFailed.to_string().contains("claim_"));
     }
 }
