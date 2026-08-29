@@ -22,6 +22,25 @@ pub struct BridgeGenerationSealingMaterialRequest {
 
 impl BridgeGenerationSealingMaterialRequest {
     #[must_use]
+    pub fn new(
+        base_generation_id: impl Into<String>,
+        generation_id: impl Into<String>,
+        plaintext_digest: impl Into<String>,
+        coordinator_session_id: impl Into<String>,
+        coordinator_fencing_token: impl Into<String>,
+        coordinator_epoch: u64,
+    ) -> Self {
+        Self {
+            base_generation_id: base_generation_id.into(),
+            generation_id: generation_id.into(),
+            plaintext_digest: plaintext_digest.into(),
+            coordinator_session_id: coordinator_session_id.into(),
+            coordinator_fencing_token: coordinator_fencing_token.into(),
+            coordinator_epoch,
+        }
+    }
+
+    #[must_use]
     pub fn base_generation_id(&self) -> &str {
         &self.base_generation_id
     }
@@ -132,6 +151,24 @@ mod tests {
         BridgeGenerationSealingMaterialRequest, BridgeGenerationSealingMaterialResponse,
         GENERATION_SEALING_CHUNK_BYTES,
     };
+
+    #[test]
+    fn request_constructor_exposes_only_canonical_machine_inputs() {
+        let request = BridgeGenerationSealingMaterialRequest::new(
+            "generation_key_base_01",
+            "generation_key_next_01",
+            "aa".repeat(32),
+            "session_key_01",
+            "fence_key_01",
+            3,
+        );
+        assert_eq!(request.base_generation_id(), "generation_key_base_01");
+        assert_eq!(request.generation_id(), "generation_key_next_01");
+        assert_eq!(request.plaintext_digest(), "aa".repeat(32));
+        assert_eq!(request.coordinator_session_id(), "session_key_01");
+        assert_eq!(request.coordinator_fencing_token(), "fence_key_01");
+        assert_eq!(request.coordinator_epoch(), 3);
+    }
 
     #[test]
     fn request_rejects_caller_selected_trusted_state() {
