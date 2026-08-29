@@ -157,6 +157,24 @@ where
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ControlPlaneLeaseTiming {
+    idle_expires_at_ms: u64,
+    hard_expires_at_ms: u64,
+}
+
+impl ControlPlaneLeaseTiming {
+    #[must_use]
+    pub const fn idle_expires_at_ms(self) -> u64 {
+        self.idle_expires_at_ms
+    }
+
+    #[must_use]
+    pub const fn hard_expires_at_ms(self) -> u64 {
+        self.hard_expires_at_ms
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct CoordinatorCursor {
     tenant_id: TenantId,
@@ -167,6 +185,7 @@ struct CoordinatorCursor {
     fencing_token: FencingToken,
     version: u64,
     sequence: u64,
+    timing: ControlPlaneLeaseTiming,
 }
 
 pub struct ControlPlaneCoordinator<T> {
@@ -181,6 +200,13 @@ impl<T> ControlPlaneCoordinator<T> {
             transport,
             cursor: None,
         }
+    }
+
+    pub fn runtime_timing(&self) -> Result<ControlPlaneLeaseTiming, ShippingControlPlaneError> {
+        self.cursor
+            .as_ref()
+            .map(|cursor| cursor.timing)
+            .ok_or(ShippingControlPlaneError::InvalidResponse)
     }
 }
 
@@ -262,7 +288,7 @@ where
             },
         };
         let response = self.command(actor.tenant_scope().tenant_id(), profile_id, &request)?;
-        let epoch = validate_active_projection(
+        let (epoch, timing) = validate_active_projection(
             &response,
             CoordinatorOutcomeDto::LeaseClaimed,
             actor.tenant_scope().tenant_id(),
@@ -299,6 +325,7 @@ where
             fencing_token,
             version: response.version,
             sequence: response.sequence,
+            timing,
         });
         Ok(lease)
     }
@@ -358,7 +385,7 @@ where
             },
         };
         let response = self.command(&cursor.tenant_id, &cursor.profile_id, &request)?;
-        let epoch = validate_active_projection(
+        let (epoch, timing) = validate_active_projection(
             &response,
             CoordinatorOutcomeDto::HeartbeatAccepted,
             &cursor.tenant_id,
@@ -379,6 +406,7 @@ where
         let current = self.cursor.as_mut().ok_or(Self::Error::InvalidResponse)?;
         current.version = response.version;
         current.sequence = response.sequence;
+        current.timing = timing;
         Ok(())
     }
 }
@@ -433,7 +461,7 @@ fn validate_active_projection(
     device_id: &DeviceId,
     session_id: &SessionId,
     expected_sequence: u64,
-) -> Result<u64, ShippingControlPlaneError> {
+) -> Result<(u64, ControlPlaneLeaseTiming), ShippingControlPlaneError> {
     if response.outcome != expected_outcome
         || response.replayed
         || response.sequence != expected_sequence
@@ -455,7 +483,29 @@ fn validate_active_projection(
     if epoch == 0 {
         return Err(ShippingControlPlaneError::InvalidResponse);
     }
-    Ok(epoch)
+    let timing = lease_timing(
+        response.projection.idle_expires_at_ms,
+        response.projection.hard_expires_at_ms,
+    )?;
+    Ok((epoch, timing))
+}
+
+fn lease_timing(
+    idle_expires_at_ms: Option<u64>,
+    hard_expires_at_ms: Option<u64>,
+) -> Result<ControlPlaneLeaseTiming, ShippingControlPlaneError> {
+    let idle_expires_at_ms =
+        idle_expires_at_ms.ok_or(ShippingControlPlaneError::InvalidResponse)?;
+    let hard_expires_at_ms =
+        hard_expires_at_ms.ok_or(ShippingControlPlaneError::InvalidResponse)?;
+    if idle_expires_at_ms == 0 || hard_expires_at_ms == 0 || idle_expires_at_ms > hard_expires_at_ms
+    {
+        return Err(ShippingControlPlaneError::InvalidResponse);
+    }
+    Ok(ControlPlaneLeaseTiming {
+        idle_expires_at_ms,
+        hard_expires_at_ms,
+    })
 }
 
 fn validate_released_response(
@@ -526,8 +576,8 @@ fn next_idempotency_key() -> Result<IdempotencyKey, ShippingControlPlaneError> {
 #[cfg(test)]
 mod tests {
     use super::{
-        ControlPlaneEnrollment, MachineHttpMethod, MachineHttpPort, MachineHttpResponse,
-        ShippingControlPlaneError,
+        ControlPlaneEnrollment, ControlPlaneLeaseTiming, MachineHttpMethod, MachineHttpPort,
+        MachineHttpResponse, ShippingControlPlaneError, lease_timing,
     };
     use crate::operator_flow::EnrollmentPort;
     use bridge_domain::ClaimUri;
@@ -555,6 +605,35 @@ mod tests {
             }));
             self.responses.pop_front().ok_or(())
         }
+    }
+
+    #[test]
+    fn active_lease_timing_is_server_owned_and_fail_closed()
+    -> Result<(), Box<dyn std::error::Error>> {
+        assert_eq!(
+            lease_timing(Some(30_000), Some(900_000))?,
+            ControlPlaneLeaseTiming {
+                idle_expires_at_ms: 30_000,
+                hard_expires_at_ms: 900_000,
+            }
+        );
+        assert_eq!(
+            lease_timing(None, Some(900_000)),
+            Err(ShippingControlPlaneError::InvalidResponse)
+        );
+        assert_eq!(
+            lease_timing(Some(30_000), None),
+            Err(ShippingControlPlaneError::InvalidResponse)
+        );
+        assert_eq!(
+            lease_timing(Some(0), Some(900_000)),
+            Err(ShippingControlPlaneError::InvalidResponse)
+        );
+        assert_eq!(
+            lease_timing(Some(900_001), Some(900_000)),
+            Err(ShippingControlPlaneError::InvalidResponse)
+        );
+        Ok(())
     }
 
     #[test]
