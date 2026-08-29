@@ -16,6 +16,7 @@ pub mod local_profile;
 pub mod operator_flow;
 pub mod runtime_bundle;
 pub mod shipping_control_plane;
+pub mod shipping_network;
 pub mod shipping_preflight;
 
 #[cfg(test)]
