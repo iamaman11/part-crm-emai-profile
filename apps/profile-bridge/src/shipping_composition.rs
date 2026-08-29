@@ -123,8 +123,9 @@ mod windows {
         let coordinator = ControlPlaneCoordinator::new(transport);
         let runtime_bundles = FilesystemRuntimeBundleSelection::open(config.runtime_root.clone())
             .map_err(|_| ShippingCompositionError::Configuration)?;
-        let materialization_root = MaterializationRoot::open_or_create(&config.materialization_root)
-            .map_err(|_| ShippingCompositionError::Configuration)?;
+        let materialization_root =
+            MaterializationRoot::open_or_create(&config.materialization_root)
+                .map_err(|_| ShippingCompositionError::Configuration)?;
         let network_evidence = FilesystemNetworkEvidence::open(&config.network_policy_path)
             .map_err(|_| ShippingCompositionError::Configuration)?;
         let runtime_binding = RuntimeBindingSlot::new();
@@ -164,9 +165,7 @@ mod windows {
                 .coordinator()
                 .runtime_timing()
                 .map_err(|_| ShippingCompositionError::ControlPlane)?;
-            let deadline = timing
-                .idle_expires_at_ms()
-                .min(timing.hard_expires_at_ms());
+            let deadline = timing.idle_expires_at_ms().min(timing.hard_expires_at_ms());
             let remaining = deadline.saturating_sub(observed_at.value());
             let delay_ms = (remaining / 2).max(1);
             thread::sleep(Duration::from_millis(delay_ms));
