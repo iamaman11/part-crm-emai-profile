@@ -20,9 +20,11 @@ use cloudflare_adapters::profile_coordinator::{
     StoredCoordinatorDocument, StoredCoordinatorEnvelope, outcome_name,
 };
 use cloudflare_adapters::profile_generation_successor_runtime::{
-    PROFILE_GENERATION_SUCCESSOR_COMMIT_PATH, ProfileGenerationSuccessorInternalErrorClass,
-    ProfileGenerationSuccessorInternalErrorResponse, ProfileGenerationSuccessorInternalOutcome,
-    ProfileGenerationSuccessorInternalRequest, ProfileGenerationSuccessorInternalResponse,
+    PROFILE_GENERATION_SUCCESSOR_COMMIT_PATH, PROFILE_GENERATION_WRITER_AUTHORITY_PATH,
+    ProfileGenerationSuccessorInternalErrorClass, ProfileGenerationSuccessorInternalErrorResponse,
+    ProfileGenerationSuccessorInternalOutcome, ProfileGenerationSuccessorInternalRequest,
+    ProfileGenerationSuccessorInternalResponse, ProfileGenerationWriterAuthorityInternalRequest,
+    ProfileGenerationWriterAuthorityInternalResponse,
 };
 use control_plane_contract::D1_CATALOG_BINDING;
 use profile_platform_primitives::{
@@ -61,6 +63,9 @@ impl DurableObject for ProfileCoordinator {
             (Method::Post, "/command") => self.command(&mut request).await,
             (Method::Post, DEVICE_GENERATION_COMMIT_PATH) => {
                 self.generation_commit(&mut request).await
+            }
+            (Method::Post, PROFILE_GENERATION_WRITER_AUTHORITY_PATH) => {
+                self.profile_generation_writer_authority(&mut request).await
             }
             (Method::Post, PROFILE_GENERATION_SUCCESSOR_COMMIT_PATH) => {
                 self.profile_generation_successor(&mut request).await
@@ -215,6 +220,62 @@ impl ProfileCoordinator {
                 generation_commit_error(error)
             }
         }
+    }
+
+    async fn profile_generation_writer_authority(&self, request: &mut Request) -> Result<Response> {
+        if self.load_generation_commit_gate().await?.is_some() {
+            return profile_successor_error(profile_successor_version_conflict());
+        }
+        let internal = match request
+            .json::<ProfileGenerationWriterAuthorityInternalRequest>()
+            .await
+        {
+            Ok(value) => value,
+            Err(_) => return profile_successor_error(profile_successor_integrity()),
+        };
+        let (actor, authority) = match internal.into_domain() {
+            Ok(value) => value,
+            Err(error) => return profile_successor_error(error),
+        };
+        let document = self
+            .load_document(actor.tenant_scope().tenant_id(), authority.profile_id())
+            .await?;
+        let coordinator = match document.replay() {
+            Ok(value) => value,
+            Err(error) => {
+                return profile_successor_error(profile_successor_adapter_integrity(error));
+            }
+        };
+        let provenance_matches = match document.active_claim_matches(
+            actor.actor_id(),
+            authority.device_id(),
+            authority.session_id(),
+        ) {
+            Ok(value) => value,
+            Err(error) => {
+                return profile_successor_error(profile_successor_adapter_integrity(error));
+            }
+        };
+        if !provenance_matches {
+            return profile_successor_error(profile_successor_stale_authority());
+        }
+        let observed_at = UnixMillis::new(Date::now().as_millis());
+        if !coordinator_generation_authority_is_live(
+            &coordinator,
+            authority.device_id(),
+            authority.session_id(),
+            authority.epoch(),
+            authority.fencing_token(),
+            coordinator.version().value(),
+            coordinator.last_sequence(),
+            observed_at,
+        ) {
+            return profile_successor_error(profile_successor_stale_authority());
+        }
+        Response::from_json(&ProfileGenerationWriterAuthorityInternalResponse {
+            coordinator_version: coordinator.version().value(),
+            coordinator_sequence: coordinator.last_sequence(),
+        })
     }
 
     async fn profile_generation_successor(&self, request: &mut Request) -> Result<Response> {
