@@ -10,11 +10,11 @@ use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use worker::{Bucket, Conditional, Object};
 
-const META_TENANT_ID: &str = "profile-platform-tenant-id";
-const META_PROFILE_ID: &str = "profile-platform-profile-id";
-const META_GENERATION_ID: &str = "profile-platform-generation-id";
-const META_METADATA_DIGEST: &str = "profile-platform-metadata-sha256";
-const META_CONTAINER_DIGEST: &str = "profile-platform-container-sha256";
+pub(crate) const META_TENANT_ID: &str = "profile-platform-tenant-id";
+pub(crate) const META_PROFILE_ID: &str = "profile-platform-profile-id";
+pub(crate) const META_GENERATION_ID: &str = "profile-platform-generation-id";
+pub(crate) const META_METADATA_DIGEST: &str = "profile-platform-metadata-sha256";
+pub(crate) const META_CONTAINER_DIGEST: &str = "profile-platform-container-sha256";
 
 pub struct R2GenerationObjects {
     bucket: Bucket,
