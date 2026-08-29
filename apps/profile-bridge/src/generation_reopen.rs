@@ -233,8 +233,8 @@ where
             body.fill(0);
             return Err(Self::Error::SizeMismatch);
         }
-        let digest = Sha256::digest(&body);
-        if digest.as_slice() != capability.container_digest() {
+        let digest: [u8; 32] = Sha256::digest(&body).into();
+        if digest != capability.container_digest() {
             body.fill(0);
             return Err(Self::Error::DigestMismatch);
         }
@@ -274,7 +274,9 @@ mod tests {
         }
     }
 
-    fn capability_for(body: &[u8]) -> Result<GenerationDownloadCapability, Box<dyn std::error::Error>> {
+    fn capability_for(
+        body: &[u8],
+    ) -> Result<GenerationDownloadCapability, Box<dyn std::error::Error>> {
         let digest: [u8; 32] = Sha256::digest(body).into();
         Ok(GenerationDownloadCapability::new(
             GenerationId::parse("generation_reopen_capability_01")?,
@@ -321,7 +323,11 @@ mod tests {
         let capability = capability_for(&body)?;
         for (status, response_body, expected) in [
             (302, body.clone(), GenerationObjectDownloadError::HttpStatus),
-            (200, b"short".to_vec(), GenerationObjectDownloadError::SizeMismatch),
+            (
+                200,
+                b"short".to_vec(),
+                GenerationObjectDownloadError::SizeMismatch,
+            ),
             (
                 200,
                 b"wrong-generation-object".to_vec(),
@@ -333,7 +339,10 @@ mod tests {
                 body: response_body,
                 observed_max: None,
             });
-            assert_eq!(downloader.download_generation_object(&capability), Err(expected));
+            assert_eq!(
+                downloader.download_generation_object(&capability),
+                Err(expected)
+            );
         }
         Ok(())
     }
