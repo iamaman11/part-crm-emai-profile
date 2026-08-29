@@ -297,6 +297,43 @@ pub struct ManagedCamouhostIpc {
     shared: Arc<Mutex<ProcessState>>,
 }
 
+#[derive(Clone)]
+pub struct ManagedCamouhostCloseObserver {
+    shared: Arc<Mutex<ProcessState>>,
+}
+
+impl ManagedCamouhostIpc {
+    /// Read-only handle used by shipping orchestration to observe a user-controlled browser close.
+    /// It shares the existing managed IPC and cannot perform the mutating close handshake.
+    #[must_use]
+    pub fn close_observer(&self) -> ManagedCamouhostCloseObserver {
+        ManagedCamouhostCloseObserver {
+            shared: Arc::clone(&self.shared),
+        }
+    }
+}
+
+impl ManagedCamouhostCloseObserver {
+    pub fn observe_controlled_close(
+        &mut self,
+        session_id: &SessionId,
+    ) -> Result<bool, BridgePortError> {
+        let response = exchange_shared(
+            &self.shared,
+            &CamouhostMessage::ObserveClose {
+                session_id: session_id.clone(),
+            },
+        )?;
+        match response {
+            CamouhostMessage::CloseObserved {
+                session_id: observed,
+                controlled,
+            } if observed == *session_id => Ok(controlled),
+            _ => Err(BridgePortError::InvalidResponse),
+        }
+    }
+}
+
 impl ManagedCamouhostProcess {
     #[must_use]
     pub fn pair(
@@ -498,30 +535,33 @@ impl CamouhostPort for ManagedCamouhostIpc {
         &mut self,
         message: &CamouhostMessage,
     ) -> Result<CamouhostMessage, BridgePortError> {
-        let mut state = self
-            .shared
-            .lock()
-            .map_err(|_| BridgePortError::Unavailable)?;
-        let frame = request_frame(message)?;
-        let timeout = response_timeout(message)?;
-        let stdin = state.stdin.as_mut().ok_or(BridgePortError::Unavailable)?;
-        stdin
-            .write_all(frame.as_bytes())
-            .and_then(|()| stdin.write_all(b"\n"))
-            .and_then(|()| stdin.flush())
-            .map_err(|_| BridgePortError::Unavailable)?;
-        let responses = state
-            .responses
-            .as_ref()
-            .ok_or(BridgePortError::Unavailable)?;
-        let response = receive_response(responses, timeout)?;
-        let parsed =
-            CamouhostMessage::parse(&response).map_err(|_| BridgePortError::InvalidResponse)?;
-        parsed
-            .validate_version()
-            .map_err(|_| BridgePortError::InvalidResponse)?;
-        Ok(parsed)
+        exchange_shared(&self.shared, message)
     }
+}
+
+fn exchange_shared(
+    shared: &Arc<Mutex<ProcessState>>,
+    message: &CamouhostMessage,
+) -> Result<CamouhostMessage, BridgePortError> {
+    let mut state = shared.lock().map_err(|_| BridgePortError::Unavailable)?;
+    let frame = request_frame(message)?;
+    let timeout = response_timeout(message)?;
+    let stdin = state.stdin.as_mut().ok_or(BridgePortError::Unavailable)?;
+    stdin
+        .write_all(frame.as_bytes())
+        .and_then(|()| stdin.write_all(b"\n"))
+        .and_then(|()| stdin.flush())
+        .map_err(|_| BridgePortError::Unavailable)?;
+    let responses = state
+        .responses
+        .as_ref()
+        .ok_or(BridgePortError::Unavailable)?;
+    let response = receive_response(responses, timeout)?;
+    let parsed = CamouhostMessage::parse(&response).map_err(|_| BridgePortError::InvalidResponse)?;
+    parsed
+        .validate_version()
+        .map_err(|_| BridgePortError::InvalidResponse)?;
+    Ok(parsed)
 }
 
 fn spawn_response_reader(stdout: ChildStdout) -> Receiver<Result<String, BridgePortError>> {
