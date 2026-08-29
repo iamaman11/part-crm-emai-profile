@@ -25,7 +25,9 @@ use cloudflare_adapters::profile_generation_successor_runtime::{
     ProfileGenerationSuccessorInternalRequest, ProfileGenerationSuccessorInternalResponse,
 };
 use control_plane_contract::D1_CATALOG_BINDING;
-use profile_platform_primitives::{DeviceId, FencingToken, ProfileId, SessionId, TenantId, UnixMillis};
+use profile_platform_primitives::{
+    DeviceId, FencingToken, ProfileId, SessionId, TenantId, UnixMillis,
+};
 use serde::{Deserialize, Serialize};
 use session_domain::coordinator::{
     CoordinatorConfig, CoordinatorOutcome, CoordinatorStatus, ProfileCoordinatorState,
@@ -239,7 +241,9 @@ impl ProfileCoordinator {
             .await?;
         let coordinator = match document.replay() {
             Ok(value) => value,
-            Err(error) => return profile_successor_error(profile_successor_adapter_integrity(error)),
+            Err(error) => {
+                return profile_successor_error(profile_successor_adapter_integrity(error));
+            }
         };
         let provenance_matches = match document.active_claim_matches(
             actor.actor_id(),
@@ -247,7 +251,9 @@ impl ProfileCoordinator {
             commit.coordinator().session_id(),
         ) {
             Ok(value) => value,
-            Err(error) => return profile_successor_error(profile_successor_adapter_integrity(error)),
+            Err(error) => {
+                return profile_successor_error(profile_successor_adapter_integrity(error));
+            }
         };
         if !provenance_matches {
             return profile_successor_error(profile_successor_stale_authority());
@@ -284,9 +290,8 @@ impl ProfileCoordinator {
             }
         }
 
-        let journal = D1ProfileGenerationSuccessorCommitJournal::new(
-            self.env.d1(D1_CATALOG_BINDING)?,
-        );
+        let journal =
+            D1ProfileGenerationSuccessorCommitJournal::new(self.env.d1(D1_CATALOG_BINDING)?);
         let outcome = journal
             .commit_profile_generation_successor(&actor, &commit)
             .await;
