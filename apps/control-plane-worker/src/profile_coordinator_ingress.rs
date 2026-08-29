@@ -144,6 +144,18 @@ async fn execute_authorized(
         Err(error) => return operation_error(error, actor.correlation_id().as_str()),
     };
 
+    if let Some(device_id) = bridge_device
+        && let Some(operation) = crate::profile_generation_successor_ingress::operation(
+            &request.path(),
+            request.method(),
+        )
+    {
+        return crate::profile_generation_successor_ingress::dispatch_authorized(
+            request, env, profile_id, actor, device_id, operation,
+        )
+        .await;
+    }
+
     let (command, bridge_policy) = match request.method() {
         Method::Get => (CoordinatorIngressRequest::Snapshot, None),
         Method::Post => {
