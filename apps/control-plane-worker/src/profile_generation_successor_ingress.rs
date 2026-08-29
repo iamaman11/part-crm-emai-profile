@@ -32,12 +32,17 @@ use control_plane_contract::generation_key_api::{
 };
 use control_plane_contract::generation_reopen_api::{
     BridgeGenerationDownloadCapabilityRequest, BridgeGenerationDownloadCapabilityResponse,
+    BridgeGenerationOpeningMaterialRequest, BridgeGenerationOpeningMaterialResponse,
 };
 use control_plane_contract::profile_generation_api::{
     BridgeGenerationSuccessorCommitOutcomeDto, BridgeGenerationSuccessorCommitResponse,
     BridgeGenerationUploadCapabilityResponse, BridgeProfileGenerationSuccessorRequest,
 };
 use device_domain::DeviceJobTarget;
+use encrypted_generation_domain::{
+    InspectedGenerationMetadataPrelude, MAX_GENERATION_METADATA_PRELUDE_BYTES,
+    inspect_generation_metadata_prelude,
+};
 use profile_platform_primitives::{
     ActorContext, DeviceId, FencingToken, GenerationId, ProfileId, SessionId, UnixMillis,
 };
@@ -55,6 +60,7 @@ pub(crate) enum BridgeGenerationMachineOperation {
     UploadCapability,
     Commit,
     DownloadCapability,
+    OpeningMaterial,
 }
 
 #[must_use]
@@ -108,6 +114,16 @@ pub(crate) fn operation(path: &str, method: Method) -> Option<BridgeGenerationMa
             "generation-reopen",
             "download-capability",
         ] => Some(BridgeGenerationMachineOperation::DownloadCapability),
+        [
+            "bridge",
+            "v1",
+            "tenants",
+            _,
+            "profiles",
+            _,
+            "generation-reopen",
+            "opening-material",
+        ] => Some(BridgeGenerationMachineOperation::OpeningMaterial),
         _ => None,
     }
 }
@@ -125,6 +141,9 @@ pub(crate) async fn dispatch_authorized(
     }
     if operation == BridgeGenerationMachineOperation::DownloadCapability {
         return dispatch_download_capability(request, env, profile_id, actor, device_id).await;
+    }
+    if operation == BridgeGenerationMachineOperation::OpeningMaterial {
+        return dispatch_opening_material(request, env, profile_id, actor, device_id).await;
     }
 
     let body = match request
@@ -215,7 +234,8 @@ pub(crate) async fn dispatch_authorized(
     let verifier = generation_object_verifier(env)?;
     match operation {
         BridgeGenerationMachineOperation::SealingMaterial
-        | BridgeGenerationMachineOperation::DownloadCapability => {
+        | BridgeGenerationMachineOperation::DownloadCapability
+        | BridgeGenerationMachineOperation::OpeningMaterial => {
             unreachable!("handled before successor DTO")
         }
         BridgeGenerationMachineOperation::UploadCapability => {
@@ -370,89 +390,28 @@ async fn dispatch_download_capability(
         Ok(value) => value,
         Err(_) => return invalid_request(actor.correlation_id().as_str()),
     };
-    if body.coordinator_epoch() == 0 {
-        return invalid_request(actor.correlation_id().as_str());
-    }
-    let session_id = match SessionId::parse(body.coordinator_session_id().to_owned()) {
+    let (session_id, fencing_token) = match reopen_witness(
+        body.coordinator_session_id(),
+        body.coordinator_fencing_token(),
+        body.coordinator_epoch(),
+    ) {
+        Some(value) => value,
+        None => return invalid_request(actor.correlation_id().as_str()),
+    };
+
+    let (reference, descriptor) = match authoritative_reopen_descriptor(
+        env,
+        profile_id,
+        actor,
+        device_id,
+        session_id,
+        fencing_token,
+        body.coordinator_epoch(),
+    )
+    .await
+    {
         Ok(value) => value,
-        Err(_) => return invalid_request(actor.correlation_id().as_str()),
-    };
-    let fencing_token = match FencingToken::parse(body.coordinator_fencing_token().to_owned()) {
-        Ok(value) => value,
-        Err(_) => return invalid_request(actor.correlation_id().as_str()),
-    };
-
-    let preconditions = device_execution_preconditions(env)?;
-    let reference = match preconditions
-        .load_active_verified_generation_object(actor.tenant_scope(), profile_id)
-        .await
-    {
-        Ok(Some(value)) => value,
-        Ok(None) => return verification_conflict(actor.correlation_id().as_str()),
-        Err(error) => {
-            return object_verify_failure(actor.correlation_id().as_str(), error.class());
-        }
-    };
-    let target = DeviceJobTarget::new(
-        actor.tenant_scope().tenant_id().clone(),
-        device_id.clone(),
-        profile_id.clone(),
-        reference.generation_id().clone(),
-    );
-    match preconditions
-        .evaluate_device_execution(actor, &target)
-        .await
-    {
-        Ok(DeviceExecutionReadiness::Ready) => {}
-        Ok(DeviceExecutionReadiness::Blocked(DeviceExecutionBlocker::DeviceUnauthorized)) => {
-            return forbidden(actor.correlation_id().as_str());
-        }
-        Ok(DeviceExecutionReadiness::Blocked(DeviceExecutionBlocker::GenerationInactive)) => {
-            return version_conflict(actor.correlation_id().as_str());
-        }
-        Ok(DeviceExecutionReadiness::Blocked(DeviceExecutionBlocker::CertificationIncomplete)) => {
-            return verification_conflict(actor.correlation_id().as_str());
-        }
-        Err(error) => match error.class() {
-            DeviceJobPortErrorClass::AuthenticationFailed => {
-                return forbidden(actor.correlation_id().as_str());
-            }
-            DeviceJobPortErrorClass::IntegrityFailure => {
-                return integrity_failure(actor.correlation_id().as_str());
-            }
-            DeviceJobPortErrorClass::DependencyUnavailable => {
-                return dependency(actor.correlation_id().as_str());
-            }
-        },
-    }
-
-    let successor = profile_generation_successor_commit(env);
-    if let Err(error) = successor
-        .prove_profile_generation_writer_authority(
-            actor,
-            &ProfileGenerationWriterAuthorityRequest::new(
-                device_id.clone(),
-                profile_id.clone(),
-                session_id,
-                fencing_token,
-                body.coordinator_epoch(),
-            ),
-        )
-        .await
-    {
-        return successor_failure(actor.correlation_id().as_str(), error.class());
-    }
-
-    let objects = generation_object_verifier(env)?;
-    let descriptor = match objects
-        .load_generation_object_descriptor_exact(actor.tenant_scope(), &reference)
-        .await
-    {
-        Ok(Some(value)) => value,
-        Ok(None) => return verification_conflict(actor.correlation_id().as_str()),
-        Err(error) => {
-            return object_verify_failure(actor.correlation_id().as_str(), error.class());
-        }
+        Err(response) => return response,
     };
     let signer = match generation_download_capability_signer(env) {
         Ok(value) => value,
@@ -473,6 +432,9 @@ async fn dispatch_download_capability(
             return download_signing_failure(actor.correlation_id().as_str(), error);
         }
     };
+    if descriptor.generation_id() != reference.generation_id() {
+        return integrity_failure(actor.correlation_id().as_str());
+    }
     machine_json(&BridgeGenerationDownloadCapabilityResponse::new(
         descriptor.generation_id().as_str(),
         descriptor.object_key(),
@@ -482,6 +444,220 @@ async fn dispatch_download_capability(
         capability.url(),
         capability.expires_seconds(),
     ))
+}
+
+async fn dispatch_opening_material(
+    request: &mut Request,
+    env: &Env,
+    profile_id: &ProfileId,
+    actor: &ActorContext,
+    device_id: &DeviceId,
+) -> Result<Response> {
+    let body = match request
+        .json::<BridgeGenerationOpeningMaterialRequest>()
+        .await
+    {
+        Ok(value) => value,
+        Err(_) => return invalid_request(actor.correlation_id().as_str()),
+    };
+    let (session_id, fencing_token) = match reopen_witness(
+        body.coordinator_session_id(),
+        body.coordinator_fencing_token(),
+        body.coordinator_epoch(),
+    ) {
+        Some(value) => value,
+        None => return invalid_request(actor.correlation_id().as_str()),
+    };
+    let prelude = match decode_bounded_lower_hex(
+        body.metadata_prelude_hex(),
+        MAX_GENERATION_METADATA_PRELUDE_BYTES,
+    ) {
+        Some(value) => value,
+        None => return invalid_request(actor.correlation_id().as_str()),
+    };
+    let inspected = match inspect_generation_metadata_prelude(&prelude) {
+        Ok(value) if value.prelude_bytes() == prelude.len() => value,
+        Ok(_) | Err(_) => return invalid_request(actor.correlation_id().as_str()),
+    };
+
+    let (reference, descriptor) = match authoritative_reopen_descriptor(
+        env,
+        profile_id,
+        actor,
+        device_id,
+        session_id,
+        fencing_token,
+        body.coordinator_epoch(),
+    )
+    .await
+    {
+        Ok(value) => value,
+        Err(response) => return response,
+    };
+    if !opening_metadata_matches_descriptor(actor, profile_id, &descriptor, &inspected)
+        || descriptor.generation_id() != reference.generation_id()
+    {
+        return integrity_failure(actor.correlation_id().as_str());
+    }
+
+    let metadata = inspected.metadata();
+    let keyring = match generation_root_keyring(env) {
+        Ok(value) => value,
+        Err(_) => return integrity_failure(actor.correlation_id().as_str()),
+    };
+    let material = match keyring.derive_for_key_id(
+        metadata.key_id(),
+        actor.tenant_scope().tenant_id(),
+        profile_id,
+        descriptor.generation_id(),
+        metadata.plaintext_digest().bytes(),
+    ) {
+        Ok(value) => value,
+        Err(_) => return integrity_failure(actor.correlation_id().as_str()),
+    };
+    if material.key_id() != metadata.key_id()
+        || material.nonce_prefix() != metadata.nonce_prefix()
+    {
+        return integrity_failure(actor.correlation_id().as_str());
+    }
+    let dek_secret = material.copy_dek_secret();
+    machine_json(&BridgeGenerationOpeningMaterialResponse::new(
+        material.key_id().as_str(),
+        lower_hex(&dek_secret[..]),
+    ))
+}
+
+async fn authoritative_reopen_descriptor(
+    env: &Env,
+    profile_id: &ProfileId,
+    actor: &ActorContext,
+    device_id: &DeviceId,
+    session_id: SessionId,
+    fencing_token: FencingToken,
+    coordinator_epoch: u64,
+) -> core::result::Result<
+    (
+        application_ports::generation_objects::GenerationObjectCatalogReference,
+        GenerationObjectDescriptor,
+    ),
+    Result<Response>,
+> {
+    let preconditions = match device_execution_preconditions(env) {
+        Ok(value) => value,
+        Err(error) => return Err(Err(error)),
+    };
+    let reference = match preconditions
+        .load_active_verified_generation_object(actor.tenant_scope(), profile_id)
+        .await
+    {
+        Ok(Some(value)) => value,
+        Ok(None) => return Err(verification_conflict(actor.correlation_id().as_str())),
+        Err(error) => {
+            return Err(object_verify_failure(
+                actor.correlation_id().as_str(),
+                error.class(),
+            ));
+        }
+    };
+    let target = DeviceJobTarget::new(
+        actor.tenant_scope().tenant_id().clone(),
+        device_id.clone(),
+        profile_id.clone(),
+        reference.generation_id().clone(),
+    );
+    match preconditions
+        .evaluate_device_execution(actor, &target)
+        .await
+    {
+        Ok(DeviceExecutionReadiness::Ready) => {}
+        Ok(DeviceExecutionReadiness::Blocked(DeviceExecutionBlocker::DeviceUnauthorized)) => {
+            return Err(forbidden(actor.correlation_id().as_str()));
+        }
+        Ok(DeviceExecutionReadiness::Blocked(DeviceExecutionBlocker::GenerationInactive)) => {
+            return Err(version_conflict(actor.correlation_id().as_str()));
+        }
+        Ok(DeviceExecutionReadiness::Blocked(DeviceExecutionBlocker::CertificationIncomplete)) => {
+            return Err(verification_conflict(actor.correlation_id().as_str()));
+        }
+        Err(error) => match error.class() {
+            DeviceJobPortErrorClass::AuthenticationFailed => {
+                return Err(forbidden(actor.correlation_id().as_str()));
+            }
+            DeviceJobPortErrorClass::IntegrityFailure => {
+                return Err(integrity_failure(actor.correlation_id().as_str()));
+            }
+            DeviceJobPortErrorClass::DependencyUnavailable => {
+                return Err(dependency(actor.correlation_id().as_str()));
+            }
+        },
+    }
+
+    let successor = profile_generation_successor_commit(env);
+    if let Err(error) = successor
+        .prove_profile_generation_writer_authority(
+            actor,
+            &ProfileGenerationWriterAuthorityRequest::new(
+                device_id.clone(),
+                profile_id.clone(),
+                session_id,
+                fencing_token,
+                coordinator_epoch,
+            ),
+        )
+        .await
+    {
+        return Err(successor_failure(
+            actor.correlation_id().as_str(),
+            error.class(),
+        ));
+    }
+
+    let objects = match generation_object_verifier(env) {
+        Ok(value) => value,
+        Err(error) => return Err(Err(error)),
+    };
+    let descriptor = match objects
+        .load_generation_object_descriptor_exact(actor.tenant_scope(), &reference)
+        .await
+    {
+        Ok(Some(value)) => value,
+        Ok(None) => return Err(verification_conflict(actor.correlation_id().as_str())),
+        Err(error) => {
+            return Err(object_verify_failure(
+                actor.correlation_id().as_str(),
+                error.class(),
+            ));
+        }
+    };
+    Ok((reference, descriptor))
+}
+
+fn reopen_witness(
+    session_id: &str,
+    fencing_token: &str,
+    coordinator_epoch: u64,
+) -> Option<(SessionId, FencingToken)> {
+    if coordinator_epoch == 0 {
+        return None;
+    }
+    Some((
+        SessionId::parse(session_id.to_owned()).ok()?,
+        FencingToken::parse(fencing_token.to_owned()).ok()?,
+    ))
+}
+
+fn opening_metadata_matches_descriptor(
+    actor: &ActorContext,
+    profile_id: &ProfileId,
+    descriptor: &GenerationObjectDescriptor,
+    inspected: &InspectedGenerationMetadataPrelude,
+) -> bool {
+    let metadata = inspected.metadata();
+    metadata.tenant_id() == actor.tenant_scope().tenant_id()
+        && metadata.profile_id() == profile_id
+        && metadata.generation_id() == descriptor.generation_id()
+        && metadata.object_key() == descriptor.object_key()
+        && lower_hex(&inspected.metadata_digest().bytes()) == descriptor.metadata_digest()
 }
 
 async fn dispatch_sealing_material(
@@ -645,6 +821,20 @@ fn decode_lower_sha256(value: &str) -> Option<[u8; 32]> {
         let high = lower_hex_nibble(bytes[index * 2])?;
         let low = lower_hex_nibble(bytes[index * 2 + 1])?;
         *output = (high << 4) | low;
+    }
+    Some(decoded)
+}
+
+fn decode_bounded_lower_hex(value: &str, max_bytes: usize) -> Option<Vec<u8>> {
+    if value.is_empty() || value.len() % 2 != 0 || value.len() > max_bytes.checked_mul(2)? {
+        return None;
+    }
+    let bytes = value.as_bytes();
+    let mut decoded = Vec::with_capacity(value.len() / 2);
+    for pair in bytes.chunks_exact(2) {
+        let high = lower_hex_nibble(pair[0])?;
+        let low = lower_hex_nibble(pair[1])?;
+        decoded.push((high << 4) | low);
     }
     Some(decoded)
 }
@@ -816,8 +1006,8 @@ fn dependency(correlation_id: &str) -> Result<Response> {
 #[cfg(test)]
 mod tests {
     use super::{
-        BridgeGenerationMachineOperation, decode_lower_sha256, descriptor_shape_is_canonical,
-        operation,
+        BridgeGenerationMachineOperation, decode_bounded_lower_hex, decode_lower_sha256,
+        descriptor_shape_is_canonical, operation,
     };
     use profile_platform_primitives::{
         ActorContext, ActorId, CorrelationId, GenerationId, ProfileId, TenantId, TenantScope,
@@ -854,6 +1044,13 @@ mod tests {
             ),
             Some(BridgeGenerationMachineOperation::DownloadCapability)
         );
+        assert_eq!(
+            operation(
+                "/bridge/v1/tenants/tenant_01/profiles/profile_01/generation-reopen/opening-material",
+                Method::Post,
+            ),
+            Some(BridgeGenerationMachineOperation::OpeningMaterial)
+        );
         for (method, path) in [
             (
                 Method::Get,
@@ -862,6 +1059,10 @@ mod tests {
             (
                 Method::Get,
                 "/bridge/v1/tenants/tenant_01/profiles/profile_01/generation-reopen/download-capability",
+            ),
+            (
+                Method::Get,
+                "/bridge/v1/tenants/tenant_01/profiles/profile_01/generation-reopen/opening-material",
             ),
             (
                 Method::Post,
@@ -875,6 +1076,10 @@ mod tests {
                 Method::Post,
                 "/bridge/v2/tenants/tenant_01/profiles/profile_01/generation-reopen/download-capability",
             ),
+            (
+                Method::Post,
+                "/bridge/v2/tenants/tenant_01/profiles/profile_01/generation-reopen/opening-material",
+            ),
         ] {
             assert_eq!(operation(path, method), None);
         }
@@ -886,6 +1091,15 @@ mod tests {
         assert_eq!(decode_lower_sha256(&"0F".repeat(32)), None);
         assert_eq!(decode_lower_sha256(&"0f".repeat(31)), None);
         assert_eq!(decode_lower_sha256(&format!("{}g0", "0f".repeat(31))), None);
+    }
+
+    #[test]
+    fn bounded_metadata_hex_rejects_uppercase_odd_and_oversized_input() {
+        assert_eq!(decode_bounded_lower_hex("00ff", 2), Some(vec![0, 255]));
+        assert_eq!(decode_bounded_lower_hex("00FF", 2), None);
+        assert_eq!(decode_bounded_lower_hex("0", 2), None);
+        assert_eq!(decode_bounded_lower_hex("000000", 2), None);
+        assert_eq!(decode_bounded_lower_hex("", 2), None);
     }
 
     #[test]
