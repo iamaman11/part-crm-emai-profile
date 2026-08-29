@@ -192,8 +192,8 @@ fn decode_key_hex(value: &str) -> Result<[u8; 32], GenerationRootKeyringError> {
     let bytes = value.as_bytes();
     let mut decoded = Zeroizing::new([0_u8; 32]);
     for (index, byte) in decoded.iter_mut().enumerate() {
-        let high = hex_nibble(bytes[index * 2])
-            .ok_or(GenerationRootKeyringError::InvalidConfiguration)?;
+        let high =
+            hex_nibble(bytes[index * 2]).ok_or(GenerationRootKeyringError::InvalidConfiguration)?;
         let low = hex_nibble(bytes[index * 2 + 1])
             .ok_or(GenerationRootKeyringError::InvalidConfiguration)?;
         *byte = (high << 4) | low;
@@ -258,7 +258,8 @@ mod tests {
     }
 
     #[test]
-    fn malformed_duplicate_missing_active_and_unknown_versions_fail_closed() {
+    fn malformed_duplicate_missing_active_and_unknown_versions_fail_closed()
+    -> Result<(), Box<dyn std::error::Error>> {
         let duplicate = format!(
             "{{\"activeVersion\":1,\"keys\":[{{\"version\":1,\"keyHex\":\"{}\"}},{{\"version\":1,\"keyHex\":\"{}\"}}]}}",
             "11".repeat(32),
@@ -273,16 +274,14 @@ mod tests {
             "{\"activeVersion\":1,\"keys\":[]}".to_owned(),
             duplicate,
             missing_active,
-            "{\"activeVersion\":1,\"keys\":[{\"version\":1,\"keyHex\":\"00\"}]}"
-                .to_owned(),
+            "{\"activeVersion\":1,\"keys\":[{\"version\":1,\"keyHex\":\"00\"}]}".to_owned(),
         ] {
             assert_eq!(
                 parse_serialized_keyring(invalid).err(),
                 Some(GenerationRootKeyringError::InvalidConfiguration)
             );
         }
-        let keyring = parse_serialized_keyring(valid_keyring())
-            .map_err(|error| format!("unexpected keyring error: {error}"))?;
+        let keyring = parse_serialized_keyring(valid_keyring())?;
         let tenant = TenantId::parse("tenant_generation_keyring_02")?;
         let profile = ProfileId::parse("profile_generation_keyring_02")?;
         let generation = GenerationId::parse("generation_generation_keyring_02")?;
