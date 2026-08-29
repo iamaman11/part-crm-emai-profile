@@ -25,7 +25,9 @@ impl core::fmt::Display for AuthoritativeGenerationMaterializationError {
             Self::ControlPlane => "authoritative generation control-plane request failed",
             Self::Download => "authoritative generation object download failed",
             Self::DescriptorMismatch => "download capability does not name the requested authority",
-            Self::MetadataMismatch => "encrypted generation metadata does not match server authority",
+            Self::MetadataMismatch => {
+                "encrypted generation metadata does not match server authority"
+            }
             Self::OpeningMaterialMismatch => {
                 "opening material does not match the authenticated encrypted metadata"
             }
@@ -105,21 +107,23 @@ where
         generation_id,
     )
     .map_err(|_| AuthoritativeGenerationMaterializationError::Decryption)?;
-    materialize_workspace_snapshot(root, tenant_id, profile_id, generation_id, opened.plaintext())
-        .map_err(|error| match error {
-            GenerationSnapshotError::Local(_) => {
-                AuthoritativeGenerationMaterializationError::Local
-            }
-            _ => AuthoritativeGenerationMaterializationError::Snapshot,
-        })?;
+    materialize_workspace_snapshot(
+        root,
+        tenant_id,
+        profile_id,
+        generation_id,
+        opened.plaintext(),
+    )
+    .map_err(|error| match error {
+        GenerationSnapshotError::Local(_) => AuthoritativeGenerationMaterializationError::Local,
+        _ => AuthoritativeGenerationMaterializationError::Snapshot,
+    })?;
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        AuthoritativeGenerationMaterializationError, ensure_authoritative_generation,
-    };
+    use super::{AuthoritativeGenerationMaterializationError, ensure_authoritative_generation};
     use crate::generation_reopen::{
         GenerationDownloadCapability, GenerationObjectDownloadPort, GenerationReopenControlPort,
     };
