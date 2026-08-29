@@ -15,8 +15,8 @@ use profile_bridge::shipping_control_plane::{
     MachineHttpResponse, ShippingControlPlaneError,
 };
 use profile_platform_primitives::{
-    ActorContext, ActorId, CorrelationId, DeviceId, LaunchIntentId, ProfileId, TenantId, TenantScope,
-    UnixMillis,
+    ActorContext, ActorId, CorrelationId, DeviceId, LaunchIntentId, ProfileId, TenantId,
+    TenantScope, UnixMillis,
 };
 use std::sync::{Arc, Mutex};
 
@@ -81,10 +81,9 @@ impl MachineHttpPort for CanonicalMachineHttp {
 
         if path == BRIDGE_PROFILE_LAUNCH_REDEMPTION_PATH {
             assert_eq!(method, MachineHttpMethod::PostJson);
-            let request = serde_json::from_slice::<BridgeProfileLaunchRedemptionRequest>(
-                body.ok_or(())?,
-            )
-            .map_err(|_| ())?;
+            let request =
+                serde_json::from_slice::<BridgeProfileLaunchRedemptionRequest>(body.ok_or(())?)
+                    .map_err(|_| ())?;
             assert_eq!(request.claim_code(), CLAIM);
             let response = BridgeProfileLaunchRedemptionProjection {
                 tenant_id: TENANT.to_owned(),
@@ -108,11 +107,13 @@ impl MachineHttpPort for CanonicalMachineHttp {
                 Ok(json_response(200, &snapshot_response())?)
             }
             MachineHttpMethod::PostJson => {
-                let request = serde_json::from_slice::<CoordinatorCommandRequestDto>(
-                    body.ok_or(())?,
-                )
-                .map_err(|_| ())?;
-                Ok(json_response(200, &command_response(request, self.failure_mode)?)?)
+                let request =
+                    serde_json::from_slice::<CoordinatorCommandRequestDto>(body.ok_or(())?)
+                        .map_err(|_| ())?;
+                Ok(json_response(
+                    200,
+                    &command_response(request, self.failure_mode)?,
+                )?)
             }
         }
     }
@@ -306,14 +307,18 @@ fn canonical_shipping_machine_client_redeems_claim_claims_heartbeats_and_release
     assert_eq!(coordinator.runtime_timing()?.idle_expires_at_ms(), 60_000);
     coordinator.close_lease(&lease)?;
 
-    let requests = observations.lock().map_err(|_| "observation lock poisoned")?;
+    let requests = observations
+        .lock()
+        .map_err(|_| "observation lock poisoned")?;
     assert_eq!(requests.len(), 5);
     assert_eq!(requests[0].path, BRIDGE_PROFILE_LAUNCH_REDEMPTION_PATH);
     assert_eq!(requests[0].method, MachineHttpMethod::PostJson);
-    assert!(requests[0]
-        .body
-        .as_deref()
-        .is_some_and(|body| String::from_utf8_lossy(body).contains(CLAIM)));
+    assert!(
+        requests[0]
+            .body
+            .as_deref()
+            .is_some_and(|body| String::from_utf8_lossy(body).contains(CLAIM))
+    );
     assert!(requests.iter().skip(1).all(|request| {
         !request.path.contains(CLAIM)
             && request
