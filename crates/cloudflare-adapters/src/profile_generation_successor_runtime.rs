@@ -152,7 +152,10 @@ pub struct ProfileGenerationWriterAuthorityInternalRequest {
 
 impl ProfileGenerationWriterAuthorityInternalRequest {
     #[must_use]
-    pub fn from_domain(actor: &ActorContext, request: &ProfileGenerationWriterAuthorityRequest) -> Self {
+    pub fn from_domain(
+        actor: &ActorContext,
+        request: &ProfileGenerationWriterAuthorityRequest,
+    ) -> Self {
         Self {
             tenant_id: actor.tenant_scope().tenant_id().as_str().to_owned(),
             actor_id: actor.actor_id().as_str().to_owned(),
@@ -249,8 +252,7 @@ const fn integrity_failure() -> ProfileGenerationSuccessorCommitError {
 #[cfg(test)]
 mod tests {
     use super::{
-        ProfileGenerationSuccessorInternalRequest,
-        ProfileGenerationWriterAuthorityInternalRequest,
+        ProfileGenerationSuccessorInternalRequest, ProfileGenerationWriterAuthorityInternalRequest,
     };
     use application_ports::generation_objects::GenerationObjectDescriptor;
     use application_ports::profile_generation_successor::{
@@ -327,7 +329,8 @@ mod tests {
             FencingToken::parse("fence_successor_runtime_01")?,
             3,
         );
-        let internal = ProfileGenerationWriterAuthorityInternalRequest::from_domain(&actor, &domain);
+        let internal =
+            ProfileGenerationWriterAuthorityInternalRequest::from_domain(&actor, &domain);
         let serialized = serde_json::to_string(&internal)?;
         for forbidden in [
             "observed_at",
