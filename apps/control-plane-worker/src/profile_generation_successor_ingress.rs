@@ -375,26 +375,31 @@ async fn dispatch_sealing_material(
     );
 
     let preconditions = device_execution_preconditions(env)?;
-    match preconditions.evaluate_device_execution(actor, &target).await {
+    match preconditions
+        .evaluate_device_execution(actor, &target)
+        .await
+    {
         Ok(DeviceExecutionReadiness::Ready) => {}
-        Ok(DeviceExecutionReadiness::Blocked(
-            DeviceExecutionBlocker::DeviceUnauthorized,
-        ))
-        | Err(DeviceJobPortErrorClass::AuthenticationFailed) => {
+        Ok(DeviceExecutionReadiness::Blocked(DeviceExecutionBlocker::DeviceUnauthorized)) => {
             return forbidden(actor.correlation_id().as_str());
         }
-        Ok(DeviceExecutionReadiness::Blocked(
-            DeviceExecutionBlocker::GenerationInactive,
-        )) => return version_conflict(actor.correlation_id().as_str()),
-        Ok(DeviceExecutionReadiness::Blocked(
-            DeviceExecutionBlocker::CertificationIncomplete,
-        )) => return verification_conflict(actor.correlation_id().as_str()),
-        Err(DeviceJobPortErrorClass::IntegrityFailure) => {
-            return integrity_failure(actor.correlation_id().as_str());
+        Ok(DeviceExecutionReadiness::Blocked(DeviceExecutionBlocker::GenerationInactive)) => {
+            return version_conflict(actor.correlation_id().as_str());
         }
-        Err(DeviceJobPortErrorClass::DependencyUnavailable) => {
-            return dependency(actor.correlation_id().as_str());
+        Ok(DeviceExecutionReadiness::Blocked(DeviceExecutionBlocker::CertificationIncomplete)) => {
+            return verification_conflict(actor.correlation_id().as_str());
         }
+        Err(error) => match error.class() {
+            DeviceJobPortErrorClass::AuthenticationFailed => {
+                return forbidden(actor.correlation_id().as_str());
+            }
+            DeviceJobPortErrorClass::IntegrityFailure => {
+                return integrity_failure(actor.correlation_id().as_str());
+            }
+            DeviceJobPortErrorClass::DependencyUnavailable => {
+                return dependency(actor.correlation_id().as_str());
+            }
+        },
     }
 
     let successor = profile_generation_successor_commit(env);
