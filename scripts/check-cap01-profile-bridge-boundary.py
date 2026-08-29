@@ -29,16 +29,22 @@ REQUIRED_MAIN_MARKERS = (
 REQUIRED_COMPOSITION_MARKERS = (
     "WindowsSchannelMachineHttp::from_system(",
     "WindowsSignedGenerationObjectGet::from_system(",
+    "WindowsSignedGenerationObjectPut::from_system(",
     "ControlPlaneEnrollment::new(",
     "ControlPlaneCoordinator::new(",
     "FilesystemRuntimeBundleSelection::open(",
     "ShippingBrowserLaunchPreflight::new(",
     "ManagedCamouhostProcess::pair(",
+    ".close_observer()",
     "ProfileBridgeOperator::new(",
     ".open_authoritative(",
+    ".observe_controlled_close(&session_id)",
+    ".close(now()?)",
+    ".save_retained_successor(",
     ".runtime_timing()",
-    ".heartbeat(now()?)",
+    ".heartbeat(observed_at)",
     "RuntimeDisplayMode::Headful",
+    "ShippingCompositionError::CommittedRecoveryRequired",
     "Err(ShippingCompositionError::UnsupportedPlatform)",
 )
 
@@ -153,6 +159,12 @@ def validate(root: Path) -> None:
         if marker in composition:
             fail(f"shipping composition contains forbidden alternate/effect marker: {marker}")
 
+    close_observe = composition.find(".observe_controlled_close(&session_id)")
+    mutating_close = composition.find(".close(now()?)")
+    save = composition.find(".save_retained_successor(")
+    if min(close_observe, mutating_close, save) < 0 or not close_observe < mutating_close < save:
+        fail("shipping controlled-close witness must precede the sole mutating close and canonical save")
+
     manifest = tomllib.loads(manifest_path.read_text(encoding="utf-8"))
     validate_binary_inventory(manifest)
     dependencies = manifest.get("dependencies", {})
@@ -193,16 +205,22 @@ def write_fixture(root: Path) -> None:
     composition.write_text(
         "// WindowsSchannelMachineHttp::from_system(\n"
         "// WindowsSignedGenerationObjectGet::from_system(\n"
+        "// WindowsSignedGenerationObjectPut::from_system(\n"
         "// ControlPlaneEnrollment::new(\n"
         "// ControlPlaneCoordinator::new(\n"
         "// FilesystemRuntimeBundleSelection::open(\n"
         "// ShippingBrowserLaunchPreflight::new(\n"
         "// ManagedCamouhostProcess::pair(\n"
+        "// .close_observer()\n"
         "// ProfileBridgeOperator::new(\n"
         "// .open_authoritative(\n"
+        "// .observe_controlled_close(&session_id)\n"
+        "// .close(now()?)\n"
+        "// .save_retained_successor(\n"
         "// .runtime_timing()\n"
-        "// .heartbeat(now()?)\n"
+        "// .heartbeat(observed_at)\n"
         "// RuntimeDisplayMode::Headful\n"
+        "// ShippingCompositionError::CommittedRecoveryRequired\n"
         "// Err(ShippingCompositionError::UnsupportedPlatform)\n",
         encoding="utf-8",
     )
@@ -307,6 +325,20 @@ def self_test() -> None:
         composition.write_text(safe_composition, encoding="utf-8")
 
         composition.write_text(
+            safe_composition.replace("// .observe_controlled_close(&session_id)\n", ""),
+            encoding="utf-8",
+        )
+        expect_rejected(root, "shipping save without controlled-close witness")
+        composition.write_text(safe_composition, encoding="utf-8")
+
+        composition.write_text(
+            safe_composition.replace("// .save_retained_successor(\n", ""),
+            encoding="utf-8",
+        )
+        expect_rejected(root, "shipping close without canonical successor save")
+        composition.write_text(safe_composition, encoding="utf-8")
+
+        composition.write_text(
             safe_composition + "// FakeCamouhost\n",
             encoding="utf-8",
         )
@@ -351,7 +383,8 @@ def main() -> int:
             validate(args.root.resolve())
             print(
                 "CAP-01 Profile Bridge keeps one real governed authoritative shipping composition; "
-                "claim-only/local-only success is forbidden and synthetic executors remain production-unreachable."
+                "controlled close and canonical successor save are mandatory, claim-only/local-only success is forbidden, "
+                "and synthetic executors remain production-unreachable."
             )
     except BoundaryError as error:
         print(error)
