@@ -616,16 +616,15 @@ mod tests {
 
     static TEST_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 
-    fn fixture() -> Result<
-        (
-            std::path::PathBuf,
-            MaterializationRoot,
-            TenantId,
-            ProfileId,
-            GenerationId,
-        ),
-        Box<dyn std::error::Error>,
-    > {
+    type RematerializationFixture = (
+        std::path::PathBuf,
+        MaterializationRoot,
+        TenantId,
+        ProfileId,
+        GenerationId,
+    );
+
+    fn fixture() -> Result<RematerializationFixture, Box<dyn std::error::Error>> {
         let sequence = TEST_SEQUENCE.fetch_add(1, Ordering::Relaxed);
         let path = std::env::temp_dir().join(format!(
             "profile-bridge-reject-rematerialize-{}-{sequence}",
