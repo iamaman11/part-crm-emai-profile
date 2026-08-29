@@ -122,27 +122,27 @@ pub struct BridgeProfileGenerationSuccessorRequest {
 
 impl BridgeProfileGenerationSuccessorRequest {
     #[must_use]
-    pub const fn base_generation_id(&self) -> &str {
+    pub fn base_generation_id(&self) -> &str {
         &self.base_generation_id
     }
 
     #[must_use]
-    pub const fn generation_id(&self) -> &str {
+    pub fn generation_id(&self) -> &str {
         &self.generation_id
     }
 
     #[must_use]
-    pub const fn object_key(&self) -> &str {
+    pub fn object_key(&self) -> &str {
         &self.object_key
     }
 
     #[must_use]
-    pub const fn metadata_digest(&self) -> &str {
+    pub fn metadata_digest(&self) -> &str {
         &self.metadata_digest
     }
 
     #[must_use]
-    pub const fn container_digest(&self) -> &str {
+    pub fn container_digest(&self) -> &str {
         &self.container_digest
     }
 
@@ -152,12 +152,12 @@ impl BridgeProfileGenerationSuccessorRequest {
     }
 
     #[must_use]
-    pub const fn coordinator_session_id(&self) -> &str {
+    pub fn coordinator_session_id(&self) -> &str {
         &self.coordinator_session_id
     }
 
     #[must_use]
-    pub const fn coordinator_fencing_token(&self) -> &str {
+    pub fn coordinator_fencing_token(&self) -> &str {
         &self.coordinator_fencing_token
     }
 
