@@ -1,3 +1,6 @@
+use crate::r2_generation_objects::{
+    META_CONTAINER_DIGEST, META_GENERATION_ID, META_METADATA_DIGEST, META_PROFILE_ID, META_TENANT_ID,
+};
 use application_ports::generation_objects::GenerationObjectDescriptor;
 use core::fmt;
 use profile_platform_primitives::TenantScope;
@@ -165,23 +168,23 @@ impl R2GenerationUploadCapabilitySigner {
                 descriptor.container_bytes().to_string(),
             ),
             (
-                "x-amz-meta-container-digest".to_owned(),
+                format!("x-amz-meta-{META_CONTAINER_DIGEST}"),
                 descriptor.container_digest().to_owned(),
             ),
             (
-                "x-amz-meta-generation-id".to_owned(),
+                format!("x-amz-meta-{META_GENERATION_ID}"),
                 descriptor.generation_id().as_str().to_owned(),
             ),
             (
-                "x-amz-meta-metadata-digest".to_owned(),
+                format!("x-amz-meta-{META_METADATA_DIGEST}"),
                 descriptor.metadata_digest().to_owned(),
             ),
             (
-                "x-amz-meta-profile-id".to_owned(),
+                format!("x-amz-meta-{META_PROFILE_ID}"),
                 descriptor.profile_id().as_str().to_owned(),
             ),
             (
-                "x-amz-meta-tenant-id".to_owned(),
+                format!("x-amz-meta-{META_TENANT_ID}"),
                 scope.tenant_id().as_str().to_owned(),
             ),
         ];
@@ -198,7 +201,9 @@ impl R2GenerationUploadCapabilitySigner {
             canonical_headers.push('\n');
         }
 
-        let signed_headers = "content-type;host;if-none-match;x-amz-checksum-sha256;x-amz-meta-container-bytes;x-amz-meta-container-digest;x-amz-meta-generation-id;x-amz-meta-metadata-digest;x-amz-meta-profile-id;x-amz-meta-tenant-id";
+        let signed_headers = format!(
+            "content-type;host;if-none-match;x-amz-checksum-sha256;x-amz-meta-container-bytes;x-amz-meta-{META_CONTAINER_DIGEST};x-amz-meta-{META_GENERATION_ID};x-amz-meta-{META_METADATA_DIGEST};x-amz-meta-{META_PROFILE_ID};x-amz-meta-{META_TENANT_ID}"
+        );
         let credential_scope = format!(
             "{}/{}/{}/{}",
             signing_time.date_stamp, REGION, SERVICE, TERMINATOR
@@ -210,7 +215,7 @@ impl R2GenerationUploadCapabilitySigner {
             uri_encode(&credential, false),
             uri_encode(&signing_time.amz_date, false),
             expires_seconds,
-            uri_encode(signed_headers, false),
+            uri_encode(&signed_headers, false),
         );
         let canonical_uri = format!(
             "/{}/{}",
@@ -497,14 +502,13 @@ mod tests {
         let scope = TenantScope::new(TenantId::parse("tenant_upload_capability_01")?);
         let signing_time = R2GenerationUploadSigningTime::parse("20260810T120000Z")?;
         let capability = signer()?.sign_put(&scope, &descriptor()?, &signing_time, 300)?;
-
         assert!(capability.url().starts_with(
             "https://0123456789abcdef0123456789abcdef.r2.cloudflarestorage.com/profile-generations/tenants/tenant_upload_capability_01/"
         ));
         for required in [
             "X-Amz-Algorithm=AWS4-HMAC-SHA256",
             "X-Amz-Expires=300",
-            "X-Amz-SignedHeaders=content-type%3Bhost%3Bif-none-match%3Bx-amz-checksum-sha256%3Bx-amz-meta-container-bytes%3Bx-amz-meta-container-digest%3Bx-amz-meta-generation-id%3Bx-amz-meta-metadata-digest%3Bx-amz-meta-profile-id%3Bx-amz-meta-tenant-id",
+            "X-Amz-SignedHeaders=content-type%3Bhost%3Bif-none-match%3Bx-amz-checksum-sha256%3Bx-amz-meta-container-bytes%3Bx-amz-meta-profile-platform-container-sha256%3Bx-amz-meta-profile-platform-generation-id%3Bx-amz-meta-profile-platform-metadata-sha256%3Bx-amz-meta-profile-platform-profile-id%3Bx-amz-meta-profile-platform-tenant-id",
             "X-Amz-Signature=",
         ] {
             assert!(capability.url().contains(required));
@@ -516,12 +520,27 @@ mod tests {
                 .iter()
                 .any(|(name, _)| name == "x-amz-checksum-sha256")
         );
-        assert!(headers.contains(&("x-amz-meta-container-digest".to_owned(), "e".repeat(64))));
-        assert!(headers.contains(&("x-amz-meta-metadata-digest".to_owned(), "d".repeat(64))));
         assert!(headers.contains(&(
-            "x-amz-meta-tenant-id".to_owned(),
+            "x-amz-meta-profile-platform-container-sha256".to_owned(),
+            "e".repeat(64)
+        )));
+        assert!(headers.contains(&(
+            "x-amz-meta-profile-platform-metadata-sha256".to_owned(),
+            "d".repeat(64)
+        )));
+        assert!(headers.contains(&(
+            "x-amz-meta-profile-platform-tenant-id".to_owned(),
             "tenant_upload_capability_01".to_owned()
         )));
+        for forbidden in [
+            "x-amz-meta-container-digest",
+            "x-amz-meta-generation-id",
+            "x-amz-meta-metadata-digest",
+            "x-amz-meta-profile-id",
+            "x-amz-meta-tenant-id",
+        ] {
+            assert!(!headers.iter().any(|(name, _)| name == forbidden));
+        }
         assert_eq!(capability.expires_seconds(), 300);
         Ok(())
     }
