@@ -15,6 +15,7 @@ client-domain.workspace = true
 cloudflare-adapters.workspace = true
 control-plane-contract = { path = "../../crates/control-plane-contract" }
 device-domain.workspace = true
+encrypted-generation-domain.workspace = true
 identity-access-domain.workspace = true
 profile-platform-primitives.workspace = true
 serde = "=1.0.229"
