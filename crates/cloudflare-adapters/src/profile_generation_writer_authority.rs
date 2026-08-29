@@ -1,6 +1,7 @@
 use crate::profile_generation_successor_runtime::{
     PROFILE_GENERATION_WRITER_AUTHORITY_PATH, ProfileGenerationSuccessorInternalErrorClass,
-    ProfileGenerationSuccessorInternalErrorResponse, ProfileGenerationWriterAuthorityInternalRequest,
+    ProfileGenerationSuccessorInternalErrorResponse,
+    ProfileGenerationWriterAuthorityInternalRequest,
     ProfileGenerationWriterAuthorityInternalResponse,
 };
 use application_ports::profile_generation_successor::{
@@ -100,8 +101,11 @@ fn internal_request<T: Serialize>(
     init.with_method(Method::Post)
         .with_headers(headers)
         .with_body(Some(JsValue::from_str(&payload)));
-    Request::new_with_init(&format!("https://profile-coordinator.internal{path}"), &init)
-        .map_err(|_| dependency_failure())
+    Request::new_with_init(
+        &format!("https://profile-coordinator.internal{path}"),
+        &init,
+    )
+    .map_err(|_| dependency_failure())
 }
 
 const fn stale_authority() -> ProfileGenerationSuccessorCommitError {
