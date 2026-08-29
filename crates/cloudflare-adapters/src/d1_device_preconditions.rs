@@ -2,6 +2,10 @@ use application_ports::device_generation_commit::{
     DeviceGenerationCommitError, DeviceGenerationCommitErrorClass,
     DeviceGenerationProfileVersionPort,
 };
+use application_ports::profile_generation_successor::{
+    ProfileGenerationSuccessorCommitError, ProfileGenerationSuccessorCommitErrorClass,
+    ProfileGenerationSuccessorVersionPort,
+};
 use application_ports::{
     DeviceExecutionBlocker, DeviceExecutionPreconditionPort, DeviceExecutionReadiness,
     DeviceJobPortError, DeviceJobPortErrorClass,
@@ -52,6 +56,16 @@ WHERE profile.tenant_id = ?
   AND profile.active_generation_id = ?
 "#;
 
+const LOAD_SUCCESSOR_PROFILE_VERSION: &str = r#"
+SELECT
+    profile.version,
+    profile.active_generation_id
+FROM browser_profiles AS profile
+WHERE profile.tenant_id = ?
+  AND profile.profile_id = ?
+  AND profile.status = 'READY'
+"#;
+
 #[derive(Deserialize)]
 struct ExecutionPreconditionRow {
     generation_active: i64,
@@ -62,6 +76,12 @@ struct ExecutionPreconditionRow {
 #[derive(Deserialize)]
 struct ActiveProfileVersionRow {
     version: i64,
+}
+
+#[derive(Deserialize)]
+struct SuccessorProfileVersionRow {
+    version: i64,
+    active_generation_id: String,
 }
 
 pub struct D1DeviceExecutionPreconditions {
@@ -158,6 +178,44 @@ impl DeviceGenerationProfileVersionPort for D1DeviceExecutionPreconditions {
     }
 }
 
+impl ProfileGenerationSuccessorVersionPort for D1DeviceExecutionPreconditions {
+    async fn load_successor_expected_profile_version(
+        &self,
+        actor: &ActorContext,
+        profile_id: &ProfileId,
+        base_generation_id: &GenerationId,
+        candidate_generation_id: &GenerationId,
+    ) -> Result<Option<AggregateVersion>, ProfileGenerationSuccessorCommitError> {
+        let row = query!(
+            &self.database,
+            LOAD_SUCCESSOR_PROFILE_VERSION,
+            actor.tenant_scope().tenant_id().as_str(),
+            profile_id.as_str()
+        )
+        .map_err(|_| profile_successor_dependency_failure())?
+        .first::<SuccessorProfileVersionRow>(None)
+        .await
+        .map_err(|_| profile_successor_dependency_failure())?;
+
+        let Some(row) = row else {
+            return Ok(None);
+        };
+        let current = u64::try_from(row.version).map_err(|_| profile_successor_integrity_failure())?;
+        let expected = if row.active_generation_id == base_generation_id.as_str() {
+            current
+        } else if row.active_generation_id == candidate_generation_id.as_str() {
+            current
+                .checked_sub(1)
+                .ok_or_else(profile_successor_integrity_failure)?
+        } else {
+            return Ok(None);
+        };
+        AggregateVersion::new(expected)
+            .map(Some)
+            .map_err(|_| profile_successor_integrity_failure())
+    }
+}
+
 fn bounded_boolean(value: i64) -> Result<bool, DeviceJobPortError> {
     match value {
         0 => Ok(false),
@@ -182,9 +240,24 @@ fn generation_commit_dependency_failure() -> DeviceGenerationCommitError {
     DeviceGenerationCommitError::new(DeviceGenerationCommitErrorClass::DependencyUnavailable)
 }
 
+const fn profile_successor_integrity_failure() -> ProfileGenerationSuccessorCommitError {
+    ProfileGenerationSuccessorCommitError::new(
+        ProfileGenerationSuccessorCommitErrorClass::IntegrityFailure,
+    )
+}
+
+const fn profile_successor_dependency_failure() -> ProfileGenerationSuccessorCommitError {
+    ProfileGenerationSuccessorCommitError::new(
+        ProfileGenerationSuccessorCommitErrorClass::DependencyUnavailable,
+    )
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{EVALUATE_EXECUTION_PRECONDITIONS, LOAD_ACTIVE_PROFILE_VERSION};
+    use super::{
+        EVALUATE_EXECUTION_PRECONDITIONS, LOAD_ACTIVE_PROFILE_VERSION,
+        LOAD_SUCCESSOR_PROFILE_VERSION,
+    };
 
     #[test]
     fn precondition_query_is_exact_target_and_freshness_scoped() {
@@ -213,5 +286,20 @@ mod tests {
             assert!(LOAD_ACTIVE_PROFILE_VERSION.contains(required));
         }
         assert!(!LOAD_ACTIVE_PROFILE_VERSION.contains("profile_assignments"));
+    }
+
+    #[test]
+    fn successor_version_query_reads_only_server_owned_profile_state() {
+        for required in [
+            "profile.version",
+            "profile.active_generation_id",
+            "profile.tenant_id = ?",
+            "profile.profile_id = ?",
+            "profile.status = 'READY'",
+        ] {
+            assert!(LOAD_SUCCESSOR_PROFILE_VERSION.contains(required));
+        }
+        assert!(!LOAD_SUCCESSOR_PROFILE_VERSION.contains("device_jobs"));
+        assert!(!LOAD_SUCCESSOR_PROFILE_VERSION.contains("profile_assignments"));
     }
 }
