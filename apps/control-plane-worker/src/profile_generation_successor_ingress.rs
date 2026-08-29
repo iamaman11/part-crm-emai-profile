@@ -3,6 +3,7 @@ use crate::composition::{
     device_execution_preconditions, device_job_authorization, generation_object_verifier,
     generation_upload_capability_signer, profile_generation_successor_commit,
 };
+use application_ports::DeviceJobPortErrorClass;
 use application_ports::device_jobs::{DeviceJobAuthorizationPort, DeviceJobCapability};
 use application_ports::generation_objects::{
     GenerationObjectDescriptor, GenerationObjectDescriptorVerifyPort,
@@ -14,7 +15,6 @@ use application_ports::profile_generation_successor::{
     ProfileGenerationSuccessorCommitRequest, ProfileGenerationSuccessorVersionPort,
     ProfileGenerationWriterAuthorityPort, ProfileGenerationWriterAuthorityRequest,
 };
-use application_ports::DeviceJobPortErrorClass;
 use cloudflare_adapters::r2_generation_upload_capability::{
     R2GenerationUploadCapabilityError, R2GenerationUploadSigningTime,
 };
@@ -96,7 +96,10 @@ pub(crate) async fn dispatch_authorized(
         Ok(value) => value,
         Err(_) => return invalid_request(actor.correlation_id().as_str()),
     };
-    if generation_id == base_generation_id || body.container_bytes() == 0 || body.coordinator_epoch() == 0 {
+    if generation_id == base_generation_id
+        || body.container_bytes() == 0
+        || body.coordinator_epoch() == 0
+    {
         return invalid_request(actor.correlation_id().as_str());
     }
     let session_id = match SessionId::parse(body.coordinator_session_id().to_owned()) {
@@ -133,8 +136,17 @@ pub(crate) async fn dispatch_authorized(
         base_generation_id.clone(),
     );
 
-    if !device_authorized(env, actor, &target).await? {
-        return forbidden(actor.correlation_id().as_str());
+    match device_authorized(env, actor, &target).await {
+        Ok(true) => {}
+        Ok(false) | Err(DeviceJobPortErrorClass::AuthenticationFailed) => {
+            return forbidden(actor.correlation_id().as_str());
+        }
+        Err(DeviceJobPortErrorClass::IntegrityFailure) => {
+            return integrity_failure(actor.correlation_id().as_str());
+        }
+        Err(DeviceJobPortErrorClass::DependencyUnavailable) => {
+            return dependency(actor.correlation_id().as_str());
+        }
     }
 
     let preconditions = device_execution_preconditions(env)?;
@@ -224,8 +236,17 @@ pub(crate) async fn dispatch_authorized(
 
             // Authorization is re-read after exact object verification so revocation racing a save
             // cannot rely on the earlier upload-capability decision.
-            if !device_authorized(env, actor, &target).await? {
-                return forbidden(actor.correlation_id().as_str());
+            match device_authorized(env, actor, &target).await {
+                Ok(true) => {}
+                Ok(false) | Err(DeviceJobPortErrorClass::AuthenticationFailed) => {
+                    return forbidden(actor.correlation_id().as_str());
+                }
+                Err(DeviceJobPortErrorClass::IntegrityFailure) => {
+                    return integrity_failure(actor.correlation_id().as_str());
+                }
+                Err(DeviceJobPortErrorClass::DependencyUnavailable) => {
+                    return dependency(actor.correlation_id().as_str());
+                }
             }
 
             let successor = profile_generation_successor_commit(env);
@@ -289,15 +310,13 @@ async fn device_authorized(
     env: &Env,
     actor: &ActorContext,
     target: &DeviceJobTarget,
-) -> Result<bool> {
-    let authorization = device_job_authorization(env)?;
-    match authorization
+) -> core::result::Result<bool, DeviceJobPortErrorClass> {
+    let authorization = device_job_authorization(env)
+        .map_err(|_| DeviceJobPortErrorClass::DependencyUnavailable)?;
+    authorization
         .is_device_job_authorized(actor, target, DeviceJobCapability::Complete)
         .await
-    {
-        Ok(value) => Ok(value),
-        Err(error) => device_authorization_failure(actor.correlation_id().as_str(), error.class()),
-    }
+        .map_err(|error| error.class())
 }
 
 fn descriptor_shape_is_canonical(
@@ -350,27 +369,6 @@ fn machine_json<T: serde::Serialize>(value: &T) -> Result<Response> {
     Ok(response)
 }
 
-fn device_authorization_failure(
-    correlation_id: &str,
-    class: DeviceJobPortErrorClass,
-) -> Result<bool> {
-    match class {
-        DeviceJobPortErrorClass::AuthenticationFailed => Ok(false),
-        DeviceJobPortErrorClass::IntegrityFailure => {
-            let _ = integrity_failure(correlation_id)?;
-            Err(worker::Error::RustError(
-                "device authorization integrity failure".to_owned(),
-            ))
-        }
-        DeviceJobPortErrorClass::DependencyUnavailable => {
-            let _ = dependency(correlation_id)?;
-            Err(worker::Error::RustError(
-                "device authorization dependency unavailable".to_owned(),
-            ))
-        }
-    }
-}
-
 fn successor_failure(
     correlation_id: &str,
     class: ProfileGenerationSuccessorCommitErrorClass,
@@ -385,7 +383,9 @@ fn successor_failure(
         ProfileGenerationSuccessorCommitErrorClass::IntegrityFailure => {
             integrity_failure(correlation_id)
         }
-        ProfileGenerationSuccessorCommitErrorClass::DependencyUnavailable => dependency(correlation_id),
+        ProfileGenerationSuccessorCommitErrorClass::DependencyUnavailable => {
+            dependency(correlation_id)
+        }
     }
 }
 
