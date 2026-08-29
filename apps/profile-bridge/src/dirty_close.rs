@@ -16,9 +16,9 @@ use application_ports::ProfileCoordinatorPort;
 use application_ports::generation_objects::{
     GenerationObjectExactVerifyPort, GenerationObjectUploadPort,
 };
-use profile_platform_primitives::{GenerationId, UnixMillis};
 #[cfg(any(test, feature = "synthetic-test-bin"))]
 use profile_platform_primitives::TenantScope;
+use profile_platform_primitives::{GenerationId, UnixMillis};
 use session_domain::ProfileLease;
 use std::fmt;
 
@@ -132,15 +132,13 @@ impl RetainedDirtyClose {
             ),
         };
 
-        let workspace_lock_released = self
+        let physical_workspace_lock_released = self
             .workspace_lock
             .take()
             .is_some_and(|workspace_lock| workspace_lock.release().is_ok());
-        if workspace_lock_released {
-            self.base
-                .set_locked(false)
-                .map_err(RetainedDirtyCloseError::Local)?;
-        }
+        let local_unlock_recorded = !physical_workspace_lock_released
+            || self.base.set_locked(false).is_ok();
+        let workspace_lock_released = physical_workspace_lock_released && local_unlock_recorded;
         let coordinator_lease_released = coordinator.close_lease(&self.lease).is_ok();
 
         Ok(DirtyCloseCompletion {
@@ -301,8 +299,10 @@ impl DirtyCloseCompletion {
 
     #[must_use]
     pub fn is_fully_saved_locally(&self) -> bool {
-        matches!(self.local_outcome, DirtyCloseLocalOutcome::CandidateAccepted(_))
-            && self.workspace_lock_released
+        matches!(
+            self.local_outcome,
+            DirtyCloseLocalOutcome::CandidateAccepted(_)
+        ) && self.workspace_lock_released
             && self.coordinator_lease_released
     }
 
