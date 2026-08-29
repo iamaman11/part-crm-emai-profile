@@ -1,4 +1,4 @@
-use crate::{GenerationDek, KeyId, NoncePrefix, PlaintextDigest};
+use crate::{GenerationDek, KeyId, NoncePrefix};
 use core::fmt;
 use profile_platform_primitives::{GenerationId, ProfileId, TenantId};
 use sha2::{Digest, Sha256};
@@ -19,6 +19,28 @@ impl GenerationRootKeyVersion {
             return Err(GenerationKeyDerivationError::InvalidRootKeyVersion);
         }
         Ok(Self(value))
+    }
+
+    pub fn from_key_id(key_id: &KeyId) -> Result<Self, GenerationKeyDerivationError> {
+        let suffix = key_id
+            .as_str()
+            .strip_prefix(ROOT_KEY_ID_PREFIX)
+            .ok_or(GenerationKeyDerivationError::InvalidKeyIdentity)?;
+        if suffix.is_empty()
+            || (suffix.len() > 1 && suffix.starts_with('0'))
+            || !suffix.bytes().all(|byte| byte.is_ascii_digit())
+        {
+            return Err(GenerationKeyDerivationError::InvalidKeyIdentity);
+        }
+        let value = suffix
+            .parse::<u32>()
+            .map_err(|_| GenerationKeyDerivationError::InvalidKeyIdentity)?;
+        Self::new(value).map_err(|_| GenerationKeyDerivationError::InvalidKeyIdentity)
+    }
+
+    pub fn key_id(self) -> Result<KeyId, GenerationKeyDerivationError> {
+        KeyId::parse(format!("{ROOT_KEY_ID_PREFIX}{}", self.value()))
+            .map_err(|_| GenerationKeyDerivationError::InvalidKeyIdentity)
     }
 
     #[must_use]
@@ -65,7 +87,7 @@ pub struct GenerationKeyDerivationContext<'a> {
     tenant_id: &'a TenantId,
     profile_id: &'a ProfileId,
     generation_id: &'a GenerationId,
-    plaintext_digest: PlaintextDigest,
+    plaintext_digest: [u8; 32],
 }
 
 impl<'a> GenerationKeyDerivationContext<'a> {
@@ -74,7 +96,7 @@ impl<'a> GenerationKeyDerivationContext<'a> {
         tenant_id: &'a TenantId,
         profile_id: &'a ProfileId,
         generation_id: &'a GenerationId,
-        plaintext_digest: PlaintextDigest,
+        plaintext_digest: [u8; 32],
     ) -> Self {
         Self {
             tenant_id,
@@ -130,8 +152,7 @@ pub fn derive_generation_material(
     root: &GenerationRootKey,
     context: GenerationKeyDerivationContext<'_>,
 ) -> Result<DerivedGenerationMaterial, GenerationKeyDerivationError> {
-    let key_id = KeyId::parse(format!("{ROOT_KEY_ID_PREFIX}{}", root.version().value()))
-        .map_err(|_| GenerationKeyDerivationError::InvalidKeyIdentity)?;
+    let key_id = root.version().key_id()?;
     let dek_bytes = derive_prf(root, DEK_DOMAIN, context)?;
     let nonce_bytes = derive_prf(root, NONCE_PREFIX_DOMAIN, context)?;
     let mut nonce_prefix = [0_u8; 16];
@@ -162,7 +183,7 @@ fn derive_prf(
     update_frame(&mut inner, context.tenant_id.as_str().as_bytes())?;
     update_frame(&mut inner, context.profile_id.as_str().as_bytes())?;
     update_frame(&mut inner, context.generation_id.as_str().as_bytes())?;
-    update_frame(&mut inner, &context.plaintext_digest.bytes())?;
+    update_frame(&mut inner, &context.plaintext_digest)?;
     let inner_digest = Zeroizing::new(<[u8; 32]>::from(inner.finalize()));
 
     let mut outer = Sha256::new();
@@ -185,7 +206,7 @@ mod tests {
         DEK_DOMAIN, GenerationKeyDerivationContext, GenerationRootKey, GenerationRootKeyVersion,
         NONCE_PREFIX_DOMAIN, derive_generation_material, derive_prf,
     };
-    use crate::PlaintextDigest;
+    use crate::{KeyId, PlaintextDigest};
     use profile_platform_primitives::{GenerationId, ProfileId, TenantId};
 
     #[test]
@@ -194,7 +215,7 @@ mod tests {
         let tenant = TenantId::parse("tenant_generation_kdf_01")?;
         let profile = ProfileId::parse("profile_generation_kdf_01")?;
         let generation = GenerationId::parse("generation_generation_kdf_01")?;
-        let digest = PlaintextDigest::calculate(b"same snapshot");
+        let digest = PlaintextDigest::calculate(b"same snapshot").bytes();
         let version = GenerationRootKeyVersion::new(7)?;
         let root = GenerationRootKey::new(version, [0x42; 32]);
         let context = GenerationKeyDerivationContext::new(&tenant, &profile, &generation, digest);
@@ -209,6 +230,7 @@ mod tests {
         );
         let material = derive_generation_material(&root, context)?;
         assert_eq!(material.key_id().as_str(), "profile-generation-root-v1-7");
+        assert_eq!(GenerationRootKeyVersion::from_key_id(material.key_id())?, version);
         Ok(())
     }
 
@@ -223,13 +245,13 @@ mod tests {
             &tenant,
             &profile,
             &generation,
-            PlaintextDigest::calculate(b"snapshot-v1"),
+            PlaintextDigest::calculate(b"snapshot-v1").bytes(),
         );
         let second = GenerationKeyDerivationContext::new(
             &tenant,
             &profile,
             &generation,
-            PlaintextDigest::calculate(b"snapshot-v2"),
+            PlaintextDigest::calculate(b"snapshot-v2").bytes(),
         );
 
         assert_ne!(
@@ -254,7 +276,7 @@ mod tests {
         let tenant_b = TenantId::parse("tenant_generation_kdf_03b")?;
         let profile = ProfileId::parse("profile_generation_kdf_03")?;
         let generation = GenerationId::parse("generation_generation_kdf_03")?;
-        let digest = PlaintextDigest::calculate(b"snapshot");
+        let digest = PlaintextDigest::calculate(b"snapshot").bytes();
         let root_v1 = GenerationRootKey::new(GenerationRootKeyVersion::new(1)?, [0x55; 32]);
         let root_v2 = GenerationRootKey::new(GenerationRootKeyVersion::new(2)?, [0x55; 32]);
         let context_a =
@@ -274,6 +296,24 @@ mod tests {
             derive_generation_material(&root_v1, context_a)?.key_id(),
             derive_generation_material(&root_v2, context_a)?.key_id()
         );
+        Ok(())
+    }
+
+    #[test]
+    fn key_identity_is_canonical_and_strict() -> Result<(), Box<dyn std::error::Error>> {
+        let version = GenerationRootKeyVersion::new(42)?;
+        let key_id = version.key_id()?;
+        assert_eq!(key_id.as_str(), "profile-generation-root-v1-42");
+        assert_eq!(GenerationRootKeyVersion::from_key_id(&key_id)?, version);
+        for invalid in [
+            "profile-generation-root-v1-0",
+            "profile-generation-root-v1-01",
+            "profile-generation-root-v1-x",
+            "profile-generation-root-v2-1",
+        ] {
+            let key_id = KeyId::parse(invalid)?;
+            assert!(GenerationRootKeyVersion::from_key_id(&key_id).is_err());
+        }
         Ok(())
     }
 
