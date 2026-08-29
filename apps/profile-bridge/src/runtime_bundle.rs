@@ -1,10 +1,22 @@
 use crate::ProcessControlPort;
+use crate::operator_flow::RuntimeBundleSelectionPort;
 use bridge_domain::{BridgePortError, CAMOUHOST_IPC_VERSION, CamouhostMessage, CamouhostPort};
-use profile_platform_primitives::SessionId;
+use profile_platform_primitives::{ActorContext, GenerationId, ProfileId, SessionId};
 use runtime_bundle_domain::{
-    InventoryError, RuntimeInventory, RuntimeManifest, RuntimeManifestError, Sha256Digest,
+    BundleRelativePath, InventoryEntry, InventoryError, RuntimeInventory, RuntimeManifest,
+    RuntimeManifestError, RuntimePlatform, Sha256Digest,
 };
+use sha2::{Digest, Sha256};
 use std::fmt;
+use std::fs;
+use std::path::{Path, PathBuf};
+
+const SHIPPING_RUNTIME_VERSION: &str = "2.0.0";
+const SHIPPING_PYTHON_VERSION: &str = "3.12";
+const SHIPPING_ENTRYPOINT: &str = "camouhost/real.py";
+const SHIPPING_RUNTIME_LOCK: &str = "camouhost/runtime-lock.json";
+const MAX_RUNTIME_FILE_BYTES: u64 = 32 * 1024 * 1024;
+const LOWER_HEX: &[u8; 16] = b"0123456789abcdef";
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ApprovedRuntimeBundle {
@@ -57,6 +69,153 @@ impl fmt::Display for RuntimeBundleApprovalError {
 }
 
 impl std::error::Error for RuntimeBundleApprovalError {}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct FilesystemRuntimeBundleSelection {
+    runtime_root: PathBuf,
+}
+
+impl FilesystemRuntimeBundleSelection {
+    pub fn open(runtime_root: impl Into<PathBuf>) -> Result<Self, RuntimeBundleSelectionError> {
+        let runtime_root = runtime_root.into();
+        if !runtime_root.is_absolute() {
+            return Err(RuntimeBundleSelectionError::InvalidRoot);
+        }
+        let metadata = fs::symlink_metadata(&runtime_root)
+            .map_err(|_| RuntimeBundleSelectionError::InvalidRoot)?;
+        if metadata.file_type().is_symlink() || !metadata.is_dir() {
+            return Err(RuntimeBundleSelectionError::InvalidRoot);
+        }
+        let runtime_root = fs::canonicalize(runtime_root)
+            .map_err(|_| RuntimeBundleSelectionError::InvalidRoot)?;
+        Ok(Self { runtime_root })
+    }
+
+    #[must_use]
+    pub fn runtime_root(&self) -> &Path {
+        &self.runtime_root
+    }
+
+    fn load_bundle(&self) -> Result<ApprovedRuntimeBundle, RuntimeBundleSelectionError> {
+        let entrypoint = read_runtime_file(&self.runtime_root, SHIPPING_ENTRYPOINT)?;
+        let runtime_lock = read_runtime_file(&self.runtime_root, SHIPPING_RUNTIME_LOCK)?;
+        let entries = [entrypoint, runtime_lock];
+        let calculated_inventory_sha256 = inventory_digest(&entries)?;
+        let manifest = RuntimeManifest::new(
+            SHIPPING_RUNTIME_VERSION,
+            SHIPPING_PYTHON_VERSION,
+            RuntimePlatform::WindowsX86_64,
+            BundleRelativePath::parse(SHIPPING_ENTRYPOINT)
+                .map_err(|_| RuntimeBundleSelectionError::InvalidRuntime)?,
+            calculated_inventory_sha256.clone(),
+        )
+        .map_err(|_| RuntimeBundleSelectionError::InvalidRuntime)?;
+        let inventory = RuntimeInventory::new(entries.into_iter().map(RuntimeFile::into_entry))
+            .map_err(|_| RuntimeBundleSelectionError::InvalidRuntime)?;
+        ApprovedRuntimeBundle::validate(manifest, inventory, &calculated_inventory_sha256)
+            .map_err(|_| RuntimeBundleSelectionError::InvalidRuntime)
+    }
+}
+
+impl RuntimeBundleSelectionPort for FilesystemRuntimeBundleSelection {
+    type Error = RuntimeBundleSelectionError;
+
+    fn select_bundle(
+        &mut self,
+        _actor: &ActorContext,
+        _profile_id: &ProfileId,
+        _generation_id: &GenerationId,
+    ) -> Result<ApprovedRuntimeBundle, Self::Error> {
+        self.load_bundle()
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RuntimeBundleSelectionError {
+    InvalidRoot,
+    MissingRuntimeFile,
+    InvalidRuntime,
+}
+
+impl fmt::Display for RuntimeBundleSelectionError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::InvalidRoot => "shipping runtime root is invalid",
+            Self::MissingRuntimeFile => "shipping runtime file is unavailable",
+            Self::InvalidRuntime => "shipping runtime bundle is invalid",
+        })
+    }
+}
+
+impl std::error::Error for RuntimeBundleSelectionError {}
+
+struct RuntimeFile {
+    path: BundleRelativePath,
+    length: u64,
+    sha256: Sha256Digest,
+}
+
+impl RuntimeFile {
+    fn into_entry(self) -> InventoryEntry {
+        InventoryEntry::new(self.path, self.length, self.sha256)
+    }
+}
+
+fn read_runtime_file(
+    runtime_root: &Path,
+    relative: &str,
+) -> Result<RuntimeFile, RuntimeBundleSelectionError> {
+    let relative = BundleRelativePath::parse(relative)
+        .map_err(|_| RuntimeBundleSelectionError::InvalidRuntime)?;
+    let path = runtime_root.join(relative.as_str());
+    let metadata = fs::symlink_metadata(&path)
+        .map_err(|_| RuntimeBundleSelectionError::MissingRuntimeFile)?;
+    if metadata.file_type().is_symlink()
+        || !metadata.is_file()
+        || metadata.len() == 0
+        || metadata.len() > MAX_RUNTIME_FILE_BYTES
+    {
+        return Err(RuntimeBundleSelectionError::InvalidRuntime);
+    }
+    let bytes = fs::read(path).map_err(|_| RuntimeBundleSelectionError::MissingRuntimeFile)?;
+    if u64::try_from(bytes.len()).ok() != Some(metadata.len()) {
+        return Err(RuntimeBundleSelectionError::InvalidRuntime);
+    }
+    Ok(RuntimeFile {
+        path: relative,
+        length: metadata.len(),
+        sha256: Sha256Digest::parse(sha256_hex(&bytes))
+            .map_err(|_| RuntimeBundleSelectionError::InvalidRuntime)?,
+    })
+}
+
+fn inventory_digest(entries: &[RuntimeFile]) -> Result<Sha256Digest, RuntimeBundleSelectionError> {
+    let mut canonical = String::from("[");
+    for (index, entry) in entries.iter().enumerate() {
+        if index > 0 {
+            canonical.push(',');
+        }
+        canonical.push_str(&format!(
+            "{{\"length\":{},\"path\":\"{}\",\"sha256\":\"{}\"}}",
+            entry.length,
+            entry.path.as_str(),
+            entry.sha256.as_str()
+        ));
+    }
+    canonical.push_str("]\n");
+    Sha256Digest::parse(sha256_hex(canonical.as_bytes()))
+        .map_err(|_| RuntimeBundleSelectionError::InvalidRuntime)
+}
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    let digest = Sha256::digest(bytes);
+    let mut encoded = String::with_capacity(64);
+    for byte in digest {
+        encoded.push(char::from(LOWER_HEX[usize::from(byte >> 4)]));
+        encoded.push(char::from(LOWER_HEX[usize::from(byte & 0x0f)]));
+    }
+    encoded
+}
 
 pub struct RuntimeSessionOrchestrator;
 
@@ -198,16 +357,23 @@ impl std::error::Error for RuntimeLaunchError {}
 #[cfg(test)]
 mod tests {
     use super::{
-        ApprovedRuntimeBundle, RuntimeBundleApprovalError, RuntimeLaunchError,
-        RuntimeSessionOrchestrator,
+        ApprovedRuntimeBundle, FilesystemRuntimeBundleSelection, RuntimeBundleApprovalError,
+        RuntimeBundleSelectionError, RuntimeLaunchError, RuntimeSessionOrchestrator,
     };
+    use crate::operator_flow::RuntimeBundleSelectionPort;
     use crate::{FakeCamouhost, FakeProcessControl, ProcessAction};
     use bridge_domain::{BridgePortError, CamouhostMessage, CamouhostPort};
-    use profile_platform_primitives::SessionId;
+    use profile_platform_primitives::{
+        ActorContext, ActorId, CorrelationId, GenerationId, ProfileId, SessionId, TenantId,
+        TenantScope,
+    };
     use runtime_bundle_domain::{
         BundleRelativePath, InventoryEntry, InventoryError, RuntimeInventory, RuntimeManifest,
         RuntimeManifestError, RuntimePlatform, Sha256Digest,
     };
+    use std::fs;
+    use std::path::PathBuf;
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     #[derive(Default)]
     struct CloseFailCamouhost {
@@ -246,6 +412,79 @@ mod tests {
             inventory,
             &calculated,
         )?)
+    }
+
+    fn runtime_root(label: &str) -> Result<PathBuf, Box<dyn std::error::Error>> {
+        let nonce = SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos();
+        Ok(std::env::temp_dir().join(format!(
+            "profile-bridge-runtime-selection-{label}-{}-{nonce}",
+            std::process::id()
+        )))
+    }
+
+    fn actor() -> Result<ActorContext, Box<dyn std::error::Error>> {
+        Ok(ActorContext::new(
+            TenantScope::new(TenantId::parse("tenant_01JRUNTIMESELECT")?),
+            ActorId::parse("actor_01JRUNTIMESELECT")?,
+            CorrelationId::parse("corr_01JRUNTIMESELECT")?,
+        ))
+    }
+
+    fn select(
+        selector: &mut FilesystemRuntimeBundleSelection,
+    ) -> Result<ApprovedRuntimeBundle, RuntimeBundleSelectionError> {
+        selector.select_bundle(
+            &actor().map_err(|_| RuntimeBundleSelectionError::InvalidRuntime)?,
+            &ProfileId::parse("profile_01JRUNTIMESELECT")
+                .map_err(|_| RuntimeBundleSelectionError::InvalidRuntime)?,
+            &GenerationId::parse("generation_01JRUNTIMESELECT")
+                .map_err(|_| RuntimeBundleSelectionError::InvalidRuntime)?,
+        )
+    }
+
+    #[test]
+    fn filesystem_selector_binds_exact_real_runtime_file_bytes()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let root_path = runtime_root("exact")?;
+        fs::create_dir_all(root_path.join("camouhost"))?;
+        fs::write(root_path.join("camouhost/real.py"), b"print('real')\n")?;
+        fs::write(
+            root_path.join("camouhost/runtime-lock.json"),
+            b"{\"runtime_role\":\"real_camoufox\"}\n",
+        )?;
+        let mut selector = FilesystemRuntimeBundleSelection::open(&root_path)?;
+        let first = select(&mut selector)?;
+        assert_eq!(first.manifest().runtime_version(), "2.0.0");
+        assert_eq!(first.manifest().entrypoint().as_str(), "camouhost/real.py");
+        let first_digest = first.manifest().inventory_sha256().clone();
+
+        fs::write(
+            root_path.join("camouhost/runtime-lock.json"),
+            b"{\"runtime_role\":\"real_camoufox\",\"changed\":true}\n",
+        )?;
+        let second = select(&mut selector)?;
+        assert_ne!(second.manifest().inventory_sha256(), &first_digest);
+        fs::remove_dir_all(root_path)?;
+        Ok(())
+    }
+
+    #[test]
+    fn filesystem_selector_rejects_missing_or_relative_runtime_roots()
+    -> Result<(), Box<dyn std::error::Error>> {
+        assert_eq!(
+            FilesystemRuntimeBundleSelection::open(PathBuf::from("runtime/camouhost")),
+            Err(RuntimeBundleSelectionError::InvalidRoot)
+        );
+        let root_path = runtime_root("missing")?;
+        fs::create_dir_all(root_path.join("camouhost"))?;
+        fs::write(root_path.join("camouhost/runtime-lock.json"), b"{}\n")?;
+        let mut selector = FilesystemRuntimeBundleSelection::open(&root_path)?;
+        assert_eq!(
+            select(&mut selector),
+            Err(RuntimeBundleSelectionError::MissingRuntimeFile)
+        );
+        fs::remove_dir_all(root_path)?;
+        Ok(())
     }
 
     #[test]
