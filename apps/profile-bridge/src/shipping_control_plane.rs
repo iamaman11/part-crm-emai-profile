@@ -1,6 +1,6 @@
-use crate::operator_flow::{DeviceAuthenticationPort, EnrollmentPort, OperatorEnrollment};
+use crate::operator_flow::{EnrollmentPort, OperatorEnrollment};
 use application_ports::{ProfileCoordinatorPort, ProfileCoordinatorRuntimePort};
-use bridge_domain::{BridgePortError, ClaimUri};
+use bridge_domain::ClaimUri;
 use control_plane_contract::coordinator_api::{
     CoordinatorCommandDto, CoordinatorCommandRequestDto, CoordinatorOutcomeDto,
     CoordinatorReleaseDispositionDto, CoordinatorResponseDto, CoordinatorStatusDto,
@@ -10,8 +10,8 @@ use control_plane_contract::profile_launch_api::{
     BridgeProfileLaunchRedemptionProjection, BridgeProfileLaunchRedemptionRequest,
 };
 use profile_platform_primitives::{
-    ActorContext, ActorId, CorrelationId, DeviceId, FencingToken, IdempotencyKey, LaunchIntentId,
-    ProfileId, SessionId, TenantId, TenantScope, UnixMillis,
+    ActorContext, ActorId, CorrelationId, DeviceId, FencingToken, GenerationId, IdempotencyKey,
+    LaunchIntentId, ProfileId, SessionId, TenantId, TenantScope, UnixMillis,
 };
 use session_domain::ProfileLease;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -85,19 +85,6 @@ impl core::fmt::Display for ShippingControlPlaneError {
 
 impl std::error::Error for ShippingControlPlaneError {}
 
-pub struct ControlPlaneDeviceAuthentication;
-
-impl DeviceAuthenticationPort for ControlPlaneDeviceAuthentication {
-    type Error = BridgePortError;
-
-    fn authenticate(&mut self, device_id: &DeviceId, key_handle: &str) -> Result<(), Self::Error> {
-        if device_id.as_str().is_empty() || key_handle.is_empty() {
-            return Err(BridgePortError::InvalidResponse);
-        }
-        Ok(())
-    }
-}
-
 pub struct ControlPlaneEnrollment<T> {
     transport: T,
 }
@@ -121,7 +108,7 @@ where
         device_id: &DeviceId,
         _now: UnixMillis,
     ) -> Result<OperatorEnrollment, Self::Error> {
-        let correlation_id = next_typed_id("corr", CorrelationId::parse)?;
+        let correlation_id = next_correlation_id()?;
         let request = BridgeProfileLaunchRedemptionRequest::new(
             claim
                 .claim_code()
@@ -152,10 +139,8 @@ where
             .map_err(|_| Self::Error::InvalidResponse)?;
         let profile_id = ProfileId::parse(projection.profile_id)
             .map_err(|_| Self::Error::InvalidResponse)?;
-        let generation_id = profile_platform_primitives::GenerationId::parse(
-            projection.generation_id,
-        )
-        .map_err(|_| Self::Error::InvalidResponse)?;
+        let generation_id = GenerationId::parse(projection.generation_id)
+            .map_err(|_| Self::Error::InvalidResponse)?;
         let returned_device = DeviceId::parse(projection.device_id)
             .map_err(|_| Self::Error::InvalidResponse)?;
         let launch_intent_id = LaunchIntentId::parse(projection.launch_intent_id)
@@ -198,21 +183,22 @@ impl<T> ControlPlaneCoordinator<T> {
             cursor: None,
         }
     }
+}
 
+impl<T> ControlPlaneCoordinator<T>
+where
+    T: MachineHttpPort,
+{
     fn snapshot(
         &mut self,
         actor: &ActorContext,
         profile_id: &ProfileId,
-    ) -> Result<CoordinatorResponseDto, ShippingControlPlaneError>
-    where
-        T: MachineHttpPort,
-    {
-        let path = coordinator_path(actor.tenant_scope().tenant_id(), profile_id);
+    ) -> Result<CoordinatorResponseDto, ShippingControlPlaneError> {
         let response = self
             .transport
             .request(
                 MachineHttpMethod::Get,
-                &path,
+                &coordinator_path(actor.tenant_scope().tenant_id(), profile_id),
                 actor.correlation_id(),
                 None,
             )
@@ -225,24 +211,21 @@ impl<T> ControlPlaneCoordinator<T> {
         tenant_id: &TenantId,
         profile_id: &ProfileId,
         request: &CoordinatorCommandRequestDto,
-    ) -> Result<CoordinatorResponseDto, ShippingControlPlaneError>
-    where
-        T: MachineHttpPort,
-    {
-        let correlation_id = next_typed_id("corr", CorrelationId::parse)?;
-        let path = coordinator_path(tenant_id, profile_id);
-        let body = serde_json::to_vec(request)
+    ) -> Result<CoordinatorResponseDto, ShippingControlPlaneError> {
+        let correlation_id = next_correlation_id()?;
+        let mut body = serde_json::to_vec(request)
             .map_err(|_| ShippingControlPlaneError::InvalidResponse)?;
         let response = self
             .transport
             .request(
                 MachineHttpMethod::PostJson,
-                &path,
+                &coordinator_path(tenant_id, profile_id),
                 &correlation_id,
                 Some(&body),
             )
-            .map_err(|_| ShippingControlPlaneError::Transport)?;
-        decode_coordinator_response(response)
+            .map_err(|_| ShippingControlPlaneError::Transport);
+        body.fill(0);
+        decode_coordinator_response(response?)
     }
 }
 
@@ -268,15 +251,14 @@ where
             actor.tenant_scope().tenant_id(),
             profile_id,
         )?;
-        let session_id = next_typed_id("session", SessionId::parse)?;
+        let session_id = next_session_id()?;
+        let sequence = snapshot
+            .sequence
+            .checked_add(1)
+            .ok_or(Self::Error::InvalidResponse)?;
         let request = CoordinatorCommandRequestDto {
-            idempotency_key: next_typed_id("idem", IdempotencyKey::parse)?
-                .as_str()
-                .to_owned(),
-            sequence: snapshot
-                .sequence
-                .checked_add(1)
-                .ok_or(Self::Error::InvalidResponse)?,
+            idempotency_key: next_idempotency_key()?.as_str().to_owned(),
+            sequence,
             expected_version: snapshot.version,
             command: CoordinatorCommandDto::Claim {
                 launch_intent_id: launch_intent_id.as_str().to_owned(),
@@ -285,16 +267,25 @@ where
             },
         };
         let response = self.command(actor.tenant_scope().tenant_id(), profile_id, &request)?;
-        let fencing_token = validate_active_response(
+        let epoch = validate_active_projection(
             &response,
             CoordinatorOutcomeDto::LeaseClaimed,
             actor.tenant_scope().tenant_id(),
             profile_id,
             device_id,
             &session_id,
-            request.sequence,
+            sequence,
         )?;
-        let epoch = response.epoch.ok_or(Self::Error::InvalidResponse)?;
+        if response.epoch != Some(epoch) {
+            return Err(Self::Error::InvalidResponse);
+        }
+        let fencing_token = response
+            .fencing_token
+            .as_ref()
+            .ok_or(Self::Error::InvalidResponse)
+            .and_then(|value| {
+                FencingToken::parse(value.clone()).map_err(|_| Self::Error::InvalidResponse)
+            })?;
         let lease = ProfileLease::issue(
             actor.tenant_scope().tenant_id().clone(),
             profile_id.clone(),
@@ -329,9 +320,7 @@ where
             .checked_add(1)
             .ok_or(Self::Error::InvalidResponse)?;
         let request = CoordinatorCommandRequestDto {
-            idempotency_key: next_typed_id("idem", IdempotencyKey::parse)?
-                .as_str()
-                .to_owned(),
+            idempotency_key: next_idempotency_key()?.as_str().to_owned(),
             sequence,
             expected_version: cursor.version,
             command: CoordinatorCommandDto::Release {
@@ -364,9 +353,7 @@ where
             .checked_add(1)
             .ok_or(Self::Error::InvalidResponse)?;
         let request = CoordinatorCommandRequestDto {
-            idempotency_key: next_typed_id("idem", IdempotencyKey::parse)?
-                .as_str()
-                .to_owned(),
+            idempotency_key: next_idempotency_key()?.as_str().to_owned(),
             sequence,
             expected_version: cursor.version,
             command: CoordinatorCommandDto::Heartbeat {
@@ -376,7 +363,7 @@ where
             },
         };
         let response = self.command(&cursor.tenant_id, &cursor.profile_id, &request)?;
-        validate_active_response(
+        let epoch = validate_active_projection(
             &response,
             CoordinatorOutcomeDto::HeartbeatAccepted,
             &cursor.tenant_id,
@@ -385,6 +372,14 @@ where
             &cursor.session_id,
             sequence,
         )?;
+        if epoch != cursor.epoch
+            || response.epoch.is_some_and(|value| value != cursor.epoch)
+            || response.fencing_token.as_deref().is_some_and(|value| {
+                value != cursor.fencing_token.as_str()
+            })
+        {
+            return Err(Self::Error::InvalidResponse);
+        }
         let current = self.cursor.as_mut().ok_or(Self::Error::InvalidResponse)?;
         current.version = response.version;
         current.sequence = response.sequence;
@@ -433,7 +428,8 @@ fn validate_snapshot(
     Ok(())
 }
 
-fn validate_active_response(
+#[allow(clippy::too_many_arguments)]
+fn validate_active_projection(
     response: &CoordinatorResponseDto,
     expected_outcome: CoordinatorOutcomeDto,
     tenant_id: &TenantId,
@@ -441,7 +437,7 @@ fn validate_active_response(
     device_id: &DeviceId,
     session_id: &SessionId,
     expected_sequence: u64,
-) -> Result<FencingToken, ShippingControlPlaneError> {
+) -> Result<u64, ShippingControlPlaneError> {
     if response.outcome != expected_outcome
         || response.replayed
         || response.sequence != expected_sequence
@@ -460,21 +456,10 @@ fn validate_active_response(
         .projection
         .active_epoch
         .ok_or(ShippingControlPlaneError::InvalidResponse)?;
-    if epoch == 0 || response.epoch.is_some_and(|value| value != epoch) {
+    if epoch == 0 {
         return Err(ShippingControlPlaneError::InvalidResponse);
     }
-    let token = response
-        .fencing_token
-        .as_deref()
-        .or_else(|| {
-            if expected_outcome == CoordinatorOutcomeDto::HeartbeatAccepted {
-                None
-            } else {
-                None
-            }
-        })
-        .ok_or(ShippingControlPlaneError::InvalidResponse)?;
-    FencingToken::parse(token.to_owned()).map_err(|_| ShippingControlPlaneError::InvalidResponse)
+    Ok(epoch)
 }
 
 fn validate_released_response(
@@ -490,9 +475,12 @@ fn validate_released_response(
         || response.projection.profile_id != cursor.profile_id.as_str()
         || response.projection.version != response.version
         || response.projection.sequence != response.sequence
+        || response.projection.status != CoordinatorStatusDto::Uncertain
         || response.projection.active_session_id.is_some()
         || response.projection.active_device_id.is_some()
         || response.projection.active_epoch.is_some()
+        || response.fencing_token.is_some()
+        || response.epoch.is_some()
     {
         return Err(ShippingControlPlaneError::InvalidResponse);
     }
@@ -514,21 +502,29 @@ fn coordinator_path(tenant_id: &TenantId, profile_id: &ProfileId) -> String {
         .replace("{profileId}", profile_id.as_str())
 }
 
-fn next_typed_id<T, E>(
-    prefix: &str,
-    parse: impl FnOnce(String) -> Result<T, E>,
-) -> Result<T, ShippingControlPlaneError> {
+fn unique_value(prefix: &str) -> Result<String, ShippingControlPlaneError> {
     let millis = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_err(|_| ShippingControlPlaneError::Clock)?
         .as_millis();
     let sequence = REQUEST_SEQUENCE.fetch_add(1, Ordering::Relaxed);
-    parse(format!(
+    Ok(format!(
         "{prefix}_{millis}_{}_{}",
         std::process::id(),
         sequence
     ))
-    .map_err(|_| ShippingControlPlaneError::Clock)
+}
+
+fn next_correlation_id() -> Result<CorrelationId, ShippingControlPlaneError> {
+    CorrelationId::parse(unique_value("corr")?).map_err(|_| ShippingControlPlaneError::Clock)
+}
+
+fn next_session_id() -> Result<SessionId, ShippingControlPlaneError> {
+    SessionId::parse(unique_value("session")?).map_err(|_| ShippingControlPlaneError::Clock)
+}
+
+fn next_idempotency_key() -> Result<IdempotencyKey, ShippingControlPlaneError> {
+    IdempotencyKey::parse(unique_value("idem")?).map_err(|_| ShippingControlPlaneError::Clock)
 }
 
 #[cfg(test)]
@@ -545,7 +541,6 @@ mod tests {
     #[derive(Default)]
     struct FakeMachineHttp {
         responses: VecDeque<MachineHttpResponse>,
-        observed_body_contains_claim: bool,
     }
 
     impl MachineHttpPort for FakeMachineHttp {
@@ -559,9 +554,9 @@ mod tests {
             body: Option<&[u8]>,
         ) -> Result<MachineHttpResponse, Self::Error> {
             assert_eq!(method, MachineHttpMethod::PostJson);
-            self.observed_body_contains_claim = body.is_some_and(|value| {
+            assert!(body.is_some_and(|value| {
                 String::from_utf8_lossy(value).contains("claim_01JBRIDGE_FEASIBILITY")
-            });
+            }));
             self.responses.pop_front().ok_or(())
         }
     }
@@ -575,13 +570,9 @@ mod tests {
         );
         let mut enrollment = ControlPlaneEnrollment::new(FakeMachineHttp {
             responses: VecDeque::from([response]),
-            observed_body_contains_claim: false,
         });
-        let claim = ClaimUri::parse(
-            "profilebridge://claim/claim_01JBRIDGE_FEASIBILITY",
-        )?;
         let result = enrollment.redeem_claim(
-            &claim,
+            &ClaimUri::parse("profilebridge://claim/claim_01JBRIDGE_FEASIBILITY")?,
             &DeviceId::parse("device_01JBRIDGE")?,
             UnixMillis::new(1),
         )?;
@@ -599,12 +590,9 @@ mod tests {
         );
         let mut enrollment = ControlPlaneEnrollment::new(FakeMachineHttp {
             responses: VecDeque::from([response]),
-            observed_body_contains_claim: false,
         });
         let error = enrollment.redeem_claim(
-            &ClaimUri::parse(
-                "profilebridge://claim/claim_01JBRIDGE_FEASIBILITY",
-            )?,
+            &ClaimUri::parse("profilebridge://claim/claim_01JBRIDGE_FEASIBILITY")?,
             &DeviceId::parse("device_01JBRIDGE")?,
             UnixMillis::new(1),
         );
