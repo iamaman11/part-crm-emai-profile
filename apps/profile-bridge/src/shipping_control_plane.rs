@@ -1,4 +1,5 @@
 use crate::dirty_generation::{GenerationSealingMaterial, GenerationSealingMaterialPort};
+use crate::generation_reopen::{GenerationDownloadCapability, GenerationReopenControlPort};
 use crate::operator_flow::{EnrollmentPort, OperatorEnrollment};
 use application_ports::{ProfileCoordinatorPort, ProfileCoordinatorRuntimePort};
 use bridge_domain::ClaimUri;
@@ -10,11 +11,22 @@ use control_plane_contract::generation_key_api::{
     BRIDGE_GENERATION_SEALING_MATERIAL_PATH_TEMPLATE, BridgeGenerationSealingMaterialRequest,
     BridgeGenerationSealingMaterialResponse, GENERATION_SEALING_CHUNK_BYTES,
 };
+use control_plane_contract::generation_reopen_api::{
+    BRIDGE_PROFILE_GENERATION_DOWNLOAD_CAPABILITY_PATH_TEMPLATE,
+    BRIDGE_PROFILE_GENERATION_OPENING_MATERIAL_PATH_TEMPLATE,
+    BridgeGenerationDownloadCapabilityRequest, BridgeGenerationDownloadCapabilityResponse,
+    BridgeGenerationOpeningMaterialRequest, BridgeGenerationOpeningMaterialResponse,
+    GENERATION_DOWNLOAD_CAPABILITY_MAX_EXPIRES_SECONDS,
+};
 use control_plane_contract::profile_launch_api::{
     BRIDGE_PROFILE_COORDINATOR_PATH_TEMPLATE, BRIDGE_PROFILE_LAUNCH_REDEMPTION_PATH,
     BridgeProfileLaunchRedemptionProjection, BridgeProfileLaunchRedemptionRequest,
 };
-use encrypted_generation_domain::{GenerationDek, GenerationRootKeyVersion, KeyId, NoncePrefix};
+use encrypted_generation_domain::{
+    GenerationDek, GenerationRootKeyVersion, KeyId, MAX_GENERATION_CONTAINER_BYTES,
+    MAX_GENERATION_METADATA_PRELUDE_BYTES, NoncePrefix, canonical_generation_object_key,
+    inspect_generation_metadata_prelude,
+};
 use profile_platform_primitives::{
     ActorContext, ActorId, CorrelationId, DeviceId, FencingToken, GenerationId, IdempotencyKey,
     LaunchIntentId, ProfileId, SessionId, TenantId, TenantScope, UnixMillis,
@@ -25,6 +37,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 static REQUEST_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 const MAX_SEALING_MATERIAL_RESPONSE_BYTES: usize = 1_024;
+const MAX_REOPEN_DOWNLOAD_CAPABILITY_RESPONSE_BYTES: usize = 8_192;
+const MAX_REOPEN_OPENING_MATERIAL_RESPONSE_BYTES: usize = 1_024;
+const MAX_SIGNED_GENERATION_DOWNLOAD_URL_BYTES: usize = 4_096;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum MachineHttpMethod {
@@ -259,6 +274,22 @@ where
         body.fill(0);
         decode_coordinator_response(response?)
     }
+
+    fn exact_reopen_cursor(
+        &self,
+        tenant_id: &TenantId,
+        profile_id: &ProfileId,
+    ) -> Result<CoordinatorCursor, ShippingControlPlaneError> {
+        self.cursor
+            .as_ref()
+            .filter(|cursor| {
+                cursor.tenant_id == *tenant_id
+                    && cursor.profile_id == *profile_id
+                    && cursor.epoch != 0
+            })
+            .cloned()
+            .ok_or(ShippingControlPlaneError::InvalidResponse)
+    }
 }
 
 impl<T> ProfileCoordinatorPort for ControlPlaneCoordinator<T>
@@ -479,6 +510,129 @@ where
     }
 }
 
+impl<T> GenerationReopenControlPort for ControlPlaneCoordinator<T>
+where
+    T: MachineHttpPort,
+{
+    type Error = ShippingControlPlaneError;
+
+    fn download_capability(
+        &mut self,
+        tenant_id: &TenantId,
+        profile_id: &ProfileId,
+    ) -> Result<GenerationDownloadCapability, Self::Error> {
+        let cursor = self.exact_reopen_cursor(tenant_id, profile_id)?;
+        let request = BridgeGenerationDownloadCapabilityRequest::new(
+            cursor.session_id.as_str(),
+            cursor.fencing_token.as_str(),
+            cursor.epoch,
+        );
+        let mut body = serde_json::to_vec(&request).map_err(|_| Self::Error::InvalidResponse)?;
+        let correlation_id = next_correlation_id()?;
+        let response = self
+            .transport
+            .request(
+                MachineHttpMethod::PostJson,
+                &generation_download_capability_path(tenant_id, profile_id),
+                &correlation_id,
+                Some(&body),
+            )
+            .map_err(|_| Self::Error::Transport);
+        body.fill(0);
+        let mut response = decode_reopen_download_capability_response(response?)?;
+
+        if response.method() != "GET"
+            || response.container_bytes() == 0
+            || response.container_bytes()
+                > u64::try_from(MAX_GENERATION_CONTAINER_BYTES)
+                    .map_err(|_| Self::Error::InvalidResponse)?
+            || response.expires_seconds() == 0
+            || response.expires_seconds() > GENERATION_DOWNLOAD_CAPABILITY_MAX_EXPIRES_SECONDS
+        {
+            return Err(Self::Error::InvalidResponse);
+        }
+        let generation_id = GenerationId::parse(response.generation_id().to_owned())
+            .map_err(|_| Self::Error::InvalidResponse)?;
+        let canonical_key = canonical_generation_object_key(tenant_id, profile_id, &generation_id);
+        if response.object_key() != canonical_key || !valid_signed_r2_get_url(response.url()) {
+            return Err(Self::Error::InvalidResponse);
+        }
+        let metadata_digest =
+            decode_lower_hex::<32>(response.metadata_digest()).ok_or(Self::Error::InvalidResponse)?;
+        let container_digest =
+            decode_lower_hex::<32>(response.container_digest()).ok_or(Self::Error::InvalidResponse)?;
+        let container_bytes = response.container_bytes();
+        let expires_seconds = response.expires_seconds();
+        let signed_url = response.take_url();
+
+        Ok(GenerationDownloadCapability::new(
+            generation_id,
+            canonical_key,
+            metadata_digest,
+            container_digest,
+            container_bytes,
+            signed_url,
+            expires_seconds,
+        ))
+    }
+
+    fn opening_material(
+        &mut self,
+        tenant_id: &TenantId,
+        profile_id: &ProfileId,
+        metadata_prelude: &[u8],
+    ) -> Result<GenerationDek, Self::Error> {
+        let cursor = self.exact_reopen_cursor(tenant_id, profile_id)?;
+        if metadata_prelude.is_empty()
+            || metadata_prelude.len() > MAX_GENERATION_METADATA_PRELUDE_BYTES
+        {
+            return Err(Self::Error::InvalidResponse);
+        }
+        let inspected = inspect_generation_metadata_prelude(metadata_prelude)
+            .map_err(|_| Self::Error::InvalidResponse)?;
+        if inspected.prelude_bytes() != metadata_prelude.len()
+            || inspected.metadata().tenant_id() != tenant_id
+            || inspected.metadata().profile_id() != profile_id
+            || inspected.metadata().object_key()
+                != canonical_generation_object_key(
+                    tenant_id,
+                    profile_id,
+                    inspected.metadata().generation_id(),
+                )
+        {
+            return Err(Self::Error::InvalidResponse);
+        }
+
+        let request = BridgeGenerationOpeningMaterialRequest::new(
+            encode_lower_hex(metadata_prelude),
+            cursor.session_id.as_str(),
+            cursor.fencing_token.as_str(),
+            cursor.epoch,
+        );
+        let mut body = serde_json::to_vec(&request).map_err(|_| Self::Error::InvalidResponse)?;
+        let correlation_id = next_correlation_id()?;
+        let response = self
+            .transport
+            .request(
+                MachineHttpMethod::PostJson,
+                &generation_opening_material_path(tenant_id, profile_id),
+                &correlation_id,
+                Some(&body),
+            )
+            .map_err(|_| Self::Error::Transport);
+        body.fill(0);
+        let response = decode_reopen_opening_material_response(response?)?;
+        let (key_id, dek_hex) = response.into_parts();
+        let key_id = KeyId::parse(key_id).map_err(|_| Self::Error::InvalidResponse)?;
+        GenerationRootKeyVersion::from_key_id(&key_id).map_err(|_| Self::Error::InvalidResponse)?;
+        if &key_id != inspected.metadata().key_id() {
+            return Err(Self::Error::InvalidResponse);
+        }
+        let dek = decode_secret_dek(dek_hex.as_str()).ok_or(Self::Error::InvalidResponse)?;
+        Ok(GenerationDek::new(key_id, dek.0))
+    }
+}
+
 struct SecretDek([u8; 32]);
 
 impl Drop for SecretDek {
@@ -499,6 +653,40 @@ fn decode_sealing_material_response(
         return Err(ShippingControlPlaneError::InvalidResponse);
     }
     let decoded = serde_json::from_slice::<BridgeGenerationSealingMaterialResponse>(&response.body);
+    response.body.fill(0);
+    decoded.map_err(|_| ShippingControlPlaneError::InvalidResponse)
+}
+
+fn decode_reopen_download_capability_response(
+    mut response: MachineHttpResponse,
+) -> Result<BridgeGenerationDownloadCapabilityResponse, ShippingControlPlaneError> {
+    if !(200..=299).contains(&response.status()) {
+        response.body.fill(0);
+        return Err(ShippingControlPlaneError::HttpStatus);
+    }
+    if response.body.is_empty() || response.body.len() > MAX_REOPEN_DOWNLOAD_CAPABILITY_RESPONSE_BYTES
+    {
+        response.body.fill(0);
+        return Err(ShippingControlPlaneError::InvalidResponse);
+    }
+    let decoded =
+        serde_json::from_slice::<BridgeGenerationDownloadCapabilityResponse>(&response.body);
+    response.body.fill(0);
+    decoded.map_err(|_| ShippingControlPlaneError::InvalidResponse)
+}
+
+fn decode_reopen_opening_material_response(
+    mut response: MachineHttpResponse,
+) -> Result<BridgeGenerationOpeningMaterialResponse, ShippingControlPlaneError> {
+    if !(200..=299).contains(&response.status()) {
+        response.body.fill(0);
+        return Err(ShippingControlPlaneError::HttpStatus);
+    }
+    if response.body.is_empty() || response.body.len() > MAX_REOPEN_OPENING_MATERIAL_RESPONSE_BYTES {
+        response.body.fill(0);
+        return Err(ShippingControlPlaneError::InvalidResponse);
+    }
+    let decoded = serde_json::from_slice::<BridgeGenerationOpeningMaterialResponse>(&response.body);
     response.body.fill(0);
     decoded.map_err(|_| ShippingControlPlaneError::InvalidResponse)
 }
@@ -537,6 +725,50 @@ fn encode_lower_hex(bytes: &[u8]) -> String {
         encoded.push(char::from(HEX[usize::from(byte & 0x0f)]));
     }
     encoded
+}
+
+fn valid_signed_r2_get_url(value: &str) -> bool {
+    if value.is_empty()
+        || value.len() > MAX_SIGNED_GENERATION_DOWNLOAD_URL_BYTES
+        || value.bytes().any(|byte| byte.is_ascii_control() || byte.is_ascii_whitespace())
+        || value.contains('#')
+    {
+        return false;
+    }
+    let Some(rest) = value.strip_prefix("https://") else {
+        return false;
+    };
+    let Some((authority, path_and_query)) = rest.split_once('/') else {
+        return false;
+    };
+    const R2_SUFFIX: &str = ".r2.cloudflarestorage.com";
+    let Some(account_id) = authority.strip_suffix(R2_SUFFIX) else {
+        return false;
+    };
+    if account_id.len() != 32
+        || !account_id
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        || authority.contains('@')
+        || authority.contains(':')
+    {
+        return false;
+    }
+    let Some((path, query)) = path_and_query.split_once('?') else {
+        return false;
+    };
+    if path.is_empty() || query.is_empty() {
+        return false;
+    }
+    let required = [
+        "X-Amz-Algorithm=AWS4-HMAC-SHA256",
+        "X-Amz-Credential=",
+        "X-Amz-Date=",
+        "X-Amz-Expires=",
+        "X-Amz-SignedHeaders=host",
+        "X-Amz-Signature=",
+    ];
+    required.iter().all(|needle| query.contains(needle))
 }
 
 fn accepted_response(
@@ -682,6 +914,18 @@ fn generation_sealing_material_path(tenant_id: &TenantId, profile_id: &ProfileId
         .replace("{profileId}", profile_id.as_str())
 }
 
+fn generation_download_capability_path(tenant_id: &TenantId, profile_id: &ProfileId) -> String {
+    BRIDGE_PROFILE_GENERATION_DOWNLOAD_CAPABILITY_PATH_TEMPLATE
+        .replace("{tenantId}", tenant_id.as_str())
+        .replace("{profileId}", profile_id.as_str())
+}
+
+fn generation_opening_material_path(tenant_id: &TenantId, profile_id: &ProfileId) -> String {
+    BRIDGE_PROFILE_GENERATION_OPENING_MATERIAL_PATH_TEMPLATE
+        .replace("{tenantId}", tenant_id.as_str())
+        .replace("{profileId}", profile_id.as_str())
+}
+
 fn unique_value(prefix: &str) -> Result<String, ShippingControlPlaneError> {
     let millis = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -712,15 +956,22 @@ mod tests {
     use super::{
         ControlPlaneCoordinator, ControlPlaneEnrollment, ControlPlaneLeaseTiming,
         CoordinatorCursor, MAX_SEALING_MATERIAL_RESPONSE_BYTES, MachineHttpMethod, MachineHttpPort,
-        MachineHttpResponse, ShippingControlPlaneError, lease_timing,
+        MachineHttpResponse, ShippingControlPlaneError, lease_timing, valid_signed_r2_get_url,
     };
     use crate::dirty_generation::GenerationSealingMaterialPort;
+    use crate::generation_reopen::GenerationReopenControlPort;
     use crate::operator_flow::EnrollmentPort;
     use bridge_domain::ClaimUri;
     use control_plane_contract::generation_key_api::{
         BRIDGE_GENERATION_SEALING_MATERIAL_PATH_TEMPLATE, BridgeGenerationSealingMaterialRequest,
         BridgeGenerationSealingMaterialResponse, GENERATION_SEALING_CHUNK_BYTES,
     };
+    use control_plane_contract::generation_reopen_api::{
+        BRIDGE_PROFILE_GENERATION_DOWNLOAD_CAPABILITY_PATH_TEMPLATE,
+        BridgeGenerationDownloadCapabilityRequest, BridgeGenerationDownloadCapabilityResponse,
+        GENERATION_DOWNLOAD_CAPABILITY_MAX_EXPIRES_SECONDS,
+    };
+    use encrypted_generation_domain::canonical_generation_object_key;
     use profile_platform_primitives::{
         CorrelationId, DeviceId, FencingToken, GenerationId, ProfileId, SessionId, TenantId,
         UnixMillis,
@@ -1022,5 +1273,81 @@ mod tests {
             Err(ShippingControlPlaneError::HttpStatus)
         );
         Ok(())
+    }
+
+    #[test]
+    fn reopen_download_uses_live_cursor_and_accepts_only_canonical_descriptor()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let tenant_id = TenantId::parse("tenant_sealing_adapter_01")?;
+        let profile_id = ProfileId::parse("profile_sealing_adapter_01")?;
+        let generation_id = GenerationId::parse("generation_sealing_next_01")?;
+        let object_key = canonical_generation_object_key(&tenant_id, &profile_id, &generation_id);
+        let signed_url = "https://0123456789abcdef0123456789abcdef.r2.cloudflarestorage.com/profile-generations/tenants/tenant_sealing_adapter_01/profiles/profile_sealing_adapter_01/generations/generation_sealing_next_01.bpgc?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=access%2F20260830%2Fauto%2Fs3%2Faws4_request&X-Amz-Date=20260830T120000Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        let response = BridgeGenerationDownloadCapabilityResponse::new(
+            generation_id.as_str(),
+            &object_key,
+            "aa".repeat(32),
+            "bb".repeat(32),
+            4096,
+            signed_url,
+            GENERATION_DOWNLOAD_CAPABILITY_MAX_EXPIRES_SECONDS,
+        );
+        let mut fixture = SealingFixture::new(MachineHttpResponse::new(
+            200,
+            serde_json::to_vec(&response)?,
+        ))?;
+        let capability = fixture
+            .coordinator
+            .download_capability(&fixture.tenant_id, &fixture.profile_id)?;
+        assert_eq!(capability.generation_id(), &fixture.candidate_generation_id);
+        assert_eq!(capability.object_key(), object_key);
+        assert_eq!(capability.container_bytes(), 4096);
+        assert_eq!(capability.metadata_digest(), [0xaa; 32]);
+        assert_eq!(capability.container_digest(), [0xbb; 32]);
+        assert_eq!(capability.signed_url(), Some(signed_url));
+
+        let (method, path, body) = &fixture.coordinator.transport.requests[0];
+        assert_eq!(*method, MachineHttpMethod::PostJson);
+        let expected_path = BRIDGE_PROFILE_GENERATION_DOWNLOAD_CAPABILITY_PATH_TEMPLATE
+            .replace("{tenantId}", fixture.tenant_id.as_str())
+            .replace("{profileId}", fixture.profile_id.as_str());
+        assert_eq!(path, &expected_path);
+        let request = serde_json::from_slice::<BridgeGenerationDownloadCapabilityRequest>(body)?;
+        assert_eq!(request.coordinator_session_id(), "session_sealing_adapter_01");
+        assert_eq!(request.coordinator_fencing_token(), "fence_sealing_adapter_01");
+        assert_eq!(request.coordinator_epoch(), 7);
+        let body_text = String::from_utf8_lossy(body);
+        for forbidden in ["generationId", "objectKey", "metadataDigest", "containerDigest"] {
+            assert!(!body_text.contains(forbidden));
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn reopen_requires_exact_cursor_before_transport() -> Result<(), Box<dyn std::error::Error>> {
+        let tenant_id = TenantId::parse("tenant_reopen_no_cursor_01")?;
+        let profile_id = ProfileId::parse("profile_reopen_no_cursor_01")?;
+        let mut coordinator = ControlPlaneCoordinator::new(SealingMachineHttp::default());
+        assert!(matches!(
+            coordinator.download_capability(&tenant_id, &profile_id),
+            Err(ShippingControlPlaneError::InvalidResponse)
+        ));
+        assert!(coordinator.transport.requests.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn signed_r2_get_url_is_fail_closed() {
+        let good = "https://0123456789abcdef0123456789abcdef.r2.cloudflarestorage.com/bucket/object?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=x&X-Amz-Date=20260830T120000Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=abc";
+        assert!(valid_signed_r2_get_url(good));
+        for bad in [
+            good.replacen("https://", "http://", 1),
+            good.replacen(".r2.cloudflarestorage.com", ".example.com", 1),
+            format!("{good}#fragment"),
+            good.replacen("X-Amz-Signature=abc", "signature=abc", 1),
+            good.replacen("0123456789abcdef0123456789abcdef", "ABCDEF0123456789ABCDEF0123456789", 1),
+        ] {
+            assert!(!valid_signed_r2_get_url(&bad));
+        }
     }
 }
