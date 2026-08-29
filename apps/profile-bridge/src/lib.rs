@@ -29,6 +29,8 @@ pub mod shipping_preflight;
 mod test_support;
 
 #[cfg(windows)]
+pub mod windows_generation_put;
+#[cfg(windows)]
 pub mod windows_native;
 
 use bridge_domain::BridgePortError;
