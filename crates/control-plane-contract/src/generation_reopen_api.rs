@@ -294,9 +294,17 @@ mod tests {
     fn opening_request_rejects_independent_crypto_selectors() {
         let base = r#"{"metadataPreludeHex":"42504743303030310000000100","coordinatorSessionId":"session_reopen_open_01","coordinatorFencingToken":"fence_reopen_open_01","coordinatorEpoch":7}"#;
         assert!(serde_json::from_str::<BridgeGenerationOpeningMaterialRequest>(base).is_ok());
-        for forbidden in ["generationId", "keyId", "plaintextDigest", "noncePrefix", "metadataDigest"] {
+        for forbidden in [
+            "generationId",
+            "keyId",
+            "plaintextDigest",
+            "noncePrefix",
+            "metadataDigest",
+        ] {
             let tampered = base.replacen('}', &format!(r#", "{forbidden}": "x"}}"#), 1);
-            assert!(serde_json::from_str::<BridgeGenerationOpeningMaterialRequest>(&tampered).is_err());
+            assert!(
+                serde_json::from_str::<BridgeGenerationOpeningMaterialRequest>(&tampered).is_err()
+            );
         }
     }
 
