@@ -63,6 +63,89 @@ impl ProfileGenerationCommitWitness {
     }
 }
 
+/// Read-only proof request for the exact interactive writer currently owning a Profile session.
+/// The device comes from the authenticated Bridge machine perimeter; the actor comes from that
+/// machine's D1 binding. No coordinator version or client clock is accepted from the machine.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ProfileGenerationWriterAuthorityRequest {
+    device_id: DeviceId,
+    profile_id: ProfileId,
+    session_id: SessionId,
+    fencing_token: FencingToken,
+    epoch: u64,
+}
+
+impl ProfileGenerationWriterAuthorityRequest {
+    #[must_use]
+    pub const fn new(
+        device_id: DeviceId,
+        profile_id: ProfileId,
+        session_id: SessionId,
+        fencing_token: FencingToken,
+        epoch: u64,
+    ) -> Self {
+        Self {
+            device_id,
+            profile_id,
+            session_id,
+            fencing_token,
+            epoch,
+        }
+    }
+
+    #[must_use]
+    pub const fn device_id(&self) -> &DeviceId {
+        &self.device_id
+    }
+
+    #[must_use]
+    pub const fn profile_id(&self) -> &ProfileId {
+        &self.profile_id
+    }
+
+    #[must_use]
+    pub const fn session_id(&self) -> &SessionId {
+        &self.session_id
+    }
+
+    #[must_use]
+    pub const fn fencing_token(&self) -> &FencingToken {
+        &self.fencing_token
+    }
+
+    #[must_use]
+    pub const fn epoch(&self) -> u64 {
+        self.epoch
+    }
+}
+
+/// Server-owned coordinator version/sequence proven against the raw interactive writer witness.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ProfileGenerationWriterAuthority {
+    coordinator_version: u64,
+    coordinator_sequence: u64,
+}
+
+impl ProfileGenerationWriterAuthority {
+    #[must_use]
+    pub const fn new(coordinator_version: u64, coordinator_sequence: u64) -> Self {
+        Self {
+            coordinator_version,
+            coordinator_sequence,
+        }
+    }
+
+    #[must_use]
+    pub const fn coordinator_version(self) -> u64 {
+        self.coordinator_version
+    }
+
+    #[must_use]
+    pub const fn coordinator_sequence(self) -> u64 {
+        self.coordinator_sequence
+    }
+}
+
 /// Metadata-only request for the one atomic `N -> verified active N+1` transition.
 ///
 /// The encrypted object must already exist and have passed exact object verification. This request
@@ -189,6 +272,33 @@ impl fmt::Display for ProfileGenerationSuccessorCommitError {
 }
 
 impl std::error::Error for ProfileGenerationSuccessorCommitError {}
+
+/// Read-only preparation boundary for interactive save. It derives the predecessor Profile version
+/// from server state and accepts either the exact live base or the exact candidate already active
+/// after a lost-response replay. Callers never provide an optimistic Profile version.
+pub trait ProfileGenerationSuccessorVersionPort {
+    fn load_successor_expected_profile_version(
+        &self,
+        actor: &ActorContext,
+        profile_id: &ProfileId,
+        base_generation_id: &GenerationId,
+        candidate_generation_id: &GenerationId,
+    ) -> impl Future<Output = Result<Option<AggregateVersion>, ProfileGenerationSuccessorCommitError>>;
+}
+
+/// Read-only Profile Coordinator proof for an interactive save writer. Implementations must prove
+/// the exact Claim actor/device/session provenance plus raw fencing token, epoch and live lease using
+/// a server-owned timestamp. A positive proof returns only the authoritative version/sequence that
+/// the final commit must bind.
+pub trait ProfileGenerationWriterAuthorityPort {
+    fn prove_profile_generation_writer_authority(
+        &self,
+        actor: &ActorContext,
+        request: &ProfileGenerationWriterAuthorityRequest,
+    ) -> impl Future<
+        Output = Result<ProfileGenerationWriterAuthority, ProfileGenerationSuccessorCommitError>,
+    >;
+}
 
 /// Single catalog lifecycle owner for an already-uploaded and exactly verified successor.
 ///
