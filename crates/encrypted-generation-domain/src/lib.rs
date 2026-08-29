@@ -8,7 +8,8 @@ pub use container::{
     ContainerDigest, GenerationDek, GenerationIdentity, GenerationMetadata,
     InspectedGenerationMetadataPrelude, KeyId, MAX_GENERATION_METADATA_PRELUDE_BYTES,
     MetadataDigest, NoncePrefix, OpenedGeneration, PlaintextDigest, SealedGeneration,
-    inspect_generation_metadata_prelude, open_generation, open_generation_expected, seal_generation,
+    inspect_generation_metadata_prelude, open_generation, open_generation_expected,
+    seal_generation,
 };
 pub use key_derivation::{
     DerivedGenerationMaterial, GenerationKeyDerivationContext, GenerationKeyDerivationError,
