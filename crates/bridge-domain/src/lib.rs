@@ -25,7 +25,6 @@ impl ClaimCode {
     /// The wrapper intentionally implements neither `Debug` nor `Display`, so the raw claim cannot
     /// be formatted accidentally while crossing the transport boundary. Domain/application code
     /// should keep using `ClaimCode` itself, whose `Debug` representation is always redacted.
-    #[must_use]
     pub fn expose_for_transport(&self) -> ClaimCodeTransportSecret<'_> {
         ClaimCodeTransportSecret(&self.0)
     }
@@ -361,7 +360,9 @@ pub enum ProcessCloseOutcome {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum SupervisedProcessState {
-    Idle,
+    Idle {
+        session_id: SessionId,
+    },
     Starting {
         session_id: SessionId,
         start_deadline: UnixMillis,
@@ -388,7 +389,9 @@ impl ProcessSupervisor {
     #[must_use]
     pub const fn new() -> Self {
         Self {
-            state: SupervisedProcessState::Idle,
+            state: SupervisedProcessState::Idle {
+                session_id: SessionId::const_new("session_unset"),
+            },
         }
     }
 
@@ -398,7 +401,7 @@ impl ProcessSupervisor {
         now: UnixMillis,
         start_timeout_ms: u64,
     ) -> Result<(), ProcessSupervisorError> {
-        if !matches!(self.state, SupervisedProcessState::Idle) || start_timeout_ms == 0 {
+        if !matches!(self.state, SupervisedProcessState::Idle { .. }) || start_timeout_ms == 0 {
             return Err(ProcessSupervisorError::InvalidTransition);
         }
         let start_deadline = add_millis(now, start_timeout_ms)?;
@@ -486,7 +489,7 @@ impl ProcessSupervisor {
                 }
                 ProcessCloseOutcome::Crash
             }
-            SupervisedProcessState::Idle | SupervisedProcessState::Closed { .. } => {
+            SupervisedProcessState::Idle { .. } | SupervisedProcessState::Closed { .. } => {
                 return Err(ProcessSupervisorError::InvalidTransition);
             }
         };
