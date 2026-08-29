@@ -89,6 +89,40 @@ impl StoredCoordinatorDocument {
         Ok(CoordinatorProjection::from_state(&self.replay()?))
     }
 
+    /// Prove that the current live coordinator lease was created by the exact P2 Claim actor,
+    /// device and session. The journal is the authoritative provenance source; no duplicate D1
+    /// session-binding table is introduced for P3.
+    pub fn active_claim_matches(
+        &self,
+        actor_id: &ActorId,
+        device_id: &DeviceId,
+        session_id: &SessionId,
+    ) -> Result<bool, CoordinatorAdapterError> {
+        let state = self.replay()?;
+        let Some(active) = state.active_lease() else {
+            return Ok(false);
+        };
+        if active.device_id() != device_id || active.session_id() != session_id {
+            return Ok(false);
+        }
+
+        for envelope in self.journal.iter().rev() {
+            if let StoredCoordinatorCommand::Claim {
+                actor_id: stored_actor,
+                device_id: stored_device,
+                session_id: stored_session,
+                ..
+            } = &envelope.command
+                && stored_session == session_id.as_str()
+            {
+                return Ok(
+                    stored_actor == actor_id.as_str() && stored_device == device_id.as_str()
+                );
+            }
+        }
+        Ok(false)
+    }
+
     #[must_use]
     pub fn journal_len(&self) -> usize {
         self.journal.len()
@@ -431,7 +465,7 @@ mod tests {
         CoordinatorAdapterError, StoredCoordinatorCommand, StoredCoordinatorDocument,
         StoredCoordinatorEnvelope, StoredReleaseDisposition,
     };
-    use profile_platform_primitives::{ProfileId, TenantId};
+    use profile_platform_primitives::{ActorId, DeviceId, ProfileId, SessionId, TenantId};
     use session_domain::coordinator::CoordinatorConfig;
 
     fn document() -> Result<StoredCoordinatorDocument, Box<dyn std::error::Error>> {
@@ -465,6 +499,53 @@ mod tests {
         assert_eq!(first.decision(), duplicate.decision());
         assert_eq!(document.journal_len(), 1);
         assert_eq!(document.projection()?.sequence, 1);
+        Ok(())
+    }
+
+    #[test]
+    fn active_claim_provenance_is_bound_to_exact_actor_device_and_session()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let mut document = document()?;
+        document.apply(StoredCoordinatorEnvelope::new(
+            "idem_issue_01JADAPTER",
+            1,
+            1,
+            StoredCoordinatorCommand::IssueLaunchIntent {
+                launch_intent_id: "intent_01JADAPTER".to_owned(),
+                actor_id: "actor_01JADAPTER".to_owned(),
+                device_id: "device_01JADAPTER".to_owned(),
+                now_ms: 10,
+                expires_at_ms: 50,
+            },
+        ))?;
+        document.apply(StoredCoordinatorEnvelope::new(
+            "idem_claim_01JADAPTER",
+            2,
+            2,
+            StoredCoordinatorCommand::Claim {
+                launch_intent_id: "intent_01JADAPTER".to_owned(),
+                actor_id: "actor_01JADAPTER".to_owned(),
+                device_id: "device_01JADAPTER".to_owned(),
+                session_id: "session_01JADAPTER".to_owned(),
+                fencing_token: "fence_01JADAPTER".to_owned(),
+                now_ms: 11,
+            },
+        ))?;
+
+        let actor = ActorId::parse("actor_01JADAPTER")?;
+        let device = DeviceId::parse("device_01JADAPTER")?;
+        let session = SessionId::parse("session_01JADAPTER")?;
+        assert!(document.active_claim_matches(&actor, &device, &session)?);
+        assert!(!document.active_claim_matches(
+            &ActorId::parse("actor_02JADAPTER")?,
+            &device,
+            &session,
+        )?);
+        assert!(!document.active_claim_matches(
+            &actor,
+            &device,
+            &SessionId::parse("session_02JADAPTER")?,
+        )?);
         Ok(())
     }
 
