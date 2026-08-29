@@ -220,7 +220,7 @@ mod tests {
     #[test]
     fn non_windows_shipping_binary_has_no_fallback_runtime()
     -> Result<(), Box<dyn std::error::Error>> {
-        let claim = ClaimUri::parse("profilebridge://claim/claim_01JSHIPPING")?;
+        let claim = ClaimUri::parse("profilebridge://claim/claim_01JBRIDGE_FEASIBILITY")?;
         assert_eq!(
             run_claim(&claim),
             Err(ShippingCompositionError::UnsupportedPlatform)
