@@ -132,8 +132,8 @@ mod tests {
     use profile_platform_primitives::GenerationId;
 
     #[test]
-    fn signed_download_capability_redacts_the_bearer_url()
-    -> Result<(), Box<dyn std::error::Error>> {
+    fn signed_download_capability_redacts_the_bearer_url() -> Result<(), Box<dyn std::error::Error>>
+    {
         let capability = GenerationDownloadCapability::new(
             GenerationId::parse("generation_reopen_capability_01")?,
             "tenants/tenant_reopen_capability_01/profiles/profile_reopen_capability_01/generations/generation_reopen_capability_01.bpgc".to_owned(),
