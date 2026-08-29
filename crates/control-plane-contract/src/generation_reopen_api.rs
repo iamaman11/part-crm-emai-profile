@@ -6,6 +6,7 @@ pub const BRIDGE_PROFILE_GENERATION_DOWNLOAD_CAPABILITY_PATH_TEMPLATE: &str =
     "/bridge/v1/tenants/{tenantId}/profiles/{profileId}/generation-reopen/download-capability";
 pub const BRIDGE_PROFILE_GENERATION_OPENING_MATERIAL_PATH_TEMPLATE: &str =
     "/bridge/v1/tenants/{tenantId}/profiles/{profileId}/generation-reopen/opening-material";
+pub const GENERATION_DOWNLOAD_CAPABILITY_MAX_EXPIRES_SECONDS: u32 = 300;
 
 /// Machine request for authoritative reopen. Generation identity and object metadata are
 /// intentionally absent: the server re-reads the one active VERIFIED generation from Catalog.
@@ -192,6 +193,7 @@ mod tests {
     use super::{
         BridgeGenerationDownloadCapabilityRequest, BridgeGenerationDownloadCapabilityResponse,
         BridgeGenerationOpeningMaterialRequest, BridgeGenerationOpeningMaterialResponse,
+        GENERATION_DOWNLOAD_CAPABILITY_MAX_EXPIRES_SECONDS,
     };
 
     #[test]
@@ -247,12 +249,16 @@ mod tests {
             "b".repeat(64),
             4096,
             "https://example.invalid/signed",
-            300,
+            GENERATION_DOWNLOAD_CAPABILITY_MAX_EXPIRES_SECONDS,
         );
         let value = serde_json::to_value(&response)?;
         assert_eq!(value["method"], "GET");
         assert_eq!(value["containerBytes"], 4096);
         assert_eq!(value["generationId"], "generation_reopen_01");
+        assert_eq!(
+            value["expiresSeconds"],
+            GENERATION_DOWNLOAD_CAPABILITY_MAX_EXPIRES_SECONDS
+        );
         Ok(())
     }
 
