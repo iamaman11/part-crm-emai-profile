@@ -230,7 +230,10 @@ mod tests {
         );
         let material = derive_generation_material(&root, context)?;
         assert_eq!(material.key_id().as_str(), "profile-generation-root-v1-7");
-        assert_eq!(GenerationRootKeyVersion::from_key_id(material.key_id())?, version);
+        assert_eq!(
+            GenerationRootKeyVersion::from_key_id(material.key_id())?,
+            version
+        );
         Ok(())
     }
 
