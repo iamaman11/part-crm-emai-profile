@@ -17,6 +17,7 @@ pub struct GenerationDownloadCapability {
 }
 
 impl GenerationDownloadCapability {
+    #[cfg(test)]
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         generation_id: GenerationId,
@@ -64,9 +65,8 @@ impl GenerationDownloadCapability {
     }
 
     #[must_use]
-    pub fn signed_url(&self) -> &str {
-        core::str::from_utf8(&self.signed_url)
-            .expect("GenerationDownloadCapability is constructed from a valid Rust String")
+    pub fn signed_url(&self) -> Option<&str> {
+        core::str::from_utf8(&self.signed_url).ok()
     }
 
     #[must_use]
@@ -146,6 +146,7 @@ mod tests {
         let debug = format!("{capability:?}");
         assert!(debug.contains("[REDACTED]"));
         assert!(!debug.contains("SECRET_SENTINEL"));
+        assert!(capability.signed_url().is_some());
         assert_eq!(capability.expires_seconds(), 300);
         Ok(())
     }
