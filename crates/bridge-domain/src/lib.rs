@@ -19,11 +19,31 @@ impl ClaimCode {
         }
         Ok(Self(value))
     }
+
+    /// Narrow transport-only exposure for the one canonical redemption serializer.
+    ///
+    /// The wrapper intentionally implements neither `Debug` nor `Display`, so the raw claim cannot
+    /// be formatted accidentally while crossing the transport boundary. Domain/application code
+    /// should keep using `ClaimCode` itself, whose `Debug` representation is always redacted.
+    #[must_use]
+    pub fn expose_for_transport(&self) -> ClaimCodeTransportSecret<'_> {
+        ClaimCodeTransportSecret(&self.0)
+    }
 }
 
 impl fmt::Debug for ClaimCode {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str("ClaimCode([REDACTED])")
+    }
+}
+
+#[must_use = "transport secret exposure should be consumed only by the canonical serializer"]
+pub struct ClaimCodeTransportSecret<'a>(&'a str);
+
+impl ClaimCodeTransportSecret<'_> {
+    #[must_use]
+    pub const fn as_str(&self) -> &str {
+        self.0
     }
 }
 
@@ -686,8 +706,11 @@ mod tests {
     #[test]
     fn exact_claim_uri_is_accepted_without_exposing_secret_debug()
     -> Result<(), Box<dyn std::error::Error>> {
-        let uri = ClaimUri::parse("profilebridge://claim/claim_01JBRIDGE_FEASIBILITY")?;
+        let raw_claim = "claim_01JBRIDGE_FEASIBILITY";
+        let uri = ClaimUri::parse(&format!("profilebridge://claim/{raw_claim}"))?;
         assert_eq!(format!("{:?}", uri.claim_code()), "ClaimCode([REDACTED])");
+        assert!(!format!("{uri:?}").contains(raw_claim));
+        assert_eq!(uri.claim_code().expose_for_transport().as_str(), raw_claim);
         Ok(())
     }
 
