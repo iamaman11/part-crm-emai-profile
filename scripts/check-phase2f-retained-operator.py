@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import re
 from pathlib import Path
 
 OPERATOR = Path("apps/profile-bridge/src/operator_flow.rs")
@@ -72,6 +73,11 @@ def function_body(source: str, marker: str) -> str:
     return ""
 
 
+def regex_position(source: str, pattern: str) -> int:
+    match = re.search(pattern, source)
+    return -1 if match is None else match.start()
+
+
 def failures_for_sources(
     operator: str,
     unit_test: str,
@@ -134,7 +140,10 @@ def failures_for_sources(
             )
 
     save_flow = function_body(production, SAVE_METHOD)
-    retained = save_flow.find("self.retained_dirty.as_ref()")
+    retained = regex_position(
+        save_flow,
+        r"self\s*\.\s*retained_dirty\s*\.\s*as_ref\s*\(\s*\)",
+    )
     control = save_flow.find(SAVE_CONTROL)
     prepare = save_flow.find(SAVE_PREPARE)
     commit = save_flow.find(SAVE_COMMIT)
@@ -218,7 +227,7 @@ def self_test(root: Path) -> list[str]:
     if not any("test/synthetic cfg" in failure for failure in rejected):
         return ["retained-operator production legacy-finalize fixture unexpectedly passed"]
 
-    fixture = operator.replace(SAVE_CLEAR, "/* retained ownership clear removed */", 1)
+    fixture = operator.replace(SAVE_CLEAR, "/* retained ownership clear removed */")
     rejected = failures_for_sources(fixture, unit_test, acceptance_test, synthetic)
     if not any("canonical retained save" in failure for failure in rejected):
         return ["retained-operator missing post-commit clear fixture unexpectedly passed"]
