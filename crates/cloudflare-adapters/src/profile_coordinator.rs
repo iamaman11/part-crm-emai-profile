@@ -115,9 +115,7 @@ impl StoredCoordinatorDocument {
             } = &envelope.command
                 && stored_session == session_id.as_str()
             {
-                return Ok(
-                    stored_actor == actor_id.as_str() && stored_device == device_id.as_str()
-                );
+                return Ok(stored_actor == actor_id.as_str() && stored_device == device_id.as_str());
             }
         }
         Ok(false)
