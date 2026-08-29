@@ -557,10 +557,10 @@ where
         if response.object_key() != canonical_key || !valid_signed_r2_get_url(response.url()) {
             return Err(Self::Error::InvalidResponse);
         }
-        let metadata_digest =
-            decode_lower_hex::<32>(response.metadata_digest()).ok_or(Self::Error::InvalidResponse)?;
-        let container_digest =
-            decode_lower_hex::<32>(response.container_digest()).ok_or(Self::Error::InvalidResponse)?;
+        let metadata_digest = decode_lower_hex::<32>(response.metadata_digest())
+            .ok_or(Self::Error::InvalidResponse)?;
+        let container_digest = decode_lower_hex::<32>(response.container_digest())
+            .ok_or(Self::Error::InvalidResponse)?;
         let container_bytes = response.container_bytes();
         let expires_seconds = response.expires_seconds();
         let signed_url = response.take_url();
@@ -664,7 +664,8 @@ fn decode_reopen_download_capability_response(
         response.body.fill(0);
         return Err(ShippingControlPlaneError::HttpStatus);
     }
-    if response.body.is_empty() || response.body.len() > MAX_REOPEN_DOWNLOAD_CAPABILITY_RESPONSE_BYTES
+    if response.body.is_empty()
+        || response.body.len() > MAX_REOPEN_DOWNLOAD_CAPABILITY_RESPONSE_BYTES
     {
         response.body.fill(0);
         return Err(ShippingControlPlaneError::InvalidResponse);
@@ -682,7 +683,8 @@ fn decode_reopen_opening_material_response(
         response.body.fill(0);
         return Err(ShippingControlPlaneError::HttpStatus);
     }
-    if response.body.is_empty() || response.body.len() > MAX_REOPEN_OPENING_MATERIAL_RESPONSE_BYTES {
+    if response.body.is_empty() || response.body.len() > MAX_REOPEN_OPENING_MATERIAL_RESPONSE_BYTES
+    {
         response.body.fill(0);
         return Err(ShippingControlPlaneError::InvalidResponse);
     }
@@ -730,7 +732,9 @@ fn encode_lower_hex(bytes: &[u8]) -> String {
 fn valid_signed_r2_get_url(value: &str) -> bool {
     if value.is_empty()
         || value.len() > MAX_SIGNED_GENERATION_DOWNLOAD_URL_BYTES
-        || value.bytes().any(|byte| byte.is_ascii_control() || byte.is_ascii_whitespace())
+        || value
+            .bytes()
+            .any(|byte| byte.is_ascii_control() || byte.is_ascii_whitespace())
         || value.contains('#')
     {
         return false;
@@ -1116,7 +1120,7 @@ mod tests {
     -> Result<(), Box<dyn std::error::Error>> {
         let response = MachineHttpResponse::new(
             200,
-            br#"{"tenantId":"tenant_01JBRIDGE","actorId":"actor_01JBRIDGE","profileId":"profile_01JBRIDGE","generationId":"generation_01JBRIDGE","deviceId":"device_01JBRIDGE","launchIntentId":"launch_01JBRIDGE"}"#.to_vec(),
+            br#"{\"tenantId\":\"tenant_01JBRIDGE\",\"actorId\":\"actor_01JBRIDGE\",\"profileId\":\"profile_01JBRIDGE\",\"generationId\":\"generation_01JBRIDGE\",\"deviceId\":\"device_01JBRIDGE\",\"launchIntentId\":\"launch_01JBRIDGE\"}"#.to_vec(),
         );
         let mut enrollment = ControlPlaneEnrollment::new(FakeMachineHttp {
             responses: VecDeque::from([response]),
@@ -1136,7 +1140,7 @@ mod tests {
     fn enrollment_rejects_wrong_machine_binding() -> Result<(), Box<dyn std::error::Error>> {
         let response = MachineHttpResponse::new(
             200,
-            br#"{"tenantId":"tenant_01JBRIDGE","actorId":"actor_01JBRIDGE","profileId":"profile_01JBRIDGE","generationId":"generation_01JBRIDGE","deviceId":"device_02JBRIDGE","launchIntentId":"launch_01JBRIDGE"}"#.to_vec(),
+            br#"{\"tenantId\":\"tenant_01JBRIDGE\",\"actorId\":\"actor_01JBRIDGE\",\"profileId\":\"profile_01JBRIDGE\",\"generationId\":\"generation_01JBRIDGE\",\"deviceId\":\"device_02JBRIDGE\",\"launchIntentId\":\"launch_01JBRIDGE\"}"#.to_vec(),
         );
         let mut enrollment = ControlPlaneEnrollment::new(FakeMachineHttp {
             responses: VecDeque::from([response]),
@@ -1251,7 +1255,7 @@ mod tests {
                 "cd".repeat(16),
                 1,
             ))?,
-            br#"{"keyId":"profile-generation-root-v1-2","dekHex":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","noncePrefixHex":"cccccccccccccccccccccccccccccccc","chunkSize":65536,"unexpected":true}"#.to_vec(),
+            br#"{\"keyId\":\"profile-generation-root-v1-2\",\"dekHex\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"noncePrefixHex\":\"cccccccccccccccccccccccccccccccc\",\"chunkSize\":65536,\"unexpected\":true}"#.to_vec(),
             vec![b'x'; MAX_SEALING_MATERIAL_RESPONSE_BYTES + 1],
         ];
         for body in malformed {
@@ -1313,11 +1317,22 @@ mod tests {
             .replace("{profileId}", fixture.profile_id.as_str());
         assert_eq!(path, &expected_path);
         let request = serde_json::from_slice::<BridgeGenerationDownloadCapabilityRequest>(body)?;
-        assert_eq!(request.coordinator_session_id(), "session_sealing_adapter_01");
-        assert_eq!(request.coordinator_fencing_token(), "fence_sealing_adapter_01");
+        assert_eq!(
+            request.coordinator_session_id(),
+            "session_sealing_adapter_01"
+        );
+        assert_eq!(
+            request.coordinator_fencing_token(),
+            "fence_sealing_adapter_01"
+        );
         assert_eq!(request.coordinator_epoch(), 7);
         let body_text = String::from_utf8_lossy(body);
-        for forbidden in ["generationId", "objectKey", "metadataDigest", "containerDigest"] {
+        for forbidden in [
+            "generationId",
+            "objectKey",
+            "metadataDigest",
+            "containerDigest",
+        ] {
             assert!(!body_text.contains(forbidden));
         }
         Ok(())
@@ -1345,7 +1360,11 @@ mod tests {
             good.replacen(".r2.cloudflarestorage.com", ".example.com", 1),
             format!("{good}#fragment"),
             good.replacen("X-Amz-Signature=abc", "signature=abc", 1),
-            good.replacen("0123456789abcdef0123456789abcdef", "ABCDEF0123456789ABCDEF0123456789", 1),
+            good.replacen(
+                "0123456789abcdef0123456789abcdef",
+                "ABCDEF0123456789ABCDEF0123456789",
+                1,
+            ),
         ] {
             assert!(!valid_signed_r2_get_url(&bad));
         }
