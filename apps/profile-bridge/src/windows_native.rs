@@ -2,9 +2,7 @@
 #![forbid(unsafe_code)]
 
 use crate::operator_flow::DeviceAuthenticationPort;
-use crate::shipping_control_plane::{
-    MachineHttpMethod, MachineHttpPort, MachineHttpResponse,
-};
+use crate::shipping_control_plane::{MachineHttpMethod, MachineHttpPort, MachineHttpResponse};
 use bridge_domain::{BridgePortError, DeviceIdentityPort, DeviceKeyPort};
 use profile_platform_primitives::{CorrelationId, DeviceId};
 use std::env;
@@ -127,9 +125,7 @@ impl WindowsSchannelMachineHttp {
         correlation_id: &CorrelationId,
         body: Option<&[u8]>,
     ) -> Result<MachineHttpResponse, BridgePortError> {
-        if !valid_route_path(path)
-            || matches!(method, MachineHttpMethod::Get) != body.is_none()
-        {
+        if !valid_route_path(path) || matches!(method, MachineHttpMethod::Get) != body.is_none() {
             return Err(BridgePortError::InvalidResponse);
         }
         let mut command = Command::new(&self.curl_executable);
@@ -261,7 +257,9 @@ fn valid_route_path(path: &str) -> bool {
         && path.len() <= 512
         && !path.contains(['?', '#', '\\', '\r', '\n'])
         && !path.contains("//")
-        && !path.split('/').any(|segment| segment == "." || segment == "..")
+        && !path
+            .split('/')
+            .any(|segment| segment == "." || segment == "..")
 }
 
 fn validate_regular_absolute_file(path: &Path) -> Result<(), BridgePortError> {
@@ -293,8 +291,8 @@ mod tests {
     }
 
     #[test]
-    fn machine_certificate_is_local_machine_store_handle()
-    -> Result<(), Box<dyn std::error::Error>> {
+    fn machine_certificate_is_local_machine_store_handle() -> Result<(), Box<dyn std::error::Error>>
+    {
         let device = DeviceId::parse("device_01JBRIDGE")?;
         let mut certificate = WindowsMachineCertificate::local_machine_my(
             device.clone(),

@@ -1,13 +1,11 @@
 use crate::browser_preflight::{BrowserRuntimeObservation, BrowserRuntimeObservationPort};
 use crate::local_profile::GenerationWorkspace;
 use bridge_domain::BridgePortError;
-use browser_execution_domain::{
-    NetworkClass, NetworkIdentityObservation, NetworkIdentityPolicy,
-};
+use browser_execution_domain::{NetworkClass, NetworkIdentityObservation, NetworkIdentityPolicy};
 use profile_platform_primitives::{DeviceId, GenerationId};
 use serde::Deserialize;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 const NETWORK_POLICY_SCHEMA: &str = "profile-bridge-network-policy-v1";

@@ -128,21 +128,20 @@ where
             .map_err(|_| Self::Error::Transport);
         body.fill(0);
         let response = accepted_response(response?)?;
-        let projection = serde_json::from_slice::<BridgeProfileLaunchRedemptionProjection>(
-            response.body(),
-        )
-        .map_err(|_| Self::Error::InvalidResponse)?;
+        let projection =
+            serde_json::from_slice::<BridgeProfileLaunchRedemptionProjection>(response.body())
+                .map_err(|_| Self::Error::InvalidResponse)?;
 
-        let tenant_id = TenantId::parse(projection.tenant_id)
-            .map_err(|_| Self::Error::InvalidResponse)?;
-        let actor_id = ActorId::parse(projection.actor_id)
-            .map_err(|_| Self::Error::InvalidResponse)?;
-        let profile_id = ProfileId::parse(projection.profile_id)
-            .map_err(|_| Self::Error::InvalidResponse)?;
+        let tenant_id =
+            TenantId::parse(projection.tenant_id).map_err(|_| Self::Error::InvalidResponse)?;
+        let actor_id =
+            ActorId::parse(projection.actor_id).map_err(|_| Self::Error::InvalidResponse)?;
+        let profile_id =
+            ProfileId::parse(projection.profile_id).map_err(|_| Self::Error::InvalidResponse)?;
         let generation_id = GenerationId::parse(projection.generation_id)
             .map_err(|_| Self::Error::InvalidResponse)?;
-        let returned_device = DeviceId::parse(projection.device_id)
-            .map_err(|_| Self::Error::InvalidResponse)?;
+        let returned_device =
+            DeviceId::parse(projection.device_id).map_err(|_| Self::Error::InvalidResponse)?;
         let launch_intent_id = LaunchIntentId::parse(projection.launch_intent_id)
             .map_err(|_| Self::Error::InvalidResponse)?;
         if &returned_device != device_id {
@@ -213,8 +212,8 @@ where
         request: &CoordinatorCommandRequestDto,
     ) -> Result<CoordinatorResponseDto, ShippingControlPlaneError> {
         let correlation_id = next_correlation_id()?;
-        let mut body = serde_json::to_vec(request)
-            .map_err(|_| ShippingControlPlaneError::InvalidResponse)?;
+        let mut body =
+            serde_json::to_vec(request).map_err(|_| ShippingControlPlaneError::InvalidResponse)?;
         let response = self
             .transport
             .request(
@@ -246,11 +245,7 @@ where
             return Err(Self::Error::InvalidResponse);
         }
         let snapshot = self.snapshot(actor, profile_id)?;
-        validate_snapshot(
-            &snapshot,
-            actor.tenant_scope().tenant_id(),
-            profile_id,
-        )?;
+        validate_snapshot(&snapshot, actor.tenant_scope().tenant_id(), profile_id)?;
         let session_id = next_session_id()?;
         let sequence = snapshot
             .sequence
@@ -374,9 +369,10 @@ where
         )?;
         if epoch != cursor.epoch
             || response.epoch.is_some_and(|value| value != cursor.epoch)
-            || response.fencing_token.as_deref().is_some_and(|value| {
-                value != cursor.fencing_token.as_str()
-            })
+            || response
+                .fencing_token
+                .as_deref()
+                .is_some_and(|value| value != cursor.fencing_token.as_str())
         {
             return Err(Self::Error::InvalidResponse);
         }
