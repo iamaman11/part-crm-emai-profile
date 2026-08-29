@@ -1,5 +1,6 @@
 #![forbid(unsafe_code)]
 
+pub mod authoritative_generation;
 pub mod browser_execution;
 pub mod browser_mail_query;
 pub mod browser_mail_runtime;
