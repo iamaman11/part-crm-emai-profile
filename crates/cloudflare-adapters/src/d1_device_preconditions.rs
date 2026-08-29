@@ -200,7 +200,8 @@ impl ProfileGenerationSuccessorVersionPort for D1DeviceExecutionPreconditions {
         let Some(row) = row else {
             return Ok(None);
         };
-        let current = u64::try_from(row.version).map_err(|_| profile_successor_integrity_failure())?;
+        let current =
+            u64::try_from(row.version).map_err(|_| profile_successor_integrity_failure())?;
         let expected = if row.active_generation_id == base_generation_id.as_str() {
             current
         } else if row.active_generation_id == candidate_generation_id.as_str() {
