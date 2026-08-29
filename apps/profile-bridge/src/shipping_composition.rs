@@ -43,6 +43,7 @@ mod windows {
     use crate::camouhost_process::{
         ManagedCamouhostConfig, ManagedCamouhostProcess, RuntimeBindingSlot, RuntimeDisplayMode,
     };
+    use crate::generation_reopen::VerifiedGenerationObjectDownloader;
     use crate::local_profile::MaterializationRoot;
     use crate::operator_flow::ProfileBridgeOperator;
     use crate::runtime_bundle::FilesystemRuntimeBundleSelection;
@@ -51,6 +52,7 @@ mod windows {
     use crate::shipping_preflight::ShippingBrowserLaunchPreflight;
     use crate::windows_native::{
         WindowsDeviceIdentity, WindowsMachineCertificate, WindowsSchannelMachineHttp,
+        WindowsSignedGenerationObjectGet,
     };
     use bridge_domain::ClaimUri;
     use profile_platform_primitives::{DeviceId, UnixMillis};
@@ -118,6 +120,10 @@ mod windows {
             certificate.selector().to_owned(),
         )
         .map_err(|_| ShippingCompositionError::Configuration)?;
+        let signed_generation_get = WindowsSignedGenerationObjectGet::from_system()
+            .map_err(|_| ShippingCompositionError::Configuration)?;
+        let mut generation_downloader =
+            VerifiedGenerationObjectDownloader::new(signed_generation_get);
 
         let enrollment = ControlPlaneEnrollment::new(transport.clone());
         let coordinator = ControlPlaneCoordinator::new(transport);
@@ -156,7 +162,12 @@ mod windows {
             camouhost,
         );
         operator
-            .open(claim, &materialization_root, now()?)
+            .open_authoritative(
+                claim,
+                &materialization_root,
+                &mut generation_downloader,
+                now()?,
+            )
             .map_err(|_| ShippingCompositionError::Operator)?;
 
         loop {
