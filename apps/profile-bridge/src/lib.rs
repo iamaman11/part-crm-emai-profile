@@ -15,6 +15,7 @@ pub mod launch_binding;
 pub mod local_profile;
 pub mod operator_flow;
 pub mod runtime_bundle;
+pub mod shipping_preflight;
 
 #[cfg(test)]
 mod test_support;
