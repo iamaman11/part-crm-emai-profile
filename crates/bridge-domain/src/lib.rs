@@ -556,14 +556,32 @@ impl std::error::Error for ProcessSupervisorError {}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum CamouhostMessage {
-    Hello { version: u16 },
-    HelloAck { version: u16 },
-    Launch { session_id: SessionId },
-    Ready { session_id: SessionId },
-    ObserveClose { session_id: SessionId },
-    CloseObserved { session_id: SessionId, controlled: bool },
-    Close { session_id: SessionId },
-    Closed { session_id: SessionId, clean: bool },
+    Hello {
+        version: u16,
+    },
+    HelloAck {
+        version: u16,
+    },
+    Launch {
+        session_id: SessionId,
+    },
+    Ready {
+        session_id: SessionId,
+    },
+    ObserveClose {
+        session_id: SessionId,
+    },
+    CloseObserved {
+        session_id: SessionId,
+        controlled: bool,
+    },
+    Close {
+        session_id: SessionId,
+    },
+    Closed {
+        session_id: SessionId,
+        clean: bool,
+    },
 }
 
 impl CamouhostMessage {
@@ -650,10 +668,8 @@ pub trait DeviceKeyPort {
 }
 
 pub trait CamouhostPort {
-    fn exchange(
-        &mut self,
-        message: &CamouhostMessage,
-    ) -> Result<CamouhostMessage, BridgePortError>;
+    fn exchange(&mut self, message: &CamouhostMessage)
+    -> Result<CamouhostMessage, BridgePortError>;
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
