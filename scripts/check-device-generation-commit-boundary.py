@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Enforce the Phase 2F coordinator-authoritative device-generation commit boundary."""
+"""Enforce the coordinator-authoritative generation commit boundary."""
 
 from __future__ import annotations
 
@@ -61,6 +61,15 @@ def generation_commit_gate_release_helper(source: str) -> str:
     return source[start:] if end < 0 else source[start:end]
 
 
+def shared_generation_authority_helper(source: str) -> str:
+    marker = "fn coordinator_generation_authority_is_live("
+    start = source.find(marker)
+    if start < 0:
+        return ""
+    end = source.find("\n#[derive(Deserialize)]", start)
+    return source[start:] if end < 0 else source[start:end]
+
+
 def replay_branch(source: str) -> str:
     start = source.find("if job.status() == DeviceJobStatus::Succeeded")
     end = source.find("if job.status() != DeviceJobStatus::Running", start)
@@ -101,12 +110,47 @@ def errors(root: Path) -> list[str]:
         result.append("Durable Object must persist the authority gate before external D1 commit")
     if coordinator.count("load_generation_commit_gate().await?") < 3:
         result.append("command, alarm and generation commit paths must all observe the commit gate")
-    if "lease.accepts_writer(" not in coordinator:
-        result.append("Durable Object must validate exact session/epoch/raw fencing token authority")
-    if "coordinator.version().value() != request.coordinator().coordinator_version()" not in coordinator:
-        result.append("Durable Object must validate exact coordinator version")
-    if "coordinator.last_sequence() != request.coordinator().coordinator_sequence()" not in coordinator:
-        result.append("Durable Object must validate exact coordinator sequence")
+
+    shared_authority = shared_generation_authority_helper(coordinator)
+    if not shared_authority:
+        result.append("generation commits must share one coordinator authority validator")
+    else:
+        for required in [
+            "coordinator.version().value() != coordinator_version",
+            "coordinator.last_sequence() != coordinator_sequence",
+            "lease.device_id() != device_id",
+            "lease.accepts_writer(session_id, epoch, fencing_token)",
+            "authorized_at >= lease.idle_expires_at()",
+            "authorized_at >= lease.hard_expires_at()",
+            "CoordinatorStatus::Active | CoordinatorStatus::Draining",
+            "drain_deadline()",
+        ]:
+            if required not in shared_authority:
+                result.append(
+                    f"shared generation authority validator missing exact boundary: {required}"
+                )
+
+    device_validator_start = coordinator.find("fn validate_device_generation_commit_authority(")
+    profile_validator_start = coordinator.find("fn validate_profile_successor_authority(")
+    shared_validator_start = coordinator.find("fn coordinator_generation_authority_is_live(")
+    if min(device_validator_start, profile_validator_start, shared_validator_start) < 0:
+        result.append("device and profile successor commits must delegate to the shared authority validator")
+    else:
+        device_validator = coordinator[device_validator_start:profile_validator_start]
+        profile_validator = coordinator[profile_validator_start:shared_validator_start]
+        for required in [
+            "coordinator_generation_authority_is_live(",
+            "request.device_id()",
+            "request.coordinator().session_id()",
+            "request.coordinator().epoch()",
+            "request.coordinator().fencing_token()",
+            "request.coordinator().coordinator_version()",
+            "request.coordinator().coordinator_sequence()",
+        ]:
+            if required not in device_validator:
+                result.append(f"device generation validator missing shared witness binding: {required}")
+            if required not in profile_validator:
+                result.append(f"profile successor validator missing shared witness binding: {required}")
 
     release_helper = generation_commit_gate_release_helper(coordinator)
     if not release_helper:
@@ -276,6 +320,18 @@ def self_test() -> int:
 
         coordinator_path.write_text(
             original_coordinator.replace(
+                "coordinator.version().value() != coordinator_version",
+                "unsafe_skip_coordinator_version_check()",
+                1,
+            ),
+            encoding="utf-8",
+        )
+        detected = errors(root)
+        if not any("coordinator.version().value() != coordinator_version" in item for item in detected):
+            raise AssertionError("missing shared coordinator-version check unexpectedly passed")
+
+        coordinator_path.write_text(
+            original_coordinator.replace(
                 "DeviceGenerationCommitErrorClass::VersionConflict\n    )",
                 "DeviceGenerationCommitErrorClass::VersionConflict\n            | DeviceGenerationCommitErrorClass::DependencyUnavailable\n    )",
                 1,
@@ -300,7 +356,7 @@ def self_test() -> int:
         if not any("lost-response replay branch missing exact proof step" in item for item in detected):
             raise AssertionError("missing replay R2 verification fixture unexpectedly passed")
 
-    print("Phase 2F generation-commit authority negative fixtures rejected as expected.")
+    print("Coordinator-authoritative generation-commit negative fixtures rejected as expected.")
     return 0
 
 
@@ -315,7 +371,7 @@ def main() -> int:
         for item in detected:
             print(item)
         return 1
-    print("Phase 2F coordinator-authoritative generation commit boundary passed.")
+    print("Coordinator-authoritative generation commit boundary passed.")
     return 0
 
 
