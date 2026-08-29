@@ -2,7 +2,8 @@ use super::{
     CloudGenerationRepository, CloudGenerationStatus, ContainerDigest, EncryptedGenerationError,
     GenerationDek, GenerationIdentity, GenerationMetadata, KeyId,
     MAX_GENERATION_METADATA_PRELUDE_BYTES, NoncePrefix, PlaintextDigest, PublishResult,
-    inspect_generation_metadata_prelude, open_generation, open_generation_expected, seal_generation,
+    inspect_generation_metadata_prelude, open_generation, open_generation_expected,
+    seal_generation,
 };
 use profile_platform_primitives::{GenerationId, ProfileId, TenantId, UnixMillis};
 
