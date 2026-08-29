@@ -1,8 +1,8 @@
 use crate::access_session::problem;
 use crate::composition::{
-    device_execution_preconditions, device_job_authorization, generation_download_capability_signer,
-    generation_object_verifier, generation_root_keyring, generation_upload_capability_signer,
-    profile_generation_successor_commit,
+    device_execution_preconditions, device_job_authorization,
+    generation_download_capability_signer, generation_object_verifier, generation_root_keyring,
+    generation_upload_capability_signer, profile_generation_successor_commit,
 };
 use application_ports::device_jobs::{DeviceJobAuthorizationPort, DeviceJobCapability};
 use application_ports::generation_objects::{
@@ -399,10 +399,7 @@ async fn dispatch_download_capability(
         profile_id.clone(),
         reference.generation_id().clone(),
     );
-    match preconditions
-        .evaluate_device_execution(actor, &target)
-        .await
-    {
+    match preconditions.evaluate_device_execution(actor, &target).await {
         Ok(DeviceExecutionReadiness::Ready) => {}
         Ok(DeviceExecutionReadiness::Blocked(DeviceExecutionBlocker::DeviceUnauthorized)) => {
             return forbidden(actor.correlation_id().as_str());
@@ -410,7 +407,9 @@ async fn dispatch_download_capability(
         Ok(DeviceExecutionReadiness::Blocked(DeviceExecutionBlocker::GenerationInactive)) => {
             return version_conflict(actor.correlation_id().as_str());
         }
-        Ok(DeviceExecutionReadiness::Blocked(DeviceExecutionBlocker::CertificationIncomplete)) => {
+        Ok(DeviceExecutionReadiness::Blocked(
+            DeviceExecutionBlocker::CertificationIncomplete,
+        )) => {
             return verification_conflict(actor.correlation_id().as_str());
         }
         Err(error) => match error.class() {
@@ -529,10 +528,7 @@ async fn dispatch_sealing_material(
     );
 
     let preconditions = device_execution_preconditions(env)?;
-    match preconditions
-        .evaluate_device_execution(actor, &target)
-        .await
-    {
+    match preconditions.evaluate_device_execution(actor, &target).await {
         Ok(DeviceExecutionReadiness::Ready) => {}
         Ok(DeviceExecutionReadiness::Blocked(DeviceExecutionBlocker::DeviceUnauthorized)) => {
             return forbidden(actor.correlation_id().as_str());
@@ -540,7 +536,9 @@ async fn dispatch_sealing_material(
         Ok(DeviceExecutionReadiness::Blocked(DeviceExecutionBlocker::GenerationInactive)) => {
             return version_conflict(actor.correlation_id().as_str());
         }
-        Ok(DeviceExecutionReadiness::Blocked(DeviceExecutionBlocker::CertificationIncomplete)) => {
+        Ok(DeviceExecutionReadiness::Blocked(
+            DeviceExecutionBlocker::CertificationIncomplete,
+        )) => {
             return verification_conflict(actor.correlation_id().as_str());
         }
         Err(error) => match error.class() {
