@@ -171,10 +171,7 @@ fn derive_prf(
     Ok(outer.finalize().into())
 }
 
-fn update_frame(
-    digest: &mut Sha256,
-    value: &[u8],
-) -> Result<(), GenerationKeyDerivationError> {
+fn update_frame(digest: &mut Sha256, value: &[u8]) -> Result<(), GenerationKeyDerivationError> {
     let length =
         u64::try_from(value.len()).map_err(|_| GenerationKeyDerivationError::InvalidContext)?;
     digest.update(length.to_be_bytes());
