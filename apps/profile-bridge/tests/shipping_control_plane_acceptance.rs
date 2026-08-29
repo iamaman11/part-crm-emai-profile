@@ -93,7 +93,7 @@ impl MachineHttpPort for CanonicalMachineHttp {
                 device_id: DEVICE.to_owned(),
                 launch_intent_id: LAUNCH_INTENT.to_owned(),
             };
-            return Ok(json_response(200, &response)?);
+            return json_response(200, &response);
         }
 
         let expected_path = BRIDGE_PROFILE_COORDINATOR_PATH_TEMPLATE
@@ -104,16 +104,14 @@ impl MachineHttpPort for CanonicalMachineHttp {
         match method {
             MachineHttpMethod::Get => {
                 assert!(body.is_none());
-                Ok(json_response(200, &snapshot_response())?)
+                json_response(200, &snapshot_response())
             }
             MachineHttpMethod::PostJson => {
                 let request =
                     serde_json::from_slice::<CoordinatorCommandRequestDto>(body.ok_or(())?)
                         .map_err(|_| ())?;
-                Ok(json_response(
-                    200,
-                    &command_response(request, self.failure_mode)?,
-                )?)
+                let response = command_response(request, self.failure_mode)?;
+                json_response(200, &response)
             }
         }
     }
@@ -125,15 +123,10 @@ fn json_response<T: serde::Serialize>(status: u16, value: &T) -> Result<MachineH
         .map_err(|_| ())
 }
 
-fn projection(
+fn projection_base(
     status: CoordinatorStatusDto,
     version: u64,
     sequence: u64,
-    active_session_id: Option<String>,
-    active_device_id: Option<String>,
-    active_epoch: Option<u64>,
-    idle_expires_at_ms: Option<u64>,
-    hard_expires_at_ms: Option<u64>,
 ) -> CoordinatorProjectionDto {
     CoordinatorProjectionDto {
         tenant_id: TENANT.to_owned(),
@@ -142,14 +135,30 @@ fn projection(
         version,
         sequence,
         next_epoch: 2,
-        active_session_id,
-        active_device_id,
-        active_epoch,
-        idle_expires_at_ms,
-        hard_expires_at_ms,
+        active_session_id: None,
+        active_device_id: None,
+        active_epoch: None,
+        idle_expires_at_ms: None,
+        hard_expires_at_ms: None,
         drain_deadline_ms: None,
         pending_launch_intent_id: None,
         pending_intent_expires_at_ms: None,
+    }
+}
+
+fn active_projection(
+    version: u64,
+    sequence: u64,
+    session_id: String,
+    idle_expires_at_ms: u64,
+) -> CoordinatorProjectionDto {
+    CoordinatorProjectionDto {
+        active_session_id: Some(session_id),
+        active_device_id: Some(DEVICE.to_owned()),
+        active_epoch: Some(1),
+        idle_expires_at_ms: Some(idle_expires_at_ms),
+        hard_expires_at_ms: Some(900_000),
+        ..projection_base(CoordinatorStatusDto::Active, version, sequence)
     }
 }
 
@@ -161,16 +170,7 @@ fn snapshot_response() -> CoordinatorResponseDto {
         replayed: false,
         fencing_token: None,
         epoch: None,
-        projection: projection(
-            CoordinatorStatusDto::Idle,
-            1,
-            0,
-            None,
-            None,
-            None,
-            None,
-            None,
-        ),
+        projection: projection_base(CoordinatorStatusDto::Idle, 1, 0),
     }
 }
 
@@ -195,16 +195,7 @@ fn command_response(
                 replayed: false,
                 fencing_token: Some(FENCE.to_owned()),
                 epoch: Some(1),
-                projection: projection(
-                    CoordinatorStatusDto::Active,
-                    2,
-                    1,
-                    Some(session_id),
-                    Some(DEVICE.to_owned()),
-                    Some(1),
-                    Some(30_000),
-                    Some(900_000),
-                ),
+                projection: active_projection(2, 1, session_id, 30_000),
             })
         }
         CoordinatorCommandDto::Heartbeat {
@@ -226,16 +217,7 @@ fn command_response(
                     FailureMode::WrongHeartbeatFence => "fence_wrong".to_owned(),
                 }),
                 epoch: Some(1),
-                projection: projection(
-                    CoordinatorStatusDto::Active,
-                    3,
-                    2,
-                    Some(session_id),
-                    Some(DEVICE.to_owned()),
-                    Some(1),
-                    Some(60_000),
-                    Some(900_000),
-                ),
+                projection: active_projection(3, 2, session_id, 60_000),
             })
         }
         CoordinatorCommandDto::Release {
@@ -256,16 +238,7 @@ fn command_response(
                 replayed: false,
                 fencing_token: None,
                 epoch: None,
-                projection: projection(
-                    CoordinatorStatusDto::Uncertain,
-                    4,
-                    3,
-                    None,
-                    None,
-                    None,
-                    None,
-                    None,
-                ),
+                projection: projection_base(CoordinatorStatusDto::Uncertain, 4, 3),
             })
         }
         _ => Err(()),
