@@ -12,7 +12,7 @@ jobs:
   refresh-lock:
     runs-on: ubuntu-latest
     env:
-      EXPECTED_PARENT_SHA: f7831bdae64e08dde693a5f46d3c1e2afabba37e
+      EXPECTED_PARENT_SHA: 35e7fa7ae9e5bb470a2885a020826b5ed2a1603c
       TARGET_BRANCH: cap-exec/p2-authorized-launch
     steps:
       - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
@@ -33,7 +33,7 @@ jobs:
         run: |
           set -euo pipefail
           cp Cargo.lock "$RUNNER_TEMP/Cargo.lock.before"
-          cargo metadata --format-version=1 --no-deps > "$RUNNER_TEMP/metadata.json"
+          cargo metadata --format-version=1 > "$RUNNER_TEMP/metadata.json"
           python - <<'PY'
           import os
           import pathlib
