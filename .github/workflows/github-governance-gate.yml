@@ -154,9 +154,14 @@ jobs:
       - name: Checkout exact accepted recovery source
         uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
         with:
-          ref: ${{ github.sha }}
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
           fetch-depth: 2
           persist-credentials: false
+
+      - name: Verify exact source checkout
+        env:
+          EXPECTED_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: python -c "import os, subprocess; actual = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(); expected = os.environ['EXPECTED_SOURCE_SHA']; assert actual == expected, f'expected {expected}, got {actual}'"
 
       - name: Prove and disable exact stale P2 Actions registrations
         env:
@@ -429,7 +434,7 @@ jobs:
 
           deployments_code="$(curl --silent --show-error --output "$RUNNER_TEMP/ar11-observe-deployments.json" --write-out '%{http_code}' \
             -H "Authorization: Bearer $CLOUDFLARE_OBSERVE_API_TOKEN" \
-            "https://api.cloudflare.com/client/v4/accounts/$account_id/workers/scripts/$worker_name/deployments")"
+            "$api")"
 
           d1_catalog_exit_code=0
           CLOUDFLARE_API_TOKEN="$CLOUDFLARE_OBSERVE_API_TOKEN" CLOUDFLARE_ACCOUNT_ID="$account_id" \
