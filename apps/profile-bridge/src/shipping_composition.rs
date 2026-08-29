@@ -182,7 +182,7 @@ mod windows {
             )
             .map_err(|_| ShippingCompositionError::Operator)?;
 
-        let mut next_heartbeat_at = next_heartbeat_at(
+        let mut next_heartbeat_deadline = next_heartbeat_at(
             operator
                 .coordinator()
                 .runtime_timing()
@@ -216,11 +216,11 @@ mod windows {
                 return Err(ShippingCompositionError::CommittedRecoveryRequired);
             }
 
-            if observed_at >= next_heartbeat_at {
+            if observed_at >= next_heartbeat_deadline {
                 operator
                     .heartbeat(observed_at)
                     .map_err(|_| ShippingCompositionError::Operator)?;
-                next_heartbeat_at = next_heartbeat_at(
+                next_heartbeat_deadline = next_heartbeat_at(
                     operator
                         .coordinator()
                         .runtime_timing()
@@ -229,7 +229,7 @@ mod windows {
                 )?;
             }
 
-            let until_heartbeat = next_heartbeat_at
+            let until_heartbeat = next_heartbeat_deadline
                 .value()
                 .saturating_sub(observed_at.value())
                 .max(1);
@@ -292,12 +292,11 @@ mod windows {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(windows)))]
 mod tests {
     use super::{ShippingCompositionError, run_claim};
     use bridge_domain::ClaimUri;
 
-    #[cfg(not(windows))]
     #[test]
     fn non_windows_shipping_binary_has_no_fallback_runtime()
     -> Result<(), Box<dyn std::error::Error>> {
