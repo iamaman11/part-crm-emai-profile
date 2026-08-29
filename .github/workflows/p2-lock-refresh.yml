@@ -12,7 +12,7 @@ jobs:
   refresh-lock:
     runs-on: ubuntu-latest
     env:
-      EXPECTED_PARENT_SHA: 18349f81de90b343c79311804a7f75da2c098e6c
+      EXPECTED_PARENT_SHA: f7831bdae64e08dde693a5f46d3c1e2afabba37e
       TARGET_BRANCH: cap-exec/p2-authorized-launch
     steps:
       - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
@@ -35,10 +35,11 @@ jobs:
           cp Cargo.lock "$RUNNER_TEMP/Cargo.lock.before"
           cargo metadata --format-version=1 --no-deps > "$RUNNER_TEMP/metadata.json"
           python - <<'PY'
+          import os
           import pathlib
           import tomllib
 
-          before_path = pathlib.Path("${RUNNER_TEMP}/Cargo.lock.before")
+          before_path = pathlib.Path(os.environ["RUNNER_TEMP"]) / "Cargo.lock.before"
           after_path = pathlib.Path("Cargo.lock")
           before = tomllib.loads(before_path.read_text(encoding="utf-8"))
           after = tomllib.loads(after_path.read_text(encoding="utf-8"))
