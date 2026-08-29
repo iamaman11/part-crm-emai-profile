@@ -148,9 +148,9 @@ fn frozen_epoch_and_current_projection_are_derived_from_real_sql_bytes()
             "migrations/d1",
             26_usize,
             "0026_outbound_mail_intents.sql",
-            29_u64,
-            "0029_profile_launch_authority.sql",
-            3_u64,
+            30_u64,
+            "0030_profile_generation_successor_commit.sql",
+            4_u64,
             CATALOG_EPOCH_DIGEST,
         ),
         (
@@ -246,7 +246,7 @@ fn historical_sql_tampering_fails_closed_for_each_component() -> Result<(), Box<
 fn unowned_post_epoch_sql_fails_closed_for_each_component() -> Result<(), Box<dyn Error>> {
     let source = repo_root();
     for (label, relative) in [
-        ("catalog-post-epoch", "migrations/d1/0030_unowned.sql"),
+        ("catalog-post-epoch", "migrations/d1/0031_unowned.sql"),
         (
             "resolver-post-epoch",
             "migrations/resolver-d1/0005_unowned.sql",
@@ -293,11 +293,15 @@ fn catalog_0027_is_the_typed_first_post_epoch_revision() -> Result<(), Box<dyn E
         catalog_files[28]["name"],
         "0029_profile_launch_authority.sql"
     );
-    assert_eq!(catalog["migration_count"], 29);
-    assert_eq!(catalog["post_epoch_migration_count"], 3);
+    assert_eq!(
+        catalog_files[29]["name"],
+        "0030_profile_generation_successor_commit.sql"
+    );
+    assert_eq!(catalog["migration_count"], 30);
+    assert_eq!(catalog["post_epoch_migration_count"], 4);
     assert_eq!(
         catalog["current_repository_revision"],
-        "0029_profile_launch_authority.sql"
+        "0030_profile_generation_successor_commit.sql"
     );
 
     assert_eq!(resolver["historical_epoch"]["migration_count"], 4);
