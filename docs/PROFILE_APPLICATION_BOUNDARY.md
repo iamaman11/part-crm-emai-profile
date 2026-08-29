@@ -1,110 +1,174 @@
 # Profile Application Boundary
 
-**Status:** Phase 0 accepted architecture for profile create / visible-by-ID / assignment.
+**Status:** current bounded application contract for Profile create/read/relationship/launch semantics.
 
-**Scope:** repository architecture only. Profile grants, generation lifecycle, coordinator behavior and mailbox routes remain separate verticals. This document does not claim production readiness.
+**Scope:** repository architecture only. Generation persistence, coordinator state, local Bridge lifecycle
+and mailbox routes retain their own natural owners. This document does not claim production readiness or
+select the current execution transaction.
 
 ## Purpose
 
-The profile capability now owns create, visible-by-ID and client-assignment orchestration behind provider-neutral application contracts:
+The Profile capability owns public Profile application semantics behind provider-neutral application
+contracts. Transport, persistence and device/runtime effects remain outer concerns:
 
 ```text
-HTTP / Workers SDK
+browser / generated operation
   -> apps/control-plane-worker/src/profiles.rs
-     transport parsing + authenticated actor context + protocol mapping
-  -> crates/use-cases/src/profiles.rs
-     create/query authorization + replay/write/query sequencing
-  -> crates/use-cases/src/profile_assignments.rs
-     assignment authorization + replay/write/version sequencing
-  -> crates/application-ports/src/profiles.rs
-     provider-neutral inward profile + assignment contracts
-  -> crates/cloudflare-adapters/src/d1_profiles.rs
-     governed D1/idempotency/visibility adapter
-  -> existing atomic D1 command/query implementations
+     authenticated actor context + transport mapping
+  -> crates/use-cases
+     Profile authorization + application sequencing
+  -> crates/application-ports
+     provider-neutral Profile / launch ports
+  -> crates/cloudflare-adapters
+     governed D1 evidence / persistence adapters
 ```
 
-Concrete D1 construction is isolated in `apps/control-plane-worker/src/composition.rs`. The migrated profile transport must not import provider D1 modules, construct governed mutation DTOs, or instantiate D1 repositories directly.
+Concrete provider construction belongs to composition roots. Worker transport must not become a second
+Profile ACL owner, construct ad-hoc authorization SQL or duplicate application policy.
 
 ## Profile Create Ownership
 
 The application use case owns these decisions and ordering rules:
 
 1. only a tenant owner may execute profile create; non-owner disclosure remains neutral `not_found`;
-2. owner authorization is evaluated before request-body/idempotency parsing, preserving the former disclosure boundary;
+2. owner authorization is evaluated before request-body/idempotency parsing, preserving the disclosure boundary;
 3. the use case creates the typed `BrowserProfile` aggregate in its initial state;
 4. exact idempotency replay returns the prior logical result without a new write;
 5. a concurrent unique conflict is rechecked for exact replay and is otherwise a conflict;
-6. the D1 adapter maps typed profile state and `CommandExecutionEvidence` into the existing governed `CreateProfileMutation` / `MutationEnvelope`;
-7. the existing D1 batch retains atomic profile command-journal, profile row, idempotency, audit and outbox behavior;
-8. provider failures map to stable application failure classes rather than leaking concrete SDK/storage errors.
-
-The HTTP contract remains transport-owned: fresh create is `201`, exact replay is `200`, and the existing camelCase mutation receipt remains unchanged.
+6. the D1 adapter maps typed Profile state and command evidence into the existing governed write path;
+7. the governed D1 transaction retains atomic command journal, Profile row, idempotency, audit and outbox behavior;
+8. provider failures map to stable application failure classes rather than leaking SDK/storage errors.
 
 ## Visible Profile Query Ownership
 
-The Worker parses the profile ID and calls the application query. The D1 adapter retains the existing disclosure-safe visibility query, including the rule that a client assignment is projection data and **not** profile authorization.
+The Worker parses the Profile ID and calls the application query. The D1 adapter retains the existing
+disclosure-safe visibility query, including the rule that a Client assignment is projection data and
+**not** Profile authorization.
 
-Storage strings are converted into typed `ProfileStatus` and `AggregateVersion`. Unknown status values or invalid stored versions fail as integrity errors instead of being relabeled as a missing business resource.
+Storage strings are converted into typed Profile state/version values. Invalid stored values fail as
+integrity errors instead of being relabeled as a missing business resource.
 
-The transport preserves the existing response shape:
+## Profile Relationship Ownership
 
-- `profileId`;
-- `status`;
-- `version`;
-- optional `linkedClientId`.
+Profile-to-Client relationship history remains owned by the canonical assignment model. Attach,
+standalone detach and atomic reassign all use that owner; no second relationship table or Client-card
+shortcut becomes authoritative.
 
-## Profile Assignment Ownership
+Relationship semantics remain non-authorizing:
 
-`ProfileAssignmentApi` is owned by the same thin `profiles.rs` transport but has a dedicated pure use-case module so assignment semantics do not become mixed into create/query logic.
+```text
+Profile assigned to Client
+!=
+actor authorized for Profile
+```
 
-The accepted ordering and compatibility rules are:
+Client -> Profiles projections independently authorize the Client and every returned Profile before
+projection. Browser-controlled assignment/client identity is never trusted as durable mutation
+authority.
 
-1. assignment remains tenant-owner-only and owner resolution happens before request-body parsing;
-2. `assignmentId`, path `profileId`, `clientId`, `reason` and `expectedProfileVersion` keep their
-   typed protocol roles; browser `requestDigest` is rejected as an unknown legacy field;
-3. strict request DTO parsing rejects unknown fields before the server derives its internal
-   `PayloadFingerprint` for replay semantics;
-4. response aggregate version is `expectedProfileVersion + 1` using checked arithmetic; overflow fails before replay/write;
-5. exact pre-write idempotency replay skips the governed write;
-6. fresh assignment remains HTTP `200`, result code `assigned`, resource reference equal to the assignment ID;
-7. unlike generation Phase 0F, a conflict-class assignment write failure performs exactly one post-conflict exact replay lookup; an exact replay succeeds, while replay miss/conflict remains a conflict;
-8. non-conflict write failures do not perform that second replay lookup;
-9. `D1ProfileApplicationRepository` maps the inward assignment write to the existing `AssignProfileMutation` and `D1GovernedCommandRepository::assign_profile` transaction rather than duplicating SQL;
-10. the existing governed D1 batch remains the source of atomic command-journal, assignment, idempotency, audit and outbox mechanics;
-11. assignment remains business/history association only. It never grants profile/client visibility and must remain separate from explicit grant ACLs.
+## Authorized Profile Launch Ownership
 
-Stable public failure classes remain neutral not-found, version conflict, invalid state, conflict, integrity failure, internal failure and dependency unavailable. Provider/storage failures are not collapsed into business not-found.
+The public Profile launch operation is an orchestration capability, not a new authorization owner.
+The canonical chain is:
+
+```text
+Client Detail / Profile action
+  -> generated `launchProfile` operation
+  -> Profile launch admission
+  -> existing Profile open authorization
+  -> server-owned active actor-bound device resolution
+  -> existing device/Profile/generation authorization
+  -> existing execution preconditions
+  -> bounded one-time launch authority
+  -> machine-authenticated Bridge redemption
+  -> fresh authorization/state revalidation
+  -> atomic one-time claim consumption
+```
+
+Permanent rules:
+
+1. the browser/public request selects the Profile action only; it does **not** assert trusted `deviceId`
+   or `generationId`;
+2. active generation and active actor-bound device are resolved from authoritative server state;
+3. Profile access uses the existing Profile authorization owner; launch-specific code must not duplicate
+   Profile ACL SQL or policy;
+4. device authorization and execution-readiness semantics remain in their existing owners and are
+   composed by launch orchestration;
+5. the one-time launch-authority store owns issuance, digest-only persistence, exact target binding,
+   bounded expiry, replay/concurrency semantics and atomic consumption; it does not become a second ACL
+   owner;
+6. raw claim material is bearer material and is never persisted server-side, logged or emitted in
+   telemetry/evidence; the browser response is non-cacheable;
+7. Bridge redemption authenticates the actual machine through the dedicated machine perimeter and the
+   existing device-principal owner, using edge-verified mTLS certificate identity rather than a retained
+   human Access bearer or new static launch bearer;
+8. redemption re-resolves current actor/Profile/device/generation/readiness state **before** consuming
+   the claim. Revocation, reassignment, generation change, expiry, replay or wrong machine fails closed;
+9. successful redemption returns only the bounded typed identity needed by the existing Bridge/operator
+   and coordinator boundaries;
+10. assignment remains irrelevant to authorization except as independently authorized UI projection
+    context.
+
+The canonical browser HTTP contract is authored in the Rust control-plane contract and projected through
+OpenAPI into generated TypeScript operation/validator code. Handwritten frontend method/path/response
+semantics for launch are forbidden.
 
 ## Command Evidence
 
-The profile vertical reuses provider-neutral `application-ports::CommandExecutionEvidence` for:
+Profile commands reuse provider-neutral command evidence for idempotency, server-owned payload identity,
+audit/outbox identity and bounded command timing. The browser never supplies a trusted digest to stand in
+for server authorization or semantic validation.
 
-- idempotency key;
-- server-owned payload fingerprint;
-- deterministic audit event ID;
-- deterministic outbox event ID;
-- command timestamp;
-- idempotency expiry timestamp.
+For launch specifically, idempotency evidence binds issuance to the exact server-resolved
+actor/Profile/device/generation context. Replay cannot mutate the original authority binding.
 
-The generic request-digest rule remains the existing 16–256-character evidence contract. The HTTP/Workers layer derives evidence, while concrete D1 mutation envelopes remain adapter-owned.
+## Failure And Effect Ordering
+
+All Profile commands and launch admission fail closed before their first protected effect when identity,
+membership, authorization, capability admission or required state is absent.
+
+For launch:
+
+```text
+browser authorization
+-> current server state resolution
+-> device/execution preconditions
+-> bounded authority issuance
+
+machine redemption
+-> machine authentication
+-> load digest-bound authority
+-> current state revalidation
+-> atomic consume
+-> coordinator/runtime handoff
+```
+
+Claim issuance is therefore not durable permission to launch later if authority/state has changed.
 
 ## CI Enforcement
 
-Permanent Repository Quality Audit checks enforce:
+Permanent checks and tests protect the boundary at the cheapest sufficient tiers:
 
-- capability-owned `ProfileApplicationPort`, `ProfileAssignmentApplicationPort`, `ProfileCreateWrite`, `ProfileAssignmentWrite`, create/query symbols and dedicated assignment use-case symbols;
-- `check-profile-worker-application-boundary.py` rejects direct D1/provider orchestration in `profiles.rs`;
-- the same policy requires live `ProfileAssignmentApi` routing through `profiles.rs` and rejects return of superseded create/get/assignment handlers, DTOs or `AssignProfileMutation` in legacy `api.rs`;
-- its negative self-test deliberately restores direct provider orchestration and a legacy assignment handler and proves both are rejected;
-- Cross-Component acceptance resolves assignment orchestration through `profiles.rs -> profile_assignments.rs -> d1_profiles.rs` while retaining atomic D1 command evidence in `d1_governed_commands.rs`;
-- the existing `assignmentDoesNotAuthorize` negative evidence remains mandatory.
+- Profile application/relationship owners remain capability-owned and provider-neutral;
+- direct Worker D1/provider orchestration and duplicate authorization paths are rejected;
+- assignment-derived authorization remains negative evidence;
+- launch OpenAPI/generated frontend drift is rejected;
+- public launch contains no caller-selected trusted device/generation;
+- one-time authority tests cover exact binding, expiry, replay/concurrency and fresh revalidation;
+- machine redemption and coordinator adapters validate exact typed responses and fail closed on changed
+  device/session/epoch/fence state;
+- production Bridge boundary checks reject claim-only success, a second shipping launcher and
+  production-reachable synthetic runtime paths.
 
-Pure fake-port tests separately prove non-owner stop-before-replay/write, overflow-before-replay/write, exact pre-write replay, conflict-only post-write replay and non-conflict no-recheck. Adapter tests preserve stable assignment failure mapping. Worker native/WASM and governed D1 acceptance remain separate evidence layers.
+Exact-head green CI is acceptance evidence only for the exact candidate that produced it; it never grants
+Production authorization.
 
-## Remaining Phase 0 Work
+## Related Boundaries
 
-This slice does **not** close architecture gap A0. Remaining Worker-owned route families must migrate in bounded verticals rather than by expanding this PR. Profile grants, client grants and identity/membership/invitation governance remain in the legacy governance module until their own accepted slices.
+- coordinator lease/fencing: [`PROFILE_COORDINATOR.md`](PROFILE_COORDINATOR.md);
+- local workspace/runtime lifecycle: [`LOCAL_PROFILE_LIFECYCLE.md`](LOCAL_PROFILE_LIFECYCLE.md);
+- Profile generations: [`PROFILE_GENERATION_APPLICATION_BOUNDARY.md`](PROFILE_GENERATION_APPLICATION_BOUNDARY.md);
+- mandatory architecture invariants: [`APPLICATION_ARCHITECTURE_MANDATORY_REQUIREMENTS.md`](APPLICATION_ARCHITECTURE_MANDATORY_REQUIREMENTS.md).
 
-Generation and mailbox orchestration are already behind their accepted application boundaries and are not reopened by this slice.
-
-`production_ready=false` remains unchanged.
+`source_present != production_enabled` remains binding. Production admission is owned only by the
+Release / Capability Profile and exact target authorization process.
