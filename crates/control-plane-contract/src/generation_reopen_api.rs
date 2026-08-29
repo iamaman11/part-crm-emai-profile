@@ -48,17 +48,21 @@ impl BridgeGenerationDownloadCapabilityRequest {
     }
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+/// Descriptor-bound short-lived R2 GET capability. The signed URL is bearer material: it is
+/// intentionally not Clone, is redacted from Debug, and is zeroized when this transport DTO is
+/// dropped. A validated Bridge adapter may transfer the same allocation with `take_url` only after
+/// all non-secret response fields have been checked fail-closed.
+#[derive(Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct BridgeGenerationDownloadCapabilityResponse {
-    pub generation_id: String,
-    pub object_key: String,
-    pub metadata_digest: String,
-    pub container_digest: String,
-    pub container_bytes: u64,
-    pub method: String,
-    pub url: String,
-    pub expires_seconds: u32,
+    generation_id: String,
+    object_key: String,
+    metadata_digest: String,
+    container_digest: String,
+    container_bytes: u64,
+    method: String,
+    url: String,
+    expires_seconds: u32,
 }
 
 impl BridgeGenerationDownloadCapabilityResponse {
@@ -82,6 +86,73 @@ impl BridgeGenerationDownloadCapabilityResponse {
             url: url.into(),
             expires_seconds,
         }
+    }
+
+    #[must_use]
+    pub fn generation_id(&self) -> &str {
+        &self.generation_id
+    }
+
+    #[must_use]
+    pub fn object_key(&self) -> &str {
+        &self.object_key
+    }
+
+    #[must_use]
+    pub fn metadata_digest(&self) -> &str {
+        &self.metadata_digest
+    }
+
+    #[must_use]
+    pub fn container_digest(&self) -> &str {
+        &self.container_digest
+    }
+
+    #[must_use]
+    pub const fn container_bytes(&self) -> u64 {
+        self.container_bytes
+    }
+
+    #[must_use]
+    pub fn method(&self) -> &str {
+        &self.method
+    }
+
+    #[must_use]
+    pub fn url(&self) -> &str {
+        &self.url
+    }
+
+    #[must_use]
+    pub const fn expires_seconds(&self) -> u32 {
+        self.expires_seconds
+    }
+
+    #[must_use]
+    pub fn take_url(&mut self) -> String {
+        core::mem::take(&mut self.url)
+    }
+}
+
+impl fmt::Debug for BridgeGenerationDownloadCapabilityResponse {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("BridgeGenerationDownloadCapabilityResponse")
+            .field("generation_id", &self.generation_id)
+            .field("object_key", &self.object_key)
+            .field("metadata_digest", &self.metadata_digest)
+            .field("container_digest", &self.container_digest)
+            .field("container_bytes", &self.container_bytes)
+            .field("method", &self.method)
+            .field("url", &"[REDACTED]")
+            .field("expires_seconds", &self.expires_seconds)
+            .finish()
+    }
+}
+
+impl Drop for BridgeGenerationDownloadCapabilityResponse {
+    fn drop(&mut self) {
+        self.url.zeroize();
     }
 }
 
@@ -260,6 +331,26 @@ mod tests {
             GENERATION_DOWNLOAD_CAPABILITY_MAX_EXPIRES_SECONDS
         );
         Ok(())
+    }
+
+    #[test]
+    fn download_capability_response_redacts_bearer_url() {
+        let mut response = BridgeGenerationDownloadCapabilityResponse::new(
+            "generation_reopen_redaction_01",
+            "tenants/tenant_reopen_redaction_01/profiles/profile_reopen_redaction_01/generations/generation_reopen_redaction_01.bpgc",
+            "a".repeat(64),
+            "b".repeat(64),
+            4096,
+            "https://example.invalid/object?X-Amz-Signature=SECRET_DOWNLOAD_SENTINEL",
+            GENERATION_DOWNLOAD_CAPABILITY_MAX_EXPIRES_SECONDS,
+        );
+        let debug = format!("{response:?}");
+        assert!(debug.contains("[REDACTED]"));
+        assert!(!debug.contains("SECRET_DOWNLOAD_SENTINEL"));
+        assert!(response.url().contains("SECRET_DOWNLOAD_SENTINEL"));
+        let transferred = response.take_url();
+        assert!(transferred.contains("SECRET_DOWNLOAD_SENTINEL"));
+        assert!(response.url().is_empty());
     }
 
     #[test]
