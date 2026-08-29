@@ -388,12 +388,6 @@ mod tests {
 
     impl std::error::Error for TestError {}
 
-    impl From<encrypted_generation_domain::KeyIdError> for TestError {
-        fn from(_: encrypted_generation_domain::KeyIdError) -> Self {
-            Self
-        }
-    }
-
     struct Control {
         events: Rc<RefCell<Vec<&'static str>>>,
         verified: bool,
@@ -412,7 +406,10 @@ mod tests {
             _plaintext_digest: [u8; 32],
         ) -> Result<GenerationSealingMaterial, Self::Error> {
             Ok(GenerationSealingMaterial::new(
-                GenerationDek::new(KeyId::parse("profile-generation-root-v1-7")?, [7; 32]),
+                GenerationDek::new(
+                    KeyId::parse("profile-generation-root-v1-7").map_err(|_| TestError)?,
+                    [7; 32],
+                ),
                 NoncePrefix::new([8; 16]),
                 4096,
             ))
