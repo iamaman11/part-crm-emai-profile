@@ -89,7 +89,7 @@ mod windows {
             let runtime_root = absolute_path(required_env(RUNTIME_ROOT_ENV)?)?;
             let python_executable = absolute_path(required_env(PYTHON_EXECUTABLE_ENV)?)?;
             let network_policy_path = absolute_path(required_env(NETWORK_POLICY_PATH_ENV)?)?;
-            let proxy_config_path = optional_env(PROXY_CONFIG_PATH_ENV)
+            let proxy_config_path = optional_env(PROXY_CONFIG_PATH_ENV)?
                 .map(absolute_path)
                 .transpose()?;
             Ok(Self {
@@ -183,8 +183,14 @@ mod windows {
         Ok(value)
     }
 
-    fn optional_env(name: &str) -> Option<String> {
-        env::var(name).ok().filter(|value| !value.is_empty())
+    fn optional_env(name: &str) -> Result<Option<String>, ShippingCompositionError> {
+        match env::var(name) {
+            Ok(value) if value.is_empty() => Ok(None),
+            Ok(value) if value.contains('\0') => Err(ShippingCompositionError::Configuration),
+            Ok(value) => Ok(Some(value)),
+            Err(env::VarError::NotPresent) => Ok(None),
+            Err(env::VarError::NotUnicode(_)) => Err(ShippingCompositionError::Configuration),
+        }
     }
 
     fn absolute_path(value: String) -> Result<PathBuf, ShippingCompositionError> {
