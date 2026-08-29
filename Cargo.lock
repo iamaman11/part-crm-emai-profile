@@ -103,6 +103,7 @@ dependencies = [
  "cloudflare-adapters",
  "control-plane-contract",
  "device-domain",
+ "encrypted-generation-domain",
  "identity-access-domain",
  "profile-platform-primitives",
  "serde",
