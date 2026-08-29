@@ -87,6 +87,7 @@ jobs:
             --head-ref "$PR_HEAD_REF" \
             --base-ref "$PR_BASE_REF" \
             --base "$PR_BASE_SHA" \
+            --base "$PR_BASE_SHA" \
             --head "$PR_HEAD_SHA" \
             > premerge-observation.json
           python - <<'PY'
@@ -434,7 +435,7 @@ jobs:
 
           deployments_code="$(curl --silent --show-error --output "$RUNNER_TEMP/ar11-observe-deployments.json" --write-out '%{http_code}' \
             -H "Authorization: Bearer $CLOUDFLARE_OBSERVE_API_TOKEN" \
-            "$api")"
+            "https://api.cloudflare.com/client/v4/accounts/$account_id/workers/scripts/$worker_name/deployments")"
 
           d1_catalog_exit_code=0
           CLOUDFLARE_API_TOKEN="$CLOUDFLARE_OBSERVE_API_TOKEN" CLOUDFLARE_ACCOUNT_ID="$account_id" \
