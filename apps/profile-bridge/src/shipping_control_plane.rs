@@ -1,3 +1,4 @@
+use crate::dirty_generation::{GenerationSealingMaterial, GenerationSealingMaterialPort};
 use crate::operator_flow::{EnrollmentPort, OperatorEnrollment};
 use application_ports::{ProfileCoordinatorPort, ProfileCoordinatorRuntimePort};
 use bridge_domain::ClaimUri;
@@ -5,9 +6,16 @@ use control_plane_contract::coordinator_api::{
     CoordinatorCommandDto, CoordinatorCommandRequestDto, CoordinatorOutcomeDto,
     CoordinatorReleaseDispositionDto, CoordinatorResponseDto, CoordinatorStatusDto,
 };
+use control_plane_contract::generation_key_api::{
+    BRIDGE_GENERATION_SEALING_MATERIAL_PATH_TEMPLATE, BridgeGenerationSealingMaterialRequest,
+    BridgeGenerationSealingMaterialResponse, GENERATION_SEALING_CHUNK_BYTES,
+};
 use control_plane_contract::profile_launch_api::{
     BRIDGE_PROFILE_COORDINATOR_PATH_TEMPLATE, BRIDGE_PROFILE_LAUNCH_REDEMPTION_PATH,
     BridgeProfileLaunchRedemptionProjection, BridgeProfileLaunchRedemptionRequest,
+};
+use encrypted_generation_domain::{
+    GenerationDek, GenerationRootKeyVersion, KeyId, NoncePrefix,
 };
 use profile_platform_primitives::{
     ActorContext, ActorId, CorrelationId, DeviceId, FencingToken, GenerationId, IdempotencyKey,
@@ -18,6 +26,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 static REQUEST_SEQUENCE: AtomicU64 = AtomicU64::new(1);
+const MAX_SEALING_MATERIAL_RESPONSE_BYTES: usize = 1_024;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum MachineHttpMethod {
@@ -411,6 +420,128 @@ where
     }
 }
 
+impl<T> GenerationSealingMaterialPort for ControlPlaneCoordinator<T>
+where
+    T: MachineHttpPort,
+{
+    type Error = ShippingControlPlaneError;
+
+    fn material_for(
+        &mut self,
+        tenant_id: &TenantId,
+        profile_id: &ProfileId,
+        base_generation_id: &GenerationId,
+        generation_id: &GenerationId,
+        plaintext_digest: [u8; 32],
+    ) -> Result<GenerationSealingMaterial, Self::Error> {
+        if base_generation_id == generation_id {
+            return Err(Self::Error::InvalidResponse);
+        }
+        let cursor = self
+            .cursor
+            .as_ref()
+            .filter(|cursor| cursor.tenant_id == *tenant_id && cursor.profile_id == *profile_id)
+            .cloned()
+            .ok_or(Self::Error::InvalidResponse)?;
+        let request = BridgeGenerationSealingMaterialRequest::new(
+            base_generation_id.as_str(),
+            generation_id.as_str(),
+            encode_lower_hex(&plaintext_digest),
+            cursor.session_id.as_str(),
+            cursor.fencing_token.as_str(),
+            cursor.epoch,
+        );
+        let mut body = serde_json::to_vec(&request).map_err(|_| Self::Error::InvalidResponse)?;
+        let correlation_id = next_correlation_id()?;
+        let response = self
+            .transport
+            .request(
+                MachineHttpMethod::PostJson,
+                &generation_sealing_material_path(tenant_id, profile_id),
+                &correlation_id,
+                Some(&body),
+            )
+            .map_err(|_| Self::Error::Transport);
+        body.fill(0);
+        let response = decode_sealing_material_response(response?)?;
+        let (key_id, dek_hex, nonce_prefix_hex, chunk_size) = response.into_parts();
+        if chunk_size != GENERATION_SEALING_CHUNK_BYTES {
+            return Err(Self::Error::InvalidResponse);
+        }
+        let key_id = KeyId::parse(key_id).map_err(|_| Self::Error::InvalidResponse)?;
+        GenerationRootKeyVersion::from_key_id(&key_id)
+            .map_err(|_| Self::Error::InvalidResponse)?;
+        let dek = decode_secret_dek(dek_hex.as_str()).ok_or(Self::Error::InvalidResponse)?;
+        let nonce_prefix =
+            decode_lower_hex::<16>(&nonce_prefix_hex).ok_or(Self::Error::InvalidResponse)?;
+        Ok(GenerationSealingMaterial::new(
+            GenerationDek::new(key_id, dek.0),
+            NoncePrefix::new(nonce_prefix),
+            chunk_size,
+        ))
+    }
+}
+
+struct SecretDek([u8; 32]);
+
+impl Drop for SecretDek {
+    fn drop(&mut self) {
+        self.0.fill(0);
+    }
+}
+
+fn decode_sealing_material_response(
+    mut response: MachineHttpResponse,
+) -> Result<BridgeGenerationSealingMaterialResponse, ShippingControlPlaneError> {
+    if !(200..=299).contains(&response.status()) {
+        response.body.fill(0);
+        return Err(ShippingControlPlaneError::HttpStatus);
+    }
+    if response.body.len() > MAX_SEALING_MATERIAL_RESPONSE_BYTES {
+        response.body.fill(0);
+        return Err(ShippingControlPlaneError::InvalidResponse);
+    }
+    let decoded = serde_json::from_slice::<BridgeGenerationSealingMaterialResponse>(&response.body);
+    response.body.fill(0);
+    decoded.map_err(|_| ShippingControlPlaneError::InvalidResponse)
+}
+
+fn decode_secret_dek(value: &str) -> Option<SecretDek> {
+    decode_lower_hex::<32>(value).map(SecretDek)
+}
+
+fn decode_lower_hex<const N: usize>(value: &str) -> Option<[u8; N]> {
+    if value.len() != N.saturating_mul(2) {
+        return None;
+    }
+    let bytes = value.as_bytes();
+    let mut decoded = [0_u8; N];
+    for (index, output) in decoded.iter_mut().enumerate() {
+        let high = lower_hex_nibble(bytes[index * 2])?;
+        let low = lower_hex_nibble(bytes[index * 2 + 1])?;
+        *output = (high << 4) | low;
+    }
+    Some(decoded)
+}
+
+const fn lower_hex_nibble(value: u8) -> Option<u8> {
+    match value {
+        b'0'..=b'9' => Some(value - b'0'),
+        b'a'..=b'f' => Some(value - b'a' + 10),
+        _ => None,
+    }
+}
+
+fn encode_lower_hex(bytes: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut encoded = String::with_capacity(bytes.len().saturating_mul(2));
+    for byte in bytes {
+        encoded.push(char::from(HEX[usize::from(byte >> 4)]));
+        encoded.push(char::from(HEX[usize::from(byte & 0x0f)]));
+    }
+    encoded
+}
+
 fn accepted_response(
     response: MachineHttpResponse,
 ) -> Result<MachineHttpResponse, ShippingControlPlaneError> {
@@ -548,6 +679,12 @@ fn coordinator_path(tenant_id: &TenantId, profile_id: &ProfileId) -> String {
         .replace("{profileId}", profile_id.as_str())
 }
 
+fn generation_sealing_material_path(tenant_id: &TenantId, profile_id: &ProfileId) -> String {
+    BRIDGE_GENERATION_SEALING_MATERIAL_PATH_TEMPLATE
+        .replace("{tenantId}", tenant_id.as_str())
+        .replace("{profileId}", profile_id.as_str())
+}
+
 fn unique_value(prefix: &str) -> Result<String, ShippingControlPlaneError> {
     let millis = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -576,12 +713,21 @@ fn next_idempotency_key() -> Result<IdempotencyKey, ShippingControlPlaneError> {
 #[cfg(test)]
 mod tests {
     use super::{
-        ControlPlaneEnrollment, ControlPlaneLeaseTiming, MachineHttpMethod, MachineHttpPort,
+        ControlPlaneCoordinator, ControlPlaneEnrollment, ControlPlaneLeaseTiming, CoordinatorCursor,
+        MAX_SEALING_MATERIAL_RESPONSE_BYTES, MachineHttpMethod, MachineHttpPort,
         MachineHttpResponse, ShippingControlPlaneError, lease_timing,
     };
+    use crate::dirty_generation::GenerationSealingMaterialPort;
     use crate::operator_flow::EnrollmentPort;
     use bridge_domain::ClaimUri;
-    use profile_platform_primitives::{CorrelationId, DeviceId, UnixMillis};
+    use control_plane_contract::generation_key_api::{
+        BRIDGE_GENERATION_SEALING_MATERIAL_PATH_TEMPLATE, BridgeGenerationSealingMaterialRequest,
+        BridgeGenerationSealingMaterialResponse, GENERATION_SEALING_CHUNK_BYTES,
+    };
+    use profile_platform_primitives::{
+        CorrelationId, DeviceId, FencingToken, GenerationId, ProfileId, SessionId, TenantId,
+        UnixMillis,
+    };
     use std::collections::VecDeque;
 
     #[derive(Default)]
@@ -604,6 +750,87 @@ mod tests {
                 String::from_utf8_lossy(value).contains("claim_01JBRIDGE_FEASIBILITY")
             }));
             self.responses.pop_front().ok_or(())
+        }
+    }
+
+    #[derive(Default)]
+    struct SealingMachineHttp {
+        responses: VecDeque<MachineHttpResponse>,
+        requests: Vec<(MachineHttpMethod, String, Vec<u8>)>,
+    }
+
+    impl MachineHttpPort for SealingMachineHttp {
+        type Error = ();
+
+        fn request(
+            &mut self,
+            method: MachineHttpMethod,
+            path: &str,
+            _correlation_id: &CorrelationId,
+            body: Option<&[u8]>,
+        ) -> Result<MachineHttpResponse, Self::Error> {
+            self.requests.push((
+                method,
+                path.to_owned(),
+                body.map_or_else(Vec::new, <[u8]>::to_vec),
+            ));
+            self.responses.pop_front().ok_or(())
+        }
+    }
+
+    struct SealingFixture {
+        coordinator: ControlPlaneCoordinator<SealingMachineHttp>,
+        tenant_id: TenantId,
+        profile_id: ProfileId,
+        base_generation_id: GenerationId,
+        candidate_generation_id: GenerationId,
+    }
+
+    impl SealingFixture {
+        fn new(response: MachineHttpResponse) -> Result<Self, Box<dyn std::error::Error>> {
+            let tenant_id = TenantId::parse("tenant_sealing_adapter_01")?;
+            let profile_id = ProfileId::parse("profile_sealing_adapter_01")?;
+            let base_generation_id = GenerationId::parse("generation_sealing_base_01")?;
+            let candidate_generation_id = GenerationId::parse("generation_sealing_next_01")?;
+            let cursor = CoordinatorCursor {
+                tenant_id: tenant_id.clone(),
+                profile_id: profile_id.clone(),
+                device_id: DeviceId::parse("device_sealing_adapter_01")?,
+                session_id: SessionId::parse("session_sealing_adapter_01")?,
+                epoch: 7,
+                fencing_token: FencingToken::parse("fence_sealing_adapter_01")?,
+                version: 11,
+                sequence: 13,
+                timing: ControlPlaneLeaseTiming {
+                    idle_expires_at_ms: 30_000,
+                    hard_expires_at_ms: 900_000,
+                },
+            };
+            Ok(Self {
+                coordinator: ControlPlaneCoordinator {
+                    transport: SealingMachineHttp {
+                        responses: VecDeque::from([response]),
+                        requests: Vec::new(),
+                    },
+                    cursor: Some(cursor),
+                },
+                tenant_id,
+                profile_id,
+                base_generation_id,
+                candidate_generation_id,
+            })
+        }
+
+        fn request_material(&mut self) -> Result<(), ShippingControlPlaneError> {
+            self.coordinator
+                .material_for(
+                    &self.tenant_id,
+                    &self.profile_id,
+                    &self.base_generation_id,
+                    &self.candidate_generation_id,
+                    [0xab; 32],
+                )
+                .map(|_| ())
         }
     }
 
@@ -672,6 +899,128 @@ mod tests {
             UnixMillis::new(1),
         );
         assert_eq!(error, Err(ShippingControlPlaneError::InvalidResponse));
+        Ok(())
+    }
+
+    #[test]
+    fn sealing_material_uses_live_cursor_authority_and_canonical_route()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let response = BridgeGenerationSealingMaterialResponse::new(
+            "profile-generation-root-v1-2",
+            "ab".repeat(32),
+            "cd".repeat(16),
+            GENERATION_SEALING_CHUNK_BYTES,
+        );
+        let mut fixture = SealingFixture::new(MachineHttpResponse::new(
+            200,
+            serde_json::to_vec(&response)?,
+        ))?;
+        fixture.request_material()?;
+
+        assert_eq!(fixture.coordinator.transport.requests.len(), 1);
+        let (method, path, body) = &fixture.coordinator.transport.requests[0];
+        assert_eq!(*method, MachineHttpMethod::PostJson);
+        let expected_path = BRIDGE_GENERATION_SEALING_MATERIAL_PATH_TEMPLATE
+            .replace("{tenantId}", fixture.tenant_id.as_str())
+            .replace("{profileId}", fixture.profile_id.as_str());
+        assert_eq!(path, &expected_path);
+        let request = serde_json::from_slice::<BridgeGenerationSealingMaterialRequest>(body)?;
+        assert_eq!(
+            request.base_generation_id(),
+            fixture.base_generation_id.as_str()
+        );
+        assert_eq!(
+            request.generation_id(),
+            fixture.candidate_generation_id.as_str()
+        );
+        assert_eq!(request.plaintext_digest(), "ab".repeat(32));
+        assert_eq!(request.coordinator_session_id(), "session_sealing_adapter_01");
+        assert_eq!(
+            request.coordinator_fencing_token(),
+            "fence_sealing_adapter_01"
+        );
+        assert_eq!(request.coordinator_epoch(), 7);
+        let body_text = String::from_utf8_lossy(body);
+        assert!(!body_text.contains("device_sealing_adapter_01"));
+        assert!(!body_text.contains("rootKeyVersion"));
+        assert!(!body_text.contains("coordinatorVersion"));
+        assert!(!body_text.contains("coordinatorSequence"));
+        Ok(())
+    }
+
+    #[test]
+    fn sealing_material_requires_live_exact_cursor_before_transport()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let tenant_id = TenantId::parse("tenant_sealing_no_cursor_01")?;
+        let profile_id = ProfileId::parse("profile_sealing_no_cursor_01")?;
+        let base_generation_id = GenerationId::parse("generation_sealing_no_cursor_base_01")?;
+        let generation_id = GenerationId::parse("generation_sealing_no_cursor_next_01")?;
+        let mut coordinator = ControlPlaneCoordinator::new(SealingMachineHttp::default());
+        assert_eq!(
+            coordinator
+                .material_for(
+                    &tenant_id,
+                    &profile_id,
+                    &base_generation_id,
+                    &generation_id,
+                    [0; 32],
+                )
+                .map(|_| ()),
+            Err(ShippingControlPlaneError::InvalidResponse)
+        );
+        assert!(coordinator.transport.requests.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn sealing_material_rejects_noncanonical_or_oversized_secret_response()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let malformed = [
+            serde_json::to_vec(&BridgeGenerationSealingMaterialResponse::new(
+                "profile-generation-root-v1-02",
+                "ab".repeat(32),
+                "cd".repeat(16),
+                GENERATION_SEALING_CHUNK_BYTES,
+            ))?,
+            serde_json::to_vec(&BridgeGenerationSealingMaterialResponse::new(
+                "profile-generation-root-v1-2",
+                "AB".repeat(32),
+                "cd".repeat(16),
+                GENERATION_SEALING_CHUNK_BYTES,
+            ))?,
+            serde_json::to_vec(&BridgeGenerationSealingMaterialResponse::new(
+                "profile-generation-root-v1-2",
+                "ab".repeat(32),
+                "CD".repeat(16),
+                GENERATION_SEALING_CHUNK_BYTES,
+            ))?,
+            serde_json::to_vec(&BridgeGenerationSealingMaterialResponse::new(
+                "profile-generation-root-v1-2",
+                "ab".repeat(32),
+                "cd".repeat(16),
+                1,
+            ))?,
+            br#"{"keyId":"profile-generation-root-v1-2","dekHex":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","noncePrefixHex":"cccccccccccccccccccccccccccccccc","chunkSize":65536,"unexpected":true}"#.to_vec(),
+            vec![b'x'; MAX_SEALING_MATERIAL_RESPONSE_BYTES + 1],
+        ];
+        for body in malformed {
+            let mut fixture = SealingFixture::new(MachineHttpResponse::new(200, body))?;
+            assert_eq!(
+                fixture.request_material(),
+                Err(ShippingControlPlaneError::InvalidResponse)
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn sealing_material_rejects_non_success_without_reclassification()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let mut fixture = SealingFixture::new(MachineHttpResponse::new(403, b"denied".to_vec()))?;
+        assert_eq!(
+            fixture.request_material(),
+            Err(ShippingControlPlaneError::HttpStatus)
+        );
         Ok(())
     }
 }
