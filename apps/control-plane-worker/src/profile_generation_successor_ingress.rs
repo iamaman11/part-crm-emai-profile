@@ -33,6 +33,7 @@ use control_plane_contract::generation_key_api::{
 use control_plane_contract::generation_reopen_api::{
     BridgeGenerationDownloadCapabilityRequest, BridgeGenerationDownloadCapabilityResponse,
     BridgeGenerationOpeningMaterialRequest, BridgeGenerationOpeningMaterialResponse,
+    GENERATION_DOWNLOAD_CAPABILITY_MAX_EXPIRES_SECONDS,
 };
 use control_plane_contract::profile_generation_api::{
     BridgeGenerationSuccessorCommitOutcomeDto, BridgeGenerationSuccessorCommitResponse,
@@ -41,14 +42,14 @@ use control_plane_contract::profile_generation_api::{
 use device_domain::DeviceJobTarget;
 use encrypted_generation_domain::{
     InspectedGenerationMetadataPrelude, MAX_GENERATION_METADATA_PRELUDE_BYTES,
-    inspect_generation_metadata_prelude,
+    canonical_generation_object_key, inspect_generation_metadata_prelude,
 };
 use profile_platform_primitives::{
     ActorContext, DeviceId, FencingToken, GenerationId, ProfileId, SessionId, UnixMillis,
 };
 use worker::{Date, Env, Method, Request, Response, Result};
 
-const CAPABILITY_EXPIRES_SECONDS: u32 = 300;
+const UPLOAD_CAPABILITY_EXPIRES_SECONDS: u32 = 300;
 type UploadSigningTimeResult =
     core::result::Result<R2GenerationUploadSigningTime, R2GenerationUploadCapabilityError>;
 type DownloadSigningTimeResult =
@@ -281,7 +282,7 @@ pub(crate) async fn dispatch_authorized(
                 actor.tenant_scope(),
                 &descriptor,
                 &signing_time,
-                CAPABILITY_EXPIRES_SECONDS,
+                UPLOAD_CAPABILITY_EXPIRES_SECONDS,
             ) {
                 Ok(value) => value,
                 Err(error) => return signing_failure(actor.correlation_id().as_str(), error),
@@ -425,7 +426,7 @@ async fn dispatch_download_capability(
         actor.tenant_scope(),
         &descriptor,
         &signing_time,
-        CAPABILITY_EXPIRES_SECONDS,
+        GENERATION_DOWNLOAD_CAPABILITY_MAX_EXPIRES_SECONDS,
     ) {
         Ok(value) => value,
         Err(error) => {
@@ -793,11 +794,10 @@ fn descriptor_shape_is_canonical(
     container_digest: &str,
 ) -> bool {
     object_key
-        == format!(
-            "tenants/{}/profiles/{}/generations/{}.bpgc",
-            actor.tenant_scope().tenant_id().as_str(),
-            profile_id.as_str(),
-            generation_id.as_str(),
+        == canonical_generation_object_key(
+            actor.tenant_scope().tenant_id(),
+            profile_id,
+            generation_id,
         )
         && lower_sha256(metadata_digest)
         && lower_sha256(container_digest)
@@ -1008,6 +1008,7 @@ mod tests {
         BridgeGenerationMachineOperation, decode_bounded_lower_hex, decode_lower_sha256,
         descriptor_shape_is_canonical, operation,
     };
+    use encrypted_generation_domain::canonical_generation_object_key;
     use profile_platform_primitives::{
         ActorContext, ActorId, CorrelationId, GenerationId, ProfileId, TenantId, TenantScope,
     };
@@ -1111,11 +1112,10 @@ mod tests {
         );
         let profile_id = ProfileId::parse("profile_successor_ingress_01")?;
         let generation_id = GenerationId::parse("generation_successor_ingress_01")?;
-        let key = format!(
-            "tenants/{}/profiles/{}/generations/{}.bpgc",
-            actor.tenant_scope().tenant_id().as_str(),
-            profile_id.as_str(),
-            generation_id.as_str(),
+        let key = canonical_generation_object_key(
+            actor.tenant_scope().tenant_id(),
+            &profile_id,
+            &generation_id,
         );
         assert!(descriptor_shape_is_canonical(
             &actor,
