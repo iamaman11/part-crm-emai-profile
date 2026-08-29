@@ -12,6 +12,11 @@ use crate::profile_coordinator::{
     CoordinatorProjection, StoredCoordinatorCommand, StoredCoordinatorEnvelope,
     StoredReleaseDisposition,
 };
+use crate::profile_generation_successor_runtime::{
+    PROFILE_GENERATION_SUCCESSOR_COMMIT_PATH, ProfileGenerationSuccessorInternalErrorClass,
+    ProfileGenerationSuccessorInternalErrorResponse, ProfileGenerationSuccessorInternalOutcome,
+    ProfileGenerationSuccessorInternalRequest, ProfileGenerationSuccessorInternalResponse,
+};
 use application_ports::ClockPort;
 use application_ports::coordinator_ingress::{
     CoordinatorIngressApplicationPort, CoordinatorIngressPortError,
@@ -21,6 +26,11 @@ use application_ports::coordinator_ingress::{
 use application_ports::device_generation_commit::{
     DeviceGenerationCommitError, DeviceGenerationCommitErrorClass, DeviceGenerationCommitOutcome,
     DeviceGenerationCommitPort, DeviceGenerationCommitRequest,
+};
+use application_ports::profile_generation_successor::{
+    ProfileGenerationSuccessorCommitError, ProfileGenerationSuccessorCommitErrorClass,
+    ProfileGenerationSuccessorCommitOutcome, ProfileGenerationSuccessorCommitPort,
+    ProfileGenerationSuccessorCommitRequest,
 };
 use identity_access_domain::MembershipRole;
 use profile_platform_primitives::{
@@ -190,6 +200,83 @@ impl DeviceGenerationCommitPort for CloudflareDeviceGenerationCommitPort<'_> {
                 generation_commit_dependency()
             }
             _ => generation_commit_dependency(),
+        })
+    }
+}
+
+pub struct CloudflareProfileGenerationSuccessorCommitPort<'a> {
+    env: &'a Env,
+    coordinator_binding: &'a str,
+}
+
+impl<'a> CloudflareProfileGenerationSuccessorCommitPort<'a> {
+    #[must_use]
+    pub const fn new(env: &'a Env, coordinator_binding: &'a str) -> Self {
+        Self {
+            env,
+            coordinator_binding,
+        }
+    }
+}
+
+impl ProfileGenerationSuccessorCommitPort for CloudflareProfileGenerationSuccessorCommitPort<'_> {
+    async fn commit_profile_generation_successor(
+        &self,
+        actor: &ActorContext,
+        request: &ProfileGenerationSuccessorCommitRequest,
+    ) -> Result<ProfileGenerationSuccessorCommitOutcome, ProfileGenerationSuccessorCommitError>
+    {
+        let namespace = self
+            .env
+            .durable_object(self.coordinator_binding)
+            .map_err(|_| profile_successor_dependency())?;
+        let object_id = namespace
+            .id_from_name(&coordinator_object_name(request.profile_id()))
+            .map_err(|_| profile_successor_dependency())?;
+        let stub = object_id
+            .get_stub()
+            .map_err(|_| profile_successor_dependency())?;
+        let internal = ProfileGenerationSuccessorInternalRequest::from_domain(actor, request);
+        let request = profile_successor_internal_request(&internal)?;
+        let mut response = stub
+            .fetch_with_request(request)
+            .await
+            .map_err(|_| profile_successor_dependency())?;
+
+        if response.status_code() == 200 {
+            let body = response
+                .json::<ProfileGenerationSuccessorInternalResponse>()
+                .await
+                .map_err(|_| profile_successor_integrity())?;
+            return Ok(match body.outcome {
+                ProfileGenerationSuccessorInternalOutcome::Activated => {
+                    ProfileGenerationSuccessorCommitOutcome::Activated
+                }
+                ProfileGenerationSuccessorInternalOutcome::AlreadyActive => {
+                    ProfileGenerationSuccessorCommitOutcome::AlreadyActive
+                }
+            });
+        }
+
+        let status = response.status_code();
+        let body = response
+            .json::<ProfileGenerationSuccessorInternalErrorResponse>()
+            .await
+            .map_err(|_| profile_successor_dependency())?;
+        Err(match (status, body.class) {
+            (409, ProfileGenerationSuccessorInternalErrorClass::StaleAuthority) => {
+                profile_successor_stale_authority()
+            }
+            (409, ProfileGenerationSuccessorInternalErrorClass::VersionConflict) => {
+                profile_successor_version_conflict()
+            }
+            (400 | 500, ProfileGenerationSuccessorInternalErrorClass::IntegrityFailure) => {
+                profile_successor_integrity()
+            }
+            (503, ProfileGenerationSuccessorInternalErrorClass::DependencyUnavailable) => {
+                profile_successor_dependency()
+            }
+            _ => profile_successor_dependency(),
         })
     }
 }
@@ -424,7 +511,7 @@ fn runtime_result(
             projection.active_epoch,
             projection.idle_expires_at_ms.map(UnixMillis::new),
             projection.hard_expires_at_ms.map(UnixMillis::new),
-            projection.drain_deadline_ms.map(UnixMillis::new),
+            projection.drain_deadline_ms.map(UnixMillis::value),
             projection
                 .pending_launch_intent_id
                 .map(LaunchIntentId::parse)
@@ -528,6 +615,25 @@ fn generation_commit_internal_request(
     .map_err(|_| generation_commit_dependency())
 }
 
+fn profile_successor_internal_request(
+    body: &ProfileGenerationSuccessorInternalRequest,
+) -> Result<Request, ProfileGenerationSuccessorCommitError> {
+    let payload = serde_json::to_string(body).map_err(|_| profile_successor_integrity())?;
+    let headers = Headers::new();
+    headers
+        .set("content-type", "application/json")
+        .map_err(|_| profile_successor_dependency())?;
+    let mut init = RequestInit::new();
+    init.with_method(Method::Post)
+        .with_headers(headers)
+        .with_body(Some(JsValue::from_str(&payload)));
+    Request::new_with_init(
+        &format!("https://profile-coordinator.internal{PROFILE_GENERATION_SUCCESSOR_COMMIT_PATH}"),
+        &init,
+    )
+    .map_err(|_| profile_successor_dependency())
+}
+
 #[derive(Serialize)]
 struct CoordinatorSnapshotRequest<'a> {
     tenant_id: &'a str,
@@ -578,4 +684,28 @@ const fn generation_commit_integrity() -> DeviceGenerationCommitError {
 
 const fn generation_commit_dependency() -> DeviceGenerationCommitError {
     DeviceGenerationCommitError::new(DeviceGenerationCommitErrorClass::DependencyUnavailable)
+}
+
+const fn profile_successor_stale_authority() -> ProfileGenerationSuccessorCommitError {
+    ProfileGenerationSuccessorCommitError::new(
+        ProfileGenerationSuccessorCommitErrorClass::StaleAuthority,
+    )
+}
+
+const fn profile_successor_version_conflict() -> ProfileGenerationSuccessorCommitError {
+    ProfileGenerationSuccessorCommitError::new(
+        ProfileGenerationSuccessorCommitErrorClass::VersionConflict,
+    )
+}
+
+const fn profile_successor_integrity() -> ProfileGenerationSuccessorCommitError {
+    ProfileGenerationSuccessorCommitError::new(
+        ProfileGenerationSuccessorCommitErrorClass::IntegrityFailure,
+    )
+}
+
+const fn profile_successor_dependency() -> ProfileGenerationSuccessorCommitError {
+    ProfileGenerationSuccessorCommitError::new(
+        ProfileGenerationSuccessorCommitErrorClass::DependencyUnavailable,
+    )
 }
