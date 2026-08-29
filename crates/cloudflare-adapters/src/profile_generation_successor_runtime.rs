@@ -65,8 +65,10 @@ impl ProfileGenerationSuccessorInternalRequest {
     pub fn into_domain(
         self,
         observed_at: UnixMillis,
-    ) -> Result<(ActorContext, ProfileGenerationSuccessorCommitRequest), ProfileGenerationSuccessorCommitError>
-    {
+    ) -> Result<
+        (ActorContext, ProfileGenerationSuccessorCommitRequest),
+        ProfileGenerationSuccessorCommitError,
+    > {
         let tenant_id = TenantId::parse(self.tenant_id).map_err(|_| integrity_failure())?;
         let actor = ActorContext::new(
             TenantScope::new(tenant_id),
@@ -86,7 +88,8 @@ impl ProfileGenerationSuccessorInternalRequest {
                 self.container_digest,
                 self.container_bytes,
             ),
-            AggregateVersion::new(self.expected_profile_version).map_err(|_| integrity_failure())?,
+            AggregateVersion::new(self.expected_profile_version)
+                .map_err(|_| integrity_failure())?,
             ProfileGenerationCommitWitness::new(
                 SessionId::parse(self.coordinator_session_id).map_err(|_| integrity_failure())?,
                 FencingToken::parse(self.coordinator_fencing_token)
