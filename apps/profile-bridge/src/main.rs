@@ -68,7 +68,7 @@ mod tests {
             "profile-bridge".to_owned(),
             "profilebridge://claim/claim_01JBRIDGE_FEASIBILITY".to_owned(),
         ])?;
-        assert_eq!(claim.scheme(), "profilebridge");
+        assert!(!format!("{claim:?}").contains("claim_01JBRIDGE_FEASIBILITY"));
         Ok(())
     }
 
