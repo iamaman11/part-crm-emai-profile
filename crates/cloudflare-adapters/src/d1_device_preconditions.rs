@@ -200,8 +200,8 @@ impl ActiveGenerationObjectReferencePort for D1DeviceExecutionPreconditions {
         .map_err(|_| generation_dependency_failure())?;
 
         row.map(|row| {
-            let generation_id =
-                GenerationId::parse(row.generation_id).map_err(|_| generation_integrity_failure())?;
+            let generation_id = GenerationId::parse(row.generation_id)
+                .map_err(|_| generation_integrity_failure())?;
             let canonical_key = format!(
                 "tenants/{}/profiles/{}/generations/{}.bpgc",
                 scope.tenant_id().as_str(),
