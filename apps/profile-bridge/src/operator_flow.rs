@@ -1,8 +1,12 @@
 use crate::ProcessControlPort;
 use crate::authoritative_generation::ensure_authoritative_generation;
+#[cfg(any(test, feature = "synthetic-test-bin"))]
 use crate::browser_mail_query::BrowserMailExecutionProof;
-use crate::dirty_close::{DirtyCloseCompletion, RetainedDirtyClose, RetainedDirtyCloseError};
-use crate::dirty_generation::PreparedDirtyGeneration;
+use crate::dirty_close::{
+    DirtyCloseCompletion, DirtyCloseLocalOutcome, RetainedDirtyClose, RetainedDirtyCloseError,
+};
+use crate::dirty_generation::{GenerationSealingMaterialPort, PreparedDirtyGeneration};
+#[cfg(any(test, feature = "synthetic-test-bin"))]
 use crate::dirty_generation_finalize::DirtyGenerationCommitClientPort;
 use crate::generation_reopen::{GenerationObjectDownloadPort, GenerationReopenControlPort};
 use crate::local_profile::{
@@ -12,14 +16,22 @@ use crate::local_profile::{
 use crate::runtime_bundle::{
     ApprovedRuntimeBundle, RuntimeLaunchError, RuntimeSessionOrchestrator,
 };
+use crate::shipping_control_plane::MachineHttpPort;
+use crate::shipping_generation_save::{
+    CommittedGenerationSuccessor, SignedGenerationObjectPutPort,
+    prepare_retained_generation_successor, publish_verify_and_commit_successor,
+};
+use crate::shipping_generation_successor_control::ControlPlaneGenerationSuccessor;
+#[cfg(any(test, feature = "synthetic-test-bin"))]
 use application_ports::generation_objects::{
     GenerationObjectExactVerifyPort, GenerationObjectUploadPort,
 };
 use application_ports::{ProfileCoordinatorPort, ProfileCoordinatorRuntimePort};
 use bridge_domain::{CamouhostPort, ClaimUri, DeviceIdentityPort, DeviceKeyPort};
+#[cfg(any(test, feature = "synthetic-test-bin"))]
+use profile_platform_primitives::TenantScope;
 use profile_platform_primitives::{
-    ActorContext, DeviceId, GenerationId, LaunchIntentId, ProfileId, SessionId, TenantScope,
-    UnixMillis,
+    ActorContext, DeviceId, GenerationId, LaunchIntentId, ProfileId, SessionId, UnixMillis,
 };
 use session_domain::ProfileLease;
 use std::fmt;
@@ -125,6 +137,7 @@ pub enum OperatorFailureStage {
     LocalLifecycle,
     RuntimeLaunch,
     RuntimeClose,
+    GenerationSave,
     RuntimeAbort,
 }
 
@@ -193,6 +206,31 @@ impl OperatorTerminalRecord {
     #[must_use]
     pub const fn cleanup_failures(&self) -> CleanupFailures {
         self.cleanup_failures
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct OperatorGenerationSaveCompletion {
+    committed: CommittedGenerationSuccessor,
+    local: DirtyCloseCompletion,
+}
+
+impl OperatorGenerationSaveCompletion {
+    #[must_use]
+    pub const fn committed(&self) -> &CommittedGenerationSuccessor {
+        &self.committed
+    }
+
+    #[must_use]
+    pub const fn local(&self) -> &DirtyCloseCompletion {
+        &self.local
+    }
+
+    /// `Saved` is intentionally stronger than backend commit. It requires the exact committed
+    /// candidate to remain locally accepted and both retained ownership layers to be released.
+    #[must_use]
+    pub fn is_saved(&self) -> bool {
+        self.local.is_fully_saved_locally()
     }
 }
 
@@ -587,6 +625,134 @@ where
         }
     }
 
+    /// Canonical ordinary P3 save. Pre-commit failures retain dirty local ownership and the exact
+    /// coordinator lease for retry. Once `publish_verify_and_commit_successor` returns, N+1 is the
+    /// backend authority permanently; local completion can require recovery but can never fall back
+    /// to N or undo the commit.
+    pub fn save_retained_successor<T, U>(
+        &mut self,
+        root: &MaterializationRoot,
+        transport: T,
+        upload: &mut U,
+        now: UnixMillis,
+    ) -> Result<OperatorGenerationSaveCompletion, OperatorFlowError>
+    where
+        C: GenerationSealingMaterialPort,
+        T: MachineHttpPort,
+        U: SignedGenerationObjectPutPort,
+    {
+        if self.cleanup_blocked {
+            return Err(OperatorFlowError::CleanupRequired);
+        }
+        let (lease, base_record, workspace) = {
+            let retained = self.retained_dirty.as_ref().ok_or(OperatorFlowError::Stage(
+                OperatorFailureStage::GenerationSave,
+            ))?;
+            let workspace = retained
+                .open_base_workspace(root)
+                .map_err(|_| OperatorFlowError::Stage(OperatorFailureStage::GenerationSave))?;
+            (
+                retained.lease().clone(),
+                retained.base_record().clone(),
+                workspace,
+            )
+        };
+
+        let mut control = ControlPlaneGenerationSuccessor::new(transport, &mut self.coordinator);
+        let prepared = prepare_retained_generation_successor(
+            &base_record,
+            &workspace,
+            root,
+            lease.tenant_id(),
+            lease.profile_id(),
+            &lease,
+            &mut control,
+        )
+        .map_err(|_| OperatorFlowError::Stage(OperatorFailureStage::GenerationSave))?;
+        let committed = publish_verify_and_commit_successor(
+            lease.tenant_id(),
+            lease.profile_id(),
+            base_record.generation_id(),
+            &prepared,
+            &lease,
+            &mut control,
+            upload,
+        )
+        .map_err(|_| OperatorFlowError::Stage(OperatorFailureStage::GenerationSave))?;
+        drop(control);
+
+        let (completion, session_id, local_state) = {
+            let retained = self
+                .retained_dirty
+                .as_mut()
+                .ok_or(OperatorFlowError::Stage(
+                    OperatorFailureStage::GenerationSave,
+                ))?;
+            let session_id = retained.lease().session_id().clone();
+            let completion = retained.complete_committed_successor(
+                root,
+                &prepared,
+                &committed,
+                &mut self.coordinator,
+                now,
+            );
+            let local_state = retained.base_record().state();
+            (completion, session_id, local_state)
+        };
+
+        let completion = match completion {
+            Ok(value) => value,
+            Err(_) => {
+                let cleanup = CleanupFailures {
+                    process: false,
+                    workspace_lock: true,
+                    coordinator_lease: true,
+                };
+                self.retained_dirty = None;
+                self.last_terminal = Some(OperatorTerminalRecord {
+                    session_id,
+                    generation_id: committed.generation_id().clone(),
+                    local_state,
+                    cleanup_failures: cleanup,
+                });
+                self.cleanup_blocked = true;
+                return Err(OperatorFlowError::Terminal {
+                    stage: OperatorFailureStage::GenerationSave,
+                    local_state,
+                    cleanup,
+                });
+            }
+        };
+
+        let cleanup = CleanupFailures {
+            process: false,
+            workspace_lock: !completion.workspace_lock_released(),
+            coordinator_lease: !completion.coordinator_lease_released(),
+        };
+        let rematerialization_blocked = matches!(
+            completion.local_outcome(),
+            DirtyCloseLocalOutcome::RematerializationBlocked { .. }
+        );
+        self.retained_dirty = None;
+        self.last_terminal = Some(OperatorTerminalRecord {
+            session_id,
+            generation_id: committed.generation_id().clone(),
+            local_state,
+            cleanup_failures: cleanup,
+        });
+        if cleanup.any() || rematerialization_blocked {
+            self.cleanup_blocked = true;
+        }
+
+        Ok(OperatorGenerationSaveCompletion {
+            committed,
+            local: completion,
+        })
+    }
+
+    /// Historical DeviceJob-shaped Bridge finalize remains available only to test/synthetic
+    /// fixtures while they are migrated. Shipping production code cannot compile against it.
+    #[cfg(any(test, feature = "synthetic-test-bin"))]
     #[allow(clippy::too_many_arguments)]
     pub async fn finalize_dirty_close<U, V, M>(
         &mut self,
