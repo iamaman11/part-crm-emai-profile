@@ -422,8 +422,7 @@ mod tests {
 
     #[test]
     fn verified_upload_response_contains_no_capability() -> Result<(), Box<dyn std::error::Error>> {
-        let json =
-            serde_json::to_value(BridgeGenerationUploadCapabilityResponse::verified())?;
+        let json = serde_json::to_value(BridgeGenerationUploadCapabilityResponse::verified())?;
         assert_eq!(json["state"], "verified");
         assert!(json["method"].is_null());
         assert!(json["url"].is_null());
