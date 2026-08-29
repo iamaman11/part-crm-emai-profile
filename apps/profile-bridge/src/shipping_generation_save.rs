@@ -51,9 +51,7 @@ impl SignedGenerationUploadCapability {
         std::str::from_utf8(&self.url).map_err(|_| InvalidSignedGenerationUploadCapability)
     }
 
-    pub fn headers(
-        &self,
-    ) -> Result<Vec<(&str, &str)>, InvalidSignedGenerationUploadCapability> {
+    pub fn headers(&self) -> Result<Vec<(&str, &str)>, InvalidSignedGenerationUploadCapability> {
         self.headers
             .iter()
             .map(|(name, value)| {
