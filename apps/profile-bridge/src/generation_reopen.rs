@@ -17,7 +17,6 @@ pub struct GenerationDownloadCapability {
 }
 
 impl GenerationDownloadCapability {
-    #[cfg(test)]
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         generation_id: GenerationId,
