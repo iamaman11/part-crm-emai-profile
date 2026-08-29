@@ -1,7 +1,6 @@
 #[cfg(any(test, feature = "synthetic-test-bin"))]
 use crate::browser_mail_query::BrowserMailExecutionProof;
 use crate::dirty_generation::PreparedDirtyGeneration;
-#[cfg(any(test, feature = "synthetic-test-bin"))]
 use crate::dirty_generation_finalize::{
     DirtyGenerationCommitClientPort, DirtyGenerationFinalizeError,
     publish_verify_and_commit_dirty_generation,
@@ -136,8 +135,8 @@ impl RetainedDirtyClose {
             .workspace_lock
             .take()
             .is_some_and(|workspace_lock| workspace_lock.release().is_ok());
-        let local_unlock_recorded = !physical_workspace_lock_released
-            || self.base.set_locked(false).is_ok();
+        let local_unlock_recorded =
+            !physical_workspace_lock_released || self.base.set_locked(false).is_ok();
         let workspace_lock_released = physical_workspace_lock_released && local_unlock_recorded;
         let coordinator_lease_released = coordinator.close_lease(&self.lease).is_ok();
 
@@ -315,7 +314,6 @@ impl DirtyCloseCompletion {
 #[derive(Debug, Eq, PartialEq)]
 pub enum RetainedDirtyCloseError<C> {
     InvalidRetainedOwnership,
-    #[cfg(any(test, feature = "synthetic-test-bin"))]
     Finalize(DirtyGenerationFinalizeError<C>),
     Local(LocalProfileError),
 }
@@ -326,7 +324,6 @@ impl<C: fmt::Display> fmt::Display for RetainedDirtyCloseError<C> {
             Self::InvalidRetainedOwnership => {
                 formatter.write_str("dirty close retained ownership is invalid")
             }
-            #[cfg(any(test, feature = "synthetic-test-bin"))]
             Self::Finalize(error) => write!(formatter, "dirty close finalization failed: {error}"),
             Self::Local(error) => write!(formatter, "dirty close local transition failed: {error}"),
         }
