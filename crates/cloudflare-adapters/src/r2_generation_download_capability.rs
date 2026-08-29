@@ -1,5 +1,9 @@
 use application_ports::generation_objects::GenerationObjectDescriptor;
+use control_plane_contract::generation_reopen_api::GENERATION_DOWNLOAD_CAPABILITY_MAX_EXPIRES_SECONDS;
 use core::fmt;
+use encrypted_generation_domain::{
+    MAX_GENERATION_CONTAINER_BYTES, canonical_generation_object_key,
+};
 use profile_platform_primitives::TenantScope;
 use sha2::{Digest, Sha256};
 use zeroize::Zeroize;
@@ -9,7 +13,6 @@ const REGION: &str = "auto";
 const SERVICE: &str = "s3";
 const TERMINATOR: &str = "aws4_request";
 const UNSIGNED_PAYLOAD: &str = "UNSIGNED-PAYLOAD";
-const MAX_EXPIRES_SECONDS: u32 = 300;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct R2GenerationDownloadSigningTime {
@@ -38,7 +41,9 @@ impl R2GenerationDownloadSigningTime {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+/// Short-lived descriptor-bound GET bearer capability. The URL is intentionally not Clone and is
+/// redacted from Debug; dropping the capability zeroizes the bearer material.
+#[derive(Eq, PartialEq)]
 pub struct R2GenerationDownloadCapability {
     url: String,
     expires_seconds: u32,
@@ -53,6 +58,22 @@ impl R2GenerationDownloadCapability {
     #[must_use]
     pub const fn expires_seconds(&self) -> u32 {
         self.expires_seconds
+    }
+}
+
+impl fmt::Debug for R2GenerationDownloadCapability {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("R2GenerationDownloadCapability")
+            .field("url", &"[REDACTED]")
+            .field("expires_seconds", &self.expires_seconds)
+            .finish()
+    }
+}
+
+impl Drop for R2GenerationDownloadCapability {
+    fn drop(&mut self) {
+        self.url.zeroize();
     }
 }
 
@@ -103,7 +124,9 @@ impl R2GenerationDownloadCapabilitySigner {
         signing_time: &R2GenerationDownloadSigningTime,
         expires_seconds: u32,
     ) -> Result<R2GenerationDownloadCapability, R2GenerationDownloadCapabilityError> {
-        if expires_seconds == 0 || expires_seconds > MAX_EXPIRES_SECONDS {
+        if expires_seconds == 0
+            || expires_seconds > GENERATION_DOWNLOAD_CAPABILITY_MAX_EXPIRES_SECONDS
+        {
             return Err(R2GenerationDownloadCapabilityError::InvalidExpiry);
         }
         validate_descriptor(scope, descriptor)?;
@@ -197,14 +220,16 @@ fn validate_descriptor(
     scope: &TenantScope,
     descriptor: &GenerationObjectDescriptor,
 ) -> Result<(), R2GenerationDownloadCapabilityError> {
-    let canonical_key = format!(
-        "tenants/{}/profiles/{}/generations/{}.bpgc",
-        scope.tenant_id().as_str(),
-        descriptor.profile_id().as_str(),
-        descriptor.generation_id().as_str(),
+    let canonical_key = canonical_generation_object_key(
+        scope.tenant_id(),
+        descriptor.profile_id(),
+        descriptor.generation_id(),
     );
+    let max_container_bytes = u64::try_from(MAX_GENERATION_CONTAINER_BYTES)
+        .map_err(|_| R2GenerationDownloadCapabilityError::InvalidDescriptor)?;
     if descriptor.object_key() != canonical_key
         || descriptor.container_bytes() == 0
+        || descriptor.container_bytes() > max_container_bytes
         || !is_lower_hex_sha256(descriptor.metadata_digest())
         || !is_lower_hex_sha256(descriptor.container_digest())
     {
@@ -307,15 +332,26 @@ const fn hex_lower_digit(value: u8) -> char {
 
 #[cfg(test)]
 mod tests {
-    use super::{R2GenerationDownloadCapabilitySigner, R2GenerationDownloadSigningTime};
+    use super::{
+        R2GenerationDownloadCapability, R2GenerationDownloadCapabilitySigner,
+        R2GenerationDownloadSigningTime,
+    };
     use application_ports::generation_objects::GenerationObjectDescriptor;
+    use control_plane_contract::generation_reopen_api::GENERATION_DOWNLOAD_CAPABILITY_MAX_EXPIRES_SECONDS;
+    use encrypted_generation_domain::{
+        MAX_GENERATION_CONTAINER_BYTES, canonical_generation_object_key,
+    };
     use profile_platform_primitives::{GenerationId, ProfileId, TenantId, TenantScope};
 
     fn descriptor() -> Result<GenerationObjectDescriptor, Box<dyn std::error::Error>> {
+        let tenant_id = TenantId::parse("tenant_download_capability_01")?;
+        let profile_id = ProfileId::parse("profile_download_capability_01")?;
+        let generation_id = GenerationId::parse("generation_download_capability_01")?;
+        let object_key = canonical_generation_object_key(&tenant_id, &profile_id, &generation_id);
         Ok(GenerationObjectDescriptor::new(
-            ProfileId::parse("profile_download_capability_01")?,
-            GenerationId::parse("generation_download_capability_01")?,
-            "tenants/tenant_download_capability_01/profiles/profile_download_capability_01/generations/generation_download_capability_01.bpgc",
+            profile_id,
+            generation_id,
+            object_key,
             "d".repeat(64),
             "e".repeat(64),
             4096,
@@ -347,31 +383,56 @@ mod tests {
     }
 
     #[test]
+    fn download_capability_debug_redacts_bearer_url() {
+        let capability = R2GenerationDownloadCapability {
+            url: "https://example.invalid/object?X-Amz-Signature=DOWNLOAD_BEARER_SENTINEL"
+                .to_owned(),
+            expires_seconds: GENERATION_DOWNLOAD_CAPABILITY_MAX_EXPIRES_SECONDS,
+        };
+        let debug = format!("{capability:?}");
+        assert!(debug.contains("[REDACTED]"));
+        assert!(!debug.contains("DOWNLOAD_BEARER_SENTINEL"));
+    }
+
+    #[test]
     fn exact_get_capability_is_short_lived_and_object_bound()
     -> Result<(), Box<dyn std::error::Error>> {
         let scope = TenantScope::new(TenantId::parse("tenant_download_capability_01")?);
         let signing_time = R2GenerationDownloadSigningTime::parse("20260829T120000Z")?;
-        let capability = signer()?.sign_get(&scope, &descriptor()?, &signing_time, 300)?;
+        let capability = signer()?.sign_get(
+            &scope,
+            &descriptor()?,
+            &signing_time,
+            GENERATION_DOWNLOAD_CAPABILITY_MAX_EXPIRES_SECONDS,
+        )?;
         assert!(
             capability
                 .url()
                 .contains("/generation_download_capability_01.bpgc?")
         );
-        assert!(capability.url().contains("X-Amz-Expires=300"));
+        assert!(capability.url().contains(&format!(
+            "X-Amz-Expires={GENERATION_DOWNLOAD_CAPABILITY_MAX_EXPIRES_SECONDS}"
+        )));
         assert!(capability.url().contains("X-Amz-SignedHeaders=host"));
         assert!(capability.url().contains("X-Amz-Signature="));
-        assert_eq!(capability.expires_seconds(), 300);
+        assert_eq!(
+            capability.expires_seconds(),
+            GENERATION_DOWNLOAD_CAPABILITY_MAX_EXPIRES_SECONDS
+        );
         Ok(())
     }
 
     #[test]
-    fn signer_rejects_noncanonical_or_unbounded_descriptor()
+    fn signer_rejects_noncanonical_unbounded_or_expired_descriptor()
     -> Result<(), Box<dyn std::error::Error>> {
-        let scope = TenantScope::new(TenantId::parse("tenant_download_capability_01")?);
+        let tenant_id = TenantId::parse("tenant_download_capability_01")?;
+        let scope = TenantScope::new(tenant_id.clone());
         let signing_time = R2GenerationDownloadSigningTime::parse("20260829T120000Z")?;
-        let invalid = GenerationObjectDescriptor::new(
-            ProfileId::parse("profile_download_capability_01")?,
-            GenerationId::parse("generation_download_capability_01")?,
+        let profile_id = ProfileId::parse("profile_download_capability_01")?;
+        let generation_id = GenerationId::parse("generation_download_capability_01")?;
+        let invalid_key = GenerationObjectDescriptor::new(
+            profile_id.clone(),
+            generation_id.clone(),
             "tenants/other/profiles/profile_download_capability_01/generations/generation_download_capability_01.bpgc",
             "d".repeat(64),
             "e".repeat(64),
@@ -379,12 +440,42 @@ mod tests {
         );
         assert!(
             signer()?
-                .sign_get(&scope, &invalid, &signing_time, 300)
+                .sign_get(
+                    &scope,
+                    &invalid_key,
+                    &signing_time,
+                    GENERATION_DOWNLOAD_CAPABILITY_MAX_EXPIRES_SECONDS,
+                )
+                .is_err()
+        );
+
+        let object_key = canonical_generation_object_key(&tenant_id, &profile_id, &generation_id);
+        let oversized = GenerationObjectDescriptor::new(
+            profile_id,
+            generation_id,
+            object_key,
+            "d".repeat(64),
+            "e".repeat(64),
+            u64::try_from(MAX_GENERATION_CONTAINER_BYTES)? + 1,
+        );
+        assert!(
+            signer()?
+                .sign_get(
+                    &scope,
+                    &oversized,
+                    &signing_time,
+                    GENERATION_DOWNLOAD_CAPABILITY_MAX_EXPIRES_SECONDS,
+                )
                 .is_err()
         );
         assert!(
             signer()?
-                .sign_get(&scope, &descriptor()?, &signing_time, 301)
+                .sign_get(
+                    &scope,
+                    &descriptor()?,
+                    &signing_time,
+                    GENERATION_DOWNLOAD_CAPABILITY_MAX_EXPIRES_SECONDS + 1,
+                )
                 .is_err()
         );
         Ok(())
