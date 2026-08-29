@@ -1,8 +1,10 @@
 use crate::ProcessControlPort;
+use crate::authoritative_generation::ensure_authoritative_generation;
 use crate::browser_mail_query::BrowserMailExecutionProof;
 use crate::dirty_close::{DirtyCloseCompletion, RetainedDirtyClose, RetainedDirtyCloseError};
 use crate::dirty_generation::PreparedDirtyGeneration;
 use crate::dirty_generation_finalize::DirtyGenerationCommitClientPort;
+use crate::generation_reopen::{GenerationObjectDownloadPort, GenerationReopenControlPort};
 use crate::local_profile::{
     BridgeWorkspaceLock, GenerationWorkspace, LocalGenerationRecord, LocalGenerationState,
     LocalProfileError, MaterializationRoot,
@@ -117,6 +119,7 @@ pub enum OperatorFailureStage {
     CoordinatorClaim,
     CoordinatorHeartbeat,
     LeaseValidation,
+    AuthoritativeGeneration,
     LocalWorkspace,
     BrowserPreflight,
     LocalLifecycle,
@@ -303,12 +306,65 @@ where
         }
     }
 
+    /// Production P2 launch entrypoint. The server-selected authoritative generation is proven
+    /// and rematerialized, when absent locally, after the exact coordinator lease is acquired and
+    /// before the existing local preflight/runtime path is allowed to observe the workspace.
+    pub fn open_authoritative<Dl>(
+        &mut self,
+        claim: &ClaimUri,
+        root: &MaterializationRoot,
+        downloader: &mut Dl,
+        now: UnixMillis,
+    ) -> Result<(), OperatorFlowError>
+    where
+        C: GenerationReopenControlPort,
+        Dl: GenerationObjectDownloadPort,
+    {
+        self.open_with_materialization(
+            claim,
+            root,
+            now,
+            |coordinator, tenant_id, profile_id, generation_id| {
+                ensure_authoritative_generation(
+                    root,
+                    tenant_id,
+                    profile_id,
+                    generation_id,
+                    coordinator,
+                    downloader,
+                )
+                .map_err(|_| ())
+            },
+        )
+    }
+
+    /// Test/synthetic entrypoint for already-materialized fixtures. Shipping code cannot compile
+    /// against this predecessor shortcut; the production binary must use `open_authoritative`.
+    #[cfg(any(test, feature = "synthetic-test-bin"))]
     pub fn open(
         &mut self,
         claim: &ClaimUri,
         root: &MaterializationRoot,
         now: UnixMillis,
     ) -> Result<(), OperatorFlowError> {
+        self.open_with_materialization(
+            claim,
+            root,
+            now,
+            |_coordinator, _tenant_id, _profile_id, _generation_id| Ok(()),
+        )
+    }
+
+    fn open_with_materialization<F>(
+        &mut self,
+        claim: &ClaimUri,
+        root: &MaterializationRoot,
+        now: UnixMillis,
+        mut ensure_materialized: F,
+    ) -> Result<(), OperatorFlowError>
+    where
+        F: FnMut(&mut C, &profile_platform_primitives::TenantId, &ProfileId, &GenerationId) -> Result<(), ()>,
+    {
         if self.cleanup_blocked {
             return Err(OperatorFlowError::CleanupRequired);
         }
@@ -355,6 +411,19 @@ where
             || lease.device_id() != &device_id
         {
             return Err(self.fail_before_local_use(OperatorFailureStage::LeaseValidation, lease));
+        }
+
+        if ensure_materialized(
+            &mut self.coordinator,
+            enrollment.actor().tenant_scope().tenant_id(),
+            enrollment.profile_id(),
+            enrollment.generation_id(),
+        )
+        .is_err()
+        {
+            return Err(
+                self.fail_before_local_use(OperatorFailureStage::AuthoritativeGeneration, lease)
+            );
         }
 
         let workspace = match root.open_generation(
