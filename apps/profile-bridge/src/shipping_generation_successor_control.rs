@@ -1,8 +1,12 @@
-use crate::dirty_generation::{GenerationSealingMaterial, GenerationSealingMaterialPort, PreparedDirtyGeneration};
-use crate::shipping_control_plane::{MachineHttpMethod, MachineHttpPort, ShippingControlPlaneError};
+use crate::dirty_generation::{
+    GenerationSealingMaterial, GenerationSealingMaterialPort, PreparedDirtyGeneration,
+};
+use crate::shipping_control_plane::{
+    MachineHttpMethod, MachineHttpPort, ShippingControlPlaneError,
+};
 use crate::shipping_generation_save::{
-    GenerationSuccessorCommitOutcome, GenerationSuccessorControlPort, GenerationUploadAuthorization,
-    SignedGenerationUploadCapability,
+    GenerationSuccessorCommitOutcome, GenerationSuccessorControlPort,
+    GenerationUploadAuthorization, SignedGenerationUploadCapability,
 };
 use control_plane_contract::profile_generation_api::{
     BRIDGE_PROFILE_GENERATION_COMMIT_PATH_TEMPLATE,
@@ -33,8 +37,12 @@ pub enum GenerationSuccessorControlError<S> {
 impl<S: fmt::Display> fmt::Display for GenerationSuccessorControlError<S> {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Sealing(error) => write!(formatter, "generation sealing material failed: {error}"),
-            Self::ControlPlane(error) => write!(formatter, "generation successor control failed: {error}"),
+            Self::Sealing(error) => {
+                write!(formatter, "generation sealing material failed: {error}")
+            }
+            Self::ControlPlane(error) => {
+                write!(formatter, "generation successor control failed: {error}")
+            }
         }
     }
 }
@@ -257,9 +265,9 @@ fn valid_signed_upload_url(value: &str) -> bool {
 fn valid_header_name(value: &str) -> bool {
     !value.is_empty()
         && value.len() <= MAX_SIGNED_UPLOAD_HEADER_NAME_BYTES
-        && value.bytes().all(|byte| {
-            byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-'
-        })
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
 }
 
 fn valid_header_value(value: &str) -> bool {
@@ -282,9 +290,7 @@ fn next_correlation_id<S>() -> Result<CorrelationId, GenerationSuccessorControlE
         .map_err(|_| control_error(ShippingControlPlaneError::Clock))
 }
 
-const fn control_error<S>(
-    error: ShippingControlPlaneError,
-) -> GenerationSuccessorControlError<S> {
+const fn control_error<S>(error: ShippingControlPlaneError) -> GenerationSuccessorControlError<S> {
     GenerationSuccessorControlError::ControlPlane(error)
 }
 
@@ -292,7 +298,8 @@ const fn control_error<S>(
 mod tests {
     use super::{ControlPlaneGenerationSuccessor, GenerationSuccessorControlError};
     use crate::dirty_generation::{
-        GenerationSealingMaterial, GenerationSealingMaterialPort, prepare_dirty_generation_candidate,
+        GenerationSealingMaterial, GenerationSealingMaterialPort,
+        prepare_dirty_generation_candidate,
     };
     use crate::local_profile::{LocalGenerationRecord, MaterializationRoot};
     use crate::shipping_control_plane::{MachineHttpMethod, MachineHttpPort, MachineHttpResponse};
