@@ -18,7 +18,7 @@ pub(super) fn classify(method: &str, path: &str) -> RouteClass {
         return RouteClass::ProfileLaunchApi;
     }
     if bridge_profile_coordinator_route(method, path)
-        || bridge_profile_successor_route(method, path)
+        || bridge_profile_generation_machine_route(method, path)
     {
         return RouteClass::ProfileCoordinatorApi;
     }
@@ -86,7 +86,7 @@ fn bridge_profile_coordinator_route(method: &str, path: &str) -> bool {
 }
 
 #[must_use]
-fn bridge_profile_successor_route(method: &str, path: &str) -> bool {
+fn bridge_profile_generation_machine_route(method: &str, path: &str) -> bool {
     if method != "POST" {
         return false;
     }
@@ -106,6 +106,15 @@ fn bridge_profile_successor_route(method: &str, path: &str) -> bool {
             _,
             "generation-successor",
             "upload-capability" | "sealing-material" | "commit"
+        ] | [
+            "bridge",
+            "v1",
+            "tenants",
+            _,
+            "profiles",
+            _,
+            "generation-reopen",
+            "download-capability"
         ]
     )
 }
@@ -160,11 +169,12 @@ mod tests {
     }
 
     #[test]
-    fn only_exact_bridge_profile_successor_posts_escape_deny_default() {
+    fn only_exact_bridge_profile_generation_machine_posts_escape_deny_default() {
         for path in [
             "/bridge/v1/tenants/tenant_01/profiles/profile_01/generation-successor/upload-capability",
             "/bridge/v1/tenants/tenant_01/profiles/profile_01/generation-successor/sealing-material",
             "/bridge/v1/tenants/tenant_01/profiles/profile_01/generation-successor/commit",
+            "/bridge/v1/tenants/tenant_01/profiles/profile_01/generation-reopen/download-capability",
         ] {
             assert_eq!(classify("POST", path), RouteClass::ProfileCoordinatorApi);
             for method in ["GET", "PUT", "DELETE"] {
@@ -176,6 +186,8 @@ mod tests {
             "/bridge/v1/tenants/tenant_01/profiles/profile_01/generation-successor/verify",
             "/bridge/v1/tenants/tenant_01/profiles/profile_01/generation-successor/commit/extra",
             "/bridge/v1/tenants/tenant_01/profiles/generation-successor/commit",
+            "/bridge/v2/tenants/tenant_01/profiles/profile_01/generation-reopen/download-capability",
+            "/bridge/v1/tenants/tenant_01/profiles/profile_01/generation-reopen/download-capability/extra",
         ] {
             assert_eq!(classify("POST", invalid), RouteClass::BridgeDeniedByDefault);
         }
