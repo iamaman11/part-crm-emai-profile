@@ -15,6 +15,7 @@ pub mod launch_binding;
 pub mod local_profile;
 pub mod operator_flow;
 pub mod runtime_bundle;
+pub mod shipping_control_plane;
 pub mod shipping_preflight;
 
 #[cfg(test)]
@@ -117,6 +118,7 @@ impl CamouhostPort for FakeCamouhost {
 
 pub trait ProcessControlPort {
     fn spawn(&mut self, session_id: &SessionId) -> Result<(), BridgePortError>;
+    fn is_running(&mut self, session_id: &SessionId) -> Result<bool, BridgePortError>;
     fn request_graceful_close(&mut self, session_id: &SessionId) -> Result<(), BridgePortError>;
     fn confirm_stopped(&mut self, session_id: &SessionId) -> Result<(), BridgePortError>;
     fn force_terminate(&mut self, session_id: &SessionId) -> Result<(), BridgePortError>;
@@ -155,6 +157,14 @@ impl ProcessControlPort for FakeProcessControl {
         self.active_session = Some(session_id.clone());
         self.actions.push(ProcessAction::Spawn(session_id.clone()));
         Ok(())
+    }
+
+    fn is_running(&mut self, session_id: &SessionId) -> Result<bool, BridgePortError> {
+        match self.active_session.as_ref() {
+            Some(active) if active == session_id => Ok(true),
+            Some(_) => Err(BridgePortError::InvalidResponse),
+            None => Ok(false),
+        }
     }
 
     fn request_graceful_close(&mut self, session_id: &SessionId) -> Result<(), BridgePortError> {
@@ -271,8 +281,10 @@ mod tests {
         let session_id = SessionId::parse("session_01JPROCESS")?;
         let mut process = FakeProcessControl::default();
         process.spawn(&session_id)?;
+        assert!(process.is_running(&session_id)?);
         process.request_graceful_close(&session_id)?;
         process.force_terminate(&session_id)?;
+        assert!(!process.is_running(&session_id)?);
         assert_eq!(
             process.actions(),
             [
