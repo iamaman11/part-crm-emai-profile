@@ -86,8 +86,8 @@ impl FilesystemRuntimeBundleSelection {
         if metadata.file_type().is_symlink() || !metadata.is_dir() {
             return Err(RuntimeBundleSelectionError::InvalidRoot);
         }
-        let runtime_root = fs::canonicalize(runtime_root)
-            .map_err(|_| RuntimeBundleSelectionError::InvalidRoot)?;
+        let runtime_root =
+            fs::canonicalize(runtime_root).map_err(|_| RuntimeBundleSelectionError::InvalidRoot)?;
         Ok(Self { runtime_root })
     }
 
@@ -168,8 +168,8 @@ fn read_runtime_file(
     let relative = BundleRelativePath::parse(relative)
         .map_err(|_| RuntimeBundleSelectionError::InvalidRuntime)?;
     let path = runtime_root.join(relative.as_str());
-    let metadata = fs::symlink_metadata(&path)
-        .map_err(|_| RuntimeBundleSelectionError::MissingRuntimeFile)?;
+    let metadata =
+        fs::symlink_metadata(&path).map_err(|_| RuntimeBundleSelectionError::MissingRuntimeFile)?;
     if metadata.file_type().is_symlink()
         || !metadata.is_file()
         || metadata.len() == 0
