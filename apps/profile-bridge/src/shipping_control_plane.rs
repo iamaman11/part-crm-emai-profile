@@ -1120,7 +1120,7 @@ mod tests {
     -> Result<(), Box<dyn std::error::Error>> {
         let response = MachineHttpResponse::new(
             200,
-            br#"{\"tenantId\":\"tenant_01JBRIDGE\",\"actorId\":\"actor_01JBRIDGE\",\"profileId\":\"profile_01JBRIDGE\",\"generationId\":\"generation_01JBRIDGE\",\"deviceId\":\"device_01JBRIDGE\",\"launchIntentId\":\"launch_01JBRIDGE\"}"#.to_vec(),
+            br#"{"tenantId":"tenant_01JBRIDGE","actorId":"actor_01JBRIDGE","profileId":"profile_01JBRIDGE","generationId":"generation_01JBRIDGE","deviceId":"device_01JBRIDGE","launchIntentId":"launch_01JBRIDGE"}"#.to_vec(),
         );
         let mut enrollment = ControlPlaneEnrollment::new(FakeMachineHttp {
             responses: VecDeque::from([response]),
@@ -1140,7 +1140,7 @@ mod tests {
     fn enrollment_rejects_wrong_machine_binding() -> Result<(), Box<dyn std::error::Error>> {
         let response = MachineHttpResponse::new(
             200,
-            br#"{\"tenantId\":\"tenant_01JBRIDGE\",\"actorId\":\"actor_01JBRIDGE\",\"profileId\":\"profile_01JBRIDGE\",\"generationId\":\"generation_01JBRIDGE\",\"deviceId\":\"device_02JBRIDGE\",\"launchIntentId\":\"launch_01JBRIDGE\"}"#.to_vec(),
+            br#"{"tenantId":"tenant_01JBRIDGE","actorId":"actor_01JBRIDGE","profileId":"profile_01JBRIDGE","generationId":"generation_01JBRIDGE","deviceId":"device_02JBRIDGE","launchIntentId":"launch_01JBRIDGE"}"#.to_vec(),
         );
         let mut enrollment = ControlPlaneEnrollment::new(FakeMachineHttp {
             responses: VecDeque::from([response]),
@@ -1255,7 +1255,7 @@ mod tests {
                 "cd".repeat(16),
                 1,
             ))?,
-            br#"{\"keyId\":\"profile-generation-root-v1-2\",\"dekHex\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"noncePrefixHex\":\"cccccccccccccccccccccccccccccccc\",\"chunkSize\":65536,\"unexpected\":true}"#.to_vec(),
+            br#"{"keyId":"profile-generation-root-v1-2","dekHex":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","noncePrefixHex":"cccccccccccccccccccccccccccccccc","chunkSize":65536,"unexpected":true}"#.to_vec(),
             vec![b'x'; MAX_SEALING_MATERIAL_RESPONSE_BYTES + 1],
         ];
         for body in malformed {
