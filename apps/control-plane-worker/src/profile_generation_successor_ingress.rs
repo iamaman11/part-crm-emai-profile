@@ -515,8 +515,7 @@ async fn dispatch_opening_material(
         Ok(value) => value,
         Err(_) => return integrity_failure(actor.correlation_id().as_str()),
     };
-    if material.key_id() != metadata.key_id()
-        || material.nonce_prefix() != metadata.nonce_prefix()
+    if material.key_id() != metadata.key_id() || material.nonce_prefix() != metadata.nonce_prefix()
     {
         return integrity_failure(actor.correlation_id().as_str());
     }
