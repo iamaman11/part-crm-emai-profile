@@ -20,6 +20,7 @@ pub mod operator_flow;
 pub mod runtime_bundle;
 pub mod shipping_composition;
 pub mod shipping_control_plane;
+pub mod shipping_generation_save;
 pub mod shipping_network;
 pub mod shipping_preflight;
 
@@ -105,6 +106,14 @@ impl CamouhostPort for FakeCamouhost {
                 self.active_session = Some(session_id.clone());
                 Ok(CamouhostMessage::Ready {
                     session_id: session_id.clone(),
+                })
+            }
+            CamouhostMessage::ObserveClose { session_id }
+                if self.active_session.as_ref() == Some(session_id) =>
+            {
+                Ok(CamouhostMessage::CloseObserved {
+                    session_id: session_id.clone(),
+                    controlled: false,
                 })
             }
             CamouhostMessage::Close { session_id }
@@ -264,6 +273,15 @@ mod tests {
             })?,
             CamouhostMessage::Ready {
                 session_id: session_id.clone(),
+            }
+        );
+        assert_eq!(
+            runtime.exchange(&CamouhostMessage::ObserveClose {
+                session_id: session_id.clone(),
+            })?,
+            CamouhostMessage::CloseObserved {
+                session_id: session_id.clone(),
+                controlled: false,
             }
         );
         assert_eq!(
