@@ -83,7 +83,6 @@ mod microsoft_graph_translation_evidence;
 mod outbound_mail_evidence;
 pub mod profile_coordinator;
 pub mod profile_generation_successor_runtime;
-pub mod profile_generation_writer_authority;
 pub mod r2_generation_objects;
 pub mod r2_generation_upload_capability;
 mod resolver_request;
