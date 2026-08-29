@@ -14,9 +14,7 @@ use control_plane_contract::profile_launch_api::{
     BRIDGE_PROFILE_COORDINATOR_PATH_TEMPLATE, BRIDGE_PROFILE_LAUNCH_REDEMPTION_PATH,
     BridgeProfileLaunchRedemptionProjection, BridgeProfileLaunchRedemptionRequest,
 };
-use encrypted_generation_domain::{
-    GenerationDek, GenerationRootKeyVersion, KeyId, NoncePrefix,
-};
+use encrypted_generation_domain::{GenerationDek, GenerationRootKeyVersion, KeyId, NoncePrefix};
 use profile_platform_primitives::{
     ActorContext, ActorId, CorrelationId, DeviceId, FencingToken, GenerationId, IdempotencyKey,
     LaunchIntentId, ProfileId, SessionId, TenantId, TenantScope, UnixMillis,
@@ -469,8 +467,7 @@ where
             return Err(Self::Error::InvalidResponse);
         }
         let key_id = KeyId::parse(key_id).map_err(|_| Self::Error::InvalidResponse)?;
-        GenerationRootKeyVersion::from_key_id(&key_id)
-            .map_err(|_| Self::Error::InvalidResponse)?;
+        GenerationRootKeyVersion::from_key_id(&key_id).map_err(|_| Self::Error::InvalidResponse)?;
         let dek = decode_secret_dek(dek_hex.as_str()).ok_or(Self::Error::InvalidResponse)?;
         let nonce_prefix =
             decode_lower_hex::<16>(&nonce_prefix_hex).ok_or(Self::Error::InvalidResponse)?;
@@ -713,8 +710,8 @@ fn next_idempotency_key() -> Result<IdempotencyKey, ShippingControlPlaneError> {
 #[cfg(test)]
 mod tests {
     use super::{
-        ControlPlaneCoordinator, ControlPlaneEnrollment, ControlPlaneLeaseTiming, CoordinatorCursor,
-        MAX_SEALING_MATERIAL_RESPONSE_BYTES, MachineHttpMethod, MachineHttpPort,
+        ControlPlaneCoordinator, ControlPlaneEnrollment, ControlPlaneLeaseTiming,
+        CoordinatorCursor, MAX_SEALING_MATERIAL_RESPONSE_BYTES, MachineHttpMethod, MachineHttpPort,
         MachineHttpResponse, ShippingControlPlaneError, lease_timing,
     };
     use crate::dirty_generation::GenerationSealingMaterialPort;
@@ -934,7 +931,10 @@ mod tests {
             fixture.candidate_generation_id.as_str()
         );
         assert_eq!(request.plaintext_digest(), "ab".repeat(32));
-        assert_eq!(request.coordinator_session_id(), "session_sealing_adapter_01");
+        assert_eq!(
+            request.coordinator_session_id(),
+            "session_sealing_adapter_01"
+        );
         assert_eq!(
             request.coordinator_fencing_token(),
             "fence_sealing_adapter_01"
