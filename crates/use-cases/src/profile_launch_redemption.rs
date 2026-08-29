@@ -14,6 +14,30 @@ use contracts::ProblemCode;
 use identity_access_domain::MembershipRole;
 use profile_platform_primitives::{ActorContext, CorrelationId, TenantScope, UnixMillis};
 
+pub struct ProfileLaunchRedemptionInput<'a> {
+    correlation_id: &'a CorrelationId,
+    claim_code: &'a str,
+    authenticated_machine: &'a ProfileLaunchMachineBinding,
+    now: UnixMillis,
+}
+
+impl<'a> ProfileLaunchRedemptionInput<'a> {
+    #[must_use]
+    pub const fn new(
+        correlation_id: &'a CorrelationId,
+        claim_code: &'a str,
+        authenticated_machine: &'a ProfileLaunchMachineBinding,
+        now: UnixMillis,
+    ) -> Self {
+        Self {
+            correlation_id,
+            claim_code,
+            authenticated_machine,
+            now,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ValidatedProfileLaunchRedemption {
     binding: ProfileLaunchAuthorityBinding,
@@ -42,10 +66,7 @@ impl ValidatedProfileLaunchRedemption {
 /// actual machine. This phase is deliberately read-only: it proves the exact machine binding and
 /// reuses the canonical launch authorization/precondition owners without consuming the bearer.
 pub async fn validate_profile_launch_redemption<M, L, C, D, A, P>(
-    correlation_id: &CorrelationId,
-    claim_code: &str,
-    authenticated_machine: &ProfileLaunchMachineBinding,
-    now: UnixMillis,
+    input: ProfileLaunchRedemptionInput<'_>,
     memberships: &M,
     authority: &L,
     context_port: &C,
@@ -62,13 +83,17 @@ where
     P: DeviceExecutionPreconditionPort,
 {
     let binding = authority
-        .inspect_profile_launch_authority(claim_code, authenticated_machine.device_id(), now)
+        .inspect_profile_launch_authority(
+            input.claim_code,
+            input.authenticated_machine.device_id(),
+            input.now,
+        )
         .await
         .map_err(map_redemption_authority_error)?;
 
-    if binding.tenant_id() != authenticated_machine.tenant_id()
-        || binding.actor_id() != authenticated_machine.actor_id()
-        || binding.device_id() != authenticated_machine.device_id()
+    if binding.tenant_id() != input.authenticated_machine.tenant_id()
+        || binding.actor_id() != input.authenticated_machine.actor_id()
+        || binding.device_id() != input.authenticated_machine.device_id()
     {
         return Err(ApplicationError::new(ProblemCode::NotFound));
     }
@@ -79,7 +104,11 @@ where
         .await
         .map_err(map_membership_error)?
         .ok_or_else(|| ApplicationError::new(ProblemCode::NotFound))?;
-    let actor = ActorContext::new(scope, binding.actor_id().clone(), correlation_id.clone());
+    let actor = ActorContext::new(
+        scope,
+        binding.actor_id().clone(),
+        input.correlation_id.clone(),
+    );
 
     let target = authorize_profile_launch(
         &actor,
