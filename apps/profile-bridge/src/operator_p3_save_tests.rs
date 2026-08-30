@@ -249,10 +249,10 @@ impl MachineHttpPort for Transport {
             .generation_ids
             .borrow_mut()
             .push(request.generation_id().to_owned());
-        if path.ends_with("/commit") {
-            if let Some(hook) = self.commit_hook.as_ref() {
-                hook(&request)?;
-            }
+        if path.ends_with("/commit")
+            && let Some(hook) = self.commit_hook.as_ref()
+        {
+            hook(&request)?;
         }
         self.responses
             .pop_front()
