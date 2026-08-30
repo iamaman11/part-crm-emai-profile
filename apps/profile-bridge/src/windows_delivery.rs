@@ -184,10 +184,15 @@ pub struct AcceptedDeliveryFloor {
 impl AcceptedDeliveryFloor {
     #[must_use]
     pub fn from_candidate(candidate: &VerifiedDeliveryCandidate) -> Self {
+        Self::from_identity(&candidate.identity())
+    }
+
+    #[must_use]
+    pub fn from_identity(identity: &DeliveryIdentity) -> Self {
         Self {
-            sequence: candidate.manifest.sequence,
-            release_set_id: candidate.manifest.release_set_id.clone(),
-            manifest_sha256: candidate.manifest_sha256.clone(),
+            sequence: identity.sequence,
+            release_set_id: identity.release_set_id.clone(),
+            manifest_sha256: identity.manifest_sha256.clone(),
         }
     }
 
@@ -324,19 +329,55 @@ fn validate_component(
     Ok(())
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct DeliveryIdentity {
     pub sequence: u64,
     pub release_set_id: String,
     pub manifest_sha256: String,
 }
 
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DeliveryActivationOutcome {
+    PendingHealth,
+    Healthy,
+    RolledBack,
+    RecoveryRequired,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct DeliveryActivationEvidence {
+    pub attempt: u64,
+    pub candidate: DeliveryIdentity,
+    pub outcome: DeliveryActivationOutcome,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DeliveryFailureKind {
+    HealthRejected,
+    InterruptedActivation,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct DeliveryFailureEvidence {
+    pub candidate: DeliveryIdentity,
+    pub kind: DeliveryFailureKind,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct DeliveryState {
     active: Option<DeliveryIdentity>,
     active_health_confirmed: bool,
     last_known_good: Option<DeliveryIdentity>,
     staged: Option<DeliveryIdentity>,
+    activation_generation: u64,
+    last_activation: Option<DeliveryActivationEvidence>,
+    last_failure: Option<DeliveryFailureEvidence>,
 }
 
 impl DeliveryState {
@@ -360,10 +401,98 @@ impl DeliveryState {
         self.staged.as_ref()
     }
 
+    #[must_use]
+    pub const fn activation_generation(&self) -> u64 {
+        self.activation_generation
+    }
+
+    #[must_use]
+    pub const fn last_activation(&self) -> Option<&DeliveryActivationEvidence> {
+        self.last_activation.as_ref()
+    }
+
+    #[must_use]
+    pub const fn last_failure(&self) -> Option<&DeliveryFailureEvidence> {
+        self.last_failure.as_ref()
+    }
+
+    pub fn validate_persisted(&self) -> Result<(), DeliveryStateError> {
+        if self.active_health_confirmed && self.active.is_none() {
+            return Err(DeliveryStateError::CorruptPersistedState);
+        }
+        if self.last_known_good.is_some() && self.active.is_none() {
+            return Err(DeliveryStateError::CorruptPersistedState);
+        }
+        if self.active.as_ref() == self.last_known_good.as_ref() && self.active.is_some() {
+            return Err(DeliveryStateError::CorruptPersistedState);
+        }
+        if let (Some(active), Some(staged)) = (&self.active, &self.staged) {
+            if staged.sequence < active.sequence
+                || (staged.sequence == active.sequence && staged != active)
+            {
+                return Err(DeliveryStateError::CorruptPersistedState);
+            }
+        }
+        match &self.last_activation {
+            None if self.activation_generation != 0 => {
+                return Err(DeliveryStateError::CorruptPersistedState);
+            }
+            Some(evidence)
+                if evidence.attempt == 0 || evidence.attempt > self.activation_generation =>
+            {
+                return Err(DeliveryStateError::CorruptPersistedState);
+            }
+            Some(evidence) => match evidence.outcome {
+                DeliveryActivationOutcome::PendingHealth
+                    if self.active.as_ref() != Some(&evidence.candidate)
+                        || self.active_health_confirmed =>
+                {
+                    return Err(DeliveryStateError::CorruptPersistedState);
+                }
+                DeliveryActivationOutcome::Healthy
+                    if self.active.as_ref() != Some(&evidence.candidate)
+                        || !self.active_health_confirmed
+                        || self.last_failure.is_some() =>
+                {
+                    return Err(DeliveryStateError::CorruptPersistedState);
+                }
+                DeliveryActivationOutcome::RolledBack
+                    if self.active.as_ref() == Some(&evidence.candidate)
+                        || !self.active_health_confirmed =>
+                {
+                    return Err(DeliveryStateError::CorruptPersistedState);
+                }
+                DeliveryActivationOutcome::RecoveryRequired
+                    if self.active.is_some() || self.active_health_confirmed =>
+                {
+                    return Err(DeliveryStateError::CorruptPersistedState);
+                }
+                _ => {}
+            },
+            None => {}
+        }
+        if let Some(failure) = &self.last_failure {
+            let Some(activation) = &self.last_activation else {
+                return Err(DeliveryStateError::CorruptPersistedState);
+            };
+            if failure.candidate != activation.candidate
+                || !matches!(
+                    activation.outcome,
+                    DeliveryActivationOutcome::RolledBack
+                        | DeliveryActivationOutcome::RecoveryRequired
+                )
+            {
+                return Err(DeliveryStateError::CorruptPersistedState);
+            }
+        }
+        Ok(())
+    }
+
     pub fn stage(
         &mut self,
         candidate: &VerifiedDeliveryCandidate,
     ) -> Result<(), DeliveryStateError> {
+        self.validate_persisted()?;
         let identity = candidate.identity();
         if let Some(active) = &self.active {
             if identity.sequence < active.sequence {
@@ -390,6 +519,7 @@ impl DeliveryState {
     }
 
     pub fn activate_staged(&mut self, quiescent: bool) -> Result<(), DeliveryStateError> {
+        self.validate_persisted()?;
         if !quiescent {
             return Err(DeliveryStateError::ActiveRuntime);
         }
@@ -404,37 +534,98 @@ impl DeliveryState {
             self.staged = Some(staged);
             return Err(DeliveryStateError::HealthPending);
         }
+        let attempt = self
+            .activation_generation
+            .checked_add(1)
+            .ok_or(DeliveryStateError::AttemptCounterExhausted)?;
         if self.active_health_confirmed {
             self.last_known_good = self.active.take();
         } else {
             self.active = None;
         }
-        self.active = Some(staged);
+        self.active = Some(staged.clone());
         self.active_health_confirmed = false;
+        self.activation_generation = attempt;
+        self.last_activation = Some(DeliveryActivationEvidence {
+            attempt,
+            candidate: staged,
+            outcome: DeliveryActivationOutcome::PendingHealth,
+        });
+        self.last_failure = None;
         Ok(())
     }
 
     pub fn confirm_health(&mut self) -> Result<(), DeliveryStateError> {
-        if self.active.is_none() {
-            return Err(DeliveryStateError::NoActiveCandidate);
+        self.validate_persisted()?;
+        let active = self
+            .active
+            .as_ref()
+            .ok_or(DeliveryStateError::NoActiveCandidate)?;
+        let activation = self
+            .last_activation
+            .as_mut()
+            .ok_or(DeliveryStateError::CorruptPersistedState)?;
+        if activation.candidate != *active {
+            return Err(DeliveryStateError::CorruptPersistedState);
         }
+        activation.outcome = DeliveryActivationOutcome::Healthy;
         self.active_health_confirmed = true;
+        self.last_failure = None;
         Ok(())
     }
 
     pub fn fail_health_and_rollback(&mut self) -> Result<(), DeliveryStateError> {
-        if self.active.is_none() {
-            return Err(DeliveryStateError::NoActiveCandidate);
+        self.rollback_after_failure(DeliveryFailureKind::HealthRejected)
+    }
+
+    pub fn recover_interrupted_activation(&mut self) -> Result<(), DeliveryStateError> {
+        self.validate_persisted()?;
+        if self.active_health_confirmed {
+            return Ok(());
         }
+        self.rollback_after_failure(DeliveryFailureKind::InterruptedActivation)
+    }
+
+    fn rollback_after_failure(
+        &mut self,
+        kind: DeliveryFailureKind,
+    ) -> Result<(), DeliveryStateError> {
+        self.validate_persisted()?;
+        let failed = self
+            .active
+            .as_ref()
+            .cloned()
+            .ok_or(DeliveryStateError::NoActiveCandidate)?;
+        let activation = self
+            .last_activation
+            .as_ref()
+            .ok_or(DeliveryStateError::CorruptPersistedState)?;
+        if activation.candidate != failed {
+            return Err(DeliveryStateError::CorruptPersistedState);
+        }
+
         self.active = None;
         self.active_health_confirmed = false;
         self.staged = None;
-        let Some(lkg) = self.last_known_good.take() else {
-            return Err(DeliveryStateError::RecoveryRequired);
+        self.last_failure = Some(DeliveryFailureEvidence {
+            candidate: failed,
+            kind,
+        });
+        let outcome = if let Some(lkg) = self.last_known_good.take() {
+            self.active = Some(lkg);
+            self.active_health_confirmed = true;
+            DeliveryActivationOutcome::RolledBack
+        } else {
+            DeliveryActivationOutcome::RecoveryRequired
         };
-        self.active = Some(lkg);
-        self.active_health_confirmed = true;
-        Ok(())
+        if let Some(activation) = self.last_activation.as_mut() {
+            activation.outcome = outcome;
+        }
+        if outcome == DeliveryActivationOutcome::RecoveryRequired {
+            Err(DeliveryStateError::RecoveryRequired)
+        } else {
+            Ok(())
+        }
     }
 }
 
@@ -482,6 +673,8 @@ pub enum DeliveryStateError {
     NoStagedCandidate,
     NoActiveCandidate,
     RecoveryRequired,
+    AttemptCounterExhausted,
+    CorruptPersistedState,
 }
 
 impl fmt::Display for DeliveryStateError {
@@ -496,6 +689,8 @@ impl fmt::Display for DeliveryStateError {
             Self::NoStagedCandidate => "Windows delivery has no staged candidate",
             Self::NoActiveCandidate => "Windows delivery has no active candidate",
             Self::RecoveryRequired => "Windows delivery has no last known good candidate",
+            Self::AttemptCounterExhausted => "Windows delivery activation counter is exhausted",
+            Self::CorruptPersistedState => "Windows delivery persisted state is inconsistent",
         })
     }
 }
@@ -798,6 +993,11 @@ mod tests {
         );
         state.activate_staged(true)?;
         assert!(!state.active_health_confirmed());
+        assert_eq!(state.activation_generation(), 1);
+        assert_eq!(
+            state.last_activation().map(|evidence| evidence.outcome),
+            Some(DeliveryActivationOutcome::PendingHealth)
+        );
 
         state.stage(&second)?;
         assert_eq!(
@@ -811,6 +1011,7 @@ mod tests {
         state.activate_staged(true)?;
         assert_eq!(state.last_known_good(), Some(&first.identity()));
         assert!(!state.active_health_confirmed());
+        assert_eq!(state.activation_generation(), 2);
         Ok(())
     }
 
@@ -828,6 +1029,10 @@ mod tests {
             Err(DeliveryStateError::RecoveryRequired)
         );
         assert!(state.active().is_none());
+        assert_eq!(
+            state.last_activation().map(|evidence| evidence.outcome),
+            Some(DeliveryActivationOutcome::RecoveryRequired)
+        );
 
         state.stage(&first)?;
         state.activate_staged(true)?;
@@ -838,6 +1043,57 @@ mod tests {
         assert_eq!(state.active(), Some(&first.identity()));
         assert!(state.active_health_confirmed());
         assert!(state.staged().is_none());
+        assert_eq!(
+            state.last_failure().map(|failure| failure.kind),
+            Some(DeliveryFailureKind::HealthRejected)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn interrupted_activation_recovers_deterministically_to_lkg() -> TestResult {
+        let trust = trust()?;
+        let first = verify(&manifest(1, 'a'), &trust, None)?;
+        let second = verify(&manifest(2, 'b'), &trust, None)?;
+        let mut state = DeliveryState::default();
+        state.stage(&first)?;
+        state.activate_staged(true)?;
+        state.confirm_health()?;
+        state.stage(&second)?;
+        state.activate_staged(true)?;
+
+        let persisted = serde_json::to_vec(&state)?;
+        let mut restored: DeliveryState = serde_json::from_slice(&persisted)?;
+        restored.validate_persisted()?;
+        restored.recover_interrupted_activation()?;
+        assert_eq!(restored.active(), Some(&first.identity()));
+        assert!(restored.active_health_confirmed());
+        assert_eq!(
+            restored.last_failure().map(|failure| failure.kind),
+            Some(DeliveryFailureKind::InterruptedActivation)
+        );
+        assert_eq!(
+            restored.last_activation().map(|evidence| evidence.outcome),
+            Some(DeliveryActivationOutcome::RolledBack)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn persisted_state_inconsistency_fails_closed() -> TestResult {
+        let trust = trust()?;
+        let first = verify(&manifest(1, 'a'), &trust, None)?;
+        let mut state = DeliveryState::default();
+        state.stage(&first)?;
+        state.activate_staged(true)?;
+        state.confirm_health()?;
+        let mut value = serde_json::to_value(&state)?;
+        value["active_health_confirmed"] = serde_json::Value::Bool(false);
+        let corrupt: DeliveryState = serde_json::from_value(value)?;
+        assert_eq!(
+            corrupt.validate_persisted(),
+            Err(DeliveryStateError::CorruptPersistedState)
+        );
         Ok(())
     }
 
@@ -849,12 +1105,14 @@ mod tests {
         state.stage(&first)?;
         state.activate_staged(true)?;
         state.confirm_health()?;
+        let generation = state.activation_generation();
 
         state.stage(&first)?;
         state.activate_staged(true)?;
         assert_eq!(state.active(), Some(&first.identity()));
         assert!(state.active_health_confirmed());
         assert!(state.last_known_good().is_none());
+        assert_eq!(state.activation_generation(), generation);
         Ok(())
     }
 }
