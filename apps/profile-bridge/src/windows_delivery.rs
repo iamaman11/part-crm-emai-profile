@@ -11,7 +11,7 @@ const SIGNATURE_SCHEMA_VERSION: u32 = 1;
 const SIGNATURE_KIND: &str = "WINDOWS_PROFILE_BRIDGE_DELIVERY_CMS";
 const RELEASE_SET_PREFIX: &str = "release-set-v3-sha256-";
 const PROFILE_BRIDGE_PREFIX: &str = "profile-bridge-v2-sha256-";
-const RUNTIME_BUNDLE_PREFIX: &str = "runtime-bundle-v1-sha256-";
+const RUNTIME_BUNDLE_PREFIX: &str = "runtime-bundle-v2-sha256-";
 const PROFILE_BRIDGE_PROTOCOL_VERSION: u32 = 1;
 const RUNTIME_BUNDLE_VERSION: &str = "2.0.0";
 const MAX_SIGNATURE_BYTES: usize = 1024 * 1024;
@@ -688,7 +688,7 @@ impl fmt::Display for DeliveryStateError {
             Self::NoStagedCandidate => "Windows delivery has no staged candidate",
             Self::NoActiveCandidate => "Windows delivery has no active candidate",
             Self::RecoveryRequired => "Windows delivery has no last known good candidate",
-            Self::AttemptCounterExhausted => "Windows delivery activation counter is exhausted",
+            Self::AttemptCounterExhausted => "Windows delivery state activation counter is exhausted",
             Self::CorruptPersistedState => "Windows delivery persisted state is inconsistent",
         })
     }
@@ -945,11 +945,19 @@ mod tests {
             Err(DeliveryPolicyError::IncompatibleCandidate)
         );
 
+        let mut predecessor = manifest(7, 'a');
+        predecessor.components.runtime_bundle.release_id =
+            format!("runtime-bundle-v1-sha256-{}", "a".repeat(64));
+        assert_eq!(
+            verify(&predecessor, &trust, None),
+            Err(DeliveryPolicyError::InvalidManifest)
+        );
+
         let bytes = serde_json::to_vec(&manifest(7, 'a'))?;
         assert_eq!(
             verify_delivery_candidate(
                 &bytes,
-                br#"{"schema_version":1,"kind":"WINDOWS_PROFILE_BRIDGE_DELIVERY_CMS","key_id":"release-2026","cms_der_hex":"ZZ"}"#,
+                br#"{\"schema_version\":1,\"kind\":\"WINDOWS_PROFILE_BRIDGE_DELIVERY_CMS\",\"key_id\":\"release-2026\",\"cms_der_hex\":\"ZZ\"}"#,
                 &trust,
                 None,
                 &mut DigestBoundVerifier,
