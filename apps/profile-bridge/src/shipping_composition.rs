@@ -68,12 +68,12 @@ mod windows {
     use crate::generation_reopen::VerifiedGenerationObjectDownloader;
     use crate::local_profile::MaterializationRoot;
     use crate::operator_flow::ProfileBridgeOperator;
-    use crate::runtime_bundle::FilesystemRuntimeBundleSelection;
     use crate::shipping_control_plane::{
         ControlPlaneCoordinator, ControlPlaneEnrollment, ControlPlaneLeaseTiming,
     };
     use crate::shipping_network::FilesystemNetworkEvidence;
     use crate::shipping_preflight::ShippingBrowserLaunchPreflight;
+    use crate::windows_delivery_runtime::ActiveWindowsDeliveryRuntime;
     use crate::windows_generation_put::WindowsSignedGenerationObjectPut;
     use crate::windows_native::{
         WindowsDeviceIdentity, WindowsMachineCertificate, WindowsSchannelMachineHttp,
@@ -90,7 +90,6 @@ mod windows {
     const MACHINE_CERT_SHA1_ENV: &str = "PROFILE_BRIDGE_MACHINE_CERT_SHA1";
     const CONTROL_PLANE_ORIGIN_ENV: &str = "PROFILE_BRIDGE_CONTROL_PLANE_ORIGIN";
     const MATERIALIZATION_ROOT_ENV: &str = "PROFILE_BRIDGE_MATERIALIZATION_ROOT";
-    const RUNTIME_ROOT_ENV: &str = "PROFILE_BRIDGE_RUNTIME_ROOT";
     const NETWORK_POLICY_PATH_ENV: &str = "PROFILE_BRIDGE_NETWORK_POLICY_PATH";
     const PROXY_CONFIG_PATH_ENV: &str = "PROFILE_BRIDGE_PROXY_CONFIG_PATH";
     const PACKAGED_PYTHON_EXECUTABLE: &str = "python/python.exe";
@@ -101,7 +100,6 @@ mod windows {
         machine_cert_sha1: String,
         control_plane_origin: String,
         materialization_root: PathBuf,
-        runtime_root: PathBuf,
         network_policy_path: PathBuf,
         proxy_config_path: Option<PathBuf>,
     }
@@ -113,7 +111,6 @@ mod windows {
             let machine_cert_sha1 = required_env(MACHINE_CERT_SHA1_ENV)?;
             let control_plane_origin = required_env(CONTROL_PLANE_ORIGIN_ENV)?;
             let materialization_root = absolute_path(required_env(MATERIALIZATION_ROOT_ENV)?)?;
-            let runtime_root = absolute_path(required_env(RUNTIME_ROOT_ENV)?)?;
             let network_policy_path = absolute_path(required_env(NETWORK_POLICY_PATH_ENV)?)?;
             let proxy_config_path = optional_env(PROXY_CONFIG_PATH_ENV)?
                 .map(absolute_path)
@@ -123,7 +120,6 @@ mod windows {
                 machine_cert_sha1,
                 control_plane_origin,
                 materialization_root,
-                runtime_root,
                 network_policy_path,
                 proxy_config_path,
             })
@@ -132,6 +128,11 @@ mod windows {
 
     pub fn run(claim: &ClaimUri) -> Result<(), ShippingCompositionError> {
         let config = ShippingConfig::from_environment()?;
+        let active_delivery = ActiveWindowsDeliveryRuntime::resolve_current()
+            .map_err(|_| ShippingCompositionError::Configuration)?;
+        let runtime_root = active_delivery.runtime_root().to_path_buf();
+        let runtime_bundles = active_delivery.into_bundle_selection();
+
         let identity = WindowsDeviceIdentity::new(config.device_id.clone());
         let certificate = WindowsMachineCertificate::local_machine_my(
             config.device_id.clone(),
@@ -153,8 +154,6 @@ mod windows {
 
         let enrollment = ControlPlaneEnrollment::new(transport.clone());
         let coordinator = ControlPlaneCoordinator::new(transport);
-        let runtime_bundles = FilesystemRuntimeBundleSelection::open(config.runtime_root.clone())
-            .map_err(|_| ShippingCompositionError::Configuration)?;
         let materialization_root =
             MaterializationRoot::open_or_create(&config.materialization_root)
                 .map_err(|_| ShippingCompositionError::Configuration)?;
@@ -166,10 +165,10 @@ mod windows {
             network_evidence,
             runtime_binding.clone(),
         );
-        let python_executable = config.runtime_root.join(PACKAGED_PYTHON_EXECUTABLE);
+        let python_executable = runtime_root.join(PACKAGED_PYTHON_EXECUTABLE);
         let camouhost_config = ManagedCamouhostConfig::new(
             python_executable,
-            config.runtime_root,
+            runtime_root,
             RuntimeDisplayMode::Headful,
             None,
             config.proxy_config_path,
