@@ -29,12 +29,14 @@ impl core::fmt::Display for ShippingCompositionError {
 
 impl std::error::Error for ShippingCompositionError {}
 
+#[cfg(any(windows, test))]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ConfirmedSaveTrigger {
     ContinueRuntime,
     BeginConfirmedSave,
 }
 
+#[cfg(any(windows, test))]
 fn confirmed_save_trigger<E>(observation: Result<bool, E>) -> Result<ConfirmedSaveTrigger, E> {
     observation.map(|controlled| {
         if controlled {
