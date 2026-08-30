@@ -65,6 +65,12 @@ try {
         $code = 20
     }
     elseif (
+        $null -eq $response.RequestMessage -or
+        $response.RequestMessage.RequestUri.Scheme -cne 'https'
+    ) {
+        $code = 24
+    }
+    elseif (
         $null -ne $response.Content.Headers.ContentLength -and
         [UInt64]$response.Content.Headers.ContentLength -ne $ExpectedSize
     ) {
@@ -523,8 +529,13 @@ impl DeliveryAssetFetcher for WindowsReleaseAssetFetcher {
 
 #[cfg(windows)]
 fn validate_download_destination(path: &Path) -> Result<(), WindowsReleaseAssetFetcherError> {
-    if !path.is_absolute() || fs::symlink_metadata(path).is_ok() {
+    if !path.is_absolute() {
         return Err(WindowsReleaseAssetFetcherError::InvalidRequest);
+    }
+    match fs::symlink_metadata(path) {
+        Ok(_) => return Err(WindowsReleaseAssetFetcherError::InvalidRequest),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(_) => return Err(WindowsReleaseAssetFetcherError::InvalidRequest),
     }
     let parent = path
         .parent()
@@ -930,6 +941,27 @@ mod tests {
         let fetcher = WindowsReleaseAssetFetcher::from_system()?;
         assert!(fetcher.powershell_executable().is_absolute());
         assert!(fetcher.powershell_executable().is_file());
+        Ok(())
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn system_fetcher_rejects_preexisting_destination_without_network() -> TestResult {
+        let directory = TestDirectory::create("existing-destination")?;
+        let destination = directory.0.join(PROFILE_BRIDGE_ASSET);
+        fs::write(&destination, b"occupied")?;
+        let mut fetcher = WindowsReleaseAssetFetcher::from_system()?;
+        let release_set_id = format!("{RELEASE_SET_PREFIX}{}", "a".repeat(64));
+        assert_eq!(
+            fetcher.fetch_release_asset(
+                &release_set_id,
+                PROFILE_BRIDGE_ASSET,
+                &destination,
+                1,
+            ),
+            Err(WindowsReleaseAssetFetcherError::InvalidRequest)
+        );
+        assert_eq!(fs::read(destination)?, b"occupied");
         Ok(())
     }
 }
