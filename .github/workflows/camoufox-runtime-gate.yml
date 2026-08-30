@@ -133,8 +133,11 @@ jobs:
       - name: Prove Firefox writer-lock failure semantics
         run: python scripts/test-ar10-firefox-writer-locks.py
 
-      - name: Test and build Profile Bridge
-        run: |
-          cargo test --locked -p browser-execution-domain -p runtime-bundle-domain
-          cargo test --locked -p profile-bridge --features synthetic-test-bin
-          cargo build --locked --release -p profile-bridge
+      - name: Test browser/runtime domain contracts on Windows
+        run: cargo test --locked -p browser-execution-domain -p runtime-bundle-domain
+
+      - name: Test Profile Bridge on Windows
+        run: cargo test --locked -p profile-bridge --features synthetic-test-bin
+
+      - name: Build release Profile Bridge on Windows
+        run: cargo build --locked --release -p profile-bridge
