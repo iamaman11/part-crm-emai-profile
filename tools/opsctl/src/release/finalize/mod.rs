@@ -19,6 +19,12 @@ use std::fmt::{Display, Formatter};
 use std::path::Path;
 
 const COMPONENT_ARTIFACT_KIND: &str = "component";
+const WINDOWS_SBOM_KEY: &str = "windows_sbom";
+const WINDOWS_SBOM_PATH: &str = "windows/windows-sbom-v1.json";
+const WINDOWS_SBOM_KIND: &str = "windows-delivery-sbom";
+const WINDOWS_PROVENANCE_KEY: &str = "windows_provenance";
+const WINDOWS_PROVENANCE_PATH: &str = "windows/windows-provenance-v1.json";
+const WINDOWS_PROVENANCE_KIND: &str = "windows-delivery-provenance";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReleaseFinalizeError {
@@ -93,6 +99,7 @@ fn compose_release_set(
         ReleaseFinalizeError::new(format!("typed D1 repository identity failed: {error}"))
     })?;
     let (components, mut artifact_inventory) = component_identities(&request);
+    artifact_inventory.extend(windows_evidence_artifacts(&request)?);
     let capability_policy_bytes = capability_policy_manifest::render_bytes().map_err(|error| {
         ReleaseFinalizeError::new(format!("capability policy projection failed: {error}"))
     })?;
@@ -228,6 +235,50 @@ fn component_identities(
     }
 
     (components, artifacts.into_values().collect())
+}
+
+fn windows_evidence_artifacts(
+    request: &ReleaseFinalizeRequestV1,
+) -> Result<Vec<core::ArtifactIdentity>, ReleaseFinalizeError> {
+    if !request.components.contains_key("profile_bridge") {
+        if request.evidence_artifacts.is_empty() {
+            return Ok(Vec::new());
+        }
+        return Err(ReleaseFinalizeError::new(
+            "Windows delivery evidence requires the profile_bridge component",
+        ));
+    }
+    if request.evidence_artifacts.len() != 2 {
+        return Err(ReleaseFinalizeError::new(
+            "profile_bridge Release Set requires exactly Windows SBOM and provenance evidence",
+        ));
+    }
+    let expected = [
+        (WINDOWS_SBOM_KEY, WINDOWS_SBOM_PATH, WINDOWS_SBOM_KIND),
+        (
+            WINDOWS_PROVENANCE_KEY,
+            WINDOWS_PROVENANCE_PATH,
+            WINDOWS_PROVENANCE_KIND,
+        ),
+    ];
+    let mut artifacts = Vec::with_capacity(expected.len());
+    for (key, path, kind) in expected {
+        let observed = request.evidence_artifacts.get(key).ok_or_else(|| {
+            ReleaseFinalizeError::new(format!("missing required Windows evidence artifact: {key}"))
+        })?;
+        if observed.path != path || observed.kind != kind {
+            return Err(ReleaseFinalizeError::new(format!(
+                "Windows evidence artifact {key} identity mismatch"
+            )));
+        }
+        artifacts.push(core::ArtifactIdentity {
+            path: observed.path.clone(),
+            sha256: observed.sha256.clone(),
+            size_bytes: observed.size_bytes,
+            kind: observed.kind.clone(),
+        });
+    }
+    Ok(artifacts)
 }
 
 fn d1_schema_window(
