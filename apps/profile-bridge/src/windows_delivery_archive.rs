@@ -918,7 +918,10 @@ mod tests {
             type_flag,
         )?);
         output.extend_from_slice(content);
-        while output.len() % usize::try_from(TAR_BLOCK_BYTES).map_err(io::Error::other)? != 0 {
+        while !output
+            .len()
+            .is_multiple_of(usize::try_from(TAR_BLOCK_BYTES).map_err(io::Error::other)?)
+        {
             output.push(0);
         }
         Ok(())
