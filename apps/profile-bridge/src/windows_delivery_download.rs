@@ -4,9 +4,9 @@ use crate::windows_delivery::{VerifiedDeliveryCandidate, WindowsDeliveryComponen
 use sha2::{Digest, Sha256};
 use std::fmt;
 use std::fs::{self, File, Metadata, OpenOptions};
-use std::io::{self, Read};
 #[cfg(windows)]
 use std::io::Write;
+use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
