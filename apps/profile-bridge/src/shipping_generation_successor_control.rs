@@ -390,7 +390,8 @@ mod tests {
             let root = MaterializationRoot::open_or_create(root_path.clone())?;
             let tenant = TenantId::parse(format!("tenant_successor_control_{sequence}"))?;
             let profile = ProfileId::parse(format!("profile_successor_control_{sequence}"))?;
-            let base = GenerationId::parse(format!("generation_successor_control_base_{sequence}"))?;
+            let base =
+                GenerationId::parse(format!("generation_successor_control_base_{sequence}"))?;
             let candidate =
                 GenerationId::parse(format!("generation_successor_control_next_{sequence}"))?;
             let device = DeviceId::parse(format!("device_successor_control_{sequence}"))?;
