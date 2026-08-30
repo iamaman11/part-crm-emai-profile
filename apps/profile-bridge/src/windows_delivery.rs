@@ -719,10 +719,7 @@ fn is_lower_hex(value: &str, expected_len: usize) -> bool {
 }
 
 fn decode_lower_hex(value: &str) -> Option<Vec<u8>> {
-    if value.is_empty()
-        || !value.len().is_multiple_of(2)
-        || !is_lower_hex(value, value.len())
-    {
+    if value.is_empty() || !value.len().is_multiple_of(2) || !is_lower_hex(value, value.len()) {
         return None;
     }
     value
