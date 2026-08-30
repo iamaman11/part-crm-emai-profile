@@ -1020,7 +1020,7 @@ mod tests {
             source_commit_sha: "1".repeat(40),
             components: WindowsDeliveryComponents {
                 profile_bridge: component(bridge_bytes, "profile-bridge-v2-sha256-"),
-                runtime_bundle: component(runtime_bytes, "runtime-bundle-v1-sha256-"),
+                runtime_bundle: component(runtime_bytes, "runtime-bundle-v2-sha256-"),
             },
             evidence: WindowsDeliveryEvidence {
                 sbom_sha256: "e".repeat(64),
