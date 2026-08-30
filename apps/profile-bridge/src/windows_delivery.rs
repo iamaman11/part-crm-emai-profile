@@ -425,7 +425,9 @@ impl DeliveryState {
             self.active.as_ref(),
             self.last_known_good.as_ref(),
             self.staged.as_ref(),
-            self.last_activation.as_ref().map(|evidence| &evidence.candidate),
+            self.last_activation
+                .as_ref()
+                .map(|evidence| &evidence.candidate),
             self.last_failure.as_ref().map(|failure| &failure.candidate),
         ]
         .into_iter()
