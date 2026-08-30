@@ -51,6 +51,19 @@ EXPECTED_LOCK: dict[str, Any] = {
     "runtime_role": "real_camoufox",
     "schema_version": 1,
 }
+EXPECTED_WINDOWS_DISTRIBUTION: dict[str, Any] = {
+    "architecture": "x86_64",
+    "browser": {
+        "artifact_sha256": "386fc2f41139685f9a1a9cef0d024bc041d899c315ea538d561171b5b282e57d",
+        "artifact_url": "https://github.com/daijro/camoufox/releases/download/v152.0.4-beta.28/camoufox-152.0.4-beta.28-win.x86_64.zip",
+        "executable_path": "browser/camoufox.exe",
+    },
+    "python": {
+        "artifact_sha256": "4acbed6dd1c744b0376e3b1cf57ce906f9dc9e95e68824584c8099a63025a3c3",
+        "artifact_url": "https://www.python.org/ftp/python/3.12.10/python-3.12.10-embed-amd64.zip",
+        "version": "3.12.10",
+    },
+}
 
 NETWORK_IMPORT_PREFIXES = (
     "aiohttp",
@@ -265,14 +278,26 @@ def validate_python_runtime_boundary(root: Path) -> None:
         )
 
 
+def validate_runtime_lock_value(parsed: object) -> None:
+    if not isinstance(parsed, dict):
+        fail("runtime lock must be a JSON object")
+    expected_keys = set(EXPECTED_LOCK) | {"windows_distribution"}
+    if set(parsed) != expected_keys:
+        fail("runtime lock shape drifted outside AR-10 + S0 authorities")
+    ar10_projection = {key: parsed[key] for key in EXPECTED_LOCK}
+    if ar10_projection != EXPECTED_LOCK:
+        fail("runtime lock drifted from the exact AR-10 candidate component identity")
+    if parsed.get("windows_distribution") != EXPECTED_WINDOWS_DISTRIBUTION:
+        fail("runtime lock Windows distribution drifted from the exact S0 delivery identity")
+
+
 def validate_runtime_lock(root: Path) -> None:
     raw = read_regular_bytes(root, RUNTIME_LOCK)
     try:
         parsed = json.loads(raw.decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError) as error:
         fail(f"runtime lock is invalid JSON: {error}")
-    if parsed != EXPECTED_LOCK:
-        fail("runtime lock drifted from the exact AR-10 candidate component identity")
+    validate_runtime_lock_value(parsed)
     if canonical_json_bytes(parsed) != raw:
         fail("runtime lock must use canonical JSON encoding")
 
@@ -433,11 +458,38 @@ def expect_runtime_source_failure(relative: Path, source: str, marker: str) -> N
     fail(f"runtime-boundary negative fixture unexpectedly passed: {relative.as_posix()}")
 
 
+def expect_runtime_lock_failure(value: object, marker: str) -> None:
+    try:
+        validate_runtime_lock_value(value)
+    except GateError as error:
+        if marker not in str(error):
+            fail(f"runtime-lock negative fixture failed for the wrong reason: {error}")
+        return
+    fail("runtime-lock negative fixture unexpectedly passed")
+
+
+def exact_runtime_lock_fixture() -> dict[str, Any]:
+    value = json.loads(json.dumps(EXPECTED_LOCK))
+    value["windows_distribution"] = json.loads(json.dumps(EXPECTED_WINDOWS_DISTRIBUTION))
+    return value
+
+
 def self_test() -> None:
-    mutated = json.loads(json.dumps(EXPECTED_LOCK))
-    mutated["components"]["browserforge"] = "latest"
-    if mutated == EXPECTED_LOCK:
-        fail("runtime-lock negative self-test failed")
+    exact = exact_runtime_lock_fixture()
+    validate_runtime_lock_value(exact)
+
+    mutated_ar10 = exact_runtime_lock_fixture()
+    mutated_ar10["components"]["browserforge"] = "latest"
+    expect_runtime_lock_failure(mutated_ar10, "AR-10 candidate component identity")
+
+    mutated_windows = exact_runtime_lock_fixture()
+    mutated_windows["windows_distribution"]["browser"]["artifact_sha256"] = "0" * 64
+    expect_runtime_lock_failure(mutated_windows, "S0 delivery identity")
+
+    unknown = exact_runtime_lock_fixture()
+    unknown["compatibility_fallback"] = True
+    expect_runtime_lock_failure(unknown, "shape drifted")
+
     source = "def run_ipc():\n    return launch_options()\n"
     node = function_node(ast.parse(source), "run_ipc")
     if "launch_options" not in called_names(node):
