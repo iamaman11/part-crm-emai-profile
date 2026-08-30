@@ -29,6 +29,8 @@ pub mod shipping_network;
 pub mod shipping_preflight;
 pub mod windows_delivery;
 pub mod windows_delivery_staging;
+#[cfg(windows)]
+pub mod windows_delivery_signature;
 pub mod windows_delivery_store;
 
 #[cfg(test)]
