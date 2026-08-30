@@ -336,7 +336,7 @@ fn inherit_system_environment(command: &mut Command) {
 #[test]
 fn production_script_accepts_isolated_test_trust_without_system_trust_fallback() -> TestResult {
     let directory = TestDirectory::create()?;
-    let manifest = br#"{\"kind\":\"S0_CMS_ACCEPTANCE\",\"sequence\":1}"#;
+    let manifest = br#"{"kind":"S0_CMS_ACCEPTANCE","sequence":1}"#;
     let fixture = SigningFixture::create(&directory.0, manifest)?;
 
     let exact_code = run_isolated_trust_verifier(
@@ -350,7 +350,7 @@ fn production_script_accepts_isolated_test_trust_without_system_trust_fallback()
     let tampered_code = run_isolated_trust_verifier(
         &directory.0,
         "tampered",
-        br#"{\"kind\":\"S0_CMS_ACCEPTANCE\",\"sequence\":2}"#,
+        br#"{"kind":"S0_CMS_ACCEPTANCE","sequence":2}"#,
         &fixture.signature,
         &fixture.certificate_sha256,
         &fixture.certificate_path,
