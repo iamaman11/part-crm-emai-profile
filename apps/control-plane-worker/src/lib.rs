@@ -26,6 +26,7 @@ mod notifications;
 mod operator_queries;
 mod profile_coordinator;
 mod profile_coordinator_ingress;
+mod profile_generation_successor_ingress;
 mod profile_generations;
 mod profiles;
 mod realtime_contract;

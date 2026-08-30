@@ -12,6 +12,7 @@ client-domain.workspace = true
 contracts.workspace = true
 control-plane-contract = { path = "../control-plane-contract" }
 device-domain.workspace = true
+encrypted-generation-domain.workspace = true
 hmac.workspace = true
 identity-access-domain.workspace = true
 mailbox-domain.workspace = true

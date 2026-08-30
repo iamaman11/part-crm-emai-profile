@@ -20,6 +20,7 @@ use cloudflare_adapters::contact_protection::{
 };
 use cloudflare_adapters::coordinator_ingress::{
     CloudflareCoordinatorIngressApplication, CloudflareDeviceGenerationCommitPort,
+    CloudflareProfileGenerationSuccessorCommitPort,
 };
 use cloudflare_adapters::d1_authenticated_device::D1AuthenticatedDevice;
 use cloudflare_adapters::d1_browser_mail_execution::D1BrowserMailboxExecutionBinding;
@@ -41,7 +42,9 @@ use cloudflare_adapters::d1_notifications::D1NotificationRepository;
 use cloudflare_adapters::d1_profile_application::D1ProfileApplicationBundle;
 use cloudflare_adapters::d1_profile_generation_application::D1ProfileGenerationApplicationRepository;
 use cloudflare_adapters::d1_query::D1QueryRepository;
+use cloudflare_adapters::generation_keyring::CloudflareGenerationRootKeyring;
 use cloudflare_adapters::microsoft_graph_authorization::D1MicrosoftGraphAuthorization;
+use cloudflare_adapters::r2_generation_download_capability::R2GenerationDownloadCapabilitySigner;
 use cloudflare_adapters::r2_generation_objects::R2GenerationObjects;
 use cloudflare_adapters::r2_generation_upload_capability::{
     R2GenerationUploadCapabilitySigner, R2SigV4Credentials,
@@ -54,6 +57,7 @@ use worker::{Env, Error, Result};
 
 #[cfg(target_arch = "wasm32")]
 const CLIENT_CONTACT_PROTECTION_KEYRING_BINDING: &str = "CLIENT_CONTACT_PROTECTION_KEYRING";
+const GENERATION_ROOT_KEYRING_BINDING: &str = "PROFILE_GENERATION_ROOT_KEYRING";
 const R2_GENERATION_ACCOUNT_ID_BINDING: &str = "R2_GENERATION_ACCOUNT_ID";
 const R2_GENERATION_BUCKET_NAME_BINDING: &str = "R2_GENERATION_BUCKET_NAME";
 const R2_GENERATION_ACCESS_KEY_ID_BINDING: &str = "R2_GENERATION_ACCESS_KEY_ID";
@@ -265,6 +269,11 @@ pub fn generation_object_verifier(env: &Env) -> Result<R2GenerationObjects> {
     Ok(R2GenerationObjects::new(env.bucket(R2_PROFILES_BINDING)?))
 }
 
+pub fn generation_root_keyring(env: &Env) -> Result<CloudflareGenerationRootKeyring> {
+    CloudflareGenerationRootKeyring::from_env(env, GENERATION_ROOT_KEYRING_BINDING)
+        .map_err(|_| Error::RustError("generation root-key keyring unavailable".to_owned()))
+}
+
 pub fn generation_upload_capability_signer(
     env: &Env,
 ) -> Result<R2GenerationUploadCapabilitySigner> {
@@ -284,6 +293,21 @@ pub fn generation_upload_capability_signer(
     .map_err(|_| Error::RustError("invalid R2 generation upload signing configuration".to_owned()))
 }
 
+pub fn generation_download_capability_signer(
+    env: &Env,
+) -> Result<R2GenerationDownloadCapabilitySigner> {
+    R2GenerationDownloadCapabilitySigner::new(
+        env.var(R2_GENERATION_ACCOUNT_ID_BINDING)?.to_string(),
+        env.var(R2_GENERATION_BUCKET_NAME_BINDING)?.to_string(),
+        env.secret(R2_GENERATION_ACCESS_KEY_ID_BINDING)?.to_string(),
+        env.secret(R2_GENERATION_SECRET_ACCESS_KEY_BINDING)?
+            .to_string(),
+    )
+    .map_err(|_| {
+        Error::RustError("invalid R2 generation download signing configuration".to_owned())
+    })
+}
+
 #[must_use]
 pub fn coordinator_ingress_application(env: &Env) -> CloudflareCoordinatorIngressApplication<'_> {
     CloudflareCoordinatorIngressApplication::new(
@@ -296,4 +320,11 @@ pub fn coordinator_ingress_application(env: &Env) -> CloudflareCoordinatorIngres
 #[must_use]
 pub fn device_generation_commit(env: &Env) -> CloudflareDeviceGenerationCommitPort<'_> {
     CloudflareDeviceGenerationCommitPort::new(env, PROFILE_COORDINATOR_BINDING)
+}
+
+#[must_use]
+pub fn profile_generation_successor_commit(
+    env: &Env,
+) -> CloudflareProfileGenerationSuccessorCommitPort<'_> {
+    CloudflareProfileGenerationSuccessorCommitPort::new(env, PROFILE_COORDINATOR_BINDING)
 }

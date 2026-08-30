@@ -28,6 +28,7 @@ const MAX_CONFIG_BYTES: u64 = 1024 * 1024;
 const MAX_IPC_RESPONSE_BYTES: usize = 1024;
 const HELLO_RESPONSE_TIMEOUT: Duration = Duration::from_secs(10);
 const LAUNCH_RESPONSE_TIMEOUT: Duration = Duration::from_secs(120);
+const OBSERVE_CLOSE_RESPONSE_TIMEOUT: Duration = Duration::from_secs(5);
 const CLOSE_RESPONSE_TIMEOUT: Duration = Duration::from_secs(30);
 const PROCESS_EXIT_TIMEOUT: Duration = Duration::from_secs(15);
 const FORCE_EXIT_TIMEOUT: Duration = Duration::from_secs(10);
@@ -296,6 +297,43 @@ pub struct ManagedCamouhostIpc {
     shared: Arc<Mutex<ProcessState>>,
 }
 
+#[derive(Clone)]
+pub struct ManagedCamouhostCloseObserver {
+    shared: Arc<Mutex<ProcessState>>,
+}
+
+impl ManagedCamouhostIpc {
+    /// Read-only handle used by shipping orchestration to observe a user-controlled browser close.
+    /// It shares the existing managed IPC and cannot perform the mutating close handshake.
+    #[must_use]
+    pub fn close_observer(&self) -> ManagedCamouhostCloseObserver {
+        ManagedCamouhostCloseObserver {
+            shared: Arc::clone(&self.shared),
+        }
+    }
+}
+
+impl ManagedCamouhostCloseObserver {
+    pub fn observe_controlled_close(
+        &mut self,
+        session_id: &SessionId,
+    ) -> Result<bool, BridgePortError> {
+        let response = exchange_shared(
+            &self.shared,
+            &CamouhostMessage::ObserveClose {
+                session_id: session_id.clone(),
+            },
+        )?;
+        match response {
+            CamouhostMessage::CloseObserved {
+                session_id: observed,
+                controlled,
+            } if observed == *session_id => Ok(controlled),
+            _ => Err(BridgePortError::InvalidResponse),
+        }
+    }
+}
+
 impl ManagedCamouhostProcess {
     #[must_use]
     pub fn pair(
@@ -497,30 +535,34 @@ impl CamouhostPort for ManagedCamouhostIpc {
         &mut self,
         message: &CamouhostMessage,
     ) -> Result<CamouhostMessage, BridgePortError> {
-        let mut state = self
-            .shared
-            .lock()
-            .map_err(|_| BridgePortError::Unavailable)?;
-        let frame = request_frame(message)?;
-        let timeout = response_timeout(message)?;
-        let stdin = state.stdin.as_mut().ok_or(BridgePortError::Unavailable)?;
-        stdin
-            .write_all(frame.as_bytes())
-            .and_then(|()| stdin.write_all(b"\n"))
-            .and_then(|()| stdin.flush())
-            .map_err(|_| BridgePortError::Unavailable)?;
-        let responses = state
-            .responses
-            .as_ref()
-            .ok_or(BridgePortError::Unavailable)?;
-        let response = receive_response(responses, timeout)?;
-        let parsed =
-            CamouhostMessage::parse(&response).map_err(|_| BridgePortError::InvalidResponse)?;
-        parsed
-            .validate_version()
-            .map_err(|_| BridgePortError::InvalidResponse)?;
-        Ok(parsed)
+        exchange_shared(&self.shared, message)
     }
+}
+
+fn exchange_shared(
+    shared: &Arc<Mutex<ProcessState>>,
+    message: &CamouhostMessage,
+) -> Result<CamouhostMessage, BridgePortError> {
+    let mut state = shared.lock().map_err(|_| BridgePortError::Unavailable)?;
+    let frame = request_frame(message)?;
+    let timeout = response_timeout(message)?;
+    let stdin = state.stdin.as_mut().ok_or(BridgePortError::Unavailable)?;
+    stdin
+        .write_all(frame.as_bytes())
+        .and_then(|()| stdin.write_all(b"\n"))
+        .and_then(|()| stdin.flush())
+        .map_err(|_| BridgePortError::Unavailable)?;
+    let responses = state
+        .responses
+        .as_ref()
+        .ok_or(BridgePortError::Unavailable)?;
+    let response = receive_response(responses, timeout)?;
+    let parsed =
+        CamouhostMessage::parse(&response).map_err(|_| BridgePortError::InvalidResponse)?;
+    parsed
+        .validate_version()
+        .map_err(|_| BridgePortError::InvalidResponse)?;
+    Ok(parsed)
 }
 
 fn spawn_response_reader(stdout: ChildStdout) -> Receiver<Result<String, BridgePortError>> {
@@ -559,6 +601,7 @@ fn response_timeout(message: &CamouhostMessage) -> Result<Duration, BridgePortEr
     match message {
         CamouhostMessage::Hello { .. } => Ok(HELLO_RESPONSE_TIMEOUT),
         CamouhostMessage::Launch { .. } => Ok(LAUNCH_RESPONSE_TIMEOUT),
+        CamouhostMessage::ObserveClose { .. } => Ok(OBSERVE_CLOSE_RESPONSE_TIMEOUT),
         CamouhostMessage::Close { .. } => Ok(CLOSE_RESPONSE_TIMEOUT),
         _ => Err(BridgePortError::InvalidResponse),
     }
@@ -613,6 +656,9 @@ fn request_frame(message: &CamouhostMessage) -> Result<String, BridgePortError> 
             Ok(format!("hello|{version}"))
         }
         CamouhostMessage::Launch { session_id } => Ok(format!("launch|{}", session_id.as_str())),
+        CamouhostMessage::ObserveClose { session_id } => {
+            Ok(format!("observe_close|{}", session_id.as_str()))
+        }
         CamouhostMessage::Close { session_id } => Ok(format!("close|{}", session_id.as_str())),
         _ => Err(BridgePortError::InvalidResponse),
     }
@@ -634,7 +680,8 @@ fn verify_file_digest(path: &Path, expected: &str) -> Result<(), BridgePortError
 mod tests {
     use super::{
         FINGERPRINT_SOURCE_PREFIX, IDENTITY_COMPATIBILITY_VERSION,
-        RuntimeBindingBrowserLaunchPreflight, RuntimeBindingSlot, receive_response, sha256_hex,
+        RuntimeBindingBrowserLaunchPreflight, RuntimeBindingSlot, receive_response, request_frame,
+        sha256_hex,
     };
     use crate::browser_execution::persist_materialization_binding;
     use crate::browser_preflight::{BrowserRuntimeObservation, BrowserRuntimeObservationPort};
@@ -642,12 +689,12 @@ mod tests {
     use crate::operator_flow::BrowserLaunchPreflightPort;
     use crate::runtime_bundle::ApprovedRuntimeBundle;
     use crate::test_support::remove_test_root;
-    use bridge_domain::BridgePortError;
+    use bridge_domain::{BridgePortError, CamouhostMessage};
     use browser_execution_domain::{
         BrowserIdentityManifest, MaterializationBinding, NetworkClass, NetworkIdentityObservation,
         NetworkIdentityPolicy,
     };
-    use profile_platform_primitives::{DeviceId, GenerationId, ProfileId, TenantId};
+    use profile_platform_primitives::{DeviceId, GenerationId, ProfileId, SessionId, TenantId};
     use runtime_bundle_domain::{
         BundleRelativePath, InventoryEntry, RuntimeInventory, RuntimeManifest, RuntimePlatform,
         Sha256Digest,
@@ -766,6 +813,26 @@ mod tests {
             receive_response(&receiver, Duration::from_millis(1)),
             Err(BridgePortError::Unavailable)
         );
+    }
+
+    #[test]
+    fn controlled_close_observation_has_a_read_only_ipc_frame()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let session_id = SessionId::parse("session_01JAR10CLOSE")?;
+        assert_eq!(
+            request_frame(&CamouhostMessage::ObserveClose {
+                session_id: session_id.clone(),
+            })?,
+            format!("observe_close|{}", session_id.as_str())
+        );
+        assert!(
+            request_frame(&CamouhostMessage::CloseObserved {
+                session_id,
+                controlled: true,
+            })
+            .is_err()
+        );
+        Ok(())
     }
 
     #[test]

@@ -9,6 +9,7 @@ pub enum ShippingCompositionError {
     Clock,
     ControlPlane,
     Operator,
+    CommittedRecoveryRequired,
 }
 
 impl core::fmt::Display for ShippingCompositionError {
@@ -19,11 +20,32 @@ impl core::fmt::Display for ShippingCompositionError {
             Self::Clock => "shipping Profile Bridge clock is unavailable",
             Self::ControlPlane => "shipping Profile Bridge control-plane lease state is invalid",
             Self::Operator => "shipping Profile Bridge operator flow failed",
+            Self::CommittedRecoveryRequired => {
+                "generation successor committed but local recovery is required"
+            }
         })
     }
 }
 
 impl std::error::Error for ShippingCompositionError {}
+
+#[cfg(any(windows, test))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ConfirmedSaveTrigger {
+    ContinueRuntime,
+    BeginConfirmedSave,
+}
+
+#[cfg(any(windows, test))]
+fn confirmed_save_trigger<E>(observation: Result<bool, E>) -> Result<ConfirmedSaveTrigger, E> {
+    observation.map(|controlled| {
+        if controlled {
+            ConfirmedSaveTrigger::BeginConfirmedSave
+        } else {
+            ConfirmedSaveTrigger::ContinueRuntime
+        }
+    })
+}
 
 pub fn run_claim(claim: &ClaimUri) -> Result<(), ShippingCompositionError> {
     #[cfg(windows)]
@@ -39,18 +61,23 @@ pub fn run_claim(claim: &ClaimUri) -> Result<(), ShippingCompositionError> {
 
 #[cfg(windows)]
 mod windows {
-    use super::ShippingCompositionError;
+    use super::{ConfirmedSaveTrigger, ShippingCompositionError, confirmed_save_trigger};
     use crate::camouhost_process::{
         ManagedCamouhostConfig, ManagedCamouhostProcess, RuntimeBindingSlot, RuntimeDisplayMode,
     };
+    use crate::generation_reopen::VerifiedGenerationObjectDownloader;
     use crate::local_profile::MaterializationRoot;
     use crate::operator_flow::ProfileBridgeOperator;
     use crate::runtime_bundle::FilesystemRuntimeBundleSelection;
-    use crate::shipping_control_plane::{ControlPlaneCoordinator, ControlPlaneEnrollment};
+    use crate::shipping_control_plane::{
+        ControlPlaneCoordinator, ControlPlaneEnrollment, ControlPlaneLeaseTiming,
+    };
     use crate::shipping_network::FilesystemNetworkEvidence;
     use crate::shipping_preflight::ShippingBrowserLaunchPreflight;
+    use crate::windows_generation_put::WindowsSignedGenerationObjectPut;
     use crate::windows_native::{
         WindowsDeviceIdentity, WindowsMachineCertificate, WindowsSchannelMachineHttp,
+        WindowsSignedGenerationObjectGet,
     };
     use bridge_domain::ClaimUri;
     use profile_platform_primitives::{DeviceId, UnixMillis};
@@ -67,6 +94,7 @@ mod windows {
     const PYTHON_EXECUTABLE_ENV: &str = "PROFILE_BRIDGE_PYTHON_EXECUTABLE";
     const NETWORK_POLICY_PATH_ENV: &str = "PROFILE_BRIDGE_NETWORK_POLICY_PATH";
     const PROXY_CONFIG_PATH_ENV: &str = "PROFILE_BRIDGE_PROXY_CONFIG_PATH";
+    const CONTROLLED_CLOSE_POLL_MS: u64 = 250;
 
     struct ShippingConfig {
         device_id: DeviceId,
@@ -118,6 +146,13 @@ mod windows {
             certificate.selector().to_owned(),
         )
         .map_err(|_| ShippingCompositionError::Configuration)?;
+        let save_transport = transport.clone();
+        let signed_generation_get = WindowsSignedGenerationObjectGet::from_system()
+            .map_err(|_| ShippingCompositionError::Configuration)?;
+        let mut generation_downloader =
+            VerifiedGenerationObjectDownloader::new(signed_generation_get);
+        let mut generation_uploader = WindowsSignedGenerationObjectPut::from_system()
+            .map_err(|_| ShippingCompositionError::Configuration)?;
 
         let enrollment = ControlPlaneEnrollment::new(transport.clone());
         let coordinator = ControlPlaneCoordinator::new(transport);
@@ -143,6 +178,7 @@ mod windows {
         )
         .map_err(|_| ShippingCompositionError::Configuration)?;
         let (process, camouhost) = ManagedCamouhostProcess::pair(camouhost_config, runtime_binding);
+        let mut close_observer = camouhost.close_observer();
 
         let mut operator = ProfileBridgeOperator::new(
             identity,
@@ -156,23 +192,88 @@ mod windows {
             camouhost,
         );
         operator
-            .open(claim, &materialization_root, now()?)
+            .open_authoritative(
+                claim,
+                &materialization_root,
+                &mut generation_downloader,
+                now()?,
+            )
             .map_err(|_| ShippingCompositionError::Operator)?;
 
-        loop {
-            let observed_at = now()?;
-            let timing = operator
+        let mut next_heartbeat_deadline = next_heartbeat_at(
+            operator
                 .coordinator()
                 .runtime_timing()
-                .map_err(|_| ShippingCompositionError::ControlPlane)?;
-            let deadline = timing.idle_expires_at_ms().min(timing.hard_expires_at_ms());
-            let remaining = deadline.saturating_sub(observed_at.value());
-            let delay_ms = (remaining / 2).max(1);
-            thread::sleep(Duration::from_millis(delay_ms));
-            operator
-                .heartbeat(now()?)
-                .map_err(|_| ShippingCompositionError::Operator)?;
+                .map_err(|_| ShippingCompositionError::ControlPlane)?,
+            now()?,
+        )?;
+        loop {
+            let observed_at = now()?;
+            let session_id = operator
+                .active_session_id()
+                .cloned()
+                .ok_or(ShippingCompositionError::Operator)?;
+            let save_trigger = confirmed_save_trigger(
+                close_observer
+                    .observe_controlled_close(&session_id)
+                    .map_err(|_| ShippingCompositionError::Operator),
+            )?;
+            if save_trigger == ConfirmedSaveTrigger::BeginConfirmedSave {
+                operator
+                    .close(now()?)
+                    .map_err(|_| ShippingCompositionError::Operator)?;
+                let completion = operator
+                    .save_retained_successor(
+                        &materialization_root,
+                        save_transport,
+                        &mut generation_uploader,
+                        now()?,
+                    )
+                    .map_err(|_| ShippingCompositionError::Operator)?;
+                if completion.is_saved() {
+                    return Ok(());
+                }
+                return Err(ShippingCompositionError::CommittedRecoveryRequired);
+            }
+
+            if observed_at >= next_heartbeat_deadline {
+                operator
+                    .heartbeat(observed_at)
+                    .map_err(|_| ShippingCompositionError::Operator)?;
+                next_heartbeat_deadline = next_heartbeat_at(
+                    operator
+                        .coordinator()
+                        .runtime_timing()
+                        .map_err(|_| ShippingCompositionError::ControlPlane)?,
+                    observed_at,
+                )?;
+            }
+
+            let until_heartbeat = next_heartbeat_deadline
+                .value()
+                .saturating_sub(observed_at.value())
+                .max(1);
+            thread::sleep(Duration::from_millis(
+                until_heartbeat.min(CONTROLLED_CLOSE_POLL_MS),
+            ));
         }
+    }
+
+    fn next_heartbeat_at(
+        timing: ControlPlaneLeaseTiming,
+        observed_at: UnixMillis,
+    ) -> Result<UnixMillis, ShippingCompositionError> {
+        let deadline = timing.idle_expires_at_ms().min(timing.hard_expires_at_ms());
+        let remaining = deadline.saturating_sub(observed_at.value());
+        if remaining <= 1 {
+            return Err(ShippingCompositionError::ControlPlane);
+        }
+        let delay = (remaining / 2).max(1);
+        observed_at
+            .value()
+            .checked_add(delay)
+            .map(UnixMillis::new)
+            .ok_or(ShippingCompositionError::Clock)
     }
 
     fn required_env(name: &str) -> Result<String, ShippingCompositionError> {
@@ -213,8 +314,26 @@ mod windows {
 
 #[cfg(test)]
 mod tests {
-    use super::{ShippingCompositionError, run_claim};
+    use super::{
+        ConfirmedSaveTrigger, ShippingCompositionError, confirmed_save_trigger, run_claim,
+    };
     use bridge_domain::ClaimUri;
+
+    #[test]
+    fn confirmed_save_requires_positive_controlled_close_witness() {
+        assert_eq!(
+            confirmed_save_trigger::<ShippingCompositionError>(Ok(false)),
+            Ok(ConfirmedSaveTrigger::ContinueRuntime)
+        );
+        assert_eq!(
+            confirmed_save_trigger::<ShippingCompositionError>(Ok(true)),
+            Ok(ConfirmedSaveTrigger::BeginConfirmedSave)
+        );
+        assert_eq!(
+            confirmed_save_trigger(Err(ShippingCompositionError::Operator)),
+            Err(ShippingCompositionError::Operator)
+        );
+    }
 
     #[cfg(not(windows))]
     #[test]

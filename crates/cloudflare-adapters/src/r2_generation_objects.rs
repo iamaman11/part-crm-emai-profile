@@ -1,5 +1,6 @@
 use application_ports::generation_objects::{
-    GenerationObjectDescriptor, GenerationObjectDescriptorVerifyPort,
+    GenerationObjectCatalogReference, GenerationObjectDescriptor,
+    GenerationObjectDescriptorReadPort, GenerationObjectDescriptorVerifyPort,
     GenerationObjectExactVerifyPort, GenerationObjectUploadOutcome, GenerationObjectUploadPort,
     ImmutableGenerationObject,
 };
@@ -9,11 +10,11 @@ use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use worker::{Bucket, Conditional, Object};
 
-const META_TENANT_ID: &str = "profile-platform-tenant-id";
-const META_PROFILE_ID: &str = "profile-platform-profile-id";
-const META_GENERATION_ID: &str = "profile-platform-generation-id";
-const META_METADATA_DIGEST: &str = "profile-platform-metadata-sha256";
-const META_CONTAINER_DIGEST: &str = "profile-platform-container-sha256";
+pub(crate) const META_TENANT_ID: &str = "profile-platform-tenant-id";
+pub(crate) const META_PROFILE_ID: &str = "profile-platform-profile-id";
+pub(crate) const META_GENERATION_ID: &str = "profile-platform-generation-id";
+pub(crate) const META_METADATA_DIGEST: &str = "profile-platform-metadata-sha256";
+pub(crate) const META_CONTAINER_DIGEST: &str = "profile-platform-container-sha256";
 
 pub struct R2GenerationObjects {
     bucket: Bucket,
@@ -56,6 +57,26 @@ impl R2GenerationObjects {
             descriptor.generation_id().as_str(),
         );
         if descriptor.object_key() != canonical {
+            return Err(integrity_failure());
+        }
+        Ok(())
+    }
+
+    fn validate_reference(
+        scope: &TenantScope,
+        reference: &GenerationObjectCatalogReference,
+    ) -> Result<(), GenerationPortError> {
+        if !is_sha256_hex(reference.metadata_digest())
+            || !is_sha256_hex(reference.container_digest())
+        {
+            return Err(integrity_failure());
+        }
+        let canonical = canonical_object_key(
+            scope,
+            reference.profile_id().as_str(),
+            reference.generation_id().as_str(),
+        );
+        if reference.object_key() != canonical {
             return Err(integrity_failure());
         }
         Ok(())
@@ -110,6 +131,18 @@ impl R2GenerationObjects {
         Self::validate_descriptor(scope, descriptor)?;
         self.bucket
             .head(descriptor.object_key())
+            .await
+            .map_err(|_| dependency_unavailable())
+    }
+
+    async fn head_reference(
+        &self,
+        scope: &TenantScope,
+        reference: &GenerationObjectCatalogReference,
+    ) -> Result<Option<Object>, GenerationPortError> {
+        Self::validate_reference(scope, reference)?;
+        self.bucket
+            .head(reference.object_key())
             .await
             .map_err(|_| dependency_unavailable())
     }
@@ -201,6 +234,34 @@ impl GenerationObjectDescriptorVerifyPort for R2GenerationObjects {
             return Ok(false);
         };
         Self::descriptor_matches(&stored, scope, descriptor)
+    }
+}
+
+impl GenerationObjectDescriptorReadPort for R2GenerationObjects {
+    async fn load_generation_object_descriptor_exact(
+        &self,
+        scope: &TenantScope,
+        reference: &GenerationObjectCatalogReference,
+    ) -> Result<Option<GenerationObjectDescriptor>, GenerationPortError> {
+        let Some(stored) = self.head_reference(scope, reference).await? else {
+            return Ok(None);
+        };
+        if stored.size() == 0 {
+            return Err(integrity_failure());
+        }
+        let descriptor = GenerationObjectDescriptor::new(
+            reference.profile_id().clone(),
+            reference.generation_id().clone(),
+            reference.object_key(),
+            reference.metadata_digest(),
+            reference.container_digest(),
+            stored.size(),
+        );
+        if Self::descriptor_matches(&stored, scope, &descriptor)? {
+            Ok(Some(descriptor))
+        } else {
+            Err(integrity_failure())
+        }
     }
 }
 

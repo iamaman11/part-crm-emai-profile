@@ -1,7 +1,9 @@
 use super::{
     CloudGenerationRepository, CloudGenerationStatus, ContainerDigest, EncryptedGenerationError,
-    GenerationDek, GenerationIdentity, GenerationMetadata, KeyId, NoncePrefix, PlaintextDigest,
-    PublishResult, open_generation, open_generation_expected, seal_generation,
+    GenerationDek, GenerationIdentity, GenerationMetadata, KeyId,
+    MAX_GENERATION_METADATA_PRELUDE_BYTES, NoncePrefix, PlaintextDigest, PublishResult,
+    inspect_generation_metadata_prelude, open_generation, open_generation_expected,
+    seal_generation,
 };
 use profile_platform_primitives::{GenerationId, ProfileId, TenantId, UnixMillis};
 
@@ -50,6 +52,46 @@ fn metadata_length(container: &[u8]) -> Result<usize, EncryptedGenerationError> 
     length.copy_from_slice(bytes);
     usize::try_from(u32::from_be_bytes(length))
         .map_err(|_| EncryptedGenerationError::InvalidContainer)
+}
+
+#[test]
+fn canonical_metadata_prelude_inspection_is_bounded_and_prefix_exact()
+-> Result<(), Box<dyn std::error::Error>> {
+    let plaintext = b"metadata prelude inspection";
+    let metadata = metadata("generation_01JSTEP9PRELUDE", 0x21, plaintext)?;
+    let sealed = seal_generation(&metadata, &key(0x10)?, plaintext)?;
+    let inspected = inspect_generation_metadata_prelude(sealed.container())?;
+    let expected_prelude_bytes = 12_usize
+        .checked_add(metadata_length(sealed.container())?)
+        .ok_or(EncryptedGenerationError::InvalidContainer)?;
+    assert_eq!(inspected.metadata(), &metadata);
+    assert_eq!(inspected.metadata_digest(), sealed.metadata_digest());
+    assert_eq!(inspected.prelude_bytes(), expected_prelude_bytes);
+    assert!(inspected.prelude_bytes() <= MAX_GENERATION_METADATA_PRELUDE_BYTES);
+    assert_eq!(
+        inspect_generation_metadata_prelude(&sealed.container()[..expected_prelude_bytes])?,
+        inspected
+    );
+
+    let mut bad_magic = sealed.container()[..expected_prelude_bytes].to_vec();
+    bad_magic[0] ^= 0x01;
+    assert_eq!(
+        inspect_generation_metadata_prelude(&bad_magic),
+        Err(EncryptedGenerationError::InvalidContainer)
+    );
+    let mut oversized = b"BPGC0001".to_vec();
+    oversized.extend_from_slice(&4_097_u32.to_be_bytes());
+    assert_eq!(
+        inspect_generation_metadata_prelude(&oversized),
+        Err(EncryptedGenerationError::InvalidContainer)
+    );
+    assert_eq!(
+        inspect_generation_metadata_prelude(
+            &sealed.container()[..expected_prelude_bytes.saturating_sub(1)]
+        ),
+        Err(EncryptedGenerationError::InvalidContainer)
+    );
+    Ok(())
 }
 
 #[test]

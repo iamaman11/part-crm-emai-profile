@@ -1,3 +1,5 @@
+use crate::dirty_generation::{GenerationSealingMaterial, GenerationSealingMaterialPort};
+use crate::generation_reopen::{GenerationDownloadCapability, GenerationReopenControlPort};
 use crate::operator_flow::{EnrollmentPort, OperatorEnrollment};
 use application_ports::{ProfileCoordinatorPort, ProfileCoordinatorRuntimePort};
 use bridge_domain::ClaimUri;
@@ -5,9 +7,25 @@ use control_plane_contract::coordinator_api::{
     CoordinatorCommandDto, CoordinatorCommandRequestDto, CoordinatorOutcomeDto,
     CoordinatorReleaseDispositionDto, CoordinatorResponseDto, CoordinatorStatusDto,
 };
+use control_plane_contract::generation_key_api::{
+    BRIDGE_GENERATION_SEALING_MATERIAL_PATH_TEMPLATE, BridgeGenerationSealingMaterialRequest,
+    BridgeGenerationSealingMaterialResponse, GENERATION_SEALING_CHUNK_BYTES,
+};
+use control_plane_contract::generation_reopen_api::{
+    BRIDGE_PROFILE_GENERATION_DOWNLOAD_CAPABILITY_PATH_TEMPLATE,
+    BRIDGE_PROFILE_GENERATION_OPENING_MATERIAL_PATH_TEMPLATE,
+    BridgeGenerationDownloadCapabilityRequest, BridgeGenerationDownloadCapabilityResponse,
+    BridgeGenerationOpeningMaterialRequest, BridgeGenerationOpeningMaterialResponse,
+    GENERATION_DOWNLOAD_CAPABILITY_MAX_EXPIRES_SECONDS,
+};
 use control_plane_contract::profile_launch_api::{
     BRIDGE_PROFILE_COORDINATOR_PATH_TEMPLATE, BRIDGE_PROFILE_LAUNCH_REDEMPTION_PATH,
     BridgeProfileLaunchRedemptionProjection, BridgeProfileLaunchRedemptionRequest,
+};
+use encrypted_generation_domain::{
+    GenerationDek, GenerationRootKeyVersion, KeyId, MAX_GENERATION_CONTAINER_BYTES,
+    MAX_GENERATION_METADATA_PRELUDE_BYTES, NoncePrefix, canonical_generation_object_key,
+    inspect_generation_metadata_prelude,
 };
 use profile_platform_primitives::{
     ActorContext, ActorId, CorrelationId, DeviceId, FencingToken, GenerationId, IdempotencyKey,
@@ -18,6 +36,10 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 static REQUEST_SEQUENCE: AtomicU64 = AtomicU64::new(1);
+const MAX_SEALING_MATERIAL_RESPONSE_BYTES: usize = 1_024;
+const MAX_REOPEN_DOWNLOAD_CAPABILITY_RESPONSE_BYTES: usize = 8_192;
+const MAX_REOPEN_OPENING_MATERIAL_RESPONSE_BYTES: usize = 1_024;
+const MAX_SIGNED_GENERATION_DOWNLOAD_URL_BYTES: usize = 4_096;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum MachineHttpMethod {
@@ -252,6 +274,54 @@ where
         body.fill(0);
         decode_coordinator_response(response?)
     }
+
+    fn release_lease(
+        &mut self,
+        lease: &ProfileLease,
+        disposition: CoordinatorReleaseDispositionDto,
+    ) -> Result<(), ShippingControlPlaneError> {
+        let cursor = self
+            .cursor
+            .as_ref()
+            .filter(|value| cursor_matches_lease(value, lease))
+            .cloned()
+            .ok_or(ShippingControlPlaneError::InvalidResponse)?;
+        let sequence = cursor
+            .sequence
+            .checked_add(1)
+            .ok_or(ShippingControlPlaneError::InvalidResponse)?;
+        let request = CoordinatorCommandRequestDto {
+            idempotency_key: next_idempotency_key()?.as_str().to_owned(),
+            sequence,
+            expected_version: cursor.version,
+            command: CoordinatorCommandDto::Release {
+                session_id: cursor.session_id.as_str().to_owned(),
+                epoch: cursor.epoch,
+                fencing_token: cursor.fencing_token.as_str().to_owned(),
+                disposition,
+            },
+        };
+        let response = self.command(&cursor.tenant_id, &cursor.profile_id, &request)?;
+        validate_released_response(&response, &cursor, sequence, disposition)?;
+        self.cursor = None;
+        Ok(())
+    }
+
+    fn exact_reopen_cursor(
+        &self,
+        tenant_id: &TenantId,
+        profile_id: &ProfileId,
+    ) -> Result<CoordinatorCursor, ShippingControlPlaneError> {
+        self.cursor
+            .as_ref()
+            .filter(|cursor| {
+                cursor.tenant_id == *tenant_id
+                    && cursor.profile_id == *profile_id
+                    && cursor.epoch != 0
+            })
+            .cloned()
+            .ok_or(ShippingControlPlaneError::InvalidResponse)
+    }
 }
 
 impl<T> ProfileCoordinatorPort for ControlPlaneCoordinator<T>
@@ -331,31 +401,11 @@ where
     }
 
     fn close_lease(&mut self, lease: &ProfileLease) -> Result<(), Self::Error> {
-        let cursor = self
-            .cursor
-            .as_ref()
-            .filter(|value| cursor_matches_lease(value, lease))
-            .cloned()
-            .ok_or(Self::Error::InvalidResponse)?;
-        let sequence = cursor
-            .sequence
-            .checked_add(1)
-            .ok_or(Self::Error::InvalidResponse)?;
-        let request = CoordinatorCommandRequestDto {
-            idempotency_key: next_idempotency_key()?.as_str().to_owned(),
-            sequence,
-            expected_version: cursor.version,
-            command: CoordinatorCommandDto::Release {
-                session_id: cursor.session_id.as_str().to_owned(),
-                epoch: cursor.epoch,
-                fencing_token: cursor.fencing_token.as_str().to_owned(),
-                disposition: CoordinatorReleaseDispositionDto::Uncertain,
-            },
-        };
-        let response = self.command(&cursor.tenant_id, &cursor.profile_id, &request)?;
-        validate_released_response(&response, &cursor, sequence)?;
-        self.cursor = None;
-        Ok(())
+        self.release_lease(lease, CoordinatorReleaseDispositionDto::Uncertain)
+    }
+
+    fn close_confirmed_save(&mut self, lease: &ProfileLease) -> Result<(), Self::Error> {
+        self.release_lease(lease, CoordinatorReleaseDispositionDto::Clean)
     }
 }
 
@@ -409,6 +459,332 @@ where
         current.timing = timing;
         Ok(())
     }
+}
+
+impl<T> GenerationSealingMaterialPort for ControlPlaneCoordinator<T>
+where
+    T: MachineHttpPort,
+{
+    type Error = ShippingControlPlaneError;
+
+    fn material_for(
+        &mut self,
+        tenant_id: &TenantId,
+        profile_id: &ProfileId,
+        base_generation_id: &GenerationId,
+        generation_id: &GenerationId,
+        plaintext_digest: [u8; 32],
+    ) -> Result<GenerationSealingMaterial, Self::Error> {
+        if base_generation_id == generation_id {
+            return Err(Self::Error::InvalidResponse);
+        }
+        let cursor = self
+            .cursor
+            .as_ref()
+            .filter(|cursor| cursor.tenant_id == *tenant_id && cursor.profile_id == *profile_id)
+            .cloned()
+            .ok_or(Self::Error::InvalidResponse)?;
+        let request = BridgeGenerationSealingMaterialRequest::new(
+            base_generation_id.as_str(),
+            generation_id.as_str(),
+            encode_lower_hex(&plaintext_digest),
+            cursor.session_id.as_str(),
+            cursor.fencing_token.as_str(),
+            cursor.epoch,
+        );
+        let mut body = serde_json::to_vec(&request).map_err(|_| Self::Error::InvalidResponse)?;
+        let correlation_id = next_correlation_id()?;
+        let response = self
+            .transport
+            .request(
+                MachineHttpMethod::PostJson,
+                &generation_sealing_material_path(tenant_id, profile_id),
+                &correlation_id,
+                Some(&body),
+            )
+            .map_err(|_| Self::Error::Transport);
+        body.fill(0);
+        let response = decode_sealing_material_response(response?)?;
+        let (key_id, dek_hex, nonce_prefix_hex, chunk_size) = response.into_parts();
+        if chunk_size != GENERATION_SEALING_CHUNK_BYTES {
+            return Err(Self::Error::InvalidResponse);
+        }
+        let key_id = KeyId::parse(key_id).map_err(|_| Self::Error::InvalidResponse)?;
+        GenerationRootKeyVersion::from_key_id(&key_id).map_err(|_| Self::Error::InvalidResponse)?;
+        let dek = decode_secret_dek(dek_hex.as_str()).ok_or(Self::Error::InvalidResponse)?;
+        let nonce_prefix =
+            decode_lower_hex::<16>(&nonce_prefix_hex).ok_or(Self::Error::InvalidResponse)?;
+        Ok(GenerationSealingMaterial::new(
+            GenerationDek::new(key_id, dek.0),
+            NoncePrefix::new(nonce_prefix),
+            chunk_size,
+        ))
+    }
+}
+
+impl<T> GenerationReopenControlPort for ControlPlaneCoordinator<T>
+where
+    T: MachineHttpPort,
+{
+    type Error = ShippingControlPlaneError;
+
+    fn download_capability(
+        &mut self,
+        tenant_id: &TenantId,
+        profile_id: &ProfileId,
+    ) -> Result<GenerationDownloadCapability, Self::Error> {
+        let cursor = self.exact_reopen_cursor(tenant_id, profile_id)?;
+        let request = BridgeGenerationDownloadCapabilityRequest::new(
+            cursor.session_id.as_str(),
+            cursor.fencing_token.as_str(),
+            cursor.epoch,
+        );
+        let mut body = serde_json::to_vec(&request).map_err(|_| Self::Error::InvalidResponse)?;
+        let correlation_id = next_correlation_id()?;
+        let response = self
+            .transport
+            .request(
+                MachineHttpMethod::PostJson,
+                &generation_download_capability_path(tenant_id, profile_id),
+                &correlation_id,
+                Some(&body),
+            )
+            .map_err(|_| Self::Error::Transport);
+        body.fill(0);
+        let mut response = decode_reopen_download_capability_response(response?)?;
+
+        if response.method() != "GET"
+            || response.container_bytes() == 0
+            || response.container_bytes()
+                > u64::try_from(MAX_GENERATION_CONTAINER_BYTES)
+                    .map_err(|_| Self::Error::InvalidResponse)?
+            || response.expires_seconds() == 0
+            || response.expires_seconds() > GENERATION_DOWNLOAD_CAPABILITY_MAX_EXPIRES_SECONDS
+        {
+            return Err(Self::Error::InvalidResponse);
+        }
+        let generation_id = GenerationId::parse(response.generation_id().to_owned())
+            .map_err(|_| Self::Error::InvalidResponse)?;
+        let canonical_key = canonical_generation_object_key(tenant_id, profile_id, &generation_id);
+        if response.object_key() != canonical_key || !valid_signed_r2_get_url(response.url()) {
+            return Err(Self::Error::InvalidResponse);
+        }
+        let metadata_digest = decode_lower_hex::<32>(response.metadata_digest())
+            .ok_or(Self::Error::InvalidResponse)?;
+        let container_digest = decode_lower_hex::<32>(response.container_digest())
+            .ok_or(Self::Error::InvalidResponse)?;
+        let container_bytes = response.container_bytes();
+        let expires_seconds = response.expires_seconds();
+        let signed_url = response.take_url();
+
+        Ok(GenerationDownloadCapability::new(
+            generation_id,
+            canonical_key,
+            metadata_digest,
+            container_digest,
+            container_bytes,
+            signed_url,
+            expires_seconds,
+        ))
+    }
+
+    fn opening_material(
+        &mut self,
+        tenant_id: &TenantId,
+        profile_id: &ProfileId,
+        metadata_prelude: &[u8],
+    ) -> Result<GenerationDek, Self::Error> {
+        let cursor = self.exact_reopen_cursor(tenant_id, profile_id)?;
+        if metadata_prelude.is_empty()
+            || metadata_prelude.len() > MAX_GENERATION_METADATA_PRELUDE_BYTES
+        {
+            return Err(Self::Error::InvalidResponse);
+        }
+        let inspected = inspect_generation_metadata_prelude(metadata_prelude)
+            .map_err(|_| Self::Error::InvalidResponse)?;
+        if inspected.prelude_bytes() != metadata_prelude.len()
+            || inspected.metadata().tenant_id() != tenant_id
+            || inspected.metadata().profile_id() != profile_id
+            || inspected.metadata().object_key()
+                != canonical_generation_object_key(
+                    tenant_id,
+                    profile_id,
+                    inspected.metadata().generation_id(),
+                )
+        {
+            return Err(Self::Error::InvalidResponse);
+        }
+
+        let request = BridgeGenerationOpeningMaterialRequest::new(
+            encode_lower_hex(metadata_prelude),
+            cursor.session_id.as_str(),
+            cursor.fencing_token.as_str(),
+            cursor.epoch,
+        );
+        let mut body = serde_json::to_vec(&request).map_err(|_| Self::Error::InvalidResponse)?;
+        let correlation_id = next_correlation_id()?;
+        let response = self
+            .transport
+            .request(
+                MachineHttpMethod::PostJson,
+                &generation_opening_material_path(tenant_id, profile_id),
+                &correlation_id,
+                Some(&body),
+            )
+            .map_err(|_| Self::Error::Transport);
+        body.fill(0);
+        let response = decode_reopen_opening_material_response(response?)?;
+        let (key_id, dek_hex) = response.into_parts();
+        let key_id = KeyId::parse(key_id).map_err(|_| Self::Error::InvalidResponse)?;
+        GenerationRootKeyVersion::from_key_id(&key_id).map_err(|_| Self::Error::InvalidResponse)?;
+        if &key_id != inspected.metadata().key_id() {
+            return Err(Self::Error::InvalidResponse);
+        }
+        let dek = decode_secret_dek(dek_hex.as_str()).ok_or(Self::Error::InvalidResponse)?;
+        Ok(GenerationDek::new(key_id, dek.0))
+    }
+}
+
+struct SecretDek([u8; 32]);
+
+impl Drop for SecretDek {
+    fn drop(&mut self) {
+        self.0.fill(0);
+    }
+}
+
+fn decode_sealing_material_response(
+    mut response: MachineHttpResponse,
+) -> Result<BridgeGenerationSealingMaterialResponse, ShippingControlPlaneError> {
+    if !(200..=299).contains(&response.status()) {
+        response.body.fill(0);
+        return Err(ShippingControlPlaneError::HttpStatus);
+    }
+    if response.body.len() > MAX_SEALING_MATERIAL_RESPONSE_BYTES {
+        response.body.fill(0);
+        return Err(ShippingControlPlaneError::InvalidResponse);
+    }
+    let decoded = serde_json::from_slice::<BridgeGenerationSealingMaterialResponse>(&response.body);
+    response.body.fill(0);
+    decoded.map_err(|_| ShippingControlPlaneError::InvalidResponse)
+}
+
+fn decode_reopen_download_capability_response(
+    mut response: MachineHttpResponse,
+) -> Result<BridgeGenerationDownloadCapabilityResponse, ShippingControlPlaneError> {
+    if !(200..=299).contains(&response.status()) {
+        response.body.fill(0);
+        return Err(ShippingControlPlaneError::HttpStatus);
+    }
+    if response.body.is_empty()
+        || response.body.len() > MAX_REOPEN_DOWNLOAD_CAPABILITY_RESPONSE_BYTES
+    {
+        response.body.fill(0);
+        return Err(ShippingControlPlaneError::InvalidResponse);
+    }
+    let decoded =
+        serde_json::from_slice::<BridgeGenerationDownloadCapabilityResponse>(&response.body);
+    response.body.fill(0);
+    decoded.map_err(|_| ShippingControlPlaneError::InvalidResponse)
+}
+
+fn decode_reopen_opening_material_response(
+    mut response: MachineHttpResponse,
+) -> Result<BridgeGenerationOpeningMaterialResponse, ShippingControlPlaneError> {
+    if !(200..=299).contains(&response.status()) {
+        response.body.fill(0);
+        return Err(ShippingControlPlaneError::HttpStatus);
+    }
+    if response.body.is_empty() || response.body.len() > MAX_REOPEN_OPENING_MATERIAL_RESPONSE_BYTES
+    {
+        response.body.fill(0);
+        return Err(ShippingControlPlaneError::InvalidResponse);
+    }
+    let decoded = serde_json::from_slice::<BridgeGenerationOpeningMaterialResponse>(&response.body);
+    response.body.fill(0);
+    decoded.map_err(|_| ShippingControlPlaneError::InvalidResponse)
+}
+
+fn decode_secret_dek(value: &str) -> Option<SecretDek> {
+    decode_lower_hex::<32>(value).map(SecretDek)
+}
+
+fn decode_lower_hex<const N: usize>(value: &str) -> Option<[u8; N]> {
+    if value.len() != N.saturating_mul(2) {
+        return None;
+    }
+    let bytes = value.as_bytes();
+    let mut decoded = [0_u8; N];
+    for (index, output) in decoded.iter_mut().enumerate() {
+        let high = lower_hex_nibble(bytes[index * 2])?;
+        let low = lower_hex_nibble(bytes[index * 2 + 1])?;
+        *output = (high << 4) | low;
+    }
+    Some(decoded)
+}
+
+const fn lower_hex_nibble(value: u8) -> Option<u8> {
+    match value {
+        b'0'..=b'9' => Some(value - b'0'),
+        b'a'..=b'f' => Some(value - b'a' + 10),
+        _ => None,
+    }
+}
+
+fn encode_lower_hex(bytes: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut encoded = String::with_capacity(bytes.len().saturating_mul(2));
+    for byte in bytes {
+        encoded.push(char::from(HEX[usize::from(byte >> 4)]));
+        encoded.push(char::from(HEX[usize::from(byte & 0x0f)]));
+    }
+    encoded
+}
+
+fn valid_signed_r2_get_url(value: &str) -> bool {
+    if value.is_empty()
+        || value.len() > MAX_SIGNED_GENERATION_DOWNLOAD_URL_BYTES
+        || value
+            .bytes()
+            .any(|byte| byte.is_ascii_control() || byte.is_ascii_whitespace())
+        || value.contains('#')
+    {
+        return false;
+    }
+    let Some(rest) = value.strip_prefix("https://") else {
+        return false;
+    };
+    let Some((authority, path_and_query)) = rest.split_once('/') else {
+        return false;
+    };
+    const R2_SUFFIX: &str = ".r2.cloudflarestorage.com";
+    let Some(account_id) = authority.strip_suffix(R2_SUFFIX) else {
+        return false;
+    };
+    if account_id.len() != 32
+        || !account_id
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        || authority.contains('@')
+        || authority.contains(':')
+    {
+        return false;
+    }
+    let Some((path, query)) = path_and_query.split_once('?') else {
+        return false;
+    };
+    if path.is_empty() || query.is_empty() {
+        return false;
+    }
+    let required = [
+        "X-Amz-Algorithm=AWS4-HMAC-SHA256",
+        "X-Amz-Credential=",
+        "X-Amz-Date=",
+        "X-Amz-Expires=",
+        "X-Amz-SignedHeaders=host",
+        "X-Amz-Signature=",
+    ];
+    required.iter().all(|needle| query.contains(needle))
 }
 
 fn accepted_response(
@@ -512,7 +888,13 @@ fn validate_released_response(
     response: &CoordinatorResponseDto,
     cursor: &CoordinatorCursor,
     expected_sequence: u64,
+    disposition: CoordinatorReleaseDispositionDto,
 ) -> Result<(), ShippingControlPlaneError> {
+    let expected_status = match disposition {
+        CoordinatorReleaseDispositionDto::Clean => CoordinatorStatusDto::Idle,
+        CoordinatorReleaseDispositionDto::Dirty => CoordinatorStatusDto::Dirty,
+        CoordinatorReleaseDispositionDto::Uncertain => CoordinatorStatusDto::Uncertain,
+    };
     if response.outcome != CoordinatorOutcomeDto::Released
         || response.replayed
         || response.sequence != expected_sequence
@@ -521,7 +903,7 @@ fn validate_released_response(
         || response.projection.profile_id != cursor.profile_id.as_str()
         || response.projection.version != response.version
         || response.projection.sequence != response.sequence
-        || response.projection.status != CoordinatorStatusDto::Uncertain
+        || response.projection.status != expected_status
         || response.projection.active_session_id.is_some()
         || response.projection.active_device_id.is_some()
         || response.projection.active_epoch.is_some()
@@ -544,6 +926,24 @@ fn cursor_matches_lease(cursor: &CoordinatorCursor, lease: &ProfileLease) -> boo
 
 fn coordinator_path(tenant_id: &TenantId, profile_id: &ProfileId) -> String {
     BRIDGE_PROFILE_COORDINATOR_PATH_TEMPLATE
+        .replace("{tenantId}", tenant_id.as_str())
+        .replace("{profileId}", profile_id.as_str())
+}
+
+fn generation_sealing_material_path(tenant_id: &TenantId, profile_id: &ProfileId) -> String {
+    BRIDGE_GENERATION_SEALING_MATERIAL_PATH_TEMPLATE
+        .replace("{tenantId}", tenant_id.as_str())
+        .replace("{profileId}", profile_id.as_str())
+}
+
+fn generation_download_capability_path(tenant_id: &TenantId, profile_id: &ProfileId) -> String {
+    BRIDGE_PROFILE_GENERATION_DOWNLOAD_CAPABILITY_PATH_TEMPLATE
+        .replace("{tenantId}", tenant_id.as_str())
+        .replace("{profileId}", profile_id.as_str())
+}
+
+fn generation_opening_material_path(tenant_id: &TenantId, profile_id: &ProfileId) -> String {
+    BRIDGE_PROFILE_GENERATION_OPENING_MATERIAL_PATH_TEMPLATE
         .replace("{tenantId}", tenant_id.as_str())
         .replace("{profileId}", profile_id.as_str())
 }
@@ -576,12 +976,35 @@ fn next_idempotency_key() -> Result<IdempotencyKey, ShippingControlPlaneError> {
 #[cfg(test)]
 mod tests {
     use super::{
-        ControlPlaneEnrollment, ControlPlaneLeaseTiming, MachineHttpMethod, MachineHttpPort,
-        MachineHttpResponse, ShippingControlPlaneError, lease_timing,
+        ControlPlaneCoordinator, ControlPlaneEnrollment, ControlPlaneLeaseTiming,
+        CoordinatorCursor, MAX_SEALING_MATERIAL_RESPONSE_BYTES, MachineHttpMethod, MachineHttpPort,
+        MachineHttpResponse, ShippingControlPlaneError, lease_timing, valid_signed_r2_get_url,
     };
+    use crate::dirty_generation::GenerationSealingMaterialPort;
+    use crate::generation_reopen::GenerationReopenControlPort;
     use crate::operator_flow::EnrollmentPort;
+    use application_ports::ProfileCoordinatorPort;
     use bridge_domain::ClaimUri;
-    use profile_platform_primitives::{CorrelationId, DeviceId, UnixMillis};
+    use control_plane_contract::coordinator_api::{
+        CoordinatorCommandDto, CoordinatorCommandRequestDto, CoordinatorOutcomeDto,
+        CoordinatorProjectionDto, CoordinatorReleaseDispositionDto, CoordinatorResponseDto,
+        CoordinatorStatusDto,
+    };
+    use control_plane_contract::generation_key_api::{
+        BRIDGE_GENERATION_SEALING_MATERIAL_PATH_TEMPLATE, BridgeGenerationSealingMaterialRequest,
+        BridgeGenerationSealingMaterialResponse, GENERATION_SEALING_CHUNK_BYTES,
+    };
+    use control_plane_contract::generation_reopen_api::{
+        BRIDGE_PROFILE_GENERATION_DOWNLOAD_CAPABILITY_PATH_TEMPLATE,
+        BridgeGenerationDownloadCapabilityRequest, BridgeGenerationDownloadCapabilityResponse,
+        GENERATION_DOWNLOAD_CAPABILITY_MAX_EXPIRES_SECONDS,
+    };
+    use encrypted_generation_domain::canonical_generation_object_key;
+    use profile_platform_primitives::{
+        CorrelationId, DeviceId, FencingToken, GenerationId, ProfileId, SessionId, TenantId,
+        UnixMillis,
+    };
+    use session_domain::ProfileLease;
     use std::collections::VecDeque;
 
     #[derive(Default)]
@@ -604,6 +1027,87 @@ mod tests {
                 String::from_utf8_lossy(value).contains("claim_01JBRIDGE_FEASIBILITY")
             }));
             self.responses.pop_front().ok_or(())
+        }
+    }
+
+    #[derive(Default)]
+    struct SealingMachineHttp {
+        responses: VecDeque<MachineHttpResponse>,
+        requests: Vec<(MachineHttpMethod, String, Vec<u8>)>,
+    }
+
+    impl MachineHttpPort for SealingMachineHttp {
+        type Error = ();
+
+        fn request(
+            &mut self,
+            method: MachineHttpMethod,
+            path: &str,
+            _correlation_id: &CorrelationId,
+            body: Option<&[u8]>,
+        ) -> Result<MachineHttpResponse, Self::Error> {
+            self.requests.push((
+                method,
+                path.to_owned(),
+                body.map_or_else(Vec::new, <[u8]>::to_vec),
+            ));
+            self.responses.pop_front().ok_or(())
+        }
+    }
+
+    struct SealingFixture {
+        coordinator: ControlPlaneCoordinator<SealingMachineHttp>,
+        tenant_id: TenantId,
+        profile_id: ProfileId,
+        base_generation_id: GenerationId,
+        candidate_generation_id: GenerationId,
+    }
+
+    impl SealingFixture {
+        fn new(response: MachineHttpResponse) -> Result<Self, Box<dyn std::error::Error>> {
+            let tenant_id = TenantId::parse("tenant_sealing_adapter_01")?;
+            let profile_id = ProfileId::parse("profile_sealing_adapter_01")?;
+            let base_generation_id = GenerationId::parse("generation_sealing_base_01")?;
+            let candidate_generation_id = GenerationId::parse("generation_sealing_next_01")?;
+            let cursor = CoordinatorCursor {
+                tenant_id: tenant_id.clone(),
+                profile_id: profile_id.clone(),
+                device_id: DeviceId::parse("device_sealing_adapter_01")?,
+                session_id: SessionId::parse("session_sealing_adapter_01")?,
+                epoch: 7,
+                fencing_token: FencingToken::parse("fence_sealing_adapter_01")?,
+                version: 11,
+                sequence: 13,
+                timing: ControlPlaneLeaseTiming {
+                    idle_expires_at_ms: 30_000,
+                    hard_expires_at_ms: 900_000,
+                },
+            };
+            Ok(Self {
+                coordinator: ControlPlaneCoordinator {
+                    transport: SealingMachineHttp {
+                        responses: VecDeque::from([response]),
+                        requests: Vec::new(),
+                    },
+                    cursor: Some(cursor),
+                },
+                tenant_id,
+                profile_id,
+                base_generation_id,
+                candidate_generation_id,
+            })
+        }
+
+        fn request_material(&mut self) -> Result<(), ShippingControlPlaneError> {
+            self.coordinator
+                .material_for(
+                    &self.tenant_id,
+                    &self.profile_id,
+                    &self.base_generation_id,
+                    &self.candidate_generation_id,
+                    [0xab; 32],
+                )
+                .map(|_| ())
         }
     }
 
@@ -633,6 +1137,121 @@ mod tests {
             lease_timing(Some(900_001), Some(900_000)),
             Err(ShippingControlPlaneError::InvalidResponse)
         );
+        Ok(())
+    }
+
+    #[test]
+    fn confirmed_save_release_is_clean_while_generic_release_remains_uncertain()
+    -> Result<(), Box<dyn std::error::Error>> {
+        fn release_response(
+            tenant_id: &TenantId,
+            profile_id: &ProfileId,
+            status: CoordinatorStatusDto,
+        ) -> Result<MachineHttpResponse, serde_json::Error> {
+            Ok(MachineHttpResponse::new(
+                200,
+                serde_json::to_vec(&CoordinatorResponseDto {
+                    outcome: CoordinatorOutcomeDto::Released,
+                    version: 12,
+                    sequence: 14,
+                    replayed: false,
+                    fencing_token: None,
+                    epoch: None,
+                    projection: CoordinatorProjectionDto {
+                        tenant_id: tenant_id.as_str().to_owned(),
+                        profile_id: profile_id.as_str().to_owned(),
+                        status,
+                        version: 12,
+                        sequence: 14,
+                        next_epoch: 7,
+                        active_session_id: None,
+                        active_device_id: None,
+                        active_epoch: None,
+                        idle_expires_at_ms: None,
+                        hard_expires_at_ms: None,
+                        drain_deadline_ms: None,
+                        pending_launch_intent_id: None,
+                        pending_intent_expires_at_ms: None,
+                    },
+                })?,
+            ))
+        }
+
+        fn coordinator(
+            status: CoordinatorStatusDto,
+        ) -> Result<
+            (ControlPlaneCoordinator<SealingMachineHttp>, ProfileLease),
+            Box<dyn std::error::Error>,
+        > {
+            let tenant_id = TenantId::parse("tenant_release_adapter_01")?;
+            let profile_id = ProfileId::parse("profile_release_adapter_01")?;
+            let device_id = DeviceId::parse("device_release_adapter_01")?;
+            let session_id = SessionId::parse("session_release_adapter_01")?;
+            let fencing_token = FencingToken::parse("fence_release_adapter_01")?;
+            let lease = ProfileLease::issue(
+                tenant_id.clone(),
+                profile_id.clone(),
+                session_id.clone(),
+                device_id.clone(),
+                7,
+                fencing_token.clone(),
+            )?;
+            Ok((
+                ControlPlaneCoordinator {
+                    transport: SealingMachineHttp {
+                        responses: VecDeque::from([release_response(
+                            &tenant_id,
+                            &profile_id,
+                            status,
+                        )?]),
+                        requests: Vec::new(),
+                    },
+                    cursor: Some(CoordinatorCursor {
+                        tenant_id,
+                        profile_id,
+                        device_id,
+                        session_id,
+                        epoch: 7,
+                        fencing_token,
+                        version: 11,
+                        sequence: 13,
+                        timing: ControlPlaneLeaseTiming {
+                            idle_expires_at_ms: 30_000,
+                            hard_expires_at_ms: 900_000,
+                        },
+                    }),
+                },
+                lease,
+            ))
+        }
+
+        let (mut confirmed, confirmed_lease) = coordinator(CoordinatorStatusDto::Idle)?;
+        confirmed.close_confirmed_save(&confirmed_lease)?;
+        assert!(confirmed.cursor.is_none());
+        let confirmed_request = serde_json::from_slice::<CoordinatorCommandRequestDto>(
+            &confirmed.transport.requests[0].2,
+        )?;
+        assert!(matches!(
+            confirmed_request.command,
+            CoordinatorCommandDto::Release {
+                disposition: CoordinatorReleaseDispositionDto::Clean,
+                ..
+            }
+        ));
+
+        let (mut generic, generic_lease) = coordinator(CoordinatorStatusDto::Uncertain)?;
+        generic.close_lease(&generic_lease)?;
+        assert!(generic.cursor.is_none());
+        let generic_request = serde_json::from_slice::<CoordinatorCommandRequestDto>(
+            &generic.transport.requests[0].2,
+        )?;
+        assert!(matches!(
+            generic_request.command,
+            CoordinatorCommandDto::Release {
+                disposition: CoordinatorReleaseDispositionDto::Uncertain,
+                ..
+            }
+        ));
         Ok(())
     }
 
@@ -673,5 +1292,221 @@ mod tests {
         );
         assert_eq!(error, Err(ShippingControlPlaneError::InvalidResponse));
         Ok(())
+    }
+
+    #[test]
+    fn sealing_material_uses_live_cursor_authority_and_canonical_route()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let response = BridgeGenerationSealingMaterialResponse::new(
+            "profile-generation-root-v1-2",
+            "ab".repeat(32),
+            "cd".repeat(16),
+            GENERATION_SEALING_CHUNK_BYTES,
+        );
+        let mut fixture = SealingFixture::new(MachineHttpResponse::new(
+            200,
+            serde_json::to_vec(&response)?,
+        ))?;
+        fixture.request_material()?;
+
+        assert_eq!(fixture.coordinator.transport.requests.len(), 1);
+        let (method, path, body) = &fixture.coordinator.transport.requests[0];
+        assert_eq!(*method, MachineHttpMethod::PostJson);
+        let expected_path = BRIDGE_GENERATION_SEALING_MATERIAL_PATH_TEMPLATE
+            .replace("{tenantId}", fixture.tenant_id.as_str())
+            .replace("{profileId}", fixture.profile_id.as_str());
+        assert_eq!(path, &expected_path);
+        let request = serde_json::from_slice::<BridgeGenerationSealingMaterialRequest>(body)?;
+        assert_eq!(
+            request.base_generation_id(),
+            fixture.base_generation_id.as_str()
+        );
+        assert_eq!(
+            request.generation_id(),
+            fixture.candidate_generation_id.as_str()
+        );
+        assert_eq!(request.plaintext_digest(), "ab".repeat(32));
+        assert_eq!(
+            request.coordinator_session_id(),
+            "session_sealing_adapter_01"
+        );
+        assert_eq!(
+            request.coordinator_fencing_token(),
+            "fence_sealing_adapter_01"
+        );
+        assert_eq!(request.coordinator_epoch(), 7);
+        let body_text = String::from_utf8_lossy(body);
+        assert!(!body_text.contains("device_sealing_adapter_01"));
+        assert!(!body_text.contains("rootKeyVersion"));
+        assert!(!body_text.contains("coordinatorVersion"));
+        assert!(!body_text.contains("coordinatorSequence"));
+        Ok(())
+    }
+
+    #[test]
+    fn sealing_material_requires_live_exact_cursor_before_transport()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let tenant_id = TenantId::parse("tenant_sealing_no_cursor_01")?;
+        let profile_id = ProfileId::parse("profile_sealing_no_cursor_01")?;
+        let base_generation_id = GenerationId::parse("generation_sealing_no_cursor_base_01")?;
+        let generation_id = GenerationId::parse("generation_sealing_no_cursor_next_01")?;
+        let mut coordinator = ControlPlaneCoordinator::new(SealingMachineHttp::default());
+        assert_eq!(
+            coordinator
+                .material_for(
+                    &tenant_id,
+                    &profile_id,
+                    &base_generation_id,
+                    &generation_id,
+                    [0; 32],
+                )
+                .map(|_| ()),
+            Err(ShippingControlPlaneError::InvalidResponse)
+        );
+        assert!(coordinator.transport.requests.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn sealing_material_rejects_noncanonical_or_oversized_secret_response()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let malformed = [
+            serde_json::to_vec(&BridgeGenerationSealingMaterialResponse::new(
+                "profile-generation-root-v1-02",
+                "ab".repeat(32),
+                "cd".repeat(16),
+                GENERATION_SEALING_CHUNK_BYTES,
+            ))?,
+            serde_json::to_vec(&BridgeGenerationSealingMaterialResponse::new(
+                "profile-generation-root-v1-2",
+                "AB".repeat(32),
+                "cd".repeat(16),
+                GENERATION_SEALING_CHUNK_BYTES,
+            ))?,
+            serde_json::to_vec(&BridgeGenerationSealingMaterialResponse::new(
+                "profile-generation-root-v1-2",
+                "ab".repeat(32),
+                "CD".repeat(16),
+                GENERATION_SEALING_CHUNK_BYTES,
+            ))?,
+            serde_json::to_vec(&BridgeGenerationSealingMaterialResponse::new(
+                "profile-generation-root-v1-2",
+                "ab".repeat(32),
+                "cd".repeat(16),
+                1,
+            ))?,
+            br#"{"keyId":"profile-generation-root-v1-2","dekHex":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","noncePrefixHex":"cccccccccccccccccccccccccccccccc","chunkSize":65536,"unexpected":true}"#.to_vec(),
+            vec![b'x'; MAX_SEALING_MATERIAL_RESPONSE_BYTES + 1],
+        ];
+        for body in malformed {
+            let mut fixture = SealingFixture::new(MachineHttpResponse::new(200, body))?;
+            assert_eq!(
+                fixture.request_material(),
+                Err(ShippingControlPlaneError::InvalidResponse)
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn sealing_material_rejects_non_success_without_reclassification()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let mut fixture = SealingFixture::new(MachineHttpResponse::new(403, b"denied".to_vec()))?;
+        assert_eq!(
+            fixture.request_material(),
+            Err(ShippingControlPlaneError::HttpStatus)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn reopen_download_uses_live_cursor_and_accepts_only_canonical_descriptor()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let tenant_id = TenantId::parse("tenant_sealing_adapter_01")?;
+        let profile_id = ProfileId::parse("profile_sealing_adapter_01")?;
+        let generation_id = GenerationId::parse("generation_sealing_next_01")?;
+        let object_key = canonical_generation_object_key(&tenant_id, &profile_id, &generation_id);
+        let signed_url = "https://0123456789abcdef0123456789abcdef.r2.cloudflarestorage.com/profile-generations/tenants/tenant_sealing_adapter_01/profiles/profile_sealing_adapter_01/generations/generation_sealing_next_01.bpgc?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=access%2F20260830%2Fauto%2Fs3%2Faws4_request&X-Amz-Date=20260830T120000Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        let response = BridgeGenerationDownloadCapabilityResponse::new(
+            generation_id.as_str(),
+            &object_key,
+            "aa".repeat(32),
+            "bb".repeat(32),
+            4096,
+            signed_url,
+            GENERATION_DOWNLOAD_CAPABILITY_MAX_EXPIRES_SECONDS,
+        );
+        let mut fixture = SealingFixture::new(MachineHttpResponse::new(
+            200,
+            serde_json::to_vec(&response)?,
+        ))?;
+        let capability = fixture
+            .coordinator
+            .download_capability(&fixture.tenant_id, &fixture.profile_id)?;
+        assert_eq!(capability.generation_id(), &fixture.candidate_generation_id);
+        assert_eq!(capability.object_key(), object_key);
+        assert_eq!(capability.container_bytes(), 4096);
+        assert_eq!(capability.metadata_digest(), [0xaa; 32]);
+        assert_eq!(capability.container_digest(), [0xbb; 32]);
+        assert_eq!(capability.signed_url(), Some(signed_url));
+
+        let (method, path, body) = &fixture.coordinator.transport.requests[0];
+        assert_eq!(*method, MachineHttpMethod::PostJson);
+        let expected_path = BRIDGE_PROFILE_GENERATION_DOWNLOAD_CAPABILITY_PATH_TEMPLATE
+            .replace("{tenantId}", fixture.tenant_id.as_str())
+            .replace("{profileId}", fixture.profile_id.as_str());
+        assert_eq!(path, &expected_path);
+        let request = serde_json::from_slice::<BridgeGenerationDownloadCapabilityRequest>(body)?;
+        assert_eq!(
+            request.coordinator_session_id(),
+            "session_sealing_adapter_01"
+        );
+        assert_eq!(
+            request.coordinator_fencing_token(),
+            "fence_sealing_adapter_01"
+        );
+        assert_eq!(request.coordinator_epoch(), 7);
+        let body_text = String::from_utf8_lossy(body);
+        for forbidden in [
+            "generationId",
+            "objectKey",
+            "metadataDigest",
+            "containerDigest",
+        ] {
+            assert!(!body_text.contains(forbidden));
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn reopen_requires_exact_cursor_before_transport() -> Result<(), Box<dyn std::error::Error>> {
+        let tenant_id = TenantId::parse("tenant_reopen_no_cursor_01")?;
+        let profile_id = ProfileId::parse("profile_reopen_no_cursor_01")?;
+        let mut coordinator = ControlPlaneCoordinator::new(SealingMachineHttp::default());
+        assert!(matches!(
+            coordinator.download_capability(&tenant_id, &profile_id),
+            Err(ShippingControlPlaneError::InvalidResponse)
+        ));
+        assert!(coordinator.transport.requests.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn signed_r2_get_url_is_fail_closed() {
+        let good = "https://0123456789abcdef0123456789abcdef.r2.cloudflarestorage.com/bucket/object?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=x&X-Amz-Date=20260830T120000Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=abc";
+        assert!(valid_signed_r2_get_url(good));
+        for bad in [
+            good.replacen("https://", "http://", 1),
+            good.replacen(".r2.cloudflarestorage.com", ".example.com", 1),
+            format!("{good}#fragment"),
+            good.replacen("X-Amz-Signature=abc", "signature=abc", 1),
+            good.replacen(
+                "0123456789abcdef0123456789abcdef",
+                "ABCDEF0123456789ABCDEF0123456789",
+                1,
+            ),
+        ] {
+            assert!(!valid_signed_r2_get_url(&bad));
+        }
     }
 }

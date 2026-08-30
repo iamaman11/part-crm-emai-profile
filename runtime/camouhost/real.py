@@ -20,7 +20,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-IPC_VERSION = "1"
+IPC_VERSION = "2"
 MAX_FRAME_LENGTH = 512
 MAX_CONFIG_BYTES = 1024 * 1024
 MAX_URL_BYTES = 2048
@@ -483,6 +483,41 @@ def close_context(manager: Any, _context: Any, root: Path) -> None:
     wait_for_browser_quiescence(root)
 
 
+def install_controlled_close_observation(context: Any) -> dict[str, Any]:
+    """Observe user page/window closure without mutating browser lifecycle.
+
+    A candidate is publishable only when every page observed by this live context emitted its
+    normal close event and no page emitted a crash event. Process loss, IPC EOF/disconnect and
+    unobserved context teardown therefore cannot manufacture a controlled-close witness.
+    """
+    state: dict[str, Any] = {
+        "tracked_pages": set(),
+        "closed_pages": set(),
+        "crashed": False,
+    }
+
+    def track_page(page: Any) -> None:
+        token = id(page)
+        state["tracked_pages"].add(token)
+        page.on(
+            "close",
+            lambda _page, page_token=token: state["closed_pages"].add(page_token),
+        )
+        page.on("crash", lambda _page: state.__setitem__("crashed", True))
+
+    for page in context.pages:
+        track_page(page)
+    context.on("page", track_page)
+    return state
+
+
+def controlled_close_candidate(state: dict[str, Any] | None) -> bool:
+    if state is None or state["crashed"]:
+        return False
+    tracked = state["tracked_pages"]
+    return bool(tracked) and tracked == state["closed_pages"]
+
+
 def materialize_candidate_identity(root: Path) -> dict[str, str]:
     """Create exact generation identity once under an already acquired Bridge writer lock."""
     from camoufox.sync_api import Camoufox
@@ -565,6 +600,7 @@ def run_ipc() -> int:
     active_session: str | None = None
     manager: Any | None = None
     context: Any | None = None
+    close_observation: dict[str, Any] | None = None
 
     for raw in sys.stdin:
         if not valid_frame(raw):
@@ -586,11 +622,24 @@ def run_ipc() -> int:
         ):
             try:
                 manager, context = launch_verified_context(lock, root, config, expected_probe)
+                close_observation = install_controlled_close_observation(context)
             except BaseException:
                 emit("error|runtime")
                 return 5
             active_session = parts[1]
             emit(f"ready|{active_session}")
+            continue
+
+        if (
+            len(parts) == 2
+            and parts[0] == "observe_close"
+            and active_session is not None
+            and parts[1] == active_session
+            and manager is not None
+            and context is not None
+        ):
+            controlled = controlled_close_candidate(close_observation)
+            emit(f"close_observed|{active_session}|{'true' if controlled else 'false'}")
             continue
 
         if (
@@ -612,6 +661,8 @@ def run_ipc() -> int:
         emit("error|protocol")
         return 2
 
+    # EOF/disconnect is never a controlled-close witness. Cleanup is best-effort only and no
+    # positive close-observation frame can be emitted after transport loss.
     if manager is not None and context is not None:
         with contextlib.suppress(BaseException):
             close_context(manager, context, root)

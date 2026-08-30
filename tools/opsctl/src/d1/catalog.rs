@@ -111,6 +111,15 @@ const CATALOG_POST_EPOCH_MIGRATIONS: &[MigrationSpec] = &[
         code_rollback_allowed: true,
         contract_preconditions: &[],
     },
+    MigrationSpec {
+        revision: "0030_profile_generation_successor_commit.sql",
+        migration_class: MigrationClass::Expand,
+        rollout_order: RolloutOrder::MigrateBeforeCode,
+        fail_forward_required: false,
+        destructive: false,
+        code_rollback_allowed: true,
+        contract_preconditions: &[],
+    },
 ];
 
 impl MigrationSpec {
@@ -622,7 +631,7 @@ mod tests {
         let resolver = component_authority(&root, "resolver")?;
 
         assert_eq!(catalog.historical_len, 26);
-        assert_eq!(catalog.ordered_history.len(), 29);
+        assert_eq!(catalog.ordered_history.len(), 30);
         assert_eq!(resolver.historical_len, 4);
         assert_eq!(resolver.ordered_history.len(), 4);
         assert_eq!(
@@ -631,14 +640,14 @@ mod tests {
         );
         assert_eq!(
             catalog.current_repository_revision,
-            "0029_profile_launch_authority.sql"
+            "0030_profile_generation_successor_commit.sql"
         );
         assert_eq!(
             resolver.current_repository_revision,
             "0004_refresh_owner_hmac_version.sql"
         );
 
-        assert_eq!(catalog.post_epoch.len(), 3);
+        assert_eq!(catalog.post_epoch.len(), 4);
         let contract = &catalog.post_epoch[0];
         assert_eq!(contract.migration_file, "0027_pas2_payload_fingerprint.sql");
         assert_eq!(contract.migration_class, MigrationClass::Contract);
@@ -674,6 +683,18 @@ mod tests {
         assert!(!launch.destructive);
         assert!(launch.code_rollback_allowed);
         assert!(launch.contract_preconditions.is_empty());
+
+        let successor = &catalog.post_epoch[3];
+        assert_eq!(
+            successor.migration_file,
+            "0030_profile_generation_successor_commit.sql"
+        );
+        assert_eq!(successor.migration_class, MigrationClass::Expand);
+        assert_eq!(successor.rollout_order, RolloutOrder::MigrateBeforeCode);
+        assert!(!successor.fail_forward_required);
+        assert!(!successor.destructive);
+        assert!(successor.code_rollback_allowed);
+        assert!(successor.contract_preconditions.is_empty());
         Ok(())
     }
 

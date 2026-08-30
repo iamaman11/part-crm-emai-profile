@@ -3,6 +3,7 @@ use profile_platform_primitives::{DeviceId, GenerationId, ProfileId, TenantId};
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 const ROOT_MARKER: &str = ".profile-platform-root";
 const ROOT_MARKER_CONTENT: &str = "profile-platform-local-root-v1\n";
@@ -17,6 +18,7 @@ const MAX_INVENTORY_FILES: usize = 100_000;
 const MAX_RELATIVE_PATH_BYTES: usize = 512;
 const FNV_OFFSET_BASIS: u64 = 0xcbf2_9ce4_8422_2325;
 const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
+static REJECTED_GENERATION_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct MaterializationRoot {
@@ -92,6 +94,51 @@ impl MaterializationRoot {
         let tenant_path = open_directory(&self.canonical_path, tenant_id.as_str())?;
         let profile_path = open_directory(&tenant_path, profile_id.as_str())?;
         GenerationWorkspace::open(profile_path.join(generation_id.as_str()))
+    }
+
+    /// Remove an invalid post-commit local candidate from its canonical generation path.
+    ///
+    /// This is intentionally different from normal generation open: the exact canonical directory
+    /// may already be corrupted (including a missing generation marker). The safe tenant/profile
+    /// parents and exact generation segment are still validated, symbolic links/non-directories
+    /// are rejected, and any active Bridge writer lock blocks removal. The real directory is first
+    /// atomically renamed away from the canonical generation path before best-effort destruction,
+    /// so a cleanup failure cannot make its bytes eligible for authoritative-local reopen.
+    pub fn reject_generation_for_rematerialization(
+        &self,
+        tenant_id: &TenantId,
+        profile_id: &ProfileId,
+        generation_id: &GenerationId,
+    ) -> Result<(), LocalProfileError> {
+        let tenant_path = open_directory(&self.canonical_path, tenant_id.as_str())?;
+        let profile_path = open_directory(&tenant_path, profile_id.as_str())?;
+        let generation_path = profile_path.join(generation_id.as_str());
+        let metadata = fs::symlink_metadata(&generation_path)?;
+        if metadata.file_type().is_symlink() {
+            return Err(LocalProfileError::SymbolicLinkRejected);
+        }
+        if !metadata.is_dir() {
+            return Err(LocalProfileError::RootIsNotDirectory);
+        }
+        let bridge_lock = generation_path.join(BRIDGE_LOCK_FILE);
+        match fs::symlink_metadata(&bridge_lock) {
+            Ok(_) => return Err(LocalProfileError::LockBusy),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error.into()),
+        }
+
+        let sequence = REJECTED_GENERATION_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+        let rejected_path = profile_path.join(format!(
+            ".rematerialize-rejected-{}-{}-{sequence}",
+            generation_id.as_str(),
+            std::process::id()
+        ));
+        if rejected_path.exists() {
+            return Err(LocalProfileError::TargetAlreadyExists);
+        }
+        fs::rename(&generation_path, &rejected_path)?;
+        fs::remove_dir_all(&rejected_path)?;
+        Ok(())
     }
 }
 
@@ -559,4 +606,91 @@ fn copy_inventory(
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{BridgeWorkspaceLock, MaterializationRoot};
+    use profile_platform_primitives::{DeviceId, GenerationId, ProfileId, TenantId};
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static TEST_SEQUENCE: AtomicU64 = AtomicU64::new(1);
+
+    type RematerializationFixture = (
+        std::path::PathBuf,
+        MaterializationRoot,
+        TenantId,
+        ProfileId,
+        GenerationId,
+    );
+
+    fn fixture() -> Result<RematerializationFixture, Box<dyn std::error::Error>> {
+        let sequence = TEST_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+        let path = std::env::temp_dir().join(format!(
+            "profile-bridge-reject-rematerialize-{}-{sequence}",
+            std::process::id()
+        ));
+        let root = MaterializationRoot::open_or_create(path.clone())?;
+        Ok((
+            path,
+            root,
+            TenantId::parse(format!("tenant_reject_{sequence}"))?,
+            ProfileId::parse(format!("profile_reject_{sequence}"))?,
+            GenerationId::parse(format!("generation_reject_{sequence}"))?,
+        ))
+    }
+
+    #[test]
+    fn rejected_candidate_disappears_from_canonical_generation_path()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let (path, root, tenant, profile, generation) = fixture()?;
+        let workspace = root.create_generation(&tenant, &profile, &generation)?;
+        std::fs::write(
+            workspace.path().join("candidate.bin"),
+            b"invalid-after-commit",
+        )?;
+
+        root.reject_generation_for_rematerialization(&tenant, &profile, &generation)?;
+
+        assert!(
+            root.open_generation(&tenant, &profile, &generation)
+                .is_err()
+        );
+        assert!(!workspace.path().exists());
+        let _ = crate::test_support::remove_test_root(&path);
+        Ok(())
+    }
+
+    #[test]
+    fn writer_owned_generation_cannot_be_rejected_for_rematerialization()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let (path, root, tenant, profile, generation) = fixture()?;
+        let workspace = root.create_generation(&tenant, &profile, &generation)?;
+        let device = DeviceId::parse("device_reject_rematerialize_01")?;
+        let lock = BridgeWorkspaceLock::acquire(&workspace, &device, 1)?;
+
+        assert_eq!(
+            root.reject_generation_for_rematerialization(&tenant, &profile, &generation),
+            Err(super::LocalProfileError::LockBusy)
+        );
+        assert!(root.open_generation(&tenant, &profile, &generation).is_ok());
+
+        lock.release()?;
+        let _ = crate::test_support::remove_test_root(&path);
+        Ok(())
+    }
+
+    #[test]
+    fn corrupted_marker_still_cannot_keep_committed_bytes_on_canonical_path()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let (path, root, tenant, profile, generation) = fixture()?;
+        let workspace = root.create_generation(&tenant, &profile, &generation)?;
+        std::fs::remove_file(workspace.path().join(".profile-generation"))?;
+
+        root.reject_generation_for_rematerialization(&tenant, &profile, &generation)?;
+
+        assert!(!workspace.path().exists());
+        let _ = crate::test_support::remove_test_root(&path);
+        Ok(())
+    }
 }

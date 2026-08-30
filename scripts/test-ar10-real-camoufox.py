@@ -23,6 +23,7 @@ ROOT = Path(__file__).resolve().parents[1]
 CAMOUHOST = ROOT / "runtime/camouhost/real.py"
 RUNTIME_LOCK = ROOT / "runtime/camouhost/runtime-lock.json"
 SESSION = "session_01JAR10REALCAMOUFOX"
+IPC_VERSION = "2"
 BRIDGE_LOCK_CONTENT = "profile-platform-bridge-lock-v1\ndevice_01JAR10REALCAMOUFOX\n1\n"
 MANAGED_PARENT_ENV = {
     "DBUS_SESSION_BUS_ADDRESS",
@@ -251,8 +252,8 @@ def launch_probe(
         bufsize=1,
     )
     try:
-        hello = exchange(process, "hello|1")
-        if hello != "hello_ack|1":
+        hello = exchange(process, f"hello|{IPC_VERSION}")
+        if hello != f"hello_ack|{IPC_VERSION}":
             return hello, process.wait(timeout=30), ""
         launch = exchange(process, f"launch|{SESSION}")
         if launch == f"ready|{SESSION}":
@@ -306,7 +307,7 @@ def run_cold_launch(root: Path, report: dict[str, str], url: str) -> None:
         bufsize=1,
     )
     try:
-        assert exchange(process, "hello|1") == "hello_ack|1"
+        assert exchange(process, f"hello|{IPC_VERSION}") == f"hello_ack|{IPC_VERSION}"
         assert exchange(process, f"launch|{SESSION}") == f"ready|{SESSION}"
         assert exchange(process, f"close|{SESSION}") == f"closed|{SESSION}|true"
         returncode = process.wait(timeout=60)
@@ -326,7 +327,7 @@ def expect_prelaunch_identity_rejection(root: Path, report: dict[str, str], url:
         [sys.executable, str(CAMOUHOST)],
         cwd=ROOT,
         env=env,
-        input="hello|1\n",
+        input=f"hello|{IPC_VERSION}\n",
         text=True,
         capture_output=True,
         timeout=30,
@@ -352,7 +353,7 @@ def expect_probe_drift_rejection(root: Path, report: dict[str, str], url: str) -
         bufsize=1,
     )
     try:
-        assert exchange(process, "hello|1") == "hello_ack|1"
+        assert exchange(process, f"hello|{IPC_VERSION}") == f"hello_ack|{IPC_VERSION}"
         assert exchange(process, f"launch|{SESSION}") == "error|runtime"
         if process.wait(timeout=60) != 5:
             raise AssertionError("profile-stable probe drift did not fail closed")

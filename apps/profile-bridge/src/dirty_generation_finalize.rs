@@ -276,7 +276,9 @@ mod tests {
             &mut self,
             _tenant_id: &TenantId,
             _profile_id: &ProfileId,
+            _base_generation_id: &GenerationId,
             _generation_id: &GenerationId,
+            _plaintext_digest: [u8; 32],
         ) -> Result<GenerationSealingMaterial, Self::Error> {
             Ok(GenerationSealingMaterial::new(
                 GenerationDek::new(

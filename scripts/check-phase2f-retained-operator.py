@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import re
 from pathlib import Path
 
 OPERATOR = Path("apps/profile-bridge/src/operator_flow.rs")
@@ -11,14 +12,24 @@ UNIT_TEST = Path("apps/profile-bridge/src/operator_flow.rs")
 ACCEPTANCE_TEST = Path("apps/profile-bridge/tests/operator_flow_acceptance.rs")
 SYNTHETIC = Path("apps/profile-bridge/src/bin/profile-bridge-synthetic.rs")
 
+AUTHORITATIVE_OPEN = "pub fn open_authoritative"
+SINGLE_OPEN_BODY = "fn open_with_materialization"
 OPEN_PENDING_GUARD = "self.active.is_some() || self.retained_dirty.is_some()"
 RETAINED_FIELD = "retained_dirty: Option<RetainedDirtyClose>"
 RETAINED_HANDOFF = "RetainedDirtyClose::begin_after_browser_close("
 RETAINED_ASSIGNMENT = "self.retained_dirty = Some(retained)"
-FINALIZE_METHOD = "pub async fn finalize_dirty_close"
-FINALIZE_RETAINED = ".retained_dirty\n            .as_mut()"
-FINALIZE_DELEGATE = ".finalize("
-FINALIZE_CLEAR = "self.retained_dirty = None"
+SAVE_METHOD = "pub fn save_retained_successor"
+SAVE_CONTROL = "ControlPlaneGenerationSuccessor::new(transport, &mut self.coordinator)"
+SAVE_PREPARE = "prepare_retained_generation_successor("
+SAVE_COMMIT = "publish_verify_and_commit_successor("
+SAVE_COMPLETE = ".complete_committed_successor("
+SAVE_CLEAR = "self.retained_dirty = None"
+LEGACY_FINALIZE = "pub async fn finalize_dirty_close"
+LEGACY_FINALIZE_GUARD = (
+    '#[cfg(any(test, feature = "synthetic-test-bin"))]\n'
+    "    #[allow(clippy::too_many_arguments)]\n"
+    "    pub async fn finalize_dirty_close"
+)
 SYNTHETIC_MARKER = "synthetic-operator-complete state=DIRTY_LOCAL_COMMITTED_GENERATION"
 
 REQUIRED_UNIT_TESTS = (
@@ -62,6 +73,11 @@ def function_body(source: str, marker: str) -> str:
     return ""
 
 
+def regex_position(source: str, pattern: str) -> int:
+    match = re.search(pattern, source)
+    return -1 if match is None else match.start()
+
+
 def failures_for_sources(
     operator: str,
     unit_test: str,
@@ -71,11 +87,22 @@ def failures_for_sources(
     failures: list[str] = []
     production = operator.split("#[cfg(test)]", 1)[0]
 
-    for fragment in (RETAINED_FIELD, OPEN_PENDING_GUARD, FINALIZE_METHOD):
+    for fragment in (
+        RETAINED_FIELD,
+        AUTHORITATIVE_OPEN,
+        SINGLE_OPEN_BODY,
+        OPEN_PENDING_GUARD,
+        SAVE_METHOD,
+    ):
         if fragment not in production:
             failures.append(f"missing retained operator invariant: {fragment}")
 
-    open_flow = function_body(production, "pub fn open(")
+    if LEGACY_FINALIZE not in operator or LEGACY_FINALIZE_GUARD not in operator:
+        failures.append(
+            "historical DeviceJob finalize must exist only behind test/synthetic cfg during predecessor migration"
+        )
+
+    open_flow = function_body(production, SINGLE_OPEN_BODY)
     pending_guard = open_flow.find(OPEN_PENDING_GUARD)
     device_identity = open_flow.find(".device_identity")
     enrollment = open_flow.find(".redeem_claim(")
@@ -83,7 +110,15 @@ def failures_for_sources(
         pending_guard < device_identity < enrollment
     ):
         failures.append(
-            "pending dirty ownership must block before device/enrollment claim processing"
+            "pending dirty ownership must block in the single launch body before device/enrollment claim processing"
+        )
+
+    authoritative_flow = function_body(production, AUTHORITATIVE_OPEN)
+    delegate = authoritative_flow.find("self.open_with_materialization(")
+    rematerialize = authoritative_flow.find("ensure_authoritative_generation(")
+    if min(delegate, rematerialize) < 0 or delegate >= rematerialize:
+        failures.append(
+            "production launch must delegate to the single launch body with authoritative generation rematerialization"
         )
 
     close_flow = function_body(production, "pub fn close(")
@@ -104,17 +139,34 @@ def failures_for_sources(
                 f"graceful retained-close handoff must not release ownership early: {forbidden}"
             )
 
-    finalize_flow = function_body(production, FINALIZE_METHOD)
-    retained = finalize_flow.find(FINALIZE_RETAINED)
-    delegated = finalize_flow.find(FINALIZE_DELEGATE)
-    cleanup = finalize_flow.find("workspace_lock: !completion.workspace_lock_released()")
-    terminal = finalize_flow.find("let terminal = OperatorTerminalRecord")
-    clear = finalize_flow.find(FINALIZE_CLEAR)
-    if min(retained, delegated, cleanup, terminal, clear) < 0 or not (
-        retained < delegated < cleanup < terminal < clear
+    save_flow = function_body(production, SAVE_METHOD)
+    retained = regex_position(
+        save_flow,
+        r"self\s*\.\s*retained_dirty\s*\.\s*as_ref\s*\(\s*\)",
+    )
+    control = save_flow.find(SAVE_CONTROL)
+    prepare = save_flow.find(SAVE_PREPARE)
+    commit = save_flow.find(SAVE_COMMIT)
+    complete = save_flow.find(SAVE_COMPLETE)
+    clear = save_flow.rfind(SAVE_CLEAR)
+    if min(retained, control, prepare, commit, complete, clear) < 0 or not (
+        retained < control < prepare < commit < complete < clear
     ):
         failures.append(
-            "dirty close finalization must use retained ownership and clear it only after authoritative completion bookkeeping"
+            "canonical retained save must preserve prepare -> exact verify/commit -> post-commit completion -> clear ordering"
+        )
+    precommit_region = save_flow[:commit] if commit >= 0 else ""
+    if SAVE_CLEAR in precommit_region or "coordinator.close_lease" in precommit_region:
+        failures.append(
+            "pre-commit failure region must retain dirty writer and coordinator ownership"
+        )
+    if "generation_id: committed.generation_id().clone()" not in save_flow:
+        failures.append(
+            "post-commit terminal bookkeeping must use committed N+1 generation identity"
+        )
+    if "DirtyCloseLocalOutcome::RematerializationBlocked" not in save_flow:
+        failures.append(
+            "post-commit local rematerialization failure must remain fail-closed"
         )
 
     for test_name in REQUIRED_UNIT_TESTS:
@@ -155,15 +207,30 @@ def self_test(root: Path) -> list[str]:
     if not any("pending dirty ownership" in failure or OPEN_PENDING_GUARD in failure for failure in rejected):
         return ["retained-operator premature second-ownership fixture unexpectedly passed"]
 
+    fixture = operator.replace("ensure_authoritative_generation(", "removed_rematerialization(", 1)
+    rejected = failures_for_sources(fixture, unit_test, acceptance_test, synthetic)
+    if not any("authoritative generation rematerialization" in failure for failure in rejected):
+        return ["retained-operator missing authoritative rematerialization fixture unexpectedly passed"]
+
     fixture = operator.replace(RETAINED_HANDOFF, "RetainedDirtyClose::removed_handoff(", 1)
     rejected = failures_for_sources(fixture, unit_test, acceptance_test, synthetic)
     if not any("graceful close must hand writer ownership" in failure for failure in rejected):
         return ["retained-operator missing graceful handoff fixture unexpectedly passed"]
 
-    fixture = operator.replace(FINALIZE_CLEAR, "/* retained ownership clear removed */", 1)
+    fixture = operator.replace(SAVE_COMMIT, "removed_successor_commit(", 1)
     rejected = failures_for_sources(fixture, unit_test, acceptance_test, synthetic)
-    if not any("clear it only after authoritative completion" in failure for failure in rejected):
-        return ["retained-operator missing post-finalize clear fixture unexpectedly passed"]
+    if not any("canonical retained save" in failure for failure in rejected):
+        return ["retained-operator missing canonical successor commit fixture unexpectedly passed"]
+
+    fixture = operator.replace(LEGACY_FINALIZE_GUARD, LEGACY_FINALIZE, 1)
+    rejected = failures_for_sources(fixture, unit_test, acceptance_test, synthetic)
+    if not any("test/synthetic cfg" in failure for failure in rejected):
+        return ["retained-operator production legacy-finalize fixture unexpectedly passed"]
+
+    fixture = operator.replace(SAVE_CLEAR, "/* retained ownership clear removed */")
+    rejected = failures_for_sources(fixture, unit_test, acceptance_test, synthetic)
+    if not any("canonical retained save" in failure for failure in rejected):
+        return ["retained-operator missing post-commit clear fixture unexpectedly passed"]
 
     return []
 

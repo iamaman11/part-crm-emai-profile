@@ -1,17 +1,25 @@
+#[cfg(any(test, feature = "synthetic-test-bin"))]
 use crate::browser_mail_query::BrowserMailExecutionProof;
 use crate::dirty_generation::PreparedDirtyGeneration;
+#[cfg(any(test, feature = "synthetic-test-bin"))]
+use crate::dirty_generation_finalize::DirtyGenerationFinalizeError;
+#[cfg(any(test, feature = "synthetic-test-bin"))]
 use crate::dirty_generation_finalize::{
-    DirtyGenerationCommitClientPort, DirtyGenerationFinalizeError,
-    publish_verify_and_commit_dirty_generation,
+    DirtyGenerationCommitClientPort, publish_verify_and_commit_dirty_generation,
 };
 use crate::local_profile::{
-    BridgeWorkspaceLock, LocalGenerationRecord, LocalGenerationState, LocalProfileError,
+    BridgeWorkspaceLock, GenerationWorkspace, LocalGenerationRecord, LocalGenerationState,
+    LocalProfileError, MaterializationRoot,
 };
+use crate::shipping_generation_save::CommittedGenerationSuccessor;
 use application_ports::ProfileCoordinatorPort;
+#[cfg(any(test, feature = "synthetic-test-bin"))]
 use application_ports::generation_objects::{
     GenerationObjectExactVerifyPort, GenerationObjectUploadPort,
 };
-use profile_platform_primitives::{GenerationId, TenantScope, UnixMillis};
+#[cfg(any(test, feature = "synthetic-test-bin"))]
+use profile_platform_primitives::TenantScope;
+use profile_platform_primitives::{GenerationId, UnixMillis};
 use session_domain::ProfileLease;
 use std::fmt;
 
@@ -55,6 +63,93 @@ impl RetainedDirtyClose {
         self.workspace_lock.is_some()
     }
 
+    pub fn open_base_workspace(
+        &self,
+        root: &MaterializationRoot,
+    ) -> Result<GenerationWorkspace, LocalProfileError> {
+        if self.workspace_lock.is_none()
+            || self.base.state() != LocalGenerationState::DirtyLocal
+            || !self.base.is_locked()
+            || self.lease.tenant_id().as_str().is_empty()
+            || self.lease.profile_id().as_str().is_empty()
+        {
+            return Err(LocalProfileError::InvalidTransition);
+        }
+        root.open_generation(
+            self.lease.tenant_id(),
+            self.lease.profile_id(),
+            self.base.generation_id(),
+        )
+    }
+
+    /// Complete local ownership after the canonical backend successor commit has succeeded.
+    ///
+    /// The backend commit is already authoritative when this method is entered. Therefore the old
+    /// base is made superseded before candidate validation and is never restored. A changed or
+    /// missing candidate is removed from its canonical N+1 path when possible so the next ordinary
+    /// P2 launch must rematerialize the server-selected N+1. Workspace/coordinator release are
+    /// attempted independently; failure of either is reported but never rolls the backend back.
+    pub fn complete_committed_successor<P>(
+        &mut self,
+        root: &MaterializationRoot,
+        prepared: &PreparedDirtyGeneration,
+        committed: &CommittedGenerationSuccessor,
+        coordinator: &mut P,
+        now: UnixMillis,
+    ) -> Result<DirtyCloseCompletion, CommittedDirtyCloseError>
+    where
+        P: ProfileCoordinatorPort,
+    {
+        if self.workspace_lock.is_none()
+            || self.base.state() != LocalGenerationState::DirtyLocal
+            || !self.base.is_locked()
+            || !committed_matches_retained(&self.lease, &self.base, prepared, committed)
+        {
+            return Err(CommittedDirtyCloseError::InvalidRetainedOwnership);
+        }
+
+        let transition_at = if now < self.base.last_activity_at() {
+            self.base.last_activity_at()
+        } else {
+            now
+        };
+        self.base
+            .mark_superseded(transition_at)
+            .map_err(CommittedDirtyCloseError::Local)?;
+
+        let local_outcome = match prepared.candidate_workspace().inventory() {
+            Ok(inventory) if inventory == *prepared.candidate_inventory() => {
+                DirtyCloseLocalOutcome::CandidateAccepted(LocalGenerationRecord::new(
+                    committed.generation_id().clone(),
+                    inventory.total_bytes(),
+                    transition_at,
+                ))
+            }
+            Ok(_) | Err(_) => rematerialization_outcome(
+                root,
+                self.lease.tenant_id(),
+                self.lease.profile_id(),
+                committed.generation_id(),
+            ),
+        };
+
+        let physical_workspace_lock_released = self
+            .workspace_lock
+            .take()
+            .is_some_and(|workspace_lock| workspace_lock.release().is_ok());
+        let local_unlock_recorded =
+            !physical_workspace_lock_released || self.base.set_locked(false).is_ok();
+        let workspace_lock_released = physical_workspace_lock_released && local_unlock_recorded;
+        let coordinator_lease_released = coordinator.close_confirmed_save(&self.lease).is_ok();
+
+        Ok(DirtyCloseCompletion {
+            local_outcome,
+            workspace_lock_released,
+            coordinator_lease_released,
+        })
+    }
+
+    #[cfg(any(test, feature = "synthetic-test-bin"))]
     #[allow(clippy::too_many_arguments)]
     pub async fn finalize<U, V, M, P>(
         &mut self,
@@ -118,6 +213,48 @@ impl RetainedDirtyClose {
     }
 }
 
+fn committed_matches_retained(
+    lease: &ProfileLease,
+    base: &LocalGenerationRecord,
+    prepared: &PreparedDirtyGeneration,
+    committed: &CommittedGenerationSuccessor,
+) -> bool {
+    let metadata = prepared.sealed().metadata();
+    let expected_container_bytes = u64::try_from(prepared.sealed().container().len()).ok();
+    lease.tenant_id() == metadata.tenant_id()
+        && lease.profile_id() == metadata.profile_id()
+        && metadata.base_generation_id() == Some(base.generation_id())
+        && committed.generation_id() == metadata.generation_id()
+        && committed.object_key() == prepared.object_key()
+        && committed.metadata_digest() == prepared.metadata_digest()
+        && committed.container_digest() == prepared.container_digest()
+        && Some(committed.container_bytes()) == expected_container_bytes
+        && prepared
+            .candidate_workspace()
+            .path()
+            .file_name()
+            .and_then(|value| value.to_str())
+            == Some(committed.generation_id().as_str())
+}
+
+fn rematerialization_outcome(
+    root: &MaterializationRoot,
+    tenant_id: &profile_platform_primitives::TenantId,
+    profile_id: &profile_platform_primitives::ProfileId,
+    generation_id: &GenerationId,
+) -> DirtyCloseLocalOutcome {
+    match root.reject_generation_for_rematerialization(tenant_id, profile_id, generation_id) {
+        Ok(()) | Err(LocalProfileError::Io(std::io::ErrorKind::NotFound)) => {
+            DirtyCloseLocalOutcome::RematerializeRequired(generation_id.clone())
+        }
+        Err(error) => DirtyCloseLocalOutcome::RematerializationBlocked {
+            generation_id: generation_id.clone(),
+            error,
+        },
+    }
+}
+
+#[cfg(any(test, feature = "synthetic-test-bin"))]
 fn same_lease(left: &ProfileLease, right: &ProfileLease) -> bool {
     left.tenant_id() == right.tenant_id()
         && left.profile_id() == right.profile_id()
@@ -132,6 +269,10 @@ fn same_lease(left: &ProfileLease, right: &ProfileLease) -> bool {
 pub enum DirtyCloseLocalOutcome {
     CandidateAccepted(LocalGenerationRecord),
     RematerializeRequired(GenerationId),
+    RematerializationBlocked {
+        generation_id: GenerationId,
+        error: LocalProfileError,
+    },
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -156,8 +297,45 @@ impl DirtyCloseCompletion {
     pub const fn coordinator_lease_released(&self) -> bool {
         self.coordinator_lease_released
     }
+
+    #[must_use]
+    pub fn is_fully_saved_locally(&self) -> bool {
+        matches!(
+            self.local_outcome,
+            DirtyCloseLocalOutcome::CandidateAccepted(_)
+        ) && self.workspace_lock_released
+            && self.coordinator_lease_released
+    }
+
+    #[must_use]
+    pub fn is_committed_recovery_required(&self) -> bool {
+        !self.is_fully_saved_locally()
+    }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CommittedDirtyCloseError {
+    InvalidRetainedOwnership,
+    Local(LocalProfileError),
+}
+
+impl fmt::Display for CommittedDirtyCloseError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::InvalidRetainedOwnership => {
+                formatter.write_str("committed dirty-close ownership is invalid")
+            }
+            Self::Local(error) => write!(
+                formatter,
+                "committed dirty-close local transition failed: {error}"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for CommittedDirtyCloseError {}
+
+#[cfg(any(test, feature = "synthetic-test-bin"))]
 #[derive(Debug, Eq, PartialEq)]
 pub enum RetainedDirtyCloseError<C> {
     InvalidRetainedOwnership,
@@ -165,6 +343,7 @@ pub enum RetainedDirtyCloseError<C> {
     Local(LocalProfileError),
 }
 
+#[cfg(any(test, feature = "synthetic-test-bin"))]
 impl<C: fmt::Display> fmt::Display for RetainedDirtyCloseError<C> {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -177,6 +356,7 @@ impl<C: fmt::Display> fmt::Display for RetainedDirtyCloseError<C> {
     }
 }
 
+#[cfg(any(test, feature = "synthetic-test-bin"))]
 impl<C: std::error::Error> std::error::Error for RetainedDirtyCloseError<C> {}
 
 #[cfg(test)]
@@ -234,7 +414,9 @@ mod tests {
             &mut self,
             _tenant_id: &TenantId,
             _profile_id: &ProfileId,
+            _base_generation_id: &GenerationId,
             _generation_id: &GenerationId,
+            _plaintext_digest: [u8; 32],
         ) -> Result<GenerationSealingMaterial, Self::Error> {
             Ok(GenerationSealingMaterial::new(
                 GenerationDek::new(

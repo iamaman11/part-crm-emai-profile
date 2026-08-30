@@ -1,5 +1,6 @@
 #![forbid(unsafe_code)]
 
+pub mod authoritative_generation;
 pub mod browser_execution;
 pub mod browser_mail_query;
 pub mod browser_mail_runtime;
@@ -7,22 +8,37 @@ pub mod browser_preflight;
 pub mod camouhost_process;
 pub mod dirty_close;
 pub mod dirty_generation;
+#[cfg(any(test, feature = "synthetic-test-bin"))]
 pub mod dirty_generation_finalize;
+#[cfg(any(test, feature = "synthetic-test-bin"))]
 mod dirty_generation_local;
+#[cfg(any(test, feature = "synthetic-test-bin"))]
 pub mod dirty_generation_publish;
 pub mod fake_mail_query;
+pub mod generation_reopen;
+mod generation_snapshot;
 pub mod launch_binding;
 pub mod local_profile;
 pub mod operator_flow;
 pub mod runtime_bundle;
 pub mod shipping_composition;
 pub mod shipping_control_plane;
+pub mod shipping_generation_save;
+pub mod shipping_generation_successor_control;
 pub mod shipping_network;
 pub mod shipping_preflight;
 
 #[cfg(test)]
+mod operator_p3_reopen_e2e_tests;
+#[cfg(test)]
+mod operator_p3_save_tests;
+#[cfg(test)]
+mod shipping_control_plane_p3_tests;
+#[cfg(test)]
 mod test_support;
 
+#[cfg(windows)]
+pub mod windows_generation_put;
 #[cfg(windows)]
 pub mod windows_native;
 
@@ -102,6 +118,14 @@ impl CamouhostPort for FakeCamouhost {
                 self.active_session = Some(session_id.clone());
                 Ok(CamouhostMessage::Ready {
                     session_id: session_id.clone(),
+                })
+            }
+            CamouhostMessage::ObserveClose { session_id }
+                if self.active_session.as_ref() == Some(session_id) =>
+            {
+                Ok(CamouhostMessage::CloseObserved {
+                    session_id: session_id.clone(),
+                    controlled: false,
                 })
             }
             CamouhostMessage::Close { session_id }
@@ -261,6 +285,15 @@ mod tests {
             })?,
             CamouhostMessage::Ready {
                 session_id: session_id.clone(),
+            }
+        );
+        assert_eq!(
+            runtime.exchange(&CamouhostMessage::ObserveClose {
+                session_id: session_id.clone(),
+            })?,
+            CamouhostMessage::CloseObserved {
+                session_id: session_id.clone(),
+                controlled: false,
             }
         );
         assert_eq!(

@@ -8,10 +8,10 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-const CATALOG_BASELINE_REVISION: &str = "0029_profile_launch_authority.sql";
+const CATALOG_BASELINE_REVISION: &str = "0030_profile_generation_successor_commit.sql";
 const CATALOG_FROZEN_EPOCH_DIGEST: &str =
     "4d1d8b8d3bba5d0903385d05fc18e0036628ff1123e0e26e9a080a340f7b5e2e";
-const CATALOG_FUTURE_REVISION: &str = "0030_post_epoch_probe.sql";
+const CATALOG_FUTURE_REVISION: &str = "0031_post_epoch_probe.sql";
 const RESOLVER_BASELINE_REVISION: &str = "0004_refresh_owner_hmac_version.sql";
 const RESOLVER_FROZEN_EPOCH_DIGEST: &str =
     "98fd6f91a839223b06c441df4901dbd4fda8e69f2f90606f00e43faad91877ec";
@@ -174,6 +174,15 @@ fn patch_future_specs(root: &Path) -> Result<(), Box<dyn Error>> {
         code_rollback_allowed: true,
         contract_preconditions: &[],
     },
+    MigrationSpec {
+        revision: "0030_profile_generation_successor_commit.sql",
+        migration_class: MigrationClass::Expand,
+        rollout_order: RolloutOrder::MigrateBeforeCode,
+        fail_forward_required: false,
+        destructive: false,
+        code_rollback_allowed: true,
+        contract_preconditions: &[],
+    },
 ];
 "#;
     let patched_catalog = r#"const CATALOG_POST_EPOCH_MIGRATIONS: &[MigrationSpec] = &[
@@ -208,7 +217,16 @@ fn patch_future_specs(root: &Path) -> Result<(), Box<dyn Error>> {
         contract_preconditions: &[],
     },
     MigrationSpec {
-        revision: "0030_post_epoch_probe.sql",
+        revision: "0030_profile_generation_successor_commit.sql",
+        migration_class: MigrationClass::Expand,
+        rollout_order: RolloutOrder::MigrateBeforeCode,
+        fail_forward_required: false,
+        destructive: false,
+        code_rollback_allowed: true,
+        contract_preconditions: &[],
+    },
+    MigrationSpec {
+        revision: "0031_post_epoch_probe.sql",
         migration_class: MigrationClass::Expand,
         rollout_order: RolloutOrder::MigrateBeforeCode,
         fail_forward_required: false,
@@ -232,7 +250,7 @@ fn install_future_sql(root: &Path) -> Result<(), Box<dyn Error>> {
     let source = repo_root();
     fs::copy(
         source.join("tests/d1-evolution/post-epoch/catalog/0027_post_epoch_probe.sql"),
-        root.join("migrations/d1/0030_post_epoch_probe.sql"),
+        root.join("migrations/d1/0031_post_epoch_probe.sql"),
     )?;
     fs::copy(
         source.join("tests/d1-evolution/post-epoch/resolver/0005_post_epoch_probe.sql"),
@@ -486,7 +504,7 @@ fn next_catalog_and_first_resolver_migrations_run_through_real_authoring_path()
             baseline_revision: CATALOG_BASELINE_REVISION,
             frozen_epoch_digest: CATALOG_FROZEN_EPOCH_DIGEST,
             future_revision: CATALOG_FUTURE_REVISION,
-            expected_post_epoch_count: 4,
+            expected_post_epoch_count: 5,
         },
         FutureCase {
             component: "resolver",
@@ -502,8 +520,8 @@ fn next_catalog_and_first_resolver_migrations_run_through_real_authoring_path()
 
     let canonical_projection: Value = serde_json::from_str(&repository_projection(&repo_root())?)?;
     let canonical_catalog = component(&canonical_projection, "catalog")?;
-    assert_eq!(canonical_catalog["migration_count"], 29);
-    assert_eq!(canonical_catalog["post_epoch_migration_count"], 3);
+    assert_eq!(canonical_catalog["migration_count"], 30);
+    assert_eq!(canonical_catalog["post_epoch_migration_count"], 4);
     assert_eq!(
         canonical_catalog["current_repository_revision"],
         CATALOG_BASELINE_REVISION
@@ -531,8 +549,13 @@ fn next_catalog_and_first_resolver_migrations_run_through_real_authoring_path()
             .is_file()
     );
     assert!(
+        repo_root()
+            .join("migrations/d1/0030_profile_generation_successor_commit.sql")
+            .is_file()
+    );
+    assert!(
         !repo_root()
-            .join("migrations/d1/0030_post_epoch_probe.sql")
+            .join("migrations/d1/0031_post_epoch_probe.sql")
             .exists()
     );
     assert!(

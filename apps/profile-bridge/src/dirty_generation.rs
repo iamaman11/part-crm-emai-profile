@@ -1,20 +1,14 @@
+use crate::generation_snapshot::{GenerationSnapshotError, encode_workspace_snapshot};
 use crate::local_profile::{
     GenerationInventory, GenerationWorkspace, LocalGenerationRecord, LocalGenerationState,
     LocalProfileError, MaterializationRoot, RecoveryClone,
 };
 use encrypted_generation_domain::{
-    GenerationDek, GenerationIdentity, GenerationMetadata, NoncePrefix, SealedGeneration,
-    seal_generation,
+    GenerationDek, GenerationIdentity, GenerationMetadata, NoncePrefix, PlaintextDigest,
+    SealedGeneration, seal_generation,
 };
 use profile_platform_primitives::{GenerationId, ProfileId, TenantId};
 use std::fmt;
-use std::fs::File;
-use std::io::Read;
-
-const SNAPSHOT_MAGIC: &[u8; 8] = b"BPGW0001";
-const MAX_SNAPSHOT_BYTES: usize = 67_108_864;
-const FNV_OFFSET_BASIS: u64 = 0xcbf2_9ce4_8422_2325;
-const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DirtyGenerationError {
@@ -81,7 +75,9 @@ pub trait GenerationSealingMaterialPort {
         &mut self,
         tenant_id: &TenantId,
         profile_id: &ProfileId,
+        base_generation_id: &GenerationId,
         generation_id: &GenerationId,
+        plaintext_digest: [u8; 32],
     ) -> Result<GenerationSealingMaterial, Self::Error>;
 }
 
@@ -159,13 +155,21 @@ pub fn prepare_dirty_generation_candidate<K: GenerationSealingMaterialPort>(
         candidate_generation_id,
     )?;
     let candidate_inventory = clone.verify_clone_only()?;
-    let snapshot = encode_workspace_snapshot(clone.workspace(), &candidate_inventory)?;
+    let snapshot = encode_workspace_snapshot(clone.workspace(), &candidate_inventory)
+        .map_err(map_snapshot_encode_error)?;
     if clone.verify_clone_only()? != candidate_inventory {
         return Err(DirtyGenerationError::SourceChanged);
     }
+    let plaintext_digest = PlaintextDigest::calculate(&snapshot).bytes();
 
     let material = keys
-        .material_for(tenant_id, profile_id, candidate_generation_id)
+        .material_for(
+            tenant_id,
+            profile_id,
+            base_generation_id,
+            candidate_generation_id,
+            plaintext_digest,
+        )
         .map_err(|_| DirtyGenerationError::KeyUnavailable)?;
     let metadata = GenerationMetadata::for_plaintext(
         GenerationIdentity::new(
@@ -194,80 +198,15 @@ pub fn prepare_dirty_generation_candidate<K: GenerationSealingMaterialPort>(
     })
 }
 
-fn encode_workspace_snapshot(
-    workspace: &GenerationWorkspace,
-    expected_inventory: &GenerationInventory,
-) -> Result<Vec<u8>, DirtyGenerationError> {
-    let entry_count = u32::try_from(expected_inventory.entries().len())
-        .map_err(|_| DirtyGenerationError::SnapshotTooLarge)?;
-    let mut output = Vec::new();
-    output.extend_from_slice(SNAPSHOT_MAGIC);
-    output.extend_from_slice(&entry_count.to_be_bytes());
-
-    for entry in expected_inventory.entries() {
-        let path = entry.relative_path().as_bytes();
-        let path_length =
-            u16::try_from(path.len()).map_err(|_| DirtyGenerationError::SnapshotTooLarge)?;
-        checked_extend(&mut output, &path_length.to_be_bytes())?;
-        checked_extend(&mut output, path)?;
-        checked_extend(&mut output, &entry.bytes().to_be_bytes())?;
-
-        let full_path = workspace.path().join(entry.relative_path());
-        let metadata = std::fs::symlink_metadata(&full_path).map_err(LocalProfileError::from)?;
-        if metadata.file_type().is_symlink()
-            || !metadata.is_file()
-            || metadata.len() != entry.bytes()
-        {
-            return Err(DirtyGenerationError::SourceChanged);
-        }
-        let expected_bytes =
-            usize::try_from(entry.bytes()).map_err(|_| DirtyGenerationError::SnapshotTooLarge)?;
-        let remaining = MAX_SNAPSHOT_BYTES
-            .checked_sub(output.len())
-            .ok_or(DirtyGenerationError::SnapshotTooLarge)?;
-        if expected_bytes > remaining {
-            return Err(DirtyGenerationError::SnapshotTooLarge);
-        }
-        let mut file = File::open(&full_path).map_err(LocalProfileError::from)?;
-        let start = output.len();
-        output.resize(
-            start
-                .checked_add(expected_bytes)
-                .ok_or(DirtyGenerationError::SnapshotTooLarge)?,
-            0,
-        );
-        file.read_exact(&mut output[start..])
-            .map_err(LocalProfileError::from)?;
-        if fnv_digest(&output[start..]) != entry.content_digest() {
-            return Err(DirtyGenerationError::SourceChanged);
-        }
+fn map_snapshot_encode_error(error: GenerationSnapshotError) -> DirtyGenerationError {
+    match error {
+        GenerationSnapshotError::SnapshotTooLarge => DirtyGenerationError::SnapshotTooLarge,
+        GenerationSnapshotError::Local(error) => DirtyGenerationError::Local(error),
+        GenerationSnapshotError::SourceChanged
+        | GenerationSnapshotError::InvalidFormat
+        | GenerationSnapshotError::UnsafePath
+        | GenerationSnapshotError::TargetAlreadyExists => DirtyGenerationError::SourceChanged,
     }
-
-    if workspace.inventory().map_err(DirtyGenerationError::Local)? != *expected_inventory {
-        return Err(DirtyGenerationError::SourceChanged);
-    }
-    Ok(output)
-}
-
-fn checked_extend(output: &mut Vec<u8>, bytes: &[u8]) -> Result<(), DirtyGenerationError> {
-    let new_len = output
-        .len()
-        .checked_add(bytes.len())
-        .ok_or(DirtyGenerationError::SnapshotTooLarge)?;
-    if new_len > MAX_SNAPSHOT_BYTES {
-        return Err(DirtyGenerationError::SnapshotTooLarge);
-    }
-    output.extend_from_slice(bytes);
-    Ok(())
-}
-
-fn fnv_digest(bytes: &[u8]) -> u64 {
-    let mut digest = FNV_OFFSET_BASIS;
-    for byte in bytes {
-        digest ^= u64::from(*byte);
-        digest = digest.wrapping_mul(FNV_PRIME);
-    }
-    digest
 }
 
 fn digest_hex(bytes: [u8; 32]) -> String {
@@ -296,7 +235,11 @@ mod tests {
 
     static TEMP_COUNTER: AtomicU64 = AtomicU64::new(1);
 
-    struct FakeKeys;
+    #[derive(Default)]
+    struct FakeKeys {
+        observed_base_generation_id: Option<GenerationId>,
+        observed_plaintext_digest: Option<[u8; 32]>,
+    }
 
     impl GenerationSealingMaterialPort for FakeKeys {
         type Error = ();
@@ -305,8 +248,12 @@ mod tests {
             &mut self,
             _tenant_id: &TenantId,
             _profile_id: &ProfileId,
+            base_generation_id: &GenerationId,
             _generation_id: &GenerationId,
+            plaintext_digest: [u8; 32],
         ) -> Result<GenerationSealingMaterial, Self::Error> {
+            self.observed_base_generation_id = Some(base_generation_id.clone());
+            self.observed_plaintext_digest = Some(plaintext_digest);
             Ok(GenerationSealingMaterial::new(
                 GenerationDek::new(
                     KeyId::parse("key_dirty_generation_01").map_err(|_| ())?,
@@ -376,7 +323,7 @@ mod tests {
         fs::write(source.path().join("storage/default/state.bin"), b"state-v2")?;
         let source_before = source.inventory()?;
         let record = dirty_record(fixture.base_generation_id.clone())?;
-        let mut keys = FakeKeys;
+        let mut keys = FakeKeys::default();
 
         let prepared = prepare_dirty_generation_candidate(
             &record,
@@ -390,6 +337,14 @@ mod tests {
 
         assert_eq!(source.inventory()?, source_before);
         assert_eq!(prepared.candidate_inventory(), &source_before);
+        assert_eq!(
+            keys.observed_base_generation_id.as_ref(),
+            Some(&fixture.base_generation_id)
+        );
+        assert_eq!(
+            keys.observed_plaintext_digest,
+            Some(prepared.sealed().metadata().plaintext_digest().bytes())
+        );
         assert_eq!(prepared.metadata_digest().len(), 64);
         assert_eq!(
             prepared.metadata_digest(),
@@ -432,7 +387,7 @@ mod tests {
         )?;
         let clean =
             LocalGenerationRecord::new(fixture.base_generation_id.clone(), 0, UnixMillis::new(10));
-        let mut keys = FakeKeys;
+        let mut keys = FakeKeys::default();
         assert_eq!(
             prepare_dirty_generation_candidate(
                 &clean,

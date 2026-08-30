@@ -19,6 +19,7 @@ const MAX_CONTAINER_BYTES: usize = 83_886_080;
 const MAX_METADATA_BYTES: usize = 4_096;
 const MIN_KEY_ID_BYTES: usize = 8;
 const MAX_KEY_ID_BYTES: usize = 96;
+pub const MAX_GENERATION_METADATA_PRELUDE_BYTES: usize = MAGIC.len() + 4 + MAX_METADATA_BYTES;
 
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct KeyId(String);
@@ -383,6 +384,54 @@ impl GenerationMetadata {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub struct InspectedGenerationMetadataPrelude {
+    metadata: GenerationMetadata,
+    metadata_digest: MetadataDigest,
+    prelude_bytes: usize,
+}
+
+impl InspectedGenerationMetadataPrelude {
+    #[must_use]
+    pub const fn metadata(&self) -> &GenerationMetadata {
+        &self.metadata
+    }
+
+    #[must_use]
+    pub const fn metadata_digest(&self) -> MetadataDigest {
+        self.metadata_digest
+    }
+
+    #[must_use]
+    pub const fn prelude_bytes(&self) -> usize {
+        self.prelude_bytes
+    }
+}
+
+pub fn inspect_generation_metadata_prelude(
+    container_or_prelude: &[u8],
+) -> Result<InspectedGenerationMetadataPrelude, EncryptedGenerationError> {
+    if container_or_prelude.len() > MAX_CONTAINER_BYTES {
+        return Err(EncryptedGenerationError::InvalidContainer);
+    }
+    let mut cursor = Cursor::new(container_or_prelude);
+    if cursor.take(MAGIC.len())? != MAGIC {
+        return Err(EncryptedGenerationError::InvalidContainer);
+    }
+    let metadata_length = usize::try_from(cursor.read_u32()?)
+        .map_err(|_| EncryptedGenerationError::InvalidContainer)?;
+    if metadata_length == 0 || metadata_length > MAX_METADATA_BYTES {
+        return Err(EncryptedGenerationError::InvalidContainer);
+    }
+    let metadata_bytes = cursor.take(metadata_length)?;
+    let metadata = GenerationMetadata::decode(metadata_bytes)?;
+    Ok(InspectedGenerationMetadataPrelude {
+        metadata,
+        metadata_digest: MetadataDigest::calculate(metadata_bytes),
+        prelude_bytes: cursor.position,
+    })
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SealedGeneration {
     metadata: GenerationMetadata,
     metadata_digest: MetadataDigest,
@@ -529,25 +578,20 @@ pub fn open_generation(
     container: &[u8],
     key: &GenerationDek,
 ) -> Result<OpenedGeneration, EncryptedGenerationError> {
-    if container.len() > MAX_CONTAINER_BYTES {
-        return Err(EncryptedGenerationError::InvalidContainer);
-    }
-    let mut cursor = Cursor::new(container);
-    if cursor.take(MAGIC.len())? != MAGIC {
-        return Err(EncryptedGenerationError::InvalidContainer);
-    }
-    let metadata_length = usize::try_from(cursor.read_u32()?)
-        .map_err(|_| EncryptedGenerationError::InvalidContainer)?;
-    if metadata_length == 0 || metadata_length > MAX_METADATA_BYTES {
-        return Err(EncryptedGenerationError::InvalidContainer);
-    }
-    let metadata_bytes = cursor.take(metadata_length)?;
-    let metadata = GenerationMetadata::decode(metadata_bytes)?;
-    if metadata.key_id() != key.key_id() {
+    let inspected = inspect_generation_metadata_prelude(container)?;
+    if inspected.metadata().key_id() != key.key_id() {
         return Err(EncryptedGenerationError::MetadataMismatch);
     }
-    let metadata_digest = MetadataDigest::calculate(metadata_bytes);
+    let InspectedGenerationMetadataPrelude {
+        metadata,
+        metadata_digest,
+        prelude_bytes,
+    } = inspected;
     let cipher = key.cipher()?;
+    let mut cursor = Cursor {
+        bytes: container,
+        position: prelude_bytes,
+    };
     let mut plaintext = Zeroizing::new(Vec::new());
     let mut expected_index = 0_u64;
     let mut final_seen = false;

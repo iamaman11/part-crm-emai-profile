@@ -159,7 +159,7 @@ jobs:
 
           cp migrations/d1/*.sql .wrangler/ar9-post-epoch-catalog/migrations/
           cp tests/d1-evolution/post-epoch/catalog/0027_post_epoch_probe.sql \
-            .wrangler/ar9-post-epoch-catalog/migrations/0030_post_epoch_probe.sql
+            .wrangler/ar9-post-epoch-catalog/migrations/0031_post_epoch_probe.sql
           cp migrations/resolver-d1/*.sql .wrangler/ar9-post-epoch-resolver/migrations/
           cp tests/d1-evolution/post-epoch/resolver/0005_post_epoch_probe.sql \
             .wrangler/ar9-post-epoch-resolver/migrations/
@@ -255,8 +255,8 @@ jobs:
 
           catalog_rows = catalog[0]['results']
           resolver_rows = resolver[0]['results']
-          assert len(catalog_rows) == 30, catalog_rows
-          assert catalog_rows[-1]['name'] == '0030_post_epoch_probe.sql', catalog_rows[-1]
+          assert len(catalog_rows) == 31, catalog_rows
+          assert catalog_rows[-1]['name'] == '0031_post_epoch_probe.sql', catalog_rows[-1]
           assert len(resolver_rows) == 5, resolver_rows
           assert resolver_rows[-1]['name'] == '0005_post_epoch_probe.sql', resolver_rows[-1]
           assert catalog_table[0]['results'][0]['present'] == 1, catalog_table

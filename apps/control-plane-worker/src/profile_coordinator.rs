@@ -1,9 +1,15 @@
 use application_ports::device_generation_commit::{
     DeviceGenerationCommitError, DeviceGenerationCommitErrorClass, DeviceGenerationCommitRequest,
 };
+use application_ports::profile_generation_successor::{
+    ProfileGenerationSuccessorCommitError, ProfileGenerationSuccessorCommitErrorClass,
+    ProfileGenerationSuccessorCommitOutcome, ProfileGenerationSuccessorCommitPort,
+    ProfileGenerationSuccessorCommitRequest,
+};
 use cloudflare_adapters::d1_device_generation_commit::{
     D1DeviceGenerationCommitJournal, DeviceGenerationCommitJournalOutcome,
 };
+use cloudflare_adapters::d1_profile_generation_successor::D1ProfileGenerationSuccessorCommitJournal;
 use cloudflare_adapters::device_generation_commit_runtime::{
     DEVICE_GENERATION_COMMIT_PATH, DeviceGenerationCommitInternalErrorClass,
     DeviceGenerationCommitInternalErrorResponse, DeviceGenerationCommitInternalOutcome,
@@ -13,8 +19,17 @@ use cloudflare_adapters::profile_coordinator::{
     CoordinatorAdapterError, CoordinatorProjection, StoredCoordinatorCommand,
     StoredCoordinatorDocument, StoredCoordinatorEnvelope, outcome_name,
 };
+use cloudflare_adapters::profile_generation_successor_runtime::{
+    PROFILE_GENERATION_SUCCESSOR_COMMIT_PATH, PROFILE_GENERATION_WRITER_AUTHORITY_PATH,
+    ProfileGenerationSuccessorInternalErrorClass, ProfileGenerationSuccessorInternalErrorResponse,
+    ProfileGenerationSuccessorInternalOutcome, ProfileGenerationSuccessorInternalRequest,
+    ProfileGenerationSuccessorInternalResponse, ProfileGenerationWriterAuthorityInternalRequest,
+    ProfileGenerationWriterAuthorityInternalResponse,
+};
 use control_plane_contract::D1_CATALOG_BINDING;
-use profile_platform_primitives::{ProfileId, TenantId, UnixMillis};
+use profile_platform_primitives::{
+    DeviceId, FencingToken, ProfileId, SessionId, TenantId, UnixMillis,
+};
 use serde::{Deserialize, Serialize};
 use session_domain::coordinator::{
     CoordinatorConfig, CoordinatorOutcome, CoordinatorStatus, ProfileCoordinatorState,
@@ -48,6 +63,12 @@ impl DurableObject for ProfileCoordinator {
             (Method::Post, "/command") => self.command(&mut request).await,
             (Method::Post, DEVICE_GENERATION_COMMIT_PATH) => {
                 self.generation_commit(&mut request).await
+            }
+            (Method::Post, PROFILE_GENERATION_WRITER_AUTHORITY_PATH) => {
+                self.profile_generation_writer_authority(&mut request).await
+            }
+            (Method::Post, PROFILE_GENERATION_SUCCESSOR_COMMIT_PATH) => {
+                self.profile_generation_successor(&mut request).await
             }
             _ => Response::error("Not Found", 404),
         }
@@ -123,7 +144,7 @@ impl ProfileCoordinator {
             .await
         {
             Ok(value) => value,
-            Err(_) => return generation_commit_error(integrity_failure()),
+            Err(_) => return generation_commit_error(device_integrity_failure()),
         };
         let authority_digest = internal.authority_digest();
         let existing_gate = self.load_generation_commit_gate().await?;
@@ -141,15 +162,15 @@ impl ProfileCoordinator {
             .await?;
         let coordinator = match document.replay() {
             Ok(value) => value,
-            Err(error) => return generation_commit_error(adapter_integrity(error)),
+            Err(error) => return generation_commit_error(device_adapter_integrity(error)),
         };
 
         match existing_gate {
             Some(gate) => {
-                if !gate.matches(&authority_digest, &commit) {
-                    return generation_commit_error(version_conflict());
+                if !gate.matches(&authority_digest, commit.object().generation_id().as_str()) {
+                    return generation_commit_error(device_version_conflict());
                 }
-                if let Err(error) = validate_generation_commit_authority(
+                if let Err(error) = validate_device_generation_commit_authority(
                     &coordinator,
                     &commit,
                     UnixMillis::new(gate.authorized_at_ms),
@@ -159,11 +180,15 @@ impl ProfileCoordinator {
             }
             None => {
                 if let Err(error) =
-                    validate_generation_commit_authority(&coordinator, &commit, observed_at)
+                    validate_device_generation_commit_authority(&coordinator, &commit, observed_at)
                 {
                     return generation_commit_error(error);
                 }
-                let gate = StoredGenerationCommitGate::new(authority_digest, &commit, observed_at);
+                let gate = StoredGenerationCommitGate::new(
+                    authority_digest,
+                    commit.object().generation_id().as_str(),
+                    observed_at,
+                );
                 self.state
                     .storage()
                     .put(GENERATION_COMMIT_GATE_KEY, &gate)
@@ -193,6 +218,164 @@ impl ProfileCoordinator {
                     schedule_gate_retry_alarm(&self.state).await?;
                 }
                 generation_commit_error(error)
+            }
+        }
+    }
+
+    async fn profile_generation_writer_authority(&self, request: &mut Request) -> Result<Response> {
+        if self.load_generation_commit_gate().await?.is_some() {
+            return profile_successor_error(profile_successor_version_conflict());
+        }
+        let internal = match request
+            .json::<ProfileGenerationWriterAuthorityInternalRequest>()
+            .await
+        {
+            Ok(value) => value,
+            Err(_) => return profile_successor_error(profile_successor_integrity()),
+        };
+        let (actor, authority) = match internal.into_domain() {
+            Ok(value) => value,
+            Err(error) => return profile_successor_error(error),
+        };
+        let document = self
+            .load_document(actor.tenant_scope().tenant_id(), authority.profile_id())
+            .await?;
+        let coordinator = match document.replay() {
+            Ok(value) => value,
+            Err(error) => {
+                return profile_successor_error(profile_successor_adapter_integrity(error));
+            }
+        };
+        let provenance_matches = match document.active_claim_matches(
+            actor.actor_id(),
+            authority.device_id(),
+            authority.session_id(),
+        ) {
+            Ok(value) => value,
+            Err(error) => {
+                return profile_successor_error(profile_successor_adapter_integrity(error));
+            }
+        };
+        if !provenance_matches {
+            return profile_successor_error(profile_successor_stale_authority());
+        }
+        let observed_at = UnixMillis::new(Date::now().as_millis());
+        if !coordinator_generation_authority_is_live(
+            &coordinator,
+            authority.device_id(),
+            authority.session_id(),
+            authority.epoch(),
+            authority.fencing_token(),
+            coordinator.version().value(),
+            coordinator.last_sequence(),
+            observed_at,
+        ) {
+            return profile_successor_error(profile_successor_stale_authority());
+        }
+        Response::from_json(&ProfileGenerationWriterAuthorityInternalResponse {
+            coordinator_version: coordinator.version().value(),
+            coordinator_sequence: coordinator.last_sequence(),
+        })
+    }
+
+    async fn profile_generation_successor(&self, request: &mut Request) -> Result<Response> {
+        let internal = match request
+            .json::<ProfileGenerationSuccessorInternalRequest>()
+            .await
+        {
+            Ok(value) => value,
+            Err(_) => return profile_successor_error(profile_successor_integrity()),
+        };
+        let authority_digest = internal.authority_digest();
+        let existing_gate = self.load_generation_commit_gate().await?;
+        let observed_at = existing_gate.as_ref().map_or_else(
+            || UnixMillis::new(Date::now().as_millis()),
+            |gate| UnixMillis::new(gate.authorized_at_ms),
+        );
+        let (actor, commit) = match internal.into_domain(observed_at) {
+            Ok(value) => value,
+            Err(error) => return profile_successor_error(error),
+        };
+
+        let document = self
+            .load_document(actor.tenant_scope().tenant_id(), commit.profile_id())
+            .await?;
+        let coordinator = match document.replay() {
+            Ok(value) => value,
+            Err(error) => {
+                return profile_successor_error(profile_successor_adapter_integrity(error));
+            }
+        };
+        let provenance_matches = match document.active_claim_matches(
+            actor.actor_id(),
+            commit.device_id(),
+            commit.coordinator().session_id(),
+        ) {
+            Ok(value) => value,
+            Err(error) => {
+                return profile_successor_error(profile_successor_adapter_integrity(error));
+            }
+        };
+        if !provenance_matches {
+            return profile_successor_error(profile_successor_stale_authority());
+        }
+
+        match existing_gate {
+            Some(gate) => {
+                if !gate.matches(&authority_digest, commit.object().generation_id().as_str()) {
+                    return profile_successor_error(profile_successor_version_conflict());
+                }
+                if let Err(error) = validate_profile_successor_authority(
+                    &coordinator,
+                    &commit,
+                    UnixMillis::new(gate.authorized_at_ms),
+                ) {
+                    return profile_successor_error(error);
+                }
+            }
+            None => {
+                if let Err(error) =
+                    validate_profile_successor_authority(&coordinator, &commit, observed_at)
+                {
+                    return profile_successor_error(error);
+                }
+                let gate = StoredGenerationCommitGate::new(
+                    authority_digest,
+                    commit.object().generation_id().as_str(),
+                    observed_at,
+                );
+                self.state
+                    .storage()
+                    .put(GENERATION_COMMIT_GATE_KEY, &gate)
+                    .await?;
+            }
+        }
+
+        let journal =
+            D1ProfileGenerationSuccessorCommitJournal::new(self.env.d1(D1_CATALOG_BINDING)?);
+        let outcome = journal
+            .commit_profile_generation_successor(&actor, &commit)
+            .await;
+        match outcome {
+            Ok(ProfileGenerationSuccessorCommitOutcome::Activated) => {
+                self.clear_generation_commit_gate().await?;
+                Response::from_json(&ProfileGenerationSuccessorInternalResponse {
+                    outcome: ProfileGenerationSuccessorInternalOutcome::Activated,
+                })
+            }
+            Ok(ProfileGenerationSuccessorCommitOutcome::AlreadyActive) => {
+                self.clear_generation_commit_gate().await?;
+                Response::from_json(&ProfileGenerationSuccessorInternalResponse {
+                    outcome: ProfileGenerationSuccessorInternalOutcome::AlreadyActive,
+                })
+            }
+            Err(error) => {
+                if profile_successor_failure_releases_gate(error.class()) {
+                    self.clear_generation_commit_gate().await?;
+                } else {
+                    schedule_gate_retry_alarm(&self.state).await?;
+                }
+                profile_successor_error(error)
             }
         }
     }
@@ -241,68 +424,104 @@ impl ProfileCoordinator {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 struct StoredGenerationCommitGate {
     authority_digest: String,
-    job_id: String,
     generation_id: String,
     authorized_at_ms: u64,
 }
 
 impl StoredGenerationCommitGate {
-    fn new(
-        authority_digest: String,
-        request: &DeviceGenerationCommitRequest,
-        authorized_at: UnixMillis,
-    ) -> Self {
+    fn new(authority_digest: String, generation_id: &str, authorized_at: UnixMillis) -> Self {
         Self {
             authority_digest,
-            job_id: request.job_id().as_str().to_owned(),
-            generation_id: request.object().generation_id().as_str().to_owned(),
+            generation_id: generation_id.to_owned(),
             authorized_at_ms: authorized_at.value(),
         }
     }
 
-    fn matches(&self, authority_digest: &str, request: &DeviceGenerationCommitRequest) -> bool {
-        self.authority_digest == authority_digest
-            && self.job_id == request.job_id().as_str()
-            && self.generation_id == request.object().generation_id().as_str()
+    fn matches(&self, authority_digest: &str, generation_id: &str) -> bool {
+        self.authority_digest == authority_digest && self.generation_id == generation_id
     }
 }
 
-fn validate_generation_commit_authority(
+fn validate_device_generation_commit_authority(
     coordinator: &ProfileCoordinatorState,
     request: &DeviceGenerationCommitRequest,
     authorized_at: UnixMillis,
 ) -> core::result::Result<(), DeviceGenerationCommitError> {
+    if coordinator_generation_authority_is_live(
+        coordinator,
+        request.device_id(),
+        request.coordinator().session_id(),
+        request.coordinator().epoch(),
+        request.coordinator().fencing_token(),
+        request.coordinator().coordinator_version(),
+        request.coordinator().coordinator_sequence(),
+        authorized_at,
+    ) {
+        Ok(())
+    } else {
+        Err(device_stale_authority())
+    }
+}
+
+fn validate_profile_successor_authority(
+    coordinator: &ProfileCoordinatorState,
+    request: &ProfileGenerationSuccessorCommitRequest,
+    authorized_at: UnixMillis,
+) -> core::result::Result<(), ProfileGenerationSuccessorCommitError> {
+    if coordinator_generation_authority_is_live(
+        coordinator,
+        request.device_id(),
+        request.coordinator().session_id(),
+        request.coordinator().epoch(),
+        request.coordinator().fencing_token(),
+        request.coordinator().coordinator_version(),
+        request.coordinator().coordinator_sequence(),
+        authorized_at,
+    ) {
+        Ok(())
+    } else {
+        Err(profile_successor_stale_authority())
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn coordinator_generation_authority_is_live(
+    coordinator: &ProfileCoordinatorState,
+    device_id: &DeviceId,
+    session_id: &SessionId,
+    epoch: u64,
+    fencing_token: &FencingToken,
+    coordinator_version: u64,
+    coordinator_sequence: u64,
+    authorized_at: UnixMillis,
+) -> bool {
     if !matches!(
         coordinator.status(),
         CoordinatorStatus::Active | CoordinatorStatus::Draining
-    ) || coordinator.version().value() != request.coordinator().coordinator_version()
-        || coordinator.last_sequence() != request.coordinator().coordinator_sequence()
+    ) || coordinator.version().value() != coordinator_version
+        || coordinator.last_sequence() != coordinator_sequence
         || authorized_at < coordinator.last_observed_at()
     {
-        return Err(stale_authority());
+        return false;
     }
     let Some(lease) = coordinator.active_lease() else {
-        return Err(stale_authority());
+        return false;
     };
-    if lease.device_id() != request.device_id()
-        || !lease.accepts_writer(
-            request.coordinator().session_id(),
-            request.coordinator().epoch(),
-            request.coordinator().fencing_token(),
-        )
+    if lease.device_id() != device_id
+        || !lease.accepts_writer(session_id, epoch, fencing_token)
         || authorized_at >= lease.idle_expires_at()
         || authorized_at >= lease.hard_expires_at()
     {
-        return Err(stale_authority());
+        return false;
     }
     if coordinator.status() == CoordinatorStatus::Draining
         && coordinator
             .drain_deadline()
             .is_none_or(|deadline| authorized_at >= deadline)
     {
-        return Err(stale_authority());
+        return false;
     }
-    Ok(())
+    true
 }
 
 #[derive(Deserialize)]
@@ -422,6 +641,16 @@ fn generation_commit_failure_releases_gate(class: DeviceGenerationCommitErrorCla
     )
 }
 
+fn profile_successor_failure_releases_gate(
+    class: ProfileGenerationSuccessorCommitErrorClass,
+) -> bool {
+    matches!(
+        class,
+        ProfileGenerationSuccessorCommitErrorClass::StaleAuthority
+            | ProfileGenerationSuccessorCommitErrorClass::VersionConflict
+    )
+}
+
 fn generation_commit_error(error: DeviceGenerationCommitError) -> Result<Response> {
     let (status, class) = match error.class() {
         DeviceGenerationCommitErrorClass::StaleAuthority => (
@@ -445,25 +674,72 @@ fn generation_commit_error(error: DeviceGenerationCommitError) -> Result<Respons
         .map(|response| response.with_status(status))
 }
 
+fn profile_successor_error(error: ProfileGenerationSuccessorCommitError) -> Result<Response> {
+    let (status, class) = match error.class() {
+        ProfileGenerationSuccessorCommitErrorClass::StaleAuthority => (
+            409,
+            ProfileGenerationSuccessorInternalErrorClass::StaleAuthority,
+        ),
+        ProfileGenerationSuccessorCommitErrorClass::VersionConflict => (
+            409,
+            ProfileGenerationSuccessorInternalErrorClass::VersionConflict,
+        ),
+        ProfileGenerationSuccessorCommitErrorClass::IntegrityFailure => (
+            500,
+            ProfileGenerationSuccessorInternalErrorClass::IntegrityFailure,
+        ),
+        ProfileGenerationSuccessorCommitErrorClass::DependencyUnavailable => (
+            503,
+            ProfileGenerationSuccessorInternalErrorClass::DependencyUnavailable,
+        ),
+    };
+    Response::from_json(&ProfileGenerationSuccessorInternalErrorResponse { class })
+        .map(|response| response.with_status(status))
+}
+
 #[derive(Serialize)]
 struct CoordinatorErrorResponse {
     code: &'static str,
 }
 
-fn adapter_integrity(_error: CoordinatorAdapterError) -> DeviceGenerationCommitError {
-    integrity_failure()
+fn device_adapter_integrity(_error: CoordinatorAdapterError) -> DeviceGenerationCommitError {
+    device_integrity_failure()
 }
 
-fn stale_authority() -> DeviceGenerationCommitError {
+fn profile_successor_adapter_integrity(
+    _error: CoordinatorAdapterError,
+) -> ProfileGenerationSuccessorCommitError {
+    profile_successor_integrity()
+}
+
+fn device_stale_authority() -> DeviceGenerationCommitError {
     DeviceGenerationCommitError::new(DeviceGenerationCommitErrorClass::StaleAuthority)
 }
 
-fn version_conflict() -> DeviceGenerationCommitError {
+fn device_version_conflict() -> DeviceGenerationCommitError {
     DeviceGenerationCommitError::new(DeviceGenerationCommitErrorClass::VersionConflict)
 }
 
-fn integrity_failure() -> DeviceGenerationCommitError {
+fn device_integrity_failure() -> DeviceGenerationCommitError {
     DeviceGenerationCommitError::new(DeviceGenerationCommitErrorClass::IntegrityFailure)
+}
+
+fn profile_successor_stale_authority() -> ProfileGenerationSuccessorCommitError {
+    ProfileGenerationSuccessorCommitError::new(
+        ProfileGenerationSuccessorCommitErrorClass::StaleAuthority,
+    )
+}
+
+fn profile_successor_version_conflict() -> ProfileGenerationSuccessorCommitError {
+    ProfileGenerationSuccessorCommitError::new(
+        ProfileGenerationSuccessorCommitErrorClass::VersionConflict,
+    )
+}
+
+fn profile_successor_integrity() -> ProfileGenerationSuccessorCommitError {
+    ProfileGenerationSuccessorCommitError::new(
+        ProfileGenerationSuccessorCommitErrorClass::IntegrityFailure,
+    )
 }
 
 fn identifier_error(error: profile_platform_primitives::ParseOpaqueIdError) -> Error {

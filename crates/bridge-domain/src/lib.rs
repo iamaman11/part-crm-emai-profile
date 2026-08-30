@@ -6,7 +6,7 @@ use profile_platform_primitives::{DeviceId, SessionId, UnixMillis};
 const MIN_SECRET_LENGTH: usize = 24;
 const MAX_SECRET_LENGTH: usize = 96;
 const MAX_IPC_FRAME_LENGTH: usize = 512;
-pub const CAMOUHOST_IPC_VERSION: u16 = 1;
+pub const CAMOUHOST_IPC_VERSION: u16 = 2;
 
 #[derive(Clone, Eq, PartialEq)]
 pub struct ClaimCode(String);
@@ -556,12 +556,32 @@ impl std::error::Error for ProcessSupervisorError {}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum CamouhostMessage {
-    Hello { version: u16 },
-    HelloAck { version: u16 },
-    Launch { session_id: SessionId },
-    Ready { session_id: SessionId },
-    Close { session_id: SessionId },
-    Closed { session_id: SessionId, clean: bool },
+    Hello {
+        version: u16,
+    },
+    HelloAck {
+        version: u16,
+    },
+    Launch {
+        session_id: SessionId,
+    },
+    Ready {
+        session_id: SessionId,
+    },
+    ObserveClose {
+        session_id: SessionId,
+    },
+    CloseObserved {
+        session_id: SessionId,
+        controlled: bool,
+    },
+    Close {
+        session_id: SessionId,
+    },
+    Closed {
+        session_id: SessionId,
+        clean: bool,
+    },
 }
 
 impl CamouhostMessage {
@@ -587,6 +607,15 @@ impl CamouhostMessage {
             ["ready", session_id] => Ok(Self::Ready {
                 session_id: SessionId::parse((*session_id).to_owned())
                     .map_err(|_| CamouhostProtocolError::MalformedFrame)?,
+            }),
+            ["observe_close", session_id] => Ok(Self::ObserveClose {
+                session_id: SessionId::parse((*session_id).to_owned())
+                    .map_err(|_| CamouhostProtocolError::MalformedFrame)?,
+            }),
+            ["close_observed", session_id, controlled] => Ok(Self::CloseObserved {
+                session_id: SessionId::parse((*session_id).to_owned())
+                    .map_err(|_| CamouhostProtocolError::MalformedFrame)?,
+                controlled: parse_bool(controlled)?,
             }),
             ["close", session_id] => Ok(Self::Close {
                 session_id: SessionId::parse((*session_id).to_owned())
@@ -847,7 +876,7 @@ mod tests {
     #[test]
     fn versioned_camouhost_frames_parse_and_malformed_frames_fail_closed()
     -> Result<(), Box<dyn std::error::Error>> {
-        let hello = CamouhostMessage::parse("hello|1")?;
+        let hello = CamouhostMessage::parse("hello|2")?;
         hello.validate_version()?;
         assert_eq!(
             hello,
@@ -856,8 +885,21 @@ mod tests {
             }
         );
         assert_eq!(
-            CamouhostMessage::parse("hello|2")?.validate_version(),
+            CamouhostMessage::parse("hello|1")?.validate_version(),
             Err(CamouhostProtocolError::UnsupportedVersion)
+        );
+        assert_eq!(
+            CamouhostMessage::parse("observe_close|session_01JBRIDGE")?,
+            CamouhostMessage::ObserveClose {
+                session_id: SessionId::parse("session_01JBRIDGE")?
+            }
+        );
+        assert_eq!(
+            CamouhostMessage::parse("close_observed|session_01JBRIDGE|true")?,
+            CamouhostMessage::CloseObserved {
+                session_id: SessionId::parse("session_01JBRIDGE")?,
+                controlled: true,
+            }
         );
         assert_eq!(
             CamouhostMessage::parse("closed|session_01JBRIDGE|maybe"),

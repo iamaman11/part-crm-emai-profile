@@ -47,6 +47,17 @@ CAPABILITY_HEADERS = (
     "if-none-match",
     "x-amz-checksum-sha256",
     "x-amz-meta-container-bytes",
+)
+
+CAPABILITY_METADATA_CONSTANTS = (
+    "META_CONTAINER_DIGEST",
+    "META_GENERATION_ID",
+    "META_METADATA_DIGEST",
+    "META_PROFILE_ID",
+    "META_TENANT_ID",
+)
+
+LEGACY_CAPABILITY_METADATA_HEADERS = (
     "x-amz-meta-container-digest",
     "x-amz-meta-generation-id",
     "x-amz-meta-metadata-digest",
@@ -256,6 +267,22 @@ def check_capability_text(source: str) -> list[str]:
             failures.append(f"R2 upload capability does not return required header: {header}")
         if header not in signed_headers:
             failures.append(f"R2 upload capability does not sign required header: {header}")
+
+    for constant in CAPABILITY_METADATA_CONSTANTS:
+        header_binding = f'format!("x-amz-meta-{{{constant}}}")'
+        signed_binding = f"x-amz-meta-{{{constant}}}"
+        if header_binding not in sign_put:
+            failures.append(
+                f"R2 upload capability must derive metadata header from canonical owner constant: {constant}"
+            )
+        if signed_binding not in signed_headers:
+            failures.append(
+                f"R2 upload capability must sign canonical owner metadata constant: {constant}"
+            )
+
+    for legacy in LEGACY_CAPABILITY_METADATA_HEADERS:
+        if f'"{legacy}"' in production:
+            failures.append(f"legacy R2 upload metadata header is forbidden: {legacy}")
 
     canonical_key = function_body(production, "fn validate_descriptor(")
     if (
@@ -501,13 +528,22 @@ def self_test(root: Path) -> list[str]:
             "x-amz-checksum-sha256",
         ),
         (
-            "tenant metadata",
+            "tenant metadata owner",
             capability.replace(
-                '"x-amz-meta-tenant-id".to_owned()',
-                '"x-amz-meta-tenant-removed".to_owned()',
+                'format!("x-amz-meta-{META_TENANT_ID}")',
+                'format!("x-amz-meta-{META_TENANT_REMOVED}")',
                 1,
             ),
-            "x-amz-meta-tenant-id",
+            "META_TENANT_ID",
+        ),
+        (
+            "legacy tenant metadata",
+            capability.replace(
+                'format!("x-amz-meta-{META_TENANT_ID}")',
+                '"x-amz-meta-tenant-id".to_owned()',
+                1,
+            ),
+            "legacy R2 upload metadata header",
         ),
         (
             "exact object key",
