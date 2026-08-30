@@ -171,6 +171,7 @@ def validate_windows_distribution(lock: dict[str, Any]) -> None:
     if not isinstance(python, dict) or set(python) != {
         "artifact_sha256",
         "artifact_url",
+        "packages",
         "version",
     }:
         raise RuntimeContractError("Windows Python distribution lock shape is invalid")
@@ -181,6 +182,39 @@ def validate_windows_distribution(lock: dict[str, Any]) -> None:
             raise RuntimeContractError("Windows distribution digest is invalid")
         if not isinstance(url, str) or not url.startswith("https://"):
             raise RuntimeContractError("Windows distribution URL is invalid")
+    packages = python.get("packages")
+    if not isinstance(packages, list) or not packages:
+        raise RuntimeContractError("Windows Python dependency graph is invalid")
+    for package in packages:
+        if not isinstance(package, dict) or set(package) != {
+            "filename",
+            "name",
+            "sha256",
+            "url",
+            "version",
+        }:
+            raise RuntimeContractError("Windows Python dependency row shape is invalid")
+        filename = package.get("filename")
+        name = package.get("name")
+        version = package.get("version")
+        digest = package.get("sha256")
+        url = package.get("url")
+        if (
+            not isinstance(filename, str)
+            or not filename
+            or filename in {".", ".."}
+            or "/" in filename
+            or "\\" in filename
+            or not isinstance(name, str)
+            or not name
+            or not isinstance(version, str)
+            or not version
+            or not isinstance(digest, str)
+            or not valid_sha256(digest)
+            or not isinstance(url, str)
+            or not url.startswith("https://")
+        ):
+            raise RuntimeContractError("Windows Python dependency row is invalid")
     if browser.get("executable_path") != "browser/camoufox.exe":
         raise RuntimeContractError("Windows browser executable identity is unsupported")
     if python.get("version") != "3.12.10" or lock.get("python") != "3.12":
