@@ -1,6 +1,7 @@
 #[cfg(any(test, feature = "synthetic-test-bin"))]
 use crate::browser_mail_query::BrowserMailExecutionProof;
 use crate::dirty_generation::PreparedDirtyGeneration;
+#[cfg(any(test, feature = "synthetic-test-bin"))]
 use crate::dirty_generation_finalize::DirtyGenerationFinalizeError;
 #[cfg(any(test, feature = "synthetic-test-bin"))]
 use crate::dirty_generation_finalize::{
@@ -95,7 +96,7 @@ impl RetainedDirtyClose {
         committed: &CommittedGenerationSuccessor,
         coordinator: &mut P,
         now: UnixMillis,
-    ) -> Result<DirtyCloseCompletion, RetainedDirtyCloseError<core::convert::Infallible>>
+    ) -> Result<DirtyCloseCompletion, CommittedDirtyCloseError>
     where
         P: ProfileCoordinatorPort,
     {
@@ -104,7 +105,7 @@ impl RetainedDirtyClose {
             || !self.base.is_locked()
             || !committed_matches_retained(&self.lease, &self.base, prepared, committed)
         {
-            return Err(RetainedDirtyCloseError::InvalidRetainedOwnership);
+            return Err(CommittedDirtyCloseError::InvalidRetainedOwnership);
         }
 
         let transition_at = if now < self.base.last_activity_at() {
@@ -114,7 +115,7 @@ impl RetainedDirtyClose {
         };
         self.base
             .mark_superseded(transition_at)
-            .map_err(RetainedDirtyCloseError::Local)?;
+            .map_err(CommittedDirtyCloseError::Local)?;
 
         let local_outcome = match prepared.candidate_workspace().inventory() {
             Ok(inventory) if inventory == *prepared.candidate_inventory() => {
@@ -312,6 +313,26 @@ impl DirtyCloseCompletion {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CommittedDirtyCloseError {
+    InvalidRetainedOwnership,
+    Local(LocalProfileError),
+}
+
+impl fmt::Display for CommittedDirtyCloseError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::InvalidRetainedOwnership => {
+                formatter.write_str("committed dirty-close ownership is invalid")
+            }
+            Self::Local(error) => write!(formatter, "committed dirty-close local transition failed: {error}"),
+        }
+    }
+}
+
+impl std::error::Error for CommittedDirtyCloseError {}
+
+#[cfg(any(test, feature = "synthetic-test-bin"))]
 #[derive(Debug, Eq, PartialEq)]
 pub enum RetainedDirtyCloseError<C> {
     InvalidRetainedOwnership,
@@ -319,6 +340,7 @@ pub enum RetainedDirtyCloseError<C> {
     Local(LocalProfileError),
 }
 
+#[cfg(any(test, feature = "synthetic-test-bin"))]
 impl<C: fmt::Display> fmt::Display for RetainedDirtyCloseError<C> {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -331,6 +353,7 @@ impl<C: fmt::Display> fmt::Display for RetainedDirtyCloseError<C> {
     }
 }
 
+#[cfg(any(test, feature = "synthetic-test-bin"))]
 impl<C: std::error::Error> std::error::Error for RetainedDirtyCloseError<C> {}
 
 #[cfg(test)]
