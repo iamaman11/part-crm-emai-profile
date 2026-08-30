@@ -30,8 +30,11 @@ DEFAULT_RUNTIME_SOURCE = ROOT / "runtime" / "camouhost" / "real.py"
 MAX_DOWNLOAD_BYTES = 1024 * 1024 * 1024
 MAX_EXTRACTED_BYTES = 2 * 1024 * 1024 * 1024
 MAX_ARCHIVE_FILES = 500_000
+MAX_PYTHON_PACKAGES = 256
 CHUNK_BYTES = 1024 * 1024
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+PACKAGE_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9._-]*$")
+PYPI_FILES_PREFIX = "https://files.pythonhosted.org/packages/"
 WINDOWS_RESERVED = {
     "con",
     "prn",
@@ -67,6 +70,73 @@ def sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
+def validate_python_packages(python: dict[str, Any], components: dict[str, Any]) -> None:
+    packages = python.get("packages")
+    if not isinstance(packages, list) or not packages or len(packages) > MAX_PYTHON_PACKAGES:
+        fail("Windows Python package graph is invalid")
+    observed_names: set[str] = set()
+    observed_filenames: set[str] = set()
+    ordering: list[tuple[str, str, str]] = []
+    versions: dict[str, str] = {}
+    for row in packages:
+        if not isinstance(row, dict) or set(row) != {
+            "filename",
+            "name",
+            "sha256",
+            "url",
+            "version",
+        }:
+            fail("Windows Python package row shape is invalid")
+        filename = row.get("filename")
+        name = row.get("name")
+        digest = row.get("sha256")
+        url = row.get("url")
+        version = row.get("version")
+        if (
+            not isinstance(filename, str)
+            or not filename.endswith(".whl")
+            or PurePosixPath(filename).name != filename
+            or "\\" in filename
+            or ":" in filename
+            or "\x00" in filename
+        ):
+            fail("Windows Python package filename is invalid")
+        if not isinstance(name, str) or PACKAGE_NAME_RE.fullmatch(name) is None:
+            fail("Windows Python package name is invalid")
+        if not isinstance(digest, str) or SHA256_RE.fullmatch(digest) is None:
+            fail("Windows Python package SHA-256 is invalid")
+        if (
+            not isinstance(url, str)
+            or not url.startswith(PYPI_FILES_PREFIX)
+            or url.rsplit("/", 1)[-1] != filename
+        ):
+            fail("Windows Python package URL is invalid")
+        if (
+            not isinstance(version, str)
+            or not version
+            or len(version) > 64
+            or any(character.isspace() for character in version)
+        ):
+            fail("Windows Python package version is invalid")
+        if name in observed_names or filename.casefold() in observed_filenames:
+            fail("Windows Python package graph contains duplicate identity")
+        observed_names.add(name)
+        observed_filenames.add(filename.casefold())
+        ordering.append((name, version, filename))
+        versions[name] = version
+    if ordering != sorted(ordering):
+        fail("Windows Python package graph is not deterministically ordered")
+    required_versions = {
+        "browserforge": components.get("browserforge"),
+        "camoufox": components.get("camoufox_python"),
+        "playwright": components.get("playwright"),
+    }
+    if any(not isinstance(version, str) or not version for version in required_versions.values()):
+        fail("runtime component version lock is invalid")
+    if any(versions.get(name) != version for name, version in required_versions.items()):
+        fail("Windows Python package graph disagrees with runtime component lock")
+
+
 def load_lock(path: Path) -> dict[str, Any]:
     if path.is_symlink() or not path.is_file():
         fail("runtime lock is missing/not regular")
@@ -93,6 +163,23 @@ def load_lock(path: Path) -> dict[str, Any]:
         fail("runtime lock shape is unsupported")
     if value.get("schema_version") != 1 or value.get("runtime_role") != "real_camoufox":
         fail("runtime lock identity is unsupported")
+    components = value.get("components")
+    if not isinstance(components, dict) or set(components) != {
+        "browserforge",
+        "camoufox_python",
+        "playwright",
+    }:
+        fail("runtime component lock shape is invalid")
+    python_source = value.get("python_source")
+    if not isinstance(python_source, dict) or set(python_source) != {"commit", "repository"}:
+        fail("Camoufox Python source lock shape is invalid")
+    source_commit = python_source.get("commit")
+    if (
+        python_source.get("repository") != "daijro/camoufox"
+        or not isinstance(source_commit, str)
+        or re.fullmatch(r"[0-9a-f]{40}", source_commit) is None
+    ):
+        fail("Camoufox Python source identity is invalid")
     distribution = value.get("windows_distribution")
     if not isinstance(distribution, dict) or set(distribution) != {
         "architecture",
@@ -113,6 +200,7 @@ def load_lock(path: Path) -> dict[str, Any]:
     if not isinstance(python, dict) or set(python) != {
         "artifact_sha256",
         "artifact_url",
+        "packages",
         "version",
     }:
         fail("Windows Python distribution lock shape is invalid")
@@ -127,6 +215,7 @@ def load_lock(path: Path) -> dict[str, Any]:
         fail("Windows Python distribution/version contract is unsupported")
     if browser.get("executable_path") != "browser/camoufox.exe":
         fail("Windows browser executable contract is unsupported")
+    validate_python_packages(python, components)
     return value
 
 
@@ -235,39 +324,34 @@ def rewrite_embedded_python_path(python_root: Path) -> None:
 
 
 def install_python_components(build_python: Path, lock: dict[str, Any], python_root: Path) -> None:
-    components = lock["components"]
-    python_source = lock["python_source"]
-    if not isinstance(components, dict) or not isinstance(python_source, dict):
-        fail("Python component/source lock is invalid")
-    commit = python_source.get("commit")
-    repository = python_source.get("repository")
-    if not isinstance(commit, str) or re.fullmatch(r"[0-9a-f]{40}", commit) is None:
-        fail("Camoufox Python source commit is invalid")
-    if repository != "daijro/camoufox":
-        fail("Camoufox Python source repository is unsupported")
+    packages = lock["windows_distribution"]["python"]["packages"]
     site_packages = python_root / "Lib" / "site-packages"
     site_packages.mkdir(parents=True, exist_ok=False)
-    requirements = [
-        f"git+https://github.com/{repository}.git@{commit}#subdirectory=pythonlib",
-        f"browserforge=={components['browserforge']}",
-        f"playwright=={components['playwright']}",
-    ]
-    command = [
-        str(build_python),
-        "-m",
-        "pip",
-        "install",
-        "--disable-pip-version-check",
-        "--no-cache-dir",
-        "--no-compile",
-        "--no-warn-script-location",
-        "--target",
-        str(site_packages),
-        *requirements,
-    ]
-    completed = subprocess.run(command, cwd=ROOT, check=False)
-    if completed.returncode != 0:
-        fail("exact Python component installation failed")
+    with tempfile.TemporaryDirectory(prefix="camouhost-windows-wheels-") as directory:
+        wheel_root = Path(directory)
+        wheel_paths: list[Path] = []
+        for row in packages:
+            wheel = wheel_root / row["filename"]
+            download_exact(row["url"], row["sha256"], wheel)
+            wheel_paths.append(wheel)
+        command = [
+            str(build_python),
+            "-m",
+            "pip",
+            "install",
+            "--disable-pip-version-check",
+            "--no-cache-dir",
+            "--no-compile",
+            "--no-deps",
+            "--no-index",
+            "--no-warn-script-location",
+            "--target",
+            str(site_packages),
+            *(str(path) for path in wheel_paths),
+        ]
+        completed = subprocess.run(command, cwd=ROOT, check=False)
+        if completed.returncode != 0:
+            fail("exact locked Python wheel installation failed")
 
 
 def remove_python_caches(root: Path) -> None:
@@ -338,12 +422,15 @@ def verify_runtime_tree(output: Path, lock: dict[str, Any]) -> dict[str, Any]:
         inventory.append({"path": relative, "sha256": sha256_file(path), "size_bytes": size})
     if not inventory or len(inventory) > MAX_ARCHIVE_FILES:
         fail("materialized runtime inventory is invalid")
+    packages = lock["windows_distribution"]["python"]["packages"]
     return {
         "schema_version": 1,
         "kind": "CAMOUHOST_WINDOWS_RESOLVED_RUNTIME",
         "components": observed,
+        "dependency_graph_sha256": hashlib.sha256(canonical(packages)).hexdigest(),
         "files": len(inventory),
         "inventory_sha256": hashlib.sha256(canonical(inventory)).hexdigest(),
+        "package_count": len(packages),
         "total_size_bytes": total,
     }
 
