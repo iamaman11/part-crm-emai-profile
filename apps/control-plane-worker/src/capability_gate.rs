@@ -10,6 +10,9 @@ use capability_policy::{
 pub const CANONICAL_ENVIRONMENT_VAR: &str = "CANONICAL_ENVIRONMENT";
 pub const CAPABILITY_PROFILE_ID_VAR: &str = "CAPABILITY_PROFILE_ID";
 pub const CAPABILITY_PROFILE_DIGEST_VAR: &str = "CAPABILITY_PROFILE_DIGEST";
+pub const TARGET_AUTHORIZATION_OBSERVATION_VAR: &str = "TARGET_AUTHORIZATION_OBSERVATION";
+const TARGET_AUTHORIZATION_SCHEMA: &str = "target-v1";
+const RELEASE_SET_V3_PREFIX: &str = "release-set-v3-sha256-";
 
 #[derive(Clone, Debug)]
 pub struct RuntimeCapabilityContext {
@@ -21,11 +24,23 @@ impl RuntimeCapabilityContext {
         let environment = env.var(CANONICAL_ENVIRONMENT_VAR)?.to_string();
         let profile_id = env.var(CAPABILITY_PROFILE_ID_VAR)?.to_string();
         let digest = env.var(CAPABILITY_PROFILE_DIGEST_VAR)?.to_string();
+        let environment = CanonicalEnvironment::parse(&environment).map_err(policy_error)?;
+        let profile_id = ProfileId::parse(&profile_id).map_err(policy_error)?;
+        let digest = ProfileDigest::parse_hex(&digest).map_err(policy_error)?;
+        let target_authorization = env
+            .var(TARGET_AUTHORIZATION_OBSERVATION_VAR)
+            .ok()
+            .map(|value| value.to_string());
         let request = AdmissionRequest {
-            environment: CanonicalEnvironment::parse(&environment).map_err(policy_error)?,
-            profile_id: ProfileId::parse(&profile_id).map_err(policy_error)?,
-            presented_digest: ProfileDigest::parse_hex(&digest).map_err(policy_error)?,
-            authorization: AuthorizationState::NotAuthorized,
+            environment,
+            profile_id,
+            presented_digest: digest,
+            authorization: target_authorization_state(
+                target_authorization.as_deref(),
+                environment,
+                profile_id,
+                digest,
+            )?,
         };
         let profile = admit(request).map_err(policy_error)?;
         Ok(Self { profile })
@@ -50,6 +65,65 @@ impl RuntimeCapabilityContext {
     pub fn route_enabled(&self, route: RouteClass, path: &str) -> bool {
         route_surface(route, path).is_none_or(|surface| self.surface_enabled(surface))
     }
+}
+
+fn target_authorization_state(
+    observation: Option<&str>,
+    environment: CanonicalEnvironment,
+    profile_id: ProfileId,
+    digest: ProfileDigest,
+) -> Result<AuthorizationState> {
+    let Some(observation) = observation else {
+        return Ok(AuthorizationState::NotAuthorized);
+    };
+    if environment == CanonicalEnvironment::Production {
+        return Err(target_authorization_error());
+    }
+    let mut fields = observation.split('|');
+    let Some(schema) = fields.next() else {
+        return Err(target_authorization_error());
+    };
+    let Some(observed_environment) = fields.next() else {
+        return Err(target_authorization_error());
+    };
+    let Some(observed_profile_id) = fields.next() else {
+        return Err(target_authorization_error());
+    };
+    let Some(observed_digest) = fields.next() else {
+        return Err(target_authorization_error());
+    };
+    let Some(release_set_id) = fields.next() else {
+        return Err(target_authorization_error());
+    };
+    if fields.next().is_some() || schema != TARGET_AUTHORIZATION_SCHEMA {
+        return Err(target_authorization_error());
+    }
+    if CanonicalEnvironment::parse(observed_environment)
+        .map_err(|_| target_authorization_error())?
+        != environment
+        || ProfileId::parse(observed_profile_id).map_err(|_| target_authorization_error())?
+            != profile_id
+        || ProfileDigest::parse_hex(observed_digest).map_err(|_| target_authorization_error())?
+            != digest
+        || !valid_release_set_v3_id(release_set_id)
+    {
+        return Err(target_authorization_error());
+    }
+    Ok(AuthorizationState::TargetAuthorized)
+}
+
+fn valid_release_set_v3_id(value: &str) -> bool {
+    let Some(digest) = value.strip_prefix(RELEASE_SET_V3_PREFIX) else {
+        return false;
+    };
+    digest.len() == 64
+        && digest
+            .bytes()
+            .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
+}
+
+fn target_authorization_error() -> Error {
+    Error::RustError("target authorization observation failed closed".to_owned())
 }
 
 fn policy_error(error: capability_policy::PolicyError) -> Error {
@@ -128,8 +202,74 @@ pub fn route_surface(route: RouteClass, path: &str) -> Option<RuntimeSurface> {
 mod tests {
     use super::{
         ActivationUnit, RouteClass, RuntimeCapabilityContext, RuntimeSurface, route_surface,
+        target_authorization_state,
     };
-    use capability_policy::{CanonicalEnvironment, ProfileId, effective_profile};
+    use capability_policy::{
+        AuthorizationState, CanonicalEnvironment, ProfileId, effective_profile, profile_digest,
+    };
+
+    fn release_set_id() -> String {
+        format!("release-set-v3-sha256-{}", "a".repeat(64))
+    }
+
+    fn target_observation(environment: CanonicalEnvironment, profile_id: ProfileId) -> String {
+        format!(
+            "target-v1|{}|{}|{}|{}",
+            environment.id(),
+            profile_id.id(),
+            profile_digest(profile_id),
+            release_set_id()
+        )
+    }
+
+    #[test]
+    fn target_authorization_observation_is_exact_and_fail_closed()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let environment = CanonicalEnvironment::Staging;
+        let profile_id = ProfileId::RehearsalCoreV2;
+        let digest = profile_digest(profile_id);
+        let exact = target_observation(environment, profile_id);
+        assert_eq!(
+            target_authorization_state(Some(&exact), environment, profile_id, digest)?,
+            AuthorizationState::TargetAuthorized
+        );
+        assert_eq!(
+            target_authorization_state(None, environment, profile_id, digest)?,
+            AuthorizationState::NotAuthorized
+        );
+
+        for malformed in [
+            "target-v2|staging|rehearsal-core-v2|22be80b5718a3cb80f35c474d3f52421a98ffeb663cc8701c1acd6f2c47759e2|release-set-v3-sha256-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "target-v1|rehearsal|rehearsal-core-v2|22be80b5718a3cb80f35c474d3f52421a98ffeb663cc8701c1acd6f2c47759e2|release-set-v3-sha256-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "target-v1|staging|production-core-v2|22be80b5718a3cb80f35c474d3f52421a98ffeb663cc8701c1acd6f2c47759e2|release-set-v3-sha256-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "target-v1|staging|rehearsal-core-v2|0000000000000000000000000000000000000000000000000000000000000000|release-set-v3-sha256-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "target-v1|staging|rehearsal-core-v2|22be80b5718a3cb80f35c474d3f52421a98ffeb663cc8701c1acd6f2c47759e2|release-set-v2-sha256-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "target-v1|staging|rehearsal-core-v2|22be80b5718a3cb80f35c474d3f52421a98ffeb663cc8701c1acd6f2c47759e2|release-set-v3-sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        ] {
+            assert!(
+                target_authorization_state(Some(malformed), environment, profile_id, digest)
+                    .is_err(),
+                "malformed target observation unexpectedly admitted: {malformed}"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn target_authorization_observation_cannot_target_production() {
+        let environment = CanonicalEnvironment::Production;
+        let profile_id = ProfileId::ProductionCoreV2;
+        let observation = target_observation(environment, profile_id);
+        assert!(
+            target_authorization_state(
+                Some(&observation),
+                environment,
+                profile_id,
+                profile_digest(profile_id),
+            )
+            .is_err()
+        );
+    }
 
     #[test]
     fn route_adapter_delegates_semantics_to_capability_policy() {

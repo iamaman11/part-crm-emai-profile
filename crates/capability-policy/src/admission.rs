@@ -1,11 +1,12 @@
 use crate::{
-    CanonicalEnvironment, EffectiveProfile, PolicyError, ProfileDigest, ProfileId, identity,
-    profile, profile_definition, validate_policy,
+    ActivationGate, CanonicalEnvironment, EffectiveProfile, PolicyError, ProfileDigest, ProfileId,
+    identity, profile, profile_definition, validate_policy,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum AuthorizationState {
     NotAuthorized,
+    TargetAuthorized,
     Authorized,
 }
 
@@ -29,6 +30,11 @@ pub fn admit(request: AdmissionRequest) -> Result<EffectiveProfile, PolicyError>
         .contains(&request.environment)
     {
         return Err(PolicyError::EnvironmentNotAllowed);
+    }
+    if definition.activation_gate == ActivationGate::TargetAuthorization
+        && request.authorization != AuthorizationState::TargetAuthorized
+    {
+        return Err(PolicyError::TargetNotAuthorized);
     }
     if request.environment == CanonicalEnvironment::Production
         && definition.production_authorization_required
@@ -60,6 +66,20 @@ mod tests {
     }
 
     #[test]
+    fn target_authorization_never_authorizes_production() {
+        let definition = profile_definition(ProfileId::ProductionCoreV2);
+        assert_eq!(
+            admit(AdmissionRequest {
+                environment: CanonicalEnvironment::Production,
+                profile_id: ProfileId::ProductionCoreV2,
+                presented_digest: semantic_digest_v1(definition),
+                authorization: AuthorizationState::TargetAuthorized,
+            }),
+            Err(PolicyError::ProductionNotAuthorized)
+        );
+    }
+
+    #[test]
     fn wrong_digest_and_wrong_environment_fail_closed() {
         let wrong_digest = ProfileDigest::parse_hex(
             "0000000000000000000000000000000000000000000000000000000000000000",
@@ -71,7 +91,7 @@ mod tests {
                     environment: CanonicalEnvironment::Staging,
                     profile_id: ProfileId::RehearsalCoreV2,
                     presented_digest: wrong_digest,
-                    authorization: AuthorizationState::NotAuthorized,
+                    authorization: AuthorizationState::TargetAuthorized,
                 }),
                 Err(PolicyError::DigestMismatch)
             );
@@ -83,21 +103,44 @@ mod tests {
                 environment: CanonicalEnvironment::Production,
                 profile_id: ProfileId::RehearsalCoreV2,
                 presented_digest: semantic_digest_v1(definition),
-                authorization: AuthorizationState::NotAuthorized,
+                authorization: AuthorizationState::TargetAuthorized,
             }),
             Err(PolicyError::EnvironmentNotAllowed)
         );
     }
 
     #[test]
-    fn rehearsal_profile_is_admitted_in_staging() {
+    fn target_gated_rehearsal_profile_fails_closed_without_target_authorization() {
+        let definition = profile_definition(ProfileId::RehearsalCoreV2);
+        assert_eq!(
+            admit(AdmissionRequest {
+                environment: CanonicalEnvironment::Staging,
+                profile_id: ProfileId::RehearsalCoreV2,
+                presented_digest: semantic_digest_v1(definition),
+                authorization: AuthorizationState::NotAuthorized,
+            }),
+            Err(PolicyError::TargetNotAuthorized)
+        );
+        assert_eq!(
+            admit(AdmissionRequest {
+                environment: CanonicalEnvironment::Staging,
+                profile_id: ProfileId::RehearsalCoreV2,
+                presented_digest: semantic_digest_v1(definition),
+                authorization: AuthorizationState::Authorized,
+            }),
+            Err(PolicyError::TargetNotAuthorized)
+        );
+    }
+
+    #[test]
+    fn target_gated_rehearsal_profile_is_admitted_with_target_authorization() {
         let definition = profile_definition(ProfileId::RehearsalCoreV2);
         assert!(
             admit(AdmissionRequest {
                 environment: CanonicalEnvironment::Staging,
                 profile_id: ProfileId::RehearsalCoreV2,
                 presented_digest: semantic_digest_v1(definition),
-                authorization: AuthorizationState::NotAuthorized,
+                authorization: AuthorizationState::TargetAuthorized,
             })
             .is_ok()
         );

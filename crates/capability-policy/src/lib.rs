@@ -33,6 +33,7 @@ pub enum PolicyError {
     InvalidDigest,
     DigestMismatch,
     EnvironmentNotAllowed,
+    TargetNotAuthorized,
     ProductionNotAuthorized,
     ActivationDependencyCycle,
     ActivationSelfDependency {
@@ -69,6 +70,9 @@ impl Display for PolicyError {
             Self::DigestMismatch => formatter.write_str("capability profile digest mismatch"),
             Self::EnvironmentNotAllowed => {
                 formatter.write_str("capability profile environment not allowed")
+            }
+            Self::TargetNotAuthorized => {
+                formatter.write_str("target capability profile not authorized")
             }
             Self::ProductionNotAuthorized => {
                 formatter.write_str("production capability profile not authorized")

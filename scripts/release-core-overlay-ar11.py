@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Render the no-rebuild AR-11 Core Wrangler overlay from immutable release bits.
 
-This adapter performs deterministic path/resource substitution only. It does not decide
-release compatibility, promotion authorization, D1 policy, rollback, or production
-readiness; those decisions belong to native opsctl release/promotion policy.
+This adapter performs deterministic path/resource substitution and projects exact target identity
+into the staging runtime. It does not decide release compatibility, promotion authorization, D1
+policy, rollback, or production readiness; those decisions belong to native opsctl release/
+promotion policy and the guarded promotion workflow.
 """
 
 from __future__ import annotations
@@ -21,6 +22,10 @@ RESOURCE_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")
 ACCOUNT_RE = re.compile(r"^[0-9a-f]{32}$")
 D1_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
 AUDIENCE_RE = re.compile(r"^[A-Za-z0-9_-]{16,128}$")
+SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+RELEASE_SET_V3_RE = re.compile(r"^release-set-v3-sha256-[0-9a-f]{64}$")
+TARGET_AUTHORIZATION_VAR = "TARGET_AUTHORIZATION_OBSERVATION"
+TARGET_AUTHORIZATION_SCHEMA = "target-v1"
 REQUIRED_CONTROL_FIELDS = {
     "worker_name",
     "account_id",
@@ -114,6 +119,33 @@ def control_manifest(document: dict[str, Any], environment: str) -> dict[str, st
     return result
 
 
+def target_authorization_observation(
+    vars_value: dict[str, Any],
+    release_set_id: Any,
+) -> str:
+    environment = bounded(vars_value.get("CANONICAL_ENVIRONMENT"), "CANONICAL_ENVIRONMENT")
+    profile_id = bounded(vars_value.get("CAPABILITY_PROFILE_ID"), "CAPABILITY_PROFILE_ID")
+    profile_digest = bounded(
+        vars_value.get("CAPABILITY_PROFILE_DIGEST"), "CAPABILITY_PROFILE_DIGEST"
+    )
+    release_set_id = bounded(release_set_id, "RELEASE_SET_ID")
+    if environment != "staging" or profile_id != "rehearsal-core-v2":
+        fail("target authorization projection is restricted to the rehearsal Core staging target")
+    if SHA256_RE.fullmatch(profile_digest) is None:
+        fail("CAPABILITY_PROFILE_DIGEST must be a lowercase SHA-256 digest")
+    if RELEASE_SET_V3_RE.fullmatch(release_set_id) is None:
+        fail("RELEASE_SET_ID must be an immutable Release Set v3 identity")
+    return "|".join(
+        [
+            TARGET_AUTHORIZATION_SCHEMA,
+            environment,
+            profile_id,
+            profile_digest,
+            release_set_id,
+        ]
+    )
+
+
 def relative_path(target: Path, output: Path) -> str:
     return Path(os.path.relpath(target.resolve(), output.parent.resolve())).as_posix()
 
@@ -137,6 +169,8 @@ def render(
     vars_value = selected.get("vars")
     if not isinstance(vars_value, dict):
         fail("selected environment vars are missing")
+    if TARGET_AUTHORIZATION_VAR in vars_value:
+        fail("immutable Wrangler config must not author target authorization")
     if (
         vars_value.get("CANONICAL_ENVIRONMENT") != "staging"
         or vars_value.get("CAPABILITY_PROFILE_ID") != "rehearsal-core-v2"
@@ -167,6 +201,13 @@ def render(
     selected = substitute(selected)
     if not isinstance(selected, dict):
         fail("rendered selected Core environment must remain an object")
+    rendered_vars = selected.get("vars")
+    if not isinstance(rendered_vars, dict):
+        fail("rendered selected environment vars are missing")
+    rendered_vars[TARGET_AUTHORIZATION_VAR] = target_authorization_observation(
+        rendered_vars,
+        os.environ.get("RELEASE_SET_ID"),
+    )
     # `secrets.required` is repository policy metadata, not Wrangler deployment input.
     # Secret values are never transported here; remote binding names are observed with
     # `wrangler secret list` and validated before the exact-bits deploy.
@@ -216,9 +257,28 @@ def self_test() -> None:
     try:
         control_manifest({"worker_name": "x"}, "production")
     except OverlayError:
-        print("AR-11 Core no-rebuild overlay self-test passed.")
-        return
-    fail("production overlay negative fixture unexpectedly passed")
+        pass
+    else:
+        fail("production overlay negative fixture unexpectedly passed")
+
+    digest = "a" * 64
+    release_set_id = f"release-set-v3-sha256-{'b' * 64}"
+    vars_value = {
+        "CANONICAL_ENVIRONMENT": "staging",
+        "CAPABILITY_PROFILE_ID": "rehearsal-core-v2",
+        "CAPABILITY_PROFILE_DIGEST": digest,
+    }
+    expected = f"target-v1|staging|rehearsal-core-v2|{digest}|{release_set_id}"
+    if target_authorization_observation(vars_value, release_set_id) != expected:
+        fail("target authorization projection is not deterministic")
+    try:
+        target_authorization_observation(vars_value, "release-set-v2-sha256-" + "b" * 64)
+    except OverlayError:
+        pass
+    else:
+        fail("non-v3 Release Set target unexpectedly passed")
+
+    print("AR-11 Core no-rebuild overlay self-test passed.")
 
 
 def main() -> int:
