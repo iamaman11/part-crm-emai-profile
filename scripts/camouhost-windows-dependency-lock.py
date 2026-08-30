@@ -135,6 +135,19 @@ def candidate(runtime_lock: dict[str, Any], report: dict[str, Any]) -> dict[str,
     }
 
 
+def write_new(path: Path, payload: bytes) -> None:
+    if path.is_symlink() or path.exists():
+        fail("dependency lock candidate output must not already exist")
+    if not path.parent.is_dir() or path.parent.is_symlink():
+        fail("dependency lock candidate output parent is invalid")
+    try:
+        with path.open("xb") as handle:
+            handle.write(payload)
+            handle.flush()
+    except OSError as error:
+        raise DependencyLockError("cannot persist dependency lock candidate") from error
+
+
 def self_test() -> None:
     runtime_lock = {
         "components": {
@@ -215,6 +228,7 @@ def parser() -> argparse.ArgumentParser:
     project = subcommands.add_parser("project")
     project.add_argument("--runtime-lock", type=Path, default=DEFAULT_RUNTIME_LOCK)
     project.add_argument("--pip-report", type=Path, required=True)
+    project.add_argument("--output", type=Path)
     subcommands.add_parser("self-test")
     return result
 
@@ -227,7 +241,11 @@ def main() -> int:
         elif args.command == "project":
             runtime_lock = load_json(args.runtime_lock, "runtime lock")
             report = load_json(args.pip_report, "pip report")
-            sys.stdout.buffer.write(canonical(candidate(runtime_lock, report)))
+            payload = canonical(candidate(runtime_lock, report))
+            if args.output is None:
+                sys.stdout.buffer.write(payload)
+            else:
+                write_new(args.output, payload)
         else:
             fail(f"unsupported command: {args.command}")
         return 0
