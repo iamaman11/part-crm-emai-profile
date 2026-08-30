@@ -187,8 +187,8 @@ fn verify_embedded_release_id(
     {
         return Err(RuntimeBundleSelectionError::InvalidRuntime);
     }
-    let bytes = fs::read(&manifest_path)
-        .map_err(|_| RuntimeBundleSelectionError::MissingRuntimeFile)?;
+    let bytes =
+        fs::read(&manifest_path).map_err(|_| RuntimeBundleSelectionError::MissingRuntimeFile)?;
     let manifest: Value =
         serde_json::from_slice(&bytes).map_err(|_| RuntimeBundleSelectionError::InvalidRuntime)?;
     let release_id = manifest
@@ -216,8 +216,8 @@ fn is_lower_hex(value: &str, expected_len: usize) -> bool {
 }
 
 fn validate_regular_path(path: &Path) -> Result<(), WindowsDeliveryRuntimeError> {
-    let metadata =
-        fs::symlink_metadata(path).map_err(|_| WindowsDeliveryRuntimeError::InvalidInstalledLayout)?;
+    let metadata = fs::symlink_metadata(path)
+        .map_err(|_| WindowsDeliveryRuntimeError::InvalidInstalledLayout)?;
     if metadata_is_link_or_reparse(&metadata) || !metadata.is_file() {
         return Err(WindowsDeliveryRuntimeError::InvalidInstalledLayout);
     }
@@ -225,8 +225,8 @@ fn validate_regular_path(path: &Path) -> Result<(), WindowsDeliveryRuntimeError>
 }
 
 fn validate_existing_directory(path: &Path) -> Result<(), WindowsDeliveryRuntimeError> {
-    let metadata =
-        fs::symlink_metadata(path).map_err(|_| WindowsDeliveryRuntimeError::InvalidInstalledLayout)?;
+    let metadata = fs::symlink_metadata(path)
+        .map_err(|_| WindowsDeliveryRuntimeError::InvalidInstalledLayout)?;
     if metadata_is_link_or_reparse(&metadata) || !metadata.is_dir() {
         return Err(WindowsDeliveryRuntimeError::InvalidInstalledLayout);
     }
@@ -308,7 +308,10 @@ mod tests {
             r"C:\ProfileBridge\releases\release-00000000000000000001-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\profile-bridge\profile-bridge.exe",
         );
         let layout = InstalledDeliveryLayout::from_executable(executable)?;
-        assert_eq!(layout.releases_root, PathBuf::from(r"C:\ProfileBridge\releases"));
+        assert_eq!(
+            layout.releases_root,
+            PathBuf::from(r"C:\ProfileBridge\releases")
+        );
         assert_eq!(layout.state_root, PathBuf::from(r"C:\ProfileBridge\state"));
         assert_eq!(
             InstalledDeliveryLayout::from_executable(Path::new(
