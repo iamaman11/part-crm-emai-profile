@@ -98,7 +98,8 @@ fn target_authorization_state(
     if fields.next().is_some() || schema != TARGET_AUTHORIZATION_SCHEMA {
         return Err(target_authorization_error());
     }
-    if CanonicalEnvironment::parse(observed_environment).map_err(|_| target_authorization_error())?
+    if CanonicalEnvironment::parse(observed_environment)
+        .map_err(|_| target_authorization_error())?
         != environment
         || ProfileId::parse(observed_profile_id).map_err(|_| target_authorization_error())?
             != profile_id
@@ -211,10 +212,7 @@ mod tests {
         format!("release-set-v3-sha256-{}", "a".repeat(64))
     }
 
-    fn target_observation(
-        environment: CanonicalEnvironment,
-        profile_id: ProfileId,
-    ) -> String {
+    fn target_observation(environment: CanonicalEnvironment, profile_id: ProfileId) -> String {
         format!(
             "target-v1|{}|{}|{}|{}",
             environment.id(),
@@ -241,12 +239,12 @@ mod tests {
         );
 
         for malformed in [
-            "target-v2|staging|rehearsal-core-v2|22be80b51e794e266a1ac4157f8375e644bec9116335482128774bcf401d46da|release-set-v3-sha256-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-            "target-v1|rehearsal|rehearsal-core-v2|22be80b51e794e266a1ac4157f8375e644bec9116335482128774bcf401d46da|release-set-v3-sha256-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-            "target-v1|staging|production-core-v2|22be80b51e794e266a1ac4157f8375e644bec9116335482128774bcf401d46da|release-set-v3-sha256-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "target-v2|staging|rehearsal-core-v2|22be80b5718a3cb80f35c474d3f52421a98ffeb663cc8701c1acd6f2c47759e2|release-set-v3-sha256-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "target-v1|rehearsal|rehearsal-core-v2|22be80b5718a3cb80f35c474d3f52421a98ffeb663cc8701c1acd6f2c47759e2|release-set-v3-sha256-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "target-v1|staging|production-core-v2|22be80b5718a3cb80f35c474d3f52421a98ffeb663cc8701c1acd6f2c47759e2|release-set-v3-sha256-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
             "target-v1|staging|rehearsal-core-v2|0000000000000000000000000000000000000000000000000000000000000000|release-set-v3-sha256-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-            "target-v1|staging|rehearsal-core-v2|22be80b51e794e266a1ac4157f8375e644bec9116335482128774bcf401d46da|release-set-v2-sha256-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-            "target-v1|staging|rehearsal-core-v2|22be80b51e794e266a1ac4157f8375e644bec9116335482128774bcf401d46da|release-set-v3-sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+            "target-v1|staging|rehearsal-core-v2|22be80b5718a3cb80f35c474d3f52421a98ffeb663cc8701c1acd6f2c47759e2|release-set-v2-sha256-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "target-v1|staging|rehearsal-core-v2|22be80b5718a3cb80f35c474d3f52421a98ffeb663cc8701c1acd6f2c47759e2|release-set-v3-sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
         ] {
             assert!(
                 target_authorization_state(Some(malformed), environment, profile_id, digest)
