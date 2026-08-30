@@ -13,6 +13,14 @@ pub trait ProfileCoordinatorPort {
     ) -> Result<ProfileLease, Self::Error>;
 
     fn close_lease(&mut self, lease: &ProfileLease) -> Result<(), Self::Error>;
+
+    /// Release coordinator ownership after an exactly verified successor has already become the
+    /// authoritative backend generation. Generic abort/error cleanup remains `close_lease`; a
+    /// shipping coordinator may strengthen this operation to a clean release because confirmed
+    /// save has removed the dirty-writer ambiguity.
+    fn close_confirmed_save(&mut self, lease: &ProfileLease) -> Result<(), Self::Error> {
+        self.close_lease(lease)
+    }
 }
 
 pub trait ProfileCoordinatorRuntimePort: ProfileCoordinatorPort {
