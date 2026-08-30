@@ -3,7 +3,7 @@
 use crate::windows_delivery::{
     DeliveryIdentity, VerifiedDeliveryCandidate, WindowsDeliveryComponent,
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
 use std::fmt;
@@ -200,16 +200,18 @@ struct ComponentPlan {
     files: Vec<PlannedFile>,
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 struct StageMarker {
     schema_version: u32,
-    kind: &'static str,
+    kind: String,
     identity: DeliveryIdentity,
     profile_bridge: StageComponentMarker,
     runtime_bundle: StageComponentMarker,
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 struct StageComponentMarker {
     release_id: String,
     artifact_sha256: String,
@@ -218,7 +220,8 @@ struct StageComponentMarker {
     files: Vec<StageFileMarker>,
 }
 
-#[derive(Clone, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 struct StageFileMarker {
     relative_path: String,
     size_bytes: u64,
@@ -248,7 +251,7 @@ pub fn stage_verified_delivery<R: DeliveryArchiveReader>(
     )?;
     let marker = StageMarker {
         schema_version: STAGE_SCHEMA_VERSION,
-        kind: STAGE_KIND,
+        kind: STAGE_KIND.to_owned(),
         identity: candidate.identity(),
         profile_bridge: marker_component(&bridge_plan),
         runtime_bundle: marker_component(&runtime_plan),
@@ -310,6 +313,63 @@ pub fn stage_verified_delivery<R: DeliveryArchiveReader>(
     Ok(staged_delivery(candidate, final_path))
 }
 
+pub fn reopen_staged_delivery(
+    root: &DeliveryStagingRoot,
+    identity: &DeliveryIdentity,
+) -> Result<StagedDelivery, DeliveryStagingError> {
+    validate_directory_path(root.path())?;
+    let directory_name = release_directory_name_for_identity(identity)?;
+    let final_path = root.path().join(&directory_name);
+    let pending_path = root.path().join(format!(".pending-{directory_name}"));
+    let final_exists = safe_directory_exists(&final_path)?;
+    let pending_exists = safe_directory_exists(&pending_path)?;
+    if final_exists && pending_exists {
+        return Err(DeliveryStagingError::AmbiguousStage);
+    }
+    if pending_exists || !final_exists {
+        return Err(DeliveryStagingError::CorruptStage);
+    }
+
+    let marker_path = final_path.join(MARKER_NAME);
+    let marker_metadata =
+        fs::symlink_metadata(&marker_path).map_err(|_| DeliveryStagingError::CorruptStage)?;
+    if metadata_is_link_or_reparse(&marker_metadata) || !marker_metadata.is_file() {
+        return Err(DeliveryStagingError::UnsafeFilesystem);
+    }
+    let marker_bytes = fs::read(&marker_path).map_err(|_| DeliveryStagingError::Io)?;
+    let marker: StageMarker = serde_json::from_slice(&marker_bytes)
+        .map_err(|_| DeliveryStagingError::CorruptStage)?;
+    let canonical_marker =
+        serde_json::to_vec(&marker).map_err(|_| DeliveryStagingError::Serialization)?;
+    if canonical_marker != marker_bytes
+        || marker.schema_version != STAGE_SCHEMA_VERSION
+        || marker.kind != STAGE_KIND
+        || marker.identity != *identity
+    {
+        return Err(DeliveryStagingError::CorruptStage);
+    }
+
+    let bridge_plan = component_plan_from_marker(
+        DeliveryComponentKind::ProfileBridge,
+        &marker.profile_bridge,
+        &identity.profile_bridge_release_id,
+    )?;
+    let runtime_plan = component_plan_from_marker(
+        DeliveryComponentKind::RuntimeBundle,
+        &marker.runtime_bundle,
+        &identity.runtime_bundle_release_id,
+    )?;
+    verify_materialized_stage(
+        &final_path,
+        &marker_bytes,
+        [&bridge_plan, &runtime_plan],
+    )?;
+    Ok(StagedDelivery {
+        identity: identity.clone(),
+        path: final_path,
+    })
+}
+
 fn build_component_plan<R: DeliveryArchiveReader>(
     kind: DeliveryComponentKind,
     artifact_path: &Path,
@@ -360,6 +420,59 @@ fn build_component_plan<R: DeliveryArchiveReader>(
         artifact_sha256: expected.artifact_sha256.clone(),
         artifact_size_bytes: expected.artifact_size_bytes,
         component_manifest_sha256: expected.component_manifest_sha256.clone(),
+        files,
+    })
+}
+
+fn component_plan_from_marker(
+    kind: DeliveryComponentKind,
+    marker: &StageComponentMarker,
+    expected_release_id: &str,
+) -> Result<ComponentPlan, DeliveryStagingError> {
+    if marker.release_id != expected_release_id
+        || marker.artifact_size_bytes == 0
+        || !is_lower_hex(&marker.artifact_sha256, 64)
+        || !is_lower_hex(&marker.component_manifest_sha256, 64)
+        || marker.files.len() > MAX_STAGE_FILES
+    {
+        return Err(DeliveryStagingError::CorruptStage);
+    }
+    let mut files = Vec::with_capacity(marker.files.len());
+    let mut casefolded = HashSet::with_capacity(marker.files.len());
+    let mut decoded_bytes = 0_u64;
+    for (source_index, file) in marker.files.iter().enumerate() {
+        validate_windows_relative_path(&file.relative_path)
+            .map_err(|_| DeliveryStagingError::CorruptStage)?;
+        if !is_lower_hex(&file.sha256, 64) {
+            return Err(DeliveryStagingError::CorruptStage);
+        }
+        decoded_bytes = decoded_bytes
+            .checked_add(file.size_bytes)
+            .ok_or(DeliveryStagingError::CorruptStage)?;
+        if decoded_bytes > MAX_STAGE_BYTES || !casefolded.insert(file.relative_path.to_lowercase()) {
+            return Err(DeliveryStagingError::CorruptStage);
+        }
+        files.push(PlannedFile {
+            source_index,
+            relative_path: file.relative_path.clone(),
+            size_bytes: file.size_bytes,
+            sha256: file.sha256.clone(),
+        });
+    }
+    if files
+        .windows(2)
+        .any(|pair| pair[0].relative_path >= pair[1].relative_path)
+    {
+        return Err(DeliveryStagingError::CorruptStage);
+    }
+    validate_file_tree(&files).map_err(|_| DeliveryStagingError::CorruptStage)?;
+    Ok(ComponentPlan {
+        kind,
+        artifact_path: PathBuf::new(),
+        release_id: marker.release_id.clone(),
+        artifact_sha256: marker.artifact_sha256.clone(),
+        artifact_size_bytes: marker.artifact_size_bytes,
+        component_manifest_sha256: marker.component_manifest_sha256.clone(),
         files,
     })
 }
@@ -742,11 +855,23 @@ fn remove_safe_directory_contents(path: &Path) -> Result<(), DeliveryStagingErro
 }
 
 fn release_directory_name(candidate: &VerifiedDeliveryCandidate) -> String {
-    format!(
-        "release-{:020}-{}",
-        candidate.manifest().sequence,
-        candidate.manifest_sha256()
-    )
+    release_directory_name_from_parts(candidate.manifest().sequence, candidate.manifest_sha256())
+}
+
+fn release_directory_name_for_identity(
+    identity: &DeliveryIdentity,
+) -> Result<String, DeliveryStagingError> {
+    if identity.sequence == 0 || !is_lower_hex(&identity.manifest_sha256, 64) {
+        return Err(DeliveryStagingError::CorruptStage);
+    }
+    Ok(release_directory_name_from_parts(
+        identity.sequence,
+        &identity.manifest_sha256,
+    ))
+}
+
+fn release_directory_name_from_parts(sequence: u64, manifest_sha256: &str) -> String {
+    format!("release-{sequence:020}-{manifest_sha256}")
 }
 
 fn staged_delivery(candidate: &VerifiedDeliveryCandidate, path: PathBuf) -> StagedDelivery {
@@ -1093,6 +1218,8 @@ mod tests {
             &mut reader,
         )?;
         assert_eq!(first, replay);
+        let reopened = reopen_staged_delivery(&root, &candidate.identity())?;
+        assert_eq!(reopened, first);
         assert_eq!(
             fs::read(first.profile_bridge_root().join("profile-bridge.exe"))?,
             b"bridge"
@@ -1100,6 +1227,52 @@ mod tests {
         assert_eq!(
             fs::read(first.runtime_root().join("python/python.exe"))?,
             b"python"
+        );
+        fs::write(first.runtime_root().join("python/python.exe"), b"tampered")?;
+        assert_eq!(
+            reopen_staged_delivery(&root, &candidate.identity()),
+            Err(DeliveryStagingError::CorruptStage)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn reopen_rejects_component_identity_substitution() -> TestResult {
+        let directory = TestDirectory::create("reopen-identity")?;
+        let bridge_artifact = directory.0.join("bridge.zip");
+        let runtime_artifact = directory.0.join("runtime.zip");
+        let bridge_bytes = b"bridge-archive";
+        let runtime_bytes = b"runtime-archive";
+        artifact(&bridge_artifact, bridge_bytes)?;
+        artifact(&runtime_artifact, runtime_bytes)?;
+        let candidate = candidate(bridge_bytes, runtime_bytes, 13)?;
+        let root = DeliveryStagingRoot::open_or_create(directory.0.join("releases"))?;
+        let mut reader = FakeArchiveReader::default();
+        reader.insert_file(
+            DeliveryComponentKind::ProfileBridge,
+            "profile-bridge.exe",
+            b"bridge",
+        );
+        reader.insert_file(
+            DeliveryComponentKind::RuntimeBundle,
+            "python/python.exe",
+            b"python",
+        );
+        let staged = stage_verified_delivery(
+            &root,
+            &candidate,
+            &bridge_artifact,
+            &runtime_artifact,
+            &mut reader,
+        )?;
+        let marker_path = staged.path().join(MARKER_NAME);
+        let mut marker: StageMarker = serde_json::from_slice(&fs::read(&marker_path)?)?;
+        marker.runtime_bundle.release_id =
+            format!("runtime-bundle-v2-sha256-{}", "9".repeat(64));
+        fs::write(&marker_path, serde_json::to_vec(&marker)?)?;
+        assert_eq!(
+            reopen_staged_delivery(&root, &candidate.identity()),
+            Err(DeliveryStagingError::CorruptStage)
         );
         Ok(())
     }
@@ -1215,6 +1388,10 @@ mod tests {
         let pending = root.path().join(format!(".pending-{name}"));
         fs::rename(staged.path(), &pending)?;
 
+        assert_eq!(
+            reopen_staged_delivery(&root, &candidate.identity()),
+            Err(DeliveryStagingError::CorruptStage)
+        );
         let recovered = stage_verified_delivery(
             &root,
             &candidate,
