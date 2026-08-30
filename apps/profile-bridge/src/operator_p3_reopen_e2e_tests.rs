@@ -97,7 +97,8 @@ impl MachineHttpPort for BackendMachineHttp {
                 return Err(BridgePortError::InvalidResponse);
             }
             state.launch_count = state.launch_count.saturating_add(1);
-            state.pending_launch_intent = Some(format!("launch_p3_reopen_{:04}", state.launch_count));
+            state.pending_launch_intent =
+                Some(format!("launch_p3_reopen_{:04}", state.launch_count));
             let projection = BridgeProfileLaunchRedemptionProjection {
                 tenant_id: TENANT.to_owned(),
                 actor_id: ACTOR.to_owned(),
@@ -109,19 +110,18 @@ impl MachineHttpPort for BackendMachineHttp {
                     .clone()
                     .ok_or(BridgePortError::InvalidResponse)?,
             };
-            state.events.push(format!(
-                "redeem:{}",
-                state.active_generation.as_str()
-            ));
+            state
+                .events
+                .push(format!("redeem:{}", state.active_generation.as_str()));
             return json_response(&projection);
         }
 
         if path.ends_with("/coordinator") {
             return match method {
                 MachineHttpMethod::Get if body.is_none() => state.snapshot_response(),
-                MachineHttpMethod::PostJson => state.coordinator_command(
-                    body.ok_or(BridgePortError::InvalidResponse)?,
-                ),
+                MachineHttpMethod::PostJson => {
+                    state.coordinator_command(body.ok_or(BridgePortError::InvalidResponse)?)
+                }
                 _ => Err(BridgePortError::InvalidResponse),
             };
         }
@@ -223,10 +223,7 @@ impl BackendState {
         })
     }
 
-    fn coordinator_command(
-        &mut self,
-        body: &[u8],
-    ) -> Result<MachineHttpResponse, BridgePortError> {
+    fn coordinator_command(&mut self, body: &[u8]) -> Result<MachineHttpResponse, BridgePortError> {
         let request = serde_json::from_slice::<CoordinatorCommandRequestDto>(body)
             .map_err(|_| BridgePortError::InvalidResponse)?;
         if request.expected_version != self.coordinator_version
@@ -255,7 +252,8 @@ impl BackendState {
                 self.live_fencing_token = Some(fencing_token.clone());
                 self.pending_launch_intent = None;
                 self.coordinator_status = CoordinatorStatusDto::Active;
-                self.events.push(format!("coordinator:claim:{}", self.epoch));
+                self.events
+                    .push(format!("coordinator:claim:{}", self.epoch));
                 json_response(&CoordinatorResponseDto {
                     outcome: CoordinatorOutcomeDto::LeaseClaimed,
                     version: self.coordinator_version,
@@ -287,7 +285,8 @@ impl BackendState {
                 };
                 self.live_session_id = None;
                 self.live_fencing_token = None;
-                self.events.push(format!("coordinator:release:{disposition:?}"));
+                self.events
+                    .push(format!("coordinator:release:{disposition:?}"));
                 json_response(&CoordinatorResponseDto {
                     outcome: CoordinatorOutcomeDto::Released,
                     version: self.coordinator_version,
@@ -334,7 +333,8 @@ impl BackendState {
         {
             return Err(BridgePortError::InvalidResponse);
         }
-        self.events.push(format!("seal:{}", request.generation_id()));
+        self.events
+            .push(format!("seal:{}", request.generation_id()));
         json_response(&BridgeGenerationSealingMaterialResponse::new(
             ROOT_KEY_ID,
             lower_hex(&[7; 32]),
@@ -379,7 +379,10 @@ impl BackendState {
         if self.pending_successor.as_ref() != Some(&request) {
             return Err(BridgePortError::InvalidResponse);
         }
-        let object = self.object.as_ref().ok_or(BridgePortError::InvalidResponse)?;
+        let object = self
+            .object
+            .as_ref()
+            .ok_or(BridgePortError::InvalidResponse)?;
         if u64::try_from(object.len()).ok() != Some(request.container_bytes())
             || lower_hex(&Sha256::digest(object)) != request.container_digest()
         {
@@ -395,10 +398,7 @@ impl BackendState {
         })
     }
 
-    fn download_capability(
-        &mut self,
-        body: &[u8],
-    ) -> Result<MachineHttpResponse, BridgePortError> {
+    fn download_capability(&mut self, body: &[u8]) -> Result<MachineHttpResponse, BridgePortError> {
         let request = serde_json::from_slice::<BridgeGenerationDownloadCapabilityRequest>(body)
             .map_err(|_| BridgePortError::InvalidResponse)?;
         self.check_witness(
@@ -408,7 +408,7 @@ impl BackendState {
         )?;
         let committed = self
             .committed_successor
-            .as_ref()
+            .clone()
             .ok_or(BridgePortError::InvalidResponse)?;
         if committed.generation_id() != self.active_generation.as_str() {
             return Err(BridgePortError::InvalidResponse);
@@ -436,7 +436,10 @@ impl BackendState {
             request.coordinator_fencing_token(),
             request.coordinator_epoch(),
         )?;
-        let object = self.object.as_ref().ok_or(BridgePortError::InvalidResponse)?;
+        let object = self
+            .object
+            .as_ref()
+            .ok_or(BridgePortError::InvalidResponse)?;
         let inspected = inspect_generation_metadata_prelude(object)
             .map_err(|_| BridgePortError::InvalidResponse)?;
         let prelude = object
@@ -521,7 +524,10 @@ impl SignedGenerationObjectPutPort for BackendPut {
         capability: &SignedGenerationUploadCapability,
         container: &[u8],
     ) -> Result<(), Self::Error> {
-        if capability.url().map_err(|_| BridgePortError::InvalidResponse)? != SIGNED_UPLOAD_URL
+        if capability
+            .url()
+            .map_err(|_| BridgePortError::InvalidResponse)?
+            != SIGNED_UPLOAD_URL
             || capability.expires_seconds() == 0
             || container.is_empty()
         {
@@ -537,8 +543,9 @@ impl SignedGenerationObjectPutPort for BackendPut {
         {
             return Err(BridgePortError::InvalidResponse);
         }
+        let pending_generation = pending.generation_id().to_owned();
         state.object = Some(container.to_vec());
-        state.events.push(format!("put:{}", pending.generation_id()));
+        state.events.push(format!("put:{pending_generation}"));
         Ok(())
     }
 }
@@ -559,7 +566,10 @@ impl SignedGenerationObjectGetPort for BackendGet {
             return Err(BridgePortError::InvalidResponse);
         }
         let mut state = self.state.borrow_mut();
-        let object = state.object.clone().ok_or(BridgePortError::InvalidResponse)?;
+        let object = state
+            .object
+            .clone()
+            .ok_or(BridgePortError::InvalidResponse)?;
         if object.len() != max_bytes {
             return Err(BridgePortError::InvalidResponse);
         }
@@ -574,11 +584,7 @@ struct DeviceAuthentication;
 impl DeviceAuthenticationPort for DeviceAuthentication {
     type Error = BridgePortError;
 
-    fn authenticate(
-        &mut self,
-        device_id: &DeviceId,
-        key_handle: &str,
-    ) -> Result<(), Self::Error> {
+    fn authenticate(&mut self, device_id: &DeviceId, key_handle: &str) -> Result<(), Self::Error> {
         if device_id.as_str() == DEVICE && !key_handle.is_empty() {
             Ok(())
         } else {
@@ -739,11 +745,12 @@ fn canonical_save_then_local_loss_reopens_server_selected_successor()
         state: Rc::clone(&state),
     });
 
-    let first_claim = ClaimUri::parse(
-        "profilebridge://claim/claim_p3_reopen_e2e_first_000001",
-    )?;
+    let first_claim = ClaimUri::parse("profilebridge://claim/claim_p3_reopen_e2e_first_000001")?;
     operator.open_authoritative(&first_claim, &root, &mut downloader, UnixMillis::new(10))?;
-    assert_eq!(operator.active_local_state(), Some(LocalGenerationState::InUse));
+    assert_eq!(
+        operator.active_local_state(),
+        Some(LocalGenerationState::InUse)
+    );
     let first_workspace = root.open_generation(&tenant_id, &profile_id, &base_generation)?;
     fs::write(
         first_workspace.path().join("prefs.js"),
@@ -775,13 +782,17 @@ fn canonical_save_then_local_loss_reopens_server_selected_successor()
     }
 
     root.reject_generation_for_rematerialization(&tenant_id, &profile_id, &successor)?;
-    assert!(root.open_generation(&tenant_id, &profile_id, &successor).is_err());
+    assert!(
+        root.open_generation(&tenant_id, &profile_id, &successor)
+            .is_err()
+    );
 
-    let second_claim = ClaimUri::parse(
-        "profilebridge://claim/claim_p3_reopen_e2e_second_000002",
-    )?;
+    let second_claim = ClaimUri::parse("profilebridge://claim/claim_p3_reopen_e2e_second_000002")?;
     operator.open_authoritative(&second_claim, &root, &mut downloader, UnixMillis::new(40))?;
-    assert_eq!(operator.active_local_state(), Some(LocalGenerationState::InUse));
+    assert_eq!(
+        operator.active_local_state(),
+        Some(LocalGenerationState::InUse)
+    );
     let reopened = root.open_generation(&tenant_id, &profile_id, &successor)?;
     assert_eq!(
         fs::read(reopened.path().join("prefs.js"))?,
