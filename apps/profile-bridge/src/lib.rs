@@ -8,8 +8,11 @@ pub mod browser_preflight;
 pub mod camouhost_process;
 pub mod dirty_close;
 pub mod dirty_generation;
+#[cfg(any(test, feature = "synthetic-test-bin"))]
 pub mod dirty_generation_finalize;
+#[cfg(any(test, feature = "synthetic-test-bin"))]
 mod dirty_generation_local;
+#[cfg(any(test, feature = "synthetic-test-bin"))]
 pub mod dirty_generation_publish;
 pub mod fake_mail_query;
 pub mod generation_reopen;
