@@ -235,7 +235,11 @@ fn load_chain(root: &Path) -> Result<LoadedState, DeliveryStateStoreError> {
             return Err(DeliveryStateStoreError::CorruptState);
         }
         envelope.validate(expected_revision, Some(&loaded.snapshot_sha256))?;
-        let final_path = root.join(snapshot_name(FINAL_PREFIX, expected_revision, pending_digest));
+        let final_path = root.join(snapshot_name(
+            FINAL_PREFIX,
+            expected_revision,
+            pending_digest,
+        ));
         if final_path.exists() {
             return Err(DeliveryStateStoreError::AmbiguousState);
         }
@@ -325,9 +329,7 @@ fn write_snapshot(
     Ok(digest)
 }
 
-fn read_snapshot(
-    path: &Path,
-) -> Result<(PersistedStateEnvelope, String), DeliveryStateStoreError> {
+fn read_snapshot(path: &Path) -> Result<(PersistedStateEnvelope, String), DeliveryStateStoreError> {
     let metadata = fs::symlink_metadata(path).map_err(|_| DeliveryStateStoreError::Io)?;
     if !metadata.is_file() || metadata.file_type().is_symlink() {
         return Err(DeliveryStateStoreError::CorruptState);
