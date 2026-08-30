@@ -82,6 +82,7 @@ struct FakeCoordinator {
     expected_launch_intent_id: LaunchIntentId,
     claimed: u64,
     closed: u64,
+    close_fail: bool,
 }
 
 impl ProfileCoordinatorPort for FakeCoordinator {
@@ -109,7 +110,11 @@ impl ProfileCoordinatorPort for FakeCoordinator {
             return Err(BridgePortError::InvalidResponse);
         }
         self.closed += 1;
-        Ok(())
+        if self.close_fail {
+            Err(BridgePortError::Unavailable)
+        } else {
+            Ok(())
+        }
     }
 }
 
@@ -189,6 +194,10 @@ type TestOperator = ProfileBridgeOperator<
     FakeCamouhost,
 >;
 
+type CommitHook = Rc<
+    dyn Fn(&BridgeProfileGenerationSuccessorRequest) -> Result<(), BridgePortError>,
+>;
+
 #[derive(Clone, Default)]
 struct TransportTrace {
     paths: Rc<RefCell<Vec<String>>>,
@@ -198,6 +207,7 @@ struct TransportTrace {
 struct Transport {
     responses: VecDeque<Result<MachineHttpResponse, BridgePortError>>,
     trace: TransportTrace,
+    commit_hook: Option<CommitHook>,
 }
 
 impl Transport {
@@ -208,7 +218,13 @@ impl Transport {
         Self {
             responses: responses.into_iter().collect(),
             trace,
+            commit_hook: None,
         }
+    }
+
+    fn with_commit_hook(mut self, hook: CommitHook) -> Self {
+        self.commit_hook = Some(hook);
+        self
     }
 }
 
@@ -234,6 +250,11 @@ impl MachineHttpPort for Transport {
             .generation_ids
             .borrow_mut()
             .push(request.generation_id().to_owned());
+        if path.ends_with("/commit") {
+            if let Some(hook) = self.commit_hook.as_ref() {
+                hook(&request)?;
+            }
+        }
         self.responses
             .pop_front()
             .ok_or(BridgePortError::Unavailable)?
@@ -349,16 +370,30 @@ impl Fixture {
             expected_launch_intent_id: self.launch_intent_id.clone(),
             claimed: 0,
             closed: 0,
+            close_fail: false,
         }
     }
 
     fn operator(&self) -> Result<TestOperator, Box<dyn std::error::Error>> {
+        self.operator_with_coordinator(self.coordinator())
+    }
+
+    fn operator_with_close_failure(&self) -> Result<TestOperator, Box<dyn std::error::Error>> {
+        let mut coordinator = self.coordinator();
+        coordinator.close_fail = true;
+        self.operator_with_coordinator(coordinator)
+    }
+
+    fn operator_with_coordinator(
+        &self,
+        coordinator: FakeCoordinator,
+    ) -> Result<TestOperator, Box<dyn std::error::Error>> {
         Ok(ProfileBridgeOperator::new(
             FakeDeviceIdentity::new(self.device_id.clone()),
             FakeDeviceKeyStore::default(),
             FakeDeviceAuthentication,
             self.enrollment()?,
-            self.coordinator(),
+            coordinator,
             FakeRuntimeBundles {
                 bundle: approved_bundle()?,
             },
@@ -383,12 +418,16 @@ impl Fixture {
         Ok(())
     }
 
-    fn assert_base_lock_held(&self) -> Result<(), Box<dyn std::error::Error>> {
-        let workspace = self.root.open_generation(
+    fn base_workspace(&self) -> Result<GenerationWorkspace, Box<dyn std::error::Error>> {
+        Ok(self.root.open_generation(
             self.actor.tenant_scope().tenant_id(),
             &self.profile_id,
             &self.generation_id,
-        )?;
+        )?)
+    }
+
+    fn assert_base_lock_held(&self) -> Result<(), Box<dyn std::error::Error>> {
+        let workspace = self.base_workspace()?;
         assert!(matches!(
             BridgeWorkspaceLock::acquire(&workspace, &self.device_id, self.lease.epoch()),
             Err(LocalProfileError::LockBusy)
@@ -553,11 +592,7 @@ fn canonical_operator_save_retries_same_successor_after_upload_failure()
     )?;
     assert!(!rebuilt_candidate.path().join("retry-residue").exists());
 
-    let base_workspace = fixture.root.open_generation(
-        fixture.actor.tenant_scope().tenant_id(),
-        &fixture.profile_id,
-        &fixture.generation_id,
-    )?;
+    let base_workspace = fixture.base_workspace()?;
     let released =
         BridgeWorkspaceLock::acquire(&base_workspace, &fixture.device_id, fixture.lease.epoch())?;
     released.release()?;
@@ -741,5 +776,271 @@ fn canonical_operator_already_active_replay_is_terminal_same_successor()
         completion.committed().generation_id().as_str(),
         generation_ids[0]
     );
+    Ok(())
+}
+
+#[test]
+fn canonical_postcommit_candidate_mutation_requires_rematerialization_without_fallback()
+-> Result<(), Box<dyn std::error::Error>> {
+    let fixture = Fixture::new("postcommit-candidate-mutation")?;
+    let mut operator = fixture.operator()?;
+    fixture.open_mutate_and_close(&mut operator)?;
+
+    let root = fixture.root.clone();
+    let tenant_id = fixture.actor.tenant_scope().tenant_id().clone();
+    let profile_id = fixture.profile_id.clone();
+    let hook: CommitHook = Rc::new(move |request| {
+        let generation_id = GenerationId::parse(request.generation_id().to_owned())
+            .map_err(|_| BridgePortError::InvalidResponse)?;
+        let candidate = root
+            .open_generation(&tenant_id, &profile_id, &generation_id)
+            .map_err(|_| BridgePortError::InvalidResponse)?;
+        fs::write(
+            candidate.path().join("late-postcommit-mutation"),
+            b"changed-after-server-commit",
+        )
+        .map_err(|_| BridgePortError::Unavailable)?;
+        Ok(())
+    });
+    let trace = TransportTrace::default();
+    let completion = operator.save_retained_successor(
+        &fixture.root,
+        Transport::new(
+            [
+                Ok(verified_response()?),
+                Ok(commit_response(
+                    BridgeGenerationSuccessorCommitOutcomeDto::Activated,
+                )?),
+            ],
+            trace,
+        )
+        .with_commit_hook(hook),
+        &mut Put {
+            fail: false,
+            calls: Rc::new(Cell::new(0)),
+        },
+        UnixMillis::new(30),
+    )?;
+
+    assert!(!completion.is_saved());
+    assert!(matches!(
+        completion.local().local_outcome(),
+        DirtyCloseLocalOutcome::RematerializeRequired(generation_id)
+            if generation_id == completion.committed().generation_id()
+    ));
+    assert!(completion.local().workspace_lock_released());
+    assert!(completion.local().coordinator_lease_released());
+    assert!(!operator.has_pending_dirty_close());
+    assert!(!operator.cleanup_blocked());
+    assert_eq!(operator.coordinator().closed, 1);
+    let terminal = operator.last_terminal().ok_or("missing terminal record")?;
+    assert_eq!(
+        terminal.generation_id(),
+        completion.committed().generation_id()
+    );
+    assert_eq!(
+        terminal.local_state(),
+        LocalGenerationState::SupersededEvictable
+    );
+    assert!(!terminal.cleanup_failures().any());
+    assert!(matches!(
+        fixture.root.open_generation(
+            fixture.actor.tenant_scope().tenant_id(),
+            &fixture.profile_id,
+            completion.committed().generation_id(),
+        ),
+        Err(LocalProfileError::Io(std::io::ErrorKind::NotFound))
+    ));
+    Ok(())
+}
+
+#[test]
+fn canonical_postcommit_workspace_release_failure_is_recovery_required_but_still_releases_coordinator()
+-> Result<(), Box<dyn std::error::Error>> {
+    let fixture = Fixture::new("postcommit-workspace-release")?;
+    let mut operator = fixture.operator()?;
+    fixture.open_mutate_and_close(&mut operator)?;
+    let base_workspace = fixture.base_workspace()?;
+    fs::write(
+        base_workspace.path().join(".profile-platform.lock"),
+        b"tampered-lock-ownership\n",
+    )?;
+
+    let completion = operator.save_retained_successor(
+        &fixture.root,
+        Transport::new(
+            [
+                Ok(verified_response()?),
+                Ok(commit_response(
+                    BridgeGenerationSuccessorCommitOutcomeDto::Activated,
+                )?),
+            ],
+            TransportTrace::default(),
+        ),
+        &mut Put {
+            fail: false,
+            calls: Rc::new(Cell::new(0)),
+        },
+        UnixMillis::new(30),
+    )?;
+
+    assert!(!completion.is_saved());
+    assert!(matches!(
+        completion.local().local_outcome(),
+        DirtyCloseLocalOutcome::CandidateAccepted(record)
+            if record.generation_id() == completion.committed().generation_id()
+    ));
+    assert!(!completion.local().workspace_lock_released());
+    assert!(completion.local().coordinator_lease_released());
+    assert_eq!(operator.coordinator().closed, 1);
+    assert!(!operator.has_pending_dirty_close());
+    assert!(operator.cleanup_blocked());
+    let terminal = operator.last_terminal().ok_or("missing terminal record")?;
+    assert_eq!(
+        terminal.generation_id(),
+        completion.committed().generation_id()
+    );
+    assert_eq!(
+        terminal.local_state(),
+        LocalGenerationState::SupersededEvictable
+    );
+    assert!(terminal.cleanup_failures().workspace_lock());
+    assert!(!terminal.cleanup_failures().coordinator_lease());
+    Ok(())
+}
+
+#[test]
+fn canonical_postcommit_coordinator_release_failure_is_recovery_required_without_rollback()
+-> Result<(), Box<dyn std::error::Error>> {
+    let fixture = Fixture::new("postcommit-coordinator-release")?;
+    let mut operator = fixture.operator_with_close_failure()?;
+    fixture.open_mutate_and_close(&mut operator)?;
+
+    let completion = operator.save_retained_successor(
+        &fixture.root,
+        Transport::new(
+            [
+                Ok(verified_response()?),
+                Ok(commit_response(
+                    BridgeGenerationSuccessorCommitOutcomeDto::Activated,
+                )?),
+            ],
+            TransportTrace::default(),
+        ),
+        &mut Put {
+            fail: false,
+            calls: Rc::new(Cell::new(0)),
+        },
+        UnixMillis::new(30),
+    )?;
+
+    assert!(!completion.is_saved());
+    assert!(matches!(
+        completion.local().local_outcome(),
+        DirtyCloseLocalOutcome::CandidateAccepted(record)
+            if record.generation_id() == completion.committed().generation_id()
+    ));
+    assert!(completion.local().workspace_lock_released());
+    assert!(!completion.local().coordinator_lease_released());
+    assert_eq!(operator.coordinator().closed, 1);
+    assert!(!operator.has_pending_dirty_close());
+    assert!(operator.cleanup_blocked());
+    let terminal = operator.last_terminal().ok_or("missing terminal record")?;
+    assert_eq!(
+        terminal.generation_id(),
+        completion.committed().generation_id()
+    );
+    assert_eq!(
+        terminal.local_state(),
+        LocalGenerationState::SupersededEvictable
+    );
+    assert!(!terminal.cleanup_failures().workspace_lock());
+    assert!(terminal.cleanup_failures().coordinator_lease());
+
+    let base_workspace = fixture.base_workspace()?;
+    let reacquired =
+        BridgeWorkspaceLock::acquire(&base_workspace, &fixture.device_id, fixture.lease.epoch())?;
+    reacquired.release()?;
+    Ok(())
+}
+
+#[test]
+fn canonical_postcommit_writer_owned_candidate_blocks_rematerialization_fail_closed()
+-> Result<(), Box<dyn std::error::Error>> {
+    let fixture = Fixture::new("postcommit-rematerialization-blocked")?;
+    let mut operator = fixture.operator()?;
+    fixture.open_mutate_and_close(&mut operator)?;
+
+    let root = fixture.root.clone();
+    let tenant_id = fixture.actor.tenant_scope().tenant_id().clone();
+    let profile_id = fixture.profile_id.clone();
+    let device_id = fixture.device_id.clone();
+    let epoch = fixture.lease.epoch();
+    let candidate_lock = Rc::new(RefCell::new(None));
+    let hook_lock = Rc::clone(&candidate_lock);
+    let hook: CommitHook = Rc::new(move |request| {
+        let generation_id = GenerationId::parse(request.generation_id().to_owned())
+            .map_err(|_| BridgePortError::InvalidResponse)?;
+        let candidate = root
+            .open_generation(&tenant_id, &profile_id, &generation_id)
+            .map_err(|_| BridgePortError::InvalidResponse)?;
+        fs::write(
+            candidate.path().join("late-postcommit-mutation"),
+            b"changed-after-server-commit",
+        )
+        .map_err(|_| BridgePortError::Unavailable)?;
+        let lock = BridgeWorkspaceLock::acquire(&candidate, &device_id, epoch)
+            .map_err(|_| BridgePortError::Unavailable)?;
+        *hook_lock.borrow_mut() = Some(lock);
+        Ok(())
+    });
+
+    let completion = operator.save_retained_successor(
+        &fixture.root,
+        Transport::new(
+            [
+                Ok(verified_response()?),
+                Ok(commit_response(
+                    BridgeGenerationSuccessorCommitOutcomeDto::Activated,
+                )?),
+            ],
+            TransportTrace::default(),
+        )
+        .with_commit_hook(hook),
+        &mut Put {
+            fail: false,
+            calls: Rc::new(Cell::new(0)),
+        },
+        UnixMillis::new(30),
+    )?;
+
+    assert!(!completion.is_saved());
+    assert!(matches!(
+        completion.local().local_outcome(),
+        DirtyCloseLocalOutcome::RematerializationBlocked {
+            generation_id,
+            error: LocalProfileError::LockBusy,
+        } if generation_id == completion.committed().generation_id()
+    ));
+    assert!(completion.local().workspace_lock_released());
+    assert!(completion.local().coordinator_lease_released());
+    assert_eq!(operator.coordinator().closed, 1);
+    assert!(!operator.has_pending_dirty_close());
+    assert!(operator.cleanup_blocked());
+    let terminal = operator.last_terminal().ok_or("missing terminal record")?;
+    assert_eq!(
+        terminal.generation_id(),
+        completion.committed().generation_id()
+    );
+    assert_eq!(
+        terminal.local_state(),
+        LocalGenerationState::SupersededEvictable
+    );
+    assert!(!terminal.cleanup_failures().any());
+    let lock = candidate_lock
+        .borrow_mut()
+        .take()
+        .ok_or("candidate lock was not retained")?;
+    lock.release()?;
     Ok(())
 }
