@@ -110,7 +110,7 @@ impl WindowsCmsSignatureVerifier {
         expected_certificate_sha256: &str,
     ) -> Result<bool, WindowsCmsVerifierError> {
         if manifest_bytes.is_empty()
-            || cms_der.is_empty()
+            || !has_exact_der_sequence_envelope(cms_der)
             || !is_lower_hex(expected_certificate_sha256, 64)
         {
             return Ok(false);
@@ -326,6 +326,42 @@ fn metadata_is_link_or_reparse(metadata: &fs::Metadata) -> bool {
         || metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
 }
 
+fn has_exact_der_sequence_envelope(value: &[u8]) -> bool {
+    if value.len() < 2 || value[0] != 0x30 {
+        return false;
+    }
+
+    let first_length = value[1];
+    let (header_length, content_length) = if first_length & 0x80 == 0 {
+        (2usize, usize::from(first_length))
+    } else {
+        let length_bytes = usize::from(first_length & 0x7f);
+        if length_bytes == 0
+            || length_bytes > std::mem::size_of::<usize>()
+            || value.len() < 2 + length_bytes
+            || value[2] == 0
+        {
+            return false;
+        }
+        let mut content_length = 0usize;
+        for byte in &value[2..2 + length_bytes] {
+            let Some(next) = content_length
+                .checked_mul(256)
+                .and_then(|current| current.checked_add(usize::from(*byte)))
+            else {
+                return false;
+            };
+            content_length = next;
+        }
+        if content_length < 128 {
+            return false;
+        }
+        (2 + length_bytes, content_length)
+    };
+
+    header_length.checked_add(content_length) == Some(value.len())
+}
+
 fn is_lower_hex(value: &str, expected_len: usize) -> bool {
     value.len() == expected_len
         && value
@@ -402,6 +438,17 @@ mod tests {
         assert!(!verifier.verify_cms(b"manifest", b"not-cms", "ABC")?);
         assert!(fs::read_dir(&directory.0)?.next().is_none());
         Ok(())
+    }
+
+    #[test]
+    fn der_envelope_precheck_is_strict_and_bounded() {
+        assert!(!has_exact_der_sequence_envelope(b"not-cms"));
+        assert!(!has_exact_der_sequence_envelope(&[0x30, 0x80, 0x00, 0x00]));
+        assert!(!has_exact_der_sequence_envelope(&[0x30, 0x81, 0x01, 0x00]));
+        assert!(has_exact_der_sequence_envelope(&[0x30, 0x01, 0x00]));
+        let mut long_form = vec![0x30, 0x81, 0x80];
+        long_form.extend(std::iter::repeat_n(0, 128));
+        assert!(has_exact_der_sequence_envelope(&long_form));
     }
 
     #[test]
