@@ -291,6 +291,11 @@ portability, а не случайное равенство среды. Repositor
 negative cases и deterministic projections; claim о реальной физической
 cross-device совместимости требует соответствующего Windows-host evidence.
 
+Repository-owned S0 closure должна сделать этот путь code-complete и fail-closed
+на одном shipping runtime owner. V2/B10 и соответствующий внешний Windows-host
+evidence затем доказывают реальный Host A -> Host B сценарий на exact candidate;
+они не должны впервые обнаруживать отсутствующий portability contract.
+
 ### Inter-Profile Uniqueness
 
 - cohort не менее 100 синтетических профилей перед первым release;
