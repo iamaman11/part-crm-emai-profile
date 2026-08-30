@@ -688,7 +688,7 @@ impl fmt::Display for DeliveryStateError {
             Self::NoStagedCandidate => "Windows delivery has no staged candidate",
             Self::NoActiveCandidate => "Windows delivery has no active candidate",
             Self::RecoveryRequired => "Windows delivery has no last known good candidate",
-            Self::AttemptCounterExhausted => "Windows delivery state activation counter is exhausted",
+            Self::AttemptCounterExhausted => "Windows delivery activation counter is exhausted",
             Self::CorruptPersistedState => "Windows delivery persisted state is inconsistent",
         })
     }
@@ -957,7 +957,7 @@ mod tests {
         assert_eq!(
             verify_delivery_candidate(
                 &bytes,
-                br#"{\"schema_version\":1,\"kind\":\"WINDOWS_PROFILE_BRIDGE_DELIVERY_CMS\",\"key_id\":\"release-2026\",\"cms_der_hex\":\"ZZ\"}"#,
+                br#"{"schema_version":1,"kind":"WINDOWS_PROFILE_BRIDGE_DELIVERY_CMS","key_id":"release-2026","cms_der_hex":"ZZ"}"#,
                 &trust,
                 None,
                 &mut DigestBoundVerifier,
