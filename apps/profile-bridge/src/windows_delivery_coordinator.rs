@@ -1,8 +1,9 @@
 #![forbid(unsafe_code)]
 
 use crate::windows_delivery::{
-    AcceptedDeliveryFloor, DeliveryIdentity, DeliveryPolicyError, DeliveryState, DeliveryStateError,
-    DetachedSignatureVerifier, TrustedSignerSet, VerifiedDeliveryCandidate, verify_delivery_candidate,
+    AcceptedDeliveryFloor, DeliveryIdentity, DeliveryPolicyError, DeliveryState,
+    DeliveryStateError, DetachedSignatureVerifier, TrustedSignerSet, VerifiedDeliveryCandidate,
+    verify_delivery_candidate,
 };
 use crate::windows_delivery_download::{
     DeliveryAssetFetcher, DeliveryDownloadError, DeliveryDownloadRoot, download_verified_delivery,
@@ -149,11 +150,19 @@ pub enum WindowsDeliveryCoordinatorError {
 impl fmt::Display for WindowsDeliveryCoordinatorError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Policy(error) => write!(formatter, "Windows delivery candidate rejected: {error}"),
+            Self::Policy(error) => {
+                write!(formatter, "Windows delivery candidate rejected: {error}")
+            }
             Self::Download(error) => write!(formatter, "Windows delivery download failed: {error}"),
             Self::Staging(error) => write!(formatter, "Windows delivery staging failed: {error}"),
-            Self::State(error) => write!(formatter, "Windows delivery state transition failed: {error}"),
-            Self::Store(error) => write!(formatter, "Windows delivery state persistence failed: {error}"),
+            Self::State(error) => write!(
+                formatter,
+                "Windows delivery state transition failed: {error}"
+            ),
+            Self::Store(error) => write!(
+                formatter,
+                "Windows delivery state persistence failed: {error}"
+            ),
             Self::StageIdentityMismatch => formatter.write_str(
                 "Windows delivery reopened stage does not match the verified candidate identity",
             ),
@@ -167,9 +176,9 @@ impl std::error::Error for WindowsDeliveryCoordinatorError {}
 mod tests {
     use super::*;
     use crate::windows_delivery::{
-        DetachedSignatureEnvelope, TrustedSigner, TrustedSignerStatus, WindowsDeliveryCompatibility,
-        WindowsDeliveryComponent, WindowsDeliveryComponents, WindowsDeliveryEvidence,
-        WindowsDeliveryManifest,
+        DetachedSignatureEnvelope, TrustedSigner, TrustedSignerStatus,
+        WindowsDeliveryCompatibility, WindowsDeliveryComponent, WindowsDeliveryComponents,
+        WindowsDeliveryEvidence, WindowsDeliveryManifest,
     };
     use crate::windows_delivery_staging::{
         DeliveryArchiveEntry, DeliveryArchiveEntryKind, DeliveryComponentKind,
@@ -287,7 +296,9 @@ mod tests {
                     sha256_hex(BRIDGE_FILE),
                 )],
                 DeliveryComponentKind::RuntimeBundle if self.reject_runtime => {
-                    vec![DeliveryArchiveEntry::link_or_special("browser/camoufox.exe")]
+                    vec![DeliveryArchiveEntry::link_or_special(
+                        "browser/camoufox.exe",
+                    )]
                 }
                 DeliveryComponentKind::RuntimeBundle => vec![
                     DeliveryArchiveEntry::regular_file(
@@ -323,7 +334,14 @@ mod tests {
 
     fn roots(
         directory: &TestDirectory,
-    ) -> Result<(DeliveryDownloadRoot, DeliveryStagingRoot, DeliveryStateStore), Box<dyn std::error::Error>> {
+    ) -> Result<
+        (
+            DeliveryDownloadRoot,
+            DeliveryStagingRoot,
+            DeliveryStateStore,
+        ),
+        Box<dyn std::error::Error>,
+    > {
         let downloads = DeliveryDownloadRoot::open_or_create(directory.join("downloads"))?;
         let releases = DeliveryStagingRoot::open_or_create(directory.join("releases"))?;
         let state = DeliveryStateStore::initialize(directory.join("state"))?;
@@ -412,7 +430,12 @@ mod tests {
         assert_eq!(store.state().staged(), Some(prepared.staged().identity()));
         assert_eq!(store.state().active(), None);
         assert_eq!(
-            fs::read(prepared.staged().profile_bridge_root().join("profile-bridge.exe"))?,
+            fs::read(
+                prepared
+                    .staged()
+                    .profile_bridge_root()
+                    .join("profile-bridge.exe")
+            )?,
             BRIDGE_FILE
         );
         assert_eq!(
