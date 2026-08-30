@@ -147,7 +147,9 @@ impl SigningFixture {
                 .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
             || thumbprint.is_empty()
         {
-            return Err(io::Error::new(io::ErrorKind::InvalidData, "invalid CMS test fixture").into());
+            return Err(
+                io::Error::new(io::ErrorKind::InvalidData, "invalid CMS test fixture").into(),
+            );
         }
         Ok(Self {
             signature,
@@ -225,7 +227,10 @@ fn powershell_executable() -> Result<PathBuf, io::Error> {
     if executable.is_absolute() && executable.is_file() {
         Ok(executable)
     } else {
-        Err(io::Error::new(io::ErrorKind::NotFound, "PowerShell unavailable"))
+        Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            "PowerShell unavailable",
+        ))
     }
 }
 
@@ -244,11 +249,7 @@ fn production_verifier_accepts_ephemeral_test_signed_cms_and_rejects_tamper() ->
     let fixture = SigningFixture::create(&directory.0, manifest)?;
     let mut verifier = WindowsCmsSignatureVerifier::from_system(directory.0.clone())?;
 
-    let exact = verifier.verify_cms(
-        manifest,
-        &fixture.signature,
-        &fixture.certificate_sha256,
-    );
+    let exact = verifier.verify_cms(manifest, &fixture.signature, &fixture.certificate_sha256);
     let tampered = verifier.verify_cms(
         br#"{"kind":"S0_CMS_ACCEPTANCE","sequence":2}"#,
         &fixture.signature,
