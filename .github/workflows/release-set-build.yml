@@ -224,6 +224,7 @@ jobs:
         uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
         with:
           ref: ${{ github.sha }}
+          fetch-depth: 0
           persist-credentials: false
 
       - name: Download exact component CI transport
@@ -292,6 +293,28 @@ jobs:
           bridge_manifest_sha="$(sha256_file "$bridge_manifest")"
           runtime_manifest_sha="$(sha256_file "$runtime_manifest")"
 
+          python -m py_compile \
+            scripts/windows-delivery-evidence.py \
+            scripts/windows-delivery-publication.py
+          python scripts/windows-delivery-evidence.py self-test
+          python scripts/windows-delivery-publication.py self-test
+          evidence_root="$RUNNER_TEMP/windows-delivery-evidence"
+          mkdir -p "$evidence_root"
+          sbom_json="$evidence_root/windows-sbom-v1.json"
+          provenance_json="$evidence_root/windows-provenance-v1.json"
+          python scripts/windows-delivery-evidence.py build \
+            --source-sha "$SOURCE_SHA" \
+            --profile-bridge-manifest "$bridge_manifest" \
+            --profile-bridge-archive "$component_root/profile-bridge.zip" \
+            --runtime-manifest "$runtime_manifest" \
+            --runtime-archive "$component_root/runtime-bundle.tar" \
+            --sbom "$sbom_json" \
+            --provenance "$provenance_json"
+          sbom_sha="$(sha256_file "$sbom_json")"
+          provenance_sha="$(sha256_file "$provenance_json")"
+          sbom_size="$(size_bytes "$sbom_json")"
+          provenance_size="$(size_bytes "$provenance_json")"
+
           accepted_main_binding="$(
             jq -c -n -j \
               --arg authority accepted-main \
@@ -327,6 +350,10 @@ jobs:
             --arg runtime_sha "$runtime_sha" \
             --argjson runtime_size "$runtime_size" \
             --arg runtime_manifest_sha "$runtime_manifest_sha" \
+            --arg sbom_sha "$sbom_sha" \
+            --argjson sbom_size "$sbom_size" \
+            --arg provenance_sha "$provenance_sha" \
+            --argjson provenance_size "$provenance_size" \
             --argjson bridge_protocol "$bridge_protocol" \
             --arg resolver_protocol "$resolver_protocol" \
             '{
@@ -385,6 +412,20 @@ jobs:
                   component_manifest_sha256: $bridge_manifest_sha
                 }
               },
+              evidence_artifacts: {
+                windows_sbom: {
+                  path: "windows/windows-sbom-v1.json",
+                  sha256: $sbom_sha,
+                  size_bytes: $sbom_size,
+                  kind: "windows-delivery-sbom"
+                },
+                windows_provenance: {
+                  path: "windows/windows-provenance-v1.json",
+                  sha256: $provenance_sha,
+                  size_bytes: $provenance_size,
+                  kind: "windows-delivery-provenance"
+                }
+              },
               protocols: {
                 profile_bridge_protocol_version: $bridge_protocol,
                 resolver_protocol: $resolver_protocol
@@ -420,6 +461,10 @@ jobs:
             --arg source_sha "$SOURCE_SHA" \
             --arg policy_sha "$capability_policy_sha" \
             --argjson policy_size "$capability_policy_size" \
+            --arg sbom_sha "$sbom_sha" \
+            --argjson sbom_size "$sbom_size" \
+            --arg provenance_sha "$provenance_sha" \
+            --argjson provenance_size "$provenance_size" \
             '.schema_version == 3
               and .source.repository == $repository
               and .source.commit_sha == $source_sha
@@ -428,21 +473,55 @@ jobs:
                 .path == "capability-policy-v1.json"
                 and .sha256 == $policy_sha
                 and .size_bytes == $policy_size
-                and .kind == "capability-policy")' \
+                and .kind == "capability-policy")
+              and any(.artifact_inventory[];
+                .path == "windows/windows-sbom-v1.json"
+                and .sha256 == $sbom_sha
+                and .size_bytes == $sbom_size
+                and .kind == "windows-delivery-sbom")
+              and any(.artifact_inventory[];
+                .path == "windows/windows-provenance-v1.json"
+                and .sha256 == $provenance_sha
+                and .size_bytes == $provenance_size
+                and .kind == "windows-delivery-provenance")' \
             "$release_json" >/dev/null
           release_id="$(jq -er '.release_set_id' "$release_json")"
           [[ "$release_id" =~ ^release-set-v3-sha256-[0-9a-f]{64}$ ]]
 
           release_dir="artifacts/release-sets/$release_id"
           test ! -e "$release_dir"
-          mkdir -p "$release_dir/components"
+          mkdir -p "$release_dir/components" "$release_dir/windows"
           cp "$release_json" "$release_dir/release-set.json"
           cp "$capability_policy_json" "$release_dir/capability-policy-v1.json"
           cp "$component_root/control-plane.tar" "$release_dir/components/control-plane.tar"
           cp "$component_root/secret-resolver.tar" "$release_dir/components/secret-resolver.tar"
           cp "$component_root/runtime-bundle.tar" "$release_dir/components/runtime-bundle.tar"
           cp "$component_root/profile-bridge.zip" "$release_dir/components/profile-bridge.zip"
-          test "$(find "$release_dir" -type f | wc -l)" -eq 6
+          cp "$sbom_json" "$release_dir/windows/windows-sbom-v1.json"
+          cp "$provenance_json" "$release_dir/windows/windows-provenance-v1.json"
+
+          delivery_sequence="$(git rev-list --first-parent --count "$SOURCE_SHA")"
+          test "$delivery_sequence" -gt 0
+          python scripts/windows-delivery-publication.py manifest \
+            --release-set "$release_dir/release-set.json" \
+            --sbom "$release_dir/windows/windows-sbom-v1.json" \
+            --provenance "$release_dir/windows/windows-provenance-v1.json" \
+            --sequence "$delivery_sequence" \
+            --output "$release_dir/windows-delivery-manifest.json"
+          jq -e \
+            --arg release_id "$release_id" \
+            --arg source_sha "$SOURCE_SHA" \
+            --arg sbom_sha "$sbom_sha" \
+            --arg provenance_sha "$provenance_sha" \
+            '.schema_version == 1
+              and .kind == "WINDOWS_PROFILE_BRIDGE_DELIVERY"
+              and .release_set_id == $release_id
+              and .source_commit_sha == $source_sha
+              and .evidence.sbom_sha256 == $sbom_sha
+              and .evidence.provenance_sha256 == $provenance_sha
+              and .sequence > 0' \
+            "$release_dir/windows-delivery-manifest.json" >/dev/null
+          test "$(find "$release_dir" -type f | wc -l)" -eq 9
 
           policy_dir="$RUNNER_TEMP/release-policy-input"
           mkdir -p "$policy_dir"
@@ -477,7 +556,10 @@ jobs:
           cp "$RELEASE_DIR/release-set.json" "$asset_dir/release-set.json"
           cp "$RELEASE_DIR/capability-policy-v1.json" "$asset_dir/capability-policy-v1.json"
           cp "$RELEASE_DIR/components/"* "$asset_dir/"
-          test "$(find "$asset_dir" -maxdepth 1 -type f | wc -l)" -eq 6
+          cp "$RELEASE_DIR/windows/windows-sbom-v1.json" "$asset_dir/windows-sbom-v1.json"
+          cp "$RELEASE_DIR/windows/windows-provenance-v1.json" "$asset_dir/windows-provenance-v1.json"
+          cp "$RELEASE_DIR/windows-delivery-manifest.json" "$asset_dir/windows-delivery-manifest.json"
+          test "$(find "$asset_dir" -maxdepth 1 -type f | wc -l)" -eq 9
           if gh release view "$RELEASE_ID" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             existing="$RUNNER_TEMP/existing-release"
             mkdir -p "$existing"
@@ -487,7 +569,7 @@ jobs:
               test -f "$existing/$name"
               cmp --silent "$file" "$existing/$name"
             done
-            test "$(find "$existing" -maxdepth 1 -type f | wc -l)" -eq 6
+            test "$(find "$existing" -maxdepth 1 -type f | wc -l)" -eq 9
           else
             gh release create "$RELEASE_ID" \
               --repo "$GITHUB_REPOSITORY" \
@@ -504,6 +586,9 @@ jobs:
           path: |
             ${{ steps.release-set.outputs.release_dir }}/release-set.json
             ${{ steps.release-set.outputs.release_dir }}/capability-policy-v1.json
+            ${{ steps.release-set.outputs.release_dir }}/windows/windows-sbom-v1.json
+            ${{ steps.release-set.outputs.release_dir }}/windows/windows-provenance-v1.json
+            ${{ steps.release-set.outputs.release_dir }}/windows-delivery-manifest.json
             ${{ steps.release-set.outputs.accepted_source_evidence }}
           if-no-files-found: error
           retention-days: 30
