@@ -7,20 +7,24 @@ use std::env;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::thread;
+use std::time::{Duration, Instant};
 
 const CREATE_FIXTURE_SCRIPT: &str = r#"param(
     [Parameter(Mandatory=$true)][string]$ManifestPath,
     [Parameter(Mandatory=$true)][string]$SignaturePath,
     [Parameter(Mandatory=$true)][string]$PinPath,
-    [Parameter(Mandatory=$true)][string]$ThumbprintPath
+    [Parameter(Mandatory=$true)][string]$ThumbprintPath,
+    [Parameter(Mandatory=$true)][string]$CertificatePath
 )
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.Security
 $certificate = $null
-$rootStore = $null
+$certutil = Join-Path $env:SystemRoot 'System32\certutil.exe'
 try {
+    Write-Host 'CMS fixture: create code-signing certificate'
     $certificate = New-SelfSignedCertificate `
         -Type CodeSigningCert `
         -Subject ("CN=Profile Bridge S0 CI " + [Guid]::NewGuid().ToString()) `
@@ -28,15 +32,20 @@ try {
         -KeyAlgorithm RSA `
         -KeyLength 2048 `
         -HashAlgorithm SHA256 `
-        -NotAfter (Get-Date).AddHours(1)
+        -NotAfter (Get-Date).AddHours(1) `
+        -Confirm:$false
 
-    $rootStore = [System.Security.Cryptography.X509Certificates.X509Store]::new(
-        [System.Security.Cryptography.X509Certificates.StoreName]::Root,
-        [System.Security.Cryptography.X509Certificates.StoreLocation]::CurrentUser
+    [System.IO.File]::WriteAllBytes(
+        $CertificatePath,
+        $certificate.Export([System.Security.Cryptography.X509Certificates.X509ContentType]::Cert)
     )
-    $rootStore.Open([System.Security.Cryptography.X509Certificates.OpenFlags]::ReadWrite)
-    $rootStore.Add($certificate)
+    Write-Host 'CMS fixture: trust code-signing certificate'
+    & $certutil -user -f -addstore Root $CertificatePath | Out-Host
+    if ($LASTEXITCODE -ne 0) {
+        throw "certutil failed to add the ephemeral root certificate: $LASTEXITCODE"
+    }
 
+    Write-Host 'CMS fixture: sign detached manifest'
     $manifest = [System.IO.File]::ReadAllBytes($ManifestPath)
     $contentInfo = [System.Security.Cryptography.Pkcs.ContentInfo]::new($manifest)
     $cms = [System.Security.Cryptography.Pkcs.SignedCms]::new($contentInfo, $true)
@@ -56,20 +65,15 @@ try {
     }
     [System.IO.File]::WriteAllText($PinPath, $pin)
     [System.IO.File]::WriteAllText($ThumbprintPath, $certificate.Thumbprint)
+    Write-Host 'CMS fixture: ready'
 }
 catch {
     if ($null -ne $certificate) {
-        foreach ($location in @('Cert:\CurrentUser\Root', 'Cert:\CurrentUser\My')) {
-            Get-ChildItem $location | Where-Object Thumbprint -eq $certificate.Thumbprint | Remove-Item -Force -ErrorAction SilentlyContinue
+        foreach ($store in @('Root', 'My')) {
+            & $certutil -user -delstore $store $certificate.Thumbprint | Out-Null
         }
     }
     throw
-}
-finally {
-    if ($null -ne $rootStore) {
-        $rootStore.Close()
-        $rootStore.Dispose()
-    }
 }
 "#;
 
@@ -77,13 +81,17 @@ const CLEANUP_FIXTURE_SCRIPT: &str = r#"param(
     [Parameter(Mandatory=$true)][string]$Thumbprint
 )
 $ErrorActionPreference = 'Stop'
-foreach ($location in @('Cert:\CurrentUser\Root', 'Cert:\CurrentUser\My')) {
-    Get-ChildItem $location |
-        Where-Object Thumbprint -eq $Thumbprint |
-        Remove-Item -Force -ErrorAction Stop
+$certutil = Join-Path $env:SystemRoot 'System32\certutil.exe'
+foreach ($store in @('Root', 'My')) {
+    & $certutil -user -delstore $store $Thumbprint | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+        throw "certutil failed to remove the ephemeral certificate from $store: $LASTEXITCODE"
+    }
 }
 "#;
 
+const FIXTURE_PROCESS_TIMEOUT: Duration = Duration::from_secs(60);
+const FIXTURE_PROCESS_POLL_INTERVAL: Duration = Duration::from_millis(25);
 static TEST_COUNTER: AtomicU64 = AtomicU64::new(1);
 
 type TestResult = Result<(), Box<dyn std::error::Error>>;
@@ -121,6 +129,7 @@ impl SigningFixture {
         let signature_path = directory.join("fixture-signature.p7s");
         let pin_path = directory.join("fixture-pin.txt");
         let thumbprint_path = directory.join("fixture-thumbprint.txt");
+        let certificate_path = directory.join("fixture-certificate.cer");
         let create_script = directory.join("create-fixture.ps1");
         let cleanup_script = directory.join("cleanup-fixture.ps1");
         fs::write(&manifest_path, manifest)?;
@@ -134,6 +143,7 @@ impl SigningFixture {
                 ("-SignaturePath", signature_path.as_path()),
                 ("-PinPath", pin_path.as_path()),
                 ("-ThumbprintPath", thumbprint_path.as_path()),
+                ("-CertificatePath", certificate_path.as_path()),
             ],
         )?;
 
@@ -178,11 +188,12 @@ fn run_powershell(
         command.arg(name).arg(value);
     }
     inherit_system_environment(&mut command);
-    let status = command
+    let mut child = command
         .stdin(Stdio::null())
-        .stdout(Stdio::null())
+        .stdout(Stdio::inherit())
         .stderr(Stdio::inherit())
-        .status()?;
+        .spawn()?;
+    let status = wait_for_powershell_process(&mut child)?;
     if status.success() {
         Ok(())
     } else {
@@ -204,15 +215,35 @@ fn run_powershell_text(
         .arg(name)
         .arg(value);
     inherit_system_environment(&mut command);
-    let status = command
+    let mut child = command
         .stdin(Stdio::null())
-        .stdout(Stdio::null())
+        .stdout(Stdio::inherit())
         .stderr(Stdio::inherit())
-        .status()?;
+        .spawn()?;
+    let status = wait_for_powershell_process(&mut child)?;
     if status.success() {
         Ok(())
     } else {
         Err(io::Error::other("PowerShell CMS fixture cleanup failed").into())
+    }
+}
+
+fn wait_for_powershell_process(child: &mut Child) -> Result<ExitStatus, io::Error> {
+    let started_at = Instant::now();
+    loop {
+        match child.try_wait()? {
+            Some(status) => return Ok(status),
+            None => {}
+        }
+        if started_at.elapsed() >= FIXTURE_PROCESS_TIMEOUT {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "PowerShell CMS fixture process timed out",
+            ));
+        }
+        thread::sleep(FIXTURE_PROCESS_POLL_INTERVAL);
     }
 }
 
