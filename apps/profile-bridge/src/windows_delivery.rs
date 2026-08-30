@@ -490,7 +490,9 @@ impl fmt::Display for DeliveryStateError {
             Self::DowngradeRejected => "Windows delivery downgrade is rejected",
             Self::ReplayConflict => "Windows delivery sequence conflicts with staged identity",
             Self::ActiveRuntime => "Windows delivery activation requires quiescence",
-            Self::HealthPending => "Windows delivery active release has not passed health confirmation",
+            Self::HealthPending => {
+                "Windows delivery active release has not passed health confirmation"
+            }
             Self::NoStagedCandidate => "Windows delivery has no staged candidate",
             Self::NoActiveCandidate => "Windows delivery has no active candidate",
             Self::RecoveryRequired => "Windows delivery has no last known good candidate",
@@ -847,7 +849,9 @@ mod tests {
         state.confirm_health().expect("first healthy");
 
         state.stage(&first).expect("stage exact active");
-        state.activate_staged(true).expect("reactivate exact active");
+        state
+            .activate_staged(true)
+            .expect("reactivate exact active");
         assert_eq!(state.active(), Some(&first.identity()));
         assert!(state.active_health_confirmed());
         assert!(state.last_known_good().is_none());
