@@ -95,6 +95,23 @@ struct RuntimeWindowsPythonDistributionV1 {
     _artifact_sha256: String,
     #[serde(rename = "artifact_url")]
     _artifact_url: String,
+    #[serde(rename = "packages")]
+    _packages: Vec<RuntimeWindowsPythonPackageV1>,
+    #[serde(rename = "version")]
+    _version: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RuntimeWindowsPythonPackageV1 {
+    #[serde(rename = "filename")]
+    _filename: String,
+    #[serde(rename = "name")]
+    _name: String,
+    #[serde(rename = "sha256")]
+    _sha256: String,
+    #[serde(rename = "url")]
+    _url: String,
     #[serde(rename = "version")]
     _version: String,
 }
