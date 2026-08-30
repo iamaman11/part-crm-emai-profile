@@ -40,9 +40,10 @@ try {
         $certificate.Export([System.Security.Cryptography.X509Certificates.X509ContentType]::Cert)
     )
     Write-Host 'CMS fixture: trust code-signing certificate'
-    & $certutil -user -f -addstore Root $CertificatePath | Out-Host
-    if ($LASTEXITCODE -ne 0) {
-        throw "certutil failed to add the ephemeral root certificate: $LASTEXITCODE"
+    $addArguments = @('-user', '-f', '-addstore', 'Root', ('"' + $CertificatePath + '"'))
+    $addResult = Start-Process -FilePath $certutil -ArgumentList $addArguments -NoNewWindow -Wait -PassThru
+    if ($addResult.ExitCode -ne 0) {
+        throw "certutil failed to add the ephemeral root certificate: $($addResult.ExitCode)"
     }
 
     Write-Host 'CMS fixture: sign detached manifest'
@@ -70,7 +71,11 @@ try {
 catch {
     if ($null -ne $certificate) {
         foreach ($store in @('Root', 'My')) {
-            & $certutil -user -delstore $store $certificate.Thumbprint | Out-Null
+            try {
+                $deleteArguments = @('-user', '-delstore', $store, $certificate.Thumbprint)
+                Start-Process -FilePath $certutil -ArgumentList $deleteArguments -NoNewWindow -Wait | Out-Null
+            }
+            catch {}
         }
     }
     throw
@@ -83,9 +88,10 @@ const CLEANUP_FIXTURE_SCRIPT: &str = r#"param(
 $ErrorActionPreference = 'Stop'
 $certutil = Join-Path $env:SystemRoot 'System32\certutil.exe'
 foreach ($store in @('Root', 'My')) {
-    & $certutil -user -delstore $store $Thumbprint | Out-Null
-    if ($LASTEXITCODE -ne 0) {
-        throw "certutil failed to remove the ephemeral certificate from $store: $LASTEXITCODE"
+    $deleteArguments = @('-user', '-delstore', $store, $Thumbprint)
+    $deleteResult = Start-Process -FilePath $certutil -ArgumentList $deleteArguments -NoNewWindow -Wait -PassThru
+    if ($deleteResult.ExitCode -ne 0) {
+        throw "certutil failed to remove the ephemeral certificate from $store: $($deleteResult.ExitCode)"
     }
 }
 "#;
