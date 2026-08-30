@@ -1,7 +1,7 @@
 # Architecture Map
 
 **Status:** normative target architecture  
-**Date:** 2026-08-27
+**Date:** 2026-08-30
 **For:** developers, reviewers, operators and future CRM integration work
 
 This document defines stable architecture boundaries and invariants. It does **not** define
@@ -201,6 +201,17 @@ the Bridge keeps the workspace writer lock and Coordinator lease until immutable
 publication, exact verification, authoritative fenced/CAS commit and local successor bookkeeping
 complete. React owns presentation/navigation/remote-cache behavior only.
 
+Confirmed Save / Reopen closes that retained transition for ordinary interactive browser use. Only a
+positive controlled-close witness may enter the save path. The Bridge seals one deterministic encrypted
+successor from the retained owned workspace, uses the canonical Profile Generation Successor Commit
+contract, and reports `Saved` only after exact immutable-object verification, atomic backend activation
+and successful local successor/ownership completion. Generic abort/error cleanup remains fail-closed as
+uncertain; only a committed confirmed save uses clean Coordinator release back to `Idle`. The next normal
+P2 launch resolves the active verified generation from backend authority. Missing, stale or invalid local
+state may trigger exact rematerialization of that server-selected generation but may never select or fall
+back to an older local generation. The historical DeviceJob-shaped dirty-finalize seam is test/synthetic
+only and is not part of the shipping Profile Bridge API or default compile graph.
+
 ## 5. Core Data Ownership
 
 | Aggregate/data | Authoritative owner | Storage/coordination boundary |
@@ -225,15 +236,34 @@ state. Session transitions belong to `session-domain`, not `profile-domain`.
 
 There is no distributed transaction across D1, DO and R2.
 
-Generation lifecycle follows crash-safe saga/reconciliation semantics:
+Generation lifecycle follows crash-safe saga/reconciliation semantics. For an ordinary confirmed save:
 
-1. command carries idempotency + expected aggregate version;
-2. per-profile coordinator serializes writer state and supplies fencing;
-3. Bridge creates a new immutable encrypted generation object;
-4. verifier checks manifest/digest/restore readability;
-5. D1 compare-and-set activates only the expected generation/version/fencing outcome;
-6. audit/outbox/event follows durable acceptance;
-7. orphan/incomplete transitions are reconciled under bounded retention/recovery policy.
+1. P2 backend authority has already selected the exact active verified base generation and issued the
+   live Coordinator session/epoch/fencing authority used by the one local writer;
+2. a positive controlled browser-close witness moves the workspace to retained dirty ownership; close
+   alone is never `Saved` and does not release writer/Coordinator ownership;
+3. the Bridge snapshots the retained workspace and derives deterministic generation cryptographic
+   material for one exact successor identity;
+4. the immutable encrypted successor is uploaded through a bounded operation/object/digest/size/expiry
+   capability and then exactly verified;
+5. one canonical Profile Generation Successor Commit revalidates authenticated device authority,
+   active verified base generation, expected profile version and exact Coordinator witness immediately
+   before the atomic D1 transition;
+6. one atomic backend mutation records/verifies the successor and makes it the authoritative active
+   generation; exact replay may return `AlreadyActive`, while divergent replay or stale authority fails
+   closed;
+7. only after committed/`AlreadyActive` proof may local successor bookkeeping complete and confirmed-save
+   ownership be cleanly released; pre-commit failure retains N plus recoverable dirty ownership;
+8. a post-commit local failure never rolls back backend authority to N: N+1 remains authoritative and
+   recovery/rematerialization is explicit;
+9. the next ordinary P2 launch again selects the authoritative active verified generation server-side;
+   if its local materialization is absent, the Bridge downloads the exact server-described immutable
+   object, verifies exact size/digest and authenticated metadata before requesting historical opening
+   material, decrypts with exact identity binding, materializes it, and runs normal launch preflight.
+
+Generic device-job and other generation transitions may reuse the same successor-commit semantic owner
+through their own outer application transaction, but no caller gains a second register/verify/activate
+protocol and no transport or local cache becomes generation-selection authority.
 
 Forbidden:
 
@@ -241,7 +271,11 @@ Forbidden:
 - “latest timestamp/object listing wins”;
 - last-write-wins generation activation;
 - deleting dirty local state before verified sync;
-- stale fencing token activating/overwriting newer generation.
+- stale fencing token activating/overwriting newer generation;
+- reporting `Saved` before exact verification plus authoritative backend commit and required local
+  completion;
+- caller/local generation selection or fallback to N after backend commit made N+1 authoritative;
+- treating IPC EOF, runtime crash or ambiguous close as a controlled-close witness.
 
 ## 7. Durable Object / Session Boundary
 
@@ -364,14 +398,34 @@ object verification and an authoritative fenced/CAS active-generation commit. Th
 superseded before ownership release; post-commit local candidate drift/failure requires rematerialization
 instead of reopening the base. Real browser/kernel-lock/device/provider execution remains External.
 
+Confirmed Save / Reopen further requires an explicit positive controlled-close witness; runtime crash,
+ambiguous close and IPC disconnect/EOF cannot synthesize one. Before backend commit, failure retains the
+last confirmed generation and exact dirty local ownership for retry. After backend commit, the committed
+successor remains authoritative even if local candidate acceptance or cleanup fails. Reopen is always a
+normal P2 server-authorized launch: the Bridge may reuse an exact local copy or rematerialize that exact
+server-selected active verified generation, but it has no older-generation fallback or caller-selected
+reopen path.
+
 ## 12. Key Hierarchy
 
 ```text
-Cloudflare secret root wrapping key (versioned)
-  -> wrapped tenant KEK in governed metadata
-     -> wrapped generation DEK
+versioned profile-generation root key in the protected Cloudflare keyring/provider
+  -> domain-separated HMAC-SHA256 derivation over
+     tenant + profile + generation + plaintext digest + root-key version
+     -> generation DEK domain
+     -> independent generation nonce-prefix domain
         -> AEAD encrypted immutable generation in R2
 ```
+
+The root key never leaves its provider/keyring boundary. `encrypted-generation-domain` owns the KDF and
+canonical root-key identity (`profile-generation-root-v1-N`). DEK and nonce material are derived in
+separate domains from the exact generation context, so an exact pre-commit retry re-derives the same
+candidate material while a changed tenant/profile/generation/plaintext digest or root-key version changes
+the derived material. There is no authoritative D1 table of plaintext DEKs, no per-generation wrapped-DEK
+registry and no caller-selected nonce/key identity. A bounded authenticated machine response may carry
+only the exact derived DEK needed for current sealing/opening; owned secret buffers are zeroized where
+the implementation controls their lifetime. Generation metadata carries the canonical key id and is
+authenticated as part of the encrypted immutable object.
 
 Client contact protection is a separate application/adaptor key domain from generation storage:
 contact display encryption keys and exact-lookup HMAC keys are distinct, versioned domains. The
@@ -380,9 +434,10 @@ Phase 2B accepts authoritative protected client-contact D1 persistence, current+
 keyring behavior, current-key writes, version-selected decrypt and lookup candidates across active
 lookup-key versions so planned rotation/backfill does not require plaintext database scans.
 
-Plain root/KEK/DEK/contact-encryption/HMAC key material never belongs in Git, D1, R2, logs, audit,
-events or client bundles. Production promotion requires explicit rotation, recovery/escrow, restore
-and operator-separation policy.
+Plain generation-root/derived-DEK/contact-encryption/HMAC key material never belongs in Git, D1, R2,
+logs, audit, events or client bundles. Production promotion still requires explicit root-key provider,
+rotation, recovery/escrow, restore and operator-separation proof; P3 repository-local acceptance does
+not grant Production authorization.
 
 ## 13. Events, Queues And Realtime
 
@@ -430,6 +485,9 @@ Permanent policy should cover:
   adapter bounds and mailbox-content privacy positive/negative fixtures;
 - Phase 2F device ownership/claim/fencing/freshness, browser-writer retained ownership, exact immutable
   generation upload/verification/commit ordering and browser-mail privacy positive/negative fixtures;
+- Confirmed Save / Reopen controlled-close gating, no-`Saved`-before-commit ordering, pre/post-commit
+  recovery distinction, exact replay/concurrency, clean confirmed release, authoritative reopen and
+  stale/unverified/local-selected no-fallback negative fixtures;
 - generation freshness/fencing;
 - secret/PII/content scans;
 - native + WASM + Windows/release composition as applicable;
@@ -502,7 +560,12 @@ until a dedicated extraction is separately scoped and accepted.
 - long-lived device bearer/bucket credential;
 - generic remote `exec` instead of typed device command;
 - message body in ordinary logs/audit/events/telemetry/support;
-- direct CRM table/entity dependency from Profile Platform core.
+- direct CRM table/entity dependency from Profile Platform core;
+- reporting ordinary interactive save success from browser close, upload alone or local state alone;
+- caller/local generation selection, newest-local heuristic or fallback to a superseded generation on
+  reopen;
+- a parallel manual register -> verify -> activate save protocol beside the canonical successor commit;
+- treating generic abort/error cleanup as a confirmed clean Coordinator release.
 
 ## 18. CRM Boundary
 
