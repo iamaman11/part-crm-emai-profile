@@ -124,7 +124,9 @@ pub struct TrustedSignerSet {
 }
 
 impl TrustedSignerSet {
-    pub fn new(signers: impl IntoIterator<Item = TrustedSigner>) -> Result<Self, DeliveryPolicyError> {
+    pub fn new(
+        signers: impl IntoIterator<Item = TrustedSigner>,
+    ) -> Result<Self, DeliveryPolicyError> {
         let signers: Vec<_> = signers.into_iter().collect();
         if signers.is_empty() {
             return Err(DeliveryPolicyError::InvalidTrustPolicy);
@@ -238,6 +240,11 @@ pub fn verify_delivery_candidate<V: DetachedSignatureVerifier>(
     let manifest: WindowsDeliveryManifest =
         serde_json::from_slice(manifest_bytes).map_err(|_| DeliveryPolicyError::InvalidManifest)?;
     validate_manifest(&manifest)?;
+    let canonical_bytes =
+        serde_json::to_vec(&manifest).map_err(|_| DeliveryPolicyError::InvalidManifest)?;
+    if canonical_bytes != manifest_bytes {
+        return Err(DeliveryPolicyError::NonCanonicalManifest);
+    }
 
     let envelope: DetachedSignatureEnvelope = serde_json::from_slice(signature_bytes)
         .map_err(|_| DeliveryPolicyError::InvalidSignatureEnvelope)?;
@@ -327,6 +334,7 @@ pub struct DeliveryIdentity {
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct DeliveryState {
     active: Option<DeliveryIdentity>,
+    active_health_confirmed: bool,
     last_known_good: Option<DeliveryIdentity>,
     staged: Option<DeliveryIdentity>,
 }
@@ -335,6 +343,11 @@ impl DeliveryState {
     #[must_use]
     pub const fn active(&self) -> Option<&DeliveryIdentity> {
         self.active.as_ref()
+    }
+
+    #[must_use]
+    pub const fn active_health_confirmed(&self) -> bool {
+        self.active_health_confirmed
     }
 
     #[must_use]
@@ -347,7 +360,10 @@ impl DeliveryState {
         self.staged.as_ref()
     }
 
-    pub fn stage(&mut self, candidate: &VerifiedDeliveryCandidate) -> Result<(), DeliveryStateError> {
+    pub fn stage(
+        &mut self,
+        candidate: &VerifiedDeliveryCandidate,
+    ) -> Result<(), DeliveryStateError> {
         let identity = candidate.identity();
         if let Some(active) = &self.active {
             if identity.sequence < active.sequence {
@@ -355,6 +371,7 @@ impl DeliveryState {
             }
             if identity.sequence == active.sequence {
                 if identity == *active {
+                    self.staged = Some(identity);
                     return Ok(());
                 }
                 return Err(DeliveryStateError::ReplayConflict);
@@ -376,12 +393,24 @@ impl DeliveryState {
         if !quiescent {
             return Err(DeliveryStateError::ActiveRuntime);
         }
-        let staged = self.staged.take().ok_or(DeliveryStateError::NoStagedCandidate)?;
+        let staged = self
+            .staged
+            .take()
+            .ok_or(DeliveryStateError::NoStagedCandidate)?;
         if self.active.as_ref() == Some(&staged) {
             return Ok(());
         }
-        self.last_known_good = self.active.take();
+        if self.active.is_some() && !self.active_health_confirmed {
+            self.staged = Some(staged);
+            return Err(DeliveryStateError::HealthPending);
+        }
+        if self.active_health_confirmed {
+            self.last_known_good = self.active.take();
+        } else {
+            self.active = None;
+        }
         self.active = Some(staged);
+        self.active_health_confirmed = false;
         Ok(())
     }
 
@@ -389,15 +418,22 @@ impl DeliveryState {
         if self.active.is_none() {
             return Err(DeliveryStateError::NoActiveCandidate);
         }
+        self.active_health_confirmed = true;
         Ok(())
     }
 
     pub fn fail_health_and_rollback(&mut self) -> Result<(), DeliveryStateError> {
+        if self.active.is_none() {
+            return Err(DeliveryStateError::NoActiveCandidate);
+        }
+        self.active = None;
+        self.active_health_confirmed = false;
+        self.staged = None;
         let Some(lkg) = self.last_known_good.take() else {
             return Err(DeliveryStateError::RecoveryRequired);
         };
         self.active = Some(lkg);
-        self.staged = None;
+        self.active_health_confirmed = true;
         Ok(())
     }
 }
@@ -405,6 +441,7 @@ impl DeliveryState {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DeliveryPolicyError {
     InvalidManifest,
+    NonCanonicalManifest,
     IncompatibleCandidate,
     InvalidSignatureEnvelope,
     InvalidTrustPolicy,
@@ -420,6 +457,7 @@ impl fmt::Display for DeliveryPolicyError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(match self {
             Self::InvalidManifest => "Windows delivery manifest is invalid",
+            Self::NonCanonicalManifest => "Windows delivery manifest is not canonical",
             Self::IncompatibleCandidate => "Windows delivery candidate is incompatible",
             Self::InvalidSignatureEnvelope => "Windows delivery signature envelope is invalid",
             Self::InvalidTrustPolicy => "Windows delivery trust policy is invalid",
@@ -440,6 +478,7 @@ pub enum DeliveryStateError {
     DowngradeRejected,
     ReplayConflict,
     ActiveRuntime,
+    HealthPending,
     NoStagedCandidate,
     NoActiveCandidate,
     RecoveryRequired,
@@ -451,6 +490,7 @@ impl fmt::Display for DeliveryStateError {
             Self::DowngradeRejected => "Windows delivery downgrade is rejected",
             Self::ReplayConflict => "Windows delivery sequence conflicts with staged identity",
             Self::ActiveRuntime => "Windows delivery activation requires quiescence",
+            Self::HealthPending => "Windows delivery active release has not passed health confirmation",
             Self::NoStagedCandidate => "Windows delivery has no staged candidate",
             Self::NoActiveCandidate => "Windows delivery has no active candidate",
             Self::RecoveryRequired => "Windows delivery has no last known good candidate",
@@ -533,7 +573,7 @@ mod tests {
             expected_certificate_sha256: &str,
         ) -> Result<bool, Self::Error> {
             Ok(cms_der == Sha256::digest(manifest_bytes).as_slice()
-                && expected_certificate_sha256 == CERT_A)
+                && matches!(expected_certificate_sha256, CERT_A | CERT_B))
         }
     }
 
@@ -587,13 +627,39 @@ mod tests {
         .expect("serialize signature fixture")
     }
 
-    fn trust(status: TrustedSignerStatus) -> TrustedSignerSet {
+    fn trust() -> TrustedSignerSet {
         TrustedSignerSet::new([
-            TrustedSigner::new("release-2026", CERT_A, status).expect("valid signer"),
-            TrustedSigner::new("release-2025", CERT_B, TrustedSignerStatus::AcceptedPrevious)
-                .expect("valid previous signer"),
+            TrustedSigner::new("release-2026", CERT_A, TrustedSignerStatus::Active)
+                .expect("valid active signer"),
+            TrustedSigner::new(
+                "release-2025",
+                CERT_B,
+                TrustedSignerStatus::AcceptedPrevious,
+            )
+            .expect("valid previous signer"),
         ])
         .expect("valid trust set")
+    }
+
+    fn revoked_trust() -> TrustedSignerSet {
+        TrustedSignerSet::new([
+            TrustedSigner::new("release-2026", CERT_A, TrustedSignerStatus::Revoked)
+                .expect("valid revoked signer"),
+            TrustedSigner::new("release-2027", CERT_B, TrustedSignerStatus::Active)
+                .expect("valid active signer"),
+        ])
+        .expect("valid trust set")
+    }
+
+    fn verify_with_key(
+        manifest: &WindowsDeliveryManifest,
+        trust: &TrustedSignerSet,
+        floor: Option<&AcceptedDeliveryFloor>,
+        key_id: &str,
+    ) -> Result<VerifiedDeliveryCandidate, DeliveryPolicyError> {
+        let bytes = serde_json::to_vec(manifest).expect("serialize manifest fixture");
+        let signature = signature_for(&bytes, key_id);
+        verify_delivery_candidate(&bytes, &signature, trust, floor, &mut DigestBoundVerifier)
     }
 
     fn verify(
@@ -601,29 +667,30 @@ mod tests {
         trust: &TrustedSignerSet,
         floor: Option<&AcceptedDeliveryFloor>,
     ) -> Result<VerifiedDeliveryCandidate, DeliveryPolicyError> {
-        let bytes = serde_json::to_vec(manifest).expect("serialize manifest fixture");
-        let signature = signature_for(&bytes, "release-2026");
-        verify_delivery_candidate(
-            &bytes,
-            &signature,
-            trust,
-            floor,
-            &mut DigestBoundVerifier,
-        )
+        verify_with_key(manifest, trust, floor, "release-2026")
     }
 
     #[test]
     fn exact_signed_candidate_is_admitted_and_same_identity_is_idempotent() {
-        let trust = trust(TrustedSignerStatus::Active);
+        let trust = trust();
         let first = verify(&manifest(7, 'a'), &trust, None).expect("candidate admitted");
         let floor = AcceptedDeliveryFloor::from_candidate(&first);
-        let replay = verify(&manifest(7, 'a'), &trust, Some(&floor)).expect("exact replay admitted");
+        let replay =
+            verify(&manifest(7, 'a'), &trust, Some(&floor)).expect("exact replay admitted");
         assert_eq!(replay.identity(), first.identity());
     }
 
     #[test]
-    fn candidate_tamper_fails_signature_verification() {
-        let trust = trust(TrustedSignerStatus::Active);
+    fn accepted_previous_signer_supports_rotation_overlap() {
+        let trust = trust();
+        let candidate = verify_with_key(&manifest(7, 'a'), &trust, None, "release-2025")
+            .expect("accepted previous signer remains valid during overlap");
+        assert_eq!(candidate.signer_key_id(), "release-2025");
+    }
+
+    #[test]
+    fn candidate_tamper_and_noncanonical_manifest_fail_closed() {
+        let trust = trust();
         let original = serde_json::to_vec(&manifest(7, 'a')).expect("serialize original");
         let signature = signature_for(&original, "release-2026");
         let tampered = serde_json::to_vec(&manifest(8, 'a')).expect("serialize tampered");
@@ -637,27 +704,35 @@ mod tests {
             ),
             Err(DeliveryPolicyError::SignatureInvalid)
         );
+
+        let mut noncanonical = original.clone();
+        noncanonical.push(b'\n');
+        let noncanonical_signature = signature_for(&noncanonical, "release-2026");
+        assert_eq!(
+            verify_delivery_candidate(
+                &noncanonical,
+                &noncanonical_signature,
+                &trust,
+                None,
+                &mut DigestBoundVerifier,
+            ),
+            Err(DeliveryPolicyError::NonCanonicalManifest)
+        );
     }
 
     #[test]
     fn revoked_unknown_and_ambiguous_trust_fail_closed() {
         assert_eq!(
-            verify(&manifest(7, 'a'), &trust(TrustedSignerStatus::Revoked), None),
+            verify(&manifest(7, 'a'), &revoked_trust(), None),
             Err(DeliveryPolicyError::RevokedSigner)
         );
-        let active = TrustedSigner::new("other", CERT_A, TrustedSignerStatus::Active)
-            .expect("valid signer");
+        let active =
+            TrustedSigner::new("other", CERT_A, TrustedSignerStatus::Active).expect("valid signer");
         let unknown = TrustedSignerSet::new([active]).expect("valid trust set");
         let bytes = serde_json::to_vec(&manifest(7, 'a')).expect("serialize manifest");
         let signature = signature_for(&bytes, "release-2026");
         assert_eq!(
-            verify_delivery_candidate(
-                &bytes,
-                &signature,
-                &unknown,
-                None,
-                &mut DigestBoundVerifier,
-            ),
+            verify_delivery_candidate(&bytes, &signature, &unknown, None, &mut DigestBoundVerifier),
             Err(DeliveryPolicyError::UnknownSigner)
         );
         assert_eq!(
@@ -671,7 +746,7 @@ mod tests {
 
     #[test]
     fn incompatible_manifest_and_malformed_signature_fail_closed() {
-        let trust = trust(TrustedSignerStatus::Active);
+        let trust = trust();
         let mut incompatible = manifest(7, 'a');
         incompatible.compatibility.runtime_bundle_version = "3.0.0".to_owned();
         assert_eq!(
@@ -694,7 +769,7 @@ mod tests {
 
     #[test]
     fn downgrade_and_same_sequence_conflict_are_rejected() {
-        let trust = trust(TrustedSignerStatus::Active);
+        let trust = trust();
         let accepted = verify(&manifest(7, 'a'), &trust, None).expect("candidate admitted");
         let floor = AcceptedDeliveryFloor::from_candidate(&accepted);
         assert_eq!(
@@ -708,8 +783,8 @@ mod tests {
     }
 
     #[test]
-    fn delivery_state_requires_quiescence_and_rolls_back_only_to_lkg() {
-        let trust = trust(TrustedSignerStatus::Active);
+    fn delivery_state_never_promotes_unhealthy_active_to_lkg() {
+        let trust = trust();
         let first = verify(&manifest(1, 'a'), &trust, None).expect("first candidate");
         let second = verify(&manifest(2, 'b'), &trust, None).expect("second candidate");
         let mut state = DeliveryState::default();
@@ -720,17 +795,61 @@ mod tests {
             Err(DeliveryStateError::ActiveRuntime)
         );
         state.activate_staged(true).expect("activate first");
+        assert!(!state.active_health_confirmed());
+
+        state.stage(&second).expect("stage second");
+        assert_eq!(
+            state.activate_staged(true),
+            Err(DeliveryStateError::HealthPending)
+        );
+        assert_eq!(state.staged(), Some(&second.identity()));
+        assert!(state.last_known_good().is_none());
+
+        state.confirm_health().expect("first healthy");
+        state.activate_staged(true).expect("activate second");
+        assert_eq!(state.last_known_good(), Some(&first.identity()));
+        assert!(!state.active_health_confirmed());
+    }
+
+    #[test]
+    fn health_failure_rolls_back_only_to_confirmed_lkg() {
+        let trust = trust();
+        let first = verify(&manifest(1, 'a'), &trust, None).expect("first candidate");
+        let second = verify(&manifest(2, 'b'), &trust, None).expect("second candidate");
+        let mut state = DeliveryState::default();
+
+        state.stage(&first).expect("stage first");
+        state.activate_staged(true).expect("activate first");
         assert_eq!(
             state.fail_health_and_rollback(),
             Err(DeliveryStateError::RecoveryRequired)
         );
-        state.confirm_health().expect("first healthy");
+        assert!(state.active().is_none());
 
+        state.stage(&first).expect("stage first again");
+        state.activate_staged(true).expect("activate first again");
+        state.confirm_health().expect("first healthy");
         state.stage(&second).expect("stage second");
         state.activate_staged(true).expect("activate second");
-        assert_eq!(state.last_known_good(), Some(&first.identity()));
         state.fail_health_and_rollback().expect("rollback to first");
         assert_eq!(state.active(), Some(&first.identity()));
+        assert!(state.active_health_confirmed());
         assert!(state.staged().is_none());
+    }
+
+    #[test]
+    fn exact_active_candidate_reactivation_is_idempotent() {
+        let trust = trust();
+        let first = verify(&manifest(1, 'a'), &trust, None).expect("first candidate");
+        let mut state = DeliveryState::default();
+        state.stage(&first).expect("stage first");
+        state.activate_staged(true).expect("activate first");
+        state.confirm_health().expect("first healthy");
+
+        state.stage(&first).expect("stage exact active");
+        state.activate_staged(true).expect("reactivate exact active");
+        assert_eq!(state.active(), Some(&first.identity()));
+        assert!(state.active_health_confirmed());
+        assert!(state.last_known_good().is_none());
     }
 }
