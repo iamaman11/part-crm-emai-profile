@@ -231,6 +231,8 @@ impl VerifiedDeliveryCandidate {
             sequence: self.manifest.sequence,
             release_set_id: self.manifest.release_set_id.clone(),
             manifest_sha256: self.manifest_sha256.clone(),
+            profile_bridge_release_id: self.manifest.components.profile_bridge.release_id.clone(),
+            runtime_bundle_release_id: self.manifest.components.runtime_bundle.release_id.clone(),
         }
     }
 }
@@ -335,6 +337,8 @@ pub struct DeliveryIdentity {
     pub sequence: u64,
     pub release_set_id: String,
     pub manifest_sha256: String,
+    pub profile_bridge_release_id: String,
+    pub runtime_bundle_release_id: String,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -417,6 +421,20 @@ impl DeliveryState {
     }
 
     pub fn validate_persisted(&self) -> Result<(), DeliveryStateError> {
+        for identity in [
+            self.active.as_ref(),
+            self.last_known_good.as_ref(),
+            self.staged.as_ref(),
+            self.last_activation.as_ref().map(|evidence| &evidence.candidate),
+            self.last_failure.as_ref().map(|failure| &failure.candidate),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            if !valid_delivery_identity(identity) {
+                return Err(DeliveryStateError::CorruptPersistedState);
+            }
+        }
         if self.active_health_confirmed && self.active.is_none() {
             return Err(DeliveryStateError::CorruptPersistedState);
         }
@@ -696,6 +714,14 @@ impl fmt::Display for DeliveryStateError {
 
 impl std::error::Error for DeliveryStateError {}
 
+fn valid_delivery_identity(identity: &DeliveryIdentity) -> bool {
+    identity.sequence != 0
+        && prefixed_sha256(&identity.release_set_id, RELEASE_SET_PREFIX)
+        && is_lower_hex(&identity.manifest_sha256, 64)
+        && prefixed_sha256(&identity.profile_bridge_release_id, PROFILE_BRIDGE_PREFIX)
+        && prefixed_sha256(&identity.runtime_bundle_release_id, RUNTIME_BUNDLE_PREFIX)
+}
+
 fn prefixed_sha256(value: &str, prefix: &str) -> bool {
     value
         .strip_prefix(prefix)
@@ -861,10 +887,19 @@ mod tests {
     #[test]
     fn exact_signed_candidate_is_admitted_and_same_identity_is_idempotent() -> TestResult {
         let trust = trust()?;
-        let first = verify(&manifest(7, 'a'), &trust, None)?;
+        let first_manifest = manifest(7, 'a');
+        let first = verify(&first_manifest, &trust, None)?;
         let floor = AcceptedDeliveryFloor::from_candidate(&first);
-        let replay = verify(&manifest(7, 'a'), &trust, Some(&floor))?;
+        let replay = verify(&first_manifest, &trust, Some(&floor))?;
         assert_eq!(replay.identity(), first.identity());
+        assert_eq!(
+            first.identity().profile_bridge_release_id,
+            first_manifest.components.profile_bridge.release_id
+        );
+        assert_eq!(
+            first.identity().runtime_bundle_release_id,
+            first_manifest.components.runtime_bundle.release_id
+        );
         Ok(())
     }
 
@@ -1093,6 +1128,15 @@ mod tests {
         state.confirm_health()?;
         let mut value = serde_json::to_value(&state)?;
         value["active_health_confirmed"] = serde_json::Value::Bool(false);
+        let corrupt: DeliveryState = serde_json::from_value(value)?;
+        assert_eq!(
+            corrupt.validate_persisted(),
+            Err(DeliveryStateError::CorruptPersistedState)
+        );
+
+        let mut value = serde_json::to_value(&state)?;
+        value["active"]["runtime_bundle_release_id"] =
+            serde_json::Value::String("runtime-bundle-v1-sha256-".to_owned() + &"a".repeat(64));
         let corrupt: DeliveryState = serde_json::from_value(value)?;
         assert_eq!(
             corrupt.validate_persisted(),
