@@ -150,6 +150,43 @@ def runtime_lock_path() -> Path:
     return path
 
 
+def validate_windows_distribution(lock: dict[str, Any]) -> None:
+    distribution = lock.get("windows_distribution")
+    if not isinstance(distribution, dict) or set(distribution) != {
+        "architecture",
+        "browser",
+        "python",
+    }:
+        raise RuntimeContractError("Windows distribution lock shape is invalid")
+    if distribution.get("architecture") != "x86_64":
+        raise RuntimeContractError("Windows runtime architecture is unsupported")
+    browser = distribution.get("browser")
+    python = distribution.get("python")
+    if not isinstance(browser, dict) or set(browser) != {
+        "artifact_sha256",
+        "artifact_url",
+        "executable_path",
+    }:
+        raise RuntimeContractError("Windows browser distribution lock shape is invalid")
+    if not isinstance(python, dict) or set(python) != {
+        "artifact_sha256",
+        "artifact_url",
+        "version",
+    }:
+        raise RuntimeContractError("Windows Python distribution lock shape is invalid")
+    for row in (browser, python):
+        digest = row.get("artifact_sha256")
+        url = row.get("artifact_url")
+        if not isinstance(digest, str) or not valid_sha256(digest):
+            raise RuntimeContractError("Windows distribution digest is invalid")
+        if not isinstance(url, str) or not url.startswith("https://"):
+            raise RuntimeContractError("Windows distribution URL is invalid")
+    if browser.get("executable_path") != "browser/camoufox.exe":
+        raise RuntimeContractError("Windows browser executable identity is unsupported")
+    if python.get("version") != "3.12.10" or lock.get("python") != "3.12":
+        raise RuntimeContractError("Windows Python distribution identity is unsupported")
+
+
 def load_runtime_lock() -> tuple[dict[str, Any], str]:
     lock, raw = load_canonical_json(runtime_lock_path(), MAX_CONFIG_BYTES)
     required_top = {
@@ -162,6 +199,7 @@ def load_runtime_lock() -> tuple[dict[str, Any], str]:
         "python_source",
         "runtime_role",
         "schema_version",
+        "windows_distribution",
     }
     if set(lock) != required_top:
         raise RuntimeContractError("runtime lock shape is invalid")
@@ -169,6 +207,7 @@ def load_runtime_lock() -> tuple[dict[str, Any], str]:
         raise RuntimeContractError("runtime lock identity is unsupported")
     if lock.get("camouhost_ipc_version") != int(IPC_VERSION):
         raise RuntimeContractError("runtime IPC identity is unsupported")
+    validate_windows_distribution(lock)
     expected = os.environ.get(EXPECTED_RUNTIME_LOCK_SHA256_ENV)
     digest = sha256_bytes(raw)
     if expected is not None and (not valid_sha256(expected) or expected != digest):
@@ -456,14 +495,11 @@ def firefox_writer_active(root: Path) -> bool:
         else:
             raise RuntimeContractError("unsupported Firefox lock-probe platform")
     elif legacy_present:
-        # Without the modern primary lock we cannot prove that an old marker is stale.
         return True
 
     if not legacy_present or legacy_lock is None:
         return False
     if os.name == "posix" and modern_unix_legacy_lock_is_stale(legacy_lock):
-        # Firefox treats +PID as obsolete after the primary fcntl lock is proven free.
-        # Never unlink it here; Firefox remains responsible for its own lock artifacts.
         return False
     return True
 
@@ -584,8 +620,6 @@ def run_ipc() -> int:
         lock, _ = load_runtime_lock()
         verify_python_components(lock)
         root = resolve_profile_root(require_bridge_lock=True)
-        # The child is already Bridge-owned, but browser launch is still forbidden until
-        # the real Firefox OS-lock probe proves the generation quiescent.
         if firefox_writer_active(root):
             raise RuntimeContractError("Firefox writer is already active")
         config, _ = load_generation_config(root)
@@ -661,8 +695,6 @@ def run_ipc() -> int:
         emit("error|protocol")
         return 2
 
-    # EOF/disconnect is never a controlled-close witness. Cleanup is best-effort only and no
-    # positive close-observation frame can be emitted after transport loss.
     if manager is not None and context is not None:
         with contextlib.suppress(BaseException):
             close_context(manager, context, root)
