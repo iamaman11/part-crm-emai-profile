@@ -426,12 +426,11 @@ impl DeliveryState {
         if self.active.as_ref() == self.last_known_good.as_ref() && self.active.is_some() {
             return Err(DeliveryStateError::CorruptPersistedState);
         }
-        if let (Some(active), Some(staged)) = (&self.active, &self.staged) {
-            if staged.sequence < active.sequence
-                || (staged.sequence == active.sequence && staged != active)
-            {
-                return Err(DeliveryStateError::CorruptPersistedState);
-            }
+        if let (Some(active), Some(staged)) = (&self.active, &self.staged)
+            && (staged.sequence < active.sequence
+                || (staged.sequence == active.sequence && staged != active))
+        {
+            return Err(DeliveryStateError::CorruptPersistedState);
         }
         match &self.last_activation {
             None if self.activation_generation != 0 => {
