@@ -204,7 +204,11 @@ fn profile_bridge_release_requires_exact_windows_evidence_pair() -> Result<(), S
     let error = finalize_json(&root(), &input)
         .err()
         .ok_or_else(|| "missing Windows provenance unexpectedly finalized".to_owned())?;
-    assert!(error.to_string().contains("exactly Windows SBOM and provenance"));
+    assert!(
+        error
+            .to_string()
+            .contains("exactly Windows SBOM and provenance")
+    );
 
     let mut wrong_path = request_value();
     wrong_path["evidence_artifacts"]["windows_sbom"]["path"] =
