@@ -31,6 +31,8 @@ struct RuntimeLockV1 {
     #[serde(rename = "python_source")]
     _python_source: RuntimePythonSourceV1,
     runtime_role: String,
+    #[serde(rename = "windows_distribution")]
+    _windows_distribution: RuntimeWindowsDistributionV1,
 }
 
 #[derive(Debug, Deserialize)]
@@ -62,6 +64,39 @@ struct RuntimePythonSourceV1 {
     _commit: String,
     #[serde(rename = "repository")]
     _repository: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RuntimeWindowsDistributionV1 {
+    #[serde(rename = "architecture")]
+    _architecture: String,
+    #[serde(rename = "browser")]
+    _browser: RuntimeWindowsBrowserDistributionV1,
+    #[serde(rename = "python")]
+    _python: RuntimeWindowsPythonDistributionV1,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RuntimeWindowsBrowserDistributionV1 {
+    #[serde(rename = "artifact_sha256")]
+    _artifact_sha256: String,
+    #[serde(rename = "artifact_url")]
+    _artifact_url: String,
+    #[serde(rename = "executable_path")]
+    _executable_path: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RuntimeWindowsPythonDistributionV1 {
+    #[serde(rename = "artifact_sha256")]
+    _artifact_sha256: String,
+    #[serde(rename = "artifact_url")]
+    _artifact_url: String,
+    #[serde(rename = "version")]
+    _version: String,
 }
 
 pub(super) fn load(path: &Path) -> Result<RuntimeLockFacts, ReleaseFinalizeError> {
