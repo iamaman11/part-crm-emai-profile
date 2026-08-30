@@ -139,9 +139,80 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
+  runtime-bundle:
+    name: Build immutable clean-host Windows Camouhost runtime
+    runs-on: windows-2025
+    env:
+      SOURCE_SHA: ${{ github.sha }}
+    steps:
+      - name: Checkout exact accepted-main source
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Prove accepted-main source
+        shell: pwsh
+        run: |
+          if ($env:GITHUB_EVENT_NAME -ne 'push') { throw 'Release Set build requires main push' }
+          if ($env:GITHUB_REF -ne 'refs/heads/main') { throw 'Release Set build requires main' }
+          if ((git rev-parse HEAD).Trim() -ne $env:SOURCE_SHA) { throw 'source SHA mismatch' }
+
+      - name: Set up exact build Python 3.12.10
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.12.10'
+
+      - name: Prove runtime materializer and packager policy
+        shell: pwsh
+        run: |
+          python --version
+          if ((python -c "import sys; print('.'.join(map(str, sys.version_info[:3])))").Trim() -ne '3.12.10') { throw 'build Python mismatch' }
+          python -m py_compile scripts/camouhost-runtime-build-windows.py scripts/camouhost-runtime-package.py
+          python scripts/camouhost-runtime-build-windows.py self-test
+          python scripts/camouhost-runtime-package.py self-test
+
+      - name: Materialize exact clean-host Windows runtime
+        shell: pwsh
+        run: |
+          $runtimeRoot = Join-Path $env:RUNNER_TEMP 'camouhost-runtime'
+          $buildPython = (Get-Command python).Source
+          python scripts/camouhost-runtime-build-windows.py build `
+            --runtime-lock runtime/camouhost/runtime-lock.json `
+            --runtime-source runtime/camouhost/real.py `
+            --output "$runtimeRoot" `
+            --build-python "$buildPython"
+          if (-not (Test-Path -LiteralPath (Join-Path $runtimeRoot 'python\python.exe') -PathType Leaf)) { throw 'embedded Python missing' }
+          if (-not (Test-Path -LiteralPath (Join-Path $runtimeRoot 'browser\camoufox.exe') -PathType Leaf)) { throw 'packaged Camoufox missing' }
+
+      - name: Package exact Windows runtime component
+        shell: pwsh
+        run: |
+          $runtimeRoot = Join-Path $env:RUNNER_TEMP 'camouhost-runtime'
+          New-Item -ItemType Directory -Force -Path artifacts/ar11-runtime-bundle | Out-Null
+          python scripts/camouhost-runtime-package.py package `
+            --source-sha "$env:SOURCE_SHA" `
+            --runtime-root "$runtimeRoot" `
+            --archive artifacts/ar11-runtime-bundle/runtime-bundle.tar `
+            --manifest artifacts/ar11-runtime-bundle/runtime-manifest.json
+          $manifest = Get-Content artifacts/ar11-runtime-bundle/runtime-manifest.json -Raw | ConvertFrom-Json
+          if ($manifest.schema_version -ne 2) { throw 'runtime manifest schema mismatch' }
+          if ($manifest.kind -ne 'CAMOUFOX_WINDOWS_RUNTIME_COMPONENT') { throw 'runtime manifest kind mismatch' }
+          if ($manifest.platform -ne 'windows-x86_64') { throw 'runtime manifest platform mismatch' }
+          if ($manifest.source_commit_sha -ne $env:SOURCE_SHA) { throw 'runtime source mismatch' }
+          if ($manifest.release_id -notmatch '^runtime-bundle-v2-sha256-[0-9a-f]{64}$') { throw 'runtime release identity mismatch' }
+
+      - name: Upload CI transport only
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: ar11-runtime-bundle-${{ github.sha }}
+          path: artifacts/ar11-runtime-bundle
+          if-no-files-found: error
+          retention-days: 7
+
   assemble-publish:
     name: Finalize and publish durable immutable Release Set v3
-    needs: [cloud-components, profile-bridge]
+    needs: [cloud-components, profile-bridge, runtime-bundle]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -176,17 +247,12 @@ jobs:
           cp artifacts/ar11-inputs/control-plane.tar "$component_root/control-plane.tar"
           cp artifacts/ar11-inputs/secret-resolver.tar "$component_root/secret-resolver.tar"
           cp artifacts/ar11-inputs/profile-bridge.zip "$component_root/profile-bridge.zip"
-
-          python scripts/camouhost-runtime-package.py self-test
-          python scripts/camouhost-runtime-package.py package \
-            --source-sha "$SOURCE_SHA" \
-            --archive "$component_root/runtime-bundle.tar" \
-            --manifest "$RUNNER_TEMP/runtime-manifest.json"
+          cp artifacts/ar11-inputs/runtime-bundle.tar "$component_root/runtime-bundle.tar"
 
           control_manifest=artifacts/ar11-inputs/control-plane-manifest.json
           resolver_manifest=artifacts/ar11-inputs/secret-resolver-manifest.json
           bridge_manifest=artifacts/ar11-inputs/profile-bridge-manifest.json
-          runtime_manifest="$RUNNER_TEMP/runtime-manifest.json"
+          runtime_manifest=artifacts/ar11-inputs/runtime-manifest.json
 
           control_release_id="$(jq -er '.release_id' "$control_manifest")"
           resolver_release_id="$(jq -er '.release_id' "$resolver_manifest")"
