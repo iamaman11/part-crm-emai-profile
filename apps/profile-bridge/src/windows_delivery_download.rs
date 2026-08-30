@@ -953,12 +953,7 @@ mod tests {
         let mut fetcher = WindowsReleaseAssetFetcher::from_system()?;
         let release_set_id = format!("{RELEASE_SET_PREFIX}{}", "a".repeat(64));
         assert_eq!(
-            fetcher.fetch_release_asset(
-                &release_set_id,
-                PROFILE_BRIDGE_ASSET,
-                &destination,
-                1,
-            ),
+            fetcher.fetch_release_asset(&release_set_id, PROFILE_BRIDGE_ASSET, &destination, 1,),
             Err(WindowsReleaseAssetFetcherError::InvalidRequest)
         );
         assert_eq!(fs::read(destination)?, b"occupied");
