@@ -359,20 +359,49 @@ def extract_camoufox_config(options: dict[str, Any]) -> dict[str, Any]:
     return value
 
 
+def packaged_windows_browser(lock: dict[str, Any]) -> Path:
+    distribution = lock.get("windows_distribution")
+    if not isinstance(distribution, dict):
+        raise RuntimeContractError("Windows distribution lock is invalid")
+    browser = distribution.get("browser")
+    if not isinstance(browser, dict):
+        raise RuntimeContractError("Windows browser distribution lock is invalid")
+    executable_path = browser.get("executable_path")
+    if executable_path != "browser/camoufox.exe":
+        raise RuntimeContractError("Windows browser executable identity is unsupported")
+
+    runtime_entrypoint = Path(__file__)
+    if runtime_entrypoint.is_symlink() or not runtime_entrypoint.is_file():
+        raise RuntimeContractError("Camouhost runtime entrypoint is not a regular file")
+    runtime_root = runtime_entrypoint.resolve(strict=True).parent.parent
+    executable = runtime_root.joinpath(*executable_path.split("/"))
+    if executable.is_symlink() or not executable.is_file():
+        raise RuntimeContractError("packaged Windows browser executable is unavailable")
+    return executable.resolve(strict=True)
+
+
+def camoufox_browser_selector(lock: dict[str, Any]) -> dict[str, str | Path]:
+    browser = lock.get("browser")
+    if not isinstance(browser, dict) or not isinstance(browser.get("version"), str):
+        raise RuntimeContractError("browser lock is invalid")
+    if os.name == "nt":
+        return {"executable_path": packaged_windows_browser(lock)}
+    if os.name == "posix":
+        return {"browser": browser["version"]}
+    raise RuntimeContractError("unsupported Camoufox runtime platform")
+
+
 def camoufox_kwargs(
     lock: dict[str, Any],
     root: Path,
     config: dict[str, Any],
 ) -> dict[str, Any]:
-    browser = lock.get("browser")
-    if not isinstance(browser, dict) or not isinstance(browser.get("version"), str):
-        raise RuntimeContractError("browser lock is invalid")
     user_data_dir = root / USER_DATA_NAME
     if user_data_dir.is_symlink():
         raise RuntimeContractError("browser user-data directory may not be a symlink")
     user_data_dir.mkdir(exist_ok=True)
     return {
-        "browser": browser["version"],
+        **camoufox_browser_selector(lock),
         "config": copy.deepcopy(config),
         "enable_cache": True,
         "env": browser_environment(),
@@ -607,12 +636,10 @@ def materialize_candidate_identity(root: Path) -> dict[str, str]:
     if firefox_writer_active(root):
         raise RuntimeContractError("candidate generation has an active/ambiguous Firefox writer")
 
-    browser = lock.get("browser")
-    if not isinstance(browser, dict) or not isinstance(browser.get("version"), str):
-        raise RuntimeContractError("browser lock is invalid")
+    browser_selector = camoufox_browser_selector(lock)
     with contextlib.redirect_stdout(sys.stderr):
         options = launch_options(
-            browser=browser["version"],
+            **browser_selector,
             enable_cache=True,
             env=browser_environment(),
             headless=resolve_headless_mode(),
