@@ -29,6 +29,22 @@ impl core::fmt::Display for ShippingCompositionError {
 
 impl std::error::Error for ShippingCompositionError {}
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ConfirmedSaveTrigger {
+    ContinueRuntime,
+    BeginConfirmedSave,
+}
+
+fn confirmed_save_trigger<E>(observation: Result<bool, E>) -> Result<ConfirmedSaveTrigger, E> {
+    observation.map(|controlled| {
+        if controlled {
+            ConfirmedSaveTrigger::BeginConfirmedSave
+        } else {
+            ConfirmedSaveTrigger::ContinueRuntime
+        }
+    })
+}
+
 pub fn run_claim(claim: &ClaimUri) -> Result<(), ShippingCompositionError> {
     #[cfg(windows)]
     {
@@ -43,7 +59,7 @@ pub fn run_claim(claim: &ClaimUri) -> Result<(), ShippingCompositionError> {
 
 #[cfg(windows)]
 mod windows {
-    use super::ShippingCompositionError;
+    use super::{ConfirmedSaveTrigger, ShippingCompositionError, confirmed_save_trigger};
     use crate::camouhost_process::{
         ManagedCamouhostConfig, ManagedCamouhostProcess, RuntimeBindingSlot, RuntimeDisplayMode,
     };
@@ -195,10 +211,12 @@ mod windows {
                 .active_session_id()
                 .cloned()
                 .ok_or(ShippingCompositionError::Operator)?;
-            let controlled_close = close_observer
-                .observe_controlled_close(&session_id)
-                .map_err(|_| ShippingCompositionError::Operator)?;
-            if controlled_close {
+            let save_trigger = confirmed_save_trigger(
+                close_observer
+                    .observe_controlled_close(&session_id)
+                    .map_err(|_| ShippingCompositionError::Operator),
+            )?;
+            if save_trigger == ConfirmedSaveTrigger::BeginConfirmedSave {
                 operator
                     .close(now()?)
                     .map_err(|_| ShippingCompositionError::Operator)?;
@@ -292,11 +310,30 @@ mod windows {
     }
 }
 
-#[cfg(all(test, not(windows)))]
+#[cfg(test)]
 mod tests {
-    use super::{ShippingCompositionError, run_claim};
+    use super::{
+        ConfirmedSaveTrigger, ShippingCompositionError, confirmed_save_trigger, run_claim,
+    };
     use bridge_domain::ClaimUri;
 
+    #[test]
+    fn confirmed_save_requires_positive_controlled_close_witness() {
+        assert_eq!(
+            confirmed_save_trigger::<ShippingCompositionError>(Ok(false)),
+            Ok(ConfirmedSaveTrigger::ContinueRuntime)
+        );
+        assert_eq!(
+            confirmed_save_trigger::<ShippingCompositionError>(Ok(true)),
+            Ok(ConfirmedSaveTrigger::BeginConfirmedSave)
+        );
+        assert_eq!(
+            confirmed_save_trigger(Err(ShippingCompositionError::Operator)),
+            Err(ShippingCompositionError::Operator)
+        );
+    }
+
+    #[cfg(not(windows))]
     #[test]
     fn non_windows_shipping_binary_has_no_fallback_runtime()
     -> Result<(), Box<dyn std::error::Error>> {
