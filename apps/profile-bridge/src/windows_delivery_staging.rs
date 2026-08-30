@@ -337,8 +337,8 @@ pub fn reopen_staged_delivery(
         return Err(DeliveryStagingError::UnsafeFilesystem);
     }
     let marker_bytes = fs::read(&marker_path).map_err(|_| DeliveryStagingError::Io)?;
-    let marker: StageMarker = serde_json::from_slice(&marker_bytes)
-        .map_err(|_| DeliveryStagingError::CorruptStage)?;
+    let marker: StageMarker =
+        serde_json::from_slice(&marker_bytes).map_err(|_| DeliveryStagingError::CorruptStage)?;
     let canonical_marker =
         serde_json::to_vec(&marker).map_err(|_| DeliveryStagingError::Serialization)?;
     if canonical_marker != marker_bytes
@@ -359,11 +359,7 @@ pub fn reopen_staged_delivery(
         &marker.runtime_bundle,
         &identity.runtime_bundle_release_id,
     )?;
-    verify_materialized_stage(
-        &final_path,
-        &marker_bytes,
-        [&bridge_plan, &runtime_plan],
-    )?;
+    verify_materialized_stage(&final_path, &marker_bytes, [&bridge_plan, &runtime_plan])?;
     Ok(StagedDelivery {
         identity: identity.clone(),
         path: final_path,
@@ -449,7 +445,8 @@ fn component_plan_from_marker(
         decoded_bytes = decoded_bytes
             .checked_add(file.size_bytes)
             .ok_or(DeliveryStagingError::CorruptStage)?;
-        if decoded_bytes > MAX_STAGE_BYTES || !casefolded.insert(file.relative_path.to_lowercase()) {
+        if decoded_bytes > MAX_STAGE_BYTES || !casefolded.insert(file.relative_path.to_lowercase())
+        {
             return Err(DeliveryStagingError::CorruptStage);
         }
         files.push(PlannedFile {
@@ -1267,8 +1264,7 @@ mod tests {
         )?;
         let marker_path = staged.path().join(MARKER_NAME);
         let mut marker: StageMarker = serde_json::from_slice(&fs::read(&marker_path)?)?;
-        marker.runtime_bundle.release_id =
-            format!("runtime-bundle-v2-sha256-{}", "9".repeat(64));
+        marker.runtime_bundle.release_id = format!("runtime-bundle-v2-sha256-{}", "9".repeat(64));
         fs::write(&marker_path, serde_json::to_vec(&marker)?)?;
         assert_eq!(
             reopen_staged_delivery(&root, &candidate.identity()),
