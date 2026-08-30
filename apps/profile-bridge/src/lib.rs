@@ -29,6 +29,7 @@ pub mod shipping_network;
 pub mod shipping_preflight;
 pub mod windows_delivery;
 pub mod windows_delivery_archive;
+pub mod windows_delivery_download;
 #[cfg(windows)]
 pub mod windows_delivery_runtime;
 #[cfg(windows)]
