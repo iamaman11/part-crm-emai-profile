@@ -15,6 +15,8 @@ pub(super) struct ReleaseFinalizeRequestV1 {
     kind: String,
     pub(super) source: SourceObservationV1,
     pub(super) components: BTreeMap<String, ComponentObservationV1>,
+    #[serde(default)]
+    pub(super) evidence_artifacts: BTreeMap<String, EvidenceArtifactObservationV1>,
     pub(super) protocols: ProtocolObservationV1,
 }
 
@@ -37,6 +39,15 @@ pub(super) struct ComponentObservationV1 {
     pub(super) artifact_sha256: String,
     pub(super) artifact_size_bytes: u64,
     pub(super) component_manifest_sha256: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct EvidenceArtifactObservationV1 {
+    pub(super) path: String,
+    pub(super) sha256: String,
+    pub(super) size_bytes: u64,
+    pub(super) kind: String,
 }
 
 #[derive(Debug, Deserialize)]
