@@ -144,6 +144,12 @@ cross-device запуск на неодинаковых физических hos
 Целевая typed identity должна описывать policy-relevant значения, а не только
 непрозрачный общий hash.
 
+S0 Windows shipping/recovery может реализовать недостающую composition/runtime
+closure, необходимую для clean-host/cross-device запуска, только через этот
+существующий semantic owner. Windows delivery state, Release Set или updater не
+получают права определять fingerprint значения, выбирать новое browser identity
+или создавать parallel compatibility policy.
+
 Для generation canonical identity material должен однозначно определять как
 минимум:
 
