@@ -4,7 +4,7 @@ use crate::windows_delivery::{DeliveryState, DeliveryStateError};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::fmt;
-use std::fs::{self, File, OpenOptions};
+use std::fs::{self, OpenOptions};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
@@ -244,7 +244,9 @@ fn load_chain(root: &Path) -> Result<LoadedState, DeliveryStateStoreError> {
             return Err(DeliveryStateStoreError::AmbiguousState);
         }
         fs::rename(pending_path, &final_path).map_err(|_| DeliveryStateStoreError::Io)?;
-        File::open(&final_path)
+        OpenOptions::new()
+            .write(true)
+            .open(&final_path)
             .and_then(|file| file.sync_all())
             .map_err(|_| DeliveryStateStoreError::Io)?;
         loaded = LoadedState {
@@ -323,7 +325,9 @@ fn write_snapshot(
         .map_err(|_| DeliveryStateStoreError::Io)?;
     drop(file);
     fs::rename(&pending_path, &final_path).map_err(|_| DeliveryStateStoreError::Io)?;
-    File::open(&final_path)
+    OpenOptions::new()
+        .write(true)
+        .open(&final_path)
         .and_then(|file| file.sync_all())
         .map_err(|_| DeliveryStateStoreError::Io)?;
     Ok(digest)
