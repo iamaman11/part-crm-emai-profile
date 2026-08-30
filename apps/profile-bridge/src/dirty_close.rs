@@ -325,7 +325,10 @@ impl fmt::Display for CommittedDirtyCloseError {
             Self::InvalidRetainedOwnership => {
                 formatter.write_str("committed dirty-close ownership is invalid")
             }
-            Self::Local(error) => write!(formatter, "committed dirty-close local transition failed: {error}"),
+            Self::Local(error) => write!(
+                formatter,
+                "committed dirty-close local transition failed: {error}"
+            ),
         }
     }
 }
