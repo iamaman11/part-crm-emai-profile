@@ -7,6 +7,8 @@ use serde_json::{Value, json};
 use std::path::PathBuf;
 
 const GIT: &str = "1111111111111111111111111111111111111111";
+const WINDOWS_SBOM_PATH: &str = "windows/windows-sbom-v1.json";
+const WINDOWS_PROVENANCE_PATH: &str = "windows/windows-provenance-v1.json";
 
 fn root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
@@ -31,6 +33,15 @@ fn component(
         "artifact_sha256": digest(digest_character),
         "artifact_size_bytes": size,
         "component_manifest_sha256": digest('e')
+    })
+}
+
+fn evidence(path: &str, digest_character: char, size: u64, kind: &str) -> Value {
+    json!({
+        "path": path,
+        "sha256": digest(digest_character),
+        "size_bytes": size,
+        "kind": kind
     })
 }
 
@@ -81,6 +92,20 @@ fn request_value() -> Value {
                 14
             )
         },
+        "evidence_artifacts": {
+            "windows_sbom": evidence(
+                WINDOWS_SBOM_PATH,
+                '5',
+                15,
+                "windows-delivery-sbom"
+            ),
+            "windows_provenance": evidence(
+                WINDOWS_PROVENANCE_PATH,
+                '6',
+                16,
+                "windows-delivery-provenance"
+            )
+        },
         "protocols": {
             "profile_bridge_protocol_version": 1,
             "resolver_protocol": "mailbox-secret-resolver-v1"
@@ -111,7 +136,7 @@ fn finalizes_through_pure_v3_core_and_v3_renderer() -> Result<(), String> {
     let artifacts = value["artifact_inventory"]
         .as_array()
         .ok_or_else(|| "artifact inventory missing".to_owned())?;
-    assert_eq!(artifacts.len(), 5);
+    assert_eq!(artifacts.len(), 7);
     let expected_policy = render_bytes().map_err(|error| error.to_string())?;
     let expected_policy_sha = sha256_hex(&expected_policy);
     let expected_policy_size =
@@ -132,6 +157,21 @@ fn finalizes_through_pure_v3_core_and_v3_renderer() -> Result<(), String> {
         policy_artifact["size_bytes"].as_u64(),
         Some(expected_policy_size)
     );
+    let sbom = artifacts
+        .iter()
+        .find(|artifact| artifact["path"].as_str() == Some(WINDOWS_SBOM_PATH))
+        .ok_or_else(|| "Release Set omitted Windows SBOM".to_owned())?;
+    assert_eq!(sbom["sha256"].as_str(), Some(digest('5').as_str()));
+    assert_eq!(sbom["kind"].as_str(), Some("windows-delivery-sbom"));
+    let provenance = artifacts
+        .iter()
+        .find(|artifact| artifact["path"].as_str() == Some(WINDOWS_PROVENANCE_PATH))
+        .ok_or_else(|| "Release Set omitted Windows provenance".to_owned())?;
+    assert_eq!(provenance["sha256"].as_str(), Some(digest('6').as_str()));
+    assert_eq!(
+        provenance["kind"].as_str(),
+        Some("windows-delivery-provenance")
+    );
     assert!(value.get("display_version").is_none());
     Ok(())
 }
@@ -150,6 +190,30 @@ fn strict_transport_rejects_duplicates_unknown_fields_and_wrong_identity() -> Re
     wrong_kind["kind"] = Value::String("OTHER".to_owned());
     let wrong_kind = serde_json::to_string(&wrong_kind).map_err(|error| error.to_string())?;
     assert!(request::parse(&wrong_kind).is_err());
+    Ok(())
+}
+
+#[test]
+fn profile_bridge_release_requires_exact_windows_evidence_pair() -> Result<(), String> {
+    let mut missing = request_value();
+    missing["evidence_artifacts"]
+        .as_object_mut()
+        .ok_or_else(|| "evidence map missing".to_owned())?
+        .remove("windows_provenance");
+    let input = serde_json::to_string(&missing).map_err(|error| error.to_string())?;
+    let error = finalize_json(&root(), &input)
+        .err()
+        .ok_or_else(|| "missing Windows provenance unexpectedly finalized".to_owned())?;
+    assert!(error.to_string().contains("exactly Windows SBOM and provenance"));
+
+    let mut wrong_path = request_value();
+    wrong_path["evidence_artifacts"]["windows_sbom"]["path"] =
+        Value::String("other.json".to_owned());
+    let input = serde_json::to_string(&wrong_path).map_err(|error| error.to_string())?;
+    let error = finalize_json(&root(), &input)
+        .err()
+        .ok_or_else(|| "wrong Windows SBOM path unexpectedly finalized".to_owned())?;
+    assert!(error.to_string().contains("identity mismatch"));
     Ok(())
 }
 
@@ -196,7 +260,12 @@ fn transport_is_typed_before_composition() -> Result<(), String> {
     let request = request::parse(&request_json()?).map_err(|error| error.to_string())?;
     assert_eq!(request.schema_version, 1);
     assert_eq!(request.components.len(), 5);
+    assert_eq!(request.evidence_artifacts.len(), 2);
     assert_eq!(request.components["frontend"].component_id, "frontend");
     assert_eq!(request.components["runtime_bundle"].source_commit_sha, GIT);
+    assert_eq!(
+        request.evidence_artifacts["windows_sbom"].path,
+        WINDOWS_SBOM_PATH
+    );
     Ok(())
 }
