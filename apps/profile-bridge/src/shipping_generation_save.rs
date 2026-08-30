@@ -2,7 +2,9 @@ use crate::dirty_generation::{
     DirtyGenerationError, GenerationSealingMaterialPort, PreparedDirtyGeneration,
     prepare_dirty_generation_candidate,
 };
-use crate::local_profile::{GenerationWorkspace, LocalGenerationRecord, MaterializationRoot};
+use crate::local_profile::{
+    GenerationWorkspace, LocalGenerationRecord, LocalProfileError, MaterializationRoot,
+};
 use profile_platform_primitives::{GenerationId, ProfileId, TenantId};
 use session_domain::ProfileLease;
 use sha2::{Digest, Sha256};
@@ -227,6 +229,20 @@ where
     if base_record.generation_id() == &candidate_generation_id {
         return Err(ShippingGenerationSaveError::InvalidRetainedAuthority);
     }
+
+    match root.reject_generation_for_rematerialization(
+        tenant_id,
+        profile_id,
+        &candidate_generation_id,
+    ) {
+        Ok(()) | Err(LocalProfileError::Io(std::io::ErrorKind::NotFound)) => {}
+        Err(error) => {
+            return Err(ShippingGenerationSaveError::Prepare(
+                DirtyGenerationError::Local(error),
+            ));
+        }
+    }
+
     prepare_dirty_generation_candidate(
         base_record,
         source_workspace,
@@ -358,13 +374,16 @@ mod tests {
     use super::{
         GenerationSuccessorCommitOutcome, GenerationSuccessorControlPort,
         GenerationUploadAuthorization, ShippingGenerationSaveError, SignedGenerationObjectPutPort,
-        SignedGenerationUploadCapability, publish_verify_and_commit_successor,
+        SignedGenerationUploadCapability, prepare_retained_generation_successor,
+        publish_verify_and_commit_successor,
     };
     use crate::dirty_generation::{
-        GenerationSealingMaterial, GenerationSealingMaterialPort,
+        DirtyGenerationError, GenerationSealingMaterial, GenerationSealingMaterialPort,
         prepare_dirty_generation_candidate,
     };
-    use crate::local_profile::{LocalGenerationRecord, MaterializationRoot};
+    use crate::local_profile::{
+        BridgeWorkspaceLock, LocalGenerationRecord, LocalProfileError, MaterializationRoot,
+    };
     use encrypted_generation_domain::{GenerationDek, KeyId, NoncePrefix};
     use profile_platform_primitives::{
         DeviceId, FencingToken, GenerationId, ProfileId, SessionId, TenantId, UnixMillis,
@@ -540,6 +559,14 @@ mod tests {
                 control,
             )?)
         }
+
+        fn source_workspace(
+            &self,
+        ) -> Result<crate::local_profile::GenerationWorkspace, Box<dyn std::error::Error>> {
+            Ok(self
+                .root
+                .open_generation(&self.tenant, &self.profile, &self.base)?)
+        }
     }
 
     impl Drop for Fixture {
@@ -561,6 +588,100 @@ mod tests {
         let debug = format!("{capability:?}");
         assert!(!debug.contains("secret=1"));
         assert!(!debug.contains("value"));
+        Ok(())
+    }
+
+    #[test]
+    fn retained_retry_rebuilds_only_the_exact_deterministic_candidate()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let fixture = Fixture::new("retry")?;
+        let events = Rc::new(RefCell::new(Vec::new()));
+        let mut control = Control {
+            events,
+            verified: false,
+            commit: GenerationSuccessorCommitOutcome::Activated,
+        };
+        let source = fixture.source_workspace()?;
+        let first = prepare_retained_generation_successor(
+            &fixture.record,
+            &source,
+            &fixture.root,
+            &fixture.tenant,
+            &fixture.profile,
+            &fixture.lease,
+            &mut control,
+        )?;
+        let candidate_generation_id = first.sealed().metadata().generation_id().clone();
+        std::fs::write(
+            first.candidate_workspace().path().join("retry-residue"),
+            b"stale-precommit-candidate",
+        )?;
+
+        let second = prepare_retained_generation_successor(
+            &fixture.record,
+            &source,
+            &fixture.root,
+            &fixture.tenant,
+            &fixture.profile,
+            &fixture.lease,
+            &mut control,
+        )?;
+
+        assert_eq!(
+            second.sealed().metadata().generation_id(),
+            &candidate_generation_id
+        );
+        assert!(!second.candidate_workspace().path().join("retry-residue").exists());
+        assert_eq!(
+            second.candidate_workspace().inventory()?,
+            *second.candidate_inventory()
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn retained_retry_never_replaces_a_writer_owned_candidate()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let fixture = Fixture::new("retry-writer")?;
+        let events = Rc::new(RefCell::new(Vec::new()));
+        let mut control = Control {
+            events,
+            verified: false,
+            commit: GenerationSuccessorCommitOutcome::Activated,
+        };
+        let source = fixture.source_workspace()?;
+        let first = prepare_retained_generation_successor(
+            &fixture.record,
+            &source,
+            &fixture.root,
+            &fixture.tenant,
+            &fixture.profile,
+            &fixture.lease,
+            &mut control,
+        )?;
+        let lock = BridgeWorkspaceLock::acquire(
+            first.candidate_workspace(),
+            fixture.lease.device_id(),
+            fixture.lease.epoch(),
+        )?;
+
+        let retry = prepare_retained_generation_successor(
+            &fixture.record,
+            &source,
+            &fixture.root,
+            &fixture.tenant,
+            &fixture.profile,
+            &fixture.lease,
+            &mut control,
+        );
+        assert!(matches!(
+            retry,
+            Err(ShippingGenerationSaveError::Prepare(
+                DirtyGenerationError::Local(LocalProfileError::LockBusy)
+            ))
+        ));
+
+        lock.release()?;
         Ok(())
     }
 
