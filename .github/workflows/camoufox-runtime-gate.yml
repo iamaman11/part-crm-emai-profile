@@ -108,13 +108,24 @@ jobs:
         run: |
           python scripts/camouhost-windows-dependency-lock.py self-test
           $report = Join-Path $env:RUNNER_TEMP 'camouhost-windows-pip-report.json'
+          $candidate = Join-Path $env:RUNNER_TEMP 'camouhost-windows-dependency-lock.json'
           python -m pip install --disable-pip-version-check --dry-run --ignore-installed --only-binary=:all: --report "$report" `
             "camoufox==0.5.5" `
             "browserforge==1.2.4" `
             "playwright==1.60.0"
           python scripts/camouhost-windows-dependency-lock.py project `
             --runtime-lock runtime/camouhost/runtime-lock.json `
-            --pip-report "$report"
+            --pip-report "$report" `
+            --output "$candidate"
+          python -c "import json,os,pathlib; p=pathlib.Path(os.environ['RUNNER_TEMP'])/'camouhost-windows-dependency-lock.json'; v=json.loads(p.read_text(encoding='utf-8')); assert v['kind']=='CAMOUHOST_WINDOWS_PYTHON_DEPENDENCY_LOCK_CANDIDATE'; assert v['python_version']=='3.12.10'; assert v['architecture']=='x86_64'; assert v['packages']"
+
+      - name: Upload dependency lock candidate evidence
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: s0-windows-dependency-lock-${{ github.event.pull_request.head.sha || github.sha }}
+          path: ${{ runner.temp }}/camouhost-windows-dependency-lock.json
+          if-no-files-found: error
+          retention-days: 7
 
       - name: Compile real Camouhost source without installing browser runtime
         run: python -m py_compile runtime/camouhost/real.py scripts/test-ar10-firefox-writer-locks.py scripts/check-ar10-runtime-cutover.py scripts/camouhost-runtime-build-windows.py scripts/camouhost-windows-dependency-lock.py
