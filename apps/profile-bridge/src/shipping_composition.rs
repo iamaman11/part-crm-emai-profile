@@ -91,9 +91,9 @@ mod windows {
     const CONTROL_PLANE_ORIGIN_ENV: &str = "PROFILE_BRIDGE_CONTROL_PLANE_ORIGIN";
     const MATERIALIZATION_ROOT_ENV: &str = "PROFILE_BRIDGE_MATERIALIZATION_ROOT";
     const RUNTIME_ROOT_ENV: &str = "PROFILE_BRIDGE_RUNTIME_ROOT";
-    const PYTHON_EXECUTABLE_ENV: &str = "PROFILE_BRIDGE_PYTHON_EXECUTABLE";
     const NETWORK_POLICY_PATH_ENV: &str = "PROFILE_BRIDGE_NETWORK_POLICY_PATH";
     const PROXY_CONFIG_PATH_ENV: &str = "PROFILE_BRIDGE_PROXY_CONFIG_PATH";
+    const PACKAGED_PYTHON_EXECUTABLE: &str = "python/python.exe";
     const CONTROLLED_CLOSE_POLL_MS: u64 = 250;
 
     struct ShippingConfig {
@@ -102,7 +102,6 @@ mod windows {
         control_plane_origin: String,
         materialization_root: PathBuf,
         runtime_root: PathBuf,
-        python_executable: PathBuf,
         network_policy_path: PathBuf,
         proxy_config_path: Option<PathBuf>,
     }
@@ -115,7 +114,6 @@ mod windows {
             let control_plane_origin = required_env(CONTROL_PLANE_ORIGIN_ENV)?;
             let materialization_root = absolute_path(required_env(MATERIALIZATION_ROOT_ENV)?)?;
             let runtime_root = absolute_path(required_env(RUNTIME_ROOT_ENV)?)?;
-            let python_executable = absolute_path(required_env(PYTHON_EXECUTABLE_ENV)?)?;
             let network_policy_path = absolute_path(required_env(NETWORK_POLICY_PATH_ENV)?)?;
             let proxy_config_path = optional_env(PROXY_CONFIG_PATH_ENV)?
                 .map(absolute_path)
@@ -126,7 +124,6 @@ mod windows {
                 control_plane_origin,
                 materialization_root,
                 runtime_root,
-                python_executable,
                 network_policy_path,
                 proxy_config_path,
             })
@@ -169,8 +166,9 @@ mod windows {
             network_evidence,
             runtime_binding.clone(),
         );
+        let python_executable = config.runtime_root.join(PACKAGED_PYTHON_EXECUTABLE);
         let camouhost_config = ManagedCamouhostConfig::new(
-            config.python_executable,
+            python_executable,
             config.runtime_root,
             RuntimeDisplayMode::Headful,
             None,
