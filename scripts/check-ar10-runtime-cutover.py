@@ -664,6 +664,8 @@ def self_test() -> None:
 def packaged_windows_browser(lock):
     browser = lock["windows_distribution"]["browser"]
     executable_path = browser.get("executable_path")
+    if executable_path != "browser/camoufox.exe":
+        raise ValueError
     runtime_entrypoint = Path(__file__)
     if runtime_entrypoint.is_symlink() or not runtime_entrypoint.is_file():
         raise ValueError
