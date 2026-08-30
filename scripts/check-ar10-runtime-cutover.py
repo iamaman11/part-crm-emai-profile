@@ -398,6 +398,42 @@ def validate_runtime_lock(root: Path) -> None:
         fail("runtime lock must use canonical JSON encoding")
 
 
+def validate_browser_selector_policy(source: str, tree: ast.Module) -> None:
+    packaged = function_node(tree, "packaged_windows_browser")
+    selector = function_node(tree, "camoufox_browser_selector")
+    kwargs = function_node(tree, "camoufox_kwargs")
+    materializer = function_node(tree, "materialize_candidate_identity")
+
+    if not {"is_symlink", "is_file", "resolve"}.issubset(called_names(packaged)):
+        fail("Windows packaged Camoufox executable must be a regular resolved file")
+    if "packaged_windows_browser" not in called_names(selector):
+        fail("Windows runtime must select the packaged Camoufox executable")
+    if "camoufox_browser_selector" not in called_names(kwargs):
+        fail("normal Camoufox launch must use the governed browser selector")
+    if "camoufox_browser_selector" not in called_names(materializer):
+        fail("candidate identity materialization must use the governed browser selector")
+
+    packaged_source = ast.get_source_segment(source, packaged) or ""
+    for marker in (
+        'browser.get("executable_path")',
+        '"browser/camoufox.exe"',
+        "Path(__file__)",
+        "runtime_entrypoint.resolve(strict=True).parent.parent",
+    ):
+        if marker not in packaged_source:
+            fail(f"Windows packaged Camoufox resolver lost required invariant: {marker}")
+
+    selector_source = ast.get_source_segment(source, selector) or ""
+    for marker in (
+        'os.name == "nt"',
+        'return {"executable_path": packaged_windows_browser(lock)}',
+        'os.name == "posix"',
+        'return {"browser": browser["version"]}',
+    ):
+        if marker not in selector_source:
+            fail(f"Camoufox browser selector lost required platform invariant: {marker}")
+
+
 def validate_real_runtime(root: Path) -> None:
     text = read_regular(root, REAL_RUNTIME)
     try:
@@ -412,7 +448,6 @@ def validate_real_runtime(root: Path) -> None:
         'EXPECTED_CONFIG_SHA256_ENV',
         'EXPECTED_PROBE_SHA256_ENV',
         'persistent_context": True',
-        '"browser": browser["version"]',
         '"i_know_what_im_doing": True',
         "profile-stable fingerprint drift detected",
         "fingerprint config digest mismatch",
@@ -424,6 +459,7 @@ def validate_real_runtime(root: Path) -> None:
         if marker not in text:
             fail(f"real Camouhost lost required AR-10 invariant: {marker}")
 
+    validate_browser_selector_policy(text, tree)
     ipc = function_node(tree, "run_ipc")
     materializer = function_node(tree, "materialize_candidate_identity")
     launch = function_node(tree, "launch_verified_context")
@@ -564,6 +600,16 @@ def expect_runtime_lock_failure(value: object, marker: str) -> None:
     fail("runtime-lock negative fixture unexpectedly passed")
 
 
+def expect_browser_selector_failure(source: str, marker: str) -> None:
+    try:
+        validate_browser_selector_policy(source, ast.parse(source))
+    except GateError as error:
+        if marker not in str(error):
+            fail(f"browser-selector negative fixture failed for the wrong reason: {error}")
+        return
+    fail("browser-selector negative fixture unexpectedly passed")
+
+
 def package_fixture(name: str, version: str, digit: str) -> dict[str, str]:
     filename = f"{name}-{version}-py3-none-any.whl"
     return {
@@ -613,6 +659,31 @@ def self_test() -> None:
         fail("normal-launch regeneration negative self-test failed")
     if re.fullmatch(r"[0-9a-f]{64}", "0" * 64) is None:
         fail("digest self-test failed")
+
+    predecessor_selector = '''
+def packaged_windows_browser(lock):
+    browser = lock["windows_distribution"]["browser"]
+    executable_path = browser.get("executable_path")
+    runtime_entrypoint = Path(__file__)
+    if runtime_entrypoint.is_symlink() or not runtime_entrypoint.is_file():
+        raise ValueError
+    runtime_root = runtime_entrypoint.resolve(strict=True).parent.parent
+    executable = runtime_root.joinpath(*executable_path.split("/"))
+    if executable.is_symlink() or not executable.is_file():
+        raise ValueError
+    return executable.resolve(strict=True)
+
+def camoufox_browser_selector(lock):
+    browser = lock["browser"]
+    return {"browser": browser["version"]}
+
+def camoufox_kwargs(lock, root, config):
+    return camoufox_browser_selector(lock)
+
+def materialize_candidate_identity(root):
+    return camoufox_browser_selector({})
+'''
+    expect_browser_selector_failure(predecessor_selector, "packaged Camoufox executable")
 
     expect_runtime_source_failure(
         SYNTHETIC_RUNTIME,
