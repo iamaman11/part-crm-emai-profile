@@ -80,7 +80,8 @@ pub struct WindowsCmsSignatureVerifier {
 impl WindowsCmsSignatureVerifier {
     pub fn from_system(scratch_root: impl Into<PathBuf>) -> Result<Self, WindowsCmsVerifierError> {
         let scratch_root = scratch_root.into();
-        validate_directory(&scratch_root).map_err(|_| WindowsCmsVerifierError::InvalidScratchRoot)?;
+        validate_directory(&scratch_root)
+            .map_err(|_| WindowsCmsVerifierError::InvalidScratchRoot)?;
         let powershell_executable = system_powershell_executable()?;
         Ok(Self {
             scratch_root,
@@ -163,11 +164,7 @@ impl DetachedSignatureVerifier for WindowsCmsSignatureVerifier {
         cms_der: &[u8],
         expected_certificate_sha256: &str,
     ) -> Result<bool, Self::Error> {
-        self.verify_detached_cms(
-            manifest_bytes,
-            cms_der,
-            expected_certificate_sha256,
-        )
+        self.verify_detached_cms(manifest_bytes, cms_der, expected_certificate_sha256)
     }
 }
 
@@ -179,10 +176,7 @@ impl VerificationScratch {
     fn create(root: &Path) -> Result<Self, WindowsCmsVerifierError> {
         for _ in 0..SCRATCH_ATTEMPTS {
             let sequence = SCRATCH_SEQUENCE.fetch_add(1, Ordering::Relaxed);
-            let directory = root.join(format!(
-                ".cms-verify-{}-{sequence}",
-                std::process::id()
-            ));
+            let directory = root.join(format!(".cms-verify-{}-{sequence}", std::process::id()));
             match fs::create_dir(&directory) {
                 Ok(()) => {
                     validate_directory(&directory)
@@ -260,14 +254,14 @@ fn write_new_synced(path: &Path, bytes: &[u8]) -> Result<(), WindowsCmsVerifierE
 }
 
 fn system_powershell_executable() -> Result<PathBuf, WindowsCmsVerifierError> {
-    let system_root = env::var_os("SystemRoot").ok_or(WindowsCmsVerifierError::PlatformUnavailable)?;
+    let system_root =
+        env::var_os("SystemRoot").ok_or(WindowsCmsVerifierError::PlatformUnavailable)?;
     let executable = PathBuf::from(system_root)
         .join("System32")
         .join("WindowsPowerShell")
         .join("v1.0")
         .join("powershell.exe");
-    validate_regular_file(&executable)
-        .map_err(|_| WindowsCmsVerifierError::PlatformUnavailable)?;
+    validate_regular_file(&executable).map_err(|_| WindowsCmsVerifierError::PlatformUnavailable)?;
     Ok(executable)
 }
 
@@ -389,10 +383,8 @@ mod tests {
             WindowsCmsSignatureVerifier::from_system(PathBuf::from("relative")),
             Err(WindowsCmsVerifierError::InvalidScratchRoot)
         );
-        let missing = std::env::temp_dir().join(format!(
-            "profile-bridge-cms-missing-{}",
-            std::process::id()
-        ));
+        let missing =
+            std::env::temp_dir().join(format!("profile-bridge-cms-missing-{}", std::process::id()));
         let _ = fs::remove_dir_all(&missing);
         assert_eq!(
             WindowsCmsSignatureVerifier::from_system(missing),
