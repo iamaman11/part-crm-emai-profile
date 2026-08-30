@@ -24,7 +24,9 @@ use std::time::{Duration, Instant};
 const CONFIG_NAME: &str = "camoufox-config.json";
 const REAL_ENTRYPOINT: &str = "camouhost/real.py";
 const RUNTIME_LOCK_PATH: &str = "camouhost/runtime-lock.json";
+#[cfg(windows)]
 const WINDOWS_BROWSER_EXECUTABLE: &str = "browser/camoufox.exe";
+#[cfg(windows)]
 const WINDOWS_PYTHON_EXECUTABLE: &str = "python/python.exe";
 const MAX_CONFIG_BYTES: u64 = 1024 * 1024;
 const MAX_IPC_RESPONSE_BYTES: usize = 1024;
