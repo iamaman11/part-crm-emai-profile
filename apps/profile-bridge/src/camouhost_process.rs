@@ -765,7 +765,7 @@ mod tests {
         let calculated = digest('a')?;
         let entrypoint = BundleRelativePath::parse("camouhost/real.py")?;
         let lock_path = BundleRelativePath::parse("camouhost/runtime-lock.json")?;
-        let mut entries = vec![
+        let entries = vec![
             InventoryEntry::new(entrypoint.clone(), 10, digest('e')?),
             InventoryEntry::new(
                 lock_path,
@@ -774,18 +774,20 @@ mod tests {
             ),
         ];
         #[cfg(windows)]
-        {
+        let entries = {
+            let mut entries = entries;
             entries.push(InventoryEntry::new(
-                BundleRelativePath::parse(WINDOWS_BROWSER_EXECUTABLE)?,
+                BundleRelativePath::parse(super::WINDOWS_BROWSER_EXECUTABLE)?,
                 10,
                 digest('f')?,
             ));
             entries.push(InventoryEntry::new(
-                BundleRelativePath::parse(WINDOWS_PYTHON_EXECUTABLE)?,
+                BundleRelativePath::parse(super::WINDOWS_PYTHON_EXECUTABLE)?,
                 10,
                 digest('9')?,
             ));
-        }
+            entries
+        };
         let manifest = RuntimeManifest::new(
             "2.0.0",
             "3.12",
