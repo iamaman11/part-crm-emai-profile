@@ -10,6 +10,7 @@ from pathlib import Path
 
 PRODUCTION_MAIN = Path("apps/profile-bridge/src/main.rs")
 PRODUCTION_COMPOSITION = Path("apps/profile-bridge/src/shipping_composition.rs")
+ACTIVE_DELIVERY_RUNTIME = Path("apps/profile-bridge/src/windows_delivery_runtime.rs")
 MANIFEST = Path("apps/profile-bridge/Cargo.toml")
 AUX_BIN_ROOT = Path("apps/profile-bridge/src/bin")
 ALLOWED_AUX_BINS = {"profile-bridge-synthetic.rs"}
@@ -32,7 +33,9 @@ REQUIRED_COMPOSITION_MARKERS = (
     "WindowsSignedGenerationObjectPut::from_system(",
     "ControlPlaneEnrollment::new(",
     "ControlPlaneCoordinator::new(",
-    "FilesystemRuntimeBundleSelection::open(",
+    "ActiveWindowsDeliveryRuntime::resolve_current()",
+    ".runtime_root().to_path_buf()",
+    ".into_bundle_selection()",
     "ShippingBrowserLaunchPreflight::new(",
     "ManagedCamouhostProcess::pair(",
     ".close_observer()",
@@ -46,6 +49,23 @@ REQUIRED_COMPOSITION_MARKERS = (
     "RuntimeDisplayMode::Headful",
     "ShippingCompositionError::CommittedRecoveryRequired",
     "Err(ShippingCompositionError::UnsupportedPlatform)",
+)
+
+REQUIRED_ACTIVE_DELIVERY_MARKERS = (
+    "std::env::current_exe()",
+    "DeliveryStateStore::open(",
+    ".state()",
+    ".active()",
+    "reopen_staged_delivery(",
+    "fs::canonicalize(staged.path())",
+    "fs::canonicalize(&layout.release_root)",
+    "staged.profile_bridge_root().join(PROFILE_BRIDGE_EXECUTABLE)",
+    "expected_executable != current_executable",
+    "FilesystemRuntimeBundleSelection::open(runtime_root)?",
+    "verify_embedded_release_id(",
+    "active.runtime_bundle_release_id",
+    'const RUNTIME_MANIFEST: &str = "runtime-manifest.json";',
+    'const RUNTIME_RELEASE_PREFIX: &str = "runtime-bundle-v2-sha256-";',
 )
 
 FORBIDDEN_CLAIM_ONLY_SUCCESS_MARKERS = (
@@ -72,6 +92,19 @@ FORBIDDEN_COMPOSITION_MARKERS = (
     "profile-bridge-synthetic",
     "FakeCamouhost",
     "FakeProcessControl",
+    "PROFILE_BRIDGE_RUNTIME_ROOT",
+    "PROFILE_BRIDGE_RUNTIME_RELEASE_ID",
+    "FilesystemRuntimeBundleSelection::open(",
+    "std::process::Command",
+    "Command::new(",
+    ".spawn(",
+    "std::net::",
+    "reqwest::",
+)
+
+FORBIDDEN_ACTIVE_DELIVERY_MARKERS = (
+    "PROFILE_BRIDGE_RUNTIME_ROOT",
+    "PROFILE_BRIDGE_RUNTIME_RELEASE_ID",
     "std::process::Command",
     "Command::new(",
     ".spawn(",
@@ -128,6 +161,7 @@ def validate_binary_inventory(manifest: dict) -> None:
 def validate(root: Path) -> None:
     main_path = root / PRODUCTION_MAIN
     composition_path = root / PRODUCTION_COMPOSITION
+    active_delivery_path = root / ACTIVE_DELIVERY_RUNTIME
     manifest_path = root / MANIFEST
     if not main_path.is_file():
         fail(f"missing production entrypoint: {PRODUCTION_MAIN}")
@@ -137,6 +171,10 @@ def validate(root: Path) -> None:
         fail(f"missing production composition: {PRODUCTION_COMPOSITION}")
     if composition_path.is_symlink():
         fail(f"production composition must not be a symlink: {PRODUCTION_COMPOSITION}")
+    if not active_delivery_path.is_file():
+        fail(f"missing active delivery runtime owner: {ACTIVE_DELIVERY_RUNTIME}")
+    if active_delivery_path.is_symlink():
+        fail(f"active delivery runtime owner must not be a symlink: {ACTIVE_DELIVERY_RUNTIME}")
     if not manifest_path.is_file():
         fail(f"missing manifest: {MANIFEST}")
 
@@ -158,6 +196,14 @@ def validate(root: Path) -> None:
     for marker in FORBIDDEN_COMPOSITION_MARKERS:
         if marker in composition:
             fail(f"shipping composition contains forbidden alternate/effect marker: {marker}")
+
+    active_delivery = active_delivery_path.read_text(encoding="utf-8").replace("\r\n", "\n")
+    for marker in REQUIRED_ACTIVE_DELIVERY_MARKERS:
+        if marker not in active_delivery:
+            fail(f"active delivery runtime marker missing: {marker}")
+    for marker in FORBIDDEN_ACTIVE_DELIVERY_MARKERS:
+        if marker in active_delivery:
+            fail(f"active delivery runtime contains forbidden alternate/effect marker: {marker}")
 
     close_observe = composition.find(".observe_controlled_close(&session_id)")
     mutating_close = composition.find(".close(now()?)")
@@ -208,7 +254,9 @@ def write_fixture(root: Path) -> None:
         "// WindowsSignedGenerationObjectPut::from_system(\n"
         "// ControlPlaneEnrollment::new(\n"
         "// ControlPlaneCoordinator::new(\n"
-        "// FilesystemRuntimeBundleSelection::open(\n"
+        "// ActiveWindowsDeliveryRuntime::resolve_current()\n"
+        "// .runtime_root().to_path_buf()\n"
+        "// .into_bundle_selection()\n"
         "// ShippingBrowserLaunchPreflight::new(\n"
         "// ManagedCamouhostProcess::pair(\n"
         "// .close_observer()\n"
@@ -222,6 +270,24 @@ def write_fixture(root: Path) -> None:
         "// RuntimeDisplayMode::Headful\n"
         "// ShippingCompositionError::CommittedRecoveryRequired\n"
         "// Err(ShippingCompositionError::UnsupportedPlatform)\n",
+        encoding="utf-8",
+    )
+    active_delivery = root / ACTIVE_DELIVERY_RUNTIME
+    active_delivery.write_text(
+        "// std::env::current_exe()\n"
+        "// DeliveryStateStore::open(\n"
+        "// .state()\n"
+        "// .active()\n"
+        "// reopen_staged_delivery(\n"
+        "// fs::canonicalize(staged.path())\n"
+        "// fs::canonicalize(&layout.release_root)\n"
+        "// staged.profile_bridge_root().join(PROFILE_BRIDGE_EXECUTABLE)\n"
+        "// expected_executable != current_executable\n"
+        "// FilesystemRuntimeBundleSelection::open(runtime_root)?\n"
+        "// verify_embedded_release_id(\n"
+        "// active.runtime_bundle_release_id\n"
+        '// const RUNTIME_MANIFEST: &str = "runtime-manifest.json";\n'
+        '// const RUNTIME_RELEASE_PREFIX: &str = "runtime-bundle-v2-sha256-";\n',
         encoding="utf-8",
     )
     manifest = root / MANIFEST
@@ -272,6 +338,8 @@ def self_test() -> None:
         safe_main = main.read_text(encoding="utf-8")
         composition = root / PRODUCTION_COMPOSITION
         safe_composition = composition.read_text(encoding="utf-8")
+        active_delivery = root / ACTIVE_DELIVERY_RUNTIME
+        safe_active_delivery = active_delivery.read_text(encoding="utf-8")
 
         main.write_text(
             safe_main + "use profile_bridge::operator_flow::ProfileBridgeOperator;\n",
@@ -345,6 +413,41 @@ def self_test() -> None:
         expect_rejected(root, "synthetic runtime in shipping composition")
         composition.write_text(safe_composition, encoding="utf-8")
 
+        composition.write_text(
+            safe_composition + "// PROFILE_BRIDGE_RUNTIME_ROOT\n",
+            encoding="utf-8",
+        )
+        expect_rejected(root, "caller-selected runtime-root predecessor")
+        composition.write_text(safe_composition, encoding="utf-8")
+
+        composition.write_text(
+            safe_composition + "// FilesystemRuntimeBundleSelection::open(\n",
+            encoding="utf-8",
+        )
+        expect_rejected(root, "direct unbound runtime selector predecessor")
+        composition.write_text(safe_composition, encoding="utf-8")
+
+        active_delivery.write_text(
+            safe_active_delivery.replace("// DeliveryStateStore::open(\n", ""),
+            encoding="utf-8",
+        )
+        expect_rejected(root, "active delivery without persisted state owner")
+        active_delivery.write_text(safe_active_delivery, encoding="utf-8")
+
+        active_delivery.write_text(
+            safe_active_delivery.replace("// reopen_staged_delivery(\n", ""),
+            encoding="utf-8",
+        )
+        expect_rejected(root, "active delivery without exact staged candidate reopen")
+        active_delivery.write_text(safe_active_delivery, encoding="utf-8")
+
+        active_delivery.write_text(
+            safe_active_delivery + "// reqwest::\n",
+            encoding="utf-8",
+        )
+        expect_rejected(root, "active delivery network side path")
+        active_delivery.write_text(safe_active_delivery, encoding="utf-8")
+
         manifest = root / MANIFEST
         safe_manifest = manifest.read_text(encoding="utf-8")
         manifest.write_text(
@@ -383,7 +486,8 @@ def main() -> int:
             validate(args.root.resolve())
             print(
                 "CAP-01 Profile Bridge keeps one real governed authoritative shipping composition; "
-                "controlled close and canonical successor save are mandatory, claim-only/local-only success is forbidden, "
+                "the running Bridge is bound through persisted active delivery state to one exact staged runtime, "
+                "controlled close and canonical successor save are mandatory, caller-selected runtime predecessors are forbidden, "
                 "and synthetic executors remain production-unreachable."
             )
     except BoundaryError as error:
