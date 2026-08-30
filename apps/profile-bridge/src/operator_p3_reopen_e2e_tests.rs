@@ -59,6 +59,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 static TEMP_COUNTER: AtomicU64 = AtomicU64::new(1);
 
+type PreflightObservation = (String, Vec<u8>);
+type PreflightObservations = Rc<RefCell<Vec<PreflightObservation>>>;
+
 const TENANT: &str = "tenant_p3_reopen_e2e";
 const PROFILE: &str = "profile_p3_reopen_e2e";
 const ACTOR: &str = "actor_p3_reopen_e2e";
@@ -617,7 +620,7 @@ impl RuntimeBundleSelectionPort for RecordingBundles {
 }
 
 struct RecordingPreflight {
-    observations: Rc<RefCell<Vec<(String, Vec<u8>)>>>,
+    observations: PreflightObservations,
 }
 
 impl BrowserLaunchPreflightPort for RecordingPreflight {
@@ -721,7 +724,7 @@ fn canonical_save_then_local_loss_reopens_server_selected_successor()
         state: Rc::clone(&state),
     };
     let runtime_generations = Rc::new(RefCell::new(Vec::new()));
-    let preflight = Rc::new(RefCell::new(Vec::new()));
+    let preflight: PreflightObservations = Rc::new(RefCell::new(Vec::new()));
     let enrollment = ControlPlaneEnrollment::new(transport.clone());
     let coordinator = ControlPlaneCoordinator::new(transport.clone());
     let mut operator = ProfileBridgeOperator::new(
