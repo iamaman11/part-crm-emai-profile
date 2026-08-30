@@ -98,8 +98,26 @@ jobs:
           EXPECTED_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: python -c "import os, subprocess; actual = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(); expected = os.environ['EXPECTED_SOURCE_SHA']; assert actual == expected, f'expected {expected}, got {actual}'"
 
+      - name: Set up exact Windows dependency-lock Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.12.10'
+
+      - name: Project exact Windows dependency lock candidate
+        shell: pwsh
+        run: |
+          python scripts/camouhost-windows-dependency-lock.py self-test
+          $report = Join-Path $env:RUNNER_TEMP 'camouhost-windows-pip-report.json'
+          python -m pip install --disable-pip-version-check --dry-run --ignore-installed --only-binary=:all: --report "$report" `
+            "camoufox==0.5.5" `
+            "browserforge==1.2.4" `
+            "playwright==1.60.0"
+          python scripts/camouhost-windows-dependency-lock.py project `
+            --runtime-lock runtime/camouhost/runtime-lock.json `
+            --pip-report "$report"
+
       - name: Compile real Camouhost source without installing browser runtime
-        run: python -m py_compile runtime/camouhost/real.py scripts/test-ar10-firefox-writer-locks.py scripts/check-ar10-runtime-cutover.py
+        run: python -m py_compile runtime/camouhost/real.py scripts/test-ar10-firefox-writer-locks.py scripts/check-ar10-runtime-cutover.py scripts/camouhost-runtime-build-windows.py scripts/camouhost-windows-dependency-lock.py
 
       - name: Prove Firefox writer-lock failure semantics
         run: python scripts/test-ar10-firefox-writer-locks.py
