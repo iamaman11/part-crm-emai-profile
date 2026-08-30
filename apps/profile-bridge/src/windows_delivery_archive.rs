@@ -67,7 +67,10 @@ impl DeliveryArchiveReader for WindowsDeliveryArchiveReader {
             DeliveryComponentKind::ProfileBridge => parse_profile_bridge_zip(&mut file)?,
             DeliveryComponentKind::RuntimeBundle => parse_runtime_pax_tar(&mut file)?,
         };
-        let result = parsed.iter().map(ParsedArchiveEntry::delivery_entry).collect();
+        let result = parsed
+            .iter()
+            .map(ParsedArchiveEntry::delivery_entry)
+            .collect();
         *self.cache_slot_mut(component) = Some(CachedArchive {
             artifact_path: artifact_path.to_path_buf(),
             file,
@@ -206,7 +209,8 @@ fn parse_profile_bridge_zip(
             return Err(WindowsDeliveryArchiveError::InvalidArchive);
         }
         let version_made_by = le_u16(&central, 4)?;
-        if u8::try_from(version_made_by >> 8).map_err(|_| WindowsDeliveryArchiveError::InvalidArchive)?
+        if u8::try_from(version_made_by >> 8)
+            .map_err(|_| WindowsDeliveryArchiveError::InvalidArchive)?
             != ZIP_UNIX_SYSTEM
         {
             return Err(WindowsDeliveryArchiveError::InvalidArchive);
@@ -233,7 +237,9 @@ fn parse_profile_bridge_zip(
             return Err(WindowsDeliveryArchiveError::InvalidArchive);
         }
         let central_record_len = 46_u64
-            .checked_add(u64::try_from(name_len).map_err(|_| WindowsDeliveryArchiveError::InvalidArchive)?)
+            .checked_add(
+                u64::try_from(name_len).map_err(|_| WindowsDeliveryArchiveError::InvalidArchive)?,
+            )
             .and_then(|value| value.checked_add(u64::try_from(extra_len).ok()?))
             .and_then(|value| value.checked_add(u64::try_from(comment_len).ok()?))
             .ok_or(WindowsDeliveryArchiveError::InvalidArchive)?;
@@ -303,7 +309,9 @@ fn parse_profile_bridge_zip(
     if occupied
         .windows(2)
         .any(|pair| pair[0].1 > pair[1].0 || pair[1].1 > central_offset)
-        || occupied.first().is_some_and(|range| range.1 > central_offset)
+        || occupied
+            .first()
+            .is_some_and(|range| range.1 > central_offset)
     {
         return Err(WindowsDeliveryArchiveError::InvalidArchive);
     }
@@ -339,7 +347,11 @@ fn parse_runtime_pax_tar(
             {
                 return Err(WindowsDeliveryArchiveError::InvalidArchive);
             }
-            ensure_zero_tail(file, checked_add(second_offset, TAR_BLOCK_BYTES)?, archive_len)?;
+            ensure_zero_tail(
+                file,
+                checked_add(second_offset, TAR_BLOCK_BYTES)?,
+                archive_len,
+            )?;
             terminated = true;
             break;
         }
@@ -457,7 +469,8 @@ fn parse_pax_overrides(payload: &[u8]) -> Result<PaxOverrides, WindowsDeliveryAr
         let record_end = cursor
             .checked_add(record_len)
             .ok_or(WindowsDeliveryArchiveError::InvalidArchive)?;
-        if record_end > payload.len() || record_end <= space + 2 || payload[record_end - 1] != b'\n' {
+        if record_end > payload.len() || record_end <= space + 2 || payload[record_end - 1] != b'\n'
+        {
             return Err(WindowsDeliveryArchiveError::InvalidArchive);
         }
         let record = &payload[space + 1..record_end - 1];
@@ -529,7 +542,10 @@ fn tar_header_path(header: &[u8; 512]) -> Result<String, WindowsDeliveryArchiveE
 }
 
 fn tar_text(field: &[u8]) -> Result<String, WindowsDeliveryArchiveError> {
-    let end = field.iter().position(|byte| *byte == 0).unwrap_or(field.len());
+    let end = field
+        .iter()
+        .position(|byte| *byte == 0)
+        .unwrap_or(field.len());
     if field[end..].iter().any(|byte| *byte != 0) {
         return Err(WindowsDeliveryArchiveError::InvalidArchive);
     }
@@ -627,8 +643,8 @@ fn hash_and_crc_region(
                 crc32 = (crc32 >> 1) ^ (0xedb8_8320 & mask);
             }
         }
-        remaining -= u64::try_from(read_len)
-            .map_err(|_| WindowsDeliveryArchiveError::InvalidArchive)?;
+        remaining -=
+            u64::try_from(read_len).map_err(|_| WindowsDeliveryArchiveError::InvalidArchive)?;
     }
     Ok(RegionIdentity {
         sha256: encode_lower_hex(sha256.finalize().as_slice()),
@@ -654,8 +670,8 @@ fn copy_region(
         writer
             .write_all(&buffer[..read_len])
             .map_err(|_| WindowsDeliveryArchiveError::Io)?;
-        remaining -= u64::try_from(read_len)
-            .map_err(|_| WindowsDeliveryArchiveError::InvalidArchive)?;
+        remaining -=
+            u64::try_from(read_len).map_err(|_| WindowsDeliveryArchiveError::InvalidArchive)?;
     }
     Ok(())
 }
@@ -686,7 +702,8 @@ fn read_bytes_at(
 }
 
 fn utf8_archive_path(bytes: Vec<u8>) -> Result<String, WindowsDeliveryArchiveError> {
-    let value = String::from_utf8(bytes).map_err(|_| WindowsDeliveryArchiveError::InvalidArchive)?;
+    let value =
+        String::from_utf8(bytes).map_err(|_| WindowsDeliveryArchiveError::InvalidArchive)?;
     if value.is_empty() || value.contains('\0') {
         return Err(WindowsDeliveryArchiveError::InvalidArchive);
     }
@@ -789,7 +806,10 @@ mod tests {
             push_u32(&mut local, crc);
             push_u32(&mut local, size);
             push_u32(&mut local, size);
-            push_u16(&mut local, u16::try_from(name.len()).map_err(io::Error::other)?);
+            push_u16(
+                &mut local,
+                u16::try_from(name.len()).map_err(io::Error::other)?,
+            );
             push_u16(&mut local, 0);
             local.extend_from_slice(name);
             local.extend_from_slice(file.content);
@@ -804,7 +824,10 @@ mod tests {
             push_u32(&mut central, crc);
             push_u32(&mut central, size);
             push_u32(&mut central, size);
-            push_u16(&mut central, u16::try_from(name.len()).map_err(io::Error::other)?);
+            push_u16(
+                &mut central,
+                u16::try_from(name.len()).map_err(io::Error::other)?,
+            );
             push_u16(&mut central, 0);
             push_u16(&mut central, 0);
             push_u16(&mut central, 0);
@@ -969,7 +992,10 @@ mod tests {
         let mut reader = WindowsDeliveryArchiveReader::new();
         let bridge_entries = reader.entries(DeliveryComponentKind::ProfileBridge, &bridge)?;
         assert_eq!(bridge_entries.len(), 2);
-        assert_eq!(bridge_entries[0].relative_path(), "profile-bridge-manifest.json");
+        assert_eq!(
+            bridge_entries[0].relative_path(),
+            "profile-bridge-manifest.json"
+        );
         assert_eq!(bridge_entries[1].relative_path(), "profile-bridge.exe");
         assert_eq!(bridge_entries[1].size_bytes(), 17);
         assert_eq!(bridge_entries[1].sha256(), sha256_hex(b"bridge-executable"));
