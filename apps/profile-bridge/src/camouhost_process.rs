@@ -24,6 +24,8 @@ use std::time::{Duration, Instant};
 const CONFIG_NAME: &str = "camoufox-config.json";
 const REAL_ENTRYPOINT: &str = "camouhost/real.py";
 const RUNTIME_LOCK_PATH: &str = "camouhost/runtime-lock.json";
+const WINDOWS_BROWSER_EXECUTABLE: &str = "browser/camoufox.exe";
+const WINDOWS_PYTHON_EXECUTABLE: &str = "python/python.exe";
 const MAX_CONFIG_BYTES: u64 = 1024 * 1024;
 const MAX_IPC_RESPONSE_BYTES: usize = 1024;
 const HELLO_RESPONSE_TIMEOUT: Duration = Duration::from_secs(10);
@@ -84,6 +86,10 @@ struct RuntimeLaunchBinding {
     fingerprint_config_sha256: String,
     profile_stable_probe_sha256: String,
     entrypoint_sha256: String,
+    #[cfg(windows)]
+    browser_sha256: String,
+    #[cfg(windows)]
+    python_sha256: String,
 }
 
 /// Wraps the already accepted browser preflight and publishes one launch capability only after
@@ -159,6 +165,10 @@ fn validate_runtime_identity(
         return Err(BrowserLaunchBlocker::MaterializationStale);
     }
     let entrypoint_sha256 = inventory_digest(runtime_bundle, REAL_ENTRYPOINT)?.to_owned();
+    #[cfg(windows)]
+    let browser_sha256 = inventory_digest(runtime_bundle, WINDOWS_BROWSER_EXECUTABLE)?.to_owned();
+    #[cfg(windows)]
+    let python_sha256 = inventory_digest(runtime_bundle, WINDOWS_PYTHON_EXECUTABLE)?.to_owned();
 
     Ok(RuntimeLaunchBinding {
         profile_root: workspace.path().to_path_buf(),
@@ -166,6 +176,10 @@ fn validate_runtime_identity(
         fingerprint_config_sha256: config_sha256,
         profile_stable_probe_sha256: probe_sha256.to_owned(),
         entrypoint_sha256,
+        #[cfg(windows)]
+        browser_sha256,
+        #[cfg(windows)]
+        python_sha256,
     })
 }
 
@@ -234,6 +248,10 @@ impl ManagedCamouhostConfig {
         proxy_config_path: Option<PathBuf>,
     ) -> Result<Self, BridgePortError> {
         if !python_executable.is_absolute() || !runtime_root.is_absolute() {
+            return Err(BridgePortError::InvalidResponse);
+        }
+        #[cfg(windows)]
+        if python_executable != runtime_root.join(WINDOWS_PYTHON_EXECUTABLE) {
             return Err(BridgePortError::InvalidResponse);
         }
         if initial_url.as_deref().is_some_and(|url| {
@@ -360,8 +378,19 @@ impl ManagedCamouhostProcess {
         let runtime_lock = self.config.runtime_root.join(RUNTIME_LOCK_PATH);
         verify_file_digest(&entrypoint, &binding.entrypoint_sha256)?;
         verify_file_digest(&runtime_lock, &binding.runtime_lock_sha256)?;
+        #[cfg(windows)]
+        {
+            let browser = self.config.runtime_root.join(WINDOWS_BROWSER_EXECUTABLE);
+            let python = self.config.runtime_root.join(WINDOWS_PYTHON_EXECUTABLE);
+            verify_file_digest(&browser, &binding.browser_sha256)?;
+            verify_file_digest(&python, &binding.python_sha256)?;
+        }
 
-        let mut command = Command::new(&self.config.python_executable);
+        #[cfg(windows)]
+        let python_executable = self.config.runtime_root.join(WINDOWS_PYTHON_EXECUTABLE);
+        #[cfg(not(windows))]
+        let python_executable = self.config.python_executable.clone();
+        let mut command = Command::new(&python_executable);
         command
             .arg(&entrypoint)
             .current_dir(&self.config.runtime_root)
@@ -736,21 +765,35 @@ mod tests {
         let calculated = digest('a')?;
         let entrypoint = BundleRelativePath::parse("camouhost/real.py")?;
         let lock_path = BundleRelativePath::parse("camouhost/runtime-lock.json")?;
-        let manifest = RuntimeManifest::new(
-            "2.0.0",
-            "3.12",
-            RuntimePlatform::WindowsX86_64,
-            entrypoint.clone(),
-            calculated.clone(),
-        )?;
-        let inventory = RuntimeInventory::new([
-            InventoryEntry::new(entrypoint, 10, digest('e')?),
+        let mut entries = vec![
+            InventoryEntry::new(entrypoint.clone(), 10, digest('e')?),
             InventoryEntry::new(
                 lock_path,
                 10,
                 Sha256Digest::parse(runtime_lock_sha256.to_owned())?,
             ),
-        ])?;
+        ];
+        #[cfg(windows)]
+        {
+            entries.push(InventoryEntry::new(
+                BundleRelativePath::parse(WINDOWS_BROWSER_EXECUTABLE)?,
+                10,
+                digest('f')?,
+            ));
+            entries.push(InventoryEntry::new(
+                BundleRelativePath::parse(WINDOWS_PYTHON_EXECUTABLE)?,
+                10,
+                digest('9')?,
+            ));
+        }
+        let manifest = RuntimeManifest::new(
+            "2.0.0",
+            "3.12",
+            RuntimePlatform::WindowsX86_64,
+            entrypoint,
+            calculated.clone(),
+        )?;
+        let inventory = RuntimeInventory::new(entries)?;
         Ok(ApprovedRuntimeBundle::validate(
             manifest,
             inventory,
@@ -833,6 +876,23 @@ mod tests {
             .is_err()
         );
         Ok(())
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_config_rejects_non_packaged_python_path() {
+        let runtime_root = PathBuf::from(r"C:\profile-bridge\runtime");
+        let python = PathBuf::from(r"C:\other\python.exe");
+        assert!(
+            super::ManagedCamouhostConfig::new(
+                python,
+                runtime_root,
+                super::RuntimeDisplayMode::Headful,
+                None,
+                None,
+            )
+            .is_err()
+        );
     }
 
     #[test]
