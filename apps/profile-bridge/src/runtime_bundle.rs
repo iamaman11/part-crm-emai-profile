@@ -758,7 +758,7 @@ mod tests {
     };
     use serde_json::{Value, json};
     use std::fs;
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
     use std::time::{SystemTime, UNIX_EPOCH};
 
     #[derive(Default)]
@@ -828,7 +828,7 @@ mod tests {
         )
     }
 
-    fn write_packaged_runtime(root: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
+    fn write_packaged_runtime(root: &Path) -> Result<(), Box<dyn std::error::Error>> {
         let fixtures = [
             (SHIPPING_BROWSER_EXECUTABLE, b"browser".as_slice()),
             (SHIPPING_ENTRYPOINT, b"print('real')\n".as_slice()),
