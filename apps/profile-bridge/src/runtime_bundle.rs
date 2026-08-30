@@ -192,11 +192,7 @@ impl FilesystemRuntimeBundleSelection {
                 return Err(RuntimeBundleSelectionError::InvalidRuntime);
             }
         }
-        validate_runtime_tree(
-            &self.runtime_root,
-            &expected_files,
-            &expected_directories,
-        )?;
+        validate_runtime_tree(&self.runtime_root, &expected_files, &expected_directories)?;
 
         let calculated_inventory_sha256 = inventory_digest(&runtime_files)?;
         let manifest = RuntimeManifest::new(
@@ -208,8 +204,9 @@ impl FilesystemRuntimeBundleSelection {
             calculated_inventory_sha256.clone(),
         )
         .map_err(|_| RuntimeBundleSelectionError::InvalidRuntime)?;
-        let inventory = RuntimeInventory::new(runtime_files.into_iter().map(RuntimeFile::into_entry))
-            .map_err(|_| RuntimeBundleSelectionError::InvalidRuntime)?;
+        let inventory =
+            RuntimeInventory::new(runtime_files.into_iter().map(RuntimeFile::into_entry))
+                .map_err(|_| RuntimeBundleSelectionError::InvalidRuntime)?;
         ApprovedRuntimeBundle::validate(manifest, inventory, &calculated_inventory_sha256)
             .map_err(|_| RuntimeBundleSelectionError::InvalidRuntime)
     }
@@ -263,8 +260,8 @@ fn read_packaged_manifest(
     runtime_root: &Path,
 ) -> Result<PackagedRuntimeManifest, RuntimeBundleSelectionError> {
     let path = runtime_root.join(SHIPPING_COMPONENT_MANIFEST);
-    let metadata = fs::symlink_metadata(&path)
-        .map_err(|_| RuntimeBundleSelectionError::MissingRuntimeFile)?;
+    let metadata =
+        fs::symlink_metadata(&path).map_err(|_| RuntimeBundleSelectionError::MissingRuntimeFile)?;
     if metadata_is_link_or_reparse(&metadata)
         || !metadata.is_file()
         || metadata.len() == 0
@@ -316,7 +313,9 @@ fn validate_packaged_manifest(
     validate_runtime_identity_set(&manifest.files)
 }
 
-fn validate_source_identity_set(identity: &PackagedFileSet) -> Result<(), RuntimeBundleSelectionError> {
+fn validate_source_identity_set(
+    identity: &PackagedFileSet,
+) -> Result<(), RuntimeBundleSelectionError> {
     if identity.files.is_empty()
         || identity.files.len() > MAX_RUNTIME_FILES
         || !is_lower_hex(&identity.sha256, 64)
@@ -334,7 +333,9 @@ fn validate_source_identity_set(identity: &PackagedFileSet) -> Result<(), Runtim
     validate_file_set_digest(identity)
 }
 
-fn validate_runtime_identity_set(identity: &PackagedFileSet) -> Result<(), RuntimeBundleSelectionError> {
+fn validate_runtime_identity_set(
+    identity: &PackagedFileSet,
+) -> Result<(), RuntimeBundleSelectionError> {
     if identity.files.is_empty()
         || identity.files.len() > MAX_RUNTIME_FILES
         || !is_lower_hex(&identity.sha256, 64)
@@ -353,15 +354,17 @@ fn validate_runtime_identity_set(identity: &PackagedFileSet) -> Result<(), Runti
 }
 
 fn validate_file_set_digest(identity: &PackagedFileSet) -> Result<(), RuntimeBundleSelectionError> {
-    let canonical =
-        serde_json::to_vec(&identity.files).map_err(|_| RuntimeBundleSelectionError::InvalidRuntime)?;
+    let canonical = serde_json::to_vec(&identity.files)
+        .map_err(|_| RuntimeBundleSelectionError::InvalidRuntime)?;
     if sha256_hex(&canonical) != identity.sha256 {
         return Err(RuntimeBundleSelectionError::InvalidRuntime);
     }
     Ok(())
 }
 
-fn validate_source_file_identity(file: &PackagedFileIdentity) -> Result<(), RuntimeBundleSelectionError> {
+fn validate_source_file_identity(
+    file: &PackagedFileIdentity,
+) -> Result<(), RuntimeBundleSelectionError> {
     let path = file.path.as_str();
     if path.is_empty()
         || path.len() > MAX_SOURCE_PATH_BYTES
@@ -370,7 +373,9 @@ fn validate_source_file_identity(file: &PackagedFileIdentity) -> Result<(), Runt
         || path.contains(':')
         || path.contains("//")
         || path.ends_with('/')
-        || path.split('/').any(|segment| segment.is_empty() || matches!(segment, "." | ".."))
+        || path
+            .split('/')
+            .any(|segment| segment.is_empty() || matches!(segment, "." | ".."))
         || !is_lower_hex(&file.sha256, 64)
         || file.size_bytes > MAX_RUNTIME_FILE_BYTES
     {
@@ -379,8 +384,11 @@ fn validate_source_file_identity(file: &PackagedFileIdentity) -> Result<(), Runt
     Ok(())
 }
 
-fn validate_runtime_file_identity(file: &PackagedFileIdentity) -> Result<(), RuntimeBundleSelectionError> {
-    BundleRelativePath::parse(&file.path).map_err(|_| RuntimeBundleSelectionError::InvalidRuntime)?;
+fn validate_runtime_file_identity(
+    file: &PackagedFileIdentity,
+) -> Result<(), RuntimeBundleSelectionError> {
+    BundleRelativePath::parse(&file.path)
+        .map_err(|_| RuntimeBundleSelectionError::InvalidRuntime)?;
     if !is_lower_hex(&file.sha256, 64) || file.size_bytes > MAX_RUNTIME_FILE_BYTES {
         return Err(RuntimeBundleSelectionError::InvalidRuntime);
     }
@@ -394,8 +402,8 @@ fn read_expected_runtime_file(
     let relative = BundleRelativePath::parse(&expected.path)
         .map_err(|_| RuntimeBundleSelectionError::InvalidRuntime)?;
     let path = runtime_root.join(path_from_bundle_relative(&relative));
-    let metadata = fs::symlink_metadata(&path)
-        .map_err(|_| RuntimeBundleSelectionError::MissingRuntimeFile)?;
+    let metadata =
+        fs::symlink_metadata(&path).map_err(|_| RuntimeBundleSelectionError::MissingRuntimeFile)?;
     if metadata_is_link_or_reparse(&metadata)
         || !metadata.is_file()
         || metadata.len() != expected.size_bytes
@@ -413,8 +421,12 @@ fn read_expected_runtime_file(
     })
 }
 
-fn sha256_regular_file(path: &Path, expected_size: u64) -> Result<String, RuntimeBundleSelectionError> {
-    let mut file = fs::File::open(path).map_err(|_| RuntimeBundleSelectionError::MissingRuntimeFile)?;
+fn sha256_regular_file(
+    path: &Path,
+    expected_size: u64,
+) -> Result<String, RuntimeBundleSelectionError> {
+    let mut file =
+        fs::File::open(path).map_err(|_| RuntimeBundleSelectionError::MissingRuntimeFile)?;
     let mut digest = Sha256::new();
     let mut buffer = [0_u8; 1024 * 1024];
     let mut observed = 0_u64;
@@ -426,7 +438,9 @@ fn sha256_regular_file(path: &Path, expected_size: u64) -> Result<String, Runtim
             break;
         }
         observed = observed
-            .checked_add(u64::try_from(read).map_err(|_| RuntimeBundleSelectionError::InvalidRuntime)?)
+            .checked_add(
+                u64::try_from(read).map_err(|_| RuntimeBundleSelectionError::InvalidRuntime)?,
+            )
             .ok_or(RuntimeBundleSelectionError::InvalidRuntime)?;
         if observed > expected_size {
             return Err(RuntimeBundleSelectionError::InvalidRuntime);
@@ -478,12 +492,7 @@ fn validate_runtime_tree(
 ) -> Result<(), RuntimeBundleSelectionError> {
     let mut observed_files = HashSet::new();
     let mut observed_directories = HashSet::new();
-    collect_runtime_tree(
-        root,
-        root,
-        &mut observed_files,
-        &mut observed_directories,
-    )?;
+    collect_runtime_tree(root, root, &mut observed_files, &mut observed_directories)?;
     if &observed_files != expected_files || &observed_directories != expected_directories {
         return Err(RuntimeBundleSelectionError::InvalidRuntime);
     }
@@ -517,10 +526,7 @@ fn collect_runtime_tree(
     Ok(())
 }
 
-fn normalized_descendant(
-    root: &Path,
-    path: &Path,
-) -> Result<String, RuntimeBundleSelectionError> {
+fn normalized_descendant(root: &Path, path: &Path) -> Result<String, RuntimeBundleSelectionError> {
     let relative = path
         .strip_prefix(root)
         .map_err(|_| RuntimeBundleSelectionError::InvalidRuntime)?;
@@ -827,7 +833,10 @@ mod tests {
             (SHIPPING_BROWSER_EXECUTABLE, b"browser".as_slice()),
             (SHIPPING_ENTRYPOINT, b"print('real')\n".as_slice()),
             (SHIPPING_RESOLVED_RUNTIME, b"{}\n".as_slice()),
-            (SHIPPING_RUNTIME_LOCK, b"{\"runtime_role\":\"real_camoufox\"}\n".as_slice()),
+            (
+                SHIPPING_RUNTIME_LOCK,
+                b"{\"runtime_role\":\"real_camoufox\"}\n".as_slice(),
+            ),
             (SHIPPING_PYTHON_EXECUTABLE, b"python".as_slice()),
         ];
         let mut files = Vec::new();
@@ -895,7 +904,10 @@ mod tests {
             root_path.join("camouhost/runtime-lock.json"),
             b"{\"runtime_role\":\"real_camoufox\",\"changed\":true}\n",
         )?;
-        assert_eq!(select(&mut selector), Err(RuntimeBundleSelectionError::InvalidRuntime));
+        assert_eq!(
+            select(&mut selector),
+            Err(RuntimeBundleSelectionError::InvalidRuntime)
+        );
         fs::remove_dir_all(root_path)?;
         Ok(())
     }
@@ -916,7 +928,10 @@ mod tests {
         write_packaged_runtime(&root_path)?;
         fs::write(root_path.join("unexpected.txt"), b"unexpected")?;
         let mut selector = FilesystemRuntimeBundleSelection::open(&root_path)?;
-        assert_eq!(select(&mut selector), Err(RuntimeBundleSelectionError::InvalidRuntime));
+        assert_eq!(
+            select(&mut selector),
+            Err(RuntimeBundleSelectionError::InvalidRuntime)
+        );
         fs::remove_dir_all(root_path)?;
         Ok(())
     }
