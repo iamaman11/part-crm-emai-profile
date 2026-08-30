@@ -57,7 +57,7 @@ pub struct WindowsDeliveryEvidence {
 #[serde(deny_unknown_fields)]
 pub struct WindowsDeliveryCompatibility {
     pub profile_bridge_protocol_version: u32,
-    pub camouhost_ipc_version: u32,
+    pub camouhost_ipc_version: u16,
     pub runtime_bundle_version: String,
 }
 
