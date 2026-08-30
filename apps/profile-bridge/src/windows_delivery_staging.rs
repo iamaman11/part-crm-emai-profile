@@ -1,6 +1,8 @@
 #![forbid(unsafe_code)]
 
-use crate::windows_delivery::{DeliveryIdentity, VerifiedDeliveryCandidate, WindowsDeliveryComponent};
+use crate::windows_delivery::{
+    DeliveryIdentity, VerifiedDeliveryCandidate, WindowsDeliveryComponent,
+};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
@@ -251,7 +253,8 @@ pub fn stage_verified_delivery<R: DeliveryArchiveReader>(
         profile_bridge: marker_component(&bridge_plan),
         runtime_bundle: marker_component(&runtime_plan),
     };
-    let marker_bytes = serde_json::to_vec(&marker).map_err(|_| DeliveryStagingError::Serialization)?;
+    let marker_bytes =
+        serde_json::to_vec(&marker).map_err(|_| DeliveryStagingError::Serialization)?;
     let directory_name = release_directory_name(candidate);
     let final_path = root.path().join(&directory_name);
     let pending_path = root.path().join(format!(".pending-{directory_name}"));
@@ -266,7 +269,8 @@ pub fn stage_verified_delivery<R: DeliveryArchiveReader>(
         return Ok(staged_delivery(candidate, final_path));
     }
     if pending_exists {
-        match verify_materialized_stage(&pending_path, &marker_bytes, [&bridge_plan, &runtime_plan]) {
+        match verify_materialized_stage(&pending_path, &marker_bytes, [&bridge_plan, &runtime_plan])
+        {
             Ok(()) => {
                 fs::rename(&pending_path, &final_path).map_err(|_| DeliveryStagingError::Io)?;
                 verify_materialized_stage(
@@ -494,7 +498,10 @@ fn verify_materialized_stage(
 
     let mut expected_files = HashMap::new();
     let mut expected_directories = HashSet::new();
-    expected_files.insert(MARKER_NAME.to_owned(), (marker_bytes.len() as u64, sha256_hex(marker_bytes)));
+    expected_files.insert(
+        MARKER_NAME.to_owned(),
+        (marker_bytes.len() as u64, sha256_hex(marker_bytes)),
+    );
     for plan in plans {
         let prefix = plan.kind.directory();
         expected_directories.insert(prefix.to_owned());
@@ -522,7 +529,9 @@ fn verify_materialized_stage(
     )?;
     if actual_files.len() != expected_files.len()
         || actual_directories != expected_directories
-        || !expected_files.keys().all(|path| actual_files.contains(path))
+        || !expected_files
+            .keys()
+            .all(|path| actual_files.contains(path))
     {
         return Err(DeliveryStagingError::CorruptStage);
     }
@@ -546,7 +555,13 @@ fn collect_tree(
         let relative = normalized_descendant(root, &path)?;
         if metadata.is_dir() {
             actual_directories.insert(relative);
-            collect_tree(root, &path, expected_files, actual_files, actual_directories)?;
+            collect_tree(
+                root,
+                &path,
+                expected_files,
+                actual_files,
+                actual_directories,
+            )?;
         } else if metadata.is_file() {
             let Some((expected_size, expected_digest)) = expected_files.get(&relative) else {
                 return Err(DeliveryStagingError::CorruptStage);
@@ -746,7 +761,9 @@ fn sha256_file(path: &Path) -> Result<String, DeliveryStagingError> {
     let mut digest = Sha256::new();
     let mut buffer = [0_u8; 64 * 1024];
     loop {
-        let read = file.read(&mut buffer).map_err(|_| DeliveryStagingError::Io)?;
+        let read = file
+            .read(&mut buffer)
+            .map_err(|_| DeliveryStagingError::Io)?;
         if read == 0 {
             break;
         }
@@ -882,8 +899,7 @@ mod tests {
 
     type TestResult = Result<(), Box<dyn std::error::Error>>;
     static TEST_COUNTER: AtomicU64 = AtomicU64::new(1);
-    const CERTIFICATE: &str =
-        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    const CERTIFICATE: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
     struct TestDirectory(PathBuf);
 
@@ -911,12 +927,7 @@ mod tests {
     }
 
     impl FakeArchiveReader {
-        fn insert_file(
-            &mut self,
-            component: DeliveryComponentKind,
-            path: &str,
-            content: &[u8],
-        ) {
+        fn insert_file(&mut self, component: DeliveryComponentKind, path: &str, content: &[u8]) {
             self.entries.entry(component).or_default().push((
                 DeliveryArchiveEntry::regular_file(
                     path,
@@ -928,10 +939,10 @@ mod tests {
         }
 
         fn insert_special(&mut self, component: DeliveryComponentKind, path: &str) {
-            self.entries.entry(component).or_default().push((
-                DeliveryArchiveEntry::link_or_special(path),
-                Vec::new(),
-            ));
+            self.entries
+                .entry(component)
+                .or_default()
+                .push((DeliveryArchiveEntry::link_or_special(path), Vec::new()));
         }
     }
 
@@ -1051,9 +1062,21 @@ mod tests {
         let candidate = candidate(bridge_bytes, runtime_bytes, 7)?;
         let root = DeliveryStagingRoot::open_or_create(directory.0.join("releases"))?;
         let mut reader = FakeArchiveReader::default();
-        reader.insert_file(DeliveryComponentKind::ProfileBridge, "profile-bridge.exe", b"bridge");
-        reader.insert_file(DeliveryComponentKind::RuntimeBundle, "python/python.exe", b"python");
-        reader.insert_file(DeliveryComponentKind::RuntimeBundle, "runtime/real.py", b"runtime");
+        reader.insert_file(
+            DeliveryComponentKind::ProfileBridge,
+            "profile-bridge.exe",
+            b"bridge",
+        );
+        reader.insert_file(
+            DeliveryComponentKind::RuntimeBundle,
+            "python/python.exe",
+            b"python",
+        );
+        reader.insert_file(
+            DeliveryComponentKind::RuntimeBundle,
+            "runtime/real.py",
+            b"runtime",
+        );
 
         let first = stage_verified_delivery(
             &root,
@@ -1119,7 +1142,13 @@ mod tests {
         let candidate = candidate(bridge_bytes, runtime_bytes, 9)?;
         let root = DeliveryStagingRoot::open_or_create(directory.0.join("releases"))?;
 
-        for path in ["../escape", "C:/absolute", "dir\\escape", "NUL.txt", "file:ads"] {
+        for path in [
+            "../escape",
+            "C:/absolute",
+            "dir\\escape",
+            "NUL.txt",
+            "file:ads",
+        ] {
             let mut reader = FakeArchiveReader::default();
             reader.insert_file(DeliveryComponentKind::ProfileBridge, path, b"bad");
             assert_eq!(
@@ -1161,8 +1190,16 @@ mod tests {
         let candidate = candidate(bridge_bytes, runtime_bytes, 10)?;
         let root = DeliveryStagingRoot::open_or_create(directory.0.join("releases"))?;
         let mut reader = FakeArchiveReader::default();
-        reader.insert_file(DeliveryComponentKind::ProfileBridge, "profile-bridge.exe", b"bridge");
-        reader.insert_file(DeliveryComponentKind::RuntimeBundle, "runtime/real.py", b"runtime");
+        reader.insert_file(
+            DeliveryComponentKind::ProfileBridge,
+            "profile-bridge.exe",
+            b"bridge",
+        );
+        reader.insert_file(
+            DeliveryComponentKind::RuntimeBundle,
+            "runtime/real.py",
+            b"runtime",
+        );
         let staged = stage_verified_delivery(
             &root,
             &candidate,
@@ -1203,8 +1240,16 @@ mod tests {
         let second_candidate = candidate(bridge_bytes, runtime_bytes, 12)?;
         let root = DeliveryStagingRoot::open_or_create(directory.0.join("releases"))?;
         let mut good = FakeArchiveReader::default();
-        good.insert_file(DeliveryComponentKind::ProfileBridge, "profile-bridge.exe", b"bridge");
-        good.insert_file(DeliveryComponentKind::RuntimeBundle, "runtime/real.py", b"runtime");
+        good.insert_file(
+            DeliveryComponentKind::ProfileBridge,
+            "profile-bridge.exe",
+            b"bridge",
+        );
+        good.insert_file(
+            DeliveryComponentKind::RuntimeBundle,
+            "runtime/real.py",
+            b"runtime",
+        );
         let first = stage_verified_delivery(
             &root,
             &first_candidate,
