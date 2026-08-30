@@ -139,7 +139,7 @@ impl RetainedDirtyClose {
         let local_unlock_recorded =
             !physical_workspace_lock_released || self.base.set_locked(false).is_ok();
         let workspace_lock_released = physical_workspace_lock_released && local_unlock_recorded;
-        let coordinator_lease_released = coordinator.close_lease(&self.lease).is_ok();
+        let coordinator_lease_released = coordinator.close_confirmed_save(&self.lease).is_ok();
 
         Ok(DirtyCloseCompletion {
             local_outcome,
