@@ -51,7 +51,7 @@ EXPECTED_LOCK: dict[str, Any] = {
     "runtime_role": "real_camoufox",
     "schema_version": 1,
 }
-EXPECTED_WINDOWS_DISTRIBUTION: dict[str, Any] = {
+EXPECTED_WINDOWS_DISTRIBUTION_BASE: dict[str, Any] = {
     "architecture": "x86_64",
     "browser": {
         "artifact_sha256": "386fc2f41139685f9a1a9cef0d024bc041d899c315ea538d561171b5b282e57d",
@@ -64,6 +64,10 @@ EXPECTED_WINDOWS_DISTRIBUTION: dict[str, Any] = {
         "version": "3.12.10",
     },
 }
+MAX_WINDOWS_PYTHON_PACKAGES = 256
+PYPI_FILES_PREFIX = "https://files.pythonhosted.org/packages/"
+PACKAGE_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9._-]*$")
+SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 
 NETWORK_IMPORT_PREFIXES = (
     "aiohttp",
@@ -278,6 +282,99 @@ def validate_python_runtime_boundary(root: Path) -> None:
         )
 
 
+def validate_windows_package_graph(packages: object) -> None:
+    if (
+        not isinstance(packages, list)
+        or not packages
+        or len(packages) > MAX_WINDOWS_PYTHON_PACKAGES
+    ):
+        fail("Windows Python package graph is invalid")
+    observed_names: set[str] = set()
+    observed_filenames: set[str] = set()
+    ordering: list[tuple[str, str, str]] = []
+    versions: dict[str, str] = {}
+    for row in packages:
+        if not isinstance(row, dict) or set(row) != {
+            "filename",
+            "name",
+            "sha256",
+            "url",
+            "version",
+        }:
+            fail("Windows Python package graph row shape is invalid")
+        filename = row.get("filename")
+        name = row.get("name")
+        digest = row.get("sha256")
+        url = row.get("url")
+        version = row.get("version")
+        if (
+            not isinstance(filename, str)
+            or not filename.endswith(".whl")
+            or Path(filename).name != filename
+            or "\\" in filename
+            or ":" in filename
+        ):
+            fail("Windows Python package graph filename is invalid")
+        if not isinstance(name, str) or PACKAGE_NAME_RE.fullmatch(name) is None:
+            fail("Windows Python package graph name is invalid")
+        if not isinstance(digest, str) or SHA256_RE.fullmatch(digest) is None:
+            fail("Windows Python package graph SHA-256 is invalid")
+        if (
+            not isinstance(url, str)
+            or not url.startswith(PYPI_FILES_PREFIX)
+            or url.rsplit("/", 1)[-1] != filename
+        ):
+            fail("Windows Python package graph URL is invalid")
+        if (
+            not isinstance(version, str)
+            or not version
+            or len(version) > 64
+            or any(character.isspace() for character in version)
+        ):
+            fail("Windows Python package graph version is invalid")
+        if name in observed_names or filename.casefold() in observed_filenames:
+            fail("Windows Python package graph contains duplicate identity")
+        observed_names.add(name)
+        observed_filenames.add(filename.casefold())
+        ordering.append((name, version, filename))
+        versions[name] = version
+    if ordering != sorted(ordering):
+        fail("Windows Python package graph is not deterministically ordered")
+    expected_roots = {
+        "browserforge": EXPECTED_LOCK["components"]["browserforge"],
+        "camoufox": EXPECTED_LOCK["components"]["camoufox_python"],
+        "playwright": EXPECTED_LOCK["components"]["playwright"],
+    }
+    if any(versions.get(name) != version for name, version in expected_roots.items()):
+        fail("Windows Python package graph root versions drifted from AR-10 identity")
+
+
+def validate_windows_distribution(distribution: object) -> None:
+    if not isinstance(distribution, dict) or set(distribution) != {
+        "architecture",
+        "browser",
+        "python",
+    }:
+        fail("runtime lock Windows distribution shape drifted")
+    if distribution.get("architecture") != EXPECTED_WINDOWS_DISTRIBUTION_BASE["architecture"]:
+        fail("runtime lock Windows distribution drifted from the exact S0 delivery identity")
+    if distribution.get("browser") != EXPECTED_WINDOWS_DISTRIBUTION_BASE["browser"]:
+        fail("runtime lock Windows distribution drifted from the exact S0 delivery identity")
+    python = distribution.get("python")
+    if not isinstance(python, dict) or set(python) != {
+        "artifact_sha256",
+        "artifact_url",
+        "packages",
+        "version",
+    }:
+        fail("runtime lock Windows Python distribution shape drifted")
+    expected_python = EXPECTED_WINDOWS_DISTRIBUTION_BASE["python"]
+    projection = {key: python.get(key) for key in expected_python}
+    if projection != expected_python:
+        fail("runtime lock Windows distribution drifted from the exact S0 delivery identity")
+    validate_windows_package_graph(python.get("packages"))
+
+
 def validate_runtime_lock_value(parsed: object) -> None:
     if not isinstance(parsed, dict):
         fail("runtime lock must be a JSON object")
@@ -287,8 +384,7 @@ def validate_runtime_lock_value(parsed: object) -> None:
     ar10_projection = {key: parsed[key] for key in EXPECTED_LOCK}
     if ar10_projection != EXPECTED_LOCK:
         fail("runtime lock drifted from the exact AR-10 candidate component identity")
-    if parsed.get("windows_distribution") != EXPECTED_WINDOWS_DISTRIBUTION:
-        fail("runtime lock Windows distribution drifted from the exact S0 delivery identity")
+    validate_windows_distribution(parsed.get("windows_distribution"))
 
 
 def validate_runtime_lock(root: Path) -> None:
@@ -468,9 +564,26 @@ def expect_runtime_lock_failure(value: object, marker: str) -> None:
     fail("runtime-lock negative fixture unexpectedly passed")
 
 
+def package_fixture(name: str, version: str, digit: str) -> dict[str, str]:
+    filename = f"{name}-{version}-py3-none-any.whl"
+    return {
+        "filename": filename,
+        "name": name,
+        "sha256": digit * 64,
+        "url": f"{PYPI_FILES_PREFIX}fixture/{filename}",
+        "version": version,
+    }
+
+
 def exact_runtime_lock_fixture() -> dict[str, Any]:
     value = json.loads(json.dumps(EXPECTED_LOCK))
-    value["windows_distribution"] = json.loads(json.dumps(EXPECTED_WINDOWS_DISTRIBUTION))
+    distribution = json.loads(json.dumps(EXPECTED_WINDOWS_DISTRIBUTION_BASE))
+    distribution["python"]["packages"] = [
+        package_fixture("browserforge", "1.2.4", "1"),
+        package_fixture("camoufox", "0.5.5", "2"),
+        package_fixture("playwright", "1.60.0", "3"),
+    ]
+    value["windows_distribution"] = distribution
     return value
 
 
@@ -485,6 +598,10 @@ def self_test() -> None:
     mutated_windows = exact_runtime_lock_fixture()
     mutated_windows["windows_distribution"]["browser"]["artifact_sha256"] = "0" * 64
     expect_runtime_lock_failure(mutated_windows, "S0 delivery identity")
+
+    mutated_package = exact_runtime_lock_fixture()
+    mutated_package["windows_distribution"]["python"]["packages"][0]["sha256"] = "invalid"
+    expect_runtime_lock_failure(mutated_package, "package graph")
 
     unknown = exact_runtime_lock_fixture()
     unknown["compatibility_fallback"] = True
@@ -512,7 +629,6 @@ def self_test() -> None:
         "import subprocess\nsubprocess.run(['wrangler', 'r2', 'object', 'put', 'x'])\n",
         "forbidden direct effects",
     )
-
     expect_runtime_source_failure(
         REAL_RUNTIME,
         "import os\ntoken = os.getenv('CLOUDFLARE_API_TOKEN')\n",
