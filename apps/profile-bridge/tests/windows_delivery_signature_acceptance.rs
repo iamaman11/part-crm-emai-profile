@@ -82,16 +82,12 @@ const PRODUCTION_SCRIPT_PREFIX: &str = "const VERIFY_SCRIPT: &str = r#\"";
 const PRODUCTION_SCRIPT_SUFFIX: &str = "\"#;";
 const PARAMETER_ANCHOR: &str =
     "    [Parameter(Mandatory=$true)][string]$ExpectedCertificateSha256\n)";
-const PARAMETER_REPLACEMENT: &str =
-    "    [Parameter(Mandatory=$true)][string]$ExpectedCertificateSha256,\n    [Parameter(Mandatory=$true)][string]$CustomRootPath\n)";
+const PARAMETER_REPLACEMENT: &str = "    [Parameter(Mandatory=$true)][string]$ExpectedCertificateSha256,\n    [Parameter(Mandatory=$true)][string]$CustomRootPath\n)";
 const CHAIN_ANCHOR: &str =
     "    $chain = [System.Security.Cryptography.X509Certificates.X509Chain]::new()\n    try {\n";
-const CHAIN_REPLACEMENT: &str =
-    "    $customRoot = [System.Security.Cryptography.X509Certificates.X509Certificate2]::new($CustomRootPath)\n    $chain = [System.Security.Cryptography.X509Certificates.X509Chain]::new()\n    try {\n        [void]$chain.ChainPolicy.ExtraStore.Add($customRoot)\n";
-const FLAGS_ANCHOR: &str =
-    "        $chain.ChainPolicy.VerificationFlags = [System.Security.Cryptography.X509Certificates.X509VerificationFlags]::NoFlag";
-const FLAGS_REPLACEMENT: &str =
-    "        $chain.ChainPolicy.VerificationFlags = [System.Security.Cryptography.X509Certificates.X509VerificationFlags]::AllowUnknownCertificateAuthority";
+const CHAIN_REPLACEMENT: &str = "    $customRoot = [System.Security.Cryptography.X509Certificates.X509Certificate2]::new($CustomRootPath)\n    $chain = [System.Security.Cryptography.X509Certificates.X509Chain]::new()\n    try {\n        [void]$chain.ChainPolicy.ExtraStore.Add($customRoot)\n";
+const FLAGS_ANCHOR: &str = "        $chain.ChainPolicy.VerificationFlags = [System.Security.Cryptography.X509Certificates.X509VerificationFlags]::NoFlag";
+const FLAGS_REPLACEMENT: &str = "        $chain.ChainPolicy.VerificationFlags = [System.Security.Cryptography.X509Certificates.X509VerificationFlags]::AllowUnknownCertificateAuthority";
 const BUILD_ANCHOR: &str = "        if (-not $chain.Build($certificate)) { exit 23 }";
 const BUILD_REPLACEMENT: &str = r#"        if (-not $chain.Build($certificate)) { exit 23 }
         if ($chain.ChainElements.Count -lt 1) { exit 23 }
@@ -175,14 +171,17 @@ fn production_verify_script() -> Result<String, io::Error> {
     let source_path = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("src")
         .join("windows_delivery_signature.rs");
-    let source = fs::read_to_string(source_path)?;
+    let source = fs::read_to_string(source_path)?.replace("\r\n", "\n");
     let start = source
         .find(PRODUCTION_SCRIPT_PREFIX)
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "VERIFY_SCRIPT owner missing"))?;
     let body_start = start + PRODUCTION_SCRIPT_PREFIX.len();
     let tail = &source[body_start..];
     let body_end = tail.find(PRODUCTION_SCRIPT_SUFFIX).ok_or_else(|| {
-        io::Error::new(io::ErrorKind::InvalidData, "VERIFY_SCRIPT terminator missing")
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            "VERIFY_SCRIPT terminator missing",
+        )
     })?;
     if tail[body_end + PRODUCTION_SCRIPT_SUFFIX.len()..].contains(PRODUCTION_SCRIPT_PREFIX) {
         return Err(io::Error::new(
@@ -204,7 +203,10 @@ fn isolated_trust_verify_script() -> Result<String, io::Error> {
 
 fn replace_exactly_once(input: &str, anchor: &str, replacement: &str) -> Result<String, io::Error> {
     let start = input.find(anchor).ok_or_else(|| {
-        io::Error::new(io::ErrorKind::InvalidData, "production verifier anchor missing")
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            "production verifier anchor missing",
+        )
     })?;
     if input[start + anchor.len()..].contains(anchor) {
         return Err(io::Error::new(
@@ -365,11 +367,8 @@ fn production_script_accepts_isolated_test_trust_without_system_trust_fallback()
     )?;
 
     let mut system_verifier = WindowsCmsSignatureVerifier::from_system(directory.0.clone())?;
-    let system_trust_result = system_verifier.verify_cms(
-        manifest,
-        &fixture.signature,
-        &fixture.certificate_sha256,
-    )?;
+    let system_trust_result =
+        system_verifier.verify_cms(manifest, &fixture.signature, &fixture.certificate_sha256)?;
 
     assert_eq!(exact_code, 0);
     assert_eq!(tampered_code, 24);
