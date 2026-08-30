@@ -33,6 +33,8 @@ mod operator_p3_reopen_e2e_tests;
 #[cfg(test)]
 mod operator_p3_save_tests;
 #[cfg(test)]
+mod shipping_control_plane_p3_tests;
+#[cfg(test)]
 mod test_support;
 
 #[cfg(windows)]
