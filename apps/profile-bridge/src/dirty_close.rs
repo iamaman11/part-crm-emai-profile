@@ -1,9 +1,10 @@
 #[cfg(any(test, feature = "synthetic-test-bin"))]
 use crate::browser_mail_query::BrowserMailExecutionProof;
 use crate::dirty_generation::PreparedDirtyGeneration;
+use crate::dirty_generation_finalize::DirtyGenerationFinalizeError;
+#[cfg(any(test, feature = "synthetic-test-bin"))]
 use crate::dirty_generation_finalize::{
-    DirtyGenerationCommitClientPort, DirtyGenerationFinalizeError,
-    publish_verify_and_commit_dirty_generation,
+    DirtyGenerationCommitClientPort, publish_verify_and_commit_dirty_generation,
 };
 use crate::local_profile::{
     BridgeWorkspaceLock, GenerationWorkspace, LocalGenerationRecord, LocalGenerationState,
