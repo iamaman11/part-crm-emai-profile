@@ -116,17 +116,16 @@ impl WindowsCmsSignatureVerifier {
             .map_err(|_| WindowsCmsVerifierError::PlatformUnavailable)?;
 
         let scratch = VerificationScratch::create(&self.scratch_root)?;
-        scratch.write_inputs(manifest_bytes, cms_der)?;
-        let status = Command::new(&self.powershell_executable)
+        if let Err(error) = scratch.write_inputs(manifest_bytes, cms_der) {
+            let cleanup = scratch.cleanup();
+            cleanup?;
+            return Err(error);
+        }
+
+        let mut command = Command::new(&self.powershell_executable);
+        command
             .env_clear()
-            .args([
-                "-NoLogo",
-                "-NoProfile",
-                "-NonInteractive",
-                "-ExecutionPolicy",
-                "Bypass",
-                "-File",
-            ])
+            .args(["-NoLogo", "-NoProfile", "-NonInteractive", "-File"])
             .arg(scratch.script_path())
             .arg("-ManifestPath")
             .arg(scratch.manifest_path())
@@ -137,16 +136,16 @@ impl WindowsCmsSignatureVerifier {
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null());
-        let mut command = status;
         inherit_windows_system_environment(&mut command);
         let status = command
             .status()
-            .map_err(|_| WindowsCmsVerifierError::VerificationProcess)?;
+            .map_err(|_| WindowsCmsVerifierError::VerificationProcess);
         let cleanup = scratch.cleanup();
+        let status = status?;
+        cleanup?;
         let code = status
             .code()
             .ok_or(WindowsCmsVerifierError::VerificationProcess)?;
-        cleanup?;
         match code {
             0 => Ok(true),
             20..=29 => Ok(false),
@@ -227,12 +226,16 @@ impl VerificationScratch {
             self.manifest_path(),
             self.signature_path(),
         ] {
-            let metadata = fs::symlink_metadata(&path)
-                .map_err(|_| WindowsCmsVerifierError::ScratchIo)?;
-            if metadata_is_link_or_reparse(&metadata) || !metadata.is_file() {
-                return Err(WindowsCmsVerifierError::ScratchIo);
+            match fs::symlink_metadata(&path) {
+                Ok(metadata) => {
+                    if metadata_is_link_or_reparse(&metadata) || !metadata.is_file() {
+                        return Err(WindowsCmsVerifierError::ScratchIo);
+                    }
+                    fs::remove_file(path).map_err(|_| WindowsCmsVerifierError::ScratchIo)?;
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(_) => return Err(WindowsCmsVerifierError::ScratchIo),
             }
-            fs::remove_file(path).map_err(|_| WindowsCmsVerifierError::ScratchIo)?;
         }
         if fs::read_dir(&self.directory)
             .map_err(|_| WindowsCmsVerifierError::ScratchIo)?
