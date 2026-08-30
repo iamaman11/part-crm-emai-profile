@@ -194,9 +194,8 @@ type TestOperator = ProfileBridgeOperator<
     FakeCamouhost,
 >;
 
-type CommitHook = Rc<
-    dyn Fn(&BridgeProfileGenerationSuccessorRequest) -> Result<(), BridgePortError>,
->;
+type CommitHook =
+    Rc<dyn Fn(&BridgeProfileGenerationSuccessorRequest) -> Result<(), BridgePortError>>;
 
 #[derive(Clone, Default)]
 struct TransportTrace {
