@@ -2,6 +2,7 @@
 
 **Статус:** accepted
 **Дата:** 2026-08-05
+**Cross-device clarification:** 2026-08-31
 **Решение требуется до:** включения генерации production-профилей
 
 ## Контекст
@@ -97,6 +98,126 @@ hash:
 Session-dynamic signals контролируются диапазонами и coherence rules, но не
 сравниваются на полное равенство.
 
+## Cross-Device Reproducibility Contract
+
+Цель платформы — не привязать browser profile к одному физическому компьютеру и
+не решать drift запретом второго устройства. Один и тот же подтвержденный
+`profile generation` должен воспроизводиться на другом авторизованном supported
+Windows device через тот же pinned Camoufox runtime, если runtime способен
+представить сохраненную browser-visible identity независимо от физических
+характеристик нового host.
+
+Binding target:
+
+```text
+server-selected exact generation
+-> exact encrypted generation restore
+-> typed Profile-Stable identity
+-> canonical Camoufox config projection
+-> exact pinned runtime
+-> host/runtime compatibility admission
+-> Camoufox masking/virtualization
+-> typed browser-visible observation
+-> exact policy comparison
+-> navigation allowed
+```
+
+Физический monitor, DPI, GPU, installed fonts, Windows user, speech catalog,
+audio devices или другое host-состояние не получают права молча переписать
+identity существующего generation. Приоритет реализации:
+
+1. воспроизвести сохраненное значение средствами Camoufox/config/runtime masking;
+2. проверить фактически наблюдаемое browser-visible значение до пользовательской
+   навигации;
+3. только если pinned runtime доказанно не умеет безопасно представить требуемую
+   identity на данном host, вернуть явный incompatible-host/recovery outcome.
+
+`IncompatibleHost` — fail-closed граница безопасности, а не штатная стратегия
+переносимости. Supported Windows acceptance должен стремиться доказать успешный
+cross-device запуск на неодинаковых физических hosts, а не объявлять одинаковое
+железо обязательным условием.
+
+### Один semantic owner identity
+
+`browser-execution-domain` остается natural semantic owner browser identity.
+Нельзя создавать отдельный Windows/fingerprint registry или updater-owned copy.
+Целевая typed identity должна описывать policy-relevant значения, а не только
+непрозрачный общий hash.
+
+Для generation canonical identity material должен однозначно определять как
+минимум:
+
+- browser/OS/architecture identity и UA coherence;
+- hardware capability model (`hardwareConcurrency`, `deviceMemory`,
+  `maxTouchPoints` и применимые browser-visible capability fields);
+- display identity: width/height, available geometry, color/pixel depth,
+  device-pixel-ratio и те window/display fields, которые текущая policy
+  классифицирует как profile-stable;
+- graphics identity: WebGL vendor/renderer плюс применимый extensions,
+  parameters, shader-precision и context-attribute capability envelope;
+- fonts identity и deterministic font-spacing seed;
+- deterministic canvas/audio identity inputs;
+- locale/language identity;
+- применимые stable speech/media/input capability values;
+- fingerprint policy/schema version и exact runtime compatibility identity.
+
+Конкретный persisted representation может эволюционировать, но должен иметь
+один canonical owner. `camoufox-config.json` является runtime projection этой
+identity, а его SHA-256 — integrity evidence, не самостоятельный semantic owner.
+Aggregate probe SHA также является evidence и не заменяет typed comparison.
+
+### Host compatibility не является browser identity
+
+Физический host проверяется отдельным compatibility admission. Минимально
+значимы supported Windows/runtime class, architecture, display/DPI environment,
+graphics backend, execution/display mode, clock sanity и необходимые
+filesystem/process capabilities.
+
+Host observation не должен попадать в generation как новая identity только
+потому, что профиль открылся на другом ПК. Если физический host отличается, но
+Camoufox воспроизводит ту же browser-visible identity, запуск совместим.
+
+Запрещено:
+
+- менять сохраненные screen/DPR/WebGL/fonts/audio/canvas значения под новый host;
+- требовать одинаковую модель монитора/GPU как основной portability contract;
+- автоматически создавать новый fingerprint/config при restore;
+- fallback на другой runtime/config при несовпадении;
+- считать общий probe hash достаточным, если policy-relevant поля не были
+  классифицированы и проверены.
+
+### Execution surface
+
+`Headful`, `VirtualHeadful` и будущий отдельно сертифицированный execution mode
+являются частью compatibility surface. Существующий generation нельзя молча
+переключать на режим, для которого не доказана эквивалентность его
+browser-visible identity.
+
+Для первого интерактивного Windows release предпочтительный путь — real
+headful. Virtual-headful может использоваться только при отдельной доказанной
+совместимости с той же generation identity.
+
+### Profile-state portability
+
+Browser identity и переносимость browser state — разные контракты.
+Generation snapshot должен переносить обычное browser-owned состояние, для
+которого принята portability guarantee: cookies, localStorage, IndexedDB и
+применимое persistent Firefox profile state.
+
+Machine/device-bound материалы должны классифицироваться явно:
+
+```text
+PORTABLE
+REBIND_REQUIRED
+DEVICE_BOUND_UNSUPPORTED
+```
+
+Например, device authentication key и proxy credential могут требовать нового
+разрешения/привязки на устройстве и не являются частью browser fingerprint.
+Platform passkeys, Windows Hello, hardware-backed keys, client-certificate
+private keys и native integrations нельзя обещать как portable без отдельного
+поддерживаемого механизма. Их наличие не разрешает молча менять browser identity.
+
 ## Profile Entropy Root
 
 Каждый новый профиль получает 256-bit cryptographically random entropy root.
@@ -138,6 +259,26 @@ controlled migration:
 - storage marker, persistent cookie и localStorage воспроизводятся;
 - отсутствует cross-profile storage contamination.
 
+### Cross-Device Reproducibility
+
+Для supported Windows portability evidence требуется минимум:
+
+1. создать/подтвердить generation на Host A;
+2. сохранить browser state marker и exact generation identity;
+3. восстановить тот же encrypted generation на независимо авторизованном Host B;
+4. использовать тот же exact accepted runtime/config identity;
+5. доказать совпадение typed Profile-Stable browser-visible vector до
+   пользовательской навигации;
+6. доказать восстановление persistent cookie/localStorage и применимого
+   generation state;
+7. отдельно доказать network-bound coherence для route, выбранного на Host B.
+
+Host B должен по возможности отличаться от Host A физическими display/DPI/GPU
+или Windows-user характеристиками, чтобы acceptance доказывал virtualization и
+portability, а не случайное равенство среды. Repository CI проверяет контракт,
+negative cases и deterministic projections; claim о реальной физической
+cross-device совместимости требует соответствующего Windows-host evidence.
+
 ### Inter-Profile Uniqueness
 
 - cohort не менее 100 синтетических профилей перед первым release;
@@ -166,7 +307,8 @@ Release gate требует отсутствия fail-сигналов и явн
 Production-порядок:
 
 1. real headful для интерактивной работы;
-2. virtual-headful с fingerprint-sized Xvfb для unattended jobs;
+2. virtual-headful только после доказанной fingerprint-equivalence для
+   применимого runtime/generation contract;
 3. native headless только после отдельной сертификации target site и runtime
    bundle.
 
@@ -174,11 +316,15 @@ Production-порядок:
 
 Да, проблема решаема как engineering problem:
 
-- сохранять полную identity policy, а не случайный subset config;
+- сохранять полную typed identity policy, а не случайный subset config;
 - перестать случайно менять canvas/audio/font seeds между рестартами;
+- использовать Camoufox masking/virtualization для воспроизведения сохраненной
+  identity на другом compatible device;
+- отделять host compatibility и network identity от browser identity;
 - привязать изменения к generation и runtime bundle;
-- проверять consistency автоматически;
-- блокировать запуск профиля при unexplained drift.
+- проверять typed browser-visible consistency автоматически до навигации;
+- блокировать только unexplained drift или доказанно несовместимый host, не
+  запрещая cross-device запуск как продуктовую модель.
 
 Не решаемой является только абсолютная гарантия «никогда не будет обнаружен».
 Такую гарантию нельзя достоверно дать ни для Camoufox, ни для физического
@@ -187,7 +333,16 @@ Production-порядок:
 ## Последствия
 
 - текущая функция, удаляющая все session-noise seeds, должна быть переработана;
-- snapshot schema получает signal classes и policy version;
+- snapshot/identity schema получает signal classes, policy version и typed
+  profile-stable identity evidence;
+- существующий `BrowserIdentityManifest` должен эволюционировать без создания
+  второго owner и связывать canonical config, typed stable identity и exact
+  runtime compatibility;
+- runtime probe должен покрывать policy-relevant stable surface, а не только
+  несколько агрегированных сигналов;
+- host environment наследуется только через минимальный bounded runtime contract;
+  browser-visible locale/timezone/display/network semantics приходят от своих
+  natural owners, а не случайно от Windows host;
 - certification service становится обязательным release gate;
 - legacy-профили без entropy provenance не получают статус certified без
   canary-клонирования и baseline capture;
