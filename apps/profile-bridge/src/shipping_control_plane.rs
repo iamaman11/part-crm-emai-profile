@@ -275,6 +275,38 @@ where
         decode_coordinator_response(response?)
     }
 
+    fn release_lease(
+        &mut self,
+        lease: &ProfileLease,
+        disposition: CoordinatorReleaseDispositionDto,
+    ) -> Result<(), ShippingControlPlaneError> {
+        let cursor = self
+            .cursor
+            .as_ref()
+            .filter(|value| cursor_matches_lease(value, lease))
+            .cloned()
+            .ok_or(ShippingControlPlaneError::InvalidResponse)?;
+        let sequence = cursor
+            .sequence
+            .checked_add(1)
+            .ok_or(ShippingControlPlaneError::InvalidResponse)?;
+        let request = CoordinatorCommandRequestDto {
+            idempotency_key: next_idempotency_key()?.as_str().to_owned(),
+            sequence,
+            expected_version: cursor.version,
+            command: CoordinatorCommandDto::Release {
+                session_id: cursor.session_id.as_str().to_owned(),
+                epoch: cursor.epoch,
+                fencing_token: cursor.fencing_token.as_str().to_owned(),
+                disposition,
+            },
+        };
+        let response = self.command(&cursor.tenant_id, &cursor.profile_id, &request)?;
+        validate_released_response(&response, &cursor, sequence, disposition)?;
+        self.cursor = None;
+        Ok(())
+    }
+
     fn exact_reopen_cursor(
         &self,
         tenant_id: &TenantId,
@@ -369,31 +401,11 @@ where
     }
 
     fn close_lease(&mut self, lease: &ProfileLease) -> Result<(), Self::Error> {
-        let cursor = self
-            .cursor
-            .as_ref()
-            .filter(|value| cursor_matches_lease(value, lease))
-            .cloned()
-            .ok_or(Self::Error::InvalidResponse)?;
-        let sequence = cursor
-            .sequence
-            .checked_add(1)
-            .ok_or(Self::Error::InvalidResponse)?;
-        let request = CoordinatorCommandRequestDto {
-            idempotency_key: next_idempotency_key()?.as_str().to_owned(),
-            sequence,
-            expected_version: cursor.version,
-            command: CoordinatorCommandDto::Release {
-                session_id: cursor.session_id.as_str().to_owned(),
-                epoch: cursor.epoch,
-                fencing_token: cursor.fencing_token.as_str().to_owned(),
-                disposition: CoordinatorReleaseDispositionDto::Uncertain,
-            },
-        };
-        let response = self.command(&cursor.tenant_id, &cursor.profile_id, &request)?;
-        validate_released_response(&response, &cursor, sequence)?;
-        self.cursor = None;
-        Ok(())
+        self.release_lease(lease, CoordinatorReleaseDispositionDto::Uncertain)
+    }
+
+    fn close_confirmed_save(&mut self, lease: &ProfileLease) -> Result<(), Self::Error> {
+        self.release_lease(lease, CoordinatorReleaseDispositionDto::Clean)
     }
 }
 
@@ -876,7 +888,13 @@ fn validate_released_response(
     response: &CoordinatorResponseDto,
     cursor: &CoordinatorCursor,
     expected_sequence: u64,
+    disposition: CoordinatorReleaseDispositionDto,
 ) -> Result<(), ShippingControlPlaneError> {
+    let expected_status = match disposition {
+        CoordinatorReleaseDispositionDto::Clean => CoordinatorStatusDto::Idle,
+        CoordinatorReleaseDispositionDto::Dirty => CoordinatorStatusDto::Dirty,
+        CoordinatorReleaseDispositionDto::Uncertain => CoordinatorStatusDto::Uncertain,
+    };
     if response.outcome != CoordinatorOutcomeDto::Released
         || response.replayed
         || response.sequence != expected_sequence
@@ -885,7 +903,7 @@ fn validate_released_response(
         || response.projection.profile_id != cursor.profile_id.as_str()
         || response.projection.version != response.version
         || response.projection.sequence != response.sequence
-        || response.projection.status != CoordinatorStatusDto::Uncertain
+        || response.projection.status != expected_status
         || response.projection.active_session_id.is_some()
         || response.projection.active_device_id.is_some()
         || response.projection.active_epoch.is_some()
@@ -965,7 +983,13 @@ mod tests {
     use crate::dirty_generation::GenerationSealingMaterialPort;
     use crate::generation_reopen::GenerationReopenControlPort;
     use crate::operator_flow::EnrollmentPort;
+    use application_ports::ProfileCoordinatorPort;
     use bridge_domain::ClaimUri;
+    use control_plane_contract::coordinator_api::{
+        CoordinatorCommandDto, CoordinatorCommandRequestDto, CoordinatorOutcomeDto,
+        CoordinatorProjectionDto, CoordinatorReleaseDispositionDto, CoordinatorResponseDto,
+        CoordinatorStatusDto,
+    };
     use control_plane_contract::generation_key_api::{
         BRIDGE_GENERATION_SEALING_MATERIAL_PATH_TEMPLATE, BridgeGenerationSealingMaterialRequest,
         BridgeGenerationSealingMaterialResponse, GENERATION_SEALING_CHUNK_BYTES,
@@ -980,6 +1004,7 @@ mod tests {
         CorrelationId, DeviceId, FencingToken, GenerationId, ProfileId, SessionId, TenantId,
         UnixMillis,
     };
+    use session_domain::ProfileLease;
     use std::collections::VecDeque;
 
     #[derive(Default)]
@@ -1112,6 +1137,121 @@ mod tests {
             lease_timing(Some(900_001), Some(900_000)),
             Err(ShippingControlPlaneError::InvalidResponse)
         );
+        Ok(())
+    }
+
+    #[test]
+    fn confirmed_save_release_is_clean_while_generic_release_remains_uncertain()
+    -> Result<(), Box<dyn std::error::Error>> {
+        fn release_response(
+            tenant_id: &TenantId,
+            profile_id: &ProfileId,
+            status: CoordinatorStatusDto,
+        ) -> Result<MachineHttpResponse, serde_json::Error> {
+            Ok(MachineHttpResponse::new(
+                200,
+                serde_json::to_vec(&CoordinatorResponseDto {
+                    outcome: CoordinatorOutcomeDto::Released,
+                    version: 12,
+                    sequence: 14,
+                    replayed: false,
+                    fencing_token: None,
+                    epoch: None,
+                    projection: CoordinatorProjectionDto {
+                        tenant_id: tenant_id.as_str().to_owned(),
+                        profile_id: profile_id.as_str().to_owned(),
+                        status,
+                        version: 12,
+                        sequence: 14,
+                        next_epoch: 7,
+                        active_session_id: None,
+                        active_device_id: None,
+                        active_epoch: None,
+                        idle_expires_at_ms: None,
+                        hard_expires_at_ms: None,
+                        drain_deadline_ms: None,
+                        pending_launch_intent_id: None,
+                        pending_intent_expires_at_ms: None,
+                    },
+                })?,
+            ))
+        }
+
+        fn coordinator(
+            status: CoordinatorStatusDto,
+        ) -> Result<
+            (ControlPlaneCoordinator<SealingMachineHttp>, ProfileLease),
+            Box<dyn std::error::Error>,
+        > {
+            let tenant_id = TenantId::parse("tenant_release_adapter_01")?;
+            let profile_id = ProfileId::parse("profile_release_adapter_01")?;
+            let device_id = DeviceId::parse("device_release_adapter_01")?;
+            let session_id = SessionId::parse("session_release_adapter_01")?;
+            let fencing_token = FencingToken::parse("fence_release_adapter_01")?;
+            let lease = ProfileLease::issue(
+                tenant_id.clone(),
+                profile_id.clone(),
+                session_id.clone(),
+                device_id.clone(),
+                7,
+                fencing_token.clone(),
+            )?;
+            Ok((
+                ControlPlaneCoordinator {
+                    transport: SealingMachineHttp {
+                        responses: VecDeque::from([release_response(
+                            &tenant_id,
+                            &profile_id,
+                            status,
+                        )?]),
+                        requests: Vec::new(),
+                    },
+                    cursor: Some(CoordinatorCursor {
+                        tenant_id,
+                        profile_id,
+                        device_id,
+                        session_id,
+                        epoch: 7,
+                        fencing_token,
+                        version: 11,
+                        sequence: 13,
+                        timing: ControlPlaneLeaseTiming {
+                            idle_expires_at_ms: 30_000,
+                            hard_expires_at_ms: 900_000,
+                        },
+                    }),
+                },
+                lease,
+            ))
+        }
+
+        let (mut confirmed, confirmed_lease) = coordinator(CoordinatorStatusDto::Idle)?;
+        confirmed.close_confirmed_save(&confirmed_lease)?;
+        assert!(confirmed.cursor.is_none());
+        let confirmed_request = serde_json::from_slice::<CoordinatorCommandRequestDto>(
+            &confirmed.transport.requests[0].2,
+        )?;
+        assert!(matches!(
+            confirmed_request.command,
+            CoordinatorCommandDto::Release {
+                disposition: CoordinatorReleaseDispositionDto::Clean,
+                ..
+            }
+        ));
+
+        let (mut generic, generic_lease) = coordinator(CoordinatorStatusDto::Uncertain)?;
+        generic.close_lease(&generic_lease)?;
+        assert!(generic.cursor.is_none());
+        let generic_request = serde_json::from_slice::<CoordinatorCommandRequestDto>(
+            &generic.transport.requests[0].2,
+        )?;
+        assert!(matches!(
+            generic_request.command,
+            CoordinatorCommandDto::Release {
+                disposition: CoordinatorReleaseDispositionDto::Uncertain,
+                ..
+            }
+        ));
         Ok(())
     }
 
