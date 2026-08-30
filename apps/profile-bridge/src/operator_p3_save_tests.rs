@@ -10,7 +10,9 @@ use crate::operator_flow::{
 };
 use crate::runtime_bundle::ApprovedRuntimeBundle;
 use crate::shipping_control_plane::{MachineHttpMethod, MachineHttpPort, MachineHttpResponse};
-use crate::shipping_generation_save::{SignedGenerationObjectPutPort, SignedGenerationUploadCapability};
+use crate::shipping_generation_save::{
+    SignedGenerationObjectPutPort, SignedGenerationUploadCapability,
+};
 use crate::{FakeCamouhost, FakeDeviceIdentity, FakeDeviceKeyStore, FakeProcessControl};
 use application_ports::ProfileCoordinatorPort;
 use bridge_domain::{BridgePortError, ClaimCode, ClaimUri, EnrollmentClaim};
@@ -251,7 +253,10 @@ impl SignedGenerationObjectPutPort for Put {
         capability: &SignedGenerationUploadCapability,
         container: &[u8],
     ) -> Result<(), Self::Error> {
-        if capability.url().map_err(|_| BridgePortError::InvalidResponse)?.is_empty()
+        if capability
+            .url()
+            .map_err(|_| BridgePortError::InvalidResponse)?
+            .is_empty()
             || container.is_empty()
         {
             return Err(BridgePortError::InvalidResponse);
@@ -426,7 +431,10 @@ fn upload_required_response() -> Result<MachineHttpResponse, serde_json::Error> 
         &[("x-test".to_owned(), "secret".to_owned())],
         300,
     );
-    Ok(MachineHttpResponse::new(200, serde_json::to_vec(&response)?))
+    Ok(MachineHttpResponse::new(
+        200,
+        serde_json::to_vec(&response)?,
+    ))
 }
 
 fn verified_response() -> Result<MachineHttpResponse, serde_json::Error> {
@@ -550,11 +558,8 @@ fn canonical_operator_save_retries_same_successor_after_upload_failure()
         &fixture.profile_id,
         &fixture.generation_id,
     )?;
-    let released = BridgeWorkspaceLock::acquire(
-        &base_workspace,
-        &fixture.device_id,
-        fixture.lease.epoch(),
-    )?;
+    let released =
+        BridgeWorkspaceLock::acquire(&base_workspace, &fixture.device_id, fixture.lease.epoch())?;
     released.release()?;
 
     let requests_before_duplicate = trace.paths.borrow().len();
@@ -610,7 +615,13 @@ fn canonical_operator_never_verified_cannot_commit_or_release()
     ));
     assert!(operator.has_pending_dirty_close());
     assert_eq!(operator.coordinator().closed, 0);
-    assert!(trace.paths.borrow().iter().all(|path| !path.ends_with("/commit")));
+    assert!(
+        trace
+            .paths
+            .borrow()
+            .iter()
+            .all(|path| !path.ends_with("/commit"))
+    );
     fixture.assert_base_lock_held()?;
     Ok(())
 }
