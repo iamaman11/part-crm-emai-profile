@@ -7,8 +7,10 @@ use std::fmt;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::thread;
+use std::time::{Duration, Instant};
 
 const VERIFY_SCRIPT: &str = r#"param(
     [Parameter(Mandatory=$true)][string]$ManifestPath,
@@ -43,7 +45,7 @@ try {
     $chain = [System.Security.Cryptography.X509Certificates.X509Chain]::new()
     try {
         $chain.ChainPolicy.RevocationMode = [System.Security.Cryptography.X509Certificates.X509RevocationMode]::Online
-        $chain.ChainPolicy.RevocationFlag = [System.Security.Cryptography.X509Certificates.X509RevocationFlag]::EntireChain
+        $chain.ChainPolicy.RevocationFlag = [System.Security.Cryptography.X509Certificates.X509RevocationFlag]::ExcludeRoot
         $chain.ChainPolicy.VerificationFlags = [System.Security.Cryptography.X509Certificates.X509VerificationFlags]::NoFlag
         $chain.ChainPolicy.UrlRetrievalTimeout = [System.TimeSpan]::FromSeconds(10)
         [void]$chain.ChainPolicy.ApplicationPolicy.Add(
@@ -69,6 +71,8 @@ const MANIFEST_NAME: &str = "delivery-manifest.json";
 const SIGNATURE_NAME: &str = "delivery-signature.p7s";
 const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0400;
 const SCRATCH_ATTEMPTS: usize = 32;
+const VERIFICATION_PROCESS_TIMEOUT: Duration = Duration::from_secs(30);
+const VERIFICATION_PROCESS_POLL_INTERVAL: Duration = Duration::from_millis(25);
 static SCRATCH_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -139,8 +143,9 @@ impl WindowsCmsSignatureVerifier {
             .stderr(Stdio::null());
         inherit_windows_system_environment(&mut command);
         let status = command
-            .status()
-            .map_err(|_| WindowsCmsVerifierError::VerificationProcess);
+            .spawn()
+            .map_err(|_| WindowsCmsVerifierError::VerificationProcess)
+            .and_then(|mut child| wait_for_verification_process(&mut child));
         let cleanup = scratch.cleanup();
         let status = status?;
         cleanup?;
@@ -165,6 +170,26 @@ impl DetachedSignatureVerifier for WindowsCmsSignatureVerifier {
         expected_certificate_sha256: &str,
     ) -> Result<bool, Self::Error> {
         self.verify_detached_cms(manifest_bytes, cms_der, expected_certificate_sha256)
+    }
+}
+
+fn wait_for_verification_process(child: &mut Child) -> Result<ExitStatus, WindowsCmsVerifierError> {
+    let started_at = Instant::now();
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => return Ok(status),
+            Ok(None) => {}
+            Err(_) => return Err(WindowsCmsVerifierError::VerificationProcess),
+        }
+        if started_at.elapsed() >= VERIFICATION_PROCESS_TIMEOUT {
+            let kill_result = child.kill();
+            let wait_result = child.wait();
+            if kill_result.is_err() && wait_result.is_err() {
+                return Err(WindowsCmsVerifierError::VerificationProcess);
+            }
+            return Err(WindowsCmsVerifierError::VerificationTimeout);
+        }
+        thread::sleep(VERIFICATION_PROCESS_POLL_INTERVAL);
     }
 }
 
@@ -314,6 +339,7 @@ pub enum WindowsCmsVerifierError {
     PlatformUnavailable,
     ScratchIo,
     VerificationProcess,
+    VerificationTimeout,
 }
 
 impl fmt::Display for WindowsCmsVerifierError {
@@ -323,6 +349,7 @@ impl fmt::Display for WindowsCmsVerifierError {
             Self::PlatformUnavailable => "Windows CMS verification platform is unavailable",
             Self::ScratchIo => "Windows CMS verification scratch operation failed",
             Self::VerificationProcess => "Windows CMS verification process failed",
+            Self::VerificationTimeout => "Windows CMS verification process exceeded its deadline",
         })
     }
 }
