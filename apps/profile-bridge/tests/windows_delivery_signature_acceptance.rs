@@ -16,35 +16,22 @@ const CREATE_FIXTURE_SCRIPT: &str = r#"param(
     [Parameter(Mandatory=$true)][string]$ManifestPath,
     [Parameter(Mandatory=$true)][string]$SignaturePath,
     [Parameter(Mandatory=$true)][string]$PinPath,
-    [Parameter(Mandatory=$true)][string]$ThumbprintPath,
-    [Parameter(Mandatory=$true)][string]$CertificatePath
+    [Parameter(Mandatory=$true)][string]$ThumbprintPath
 )
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.Security
 $certificate = $null
-$certutil = Join-Path $env:SystemRoot 'System32\certutil.exe'
 try {
-    Write-Host 'CMS fixture: create code-signing certificate'
+    Write-Host 'CMS fixture: create trusted code-signing certificate'
     $certificate = New-SelfSignedCertificate `
         -Type CodeSigningCert `
         -Subject ("CN=Profile Bridge S0 CI " + [Guid]::NewGuid().ToString()) `
-        -CertStoreLocation 'Cert:\CurrentUser\My' `
+        -CertStoreLocation 'Cert:\CurrentUser\Root' `
         -KeyAlgorithm RSA `
         -KeyLength 2048 `
         -HashAlgorithm SHA256 `
         -NotAfter (Get-Date).AddHours(1) `
         -Confirm:$false
-
-    [System.IO.File]::WriteAllBytes(
-        $CertificatePath,
-        $certificate.Export([System.Security.Cryptography.X509Certificates.X509ContentType]::Cert)
-    )
-    Write-Host 'CMS fixture: trust code-signing certificate'
-    $addArguments = @('-user', '-f', '-addstore', 'Root', ('"' + $CertificatePath + '"'))
-    $addResult = Start-Process -FilePath $certutil -ArgumentList $addArguments -NoNewWindow -Wait -PassThru
-    if ($addResult.ExitCode -ne 0) {
-        throw "certutil failed to add the ephemeral root certificate: $($addResult.ExitCode)"
-    }
 
     Write-Host 'CMS fixture: sign detached manifest'
     $manifest = [System.IO.File]::ReadAllBytes($ManifestPath)
@@ -70,13 +57,11 @@ try {
 }
 catch {
     if ($null -ne $certificate) {
-        foreach ($store in @('Root', 'My')) {
-            try {
-                $deleteArguments = @('-user', '-delstore', $store, $certificate.Thumbprint)
-                Start-Process -FilePath $certutil -ArgumentList $deleteArguments -NoNewWindow -Wait | Out-Null
-            }
-            catch {}
-        }
+        Remove-Item `
+            -LiteralPath ("Cert:\CurrentUser\Root\" + $certificate.Thumbprint) `
+            -Force `
+            -Confirm:$false `
+            -ErrorAction SilentlyContinue
     }
     throw
 }
@@ -86,14 +71,11 @@ const CLEANUP_FIXTURE_SCRIPT: &str = r#"param(
     [Parameter(Mandatory=$true)][string]$Thumbprint
 )
 $ErrorActionPreference = 'Stop'
-$certutil = Join-Path $env:SystemRoot 'System32\certutil.exe'
-foreach ($store in @('Root', 'My')) {
-    $deleteArguments = @('-user', '-delstore', $store, $Thumbprint)
-    $deleteResult = Start-Process -FilePath $certutil -ArgumentList $deleteArguments -NoNewWindow -Wait -PassThru
-    if ($deleteResult.ExitCode -ne 0) {
-        throw "certutil failed to remove the ephemeral certificate from $store: $($deleteResult.ExitCode)"
-    }
-}
+Remove-Item `
+    -LiteralPath ("Cert:\CurrentUser\Root\" + $Thumbprint) `
+    -Force `
+    -Confirm:$false `
+    -ErrorAction Stop
 "#;
 
 const FIXTURE_PROCESS_TIMEOUT: Duration = Duration::from_secs(60);
@@ -135,7 +117,6 @@ impl SigningFixture {
         let signature_path = directory.join("fixture-signature.p7s");
         let pin_path = directory.join("fixture-pin.txt");
         let thumbprint_path = directory.join("fixture-thumbprint.txt");
-        let certificate_path = directory.join("fixture-certificate.cer");
         let create_script = directory.join("create-fixture.ps1");
         let cleanup_script = directory.join("cleanup-fixture.ps1");
         fs::write(&manifest_path, manifest)?;
@@ -149,7 +130,6 @@ impl SigningFixture {
                 ("-SignaturePath", signature_path.as_path()),
                 ("-PinPath", pin_path.as_path()),
                 ("-ThumbprintPath", thumbprint_path.as_path()),
-                ("-CertificatePath", certificate_path.as_path()),
             ],
         )?;
 
