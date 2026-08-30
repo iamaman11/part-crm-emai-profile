@@ -25,9 +25,10 @@ const HTTP_STATUS_MARKER: &[u8] = b"\nPROFILE_BRIDGE_HTTP_STATUS:";
 /// Effect-only Windows adapter for one server-issued immutable generation PUT capability.
 ///
 /// This adapter owns no R2 credentials, machine certificate, descriptor semantics or verification.
-/// It sends exactly the backend-issued signed headers and container bytes to one HTTPS URL, never
-/// follows redirects, and treats every non-2xx response as a pre-commit failure. Exact object
-/// verification remains server-owned and is required again before successor commit.
+/// It sends exactly the backend-issued signed headers and container bytes only to the canonical
+/// direct R2 HTTPS authority, never follows redirects, and treats every non-2xx response as a
+/// pre-commit failure. Exact object verification remains server-owned and is required again before
+/// successor commit.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct WindowsSignedGenerationObjectPut {
     curl_executable: PathBuf,
@@ -55,7 +56,7 @@ impl SignedGenerationObjectPutPort for WindowsSignedGenerationObjectPut {
         let signed_url = capability
             .url()
             .map_err(|_| BridgePortError::InvalidResponse)?;
-        if !valid_direct_https_url(signed_url) {
+        if !valid_signed_r2_put_url(signed_url) {
             return Err(BridgePortError::InvalidResponse);
         }
         let headers = capability
@@ -152,16 +153,50 @@ fn decode_curl_http_output(output: Output) -> Result<(u16, Vec<u8>), BridgePortE
     Ok((status, output.stdout[..marker].to_vec()))
 }
 
-fn valid_direct_https_url(value: &str) -> bool {
+fn valid_signed_r2_put_url(value: &str) -> bool {
+    if value.is_empty()
+        || value.len() > MAX_SIGNED_GENERATION_URL_BYTES
+        || value
+            .bytes()
+            .any(|byte| byte.is_ascii_control() || byte.is_ascii_whitespace())
+        || value.contains('#')
+    {
+        return false;
+    }
     let Some(rest) = value.strip_prefix("https://") else {
         return false;
     };
-    !rest.is_empty()
-        && value.len() <= MAX_SIGNED_GENERATION_URL_BYTES
-        && !value.contains('#')
-        && !value
+    let Some((authority, path_and_query)) = rest.split_once('/') else {
+        return false;
+    };
+    const R2_SUFFIX: &str = ".r2.cloudflarestorage.com";
+    let Some(account_id) = authority.strip_suffix(R2_SUFFIX) else {
+        return false;
+    };
+    if account_id.len() != 32
+        || !account_id
             .bytes()
-            .any(|byte| byte.is_ascii_control() || byte.is_ascii_whitespace())
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        || authority.contains('@')
+        || authority.contains(':')
+    {
+        return false;
+    }
+    let Some((path, query)) = path_and_query.split_once('?') else {
+        return false;
+    };
+    if path.is_empty() || query.is_empty() {
+        return false;
+    }
+    let required = [
+        "X-Amz-Algorithm=AWS4-HMAC-SHA256",
+        "X-Amz-Credential=",
+        "X-Amz-Date=",
+        "X-Amz-Expires=",
+        "X-Amz-SignedHeaders=",
+        "X-Amz-Signature=",
+    ];
+    required.iter().all(|needle| query.contains(needle))
 }
 
 fn valid_header_name(value: &str) -> bool {
@@ -208,18 +243,25 @@ fn validate_regular_absolute_file(path: &Path) -> Result<(), BridgePortError> {
 
 #[cfg(test)]
 mod tests {
-    use super::{valid_direct_https_url, valid_header_name, valid_header_value};
+    use super::{valid_header_name, valid_header_value, valid_signed_r2_put_url};
 
     #[test]
-    fn signed_put_url_is_https_only_and_fragment_free() {
-        assert!(valid_direct_https_url(
-            "https://0123456789abcdef0123456789abcdef.r2.cloudflarestorage.com/bucket/object?X-Amz-Signature=abc"
-        ));
-        assert!(!valid_direct_https_url("http://example.invalid/object"));
-        assert!(!valid_direct_https_url(
-            "https://example.invalid/object#fragment"
-        ));
-        assert!(!valid_direct_https_url("https://example.invalid/bad url"));
+    fn signed_put_url_requires_direct_canonical_r2_authority() {
+        let good = "https://0123456789abcdef0123456789abcdef.r2.cloudflarestorage.com/profile-generations/tenants/tenant_01/profiles/profile_01/generations/generation_01.bpgc?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=access%2F20260830%2Fauto%2Fs3%2Faws4_request&X-Amz-Date=20260830T120000Z&X-Amz-Expires=300&X-Amz-SignedHeaders=content-type%3Bhost&X-Amz-Signature=abc";
+        assert!(valid_signed_r2_put_url(good));
+        for bad in [
+            good.replacen("https://", "http://", 1),
+            good.replacen(".r2.cloudflarestorage.com", ".example.com", 1),
+            format!("{good}#fragment"),
+            good.replacen("X-Amz-Signature=abc", "signature=abc", 1),
+            good.replacen(
+                "0123456789abcdef0123456789abcdef",
+                "ABCDEF0123456789ABCDEF0123456789",
+                1,
+            ),
+        ] {
+            assert!(!valid_signed_r2_put_url(&bad));
+        }
     }
 
     #[test]
