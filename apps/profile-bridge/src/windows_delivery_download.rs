@@ -4,7 +4,9 @@ use crate::windows_delivery::{VerifiedDeliveryCandidate, WindowsDeliveryComponen
 use sha2::{Digest, Sha256};
 use std::fmt;
 use std::fs::{self, File, Metadata, OpenOptions};
-use std::io::{self, Read, Write};
+use std::io::{self, Read};
+#[cfg(windows)]
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -20,6 +22,7 @@ use std::time::{Duration, Instant};
 const RELEASE_SET_PREFIX: &str = "release-set-v3-sha256-";
 const PROFILE_BRIDGE_ASSET: &str = "profile-bridge.zip";
 const RUNTIME_BUNDLE_ASSET: &str = "runtime-bundle.tar";
+#[cfg(any(test, windows))]
 const RELEASE_BASE_URL: &str =
     "https://github.com/iamaman11/part-crm-emai-profile/releases/download";
 const MAX_DOWNLOAD_BYTES: u64 = 8 * 1024 * 1024 * 1024;
@@ -131,8 +134,7 @@ impl DeliveryDownloadRoot {
                     Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
                     Err(_) => return Err(DeliveryDownloadError::Io),
                 }
-                let metadata =
-                    fs::symlink_metadata(path).map_err(|_| DeliveryDownloadError::Io)?;
+                let metadata = fs::symlink_metadata(path).map_err(|_| DeliveryDownloadError::Io)?;
                 validate_directory_metadata(&metadata)?;
             }
             Err(_) => return Err(DeliveryDownloadError::Io),
@@ -249,28 +251,42 @@ fn materialize_asset<F: DeliveryAssetFetcher>(
     }
 
     let pending_path = pending_path(release_directory, asset_name);
-    if fs::symlink_metadata(&pending_path).is_ok() {
-        return Err(DeliveryDownloadError::Io);
+    match fs::symlink_metadata(&pending_path) {
+        Ok(_) => return Err(DeliveryDownloadError::Io),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(_) => return Err(DeliveryDownloadError::Io),
     }
-    if let Err(_error) = fetcher.fetch_release_asset(
-        release_set_id,
-        asset_name,
-        &pending_path,
-        component.artifact_size_bytes,
-    ) {
+    if fetcher
+        .fetch_release_asset(
+            release_set_id,
+            asset_name,
+            &pending_path,
+            component.artifact_size_bytes,
+        )
+        .is_err()
+    {
         cleanup_pending(&pending_path)?;
         return Err(DeliveryDownloadError::FetchFailed);
     }
-    let exact = verify_file_identity(
+    let exact = match verify_file_identity(
         &pending_path,
         component.artifact_size_bytes,
         &component.artifact_sha256,
-    )?;
+    ) {
+        Ok(exact) => exact,
+        Err(error) => {
+            cleanup_pending(&pending_path)?;
+            return Err(error);
+        }
+    };
     if !exact {
         cleanup_pending(&pending_path)?;
         return Err(DeliveryDownloadError::ArtifactIdentityMismatch);
     }
-    sync_regular_file(&pending_path)?;
+    if let Err(error) = sync_regular_file(&pending_path) {
+        cleanup_pending(&pending_path)?;
+        return Err(error);
+    }
 
     match fs::hard_link(&pending_path, &final_path) {
         Ok(()) => {
@@ -408,15 +424,14 @@ fn encode_lower_hex(bytes: &[u8]) -> String {
     output
 }
 
+#[cfg(any(test, windows))]
 fn release_asset_url(release_set_id: &str, asset_name: &str) -> Option<String> {
     if !prefixed_sha256(release_set_id, RELEASE_SET_PREFIX)
         || !matches!(asset_name, PROFILE_BRIDGE_ASSET | RUNTIME_BUNDLE_ASSET)
     {
         return None;
     }
-    Some(format!(
-        "{RELEASE_BASE_URL}/{release_set_id}/{asset_name}"
-    ))
+    Some(format!("{RELEASE_BASE_URL}/{release_set_id}/{asset_name}"))
 }
 
 fn metadata_is_link_or_reparse(metadata: &Metadata) -> bool {
@@ -494,8 +509,8 @@ impl DeliveryAssetFetcher for WindowsReleaseAssetFetcher {
             .spawn()
             .map_err(|_| WindowsReleaseAssetFetcherError::Process)
             .and_then(|mut child| wait_for_fetch_process(&mut child));
-        let cleanup = fs::remove_file(&script_path)
-            .map_err(|_| WindowsReleaseAssetFetcherError::ScratchIo);
+        let cleanup =
+            fs::remove_file(&script_path).map_err(|_| WindowsReleaseAssetFetcherError::ScratchIo);
         let status = status?;
         cleanup?;
         match status.code() {
@@ -532,10 +547,7 @@ fn fetch_script_path(destination: &Path) -> PathBuf {
 }
 
 #[cfg(windows)]
-fn write_new_synced(
-    path: &Path,
-    bytes: &[u8],
-) -> Result<(), WindowsReleaseAssetFetcherError> {
+fn write_new_synced(path: &Path, bytes: &[u8]) -> Result<(), WindowsReleaseAssetFetcherError> {
     let mut file = OpenOptions::new()
         .write(true)
         .create_new(true)
@@ -661,6 +673,7 @@ mod tests {
         WindowsDeliveryEvidence, WindowsDeliveryManifest, verify_delivery_candidate,
     };
     use bridge_domain::CAMOUHOST_IPC_VERSION;
+    use std::io::Write;
     use std::sync::atomic::{AtomicU64, Ordering};
 
     type TestResult = Result<(), Box<dyn std::error::Error>>;
@@ -793,11 +806,8 @@ mod tests {
             key_id: "test-release".to_owned(),
             cms_der_hex: "00".to_owned(),
         })?;
-        let signer = TrustedSigner::new(
-            "test-release",
-            "a".repeat(64),
-            TrustedSignerStatus::Active,
-        )?;
+        let signer =
+            TrustedSigner::new("test-release", "a".repeat(64), TrustedSignerStatus::Active)?;
         let trust = TrustedSignerSet::new([signer])?;
         Ok(verify_delivery_candidate(
             &manifest_bytes,
@@ -829,7 +839,10 @@ mod tests {
         assert_eq!(fs::read(first.runtime_bundle())?, runtime);
         assert_eq!(
             fetcher.calls,
-            [PROFILE_BRIDGE_ASSET.to_owned(), RUNTIME_BUNDLE_ASSET.to_owned()]
+            [
+                PROFILE_BRIDGE_ASSET.to_owned(),
+                RUNTIME_BUNDLE_ASSET.to_owned()
+            ]
         );
 
         let second = download_verified_delivery(&root, &candidate, &mut RejectingFetcher)?;
