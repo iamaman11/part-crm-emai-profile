@@ -631,7 +631,13 @@ mod tests {
             second.sealed().metadata().generation_id(),
             &candidate_generation_id
         );
-        assert!(!second.candidate_workspace().path().join("retry-residue").exists());
+        assert!(
+            !second
+                .candidate_workspace()
+                .path()
+                .join("retry-residue")
+                .exists()
+        );
         assert_eq!(
             second.candidate_workspace().inventory()?,
             *second.candidate_inventory()
