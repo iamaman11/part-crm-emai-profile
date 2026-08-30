@@ -28,6 +28,7 @@ pub mod shipping_generation_successor_control;
 pub mod shipping_network;
 pub mod shipping_preflight;
 pub mod windows_delivery;
+pub mod windows_delivery_store;
 
 #[cfg(test)]
 mod operator_p3_reopen_e2e_tests;
