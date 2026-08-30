@@ -99,20 +99,19 @@ impl MachineHttpPort for BackendMachineHttp {
             state.launch_count = state.launch_count.saturating_add(1);
             state.pending_launch_intent =
                 Some(format!("launch_p3_reopen_{:04}", state.launch_count));
+            let active_generation = state.active_generation.as_str().to_owned();
             let projection = BridgeProfileLaunchRedemptionProjection {
                 tenant_id: TENANT.to_owned(),
                 actor_id: ACTOR.to_owned(),
                 profile_id: PROFILE.to_owned(),
-                generation_id: state.active_generation.as_str().to_owned(),
+                generation_id: active_generation.clone(),
                 device_id: DEVICE.to_owned(),
                 launch_intent_id: state
                     .pending_launch_intent
                     .clone()
                     .ok_or(BridgePortError::InvalidResponse)?,
             };
-            state
-                .events
-                .push(format!("redeem:{}", state.active_generation.as_str()));
+            state.events.push(format!("redeem:{active_generation}"));
             return json_response(&projection);
         }
 
