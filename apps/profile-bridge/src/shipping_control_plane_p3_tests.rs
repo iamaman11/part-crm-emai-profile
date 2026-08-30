@@ -67,10 +67,7 @@ impl MachineHttpPort for OpeningMaterialTransport {
 
         if path.ends_with("/generation-reopen/opening-material") {
             self.opening_requests = self.opening_requests.saturating_add(1);
-            return Ok(MachineHttpResponse::new(
-                200,
-                self.opening_response.clone(),
-            ));
+            return Ok(MachineHttpResponse::new(200, self.opening_response.clone()));
         }
 
         let request = serde_json::from_slice::<CoordinatorCommandRequestDto>(body.ok_or(())?)
@@ -162,11 +159,8 @@ impl Fixture {
     }
 
     fn opening_material(&mut self) -> Result<GenerationDek, ShippingControlPlaneError> {
-        self.coordinator.opening_material(
-            &self.tenant_id,
-            &self.profile_id,
-            &self.metadata_prelude,
-        )
+        self.coordinator
+            .opening_material(&self.tenant_id, &self.profile_id, &self.metadata_prelude)
     }
 }
 
@@ -201,19 +195,21 @@ fn metadata_prelude(
 }
 
 fn response(key_id: &str, dek_hex: String) -> Result<Vec<u8>, serde_json::Error> {
-    serde_json::to_vec(&BridgeGenerationOpeningMaterialResponse::new(key_id, dek_hex))
+    serde_json::to_vec(&BridgeGenerationOpeningMaterialResponse::new(
+        key_id, dek_hex,
+    ))
 }
 
 #[test]
 fn opening_material_accepts_only_exact_authenticated_key_material()
 -> Result<(), Box<dyn std::error::Error>> {
-    let mut fixture = Fixture::new(response(
-        "profile-generation-root-v1-7",
-        "ab".repeat(32),
-    )?)?;
+    let mut fixture = Fixture::new(response("profile-generation-root-v1-7", "ab".repeat(32))?)?;
     let material = fixture.opening_material()?;
     assert_eq!(material.key_id(), &fixture.key_id);
-    assert_eq!(fixture.coordinator.runtime_timing()?.idle_expires_at_ms(), 30_000);
+    assert_eq!(
+        fixture.coordinator.runtime_timing()?.idle_expires_at_ms(),
+        30_000
+    );
     Ok(())
 }
 
