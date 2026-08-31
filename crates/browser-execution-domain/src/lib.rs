@@ -21,28 +21,37 @@ const MAX_ROUTE_IDENTITY_BYTES: usize = 128;
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct BrowserIdentityManifest {
     compatibility_version: u32,
+    fingerprint_policy_version: String,
     runtime_version: String,
     runtime_inventory_sha256: String,
     fingerprint_source: String,
     fingerprint_config_sha256: String,
+    profile_stable_identity: ProfileStableIdentity,
 }
 
 impl BrowserIdentityManifest {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         compatibility_version: u32,
+        fingerprint_policy_version: impl Into<String>,
         runtime_version: impl Into<String>,
         runtime_inventory_sha256: impl Into<String>,
         fingerprint_source: impl Into<String>,
         fingerprint_config_sha256: impl Into<String>,
+        profile_stable_identity: ProfileStableIdentity,
     ) -> Result<Self, BrowserExecutionError> {
         if compatibility_version == 0 {
             return Err(BrowserExecutionError::InvalidCompatibilityVersion);
         }
+        let fingerprint_policy_version = fingerprint_policy_version.into();
         let runtime_version = runtime_version.into();
         let runtime_inventory_sha256 = runtime_inventory_sha256.into();
         let fingerprint_source = fingerprint_source.into();
         let fingerprint_config_sha256 = fingerprint_config_sha256.into();
-        if !valid_token(&runtime_version) || !valid_token(&fingerprint_source) {
+        if !valid_token(&fingerprint_policy_version)
+            || !valid_token(&runtime_version)
+            || !valid_token(&fingerprint_source)
+        {
             return Err(BrowserExecutionError::InvalidIdentityToken);
         }
         if !valid_sha256(&runtime_inventory_sha256) || !valid_sha256(&fingerprint_config_sha256) {
@@ -50,16 +59,23 @@ impl BrowserIdentityManifest {
         }
         Ok(Self {
             compatibility_version,
+            fingerprint_policy_version,
             runtime_version,
             runtime_inventory_sha256,
             fingerprint_source,
             fingerprint_config_sha256,
+            profile_stable_identity,
         })
     }
 
     #[must_use]
     pub const fn compatibility_version(&self) -> u32 {
         self.compatibility_version
+    }
+
+    #[must_use]
+    pub fn fingerprint_policy_version(&self) -> &str {
+        &self.fingerprint_policy_version
     }
 
     #[must_use]
@@ -72,6 +88,8 @@ impl BrowserIdentityManifest {
         &self.runtime_inventory_sha256
     }
 
+    /// Aggregate probe identity remains additional runtime evidence. Policy semantics are owned by
+    /// `profile_stable_identity`, not by this token.
     #[must_use]
     pub fn fingerprint_source(&self) -> &str {
         &self.fingerprint_source
@@ -80,6 +98,11 @@ impl BrowserIdentityManifest {
     #[must_use]
     pub fn fingerprint_config_sha256(&self) -> &str {
         &self.fingerprint_config_sha256
+    }
+
+    #[must_use]
+    pub const fn profile_stable_identity(&self) -> &ProfileStableIdentity {
+        &self.profile_stable_identity
     }
 
     #[must_use]
@@ -436,19 +459,57 @@ fn valid_route_identity(value: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        BrowserIdentityCompatibility, BrowserIdentityManifest, BrowserWriterDecision,
-        BrowserWriterObservation, MaterializationBinding, NetworkClass, NetworkIdentityDecision,
-        NetworkIdentityObservation, NetworkIdentityPolicy,
+        BrowserIdentityCompatibility, BrowserIdentityManifest, BrowserOsIdentity,
+        BrowserWriterDecision, BrowserWriterObservation, DisplayIdentity, FontIdentity,
+        GraphicsIdentity, HardwareCapabilityIdentity, LocaleIdentity, MaterializationBinding,
+        NetworkClass, NetworkIdentityDecision, NetworkIdentityObservation, NetworkIdentityPolicy,
+        OriginDeterminismMode, OriginDeterministicIdentity, ProfileStableIdentity,
     };
     use profile_platform_primitives::{GenerationId, ProfileId, TenantId};
 
+    fn digest(character: char) -> String {
+        character.to_string().repeat(64)
+    }
+
+    fn profile_stable(character: char) -> Result<ProfileStableIdentity, Box<dyn std::error::Error>> {
+        Ok(ProfileStableIdentity::new(
+            1,
+            BrowserOsIdentity::new(
+                "Mozilla/5.0 Firefox/152.0",
+                152,
+                "Win32",
+                "Windows NT 10.0; Win64; x64",
+            )?,
+            HardwareCapabilityIdentity::new(8, 8, 0)?,
+            DisplayIdentity::new(1920, 1080, 1920, 1040, 0, 0, 24, 24, 1000)?,
+            GraphicsIdentity::new(
+                "Google Inc. (NVIDIA)",
+                "ANGLE (NVIDIA GeForce)",
+                digest(character),
+                digest(character),
+                digest(character),
+                digest(character),
+                digest(character),
+            )?,
+            FontIdentity::new(digest(character), digest(character))?,
+            OriginDeterministicIdentity::new(
+                OriginDeterminismMode::ProfileGenerationSeed,
+                digest(character),
+                digest(character),
+            )?,
+            LocaleIdentity::new("en-US", digest(character), None)?,
+        )?)
+    }
+
     fn identity(character: char) -> Result<BrowserIdentityManifest, Box<dyn std::error::Error>> {
         Ok(BrowserIdentityManifest::new(
-            1,
+            2,
+            "profile-stability-v1",
             "1.2.3",
-            character.to_string().repeat(64),
+            digest(character),
             "camoufox-v1",
-            character.to_string().repeat(64),
+            digest(character),
+            profile_stable(character)?,
         )?)
     }
 
