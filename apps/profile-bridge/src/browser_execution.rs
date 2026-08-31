@@ -531,7 +531,7 @@ mod tests {
         )?;
         assert_eq!(
             load_materialization_binding(&workspace, &tenant, &profile, &generation),
-            Err(BrowserLaunchBlocker::MaterializationStale)
+            Err(BrowserLaunchBlocker::InvalidMaterializationEvidence)
         );
         remove_test_root(&root_path)?;
         Ok(())
