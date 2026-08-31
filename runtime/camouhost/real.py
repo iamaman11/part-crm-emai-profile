@@ -465,6 +465,18 @@ def preserve_generated_browserforge_projection(config: dict[str, Any], fingerpri
     preserve_generated_locale_projection(config, fingerprint.navigator)
 
 
+def locked_firefox_major(lock: dict[str, Any]) -> int:
+    """Project the managed Firefox major only from the immutable runtime lock."""
+    browser = lock.get("browser")
+    version = browser.get("version") if isinstance(browser, dict) else None
+    if not isinstance(version, str):
+        raise RuntimeContractError("browser lock is invalid")
+    match = re.fullmatch(r"([1-9][0-9]*)\.[0-9]+\.[0-9]+-beta\.[0-9]+", version)
+    if match is None:
+        raise RuntimeContractError("browser lock version is unsupported")
+    return int(match.group(1))
+
+
 def packaged_windows_browser(lock: dict[str, Any]) -> Path:
     distribution = lock.get("windows_distribution")
     if not isinstance(distribution, dict):
@@ -511,6 +523,7 @@ def camoufox_kwargs(
         "config": copy.deepcopy(config),
         "enable_cache": True,
         "env": browser_environment(),
+        "ff_version": locked_firefox_major(lock),
         "firefox_user_prefs": {
             "privacy.baselineFingerprintingProtection": False,
         },
@@ -758,6 +771,7 @@ def materialize_candidate_identity(root: Path) -> dict[str, str]:
             **browser_selector,
             enable_cache=True,
             env=browser_env,
+            ff_version=locked_firefox_major(lock),
             fingerprint=fingerprint,
             headless=headless_mode,
             i_know_what_im_doing=True,
