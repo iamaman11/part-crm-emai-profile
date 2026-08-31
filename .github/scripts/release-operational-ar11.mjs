@@ -172,7 +172,7 @@ function promotionErrors(promotion) {
   if (count(promotion, 'workflow_dispatch:') !== 1) errors.push('Release Set promotion must expose exactly one manual dispatch surface');
   if (count(promotion, 'secrets.CLOUDFLARE_API_TOKEN') !== 1) errors.push('deploy-capable Cloudflare token must be referenced exactly once, inside mutation executor');
   if (count(promotion, 'materialize current-v3') !== 5) errors.push(`current v3 Release Set materialization must occur exactly five times, observed=${count(promotion, 'materialize current-v3')}`);
-  if (count(promotion, 'materialize known-good-v2-v3') !== 1) errors.push(`historical v2/v3 materialization must occur exactly once in known-good verification, observed=${count(promotion, 'materialize known-good-v2-v3')}`);
+  if (count(promotion, 'materialize known-good-v2-v3') !== 1) errors.push(`historical v2/v3 Release Set materialization must occur exactly once in known-good verification, observed=${count(promotion, 'materialize known-good-v2-v3')}`);
   errors.push(...forbidMarkers(promotion, [
     'workflow_run:', 'issue_comment:', 'pull_request_target:', 'pull_request:\n', 'operator-entrypoint:',
     'test "$source_sha" = "$main_sha"',
@@ -210,7 +210,7 @@ function promotionErrors(promotion) {
   errors.push(...forbidMarkers(resolve, [
     '[[ "$RELEASE_SET_ID" =~ ^release-set-v2-sha256-[0-9a-f]{64}$ ]]',
     'materialize known-good-v2-v3',
-    'test "$(jq -r \' .schema_version\' "$policy_dir/release-set.json")" = 2',
+    'test "$(jq -r \'.schema_version\' "$policy_dir/release-set.json")" = 2',
     '.release_set_schema_version == 2',
     'secrets.CLOUDFLARE_', 'environment: staging', 'wrangler deploy', 'wrangler d1 execute',
     'curl --silent --show-error --output "$RUNNER_TEMP/deployments-api.json"',
