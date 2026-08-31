@@ -1,20 +1,26 @@
 use crate::local_profile::{GenerationWorkspace, LocalProfileError};
 use browser_execution_domain::{
-    BrowserExecutionError, BrowserIdentityManifest, BrowserWriterDecision,
-    BrowserWriterObservation, MaterializationBinding, NetworkIdentityDecision,
-    NetworkIdentityObservation, NetworkIdentityPolicy,
+    BrowserExecutionError, BrowserIdentityManifest, BrowserOsIdentity, BrowserWriterDecision,
+    BrowserWriterObservation, DisplayIdentity, FontIdentity, GraphicsIdentity,
+    HardwareCapabilityIdentity, LocaleIdentity, MaterializationBinding, NetworkIdentityDecision,
+    NetworkIdentityObservation, NetworkIdentityPolicy, OriginDeterminismMode,
+    OriginDeterministicIdentity, ProfileStableIdentity,
 };
 use profile_platform_primitives::{DeviceId, GenerationId, ProfileId, TenantId};
+use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
-const MATERIALIZATION_SCHEMA: &str = "profile-platform-materialization-v1";
+const MATERIALIZATION_SCHEMA: &str = "profile-platform-materialization-v2";
+const BROWSER_IDENTITY_RECORD_SCHEMA: &str = "profile-platform-browser-identity-v1";
+pub(crate) const BROWSER_IDENTITY_RECORD_FILE: &str = ".profile-browser-identity-v1";
 const BRIDGE_LOCK_FILE: &str = ".profile-platform.lock";
 const BRIDGE_LOCK_SCHEMA: &str = "profile-platform-bridge-lock-v1";
 const FIREFOX_PARENT_LOCK_FILE: &str = ".parentlock";
 const FIREFOX_LOCK_FILE: &str = "lock";
+const NONE_DIGEST: &str = "none";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum BrowserLaunchBlocker {
@@ -49,6 +55,9 @@ impl core::fmt::Display for BrowserLaunchBlocker {
 
 impl std::error::Error for BrowserLaunchBlocker {}
 
+/// Persist the generation-owned browser identity first, then bind local materialization evidence to
+/// its exact SHA-256. The identity record lives inside the generation and therefore travels through
+/// the existing encrypted snapshot/save/reopen path; the sidecar remains host-local evidence only.
 pub fn persist_materialization_binding(
     workspace: &GenerationWorkspace,
     binding: &MaterializationBinding,
@@ -56,25 +65,12 @@ pub fn persist_materialization_binding(
     if workspace.materialization_inventory_digest()? != binding.materialized_inventory_digest() {
         return Err(BrowserLaunchBlocker::MaterializationStale);
     }
+    let identity_record = render_identity_record(binding.browser_identity());
+    persist_exact_text(&browser_identity_record_path(workspace), &identity_record)?;
+    let identity_sha256 = sha256_hex(identity_record.as_bytes());
     let path = materialization_sidecar(workspace, binding.generation_id())?;
-    let content = render_binding(binding);
-    match OpenOptions::new().write(true).create_new(true).open(&path) {
-        Ok(mut file) => {
-            file.write_all(content.as_bytes())
-                .map_err(LocalProfileError::from)?;
-            file.sync_all().map_err(LocalProfileError::from)?;
-            Ok(())
-        }
-        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
-            let existing = read_regular_file(&path)?;
-            if existing == content {
-                Ok(())
-            } else {
-                Err(BrowserLaunchBlocker::MaterializationStale)
-            }
-        }
-        Err(error) => Err(LocalProfileError::from(error).into()),
-    }
+    let content = render_binding(binding, &identity_sha256);
+    persist_exact_text(&path, &content)
 }
 
 pub fn load_materialization_binding(
@@ -83,9 +79,44 @@ pub fn load_materialization_binding(
     profile_id: &ProfileId,
     generation_id: &GenerationId,
 ) -> Result<MaterializationBinding, BrowserLaunchBlocker> {
+    let identity_record = read_regular_file(&browser_identity_record_path(workspace))?;
+    let identity_sha256 = sha256_hex(identity_record.as_bytes());
+    let identity = parse_identity_record(&identity_record)?;
     let path = materialization_sidecar(workspace, generation_id)?;
     let content = read_regular_file(&path)?;
-    parse_binding(&content, tenant_id, profile_id, generation_id)
+    parse_binding(
+        &content,
+        tenant_id,
+        profile_id,
+        generation_id,
+        identity,
+        &identity_sha256,
+    )
+}
+
+/// Rebuild host-local materialization evidence only after an authenticated generation has been
+/// opened and materialized. This never creates or changes browser identity; missing identity in the
+/// generation fails closed and requires an explicit candidate-generation migration.
+pub fn restore_materialization_binding_after_authoritative_open(
+    workspace: &GenerationWorkspace,
+    tenant_id: &TenantId,
+    profile_id: &ProfileId,
+    generation_id: &GenerationId,
+    source_container_sha256: &str,
+) -> Result<MaterializationBinding, BrowserLaunchBlocker> {
+    let identity_record = read_regular_file(&browser_identity_record_path(workspace))?;
+    let identity = parse_identity_record(&identity_record)?;
+    let binding = MaterializationBinding::new(
+        tenant_id.clone(),
+        profile_id.clone(),
+        generation_id.clone(),
+        source_container_sha256,
+        workspace.materialization_inventory_digest()?,
+        identity,
+    )
+    .map_err(map_execution_error)?;
+    persist_materialization_binding(workspace, &binding)?;
+    Ok(binding)
 }
 
 pub fn evaluate_browser_launch(
@@ -173,20 +204,19 @@ fn materialization_sidecar(
     Ok(parent.join(format!(".{}.materialization", generation_id.as_str())))
 }
 
-fn render_binding(binding: &MaterializationBinding) -> String {
-    let identity = binding.browser_identity();
+fn browser_identity_record_path(workspace: &GenerationWorkspace) -> PathBuf {
+    workspace.path().join(BROWSER_IDENTITY_RECORD_FILE)
+}
+
+fn render_binding(binding: &MaterializationBinding, browser_identity_sha256: &str) -> String {
     format!(
-        "schema={MATERIALIZATION_SCHEMA}\ntenant_id={}\nprofile_id={}\ngeneration_id={}\nsource_container_sha256={}\nmaterialized_inventory_digest={}\nidentity_compatibility_version={}\nruntime_version={}\nruntime_inventory_sha256={}\nfingerprint_source={}\nfingerprint_config_sha256={}\n",
+        "schema={MATERIALIZATION_SCHEMA}\ntenant_id={}\nprofile_id={}\ngeneration_id={}\nsource_container_sha256={}\nmaterialized_inventory_digest={}\nbrowser_identity_sha256={}\n",
         binding.tenant_id().as_str(),
         binding.profile_id().as_str(),
         binding.generation_id().as_str(),
         binding.source_container_sha256(),
         binding.materialized_inventory_digest(),
-        identity.compatibility_version(),
-        identity.runtime_version(),
-        identity.runtime_inventory_sha256(),
-        identity.fingerprint_source(),
-        identity.fingerprint_config_sha256(),
+        browser_identity_sha256,
     )
 }
 
@@ -195,20 +225,10 @@ fn parse_binding(
     expected_tenant: &TenantId,
     expected_profile: &ProfileId,
     expected_generation: &GenerationId,
+    identity: BrowserIdentityManifest,
+    actual_identity_sha256: &str,
 ) -> Result<MaterializationBinding, BrowserLaunchBlocker> {
-    let mut values = BTreeMap::new();
-    for line in content.lines() {
-        let (key, value) = line
-            .split_once('=')
-            .ok_or(BrowserLaunchBlocker::InvalidMaterializationEvidence)?;
-        if key.is_empty() || value.is_empty() || values.insert(key, value).is_some() {
-            return Err(BrowserLaunchBlocker::InvalidMaterializationEvidence);
-        }
-    }
-    if values.len() != 11 || values.get("schema") != Some(&MATERIALIZATION_SCHEMA) {
-        return Err(BrowserLaunchBlocker::InvalidMaterializationEvidence);
-    }
-
+    let values = parse_record(content, 7, MATERIALIZATION_SCHEMA)?;
     let tenant = TenantId::parse(required(&values, "tenant_id")?)
         .map_err(|_| BrowserLaunchBlocker::InvalidMaterializationEvidence)?;
     let profile = ProfileId::parse(required(&values, "profile_id")?)
@@ -221,20 +241,12 @@ fn parse_binding(
     {
         return Err(BrowserLaunchBlocker::MaterializationStale);
     }
-    let compatibility_version = required(&values, "identity_compatibility_version")?
-        .parse::<u32>()
-        .map_err(|_| BrowserLaunchBlocker::InvalidMaterializationEvidence)?;
+    if required(&values, "browser_identity_sha256")? != actual_identity_sha256 {
+        return Err(BrowserLaunchBlocker::MaterializationStale);
+    }
     let materialized_inventory_digest = required(&values, "materialized_inventory_digest")?
         .parse::<u64>()
         .map_err(|_| BrowserLaunchBlocker::InvalidMaterializationEvidence)?;
-    let identity = BrowserIdentityManifest::new(
-        compatibility_version,
-        required(&values, "runtime_version")?,
-        required(&values, "runtime_inventory_sha256")?,
-        required(&values, "fingerprint_source")?,
-        required(&values, "fingerprint_config_sha256")?,
-    )
-    .map_err(map_execution_error)?;
     MaterializationBinding::new(
         tenant,
         profile,
@@ -246,6 +258,202 @@ fn parse_binding(
     .map_err(map_execution_error)
 }
 
+fn render_identity_record(identity: &BrowserIdentityManifest) -> String {
+    let stable = identity.profile_stable_identity();
+    let browser = stable.browser_os();
+    let hardware = stable.hardware();
+    let display = stable.display();
+    let graphics = stable.graphics();
+    let fonts = stable.fonts();
+    let origin = stable.origin_deterministic();
+    let locale = stable.locale();
+    let origin_mode = match origin.mode() {
+        OriginDeterminismMode::ProfileGenerationSeed => "profile-generation-seed",
+        OriginDeterminismMode::OriginHmac => "origin-hmac",
+    };
+    let speech_voices = locale.speech_voices_sha256().unwrap_or(NONE_DIGEST);
+    format!(
+        concat!(
+            "schema={BROWSER_IDENTITY_RECORD_SCHEMA}\n",
+            "identity_compatibility_version={}\n",
+            "fingerprint_policy_version={}\n",
+            "runtime_version={}\n",
+            "runtime_inventory_sha256={}\n",
+            "fingerprint_source={}\n",
+            "fingerprint_config_sha256={}\n",
+            "profile_stable_schema_version={}\n",
+            "browser_user_agent={}\n",
+            "browser_major={}\n",
+            "browser_platform={}\n",
+            "browser_oscpu={}\n",
+            "hardware_concurrency={}\n",
+            "device_memory_gib={}\n",
+            "max_touch_points={}\n",
+            "display_width={}\n",
+            "display_height={}\n",
+            "display_avail_width={}\n",
+            "display_avail_height={}\n",
+            "display_avail_left={}\n",
+            "display_avail_top={}\n",
+            "display_color_depth={}\n",
+            "display_pixel_depth={}\n",
+            "display_dpr_milli={}\n",
+            "webgl_vendor={}\n",
+            "webgl_renderer={}\n",
+            "webgl_extensions_sha256={}\n",
+            "webgl_parameters_sha256={}\n",
+            "webgl2_parameters_sha256={}\n",
+            "shader_precision_sha256={}\n",
+            "context_attributes_sha256={}\n",
+            "font_set_sha256={}\n",
+            "spacing_seed_sha256={}\n",
+            "origin_determinism_mode={}\n",
+            "canvas_seed_sha256={}\n",
+            "audio_seed_sha256={}\n",
+            "locale_language={}\n",
+            "languages_sha256={}\n",
+            "speech_voices_sha256={}\n"
+        ),
+        identity.compatibility_version(),
+        identity.fingerprint_policy_version(),
+        identity.runtime_version(),
+        identity.runtime_inventory_sha256(),
+        identity.fingerprint_source(),
+        identity.fingerprint_config_sha256(),
+        stable.schema_version(),
+        browser.user_agent(),
+        browser.browser_major(),
+        browser.platform(),
+        browser.oscpu(),
+        hardware.hardware_concurrency(),
+        hardware.device_memory_gib(),
+        hardware.max_touch_points(),
+        display.width(),
+        display.height(),
+        display.avail_width(),
+        display.avail_height(),
+        display.avail_left(),
+        display.avail_top(),
+        display.color_depth(),
+        display.pixel_depth(),
+        display.device_pixel_ratio_milli(),
+        graphics.webgl_vendor(),
+        graphics.webgl_renderer(),
+        graphics.webgl_extensions_sha256(),
+        graphics.webgl_parameters_sha256(),
+        graphics.webgl2_parameters_sha256(),
+        graphics.shader_precision_sha256(),
+        graphics.context_attributes_sha256(),
+        fonts.font_set_sha256(),
+        fonts.spacing_seed_sha256(),
+        origin_mode,
+        origin.canvas_seed_sha256(),
+        origin.audio_seed_sha256(),
+        locale.language(),
+        locale.languages_sha256(),
+        speech_voices,
+    )
+}
+
+fn parse_identity_record(content: &str) -> Result<BrowserIdentityManifest, BrowserLaunchBlocker> {
+    let values = parse_record(content, 39, BROWSER_IDENTITY_RECORD_SCHEMA)?;
+    let origin_mode = match required(&values, "origin_determinism_mode")? {
+        "profile-generation-seed" => OriginDeterminismMode::ProfileGenerationSeed,
+        "origin-hmac" => OriginDeterminismMode::OriginHmac,
+        _ => return Err(BrowserLaunchBlocker::InvalidMaterializationEvidence),
+    };
+    let speech_voices = match required(&values, "speech_voices_sha256")? {
+        NONE_DIGEST => None,
+        value => Some(value.to_owned()),
+    };
+    let stable = ProfileStableIdentity::new(
+        parse_number(&values, "profile_stable_schema_version")?,
+        BrowserOsIdentity::new(
+            required(&values, "browser_user_agent")?,
+            parse_number(&values, "browser_major")?,
+            required(&values, "browser_platform")?,
+            required(&values, "browser_oscpu")?,
+        )
+        .map_err(map_execution_error)?,
+        HardwareCapabilityIdentity::new(
+            parse_number(&values, "hardware_concurrency")?,
+            parse_number(&values, "device_memory_gib")?,
+            parse_number(&values, "max_touch_points")?,
+        )
+        .map_err(map_execution_error)?,
+        DisplayIdentity::new(
+            parse_number(&values, "display_width")?,
+            parse_number(&values, "display_height")?,
+            parse_number(&values, "display_avail_width")?,
+            parse_number(&values, "display_avail_height")?,
+            parse_number(&values, "display_avail_left")?,
+            parse_number(&values, "display_avail_top")?,
+            parse_number(&values, "display_color_depth")?,
+            parse_number(&values, "display_pixel_depth")?,
+            parse_number(&values, "display_dpr_milli")?,
+        )
+        .map_err(map_execution_error)?,
+        GraphicsIdentity::new(
+            required(&values, "webgl_vendor")?,
+            required(&values, "webgl_renderer")?,
+            required(&values, "webgl_extensions_sha256")?,
+            required(&values, "webgl_parameters_sha256")?,
+            required(&values, "webgl2_parameters_sha256")?,
+            required(&values, "shader_precision_sha256")?,
+            required(&values, "context_attributes_sha256")?,
+        )
+        .map_err(map_execution_error)?,
+        FontIdentity::new(
+            required(&values, "font_set_sha256")?,
+            required(&values, "spacing_seed_sha256")?,
+        )
+        .map_err(map_execution_error)?,
+        OriginDeterministicIdentity::new(
+            origin_mode,
+            required(&values, "canvas_seed_sha256")?,
+            required(&values, "audio_seed_sha256")?,
+        )
+        .map_err(map_execution_error)?,
+        LocaleIdentity::new(
+            required(&values, "locale_language")?,
+            required(&values, "languages_sha256")?,
+            speech_voices,
+        )
+        .map_err(map_execution_error)?,
+    )
+    .map_err(map_execution_error)?;
+    BrowserIdentityManifest::new(
+        parse_number(&values, "identity_compatibility_version")?,
+        required(&values, "fingerprint_policy_version")?,
+        required(&values, "runtime_version")?,
+        required(&values, "runtime_inventory_sha256")?,
+        required(&values, "fingerprint_source")?,
+        required(&values, "fingerprint_config_sha256")?,
+        stable,
+    )
+    .map_err(map_execution_error)
+}
+
+fn parse_record<'a>(
+    content: &'a str,
+    expected_fields: usize,
+    expected_schema: &str,
+) -> Result<BTreeMap<&'a str, &'a str>, BrowserLaunchBlocker> {
+    let mut values = BTreeMap::new();
+    for line in content.lines() {
+        let (key, value) = line
+            .split_once('=')
+            .ok_or(BrowserLaunchBlocker::InvalidMaterializationEvidence)?;
+        if key.is_empty() || value.is_empty() || values.insert(key, value).is_some() {
+            return Err(BrowserLaunchBlocker::InvalidMaterializationEvidence);
+        }
+    }
+    if values.len() != expected_fields || values.get("schema") != Some(&expected_schema) {
+        return Err(BrowserLaunchBlocker::InvalidMaterializationEvidence);
+    }
+    Ok(values)
+}
+
 fn required<'a>(
     values: &'a BTreeMap<&str, &str>,
     key: &str,
@@ -254,6 +462,49 @@ fn required<'a>(
         .get(key)
         .copied()
         .ok_or(BrowserLaunchBlocker::InvalidMaterializationEvidence)
+}
+
+fn parse_number<T>(
+    values: &BTreeMap<&str, &str>,
+    key: &str,
+) -> Result<T, BrowserLaunchBlocker>
+where
+    T: core::str::FromStr,
+{
+    required(values, key)?
+        .parse::<T>()
+        .map_err(|_| BrowserLaunchBlocker::InvalidMaterializationEvidence)
+}
+
+fn persist_exact_text(path: &Path, content: &str) -> Result<(), BrowserLaunchBlocker> {
+    match OpenOptions::new().write(true).create_new(true).open(path) {
+        Ok(mut file) => {
+            file.write_all(content.as_bytes())
+                .map_err(LocalProfileError::from)?;
+            file.sync_all().map_err(LocalProfileError::from)?;
+            Ok(())
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+            let existing = read_regular_file(path)?;
+            if existing == content {
+                Ok(())
+            } else {
+                Err(BrowserLaunchBlocker::MaterializationStale)
+            }
+        }
+        Err(error) => Err(LocalProfileError::from(error).into()),
+    }
+}
+
+fn sha256_hex(content: &[u8]) -> String {
+    let digest = Sha256::digest(content);
+    let mut encoded = String::with_capacity(64);
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    for byte in digest {
+        encoded.push(char::from(HEX[usize::from(byte >> 4)]));
+        encoded.push(char::from(HEX[usize::from(byte & 0x0f)]));
+    }
+    encoded
 }
 
 fn read_regular_file(path: &Path) -> Result<String, BrowserLaunchBlocker> {
@@ -280,12 +531,17 @@ fn map_execution_error(_error: BrowserExecutionError) -> BrowserLaunchBlocker {
 
 #[cfg(test)]
 mod tests {
-    use super::{BrowserLaunchBlocker, evaluate_browser_launch, persist_materialization_binding};
+    use super::{
+        BROWSER_IDENTITY_RECORD_FILE, BrowserLaunchBlocker, evaluate_browser_launch,
+        load_materialization_binding, persist_materialization_binding,
+    };
     use crate::local_profile::{BridgeWorkspaceLock, MaterializationRoot};
     use crate::test_support::remove_test_root;
     use browser_execution_domain::{
-        BrowserIdentityManifest, MaterializationBinding, NetworkClass, NetworkIdentityObservation,
-        NetworkIdentityPolicy,
+        BrowserIdentityManifest, BrowserOsIdentity, DisplayIdentity, FontIdentity, GraphicsIdentity,
+        HardwareCapabilityIdentity, LocaleIdentity, MaterializationBinding, NetworkClass,
+        NetworkIdentityObservation, NetworkIdentityPolicy, OriginDeterminismMode,
+        OriginDeterministicIdentity, ProfileStableIdentity,
     };
     use profile_platform_primitives::{DeviceId, GenerationId, ProfileId, TenantId};
     use std::fs;
@@ -301,12 +557,42 @@ mod tests {
     }
 
     fn identity() -> Result<BrowserIdentityManifest, Box<dyn std::error::Error>> {
-        Ok(BrowserIdentityManifest::new(
+        let digest = |character: char| character.to_string().repeat(64);
+        let stable = ProfileStableIdentity::new(
             1,
+            BrowserOsIdentity::new(
+                "Mozilla/5.0 Firefox/152.0",
+                152,
+                "Win32",
+                "Windows NT 10.0; Win64; x64",
+            )?,
+            HardwareCapabilityIdentity::new(8, 8, 0)?,
+            DisplayIdentity::new(1920, 1080, 1920, 1040, 0, 0, 24, 24, 1000)?,
+            GraphicsIdentity::new(
+                "Google Inc. (NVIDIA)",
+                "ANGLE (NVIDIA GeForce)",
+                digest('1'),
+                digest('2'),
+                digest('3'),
+                digest('4'),
+                digest('5'),
+            )?,
+            FontIdentity::new(digest('6'), digest('7'))?,
+            OriginDeterministicIdentity::new(
+                OriginDeterminismMode::ProfileGenerationSeed,
+                digest('8'),
+                digest('9'),
+            )?,
+            LocaleIdentity::new("en-US", digest('a'), Some(digest('b')))?,
+        )?;
+        Ok(BrowserIdentityManifest::new(
+            2,
+            "profile-stability-v1",
             "1.2.3",
-            "a".repeat(64),
-            "camoufox-v1",
-            "b".repeat(64),
+            digest('c'),
+            "profile-stability-v1-probe-test",
+            digest('d'),
+            stable,
         )?)
     }
 
@@ -353,6 +639,16 @@ mod tests {
             identity()?,
         )?;
         persist_materialization_binding(&workspace, &binding)?;
+        assert!(workspace.path().join(BROWSER_IDENTITY_RECORD_FILE).is_file());
+        assert_eq!(
+            load_materialization_binding(
+                &workspace,
+                binding.tenant_id(),
+                binding.profile_id(),
+                binding.generation_id(),
+            )?,
+            binding
+        );
         evaluate_browser_launch(
             &workspace,
             &device,
@@ -392,6 +688,38 @@ mod tests {
             Err(BrowserLaunchBlocker::MaterializationStale)
         );
         bridge_lock.release()?;
+        remove_test_root(&root_path)?;
+        Ok(())
+    }
+
+    #[test]
+    fn tampered_generation_owned_identity_fails_closed()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let root_path = root_path("identity-tamper")?;
+        let root = MaterializationRoot::open_or_create(&root_path)?;
+        let tenant = TenantId::parse("tenant_01JIDENTITY")?;
+        let profile = ProfileId::parse("profile_01JIDENTITY")?;
+        let generation = GenerationId::parse("generation_01JIDENTITY")?;
+        let workspace = root.create_generation(&tenant, &profile, &generation)?;
+        let binding = MaterializationBinding::new(
+            tenant.clone(),
+            profile.clone(),
+            generation.clone(),
+            "c".repeat(64),
+            workspace.materialization_inventory_digest()?,
+            identity()?,
+        )?;
+        persist_materialization_binding(&workspace, &binding)?;
+        let identity_path = workspace.path().join(BROWSER_IDENTITY_RECORD_FILE);
+        let original = fs::read_to_string(&identity_path)?;
+        fs::write(
+            &identity_path,
+            original.replace("display_width=1920", "display_width=1600"),
+        )?;
+        assert_eq!(
+            load_materialization_binding(&workspace, &tenant, &profile, &generation),
+            Err(BrowserLaunchBlocker::MaterializationStale)
+        );
         remove_test_root(&root_path)?;
         Ok(())
     }
