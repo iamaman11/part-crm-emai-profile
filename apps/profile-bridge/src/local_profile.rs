@@ -2,16 +2,17 @@ use std::fmt;
 
 mod filesystem;
 mod lifecycle;
+mod quiescence;
 
 pub(crate) use filesystem::BROWSER_IDENTITY_RECORD_FILE;
 pub use filesystem::{
-    BridgeWorkspaceLock, GenerationInventory, GenerationWorkspace, InventoryEntry,
-    MaterializationRoot, RecoveryClone,
+    GenerationInventory, GenerationWorkspace, InventoryEntry, MaterializationRoot, RecoveryClone,
 };
 pub use lifecycle::{
     ForgottenWindowAction, ForgottenWindowPolicy, LocalGenerationRecord, LocalGenerationState,
     QuotaPlan, QuotaPolicy, SupportBundleSummary,
 };
+pub use quiescence::{BridgeWorkspaceLock, DeliveryActivationGuard};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum LocalProfileError {
