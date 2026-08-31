@@ -1,9 +1,8 @@
 #![forbid(unsafe_code)]
 
 use bridge_domain::ClaimUri;
-use profile_bridge::shipping_composition::{
-    ShippingDeliveryCommand, run_claim, run_delivery_command,
-};
+use profile_bridge::shipping_composition::run_claim;
+use profile_bridge::shipping_composition::{ShippingDeliveryCommand, run_delivery_command};
 use profile_bridge::windows_delivery_handoff::{
     HANDOFF_ACTIVATE_ARGUMENT, HANDOFF_ARRIVAL_ARGUMENT,
 };
