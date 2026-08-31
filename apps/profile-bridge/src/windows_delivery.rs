@@ -1036,7 +1036,7 @@ mod tests {
         assert_eq!(
             verify_delivery_candidate(
                 &bytes,
-                br#"{\"schema_version\":1,\"kind\":\"WINDOWS_PROFILE_BRIDGE_DELIVERY_CMS\",\"key_id\":\"release-2026\",\"cms_der_hex\":\"ZZ\"}"#,
+                br#"{"schema_version":1,"kind":"WINDOWS_PROFILE_BRIDGE_DELIVERY_CMS","key_id":"release-2026","cms_der_hex":"ZZ"}"#,
                 &trust,
                 None,
                 &mut DigestBoundVerifier,
