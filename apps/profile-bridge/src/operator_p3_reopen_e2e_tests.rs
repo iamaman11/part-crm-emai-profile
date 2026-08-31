@@ -1,3 +1,4 @@
+use crate::browser_execution::persist_materialization_binding;
 use crate::generation_reopen::{
     SignedGenerationObjectGetPort, SignedGenerationObjectGetResponse,
     VerifiedGenerationObjectDownloader,
@@ -15,8 +16,10 @@ use crate::shipping_control_plane::{
 use crate::shipping_generation_save::{
     SignedGenerationObjectPutPort, SignedGenerationUploadCapability,
 };
+use crate::test_support::browser_identity_fixture;
 use crate::{FakeCamouhost, FakeDeviceIdentity, FakeDeviceKeyStore, FakeProcessControl};
 use bridge_domain::{BridgePortError, ClaimUri};
+use browser_execution_domain::MaterializationBinding;
 use control_plane_contract::coordinator_api::{
     CoordinatorCommandDto, CoordinatorCommandRequestDto, CoordinatorOutcomeDto,
     CoordinatorProjectionDto, CoordinatorReleaseDispositionDto, CoordinatorResponseDto,
@@ -718,6 +721,27 @@ fn canonical_save_then_local_loss_reopens_server_selected_successor()
     let device_id = DeviceId::parse(DEVICE)?;
     let base_workspace = root.create_generation(&tenant_id, &profile_id, &base_generation)?;
     fs::write(base_workspace.path().join("prefs.js"), b"base")?;
+    let config_bytes = b"{}\n";
+    fs::write(
+        base_workspace.path().join("camoufox-config.json"),
+        config_bytes,
+    )?;
+    let bundle = approved_bundle()?;
+    let browser_identity = browser_identity_fixture(
+        bundle.manifest().runtime_version(),
+        bundle.manifest().inventory_sha256().as_str(),
+        "profile-stability-v1-probe-p3-reopen-e2e",
+        lower_hex(&Sha256::digest(config_bytes)),
+    )?;
+    let binding = MaterializationBinding::new(
+        tenant_id.clone(),
+        profile_id.clone(),
+        base_generation.clone(),
+        "c".repeat(64),
+        base_workspace.materialization_inventory_digest()?,
+        browser_identity,
+    )?;
+    persist_materialization_binding(&base_workspace, &binding)?;
 
     let state = Rc::new(RefCell::new(BackendState::new()?));
     let transport = BackendMachineHttp {
@@ -734,7 +758,7 @@ fn canonical_save_then_local_loss_reopens_server_selected_successor()
         enrollment,
         coordinator,
         RecordingBundles {
-            bundle: approved_bundle()?,
+            bundle,
             generations: Rc::clone(&runtime_generations),
         },
         RecordingPreflight {
