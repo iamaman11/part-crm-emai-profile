@@ -143,20 +143,20 @@ impl BrowserOsIdentity {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct HardwareCapabilityIdentity {
     hardware_concurrency: u16,
-    device_memory_gib: u16,
+    device_memory_gib: Option<u16>,
     max_touch_points: u16,
 }
 
 impl HardwareCapabilityIdentity {
     pub fn new(
         hardware_concurrency: u16,
-        device_memory_gib: u16,
+        device_memory_gib: impl Into<Option<u16>>,
         max_touch_points: u16,
     ) -> Result<Self, BrowserExecutionError> {
+        let device_memory_gib = device_memory_gib.into();
         if hardware_concurrency == 0
             || hardware_concurrency > 1_024
-            || device_memory_gib == 0
-            || device_memory_gib > 1_024
+            || device_memory_gib.is_some_and(|value| value == 0 || value > 1_024)
             || max_touch_points > 64
         {
             return Err(BrowserExecutionError::InvalidProfileStableIdentity);
@@ -174,7 +174,7 @@ impl HardwareCapabilityIdentity {
     }
 
     #[must_use]
-    pub const fn device_memory_gib(self) -> u16 {
+    pub const fn device_memory_gib(self) -> Option<u16> {
         self.device_memory_gib
     }
 
@@ -598,10 +598,17 @@ mod tests {
         let identity = identity()?;
         assert_eq!(identity.browser_os().browser_major(), 152);
         assert_eq!(identity.hardware().hardware_concurrency(), 8);
+        assert_eq!(identity.hardware().device_memory_gib(), Some(8));
         assert_eq!(identity.display().device_pixel_ratio_milli(), 1000);
         assert_eq!(identity.graphics().webgl_extensions_sha256(), digest('1'));
         assert_eq!(identity.locale().language(), "en-US");
         Ok(())
+    }
+
+    #[test]
+    fn unavailable_device_memory_is_explicitly_representable() {
+        assert!(HardwareCapabilityIdentity::new(8, None, 0).is_ok());
+        assert!(HardwareCapabilityIdentity::new(8, Some(0), 0).is_err());
     }
 
     #[test]

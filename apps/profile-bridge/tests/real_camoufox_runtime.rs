@@ -183,6 +183,16 @@ fn config_u16(config: &Value, key: &str) -> Result<u16, Box<dyn std::error::Erro
     Ok(u16::try_from(config_integer(config, key)?)?)
 }
 
+fn optional_config_u16(
+    config: &Value,
+    key: &str,
+) -> Result<Option<u16>, Box<dyn std::error::Error>> {
+    match config.as_object().and_then(|object| object.get(key)) {
+        Some(_) => Ok(Some(config_u16(config, key)?)),
+        None => Ok(None),
+    }
+}
+
 fn config_u32(config: &Value, key: &str) -> Result<u32, Box<dyn std::error::Error>> {
     Ok(u32::try_from(config_integer(config, key)?)?)
 }
@@ -255,7 +265,7 @@ fn typed_identity_from_materialized_config(
         )?,
         HardwareCapabilityIdentity::new(
             config_u16(&config, "navigator.hardwareConcurrency")?,
-            config_u16(&config, "navigator.deviceMemory")?,
+            optional_config_u16(&config, "navigator.deviceMemory")?,
             config_u16(&config, "navigator.maxTouchPoints")?,
         )?,
         DisplayIdentity::new(

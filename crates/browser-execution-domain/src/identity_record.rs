@@ -30,6 +30,9 @@ impl BrowserIdentityManifest {
             OriginDeterminismMode::ProfileGenerationSeed => "profile_generation_seed",
             OriginDeterminismMode::OriginHmac => "origin_hmac",
         };
+        let device_memory = hardware
+            .device_memory_gib()
+            .map_or_else(|| NONE.to_owned(), |value| value.to_string());
         let speech = locale.speech_voices_sha256().unwrap_or(NONE);
         format!(
             concat!(
@@ -86,7 +89,7 @@ impl BrowserIdentityManifest {
             browser.platform(),
             browser.oscpu(),
             hardware.hardware_concurrency(),
-            hardware.device_memory_gib(),
+            device_memory,
             hardware.max_touch_points(),
             display.width(),
             display.height(),
@@ -124,7 +127,14 @@ impl BrowserIdentityManifest {
         let profile_schema_version = parse_number(&values, "profile_schema_version")?;
         let browser_major = parse_number(&values, "browser_major")?;
         let hardware_concurrency = parse_number(&values, "hardware_concurrency")?;
-        let device_memory_gib = parse_number(&values, "device_memory_gib")?;
+        let device_memory_gib = match required(&values, "device_memory_gib")? {
+            NONE => None,
+            value => Some(
+                value
+                    .parse::<u16>()
+                    .map_err(|_| BrowserExecutionError::InvalidIdentityToken)?,
+            ),
+        };
         let max_touch_points = parse_number(&values, "max_touch_points")?;
         let display_width = parse_number(&values, "display_width")?;
         let display_height = parse_number(&values, "display_height")?;
@@ -247,7 +257,9 @@ mod tests {
         character.to_string().repeat(64)
     }
 
-    fn identity() -> Result<BrowserIdentityManifest, Box<dyn std::error::Error>> {
+    fn identity_with_device_memory(
+        device_memory_gib: Option<u16>,
+    ) -> Result<BrowserIdentityManifest, Box<dyn std::error::Error>> {
         Ok(BrowserIdentityManifest::new(
             2,
             "profile-stability-v1",
@@ -263,7 +275,7 @@ mod tests {
                     "Win32",
                     "Windows NT 10.0; Win64; x64",
                 )?,
-                HardwareCapabilityIdentity::new(8, 8, 0)?,
+                HardwareCapabilityIdentity::new(8, device_memory_gib, 0)?,
                 DisplayIdentity::new(1920, 1080, 1920, 1040, 0, 0, 24, 24, 1000)?,
                 GraphicsIdentity::new(
                     "Google Inc. (NVIDIA)",
@@ -285,6 +297,10 @@ mod tests {
         )?)
     }
 
+    fn identity() -> Result<BrowserIdentityManifest, Box<dyn std::error::Error>> {
+        identity_with_device_memory(Some(8))
+    }
+
     #[test]
     fn canonical_record_round_trips_without_semantic_loss() -> Result<(), Box<dyn std::error::Error>>
     {
@@ -295,6 +311,25 @@ mod tests {
             identity
         );
         assert_eq!(identity.to_canonical_record(), record);
+        Ok(())
+    }
+
+    #[test]
+    fn canonical_record_round_trips_unavailable_device_memory()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let identity = identity_with_device_memory(None)?;
+        let record = identity.to_canonical_record();
+        assert!(record.contains("device_memory_gib=none\n"));
+        let restored = BrowserIdentityManifest::from_canonical_record(&record)?;
+        assert_eq!(
+            restored
+                .profile_stable_identity()
+                .hardware()
+                .device_memory_gib(),
+            None
+        );
+        assert_eq!(restored, identity);
+        assert_eq!(restored.to_canonical_record(), record);
         Ok(())
     }
 
