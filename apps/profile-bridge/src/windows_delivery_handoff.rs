@@ -1,22 +1,22 @@
 #![forbid(unsafe_code)]
 
 use crate::local_profile::DeliveryActivationGuard;
-use crate::windows_delivery::{DeliveryIdentity, DeliveryStateError};
 #[cfg(any(windows, test))]
 use crate::windows_delivery::{DeliveryActivationOutcome, DeliveryFailureKind, DeliveryState};
-use crate::windows_delivery_recovery::{DeliveryRecoveryError, VerifiedDeliveryRecoveryTarget};
+use crate::windows_delivery::{DeliveryIdentity, DeliveryStateError};
 #[cfg(any(windows, test))]
 use crate::windows_delivery_recovery::{
     DeliveryRecoveryCoordinator, DeliveryRecoveryDisposition, DeliveryRecoveryReason,
 };
+use crate::windows_delivery_recovery::{DeliveryRecoveryError, VerifiedDeliveryRecoveryTarget};
 use crate::windows_delivery_staging::{
     DeliveryStagingError, DeliveryStagingRoot, StagedDelivery, reopen_staged_delivery,
 };
+#[cfg(any(windows, test))]
+use crate::windows_delivery_store::DeliveryHandoffKind;
 use crate::windows_delivery_store::{
     DeliveryHandoffEvidence, DeliveryHandoffOutcome, DeliveryStateStore, DeliveryStateStoreError,
 };
-#[cfg(any(windows, test))]
-use crate::windows_delivery_store::DeliveryHandoffKind;
 use std::ffi::OsStr;
 use std::fmt;
 use std::fs;
@@ -364,11 +364,9 @@ impl DeliveryHandoffCoordinator {
         current_process_id: u32,
         current_executable: impl AsRef<Path>,
     ) -> Result<DeliveryHandoffRestartDisposition, DeliveryHandoffError> {
-        self.recover_or_resume_started_with(
-            current_process_id,
-            current_executable,
-            |handoff| handoff.schedule().map(|_| ()),
-        )
+        self.recover_or_resume_started_with(current_process_id, current_executable, |handoff| {
+            handoff.schedule().map(|_| ())
+        })
     }
 
     #[cfg(any(windows, test))]
@@ -1112,11 +1110,7 @@ mod tests {
             DeliveryHandoffCoordinator::new(fixture.staging.clone(), &fixture.state_root);
         let guard = DeliveryActivationGuard::acquire(&fixture.materialization)?;
         coordinator.start_activation_with(&guard, 42, &fixture.first_executable, |_| Ok(()))?;
-        coordinator.recover_or_resume_started_with(
-            43,
-            &fixture.second_executable,
-            |_| Ok(()),
-        )?;
+        coordinator.recover_or_resume_started_with(43, &fixture.second_executable, |_| Ok(()))?;
         let before = DeliveryStateStore::open(&fixture.state_root)?;
         let evidence = before
             .handoff()
@@ -1203,14 +1197,10 @@ mod tests {
         let _guard = DeliveryActivationGuard::acquire(&fixture.materialization)?;
         let scheduled = Cell::new(false);
         assert_eq!(
-            coordinator.recover_or_resume_started_with(
-                42,
-                &fixture.first_executable,
-                |_| {
-                    scheduled.set(true);
-                    Ok(())
-                },
-            )?,
+            coordinator.recover_or_resume_started_with(42, &fixture.first_executable, |_| {
+                scheduled.set(true);
+                Ok(())
+            },)?,
             DeliveryHandoffRestartDisposition::RecoveryRequired
         );
         assert!(!scheduled.get());
@@ -1233,14 +1223,10 @@ mod tests {
         let _guard = DeliveryActivationGuard::acquire(&fixture.materialization)?;
         let scheduled = Cell::new(false);
         assert_eq!(
-            coordinator.recover_or_resume_started_with(
-                42,
-                &fixture.first_executable,
-                |_| {
-                    scheduled.set(true);
-                    Ok(())
-                },
-            )?,
+            coordinator.recover_or_resume_started_with(42, &fixture.first_executable, |_| {
+                scheduled.set(true);
+                Ok(())
+            },)?,
             DeliveryHandoffRestartDisposition::None
         );
         assert!(!scheduled.get());
@@ -1342,14 +1328,10 @@ mod tests {
         let before_handoff = before.handoff().cloned();
         let scheduled = Cell::new(false);
         assert_eq!(
-            coordinator.recover_or_resume_started_with(
-                43,
-                &fixture.first_executable,
-                |_| {
-                    scheduled.set(true);
-                    Ok(())
-                },
-            ),
+            coordinator.recover_or_resume_started_with(43, &fixture.first_executable, |_| {
+                scheduled.set(true);
+                Ok(())
+            },),
             Err(DeliveryHandoffError::CurrentExecutableMismatch)
         );
         assert!(!scheduled.get());
