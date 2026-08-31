@@ -3,9 +3,9 @@
 mod profile_stable_identity;
 
 pub use profile_stable_identity::{
-    BrowserOsIdentity, DisplayIdentity, FontIdentity, GraphicsIdentity,
-    HardwareCapabilityIdentity, LocaleIdentity, OriginDeterminismMode,
-    OriginDeterministicIdentity, ProfileStableIdentity, ProfileStateKind, ProfileStatePortability,
+    BrowserOsIdentity, DisplayIdentity, FontIdentity, GraphicsIdentity, HardwareCapabilityIdentity,
+    LocaleIdentity, OriginDeterminismMode, OriginDeterministicIdentity, ProfileStableIdentity,
+    ProfileStateKind, ProfileStatePortability,
 };
 
 use core::fmt;
@@ -471,7 +471,9 @@ mod tests {
         character.to_string().repeat(64)
     }
 
-    fn profile_stable(character: char) -> Result<ProfileStableIdentity, Box<dyn std::error::Error>> {
+    fn profile_stable(
+        character: char,
+    ) -> Result<ProfileStableIdentity, Box<dyn std::error::Error>> {
         Ok(ProfileStableIdentity::new(
             1,
             BrowserOsIdentity::new(
