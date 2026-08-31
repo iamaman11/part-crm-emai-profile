@@ -1,8 +1,14 @@
 #![forbid(unsafe_code)]
 
 use crate::local_profile::DeliveryActivationGuard;
-use crate::windows_delivery::{DeliveryIdentity, DeliveryState, DeliveryStateError};
-use crate::windows_delivery_recovery::VerifiedDeliveryRecoveryTarget;
+use crate::windows_delivery::{
+    DeliveryActivationOutcome, DeliveryFailureKind, DeliveryIdentity, DeliveryState,
+    DeliveryStateError,
+};
+use crate::windows_delivery_recovery::{
+    DeliveryRecoveryCoordinator, DeliveryRecoveryDisposition, DeliveryRecoveryError,
+    DeliveryRecoveryReason, VerifiedDeliveryRecoveryTarget,
+};
 use crate::windows_delivery_staging::{
     DeliveryStagingError, DeliveryStagingRoot, StagedDelivery, reopen_staged_delivery,
 };
@@ -170,10 +176,18 @@ impl OneShotDeliveryHandoff {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DeliveryHandoffRestartDisposition {
+    None,
+    TransferScheduled,
+    RecoveryRequired,
+}
+
 /// The R9 effect-shell composition. Canonical delivery state and exact staged/recovery targets are
 /// inputs. The waiting helper is created before the single hash-chained snapshot that records an
 /// activation and its exact handoff-start evidence; arrival only proves the exact successor process
-/// and marks that already-committed transfer complete.
+/// and marks that already-committed transfer complete. Restart recovery consumes only the same
+/// canonical state/evidence and R8 recovery owner; it never replays a claim or selects a candidate.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DeliveryHandoffCoordinator {
     staging_root: DeliveryStagingRoot,
@@ -236,12 +250,9 @@ impl DeliveryHandoffCoordinator {
         current_process_id: u32,
         current_executable: impl AsRef<Path>,
     ) -> Result<(), DeliveryHandoffError> {
-        self.start_activation_with(
-            guard,
-            current_process_id,
-            current_executable,
-            |handoff| handoff.schedule().map(|_| ()),
-        )
+        self.start_activation_with(guard, current_process_id, current_executable, |handoff| {
+            handoff.schedule().map(|_| ())
+        })
     }
 
     fn start_activation_with<F>(
@@ -344,32 +355,150 @@ impl DeliveryHandoffCoordinator {
         self.persist_handoff_exact(&mut store, &state, evidence)
     }
 
-    pub fn resume_started(
+    #[cfg(windows)]
+    pub fn recover_or_resume_started(
         &self,
-        _guard: &DeliveryActivationGuard,
+        guard: &DeliveryActivationGuard,
         current_process_id: u32,
         current_executable: impl AsRef<Path>,
-    ) -> Result<Option<OneShotDeliveryHandoff>, DeliveryHandoffError> {
+    ) -> Result<DeliveryHandoffRestartDisposition, DeliveryHandoffError> {
+        self.recover_or_resume_started_with(
+            guard,
+            current_process_id,
+            current_executable,
+            |handoff| handoff.schedule().map(|_| ()),
+        )
+    }
+
+    fn recover_or_resume_started_with<F>(
+        &self,
+        guard: &DeliveryActivationGuard,
+        current_process_id: u32,
+        current_executable: impl AsRef<Path>,
+        schedule: F,
+    ) -> Result<DeliveryHandoffRestartDisposition, DeliveryHandoffError>
+    where
+        F: FnOnce(&OneShotDeliveryHandoff) -> Result<(), DeliveryHandoffError>,
+    {
+        let current_executable = current_executable.as_ref();
         let store = self.open_store()?;
-        let Some(evidence) = store.handoff().cloned() else {
-            return Ok(None);
+        match store.handoff().cloned() {
+            Some(evidence) if evidence.outcome() == DeliveryHandoffOutcome::Arrived => {
+                Ok(DeliveryHandoffRestartDisposition::None)
+            }
+            Some(evidence) => match evidence.kind() {
+                DeliveryHandoffKind::Recovery => {
+                    self.verify_current_identity(evidence.source_candidate(), current_executable)?;
+                    let target = self.target_for_identity(evidence.target())?;
+                    let handoff =
+                        OneShotDeliveryHandoff::new(current_process_id, current_executable, target)?;
+                    schedule(&handoff)?;
+                    Ok(DeliveryHandoffRestartDisposition::TransferScheduled)
+                }
+                DeliveryHandoffKind::Activation => {
+                    self.verify_current_identity(evidence.source_candidate(), current_executable)?;
+                    let source_candidate = evidence.source_candidate().clone();
+                    let source_attempt = evidence.source_attempt();
+                    drop(store);
+                    let recovery = DeliveryRecoveryCoordinator::new(
+                        self.staging_root.clone(),
+                        &self.state_root,
+                    );
+                    match recovery
+                        .recover(
+                            &source_candidate,
+                            source_attempt,
+                            DeliveryRecoveryReason::InterruptedHandoff,
+                        )
+                        .map_err(DeliveryHandoffError::Recovery)?
+                    {
+                        DeliveryRecoveryDisposition::RecoveryRequired => {
+                            Ok(DeliveryHandoffRestartDisposition::RecoveryRequired)
+                        }
+                        DeliveryRecoveryDisposition::Handoff(recovery_target) => {
+                            self.start_recovery_with(
+                                guard,
+                                &source_candidate,
+                                source_attempt,
+                                &recovery_target,
+                                current_process_id,
+                                current_executable,
+                                schedule,
+                            )?;
+                            Ok(DeliveryHandoffRestartDisposition::TransferScheduled)
+                        }
+                    }
+                }
+            },
+            None => self.recover_committed_handoff_gap_with(
+                current_process_id,
+                current_executable,
+                schedule,
+            ),
+        }
+    }
+
+    fn recover_committed_handoff_gap_with<F>(
+        &self,
+        current_process_id: u32,
+        current_executable: &Path,
+        schedule: F,
+    ) -> Result<DeliveryHandoffRestartDisposition, DeliveryHandoffError>
+    where
+        F: FnOnce(&OneShotDeliveryHandoff) -> Result<(), DeliveryHandoffError>,
+    {
+        let mut store = self.open_store()?;
+        let state = store.state();
+        let Some(failure) = state.last_failure() else {
+            return Ok(DeliveryHandoffRestartDisposition::None);
         };
-        if evidence.outcome() != DeliveryHandoffOutcome::Started {
-            return Ok(None);
+        if failure.kind != DeliveryFailureKind::InterruptedHandoff {
+            return Ok(DeliveryHandoffRestartDisposition::None);
         }
-        match evidence.kind() {
-            DeliveryHandoffKind::Activation => {
-                return Err(DeliveryHandoffError::InterruptedActivationHandoff);
-            }
-            DeliveryHandoffKind::Recovery => {
-                self.verify_current_identity(
-                    evidence.source_candidate(),
-                    current_executable.as_ref(),
-                )?;
-            }
+        let activation = state
+            .last_activation()
+            .ok_or(DeliveryHandoffError::StateMismatch)?;
+        if activation.candidate != failure.candidate
+            || activation.attempt == 0
+            || activation.attempt != state.activation_generation()
+        {
+            return Err(DeliveryHandoffError::StateMismatch);
         }
-        let target = self.target_for_identity(evidence.target())?;
-        OneShotDeliveryHandoff::new(current_process_id, current_executable, target).map(Some)
+        self.verify_current_identity(&failure.candidate, current_executable)?;
+        match activation.outcome {
+            DeliveryActivationOutcome::RecoveryRequired => {
+                if state.active().is_some() || state.active_health_confirmed() {
+                    return Err(DeliveryHandoffError::StateMismatch);
+                }
+                Ok(DeliveryHandoffRestartDisposition::RecoveryRequired)
+            }
+            DeliveryActivationOutcome::RolledBack => {
+                let target_identity = state
+                    .active()
+                    .cloned()
+                    .ok_or(DeliveryHandoffError::StateMismatch)?;
+                if !state.active_health_confirmed() || state.last_known_good().is_some() {
+                    return Err(DeliveryHandoffError::StateMismatch);
+                }
+                let target = self.target_for_identity(&target_identity)?;
+                let handoff =
+                    OneShotDeliveryHandoff::new(current_process_id, current_executable, target)?;
+                schedule(&handoff)?;
+                let evidence = DeliveryHandoffEvidence::recovery_started(
+                    store.state(),
+                    &failure.candidate,
+                    activation.attempt,
+                    handoff.target().identity(),
+                )
+                .map_err(|_| DeliveryHandoffError::StateMismatch)?;
+                let state = store.state().clone();
+                self.persist_handoff_exact(&mut store, &state, evidence)?;
+                Ok(DeliveryHandoffRestartDisposition::TransferScheduled)
+            }
+            DeliveryActivationOutcome::PendingHealth
+            | DeliveryActivationOutcome::HealthAttemptStarted
+            | DeliveryActivationOutcome::Healthy => Err(DeliveryHandoffError::StateMismatch),
+        }
     }
 
     pub fn complete_arrival(
@@ -485,13 +614,13 @@ pub enum DeliveryHandoffError {
     NoStagedTarget,
     NoStartedHandoff,
     HandoffAlreadyStarted,
-    InterruptedActivationHandoff,
     HelperLaunchFailed,
     StateMismatch,
     DurableCommit,
     Staging(DeliveryStagingError),
     Store(DeliveryStateStoreError),
     State(DeliveryStateError),
+    Recovery(DeliveryRecoveryError),
 }
 
 impl fmt::Display for DeliveryHandoffError {
@@ -507,15 +636,13 @@ impl fmt::Display for DeliveryHandoffError {
             Self::NoStagedTarget => "Windows delivery handoff has no staged target release",
             Self::NoStartedHandoff => "Windows delivery handoff has no started transfer",
             Self::HandoffAlreadyStarted => "Windows delivery handoff transfer is already started",
-            Self::InterruptedActivationHandoff => {
-                "Windows delivery activation handoff was interrupted and requires recovery"
-            }
             Self::HelperLaunchFailed => "Windows delivery one-shot helper could not be started",
             Self::StateMismatch => "Windows delivery handoff state identity is inconsistent",
             Self::DurableCommit => "Windows delivery handoff evidence did not commit durably",
             Self::Staging(_) => "Windows delivery handoff staged release is invalid",
             Self::Store(_) => "Windows delivery handoff state store is unavailable",
             Self::State(_) => "Windows delivery handoff state transition was rejected",
+            Self::Recovery(_) => "Windows delivery interrupted handoff recovery was rejected",
         })
     }
 }
@@ -531,9 +658,6 @@ mod tests {
         TrustedSignerStatus, WindowsDeliveryCompatibility, WindowsDeliveryComponent,
         WindowsDeliveryComponents, WindowsDeliveryEvidence, WindowsDeliveryManifest,
         verify_delivery_candidate,
-    };
-    use crate::windows_delivery_recovery::{
-        DeliveryRecoveryCoordinator, DeliveryRecoveryDisposition, DeliveryRecoveryReason,
     };
     use crate::windows_delivery_staging::{
         DeliveryArchiveEntry, DeliveryArchiveReader, DeliveryComponentKind, stage_verified_delivery,
@@ -713,6 +837,42 @@ mod tests {
         })
     }
 
+    fn first_install_started_fixture(
+        label: &str,
+    ) -> Result<Fixture, Box<dyn std::error::Error>> {
+        let directory = TestDirectory::create(label)?;
+        let releases = directory.0.join(RELEASES_DIRECTORY);
+        fs::create_dir(&releases)?;
+        let staging = DeliveryStagingRoot::open_or_create(&releases)?;
+        let state_root = directory.0.join(STATE_DIRECTORY);
+        let mut store = DeliveryStateStore::initialize(&state_root)?;
+        let materialization = MaterializationRoot::open_or_create(directory.0.join("profiles"))?;
+        let (candidate, bridge, runtime) = candidate(&directory.0, 1, '1')?;
+        let mut reader = MemoryArchiveReader::for_release("first");
+        let stage = stage_verified_delivery(&staging, &candidate, &bridge, &runtime, &mut reader)?;
+        let identity = candidate.identity();
+        let executable = fs::canonicalize(
+            stage
+                .profile_bridge_root()
+                .join(PROFILE_BRIDGE_EXECUTABLE),
+        )?;
+        let mut state = DeliveryState::default();
+        state.stage(&candidate)?;
+        state.activate_staged(true)?;
+        let evidence = DeliveryHandoffEvidence::activation_started(&state, &identity)?;
+        store.persist_handoff(&state, evidence)?;
+        Ok(Fixture {
+            _directory: directory,
+            staging,
+            state_root,
+            materialization,
+            first: identity.clone(),
+            second: identity,
+            first_executable: executable.clone(),
+            second_executable: executable,
+        })
+    }
+
     fn trust() -> Result<TrustedSignerSet, Box<dyn std::error::Error>> {
         Ok(TrustedSignerSet::new([TrustedSigner::new(
             "test-active",
@@ -842,21 +1002,16 @@ mod tests {
             DeliveryHandoffCoordinator::new(fixture.staging.clone(), &fixture.state_root);
         let guard = DeliveryActivationGuard::acquire(&fixture.materialization)?;
         let scheduled = Cell::new(false);
-        coordinator.start_activation_with(
-            &guard,
-            42,
-            &fixture.first_executable,
-            |handoff| {
-                let before = DeliveryStateStore::open(&fixture.state_root)?;
-                assert_eq!(before.state().active(), Some(&fixture.first));
-                assert!(before.state().active_health_confirmed());
-                assert_eq!(before.state().staged(), Some(&fixture.second));
-                assert_eq!(before.handoff(), None);
-                assert_eq!(handoff.target().identity(), &fixture.second);
-                scheduled.set(true);
-                Ok(())
-            },
-        )?;
+        coordinator.start_activation_with(&guard, 42, &fixture.first_executable, |handoff| {
+            let before = DeliveryStateStore::open(&fixture.state_root)?;
+            assert_eq!(before.state().active(), Some(&fixture.first));
+            assert!(before.state().active_health_confirmed());
+            assert_eq!(before.state().staged(), Some(&fixture.second));
+            assert_eq!(before.handoff(), None);
+            assert_eq!(handoff.target().identity(), &fixture.second);
+            scheduled.set(true);
+            Ok(())
+        })?;
         assert!(scheduled.get());
 
         let after_start = DeliveryStateStore::open(&fixture.state_root)?;
@@ -890,12 +1045,9 @@ mod tests {
             DeliveryHandoffCoordinator::new(fixture.staging.clone(), &fixture.state_root);
         let guard = DeliveryActivationGuard::acquire(&fixture.materialization)?;
         assert_eq!(
-            coordinator.start_activation_with(
-                &guard,
-                42,
-                &fixture.first_executable,
-                |_| Err(DeliveryHandoffError::HelperLaunchFailed),
-            ),
+            coordinator.start_activation_with(&guard, 42, &fixture.first_executable, |_| Err(
+                DeliveryHandoffError::HelperLaunchFailed
+            ),),
             Err(DeliveryHandoffError::HelperLaunchFailed)
         );
         let state = DeliveryStateStore::open(&fixture.state_root)?;
@@ -907,20 +1059,189 @@ mod tests {
     }
 
     #[test]
-    fn interrupted_started_activation_requires_lkg_recovery_not_candidate_resume()
+    fn interrupted_activation_restart_rolls_back_then_schedules_exact_lkg()
     -> Result<(), Box<dyn std::error::Error>> {
-        let fixture = fixture("interrupted-activation", false)?;
+        let fixture = fixture("interrupted-restart", false)?;
         let coordinator =
             DeliveryHandoffCoordinator::new(fixture.staging.clone(), &fixture.state_root);
         let guard = DeliveryActivationGuard::acquire(&fixture.materialization)?;
         coordinator.start_activation_with(&guard, 42, &fixture.first_executable, |_| Ok(()))?;
+
+        let scheduled = Cell::new(false);
         assert_eq!(
-            coordinator.resume_started(&guard, 43, &fixture.second_executable),
-            Err(DeliveryHandoffError::InterruptedActivationHandoff)
+            coordinator.recover_or_resume_started_with(
+                &guard,
+                43,
+                &fixture.second_executable,
+                |handoff| {
+                    let before = DeliveryStateStore::open(&fixture.state_root)?;
+                    assert_eq!(before.state().active(), Some(&fixture.first));
+                    assert!(before.state().active_health_confirmed());
+                    assert_eq!(before.handoff(), None);
+                    assert_eq!(handoff.target().identity(), &fixture.first);
+                    scheduled.set(true);
+                    Ok(())
+                },
+            )?,
+            DeliveryHandoffRestartDisposition::TransferScheduled
         );
-        let state = DeliveryStateStore::open(&fixture.state_root)?;
-        assert_eq!(state.state().active(), Some(&fixture.second));
-        assert_eq!(state.state().last_known_good(), Some(&fixture.first));
+        assert!(scheduled.get());
+        let restarted = DeliveryStateStore::open(&fixture.state_root)?;
+        let evidence = restarted.handoff().ok_or("missing recovery handoff")?;
+        assert_eq!(restarted.state().active(), Some(&fixture.first));
+        assert!(restarted.state().active_health_confirmed());
+        assert_eq!(
+            restarted.state().last_failure().map(|value| value.kind),
+            Some(DeliveryFailureKind::InterruptedHandoff)
+        );
+        assert_eq!(evidence.kind(), DeliveryHandoffKind::Recovery);
+        assert_eq!(evidence.outcome(), DeliveryHandoffOutcome::Started);
+        assert_eq!(evidence.source_candidate(), &fixture.second);
+        assert_eq!(evidence.source_attempt(), 2);
+        assert_eq!(evidence.target(), &fixture.first);
+        Ok(())
+    }
+
+    #[test]
+    fn recovery_started_restart_reschedules_only_the_same_exact_target()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let fixture = fixture("recovery-resume", false)?;
+        let coordinator =
+            DeliveryHandoffCoordinator::new(fixture.staging.clone(), &fixture.state_root);
+        let guard = DeliveryActivationGuard::acquire(&fixture.materialization)?;
+        coordinator.start_activation_with(&guard, 42, &fixture.first_executable, |_| Ok(()))?;
+        coordinator.recover_or_resume_started_with(
+            &guard,
+            43,
+            &fixture.second_executable,
+            |_| Ok(()),
+        )?;
+        let before = DeliveryStateStore::open(&fixture.state_root)?;
+        let evidence = before.handoff().cloned().ok_or("missing recovery handoff")?;
+
+        let scheduled = Cell::new(false);
+        assert_eq!(
+            coordinator.recover_or_resume_started_with(
+                &guard,
+                44,
+                &fixture.second_executable,
+                |handoff| {
+                    assert_eq!(handoff.target().identity(), &fixture.first);
+                    scheduled.set(true);
+                    Ok(())
+                },
+            )?,
+            DeliveryHandoffRestartDisposition::TransferScheduled
+        );
+        assert!(scheduled.get());
+        let after = DeliveryStateStore::open(&fixture.state_root)?;
+        assert_eq!(after.state(), before.state());
+        assert_eq!(after.handoff(), Some(&evidence));
+        Ok(())
+    }
+
+    #[test]
+    fn committed_rollback_without_handoff_is_repaired_without_replaying_candidate()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let fixture = fixture("rollback-gap", false)?;
+        let coordinator =
+            DeliveryHandoffCoordinator::new(fixture.staging.clone(), &fixture.state_root);
+        let guard = DeliveryActivationGuard::acquire(&fixture.materialization)?;
+        coordinator.start_activation_with(&guard, 42, &fixture.first_executable, |_| Ok(()))?;
+        let recovery =
+            DeliveryRecoveryCoordinator::new(fixture.staging.clone(), &fixture.state_root);
+        let disposition = recovery.recover(
+            &fixture.second,
+            2,
+            DeliveryRecoveryReason::InterruptedHandoff,
+        )?;
+        let DeliveryRecoveryDisposition::Handoff(target) = disposition else {
+            return Err("expected verified LKG".into());
+        };
+        assert_eq!(target.identity(), &fixture.first);
+        assert!(DeliveryStateStore::open(&fixture.state_root)?
+            .handoff()
+            .is_none());
+
+        let scheduled = Cell::new(false);
+        assert_eq!(
+            coordinator.recover_or_resume_started_with(
+                &guard,
+                43,
+                &fixture.second_executable,
+                |handoff| {
+                    assert_eq!(handoff.target().identity(), &fixture.first);
+                    scheduled.set(true);
+                    Ok(())
+                },
+            )?,
+            DeliveryHandoffRestartDisposition::TransferScheduled
+        );
+        assert!(scheduled.get());
+        let repaired = DeliveryStateStore::open(&fixture.state_root)?;
+        assert_eq!(
+            repaired.handoff().map(DeliveryHandoffEvidence::kind),
+            Some(DeliveryHandoffKind::Recovery)
+        );
+        assert_eq!(
+            repaired.handoff().map(DeliveryHandoffEvidence::outcome),
+            Some(DeliveryHandoffOutcome::Started)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn first_install_interrupted_handoff_returns_recovery_required_without_schedule()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let fixture = first_install_started_fixture("first-install")?;
+        let coordinator =
+            DeliveryHandoffCoordinator::new(fixture.staging.clone(), &fixture.state_root);
+        let guard = DeliveryActivationGuard::acquire(&fixture.materialization)?;
+        let scheduled = Cell::new(false);
+        assert_eq!(
+            coordinator.recover_or_resume_started_with(
+                &guard,
+                42,
+                &fixture.first_executable,
+                |_| {
+                    scheduled.set(true);
+                    Ok(())
+                },
+            )?,
+            DeliveryHandoffRestartDisposition::RecoveryRequired
+        );
+        assert!(!scheduled.get());
+        let recovered = DeliveryStateStore::open(&fixture.state_root)?;
+        assert!(recovered.state().active().is_none());
+        assert!(recovered.handoff().is_none());
+        assert_eq!(
+            recovered.state().last_failure().map(|value| value.kind),
+            Some(DeliveryFailureKind::InterruptedHandoff)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn ordinary_arrived_or_healthy_state_does_not_schedule_restart_handoff()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let fixture = fixture("ordinary", false)?;
+        let coordinator =
+            DeliveryHandoffCoordinator::new(fixture.staging.clone(), &fixture.state_root);
+        let guard = DeliveryActivationGuard::acquire(&fixture.materialization)?;
+        let scheduled = Cell::new(false);
+        assert_eq!(
+            coordinator.recover_or_resume_started_with(
+                &guard,
+                42,
+                &fixture.first_executable,
+                |_| {
+                    scheduled.set(true);
+                    Ok(())
+                },
+            )?,
+            DeliveryHandoffRestartDisposition::None
+        );
+        assert!(!scheduled.get());
         Ok(())
     }
 
@@ -992,10 +1313,37 @@ mod tests {
         let guard = DeliveryActivationGuard::acquire(&fixture.materialization)?;
         let scheduled = Cell::new(false);
         assert_eq!(
-            coordinator.start_activation_with(
+            coordinator.start_activation_with(&guard, 42, &fixture.second_executable, |_| {
+                scheduled.set(true);
+                Ok(())
+            },),
+            Err(DeliveryHandoffError::CurrentExecutableMismatch)
+        );
+        assert!(!scheduled.get());
+        assert_eq!(
+            coordinator.complete_arrival(&guard, &fixture.first_executable),
+            Err(DeliveryHandoffError::NoStartedHandoff)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn interrupted_restart_rejects_wrong_current_executable_before_rollback()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let fixture = fixture("restart-substitution", false)?;
+        let coordinator =
+            DeliveryHandoffCoordinator::new(fixture.staging.clone(), &fixture.state_root);
+        let guard = DeliveryActivationGuard::acquire(&fixture.materialization)?;
+        coordinator.start_activation_with(&guard, 42, &fixture.first_executable, |_| Ok(()))?;
+        let before = DeliveryStateStore::open(&fixture.state_root)?;
+        let before_state = before.state().clone();
+        let before_handoff = before.handoff().cloned();
+        let scheduled = Cell::new(false);
+        assert_eq!(
+            coordinator.recover_or_resume_started_with(
                 &guard,
-                42,
-                &fixture.second_executable,
+                43,
+                &fixture.first_executable,
                 |_| {
                     scheduled.set(true);
                     Ok(())
@@ -1004,10 +1352,9 @@ mod tests {
             Err(DeliveryHandoffError::CurrentExecutableMismatch)
         );
         assert!(!scheduled.get());
-        assert_eq!(
-            coordinator.complete_arrival(&guard, &fixture.first_executable),
-            Err(DeliveryHandoffError::NoStartedHandoff)
-        );
+        let after = DeliveryStateStore::open(&fixture.state_root)?;
+        assert_eq!(after.state(), &before_state);
+        assert_eq!(after.handoff(), before_handoff.as_ref());
         Ok(())
     }
 }
