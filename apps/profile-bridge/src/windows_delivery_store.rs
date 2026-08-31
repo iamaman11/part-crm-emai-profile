@@ -1,6 +1,8 @@
 #![forbid(unsafe_code)]
 
-use crate::windows_delivery::{DeliveryState, DeliveryStateError};
+use crate::windows_delivery::{
+    DeliveryActivationOutcome, DeliveryIdentity, DeliveryState, DeliveryStateError,
+};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::fmt;
@@ -15,6 +17,162 @@ const PENDING_PREFIX: &str = ".pending-state-v1-";
 const STATE_SUFFIX: &str = ".json";
 const LOWER_HEX: &[u8; 16] = b"0123456789abcdef";
 
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DeliveryHandoffKind {
+    Activation,
+    Recovery,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DeliveryHandoffOutcome {
+    Started,
+    Arrived,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct DeliveryHandoffEvidence {
+    kind: DeliveryHandoffKind,
+    source_candidate: DeliveryIdentity,
+    source_attempt: u64,
+    target: DeliveryIdentity,
+    outcome: DeliveryHandoffOutcome,
+}
+
+impl DeliveryHandoffEvidence {
+    pub fn activation_started(
+        state: &DeliveryState,
+        target: &DeliveryIdentity,
+    ) -> Result<Self, DeliveryStateStoreError> {
+        let source_attempt = state
+            .activation_generation()
+            .checked_add(1)
+            .ok_or(DeliveryStateStoreError::RevisionExhausted)?;
+        let evidence = Self {
+            kind: DeliveryHandoffKind::Activation,
+            source_candidate: target.clone(),
+            source_attempt,
+            target: target.clone(),
+            outcome: DeliveryHandoffOutcome::Started,
+        };
+        evidence.validate(state)?;
+        Ok(evidence)
+    }
+
+    pub fn recovery_started(
+        state: &DeliveryState,
+        source_candidate: &DeliveryIdentity,
+        source_attempt: u64,
+        target: &DeliveryIdentity,
+    ) -> Result<Self, DeliveryStateStoreError> {
+        let evidence = Self {
+            kind: DeliveryHandoffKind::Recovery,
+            source_candidate: source_candidate.clone(),
+            source_attempt,
+            target: target.clone(),
+            outcome: DeliveryHandoffOutcome::Started,
+        };
+        evidence.validate(state)?;
+        Ok(evidence)
+    }
+
+    pub fn arrived(&self, state: &DeliveryState) -> Result<Self, DeliveryStateStoreError> {
+        if self.outcome != DeliveryHandoffOutcome::Started {
+            return Err(DeliveryStateStoreError::HandoffEvidence);
+        }
+        let mut arrived = self.clone();
+        arrived.outcome = DeliveryHandoffOutcome::Arrived;
+        arrived.validate(state)?;
+        Ok(arrived)
+    }
+
+    #[must_use]
+    pub const fn kind(&self) -> DeliveryHandoffKind {
+        self.kind
+    }
+
+    #[must_use]
+    pub const fn source_candidate(&self) -> &DeliveryIdentity {
+        &self.source_candidate
+    }
+
+    #[must_use]
+    pub const fn source_attempt(&self) -> u64 {
+        self.source_attempt
+    }
+
+    #[must_use]
+    pub const fn target(&self) -> &DeliveryIdentity {
+        &self.target
+    }
+
+    #[must_use]
+    pub const fn outcome(&self) -> DeliveryHandoffOutcome {
+        self.outcome
+    }
+
+    fn validate(&self, state: &DeliveryState) -> Result<(), DeliveryStateStoreError> {
+        state
+            .validate_persisted()
+            .map_err(DeliveryStateStoreError::State)?;
+        if self.source_attempt == 0 {
+            return Err(DeliveryStateStoreError::HandoffEvidence);
+        }
+        match (self.kind, self.outcome) {
+            (DeliveryHandoffKind::Activation, DeliveryHandoffOutcome::Started) => {
+                let expected_attempt = state
+                    .activation_generation()
+                    .checked_add(1)
+                    .ok_or(DeliveryStateStoreError::RevisionExhausted)?;
+                if self.source_candidate != self.target
+                    || self.source_attempt != expected_attempt
+                    || state.staged() != Some(&self.target)
+                    || state.active() == Some(&self.target)
+                    || (state.active().is_some() && !state.active_health_confirmed())
+                {
+                    return Err(DeliveryStateStoreError::HandoffEvidence);
+                }
+            }
+            (DeliveryHandoffKind::Activation, DeliveryHandoffOutcome::Arrived) => {
+                let activation = state
+                    .last_activation()
+                    .ok_or(DeliveryStateStoreError::HandoffEvidence)?;
+                if self.source_candidate != self.target
+                    || state.active() != Some(&self.target)
+                    || state.active_health_confirmed()
+                    || state.activation_generation() != self.source_attempt
+                    || activation.attempt != self.source_attempt
+                    || activation.candidate != self.target
+                    || activation.outcome != DeliveryActivationOutcome::PendingHealth
+                {
+                    return Err(DeliveryStateStoreError::HandoffEvidence);
+                }
+            }
+            (DeliveryHandoffKind::Recovery, _) => {
+                let activation = state
+                    .last_activation()
+                    .ok_or(DeliveryStateStoreError::HandoffEvidence)?;
+                let failure = state
+                    .last_failure()
+                    .ok_or(DeliveryStateStoreError::HandoffEvidence)?;
+                if self.source_candidate == self.target
+                    || state.active() != Some(&self.target)
+                    || !state.active_health_confirmed()
+                    || activation.attempt != self.source_attempt
+                    || activation.candidate != self.source_candidate
+                    || activation.outcome != DeliveryActivationOutcome::RolledBack
+                    || failure.candidate != self.source_candidate
+                {
+                    return Err(DeliveryStateStoreError::HandoffEvidence);
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 struct PersistedStateEnvelope {
@@ -23,6 +181,8 @@ struct PersistedStateEnvelope {
     revision: u64,
     previous_snapshot_sha256: Option<String>,
     state: DeliveryState,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    handoff: Option<DeliveryHandoffEvidence>,
 }
 
 impl PersistedStateEnvelope {
@@ -30,6 +190,7 @@ impl PersistedStateEnvelope {
         revision: u64,
         previous_snapshot_sha256: Option<String>,
         state: DeliveryState,
+        handoff: Option<DeliveryHandoffEvidence>,
     ) -> Result<Self, DeliveryStateStoreError> {
         if revision == 0 {
             return Err(DeliveryStateStoreError::CorruptState);
@@ -47,12 +208,16 @@ impl PersistedStateEnvelope {
         state
             .validate_persisted()
             .map_err(DeliveryStateStoreError::State)?;
+        if let Some(evidence) = &handoff {
+            evidence.validate(&state)?;
+        }
         Ok(Self {
             schema_version: STATE_SCHEMA_VERSION,
             kind: STATE_KIND.to_owned(),
             revision,
             previous_snapshot_sha256,
             state,
+            handoff,
         })
     }
 
@@ -70,7 +235,11 @@ impl PersistedStateEnvelope {
         }
         self.state
             .validate_persisted()
-            .map_err(DeliveryStateStoreError::State)
+            .map_err(DeliveryStateStoreError::State)?;
+        if let Some(evidence) = &self.handoff {
+            evidence.validate(&self.state)?;
+        }
+        Ok(())
     }
 }
 
@@ -80,6 +249,7 @@ pub struct DeliveryStateStore {
     revision: u64,
     snapshot_sha256: String,
     state: DeliveryState,
+    handoff: Option<DeliveryHandoffEvidence>,
 }
 
 impl DeliveryStateStore {
@@ -93,13 +263,14 @@ impl DeliveryStateStore {
             Err(_) => return Err(DeliveryStateStoreError::Io),
         }
         let state = DeliveryState::default();
-        let envelope = PersistedStateEnvelope::new(1, None, state.clone())?;
+        let envelope = PersistedStateEnvelope::new(1, None, state.clone(), None)?;
         let snapshot_sha256 = write_snapshot(&root, &envelope)?;
         Ok(Self {
             root,
             revision: 1,
             snapshot_sha256,
             state,
+            handoff: None,
         })
     }
 
@@ -111,6 +282,7 @@ impl DeliveryStateStore {
             revision: loaded.revision,
             snapshot_sha256: loaded.snapshot_sha256,
             state: loaded.state,
+            handoff: loaded.handoff,
         })
     }
 
@@ -129,10 +301,34 @@ impl DeliveryStateStore {
         &self.state
     }
 
+    #[must_use]
+    pub const fn handoff(&self) -> Option<&DeliveryHandoffEvidence> {
+        self.handoff.as_ref()
+    }
+
     pub fn persist(&mut self, state: &DeliveryState) -> Result<(), DeliveryStateStoreError> {
+        self.persist_snapshot(state, None)
+    }
+
+    pub fn persist_handoff(
+        &mut self,
+        state: &DeliveryState,
+        handoff: DeliveryHandoffEvidence,
+    ) -> Result<(), DeliveryStateStoreError> {
+        self.persist_snapshot(state, Some(handoff))
+    }
+
+    fn persist_snapshot(
+        &mut self,
+        state: &DeliveryState,
+        handoff: Option<DeliveryHandoffEvidence>,
+    ) -> Result<(), DeliveryStateStoreError> {
         state
             .validate_persisted()
             .map_err(DeliveryStateStoreError::State)?;
+        if let Some(evidence) = &handoff {
+            evidence.validate(state)?;
+        }
         let revision = self
             .revision
             .checked_add(1)
@@ -141,11 +337,13 @@ impl DeliveryStateStore {
             revision,
             Some(self.snapshot_sha256.clone()),
             state.clone(),
+            handoff.clone(),
         )?;
         let snapshot_sha256 = write_snapshot(&self.root, &envelope)?;
         self.revision = revision;
         self.snapshot_sha256 = snapshot_sha256;
         self.state = state.clone();
+        self.handoff = handoff;
         Ok(())
     }
 
@@ -159,6 +357,7 @@ struct LoadedState {
     revision: u64,
     snapshot_sha256: String,
     state: DeliveryState,
+    handoff: Option<DeliveryHandoffEvidence>,
 }
 
 fn validated_absolute(root: &Path) -> Result<PathBuf, DeliveryStateStoreError> {
@@ -253,6 +452,7 @@ fn load_chain(root: &Path) -> Result<LoadedState, DeliveryStateStoreError> {
             revision: expected_revision,
             snapshot_sha256: pending_digest.clone(),
             state: envelope.state,
+            handoff: envelope.handoff,
         };
     }
 
@@ -264,6 +464,7 @@ fn load_final_chain(
 ) -> Result<LoadedState, DeliveryStateStoreError> {
     let mut previous_digest: Option<String> = None;
     let mut loaded_state: Option<DeliveryState> = None;
+    let mut loaded_handoff: Option<DeliveryHandoffEvidence> = None;
     let mut expected_revision = 1_u64;
     for ((revision, filename_digest), path) in finals {
         if *revision != expected_revision {
@@ -276,6 +477,7 @@ fn load_final_chain(
         envelope.validate(*revision, previous_digest.as_deref())?;
         previous_digest = Some(bytes_digest);
         loaded_state = Some(envelope.state);
+        loaded_handoff = envelope.handoff;
         expected_revision = expected_revision
             .checked_add(1)
             .ok_or(DeliveryStateStoreError::RevisionExhausted)?;
@@ -286,6 +488,7 @@ fn load_final_chain(
         revision: expected_revision - 1,
         snapshot_sha256,
         state,
+        handoff: loaded_handoff,
     })
 }
 
@@ -393,6 +596,7 @@ pub enum DeliveryStateStoreError {
     Serialization,
     Io,
     State(DeliveryStateError),
+    HandoffEvidence,
 }
 
 impl fmt::Display for DeliveryStateStoreError {
@@ -407,6 +611,7 @@ impl fmt::Display for DeliveryStateStoreError {
             Self::Serialization => "Windows delivery state serialization failed",
             Self::Io => "Windows delivery state filesystem operation failed",
             Self::State(_) => "Windows delivery state machine rejected persisted state",
+            Self::HandoffEvidence => "Windows delivery handoff evidence is inconsistent",
         })
     }
 }
@@ -416,6 +621,7 @@ impl std::error::Error for DeliveryStateStoreError {}
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
     use std::sync::atomic::{AtomicU64, Ordering};
 
     type TestResult = Result<(), Box<dyn std::error::Error>>;
@@ -445,6 +651,28 @@ mod tests {
         }
     }
 
+    fn identity() -> DeliveryIdentity {
+        DeliveryIdentity {
+            sequence: 1,
+            release_set_id: format!("release-set-v3-sha256-{}", "1".repeat(64)),
+            manifest_sha256: "2".repeat(64),
+            profile_bridge_release_id: format!("profile-bridge-v2-sha256-{}", "3".repeat(64)),
+            runtime_bundle_release_id: format!("runtime-bundle-v2-sha256-{}", "4".repeat(64)),
+        }
+    }
+
+    fn staged_state() -> Result<DeliveryState, serde_json::Error> {
+        serde_json::from_value(json!({
+            "active": null,
+            "active_health_confirmed": false,
+            "last_known_good": null,
+            "staged": identity(),
+            "activation_generation": 0,
+            "last_activation": null,
+            "last_failure": null
+        }))
+    }
+
     #[test]
     fn explicit_initialize_and_restart_round_trip_are_deterministic() -> TestResult {
         let directory = TestDirectory::create("restart")?;
@@ -460,7 +688,39 @@ mod tests {
         let reopened = DeliveryStateStore::open(&root)?;
         assert_eq!(reopened.revision(), 2);
         assert_eq!(reopened.state(), &state);
+        assert_eq!(reopened.handoff(), None);
         assert_eq!(reopened.snapshot_sha256(), store.snapshot_sha256());
+        Ok(())
+    }
+
+    #[test]
+    fn handoff_evidence_round_trips_inside_the_existing_state_journal() -> TestResult {
+        let directory = TestDirectory::create("handoff")?;
+        let root = directory.state_root();
+        let mut store = DeliveryStateStore::initialize(&root)?;
+        let state = staged_state()?;
+        let evidence = DeliveryHandoffEvidence::activation_started(&state, &identity())?;
+        store.persist_handoff(&state, evidence.clone())?;
+
+        let reopened = DeliveryStateStore::open(&root)?;
+        assert_eq!(reopened.state(), &state);
+        assert_eq!(reopened.handoff(), Some(&evidence));
+
+        let plain_state = reopened.state().clone();
+        let mut reopened = reopened;
+        reopened.persist(&plain_state)?;
+        assert_eq!(reopened.handoff(), None);
+        assert_eq!(DeliveryStateStore::open(&root)?.handoff(), None);
+        Ok(())
+    }
+
+    #[test]
+    fn inconsistent_handoff_evidence_fails_closed() -> TestResult {
+        let state = DeliveryState::default();
+        assert_eq!(
+            DeliveryHandoffEvidence::activation_started(&state, &identity()),
+            Err(DeliveryStateStoreError::HandoffEvidence)
+        );
         Ok(())
     }
 
@@ -509,6 +769,7 @@ mod tests {
             2,
             Some(store.snapshot_sha256().to_owned()),
             store.state().clone(),
+            None,
         )?;
         let bytes = serde_json::to_vec(&envelope)?;
         let digest = sha256_hex(&bytes);
@@ -524,6 +785,7 @@ mod tests {
         let reopened = DeliveryStateStore::open(&root)?;
         assert_eq!(reopened.revision(), 2);
         assert_eq!(reopened.snapshot_sha256(), digest);
+        assert_eq!(reopened.handoff(), None);
         assert!(!pending_path.exists());
         assert!(root.join(snapshot_name(FINAL_PREFIX, 2, &digest)).is_file());
         Ok(())
