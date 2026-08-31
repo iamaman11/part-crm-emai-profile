@@ -2,7 +2,7 @@ use super::filesystem;
 use super::{GenerationWorkspace, LocalProfileError, MaterializationRoot};
 use profile_platform_primitives::DeviceId;
 use std::fs::{self, File, OpenOptions, TryLockError};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 const ROOT_MARKER: &str = ".profile-platform-root";
 const BRIDGE_LOCK_FILE: &str = ".profile-platform.lock";
