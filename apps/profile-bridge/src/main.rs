@@ -4,12 +4,12 @@ use bridge_domain::ClaimUri;
 #[cfg(windows)]
 use profile_bridge::local_profile::{DeliveryActivationGuard, MaterializationRoot};
 use profile_bridge::shipping_composition::run_claim;
-use profile_bridge::windows_delivery_handoff::{
-    HANDOFF_ACTIVATE_ARGUMENT, HANDOFF_ARRIVAL_ARGUMENT,
-};
 #[cfg(windows)]
 use profile_bridge::windows_delivery_handoff::{
     DeliveryHandoffCoordinator, DeliveryHandoffRestartDisposition,
+};
+use profile_bridge::windows_delivery_handoff::{
+    HANDOFF_ACTIVATE_ARGUMENT, HANDOFF_ARRIVAL_ARGUMENT,
 };
 use std::env;
 use std::fmt;
@@ -120,14 +120,8 @@ fn run_delivery_handoff_arrived() -> Result<(), BridgeCliError> {
 }
 
 #[cfg(windows)]
-fn delivery_context() -> Result<
-    (
-        DeliveryActivationGuard,
-        DeliveryHandoffCoordinator,
-        PathBuf,
-    ),
-    BridgeCliError,
-> {
+fn delivery_context()
+-> Result<(DeliveryActivationGuard, DeliveryHandoffCoordinator, PathBuf), BridgeCliError> {
     let root = env::var_os(MATERIALIZATION_ROOT_ENV)
         .filter(|value| !value.is_empty())
         .map(PathBuf::from)
@@ -168,7 +162,9 @@ enum BridgeCliError {
 impl fmt::Display for BridgeCliError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(match self {
-            Self::MissingClaimUri => "a single Profile Bridge claim URI or delivery command is required",
+            Self::MissingClaimUri => {
+                "a single Profile Bridge claim URI or delivery command is required"
+            }
             Self::UnexpectedArgument => "unexpected additional argument",
             Self::InvalidClaimUri => "claim URI is invalid",
             Self::LaunchFailed => "authorized Profile Bridge launch failed closed",
@@ -177,9 +173,7 @@ impl fmt::Display for BridgeCliError {
                 "Profile Bridge delivery recovery was scheduled; retry after handoff"
             }
             Self::DeliveryRecoveryRequired => "Profile Bridge delivery recovery is required",
-            Self::UnsupportedDeliveryCommand => {
-                "Profile Bridge delivery commands require Windows"
-            }
+            Self::UnsupportedDeliveryCommand => "Profile Bridge delivery commands require Windows",
         })
     }
 }
@@ -207,13 +201,20 @@ mod tests {
     }
 
     #[test]
-    fn delivery_commands_are_bounded_and_carry_no_claim() -> Result<(), Box<dyn std::error::Error>> {
+    fn delivery_commands_are_bounded_and_carry_no_claim() -> Result<(), Box<dyn std::error::Error>>
+    {
         assert!(matches!(
-            parse_command(["profile-bridge".to_owned(), HANDOFF_ACTIVATE_ARGUMENT.to_owned()])?,
+            parse_command([
+                "profile-bridge".to_owned(),
+                HANDOFF_ACTIVATE_ARGUMENT.to_owned()
+            ])?,
             BridgeCommand::DeliveryActivateStaged
         ));
         assert!(matches!(
-            parse_command(["profile-bridge".to_owned(), HANDOFF_ARRIVAL_ARGUMENT.to_owned()])?,
+            parse_command([
+                "profile-bridge".to_owned(),
+                HANDOFF_ARRIVAL_ARGUMENT.to_owned()
+            ])?,
             BridgeCommand::DeliveryHandoffArrived
         ));
         assert_eq!(
@@ -250,6 +251,10 @@ mod tests {
                 .contains("secret")
         );
         assert!(!BridgeCliError::LaunchFailed.to_string().contains("claim_"));
-        assert!(!BridgeCliError::DeliveryFailed.to_string().contains("claim_"));
+        assert!(
+            !BridgeCliError::DeliveryFailed
+                .to_string()
+                .contains("claim_")
+        );
     }
 }
