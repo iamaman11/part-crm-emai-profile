@@ -108,12 +108,66 @@ pub(crate) struct PendingWindowsDeliveryHealthConfirmation {
 }
 
 impl PendingWindowsDeliveryHealthConfirmation {
+    pub(crate) fn start_before_runtime_health(
+        self,
+    ) -> Result<StartedWindowsDeliveryHealthConfirmation, WindowsDeliveryRuntimeError> {
+        let mut store = DeliveryStateStore::open(&self.state_root)
+            .map_err(|_| WindowsDeliveryRuntimeError::PersistedState)?;
+        match exact_health_state(store.state(), &self.candidate, self.activation_attempt)? {
+            ExactHealthState::Pending => {
+                let mut next = store.state().clone();
+                next.start_health_attempt(&self.candidate, self.activation_attempt)
+                    .map_err(|_| WindowsDeliveryRuntimeError::PersistedState)?;
+                if store.persist(&next).is_err() {
+                    let reopened = DeliveryStateStore::open(&self.state_root)
+                        .map_err(|_| WindowsDeliveryRuntimeError::PersistedState)?;
+                    if exact_health_state(
+                        reopened.state(),
+                        &self.candidate,
+                        self.activation_attempt,
+                    )? != ExactHealthState::Started
+                    {
+                        return Err(WindowsDeliveryRuntimeError::PersistedState);
+                    }
+                } else {
+                    let reopened = DeliveryStateStore::open(&self.state_root)
+                        .map_err(|_| WindowsDeliveryRuntimeError::PersistedState)?;
+                    if exact_health_state(
+                        reopened.state(),
+                        &self.candidate,
+                        self.activation_attempt,
+                    )? != ExactHealthState::Started
+                    {
+                        return Err(WindowsDeliveryRuntimeError::PersistedState);
+                    }
+                }
+            }
+            ExactHealthState::Started => {}
+            ExactHealthState::Healthy => return Err(WindowsDeliveryRuntimeError::PersistedState),
+        }
+        Ok(StartedWindowsDeliveryHealthConfirmation {
+            state_root: self.state_root,
+            candidate: self.candidate,
+            activation_attempt: self.activation_attempt,
+        })
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct StartedWindowsDeliveryHealthConfirmation {
+    state_root: PathBuf,
+    candidate: DeliveryIdentity,
+    activation_attempt: u64,
+}
+
+impl StartedWindowsDeliveryHealthConfirmation {
     pub(crate) fn confirm_after_runtime_ready(self) -> Result<(), WindowsDeliveryRuntimeError> {
         let mut store = DeliveryStateStore::open(&self.state_root)
             .map_err(|_| WindowsDeliveryRuntimeError::PersistedState)?;
         match exact_health_state(store.state(), &self.candidate, self.activation_attempt)? {
             ExactHealthState::Healthy => return Ok(()),
-            ExactHealthState::Pending => {}
+            ExactHealthState::Started => {}
+            ExactHealthState::Pending => return Err(WindowsDeliveryRuntimeError::PersistedState),
         }
 
         let mut next = store.state().clone();
@@ -128,7 +182,9 @@ impl PendingWindowsDeliveryHealthConfirmation {
                 self.activation_attempt,
             )? {
                 ExactHealthState::Healthy => Ok(()),
-                ExactHealthState::Pending => Err(WindowsDeliveryRuntimeError::PersistedState),
+                ExactHealthState::Pending | ExactHealthState::Started => {
+                    Err(WindowsDeliveryRuntimeError::PersistedState)
+                }
             };
         }
 
@@ -136,7 +192,9 @@ impl PendingWindowsDeliveryHealthConfirmation {
             .map_err(|_| WindowsDeliveryRuntimeError::PersistedState)?;
         match exact_health_state(reopened.state(), &self.candidate, self.activation_attempt)? {
             ExactHealthState::Healthy => Ok(()),
-            ExactHealthState::Pending => Err(WindowsDeliveryRuntimeError::PersistedState),
+            ExactHealthState::Pending | ExactHealthState::Started => {
+                Err(WindowsDeliveryRuntimeError::PersistedState)
+            }
         }
     }
 }
@@ -144,6 +202,7 @@ impl PendingWindowsDeliveryHealthConfirmation {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ExactHealthState {
     Pending,
+    Started,
     Healthy,
 }
 
@@ -159,6 +218,7 @@ fn pending_health_confirmation(
             candidate: active.clone(),
             activation_attempt: store.state().activation_generation(),
         })),
+        ExactHealthState::Started => Err(WindowsDeliveryRuntimeError::InterruptedHealthAttempt),
     }
 }
 
@@ -184,6 +244,7 @@ fn exact_health_state(
     }
     match (state.active_health_confirmed(), activation.outcome) {
         (false, DeliveryActivationOutcome::PendingHealth) => Ok(ExactHealthState::Pending),
+        (false, DeliveryActivationOutcome::HealthAttemptStarted) => Ok(ExactHealthState::Started),
         (true, DeliveryActivationOutcome::Healthy) => Ok(ExactHealthState::Healthy),
         _ => Err(WindowsDeliveryRuntimeError::PersistedState),
     }
@@ -344,6 +405,7 @@ fn metadata_is_link_or_reparse(metadata: &fs::Metadata) -> bool {
 pub enum WindowsDeliveryRuntimeError {
     InvalidInstalledLayout,
     PersistedState,
+    InterruptedHealthAttempt,
     NoActiveDelivery,
     StagedDelivery,
     ActiveExecutableMismatch,
@@ -355,6 +417,9 @@ impl fmt::Display for WindowsDeliveryRuntimeError {
         formatter.write_str(match self {
             Self::InvalidInstalledLayout => "installed Windows delivery layout is invalid",
             Self::PersistedState => "persisted Windows delivery state is unavailable",
+            Self::InterruptedHealthAttempt => {
+                "persisted Windows delivery health attempt was interrupted"
+            }
             Self::NoActiveDelivery => "persisted Windows delivery state has no active candidate",
             Self::StagedDelivery => "active Windows delivery stage is invalid",
             Self::ActiveExecutableMismatch => {
@@ -485,7 +550,7 @@ mod tests {
     }
 
     #[test]
-    fn pending_candidate_health_confirmation_is_exact_and_idempotent()
+    fn pending_health_attempt_is_durably_started_before_confirmation()
     -> Result<(), Box<dyn std::error::Error>> {
         let directory = TestDirectory::create("pending-health")?;
         let state_root = directory.0.join("state");
@@ -501,9 +566,28 @@ mod tests {
         );
         let confirmation = pending_health_confirmation(&store, &state_root, &identity)?
             .ok_or("pending candidate did not expose exact health confirmation")?;
-        confirmation.clone().confirm_after_runtime_ready()?;
-        confirmation.confirm_after_runtime_ready()?;
+        let started = confirmation.clone().start_before_runtime_health()?;
+        let started_again = confirmation.start_before_runtime_health()?;
 
+        let reopened = DeliveryStateStore::open(&state_root)?;
+        assert_eq!(
+            reopened
+                .state()
+                .last_activation()
+                .map(|value| value.outcome),
+            Some(DeliveryActivationOutcome::HealthAttemptStarted)
+        );
+        assert_eq!(
+            exact_health_state(reopened.state(), &identity, 1)?,
+            ExactHealthState::Started
+        );
+        assert_eq!(
+            pending_health_confirmation(&reopened, &state_root, &identity),
+            Err(WindowsDeliveryRuntimeError::InterruptedHealthAttempt)
+        );
+
+        started.confirm_after_runtime_ready()?;
+        started_again.confirm_after_runtime_ready()?;
         let reopened = DeliveryStateStore::open(&state_root)?;
         assert!(reopened.state().active_health_confirmed());
         assert_eq!(reopened.state().active(), Some(&identity));
@@ -522,7 +606,7 @@ mod tests {
     }
 
     #[test]
-    fn health_confirmation_rejects_candidate_or_attempt_substitution()
+    fn health_attempt_rejects_candidate_or_attempt_substitution()
     -> Result<(), Box<dyn std::error::Error>> {
         let identity = delivery_identity('e');
         let state = pending_state(&identity)?;

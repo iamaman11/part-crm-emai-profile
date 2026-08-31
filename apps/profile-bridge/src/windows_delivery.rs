@@ -345,6 +345,7 @@ pub struct DeliveryIdentity {
 #[serde(rename_all = "snake_case")]
 pub enum DeliveryActivationOutcome {
     PendingHealth,
+    HealthAttemptStarted,
     Healthy,
     RolledBack,
     RecoveryRequired,
@@ -463,6 +464,7 @@ impl DeliveryState {
             }
             Some(evidence) => match evidence.outcome {
                 DeliveryActivationOutcome::PendingHealth
+                | DeliveryActivationOutcome::HealthAttemptStarted
                     if self.active.as_ref() != Some(&evidence.candidate)
                         || self.active_health_confirmed =>
                 {
@@ -574,6 +576,36 @@ impl DeliveryState {
         Ok(())
     }
 
+    pub fn start_health_attempt(
+        &mut self,
+        candidate: &DeliveryIdentity,
+        attempt: u64,
+    ) -> Result<(), DeliveryStateError> {
+        self.validate_persisted()?;
+        if attempt == 0
+            || self.active.as_ref() != Some(candidate)
+            || self.active_health_confirmed
+            || self.activation_generation != attempt
+        {
+            return Err(DeliveryStateError::HealthAttemptMismatch);
+        }
+        let activation = self
+            .last_activation
+            .as_mut()
+            .ok_or(DeliveryStateError::CorruptPersistedState)?;
+        if activation.attempt != attempt || activation.candidate != *candidate {
+            return Err(DeliveryStateError::HealthAttemptMismatch);
+        }
+        match activation.outcome {
+            DeliveryActivationOutcome::PendingHealth => {
+                activation.outcome = DeliveryActivationOutcome::HealthAttemptStarted;
+                Ok(())
+            }
+            DeliveryActivationOutcome::HealthAttemptStarted => Ok(()),
+            _ => Err(DeliveryStateError::HealthAttemptNotStarted),
+        }
+    }
+
     pub fn confirm_health(&mut self) -> Result<(), DeliveryStateError> {
         self.validate_persisted()?;
         let active = self
@@ -587,6 +619,9 @@ impl DeliveryState {
         if activation.candidate != *active {
             return Err(DeliveryStateError::CorruptPersistedState);
         }
+        if activation.outcome != DeliveryActivationOutcome::HealthAttemptStarted {
+            return Err(DeliveryStateError::HealthAttemptNotStarted);
+        }
         activation.outcome = DeliveryActivationOutcome::Healthy;
         self.active_health_confirmed = true;
         self.last_failure = None;
@@ -598,10 +633,6 @@ impl DeliveryState {
     }
 
     pub fn recover_interrupted_activation(&mut self) -> Result<(), DeliveryStateError> {
-        self.validate_persisted()?;
-        if self.active_health_confirmed {
-            return Ok(());
-        }
         self.rollback_after_failure(DeliveryFailureKind::InterruptedActivation)
     }
 
@@ -620,7 +651,10 @@ impl DeliveryState {
             .as_ref()
             .ok_or(DeliveryStateError::CorruptPersistedState)?;
         if activation.candidate != failed {
-            return Err(DeliveryStateError::CorruptPersistedState);
+            return Err(DeliveryStateError::HealthAttemptMismatch);
+        }
+        if activation.outcome != DeliveryActivationOutcome::HealthAttemptStarted {
+            return Err(DeliveryStateError::HealthAttemptNotStarted);
         }
 
         self.active = None;
@@ -689,6 +723,8 @@ pub enum DeliveryStateError {
     ReplayConflict,
     ActiveRuntime,
     HealthPending,
+    HealthAttemptMismatch,
+    HealthAttemptNotStarted,
     NoStagedCandidate,
     NoActiveCandidate,
     RecoveryRequired,
@@ -704,6 +740,10 @@ impl fmt::Display for DeliveryStateError {
             Self::ActiveRuntime => "Windows delivery activation requires quiescence",
             Self::HealthPending => {
                 "Windows delivery active release has not passed health confirmation"
+            }
+            Self::HealthAttemptMismatch => "Windows delivery health attempt identity is inconsistent",
+            Self::HealthAttemptNotStarted => {
+                "Windows delivery health attempt has not durably started"
             }
             Self::NoStagedCandidate => "Windows delivery has no staged candidate",
             Self::NoActiveCandidate => "Windows delivery has no active candidate",
@@ -1033,11 +1073,26 @@ mod tests {
             Err(DeliveryStateError::ActiveRuntime)
         );
         state.activate_staged(true)?;
+        let first_identity = first.identity();
         assert!(!state.active_health_confirmed());
         assert_eq!(state.activation_generation(), 1);
         assert_eq!(
             state.last_activation().map(|evidence| evidence.outcome),
             Some(DeliveryActivationOutcome::PendingHealth)
+        );
+        assert_eq!(
+            state.confirm_health(),
+            Err(DeliveryStateError::HealthAttemptNotStarted)
+        );
+        assert_eq!(
+            state.start_health_attempt(&second.identity(), 1),
+            Err(DeliveryStateError::HealthAttemptMismatch)
+        );
+        state.start_health_attempt(&first_identity, 1)?;
+        state.start_health_attempt(&first_identity, 1)?;
+        assert_eq!(
+            state.last_activation().map(|evidence| evidence.outcome),
+            Some(DeliveryActivationOutcome::HealthAttemptStarted)
         );
 
         state.stage(&second)?;
@@ -1050,7 +1105,7 @@ mod tests {
 
         state.confirm_health()?;
         state.activate_staged(true)?;
-        assert_eq!(state.last_known_good(), Some(&first.identity()));
+        assert_eq!(state.last_known_good(), Some(&first_identity));
         assert!(!state.active_health_confirmed());
         assert_eq!(state.activation_generation(), 2);
         Ok(())
@@ -1061,10 +1116,18 @@ mod tests {
         let trust = trust()?;
         let first = verify(&manifest(1, 'a'), &trust, None)?;
         let second = verify(&manifest(2, 'b'), &trust, None)?;
+        let first_identity = first.identity();
+        let second_identity = second.identity();
         let mut state = DeliveryState::default();
 
         state.stage(&first)?;
         state.activate_staged(true)?;
+        assert_eq!(
+            state.fail_health_and_rollback(),
+            Err(DeliveryStateError::HealthAttemptNotStarted)
+        );
+        assert_eq!(state.active(), Some(&first_identity));
+        state.start_health_attempt(&first_identity, 1)?;
         assert_eq!(
             state.fail_health_and_rollback(),
             Err(DeliveryStateError::RecoveryRequired)
@@ -1077,11 +1140,15 @@ mod tests {
 
         state.stage(&first)?;
         state.activate_staged(true)?;
+        let first_retry_attempt = state.activation_generation();
+        state.start_health_attempt(&first_identity, first_retry_attempt)?;
         state.confirm_health()?;
         state.stage(&second)?;
         state.activate_staged(true)?;
+        let second_attempt = state.activation_generation();
+        state.start_health_attempt(&second_identity, second_attempt)?;
         state.fail_health_and_rollback()?;
-        assert_eq!(state.active(), Some(&first.identity()));
+        assert_eq!(state.active(), Some(&first_identity));
         assert!(state.active_health_confirmed());
         assert!(state.staged().is_none());
         assert_eq!(
@@ -1092,22 +1159,30 @@ mod tests {
     }
 
     #[test]
-    fn interrupted_activation_recovers_deterministically_to_lkg() -> TestResult {
+    fn interrupted_activation_recovers_only_a_durably_started_attempt() -> TestResult {
         let trust = trust()?;
         let first = verify(&manifest(1, 'a'), &trust, None)?;
         let second = verify(&manifest(2, 'b'), &trust, None)?;
+        let first_identity = first.identity();
+        let second_identity = second.identity();
         let mut state = DeliveryState::default();
         state.stage(&first)?;
         state.activate_staged(true)?;
+        state.start_health_attempt(&first_identity, 1)?;
         state.confirm_health()?;
         state.stage(&second)?;
         state.activate_staged(true)?;
+        assert_eq!(
+            state.recover_interrupted_activation(),
+            Err(DeliveryStateError::HealthAttemptNotStarted)
+        );
+        state.start_health_attempt(&second_identity, 2)?;
 
         let persisted = serde_json::to_vec(&state)?;
         let mut restored: DeliveryState = serde_json::from_slice(&persisted)?;
         restored.validate_persisted()?;
         restored.recover_interrupted_activation()?;
-        assert_eq!(restored.active(), Some(&first.identity()));
+        assert_eq!(restored.active(), Some(&first_identity));
         assert!(restored.active_health_confirmed());
         assert_eq!(
             restored.last_failure().map(|failure| failure.kind),
@@ -1117,6 +1192,10 @@ mod tests {
             restored.last_activation().map(|evidence| evidence.outcome),
             Some(DeliveryActivationOutcome::RolledBack)
         );
+        assert_eq!(
+            restored.recover_interrupted_activation(),
+            Err(DeliveryStateError::HealthAttemptNotStarted)
+        );
         Ok(())
     }
 
@@ -1124,9 +1203,11 @@ mod tests {
     fn persisted_state_inconsistency_fails_closed() -> TestResult {
         let trust = trust()?;
         let first = verify(&manifest(1, 'a'), &trust, None)?;
+        let first_identity = first.identity();
         let mut state = DeliveryState::default();
         state.stage(&first)?;
         state.activate_staged(true)?;
+        state.start_health_attempt(&first_identity, 1)?;
         state.confirm_health()?;
         let mut value = serde_json::to_value(&state)?;
         value["active_health_confirmed"] = serde_json::Value::Bool(false);
@@ -1151,15 +1232,17 @@ mod tests {
     fn exact_active_candidate_reactivation_is_idempotent() -> TestResult {
         let trust = trust()?;
         let first = verify(&manifest(1, 'a'), &trust, None)?;
+        let first_identity = first.identity();
         let mut state = DeliveryState::default();
         state.stage(&first)?;
         state.activate_staged(true)?;
+        state.start_health_attempt(&first_identity, 1)?;
         state.confirm_health()?;
         let generation = state.activation_generation();
 
         state.stage(&first)?;
         state.activate_staged(true)?;
-        assert_eq!(state.active(), Some(&first.identity()));
+        assert_eq!(state.active(), Some(&first_identity));
         assert!(state.active_health_confirmed());
         assert!(state.last_known_good().is_none());
         assert_eq!(state.activation_generation(), generation);

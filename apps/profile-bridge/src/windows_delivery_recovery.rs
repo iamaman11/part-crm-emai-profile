@@ -88,7 +88,7 @@ impl DeliveryRecoveryCoordinator {
     ) -> Result<DeliveryRecoveryDisposition, DeliveryRecoveryError> {
         let mut store = DeliveryStateStore::open(&self.state_root)
             .map_err(DeliveryRecoveryError::StateStore)?;
-        validate_exact_pending_attempt(store.state(), expected_candidate, expected_attempt)?;
+        validate_exact_started_attempt(store.state(), expected_candidate, expected_attempt)?;
 
         let mut next = store.state().clone();
         let transition = match reason {
@@ -129,7 +129,7 @@ impl DeliveryRecoveryCoordinator {
     }
 }
 
-fn validate_exact_pending_attempt(
+fn validate_exact_started_attempt(
     state: &DeliveryState,
     candidate: &DeliveryIdentity,
     attempt: u64,
@@ -149,7 +149,7 @@ fn validate_exact_pending_attempt(
         .ok_or(DeliveryRecoveryError::StateMismatch)?;
     if activation.attempt != attempt
         || activation.candidate != *candidate
-        || activation.outcome != DeliveryActivationOutcome::PendingHealth
+        || activation.outcome != DeliveryActivationOutcome::HealthAttemptStarted
     {
         return Err(DeliveryRecoveryError::StateMismatch);
     }
@@ -394,12 +394,21 @@ mod tests {
     }
 
     fn fixture_with_lkg(label: &str) -> Result<Fixture, Box<dyn std::error::Error>> {
+        fixture_with_lkg_state(label, true)
+    }
+
+    fn fixture_with_lkg_state(
+        label: &str,
+        start_second: bool,
+    ) -> Result<Fixture, Box<dyn std::error::Error>> {
         let directory = TestDirectory::create(label)?;
         let staging = DeliveryStagingRoot::open_or_create(directory.0.join("releases"))?;
         let state_root = directory.0.join("state");
         let mut store = DeliveryStateStore::initialize(&state_root)?;
         let first_candidate = candidate(&directory.0, 1, 'a', "first")?;
         let second_candidate = candidate(&directory.0, 2, 'b', "second")?;
+        let first_identity = first_candidate.0.identity();
+        let second_identity = second_candidate.0.identity();
         let mut first_reader = MemoryArchiveReader::for_release("first");
         let first_stage = stage_verified_delivery(
             &staging,
@@ -420,17 +429,21 @@ mod tests {
         let mut state = DeliveryState::default();
         state.stage(&first_candidate.0)?;
         state.activate_staged(true)?;
+        state.start_health_attempt(&first_identity, 1)?;
         state.confirm_health()?;
         state.stage(&second_candidate.0)?;
         state.activate_staged(true)?;
+        if start_second {
+            state.start_health_attempt(&second_identity, 2)?;
+        }
         store.persist(&state)?;
 
         Ok(Fixture {
             _directory: directory,
             staging,
             state_root,
-            first: first_candidate.0.identity(),
-            second: second_candidate.0.identity(),
+            first: first_identity,
+            second: second_identity,
             first_stage: first_stage.path().to_path_buf(),
         })
     }
@@ -501,6 +514,7 @@ mod tests {
         let state_root = directory.0.join("state");
         let mut store = DeliveryStateStore::initialize(&state_root)?;
         let first_candidate = candidate(&directory.0, 1, 'd', "first-only")?;
+        let identity = first_candidate.0.identity();
         let mut reader = MemoryArchiveReader::for_release("first-only");
         stage_verified_delivery(
             &staging,
@@ -512,8 +526,8 @@ mod tests {
         let mut state = DeliveryState::default();
         state.stage(&first_candidate.0)?;
         state.activate_staged(true)?;
+        state.start_health_attempt(&identity, 1)?;
         store.persist(&state)?;
-        let identity = first_candidate.0.identity();
 
         let recovery = DeliveryRecoveryCoordinator::new(staging, &state_root);
         assert_eq!(
@@ -556,6 +570,45 @@ mod tests {
             reopened.state().last_failure().map(|value| value.kind),
             Some(DeliveryFailureKind::InterruptedActivation)
         );
+        Ok(())
+    }
+
+    #[test]
+    fn untouched_pending_and_healthy_states_cannot_masquerade_as_interrupted()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let pending = fixture_with_lkg_state("untouched-pending", false)?;
+        let before = DeliveryStateStore::open(&pending.state_root)?
+            .state()
+            .clone();
+        let recovery = DeliveryRecoveryCoordinator::new(pending.staging, &pending.state_root);
+        assert_eq!(
+            recovery.recover(
+                &pending.second,
+                2,
+                DeliveryRecoveryReason::InterruptedActivation,
+            ),
+            Err(DeliveryRecoveryError::StateMismatch)
+        );
+        assert_eq!(DeliveryStateStore::open(&pending.state_root)?.state(), &before);
+
+        let healthy = fixture_with_lkg("healthy")?;
+        let mut store = DeliveryStateStore::open(&healthy.state_root)?;
+        let mut state = store.state().clone();
+        state.confirm_health()?;
+        store.persist(&state)?;
+        let before = DeliveryStateStore::open(&healthy.state_root)?
+            .state()
+            .clone();
+        let recovery = DeliveryRecoveryCoordinator::new(healthy.staging, &healthy.state_root);
+        assert_eq!(
+            recovery.recover(
+                &healthy.second,
+                2,
+                DeliveryRecoveryReason::InterruptedActivation,
+            ),
+            Err(DeliveryRecoveryError::StateMismatch)
+        );
+        assert_eq!(DeliveryStateStore::open(&healthy.state_root)?.state(), &before);
         Ok(())
     }
 
