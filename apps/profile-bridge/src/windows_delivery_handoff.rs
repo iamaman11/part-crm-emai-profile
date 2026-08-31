@@ -195,7 +195,8 @@ impl DeliveryHandoffCoordinator {
         let profile_bridge_root = current_executable
             .parent()
             .ok_or(DeliveryHandoffError::InvalidInstalledLayout)?;
-        if profile_bridge_root.file_name().and_then(OsStr::to_str) != Some(PROFILE_BRIDGE_DIRECTORY) {
+        if profile_bridge_root.file_name().and_then(OsStr::to_str) != Some(PROFILE_BRIDGE_DIRECTORY)
+        {
             return Err(DeliveryHandoffError::InvalidInstalledLayout);
         }
         let release_root = profile_bridge_root
