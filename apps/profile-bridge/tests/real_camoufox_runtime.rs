@@ -169,7 +169,11 @@ fn config_integer(config: &Value, key: &str) -> Result<i64, Box<dyn std::error::
     let Some(number) = value.as_f64() else {
         return Err(format!("materialized Camoufox config field {key} is not numeric").into());
     };
-    if !number.is_finite() || number.fract() != 0.0 || number < i64::MIN as f64 || number > i64::MAX as f64 {
+    if !number.is_finite()
+        || number.fract() != 0.0
+        || number < i64::MIN as f64
+        || number > i64::MAX as f64
+    {
         return Err(format!("materialized Camoufox config field {key} is not an integer").into());
     }
     Ok(number as i64)
