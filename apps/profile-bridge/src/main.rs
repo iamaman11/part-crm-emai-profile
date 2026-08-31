@@ -1,24 +1,15 @@
 #![forbid(unsafe_code)]
 
 use bridge_domain::ClaimUri;
-#[cfg(windows)]
-use profile_bridge::local_profile::{DeliveryActivationGuard, MaterializationRoot};
-use profile_bridge::shipping_composition::run_claim;
-#[cfg(windows)]
-use profile_bridge::windows_delivery_handoff::{
-    DeliveryHandoffCoordinator, DeliveryHandoffRestartDisposition,
+use profile_bridge::shipping_composition::{
+    ShippingDeliveryCommand, run_claim, run_delivery_command,
 };
 use profile_bridge::windows_delivery_handoff::{
     HANDOFF_ACTIVATE_ARGUMENT, HANDOFF_ARRIVAL_ARGUMENT,
 };
 use std::env;
 use std::fmt;
-#[cfg(windows)]
-use std::path::PathBuf;
 use std::process::ExitCode;
-
-#[cfg(windows)]
-const MATERIALIZATION_ROOT_ENV: &str = "PROFILE_BRIDGE_MATERIALIZATION_ROOT";
 
 fn main() -> ExitCode {
     match run(env::args()) {
@@ -35,9 +26,17 @@ where
     I: IntoIterator<Item = String>,
 {
     match parse_command(arguments)? {
-        BridgeCommand::Claim(claim) => run_claim_after_delivery_recovery(&claim),
-        BridgeCommand::DeliveryActivateStaged => run_delivery_activate_staged(),
-        BridgeCommand::DeliveryHandoffArrived => run_delivery_handoff_arrived(),
+        BridgeCommand::Claim(claim) => {
+            run_claim(&claim).map_err(|_| BridgeCliError::LaunchFailed)
+        }
+        BridgeCommand::DeliveryActivateStaged => {
+            run_delivery_command(ShippingDeliveryCommand::ActivateStaged)
+                .map_err(|_| BridgeCliError::DeliveryFailed)
+        }
+        BridgeCommand::DeliveryHandoffArrived => {
+            run_delivery_command(ShippingDeliveryCommand::HandoffArrived)
+                .map_err(|_| BridgeCliError::DeliveryFailed)
+        }
     }
 }
 
@@ -66,110 +65,13 @@ where
     }
 }
 
-fn run_claim_after_delivery_recovery(claim: &ClaimUri) -> Result<(), BridgeCliError> {
-    #[cfg(windows)]
-    {
-        let (coordinator, current_executable) = delivery_coordinator()?;
-        if coordinator
-            .restart_recovery_pending()
-            .map_err(|_| BridgeCliError::DeliveryFailed)?
-        {
-            let guard = delivery_activation_guard()?;
-            let disposition = coordinator
-                .recover_or_resume_started(&guard, std::process::id(), &current_executable)
-                .map_err(|_| BridgeCliError::DeliveryFailed)?;
-            match disposition {
-                DeliveryHandoffRestartDisposition::None => drop(guard),
-                DeliveryHandoffRestartDisposition::TransferScheduled => {
-                    hold_activation_guard_until_process_exit(guard);
-                    return Err(BridgeCliError::DeliveryRestartScheduled);
-                }
-                DeliveryHandoffRestartDisposition::RecoveryRequired => {
-                    return Err(BridgeCliError::DeliveryRecoveryRequired);
-                }
-            }
-        }
-    }
-    run_claim(claim).map_err(|_| BridgeCliError::LaunchFailed)
-}
-
-fn run_delivery_activate_staged() -> Result<(), BridgeCliError> {
-    #[cfg(windows)]
-    {
-        let (coordinator, current_executable) = delivery_coordinator()?;
-        let guard = delivery_activation_guard()?;
-        coordinator
-            .start_activation(&guard, std::process::id(), &current_executable)
-            .map_err(|_| BridgeCliError::DeliveryFailed)?;
-        hold_activation_guard_until_process_exit(guard);
-        return Ok(());
-    }
-    #[cfg(not(windows))]
-    {
-        Err(BridgeCliError::UnsupportedDeliveryCommand)
-    }
-}
-
-fn run_delivery_handoff_arrived() -> Result<(), BridgeCliError> {
-    #[cfg(windows)]
-    {
-        let (coordinator, current_executable) = delivery_coordinator()?;
-        let guard = delivery_activation_guard()?;
-        coordinator
-            .complete_arrival(&guard, &current_executable)
-            .map_err(|_| BridgeCliError::DeliveryFailed)?;
-        hold_activation_guard_until_process_exit(guard);
-        return Ok(());
-    }
-    #[cfg(not(windows))]
-    {
-        Err(BridgeCliError::UnsupportedDeliveryCommand)
-    }
-}
-
-#[cfg(windows)]
-fn delivery_coordinator() -> Result<(DeliveryHandoffCoordinator, PathBuf), BridgeCliError> {
-    let current_executable = env::current_exe().map_err(|_| BridgeCliError::DeliveryFailed)?;
-    let coordinator = DeliveryHandoffCoordinator::from_current_executable(&current_executable)
-        .map_err(|_| BridgeCliError::DeliveryFailed)?;
-    Ok((coordinator, current_executable))
-}
-
-#[cfg(windows)]
-fn delivery_activation_guard() -> Result<DeliveryActivationGuard, BridgeCliError> {
-    let root = env::var_os(MATERIALIZATION_ROOT_ENV)
-        .filter(|value| !value.is_empty())
-        .map(PathBuf::from)
-        .ok_or(BridgeCliError::DeliveryFailed)?;
-    if !root.is_absolute() {
-        return Err(BridgeCliError::DeliveryFailed);
-    }
-    let materialization =
-        MaterializationRoot::open_or_create(root).map_err(|_| BridgeCliError::DeliveryFailed)?;
-    DeliveryActivationGuard::acquire(&materialization).map_err(|_| BridgeCliError::DeliveryFailed)
-}
-
-#[cfg(windows)]
-fn hold_activation_guard_until_process_exit(guard: DeliveryActivationGuard) {
-    // Successful handoff paths return directly from `main`. Intentionally retaining the OS-backed
-    // exclusive admission handle until process termination prevents a new Profile Bridge writer from
-    // entering between the durable handoff snapshot and the old process actually disappearing.
-    std::mem::forget(guard);
-}
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum BridgeCliError {
     MissingClaimUri,
     UnexpectedArgument,
     InvalidClaimUri,
     LaunchFailed,
-    #[cfg(windows)]
     DeliveryFailed,
-    #[cfg(windows)]
-    DeliveryRestartScheduled,
-    #[cfg(windows)]
-    DeliveryRecoveryRequired,
-    UnsupportedDeliveryCommand,
 }
 
 impl fmt::Display for BridgeCliError {
@@ -181,15 +83,7 @@ impl fmt::Display for BridgeCliError {
             Self::UnexpectedArgument => "unexpected additional argument",
             Self::InvalidClaimUri => "claim URI is invalid",
             Self::LaunchFailed => "authorized Profile Bridge launch failed closed",
-            #[cfg(windows)]
             Self::DeliveryFailed => "Profile Bridge delivery handoff failed closed",
-            #[cfg(windows)]
-            Self::DeliveryRestartScheduled => {
-                "Profile Bridge delivery recovery was scheduled; retry after handoff"
-            }
-            #[cfg(windows)]
-            Self::DeliveryRecoveryRequired => "Profile Bridge delivery recovery is required",
-            Self::UnsupportedDeliveryCommand => "Profile Bridge delivery commands require Windows",
         })
     }
 }
@@ -267,5 +161,6 @@ mod tests {
                 .contains("secret")
         );
         assert!(!BridgeCliError::LaunchFailed.to_string().contains("claim_"));
+        assert!(!BridgeCliError::DeliveryFailed.to_string().contains("claim_"));
     }
 }
