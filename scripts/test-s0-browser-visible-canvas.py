@@ -6,6 +6,11 @@ never promotes canvas:seed into output evidence by hashing the config key. Inste
 launches the exact pinned Camoufox runtime, observes a deterministic browser-visible
 2D canvas payload, and requires byte-identical output across a cold relaunch and an
 exact restored generation workspace that is rebound to a fresh Bridge writer lock.
+
+On Windows the same acceptance also proves that a clean packaged runtime can materialize
+and reopen an identity with Python-side outbound networking denied and with an isolated,
+initially empty Camoufox shared cache. This detects mutable addon/runtime acquisition
+without turning the test into a second runtime authority.
 """
 
 from __future__ import annotations
@@ -27,6 +32,99 @@ IPC_VERSION = "2"
 SESSION = "session_01JAS0CANVASPORTABLE"
 BRIDGE_LOCK = "profile-platform-bridge-lock-v1\ndevice_01JAS0CANVASPORTABLE\n1\n"
 LOCK_MARKERS = (".parentlock", "parent.lock", "lock")
+
+OFFLINE_BOOTSTRAP = r'''#!/usr/bin/env python3
+from __future__ import annotations
+
+import importlib.util
+import json
+import os
+import socket
+import sys
+from pathlib import Path
+
+attempts: list[str] = []
+original_getaddrinfo = socket.getaddrinfo
+original_socket = socket.socket
+
+
+def local_host(value: object) -> bool:
+    text = str(value).strip().lower()
+    return text in {"127.0.0.1", "::1", "localhost"} or text.startswith("127.")
+
+
+def guarded_getaddrinfo(host: object, *args: object, **kwargs: object):
+    if host is not None and not local_host(host):
+        attempts.append(f"resolve:{host}")
+        raise OSError("offline acceptance blocked outbound name resolution")
+    return original_getaddrinfo(host, *args, **kwargs)
+
+
+class GuardedSocket(original_socket):
+    def connect(self, address: object) -> None:
+        if isinstance(address, tuple) and address and not local_host(address[0]):
+            attempts.append(f"connect:{address[0]}")
+            raise OSError("offline acceptance blocked outbound socket connection")
+        return super().connect(address)
+
+    def connect_ex(self, address: object) -> int:
+        if isinstance(address, tuple) and address and not local_host(address[0]):
+            attempts.append(f"connect_ex:{address[0]}")
+            return 10065
+        return super().connect_ex(address)
+
+
+socket.getaddrinfo = guarded_getaddrinfo
+socket.socket = GuardedSocket
+
+camouhost_path = Path(sys.argv[1]).resolve(strict=True)
+runtime_lock = Path(sys.argv[2]).resolve(strict=True)
+profile_root = Path(sys.argv[3])
+profile_root.mkdir()
+(profile_root / ".profile-platform.lock").write_text(
+    "offline-bridge-writer\n", encoding="utf-8", newline="\n"
+)
+os.environ["CAMOUHOST_RUNTIME_LOCK"] = str(runtime_lock)
+os.environ.pop("CAMOUHOST_INITIAL_URL", None)
+os.environ.pop("CAMOUHOST_PROXY_CONFIG_PATH", None)
+
+spec = importlib.util.spec_from_file_location("s0_offline_camouhost", camouhost_path)
+if spec is None or spec.loader is None:
+    raise AssertionError("unable to load packaged Camouhost")
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+
+from camoufox.pkgman import INSTALL_DIR
+
+cache_root = Path(os.environ["LOCALAPPDATA"]).resolve()
+install_dir = Path(INSTALL_DIR).resolve()
+if not install_dir.is_relative_to(cache_root):
+    raise AssertionError(f"Camoufox shared cache escaped isolated root: {install_dir}")
+if install_dir.exists() and any(install_dir.iterdir()):
+    raise AssertionError("Camoufox shared cache was not empty before offline launch")
+
+report = module.materialize_candidate_identity(profile_root)
+if attempts:
+    raise AssertionError(f"materialization attempted outbound network: {attempts}")
+if install_dir.exists() and any(install_dir.rglob("*")):
+    raise AssertionError("materialization created mutable shared Camoufox runtime/addon state")
+
+config = json.loads((profile_root / "camoufox-config.json").read_text(encoding="utf-8"))
+lock, _ = module.load_runtime_lock()
+manager, context = module.launch_verified_context(
+    lock,
+    profile_root,
+    config,
+    report["profile_stable_probe_sha256"],
+)
+module.close_context(manager, context, profile_root)
+if attempts:
+    raise AssertionError(f"reopen attempted outbound network: {attempts}")
+if install_dir.exists() and any(install_dir.rglob("*")):
+    raise AssertionError("reopen created mutable shared Camoufox runtime/addon state")
+
+print(json.dumps({"offline": True, "outbound_attempts": 0, "shared_cache_entries": 0}))
+'''
 
 PAGE = b"""<!doctype html><meta charset='utf-8'><script>
 const canvas = document.createElement('canvas');
@@ -129,6 +227,75 @@ def runtime_env(runtime_lock: Path, headless: str) -> dict[str, str]:
         }
     )
     return env
+
+
+def prove_packaged_runtime_offline(
+    python: Path,
+    camouhost: Path,
+    runtime_lock: Path,
+    headless: str,
+) -> bool:
+    if os.name != "nt":
+        return False
+    with tempfile.TemporaryDirectory(prefix="s0-offline-runtime-") as temporary:
+        base = Path(temporary)
+        cache = base / "local-app-data"
+        roaming = base / "roaming-app-data"
+        home = base / "home"
+        scratch = base / "tmp"
+        for path in (cache, roaming, home, scratch):
+            path.mkdir()
+        bootstrap = base / "offline-bootstrap.py"
+        bootstrap.write_text(OFFLINE_BOOTSTRAP, encoding="utf-8", newline="\n")
+        env = runtime_env(runtime_lock, headless)
+        env.update(
+            {
+                "LOCALAPPDATA": str(cache),
+                "APPDATA": str(roaming),
+                "USERPROFILE": str(home),
+                "HOME": str(home),
+                "TEMP": str(scratch),
+                "TMP": str(scratch),
+                "PYTHONNOUSERSITE": "1",
+            }
+        )
+        for name in (
+            "ALL_PROXY",
+            "HTTP_PROXY",
+            "HTTPS_PROXY",
+            "NO_PROXY",
+            "all_proxy",
+            "http_proxy",
+            "https_proxy",
+            "no_proxy",
+            "CAMOUHOST_INITIAL_URL",
+            "CAMOUHOST_PROXY_CONFIG_PATH",
+        ):
+            env.pop(name, None)
+        completed = subprocess.run(
+            [
+                str(python),
+                str(bootstrap),
+                str(camouhost),
+                str(runtime_lock),
+                str(base / "generation"),
+            ],
+            env=env,
+            text=True,
+            capture_output=True,
+            timeout=300,
+            check=False,
+        )
+        if completed.returncode != 0:
+            raise AssertionError(
+                "packaged runtime offline acceptance failed: "
+                f"rc={completed.returncode} out={completed.stdout[-1000:]!r} "
+                f"err={completed.stderr[-3000:]!r}"
+            )
+        report = json.loads(completed.stdout)
+        if report != {"offline": True, "outbound_attempts": 0, "shared_cache_entries": 0}:
+            raise AssertionError(f"unexpected offline runtime report: {report}")
+        return True
 
 
 def materialize(
@@ -254,6 +421,9 @@ def main() -> int:
     python = require_regular(args.python, "runtime Python")
     camouhost = require_regular(args.camouhost, "Camouhost entrypoint")
     runtime_lock = require_regular(args.runtime_lock, "runtime lock")
+    packaged_runtime_offline = prove_packaged_runtime_offline(
+        python, camouhost, runtime_lock, args.headless
+    )
 
     server = CanvasServer()
     thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -291,6 +461,7 @@ def main() -> int:
                         "canvas_payload_bytes": first[0],
                         "canvas_payload_sha256": first[1],
                         "cold_relaunch_equal": True,
+                        "packaged_runtime_offline": packaged_runtime_offline,
                         "portable_restore_equal": True,
                     },
                     sort_keys=True,

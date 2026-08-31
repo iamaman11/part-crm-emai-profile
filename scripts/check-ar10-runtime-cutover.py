@@ -453,16 +453,25 @@ def validate_real_runtime(root: Path) -> None:
         "fingerprint config digest mismatch",
         "Bridge writer ownership evidence is missing",
         "materialize_candidate_identity",
+        "default_addon_exclusions",
+        "DefaultAddons.UBO",
+        '"exclude_addons": default_addon_exclusions()',
+        "exclude_addons=default_addon_exclusions()",
         'emit(f"ready|{active_session}")',
         'emit(f"closed|{active_session}|true")',
     ):
         if marker not in text:
-            fail(f"real Camouhost lost required AR-10 invariant: {marker}")
+            fail(f"real Camouhost lost required AR-10/S0 runtime invariant: {marker}")
 
     validate_browser_selector_policy(text, tree)
     ipc = function_node(tree, "run_ipc")
     materializer = function_node(tree, "materialize_candidate_identity")
     launch = function_node(tree, "launch_verified_context")
+    kwargs = function_node(tree, "camoufox_kwargs")
+    materializer_source = ast.get_source_segment(text, materializer) or ""
+    kwargs_source = ast.get_source_segment(text, kwargs) or ""
+    if '"geoip"' in kwargs_source or "geoip=" in materializer_source:
+        fail("real Camouhost may not acquire autonomous GeoIP/network-identity authority")
     if "launch_options" in called_names(ipc):
         fail("normal active-generation launch may not regenerate BrowserForge identity")
     if "launch_options" not in called_names(materializer):

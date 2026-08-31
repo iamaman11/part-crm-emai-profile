@@ -509,6 +509,13 @@ def camoufox_browser_selector(lock: dict[str, Any]) -> dict[str, str | Path]:
     raise RuntimeContractError("unsupported Camoufox runtime platform")
 
 
+def default_addon_exclusions() -> list[Any]:
+    """Disable Camoufox mutable default-addon acquisition on every shipping launch path."""
+    from camoufox.addons import DefaultAddons
+
+    return [DefaultAddons.UBO]
+
+
 def camoufox_kwargs(
     lock: dict[str, Any],
     root: Path,
@@ -523,6 +530,7 @@ def camoufox_kwargs(
         "config": copy.deepcopy(config),
         "enable_cache": True,
         "env": browser_environment(),
+        "exclude_addons": default_addon_exclusions(),
         "ff_version": locked_firefox_major(lock),
         "firefox_user_prefs": {
             "privacy.baselineFingerprintingProtection": False,
@@ -771,6 +779,7 @@ def materialize_candidate_identity(root: Path) -> dict[str, str]:
             **browser_selector,
             enable_cache=True,
             env=browser_env,
+            exclude_addons=default_addon_exclusions(),
             ff_version=locked_firefox_major(lock),
             fingerprint=fingerprint,
             headless=headless_mode,

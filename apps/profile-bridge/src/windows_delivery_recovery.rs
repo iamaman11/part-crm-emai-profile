@@ -198,16 +198,16 @@ fn verify_recovery_target(
 fn verified_target_from_stage(
     staged: StagedDelivery,
 ) -> Result<VerifiedDeliveryRecoveryTarget, DeliveryRecoveryError> {
-    let release_root = fs::canonicalize(staged.path())
-        .map_err(|_| DeliveryRecoveryError::InvalidExecutable)?;
+    let release_root =
+        fs::canonicalize(staged.path()).map_err(|_| DeliveryRecoveryError::InvalidExecutable)?;
     let executable = staged.profile_bridge_root().join(PROFILE_BRIDGE_EXECUTABLE);
-    let metadata = fs::symlink_metadata(&executable)
-        .map_err(|_| DeliveryRecoveryError::InvalidExecutable)?;
+    let metadata =
+        fs::symlink_metadata(&executable).map_err(|_| DeliveryRecoveryError::InvalidExecutable)?;
     if metadata.file_type().is_symlink() || !metadata.is_file() {
         return Err(DeliveryRecoveryError::InvalidExecutable);
     }
-    let executable = fs::canonicalize(executable)
-        .map_err(|_| DeliveryRecoveryError::InvalidExecutable)?;
+    let executable =
+        fs::canonicalize(executable).map_err(|_| DeliveryRecoveryError::InvalidExecutable)?;
     if !executable.starts_with(&release_root) {
         return Err(DeliveryRecoveryError::InvalidExecutable);
     }
@@ -231,8 +231,8 @@ fn persist_exact(
         }
         return Ok(());
     }
-    let reopened = DeliveryStateStore::open(state_root)
-        .map_err(DeliveryRecoveryError::StateStore)?;
+    let reopened =
+        DeliveryStateStore::open(state_root).map_err(DeliveryRecoveryError::StateStore)?;
     if reopened.state() != expected {
         return Err(DeliveryRecoveryError::DurableCommit);
     }
@@ -271,8 +271,8 @@ mod tests {
         DeliveryRecoveryReason,
     };
     use crate::windows_delivery::{
-        DetachedSignatureVerifier, DeliveryActivationOutcome, DeliveryFailureKind, DeliveryIdentity,
-        DeliveryState, TrustedSigner, TrustedSignerSet, TrustedSignerStatus,
+        DeliveryActivationOutcome, DeliveryFailureKind, DeliveryIdentity, DeliveryState,
+        DetachedSignatureVerifier, TrustedSigner, TrustedSignerSet, TrustedSignerStatus,
         WindowsDeliveryCompatibility, WindowsDeliveryComponent, WindowsDeliveryComponents,
         WindowsDeliveryEvidence, WindowsDeliveryManifest, verify_delivery_candidate,
     };
@@ -440,11 +440,8 @@ mod tests {
     -> Result<(), Box<dyn std::error::Error>> {
         let fixture = fixture_with_lkg("health")?;
         let recovery = DeliveryRecoveryCoordinator::new(fixture.staging, &fixture.state_root);
-        let disposition = recovery.recover(
-            &fixture.second,
-            2,
-            DeliveryRecoveryReason::HealthRejected,
-        )?;
+        let disposition =
+            recovery.recover(&fixture.second, 2, DeliveryRecoveryReason::HealthRejected)?;
         let DeliveryRecoveryDisposition::Handoff(target) = disposition else {
             return Err("expected verified LKG handoff".into());
         };
@@ -467,25 +464,26 @@ mod tests {
             Some(DeliveryFailureKind::HealthRejected)
         );
         assert_eq!(
-            reopened.state().last_activation().map(|value| value.outcome),
+            reopened
+                .state()
+                .last_activation()
+                .map(|value| value.outcome),
             Some(DeliveryActivationOutcome::RolledBack)
         );
         Ok(())
     }
 
     #[test]
-    fn corrupted_lkg_stage_prevents_rollback_state_commit()
-    -> Result<(), Box<dyn std::error::Error>> {
+    fn corrupted_lkg_stage_prevents_rollback_state_commit() -> Result<(), Box<dyn std::error::Error>>
+    {
         let fixture = fixture_with_lkg("corrupt-lkg")?;
         fs::remove_dir_all(&fixture.first_stage)?;
-        let before = DeliveryStateStore::open(&fixture.state_root)?.state().clone();
+        let before = DeliveryStateStore::open(&fixture.state_root)?
+            .state()
+            .clone();
         let recovery = DeliveryRecoveryCoordinator::new(fixture.staging, &fixture.state_root);
         assert_eq!(
-            recovery.recover(
-                &fixture.second,
-                2,
-                DeliveryRecoveryReason::HealthRejected,
-            ),
+            recovery.recover(&fixture.second, 2, DeliveryRecoveryReason::HealthRejected,),
             Err(DeliveryRecoveryError::StagedRelease)
         );
         let reopened = DeliveryStateStore::open(&fixture.state_root)?;
@@ -530,7 +528,10 @@ mod tests {
             Some(DeliveryFailureKind::HealthRejected)
         );
         assert_eq!(
-            reopened.state().last_activation().map(|value| value.outcome),
+            reopened
+                .state()
+                .last_activation()
+                .map(|value| value.outcome),
             Some(DeliveryActivationOutcome::RecoveryRequired)
         );
         Ok(())
@@ -562,25 +563,22 @@ mod tests {
     fn candidate_or_attempt_substitution_fails_before_mutation()
     -> Result<(), Box<dyn std::error::Error>> {
         let fixture = fixture_with_lkg("substitution")?;
-        let before = DeliveryStateStore::open(&fixture.state_root)?.state().clone();
+        let before = DeliveryStateStore::open(&fixture.state_root)?
+            .state()
+            .clone();
         let recovery = DeliveryRecoveryCoordinator::new(fixture.staging, &fixture.state_root);
         assert_eq!(
-            recovery.recover(
-                &fixture.first,
-                2,
-                DeliveryRecoveryReason::HealthRejected,
-            ),
+            recovery.recover(&fixture.first, 2, DeliveryRecoveryReason::HealthRejected,),
             Err(DeliveryRecoveryError::StateMismatch)
         );
         assert_eq!(
-            recovery.recover(
-                &fixture.second,
-                1,
-                DeliveryRecoveryReason::HealthRejected,
-            ),
+            recovery.recover(&fixture.second, 1, DeliveryRecoveryReason::HealthRejected,),
             Err(DeliveryRecoveryError::StateMismatch)
         );
-        assert_eq!(DeliveryStateStore::open(&fixture.state_root)?.state(), &before);
+        assert_eq!(
+            DeliveryStateStore::open(&fixture.state_root)?.state(),
+            &before
+        );
         Ok(())
     }
 
