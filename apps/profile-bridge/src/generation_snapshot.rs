@@ -107,6 +107,7 @@ pub(crate) fn encode_workspace_snapshot(
     Ok(output)
 }
 
+#[cfg(test)]
 pub(crate) fn materialize_workspace_snapshot(
     root: &MaterializationRoot,
     tenant_id: &TenantId,
