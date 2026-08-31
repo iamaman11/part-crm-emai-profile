@@ -364,6 +364,7 @@ pub struct DeliveryActivationEvidence {
 pub enum DeliveryFailureKind {
     HealthRejected,
     InterruptedActivation,
+    InterruptedHandoff,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -629,16 +630,30 @@ impl DeliveryState {
     }
 
     pub fn fail_health_and_rollback(&mut self) -> Result<(), DeliveryStateError> {
-        self.rollback_after_failure(DeliveryFailureKind::HealthRejected)
+        self.rollback_after_failure(
+            DeliveryFailureKind::HealthRejected,
+            DeliveryActivationOutcome::HealthAttemptStarted,
+        )
     }
 
     pub fn recover_interrupted_activation(&mut self) -> Result<(), DeliveryStateError> {
-        self.rollback_after_failure(DeliveryFailureKind::InterruptedActivation)
+        self.rollback_after_failure(
+            DeliveryFailureKind::InterruptedActivation,
+            DeliveryActivationOutcome::HealthAttemptStarted,
+        )
+    }
+
+    pub fn recover_interrupted_handoff(&mut self) -> Result<(), DeliveryStateError> {
+        self.rollback_after_failure(
+            DeliveryFailureKind::InterruptedHandoff,
+            DeliveryActivationOutcome::PendingHealth,
+        )
     }
 
     fn rollback_after_failure(
         &mut self,
         kind: DeliveryFailureKind,
+        expected_outcome: DeliveryActivationOutcome,
     ) -> Result<(), DeliveryStateError> {
         self.validate_persisted()?;
         let failed = self
@@ -653,8 +668,11 @@ impl DeliveryState {
         if activation.candidate != failed {
             return Err(DeliveryStateError::HealthAttemptMismatch);
         }
-        if activation.outcome != DeliveryActivationOutcome::HealthAttemptStarted {
-            return Err(DeliveryStateError::HealthAttemptNotStarted);
+        if activation.outcome != expected_outcome {
+            return Err(match expected_outcome {
+                DeliveryActivationOutcome::PendingHealth => DeliveryStateError::HandoffNotStarted,
+                _ => DeliveryStateError::HealthAttemptNotStarted,
+            });
         }
 
         self.active = None;
@@ -725,6 +743,7 @@ pub enum DeliveryStateError {
     HealthPending,
     HealthAttemptMismatch,
     HealthAttemptNotStarted,
+    HandoffNotStarted,
     NoStagedCandidate,
     NoActiveCandidate,
     RecoveryRequired,
@@ -746,6 +765,9 @@ impl fmt::Display for DeliveryStateError {
             }
             Self::HealthAttemptNotStarted => {
                 "Windows delivery health attempt has not durably started"
+            }
+            Self::HandoffNotStarted => {
+                "Windows delivery activation handoff has not durably started"
             }
             Self::NoStagedCandidate => "Windows delivery has no staged candidate",
             Self::NoActiveCandidate => "Windows delivery has no active candidate",
@@ -1197,6 +1219,58 @@ mod tests {
         assert_eq!(
             restored.recover_interrupted_activation(),
             Err(DeliveryStateError::HealthAttemptMismatch)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn interrupted_handoff_recovers_only_pending_health_without_fabricating_health_start()
+    -> TestResult {
+        let trust = trust()?;
+        let first = verify(&manifest(1, 'a'), &trust, None)?;
+        let second = verify(&manifest(2, 'b'), &trust, None)?;
+        let first_identity = first.identity();
+        let second_identity = second.identity();
+        let mut state = DeliveryState::default();
+        state.stage(&first)?;
+        state.activate_staged(true)?;
+        state.start_health_attempt(&first_identity, 1)?;
+        state.confirm_health()?;
+        state.stage(&second)?;
+        state.activate_staged(true)?;
+
+        state.recover_interrupted_handoff()?;
+        assert_eq!(state.active(), Some(&first_identity));
+        assert!(state.active_health_confirmed());
+        assert_eq!(
+            state.last_failure().map(|failure| failure.kind),
+            Some(DeliveryFailureKind::InterruptedHandoff)
+        );
+        assert_eq!(
+            state.last_activation().map(|evidence| evidence.outcome),
+            Some(DeliveryActivationOutcome::RolledBack)
+        );
+
+        let mut wrong_phase = DeliveryState::default();
+        wrong_phase.stage(&first)?;
+        wrong_phase.activate_staged(true)?;
+        wrong_phase.start_health_attempt(&first_identity, 1)?;
+        assert_eq!(
+            wrong_phase.recover_interrupted_handoff(),
+            Err(DeliveryStateError::HandoffNotStarted)
+        );
+
+        let mut first_install = DeliveryState::default();
+        first_install.stage(&second)?;
+        first_install.activate_staged(true)?;
+        assert_eq!(
+            first_install.recover_interrupted_handoff(),
+            Err(DeliveryStateError::RecoveryRequired)
+        );
+        assert!(first_install.active().is_none());
+        assert_eq!(
+            first_install.last_failure().map(|failure| failure.kind),
+            Some(DeliveryFailureKind::InterruptedHandoff)
         );
         Ok(())
     }
