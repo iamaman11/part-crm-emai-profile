@@ -222,7 +222,10 @@ mod tests {
     fn unresolved_per_generation_writer_evidence_blocks_activation()
     -> Result<(), Box<dyn std::error::Error>> {
         let (_test_root, root, workspace, _device) = fixture("stale-writer")?;
-        fs::write(workspace.path().join(BRIDGE_LOCK_FILE), b"unresolved-writer\n")?;
+        fs::write(
+            workspace.path().join(BRIDGE_LOCK_FILE),
+            b"unresolved-writer\n",
+        )?;
 
         assert!(matches!(
             DeliveryActivationGuard::acquire(&root),
