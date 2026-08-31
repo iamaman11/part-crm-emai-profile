@@ -1230,7 +1230,6 @@ mod tests {
         let first = verify(&manifest(1, 'a'), &trust, None)?;
         let second = verify(&manifest(2, 'b'), &trust, None)?;
         let first_identity = first.identity();
-        let second_identity = second.identity();
         let mut state = DeliveryState::default();
         state.stage(&first)?;
         state.activate_staged(true)?;
