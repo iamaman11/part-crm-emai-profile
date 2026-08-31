@@ -1,7 +1,7 @@
 use browser_execution_domain::{
-    BrowserExecutionError, BrowserIdentityManifest, BrowserOsIdentity, DisplayIdentity, FontIdentity,
-    GraphicsIdentity, HardwareCapabilityIdentity, LocaleIdentity, OriginDeterminismMode,
-    OriginDeterministicIdentity, ProfileStableIdentity,
+    BrowserExecutionError, BrowserIdentityManifest, BrowserOsIdentity, DisplayIdentity,
+    FontIdentity, GraphicsIdentity, HardwareCapabilityIdentity, LocaleIdentity,
+    OriginDeterminismMode, OriginDeterministicIdentity, ProfileStableIdentity,
 };
 use std::path::Path;
 
