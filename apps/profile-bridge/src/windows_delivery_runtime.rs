@@ -6,7 +6,9 @@ use crate::runtime_bundle::{
 };
 use crate::windows_delivery::{DeliveryActivationOutcome, DeliveryIdentity, DeliveryState};
 use crate::windows_delivery_staging::{DeliveryStagingRoot, reopen_staged_delivery};
-use crate::windows_delivery_store::DeliveryStateStore;
+use crate::windows_delivery_store::{
+    DeliveryHandoffKind, DeliveryHandoffOutcome, DeliveryStateStore,
+};
 use profile_platform_primitives::{ActorContext, GenerationId, ProfileId};
 use serde_json::Value;
 use std::fmt;
@@ -113,12 +115,13 @@ impl PendingWindowsDeliveryHealthConfirmation {
     ) -> Result<StartedWindowsDeliveryHealthConfirmation, WindowsDeliveryRuntimeError> {
         let mut store = DeliveryStateStore::open(&self.state_root)
             .map_err(|_| WindowsDeliveryRuntimeError::PersistedState)?;
+        exact_arrived_activation_handoff(&store, &self.candidate, self.activation_attempt)?;
         match exact_health_state(store.state(), &self.candidate, self.activation_attempt)? {
             ExactHealthState::Pending => {
                 let mut next = store.state().clone();
                 next.start_health_attempt(&self.candidate, self.activation_attempt)
                     .map_err(|_| WindowsDeliveryRuntimeError::PersistedState)?;
-                if store.persist(&next).is_err() {
+                if store.persist_preserving_handoff(&next).is_err() {
                     let reopened = DeliveryStateStore::open(&self.state_root)
                         .map_err(|_| WindowsDeliveryRuntimeError::PersistedState)?;
                     if exact_health_state(
@@ -129,6 +132,11 @@ impl PendingWindowsDeliveryHealthConfirmation {
                     {
                         return Err(WindowsDeliveryRuntimeError::PersistedState);
                     }
+                    exact_arrived_activation_handoff(
+                        &reopened,
+                        &self.candidate,
+                        self.activation_attempt,
+                    )?;
                 } else {
                     let reopened = DeliveryStateStore::open(&self.state_root)
                         .map_err(|_| WindowsDeliveryRuntimeError::PersistedState)?;
@@ -140,9 +148,16 @@ impl PendingWindowsDeliveryHealthConfirmation {
                     {
                         return Err(WindowsDeliveryRuntimeError::PersistedState);
                     }
+                    exact_arrived_activation_handoff(
+                        &reopened,
+                        &self.candidate,
+                        self.activation_attempt,
+                    )?;
                 }
             }
-            ExactHealthState::Started => {}
+            ExactHealthState::Started => {
+                exact_arrived_activation_handoff(&store, &self.candidate, self.activation_attempt)?;
+            }
             ExactHealthState::Healthy => return Err(WindowsDeliveryRuntimeError::PersistedState),
         }
         Ok(StartedWindowsDeliveryHealthConfirmation {
@@ -164,6 +179,7 @@ impl StartedWindowsDeliveryHealthConfirmation {
     pub(crate) fn confirm_after_runtime_ready(self) -> Result<(), WindowsDeliveryRuntimeError> {
         let mut store = DeliveryStateStore::open(&self.state_root)
             .map_err(|_| WindowsDeliveryRuntimeError::PersistedState)?;
+        exact_arrived_activation_handoff(&store, &self.candidate, self.activation_attempt)?;
         match exact_health_state(store.state(), &self.candidate, self.activation_attempt)? {
             ExactHealthState::Healthy => return Ok(()),
             ExactHealthState::Started => {}
@@ -173,9 +189,14 @@ impl StartedWindowsDeliveryHealthConfirmation {
         let mut next = store.state().clone();
         next.confirm_health()
             .map_err(|_| WindowsDeliveryRuntimeError::PersistedState)?;
-        if store.persist(&next).is_err() {
+        if store.persist_preserving_handoff(&next).is_err() {
             let reopened = DeliveryStateStore::open(&self.state_root)
                 .map_err(|_| WindowsDeliveryRuntimeError::PersistedState)?;
+            exact_arrived_activation_handoff(
+                &reopened,
+                &self.candidate,
+                self.activation_attempt,
+            )?;
             return match exact_health_state(
                 reopened.state(),
                 &self.candidate,
@@ -190,6 +211,7 @@ impl StartedWindowsDeliveryHealthConfirmation {
 
         let reopened = DeliveryStateStore::open(&self.state_root)
             .map_err(|_| WindowsDeliveryRuntimeError::PersistedState)?;
+        exact_arrived_activation_handoff(&reopened, &self.candidate, self.activation_attempt)?;
         match exact_health_state(reopened.state(), &self.candidate, self.activation_attempt)? {
             ExactHealthState::Healthy => Ok(()),
             ExactHealthState::Pending | ExactHealthState::Started => {
@@ -211,15 +233,41 @@ fn pending_health_confirmation(
     state_root: &Path,
     active: &DeliveryIdentity,
 ) -> Result<Option<PendingWindowsDeliveryHealthConfirmation>, WindowsDeliveryRuntimeError> {
-    match exact_health_state(store.state(), active, store.state().activation_generation())? {
+    let activation_attempt = store.state().activation_generation();
+    match exact_health_state(store.state(), active, activation_attempt)? {
         ExactHealthState::Healthy => Ok(None),
-        ExactHealthState::Pending => Ok(Some(PendingWindowsDeliveryHealthConfirmation {
-            state_root: state_root.to_path_buf(),
-            candidate: active.clone(),
-            activation_attempt: store.state().activation_generation(),
-        })),
-        ExactHealthState::Started => Err(WindowsDeliveryRuntimeError::InterruptedHealthAttempt),
+        ExactHealthState::Pending => {
+            exact_arrived_activation_handoff(store, active, activation_attempt)?;
+            Ok(Some(PendingWindowsDeliveryHealthConfirmation {
+                state_root: state_root.to_path_buf(),
+                candidate: active.clone(),
+                activation_attempt,
+            }))
+        }
+        ExactHealthState::Started => {
+            exact_arrived_activation_handoff(store, active, activation_attempt)?;
+            Err(WindowsDeliveryRuntimeError::InterruptedHealthAttempt)
+        }
     }
+}
+
+fn exact_arrived_activation_handoff(
+    store: &DeliveryStateStore,
+    candidate: &DeliveryIdentity,
+    activation_attempt: u64,
+) -> Result<(), WindowsDeliveryRuntimeError> {
+    let handoff = store
+        .handoff()
+        .ok_or(WindowsDeliveryRuntimeError::HandoffNotArrived)?;
+    if handoff.kind() != DeliveryHandoffKind::Activation
+        || handoff.outcome() != DeliveryHandoffOutcome::Arrived
+        || handoff.source_candidate() != candidate
+        || handoff.source_attempt() != activation_attempt
+        || handoff.target() != candidate
+    {
+        return Err(WindowsDeliveryRuntimeError::HandoffNotArrived);
+    }
+    Ok(())
 }
 
 fn exact_health_state(
@@ -405,6 +453,7 @@ fn metadata_is_link_or_reparse(metadata: &fs::Metadata) -> bool {
 pub enum WindowsDeliveryRuntimeError {
     InvalidInstalledLayout,
     PersistedState,
+    HandoffNotArrived,
     InterruptedHealthAttempt,
     NoActiveDelivery,
     StagedDelivery,
@@ -417,6 +466,9 @@ impl fmt::Display for WindowsDeliveryRuntimeError {
         formatter.write_str(match self {
             Self::InvalidInstalledLayout => "installed Windows delivery layout is invalid",
             Self::PersistedState => "persisted Windows delivery state is unavailable",
+            Self::HandoffNotArrived => {
+                "Windows delivery activation handoff has not arrived at the exact active candidate"
+            }
             Self::InterruptedHealthAttempt => {
                 "persisted Windows delivery health attempt was interrupted"
             }
@@ -436,11 +488,14 @@ impl std::error::Error for WindowsDeliveryRuntimeError {}
 mod tests {
     use super::{
         ExactHealthState, InstalledDeliveryLayout, RUNTIME_MANIFEST, RUNTIME_RELEASE_PREFIX,
-        RuntimeBundleSelectionError, WindowsDeliveryRuntimeError, exact_health_state,
-        pending_health_confirmation, valid_runtime_release_id, verify_embedded_release_id,
+        RuntimeBundleSelectionError, WindowsDeliveryRuntimeError,
+        exact_arrived_activation_handoff, exact_health_state, pending_health_confirmation,
+        valid_runtime_release_id, verify_embedded_release_id,
     };
     use crate::windows_delivery::{DeliveryActivationOutcome, DeliveryIdentity, DeliveryState};
-    use crate::windows_delivery_store::DeliveryStateStore;
+    use crate::windows_delivery_store::{
+        DeliveryHandoffEvidence, DeliveryHandoffOutcome, DeliveryStateStore,
+    };
     use serde_json::json;
     use std::fs;
     use std::path::{Path, PathBuf};
@@ -493,6 +548,18 @@ mod tests {
             },
             "last_failure": null
         }))
+    }
+
+    fn persist_arrived_pending(
+        state_root: &Path,
+        identity: &DeliveryIdentity,
+    ) -> Result<DeliveryStateStore, Box<dyn std::error::Error>> {
+        let mut store = DeliveryStateStore::initialize(state_root)?;
+        let pending = pending_state(identity)?;
+        let started = DeliveryHandoffEvidence::activation_started(&pending, identity)?;
+        let arrived = started.arrived(&pending)?;
+        store.persist_handoff(&pending, arrived)?;
+        Ok(DeliveryStateStore::open(state_root)?)
     }
 
     #[test]
@@ -550,20 +617,42 @@ mod tests {
     }
 
     #[test]
-    fn pending_health_attempt_is_durably_started_before_confirmation()
+    fn bare_pending_or_started_handoff_cannot_enter_runtime_health()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let directory = TestDirectory::create("handoff-gate")?;
+        let state_root = directory.0.join("state");
+        let identity = delivery_identity('c');
+        let pending = pending_state(&identity)?;
+        let mut store = DeliveryStateStore::initialize(&state_root)?;
+        store.persist(&pending)?;
+        assert_eq!(
+            pending_health_confirmation(&store, &state_root, &identity),
+            Err(WindowsDeliveryRuntimeError::HandoffNotArrived)
+        );
+
+        let started = DeliveryHandoffEvidence::activation_started(&pending, &identity)?;
+        store.persist_handoff(&pending, started)?;
+        let reopened = DeliveryStateStore::open(&state_root)?;
+        assert_eq!(
+            pending_health_confirmation(&reopened, &state_root, &identity),
+            Err(WindowsDeliveryRuntimeError::HandoffNotArrived)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn pending_health_attempt_requires_arrival_and_preserves_evidence_through_health()
     -> Result<(), Box<dyn std::error::Error>> {
         let directory = TestDirectory::create("pending-health")?;
         let state_root = directory.0.join("state");
-        let mut store = DeliveryStateStore::initialize(&state_root)?;
         let identity = delivery_identity('d');
-        let pending = pending_state(&identity)?;
-        pending.validate_persisted()?;
-        store.persist(&pending)?;
+        let store = persist_arrived_pending(&state_root, &identity)?;
 
         assert_eq!(
             exact_health_state(store.state(), &identity, 1)?,
             ExactHealthState::Pending
         );
+        exact_arrived_activation_handoff(&store, &identity, 1)?;
         let confirmation = pending_health_confirmation(&store, &state_root, &identity)?
             .ok_or("pending candidate did not expose exact health confirmation")?;
         let started = confirmation.clone().start_before_runtime_health()?;
@@ -576,6 +665,10 @@ mod tests {
                 .last_activation()
                 .map(|value| value.outcome),
             Some(DeliveryActivationOutcome::HealthAttemptStarted)
+        );
+        assert_eq!(
+            reopened.handoff().map(DeliveryHandoffEvidence::outcome),
+            Some(DeliveryHandoffOutcome::Arrived)
         );
         assert_eq!(
             exact_health_state(reopened.state(), &identity, 1)?,
@@ -599,8 +692,31 @@ mod tests {
             Some(DeliveryActivationOutcome::Healthy)
         );
         assert_eq!(
+            reopened.handoff().map(DeliveryHandoffEvidence::outcome),
+            Some(DeliveryHandoffOutcome::Arrived)
+        );
+        assert_eq!(
             exact_health_state(reopened.state(), &identity, 1)?,
             ExactHealthState::Healthy
+        );
+        exact_arrived_activation_handoff(&reopened, &identity, 1)?;
+        Ok(())
+    }
+
+    #[test]
+    fn arrived_handoff_rejects_candidate_or_attempt_substitution()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let directory = TestDirectory::create("handoff-substitution")?;
+        let state_root = directory.0.join("state");
+        let identity = delivery_identity('e');
+        let store = persist_arrived_pending(&state_root, &identity)?;
+        assert_eq!(
+            exact_arrived_activation_handoff(&store, &delivery_identity('f'), 1),
+            Err(WindowsDeliveryRuntimeError::HandoffNotArrived)
+        );
+        assert_eq!(
+            exact_arrived_activation_handoff(&store, &identity, 2),
+            Err(WindowsDeliveryRuntimeError::HandoffNotArrived)
         );
         Ok(())
     }
