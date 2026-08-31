@@ -2,8 +2,10 @@
 
 use bridge_domain::{BridgePortError, CamouhostMessage, CamouhostPort};
 use browser_execution_domain::{
-    BrowserIdentityManifest, MaterializationBinding, NetworkClass, NetworkIdentityObservation,
-    NetworkIdentityPolicy,
+    BrowserIdentityManifest, BrowserOsIdentity, DisplayIdentity, FontIdentity, GraphicsIdentity,
+    HardwareCapabilityIdentity, LocaleIdentity, MaterializationBinding, NetworkClass,
+    NetworkIdentityObservation, NetworkIdentityPolicy, OriginDeterminismMode,
+    OriginDeterministicIdentity, ProfileStableIdentity,
 };
 use profile_bridge::browser_execution::persist_materialization_binding;
 use profile_bridge::browser_preflight::{BrowserRuntimeObservation, BrowserRuntimeObservationPort};
@@ -233,6 +235,37 @@ fn root_path() -> Result<PathBuf, Box<dyn std::error::Error>> {
     )))
 }
 
+fn typed_identity_fixture() -> Result<ProfileStableIdentity, Box<dyn std::error::Error>> {
+    let digest = |character: char| character.to_string().repeat(64);
+    Ok(ProfileStableIdentity::new(
+        1,
+        BrowserOsIdentity::new(
+            "Mozilla/5.0 Firefox/152.0",
+            152,
+            "Win32",
+            "Windows NT 10.0; Win64; x64",
+        )?,
+        HardwareCapabilityIdentity::new(8, 8, 0)?,
+        DisplayIdentity::new(1920, 1080, 1920, 1040, 0, 0, 24, 24, 1000)?,
+        GraphicsIdentity::new(
+            "Google Inc. (NVIDIA)",
+            "ANGLE (NVIDIA GeForce)",
+            digest('1'),
+            digest('2'),
+            digest('3'),
+            digest('4'),
+            digest('5'),
+        )?,
+        FontIdentity::new(digest('6'), digest('7'))?,
+        OriginDeterministicIdentity::new(
+            OriginDeterminismMode::ProfileGenerationSeed,
+            digest('8'),
+            digest('9'),
+        )?,
+        LocaleIdentity::new("en-US", digest('a'), Some(digest('b')))?,
+    )?)
+}
+
 #[test]
 fn bridge_preflight_launches_real_camoufox_through_managed_ipc()
 -> Result<(), Box<dyn std::error::Error>> {
@@ -284,10 +317,12 @@ fn bridge_preflight_launches_real_camoufox_through_managed_ipc()
     let bundle = approved_runtime(&runtime_root)?;
     let browser_identity = BrowserIdentityManifest::new(
         2,
+        "profile-stability-v1",
         bundle.manifest().runtime_version(),
         bundle.manifest().inventory_sha256().as_str(),
         format!("profile-stability-v1-probe-{probe_sha256}"),
         config_sha256,
+        typed_identity_fixture()?,
     )?;
     let binding = MaterializationBinding::new(
         tenant,
