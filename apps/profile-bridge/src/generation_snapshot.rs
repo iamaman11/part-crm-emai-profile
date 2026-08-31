@@ -446,7 +446,6 @@ fn read_bytes<'a>(
     *cursor = end;
     Ok(bytes)
 }
-
 fn checked_extend(output: &mut Vec<u8>, bytes: &[u8]) -> Result<(), GenerationSnapshotError> {
     let new_len = output
         .len()
@@ -520,9 +519,10 @@ mod tests {
         let fixture = Fixture::new()?;
         let source_id = GenerationId::parse("generation_snapshot_source")?;
         let target_id = GenerationId::parse("generation_snapshot_target")?;
-        let source = fixture
-            .root
-            .create_generation(&fixture.tenant_id, &fixture.profile_id, &source_id)?;
+        let source =
+            fixture
+                .root
+                .create_generation(&fixture.tenant_id, &fixture.profile_id, &source_id)?;
         fs::create_dir_all(source.path().join("storage/default"))?;
         fs::write(source.path().join("prefs.js"), b"prefs")?;
         fs::write(source.path().join("storage/default/state.bin"), b"state")?;
@@ -628,9 +628,10 @@ mod tests {
     -> Result<(), Box<dyn std::error::Error>> {
         let fixture = Fixture::new()?;
         let target_id = GenerationId::parse("generation_snapshot_existing")?;
-        let existing = fixture
-            .root
-            .create_generation(&fixture.tenant_id, &fixture.profile_id, &target_id)?;
+        let existing =
+            fixture
+                .root
+                .create_generation(&fixture.tenant_id, &fixture.profile_id, &target_id)?;
         fs::write(existing.path().join("prefs.js"), b"old")?;
         assert_eq!(
             materialize_workspace_snapshot(
