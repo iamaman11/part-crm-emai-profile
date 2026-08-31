@@ -198,11 +198,8 @@ fn isolated_trust_verify_script() -> Result<String, io::Error> {
     let script = production_verify_script()?;
     let script = replace_exactly_once(&script, PARAMETER_ANCHOR, PARAMETER_REPLACEMENT)?;
     let script = replace_exactly_once(&script, CHAIN_ANCHOR, CHAIN_REPLACEMENT)?;
-    let script = replace_exactly_once(
-        &script,
-        REVOCATION_MODE_ANCHOR,
-        REVOCATION_MODE_REPLACEMENT,
-    )?;
+    let script =
+        replace_exactly_once(&script, REVOCATION_MODE_ANCHOR, REVOCATION_MODE_REPLACEMENT)?;
     let script = replace_exactly_once(&script, FLAGS_ANCHOR, FLAGS_REPLACEMENT)?;
     let script = replace_exactly_once(&script, BUILD_ANCHOR, BUILD_REPLACEMENT)?;
     replace_exactly_once(&script, FINALLY_ANCHOR, FINALLY_REPLACEMENT)
