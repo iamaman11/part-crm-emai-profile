@@ -31,6 +31,7 @@ pub mod windows_delivery;
 pub mod windows_delivery_archive;
 pub mod windows_delivery_coordinator;
 pub mod windows_delivery_download;
+pub mod windows_delivery_handoff;
 pub mod windows_delivery_recovery;
 #[cfg(windows)]
 pub mod windows_delivery_runtime;
