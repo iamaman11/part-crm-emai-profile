@@ -511,6 +511,9 @@ def camoufox_kwargs(
         "config": copy.deepcopy(config),
         "enable_cache": True,
         "env": browser_environment(),
+        "firefox_user_prefs": {
+            "privacy.baselineFingerprintingProtection": False,
+        },
         "headless": resolve_headless_mode(),
         "i_know_what_im_doing": True,
         "persistent_context": True,
@@ -890,8 +893,19 @@ def main() -> int:
         except RuntimeContractError as error:
             print(f"candidate identity materialization failed: {error}", file=sys.stderr)
             return 7
-        except (OSError, importlib.metadata.PackageNotFoundError):
-            print("candidate identity materialization failed", file=sys.stderr)
+        except importlib.metadata.PackageNotFoundError:
+            print(
+                "candidate identity materialization failed: package_metadata_unavailable",
+                file=sys.stderr,
+            )
+            return 7
+        except OSError as error:
+            errno = error.errno if isinstance(error.errno, int) else "none"
+            print(
+                "candidate identity materialization failed: "
+                f"os_error={type(error).__name__} errno={errno}",
+                file=sys.stderr,
+            )
             return 7
         print(json.dumps(report, ensure_ascii=True, separators=(",", ":"), sort_keys=True))
         return 0

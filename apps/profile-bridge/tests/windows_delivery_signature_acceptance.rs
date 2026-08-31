@@ -86,6 +86,8 @@ const PARAMETER_REPLACEMENT: &str = "    [Parameter(Mandatory=$true)][string]$Ex
 const CHAIN_ANCHOR: &str =
     "    $chain = [System.Security.Cryptography.X509Certificates.X509Chain]::new()\n    try {\n";
 const CHAIN_REPLACEMENT: &str = "    $customRoot = [System.Security.Cryptography.X509Certificates.X509Certificate2]::new($CustomRootPath)\n    $chain = [System.Security.Cryptography.X509Certificates.X509Chain]::new()\n    try {\n        [void]$chain.ChainPolicy.ExtraStore.Add($customRoot)\n";
+const REVOCATION_MODE_ANCHOR: &str = "        $chain.ChainPolicy.RevocationMode = [System.Security.Cryptography.X509Certificates.X509RevocationMode]::Online";
+const REVOCATION_MODE_REPLACEMENT: &str = "        $chain.ChainPolicy.RevocationMode = [System.Security.Cryptography.X509Certificates.X509RevocationMode]::NoCheck";
 const FLAGS_ANCHOR: &str = "        $chain.ChainPolicy.VerificationFlags = [System.Security.Cryptography.X509Certificates.X509VerificationFlags]::NoFlag";
 const FLAGS_REPLACEMENT: &str = "        $chain.ChainPolicy.VerificationFlags = [System.Security.Cryptography.X509Certificates.X509VerificationFlags]::AllowUnknownCertificateAuthority";
 const BUILD_ANCHOR: &str = "        if (-not $chain.Build($certificate)) { exit 23 }";
@@ -196,6 +198,11 @@ fn isolated_trust_verify_script() -> Result<String, io::Error> {
     let script = production_verify_script()?;
     let script = replace_exactly_once(&script, PARAMETER_ANCHOR, PARAMETER_REPLACEMENT)?;
     let script = replace_exactly_once(&script, CHAIN_ANCHOR, CHAIN_REPLACEMENT)?;
+    let script = replace_exactly_once(
+        &script,
+        REVOCATION_MODE_ANCHOR,
+        REVOCATION_MODE_REPLACEMENT,
+    )?;
     let script = replace_exactly_once(&script, FLAGS_ANCHOR, FLAGS_REPLACEMENT)?;
     let script = replace_exactly_once(&script, BUILD_ANCHOR, BUILD_REPLACEMENT)?;
     replace_exactly_once(&script, FINALLY_ANCHOR, FINALLY_REPLACEMENT)
