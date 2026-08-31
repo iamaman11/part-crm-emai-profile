@@ -23,8 +23,12 @@ SYNTHETIC_FEATURE = "synthetic-test-bin"
 REQUIRED_MAIN_MARKERS = (
     "use bridge_domain::ClaimUri;",
     "use profile_bridge::shipping_composition::run_claim;",
-    "ClaimUri::parse(&uri)",
+    "HANDOFF_ACTIVATE_ARGUMENT",
+    "HANDOFF_ARRIVAL_ARGUMENT",
+    "ClaimUri::parse(&argument)",
     "run_claim(&claim)",
+    "run_delivery_command(ShippingDeliveryCommand::ActivateStaged)",
+    "run_delivery_command(ShippingDeliveryCommand::HandoffArrived)",
 )
 
 REQUIRED_COMPOSITION_MARKERS = (
@@ -240,9 +244,17 @@ def write_fixture(root: Path) -> None:
     main.write_text(
         "use bridge_domain::ClaimUri;\n"
         "use profile_bridge::shipping_composition::run_claim;\n"
-        "fn run(uri: String) -> Result<(), ()> {\n"
-        "    let claim = ClaimUri::parse(&uri).map_err(|_| ())?;\n"
-        "    run_claim(&claim).map_err(|_| ())?;\n"
+        "use profile_bridge::shipping_composition::{ShippingDeliveryCommand, run_delivery_command};\n"
+        "use profile_bridge::windows_delivery_handoff::{HANDOFF_ACTIVATE_ARGUMENT, HANDOFF_ARRIVAL_ARGUMENT};\n"
+        "fn run(argument: String) -> Result<(), ()> {\n"
+        "    match argument.as_str() {\n"
+        "        HANDOFF_ACTIVATE_ARGUMENT => run_delivery_command(ShippingDeliveryCommand::ActivateStaged).map_err(|_| ())?,\n"
+        "        HANDOFF_ARRIVAL_ARGUMENT => run_delivery_command(ShippingDeliveryCommand::HandoffArrived).map_err(|_| ())?,\n"
+        "        _ => {\n"
+        "            let claim = ClaimUri::parse(&argument).map_err(|_| ())?;\n"
+        "            run_claim(&claim).map_err(|_| ())?;\n"
+        "        }\n"
+        "    }\n"
         "    Ok(())\n"
         "}\n",
         encoding="utf-8",
@@ -353,6 +365,26 @@ def self_test() -> None:
             encoding="utf-8",
         )
         expect_rejected(root, "claim-only predecessor without shipping composition")
+        main.write_text(safe_main, encoding="utf-8")
+
+        main.write_text(
+            safe_main.replace(
+                "run_delivery_command(ShippingDeliveryCommand::ActivateStaged).map_err(|_| ())?",
+                "Ok(())?",
+            ),
+            encoding="utf-8",
+        )
+        expect_rejected(root, "missing bounded activation handoff command")
+        main.write_text(safe_main, encoding="utf-8")
+
+        main.write_text(
+            safe_main.replace(
+                "run_delivery_command(ShippingDeliveryCommand::HandoffArrived).map_err(|_| ())?",
+                "Ok(())?",
+            ),
+            encoding="utf-8",
+        )
+        expect_rejected(root, "missing bounded arrival handoff command")
         main.write_text(safe_main, encoding="utf-8")
 
         main.write_text(
@@ -486,6 +518,7 @@ def main() -> int:
             validate(args.root.resolve())
             print(
                 "CAP-01 Profile Bridge keeps one real governed authoritative shipping composition; "
+                "the same installed Bridge delegates one normal claim path plus two bounded delivery commands, "
                 "the running Bridge is bound through persisted active delivery state to one exact staged runtime, "
                 "controlled close and canonical successor save are mandatory, caller-selected runtime predecessors are forbidden, "
                 "and synthetic executors remain production-unreachable."
