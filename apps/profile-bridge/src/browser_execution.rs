@@ -1,10 +1,8 @@
-use crate::local_profile::{
-    BROWSER_IDENTITY_RECORD_FILE, GenerationWorkspace, LocalProfileError,
-};
+use crate::local_profile::{BROWSER_IDENTITY_RECORD_FILE, GenerationWorkspace, LocalProfileError};
 use browser_execution_domain::{
-    BrowserExecutionError, BrowserIdentityManifest, BrowserWriterDecision, BrowserWriterObservation,
-    MaterializationBinding, NetworkIdentityDecision, NetworkIdentityObservation,
-    NetworkIdentityPolicy,
+    BrowserExecutionError, BrowserIdentityManifest, BrowserWriterDecision,
+    BrowserWriterObservation, MaterializationBinding, NetworkIdentityDecision,
+    NetworkIdentityObservation, NetworkIdentityPolicy,
 };
 use profile_platform_primitives::{DeviceId, GenerationId, ProfileId, TenantId};
 use sha2::{Digest, Sha256};
