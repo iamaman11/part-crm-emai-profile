@@ -69,18 +69,24 @@ where
 fn run_claim_after_delivery_recovery(claim: &ClaimUri) -> Result<(), BridgeCliError> {
     #[cfg(windows)]
     {
-        let (guard, coordinator, current_executable) = delivery_context()?;
-        let disposition = coordinator
-            .recover_or_resume_started(&guard, std::process::id(), &current_executable)
-            .map_err(|_| BridgeCliError::DeliveryFailed)?;
-        match disposition {
-            DeliveryHandoffRestartDisposition::None => drop(guard),
-            DeliveryHandoffRestartDisposition::TransferScheduled => {
-                hold_activation_guard_until_process_exit(guard);
-                return Err(BridgeCliError::DeliveryRestartScheduled);
-            }
-            DeliveryHandoffRestartDisposition::RecoveryRequired => {
-                return Err(BridgeCliError::DeliveryRecoveryRequired);
+        let (coordinator, current_executable) = delivery_coordinator()?;
+        if coordinator
+            .restart_recovery_pending()
+            .map_err(|_| BridgeCliError::DeliveryFailed)?
+        {
+            let guard = delivery_activation_guard()?;
+            let disposition = coordinator
+                .recover_or_resume_started(&guard, std::process::id(), &current_executable)
+                .map_err(|_| BridgeCliError::DeliveryFailed)?;
+            match disposition {
+                DeliveryHandoffRestartDisposition::None => drop(guard),
+                DeliveryHandoffRestartDisposition::TransferScheduled => {
+                    hold_activation_guard_until_process_exit(guard);
+                    return Err(BridgeCliError::DeliveryRestartScheduled);
+                }
+                DeliveryHandoffRestartDisposition::RecoveryRequired => {
+                    return Err(BridgeCliError::DeliveryRecoveryRequired);
+                }
             }
         }
     }
@@ -90,7 +96,8 @@ fn run_claim_after_delivery_recovery(claim: &ClaimUri) -> Result<(), BridgeCliEr
 fn run_delivery_activate_staged() -> Result<(), BridgeCliError> {
     #[cfg(windows)]
     {
-        let (guard, coordinator, current_executable) = delivery_context()?;
+        let (coordinator, current_executable) = delivery_coordinator()?;
+        let guard = delivery_activation_guard()?;
         coordinator
             .start_activation(&guard, std::process::id(), &current_executable)
             .map_err(|_| BridgeCliError::DeliveryFailed)?;
@@ -106,7 +113,8 @@ fn run_delivery_activate_staged() -> Result<(), BridgeCliError> {
 fn run_delivery_handoff_arrived() -> Result<(), BridgeCliError> {
     #[cfg(windows)]
     {
-        let (guard, coordinator, current_executable) = delivery_context()?;
+        let (coordinator, current_executable) = delivery_coordinator()?;
+        let guard = delivery_activation_guard()?;
         coordinator
             .complete_arrival(&guard, &current_executable)
             .map_err(|_| BridgeCliError::DeliveryFailed)?;
@@ -120,8 +128,15 @@ fn run_delivery_handoff_arrived() -> Result<(), BridgeCliError> {
 }
 
 #[cfg(windows)]
-fn delivery_context()
--> Result<(DeliveryActivationGuard, DeliveryHandoffCoordinator, PathBuf), BridgeCliError> {
+fn delivery_coordinator() -> Result<(DeliveryHandoffCoordinator, PathBuf), BridgeCliError> {
+    let current_executable = env::current_exe().map_err(|_| BridgeCliError::DeliveryFailed)?;
+    let coordinator = DeliveryHandoffCoordinator::from_current_executable(&current_executable)
+        .map_err(|_| BridgeCliError::DeliveryFailed)?;
+    Ok((coordinator, current_executable))
+}
+
+#[cfg(windows)]
+fn delivery_activation_guard() -> Result<DeliveryActivationGuard, BridgeCliError> {
     let root = env::var_os(MATERIALIZATION_ROOT_ENV)
         .filter(|value| !value.is_empty())
         .map(PathBuf::from)
@@ -131,12 +146,7 @@ fn delivery_context()
     }
     let materialization =
         MaterializationRoot::open_or_create(root).map_err(|_| BridgeCliError::DeliveryFailed)?;
-    let guard = DeliveryActivationGuard::acquire(&materialization)
-        .map_err(|_| BridgeCliError::DeliveryFailed)?;
-    let current_executable = env::current_exe().map_err(|_| BridgeCliError::DeliveryFailed)?;
-    let coordinator = DeliveryHandoffCoordinator::from_current_executable(&current_executable)
-        .map_err(|_| BridgeCliError::DeliveryFailed)?;
-    Ok((guard, coordinator, current_executable))
+    DeliveryActivationGuard::acquire(&materialization).map_err(|_| BridgeCliError::DeliveryFailed)
 }
 
 #[cfg(windows)]
