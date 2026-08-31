@@ -593,8 +593,8 @@ mod tests {
     }
 
     #[test]
-    fn typed_identity_is_structural_not_one_opaque_hash()
-    -> Result<(), Box<dyn std::error::Error>> {
+    fn typed_identity_is_structural_not_one_opaque_hash() -> Result<(), Box<dyn std::error::Error>>
+    {
         let identity = identity()?;
         assert_eq!(identity.browser_os().browser_major(), 152);
         assert_eq!(identity.hardware().hardware_concurrency(), 8);
@@ -612,7 +612,10 @@ mod tests {
 
     #[test]
     fn browser_state_portability_is_explicit() {
-        assert_eq!(ProfileStateKind::Cookies.portability(), ProfileStatePortability::Portable);
+        assert_eq!(
+            ProfileStateKind::Cookies.portability(),
+            ProfileStatePortability::Portable
+        );
         assert_eq!(
             ProfileStateKind::ProxyCredential.portability(),
             ProfileStatePortability::RebindRequired
