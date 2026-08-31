@@ -7,12 +7,18 @@ use std::ffi::OsStr;
 use std::fmt;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command};
+#[cfg(windows)]
+use std::process::Child;
+#[cfg(any(windows, test))]
+use std::process::Command;
 
 const PROFILE_BRIDGE_EXECUTABLE: &str = "profile-bridge.exe";
 pub const HANDOFF_ARRIVAL_ARGUMENT: &str = "--delivery-handoff-arrived";
+#[cfg(any(windows, test))]
 const PARENT_PID_ENV: &str = "PART_CRM_DELIVERY_HANDOFF_PARENT_PID";
+#[cfg(any(windows, test))]
 const TARGET_EXECUTABLE_ENV: &str = "PART_CRM_DELIVERY_HANDOFF_TARGET";
+#[cfg(any(windows, test))]
 const POWERSHELL_HANDOFF: &str = "$ErrorActionPreference='Stop'; $pidToWait=[uint32]$env:PART_CRM_DELIVERY_HANDOFF_PARENT_PID; Wait-Process -Id $pidToWait -ErrorAction SilentlyContinue; $target=$env:PART_CRM_DELIVERY_HANDOFF_TARGET; if ([string]::IsNullOrWhiteSpace($target)) { exit 21 }; $child=Start-Process -FilePath $target -ArgumentList '--delivery-handoff-arrived' -PassThru; if ($null -eq $child) { exit 22 }";
 
 /// Exact filesystem/process identity already selected by the Windows delivery owner.
@@ -28,8 +34,8 @@ pub struct VerifiedDeliveryProcessTarget {
 
 impl VerifiedDeliveryProcessTarget {
     pub fn from_staged(staged: &StagedDelivery) -> Result<Self, DeliveryHandoffError> {
-        let release_root = fs::canonicalize(staged.path())
-            .map_err(|_| DeliveryHandoffError::InvalidTarget)?;
+        let release_root =
+            fs::canonicalize(staged.path()).map_err(|_| DeliveryHandoffError::InvalidTarget)?;
         let executable = staged.profile_bridge_root().join(PROFILE_BRIDGE_EXECUTABLE);
         let executable = canonical_regular_executable(&executable)?;
         if executable.parent().and_then(Path::parent) != Some(release_root.as_path()) {
@@ -42,7 +48,9 @@ impl VerifiedDeliveryProcessTarget {
         })
     }
 
-    pub fn from_recovery(target: &VerifiedDeliveryRecoveryTarget) -> Result<Self, DeliveryHandoffError> {
+    pub fn from_recovery(
+        target: &VerifiedDeliveryRecoveryTarget,
+    ) -> Result<Self, DeliveryHandoffError> {
         let release_root = fs::canonicalize(target.release_root())
             .map_err(|_| DeliveryHandoffError::InvalidTarget)?;
         let executable = canonical_regular_executable(target.profile_bridge_executable())?;
@@ -92,9 +100,7 @@ impl OneShotDeliveryHandoff {
             return Err(DeliveryHandoffError::InvalidCurrentProcess);
         }
         let current_executable = canonical_regular_executable(current_executable.as_ref())?;
-        if current_executable
-            .file_name()
-            .and_then(OsStr::to_str)
+        if current_executable.file_name().and_then(OsStr::to_str)
             != Some(PROFILE_BRIDGE_EXECUTABLE)
             || current_executable == target.profile_bridge_executable
         {
@@ -130,6 +136,7 @@ impl OneShotDeliveryHandoff {
             .map_err(|_| DeliveryHandoffError::HelperLaunchFailed)
     }
 
+    #[cfg(any(windows, test))]
     fn windows_helper_command(&self) -> Command {
         let mut command = Command::new("powershell.exe");
         command
@@ -221,7 +228,9 @@ mod tests {
         }
     }
 
-    fn fixture_target(directory: &TestDirectory) -> Result<VerifiedDeliveryProcessTarget, io::Error> {
+    fn fixture_target(
+        directory: &TestDirectory,
+    ) -> Result<VerifiedDeliveryProcessTarget, io::Error> {
         let release = directory.0.join("releases").join("candidate");
         let bridge = release.join("profile-bridge");
         fs::create_dir_all(&bridge)?;
@@ -235,9 +244,14 @@ mod tests {
     }
 
     #[test]
-    fn one_shot_plan_binds_exact_old_pid_and_target_without_claim() -> Result<(), Box<dyn std::error::Error>> {
+    fn one_shot_plan_binds_exact_old_pid_and_target_without_claim(
+    ) -> Result<(), Box<dyn std::error::Error>> {
         let directory = TestDirectory::create("plan")?;
-        let current_root = directory.0.join("releases").join("current").join("profile-bridge");
+        let current_root = directory
+            .0
+            .join("releases")
+            .join("current")
+            .join("profile-bridge");
         fs::create_dir_all(&current_root)?;
         let current = current_root.join(PROFILE_BRIDGE_EXECUTABLE);
         fs::write(&current, b"current")?;
@@ -249,14 +263,18 @@ mod tests {
             .collect::<Vec<_>>();
         assert_eq!(command.get_program(), "powershell.exe");
         assert!(args.iter().any(|arg| arg == POWERSHELL_HANDOFF));
-        assert!(args.iter().all(|arg| !arg.contains("part-crm-bridge://claim")));
+        assert!(
+            args.iter()
+                .all(|arg| !arg.contains("part-crm-bridge://claim"))
+        );
         assert_eq!(handoff.current_process_id(), 42);
         assert_eq!(handoff.target().identity(), &identity());
         Ok(())
     }
 
     #[test]
-    fn target_substitution_or_same_executable_fails_closed() -> Result<(), Box<dyn std::error::Error>> {
+    fn target_substitution_or_same_executable_fails_closed(
+    ) -> Result<(), Box<dyn std::error::Error>> {
         let directory = TestDirectory::create("reject")?;
         let target = fixture_target(&directory)?;
         assert_eq!(
