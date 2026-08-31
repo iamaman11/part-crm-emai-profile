@@ -159,7 +159,9 @@ fn encode_sha256(digest: [u8; 32]) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{AuthoritativeGenerationMaterializationError, encode_sha256, ensure_authoritative_generation};
+    use super::{
+        AuthoritativeGenerationMaterializationError, encode_sha256, ensure_authoritative_generation,
+    };
     use crate::browser_execution::{load_materialization_binding, persist_materialization_binding};
     use crate::generation_reopen::{
         GenerationDownloadCapability, GenerationObjectDownloadPort, GenerationReopenControlPort,
