@@ -55,7 +55,10 @@ FINGERPRINT_PROBE = """
     height: screen.height,
     availWidth: screen.availWidth,
     availHeight: screen.availHeight,
+    availLeft: screen.availLeft,
+    availTop: screen.availTop,
     colorDepth: screen.colorDepth,
+    pixelDepth: screen.pixelDepth,
     devicePixelRatio: window.devicePixelRatio,
   },
   webgl: (() => {
@@ -360,6 +363,25 @@ def extract_camoufox_config(options: dict[str, Any]) -> dict[str, Any]:
     return value
 
 
+def preserve_generated_integer_projection(
+    config: dict[str, Any],
+    key: str,
+    value: Any,
+    minimum: int,
+    maximum: int,
+) -> None:
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, int)
+        or not minimum <= value <= maximum
+    ):
+        raise RuntimeContractError(f"generated {key} identity is invalid")
+    configured = config.get(key)
+    if configured is not None and configured != value:
+        raise RuntimeContractError(f"materialized {key} identity drifted")
+    config[key] = value
+
+
 def packaged_windows_browser(lock: dict[str, Any]) -> Path:
     distribution = lock.get("windows_distribution")
     if not isinstance(distribution, dict):
@@ -645,13 +667,6 @@ def materialize_candidate_identity(root: Path) -> dict[str, str]:
         screen=get_screen_cons(headless_mode or "DISPLAY" in browser_env),
         os="windows",
     )
-    max_touch_points = fingerprint.navigator.maxTouchPoints
-    if (
-        isinstance(max_touch_points, bool)
-        or not isinstance(max_touch_points, int)
-        or not 0 <= max_touch_points <= 64
-    ):
-        raise RuntimeContractError("generated maxTouchPoints identity is invalid")
     with contextlib.redirect_stdout(sys.stderr):
         options = launch_options(
             **browser_selector,
@@ -663,17 +678,31 @@ def materialize_candidate_identity(root: Path) -> dict[str, str]:
             os="windows",
         )
     config = extract_camoufox_config(options)
-    configured_max_touch_points = config.get("navigator.maxTouchPoints")
-    if (
-        configured_max_touch_points is not None
-        and configured_max_touch_points != max_touch_points
-    ):
-        raise RuntimeContractError("materialized maxTouchPoints identity drifted")
     # Camoufox 0.5.5 drops falsy BrowserForge values while converting a fingerprint.
-    # Preserve the exact generated value in the canonical runtime projection instead of
-    # substituting a host-derived fact. The real-browser pre-navigation probe below proves
-    # whether the pinned browser actually reproduces this value.
-    config["navigator.maxTouchPoints"] = max_touch_points
+    # Preserve policy-relevant integer values from the exact same generated fingerprint instead of
+    # substituting host-derived facts. The real-browser pre-navigation probe below proves whether
+    # the pinned browser actually reproduces these values.
+    preserve_generated_integer_projection(
+        config,
+        "navigator.maxTouchPoints",
+        fingerprint.navigator.maxTouchPoints,
+        0,
+        64,
+    )
+    preserve_generated_integer_projection(
+        config,
+        "screen.availLeft",
+        fingerprint.screen.availLeft,
+        -(2**31),
+        2**31 - 1,
+    )
+    preserve_generated_integer_projection(
+        config,
+        "screen.availTop",
+        fingerprint.screen.availTop,
+        -(2**31),
+        2**31 - 1,
+    )
     config_bytes = canonical_json(config)
     config_path.write_bytes(config_bytes)
     config_sha256 = sha256_bytes(config_bytes)
