@@ -1,5 +1,6 @@
 #![forbid(unsafe_code)]
 
+mod identity_record;
 mod profile_stable_identity;
 
 pub use profile_stable_identity::{
