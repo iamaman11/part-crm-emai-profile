@@ -96,9 +96,9 @@ spec.loader.exec_module(module)
 
 from camoufox.pkgman import INSTALL_DIR
 
-cache_root = Path(os.environ["LOCALAPPDATA"]).resolve()
+isolation_root = Path(os.environ["S0_OFFLINE_ISOLATION_ROOT"]).resolve(strict=True)
 install_dir = Path(INSTALL_DIR).resolve()
-if not install_dir.is_relative_to(cache_root):
+if not install_dir.is_relative_to(isolation_root):
     raise AssertionError(f"Camoufox shared cache escaped isolated root: {install_dir}")
 if install_dir.exists() and any(install_dir.iterdir()):
     raise AssertionError("Camoufox shared cache was not empty before offline launch")
@@ -144,7 +144,7 @@ ctx.beginPath();
 ctx.arc(222, 45, 27, 0, Math.PI * 2, true);
 ctx.stroke();
 ctx.fillStyle = 'rgba(255, 0, 255, 0.45)';
-ctx.fillText('\u2603 portable canvas', 72, 82);
+ctx.fillText(String.fromCodePoint(0x2603) + ' portable canvas', 72, 82);
 const payload = canvas.toDataURL('image/png');
 const observed = new XMLHttpRequest();
 observed.open('POST', '/canvas', false);
@@ -257,6 +257,7 @@ def prove_packaged_runtime_offline(
                 "TEMP": str(scratch),
                 "TMP": str(scratch),
                 "PYTHONNOUSERSITE": "1",
+                "S0_OFFLINE_ISOLATION_ROOT": str(base),
             }
         )
         for name in (
