@@ -662,7 +662,10 @@ mod tests {
             b"canonical-browser-identity\n",
         )?;
 
-        assert_eq!(workspace.materialization_inventory_digest()?, before_materialization);
+        assert_eq!(
+            workspace.materialization_inventory_digest()?,
+            before_materialization
+        );
         let after_full = workspace.inventory()?;
         assert_ne!(after_full, before_full);
         assert!(
