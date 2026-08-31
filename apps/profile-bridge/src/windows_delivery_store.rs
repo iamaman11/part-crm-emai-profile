@@ -46,14 +46,10 @@ impl DeliveryHandoffEvidence {
         state: &DeliveryState,
         target: &DeliveryIdentity,
     ) -> Result<Self, DeliveryStateStoreError> {
-        let source_attempt = state
-            .activation_generation()
-            .checked_add(1)
-            .ok_or(DeliveryStateStoreError::RevisionExhausted)?;
         let evidence = Self {
             kind: DeliveryHandoffKind::Activation,
             source_candidate: target.clone(),
-            source_attempt,
+            source_attempt: state.activation_generation(),
             target: target.clone(),
             outcome: DeliveryHandoffOutcome::Started,
         };
@@ -122,15 +118,17 @@ impl DeliveryHandoffEvidence {
         }
         match (self.kind, self.outcome) {
             (DeliveryHandoffKind::Activation, DeliveryHandoffOutcome::Started) => {
-                let expected_attempt = state
-                    .activation_generation()
-                    .checked_add(1)
-                    .ok_or(DeliveryStateStoreError::RevisionExhausted)?;
+                let activation = state
+                    .last_activation()
+                    .ok_or(DeliveryStateStoreError::HandoffEvidence)?;
                 if self.source_candidate != self.target
-                    || self.source_attempt != expected_attempt
-                    || state.staged() != Some(&self.target)
-                    || state.active() == Some(&self.target)
-                    || (state.active().is_some() && !state.active_health_confirmed())
+                    || state.active() != Some(&self.target)
+                    || state.active_health_confirmed()
+                    || state.staged().is_some()
+                    || state.activation_generation() != self.source_attempt
+                    || activation.attempt != self.source_attempt
+                    || activation.candidate != self.target
+                    || activation.outcome != DeliveryActivationOutcome::PendingHealth
                 {
                     return Err(DeliveryStateStoreError::HandoffEvidence);
                 }
@@ -141,13 +139,30 @@ impl DeliveryHandoffEvidence {
                     .ok_or(DeliveryStateStoreError::HandoffEvidence)?;
                 if self.source_candidate != self.target
                     || state.active() != Some(&self.target)
-                    || state.active_health_confirmed()
+                    || state.staged().is_some()
                     || state.activation_generation() != self.source_attempt
                     || activation.attempt != self.source_attempt
                     || activation.candidate != self.target
-                    || activation.outcome != DeliveryActivationOutcome::PendingHealth
                 {
                     return Err(DeliveryStateStoreError::HandoffEvidence);
+                }
+                match activation.outcome {
+                    DeliveryActivationOutcome::PendingHealth
+                    | DeliveryActivationOutcome::HealthAttemptStarted
+                        if state.active_health_confirmed() =>
+                    {
+                        return Err(DeliveryStateStoreError::HandoffEvidence);
+                    }
+                    DeliveryActivationOutcome::Healthy if !state.active_health_confirmed() => {
+                        return Err(DeliveryStateStoreError::HandoffEvidence);
+                    }
+                    DeliveryActivationOutcome::PendingHealth
+                    | DeliveryActivationOutcome::HealthAttemptStarted
+                    | DeliveryActivationOutcome::Healthy => {}
+                    DeliveryActivationOutcome::RolledBack
+                    | DeliveryActivationOutcome::RecoveryRequired => {
+                        return Err(DeliveryStateStoreError::HandoffEvidence);
+                    }
                 }
             }
             (DeliveryHandoffKind::Recovery, _) => {
@@ -308,6 +323,13 @@ impl DeliveryStateStore {
 
     pub fn persist(&mut self, state: &DeliveryState) -> Result<(), DeliveryStateStoreError> {
         self.persist_snapshot(state, None)
+    }
+
+    pub fn persist_preserving_handoff(
+        &mut self,
+        state: &DeliveryState,
+    ) -> Result<(), DeliveryStateStoreError> {
+        self.persist_snapshot(state, self.handoff.clone())
     }
 
     pub fn persist_handoff(
@@ -661,14 +683,18 @@ mod tests {
         }
     }
 
-    fn staged_state() -> Result<DeliveryState, serde_json::Error> {
+    fn pending_activation_state() -> Result<DeliveryState, serde_json::Error> {
         serde_json::from_value(json!({
-            "active": null,
+            "active": identity(),
             "active_health_confirmed": false,
             "last_known_good": null,
-            "staged": identity(),
-            "activation_generation": 0,
-            "last_activation": null,
+            "staged": null,
+            "activation_generation": 1,
+            "last_activation": {
+                "attempt": 1,
+                "candidate": identity(),
+                "outcome": "pending_health"
+            },
             "last_failure": null
         }))
     }
@@ -698,7 +724,7 @@ mod tests {
         let directory = TestDirectory::create("handoff")?;
         let root = directory.state_root();
         let mut store = DeliveryStateStore::initialize(&root)?;
-        let state = staged_state()?;
+        let state = pending_activation_state()?;
         let evidence = DeliveryHandoffEvidence::activation_started(&state, &identity())?;
         store.persist_handoff(&state, evidence.clone())?;
 
@@ -715,13 +741,34 @@ mod tests {
     }
 
     #[test]
-    fn inconsistent_handoff_evidence_fails_closed() -> TestResult {
+    fn arrived_handoff_can_be_preserved_through_exact_health_transitions() -> TestResult {
+        let directory = TestDirectory::create("arrived-health")?;
+        let root = directory.state_root();
+        let mut store = DeliveryStateStore::initialize(&root)?;
+        let mut state = pending_activation_state()?;
+        let started = DeliveryHandoffEvidence::activation_started(&state, &identity())?;
+        let arrived = started.arrived(&state)?;
+        store.persist_handoff(&state, arrived.clone())?;
+
+        state.start_health_attempt(&identity(), 1)?;
+        store.persist_preserving_handoff(&state)?;
+        assert_eq!(store.handoff(), Some(&arrived));
+        assert_eq!(DeliveryStateStore::open(&root)?.handoff(), Some(&arrived));
+
+        state.confirm_health()?;
+        store.persist_preserving_handoff(&state)?;
+        assert_eq!(store.handoff(), Some(&arrived));
+        assert_eq!(DeliveryStateStore::open(&root)?.handoff(), Some(&arrived));
+        Ok(())
+    }
+
+    #[test]
+    fn inconsistent_handoff_evidence_fails_closed() {
         let state = DeliveryState::default();
         assert_eq!(
             DeliveryHandoffEvidence::activation_started(&state, &identity()),
             Err(DeliveryStateStoreError::HandoffEvidence)
         );
-        Ok(())
     }
 
     #[test]
