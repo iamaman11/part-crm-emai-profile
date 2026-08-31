@@ -464,10 +464,7 @@ fn required<'a>(
         .ok_or(BrowserLaunchBlocker::InvalidMaterializationEvidence)
 }
 
-fn parse_number<T>(
-    values: &BTreeMap<&str, &str>,
-    key: &str,
-) -> Result<T, BrowserLaunchBlocker>
+fn parse_number<T>(values: &BTreeMap<&str, &str>, key: &str) -> Result<T, BrowserLaunchBlocker>
 where
     T: core::str::FromStr,
 {
@@ -538,9 +535,9 @@ mod tests {
     use crate::local_profile::{BridgeWorkspaceLock, MaterializationRoot};
     use crate::test_support::remove_test_root;
     use browser_execution_domain::{
-        BrowserIdentityManifest, BrowserOsIdentity, DisplayIdentity, FontIdentity, GraphicsIdentity,
-        HardwareCapabilityIdentity, LocaleIdentity, MaterializationBinding, NetworkClass,
-        NetworkIdentityObservation, NetworkIdentityPolicy, OriginDeterminismMode,
+        BrowserIdentityManifest, BrowserOsIdentity, DisplayIdentity, FontIdentity,
+        GraphicsIdentity, HardwareCapabilityIdentity, LocaleIdentity, MaterializationBinding,
+        NetworkClass, NetworkIdentityObservation, NetworkIdentityPolicy, OriginDeterminismMode,
         OriginDeterministicIdentity, ProfileStableIdentity,
     };
     use profile_platform_primitives::{DeviceId, GenerationId, ProfileId, TenantId};
@@ -639,7 +636,12 @@ mod tests {
             identity()?,
         )?;
         persist_materialization_binding(&workspace, &binding)?;
-        assert!(workspace.path().join(BROWSER_IDENTITY_RECORD_FILE).is_file());
+        assert!(
+            workspace
+                .path()
+                .join(BROWSER_IDENTITY_RECORD_FILE)
+                .is_file()
+        );
         assert_eq!(
             load_materialization_binding(
                 &workspace,
@@ -693,8 +695,7 @@ mod tests {
     }
 
     #[test]
-    fn tampered_generation_owned_identity_fails_closed()
-    -> Result<(), Box<dyn std::error::Error>> {
+    fn tampered_generation_owned_identity_fails_closed() -> Result<(), Box<dyn std::error::Error>> {
         let root_path = root_path("identity-tamper")?;
         let root = MaterializationRoot::open_or_create(&root_path)?;
         let tenant = TenantId::parse("tenant_01JIDENTITY")?;
