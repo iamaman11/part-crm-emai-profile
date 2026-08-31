@@ -100,8 +100,7 @@ impl OneShotDeliveryHandoff {
             return Err(DeliveryHandoffError::InvalidCurrentProcess);
         }
         let current_executable = canonical_regular_executable(current_executable.as_ref())?;
-        if current_executable.file_name().and_then(OsStr::to_str)
-            != Some(PROFILE_BRIDGE_EXECUTABLE)
+        if current_executable.file_name().and_then(OsStr::to_str) != Some(PROFILE_BRIDGE_EXECUTABLE)
             || current_executable == target.profile_bridge_executable
         {
             return Err(DeliveryHandoffError::InvalidCurrentProcess);
@@ -148,7 +147,10 @@ impl OneShotDeliveryHandoff {
                 POWERSHELL_HANDOFF,
             ])
             .env(PARENT_PID_ENV, self.current_process_id.to_string())
-            .env(TARGET_EXECUTABLE_ENV, &self.target.profile_bridge_executable);
+            .env(
+                TARGET_EXECUTABLE_ENV,
+                &self.target.profile_bridge_executable,
+            );
         command
     }
 }
@@ -244,8 +246,8 @@ mod tests {
     }
 
     #[test]
-    fn one_shot_plan_binds_exact_old_pid_and_target_without_claim(
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    fn one_shot_plan_binds_exact_old_pid_and_target_without_claim()
+    -> Result<(), Box<dyn std::error::Error>> {
         let directory = TestDirectory::create("plan")?;
         let current_root = directory
             .0
@@ -273,8 +275,8 @@ mod tests {
     }
 
     #[test]
-    fn target_substitution_or_same_executable_fails_closed(
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    fn target_substitution_or_same_executable_fails_closed()
+    -> Result<(), Box<dyn std::error::Error>> {
         let directory = TestDirectory::create("reject")?;
         let target = fixture_target(&directory)?;
         assert_eq!(
