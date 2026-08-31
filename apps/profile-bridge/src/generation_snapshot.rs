@@ -446,6 +446,7 @@ fn read_bytes<'a>(
     *cursor = end;
     Ok(bytes)
 }
+
 fn checked_extend(output: &mut Vec<u8>, bytes: &[u8]) -> Result<(), GenerationSnapshotError> {
     let new_len = output
         .len()
