@@ -65,7 +65,9 @@ SNAPSHOT_REQUIRED_FRAGMENTS = (
     'WORKSPACE_SNAPSHOT_MAGIC: &[u8; 8] = b"BPGW0001"',
     "MAX_WORKSPACE_SNAPSHOT_BYTES: usize = 67_108_864",
     "pub(crate) fn encode_workspace_snapshot(",
-    "pub(crate) fn materialize_workspace_snapshot(",
+    "#[cfg(test)]\npub(crate) fn materialize_workspace_snapshot(",
+    "pub(crate) fn materialize_workspace_snapshot_with_pre_publish(",
+    "before_publish(&staging)?",
     "fn parse_workspace_snapshot(",
     "validate_windows_relative_path",
     "TargetAlreadyExists",
@@ -177,7 +179,7 @@ def dirty_generation_self_test(source: str) -> list[str]:
 
 
 def generation_snapshot_failures(source: str) -> list[str]:
-    production = source.split("#[cfg(test)]", 1)[0]
+    production = source.split("#[cfg(test)]\nmod tests", 1)[0]
     failures: list[str] = []
     for fragment in SNAPSHOT_REQUIRED_FRAGMENTS:
         if fragment not in production:
