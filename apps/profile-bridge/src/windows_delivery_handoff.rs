@@ -238,11 +238,34 @@ impl DeliveryHandoffCoordinator {
         Ok(Self::new(staging_root, delivery_root.join(STATE_DIRECTORY)))
     }
 
-    pub fn has_started_handoff(&self) -> Result<bool, DeliveryHandoffError> {
+    #[cfg(any(windows, test))]
+    pub fn restart_recovery_pending(&self) -> Result<bool, DeliveryHandoffError> {
         let store = self.open_store()?;
-        Ok(store
-            .handoff()
-            .is_some_and(|evidence| evidence.outcome() == DeliveryHandoffOutcome::Started))
+        if let Some(evidence) = store.handoff() {
+            return Ok(evidence.outcome() == DeliveryHandoffOutcome::Started);
+        }
+        let state = store.state();
+        let Some(failure) = state.last_failure() else {
+            return Ok(false);
+        };
+        if failure.kind != DeliveryFailureKind::InterruptedHandoff {
+            return Ok(false);
+        }
+        let activation = state
+            .last_activation()
+            .ok_or(DeliveryHandoffError::StateMismatch)?;
+        if activation.candidate != failure.candidate
+            || activation.attempt == 0
+            || activation.attempt != state.activation_generation()
+            || !matches!(
+                activation.outcome,
+                DeliveryActivationOutcome::RolledBack
+                    | DeliveryActivationOutcome::RecoveryRequired
+            )
+        {
+            return Err(DeliveryHandoffError::StateMismatch);
+        }
+        Ok(true)
     }
 
     #[cfg(windows)]
@@ -1066,6 +1089,7 @@ mod tests {
             DeliveryHandoffCoordinator::new(fixture.staging.clone(), &fixture.state_root);
         let guard = DeliveryActivationGuard::acquire(&fixture.materialization)?;
         coordinator.start_activation_with(&guard, 42, &fixture.first_executable, |_| Ok(()))?;
+        assert!(coordinator.restart_recovery_pending()?);
 
         let scheduled = Cell::new(false);
         assert_eq!(
@@ -1099,6 +1123,7 @@ mod tests {
         assert_eq!(evidence.source_candidate(), &fixture.second);
         assert_eq!(evidence.source_attempt(), 2);
         assert_eq!(evidence.target(), &fixture.first);
+        assert!(coordinator.restart_recovery_pending()?);
         Ok(())
     }
 
@@ -1116,6 +1141,7 @@ mod tests {
             .handoff()
             .cloned()
             .ok_or("missing recovery handoff")?;
+        assert!(coordinator.restart_recovery_pending()?);
 
         let scheduled = Cell::new(false);
         assert_eq!(
@@ -1161,6 +1187,7 @@ mod tests {
                 .handoff()
                 .is_none()
         );
+        assert!(coordinator.restart_recovery_pending()?);
 
         let scheduled = Cell::new(false);
         assert_eq!(
@@ -1196,6 +1223,7 @@ mod tests {
             DeliveryHandoffCoordinator::new(fixture.staging.clone(), &fixture.state_root);
         let _guard = DeliveryActivationGuard::acquire(&fixture.materialization)?;
         let scheduled = Cell::new(false);
+        assert!(coordinator.restart_recovery_pending()?);
         assert_eq!(
             coordinator.recover_or_resume_started_with(42, &fixture.first_executable, |_| {
                 scheduled.set(true);
@@ -1211,6 +1239,7 @@ mod tests {
             recovered.state().last_failure().map(|value| value.kind),
             Some(DeliveryFailureKind::InterruptedHandoff)
         );
+        assert!(coordinator.restart_recovery_pending()?);
         Ok(())
     }
 
@@ -1221,6 +1250,7 @@ mod tests {
         let coordinator =
             DeliveryHandoffCoordinator::new(fixture.staging.clone(), &fixture.state_root);
         let _guard = DeliveryActivationGuard::acquire(&fixture.materialization)?;
+        assert!(!coordinator.restart_recovery_pending()?);
         let scheduled = Cell::new(false);
         assert_eq!(
             coordinator.recover_or_resume_started_with(42, &fixture.first_executable, |_| {
@@ -1289,6 +1319,7 @@ mod tests {
             arrived.handoff().map(DeliveryHandoffEvidence::outcome),
             Some(DeliveryHandoffOutcome::Arrived)
         );
+        assert!(!coordinator.restart_recovery_pending()?);
         Ok(())
     }
 
