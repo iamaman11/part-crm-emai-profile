@@ -259,8 +259,7 @@ impl DeliveryHandoffCoordinator {
             || activation.attempt != state.activation_generation()
             || !matches!(
                 activation.outcome,
-                DeliveryActivationOutcome::RolledBack
-                    | DeliveryActivationOutcome::RecoveryRequired
+                DeliveryActivationOutcome::RolledBack | DeliveryActivationOutcome::RecoveryRequired
             )
         {
             return Err(DeliveryHandoffError::StateMismatch);

@@ -376,8 +376,8 @@ mod windows {
         }
     }
 
-    fn delivery_process_context(
-    ) -> Result<(DeliveryHandoffCoordinator, PathBuf), ShippingCompositionError> {
+    fn delivery_process_context()
+    -> Result<(DeliveryHandoffCoordinator, PathBuf), ShippingCompositionError> {
         let current_executable =
             env::current_exe().map_err(|_| ShippingCompositionError::DeliveryHandoff)?;
         let coordinator = DeliveryHandoffCoordinator::from_current_executable(&current_executable)
@@ -455,12 +455,12 @@ mod windows {
 
 #[cfg(test)]
 mod tests {
-    #[cfg(not(windows))]
-    use super::{run_claim, run_delivery_command};
     use super::{
         ConfirmedSaveTrigger, ShippingCompositionError, ShippingDeliveryCommand,
         confirmed_save_trigger, run_after_delivery_health_start,
     };
+    #[cfg(not(windows))]
+    use super::{run_claim, run_delivery_command};
     #[cfg(not(windows))]
     use bridge_domain::ClaimUri;
     use std::cell::Cell;

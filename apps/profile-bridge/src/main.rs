@@ -26,9 +26,7 @@ where
     I: IntoIterator<Item = String>,
 {
     match parse_command(arguments)? {
-        BridgeCommand::Claim(claim) => {
-            run_claim(&claim).map_err(|_| BridgeCliError::LaunchFailed)
-        }
+        BridgeCommand::Claim(claim) => run_claim(&claim).map_err(|_| BridgeCliError::LaunchFailed),
         BridgeCommand::DeliveryActivateStaged => {
             run_delivery_command(ShippingDeliveryCommand::ActivateStaged)
                 .map_err(|_| BridgeCliError::DeliveryFailed)
@@ -161,6 +159,10 @@ mod tests {
                 .contains("secret")
         );
         assert!(!BridgeCliError::LaunchFailed.to_string().contains("claim_"));
-        assert!(!BridgeCliError::DeliveryFailed.to_string().contains("claim_"));
+        assert!(
+            !BridgeCliError::DeliveryFailed
+                .to_string()
+                .contains("claim_")
+        );
     }
 }
