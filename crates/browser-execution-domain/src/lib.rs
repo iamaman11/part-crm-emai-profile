@@ -1,5 +1,13 @@
 #![forbid(unsafe_code)]
 
+mod profile_stable_identity;
+
+pub use profile_stable_identity::{
+    BrowserOsIdentity, DisplayIdentity, FontIdentity, GraphicsIdentity,
+    HardwareCapabilityIdentity, LocaleIdentity, OriginDeterminismMode,
+    OriginDeterministicIdentity, ProfileStableIdentity, ProfileStateKind, ProfileStatePortability,
+};
+
 use core::fmt;
 use profile_platform_primitives::{GenerationId, ProfileId, TenantId};
 use std::collections::BTreeSet;
@@ -367,6 +375,7 @@ pub enum BrowserExecutionError {
     InvalidMaterializationInventory,
     InvalidNetworkPolicy,
     InvalidNetworkObservation,
+    InvalidProfileStableIdentity,
 }
 
 impl fmt::Display for BrowserExecutionError {
@@ -382,6 +391,7 @@ impl fmt::Display for BrowserExecutionError {
             }
             Self::InvalidNetworkPolicy => "network identity policy is invalid",
             Self::InvalidNetworkObservation => "network identity observation is invalid",
+            Self::InvalidProfileStableIdentity => "profile-stable browser identity is invalid",
         })
     }
 }
