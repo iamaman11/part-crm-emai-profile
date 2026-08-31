@@ -7,7 +7,9 @@ use crate::windows_delivery::{
 use crate::windows_delivery_staging::{
     DeliveryStagingRoot, StagedDelivery, reopen_staged_delivery,
 };
-use crate::windows_delivery_store::{DeliveryStateStore, DeliveryStateStoreError};
+use crate::windows_delivery_store::{
+    DeliveryHandoffKind, DeliveryHandoffOutcome, DeliveryStateStore, DeliveryStateStoreError,
+};
 use std::fmt;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -18,6 +20,7 @@ const PROFILE_BRIDGE_EXECUTABLE: &str = "profile-bridge.exe";
 pub enum DeliveryRecoveryReason {
     HealthRejected,
     InterruptedActivation,
+    InterruptedHandoff,
 }
 
 impl DeliveryRecoveryReason {
@@ -25,6 +28,16 @@ impl DeliveryRecoveryReason {
         match self {
             Self::HealthRejected => DeliveryFailureKind::HealthRejected,
             Self::InterruptedActivation => DeliveryFailureKind::InterruptedActivation,
+            Self::InterruptedHandoff => DeliveryFailureKind::InterruptedHandoff,
+        }
+    }
+
+    const fn expected_activation_outcome(self) -> DeliveryActivationOutcome {
+        match self {
+            Self::HealthRejected | Self::InterruptedActivation => {
+                DeliveryActivationOutcome::HealthAttemptStarted
+            }
+            Self::InterruptedHandoff => DeliveryActivationOutcome::PendingHealth,
         }
     }
 }
@@ -88,12 +101,13 @@ impl DeliveryRecoveryCoordinator {
     ) -> Result<DeliveryRecoveryDisposition, DeliveryRecoveryError> {
         let mut store = DeliveryStateStore::open(&self.state_root)
             .map_err(DeliveryRecoveryError::StateStore)?;
-        validate_exact_started_attempt(store.state(), expected_candidate, expected_attempt)?;
+        validate_exact_started_attempt(&store, expected_candidate, expected_attempt, reason)?;
 
         let mut next = store.state().clone();
         let transition = match reason {
             DeliveryRecoveryReason::HealthRejected => next.fail_health_and_rollback(),
             DeliveryRecoveryReason::InterruptedActivation => next.recover_interrupted_activation(),
+            DeliveryRecoveryReason::InterruptedHandoff => next.recover_interrupted_handoff(),
         };
         let recovery_required = match transition {
             Ok(()) => false,
@@ -130,10 +144,12 @@ impl DeliveryRecoveryCoordinator {
 }
 
 fn validate_exact_started_attempt(
-    state: &DeliveryState,
+    store: &DeliveryStateStore,
     candidate: &DeliveryIdentity,
     attempt: u64,
+    reason: DeliveryRecoveryReason,
 ) -> Result<(), DeliveryRecoveryError> {
+    let state = store.state();
     state
         .validate_persisted()
         .map_err(DeliveryRecoveryError::State)?;
@@ -149,9 +165,22 @@ fn validate_exact_started_attempt(
         .ok_or(DeliveryRecoveryError::StateMismatch)?;
     if activation.attempt != attempt
         || activation.candidate != *candidate
-        || activation.outcome != DeliveryActivationOutcome::HealthAttemptStarted
+        || activation.outcome != reason.expected_activation_outcome()
     {
         return Err(DeliveryRecoveryError::StateMismatch);
+    }
+    if reason == DeliveryRecoveryReason::InterruptedHandoff {
+        let handoff = store
+            .handoff()
+            .ok_or(DeliveryRecoveryError::StateMismatch)?;
+        if handoff.kind() != DeliveryHandoffKind::Activation
+            || handoff.outcome() != DeliveryHandoffOutcome::Started
+            || handoff.source_candidate() != candidate
+            || handoff.source_attempt() != attempt
+            || handoff.target() != candidate
+        {
+            return Err(DeliveryRecoveryError::StateMismatch);
+        }
     }
     Ok(())
 }
@@ -280,7 +309,7 @@ mod tests {
         DeliveryArchiveEntry, DeliveryArchiveReader, DeliveryComponentKind, DeliveryStagingRoot,
         stage_verified_delivery,
     };
-    use crate::windows_delivery_store::DeliveryStateStore;
+    use crate::windows_delivery_store::{DeliveryHandoffEvidence, DeliveryStateStore};
     use bridge_domain::CAMOUHOST_IPC_VERSION;
     use sha2::{Digest, Sha256};
     use std::collections::HashMap;
@@ -448,6 +477,17 @@ mod tests {
         })
     }
 
+    fn persist_started_activation_handoff(
+        state_root: &Path,
+        candidate: &DeliveryIdentity,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let mut store = DeliveryStateStore::open(state_root)?;
+        let evidence = DeliveryHandoffEvidence::activation_started(store.state(), candidate)?;
+        let state = store.state().clone();
+        store.persist_handoff(&state, evidence)?;
+        Ok(())
+    }
+
     #[test]
     fn failed_health_rolls_back_only_after_exact_lkg_stage_reopens()
     -> Result<(), Box<dyn std::error::Error>> {
@@ -569,6 +609,125 @@ mod tests {
         assert_eq!(
             reopened.state().last_failure().map(|value| value.kind),
             Some(DeliveryFailureKind::InterruptedActivation)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn interrupted_handoff_requires_exact_started_evidence_and_uses_verified_lkg()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let fixture = fixture_with_lkg_state("handoff-interrupted", false)?;
+        persist_started_activation_handoff(&fixture.state_root, &fixture.second)?;
+        let recovery = DeliveryRecoveryCoordinator::new(fixture.staging, &fixture.state_root);
+        let disposition = recovery.recover(
+            &fixture.second,
+            2,
+            DeliveryRecoveryReason::InterruptedHandoff,
+        )?;
+        let DeliveryRecoveryDisposition::Handoff(target) = disposition else {
+            return Err("expected exact LKG handoff target".into());
+        };
+        assert_eq!(target.identity(), &fixture.first);
+        let reopened = DeliveryStateStore::open(&fixture.state_root)?;
+        assert_eq!(reopened.state().active(), Some(&fixture.first));
+        assert!(reopened.state().active_health_confirmed());
+        assert!(reopened.handoff().is_none());
+        assert_eq!(
+            reopened.state().last_failure().map(|value| value.kind),
+            Some(DeliveryFailureKind::InterruptedHandoff)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn untouched_pending_cannot_masquerade_as_interrupted_handoff()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let fixture = fixture_with_lkg_state("handoff-untouched", false)?;
+        let before = DeliveryStateStore::open(&fixture.state_root)?
+            .state()
+            .clone();
+        let recovery = DeliveryRecoveryCoordinator::new(fixture.staging, &fixture.state_root);
+        assert_eq!(
+            recovery.recover(
+                &fixture.second,
+                2,
+                DeliveryRecoveryReason::InterruptedHandoff,
+            ),
+            Err(DeliveryRecoveryError::StateMismatch)
+        );
+        assert_eq!(
+            DeliveryStateStore::open(&fixture.state_root)?.state(),
+            &before
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn corrupted_lkg_stage_blocks_interrupted_handoff_rollback_commit()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let fixture = fixture_with_lkg_state("handoff-corrupt-lkg", false)?;
+        persist_started_activation_handoff(&fixture.state_root, &fixture.second)?;
+        fs::remove_dir_all(&fixture.first_stage)?;
+        let before = DeliveryStateStore::open(&fixture.state_root)?;
+        let before_state = before.state().clone();
+        let before_handoff = before.handoff().cloned();
+        let recovery = DeliveryRecoveryCoordinator::new(fixture.staging, &fixture.state_root);
+        assert_eq!(
+            recovery.recover(
+                &fixture.second,
+                2,
+                DeliveryRecoveryReason::InterruptedHandoff,
+            ),
+            Err(DeliveryRecoveryError::StagedRelease)
+        );
+        let reopened = DeliveryStateStore::open(&fixture.state_root)?;
+        assert_eq!(reopened.state(), &before_state);
+        assert_eq!(reopened.handoff(), before_handoff.as_ref());
+        Ok(())
+    }
+
+    #[test]
+    fn first_install_interrupted_handoff_persists_recovery_required_without_fake_target()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let directory = TestDirectory::create("first-install-handoff")?;
+        let staging = DeliveryStagingRoot::open_or_create(directory.0.join("releases"))?;
+        let state_root = directory.0.join("state");
+        let mut store = DeliveryStateStore::initialize(&state_root)?;
+        let first_candidate = candidate(&directory.0, 1, 'e', "first-handoff")?;
+        let identity = first_candidate.0.identity();
+        let mut reader = MemoryArchiveReader::for_release("first-handoff");
+        stage_verified_delivery(
+            &staging,
+            &first_candidate.0,
+            &first_candidate.1,
+            &first_candidate.2,
+            &mut reader,
+        )?;
+        let mut state = DeliveryState::default();
+        state.stage(&first_candidate.0)?;
+        state.activate_staged(true)?;
+        let evidence = DeliveryHandoffEvidence::activation_started(&state, &identity)?;
+        store.persist_handoff(&state, evidence)?;
+
+        let recovery = DeliveryRecoveryCoordinator::new(staging, &state_root);
+        assert_eq!(
+            recovery.recover(&identity, 1, DeliveryRecoveryReason::InterruptedHandoff)?,
+            DeliveryRecoveryDisposition::RecoveryRequired
+        );
+        let reopened = DeliveryStateStore::open(&state_root)?;
+        assert!(reopened.state().active().is_none());
+        assert!(!reopened.state().active_health_confirmed());
+        assert!(reopened.handoff().is_none());
+        assert_eq!(
+            reopened.state().last_failure().map(|value| value.kind),
+            Some(DeliveryFailureKind::InterruptedHandoff)
+        );
+        assert_eq!(
+            reopened
+                .state()
+                .last_activation()
+                .map(|value| value.outcome),
+            Some(DeliveryActivationOutcome::RecoveryRequired)
         );
         Ok(())
     }
