@@ -153,8 +153,11 @@ enum BridgeCliError {
     UnexpectedArgument,
     InvalidClaimUri,
     LaunchFailed,
+    #[cfg(windows)]
     DeliveryFailed,
+    #[cfg(windows)]
     DeliveryRestartScheduled,
+    #[cfg(windows)]
     DeliveryRecoveryRequired,
     UnsupportedDeliveryCommand,
 }
@@ -168,10 +171,13 @@ impl fmt::Display for BridgeCliError {
             Self::UnexpectedArgument => "unexpected additional argument",
             Self::InvalidClaimUri => "claim URI is invalid",
             Self::LaunchFailed => "authorized Profile Bridge launch failed closed",
+            #[cfg(windows)]
             Self::DeliveryFailed => "Profile Bridge delivery handoff failed closed",
+            #[cfg(windows)]
             Self::DeliveryRestartScheduled => {
                 "Profile Bridge delivery recovery was scheduled; retry after handoff"
             }
+            #[cfg(windows)]
             Self::DeliveryRecoveryRequired => "Profile Bridge delivery recovery is required",
             Self::UnsupportedDeliveryCommand => "Profile Bridge delivery commands require Windows",
         })
@@ -251,10 +257,5 @@ mod tests {
                 .contains("secret")
         );
         assert!(!BridgeCliError::LaunchFailed.to_string().contains("claim_"));
-        assert!(
-            !BridgeCliError::DeliveryFailed
-                .to_string()
-                .contains("claim_")
-        );
     }
 }
