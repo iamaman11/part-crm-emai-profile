@@ -710,20 +710,18 @@ fn verify_file_digest(path: &Path, expected: &str) -> Result<(), BridgePortError
 #[cfg(test)]
 mod tests {
     use super::{
-        FINGERPRINT_SOURCE_PREFIX, IDENTITY_COMPATIBILITY_VERSION,
-        RuntimeBindingBrowserLaunchPreflight, RuntimeBindingSlot, receive_response, request_frame,
-        sha256_hex,
+        FINGERPRINT_SOURCE_PREFIX, RuntimeBindingBrowserLaunchPreflight, RuntimeBindingSlot,
+        receive_response, request_frame, sha256_hex,
     };
     use crate::browser_execution::persist_materialization_binding;
     use crate::browser_preflight::{BrowserRuntimeObservation, BrowserRuntimeObservationPort};
     use crate::local_profile::{BridgeWorkspaceLock, GenerationWorkspace, MaterializationRoot};
     use crate::operator_flow::BrowserLaunchPreflightPort;
     use crate::runtime_bundle::ApprovedRuntimeBundle;
-    use crate::test_support::remove_test_root;
+    use crate::test_support::{browser_identity_fixture, remove_test_root};
     use bridge_domain::{BridgePortError, CamouhostMessage};
     use browser_execution_domain::{
-        BrowserIdentityManifest, MaterializationBinding, NetworkClass, NetworkIdentityObservation,
-        NetworkIdentityPolicy,
+        MaterializationBinding, NetworkClass, NetworkIdentityObservation, NetworkIdentityPolicy,
     };
     use profile_platform_primitives::{DeviceId, GenerationId, ProfileId, SessionId, TenantId};
     use runtime_bundle_domain::{
@@ -836,11 +834,11 @@ mod tests {
         config_sha256: String,
         probe_sha256: &str,
     ) -> Result<MaterializationBinding, Box<dyn std::error::Error>> {
-        let browser_identity = BrowserIdentityManifest::new(
-            IDENTITY_COMPATIBILITY_VERSION,
+        let fingerprint_source = format!("{FINGERPRINT_SOURCE_PREFIX}{probe_sha256}");
+        let browser_identity = browser_identity_fixture(
             approved.manifest().runtime_version(),
             approved.manifest().inventory_sha256().as_str(),
-            format!("{FINGERPRINT_SOURCE_PREFIX}{probe_sha256}"),
+            &fingerprint_source,
             config_sha256,
         )?;
         Ok(MaterializationBinding::new(
