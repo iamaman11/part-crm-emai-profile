@@ -1,7 +1,7 @@
 use super::{
-    BrowserExecutionError, BrowserIdentityManifest, BrowserOsIdentity, DisplayIdentity, FontIdentity,
-    GraphicsIdentity, HardwareCapabilityIdentity, LocaleIdentity, OriginDeterminismMode,
-    OriginDeterministicIdentity, ProfileStableIdentity,
+    BrowserExecutionError, BrowserIdentityManifest, BrowserOsIdentity, DisplayIdentity,
+    FontIdentity, GraphicsIdentity, HardwareCapabilityIdentity, LocaleIdentity,
+    OriginDeterminismMode, OriginDeterministicIdentity, ProfileStableIdentity,
 };
 use std::collections::BTreeMap;
 
@@ -286,11 +286,14 @@ mod tests {
     }
 
     #[test]
-    fn canonical_record_round_trips_without_semantic_loss()
-    -> Result<(), Box<dyn std::error::Error>> {
+    fn canonical_record_round_trips_without_semantic_loss() -> Result<(), Box<dyn std::error::Error>>
+    {
         let identity = identity()?;
         let record = identity.to_canonical_record();
-        assert_eq!(BrowserIdentityManifest::from_canonical_record(&record)?, identity);
+        assert_eq!(
+            BrowserIdentityManifest::from_canonical_record(&record)?,
+            identity
+        );
         assert_eq!(identity.to_canonical_record(), record);
         Ok(())
     }
@@ -299,15 +302,16 @@ mod tests {
     fn canonical_record_rejects_unknown_or_missing_fields() -> Result<(), Box<dyn std::error::Error>>
     {
         let record = identity()?.to_canonical_record();
-        assert!(BrowserIdentityManifest::from_canonical_record(&record.replace(
-            "language=en-US\n",
-            "language=en-US\nunexpected=value\n"
-        ))
-        .is_err());
-        assert!(BrowserIdentityManifest::from_canonical_record(
-            &record.replace("language=en-US\n", "")
-        )
-        .is_err());
+        assert!(
+            BrowserIdentityManifest::from_canonical_record(
+                &record.replace("language=en-US\n", "language=en-US\nunexpected=value\n")
+            )
+            .is_err()
+        );
+        assert!(
+            BrowserIdentityManifest::from_canonical_record(&record.replace("language=en-US\n", ""))
+                .is_err()
+        );
         Ok(())
     }
 }
