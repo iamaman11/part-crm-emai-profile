@@ -407,6 +407,64 @@ def preserve_generated_milliscale_projection(
     config[key] = value
 
 
+def preserve_generated_locale_projection(config: dict[str, Any], navigator: Any) -> None:
+    language = getattr(navigator, "language", None)
+    languages = getattr(navigator, "languages", None)
+    if not isinstance(language, str) or not language or "\n" in language or "\r" in language:
+        raise RuntimeContractError("generated navigator.language identity is invalid")
+    if (
+        not isinstance(languages, list)
+        or not languages
+        or any(
+            not isinstance(value, str) or not value or "\n" in value or "\r" in value
+            for value in languages
+        )
+        or languages[0] != language
+    ):
+        raise RuntimeContractError("generated navigator.languages identity is invalid")
+    for key, value in (
+        ("navigator.language", language),
+        ("navigator.languages", languages),
+    ):
+        configured = config.get(key)
+        if configured is not None and configured != value:
+            raise RuntimeContractError(f"materialized {key} identity drifted")
+        config[key] = copy.deepcopy(value)
+
+
+def preserve_generated_browserforge_projection(config: dict[str, Any], fingerprint: Any) -> None:
+    """Close known Camoufox 0.5.5 BrowserForge conversion gaps for domain-owned identity."""
+    preserve_generated_integer_projection(
+        config,
+        "navigator.maxTouchPoints",
+        fingerprint.navigator.maxTouchPoints,
+        0,
+        64,
+    )
+    preserve_generated_integer_projection(
+        config,
+        "screen.availLeft",
+        fingerprint.screen.availLeft,
+        -(2**31),
+        2**31 - 1,
+    )
+    preserve_generated_integer_projection(
+        config,
+        "screen.availTop",
+        fingerprint.screen.availTop,
+        -(2**31),
+        2**31 - 1,
+    )
+    preserve_generated_milliscale_projection(
+        config,
+        "window.devicePixelRatio",
+        fingerprint.screen.devicePixelRatio,
+        250,
+        8_000,
+    )
+    preserve_generated_locale_projection(config, fingerprint.navigator)
+
+
 def packaged_windows_browser(lock: dict[str, Any]) -> Path:
     distribution = lock.get("windows_distribution")
     if not isinstance(distribution, dict):
@@ -700,41 +758,15 @@ def materialize_candidate_identity(root: Path) -> dict[str, str]:
             fingerprint=fingerprint,
             headless=headless_mode,
             i_know_what_im_doing=True,
+            locale=fingerprint.navigator.languages,
             os="windows",
         )
     config = extract_camoufox_config(options)
-    # Camoufox 0.5.5 may omit BrowserForge values while converting a fingerprint.
-    # Preserve policy-relevant values from the exact same generated fingerprint instead of
-    # substituting host-derived facts. The real-browser pre-navigation probe below proves whether
-    # the pinned browser actually reproduces these values.
-    preserve_generated_integer_projection(
-        config,
-        "navigator.maxTouchPoints",
-        fingerprint.navigator.maxTouchPoints,
-        0,
-        64,
-    )
-    preserve_generated_integer_projection(
-        config,
-        "screen.availLeft",
-        fingerprint.screen.availLeft,
-        -(2**31),
-        2**31 - 1,
-    )
-    preserve_generated_integer_projection(
-        config,
-        "screen.availTop",
-        fingerprint.screen.availTop,
-        -(2**31),
-        2**31 - 1,
-    )
-    preserve_generated_milliscale_projection(
-        config,
-        "window.devicePixelRatio",
-        fingerprint.screen.devicePixelRatio,
-        250,
-        8_000,
-    )
+    # Camoufox 0.5.5 intentionally leaves locale/DPR outside its BrowserForge mapping, ignores
+    # falsy BrowserForge values, and normalizes negative screen offsets. Preserve only those known
+    # conversion gaps from this exact generated fingerprint; never substitute host-derived facts.
+    # The real-browser pre-navigation probe below proves that the pinned browser reproduces them.
+    preserve_generated_browserforge_projection(config, fingerprint)
     config_bytes = canonical_json(config)
     config_path.write_bytes(config_bytes)
     config_sha256 = sha256_bytes(config_bytes)
