@@ -4,9 +4,7 @@ use crate::operator_flow::RuntimeBundleSelectionPort;
 use crate::runtime_bundle::{
     ApprovedRuntimeBundle, FilesystemRuntimeBundleSelection, RuntimeBundleSelectionError,
 };
-use crate::windows_delivery::{
-    DeliveryActivationOutcome, DeliveryIdentity, DeliveryState,
-};
+use crate::windows_delivery::{DeliveryActivationOutcome, DeliveryIdentity, DeliveryState};
 use crate::windows_delivery_staging::{DeliveryStagingRoot, reopen_staged_delivery};
 use crate::windows_delivery_store::DeliveryStateStore;
 use profile_platform_primitives::{ActorContext, GenerationId, ProfileId};
@@ -117,11 +115,7 @@ impl PendingWindowsDeliveryHealthConfirmation {
     pub(crate) fn confirm_after_runtime_ready(self) -> Result<(), WindowsDeliveryRuntimeError> {
         let mut store = DeliveryStateStore::open(&self.state_root)
             .map_err(|_| WindowsDeliveryRuntimeError::PersistedState)?;
-        match exact_health_state(
-            store.state(),
-            &self.candidate,
-            self.activation_attempt,
-        )? {
+        match exact_health_state(store.state(), &self.candidate, self.activation_attempt)? {
             ExactHealthState::Healthy => return Ok(()),
             ExactHealthState::Pending => {}
         }
@@ -144,11 +138,7 @@ impl PendingWindowsDeliveryHealthConfirmation {
 
         let reopened = DeliveryStateStore::open(&self.state_root)
             .map_err(|_| WindowsDeliveryRuntimeError::PersistedState)?;
-        match exact_health_state(
-            reopened.state(),
-            &self.candidate,
-            self.activation_attempt,
-        )? {
+        match exact_health_state(reopened.state(), &self.candidate, self.activation_attempt)? {
             ExactHealthState::Healthy => Ok(()),
             ExactHealthState::Pending => Err(WindowsDeliveryRuntimeError::PersistedState),
         }
@@ -166,11 +156,7 @@ fn pending_health_confirmation(
     state_root: &Path,
     active: &DeliveryIdentity,
 ) -> Result<Option<PendingWindowsDeliveryHealthConfirmation>, WindowsDeliveryRuntimeError> {
-    match exact_health_state(
-        store.state(),
-        active,
-        store.state().activation_generation(),
-    )? {
+    match exact_health_state(store.state(), active, store.state().activation_generation())? {
         ExactHealthState::Healthy => Ok(None),
         ExactHealthState::Pending => Ok(Some(PendingWindowsDeliveryHealthConfirmation {
             state_root: state_root.to_path_buf(),
@@ -526,7 +512,10 @@ mod tests {
         assert!(reopened.state().active_health_confirmed());
         assert_eq!(reopened.state().active(), Some(&identity));
         assert_eq!(
-            reopened.state().last_activation().map(|value| value.outcome),
+            reopened
+                .state()
+                .last_activation()
+                .map(|value| value.outcome),
             Some(DeliveryActivationOutcome::Healthy)
         );
         assert_eq!(

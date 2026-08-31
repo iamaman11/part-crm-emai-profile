@@ -134,8 +134,7 @@ mod windows {
         let config = ShippingConfig::from_environment()?;
         let active_delivery = ActiveWindowsDeliveryRuntime::resolve_current()
             .map_err(|_| ShippingCompositionError::Configuration)?;
-        let (runtime_root, runtime_bundles, pending_health) =
-            active_delivery.into_shipping_parts();
+        let (runtime_root, runtime_bundles, pending_health) = active_delivery.into_shipping_parts();
 
         let identity = WindowsDeviceIdentity::new(config.device_id.clone());
         let certificate = WindowsMachineCertificate::local_machine_my(
@@ -324,9 +323,9 @@ mod windows {
 
 #[cfg(test)]
 mod tests {
-    use super::{ConfirmedSaveTrigger, ShippingCompositionError, confirmed_save_trigger};
     #[cfg(not(windows))]
     use super::run_claim;
+    use super::{ConfirmedSaveTrigger, ShippingCompositionError, confirmed_save_trigger};
     #[cfg(not(windows))]
     use bridge_domain::ClaimUri;
 
