@@ -1,4 +1,6 @@
-use crate::local_profile::{GenerationWorkspace, LocalProfileError};
+use crate::local_profile::{
+    BROWSER_IDENTITY_RECORD_FILE, GenerationWorkspace, LocalProfileError,
+};
 use browser_execution_domain::{
     BrowserExecutionError, BrowserIdentityManifest, BrowserWriterDecision, BrowserWriterObservation,
     MaterializationBinding, NetworkIdentityDecision, NetworkIdentityObservation,
@@ -12,7 +14,6 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 
 const MATERIALIZATION_SCHEMA: &str = "profile-platform-materialization-v2";
-pub(crate) const BROWSER_IDENTITY_RECORD_FILE: &str = ".profile-browser-identity-v1";
 const BRIDGE_LOCK_FILE: &str = ".profile-platform.lock";
 const BRIDGE_LOCK_SCHEMA: &str = "profile-platform-bridge-lock-v1";
 const FIREFOX_PARENT_LOCK_FILE: &str = ".parentlock";
