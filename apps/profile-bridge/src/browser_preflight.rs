@@ -101,10 +101,9 @@ mod tests {
     use crate::local_profile::{BridgeWorkspaceLock, GenerationWorkspace, MaterializationRoot};
     use crate::operator_flow::BrowserLaunchPreflightPort;
     use crate::runtime_bundle::ApprovedRuntimeBundle;
-    use crate::test_support::remove_test_root;
+    use crate::test_support::{browser_identity_fixture, remove_test_root};
     use browser_execution_domain::{
-        BrowserIdentityManifest, MaterializationBinding, NetworkClass, NetworkIdentityObservation,
-        NetworkIdentityPolicy,
+        MaterializationBinding, NetworkClass, NetworkIdentityObservation, NetworkIdentityPolicy,
     };
     use profile_platform_primitives::{DeviceId, GenerationId, ProfileId, TenantId};
     use runtime_bundle_domain::{
@@ -174,11 +173,10 @@ mod tests {
         let device = DeviceId::parse("device_01JPREFLIGHT")?;
         let workspace = root.create_generation(&tenant, &profile, &generation)?;
         let lock = BridgeWorkspaceLock::acquire(&workspace, &device, 3)?;
-        let identity = BrowserIdentityManifest::new(
-            1,
+        let identity = browser_identity_fixture(
             "0.1.0",
             "a".repeat(64),
-            "camoufox-v1",
+            "profile-stability-v1-probe-test",
             "b".repeat(64),
         )?;
         let binding = MaterializationBinding::new(
