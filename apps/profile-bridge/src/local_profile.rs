@@ -3,6 +3,7 @@ use std::fmt;
 mod filesystem;
 mod lifecycle;
 
+pub(crate) use filesystem::BROWSER_IDENTITY_RECORD_FILE;
 pub use filesystem::{
     BridgeWorkspaceLock, GenerationInventory, GenerationWorkspace, InventoryEntry,
     MaterializationRoot, RecoveryClone,
