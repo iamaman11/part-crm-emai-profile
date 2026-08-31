@@ -33,7 +33,7 @@ impl BrowserIdentityManifest {
         let speech = locale.speech_voices_sha256().unwrap_or(NONE);
         format!(
             concat!(
-                "schema={RECORD_SCHEMA}\n",
+                "schema={}\n",
                 "compatibility_version={}\n",
                 "fingerprint_policy_version={}\n",
                 "runtime_version={}\n",
@@ -73,6 +73,7 @@ impl BrowserIdentityManifest {
                 "languages_sha256={}\n",
                 "speech_voices_sha256={}\n"
             ),
+            RECORD_SCHEMA,
             self.compatibility_version(),
             self.fingerprint_policy_version(),
             self.runtime_version(),
