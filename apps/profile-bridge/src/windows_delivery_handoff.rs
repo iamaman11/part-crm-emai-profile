@@ -195,9 +195,7 @@ impl DeliveryHandoffCoordinator {
         let profile_bridge_root = current_executable
             .parent()
             .ok_or(DeliveryHandoffError::InvalidInstalledLayout)?;
-        if profile_bridge_root.file_name().and_then(OsStr::to_str)
-            != Some(PROFILE_BRIDGE_DIRECTORY)
-        {
+        if profile_bridge_root.file_name().and_then(OsStr::to_str) != Some(PROFILE_BRIDGE_DIRECTORY) {
             return Err(DeliveryHandoffError::InvalidInstalledLayout);
         }
         let release_root = profile_bridge_root
@@ -249,11 +247,8 @@ impl DeliveryHandoffCoordinator {
             .ok_or(DeliveryHandoffError::NoStagedTarget)?;
         self.verify_current_active_source(store.state(), current_executable.as_ref())?;
         let target = self.target_for_identity(&target_identity)?;
-        let handoff = OneShotDeliveryHandoff::new(
-            current_process_id,
-            current_executable.as_ref(),
-            target,
-        )?;
+        let handoff =
+            OneShotDeliveryHandoff::new(current_process_id, current_executable.as_ref(), target)?;
         let evidence = DeliveryHandoffEvidence::activation_started(store.state(), &target_identity)
             .map_err(|_| DeliveryHandoffError::StateMismatch)?;
         let state = store.state().clone();
@@ -283,11 +278,8 @@ impl DeliveryHandoffCoordinator {
         if reopened_target != target {
             return Err(DeliveryHandoffError::InvalidTarget);
         }
-        let handoff = OneShotDeliveryHandoff::new(
-            current_process_id,
-            current_executable.as_ref(),
-            target,
-        )?;
+        let handoff =
+            OneShotDeliveryHandoff::new(current_process_id, current_executable.as_ref(), target)?;
         let evidence = DeliveryHandoffEvidence::recovery_started(
             store.state(),
             source_candidate,
@@ -378,9 +370,7 @@ impl DeliveryHandoffCoordinator {
         state: &DeliveryState,
         current_executable: &Path,
     ) -> Result<(), DeliveryHandoffError> {
-        let active = state
-            .active()
-            .ok_or(DeliveryHandoffError::NoActiveSource)?;
+        let active = state.active().ok_or(DeliveryHandoffError::NoActiveSource)?;
         if !state.active_health_confirmed() {
             return Err(DeliveryHandoffError::StateMismatch);
         }
@@ -406,16 +396,18 @@ impl DeliveryHandoffCoordinator {
         state: &DeliveryState,
         evidence: DeliveryHandoffEvidence,
     ) -> Result<(), DeliveryHandoffError> {
-        let persistence = store.persist_handoff(state, evidence.clone());
+        let persistence_error = store.persist_handoff(state, evidence.clone()).err();
         let reopened = DeliveryStateStore::open(&self.state_root).map_err(|_| {
-            persistence
-                .err()
-                .map_or(DeliveryHandoffError::DurableCommit, DeliveryHandoffError::Store)
+            persistence_error.map_or(
+                DeliveryHandoffError::DurableCommit,
+                DeliveryHandoffError::Store,
+            )
         })?;
         if reopened.state() != state || reopened.handoff() != Some(&evidence) {
-            return Err(persistence
-                .err()
-                .map_or(DeliveryHandoffError::DurableCommit, DeliveryHandoffError::Store));
+            return Err(persistence_error.map_or(
+                DeliveryHandoffError::DurableCommit,
+                DeliveryHandoffError::Store,
+            ));
         }
         Ok(())
     }
@@ -741,13 +733,8 @@ mod tests {
             cms_der_hex: "00".to_owned(),
         })?;
         let mut verifier = AcceptVerifier;
-        let candidate = verify_delivery_candidate(
-            &manifest_bytes,
-            &signature,
-            &trust()?,
-            None,
-            &mut verifier,
-        )?;
+        let candidate =
+            verify_delivery_candidate(&manifest_bytes, &signature, &trust()?, None, &mut verifier)?;
         Ok((candidate, bridge_path, runtime_path))
     }
 
@@ -784,14 +771,14 @@ mod tests {
             .collect::<Vec<_>>();
         assert_eq!(command.get_program(), "powershell.exe");
         assert!(args.iter().any(|arg| arg == POWERSHELL_HANDOFF));
-        assert!(args.iter().all(|arg| !arg.contains("profilebridge://claim")));
         assert!(
-            envs.iter().any(|(key, value)| {
-                key == CURRENT_EXECUTABLE_ENV
-                    && value.as_deref()
-                        == Some(fixture.first_executable.to_string_lossy().as_ref())
-            })
+            args.iter()
+                .all(|arg| !arg.contains("profilebridge://claim"))
         );
+        assert!(envs.iter().any(|(key, value)| {
+            key == CURRENT_EXECUTABLE_ENV
+                && value.as_deref() == Some(fixture.first_executable.to_string_lossy().as_ref())
+        }));
         assert_eq!(handoff.current_process_id(), 42);
         assert_eq!(handoff.target().identity(), &fixture.second);
         Ok(())
@@ -851,7 +838,8 @@ mod tests {
     fn recovery_handoff_consumes_only_r8_verified_lkg_target()
     -> Result<(), Box<dyn std::error::Error>> {
         let fixture = fixture("recovery", true)?;
-        let recovery = DeliveryRecoveryCoordinator::new(fixture.staging.clone(), &fixture.state_root);
+        let recovery =
+            DeliveryRecoveryCoordinator::new(fixture.staging.clone(), &fixture.state_root);
         let disposition = recovery.recover(
             &fixture.second,
             2,
