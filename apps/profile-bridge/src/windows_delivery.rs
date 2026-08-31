@@ -741,7 +741,9 @@ impl fmt::Display for DeliveryStateError {
             Self::HealthPending => {
                 "Windows delivery active release has not passed health confirmation"
             }
-            Self::HealthAttemptMismatch => "Windows delivery health attempt identity is inconsistent",
+            Self::HealthAttemptMismatch => {
+                "Windows delivery health attempt identity is inconsistent"
+            }
             Self::HealthAttemptNotStarted => {
                 "Windows delivery health attempt has not durably started"
             }

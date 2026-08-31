@@ -589,7 +589,10 @@ mod tests {
             ),
             Err(DeliveryRecoveryError::StateMismatch)
         );
-        assert_eq!(DeliveryStateStore::open(&pending.state_root)?.state(), &before);
+        assert_eq!(
+            DeliveryStateStore::open(&pending.state_root)?.state(),
+            &before
+        );
 
         let healthy = fixture_with_lkg("healthy")?;
         let mut store = DeliveryStateStore::open(&healthy.state_root)?;
@@ -608,7 +611,10 @@ mod tests {
             ),
             Err(DeliveryRecoveryError::StateMismatch)
         );
-        assert_eq!(DeliveryStateStore::open(&healthy.state_root)?.state(), &before);
+        assert_eq!(
+            DeliveryStateStore::open(&healthy.state_root)?.state(),
+            &before
+        );
         Ok(())
     }
 
