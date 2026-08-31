@@ -49,6 +49,7 @@ FINGERPRINT_PROBE = """
   languages: Array.from(navigator.languages || []),
   hardwareConcurrency: navigator.hardwareConcurrency,
   deviceMemory: navigator.deviceMemory,
+  maxTouchPoints: navigator.maxTouchPoints,
   screen: {
     width: screen.width,
     height: screen.height,
@@ -619,8 +620,9 @@ def controlled_close_candidate(state: dict[str, Any] | None) -> bool:
 
 def materialize_candidate_identity(root: Path) -> dict[str, str]:
     """Create exact generation identity once under an already acquired Bridge writer lock."""
+    from camoufox.fingerprints import generate_fingerprint
     from camoufox.sync_api import Camoufox
-    from camoufox.utils import launch_options
+    from camoufox.utils import get_screen_cons, launch_options
 
     lock, runtime_lock_sha256 = load_runtime_lock()
     verify_python_components(lock)
@@ -637,15 +639,41 @@ def materialize_candidate_identity(root: Path) -> dict[str, str]:
         raise RuntimeContractError("candidate generation has an active/ambiguous Firefox writer")
 
     browser_selector = camoufox_browser_selector(lock)
+    browser_env = browser_environment()
+    headless_mode = resolve_headless_mode()
+    fingerprint = generate_fingerprint(
+        screen=get_screen_cons(headless_mode or "DISPLAY" in browser_env),
+        os="windows",
+    )
+    max_touch_points = fingerprint.navigator.maxTouchPoints
+    if (
+        isinstance(max_touch_points, bool)
+        or not isinstance(max_touch_points, int)
+        or not 0 <= max_touch_points <= 64
+    ):
+        raise RuntimeContractError("generated maxTouchPoints identity is invalid")
     with contextlib.redirect_stdout(sys.stderr):
         options = launch_options(
             **browser_selector,
             enable_cache=True,
-            env=browser_environment(),
-            headless=resolve_headless_mode(),
+            env=browser_env,
+            fingerprint=fingerprint,
+            headless=headless_mode,
+            i_know_what_im_doing=True,
             os="windows",
         )
     config = extract_camoufox_config(options)
+    configured_max_touch_points = config.get("navigator.maxTouchPoints")
+    if (
+        configured_max_touch_points is not None
+        and configured_max_touch_points != max_touch_points
+    ):
+        raise RuntimeContractError("materialized maxTouchPoints identity drifted")
+    # Camoufox 0.5.5 drops falsy BrowserForge values while converting a fingerprint.
+    # Preserve the exact generated value in the canonical runtime projection instead of
+    # substituting a host-derived fact. The real-browser pre-navigation probe below proves
+    # whether the pinned browser actually reproduces this value.
+    config["navigator.maxTouchPoints"] = max_touch_points
     config_bytes = canonical_json(config)
     config_path.write_bytes(config_bytes)
     config_sha256 = sha256_bytes(config_bytes)
