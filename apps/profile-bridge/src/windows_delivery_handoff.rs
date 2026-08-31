@@ -283,8 +283,9 @@ mod tests {
             OneShotDeliveryHandoff::new(0, target.profile_bridge_executable(), target.clone()),
             Err(DeliveryHandoffError::InvalidCurrentProcess)
         );
+        let same_executable = target.profile_bridge_executable().to_path_buf();
         assert_eq!(
-            OneShotDeliveryHandoff::new(7, target.profile_bridge_executable(), target),
+            OneShotDeliveryHandoff::new(7, &same_executable, target),
             Err(DeliveryHandoffError::InvalidCurrentProcess)
         );
         Ok(())
