@@ -192,11 +192,7 @@ impl StartedWindowsDeliveryHealthConfirmation {
         if store.persist_preserving_handoff(&next).is_err() {
             let reopened = DeliveryStateStore::open(&self.state_root)
                 .map_err(|_| WindowsDeliveryRuntimeError::PersistedState)?;
-            exact_arrived_activation_handoff(
-                &reopened,
-                &self.candidate,
-                self.activation_attempt,
-            )?;
+            exact_arrived_activation_handoff(&reopened, &self.candidate, self.activation_attempt)?;
             return match exact_health_state(
                 reopened.state(),
                 &self.candidate,
@@ -488,9 +484,9 @@ impl std::error::Error for WindowsDeliveryRuntimeError {}
 mod tests {
     use super::{
         ExactHealthState, InstalledDeliveryLayout, RUNTIME_MANIFEST, RUNTIME_RELEASE_PREFIX,
-        RuntimeBundleSelectionError, WindowsDeliveryRuntimeError,
-        exact_arrived_activation_handoff, exact_health_state, pending_health_confirmation,
-        valid_runtime_release_id, verify_embedded_release_id,
+        RuntimeBundleSelectionError, WindowsDeliveryRuntimeError, exact_arrived_activation_handoff,
+        exact_health_state, pending_health_confirmation, valid_runtime_release_id,
+        verify_embedded_release_id,
     };
     use crate::windows_delivery::{DeliveryActivationOutcome, DeliveryIdentity, DeliveryState};
     use crate::windows_delivery_store::{
