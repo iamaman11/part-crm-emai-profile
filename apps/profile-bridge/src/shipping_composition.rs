@@ -134,7 +134,9 @@ mod windows {
         let config = ShippingConfig::from_environment()?;
         let active_delivery = ActiveWindowsDeliveryRuntime::resolve_current()
             .map_err(|_| ShippingCompositionError::Configuration)?;
-        let (runtime_root, runtime_bundles, pending_health) = active_delivery.into_shipping_parts();
+        let pending_health = active_delivery.pending_health_confirmation();
+        let runtime_root = active_delivery.runtime_root().to_path_buf();
+        let runtime_bundles = active_delivery.into_bundle_selection();
 
         let identity = WindowsDeviceIdentity::new(config.device_id.clone());
         let certificate = WindowsMachineCertificate::local_machine_my(

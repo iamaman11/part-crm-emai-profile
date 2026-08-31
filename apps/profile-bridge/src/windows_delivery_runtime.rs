@@ -88,19 +88,15 @@ impl ActiveWindowsDeliveryRuntime {
     }
 
     #[must_use]
-    pub fn into_bundle_selection(self) -> DeliveryBoundRuntimeBundleSelection {
-        self.bundles
+    pub(crate) fn pending_health_confirmation(
+        &self,
+    ) -> Option<PendingWindowsDeliveryHealthConfirmation> {
+        self.pending_health.clone()
     }
 
     #[must_use]
-    pub(crate) fn into_shipping_parts(
-        self,
-    ) -> (
-        PathBuf,
-        DeliveryBoundRuntimeBundleSelection,
-        Option<PendingWindowsDeliveryHealthConfirmation>,
-    ) {
-        (self.runtime_root, self.bundles, self.pending_health)
+    pub fn into_bundle_selection(self) -> DeliveryBoundRuntimeBundleSelection {
+        self.bundles
     }
 }
 
