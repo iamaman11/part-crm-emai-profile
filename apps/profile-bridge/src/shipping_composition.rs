@@ -8,6 +8,7 @@ pub enum ShippingCompositionError {
     Configuration,
     Clock,
     ControlPlane,
+    DeliveryHealth,
     Operator,
     CommittedRecoveryRequired,
 }
@@ -19,6 +20,9 @@ impl core::fmt::Display for ShippingCompositionError {
             Self::Configuration => "shipping Profile Bridge configuration is invalid",
             Self::Clock => "shipping Profile Bridge clock is unavailable",
             Self::ControlPlane => "shipping Profile Bridge control-plane lease state is invalid",
+            Self::DeliveryHealth => {
+                "shipping Profile Bridge candidate health could not be confirmed"
+            }
             Self::Operator => "shipping Profile Bridge operator flow failed",
             Self::CommittedRecoveryRequired => {
                 "generation successor committed but local recovery is required"
@@ -130,8 +134,8 @@ mod windows {
         let config = ShippingConfig::from_environment()?;
         let active_delivery = ActiveWindowsDeliveryRuntime::resolve_current()
             .map_err(|_| ShippingCompositionError::Configuration)?;
-        let runtime_root = active_delivery.runtime_root().to_path_buf();
-        let runtime_bundles = active_delivery.into_bundle_selection();
+        let (runtime_root, runtime_bundles, pending_health) =
+            active_delivery.into_shipping_parts();
 
         let identity = WindowsDeviceIdentity::new(config.device_id.clone());
         let certificate = WindowsMachineCertificate::local_machine_my(
@@ -188,14 +192,23 @@ mod windows {
             process,
             camouhost,
         );
+        let opened_at = now()?;
         operator
             .open_authoritative(
                 claim,
                 &materialization_root,
                 &mut generation_downloader,
-                now()?,
+                opened_at,
             )
             .map_err(|_| ShippingCompositionError::Operator)?;
+
+        if let Some(confirmation) = pending_health
+            && confirmation.confirm_after_runtime_ready().is_err()
+        {
+            let abort_at = now().unwrap_or(opened_at);
+            let _ = operator.abort(abort_at);
+            return Err(ShippingCompositionError::DeliveryHealth);
+        }
 
         let mut next_heartbeat_deadline = next_heartbeat_at(
             operator
@@ -311,9 +324,10 @@ mod windows {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        ConfirmedSaveTrigger, ShippingCompositionError, confirmed_save_trigger, run_claim,
-    };
+    use super::{ConfirmedSaveTrigger, ShippingCompositionError, confirmed_save_trigger};
+    #[cfg(not(windows))]
+    use super::run_claim;
+    #[cfg(not(windows))]
     use bridge_domain::ClaimUri;
 
     #[test]

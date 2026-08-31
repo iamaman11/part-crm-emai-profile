@@ -4,6 +4,9 @@ use crate::operator_flow::RuntimeBundleSelectionPort;
 use crate::runtime_bundle::{
     ApprovedRuntimeBundle, FilesystemRuntimeBundleSelection, RuntimeBundleSelectionError,
 };
+use crate::windows_delivery::{
+    DeliveryActivationOutcome, DeliveryIdentity, DeliveryState,
+};
 use crate::windows_delivery_staging::{DeliveryStagingRoot, reopen_staged_delivery};
 use crate::windows_delivery_store::DeliveryStateStore;
 use profile_platform_primitives::{ActorContext, GenerationId, ProfileId};
@@ -25,6 +28,7 @@ const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0400;
 pub struct ActiveWindowsDeliveryRuntime {
     runtime_root: PathBuf,
     bundles: DeliveryBoundRuntimeBundleSelection,
+    pending_health: Option<PendingWindowsDeliveryHealthConfirmation>,
 }
 
 impl ActiveWindowsDeliveryRuntime {
@@ -48,6 +52,7 @@ impl ActiveWindowsDeliveryRuntime {
             .active()
             .cloned()
             .ok_or(WindowsDeliveryRuntimeError::NoActiveDelivery)?;
+        let pending_health = pending_health_confirmation(&state, &layout.state_root, &active)?;
         let staged = reopen_staged_delivery(&staging, &active)
             .map_err(|_| WindowsDeliveryRuntimeError::StagedDelivery)?;
 
@@ -69,12 +74,13 @@ impl ActiveWindowsDeliveryRuntime {
         let runtime_root = staged.runtime_root();
         let bundles = DeliveryBoundRuntimeBundleSelection::open(
             runtime_root.clone(),
-            active.runtime_bundle_release_id,
+            active.runtime_bundle_release_id.clone(),
         )
         .map_err(|_| WindowsDeliveryRuntimeError::RuntimeIdentity)?;
         Ok(Self {
             runtime_root,
             bundles,
+            pending_health,
         })
     }
 
@@ -86,6 +92,118 @@ impl ActiveWindowsDeliveryRuntime {
     #[must_use]
     pub fn into_bundle_selection(self) -> DeliveryBoundRuntimeBundleSelection {
         self.bundles
+    }
+
+    #[must_use]
+    pub(crate) fn into_shipping_parts(
+        self,
+    ) -> (
+        PathBuf,
+        DeliveryBoundRuntimeBundleSelection,
+        Option<PendingWindowsDeliveryHealthConfirmation>,
+    ) {
+        (self.runtime_root, self.bundles, self.pending_health)
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct PendingWindowsDeliveryHealthConfirmation {
+    state_root: PathBuf,
+    candidate: DeliveryIdentity,
+    activation_attempt: u64,
+}
+
+impl PendingWindowsDeliveryHealthConfirmation {
+    pub(crate) fn confirm_after_runtime_ready(self) -> Result<(), WindowsDeliveryRuntimeError> {
+        let mut store = DeliveryStateStore::open(&self.state_root)
+            .map_err(|_| WindowsDeliveryRuntimeError::PersistedState)?;
+        match exact_health_state(
+            store.state(),
+            &self.candidate,
+            self.activation_attempt,
+        )? {
+            ExactHealthState::Healthy => return Ok(()),
+            ExactHealthState::Pending => {}
+        }
+
+        let mut next = store.state().clone();
+        next.confirm_health()
+            .map_err(|_| WindowsDeliveryRuntimeError::PersistedState)?;
+        if store.persist(&next).is_err() {
+            let reopened = DeliveryStateStore::open(&self.state_root)
+                .map_err(|_| WindowsDeliveryRuntimeError::PersistedState)?;
+            return match exact_health_state(
+                reopened.state(),
+                &self.candidate,
+                self.activation_attempt,
+            )? {
+                ExactHealthState::Healthy => Ok(()),
+                ExactHealthState::Pending => Err(WindowsDeliveryRuntimeError::PersistedState),
+            };
+        }
+
+        let reopened = DeliveryStateStore::open(&self.state_root)
+            .map_err(|_| WindowsDeliveryRuntimeError::PersistedState)?;
+        match exact_health_state(
+            reopened.state(),
+            &self.candidate,
+            self.activation_attempt,
+        )? {
+            ExactHealthState::Healthy => Ok(()),
+            ExactHealthState::Pending => Err(WindowsDeliveryRuntimeError::PersistedState),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ExactHealthState {
+    Pending,
+    Healthy,
+}
+
+fn pending_health_confirmation(
+    store: &DeliveryStateStore,
+    state_root: &Path,
+    active: &DeliveryIdentity,
+) -> Result<Option<PendingWindowsDeliveryHealthConfirmation>, WindowsDeliveryRuntimeError> {
+    match exact_health_state(
+        store.state(),
+        active,
+        store.state().activation_generation(),
+    )? {
+        ExactHealthState::Healthy => Ok(None),
+        ExactHealthState::Pending => Ok(Some(PendingWindowsDeliveryHealthConfirmation {
+            state_root: state_root.to_path_buf(),
+            candidate: active.clone(),
+            activation_attempt: store.state().activation_generation(),
+        })),
+    }
+}
+
+fn exact_health_state(
+    state: &DeliveryState,
+    candidate: &DeliveryIdentity,
+    activation_attempt: u64,
+) -> Result<ExactHealthState, WindowsDeliveryRuntimeError> {
+    state
+        .validate_persisted()
+        .map_err(|_| WindowsDeliveryRuntimeError::PersistedState)?;
+    if activation_attempt == 0
+        || state.active() != Some(candidate)
+        || state.activation_generation() != activation_attempt
+    {
+        return Err(WindowsDeliveryRuntimeError::PersistedState);
+    }
+    let activation = state
+        .last_activation()
+        .ok_or(WindowsDeliveryRuntimeError::PersistedState)?;
+    if activation.attempt != activation_attempt || activation.candidate != *candidate {
+        return Err(WindowsDeliveryRuntimeError::PersistedState);
+    }
+    match (state.active_health_confirmed(), activation.outcome) {
+        (false, DeliveryActivationOutcome::PendingHealth) => Ok(ExactHealthState::Pending),
+        (true, DeliveryActivationOutcome::Healthy) => Ok(ExactHealthState::Healthy),
+        _ => Err(WindowsDeliveryRuntimeError::PersistedState),
     }
 }
 
@@ -270,10 +388,12 @@ impl std::error::Error for WindowsDeliveryRuntimeError {}
 #[cfg(test)]
 mod tests {
     use super::{
-        InstalledDeliveryLayout, RUNTIME_MANIFEST, RUNTIME_RELEASE_PREFIX,
-        RuntimeBundleSelectionError, WindowsDeliveryRuntimeError, valid_runtime_release_id,
-        verify_embedded_release_id,
+        ExactHealthState, InstalledDeliveryLayout, RUNTIME_MANIFEST, RUNTIME_RELEASE_PREFIX,
+        RuntimeBundleSelectionError, WindowsDeliveryRuntimeError, exact_health_state,
+        pending_health_confirmation, valid_runtime_release_id, verify_embedded_release_id,
     };
+    use crate::windows_delivery::{DeliveryActivationOutcome, DeliveryIdentity, DeliveryState};
+    use crate::windows_delivery_store::DeliveryStateStore;
     use serde_json::json;
     use std::fs;
     use std::path::{Path, PathBuf};
@@ -299,6 +419,33 @@ mod tests {
         fn drop(&mut self) {
             let _ = fs::remove_dir_all(&self.0);
         }
+    }
+
+    fn delivery_identity(suffix: char) -> DeliveryIdentity {
+        let digest: String = std::iter::repeat_n(suffix, 64).collect();
+        DeliveryIdentity {
+            sequence: 1,
+            release_set_id: format!("release-set-v3-sha256-{digest}"),
+            manifest_sha256: digest.clone(),
+            profile_bridge_release_id: format!("profile-bridge-v2-sha256-{digest}"),
+            runtime_bundle_release_id: format!("runtime-bundle-v2-sha256-{digest}"),
+        }
+    }
+
+    fn pending_state(identity: &DeliveryIdentity) -> Result<DeliveryState, serde_json::Error> {
+        serde_json::from_value(json!({
+            "active": identity,
+            "active_health_confirmed": false,
+            "last_known_good": null,
+            "staged": null,
+            "activation_generation": 1,
+            "last_activation": {
+                "attempt": 1,
+                "candidate": identity,
+                "outcome": "pending_health"
+            },
+            "last_failure": null
+        }))
     }
 
     #[test]
@@ -351,6 +498,56 @@ mod tests {
                 &format!("{RUNTIME_RELEASE_PREFIX}{}", "c".repeat(64))
             ),
             Err(RuntimeBundleSelectionError::InvalidRuntime)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn pending_candidate_health_confirmation_is_exact_and_idempotent()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let directory = TestDirectory::create("pending-health")?;
+        let state_root = directory.0.join("state");
+        let mut store = DeliveryStateStore::initialize(&state_root)?;
+        let identity = delivery_identity('d');
+        let pending = pending_state(&identity)?;
+        pending.validate_persisted()?;
+        store.persist(&pending)?;
+
+        assert_eq!(
+            exact_health_state(store.state(), &identity, 1)?,
+            ExactHealthState::Pending
+        );
+        let confirmation = pending_health_confirmation(&store, &state_root, &identity)?
+            .ok_or("pending candidate did not expose exact health confirmation")?;
+        confirmation.clone().confirm_after_runtime_ready()?;
+        confirmation.confirm_after_runtime_ready()?;
+
+        let reopened = DeliveryStateStore::open(&state_root)?;
+        assert!(reopened.state().active_health_confirmed());
+        assert_eq!(reopened.state().active(), Some(&identity));
+        assert_eq!(
+            reopened.state().last_activation().map(|value| value.outcome),
+            Some(DeliveryActivationOutcome::Healthy)
+        );
+        assert_eq!(
+            exact_health_state(reopened.state(), &identity, 1)?,
+            ExactHealthState::Healthy
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn health_confirmation_rejects_candidate_or_attempt_substitution()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let identity = delivery_identity('e');
+        let state = pending_state(&identity)?;
+        assert_eq!(
+            exact_health_state(&state, &delivery_identity('f'), 1),
+            Err(WindowsDeliveryRuntimeError::PersistedState)
+        );
+        assert_eq!(
+            exact_health_state(&state, &identity, 2),
+            Err(WindowsDeliveryRuntimeError::PersistedState)
         );
         Ok(())
     }
