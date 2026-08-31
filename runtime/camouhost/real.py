@@ -382,6 +382,31 @@ def preserve_generated_integer_projection(
     config[key] = value
 
 
+def preserve_generated_milliscale_projection(
+    config: dict[str, Any],
+    key: str,
+    value: Any,
+    minimum_milli: int,
+    maximum_milli: int,
+) -> None:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise RuntimeContractError(f"generated {key} identity is invalid")
+    numeric = float(value)
+    milli = numeric * 1000.0
+    if (
+        not minimum_milli <= milli <= maximum_milli
+        or abs(round(milli) - milli) > 1e-9
+    ):
+        raise RuntimeContractError(f"generated {key} identity is invalid")
+    configured = config.get(key)
+    if configured is not None:
+        if isinstance(configured, bool) or not isinstance(configured, (int, float)):
+            raise RuntimeContractError(f"materialized {key} identity drifted")
+        if float(configured) != numeric:
+            raise RuntimeContractError(f"materialized {key} identity drifted")
+    config[key] = value
+
+
 def packaged_windows_browser(lock: dict[str, Any]) -> Path:
     distribution = lock.get("windows_distribution")
     if not isinstance(distribution, dict):
@@ -678,8 +703,8 @@ def materialize_candidate_identity(root: Path) -> dict[str, str]:
             os="windows",
         )
     config = extract_camoufox_config(options)
-    # Camoufox 0.5.5 drops falsy BrowserForge values while converting a fingerprint.
-    # Preserve policy-relevant integer values from the exact same generated fingerprint instead of
+    # Camoufox 0.5.5 may omit BrowserForge values while converting a fingerprint.
+    # Preserve policy-relevant values from the exact same generated fingerprint instead of
     # substituting host-derived facts. The real-browser pre-navigation probe below proves whether
     # the pinned browser actually reproduces these values.
     preserve_generated_integer_projection(
@@ -702,6 +727,13 @@ def materialize_candidate_identity(root: Path) -> dict[str, str]:
         fingerprint.screen.availTop,
         -(2**31),
         2**31 - 1,
+    )
+    preserve_generated_milliscale_projection(
+        config,
+        "window.devicePixelRatio",
+        fingerprint.screen.devicePixelRatio,
+        250,
+        8_000,
     )
     config_bytes = canonical_json(config)
     config_path.write_bytes(config_bytes)
