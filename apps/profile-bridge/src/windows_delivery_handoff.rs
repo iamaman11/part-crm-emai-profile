@@ -390,8 +390,11 @@ impl DeliveryHandoffCoordinator {
                 DeliveryHandoffKind::Recovery => {
                     self.verify_current_identity(evidence.source_candidate(), current_executable)?;
                     let target = self.target_for_identity(evidence.target())?;
-                    let handoff =
-                        OneShotDeliveryHandoff::new(current_process_id, current_executable, target)?;
+                    let handoff = OneShotDeliveryHandoff::new(
+                        current_process_id,
+                        current_executable,
+                        target,
+                    )?;
                     schedule(&handoff)?;
                     Ok(DeliveryHandoffRestartDisposition::TransferScheduled)
                 }
@@ -837,9 +840,7 @@ mod tests {
         })
     }
 
-    fn first_install_started_fixture(
-        label: &str,
-    ) -> Result<Fixture, Box<dyn std::error::Error>> {
+    fn first_install_started_fixture(label: &str) -> Result<Fixture, Box<dyn std::error::Error>> {
         let directory = TestDirectory::create(label)?;
         let releases = directory.0.join(RELEASES_DIRECTORY);
         fs::create_dir(&releases)?;
@@ -851,11 +852,8 @@ mod tests {
         let mut reader = MemoryArchiveReader::for_release("first");
         let stage = stage_verified_delivery(&staging, &candidate, &bridge, &runtime, &mut reader)?;
         let identity = candidate.identity();
-        let executable = fs::canonicalize(
-            stage
-                .profile_bridge_root()
-                .join(PROFILE_BRIDGE_EXECUTABLE),
-        )?;
+        let executable =
+            fs::canonicalize(stage.profile_bridge_root().join(PROFILE_BRIDGE_EXECUTABLE))?;
         let mut state = DeliveryState::default();
         state.stage(&candidate)?;
         state.activate_staged(true)?;
@@ -1117,7 +1115,10 @@ mod tests {
             |_| Ok(()),
         )?;
         let before = DeliveryStateStore::open(&fixture.state_root)?;
-        let evidence = before.handoff().cloned().ok_or("missing recovery handoff")?;
+        let evidence = before
+            .handoff()
+            .cloned()
+            .ok_or("missing recovery handoff")?;
 
         let scheduled = Cell::new(false);
         assert_eq!(
@@ -1159,9 +1160,11 @@ mod tests {
             return Err("expected verified LKG".into());
         };
         assert_eq!(target.identity(), &fixture.first);
-        assert!(DeliveryStateStore::open(&fixture.state_root)?
-            .handoff()
-            .is_none());
+        assert!(
+            DeliveryStateStore::open(&fixture.state_root)?
+                .handoff()
+                .is_none()
+        );
 
         let scheduled = Cell::new(false);
         assert_eq!(
