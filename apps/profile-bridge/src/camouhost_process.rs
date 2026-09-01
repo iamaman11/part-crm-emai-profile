@@ -1,3 +1,6 @@
+mod browser_visible_wire;
+
+use self::browser_visible_wire::verify_browser_visible_payload;
 use crate::ProcessControlPort;
 use crate::browser_execution::BrowserLaunchBlocker;
 use crate::browser_preflight::{BoundBrowserLaunchPreflight, BrowserRuntimeObservationPort};
@@ -5,7 +8,7 @@ use crate::local_profile::GenerationWorkspace;
 use crate::operator_flow::BrowserLaunchPreflightPort;
 use crate::runtime_bundle::ApprovedRuntimeBundle;
 use bridge_domain::{BridgePortError, CAMOUHOST_IPC_VERSION, CamouhostMessage, CamouhostPort};
-use browser_execution_domain::{MaterializationBinding, NetworkIdentityPolicy};
+use browser_execution_domain::{MaterializationBinding, NetworkIdentityPolicy, ProfileStableIdentity};
 use profile_platform_primitives::{DeviceId, SessionId};
 use runtime_bundle_domain::BundleRelativePath;
 use sha2::{Digest, Sha256};
@@ -29,9 +32,12 @@ const WINDOWS_BROWSER_EXECUTABLE: &str = "browser/camoufox.exe";
 #[cfg(windows)]
 const WINDOWS_PYTHON_EXECUTABLE: &str = "python/python.exe";
 const MAX_CONFIG_BYTES: u64 = 1024 * 1024;
-const MAX_IPC_RESPONSE_BYTES: usize = 1024;
+const MAX_IPC_REQUEST_BYTES: usize = 8 * 1024;
+const MAX_IPC_RESPONSE_BYTES: usize = 1024 * 1024;
 const HELLO_RESPONSE_TIMEOUT: Duration = Duration::from_secs(10);
 const LAUNCH_RESPONSE_TIMEOUT: Duration = Duration::from_secs(120);
+const BROWSER_VISIBLE_RESPONSE_TIMEOUT: Duration = Duration::from_secs(30);
+const NAVIGATION_RESPONSE_TIMEOUT: Duration = Duration::from_secs(120);
 const OBSERVE_CLOSE_RESPONSE_TIMEOUT: Duration = Duration::from_secs(5);
 const CLOSE_RESPONSE_TIMEOUT: Duration = Duration::from_secs(30);
 const PROCESS_EXIT_TIMEOUT: Duration = Duration::from_secs(15);
@@ -87,6 +93,7 @@ struct RuntimeLaunchBinding {
     runtime_lock_sha256: String,
     fingerprint_config_sha256: String,
     profile_stable_probe_sha256: String,
+    profile_stable_identity: ProfileStableIdentity,
     entrypoint_sha256: String,
     #[cfg(windows)]
     browser_sha256: String,
@@ -177,6 +184,7 @@ fn validate_runtime_identity(
         runtime_lock_sha256,
         fingerprint_config_sha256: config_sha256,
         profile_stable_probe_sha256: probe_sha256.to_owned(),
+        profile_stable_identity: browser_identity.profile_stable_identity().clone(),
         entrypoint_sha256,
         #[cfg(windows)]
         browser_sha256,
@@ -287,6 +295,8 @@ struct ProcessState {
     stdin: Option<ChildStdin>,
     responses: Option<Receiver<Result<String, BridgePortError>>>,
     active_session: Option<SessionId>,
+    profile_stable_identity: Option<ProfileStableIdentity>,
+    navigation_target: Option<String>,
 }
 
 impl ProcessState {
@@ -296,6 +306,8 @@ impl ProcessState {
             stdin: None,
             responses: None,
             active_session: None,
+            profile_stable_identity: None,
+            navigation_target: None,
         }
     }
 
@@ -304,6 +316,8 @@ impl ProcessState {
         self.stdin = None;
         self.responses = None;
         self.active_session = None;
+        self.profile_stable_identity = None;
+        self.navigation_target = None;
     }
 }
 
@@ -422,9 +436,6 @@ impl ManagedCamouhostProcess {
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null());
-        if let Some(url) = &self.config.initial_url {
-            command.env("CAMOUHOST_INITIAL_URL", url);
-        }
         if let Some(path) = &self.config.proxy_config_path {
             command.env("CAMOUHOST_PROXY_CONFIG_PATH", path);
         }
@@ -479,6 +490,8 @@ impl ProcessControlPort for ManagedCamouhostProcess {
         state.stdin = Some(stdin);
         state.responses = Some(spawn_response_reader(stdout));
         state.active_session = Some(session_id.clone());
+        state.profile_stable_identity = Some(binding.profile_stable_identity);
+        state.navigation_target = self.config.initial_url.clone();
         state.child = Some(child);
         Ok(())
     }
@@ -566,17 +579,120 @@ impl CamouhostPort for ManagedCamouhostIpc {
         &mut self,
         message: &CamouhostMessage,
     ) -> Result<CamouhostMessage, BridgePortError> {
-        exchange_shared(&self.shared, message)
+        match message {
+            CamouhostMessage::Launch { session_id } => {
+                launch_with_browser_visible_admission(&self.shared, session_id)
+            }
+            _ => exchange_shared(&self.shared, message),
+        }
     }
+}
+
+fn launch_with_browser_visible_admission(
+    shared: &Arc<Mutex<ProcessState>>,
+    session_id: &SessionId,
+) -> Result<CamouhostMessage, BridgePortError> {
+    let ready = exchange_shared(
+        shared,
+        &CamouhostMessage::Launch {
+            session_id: session_id.clone(),
+        },
+    )?;
+    if ready
+        != (CamouhostMessage::Ready {
+            session_id: session_id.clone(),
+        })
+    {
+        return Err(BridgePortError::InvalidResponse);
+    }
+
+    let observation_frame = exchange_raw_shared(
+        shared,
+        &format!("observe_browser_visible|{}", session_id.as_str()),
+        BROWSER_VISIBLE_RESPONSE_TIMEOUT,
+    )?;
+    let payload = browser_visible_payload(&observation_frame, session_id)?;
+    let expected = {
+        let state = shared.lock().map_err(|_| BridgePortError::Unavailable)?;
+        if state.active_session.as_ref() != Some(session_id) {
+            return Err(BridgePortError::InvalidResponse);
+        }
+        state
+            .profile_stable_identity
+            .clone()
+            .ok_or(BridgePortError::InvalidResponse)?
+    };
+    verify_browser_visible_payload(&expected, &payload)
+        .map_err(|_| BridgePortError::InvalidResponse)?;
+
+    let navigation_target = {
+        let state = shared.lock().map_err(|_| BridgePortError::Unavailable)?;
+        if state.active_session.as_ref() != Some(session_id) {
+            return Err(BridgePortError::InvalidResponse);
+        }
+        state.navigation_target.clone()
+    };
+    let target_hex = navigation_target
+        .as_deref()
+        .map(hex_encode)
+        .unwrap_or_default();
+    let admitted = exchange_raw_shared(
+        shared,
+        &format!("admit_navigation|{}|{target_hex}", session_id.as_str()),
+        NAVIGATION_RESPONSE_TIMEOUT,
+    )?;
+    if admitted != format!("navigated|{}", session_id.as_str()) {
+        return Err(BridgePortError::InvalidResponse);
+    }
+
+    Ok(CamouhostMessage::Ready {
+        session_id: session_id.clone(),
+    })
+}
+
+fn browser_visible_payload(
+    frame: &str,
+    session_id: &SessionId,
+) -> Result<Vec<u8>, BridgePortError> {
+    let mut parts = frame.splitn(3, '|');
+    if parts.next() != Some("browser_visible")
+        || parts.next() != Some(session_id.as_str())
+    {
+        return Err(BridgePortError::InvalidResponse);
+    }
+    let payload_hex = parts.next().ok_or(BridgePortError::InvalidResponse)?;
+    if payload_hex.is_empty() || payload_hex.len() % 2 != 0 {
+        return Err(BridgePortError::InvalidResponse);
+    }
+    decode_hex(payload_hex)
 }
 
 fn exchange_shared(
     shared: &Arc<Mutex<ProcessState>>,
     message: &CamouhostMessage,
 ) -> Result<CamouhostMessage, BridgePortError> {
-    let mut state = shared.lock().map_err(|_| BridgePortError::Unavailable)?;
     let frame = request_frame(message)?;
-    let timeout = response_timeout(message)?;
+    let response = exchange_raw_shared(shared, &frame, response_timeout(message)?)?;
+    let parsed =
+        CamouhostMessage::parse(&response).map_err(|_| BridgePortError::InvalidResponse)?;
+    parsed
+        .validate_version()
+        .map_err(|_| BridgePortError::InvalidResponse)?;
+    Ok(parsed)
+}
+
+fn exchange_raw_shared(
+    shared: &Arc<Mutex<ProcessState>>,
+    frame: &str,
+    timeout: Duration,
+) -> Result<String, BridgePortError> {
+    if frame.is_empty()
+        || frame.len() > MAX_IPC_REQUEST_BYTES
+        || frame.contains(['\n', '\r', '\0'])
+    {
+        return Err(BridgePortError::InvalidResponse);
+    }
+    let mut state = shared.lock().map_err(|_| BridgePortError::Unavailable)?;
     let stdin = state.stdin.as_mut().ok_or(BridgePortError::Unavailable)?;
     stdin
         .write_all(frame.as_bytes())
@@ -587,13 +703,7 @@ fn exchange_shared(
         .responses
         .as_ref()
         .ok_or(BridgePortError::Unavailable)?;
-    let response = receive_response(responses, timeout)?;
-    let parsed =
-        CamouhostMessage::parse(&response).map_err(|_| BridgePortError::InvalidResponse)?;
-    parsed
-        .validate_version()
-        .map_err(|_| BridgePortError::InvalidResponse)?;
-    Ok(parsed)
+    receive_response(responses, timeout)
 }
 
 fn spawn_response_reader(stdout: ChildStdout) -> Receiver<Result<String, BridgePortError>> {
@@ -695,6 +805,33 @@ fn request_frame(message: &CamouhostMessage) -> Result<String, BridgePortError> 
     }
 }
 
+fn hex_encode(bytes: &str) -> String {
+    let mut encoded = String::with_capacity(bytes.len() * 2);
+    for byte in bytes.as_bytes() {
+        encoded.push(char::from(LOWER_HEX[usize::from(byte >> 4)]));
+        encoded.push(char::from(LOWER_HEX[usize::from(byte & 0x0f)]));
+    }
+    encoded
+}
+
+fn decode_hex(value: &str) -> Result<Vec<u8>, BridgePortError> {
+    let mut decoded = Vec::with_capacity(value.len() / 2);
+    for pair in value.as_bytes().chunks_exact(2) {
+        let high = hex_nibble(pair[0]).ok_or(BridgePortError::InvalidResponse)?;
+        let low = hex_nibble(pair[1]).ok_or(BridgePortError::InvalidResponse)?;
+        decoded.push((high << 4) | low);
+    }
+    Ok(decoded)
+}
+
+fn hex_nibble(value: u8) -> Option<u8> {
+    match value {
+        b'0'..=b'9' => Some(value - b'0'),
+        b'a'..=b'f' => Some(value - b'a' + 10),
+        _ => None,
+    }
+}
+
 fn verify_file_digest(path: &Path, expected: &str) -> Result<(), BridgePortError> {
     let metadata = fs::symlink_metadata(path).map_err(|_| BridgePortError::Unavailable)?;
     if metadata.file_type().is_symlink() || !metadata.is_file() {
@@ -711,7 +848,7 @@ fn verify_file_digest(path: &Path, expected: &str) -> Result<(), BridgePortError
 mod tests {
     use super::{
         FINGERPRINT_SOURCE_PREFIX, RuntimeBindingBrowserLaunchPreflight, RuntimeBindingSlot,
-        receive_response, request_frame, sha256_hex,
+        browser_visible_payload, hex_encode, receive_response, request_frame, sha256_hex,
     };
     use crate::browser_execution::persist_materialization_binding;
     use crate::browser_preflight::{BrowserRuntimeObservation, BrowserRuntimeObservationPort};
@@ -877,6 +1014,27 @@ mod tests {
             })
             .is_err()
         );
+        Ok(())
+    }
+
+    #[test]
+    fn browser_visible_frame_is_session_bound_and_navigation_target_is_not_plaintext()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let session_id = SessionId::parse("session_01JAR10VISIBLE")?;
+        let payload = br#"{"user_agent":"ua"}"#;
+        let frame = format!(
+            "browser_visible|{}|{}",
+            session_id.as_str(),
+            hex_encode(std::str::from_utf8(payload)?)
+        );
+        assert_eq!(browser_visible_payload(&frame, &session_id)?, payload);
+        assert!(
+            browser_visible_payload(&frame, &SessionId::parse("session_02JAR10VISIBLE")?).is_err()
+        );
+        let target = "https://example.test/private-path";
+        let encoded = hex_encode(target);
+        assert!(!encoded.contains(target));
+        assert!(!encoded.contains('/'));
         Ok(())
     }
 
