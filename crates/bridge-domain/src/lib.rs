@@ -640,12 +640,10 @@ impl fmt::Debug for CamouhostMessage {
             Self::ObserveBrowserVisible { .. } => {
                 formatter.write_str("ObserveBrowserVisible { session_id: [REDACTED] }")
             }
-            Self::BrowserVisible { .. } => formatter.write_str(
-                "BrowserVisible { session_id: [REDACTED], payload_hex: [REDACTED] }",
-            ),
-            Self::AdmitNavigation { .. } => formatter.write_str(
-                "AdmitNavigation { session_id: [REDACTED], target_hex: [REDACTED] }",
-            ),
+            Self::BrowserVisible { .. } => formatter
+                .write_str("BrowserVisible { session_id: [REDACTED], payload_hex: [REDACTED] }"),
+            Self::AdmitNavigation { .. } => formatter
+                .write_str("AdmitNavigation { session_id: [REDACTED], target_hex: [REDACTED] }"),
             Self::NavigationAdmitted { .. } => {
                 formatter.write_str("NavigationAdmitted { session_id: [REDACTED] }")
             }
