@@ -23,7 +23,7 @@ ROOT = Path(__file__).resolve().parents[1]
 CAMOUHOST = ROOT / "runtime/camouhost/real.py"
 RUNTIME_LOCK = ROOT / "runtime/camouhost/runtime-lock.json"
 SESSION = "session_01JAR10REALCAMOUFOX"
-IPC_VERSION = "2"
+IPC_VERSION = "3"
 BRIDGE_LOCK_CONTENT = "profile-platform-bridge-lock-v1\ndevice_01JAR10REALCAMOUFOX\n1\n"
 MANAGED_PARENT_ENV = {
     "DBUS_SESSION_BUS_ADDRESS",
@@ -251,7 +251,7 @@ def observe_browser_visible_wire(process: subprocess.Popen[str]) -> None:
 def admit_navigation(process: subprocess.Popen[str], url: str | None) -> None:
     target = "" if url is None else url.encode("utf-8").hex()
     response = exchange(process, f"admit_navigation|{SESSION}|{target}")
-    if response != f"navigated|{SESSION}":
+    if response != f"navigation_admitted|{SESSION}":
         raise AssertionError(f"navigation admission failed: {response!r}")
 
 
