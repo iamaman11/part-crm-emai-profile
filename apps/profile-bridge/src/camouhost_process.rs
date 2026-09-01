@@ -8,7 +8,9 @@ use crate::local_profile::GenerationWorkspace;
 use crate::operator_flow::BrowserLaunchPreflightPort;
 use crate::runtime_bundle::ApprovedRuntimeBundle;
 use bridge_domain::{BridgePortError, CAMOUHOST_IPC_VERSION, CamouhostMessage, CamouhostPort};
-use browser_execution_domain::{MaterializationBinding, NetworkIdentityPolicy, ProfileStableIdentity};
+use browser_execution_domain::{
+    MaterializationBinding, NetworkIdentityPolicy, ProfileStableIdentity,
+};
 use profile_platform_primitives::{DeviceId, SessionId};
 use runtime_bundle_domain::BundleRelativePath;
 use sha2::{Digest, Sha256};
@@ -655,9 +657,7 @@ fn browser_visible_payload(
     session_id: &SessionId,
 ) -> Result<Vec<u8>, BridgePortError> {
     let mut parts = frame.splitn(3, '|');
-    if parts.next() != Some("browser_visible")
-        || parts.next() != Some(session_id.as_str())
-    {
+    if parts.next() != Some("browser_visible") || parts.next() != Some(session_id.as_str()) {
         return Err(BridgePortError::InvalidResponse);
     }
     let payload_hex = parts.next().ok_or(BridgePortError::InvalidResponse)?;
@@ -686,9 +686,7 @@ fn exchange_raw_shared(
     frame: &str,
     timeout: Duration,
 ) -> Result<String, BridgePortError> {
-    if frame.is_empty()
-        || frame.len() > MAX_IPC_REQUEST_BYTES
-        || frame.contains(['\n', '\r', '\0'])
+    if frame.is_empty() || frame.len() > MAX_IPC_REQUEST_BYTES || frame.contains(['\n', '\r', '\0'])
     {
         return Err(BridgePortError::InvalidResponse);
     }
