@@ -40,6 +40,20 @@ struct WireObservation {
     language: String,
     languages: Vec<String>,
     speech_voices: WireSpeechVoices,
+    #[serde(default)]
+    test_webgl_shape: Option<WireTestWebGlShape>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WireTestWebGlShape {
+    configured_rows: u16,
+    configured_null: u16,
+    configured_bool: u16,
+    configured_number: u16,
+    configured_text: u16,
+    configured_list: u16,
+    configured_map: u16,
 }
 
 #[derive(Debug, Deserialize)]
@@ -103,6 +117,7 @@ pub(super) fn verify_browser_visible_payload(
     expected: &ProfileStableIdentity,
     payload: &[u8],
 ) -> Result<HostRuntimeEvidence, BrowserVisibleWireError> {
+    emit_test_webgl_configured_shape(payload);
     let observation = parse_browser_visible_payload(payload)?;
     emit_test_webgl_observation_shape(&observation);
     expected
@@ -112,6 +127,30 @@ pub(super) fn verify_browser_visible_payload(
             BrowserVisibleWireError::IdentityMismatch
         })?;
     host_runtime_evidence(&observation)
+}
+
+fn emit_test_webgl_configured_shape(payload: &[u8]) {
+    if std::env::var_os("CAMOUHOST_TEST_DIAGNOSTIC").as_deref()
+        != Some(std::ffi::OsStr::new("webgl-shape"))
+    {
+        return;
+    }
+    let Ok(wire) = serde_json::from_slice::<WireObservation>(payload) else {
+        return;
+    };
+    let Some(shape) = wire.test_webgl_shape else {
+        return;
+    };
+    eprintln!(
+        "CAMOUHOST_TEST_WEBGL_CONFIGURED_SHAPE=rows={};null={};bool={};number={};text={};list={};map={}",
+        shape.configured_rows,
+        shape.configured_null,
+        shape.configured_bool,
+        shape.configured_number,
+        shape.configured_text,
+        shape.configured_list,
+        shape.configured_map,
+    );
 }
 
 fn emit_test_webgl_observation_shape(observation: &BrowserVisibleObservation) {
