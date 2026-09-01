@@ -90,7 +90,9 @@ mod p3_fixture {
             (&runtime_lock, "runtime lock"),
         ] {
             if !path.is_file() || path.symlink_metadata()?.file_type().is_symlink() {
-                return Err(format!("{label} is not a regular non-symlink file: {}", path.display()).into());
+                return Err(
+                    format!("{label} is not a regular non-symlink file: {}", path.display()).into(),
+                );
             }
         }
         Ok((python, camouhost, runtime_lock, headless))
@@ -135,7 +137,11 @@ mod p3_fixture {
             (&report.profile_stable_probe_sha256, "profile-stable probe"),
             (&report.runtime_lock_sha256, "runtime lock"),
         ] {
-            if value.len() != 64 || !value.bytes().all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase()) {
+            if value.len() != 64
+                || !value
+                    .bytes()
+                    .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+            {
                 return Err(format!("{label} digest is not canonical lower-hex SHA-256").into());
             }
         }
@@ -149,7 +155,8 @@ mod p3_fixture {
         if lower_hex(&Sha256::digest(&config_bytes)) != report.fingerprint_config_sha256 {
             return Err("materialization report config digest mismatch".into());
         }
-        let stable = crate::shipping_preflight::profile_stable_identity_from_config_bytes(&config_bytes)?;
+        let stable =
+            crate::shipping_preflight::profile_stable_identity_from_config_bytes(&config_bytes)?;
         let identity = browser_execution_domain::BrowserIdentityManifest::new(
             2,
             report.fingerprint_policy_version.clone(),
@@ -181,10 +188,14 @@ mod p3_fixture {
     fn run_real_browser_state_probe(
         workspace: &GenerationWorkspace,
         report: &RealIdentityReport,
+        origin_port: u16,
         mode: &str,
     ) -> Result<(), Box<dyn std::error::Error>> {
         if !matches!(mode, "seed" | "verify") {
             return Err("browser-state probe mode must be seed or verify".into());
+        }
+        if origin_port < 1024 {
+            return Err("browser-state origin port is outside the accepted range".into());
         }
         let (python, camouhost, runtime_lock, headless) = real_runtime_paths()?;
         let repository_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -213,6 +224,8 @@ mod p3_fixture {
             .arg(&report.runtime_lock_sha256)
             .arg("--headless")
             .arg(&headless)
+            .arg("--port")
+            .arg(origin_port.to_string())
             .arg("--mode")
             .arg(mode);
         let output = run_command(command, "real portable browser-state probe")?;
@@ -222,6 +235,7 @@ mod p3_fixture {
             "indexed_db": true,
             "local_storage": true,
             "mode": mode,
+            "origin_port": origin_port,
         });
         if observed != expected {
             return Err(format!("unexpected portable browser-state report: {observed}").into());
@@ -229,11 +243,23 @@ mod p3_fixture {
         Ok(())
     }
 
+    fn reserve_origin_port() -> Result<u16, Box<dyn std::error::Error>> {
+        let listener = std::net::TcpListener::bind(("127.0.0.1", 0))?;
+        let port = listener.local_addr()?.port();
+        drop(listener);
+        if port < 1024 {
+            return Err("allocated browser-state origin port is outside the accepted range".into());
+        }
+        Ok(port)
+    }
+
     #[test]
     fn real_cookie_local_storage_and_indexed_db_survive_authoritative_p3_reopen()
     -> Result<(), Box<dyn std::error::Error>> {
         if !real_runtime_requested() {
-            eprintln!("S0_REAL_PORTABLE_BROWSER_STATE=SKIPPED;REASON=AR10_REAL_CAMOUFOX_NOT_REQUESTED");
+            eprintln!(
+                "S0_REAL_PORTABLE_BROWSER_STATE=SKIPPED;REASON=AR10_REAL_CAMOUFOX_NOT_REQUESTED"
+            );
             return Ok(());
         }
 
@@ -251,6 +277,7 @@ mod p3_fixture {
         let base_workspace = root.create_generation(&tenant_id, &profile_id, &base_generation)?;
         let bundle = approved_bundle()?;
         let real_identity = materialize_real_identity(&base_workspace, &device_id, &bundle)?;
+        let origin_port = reserve_origin_port()?;
 
         let state = Rc::new(RefCell::new(BackendState::new()?));
         let transport = BackendMachineHttp {
@@ -280,10 +307,11 @@ mod p3_fixture {
             state: Rc::clone(&state),
         });
 
-        let first_claim = ClaimUri::parse("profilebridge://claim/claim_s0_browser_state_first_000001")?;
+        let first_claim =
+            ClaimUri::parse("profilebridge://claim/claim_s0_browser_state_first_000001")?;
         operator.open_authoritative(&first_claim, &root, &mut downloader, UnixMillis::new(10))?;
         let first_workspace = root.open_generation(&tenant_id, &profile_id, &base_generation)?;
-        run_real_browser_state_probe(&first_workspace, &real_identity, "seed")?;
+        run_real_browser_state_probe(&first_workspace, &real_identity, origin_port, "seed")?;
         operator.close(UnixMillis::new(20))?;
         assert_eq!(
             operator.pending_dirty_local_state(),
@@ -306,12 +334,16 @@ mod p3_fixture {
         // Force the second launch to consume the exact committed encrypted object instead of any
         // locally retained successor workspace.
         root.reject_generation_for_rematerialization(&tenant_id, &profile_id, &successor)?;
-        assert!(root.open_generation(&tenant_id, &profile_id, &successor).is_err());
+        assert!(
+            root.open_generation(&tenant_id, &profile_id, &successor)
+                .is_err()
+        );
 
-        let second_claim = ClaimUri::parse("profilebridge://claim/claim_s0_browser_state_second_000002")?;
+        let second_claim =
+            ClaimUri::parse("profilebridge://claim/claim_s0_browser_state_second_000002")?;
         operator.open_authoritative(&second_claim, &root, &mut downloader, UnixMillis::new(40))?;
         let reopened = root.open_generation(&tenant_id, &profile_id, &successor)?;
-        run_real_browser_state_probe(&reopened, &real_identity, "verify")?;
+        run_real_browser_state_probe(&reopened, &real_identity, origin_port, "verify")?;
 
         let events = state.borrow().events.clone();
         let commit = event_index(&events, "commit:")?;
