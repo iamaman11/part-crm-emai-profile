@@ -2,6 +2,7 @@
 
 mod browser_number;
 pub mod browser_visible_observation;
+pub mod host_compatibility;
 mod identity_record;
 mod profile_stable_identity;
 
