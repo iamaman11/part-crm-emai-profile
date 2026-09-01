@@ -1,6 +1,6 @@
 mod browser_visible_wire;
 
-use self::browser_visible_wire::verify_browser_visible_payload;
+use self::browser_visible_wire::{HostRuntimeEvidence, verify_browser_visible_payload};
 use crate::ProcessControlPort;
 use crate::browser_execution::BrowserLaunchBlocker;
 use crate::browser_preflight::{BoundBrowserLaunchPreflight, BrowserRuntimeObservationPort};
@@ -8,6 +8,10 @@ use crate::local_profile::GenerationWorkspace;
 use crate::operator_flow::BrowserLaunchPreflightPort;
 use crate::runtime_bundle::ApprovedRuntimeBundle;
 use bridge_domain::{BridgePortError, CamouhostMessage, CamouhostPort};
+use browser_execution_domain::host_compatibility::{
+    HostArchitecture, HostCompatibilityDecision, HostCompatibilityObservation,
+    HostCompatibilityPolicy, HostExecutionMode, HostPlatformClass, HostRuntimeClass,
+};
 use browser_execution_domain::{
     MaterializationBinding, NetworkIdentityPolicy, ProfileStableIdentity,
 };
@@ -24,7 +28,7 @@ use std::sync::{
     mpsc::{self, Receiver, RecvTimeoutError},
 };
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const CONFIG_NAME: &str = "camoufox-config.json";
 const REAL_ENTRYPOINT: &str = "camouhost/real.py";
@@ -331,6 +335,7 @@ pub struct ManagedCamouhostProcess {
 
 pub struct ManagedCamouhostIpc {
     shared: Arc<Mutex<ProcessState>>,
+    display_mode: RuntimeDisplayMode,
 }
 
 #[derive(Clone)]
@@ -377,13 +382,17 @@ impl ManagedCamouhostProcess {
         slot: RuntimeBindingSlot,
     ) -> (Self, ManagedCamouhostIpc) {
         let shared = Arc::new(Mutex::new(ProcessState::new()));
+        let display_mode = config.display_mode;
         (
             Self {
                 shared: Arc::clone(&shared),
                 config,
                 slot,
             },
-            ManagedCamouhostIpc { shared },
+            ManagedCamouhostIpc {
+                shared,
+                display_mode,
+            },
         )
     }
 
@@ -582,9 +591,11 @@ impl CamouhostPort for ManagedCamouhostIpc {
         message: &CamouhostMessage,
     ) -> Result<CamouhostMessage, BridgePortError> {
         match message {
-            CamouhostMessage::Launch { session_id } => {
-                launch_with_browser_visible_admission(&self.shared, session_id)
-            }
+            CamouhostMessage::Launch { session_id } => launch_with_browser_visible_admission(
+                &self.shared,
+                self.display_mode,
+                session_id,
+            ),
             _ => exchange_shared(&self.shared, message),
         }
     }
@@ -592,6 +603,7 @@ impl CamouhostPort for ManagedCamouhostIpc {
 
 fn launch_with_browser_visible_admission(
     shared: &Arc<Mutex<ProcessState>>,
+    display_mode: RuntimeDisplayMode,
     session_id: &SessionId,
 ) -> Result<CamouhostMessage, BridgePortError> {
     let ready = exchange_shared(
@@ -632,8 +644,9 @@ fn launch_with_browser_visible_admission(
             .clone()
             .ok_or(BridgePortError::InvalidResponse)?
     };
-    verify_browser_visible_payload(&expected, &payload)
+    let host_runtime_evidence = verify_browser_visible_payload(&expected, &payload)
         .map_err(|_| BridgePortError::InvalidResponse)?;
+    verify_host_compatibility(display_mode, host_runtime_evidence)?;
 
     let navigation_target = {
         let state = shared.lock().map_err(|_| BridgePortError::Unavailable)?;
@@ -664,6 +677,78 @@ fn launch_with_browser_visible_admission(
     Ok(CamouhostMessage::Ready {
         session_id: session_id.clone(),
     })
+}
+
+fn verify_host_compatibility(
+    display_mode: RuntimeDisplayMode,
+    evidence: HostRuntimeEvidence,
+) -> Result<(), BridgePortError> {
+    let millis = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|_| BridgePortError::Unavailable)?
+        .as_millis();
+    let clock_unix_ms = u64::try_from(millis).map_err(|_| BridgePortError::Unavailable)?;
+    let (policy, platform, runtime_class) = host_compatibility_policy()?;
+    let execution_mode = match display_mode {
+        RuntimeDisplayMode::Headful => HostExecutionMode::Headful,
+        RuntimeDisplayMode::VirtualHeadful => HostExecutionMode::VirtualHeadful,
+    };
+
+    // Reaching this point proves that the exact runtime/profile files were readable, the managed
+    // process spawned, the canonical IPC reached Ready, and the real browser returned its bounded
+    // typed observation. Those are the required filesystem/process capability facts; the domain
+    // remains the sole owner of deciding whether the resulting host is admitted.
+    let observation = HostCompatibilityObservation::prelaunch(
+        platform,
+        HostArchitecture::X86_64,
+        runtime_class,
+        execution_mode,
+        clock_unix_ms,
+        true,
+    )
+    .with_runtime_evidence(true, evidence.display, evidence.graphics_backend);
+
+    if policy.evaluate(&observation) != HostCompatibilityDecision::Accepted {
+        eprintln!("CAMOUHOST_HOST_COMPATIBILITY=INCOMPATIBLE");
+        return Err(BridgePortError::InvalidResponse);
+    }
+    Ok(())
+}
+
+fn host_compatibility_policy() -> Result<
+    (HostCompatibilityPolicy, HostPlatformClass, HostRuntimeClass),
+    BridgePortError,
+> {
+    if !cfg!(target_arch = "x86_64") {
+        return Err(BridgePortError::InvalidResponse);
+    }
+
+    #[cfg(windows)]
+    {
+        let policy = HostCompatibilityPolicy::windows_first_release_headful()
+            .map_err(|_| BridgePortError::InvalidResponse)?;
+        Ok((
+            policy,
+            HostPlatformClass::Windows,
+            HostRuntimeClass::PackagedCamoufox,
+        ))
+    }
+
+    #[cfg(all(not(windows), target_os = "linux"))]
+    {
+        let policy = HostCompatibilityPolicy::repository_linux_virtual_headful()
+            .map_err(|_| BridgePortError::InvalidResponse)?;
+        Ok((
+            policy,
+            HostPlatformClass::Linux,
+            HostRuntimeClass::RepositoryPinnedCamoufox,
+        ))
+    }
+
+    #[cfg(not(any(windows, target_os = "linux")))]
+    {
+        Err(BridgePortError::InvalidResponse)
+    }
 }
 
 fn exchange_shared(
