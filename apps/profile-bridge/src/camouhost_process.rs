@@ -591,11 +591,9 @@ impl CamouhostPort for ManagedCamouhostIpc {
         message: &CamouhostMessage,
     ) -> Result<CamouhostMessage, BridgePortError> {
         match message {
-            CamouhostMessage::Launch { session_id } => launch_with_browser_visible_admission(
-                &self.shared,
-                self.display_mode,
-                session_id,
-            ),
+            CamouhostMessage::Launch { session_id } => {
+                launch_with_browser_visible_admission(&self.shared, self.display_mode, session_id)
+            }
             _ => exchange_shared(&self.shared, message),
         }
     }
@@ -715,10 +713,8 @@ fn verify_host_compatibility(
     Ok(())
 }
 
-fn host_compatibility_policy() -> Result<
-    (HostCompatibilityPolicy, HostPlatformClass, HostRuntimeClass),
-    BridgePortError,
-> {
+fn host_compatibility_policy()
+-> Result<(HostCompatibilityPolicy, HostPlatformClass, HostRuntimeClass), BridgePortError> {
     if !cfg!(target_arch = "x86_64") {
         return Err(BridgePortError::InvalidResponse);
     }
