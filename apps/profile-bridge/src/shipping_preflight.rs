@@ -9,9 +9,7 @@ use crate::local_profile::GenerationWorkspace;
 use crate::operator_flow::BrowserLaunchPreflightPort;
 use crate::runtime_bundle::ApprovedRuntimeBundle;
 use browser_execution_domain::NetworkIdentityPolicy;
-use camoufox_identity::{
-    CamoufoxIdentityProjectionError, verify_materialized_camoufox_identity,
-};
+use camoufox_identity::{CamoufoxIdentityProjectionError, verify_materialized_camoufox_identity};
 use profile_platform_primitives::{DeviceId, GenerationId, ProfileId, TenantId};
 use std::path::Path;
 
@@ -76,7 +74,9 @@ fn map_identity_projection_error(error: CamoufoxIdentityProjectionError) -> Brow
         CamoufoxIdentityProjectionError::InvalidMaterialization => {
             BrowserLaunchBlocker::InvalidMaterializationEvidence
         }
-        CamoufoxIdentityProjectionError::IdentityMismatch => BrowserLaunchBlocker::MaterializationStale,
+        CamoufoxIdentityProjectionError::IdentityMismatch => {
+            BrowserLaunchBlocker::MaterializationStale
+        }
     }
 }
 

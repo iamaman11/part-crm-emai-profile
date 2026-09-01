@@ -3,13 +3,13 @@ use browser_execution_domain::browser_visible_observation::{
     canonical_audio_seed_sha256, canonical_canvas_seed_sha256, canonical_context_attributes_sha256,
     canonical_font_set_sha256, canonical_font_spacing_seed_sha256,
     canonical_navigator_languages_sha256, canonical_shader_precision_sha256,
-    canonical_speech_voices_sha256, canonical_webgl2_parameters_sha256,
-    canonical_webgl_extensions_sha256, canonical_webgl_parameters_sha256,
+    canonical_speech_voices_sha256, canonical_webgl_extensions_sha256,
+    canonical_webgl_parameters_sha256, canonical_webgl2_parameters_sha256,
 };
 use browser_execution_domain::{
     BrowserIdentityManifest, BrowserOsIdentity, DisplayIdentity, FontIdentity, GraphicsIdentity,
-    HardwareCapabilityIdentity, LocaleIdentity, OriginDeterminismMode,
-    OriginDeterministicIdentity, ProfileStableIdentity,
+    HardwareCapabilityIdentity, LocaleIdentity, OriginDeterminismMode, OriginDeterministicIdentity,
+    ProfileStableIdentity,
 };
 use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
@@ -67,7 +67,11 @@ pub fn verify_materialized_camoufox_identity(
 pub fn profile_stable_identity_from_config_bytes(
     raw: &[u8],
 ) -> Result<ProfileStableIdentity, CamoufoxIdentityProjectionError> {
-    if raw.is_empty() || u64::try_from(raw.len()).ok().is_none_or(|len| len > MAX_CONFIG_BYTES) {
+    if raw.is_empty()
+        || u64::try_from(raw.len())
+            .ok()
+            .is_none_or(|len| len > MAX_CONFIG_BYTES)
+    {
         return Err(CamoufoxIdentityProjectionError::InvalidMaterialization);
     }
     let config: Value = serde_json::from_slice(raw)
@@ -120,24 +124,16 @@ pub fn profile_stable_identity_from_config_bytes(
         GraphicsIdentity::new(
             required_string(object, "webGl:vendor")?,
             required_string(object, "webGl:renderer")?,
-            canonical_webgl_extensions_sha256(
-                &webgl_extensions,
-                &webgl2_extensions,
-                &mut digester,
-            )
-            .ok_or(CamoufoxIdentityProjectionError::InvalidMaterialization)?,
+            canonical_webgl_extensions_sha256(&webgl_extensions, &webgl2_extensions, &mut digester)
+                .ok_or(CamoufoxIdentityProjectionError::InvalidMaterialization)?,
             canonical_webgl_parameters_sha256(&webgl_parameters, &mut digester)
                 .ok_or(CamoufoxIdentityProjectionError::InvalidMaterialization)?,
             canonical_webgl2_parameters_sha256(&webgl2_parameters, &mut digester)
                 .ok_or(CamoufoxIdentityProjectionError::InvalidMaterialization)?,
             canonical_shader_precision_sha256(&webgl_shader, &webgl2_shader, &mut digester)
                 .ok_or(CamoufoxIdentityProjectionError::InvalidMaterialization)?,
-            canonical_context_attributes_sha256(
-                &webgl_context,
-                &webgl2_context,
-                &mut digester,
-            )
-            .ok_or(CamoufoxIdentityProjectionError::InvalidMaterialization)?,
+            canonical_context_attributes_sha256(&webgl_context, &webgl2_context, &mut digester)
+                .ok_or(CamoufoxIdentityProjectionError::InvalidMaterialization)?,
         )
         .map_err(|_| CamoufoxIdentityProjectionError::InvalidMaterialization)?,
         FontIdentity::new(
@@ -214,7 +210,10 @@ fn sha256_hex(bytes: &[u8]) -> String {
     output
 }
 
-fn required<'a>(object: &'a Map<String, Value>, key: &str) -> Result<&'a Value, CamoufoxIdentityProjectionError> {
+fn required<'a>(
+    object: &'a Map<String, Value>,
+    key: &str,
+) -> Result<&'a Value, CamoufoxIdentityProjectionError> {
     object
         .get(key)
         .ok_or(CamoufoxIdentityProjectionError::InvalidMaterialization)
@@ -297,9 +296,7 @@ fn required_i32(
         .map_err(|_| CamoufoxIdentityProjectionError::InvalidMaterialization)
 }
 
-fn required_dpr_milli(
-    object: &Map<String, Value>,
-) -> Result<u32, CamoufoxIdentityProjectionError> {
+fn required_dpr_milli(object: &Map<String, Value>) -> Result<u32, CamoufoxIdentityProjectionError> {
     let value = required(object, "window.devicePixelRatio")?
         .as_f64()
         .ok_or(CamoufoxIdentityProjectionError::InvalidMaterialization)?;
@@ -414,10 +411,9 @@ fn optional_speech_voices(
             let voice = voice
                 .as_object()
                 .ok_or(CamoufoxIdentityProjectionError::InvalidMaterialization)?;
-            // Pinned Camoufox exposes voiceURI as part of every voice record. The current domain
-            // voice digest does not yet carry it; requiring it here prevents schema ambiguity while
-            // the next bounded R10 domain-version slice makes it identity-bearing.
-            let _voice_uri = required_string(voice, "voiceURI")?;
+            // Exact pinned Camoufox `MaskConfig::MVoices()` and its generator consume `voiceUri`.
+            // Do not accept the inconsistent `voiceURI` JVV spelling as a compatibility fallback.
+            let _voice_uri = required_string(voice, "voiceUri")?;
             Ok(SpeechVoiceObservation {
                 language: required_string(voice, "lang")?,
                 name: required_string(voice, "name")?,
@@ -431,43 +427,40 @@ fn optional_speech_voices(
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        CamoufoxIdentityProjectionError, profile_stable_identity_from_config_bytes,
-    };
+    use super::{CamoufoxIdentityProjectionError, profile_stable_identity_from_config_bytes};
 
     fn config(number: &str) -> String {
-        format!(
-            concat!(
-                "{{",
-                "\"navigator.userAgent\":\"Mozilla/5.0 Firefox/152.0\",",
-                "\"navigator.platform\":\"Win32\",",
-                "\"navigator.oscpu\":\"Windows NT 10.0; Win64; x64\",",
-                "\"navigator.hardwareConcurrency\":8,",
-                "\"navigator.deviceMemory\":8,",
-                "\"navigator.maxTouchPoints\":0,",
-                "\"screen.width\":1920,\"screen.height\":1080,",
-                "\"screen.availWidth\":1920,\"screen.availHeight\":1040,",
-                "\"screen.availLeft\":0,\"screen.availTop\":0,",
-                "\"screen.colorDepth\":24,\"screen.pixelDepth\":24,",
-                "\"window.devicePixelRatio\":1,",
-                "\"webGl:vendor\":\"Vendor\",\"webGl:renderer\":\"Renderer\",",
-                "\"webGl:supportedExtensions\":[\"EXT_b\",\"EXT_a\"],",
-                "\"webGl2:supportedExtensions\":[\"EXT_c\"],",
-                "\"webGl:parameters\":{{\"MAX_TEXTURE_SIZE\":4096,\"VALUE\":{number}}},",
-                "\"webGl2:parameters\":{{\"MAX_TEXTURE_SIZE\":4096}},",
-                "\"webGl:shaderPrecisionFormats\":{{\"HIGH_FLOAT\":{{\"precision\":23}}}},",
-                "\"webGl2:shaderPrecisionFormats\":{{\"HIGH_FLOAT\":{{\"precision\":23}}}},",
-                "\"webGl:contextAttributes\":{{\"alpha\":true}},",
-                "\"webGl2:contextAttributes\":{{\"alpha\":true}},",
-                "\"fonts\":[\"Arial\",\"Segoe UI\"],",
-                "\"fonts:spacing_seed\":1,\"canvas:seed\":2,\"audio:seed\":3,",
-                "\"navigator.language\":\"en-US\",",
-                "\"navigator.languages\":[\"en-US\",\"en\"],",
-                "\"voices\":[{{\"isLocalService\":true,\"isDefault\":true,",
-                "\"voiceURI\":\"urn:voice:one\",\"name\":\"Voice One\",\"lang\":\"en-US\"}}]",
-                "}}"
-            ),
+        concat!(
+            "{",
+            "\"navigator.userAgent\":\"Mozilla/5.0 Firefox/152.0\",",
+            "\"navigator.platform\":\"Win32\",",
+            "\"navigator.oscpu\":\"Windows NT 10.0; Win64; x64\",",
+            "\"navigator.hardwareConcurrency\":8,",
+            "\"navigator.deviceMemory\":8,",
+            "\"navigator.maxTouchPoints\":0,",
+            "\"screen.width\":1920,\"screen.height\":1080,",
+            "\"screen.availWidth\":1920,\"screen.availHeight\":1040,",
+            "\"screen.availLeft\":0,\"screen.availTop\":0,",
+            "\"screen.colorDepth\":24,\"screen.pixelDepth\":24,",
+            "\"window.devicePixelRatio\":1,",
+            "\"webGl:vendor\":\"Vendor\",\"webGl:renderer\":\"Renderer\",",
+            "\"webGl:supportedExtensions\":[\"EXT_b\",\"EXT_a\"],",
+            "\"webGl2:supportedExtensions\":[\"EXT_c\"],",
+            "\"webGl:parameters\":{\"MAX_TEXTURE_SIZE\":4096,\"VALUE\":$NUMBER},",
+            "\"webGl2:parameters\":{\"MAX_TEXTURE_SIZE\":4096},",
+            "\"webGl:shaderPrecisionFormats\":{\"HIGH_FLOAT\":{\"precision\":23}},",
+            "\"webGl2:shaderPrecisionFormats\":{\"HIGH_FLOAT\":{\"precision\":23}},",
+            "\"webGl:contextAttributes\":{\"alpha\":true},",
+            "\"webGl2:contextAttributes\":{\"alpha\":true},",
+            "\"fonts\":[\"Arial\",\"Segoe UI\"],",
+            "\"fonts:spacing_seed\":1,\"canvas:seed\":2,\"audio:seed\":3,",
+            "\"navigator.language\":\"en-US\",",
+            "\"navigator.languages\":[\"en-US\",\"en\"],",
+            "\"voices\":[{\"isLocalService\":true,\"isDefault\":true,",
+            "\"voiceUri\":\"urn:voice:one\",\"name\":\"Voice One\",\"lang\":\"en-US\"}]",
+            "}"
         )
+        .replace("$NUMBER", number)
     }
 
     #[test]
@@ -482,8 +475,21 @@ mod tests {
     }
 
     #[test]
+    fn runtime_voice_field_name_is_exact_and_has_no_schema_typo_fallback() {
+        let malformed = config("1").replace(
+            "\"voiceUri\":\"urn:voice:one\"",
+            "\"voiceURI\":\"urn:voice:one\"",
+        );
+        assert_eq!(
+            profile_stable_identity_from_config_bytes(malformed.as_bytes()),
+            Err(CamoufoxIdentityProjectionError::InvalidMaterialization)
+        );
+    }
+
+    #[test]
     fn missing_required_semantic_field_fails_closed() {
-        let malformed = config("1").replace("\"navigator.oscpu\":\"Windows NT 10.0; Win64; x64\",", "");
+        let malformed =
+            config("1").replace("\"navigator.oscpu\":\"Windows NT 10.0; Win64; x64\",", "");
         assert_eq!(
             profile_stable_identity_from_config_bytes(malformed.as_bytes()),
             Err(CamoufoxIdentityProjectionError::InvalidMaterialization)
