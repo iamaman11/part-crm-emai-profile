@@ -227,7 +227,10 @@ impl ProfileStableIdentity {
     ) -> Result<(), BrowserVisibleMismatch> {
         let expected = self.display();
         for (matches, mismatch) in [
-            (expected.width() == observation.width, BrowserVisibleMismatch::DisplayWidth),
+            (
+                expected.width() == observation.width,
+                BrowserVisibleMismatch::DisplayWidth,
+            ),
             (
                 expected.height() == observation.height,
                 BrowserVisibleMismatch::DisplayHeight,
@@ -363,14 +366,16 @@ impl ProfileStableIdentity {
         if observation.languages.is_empty()
             || observation.languages.len() > MAX_COLLECTION_ROWS
             || observation.languages.first() != Some(&observation.language)
-            || observation.languages.iter().any(|value| !bounded_text(value))
+            || observation
+                .languages
+                .iter()
+                .any(|value| !bounded_text(value))
         {
             return Err(BrowserVisibleMismatch::Languages);
         }
-        let Some(observed_languages) = canonical_navigator_languages_sha256(
-            &observation.languages,
-            digester,
-        ) else {
+        let Some(observed_languages) =
+            canonical_navigator_languages_sha256(&observation.languages, digester)
+        else {
             return Err(BrowserVisibleMismatch::Languages);
         };
         if observed_languages != expected.languages_sha256() {
@@ -459,11 +464,7 @@ fn compare_context_pair_digest<D, F>(
 ) -> Result<(), BrowserVisibleMismatch>
 where
     D: BrowserVisibleSha256Port,
-    F: Fn(
-        &[BrowserKeyValueObservation],
-        &[BrowserKeyValueObservation],
-        &mut D,
-    ) -> Option<String>,
+    F: Fn(&[BrowserKeyValueObservation], &[BrowserKeyValueObservation], &mut D) -> Option<String>,
 {
     let (Observed::Available(webgl), Observed::Available(webgl2)) = (webgl, webgl2) else {
         return Err(mismatch);
@@ -751,12 +752,11 @@ fn append_browser_value(canonical: &mut Vec<u8>, value: &BrowserValue) -> bool {
 }
 
 fn valid_number(value: &str) -> bool {
-    if value.is_empty() || value.len() > 128 || value.bytes().any(|byte| byte.is_ascii_whitespace()) {
+    if value.is_empty() || value.len() > 128 || value.bytes().any(|byte| byte.is_ascii_whitespace())
+    {
         return false;
     }
-    value
-        .parse::<f64>()
-        .is_ok_and(|number| number.is_finite())
+    value.parse::<f64>().is_ok_and(|number| number.is_finite())
 }
 
 fn domain_bytes(domain: &str) -> Vec<u8> {
@@ -840,7 +840,8 @@ mod tests {
     fn fixture(
         device_memory_gib: Option<u16>,
         voices_applicable: bool,
-    ) -> Result<(ProfileStableIdentity, BrowserVisibleObservation), Box<dyn std::error::Error>> {
+    ) -> Result<(ProfileStableIdentity, BrowserVisibleObservation), Box<dyn std::error::Error>>
+    {
         let webgl_extensions = vec!["EXT_beta".to_owned(), "EXT_alpha".to_owned()];
         let webgl2_extensions = vec!["EXT_gamma".to_owned()];
         let webgl = key_values("webgl");
@@ -891,8 +892,7 @@ mod tests {
             )?,
             FontIdentity::new(
                 canonical_font_set_sha256(&fonts, &mut digester).ok_or("fonts")?,
-                canonical_font_spacing_seed_sha256(&value("7"), &mut digester)
-                    .ok_or("spacing")?,
+                canonical_font_spacing_seed_sha256(&value("7"), &mut digester).ok_or("spacing")?,
             )?,
             OriginDeterministicIdentity::new(
                 OriginDeterminismMode::ProfileGenerationSeed,
@@ -977,8 +977,8 @@ mod tests {
     }
 
     #[test]
-    fn webgl2_is_not_hidden_inside_adapter_owned_hashing()
-    -> Result<(), Box<dyn std::error::Error>> {
+    fn webgl2_is_not_hidden_inside_adapter_owned_hashing() -> Result<(), Box<dyn std::error::Error>>
+    {
         let (expected, mut observation) = fixture(Some(8), true)?;
         if let Observed::Available(extensions) = &mut observation.graphics.webgl2_extensions {
             extensions.push("EXT_other".to_owned());
