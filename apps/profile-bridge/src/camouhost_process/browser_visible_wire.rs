@@ -104,6 +104,7 @@ pub(super) fn verify_browser_visible_payload(
     payload: &[u8],
 ) -> Result<HostRuntimeEvidence, BrowserVisibleWireError> {
     let observation = parse_browser_visible_payload(payload)?;
+    emit_test_webgl_observation_shape(&observation);
     expected
         .compare_browser_visible(&observation, &mut Sha256Adapter)
         .map_err(|mismatch| {
@@ -111,6 +112,39 @@ pub(super) fn verify_browser_visible_payload(
             BrowserVisibleWireError::IdentityMismatch
         })?;
     host_runtime_evidence(&observation)
+}
+
+
+fn emit_test_webgl_observation_shape(observation: &BrowserVisibleObservation) {
+    if std::env::var_os("CAMOUHOST_TEST_DIAGNOSTIC").as_deref()
+        != Some(std::ffi::OsStr::new("webgl-shape"))
+    {
+        return;
+    }
+    let Observed::Available(rows) = &observation.graphics.webgl_parameters else {
+        eprintln!("CAMOUHOST_TEST_WEBGL_OBSERVED_SHAPE=unavailable");
+        return;
+    };
+    let mut nulls = 0usize;
+    let mut bools = 0usize;
+    let mut numbers = 0usize;
+    let mut texts = 0usize;
+    let mut lists = 0usize;
+    let mut maps = 0usize;
+    for row in rows {
+        match &row.value {
+            BrowserValue::Null => nulls += 1,
+            BrowserValue::Bool(_) => bools += 1,
+            BrowserValue::Number(_) => numbers += 1,
+            BrowserValue::Text(_) => texts += 1,
+            BrowserValue::List(_) => lists += 1,
+            BrowserValue::Map(_) => maps += 1,
+        }
+    }
+    eprintln!(
+        "CAMOUHOST_TEST_WEBGL_OBSERVED_SHAPE=rows={};null={nulls};bool={bools};number={numbers};text={texts};list={lists};map={maps}",
+        rows.len()
+    );
 }
 
 fn host_runtime_evidence(
