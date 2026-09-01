@@ -764,13 +764,11 @@ def launch_verified_context(
     try:
         with contextlib.redirect_stdout(sys.stderr):
             context = manager.__enter__()
-        # Shipping browser starts network-offline. The Rust identity gate is the only authority
-        # that can release navigation after typed browser-visible conformance succeeds.
+        # Shipping browser starts network-offline. Rust/browser-execution-domain is the sole
+        # semantic identity admission owner and the only authority that can release navigation.
+        # The aggregate probe digest remains materialization/integrity evidence only; Python must
+        # not compare it to browser behavior and independently veto typed Rust admission.
         context.set_offline(True)
-        page = context.pages[0] if context.pages else context.new_page()
-        observed = stable_probe_digest(page)
-        if observed != expected_probe_sha256:
-            raise RuntimeContractError("profile-stable fingerprint drift detected")
         return manager, context
     except BaseException:
         with contextlib.suppress(BaseException):
