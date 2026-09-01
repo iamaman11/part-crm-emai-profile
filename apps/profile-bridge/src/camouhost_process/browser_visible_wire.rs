@@ -133,7 +133,9 @@ fn parse_browser_visible_payload(
         browser_os: BrowserOsObservation {
             user_agent: wire.user_agent,
             platform: wire.platform,
-            oscpu: wire.oscpu.map_or(Observed::Unavailable, Observed::Available),
+            oscpu: wire
+                .oscpu
+                .map_or(Observed::Unavailable, Observed::Available),
         },
         hardware: HardwareCapabilityObservation {
             hardware_concurrency: wire.hardware_concurrency,
@@ -173,18 +175,18 @@ fn parse_browser_visible_payload(
     })
 }
 
-fn graphics_observation(wire: WireGraphics) -> Result<GraphicsObservation, BrowserVisibleWireError> {
+fn graphics_observation(
+    wire: WireGraphics,
+) -> Result<GraphicsObservation, BrowserVisibleWireError> {
     let (webgl_extensions, webgl_parameters, webgl_shader_precision, webgl_context_attributes) =
         graphics_context(wire.webgl)?;
-    let (
-        webgl2_extensions,
-        webgl2_parameters,
-        webgl2_shader_precision,
-        webgl2_context_attributes,
-    ) = graphics_context(wire.webgl2)?;
+    let (webgl2_extensions, webgl2_parameters, webgl2_shader_precision, webgl2_context_attributes) =
+        graphics_context(wire.webgl2)?;
 
     Ok(GraphicsObservation {
-        webgl_vendor: wire.vendor.map_or(Observed::Unavailable, Observed::Available),
+        webgl_vendor: wire
+            .vendor
+            .map_or(Observed::Unavailable, Observed::Available),
         webgl_renderer: wire
             .renderer
             .map_or(Observed::Unavailable, Observed::Available),
@@ -311,7 +313,10 @@ mod tests {
         let observation = parse_browser_visible_payload(MATCHING_PAYLOAD.as_bytes())
             .map_err(|_| "payload should parse")?;
         assert_eq!(observation.browser_os.platform, "Win32");
-        assert_eq!(observation.hardware.device_memory_gib, Observed::Available(8));
+        assert_eq!(
+            observation.hardware.device_memory_gib,
+            Observed::Available(8)
+        );
         assert!(matches!(
             observation.locale.speech_voices,
             SpeechVoicesObservation::Available(ref voices) if voices[0].voice_uri == "urn:voice:one"
