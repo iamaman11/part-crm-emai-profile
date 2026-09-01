@@ -5,6 +5,7 @@ pub mod browser_visible_observation;
 mod identity_record;
 mod profile_stable_identity;
 
+pub use browser_number::canonical_browser_number;
 pub use profile_stable_identity::{
     BrowserOsIdentity, DisplayIdentity, FontIdentity, GraphicsIdentity, HardwareCapabilityIdentity,
     LocaleIdentity, OriginDeterminismMode, OriginDeterministicIdentity, ProfileStableIdentity,
