@@ -15,6 +15,7 @@ ROOT = Path(__file__).resolve().parents[1]
 LOCK = ROOT / "runtime/camouhost/camoufox-patch-lock.json"
 VERIFY = ROOT / "scripts/check-camoufox-webgl-patch.py"
 SHA256_HEX = 64
+PACKAGE_TARGET_SLUG = {"linux": "lin", "windows": "win"}
 
 
 def canonical(value: Any) -> bytes:
@@ -46,7 +47,7 @@ def load_lock() -> dict[str, Any]:
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--upstream-root", type=Path, required=True)
-    parser.add_argument("--target", choices=("linux", "windows"), required=True)
+    parser.add_argument("--target", choices=tuple(PACKAGE_TARGET_SLUG), required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--provenance-output", type=Path, required=True)
     parser.add_argument("--build-source-commit", required=True)
@@ -68,7 +69,8 @@ def main() -> int:
     run("make", "mozbootstrap", cwd=source)
     run("python3", "multibuild.py", "--target", args.target, "--arch", "x86_64", cwd=source)
 
-    candidates = sorted(source.glob(f"dist/camoufox-*-{args.target}.x86_64.zip"))
+    package_slug = PACKAGE_TARGET_SLUG[args.target]
+    candidates = sorted(source.glob(f"dist/camoufox-*-{package_slug}.x86_64.zip"))
     if len(candidates) != 1 or candidates[0].is_symlink() or not candidates[0].is_file():
         raise SystemExit("candidate build did not produce exactly one regular browser archive")
     if args.output.exists() or args.output.is_symlink():
