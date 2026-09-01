@@ -51,6 +51,7 @@ pub struct FontAvailabilityObservation {
 pub struct SpeechVoiceObservation {
     pub language: String,
     pub name: String,
+    pub voice_uri: String,
     pub local_service: bool,
     pub is_default: bool,
 }
@@ -575,19 +576,22 @@ pub fn canonical_speech_voices_sha256<D: BrowserVisibleSha256Port>(
     digester: &mut D,
 ) -> Option<String> {
     if voices.len() > MAX_COLLECTION_ROWS
-        || voices
-            .iter()
-            .any(|voice| !bounded_text(&voice.language) || !bounded_text(&voice.name))
+        || voices.iter().any(|voice| {
+            !bounded_text(&voice.language)
+                || !bounded_text(&voice.name)
+                || !bounded_text(&voice.voice_uri)
+        })
     {
         return None;
     }
     let mut sorted = voices.to_vec();
     sorted.sort();
-    let mut canonical = domain_bytes("speech-voices-v1");
+    let mut canonical = domain_bytes("speech-voices-v2");
     append_component(&mut canonical, sorted.len().to_string().as_str());
     for voice in sorted {
         append_component(&mut canonical, &voice.language);
         append_component(&mut canonical, &voice.name);
+        append_component(&mut canonical, &voice.voice_uri);
         append_component(&mut canonical, if voice.local_service { "1" } else { "0" });
         append_component(&mut canonical, if voice.is_default { "1" } else { "0" });
     }
@@ -851,6 +855,7 @@ mod tests {
         let voices = vec![SpeechVoiceObservation {
             language: "en-US".to_owned(),
             name: "Example Voice".to_owned(),
+            voice_uri: "urn:voice:example".to_owned(),
             local_service: true,
             is_default: true,
         }];
@@ -861,7 +866,7 @@ mod tests {
             None
         };
         let stable = ProfileStableIdentity::new(
-            1,
+            2,
             BrowserOsIdentity::new(
                 "Mozilla/5.0 Firefox/152.0",
                 152,
@@ -968,6 +973,20 @@ mod tests {
         assert_eq!(
             expected.compare_browser_visible(&observation, &mut TestSha256),
             Ok(())
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn speech_voice_uri_drift_is_identity_bearing() -> Result<(), Box<dyn std::error::Error>> {
+        let (expected, mut observation) = fixture(Some(8), true)?;
+        let SpeechVoicesObservation::Available(voices) = &mut observation.locale.speech_voices else {
+            return Err("voices must be applicable".into());
+        };
+        voices[0].voice_uri = "urn:voice:other".to_owned();
+        assert_eq!(
+            expected.compare_browser_visible(&observation, &mut TestSha256),
+            Err(BrowserVisibleMismatch::SpeechVoices)
         );
         Ok(())
     }

@@ -19,7 +19,7 @@ use std::path::Path;
 const CONFIG_NAME: &str = "camoufox-config.json";
 const MAX_CONFIG_BYTES: u64 = 1024 * 1024;
 const MAX_JSON_DEPTH: usize = 32;
-const PROFILE_STABLE_SCHEMA_VERSION: u32 = 1;
+const PROFILE_STABLE_SCHEMA_VERSION: u32 = 2;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CamoufoxIdentityProjectionError {
@@ -413,10 +413,10 @@ fn optional_speech_voices(
                 .ok_or(CamoufoxIdentityProjectionError::InvalidMaterialization)?;
             // Exact pinned Camoufox `MaskConfig::MVoices()` and its generator consume `voiceUri`.
             // Do not accept the inconsistent `voiceURI` JVV spelling as a compatibility fallback.
-            let _voice_uri = required_string(voice, "voiceUri")?;
             Ok(SpeechVoiceObservation {
                 language: required_string(voice, "lang")?,
                 name: required_string(voice, "name")?,
+                voice_uri: required_string(voice, "voiceUri")?,
                 local_service: required_bool(voice, "isLocalService")?,
                 is_default: required_bool(voice, "isDefault")?,
             })
@@ -471,6 +471,16 @@ mod tests {
         let exponent = profile_stable_identity_from_config_bytes(config("1e0").as_bytes())?;
         assert_eq!(integer, decimal);
         assert_eq!(integer, exponent);
+        assert_eq!(integer.schema_version(), 2);
+        Ok(())
+    }
+
+    #[test]
+    fn voice_uri_is_identity_bearing() -> Result<(), Box<dyn std::error::Error>> {
+        let first = profile_stable_identity_from_config_bytes(config("1").as_bytes())?;
+        let changed = config("1").replace("urn:voice:one", "urn:voice:two");
+        let second = profile_stable_identity_from_config_bytes(changed.as_bytes())?;
+        assert_ne!(first, second);
         Ok(())
     }
 
