@@ -41,6 +41,11 @@ jobs:
           python3.12 scripts/check-cap01-profile-bridge-boundary.py
           python3.12 scripts/check-cap01-profile-bridge-boundary.py --self-test
 
+      - name: Verify pinned Camoufox native patch contract
+        run: |
+          python3.12 -m py_compile scripts/check-camoufox-webgl-patch.py
+          python3.12 scripts/check-camoufox-webgl-patch.py --self-test
+
       - name: Install exact AR-10 Camoufox Python components
         run: |
           python3.12 -m pip install --disable-pip-version-check \
