@@ -34,6 +34,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--runtime-lock-sha256", required=True)
     parser.add_argument("--headless", choices=("false", "virtual"), required=True)
     parser.add_argument("--mode", choices=("seed", "verify"), required=True)
+    parser.add_argument("--port", type=int, required=True)
     return parser.parse_args()
 
 
@@ -132,10 +133,12 @@ async function post(value) {{
 
 
 class StateServer(ThreadingHTTPServer):
-    def __init__(self, mode: str) -> None:
+    allow_reuse_address = True
+
+    def __init__(self, mode: str, port: int) -> None:
         self.page = page(mode)
         self.observations: queue.Queue[dict[str, object]] = queue.Queue()
-        super().__init__(("127.0.0.1", 0), Handler)
+        super().__init__(("127.0.0.1", port), Handler)
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -222,15 +225,17 @@ def run(args: argparse.Namespace) -> dict[str, object]:
     profile_root = args.profile_root.resolve(strict=True)
     if args.profile_root.is_symlink() or not profile_root.is_dir():
         raise AssertionError("profile root is not a regular directory")
+    if not 1024 <= args.port <= 65535:
+        raise AssertionError("portable browser-state origin port is out of range")
 
     config_sha256 = require_digest(args.config_sha256, "config digest")
     probe_sha256 = require_digest(args.probe_sha256, "probe digest")
     runtime_lock_sha256 = require_digest(args.runtime_lock_sha256, "runtime-lock digest")
 
-    server = StateServer(args.mode)
+    server = StateServer(args.mode, args.port)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
-    url = f"http://127.0.0.1:{server.server_address[1]}/"
+    url = f"http://127.0.0.1:{args.port}/"
     env = os.environ.copy()
     env.update(
         {
@@ -273,7 +278,7 @@ def run(args: argparse.Namespace) -> dict[str, object]:
         if process.wait(timeout=60) != 0:
             stderr = process.stderr.read()[-3000:] if process.stderr is not None else ""
             raise AssertionError(f"Camouhost exited non-zero: {stderr}")
-        return {"mode": args.mode, **expected}
+        return {"mode": args.mode, "origin_port": args.port, **expected}
     finally:
         if process.poll() is None:
             process.kill()
