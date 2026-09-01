@@ -1,5 +1,6 @@
 #![forbid(unsafe_code)]
 
+mod browser_number;
 pub mod browser_visible_observation;
 mod identity_record;
 mod profile_stable_identity;
