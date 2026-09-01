@@ -99,7 +99,10 @@ pub(super) fn verify_browser_visible_payload(
     let observation = parse_browser_visible_payload(payload)?;
     expected
         .compare_browser_visible(&observation, &mut Sha256Adapter)
-        .map_err(|_| BrowserVisibleWireError::IdentityMismatch)
+        .map_err(|mismatch| {
+            eprintln!("CAMOUHOST_BROWSER_VISIBLE_MISMATCH={mismatch:?}");
+            BrowserVisibleWireError::IdentityMismatch
+        })
 }
 
 fn parse_browser_visible_payload(
