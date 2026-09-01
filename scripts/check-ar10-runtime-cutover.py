@@ -449,7 +449,6 @@ def validate_real_runtime(root: Path) -> None:
         'EXPECTED_PROBE_SHA256_ENV',
         'persistent_context": True',
         '"i_know_what_im_doing": True',
-        "profile-stable fingerprint drift detected",
         "fingerprint config digest mismatch",
         "Bridge writer ownership evidence is missing",
         "materialize_candidate_identity",
@@ -477,9 +476,9 @@ def validate_real_runtime(root: Path) -> None:
     if "launch_options" not in called_names(materializer):
         fail("candidate identity materializer must explicitly create the initial exact config")
     if "stable_probe_digest" not in called_names(materializer):
-        fail("candidate identity materializer must bind a profile-stable probe")
-    if "stable_probe_digest" not in called_names(launch):
-        fail("normal launch must verify profile-stable identity before ready")
+        fail("candidate identity materializer must retain aggregate probe evidence")
+    if "stable_probe_digest" in called_names(launch):
+        fail("normal launch may not use aggregate probe as semantic admission authority")
     for marker in (
         "print(config",
         "print(proxy",
