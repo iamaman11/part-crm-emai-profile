@@ -14,7 +14,7 @@ pub use shared_fakes::{
 };
 
 mod test_support {
-    include!("../src/test_support.rs");
+    include!("../src/browser_identity_test_fixture.rs");
 }
 
 mod p3_fixture {
