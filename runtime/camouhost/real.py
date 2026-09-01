@@ -528,34 +528,49 @@ def webgl_value_shape(value: object) -> str:
     return "other"
 
 
-def emit_test_webgl_shape(config: dict[str, Any], value: dict[str, Any]) -> None:
-    """Emit only aggregate structure under an explicit test-only diagnostic switch."""
+def test_webgl_shape(config: dict[str, Any], value: dict[str, Any]) -> dict[str, int] | None:
+    """Return bounded aggregate expected WebGL structure for test-only Rust diagnostics."""
     if os.environ.get("CAMOUHOST_TEST_DIAGNOSTIC") != "webgl-shape":
-        return
-    graphics = value.get("graphics")
-    observed = graphics.get("webgl") if isinstance(graphics, dict) else None
-    observed_parameters = observed.get("parameters") if isinstance(observed, dict) else None
+        return None
     configured_parameters = config.get("webGl:parameters")
-    if not isinstance(configured_parameters, dict) or not isinstance(observed_parameters, dict):
-        print("CAMOUHOST_TEST_WEBGL_SHAPE=unavailable", file=sys.stderr)
-        return
-    configured_shapes = sorted(webgl_value_shape(item) for item in configured_parameters.values())
-    observed_shapes = sorted(webgl_value_shape(item) for item in observed_parameters.values())
-    print(
-        "CAMOUHOST_TEST_WEBGL_SHAPE="
-        f"configured_rows={len(configured_parameters)};"
-        f"observed_rows={len(observed_parameters)};"
-        f"configured_shapes={','.join(configured_shapes)};"
-        f"observed_shapes={','.join(observed_shapes)}",
-        file=sys.stderr,
-    )
-
+    if not isinstance(configured_parameters, dict):
+        return None
+    counts = {
+        "configured_null": 0,
+        "configured_bool": 0,
+        "configured_number": 0,
+        "configured_text": 0,
+        "configured_list": 0,
+        "configured_map": 0,
+    }
+    for item in configured_parameters.values():
+        shape = webgl_value_shape(item)
+        key = {
+            "null": "configured_null",
+            "bool": "configured_bool",
+            "int": "configured_number",
+            "float": "configured_number",
+            "text": "configured_text",
+            "list": "configured_list",
+            "map": "configured_map",
+        }.get(shape)
+        if key is None:
+            return None
+        counts[key] += 1
+    if any(count > 512 for count in counts.values()) or len(configured_parameters) > 512:
+        return None
+    return {
+        "configured_rows": len(configured_parameters),
+        **counts,
+    }
 
 def browser_visible_observation(page: Any, config: dict[str, Any]) -> bytes:
     value = page.evaluate(BROWSER_VISIBLE_PROBE, browser_visible_probe_request(config))
     if not isinstance(value, dict):
         raise RuntimeContractError("browser-visible observation shape is invalid")
-    emit_test_webgl_shape(config, value)
+    test_shape = test_webgl_shape(config, value)
+    if test_shape is not None:
+        value["test_webgl_shape"] = test_shape
     payload = canonical_json(value)
     if not payload or len(payload) > MAX_BROWSER_VISIBLE_BYTES:
         raise RuntimeContractError("browser-visible observation exceeds bounded size")
