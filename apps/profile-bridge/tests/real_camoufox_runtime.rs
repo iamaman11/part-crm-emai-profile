@@ -34,6 +34,7 @@ const RUNTIME_ROOT_ENV: &str = "AR10_RUNTIME_ROOT";
 const LOWER_HEX: &[u8; 16] = b"0123456789abcdef";
 const MAX_DIAGNOSTIC_SYMLINKS: usize = 32;
 const CONFIG_NAME: &str = "camoufox-config.json";
+const MANAGED_COLD_LAUNCH_ATTEMPTS: usize = 3;
 
 struct FixedObservation(NetworkIdentityObservation);
 
@@ -228,13 +229,7 @@ fn root_path() -> Result<PathBuf, Box<dyn std::error::Error>> {
     )))
 }
 
-#[test]
-fn bridge_preflight_launches_real_camoufox_through_managed_ipc()
--> Result<(), Box<dyn std::error::Error>> {
-    if env::var(ENABLE_ENV).as_deref() != Ok("1") {
-        return Ok(());
-    }
-
+fn run_managed_cold_launch_cycle() -> Result<(), Box<dyn std::error::Error>> {
     let python = PathBuf::from(env::var(PYTHON_ENV)?).canonicalize()?;
     let runtime_root = PathBuf::from(env::var(RUNTIME_ROOT_ENV)?).canonicalize()?;
     let real_runtime = runtime_root.join("camouhost/real.py");
@@ -338,5 +333,18 @@ fn bridge_preflight_launches_real_camoufox_through_managed_ipc()
 
     lock.release()?;
     fs::remove_dir_all(&root_path)?;
+    Ok(())
+}
+
+#[test]
+fn bridge_preflight_launches_real_camoufox_through_managed_ipc()
+-> Result<(), Box<dyn std::error::Error>> {
+    if env::var(ENABLE_ENV).as_deref() != Ok("1") {
+        return Ok(());
+    }
+
+    for _ in 0..MANAGED_COLD_LAUNCH_ATTEMPTS {
+        run_managed_cold_launch_cycle()?;
+    }
     Ok(())
 }
