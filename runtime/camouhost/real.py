@@ -669,6 +669,13 @@ def preserve_generated_browserforge_projection(config: dict[str, Any], fingerpri
         8_000,
     )
     preserve_generated_locale_projection(config, fingerprint.navigator)
+    voices = config.get("voices")
+    if not isinstance(voices, list) or not voices:
+        raise RuntimeContractError("generated speech voice identity is invalid")
+    block_host_voices = config.get("voices:blockIfNotDefined")
+    if block_host_voices not in (None, True):
+        raise RuntimeContractError("materialized speech voice isolation drifted")
+    config["voices:blockIfNotDefined"] = True
 
 
 def locked_firefox_major(lock: dict[str, Any]) -> int:
