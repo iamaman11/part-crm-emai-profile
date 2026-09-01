@@ -60,7 +60,7 @@ jobs:
           python3.12 -m camoufox active | grep -F '152.0.4-beta.28'
 
       - name: Compile AR-10/S0 runtime acceptance sources
-        run: python3.12 -m py_compile runtime/camouhost/real.py scripts/test-ar10-real-camoufox.py scripts/test-s0-browser-visible-canvas.py scripts/test-ar10-firefox-writer-locks.py scripts/check-ar10-runtime-cutover.py
+        run: python3.12 -m py_compile runtime/camouhost/real.py scripts/test-ar10-real-camoufox.py scripts/test-s0-browser-visible-canvas.py scripts/test-s0-browser-visible-audio-fonts.py scripts/test-ar10-firefox-writer-locks.py scripts/check-ar10-runtime-cutover.py
 
       - name: Enforce AR-10 successor-runtime policy
         run: |
@@ -76,6 +76,14 @@ jobs:
       - name: Prove browser-visible canvas portability on exact Camoufox
         run: |
           python3.12 scripts/test-s0-browser-visible-canvas.py \
+            --python /usr/bin/python3.12 \
+            --camouhost runtime/camouhost/real.py \
+            --runtime-lock runtime/camouhost/runtime-lock.json \
+            --headless virtual
+
+      - name: Prove browser-visible audio and font portability on exact Camoufox
+        run: |
+          python3.12 scripts/test-s0-browser-visible-audio-fonts.py \
             --python /usr/bin/python3.12 \
             --camouhost runtime/camouhost/real.py \
             --runtime-lock runtime/camouhost/runtime-lock.json \
@@ -151,7 +159,7 @@ jobs:
           if (-not (Test-Path -LiteralPath (Join-Path $runtimeRoot 'camouhost\resolved-runtime.json') -PathType Leaf)) { throw 'resolved runtime evidence missing' }
 
       - name: Compile runtime acceptance sources
-        run: python -m py_compile runtime/camouhost/real.py scripts/test-s0-browser-visible-canvas.py scripts/test-ar10-firefox-writer-locks.py scripts/check-ar10-runtime-cutover.py scripts/camouhost-runtime-build-windows.py scripts/camouhost-windows-dependency-lock.py
+        run: python -m py_compile runtime/camouhost/real.py scripts/test-s0-browser-visible-canvas.py scripts/test-s0-browser-visible-audio-fonts.py scripts/test-ar10-firefox-writer-locks.py scripts/check-ar10-runtime-cutover.py scripts/camouhost-runtime-build-windows.py scripts/camouhost-windows-dependency-lock.py
 
       - name: Prove Firefox writer-lock failure semantics
         run: python scripts/test-ar10-firefox-writer-locks.py
@@ -164,6 +172,19 @@ jobs:
           $camouhost = Join-Path $runtimeRoot 'camouhost\real.py'
           $runtimeLock = Join-Path $runtimeRoot 'camouhost\runtime-lock.json'
           python scripts/test-s0-browser-visible-canvas.py `
+            --python "$runtimePython" `
+            --camouhost "$camouhost" `
+            --runtime-lock "$runtimeLock" `
+            --headless false
+
+      - name: Prove clean-host Windows Camoufox audio and font portability
+        shell: pwsh
+        run: |
+          $runtimeRoot = Join-Path $env:RUNNER_TEMP 'camouhost-runtime'
+          $runtimePython = Join-Path $runtimeRoot 'python\python.exe'
+          $camouhost = Join-Path $runtimeRoot 'camouhost\real.py'
+          $runtimeLock = Join-Path $runtimeRoot 'camouhost\runtime-lock.json'
+          python scripts/test-s0-browser-visible-audio-fonts.py `
             --python "$runtimePython" `
             --camouhost "$camouhost" `
             --runtime-lock "$runtimeLock" `
