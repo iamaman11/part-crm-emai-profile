@@ -98,7 +98,8 @@ async (request) => {
     if (!gl) return null;
     const parameters = {};
     for (const key of spec.parameters) {
-      const glEnum = Number(key);
+      const numericKey = Number(key);
+      const glEnum = Number.isInteger(numericKey) ? numericKey : gl[key];
       if (!Number.isInteger(glEnum)) continue;
       try { parameters[key] = normalize(gl.getParameter(glEnum)); } catch (_) {}
     }
