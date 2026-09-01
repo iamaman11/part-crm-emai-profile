@@ -720,6 +720,17 @@ def default_addon_exclusions() -> list[Any]:
     return [DefaultAddons.UBO]
 
 
+def touch_runtime_preferences(config: dict[str, Any]) -> dict[str, int]:
+    """Project generation-owned touch identity into the pinned Firefox compatibility layer."""
+    value = config.get("navigator.maxTouchPoints")
+    if isinstance(value, bool) or not isinstance(value, int) or not 0 <= value <= 64:
+        raise RuntimeContractError("materialized navigator.maxTouchPoints identity is invalid")
+    return {
+        "dom.maxtouchpoints.testing.value": value,
+        "dom.w3c_touch_events.enabled": 1 if value > 0 else 0,
+    }
+
+
 def camoufox_kwargs(
     lock: dict[str, Any],
     root: Path,
@@ -739,6 +750,7 @@ def camoufox_kwargs(
         "firefox_user_prefs": {
             "privacy.baselineFingerprintingProtection": False,
             "webgl.disabled": False,
+            **touch_runtime_preferences(config),
         },
         "headless": resolve_headless_mode(),
         "i_know_what_im_doing": True,
