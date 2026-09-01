@@ -716,11 +716,15 @@ fn append_browser_value(canonical: &mut Vec<u8>, value: &BrowserValue) -> bool {
             append_component(canonical, if *value { "1" } else { "0" });
         }
         BrowserValue::Number(value) => {
-            if !valid_number(value) {
+            let Some(canonical_number) = value
+                .parse::<f64>()
+                .ok()
+                .and_then(crate::canonical_browser_number)
+            else {
                 return false;
-            }
+            };
             append_component(canonical, "number");
-            append_component(canonical, value);
+            append_component(canonical, &canonical_number);
         }
         BrowserValue::Text(value) => {
             if !bounded_text(value) {
@@ -749,14 +753,6 @@ fn append_browser_value(canonical: &mut Vec<u8>, value: &BrowserValue) -> bool {
         }
     }
     true
-}
-
-fn valid_number(value: &str) -> bool {
-    if value.is_empty() || value.len() > 128 || value.bytes().any(|byte| byte.is_ascii_whitespace())
-    {
-        return false;
-    }
-    value.parse::<f64>().is_ok_and(|number| number.is_finite())
 }
 
 fn domain_bytes(domain: &str) -> Vec<u8> {
@@ -1009,6 +1005,25 @@ mod tests {
             canonical_webgl_parameters_sha256(&first, &mut left),
             canonical_webgl_parameters_sha256(&second, &mut right)
         );
+    }
+
+    #[test]
+    fn equivalent_browser_number_spellings_have_one_identity_hash() {
+        let digest = |number: &str| {
+            canonical_webgl_parameters_sha256(
+                &[BrowserKeyValueObservation {
+                    name: "number".to_owned(),
+                    value: value(number),
+                }],
+                &mut TestSha256,
+            )
+        };
+        assert_eq!(digest("1"), digest("1.0"));
+        assert_eq!(digest("1"), digest("1e0"));
+        assert_eq!(digest("0"), digest("-0"));
+        assert_ne!(digest("1"), digest("1.5"));
+        assert_eq!(digest("NaN"), None);
+        assert_eq!(digest("inf"), None);
     }
 
     #[test]
