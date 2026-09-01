@@ -509,10 +509,53 @@ def browser_visible_probe_request(config: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def webgl_value_shape(value: object) -> str:
+    """Return a non-sensitive structural category for test-only divergence diagnosis."""
+    if value is None:
+        return "null"
+    if isinstance(value, bool):
+        return "bool"
+    if isinstance(value, int):
+        return "int"
+    if isinstance(value, float):
+        return "float"
+    if isinstance(value, str):
+        return "text"
+    if isinstance(value, list):
+        return "list"
+    if isinstance(value, dict):
+        return "map"
+    return "other"
+
+
+def emit_test_webgl_shape(config: dict[str, Any], value: dict[str, Any]) -> None:
+    """Emit only aggregate structure under an explicit test-only diagnostic switch."""
+    if os.environ.get("CAMOUHOST_TEST_DIAGNOSTIC") != "webgl-shape":
+        return
+    graphics = value.get("graphics")
+    observed = graphics.get("webgl") if isinstance(graphics, dict) else None
+    observed_parameters = observed.get("parameters") if isinstance(observed, dict) else None
+    configured_parameters = config.get("webGl:parameters")
+    if not isinstance(configured_parameters, dict) or not isinstance(observed_parameters, dict):
+        print("CAMOUHOST_TEST_WEBGL_SHAPE=unavailable", file=sys.stderr)
+        return
+    configured_shapes = sorted(webgl_value_shape(item) for item in configured_parameters.values())
+    observed_shapes = sorted(webgl_value_shape(item) for item in observed_parameters.values())
+    print(
+        "CAMOUHOST_TEST_WEBGL_SHAPE="
+        f"configured_rows={len(configured_parameters)};"
+        f"observed_rows={len(observed_parameters)};"
+        f"configured_shapes={','.join(configured_shapes)};"
+        f"observed_shapes={','.join(observed_shapes)}",
+        file=sys.stderr,
+    )
+
+
 def browser_visible_observation(page: Any, config: dict[str, Any]) -> bytes:
     value = page.evaluate(BROWSER_VISIBLE_PROBE, browser_visible_probe_request(config))
     if not isinstance(value, dict):
         raise RuntimeContractError("browser-visible observation shape is invalid")
+    emit_test_webgl_shape(config, value)
     payload = canonical_json(value)
     if not payload or len(payload) > MAX_BROWSER_VISIBLE_BYTES:
         raise RuntimeContractError("browser-visible observation exceeds bounded size")
