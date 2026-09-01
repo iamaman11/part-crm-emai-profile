@@ -44,10 +44,12 @@ try {
 
     $chain = [System.Security.Cryptography.X509Certificates.X509Chain]::new()
     try {
-        $chain.ChainPolicy.RevocationMode = [System.Security.Cryptography.X509Certificates.X509RevocationMode]::Online
+        # Candidate signer admission/revocation is owned by the Rust TrustedSignerSet before this
+        # adapter is called. The platform adapter therefore proves the local Windows trust chain
+        # and Code Signing EKU without introducing mutable online CRL authority.
+        $chain.ChainPolicy.RevocationMode = [System.Security.Cryptography.X509Certificates.X509RevocationMode]::NoCheck
         $chain.ChainPolicy.RevocationFlag = [System.Security.Cryptography.X509Certificates.X509RevocationFlag]::ExcludeRoot
         $chain.ChainPolicy.VerificationFlags = [System.Security.Cryptography.X509Certificates.X509VerificationFlags]::NoFlag
-        $chain.ChainPolicy.UrlRetrievalTimeout = [System.TimeSpan]::FromSeconds(10)
         [void]$chain.ChainPolicy.ApplicationPolicy.Add(
             [System.Security.Cryptography.Oid]::new('1.3.6.1.5.5.7.3.3')
         )
@@ -438,6 +440,15 @@ mod tests {
         assert!(!verifier.verify_cms(b"manifest", b"not-cms", "ABC")?);
         assert!(fs::read_dir(&directory.0)?.next().is_none());
         Ok(())
+    }
+
+    #[test]
+    fn production_chain_policy_is_local_and_app_revocation_owned() {
+        assert!(VERIFY_SCRIPT.contains("X509RevocationMode]::NoCheck"));
+        assert!(!VERIFY_SCRIPT.contains("X509RevocationMode]::Online"));
+        assert!(!VERIFY_SCRIPT.contains("UrlRetrievalTimeout"));
+        assert!(VERIFY_SCRIPT.contains("X509VerificationFlags]::NoFlag"));
+        assert!(VERIFY_SCRIPT.contains("1.3.6.1.5.5.7.3.3"));
     }
 
     #[test]
