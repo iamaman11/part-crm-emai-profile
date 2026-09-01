@@ -805,7 +805,7 @@ fn hex_encode(bytes: &str) -> String {
 }
 
 fn decode_hex(value: &str) -> Result<Vec<u8>, BridgePortError> {
-    if value.len() % 2 != 0 {
+    if !value.len().is_multiple_of(2) {
         return Err(BridgePortError::InvalidResponse);
     }
     let mut decoded = Vec::with_capacity(value.len() / 2);
@@ -1023,16 +1023,16 @@ mod tests {
             payload_hex: payload_hex.clone(),
         }
         .to_frame()?;
-        match CamouhostMessage::parse(&frame)? {
-            CamouhostMessage::BrowserVisible {
-                session_id: observed,
-                payload_hex: observed_hex,
-            } => {
-                assert_eq!(observed, session_id);
-                assert_eq!(decode_hex(&observed_hex)?, payload);
-            }
-            other => panic!("unexpected message: {other:?}"),
-        }
+        let parsed = CamouhostMessage::parse(&frame)?;
+        let CamouhostMessage::BrowserVisible {
+            session_id: observed,
+            payload_hex: observed_hex,
+        } = parsed
+        else {
+            return Err(std::io::Error::other("unexpected canonical IPC message").into());
+        };
+        assert_eq!(observed, session_id);
+        assert_eq!(decode_hex(&observed_hex)?, payload);
         let target = "https://example.test/private-path";
         let encoded = hex_encode(target);
         let navigation = CamouhostMessage::AdmitNavigation {
