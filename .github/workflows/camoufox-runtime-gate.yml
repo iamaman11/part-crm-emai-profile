@@ -94,6 +94,7 @@ jobs:
           AR10_REAL_CAMOUFOX: "1"
           AR10_PYTHON: /usr/bin/python3.12
           AR10_RUNTIME_ROOT: ${{ github.workspace }}/runtime
+          CAMOUHOST_TEST_DIAGNOSTIC: webgl-shape
         run: cargo test --locked -p profile-bridge --test real_camoufox_runtime -- --nocapture
 
       - name: Prove authoritative P3 browser-state portability through managed Camoufox
@@ -102,6 +103,7 @@ jobs:
           AR10_PYTHON: /usr/bin/python3.12
           AR10_RUNTIME_ROOT: ${{ github.workspace }}/runtime
           AR10_BROWSER_STATE_HEADLESS: virtual
+          CAMOUHOST_TEST_DIAGNOSTIC: webgl-shape
         run: cargo test --locked -p profile-bridge --test portable_browser_state real_cookie_local_storage_and_indexed_db_survive_authoritative_p3_reopen -- --nocapture
 
       - name: Enforce parity-gated AR-10 closeout policy
@@ -206,6 +208,7 @@ jobs:
           $env:AR10_PYTHON = Join-Path $runtimeRoot 'python\python.exe'
           $env:AR10_RUNTIME_ROOT = $runtimeRoot
           $env:AR10_BROWSER_STATE_HEADLESS = 'false'
+          $env:CAMOUHOST_TEST_DIAGNOSTIC = 'webgl-shape'
           cargo test --locked -p profile-bridge --test portable_browser_state real_cookie_local_storage_and_indexed_db_survive_authoritative_p3_reopen -- --nocapture
 
       - name: Test browser/runtime domain contracts on Windows
