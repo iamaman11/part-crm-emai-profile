@@ -35,7 +35,7 @@ EXPECTED_LOCK: dict[str, Any] = {
         "repository": "daijro/camoufox",
         "version": "152.0.4-beta.28",
     },
-    "camouhost_ipc_version": 2,
+    "camouhost_ipc_version": 3,
     "components": {
         "browserforge": "1.2.4",
         "camoufox_python": "0.5.5",
@@ -441,6 +441,7 @@ def validate_real_runtime(root: Path) -> None:
     except SyntaxError as error:
         fail(f"real Camouhost source does not parse: {error}")
     for marker in (
+        'IPC_VERSION = "3"',
         'CONFIG_NAME = "camoufox-config.json"',
         'USER_DATA_NAME = "user_data"',
         'BRIDGE_LOCK_NAME = ".profile-platform.lock"',
@@ -457,6 +458,7 @@ def validate_real_runtime(root: Path) -> None:
         '"exclude_addons": default_addon_exclusions()',
         "exclude_addons=default_addon_exclusions()",
         'emit(f"ready|{active_session}")',
+        'emit(f"navigation_admitted|{active_session}")',
         'emit(f"closed|{active_session}|true")',
     ):
         if marker not in text:
