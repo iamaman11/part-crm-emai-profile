@@ -980,7 +980,8 @@ mod tests {
     #[test]
     fn speech_voice_uri_drift_is_identity_bearing() -> Result<(), Box<dyn std::error::Error>> {
         let (expected, mut observation) = fixture(Some(8), true)?;
-        let SpeechVoicesObservation::Available(voices) = &mut observation.locale.speech_voices else {
+        let SpeechVoicesObservation::Available(voices) = &mut observation.locale.speech_voices
+        else {
             return Err("voices must be applicable".into());
         };
         voices[0].voice_uri = "urn:voice:other".to_owned();
