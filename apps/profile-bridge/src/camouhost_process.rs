@@ -7,7 +7,7 @@ use crate::browser_preflight::{BoundBrowserLaunchPreflight, BrowserRuntimeObserv
 use crate::local_profile::GenerationWorkspace;
 use crate::operator_flow::BrowserLaunchPreflightPort;
 use crate::runtime_bundle::ApprovedRuntimeBundle;
-use bridge_domain::{BridgePortError, CAMOUHOST_IPC_VERSION, CamouhostMessage, CamouhostPort};
+use bridge_domain::{BridgePortError, CamouhostMessage, CamouhostPort};
 use browser_execution_domain::{
     MaterializationBinding, NetworkIdentityPolicy, ProfileStableIdentity,
 };
@@ -35,7 +35,7 @@ const WINDOWS_BROWSER_EXECUTABLE: &str = "browser/camoufox.exe";
 const WINDOWS_PYTHON_EXECUTABLE: &str = "python/python.exe";
 const MAX_CONFIG_BYTES: u64 = 1024 * 1024;
 const MAX_IPC_REQUEST_BYTES: usize = 8 * 1024;
-const MAX_IPC_RESPONSE_BYTES: usize = 1024 * 1024;
+const MAX_IPC_RESPONSE_BYTES: usize = 1_100_001;
 const HELLO_RESPONSE_TIMEOUT: Duration = Duration::from_secs(10);
 const LAUNCH_RESPONSE_TIMEOUT: Duration = Duration::from_secs(120);
 const BROWSER_VISIBLE_RESPONSE_TIMEOUT: Duration = Duration::from_secs(30);
@@ -608,12 +608,20 @@ fn launch_with_browser_visible_admission(
         return Err(BridgePortError::InvalidResponse);
     }
 
-    let observation_frame = exchange_raw_shared(
+    let observation = exchange_shared(
         shared,
-        &format!("observe_browser_visible|{}", session_id.as_str()),
-        BROWSER_VISIBLE_RESPONSE_TIMEOUT,
+        &CamouhostMessage::ObserveBrowserVisible {
+            session_id: session_id.clone(),
+        },
     )?;
-    let payload = browser_visible_payload(&observation_frame, session_id)?;
+    let payload_hex = match observation {
+        CamouhostMessage::BrowserVisible {
+            session_id: observed,
+            payload_hex,
+        } if observed == *session_id => payload_hex,
+        _ => return Err(BridgePortError::InvalidResponse),
+    };
+    let payload = decode_hex(&payload_hex)?;
     let expected = {
         let state = shared.lock().map_err(|_| BridgePortError::Unavailable)?;
         if state.active_session.as_ref() != Some(session_id) {
@@ -638,12 +646,18 @@ fn launch_with_browser_visible_admission(
         .as_deref()
         .map(hex_encode)
         .unwrap_or_default();
-    let admitted = exchange_raw_shared(
+    let admitted = exchange_shared(
         shared,
-        &format!("admit_navigation|{}|{target_hex}", session_id.as_str()),
-        NAVIGATION_RESPONSE_TIMEOUT,
+        &CamouhostMessage::AdmitNavigation {
+            session_id: session_id.clone(),
+            target_hex,
+        },
     )?;
-    if admitted != format!("navigated|{}", session_id.as_str()) {
+    if admitted
+        != (CamouhostMessage::NavigationAdmitted {
+            session_id: session_id.clone(),
+        })
+    {
         return Err(BridgePortError::InvalidResponse);
     }
 
@@ -652,36 +666,26 @@ fn launch_with_browser_visible_admission(
     })
 }
 
-fn browser_visible_payload(
-    frame: &str,
-    session_id: &SessionId,
-) -> Result<Vec<u8>, BridgePortError> {
-    let mut parts = frame.splitn(3, '|');
-    if parts.next() != Some("browser_visible") || parts.next() != Some(session_id.as_str()) {
-        return Err(BridgePortError::InvalidResponse);
-    }
-    let payload_hex = parts.next().ok_or(BridgePortError::InvalidResponse)?;
-    if payload_hex.is_empty() || payload_hex.len() % 2 != 0 {
-        return Err(BridgePortError::InvalidResponse);
-    }
-    decode_hex(payload_hex)
-}
-
 fn exchange_shared(
     shared: &Arc<Mutex<ProcessState>>,
     message: &CamouhostMessage,
 ) -> Result<CamouhostMessage, BridgePortError> {
-    let frame = request_frame(message)?;
-    let response = exchange_raw_shared(shared, &frame, response_timeout(message)?)?;
+    let frame = message
+        .to_frame()
+        .map_err(|_| BridgePortError::InvalidResponse)?;
+    let response = exchange_frame_shared(shared, &frame, response_timeout(message)?)?;
     let parsed =
         CamouhostMessage::parse(&response).map_err(|_| BridgePortError::InvalidResponse)?;
     parsed
         .validate_version()
         .map_err(|_| BridgePortError::InvalidResponse)?;
+    if matches!(parsed, CamouhostMessage::Error { .. }) {
+        return Err(BridgePortError::InvalidResponse);
+    }
     Ok(parsed)
 }
 
-fn exchange_raw_shared(
+fn exchange_frame_shared(
     shared: &Arc<Mutex<ProcessState>>,
     frame: &str,
     timeout: Duration,
@@ -740,6 +744,8 @@ fn response_timeout(message: &CamouhostMessage) -> Result<Duration, BridgePortEr
     match message {
         CamouhostMessage::Hello { .. } => Ok(HELLO_RESPONSE_TIMEOUT),
         CamouhostMessage::Launch { .. } => Ok(LAUNCH_RESPONSE_TIMEOUT),
+        CamouhostMessage::ObserveBrowserVisible { .. } => Ok(BROWSER_VISIBLE_RESPONSE_TIMEOUT),
+        CamouhostMessage::AdmitNavigation { .. } => Ok(NAVIGATION_RESPONSE_TIMEOUT),
         CamouhostMessage::ObserveClose { .. } => Ok(OBSERVE_CLOSE_RESPONSE_TIMEOUT),
         CamouhostMessage::Close { .. } => Ok(CLOSE_RESPONSE_TIMEOUT),
         _ => Err(BridgePortError::InvalidResponse),
@@ -789,20 +795,6 @@ fn read_bounded_line(reader: &mut BufReader<ChildStdout>) -> Result<String, Brid
     String::from_utf8(bytes).map_err(|_| BridgePortError::InvalidResponse)
 }
 
-fn request_frame(message: &CamouhostMessage) -> Result<String, BridgePortError> {
-    match message {
-        CamouhostMessage::Hello { version } if *version == CAMOUHOST_IPC_VERSION => {
-            Ok(format!("hello|{version}"))
-        }
-        CamouhostMessage::Launch { session_id } => Ok(format!("launch|{}", session_id.as_str())),
-        CamouhostMessage::ObserveClose { session_id } => {
-            Ok(format!("observe_close|{}", session_id.as_str()))
-        }
-        CamouhostMessage::Close { session_id } => Ok(format!("close|{}", session_id.as_str())),
-        _ => Err(BridgePortError::InvalidResponse),
-    }
-}
-
 fn hex_encode(bytes: &str) -> String {
     let mut encoded = String::with_capacity(bytes.len() * 2);
     for byte in bytes.as_bytes() {
@@ -813,6 +805,9 @@ fn hex_encode(bytes: &str) -> String {
 }
 
 fn decode_hex(value: &str) -> Result<Vec<u8>, BridgePortError> {
+    if value.len() % 2 != 0 {
+        return Err(BridgePortError::InvalidResponse);
+    }
     let mut decoded = Vec::with_capacity(value.len() / 2);
     for pair in value.as_bytes().chunks_exact(2) {
         let high = hex_nibble(pair[0]).ok_or(BridgePortError::InvalidResponse)?;
@@ -846,7 +841,7 @@ fn verify_file_digest(path: &Path, expected: &str) -> Result<(), BridgePortError
 mod tests {
     use super::{
         FINGERPRINT_SOURCE_PREFIX, RuntimeBindingBrowserLaunchPreflight, RuntimeBindingSlot,
-        browser_visible_payload, hex_encode, receive_response, request_frame, sha256_hex,
+        decode_hex, hex_encode, receive_response, sha256_hex,
     };
     use crate::browser_execution::persist_materialization_binding;
     use crate::browser_preflight::{BrowserRuntimeObservation, BrowserRuntimeObservationPort};
@@ -996,41 +991,56 @@ mod tests {
     }
 
     #[test]
-    fn controlled_close_observation_has_a_read_only_ipc_frame()
+    fn controlled_close_observation_uses_canonical_ipc_frame()
     -> Result<(), Box<dyn std::error::Error>> {
         let session_id = SessionId::parse("session_01JAR10CLOSE")?;
         assert_eq!(
-            request_frame(&CamouhostMessage::ObserveClose {
+            CamouhostMessage::ObserveClose {
                 session_id: session_id.clone(),
-            })?,
+            }
+            .to_frame()?,
             format!("observe_close|{}", session_id.as_str())
         );
-        assert!(
-            request_frame(&CamouhostMessage::CloseObserved {
+        assert_eq!(
+            CamouhostMessage::CloseObserved {
                 session_id,
                 controlled: true,
-            })
-            .is_err()
+            }
+            .to_frame()?,
+            "close_observed|session_01JAR10CLOSE|true"
         );
         Ok(())
     }
 
     #[test]
-    fn browser_visible_frame_is_session_bound_and_navigation_target_is_not_plaintext()
+    fn browser_visible_and_navigation_frames_are_canonical_and_session_bound()
     -> Result<(), Box<dyn std::error::Error>> {
         let session_id = SessionId::parse("session_01JAR10VISIBLE")?;
         let payload = br#"{"user_agent":"ua"}"#;
-        let frame = format!(
-            "browser_visible|{}|{}",
-            session_id.as_str(),
-            hex_encode(std::str::from_utf8(payload)?)
-        );
-        assert_eq!(browser_visible_payload(&frame, &session_id)?, payload);
-        assert!(
-            browser_visible_payload(&frame, &SessionId::parse("session_02JAR10VISIBLE")?).is_err()
-        );
+        let payload_hex = hex_encode(std::str::from_utf8(payload)?);
+        let frame = CamouhostMessage::BrowserVisible {
+            session_id: session_id.clone(),
+            payload_hex: payload_hex.clone(),
+        }
+        .to_frame()?;
+        match CamouhostMessage::parse(&frame)? {
+            CamouhostMessage::BrowserVisible {
+                session_id: observed,
+                payload_hex: observed_hex,
+            } => {
+                assert_eq!(observed, session_id);
+                assert_eq!(decode_hex(&observed_hex)?, payload);
+            }
+            other => panic!("unexpected message: {other:?}"),
+        }
         let target = "https://example.test/private-path";
         let encoded = hex_encode(target);
+        let navigation = CamouhostMessage::AdmitNavigation {
+            session_id,
+            target_hex: encoded.clone(),
+        }
+        .to_frame()?;
+        assert!(navigation.starts_with("admit_navigation|"));
         assert!(!encoded.contains(target));
         assert!(!encoded.contains('/'));
         Ok(())
