@@ -370,7 +370,7 @@ def expect_prelaunch_identity_rejection(root: Path, report: dict[str, str]) -> N
         )
 
 
-def expect_probe_drift_rejection(root: Path, report: dict[str, str]) -> None:
+def expect_probe_digest_non_authoritative(root: Path, report: dict[str, str]) -> None:
     env = base_env(root, report)
     env["CAMOUHOST_EXPECTED_PROBE_SHA256"] = "0" * 64
     process = subprocess.Popen(
@@ -385,9 +385,14 @@ def expect_probe_drift_rejection(root: Path, report: dict[str, str]) -> None:
     )
     try:
         assert exchange(process, f"hello|{IPC_VERSION}") == f"hello_ack|{IPC_VERSION}"
-        assert exchange(process, f"launch|{SESSION}") == "error|runtime"
-        if process.wait(timeout=60) != 5:
-            raise AssertionError("profile-stable probe drift did not fail closed")
+        assert exchange(process, f"launch|{SESSION}") == f"ready|{SESSION}"
+        complete_pre_navigation_protocol(process, None)
+        assert exchange(process, f"close|{SESSION}") == f"closed|{SESSION}|true"
+        if process.wait(timeout=60) != 0:
+            stderr = process.stderr.read()[-2000:] if process.stderr is not None else ""
+            raise AssertionError(
+                "aggregate probe evidence unexpectedly became an admission veto: " + stderr
+            )
     finally:
         if process.poll() is None:
             process.kill()
@@ -439,12 +444,12 @@ def main() -> int:
 
             assert_clean_launch_lock_state(second_root)
             expect_prelaunch_identity_rejection(first_root, first)
-            expect_probe_drift_rejection(first_root, first)
+            expect_probe_digest_non_authoritative(first_root, first)
             prove_managed_environment_boundary(base)
 
         print(
             "AR-10 real Camoufox cold-launch, identity, Bridge ownership, "
-            "pre-navigation admission, managed environment and persistence evidence passed."
+            "typed admission authority, managed environment and persistence evidence passed."
         )
         return 0
     finally:
