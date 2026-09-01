@@ -200,9 +200,14 @@ impl HostCompatibilityPolicy {
     }
 
     #[must_use]
-    pub fn evaluate(&self, observation: &HostCompatibilityObservation) -> HostCompatibilityDecision {
+    pub fn evaluate(
+        &self,
+        observation: &HostCompatibilityObservation,
+    ) -> HostCompatibilityDecision {
         if !self.allowed_platforms.contains(&observation.platform)
-            || !self.allowed_architectures.contains(&observation.architecture)
+            || !self
+                .allowed_architectures
+                .contains(&observation.architecture)
             || !self
                 .allowed_runtime_classes
                 .contains(&observation.runtime_class)
@@ -278,11 +283,8 @@ mod tests {
             policy.evaluate(&prelaunch),
             HostCompatibilityDecision::PendingRuntimeEvidence
         );
-        let accepted = prelaunch.with_runtime_evidence(
-            true,
-            display(),
-            HostGraphicsBackend::WebGlAndWebGl2,
-        );
+        let accepted =
+            prelaunch.with_runtime_evidence(true, display(), HostGraphicsBackend::WebGlAndWebGl2);
         assert_eq!(
             policy.evaluate(&accepted),
             HostCompatibilityDecision::Accepted
