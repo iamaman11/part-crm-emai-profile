@@ -82,18 +82,26 @@ def verify_patch_semantics(patch_path: Path) -> None:
         text = patch_path.read_text(encoding="utf-8")
     except UnicodeDecodeError as error:
         raise PatchContractError("repository WebGL patch is not UTF-8") from error
+
+    # Inspect only the resulting/addition side of the unified diff. Removed '-' lines are
+    # predecessor evidence and must not make the semantic verifier reject a patch that deletes them.
+    added = "\n".join(
+        line[1:]
+        for line in text.splitlines()
+        if line.startswith("+") and not line.startswith("+++")
+    )
     required_fragments = (
         "struct MParamGLConverter<std::array<T, N>>",
         "return MParamGLConverter<T>::Convert(value.value());",
         "result.reserve(raw.size());",
     )
-    if any(fragment not in text for fragment in required_fragments):
+    if any(fragment not in added for fragment in required_fragments):
         fail("repository WebGL patch does not cover explicit arrays and dynamic vectors")
     forbidden_fragments = (
         "inline std::array<T, N> MParamGL(",
         "value.value().get<std::array<T, 4UL>>()",
     )
-    if any(fragment in text for fragment in forbidden_fragments):
+    if any(fragment in added for fragment in forbidden_fragments):
         fail("repository WebGL patch leaves an overload-deduction or fixed-vector predecessor")
 
 
