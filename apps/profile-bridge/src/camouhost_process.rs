@@ -40,6 +40,9 @@ const WINDOWS_PYTHON_EXECUTABLE: &str = "python/python.exe";
 const MAX_CONFIG_BYTES: u64 = 1024 * 1024;
 const MAX_IPC_REQUEST_BYTES: usize = 8 * 1024;
 const MAX_IPC_RESPONSE_BYTES: usize = 1_100_001;
+#[cfg(windows)]
+const HELLO_RESPONSE_TIMEOUT: Duration = Duration::from_secs(30);
+#[cfg(not(windows))]
 const HELLO_RESPONSE_TIMEOUT: Duration = Duration::from_secs(10);
 const LAUNCH_RESPONSE_TIMEOUT: Duration = Duration::from_secs(120);
 const BROWSER_VISIBLE_RESPONSE_TIMEOUT: Duration = Duration::from_secs(30);
@@ -461,12 +464,14 @@ impl ManagedCamouhostProcess {
             "LOGNAME",
             "PATH",
             "SHELL",
+            "SystemRoot",
             "TEMP",
             "TMP",
             "TMPDIR",
             "USER",
             "USERPROFILE",
             "WAYLAND_DISPLAY",
+            "WINDIR",
             "WSL_DISTRO_NAME",
             "WSL_INTEROP",
             "XDG_CACHE_HOME",
@@ -1155,6 +1160,7 @@ mod tests {
         let device = DeviceId::parse("device_01JAR10RUNTIME")?;
         let workspace = root.create_generation(&tenant, &profile, &generation)?;
         let lock = BridgeWorkspaceLock::acquire(&workspace, &device, 7)?;
+
         let config = b"{}\n";
         fs::write(workspace.path().join("camoufox-config.json"), config)?;
         let approved = bundle(&"b".repeat(64))?;

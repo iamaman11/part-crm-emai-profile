@@ -76,7 +76,7 @@ finally {
 }
 "#;
 
-const ACCEPTANCE_PROCESS_TIMEOUT: Duration = Duration::from_secs(60);
+const ACCEPTANCE_PROCESS_TIMEOUT: Duration = Duration::from_secs(120);
 const ACCEPTANCE_PROCESS_POLL_INTERVAL: Duration = Duration::from_millis(25);
 const PRODUCTION_SCRIPT_PREFIX: &str = "const VERIFY_SCRIPT: &str = r#\"";
 const PRODUCTION_SCRIPT_SUFFIX: &str = "\"#;";

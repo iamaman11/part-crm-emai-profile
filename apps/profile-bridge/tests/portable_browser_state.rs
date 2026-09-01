@@ -71,7 +71,9 @@ mod p3_fixture {
                 .canonicalize()?;
             let fixture = repository_root.join("scripts/test-s0-portable-browser-state.py");
             if !fixture.is_file() || fixture.symlink_metadata()?.file_type().is_symlink() {
-                return Err("portable browser-state stable-origin fixture is missing or unsafe".into());
+                return Err(
+                    "portable browser-state stable-origin fixture is missing or unsafe".into(),
+                );
             }
 
             let mut child = std::process::Command::new(python)
@@ -194,9 +196,7 @@ mod p3_fixture {
             "false" => crate::camouhost_process::RuntimeDisplayMode::Headful,
             "virtual" => crate::camouhost_process::RuntimeDisplayMode::VirtualHeadful,
             _ => {
-                return Err(
-                    "AR10_BROWSER_STATE_HEADLESS must be exactly false or virtual".into(),
-                );
+                return Err("AR10_BROWSER_STATE_HEADLESS must be exactly false or virtual".into());
             }
         };
         for (path, label) in [
@@ -214,7 +214,10 @@ mod p3_fixture {
         }
         #[cfg(windows)]
         for (path, label) in [
-            (runtime_root.join("browser/camoufox.exe"), "packaged Camoufox"),
+            (
+                runtime_root.join("browser/camoufox.exe"),
+                "packaged Camoufox",
+            ),
             (runtime_root.join("python/python.exe"), "packaged Python"),
         ] {
             if !path.is_file() || path.symlink_metadata()?.file_type().is_symlink() {
@@ -329,8 +332,7 @@ mod p3_fixture {
         bundle: &ApprovedRuntimeBundle,
         paths: &RealRuntimePaths,
     ) -> Result<MaterializationBinding, Box<dyn std::error::Error>> {
-        let writer =
-            crate::local_profile::BridgeWorkspaceLock::acquire(workspace, device_id, 99)?;
+        let writer = crate::local_profile::BridgeWorkspaceLock::acquire(workspace, device_id, 99)?;
         let mut command = std::process::Command::new(&paths.python);
         command
             .arg(&paths.camouhost)
@@ -444,8 +446,7 @@ mod p3_fixture {
         let base_generation = GenerationId::parse(BASE_GENERATION)?;
         let device_id = DeviceId::parse(DEVICE)?;
         let base_workspace = root.create_generation(&tenant_id, &profile_id, &base_generation)?;
-        let base_binding =
-            materialize_real_identity(&base_workspace, &device_id, &bundle, &paths)?;
+        let base_binding = materialize_real_identity(&base_workspace, &device_id, &bundle, &paths)?;
 
         let state = Rc::new(RefCell::new(BackendState::new()?));
         let transport = BackendMachineHttp {
@@ -494,7 +495,10 @@ mod p3_fixture {
             ClaimUri::parse("profilebridge://claim/claim_s0_browser_state_first_000001")?;
         operator.open_authoritative(&first_claim, &root, &mut downloader, UnixMillis::new(10))?;
         origin.expect("seed", 1)?;
-        assert_eq!(operator.active_local_state(), Some(LocalGenerationState::InUse));
+        assert_eq!(
+            operator.active_local_state(),
+            Some(LocalGenerationState::InUse)
+        );
         operator.close(UnixMillis::new(20))?;
         assert_eq!(
             operator.pending_dirty_local_state(),
