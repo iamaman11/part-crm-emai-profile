@@ -1,66 +1,24 @@
 #![forbid(unsafe_code)]
 
-// Re-export the normal Profile Bridge modules so the accepted in-crate P3 E2E fixture can be
-// included without changing production visibility solely for acceptance code.
+// Re-export the normal Profile Bridge modules so the shared P3 acceptance fixture can exercise
+// the same production owners without changing their production visibility solely for acceptance.
 pub use profile_bridge::*;
 
+#[cfg(not(feature = "synthetic-test-bin"))]
+mod shared_fakes {
+    include!("../src/test_fakes.rs");
+}
+#[cfg(not(feature = "synthetic-test-bin"))]
+pub use shared_fakes::{
+    FakeCamouhost, FakeDeviceIdentity, FakeDeviceKeyStore, FakeProcessControl, ProcessAction,
+};
+
 mod test_support {
-    use browser_execution_domain::{
-        BrowserExecutionError, BrowserIdentityManifest, BrowserOsIdentity, DisplayIdentity,
-        FontIdentity, GraphicsIdentity, HardwareCapabilityIdentity, LocaleIdentity,
-        OriginDeterminismMode, OriginDeterministicIdentity, ProfileStableIdentity,
-    };
-
-    pub fn browser_identity_fixture(
-        runtime_version: &str,
-        runtime_inventory_sha256: impl Into<String>,
-        fingerprint_source: &str,
-        fingerprint_config_sha256: impl Into<String>,
-    ) -> Result<BrowserIdentityManifest, BrowserExecutionError> {
-        BrowserIdentityManifest::new(
-            2,
-            "profile-stability-v1",
-            runtime_version,
-            runtime_inventory_sha256,
-            fingerprint_source,
-            fingerprint_config_sha256,
-            ProfileStableIdentity::new(
-                1,
-                BrowserOsIdentity::new(
-                    "Mozilla/5.0 Firefox/152.0",
-                    152,
-                    "Win32",
-                    "Windows NT 10.0; Win64; x64",
-                )?,
-                HardwareCapabilityIdentity::new(8, 8, 0)?,
-                DisplayIdentity::new(1920, 1080, 1920, 1040, 0, 0, 24, 24, 1000)?,
-                GraphicsIdentity::new(
-                    "Google Inc. (NVIDIA)",
-                    "ANGLE (NVIDIA GeForce)",
-                    digest('1'),
-                    digest('2'),
-                    digest('3'),
-                    digest('4'),
-                    digest('5'),
-                )?,
-                FontIdentity::new(digest('6'), digest('7'))?,
-                OriginDeterministicIdentity::new(
-                    OriginDeterminismMode::ProfileGenerationSeed,
-                    digest('8'),
-                    digest('9'),
-                )?,
-                LocaleIdentity::new("en-US", digest('a'), Some(digest('b')))?,
-            )?,
-        )
-    }
-
-    fn digest(character: char) -> String {
-        character.to_string().repeat(64)
-    }
+    include!("../src/test_support.rs");
 }
 
 mod p3_fixture {
-    include!("../src/operator_p3_reopen_e2e_tests.rs");
+    include!("../src/p3_reopen_test_support.rs");
 
     #[derive(Clone, Debug, serde::Deserialize)]
     struct RealIdentityReport {
@@ -90,9 +48,11 @@ mod p3_fixture {
             (&runtime_lock, "runtime lock"),
         ] {
             if !path.is_file() || path.symlink_metadata()?.file_type().is_symlink() {
-                return Err(
-                    format!("{label} is not a regular non-symlink file: {}", path.display()).into(),
-                );
+                return Err(format!(
+                    "{label} is not a regular non-symlink file: {}",
+                    path.display()
+                )
+                .into());
             }
         }
         Ok((python, camouhost, runtime_lock, headless))
