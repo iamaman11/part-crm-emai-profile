@@ -19,67 +19,78 @@
  #include <algorithm>
  
  #ifdef _WIN32
-@@ -235,6 +240,59 @@
+@@ -235,13 +240,69 @@
    return std::nullopt;
  }
  
-+// A configured WebGL array is profile-stable identity material. It must
-+// either be represented exactly or make the launch fail; returning the real
-+// host value on malformed input would expose a host fingerprint.
-+template <typename T, size_t N>
-+inline std::array<T, N> MParamGL(uint32_t pname, std::array<T, N> defaultValue,
-+                                 bool isWebGL2) {
-+  auto value = MaskConfig::GetNested(
-+      isWebGL2 ? "webGl2:parameters" : "webGl:parameters",
-+      std::to_string(pname));
-+  if (!value.has_value()) {
-+    return defaultValue;
-+  }
++// Configured WebGL arrays are profile-stable identity material. Upstream
++// call sites explicitly instantiate MParamGL<std::array<...>>, so checked
++// conversion must dispatch from the generic MParamGL<T> path rather than
++// depend on overload deduction.
++template <typename T>
++struct MParamGLConverter {
++  static T Convert(const nlohmann::json& raw) { return raw.get<T>(); }
++};
 +
-+  const auto& raw = value.value();
-+  MOZ_RELEASE_ASSERT(raw.is_array() && raw.size() == N,
-+                     "Camoufox WebGL array config has invalid shape");
-+  std::array<T, N> result{};
-+  for (size_t index = 0; index < N; ++index) {
-+    const auto& item = raw[index];
-+    if constexpr (std::is_same_v<T, bool>) {
-+      MOZ_RELEASE_ASSERT(item.is_boolean(),
-+                         "Camoufox WebGL boolean array config is invalid");
-+      result[index] = item.get<bool>();
-+    } else if constexpr (std::is_integral_v<T>) {
-+      MOZ_RELEASE_ASSERT(item.is_number_integer() || item.is_number_unsigned(),
-+                         "Camoufox WebGL integer array config is invalid");
-+      if (item.is_number_unsigned()) {
-+        const auto number = item.get<uint64_t>();
-+        MOZ_RELEASE_ASSERT(number <=
-+                               static_cast<uint64_t>(std::numeric_limits<T>::max()),
-+                           "Camoufox WebGL integer array config is out of range");
++template <typename T, size_t N>
++struct MParamGLConverter<std::array<T, N>> {
++  static std::array<T, N> Convert(const nlohmann::json& raw) {
++    MOZ_RELEASE_ASSERT(raw.is_array() && raw.size() == N,
++                       "Camoufox WebGL array config has invalid shape");
++    std::array<T, N> result{};
++    for (size_t index = 0; index < N; ++index) {
++      const auto& item = raw[index];
++      if constexpr (std::is_same_v<T, bool>) {
++        MOZ_RELEASE_ASSERT(item.is_boolean(),
++                           "Camoufox WebGL boolean array config is invalid");
++        result[index] = item.get<bool>();
++      } else if constexpr (std::is_integral_v<T>) {
++        MOZ_RELEASE_ASSERT(item.is_number_integer() || item.is_number_unsigned(),
++                           "Camoufox WebGL integer array config is invalid");
++        if (item.is_number_unsigned()) {
++          const auto number = item.get<uint64_t>();
++          MOZ_RELEASE_ASSERT(
++              number <= static_cast<uint64_t>(std::numeric_limits<T>::max()),
++              "Camoufox WebGL integer array config is out of range");
++          result[index] = static_cast<T>(number);
++        } else {
++          const auto number = item.get<int64_t>();
++          MOZ_RELEASE_ASSERT(
++              number >= static_cast<int64_t>(std::numeric_limits<T>::min()) &&
++                  number <= static_cast<int64_t>(std::numeric_limits<T>::max()),
++              "Camoufox WebGL integer array config is out of range");
++          result[index] = static_cast<T>(number);
++        }
++      } else if constexpr (std::is_floating_point_v<T>) {
++        MOZ_RELEASE_ASSERT(item.is_number(),
++                           "Camoufox WebGL float array config is invalid");
++        const auto number = item.get<double>();
++        MOZ_RELEASE_ASSERT(
++            std::isfinite(number) &&
++                number >= -static_cast<double>(std::numeric_limits<T>::max()) &&
++                number <= static_cast<double>(std::numeric_limits<T>::max()),
++            "Camoufox WebGL float array config is out of range");
 +        result[index] = static_cast<T>(number);
 +      } else {
-+        const auto number = item.get<int64_t>();
-+        MOZ_RELEASE_ASSERT(number >= static_cast<int64_t>(std::numeric_limits<T>::min()) &&
-+                               number <= static_cast<int64_t>(std::numeric_limits<T>::max()),
-+                           "Camoufox WebGL integer array config is out of range");
-+        result[index] = static_cast<T>(number);
++        result[index] = item.get<T>();
 +      }
-+    } else {
-+      MOZ_RELEASE_ASSERT(item.is_number(),
-+                         "Camoufox WebGL float array config is invalid");
-+      const auto number = item.get<double>();
-+      MOZ_RELEASE_ASSERT(std::isfinite(number) &&
-+                             number >= -static_cast<double>(std::numeric_limits<T>::max()) &&
-+                             number <= static_cast<double>(std::numeric_limits<T>::max()),
-+                         "Camoufox WebGL float array config is out of range");
-+      result[index] = static_cast<T>(number);
 +    }
++    return result;
 +  }
-+  return result;
-+}
++};
 +
  template <typename T>
  inline T MParamGL(uint32_t pname, T defaultValue, bool isWebGL2) {
    if (auto value = MaskConfig::GetNested(
-@@ -250,16 +308,53 @@
+           isWebGL2 ? "webGl2:parameters" : "webGl:parameters",
+           std::to_string(pname));
+       value.has_value()) {
+-    return value.value().get<T>();
++    return MParamGLConverter<T>::Convert(value.value());
+   }
+   return defaultValue;
+ }
+@@ -250,16 +311,55 @@
  inline std::vector<T> MParamGLVector(uint32_t pname,
                                       std::vector<T> defaultValue,
                                       bool isWebGL2) {
@@ -124,7 +135,7 @@
 +            "Camoufox WebGL integer vector config is out of range");
 +        result.push_back(static_cast<T>(number));
 +      }
-+    } else {
++    } else if constexpr (std::is_floating_point_v<T>) {
 +      MOZ_RELEASE_ASSERT(item.is_number(),
 +                         "Camoufox WebGL float vector config is invalid");
 +      const auto number = item.get<double>();
@@ -134,6 +145,8 @@
 +              number <= static_cast<double>(std::numeric_limits<T>::max()),
 +          "Camoufox WebGL float vector config is out of range");
 +      result.push_back(static_cast<T>(number));
++    } else {
++      result.push_back(item.get<T>());
      }
    }
 -  return defaultValue;
@@ -141,10 +154,3 @@
  }
  
  inline std::optional<std::array<int32_t, 3UL>> MShaderData(
-@@ -317,4 +412,4 @@
-   return voices;
- }
- 
--}  // namespace MaskConfig
-\ No newline at end of file
-+}  // namespace MaskConfig

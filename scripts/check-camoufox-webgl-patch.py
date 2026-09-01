@@ -77,12 +77,33 @@ def load_lock(path: Path = LOCK_PATH) -> dict[str, Any]:
     return value
 
 
+def verify_patch_semantics(patch_path: Path) -> None:
+    try:
+        text = patch_path.read_text(encoding="utf-8")
+    except UnicodeDecodeError as error:
+        raise PatchContractError("repository WebGL patch is not UTF-8") from error
+    required_fragments = (
+        "struct MParamGLConverter<std::array<T, N>>",
+        "return MParamGLConverter<T>::Convert(value.value());",
+        "result.reserve(raw.size());",
+    )
+    if any(fragment not in text for fragment in required_fragments):
+        fail("repository WebGL patch does not cover explicit arrays and dynamic vectors")
+    forbidden_fragments = (
+        "inline std::array<T, N> MParamGL(",
+        "value.value().get<std::array<T, 4UL>>()",
+    )
+    if any(fragment in text for fragment in forbidden_fragments):
+        fail("repository WebGL patch leaves an overload-deduction or fixed-vector predecessor")
+
+
 def verify(upstream_root: Path) -> None:
     lock = load_lock()
     patch = lock["patch"]
     patch_path = ROOT / relative(patch["path"])
     if digest(patch_path) != patch["sha256"]:
         fail("repository WebGL patch digest mismatch")
+    verify_patch_semantics(patch_path)
     target = upstream_root / relative(patch["upstream_target"])
     if digest(target) != patch["upstream_target_sha256"]:
         fail("pinned upstream WebGL target digest mismatch")
@@ -102,8 +123,10 @@ def self_test() -> None:
     lock = load_lock()
     if lock["browser"]["release_commit"] != "5d06ec1629ac7843508f1e683f83e404fde8db76":
         fail("unexpected beta.30 source pin")
-    if lock["patch"]["sha256"] != digest(ROOT / lock["patch"]["path"]):
+    patch_path = ROOT / lock["patch"]["path"]
+    if lock["patch"]["sha256"] != digest(patch_path):
         fail("patch digest self-test failed")
+    verify_patch_semantics(patch_path)
     with tempfile.TemporaryDirectory() as directory:
         root = Path(directory)
         target = root / lock["patch"]["upstream_target"]
