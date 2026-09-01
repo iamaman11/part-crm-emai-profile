@@ -44,6 +44,23 @@ def load_lock() -> dict[str, Any]:
     return value
 
 
+def ensure_windows_cross_build_host(target: str) -> None:
+    if target != "windows":
+        return
+    if shutil.which("msiextract") is not None:
+        return
+    if not sys.platform.startswith("linux"):
+        raise SystemExit("Windows candidate cross-build requires msiextract on the build host")
+    sudo = shutil.which("sudo")
+    apt_get = shutil.which("apt-get")
+    if sudo is None or apt_get is None:
+        raise SystemExit("Windows candidate cross-build cannot provision required msiextract")
+    subprocess.run((sudo, apt_get, "update"), check=True)
+    subprocess.run((sudo, apt_get, "install", "-y", "--no-install-recommends", "msitools"), check=True)
+    if shutil.which("msiextract") is None:
+        raise SystemExit("Windows candidate cross-build provisioned msitools without msiextract")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--upstream-root", type=Path, required=True)
@@ -62,6 +79,7 @@ def main() -> int:
     if actual != lock["browser"]["release_commit"]:
         raise SystemExit("candidate source commit differs from pinned runtime patch lock")
 
+    ensure_windows_cross_build_host(args.target)
     run(sys.executable, str(VERIFY), "--upstream-root", str(source), cwd=ROOT)
     run("patch", "--batch", "-p1", "-i", str(ROOT / lock["patch"]["path"]), cwd=source)
     run("make", "fetch", cwd=source)
