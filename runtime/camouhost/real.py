@@ -20,7 +20,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-IPC_VERSION = "2"
+IPC_VERSION = "3"
 MAX_FRAME_LENGTH = 8 * 1024
 MAX_CONFIG_BYTES = 1024 * 1024
 MAX_BROWSER_VISIBLE_BYTES = 512 * 1024
@@ -1114,7 +1114,7 @@ def run_ipc() -> int:
                 emit("error|runtime")
                 return 5
             navigation_admitted = True
-            emit(f"navigated|{active_session}")
+            emit(f"navigation_admitted|{active_session}")
             continue
 
         if (
