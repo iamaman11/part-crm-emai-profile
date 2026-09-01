@@ -31,21 +31,21 @@ LEGACY_EXECUTABLES = {
 }
 EXPECTED_LOCK: dict[str, Any] = {
     "browser": {
-        "release_commit": "0583c3ec94f5a9df5cb2d09553fbfe80589b6e2d",
+        "release_commit": "5d06ec1629ac7843508f1e683f83e404fde8db76",
         "repository": "daijro/camoufox",
-        "version": "152.0.4-beta.28",
+        "version": "152.0.4-beta.30",
     },
     "camouhost_ipc_version": 3,
     "components": {
         "browserforge": "1.2.4",
-        "camoufox_python": "0.5.5",
+        "camoufox_python": "0.5.6b1",
         "playwright": "1.60.0",
     },
     "fingerprint_config_schema": "camoufox-canonical-config-v1",
     "fingerprint_policy_version": "profile-stability-v1",
     "python": "3.12",
     "python_source": {
-        "commit": "cd83f7fd2fdf631dfde0c7eb53bd3d30f102ec4a",
+        "commit": "b68a4fb9400d950b2f3c2c030931deef6e203ba4",
         "repository": "daijro/camoufox",
     },
     "runtime_role": "real_camoufox",
@@ -54,8 +54,8 @@ EXPECTED_LOCK: dict[str, Any] = {
 EXPECTED_WINDOWS_DISTRIBUTION_BASE: dict[str, Any] = {
     "architecture": "x86_64",
     "browser": {
-        "artifact_sha256": "386fc2f41139685f9a1a9cef0d024bc041d899c315ea538d561171b5b282e57d",
-        "artifact_url": "https://github.com/daijro/camoufox/releases/download/v152.0.4-beta.28/camoufox-152.0.4-beta.28-win.x86_64.zip",
+        "artifact_sha256": "ea52a02fb1cfb1813ef6a326bea03fb2b650c9774143d953a94a27bfc8f10072",
+        "artifact_url": "https://github.com/daijro/camoufox/releases/download/v152.0.4-beta.30/camoufox-152.0.4-beta.30-win.x86_64.zip",
         "executable_path": "browser/camoufox.exe",
     },
     "python": {
@@ -636,7 +636,7 @@ def exact_runtime_lock_fixture() -> dict[str, Any]:
     distribution = json.loads(json.dumps(EXPECTED_WINDOWS_DISTRIBUTION_BASE))
     distribution["python"]["packages"] = [
         package_fixture("browserforge", "1.2.4", "1"),
-        package_fixture("camoufox", "0.5.5", "2"),
+        package_fixture("camoufox", "0.5.6b1", "2"),
         package_fixture("playwright", "1.60.0", "3"),
     ]
     value["windows_distribution"] = distribution

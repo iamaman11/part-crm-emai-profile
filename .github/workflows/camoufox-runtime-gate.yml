@@ -44,20 +44,20 @@ jobs:
       - name: Install exact AR-10 Camoufox Python components
         run: |
           python3.12 -m pip install --disable-pip-version-check \
-            "git+https://github.com/daijro/camoufox.git@cd83f7fd2fdf631dfde0c7eb53bd3d30f102ec4a#subdirectory=pythonlib" \
+            "git+https://github.com/daijro/camoufox.git@b68a4fb9400d950b2f3c2c030931deef6e203ba4#subdirectory=pythonlib" \
             "browserforge==1.2.4" \
             "playwright==1.60.0"
           python3.12 - <<'PY'
           import importlib.metadata
-          assert importlib.metadata.version('camoufox') == '0.5.5'
+          assert importlib.metadata.version('camoufox') == '0.5.6b1'
           assert importlib.metadata.version('browserforge') == '1.2.4'
           assert importlib.metadata.version('playwright') == '1.60.0'
           PY
 
       - name: Fetch exact Camoufox browser release
         run: |
-          python3.12 -m camoufox fetch official/stable/152.0.4-beta.28
-          python3.12 -m camoufox active | grep -F '152.0.4-beta.28'
+          python3.12 -m camoufox fetch official/stable/152.0.4-beta.30
+          python3.12 -m camoufox active | grep -F '152.0.4-beta.30'
 
       - name: Compile AR-10/S0 runtime acceptance sources
         run: python3.12 -m py_compile runtime/camouhost/real.py scripts/test-ar10-real-camoufox.py scripts/test-s0-browser-visible-canvas.py scripts/test-s0-browser-visible-audio-fonts.py scripts/test-s0-portable-browser-state.py scripts/test-ar10-firefox-writer-locks.py scripts/check-ar10-runtime-cutover.py
@@ -134,7 +134,7 @@ jobs:
           $report = Join-Path $env:RUNNER_TEMP 'camouhost-windows-pip-report.json'
           $candidate = Join-Path $env:RUNNER_TEMP 'camouhost-windows-dependency-lock.json'
           python -m pip install --disable-pip-version-check --dry-run --ignore-installed --only-binary=:all: --report "$report" `
-            "camoufox==0.5.5" `
+            "camoufox==0.5.6b1" `
             "browserforge==1.2.4" `
             "playwright==1.60.0"
           python scripts/camouhost-windows-dependency-lock.py project `
