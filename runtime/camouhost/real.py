@@ -102,13 +102,14 @@ async (request) => {
       const numericKey = Number(key);
       const glEnum = Number.isInteger(numericKey) ? numericKey : gl[key];
       if (!Number.isInteger(glEnum)) {
-        missingParameters.push(key);
+        missingParameters.push(`${key}_invalid_enum`);
         continue;
       }
       try {
         parameters[key] = normalize(gl.getParameter(glEnum));
-      } catch (_) {
-        missingParameters.push(key);
+      } catch (error) {
+        const category = String(error && error.name || 'error').replace(/[^A-Za-z0-9_]/g, '');
+        missingParameters.push(`${key}_${category || 'error'}`);
       }
     }
     const shaderPrecision = {};
