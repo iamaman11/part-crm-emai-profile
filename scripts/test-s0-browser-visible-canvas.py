@@ -3,9 +3,10 @@
 
 The canonical browser identity remains owned by browser-execution-domain. This test
 never promotes canvas:seed into output evidence by hashing the config key. Instead it
-launches the exact pinned Camoufox runtime, observes a deterministic browser-visible
-2D canvas payload, and requires byte-identical output across a cold relaunch and an
-exact restored generation workspace that is rebound to a fresh Bridge writer lock.
+launches the exact pinned Camoufox runtime, completes the required pre-navigation
+observation/admission protocol, observes a deterministic browser-visible 2D canvas
+payload, and requires byte-identical output across a cold relaunch and an exact restored
+generation workspace that is rebound to a fresh Bridge writer lock.
 
 On Windows the same acceptance also proves that a clean packaged runtime can materialize
 and reopen an identity with Python-side outbound networking denied and with an isolated,
@@ -85,7 +86,6 @@ profile_root.mkdir()
     "offline-bridge-writer\n", encoding="utf-8", newline="\n"
 )
 os.environ["CAMOUHOST_RUNTIME_LOCK"] = str(runtime_lock)
-os.environ.pop("CAMOUHOST_INITIAL_URL", None)
 os.environ.pop("CAMOUHOST_PROXY_CONFIG_PATH", None)
 
 spec = importlib.util.spec_from_file_location("s0_offline_camouhost", camouhost_path)
@@ -269,7 +269,6 @@ def prove_packaged_runtime_offline(
             "http_proxy",
             "https_proxy",
             "no_proxy",
-            "CAMOUHOST_INITIAL_URL",
             "CAMOUHOST_PROXY_CONFIG_PATH",
         ):
             env.pop(name, None)
@@ -328,7 +327,9 @@ def materialize(
         "profile_stable_probe_sha256",
         "runtime_lock_sha256",
     }
-    if set(report) != required or any(not isinstance(value, str) or not value for value in report.values()):
+    if set(report) != required or any(
+        not isinstance(value, str) or not value for value in report.values()
+    ):
         raise AssertionError(f"unexpected materialization report: {report}")
     return report
 
@@ -368,6 +369,25 @@ def exchange(process: subprocess.Popen[str], frame: str) -> str:
     return response
 
 
+def complete_pre_navigation_protocol(process: subprocess.Popen[str], url: str) -> None:
+    response = exchange(process, f"observe_browser_visible|{SESSION}")
+    prefix = f"browser_visible|{SESSION}|"
+    if not response.startswith(prefix):
+        raise AssertionError(f"unexpected browser-visible frame: {response[:160]!r}")
+    try:
+        payload = bytes.fromhex(response[len(prefix) :])
+        observation = json.loads(payload.decode("utf-8"))
+    except (ValueError, UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise AssertionError("browser-visible wire payload is invalid") from error
+    if not isinstance(observation, dict) or not observation:
+        raise AssertionError("browser-visible wire payload has invalid top-level shape")
+
+    encoded_target = url.encode("utf-8").hex()
+    admission = exchange(process, f"admit_navigation|{SESSION}|{encoded_target}")
+    if admission != f"navigated|{SESSION}":
+        raise AssertionError(f"navigation admission failed: {admission}")
+
+
 def observe_canvas(
     python: Path,
     camouhost: Path,
@@ -385,7 +405,6 @@ def observe_canvas(
             "CAMOUHOST_EXPECTED_RUNTIME_LOCK_SHA256": report["runtime_lock_sha256"],
             "CAMOUHOST_EXPECTED_CONFIG_SHA256": report["fingerprint_config_sha256"],
             "CAMOUHOST_EXPECTED_PROBE_SHA256": report["profile_stable_probe_sha256"],
-            "CAMOUHOST_INITIAL_URL": url,
         }
     )
     process = subprocess.Popen(
@@ -403,6 +422,7 @@ def observe_canvas(
         launch = exchange(process, f"launch|{SESSION}")
         if launch != f"ready|{SESSION}":
             raise AssertionError(f"Camouhost launch failed: {launch}")
+        complete_pre_navigation_protocol(process, url)
         evidence = server.observations.get(timeout=30)
         close = exchange(process, f"close|{SESSION}")
         if close != f"closed|{SESSION}|true":
