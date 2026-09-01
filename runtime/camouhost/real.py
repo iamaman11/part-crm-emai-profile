@@ -97,11 +97,19 @@ async (request) => {
     const gl = canvas.getContext(kind);
     if (!gl) return null;
     const parameters = {};
+    const missingParameters = [];
     for (const key of spec.parameters) {
       const numericKey = Number(key);
       const glEnum = Number.isInteger(numericKey) ? numericKey : gl[key];
-      if (!Number.isInteger(glEnum)) continue;
-      try { parameters[key] = normalize(gl.getParameter(glEnum)); } catch (_) {}
+      if (!Number.isInteger(glEnum)) {
+        missingParameters.push(key);
+        continue;
+      }
+      try {
+        parameters[key] = normalize(gl.getParameter(glEnum));
+      } catch (_) {
+        missingParameters.push(key);
+      }
     }
     const shaderPrecision = {};
     for (const key of spec.shader_precision) {
@@ -135,6 +143,7 @@ async (request) => {
       parameters,
       shader_precision: shaderPrecision,
       context_attributes: attributes,
+      missing_parameters: missingParameters,
     };
   };
 
@@ -179,7 +188,7 @@ async (request) => {
     };
   };
 
-  return {
+  const response = {
     user_agent: navigator.userAgent,
     platform: navigator.platform,
     oscpu: typeof navigator.oscpu === 'string' ? navigator.oscpu : null,
@@ -218,6 +227,10 @@ async (request) => {
     languages: Array.from(navigator.languages || []),
     speech_voices: await collectVoices(),
   };
+  if (request.test_webgl_diagnostic) {
+    response.test_webgl_missing_parameters = webgl ? webgl.missing_parameters : [];
+  }
+  return response;
 }
 """
 
@@ -506,6 +519,7 @@ def browser_visible_probe_request(config: dict[str, Any]) -> dict[str, Any]:
         },
         "fonts": copy.deepcopy(fonts),
         "voices_applicable": "voices" in config,
+        "test_webgl_diagnostic": os.environ.get("CAMOUHOST_TEST_DIAGNOSTIC") == "webgl-shape",
     }
 
 
