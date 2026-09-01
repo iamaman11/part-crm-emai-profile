@@ -97,22 +97,11 @@ async (request) => {
     const gl = canvas.getContext(kind);
     if (!gl) return null;
     const parameters = {};
-    const missingParameters = [];
     for (const key of spec.parameters) {
       const numericKey = Number(key);
       const glEnum = Number.isInteger(numericKey) ? numericKey : gl[key];
-      const arrayShape = request.test_webgl_array_shapes && request.test_webgl_array_shapes[key];
-      const diagnosticShape = typeof arrayShape === 'string' ? arrayShape : 'NA';
-      if (!Number.isInteger(glEnum)) {
-        missingParameters.push(`${key}_${diagnosticShape}_invalid_enum`);
-        continue;
-      }
-      try {
-        parameters[key] = normalize(gl.getParameter(glEnum));
-      } catch (error) {
-        const category = String(error && error.name || 'error').replace(/[^A-Za-z0-9_]/g, '');
-        missingParameters.push(`${key}_${diagnosticShape}_${category || 'error'}`);
-      }
+      if (!Number.isInteger(glEnum)) continue;
+      try { parameters[key] = normalize(gl.getParameter(glEnum)); } catch (_) {}
     }
     const shaderPrecision = {};
     for (const key of spec.shader_precision) {
@@ -146,7 +135,6 @@ async (request) => {
       parameters,
       shader_precision: shaderPrecision,
       context_attributes: attributes,
-      missing_parameters: missingParameters,
     };
   };
 
@@ -191,7 +179,7 @@ async (request) => {
     };
   };
 
-  const response = {
+  return {
     user_agent: navigator.userAgent,
     platform: navigator.platform,
     oscpu: typeof navigator.oscpu === 'string' ? navigator.oscpu : null,
@@ -230,10 +218,6 @@ async (request) => {
     languages: Array.from(navigator.languages || []),
     speech_voices: await collectVoices(),
   };
-  if (request.test_webgl_diagnostic) {
-    response.test_webgl_missing_parameters = webgl ? webgl.missing_parameters : [];
-  }
-  return response;
 }
 """
 
@@ -494,32 +478,6 @@ def stable_probe_digest(page: Any) -> str:
     return sha256_bytes(canonical_json(probe))
 
 
-def test_webgl_array_shapes(config: dict[str, Any]) -> dict[str, str]:
-    """Expose only bounded list lengths and element categories in explicit test diagnostics."""
-    if os.environ.get("CAMOUHOST_TEST_DIAGNOSTIC") != "webgl-shape":
-        return {}
-    parameters = config.get("webGl:parameters")
-    if not isinstance(parameters, dict):
-        return {}
-    shapes: dict[str, str] = {}
-    for key, value in parameters.items():
-        if not isinstance(key, str) or not isinstance(value, list) or len(value) > 8:
-            continue
-        symbols = {
-            "null": "Z",
-            "bool": "B",
-            "int": "N",
-            "float": "N",
-            "text": "T",
-            "list": "L",
-            "map": "M",
-        }
-        encoded = "".join(symbols.get(webgl_value_shape(item), "X") for item in value)
-        if encoded:
-            shapes[key] = f"L{len(value)}{encoded}"
-    return shapes
-
-
 def browser_visible_probe_request(config: dict[str, Any]) -> dict[str, Any]:
     required_maps = (
         "webGl:parameters",
@@ -548,73 +506,13 @@ def browser_visible_probe_request(config: dict[str, Any]) -> dict[str, Any]:
         },
         "fonts": copy.deepcopy(fonts),
         "voices_applicable": "voices" in config,
-        "test_webgl_diagnostic": os.environ.get("CAMOUHOST_TEST_DIAGNOSTIC") == "webgl-shape",
-        "test_webgl_array_shapes": test_webgl_array_shapes(config),
     }
 
-
-def webgl_value_shape(value: object) -> str:
-    """Return a non-sensitive structural category for test-only divergence diagnosis."""
-    if value is None:
-        return "null"
-    if isinstance(value, bool):
-        return "bool"
-    if isinstance(value, int):
-        return "int"
-    if isinstance(value, float):
-        return "float"
-    if isinstance(value, str):
-        return "text"
-    if isinstance(value, list):
-        return "list"
-    if isinstance(value, dict):
-        return "map"
-    return "other"
-
-
-def test_webgl_shape(config: dict[str, Any], value: dict[str, Any]) -> dict[str, int] | None:
-    """Return bounded aggregate expected WebGL structure for test-only Rust diagnostics."""
-    if os.environ.get("CAMOUHOST_TEST_DIAGNOSTIC") != "webgl-shape":
-        return None
-    configured_parameters = config.get("webGl:parameters")
-    if not isinstance(configured_parameters, dict):
-        return None
-    counts = {
-        "configured_null": 0,
-        "configured_bool": 0,
-        "configured_number": 0,
-        "configured_text": 0,
-        "configured_list": 0,
-        "configured_map": 0,
-    }
-    for item in configured_parameters.values():
-        shape = webgl_value_shape(item)
-        key = {
-            "null": "configured_null",
-            "bool": "configured_bool",
-            "int": "configured_number",
-            "float": "configured_number",
-            "text": "configured_text",
-            "list": "configured_list",
-            "map": "configured_map",
-        }.get(shape)
-        if key is None:
-            return None
-        counts[key] += 1
-    if any(count > 512 for count in counts.values()) or len(configured_parameters) > 512:
-        return None
-    return {
-        "configured_rows": len(configured_parameters),
-        **counts,
-    }
 
 def browser_visible_observation(page: Any, config: dict[str, Any]) -> bytes:
     value = page.evaluate(BROWSER_VISIBLE_PROBE, browser_visible_probe_request(config))
     if not isinstance(value, dict):
         raise RuntimeContractError("browser-visible observation shape is invalid")
-    test_shape = test_webgl_shape(config, value)
-    if test_shape is not None:
-        value["test_webgl_shape"] = test_shape
     payload = canonical_json(value)
     if not payload or len(payload) > MAX_BROWSER_VISIBLE_BYTES:
         raise RuntimeContractError("browser-visible observation exceeds bounded size")

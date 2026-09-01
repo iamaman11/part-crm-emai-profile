@@ -453,14 +453,6 @@ impl ManagedCamouhostProcess {
         if let Some(path) = &self.config.proxy_config_path {
             command.env("CAMOUHOST_PROXY_CONFIG_PATH", path);
         }
-        // This bounded aggregate-shape diagnostic is compiled into test/debug artifacts only.
-        // It cannot be enabled by the release shipping binary and never transports profile data.
-        if cfg!(debug_assertions)
-            && env::var_os("CAMOUHOST_TEST_DIAGNOSTIC").as_deref()
-                == Some(std::ffi::OsStr::new("webgl-shape"))
-        {
-            command.env("CAMOUHOST_TEST_DIAGNOSTIC", "webgl-shape");
-        }
         for key in [
             "DBUS_SESSION_BUS_ADDRESS",
             "DISPLAY",
