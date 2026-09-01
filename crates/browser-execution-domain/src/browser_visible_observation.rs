@@ -3,11 +3,11 @@ use super::ProfileStableIdentity;
 const MAX_COLLECTION_ROWS: usize = 512;
 const MAX_OBSERVED_TEXT_BYTES: usize = 4096;
 
-/// Pure-domain port for the SHA-256 effect used by browser-visible canonicalization.
+/// Pure-domain port for the SHA-256 effect used by Profile-Stable canonicalization.
 ///
-/// `browser-execution-domain` owns which browser values are canonicalized, their ordering and
-/// domain separation. The concrete cryptographic implementation belongs to an outer adapter so
-/// this domain crate remains dependency-pure and does not acquire a crypto/runtime concern.
+/// `browser-execution-domain` owns the exact canonical bytes and domain separation. Outer
+/// adapters only provide SHA-256 and typed values; they may not invent an alternate JSON/hash
+/// convention for generation identity or browser admission.
 pub trait BrowserVisibleSha256Port {
     type Error;
 
@@ -20,10 +20,25 @@ pub enum Observed<T> {
     Unavailable,
 }
 
+/// JSON-independent typed value used for WebGL capability/config observations.
+///
+/// A runtime/config adapter parses its native representation into this tree. The domain owns the
+/// recursive canonical encoding, so serde/JavaScript/Python object serialization is never an
+/// identity authority.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum BrowserValue {
+    Null,
+    Bool(bool),
+    Number(String),
+    Text(String),
+    List(Vec<BrowserValue>),
+    Map(Vec<BrowserKeyValueObservation>),
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct BrowserKeyValueObservation {
     pub name: String,
-    pub value: String,
+    pub value: BrowserValue,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -74,15 +89,23 @@ pub struct DisplayObservation {
     pub device_pixel_ratio_milli: u32,
 }
 
+/// Browser-visible graphics surface.
+///
+/// WebGL1 and WebGL2 are explicit inputs. The generation identity intentionally stores one
+/// combined extensions digest and one combined shader/context digest, but the combination and
+/// context labels are owned here rather than by a config or test adapter.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct GraphicsObservation {
     pub webgl_vendor: Observed<String>,
     pub webgl_renderer: Observed<String>,
     pub webgl_extensions: Observed<Vec<String>>,
+    pub webgl2_extensions: Observed<Vec<String>>,
     pub webgl_parameters: Observed<Vec<BrowserKeyValueObservation>>,
     pub webgl2_parameters: Observed<Vec<BrowserKeyValueObservation>>,
-    pub shader_precision: Observed<Vec<BrowserKeyValueObservation>>,
-    pub context_attributes: Observed<Vec<BrowserKeyValueObservation>>,
+    pub webgl_shader_precision: Observed<Vec<BrowserKeyValueObservation>>,
+    pub webgl2_shader_precision: Observed<Vec<BrowserKeyValueObservation>>,
+    pub webgl_context_attributes: Observed<Vec<BrowserKeyValueObservation>>,
+    pub webgl2_context_attributes: Observed<Vec<BrowserKeyValueObservation>>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -141,9 +164,9 @@ pub enum BrowserVisibleMismatch {
 impl ProfileStableIdentity {
     /// Compare one pre-navigation browser-visible observation with the generation-owned identity.
     ///
-    /// This remains the semantic admission owner for Profile-Stable browser fields. Runtime
-    /// adapters collect values and provide the SHA-256 primitive only; they cannot replace this
-    /// typed policy with an aggregate hash or choose the canonicalization.
+    /// This is the semantic admission owner for Profile-Stable browser fields. Runtime adapters
+    /// collect typed values and provide the SHA-256 primitive only; aggregate probe/config hashes
+    /// cannot replace this verdict or choose another canonicalization.
     pub fn compare_browser_visible<D: BrowserVisibleSha256Port>(
         &self,
         observation: &BrowserVisibleObservation,
@@ -204,10 +227,7 @@ impl ProfileStableIdentity {
     ) -> Result<(), BrowserVisibleMismatch> {
         let expected = self.display();
         for (matches, mismatch) in [
-            (
-                expected.width() == observation.width,
-                BrowserVisibleMismatch::DisplayWidth,
-            ),
+            (expected.width() == observation.width, BrowserVisibleMismatch::DisplayWidth),
             (
                 expected.height() == observation.height,
                 BrowserVisibleMismatch::DisplayHeight,
@@ -264,38 +284,39 @@ impl ProfileStableIdentity {
             &observation.webgl_renderer,
             BrowserVisibleMismatch::WebGlRenderer,
         )?;
-        compare_sorted_strings_digest(
+        compare_extensions_digest(
             expected.webgl_extensions_sha256(),
             &observation.webgl_extensions,
-            "webgl-extensions-v1",
-            BrowserVisibleMismatch::WebGlExtensions,
+            &observation.webgl2_extensions,
             digester,
         )?;
         compare_key_values_digest(
             expected.webgl_parameters_sha256(),
             &observation.webgl_parameters,
-            "webgl-parameters-v1",
+            canonical_webgl_parameters_sha256,
             BrowserVisibleMismatch::WebGlParameters,
             digester,
         )?;
         compare_key_values_digest(
             expected.webgl2_parameters_sha256(),
             &observation.webgl2_parameters,
-            "webgl2-parameters-v1",
+            canonical_webgl2_parameters_sha256,
             BrowserVisibleMismatch::WebGl2Parameters,
             digester,
         )?;
-        compare_key_values_digest(
+        compare_context_pair_digest(
             expected.shader_precision_sha256(),
-            &observation.shader_precision,
-            "webgl-shader-precision-v1",
+            &observation.webgl_shader_precision,
+            &observation.webgl2_shader_precision,
+            canonical_shader_precision_sha256,
             BrowserVisibleMismatch::ShaderPrecision,
             digester,
         )?;
-        compare_key_values_digest(
+        compare_context_pair_digest(
             expected.context_attributes_sha256(),
-            &observation.context_attributes,
-            "webgl-context-attributes-v1",
+            &observation.webgl_context_attributes,
+            &observation.webgl2_context_attributes,
+            canonical_context_attributes_sha256,
             BrowserVisibleMismatch::ContextAttributes,
             digester,
         )
@@ -321,9 +342,7 @@ impl ProfileStableIdentity {
             .iter()
             .map(|font| font.family.clone())
             .collect::<Vec<_>>();
-        let Some(observed_sha256) =
-            canonical_sorted_strings_sha256("font-set-v1", &families, digester)
-        else {
+        let Some(observed_sha256) = canonical_font_set_sha256(&families, digester) else {
             return Err(BrowserVisibleMismatch::FontSet);
         };
         if observed_sha256 != self.fonts().font_set_sha256() {
@@ -344,15 +363,11 @@ impl ProfileStableIdentity {
         if observation.languages.is_empty()
             || observation.languages.len() > MAX_COLLECTION_ROWS
             || observation.languages.first() != Some(&observation.language)
-            || observation
-                .languages
-                .iter()
-                .any(|value| !bounded_text(value))
+            || observation.languages.iter().any(|value| !bounded_text(value))
         {
             return Err(BrowserVisibleMismatch::Languages);
         }
-        let Some(observed_languages) = canonical_ordered_strings_sha256(
-            "navigator-languages-v1",
+        let Some(observed_languages) = canonical_navigator_languages_sha256(
             &observation.languages,
             digester,
         ) else {
@@ -394,40 +409,66 @@ fn compare_required_text(
     }
 }
 
-fn compare_sorted_strings_digest<D: BrowserVisibleSha256Port>(
+fn compare_extensions_digest<D: BrowserVisibleSha256Port>(
     expected: &str,
-    observed: &Observed<Vec<String>>,
-    domain: &str,
-    mismatch: BrowserVisibleMismatch,
+    webgl: &Observed<Vec<String>>,
+    webgl2: &Observed<Vec<String>>,
     digester: &mut D,
 ) -> Result<(), BrowserVisibleMismatch> {
+    let (Observed::Available(webgl), Observed::Available(webgl2)) = (webgl, webgl2) else {
+        return Err(BrowserVisibleMismatch::WebGlExtensions);
+    };
+    let Some(observed) = canonical_webgl_extensions_sha256(webgl, webgl2, digester) else {
+        return Err(BrowserVisibleMismatch::WebGlExtensions);
+    };
+    if observed == expected {
+        Ok(())
+    } else {
+        Err(BrowserVisibleMismatch::WebGlExtensions)
+    }
+}
+
+fn compare_key_values_digest<D, F>(
+    expected: &str,
+    observed: &Observed<Vec<BrowserKeyValueObservation>>,
+    canonicalize: F,
+    mismatch: BrowserVisibleMismatch,
+    digester: &mut D,
+) -> Result<(), BrowserVisibleMismatch>
+where
+    D: BrowserVisibleSha256Port,
+    F: Fn(&[BrowserKeyValueObservation], &mut D) -> Option<String>,
+{
     let Observed::Available(values) = observed else {
         return Err(mismatch);
     };
-    let Some(digest) = canonical_sorted_strings_sha256(domain, values, digester) else {
-        return Err(mismatch);
-    };
-    if digest == expected {
+    if canonicalize(values, digester).as_deref() == Some(expected) {
         Ok(())
     } else {
         Err(mismatch)
     }
 }
 
-fn compare_key_values_digest<D: BrowserVisibleSha256Port>(
+fn compare_context_pair_digest<D, F>(
     expected: &str,
-    observed: &Observed<Vec<BrowserKeyValueObservation>>,
-    domain: &str,
+    webgl: &Observed<Vec<BrowserKeyValueObservation>>,
+    webgl2: &Observed<Vec<BrowserKeyValueObservation>>,
+    canonicalize: F,
     mismatch: BrowserVisibleMismatch,
     digester: &mut D,
-) -> Result<(), BrowserVisibleMismatch> {
-    let Observed::Available(values) = observed else {
+) -> Result<(), BrowserVisibleMismatch>
+where
+    D: BrowserVisibleSha256Port,
+    F: Fn(
+        &[BrowserKeyValueObservation],
+        &[BrowserKeyValueObservation],
+        &mut D,
+    ) -> Option<String>,
+{
+    let (Observed::Available(webgl), Observed::Available(webgl2)) = (webgl, webgl2) else {
         return Err(mismatch);
     };
-    let Some(digest) = canonical_key_values_sha256(domain, values, digester) else {
-        return Err(mismatch);
-    };
-    if digest == expected {
+    if canonicalize(webgl, webgl2, digester).as_deref() == Some(expected) {
         Ok(())
     } else {
         Err(mismatch)
@@ -451,70 +492,84 @@ fn bounded_text(value: &str) -> bool {
             .any(|byte| byte == b'\0' || byte == b'\r' || byte == b'\n')
 }
 
-fn canonical_ordered_strings_sha256<D: BrowserVisibleSha256Port>(
-    domain: &str,
-    values: &[String],
+/// Canonical Profile-Stable digest for the combined WebGL1/WebGL2 extension surface.
+pub fn canonical_webgl_extensions_sha256<D: BrowserVisibleSha256Port>(
+    webgl: &[String],
+    webgl2: &[String],
     digester: &mut D,
 ) -> Option<String> {
-    let mut canonical = Vec::new();
-    append_component(&mut canonical, domain);
-    for value in values {
-        append_component(&mut canonical, value);
+    let mut canonical = domain_bytes("webgl-extensions-v1");
+    if !append_sorted_strings(&mut canonical, "webgl", webgl, true)
+        || !append_sorted_strings(&mut canonical, "webgl2", webgl2, true)
+    {
+        return None;
     }
     digest_canonical(&canonical, digester)
 }
 
-fn canonical_sorted_strings_sha256<D: BrowserVisibleSha256Port>(
-    domain: &str,
-    values: &[String],
-    digester: &mut D,
-) -> Option<String> {
-    if values.is_empty()
-        || values.len() > MAX_COLLECTION_ROWS
-        || values.iter().any(|value| !bounded_text(value))
-    {
-        return None;
-    }
-    let mut sorted = values.to_vec();
-    sorted.sort();
-    if sorted.windows(2).any(|pair| pair[0] == pair[1]) {
-        return None;
-    }
-    canonical_ordered_strings_sha256(domain, &sorted, digester)
-}
-
-fn canonical_key_values_sha256<D: BrowserVisibleSha256Port>(
-    domain: &str,
+pub fn canonical_webgl_parameters_sha256<D: BrowserVisibleSha256Port>(
     values: &[BrowserKeyValueObservation],
     digester: &mut D,
 ) -> Option<String> {
-    if values.is_empty()
-        || values.len() > MAX_COLLECTION_ROWS
-        || values
-            .iter()
-            .any(|row| !bounded_text(&row.name) || !bounded_text(&row.value))
-    {
+    canonical_key_values_sha256("webgl-parameters-v1", values, digester)
+}
+
+pub fn canonical_webgl2_parameters_sha256<D: BrowserVisibleSha256Port>(
+    values: &[BrowserKeyValueObservation],
+    digester: &mut D,
+) -> Option<String> {
+    canonical_key_values_sha256("webgl2-parameters-v1", values, digester)
+}
+
+pub fn canonical_shader_precision_sha256<D: BrowserVisibleSha256Port>(
+    webgl: &[BrowserKeyValueObservation],
+    webgl2: &[BrowserKeyValueObservation],
+    digester: &mut D,
+) -> Option<String> {
+    canonical_context_pair_sha256("webgl-shader-precision-v1", webgl, webgl2, digester)
+}
+
+pub fn canonical_context_attributes_sha256<D: BrowserVisibleSha256Port>(
+    webgl: &[BrowserKeyValueObservation],
+    webgl2: &[BrowserKeyValueObservation],
+    digester: &mut D,
+) -> Option<String> {
+    canonical_context_pair_sha256("webgl-context-attributes-v1", webgl, webgl2, digester)
+}
+
+pub fn canonical_font_set_sha256<D: BrowserVisibleSha256Port>(
+    families: &[String],
+    digester: &mut D,
+) -> Option<String> {
+    if families.is_empty() {
         return None;
     }
-    let mut sorted = values.to_vec();
-    sorted.sort_by(|left, right| {
-        left.name
-            .cmp(&right.name)
-            .then(left.value.cmp(&right.value))
-    });
-    if sorted.windows(2).any(|pair| pair[0].name == pair[1].name) {
+    let mut canonical = domain_bytes("font-set-v1");
+    if !append_sorted_strings(&mut canonical, "families", families, false) {
         return None;
-    }
-    let mut canonical = Vec::new();
-    append_component(&mut canonical, domain);
-    for row in sorted {
-        append_component(&mut canonical, &row.name);
-        append_component(&mut canonical, &row.value);
     }
     digest_canonical(&canonical, digester)
 }
 
-fn canonical_speech_voices_sha256<D: BrowserVisibleSha256Port>(
+pub fn canonical_navigator_languages_sha256<D: BrowserVisibleSha256Port>(
+    languages: &[String],
+    digester: &mut D,
+) -> Option<String> {
+    if languages.is_empty()
+        || languages.len() > MAX_COLLECTION_ROWS
+        || languages.iter().any(|value| !bounded_text(value))
+    {
+        return None;
+    }
+    let mut canonical = domain_bytes("navigator-languages-v1");
+    append_component(&mut canonical, languages.len().to_string().as_str());
+    for language in languages {
+        append_component(&mut canonical, language);
+    }
+    digest_canonical(&canonical, digester)
+}
+
+pub fn canonical_speech_voices_sha256<D: BrowserVisibleSha256Port>(
     voices: &[SpeechVoiceObservation],
     digester: &mut D,
 ) -> Option<String> {
@@ -527,8 +582,8 @@ fn canonical_speech_voices_sha256<D: BrowserVisibleSha256Port>(
     }
     let mut sorted = voices.to_vec();
     sorted.sort();
-    let mut canonical = Vec::new();
-    append_component(&mut canonical, "speech-voices-v1");
+    let mut canonical = domain_bytes("speech-voices-v1");
+    append_component(&mut canonical, sorted.len().to_string().as_str());
     for voice in sorted {
         append_component(&mut canonical, &voice.language);
         append_component(&mut canonical, &voice.name);
@@ -536,6 +591,178 @@ fn canonical_speech_voices_sha256<D: BrowserVisibleSha256Port>(
         append_component(&mut canonical, if voice.is_default { "1" } else { "0" });
     }
     digest_canonical(&canonical, digester)
+}
+
+/// Profile-Stable generation seed digests are separate from browser-output evidence.
+pub fn canonical_font_spacing_seed_sha256<D: BrowserVisibleSha256Port>(
+    seed: &BrowserValue,
+    digester: &mut D,
+) -> Option<String> {
+    canonical_seed_sha256("font-spacing-seed-v1", seed, digester)
+}
+
+pub fn canonical_canvas_seed_sha256<D: BrowserVisibleSha256Port>(
+    seed: &BrowserValue,
+    digester: &mut D,
+) -> Option<String> {
+    canonical_seed_sha256("canvas-seed-v1", seed, digester)
+}
+
+pub fn canonical_audio_seed_sha256<D: BrowserVisibleSha256Port>(
+    seed: &BrowserValue,
+    digester: &mut D,
+) -> Option<String> {
+    canonical_seed_sha256("audio-seed-v1", seed, digester)
+}
+
+fn canonical_seed_sha256<D: BrowserVisibleSha256Port>(
+    domain: &str,
+    seed: &BrowserValue,
+    digester: &mut D,
+) -> Option<String> {
+    let mut canonical = domain_bytes(domain);
+    if !append_browser_value(&mut canonical, seed) {
+        return None;
+    }
+    digest_canonical(&canonical, digester)
+}
+
+fn canonical_context_pair_sha256<D: BrowserVisibleSha256Port>(
+    domain: &str,
+    webgl: &[BrowserKeyValueObservation],
+    webgl2: &[BrowserKeyValueObservation],
+    digester: &mut D,
+) -> Option<String> {
+    let mut canonical = domain_bytes(domain);
+    if !append_key_values(&mut canonical, "webgl", webgl, true)
+        || !append_key_values(&mut canonical, "webgl2", webgl2, true)
+    {
+        return None;
+    }
+    digest_canonical(&canonical, digester)
+}
+
+fn canonical_key_values_sha256<D: BrowserVisibleSha256Port>(
+    domain: &str,
+    values: &[BrowserKeyValueObservation],
+    digester: &mut D,
+) -> Option<String> {
+    let mut canonical = domain_bytes(domain);
+    if !append_key_values(&mut canonical, "values", values, false) {
+        return None;
+    }
+    digest_canonical(&canonical, digester)
+}
+
+fn append_sorted_strings(
+    canonical: &mut Vec<u8>,
+    label: &str,
+    values: &[String],
+    allow_empty: bool,
+) -> bool {
+    if (!allow_empty && values.is_empty())
+        || values.len() > MAX_COLLECTION_ROWS
+        || values.iter().any(|value| !bounded_text(value))
+    {
+        return false;
+    }
+    let mut sorted = values.to_vec();
+    sorted.sort();
+    if sorted.windows(2).any(|pair| pair[0] == pair[1]) {
+        return false;
+    }
+    append_component(canonical, label);
+    append_component(canonical, sorted.len().to_string().as_str());
+    for value in sorted {
+        append_component(canonical, &value);
+    }
+    true
+}
+
+fn append_key_values(
+    canonical: &mut Vec<u8>,
+    label: &str,
+    values: &[BrowserKeyValueObservation],
+    allow_empty: bool,
+) -> bool {
+    if (!allow_empty && values.is_empty())
+        || values.len() > MAX_COLLECTION_ROWS
+        || values.iter().any(|row| !bounded_text(&row.name))
+    {
+        return false;
+    }
+    let mut sorted = values.to_vec();
+    sorted.sort_by(|left, right| left.name.cmp(&right.name));
+    if sorted.windows(2).any(|pair| pair[0].name == pair[1].name) {
+        return false;
+    }
+    append_component(canonical, label);
+    append_component(canonical, sorted.len().to_string().as_str());
+    for row in sorted {
+        append_component(canonical, &row.name);
+        if !append_browser_value(canonical, &row.value) {
+            return false;
+        }
+    }
+    true
+}
+
+fn append_browser_value(canonical: &mut Vec<u8>, value: &BrowserValue) -> bool {
+    match value {
+        BrowserValue::Null => append_component(canonical, "null"),
+        BrowserValue::Bool(value) => {
+            append_component(canonical, "bool");
+            append_component(canonical, if *value { "1" } else { "0" });
+        }
+        BrowserValue::Number(value) => {
+            if !valid_number(value) {
+                return false;
+            }
+            append_component(canonical, "number");
+            append_component(canonical, value);
+        }
+        BrowserValue::Text(value) => {
+            if !bounded_text(value) {
+                return false;
+            }
+            append_component(canonical, "text");
+            append_component(canonical, value);
+        }
+        BrowserValue::List(values) => {
+            if values.len() > MAX_COLLECTION_ROWS {
+                return false;
+            }
+            append_component(canonical, "list");
+            append_component(canonical, values.len().to_string().as_str());
+            for value in values {
+                if !append_browser_value(canonical, value) {
+                    return false;
+                }
+            }
+        }
+        BrowserValue::Map(values) => {
+            append_component(canonical, "map");
+            if !append_key_values(canonical, "entries", values, true) {
+                return false;
+            }
+        }
+    }
+    true
+}
+
+fn valid_number(value: &str) -> bool {
+    if value.is_empty() || value.len() > 128 || value.bytes().any(|byte| byte.is_ascii_whitespace()) {
+        return false;
+    }
+    value
+        .parse::<f64>()
+        .is_ok_and(|number| number.is_finite())
+}
+
+fn domain_bytes(domain: &str) -> Vec<u8> {
+    let mut canonical = Vec::new();
+    append_component(&mut canonical, domain);
+    canonical
 }
 
 fn append_component(canonical: &mut Vec<u8>, value: &str) {
@@ -580,9 +807,6 @@ mod tests {
         type Error = Infallible;
 
         fn sha256(&mut self, canonical_bytes: &[u8]) -> Result<[u8; 32], Self::Error> {
-            // Deliberately test-only deterministic digest. Domain tests prove canonicalization and
-            // comparison semantics without acquiring a cryptographic dependency. Shipping adapters
-            // must supply actual SHA-256 bytes.
             let mut digest = [0_u8; 32];
             for (index, byte) in canonical_bytes.iter().copied().enumerate() {
                 let slot = index % digest.len();
@@ -596,15 +820,19 @@ mod tests {
         }
     }
 
+    fn value(number: &str) -> BrowserValue {
+        BrowserValue::Number(number.to_owned())
+    }
+
     fn key_values(prefix: &str) -> Vec<BrowserKeyValueObservation> {
         vec![
             BrowserKeyValueObservation {
                 name: format!("{prefix}.a"),
-                value: "1".to_owned(),
+                value: value("1"),
             },
             BrowserKeyValueObservation {
                 name: format!("{prefix}.b"),
-                value: "2".to_owned(),
+                value: value("2"),
             },
         ]
     }
@@ -612,13 +840,15 @@ mod tests {
     fn fixture(
         device_memory_gib: Option<u16>,
         voices_applicable: bool,
-    ) -> Result<(ProfileStableIdentity, BrowserVisibleObservation), Box<dyn std::error::Error>>
-    {
-        let extensions = vec!["EXT_beta".to_owned(), "EXT_alpha".to_owned()];
+    ) -> Result<(ProfileStableIdentity, BrowserVisibleObservation), Box<dyn std::error::Error>> {
+        let webgl_extensions = vec!["EXT_beta".to_owned(), "EXT_alpha".to_owned()];
+        let webgl2_extensions = vec!["EXT_gamma".to_owned()];
         let webgl = key_values("webgl");
         let webgl2 = key_values("webgl2");
         let shader = key_values("shader");
+        let shader2 = key_values("shader2");
         let context = key_values("context");
+        let context2 = key_values("context2");
         let fonts = vec!["Arial".to_owned(), "Segoe UI".to_owned()];
         let languages = vec!["en-US".to_owned(), "en".to_owned()];
         let voices = vec![SpeechVoiceObservation {
@@ -646,35 +876,33 @@ mod tests {
             GraphicsIdentity::new(
                 "Vendor",
                 "Renderer",
-                canonical_sorted_strings_sha256("webgl-extensions-v1", &extensions, &mut digester)
-                    .ok_or("extensions")?,
-                canonical_key_values_sha256("webgl-parameters-v1", &webgl, &mut digester)
-                    .ok_or("webgl")?,
-                canonical_key_values_sha256("webgl2-parameters-v1", &webgl2, &mut digester)
-                    .ok_or("webgl2")?,
-                canonical_key_values_sha256("webgl-shader-precision-v1", &shader, &mut digester)
+                canonical_webgl_extensions_sha256(
+                    &webgl_extensions,
+                    &webgl2_extensions,
+                    &mut digester,
+                )
+                .ok_or("extensions")?,
+                canonical_webgl_parameters_sha256(&webgl, &mut digester).ok_or("webgl")?,
+                canonical_webgl2_parameters_sha256(&webgl2, &mut digester).ok_or("webgl2")?,
+                canonical_shader_precision_sha256(&shader, &shader2, &mut digester)
                     .ok_or("shader")?,
-                canonical_key_values_sha256("webgl-context-attributes-v1", &context, &mut digester)
+                canonical_context_attributes_sha256(&context, &context2, &mut digester)
                     .ok_or("context")?,
             )?,
             FontIdentity::new(
-                canonical_sorted_strings_sha256("font-set-v1", &fonts, &mut digester)
-                    .ok_or("fonts")?,
-                "7".repeat(64),
+                canonical_font_set_sha256(&fonts, &mut digester).ok_or("fonts")?,
+                canonical_font_spacing_seed_sha256(&value("7"), &mut digester)
+                    .ok_or("spacing")?,
             )?,
             OriginDeterministicIdentity::new(
                 OriginDeterminismMode::ProfileGenerationSeed,
-                "8".repeat(64),
-                "9".repeat(64),
+                canonical_canvas_seed_sha256(&value("8"), &mut digester).ok_or("canvas")?,
+                canonical_audio_seed_sha256(&value("9"), &mut digester).ok_or("audio")?,
             )?,
             LocaleIdentity::new(
                 "en-US",
-                canonical_ordered_strings_sha256(
-                    "navigator-languages-v1",
-                    &languages,
-                    &mut digester,
-                )
-                .ok_or("languages")?,
+                canonical_navigator_languages_sha256(&languages, &mut digester)
+                    .ok_or("languages")?,
                 voice_hash,
             )?,
         )?;
@@ -704,11 +932,14 @@ mod tests {
             graphics: GraphicsObservation {
                 webgl_vendor: Observed::Available("Vendor".to_owned()),
                 webgl_renderer: Observed::Available("Renderer".to_owned()),
-                webgl_extensions: Observed::Available(extensions),
+                webgl_extensions: Observed::Available(webgl_extensions),
+                webgl2_extensions: Observed::Available(webgl2_extensions),
                 webgl_parameters: Observed::Available(webgl),
                 webgl2_parameters: Observed::Available(webgl2),
-                shader_precision: Observed::Available(shader),
-                context_attributes: Observed::Available(context),
+                webgl_shader_precision: Observed::Available(shader),
+                webgl2_shader_precision: Observed::Available(shader2),
+                webgl_context_attributes: Observed::Available(context),
+                webgl2_context_attributes: Observed::Available(context2),
             },
             fonts: FontObservation {
                 configured_fonts: Observed::Available(
@@ -743,6 +974,41 @@ mod tests {
             Ok(())
         );
         Ok(())
+    }
+
+    #[test]
+    fn webgl2_is_not_hidden_inside_adapter_owned_hashing()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let (expected, mut observation) = fixture(Some(8), true)?;
+        if let Observed::Available(extensions) = &mut observation.graphics.webgl2_extensions {
+            extensions.push("EXT_other".to_owned());
+        }
+        assert_eq!(
+            expected.compare_browser_visible(&observation, &mut TestSha256),
+            Err(BrowserVisibleMismatch::WebGlExtensions)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn recursive_value_canonicalization_is_order_stable_and_typed() {
+        let mut left = TestSha256;
+        let mut right = TestSha256;
+        let first = vec![
+            BrowserKeyValueObservation {
+                name: "b".to_owned(),
+                value: BrowserValue::Bool(true),
+            },
+            BrowserKeyValueObservation {
+                name: "a".to_owned(),
+                value: BrowserValue::List(vec![value("1"), BrowserValue::Text("x".to_owned())]),
+            },
+        ];
+        let second = vec![first[1].clone(), first[0].clone()];
+        assert_eq!(
+            canonical_webgl_parameters_sha256(&first, &mut left),
+            canonical_webgl_parameters_sha256(&second, &mut right)
+        );
     }
 
     #[test]
