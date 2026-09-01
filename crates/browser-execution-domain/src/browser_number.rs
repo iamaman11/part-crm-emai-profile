@@ -26,7 +26,10 @@ mod tests {
             Some("3ff0000000000000")
         );
         assert_eq!(canonical_browser_number(1e0), canonical_browser_number(1.0));
-        assert_eq!(canonical_browser_number(-0.0), canonical_browser_number(0.0));
+        assert_eq!(
+            canonical_browser_number(-0.0),
+            canonical_browser_number(0.0)
+        );
         assert_eq!(
             canonical_browser_number(0.0).as_deref(),
             Some("0000000000000000")
