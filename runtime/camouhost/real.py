@@ -101,15 +101,17 @@ async (request) => {
     for (const key of spec.parameters) {
       const numericKey = Number(key);
       const glEnum = Number.isInteger(numericKey) ? numericKey : gl[key];
+      const arrayShape = request.test_webgl_array_shapes && request.test_webgl_array_shapes[key];
+      const diagnosticShape = typeof arrayShape === 'string' ? arrayShape : 'NA';
       if (!Number.isInteger(glEnum)) {
-        missingParameters.push(`${key}_invalid_enum`);
+        missingParameters.push(`${key}_${diagnosticShape}_invalid_enum`);
         continue;
       }
       try {
         parameters[key] = normalize(gl.getParameter(glEnum));
       } catch (error) {
         const category = String(error && error.name || 'error').replace(/[^A-Za-z0-9_]/g, '');
-        missingParameters.push(`${key}_${category || 'error'}`);
+        missingParameters.push(`${key}_${diagnosticShape}_${category || 'error'}`);
       }
     }
     const shaderPrecision = {};
@@ -492,6 +494,32 @@ def stable_probe_digest(page: Any) -> str:
     return sha256_bytes(canonical_json(probe))
 
 
+def test_webgl_array_shapes(config: dict[str, Any]) -> dict[str, str]:
+    """Expose only bounded list lengths and element categories in explicit test diagnostics."""
+    if os.environ.get("CAMOUHOST_TEST_DIAGNOSTIC") != "webgl-shape":
+        return {}
+    parameters = config.get("webGl:parameters")
+    if not isinstance(parameters, dict):
+        return {}
+    shapes: dict[str, str] = {}
+    for key, value in parameters.items():
+        if not isinstance(key, str) or not isinstance(value, list) or len(value) > 8:
+            continue
+        symbols = {
+            "null": "Z",
+            "bool": "B",
+            "int": "N",
+            "float": "N",
+            "text": "T",
+            "list": "L",
+            "map": "M",
+        }
+        encoded = "".join(symbols.get(webgl_value_shape(item), "X") for item in value)
+        if encoded:
+            shapes[key] = f"L{len(value)}{encoded}"
+    return shapes
+
+
 def browser_visible_probe_request(config: dict[str, Any]) -> dict[str, Any]:
     required_maps = (
         "webGl:parameters",
@@ -521,6 +549,7 @@ def browser_visible_probe_request(config: dict[str, Any]) -> dict[str, Any]:
         "fonts": copy.deepcopy(fonts),
         "voices_applicable": "voices" in config,
         "test_webgl_diagnostic": os.environ.get("CAMOUHOST_TEST_DIAGNOSTIC") == "webgl-shape",
+        "test_webgl_array_shapes": test_webgl_array_shapes(config),
     }
 
 
