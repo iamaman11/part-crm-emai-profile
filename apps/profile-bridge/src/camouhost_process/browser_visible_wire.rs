@@ -42,6 +42,8 @@ struct WireObservation {
     speech_voices: WireSpeechVoices,
     #[serde(default)]
     test_webgl_shape: Option<WireTestWebGlShape>,
+    #[serde(default)]
+    test_webgl_missing_parameters: Option<Vec<String>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -138,19 +140,30 @@ fn emit_test_webgl_configured_shape(payload: &[u8]) {
     let Ok(wire) = serde_json::from_slice::<WireObservation>(payload) else {
         return;
     };
-    let Some(shape) = wire.test_webgl_shape else {
-        return;
-    };
-    eprintln!(
-        "CAMOUHOST_TEST_WEBGL_CONFIGURED_SHAPE=rows={};null={};bool={};number={};text={};list={};map={}",
-        shape.configured_rows,
-        shape.configured_null,
-        shape.configured_bool,
-        shape.configured_number,
-        shape.configured_text,
-        shape.configured_list,
-        shape.configured_map,
-    );
+    if let Some(shape) = wire.test_webgl_shape {
+        eprintln!(
+            "CAMOUHOST_TEST_WEBGL_CONFIGURED_SHAPE=rows={};null={};bool={};number={};text={};list={};map={}",
+            shape.configured_rows,
+            shape.configured_null,
+            shape.configured_bool,
+            shape.configured_number,
+            shape.configured_text,
+            shape.configured_list,
+            shape.configured_map,
+        );
+    }
+    if let Some(keys) = wire.test_webgl_missing_parameters
+        && keys.len() <= 32
+        && keys.iter().all(|key| {
+            !key.is_empty()
+                && key.len() <= 64
+                && key
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
+        })
+    {
+        eprintln!("CAMOUHOST_TEST_WEBGL_MISSING_PARAMETERS={}", keys.join(","));
+    }
 }
 
 fn emit_test_webgl_observation_shape(observation: &BrowserVisibleObservation) {
