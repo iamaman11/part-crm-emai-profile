@@ -20,6 +20,7 @@ pub enum HostArchitecture {
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub enum HostRuntimeClass {
     PackagedCamoufox,
+    RepositoryPinnedCamoufox,
 }
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -178,8 +179,7 @@ impl HostCompatibilityPolicy {
         Ok(policy)
     }
 
-    #[must_use]
-    pub fn windows_first_release_headful() -> Self {
+    pub fn windows_first_release_headful() -> Result<Self, HostCompatibilityPolicyError> {
         Self::new(
             [HostPlatformClass::Windows],
             [HostArchitecture::X86_64],
@@ -187,7 +187,16 @@ impl HostCompatibilityPolicy {
             [HostExecutionMode::Headful],
             [HostGraphicsBackend::WebGlAndWebGl2],
         )
-        .expect("first-release host policy is a non-empty constant policy")
+    }
+
+    pub fn repository_linux_virtual_headful() -> Result<Self, HostCompatibilityPolicyError> {
+        Self::new(
+            [HostPlatformClass::Linux],
+            [HostArchitecture::X86_64],
+            [HostRuntimeClass::RepositoryPinnedCamoufox],
+            [HostExecutionMode::VirtualHeadful],
+            [HostGraphicsBackend::WebGlAndWebGl2],
+        )
     }
 
     #[must_use]
@@ -254,8 +263,9 @@ mod tests {
     }
 
     #[test]
-    fn first_release_windows_policy_requires_runtime_evidence_and_headful() {
-        let policy = HostCompatibilityPolicy::windows_first_release_headful();
+    fn first_release_windows_policy_requires_runtime_evidence_and_headful()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let policy = HostCompatibilityPolicy::windows_first_release_headful()?;
         let prelaunch = HostCompatibilityObservation::prelaunch(
             HostPlatformClass::Windows,
             HostArchitecture::X86_64,
@@ -277,11 +287,13 @@ mod tests {
             policy.evaluate(&accepted),
             HostCompatibilityDecision::Accepted
         );
+        Ok(())
     }
 
     #[test]
-    fn first_release_windows_policy_rejects_virtual_mode_and_bad_clock() {
-        let policy = HostCompatibilityPolicy::windows_first_release_headful();
+    fn first_release_windows_policy_rejects_virtual_mode_and_bad_clock()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let policy = HostCompatibilityPolicy::windows_first_release_headful()?;
         for observation in [
             HostCompatibilityObservation::prelaunch(
                 HostPlatformClass::Windows,
@@ -305,11 +317,33 @@ mod tests {
                 HostCompatibilityDecision::IncompatibleHost
             );
         }
+        Ok(())
     }
 
     #[test]
-    fn runtime_surface_failure_is_incompatible_not_identity_migration() {
-        let policy = HostCompatibilityPolicy::windows_first_release_headful();
+    fn repository_linux_policy_is_not_a_windows_shipping_fallback()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let policy = HostCompatibilityPolicy::repository_linux_virtual_headful()?;
+        let observation = HostCompatibilityObservation::prelaunch(
+            HostPlatformClass::Windows,
+            HostArchitecture::X86_64,
+            HostRuntimeClass::PackagedCamoufox,
+            HostExecutionMode::Headful,
+            1_800_000_000_000,
+            true,
+        )
+        .with_runtime_evidence(true, display(), HostGraphicsBackend::WebGlAndWebGl2);
+        assert_eq!(
+            policy.evaluate(&observation),
+            HostCompatibilityDecision::IncompatibleHost
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn runtime_surface_failure_is_incompatible_not_identity_migration()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let policy = HostCompatibilityPolicy::windows_first_release_headful()?;
         let observation = HostCompatibilityObservation::prelaunch(
             HostPlatformClass::Windows,
             HostArchitecture::X86_64,
@@ -323,5 +357,6 @@ mod tests {
             policy.evaluate(&observation),
             HostCompatibilityDecision::IncompatibleHost
         );
+        Ok(())
     }
 }
