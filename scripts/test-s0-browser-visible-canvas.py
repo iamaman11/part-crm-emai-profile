@@ -29,7 +29,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 MAX_CANVAS_BYTES = 1_048_576
-IPC_VERSION = "2"
+IPC_VERSION = "3"
 SESSION = "session_01JAS0CANVASPORTABLE"
 BRIDGE_LOCK = "profile-platform-bridge-lock-v1\ndevice_01JAS0CANVASPORTABLE\n1\n"
 LOCK_MARKERS = (".parentlock", "parent.lock", "lock")
@@ -384,7 +384,7 @@ def complete_pre_navigation_protocol(process: subprocess.Popen[str], url: str) -
 
     encoded_target = url.encode("utf-8").hex()
     admission = exchange(process, f"admit_navigation|{SESSION}|{encoded_target}")
-    if admission != f"navigated|{SESSION}":
+    if admission != f"navigation_admitted|{SESSION}":
         raise AssertionError(f"navigation admission failed: {admission}")
 
 
