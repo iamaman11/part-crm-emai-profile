@@ -810,9 +810,7 @@ fn valid_secret(value: &str) -> bool {
 }
 
 fn valid_lower_hex(value: &str, allow_empty: bool, maximum: usize) -> bool {
-    if value.len() > maximum
-        || !value.len().is_multiple_of(2)
-        || (!allow_empty && value.is_empty())
+    if value.len() > maximum || !value.len().is_multiple_of(2) || (!allow_empty && value.is_empty())
     {
         return false;
     }
