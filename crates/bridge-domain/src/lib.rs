@@ -583,7 +583,7 @@ impl CamouhostErrorKind {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Eq, PartialEq)]
 pub enum CamouhostMessage {
     Hello {
         version: u16,
@@ -628,6 +628,42 @@ pub enum CamouhostMessage {
     Error {
         kind: CamouhostErrorKind,
     },
+}
+
+impl fmt::Debug for CamouhostMessage {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Hello { version } => write!(formatter, "Hello {{ version: {version} }}"),
+            Self::HelloAck { version } => write!(formatter, "HelloAck {{ version: {version} }}"),
+            Self::Launch { .. } => formatter.write_str("Launch { session_id: [REDACTED] }"),
+            Self::Ready { .. } => formatter.write_str("Ready { session_id: [REDACTED] }"),
+            Self::ObserveBrowserVisible { .. } => {
+                formatter.write_str("ObserveBrowserVisible { session_id: [REDACTED] }")
+            }
+            Self::BrowserVisible { .. } => formatter.write_str(
+                "BrowserVisible { session_id: [REDACTED], payload_hex: [REDACTED] }",
+            ),
+            Self::AdmitNavigation { .. } => formatter.write_str(
+                "AdmitNavigation { session_id: [REDACTED], target_hex: [REDACTED] }",
+            ),
+            Self::NavigationAdmitted { .. } => {
+                formatter.write_str("NavigationAdmitted { session_id: [REDACTED] }")
+            }
+            Self::ObserveClose { .. } => {
+                formatter.write_str("ObserveClose { session_id: [REDACTED] }")
+            }
+            Self::CloseObserved { controlled, .. } => write!(
+                formatter,
+                "CloseObserved {{ session_id: [REDACTED], controlled: {controlled} }}"
+            ),
+            Self::Close { .. } => formatter.write_str("Close { session_id: [REDACTED] }"),
+            Self::Closed { clean, .. } => write!(
+                formatter,
+                "Closed {{ session_id: [REDACTED], clean: {clean} }}"
+            ),
+            Self::Error { kind } => write!(formatter, "Error {{ kind: {kind:?} }}"),
+        }
+    }
 }
 
 impl CamouhostMessage {
@@ -1037,6 +1073,35 @@ mod tests {
             CamouhostMessage::parse("launch|../../profile"),
             Err(CamouhostProtocolError::MalformedFrame)
         );
+        Ok(())
+    }
+
+    #[test]
+    fn camouhost_debug_redacts_session_payload_and_navigation_target()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let raw_session = "session_01JAWIREV3";
+        let payload_hex = "73656e74696e656c5f62726f777365725f7061796c6f6164";
+        let target_hex = "68747470733a2f2f7365637265742e696e76616c69642f";
+        let session = SessionId::parse(raw_session)?;
+        let visible = CamouhostMessage::BrowserVisible {
+            session_id: session.clone(),
+            payload_hex: payload_hex.to_owned(),
+        };
+        let navigation = CamouhostMessage::AdmitNavigation {
+            session_id: session,
+            target_hex: target_hex.to_owned(),
+        };
+
+        for message in [&visible, &navigation] {
+            let rendered = format!("{message:?}");
+            assert!(rendered.contains("[REDACTED]"));
+            assert!(!rendered.contains(raw_session));
+            assert!(!rendered.contains(payload_hex));
+            assert!(!rendered.contains(target_hex));
+        }
+
+        assert!(visible.to_frame()?.contains(payload_hex));
+        assert!(navigation.to_frame()?.contains(target_hex));
         Ok(())
     }
 
