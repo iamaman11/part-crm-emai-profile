@@ -21,8 +21,9 @@ from pathlib import Path
 from typing import Any
 
 IPC_VERSION = "2"
-MAX_FRAME_LENGTH = 512
+MAX_FRAME_LENGTH = 8 * 1024
 MAX_CONFIG_BYTES = 1024 * 1024
+MAX_BROWSER_VISIBLE_BYTES = 512 * 1024
 MAX_URL_BYTES = 2048
 BROWSER_CLOSE_QUIESCENCE_SECONDS = 10.0
 BROWSER_CLOSE_POLL_SECONDS = 0.05
@@ -37,7 +38,6 @@ RUNTIME_LOCK_ENV = "CAMOUHOST_RUNTIME_LOCK"
 EXPECTED_RUNTIME_LOCK_SHA256_ENV = "CAMOUHOST_EXPECTED_RUNTIME_LOCK_SHA256"
 EXPECTED_CONFIG_SHA256_ENV = "CAMOUHOST_EXPECTED_CONFIG_SHA256"
 EXPECTED_PROBE_SHA256_ENV = "CAMOUHOST_EXPECTED_PROBE_SHA256"
-INITIAL_URL_ENV = "CAMOUHOST_INITIAL_URL"
 HEADLESS_MODE_ENV = "CAMOUHOST_HEADLESS_MODE"
 PROXY_CONFIG_ENV = "CAMOUHOST_PROXY_CONFIG_PATH"
 
@@ -72,6 +72,152 @@ FINGERPRINT_PROBE = """
     };
   })(),
 })
+"""
+
+BROWSER_VISIBLE_PROBE = r"""
+async (request) => {
+  const normalize = (value) => {
+    if (value === undefined) return null;
+    if (value === null || typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
+      return value;
+    }
+    if (Array.isArray(value) || ArrayBuffer.isView(value)) {
+      return Array.from(value, normalize);
+    }
+    if (typeof value === 'object') {
+      const output = {};
+      for (const [key, nested] of Object.entries(value)) output[key] = normalize(nested);
+      return output;
+    }
+    return null;
+  };
+
+  const collectContext = (kind, spec) => {
+    const canvas = document.createElement('canvas');
+    const gl = canvas.getContext(kind);
+    if (!gl) return null;
+    const parameters = {};
+    for (const key of spec.parameters) {
+      const glEnum = Number(key);
+      if (!Number.isInteger(glEnum)) continue;
+      try { parameters[key] = normalize(gl.getParameter(glEnum)); } catch (_) {}
+    }
+    const shaderPrecision = {};
+    for (const key of spec.shader_precision) {
+      const parts = key.split(',').map(Number);
+      if (parts.length !== 2 || !parts.every(Number.isInteger)) continue;
+      try {
+        const value = gl.getShaderPrecisionFormat(parts[0], parts[1]);
+        if (value) {
+          shaderPrecision[key] = {
+            rangeMin: value.rangeMin,
+            rangeMax: value.rangeMax,
+            precision: value.precision,
+          };
+        }
+      } catch (_) {}
+    }
+    const attributes = {};
+    const actualAttributes = gl.getContextAttributes();
+    if (actualAttributes) {
+      for (const key of spec.context_attributes) {
+        if (Object.prototype.hasOwnProperty.call(actualAttributes, key)) {
+          attributes[key] = normalize(actualAttributes[key]);
+        }
+      }
+    }
+    const debug = gl.getExtension('WEBGL_debug_renderer_info');
+    return {
+      vendor: debug ? gl.getParameter(debug.UNMASKED_VENDOR_WEBGL) : gl.getParameter(gl.VENDOR),
+      renderer: debug ? gl.getParameter(debug.UNMASKED_RENDERER_WEBGL) : gl.getParameter(gl.RENDERER),
+      extensions: Array.from(gl.getSupportedExtensions() || []),
+      parameters,
+      shader_precision: shaderPrecision,
+      context_attributes: attributes,
+    };
+  };
+
+  const webgl = collectContext('webgl', request.webgl);
+  const webgl2 = collectContext('webgl2', request.webgl2);
+  const fonts = request.fonts.map((family) => {
+    const escaped = family.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+    return {
+      family,
+      available: document.fonts.check(`16px "${escaped}"`, 'mmmmmmmmmmwwwwwwww'),
+    };
+  });
+
+  const collectVoices = async () => {
+    if (!request.voices_applicable) return {status: 'not_applicable'};
+    if (!('speechSynthesis' in window)) return {status: 'unavailable'};
+    let voices = speechSynthesis.getVoices();
+    if (voices.length === 0) {
+      await new Promise((resolve) => {
+        let settled = false;
+        const finish = () => {
+          if (settled) return;
+          settled = true;
+          speechSynthesis.removeEventListener('voiceschanged', finish);
+          resolve();
+        };
+        speechSynthesis.addEventListener('voiceschanged', finish, {once: true});
+        setTimeout(finish, 1500);
+      });
+      voices = speechSynthesis.getVoices();
+    }
+    if (voices.length === 0) return {status: 'unavailable'};
+    return {
+      status: 'available',
+      voices: voices.map((voice) => ({
+        language: voice.lang,
+        name: voice.name,
+        voice_uri: voice.voiceURI,
+        local_service: voice.localService,
+        is_default: voice.default,
+      })),
+    };
+  };
+
+  return {
+    user_agent: navigator.userAgent,
+    platform: navigator.platform,
+    oscpu: typeof navigator.oscpu === 'string' ? navigator.oscpu : null,
+    hardware_concurrency: navigator.hardwareConcurrency,
+    device_memory_gib: typeof navigator.deviceMemory === 'number' ? navigator.deviceMemory : null,
+    max_touch_points: navigator.maxTouchPoints,
+    screen: {
+      width: screen.width,
+      height: screen.height,
+      avail_width: screen.availWidth,
+      avail_height: screen.availHeight,
+      avail_left: screen.availLeft,
+      avail_top: screen.availTop,
+      color_depth: screen.colorDepth,
+      pixel_depth: screen.pixelDepth,
+      device_pixel_ratio: window.devicePixelRatio,
+    },
+    graphics: {
+      vendor: webgl ? webgl.vendor : (webgl2 ? webgl2.vendor : null),
+      renderer: webgl ? webgl.renderer : (webgl2 ? webgl2.renderer : null),
+      webgl: webgl ? {
+        extensions: webgl.extensions,
+        parameters: webgl.parameters,
+        shader_precision: webgl.shader_precision,
+        context_attributes: webgl.context_attributes,
+      } : null,
+      webgl2: webgl2 ? {
+        extensions: webgl2.extensions,
+        parameters: webgl2.parameters,
+        shader_precision: webgl2.shader_precision,
+        context_attributes: webgl2.context_attributes,
+      } : null,
+    },
+    fonts,
+    language: navigator.language,
+    languages: Array.from(navigator.languages || []),
+    speech_voices: await collectVoices(),
+  };
+}
 """
 
 
@@ -281,17 +427,6 @@ def resolve_headless_mode() -> bool | str:
     raise RuntimeContractError("unsupported Camouhost headless mode")
 
 
-def resolve_initial_url() -> str | None:
-    value = os.environ.get(INITIAL_URL_ENV)
-    if value is None or value == "":
-        return None
-    if len(value.encode("utf-8")) > MAX_URL_BYTES or "\n" in value or "\r" in value:
-        raise RuntimeContractError("initial URL is invalid")
-    if not value.startswith(("https://", "http://", "about:")):
-        raise RuntimeContractError("initial URL scheme is not permitted")
-    return value
-
-
 def resolve_proxy() -> dict[str, str] | None:
     configured = os.environ.get(PROXY_CONFIG_ENV)
     if configured is None:
@@ -338,6 +473,75 @@ def load_generation_config(root: Path) -> tuple[dict[str, Any], str]:
 def stable_probe_digest(page: Any) -> str:
     probe = page.evaluate(FINGERPRINT_PROBE)
     return sha256_bytes(canonical_json(probe))
+
+
+def browser_visible_probe_request(config: dict[str, Any]) -> dict[str, Any]:
+    required_maps = (
+        "webGl:parameters",
+        "webGl2:parameters",
+        "webGl:shaderPrecisionFormats",
+        "webGl2:shaderPrecisionFormats",
+        "webGl:contextAttributes",
+        "webGl2:contextAttributes",
+    )
+    for key in required_maps:
+        if not isinstance(config.get(key), dict):
+            raise RuntimeContractError(f"materialized {key} observation surface is invalid")
+    fonts = config.get("fonts")
+    if not isinstance(fonts, list) or not fonts or any(not isinstance(value, str) or not value for value in fonts):
+        raise RuntimeContractError("materialized font observation surface is invalid")
+    return {
+        "webgl": {
+            "parameters": list(config["webGl:parameters"].keys()),
+            "shader_precision": list(config["webGl:shaderPrecisionFormats"].keys()),
+            "context_attributes": list(config["webGl:contextAttributes"].keys()),
+        },
+        "webgl2": {
+            "parameters": list(config["webGl2:parameters"].keys()),
+            "shader_precision": list(config["webGl2:shaderPrecisionFormats"].keys()),
+            "context_attributes": list(config["webGl2:contextAttributes"].keys()),
+        },
+        "fonts": copy.deepcopy(fonts),
+        "voices_applicable": "voices" in config,
+    }
+
+
+def browser_visible_observation(page: Any, config: dict[str, Any]) -> bytes:
+    value = page.evaluate(BROWSER_VISIBLE_PROBE, browser_visible_probe_request(config))
+    if not isinstance(value, dict):
+        raise RuntimeContractError("browser-visible observation shape is invalid")
+    payload = canonical_json(value)
+    if not payload or len(payload) > MAX_BROWSER_VISIBLE_BYTES:
+        raise RuntimeContractError("browser-visible observation exceeds bounded size")
+    return payload
+
+
+def emit_browser_visible(session_id: str, payload: bytes) -> None:
+    emit(f"browser_visible|{session_id}|{payload.hex()}")
+
+
+def decode_navigation_target(encoded: str) -> str | None:
+    if encoded == "":
+        return None
+    if len(encoded) > MAX_URL_BYTES * 2 or len(encoded) % 2 != 0 or re.fullmatch(r"[0-9a-f]+", encoded) is None:
+        raise RuntimeContractError("navigation target encoding is invalid")
+    try:
+        value = bytes.fromhex(encoded).decode("utf-8")
+    except (ValueError, UnicodeDecodeError) as error:
+        raise RuntimeContractError("navigation target encoding is invalid") from error
+    if len(value.encode("utf-8")) > MAX_URL_BYTES or "\n" in value or "\r" in value or "\0" in value:
+        raise RuntimeContractError("navigation target is invalid")
+    if not value.startswith(("https://", "http://", "about:")):
+        raise RuntimeContractError("navigation target scheme is not permitted")
+    return value
+
+
+def admit_navigation(context: Any, target: str | None) -> None:
+    context.set_offline(False)
+    if target is None:
+        return
+    page = context.pages[0] if context.pages else context.new_page()
+    page.goto(target, wait_until="domcontentloaded", timeout=90_000)
 
 
 def extract_camoufox_config(options: dict[str, Any]) -> dict[str, Any]:
@@ -534,6 +738,7 @@ def camoufox_kwargs(
         "ff_version": locked_firefox_major(lock),
         "firefox_user_prefs": {
             "privacy.baselineFingerprintingProtection": False,
+            "webgl.disabled": False,
         },
         "headless": resolve_headless_mode(),
         "i_know_what_im_doing": True,
@@ -559,13 +764,13 @@ def launch_verified_context(
     try:
         with contextlib.redirect_stdout(sys.stderr):
             context = manager.__enter__()
+        # Shipping browser starts network-offline. The Rust identity gate is the only authority
+        # that can release navigation after typed browser-visible conformance succeeds.
+        context.set_offline(True)
         page = context.pages[0] if context.pages else context.new_page()
         observed = stable_probe_digest(page)
         if observed != expected_probe_sha256:
             raise RuntimeContractError("profile-stable fingerprint drift detected")
-        initial_url = resolve_initial_url()
-        if initial_url is not None:
-            page.goto(initial_url, wait_until="domcontentloaded", timeout=90_000)
         return manager, context
     except BaseException:
         with contextlib.suppress(BaseException):
@@ -843,6 +1048,8 @@ def run_ipc() -> int:
     manager: Any | None = None
     context: Any | None = None
     close_observation: dict[str, Any] | None = None
+    browser_visible_observed = False
+    navigation_admitted = False
 
     for raw in sys.stdin:
         if not valid_frame(raw):
@@ -874,11 +1081,52 @@ def run_ipc() -> int:
 
         if (
             len(parts) == 2
+            and parts[0] == "observe_browser_visible"
+            and active_session is not None
+            and parts[1] == active_session
+            and manager is not None
+            and context is not None
+            and not browser_visible_observed
+            and not navigation_admitted
+        ):
+            try:
+                page = context.pages[0] if context.pages else context.new_page()
+                payload = browser_visible_observation(page, config)
+            except BaseException:
+                emit("error|runtime")
+                return 5
+            browser_visible_observed = True
+            emit_browser_visible(active_session, payload)
+            continue
+
+        if (
+            len(parts) == 3
+            and parts[0] == "admit_navigation"
+            and active_session is not None
+            and parts[1] == active_session
+            and manager is not None
+            and context is not None
+            and browser_visible_observed
+            and not navigation_admitted
+        ):
+            try:
+                target = decode_navigation_target(parts[2])
+                admit_navigation(context, target)
+            except BaseException:
+                emit("error|runtime")
+                return 5
+            navigation_admitted = True
+            emit(f"navigated|{active_session}")
+            continue
+
+        if (
+            len(parts) == 2
             and parts[0] == "observe_close"
             and active_session is not None
             and parts[1] == active_session
             and manager is not None
             and context is not None
+            and navigation_admitted
         ):
             controlled = controlled_close_candidate(close_observation)
             emit(f"close_observed|{active_session}|{'true' if controlled else 'false'}")
@@ -891,6 +1139,7 @@ def run_ipc() -> int:
             and parts[1] == active_session
             and manager is not None
             and context is not None
+            and navigation_admitted
         ):
             try:
                 close_context(manager, context, root)
