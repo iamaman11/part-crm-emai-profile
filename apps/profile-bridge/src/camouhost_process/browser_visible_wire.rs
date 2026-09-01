@@ -5,6 +5,7 @@ use browser_execution_domain::browser_visible_observation::{
     GraphicsObservation, HardwareCapabilityObservation, LocaleObservation, Observed,
     SpeechVoiceObservation, SpeechVoicesObservation,
 };
+use browser_execution_domain::host_compatibility::{HostDisplayEnvironment, HostGraphicsBackend};
 use serde::Deserialize;
 use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
@@ -16,6 +17,12 @@ const MAX_JSON_DEPTH: usize = 32;
 pub(super) enum BrowserVisibleWireError {
     InvalidPayload,
     IdentityMismatch,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) struct HostRuntimeEvidence {
+    pub display: HostDisplayEnvironment,
+    pub graphics_backend: HostGraphicsBackend,
 }
 
 #[derive(Debug, Deserialize)]
@@ -95,14 +102,46 @@ struct WireSpeechVoice {
 pub(super) fn verify_browser_visible_payload(
     expected: &ProfileStableIdentity,
     payload: &[u8],
-) -> Result<(), BrowserVisibleWireError> {
+) -> Result<HostRuntimeEvidence, BrowserVisibleWireError> {
     let observation = parse_browser_visible_payload(payload)?;
     expected
         .compare_browser_visible(&observation, &mut Sha256Adapter)
         .map_err(|mismatch| {
             eprintln!("CAMOUHOST_BROWSER_VISIBLE_MISMATCH={mismatch:?}");
             BrowserVisibleWireError::IdentityMismatch
-        })
+        })?;
+    host_runtime_evidence(&observation)
+}
+
+fn host_runtime_evidence(
+    observation: &BrowserVisibleObservation,
+) -> Result<HostRuntimeEvidence, BrowserVisibleWireError> {
+    let graphics_backend = match (
+        &observation.graphics.webgl_extensions,
+        &observation.graphics.webgl2_extensions,
+    ) {
+        (Observed::Available(_), Observed::Available(_)) => HostGraphicsBackend::WebGlAndWebGl2,
+        (Observed::Available(_), Observed::Unavailable) => HostGraphicsBackend::WebGl,
+        (Observed::Unavailable, Observed::Available(_)) => HostGraphicsBackend::WebGl2,
+        (Observed::Unavailable, Observed::Unavailable) => {
+            return Err(BrowserVisibleWireError::InvalidPayload);
+        }
+    };
+    let display = observation.display;
+    Ok(HostRuntimeEvidence {
+        display: HostDisplayEnvironment::new(
+            display.width,
+            display.height,
+            display.avail_width,
+            display.avail_height,
+            display.avail_left,
+            display.avail_top,
+            display.color_depth,
+            display.pixel_depth,
+            display.device_pixel_ratio_milli,
+        ),
+        graphics_backend,
+    })
 }
 
 fn parse_browser_visible_payload(
