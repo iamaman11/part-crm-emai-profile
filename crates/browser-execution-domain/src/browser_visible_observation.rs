@@ -204,8 +204,14 @@ impl ProfileStableIdentity {
     ) -> Result<(), BrowserVisibleMismatch> {
         let expected = self.display();
         for (matches, mismatch) in [
-            (expected.width() == observation.width, BrowserVisibleMismatch::DisplayWidth),
-            (expected.height() == observation.height, BrowserVisibleMismatch::DisplayHeight),
+            (
+                expected.width() == observation.width,
+                BrowserVisibleMismatch::DisplayWidth,
+            ),
+            (
+                expected.height() == observation.height,
+                BrowserVisibleMismatch::DisplayHeight,
+            ),
             (
                 expected.avail_width() == observation.avail_width,
                 BrowserVisibleMismatch::DisplayAvailWidth,
@@ -338,7 +344,10 @@ impl ProfileStableIdentity {
         if observation.languages.is_empty()
             || observation.languages.len() > MAX_COLLECTION_ROWS
             || observation.languages.first() != Some(&observation.language)
-            || observation.languages.iter().any(|value| !bounded_text(value))
+            || observation
+                .languages
+                .iter()
+                .any(|value| !bounded_text(value))
         {
             return Err(BrowserVisibleMismatch::Languages);
         }
@@ -488,7 +497,11 @@ fn canonical_key_values_sha256<D: BrowserVisibleSha256Port>(
         return None;
     }
     let mut sorted = values.to_vec();
-    sorted.sort_by(|left, right| left.name.cmp(&right.name).then(left.value.cmp(&right.value)));
+    sorted.sort_by(|left, right| {
+        left.name
+            .cmp(&right.name)
+            .then(left.value.cmp(&right.value))
+    });
     if sorted.windows(2).any(|pair| pair[0].name == pair[1].name) {
         return None;
     }
@@ -573,13 +586,11 @@ mod tests {
             let mut digest = [0_u8; 32];
             for (index, byte) in canonical_bytes.iter().copied().enumerate() {
                 let slot = index % digest.len();
-                digest[slot] = digest[slot]
-                    .wrapping_mul(31)
-                    .wrapping_add(byte)
-                    .wrapping_add(index as u8);
+                digest[slot] = digest[slot].wrapping_mul(31).wrapping_add(byte);
             }
-            for (index, byte) in digest.iter_mut().enumerate() {
-                *byte ^= (canonical_bytes.len() as u8).wrapping_add((index as u8).wrapping_mul(17));
+            let length_byte = canonical_bytes.len().to_le_bytes()[0];
+            for byte in &mut digest {
+                *byte ^= length_byte;
             }
             Ok(digest)
         }
@@ -601,7 +612,8 @@ mod tests {
     fn fixture(
         device_memory_gib: Option<u16>,
         voices_applicable: bool,
-    ) -> Result<(ProfileStableIdentity, BrowserVisibleObservation), Box<dyn std::error::Error>> {
+    ) -> Result<(ProfileStableIdentity, BrowserVisibleObservation), Box<dyn std::error::Error>>
+    {
         let extensions = vec!["EXT_beta".to_owned(), "EXT_alpha".to_owned()];
         let webgl = key_values("webgl");
         let webgl2 = key_values("webgl2");
