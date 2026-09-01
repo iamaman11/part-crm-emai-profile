@@ -29,18 +29,21 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
 
-      - name: Verify exact project source
+      - name: Verify exact source checkout
         env:
           EXPECTED_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: python -c "import os, subprocess; actual = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(); expected = os.environ['EXPECTED_SOURCE_SHA']; assert actual == expected, f'expected {expected}, got {actual}'"
 
-      - name: Checkout exact Camoufox upstream source
-        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
-        with:
-          repository: daijro/camoufox
-          ref: 5d06ec1629ac7843508f1e683f83e404fde8db76
-          path: .candidate-upstream
-          persist-credentials: false
+      - name: Fetch exact Camoufox upstream source without second checkout authority
+        run: |
+          set -euo pipefail
+          mkdir .candidate-upstream
+          git -C .candidate-upstream init
+          git -C .candidate-upstream remote add origin https://github.com/daijro/camoufox.git
+          git -C .candidate-upstream fetch --depth=1 origin 5d06ec1629ac7843508f1e683f83e404fde8db76
+          git -C .candidate-upstream checkout --detach FETCH_HEAD
+          test "$(git -C .candidate-upstream rev-parse HEAD)" = 5d06ec1629ac7843508f1e683f83e404fde8db76
+          test "$(git -C .candidate-upstream remote get-url origin)" = https://github.com/daijro/camoufox.git
 
       - name: Verify native patch contract and candidate tools
         run: |
