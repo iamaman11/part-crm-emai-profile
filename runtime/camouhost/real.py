@@ -226,8 +226,10 @@ class RuntimeContractError(ValueError):
 
 
 def emit(frame: str) -> None:
-    sys.stdout.write(frame + "\n")
-    sys.stdout.flush()
+    # IPC v3 owns an LF-only wire format. Writing through TextIOWrapper would translate
+    # "\n" to CRLF on Windows and make the same canonical frame platform-dependent.
+    sys.stdout.buffer.write((frame + "\n").encode("ascii"))
+    sys.stdout.buffer.flush()
 
 
 def canonical_json(value: object) -> bytes:

@@ -416,7 +416,11 @@ impl ManagedCamouhostProcess {
             verify_file_digest(&python, &binding.python_sha256)?;
         }
 
-        let mut command = Command::new(&self.config.python_executable);
+        #[cfg(windows)]
+        let python_executable = self.config.runtime_root.join(WINDOWS_PYTHON_EXECUTABLE);
+        #[cfg(not(windows))]
+        let python_executable = self.config.python_executable.clone();
+        let mut command = Command::new(&python_executable);
         command
             .arg(&entrypoint)
             .current_dir(&self.config.runtime_root)
@@ -616,7 +620,6 @@ fn launch_with_browser_visible_admission(
             session_id: session_id.clone(),
         })
     {
-        eprintln!("CAMOUHOST_MANAGED_ADMISSION_STAGE=launch;OUTCOME=unexpected_response");
         return Err(BridgePortError::InvalidResponse);
     }
 
@@ -631,15 +634,9 @@ fn launch_with_browser_visible_admission(
             session_id: observed,
             payload_hex,
         } if observed == *session_id => payload_hex,
-        _ => {
-            eprintln!("CAMOUHOST_MANAGED_ADMISSION_STAGE=browser_visible;OUTCOME=unexpected_response");
-            return Err(BridgePortError::InvalidResponse);
-        }
+        _ => return Err(BridgePortError::InvalidResponse),
     };
-    let payload = decode_hex(&payload_hex).map_err(|error| {
-        eprintln!("CAMOUHOST_MANAGED_ADMISSION_STAGE=browser_visible_decode;PORT_ERROR={error:?}");
-        error
-    })?;
+    let payload = decode_hex(&payload_hex)?;
     let expected = {
         let state = shared.lock().map_err(|_| BridgePortError::Unavailable)?;
         if state.active_session.as_ref() != Some(session_id) {
@@ -650,10 +647,8 @@ fn launch_with_browser_visible_admission(
             .clone()
             .ok_or(BridgePortError::InvalidResponse)?
     };
-    let host_runtime_evidence = verify_browser_visible_payload(&expected, &payload).map_err(|mismatch| {
-        eprintln!("CAMOUHOST_MANAGED_ADMISSION_STAGE=profile_stable;MISMATCH={mismatch:?}");
-        BridgePortError::InvalidResponse
-    })?;
+    let host_runtime_evidence = verify_browser_visible_payload(&expected, &payload)
+        .map_err(|_| BridgePortError::InvalidResponse)?;
     verify_host_compatibility(display_mode, host_runtime_evidence)?;
 
     let navigation_target = {
@@ -679,7 +674,6 @@ fn launch_with_browser_visible_admission(
             session_id: session_id.clone(),
         })
     {
-        eprintln!("CAMOUHOST_MANAGED_ADMISSION_STAGE=navigation;OUTCOME=unexpected_response");
         return Err(BridgePortError::InvalidResponse);
     }
 
@@ -762,42 +756,19 @@ fn exchange_shared(
     shared: &Arc<Mutex<ProcessState>>,
     message: &CamouhostMessage,
 ) -> Result<CamouhostMessage, BridgePortError> {
-    let stage = request_stage(message)?;
     let frame = message
         .to_frame()
         .map_err(|_| BridgePortError::InvalidResponse)?;
-    let response = exchange_frame_shared(shared, &frame, response_timeout(message)?).map_err(|error| {
-        eprintln!("CAMOUHOST_MANAGED_IPC_STAGE={stage};PORT_ERROR={error:?}");
-        error
-    })?;
-    let parsed = CamouhostMessage::parse(&response).map_err(|_| {
-        eprintln!("CAMOUHOST_MANAGED_IPC_STAGE={stage};PROTOCOL_ERROR=malformed_response");
-        BridgePortError::InvalidResponse
-    })?;
-    parsed.validate_version().map_err(|_| {
-        eprintln!("CAMOUHOST_MANAGED_IPC_STAGE={stage};PROTOCOL_ERROR=version");
-        BridgePortError::InvalidResponse
-    })?;
-    if let CamouhostMessage::Error { kind } = &parsed {
-        eprintln!(
-            "CAMOUHOST_MANAGED_IPC_STAGE={stage};CAMOUHOST_ERROR={}",
-            (*kind).as_str()
-        );
+    let response = exchange_frame_shared(shared, &frame, response_timeout(message)?)?;
+    let parsed =
+        CamouhostMessage::parse(&response).map_err(|_| BridgePortError::InvalidResponse)?;
+    parsed
+        .validate_version()
+        .map_err(|_| BridgePortError::InvalidResponse)?;
+    if matches!(parsed, CamouhostMessage::Error { .. }) {
         return Err(BridgePortError::InvalidResponse);
     }
     Ok(parsed)
-}
-
-fn request_stage(message: &CamouhostMessage) -> Result<&'static str, BridgePortError> {
-    match message {
-        CamouhostMessage::Hello { .. } => Ok("hello"),
-        CamouhostMessage::Launch { .. } => Ok("launch"),
-        CamouhostMessage::ObserveBrowserVisible { .. } => Ok("browser_visible"),
-        CamouhostMessage::AdmitNavigation { .. } => Ok("navigation"),
-        CamouhostMessage::ObserveClose { .. } => Ok("observe_close"),
-        CamouhostMessage::Close { .. } => Ok("close"),
-        _ => Err(BridgePortError::InvalidResponse),
-    }
 }
 
 fn exchange_frame_shared(
