@@ -781,10 +781,8 @@ pub trait DeviceKeyPort {
 }
 
 pub trait CamouhostPort {
-    fn exchange(
-        &mut self,
-        message: &CamouhostMessage,
-    ) -> Result<CamouhostMessage, BridgePortError>;
+    fn exchange(&mut self, message: &CamouhostMessage)
+    -> Result<CamouhostMessage, BridgePortError>;
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1042,8 +1040,8 @@ mod tests {
     }
 
     #[test]
-    fn camouhost_v3_owns_observation_admission_and_errors()
-    -> Result<(), Box<dyn std::error::Error>> {
+    fn camouhost_v3_owns_observation_admission_and_errors() -> Result<(), Box<dyn std::error::Error>>
+    {
         let session = SessionId::parse("session_01JAWIREV3")?;
         let messages = [
             CamouhostMessage::ObserveBrowserVisible {
