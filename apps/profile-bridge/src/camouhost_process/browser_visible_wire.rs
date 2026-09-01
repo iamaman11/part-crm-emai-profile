@@ -114,7 +114,6 @@ pub(super) fn verify_browser_visible_payload(
     host_runtime_evidence(&observation)
 }
 
-
 fn emit_test_webgl_observation_shape(observation: &BrowserVisibleObservation) {
     if std::env::var_os("CAMOUHOST_TEST_DIAGNOSTIC").as_deref()
         != Some(std::ffi::OsStr::new("webgl-shape"))
