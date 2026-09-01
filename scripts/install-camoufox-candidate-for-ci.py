@@ -22,6 +22,7 @@ VERIFY = ROOT / "scripts/verify-camoufox-patched-candidate.py"
 PATCH_LOCK = ROOT / "runtime/camouhost/camoufox-patch-lock.json"
 MAX_FILES = 500_000
 MAX_BYTES = 2 * 1024 * 1024 * 1024
+LINUX_EXECUTABLES = ("camoufox", "camoufox-bin")
 
 
 class InstallError(ValueError):
@@ -88,6 +89,24 @@ def safe_extract(archive: Path, destination: Path) -> None:
         fail("candidate ZIP contains no files")
 
 
+def restore_linux_executable_modes(root: Path) -> None:
+    """Restore only the two verified Camoufox Linux entry executables.
+
+    Candidate ZIPs are intentionally permission-canonicalized to regular 0644 files.
+    The archive digest is verified before extraction, so restoring these exact runtime
+    execution bits is transport materialization rather than a second identity source.
+    """
+    for relative in LINUX_EXECUTABLES:
+        executable = root / relative
+        if executable.is_symlink() or not executable.is_file():
+            fail(f"Linux candidate executable is missing: {relative}")
+        executable.chmod(
+            executable.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH
+        )
+        if not os.access(executable, os.X_OK):
+            fail(f"Linux candidate executable mode was not restored: {relative}")
+
+
 def install(archive: Path, provenance: Path, build_source_commit: str) -> Path:
     verifier = load_verifier()
     try:
@@ -109,9 +128,7 @@ def install(archive: Path, provenance: Path, build_source_commit: str) -> Path:
     with tempfile.TemporaryDirectory(prefix="camoufox-ci-stage-") as directory:
         staged = Path(directory) / "candidate"
         safe_extract(archive, staged)
-        executable = staged / "camoufox"
-        if executable.is_symlink() or not executable.is_file():
-            fail("Linux candidate executable is missing")
+        restore_linux_executable_modes(staged)
         install_path.parent.mkdir(parents=True, exist_ok=True)
         shutil.move(str(staged), str(install_path))
 
@@ -122,7 +139,9 @@ def install(archive: Path, provenance: Path, build_source_commit: str) -> Path:
         "sha256": verified["artifact_sha256"],
     }
     (install_path / "version.json").write_text(json.dumps(metadata, sort_keys=True, separators=(",", ":")), encoding="utf-8")
-    os.chmod(install_path / "camoufox", 0o755)
+    for relative in LINUX_EXECUTABLES:
+        if not os.access(install_path / relative, os.X_OK):
+            fail(f"installed Linux candidate is not executable: {relative}")
     set_active(f"browsers/{repository}/{version}")
     COMPAT_FLAG.parent.mkdir(parents=True, exist_ok=True)
     COMPAT_FLAG.touch()
