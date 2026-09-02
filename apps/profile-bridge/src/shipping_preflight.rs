@@ -3,10 +3,12 @@ mod camoufox_identity;
 pub use camoufox_identity::profile_stable_identity_from_config_bytes;
 
 use crate::browser_execution::{BrowserLaunchBlocker, load_materialization_binding};
-use crate::browser_preflight::{BrowserRuntimeObservation, BrowserRuntimeObservationPort};
+use crate::browser_preflight::{
+    BrowserRuntimeObservation, BrowserRuntimeObservationPort, classify_browser_launch_blocker,
+};
 use crate::camouhost_process::{RuntimeBindingBrowserLaunchPreflight, RuntimeBindingSlot};
 use crate::local_profile::GenerationWorkspace;
-use crate::operator_flow::BrowserLaunchPreflightPort;
+use crate::operator_flow::{BrowserLaunchPreflightPort, OperationalRejectionReason};
 use crate::runtime_bundle::ApprovedRuntimeBundle;
 use browser_execution_domain::NetworkIdentityPolicy;
 use camoufox_identity::{CamoufoxIdentityProjectionError, verify_materialized_camoufox_identity};
@@ -42,6 +44,10 @@ where
     O: BrowserRuntimeObservationPort,
 {
     type Error = BrowserLaunchBlocker;
+
+    fn operational_rejection_reason(error: &Self::Error) -> OperationalRejectionReason {
+        classify_browser_launch_blocker(error)
+    }
 
     fn evaluate_before_launch(
         &mut self,
