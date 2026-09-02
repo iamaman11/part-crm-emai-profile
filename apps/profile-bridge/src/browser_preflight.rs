@@ -202,7 +202,9 @@ fn validate_f32(value: &Value) -> bool {
 }
 
 fn validate_i32(value: &Value) -> bool {
-    value.as_i64().is_some_and(|number| i32::try_from(number).is_ok())
+    value
+        .as_i64()
+        .is_some_and(|number| i32::try_from(number).is_ok())
         || value
             .as_u64()
             .is_some_and(|number| number <= i32::MAX as u64)
