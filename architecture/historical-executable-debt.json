@@ -1,8 +1,8 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "kind": "HISTORICAL_EXECUTABLE_DEBT_INVENTORY",
   "status": "current",
-  "tracking_issue": 375,
+  "historical_origin_issue": 375,
   "scope": "post_ar11_lifecycle_documentation_d3_and_recovery_executable_debt",
   "policy": {
     "allowed_classifications": ["CURRENT_INVARIANT", "UPGRADE_ROLLBACK_REQUIRED", "TRANSITION_PROVENANCE_ONLY", "DEAD"],
@@ -143,17 +143,17 @@
     },
     {
       "path": ".github/scripts/ar8-staging-provider-bootstrap.mjs",
-      "classification": "CURRENT_INVARIANT",
-      "expected_present": true,
+      "classification": "DEAD",
+      "expected_present": false,
       "standalone_entrypoint": false,
-      "proves": "accepted AR-8C staging provider execution provenance and its fail-closed invariants",
-      "duplicate_or_successor": "permanent github-governance-gate executes contract and self-test; validator is read-only",
+      "proves": "historical accepted AR-8C staging provider execution provenance only",
+      "duplicate_or_successor": "current credential/security invariants are owned by credential-authority.json, credential-lifecycle.json, architecture-authority-check.mjs and credential-lifecycle.mjs; AR-8C contract/doc remain static provenance",
       "reads_git_history": false,
       "executes_historical_code": false,
       "materializes_retired_code": false,
       "runtime_mutation_authority": false,
       "remote_mutation_authority": false,
-      "disposition": "KEEP_AS_PERMANENT_PROVENANCE_INVARIANT"
+      "disposition": "RETIRED_V1_N002_MUST_STAY_ABSENT"
     },
     {
       "path": ".github/scripts/ar8-completion-lifecycle.mjs",
@@ -301,7 +301,7 @@
       "expected_present": false,
       "standalone_entrypoint": false,
       "proves": "retired provider-bootstrap workflow/executor contract",
-      "duplicate_or_successor": "required workflow is absent; read-only accepted provenance validator is retained separately",
+      "duplicate_or_successor": "required workflow is absent; read-only accepted provenance validator is retired and must stay absent",
       "reads_git_history": false,
       "executes_historical_code": false,
       "materializes_retired_code": false,
@@ -399,7 +399,7 @@
       "expected_present": false,
       "standalone_entrypoint": false,
       "proves": "retired protected provider-bootstrap mutation dispatch",
-      "duplicate_or_successor": "accepted provenance remains read-only in permanent governance",
+      "duplicate_or_successor": "accepted AR-8C bootstrap contract/doc remain static provenance only; no current executable validator remains",
       "reads_git_history": false,
       "executes_historical_code": false,
       "materializes_retired_code": false,

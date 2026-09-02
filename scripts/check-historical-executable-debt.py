@@ -117,12 +117,13 @@ def discover_references(target: str, paths: list[str]) -> tuple[list[str], list[
 
 def validate_policy(payload: dict[str, Any]) -> None:
     if (
-        payload.get("schema_version") != 1
+        payload.get("schema_version") != 2
         or payload.get("kind") != "HISTORICAL_EXECUTABLE_DEBT_INVENTORY"
         or payload.get("status") != "current"
-        or payload.get("tracking_issue") != 375
+        or payload.get("historical_origin_issue") != 375
+        or "tracking_issue" in payload
     ):
-        fail("historical executable debt inventory identity/version/ownership drifted")
+        fail("historical executable debt inventory identity/version/provenance drifted")
     policy = payload.get("policy")
     if not isinstance(policy, dict):
         fail("historical executable debt policy is missing")
@@ -306,6 +307,39 @@ def self_test(payload: dict[str, Any]) -> None:
         pass
     else:
         fail("retired mutation-authority negative fixture unexpectedly passed")
+
+    dead_entry = next(
+        (entry for entry in payload["entries"] if entry["classification"] == "DEAD"),
+        None,
+    )
+    if dead_entry is None:
+        fail("DEAD reintroduction negative fixture has no DEAD entry")
+    try:
+        validate_entries(payload, tracked_paths() + [dead_entry["path"]])
+    except DebtError:
+        pass
+    else:
+        fail("reintroduced DEAD executable negative fixture unexpectedly passed")
+
+    live_caller_payload = copy.deepcopy(payload)
+    caller_backed = next(
+        (
+            entry
+            for entry in live_caller_payload["entries"]
+            if entry["classification"] == "CURRENT_INVARIANT"
+            and not entry["standalone_entrypoint"]
+        ),
+        None,
+    )
+    if caller_backed is None:
+        fail("retired-live-caller negative fixture has no caller-backed current entry")
+    caller_backed["classification"] = "TRANSITION_PROVENANCE_ONLY"
+    try:
+        validate_entries(live_caller_payload, tracked_paths())
+    except DebtError:
+        pass
+    else:
+        fail("retired path with current executable caller negative fixture unexpectedly passed")
 
 
 def main() -> int:
