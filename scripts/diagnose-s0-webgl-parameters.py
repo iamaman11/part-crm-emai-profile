@@ -20,12 +20,23 @@ from typing import Any
 
 DIAGNOSTIC_PROBE = r"""
 (request) => {
+  const cloneTypedArrayIntoCallerRealm = (value) => {
+    if (typeof globalThis.structuredClone !== 'function') {
+      throw new Error('structuredClone is unavailable');
+    }
+    return globalThis.structuredClone(value);
+  };
+
   const normalize = (value) => {
     if (value === undefined) return null;
     if (value === null || typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
       return value;
     }
-    if (Array.isArray(value) || ArrayBuffer.isView(value)) return Array.from(value, normalize);
+    if (Array.isArray(value)) return Array.from(value, normalize);
+    if (ArrayBuffer.isView(value)) {
+      const local = cloneTypedArrayIntoCallerRealm(value);
+      return Array.from(local, normalize);
+    }
     if (typeof value === 'object') {
       const output = {};
       for (const [key, nested] of Object.entries(value)) output[key] = normalize(nested);
@@ -37,7 +48,8 @@ DIAGNOSTIC_PROBE = r"""
   const jsType = (value) => {
     if (value === null) return 'null';
     if (ArrayBuffer.isView(value)) {
-      const ctor = value.constructor;
+      const local = cloneTypedArrayIntoCallerRealm(value);
+      const ctor = local.constructor;
       return ctor && typeof ctor.name === 'string' && ctor.name ? ctor.name : 'TypedArray';
     }
     if (Array.isArray(value)) return 'Array';
