@@ -3,7 +3,7 @@ name: S0-PM Candidate Bootstrap
 on:
   push:
     branches:
-      - cap-exec/s0-pm-durable-candidates
+      - main
     paths:
       - .github/workflows/s0-pm-candidate-bootstrap.yml
 
@@ -28,17 +28,17 @@ jobs:
       TARGET: ${{ matrix.target }}
       PROVEN_GENERATION_RUN: '33572782439'
     steps:
-      - name: Checkout exact bootstrap source
+      - name: Checkout exact accepted-main bootstrap source
         uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
 
-      - name: Prove bounded bootstrap authority
+      - name: Prove bounded accepted-main bootstrap authority
         run: |
           set -euo pipefail
           test "$GITHUB_EVENT_NAME" = push
-          test "$GITHUB_REF" = refs/heads/cap-exec/s0-pm-durable-candidates
+          test "$GITHUB_REF" = refs/heads/main
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
           python3.12 scripts/check-camoufox-webgl-patch.py --self-test
           python3.12 scripts/verify-camoufox-patched-candidate.py --self-test
@@ -104,13 +104,11 @@ jobs:
             cmp "$source_dir/$PROVENANCE_ASSET" "$durable_dir/$PROVENANCE_ASSET"
             echo "Durable candidate already exists and is byte-identical: $RELEASE_ID"
           else
-            git fetch --no-tags --depth=1 origin "$BUILD_SOURCE_COMMIT"
-            git cat-file -e "${BUILD_SOURCE_COMMIT}^{commit}"
             gh release create "$RELEASE_ID" \
               --repo "$GITHUB_REPOSITORY" \
-              --target "$BUILD_SOURCE_COMMIT" \
+              --target "$GITHUB_SHA" \
               --title "$RELEASE_ID" \
-              --notes "Immutable content-addressed accepted Camoufox ${TARGET} candidate. Identity and provenance are repository-locked; this release is not an application release and is not a mutable latest selector."
+              --notes "Immutable content-addressed accepted Camoufox ${TARGET} candidate. Exact build-source/upstream/patch provenance is carried by the verified provenance asset and repository lock. This is not an application release or a mutable latest selector."
             gh release upload "$RELEASE_ID" \
               "$source_dir/$ARCHIVE_ASSET" \
               "$source_dir/$PROVENANCE_ASSET" \
