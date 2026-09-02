@@ -293,6 +293,19 @@ pub enum OperatorFlowError {
     },
 }
 
+impl OperatorFlowError {
+    #[must_use]
+    pub const fn stage(&self) -> Option<OperatorFailureStage> {
+        match self {
+            Self::Busy | Self::CleanupRequired => None,
+            Self::Stage(stage) | Self::Runtime { stage, .. } | Self::Terminal { stage, .. } => {
+                Some(*stage)
+            }
+            Self::Preflight { .. } => Some(OperatorFailureStage::BrowserPreflight),
+        }
+    }
+}
+
 impl fmt::Display for OperatorFlowError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
