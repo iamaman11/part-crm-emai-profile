@@ -35,47 +35,55 @@ jobs:
           EXPECTED_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: python -c "import os, subprocess; actual = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(); expected = os.environ['EXPECTED_SOURCE_SHA']; assert actual == expected, f'expected {expected}, got {actual}'"
 
-      - name: Restore candidate-input cache
-        id: candidate-cache
-        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae
-        with:
-          path: artifacts/camoufox-candidate
-          key: s0-camoufox-${{ matrix.target }}-${{ hashFiles('runtime/camouhost/camoufox-patch-lock.json') }}
-
-      - name: Seed unchanged candidate from proven prior run
-        id: candidate-seed
-        if: steps.candidate-cache.outputs.cache-hit != 'true'
-        continue-on-error: true
-        uses: actions/download-artifact@70fc10c6e5e1ce46ad2ea6f2b72d43f7d47b13c3
-        with:
-          name: s0-camoufox-${{ matrix.target }}-11e3696e37d5065633d93d5ddd05fdf1bb836b96
-          path: artifacts/camoufox-candidate
-          github-token: ${{ github.token }}
-          repository: ${{ github.repository }}
-          run-id: 33572782439
-
-      - name: Require exact locked candidate without automatic rebuild
+      - name: Resolve exact durable candidate identity
         env:
           TARGET: ${{ matrix.target }}
-          CACHE_HIT: ${{ steps.candidate-cache.outputs.cache-hit }}
-          SEED_OUTCOME: ${{ steps.candidate-seed.outcome }}
         run: |
           set -euo pipefail
           python3.12 -m py_compile scripts/check-camoufox-webgl-patch.py scripts/verify-camoufox-patched-candidate.py
           python3.12 scripts/check-camoufox-webgl-patch.py --self-test
           python3.12 scripts/verify-camoufox-patched-candidate.py --self-test
+          python3.12 - "$TARGET" >> "$GITHUB_ENV" <<'PY'
+          import json
+          import pathlib
+          import sys
 
-          archive="artifacts/camoufox-candidate/camoufox-${TARGET}.x86_64.zip"
-          provenance="artifacts/camoufox-candidate/camoufox-${TARGET}.provenance.json"
+          target = sys.argv[1]
+          lock = json.loads(pathlib.Path('runtime/camouhost/camoufox-patch-lock.json').read_text(encoding='utf-8'))
+          candidate = lock['candidates'][target]
+          artifact_sha = candidate['artifact_sha256']
+          build_source_commit = candidate['build_source_commit']
+          print(f'ARTIFACT_SHA256={artifact_sha}')
+          print(f'BUILD_SOURCE_COMMIT={build_source_commit}')
+          print(f'RELEASE_ID=camoufox-v1-{target}-sha256-{artifact_sha}')
+          print(f'ARCHIVE_ASSET=camoufox-{target}.x86_64.zip')
+          print(f'PROVENANCE_ASSET=camoufox-{target}.provenance.json')
+          PY
+
+      - name: Resolve exact candidate from durable publication authority
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARGET: ${{ matrix.target }}
+        run: |
+          set -euo pipefail
+          rm -rf artifacts/camoufox-candidate
+          mkdir -p artifacts/camoufox-candidate
+          gh release download "$RELEASE_ID" \
+            --repo "$GITHUB_REPOSITORY" \
+            --dir artifacts/camoufox-candidate \
+            --pattern "$ARCHIVE_ASSET" \
+            --pattern "$PROVENANCE_ASSET"
+          archive="artifacts/camoufox-candidate/${ARCHIVE_ASSET}"
+          provenance="artifacts/camoufox-candidate/${PROVENANCE_ASSET}"
           test -f "$archive"
           test -f "$provenance"
-          candidate_sha="$(python3.12 -c 'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["build_source_commit"])' "$provenance")"
+          test "$(sha256sum "$archive" | cut -d' ' -f1)" = "$ARTIFACT_SHA256"
           python3.12 scripts/verify-camoufox-patched-candidate.py \
             --archive "$archive" \
             --provenance "$provenance" \
             --target "$TARGET" \
-            --build-source-commit "$candidate_sha"
-          echo "Reused exact locked Camoufox ${TARGET} candidate built at ${candidate_sha}; cache_hit=${CACHE_HIT}; seed_outcome=${SEED_OUTCOME}."
+            --build-source-commit "$BUILD_SOURCE_COMMIT"
+          echo "Resolved exact durable Camoufox ${TARGET} candidate: ${RELEASE_ID}."
 
       - name: Upload ephemeral candidate transport
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
