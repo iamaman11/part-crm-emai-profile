@@ -205,7 +205,8 @@ fn map_snapshot_encode_error(error: GenerationSnapshotError) -> DirtyGenerationE
         GenerationSnapshotError::SourceChanged
         | GenerationSnapshotError::InvalidFormat
         | GenerationSnapshotError::UnsafePath
-        | GenerationSnapshotError::TargetAlreadyExists => DirtyGenerationError::SourceChanged,
+        | GenerationSnapshotError::TargetAlreadyExists
+        | GenerationSnapshotError::PrePublish => DirtyGenerationError::SourceChanged,
     }
 }
 

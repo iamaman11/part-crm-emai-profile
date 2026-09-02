@@ -3,11 +3,20 @@
 use bridge_domain::ClaimUri;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ShippingDeliveryCommand {
+    ActivateStaged,
+    HandoffArrived,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ShippingCompositionError {
     UnsupportedPlatform,
     Configuration,
     Clock,
     ControlPlane,
+    DeliveryHealth,
+    DeliveryHandoff,
+    DeliveryRecoveryRequired,
     Operator,
     CommittedRecoveryRequired,
 }
@@ -19,6 +28,13 @@ impl core::fmt::Display for ShippingCompositionError {
             Self::Configuration => "shipping Profile Bridge configuration is invalid",
             Self::Clock => "shipping Profile Bridge clock is unavailable",
             Self::ControlPlane => "shipping Profile Bridge control-plane lease state is invalid",
+            Self::DeliveryHealth => {
+                "shipping Profile Bridge candidate health could not be confirmed"
+            }
+            Self::DeliveryHandoff => "shipping Profile Bridge delivery handoff failed closed",
+            Self::DeliveryRecoveryRequired => {
+                "shipping Profile Bridge delivery recovery is required"
+            }
             Self::Operator => "shipping Profile Bridge operator flow failed",
             Self::CommittedRecoveryRequired => {
                 "generation successor committed but local recovery is required"
@@ -47,6 +63,21 @@ fn confirmed_save_trigger<E>(observation: Result<bool, E>) -> Result<ConfirmedSa
     })
 }
 
+#[cfg(any(windows, test))]
+fn run_after_delivery_health_start<P, S, E, Start, Run>(
+    pending: Option<P>,
+    start: Start,
+    run: Run,
+) -> Result<Option<S>, E>
+where
+    Start: FnOnce(P) -> Result<S, E>,
+    Run: FnOnce() -> Result<(), E>,
+{
+    let started = pending.map(start).transpose()?;
+    run()?;
+    Ok(started)
+}
+
 pub fn run_claim(claim: &ClaimUri) -> Result<(), ShippingCompositionError> {
     #[cfg(windows)]
     {
@@ -59,21 +90,41 @@ pub fn run_claim(claim: &ClaimUri) -> Result<(), ShippingCompositionError> {
     }
 }
 
+pub fn run_delivery_command(
+    command: ShippingDeliveryCommand,
+) -> Result<(), ShippingCompositionError> {
+    #[cfg(windows)]
+    {
+        return windows::run_delivery_command(command);
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = command;
+        Err(ShippingCompositionError::UnsupportedPlatform)
+    }
+}
+
 #[cfg(windows)]
 mod windows {
-    use super::{ConfirmedSaveTrigger, ShippingCompositionError, confirmed_save_trigger};
+    use super::{
+        ConfirmedSaveTrigger, ShippingCompositionError, ShippingDeliveryCommand,
+        confirmed_save_trigger, run_after_delivery_health_start,
+    };
     use crate::camouhost_process::{
         ManagedCamouhostConfig, ManagedCamouhostProcess, RuntimeBindingSlot, RuntimeDisplayMode,
     };
     use crate::generation_reopen::VerifiedGenerationObjectDownloader;
-    use crate::local_profile::MaterializationRoot;
+    use crate::local_profile::{DeliveryActivationGuard, MaterializationRoot};
     use crate::operator_flow::ProfileBridgeOperator;
-    use crate::runtime_bundle::FilesystemRuntimeBundleSelection;
     use crate::shipping_control_plane::{
         ControlPlaneCoordinator, ControlPlaneEnrollment, ControlPlaneLeaseTiming,
     };
     use crate::shipping_network::FilesystemNetworkEvidence;
     use crate::shipping_preflight::ShippingBrowserLaunchPreflight;
+    use crate::windows_delivery_handoff::{
+        DeliveryHandoffCoordinator, DeliveryHandoffRestartDisposition,
+    };
+    use crate::windows_delivery_runtime::ActiveWindowsDeliveryRuntime;
     use crate::windows_generation_put::WindowsSignedGenerationObjectPut;
     use crate::windows_native::{
         WindowsDeviceIdentity, WindowsMachineCertificate, WindowsSchannelMachineHttp,
@@ -90,10 +141,9 @@ mod windows {
     const MACHINE_CERT_SHA1_ENV: &str = "PROFILE_BRIDGE_MACHINE_CERT_SHA1";
     const CONTROL_PLANE_ORIGIN_ENV: &str = "PROFILE_BRIDGE_CONTROL_PLANE_ORIGIN";
     const MATERIALIZATION_ROOT_ENV: &str = "PROFILE_BRIDGE_MATERIALIZATION_ROOT";
-    const RUNTIME_ROOT_ENV: &str = "PROFILE_BRIDGE_RUNTIME_ROOT";
-    const PYTHON_EXECUTABLE_ENV: &str = "PROFILE_BRIDGE_PYTHON_EXECUTABLE";
     const NETWORK_POLICY_PATH_ENV: &str = "PROFILE_BRIDGE_NETWORK_POLICY_PATH";
     const PROXY_CONFIG_PATH_ENV: &str = "PROFILE_BRIDGE_PROXY_CONFIG_PATH";
+    const PACKAGED_PYTHON_EXECUTABLE: &str = "python/python.exe";
     const CONTROLLED_CLOSE_POLL_MS: u64 = 250;
 
     struct ShippingConfig {
@@ -101,8 +151,6 @@ mod windows {
         machine_cert_sha1: String,
         control_plane_origin: String,
         materialization_root: PathBuf,
-        runtime_root: PathBuf,
-        python_executable: PathBuf,
         network_policy_path: PathBuf,
         proxy_config_path: Option<PathBuf>,
     }
@@ -113,9 +161,7 @@ mod windows {
                 .map_err(|_| ShippingCompositionError::Configuration)?;
             let machine_cert_sha1 = required_env(MACHINE_CERT_SHA1_ENV)?;
             let control_plane_origin = required_env(CONTROL_PLANE_ORIGIN_ENV)?;
-            let materialization_root = absolute_path(required_env(MATERIALIZATION_ROOT_ENV)?)?;
-            let runtime_root = absolute_path(required_env(RUNTIME_ROOT_ENV)?)?;
-            let python_executable = absolute_path(required_env(PYTHON_EXECUTABLE_ENV)?)?;
+            let materialization_root = materialization_root_path()?;
             let network_policy_path = absolute_path(required_env(NETWORK_POLICY_PATH_ENV)?)?;
             let proxy_config_path = optional_env(PROXY_CONFIG_PATH_ENV)?
                 .map(absolute_path)
@@ -125,8 +171,6 @@ mod windows {
                 machine_cert_sha1,
                 control_plane_origin,
                 materialization_root,
-                runtime_root,
-                python_executable,
                 network_policy_path,
                 proxy_config_path,
             })
@@ -134,7 +178,17 @@ mod windows {
     }
 
     pub fn run(claim: &ClaimUri) -> Result<(), ShippingCompositionError> {
+        if recover_delivery_before_claim()? {
+            return Ok(());
+        }
+
         let config = ShippingConfig::from_environment()?;
+        let active_delivery = ActiveWindowsDeliveryRuntime::resolve_current()
+            .map_err(|_| ShippingCompositionError::Configuration)?;
+        let pending_health = active_delivery.pending_health_confirmation();
+        let runtime_root = active_delivery.runtime_root().to_path_buf();
+        let runtime_bundles = active_delivery.into_bundle_selection();
+
         let identity = WindowsDeviceIdentity::new(config.device_id.clone());
         let certificate = WindowsMachineCertificate::local_machine_my(
             config.device_id.clone(),
@@ -156,8 +210,6 @@ mod windows {
 
         let enrollment = ControlPlaneEnrollment::new(transport.clone());
         let coordinator = ControlPlaneCoordinator::new(transport);
-        let runtime_bundles = FilesystemRuntimeBundleSelection::open(config.runtime_root.clone())
-            .map_err(|_| ShippingCompositionError::Configuration)?;
         let materialization_root =
             MaterializationRoot::open_or_create(&config.materialization_root)
                 .map_err(|_| ShippingCompositionError::Configuration)?;
@@ -169,9 +221,10 @@ mod windows {
             network_evidence,
             runtime_binding.clone(),
         );
+        let python_executable = runtime_root.join(PACKAGED_PYTHON_EXECUTABLE);
         let camouhost_config = ManagedCamouhostConfig::new(
-            config.python_executable,
-            config.runtime_root,
+            python_executable,
+            runtime_root,
             RuntimeDisplayMode::Headful,
             None,
             config.proxy_config_path,
@@ -191,14 +244,33 @@ mod windows {
             process,
             camouhost,
         );
-        operator
-            .open_authoritative(
-                claim,
-                &materialization_root,
-                &mut generation_downloader,
-                now()?,
-            )
-            .map_err(|_| ShippingCompositionError::Operator)?;
+        let opened_at = now()?;
+        let started_health = run_after_delivery_health_start(
+            pending_health,
+            |confirmation| {
+                confirmation
+                    .start_before_runtime_health()
+                    .map_err(|_| ShippingCompositionError::DeliveryHealth)
+            },
+            || {
+                operator
+                    .open_authoritative(
+                        claim,
+                        &materialization_root,
+                        &mut generation_downloader,
+                        opened_at,
+                    )
+                    .map_err(|_| ShippingCompositionError::Operator)
+            },
+        )?;
+
+        if let Some(confirmation) = started_health
+            && confirmation.confirm_after_runtime_ready().is_err()
+        {
+            let abort_at = now().unwrap_or(opened_at);
+            let _ = operator.abort(abort_at);
+            return Err(ShippingCompositionError::DeliveryHealth);
+        }
 
         let mut next_heartbeat_deadline = next_heartbeat_at(
             operator
@@ -259,6 +331,75 @@ mod windows {
         }
     }
 
+    pub fn run_delivery_command(
+        command: ShippingDeliveryCommand,
+    ) -> Result<(), ShippingCompositionError> {
+        let (coordinator, current_executable) = delivery_process_context()?;
+        let materialization_root = delivery_materialization_root()?;
+        let guard = DeliveryActivationGuard::acquire(&materialization_root)
+            .map_err(|_| ShippingCompositionError::DeliveryHandoff)?;
+        match command {
+            ShippingDeliveryCommand::ActivateStaged => coordinator
+                .start_activation(&guard, std::process::id(), &current_executable)
+                .map_err(|_| ShippingCompositionError::DeliveryHandoff)?,
+            ShippingDeliveryCommand::HandoffArrived => coordinator
+                .complete_arrival(&guard, &current_executable)
+                .map_err(|_| ShippingCompositionError::DeliveryHandoff)?,
+        }
+        hold_activation_guard_until_process_exit(guard);
+        Ok(())
+    }
+
+    fn recover_delivery_before_claim() -> Result<bool, ShippingCompositionError> {
+        let (coordinator, current_executable) = delivery_process_context()?;
+        if !coordinator
+            .restart_recovery_pending()
+            .map_err(|_| ShippingCompositionError::DeliveryHandoff)?
+        {
+            return Ok(false);
+        }
+        let materialization_root = delivery_materialization_root()?;
+        let guard = DeliveryActivationGuard::acquire(&materialization_root)
+            .map_err(|_| ShippingCompositionError::DeliveryHandoff)?;
+        match coordinator
+            .recover_or_resume_started(&guard, std::process::id(), &current_executable)
+            .map_err(|_| ShippingCompositionError::DeliveryHandoff)?
+        {
+            DeliveryHandoffRestartDisposition::None => Ok(false),
+            DeliveryHandoffRestartDisposition::TransferScheduled => {
+                hold_activation_guard_until_process_exit(guard);
+                Ok(true)
+            }
+            DeliveryHandoffRestartDisposition::RecoveryRequired => {
+                Err(ShippingCompositionError::DeliveryRecoveryRequired)
+            }
+        }
+    }
+
+    fn delivery_process_context()
+    -> Result<(DeliveryHandoffCoordinator, PathBuf), ShippingCompositionError> {
+        let current_executable =
+            env::current_exe().map_err(|_| ShippingCompositionError::DeliveryHandoff)?;
+        let coordinator = DeliveryHandoffCoordinator::from_current_executable(&current_executable)
+            .map_err(|_| ShippingCompositionError::DeliveryHandoff)?;
+        Ok((coordinator, current_executable))
+    }
+
+    fn delivery_materialization_root() -> Result<MaterializationRoot, ShippingCompositionError> {
+        MaterializationRoot::open_or_create(materialization_root_path()?)
+            .map_err(|_| ShippingCompositionError::Configuration)
+    }
+
+    fn materialization_root_path() -> Result<PathBuf, ShippingCompositionError> {
+        absolute_path(required_env(MATERIALIZATION_ROOT_ENV)?)
+    }
+
+    fn hold_activation_guard_until_process_exit(guard: DeliveryActivationGuard) {
+        // The OS releases the exclusive admission handle when this process terminates. Retaining it
+        // closes the window between durable handoff evidence and the old process actually exiting.
+        std::mem::forget(guard);
+    }
+
     fn next_heartbeat_at(
         timing: ControlPlaneLeaseTiming,
         observed_at: UnixMillis,
@@ -315,9 +456,14 @@ mod windows {
 #[cfg(test)]
 mod tests {
     use super::{
-        ConfirmedSaveTrigger, ShippingCompositionError, confirmed_save_trigger, run_claim,
+        ConfirmedSaveTrigger, ShippingCompositionError, ShippingDeliveryCommand,
+        confirmed_save_trigger, run_after_delivery_health_start,
     };
+    #[cfg(not(windows))]
+    use super::{run_claim, run_delivery_command};
+    #[cfg(not(windows))]
     use bridge_domain::ClaimUri;
+    use std::cell::Cell;
 
     #[test]
     fn confirmed_save_requires_positive_controlled_close_witness() {
@@ -335,6 +481,40 @@ mod tests {
         );
     }
 
+    #[test]
+    fn runtime_health_never_starts_when_durable_attempt_start_fails() {
+        let runtime_started = Cell::new(false);
+        let result: Result<Option<()>, ShippingCompositionError> = run_after_delivery_health_start(
+            Some(()),
+            |_| Err(ShippingCompositionError::DeliveryHealth),
+            || {
+                runtime_started.set(true);
+                Ok(())
+            },
+        );
+        assert_eq!(result, Err(ShippingCompositionError::DeliveryHealth));
+        assert!(!runtime_started.get());
+    }
+
+    #[test]
+    fn durable_attempt_start_precedes_runtime_health_execution() {
+        let health_started = Cell::new(false);
+        let runtime_observed_started = Cell::new(false);
+        let result: Result<Option<()>, ShippingCompositionError> = run_after_delivery_health_start(
+            Some(()),
+            |_| {
+                health_started.set(true);
+                Ok(())
+            },
+            || {
+                runtime_observed_started.set(health_started.get());
+                Ok(())
+            },
+        );
+        assert_eq!(result, Ok(Some(())));
+        assert!(runtime_observed_started.get());
+    }
+
     #[cfg(not(windows))]
     #[test]
     fn non_windows_shipping_binary_has_no_fallback_runtime()
@@ -342,6 +522,14 @@ mod tests {
         let claim = ClaimUri::parse("profilebridge://claim/claim_01JBRIDGE_FEASIBILITY")?;
         assert_eq!(
             run_claim(&claim),
+            Err(ShippingCompositionError::UnsupportedPlatform)
+        );
+        assert_eq!(
+            run_delivery_command(ShippingDeliveryCommand::ActivateStaged),
+            Err(ShippingCompositionError::UnsupportedPlatform)
+        );
+        assert_eq!(
+            run_delivery_command(ShippingDeliveryCommand::HandoffArrived),
             Err(ShippingCompositionError::UnsupportedPlatform)
         );
         Ok(())

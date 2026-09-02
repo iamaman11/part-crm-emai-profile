@@ -20,9 +20,10 @@ import time
 from pathlib import Path
 from typing import Any
 
-IPC_VERSION = "2"
-MAX_FRAME_LENGTH = 512
+IPC_VERSION = "3"
+MAX_FRAME_LENGTH = 8 * 1024
 MAX_CONFIG_BYTES = 1024 * 1024
+MAX_BROWSER_VISIBLE_BYTES = 512 * 1024
 MAX_URL_BYTES = 2048
 BROWSER_CLOSE_QUIESCENCE_SECONDS = 10.0
 BROWSER_CLOSE_POLL_SECONDS = 0.05
@@ -37,7 +38,6 @@ RUNTIME_LOCK_ENV = "CAMOUHOST_RUNTIME_LOCK"
 EXPECTED_RUNTIME_LOCK_SHA256_ENV = "CAMOUHOST_EXPECTED_RUNTIME_LOCK_SHA256"
 EXPECTED_CONFIG_SHA256_ENV = "CAMOUHOST_EXPECTED_CONFIG_SHA256"
 EXPECTED_PROBE_SHA256_ENV = "CAMOUHOST_EXPECTED_PROBE_SHA256"
-INITIAL_URL_ENV = "CAMOUHOST_INITIAL_URL"
 HEADLESS_MODE_ENV = "CAMOUHOST_HEADLESS_MODE"
 PROXY_CONFIG_ENV = "CAMOUHOST_PROXY_CONFIG_PATH"
 
@@ -49,12 +49,16 @@ FINGERPRINT_PROBE = """
   languages: Array.from(navigator.languages || []),
   hardwareConcurrency: navigator.hardwareConcurrency,
   deviceMemory: navigator.deviceMemory,
+  maxTouchPoints: navigator.maxTouchPoints,
   screen: {
     width: screen.width,
     height: screen.height,
     availWidth: screen.availWidth,
     availHeight: screen.availHeight,
+    availLeft: screen.availLeft,
+    availTop: screen.availTop,
     colorDepth: screen.colorDepth,
+    pixelDepth: screen.pixelDepth,
     devicePixelRatio: window.devicePixelRatio,
   },
   webgl: (() => {
@@ -70,14 +74,242 @@ FINGERPRINT_PROBE = """
 })
 """
 
+BROWSER_VISIBLE_PROBE = r"""
+async (request) => {
+  const collectGraphicsInPageRealm = (graphicsRequest) => {
+    const requestId = '__camouhost_browser_visible_graphics_request__';
+    const resultId = '__camouhost_browser_visible_graphics_result__';
+    for (const id of [requestId, resultId]) {
+      const prior = document.getElementById(id);
+      if (prior) prior.remove();
+    }
+
+    const requestNode = document.createElement('script');
+    requestNode.id = requestId;
+    requestNode.type = 'application/json';
+    requestNode.textContent = JSON.stringify(graphicsRequest);
+
+    const resultNode = document.createElement('script');
+    resultNode.id = resultId;
+    resultNode.type = 'application/json';
+    resultNode.textContent = '';
+
+    const runner = document.createElement('script');
+    runner.textContent = `
+      (() => {
+        const requestNode = document.getElementById('${requestId}');
+        const resultNode = document.getElementById('${resultId}');
+        const write = (value) => { resultNode.textContent = JSON.stringify(value); };
+        try {
+          const request = JSON.parse(requestNode.textContent);
+          const normalize = (value) => {
+            if (value === undefined) return null;
+            if (value === null || typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
+              return value;
+            }
+            if (Array.isArray(value) || ArrayBuffer.isView(value)) {
+              return Array.from(value, normalize);
+            }
+            if (typeof value === 'object') {
+              const output = {};
+              for (const [key, nested] of Object.entries(value)) output[key] = normalize(nested);
+              return output;
+            }
+            return null;
+          };
+
+          const collectContext = (kind, spec) => {
+            const canvas = document.createElement('canvas');
+            const gl = canvas.getContext(kind);
+            if (!gl) return null;
+            const parameters = {};
+            for (const key of spec.parameters) {
+              const numericKey = Number(key);
+              const glEnum = Number.isInteger(numericKey) ? numericKey : gl[key];
+              if (!Number.isInteger(glEnum)) throw new Error('configured WebGL parameter enum is invalid');
+              parameters[key] = normalize(gl.getParameter(glEnum));
+            }
+            const shaderPrecision = {};
+            for (const key of spec.shader_precision) {
+              const parts = key.split(',').map(Number);
+              if (parts.length !== 2 || !parts.every(Number.isInteger)) continue;
+              try {
+                const value = gl.getShaderPrecisionFormat(parts[0], parts[1]);
+                if (value) {
+                  shaderPrecision[key] = {
+                    rangeMin: value.rangeMin,
+                    rangeMax: value.rangeMax,
+                    precision: value.precision,
+                  };
+                }
+              } catch (_) {}
+            }
+            const attributes = {};
+            const actualAttributes = gl.getContextAttributes();
+            if (actualAttributes) {
+              for (const key of spec.context_attributes) {
+                if (Object.prototype.hasOwnProperty.call(actualAttributes, key)) {
+                  attributes[key] = normalize(actualAttributes[key]);
+                }
+              }
+            }
+            const debug = gl.getExtension('WEBGL_debug_renderer_info');
+            return {
+              vendor: debug ? gl.getParameter(debug.UNMASKED_VENDOR_WEBGL) : gl.getParameter(gl.VENDOR),
+              renderer: debug ? gl.getParameter(debug.UNMASKED_RENDERER_WEBGL) : gl.getParameter(gl.RENDERER),
+              extensions: Array.from(gl.getSupportedExtensions() || []),
+              parameters,
+              shader_precision: shaderPrecision,
+              context_attributes: attributes,
+            };
+          };
+
+          const webgl = collectContext('webgl', request.webgl);
+          const webgl2 = collectContext('webgl2', request.webgl2);
+          write({
+            vendor: webgl ? webgl.vendor : (webgl2 ? webgl2.vendor : null),
+            renderer: webgl ? webgl.renderer : (webgl2 ? webgl2.renderer : null),
+            webgl: webgl ? {
+              extensions: webgl.extensions,
+              parameters: webgl.parameters,
+              shader_precision: webgl.shader_precision,
+              context_attributes: webgl.context_attributes,
+            } : null,
+            webgl2: webgl2 ? {
+              extensions: webgl2.extensions,
+              parameters: webgl2.parameters,
+              shader_precision: webgl2.shader_precision,
+              context_attributes: webgl2.context_attributes,
+            } : null,
+          });
+        } catch (error) {
+          write({
+            error: {
+              name: error && error.name ? String(error.name) : 'Error',
+              message: error && error.message ? String(error.message) : '',
+            },
+          });
+        }
+      })();
+    `;
+
+    const host = document.documentElement || document.head || document.body;
+    if (!host) throw new Error('browser-visible page realm is unavailable');
+    host.appendChild(requestNode);
+    host.appendChild(resultNode);
+    host.appendChild(runner);
+    const encoded = resultNode.textContent;
+    runner.remove();
+    requestNode.remove();
+    resultNode.remove();
+    if (!encoded) throw new Error('browser-visible page-realm graphics observation is empty');
+    const result = JSON.parse(encoded);
+    if (result && result.error) throw new Error('browser-visible page-realm graphics observation failed');
+    return result;
+  };
+
+  const graphics = collectGraphicsInPageRealm({webgl: request.webgl, webgl2: request.webgl2});
+  const fonts = request.fonts.map((family) => {
+    const escaped = family.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+    return {
+      family,
+      available: document.fonts.check(`16px "${escaped}"`, 'mmmmmmmmmmwwwwwwww'),
+    };
+  });
+
+  const collectVoices = async () => {
+    if (!request.voices_applicable) return {status: 'not_applicable'};
+    if (!('speechSynthesis' in window)) return {status: 'unavailable'};
+    // Gecko publishes the configured voice registry asynchronously. A first read may be
+    // empty or may expose a transient non-final registry, so readiness cannot be inferred
+    // from `length > 0`. Observe changes and require a stable post-change snapshot. If the
+    // event was emitted before this page installed its listener, use only the final bounded
+    // deadline snapshot. Rust remains the sole semantic equality owner.
+    const deadline = Date.now() + 2000;
+    let changed = false;
+    let wake = null;
+    const onChanged = () => {
+      changed = true;
+      if (wake) {
+        const resolve = wake;
+        wake = null;
+        resolve();
+      }
+    };
+    const waitForChangeOrPoll = () => new Promise((resolve) => {
+      wake = resolve;
+      setTimeout(() => {
+        if (wake === resolve) wake = null;
+        resolve();
+      }, 100);
+    });
+    const normalizeVoices = (voices) => voices.map((voice) => ({
+      language: voice.lang,
+      name: voice.name,
+      voice_uri: voice.voiceURI,
+      local_service: voice.localService,
+      is_default: voice.default,
+    }));
+    let voices = [];
+    let prior = null;
+    speechSynthesis.addEventListener('voiceschanged', onChanged);
+    try {
+      while (Date.now() < deadline) {
+        voices = speechSynthesis.getVoices();
+        const snapshot = voices.length === 0 ? null : JSON.stringify(normalizeVoices(voices));
+        if (changed && snapshot !== null && snapshot === prior) break;
+        prior = snapshot;
+        await waitForChangeOrPoll();
+      }
+      voices = speechSynthesis.getVoices();
+    } finally {
+      speechSynthesis.removeEventListener('voiceschanged', onChanged);
+      wake = null;
+    }
+    if (voices.length === 0) return {status: 'unavailable'};
+    return {
+      status: 'available',
+      voices: normalizeVoices(voices),
+    };
+  };
+
+  return {
+    user_agent: navigator.userAgent,
+    platform: navigator.platform,
+    oscpu: typeof navigator.oscpu === 'string' ? navigator.oscpu : null,
+    hardware_concurrency: navigator.hardwareConcurrency,
+    device_memory_gib: typeof navigator.deviceMemory === 'number' ? navigator.deviceMemory : null,
+    max_touch_points: navigator.maxTouchPoints,
+    screen: {
+      width: screen.width,
+      height: screen.height,
+      avail_width: screen.availWidth,
+      avail_height: screen.availHeight,
+      avail_left: screen.availLeft,
+      avail_top: screen.availTop,
+      color_depth: screen.colorDepth,
+      pixel_depth: screen.pixelDepth,
+      device_pixel_ratio: window.devicePixelRatio,
+    },
+    graphics,
+    fonts,
+    language: navigator.language,
+    languages: Array.from(navigator.languages || []),
+    speech_voices: await collectVoices(),
+  };
+}
+"""
+
 
 class RuntimeContractError(ValueError):
     """Raised when the repository-owned runtime contract is not satisfied."""
 
 
 def emit(frame: str) -> None:
-    sys.stdout.write(frame + "\n")
-    sys.stdout.flush()
+    # IPC v3 owns an LF-only wire format. Writing through TextIOWrapper would translate
+    # "\n" to CRLF on Windows and make the same canonical frame platform-dependent.
+    sys.stdout.buffer.write((frame + "\n").encode("ascii"))
+    sys.stdout.buffer.flush()
 
 
 def canonical_json(value: object) -> bytes:
@@ -150,6 +382,77 @@ def runtime_lock_path() -> Path:
     return path
 
 
+def validate_windows_distribution(lock: dict[str, Any]) -> None:
+    distribution = lock.get("windows_distribution")
+    if not isinstance(distribution, dict) or set(distribution) != {
+        "architecture",
+        "browser",
+        "python",
+    }:
+        raise RuntimeContractError("Windows distribution lock shape is invalid")
+    if distribution.get("architecture") != "x86_64":
+        raise RuntimeContractError("Windows runtime architecture is unsupported")
+    browser = distribution.get("browser")
+    python = distribution.get("python")
+    if not isinstance(browser, dict) or set(browser) != {
+        "artifact_sha256",
+        "artifact_url",
+        "executable_path",
+    }:
+        raise RuntimeContractError("Windows browser distribution lock shape is invalid")
+    if not isinstance(python, dict) or set(python) != {
+        "artifact_sha256",
+        "artifact_url",
+        "packages",
+        "version",
+    }:
+        raise RuntimeContractError("Windows Python distribution lock shape is invalid")
+    for row in (browser, python):
+        digest = row.get("artifact_sha256")
+        url = row.get("artifact_url")
+        if not isinstance(digest, str) or not valid_sha256(digest):
+            raise RuntimeContractError("Windows distribution digest is invalid")
+        if not isinstance(url, str) or not url.startswith("https://"):
+            raise RuntimeContractError("Windows distribution URL is invalid")
+    packages = python.get("packages")
+    if not isinstance(packages, list) or not packages:
+        raise RuntimeContractError("Windows Python dependency graph is invalid")
+    for package in packages:
+        if not isinstance(package, dict) or set(package) != {
+            "filename",
+            "name",
+            "sha256",
+            "url",
+            "version",
+        }:
+            raise RuntimeContractError("Windows Python dependency row shape is invalid")
+        filename = package.get("filename")
+        name = package.get("name")
+        version = package.get("version")
+        digest = package.get("sha256")
+        url = package.get("url")
+        if (
+            not isinstance(filename, str)
+            or not filename
+            or filename in {".", ".."}
+            or "/" in filename
+            or "\\" in filename
+            or not isinstance(name, str)
+            or not name
+            or not isinstance(version, str)
+            or not version
+            or not isinstance(digest, str)
+            or not valid_sha256(digest)
+            or not isinstance(url, str)
+            or not url.startswith("https://")
+        ):
+            raise RuntimeContractError("Windows Python dependency row is invalid")
+    if browser.get("executable_path") != "browser/camoufox.exe":
+        raise RuntimeContractError("Windows browser executable identity is unsupported")
+    if python.get("version") != "3.12.10" or lock.get("python") != "3.12":
+        raise RuntimeContractError("Windows Python distribution identity is unsupported")
+
+
 def load_runtime_lock() -> tuple[dict[str, Any], str]:
     lock, raw = load_canonical_json(runtime_lock_path(), MAX_CONFIG_BYTES)
     required_top = {
@@ -162,6 +465,7 @@ def load_runtime_lock() -> tuple[dict[str, Any], str]:
         "python_source",
         "runtime_role",
         "schema_version",
+        "windows_distribution",
     }
     if set(lock) != required_top:
         raise RuntimeContractError("runtime lock shape is invalid")
@@ -169,6 +473,7 @@ def load_runtime_lock() -> tuple[dict[str, Any], str]:
         raise RuntimeContractError("runtime lock identity is unsupported")
     if lock.get("camouhost_ipc_version") != int(IPC_VERSION):
         raise RuntimeContractError("runtime IPC identity is unsupported")
+    validate_windows_distribution(lock)
     expected = os.environ.get(EXPECTED_RUNTIME_LOCK_SHA256_ENV)
     digest = sha256_bytes(raw)
     if expected is not None and (not valid_sha256(expected) or expected != digest):
@@ -202,17 +507,6 @@ def resolve_headless_mode() -> bool | str:
     if value == "virtual":
         return "virtual"
     raise RuntimeContractError("unsupported Camouhost headless mode")
-
-
-def resolve_initial_url() -> str | None:
-    value = os.environ.get(INITIAL_URL_ENV)
-    if value is None or value == "":
-        return None
-    if len(value.encode("utf-8")) > MAX_URL_BYTES or "\n" in value or "\r" in value:
-        raise RuntimeContractError("initial URL is invalid")
-    if not value.startswith(("https://", "http://", "about:")):
-        raise RuntimeContractError("initial URL scheme is not permitted")
-    return value
 
 
 def resolve_proxy() -> dict[str, str] | None:
@@ -263,6 +557,75 @@ def stable_probe_digest(page: Any) -> str:
     return sha256_bytes(canonical_json(probe))
 
 
+def browser_visible_probe_request(config: dict[str, Any]) -> dict[str, Any]:
+    required_maps = (
+        "webGl:parameters",
+        "webGl2:parameters",
+        "webGl:shaderPrecisionFormats",
+        "webGl2:shaderPrecisionFormats",
+        "webGl:contextAttributes",
+        "webGl2:contextAttributes",
+    )
+    for key in required_maps:
+        if not isinstance(config.get(key), dict):
+            raise RuntimeContractError(f"materialized {key} observation surface is invalid")
+    fonts = config.get("fonts")
+    if not isinstance(fonts, list) or not fonts or any(not isinstance(value, str) or not value for value in fonts):
+        raise RuntimeContractError("materialized font observation surface is invalid")
+    return {
+        "webgl": {
+            "parameters": list(config["webGl:parameters"].keys()),
+            "shader_precision": list(config["webGl:shaderPrecisionFormats"].keys()),
+            "context_attributes": list(config["webGl:contextAttributes"].keys()),
+        },
+        "webgl2": {
+            "parameters": list(config["webGl2:parameters"].keys()),
+            "shader_precision": list(config["webGl2:shaderPrecisionFormats"].keys()),
+            "context_attributes": list(config["webGl2:contextAttributes"].keys()),
+        },
+        "fonts": copy.deepcopy(fonts),
+        "voices_applicable": "voices" in config,
+    }
+
+
+def browser_visible_observation(page: Any, config: dict[str, Any]) -> bytes:
+    value = page.evaluate(BROWSER_VISIBLE_PROBE, browser_visible_probe_request(config))
+    if not isinstance(value, dict):
+        raise RuntimeContractError("browser-visible observation shape is invalid")
+    payload = canonical_json(value)
+    if not payload or len(payload) > MAX_BROWSER_VISIBLE_BYTES:
+        raise RuntimeContractError("browser-visible observation exceeds bounded size")
+    return payload
+
+
+def emit_browser_visible(session_id: str, payload: bytes) -> None:
+    emit(f"browser_visible|{session_id}|{payload.hex()}")
+
+
+def decode_navigation_target(encoded: str) -> str | None:
+    if encoded == "":
+        return None
+    if len(encoded) > MAX_URL_BYTES * 2 or len(encoded) % 2 != 0 or re.fullmatch(r"[0-9a-f]+", encoded) is None:
+        raise RuntimeContractError("navigation target encoding is invalid")
+    try:
+        value = bytes.fromhex(encoded).decode("utf-8")
+    except (ValueError, UnicodeDecodeError) as error:
+        raise RuntimeContractError("navigation target encoding is invalid") from error
+    if len(value.encode("utf-8")) > MAX_URL_BYTES or "\n" in value or "\r" in value or "\0" in value:
+        raise RuntimeContractError("navigation target is invalid")
+    if not value.startswith(("https://", "http://", "about:")):
+        raise RuntimeContractError("navigation target scheme is not permitted")
+    return value
+
+
+def admit_navigation(context: Any, target: str | None) -> None:
+    context.set_offline(False)
+    if target is None:
+        return
+    page = context.pages[0] if context.pages else context.new_page()
+    page.goto(target, wait_until="domcontentloaded", timeout=90_000)
+
+
 def extract_camoufox_config(options: dict[str, Any]) -> dict[str, Any]:
     env = options.get("env")
     if not isinstance(env, dict):
@@ -286,23 +649,198 @@ def extract_camoufox_config(options: dict[str, Any]) -> dict[str, Any]:
     return value
 
 
+def preserve_generated_integer_projection(
+    config: dict[str, Any],
+    key: str,
+    value: Any,
+    minimum: int,
+    maximum: int,
+) -> None:
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, int)
+        or not minimum <= value <= maximum
+    ):
+        raise RuntimeContractError(f"generated {key} identity is invalid")
+    configured = config.get(key)
+    if configured is not None and configured != value:
+        raise RuntimeContractError(f"materialized {key} identity drifted")
+    config[key] = value
+
+
+def preserve_generated_milliscale_projection(
+    config: dict[str, Any],
+    key: str,
+    value: Any,
+    minimum_milli: int,
+    maximum_milli: int,
+) -> None:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise RuntimeContractError(f"generated {key} identity is invalid")
+    numeric = float(value)
+    milli = numeric * 1000.0
+    if (
+        not minimum_milli <= milli <= maximum_milli
+        or abs(round(milli) - milli) > 1e-9
+    ):
+        raise RuntimeContractError(f"generated {key} identity is invalid")
+    configured = config.get(key)
+    if configured is not None:
+        if isinstance(configured, bool) or not isinstance(configured, (int, float)):
+            raise RuntimeContractError(f"materialized {key} identity drifted")
+        if float(configured) != numeric:
+            raise RuntimeContractError(f"materialized {key} identity drifted")
+    config[key] = value
+
+
+def preserve_generated_locale_projection(config: dict[str, Any], navigator: Any) -> None:
+    language = getattr(navigator, "language", None)
+    languages = getattr(navigator, "languages", None)
+    if not isinstance(language, str) or not language or "\n" in language or "\r" in language:
+        raise RuntimeContractError("generated navigator.language identity is invalid")
+    if (
+        not isinstance(languages, list)
+        or not languages
+        or any(
+            not isinstance(value, str) or not value or "\n" in value or "\r" in value
+            for value in languages
+        )
+        or languages[0] != language
+    ):
+        raise RuntimeContractError("generated navigator.languages identity is invalid")
+    for key, value in (
+        ("navigator.language", language),
+        ("navigator.languages", languages),
+    ):
+        configured = config.get(key)
+        if configured is not None and configured != value:
+            raise RuntimeContractError(f"materialized {key} identity drifted")
+        config[key] = copy.deepcopy(value)
+
+
+def preserve_generated_browserforge_projection(config: dict[str, Any], fingerprint: Any) -> None:
+    """Close known Camoufox 0.5.5 BrowserForge conversion gaps for domain-owned identity."""
+    preserve_generated_integer_projection(
+        config,
+        "navigator.maxTouchPoints",
+        fingerprint.navigator.maxTouchPoints,
+        0,
+        64,
+    )
+    preserve_generated_integer_projection(
+        config,
+        "screen.availLeft",
+        fingerprint.screen.availLeft,
+        -(2**31),
+        2**31 - 1,
+    )
+    preserve_generated_integer_projection(
+        config,
+        "screen.availTop",
+        fingerprint.screen.availTop,
+        -(2**31),
+        2**31 - 1,
+    )
+    preserve_generated_milliscale_projection(
+        config,
+        "window.devicePixelRatio",
+        fingerprint.screen.devicePixelRatio,
+        250,
+        8_000,
+    )
+    preserve_generated_locale_projection(config, fingerprint.navigator)
+    voices = config.get("voices")
+    if not isinstance(voices, list) or not voices:
+        raise RuntimeContractError("generated speech voice identity is invalid")
+    block_host_voices = config.get("voices:blockIfNotDefined")
+    if block_host_voices not in (None, True):
+        raise RuntimeContractError("materialized speech voice isolation drifted")
+    config["voices:blockIfNotDefined"] = True
+
+
+def locked_firefox_major(lock: dict[str, Any]) -> int:
+    """Project the managed Firefox major only from the immutable runtime lock."""
+    browser = lock.get("browser")
+    version = browser.get("version") if isinstance(browser, dict) else None
+    if not isinstance(version, str):
+        raise RuntimeContractError("browser lock is invalid")
+    match = re.fullmatch(r"([1-9][0-9]*)\.[0-9]+\.[0-9]+-beta\.[0-9]+", version)
+    if match is None:
+        raise RuntimeContractError("browser lock version is unsupported")
+    return int(match.group(1))
+
+
+def packaged_windows_browser(lock: dict[str, Any]) -> Path:
+    distribution = lock.get("windows_distribution")
+    if not isinstance(distribution, dict):
+        raise RuntimeContractError("Windows distribution lock is invalid")
+    browser = distribution.get("browser")
+    if not isinstance(browser, dict):
+        raise RuntimeContractError("Windows browser distribution lock is invalid")
+    executable_path = browser.get("executable_path")
+    if executable_path != "browser/camoufox.exe":
+        raise RuntimeContractError("Windows browser executable identity is unsupported")
+
+    runtime_entrypoint = Path(__file__)
+    if runtime_entrypoint.is_symlink() or not runtime_entrypoint.is_file():
+        raise RuntimeContractError("Camouhost runtime entrypoint is not a regular file")
+    runtime_root = runtime_entrypoint.resolve(strict=True).parent.parent
+    executable = runtime_root.joinpath(*executable_path.split("/"))
+    if executable.is_symlink() or not executable.is_file():
+        raise RuntimeContractError("packaged Windows browser executable is unavailable")
+    return executable.resolve(strict=True)
+
+
+def camoufox_browser_selector(lock: dict[str, Any]) -> dict[str, str | Path]:
+    browser = lock.get("browser")
+    if not isinstance(browser, dict) or not isinstance(browser.get("version"), str):
+        raise RuntimeContractError("browser lock is invalid")
+    if os.name == "nt":
+        return {"executable_path": packaged_windows_browser(lock)}
+    if os.name == "posix":
+        return {"browser": browser["version"]}
+    raise RuntimeContractError("unsupported Camoufox runtime platform")
+
+
+def default_addon_exclusions() -> list[Any]:
+    """Disable Camoufox mutable default-addon acquisition on every shipping launch path."""
+    from camoufox.addons import DefaultAddons
+
+    return [DefaultAddons.UBO]
+
+
+def touch_runtime_preferences(config: dict[str, Any]) -> dict[str, int]:
+    """Project generation-owned touch identity into the pinned Firefox compatibility layer."""
+    value = config.get("navigator.maxTouchPoints")
+    if isinstance(value, bool) or not isinstance(value, int) or not 0 <= value <= 64:
+        raise RuntimeContractError("materialized navigator.maxTouchPoints identity is invalid")
+    return {
+        "dom.maxtouchpoints.testing.value": value,
+        "dom.w3c_touch_events.enabled": 1 if value > 0 else 0,
+    }
+
+
 def camoufox_kwargs(
     lock: dict[str, Any],
     root: Path,
     config: dict[str, Any],
 ) -> dict[str, Any]:
-    browser = lock.get("browser")
-    if not isinstance(browser, dict) or not isinstance(browser.get("version"), str):
-        raise RuntimeContractError("browser lock is invalid")
     user_data_dir = root / USER_DATA_NAME
     if user_data_dir.is_symlink():
         raise RuntimeContractError("browser user-data directory may not be a symlink")
     user_data_dir.mkdir(exist_ok=True)
     return {
-        "browser": browser["version"],
+        **camoufox_browser_selector(lock),
         "config": copy.deepcopy(config),
         "enable_cache": True,
         "env": browser_environment(),
+        "exclude_addons": default_addon_exclusions(),
+        "ff_version": locked_firefox_major(lock),
+        "firefox_user_prefs": {
+            "privacy.baselineFingerprintingProtection": False,
+            "webgl.disabled": False,
+            **touch_runtime_preferences(config),
+        },
         "headless": resolve_headless_mode(),
         "i_know_what_im_doing": True,
         "persistent_context": True,
@@ -327,13 +865,11 @@ def launch_verified_context(
     try:
         with contextlib.redirect_stdout(sys.stderr):
             context = manager.__enter__()
-        page = context.pages[0] if context.pages else context.new_page()
-        observed = stable_probe_digest(page)
-        if observed != expected_probe_sha256:
-            raise RuntimeContractError("profile-stable fingerprint drift detected")
-        initial_url = resolve_initial_url()
-        if initial_url is not None:
-            page.goto(initial_url, wait_until="domcontentloaded", timeout=90_000)
+        # Shipping browser starts network-offline. Rust/browser-execution-domain is the sole
+        # semantic identity admission owner and the only authority that can release navigation.
+        # The aggregate probe digest remains materialization/integrity evidence only; Python must
+        # not compare it to browser behavior and independently veto typed Rust admission.
+        context.set_offline(True)
         return manager, context
     except BaseException:
         with contextlib.suppress(BaseException):
@@ -456,14 +992,11 @@ def firefox_writer_active(root: Path) -> bool:
         else:
             raise RuntimeContractError("unsupported Firefox lock-probe platform")
     elif legacy_present:
-        # Without the modern primary lock we cannot prove that an old marker is stale.
         return True
 
     if not legacy_present or legacy_lock is None:
         return False
     if os.name == "posix" and modern_unix_legacy_lock_is_stale(legacy_lock):
-        # Firefox treats +PID as obsolete after the primary fcntl lock is proven free.
-        # Never unlink it here; Firefox remains responsible for its own lock artifacts.
         return False
     return True
 
@@ -520,8 +1053,9 @@ def controlled_close_candidate(state: dict[str, Any] | None) -> bool:
 
 def materialize_candidate_identity(root: Path) -> dict[str, str]:
     """Create exact generation identity once under an already acquired Bridge writer lock."""
+    from camoufox.fingerprints import generate_fingerprint
     from camoufox.sync_api import Camoufox
-    from camoufox.utils import launch_options
+    from camoufox.utils import get_screen_cons, launch_options
 
     lock, runtime_lock_sha256 = load_runtime_lock()
     verify_python_components(lock)
@@ -537,18 +1071,32 @@ def materialize_candidate_identity(root: Path) -> dict[str, str]:
     if firefox_writer_active(root):
         raise RuntimeContractError("candidate generation has an active/ambiguous Firefox writer")
 
-    browser = lock.get("browser")
-    if not isinstance(browser, dict) or not isinstance(browser.get("version"), str):
-        raise RuntimeContractError("browser lock is invalid")
+    browser_selector = camoufox_browser_selector(lock)
+    browser_env = browser_environment()
+    headless_mode = resolve_headless_mode()
+    fingerprint = generate_fingerprint(
+        screen=get_screen_cons(headless_mode or "DISPLAY" in browser_env),
+        os="windows",
+    )
     with contextlib.redirect_stdout(sys.stderr):
         options = launch_options(
-            browser=browser["version"],
+            **browser_selector,
             enable_cache=True,
-            env=browser_environment(),
-            headless=resolve_headless_mode(),
+            env=browser_env,
+            exclude_addons=default_addon_exclusions(),
+            ff_version=locked_firefox_major(lock),
+            fingerprint=fingerprint,
+            headless=headless_mode,
+            i_know_what_im_doing=True,
+            locale=fingerprint.navigator.languages,
             os="windows",
         )
     config = extract_camoufox_config(options)
+    # Camoufox 0.5.5 intentionally leaves locale/DPR outside its BrowserForge mapping, ignores
+    # falsy BrowserForge values, and normalizes negative screen offsets. Preserve only those known
+    # conversion gaps from this exact generated fingerprint; never substitute host-derived facts.
+    # The real-browser pre-navigation probe below proves that the pinned browser reproduces them.
+    preserve_generated_browserforge_projection(config, fingerprint)
     config_bytes = canonical_json(config)
     config_path.write_bytes(config_bytes)
     config_sha256 = sha256_bytes(config_bytes)
@@ -584,8 +1132,6 @@ def run_ipc() -> int:
         lock, _ = load_runtime_lock()
         verify_python_components(lock)
         root = resolve_profile_root(require_bridge_lock=True)
-        # The child is already Bridge-owned, but browser launch is still forbidden until
-        # the real Firefox OS-lock probe proves the generation quiescent.
         if firefox_writer_active(root):
             raise RuntimeContractError("Firefox writer is already active")
         config, _ = load_generation_config(root)
@@ -601,6 +1147,8 @@ def run_ipc() -> int:
     manager: Any | None = None
     context: Any | None = None
     close_observation: dict[str, Any] | None = None
+    browser_visible_observed = False
+    navigation_admitted = False
 
     for raw in sys.stdin:
         if not valid_frame(raw):
@@ -632,11 +1180,52 @@ def run_ipc() -> int:
 
         if (
             len(parts) == 2
+            and parts[0] == "observe_browser_visible"
+            and active_session is not None
+            and parts[1] == active_session
+            and manager is not None
+            and context is not None
+            and not browser_visible_observed
+            and not navigation_admitted
+        ):
+            try:
+                page = context.pages[0] if context.pages else context.new_page()
+                payload = browser_visible_observation(page, config)
+            except BaseException:
+                emit("error|runtime")
+                return 5
+            browser_visible_observed = True
+            emit_browser_visible(active_session, payload)
+            continue
+
+        if (
+            len(parts) == 3
+            and parts[0] == "admit_navigation"
+            and active_session is not None
+            and parts[1] == active_session
+            and manager is not None
+            and context is not None
+            and browser_visible_observed
+            and not navigation_admitted
+        ):
+            try:
+                target = decode_navigation_target(parts[2])
+                admit_navigation(context, target)
+            except BaseException:
+                emit("error|runtime")
+                return 5
+            navigation_admitted = True
+            emit(f"navigation_admitted|{active_session}")
+            continue
+
+        if (
+            len(parts) == 2
             and parts[0] == "observe_close"
             and active_session is not None
             and parts[1] == active_session
             and manager is not None
             and context is not None
+            and navigation_admitted
         ):
             controlled = controlled_close_candidate(close_observation)
             emit(f"close_observed|{active_session}|{'true' if controlled else 'false'}")
@@ -649,6 +1238,7 @@ def run_ipc() -> int:
             and parts[1] == active_session
             and manager is not None
             and context is not None
+            and navigation_admitted
         ):
             try:
                 close_context(manager, context, root)
@@ -661,8 +1251,6 @@ def run_ipc() -> int:
         emit("error|protocol")
         return 2
 
-    # EOF/disconnect is never a controlled-close witness. Cleanup is best-effort only and no
-    # positive close-observation frame can be emitted after transport loss.
     if manager is not None and context is not None:
         with contextlib.suppress(BaseException):
             close_context(manager, context, root)
@@ -676,8 +1264,19 @@ def main() -> int:
         except RuntimeContractError as error:
             print(f"candidate identity materialization failed: {error}", file=sys.stderr)
             return 7
-        except (OSError, importlib.metadata.PackageNotFoundError):
-            print("candidate identity materialization failed", file=sys.stderr)
+        except importlib.metadata.PackageNotFoundError:
+            print(
+                "candidate identity materialization failed: package_metadata_unavailable",
+                file=sys.stderr,
+            )
+            return 7
+        except OSError as error:
+            errno = error.errno if isinstance(error.errno, int) else "none"
+            print(
+                "candidate identity materialization failed: "
+                f"os_error={type(error).__name__} errno={errno}",
+                file=sys.stderr,
+            )
             return 7
         print(json.dumps(report, ensure_ascii=True, separators=(",", ":"), sort_keys=True))
         return 0

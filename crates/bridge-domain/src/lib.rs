@@ -5,8 +5,10 @@ use profile_platform_primitives::{DeviceId, SessionId, UnixMillis};
 
 const MIN_SECRET_LENGTH: usize = 24;
 const MAX_SECRET_LENGTH: usize = 96;
-const MAX_IPC_FRAME_LENGTH: usize = 512;
-pub const CAMOUHOST_IPC_VERSION: u16 = 2;
+const MAX_IPC_FRAME_LENGTH: usize = 1_100_000;
+const MAX_BROWSER_VISIBLE_PAYLOAD_HEX_LENGTH: usize = 512 * 1024 * 2;
+const MAX_NAVIGATION_TARGET_HEX_LENGTH: usize = 2048 * 2;
+pub const CAMOUHOST_IPC_VERSION: u16 = 3;
 
 #[derive(Clone, Eq, PartialEq)]
 pub struct ClaimCode(String);
@@ -554,7 +556,34 @@ impl fmt::Display for ProcessSupervisorError {
 
 impl std::error::Error for ProcessSupervisorError {}
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CamouhostErrorKind {
+    Protocol,
+    Identity,
+    Runtime,
+}
+
+impl CamouhostErrorKind {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Protocol => "protocol",
+            Self::Identity => "identity",
+            Self::Runtime => "runtime",
+        }
+    }
+
+    fn parse(value: &str) -> Result<Self, CamouhostProtocolError> {
+        match value {
+            "protocol" => Ok(Self::Protocol),
+            "identity" => Ok(Self::Identity),
+            "runtime" => Ok(Self::Runtime),
+            _ => Err(CamouhostProtocolError::MalformedFrame),
+        }
+    }
+}
+
+#[derive(Clone, Eq, PartialEq)]
 pub enum CamouhostMessage {
     Hello {
         version: u16,
@@ -566,6 +595,20 @@ pub enum CamouhostMessage {
         session_id: SessionId,
     },
     Ready {
+        session_id: SessionId,
+    },
+    ObserveBrowserVisible {
+        session_id: SessionId,
+    },
+    BrowserVisible {
+        session_id: SessionId,
+        payload_hex: String,
+    },
+    AdmitNavigation {
+        session_id: SessionId,
+        target_hex: String,
+    },
+    NavigationAdmitted {
         session_id: SessionId,
     },
     ObserveClose {
@@ -582,6 +625,43 @@ pub enum CamouhostMessage {
         session_id: SessionId,
         clean: bool,
     },
+    Error {
+        kind: CamouhostErrorKind,
+    },
+}
+
+impl fmt::Debug for CamouhostMessage {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Hello { version } => write!(formatter, "Hello {{ version: {version} }}"),
+            Self::HelloAck { version } => write!(formatter, "HelloAck {{ version: {version} }}"),
+            Self::Launch { .. } => formatter.write_str("Launch { session_id: [REDACTED] }"),
+            Self::Ready { .. } => formatter.write_str("Ready { session_id: [REDACTED] }"),
+            Self::ObserveBrowserVisible { .. } => {
+                formatter.write_str("ObserveBrowserVisible { session_id: [REDACTED] }")
+            }
+            Self::BrowserVisible { .. } => formatter
+                .write_str("BrowserVisible { session_id: [REDACTED], payload_hex: [REDACTED] }"),
+            Self::AdmitNavigation { .. } => formatter
+                .write_str("AdmitNavigation { session_id: [REDACTED], target_hex: [REDACTED] }"),
+            Self::NavigationAdmitted { .. } => {
+                formatter.write_str("NavigationAdmitted { session_id: [REDACTED] }")
+            }
+            Self::ObserveClose { .. } => {
+                formatter.write_str("ObserveClose { session_id: [REDACTED] }")
+            }
+            Self::CloseObserved { controlled, .. } => write!(
+                formatter,
+                "CloseObserved {{ session_id: [REDACTED], controlled: {controlled} }}"
+            ),
+            Self::Close { .. } => formatter.write_str("Close { session_id: [REDACTED] }"),
+            Self::Closed { clean, .. } => write!(
+                formatter,
+                "Closed {{ session_id: [REDACTED], clean: {clean} }}"
+            ),
+            Self::Error { kind } => write!(formatter, "Error {{ kind: {kind:?} }}"),
+        }
+    }
 }
 
 impl CamouhostMessage {
@@ -601,36 +681,103 @@ impl CamouhostMessage {
                 version: parse_version(version)?,
             }),
             ["launch", session_id] => Ok(Self::Launch {
-                session_id: SessionId::parse((*session_id).to_owned())
-                    .map_err(|_| CamouhostProtocolError::MalformedFrame)?,
+                session_id: parse_session(session_id)?,
             }),
             ["ready", session_id] => Ok(Self::Ready {
-                session_id: SessionId::parse((*session_id).to_owned())
-                    .map_err(|_| CamouhostProtocolError::MalformedFrame)?,
+                session_id: parse_session(session_id)?,
+            }),
+            ["observe_browser_visible", session_id] => Ok(Self::ObserveBrowserVisible {
+                session_id: parse_session(session_id)?,
+            }),
+            ["browser_visible", session_id, payload_hex]
+                if valid_lower_hex(payload_hex, false, MAX_BROWSER_VISIBLE_PAYLOAD_HEX_LENGTH) =>
+            {
+                Ok(Self::BrowserVisible {
+                    session_id: parse_session(session_id)?,
+                    payload_hex: (*payload_hex).to_owned(),
+                })
+            }
+            ["admit_navigation", session_id, target_hex]
+                if valid_lower_hex(target_hex, true, MAX_NAVIGATION_TARGET_HEX_LENGTH) =>
+            {
+                Ok(Self::AdmitNavigation {
+                    session_id: parse_session(session_id)?,
+                    target_hex: (*target_hex).to_owned(),
+                })
+            }
+            ["navigation_admitted", session_id] => Ok(Self::NavigationAdmitted {
+                session_id: parse_session(session_id)?,
             }),
             ["observe_close", session_id] => Ok(Self::ObserveClose {
-                session_id: SessionId::parse((*session_id).to_owned())
-                    .map_err(|_| CamouhostProtocolError::MalformedFrame)?,
+                session_id: parse_session(session_id)?,
             }),
             ["close_observed", session_id, controlled] => Ok(Self::CloseObserved {
-                session_id: SessionId::parse((*session_id).to_owned())
-                    .map_err(|_| CamouhostProtocolError::MalformedFrame)?,
+                session_id: parse_session(session_id)?,
                 controlled: parse_bool(controlled)?,
             }),
             ["close", session_id] => Ok(Self::Close {
-                session_id: SessionId::parse((*session_id).to_owned())
-                    .map_err(|_| CamouhostProtocolError::MalformedFrame)?,
+                session_id: parse_session(session_id)?,
             }),
             ["closed", session_id, clean] => Ok(Self::Closed {
-                session_id: SessionId::parse((*session_id).to_owned())
-                    .map_err(|_| CamouhostProtocolError::MalformedFrame)?,
+                session_id: parse_session(session_id)?,
                 clean: parse_bool(clean)?,
+            }),
+            ["error", kind] => Ok(Self::Error {
+                kind: CamouhostErrorKind::parse(kind)?,
             }),
             _ => Err(CamouhostProtocolError::MalformedFrame),
         }
     }
 
-    pub fn validate_version(&self) -> Result<(), CamouhostProtocolError> {
+    pub fn to_frame(&self) -> Result<String, CamouhostProtocolError> {
+        self.validate_version()?;
+        let frame = match self {
+            Self::Hello { version } => format!("hello|{version}"),
+            Self::HelloAck { version } => format!("hello_ack|{version}"),
+            Self::Launch { session_id } => format!("launch|{}", session_id.as_str()),
+            Self::Ready { session_id } => format!("ready|{}", session_id.as_str()),
+            Self::ObserveBrowserVisible { session_id } => {
+                format!("observe_browser_visible|{}", session_id.as_str())
+            }
+            Self::BrowserVisible {
+                session_id,
+                payload_hex,
+            } => {
+                if !valid_lower_hex(payload_hex, false, MAX_BROWSER_VISIBLE_PAYLOAD_HEX_LENGTH) {
+                    return Err(CamouhostProtocolError::MalformedFrame);
+                }
+                format!("browser_visible|{}|{payload_hex}", session_id.as_str())
+            }
+            Self::AdmitNavigation {
+                session_id,
+                target_hex,
+            } => {
+                if !valid_lower_hex(target_hex, true, MAX_NAVIGATION_TARGET_HEX_LENGTH) {
+                    return Err(CamouhostProtocolError::MalformedFrame);
+                }
+                format!("admit_navigation|{}|{target_hex}", session_id.as_str())
+            }
+            Self::NavigationAdmitted { session_id } => {
+                format!("navigation_admitted|{}", session_id.as_str())
+            }
+            Self::ObserveClose { session_id } => format!("observe_close|{}", session_id.as_str()),
+            Self::CloseObserved {
+                session_id,
+                controlled,
+            } => format!("close_observed|{}|{controlled}", session_id.as_str()),
+            Self::Close { session_id } => format!("close|{}", session_id.as_str()),
+            Self::Closed { session_id, clean } => {
+                format!("closed|{}|{clean}", session_id.as_str())
+            }
+            Self::Error { kind } => format!("error|{}", kind.as_str()),
+        };
+        if frame.len() > MAX_IPC_FRAME_LENGTH {
+            return Err(CamouhostProtocolError::MalformedFrame);
+        }
+        Ok(frame)
+    }
+
+    pub const fn validate_version(&self) -> Result<(), CamouhostProtocolError> {
         match self {
             Self::Hello { version } | Self::HelloAck { version }
                 if *version != CAMOUHOST_IPC_VERSION =>
@@ -696,6 +843,16 @@ fn valid_secret(value: &str) -> bool {
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
 }
 
+fn valid_lower_hex(value: &str, allow_empty: bool, maximum: usize) -> bool {
+    if value.len() > maximum || !value.len().is_multiple_of(2) || (!allow_empty && value.is_empty())
+    {
+        return false;
+    }
+    value
+        .bytes()
+        .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
+}
+
 fn add_millis(value: UnixMillis, delta: u64) -> Result<UnixMillis, ProcessSupervisorError> {
     value
         .value()
@@ -710,6 +867,10 @@ fn parse_version(value: &str) -> Result<u16, CamouhostProtocolError> {
         .map_err(|_| CamouhostProtocolError::MalformedFrame)
 }
 
+fn parse_session(value: &str) -> Result<SessionId, CamouhostProtocolError> {
+    SessionId::parse(value.to_owned()).map_err(|_| CamouhostProtocolError::MalformedFrame)
+}
+
 fn parse_bool(value: &str) -> Result<bool, CamouhostProtocolError> {
     match value {
         "true" => Ok(true),
@@ -721,9 +882,10 @@ fn parse_bool(value: &str) -> Result<bool, CamouhostProtocolError> {
 #[cfg(test)]
 mod tests {
     use super::{
-        CAMOUHOST_IPC_VERSION, CamouhostMessage, CamouhostProtocolError, ClaimCode, ClaimUri,
-        EnrollmentClaim, EnrollmentClaimError, ProcessCloseOutcome, ProcessSupervisor,
-        SupervisedProcessState, WorkspaceLockError, WorkspaceLockState, WorkspaceLockToken,
+        CAMOUHOST_IPC_VERSION, CamouhostErrorKind, CamouhostMessage, CamouhostProtocolError,
+        ClaimCode, ClaimUri, EnrollmentClaim, EnrollmentClaimError, ProcessCloseOutcome,
+        ProcessSupervisor, SupervisedProcessState, WorkspaceLockError, WorkspaceLockState,
+        WorkspaceLockToken,
     };
     use profile_platform_primitives::{DeviceId, SessionId, UnixMillis};
 
@@ -876,7 +1038,7 @@ mod tests {
     #[test]
     fn versioned_camouhost_frames_parse_and_malformed_frames_fail_closed()
     -> Result<(), Box<dyn std::error::Error>> {
-        let hello = CamouhostMessage::parse("hello|2")?;
+        let hello = CamouhostMessage::parse("hello|3")?;
         hello.validate_version()?;
         assert_eq!(
             hello,
@@ -885,7 +1047,7 @@ mod tests {
             }
         );
         assert_eq!(
-            CamouhostMessage::parse("hello|1")?.validate_version(),
+            CamouhostMessage::parse("hello|2")?.validate_version(),
             Err(CamouhostProtocolError::UnsupportedVersion)
         );
         assert_eq!(
@@ -909,6 +1071,70 @@ mod tests {
             CamouhostMessage::parse("launch|../../profile"),
             Err(CamouhostProtocolError::MalformedFrame)
         );
+        Ok(())
+    }
+
+    #[test]
+    fn camouhost_debug_redacts_session_payload_and_navigation_target()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let raw_session = "session_01JAWIREV3";
+        let payload_hex = "73656e74696e656c5f62726f777365725f7061796c6f6164";
+        let target_hex = "68747470733a2f2f7365637265742e696e76616c69642f";
+        let session = SessionId::parse(raw_session)?;
+        let visible = CamouhostMessage::BrowserVisible {
+            session_id: session.clone(),
+            payload_hex: payload_hex.to_owned(),
+        };
+        let navigation = CamouhostMessage::AdmitNavigation {
+            session_id: session,
+            target_hex: target_hex.to_owned(),
+        };
+
+        for message in [&visible, &navigation] {
+            let rendered = format!("{message:?}");
+            assert!(rendered.contains("[REDACTED]"));
+            assert!(!rendered.contains(raw_session));
+            assert!(!rendered.contains(payload_hex));
+            assert!(!rendered.contains(target_hex));
+        }
+
+        assert!(visible.to_frame()?.contains(payload_hex));
+        assert!(navigation.to_frame()?.contains(target_hex));
+        Ok(())
+    }
+
+    #[test]
+    fn camouhost_v3_owns_observation_admission_and_errors() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let session = SessionId::parse("session_01JAWIREV3")?;
+        let messages = [
+            CamouhostMessage::ObserveBrowserVisible {
+                session_id: session.clone(),
+            },
+            CamouhostMessage::BrowserVisible {
+                session_id: session.clone(),
+                payload_hex: "7b7d0a".to_owned(),
+            },
+            CamouhostMessage::AdmitNavigation {
+                session_id: session.clone(),
+                target_hex: String::new(),
+            },
+            CamouhostMessage::NavigationAdmitted {
+                session_id: session.clone(),
+            },
+            CamouhostMessage::Error {
+                kind: CamouhostErrorKind::Runtime,
+            },
+        ];
+        for message in messages {
+            let frame = message.to_frame()?;
+            assert_eq!(CamouhostMessage::parse(&frame)?, message);
+        }
+        assert!(CamouhostMessage::parse("browser_visible|session_01JAWIREV3|").is_err());
+        assert!(CamouhostMessage::parse("browser_visible|session_01JAWIREV3|GG").is_err());
+        assert!(CamouhostMessage::parse("admit_navigation|session_01JAWIREV3|0").is_err());
+        assert!(CamouhostMessage::parse("navigated|session_01JAWIREV3").is_err());
+        assert!(CamouhostMessage::parse("error|unknown").is_err());
         Ok(())
     }
 }

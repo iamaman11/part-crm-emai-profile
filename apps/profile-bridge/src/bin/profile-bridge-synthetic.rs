@@ -8,8 +8,10 @@ use application_ports::generation_objects::{
 use application_ports::generations::GenerationPortError;
 use bridge_domain::{BridgePortError, ClaimUri, EnrollmentClaim};
 use browser_execution_domain::{
-    BrowserIdentityManifest, MaterializationBinding, NetworkClass, NetworkIdentityObservation,
-    NetworkIdentityPolicy,
+    BrowserIdentityManifest, BrowserOsIdentity, DisplayIdentity, FontIdentity, GraphicsIdentity,
+    HardwareCapabilityIdentity, LocaleIdentity, MaterializationBinding, NetworkClass,
+    NetworkIdentityObservation, NetworkIdentityPolicy, OriginDeterminismMode,
+    OriginDeterministicIdentity, ProfileStableIdentity,
 };
 use encrypted_generation_domain::{GenerationDek, KeyId, NoncePrefix};
 use profile_bridge::browser_execution::persist_materialization_binding;
@@ -229,6 +231,45 @@ fn synthetic_lease(fixture: &SyntheticFixture) -> Result<ProfileLease, Synthetic
     .map_err(|_| SyntheticOperatorError::CoordinatorFixture)
 }
 
+fn synthetic_profile_stable_identity() -> Result<ProfileStableIdentity, SyntheticOperatorError> {
+    let digest = |character: char| character.to_string().repeat(64);
+    ProfileStableIdentity::new(
+        1,
+        BrowserOsIdentity::new(
+            "Mozilla/5.0 Firefox/152.0",
+            152,
+            "Win32",
+            "Windows NT 10.0; Win64; x64",
+        )
+        .map_err(|_| SyntheticOperatorError::BrowserPreflightFixture)?,
+        HardwareCapabilityIdentity::new(8, 8, 0)
+            .map_err(|_| SyntheticOperatorError::BrowserPreflightFixture)?,
+        DisplayIdentity::new(1920, 1080, 1920, 1040, 0, 0, 24, 24, 1000)
+            .map_err(|_| SyntheticOperatorError::BrowserPreflightFixture)?,
+        GraphicsIdentity::new(
+            "Google Inc. (NVIDIA)",
+            "ANGLE (NVIDIA GeForce)",
+            digest('1'),
+            digest('2'),
+            digest('3'),
+            digest('4'),
+            digest('5'),
+        )
+        .map_err(|_| SyntheticOperatorError::BrowserPreflightFixture)?,
+        FontIdentity::new(digest('6'), digest('7'))
+            .map_err(|_| SyntheticOperatorError::BrowserPreflightFixture)?,
+        OriginDeterministicIdentity::new(
+            OriginDeterminismMode::ProfileGenerationSeed,
+            digest('8'),
+            digest('9'),
+        )
+        .map_err(|_| SyntheticOperatorError::BrowserPreflightFixture)?,
+        LocaleIdentity::new("en-US", digest('a'), Some(digest('b')))
+            .map_err(|_| SyntheticOperatorError::BrowserPreflightFixture)?,
+    )
+    .map_err(|_| SyntheticOperatorError::BrowserPreflightFixture)
+}
+
 fn synthetic_browser_preflight(
     workspace: &GenerationWorkspace,
     fixture: &SyntheticFixture,
@@ -236,11 +277,13 @@ fn synthetic_browser_preflight(
 ) -> Result<BoundBrowserLaunchPreflight<SyntheticRuntimeObservation>, SyntheticOperatorError> {
     let manifest = runtime_bundles.bundle.manifest();
     let browser_identity = BrowserIdentityManifest::new(
-        1,
+        2,
+        "profile-stability-v1",
         manifest.runtime_version(),
         manifest.inventory_sha256().as_str(),
         "synthetic-camoufox-v1",
         "b".repeat(64),
+        synthetic_profile_stable_identity()?,
     )
     .map_err(|_| SyntheticOperatorError::BrowserPreflightFixture)?;
     let binding = MaterializationBinding::new(

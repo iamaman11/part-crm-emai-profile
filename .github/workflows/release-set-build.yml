@@ -6,6 +6,7 @@ on:
       - main
 
 permissions:
+  actions: read
   contents: read
 
 concurrency:
@@ -139,9 +140,163 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
+  runtime-browser-candidate:
+    name: Resolve immutable patched Windows Camoufox candidate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      SOURCE_SHA: ${{ github.sha }}
+    steps:
+      - name: Checkout exact accepted-main source
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Prove accepted-main source
+        run: |
+          set -euo pipefail
+          test "$GITHUB_EVENT_NAME" = push
+          test "$GITHUB_REF" = refs/heads/main
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+
+      - name: Restore exact candidate cache
+        id: candidate-cache
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae
+        with:
+          path: artifacts/camoufox-candidate
+          key: s0-camoufox-windows-${{ hashFiles('runtime/camouhost/camoufox-patch-lock.json') }}
+
+      - name: Seed exact candidate from the proven generation run
+        id: candidate-seed
+        if: steps.candidate-cache.outputs.cache-hit != 'true'
+        continue-on-error: true
+        uses: actions/download-artifact@70fc10c6e5e1ce46ad2ea6f2b72d43f7d47b13c3
+        with:
+          name: s0-camoufox-windows-11e3696e37d5065633d93d5ddd05fdf1bb836b96
+          path: artifacts/camoufox-candidate
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          run-id: 33572782439
+
+      - name: Require and verify the exact locked Windows candidate
+        env:
+          CACHE_HIT: ${{ steps.candidate-cache.outputs.cache-hit }}
+          SEED_OUTCOME: ${{ steps.candidate-seed.outcome }}
+        run: |
+          set -euo pipefail
+          python3.12 -m py_compile scripts/check-camoufox-webgl-patch.py scripts/verify-camoufox-patched-candidate.py
+          python3.12 scripts/check-camoufox-webgl-patch.py --self-test
+          python3.12 scripts/verify-camoufox-patched-candidate.py --self-test
+          archive=artifacts/camoufox-candidate/camoufox-windows.x86_64.zip
+          provenance=artifacts/camoufox-candidate/camoufox-windows.provenance.json
+          test -f "$archive"
+          test -f "$provenance"
+          candidate_sha="$(python3.12 -c 'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["build_source_commit"])' "$provenance")"
+          python3.12 scripts/verify-camoufox-patched-candidate.py \
+            --archive "$archive" \
+            --provenance "$provenance" \
+            --target windows \
+            --build-source-commit "$candidate_sha"
+          echo "Reused exact locked Windows candidate built at ${candidate_sha}; cache_hit=${CACHE_HIT}; seed_outcome=${SEED_OUTCOME}."
+
+      - name: Upload candidate as CI transport only
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: ar11-browser-candidate-${{ github.sha }}
+          path: artifacts/camoufox-candidate
+          if-no-files-found: error
+          retention-days: 7
+
+  runtime-bundle:
+    name: Build immutable clean-host Windows Camouhost runtime
+    needs: runtime-browser-candidate
+    runs-on: windows-2025
+    env:
+      SOURCE_SHA: ${{ github.sha }}
+    steps:
+      - name: Checkout exact accepted-main source
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Prove accepted-main source
+        shell: pwsh
+        run: |
+          if ($env:GITHUB_EVENT_NAME -ne 'push') { throw 'Release Set build requires main push' }
+          if ($env:GITHUB_REF -ne 'refs/heads/main') { throw 'Release Set build requires main' }
+          if ((git rev-parse HEAD).Trim() -ne $env:SOURCE_SHA) { throw 'source SHA mismatch' }
+
+      - name: Set up exact build Python 3.12.10
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.12.10'
+
+      - name: Download exact patched browser candidate transport
+        uses: actions/download-artifact@70fc10c6e5e1ce46ad2ea6f2b72d43f7d47b13c3
+        with:
+          name: ar11-browser-candidate-${{ github.sha }}
+          path: artifacts/ar11-browser-candidate
+
+      - name: Prove runtime materializer and packager policy
+        shell: pwsh
+        run: |
+          python --version
+          if ((python -c "import sys; print('.'.join(map(str, sys.version_info[:3])))").Trim() -ne '3.12.10') { throw 'build Python mismatch' }
+          python -m py_compile scripts/camouhost-runtime-build-windows.py scripts/camouhost-runtime-package.py scripts/verify-camoufox-patched-candidate.py
+          python scripts/verify-camoufox-patched-candidate.py --self-test
+          python scripts/camouhost-runtime-build-windows.py self-test
+          python scripts/camouhost-runtime-package.py self-test
+
+      - name: Materialize exact clean-host Windows runtime
+        shell: pwsh
+        run: |
+          $runtimeRoot = Join-Path $env:RUNNER_TEMP 'camouhost-runtime'
+          $buildPython = (Get-Command python).Source
+          $candidateBuildSha = (Get-Content -Raw 'artifacts/ar11-browser-candidate/camoufox-windows.provenance.json' | ConvertFrom-Json).build_source_commit
+          if ($candidateBuildSha -notmatch '^[0-9a-f]{40}$') { throw 'candidate build source commit is invalid' }
+          python scripts/camouhost-runtime-build-windows.py build `
+            --runtime-lock runtime/camouhost/runtime-lock.json `
+            --patch-lock runtime/camouhost/camoufox-patch-lock.json `
+            --runtime-source runtime/camouhost/real.py `
+            --browser-candidate artifacts/ar11-browser-candidate/camoufox-windows.x86_64.zip `
+            --browser-provenance artifacts/ar11-browser-candidate/camoufox-windows.provenance.json `
+            --build-source-commit "$candidateBuildSha" `
+            --output "$runtimeRoot" `
+            --build-python "$buildPython"
+          if (-not (Test-Path -LiteralPath (Join-Path $runtimeRoot 'python\python.exe') -PathType Leaf)) { throw 'embedded Python missing' }
+          if (-not (Test-Path -LiteralPath (Join-Path $runtimeRoot 'browser\camoufox.exe') -PathType Leaf)) { throw 'packaged Camoufox missing' }
+          if (-not (Test-Path -LiteralPath (Join-Path $runtimeRoot 'camouhost\browser-candidate-provenance.json') -PathType Leaf)) { throw 'browser candidate provenance missing' }
+
+      - name: Package exact Windows runtime component
+        shell: pwsh
+        run: |
+          $runtimeRoot = Join-Path $env:RUNNER_TEMP 'camouhost-runtime'
+          New-Item -ItemType Directory -Force -Path artifacts/ar11-runtime-bundle | Out-Null
+          python scripts/camouhost-runtime-package.py package `
+            --source-sha "$env:SOURCE_SHA" `
+            --runtime-root "$runtimeRoot" `
+            --archive artifacts/ar11-runtime-bundle/runtime-bundle.tar `
+            --manifest artifacts/ar11-runtime-bundle/runtime-manifest.json
+          $manifest = Get-Content artifacts/ar11-runtime-bundle/runtime-manifest.json -Raw | ConvertFrom-Json
+          if ($manifest.schema_version -ne 2) { throw 'runtime manifest schema mismatch' }
+          if ($manifest.kind -ne 'CAMOUFOX_WINDOWS_RUNTIME_COMPONENT') { throw 'runtime manifest kind mismatch' }
+          if ($manifest.platform -ne 'windows-x86_64') { throw 'runtime manifest platform mismatch' }
+          if ($manifest.source_commit_sha -ne $env:SOURCE_SHA) { throw 'runtime source mismatch' }
+          if ($manifest.release_id -notmatch '^runtime-bundle-v2-sha256-[0-9a-f]{64}$') { throw 'runtime release identity mismatch' }
+
+      - name: Upload CI transport only
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: ar11-runtime-bundle-${{ github.sha }}
+          path: artifacts/ar11-runtime-bundle
+          if-no-files-found: error
+          retention-days: 7
+
   assemble-publish:
     name: Finalize and publish durable immutable Release Set v3
-    needs: [cloud-components, profile-bridge]
+    needs: [cloud-components, profile-bridge, runtime-bundle]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -153,6 +308,7 @@ jobs:
         uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
         with:
           ref: ${{ github.sha }}
+          fetch-depth: 0
           persist-credentials: false
 
       - name: Download exact component CI transport
@@ -176,17 +332,12 @@ jobs:
           cp artifacts/ar11-inputs/control-plane.tar "$component_root/control-plane.tar"
           cp artifacts/ar11-inputs/secret-resolver.tar "$component_root/secret-resolver.tar"
           cp artifacts/ar11-inputs/profile-bridge.zip "$component_root/profile-bridge.zip"
-
-          python scripts/camouhost-runtime-package.py self-test
-          python scripts/camouhost-runtime-package.py package \
-            --source-sha "$SOURCE_SHA" \
-            --archive "$component_root/runtime-bundle.tar" \
-            --manifest "$RUNNER_TEMP/runtime-manifest.json"
+          cp artifacts/ar11-inputs/runtime-bundle.tar "$component_root/runtime-bundle.tar"
 
           control_manifest=artifacts/ar11-inputs/control-plane-manifest.json
           resolver_manifest=artifacts/ar11-inputs/secret-resolver-manifest.json
           bridge_manifest=artifacts/ar11-inputs/profile-bridge-manifest.json
-          runtime_manifest="$RUNNER_TEMP/runtime-manifest.json"
+          runtime_manifest=artifacts/ar11-inputs/runtime-manifest.json
 
           control_release_id="$(jq -er '.release_id' "$control_manifest")"
           resolver_release_id="$(jq -er '.release_id' "$resolver_manifest")"
@@ -206,12 +357,8 @@ jobs:
             exit 1
           fi
 
-          sha256_file() {
-            sha256sum "$1" | awk '{print $1}'
-          }
-          size_bytes() {
-            stat -c '%s' "$1"
-          }
+          sha256_file() { sha256sum "$1" | awk '{print $1}'; }
+          size_bytes() { stat -c '%s' "$1"; }
 
           control_sha="$(sha256_file "$component_root/control-plane.tar")"
           resolver_sha="$(sha256_file "$component_root/secret-resolver.tar")"
@@ -226,14 +373,27 @@ jobs:
           bridge_manifest_sha="$(sha256_file "$bridge_manifest")"
           runtime_manifest_sha="$(sha256_file "$runtime_manifest")"
 
-          accepted_main_binding="$(
-            jq -c -n -j \
-              --arg authority accepted-main \
-              --arg commit_sha "$SOURCE_SHA" \
-              --arg repository "$GITHUB_REPOSITORY" \
-              '{authority:$authority,commit_sha:$commit_sha,repository:$repository}' \
-              | sha256sum | awk '{print $1}'
-          )"
+          python -m py_compile scripts/windows-delivery-evidence.py scripts/windows-delivery-publication.py
+          python scripts/windows-delivery-evidence.py self-test
+          python scripts/windows-delivery-publication.py self-test
+          evidence_root="$RUNNER_TEMP/windows-delivery-evidence"
+          mkdir -p "$evidence_root"
+          sbom_json="$evidence_root/windows-sbom-v1.json"
+          provenance_json="$evidence_root/windows-provenance-v1.json"
+          python scripts/windows-delivery-evidence.py build \
+            --source-sha "$SOURCE_SHA" \
+            --profile-bridge-manifest "$bridge_manifest" \
+            --profile-bridge-archive "$component_root/profile-bridge.zip" \
+            --runtime-manifest "$runtime_manifest" \
+            --runtime-archive "$component_root/runtime-bundle.tar" \
+            --sbom "$sbom_json" \
+            --provenance "$provenance_json"
+          sbom_sha="$(sha256_file "$sbom_json")"
+          provenance_sha="$(sha256_file "$provenance_json")"
+          sbom_size="$(size_bytes "$sbom_json")"
+          provenance_size="$(size_bytes "$provenance_json")"
+
+          accepted_main_binding="$(jq -c -n -j --arg authority accepted-main --arg commit_sha "$SOURCE_SHA" --arg repository "$GITHUB_REPOSITORY" '{authority:$authority,commit_sha:$commit_sha,repository:$repository}' | sha256sum | awk '{print $1}')"
           [[ "$accepted_main_binding" =~ ^[0-9a-f]{64}$ ]]
 
           request_json="$RUNNER_TEMP/release-finalize-request.json"
@@ -261,122 +421,66 @@ jobs:
             --arg runtime_sha "$runtime_sha" \
             --argjson runtime_size "$runtime_size" \
             --arg runtime_manifest_sha "$runtime_manifest_sha" \
+            --arg sbom_sha "$sbom_sha" \
+            --argjson sbom_size "$sbom_size" \
+            --arg provenance_sha "$provenance_sha" \
+            --argjson provenance_size "$provenance_size" \
             --argjson bridge_protocol "$bridge_protocol" \
             --arg resolver_protocol "$resolver_protocol" \
             '{
               schema_version: 1,
               kind: "RELEASE_FINALIZE_REQUEST",
-              source: {
-                repository: $repository,
-                commit_sha: $source_sha,
-                accepted_main: true,
-                accepted_main_evidence_sha256: $accepted_main_evidence_sha256
-              },
+              source: {repository:$repository,commit_sha:$source_sha,accepted_main:true,accepted_main_evidence_sha256:$accepted_main_evidence_sha256},
               components: {
-                control_plane: {
-                  component_id: "control_plane",
-                  release_id: $control_release_id,
-                  source_commit_sha: $control_source_sha,
-                  artifact_path: "components/control-plane.tar",
-                  artifact_sha256: $control_sha,
-                  artifact_size_bytes: $control_size,
-                  component_manifest_sha256: $control_manifest_sha
-                },
-                frontend: {
-                  component_id: "frontend",
-                  release_id: $control_release_id,
-                  source_commit_sha: $control_source_sha,
-                  artifact_path: "components/control-plane.tar",
-                  artifact_sha256: $control_sha,
-                  artifact_size_bytes: $control_size,
-                  component_manifest_sha256: $control_manifest_sha
-                },
-                secret_resolver: {
-                  component_id: "secret_resolver",
-                  release_id: $resolver_release_id,
-                  source_commit_sha: $resolver_source_sha,
-                  artifact_path: "components/secret-resolver.tar",
-                  artifact_sha256: $resolver_sha,
-                  artifact_size_bytes: $resolver_size,
-                  component_manifest_sha256: $resolver_manifest_sha
-                },
-                runtime_bundle: {
-                  component_id: "runtime_bundle",
-                  release_id: $runtime_release_id,
-                  source_commit_sha: $runtime_source_sha,
-                  artifact_path: "components/runtime-bundle.tar",
-                  artifact_sha256: $runtime_sha,
-                  artifact_size_bytes: $runtime_size,
-                  component_manifest_sha256: $runtime_manifest_sha
-                },
-                profile_bridge: {
-                  component_id: "profile_bridge",
-                  release_id: $bridge_release_id,
-                  source_commit_sha: $bridge_source_sha,
-                  artifact_path: "components/profile-bridge.zip",
-                  artifact_sha256: $bridge_sha,
-                  artifact_size_bytes: $bridge_size,
-                  component_manifest_sha256: $bridge_manifest_sha
-                }
+                control_plane:{component_id:"control_plane",release_id:$control_release_id,source_commit_sha:$control_source_sha,artifact_path:"components/control-plane.tar",artifact_sha256:$control_sha,artifact_size_bytes:$control_size,component_manifest_sha256:$control_manifest_sha},
+                frontend:{component_id:"frontend",release_id:$control_release_id,source_commit_sha:$control_source_sha,artifact_path:"components/control-plane.tar",artifact_sha256:$control_sha,artifact_size_bytes:$control_size,component_manifest_sha256:$control_manifest_sha},
+                secret_resolver:{component_id:"secret_resolver",release_id:$resolver_release_id,source_commit_sha:$resolver_source_sha,artifact_path:"components/secret-resolver.tar",artifact_sha256:$resolver_sha,artifact_size_bytes:$resolver_size,component_manifest_sha256:$resolver_manifest_sha},
+                runtime_bundle:{component_id:"runtime_bundle",release_id:$runtime_release_id,source_commit_sha:$runtime_source_sha,artifact_path:"components/runtime-bundle.tar",artifact_sha256:$runtime_sha,artifact_size_bytes:$runtime_size,component_manifest_sha256:$runtime_manifest_sha},
+                profile_bridge:{component_id:"profile_bridge",release_id:$bridge_release_id,source_commit_sha:$bridge_source_sha,artifact_path:"components/profile-bridge.zip",artifact_sha256:$bridge_sha,artifact_size_bytes:$bridge_size,component_manifest_sha256:$bridge_manifest_sha}
               },
-              protocols: {
-                profile_bridge_protocol_version: $bridge_protocol,
-                resolver_protocol: $resolver_protocol
-              }
+              evidence_artifacts:{
+                windows_sbom:{path:"windows/windows-sbom-v1.json",sha256:$sbom_sha,size_bytes:$sbom_size,kind:"windows-delivery-sbom"},
+                windows_provenance:{path:"windows/windows-provenance-v1.json",sha256:$provenance_sha,size_bytes:$provenance_size,kind:"windows-delivery-provenance"}
+              },
+              protocols:{profile_bridge_protocol_version:$bridge_protocol,resolver_protocol:$resolver_protocol}
             }' > "$request_json"
 
           capability_policy_json="$RUNNER_TEMP/capability-policy-v1.json"
           capability_policy_replay="$RUNNER_TEMP/capability-policy-v1-replay.json"
-          cargo run --locked --quiet --manifest-path tools/opsctl/Cargo.toml \
-            --bin capability-policy-manifest > "$capability_policy_json"
-          cargo run --locked --quiet --manifest-path tools/opsctl/Cargo.toml \
-            --bin capability-policy-manifest > "$capability_policy_replay"
+          cargo run --locked --quiet --manifest-path tools/opsctl/Cargo.toml --bin capability-policy-manifest > "$capability_policy_json"
+          cargo run --locked --quiet --manifest-path tools/opsctl/Cargo.toml --bin capability-policy-manifest > "$capability_policy_replay"
           cmp --silent "$capability_policy_json" "$capability_policy_replay"
-          jq -e \
-            '.schema_version == 1
-              and .kind == "CAPABILITY_POLICY_MANIFEST"
-              and .semantic_owner == "crates/capability-policy"
-              and .projection_source == "capability-policy::snapshot_v1"' \
-            "$capability_policy_json" >/dev/null
+          jq -e '.schema_version == 1 and .kind == "CAPABILITY_POLICY_MANIFEST" and .semantic_owner == "crates/capability-policy" and .projection_source == "capability-policy::snapshot_v1"' "$capability_policy_json" >/dev/null
           capability_policy_sha="$(sha256_file "$capability_policy_json")"
           capability_policy_size="$(size_bytes "$capability_policy_json")"
 
           release_json="$RUNNER_TEMP/release-set-v3.json"
           replay_json="$RUNNER_TEMP/release-set-v3-replay.json"
-          cargo run --locked --quiet --manifest-path tools/opsctl/Cargo.toml -- \
-            --root . release finalize --request-json "$request_json" > "$release_json"
-          cargo run --locked --quiet --manifest-path tools/opsctl/Cargo.toml -- \
-            --root . release finalize --request-json "$request_json" > "$replay_json"
+          cargo run --locked --quiet --manifest-path tools/opsctl/Cargo.toml -- --root . release finalize --request-json "$request_json" > "$release_json"
+          cargo run --locked --quiet --manifest-path tools/opsctl/Cargo.toml -- --root . release finalize --request-json "$request_json" > "$replay_json"
           cmp --silent "$release_json" "$replay_json"
 
-          jq -e \
-            --arg repository "$GITHUB_REPOSITORY" \
-            --arg source_sha "$SOURCE_SHA" \
-            --arg policy_sha "$capability_policy_sha" \
-            --argjson policy_size "$capability_policy_size" \
-            '.schema_version == 3
-              and .source.repository == $repository
-              and .source.commit_sha == $source_sha
-              and .source.accepted_main == true
-              and any(.artifact_inventory[];
-                .path == "capability-policy-v1.json"
-                and .sha256 == $policy_sha
-                and .size_bytes == $policy_size
-                and .kind == "capability-policy")' \
-            "$release_json" >/dev/null
+          jq -e --arg repository "$GITHUB_REPOSITORY" --arg source_sha "$SOURCE_SHA" --arg policy_sha "$capability_policy_sha" --argjson policy_size "$capability_policy_size" --arg sbom_sha "$sbom_sha" --argjson sbom_size "$sbom_size" --arg provenance_sha "$provenance_sha" --argjson provenance_size "$provenance_size" '.schema_version == 3 and .source.repository == $repository and .source.commit_sha == $source_sha and .source.accepted_main == true and any(.artifact_inventory[];.path == "capability-policy-v1.json" and .sha256 == $policy_sha and .size_bytes == $policy_size and .kind == "capability-policy") and any(.artifact_inventory[];.path == "windows/windows-sbom-v1.json" and .sha256 == $sbom_sha and .size_bytes == $sbom_size and .kind == "windows-delivery-sbom") and any(.artifact_inventory[];.path == "windows/windows-provenance-v1.json" and .sha256 == $provenance_sha and .size_bytes == $provenance_size and .kind == "windows-delivery-provenance")' "$release_json" >/dev/null
           release_id="$(jq -er '.release_set_id' "$release_json")"
           [[ "$release_id" =~ ^release-set-v3-sha256-[0-9a-f]{64}$ ]]
 
           release_dir="artifacts/release-sets/$release_id"
           test ! -e "$release_dir"
-          mkdir -p "$release_dir/components"
+          mkdir -p "$release_dir/components" "$release_dir/windows"
           cp "$release_json" "$release_dir/release-set.json"
           cp "$capability_policy_json" "$release_dir/capability-policy-v1.json"
           cp "$component_root/control-plane.tar" "$release_dir/components/control-plane.tar"
           cp "$component_root/secret-resolver.tar" "$release_dir/components/secret-resolver.tar"
           cp "$component_root/runtime-bundle.tar" "$release_dir/components/runtime-bundle.tar"
           cp "$component_root/profile-bridge.zip" "$release_dir/components/profile-bridge.zip"
-          test "$(find "$release_dir" -type f | wc -l)" -eq 6
+          cp "$sbom_json" "$release_dir/windows/windows-sbom-v1.json"
+          cp "$provenance_json" "$release_dir/windows/windows-provenance-v1.json"
+
+          delivery_sequence="$(git rev-list --first-parent --count "$SOURCE_SHA")"
+          test "$delivery_sequence" -gt 0
+          python scripts/windows-delivery-publication.py manifest --release-set "$release_dir/release-set.json" --sbom "$release_dir/windows/windows-sbom-v1.json" --provenance "$release_dir/windows/windows-provenance-v1.json" --sequence "$delivery_sequence" --output "$release_dir/windows-delivery-manifest.json"
+          jq -e --arg release_id "$release_id" --arg source_sha "$SOURCE_SHA" --arg sbom_sha "$sbom_sha" --arg provenance_sha "$provenance_sha" '.schema_version == 1 and .kind == "WINDOWS_PROFILE_BRIDGE_DELIVERY" and .release_set_id == $release_id and .source_commit_sha == $source_sha and .evidence.sbom_sha256 == $sbom_sha and .evidence.provenance_sha256 == $provenance_sha and .sequence > 0' "$release_dir/windows-delivery-manifest.json" >/dev/null
+          test "$(find "$release_dir" -type f | wc -l)" -eq 9
 
           policy_dir="$RUNNER_TEMP/release-policy-input"
           mkdir -p "$policy_dir"
@@ -386,13 +490,7 @@ jobs:
           main_sha="$(jq -r '.commit.sha' "$branch_json")"
           [[ "$main_sha" =~ ^[0-9a-f]{40}$ ]]
           gh api "repos/$GITHUB_REPOSITORY/compare/$SOURCE_SHA...$main_sha" > "$compare_json"
-          python scripts/accepted-source-evidence-ar11.py \
-            --repository "$GITHUB_REPOSITORY" \
-            --release-set-id "$release_id" \
-            --source-sha "$SOURCE_SHA" \
-            --branch-json "$branch_json" \
-            --compare-json "$compare_json" \
-            --output "$policy_dir/accepted-source-evidence.json"
+          python scripts/accepted-source-evidence-ar11.py --repository "$GITHUB_REPOSITORY" --release-set-id "$release_id" --source-sha "$SOURCE_SHA" --branch-json "$branch_json" --compare-json "$compare_json" --output "$policy_dir/accepted-source-evidence.json"
 
           {
             echo "release_dir=$release_dir"
@@ -411,7 +509,10 @@ jobs:
           cp "$RELEASE_DIR/release-set.json" "$asset_dir/release-set.json"
           cp "$RELEASE_DIR/capability-policy-v1.json" "$asset_dir/capability-policy-v1.json"
           cp "$RELEASE_DIR/components/"* "$asset_dir/"
-          test "$(find "$asset_dir" -maxdepth 1 -type f | wc -l)" -eq 6
+          cp "$RELEASE_DIR/windows/windows-sbom-v1.json" "$asset_dir/windows-sbom-v1.json"
+          cp "$RELEASE_DIR/windows/windows-provenance-v1.json" "$asset_dir/windows-provenance-v1.json"
+          cp "$RELEASE_DIR/windows-delivery-manifest.json" "$asset_dir/windows-delivery-manifest.json"
+          test "$(find "$asset_dir" -maxdepth 1 -type f | wc -l)" -eq 9
           if gh release view "$RELEASE_ID" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             existing="$RUNNER_TEMP/existing-release"
             mkdir -p "$existing"
@@ -421,13 +522,9 @@ jobs:
               test -f "$existing/$name"
               cmp --silent "$file" "$existing/$name"
             done
-            test "$(find "$existing" -maxdepth 1 -type f | wc -l)" -eq 6
+            test "$(find "$existing" -maxdepth 1 -type f | wc -l)" -eq 9
           else
-            gh release create "$RELEASE_ID" \
-              --repo "$GITHUB_REPOSITORY" \
-              --target "$SOURCE_SHA" \
-              --title "$RELEASE_ID" \
-              --notes "Immutable Release Set v3 built once from accepted main $SOURCE_SHA."
+            gh release create "$RELEASE_ID" --repo "$GITHUB_REPOSITORY" --target "$SOURCE_SHA" --title "$RELEASE_ID" --notes "Immutable Release Set v3 built once from accepted main $SOURCE_SHA."
             gh release upload "$RELEASE_ID" --repo "$GITHUB_REPOSITORY" "$asset_dir"/*
           fi
 
@@ -438,6 +535,9 @@ jobs:
           path: |
             ${{ steps.release-set.outputs.release_dir }}/release-set.json
             ${{ steps.release-set.outputs.release_dir }}/capability-policy-v1.json
+            ${{ steps.release-set.outputs.release_dir }}/windows/windows-sbom-v1.json
+            ${{ steps.release-set.outputs.release_dir }}/windows/windows-provenance-v1.json
+            ${{ steps.release-set.outputs.release_dir }}/windows-delivery-manifest.json
             ${{ steps.release-set.outputs.accepted_source_evidence }}
           if-no-files-found: error
           retention-days: 30

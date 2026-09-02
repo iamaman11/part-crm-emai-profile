@@ -23,6 +23,7 @@ pub(crate) enum GenerationSnapshotError {
     UnsafePath,
     SourceChanged,
     TargetAlreadyExists,
+    PrePublish,
     Local(LocalProfileError),
 }
 
@@ -34,6 +35,7 @@ impl fmt::Display for GenerationSnapshotError {
             Self::UnsafePath => "workspace snapshot contains an unsafe Windows path",
             Self::SourceChanged => "workspace changed while canonical snapshot was encoded",
             Self::TargetAlreadyExists => "authoritative generation already exists locally",
+            Self::PrePublish => "authoritative generation pre-publish evidence failed",
             Self::Local(error) => {
                 return write!(formatter, "workspace snapshot local failure: {error}");
             }
@@ -105,12 +107,31 @@ pub(crate) fn encode_workspace_snapshot(
     Ok(output)
 }
 
+#[cfg(test)]
 pub(crate) fn materialize_workspace_snapshot(
     root: &MaterializationRoot,
     tenant_id: &TenantId,
     profile_id: &ProfileId,
     generation_id: &GenerationId,
     snapshot: &[u8],
+) -> Result<GenerationWorkspace, GenerationSnapshotError> {
+    materialize_workspace_snapshot_with_pre_publish(
+        root,
+        tenant_id,
+        profile_id,
+        generation_id,
+        snapshot,
+        |_| Ok(()),
+    )
+}
+
+pub(crate) fn materialize_workspace_snapshot_with_pre_publish(
+    root: &MaterializationRoot,
+    tenant_id: &TenantId,
+    profile_id: &ProfileId,
+    generation_id: &GenerationId,
+    snapshot: &[u8],
+    mut before_publish: impl FnMut(&GenerationWorkspace) -> Result<(), GenerationSnapshotError>,
 ) -> Result<GenerationWorkspace, GenerationSnapshotError> {
     let entries = parse_workspace_snapshot(snapshot)?;
     match root.open_generation(tenant_id, profile_id, generation_id) {
@@ -129,6 +150,7 @@ pub(crate) fn materialize_workspace_snapshot(
         profile_id,
         generation_id,
         &entries,
+        &mut before_publish,
     );
     if result.is_err() {
         remove_owned_staging(&staging_path);
@@ -136,6 +158,7 @@ pub(crate) fn materialize_workspace_snapshot(
     result
 }
 
+#[allow(clippy::too_many_arguments)]
 fn materialize_into_staging(
     root: &MaterializationRoot,
     staging: GenerationWorkspace,
@@ -144,6 +167,7 @@ fn materialize_into_staging(
     profile_id: &ProfileId,
     generation_id: &GenerationId,
     entries: &[SnapshotEntry<'_>],
+    before_publish: &mut impl FnMut(&GenerationWorkspace) -> Result<(), GenerationSnapshotError>,
 ) -> Result<GenerationWorkspace, GenerationSnapshotError> {
     for entry in entries {
         let target = staging_path.join(entry.relative_path);
@@ -167,6 +191,7 @@ fn materialize_into_staging(
         }
     }
     verify_materialized_snapshot(&staging, entries)?;
+    before_publish(&staging)?;
 
     let final_path = authoritative_generation_path(root, tenant_id, profile_id, generation_id);
     if fs::symlink_metadata(&final_path).is_ok() {
@@ -439,7 +464,8 @@ fn checked_extend(output: &mut Vec<u8>, bytes: &[u8]) -> Result<(), GenerationSn
 mod tests {
     use super::{
         GenerationSnapshotError, WORKSPACE_SNAPSHOT_MAGIC, encode_workspace_snapshot,
-        materialize_workspace_snapshot, parse_workspace_snapshot,
+        materialize_workspace_snapshot, materialize_workspace_snapshot_with_pre_publish,
+        parse_workspace_snapshot,
     };
     use crate::local_profile::MaterializationRoot;
     use profile_platform_primitives::{GenerationId, ProfileId, TenantId};
@@ -516,6 +542,33 @@ mod tests {
         assert_eq!(
             fs::read(target.path().join("storage/default/state.bin"))?,
             b"state"
+        );
+        fixture.cleanup();
+        Ok(())
+    }
+
+    #[test]
+    fn pre_publish_failure_never_exposes_canonical_generation()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let fixture = Fixture::new()?;
+        let target_id = GenerationId::parse("generation_snapshot_pre_publish_failure")?;
+        assert_eq!(
+            materialize_workspace_snapshot_with_pre_publish(
+                &fixture.root,
+                &fixture.tenant_id,
+                &fixture.profile_id,
+                &target_id,
+                &raw_snapshot(&[("prefs.js", b"new")]),
+                |_workspace| Err(GenerationSnapshotError::PrePublish),
+            )
+            .map(|_| ()),
+            Err(GenerationSnapshotError::PrePublish)
+        );
+        assert!(
+            fixture
+                .root
+                .open_generation(&fixture.tenant_id, &fixture.profile_id, &target_id)
+                .is_err()
         );
         fixture.cleanup();
         Ok(())

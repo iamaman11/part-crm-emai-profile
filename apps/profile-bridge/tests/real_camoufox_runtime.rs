@@ -8,12 +8,14 @@ use browser_execution_domain::{
 use profile_bridge::browser_execution::persist_materialization_binding;
 use profile_bridge::browser_preflight::{BrowserRuntimeObservation, BrowserRuntimeObservationPort};
 use profile_bridge::camouhost_process::{
-    ManagedCamouhostConfig, ManagedCamouhostProcess, RuntimeBindingBrowserLaunchPreflight,
-    RuntimeBindingSlot, RuntimeDisplayMode,
+    ManagedCamouhostConfig, ManagedCamouhostProcess, RuntimeBindingSlot, RuntimeDisplayMode,
 };
 use profile_bridge::local_profile::{BridgeWorkspaceLock, MaterializationRoot};
 use profile_bridge::operator_flow::BrowserLaunchPreflightPort;
 use profile_bridge::runtime_bundle::{ApprovedRuntimeBundle, RuntimeSessionOrchestrator};
+use profile_bridge::shipping_preflight::{
+    ShippingBrowserLaunchPreflight, profile_stable_identity_from_config_bytes,
+};
 use profile_platform_primitives::{DeviceId, GenerationId, ProfileId, SessionId, TenantId};
 use runtime_bundle_domain::{
     BundleRelativePath, InventoryEntry, RuntimeInventory, RuntimeManifest, RuntimePlatform,
@@ -31,6 +33,8 @@ const PYTHON_ENV: &str = "AR10_PYTHON";
 const RUNTIME_ROOT_ENV: &str = "AR10_RUNTIME_ROOT";
 const LOWER_HEX: &[u8; 16] = b"0123456789abcdef";
 const MAX_DIAGNOSTIC_SYMLINKS: usize = 32;
+const CONFIG_NAME: &str = "camoufox-config.json";
+const MANAGED_COLD_LAUNCH_ATTEMPTS: usize = 3;
 
 struct FixedObservation(NetworkIdentityObservation);
 
@@ -82,9 +86,7 @@ where
                 };
                 eprintln!("AR10_MANAGED_IPC_STAGE={stage};OUTCOME={outcome}");
             }
-            Err(error) => {
-                eprintln!("AR10_MANAGED_IPC_STAGE={stage};ERROR={error:?}");
-            }
+            Err(error) => eprintln!("AR10_MANAGED_IPC_STAGE={stage};ERROR={error:?}"),
         }
         result
     }
@@ -207,22 +209,16 @@ fn collect_symlink_paths(
         let path = child.path();
         let metadata = fs::symlink_metadata(&path)?;
         if metadata.file_type().is_symlink() {
-            let relative = path
-                .strip_prefix(root)?
-                .to_string_lossy()
-                .replace('\\', "/");
-            output.push(relative);
+            output.push(
+                path.strip_prefix(root)?
+                    .to_string_lossy()
+                    .replace('\\', "/"),
+            );
         } else if metadata.is_dir() {
             collect_symlink_paths(root, &path, output)?;
         }
     }
     Ok(())
-}
-
-fn diagnostic_symlink_paths(root: &Path) -> Result<Vec<String>, Box<dyn std::error::Error>> {
-    let mut paths = Vec::new();
-    collect_symlink_paths(root, root, &mut paths)?;
-    Ok(paths)
 }
 
 fn root_path() -> Result<PathBuf, Box<dyn std::error::Error>> {
@@ -233,13 +229,7 @@ fn root_path() -> Result<PathBuf, Box<dyn std::error::Error>> {
     )))
 }
 
-#[test]
-fn bridge_preflight_launches_real_camoufox_through_managed_ipc()
--> Result<(), Box<dyn std::error::Error>> {
-    if env::var(ENABLE_ENV).as_deref() != Ok("1") {
-        return Ok(());
-    }
-
+fn run_managed_cold_launch_cycle() -> Result<(), Box<dyn std::error::Error>> {
     let python = PathBuf::from(env::var(PYTHON_ENV)?).canonicalize()?;
     let runtime_root = PathBuf::from(env::var(RUNTIME_ROOT_ENV)?).canonicalize()?;
     let real_runtime = runtime_root.join("camouhost/real.py");
@@ -276,18 +266,23 @@ fn bridge_preflight_launches_real_camoufox_through_managed_ipc()
         return Err("candidate report runtime-lock identity drifted".into());
     }
 
-    let symlinks = diagnostic_symlink_paths(workspace.path())?;
+    let mut symlinks = Vec::new();
+    collect_symlink_paths(workspace.path(), workspace.path(), &mut symlinks)?;
     if !symlinks.is_empty() {
         eprintln!("AR10_DIAGNOSTIC_SYMLINKS={symlinks:?}");
     }
 
     let bundle = approved_runtime(&runtime_root)?;
+    let config_bytes = fs::read(workspace.path().join(CONFIG_NAME))?;
+    let typed_identity = profile_stable_identity_from_config_bytes(&config_bytes)?;
     let browser_identity = BrowserIdentityManifest::new(
         2,
+        "profile-stability-v1",
         bundle.manifest().runtime_version(),
         bundle.manifest().inventory_sha256().as_str(),
         format!("profile-stability-v1-probe-{probe_sha256}"),
         config_sha256,
+        typed_identity,
     )?;
     let binding = MaterializationBinding::new(
         tenant,
@@ -298,6 +293,7 @@ fn bridge_preflight_launches_real_camoufox_through_managed_ipc()
         browser_identity,
     )?;
     persist_materialization_binding(&workspace, &binding)?;
+
     let network_policy = NetworkIdentityPolicy::new(
         Some("PL".to_owned()),
         Some("Mazowieckie".to_owned()),
@@ -315,8 +311,7 @@ fn bridge_preflight_launches_real_camoufox_through_managed_ipc()
         "ar10-local-evidence",
     )?;
     let slot = RuntimeBindingSlot::new();
-    let mut preflight = RuntimeBindingBrowserLaunchPreflight::new(
-        binding,
+    let mut preflight = ShippingBrowserLaunchPreflight::new(
         network_policy,
         FixedObservation(observation),
         slot.clone(),
@@ -338,5 +333,18 @@ fn bridge_preflight_launches_real_camoufox_through_managed_ipc()
 
     lock.release()?;
     fs::remove_dir_all(&root_path)?;
+    Ok(())
+}
+
+#[test]
+fn bridge_preflight_launches_real_camoufox_through_managed_ipc()
+-> Result<(), Box<dyn std::error::Error>> {
+    if env::var(ENABLE_ENV).as_deref() != Ok("1") {
+        return Ok(());
+    }
+
+    for _ in 0..MANAGED_COLD_LAUNCH_ATTEMPTS {
+        run_managed_cold_launch_cycle()?;
+    }
     Ok(())
 }

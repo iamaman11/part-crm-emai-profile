@@ -1,11 +1,20 @@
+mod browser_visible_wire;
+
+use self::browser_visible_wire::{HostRuntimeEvidence, verify_browser_visible_payload};
 use crate::ProcessControlPort;
 use crate::browser_execution::BrowserLaunchBlocker;
 use crate::browser_preflight::{BoundBrowserLaunchPreflight, BrowserRuntimeObservationPort};
 use crate::local_profile::GenerationWorkspace;
 use crate::operator_flow::BrowserLaunchPreflightPort;
 use crate::runtime_bundle::ApprovedRuntimeBundle;
-use bridge_domain::{BridgePortError, CAMOUHOST_IPC_VERSION, CamouhostMessage, CamouhostPort};
-use browser_execution_domain::{MaterializationBinding, NetworkIdentityPolicy};
+use bridge_domain::{BridgePortError, CamouhostMessage, CamouhostPort};
+use browser_execution_domain::host_compatibility::{
+    HostArchitecture, HostCompatibilityDecision, HostCompatibilityObservation,
+    HostCompatibilityPolicy, HostExecutionMode, HostPlatformClass, HostRuntimeClass,
+};
+use browser_execution_domain::{
+    MaterializationBinding, NetworkIdentityPolicy, ProfileStableIdentity,
+};
 use profile_platform_primitives::{DeviceId, SessionId};
 use runtime_bundle_domain::BundleRelativePath;
 use sha2::{Digest, Sha256};
@@ -19,15 +28,25 @@ use std::sync::{
     mpsc::{self, Receiver, RecvTimeoutError},
 };
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const CONFIG_NAME: &str = "camoufox-config.json";
 const REAL_ENTRYPOINT: &str = "camouhost/real.py";
 const RUNTIME_LOCK_PATH: &str = "camouhost/runtime-lock.json";
+#[cfg(windows)]
+const WINDOWS_BROWSER_EXECUTABLE: &str = "browser/camoufox.exe";
+#[cfg(windows)]
+const WINDOWS_PYTHON_EXECUTABLE: &str = "python/python.exe";
 const MAX_CONFIG_BYTES: u64 = 1024 * 1024;
-const MAX_IPC_RESPONSE_BYTES: usize = 1024;
+const MAX_IPC_REQUEST_BYTES: usize = 8 * 1024;
+const MAX_IPC_RESPONSE_BYTES: usize = 1_100_001;
+#[cfg(windows)]
+const HELLO_RESPONSE_TIMEOUT: Duration = Duration::from_secs(30);
+#[cfg(not(windows))]
 const HELLO_RESPONSE_TIMEOUT: Duration = Duration::from_secs(10);
 const LAUNCH_RESPONSE_TIMEOUT: Duration = Duration::from_secs(120);
+const BROWSER_VISIBLE_RESPONSE_TIMEOUT: Duration = Duration::from_secs(30);
+const NAVIGATION_RESPONSE_TIMEOUT: Duration = Duration::from_secs(120);
 const OBSERVE_CLOSE_RESPONSE_TIMEOUT: Duration = Duration::from_secs(5);
 const CLOSE_RESPONSE_TIMEOUT: Duration = Duration::from_secs(30);
 const PROCESS_EXIT_TIMEOUT: Duration = Duration::from_secs(15);
@@ -83,7 +102,12 @@ struct RuntimeLaunchBinding {
     runtime_lock_sha256: String,
     fingerprint_config_sha256: String,
     profile_stable_probe_sha256: String,
+    profile_stable_identity: ProfileStableIdentity,
     entrypoint_sha256: String,
+    #[cfg(windows)]
+    browser_sha256: String,
+    #[cfg(windows)]
+    python_sha256: String,
 }
 
 /// Wraps the already accepted browser preflight and publishes one launch capability only after
@@ -159,13 +183,22 @@ fn validate_runtime_identity(
         return Err(BrowserLaunchBlocker::MaterializationStale);
     }
     let entrypoint_sha256 = inventory_digest(runtime_bundle, REAL_ENTRYPOINT)?.to_owned();
+    #[cfg(windows)]
+    let browser_sha256 = inventory_digest(runtime_bundle, WINDOWS_BROWSER_EXECUTABLE)?.to_owned();
+    #[cfg(windows)]
+    let python_sha256 = inventory_digest(runtime_bundle, WINDOWS_PYTHON_EXECUTABLE)?.to_owned();
 
     Ok(RuntimeLaunchBinding {
         profile_root: workspace.path().to_path_buf(),
         runtime_lock_sha256,
         fingerprint_config_sha256: config_sha256,
         profile_stable_probe_sha256: probe_sha256.to_owned(),
+        profile_stable_identity: browser_identity.profile_stable_identity().clone(),
         entrypoint_sha256,
+        #[cfg(windows)]
+        browser_sha256,
+        #[cfg(windows)]
+        python_sha256,
     })
 }
 
@@ -236,6 +269,10 @@ impl ManagedCamouhostConfig {
         if !python_executable.is_absolute() || !runtime_root.is_absolute() {
             return Err(BridgePortError::InvalidResponse);
         }
+        #[cfg(windows)]
+        if python_executable != runtime_root.join(WINDOWS_PYTHON_EXECUTABLE) {
+            return Err(BridgePortError::InvalidResponse);
+        }
         if initial_url.as_deref().is_some_and(|url| {
             url.len() > 2048
                 || url.contains('\n')
@@ -267,6 +304,8 @@ struct ProcessState {
     stdin: Option<ChildStdin>,
     responses: Option<Receiver<Result<String, BridgePortError>>>,
     active_session: Option<SessionId>,
+    profile_stable_identity: Option<ProfileStableIdentity>,
+    navigation_target: Option<String>,
 }
 
 impl ProcessState {
@@ -276,6 +315,8 @@ impl ProcessState {
             stdin: None,
             responses: None,
             active_session: None,
+            profile_stable_identity: None,
+            navigation_target: None,
         }
     }
 
@@ -284,6 +325,8 @@ impl ProcessState {
         self.stdin = None;
         self.responses = None;
         self.active_session = None;
+        self.profile_stable_identity = None;
+        self.navigation_target = None;
     }
 }
 
@@ -295,6 +338,7 @@ pub struct ManagedCamouhostProcess {
 
 pub struct ManagedCamouhostIpc {
     shared: Arc<Mutex<ProcessState>>,
+    display_mode: RuntimeDisplayMode,
 }
 
 #[derive(Clone)]
@@ -341,13 +385,17 @@ impl ManagedCamouhostProcess {
         slot: RuntimeBindingSlot,
     ) -> (Self, ManagedCamouhostIpc) {
         let shared = Arc::new(Mutex::new(ProcessState::new()));
+        let display_mode = config.display_mode;
         (
             Self {
                 shared: Arc::clone(&shared),
                 config,
                 slot,
             },
-            ManagedCamouhostIpc { shared },
+            ManagedCamouhostIpc {
+                shared,
+                display_mode,
+            },
         )
     }
 
@@ -360,8 +408,19 @@ impl ManagedCamouhostProcess {
         let runtime_lock = self.config.runtime_root.join(RUNTIME_LOCK_PATH);
         verify_file_digest(&entrypoint, &binding.entrypoint_sha256)?;
         verify_file_digest(&runtime_lock, &binding.runtime_lock_sha256)?;
+        #[cfg(windows)]
+        {
+            let browser = self.config.runtime_root.join(WINDOWS_BROWSER_EXECUTABLE);
+            let python = self.config.runtime_root.join(WINDOWS_PYTHON_EXECUTABLE);
+            verify_file_digest(&browser, &binding.browser_sha256)?;
+            verify_file_digest(&python, &binding.python_sha256)?;
+        }
 
-        let mut command = Command::new(&self.config.python_executable);
+        #[cfg(windows)]
+        let python_executable = self.config.runtime_root.join(WINDOWS_PYTHON_EXECUTABLE);
+        #[cfg(not(windows))]
+        let python_executable = self.config.python_executable.clone();
+        let mut command = Command::new(&python_executable);
         command
             .arg(&entrypoint)
             .current_dir(&self.config.runtime_root)
@@ -391,9 +450,6 @@ impl ManagedCamouhostProcess {
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null());
-        if let Some(url) = &self.config.initial_url {
-            command.env("CAMOUHOST_INITIAL_URL", url);
-        }
         if let Some(path) = &self.config.proxy_config_path {
             command.env("CAMOUHOST_PROXY_CONFIG_PATH", path);
         }
@@ -408,12 +464,14 @@ impl ManagedCamouhostProcess {
             "LOGNAME",
             "PATH",
             "SHELL",
+            "SystemRoot",
             "TEMP",
             "TMP",
             "TMPDIR",
             "USER",
             "USERPROFILE",
             "WAYLAND_DISPLAY",
+            "WINDIR",
             "WSL_DISTRO_NAME",
             "WSL_INTEROP",
             "XDG_CACHE_HOME",
@@ -448,6 +506,8 @@ impl ProcessControlPort for ManagedCamouhostProcess {
         state.stdin = Some(stdin);
         state.responses = Some(spawn_response_reader(stdout));
         state.active_session = Some(session_id.clone());
+        state.profile_stable_identity = Some(binding.profile_stable_identity);
+        state.navigation_target = self.config.initial_url.clone();
         state.child = Some(child);
         Ok(())
     }
@@ -535,7 +595,160 @@ impl CamouhostPort for ManagedCamouhostIpc {
         &mut self,
         message: &CamouhostMessage,
     ) -> Result<CamouhostMessage, BridgePortError> {
-        exchange_shared(&self.shared, message)
+        match message {
+            CamouhostMessage::Launch { session_id } => {
+                launch_with_browser_visible_admission(&self.shared, self.display_mode, session_id)
+            }
+            _ => exchange_shared(&self.shared, message),
+        }
+    }
+}
+
+fn launch_with_browser_visible_admission(
+    shared: &Arc<Mutex<ProcessState>>,
+    display_mode: RuntimeDisplayMode,
+    session_id: &SessionId,
+) -> Result<CamouhostMessage, BridgePortError> {
+    let ready = exchange_shared(
+        shared,
+        &CamouhostMessage::Launch {
+            session_id: session_id.clone(),
+        },
+    )?;
+    if ready
+        != (CamouhostMessage::Ready {
+            session_id: session_id.clone(),
+        })
+    {
+        return Err(BridgePortError::InvalidResponse);
+    }
+
+    let observation = exchange_shared(
+        shared,
+        &CamouhostMessage::ObserveBrowserVisible {
+            session_id: session_id.clone(),
+        },
+    )?;
+    let payload_hex = match observation {
+        CamouhostMessage::BrowserVisible {
+            session_id: observed,
+            payload_hex,
+        } if observed == *session_id => payload_hex,
+        _ => return Err(BridgePortError::InvalidResponse),
+    };
+    let payload = decode_hex(&payload_hex)?;
+    let expected = {
+        let state = shared.lock().map_err(|_| BridgePortError::Unavailable)?;
+        if state.active_session.as_ref() != Some(session_id) {
+            return Err(BridgePortError::InvalidResponse);
+        }
+        state
+            .profile_stable_identity
+            .clone()
+            .ok_or(BridgePortError::InvalidResponse)?
+    };
+    let host_runtime_evidence = verify_browser_visible_payload(&expected, &payload)
+        .map_err(|_| BridgePortError::InvalidResponse)?;
+    verify_host_compatibility(display_mode, host_runtime_evidence)?;
+
+    let navigation_target = {
+        let state = shared.lock().map_err(|_| BridgePortError::Unavailable)?;
+        if state.active_session.as_ref() != Some(session_id) {
+            return Err(BridgePortError::InvalidResponse);
+        }
+        state.navigation_target.clone()
+    };
+    let target_hex = navigation_target
+        .as_deref()
+        .map(hex_encode)
+        .unwrap_or_default();
+    let admitted = exchange_shared(
+        shared,
+        &CamouhostMessage::AdmitNavigation {
+            session_id: session_id.clone(),
+            target_hex,
+        },
+    )?;
+    if admitted
+        != (CamouhostMessage::NavigationAdmitted {
+            session_id: session_id.clone(),
+        })
+    {
+        return Err(BridgePortError::InvalidResponse);
+    }
+
+    Ok(CamouhostMessage::Ready {
+        session_id: session_id.clone(),
+    })
+}
+
+fn verify_host_compatibility(
+    display_mode: RuntimeDisplayMode,
+    evidence: HostRuntimeEvidence,
+) -> Result<(), BridgePortError> {
+    let millis = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|_| BridgePortError::Unavailable)?
+        .as_millis();
+    let clock_unix_ms = u64::try_from(millis).map_err(|_| BridgePortError::Unavailable)?;
+    let (policy, platform, runtime_class) = host_compatibility_policy()?;
+    let execution_mode = match display_mode {
+        RuntimeDisplayMode::Headful => HostExecutionMode::Headful,
+        RuntimeDisplayMode::VirtualHeadful => HostExecutionMode::VirtualHeadful,
+    };
+
+    // Reaching this point proves that the exact runtime/profile files were readable, the managed
+    // process spawned, the canonical IPC reached Ready, and the real browser returned its bounded
+    // typed observation. Those are the required filesystem/process capability facts; the domain
+    // remains the sole owner of deciding whether the resulting host is admitted.
+    let observation = HostCompatibilityObservation::prelaunch(
+        platform,
+        HostArchitecture::X86_64,
+        runtime_class,
+        execution_mode,
+        clock_unix_ms,
+        true,
+    )
+    .with_runtime_evidence(true, evidence.display, evidence.graphics_backend);
+
+    if policy.evaluate(&observation) != HostCompatibilityDecision::Accepted {
+        eprintln!("CAMOUHOST_HOST_COMPATIBILITY=INCOMPATIBLE");
+        return Err(BridgePortError::InvalidResponse);
+    }
+    Ok(())
+}
+
+fn host_compatibility_policy()
+-> Result<(HostCompatibilityPolicy, HostPlatformClass, HostRuntimeClass), BridgePortError> {
+    if !cfg!(target_arch = "x86_64") {
+        return Err(BridgePortError::InvalidResponse);
+    }
+
+    #[cfg(windows)]
+    {
+        let policy = HostCompatibilityPolicy::windows_first_release_headful()
+            .map_err(|_| BridgePortError::InvalidResponse)?;
+        Ok((
+            policy,
+            HostPlatformClass::Windows,
+            HostRuntimeClass::PackagedCamoufox,
+        ))
+    }
+
+    #[cfg(all(not(windows), target_os = "linux"))]
+    {
+        let policy = HostCompatibilityPolicy::repository_linux_virtual_headful()
+            .map_err(|_| BridgePortError::InvalidResponse)?;
+        Ok((
+            policy,
+            HostPlatformClass::Linux,
+            HostRuntimeClass::RepositoryPinnedCamoufox,
+        ))
+    }
+
+    #[cfg(not(any(windows, target_os = "linux")))]
+    {
+        Err(BridgePortError::InvalidResponse)
     }
 }
 
@@ -543,9 +756,31 @@ fn exchange_shared(
     shared: &Arc<Mutex<ProcessState>>,
     message: &CamouhostMessage,
 ) -> Result<CamouhostMessage, BridgePortError> {
+    let frame = message
+        .to_frame()
+        .map_err(|_| BridgePortError::InvalidResponse)?;
+    let response = exchange_frame_shared(shared, &frame, response_timeout(message)?)?;
+    let parsed =
+        CamouhostMessage::parse(&response).map_err(|_| BridgePortError::InvalidResponse)?;
+    parsed
+        .validate_version()
+        .map_err(|_| BridgePortError::InvalidResponse)?;
+    if matches!(parsed, CamouhostMessage::Error { .. }) {
+        return Err(BridgePortError::InvalidResponse);
+    }
+    Ok(parsed)
+}
+
+fn exchange_frame_shared(
+    shared: &Arc<Mutex<ProcessState>>,
+    frame: &str,
+    timeout: Duration,
+) -> Result<String, BridgePortError> {
+    if frame.is_empty() || frame.len() > MAX_IPC_REQUEST_BYTES || frame.contains(['\n', '\r', '\0'])
+    {
+        return Err(BridgePortError::InvalidResponse);
+    }
     let mut state = shared.lock().map_err(|_| BridgePortError::Unavailable)?;
-    let frame = request_frame(message)?;
-    let timeout = response_timeout(message)?;
     let stdin = state.stdin.as_mut().ok_or(BridgePortError::Unavailable)?;
     stdin
         .write_all(frame.as_bytes())
@@ -556,13 +791,7 @@ fn exchange_shared(
         .responses
         .as_ref()
         .ok_or(BridgePortError::Unavailable)?;
-    let response = receive_response(responses, timeout)?;
-    let parsed =
-        CamouhostMessage::parse(&response).map_err(|_| BridgePortError::InvalidResponse)?;
-    parsed
-        .validate_version()
-        .map_err(|_| BridgePortError::InvalidResponse)?;
-    Ok(parsed)
+    receive_response(responses, timeout)
 }
 
 fn spawn_response_reader(stdout: ChildStdout) -> Receiver<Result<String, BridgePortError>> {
@@ -601,6 +830,8 @@ fn response_timeout(message: &CamouhostMessage) -> Result<Duration, BridgePortEr
     match message {
         CamouhostMessage::Hello { .. } => Ok(HELLO_RESPONSE_TIMEOUT),
         CamouhostMessage::Launch { .. } => Ok(LAUNCH_RESPONSE_TIMEOUT),
+        CamouhostMessage::ObserveBrowserVisible { .. } => Ok(BROWSER_VISIBLE_RESPONSE_TIMEOUT),
+        CamouhostMessage::AdmitNavigation { .. } => Ok(NAVIGATION_RESPONSE_TIMEOUT),
         CamouhostMessage::ObserveClose { .. } => Ok(OBSERVE_CLOSE_RESPONSE_TIMEOUT),
         CamouhostMessage::Close { .. } => Ok(CLOSE_RESPONSE_TIMEOUT),
         _ => Err(BridgePortError::InvalidResponse),
@@ -650,17 +881,33 @@ fn read_bounded_line(reader: &mut BufReader<ChildStdout>) -> Result<String, Brid
     String::from_utf8(bytes).map_err(|_| BridgePortError::InvalidResponse)
 }
 
-fn request_frame(message: &CamouhostMessage) -> Result<String, BridgePortError> {
-    match message {
-        CamouhostMessage::Hello { version } if *version == CAMOUHOST_IPC_VERSION => {
-            Ok(format!("hello|{version}"))
-        }
-        CamouhostMessage::Launch { session_id } => Ok(format!("launch|{}", session_id.as_str())),
-        CamouhostMessage::ObserveClose { session_id } => {
-            Ok(format!("observe_close|{}", session_id.as_str()))
-        }
-        CamouhostMessage::Close { session_id } => Ok(format!("close|{}", session_id.as_str())),
-        _ => Err(BridgePortError::InvalidResponse),
+fn hex_encode(bytes: &str) -> String {
+    let mut encoded = String::with_capacity(bytes.len() * 2);
+    for byte in bytes.as_bytes() {
+        encoded.push(char::from(LOWER_HEX[usize::from(byte >> 4)]));
+        encoded.push(char::from(LOWER_HEX[usize::from(byte & 0x0f)]));
+    }
+    encoded
+}
+
+fn decode_hex(value: &str) -> Result<Vec<u8>, BridgePortError> {
+    if !value.len().is_multiple_of(2) {
+        return Err(BridgePortError::InvalidResponse);
+    }
+    let mut decoded = Vec::with_capacity(value.len() / 2);
+    for pair in value.as_bytes().chunks_exact(2) {
+        let high = hex_nibble(pair[0]).ok_or(BridgePortError::InvalidResponse)?;
+        let low = hex_nibble(pair[1]).ok_or(BridgePortError::InvalidResponse)?;
+        decoded.push((high << 4) | low);
+    }
+    Ok(decoded)
+}
+
+fn hex_nibble(value: u8) -> Option<u8> {
+    match value {
+        b'0'..=b'9' => Some(value - b'0'),
+        b'a'..=b'f' => Some(value - b'a' + 10),
+        _ => None,
     }
 }
 
@@ -679,20 +926,18 @@ fn verify_file_digest(path: &Path, expected: &str) -> Result<(), BridgePortError
 #[cfg(test)]
 mod tests {
     use super::{
-        FINGERPRINT_SOURCE_PREFIX, IDENTITY_COMPATIBILITY_VERSION,
-        RuntimeBindingBrowserLaunchPreflight, RuntimeBindingSlot, receive_response, request_frame,
-        sha256_hex,
+        FINGERPRINT_SOURCE_PREFIX, RuntimeBindingBrowserLaunchPreflight, RuntimeBindingSlot,
+        decode_hex, hex_encode, receive_response, sha256_hex,
     };
     use crate::browser_execution::persist_materialization_binding;
     use crate::browser_preflight::{BrowserRuntimeObservation, BrowserRuntimeObservationPort};
     use crate::local_profile::{BridgeWorkspaceLock, GenerationWorkspace, MaterializationRoot};
     use crate::operator_flow::BrowserLaunchPreflightPort;
     use crate::runtime_bundle::ApprovedRuntimeBundle;
-    use crate::test_support::remove_test_root;
+    use crate::test_support::{browser_identity_fixture, remove_test_root};
     use bridge_domain::{BridgePortError, CamouhostMessage};
     use browser_execution_domain::{
-        BrowserIdentityManifest, MaterializationBinding, NetworkClass, NetworkIdentityObservation,
-        NetworkIdentityPolicy,
+        MaterializationBinding, NetworkClass, NetworkIdentityObservation, NetworkIdentityPolicy,
     };
     use profile_platform_primitives::{DeviceId, GenerationId, ProfileId, SessionId, TenantId};
     use runtime_bundle_domain::{
@@ -736,21 +981,37 @@ mod tests {
         let calculated = digest('a')?;
         let entrypoint = BundleRelativePath::parse("camouhost/real.py")?;
         let lock_path = BundleRelativePath::parse("camouhost/runtime-lock.json")?;
-        let manifest = RuntimeManifest::new(
-            "2.0.0",
-            "3.12",
-            RuntimePlatform::WindowsX86_64,
-            entrypoint.clone(),
-            calculated.clone(),
-        )?;
-        let inventory = RuntimeInventory::new([
-            InventoryEntry::new(entrypoint, 10, digest('e')?),
+        let entries = vec![
+            InventoryEntry::new(entrypoint.clone(), 10, digest('e')?),
             InventoryEntry::new(
                 lock_path,
                 10,
                 Sha256Digest::parse(runtime_lock_sha256.to_owned())?,
             ),
-        ])?;
+        ];
+        #[cfg(windows)]
+        let entries = {
+            let mut entries = entries;
+            entries.push(InventoryEntry::new(
+                BundleRelativePath::parse(super::WINDOWS_BROWSER_EXECUTABLE)?,
+                10,
+                digest('f')?,
+            ));
+            entries.push(InventoryEntry::new(
+                BundleRelativePath::parse(super::WINDOWS_PYTHON_EXECUTABLE)?,
+                10,
+                digest('9')?,
+            ));
+            entries
+        };
+        let manifest = RuntimeManifest::new(
+            "2.0.0",
+            "3.12",
+            RuntimePlatform::WindowsX86_64,
+            entrypoint,
+            calculated.clone(),
+        )?;
+        let inventory = RuntimeInventory::new(entries)?;
         Ok(ApprovedRuntimeBundle::validate(
             manifest,
             inventory,
@@ -789,11 +1050,11 @@ mod tests {
         config_sha256: String,
         probe_sha256: &str,
     ) -> Result<MaterializationBinding, Box<dyn std::error::Error>> {
-        let browser_identity = BrowserIdentityManifest::new(
-            IDENTITY_COMPATIBILITY_VERSION,
+        let fingerprint_source = format!("{FINGERPRINT_SOURCE_PREFIX}{probe_sha256}");
+        let browser_identity = browser_identity_fixture(
             approved.manifest().runtime_version(),
             approved.manifest().inventory_sha256().as_str(),
-            format!("{FINGERPRINT_SOURCE_PREFIX}{probe_sha256}"),
+            &fingerprint_source,
             config_sha256,
         )?;
         Ok(MaterializationBinding::new(
@@ -816,23 +1077,76 @@ mod tests {
     }
 
     #[test]
-    fn controlled_close_observation_has_a_read_only_ipc_frame()
+    fn controlled_close_observation_uses_canonical_ipc_frame()
     -> Result<(), Box<dyn std::error::Error>> {
         let session_id = SessionId::parse("session_01JAR10CLOSE")?;
         assert_eq!(
-            request_frame(&CamouhostMessage::ObserveClose {
+            CamouhostMessage::ObserveClose {
                 session_id: session_id.clone(),
-            })?,
+            }
+            .to_frame()?,
             format!("observe_close|{}", session_id.as_str())
         );
-        assert!(
-            request_frame(&CamouhostMessage::CloseObserved {
+        assert_eq!(
+            CamouhostMessage::CloseObserved {
                 session_id,
                 controlled: true,
-            })
-            .is_err()
+            }
+            .to_frame()?,
+            "close_observed|session_01JAR10CLOSE|true"
         );
         Ok(())
+    }
+
+    #[test]
+    fn browser_visible_and_navigation_frames_are_canonical_and_session_bound()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let session_id = SessionId::parse("session_01JAR10VISIBLE")?;
+        let payload = br#"{"user_agent":"ua"}"#;
+        let payload_hex = hex_encode(std::str::from_utf8(payload)?);
+        let frame = CamouhostMessage::BrowserVisible {
+            session_id: session_id.clone(),
+            payload_hex: payload_hex.clone(),
+        }
+        .to_frame()?;
+        let parsed = CamouhostMessage::parse(&frame)?;
+        let CamouhostMessage::BrowserVisible {
+            session_id: observed,
+            payload_hex: observed_hex,
+        } = parsed
+        else {
+            return Err(std::io::Error::other("unexpected canonical IPC message").into());
+        };
+        assert_eq!(observed, session_id);
+        assert_eq!(decode_hex(&observed_hex)?, payload);
+        let target = "https://example.test/private-path";
+        let encoded = hex_encode(target);
+        let navigation = CamouhostMessage::AdmitNavigation {
+            session_id,
+            target_hex: encoded.clone(),
+        }
+        .to_frame()?;
+        assert!(navigation.starts_with("admit_navigation|"));
+        assert!(!encoded.contains(target));
+        assert!(!encoded.contains('/'));
+        Ok(())
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_config_rejects_non_packaged_python_path() {
+        let runtime_root = PathBuf::from(r"C:\profile-bridge\runtime");
+        let python = PathBuf::from(r"C:\other\python.exe");
+        assert!(
+            super::ManagedCamouhostConfig::new(
+                python,
+                runtime_root,
+                super::RuntimeDisplayMode::Headful,
+                None,
+                None,
+            )
+            .is_err()
+        );
     }
 
     #[test]
@@ -846,6 +1160,7 @@ mod tests {
         let device = DeviceId::parse("device_01JAR10RUNTIME")?;
         let workspace = root.create_generation(&tenant, &profile, &generation)?;
         let lock = BridgeWorkspaceLock::acquire(&workspace, &device, 7)?;
+
         let config = b"{}\n";
         fs::write(workspace.path().join("camoufox-config.json"), config)?;
         let approved = bundle(&"b".repeat(64))?;

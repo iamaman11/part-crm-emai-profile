@@ -1,3 +1,9 @@
 # D1 history digests cover checkout bytes, so every platform must materialize LF.
 /migrations/d1/*.sql text eol=lf
 /migrations/resolver-d1/*.sql text eol=lf
+
+# S0 packages the Camouhost source and digests canonical runtime/candidate locks; checkout
+# bytes must therefore be identical on Windows and POSIX rather than subject to autocrlf.
+/runtime/camouhost/real.py text eol=lf
+/runtime/camouhost/runtime-lock.json text eol=lf
+/runtime/camouhost/camoufox-patch-lock.json text eol=lf

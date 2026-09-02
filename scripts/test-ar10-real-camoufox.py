@@ -23,7 +23,7 @@ ROOT = Path(__file__).resolve().parents[1]
 CAMOUHOST = ROOT / "runtime/camouhost/real.py"
 RUNTIME_LOCK = ROOT / "runtime/camouhost/runtime-lock.json"
 SESSION = "session_01JAR10REALCAMOUFOX"
-IPC_VERSION = "2"
+IPC_VERSION = "3"
 BRIDGE_LOCK_CONTENT = "profile-platform-bridge-lock-v1\ndevice_01JAR10REALCAMOUFOX\n1\n"
 MANAGED_PARENT_ENV = {
     "DBUS_SESSION_BUS_ADDRESS",
@@ -100,7 +100,7 @@ def canonical_lock_digest() -> str:
     return hashlib.sha256(raw).hexdigest()
 
 
-def base_env(root: Path, report: dict[str, str], url: str) -> dict[str, str]:
+def base_env(root: Path, report: dict[str, str]) -> dict[str, str]:
     env = os.environ.copy()
     env.update(
         {
@@ -110,7 +110,6 @@ def base_env(root: Path, report: dict[str, str], url: str) -> dict[str, str]:
             "CAMOUHOST_EXPECTED_CONFIG_SHA256": report["fingerprint_config_sha256"],
             "CAMOUHOST_EXPECTED_PROBE_SHA256": report["profile_stable_probe_sha256"],
             "CAMOUHOST_HEADLESS_MODE": "virtual",
-            "CAMOUHOST_INITIAL_URL": url,
             "PYTHONUNBUFFERED": "1",
         }
     )
@@ -234,6 +233,36 @@ def exchange(process: subprocess.Popen[str], frame: str) -> str:
     return response
 
 
+def observe_browser_visible_wire(process: subprocess.Popen[str]) -> None:
+    response = exchange(process, f"observe_browser_visible|{SESSION}")
+    prefix = f"browser_visible|{SESSION}|"
+    if not response.startswith(prefix):
+        raise AssertionError(f"unexpected browser-visible frame: {response[:160]!r}")
+    payload_hex = response[len(prefix) :]
+    try:
+        payload = bytes.fromhex(payload_hex)
+        observation = json.loads(payload.decode("utf-8"))
+    except (ValueError, UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise AssertionError("browser-visible wire payload is not bounded JSON evidence") from error
+    if not isinstance(observation, dict) or not observation:
+        raise AssertionError("browser-visible wire payload has invalid top-level shape")
+
+
+def admit_navigation(process: subprocess.Popen[str], url: str | None) -> None:
+    target = "" if url is None else url.encode("utf-8").hex()
+    response = exchange(process, f"admit_navigation|{SESSION}|{target}")
+    if response != f"navigation_admitted|{SESSION}":
+        raise AssertionError(f"navigation admission failed: {response!r}")
+
+
+def complete_pre_navigation_protocol(
+    process: subprocess.Popen[str],
+    url: str | None,
+) -> None:
+    observe_browser_visible_wire(process)
+    admit_navigation(process, url)
+
+
 def launch_probe(
     root: Path,
     report: dict[str, str],
@@ -257,6 +286,7 @@ def launch_probe(
             return hello, process.wait(timeout=30), ""
         launch = exchange(process, f"launch|{SESSION}")
         if launch == f"ready|{SESSION}":
+            complete_pre_navigation_protocol(process, None)
             close = exchange(process, f"close|{SESSION}")
             returncode = process.wait(timeout=60)
             stderr = process.stderr.read()[-1000:] if process.stderr is not None else ""
@@ -299,7 +329,7 @@ def run_cold_launch(root: Path, report: dict[str, str], url: str) -> None:
     process = subprocess.Popen(
         [sys.executable, str(CAMOUHOST)],
         cwd=ROOT,
-        env=base_env(root, report, url),
+        env=base_env(root, report),
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -309,6 +339,7 @@ def run_cold_launch(root: Path, report: dict[str, str], url: str) -> None:
     try:
         assert exchange(process, f"hello|{IPC_VERSION}") == f"hello_ack|{IPC_VERSION}"
         assert exchange(process, f"launch|{SESSION}") == f"ready|{SESSION}"
+        complete_pre_navigation_protocol(process, url)
         assert exchange(process, f"close|{SESSION}") == f"closed|{SESSION}|true"
         returncode = process.wait(timeout=60)
         if returncode != 0:
@@ -320,8 +351,8 @@ def run_cold_launch(root: Path, report: dict[str, str], url: str) -> None:
             process.wait(timeout=30)
 
 
-def expect_prelaunch_identity_rejection(root: Path, report: dict[str, str], url: str) -> None:
-    env = base_env(root, report, url)
+def expect_prelaunch_identity_rejection(root: Path, report: dict[str, str]) -> None:
+    env = base_env(root, report)
     env["CAMOUHOST_EXPECTED_CONFIG_SHA256"] = "0" * 64
     completed = subprocess.run(
         [sys.executable, str(CAMOUHOST)],
@@ -339,8 +370,8 @@ def expect_prelaunch_identity_rejection(root: Path, report: dict[str, str], url:
         )
 
 
-def expect_probe_drift_rejection(root: Path, report: dict[str, str], url: str) -> None:
-    env = base_env(root, report, url)
+def expect_probe_digest_non_authoritative(root: Path, report: dict[str, str]) -> None:
+    env = base_env(root, report)
     env["CAMOUHOST_EXPECTED_PROBE_SHA256"] = "0" * 64
     process = subprocess.Popen(
         [sys.executable, str(CAMOUHOST)],
@@ -354,9 +385,14 @@ def expect_probe_drift_rejection(root: Path, report: dict[str, str], url: str) -
     )
     try:
         assert exchange(process, f"hello|{IPC_VERSION}") == f"hello_ack|{IPC_VERSION}"
-        assert exchange(process, f"launch|{SESSION}") == "error|runtime"
-        if process.wait(timeout=60) != 5:
-            raise AssertionError("profile-stable probe drift did not fail closed")
+        assert exchange(process, f"launch|{SESSION}") == f"ready|{SESSION}"
+        complete_pre_navigation_protocol(process, None)
+        assert exchange(process, f"close|{SESSION}") == f"closed|{SESSION}|true"
+        if process.wait(timeout=60) != 0:
+            stderr = process.stderr.read()[-2000:] if process.stderr is not None else ""
+            raise AssertionError(
+                "aggregate probe evidence unexpectedly became an admission veto: " + stderr
+            )
     finally:
         if process.poll() is None:
             process.kill()
@@ -407,11 +443,14 @@ def main() -> int:
                 )
 
             assert_clean_launch_lock_state(second_root)
-            expect_prelaunch_identity_rejection(first_root, first, url)
-            expect_probe_drift_rejection(first_root, first, url)
+            expect_prelaunch_identity_rejection(first_root, first)
+            expect_probe_digest_non_authoritative(first_root, first)
             prove_managed_environment_boundary(base)
 
-        print("AR-10 real Camoufox cold-launch, identity, Bridge ownership, managed environment and persistence evidence passed.")
+        print(
+            "AR-10 real Camoufox cold-launch, identity, Bridge ownership, "
+            "typed admission authority, managed environment and persistence evidence passed."
+        )
         return 0
     finally:
         server.shutdown()

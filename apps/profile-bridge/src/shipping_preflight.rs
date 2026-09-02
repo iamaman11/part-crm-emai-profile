@@ -1,3 +1,7 @@
+mod camoufox_identity;
+
+pub use camoufox_identity::profile_stable_identity_from_config_bytes;
+
 use crate::browser_execution::{BrowserLaunchBlocker, load_materialization_binding};
 use crate::browser_preflight::{BrowserRuntimeObservation, BrowserRuntimeObservationPort};
 use crate::camouhost_process::{RuntimeBindingBrowserLaunchPreflight, RuntimeBindingSlot};
@@ -5,6 +9,7 @@ use crate::local_profile::GenerationWorkspace;
 use crate::operator_flow::BrowserLaunchPreflightPort;
 use crate::runtime_bundle::ApprovedRuntimeBundle;
 use browser_execution_domain::NetworkIdentityPolicy;
+use camoufox_identity::{CamoufoxIdentityProjectionError, verify_materialized_camoufox_identity};
 use profile_platform_primitives::{DeviceId, GenerationId, ProfileId, TenantId};
 use std::path::Path;
 
@@ -52,6 +57,8 @@ where
             &identity.profile_id,
             &identity.generation_id,
         )?;
+        verify_materialized_camoufox_identity(workspace.path(), expected.browser_identity())
+            .map_err(map_identity_projection_error)?;
         let mut inner = RuntimeBindingBrowserLaunchPreflight::new(
             expected,
             self.network_policy.clone(),
@@ -59,6 +66,17 @@ where
             self.runtime_binding_slot.clone(),
         );
         inner.evaluate_before_launch(workspace, device_id, workspace_epoch, runtime_bundle)
+    }
+}
+
+fn map_identity_projection_error(error: CamoufoxIdentityProjectionError) -> BrowserLaunchBlocker {
+    match error {
+        CamoufoxIdentityProjectionError::InvalidMaterialization => {
+            BrowserLaunchBlocker::InvalidMaterializationEvidence
+        }
+        CamoufoxIdentityProjectionError::IdentityMismatch => {
+            BrowserLaunchBlocker::MaterializationStale
+        }
     }
 }
 

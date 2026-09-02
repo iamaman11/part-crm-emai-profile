@@ -68,8 +68,8 @@ function buildErrors(build) {
     'Publish once or prove byte-identical replay',
     'cp "$RELEASE_DIR/capability-policy-v1.json" "$asset_dir/capability-policy-v1.json"',
     'cp "$RELEASE_DIR/components/"* "$asset_dir/"',
-    'test "$(find "$asset_dir" -maxdepth 1 -type f | wc -l)" -eq 6',
-    'test "$(find "$existing" -maxdepth 1 -type f | wc -l)" -eq 6',
+    'test "$(find "$asset_dir" -maxdepth 1 -type f | wc -l)" -eq 9',
+    'test "$(find "$existing" -maxdepth 1 -type f | wc -l)" -eq 9',
   ], 'Release Set build'));
   errors.push(...forbidMarkers(build, [
     'release-set-ar11.py build', 'release-set-v2-sha256-', '.release_set_schema_version == 2',
@@ -172,7 +172,7 @@ function promotionErrors(promotion) {
   if (count(promotion, 'workflow_dispatch:') !== 1) errors.push('Release Set promotion must expose exactly one manual dispatch surface');
   if (count(promotion, 'secrets.CLOUDFLARE_API_TOKEN') !== 1) errors.push('deploy-capable Cloudflare token must be referenced exactly once, inside mutation executor');
   if (count(promotion, 'materialize current-v3') !== 5) errors.push(`current v3 Release Set materialization must occur exactly five times, observed=${count(promotion, 'materialize current-v3')}`);
-  if (count(promotion, 'materialize known-good-v2-v3') !== 1) errors.push(`historical v2/v3 materialization must occur exactly once in known-good verification, observed=${count(promotion, 'materialize known-good-v2-v3')}`);
+  if (count(promotion, 'materialize known-good-v2-v3') !== 1) errors.push(`historical v2/v3 Release Set materialization must occur exactly once in known-good verification, observed=${count(promotion, 'materialize known-good-v2-v3')}`);
   errors.push(...forbidMarkers(promotion, [
     'workflow_run:', 'issue_comment:', 'pull_request_target:', 'pull_request:\n', 'operator-entrypoint:',
     'test "$source_sha" = "$main_sha"',
@@ -343,8 +343,8 @@ function selfTest() {
   const v2Writer = build.replace('release-set-v3-sha256-', 'release-set-v2-sha256-');
   if (!buildErrors(v2Writer).some((error) => error.includes('release-set-v2-sha256-'))) throw new Error('Release Set v2 current-writer fixture unexpectedly passed');
 
-  const staleFiveAssetBuild = build.replace('test "$(find "$asset_dir" -maxdepth 1 -type f | wc -l)" -eq 6', 'test "$(find "$asset_dir" -maxdepth 1 -type f | wc -l)" -eq 5');
-  if (!buildErrors(staleFiveAssetBuild).some((error) => error.includes('eq 6'))) throw new Error('five-asset current Release Set fixture unexpectedly passed');
+  const staleFiveAssetBuild = build.replace('test "$(find "$asset_dir" -maxdepth 1 -type f | wc -l)" -eq 9', 'test "$(find "$asset_dir" -maxdepth 1 -type f | wc -l)" -eq 5');
+  if (!buildErrors(staleFiveAssetBuild).some((error) => error.includes('eq 9'))) throw new Error('five-asset current Release Set fixture unexpectedly passed');
 
   const v2Target = promotion.replaceAll('[[ "$RELEASE_SET_ID" =~ ^release-set-v3-sha256-[0-9a-f]{64}$ ]]', '[[ "$RELEASE_SET_ID" =~ ^release-set-v2-sha256-[0-9a-f]{64}$ ]]');
   if (!promotionErrors(v2Target).some((error) => error.includes('release-set-v2-sha256-') || error.includes('release-set-v3-sha256-'))) throw new Error('Release Set v2 current-target fixture unexpectedly passed');
@@ -413,7 +413,7 @@ function selfTest() {
   const nestedArtifact = promotion.replace('${{ runner.temp }}/release-set.json\n            ${{ runner.temp }}/accepted-source-evidence.json', '${{ runner.temp }}/release-policy-input/release-set.json\n            ${{ runner.temp }}/release-policy-input/accepted-source-evidence.json');
   if (!promotionErrors(nestedArtifact).some((error) => error.includes('phase 2 observe+preflight'))) throw new Error('nested preflight artifact regression unexpectedly passed');
 
-  console.log('AR-11 trusted-main transport, six-asset Release Set v3, narrow historical v2/v3 verification, and structural promotion negative self-test passed.');
+  console.log('AR-11 trusted-main transport, nine-asset Release Set v3, narrow historical v2/v3 verification, and structural promotion negative self-test passed.');
 }
 
 if (process.argv.includes('--self-test')) { selfTest(); process.exit(0); }
@@ -422,4 +422,4 @@ if (errors.length > 0) {
   console.error(`AR-11 operational policy failed:\n${errors.map((error) => `- ${error}`).join('\n')}`);
   process.exit(1);
 }
-console.log('AR-11 durable Release Set v3 (six immutable assets), trusted-main operator transport, and structural promotion policy passed.');
+console.log('AR-11 durable Release Set v3 (nine immutable assets), trusted-main operator transport, and structural promotion policy passed.');

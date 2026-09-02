@@ -27,6 +27,7 @@ workflow or readiness state.
 | Live program position and accepted-main summary | [Issue #266](https://github.com/iamaman11/part-crm-emai-profile/issues/266) |
 | Bounded transaction record, change envelope and evidence | Exactly one current owning Issue linked from [Issue #266](https://github.com/iamaman11/part-crm-emai-profile/issues/266); durable provenance after close |
 | Research coverage and decisions | [CAP-INDEX #505](https://github.com/iamaman11/part-crm-emai-profile/issues/505) and owning CAP Issues |
+| Non-active future product-evolution options | [FUTURE_DEVELOPMENT.md](FUTURE_DEVELOPMENT.md) — never execution authority or `NEXT` |
 | Public contract evolution | [CONTRACT_POLICY.md](CONTRACT_POLICY.md) |
 | Exact-head acceptance | [ARCHITECTURE_ACCEPTANCE_PROTOCOL.md](ARCHITECTURE_ACCEPTANCE_PROTOCOL.md) |
 | Data classification/retention | [DATA_CLASSIFICATION.md](DATA_CLASSIFICATION.md), [PRIVACY_AND_RETENTION.md](PRIVACY_AND_RETENTION.md) |
@@ -45,6 +46,9 @@ workflow or readiness state.
 - **Live state** lives in protected Git/GitHub/provider owners. Issue #266 is the sole live transaction
   pointer; the one linked owning Issue contains bounded discovery/change/acceptance evidence and becomes
   provenance after close; exact environment and candidate evidence lives with its owning R-stage evidence.
+- **Future product options** may be recorded in `FUTURE_DEVELOPMENT.md`, but they cannot select work,
+  create `NEXT`, authorize a provider mutation or justify pre-creating an execution Issue. They are
+  reconsidered from then-current accepted `main` only when the live tracker selects that concern.
 - **Projection/navigation** may summarize canonical owners but cannot create status, readiness, order
   or authority. `DEVELOPMENT_PLAN.md`, generated status JSON and capability/evidence matrices are in
   this class unless a listed bounded contract explicitly assigns them a narrower role.

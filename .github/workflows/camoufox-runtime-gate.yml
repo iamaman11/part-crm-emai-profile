@@ -7,6 +7,7 @@ on:
       - main
 
 permissions:
+  actions: read
   contents: read
 
 concurrency:
@@ -14,10 +15,81 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  real-runtime-linux:
-    name: Real Camoufox cold-launch proof
+  patched-candidate:
+    name: Resolve patched Camoufox candidate (${{ matrix.target }})
     runs-on: ubuntu-24.04
     timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [linux, windows]
+    steps:
+      - name: Checkout exact project source
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+
+      - name: Verify exact source checkout
+        env:
+          EXPECTED_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: python -c "import os, subprocess; actual = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(); expected = os.environ['EXPECTED_SOURCE_SHA']; assert actual == expected, f'expected {expected}, got {actual}'"
+
+      - name: Restore candidate-input cache
+        id: candidate-cache
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae
+        with:
+          path: artifacts/camoufox-candidate
+          key: s0-camoufox-${{ matrix.target }}-${{ hashFiles('runtime/camouhost/camoufox-patch-lock.json') }}
+
+      - name: Seed unchanged candidate from proven prior run
+        id: candidate-seed
+        if: steps.candidate-cache.outputs.cache-hit != 'true'
+        continue-on-error: true
+        uses: actions/download-artifact@70fc10c6e5e1ce46ad2ea6f2b72d43f7d47b13c3
+        with:
+          name: s0-camoufox-${{ matrix.target }}-11e3696e37d5065633d93d5ddd05fdf1bb836b96
+          path: artifacts/camoufox-candidate
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          run-id: 33572782439
+
+      - name: Require exact locked candidate without automatic rebuild
+        env:
+          TARGET: ${{ matrix.target }}
+          CACHE_HIT: ${{ steps.candidate-cache.outputs.cache-hit }}
+          SEED_OUTCOME: ${{ steps.candidate-seed.outcome }}
+        run: |
+          set -euo pipefail
+          python3.12 -m py_compile scripts/check-camoufox-webgl-patch.py scripts/verify-camoufox-patched-candidate.py
+          python3.12 scripts/check-camoufox-webgl-patch.py --self-test
+          python3.12 scripts/verify-camoufox-patched-candidate.py --self-test
+
+          archive="artifacts/camoufox-candidate/camoufox-${TARGET}.x86_64.zip"
+          provenance="artifacts/camoufox-candidate/camoufox-${TARGET}.provenance.json"
+          test -f "$archive"
+          test -f "$provenance"
+          candidate_sha="$(python3.12 -c 'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["build_source_commit"])' "$provenance")"
+          python3.12 scripts/verify-camoufox-patched-candidate.py \
+            --archive "$archive" \
+            --provenance "$provenance" \
+            --target "$TARGET" \
+            --build-source-commit "$candidate_sha"
+          echo "Reused exact locked Camoufox ${TARGET} candidate built at ${candidate_sha}; cache_hit=${CACHE_HIT}; seed_outcome=${SEED_OUTCOME}."
+
+      - name: Upload ephemeral candidate transport
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: s0-camoufox-${{ matrix.target }}-${{ github.event.pull_request.head.sha || github.sha }}
+          path: artifacts/camoufox-candidate
+          if-no-files-found: error
+          retention-days: 7
+
+  real-runtime-linux:
+    name: Real Camoufox cold-launch proof
+    needs: patched-candidate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
     steps:
       - name: Checkout exact source
         uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
@@ -44,23 +116,34 @@ jobs:
       - name: Install exact AR-10 Camoufox Python components
         run: |
           python3.12 -m pip install --disable-pip-version-check \
-            "git+https://github.com/daijro/camoufox.git@cd83f7fd2fdf631dfde0c7eb53bd3d30f102ec4a#subdirectory=pythonlib" \
+            "git+https://github.com/daijro/camoufox.git@b68a4fb9400d950b2f3c2c030931deef6e203ba4#subdirectory=pythonlib" \
             "browserforge==1.2.4" \
             "playwright==1.60.0"
           python3.12 - <<'PY'
           import importlib.metadata
-          assert importlib.metadata.version('camoufox') == '0.5.5'
+          assert importlib.metadata.version('camoufox') == '0.5.6b1'
           assert importlib.metadata.version('browserforge') == '1.2.4'
           assert importlib.metadata.version('playwright') == '1.60.0'
           PY
 
-      - name: Fetch exact Camoufox browser release
-        run: |
-          python3.12 -m camoufox fetch official/stable/152.0.4-beta.28
-          python3.12 -m camoufox active | grep -F '152.0.4-beta.28'
+      - name: Download exact patched Linux candidate
+        uses: actions/download-artifact@70fc10c6e5e1ce46ad2ea6f2b72d43f7d47b13c3
+        with:
+          name: s0-camoufox-linux-${{ github.event.pull_request.head.sha || github.sha }}
+          path: artifacts/camoufox-candidate
 
-      - name: Compile AR-10 runtime sources
-        run: python3.12 -m py_compile runtime/camouhost/real.py scripts/test-ar10-real-camoufox.py scripts/test-ar10-firefox-writer-locks.py scripts/check-ar10-runtime-cutover.py
+      - name: Install verified candidate into ephemeral Camoufox CI cache
+        run: |
+          candidate_sha="$(python3.12 -c 'import json; print(json.load(open("artifacts/camoufox-candidate/camoufox-linux.provenance.json", encoding="utf-8"))["build_source_commit"])')"
+          python3.12 -m py_compile scripts/install-camoufox-candidate-for-ci.py scripts/verify-camoufox-patched-candidate.py
+          python3.12 scripts/install-camoufox-candidate-for-ci.py \
+            --archive artifacts/camoufox-candidate/camoufox-linux.x86_64.zip \
+            --provenance artifacts/camoufox-candidate/camoufox-linux.provenance.json \
+            --build-source-commit "$candidate_sha"
+          python3.12 -m camoufox list --path
+
+      - name: Compile AR-10/S0 runtime acceptance sources
+        run: python3.12 -m py_compile runtime/camouhost/real.py scripts/diagnose-s0-webgl-parameters.py scripts/test-ar10-real-camoufox.py scripts/test-s0-browser-visible-canvas.py scripts/test-s0-browser-visible-audio-fonts.py scripts/test-s0-portable-browser-state.py scripts/test-ar10-firefox-writer-locks.py scripts/check-ar10-runtime-cutover.py
 
       - name: Enforce AR-10 successor-runtime policy
         run: |
@@ -73,6 +156,29 @@ jobs:
       - name: Prove real Camoufox identity and persistent profile behavior
         run: python3.12 scripts/test-ar10-real-camoufox.py
 
+      - name: Prove exact native WebGL arrays and browser-visible TypedArrays
+        run: |
+          python3.12 scripts/diagnose-s0-webgl-parameters.py \
+            --camouhost runtime/camouhost/real.py \
+            --runtime-lock runtime/camouhost/runtime-lock.json \
+            --headless virtual
+
+      - name: Prove browser-visible canvas portability on exact Camoufox
+        run: |
+          python3.12 scripts/test-s0-browser-visible-canvas.py \
+            --python /usr/bin/python3.12 \
+            --camouhost runtime/camouhost/real.py \
+            --runtime-lock runtime/camouhost/runtime-lock.json \
+            --headless virtual
+
+      - name: Prove browser-visible audio and font portability on exact Camoufox
+        run: |
+          python3.12 scripts/test-s0-browser-visible-audio-fonts.py \
+            --python /usr/bin/python3.12 \
+            --camouhost runtime/camouhost/real.py \
+            --runtime-lock runtime/camouhost/runtime-lock.json \
+            --headless virtual
+
       - name: Prove Profile Bridge -> managed IPC -> real Camoufox chain
         env:
           AR10_REAL_CAMOUFOX: "1"
@@ -80,12 +186,22 @@ jobs:
           AR10_RUNTIME_ROOT: ${{ github.workspace }}/runtime
         run: cargo test --locked -p profile-bridge --test real_camoufox_runtime -- --nocapture
 
+      - name: Prove authoritative P3 browser-state portability through managed Camoufox
+        env:
+          AR10_REAL_CAMOUFOX: "1"
+          AR10_PYTHON: /usr/bin/python3.12
+          AR10_RUNTIME_ROOT: ${{ github.workspace }}/runtime
+          AR10_BROWSER_STATE_HEADLESS: virtual
+        run: cargo test --locked -p profile-bridge --test portable_browser_state real_cookie_local_storage_and_indexed_db_survive_authoritative_p3_reopen -- --nocapture
+
       - name: Enforce parity-gated AR-10 closeout policy
         run: python3.12 scripts/check-ar10-runtime-cutover.py --closeout
 
   bridge-regression-windows:
     name: Profile Bridge Windows regression
+    needs: patched-candidate
     runs-on: windows-2025
+    timeout-minutes: 60
     steps:
       - name: Checkout exact source
         uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
@@ -98,14 +214,105 @@ jobs:
           EXPECTED_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: python -c "import os, subprocess; actual = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(); expected = os.environ['EXPECTED_SOURCE_SHA']; assert actual == expected, f'expected {expected}, got {actual}'"
 
-      - name: Compile real Camouhost source without installing browser runtime
-        run: python -m py_compile runtime/camouhost/real.py scripts/test-ar10-firefox-writer-locks.py scripts/check-ar10-runtime-cutover.py
+      - name: Set up exact Windows dependency-lock Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.12.10'
+
+      - name: Project exact Windows dependency lock candidate
+        shell: pwsh
+        run: |
+          python scripts/camouhost-windows-dependency-lock.py self-test
+          $report = Join-Path $env:RUNNER_TEMP 'camouhost-windows-pip-report.json'
+          $candidate = Join-Path $env:RUNNER_TEMP 'camouhost-windows-dependency-lock.json'
+          python -m pip install --disable-pip-version-check --dry-run --ignore-installed --only-binary=:all: --report "$report" `
+            "camoufox==0.5.6b1" `
+            "browserforge==1.2.4" `
+            "playwright==1.60.0"
+          python scripts/camouhost-windows-dependency-lock.py project `
+            --runtime-lock runtime/camouhost/runtime-lock.json `
+            --pip-report "$report" `
+            --output "$candidate"
+
+      - name: Upload dependency lock candidate evidence
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: s0-windows-dependency-lock-${{ github.event.pull_request.head.sha || github.sha }}
+          path: ${{ runner.temp }}/camouhost-windows-dependency-lock.json
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Download exact patched Windows candidate
+        uses: actions/download-artifact@70fc10c6e5e1ce46ad2ea6f2b72d43f7d47b13c3
+        with:
+          name: s0-camoufox-windows-${{ github.event.pull_request.head.sha || github.sha }}
+          path: artifacts/camoufox-candidate
+
+      - name: Materialize exact clean-host Windows runtime from verified candidate
+        shell: pwsh
+        run: |
+          $runtimeRoot = Join-Path $env:RUNNER_TEMP 'camouhost-runtime'
+          $buildPython = (Get-Command python).Source
+          $candidateBuildSha = (Get-Content -Raw 'artifacts/camoufox-candidate/camoufox-windows.provenance.json' | ConvertFrom-Json).build_source_commit
+          if ($candidateBuildSha -notmatch '^[0-9a-f]{40}$') { throw 'candidate build source commit is invalid' }
+          python -m py_compile scripts/camouhost-runtime-build-windows.py scripts/verify-camoufox-patched-candidate.py
+          python scripts/verify-camoufox-patched-candidate.py --self-test
+          python scripts/camouhost-runtime-build-windows.py self-test
+          python scripts/camouhost-runtime-build-windows.py build `
+            --runtime-lock runtime/camouhost/runtime-lock.json `
+            --patch-lock runtime/camouhost/camoufox-patch-lock.json `
+            --runtime-source runtime/camouhost/real.py `
+            --browser-candidate artifacts/camoufox-candidate/camoufox-windows.x86_64.zip `
+            --browser-provenance artifacts/camoufox-candidate/camoufox-windows.provenance.json `
+            --build-source-commit "$candidateBuildSha" `
+            --output "$runtimeRoot" `
+            --build-python "$buildPython"
+          if (-not (Test-Path -LiteralPath (Join-Path $runtimeRoot 'python\python.exe') -PathType Leaf)) { throw 'embedded Python missing' }
+          if (-not (Test-Path -LiteralPath (Join-Path $runtimeRoot 'browser\camoufox.exe') -PathType Leaf)) { throw 'packaged Camoufox missing' }
+          if (-not (Test-Path -LiteralPath (Join-Path $runtimeRoot 'camouhost\browser-candidate-provenance.json') -PathType Leaf)) { throw 'browser candidate provenance missing' }
+
+      - name: Compile runtime acceptance sources
+        run: python -m py_compile runtime/camouhost/real.py scripts/diagnose-s0-speech-voices.py scripts/test-s0-browser-visible-canvas.py scripts/test-s0-browser-visible-audio-fonts.py scripts/test-s0-portable-browser-state.py scripts/test-ar10-firefox-writer-locks.py scripts/check-ar10-runtime-cutover.py scripts/camouhost-runtime-build-windows.py scripts/camouhost-windows-dependency-lock.py scripts/verify-camoufox-patched-candidate.py
 
       - name: Prove Firefox writer-lock failure semantics
         run: python scripts/test-ar10-firefox-writer-locks.py
 
-      - name: Test and build Profile Bridge
+      - name: Prove clean-host Windows Camoufox canvas portability
+        shell: pwsh
         run: |
-          cargo test --locked -p browser-execution-domain -p runtime-bundle-domain
-          cargo test --locked -p profile-bridge --features synthetic-test-bin
-          cargo build --locked --release -p profile-bridge
+          $runtimeRoot = Join-Path $env:RUNNER_TEMP 'camouhost-runtime'
+          python scripts/test-s0-browser-visible-canvas.py --python (Join-Path $runtimeRoot 'python\python.exe') --camouhost (Join-Path $runtimeRoot 'camouhost\real.py') --runtime-lock (Join-Path $runtimeRoot 'camouhost\runtime-lock.json') --headless false
+
+      - name: Prove clean-host Windows Camoufox audio and font portability
+        shell: pwsh
+        run: |
+          $runtimeRoot = Join-Path $env:RUNNER_TEMP 'camouhost-runtime'
+          python scripts/test-s0-browser-visible-audio-fonts.py --python (Join-Path $runtimeRoot 'python\python.exe') --camouhost (Join-Path $runtimeRoot 'camouhost\real.py') --runtime-lock (Join-Path $runtimeRoot 'camouhost\runtime-lock.json') --headless false
+
+      - name: Prove configured Windows speech voices reach a stable browser-visible snapshot
+        shell: pwsh
+        run: |
+          $runtimeRoot = Join-Path $env:RUNNER_TEMP 'camouhost-runtime'
+          & (Join-Path $runtimeRoot 'python\python.exe') scripts/diagnose-s0-speech-voices.py `
+            --camouhost (Join-Path $runtimeRoot 'camouhost\real.py') `
+            --runtime-lock (Join-Path $runtimeRoot 'camouhost\runtime-lock.json') `
+            --headless false
+
+      - name: Prove clean-host Windows authoritative P3 browser-state portability
+        shell: pwsh
+        run: |
+          $runtimeRoot = Join-Path $env:RUNNER_TEMP 'camouhost-runtime'
+          $env:AR10_REAL_CAMOUFOX = '1'
+          $env:AR10_PYTHON = Join-Path $runtimeRoot 'python\python.exe'
+          $env:AR10_RUNTIME_ROOT = $runtimeRoot
+          $env:AR10_BROWSER_STATE_HEADLESS = 'false'
+          cargo test --locked -p profile-bridge --test portable_browser_state real_cookie_local_storage_and_indexed_db_survive_authoritative_p3_reopen -- --nocapture
+
+      - name: Test browser/runtime domain contracts on Windows
+        run: cargo test --locked -p browser-execution-domain -p runtime-bundle-domain
+
+      - name: Test Profile Bridge on Windows
+        run: cargo test --locked -p profile-bridge --features synthetic-test-bin
+
+      - name: Build release Profile Bridge on Windows
+        run: cargo build --locked --release -p profile-bridge

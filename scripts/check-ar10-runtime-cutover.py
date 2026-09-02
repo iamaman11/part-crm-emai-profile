@@ -31,26 +31,43 @@ LEGACY_EXECUTABLES = {
 }
 EXPECTED_LOCK: dict[str, Any] = {
     "browser": {
-        "release_commit": "0583c3ec94f5a9df5cb2d09553fbfe80589b6e2d",
+        "release_commit": "5d06ec1629ac7843508f1e683f83e404fde8db76",
         "repository": "daijro/camoufox",
-        "version": "152.0.4-beta.28",
+        "version": "152.0.4-beta.30",
     },
-    "camouhost_ipc_version": 2,
+    "camouhost_ipc_version": 3,
     "components": {
         "browserforge": "1.2.4",
-        "camoufox_python": "0.5.5",
+        "camoufox_python": "0.5.6b1",
         "playwright": "1.60.0",
     },
     "fingerprint_config_schema": "camoufox-canonical-config-v1",
     "fingerprint_policy_version": "profile-stability-v1",
     "python": "3.12",
     "python_source": {
-        "commit": "cd83f7fd2fdf631dfde0c7eb53bd3d30f102ec4a",
+        "commit": "b68a4fb9400d950b2f3c2c030931deef6e203ba4",
         "repository": "daijro/camoufox",
     },
     "runtime_role": "real_camoufox",
     "schema_version": 1,
 }
+EXPECTED_WINDOWS_DISTRIBUTION_BASE: dict[str, Any] = {
+    "architecture": "x86_64",
+    "browser": {
+        "artifact_sha256": "ea52a02fb1cfb1813ef6a326bea03fb2b650c9774143d953a94a27bfc8f10072",
+        "artifact_url": "https://github.com/daijro/camoufox/releases/download/v152.0.4-beta.30/camoufox-152.0.4-beta.30-win.x86_64.zip",
+        "executable_path": "browser/camoufox.exe",
+    },
+    "python": {
+        "artifact_sha256": "4acbed6dd1c744b0376e3b1cf57ce906f9dc9e95e68824584c8099a63025a3c3",
+        "artifact_url": "https://www.python.org/ftp/python/3.12.10/python-3.12.10-embed-amd64.zip",
+        "version": "3.12.10",
+    },
+}
+MAX_WINDOWS_PYTHON_PACKAGES = 256
+PYPI_FILES_PREFIX = "https://files.pythonhosted.org/packages/"
+PACKAGE_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9._-]*$")
+SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 
 NETWORK_IMPORT_PREFIXES = (
     "aiohttp",
@@ -265,16 +282,156 @@ def validate_python_runtime_boundary(root: Path) -> None:
         )
 
 
+def validate_windows_package_graph(packages: object) -> None:
+    if (
+        not isinstance(packages, list)
+        or not packages
+        or len(packages) > MAX_WINDOWS_PYTHON_PACKAGES
+    ):
+        fail("Windows Python package graph is invalid")
+    observed_names: set[str] = set()
+    observed_filenames: set[str] = set()
+    ordering: list[tuple[str, str, str]] = []
+    versions: dict[str, str] = {}
+    for row in packages:
+        if not isinstance(row, dict) or set(row) != {
+            "filename",
+            "name",
+            "sha256",
+            "url",
+            "version",
+        }:
+            fail("Windows Python package graph row shape is invalid")
+        filename = row.get("filename")
+        name = row.get("name")
+        digest = row.get("sha256")
+        url = row.get("url")
+        version = row.get("version")
+        if (
+            not isinstance(filename, str)
+            or not filename.endswith(".whl")
+            or Path(filename).name != filename
+            or "\\" in filename
+            or ":" in filename
+        ):
+            fail("Windows Python package graph filename is invalid")
+        if not isinstance(name, str) or PACKAGE_NAME_RE.fullmatch(name) is None:
+            fail("Windows Python package graph name is invalid")
+        if not isinstance(digest, str) or SHA256_RE.fullmatch(digest) is None:
+            fail("Windows Python package graph SHA-256 is invalid")
+        if (
+            not isinstance(url, str)
+            or not url.startswith(PYPI_FILES_PREFIX)
+            or url.rsplit("/", 1)[-1] != filename
+        ):
+            fail("Windows Python package graph URL is invalid")
+        if (
+            not isinstance(version, str)
+            or not version
+            or len(version) > 64
+            or any(character.isspace() for character in version)
+        ):
+            fail("Windows Python package graph version is invalid")
+        if name in observed_names or filename.casefold() in observed_filenames:
+            fail("Windows Python package graph contains duplicate identity")
+        observed_names.add(name)
+        observed_filenames.add(filename.casefold())
+        ordering.append((name, version, filename))
+        versions[name] = version
+    if ordering != sorted(ordering):
+        fail("Windows Python package graph is not deterministically ordered")
+    expected_roots = {
+        "browserforge": EXPECTED_LOCK["components"]["browserforge"],
+        "camoufox": EXPECTED_LOCK["components"]["camoufox_python"],
+        "playwright": EXPECTED_LOCK["components"]["playwright"],
+    }
+    if any(versions.get(name) != version for name, version in expected_roots.items()):
+        fail("Windows Python package graph root versions drifted from AR-10 identity")
+
+
+def validate_windows_distribution(distribution: object) -> None:
+    if not isinstance(distribution, dict) or set(distribution) != {
+        "architecture",
+        "browser",
+        "python",
+    }:
+        fail("runtime lock Windows distribution shape drifted")
+    if distribution.get("architecture") != EXPECTED_WINDOWS_DISTRIBUTION_BASE["architecture"]:
+        fail("runtime lock Windows distribution drifted from the exact S0 delivery identity")
+    if distribution.get("browser") != EXPECTED_WINDOWS_DISTRIBUTION_BASE["browser"]:
+        fail("runtime lock Windows distribution drifted from the exact S0 delivery identity")
+    python = distribution.get("python")
+    if not isinstance(python, dict) or set(python) != {
+        "artifact_sha256",
+        "artifact_url",
+        "packages",
+        "version",
+    }:
+        fail("runtime lock Windows Python distribution shape drifted")
+    expected_python = EXPECTED_WINDOWS_DISTRIBUTION_BASE["python"]
+    projection = {key: python.get(key) for key in expected_python}
+    if projection != expected_python:
+        fail("runtime lock Windows distribution drifted from the exact S0 delivery identity")
+    validate_windows_package_graph(python.get("packages"))
+
+
+def validate_runtime_lock_value(parsed: object) -> None:
+    if not isinstance(parsed, dict):
+        fail("runtime lock must be a JSON object")
+    expected_keys = set(EXPECTED_LOCK) | {"windows_distribution"}
+    if set(parsed) != expected_keys:
+        fail("runtime lock shape drifted outside AR-10 + S0 authorities")
+    ar10_projection = {key: parsed[key] for key in EXPECTED_LOCK}
+    if ar10_projection != EXPECTED_LOCK:
+        fail("runtime lock drifted from the exact AR-10 candidate component identity")
+    validate_windows_distribution(parsed.get("windows_distribution"))
+
+
 def validate_runtime_lock(root: Path) -> None:
     raw = read_regular_bytes(root, RUNTIME_LOCK)
     try:
         parsed = json.loads(raw.decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError) as error:
         fail(f"runtime lock is invalid JSON: {error}")
-    if parsed != EXPECTED_LOCK:
-        fail("runtime lock drifted from the exact AR-10 candidate component identity")
+    validate_runtime_lock_value(parsed)
     if canonical_json_bytes(parsed) != raw:
         fail("runtime lock must use canonical JSON encoding")
+
+
+def validate_browser_selector_policy(source: str, tree: ast.Module) -> None:
+    packaged = function_node(tree, "packaged_windows_browser")
+    selector = function_node(tree, "camoufox_browser_selector")
+    kwargs = function_node(tree, "camoufox_kwargs")
+    materializer = function_node(tree, "materialize_candidate_identity")
+
+    if not {"is_symlink", "is_file", "resolve"}.issubset(called_names(packaged)):
+        fail("Windows packaged Camoufox executable must be a regular resolved file")
+    if "packaged_windows_browser" not in called_names(selector):
+        fail("Windows runtime must select the packaged Camoufox executable")
+    if "camoufox_browser_selector" not in called_names(kwargs):
+        fail("normal Camoufox launch must use the governed browser selector")
+    if "camoufox_browser_selector" not in called_names(materializer):
+        fail("candidate identity materialization must use the governed browser selector")
+
+    packaged_source = ast.get_source_segment(source, packaged) or ""
+    for marker in (
+        'browser.get("executable_path")',
+        '"browser/camoufox.exe"',
+        "Path(__file__)",
+        "runtime_entrypoint.resolve(strict=True).parent.parent",
+    ):
+        if marker not in packaged_source:
+            fail(f"Windows packaged Camoufox resolver lost required invariant: {marker}")
+
+    selector_source = ast.get_source_segment(source, selector) or ""
+    for marker in (
+        'os.name == "nt"',
+        'return {"executable_path": packaged_windows_browser(lock)}',
+        'os.name == "posix"',
+        'return {"browser": browser["version"]}',
+    ):
+        if marker not in selector_source:
+            fail(f"Camoufox browser selector lost required platform invariant: {marker}")
 
 
 def validate_real_runtime(root: Path) -> None:
@@ -284,6 +441,7 @@ def validate_real_runtime(root: Path) -> None:
     except SyntaxError as error:
         fail(f"real Camouhost source does not parse: {error}")
     for marker in (
+        'IPC_VERSION = "3"',
         'CONFIG_NAME = "camoufox-config.json"',
         'USER_DATA_NAME = "user_data"',
         'BRIDGE_LOCK_NAME = ".profile-platform.lock"',
@@ -291,29 +449,38 @@ def validate_real_runtime(root: Path) -> None:
         'EXPECTED_CONFIG_SHA256_ENV',
         'EXPECTED_PROBE_SHA256_ENV',
         'persistent_context": True',
-        '"browser": browser["version"]',
         '"i_know_what_im_doing": True',
-        "profile-stable fingerprint drift detected",
         "fingerprint config digest mismatch",
         "Bridge writer ownership evidence is missing",
         "materialize_candidate_identity",
+        "default_addon_exclusions",
+        "DefaultAddons.UBO",
+        '"exclude_addons": default_addon_exclusions()',
+        "exclude_addons=default_addon_exclusions()",
         'emit(f"ready|{active_session}")',
+        'emit(f"navigation_admitted|{active_session}")',
         'emit(f"closed|{active_session}|true")',
     ):
         if marker not in text:
-            fail(f"real Camouhost lost required AR-10 invariant: {marker}")
+            fail(f"real Camouhost lost required AR-10/S0 runtime invariant: {marker}")
 
+    validate_browser_selector_policy(text, tree)
     ipc = function_node(tree, "run_ipc")
     materializer = function_node(tree, "materialize_candidate_identity")
     launch = function_node(tree, "launch_verified_context")
+    kwargs = function_node(tree, "camoufox_kwargs")
+    materializer_source = ast.get_source_segment(text, materializer) or ""
+    kwargs_source = ast.get_source_segment(text, kwargs) or ""
+    if '"geoip"' in kwargs_source or "geoip=" in materializer_source:
+        fail("real Camouhost may not acquire autonomous GeoIP/network-identity authority")
     if "launch_options" in called_names(ipc):
         fail("normal active-generation launch may not regenerate BrowserForge identity")
     if "launch_options" not in called_names(materializer):
         fail("candidate identity materializer must explicitly create the initial exact config")
     if "stable_probe_digest" not in called_names(materializer):
-        fail("candidate identity materializer must bind a profile-stable probe")
-    if "stable_probe_digest" not in called_names(launch):
-        fail("normal launch must verify profile-stable identity before ready")
+        fail("candidate identity materializer must retain aggregate probe evidence")
+    if "stable_probe_digest" in called_names(launch):
+        fail("normal launch may not use aggregate probe as semantic admission authority")
     for marker in (
         "print(config",
         "print(proxy",
@@ -433,17 +600,102 @@ def expect_runtime_source_failure(relative: Path, source: str, marker: str) -> N
     fail(f"runtime-boundary negative fixture unexpectedly passed: {relative.as_posix()}")
 
 
+def expect_runtime_lock_failure(value: object, marker: str) -> None:
+    try:
+        validate_runtime_lock_value(value)
+    except GateError as error:
+        if marker not in str(error):
+            fail(f"runtime-lock negative fixture failed for the wrong reason: {error}")
+        return
+    fail("runtime-lock negative fixture unexpectedly passed")
+
+
+def expect_browser_selector_failure(source: str, marker: str) -> None:
+    try:
+        validate_browser_selector_policy(source, ast.parse(source))
+    except GateError as error:
+        if marker not in str(error):
+            fail(f"browser-selector negative fixture failed for the wrong reason: {error}")
+        return
+    fail("browser-selector negative fixture unexpectedly passed")
+
+
+def package_fixture(name: str, version: str, digit: str) -> dict[str, str]:
+    filename = f"{name}-{version}-py3-none-any.whl"
+    return {
+        "filename": filename,
+        "name": name,
+        "sha256": digit * 64,
+        "url": f"{PYPI_FILES_PREFIX}fixture/{filename}",
+        "version": version,
+    }
+
+
+def exact_runtime_lock_fixture() -> dict[str, Any]:
+    value = json.loads(json.dumps(EXPECTED_LOCK))
+    distribution = json.loads(json.dumps(EXPECTED_WINDOWS_DISTRIBUTION_BASE))
+    distribution["python"]["packages"] = [
+        package_fixture("browserforge", "1.2.4", "1"),
+        package_fixture("camoufox", "0.5.6b1", "2"),
+        package_fixture("playwright", "1.60.0", "3"),
+    ]
+    value["windows_distribution"] = distribution
+    return value
+
+
 def self_test() -> None:
-    mutated = json.loads(json.dumps(EXPECTED_LOCK))
-    mutated["components"]["browserforge"] = "latest"
-    if mutated == EXPECTED_LOCK:
-        fail("runtime-lock negative self-test failed")
+    exact = exact_runtime_lock_fixture()
+    validate_runtime_lock_value(exact)
+
+    mutated_ar10 = exact_runtime_lock_fixture()
+    mutated_ar10["components"]["browserforge"] = "latest"
+    expect_runtime_lock_failure(mutated_ar10, "AR-10 candidate component identity")
+
+    mutated_windows = exact_runtime_lock_fixture()
+    mutated_windows["windows_distribution"]["browser"]["artifact_sha256"] = "0" * 64
+    expect_runtime_lock_failure(mutated_windows, "S0 delivery identity")
+
+    mutated_package = exact_runtime_lock_fixture()
+    mutated_package["windows_distribution"]["python"]["packages"][0]["sha256"] = "invalid"
+    expect_runtime_lock_failure(mutated_package, "package graph")
+
+    unknown = exact_runtime_lock_fixture()
+    unknown["compatibility_fallback"] = True
+    expect_runtime_lock_failure(unknown, "shape drifted")
+
     source = "def run_ipc():\n    return launch_options()\n"
     node = function_node(ast.parse(source), "run_ipc")
     if "launch_options" not in called_names(node):
         fail("normal-launch regeneration negative self-test failed")
     if re.fullmatch(r"[0-9a-f]{64}", "0" * 64) is None:
         fail("digest self-test failed")
+
+    predecessor_selector = '''
+def packaged_windows_browser(lock):
+    browser = lock["windows_distribution"]["browser"]
+    executable_path = browser.get("executable_path")
+    if executable_path != "browser/camoufox.exe":
+        raise ValueError
+    runtime_entrypoint = Path(__file__)
+    if runtime_entrypoint.is_symlink() or not runtime_entrypoint.is_file():
+        raise ValueError
+    runtime_root = runtime_entrypoint.resolve(strict=True).parent.parent
+    executable = runtime_root.joinpath(*executable_path.split("/"))
+    if executable.is_symlink() or not executable.is_file():
+        raise ValueError
+    return executable.resolve(strict=True)
+
+def camoufox_browser_selector(lock):
+    browser = lock["browser"]
+    return {"browser": browser["version"]}
+
+def camoufox_kwargs(lock, root, config):
+    return camoufox_browser_selector(lock)
+
+def materialize_candidate_identity(root):
+    return camoufox_browser_selector({})
+'''
+    expect_browser_selector_failure(predecessor_selector, "packaged Camoufox executable")
 
     expect_runtime_source_failure(
         SYNTHETIC_RUNTIME,
@@ -460,7 +712,6 @@ def self_test() -> None:
         "import subprocess\nsubprocess.run(['wrangler', 'r2', 'object', 'put', 'x'])\n",
         "forbidden direct effects",
     )
-
     expect_runtime_source_failure(
         REAL_RUNTIME,
         "import os\ntoken = os.getenv('CLOUDFLARE_API_TOKEN')\n",

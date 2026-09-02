@@ -10,6 +10,7 @@ const ROOT_MARKER_CONTENT: &str = "profile-platform-local-root-v1\n";
 const GENERATION_MARKER: &str = ".profile-generation";
 const GENERATION_MARKER_CONTENT: &str = "profile-platform-generation-v1\n";
 const BRIDGE_LOCK_FILE: &str = ".profile-platform.lock";
+pub(crate) const BROWSER_IDENTITY_RECORD_FILE: &str = ".profile-browser-identity-v1";
 const BROWSER_STATE_DIRECTORY: &str = "user_data";
 const FIREFOX_PARENT_LOCK_PATH: &str = "user_data/.parentlock";
 const FIREFOX_WINDOWS_PARENT_LOCK_PATH: &str = "user_data/parent.lock";
@@ -181,8 +182,9 @@ impl GenerationWorkspace {
     ///
     /// `user_data/**` is mutable browser state (cookies, localStorage, caches and Firefox
     /// runtime lock artifacts) and must not invalidate a generation's fingerprint/runtime
-    /// identity after a clean browser session. The state directory itself must still be a
-    /// real directory rather than a symlink.
+    /// identity after a clean browser session. The canonical browser-identity record is also
+    /// excluded here to avoid a self-referential digest, while remaining part of full generation
+    /// inventory and therefore part of clone/save/encrypt/reopen integrity.
     pub fn materialization_inventory_digest(&self) -> Result<u64, LocalProfileError> {
         build_materialization_inventory_digest(&self.canonical_path)
     }
@@ -502,6 +504,12 @@ fn collect_materialization_inventory(
             }
             continue;
         }
+        if relative_path == BROWSER_IDENTITY_RECORD_FILE {
+            if !file_type.is_file() {
+                return Err(LocalProfileError::SpecialFileRejected);
+            }
+            continue;
+        }
         if relative_path == BROWSER_STATE_DIRECTORY {
             if !file_type.is_dir() {
                 return Err(LocalProfileError::SpecialFileRejected);
@@ -610,7 +618,7 @@ fn copy_inventory(
 
 #[cfg(test)]
 mod tests {
-    use super::{BridgeWorkspaceLock, MaterializationRoot};
+    use super::{BROWSER_IDENTITY_RECORD_FILE, BridgeWorkspaceLock, MaterializationRoot};
     use profile_platform_primitives::{DeviceId, GenerationId, ProfileId, TenantId};
     use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -638,6 +646,36 @@ mod tests {
             ProfileId::parse(format!("profile_reject_{sequence}"))?,
             GenerationId::parse(format!("generation_reject_{sequence}"))?,
         ))
+    }
+
+    #[test]
+    fn browser_identity_is_full_generation_state_but_not_a_materialization_input()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let (path, root, tenant, profile, generation) = fixture()?;
+        let workspace = root.create_generation(&tenant, &profile, &generation)?;
+        std::fs::write(workspace.path().join("camoufox-config.json"), b"{}\n")?;
+        let before_materialization = workspace.materialization_inventory_digest()?;
+        let before_full = workspace.inventory()?;
+
+        std::fs::write(
+            workspace.path().join(BROWSER_IDENTITY_RECORD_FILE),
+            b"canonical-browser-identity\n",
+        )?;
+
+        assert_eq!(
+            workspace.materialization_inventory_digest()?,
+            before_materialization
+        );
+        let after_full = workspace.inventory()?;
+        assert_ne!(after_full, before_full);
+        assert!(
+            after_full
+                .entries()
+                .iter()
+                .any(|entry| entry.relative_path() == BROWSER_IDENTITY_RECORD_FILE)
+        );
+        let _ = crate::test_support::remove_test_root(&path);
+        Ok(())
     }
 
     #[test]

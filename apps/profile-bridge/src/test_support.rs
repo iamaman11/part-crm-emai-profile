@@ -1,3 +1,5 @@
+include!("browser_identity_test_fixture.rs");
+
 use std::path::Path;
 
 pub fn remove_test_root(path: &Path) -> Result<(), std::io::Error> {
