@@ -20,126 +20,124 @@ from typing import Any
 
 DIAGNOSTIC_PROBE = r"""
 (request) => {
-  const typedArrayConstructors = new Map([
-    ['[object Int8Array]', Int8Array],
-    ['[object Uint8Array]', Uint8Array],
-    ['[object Uint8ClampedArray]', Uint8ClampedArray],
-    ['[object Int16Array]', Int16Array],
-    ['[object Uint16Array]', Uint16Array],
-    ['[object Int32Array]', Int32Array],
-    ['[object Uint32Array]', Uint32Array],
-    ['[object Float32Array]', Float32Array],
-    ['[object Float64Array]', Float64Array],
-  ]);
+  // Playwright's Firefox evaluation sandbox sees WebGL-returned TypedArrays through Xray
+  // wrappers. Read and normalize them in the blank page's own realm, serialize there, and
+  // transfer only the resulting primitive JSON string back across the Xray boundary.
+  const requestId = '__s0_webgl_request__';
+  const resultId = '__s0_webgl_result__';
+  for (const id of [requestId, resultId]) {
+    const prior = document.getElementById(id);
+    if (prior) prior.remove();
+  }
 
-  // Playwright 1.60.0 uses TypedArray.toBase64() specifically because Firefox forbids
-  // iterating WebGL-returned TypedArrays across Xrays. Reconstruct a local typed array from
-  // those exact bytes before reading values; this is transport observation, not identity logic.
-  const cloneTypedArrayIntoCallerRealm = (value) => {
-    const tag = Object.prototype.toString.call(value);
-    const Constructor = typedArrayConstructors.get(tag);
-    if (!Constructor) throw new Error(`unsupported TypedArray tag: ${tag}`);
-    if (!('toBase64' in value) || typeof value.toBase64 !== 'function') {
-      throw new Error(`TypedArray.toBase64 unavailable for ${tag}`);
-    }
-    const binary = atob(value.toBase64());
-    const bytes = new Uint8Array(binary.length);
-    for (let index = 0; index < binary.length; index += 1) {
-      bytes[index] = binary.charCodeAt(index);
-    }
-    return {local: new Constructor(bytes.buffer), type: Constructor.name};
-  };
+  const requestNode = document.createElement('script');
+  requestNode.id = requestId;
+  requestNode.type = 'application/json';
+  requestNode.textContent = JSON.stringify(request);
 
-  const normalize = (value) => {
-    if (value === undefined) return null;
-    if (value === null || typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
-      return value;
-    }
-    if (Array.isArray(value)) return Array.from(value, normalize);
-    if (ArrayBuffer.isView(value)) {
-      return Array.from(cloneTypedArrayIntoCallerRealm(value).local, normalize);
-    }
-    if (typeof value === 'object') {
-      const output = {};
-      for (const [key, nested] of Object.entries(value)) output[key] = normalize(nested);
-      return output;
-    }
-    return null;
-  };
+  const resultNode = document.createElement('script');
+  resultNode.id = resultId;
+  resultNode.type = 'application/json';
+  resultNode.textContent = '';
 
-  const jsType = (value) => {
-    if (value === null) return 'null';
-    if (ArrayBuffer.isView(value)) return cloneTypedArrayIntoCallerRealm(value).type;
-    if (Array.isArray(value)) return 'Array';
-    return typeof value;
-  };
-
-  const errorFields = (phase, error) => ({
-    error_phase: phase,
-    error_name: error && error.name ? String(error.name) : 'Error',
-    error_message: error && error.message ? String(error.message) : '',
-  });
-
-  const inspect = (kind, configured) => {
-    const canvas = document.createElement('canvas');
-    const gl = canvas.getContext(kind);
-    if (!gl) return {available: false, rows: []};
-    const rows = [];
-    for (const [key, expected] of Object.entries(configured)) {
-      const numericKey = Number(key);
-      const glEnum = Number.isInteger(numericKey) ? numericKey : gl[key];
-      if (!Number.isInteger(glEnum)) {
-        rows.push({key, configured: normalize(expected), observed: null, js_type: 'unresolved-enum', equal: false});
-        continue;
-      }
-
-      let raw;
+  const runner = document.createElement('script');
+  runner.textContent = `
+    (() => {
+      const requestNode = document.getElementById('${requestId}');
+      const resultNode = document.getElementById('${resultId}');
+      const write = (value) => { resultNode.textContent = JSON.stringify(value); };
       try {
-        raw = gl.getParameter(glEnum);
-      } catch (error) {
-        rows.push({
-          key,
-          configured: normalize(expected),
-          observed: null,
-          js_type: 'exception',
-          equal: false,
-          ...errorFields('getParameter', error),
+        const request = JSON.parse(requestNode.textContent);
+        const normalize = (value) => {
+          if (value === undefined) return null;
+          if (value === null || typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
+            return value;
+          }
+          if (Array.isArray(value) || ArrayBuffer.isView(value)) return Array.from(value, normalize);
+          if (typeof value === 'object') {
+            const output = {};
+            for (const [key, nested] of Object.entries(value)) output[key] = normalize(nested);
+            return output;
+          }
+          return null;
+        };
+        const jsType = (value) => {
+          if (value === null) return 'null';
+          if (ArrayBuffer.isView(value)) {
+            const ctor = value.constructor;
+            return ctor && typeof ctor.name === 'string' && ctor.name ? ctor.name : 'TypedArray';
+          }
+          if (Array.isArray(value)) return 'Array';
+          return typeof value;
+        };
+        const errorFields = (phase, error) => ({
+          error_phase: phase,
+          error_name: error && error.name ? String(error.name) : 'Error',
+          error_message: error && error.message ? String(error.message) : '',
         });
-        continue;
-      }
-
-      let observed;
-      let observedType;
-      try {
-        observedType = jsType(raw);
-        observed = normalize(raw);
-      } catch (error) {
-        rows.push({
-          key,
-          configured: normalize(expected),
-          observed: null,
-          js_type: 'exception',
-          equal: false,
-          ...errorFields('normalize', error),
+        const inspect = (kind, configured) => {
+          const canvas = document.createElement('canvas');
+          const gl = canvas.getContext(kind);
+          if (!gl) return {available: false, rows: []};
+          const rows = [];
+          for (const [key, expected] of Object.entries(configured)) {
+            const numericKey = Number(key);
+            const glEnum = Number.isInteger(numericKey) ? numericKey : gl[key];
+            if (!Number.isInteger(glEnum)) {
+              rows.push({key, configured: normalize(expected), observed: null, js_type: 'unresolved-enum', equal: false});
+              continue;
+            }
+            let raw;
+            try {
+              raw = gl.getParameter(glEnum);
+            } catch (error) {
+              rows.push({key, configured: normalize(expected), observed: null, js_type: 'exception', equal: false, ...errorFields('getParameter', error)});
+              continue;
+            }
+            let observed;
+            let observedType;
+            try {
+              observedType = jsType(raw);
+              observed = normalize(raw);
+            } catch (error) {
+              rows.push({key, configured: normalize(expected), observed: null, js_type: 'exception', equal: false, ...errorFields('normalize', error)});
+              continue;
+            }
+            rows.push({
+              key,
+              configured: normalize(expected),
+              observed,
+              js_type: observedType,
+              equal: JSON.stringify(normalize(expected)) === JSON.stringify(observed),
+            });
+          }
+          return {available: true, rows};
+        };
+        write({
+          webgl: inspect('webgl', request.webgl),
+          webgl2: inspect('webgl2', request.webgl2),
         });
-        continue;
+      } catch (error) {
+        write({
+          bridge_error: {
+            name: error && error.name ? String(error.name) : 'Error',
+            message: error && error.message ? String(error.message) : '',
+          },
+        });
       }
+    })();
+  `;
 
-      rows.push({
-        key,
-        configured: normalize(expected),
-        observed,
-        js_type: observedType,
-        equal: JSON.stringify(normalize(expected)) === JSON.stringify(observed),
-      });
-    }
-    return {available: true, rows};
-  };
-
-  return {
-    webgl: inspect('webgl', request.webgl),
-    webgl2: inspect('webgl2', request.webgl2),
-  };
+  const host = document.documentElement || document.head || document.body;
+  host.appendChild(requestNode);
+  host.appendChild(resultNode);
+  host.appendChild(runner);
+  const encoded = resultNode.textContent;
+  runner.remove();
+  requestNode.remove();
+  resultNode.remove();
+  if (!encoded) throw new Error('content-realm WebGL bridge produced no result');
+  return JSON.parse(encoded);
 }
 """
 
@@ -214,8 +212,9 @@ def main() -> int:
                 with contextlib.suppress(BaseException):
                     camouhost.close_context(manager, context, root)
 
-    if not isinstance(result, dict):
-        raise RuntimeError("diagnostic browser result is invalid")
+    if not isinstance(result, dict) or "bridge_error" in result:
+        canonical_line("S0_WEBGL_PARAMETER_BRIDGE_ERROR", result)
+        return 1
 
     total_rows = 0
     typed_array_rows = 0
