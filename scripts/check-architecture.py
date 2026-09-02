@@ -19,6 +19,7 @@ PURE_CRATE_ALLOWLISTS: dict[str, set[str]] = {
     "client-domain": {"profile-platform-primitives", "contracts", "zeroize"},
     "device-domain": {"profile-platform-primitives"},
     "browser-execution-domain": {"profile-platform-primitives"},
+    "capability-policy": set(),
     "profile-domain": {"profile-platform-primitives", "contracts"},
     "session-domain": {"profile-platform-primitives", "contracts"},
     "mailbox-domain": {"profile-platform-primitives", "contracts"},
@@ -94,6 +95,8 @@ PURE_CRATE_ALLOWLISTS: dict[str, set[str]] = {
     },
 }
 
+OUTER_ADAPTER_CRATES = {"cloudflare-adapters"}
+
 FORBIDDEN_DEPENDENCIES = {
     "worker",
     "worker-sys",
@@ -112,6 +115,7 @@ DEPENDENCY_SECTIONS = ("dependencies", "dev-dependencies", "build-dependencies")
 NEGATIVE_PURE_FIXTURES = (
     Path("tests/architecture/fixtures/forbidden-domain"),
     Path("tests/architecture/fixtures/forbidden-query"),
+    Path("tests/architecture/fixtures/unclassified-crate"),
 )
 PHASE2G_POLICY = Path("scripts/check-phase2g-realtime-boundaries.py")
 PHASE2H_POLICY = Path("scripts/check-phase2h-ui-boundaries.py")
@@ -161,7 +165,12 @@ def check(root: Path) -> list[str]:
     if not manifests:
         return [f"no crate manifests found below {root / 'crates'}"]
 
-    seen: set[str] = set()
+    classification_overlap = set(PURE_CRATE_ALLOWLISTS) & OUTER_ADAPTER_CRATES
+    if classification_overlap:
+        errors.append(f"crate architecture classifications overlap: {sorted(classification_overlap)}")
+
+    seen_pure: set[str] = set()
+    seen_outer_adapters: set[str] = set()
     for manifest in manifests:
         with manifest.open("rb") as handle:
             document = tomllib.load(handle)
@@ -170,21 +179,28 @@ def check(root: Path) -> list[str]:
             errors.append(f"{manifest}: missing package.name")
             continue
         name = package["name"]
-        if name not in PURE_CRATE_ALLOWLISTS:
+        if name in PURE_CRATE_ALLOWLISTS:
+            seen_pure.add(name)
+            dependencies = dependency_names(document)
+            forbidden = dependencies & FORBIDDEN_DEPENDENCIES
+            if forbidden:
+                errors.append(f"{manifest}: forbidden provider/runtime dependencies: {sorted(forbidden)}")
+            unexpected = dependencies - PURE_CRATE_ALLOWLISTS[name]
+            if unexpected:
+                errors.append(f"{manifest}: dependencies outside pure allowlist: {sorted(unexpected)}")
             continue
-        seen.add(name)
-        dependencies = dependency_names(document)
-        forbidden = dependencies & FORBIDDEN_DEPENDENCIES
-        if forbidden:
-            errors.append(f"{manifest}: forbidden provider/runtime dependencies: {sorted(forbidden)}")
-        unexpected = dependencies - PURE_CRATE_ALLOWLISTS[name]
-        if unexpected:
-            errors.append(f"{manifest}: dependencies outside pure allowlist: {sorted(unexpected)}")
+        if name in OUTER_ADAPTER_CRATES:
+            seen_outer_adapters.add(name)
+            continue
+        errors.append(f"{manifest}: unclassified crate package: {name}")
 
     if root.resolve() == Path.cwd().resolve():
-        missing = set(PURE_CRATE_ALLOWLISTS) - seen
-        if missing:
-            errors.append(f"missing governed pure crates: {sorted(missing)}")
+        missing_pure = set(PURE_CRATE_ALLOWLISTS) - seen_pure
+        if missing_pure:
+            errors.append(f"missing governed pure crates: {sorted(missing_pure)}")
+        missing_outer_adapters = OUTER_ADAPTER_CRATES - seen_outer_adapters
+        if missing_outer_adapters:
+            errors.append(f"missing governed outer adapter crates: {sorted(missing_outer_adapters)}")
         try:
             ledger = load_ledger(root / "architecture" / "accepted-phases.json")
             provenance_self_test(ledger)
