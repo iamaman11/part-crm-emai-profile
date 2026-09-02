@@ -11,7 +11,6 @@ accepted only by immutable 40-hex commit SHA. Checkout credentials never persist
 from __future__ import annotations
 
 import argparse
-import json
 import re
 import sys
 from pathlib import Path
@@ -22,39 +21,34 @@ EXACT_MERGE_SOURCE_REF = "${{ github.event.pull_request.merge_commit_sha }}"
 FULL_SHA = re.compile(r"[0-9a-fA-F]{40}")
 USES_PATTERN = re.compile(r"^(?P<indent>\s*)uses:\s*(?P<target>[^\s#]+)", re.MULTILINE)
 PULL_REQUEST_PATTERN = re.compile(r"^  pull_request:\s*(?:#.*)?$", re.MULTILINE)
+PULL_REQUEST_CLOSED_PATTERN = re.compile(r"^\s{4}types:\s*\[closed\]\s*(?:#.*)?$", re.MULTILINE)
 PULL_REQUEST_TARGET_PATTERN = re.compile(r"^  pull_request_target:\s*(?:#.*)?$", re.MULTILINE)
 EXACT_VERIFY_STEP = "- name: Verify exact source checkout"
 EXACT_VERIFY_COMMAND = "python -c \"import os, subprocess; actual = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(); expected = os.environ['EXPECTED_SOURCE_SHA']; assert actual == expected, f'expected {expected}, got {actual}'\""
 POST_MERGE_VERIFY_STEP = "- name: Verify exact accepted merge checkout"
 POST_MERGE_VERIFY_COMMAND = 'test "$(git rev-parse HEAD)" = "$MERGE_SHA"'
-REGISTRY = Path("architecture/github-actions-registry.json")
-POST_MERGE_CATEGORY = "POST_MERGE_METADATA"
 
 
 def workflow_files(root: Path) -> list[Path]:
     workflow_root = root / ".github" / "workflows"
     if not workflow_root.is_dir():
         raise ValueError(f"workflow directory is missing: {workflow_root}")
-    return sorted(path for path in workflow_root.iterdir() if path.is_file() and path.suffix in {".yml", ".yaml"})
+    paths = sorted(path for path in workflow_root.iterdir() if path.is_file() and path.suffix in {".yml", ".yaml"})
+    if not paths:
+        raise ValueError("tracked workflow source must contain at least one workflow")
+    return paths
+
+
+def is_post_merge_metadata(text: str) -> bool:
+    return bool(PULL_REQUEST_PATTERN.search(text) and PULL_REQUEST_CLOSED_PATTERN.search(text))
 
 
 def post_merge_metadata_paths(root: Path) -> set[str]:
-    registry = root / REGISTRY
-    if not registry.is_file():
-        return set()
-    payload = json.loads(registry.read_text(encoding="utf-8"))
-    registrations = payload.get("active_registrations", [])
-    if not isinstance(registrations, list):
-        raise ValueError(f"{REGISTRY}: active_registrations must be a list")
     result: set[str] = set()
-    for row in registrations:
-        if not isinstance(row, dict):
-            raise ValueError(f"{REGISTRY}: registration must be an object")
-        if row.get("category") == POST_MERGE_CATEGORY:
-            workflow_path = row.get("path")
-            if not isinstance(workflow_path, str):
-                raise ValueError(f"{REGISTRY}: POST_MERGE_METADATA path must be a string")
-            result.add(workflow_path)
+    for path in workflow_files(root):
+        text = path.read_text(encoding="utf-8")
+        if is_post_merge_metadata(text):
+            result.add(path.relative_to(root).as_posix())
     return result
 
 
@@ -72,7 +66,7 @@ def checkout_block(lines: list[str], uses_index: int, uses_indent: int) -> str:
 def validate_post_merge_metadata(relative: Path, text: str, checkout_count: int) -> list[str]:
     errors: list[str] = []
     label = relative.as_posix()
-    if not re.search(r"^\s{4}types:\s*\[closed\]\s*(?:#.*)?$", text, re.MULTILINE):
+    if not PULL_REQUEST_CLOSED_PATTERN.search(text):
         errors.append(f"{label}: POST_MERGE_METADATA must trigger only on pull_request types: [closed]")
     if "github.event.pull_request.merged == true" not in text:
         errors.append(f"{label}: POST_MERGE_METADATA must fail closed unless pull_request.merged == true")
@@ -127,12 +121,17 @@ jobs:
     return any("forbidden source/provider mutation marker 'git push " in error for error in errors)
 
 
+def post_merge_classification_self_test() -> bool:
+    closed_only = "on:\n  pull_request:\n    types: [closed]\n"
+    candidate = "on:\n  pull_request:\n    branches: [main]\n"
+    return is_post_merge_metadata(closed_only) and not is_post_merge_metadata(candidate)
+
+
 def validate(root: Path) -> list[str]:
     errors: list[str] = []
     checkout_occurrences = 0
     external_action_occurrences = 0
     post_merge_paths = post_merge_metadata_paths(root)
-    observed_post_merge: set[str] = set()
 
     for path in workflow_files(root):
         text = path.read_text(encoding="utf-8")
@@ -140,8 +139,6 @@ def validate(root: Path) -> list[str]:
         relative_name = relative.as_posix()
         has_pull_request = bool(PULL_REQUEST_PATTERN.search(text))
         is_post_merge = relative_name in post_merge_paths
-        if is_post_merge:
-            observed_post_merge.add(relative_name)
         if PULL_REQUEST_TARGET_PATTERN.search(text):
             errors.append(f"{relative}: pull_request_target is forbidden; use unprivileged pull_request plus trusted post-merge jobs")
         if is_post_merge and not has_pull_request:
@@ -195,10 +192,10 @@ def validate(root: Path) -> list[str]:
                         f"checkouts={pr_checkout_count}, steps={verify_step_count}, commands={verify_command_count}"
                     )
 
-    for relative in sorted(post_merge_paths - observed_post_merge):
-        errors.append(f"{relative}: POST_MERGE_METADATA registration has no tracked workflow file")
     if len(post_merge_paths) > 1:
-        errors.append(f"POST_MERGE_METADATA workflow authority must be singular; observed={len(post_merge_paths)}")
+        errors.append(f"POST_MERGE_METADATA source classification must be singular; observed={len(post_merge_paths)}")
+    if not post_merge_classification_self_test():
+        errors.append("POST_MERGE_METADATA source-classification negative fixture unexpectedly passed")
     if not post_merge_negative_self_test():
         errors.append("POST_MERGE_METADATA branch-push negative fixture unexpectedly passed")
     if checkout_occurrences == 0:
@@ -218,7 +215,7 @@ def main() -> int:
     args = parse_args()
     try:
         errors = validate(args.root.resolve())
-    except (OSError, ValueError, json.JSONDecodeError) as error:
+    except (OSError, ValueError) as error:
         print(f"GitHub Actions policy failed: {error}", file=sys.stderr)
         return 1
     if errors:
