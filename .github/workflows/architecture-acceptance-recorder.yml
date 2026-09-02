@@ -202,16 +202,19 @@ jobs:
           if missing or failed:
               raise SystemExit(f'required exact-head contexts incomplete: missing={missing}, failed={failed}')
 
-          registry = json.loads(Path('architecture/github-actions-registry.json').read_text(encoding='utf-8'))
-          permanent = {row['path'] for row in registry.get('active_registrations', []) if row.get('category') == 'PERMANENT_REQUIRED'}
+          workflow_root = Path('.github/workflows')
+          if not workflow_root.is_dir():
+              raise SystemExit('tracked workflow source directory is missing')
           applicable_expected = set()
           trigger_pattern = re.compile(r'^  pull_request:\s*(?:#.*)?$', re.MULTILINE)
-          for workflow_path in permanent:
-              body = Path(workflow_path).read_text(encoding='utf-8')
-              if trigger_pattern.search(body):
-                  applicable_expected.add(workflow_path)
+          closed_only_pattern = re.compile(r'^\s{4}types:\s*\[closed\]\s*(?:#.*)?$', re.MULTILINE)
+          workflow_files = sorted(list(workflow_root.glob('*.yml')) + list(workflow_root.glob('*.yaml')))
+          for workflow_path in workflow_files:
+              body = workflow_path.read_text(encoding='utf-8')
+              if trigger_pattern.search(body) and not closed_only_pattern.search(body):
+                  applicable_expected.add(workflow_path.as_posix())
           if not applicable_expected:
-              raise SystemExit('canonical registry yields no pull-request-applicable permanent workflows')
+              raise SystemExit('tracked workflow source yields no candidate pull-request workflows')
 
           runs = json.loads(Path('workflow-runs.json').read_text(encoding='utf-8'))
           if runs.get('total_count', 0) > 100:
@@ -225,7 +228,7 @@ jobs:
           missing_runs = sorted(applicable_expected - set(applicable_observed))
           not_green = sorted(workflow_path for workflow_path, run in applicable_observed.items() if run.get('status') != 'completed' or run.get('conclusion') != 'success')
           if missing_runs or not_green:
-              raise SystemExit(f'applicable permanent workflows incomplete: missing={missing_runs}, not_green={not_green}')
+              raise SystemExit(f'applicable candidate workflows incomplete: missing={missing_runs}, not_green={not_green}')
 
           review = json.loads(Path('review-state.json').read_text(encoding='utf-8'))['data']['repository']['pullRequest']
           threads = review['reviewThreads']

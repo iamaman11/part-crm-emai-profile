@@ -11,7 +11,6 @@ const PROMOTION = '.github/workflows/release-set-promotion.yml';
 const TRANSPORT = '.github/workflows/ar11-fc6-operator-transport.yml';
 const OPERATOR = '.github/scripts/ar11-fc6-operator.mjs';
 const ASSET_MATERIALIZER = 'scripts/release-set-assets-ar11.sh';
-const REGISTRY = 'architecture/github-actions-registry.json';
 const AUTHORITY = 'architecture/release-architecture-ar11.json';
 const TRANSACTION = 'docs/evidence/ar11-fc6-operator-transaction.json';
 const LEGACY_FILES = [
@@ -287,7 +286,7 @@ function promotionErrors(promotion) {
 
 function operationalErrors({ requireCutover = true } = {}) {
   const errors = [];
-  for (const relative of [BUILD, PROMOTION, TRANSPORT, OPERATOR, ASSET_MATERIALIZER, REGISTRY, AUTHORITY]) {
+  for (const relative of [BUILD, PROMOTION, TRANSPORT, OPERATOR, ASSET_MATERIALIZER, AUTHORITY]) {
     if (!existsSync(path.join(ROOT, relative))) errors.push(`missing AR-11 operational authority: ${relative}`);
   }
   if (errors.length > 0) return errors;
@@ -300,17 +299,6 @@ function operationalErrors({ requireCutover = true } = {}) {
   errors.push(...promotionErrors(promotion));
   errors.push(...transportErrors(transport));
   errors.push(...operatorScriptErrors(operator));
-
-  const registry = JSON.parse(read(REGISTRY));
-  const workflows = registry.active_registrations ?? [];
-  const buildRows = workflows.filter((row) => row.path === BUILD);
-  const promotionRows = workflows.filter((row) => row.path === PROMOTION);
-  const transportRows = workflows.filter((row) => row.path === TRANSPORT);
-  if (buildRows.length !== 1 || buildRows[0].category !== 'PERMANENT_REQUIRED') errors.push('Release Set build must appear exactly once as PERMANENT_REQUIRED');
-  if (promotionRows.length !== 1 || promotionRows[0].category !== 'CURRENT_MANUAL_OPERATION') errors.push('Release Set promotion must be the single canonical CURRENT_MANUAL_OPERATION');
-  if (transportRows.length !== 1 || transportRows[0].category !== 'PERMANENT_REQUIRED') errors.push('FC-6 operator transport must appear exactly once as PERMANENT_REQUIRED and may not be mutation authority');
-  const manualRows = workflows.filter((row) => row.category === 'CURRENT_MANUAL_OPERATION');
-  if (manualRows.length !== 1) errors.push(`canonical Actions registry must have exactly one manual operation, observed=${manualRows.length}`);
 
   const authority = JSON.parse(read(AUTHORITY));
   if (authority.production_mutation !== false || authority.production_ready !== false || authority.production_core_gate !== 'BLOCKED' || authority.architecture_complete !== false) {

@@ -1,104 +1,10 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "authority": "github-governance",
   "repository": "iamaman11/part-crm-emai-profile",
-  "cleanup_issue": 352,
-  "baseline_evidence": "docs/evidence/2026-08-18-post-ar8c-actions-registry-classification.json",
+  "active_projection": "tracked_workflow_files",
   "historical_inactive_registrations_allowed": true,
   "unexpected_active_registrations_forbidden": true,
   "duplicate_registration_paths_forbidden": true,
-  "active_registrations": [
-    {
-      "path": ".github/workflows/ar11-fc6-operator-transport.yml",
-      "category": "PERMANENT_REQUIRED"
-    },
-    {
-      "path": ".github/workflows/architecture-acceptance-recorder.yml",
-      "category": "POST_MERGE_METADATA"
-    },
-    {
-      "path": ".github/workflows/camoufox-runtime-gate.yml",
-      "category": "PERMANENT_REQUIRED"
-    },
-    {
-      "path": ".github/workflows/certification-gate.yml",
-      "category": "PERMANENT_REQUIRED"
-    },
-    {
-      "path": ".github/workflows/cross-component-acceptance-gate.yml",
-      "category": "PERMANENT_REQUIRED"
-    },
-    {
-      "path": ".github/workflows/d1-evolution-gate.yml",
-      "category": "PERMANENT_REQUIRED"
-    },
-    {
-      "path": ".github/workflows/d1-migration-executor.yml",
-      "category": "PERMANENT_REQUIRED"
-    },
-    {
-      "path": ".github/workflows/encrypted-generation-gate.yml",
-      "category": "PERMANENT_REQUIRED"
-    },
-    {
-      "path": ".github/workflows/external-evidence-gate.yml",
-      "category": "PERMANENT_REQUIRED"
-    },
-    {
-      "path": ".github/workflows/external-readiness-gate.yml",
-      "category": "PERMANENT_REQUIRED"
-    },
-    {
-      "path": ".github/workflows/external-review-attestation-gate.yml",
-      "category": "PERMANENT_REQUIRED"
-    },
-    {
-      "path": ".github/workflows/frontend-gate.yml",
-      "category": "PERMANENT_REQUIRED"
-    },
-    {
-      "path": ".github/workflows/github-governance-gate.yml",
-      "category": "PERMANENT_REQUIRED"
-    },
-    {
-      "path": ".github/workflows/local-profile-gate.yml",
-      "category": "PERMANENT_REQUIRED"
-    },
-    {
-      "path": ".github/workflows/mailbox-secret-resolver-release.yml",
-      "category": "PERMANENT_REQUIRED"
-    },
-    {
-      "path": ".github/workflows/profile-generation-gate.yml",
-      "category": "PERMANENT_REQUIRED"
-    },
-    {
-      "path": ".github/workflows/quality-gate.yml",
-      "category": "PERMANENT_REQUIRED"
-    },
-    {
-      "path": ".github/workflows/release-architecture-gate.yml",
-      "category": "PERMANENT_REQUIRED"
-    },
-    {
-      "path": ".github/workflows/release-set-build.yml",
-      "category": "PERMANENT_REQUIRED"
-    },
-    {
-      "path": ".github/workflows/release-set-promotion.yml",
-      "category": "CURRENT_MANUAL_OPERATION"
-    },
-    {
-      "path": ".github/workflows/repository-quality-audit-gate.yml",
-      "category": "PERMANENT_REQUIRED"
-    },
-    {
-      "path": ".github/workflows/resolver-d1-first-bootstrap.yml",
-      "category": "PERMANENT_REQUIRED"
-    },
-    {
-      "path": ".github/workflows/runtime-bundle-gate.yml",
-      "category": "PERMANENT_REQUIRED"
-    }
-  ]
+  "duplicate_registration_ids_forbidden": true
 }

@@ -13,7 +13,6 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 BASE_AUTHORITY = Path("architecture/credential-authority-ar8b.json")
 AR11_EXTENSION = Path("architecture/credential-authority-ar11-extension.json")
-REGISTRY = Path("architecture/github-actions-registry.json")
 SECRET_RE = re.compile(r"\$\{\{\s*secrets\.([A-Z][A-Z0-9_]*)")
 JOB_RE = re.compile(r"^  ([A-Za-z0-9_-]+):\s*(?:#.*)?$")
 JOB_FIELD_RE = re.compile(r"^    ([A-Za-z0-9_-]+):\s*(.*?)\s*(?:#.*)?$")
@@ -85,21 +84,18 @@ def load_authorities(root: Path) -> tuple[list[dict], dict]:
     return [base, extension], extension
 
 
-def canonical_workflows(registry: dict) -> list[str]:
-    rows = registry.get("active_registrations")
-    if not isinstance(rows, list):
-        raise ValueError("canonical Actions registry active_registrations must be an array")
-    paths: list[str] = []
-    for row in rows:
-        if not isinstance(row, dict) or not isinstance(row.get("path"), str):
-            raise ValueError("canonical Actions registry contains a malformed active registration")
-        path = row["path"]
-        if not path.startswith(WORKFLOW_PREFIX) or not re.search(r"\.ya?ml$", path, re.I):
-            raise ValueError(f"canonical Actions registry contains invalid workflow path: {path}")
-        paths.append(path)
-    if len(paths) != len(set(paths)):
-        raise ValueError("canonical Actions registry contains duplicate workflow paths")
-    return sorted(paths)
+def canonical_workflows(root: Path) -> list[str]:
+    workflow_root = root / WORKFLOW_PREFIX
+    if not workflow_root.is_dir():
+        raise ValueError(f"canonical workflow directory is missing: {WORKFLOW_PREFIX}")
+    paths = sorted(
+        path.relative_to(root).as_posix()
+        for path in workflow_root.iterdir()
+        if path.is_file() and path.suffix.lower() in {".yml", ".yaml"}
+    )
+    if not paths:
+        raise ValueError("canonical workflow source must contain at least one tracked workflow")
+    return paths
 
 
 def bindings_from_authorities(
@@ -515,7 +511,7 @@ def _validate_dynamic_contract(
 
 def validate(root: Path) -> list[str]:
     authorities, extension = load_authorities(root)
-    workflows = canonical_workflows(load_json(root, REGISTRY))
+    workflows = canonical_workflows(root)
     bindings, dynamic_contracts, errors = bindings_from_authorities(authorities, extension)
     references, _workflow_texts, jobs_by_workflow, scan_errors = scan_references(root, workflows)
     errors.extend(scan_errors)
@@ -524,7 +520,7 @@ def validate(root: Path) -> list[str]:
     for (credential_id, workflow), contract in dynamic_contracts.items():
         if workflow not in workflows:
             errors.append(
-                f"governed dynamic environment consumer is not a canonical active workflow: {credential_id} {workflow}"
+                f"governed dynamic environment consumer is not a canonical tracked workflow: {credential_id} {workflow}"
             )
             continue
         errors.extend(
@@ -543,7 +539,7 @@ def validate(root: Path) -> list[str]:
             errors.append(f"secret reference outside a parsed workflow job is forbidden: {label}")
             continue
         if binding is None:
-            errors.append(f"unclassified permanent workflow secret reference: {label}")
+            errors.append(f"unclassified workflow secret reference: {label}")
             continue
         usage[reference.secret].add(reference.workflow)
         if reference.workflow not in binding.consumers:
@@ -631,12 +627,6 @@ def self_test() -> bool:
             }
         ],
     }
-    registry = {
-        "active_registrations": [
-            {"path": ".github/workflows/dynamic.yml", "category": "PERMANENT_REQUIRED"},
-            {"path": ".github/workflows/ok.yml", "category": "CURRENT_MANUAL_OPERATION"},
-        ]
-    }
     dynamic_ok = (
         "jobs:\n"
         "  authorize:\n"
@@ -667,7 +657,6 @@ def self_test() -> bool:
         (root / ".github/workflows").mkdir(parents=True)
         (root / BASE_AUTHORITY).write_text(json.dumps(base), encoding="utf-8")
         (root / AR11_EXTENSION).write_text(json.dumps(extension), encoding="utf-8")
-        (root / REGISTRY).write_text(json.dumps(registry), encoding="utf-8")
         workflow = root / ".github/workflows/ok.yml"
         dynamic = root / ".github/workflows/dynamic.yml"
         workflow.write_text(
@@ -721,7 +710,7 @@ def self_test() -> bool:
             "jobs:\n  observe:\n    environment: staging\n    env:\n      TOKEN: ${{ secrets.UNKNOWN_TOKEN }}\n",
             encoding="utf-8",
         )
-        if not has_error(root, "unclassified permanent workflow secret reference"):
+        if not has_error(root, "unclassified workflow secret reference"):
             return False
 
         workflow.write_text(
