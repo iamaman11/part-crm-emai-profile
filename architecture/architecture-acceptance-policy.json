@@ -31,6 +31,19 @@
     "candidate_tree_equals_merge_tree_required": true,
     "merge_first_parent_equals_premerge_base_required": true
   },
+  "post_merge_proof_lifecycle": {
+    "applies_when_transaction_dod_requires_post_merge_proof": true,
+    "required_order": [
+      "merge",
+      "accepted_main_tree_reread",
+      "post_merge_required_contexts",
+      "required_publication_or_proof",
+      "acceptance_checkpoint",
+      "program_tracker_update",
+      "explicit_owning_issue_close"
+    ],
+    "merge_keyword_auto_close_forbidden": true
+  },
   "required_status_contexts": {
     "sources": [
       {
@@ -80,7 +93,15 @@
       "production_core_gate",
       "production_ready",
       "production_mutation"
-    ]
+    ],
+    "cap_s0_extension": {
+      "tag": "architecture/accepted/cap-s0",
+      "record_schema_version": 2,
+      "validator_command": "node .github/scripts/architecture-acceptance-observer.mjs cap-record --file <record>",
+      "created_only_after_post_merge_proof": true,
+      "production_authorized": false,
+      "provider_mutation_authorized": false
+    }
   },
   "forbidden_forward_patterns": {
     "per_slice_closeout_transformer": true,
