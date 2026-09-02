@@ -58,7 +58,7 @@ jobs:
           build_source_commit = candidate['build_source_commit']
           print(f'ARTIFACT_SHA256={artifact_sha}')
           print(f'BUILD_SOURCE_COMMIT={build_source_commit}')
-          print(f'RELEASE_ID=camoufox-candidate-v1-{target}-sha256-{artifact_sha}')
+          print(f'RELEASE_ID=camoufox-v1-{target}-sha256-{artifact_sha}')
           print(f'ARCHIVE_ASSET=camoufox-{target}.x86_64.zip')
           print(f'PROVENANCE_ASSET=camoufox-{target}.provenance.json')
           PY
