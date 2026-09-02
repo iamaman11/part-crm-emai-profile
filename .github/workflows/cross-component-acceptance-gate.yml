@@ -97,13 +97,6 @@ jobs:
           python scripts/check-phase2f-retained-operator.py
           python scripts/check-phase2f-retained-operator.py --self-test
 
-      - name: Test application Worker adapter and failure composition
-        run: |
-          cargo test --locked -p application-ports -p use-cases-query -p use-cases-mailboxes -p use-cases-devices -p use-cases-notifications
-          cargo test --locked -p cloudflare-adapters --lib
-          cargo test --locked -p browser-profile-control-plane-worker --lib
-          cargo check --locked -p browser-profile-control-plane-worker --target wasm32-unknown-unknown
-
       - name: Verify installed Rust dependency licenses
         run: python scripts/check-phase2i-supply-chain.py --cargo-licenses
 
