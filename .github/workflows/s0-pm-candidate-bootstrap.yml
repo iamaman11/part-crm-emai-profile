@@ -1,0 +1,57 @@
+name: S0-PM Candidate Bootstrap Registration Cleanup
+
+on:
+  push:
+    branches:
+      - cap-exec/s0-pm-durable-candidates
+    paths:
+      - '.github/workflows/s0-pm-candidate-bootstrap.yml'
+
+permissions:
+  actions: write
+  contents: read
+
+jobs:
+  retire-registration:
+    name: Retire orphaned bootstrap registration
+    if: github.repository == 'iamaman11/part-crm-emai-profile' && github.ref == 'refs/heads/cap-exec/s0-pm-durable-candidates'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Disable exact orphan registration and preserve history
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EXPECTED_ID: '348413020'
+          EXPECTED_PATH: '.github/workflows/s0-pm-candidate-bootstrap.yml'
+        run: |
+          set -euo pipefail
+          api="https://api.github.com/repos/$GITHUB_REPOSITORY/actions/workflows/$EXPECTED_ID"
+          auth=(--header "Authorization: Bearer $GH_TOKEN" --header 'Accept: application/vnd.github+json' --header 'X-GitHub-Api-Version: 2022-11-28')
+
+          before="$RUNNER_TEMP/workflow-before.json"
+          code="$(curl --silent --show-error "${auth[@]}" --output "$before" --write-out '%{http_code}' "$api")"
+          test "$code" = '200'
+          test "$(jq -r '.id' "$before")" = "$EXPECTED_ID"
+          test "$(jq -r '.path' "$before")" = "$EXPECTED_PATH"
+          state="$(jq -r '.state' "$before")"
+
+          if [ "$state" = 'active' ]; then
+            code="$(curl --silent --show-error --request PUT "${auth[@]}" --output "$RUNNER_TEMP/disable.txt" --write-out '%{http_code}' "$api/disable")"
+            test "$code" = '204'
+          elif [ "$state" = 'disabled_manually' ] || [ "$state" = 'deleted' ]; then
+            :
+          else
+            echo "Unexpected workflow state for exact orphan: $state" >&2
+            exit 1
+          fi
+
+          after="$RUNNER_TEMP/workflow-after.json"
+          code="$(curl --silent --show-error "${auth[@]}" --output "$after" --write-out '%{http_code}' "$api")"
+          test "$code" = '200'
+          test "$(jq -r '.id' "$after")" = "$EXPECTED_ID"
+          test "$(jq -r '.path' "$after")" = "$EXPECTED_PATH"
+          after_state="$(jq -r '.state' "$after")"
+          test "$after_state" = 'disabled_manually' -o "$after_state" = 'deleted'
+
+          echo "Exact orphan workflow registration $EXPECTED_ID retired as $after_state; historical runs preserved; main workflow surface unchanged." >> "$GITHUB_STEP_SUMMARY"
