@@ -200,6 +200,9 @@ fn validate_known_webgl_parameters(
                 validate_fixed_array(raw, length, validate_bool)?;
             }
             WebGlValueContract::U32Vector => {
+                if raw.is_null() {
+                    continue;
+                }
                 let values = raw
                     .as_array()
                     .ok_or(BrowserLaunchBlocker::InvalidMaterializationEvidence)?;
@@ -380,7 +383,8 @@ mod tests {
         let device = DeviceId::parse("device_01JPREFLIGHT")?;
         let workspace = root.create_generation(&tenant, &profile, &generation)?;
         let lock = BridgeWorkspaceLock::acquire(&workspace, &device, 3)?;
-        let canonical_config = r#"{"webGl:parameters":{"2928":[0.0,1.0],"3107":[true,true,true,true],"34467":[33776,33777]}}"#;
+        let canonical_config =
+            r#"{"webGl:parameters":{"2928":[0.0,1.0],"3107":[true,true,true,true],"34467":null}}"#;
         fs::write(
             workspace.path().join(CAMOUFOX_CONFIG_FILE),
             canonical_config,
@@ -475,7 +479,6 @@ mod tests {
             json!({"webGl:parameters": {"3107": [true, true, true, 1]}}),
             json!({"webGl:parameters": {"3386": [2_147_483_648_u64, 1]}}),
             json!({"webGl:parameters": {"2928": [3.5e38, 1.0]}}),
-            json!({"webGl:parameters": {"34467": null}}),
             json!({"webGl:parameters": {"34467": 33776}}),
             json!({"webGl:parameters": {"34467": {"unexpected": 33776}}}),
             json!({"webGl:parameters": {"34467": [-1, 4_294_967_296_u64]}}),
@@ -502,7 +505,7 @@ mod tests {
                 "3088": [0, 0, 1920, 1080],
                 "2978": [0, 0, 1920, 1080],
                 "3107": [true, true, true, true],
-                "34467": [33776, 33777]
+                "34467": null
             },
             "webGl2:parameters": {
                 "2928": [0.0, 1.0],
