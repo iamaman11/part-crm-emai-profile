@@ -82,12 +82,97 @@
       "production_mutation"
     ]
   },
+  "cap_s0_acceptance": {
+    "kind": "CAP_S0_ACCEPTANCE",
+    "transaction": "CAP-EXEC S0-PM",
+    "tag": "architecture/accepted/cap-s0",
+    "record_schema_version": 2,
+    "owning_issue": 539,
+    "original_s0_issue": 535,
+    "implementation_pr": 536,
+    "repair_pr": 549,
+    "repair_pr_title": "CAP-EXEC S0-PM — acceptance and governance hardening",
+    "repair_head_branch": "cap-exec/s0-pm-acceptance-governance",
+    "repair_merge_method": "merge",
+    "source_candidate_sha": "2916a748791a720e7fb69cd03e46fcd4f5e1297e",
+    "source_candidate_tree": "7db3e63fe3fd4fa4d1235dc248a0ca6df9f45680",
+    "ec_namespace": "EC-S0-01..18",
+    "ec_result": "PASS",
+    "ec_unknown_count": 0,
+    "evidence_refs": [
+      {
+        "issue": 535,
+        "comment": 5503815303,
+        "role": "S0_FINAL_CANDIDATE_EC_ACCEPTANCE"
+      },
+      {
+        "issue": 539,
+        "comment": 5511460803,
+        "role": "S0_PM2_REPRODUCIBILITY_ACCEPTANCE"
+      }
+    ],
+    "camoufox_lock": "runtime/camouhost/camoufox-patch-lock.json",
+    "post_merge_trigger_workflow": "Camoufox Runtime Gate",
+    "release_workflow": "Release Set Build",
+    "release_tag_prefix": "release-set-v3-sha256-",
+    "required_contexts_source": "architecture/github-governance.json#/main/required_checks",
+    "production_authorized": false,
+    "provider_mutation_authorized": false,
+    "required_fields": [
+      "kind",
+      "transaction",
+      "owning_issue",
+      "original_s0_issue",
+      "implementation_pr",
+      "repair_pr",
+      "repair_base_sha",
+      "source_candidate_sha",
+      "source_candidate_tree",
+      "repair_candidate_sha",
+      "repair_candidate_tree",
+      "accepted_main_sha",
+      "accepted_main_tree",
+      "upstream_camoufox_commit",
+      "patch_sha256",
+      "camoufox_candidate_sha256",
+      "release_set_id",
+      "ec_namespace",
+      "ec_result",
+      "ec_unknown_count",
+      "evidence_refs",
+      "required_status_contexts_total",
+      "required_status_contexts_success",
+      "post_merge_required_contexts",
+      "release_publication",
+      "production_authorized",
+      "provider_mutation_authorized"
+    ]
+  },
+  "post_merge_lifecycle": {
+    "applies_when_definition_of_done_requires_post_merge_proof": true,
+    "ordered_steps": [
+      "merge",
+      "verify_main_tree",
+      "post_merge_required_checks",
+      "required_publication_proof",
+      "acceptance_checkpoint",
+      "tracker_update",
+      "explicit_owning_issue_close"
+    ],
+    "acceptance_checkpoint_storage": "existing_annotated_git_tag_authority",
+    "tracker_update_before_acceptance_forbidden": true,
+    "owning_issue_close_before_acceptance_forbidden": true,
+    "merge_keyword_auto_close_for_owning_issue_forbidden": true,
+    "acceptance_writer_may_update_tracker": false,
+    "acceptance_writer_may_close_issue": false
+  },
   "forbidden_forward_patterns": {
     "per_slice_closeout_transformer": true,
     "temporary_self_writing_closeout_workflow": true,
     "second_source_pr_only_to_record_acceptance": true,
     "acceptance_workflow_branch_push": true,
     "force_moved_acceptance_tag": true,
-    "manual_duplicate_current_slice_authority": true
+    "manual_duplicate_current_slice_authority": true,
+    "merge_keyword_auto_close_when_post_merge_proof_required": true
   }
 }
