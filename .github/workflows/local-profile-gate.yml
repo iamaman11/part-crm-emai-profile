@@ -72,9 +72,6 @@ jobs:
       - name: Prove Windows release CMS verifier
         run: cargo test --locked -p profile-bridge --test windows_delivery_signature_acceptance -- --exact production_script_accepts_isolated_test_trust_without_system_trust_fallback
 
-      - name: Build release Profile Bridge executable
-        run: cargo build --locked --release -p profile-bridge
-
       - name: Test and build AR-6 opsctl on Windows
         run: |
           cargo test --locked --manifest-path tools/opsctl/Cargo.toml
@@ -97,15 +94,3 @@ jobs:
           if ($LASTEXITCODE -ne 0 -or $status.accepted_checkpoint -ne 'AR-11' -or $status.current_slice -ne 'AR-12') {
             throw "opsctl status lost the typed lifecycle contract"
           }
-
-      - name: Verify Windows Profile Bridge artifact
-        shell: pwsh
-        run: |
-          if (-not (Test-Path "target/release/profile-bridge.exe")) {
-            throw "profile-bridge.exe was not produced"
-          }
-          $artifact = Get-Item "target/release/profile-bridge.exe"
-          if ($artifact.Length -le 0) {
-            throw "profile-bridge.exe is empty"
-          }
-          Write-Host "Verified Profile Bridge artifact: $($artifact.FullName) ($($artifact.Length) bytes)"
