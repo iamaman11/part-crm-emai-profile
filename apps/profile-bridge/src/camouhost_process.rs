@@ -737,7 +737,7 @@ fn host_compatibility_policy()
 
     #[cfg(all(not(windows), target_os = "linux"))]
     {
-        let policy = HostCompatibilityPolicy::repository_linux_virtual_headful()
+        let policy = HostCompatibilityPolicy::repository_linux_headful()
             .map_err(|_| BridgePortError::InvalidResponse)?;
         Ok((
             policy,

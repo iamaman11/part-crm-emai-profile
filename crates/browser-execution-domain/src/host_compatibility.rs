@@ -189,12 +189,12 @@ impl HostCompatibilityPolicy {
         )
     }
 
-    pub fn repository_linux_virtual_headful() -> Result<Self, HostCompatibilityPolicyError> {
+    pub fn repository_linux_headful() -> Result<Self, HostCompatibilityPolicyError> {
         Self::new(
             [HostPlatformClass::Linux],
             [HostArchitecture::X86_64],
             [HostRuntimeClass::RepositoryPinnedCamoufox],
-            [HostExecutionMode::VirtualHeadful],
+            [HostExecutionMode::Headful],
             [HostGraphicsBackend::WebGlAndWebGl2],
         )
     }
@@ -323,22 +323,50 @@ mod tests {
     }
 
     #[test]
-    fn repository_linux_policy_is_not_a_windows_shipping_fallback()
+    fn repository_linux_headful_policy_is_not_a_virtual_or_windows_fallback()
     -> Result<(), Box<dyn std::error::Error>> {
-        let policy = HostCompatibilityPolicy::repository_linux_virtual_headful()?;
-        let observation = HostCompatibilityObservation::prelaunch(
-            HostPlatformClass::Windows,
+        let policy = HostCompatibilityPolicy::repository_linux_headful()?;
+        let accepted = HostCompatibilityObservation::prelaunch(
+            HostPlatformClass::Linux,
             HostArchitecture::X86_64,
-            HostRuntimeClass::PackagedCamoufox,
+            HostRuntimeClass::RepositoryPinnedCamoufox,
             HostExecutionMode::Headful,
             1_800_000_000_000,
             true,
         )
         .with_runtime_evidence(true, display(), HostGraphicsBackend::WebGlAndWebGl2);
         assert_eq!(
-            policy.evaluate(&observation),
-            HostCompatibilityDecision::IncompatibleHost
+            policy.evaluate(&accepted),
+            HostCompatibilityDecision::Accepted
         );
+        for rejected in [
+            HostCompatibilityObservation::prelaunch(
+                HostPlatformClass::Linux,
+                HostArchitecture::X86_64,
+                HostRuntimeClass::RepositoryPinnedCamoufox,
+                HostExecutionMode::VirtualHeadful,
+                1_800_000_000_000,
+                true,
+            ),
+            HostCompatibilityObservation::prelaunch(
+                HostPlatformClass::Windows,
+                HostArchitecture::X86_64,
+                HostRuntimeClass::PackagedCamoufox,
+                HostExecutionMode::Headful,
+                1_800_000_000_000,
+                true,
+            ),
+        ] {
+            let rejected = rejected.with_runtime_evidence(
+                true,
+                display(),
+                HostGraphicsBackend::WebGlAndWebGl2,
+            );
+            assert_eq!(
+                policy.evaluate(&rejected),
+                HostCompatibilityDecision::IncompatibleHost
+            );
+        }
         Ok(())
     }
 
