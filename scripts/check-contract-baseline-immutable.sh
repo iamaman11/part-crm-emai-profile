@@ -9,7 +9,7 @@ if [[ "${GITHUB_EVENT_NAME:-}" != "pull_request" ]]; then
 fi
 
 base_ref="${GITHUB_BASE_REF:?GITHUB_BASE_REF is required for pull requests}"
-git fetch --no-tags --depth=1 origin "${base_ref}"
+git fetch --no-tags origin "+refs/heads/${base_ref}:refs/remotes/origin/${base_ref}"
 
 baseline_marker="contracts/baseline/openapi/v1/openapi.json"
 if git cat-file -e "origin/${base_ref}:${baseline_marker}" 2>/dev/null; then
