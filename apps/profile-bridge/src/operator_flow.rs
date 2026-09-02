@@ -546,11 +546,7 @@ where
             &runtime_bundle,
         ) {
             let reason = B::operational_rejection_reason(&error);
-            return Err(self.fail_preflight_with_lock_before_use(
-                reason,
-                lease,
-                workspace_lock,
-            ));
+            return Err(self.fail_preflight_with_lock_before_use(reason, lease, workspace_lock));
         }
         let inventory = match workspace.inventory() {
             Ok(value) => value,
