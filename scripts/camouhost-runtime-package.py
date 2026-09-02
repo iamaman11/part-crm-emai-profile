@@ -187,6 +187,13 @@ def safe_runtime_relative(root: Path, path: Path) -> str:
     return relative
 
 
+def register_casefold_unique_path(relative: str, observed: set[str]) -> None:
+    alias = relative.casefold()
+    if alias in observed:
+        fail(f"materialized runtime contains case-alias path: {relative}")
+    observed.add(alias)
+
+
 def runtime_tree_files(runtime_root: Path) -> list[tuple[str, Path]]:
     if runtime_root.is_symlink() or not runtime_root.is_dir():
         fail("materialized runtime root must be a real directory")
@@ -202,10 +209,7 @@ def runtime_tree_files(runtime_root: Path) -> list[tuple[str, Path]]:
         if not path.is_file():
             fail(f"materialized runtime contains special entry: {path}")
         relative = safe_runtime_relative(runtime_root, path)
-        alias = relative.casefold()
-        if alias in observed:
-            fail(f"materialized runtime contains case-alias path: {relative}")
-        observed.add(alias)
+        register_casefold_unique_path(relative, observed)
         total += path.stat().st_size
         if total > MAX_RUNTIME_BYTES:
             fail("materialized runtime exceeds bounded size")
@@ -405,12 +409,10 @@ def self_test() -> None:
         else:
             fail("invalid source SHA negative self-test unexpectedly passed")
 
-        unsafe_root = temp / "unsafe"
-        write_fixture_runtime(unsafe_root)
-        (unsafe_root / "alias.txt").write_bytes(b"one")
-        (unsafe_root / "ALIAS.TXT").write_bytes(b"two")
+        observed = set()
+        register_casefold_unique_path("alias.txt", observed)
         try:
-            runtime_tree_files(unsafe_root)
+            register_casefold_unique_path("ALIAS.TXT", observed)
         except RuntimePackageError:
             pass
         else:
