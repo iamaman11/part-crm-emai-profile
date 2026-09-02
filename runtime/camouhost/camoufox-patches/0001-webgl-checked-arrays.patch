@@ -90,7 +90,7 @@
    }
    return defaultValue;
  }
-@@ -250,16 +311,55 @@
+@@ -250,16 +311,58 @@
  inline std::vector<T> MParamGLVector(uint32_t pname,
                                       std::vector<T> defaultValue,
                                       bool isWebGL2) {
@@ -109,6 +109,9 @@
 +  }
 +
 +  const auto& raw = value.value();
++  if (raw.is_null()) {
++    return defaultValue;
++  }
 +  MOZ_RELEASE_ASSERT(raw.is_array(),
 +                     "Camoufox WebGL vector config has invalid shape");
 +  std::vector<T> result;
