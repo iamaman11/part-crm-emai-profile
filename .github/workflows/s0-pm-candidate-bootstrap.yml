@@ -104,6 +104,7 @@ jobs:
             cmp "$source_dir/$PROVENANCE_ASSET" "$durable_dir/$PROVENANCE_ASSET"
             echo "Durable candidate already exists and is byte-identical: $RELEASE_ID"
           else
+            git fetch --no-tags --depth=1 origin "$BUILD_SOURCE_COMMIT"
             git cat-file -e "${BUILD_SOURCE_COMMIT}^{commit}"
             gh release create "$RELEASE_ID" \
               --repo "$GITHUB_REPOSITORY" \
