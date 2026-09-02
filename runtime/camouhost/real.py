@@ -220,31 +220,56 @@ async (request) => {
   const collectVoices = async () => {
     if (!request.voices_applicable) return {status: 'not_applicable'};
     if (!('speechSynthesis' in window)) return {status: 'unavailable'};
-    let voices = speechSynthesis.getVoices();
-    if (voices.length === 0) {
-      await new Promise((resolve) => {
-        let settled = false;
-        const finish = () => {
-          if (settled) return;
-          settled = true;
-          speechSynthesis.removeEventListener('voiceschanged', finish);
-          resolve();
-        };
-        speechSynthesis.addEventListener('voiceschanged', finish, {once: true});
-        setTimeout(finish, 1500);
-      });
+    // Gecko publishes the configured voice registry asynchronously. A first read may be
+    // empty or may expose a transient non-final registry, so readiness cannot be inferred
+    // from `length > 0`. Observe changes and require a stable post-change snapshot. If the
+    // event was emitted before this page installed its listener, use only the final bounded
+    // deadline snapshot. Rust remains the sole semantic equality owner.
+    const deadline = Date.now() + 2000;
+    let changed = false;
+    let wake = null;
+    const onChanged = () => {
+      changed = true;
+      if (wake) {
+        const resolve = wake;
+        wake = null;
+        resolve();
+      }
+    };
+    const waitForChangeOrPoll = () => new Promise((resolve) => {
+      wake = resolve;
+      setTimeout(() => {
+        if (wake === resolve) wake = null;
+        resolve();
+      }, 100);
+    });
+    const normalizeVoices = (voices) => voices.map((voice) => ({
+      language: voice.lang,
+      name: voice.name,
+      voice_uri: voice.voiceURI,
+      local_service: voice.localService,
+      is_default: voice.default,
+    }));
+    let voices = [];
+    let prior = null;
+    speechSynthesis.addEventListener('voiceschanged', onChanged);
+    try {
+      while (Date.now() < deadline) {
+        voices = speechSynthesis.getVoices();
+        const snapshot = voices.length === 0 ? null : JSON.stringify(normalizeVoices(voices));
+        if (changed && snapshot !== null && snapshot === prior) break;
+        prior = snapshot;
+        await waitForChangeOrPoll();
+      }
       voices = speechSynthesis.getVoices();
+    } finally {
+      speechSynthesis.removeEventListener('voiceschanged', onChanged);
+      wake = null;
     }
     if (voices.length === 0) return {status: 'unavailable'};
     return {
       status: 'available',
-      voices: voices.map((voice) => ({
-        language: voice.lang,
-        name: voice.name,
-        voice_uri: voice.voiceURI,
-        local_service: voice.localService,
-        is_default: voice.default,
-      })),
+      voices: normalizeVoices(voices),
     };
   };
 

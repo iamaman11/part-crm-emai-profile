@@ -149,10 +149,7 @@ def main() -> int:
 
     if not isinstance(snapshots, list):
         raise RuntimeError("speech voice diagnostic snapshots are invalid")
-    canonical_line(
-        "S0_SPEECH_VOICE_EXPECTED",
-        {"count": len(expected), "voices": sorted_rows(expected)},
-    )
+    canonical_line("S0_SPEECH_VOICE_EXPECTED", {"count": len(expected)})
     final_equal = False
     for snapshot in snapshots:
         if not isinstance(snapshot, dict) or not isinstance(snapshot.get("voices"), list):
@@ -166,7 +163,6 @@ def main() -> int:
                 "count": len(observed),
                 "equal": equal,
                 "event_count": snapshot.get("event_count"),
-                "voices": sorted_rows(observed),
             },
         )
         final_equal = equal
@@ -178,7 +174,7 @@ def main() -> int:
             "snapshot_count": len(snapshots),
         },
     )
-    return 0
+    return 0 if expected and final_equal else 1
 
 
 if __name__ == "__main__":

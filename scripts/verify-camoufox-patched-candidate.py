@@ -50,6 +50,15 @@ def sha256_file(path: Path) -> str:
 def verify(archive: Path, provenance_path: Path, lock_path: Path, target: str, build_source_commit: str | None) -> dict[str, Any]:
     lock = load_canonical(lock_path)
     provenance = load_canonical(provenance_path)
+    candidates = lock.get("candidates")
+    if not isinstance(candidates, dict) or target not in candidates:
+        raise CandidateError("candidate target is absent from the patch lock")
+    locked_candidate = candidates[target]
+    if not isinstance(locked_candidate, dict) or set(locked_candidate) != {
+        "artifact_sha256",
+        "build_source_commit",
+    }:
+        raise CandidateError("locked candidate identity is unsupported")
     required = {
         "schema_version", "kind", "upstream_repository", "upstream_commit", "camoufox_version",
         "patch_path", "patch_sha256", "upstream_target", "upstream_target_sha256",
@@ -79,6 +88,10 @@ def verify(archive: Path, provenance_path: Path, lock_path: Path, target: str, b
         raise CandidateError("candidate artifact SHA-256 is invalid")
     if not isinstance(source_sha, str) or GIT_SHA_RE.fullmatch(source_sha) is None:
         raise CandidateError("candidate build source commit is invalid")
+    if artifact_sha != locked_candidate.get("artifact_sha256"):
+        raise CandidateError("candidate artifact SHA-256 differs from lock")
+    if source_sha != locked_candidate.get("build_source_commit"):
+        raise CandidateError("candidate build source commit differs from lock")
     if build_source_commit is not None and source_sha != build_source_commit:
         raise CandidateError("candidate build source commit differs from expected source")
     if sha256_file(archive) != artifact_sha:
@@ -108,12 +121,19 @@ def self_test() -> None:
             "artifact_sha256": sha256_file(archive),
             "build_source_commit": "0" * 40,
         }
+        test_lock = json.loads(json.dumps(lock))
+        test_lock["candidates"]["windows"] = {
+            "artifact_sha256": provenance["artifact_sha256"],
+            "build_source_commit": provenance["build_source_commit"],
+        }
+        lock_path = root / "patch-lock.json"
+        lock_path.write_bytes(canonical(test_lock))
         provenance_path = root / "provenance.json"
         provenance_path.write_bytes(canonical(provenance))
-        verify(archive, provenance_path, DEFAULT_LOCK, "windows", "0" * 40)
+        verify(archive, provenance_path, lock_path, "windows", "0" * 40)
         archive.write_bytes(b"tampered")
         try:
-            verify(archive, provenance_path, DEFAULT_LOCK, "windows", "0" * 40)
+            verify(archive, provenance_path, lock_path, "windows", "0" * 40)
         except CandidateError:
             pass
         else:
@@ -123,11 +143,18 @@ def self_test() -> None:
         changed["patch_sha256"] = "1" * 64
         provenance_path.write_bytes(canonical(changed))
         try:
-            verify(archive, provenance_path, DEFAULT_LOCK, "windows", "0" * 40)
+            verify(archive, provenance_path, lock_path, "windows", "0" * 40)
         except CandidateError:
             pass
         else:
             raise CandidateError("wrong patch digest negative self-test unexpectedly passed")
+        provenance_path.write_bytes(canonical(provenance))
+        try:
+            verify(archive, provenance_path, lock_path, "windows", "1" * 40)
+        except CandidateError:
+            pass
+        else:
+            raise CandidateError("wrong expected build source negative self-test unexpectedly passed")
     print("Camoufox patched candidate verifier self-test passed.")
 
 

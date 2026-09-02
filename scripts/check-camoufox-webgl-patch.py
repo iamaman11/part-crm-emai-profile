@@ -55,9 +55,9 @@ def load_lock(path: Path = LOCK_PATH) -> dict[str, Any]:
         raise PatchContractError("patch lock is not JSON") from error
     if not isinstance(value, dict) or raw != canonical(value):
         fail("patch lock must be canonical JSON")
-    if set(value) != {"browser", "patch", "schema_version"} or value["schema_version"] != 1:
+    if set(value) != {"browser", "candidates", "patch", "schema_version"} or value["schema_version"] != 2:
         fail("patch lock schema is invalid")
-    browser, patch = value["browser"], value["patch"]
+    browser, candidates, patch = value["browser"], value["candidates"], value["patch"]
     if not isinstance(browser, dict) or set(browser) != {"release_commit", "repository", "version"}:
         fail("patch lock browser identity is invalid")
     if (not isinstance(browser["repository"], str) or browser["repository"] != "daijro/camoufox"
@@ -74,6 +74,21 @@ def load_lock(path: Path = LOCK_PATH) -> dict[str, Any]:
     for key in ("sha256", "upstream_target_sha256"):
         if not isinstance(patch[key], str) or SHA256.fullmatch(patch[key]) is None:
             fail("patch lock digest is invalid")
+    if not isinstance(candidates, dict) or set(candidates) != {"linux", "windows"}:
+        fail("patch lock candidate targets are invalid")
+    for candidate in candidates.values():
+        if not isinstance(candidate, dict) or set(candidate) != {
+            "artifact_sha256",
+            "build_source_commit",
+        }:
+            fail("patch lock candidate identity is invalid")
+        if (
+            not isinstance(candidate["artifact_sha256"], str)
+            or SHA256.fullmatch(candidate["artifact_sha256"]) is None
+            or not isinstance(candidate["build_source_commit"], str)
+            or COMMIT.fullmatch(candidate["build_source_commit"]) is None
+        ):
+            fail("patch lock candidate identity is invalid")
     return value
 
 
@@ -134,6 +149,10 @@ def self_test() -> None:
     patch_path = ROOT / lock["patch"]["path"]
     if lock["patch"]["sha256"] != digest(patch_path):
         fail("patch digest self-test failed")
+    if lock["candidates"]["linux"]["artifact_sha256"] != "dbdf8b9b6e79cad5d940732cb40831e9cbc2c46d3b86642f11dd383784e8b063":
+        fail("unexpected locked Linux candidate")
+    if lock["candidates"]["windows"]["artifact_sha256"] != "43651ef7e870a7d14628194f7a2680867b629bc4513873769cf403ef5f47f1c0":
+        fail("unexpected locked Windows candidate")
     verify_patch_semantics(patch_path)
     with tempfile.TemporaryDirectory() as directory:
         root = Path(directory)

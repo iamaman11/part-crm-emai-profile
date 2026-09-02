@@ -6,6 +6,7 @@ on:
       - main
 
 permissions:
+  actions: read
   contents: read
 
 concurrency:
@@ -140,9 +141,9 @@ jobs:
           retention-days: 7
 
   runtime-browser-candidate:
-    name: Build immutable patched Windows Camoufox candidate
+    name: Resolve immutable patched Windows Camoufox candidate
     runs-on: ubuntu-24.04
-    timeout-minutes: 120
+    timeout-minutes: 30
     env:
       SOURCE_SHA: ${{ github.sha }}
     steps:
@@ -159,41 +160,53 @@ jobs:
           test "$GITHUB_REF" = refs/heads/main
           test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
 
-      - name: Checkout exact Camoufox upstream source
-        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+      - name: Restore exact candidate cache
+        id: candidate-cache
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae
         with:
-          repository: daijro/camoufox
-          ref: 5d06ec1629ac7843508f1e683f83e404fde8db76
-          path: .candidate-upstream
-          persist-credentials: false
+          path: artifacts/camoufox-candidate
+          key: s0-camoufox-windows-${{ hashFiles('runtime/camouhost/camoufox-patch-lock.json') }}
 
-      - name: Build and verify exact Windows candidate
+      - name: Seed exact candidate from the proven generation run
+        id: candidate-seed
+        if: steps.candidate-cache.outputs.cache-hit != 'true'
+        continue-on-error: true
+        uses: actions/download-artifact@70fc10c6e5e1ce46ad2ea6f2b72d43f7d47b13c3
+        with:
+          name: s0-camoufox-windows-11e3696e37d5065633d93d5ddd05fdf1bb836b96
+          path: artifacts/camoufox-candidate
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          run-id: 33572782439
+
+      - name: Require and verify the exact locked Windows candidate
+        env:
+          CACHE_HIT: ${{ steps.candidate-cache.outputs.cache-hit }}
+          SEED_OUTCOME: ${{ steps.candidate-seed.outcome }}
         run: |
           set -euo pipefail
-          python3.12 -m py_compile scripts/check-camoufox-webgl-patch.py scripts/build-camoufox-patched-candidate.py scripts/verify-camoufox-patched-candidate.py
+          python3.12 -m py_compile scripts/check-camoufox-webgl-patch.py scripts/verify-camoufox-patched-candidate.py
           python3.12 scripts/check-camoufox-webgl-patch.py --self-test
           python3.12 scripts/verify-camoufox-patched-candidate.py --self-test
-          test "$(git -C .candidate-upstream rev-parse HEAD)" = 5d06ec1629ac7843508f1e683f83e404fde8db76
-          mkdir -p artifacts/ar11-browser-candidate
-          python3.12 scripts/build-camoufox-patched-candidate.py \
-            --upstream-root .candidate-upstream \
-            --target windows \
-            --output artifacts/ar11-browser-candidate/camoufox-windows.x86_64.zip \
-            --provenance-output artifacts/ar11-browser-candidate/camoufox-windows.provenance.json \
-            --build-source-commit "$SOURCE_SHA"
+          archive=artifacts/camoufox-candidate/camoufox-windows.x86_64.zip
+          provenance=artifacts/camoufox-candidate/camoufox-windows.provenance.json
+          test -f "$archive"
+          test -f "$provenance"
+          candidate_sha="$(python3.12 -c 'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["build_source_commit"])' "$provenance")"
           python3.12 scripts/verify-camoufox-patched-candidate.py \
-            --archive artifacts/ar11-browser-candidate/camoufox-windows.x86_64.zip \
-            --provenance artifacts/ar11-browser-candidate/camoufox-windows.provenance.json \
+            --archive "$archive" \
+            --provenance "$provenance" \
             --target windows \
-            --build-source-commit "$SOURCE_SHA"
+            --build-source-commit "$candidate_sha"
+          echo "Reused exact locked Windows candidate built at ${candidate_sha}; cache_hit=${CACHE_HIT}; seed_outcome=${SEED_OUTCOME}."
 
       - name: Upload candidate as CI transport only
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: ar11-browser-candidate-${{ github.sha }}
-          path: artifacts/ar11-browser-candidate
+          path: artifacts/camoufox-candidate
           if-no-files-found: error
-          retention-days: 1
+          retention-days: 7
 
   runtime-bundle:
     name: Build immutable clean-host Windows Camouhost runtime
@@ -241,13 +254,15 @@ jobs:
         run: |
           $runtimeRoot = Join-Path $env:RUNNER_TEMP 'camouhost-runtime'
           $buildPython = (Get-Command python).Source
+          $candidateBuildSha = (Get-Content -Raw 'artifacts/ar11-browser-candidate/camoufox-windows.provenance.json' | ConvertFrom-Json).build_source_commit
+          if ($candidateBuildSha -notmatch '^[0-9a-f]{40}$') { throw 'candidate build source commit is invalid' }
           python scripts/camouhost-runtime-build-windows.py build `
             --runtime-lock runtime/camouhost/runtime-lock.json `
             --patch-lock runtime/camouhost/camoufox-patch-lock.json `
             --runtime-source runtime/camouhost/real.py `
             --browser-candidate artifacts/ar11-browser-candidate/camoufox-windows.x86_64.zip `
             --browser-provenance artifacts/ar11-browser-candidate/camoufox-windows.provenance.json `
-            --build-source-commit "$env:SOURCE_SHA" `
+            --build-source-commit "$candidateBuildSha" `
             --output "$runtimeRoot" `
             --build-python "$buildPython"
           if (-not (Test-Path -LiteralPath (Join-Path $runtimeRoot 'python\python.exe') -PathType Leaf)) { throw 'embedded Python missing' }
