@@ -76,70 +76,139 @@ FINGERPRINT_PROBE = """
 
 BROWSER_VISIBLE_PROBE = r"""
 async (request) => {
-  const normalize = (value) => {
-    if (value === undefined) return null;
-    if (value === null || typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
-      return value;
+  const collectGraphicsInPageRealm = (graphicsRequest) => {
+    const requestId = '__camouhost_browser_visible_graphics_request__';
+    const resultId = '__camouhost_browser_visible_graphics_result__';
+    for (const id of [requestId, resultId]) {
+      const prior = document.getElementById(id);
+      if (prior) prior.remove();
     }
-    if (Array.isArray(value) || ArrayBuffer.isView(value)) {
-      return Array.from(value, normalize);
-    }
-    if (typeof value === 'object') {
-      const output = {};
-      for (const [key, nested] of Object.entries(value)) output[key] = normalize(nested);
-      return output;
-    }
-    return null;
-  };
 
-  const collectContext = (kind, spec) => {
-    const canvas = document.createElement('canvas');
-    const gl = canvas.getContext(kind);
-    if (!gl) return null;
-    const parameters = {};
-    for (const key of spec.parameters) {
-      const numericKey = Number(key);
-      const glEnum = Number.isInteger(numericKey) ? numericKey : gl[key];
-      if (!Number.isInteger(glEnum)) continue;
-      try { parameters[key] = normalize(gl.getParameter(glEnum)); } catch (_) {}
-    }
-    const shaderPrecision = {};
-    for (const key of spec.shader_precision) {
-      const parts = key.split(',').map(Number);
-      if (parts.length !== 2 || !parts.every(Number.isInteger)) continue;
-      try {
-        const value = gl.getShaderPrecisionFormat(parts[0], parts[1]);
-        if (value) {
-          shaderPrecision[key] = {
-            rangeMin: value.rangeMin,
-            rangeMax: value.rangeMax,
-            precision: value.precision,
+    const requestNode = document.createElement('script');
+    requestNode.id = requestId;
+    requestNode.type = 'application/json';
+    requestNode.textContent = JSON.stringify(graphicsRequest);
+
+    const resultNode = document.createElement('script');
+    resultNode.id = resultId;
+    resultNode.type = 'application/json';
+    resultNode.textContent = '';
+
+    const runner = document.createElement('script');
+    runner.textContent = `
+      (() => {
+        const requestNode = document.getElementById('${requestId}');
+        const resultNode = document.getElementById('${resultId}');
+        const write = (value) => { resultNode.textContent = JSON.stringify(value); };
+        try {
+          const request = JSON.parse(requestNode.textContent);
+          const normalize = (value) => {
+            if (value === undefined) return null;
+            if (value === null || typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
+              return value;
+            }
+            if (Array.isArray(value) || ArrayBuffer.isView(value)) {
+              return Array.from(value, normalize);
+            }
+            if (typeof value === 'object') {
+              const output = {};
+              for (const [key, nested] of Object.entries(value)) output[key] = normalize(nested);
+              return output;
+            }
+            return null;
           };
+
+          const collectContext = (kind, spec) => {
+            const canvas = document.createElement('canvas');
+            const gl = canvas.getContext(kind);
+            if (!gl) return null;
+            const parameters = {};
+            for (const key of spec.parameters) {
+              const numericKey = Number(key);
+              const glEnum = Number.isInteger(numericKey) ? numericKey : gl[key];
+              if (!Number.isInteger(glEnum)) throw new Error('configured WebGL parameter enum is invalid');
+              parameters[key] = normalize(gl.getParameter(glEnum));
+            }
+            const shaderPrecision = {};
+            for (const key of spec.shader_precision) {
+              const parts = key.split(',').map(Number);
+              if (parts.length !== 2 || !parts.every(Number.isInteger)) continue;
+              try {
+                const value = gl.getShaderPrecisionFormat(parts[0], parts[1]);
+                if (value) {
+                  shaderPrecision[key] = {
+                    rangeMin: value.rangeMin,
+                    rangeMax: value.rangeMax,
+                    precision: value.precision,
+                  };
+                }
+              } catch (_) {}
+            }
+            const attributes = {};
+            const actualAttributes = gl.getContextAttributes();
+            if (actualAttributes) {
+              for (const key of spec.context_attributes) {
+                if (Object.prototype.hasOwnProperty.call(actualAttributes, key)) {
+                  attributes[key] = normalize(actualAttributes[key]);
+                }
+              }
+            }
+            const debug = gl.getExtension('WEBGL_debug_renderer_info');
+            return {
+              vendor: debug ? gl.getParameter(debug.UNMASKED_VENDOR_WEBGL) : gl.getParameter(gl.VENDOR),
+              renderer: debug ? gl.getParameter(debug.UNMASKED_RENDERER_WEBGL) : gl.getParameter(gl.RENDERER),
+              extensions: Array.from(gl.getSupportedExtensions() || []),
+              parameters,
+              shader_precision: shaderPrecision,
+              context_attributes: attributes,
+            };
+          };
+
+          const webgl = collectContext('webgl', request.webgl);
+          const webgl2 = collectContext('webgl2', request.webgl2);
+          write({
+            vendor: webgl ? webgl.vendor : (webgl2 ? webgl2.vendor : null),
+            renderer: webgl ? webgl.renderer : (webgl2 ? webgl2.renderer : null),
+            webgl: webgl ? {
+              extensions: webgl.extensions,
+              parameters: webgl.parameters,
+              shader_precision: webgl.shader_precision,
+              context_attributes: webgl.context_attributes,
+            } : null,
+            webgl2: webgl2 ? {
+              extensions: webgl2.extensions,
+              parameters: webgl2.parameters,
+              shader_precision: webgl2.shader_precision,
+              context_attributes: webgl2.context_attributes,
+            } : null,
+          });
+        } catch (error) {
+          write({
+            error: {
+              name: error && error.name ? String(error.name) : 'Error',
+              message: error && error.message ? String(error.message) : '',
+            },
+          });
         }
-      } catch (_) {}
-    }
-    const attributes = {};
-    const actualAttributes = gl.getContextAttributes();
-    if (actualAttributes) {
-      for (const key of spec.context_attributes) {
-        if (Object.prototype.hasOwnProperty.call(actualAttributes, key)) {
-          attributes[key] = normalize(actualAttributes[key]);
-        }
-      }
-    }
-    const debug = gl.getExtension('WEBGL_debug_renderer_info');
-    return {
-      vendor: debug ? gl.getParameter(debug.UNMASKED_VENDOR_WEBGL) : gl.getParameter(gl.VENDOR),
-      renderer: debug ? gl.getParameter(debug.UNMASKED_RENDERER_WEBGL) : gl.getParameter(gl.RENDERER),
-      extensions: Array.from(gl.getSupportedExtensions() || []),
-      parameters,
-      shader_precision: shaderPrecision,
-      context_attributes: attributes,
-    };
+      })();
+    `;
+
+    const host = document.documentElement || document.head || document.body;
+    if (!host) throw new Error('browser-visible page realm is unavailable');
+    host.appendChild(requestNode);
+    host.appendChild(resultNode);
+    host.appendChild(runner);
+    const encoded = resultNode.textContent;
+    runner.remove();
+    requestNode.remove();
+    resultNode.remove();
+    if (!encoded) throw new Error('browser-visible page-realm graphics observation is empty');
+    const result = JSON.parse(encoded);
+    if (result && result.error) throw new Error('browser-visible page-realm graphics observation failed');
+    return result;
   };
 
-  const webgl = collectContext('webgl', request.webgl);
-  const webgl2 = collectContext('webgl2', request.webgl2);
+  const graphics = collectGraphicsInPageRealm({webgl: request.webgl, webgl2: request.webgl2});
   const fonts = request.fonts.map((family) => {
     const escaped = family.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
     return {
@@ -197,22 +266,7 @@ async (request) => {
       pixel_depth: screen.pixelDepth,
       device_pixel_ratio: window.devicePixelRatio,
     },
-    graphics: {
-      vendor: webgl ? webgl.vendor : (webgl2 ? webgl2.vendor : null),
-      renderer: webgl ? webgl.renderer : (webgl2 ? webgl2.renderer : null),
-      webgl: webgl ? {
-        extensions: webgl.extensions,
-        parameters: webgl.parameters,
-        shader_precision: webgl.shader_precision,
-        context_attributes: webgl.context_attributes,
-      } : null,
-      webgl2: webgl2 ? {
-        extensions: webgl2.extensions,
-        parameters: webgl2.parameters,
-        shader_precision: webgl2.shader_precision,
-        context_attributes: webgl2.context_attributes,
-      } : null,
-    },
+    graphics,
     fonts,
     language: navigator.language,
     languages: Array.from(navigator.languages || []),
