@@ -39,6 +39,27 @@ The historical AR protocol appended:
 
 That suffix does not apply to CAP transaction selection or create a second source commit.
 
+## Transactions whose DoD requires post-merge proof
+
+A transaction whose owning Issue requires evidence that can exist only after merge is not complete at
+merge time. Its binding closure order is:
+
+```text
+merge
+  -> accepted main/tree reread
+  -> post-merge protected required checks
+  -> required publication/proof
+  -> append-only acceptance checkpoint
+  -> program tracker update
+  -> explicit owning-Issue close
+```
+
+The merge PR for such a transaction must not use `Closes`, `Fixes`, `Resolves`, or equivalent
+merge-time auto-close keywords for the owning Issue. The acceptance checkpoint is metadata, not a
+second source change: when the existing annotated-tag mechanism is the natural owner, acceptance-only
+metadata must be recorded there without another source PR or branch push. Tracker state may advance
+only after that checkpoint exists and has been re-read from accepted main facts.
+
 ## Candidate identity scopes
 
 An implementation PR candidate and a Production candidate are related but not identical concepts:
