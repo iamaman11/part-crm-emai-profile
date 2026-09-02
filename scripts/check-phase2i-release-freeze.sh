@@ -7,7 +7,7 @@ if [[ "${GITHUB_EVENT_NAME:-}" != "pull_request" ]]; then
 fi
 
 base_ref="${GITHUB_BASE_REF:?GITHUB_BASE_REF is required for pull requests}"
-git fetch --no-tags --depth=1 origin "${base_ref}"
+git fetch --no-tags origin "+refs/heads/${base_ref}:refs/remotes/origin/${base_ref}"
 
 immutable_evidence_roots=(
   "contracts/baseline"
