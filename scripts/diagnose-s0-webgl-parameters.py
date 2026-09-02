@@ -44,6 +44,12 @@ DIAGNOSTIC_PROBE = r"""
     return typeof value;
   };
 
+  const errorFields = (phase, error) => ({
+    error_phase: phase,
+    error_name: error && error.name ? String(error.name) : 'Error',
+    error_message: error && error.message ? String(error.message) : '',
+  });
+
   const inspect = (kind, configured) => {
     const canvas = document.createElement('canvas');
     const gl = canvas.getContext(kind);
@@ -56,25 +62,46 @@ DIAGNOSTIC_PROBE = r"""
         rows.push({key, configured: normalize(expected), observed: null, js_type: 'unresolved-enum', equal: false});
         continue;
       }
+
+      let raw;
       try {
-        const raw = gl.getParameter(glEnum);
-        const observed = normalize(raw);
-        rows.push({
-          key,
-          configured: normalize(expected),
-          observed,
-          js_type: jsType(raw),
-          equal: JSON.stringify(normalize(expected)) === JSON.stringify(observed),
-        });
+        raw = gl.getParameter(glEnum);
       } catch (error) {
         rows.push({
           key,
           configured: normalize(expected),
           observed: null,
-          js_type: 'exception:' + (error && error.name ? error.name : 'Error'),
+          js_type: 'exception',
           equal: false,
+          ...errorFields('getParameter', error),
         });
+        continue;
       }
+
+      let observed;
+      let observedType;
+      try {
+        observedType = jsType(raw);
+        observed = normalize(raw);
+      } catch (error) {
+        rows.push({
+          key,
+          configured: normalize(expected),
+          observed: null,
+          js_type: 'exception',
+          equal: false,
+          ...errorFields('normalize', error),
+        });
+        continue;
+      }
+
+      rows.push({
+        key,
+        configured: normalize(expected),
+        observed,
+        js_type: observedType,
+        equal: JSON.stringify(normalize(expected)) === JSON.stringify(observed),
+      });
     }
     return {available: true, rows};
   };
