@@ -152,8 +152,11 @@ fn validate_camoufox_webgl_config(
     workspace: &GenerationWorkspace,
 ) -> Result<(), BrowserLaunchBlocker> {
     let path = workspace.path().join(CAMOUFOX_CONFIG_FILE);
-    let metadata = fs::symlink_metadata(&path)
-        .map_err(|_| BrowserLaunchBlocker::InvalidMaterializationEvidence)?;
+    let metadata = match fs::symlink_metadata(&path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(_) => return Err(BrowserLaunchBlocker::InvalidMaterializationEvidence),
+    };
     if metadata.file_type().is_symlink() || !metadata.is_file() {
         return Err(BrowserLaunchBlocker::InvalidMaterializationEvidence);
     }
