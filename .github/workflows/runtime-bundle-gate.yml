@@ -74,6 +74,11 @@ jobs:
           EXPECTED_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: python -c "import os, subprocess; actual = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(); expected = os.environ['EXPECTED_SOURCE_SHA']; assert actual == expected, f'expected {expected}, got {actual}'"
 
+      - name: Prove Windows runtime package policy
+        run: |
+          python -m py_compile scripts/camouhost-runtime-package.py
+          python scripts/camouhost-runtime-package.py self-test
+
       - name: Test runtime bundle domain
         run: cargo test --locked -p runtime-bundle-domain
 
