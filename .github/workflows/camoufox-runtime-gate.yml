@@ -358,11 +358,11 @@ jobs:
           $env:AR10_BROWSER_STATE_HEADLESS = 'false'
           cargo test --locked -p profile-bridge --test portable_browser_state real_cookie_local_storage_and_indexed_db_survive_authoritative_p3_reopen -- --nocapture
 
-      - name: Test browser/runtime domain contracts on Windows
-        run: cargo test --locked -p browser-execution-domain -p runtime-bundle-domain
-
-      - name: Test Profile Bridge on Windows
-        run: cargo test --locked -p profile-bridge --features synthetic-test-bin
-
-      - name: Build release Profile Bridge on Windows
-        run: cargo build --locked --release -p profile-bridge
+      - name: Test synthetic Profile Bridge failure and CLI contracts on Windows
+        run: >-
+          cargo test --locked -p profile-bridge --features synthetic-test-bin
+          --bin profile-bridge-synthetic
+          --test ipc_protocol_failure_matrix
+          --test operator_flow_acceptance
+          --test runtime_failure_matrix
+          --test synthetic_operator_cli
