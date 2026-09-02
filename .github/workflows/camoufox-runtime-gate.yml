@@ -7,6 +7,7 @@ on:
       - main
 
 permissions:
+  actions: read
   contents: read
 
 concurrency:
@@ -15,7 +16,7 @@ concurrency:
 
 jobs:
   patched-candidate:
-    name: Build patched Camoufox candidate (${{ matrix.target }})
+    name: Resolve patched Camoufox candidate (${{ matrix.target }})
     runs-on: ubuntu-24.04
     timeout-minutes: 120
     strategy:
@@ -34,42 +35,91 @@ jobs:
           EXPECTED_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: python -c "import os, subprocess; actual = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(); expected = os.environ['EXPECTED_SOURCE_SHA']; assert actual == expected, f'expected {expected}, got {actual}'"
 
-      - name: Fetch exact Camoufox upstream source without second checkout authority
-        run: |
-          set -euo pipefail
-          mkdir .candidate-upstream
-          git -C .candidate-upstream init
-          git -C .candidate-upstream remote add origin https://github.com/daijro/camoufox.git
-          git -C .candidate-upstream fetch --depth=1 origin 5d06ec1629ac7843508f1e683f83e404fde8db76
-          git -C .candidate-upstream checkout --detach FETCH_HEAD
-          test "$(git -C .candidate-upstream rev-parse HEAD)" = 5d06ec1629ac7843508f1e683f83e404fde8db76
-          test "$(git -C .candidate-upstream remote get-url origin)" = https://github.com/daijro/camoufox.git
+      - name: Restore candidate-input cache
+        id: candidate-cache
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
+        with:
+          path: artifacts/camoufox-candidate
+          key: s0-camoufox-${{ matrix.target }}-${{ hashFiles('runtime/camouhost/camoufox-patch-lock.json', 'runtime/camouhost/camoufox-patches/0001-webgl-checked-arrays.patch', 'scripts/build-camoufox-patched-candidate.py', 'scripts/check-camoufox-webgl-patch.py', 'scripts/verify-camoufox-patched-candidate.py') }}
 
-      - name: Verify native patch contract and candidate tools
-        run: |
-          python3.12 -m py_compile scripts/check-camoufox-webgl-patch.py scripts/build-camoufox-patched-candidate.py scripts/verify-camoufox-patched-candidate.py
-          python3.12 scripts/check-camoufox-webgl-patch.py --self-test
-          python3.12 scripts/verify-camoufox-patched-candidate.py --self-test
-          test "$(git -C .candidate-upstream rev-parse HEAD)" = 5d06ec1629ac7843508f1e683f83e404fde8db76
+      - name: Seed unchanged candidate from proven prior run
+        id: candidate-seed
+        if: steps.candidate-cache.outputs.cache-hit != 'true'
+        continue-on-error: true
+        uses: actions/download-artifact@70fc10c6e5e1ce46ad2ea6f2b72d43f7d47b13c3
+        with:
+          name: s0-camoufox-${{ matrix.target }}-11e3696e37d5065633d93d5ddd05fdf1bb836b96
+          path: artifacts/camoufox-candidate
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          run-id: 33572782439
 
-      - name: Build exact patched candidate
+      - name: Verify cached candidate or rebuild only when candidate inputs changed
         env:
           TARGET: ${{ matrix.target }}
           SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          CACHE_HIT: ${{ steps.candidate-cache.outputs.cache-hit }}
+          SEED_OUTCOME: ${{ steps.candidate-seed.outcome }}
         run: |
           set -euo pipefail
+          python3.12 -m py_compile scripts/check-camoufox-webgl-patch.py scripts/build-camoufox-patched-candidate.py scripts/verify-camoufox-patched-candidate.py
+          python3.12 scripts/check-camoufox-webgl-patch.py --self-test
+          python3.12 scripts/verify-camoufox-patched-candidate.py --self-test
+
           mkdir -p artifacts/camoufox-candidate
-          python3.12 scripts/build-camoufox-patched-candidate.py \
-            --upstream-root .candidate-upstream \
-            --target "$TARGET" \
-            --output "artifacts/camoufox-candidate/camoufox-${TARGET}.x86_64.zip" \
-            --provenance-output "artifacts/camoufox-candidate/camoufox-${TARGET}.provenance.json" \
-            --build-source-commit "$SOURCE_SHA"
-          python3.12 scripts/verify-camoufox-patched-candidate.py \
-            --archive "artifacts/camoufox-candidate/camoufox-${TARGET}.x86_64.zip" \
-            --provenance "artifacts/camoufox-candidate/camoufox-${TARGET}.provenance.json" \
-            --target "$TARGET" \
-            --build-source-commit "$SOURCE_SHA"
+          archive="artifacts/camoufox-candidate/camoufox-${TARGET}.x86_64.zip"
+          provenance="artifacts/camoufox-candidate/camoufox-${TARGET}.provenance.json"
+          candidate_compatible=false
+
+          if [[ -f "$archive" && -f "$provenance" ]]; then
+            candidate_sha="$(python3.12 -c 'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["build_source_commit"])' "$provenance")"
+            if [[ "$candidate_sha" =~ ^[0-9a-f]{40}$ ]]; then
+              git fetch --no-tags --depth=1 origin "$candidate_sha"
+              candidate_inputs=(
+                runtime/camouhost/camoufox-patch-lock.json
+                runtime/camouhost/camoufox-patches/0001-webgl-checked-arrays.patch
+                scripts/build-camoufox-patched-candidate.py
+                scripts/check-camoufox-webgl-patch.py
+                scripts/verify-camoufox-patched-candidate.py
+              )
+              if git diff --quiet "$candidate_sha" "$SOURCE_SHA" -- "${candidate_inputs[@]}"; then
+                python3.12 scripts/verify-camoufox-patched-candidate.py \
+                  --archive "$archive" \
+                  --provenance "$provenance" \
+                  --target "$TARGET" \
+                  --build-source-commit "$candidate_sha"
+                candidate_compatible=true
+                echo "Reusing verified Camoufox candidate built at ${candidate_sha}; candidate-defining inputs are byte-equivalent to exact head ${SOURCE_SHA}."
+              fi
+            fi
+          fi
+
+          if [[ "$candidate_compatible" != true ]]; then
+            if [[ "$CACHE_HIT" == true ]]; then
+              echo "Candidate cache hit failed exact input-equivalence verification." >&2
+              exit 1
+            fi
+            rm -rf artifacts/camoufox-candidate .candidate-upstream
+            mkdir -p artifacts/camoufox-candidate .candidate-upstream
+            git -C .candidate-upstream init
+            git -C .candidate-upstream remote add origin https://github.com/daijro/camoufox.git
+            git -C .candidate-upstream fetch --depth=1 origin 5d06ec1629ac7843508f1e683f83e404fde8db76
+            git -C .candidate-upstream checkout --detach FETCH_HEAD
+            test "$(git -C .candidate-upstream rev-parse HEAD)" = 5d06ec1629ac7843508f1e683f83e404fde8db76
+            test "$(git -C .candidate-upstream remote get-url origin)" = https://github.com/daijro/camoufox.git
+            python3.12 scripts/build-camoufox-patched-candidate.py \
+              --upstream-root .candidate-upstream \
+              --target "$TARGET" \
+              --output "$archive" \
+              --provenance-output "$provenance" \
+              --build-source-commit "$SOURCE_SHA"
+            python3.12 scripts/verify-camoufox-patched-candidate.py \
+              --archive "$archive" \
+              --provenance "$provenance" \
+              --target "$TARGET" \
+              --build-source-commit "$SOURCE_SHA"
+            echo "Candidate-defining inputs changed or no reusable artifact was available; rebuilt exact candidate for ${SOURCE_SHA}."
+          fi
 
       - name: Upload ephemeral candidate transport
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
@@ -127,14 +177,13 @@ jobs:
           path: artifacts/camoufox-candidate
 
       - name: Install verified candidate into ephemeral Camoufox CI cache
-        env:
-          SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
+          candidate_sha="$(python3.12 -c 'import json; print(json.load(open("artifacts/camoufox-candidate/camoufox-linux.provenance.json", encoding="utf-8"))["build_source_commit"])')"
           python3.12 -m py_compile scripts/install-camoufox-candidate-for-ci.py scripts/verify-camoufox-patched-candidate.py
           python3.12 scripts/install-camoufox-candidate-for-ci.py \
             --archive artifacts/camoufox-candidate/camoufox-linux.x86_64.zip \
             --provenance artifacts/camoufox-candidate/camoufox-linux.provenance.json \
-            --build-source-commit "$SOURCE_SHA"
+            --build-source-commit "$candidate_sha"
           python3.12 -m camoufox list --path
 
       - name: Compile AR-10/S0 runtime acceptance sources
@@ -241,6 +290,8 @@ jobs:
         run: |
           $runtimeRoot = Join-Path $env:RUNNER_TEMP 'camouhost-runtime'
           $buildPython = (Get-Command python).Source
+          $candidateBuildSha = (Get-Content -Raw 'artifacts/camoufox-candidate/camoufox-windows.provenance.json' | ConvertFrom-Json).build_source_commit
+          if ($candidateBuildSha -notmatch '^[0-9a-f]{40}$') { throw 'candidate build source commit is invalid' }
           python -m py_compile scripts/camouhost-runtime-build-windows.py scripts/verify-camoufox-patched-candidate.py
           python scripts/verify-camoufox-patched-candidate.py --self-test
           python scripts/camouhost-runtime-build-windows.py self-test
@@ -250,7 +301,7 @@ jobs:
             --runtime-source runtime/camouhost/real.py `
             --browser-candidate artifacts/camoufox-candidate/camoufox-windows.x86_64.zip `
             --browser-provenance artifacts/camoufox-candidate/camoufox-windows.provenance.json `
-            --build-source-commit "${{ github.event.pull_request.head.sha || github.sha }}" `
+            --build-source-commit "$candidateBuildSha" `
             --output "$runtimeRoot" `
             --build-python "$buildPython"
           if (-not (Test-Path -LiteralPath (Join-Path $runtimeRoot 'python\python.exe') -PathType Leaf)) { throw 'embedded Python missing' }
