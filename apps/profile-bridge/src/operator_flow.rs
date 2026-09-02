@@ -395,6 +395,9 @@ where
         }
     }
 
+    /// Production P2 launch entrypoint. The server-selected authoritative generation is proven
+    /// and rematerialized, when absent locally, after the exact coordinator lease is acquired and
+    /// before the existing local preflight/runtime path is allowed to observe the workspace.
     pub fn open_authoritative<Dl>(
         &mut self,
         claim: &ClaimUri,
@@ -424,6 +427,8 @@ where
         )
     }
 
+    /// Test/synthetic entrypoint for already-materialized fixtures. Shipping code cannot compile
+    /// against this predecessor shortcut; the production binary must use `open_authoritative`.
     #[cfg(any(test, feature = "synthetic-test-bin"))]
     pub fn open(
         &mut self,
@@ -541,7 +546,11 @@ where
             &runtime_bundle,
         ) {
             let reason = B::operational_rejection_reason(&error);
-            return Err(self.fail_preflight_with_lock_before_use(reason, lease, workspace_lock));
+            return Err(self.fail_preflight_with_lock_before_use(
+                reason,
+                lease,
+                workspace_lock,
+            ));
         }
         let inventory = match workspace.inventory() {
             Ok(value) => value,
@@ -669,6 +678,10 @@ where
         }
     }
 
+    /// Canonical ordinary P3 save. Pre-commit failures retain dirty local ownership and the exact
+    /// coordinator lease for retry. Once `publish_verify_and_commit_successor` returns, N+1 is the
+    /// backend authority permanently; local completion can require recovery but can never fall back
+    /// to N or undo the commit.
     pub fn save_retained_successor<T, U>(
         &mut self,
         root: &MaterializationRoot,
@@ -793,6 +806,8 @@ where
         })
     }
 
+    /// Historical DeviceJob-shaped Bridge finalize remains available only to test/synthetic
+    /// fixtures while they are migrated. Shipping production code cannot compile against it.
     #[cfg(any(test, feature = "synthetic-test-bin"))]
     #[allow(clippy::too_many_arguments)]
     pub async fn finalize_dirty_close<U, V, M>(
@@ -1454,6 +1469,270 @@ mod tests {
     }
 
     #[test]
+    fn composed_operator_close_retains_dirty_ownership_until_commit()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let fixture = Fixture::new()?;
+        let mut operator = operator(&fixture, FakeCamouhost::default())?;
+        operator.open(&fixture.claim_uri, &fixture.root, UnixMillis::new(10))?;
+        assert_eq!(
+            operator.active_session_id(),
+            Some(fixture.lease.session_id())
+        );
+        assert_eq!(
+            operator.active_local_state(),
+            Some(LocalGenerationState::InUse)
+        );
+        assert_eq!(operator.coordinator().claimed, 1);
+        assert_eq!(operator.coordinator().closed, 0);
+        assert_eq!(
+            operator.process().actions(),
+            [ProcessAction::Spawn(fixture.lease.session_id().clone())]
+        );
+
+        operator.close(UnixMillis::new(20))?;
+        assert_eq!(
+            operator.pending_dirty_local_state(),
+            Some(LocalGenerationState::DirtyLocal)
+        );
+        assert!(operator.has_pending_dirty_close());
+        assert_eq!(operator.coordinator().closed, 0);
+        assert_eq!(
+            operator.process().actions(),
+            [
+                ProcessAction::Spawn(fixture.lease.session_id().clone()),
+                ProcessAction::GracefulClose(fixture.lease.session_id().clone()),
+                ProcessAction::ConfirmStopped(fixture.lease.session_id().clone()),
+            ]
+        );
+        let workspace = fixture.root.open_generation(
+            fixture.actor.tenant_scope().tenant_id(),
+            &fixture.profile_id,
+            &fixture.generation_id,
+        )?;
+        assert!(matches!(
+            BridgeWorkspaceLock::acquire(&workspace, &fixture.device_id, fixture.lease.epoch()),
+            Err(LocalProfileError::LockBusy)
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn healthy_heartbeat_preserves_active_runtime_ownership()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let fixture = Fixture::new()?;
+        let mut operator = operator(&fixture, FakeCamouhost::default())?;
+        operator.open(&fixture.claim_uri, &fixture.root, UnixMillis::new(10))?;
+        operator.heartbeat(UnixMillis::new(11))?;
+        assert_eq!(operator.coordinator().heartbeats, 1);
+        assert_eq!(
+            operator.active_session_id(),
+            Some(fixture.lease.session_id())
+        );
+        assert_eq!(
+            operator.process().actions(),
+            [ProcessAction::Spawn(fixture.lease.session_id().clone())]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn dead_runtime_is_fenced_before_coordinator_heartbeat()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let fixture = Fixture::new()?;
+        let mut operator = operator(&fixture, FakeCamouhost::default())?;
+        operator.open(&fixture.claim_uri, &fixture.root, UnixMillis::new(10))?;
+        operator
+            .process_mut()
+            .simulate_exit(fixture.lease.session_id())?;
+        assert_eq!(
+            operator.heartbeat(UnixMillis::new(11)),
+            Err(OperatorFlowError::Terminal {
+                stage: OperatorFailureStage::RuntimeAbort,
+                local_state: LocalGenerationState::RecoveryRequired,
+                cleanup: super::CleanupFailures::none(),
+            })
+        );
+        assert_eq!(operator.coordinator().heartbeats, 0);
+        assert_eq!(operator.coordinator().closed, 1);
+        assert_eq!(operator.active_session_id(), None);
+        assert_eq!(
+            operator.last_terminal().map(|value| value.local_state()),
+            Some(LocalGenerationState::RecoveryRequired)
+        );
+        assert_eq!(
+            operator.process().actions(),
+            [
+                ProcessAction::Spawn(fixture.lease.session_id().clone()),
+                ProcessAction::ForceTerminate(fixture.lease.session_id().clone()),
+            ]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn lost_heartbeat_stops_runtime_and_enters_recovery() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let fixture = Fixture::new()?;
+        let mut coordinator = fixture.coordinator();
+        coordinator.heartbeat_fail = true;
+        let mut operator = ProfileBridgeOperator::new(
+            FakeDeviceIdentity::new(fixture.device_id.clone()),
+            FakeDeviceKeyStore::default(),
+            FakeDeviceAuthentication { allow: true },
+            fixture.enrollment()?,
+            coordinator,
+            FakeRuntimeBundles {
+                bundle: approved_bundle()?,
+                allow: true,
+            },
+            FakeBrowserPreflight {
+                allow: true,
+                calls: 0,
+            },
+            FakeProcessControl::default(),
+            FakeCamouhost::default(),
+        );
+        operator.open(&fixture.claim_uri, &fixture.root, UnixMillis::new(10))?;
+        assert_eq!(
+            operator.heartbeat(UnixMillis::new(11)),
+            Err(OperatorFlowError::Terminal {
+                stage: OperatorFailureStage::CoordinatorHeartbeat,
+                local_state: LocalGenerationState::RecoveryRequired,
+                cleanup: super::CleanupFailures::none(),
+            })
+        );
+        assert_eq!(operator.coordinator().heartbeats, 1);
+        assert_eq!(operator.coordinator().closed, 1);
+        assert_eq!(operator.active_session_id(), None);
+        assert_eq!(
+            operator.last_terminal().map(|value| value.local_state()),
+            Some(LocalGenerationState::RecoveryRequired)
+        );
+        assert_eq!(
+            operator.process().actions(),
+            [
+                ProcessAction::Spawn(fixture.lease.session_id().clone()),
+                ProcessAction::ForceTerminate(fixture.lease.session_id().clone()),
+            ]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn authentication_failure_prevents_coordinator_and_runtime_mutation()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let fixture = Fixture::new()?;
+        let mut operator = ProfileBridgeOperator::new(
+            FakeDeviceIdentity::new(fixture.device_id.clone()),
+            FakeDeviceKeyStore::default(),
+            FakeDeviceAuthentication { allow: false },
+            fixture.enrollment()?,
+            fixture.coordinator(),
+            FakeRuntimeBundles {
+                bundle: approved_bundle()?,
+                allow: true,
+            },
+            FakeBrowserPreflight {
+                allow: true,
+                calls: 0,
+            },
+            FakeProcessControl::default(),
+            FakeCamouhost::default(),
+        );
+        assert_eq!(
+            operator.open(&fixture.claim_uri, &fixture.root, UnixMillis::new(10)),
+            Err(OperatorFlowError::Stage(
+                OperatorFailureStage::DeviceAuthentication
+            ))
+        );
+        assert_eq!(operator.coordinator().claimed, 0);
+        assert!(operator.process().actions().is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn pending_dirty_close_blocks_second_ownership_before_claim_replay()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let fixture = Fixture::new()?;
+        let mut operator = operator(&fixture, FakeCamouhost::default())?;
+        operator.open(&fixture.claim_uri, &fixture.root, UnixMillis::new(10))?;
+        operator.close(UnixMillis::new(20))?;
+        assert_eq!(
+            operator.open(&fixture.claim_uri, &fixture.root, UnixMillis::new(21)),
+            Err(OperatorFlowError::Busy)
+        );
+        assert_eq!(operator.coordinator().claimed, 1);
+        assert_eq!(operator.coordinator().closed, 0);
+        Ok(())
+    }
+
+    #[test]
+    fn mismatched_coordinator_lease_is_closed_before_local_or_runtime_use()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let fixture = Fixture::new()?;
+        let wrong_lease = ProfileLease::issue(
+            fixture.actor.tenant_scope().tenant_id().clone(),
+            fixture.profile_id.clone(),
+            SessionId::parse("session_01JOPERATOR_WRONG")?,
+            DeviceId::parse("device_01JOPERATOR_WRONG")?,
+            99,
+            FencingToken::parse("fence_01JOPERATOR_WRONG")?,
+        )?;
+        let mut coordinator = fixture.coordinator();
+        coordinator.lease = wrong_lease;
+        let mut operator = ProfileBridgeOperator::new(
+            FakeDeviceIdentity::new(fixture.device_id.clone()),
+            FakeDeviceKeyStore::default(),
+            FakeDeviceAuthentication { allow: true },
+            fixture.enrollment()?,
+            coordinator,
+            FakeRuntimeBundles {
+                bundle: approved_bundle()?,
+                allow: true,
+            },
+            FakeBrowserPreflight {
+                allow: true,
+                calls: 0,
+            },
+            FakeProcessControl::default(),
+            FakeCamouhost::default(),
+        );
+        assert_eq!(
+            operator.open(&fixture.claim_uri, &fixture.root, UnixMillis::new(10)),
+            Err(OperatorFlowError::Stage(
+                OperatorFailureStage::LeaseValidation
+            ))
+        );
+        assert_eq!(operator.coordinator().closed, 1);
+        assert!(operator.process().actions().is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn local_lock_contention_prevents_runtime_spawn_and_closes_lease()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let fixture = Fixture::new()?;
+        let workspace = fixture.root.open_generation(
+            fixture.actor.tenant_scope().tenant_id(),
+            &fixture.profile_id,
+            &fixture.generation_id,
+        )?;
+        let busy_lock =
+            BridgeWorkspaceLock::acquire(&workspace, &fixture.device_id, fixture.lease.epoch())?;
+        let mut operator = operator(&fixture, FakeCamouhost::default())?;
+        assert_eq!(
+            operator.open(&fixture.claim_uri, &fixture.root, UnixMillis::new(10)),
+            Err(OperatorFlowError::Stage(
+                OperatorFailureStage::LocalWorkspace
+            ))
+        );
+        assert_eq!(operator.coordinator().closed, 1);
+        assert!(operator.process().actions().is_empty());
+        busy_lock.release()?;
+        Ok(())
+    }
+
+    #[test]
     fn browser_preflight_failure_prevents_runtime_spawn_and_releases_ownership()
     -> Result<(), Box<dyn std::error::Error>> {
         let fixture = Fixture::new()?;
@@ -1492,6 +1771,58 @@ mod tests {
         let lock =
             BridgeWorkspaceLock::acquire(&workspace, &fixture.device_id, fixture.lease.epoch())?;
         lock.release()?;
+        Ok(())
+    }
+
+    #[test]
+    fn runtime_negotiation_failure_becomes_recovery_required()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let fixture = Fixture::new()?;
+        let mut operator = operator(&fixture, CloseRejectingCamouhost::default())?;
+        operator.open(&fixture.claim_uri, &fixture.root, UnixMillis::new(10))?;
+        let error = operator.close(UnixMillis::new(20));
+        assert!(matches!(
+            error,
+            Err(OperatorFlowError::Runtime {
+                stage: OperatorFailureStage::RuntimeClose,
+                ..
+            })
+        ));
+        assert_eq!(
+            operator.last_terminal().map(|value| value.local_state()),
+            Some(LocalGenerationState::RecoveryRequired)
+        );
+        assert_eq!(operator.coordinator().closed, 1);
+        assert_eq!(
+            operator.process().actions(),
+            [
+                ProcessAction::Spawn(fixture.lease.session_id().clone()),
+                ProcessAction::GracefulClose(fixture.lease.session_id().clone()),
+                ProcessAction::ForceTerminate(fixture.lease.session_id().clone()),
+            ]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn explicit_abort_marks_recovery_and_releases_ownership()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let fixture = Fixture::new()?;
+        let mut operator = operator(&fixture, FakeCamouhost::default())?;
+        operator.open(&fixture.claim_uri, &fixture.root, UnixMillis::new(10))?;
+        let terminal = operator.abort(UnixMillis::new(11))?;
+        assert_eq!(
+            terminal.local_state(),
+            LocalGenerationState::RecoveryRequired
+        );
+        assert_eq!(operator.coordinator().closed, 1);
+        assert_eq!(
+            operator.process().actions(),
+            [
+                ProcessAction::Spawn(fixture.lease.session_id().clone()),
+                ProcessAction::ForceTerminate(fixture.lease.session_id().clone()),
+            ]
+        );
         Ok(())
     }
 }
