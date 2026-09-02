@@ -66,8 +66,43 @@ pub trait RuntimeBundleSelectionPort {
     ) -> Result<ApprovedRuntimeBundle, Self::Error>;
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum OperationalRejectionReason {
+    BrowserPreflightRejected,
+    RuntimeCandidateMismatch,
+    ConfigIntegrityMismatch,
+    IdentityObservationMismatch,
+    ProfileBusy,
+    RecoveryRequired,
+    RetryableNetworkRouteChurn,
+    FilesystemProcessCapabilityUnavailable,
+}
+
+impl OperationalRejectionReason {
+    #[must_use]
+    pub const fn code(self) -> &'static str {
+        match self {
+            Self::BrowserPreflightRejected => "browser_preflight_rejected",
+            Self::RuntimeCandidateMismatch => "runtime_candidate_mismatch",
+            Self::ConfigIntegrityMismatch => "config_integrity_mismatch",
+            Self::IdentityObservationMismatch => "identity_observation_mismatch",
+            Self::ProfileBusy => "profile_busy",
+            Self::RecoveryRequired => "recovery_required",
+            Self::RetryableNetworkRouteChurn => "retryable_network_route_churn",
+            Self::FilesystemProcessCapabilityUnavailable => {
+                "filesystem_process_capability_unavailable"
+            }
+        }
+    }
+}
+
 pub trait BrowserLaunchPreflightPort {
     type Error;
+
+    fn operational_rejection_reason(error: &Self::Error) -> OperationalRejectionReason {
+        let _ = error;
+        OperationalRejectionReason::BrowserPreflightRejected
+    }
 
     fn evaluate_before_launch(
         &mut self,
@@ -241,6 +276,11 @@ pub enum OperatorFlowError {
     Busy,
     CleanupRequired,
     Stage(OperatorFailureStage),
+    Preflight {
+        reason: OperationalRejectionReason,
+        local_state: LocalGenerationState,
+        cleanup: CleanupFailures,
+    },
     Runtime {
         stage: OperatorFailureStage,
         source: RuntimeLaunchError,
@@ -259,6 +299,15 @@ impl fmt::Display for OperatorFlowError {
             Self::Busy => formatter.write_str("an operator session is already active"),
             Self::CleanupRequired => formatter.write_str("previous operator cleanup is unresolved"),
             Self::Stage(stage) => write!(formatter, "operator flow failed at {stage:?}"),
+            Self::Preflight {
+                reason,
+                local_state,
+                cleanup,
+            } => write!(
+                formatter,
+                "operator browser preflight rejected: reason={}; local_state={local_state:?}; cleanup={cleanup:?}",
+                reason.code()
+            ),
             Self::Runtime {
                 stage,
                 source,
@@ -490,13 +539,15 @@ where
                     );
                 }
             };
-        if self
-            .browser_preflight
-            .evaluate_before_launch(&workspace, &device_id, lease.epoch(), &runtime_bundle)
-            .is_err()
-        {
-            return Err(self.fail_with_lock_before_use(
-                OperatorFailureStage::BrowserPreflight,
+        if let Err(error) = self.browser_preflight.evaluate_before_launch(
+            &workspace,
+            &device_id,
+            lease.epoch(),
+            &runtime_bundle,
+        ) {
+            let reason = B::operational_rejection_reason(&error);
+            return Err(self.fail_preflight_with_lock_before_use(
+                reason,
                 lease,
                 workspace_lock,
             ));
@@ -899,6 +950,29 @@ where
         OperatorFlowError::Stage(stage)
     }
 
+    fn fail_preflight_with_lock_before_use(
+        &mut self,
+        reason: OperationalRejectionReason,
+        lease: ProfileLease,
+        workspace_lock: BridgeWorkspaceLock,
+    ) -> OperatorFlowError {
+        let workspace_lock_failed = workspace_lock.release().is_err();
+        let coordinator_lease = self.coordinator.close_lease(&lease).is_err();
+        let cleanup = CleanupFailures {
+            process: false,
+            workspace_lock: workspace_lock_failed,
+            coordinator_lease,
+        };
+        if cleanup.any() {
+            self.cleanup_blocked = true;
+        }
+        OperatorFlowError::Preflight {
+            reason,
+            local_state: LocalGenerationState::MaterializedClean,
+            cleanup,
+        }
+    }
+
     fn fail_with_lock_before_use(
         &mut self,
         stage: OperatorFailureStage,
@@ -1035,8 +1109,9 @@ impl From<LocalProfileError> for OperatorFlowError {
 #[cfg(test)]
 mod tests {
     use super::{
-        BrowserLaunchPreflightPort, DeviceAuthenticationPort, EnrollmentPort, OperatorEnrollment,
-        OperatorFailureStage, OperatorFlowError, ProfileBridgeOperator, RuntimeBundleSelectionPort,
+        BrowserLaunchPreflightPort, DeviceAuthenticationPort, EnrollmentPort,
+        OperationalRejectionReason, OperatorEnrollment, OperatorFailureStage, OperatorFlowError,
+        ProfileBridgeOperator, RuntimeBundleSelectionPort,
     };
     use crate::local_profile::{
         BridgeWorkspaceLock, GenerationWorkspace, LocalGenerationState, LocalProfileError,
@@ -1680,9 +1755,11 @@ mod tests {
         );
         assert_eq!(
             operator.open(&fixture.claim_uri, &fixture.root, UnixMillis::new(10)),
-            Err(OperatorFlowError::Stage(
-                OperatorFailureStage::BrowserPreflight
-            ))
+            Err(OperatorFlowError::Preflight {
+                reason: OperationalRejectionReason::BrowserPreflightRejected,
+                local_state: LocalGenerationState::MaterializedClean,
+                cleanup: super::CleanupFailures::none(),
+            })
         );
         assert_eq!(operator.coordinator().closed, 1);
         assert!(operator.process().actions().is_empty());
