@@ -1,6 +1,6 @@
 use crate::browser_execution::{BrowserLaunchBlocker, evaluate_browser_launch};
 use crate::local_profile::GenerationWorkspace;
-use crate::operator_flow::BrowserLaunchPreflightPort;
+use crate::operator_flow::{BrowserLaunchPreflightPort, OperationalRejectionReason};
 use crate::runtime_bundle::ApprovedRuntimeBundle;
 use browser_execution_domain::{
     MaterializationBinding, NetworkIdentityObservation, NetworkIdentityPolicy,
@@ -80,11 +80,37 @@ impl<O> BoundBrowserLaunchPreflight<O> {
     }
 }
 
+fn classify_browser_launch_blocker(error: &BrowserLaunchBlocker) -> OperationalRejectionReason {
+    match error {
+        BrowserLaunchBlocker::MaterializationStale => {
+            OperationalRejectionReason::RuntimeCandidateMismatch
+        }
+        BrowserLaunchBlocker::InvalidMaterializationEvidence => {
+            OperationalRejectionReason::ConfigIntegrityMismatch
+        }
+        BrowserLaunchBlocker::NetworkPolicyMismatch => {
+            OperationalRejectionReason::IdentityObservationMismatch
+        }
+        BrowserLaunchBlocker::ProfileBusy => OperationalRejectionReason::ProfileBusy,
+        BrowserLaunchBlocker::RecoveryRequired => OperationalRejectionReason::RecoveryRequired,
+        BrowserLaunchBlocker::RetryableNetworkRouteChurn => {
+            OperationalRejectionReason::RetryableNetworkRouteChurn
+        }
+        BrowserLaunchBlocker::LocalProfile(_) => {
+            OperationalRejectionReason::FilesystemProcessCapabilityUnavailable
+        }
+    }
+}
+
 impl<O> BrowserLaunchPreflightPort for BoundBrowserLaunchPreflight<O>
 where
     O: BrowserRuntimeObservationPort,
 {
     type Error = BrowserLaunchBlocker;
+
+    fn operational_rejection_reason(error: &Self::Error) -> OperationalRejectionReason {
+        classify_browser_launch_blocker(error)
+    }
 
     fn evaluate_before_launch(
         &mut self,
@@ -224,11 +250,11 @@ fn validate_u32(value: &Value) -> bool {
 mod tests {
     use super::{
         BoundBrowserLaunchPreflight, BrowserRuntimeObservation, BrowserRuntimeObservationPort,
-        CAMOUFOX_CONFIG_FILE, validate_camoufox_webgl_value,
+        CAMOUFOX_CONFIG_FILE, classify_browser_launch_blocker, validate_camoufox_webgl_value,
     };
     use crate::browser_execution::{BrowserLaunchBlocker, persist_materialization_binding};
     use crate::local_profile::{BridgeWorkspaceLock, GenerationWorkspace, MaterializationRoot};
-    use crate::operator_flow::BrowserLaunchPreflightPort;
+    use crate::operator_flow::{BrowserLaunchPreflightPort, OperationalRejectionReason};
     use crate::runtime_bundle::ApprovedRuntimeBundle;
     use crate::test_support::{browser_identity_fixture, remove_test_root};
     use browser_execution_domain::{
@@ -295,6 +321,47 @@ mod tests {
             inventory,
             &calculated,
         )?)
+    }
+
+    #[test]
+    fn operational_rejection_categories_are_stable_and_non_secret() {
+        let cases = [
+            (
+                BrowserLaunchBlocker::MaterializationStale,
+                OperationalRejectionReason::RuntimeCandidateMismatch,
+                "runtime_candidate_mismatch",
+            ),
+            (
+                BrowserLaunchBlocker::InvalidMaterializationEvidence,
+                OperationalRejectionReason::ConfigIntegrityMismatch,
+                "config_integrity_mismatch",
+            ),
+            (
+                BrowserLaunchBlocker::NetworkPolicyMismatch,
+                OperationalRejectionReason::IdentityObservationMismatch,
+                "identity_observation_mismatch",
+            ),
+            (
+                BrowserLaunchBlocker::ProfileBusy,
+                OperationalRejectionReason::ProfileBusy,
+                "profile_busy",
+            ),
+            (
+                BrowserLaunchBlocker::RecoveryRequired,
+                OperationalRejectionReason::RecoveryRequired,
+                "recovery_required",
+            ),
+            (
+                BrowserLaunchBlocker::RetryableNetworkRouteChurn,
+                OperationalRejectionReason::RetryableNetworkRouteChurn,
+                "retryable_network_route_churn",
+            ),
+        ];
+        for (blocker, expected, code) in cases {
+            let observed = classify_browser_launch_blocker(&blocker);
+            assert_eq!(observed, expected);
+            assert_eq!(observed.code(), code);
+        }
     }
 
     #[test]
