@@ -383,7 +383,8 @@ mod tests {
         let device = DeviceId::parse("device_01JPREFLIGHT")?;
         let workspace = root.create_generation(&tenant, &profile, &generation)?;
         let lock = BridgeWorkspaceLock::acquire(&workspace, &device, 3)?;
-        let canonical_config = r#"{"webGl:parameters":{"2928":[0.0,1.0],"3107":[true,true,true,true],"34467":null}}"#;
+        let canonical_config =
+            r#"{"webGl:parameters":{"2928":[0.0,1.0],"3107":[true,true,true,true],"34467":null}}"#;
         fs::write(
             workspace.path().join(CAMOUFOX_CONFIG_FILE),
             canonical_config,
