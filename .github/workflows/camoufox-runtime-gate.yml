@@ -90,6 +90,8 @@ jobs:
     needs: patched-candidate
     runs-on: ubuntu-24.04
     timeout-minutes: 60
+    env:
+      AR10_REAL_CAMOUFOX_HEADLESS: "false"
     steps:
       - name: Checkout exact source
         uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
@@ -106,6 +108,37 @@ jobs:
         run: |
           python3.12 --version
           command -v Xvfb
+
+      - name: Start one managed X display
+        run: |
+          Xvfb :99 -screen 0 1920x1080x24 -nolisten tcp -ac >"$RUNNER_TEMP/s0-xvfb.log" 2>&1 &
+          xvfb_pid=$!
+          echo "S0_XVFB_PID=$xvfb_pid" >> "$GITHUB_ENV"
+          if ! S0_XVFB_PID="$xvfb_pid" python3.12 - <<'PY'
+          import os
+          import socket
+          import time
+
+          pid = int(os.environ["S0_XVFB_PID"])
+          deadline = time.monotonic() + 20
+          while time.monotonic() < deadline:
+              try:
+                  os.kill(pid, 0)
+                  with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
+                      client.settimeout(0.2)
+                      client.connect("/tmp/.X11-unix/X99")
+                  break
+              except (FileNotFoundError, ConnectionError, OSError):
+                  time.sleep(0.1)
+          else:
+              raise SystemExit("managed X display did not accept connections within 20 seconds")
+          PY
+          then
+            cat "$RUNNER_TEMP/s0-xvfb.log"
+            kill "$xvfb_pid" 2>/dev/null || true
+            exit 1
+          fi
+          echo "DISPLAY=:99" >> "$GITHUB_ENV"
 
       - name: Enforce CAP-01 production Bridge boundary
         run: |
@@ -161,7 +194,7 @@ jobs:
           python3.12 scripts/diagnose-s0-webgl-parameters.py \
             --camouhost runtime/camouhost/real.py \
             --runtime-lock runtime/camouhost/runtime-lock.json \
-            --headless virtual
+            --headless false
 
       - name: Prove browser-visible canvas portability on exact Camoufox
         run: |
@@ -169,7 +202,7 @@ jobs:
             --python /usr/bin/python3.12 \
             --camouhost runtime/camouhost/real.py \
             --runtime-lock runtime/camouhost/runtime-lock.json \
-            --headless virtual
+            --headless false
 
       - name: Prove browser-visible audio and font portability on exact Camoufox
         run: |
@@ -177,13 +210,14 @@ jobs:
             --python /usr/bin/python3.12 \
             --camouhost runtime/camouhost/real.py \
             --runtime-lock runtime/camouhost/runtime-lock.json \
-            --headless virtual
+            --headless false
 
       - name: Prove Profile Bridge -> managed IPC -> real Camoufox chain
         env:
           AR10_REAL_CAMOUFOX: "1"
           AR10_PYTHON: /usr/bin/python3.12
           AR10_RUNTIME_ROOT: ${{ github.workspace }}/runtime
+          AR10_REAL_CAMOUFOX_HEADLESS: "false"
         run: cargo test --locked -p profile-bridge --test real_camoufox_runtime -- --nocapture
 
       - name: Prove authoritative P3 browser-state portability through managed Camoufox
@@ -191,11 +225,19 @@ jobs:
           AR10_REAL_CAMOUFOX: "1"
           AR10_PYTHON: /usr/bin/python3.12
           AR10_RUNTIME_ROOT: ${{ github.workspace }}/runtime
-          AR10_BROWSER_STATE_HEADLESS: virtual
+          AR10_BROWSER_STATE_HEADLESS: "false"
         run: cargo test --locked -p profile-bridge --test portable_browser_state real_cookie_local_storage_and_indexed_db_survive_authoritative_p3_reopen -- --nocapture
 
       - name: Enforce parity-gated AR-10 closeout policy
         run: python3.12 scripts/check-ar10-runtime-cutover.py --closeout
+
+      - name: Stop managed X display
+        if: always()
+        run: |
+          if [ -n "${S0_XVFB_PID:-}" ] && kill -0 "$S0_XVFB_PID" 2>/dev/null; then
+            kill "$S0_XVFB_PID"
+            wait "$S0_XVFB_PID" || true
+          fi
 
   bridge-regression-windows:
     name: Profile Bridge Windows regression

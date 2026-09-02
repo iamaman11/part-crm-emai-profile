@@ -24,6 +24,7 @@ CAMOUHOST = ROOT / "runtime/camouhost/real.py"
 RUNTIME_LOCK = ROOT / "runtime/camouhost/runtime-lock.json"
 SESSION = "session_01JAR10REALCAMOUFOX"
 IPC_VERSION = "3"
+HEADLESS_MODE_ENV = "AR10_REAL_CAMOUFOX_HEADLESS"
 BRIDGE_LOCK_CONTENT = "profile-platform-bridge-lock-v1\ndevice_01JAR10REALCAMOUFOX\n1\n"
 MANAGED_PARENT_ENV = {
     "DBUS_SESSION_BUS_ADDRESS",
@@ -100,6 +101,13 @@ def canonical_lock_digest() -> str:
     return hashlib.sha256(raw).hexdigest()
 
 
+def requested_headless_mode() -> str:
+    value = os.environ.get(HEADLESS_MODE_ENV, "virtual")
+    if value not in {"false", "virtual"}:
+        raise AssertionError(f"{HEADLESS_MODE_ENV} must be exactly false or virtual")
+    return value
+
+
 def base_env(root: Path, report: dict[str, str]) -> dict[str, str]:
     env = os.environ.copy()
     env.update(
@@ -109,7 +117,7 @@ def base_env(root: Path, report: dict[str, str]) -> dict[str, str]:
             "CAMOUHOST_EXPECTED_RUNTIME_LOCK_SHA256": report["runtime_lock_sha256"],
             "CAMOUHOST_EXPECTED_CONFIG_SHA256": report["fingerprint_config_sha256"],
             "CAMOUHOST_EXPECTED_PROBE_SHA256": report["profile_stable_probe_sha256"],
-            "CAMOUHOST_HEADLESS_MODE": "virtual",
+            "CAMOUHOST_HEADLESS_MODE": requested_headless_mode(),
             "PYTHONUNBUFFERED": "1",
         }
     )
@@ -134,7 +142,7 @@ def managed_env(
             "CAMOUHOST_EXPECTED_RUNTIME_LOCK_SHA256": report["runtime_lock_sha256"],
             "CAMOUHOST_EXPECTED_CONFIG_SHA256": report["fingerprint_config_sha256"],
             "CAMOUHOST_EXPECTED_PROBE_SHA256": report["profile_stable_probe_sha256"],
-            "CAMOUHOST_HEADLESS_MODE": "virtual",
+            "CAMOUHOST_HEADLESS_MODE": requested_headless_mode(),
             "PYTHONUNBUFFERED": "1",
         }
     )
@@ -145,7 +153,7 @@ def materializer_env() -> dict[str, str]:
     return {
         **os.environ,
         "CAMOUHOST_RUNTIME_LOCK": str(RUNTIME_LOCK),
-        "CAMOUHOST_HEADLESS_MODE": "virtual",
+        "CAMOUHOST_HEADLESS_MODE": requested_headless_mode(),
     }
 
 

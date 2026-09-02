@@ -31,6 +31,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 const ENABLE_ENV: &str = "AR10_REAL_CAMOUFOX";
 const PYTHON_ENV: &str = "AR10_PYTHON";
 const RUNTIME_ROOT_ENV: &str = "AR10_RUNTIME_ROOT";
+const HEADLESS_ENV: &str = "AR10_REAL_CAMOUFOX_HEADLESS";
 const LOWER_HEX: &[u8; 16] = b"0123456789abcdef";
 const MAX_DIAGNOSTIC_SYMLINKS: usize = 32;
 const CONFIG_NAME: &str = "camoufox-config.json";
@@ -242,13 +243,19 @@ fn run_managed_cold_launch_cycle() -> Result<(), Box<dyn std::error::Error>> {
     let device = DeviceId::parse("device_01JAR10REAL")?;
     let workspace = root.create_generation(&tenant, &profile, &generation)?;
     let lock = BridgeWorkspaceLock::acquire(&workspace, &device, 9)?;
+    let headless = env::var(HEADLESS_ENV).unwrap_or_else(|_| "virtual".to_owned());
+    let display_mode = match headless.as_str() {
+        "false" => RuntimeDisplayMode::Headful,
+        "virtual" => RuntimeDisplayMode::VirtualHeadful,
+        _ => return Err(format!("{HEADLESS_ENV} must be exactly false or virtual").into()),
+    };
 
     let output = Command::new(&python)
         .arg(&real_runtime)
         .arg("--materialize-identity")
         .arg(workspace.path())
         .env("CAMOUHOST_RUNTIME_LOCK", &runtime_lock)
-        .env("CAMOUHOST_HEADLESS_MODE", "virtual")
+        .env("CAMOUHOST_HEADLESS_MODE", &headless)
         .output()?;
     if !output.status.success() {
         return Err(format!(
@@ -318,13 +325,7 @@ fn run_managed_cold_launch_cycle() -> Result<(), Box<dyn std::error::Error>> {
     );
     preflight.evaluate_before_launch(&workspace, &device, 9, &bundle)?;
 
-    let config = ManagedCamouhostConfig::new(
-        python,
-        runtime_root,
-        RuntimeDisplayMode::VirtualHeadful,
-        None,
-        None,
-    )?;
+    let config = ManagedCamouhostConfig::new(python, runtime_root, display_mode, None, None)?;
     let (mut process, camouhost) = ManagedCamouhostProcess::pair(config, slot);
     let mut camouhost = StageTracingCamouhost::new(camouhost);
     let session = SessionId::parse("session_01JAR10REAL")?;
