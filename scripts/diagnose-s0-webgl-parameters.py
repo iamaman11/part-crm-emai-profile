@@ -20,11 +20,34 @@ from typing import Any
 
 DIAGNOSTIC_PROBE = r"""
 (request) => {
+  const typedArrayConstructors = new Map([
+    ['[object Int8Array]', Int8Array],
+    ['[object Uint8Array]', Uint8Array],
+    ['[object Uint8ClampedArray]', Uint8ClampedArray],
+    ['[object Int16Array]', Int16Array],
+    ['[object Uint16Array]', Uint16Array],
+    ['[object Int32Array]', Int32Array],
+    ['[object Uint32Array]', Uint32Array],
+    ['[object Float32Array]', Float32Array],
+    ['[object Float64Array]', Float64Array],
+  ]);
+
+  // Playwright 1.60.0 uses TypedArray.toBase64() specifically because Firefox forbids
+  // iterating WebGL-returned TypedArrays across Xrays. Reconstruct a local typed array from
+  // those exact bytes before reading values; this is transport observation, not identity logic.
   const cloneTypedArrayIntoCallerRealm = (value) => {
-    if (typeof globalThis.structuredClone !== 'function') {
-      throw new Error('structuredClone is unavailable');
+    const tag = Object.prototype.toString.call(value);
+    const Constructor = typedArrayConstructors.get(tag);
+    if (!Constructor) throw new Error(`unsupported TypedArray tag: ${tag}`);
+    if (!('toBase64' in value) || typeof value.toBase64 !== 'function') {
+      throw new Error(`TypedArray.toBase64 unavailable for ${tag}`);
     }
-    return globalThis.structuredClone(value);
+    const binary = atob(value.toBase64());
+    const bytes = new Uint8Array(binary.length);
+    for (let index = 0; index < binary.length; index += 1) {
+      bytes[index] = binary.charCodeAt(index);
+    }
+    return {local: new Constructor(bytes.buffer), type: Constructor.name};
   };
 
   const normalize = (value) => {
@@ -34,8 +57,7 @@ DIAGNOSTIC_PROBE = r"""
     }
     if (Array.isArray(value)) return Array.from(value, normalize);
     if (ArrayBuffer.isView(value)) {
-      const local = cloneTypedArrayIntoCallerRealm(value);
-      return Array.from(local, normalize);
+      return Array.from(cloneTypedArrayIntoCallerRealm(value).local, normalize);
     }
     if (typeof value === 'object') {
       const output = {};
@@ -47,11 +69,7 @@ DIAGNOSTIC_PROBE = r"""
 
   const jsType = (value) => {
     if (value === null) return 'null';
-    if (ArrayBuffer.isView(value)) {
-      const local = cloneTypedArrayIntoCallerRealm(value);
-      const ctor = local.constructor;
-      return ctor && typeof ctor.name === 'string' && ctor.name ? ctor.name : 'TypedArray';
-    }
+    if (ArrayBuffer.isView(value)) return cloneTypedArrayIntoCallerRealm(value).type;
     if (Array.isArray(value)) return 'Array';
     return typeof value;
   };
