@@ -3,6 +3,10 @@ name: Architecture Acceptance Recorder
 on:
   pull_request:
     types: [closed]
+  workflow_run:
+    workflows:
+      - Camoufox Runtime Gate
+    types: [completed]
 
 permissions:
   actions: read
@@ -16,7 +20,7 @@ concurrency:
 jobs:
   record:
     name: Record Architecture Acceptance
-    if: github.event.pull_request.merged == true && startsWith(github.event.pull_request.title, 'AR-')
+    if: github.event_name == 'pull_request' && github.event.pull_request.merged == true && startsWith(github.event.pull_request.title, 'AR-')
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout exact accepted merge
@@ -315,3 +319,371 @@ jobs:
           cargo run --locked --quiet --manifest-path tools/opsctl/Cargo.toml -- \
             --root . status --acceptance-evidence-json acceptance-evidence.json \
             > lifecycle-state.json
+
+  record-cap-s0:
+    name: Record CAP S0 Accepted Main
+    if: >-
+      github.event_name == 'workflow_run' &&
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_branch == 'main'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout exact post-merge main
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Node 24 LTS
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
+        with:
+          node-version: '24.19.0'
+          package-manager-cache: false
+
+      - name: Resolve CAP S0 identity and existing checkpoint
+        id: cap-identity
+        env:
+          ACCEPTED_MAIN_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$ACCEPTED_MAIN_SHA"
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          policy = json.loads(Path('architecture/architecture-acceptance-policy.json').read_text(encoding='utf-8'))
+          cap = policy['cap_s0_acceptance']
+          lifecycle = policy['post_merge_lifecycle']
+          expected_order = [
+              'merge', 'verify_main_tree', 'post_merge_required_checks',
+              'required_publication_proof', 'acceptance_checkpoint',
+              'tracker_update', 'explicit_owning_issue_close',
+          ]
+          if cap['kind'] != 'CAP_S0_ACCEPTANCE' or cap['transaction'] != 'CAP-EXEC S0-PM':
+              raise SystemExit('CAP S0 acceptance policy identity drifted')
+          if cap['tag'] != 'architecture/accepted/cap-s0' or cap['record_schema_version'] != 2:
+              raise SystemExit('CAP S0 acceptance tag/schema drifted')
+          if lifecycle['ordered_steps'] != expected_order:
+              raise SystemExit('post-merge lifecycle ordering drifted')
+          if not lifecycle['merge_keyword_auto_close_for_owning_issue_forbidden']:
+              raise SystemExit('post-merge lifecycle lost explicit-close protection')
+          PY
+          TAG="$(jq -er '.cap_s0_acceptance.tag' architecture/architecture-acceptance-policy.json)"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          if git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null 2>&1; then
+            echo "existing=true" >> "$GITHUB_OUTPUT"
+            git fetch --no-tags origin "refs/tags/$TAG:refs/tags/$TAG"
+          else
+            echo "existing=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Verify idempotent CAP S0 checkpoint
+        if: steps.cap-identity.outputs.existing == 'true'
+        env:
+          TAG: ${{ steps.cap-identity.outputs.tag }}
+        run: |
+          set -euo pipefail
+          node .github/scripts/architecture-acceptance-observer.mjs cap-evidence > cap-s0-evidence.json
+          python - <<'PY'
+          import json
+          evidence = json.load(open('cap-s0-evidence.json', encoding='utf-8'))
+          rows = evidence.get('cap_acceptance_observations')
+          if not isinstance(rows, list) or len(rows) != 1 or rows[0].get('kind') != 'CAP_S0_ACCEPTANCE':
+              raise SystemExit('existing CAP S0 checkpoint is not the one typed immutable record')
+          PY
+
+      - name: Re-prove exact PM-3 merge identity and explicit-close governance
+        if: steps.cap-identity.outputs.existing != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ACCEPTED_MAIN_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin main
+          test "$(git rev-parse origin/main)" = "$ACCEPTED_MAIN_SHA"
+          PR_NUMBER="$(jq -er '.cap_s0_acceptance.repair_pr' architecture/architecture-acceptance-policy.json)"
+          gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER" > cap-s0-pr.json
+          python - <<'PY'
+          import json, os, re, subprocess
+          from pathlib import Path
+          policy = json.loads(Path('architecture/architecture-acceptance-policy.json').read_text(encoding='utf-8'))['cap_s0_acceptance']
+          pr = json.loads(Path('cap-s0-pr.json').read_text(encoding='utf-8'))
+          accepted = os.environ['ACCEPTED_MAIN_SHA']
+          expected = {
+              'number': policy['repair_pr'],
+              'title': policy['repair_pr_title'],
+              'base_ref': 'main',
+              'head_ref': policy['repair_head_branch'],
+          }
+          observed = {
+              'number': pr.get('number'),
+              'title': pr.get('title'),
+              'base_ref': pr.get('base', {}).get('ref'),
+              'head_ref': pr.get('head', {}).get('ref'),
+          }
+          if observed != expected:
+              raise SystemExit(f'CAP S0 repair PR identity drifted: {observed!r} != {expected!r}')
+          if not pr.get('merged_at') or pr.get('merge_commit_sha') != accepted:
+              raise SystemExit('CAP S0 repair PR is not the exact accepted-main merge')
+          closing = re.compile(r'\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s*:?\s*(?:[\w.-]+/[\w.-]+)?#539\b', re.I)
+          if closing.search(pr.get('title') or '') or closing.search(pr.get('body') or ''):
+              raise SystemExit('CAP S0 repair PR attempts merge-keyword auto-close of #539')
+          base = pr['base']['sha']
+          head = pr['head']['sha']
+          merge_tree = subprocess.check_output(['git', 'rev-parse', f'{accepted}^{{tree}}'], text=True).strip()
+          head_tree = subprocess.check_output(['git', 'rev-parse', f'{head}^{{tree}}'], text=True).strip()
+          first_parent = subprocess.check_output(['git', 'rev-parse', f'{accepted}^1'], text=True).strip()
+          second_parent = subprocess.check_output(['git', 'rev-parse', f'{accepted}^2'], text=True).strip()
+          if merge_tree != head_tree or first_parent != base or second_parent != head:
+              raise SystemExit('CAP S0 merge/tree provenance is not an exact two-parent guarded merge')
+          PY
+
+      - name: Wait for all exact-main protected contexts
+        if: steps.cap-identity.outputs.existing != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ACCEPTED_MAIN_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          set -euo pipefail
+          for attempt in $(seq 1 60); do
+            gh api --method GET "repos/$GITHUB_REPOSITORY/commits/$ACCEPTED_MAIN_SHA/check-runs" -f per_page=100 > cap-s0-check-runs.json
+            set +e
+            python - <<'PY'
+          import json, sys
+          from pathlib import Path
+
+          def pointer(document, value):
+              cursor = document
+              for token in value.strip('/').split('/'):
+                  cursor = cursor[token.replace('~1', '/').replace('~0', '~')]
+              return cursor
+
+          policy = json.loads(Path('architecture/architecture-acceptance-policy.json').read_text(encoding='utf-8'))
+          required = []
+          for source in policy['required_status_contexts']['sources']:
+              document = json.loads(Path(source['path']).read_text(encoding='utf-8'))
+              required.extend(pointer(document, source['json_pointer']))
+          if len(required) != len(set(required)):
+              print('duplicate required contexts', file=sys.stderr)
+              raise SystemExit(20)
+          checks = json.loads(Path('cap-s0-check-runs.json').read_text(encoding='utf-8'))
+          if checks.get('total_count', 0) > 100:
+              print('check-run page bound exceeded', file=sys.stderr)
+              raise SystemExit(20)
+          latest = {}
+          for row in checks.get('check_runs', []):
+              name = row.get('name')
+              if isinstance(name, str) and (name not in latest or int(row.get('id', 0)) > int(latest[name].get('id', 0))):
+                  latest[name] = row
+          missing = [name for name in required if name not in latest]
+          terminal_failures = [name for name in required if name in latest and latest[name].get('status') == 'completed' and latest[name].get('conclusion') != 'success']
+          pending = [name for name in required if name in latest and latest[name].get('status') != 'completed']
+          if terminal_failures:
+              print(f'terminal required-context failures: {terminal_failures}', file=sys.stderr)
+              raise SystemExit(20)
+          if missing or pending:
+              print(f'waiting for required contexts: missing={missing}, pending={pending}')
+              raise SystemExit(10)
+          Path('cap-s0-required-count.txt').write_text(str(len(required)), encoding='utf-8')
+          PY
+            rc=$?
+            set -e
+            if [ "$rc" -eq 0 ]; then
+              break
+            fi
+            if [ "$rc" -eq 20 ] || [ "$attempt" -eq 60 ]; then
+              exit 1
+            fi
+            sleep 10
+          done
+
+      - name: Wait for exact-main Release Set publication
+        if: steps.cap-identity.outputs.existing != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ACCEPTED_MAIN_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          set -euo pipefail
+          RELEASE_WORKFLOW="$(jq -er '.cap_s0_acceptance.release_workflow' architecture/architecture-acceptance-policy.json)"
+          export RELEASE_WORKFLOW
+          for attempt in $(seq 1 60); do
+            gh api --method GET "repos/$GITHUB_REPOSITORY/actions/runs" -f head_sha="$ACCEPTED_MAIN_SHA" -f event=push -f per_page=100 > cap-s0-release-runs.json
+            set +e
+            python - <<'PY'
+          import json, os, sys
+          from pathlib import Path
+          runs = json.loads(Path('cap-s0-release-runs.json').read_text(encoding='utf-8'))
+          if runs.get('total_count', 0) > 100:
+              print('release workflow-run page bound exceeded', file=sys.stderr)
+              raise SystemExit(20)
+          matches = [row for row in runs.get('workflow_runs', []) if row.get('name') == os.environ['RELEASE_WORKFLOW'] and row.get('head_sha') == os.environ['ACCEPTED_MAIN_SHA'] and row.get('event') == 'push']
+          if not matches:
+              raise SystemExit(10)
+          run = max(matches, key=lambda row: int(row.get('id', 0)))
+          if run.get('status') != 'completed':
+              raise SystemExit(10)
+          if run.get('conclusion') != 'success':
+              print(f"release workflow failed: {run.get('conclusion')}", file=sys.stderr)
+              raise SystemExit(20)
+          Path('cap-s0-release-run-id.txt').write_text(str(run['id']), encoding='utf-8')
+          PY
+            rc=$?
+            set -e
+            if [ "$rc" -eq 0 ]; then
+              break
+            fi
+            if [ "$rc" -eq 20 ] || [ "$attempt" -eq 60 ]; then
+              exit 1
+            fi
+            sleep 10
+          done
+          RELEASE_RUN_ID="$(cat cap-s0-release-run-id.txt)"
+          gh api --method GET "repos/$GITHUB_REPOSITORY/actions/runs/$RELEASE_RUN_ID/jobs" -f per_page=100 > cap-s0-release-jobs.json
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          jobs = json.loads(Path('cap-s0-release-jobs.json').read_text(encoding='utf-8'))
+          required = {
+              'Build immutable clean-host Windows Camouhost runtime',
+              'Finalize and publish durable immutable Release Set v3',
+          }
+          latest = {}
+          for row in jobs.get('jobs', []):
+              name = row.get('name')
+              if name in required and (name not in latest or int(row.get('id', 0)) > int(latest[name].get('id', 0))):
+                  latest[name] = row
+          missing = sorted(required - set(latest))
+          failed = sorted(name for name, row in latest.items() if row.get('status') != 'completed' or row.get('conclusion') != 'success')
+          if missing or failed:
+              raise SystemExit(f'exact Release Set proof incomplete: missing={missing}, failed={failed}')
+          PY
+
+      - name: Resolve and verify exact durable Release Set
+        if: steps.cap-identity.outputs.existing != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ACCEPTED_MAIN_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          set -euo pipefail
+          gh api --method GET "repos/$GITHUB_REPOSITORY/releases" -f per_page=100 > cap-s0-releases.json
+          python - <<'PY'
+          import json, os, re
+          from pathlib import Path
+          releases = json.loads(Path('cap-s0-releases.json').read_text(encoding='utf-8'))
+          pattern = re.compile(r'^release-set-v3-sha256-[0-9a-f]{64}$')
+          matches = [row for row in releases if row.get('target_commitish') == os.environ['ACCEPTED_MAIN_SHA'] and pattern.fullmatch(row.get('tag_name') or '')]
+          if len(matches) != 1:
+              raise SystemExit(f'expected one exact Release Set for accepted main, observed {len(matches)}')
+          release = matches[0]
+          if release.get('draft') or release.get('prerelease') or release.get('name') != release.get('tag_name'):
+              raise SystemExit('exact Release Set publication state is invalid')
+          assets = {row.get('name'): row for row in release.get('assets', [])}
+          for name in ['release-set.json', 'runtime-bundle.tar']:
+              asset = assets.get(name)
+              if not asset or asset.get('state') != 'uploaded' or int(asset.get('size', 0)) <= 0:
+                  raise SystemExit(f'durable Release Set asset missing or invalid: {name}')
+          Path('cap-s0-release-id.txt').write_text(release['tag_name'], encoding='utf-8')
+          PY
+          RELEASE_ID="$(cat cap-s0-release-id.txt)"
+          mkdir -p "$RUNNER_TEMP/cap-s0-release-proof"
+          gh release download "$RELEASE_ID" --pattern release-set.json --dir "$RUNNER_TEMP/cap-s0-release-proof"
+          jq -e --arg source "$ACCEPTED_MAIN_SHA" --arg release "$RELEASE_ID" '.schema_version == 3 and .release_set_id == $release and .source.commit_sha == $source and .source.accepted_main == true' "$RUNNER_TEMP/cap-s0-release-proof/release-set.json" >/dev/null
+
+      - name: Build and validate immutable CAP S0 acceptance record
+        if: steps.cap-identity.outputs.existing != 'true'
+        env:
+          ACCEPTED_MAIN_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json, os, subprocess
+          from pathlib import Path
+          policy = json.loads(Path('architecture/architecture-acceptance-policy.json').read_text(encoding='utf-8'))['cap_s0_acceptance']
+          lock = json.loads(Path(policy['camoufox_lock']).read_text(encoding='utf-8'))
+          pr = json.loads(Path('cap-s0-pr.json').read_text(encoding='utf-8'))
+          accepted = os.environ['ACCEPTED_MAIN_SHA']
+          candidate = pr['head']['sha']
+          record = {
+              'schema_version': policy['record_schema_version'],
+              'kind': policy['kind'],
+              'transaction': policy['transaction'],
+              'owning_issue': policy['owning_issue'],
+              'original_s0_issue': policy['original_s0_issue'],
+              'implementation_pr': policy['implementation_pr'],
+              'repair_pr': policy['repair_pr'],
+              'repair_base_sha': pr['base']['sha'],
+              'source_candidate_sha': policy['source_candidate_sha'],
+              'source_candidate_tree': policy['source_candidate_tree'],
+              'repair_candidate_sha': candidate,
+              'repair_candidate_tree': subprocess.check_output(['git', 'rev-parse', f'{candidate}^{{tree}}'], text=True).strip(),
+              'accepted_main_sha': accepted,
+              'accepted_main_tree': subprocess.check_output(['git', 'rev-parse', f'{accepted}^{{tree}}'], text=True).strip(),
+              'upstream_camoufox_commit': lock['browser']['release_commit'],
+              'patch_sha256': lock['patch']['sha256'],
+              'camoufox_candidate_sha256': {
+                  'linux_x86_64': lock['candidates']['linux']['artifact_sha256'],
+                  'windows_x86_64': lock['candidates']['windows']['artifact_sha256'],
+              },
+              'release_set_id': Path('cap-s0-release-id.txt').read_text(encoding='utf-8').strip(),
+              'ec_namespace': policy['ec_namespace'],
+              'ec_result': policy['ec_result'],
+              'ec_unknown_count': policy['ec_unknown_count'],
+              'evidence_refs': policy['evidence_refs'],
+              'required_status_contexts_total': int(Path('cap-s0-required-count.txt').read_text(encoding='utf-8')),
+              'required_status_contexts_success': int(Path('cap-s0-required-count.txt').read_text(encoding='utf-8')),
+              'post_merge_required_contexts': 'SUCCESS',
+              'release_publication': 'SUCCESS',
+              'production_authorized': policy['production_authorized'],
+              'provider_mutation_authorized': policy['provider_mutation_authorized'],
+          }
+          Path('cap-s0-acceptance-record.json').write_text(json.dumps(record, sort_keys=True, separators=(',', ':')) + '\n', encoding='utf-8')
+          PY
+          node .github/scripts/architecture-acceptance-observer.mjs cap-evidence --append cap-s0-acceptance-record.json > cap-s0-candidate-evidence.json
+          python - <<'PY'
+          import json
+          evidence = json.load(open('cap-s0-candidate-evidence.json', encoding='utf-8'))
+          rows = evidence.get('cap_acceptance_observations')
+          if not isinstance(rows, list) or len(rows) != 1 or rows[0].get('production_authorized') is not False or rows[0].get('provider_mutation_authorized') is not False:
+              raise SystemExit('candidate CAP S0 acceptance evidence did not validate exactly once')
+          PY
+
+      - name: Create append-only CAP S0 acceptance tag
+        if: steps.cap-identity.outputs.existing != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.cap-identity.outputs.tag }}
+          ACCEPTED_MAIN_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          Path('cap-s0-tag-object.json').write_text(json.dumps({
+              'tag': os.environ['TAG'],
+              'message': Path('cap-s0-acceptance-record.json').read_text(encoding='utf-8').strip(),
+              'object': os.environ['ACCEPTED_MAIN_SHA'],
+              'type': 'commit',
+          }), encoding='utf-8')
+          PY
+          TAG_OBJECT_SHA="$(gh api --method POST "repos/$GITHUB_REPOSITORY/git/tags" --input cap-s0-tag-object.json --jq .sha)"
+          export TAG_OBJECT_SHA
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          Path('cap-s0-tag-ref.json').write_text(json.dumps({
+              'ref': f"refs/tags/{os.environ['TAG']}",
+              'sha': os.environ['TAG_OBJECT_SHA'],
+          }), encoding='utf-8')
+          PY
+          gh api --method POST "repos/$GITHUB_REPOSITORY/git/refs" --input cap-s0-tag-ref.json >/dev/null
+          git fetch --no-tags origin "refs/tags/$TAG:refs/tags/$TAG"
+          test "$(git rev-list -n 1 "$TAG")" = "$ACCEPTED_MAIN_SHA"
+          node .github/scripts/architecture-acceptance-observer.mjs cap-evidence > cap-s0-evidence.json
+          python - <<'PY'
+          import json, os
+          evidence = json.load(open('cap-s0-evidence.json', encoding='utf-8'))
+          rows = evidence.get('cap_acceptance_observations')
+          if not isinstance(rows, list) or len(rows) != 1 or rows[0].get('accepted_main_sha') != os.environ['ACCEPTED_MAIN_SHA']:
+              raise SystemExit('durable CAP S0 acceptance checkpoint did not re-observe exact accepted main')
+          PY
