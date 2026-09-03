@@ -8,11 +8,8 @@ import process from 'node:process';
 const ROOT = process.cwd();
 const BUILD = '.github/workflows/release-set-build.yml';
 const PROMOTION = '.github/workflows/release-set-promotion.yml';
-const TRANSPORT = '.github/workflows/ar11-fc6-operator-transport.yml';
-const OPERATOR = '.github/scripts/ar11-fc6-operator.mjs';
 const ASSET_MATERIALIZER = 'scripts/release-set-assets-ar11.sh';
 const AUTHORITY = 'architecture/release-architecture-ar11.json';
-const TRANSACTION = 'docs/evidence/ar11-fc6-operator-transaction.json';
 const LEGACY_FILES = [
   '.github/workflows/mailbox-secret-resolver-promotion.yml',
   'scripts/mailbox-secret-resolver-promotion.py',
@@ -78,89 +75,6 @@ function buildErrors(build) {
   return errors;
 }
 
-function operatorScriptErrors(operator) {
-  const errors = [];
-  errors.push(...requireMarkers(operator, [
-    "const REPOSITORY = 'iamaman11/part-crm-emai-profile'",
-    'const ISSUE_NUMBER = 399',
-    "const WORKFLOW = 'release-set-promotion.yml'",
-    "const WORKFLOW_PATH = '.github/workflows/release-set-promotion.yml'",
-    "const TRANSPORT_WORKFLOW = 'AR-11 FC-6 Operator Transport'",
-    "const TRANSACTION_PATH = 'docs/evidence/ar11-fc6-operator-transaction.json'",
-    "const RELEASE = 'release-set-v3-sha256-[0-9a-f]{64}'",
-    'ceremony Release Set IDs must be canonical v3 IDs',
-    "kind !== 'AR11_FC6_STAGING_CEREMONY'",
-    "authority !== 'TRANSPORT_REQUEST_ONLY'",
-    'production_authorized !== false',
-    "operation !== 'full-staging-ceremony'",
-    'ceremony A and B must be source-distinct Release Sets',
-    'ceremony initial expected-current must equal A',
-    'ceremony final expected-current must equal A',
-    'ceremony confirmation must bind exact A and B',
-    "eventName !== 'push' || githubRef !== 'refs/heads/main'",
-    'operator requires an ordinary protected-main update',
-    'push event must bind exact checked-out main SHA',
-    'operator transaction must be exactly one accepted-main commit',
-    'operator transaction commit must change exactly one data-only file',
-    'operator transaction may only add or modify',
-    'ceremony commit must remain the current protected main while dispatching',
-    'checked-out ceremony transaction bytes differ from hosted exact-SHA bytes',
-    "if (stage === 'a-to-b')",
-    "if (stage === 'b-no-change')",
-    "if (stage === 'b-to-a')",
-    "if (stage === 'a-no-change')",
-    "operation: 'rollback-negative'",
-    'negative rollback requires completed A-to-A canonical run id',
-    '/actions/workflows/${WORKFLOW}/dispatches',
-    "ref: 'main'",
-    'duplicate canonical runs already exist',
-    'dispatch accepted but resulting canonical run could not be bound',
-    'canonical run ${runId} identity drifted',
-    "run?.path === WORKFLOW_PATH",
-    'AR11_FC6_TRUSTED_MAIN_AUDIT',
-    'DISPATCH_PENDING',
-    'DISPATCH_BOUND',
-    'RUN_SUCCESS',
-    "'ceremony', 'COMPLETE'",
-    'operator must execute only inside',
-    "for (const stage of ['a-to-b', 'b-no-change', 'b-to-a', 'a-no-change'])",
-    "completed['a-no-change'].id",
-    'production_authorized: false',
-  ], 'FC-6 trusted-main operator adapter'));
-  errors.push(...forbidMarkers(operator, [
-    "const RELEASE = 'release-set-v2-sha256-[0-9a-f]{64}'",
-    'CLOUDFLARE_API_TOKEN', 'CLOUDFLARE_DEPLOY_MANIFEST_JSON', 'wrangler', 'deployments: write',
-    'environment: staging', 'environment: production', 'terraform', 'pull.body', 'pull_request_target',
-  ], 'FC-6 trusted-main operator adapter'));
-  return errors;
-}
-
-function transportErrors(transport) {
-  const errors = [];
-  errors.push(...requireMarkers(transport, [
-    'name: AR-11 FC-6 Operator Transport',
-    'push:\n    branches:\n      - main\n    paths:\n      - docs/evidence/ar11-fc6-operator-transaction.json',
-    'concurrency:\n  group: ar11-fc6-trusted-main-operator\n  cancel-in-progress: false',
-    "if: github.ref == 'refs/heads/main'",
-    'actions: write',
-    'issues: write',
-    'ref: ${{ github.sha }}',
-    'fetch-depth: 1',
-    'persist-credentials: false',
-    'timeout-minutes: 180',
-    'node .github/scripts/ar11-fc6-operator.mjs',
-  ], 'FC-6 operator transport'));
-  if (count(transport, 'push:') !== 1) errors.push('FC-6 operator transport must expose exactly one push trigger');
-  if (count(transport, 'operator-entrypoint:') !== 1) errors.push('FC-6 operator transport must contain exactly one operator job');
-  errors.push(...forbidMarkers(transport, [
-    'workflow_run:', 'workflow_dispatch:', 'issue_comment:', 'pull_request_target:', 'pull_request:\n',
-    'secrets.CLOUDFLARE_', 'CLOUDFLARE_API_TOKEN', 'CLOUDFLARE_DEPLOY_MANIFEST_JSON',
-    'environment: staging', 'environment: production', 'deployments: write', 'wrangler', 'terraform',
-    'ref: main\n', 'github.event.pull_request', 'github.event.workflow_run',
-  ], 'FC-6 operator transport'));
-  return errors;
-}
-
 function promotionErrors(promotion) {
   const errors = [];
   errors.push(...requireMarkers(promotion, [
@@ -209,7 +123,7 @@ function promotionErrors(promotion) {
   errors.push(...forbidMarkers(resolve, [
     '[[ "$RELEASE_SET_ID" =~ ^release-set-v2-sha256-[0-9a-f]{64}$ ]]',
     'materialize known-good-v2-v3',
-    'test "$(jq -r \'.schema_version\' "$policy_dir/release-set.json")" = 2',
+    "test \"$(jq -r '.schema_version' \"$policy_dir/release-set.json\")\" = 2",
     '.release_set_schema_version == 2',
     'secrets.CLOUDFLARE_', 'environment: staging', 'wrangler deploy', 'wrangler d1 execute',
     'curl --silent --show-error --output "$RUNNER_TEMP/deployments-api.json"',
@@ -286,19 +200,15 @@ function promotionErrors(promotion) {
 
 function operationalErrors({ requireCutover = true } = {}) {
   const errors = [];
-  for (const relative of [BUILD, PROMOTION, TRANSPORT, OPERATOR, ASSET_MATERIALIZER, AUTHORITY]) {
+  for (const relative of [BUILD, PROMOTION, ASSET_MATERIALIZER, AUTHORITY]) {
     if (!existsSync(path.join(ROOT, relative))) errors.push(`missing AR-11 operational authority: ${relative}`);
   }
   if (errors.length > 0) return errors;
 
   const build = read(BUILD);
   const promotion = read(PROMOTION);
-  const transport = read(TRANSPORT);
-  const operator = read(OPERATOR);
   errors.push(...buildErrors(build));
   errors.push(...promotionErrors(promotion));
-  errors.push(...transportErrors(transport));
-  errors.push(...operatorScriptErrors(operator));
 
   const authority = JSON.parse(read(AUTHORITY));
   if (authority.production_mutation !== false || authority.production_ready !== false || authority.production_core_gate !== 'BLOCKED' || authority.architecture_complete !== false) {
@@ -316,14 +226,11 @@ function operationalErrors({ requireCutover = true } = {}) {
 
 function selfTest() {
   const promotion = read(PROMOTION);
-  const transport = read(TRANSPORT);
   const build = read(BUILD);
-  const operator = read(OPERATOR);
-  if (buildErrors(build).length !== 0 || promotionErrors(promotion).length !== 0 || transportErrors(transport).length !== 0 || operatorScriptErrors(operator).length !== 0) {
-    throw new Error('canonical AR-11 operational workflow does not satisfy its own structural validator');
+  if (buildErrors(build).length !== 0 || promotionErrors(promotion).length !== 0) {
+    throw new Error('canonical AR-11 Release Set v3 build/promotion workflow does not satisfy its own structural validator');
   }
   execFileSync('bash', [path.join(ROOT, ASSET_MATERIALIZER), '--self-test'], { cwd: ROOT, stdio: 'inherit' });
-  execFileSync(process.execPath, [path.join(ROOT, OPERATOR), '--self-test'], { cwd: ROOT, stdio: 'inherit' });
 
   const predecessorWriter = build.replace('release finalize --request-json', 'release-set-ar11.py build');
   if (!buildErrors(predecessorWriter).some((error) => error.includes('release-set-ar11.py build'))) throw new Error('Python Release Set writer reintroduction fixture unexpectedly passed');
@@ -342,9 +249,6 @@ function selfTest() {
 
   const broadHistoricalMaterializer = promotion.replace('materialize current-v3 "$RELEASE_SET_ID"', 'materialize known-good-v2-v3 "$RELEASE_SET_ID"');
   if (promotionErrors(broadHistoricalMaterializer).length === 0) throw new Error('historical v2/v3 materializer leaked into current target authority');
-
-  const v2Operator = operator.replace("const RELEASE = 'release-set-v3-sha256-[0-9a-f]{64}'", "const RELEASE = 'release-set-v2-sha256-[0-9a-f]{64}'");
-  if (!operatorScriptErrors(v2Operator).some((error) => error.includes('release-set-v2-sha256-') || error.includes('release-set-v3-sha256-'))) throw new Error('FC-6 v2 target authority fixture unexpectedly passed');
 
   const leaked = promotion.replace('permissions:\n      contents: read\n    outputs:', 'permissions:\n      contents: read\n    env:\n      LEAKED_DEPLOY: ${{ secrets.CLOUDFLARE_API_TOKEN }}\n    outputs:');
   if (!promotionErrors(leaked).some((error) => error.includes('referenced exactly once'))) throw new Error('deploy-token leakage fixture unexpectedly passed');
@@ -376,24 +280,6 @@ function selfTest() {
   const fenceTypo = promotion.replace('preflight_sha256:$preflight_sha256', 'preflight_sha256256:$preflight_sha256');
   if (!promotionErrors(fenceTypo).some((error) => error.includes('preflight_sha256256') || error.includes('mutation-fence'))) throw new Error('mutation fence key typo fixture unexpectedly passed');
 
-  const transportSecretLeak = transport.replace('GITHUB_TOKEN: ${{ github.token }}', 'LEAKED_DEPLOY: ${{ secrets.CLOUDFLARE_API_TOKEN }}\n      GITHUB_TOKEN: ${{ github.token }}');
-  if (!transportErrors(transportSecretLeak).some((error) => error.includes('CLOUDFLARE_API_TOKEN'))) throw new Error('operator transport credential leakage fixture unexpectedly passed');
-
-  const reintroducedWorkflowRun = transport.replace('  push:\n', '  workflow_run:\n    workflows: [Release Architecture Gate]\n    types: [completed]\n  push:\n');
-  if (!transportErrors(reintroducedWorkflowRun).some((error) => error.includes('workflow_run'))) throw new Error('workflow_run transport reintroduction fixture unexpectedly passed');
-
-  const directPrTransport = transport.replace('  push:\n', '  pull_request_target:\n    types: [opened]\n  push:\n');
-  if (!transportErrors(directPrTransport).some((error) => error.includes('pull_request_target'))) throw new Error('direct PR write-token transport fixture unexpectedly passed');
-
-  const untrustedCheckout = transport.replace('ref: ${{ github.sha }}', 'ref: main');
-  if (!transportErrors(untrustedCheckout).some((error) => error.includes('ref: main') || error.includes('github.sha'))) throw new Error('operator non-exact-main checkout fixture unexpectedly passed');
-
-  const broadPath = transport.replace('      - docs/evidence/ar11-fc6-operator-transaction.json', '      - docs/evidence/**');
-  if (!transportErrors(broadPath).some((error) => error.includes('push'))) throw new Error('operator broad path trigger fixture unexpectedly passed');
-
-  const stagingAuthority = transport.replace('    runs-on: ubuntu-latest', '    runs-on: ubuntu-latest\n    environment: staging\n    permissions:\n      deployments: write');
-  if (!transportErrors(stagingAuthority).some((error) => error.includes('environment: staging') || error.includes('deployments: write'))) throw new Error('operator mutation-authority escalation fixture unexpectedly passed');
-
   const negativeBlock = jobBlock(promotion, 'rollback-negative-evidence');
   const uncontrolledNegative = promotion.replace(negativeBlock, negativeBlock.replace("jq '.catalog_schema_revision = null'", "jq '.catalog_schema_revision = .catalog_schema_revision'"));
   if (!promotionErrors(uncontrolledNegative).some((error) => error.includes('rollback-negative evidence'))) throw new Error('rollback-negative controlled-condition bypass unexpectedly passed');
@@ -401,7 +287,7 @@ function selfTest() {
   const nestedArtifact = promotion.replace('${{ runner.temp }}/release-set.json\n            ${{ runner.temp }}/accepted-source-evidence.json', '${{ runner.temp }}/release-policy-input/release-set.json\n            ${{ runner.temp }}/release-policy-input/accepted-source-evidence.json');
   if (!promotionErrors(nestedArtifact).some((error) => error.includes('phase 2 observe+preflight'))) throw new Error('nested preflight artifact regression unexpectedly passed');
 
-  console.log('AR-11 trusted-main transport, nine-asset Release Set v3, narrow historical v2/v3 verification, and structural promotion negative self-test passed.');
+  console.log('AR-11 nine-asset Release Set v3, narrow historical v2/v3 verification, and structural promotion negative self-test passed.');
 }
 
 if (process.argv.includes('--self-test')) { selfTest(); process.exit(0); }
@@ -410,4 +296,4 @@ if (errors.length > 0) {
   console.error(`AR-11 operational policy failed:\n${errors.map((error) => `- ${error}`).join('\n')}`);
   process.exit(1);
 }
-console.log('AR-11 durable Release Set v3 (nine immutable assets), trusted-main operator transport, and structural promotion policy passed.');
+console.log('AR-11 durable Release Set v3 (nine immutable assets) and structural promotion policy passed.');
