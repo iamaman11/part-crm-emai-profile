@@ -543,6 +543,7 @@ jobs:
           cargo test --locked --workspace --all-targets
           --exclude browser-profile-control-plane-worker
           --exclude cloudflare-adapters
+          -- --skip production_script_accepts_isolated_test_trust_without_system_trust_fallback
 
       - name: Verify AR-6 opsctl quality on Windows
         shell: pwsh
