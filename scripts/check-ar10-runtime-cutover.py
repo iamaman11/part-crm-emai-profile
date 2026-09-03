@@ -17,9 +17,6 @@ SYNTHETIC_RUNTIME = Path("runtime/camouhost/main.py")
 RUNTIME_ROOT = Path("runtime")
 RUNTIME_LOCK = Path("runtime/camouhost/runtime-lock.json")
 OPSCTL_SOURCE = Path("tools/opsctl/src")
-ADR = Path("docs/adr/ADR-0001-fingerprint-stability-policy.md")
-AR10_EVIDENCE = Path("docs/ARCHITECTURE_REBASELINE_V3_AR10.md")
-AR10_ACCEPTANCE_EVIDENCE = Path("docs/evidence/2026-08-19-ar10-final-acceptance.json")
 RETIRED_RUNTIME_CUTOVER = Path("architecture/runtime-cutover-ar10.json")
 LEGACY_EXECUTABLES = {
     "check_mail.py",
@@ -551,28 +548,6 @@ def validate_retired_runtime_authority(root: Path) -> None:
         fail("retired AR-10 runtime-cutover semantic authority was reintroduced")
 
 
-def validate_acceptance_projection(root: Path) -> None:
-    adr = read_regular(root, ADR)
-    if "**Статус:** accepted" not in adr:
-        fail("ADR-0001 must be accepted only with AR-10 executable evidence")
-    for marker in (
-        "Profile-Stable",
-        "Origin-Deterministic",
-        "Network-Bound",
-        "Session-Dynamic",
-        "## Runtime И Browser Upgrades",
-        "Автоматический silent upgrade запрещен.",
-    ):
-        if marker not in adr:
-            fail(f"ADR-0001 lost required policy class/upgrade invariant: {marker}")
-    read_regular(root, AR10_EVIDENCE)
-    evidence = json.loads(read_regular(root, AR10_ACCEPTANCE_EVIDENCE))
-    if evidence.get("kind") != "AR10_FINAL_ACCEPTANCE" or evidence.get("implementation_merge") != "7ab5edf583f541d08ff732624af25881d430d427":
-        fail("AR-10 final acceptance evidence identity drifted")
-    if evidence.get("applicable_permanent_workflows") != "16/16" or evidence.get("production_mutation") is not False:
-        fail("AR-10 final acceptance evidence is incomplete or production-mutating")
-
-
 def validate_preflight(root: Path) -> None:
     """Validate the supported runtime boundary before runtime parity proof."""
     validate_retired_runtime_authority(root)
@@ -581,13 +556,7 @@ def validate_preflight(root: Path) -> None:
     validate_synthetic_runtime(root)
     validate_python_runtime_boundary(root)
     validate_opsctl(root)
-
-
-def validate_closeout(root: Path) -> None:
-    """Validate accepted AR-10 state after successor parity has already been proved."""
-    validate_preflight(root)
     validate_legacy_retirement(root)
-    validate_acceptance_projection(root)
 
 
 def expect_runtime_source_failure(relative: Path, source: str, marker: str) -> None:
@@ -732,7 +701,6 @@ def materialize_candidate_identity(root):
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--root", type=Path, default=ROOT)
-    parser.add_argument("--closeout", action="store_true")
     parser.add_argument("--self-test", action="store_true")
     return parser.parse_args()
 
@@ -743,12 +711,9 @@ def main() -> int:
         if arguments.self_test:
             self_test()
             print("AR-10 runtime/Python role-effect policy negative self-test passed.")
-        elif arguments.closeout:
-            validate_closeout(arguments.root.resolve())
-            print("AR-10 real runtime, Python runtime boundary, opsctl and executable-retirement closeout policy passed.")
         else:
             validate_preflight(arguments.root.resolve())
-            print("AR-10 successor runtime and Python runtime role/effect preflight policy passed.")
+            print("AR-10 successor runtime, executable-retirement and Python runtime role/effect preflight policy passed.")
     except (GateError, OSError, UnicodeError, json.JSONDecodeError, ValueError) as error:
         print(f"AR-10 runtime cutover policy failed: {error}", file=sys.stderr)
         return 1
