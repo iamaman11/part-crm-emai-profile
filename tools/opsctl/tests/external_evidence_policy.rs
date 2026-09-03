@@ -5,7 +5,7 @@ use opsctl_core::external_evidence::{
     validate_external_evidence,
 };
 use serde::Deserialize;
-use serde_json::{Value, json};
+use serde_json::json;
 use std::borrow::Cow;
 use std::collections::BTreeSet;
 use std::fmt::{Display, Formatter};
@@ -269,27 +269,6 @@ fn validate_projection(
             "{} differs from typed Rust readiness projection",
             summary_path.display()
         )));
-    }
-    validate_status(root, summary.eligible_for_production_review)
-}
-
-fn validate_status(root: &Path, eligible: bool) -> Result<(), AdapterError> {
-    validate_status_path(&root.join("docs/status.json"), eligible)
-}
-
-fn validate_status_path(path: &Path, eligible: bool) -> Result<(), AdapterError> {
-    let raw = fs::read_to_string(path)
-        .map_err(|error| AdapterError::new(format!("cannot read {}: {error}", path.display())))?;
-    let value = parse_strict_json_with_limits(&raw, 256 * 1024, 32)
-        .map_err(|error| AdapterError::new(format!("{}: {error}", path.display())))?;
-    let production_ready = value
-        .get("production_ready")
-        .and_then(Value::as_bool)
-        .ok_or_else(|| AdapterError::new("docs/status.json production_ready must be boolean"))?;
-    if production_ready && !eligible {
-        return Err(AdapterError::new(
-            "production_ready cannot be true while external evidence is incomplete",
-        ));
     }
     Ok(())
 }
@@ -660,21 +639,5 @@ fn empty_readiness_projection_matches_existing_contract() -> Result<(), Box<dyn 
         expected.as_str(),
         normalize_repository_text(&committed).as_ref()
     );
-    validate_status_path(
-        &root.join("status.json"),
-        summary.eligible_for_production_review,
-    )?;
-    Ok(())
-}
-
-#[test]
-fn false_production_readiness_fails_closed() -> Result<(), Box<dyn std::error::Error>> {
-    let root = repository_root().join("tests/external-readiness/fixtures/empty");
-    let summary = validate_tree(&root)?;
-    let result = validate_status_path(
-        &root.join("status-production-ready.json"),
-        summary.eligible_for_production_review,
-    );
-    assert!(result.is_err());
     Ok(())
 }

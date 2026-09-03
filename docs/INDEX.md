@@ -80,10 +80,10 @@ Use the natural owner's document when a transaction touches that boundary:
 
 ## Projection and history rules
 
-Generated JSON/status files are projections only. Existing executable consumers of `status.json` are
-transition debt owned by an explicit E4/V1 cutover: the file must not be deleted until
-`old_current_callers=0` and `old_unique_current_invariants=0`, and its existence does not make it
-current factual or Production authority.
+Generated JSON/status files are projections only and cannot create current factual, readiness or
+Production authority. The E4/V1 `status.json` transition debt has been retired after its executable
+callers were removed and its only readiness invariant remained in the stronger typed external-evidence
+owner; do not recreate a mutable current-state status mirror.
 
 Documents named for completed Phase, Pre-2J, AR, PF, PAS or Functional Closure work are historical
 provenance unless this index explicitly lists them as a current bounded contract. Historical documents

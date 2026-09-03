@@ -24,7 +24,6 @@ RESOLVER_ROOT = Path("apps/mailbox-secret-resolver-worker")
 RESOLVER_MIGRATION_ROOT = Path("migrations/resolver-d1")
 ADAPTER_ROOT = Path("crates/cloudflare-adapters/src")
 RELEASE_SCRIPT = Path("scripts/mailbox-secret-resolver-release.py")
-STATUS = Path("docs/status.json")
 STATIC_TRANSITION_CHECKER = Path(".github/scripts/ar8-d-secret-transport-successor.mjs")
 
 ADAPTER_ENDPOINT_RE = re.compile(r'https://mailbox-secret-resolver\.internal([^"\s]+)')
@@ -288,19 +287,6 @@ def release_script_errors() -> list[str]:
     return errors
 
 
-def production_state_errors() -> list[str]:
-    status = load(STATUS)
-    current = status.get("current")
-    errors: list[str] = []
-    if status.get("production_ready") is not False:
-        errors.append("production_ready must remain false")
-    if not isinstance(current, dict) or current.get("architecture_complete") is not False:
-        errors.append("architecture_complete must remain false")
-    if not isinstance(current, dict) or current.get("production_core_gate") != "BLOCKED":
-        errors.append("production_core_gate must remain BLOCKED")
-    return errors
-
-
 def current_errors() -> list[str]:
     errors: list[str] = []
     errors.extend(endpoint_errors())
@@ -309,7 +295,6 @@ def current_errors() -> list[str]:
     errors.extend(adapter_errors())
     errors.extend(migration_errors())
     errors.extend(release_script_errors())
-    errors.extend(production_state_errors())
     return errors
 
 

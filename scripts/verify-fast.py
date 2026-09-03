@@ -8,7 +8,6 @@ permanent GitHub Actions workflows on one unchanged exact head.
 from __future__ import annotations
 
 import argparse
-import json
 import subprocess
 import sys
 from pathlib import Path
@@ -84,11 +83,6 @@ def main() -> int:
         "resolver release negative provenance",
         [sys.executable, str(ROOT / "scripts" / "mailbox-secret-resolver-release.py"), "self-test"],
     )
-
-    status_path = ROOT / "docs" / "status.json"
-    print("\n==> docs/status.json syntax")
-    with status_path.open("r", encoding="utf-8") as handle:
-        json.load(handle)
 
     if args.with_compile:
         run(

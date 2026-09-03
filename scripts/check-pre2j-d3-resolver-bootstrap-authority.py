@@ -13,7 +13,6 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 AUTHORITY_PATH = Path("architecture/pre2j-d3-resolver-bootstrap-authority.json")
 DOC_PATH = Path("docs/PRE2J_D3_RESOLVER_BOOTSTRAP_AUTHORITY.md")
-STATUS_PATH = Path("docs/status.json")
 EXPECTED_BASE = "65550585baa471c8fb3c452c85ee5db7e79d9b5b"
 EXPECTED_IMPLEMENTATION_MARKER = Path(
     "architecture/pre2j-d3-resolver-bootstrap-implementation.json"
@@ -165,27 +164,6 @@ def source_endpoints() -> list[str]:
     return sorted(endpoints)
 
 
-def remediation_errors(status: dict[str, object]) -> list[str]:
-    current = status.get("current")
-    if not isinstance(current, dict):
-        return ["docs/status.json: current authority is missing"]
-    remediation = current.get("pre2j_product_readiness_remediation")
-    errors: list[str] = []
-    if not isinstance(remediation, dict) or remediation.get("status") != "active_blocking":
-        errors.append("D3 resolver authority requires active_blocking pre-2J remediation")
-    elif remediation.get("tracking_issue") != 203:
-        errors.append("D3 resolver authority requires umbrella blocker #203")
-    phase = current.get("phase_2j")
-    if (
-        not isinstance(phase, dict)
-        or phase.get("status") != "blocked_pending_repository_remediation"
-    ):
-        errors.append("Phase 2J must remain blocked")
-    if status.get("production_ready") is not False:
-        errors.append("production_ready must remain false")
-    return errors
-
-
 def authority_errors(authority: dict[str, object]) -> list[str]:
     expected_scalars = {
         "schema_version": 1,
@@ -237,7 +215,6 @@ def document_errors() -> list[str]:
 def current_errors() -> list[str]:
     errors = authority_errors(load_json(AUTHORITY_PATH))
     errors.extend(document_errors())
-    errors.extend(remediation_errors(load_json(STATUS_PATH)))
     return errors
 
 
