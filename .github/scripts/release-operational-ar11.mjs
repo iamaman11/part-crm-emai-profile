@@ -123,7 +123,7 @@ function promotionErrors(promotion) {
   errors.push(...forbidMarkers(resolve, [
     '[[ "$RELEASE_SET_ID" =~ ^release-set-v2-sha256-[0-9a-f]{64}$ ]]',
     'materialize known-good-v2-v3',
-    'test "$(jq -r \' .schema_version\' "$policy_dir/release-set.json")" = 2'.replace("\\' ", "\\'"),
+    "test \"$(jq -r '.schema_version' \"$policy_dir/release-set.json\")\" = 2",
     '.release_set_schema_version == 2',
     'secrets.CLOUDFLARE_', 'environment: staging', 'wrangler deploy', 'wrangler d1 execute',
     'curl --silent --show-error --output "$RUNNER_TEMP/deployments-api.json"',
