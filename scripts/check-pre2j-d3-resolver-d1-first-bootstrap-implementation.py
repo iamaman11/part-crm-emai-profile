@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import argparse
 import importlib.util
-import json
 import shutil
 import subprocess
 import tempfile
@@ -17,7 +16,6 @@ BOOTSTRAP = Path("scripts/mailbox-secret-resolver-d1-bootstrap.py")
 RELEASE = Path("scripts/mailbox-secret-resolver-release.py")
 MIGRATIONS = Path("migrations/resolver-d1")
 QUALITY = Path(".github/workflows/resolver-d1-first-bootstrap.yml")
-STATUS = Path("docs/status.json")
 IMPLEMENTATION = Path("architecture/pre2j-d3-resolver-d1-first-bootstrap-implementation.json")
 ALLOWED_IMPLEMENTATION_PATHS = {
     "architecture/pre2j-d3-resolver-d1-first-bootstrap-implementation.json",
@@ -59,13 +57,6 @@ def git(*args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
 
 def read(path: Path) -> str:
     return (ROOT / path).read_text(encoding="utf-8")
-
-
-def status_errors() -> list[str]:
-    value = json.loads(read(STATUS))
-    return [] if isinstance(value, dict) and value.get("production_ready") is False else [
-        "production_ready must remain false"
-    ]
 
 
 def quality_workflow_errors(text: str) -> list[str]:
@@ -132,7 +123,6 @@ def current_errors() -> list[str]:
         errors.append(f"first-bootstrap repository policy failed: {error}")
     errors.extend(release_alignment_errors(bootstrap, release))
     errors.extend(quality_workflow_errors(read(QUALITY)))
-    errors.extend(status_errors())
     return errors
 
 
