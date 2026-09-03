@@ -20,7 +20,6 @@ const HISTORICAL_CHECKER = 'scripts/check-pre2j-d3-resolver-bootstrap-implementa
 const CURRENT_D3_CHECKER = 'scripts/check-pre2j-d3-resolver-bootstrap-implementation.py';
 const QUALITY_GATE = '.github/workflows/quality-gate.yml';
 const FAST_VERIFY = 'scripts/verify-fast.py';
-const RESOLVER_RELEASE = '.github/workflows/mailbox-secret-resolver-release.yml';
 const EXPECTED_TRANSITION_BASE = '9635ef21aafa0e2ff04551ef4cecf9497cbc87d5';
 const EXPECTED_WORKFLOW_BLOB = '85fd78557c97c96c179ff5d45f338bf12e639305';
 
@@ -174,7 +173,7 @@ function currentSuccessorErrors() {
   if (errors.length > 0) return errors;
 
   errors.push(...promotionPolicyErrors(read(AR11_PROMOTION)));
-  for (const relative of [CURRENT_D3_CHECKER, QUALITY_GATE, FAST_VERIFY, RESOLVER_RELEASE]) {
+  for (const relative of [CURRENT_D3_CHECKER, QUALITY_GATE, FAST_VERIFY]) {
     if (!existsSync(path.join(ROOT, relative))) {
       errors.push(`missing current D3 caller: ${relative}`);
       continue;

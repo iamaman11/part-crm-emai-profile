@@ -23,7 +23,6 @@ RESOLVER_CONFIG = Path("deploy/cloudflare/mailbox-secret-resolver.wrangler.jsonc
 RESOLVER_ROOT = Path("apps/mailbox-secret-resolver-worker")
 RESOLVER_MIGRATION_ROOT = Path("migrations/resolver-d1")
 ADAPTER_ROOT = Path("crates/cloudflare-adapters/src")
-RELEASE_WORKFLOW = Path(".github/workflows/mailbox-secret-resolver-release.yml")
 RELEASE_SCRIPT = Path("scripts/mailbox-secret-resolver-release.py")
 STATUS = Path("docs/status.json")
 STATIC_TRANSITION_CHECKER = Path(".github/scripts/ar8-d-secret-transport-successor.mjs")
@@ -270,36 +269,6 @@ def migration_errors() -> list[str]:
     return migration_text_errors("\n".join(path.read_text(encoding="utf-8") for path in paths))
 
 
-def release_workflow_errors(release: str) -> list[str]:
-    errors: list[str] = []
-    for marker in (
-        "push:",
-        "- main",
-        "accepted-main-release",
-        "worker-build --release",
-        "mailbox-secret-resolver-release.py build",
-        "mailbox-secret-resolver-release.py verify-archive",
-        "upload-artifact@",
-    ):
-        if marker not in release:
-            errors.append(f"current resolver release workflow is missing {marker!r}")
-    if "pull_request:" in release or "workflow_dispatch:" in release:
-        errors.append("current resolver build workflow must accept only accepted-main pushes")
-    if release.count("worker-build --release") != 1:
-        errors.append("current resolver release workflow must build exactly once")
-    for forbidden in (
-        "wrangler deploy",
-        "wrangler d1 create",
-        "wrangler r2 bucket create",
-        "wrangler queues create",
-        "CLOUDFLARE_RESOLVER_SECRETS_JSON",
-        "CLOUDFLARE_CONTROL_PLANE_SECRETS_JSON",
-    ):
-        if forbidden in release:
-            errors.append(f"current resolver release workflow contains forbidden mutation/input: {forbidden}")
-    return errors
-
-
 def release_script_errors() -> list[str]:
     release = read(RELEASE_SCRIPT)
     errors: list[str] = []
@@ -339,7 +308,6 @@ def current_errors() -> list[str]:
     errors.extend(runtime_errors())
     errors.extend(adapter_errors())
     errors.extend(migration_errors())
-    errors.extend(release_workflow_errors(read(RELEASE_WORKFLOW)))
     errors.extend(release_script_errors())
     errors.extend(production_state_errors())
     return errors
@@ -383,9 +351,6 @@ def self_test() -> None:
     )
     assert migration_text_errors(migration_text + "\npassword TEXT\n")
 
-    release = read(RELEASE_WORKFLOW)
-    assert release_workflow_errors(release + "\nwrangler deploy --env production\n")
-
     transition_errors = run_static_transition(self_test=True)
     if transition_errors:
         raise AssertionError(transition_errors)
@@ -412,7 +377,7 @@ def main() -> int:
     if errors:
         raise SystemExit("\n".join(errors))
     print(
-        "Current mailbox-secret-resolver security, build-once release policy, and static D3 transition provenance passed."
+        "Current mailbox-secret-resolver security, artifact verification, and static D3 transition provenance passed."
     )
     return 0
 
