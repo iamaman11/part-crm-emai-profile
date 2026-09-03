@@ -537,6 +537,16 @@ jobs:
           --exclude browser-profile-control-plane-worker
           --exclude cloudflare-adapters
 
+      - name: Verify AR-6 opsctl quality on Windows
+        shell: pwsh
+        run: |
+          cargo fmt --manifest-path tools/opsctl/Cargo.toml -- --check
+          cargo clippy --locked --manifest-path tools/opsctl/Cargo.toml --all-targets -- -D warnings
+          cargo test --locked --manifest-path tools/opsctl/Cargo.toml
+          cargo fmt --manifest-path tools/opsctl/Cargo.toml --package opsctl-core -- --check
+          cargo clippy --locked --manifest-path tools/opsctl/Cargo.toml --package opsctl-core --all-targets -- -D warnings
+          cargo test --locked --manifest-path tools/opsctl/Cargo.toml --package opsctl-core
+
       - name: Build release Profile Bridge executable
         run: cargo build --locked --release -p profile-bridge
 
