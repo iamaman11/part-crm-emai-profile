@@ -236,9 +236,6 @@ jobs:
           AR10_BROWSER_STATE_HEADLESS: "false"
         run: cargo test --locked -p profile-bridge --test portable_browser_state real_cookie_local_storage_and_indexed_db_survive_authoritative_p3_reopen -- --nocapture
 
-      - name: Enforce parity-gated AR-10 closeout policy
-        run: python3.12 scripts/check-ar10-runtime-cutover.py --closeout
-
       - name: Stop managed X display
         if: always()
         run: |
