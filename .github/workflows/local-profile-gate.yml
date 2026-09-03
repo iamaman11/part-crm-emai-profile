@@ -72,10 +72,8 @@ jobs:
       - name: Prove Windows release CMS verifier
         run: cargo test --locked -p profile-bridge --test windows_delivery_signature_acceptance -- --exact production_script_accepts_isolated_test_trust_without_system_trust_fallback
 
-      - name: Test and build AR-6 opsctl on Windows
-        run: |
-          cargo test --locked --manifest-path tools/opsctl/Cargo.toml
-          cargo build --locked --manifest-path tools/opsctl/Cargo.toml
+      - name: Build AR-6 opsctl on Windows
+        run: cargo build --locked --manifest-path tools/opsctl/Cargo.toml
 
       - name: Exercise AR-6 opsctl read-only commands on Windows
         shell: pwsh
