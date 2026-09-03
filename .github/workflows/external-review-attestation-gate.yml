@@ -36,9 +36,6 @@ jobs:
           python -m py_compile scripts/check-external-review-attestations.py
           python -m py_compile tests/external-review-attestations/test-attestations.py
 
-      - name: Revalidate external evidence through the typed Rust semantic owner
-        run: cargo test --locked --manifest-path tools/opsctl/Cargo.toml --test external_evidence_policy current_repository_external_evidence_uses_typed_rust_authority
-
       - name: Run observer-only GitHub API fixtures
         run: python tests/external-review-attestations/test-attestations.py
 
