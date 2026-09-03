@@ -393,7 +393,6 @@ jobs:
     runs-on: ubuntu-latest
     env:
       SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
-      WORKER_BUILD_ROOT: ${{ runner.temp }}/worker-build-install
     steps:
       - name: Checkout exact release source
         uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
@@ -444,22 +443,22 @@ jobs:
         id: worker-build-cache
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
         with:
-          path: ${{ env.WORKER_BUILD_ROOT }}
+          path: ${{ runner.temp }}/worker-build-install
           key: worker-build-${{ runner.os }}-${{ runner.arch }}-rust-${{ hashFiles('rust-toolchain.toml') }}-0.8.5
 
       - name: Install pinned worker-build
-        run: cargo install worker-build --version 0.8.5 --locked --root "$WORKER_BUILD_ROOT"
+        run: cargo install worker-build --version 0.8.5 --locked --root "$RUNNER_TEMP/worker-build-install"
 
       - name: Save pinned worker-build bootstrap cache
         if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.worker-build-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
         with:
-          path: ${{ env.WORKER_BUILD_ROOT }}
+          path: ${{ runner.temp }}/worker-build-install
           key: worker-build-${{ runner.os }}-${{ runner.arch }}-rust-${{ hashFiles('rust-toolchain.toml') }}-0.8.5
 
       - name: Build release Worker artifact
         working-directory: apps/control-plane-worker
-        run: '"$WORKER_BUILD_ROOT/bin/worker-build" --release'
+        run: '"$RUNNER_TEMP/worker-build-install/bin/worker-build" --release'
 
       - name: Verify Worker artifact
         run: |
