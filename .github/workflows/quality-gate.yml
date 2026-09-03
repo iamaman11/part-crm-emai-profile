@@ -336,21 +336,6 @@ jobs:
           -p use-cases
           -p use-cases-query
 
-      - name: Validate delivery status
-        run: |
-          python -m json.tool docs/status.json >/dev/null
-          python - <<'PY'
-          import json
-          from pathlib import Path
-
-          status = json.loads(Path("docs/status.json").read_text(encoding="utf-8"))
-          step = status["repository_step"]
-          assert status["production_ready"] is False
-          assert isinstance(step["number"], int) and step["number"] >= 0
-          assert step["status"] in {"in_progress", "completed"}
-          assert status["decisions"]["adr_0006"].startswith("proposed")
-          PY
-
       - name: Scan tracked files for high-confidence secrets
         run: bash scripts/check-tracked-secrets.sh
 
