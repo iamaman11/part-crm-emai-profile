@@ -38,6 +38,6 @@
 - privacy/retention values and acceptable-use policy;
 - D1-to-PostgreSQL CRM cutover strategy.
 
-Историческая machine-readable projection находится в [`status.json`](status.json). Она не является
-текущей factual, execution или Production authority; оставшиеся executable consumers выводятся только
-через отдельный E4/V1 cutover с доказательством нулевых callers/unique invariants.
+Связанная historical machine-readable projection `docs/status.json` retired в V1-N003 после доказательства
+нулевых current callers и unique current invariants. Текущая factual/execution/Production authority остаётся
+в GitHub/#266 и у типизированных external-evidence owners; новый mutable current-state mirror не создаётся.
