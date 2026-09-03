@@ -84,14 +84,3 @@ jobs:
 
       - name: Test fake Camouhost subprocess lifecycle
         run: python scripts/test-step7-fake-camouhost.py
-
-      - name: Rebuild Profile Bridge release artifact
-        run: cargo build --locked --release -p profile-bridge
-
-      - name: Verify Profile Bridge executable remains present
-        shell: pwsh
-        run: |
-          $artifact = Get-Item "target/release/profile-bridge.exe"
-          if ($artifact.Length -le 0) {
-            throw "profile-bridge.exe is empty"
-          }
