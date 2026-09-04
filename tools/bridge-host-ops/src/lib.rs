@@ -296,9 +296,7 @@ pub fn binding_write_plan(
     };
     Ok(BindingHttpPlan {
         method: "PUT",
-        url: format!(
-            "{origin}/api/v1/tenants/{tenant_id}/members/{actor_id}/device-binding"
-        ),
+        url: format!("{origin}/api/v1/tenants/{tenant_id}/members/{actor_id}/device-binding"),
         body,
         correlation_id: correlation_id.to_owned(),
         target_actor_id: actor_id.to_owned(),
@@ -321,9 +319,7 @@ pub fn binding_revoke_plan(
     }
     Ok(BindingHttpPlan {
         method: "DELETE",
-        url: format!(
-            "{origin}/api/v1/tenants/{tenant_id}/members/{actor_id}/device-binding"
-        ),
+        url: format!("{origin}/api/v1/tenants/{tenant_id}/members/{actor_id}/device-binding"),
         body: format!("{{\"expectedVersion\":{expected_version}}}"),
         correlation_id: correlation_id.to_owned(),
         target_actor_id: actor_id.to_owned(),
@@ -394,7 +390,10 @@ fn parse_mutation_receipt(value: &str) -> HostOpsResult<MutationReceipt> {
 }
 
 fn parse_plain_json_string(value: &str) -> HostOpsResult<String> {
-    let Some(inner) = value.strip_prefix('"').and_then(|item| item.strip_suffix('"')) else {
+    let Some(inner) = value
+        .strip_prefix('"')
+        .and_then(|item| item.strip_suffix('"'))
+    else {
         return Err(HostOpsError::new("invalid_mutation_receipt"));
     };
     if inner.contains('\\') || inner.contains('"') || inner.bytes().any(|byte| byte < 0x20) {
@@ -416,10 +415,7 @@ fn validate_receipt_token(value: &str) -> HostOpsResult<()> {
 }
 
 #[must_use]
-pub fn render_certificate_receipt(
-    operation: &str,
-    certificate: &CertificateObservation,
-) -> String {
+pub fn render_certificate_receipt(operation: &str, certificate: &CertificateObservation) -> String {
     format!(
         "{{\"schemaVersion\":{},\"operation\":{},\"certificateStore\":{},\"certificateSha1\":{},\"certificateSha256\":{},\"certificateSelector\":{}}}",
         json_string(SCHEMA_VERSION),
@@ -535,12 +531,14 @@ mod tests {
         let rendered = render_certificate_receipt("inspect", &observation);
         assert!(rendered.contains("LocalMachine\\\\MY\\\\"));
         for (private, client, current) in [("0", "1", "1"), ("1", "0", "1"), ("1", "1", "0")] {
-            assert!(parse_certificate_observation(&format!(
-                "{}\t{}\t{private}\t{client}\t{current}",
-                "AB".repeat(20),
-                "cd".repeat(32)
-            ))
-            .is_err());
+            assert!(
+                parse_certificate_observation(&format!(
+                    "{}\t{}\t{private}\t{client}\t{current}",
+                    "AB".repeat(20),
+                    "cd".repeat(32)
+                ))
+                .is_err()
+            );
         }
         Ok(())
     }
@@ -592,16 +590,18 @@ mod tests {
         assert!(put_arguments.contains(
             "https://control.example.test/api/v1/tenants/tenant_01/members/actor_01/device-binding"
         ));
-        assert!(binding_write_plan(
-            "https://control.example.test",
-            "tenant_01",
-            "actor_01",
-            "device_01",
-            &"AB".repeat(32),
-            None,
-            "corr_tx2_03"
-        )
-        .is_err());
+        assert!(
+            binding_write_plan(
+                "https://control.example.test",
+                "tenant_01",
+                "actor_01",
+                "device_01",
+                &"AB".repeat(32),
+                None,
+                "corr_tx2_03"
+            )
+            .is_err()
+        );
         let delete = binding_revoke_plan(
             "https://control.example.test",
             "tenant_01",
@@ -614,8 +614,7 @@ mod tests {
     }
 
     #[test]
-    fn control_plane_receipt_is_strict_and_secret_free()
-    -> Result<(), Box<dyn std::error::Error>> {
+    fn control_plane_receipt_is_strict_and_secret_free() -> Result<(), Box<dyn std::error::Error>> {
         let receipt = parse_control_plane_output(
             "{\"resultCode\":\"bound\",\"resourceId\":\"actor_01\",\"aggregateVersion\":7}\n200",
         )?;
