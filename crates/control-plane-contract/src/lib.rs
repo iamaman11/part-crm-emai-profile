@@ -31,6 +31,8 @@ pub enum RouteClass {
     InvitationAcceptApi,
     MembershipCollectionApi,
     MembershipStatusApi,
+    DeviceBindingResourceApi,
+    DeviceBindingRevokeApi,
     ClientCollectionApi,
     ClientResourceApi,
     ClientArchiveApi,
@@ -201,6 +203,16 @@ mod tests {
                 "PUT",
                 "/api/v1/tenants/tenant_01/members/actor_01/status",
                 RouteClass::MembershipStatusApi,
+            ),
+            (
+                "PUT",
+                "/api/v1/tenants/tenant_01/members/actor_01/device-binding",
+                RouteClass::DeviceBindingResourceApi,
+            ),
+            (
+                "DELETE",
+                "/api/v1/tenants/tenant_01/members/actor_01/device-binding",
+                RouteClass::DeviceBindingRevokeApi,
             ),
             (
                 "POST",
@@ -555,6 +567,14 @@ mod tests {
             (
                 "GET",
                 "/api/v1/tenants/tenant_01/profiles/profile_01/launch",
+            ),
+            (
+                "POST",
+                "/api/v1/tenants/tenant_01/members/actor_01/device-binding",
+            ),
+            (
+                "GET",
+                "/api/v1/tenants/tenant_01/members/actor_01/device-binding",
             ),
         ] {
             assert_eq!(
