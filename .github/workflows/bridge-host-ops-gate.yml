@@ -1,0 +1,74 @@
+name: Bridge Host Operations Gate
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: bridge-host-ops-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  policy-linux:
+    name: Bridge Host Ops Linux Policy
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout exact candidate source
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify exact source checkout
+        env:
+          EXPECTED_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: python -c "import os, subprocess; actual = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(); expected = os.environ['EXPECTED_SOURCE_SHA']; assert actual == expected, f'expected {expected}, got {actual}'"
+
+      - name: Show pinned toolchain
+        run: rustup show active-toolchain
+
+      - name: Verify host-operations policy and secret boundary
+        run: |
+          cargo fmt --manifest-path tools/bridge-host-ops/Cargo.toml --all -- --check
+          cargo clippy --locked --manifest-path tools/bridge-host-ops/Cargo.toml --all-targets -- -D warnings
+          cargo test --locked --manifest-path tools/bridge-host-ops/Cargo.toml
+          cargo run --locked --quiet --manifest-path tools/bridge-host-ops/Cargo.toml -- self-test | python -m json.tool >/dev/null
+
+  windows-compile:
+    name: Bridge Host Ops Windows Compile
+    runs-on: windows-latest
+    steps:
+      - name: Checkout exact candidate source
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify exact source checkout
+        shell: pwsh
+        env:
+          EXPECTED_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          $actual = (git rev-parse HEAD).Trim()
+          if ($actual -ne $env:EXPECTED_SOURCE_SHA) { throw "expected $env:EXPECTED_SOURCE_SHA, got $actual" }
+
+      - name: Show pinned toolchain
+        shell: pwsh
+        run: rustup show active-toolchain
+
+      - name: Compile and test the real Windows host adapter
+        shell: pwsh
+        run: |
+          cargo fmt --manifest-path tools/bridge-host-ops/Cargo.toml --all -- --check
+          cargo clippy --locked --manifest-path tools/bridge-host-ops/Cargo.toml --all-targets -- -D warnings
+          cargo test --locked --manifest-path tools/bridge-host-ops/Cargo.toml
+          cargo build --locked --release --manifest-path tools/bridge-host-ops/Cargo.toml
+          cargo run --locked --quiet --manifest-path tools/bridge-host-ops/Cargo.toml -- self-test | ConvertFrom-Json | Out-Null
