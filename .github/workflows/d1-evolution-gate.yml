@@ -264,7 +264,7 @@ jobs:
             "d1_databases": [
               {
                 "binding": "RESOLVER_DB",
-                "database_name": "ar9-d1-partial-failure-proof",
+                "database_name": "ar9-partial-failure-proof",
                 "database_id": "00000000-0000-0000-0000-000000000009",
                 "migrations_dir": "migrations"
               }
