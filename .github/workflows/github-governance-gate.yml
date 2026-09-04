@@ -133,7 +133,7 @@ jobs:
       - name: Validate current Profile/Camoufox security authority
         run: node .github/scripts/profile-security-authority-check.mjs
 
-      - name: Prove current Profile/Camoufox security and proxy-handle leakage fail closed
+      - name: Prove Profile/Camoufox security and proxy-handle leakage fail closed
         run: node .github/scripts/profile-security-authority-check.mjs --self-test
 
   hosted-state:
