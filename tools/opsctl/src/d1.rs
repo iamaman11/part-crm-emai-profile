@@ -19,7 +19,7 @@ use authority::{load_preconditions, load_release_contract, load_wrangler_ledger}
 use catalog::component_authority;
 use model::{Evaluation, Preconditions, ReleaseSchemaContract};
 use plan::evaluate;
-use serde_json::json;
+use serde_json::{Value, json};
 use std::path::Path;
 use util::resolve_input;
 
@@ -87,14 +87,25 @@ pub(crate) fn release_schema_identity(
     root: &Path,
     component: &str,
 ) -> Result<D1ReleaseSchemaIdentity, D1Error> {
-    let authority = component_authority(root, component)?;
+    let projection = release_contract(root, component)?;
+    let required = |field: &str| -> Result<String, D1Error> {
+        projection
+            .get(field)
+            .and_then(Value::as_str)
+            .map(str::to_owned)
+            .ok_or_else(|| {
+                D1Error::new(format!(
+                    "typed D1 release schema projection is missing {field}"
+                ))
+            })
+    };
     Ok(D1ReleaseSchemaIdentity {
-        database_component: authority.component_id,
-        target_schema_revision: authority.current_repository_revision.clone(),
-        supported_schema_min: authority.current_repository_revision.clone(),
-        supported_schema_max: authority.current_repository_revision,
-        migration_history_digest: authority.history_digest,
-        compatibility_policy_digest: authority.policy_digest,
+        database_component: required("database_component")?,
+        target_schema_revision: required("target_schema_revision")?,
+        supported_schema_min: required("supported_schema_min")?,
+        supported_schema_max: required("supported_schema_max")?,
+        migration_history_digest: required("migration_history_digest")?,
+        compatibility_policy_digest: required("compatibility_policy_digest")?,
     })
 }
 
