@@ -54,7 +54,6 @@ else
   python - "origin/${base_ref}" <<'PY'
 from __future__ import annotations
 
-import json
 import re
 import subprocess
 import sys
@@ -62,21 +61,12 @@ from pathlib import Path
 
 base_ref = sys.argv[1]
 root = Path.cwd()
-status_path = root / "docs/status.json"
-if not status_path.is_file():
-    raise SystemExit("docs/status.json is required before D1 migration remediation can be evaluated")
 
-status = json.loads(status_path.read_text(encoding="utf-8"))
-remediation = status.get("current", {}).get("pre2j_product_readiness_remediation", {})
-if not (
-    remediation.get("status") == "active_blocking"
-    and remediation.get("tracking_issue") == 203
-    and remediation.get("plan") == "docs/PRE2J_PRODUCT_READINESS_REMEDIATION_PLAN.md"
-):
-    raise SystemExit(
-        "D1 migration root remains frozen unless the canonical pre-2J product-readiness remediation is active"
-    )
-
+# Issue #203 and its docs/status.json projection are historical predecessor
+# authority only. Current forward sequencing is #266 and D1 evolution is owned
+# by the typed opsctl catalog plus this immutable-prefix/append-only boundary.
+# Never require resurrection of the retired pre-2J blocker merely to admit a
+# current governed migration.
 name_status = subprocess.check_output(
     ["git", "diff", "--name-status", base_ref, "--", "migrations/d1"],
     text=True,
@@ -89,7 +79,7 @@ for line in name_status:
     fields = line.split("\t")
     if len(fields) != 2 or fields[0] != "A":
         raise SystemExit(
-            "accepted D1 migration history is immutable during remediation; only new migration files may be appended: "
+            "accepted D1 migration history is immutable; only new migration files may be appended: "
             + line
         )
     path = fields[1]
@@ -124,7 +114,7 @@ if current_files[: len(base_files)] != base_files:
     raise SystemExit("accepted D1 migration prefix changed; existing migrations may not be edited, removed, renamed or reordered")
 if sorted(added) != current_files[len(base_files) :]:
     raise SystemExit(
-        "all remediation D1 changes must be a contiguous append-only suffix; "
+        "all D1 changes must be a contiguous append-only suffix; "
         f"added={sorted(added)!r}, expected={current_files[len(base_files):]!r}"
     )
 for path in added:
@@ -132,7 +122,7 @@ for path in added:
         raise SystemExit(f"appended D1 migration must not be empty: {path}")
 
 print(
-    "Canonical pre-2J remediation permits only this append-only D1 migration suffix: "
+    "Current D1 evolution permits only this immutable-prefix append-only migration suffix: "
     + ", ".join(added)
 )
 PY
