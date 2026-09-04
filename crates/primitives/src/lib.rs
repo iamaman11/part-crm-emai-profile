@@ -109,7 +109,9 @@ define_typed_id!(SecretHandle);
 pub struct MachineCertificateFingerprint(String);
 
 impl MachineCertificateFingerprint {
-    pub fn parse(value: impl Into<String>) -> Result<Self, ParseMachineCertificateFingerprintError> {
+    pub fn parse(
+        value: impl Into<String>,
+    ) -> Result<Self, ParseMachineCertificateFingerprintError> {
         let value = value.into();
         if value.len() != SHA256_HEX_LENGTH || !value.bytes().all(|byte| byte.is_ascii_hexdigit()) {
             return Err(ParseMachineCertificateFingerprintError);
@@ -134,7 +136,8 @@ pub struct ParseMachineCertificateFingerprintError;
 
 impl fmt::Display for ParseMachineCertificateFingerprintError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str("machine certificate fingerprint must be exactly 64 hexadecimal characters")
+        formatter
+            .write_str("machine certificate fingerprint must be exactly 64 hexadecimal characters")
     }
 }
 
@@ -332,10 +335,7 @@ mod tests {
             MachineCertificateFingerprint::parse(lower.clone())?.as_str(),
             lower
         );
-        assert_eq!(
-            MachineCertificateFingerprint::parse(upper)?.as_str(),
-            lower
-        );
+        assert_eq!(MachineCertificateFingerprint::parse(upper)?.as_str(), lower);
         assert!(MachineCertificateFingerprint::parse("a".repeat(63)).is_err());
         assert!(MachineCertificateFingerprint::parse("g".repeat(64)).is_err());
         Ok(())
