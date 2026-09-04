@@ -143,7 +143,9 @@ pub fn route_surface(route: RouteClass, path: &str) -> Option<RuntimeSurface> {
         | RouteClass::InvitationCollectionApi
         | RouteClass::InvitationAcceptApi
         | RouteClass::MembershipCollectionApi
-        | RouteClass::MembershipStatusApi => Some(RuntimeSurface::HttpIdentity),
+        | RouteClass::MembershipStatusApi
+        | RouteClass::DeviceBindingResourceApi
+        | RouteClass::DeviceBindingRevokeApi => Some(RuntimeSurface::HttpIdentity),
         RouteClass::ClientCollectionApi
         | RouteClass::ClientResourceApi
         | RouteClass::ClientArchiveApi
@@ -279,6 +281,24 @@ mod tests {
             surface.map(RuntimeSurface::activation_unit),
             Some(ActivationUnit::OutboundMail)
         );
+    }
+
+    #[test]
+    fn device_binding_governance_routes_use_existing_identity_capability() {
+        for route in [
+            RouteClass::DeviceBindingResourceApi,
+            RouteClass::DeviceBindingRevokeApi,
+        ] {
+            let surface = route_surface(
+                route,
+                "/api/v1/tenants/tenant_01/members/actor_01/device-binding",
+            );
+            assert_eq!(surface, Some(RuntimeSurface::HttpIdentity));
+            assert_eq!(
+                surface.map(RuntimeSurface::activation_unit),
+                Some(ActivationUnit::Identity)
+            );
+        }
     }
 
     #[test]
