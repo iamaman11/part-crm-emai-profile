@@ -103,8 +103,8 @@ pub fn import_certificate(
     pfx_path: &Path,
     password_file: &Path,
 ) -> HostOpsResult<CertificateObservation> {
-    let canonical_pfx = fs::canonicalize(pfx_path)
-        .map_err(|_| HostOpsError::new("pfx_input_unavailable"))?;
+    let canonical_pfx =
+        fs::canonicalize(pfx_path).map_err(|_| HostOpsError::new("pfx_input_unavailable"))?;
     if !canonical_pfx.is_file() {
         return Err(HostOpsError::new("pfx_input_unavailable"));
     }
