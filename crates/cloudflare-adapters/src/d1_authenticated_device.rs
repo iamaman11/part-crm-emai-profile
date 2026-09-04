@@ -2,7 +2,9 @@ use application_ports::device_jobs::{
     AuthenticatedDevicePort, DeviceJobPortError, DeviceJobPortErrorClass,
 };
 use application_ports::profile_launch::ProfileLaunchMachineBinding;
-use profile_platform_primitives::{ActorContext, ActorId, DeviceId, TenantId};
+use profile_platform_primitives::{
+    ActorContext, ActorId, DeviceId, MachineCertificateFingerprint, TenantId,
+};
 use serde::Deserialize;
 use worker::d1::D1Database;
 use worker::query;
@@ -65,12 +67,12 @@ impl D1AuthenticatedDevice {
     /// fingerprint; raw certificate material and private keys never enter D1 or this adapter.
     pub async fn resolve_machine_certificate_fingerprint(
         &self,
-        verified_fingerprint_sha256: &str,
+        verified_fingerprint_sha256: &MachineCertificateFingerprint,
     ) -> Result<Option<ProfileLaunchMachineBinding>, DeviceJobPortError> {
-        if !valid_sha256_fingerprint(verified_fingerprint_sha256) {
-            return Ok(None);
-        }
-        let evidence_reference = format!("{MACHINE_EVIDENCE_PREFIX}{verified_fingerprint_sha256}");
+        let evidence_reference = format!(
+            "{MACHINE_EVIDENCE_PREFIX}{}",
+            verified_fingerprint_sha256.as_str()
+        );
         let result = query!(
             &self.database,
             LOAD_ACTIVE_MACHINE_BINDING,
@@ -135,13 +137,6 @@ impl AuthenticatedDevicePort for D1AuthenticatedDevice {
     }
 }
 
-fn valid_sha256_fingerprint(value: &str) -> bool {
-    value.len() == 64
-        && value
-            .bytes()
-            .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
-}
-
 fn authentication_failed() -> DeviceJobPortError {
     DeviceJobPortError::new(DeviceJobPortErrorClass::AuthenticationFailed)
 }
@@ -156,10 +151,8 @@ fn map_worker_error(_error: worker::Error) -> DeviceJobPortError {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        LOAD_ACTIVE_DEVICE_BINDING, LOAD_ACTIVE_MACHINE_BINDING, MACHINE_EVIDENCE_PREFIX,
-        valid_sha256_fingerprint,
-    };
+    use super::{LOAD_ACTIVE_DEVICE_BINDING, LOAD_ACTIVE_MACHINE_BINDING, MACHINE_EVIDENCE_PREFIX};
+    use profile_platform_primitives::MachineCertificateFingerprint;
 
     #[test]
     fn device_identity_query_is_actor_scoped_and_rechecks_live_membership() {
@@ -191,11 +184,17 @@ mod tests {
     }
 
     #[test]
-    fn machine_evidence_is_domain_tagged_verified_certificate_fingerprint() {
+    fn machine_evidence_is_domain_tagged_typed_certificate_fingerprint()
+    -> Result<(), Box<dyn std::error::Error>> {
         assert_eq!(MACHINE_EVIDENCE_PREFIX, "mtls_cert_sha256:");
-        assert!(valid_sha256_fingerprint(&"a1".repeat(32)));
-        assert!(!valid_sha256_fingerprint(&"A1".repeat(32)));
-        assert!(!valid_sha256_fingerprint(&"a".repeat(63)));
-        assert!(!valid_sha256_fingerprint(&"g".repeat(64)));
+        let lower = "a1".repeat(32);
+        let upper = lower.to_ascii_uppercase();
+        assert_eq!(
+            MachineCertificateFingerprint::parse(upper)?.as_str(),
+            lower
+        );
+        assert!(MachineCertificateFingerprint::parse("a".repeat(63)).is_err());
+        assert!(MachineCertificateFingerprint::parse("g".repeat(64)).is_err());
+        Ok(())
     }
 }
