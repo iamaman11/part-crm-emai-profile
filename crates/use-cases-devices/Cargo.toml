@@ -8,7 +8,6 @@ publish = false
 [dependencies]
 application-ports.workspace = true
 device-domain.workspace = true
-identity-access-domain.workspace = true
 profile-platform-primitives.workspace = true
 
 [lints]
