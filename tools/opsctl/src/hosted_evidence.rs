@@ -1,10 +1,10 @@
 use crate::canonical::{canonical_json, canonical_pretty_json, parse_strict_json, sha256_hex};
 use opsctl_core::hosted_evidence::{
     EvidenceBindingV1, EvidenceEnvironment, EvidenceIssuer, EvidenceOutcome, EvidencePolicyError,
-    EvidencePolicyV3, EvidenceSource, EvidenceSubject, EvidenceTarget, EvidenceTrustState,
-    ExpectedAccountBindingV1, HostedEvidenceEnvelopeV3, HostedEvidenceObservationV3,
+    EvidencePolicyV4, EvidenceSource, EvidenceSubject, EvidenceTarget, EvidenceTrustState,
+    ExpectedAccountBindingV1, HostedEvidenceEnvelopeV4, HostedEvidenceObservationV4,
     OperationalCredentialAccountObservationV1, OperationalCredentialAttestationObservationV1,
-    OperationalCredentialPolicyObservationV1, OperationalCredentialReadObservationV3,
+    OperationalCredentialPolicyObservationV1, OperationalCredentialReadObservationV4,
     OperationalCredentialTokenVerifyObservationV1, ReviewAttestationObservationV1,
     ReviewAttestationPolicyV1, ReviewAttestationStatus,
 };
@@ -19,12 +19,12 @@ const ENVELOPE_KIND: &str = "HOSTED_EVIDENCE_ENVELOPE";
 const REVIEW_OBSERVATION_KIND: &str = "EXTERNAL_REVIEW_ATTESTATION_OBSERVATION";
 const REVIEW_RESULT_KIND: &str = "EXTERNAL_REVIEW_ATTESTATION_RESULT";
 const REVIEW_CLAIM_DOMAIN: &str = "external-evidence-review-v1";
-const OBSERVATION_SCHEMA_VERSION: u64 = 3;
-const ARTIFACT_SCHEMA_VERSION: u64 = 3;
-const ENVELOPE_SCHEMA_VERSION: u64 = 3;
+const OBSERVATION_SCHEMA_VERSION: u64 = 4;
+const ARTIFACT_SCHEMA_VERSION: u64 = 4;
+const ENVELOPE_SCHEMA_VERSION: u64 = 4;
 const REVIEW_SCHEMA_VERSION: u64 = 1;
 const DIGEST_ALGORITHM: &str = "SHA-256";
-const DIGEST_SCOPE: &str = "RFC8785_CANONICAL_OPERATIONAL_CREDENTIAL_EVIDENCE_V3_BYTES";
+const DIGEST_SCOPE: &str = "RFC8785_CANONICAL_OPERATIONAL_CREDENTIAL_EVIDENCE_V4_BYTES";
 const OPERATIONAL_CREDENTIAL_ISSUER: &str = "github-actions";
 const OPERATIONAL_CREDENTIAL_SOURCE: &str = "github-governance-gate/operational-credential-state";
 const HOSTED_EVIDENCE_TARGET: &str = "iamaman11/part-crm-emai-profile";
@@ -138,6 +138,7 @@ struct ReadObservationsDto {
     workers_deployments_success: Option<bool>,
     workers_deployments_error_count: Option<usize>,
     workers_deployments_response_digest_sha256: Option<String>,
+    workers_current_release_set_id: String,
     d1_catalog_exit_code: Option<i32>,
     d1_catalog_output_digest_sha256: Option<String>,
     r2_bucket_exit_code: Option<i32>,
@@ -390,8 +391,8 @@ fn validate_artifact_contract(dto: &ArtifactDto) -> Result<(), HostedEvidenceAda
 
 fn observation_from_dto(
     dto: &ObservationDto,
-) -> Result<HostedEvidenceObservationV3, HostedEvidenceAdapterError> {
-    Ok(HostedEvidenceObservationV3 {
+) -> Result<HostedEvidenceObservationV4, HostedEvidenceAdapterError> {
+    Ok(HostedEvidenceObservationV4 {
         binding: EvidenceBindingV1 {
             issuer: EvidenceIssuer::new(dto.issuer.clone())?,
             source: EvidenceSource::new(dto.source.clone())?,
@@ -448,7 +449,7 @@ fn observation_from_dto(
             account_name: dto.account.account_name.clone(),
         },
         deployment_account_id: dto.deployment_account_id.clone(),
-        reads: OperationalCredentialReadObservationV3 {
+        reads: OperationalCredentialReadObservationV4 {
             workers_deployments_http_status: dto.reads.workers_deployments_http_status,
             workers_deployments_success: dto.reads.workers_deployments_success,
             workers_deployments_error_count: dto.reads.workers_deployments_error_count,
@@ -456,6 +457,7 @@ fn observation_from_dto(
                 .reads
                 .workers_deployments_response_digest_sha256
                 .clone(),
+            workers_current_release_set_id: dto.reads.workers_current_release_set_id.clone(),
             d1_catalog_exit_code: dto.reads.d1_catalog_exit_code,
             d1_catalog_output_digest_sha256: dto.reads.d1_catalog_output_digest_sha256.clone(),
             r2_bucket_exit_code: dto.reads.r2_bucket_exit_code,
@@ -470,13 +472,13 @@ fn observation_from_dto(
 
 fn envelope_from_dto(
     dto: &EnvelopeDto,
-) -> Result<HostedEvidenceEnvelopeV3, HostedEvidenceAdapterError> {
+) -> Result<HostedEvidenceEnvelopeV4, HostedEvidenceAdapterError> {
     if dto.schema_version != ENVELOPE_SCHEMA_VERSION || dto.kind != ENVELOPE_KIND {
         return Err(HostedEvidenceAdapterError::new(
             "HOSTED_EVIDENCE_ENVELOPE_CONTRACT: unsupported schema_version or kind",
         ));
     }
-    Ok(HostedEvidenceEnvelopeV3 {
+    Ok(HostedEvidenceEnvelopeV4 {
         binding: EvidenceBindingV1 {
             issuer: EvidenceIssuer::new(dto.issuer.clone())?,
             source: EvidenceSource::new(dto.source.clone())?,
@@ -494,7 +496,7 @@ fn envelope_from_dto(
     })
 }
 
-fn envelope_to_dto(envelope: &HostedEvidenceEnvelopeV3) -> EnvelopeDto {
+fn envelope_to_dto(envelope: &HostedEvidenceEnvelopeV4) -> EnvelopeDto {
     EnvelopeDto {
         schema_version: ENVELOPE_SCHEMA_VERSION,
         kind: ENVELOPE_KIND.to_owned(),
@@ -529,7 +531,7 @@ fn evidence_digest(
 
 fn render_artifact(
     observation: &ObservationDto,
-    envelope: &HostedEvidenceEnvelopeV3,
+    envelope: &HostedEvidenceEnvelopeV4,
 ) -> Result<String, HostedEvidenceAdapterError> {
     let envelope = envelope_to_dto(envelope);
     let artifact = ArtifactDto {
@@ -553,7 +555,7 @@ fn render_artifact(
 
 fn operational_credential_policy(
     expected_subject: &str,
-) -> Result<EvidencePolicyV3, HostedEvidenceAdapterError> {
+) -> Result<EvidencePolicyV4, HostedEvidenceAdapterError> {
     let binding = EvidenceBindingV1 {
         issuer: EvidenceIssuer::new(OPERATIONAL_CREDENTIAL_ISSUER)?,
         source: EvidenceSource::new(OPERATIONAL_CREDENTIAL_SOURCE)?,
@@ -561,7 +563,7 @@ fn operational_credential_policy(
         environment: EvidenceEnvironment::new(OPERATIONAL_CREDENTIAL_ENVIRONMENT)?,
         subject: EvidenceSubject::new(expected_subject)?,
     };
-    EvidencePolicyV3::new(
+    EvidencePolicyV4::new(
         binding,
         OPERATIONAL_CREDENTIAL_MAX_VALIDITY_SECONDS,
         OPERATIONAL_CREDENTIAL_ID,
@@ -800,9 +802,13 @@ mod tests {
     const REVIEW_REPOSITORY: &str = "iamaman11/part-crm-emai-profile";
     const ACCOUNT_ID: &str = "4426df1449e417511bc7697d60b7f62f";
 
+    fn release_set_v3() -> String {
+        format!("release-set-v3-sha256-{}", "44".repeat(32))
+    }
+
     fn observation() -> Value {
         json!({
-            "schema_version": 3,
+            "schema_version": 4,
             "kind": "HOSTED_EVIDENCE_RAW_OBSERVATION",
             "issuer": "github-actions",
             "source": "github-governance-gate/operational-credential-state",
@@ -873,6 +879,7 @@ mod tests {
                 "workers_deployments_success": true,
                 "workers_deployments_error_count": 0,
                 "workers_deployments_response_digest_sha256": "11".repeat(32),
+                "workers_current_release_set_id": release_set_v3(),
                 "d1_catalog_exit_code": 0,
                 "d1_catalog_output_digest_sha256": "22".repeat(32),
                 "r2_bucket_exit_code": 0,
@@ -894,7 +901,7 @@ mod tests {
     }
 
     #[test]
-    fn raw_v3_roundtrips_to_rust_derived_verdict() -> Result<(), Box<dyn std::error::Error>> {
+    fn raw_v4_roundtrips_to_rust_derived_verdict() -> Result<(), Box<dyn std::error::Error>> {
         let artifact = seal(&observation())?;
         let verified = verify_operational_credential_json(&artifact, EVALUATED_AT, SUBJECT)?;
         assert_eq!(artifact, verified);
@@ -902,27 +909,30 @@ mod tests {
         assert!(artifact.contains("\"outcome\": \"PASS\""));
         assert!(artifact.contains("\"account_name\": \"Pvisakp@gmail.com's Account\""));
         assert!(artifact.contains("\"workers_deployments_response_digest_sha256\""));
+        assert!(artifact.contains("\"workers_current_release_set_id\""));
         Ok(())
     }
 
     #[test]
-    fn raw_v3_rejects_injected_verdict_legacy_shapes_unknown_fields_and_malformed_json() {
-        let mut verdict = observation();
-        verdict["trust_state"] = Value::String("TRUSTED".to_owned());
-        verdict["outcome"] = Value::String("PASS".to_owned());
-        assert_rejected(&verdict);
+    fn raw_v4_accepts_explicit_none_release_identity() -> Result<(), Box<dyn std::error::Error>> {
+        let mut clean = observation();
+        clean["reads"]["workers_current_release_set_id"] = json!("NONE");
+        seal(&clean)?;
+        Ok(())
+    }
 
-        let mut legacy = observation();
-        legacy["schema_version"] = json!(2);
-        legacy["reads"] = json!({
-            "workers_deployments_read": true,
-            "d1_catalog_read": true,
-            "r2_bucket_read": true,
-            "queue_read": true,
-            "worker_secret_names_read": true,
-            "mutation_probe": "FORBIDDEN_NOT_EXECUTED"
-        });
-        assert_rejected(&legacy);
+    #[test]
+    fn raw_v4_rejects_predecessor_missing_identity_unknown_fields_and_malformed_json() {
+        let mut predecessor = observation();
+        predecessor["schema_version"] = json!(3);
+        assert_rejected(&predecessor);
+
+        let mut missing_identity = observation();
+        missing_identity["reads"]
+            .as_object_mut()
+            .expect("reads fixture object")
+            .remove("workers_current_release_set_id");
+        assert_rejected(&missing_identity);
 
         let mut secret = observation();
         secret["token"] = Value::String("must-not-cross-boundary".to_owned());
@@ -977,7 +987,7 @@ mod tests {
     }
 
     #[test]
-    fn production_path_rejects_missing_results_invalid_digests_and_account_drift() {
+    fn production_path_rejects_missing_results_invalid_digests_release_identity_and_account_drift() {
         let mut missing = observation();
         missing["reads"]["workers_deployments_success"] = Value::Null;
         assert_rejected(&missing);
@@ -985,6 +995,11 @@ mod tests {
         let mut invalid_digest = observation();
         invalid_digest["reads"]["d1_catalog_output_digest_sha256"] = json!("ABC");
         assert_rejected(&invalid_digest);
+
+        let mut invalid_release = observation();
+        invalid_release["reads"]["workers_current_release_set_id"] =
+            json!("release-set-v4-sha256-".to_owned() + &"a".repeat(64));
+        assert_rejected(&invalid_release);
 
         let mut wrong_live_account = observation();
         wrong_live_account["account"]["account_name"] = json!("majakojh");
@@ -1066,6 +1081,12 @@ mod tests {
         observed_digest_tamper["observation"]["reads"]["d1_catalog_output_digest_sha256"] =
             Value::String("4".repeat(64));
         let tampered = serde_json::to_string_pretty(&observed_digest_tamper)? + "\n";
+        assert!(verify_operational_credential_json(&tampered, EVALUATED_AT, SUBJECT).is_err());
+
+        let mut release_identity_tamper: Value = serde_json::from_str(&artifact)?;
+        release_identity_tamper["observation"]["reads"]["workers_current_release_set_id"] =
+            Value::String("NONE".to_owned());
+        let tampered = serde_json::to_string_pretty(&release_identity_tamper)? + "\n";
         assert!(verify_operational_credential_json(&tampered, EVALUATED_AT, SUBJECT).is_err());
         Ok(())
     }
