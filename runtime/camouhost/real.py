@@ -1150,111 +1150,115 @@ def run_ipc() -> int:
     browser_visible_observed = False
     navigation_admitted = False
 
-    for raw in sys.stdin:
-        if not valid_frame(raw):
+    try:
+        for raw in sys.stdin:
+            if not valid_frame(raw):
+                emit("error|protocol")
+                return 2
+            parts = raw[:-1].split("|")
+
+            if parts == ["hello", IPC_VERSION] and not negotiated and active_session is None:
+                negotiated = True
+                emit(f"hello_ack|{IPC_VERSION}")
+                continue
+
+            if (
+                len(parts) == 2
+                and parts[0] == "launch"
+                and negotiated
+                and active_session is None
+                and SESSION_PATTERN.fullmatch(parts[1]) is not None
+            ):
+                try:
+                    manager, context = launch_verified_context(lock, root, config, expected_probe)
+                    close_observation = install_controlled_close_observation(context)
+                except BaseException:
+                    emit("error|runtime")
+                    return 5
+                active_session = parts[1]
+                emit(f"ready|{active_session}")
+                continue
+
+            if (
+                len(parts) == 2
+                and parts[0] == "observe_browser_visible"
+                and active_session is not None
+                and parts[1] == active_session
+                and manager is not None
+                and context is not None
+                and not browser_visible_observed
+                and not navigation_admitted
+            ):
+                try:
+                    page = context.pages[0] if context.pages else context.new_page()
+                    payload = browser_visible_observation(page, config)
+                except BaseException:
+                    emit("error|runtime")
+                    return 5
+                browser_visible_observed = True
+                emit_browser_visible(active_session, payload)
+                continue
+
+            if (
+                len(parts) == 3
+                and parts[0] == "admit_navigation"
+                and active_session is not None
+                and parts[1] == active_session
+                and manager is not None
+                and context is not None
+                and browser_visible_observed
+                and not navigation_admitted
+            ):
+                try:
+                    target = decode_navigation_target(parts[2])
+                    admit_navigation(context, target)
+                except BaseException:
+                    emit("error|runtime")
+                    return 5
+                navigation_admitted = True
+                emit(f"navigation_admitted|{active_session}")
+                continue
+
+            if (
+                len(parts) == 2
+                and parts[0] == "observe_close"
+                and active_session is not None
+                and parts[1] == active_session
+                and manager is not None
+                and context is not None
+                and navigation_admitted
+            ):
+                controlled = controlled_close_candidate(close_observation)
+                emit(f"close_observed|{active_session}|{'true' if controlled else 'false'}")
+                continue
+
+            if (
+                len(parts) == 2
+                and parts[0] == "close"
+                and active_session is not None
+                and parts[1] == active_session
+                and manager is not None
+                and context is not None
+                and navigation_admitted
+            ):
+                try:
+                    close_context(manager, context, root)
+                except BaseException:
+                    emit(f"closed|{active_session}|false")
+                    return 6
+                manager = None
+                context = None
+                emit(f"closed|{active_session}|true")
+                return 0
+
             emit("error|protocol")
             return 2
-        parts = raw[:-1].split("|")
 
-        if parts == ["hello", IPC_VERSION] and not negotiated and active_session is None:
-            negotiated = True
-            emit(f"hello_ack|{IPC_VERSION}")
-            continue
-
-        if (
-            len(parts) == 2
-            and parts[0] == "launch"
-            and negotiated
-            and active_session is None
-            and SESSION_PATTERN.fullmatch(parts[1]) is not None
-        ):
-            try:
-                manager, context = launch_verified_context(lock, root, config, expected_probe)
-                close_observation = install_controlled_close_observation(context)
-            except BaseException:
-                emit("error|runtime")
-                return 5
-            active_session = parts[1]
-            emit(f"ready|{active_session}")
-            continue
-
-        if (
-            len(parts) == 2
-            and parts[0] == "observe_browser_visible"
-            and active_session is not None
-            and parts[1] == active_session
-            and manager is not None
-            and context is not None
-            and not browser_visible_observed
-            and not navigation_admitted
-        ):
-            try:
-                page = context.pages[0] if context.pages else context.new_page()
-                payload = browser_visible_observation(page, config)
-            except BaseException:
-                emit("error|runtime")
-                return 5
-            browser_visible_observed = True
-            emit_browser_visible(active_session, payload)
-            continue
-
-        if (
-            len(parts) == 3
-            and parts[0] == "admit_navigation"
-            and active_session is not None
-            and parts[1] == active_session
-            and manager is not None
-            and context is not None
-            and browser_visible_observed
-            and not navigation_admitted
-        ):
-            try:
-                target = decode_navigation_target(parts[2])
-                admit_navigation(context, target)
-            except BaseException:
-                emit("error|runtime")
-                return 5
-            navigation_admitted = True
-            emit(f"navigation_admitted|{active_session}")
-            continue
-
-        if (
-            len(parts) == 2
-            and parts[0] == "observe_close"
-            and active_session is not None
-            and parts[1] == active_session
-            and manager is not None
-            and context is not None
-            and navigation_admitted
-        ):
-            controlled = controlled_close_candidate(close_observation)
-            emit(f"close_observed|{active_session}|{'true' if controlled else 'false'}")
-            continue
-
-        if (
-            len(parts) == 2
-            and parts[0] == "close"
-            and active_session is not None
-            and parts[1] == active_session
-            and manager is not None
-            and context is not None
-            and navigation_admitted
-        ):
-            try:
+        return 3 if negotiated or active_session is not None else 0
+    finally:
+        if manager is not None and context is not None:
+            with contextlib.suppress(BaseException):
                 close_context(manager, context, root)
-            except BaseException:
-                emit(f"closed|{active_session}|false")
-                return 6
-            emit(f"closed|{active_session}|true")
-            return 0
-
-        emit("error|protocol")
-        return 2
-
-    if manager is not None and context is not None:
-        with contextlib.suppress(BaseException):
-            close_context(manager, context, root)
-    return 3 if negotiated or active_session is not None else 0
 
 
 def main() -> int:
