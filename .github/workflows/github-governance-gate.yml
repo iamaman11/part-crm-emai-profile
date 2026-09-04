@@ -100,6 +100,9 @@ jobs:
       - name: Prove typed lifecycle drift fails closed
         run: cargo test --locked --manifest-path tools/opsctl/Cargo.toml architecture
 
+      - name: Prove deployment identity observation adapter fails closed
+        run: python scripts/deployment-identity-ar11.py --self-test
+
       - name: Prove typed hosted evidence policy and adapter fail closed
         run: cargo test --locked --manifest-path tools/opsctl/Cargo.toml hosted_evidence
 
@@ -130,7 +133,7 @@ jobs:
       - name: Validate current Profile/Camoufox security authority
         run: node .github/scripts/profile-security-authority-check.mjs
 
-      - name: Prove Profile/Camoufox security and proxy-handle leakage fail closed
+      - name: Prove current Profile/Camoufox security and proxy-handle leakage fail closed
         run: node .github/scripts/profile-security-authority-check.mjs --self-test
 
   hosted-state:
@@ -243,6 +246,15 @@ jobs:
           deployments_code="$(curl --silent --show-error --output "$RUNNER_TEMP/ar11-observe-deployments.json" --write-out '%{http_code}' \
             -H "Authorization: Bearer $CLOUDFLARE_OBSERVE_API_TOKEN" \
             "https://api.cloudflare.com/client/v4/accounts/$account_id/workers/scripts/$worker_name/deployments")"
+          if [ "$deployments_code" = 200 ]; then
+            jq '.result.deployments[0] // {}' "$RUNNER_TEMP/ar11-observe-deployments.json" > "$RUNNER_TEMP/ar11-observe-current-deployment.json"
+          else
+            printf '{}\n' > "$RUNNER_TEMP/ar11-observe-current-deployment.json"
+          fi
+          python scripts/deployment-identity-ar11.py \
+            --status "$RUNNER_TEMP/ar11-observe-current-deployment.json" \
+            --output "$RUNNER_TEMP/ar11-observe-current-identity.json"
+          workers_current_release_set_id="$(jq -r '.release_set_id // "NONE"' "$RUNNER_TEMP/ar11-observe-current-identity.json")"
 
           d1_catalog_exit_code=0
           CLOUDFLARE_API_TOKEN="$CLOUDFLARE_OBSERVE_API_TOKEN" CLOUDFLARE_ACCOUNT_ID="$account_id" \
@@ -273,6 +285,7 @@ jobs:
             --argjson workers_deployments_http_status "$deployments_code" \
             --slurpfile deployments "$RUNNER_TEMP/ar11-observe-deployments.json" \
             --arg workers_deployments_response_digest_sha256 "$workers_deployments_response_digest_sha256" \
+            --arg workers_current_release_set_id "$workers_current_release_set_id" \
             --argjson d1_catalog_exit_code "$d1_catalog_exit_code" \
             --arg d1_catalog_output_digest_sha256 "$d1_catalog_output_digest_sha256" \
             --argjson r2_bucket_exit_code "$r2_bucket_exit_code" \
@@ -284,6 +297,7 @@ jobs:
               workers_deployments_success: $deployments[0].success,
               workers_deployments_error_count: ($deployments[0].errors | length),
               workers_deployments_response_digest_sha256: $workers_deployments_response_digest_sha256,
+              workers_current_release_set_id: $workers_current_release_set_id,
               d1_catalog_exit_code: $d1_catalog_exit_code,
               d1_catalog_output_digest_sha256: $d1_catalog_output_digest_sha256,
               r2_bucket_exit_code: $r2_bucket_exit_code,
@@ -316,7 +330,7 @@ jobs:
             --argjson account_http_status "$account_code" \
             '($extension[0].credentials | map(select(.id == "cloudflare.staging-observation-api")) | .[0]) as $credential |
             {
-              schema_version: 3,
+              schema_version: 4,
               kind: "HOSTED_EVIDENCE_RAW_OBSERVATION",
               issuer: $issuer,
               source: $source,
@@ -457,6 +471,8 @@ jobs:
             "$RUNNER_TEMP/ar11-observe-token-verify.json" \
             "$RUNNER_TEMP/ar11-observe-account.json" \
             "$RUNNER_TEMP/ar11-observe-deployments.json" \
+            "$RUNNER_TEMP/ar11-observe-current-deployment.json" \
+            "$RUNNER_TEMP/ar11-observe-current-identity.json" \
             "$RUNNER_TEMP/ar11-observe-d1.json" \
             "$RUNNER_TEMP/ar11-observe-r2.json" \
             "$RUNNER_TEMP/ar11-observe-queue.txt" \
