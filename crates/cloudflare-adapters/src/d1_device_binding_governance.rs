@@ -233,7 +233,13 @@ mod tests {
         assert!(DEVICE_REVOKE_COMMAND.contains("device_binding_revoke_commands"));
         assert!(AUDIT_CREATE.contains("device_binding"));
         assert!(OUTBOX_CREATE.contains("device_binding"));
-        for forbidden in ["private_key", "certificate_pem", "certificate_der", "pfx", "pkcs12"] {
+        for forbidden in [
+            "private_key",
+            "certificate_pem",
+            "certificate_der",
+            "pfx",
+            "pkcs12",
+        ] {
             assert!(!DEVICE_BIND_COMMAND.contains(forbidden));
         }
     }
