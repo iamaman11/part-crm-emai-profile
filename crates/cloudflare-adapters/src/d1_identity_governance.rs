@@ -1,3 +1,6 @@
+use crate::d1_device_binding_governance::{
+    D1DeviceBindingGovernanceRepository, DeviceBindingMutation, DeviceBindingRevokeMutation,
+};
 use crate::d1_governed_commands::D1GovernedCommandRepository;
 use crate::d1_idempotency::{D1IdempotencyRepository, IdempotencyDecision};
 use crate::d1_identity_acl::{
@@ -7,9 +10,9 @@ use crate::d1_identity_acl::{
 use crate::d1_identity_failure::{map_identity_dependency_error, map_identity_write_error};
 use application_ports::CommandExecutionEvidence;
 use application_ports::identity_governance::{
-    ActiveOwnerGovernanceApplicationPort, IdentityGovernancePortError, IdentityReplayDecision,
-    IdentityReplayReceipt, InvitationCreateWrite, MembershipStatusTarget, MembershipStatusWrite,
-    OwnerTransferWrite,
+    ActiveOwnerGovernanceApplicationPort, DeviceBindingRevokeWrite, DeviceBindingWrite,
+    IdentityGovernancePortError, IdentityReplayDecision, IdentityReplayReceipt,
+    InvitationCreateWrite, MembershipStatusTarget, MembershipStatusWrite, OwnerTransferWrite,
 };
 use profile_platform_primitives::ActorContext;
 use worker::d1::D1Database;
@@ -17,14 +20,20 @@ use worker::d1::D1Database;
 pub struct D1IdentityGovernanceApplicationRepository {
     governed: D1GovernedCommandRepository,
     idempotency: D1IdempotencyRepository,
+    device_bindings: D1DeviceBindingGovernanceRepository,
 }
 
 impl D1IdentityGovernanceApplicationRepository {
     #[must_use]
-    pub const fn new(governed_database: D1Database, idempotency_database: D1Database) -> Self {
+    pub const fn new(
+        governed_database: D1Database,
+        idempotency_database: D1Database,
+        device_binding_database: D1Database,
+    ) -> Self {
         Self {
             governed: D1GovernedCommandRepository::new(governed_database),
             idempotency: D1IdempotencyRepository::new(idempotency_database),
+            device_bindings: D1DeviceBindingGovernanceRepository::new(device_binding_database),
         }
     }
 }
@@ -103,6 +112,47 @@ impl ActiveOwnerGovernanceApplicationPort for D1IdentityGovernanceApplicationRep
                     target_actor_id: write.target_actor_id(),
                     expected_version: write.expected_version(),
                     next_status: membership_status(write.next_status()),
+                    envelope: mutation_envelope(write.evidence(), write.event_payload_json()),
+                },
+            )
+            .await
+            .map(|_| ())
+            .map_err(map_identity_write_error)
+    }
+
+    async fn bind_device(
+        &self,
+        actor: &ActorContext,
+        write: &DeviceBindingWrite,
+    ) -> Result<(), IdentityGovernancePortError> {
+        self.device_bindings
+            .bind(
+                actor,
+                DeviceBindingMutation {
+                    target_actor_id: write.target_actor_id(),
+                    device_id: write.device_id(),
+                    certificate_fingerprint: write.certificate_fingerprint(),
+                    expected_previous_version: write.expected_previous_version(),
+                    next_version: write.next_version(),
+                    envelope: mutation_envelope(write.evidence(), write.event_payload_json()),
+                },
+            )
+            .await
+            .map(|_| ())
+            .map_err(map_identity_write_error)
+    }
+
+    async fn revoke_device_binding(
+        &self,
+        actor: &ActorContext,
+        write: &DeviceBindingRevokeWrite,
+    ) -> Result<(), IdentityGovernancePortError> {
+        self.device_bindings
+            .revoke(
+                actor,
+                DeviceBindingRevokeMutation {
+                    target_actor_id: write.target_actor_id(),
+                    expected_version: write.expected_version(),
                     envelope: mutation_envelope(write.evidence(), write.event_payload_json()),
                 },
             )
