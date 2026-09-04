@@ -61,6 +61,9 @@ async fn bind_device(
         Ok(value) => value,
         Err(_) => return invalid_request(actor.actor().correlation_id().as_str()),
     };
+    if !is_canonical_sha256_hex(&body.certificate_fingerprint) {
+        return invalid_request(actor.actor().correlation_id().as_str());
+    }
     let certificate_fingerprint =
         match MachineCertificateFingerprint::parse(body.certificate_fingerprint.clone()) {
             Ok(value) => value,
@@ -139,6 +142,13 @@ async fn revoke_device(
     }
 }
 
+fn is_canonical_sha256_hex(value: &str) -> bool {
+    value.len() == 64
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
+
 fn device_binding_failure(
     correlation_id: &str,
     error: DeviceBindingOperationError,
@@ -210,7 +220,10 @@ struct DeviceBindingRevokeRequest {
 
 #[cfg(test)]
 mod tests {
-    use super::{DeviceBindingRevokeRequest, DeviceBindingWriteRequest, MutationReceipt};
+    use super::{
+        DeviceBindingRevokeRequest, DeviceBindingWriteRequest, MutationReceipt,
+        is_canonical_sha256_hex,
+    };
 
     #[test]
     fn transport_models_are_strict_and_contain_only_non_secret_binding_material()
@@ -259,5 +272,13 @@ mod tests {
         assert_eq!(receipt["resourceId"], "actor_01JDEVICETARGET");
         assert_eq!(receipt["aggregateVersion"], 1);
         Ok(())
+    }
+
+    #[test]
+    fn certificate_fingerprint_wire_form_is_exact_lowercase_sha256_hex() {
+        assert!(is_canonical_sha256_hex(&"ab".repeat(32)));
+        assert!(!is_canonical_sha256_hex(&"AB".repeat(32)));
+        assert!(!is_canonical_sha256_hex(&"a".repeat(63)));
+        assert!(!is_canonical_sha256_hex(&"g".repeat(64)));
     }
 }
