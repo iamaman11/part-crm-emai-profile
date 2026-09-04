@@ -196,11 +196,7 @@ pub async fn execute_device_revoke<P: ActiveOwnerGovernanceApplicationPort>(
         EVENT_PAYLOAD,
     );
     match port.revoke_device_binding(actor, &write).await {
-        Ok(()) => Ok(fresh_outcome(
-            "revoked",
-            actor_id,
-            command.expected_version,
-        )),
+        Ok(()) => Ok(fresh_outcome("revoked", actor_id, command.expected_version)),
         Err(error) if error.class() == IdentityGovernancePortErrorClass::Conflict => {
             conflict_replay(
                 actor,
@@ -468,7 +464,11 @@ mod tests {
     fn initial_bind_uses_version_one_and_rebind_advances_exactly_once()
     -> Result<(), Box<dyn std::error::Error>> {
         let initial = FakePort::new(vec![IdentityReplayDecision::Miss]);
-        let outcome = block_on(execute_device_bind(&actor()?, &initial, bind_command(None)?))?;
+        let outcome = block_on(execute_device_bind(
+            &actor()?,
+            &initial,
+            bind_command(None)?,
+        ))?;
         assert_eq!(outcome.binding_version(), AggregateVersion::INITIAL);
         assert_eq!(initial.observed_bind_version.get(), Some(1));
 
