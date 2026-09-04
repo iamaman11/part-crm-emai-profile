@@ -82,16 +82,13 @@ struct MigrationSpec {
 
 const CATALOG_POST_EPOCH_MIGRATIONS: &[MigrationSpec] = &[
     MigrationSpec {
-        revision: "0027_pas2_payload_fingerprint.sql",
-        migration_class: MigrationClass::Contract,
-        rollout_order: RolloutOrder::SeparateContractRelease,
-        fail_forward_required: true,
-        destructive: true,
-        code_rollback_allowed: false,
-        contract_preconditions: &[
-            "server_owned_payload_fingerprint_active",
-            "request_digest_readers_writers_retired",
-        ],
+        revision: "0027_pas2_payload_fingerprint_expand.sql",
+        migration_class: MigrationClass::Expand,
+        rollout_order: RolloutOrder::MigrateBeforeCode,
+        fail_forward_required: false,
+        destructive: false,
+        code_rollback_allowed: true,
+        contract_preconditions: &[],
     },
     MigrationSpec {
         revision: "0028_profile_assignment_detach.sql",
@@ -128,6 +125,18 @@ const CATALOG_POST_EPOCH_MIGRATIONS: &[MigrationSpec] = &[
         destructive: false,
         code_rollback_allowed: true,
         contract_preconditions: &[],
+    },
+    MigrationSpec {
+        revision: "0032_pas2_payload_fingerprint_contract.sql",
+        migration_class: MigrationClass::Contract,
+        rollout_order: RolloutOrder::SeparateContractRelease,
+        fail_forward_required: true,
+        destructive: true,
+        code_rollback_allowed: false,
+        contract_preconditions: &[
+            "server_owned_payload_fingerprint_active",
+            "request_digest_readers_writers_retired",
+        ],
     },
 ];
 
@@ -277,11 +286,41 @@ impl RepositoryMigrationCatalog {
             .migrations
             .last()
             .ok_or_else(|| D1Error::new("canonical D1 migration history is empty"))?;
+        let specs = self.component.future_migrations();
+        let trailing_contract_count = specs
+            .iter()
+            .rev()
+            .take_while(|spec| {
+                spec.migration_class == MigrationClass::Contract
+                    && spec.rollout_order == RolloutOrder::SeparateContractRelease
+            })
+            .count();
+        if trailing_contract_count > 1 {
+            return Err(D1Error::new(
+                "release schema projection supports at most one trailing SEPARATE_CONTRACT_RELEASE",
+            ));
+        }
+        let (target, supported_max) = if trailing_contract_count == 1 {
+            if self.migrations.len() < 2 {
+                return Err(D1Error::new(
+                    "trailing contract release requires an immediate predecessor revision",
+                ));
+            }
+            let target = &self.migrations[self.migrations.len() - 2];
+            if specs.last().map(|spec| spec.revision) != Some(last.name.as_str()) {
+                return Err(D1Error::new(
+                    "trailing contract release policy does not match repository latest revision",
+                ));
+            }
+            (target.name.as_str(), last.name.as_str())
+        } else {
+            (last.name.as_str(), last.name.as_str())
+        };
         Ok(json!({
             "database_component": self.component.id(),
-            "target_schema_revision": last.name,
-            "supported_schema_min": last.name,
-            "supported_schema_max": last.name,
+            "target_schema_revision": target,
+            "supported_schema_min": target,
+            "supported_schema_max": supported_max,
             "migration_history_digest": self.history_digest,
             "compatibility_policy_digest": self.policy_digest,
         }))
@@ -640,7 +679,7 @@ mod tests {
         let resolver = component_authority(&root, "resolver")?;
 
         assert_eq!(catalog.historical_len, 26);
-        assert_eq!(catalog.ordered_history.len(), 31);
+        assert_eq!(catalog.ordered_history.len(), 32);
         assert_eq!(resolver.historical_len, 4);
         assert_eq!(resolver.ordered_history.len(), 4);
         assert_eq!(
@@ -649,31 +688,25 @@ mod tests {
         );
         assert_eq!(
             catalog.current_repository_revision,
-            "0031_device_binding_governance.sql"
+            "0032_pas2_payload_fingerprint_contract.sql"
         );
         assert_eq!(
             resolver.current_repository_revision,
             "0004_refresh_owner_hmac_version.sql"
         );
 
-        assert_eq!(catalog.post_epoch.len(), 5);
-        let contract = &catalog.post_epoch[0];
-        assert_eq!(contract.migration_file, "0027_pas2_payload_fingerprint.sql");
-        assert_eq!(contract.migration_class, MigrationClass::Contract);
+        assert_eq!(catalog.post_epoch.len(), 6);
+        let expand = &catalog.post_epoch[0];
         assert_eq!(
-            contract.rollout_order,
-            RolloutOrder::SeparateContractRelease
+            expand.migration_file,
+            "0027_pas2_payload_fingerprint_expand.sql"
         );
-        assert!(contract.fail_forward_required);
-        assert!(contract.destructive);
-        assert!(!contract.code_rollback_allowed);
-        assert_eq!(
-            contract.contract_preconditions,
-            vec![
-                "server_owned_payload_fingerprint_active".to_owned(),
-                "request_digest_readers_writers_retired".to_owned(),
-            ]
-        );
+        assert_eq!(expand.migration_class, MigrationClass::Expand);
+        assert_eq!(expand.rollout_order, RolloutOrder::MigrateBeforeCode);
+        assert!(!expand.fail_forward_required);
+        assert!(!expand.destructive);
+        assert!(expand.code_rollback_allowed);
+        assert!(expand.contract_preconditions.is_empty());
 
         let detach = &catalog.post_epoch[1];
         assert_eq!(detach.migration_file, "0028_profile_assignment_detach.sql");
@@ -719,6 +752,42 @@ mod tests {
         assert!(!device_binding.destructive);
         assert!(device_binding.code_rollback_allowed);
         assert!(device_binding.contract_preconditions.is_empty());
+
+        let contract = &catalog.post_epoch[5];
+        assert_eq!(
+            contract.migration_file,
+            "0032_pas2_payload_fingerprint_contract.sql"
+        );
+        assert_eq!(contract.migration_class, MigrationClass::Contract);
+        assert_eq!(
+            contract.rollout_order,
+            RolloutOrder::SeparateContractRelease
+        );
+        assert!(contract.fail_forward_required);
+        assert!(contract.destructive);
+        assert!(!contract.code_rollback_allowed);
+        assert_eq!(
+            contract.contract_preconditions,
+            vec![
+                "server_owned_payload_fingerprint_active".to_owned(),
+                "request_digest_readers_writers_retired".to_owned(),
+            ]
+        );
+
+        let projection = RepositoryMigrationCatalog::load(&root, D1Component::Catalog)?
+            .release_contract_projection()?;
+        assert_eq!(
+            projection["target_schema_revision"],
+            "0031_device_binding_governance.sql"
+        );
+        assert_eq!(
+            projection["supported_schema_min"],
+            "0031_device_binding_governance.sql"
+        );
+        assert_eq!(
+            projection["supported_schema_max"],
+            "0032_pas2_payload_fingerprint_contract.sql"
+        );
         Ok(())
     }
 
