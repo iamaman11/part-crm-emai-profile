@@ -245,7 +245,13 @@ mod tests {
         )?;
         assert_eq!(rebind.expected_previous_version, Some(3));
 
-        for forbidden in ["privateKey", "certificatePem", "certificateDer", "pfx", "pkcs12"] {
+        for forbidden in [
+            "privateKey",
+            "certificatePem",
+            "certificateDer",
+            "pfx",
+            "pkcs12",
+        ] {
             let payload = format!(
                 r#"{{"deviceId":"device_01JDEVICEBIND","certificateFingerprint":"{}","{forbidden}":"secret"}}"#,
                 "ab".repeat(32)
@@ -253,8 +259,7 @@ mod tests {
             assert!(serde_json::from_str::<DeviceBindingWriteRequest>(&payload).is_err());
         }
 
-        let revoke: DeviceBindingRevokeRequest =
-            serde_json::from_str(r#"{"expectedVersion":4}"#)?;
+        let revoke: DeviceBindingRevokeRequest = serde_json::from_str(r#"{"expectedVersion":4}"#)?;
         assert_eq!(revoke.expected_version, 4);
         assert!(
             serde_json::from_str::<DeviceBindingRevokeRequest>(
