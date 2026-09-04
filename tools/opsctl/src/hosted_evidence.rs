@@ -927,6 +927,11 @@ mod tests {
         predecessor["schema_version"] = json!(3);
         assert_rejected(&predecessor);
 
+        let mut injected_verdict = observation();
+        injected_verdict["trust_state"] = json!("TRUSTED");
+        injected_verdict["outcome"] = json!("PASS");
+        assert_rejected(&injected_verdict);
+
         let mut missing_identity = observation();
         missing_identity["reads"]
             .as_object_mut()
@@ -987,7 +992,8 @@ mod tests {
     }
 
     #[test]
-    fn production_path_rejects_missing_results_invalid_digests_release_identity_and_account_drift() {
+    fn production_path_rejects_missing_results_invalid_digests_release_identity_and_account_drift()
+    {
         let mut missing = observation();
         missing["reads"]["workers_deployments_success"] = Value::Null;
         assert_rejected(&missing);
