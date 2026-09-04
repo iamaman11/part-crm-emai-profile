@@ -417,6 +417,8 @@ def validate_profile_relationship_d1_behavior(errors: list[str]) -> None:
         if profile_version(database) != 2:
             errors.append("legacy ASSIGN must bump Profile version exactly once")
 
+        # A failure after command + idempotency + audit + outbox inside one transaction must roll
+        # the complete governed mutation envelope back, modelling the production D1 batch boundary.
         database.commit()
         database.execute("BEGIN")
         try:
@@ -519,6 +521,8 @@ def validate_profile_relationship_d1_behavior(errors: list[str]) -> None:
         if profile_version(database) != 3:
             errors.append("atomic reassign must bump Profile version exactly once")
 
+        # Execute the exact production SQL from both read adapters. Relationship is only
+        # projection data: Client visibility and Profile visibility remain independently granted.
         validate_inverse_relationship_acl(database, errors)
 
         client_lifecycle_insert = """
@@ -554,6 +558,7 @@ def validate_profile_relationship_d1_behavior(errors: list[str]) -> None:
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """
 
+        # Two commands racing on one optimistic Profile version serialize so at most one can win.
         insert_relationship_command(
             database,
             command_id="command_concurrent_first_p1_fixture",
@@ -698,6 +703,7 @@ def validate_profile_relationship_d1_behavior(errors: list[str]) -> None:
             errors,
         )
 
+        # Once the relationship is resolved, the existing Client archive command is valid again.
         database.execute(
             client_lifecycle_insert,
             (
@@ -714,6 +720,7 @@ def validate_profile_relationship_d1_behavior(errors: list[str]) -> None:
         if client_state(database, "client_b_p1_fixture") != ("ARCHIVED", 2):
             errors.append("Client archive did not resume after the active Profile relationship was detached")
 
+        # A completed command cannot be reused as durable authority for a later direct history write.
         expect_integrity_failure(
             database,
             "UPDATE profile_client_assignments SET closed_at_ms = ? WHERE tenant_id = ? AND assignment_id = ?",
