@@ -179,11 +179,12 @@ pub struct OperationalCredentialAccountObservationV1 {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct OperationalCredentialReadObservationV3 {
+pub struct OperationalCredentialReadObservationV4 {
     pub workers_deployments_http_status: Option<u16>,
     pub workers_deployments_success: Option<bool>,
     pub workers_deployments_error_count: Option<usize>,
     pub workers_deployments_response_digest_sha256: Option<String>,
+    pub workers_current_release_set_id: String,
     pub d1_catalog_exit_code: Option<i32>,
     pub d1_catalog_output_digest_sha256: Option<String>,
     pub r2_bucket_exit_code: Option<i32>,
@@ -194,7 +195,7 @@ pub struct OperationalCredentialReadObservationV3 {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct HostedEvidenceObservationV3 {
+pub struct HostedEvidenceObservationV4 {
     pub binding: EvidenceBindingV1,
     pub source_run_id: u64,
     pub source_run_attempt: u32,
@@ -205,12 +206,12 @@ pub struct HostedEvidenceObservationV3 {
     pub token_verify: OperationalCredentialTokenVerifyObservationV1,
     pub account: OperationalCredentialAccountObservationV1,
     pub deployment_account_id: String,
-    pub reads: OperationalCredentialReadObservationV3,
+    pub reads: OperationalCredentialReadObservationV4,
     pub production_mutation: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct HostedEvidenceEnvelopeV3 {
+pub struct HostedEvidenceEnvelopeV4 {
     pub binding: EvidenceBindingV1,
     pub source_run_id: u64,
     pub source_run_attempt: u32,
@@ -247,7 +248,7 @@ impl ExpectedAccountBindingV1 {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct EvidencePolicyV3 {
+pub struct EvidencePolicyV4 {
     expected_binding: EvidenceBindingV1,
     max_validity_seconds: i64,
     expected_credential_id: String,
@@ -257,7 +258,7 @@ pub struct EvidencePolicyV3 {
     expected_mutation_probe: String,
 }
 
-impl EvidencePolicyV3 {
+impl EvidencePolicyV4 {
     pub fn new(
         expected_binding: EvidenceBindingV1,
         max_validity_seconds: u64,
@@ -304,9 +305,9 @@ impl EvidencePolicyV3 {
 
     pub fn evaluate(
         &self,
-        observation: HostedEvidenceObservationV3,
+        observation: HostedEvidenceObservationV4,
         evaluated_at_unix_seconds: i64,
-    ) -> Result<HostedEvidenceEnvelopeV3, EvidencePolicyError> {
+    ) -> Result<HostedEvidenceEnvelopeV4, EvidencePolicyError> {
         if observation.binding != self.expected_binding {
             return Err(EvidencePolicyError::new(
                 "HOSTED_EVIDENCE_BINDING_MISMATCH",
@@ -335,7 +336,7 @@ impl EvidencePolicyV3 {
         validate_account_observation(self, &observation)?;
         validate_read_observations(self, &observation)?;
 
-        Ok(HostedEvidenceEnvelopeV3 {
+        Ok(HostedEvidenceEnvelopeV4 {
             binding: observation.binding,
             source_run_id: observation.source_run_id,
             source_run_attempt: observation.source_run_attempt,
@@ -409,8 +410,8 @@ fn validate_freshness(
 }
 
 fn validate_credential_policy(
-    policy: &EvidencePolicyV3,
-    observation: &HostedEvidenceObservationV3,
+    policy: &EvidencePolicyV4,
+    observation: &HostedEvidenceObservationV4,
 ) -> Result<(), EvidencePolicyError> {
     let credential = &observation.credential_policy;
     if credential.credential_id != policy.expected_credential_id {
@@ -460,8 +461,8 @@ fn validate_credential_policy(
 }
 
 fn validate_attestation(
-    policy: &EvidencePolicyV3,
-    observation: &HostedEvidenceObservationV3,
+    policy: &EvidencePolicyV4,
+    observation: &HostedEvidenceObservationV4,
 ) -> Result<(), EvidencePolicyError> {
     let attestation = &observation.attestation;
     if attestation.schema_version != 1
@@ -544,7 +545,7 @@ fn validate_attestation(
 }
 
 fn validate_token_verify(
-    observation: &HostedEvidenceObservationV3,
+    observation: &HostedEvidenceObservationV4,
 ) -> Result<(), EvidencePolicyError> {
     let verify = &observation.token_verify;
     validate_provider_http_status("token verification", verify.http_status)?;
@@ -582,8 +583,8 @@ fn validate_token_verify(
 }
 
 fn validate_account_observation(
-    policy: &EvidencePolicyV3,
-    observation: &HostedEvidenceObservationV3,
+    policy: &EvidencePolicyV4,
+    observation: &HostedEvidenceObservationV4,
 ) -> Result<(), EvidencePolicyError> {
     let account = &observation.account;
     validate_provider_http_status("account observation", account.http_status)?;
@@ -630,8 +631,8 @@ fn validate_account_observation(
 }
 
 fn validate_read_observations(
-    policy: &EvidencePolicyV3,
-    observation: &HostedEvidenceObservationV3,
+    policy: &EvidencePolicyV4,
+    observation: &HostedEvidenceObservationV4,
 ) -> Result<(), EvidencePolicyError> {
     let reads = &observation.reads;
     validate_provider_http_status(
@@ -650,6 +651,7 @@ fn validate_read_observations(
         "workers_deployments_response_digest_sha256",
         reads.workers_deployments_response_digest_sha256.as_deref(),
     )?;
+    validate_current_release_set_id(&reads.workers_current_release_set_id)?;
     validate_required_sha256(
         "d1_catalog_output_digest_sha256",
         reads.d1_catalog_output_digest_sha256.as_deref(),
@@ -670,6 +672,22 @@ fn validate_read_observations(
         ));
     }
     Ok(())
+}
+
+fn validate_current_release_set_id(value: &str) -> Result<(), EvidencePolicyError> {
+    if value == "NONE" {
+        return Ok(());
+    }
+    let digest = value
+        .strip_prefix("release-set-v2-sha256-")
+        .or_else(|| value.strip_prefix("release-set-v3-sha256-"));
+    if digest.is_some_and(|digest| is_lower_hex(digest, 64)) {
+        return Ok(());
+    }
+    Err(EvidencePolicyError::new(
+        "HOSTED_EVIDENCE_RELEASE_SET_ID_INVALID",
+        "workers_current_release_set_id must be NONE or one exact Release Set v2/v3 tag",
+    ))
 }
 
 fn validate_provider_http_status(
@@ -897,11 +915,11 @@ impl ReviewAttestationPolicyV1 {
 mod tests {
     use super::{
         EvidenceBindingV1, EvidenceEnvironment, EvidenceIssuer, EvidenceOutcome,
-        EvidencePolicyDisposition, EvidencePolicyError, EvidencePolicyV3, EvidenceSource,
+        EvidencePolicyDisposition, EvidencePolicyError, EvidencePolicyV4, EvidenceSource,
         EvidenceSubject, EvidenceTarget, EvidenceTrustState, ExpectedAccountBindingV1,
-        HostedEvidenceEnvelopeV3, HostedEvidenceObservationV3,
+        HostedEvidenceEnvelopeV4, HostedEvidenceObservationV4,
         OperationalCredentialAccountObservationV1, OperationalCredentialAttestationObservationV1,
-        OperationalCredentialPolicyObservationV1, OperationalCredentialReadObservationV3,
+        OperationalCredentialPolicyObservationV1, OperationalCredentialReadObservationV4,
         OperationalCredentialTokenVerifyObservationV1, ReviewAttestationObservationV1,
         ReviewAttestationPolicyV1, ReviewAttestationStatus,
     };
@@ -909,7 +927,7 @@ mod tests {
     type TestResult<T> = Result<T, Box<dyn std::error::Error>>;
 
     fn policy_error(
-        result: Result<HostedEvidenceEnvelopeV3, EvidencePolicyError>,
+        result: Result<HostedEvidenceEnvelopeV4, EvidencePolicyError>,
     ) -> TestResult<EvidencePolicyError> {
         match result {
             Err(error) => Ok(error),
@@ -927,14 +945,18 @@ mod tests {
         })
     }
 
-    fn observation() -> TestResult<HostedEvidenceObservationV3> {
+    fn release_set_v3() -> String {
+        format!("release-set-v3-sha256-{}", "4".repeat(64))
+    }
+
+    fn observation() -> TestResult<HostedEvidenceObservationV4> {
         let required = vec![
             "D1 Read".to_owned(),
             "Queues Read".to_owned(),
             "Workers R2 Storage Read".to_owned(),
             "Workers Scripts Read".to_owned(),
         ];
-        Ok(HostedEvidenceObservationV3 {
+        Ok(HostedEvidenceObservationV4 {
             binding: binding("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")?,
             source_run_id: 42,
             source_run_attempt: 1,
@@ -985,11 +1007,12 @@ mod tests {
                 account_name: Some("pvisakp".to_owned()),
             },
             deployment_account_id: "a".repeat(32),
-            reads: OperationalCredentialReadObservationV3 {
+            reads: OperationalCredentialReadObservationV4 {
                 workers_deployments_http_status: Some(200),
                 workers_deployments_success: Some(true),
                 workers_deployments_error_count: Some(0),
                 workers_deployments_response_digest_sha256: Some("1".repeat(64)),
+                workers_current_release_set_id: release_set_v3(),
                 d1_catalog_exit_code: Some(0),
                 d1_catalog_output_digest_sha256: Some("2".repeat(64)),
                 r2_bucket_exit_code: Some(0),
@@ -1002,8 +1025,8 @@ mod tests {
         })
     }
 
-    fn policy() -> TestResult<EvidencePolicyV3> {
-        Ok(EvidencePolicyV3::new(
+    fn policy() -> TestResult<EvidencePolicyV4> {
+        Ok(EvidencePolicyV4::new(
             binding("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")?,
             3_600,
             "cloudflare.staging-observation-api",
@@ -1020,6 +1043,29 @@ mod tests {
         assert_eq!(envelope.trust_state, EvidenceTrustState::Trusted);
         assert_eq!(envelope.outcome, EvidenceOutcome::Passed);
         assert!(!envelope.production_mutation);
+        Ok(())
+    }
+
+    #[test]
+    fn accepts_explicit_clean_environment_release_identity() -> TestResult<()> {
+        let mut clean = observation()?;
+        clean.reads.workers_current_release_set_id = "NONE".to_owned();
+        policy()?.evaluate(clean, 1_700_000_010)?;
+        Ok(())
+    }
+
+    #[test]
+    fn rejects_unsupported_or_malformed_release_identity() -> TestResult<()> {
+        for current_id in [
+            "release-set-v1-sha256-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "release-set-v4-sha256-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "release-set-v3-sha256-deadbeef",
+        ] {
+            let mut invalid = observation()?;
+            invalid.reads.workers_current_release_set_id = current_id.to_owned();
+            let error = policy_error(policy()?.evaluate(invalid, 1_700_000_010))?;
+            assert_eq!(error.code(), "HOSTED_EVIDENCE_RELEASE_SET_ID_INVALID");
+        }
         Ok(())
     }
 
