@@ -326,7 +326,8 @@ def self_test() -> bool:
         certs = root / "certs.json"
         ledger = root / "ledger.json"
         app_id = "app_12345678"
-        manifest.write_text(json.dumps({"control_plane": {"account_id": "a" * 32, "custom_domain": "staging.example.test"}}), encoding="utf-8")
+        fixture_account_id = hashlib.sha256(b"fixture-account").hexdigest()[:32]
+        manifest.write_text(json.dumps({"control_plane": {"account_id": fixture_account_id, "custom_domain": "staging.example.test"}}), encoding="utf-8")
         verify.write_text(json.dumps({"success": True, "errors": [], "result": {"id": "token_12345678", "status": "active"}}), encoding="utf-8")
         apps.write_text(json.dumps({"success": True, "errors": [], "result": [
             {"id": app_id, "domain": "staging.example.test", "type": "self_hosted", "aud": "aud-test"},
@@ -366,7 +367,7 @@ def self_test() -> bool:
             "person@example.test" not in encoded,
             "DO_NOT_EXPORT" not in encoded,
             "private-name" not in encoded,
-            "a" * 32 not in encoded,
+            fixture_account_id not in encoded,
         ]
         if not all(checks):
             return False
