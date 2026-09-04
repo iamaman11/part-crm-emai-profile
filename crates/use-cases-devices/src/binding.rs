@@ -5,7 +5,6 @@ use application_ports::identity_governance::{
     IdentityReplayReceipt,
 };
 use core::fmt;
-use identity_access_domain::MembershipRole;
 use profile_platform_primitives::{
     ActorContext, ActorId, AggregateVersion, DeviceId, MachineCertificateFingerprint,
 };
@@ -125,11 +124,9 @@ impl ExecuteDeviceRevokeCommand {
 
 pub async fn execute_device_bind<P: ActiveOwnerGovernanceApplicationPort>(
     actor: &ActorContext,
-    role: MembershipRole,
     port: &P,
     command: ExecuteDeviceBindCommand,
 ) -> Result<DeviceBindingMutationOutcome, DeviceBindingOperationError> {
-    authorize_device_binding_governance(role)?;
     let next_version = next_binding_version(command.expected_previous_version)?;
     let actor_id = command.target_actor_id.clone();
 
@@ -174,11 +171,9 @@ pub async fn execute_device_bind<P: ActiveOwnerGovernanceApplicationPort>(
 
 pub async fn execute_device_revoke<P: ActiveOwnerGovernanceApplicationPort>(
     actor: &ActorContext,
-    role: MembershipRole,
     port: &P,
     command: ExecuteDeviceRevokeCommand,
 ) -> Result<DeviceBindingMutationOutcome, DeviceBindingOperationError> {
-    authorize_device_binding_governance(role)?;
     let actor_id = command.target_actor_id.clone();
 
     if let Some(outcome) = prewrite_replay(
@@ -218,16 +213,6 @@ pub async fn execute_device_revoke<P: ActiveOwnerGovernanceApplicationPort>(
             .await
         }
         Err(error) => Err(map_port_error(error)),
-    }
-}
-
-fn authorize_device_binding_governance(
-    role: MembershipRole,
-) -> Result<(), DeviceBindingOperationError> {
-    if role == MembershipRole::TenantOwner {
-        Ok(())
-    } else {
-        Err(DeviceBindingOperationError::NotFound)
     }
 }
 
@@ -480,39 +465,16 @@ mod tests {
     }
 
     #[test]
-    fn non_owner_stops_before_replay_or_write() -> Result<(), Box<dyn std::error::Error>> {
-        let port = FakePort::new(vec![IdentityReplayDecision::Miss]);
-        assert_eq!(
-            block_on(execute_device_bind(
-                &actor()?,
-                MembershipRole::Member,
-                &port,
-                bind_command(None)?,
-            )),
-            Err(DeviceBindingOperationError::NotFound)
-        );
-        assert!(port.commands.borrow().is_empty());
-        assert_eq!(port.bind_calls.get(), 0);
-        Ok(())
-    }
-
-    #[test]
     fn initial_bind_uses_version_one_and_rebind_advances_exactly_once()
     -> Result<(), Box<dyn std::error::Error>> {
         let initial = FakePort::new(vec![IdentityReplayDecision::Miss]);
-        let outcome = block_on(execute_device_bind(
-            &actor()?,
-            MembershipRole::TenantOwner,
-            &initial,
-            bind_command(None)?,
-        ))?;
+        let outcome = block_on(execute_device_bind(&actor()?, &initial, bind_command(None)?))?;
         assert_eq!(outcome.binding_version(), AggregateVersion::INITIAL);
         assert_eq!(initial.observed_bind_version.get(), Some(1));
 
         let rebind = FakePort::new(vec![IdentityReplayDecision::Miss]);
         let outcome = block_on(execute_device_bind(
             &actor()?,
-            MembershipRole::TenantOwner,
             &rebind,
             bind_command(Some(AggregateVersion::new(3)?))?,
         ))?;
@@ -526,12 +488,7 @@ mod tests {
         let port = FakePort::new(vec![IdentityReplayDecision::Replay(
             IdentityReplayReceipt::new("bound", Some("actor_01JDEVICETARGET".to_owned())),
         )]);
-        let outcome = block_on(execute_device_bind(
-            &actor()?,
-            MembershipRole::TenantOwner,
-            &port,
-            bind_command(None)?,
-        ))?;
+        let outcome = block_on(execute_device_bind(&actor()?, &port, bind_command(None)?))?;
         assert!(outcome.replayed());
         assert_eq!(port.bind_calls.get(), 0);
         assert_eq!(port.commands.borrow().as_slice(), [DEVICE_BIND_COMMAND]);
@@ -546,7 +503,6 @@ mod tests {
         assert_eq!(
             block_on(execute_device_bind(
                 &actor()?,
-                MembershipRole::TenantOwner,
                 &port,
                 bind_command(Some(AggregateVersion::INITIAL))?,
             )),
@@ -562,7 +518,6 @@ mod tests {
         let expected = AggregateVersion::new(5)?;
         let outcome = block_on(execute_device_revoke(
             &actor()?,
-            MembershipRole::TenantOwner,
             &port,
             ExecuteDeviceRevokeCommand::new(
                 ActorId::parse("actor_01JDEVICETARGET")?,
@@ -583,7 +538,6 @@ mod tests {
         assert_eq!(
             block_on(execute_device_bind(
                 &actor()?,
-                MembershipRole::TenantOwner,
                 &port,
                 bind_command(Some(AggregateVersion::new(u64::MAX)?))?,
             )),
