@@ -1,7 +1,8 @@
 use crate::CommandExecutionEvidence;
 use core::fmt;
 use profile_platform_primitives::{
-    ActorContext, ActorId, AggregateVersion, InvitationId, UnixMillis,
+    ActorContext, ActorId, AggregateVersion, DeviceId, InvitationId, MachineCertificateFingerprint,
+    UnixMillis,
 };
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -263,6 +264,120 @@ impl MembershipStatusWrite {
     }
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DeviceBindingWrite {
+    target_actor_id: ActorId,
+    device_id: DeviceId,
+    certificate_fingerprint: MachineCertificateFingerprint,
+    expected_previous_version: Option<AggregateVersion>,
+    next_version: AggregateVersion,
+    evidence: CommandExecutionEvidence,
+    event_payload_json: String,
+}
+
+impl DeviceBindingWrite {
+    #[must_use]
+    pub fn new(
+        target_actor_id: ActorId,
+        device_id: DeviceId,
+        certificate_fingerprint: MachineCertificateFingerprint,
+        expected_previous_version: Option<AggregateVersion>,
+        next_version: AggregateVersion,
+        evidence: CommandExecutionEvidence,
+        event_payload_json: impl Into<String>,
+    ) -> Self {
+        Self {
+            target_actor_id,
+            device_id,
+            certificate_fingerprint,
+            expected_previous_version,
+            next_version,
+            evidence,
+            event_payload_json: event_payload_json.into(),
+        }
+    }
+
+    #[must_use]
+    pub const fn target_actor_id(&self) -> &ActorId {
+        &self.target_actor_id
+    }
+
+    #[must_use]
+    pub const fn device_id(&self) -> &DeviceId {
+        &self.device_id
+    }
+
+    #[must_use]
+    pub const fn certificate_fingerprint(&self) -> &MachineCertificateFingerprint {
+        &self.certificate_fingerprint
+    }
+
+    #[must_use]
+    pub const fn expected_previous_version(&self) -> Option<AggregateVersion> {
+        self.expected_previous_version
+    }
+
+    #[must_use]
+    pub const fn next_version(&self) -> AggregateVersion {
+        self.next_version
+    }
+
+    #[must_use]
+    pub const fn evidence(&self) -> &CommandExecutionEvidence {
+        &self.evidence
+    }
+
+    #[must_use]
+    pub fn event_payload_json(&self) -> &str {
+        &self.event_payload_json
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DeviceBindingRevokeWrite {
+    target_actor_id: ActorId,
+    expected_version: AggregateVersion,
+    evidence: CommandExecutionEvidence,
+    event_payload_json: String,
+}
+
+impl DeviceBindingRevokeWrite {
+    #[must_use]
+    pub fn new(
+        target_actor_id: ActorId,
+        expected_version: AggregateVersion,
+        evidence: CommandExecutionEvidence,
+        event_payload_json: impl Into<String>,
+    ) -> Self {
+        Self {
+            target_actor_id,
+            expected_version,
+            evidence,
+            event_payload_json: event_payload_json.into(),
+        }
+    }
+
+    #[must_use]
+    pub const fn target_actor_id(&self) -> &ActorId {
+        &self.target_actor_id
+    }
+
+    #[must_use]
+    pub const fn expected_version(&self) -> AggregateVersion {
+        self.expected_version
+    }
+
+    #[must_use]
+    pub const fn evidence(&self) -> &CommandExecutionEvidence {
+        &self.evidence
+    }
+
+    #[must_use]
+    pub fn event_payload_json(&self) -> &str {
+        &self.event_payload_json
+    }
+}
+
 #[allow(async_fn_in_trait)]
 pub trait ActiveOwnerGovernanceApplicationPort {
     async fn decide_identity_replay(
@@ -288,5 +403,17 @@ pub trait ActiveOwnerGovernanceApplicationPort {
         &self,
         actor: &ActorContext,
         write: &MembershipStatusWrite,
+    ) -> Result<(), IdentityGovernancePortError>;
+
+    async fn bind_device(
+        &self,
+        actor: &ActorContext,
+        write: &DeviceBindingWrite,
+    ) -> Result<(), IdentityGovernancePortError>;
+
+    async fn revoke_device_binding(
+        &self,
+        actor: &ActorContext,
+        write: &DeviceBindingRevokeWrite,
     ) -> Result<(), IdentityGovernancePortError>;
 }

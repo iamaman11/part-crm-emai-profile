@@ -1,9 +1,14 @@
 #![forbid(unsafe_code)]
 
+pub mod binding;
 pub mod generation_commit;
 pub mod jobs;
 pub mod queries;
 
+pub use binding::{
+    DeviceBindingMutationOutcome, DeviceBindingOperationError, ExecuteDeviceBindCommand,
+    ExecuteDeviceRevokeCommand, execute_device_bind, execute_device_revoke,
+};
 pub use generation_commit::{
     DeviceGenerationCommitOperationError, DeviceGenerationCommitServices,
     execute_commit_dirty_generation,

@@ -1,4 +1,5 @@
 use super::*;
+use application_ports::identity_governance::{DeviceBindingRevokeWrite, DeviceBindingWrite};
 use profile_platform_primitives::{
     AuditEventId, CorrelationId, IdempotencyKey, OutboxEventId, PayloadFingerprint, TenantId,
     TenantScope,
@@ -90,6 +91,22 @@ impl ActiveOwnerGovernanceApplicationPort for FakePort {
         _write: &MembershipStatusWrite,
     ) -> Result<(), IdentityGovernancePortError> {
         self.membership_calls.set(self.membership_calls.get() + 1);
+        self.write_result()
+    }
+
+    async fn bind_device(
+        &self,
+        _actor: &ActorContext,
+        _write: &DeviceBindingWrite,
+    ) -> Result<(), IdentityGovernancePortError> {
+        self.write_result()
+    }
+
+    async fn revoke_device_binding(
+        &self,
+        _actor: &ActorContext,
+        _write: &DeviceBindingRevokeWrite,
+    ) -> Result<(), IdentityGovernancePortError> {
         self.write_result()
     }
 }

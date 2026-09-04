@@ -100,6 +100,49 @@ define_typed_id!(OutboxEventId);
 define_typed_id!(FencingToken);
 define_typed_id!(SecretHandle);
 
+/// Canonical SHA-256 fingerprint of a machine client certificate.
+///
+/// Cloudflare may expose hexadecimal fingerprints with either case. The project stores and
+/// compares exactly one lowercase canonical representation. This value is an identity selector,
+/// not certificate or private-key material.
+#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct MachineCertificateFingerprint(String);
+
+impl MachineCertificateFingerprint {
+    pub fn parse(
+        value: impl Into<String>,
+    ) -> Result<Self, ParseMachineCertificateFingerprintError> {
+        let value = value.into();
+        if value.len() != SHA256_HEX_LENGTH || !value.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+            return Err(ParseMachineCertificateFingerprintError);
+        }
+        Ok(Self(value.to_ascii_lowercase()))
+    }
+
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Display for MachineCertificateFingerprint {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.as_str())
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ParseMachineCertificateFingerprintError;
+
+impl fmt::Display for ParseMachineCertificateFingerprintError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .write_str("machine certificate fingerprint must be exactly 64 hexadecimal characters")
+    }
+}
+
+impl std::error::Error for ParseMachineCertificateFingerprintError {}
+
 /// Internal server-owned SHA-256 fingerprint used only for idempotency payload comparison.
 ///
 /// This type is intentionally not an opaque public identifier and is not part of any wire contract.
@@ -264,8 +307,9 @@ impl UnixMillis {
 #[cfg(test)]
 mod tests {
     use super::{
-        ActorContext, ActorId, AggregateVersion, ContactPointId, CorrelationId, OpaqueId,
-        PayloadFingerprint, SHA256_HEX_LENGTH, TenantId, TenantScope,
+        ActorContext, ActorId, AggregateVersion, ContactPointId, CorrelationId,
+        MachineCertificateFingerprint, OpaqueId, PayloadFingerprint, SHA256_HEX_LENGTH, TenantId,
+        TenantScope,
     };
 
     #[test]
@@ -279,6 +323,21 @@ mod tests {
         assert_eq!(actor.tenant_scope().tenant_id(), &tenant_id);
         assert_eq!(actor.actor_id(), &actor_id);
         assert_eq!(actor.correlation_id(), &correlation_id);
+        Ok(())
+    }
+
+    #[test]
+    fn machine_certificate_fingerprint_is_exact_sha256_and_canonical_lowercase()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let lower = "a1".repeat(32);
+        let upper = lower.to_ascii_uppercase();
+        assert_eq!(
+            MachineCertificateFingerprint::parse(lower.clone())?.as_str(),
+            lower
+        );
+        assert_eq!(MachineCertificateFingerprint::parse(upper)?.as_str(), lower);
+        assert!(MachineCertificateFingerprint::parse("a".repeat(63)).is_err());
+        assert!(MachineCertificateFingerprint::parse("g".repeat(64)).is_err());
         Ok(())
     }
 

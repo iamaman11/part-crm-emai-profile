@@ -135,6 +135,7 @@ pub fn identity_governance_application(
     Ok(D1IdentityGovernanceApplicationRepository::new(
         env.d1(D1_CATALOG_BINDING)?,
         env.d1(D1_CATALOG_BINDING)?,
+        env.d1(D1_CATALOG_BINDING)?,
     ))
 }
 

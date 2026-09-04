@@ -120,6 +120,15 @@ const CATALOG_POST_EPOCH_MIGRATIONS: &[MigrationSpec] = &[
         code_rollback_allowed: true,
         contract_preconditions: &[],
     },
+    MigrationSpec {
+        revision: "0031_device_binding_governance.sql",
+        migration_class: MigrationClass::Expand,
+        rollout_order: RolloutOrder::MigrateBeforeCode,
+        fail_forward_required: false,
+        destructive: false,
+        code_rollback_allowed: true,
+        contract_preconditions: &[],
+    },
 ];
 
 impl MigrationSpec {
@@ -631,7 +640,7 @@ mod tests {
         let resolver = component_authority(&root, "resolver")?;
 
         assert_eq!(catalog.historical_len, 26);
-        assert_eq!(catalog.ordered_history.len(), 30);
+        assert_eq!(catalog.ordered_history.len(), 31);
         assert_eq!(resolver.historical_len, 4);
         assert_eq!(resolver.ordered_history.len(), 4);
         assert_eq!(
@@ -640,14 +649,14 @@ mod tests {
         );
         assert_eq!(
             catalog.current_repository_revision,
-            "0030_profile_generation_successor_commit.sql"
+            "0031_device_binding_governance.sql"
         );
         assert_eq!(
             resolver.current_repository_revision,
             "0004_refresh_owner_hmac_version.sql"
         );
 
-        assert_eq!(catalog.post_epoch.len(), 4);
+        assert_eq!(catalog.post_epoch.len(), 5);
         let contract = &catalog.post_epoch[0];
         assert_eq!(contract.migration_file, "0027_pas2_payload_fingerprint.sql");
         assert_eq!(contract.migration_class, MigrationClass::Contract);
@@ -695,6 +704,21 @@ mod tests {
         assert!(!successor.destructive);
         assert!(successor.code_rollback_allowed);
         assert!(successor.contract_preconditions.is_empty());
+
+        let device_binding = &catalog.post_epoch[4];
+        assert_eq!(
+            device_binding.migration_file,
+            "0031_device_binding_governance.sql"
+        );
+        assert_eq!(device_binding.migration_class, MigrationClass::Expand);
+        assert_eq!(
+            device_binding.rollout_order,
+            RolloutOrder::MigrateBeforeCode
+        );
+        assert!(!device_binding.fail_forward_required);
+        assert!(!device_binding.destructive);
+        assert!(device_binding.code_rollback_allowed);
+        assert!(device_binding.contract_preconditions.is_empty());
         Ok(())
     }
 
