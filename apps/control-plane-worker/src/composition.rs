@@ -135,6 +135,7 @@ pub fn identity_governance_application(
     Ok(D1IdentityGovernanceApplicationRepository::new(
         env.d1(D1_CATALOG_BINDING)?,
         env.d1(D1_CATALOG_BINDING)?,
+        env.d1(D1_CATALOG_BINDING)?,
     ))
 }
 
@@ -259,72 +260,81 @@ pub fn device_job_repository(env: &Env) -> Result<D1DeviceJobRepository> {
     Ok(D1DeviceJobRepository::new(env.d1(D1_CATALOG_BINDING)?))
 }
 
-pub fn device_generation_replay_probe(env: &Env) -> Result<D1DeviceGenerationCommitJournal> {
+pub fn device_generation_commit_journal(env: &Env) -> Result<D1DeviceGenerationCommitJournal> {
     Ok(D1DeviceGenerationCommitJournal::new(
         env.d1(D1_CATALOG_BINDING)?,
     ))
 }
 
-pub fn generation_object_verifier(env: &Env) -> Result<R2GenerationObjects> {
-    Ok(R2GenerationObjects::new(env.bucket(R2_PROFILES_BINDING)?))
+pub fn profile_coordinator_ingress_application(
+    env: &Env,
+) -> Result<CloudflareCoordinatorIngressApplication> {
+    Ok(CloudflareCoordinatorIngressApplication::new(
+        env.d1(D1_CATALOG_BINDING)?,
+        env.d1(D1_CATALOG_BINDING)?,
+        env.durable_object(PROFILE_COORDINATOR_BINDING)?,
+    ))
 }
 
-pub fn generation_root_keyring(env: &Env) -> Result<CloudflareGenerationRootKeyring> {
-    CloudflareGenerationRootKeyring::from_env(env, GENERATION_ROOT_KEYRING_BINDING)
-        .map_err(|_| Error::RustError("generation root-key keyring unavailable".to_owned()))
+pub fn cloudflare_device_generation_commit_port(
+    env: &Env,
+) -> Result<CloudflareDeviceGenerationCommitPort> {
+    Ok(CloudflareDeviceGenerationCommitPort::new(
+        env.d1(D1_CATALOG_BINDING)?,
+        env.d1(D1_CATALOG_BINDING)?,
+    ))
+}
+
+pub fn cloudflare_profile_generation_successor_commit_port(
+    env: &Env,
+) -> Result<CloudflareProfileGenerationSuccessorCommitPort> {
+    Ok(CloudflareProfileGenerationSuccessorCommitPort::new(
+        env.d1(D1_CATALOG_BINDING)?,
+        env.d1(D1_CATALOG_BINDING)?,
+    ))
+}
+
+pub fn r2_generation_objects(env: &Env) -> Result<R2GenerationObjects> {
+    Ok(R2GenerationObjects::new(env.bucket(R2_PROFILES_BINDING)?))
 }
 
 pub fn generation_upload_capability_signer(
     env: &Env,
 ) -> Result<R2GenerationUploadCapabilitySigner> {
-    let credentials = R2SigV4Credentials::new(
-        env.secret(R2_GENERATION_ACCESS_KEY_ID_BINDING)?.to_string(),
-        env.secret(R2_GENERATION_SECRET_ACCESS_KEY_BINDING)?
-            .to_string(),
-    )
-    .map_err(|_| {
-        Error::RustError("invalid R2 generation upload signing configuration".to_owned())
-    })?;
+    let account_id = env.secret(R2_GENERATION_ACCOUNT_ID_BINDING)?.to_string();
+    let bucket_name = env.secret(R2_GENERATION_BUCKET_NAME_BINDING)?.to_string();
+    let access_key_id = env.secret(R2_GENERATION_ACCESS_KEY_ID_BINDING)?.to_string();
+    let secret_access_key = env
+        .secret(R2_GENERATION_SECRET_ACCESS_KEY_BINDING)?
+        .to_string();
     R2GenerationUploadCapabilitySigner::new(
-        env.var(R2_GENERATION_ACCOUNT_ID_BINDING)?.to_string(),
-        env.var(R2_GENERATION_BUCKET_NAME_BINDING)?.to_string(),
-        credentials,
+        account_id,
+        bucket_name,
+        R2SigV4Credentials::new(access_key_id, secret_access_key),
     )
-    .map_err(|_| Error::RustError("invalid R2 generation upload signing configuration".to_owned()))
+    .map_err(|error| Error::RustError(format!("invalid R2 generation upload signer: {error}")))
 }
 
 pub fn generation_download_capability_signer(
     env: &Env,
 ) -> Result<R2GenerationDownloadCapabilitySigner> {
+    let account_id = env.secret(R2_GENERATION_ACCOUNT_ID_BINDING)?.to_string();
+    let bucket_name = env.secret(R2_GENERATION_BUCKET_NAME_BINDING)?.to_string();
+    let access_key_id = env.secret(R2_GENERATION_ACCESS_KEY_ID_BINDING)?.to_string();
+    let secret_access_key = env
+        .secret(R2_GENERATION_SECRET_ACCESS_KEY_BINDING)?
+        .to_string();
     R2GenerationDownloadCapabilitySigner::new(
-        env.var(R2_GENERATION_ACCOUNT_ID_BINDING)?.to_string(),
-        env.var(R2_GENERATION_BUCKET_NAME_BINDING)?.to_string(),
-        env.secret(R2_GENERATION_ACCESS_KEY_ID_BINDING)?.to_string(),
-        env.secret(R2_GENERATION_SECRET_ACCESS_KEY_BINDING)?
-            .to_string(),
+        account_id,
+        bucket_name,
+        R2SigV4Credentials::new(access_key_id, secret_access_key),
     )
-    .map_err(|_| {
-        Error::RustError("invalid R2 generation download signing configuration".to_owned())
-    })
+    .map_err(|error| Error::RustError(format!("invalid R2 generation download signer: {error}")))
 }
 
-#[must_use]
-pub fn coordinator_ingress_application(env: &Env) -> CloudflareCoordinatorIngressApplication<'_> {
-    CloudflareCoordinatorIngressApplication::new(
-        env,
-        D1_CATALOG_BINDING,
-        PROFILE_COORDINATOR_BINDING,
+pub fn generation_root_keyring(env: &Env) -> Result<CloudflareGenerationRootKeyring> {
+    CloudflareGenerationRootKeyring::parse(
+        env.secret(GENERATION_ROOT_KEYRING_BINDING)?.to_string(),
     )
-}
-
-#[must_use]
-pub fn device_generation_commit(env: &Env) -> CloudflareDeviceGenerationCommitPort<'_> {
-    CloudflareDeviceGenerationCommitPort::new(env, PROFILE_COORDINATOR_BINDING)
-}
-
-#[must_use]
-pub fn profile_generation_successor_commit(
-    env: &Env,
-) -> CloudflareProfileGenerationSuccessorCommitPort<'_> {
-    CloudflareProfileGenerationSuccessorCommitPort::new(env, PROFILE_COORDINATOR_BINDING)
+    .map_err(|error| Error::RustError(format!("invalid generation root keyring: {error}")))
 }
