@@ -236,22 +236,72 @@ def validate_overlay(value: dict[str, Any]) -> None:
             raise ValueError(f"forbidden value-bearing field {location}.{key}")
         if isinstance(nested, str) and any(pattern.search(nested) for pattern in MATERIAL_PATTERNS):
             raise ValueError(f"high-confidence credential material found at {location}.{key}")
+
     credentials = value["credentials"]
-    if len(credentials) != 1:
-        raise ValueError("AR-11 credential overlay must own exactly the read-only observation credential")
-    observation = credentials[0]
+    by_id: dict[str, dict[str, Any]] = {}
+    for credential in credentials:
+        logical_id = credential.get("id")
+        if not isinstance(logical_id, str) or not logical_id or logical_id in by_id:
+            raise ValueError("AR-11 credential overlay has invalid/duplicate credential identity")
+        by_id[logical_id] = credential
+    expected_ids = {
+        "cloudflare.release-observation-api",
+        "cloudflare.staging-zero-trust-observation-api",
+    }
+    if set(by_id) != expected_ids:
+        raise ValueError("AR-11 credential overlay must own exactly the two bounded read-only observation credentials")
+
+    observation = by_id["cloudflare.release-observation-api"]
     if (
-        observation.get("id") != "cloudflare.release-observation-api"
+        observation.get("class") != "OPERATIONAL_API_CREDENTIAL"
+        or observation.get("provider_system") != "CLOUDFLARE"
         or observation.get("owner") != "release-set-promotion-observation"
+        or observation.get("consumers") != [".github/workflows/release-set-promotion.yml"]
         or observation.get("provider_capability") != "READ_ONLY_METADATA_OBSERVATION"
         or observation.get("automation_class") != "READ_ONLY_PROVIDER_OBSERVATION"
+        or observation.get("externally_issued") is not True
+        or observation.get("future_cutover") != "AR-11"
     ):
-        raise ValueError("AR-11 observation credential least-privilege identity drifted")
+        raise ValueError("AR-11 release observation credential least-privilege identity drifted")
     bindings = observation.get("bindings")
-    if not isinstance(bindings, list) or len(bindings) != 1 or bindings[0].get("name") != "CLOUDFLARE_OBSERVE_API_TOKEN":
-        raise ValueError("AR-11 observation credential binding drifted")
+    if (
+        not isinstance(bindings, list)
+        or len(bindings) != 1
+        or bindings[0] != {
+            "surface": "github_environment_secret",
+            "name": "CLOUDFLARE_OBSERVE_API_TOKEN",
+            "environments": ["staging"],
+        }
+    ):
+        raise ValueError("AR-11 release observation credential binding drifted")
     if observation.get("environment_scope") != {"kind": "environment", "environments": ["staging"]}:
-        raise ValueError("AR-11 observation credential must remain staging-only")
+        raise ValueError("AR-11 release observation credential must remain staging-only")
+
+    zero_trust = by_id["cloudflare.staging-zero-trust-observation-api"]
+    if (
+        zero_trust.get("class") != "OPERATIONAL_API_CREDENTIAL"
+        or zero_trust.get("provider_system") != "CLOUDFLARE_ZERO_TRUST"
+        or zero_trust.get("owner") != "cloudflare-promotion-authority"
+        or zero_trust.get("consumers") != [".github/workflows/v2-staging-envelope-observation.yml"]
+        or zero_trust.get("provider_capability") != "READ_ONLY_ZERO_TRUST_METADATA_OBSERVATION"
+        or zero_trust.get("automation_class") != "READ_ONLY_PROVIDER_OBSERVATION"
+        or zero_trust.get("externally_issued") is not True
+        or zero_trust.get("future_cutover") != "CAP_EXEC_V2_RETIRE"
+    ):
+        raise ValueError("V2 Zero Trust observation credential least-privilege identity drifted")
+    zero_trust_bindings = zero_trust.get("bindings")
+    if (
+        not isinstance(zero_trust_bindings, list)
+        or len(zero_trust_bindings) != 1
+        or zero_trust_bindings[0] != {
+            "surface": "github_environment_secret",
+            "name": "CLOUDFLARE_ZERO_TRUST_OBSERVE_API_TOKEN",
+            "environments": ["staging"],
+        }
+    ):
+        raise ValueError("V2 Zero Trust observation credential binding drifted")
+    if zero_trust.get("environment_scope") != {"kind": "environment", "environments": ["staging"]}:
+        raise ValueError("V2 Zero Trust observation credential must remain staging-only")
 
 
 def compose_registry(base: dict[str, Any], overlay: dict[str, Any]) -> dict[str, Any]:
@@ -489,13 +539,43 @@ def negative_self_test(state: State, root: Path = ROOT) -> None:
         raise AssertionError("current-authority status fixture unexpectedly passed")
 
     bad_overlay = copy.deepcopy(state.overlay)
-    bad_overlay["credentials"][0]["provider_capability"] = "DEPLOY"
+    release_observation = next(
+        item for item in bad_overlay["credentials"] if item.get("id") == "cloudflare.release-observation-api"
+    )
+    release_observation["provider_capability"] = "DEPLOY"
     try:
         validate_overlay(bad_overlay)
     except ValueError:
         pass
     else:
-        raise AssertionError("observation credential mutation-capability fixture unexpectedly passed")
+        raise AssertionError("release observation credential mutation-capability fixture unexpectedly passed")
+
+    bad_zero_trust_overlay = copy.deepcopy(state.overlay)
+    zero_trust_observation = next(
+        item
+        for item in bad_zero_trust_overlay["credentials"]
+        if item.get("id") == "cloudflare.staging-zero-trust-observation-api"
+    )
+    zero_trust_observation["provider_capability"] = "DEPLOY"
+    try:
+        validate_overlay(bad_zero_trust_overlay)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("V2 Zero Trust observation mutation-capability fixture unexpectedly passed")
+
+    missing_zero_trust_overlay = copy.deepcopy(state.overlay)
+    missing_zero_trust_overlay["credentials"] = [
+        item
+        for item in missing_zero_trust_overlay["credentials"]
+        if item.get("id") != "cloudflare.staging-zero-trust-observation-api"
+    ]
+    try:
+        validate_overlay(missing_zero_trust_overlay)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("missing V2 Zero Trust observation credential fixture unexpectedly passed")
 
     bad_lifecycle = copy.deepcopy(state.lifecycle)
     bad_lifecycle["routine_release_secret_transport"] = True

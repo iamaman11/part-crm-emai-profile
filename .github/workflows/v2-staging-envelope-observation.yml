@@ -1,0 +1,198 @@
+name: V2 Staging Envelope Observation
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: v2-staging-envelope-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+# STAGE_BOUND_V2: retire after #584 acceptance unless a later stage proves a durable consumer.
+jobs:
+  contract:
+    name: V2 Staging Envelope Contract
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout exact candidate source
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify exact source checkout
+        env:
+          EXPECTED_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: python -c "import os, subprocess; actual = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(); expected = os.environ['EXPECTED_SOURCE_SHA']; assert actual == expected, f'expected {expected}, got {actual}'"
+
+      - name: Prove V2 staging observation adapter fails closed and redacts sensitive values
+        run: python scripts/v2-staging-envelope-observation.py --self-test
+
+  observe:
+    name: V2 Staging Envelope Hosted Observation
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    needs: contract
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    environment: staging
+    steps:
+      - name: Checkout exact accepted-main source
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Verify exact source checkout
+        env:
+          EXPECTED_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: python -c "import os, subprocess; actual = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(); expected = os.environ['EXPECTED_SOURCE_SHA']; assert actual == expected, f'expected {expected}, got {actual}'"
+
+      - name: Verify accepted-main staging-only execution
+        env:
+          SOURCE_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = "refs/heads/main"
+          test "$GITHUB_EVENT_NAME" != "pull_request"
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+
+      - name: Set up pinned Node for Wrangler read adapter
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
+        with:
+          node-version: '24.19.0'
+          package-manager-cache: false
+
+      - name: Collect exact staging provider observations with read-only credentials
+        env:
+          CLOUDFLARE_ZERO_TRUST_OBSERVE_API_TOKEN: ${{ secrets.CLOUDFLARE_ZERO_TRUST_OBSERVE_API_TOKEN }}
+          CLOUDFLARE_OBSERVE_API_TOKEN: ${{ secrets.CLOUDFLARE_OBSERVE_API_TOKEN }}
+          CLOUDFLARE_DEPLOY_MANIFEST_JSON: ${{ secrets.CLOUDFLARE_DEPLOY_MANIFEST_JSON }}
+          SOURCE_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          test -n "$CLOUDFLARE_ZERO_TRUST_OBSERVE_API_TOKEN"
+          test -n "$CLOUDFLARE_OBSERVE_API_TOKEN"
+          test -n "$CLOUDFLARE_DEPLOY_MANIFEST_JSON"
+          echo "::add-mask::$CLOUDFLARE_ZERO_TRUST_OBSERVE_API_TOKEN"
+          echo "::add-mask::$CLOUDFLARE_OBSERVE_API_TOKEN"
+          umask 077
+
+          raw="$RUNNER_TEMP/v2-staging-envelope-raw"
+          evidence="artifacts/v2-staging-envelope-observation"
+          policies="$raw/policies"
+          mkdir -p "$raw" "$policies" "$evidence"
+          manifest="$raw/deploy-manifest.json"
+          printf '%s' "$CLOUDFLARE_DEPLOY_MANIFEST_JSON" > "$manifest"
+
+          account_id="$(jq -er '.control_plane.account_id // .account_id | select(type == "string" and length == 32)' "$manifest")"
+          d1_database_name="$(jq -er '.control_plane.d1_database_name // .d1_database_name | select(type == "string" and length > 0)' "$manifest")"
+          target_host="$(python - "$manifest" <<'PY'
+          import json
+          import sys
+          from urllib.parse import urlsplit
+          document = json.load(open(sys.argv[1], encoding='utf-8'))
+          control = document.get('control_plane') if isinstance(document.get('control_plane'), dict) else document
+          value = control.get('custom_domain')
+          if not isinstance(value, str) or not value.strip():
+              raise SystemExit('missing custom_domain')
+          raw = value.strip().lower()
+          parsed = urlsplit(raw if '://' in raw else 'https://' + raw)
+          if not parsed.hostname:
+              raise SystemExit('invalid custom_domain')
+          print(parsed.hostname.rstrip('.'))
+          PY
+          )"
+
+          verify_code="$(curl --silent --show-error --output "$raw/zero-trust-token-verify.json" --write-out '%{http_code}' \
+            -H "Authorization: Bearer $CLOUDFLARE_ZERO_TRUST_OBSERVE_API_TOKEN" \
+            'https://api.cloudflare.com/client/v4/user/tokens/verify')"
+          test "$verify_code" = 200
+          jq -e '.success == true and (.errors | length) == 0 and .result.status == "active"' "$raw/zero-trust-token-verify.json" >/dev/null
+
+          apps_code="$(curl --silent --show-error --output "$raw/access-apps.json" --write-out '%{http_code}' \
+            -H "Authorization: Bearer $CLOUDFLARE_ZERO_TRUST_OBSERVE_API_TOKEN" \
+            "https://api.cloudflare.com/client/v4/accounts/$account_id/access/apps?per_page=1000")"
+          test "$apps_code" = 200
+          jq -e '.success == true and (.errors | length) == 0 and (.result | type == "array")' "$raw/access-apps.json" >/dev/null
+
+          organization_code="$(curl --silent --show-error --output "$raw/access-organization.json" --write-out '%{http_code}' \
+            -H "Authorization: Bearer $CLOUDFLARE_ZERO_TRUST_OBSERVE_API_TOKEN" \
+            "https://api.cloudflare.com/client/v4/accounts/$account_id/access/organizations")"
+          test "$organization_code" = 200
+          jq -e '.success == true and (.errors | length) == 0 and (.result | type == "object")' "$raw/access-organization.json" >/dev/null
+
+          certificates_code="$(curl --silent --show-error --output "$raw/access-certificates.json" --write-out '%{http_code}' \
+            -H "Authorization: Bearer $CLOUDFLARE_ZERO_TRUST_OBSERVE_API_TOKEN" \
+            "https://api.cloudflare.com/client/v4/accounts/$account_id/access/certificates")"
+          test "$certificates_code" = 200
+          jq -e '.success == true and (.errors | length) == 0 and (.result | type == "array")' "$raw/access-certificates.json" >/dev/null
+
+          python - "$raw/access-apps.json" "$target_host" > "$raw/target-app-ids.txt" <<'PY'
+          import json
+          import sys
+          from urllib.parse import urlsplit
+          document = json.load(open(sys.argv[1], encoding='utf-8'))
+          target = sys.argv[2].lower().rstrip('.')
+          for app in document.get('result', []):
+              if not isinstance(app, dict) or not isinstance(app.get('domain'), str):
+                  continue
+              raw = app['domain'].strip().lower()
+              parsed = urlsplit(raw if '://' in raw else 'https://' + raw)
+              if parsed.hostname and parsed.hostname.rstrip('.') == target:
+                  app_id = app.get('id')
+                  if isinstance(app_id, str) and app_id and all(ch.isalnum() or ch in '_-' for ch in app_id):
+                      print(app_id)
+          PY
+
+          while IFS= read -r app_id; do
+            test -n "$app_id" || continue
+            policies_code="$(curl --silent --show-error --output "$policies/$app_id.json" --write-out '%{http_code}' \
+              -H "Authorization: Bearer $CLOUDFLARE_ZERO_TRUST_OBSERVE_API_TOKEN" \
+              "https://api.cloudflare.com/client/v4/accounts/$account_id/access/apps/$app_id/policies")"
+            test "$policies_code" = 200
+            jq -e '.success == true and (.errors | length) == 0 and (.result | type == "array")' "$policies/$app_id.json" >/dev/null
+          done < "$raw/target-app-ids.txt"
+
+          CLOUDFLARE_API_TOKEN="$CLOUDFLARE_OBSERVE_API_TOKEN" CLOUDFLARE_ACCOUNT_ID="$account_id" \
+            npx --yes wrangler@4.94.0 d1 execute "$d1_database_name" --remote \
+              --command 'SELECT name FROM d1_migrations ORDER BY name' --json \
+              > "$raw/d1-ledger.json"
+
+          observed_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          python scripts/v2-staging-envelope-observation.py \
+            --source-sha "$SOURCE_SHA" \
+            --observed-at "$observed_at" \
+            --deploy-manifest "$manifest" \
+            --zero-trust-token-verify "$raw/zero-trust-token-verify.json" \
+            --apps "$raw/access-apps.json" \
+            --organization "$raw/access-organization.json" \
+            --certificates "$raw/access-certificates.json" \
+            --policies-dir "$policies" \
+            --d1-ledger "$raw/d1-ledger.json" \
+            --migrations-dir migrations/d1 \
+            --output "$evidence/evidence.json"
+
+          SOURCE_SHA="$SOURCE_SHA" jq -e \
+            '.schema_version == 1 and .kind == "V2_STAGING_ENVELOPE_OBSERVATION" and .source_sha == env.SOURCE_SHA and .environment == "staging" and .provider_mutation == false and .production_mutation == false' \
+            "$evidence/evidence.json" >/dev/null
+          python -m json.tool "$evidence/evidence.json" >/dev/null
+
+      - name: Publish secret-free V2 staging envelope observation
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: v2-staging-envelope-observation-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.sha }}
+          path: artifacts/v2-staging-envelope-observation
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Remove raw provider observations from runner temp
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/v2-staging-envelope-raw"
