@@ -933,10 +933,10 @@ mod tests {
         assert_rejected(&injected_verdict);
 
         let mut missing_identity = observation();
-        missing_identity["reads"]
+        let removed = missing_identity["reads"]
             .as_object_mut()
-            .expect("reads fixture object")
-            .remove("workers_current_release_set_id");
+            .and_then(|reads| reads.remove("workers_current_release_set_id"));
+        assert!(removed.is_some());
         assert_rejected(&missing_identity);
 
         let mut secret = observation();
