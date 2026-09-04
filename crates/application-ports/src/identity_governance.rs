@@ -1,8 +1,8 @@
 use crate::CommandExecutionEvidence;
 use core::fmt;
 use profile_platform_primitives::{
-    ActorContext, ActorId, AggregateVersion, DeviceId, InvitationId,
-    MachineCertificateFingerprint, UnixMillis,
+    ActorContext, ActorId, AggregateVersion, DeviceId, InvitationId, MachineCertificateFingerprint,
+    UnixMillis,
 };
 
 #[derive(Clone, Debug, Eq, PartialEq)]
