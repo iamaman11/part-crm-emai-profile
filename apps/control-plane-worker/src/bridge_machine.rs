@@ -72,10 +72,7 @@ mod tests {
             MachineCertificateFingerprint::parse(lower.clone())?.as_str(),
             lower
         );
-        assert_eq!(
-            MachineCertificateFingerprint::parse(upper)?.as_str(),
-            lower
-        );
+        assert_eq!(MachineCertificateFingerprint::parse(upper)?.as_str(), lower);
         assert!(MachineCertificateFingerprint::parse("a".repeat(63)).is_err());
         assert!(MachineCertificateFingerprint::parse("g".repeat(64)).is_err());
         assert!(MachineCertificateFingerprint::parse(format!("{}:", "a".repeat(63))).is_err());
