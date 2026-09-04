@@ -184,7 +184,7 @@ jobs:
           python3.12 -m camoufox list --path
 
       - name: Compile AR-10/S0 runtime acceptance sources
-        run: python3.12 -m py_compile runtime/camouhost/real.py scripts/diagnose-s0-webgl-parameters.py scripts/test-ar10-real-camoufox.py scripts/test-s0-browser-visible-canvas.py scripts/test-s0-browser-visible-audio-fonts.py scripts/test-s0-portable-browser-state.py scripts/test-ar10-firefox-writer-locks.py scripts/check-ar10-runtime-cutover.py
+        run: python3.12 -m py_compile runtime/camouhost/real.py scripts/diagnose-s0-webgl-parameters.py scripts/test-ar10-real-camoufox.py scripts/test-ar10-real-camoufox-cleanup.py scripts/test-s0-browser-visible-canvas.py scripts/test-s0-browser-visible-audio-fonts.py scripts/test-s0-portable-browser-state.py scripts/test-ar10-firefox-writer-locks.py scripts/check-ar10-runtime-cutover.py
 
       - name: Enforce AR-10 successor-runtime policy
         run: |
@@ -193,6 +193,14 @@ jobs:
 
       - name: Prove Firefox writer-lock failure semantics
         run: python3.12 scripts/test-ar10-firefox-writer-locks.py
+
+      - name: Prove post-launch failure cleanup and immediate relaunch
+        run: |
+          python3.12 scripts/test-ar10-real-camoufox-cleanup.py \
+            --python /usr/bin/python3.12 \
+            --camouhost runtime/camouhost/real.py \
+            --runtime-lock runtime/camouhost/runtime-lock.json \
+            --headless false
 
       - name: Prove real Camoufox identity and persistent profile behavior
         run: python3.12 scripts/test-ar10-real-camoufox.py
@@ -319,10 +327,20 @@ jobs:
           if (-not (Test-Path -LiteralPath (Join-Path $runtimeRoot 'camouhost\browser-candidate-provenance.json') -PathType Leaf)) { throw 'browser candidate provenance missing' }
 
       - name: Compile runtime acceptance sources
-        run: python -m py_compile runtime/camouhost/real.py scripts/diagnose-s0-speech-voices.py scripts/test-s0-browser-visible-canvas.py scripts/test-s0-browser-visible-audio-fonts.py scripts/test-s0-portable-browser-state.py scripts/test-ar10-firefox-writer-locks.py scripts/check-ar10-runtime-cutover.py scripts/camouhost-runtime-build-windows.py scripts/camouhost-windows-dependency-lock.py scripts/verify-camoufox-patched-candidate.py
+        run: python -m py_compile runtime/camouhost/real.py scripts/diagnose-s0-speech-voices.py scripts/test-ar10-real-camoufox-cleanup.py scripts/test-s0-browser-visible-canvas.py scripts/test-s0-browser-visible-audio-fonts.py scripts/test-s0-portable-browser-state.py scripts/test-ar10-firefox-writer-locks.py scripts/check-ar10-runtime-cutover.py scripts/camouhost-runtime-build-windows.py scripts/camouhost-windows-dependency-lock.py scripts/verify-camoufox-patched-candidate.py
 
       - name: Prove Firefox writer-lock failure semantics
         run: python scripts/test-ar10-firefox-writer-locks.py
+
+      - name: Prove packaged Windows post-launch failure cleanup and immediate relaunch
+        shell: pwsh
+        run: |
+          $runtimeRoot = Join-Path $env:RUNNER_TEMP 'camouhost-runtime'
+          python scripts/test-ar10-real-camoufox-cleanup.py `
+            --python (Join-Path $runtimeRoot 'python\python.exe') `
+            --camouhost (Join-Path $runtimeRoot 'camouhost\real.py') `
+            --runtime-lock (Join-Path $runtimeRoot 'camouhost\runtime-lock.json') `
+            --headless false
 
       - name: Prove clean-host Windows Camoufox canvas portability
         shell: pwsh
