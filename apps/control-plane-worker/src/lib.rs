@@ -8,6 +8,7 @@ mod client_mail_send;
 mod clients;
 mod command_evidence;
 mod composition;
+mod device_binding_governance;
 mod device_generation_commit;
 mod device_generation_upload_capability;
 mod device_jobs;
@@ -163,6 +164,9 @@ pub async fn main(mut request: Request, env: Env, _context: Context) -> Result<R
         RouteClass::MailboxJobCollectionApi
         | RouteClass::MailboxJobResourceApi
         | RouteClass::MailboxJobRunApi => mailbox_jobs::dispatch(route, &mut request, &env).await,
+        RouteClass::DeviceBindingResourceApi | RouteClass::DeviceBindingRevokeApi => {
+            device_binding_governance::dispatch(route, &mut request, &env).await
+        }
         RouteClass::DeviceJobClaimableApi
         | RouteClass::DeviceJobClaimApi
         | RouteClass::DeviceJobHeartbeatApi
