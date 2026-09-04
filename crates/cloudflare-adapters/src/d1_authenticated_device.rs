@@ -189,10 +189,7 @@ mod tests {
         assert_eq!(MACHINE_EVIDENCE_PREFIX, "mtls_cert_sha256:");
         let lower = "a1".repeat(32);
         let upper = lower.to_ascii_uppercase();
-        assert_eq!(
-            MachineCertificateFingerprint::parse(upper)?.as_str(),
-            lower
-        );
+        assert_eq!(MachineCertificateFingerprint::parse(upper)?.as_str(), lower);
         assert!(MachineCertificateFingerprint::parse("a".repeat(63)).is_err());
         assert!(MachineCertificateFingerprint::parse("g".repeat(64)).is_err());
         Ok(())
