@@ -8,10 +8,10 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-const CATALOG_BASELINE_REVISION: &str = "0031_device_binding_governance.sql";
+const CATALOG_BASELINE_REVISION: &str = "0032_pas2_payload_fingerprint_contract.sql";
 const CATALOG_FROZEN_EPOCH_DIGEST: &str =
     "4d1d8b8d3bba5d0903385d05fc18e0036628ff1123e0e26e9a080a340f7b5e2e";
-const CATALOG_FUTURE_REVISION: &str = "0032_post_epoch_probe.sql";
+const CATALOG_FUTURE_REVISION: &str = "0033_post_epoch_probe.sql";
 const RESOLVER_BASELINE_REVISION: &str = "0004_refresh_owner_hmac_version.sql";
 const RESOLVER_FROZEN_EPOCH_DIGEST: &str =
     "98fd6f91a839223b06c441df4901dbd4fda8e69f2f90606f00e43faad91877ec";
@@ -143,9 +143,22 @@ fn patch_future_specs(root: &Path) -> Result<(), Box<dyn Error>> {
     }
     source = source.replacen(current_future, patched_future, 1);
 
-    let current_catalog = r#"const CATALOG_POST_EPOCH_MIGRATIONS: &[MigrationSpec] = &[
-    MigrationSpec {
-        revision: "0027_pas2_payload_fingerprint.sql",
+    let current_catalog_tail = r#"    MigrationSpec {
+        revision: "0032_pas2_payload_fingerprint_contract.sql",
+        migration_class: MigrationClass::Contract,
+        rollout_order: RolloutOrder::SeparateContractRelease,
+        fail_forward_required: true,
+        destructive: true,
+        code_rollback_allowed: false,
+        contract_preconditions: &[
+            "server_owned_payload_fingerprint_active",
+            "request_digest_readers_writers_retired",
+        ],
+    },
+];
+"#;
+    let patched_catalog_tail = r#"    MigrationSpec {
+        revision: "0032_pas2_payload_fingerprint_contract.sql",
         migration_class: MigrationClass::Contract,
         rollout_order: RolloutOrder::SeparateContractRelease,
         fail_forward_required: true,
@@ -157,34 +170,7 @@ fn patch_future_specs(root: &Path) -> Result<(), Box<dyn Error>> {
         ],
     },
     MigrationSpec {
-        revision: "0028_profile_assignment_detach.sql",
-        migration_class: MigrationClass::Expand,
-        rollout_order: RolloutOrder::MigrateBeforeCode,
-        fail_forward_required: false,
-        destructive: false,
-        code_rollback_allowed: true,
-        contract_preconditions: &[],
-    },
-    MigrationSpec {
-        revision: "0029_profile_launch_authority.sql",
-        migration_class: MigrationClass::Expand,
-        rollout_order: RolloutOrder::MigrateBeforeCode,
-        fail_forward_required: false,
-        destructive: false,
-        code_rollback_allowed: true,
-        contract_preconditions: &[],
-    },
-    MigrationSpec {
-        revision: "0030_profile_generation_successor_commit.sql",
-        migration_class: MigrationClass::Expand,
-        rollout_order: RolloutOrder::MigrateBeforeCode,
-        fail_forward_required: false,
-        destructive: false,
-        code_rollback_allowed: true,
-        contract_preconditions: &[],
-    },
-    MigrationSpec {
-        revision: "0031_device_binding_governance.sql",
+        revision: "0033_post_epoch_probe.sql",
         migration_class: MigrationClass::Expand,
         rollout_order: RolloutOrder::MigrateBeforeCode,
         fail_forward_required: false,
@@ -194,72 +180,12 @@ fn patch_future_specs(root: &Path) -> Result<(), Box<dyn Error>> {
     },
 ];
 "#;
-    let patched_catalog = r#"const CATALOG_POST_EPOCH_MIGRATIONS: &[MigrationSpec] = &[
-    MigrationSpec {
-        revision: "0027_pas2_payload_fingerprint.sql",
-        migration_class: MigrationClass::Contract,
-        rollout_order: RolloutOrder::SeparateContractRelease,
-        fail_forward_required: true,
-        destructive: true,
-        code_rollback_allowed: false,
-        contract_preconditions: &[
-            "server_owned_payload_fingerprint_active",
-            "request_digest_readers_writers_retired",
-        ],
-    },
-    MigrationSpec {
-        revision: "0028_profile_assignment_detach.sql",
-        migration_class: MigrationClass::Expand,
-        rollout_order: RolloutOrder::MigrateBeforeCode,
-        fail_forward_required: false,
-        destructive: false,
-        code_rollback_allowed: true,
-        contract_preconditions: &[],
-    },
-    MigrationSpec {
-        revision: "0029_profile_launch_authority.sql",
-        migration_class: MigrationClass::Expand,
-        rollout_order: RolloutOrder::MigrateBeforeCode,
-        fail_forward_required: false,
-        destructive: false,
-        code_rollback_allowed: true,
-        contract_preconditions: &[],
-    },
-    MigrationSpec {
-        revision: "0030_profile_generation_successor_commit.sql",
-        migration_class: MigrationClass::Expand,
-        rollout_order: RolloutOrder::MigrateBeforeCode,
-        fail_forward_required: false,
-        destructive: false,
-        code_rollback_allowed: true,
-        contract_preconditions: &[],
-    },
-    MigrationSpec {
-        revision: "0031_device_binding_governance.sql",
-        migration_class: MigrationClass::Expand,
-        rollout_order: RolloutOrder::MigrateBeforeCode,
-        fail_forward_required: false,
-        destructive: false,
-        code_rollback_allowed: true,
-        contract_preconditions: &[],
-    },
-    MigrationSpec {
-        revision: "0032_post_epoch_probe.sql",
-        migration_class: MigrationClass::Expand,
-        rollout_order: RolloutOrder::MigrateBeforeCode,
-        fail_forward_required: false,
-        destructive: false,
-        code_rollback_allowed: true,
-        contract_preconditions: &[],
-    },
-];
-"#;
-    if source.matches(current_catalog).count() != 1 {
+    if source.matches(current_catalog_tail).count() != 1 {
         return Err(
             "canonical Catalog post-epoch policy changed; update the authoring proof".into(),
         );
     }
-    source = source.replacen(current_catalog, patched_catalog, 1);
+    source = source.replacen(current_catalog_tail, patched_catalog_tail, 1);
     fs::write(path, source)?;
     Ok(())
 }
@@ -268,7 +194,7 @@ fn install_future_sql(root: &Path) -> Result<(), Box<dyn Error>> {
     let source = repo_root();
     fs::copy(
         source.join("tests/d1-evolution/post-epoch/catalog/0027_post_epoch_probe.sql"),
-        root.join("migrations/d1/0032_post_epoch_probe.sql"),
+        root.join("migrations/d1/0033_post_epoch_probe.sql"),
     )?;
     fs::copy(
         source.join("tests/d1-evolution/post-epoch/resolver/0005_post_epoch_probe.sql"),
@@ -522,7 +448,7 @@ fn next_catalog_and_first_resolver_migrations_run_through_real_authoring_path()
             baseline_revision: CATALOG_BASELINE_REVISION,
             frozen_epoch_digest: CATALOG_FROZEN_EPOCH_DIGEST,
             future_revision: CATALOG_FUTURE_REVISION,
-            expected_post_epoch_count: 6,
+            expected_post_epoch_count: 7,
         },
         FutureCase {
             component: "resolver",
@@ -538,10 +464,18 @@ fn next_catalog_and_first_resolver_migrations_run_through_real_authoring_path()
 
     let canonical_projection: Value = serde_json::from_str(&repository_projection(&repo_root())?)?;
     let canonical_catalog = component(&canonical_projection, "catalog")?;
-    assert_eq!(canonical_catalog["migration_count"], 31);
-    assert_eq!(canonical_catalog["post_epoch_migration_count"], 5);
+    assert_eq!(canonical_catalog["migration_count"], 32);
+    assert_eq!(canonical_catalog["post_epoch_migration_count"], 6);
     assert_eq!(
         canonical_catalog["current_repository_revision"],
+        CATALOG_BASELINE_REVISION
+    );
+    assert_eq!(
+        canonical_catalog["release_schema_contract"]["target_schema_revision"],
+        "0031_device_binding_governance.sql"
+    );
+    assert_eq!(
+        canonical_catalog["release_schema_contract"]["supported_schema_max"],
         CATALOG_BASELINE_REVISION
     );
     let canonical_resolver = component(&canonical_projection, "resolver")?;
@@ -553,8 +487,13 @@ fn next_catalog_and_first_resolver_migrations_run_through_real_authoring_path()
     );
     assert!(
         repo_root()
-            .join("migrations/d1/0027_pas2_payload_fingerprint.sql")
+            .join("migrations/d1/0027_pas2_payload_fingerprint_expand.sql")
             .is_file()
+    );
+    assert!(
+        !repo_root()
+            .join("migrations/d1/0027_pas2_payload_fingerprint.sql")
+            .exists()
     );
     assert!(
         repo_root()
@@ -577,8 +516,13 @@ fn next_catalog_and_first_resolver_migrations_run_through_real_authoring_path()
             .is_file()
     );
     assert!(
+        repo_root()
+            .join("migrations/d1/0032_pas2_payload_fingerprint_contract.sql")
+            .is_file()
+    );
+    assert!(
         !repo_root()
-            .join("migrations/d1/0032_post_epoch_probe.sql")
+            .join("migrations/d1/0033_post_epoch_probe.sql")
             .exists()
     );
     assert!(
