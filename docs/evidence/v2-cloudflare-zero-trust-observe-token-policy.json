@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "kind": "V2_CLOUDFLARE_ZERO_TRUST_OBSERVE_TOKEN_POLICY_ATTESTATION",
+  "environment": "staging",
+  "credential_binding": "CLOUDFLARE_ZERO_TRUST_OBSERVE_API_TOKEN",
+  "account_scope": "exact staging account referenced by CLOUDFLARE_DEPLOY_MANIFEST_JSON",
+  "permission_names": [
+    "Access: Apps and Policies Read",
+    "Access: Mutual TLS Certificates Read",
+    "Access: Organizations, Identity Providers, and Groups Read"
+  ],
+  "production_scope": false,
+  "mutation_capability": false,
+  "token_management_capability": false,
+  "plaintext_token_included": false,
+  "attestation_source": "EXTERNAL_OPERATOR_REPORT",
+  "runtime_token_id_binding": "GET /user/tokens/verify on accepted-main staging observation",
+  "runtime_endpoint_proof_required": true,
+  "provider_mutation_occurred_during_issuance": true,
+  "further_provider_mutation_authorized": false,
+  "lifecycle": "STAGE_BOUND_V2",
+  "retirement_condition": "After CAP-EXEC V2 #584 acceptance, revoke/remove this dedicated observation credential and retire its workflow/authority extension unless a separately proven later-stage consumer is authorized."
+}
