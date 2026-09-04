@@ -1,0 +1,200 @@
+name: V2 One-Click Catalog D1 0027-0031
+
+run-name: V2 one-click staging Catalog D1 0027-0031 @ ${{ github.sha }}
+
+on:
+  workflow_dispatch:
+
+permissions:
+  actions: write
+  contents: read
+
+concurrency:
+  group: release-set-promotion-staging
+  cancel-in-progress: false
+
+# STAGE_BOUND_V2_ONE_SHOT: thin GitHub-only orchestration for #584.
+# This workflow does not own D1 semantics and must be retired after the bounded 0027-0031 transaction.
+jobs:
+  resolve-dispatch:
+    name: Resolve exact immutable D1 dispatch envelope
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      GH_TOKEN: ${{ github.token }}
+      SOURCE_SHA: ${{ github.sha }}
+      EXPECTED_CURRENT_RELEASE_SET_ID: release-set-v3-sha256-e01338de30cdc4c334e210f9e2bd75a67837420dd370b83964caae452f77522c
+      EXPECTED_CURRENT_RELEASE_SOURCE: 852dd515121011130dbd3d7726b72483ecc85aaf
+      EXPECTED_CURRENT_MANIFEST_SHA256: cd57a6851a348c7044a628deae5a5804e0f7447cd0583c96bc61ad8f8812e10e
+      EXPECTED_TARGET_MIGRATION: 0031_device_binding_governance.sql
+      EXPECTED_CURRENT_MIGRATION: 0026_outbound_mail_intents.sql
+      CLOUDFLARE_ACCOUNT_ID: 4426df1449e417511bc7697d60b7f62f
+      DATABASE_NAME: part-crm-catalog-staging-d3-20260815
+      DATABASE_ID: af9abfd1-cb0e-4c58-aa5e-f09c8147f23f
+    steps:
+      - name: Checkout exact accepted-main source
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Fail closed unless this is the exact bounded main transaction
+        run: |
+          set -euo pipefail
+          test "$GITHUB_EVENT_NAME" = workflow_dispatch
+          test "$GITHUB_REF" = refs/heads/main
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          test -f "migrations/d1/$EXPECTED_TARGET_MIGRATION"
+          test -f "migrations/d1/$EXPECTED_CURRENT_MIGRATION"
+          mapfile -t migrations < <(find migrations/d1 -maxdepth 1 -type f -name '*.sql' -printf '%f\n' | sort)
+          test "${#migrations[@]}" -eq 31
+          test "${migrations[30]}" = "$EXPECTED_TARGET_MIGRATION"
+          for expected in \
+            0027_pas2_payload_fingerprint.sql \
+            0028_profile_assignment_detach.sql \
+            0029_profile_launch_authority.sql \
+            0030_profile_generation_successor_commit.sql \
+            0031_device_binding_governance.sql; do
+            test -f "migrations/d1/$expected"
+          done
+
+      - name: Resolve exact target and current immutable component manifests
+        id: manifests
+        run: |
+          set -euo pipefail
+          mapfile -t target_release_ids < <(
+            gh api --paginate "repos/$GITHUB_REPOSITORY/releases?per_page=100" \
+              | jq -r --arg sha "$SOURCE_SHA" \
+                '.[] | select(.target_commitish == $sha and (.tag_name | startswith("release-set-v3-sha256-"))) | .tag_name'
+          )
+          test "${#target_release_ids[@]}" -eq 1
+          target_release_set_id="${target_release_ids[0]}"
+          [[ "$target_release_set_id" =~ ^release-set-v3-sha256-[0-9a-f]{64}$ ]]
+
+          current_release_source="$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$EXPECTED_CURRENT_RELEASE_SET_ID" --jq '.target_commitish')"
+          test "$current_release_source" = "$EXPECTED_CURRENT_RELEASE_SOURCE"
+
+          target_assets="$RUNNER_TEMP/v2-d1-target-assets"
+          target_root="$RUNNER_TEMP/v2-d1-target-release-set"
+          target_extract="$RUNNER_TEMP/v2-d1-target-control-plane"
+          current_assets="$RUNNER_TEMP/v2-d1-current-assets"
+          current_root="$RUNNER_TEMP/v2-d1-current-release-set"
+          current_extract="$RUNNER_TEMP/v2-d1-current-control-plane"
+          mkdir -p "$target_assets" "$target_extract" "$current_assets" "$current_extract"
+
+          gh release download "$target_release_set_id" --repo "$GITHUB_REPOSITORY" --dir "$target_assets"
+          bash scripts/release-set-assets-ar11.sh materialize current-v3 \
+            "$target_release_set_id" "$target_assets" "$target_root"
+          tar -xf "$target_root/components/control-plane.tar" -C "$target_extract"
+          target_manifest="$(find "$target_extract" -type f -name release-manifest.json -print -quit)"
+          test -n "$target_manifest"
+
+          gh release download "$EXPECTED_CURRENT_RELEASE_SET_ID" --repo "$GITHUB_REPOSITORY" --dir "$current_assets"
+          bash scripts/release-set-assets-ar11.sh materialize known-good-v2-v3 \
+            "$EXPECTED_CURRENT_RELEASE_SET_ID" "$current_assets" "$current_root"
+          tar -xf "$current_root/components/control-plane.tar" -C "$current_extract"
+          current_manifest="$(find "$current_extract" -type f -name release-manifest.json -print -quit)"
+          test -n "$current_manifest"
+          test "$(sha256sum "$current_manifest" | awk '{print $1}')" = "$EXPECTED_CURRENT_MANIFEST_SHA256"
+
+          python - "$target_manifest" "$current_manifest" "$EXPECTED_TARGET_MIGRATION" "$EXPECTED_CURRENT_MIGRATION" <<'PY'
+          import json
+          import sys
+
+          def strings(value):
+              if isinstance(value, dict):
+                  for item in value.values():
+                      yield from strings(item)
+              elif isinstance(value, list):
+                  for item in value:
+                      yield from strings(item)
+              elif isinstance(value, str):
+                  yield value
+
+          target = json.load(open(sys.argv[1], encoding='utf-8'))
+          current = json.load(open(sys.argv[2], encoding='utf-8'))
+          target_values = set(strings(target))
+          current_values = set(strings(current))
+          expected_target = sys.argv[3]
+          expected_current = sys.argv[4]
+          if expected_target not in target_values:
+              raise SystemExit('target manifest is not bound to canonical Catalog 0031')
+          if expected_current not in current_values:
+              raise SystemExit('current manifest is not bound to canonical Catalog 0026')
+          if expected_target in current_values:
+              raise SystemExit('current manifest unexpectedly already targets Catalog 0031')
+          PY
+
+          target_json="$(jq -c . "$target_manifest")"
+          current_json="$(jq -c . "$current_manifest")"
+          confirmation="$SOURCE_SHA:staging:catalog:$DATABASE_ID"
+
+          {
+            echo "target_release_set_id=$target_release_set_id"
+            echo "target_release_manifest_json=$target_json"
+            echo "current_release_manifest_json=$current_json"
+            echo "known_good_release_manifest_json=$current_json"
+            echo "confirmation=$confirmation"
+          } >> "$GITHUB_OUTPUT"
+
+          echo "Resolved exact current-source target Release Set: $target_release_set_id"
+          echo "Pinned current/known-good staging Release Set: $EXPECTED_CURRENT_RELEASE_SET_ID"
+
+      - name: Race-check main and prove this exact executor has not already been dispatched
+        run: |
+          set -euo pipefail
+          main_sha="$(gh api "repos/$GITHUB_REPOSITORY/branches/main" --jq '.commit.sha')"
+          test "$main_sha" = "$SOURCE_SHA"
+          gh api "repos/$GITHUB_REPOSITORY/actions/workflows/d1-migration-executor.yml/runs?event=workflow_dispatch&per_page=100" \
+            > "$RUNNER_TEMP/d1-executor-runs.json"
+          existing="$(jq --arg sha "$SOURCE_SHA" '[.workflow_runs[] | select(.head_sha == $sha)] | length' "$RUNNER_TEMP/d1-executor-runs.json")"
+          test "$existing" -eq 0
+
+      - name: Dispatch the existing canonical Protected D1 Migration Executor exactly once
+        env:
+          TARGET_RELEASE_MANIFEST_JSON: ${{ steps.manifests.outputs.target_release_manifest_json }}
+          CURRENT_RELEASE_MANIFEST_JSON: ${{ steps.manifests.outputs.current_release_manifest_json }}
+          KNOWN_GOOD_RELEASE_MANIFEST_JSON: ${{ steps.manifests.outputs.known_good_release_manifest_json }}
+          CONFIRMATION: ${{ steps.manifests.outputs.confirmation }}
+        run: |
+          set -euo pipefail
+          main_sha="$(gh api "repos/$GITHUB_REPOSITORY/branches/main" --jq '.commit.sha')"
+          test "$main_sha" = "$SOURCE_SHA"
+
+          jq -n \
+            --arg ref main \
+            --arg environment staging \
+            --arg source_sha "$SOURCE_SHA" \
+            --arg component catalog \
+            --arg account_id "$CLOUDFLARE_ACCOUNT_ID" \
+            --arg database_name "$DATABASE_NAME" \
+            --arg database_id "$DATABASE_ID" \
+            --arg target_release_manifest_json "$TARGET_RELEASE_MANIFEST_JSON" \
+            --arg current_release_manifest_json "$CURRENT_RELEASE_MANIFEST_JSON" \
+            --arg known_good_release_manifest_json "$KNOWN_GOOD_RELEASE_MANIFEST_JSON" \
+            --arg preconditions_json '{}' \
+            --arg confirmation "$CONFIRMATION" \
+            '{
+              ref: $ref,
+              inputs: {
+                environment: $environment,
+                source_sha: $source_sha,
+                component: $component,
+                account_id: $account_id,
+                database_name: $database_name,
+                database_id: $database_id,
+                target_release_manifest_json: $target_release_manifest_json,
+                current_release_manifest_json: $current_release_manifest_json,
+                known_good_release_manifest_json: $known_good_release_manifest_json,
+                preconditions_json: $preconditions_json,
+                mutation_authorized: true,
+                confirmation: $confirmation
+              }
+            }' > "$RUNNER_TEMP/d1-dispatch.json"
+
+          gh api --method POST \
+            "repos/$GITHUB_REPOSITORY/actions/workflows/d1-migration-executor.yml/dispatches" \
+            --input "$RUNNER_TEMP/d1-dispatch.json"
+          rm -f "$RUNNER_TEMP/d1-dispatch.json"
+          echo "Canonical Protected D1 Migration Executor dispatch accepted by GitHub."
