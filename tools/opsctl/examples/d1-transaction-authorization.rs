@@ -1,9 +1,7 @@
 #![forbid(unsafe_code)]
 
 use opsctl::canonical::parse_strict_json;
-use opsctl::d1::authorization::{
-    bind_transaction_authorization, serialize_authorization_binding,
-};
+use opsctl::d1::authorization::{bind_transaction_authorization, serialize_authorization_binding};
 use opsctl::d1::transaction::TransactionProjection;
 use serde_json::Value;
 use std::env;
@@ -65,7 +63,7 @@ fn parse_args() -> Result<Args, Box<dyn Error>> {
             other => {
                 return Err(
                     format!("unsupported transaction-authorization argument: {other}").into(),
-                )
+                );
             }
         }
     }
@@ -88,8 +86,10 @@ fn main() -> Result<(), Box<dyn Error>> {
         required(args.transaction_json, "--transaction-json")?,
         "prepared transaction",
     )?;
-    let transaction: TransactionProjection = serde_json::from_value(transaction_value)
-        .map_err(|error| format!("prepared transaction does not match the typed contract: {error}"))?;
+    let transaction: TransactionProjection =
+        serde_json::from_value(transaction_value).map_err(|error| {
+            format!("prepared transaction does not match the typed contract: {error}")
+        })?;
     let authorization = read_strict(
         required(args.authorization_json, "--authorization-json")?,
         "transaction authorization",
