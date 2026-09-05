@@ -157,6 +157,16 @@ pub fn revalidate_transaction_projection(
             ));
         }
     }
+    let planned_names = plan
+        .planned_migrations
+        .iter()
+        .map(|migration| migration.migration_file.clone())
+        .collect::<Vec<_>>();
+    if observation.wrangler_pending_migrations != planned_names {
+        return Err(D1Error::new(
+            "sealed Wrangler pending migrations must exactly equal prepared transaction planned_migrations",
+        ));
+    }
     validate_unique_strings(
         &plan.precondition_evidence_refs,
         "transaction precondition_evidence_refs",
