@@ -9,9 +9,12 @@ use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 const CATALOG_BASELINE_REVISION: &str = "0032_pas2_payload_fingerprint_contract.sql";
+const CATALOG_RUNTIME_TARGET: &str = "0031_device_binding_governance.sql";
 const CATALOG_FROZEN_EPOCH_DIGEST: &str =
     "4d1d8b8d3bba5d0903385d05fc18e0036628ff1123e0e26e9a080a340f7b5e2e";
 const CATALOG_FUTURE_REVISION: &str = "0033_post_epoch_probe.sql";
+const CATALOG_LEGACY_PAS2_REVISION: &str = "0027_pas2_payload_fingerprint.sql";
+const CATALOG_SUCCESSOR_EXPAND_REVISION: &str = "0027_pas2_payload_fingerprint_expand.sql";
 const RESOLVER_BASELINE_REVISION: &str = "0004_refresh_owner_hmac_version.sql";
 const RESOLVER_FROZEN_EPOCH_DIGEST: &str =
     "98fd6f91a839223b06c441df4901dbd4fda8e69f2f90606f00e43faad91877ec";
@@ -59,6 +62,10 @@ impl TempRepository {
         copy_file(&source, &path, "tools/opsctl/Cargo.toml")?;
         copy_file(&source, &path, "tools/opsctl/Cargo.lock")?;
         copy_directory(&source.join("migrations/d1"), &path.join("migrations/d1"))?;
+        copy_directory(
+            &source.join("migrations/d1-successor"),
+            &path.join("migrations/d1-successor"),
+        )?;
         copy_directory(
             &source.join("migrations/resolver-d1"),
             &path.join("migrations/resolver-d1"),
@@ -111,17 +118,22 @@ fn copy_directory(source: &Path, target: &Path) -> Result<(), Box<dyn Error>> {
 }
 
 fn patch_future_specs(root: &Path) -> Result<(), Box<dyn Error>> {
+    patch_resolver_future_spec(root)?;
+    patch_catalog_future_spec(root)?;
+    Ok(())
+}
+
+fn patch_resolver_future_spec(root: &Path) -> Result<(), Box<dyn Error>> {
     let path = root.join("tools/opsctl/src/d1/catalog.rs");
     let mut source = fs::read_to_string(&path)?.replace("\r\n", "\n");
-
-    let current_future = r#"    const fn future_migrations(self) -> &'static [MigrationSpec] {
+    let current = r#"    const fn future_migrations(self) -> &'static [MigrationSpec] {
         match self {
             Self::Catalog => CATALOG_POST_EPOCH_MIGRATIONS,
             Self::Resolver => &[],
         }
     }
 "#;
-    let patched_future = r#"    const fn future_migrations(self) -> &'static [MigrationSpec] {
+    let patched = r#"    const fn future_migrations(self) -> &'static [MigrationSpec] {
         match self {
             Self::Catalog => CATALOG_POST_EPOCH_MIGRATIONS,
             Self::Resolver => &[MigrationSpec {
@@ -136,15 +148,19 @@ fn patch_future_specs(root: &Path) -> Result<(), Box<dyn Error>> {
         }
     }
 "#;
-    if source.matches(current_future).count() != 1 {
-        return Err(
-            "canonical future-migration dispatch changed; update the post-epoch proof".into(),
-        );
+    if source.matches(current).count() != 1 {
+        return Err("canonical Resolver future-migration dispatch changed; update the authoring proof".into());
     }
-    source = source.replacen(current_future, patched_future, 1);
+    source = source.replacen(current, patched, 1);
+    fs::write(path, source)?;
+    Ok(())
+}
 
-    let current_catalog_tail = r#"    MigrationSpec {
-        revision: "0032_pas2_payload_fingerprint_contract.sql",
+fn patch_catalog_future_spec(root: &Path) -> Result<(), Box<dyn Error>> {
+    let path = root.join("tools/opsctl/src/d1/catalog_successor.rs");
+    let mut source = fs::read_to_string(&path)?.replace("\r\n", "\n");
+    let current = r#"    MigrationSpec {
+        revision: SUCCESSOR_CONTRACT_REVISION,
         migration_class: MigrationClass::Contract,
         rollout_order: RolloutOrder::SeparateContractRelease,
         fail_forward_required: true,
@@ -157,8 +173,8 @@ fn patch_future_specs(root: &Path) -> Result<(), Box<dyn Error>> {
     },
 ];
 "#;
-    let patched_catalog_tail = r#"    MigrationSpec {
-        revision: "0032_pas2_payload_fingerprint_contract.sql",
+    let patched = r#"    MigrationSpec {
+        revision: SUCCESSOR_CONTRACT_REVISION,
         migration_class: MigrationClass::Contract,
         rollout_order: RolloutOrder::SeparateContractRelease,
         fail_forward_required: true,
@@ -180,12 +196,10 @@ fn patch_future_specs(root: &Path) -> Result<(), Box<dyn Error>> {
     },
 ];
 "#;
-    if source.matches(current_catalog_tail).count() != 1 {
-        return Err(
-            "canonical Catalog post-epoch policy changed; update the authoring proof".into(),
-        );
+    if source.matches(current).count() != 1 {
+        return Err("canonical Catalog successor policy changed; update the authoring proof".into());
     }
-    source = source.replacen(current_catalog_tail, patched_catalog_tail, 1);
+    source = source.replacen(current, patched, 1);
     fs::write(path, source)?;
     Ok(())
 }
@@ -194,7 +208,7 @@ fn install_future_sql(root: &Path) -> Result<(), Box<dyn Error>> {
     let source = repo_root();
     fs::copy(
         source.join("tests/d1-evolution/post-epoch/catalog/0027_post_epoch_probe.sql"),
-        root.join("migrations/d1/0033_post_epoch_probe.sql"),
+        root.join("migrations/d1-successor/0033_post_epoch_probe.sql"),
     )?;
     fs::copy(
         source.join("tests/d1-evolution/post-epoch/resolver/0005_post_epoch_probe.sql"),
@@ -203,12 +217,7 @@ fn install_future_sql(root: &Path) -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-fn baseline_names(
-    root: &Path,
-    migration_root: &str,
-    future_revision: &str,
-    baseline_revision: &str,
-) -> Result<Vec<String>, Box<dyn Error>> {
+fn directory_names(root: &Path, migration_root: &str) -> Result<Vec<String>, Box<dyn Error>> {
     let mut names = fs::read_dir(root.join(migration_root))?
         .map(|entry| {
             let entry = entry?;
@@ -218,13 +227,43 @@ fn baseline_names(
                 .map_err(|_| std::io::Error::other("migration filename must be UTF-8"))
         })
         .collect::<Result<Vec<_>, _>>()?;
-    names.retain(|name| name != future_revision);
     names.sort();
-    if names.last().map(String::as_str) != Some(baseline_revision) {
-        return Err(format!(
-            "baseline revision changed for {migration_root}; update the post-epoch proof"
-        )
-        .into());
+    Ok(names)
+}
+
+fn catalog_baseline_names(root: &Path) -> Result<Vec<String>, Box<dyn Error>> {
+    let legacy = directory_names(root, "migrations/d1")?;
+    let successor = directory_names(root, "migrations/d1-successor")?;
+    if legacy.len() != 31
+        || legacy.get(26).map(String::as_str) != Some(CATALOG_LEGACY_PAS2_REVISION)
+        || legacy.last().map(String::as_str) != Some(CATALOG_RUNTIME_TARGET)
+    {
+        return Err("accepted Catalog legacy 0001..0031 lineage drifted".into());
+    }
+    if successor
+        != vec![
+            CATALOG_SUCCESSOR_EXPAND_REVISION.to_owned(),
+            CATALOG_BASELINE_REVISION.to_owned(),
+            CATALOG_FUTURE_REVISION.to_owned(),
+        ]
+    {
+        return Err(format!("future Catalog successor inventory drifted: {successor:?}").into());
+    }
+    let mut baseline = legacy[..26].to_vec();
+    baseline.push(CATALOG_SUCCESSOR_EXPAND_REVISION.to_owned());
+    baseline.extend_from_slice(&legacy[27..31]);
+    baseline.push(CATALOG_BASELINE_REVISION.to_owned());
+    if baseline.len() != 32 || baseline.iter().any(|name| name == CATALOG_LEGACY_PAS2_REVISION) {
+        return Err("Catalog executable baseline did not exclude superseded legacy 0027".into());
+    }
+    Ok(baseline)
+}
+
+fn resolver_baseline_names(root: &Path) -> Result<Vec<String>, Box<dyn Error>> {
+    let mut names = directory_names(root, "migrations/resolver-d1")?;
+    names.retain(|name| name != RESOLVER_FUTURE_REVISION);
+    if names.last().map(String::as_str) != Some(RESOLVER_BASELINE_REVISION) {
+        return Err("Resolver baseline revision drifted".into());
     }
     Ok(names)
 }
@@ -285,8 +324,8 @@ fn component<'a>(projection: &'a Value, id: &str) -> Result<&'a Value, Box<dyn E
 
 struct FutureCase {
     component: &'static str,
-    migration_root: &'static str,
     baseline_revision: &'static str,
+    current_target_revision: &'static str,
     frozen_epoch_digest: &'static str,
     future_revision: &'static str,
     expected_post_epoch_count: u64,
@@ -295,43 +334,29 @@ struct FutureCase {
 fn prove_future_case(
     root: &Path,
     projection: &Value,
+    baseline: Vec<String>,
     case: &FutureCase,
 ) -> Result<(), Box<dyn Error>> {
-    let baseline = baseline_names(
-        root,
-        case.migration_root,
-        case.future_revision,
-        case.baseline_revision,
-    )?;
+    if baseline.last().map(String::as_str) != Some(case.baseline_revision) {
+        return Err(format!("{} baseline revision drifted", case.component).into());
+    }
     let projected = component(projection, case.component)?;
     assert_eq!(projected["migration_count"], baseline.len() + 1);
     assert_eq!(
         projected["post_epoch_migration_count"],
         case.expected_post_epoch_count
     );
-    assert_eq!(
-        projected["current_repository_revision"],
-        case.future_revision
-    );
+    assert_eq!(projected["current_repository_revision"], case.future_revision);
     assert_ne!(projected["history_digest"], case.frozen_epoch_digest);
 
     let target_contract = projected["release_schema_contract"].clone();
-    assert_eq!(
-        target_contract["target_schema_revision"],
-        case.future_revision
-    );
-    assert_eq!(
-        target_contract["supported_schema_min"],
-        case.future_revision
-    );
-    assert_eq!(
-        target_contract["supported_schema_max"],
-        case.future_revision
-    );
+    assert_eq!(target_contract["target_schema_revision"], case.future_revision);
+    assert_eq!(target_contract["supported_schema_min"], case.future_revision);
+    assert_eq!(target_contract["supported_schema_max"], case.future_revision);
 
     let mut current_contract = target_contract.clone();
-    current_contract["target_schema_revision"] = json!(case.baseline_revision);
-    current_contract["supported_schema_min"] = json!(case.baseline_revision);
+    current_contract["target_schema_revision"] = json!(case.current_target_revision);
+    current_contract["supported_schema_min"] = json!(case.current_target_revision);
     current_contract["supported_schema_max"] = json!(case.baseline_revision);
 
     let mut known_good_contract = current_contract.clone();
@@ -368,10 +393,7 @@ fn prove_future_case(
     assert_eq!(compatibility["ledger_state"], "BEHIND_KNOWN_PREFIX");
     assert_eq!(compatibility["decision"], "MIGRATION_REQUIRED");
     assert_eq!(compatibility["allowed"], true);
-    assert_eq!(
-        compatibility["planned_migrations"],
-        json!([case.future_revision])
-    );
+    assert_eq!(compatibility["planned_migrations"], json!([case.future_revision]));
     assert_eq!(
         compatibility["planned_migration_contracts"][0]["migration_class"],
         "EXPAND"
@@ -441,26 +463,42 @@ fn next_catalog_and_first_resolver_migrations_run_through_real_authoring_path()
     let second_projection = run_opsctl(root, &["d1", "repository"])?;
     assert_eq!(first_projection, second_projection);
 
-    for case in [
-        FutureCase {
+    let catalog_baseline = catalog_baseline_names(root)?;
+    let resolver_baseline = resolver_baseline_names(root)?;
+    prove_future_case(
+        root,
+        &first_projection,
+        catalog_baseline,
+        &FutureCase {
             component: "catalog",
-            migration_root: "migrations/d1",
             baseline_revision: CATALOG_BASELINE_REVISION,
+            current_target_revision: CATALOG_RUNTIME_TARGET,
             frozen_epoch_digest: CATALOG_FROZEN_EPOCH_DIGEST,
             future_revision: CATALOG_FUTURE_REVISION,
             expected_post_epoch_count: 7,
         },
-        FutureCase {
+    )?;
+    prove_future_case(
+        root,
+        &first_projection,
+        resolver_baseline,
+        &FutureCase {
             component: "resolver",
-            migration_root: "migrations/resolver-d1",
             baseline_revision: RESOLVER_BASELINE_REVISION,
+            current_target_revision: RESOLVER_BASELINE_REVISION,
             frozen_epoch_digest: RESOLVER_FROZEN_EPOCH_DIGEST,
             future_revision: RESOLVER_FUTURE_REVISION,
             expected_post_epoch_count: 1,
         },
-    ] {
-        prove_future_case(root, &first_projection, &case)?;
-    }
+    )?;
+
+    let future_catalog = component(&first_projection, "catalog")?;
+    let future_sources = future_catalog["executable_migration_sources"]
+        .as_array()
+        .ok_or("future Catalog source map missing")?;
+    assert_eq!(future_sources.len(), 33);
+    assert_eq!(future_sources[32]["migration_file"], CATALOG_FUTURE_REVISION);
+    assert_eq!(future_sources[32]["source_root"], "migrations/d1-successor");
 
     let canonical_projection: Value = serde_json::from_str(&repository_projection(&repo_root())?)?;
     let canonical_catalog = component(&canonical_projection, "catalog")?;
@@ -472,7 +510,7 @@ fn next_catalog_and_first_resolver_migrations_run_through_real_authoring_path()
     );
     assert_eq!(
         canonical_catalog["release_schema_contract"]["target_schema_revision"],
-        "0031_device_binding_governance.sql"
+        CATALOG_RUNTIME_TARGET
     );
     assert_eq!(
         canonical_catalog["release_schema_contract"]["supported_schema_max"],
@@ -485,50 +523,15 @@ fn next_catalog_and_first_resolver_migrations_run_through_real_authoring_path()
         canonical_resolver["current_repository_revision"],
         RESOLVER_BASELINE_REVISION
     );
-    assert!(
-        repo_root()
-            .join("migrations/d1/0027_pas2_payload_fingerprint_expand.sql")
-            .is_file()
-    );
-    assert!(
-        !repo_root()
-            .join("migrations/d1/0027_pas2_payload_fingerprint.sql")
-            .exists()
-    );
-    assert!(
-        repo_root()
-            .join("migrations/d1/0028_profile_assignment_detach.sql")
-            .is_file()
-    );
-    assert!(
-        repo_root()
-            .join("migrations/d1/0029_profile_launch_authority.sql")
-            .is_file()
-    );
-    assert!(
-        repo_root()
-            .join("migrations/d1/0030_profile_generation_successor_commit.sql")
-            .is_file()
-    );
-    assert!(
-        repo_root()
-            .join("migrations/d1/0031_device_binding_governance.sql")
-            .is_file()
-    );
-    assert!(
-        repo_root()
-            .join("migrations/d1/0032_pas2_payload_fingerprint_contract.sql")
-            .is_file()
-    );
-    assert!(
-        !repo_root()
-            .join("migrations/d1/0033_post_epoch_probe.sql")
-            .exists()
-    );
-    assert!(
-        !repo_root()
-            .join("migrations/resolver-d1/0005_post_epoch_probe.sql")
-            .exists()
-    );
+
+    assert!(repo_root().join(format!("migrations/d1/{CATALOG_LEGACY_PAS2_REVISION}")).is_file());
+    assert!(repo_root().join(format!("migrations/d1-successor/{CATALOG_SUCCESSOR_EXPAND_REVISION}")).is_file());
+    assert!(repo_root().join("migrations/d1/0028_profile_assignment_detach.sql").is_file());
+    assert!(repo_root().join("migrations/d1/0029_profile_launch_authority.sql").is_file());
+    assert!(repo_root().join("migrations/d1/0030_profile_generation_successor_commit.sql").is_file());
+    assert!(repo_root().join(format!("migrations/d1/{CATALOG_RUNTIME_TARGET}")).is_file());
+    assert!(repo_root().join(format!("migrations/d1-successor/{CATALOG_BASELINE_REVISION}")).is_file());
+    assert!(!repo_root().join(format!("migrations/d1-successor/{CATALOG_FUTURE_REVISION}")).exists());
+    assert!(!repo_root().join(format!("migrations/resolver-d1/{RESOLVER_FUTURE_REVISION}")).exists());
     Ok(())
 }
