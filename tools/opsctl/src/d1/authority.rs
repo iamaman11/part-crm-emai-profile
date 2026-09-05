@@ -1,5 +1,5 @@
-use super::model::{D1Error, Preconditions, ReleaseSchemaContract};
-use super::util::{read_json, required_string, required_string_array};
+use super::model::{D1Error, GateResult, Preconditions, ReleaseSchemaContract};
+use super::util::{read_json, required_string};
 use serde_json::Value;
 use std::path::Path;
 
@@ -82,16 +82,141 @@ pub(super) fn load_release_contract(
 }
 
 pub(super) fn load_preconditions(path: &Path, component: &str) -> Result<Preconditions, D1Error> {
+    const REMEDIATION: &str = "Regenerate the preconditions input from the typed caller contract with exact component and completed fields, then rerun prepare before requesting authorization.";
+
     let document = read_json(path, "D1 contract preconditions")?;
-    let object = document
-        .as_object()
-        .ok_or_else(|| D1Error::new("D1 contract preconditions must be an object"))?;
-    if required_string(object, "component")? != component {
-        return Err(D1Error::new("D1 contract precondition component mismatch"));
+    let object = document.as_object().ok_or_else(|| {
+        D1Error::blocked(GateResult::blocked(
+            "INPUT_VALIDATION",
+            "d1.preconditions.schema",
+            "D1_PRECONDITIONS_NOT_OBJECT",
+            "D1 contract preconditions must be a JSON object",
+            Some("{\"component\":<string>,\"completed\":[<string>...]}".to_owned()),
+            Some("non-object JSON value".to_owned()),
+            REMEDIATION,
+        ))
+    })?;
+
+    let precondition_component =
+        object
+            .get("component")
+            .and_then(Value::as_str)
+            .ok_or_else(|| {
+                D1Error::blocked(GateResult::blocked(
+                    "INPUT_VALIDATION",
+                    "d1.preconditions.schema",
+                    "D1_PRECONDITIONS_COMPONENT_INVALID",
+                    "D1 contract preconditions require a string component field",
+                    Some(format!("component={component:?}")),
+                    Some(if object.contains_key("component") {
+                        "component present but not a string".to_owned()
+                    } else {
+                        "component field absent".to_owned()
+                    }),
+                    REMEDIATION,
+                ))
+            })?;
+    if precondition_component != component {
+        return Err(D1Error::blocked(GateResult::blocked(
+            "INPUT_VALIDATION",
+            "d1.preconditions.component",
+            "D1_PRECONDITIONS_COMPONENT_MISMATCH",
+            "D1 contract precondition component does not match the requested component",
+            Some(component.to_owned()),
+            Some(precondition_component.to_owned()),
+            REMEDIATION,
+        )));
     }
-    Ok(Preconditions {
-        completed: required_string_array(object, "completed")?
-            .into_iter()
-            .collect(),
-    })
+
+    let completed_values = object
+        .get("completed")
+        .and_then(Value::as_array)
+        .ok_or_else(|| {
+            D1Error::blocked(GateResult::blocked(
+                "INPUT_VALIDATION",
+                "d1.preconditions.schema",
+                "D1_PRECONDITIONS_COMPLETED_INVALID",
+                "D1 contract preconditions require a completed string array",
+                Some("completed=[<string>...]".to_owned()),
+                Some(if object.contains_key("completed") {
+                    "completed present but not an array".to_owned()
+                } else {
+                    "completed field absent".to_owned()
+                }),
+                REMEDIATION,
+            ))
+        })?;
+    let mut completed = std::collections::HashSet::with_capacity(completed_values.len());
+    for (index, value) in completed_values.iter().enumerate() {
+        let item = value.as_str().ok_or_else(|| {
+            D1Error::blocked(GateResult::blocked(
+                "INPUT_VALIDATION",
+                "d1.preconditions.schema",
+                "D1_PRECONDITIONS_COMPLETED_INVALID",
+                "D1 contract preconditions completed entries must all be strings",
+                Some("completed=[<string>...]".to_owned()),
+                Some(format!("completed[{index}] is not a string")),
+                REMEDIATION,
+            ))
+        })?;
+        completed.insert(item.to_owned());
+    }
+
+    Ok(Preconditions { completed })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::load_preconditions;
+    use std::path::PathBuf;
+
+    fn fixture_path(name: &str) -> PathBuf {
+        std::env::temp_dir().join(format!("opsctl-d1-{name}-{}.json", std::process::id()))
+    }
+
+    #[test]
+    fn historical_empty_preconditions_are_self_explaining() -> Result<(), std::io::Error> {
+        let path = fixture_path("empty-preconditions");
+        std::fs::write(&path, "{}")?;
+        let result = load_preconditions(&path, "catalog");
+        std::fs::remove_file(&path)?;
+        let error = match result {
+            Err(error) => error,
+            Ok(_) => {
+                return Err(std::io::Error::other(
+                    "empty preconditions must fail closed",
+                ));
+            }
+        };
+        let gate = error.gate_result_json();
+        assert_eq!(gate["status"], "BLOCKED");
+        assert_eq!(gate["phase"], "INPUT_VALIDATION");
+        assert_eq!(gate["gate_id"], "d1.preconditions.schema");
+        assert_eq!(gate["reason_code"], "D1_PRECONDITIONS_COMPONENT_INVALID");
+        assert_eq!(gate["observed"], "component field absent");
+        assert!(
+            gate["remediation"].as_str().is_some_and(
+                |value| value.contains("rerun prepare before requesting authorization")
+            )
+        );
+        assert_eq!(gate["transaction_id"], serde_json::Value::Null);
+        Ok(())
+    }
+
+    #[test]
+    fn missing_completed_field_has_distinct_durable_reason() -> Result<(), std::io::Error> {
+        let path = fixture_path("missing-completed");
+        std::fs::write(&path, r#"{"component":"catalog"}"#)?;
+        let result = load_preconditions(&path, "catalog");
+        std::fs::remove_file(&path)?;
+        let error = match result {
+            Err(error) => error,
+            Ok(_) => return Err(std::io::Error::other("missing completed must fail closed")),
+        };
+        let gate = error.gate_result_json();
+        assert_eq!(gate["status"], "BLOCKED");
+        assert_eq!(gate["reason_code"], "D1_PRECONDITIONS_COMPLETED_INVALID");
+        assert_eq!(gate["observed"], "completed field absent");
+        Ok(())
+    }
 }

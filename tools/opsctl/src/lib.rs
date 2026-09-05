@@ -161,12 +161,11 @@ pub fn execute(invocation: Invocation) -> Result<String, OpsctlError> {
                 known_good_manifest: known_good_manifest.as_deref(),
                 preconditions_json: preconditions_json.as_deref(),
             })
-            .map_err(|error| OpsctlError::new("d1", error.to_string()))
+            .map_err(OpsctlError::from_d1)
         }
         Invocation::D1Repository { root } => {
             let repo_root = resolve_d1_repository_root(root.as_deref())?;
-            d1::repository_projection(&repo_root)
-                .map_err(|error| OpsctlError::new("d1", error.to_string()))
+            d1::repository_projection(&repo_root).map_err(OpsctlError::from_d1)
         }
         Invocation::ReleaseFinalize { root, request_json } => {
             let repo_root = resolve_repo_root(root.as_deref(), "release")?;
