@@ -71,19 +71,8 @@ def evaluate_policy(plan_path: Path, compatibility_path: Path) -> bool:
         "D1_COMPATIBILITY_OUTPUT_INVALID",
     )
 
-    if plan.get("allowed") is not True:
-        raise DiagnosticFailure(
-            "native-plan-policy",
-            "D1_NATIVE_PLAN_DENIED",
-            f"allowed={_bounded_scalar(plan.get('allowed'))}; decision={_bounded_scalar(plan.get('decision'))}",
-        )
-    if compatibility.get("allowed") is not True:
-        raise DiagnosticFailure(
-            "compatibility-policy",
-            "D1_COMPATIBILITY_DENIED",
-            f"allowed={_bounded_scalar(compatibility.get('allowed'))}; decision={_bounded_scalar(compatibility.get('decision'))}",
-        )
-
+    # Preserve the old fail-closed result while making the most specific policy
+    # reason observable even when opsctl also reports allowed=false.
     decision = plan.get("decision")
     if decision in BLOCKED_DECISIONS:
         raise DiagnosticFailure(
@@ -105,6 +94,19 @@ def evaluate_policy(plan_path: Path, compatibility_path: Path) -> bool:
                 "D1_CONTRACT_RECOVERY_STRATEGY_MISMATCH",
                 f"recovery_strategy={_bounded_scalar(plan.get('recovery_strategy'))}",
             )
+
+    if plan.get("allowed") is not True:
+        raise DiagnosticFailure(
+            "native-plan-policy",
+            "D1_NATIVE_PLAN_DENIED",
+            f"allowed={_bounded_scalar(plan.get('allowed'))}; decision={_bounded_scalar(plan.get('decision'))}",
+        )
+    if compatibility.get("allowed") is not True:
+        raise DiagnosticFailure(
+            "compatibility-policy",
+            "D1_COMPATIBILITY_DENIED",
+            f"allowed={_bounded_scalar(compatibility.get('allowed'))}; decision={_bounded_scalar(compatibility.get('decision'))}",
+        )
 
     return bool(plan.get("planned_migrations"))
 
@@ -221,11 +223,16 @@ def command_self_test(_: argparse.Namespace) -> int:
             ("D1_NATIVE_PLAN_DENIED", {**good_plan, "allowed": False}, good_compatibility),
             ("D1_COMPATIBILITY_OUTPUT_INVALID", good_plan, "[]\n"),
             ("D1_COMPATIBILITY_DENIED", good_plan, {"allowed": False, "decision": "UNSAFE"}),
-            ("D1_ROLLBACK_POLICY_BLOCKED", {**good_plan, "decision": "FAIL_FORWARD_REQUIRED"}, good_compatibility),
+            (
+                "D1_ROLLBACK_POLICY_BLOCKED",
+                {**good_plan, "allowed": False, "decision": "FAIL_FORWARD_REQUIRED"},
+                good_compatibility,
+            ),
             (
                 "D1_CONTRACT_PLAN_MIGRATION_MISMATCH",
                 {
                     **good_plan,
+                    "allowed": False,
                     "command": "d1 contract-transition",
                     "planned_migrations": ["0031_device_binding_governance.sql"],
                     "recovery_strategy": "FAIL_FORWARD_ONLY",
@@ -236,6 +243,7 @@ def command_self_test(_: argparse.Namespace) -> int:
                 "D1_CONTRACT_RECOVERY_STRATEGY_MISMATCH",
                 {
                     **good_plan,
+                    "allowed": False,
                     "command": "d1 contract-transition",
                     "planned_migrations": ["0032_pas2_payload_fingerprint_contract.sql"],
                     "recovery_strategy": "RESTORE",
