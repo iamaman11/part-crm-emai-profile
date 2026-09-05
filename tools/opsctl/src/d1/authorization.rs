@@ -234,8 +234,8 @@ fn validate_sha256(value: &str, label: &str) -> Result<(), D1Error> {
 #[cfg(test)]
 mod tests {
     use super::super::transaction::{
-        MigrationTransactionPlan, ProviderObservationBundle, ProviderObservationInput,
-        RecoveryStrategy, TransactionKind,
+        MigrationTransactionPlan, PlannedMigrationDigest, ProviderObservationBundle,
+        ProviderObservationInput, RecoveryStrategy, TransactionKind,
     };
     use super::*;
     use serde_json::json;
@@ -302,7 +302,10 @@ mod tests {
             observed_at_unix_seconds: OBSERVED_AT,
             freshness_max_age_seconds: 900,
             predecessor_ledger_sha256: "22".repeat(32),
-            planned_migrations: Vec::new(),
+            planned_migrations: vec![PlannedMigrationDigest {
+                migration_file: "0031_device_binding_governance.sql".to_owned(),
+                content_sha256: "bb".repeat(32),
+            }],
             schema_target: "0031_device_binding_governance.sql".to_owned(),
             supported_schema_min: "0031_device_binding_governance.sql".to_owned(),
             supported_schema_max: "0032_pas2_payload_fingerprint_contract.sql".to_owned(),
@@ -401,7 +404,16 @@ mod tests {
     fn forged_provider_observation_digest_is_rejected() {
         let mut transaction = transaction();
         transaction.provider_observation.deployment_identity = Some("forged-deployment".to_owned());
-        transaction.transaction_plan.observation_digest = transaction.provider_observation.observation_digest.clone();
+        transaction.transaction_plan.observation_digest =
+            transaction.provider_observation.observation_digest.clone();
+        let input = authorization(&transaction);
+        assert!(bind_transaction_authorization(&transaction, &input, EVALUATED_AT).is_err());
+    }
+
+    #[test]
+    fn sealed_wrangler_pending_drift_is_rejected() {
+        let mut transaction = transaction();
+        transaction.provider_observation.wrangler_pending_migrations = Vec::new();
         let input = authorization(&transaction);
         assert!(bind_transaction_authorization(&transaction, &input, EVALUATED_AT).is_err());
     }
