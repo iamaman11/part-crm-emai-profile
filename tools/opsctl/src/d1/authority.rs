@@ -1,5 +1,5 @@
 use super::model::{D1Error, GateResult, Preconditions, ReleaseSchemaContract};
-use super::util::{read_json, required_string, required_string_array};
+use super::util::{read_json, required_string};
 use serde_json::Value;
 use std::path::Path;
 
