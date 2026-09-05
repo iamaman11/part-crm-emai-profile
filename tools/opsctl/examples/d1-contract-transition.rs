@@ -1,6 +1,9 @@
 #![forbid(unsafe_code)]
 
-use opsctl::d1::{D1ContractTransitionRequest, contract_transition};
+use opsctl::d1::{
+    D1ContractTransitionRequest, D1ContractTransitionVerificationRequest, contract_transition,
+    contract_transition_verify,
+};
 use std::env;
 use std::error::Error;
 use std::ffi::OsString;
@@ -10,6 +13,7 @@ use std::path::PathBuf;
 struct Args {
     root: Option<PathBuf>,
     ledger_json: Option<PathBuf>,
+    post_ledger_json: Option<PathBuf>,
     release_manifest: Option<PathBuf>,
     evidence_json: Option<PathBuf>,
     evaluated_at_unix_seconds: Option<i64>,
@@ -49,6 +53,11 @@ fn parse_args() -> Result<Args, Box<dyn Error>> {
             )?,
             "--ledger-json" => set_once(
                 &mut args.ledger_json,
+                PathBuf::from(next_value(&mut iterator, flag)?),
+                flag,
+            )?,
+            "--post-ledger-json" => set_once(
+                &mut args.post_ledger_json,
                 PathBuf::from(next_value(&mut iterator, flag)?),
                 flag,
             )?,
@@ -106,15 +115,29 @@ fn main() -> Result<(), Box<dyn Error>> {
     let expected_source_sha = required(args.expected_source_sha, "--expected-source-sha")?;
     let expected_release_set_id =
         required(args.expected_release_set_id, "--expected-release-set-id")?;
-    let output = contract_transition(D1ContractTransitionRequest {
-        root: &root,
-        ledger_json: &ledger_json,
-        release_manifest: &release_manifest,
-        evidence_json: &evidence_json,
-        evaluated_at_unix_seconds,
-        expected_source_sha: &expected_source_sha,
-        expected_release_set_id: &expected_release_set_id,
-    })?;
+    let output = match args.post_ledger_json {
+        Some(post_ledger_json) => contract_transition_verify(
+            D1ContractTransitionVerificationRequest {
+                root: &root,
+                predecessor_ledger_json: &ledger_json,
+                ledger_json: &post_ledger_json,
+                release_manifest: &release_manifest,
+                evidence_json: &evidence_json,
+                evaluated_at_unix_seconds,
+                expected_source_sha: &expected_source_sha,
+                expected_release_set_id: &expected_release_set_id,
+            },
+        )?,
+        None => contract_transition(D1ContractTransitionRequest {
+            root: &root,
+            ledger_json: &ledger_json,
+            release_manifest: &release_manifest,
+            evidence_json: &evidence_json,
+            evaluated_at_unix_seconds,
+            expected_source_sha: &expected_source_sha,
+            expected_release_set_id: &expected_release_set_id,
+        })?,
+    };
     print!("{output}");
     Ok(())
 }
