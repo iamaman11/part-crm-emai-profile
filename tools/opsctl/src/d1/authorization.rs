@@ -256,7 +256,7 @@ mod tests {
         }
     }
 
-    fn transaction() -> TransactionProjection {
+    fn transaction() -> Result<TransactionProjection, D1Error> {
         let target = target();
         let observation_input = ProviderObservationInput {
             schema_version: 1,
@@ -269,10 +269,9 @@ mod tests {
             deployment_identity: Some("deployment-1".to_owned()),
             time_travel_bookmark_capable: true,
         };
-        let canonical_observation = canonical_json(
-            &serde_json::to_value(&observation_input).expect("serialize observation fixture"),
-        )
-        .expect("canonicalize observation fixture");
+        let observation_value = serde_json::to_value(&observation_input)
+            .map_err(|error| D1Error::new(format!("cannot serialize observation fixture: {error}")))?;
+        let canonical_observation = canonical_json(&observation_value).map_err(D1Error::new)?;
         let observation_digest = sha256_hex(canonical_observation.as_bytes());
         let provider_observation = ProviderObservationBundle {
             schema_version: observation_input.schema_version,
@@ -319,11 +318,10 @@ mod tests {
                 "PRODUCTION_MUTATION".to_owned(),
             ],
         };
-        let canonical_plan = canonical_json(
-            &serde_json::to_value(&transaction_plan).expect("serialize transaction fixture"),
-        )
-        .expect("canonicalize transaction fixture");
-        TransactionProjection {
+        let plan_value = serde_json::to_value(&transaction_plan)
+            .map_err(|error| D1Error::new(format!("cannot serialize transaction fixture: {error}")))?;
+        let canonical_plan = canonical_json(&plan_value).map_err(D1Error::new)?;
+        Ok(TransactionProjection {
             schema_version: 1,
             status: "TRANSACTION_PREPARED".to_owned(),
             mode: "read-only".to_owned(),
@@ -333,7 +331,7 @@ mod tests {
             provider_observation,
             transaction_id: sha256_hex(canonical_plan.as_bytes()),
             transaction_plan,
-        }
+        })
     }
 
     fn authorization(transaction: &TransactionProjection) -> Value {
@@ -357,7 +355,7 @@ mod tests {
 
     #[test]
     fn exact_authorization_binds_without_consuming_or_mutating() -> Result<(), D1Error> {
-        let transaction = transaction();
+        let transaction = transaction()?;
         let binding = bind_transaction_authorization(
             &transaction,
             &authorization(&transaction),
@@ -376,7 +374,7 @@ mod tests {
 
     #[test]
     fn identical_authorization_has_deterministic_digest() -> Result<(), D1Error> {
-        let transaction = transaction();
+        let transaction = transaction()?;
         let input = authorization(&transaction);
         let left = bind_transaction_authorization(&transaction, &input, EVALUATED_AT)?;
         let right = bind_transaction_authorization(&transaction, &input, EVALUATED_AT)?;
@@ -385,126 +383,141 @@ mod tests {
     }
 
     #[test]
-    fn transaction_id_drift_is_rejected() {
-        let transaction = transaction();
+    fn transaction_id_drift_is_rejected() -> Result<(), D1Error> {
+        let transaction = transaction()?;
         let mut input = authorization(&transaction);
         input["transaction_id"] = json!("ff".repeat(32));
         assert!(bind_transaction_authorization(&transaction, &input, EVALUATED_AT).is_err());
+        Ok(())
     }
 
     #[test]
-    fn forged_transaction_plan_with_stale_id_is_rejected() {
-        let mut transaction = transaction();
+    fn forged_transaction_plan_with_stale_id_is_rejected() -> Result<(), D1Error> {
+        let mut transaction = transaction()?;
         transaction.transaction_plan.schema_target = "forged-schema.sql".to_owned();
         let input = authorization(&transaction);
         assert!(bind_transaction_authorization(&transaction, &input, EVALUATED_AT).is_err());
+        Ok(())
     }
 
     #[test]
-    fn forged_provider_observation_digest_is_rejected() {
-        let mut transaction = transaction();
+    fn forged_provider_observation_digest_is_rejected() -> Result<(), D1Error> {
+        let mut transaction = transaction()?;
         transaction.provider_observation.deployment_identity = Some("forged-deployment".to_owned());
         transaction.transaction_plan.observation_digest =
             transaction.provider_observation.observation_digest.clone();
         let input = authorization(&transaction);
         assert!(bind_transaction_authorization(&transaction, &input, EVALUATED_AT).is_err());
+        Ok(())
     }
 
     #[test]
-    fn sealed_wrangler_pending_drift_is_rejected() {
-        let mut transaction = transaction();
+    fn sealed_wrangler_pending_drift_is_rejected() -> Result<(), D1Error> {
+        let mut transaction = transaction()?;
         transaction.provider_observation.wrangler_pending_migrations = Vec::new();
         let input = authorization(&transaction);
         assert!(bind_transaction_authorization(&transaction, &input, EVALUATED_AT).is_err());
+        Ok(())
     }
 
     #[test]
-    fn target_drift_is_rejected() {
-        let transaction = transaction();
+    fn target_drift_is_rejected() -> Result<(), D1Error> {
+        let transaction = transaction()?;
         let mut input = authorization(&transaction);
         input["target"]["database_id"] = json!("different-database");
         assert!(bind_transaction_authorization(&transaction, &input, EVALUATED_AT).is_err());
+        Ok(())
     }
 
     #[test]
-    fn provider_effect_widening_is_rejected() {
-        let transaction = transaction();
+    fn provider_effect_widening_is_rejected() -> Result<(), D1Error> {
+        let transaction = transaction()?;
         let mut input = authorization(&transaction);
         input["authorized_provider_effects"] =
             json!(["D1_MIGRATIONS_APPLY_EXACT_PLAN", "D1_DELETE"]);
         assert!(bind_transaction_authorization(&transaction, &input, EVALUATED_AT).is_err());
+        Ok(())
     }
 
     #[test]
-    fn duplicate_provider_effect_is_rejected() {
-        let transaction = transaction();
+    fn duplicate_provider_effect_is_rejected() -> Result<(), D1Error> {
+        let transaction = transaction()?;
         let mut input = authorization(&transaction);
         input["authorized_provider_effects"] = json!([
             "D1_MIGRATIONS_APPLY_EXACT_PLAN",
             "D1_MIGRATIONS_APPLY_EXACT_PLAN"
         ]);
         assert!(bind_transaction_authorization(&transaction, &input, EVALUATED_AT).is_err());
+        Ok(())
     }
 
     #[test]
-    fn phase_drift_is_rejected() {
-        let transaction = transaction();
+    fn phase_drift_is_rejected() -> Result<(), D1Error> {
+        let transaction = transaction()?;
         let mut input = authorization(&transaction);
         input["phase"] = json!("CONTRACT");
         assert!(bind_transaction_authorization(&transaction, &input, EVALUATED_AT).is_err());
+        Ok(())
     }
 
     #[test]
-    fn expired_authorization_is_rejected() {
-        let transaction = transaction();
+    fn expired_authorization_is_rejected() -> Result<(), D1Error> {
+        let transaction = transaction()?;
         let input = authorization(&transaction);
         assert!(bind_transaction_authorization(&transaction, &input, EXPIRES_AT + 1).is_err());
+        Ok(())
     }
 
     #[test]
-    fn authorization_not_yet_valid_is_rejected() {
-        let transaction = transaction();
+    fn authorization_not_yet_valid_is_rejected() -> Result<(), D1Error> {
+        let transaction = transaction()?;
         let input = authorization(&transaction);
         assert!(bind_transaction_authorization(&transaction, &input, ISSUED_AT - 1).is_err());
+        Ok(())
     }
 
     #[test]
-    fn authorization_cannot_outlive_observation_freshness() {
-        let transaction = transaction();
+    fn authorization_cannot_outlive_observation_freshness() -> Result<(), D1Error> {
+        let transaction = transaction()?;
         let mut input = authorization(&transaction);
         input["expires_at_unix_seconds"] = json!(FRESH_UNTIL + 1);
         assert!(bind_transaction_authorization(&transaction, &input, EVALUATED_AT).is_err());
+        Ok(())
     }
 
     #[test]
-    fn forged_freshness_deadline_is_rejected() {
-        let transaction = transaction();
+    fn forged_freshness_deadline_is_rejected() -> Result<(), D1Error> {
+        let transaction = transaction()?;
         let mut input = authorization(&transaction);
         input["observation_fresh_until_unix_seconds"] = json!(FRESH_UNTIL + 1);
         assert!(bind_transaction_authorization(&transaction, &input, EVALUATED_AT).is_err());
+        Ok(())
     }
 
     #[test]
-    fn authorization_before_observation_is_rejected() {
-        let transaction = transaction();
+    fn authorization_before_observation_is_rejected() -> Result<(), D1Error> {
+        let transaction = transaction()?;
         let mut input = authorization(&transaction);
         input["issued_at_unix_seconds"] = json!(OBSERVED_AT - 1);
         assert!(bind_transaction_authorization(&transaction, &input, EVALUATED_AT).is_err());
+        Ok(())
     }
 
     #[test]
-    fn transaction_projection_observation_drift_is_rejected() {
-        let mut transaction = transaction();
+    fn transaction_projection_observation_drift_is_rejected() -> Result<(), D1Error> {
+        let mut transaction = transaction()?;
         transaction.provider_observation.observation_digest = "bb".repeat(32);
         let input = authorization(&transaction);
         assert!(bind_transaction_authorization(&transaction, &input, EVALUATED_AT).is_err());
+        Ok(())
     }
 
     #[test]
-    fn already_consumed_projection_is_rejected() {
-        let mut transaction = transaction();
+    fn already_consumed_projection_is_rejected() -> Result<(), D1Error> {
+        let mut transaction = transaction()?;
         transaction.authorization_consumed = true;
         let input = authorization(&transaction);
         assert!(bind_transaction_authorization(&transaction, &input, EVALUATED_AT).is_err());
+        Ok(())
     }
 }
