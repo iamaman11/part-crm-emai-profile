@@ -27,6 +27,20 @@ pub(super) struct ContractTransitionInput<'a> {
     pub(super) ledger_sha256: &'a str,
 }
 
+pub(super) struct ContractTransitionVerificationInput<'a> {
+    pub(super) authority: &'a ComponentAuthority,
+    pub(super) predecessor_remote_names: &'a [String],
+    pub(super) remote_names: &'a [String],
+    pub(super) release: &'a ReleaseSchemaContract,
+    pub(super) evidence: &'a Value,
+    pub(super) evaluated_at_unix_seconds: i64,
+    pub(super) expected_source_sha: &'a str,
+    pub(super) expected_release_set_id: &'a str,
+    pub(super) release_manifest_sha256: &'a str,
+    pub(super) repository_identity_sha256: &'a str,
+    pub(super) predecessor_ledger_sha256: &'a str,
+}
+
 fn exact_keys(object: &Map<String, Value>, expected: &[&str], label: &str) -> Result<(), D1Error> {
     let observed = object.keys().map(String::as_str).collect::<BTreeSet<_>>();
     let expected = expected.iter().copied().collect::<BTreeSet<_>>();
@@ -144,6 +158,23 @@ fn validate_exact_predecessor(
     if remote_names != &authority.ordered_history[..contract_index] {
         return Err(D1Error::new(
             "contract-transition requires the remote ledger to equal the exact canonical prefix through 0031",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_exact_successor(
+    authority: &ComponentAuthority,
+    predecessor_remote_names: &[String],
+    remote_names: &[String],
+) -> Result<(), D1Error> {
+    validate_exact_predecessor(authority, predecessor_remote_names)?;
+    if remote_names != authority.ordered_history.as_slice()
+        || remote_names.len() != predecessor_remote_names.len() + 1
+        || remote_names.last().map(String::as_str) != Some(CONTRACT_REVISION)
+    {
+        return Err(D1Error::new(
+            "post-contract verification requires exactly one canonical 0031 -> 0032 transition",
         ));
     }
     Ok(())
@@ -345,9 +376,73 @@ pub(super) fn evaluate(input: ContractTransitionInput<'_>) -> Result<String, D1E
         })
 }
 
+pub(super) fn verify_post_transition(
+    input: ContractTransitionVerificationInput<'_>,
+) -> Result<String, D1Error> {
+    validate_release_contract(input.authority, input.release)?;
+    validate_exact_successor(
+        input.authority,
+        input.predecessor_remote_names,
+        input.remote_names,
+    )?;
+    let evidence_input = ContractTransitionInput {
+        authority: input.authority,
+        remote_names: input.predecessor_remote_names,
+        release: input.release,
+        evidence: input.evidence,
+        evaluated_at_unix_seconds: input.evaluated_at_unix_seconds,
+        expected_source_sha: input.expected_source_sha,
+        expected_release_set_id: input.expected_release_set_id,
+        release_manifest_sha256: input.release_manifest_sha256,
+        repository_identity_sha256: input.repository_identity_sha256,
+        ledger_sha256: input.predecessor_ledger_sha256,
+    };
+    let evidence_age_seconds = validate_evidence(&evidence_input)?;
+    let output = json!({
+        "schema_version": 1,
+        "command": "d1 contract-transition verify",
+        "status": "ok",
+        "mode": "read-only",
+        "mutation_executed": false,
+        "component": "catalog",
+        "predecessor_ledger_state": "EXACT",
+        "ledger_state": "EXACT",
+        "decision": "SAFE",
+        "predecessor_revision": PREDECESSOR_REVISION,
+        "remote_revision": CONTRACT_REVISION,
+        "runtime_target_revision": input.release.target_schema_revision,
+        "supported_schema_min": input.release.supported_schema_min,
+        "supported_schema_max": input.release.supported_schema_max,
+        "current_repository_revision": input.authority.current_repository_revision,
+        "history_digest": input.authority.history_digest,
+        "transition_migrations": [CONTRACT_REVISION],
+        "planned_migrations": [],
+        "recovery_strategy": RECOVERY_STRATEGY,
+        "evidence_age_seconds": evidence_age_seconds,
+        "reason_codes": [
+            "EXACT_0031_PREDECESSOR",
+            "EXACT_ONE_STEP_0032_CONTRACT",
+            "PHASE_C_PRECONDITIONS_VERIFIED",
+            "SINGLE_VERSION_QUIESCENCE_VERIFIED",
+            "RUNTIME_WINDOW_0031_0032_VERIFIED"
+        ],
+        "allowed": true
+    });
+    serde_json::to_string(&output)
+        .map(|value| value + "\n")
+        .map_err(|error| {
+            D1Error::new(format!(
+                "cannot serialize post-contract verification result: {error}"
+            ))
+        })
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{valid_release_set_id, valid_sha256, valid_source_sha};
+    use super::{
+        CONTRACT_REVISION, ComponentAuthority, PREDECESSOR_REVISION, validate_exact_successor,
+        valid_release_set_id, valid_sha256, valid_source_sha,
+    };
 
     #[test]
     fn identity_validators_are_strict() {
@@ -364,5 +459,25 @@ mod tests {
             "release-set-v4-sha256-{}",
             "c".repeat(64)
         )));
+    }
+
+    #[test]
+    fn post_contract_verification_requires_exactly_one_contract_step() {
+        let authority = ComponentAuthority {
+            component_id: "catalog".to_owned(),
+            historical_len: 0,
+            ordered_history: vec![PREDECESSOR_REVISION.to_owned(), CONTRACT_REVISION.to_owned()],
+            post_epoch: Vec::new(),
+            current_repository_revision: CONTRACT_REVISION.to_owned(),
+            history_digest: "history".to_owned(),
+            policy_digest: "policy".to_owned(),
+        };
+        let predecessor = vec![PREDECESSOR_REVISION.to_owned()];
+        let exact = vec![PREDECESSOR_REVISION.to_owned(), CONTRACT_REVISION.to_owned()];
+        assert!(validate_exact_successor(&authority, &predecessor, &exact).is_ok());
+        assert!(validate_exact_successor(&authority, &predecessor, &predecessor).is_err());
+        let mut extra = exact.clone();
+        extra.push("0033_unexpected.sql".to_owned());
+        assert!(validate_exact_successor(&authority, &predecessor, &extra).is_err());
     }
 }
