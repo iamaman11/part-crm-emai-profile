@@ -14,6 +14,8 @@ mod model;
 mod plan;
 #[path = "d1/status.rs"]
 mod status;
+#[path = "d1/transaction.rs"]
+mod transaction;
 #[path = "d1/util.rs"]
 mod util;
 #[path = "d1/verify.rs"]
