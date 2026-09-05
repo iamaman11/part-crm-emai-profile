@@ -1,6 +1,7 @@
 use opsctl::canonical::{canonical_json, sha256_hex};
 use opsctl::d1::{
-    D1ContractTransitionVerificationRequest, contract_transition_verify, repository_projection,
+    D1ContractTransitionRequest, D1ContractTransitionVerificationRequest, contract_transition,
+    contract_transition_verify, repository_projection,
 };
 use serde_json::{Value, json};
 use std::error::Error;
@@ -72,7 +73,7 @@ fn ledger(names: &[String]) -> Value {
 }
 
 #[test]
-fn public_post_contract_verify_accepts_exact_0032_and_rejects_non_transition()
+fn public_contract_transition_enforces_exact_fail_closed_matrix_and_post_verify()
 -> Result<(), Box<dyn Error>> {
     let root = repo_root();
     let projection: Value = serde_json::from_str(&repository_projection(&root)?)?;
@@ -94,6 +95,7 @@ fn public_post_contract_verify_accepts_exact_0032_and_rejects_non_transition()
     assert_eq!(names[31], CONTRACT_REVISION);
 
     let predecessor_ledger = ledger(&names[..31]);
+    let multiple_pending_ledger = ledger(&names[..30]);
     let post_ledger = ledger(&names);
     let release_manifest = json!({
         "schema_contract": catalog["release_schema_contract"].clone()
@@ -121,9 +123,9 @@ fn public_post_contract_verify_accepts_exact_0032_and_rejects_non_transition()
         "deployment": {
             "active_version_ids": ["worker-version-1"],
             "quiescent": true,
-            "release_set_id": release_set_id,
+            "release_set_id": release_set_id.clone(),
             "single_version": true,
-            "source_sha": source_sha,
+            "source_sha": source_sha.clone(),
             "traffic_percent": 100.0
         },
         "preconditions": {
@@ -134,15 +136,115 @@ fn public_post_contract_verify_accepts_exact_0032_and_rejects_non_transition()
 
     let temp = TempDirectory::new()?;
     let predecessor_path = temp.path("predecessor-ledger.json");
+    let multiple_pending_path = temp.path("multiple-pending-ledger.json");
     let post_path = temp.path("post-ledger.json");
-    let unchanged_path = temp.path("unchanged-ledger.json");
     let release_path = temp.path("release.json");
     let evidence_path = temp.path("evidence.json");
     write_json(&predecessor_path, &predecessor_ledger)?;
+    write_json(&multiple_pending_path, &multiple_pending_ledger)?;
     write_json(&post_path, &post_ledger)?;
-    write_json(&unchanged_path, &predecessor_ledger)?;
     write_json(&release_path, &release_manifest)?;
     write_json(&evidence_path, &evidence)?;
+
+    let planned = contract_transition(D1ContractTransitionRequest {
+        root: &root,
+        ledger_json: &predecessor_path,
+        release_manifest: &release_path,
+        evidence_json: &evidence_path,
+        evaluated_at_unix_seconds: 101,
+        expected_source_sha: &source_sha,
+        expected_release_set_id: &release_set_id,
+    })?;
+    let planned: Value = serde_json::from_str(&planned)?;
+    assert_eq!(planned["command"], "d1 contract-transition");
+    assert_eq!(planned["decision"], "MIGRATION_REQUIRED");
+    assert_eq!(planned["remote_revision"], PREDECESSOR_REVISION);
+    assert_eq!(planned["target_revision"], CONTRACT_REVISION);
+    assert_eq!(planned["planned_migrations"], json!([CONTRACT_REVISION]));
+    assert_eq!(planned["recovery_strategy"], "FAIL_FORWARD_ONLY");
+    assert_eq!(planned["allowed"], true);
+    assert_eq!(planned["mutation_executed"], false);
+
+    let multiple_pending = contract_transition(D1ContractTransitionRequest {
+        root: &root,
+        ledger_json: &multiple_pending_path,
+        release_manifest: &release_path,
+        evidence_json: &evidence_path,
+        evaluated_at_unix_seconds: 101,
+        expected_source_sha: &source_sha,
+        expected_release_set_id: &release_set_id,
+    })
+    .expect_err("wrong predecessor with multiple pending migrations must fail closed");
+    assert!(multiple_pending.to_string().contains("exact canonical prefix through 0031"));
+
+    let mut split_evidence = evidence.clone();
+    split_evidence["deployment"]["single_version"] = json!(false);
+    let split_path = temp.path("split-evidence.json");
+    write_json(&split_path, &split_evidence)?;
+    let split = contract_transition(D1ContractTransitionRequest {
+        root: &root,
+        ledger_json: &predecessor_path,
+        release_manifest: &release_path,
+        evidence_json: &split_path,
+        evaluated_at_unix_seconds: 101,
+        expected_source_sha: &source_sha,
+        expected_release_set_id: &release_set_id,
+    })
+    .expect_err("split deployment evidence must fail closed");
+    assert!(split.to_string().contains("deployment.single_version must be true"));
+
+    let mut missing_recovery = evidence.clone();
+    missing_recovery
+        .as_object_mut()
+        .ok_or("evidence fixture must be an object")?
+        .remove("recovery_strategy");
+    let missing_recovery_path = temp.path("missing-recovery-evidence.json");
+    write_json(&missing_recovery_path, &missing_recovery)?;
+    let missing_recovery = contract_transition(D1ContractTransitionRequest {
+        root: &root,
+        ledger_json: &predecessor_path,
+        release_manifest: &release_path,
+        evidence_json: &missing_recovery_path,
+        evaluated_at_unix_seconds: 101,
+        expected_source_sha: &source_sha,
+        expected_release_set_id: &release_set_id,
+    })
+    .expect_err("missing recovery strategy must fail closed");
+    assert!(missing_recovery.to_string().contains("exact governed schema"));
+
+    let mut incomplete_preconditions = evidence.clone();
+    incomplete_preconditions["preconditions"]
+        .as_object_mut()
+        .ok_or("preconditions fixture must be an object")?
+        .remove("server_owned_payload_fingerprint_active");
+    let incomplete_preconditions_path = temp.path("incomplete-preconditions-evidence.json");
+    write_json(&incomplete_preconditions_path, &incomplete_preconditions)?;
+    let incomplete = contract_transition(D1ContractTransitionRequest {
+        root: &root,
+        ledger_json: &predecessor_path,
+        release_manifest: &release_path,
+        evidence_json: &incomplete_preconditions_path,
+        evaluated_at_unix_seconds: 101,
+        expected_source_sha: &source_sha,
+        expected_release_set_id: &release_set_id,
+    })
+    .expect_err("incomplete contract preconditions must fail closed");
+    assert!(incomplete.to_string().contains("exact governed schema"));
+
+    let mismatched_source = "f".repeat(40);
+    let identity_mismatch = contract_transition(D1ContractTransitionRequest {
+        root: &root,
+        ledger_json: &predecessor_path,
+        release_manifest: &release_path,
+        evidence_json: &evidence_path,
+        evaluated_at_unix_seconds: 101,
+        expected_source_sha: &mismatched_source,
+        expected_release_set_id: &release_set_id,
+    })
+    .expect_err("source identity mismatch must fail closed");
+    assert!(identity_mismatch
+        .to_string()
+        .contains("source SHA does not match the exact expected accepted source"));
 
     let output = contract_transition_verify(D1ContractTransitionVerificationRequest {
         root: &root,
@@ -168,10 +270,10 @@ fn public_post_contract_verify_accepts_exact_0032_and_rejects_non_transition()
     assert_eq!(verified["allowed"], true);
     assert_eq!(verified["mutation_executed"], false);
 
-    let error = contract_transition_verify(D1ContractTransitionVerificationRequest {
+    let unchanged = contract_transition_verify(D1ContractTransitionVerificationRequest {
         root: &root,
         predecessor_ledger_json: &predecessor_path,
-        ledger_json: &unchanged_path,
+        ledger_json: &predecessor_path,
         release_manifest: &release_path,
         evidence_json: &evidence_path,
         evaluated_at_unix_seconds: 101,
@@ -179,6 +281,8 @@ fn public_post_contract_verify_accepts_exact_0032_and_rejects_non_transition()
         expected_release_set_id: &release_set_id,
     })
     .expect_err("unchanged 0031 ledger must not pass post-contract verification");
-    assert!(error.to_string().contains("exactly one canonical 0031 -> 0032 transition"));
+    assert!(unchanged
+        .to_string()
+        .contains("exactly one canonical 0031 -> 0032 transition"));
     Ok(())
 }
