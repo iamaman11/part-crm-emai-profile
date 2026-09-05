@@ -51,7 +51,7 @@ fn canonical_sha256(value: &Value) -> Result<String, Box<dyn Error>> {
     Ok(sha256_hex(canonical_json(value)?.as_bytes()))
 }
 
-fn catalog<'a>(projection: &'a Value) -> Result<&'a Value, Box<dyn Error>> {
+fn catalog(projection: &Value) -> Result<&Value, Box<dyn Error>> {
     projection["components"]
         .as_array()
         .and_then(|components| {
@@ -165,7 +165,7 @@ fn public_contract_transition_enforces_exact_fail_closed_matrix_and_post_verify(
     assert_eq!(planned["allowed"], true);
     assert_eq!(planned["mutation_executed"], false);
 
-    let multiple_pending = contract_transition(D1ContractTransitionRequest {
+    let multiple_pending = match contract_transition(D1ContractTransitionRequest {
         root: &root,
         ledger_json: &multiple_pending_path,
         release_manifest: &release_path,
@@ -173,8 +173,12 @@ fn public_contract_transition_enforces_exact_fail_closed_matrix_and_post_verify(
         evaluated_at_unix_seconds: 101,
         expected_source_sha: &source_sha,
         expected_release_set_id: &release_set_id,
-    })
-    .expect_err("wrong predecessor with multiple pending migrations must fail closed");
+    }) {
+        Ok(_) => {
+            return Err("wrong predecessor with multiple pending migrations unexpectedly passed".into());
+        }
+        Err(error) => error,
+    };
     assert!(
         multiple_pending
             .to_string()
@@ -185,7 +189,7 @@ fn public_contract_transition_enforces_exact_fail_closed_matrix_and_post_verify(
     split_evidence["deployment"]["single_version"] = json!(false);
     let split_path = temp.path("split-evidence.json");
     write_json(&split_path, &split_evidence)?;
-    let split = contract_transition(D1ContractTransitionRequest {
+    let split = match contract_transition(D1ContractTransitionRequest {
         root: &root,
         ledger_json: &predecessor_path,
         release_manifest: &release_path,
@@ -193,8 +197,10 @@ fn public_contract_transition_enforces_exact_fail_closed_matrix_and_post_verify(
         evaluated_at_unix_seconds: 101,
         expected_source_sha: &source_sha,
         expected_release_set_id: &release_set_id,
-    })
-    .expect_err("split deployment evidence must fail closed");
+    }) {
+        Ok(_) => return Err("split deployment evidence unexpectedly passed".into()),
+        Err(error) => error,
+    };
     assert!(
         split
             .to_string()
@@ -208,7 +214,7 @@ fn public_contract_transition_enforces_exact_fail_closed_matrix_and_post_verify(
         .remove("recovery_strategy");
     let missing_recovery_path = temp.path("missing-recovery-evidence.json");
     write_json(&missing_recovery_path, &missing_recovery)?;
-    let missing_recovery = contract_transition(D1ContractTransitionRequest {
+    let missing_recovery = match contract_transition(D1ContractTransitionRequest {
         root: &root,
         ledger_json: &predecessor_path,
         release_manifest: &release_path,
@@ -216,8 +222,10 @@ fn public_contract_transition_enforces_exact_fail_closed_matrix_and_post_verify(
         evaluated_at_unix_seconds: 101,
         expected_source_sha: &source_sha,
         expected_release_set_id: &release_set_id,
-    })
-    .expect_err("missing recovery strategy must fail closed");
+    }) {
+        Ok(_) => return Err("missing recovery strategy unexpectedly passed".into()),
+        Err(error) => error,
+    };
     assert!(
         missing_recovery
             .to_string()
@@ -231,7 +239,7 @@ fn public_contract_transition_enforces_exact_fail_closed_matrix_and_post_verify(
         .remove("server_owned_payload_fingerprint_active");
     let incomplete_preconditions_path = temp.path("incomplete-preconditions-evidence.json");
     write_json(&incomplete_preconditions_path, &incomplete_preconditions)?;
-    let incomplete = contract_transition(D1ContractTransitionRequest {
+    let incomplete = match contract_transition(D1ContractTransitionRequest {
         root: &root,
         ledger_json: &predecessor_path,
         release_manifest: &release_path,
@@ -239,12 +247,14 @@ fn public_contract_transition_enforces_exact_fail_closed_matrix_and_post_verify(
         evaluated_at_unix_seconds: 101,
         expected_source_sha: &source_sha,
         expected_release_set_id: &release_set_id,
-    })
-    .expect_err("incomplete contract preconditions must fail closed");
+    }) {
+        Ok(_) => return Err("incomplete contract preconditions unexpectedly passed".into()),
+        Err(error) => error,
+    };
     assert!(incomplete.to_string().contains("exact governed schema"));
 
     let mismatched_source = "f".repeat(40);
-    let identity_mismatch = contract_transition(D1ContractTransitionRequest {
+    let identity_mismatch = match contract_transition(D1ContractTransitionRequest {
         root: &root,
         ledger_json: &predecessor_path,
         release_manifest: &release_path,
@@ -252,8 +262,10 @@ fn public_contract_transition_enforces_exact_fail_closed_matrix_and_post_verify(
         evaluated_at_unix_seconds: 101,
         expected_source_sha: &mismatched_source,
         expected_release_set_id: &release_set_id,
-    })
-    .expect_err("source identity mismatch must fail closed");
+    }) {
+        Ok(_) => return Err("source identity mismatch unexpectedly passed".into()),
+        Err(error) => error,
+    };
     assert!(
         identity_mismatch
             .to_string()
@@ -287,7 +299,7 @@ fn public_contract_transition_enforces_exact_fail_closed_matrix_and_post_verify(
     assert_eq!(verified["allowed"], true);
     assert_eq!(verified["mutation_executed"], false);
 
-    let unchanged = contract_transition_verify(D1ContractTransitionVerificationRequest {
+    let unchanged = match contract_transition_verify(D1ContractTransitionVerificationRequest {
         root: &root,
         predecessor_ledger_json: &predecessor_path,
         ledger_json: &predecessor_path,
@@ -296,8 +308,10 @@ fn public_contract_transition_enforces_exact_fail_closed_matrix_and_post_verify(
         evaluated_at_unix_seconds: 101,
         expected_source_sha: &source_sha,
         expected_release_set_id: &release_set_id,
-    })
-    .expect_err("unchanged 0031 ledger must not pass post-contract verification");
+    }) {
+        Ok(_) => return Err("unchanged 0031 ledger unexpectedly passed post-contract verification".into()),
+        Err(error) => error,
+    };
     assert!(
         unchanged
             .to_string()
