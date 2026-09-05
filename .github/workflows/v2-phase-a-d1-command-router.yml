@@ -34,7 +34,7 @@ jobs:
       COMMENT_AUTHOR: ${{ github.event.comment.user.login }}
       COMMENT_AUTHOR_ASSOCIATION: ${{ github.event.comment.author_association }}
       SOURCE_SHA: ${{ github.sha }}
-      AUTHORIZATION_BASE_SHA: 1c9f8a26a85ae653759aea1f36c2ccb95152c5bb
+      AUTHORIZATION_BASE_SHA: 4c65c8b7903e0d8dfa6abc97b36815c45c56d4e0
       EXPECTED_ACTOR: iamaman11
       EXPECTED_ISSUE: '584'
       EXPECTED_CURRENT_RELEASE_SET_ID: release-set-v3-sha256-e01338de30cdc4c334e210f9e2bd75a67837420dd370b83964caae452f77522c
@@ -101,8 +101,8 @@ jobs:
           test "$GITHUB_EVENT_NAME" = issue_comment
           test "$COMMAND_SOURCE_SHA" = "$SOURCE_SHA"
           test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
-          test "$(git rev-parse HEAD^)" = "$AUTHORIZATION_BASE_SHA"
-          test "$(git rev-list --count "$AUTHORIZATION_BASE_SHA..$SOURCE_SHA")" -eq 1
+          test "$(git rev-parse HEAD^1)" = "$AUTHORIZATION_BASE_SHA"
+          test "$(git rev-list --first-parent --count "$AUTHORIZATION_BASE_SHA..$SOURCE_SHA")" -eq 1
           mapfile -t changed < <(git diff --name-only "$AUTHORIZATION_BASE_SHA" "$SOURCE_SHA")
           test "${#changed[@]}" -eq 1
           test "${changed[0]}" = "$ROUTER_PATH"
