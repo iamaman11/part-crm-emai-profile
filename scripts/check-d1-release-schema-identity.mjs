@@ -8,7 +8,8 @@ import { DatabaseSync } from 'node:sqlite';
 import { fileURLToPath } from 'node:url';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const MIGRATIONS_DIR = path.join(ROOT, 'migrations', 'd1');
+const LEGACY_MIGRATIONS_DIR = path.join(ROOT, 'migrations', 'd1');
+const SUCCESSOR_MIGRATIONS_DIR = path.join(ROOT, 'migrations', 'd1-successor');
 const PAS2_EXPAND_MIGRATION = '0027_pas2_payload_fingerprint_expand.sql';
 const PAS2_CONTRACT_MIGRATION = '0032_pas2_payload_fingerprint_contract.sql';
 const SUPERSEDED_PAS2_MIGRATION = '0027_pas2_payload_fingerprint.sql';
@@ -220,25 +221,61 @@ function assertDatabaseIntegrity(database, label) {
   }
 }
 
-async function provePas2PayloadFingerprintCutover() {
-  const names = (await readdir(MIGRATIONS_DIR))
-    .filter((name) => /^\d{4}_[a-z0-9_]+\.sql$/u.test(name))
-    .sort();
-  if (names.includes(SUPERSEDED_PAS2_MIGRATION)) fail(`superseded migration remains canonical: ${SUPERSEDED_PAS2_MIGRATION}`);
+function validatePas2MigrationInventory(legacyNames, successorNames) {
+  if (legacyNames.length !== 31 || legacyNames[26] !== SUPERSEDED_PAS2_MIGRATION) {
+    fail('accepted Catalog legacy lineage must remain the immutable 0001..0031 history with old 0027 present');
+  }
+  if (legacyNames.at(-1) !== PAS2_RUNTIME_TARGET) {
+    fail(`accepted Catalog legacy lineage must end at ${PAS2_RUNTIME_TARGET}`);
+  }
+  if (successorNames.length !== 2
+      || successorNames[0] !== PAS2_EXPAND_MIGRATION
+      || successorNames[1] !== PAS2_CONTRACT_MIGRATION) {
+    fail(`Catalog successor root must contain exactly ${PAS2_EXPAND_MIGRATION} and ${PAS2_CONTRACT_MIGRATION}`);
+  }
+  const names = [
+    ...legacyNames.slice(0, 26),
+    PAS2_EXPAND_MIGRATION,
+    ...legacyNames.slice(27),
+    PAS2_CONTRACT_MIGRATION,
+  ];
+  if (names.includes(SUPERSEDED_PAS2_MIGRATION)) {
+    fail('legacy destructive 0027 leaked into the current successor executable lineage');
+  }
   const expandIndex = names.indexOf(PAS2_EXPAND_MIGRATION);
   const contractIndex = names.indexOf(PAS2_CONTRACT_MIGRATION);
-  if (expandIndex < 0) fail(`missing ${PAS2_EXPAND_MIGRATION}`);
-  if (contractIndex < 0) fail(`missing ${PAS2_CONTRACT_MIGRATION}`);
-  if (contractIndex <= expandIndex) fail('PAS-2 contract migration must trail the expand migration');
+  if (expandIndex !== 26 || contractIndex !== 31) {
+    fail(`PAS-2 successor lineage revision positions drifted: expand=${expandIndex}, contract=${contractIndex}`);
+  }
   if (names[contractIndex - 1] !== PAS2_RUNTIME_TARGET) {
     fail(`PAS-2 contract predecessor must be ${PAS2_RUNTIME_TARGET}`);
   }
+  return names;
+}
+
+function migrationPath(name) {
+  if (name === PAS2_EXPAND_MIGRATION || name === PAS2_CONTRACT_MIGRATION) {
+    return path.join(SUCCESSOR_MIGRATIONS_DIR, name);
+  }
+  return path.join(LEGACY_MIGRATIONS_DIR, name);
+}
+
+async function provePas2PayloadFingerprintCutover() {
+  const legacyNames = (await readdir(LEGACY_MIGRATIONS_DIR))
+    .filter((name) => /^\d{4}_[a-z0-9_]+\.sql$/u.test(name))
+    .sort();
+  const successorNames = (await readdir(SUCCESSOR_MIGRATIONS_DIR))
+    .filter((name) => /^\d{4}_[a-z0-9_]+\.sql$/u.test(name))
+    .sort();
+  const names = validatePas2MigrationInventory(legacyNames, successorNames);
+  const expandIndex = names.indexOf(PAS2_EXPAND_MIGRATION);
+  const contractIndex = names.indexOf(PAS2_CONTRACT_MIGRATION);
 
   const database = new DatabaseSync(':memory:');
   try {
     database.exec('PRAGMA foreign_keys = ON;');
     for (const name of names.slice(0, expandIndex)) {
-      database.exec(await readFile(path.join(MIGRATIONS_DIR, name), 'utf8'));
+      database.exec(await readFile(migrationPath(name), 'utf8'));
     }
 
     const inboundReferences = [];
@@ -276,7 +313,7 @@ async function provePas2PayloadFingerprintCutover() {
       );
     `);
 
-    database.exec(await readFile(path.join(MIGRATIONS_DIR, PAS2_EXPAND_MIGRATION), 'utf8'));
+    database.exec(await readFile(migrationPath(PAS2_EXPAND_MIGRATION), 'utf8'));
     assertBridgeShape(database, 'idempotency_records', 'PAS-2 idempotency expand bridge');
     assertBridgeShape(database, 'outbound_mail_intents', 'PAS-2 outbound-mail expand bridge');
     assertNoPas2TemporaryTables(database);
@@ -353,7 +390,7 @@ async function provePas2PayloadFingerprintCutover() {
     assertDatabaseIntegrity(database, 'PAS-2 expand');
 
     for (const name of names.slice(expandIndex + 1, contractIndex)) {
-      database.exec(await readFile(path.join(MIGRATIONS_DIR, name), 'utf8'));
+      database.exec(await readFile(migrationPath(name), 'utf8'));
     }
     const preContractLegacy = database.prepare(
       "SELECT request_digest, payload_fingerprint FROM idempotency_records WHERE idempotency_key = 'idem_01JPAS2'",
@@ -370,7 +407,7 @@ async function provePas2PayloadFingerprintCutover() {
     assertBridgeShape(database, 'outbound_mail_intents', 'pre-contract outbound-mail bridge');
     assertDatabaseIntegrity(database, 'PAS-2 pre-contract');
 
-    database.exec(await readFile(path.join(MIGRATIONS_DIR, PAS2_CONTRACT_MIGRATION), 'utf8'));
+    database.exec(await readFile(migrationPath(PAS2_CONTRACT_MIGRATION), 'utf8'));
     assertContractShape(database, 'idempotency_records', 'PAS-2 idempotency contract');
     assertContractShape(database, 'outbound_mail_intents', 'PAS-2 outbound-mail contract');
     assertNoPas2TemporaryTables(database);
@@ -469,6 +506,15 @@ function expectValidationFailure(label, inputs) {
   fail(`${label} negative fixture unexpectedly passed`);
 }
 
+function expectInventoryFailure(label, legacyNames, successorNames) {
+  try {
+    validatePas2MigrationInventory(legacyNames, successorNames);
+  } catch {
+    return;
+  }
+  fail(`${label} migration-inventory negative fixture unexpectedly passed`);
+}
+
 async function selfTest() {
   const inputs = await loadInputs();
   validateInputs(inputs);
@@ -506,7 +552,24 @@ async function selfTest() {
     ),
   });
 
-  console.log('D1 release schema-identity ownership, phased PAS-2 expand/contract semantics, and negative fixtures passed.');
+  const legacyNames = (await readdir(LEGACY_MIGRATIONS_DIR))
+    .filter((name) => /^\d{4}_[a-z0-9_]+\.sql$/u.test(name))
+    .sort();
+  const successorNames = (await readdir(SUCCESSOR_MIGRATIONS_DIR))
+    .filter((name) => /^\d{4}_[a-z0-9_]+\.sql$/u.test(name))
+    .sort();
+  expectInventoryFailure(
+    'legacy 0027 removed instead of retained as immutable evidence',
+    legacyNames.filter((name) => name !== SUPERSEDED_PAS2_MIGRATION),
+    successorNames,
+  );
+  expectInventoryFailure(
+    'extra successor migration outside bounded overlay',
+    legacyNames,
+    [...successorNames, '0033_unapproved.sql'].sort(),
+  );
+
+  console.log('D1 release schema-identity ownership, immutable legacy history, phased PAS-2 successor expand/contract semantics, and negative fixtures passed.');
 }
 
 async function main() {
@@ -517,7 +580,7 @@ async function main() {
   if (process.argv.length > 2) fail(`unknown arguments: ${process.argv.slice(2).join(' ')}`);
   await validate();
   console.log(
-    'Catalog and Resolver identities consume the canonical D1 projection; Release Set v3 consumes the typed schema window; PAS-2 proves data-preserving expand followed by an explicit destructive contract without reclassifying legacy digest bytes.',
+    'Catalog and Resolver identities consume the canonical D1 projection; Release Set v3 consumes the typed schema window; immutable legacy Catalog history is retained while the executable PAS-2 successor lineage proves data-preserving expand followed by an explicit destructive contract without reclassifying legacy digest bytes.',
   );
 }
 
