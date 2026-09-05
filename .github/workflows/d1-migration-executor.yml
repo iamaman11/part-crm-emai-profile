@@ -514,10 +514,19 @@ jobs:
             jq -e '.ledger_state == "EXACT" and .decision == "SAFE" and .allowed == true and .mutation_executed == false' \
               artifacts/d1-migration/verify.json >/dev/null
           else
-            env -u CLOUDFLARE_API_TOKEN -u CLOUDFLARE_ACCOUNT_ID cargo run --locked --quiet --manifest-path tools/opsctl/Cargo.toml -- --root . d1 status \
-              --component catalog --ledger-json artifacts/d1-migration/ledger-after.json \
+            evaluated_at="$(date -u +%s)"
+            env -u CLOUDFLARE_API_TOKEN -u CLOUDFLARE_ACCOUNT_ID cargo run --locked --quiet \
+              --manifest-path tools/opsctl/Cargo.toml --example d1-contract-transition -- \
+              --root . \
+              --ledger-json artifacts/d1-migration/ledger-before.json \
+              --post-ledger-json artifacts/d1-migration/ledger-after.json \
+              --release-manifest artifacts/d1-migration/target-release.json \
+              --evidence-json artifacts/d1-migration/preconditions.json \
+              --evaluated-at-unix-seconds "$evaluated_at" \
+              --expected-source-sha "$SOURCE_SHA" \
+              --expected-release-set-id "$EXPECTED_RELEASE_SET_ID" \
               > artifacts/d1-migration/verify.json
-            jq -e '.ledger_state == "EXACT" and .remote_revision == "0032_pas2_payload_fingerprint_contract.sql" and .decision == "SAFE" and .allowed == true and .mutation_executed == false' \
+            jq -e '.command == "d1 contract-transition verify" and .predecessor_ledger_state == "EXACT" and .ledger_state == "EXACT" and .decision == "SAFE" and .predecessor_revision == "0031_device_binding_governance.sql" and .remote_revision == "0032_pas2_payload_fingerprint_contract.sql" and .runtime_target_revision == "0031_device_binding_governance.sql" and .supported_schema_min == "0031_device_binding_governance.sql" and .supported_schema_max == "0032_pas2_payload_fingerprint_contract.sql" and .transition_migrations == ["0032_pas2_payload_fingerprint_contract.sql"] and .planned_migrations == [] and .recovery_strategy == "FAIL_FORWARD_ONLY" and .allowed == true and .mutation_executed == false' \
               artifacts/d1-migration/verify.json >/dev/null
           fi
 
