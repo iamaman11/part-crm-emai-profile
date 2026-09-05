@@ -1,7 +1,5 @@
 use super::catalog_legacy;
-use super::model::{
-    ComponentAuthority, D1Error, MigrationClass, MigrationContract, RolloutOrder,
-};
+use super::model::{ComponentAuthority, D1Error, MigrationClass, MigrationContract, RolloutOrder};
 use crate::canonical::{canonical_json, canonical_pretty_json, sha256_hex};
 use serde_json::{Value, json};
 use std::fs;
@@ -151,7 +149,8 @@ impl CatalogSuccessor {
             .map(|name| migration_source_root(&legacy, &successor_files, name))
             .collect::<Result<Vec<_>, _>>()?;
 
-        let history_digest = successor_history_digest(root, &ordered_history, &migration_source_roots)?;
+        let history_digest =
+            successor_history_digest(root, &ordered_history, &migration_source_roots)?;
         let policy_digest = legacy.policy_digest.clone();
         verify_policy_digest(&policy_digest)?;
         let post_epoch = CATALOG_POST_EPOCH_MIGRATIONS
@@ -314,11 +313,8 @@ pub(crate) fn repository_projection(root: &Path) -> Result<String, D1Error> {
         repository_identity_from_components(components)?
     };
 
-    projection["executable_schema_authority"] = json!([
-        LEGACY_ROOT,
-        SUCCESSOR_ROOT,
-        "migrations/resolver-d1"
-    ]);
+    projection["executable_schema_authority"] =
+        json!([LEGACY_ROOT, SUCCESSOR_ROOT, "migrations/resolver-d1"]);
     projection["repository_identity_sha256"] = json!(repository_identity);
     canonical_pretty_json(&projection).map_err(D1Error::new)
 }
@@ -353,9 +349,7 @@ fn validate_legacy_authority(authority: &ComponentAuthority) -> Result<(), D1Err
     Ok(())
 }
 
-fn expected_successor_files(
-    legacy: &ComponentAuthority,
-) -> Result<Vec<&'static str>, D1Error> {
+fn expected_successor_files(legacy: &ComponentAuthority) -> Result<Vec<&'static str>, D1Error> {
     let mut expected = Vec::new();
     for (index, spec) in CATALOG_POST_EPOCH_MIGRATIONS.iter().enumerate() {
         let expected_revision = HISTORICAL_MIGRATION_COUNT + index + 1;
@@ -366,7 +360,10 @@ fn expected_successor_files(
                 spec.revision
             )));
         }
-        match legacy.ordered_history.get(actual_revision.saturating_sub(1)) {
+        match legacy
+            .ordered_history
+            .get(actual_revision.saturating_sub(1))
+        {
             Some(legacy_name) if legacy_name == spec.revision => {}
             _ => expected.push(spec.revision),
         }
@@ -374,10 +371,7 @@ fn expected_successor_files(
     Ok(expected)
 }
 
-fn validate_successor_directory(
-    root: &Path,
-    expected_files: &[&str],
-) -> Result<(), D1Error> {
+fn validate_successor_directory(root: &Path, expected_files: &[&str]) -> Result<(), D1Error> {
     let directory = root.join(SUCCESSOR_ROOT);
     let metadata = fs::symlink_metadata(&directory).map_err(|error| {
         D1Error::new(format!(
@@ -397,7 +391,9 @@ fn validate_successor_directory(
         ))
     })? {
         let entry = entry.map_err(|error| {
-            D1Error::new(format!("cannot inspect Catalog successor migration entry: {error}"))
+            D1Error::new(format!(
+                "cannot inspect Catalog successor migration entry: {error}"
+            ))
         })?;
         let entry_metadata = fs::symlink_metadata(entry.path()).map_err(|error| {
             D1Error::new(format!(
@@ -498,7 +494,10 @@ fn migration_identity(root: &Path, migration_root: &str, name: &str) -> Result<V
 
 fn read_regular_repository_file(root: &Path, relative: &str) -> Result<Vec<u8>, D1Error> {
     let root_metadata = fs::symlink_metadata(root).map_err(|error| {
-        D1Error::new(format!("cannot inspect repository root {}: {error}", root.display()))
+        D1Error::new(format!(
+            "cannot inspect repository root {}: {error}",
+            root.display()
+        ))
     })?;
     if root_metadata.file_type().is_symlink() || !root_metadata.is_dir() {
         return Err(D1Error::new(
@@ -506,11 +505,17 @@ fn read_regular_repository_file(root: &Path, relative: &str) -> Result<Vec<u8>, 
         ));
     }
     let canonical_root = fs::canonicalize(root).map_err(|error| {
-        D1Error::new(format!("cannot canonicalize repository root {}: {error}", root.display()))
+        D1Error::new(format!(
+            "cannot canonicalize repository root {}: {error}",
+            root.display()
+        ))
     })?;
     let path = root.join(relative);
     let metadata = fs::symlink_metadata(&path).map_err(|error| {
-        D1Error::new(format!("cannot inspect migration source {}: {error}", path.display()))
+        D1Error::new(format!(
+            "cannot inspect migration source {}: {error}",
+            path.display()
+        ))
     })?;
     if metadata.file_type().is_symlink() || !metadata.is_file() {
         return Err(D1Error::new(format!(
@@ -518,7 +523,10 @@ fn read_regular_repository_file(root: &Path, relative: &str) -> Result<Vec<u8>, 
         )));
     }
     let canonical_path = fs::canonicalize(&path).map_err(|error| {
-        D1Error::new(format!("cannot canonicalize migration source {}: {error}", path.display()))
+        D1Error::new(format!(
+            "cannot canonicalize migration source {}: {error}",
+            path.display()
+        ))
     })?;
     if !canonical_path.starts_with(&canonical_root) {
         return Err(D1Error::new(format!(
@@ -592,7 +600,10 @@ mod tests {
         assert_eq!(authority.ordered_history.len(), 32);
         assert_eq!(authority.ordered_history[26], SUCCESSOR_EXPAND_REVISION);
         assert_eq!(authority.ordered_history[31], SUCCESSOR_CONTRACT_REVISION);
-        assert_eq!(authority.current_repository_revision, SUCCESSOR_CONTRACT_REVISION);
+        assert_eq!(
+            authority.current_repository_revision,
+            SUCCESSOR_CONTRACT_REVISION
+        );
         assert_eq!(authority.post_epoch.len(), 6);
     }
 
