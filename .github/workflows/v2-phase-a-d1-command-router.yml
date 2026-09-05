@@ -238,7 +238,7 @@ jobs:
             --arg target_release_manifest_json "$target_manifest" \
             --arg current_release_manifest_json "$current_manifest" \
             --arg known_good_release_manifest_json "$current_manifest" \
-            --arg preconditions_json '{}' \
+            --arg preconditions_json '{"component":"catalog","completed":[]}' \
             --arg transition_mode ordinary \
             --arg confirmation "$confirmation" \
             '{ref:$ref,inputs:{environment:$environment,source_sha:$source_sha,component:$component,account_id:$account_id,database_name:$database_name,database_id:$database_id,target_release_manifest_json:$target_release_manifest_json,current_release_manifest_json:$current_release_manifest_json,known_good_release_manifest_json:$known_good_release_manifest_json,preconditions_json:$preconditions_json,transition_mode:$transition_mode,expected_release_set_id:"",mutation_authorized:true,confirmation:$confirmation}}' \
