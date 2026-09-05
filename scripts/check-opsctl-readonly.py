@@ -30,6 +30,7 @@ REQUIRED_SOURCE_FILES = {
     "d1.rs",
     "d1/authority.rs",
     "d1/catalog.rs",
+    "d1/catalog_successor.rs",
     "d1/compatibility.rs",
     "d1/model.rs",
     "d1/plan.rs",
@@ -107,8 +108,12 @@ REQUIRED_D1_MARKERS = (
     '"D1_REPOSITORY_PROJECTION"',
     '"tools/opsctl/src/d1"',
     '"migrations/d1"',
+    '"migrations/d1-successor"',
     '"migrations/resolver-d1"',
+    '"catalog-successor-v1"',
     '"0026_outbound_mail_intents.sql"',
+    '"0027_pas2_payload_fingerprint_expand.sql"',
+    '"0032_pas2_payload_fingerprint_contract.sql"',
     '"0004_refresh_owner_hmac_version.sql"',
     '"4d1d8b8d3bba5d0903385d05fc18e0036628ff1123e0e26e9a080a340f7b5e2e"',
     '"98fd6f91a839223b06c441df4901dbd4fda8e69f2f90606f00e43faad91877ec"',
@@ -417,6 +422,7 @@ def validate_d1_projection(payload: dict[str, Any]) -> None:
         fail("typed D1 semantic authority drifted")
     if payload.get("executable_schema_authority") != [
         "migrations/d1",
+        "migrations/d1-successor",
         "migrations/resolver-d1",
     ]:
         fail("D1 executable schema authority drifted")
@@ -436,6 +442,35 @@ def validate_d1_projection(payload: dict[str, Any]) -> None:
         contract = component.get("release_schema_contract")
         if not isinstance(contract, dict) or contract.get("database_component") != component_id:
             fail(f"typed D1 {component_id} release contract is missing or mismatched")
+
+    catalog = by_id["catalog"]
+    if catalog.get("migration_root") != "migrations/d1":
+        fail("Catalog legacy migration root drifted")
+    if catalog.get("successor_migration_root") != "migrations/d1-successor":
+        fail("Catalog successor migration root drifted")
+    if catalog.get("migration_lineage") != "catalog-successor-v1":
+        fail("Catalog successor lineage identity drifted")
+    if catalog.get("current_repository_revision") != "0032_pas2_payload_fingerprint_contract.sql":
+        fail("Catalog successor current repository revision drifted")
+    if catalog.get("migration_count") != 32 or catalog.get("post_epoch_migration_count") != 6:
+        fail("Catalog successor migration cardinality drifted")
+    legacy = catalog.get("legacy_history")
+    if legacy != {
+        "migration_root": "migrations/d1",
+        "current_repository_revision": "0031_device_binding_governance.sql",
+        "immutable": True,
+        "executable_by_successor_lineage": False,
+    }:
+        fail("Catalog accepted legacy-history boundary drifted")
+    catalog_contract = catalog.get("release_schema_contract")
+    if not isinstance(catalog_contract, dict):
+        fail("Catalog successor release contract is missing")
+    if (
+        catalog_contract.get("target_schema_revision") != "0031_device_binding_governance.sql"
+        or catalog_contract.get("supported_schema_min") != "0031_device_binding_governance.sql"
+        or catalog_contract.get("supported_schema_max") != "0032_pas2_payload_fingerprint_contract.sql"
+    ):
+        fail("Catalog successor bounded 0031..0032 release window drifted")
 
 
 def validate(root: Path = ROOT) -> None:
@@ -551,6 +586,10 @@ def self_test() -> None:
     with tempfile.TemporaryDirectory(prefix="opsctl-d1-negative-") as temporary:
         fixture = Path(temporary)
         shutil.copytree(ROOT / "migrations" / "d1", fixture / "migrations" / "d1")
+        shutil.copytree(
+            ROOT / "migrations" / "d1-successor",
+            fixture / "migrations" / "d1-successor",
+        )
         shutil.copytree(ROOT / "migrations" / "resolver-d1", fixture / "migrations" / "resolver-d1")
         migration = fixture / "migrations" / "d1" / "0001_catalog.sql"
         migration.write_bytes(migration.read_bytes() + b"\n-- tampered\n")
@@ -558,7 +597,8 @@ def self_test() -> None:
 
     print(
         "opsctl shell/core purity, approved capability-policy dependency direction, Product Runtime "
-        "dependency isolation, typed D1 catalog, historical-anchor and dependency negative fixtures passed."
+        "dependency isolation, typed D1 successor lineage, immutable legacy anchors and dependency "
+        "negative fixtures passed."
     )
 
 
@@ -572,8 +612,8 @@ def main() -> int:
         validate()
         print(
             "opsctl remains native, read-only and provider-free; opsctl-core stays pure and consumes "
-            "only the approved capability-policy owner; Product Runtime remains independent; D1 history "
-            "is derived from canonical SQL under compact typed historical anchors."
+            "only the approved capability-policy owner; Product Runtime remains independent; Catalog "
+            "uses one bounded successor lineage over immutable legacy history."
         )
     return 0
 

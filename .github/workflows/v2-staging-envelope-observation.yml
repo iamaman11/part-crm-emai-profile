@@ -6,6 +6,12 @@ on:
     branches:
       - main
   workflow_dispatch:
+    inputs:
+      phase_c_release_set_id:
+        description: Optional exact deployed Release Set v3 to prove Phase C without mutation
+        required: false
+        default: ''
+        type: string
 
 permissions:
   contents: read
@@ -32,8 +38,13 @@ jobs:
           EXPECTED_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: python -c "import os, subprocess; actual = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(); expected = os.environ['EXPECTED_SOURCE_SHA']; assert actual == expected, f'expected {expected}, got {actual}'"
 
-      - name: Prove V2 staging observation adapter fails closed and redacts sensitive values
-        run: python scripts/v2-staging-envelope-observation.py --self-test
+      - name: Prove V2 staging observation adapters fail closed
+        run: |
+          set -euo pipefail
+          python scripts/v2-staging-envelope-observation.py --self-test
+          python scripts/v2-phase-c-contract-evidence.py --self-test
+          python scripts/deployment-identity-ar11.py --self-test
+          cargo build --locked --manifest-path tools/opsctl/Cargo.toml --examples
 
   observe:
     name: V2 Staging Envelope Hosted Observation
@@ -88,7 +99,8 @@ jobs:
           raw="$RUNNER_TEMP/v2-staging-envelope-raw"
           evidence="artifacts/v2-staging-envelope-observation"
           policies="$raw/policies"
-          mkdir -p "$raw" "$policies" "$evidence"
+          lineage="$raw/catalog-successor-lineage"
+          mkdir -p "$raw" "$policies" "$lineage" "$evidence"
           manifest="$raw/deploy-manifest.json"
           printf '%s' "$CLOUDFLARE_DEPLOY_MANIFEST_JSON" > "$manifest"
 
@@ -110,6 +122,33 @@ jobs:
           print(parsed.hostname.rstrip('.'))
           PY
           )"
+
+          env -u CLOUDFLARE_OBSERVE_API_TOKEN -u CLOUDFLARE_ZERO_TRUST_OBSERVE_API_TOKEN \
+            -u CLOUDFLARE_API_TOKEN -u CLOUDFLARE_ACCOUNT_ID \
+            cargo run --locked --quiet --manifest-path tools/opsctl/Cargo.toml -- --root . d1 repository \
+            > "$raw/d1-repository.json"
+          python - "$raw/d1-repository.json" "$lineage" <<'PY'
+          import json, shutil, sys
+          from pathlib import Path
+          projection = json.load(open(sys.argv[1], encoding='utf-8'))
+          output = Path(sys.argv[2])
+          matches = [item for item in projection.get('components', []) if item.get('component_id') == 'catalog']
+          if len(matches) != 1:
+              raise SystemExit('typed Catalog projection missing/ambiguous')
+          sources = matches[0].get('executable_migration_sources')
+          if not isinstance(sources, list) or not sources:
+              raise SystemExit('typed Catalog executable_migration_sources missing')
+          for item in sources:
+              name = item.get('migration_file')
+              root = item.get('source_root')
+              if root not in {'migrations/d1', 'migrations/d1-successor'} or not isinstance(name, str):
+                  raise SystemExit('typed Catalog migration source escaped governed roots')
+              source = Path(root) / name
+              target = output / name
+              if source.is_symlink() or not source.is_file() or target.exists():
+                  raise SystemExit(f'invalid typed Catalog migration source: {source}')
+              shutil.copyfile(source, target)
+          PY
 
           verify_code="$(curl --silent --show-error --output "$raw/zero-trust-token-verify.json" --write-out '%{http_code}' \
             -H "Authorization: Bearer $CLOUDFLARE_ZERO_TRUST_OBSERVE_API_TOKEN" \
@@ -164,6 +203,7 @@ jobs:
           CLOUDFLARE_API_TOKEN="$CLOUDFLARE_OBSERVE_API_TOKEN" CLOUDFLARE_ACCOUNT_ID="$account_id" \
             npx --yes wrangler@4.94.0 d1 execute "$d1_database_name" --remote \
               --command 'SELECT name FROM d1_migrations ORDER BY name' --json \
+              --experimental-provision=false --experimental-auto-create=false \
               > "$raw/d1-ledger.json"
 
           observed_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
@@ -177,7 +217,7 @@ jobs:
             --certificates "$raw/access-certificates.json" \
             --policies-dir "$policies" \
             --d1-ledger "$raw/d1-ledger.json" \
-            --migrations-dir migrations/d1 \
+            --migrations-dir "$lineage" \
             --output "$evidence/evidence.json"
 
           SOURCE_SHA="$SOURCE_SHA" jq -e \
@@ -196,3 +236,167 @@ jobs:
       - name: Remove raw provider observations from runner temp
         if: always()
         run: rm -rf "$RUNNER_TEMP/v2-staging-envelope-raw"
+
+  phase-c:
+    name: V2 Phase C Mechanical Contract Evidence
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.phase_c_release_set_id != ''
+    needs: contract
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    environment: staging
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RELEASE_SET_ID: ${{ inputs.phase_c_release_set_id }}
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_OBSERVE_API_TOKEN }}
+      CLOUDFLARE_DEPLOY_MANIFEST_JSON: ${{ secrets.CLOUDFLARE_DEPLOY_MANIFEST_JSON }}
+    steps:
+      - name: Checkout exact current accepted-main policy and source
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify exact source checkout
+        env:
+          EXPECTED_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: python -c "import os, subprocess; actual = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(); expected = os.environ['EXPECTED_SOURCE_SHA']; assert actual == expected, f'expected {expected}, got {actual}'"
+
+      - name: Require exact current-main Release B identity
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = refs/heads/main
+          test "$GITHUB_EVENT_NAME" = workflow_dispatch
+          [[ "$RELEASE_SET_ID" =~ ^release-set-v3-sha256-[0-9a-f]{64}$ ]]
+          test -n "$CLOUDFLARE_API_TOKEN"
+          test -n "$CLOUDFLARE_DEPLOY_MANIFEST_JSON"
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          gh api "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_SET_ID" > "$RUNNER_TEMP/phase-c-release-api.json"
+          release_source="$(jq -r '.target_commitish' "$RUNNER_TEMP/phase-c-release-api.json")"
+          [[ "$release_source" =~ ^[0-9a-f]{40}$ ]]
+          test "$release_source" = "$GITHUB_SHA"
+
+      - name: Set up pinned Node for read-only Wrangler observation
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
+        with:
+          node-version: '24.19.0'
+          package-manager-cache: false
+
+      - name: Verify immutable Release B and extract exact Catalog release manifest
+        run: |
+          set -euo pipefail
+          asset_root="$RUNNER_TEMP/phase-c-assets"
+          release_root="$RUNNER_TEMP/phase-c-release-set"
+          mkdir -p "$asset_root"
+          gh release download "$RELEASE_SET_ID" --repo "$GITHUB_REPOSITORY" --dir "$asset_root"
+          bash scripts/release-set-assets-ar11.sh materialize current-v3 "$RELEASE_SET_ID" "$asset_root" "$release_root"
+          test "$(jq -r '.release_set_id' "$release_root/release-set.json")" = "$RELEASE_SET_ID"
+          cargo run --locked --quiet --manifest-path tools/opsctl/Cargo.toml -- \
+            --root . release verify --release-set "$release_root/release-set.json" \
+            --source-root . --artifact-root "$release_root" \
+            | jq -e '.decision == "VALID" and .release_set_schema_version == 3 and .mutation_executed == false' >/dev/null
+          control_extract="$RUNNER_TEMP/phase-c-control-release"
+          mkdir -p "$control_extract"
+          tar -xf "$release_root/components/control-plane.tar" -C "$control_extract"
+          control_manifest="$(find "$control_extract" -type f -name release-manifest.json -print -quit)"
+          test -n "$control_manifest"
+          echo "CONTROL_RELEASE_MANIFEST=$control_manifest" >> "$GITHUB_ENV"
+
+      - name: Collect exact pre-CONTRACT ledger and native evidence bindings
+        run: |
+          set -euo pipefail
+          umask 077
+          raw="$RUNNER_TEMP/v2-phase-c-raw"
+          mkdir -p "$raw" artifacts/v2-phase-c-contract-evidence
+          manifest="$raw/deploy-manifest.json"
+          printf '%s' "$CLOUDFLARE_DEPLOY_MANIFEST_JSON" > "$manifest"
+          account_id="$(jq -er '.control_plane.account_id // .account_id | select(type == "string" and length == 32)' "$manifest")"
+          database_name="$(jq -er '.control_plane.d1_database_name // .d1_database_name | select(type == "string" and length > 0)' "$manifest")"
+          worker_name="$(jq -er '.control_plane.worker_name // .worker_name | select(type == "string" and length > 0)' "$manifest")"
+          {
+            echo "PHASE_C_RAW=$raw"
+            echo "PHASE_C_ACCOUNT_ID=$account_id"
+            echo "PHASE_C_DATABASE_NAME=$database_name"
+            echo "PHASE_C_WORKER_NAME=$worker_name"
+          } >> "$GITHUB_ENV"
+
+          CLOUDFLARE_ACCOUNT_ID="$account_id" npx --yes wrangler@4.94.0 d1 execute "$database_name" --remote \
+            --command 'SELECT id, name FROM d1_migrations ORDER BY id' --json \
+            --experimental-provision=false --experimental-auto-create=false \
+            > "$raw/catalog-ledger.json"
+          env -u CLOUDFLARE_API_TOKEN -u CLOUDFLARE_ACCOUNT_ID cargo run --locked --quiet \
+            --manifest-path tools/opsctl/Cargo.toml --example d1-contract-bindings -- \
+            --root . --ledger-json "$raw/catalog-ledger.json" --release-manifest "$CONTROL_RELEASE_MANIFEST" \
+            > "$raw/contract-bindings.json"
+
+      - name: Observe sole deployed Worker version before quiescence interval
+        run: |
+          set -euo pipefail
+          code="$(curl --silent --show-error --output "$PHASE_C_RAW/deployments-before-api.json" --write-out '%{http_code}' \
+            -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+            "https://api.cloudflare.com/client/v4/accounts/$PHASE_C_ACCOUNT_ID/workers/scripts/$PHASE_C_WORKER_NAME/deployments")"
+          test "$code" = 200
+          jq -e '.success == true and (.errors | length) == 0 and (.result.deployments | type == "array") and (.result.deployments | length) > 0' \
+            "$PHASE_C_RAW/deployments-before-api.json" >/dev/null
+          jq '.result.deployments[0]' "$PHASE_C_RAW/deployments-before-api.json" > "$PHASE_C_RAW/deployment-before.json"
+          python scripts/deployment-identity-ar11.py \
+            --status "$PHASE_C_RAW/deployment-before.json" --output "$PHASE_C_RAW/identity-before.json"
+          echo "PHASE_C_FIRST_OBSERVED_AT=$(date -u +%s)" >> "$GITHUB_ENV"
+
+      - name: Establish bounded quiescence observation interval
+        run: sleep 30
+
+      - name: Reobserve exact same sole Worker version and build Phase C evidence
+        run: |
+          set -euo pipefail
+          code="$(curl --silent --show-error --output "$PHASE_C_RAW/deployments-after-api.json" --write-out '%{http_code}' \
+            -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+            "https://api.cloudflare.com/client/v4/accounts/$PHASE_C_ACCOUNT_ID/workers/scripts/$PHASE_C_WORKER_NAME/deployments")"
+          test "$code" = 200
+          jq -e '.success == true and (.errors | length) == 0 and (.result.deployments | type == "array") and (.result.deployments | length) > 0' \
+            "$PHASE_C_RAW/deployments-after-api.json" >/dev/null
+          jq '.result.deployments[0]' "$PHASE_C_RAW/deployments-after-api.json" > "$PHASE_C_RAW/deployment-after.json"
+          python scripts/deployment-identity-ar11.py \
+            --status "$PHASE_C_RAW/deployment-after.json" --output "$PHASE_C_RAW/identity-after.json"
+          observed_at="$(date -u +%s)"
+          python scripts/v2-phase-c-contract-evidence.py \
+            --root . \
+            --expected-source-sha "$GITHUB_SHA" \
+            --expected-release-set-id "$RELEASE_SET_ID" \
+            --first-observed-at-unix-seconds "$PHASE_C_FIRST_OBSERVED_AT" \
+            --observed-at-unix-seconds "$observed_at" \
+            --deployment-before "$PHASE_C_RAW/deployment-before.json" \
+            --deployment-after "$PHASE_C_RAW/deployment-after.json" \
+            --identity-before "$PHASE_C_RAW/identity-before.json" \
+            --identity-after "$PHASE_C_RAW/identity-after.json" \
+            --ledger-json "$PHASE_C_RAW/catalog-ledger.json" \
+            --bindings-json "$PHASE_C_RAW/contract-bindings.json" \
+            --output artifacts/v2-phase-c-contract-evidence/contract-transition-evidence.json \
+            --details-output artifacts/v2-phase-c-contract-evidence/mechanical-proof-details.json
+
+          env -u CLOUDFLARE_API_TOKEN -u CLOUDFLARE_ACCOUNT_ID cargo run --locked --quiet \
+            --manifest-path tools/opsctl/Cargo.toml --example d1-contract-transition -- \
+            --root . \
+            --ledger-json "$PHASE_C_RAW/catalog-ledger.json" \
+            --release-manifest "$CONTROL_RELEASE_MANIFEST" \
+            --evidence-json artifacts/v2-phase-c-contract-evidence/contract-transition-evidence.json \
+            --evaluated-at-unix-seconds "$observed_at" \
+            --expected-source-sha "$GITHUB_SHA" \
+            --expected-release-set-id "$RELEASE_SET_ID" \
+            > artifacts/v2-phase-c-contract-evidence/native-contract-transition.json
+          jq -e \
+            '.allowed == true and .command == "d1 contract-transition" and .planned_migrations == ["0032_pas2_payload_fingerprint_contract.sql"] and .recovery_strategy == "FAIL_FORWARD_ONLY" and .mutation_executed == false' \
+            artifacts/v2-phase-c-contract-evidence/native-contract-transition.json >/dev/null
+          cp "$CONTROL_RELEASE_MANIFEST" artifacts/v2-phase-c-contract-evidence/catalog-release-manifest.json
+
+      - name: Publish secret-free Phase C contract evidence
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: v2-phase-c-contract-evidence-${{ inputs.phase_c_release_set_id }}-${{ github.sha }}
+          path: artifacts/v2-phase-c-contract-evidence
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Remove raw Phase C provider observations
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/v2-phase-c-raw" "$RUNNER_TEMP/phase-c-assets" "$RUNNER_TEMP/phase-c-release-set" "$RUNNER_TEMP/phase-c-control-release"

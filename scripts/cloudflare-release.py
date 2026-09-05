@@ -765,6 +765,7 @@ def create_mock_repo(root: Path) -> None:
     (root / "openapi" / "v1" / "openapi.json").write_text('{"openapi":"3.1.0"}\n', encoding="utf-8")
     (root / "openapi" / "v1" / "fragments" / "fixture.json").write_text('{"fixture":true}\n', encoding="utf-8")
     shutil.copytree(ROOT / "migrations" / "d1", root / "migrations" / "d1")
+    shutil.copytree(ROOT / "migrations" / "d1-successor", root / "migrations" / "d1-successor")
     shutil.copytree(ROOT / "migrations" / "resolver-d1", root / "migrations" / "resolver-d1")
     (root / "frontend" / "package.json").write_text(
         json.dumps(
@@ -830,9 +831,9 @@ def self_test() -> None:
             schema_contract.get("database_component") == "catalog"
             and schema_contract.get("target_schema_revision") == "0031_device_binding_governance.sql"
             and schema_contract.get("supported_schema_min") == "0031_device_binding_governance.sql"
-            and schema_contract.get("supported_schema_max") == "0031_device_binding_governance.sql"
+            and schema_contract.get("supported_schema_max") == "0032_pas2_payload_fingerprint_contract.sql"
         ):
-            fail("Catalog fixture release did not bind the exact conservative schema contract")
+            fail("Catalog fixture release did not bind the exact bounded 0031..0032 schema contract")
 
         mutated_frontend = first_dir / "frontend" / "index.html"
         mutated_frontend.write_text("mutated\n", encoding="utf-8")

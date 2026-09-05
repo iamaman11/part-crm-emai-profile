@@ -72,25 +72,74 @@ jobs:
             --ledger-json tests/d1-evolution/valid-exact-resolver-ledger.json \
             --release-manifest tests/d1-evolution/resolver-release-compatible.json | python -m json.tool >/dev/null
 
+      - name: Materialize exact Catalog executable lineage from typed projection
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts/d1-evolution .wrangler/ar9-catalog/migrations .wrangler/ar9-catalog/state
+          cargo run --locked --quiet --manifest-path tools/opsctl/Cargo.toml -- --root . d1 repository \
+            > artifacts/d1-evolution/repository-projection.json
+          python - <<'PY'
+          import json
+          import shutil
+          from pathlib import Path
+
+          projection = json.loads(Path('artifacts/d1-evolution/repository-projection.json').read_text())
+          catalog = next(component for component in projection['components'] if component['component_id'] == 'catalog')
+          sources = catalog['executable_migration_sources']
+          assert len(sources) == 32, sources
+          output = Path('.wrangler/ar9-catalog/migrations')
+          names = []
+          for item in sources:
+              name = item['migration_file']
+              source_root = item['source_root']
+              assert source_root in {'migrations/d1', 'migrations/d1-successor'}, item
+              source = Path(source_root) / name
+              assert source.is_file() and not source.is_symlink(), source
+              target = output / name
+              assert not target.exists(), target
+              shutil.copyfile(source, target)
+              names.append(name)
+          assert names[26] == '0027_pas2_payload_fingerprint_expand.sql', names[26]
+          assert names[-1] == '0032_pas2_payload_fingerprint_contract.sql', names[-1]
+          assert '0027_pas2_payload_fingerprint.sql' not in names, names
+          assert Path('migrations/d1/0027_pas2_payload_fingerprint.sql').is_file()
+          assert not (output / '0027_pas2_payload_fingerprint.sql').exists()
+          assert sorted(path.name for path in output.glob('*.sql')) == sorted(names)
+          PY
+          cat > .wrangler/ar9-catalog/wrangler.jsonc <<'JSON'
+          {
+            "name": "ar9-catalog-successor-proof",
+            "main": "../../tests/d1-runtime/worker.mjs",
+            "compatibility_date": "2026-08-05",
+            "d1_databases": [
+              {
+                "binding": "CATALOG_DB",
+                "database_name": "ar9-catalog-successor-proof",
+                "database_id": "00000000-0000-0000-0000-000000000001",
+                "migrations_dir": "migrations"
+              }
+            ]
+          }
+          JSON
+
       - name: Prove Catalog pinned-Wrangler migration and replay no-op
         run: |
           npx --yes wrangler@4.94.0 d1 migrations apply CATALOG_DB \
             --local \
-            --config deploy/cloudflare/wrangler.d1-test.jsonc \
-            --persist-to .wrangler/ar9-catalog \
+            --config .wrangler/ar9-catalog/wrangler.jsonc \
+            --persist-to .wrangler/ar9-catalog/state \
             --experimental-provision=false \
             --experimental-auto-create=false
           npx --yes wrangler@4.94.0 d1 migrations apply CATALOG_DB \
             --local \
-            --config deploy/cloudflare/wrangler.d1-test.jsonc \
-            --persist-to .wrangler/ar9-catalog \
+            --config .wrangler/ar9-catalog/wrangler.jsonc \
+            --persist-to .wrangler/ar9-catalog/state \
             --experimental-provision=false \
             --experimental-auto-create=false
-          mkdir -p artifacts/d1-evolution
           npx --yes wrangler@4.94.0 d1 execute CATALOG_DB \
             --local \
-            --config deploy/cloudflare/wrangler.d1-test.jsonc \
-            --persist-to .wrangler/ar9-catalog \
+            --config .wrangler/ar9-catalog/wrangler.jsonc \
+            --persist-to .wrangler/ar9-catalog/state \
             --command "SELECT id, name FROM d1_migrations ORDER BY id" \
             --json \
             --experimental-provision=false \
@@ -147,9 +196,12 @@ jobs:
           mkdir -p .wrangler/ar9-post-epoch-catalog/migrations .wrangler/ar9-post-epoch-catalog/state
           mkdir -p .wrangler/ar9-post-epoch-resolver/migrations .wrangler/ar9-post-epoch-resolver/state
 
-          cp migrations/d1/*.sql .wrangler/ar9-post-epoch-catalog/migrations/
+          cp .wrangler/ar9-catalog/migrations/*.sql .wrangler/ar9-post-epoch-catalog/migrations/
           cp tests/d1-evolution/post-epoch/catalog/0027_post_epoch_probe.sql \
-            .wrangler/ar9-post-epoch-catalog/migrations/0032_post_epoch_probe.sql
+            .wrangler/ar9-post-epoch-catalog/migrations/0033_post_epoch_probe.sql
+          test ! -e .wrangler/ar9-post-epoch-catalog/migrations/0027_pas2_payload_fingerprint.sql
+          test -e .wrangler/ar9-post-epoch-catalog/migrations/0027_pas2_payload_fingerprint_expand.sql
+          test -e .wrangler/ar9-post-epoch-catalog/migrations/0032_pas2_payload_fingerprint_contract.sql
           cp migrations/resolver-d1/*.sql .wrangler/ar9-post-epoch-resolver/migrations/
           cp tests/d1-evolution/post-epoch/resolver/0005_post_epoch_probe.sql \
             .wrangler/ar9-post-epoch-resolver/migrations/
@@ -245,8 +297,11 @@ jobs:
 
           catalog_rows = catalog[0]['results']
           resolver_rows = resolver[0]['results']
-          assert len(catalog_rows) == 32, catalog_rows
-          assert catalog_rows[-1]['name'] == '0032_post_epoch_probe.sql', catalog_rows[-1]
+          assert len(catalog_rows) == 33, catalog_rows
+          assert catalog_rows[26]['name'] == '0027_pas2_payload_fingerprint_expand.sql', catalog_rows[26]
+          assert catalog_rows[31]['name'] == '0032_pas2_payload_fingerprint_contract.sql', catalog_rows[31]
+          assert catalog_rows[-1]['name'] == '0033_post_epoch_probe.sql', catalog_rows[-1]
+          assert all(row['name'] != '0027_pas2_payload_fingerprint.sql' for row in catalog_rows), catalog_rows
           assert len(resolver_rows) == 5, resolver_rows
           assert resolver_rows[-1]['name'] == '0005_post_epoch_probe.sql', resolver_rows[-1]
           assert catalog_table[0]['results'][0]['present'] == 1, catalog_table
