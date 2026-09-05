@@ -228,14 +228,14 @@ impl GateResult {
 #[derive(Debug, PartialEq, Eq)]
 pub struct D1Error {
     message: String,
-    gate_result: GateResult,
+    gate_result: Box<GateResult>,
 }
 
 impl D1Error {
     pub(super) fn new(message: impl Into<String>) -> Self {
         let message = message.into();
         Self {
-            gate_result: GateResult::error(message.clone()),
+            gate_result: Box::new(GateResult::error(message.clone())),
             message,
         }
     }
@@ -243,7 +243,7 @@ impl D1Error {
     pub(super) fn blocked(gate_result: GateResult) -> Self {
         Self {
             message: gate_result.summary.clone(),
-            gate_result,
+            gate_result: Box::new(gate_result),
         }
     }
 
