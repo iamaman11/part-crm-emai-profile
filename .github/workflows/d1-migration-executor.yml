@@ -245,6 +245,7 @@ jobs:
           test "$(npm --version)" = "11.17.0"
           test "$(npx --yes wrangler@4.94.0 --version)" = "4.94.0"
           python scripts/d1-executor-plan.py self-test
+          python scripts/d1-gate-diagnostics.py self-test
           env -u CLOUDFLARE_API_TOKEN -u CLOUDFLARE_ACCOUNT_ID python scripts/check-opsctl-readonly.py
           env -u CLOUDFLARE_API_TOKEN -u CLOUDFLARE_ACCOUNT_ID cargo build --locked --manifest-path tools/opsctl/Cargo.toml
 
@@ -347,6 +348,10 @@ jobs:
         id: policy
         run: |
           set -euo pipefail
+          diagnostics="artifacts/d1-migration/d1-gate-diagnostics.jsonl"
+          : > "$diagnostics"
+
+          set +e
           if [ "$TRANSITION_MODE" = ordinary ]; then
             env -u CLOUDFLARE_API_TOKEN -u CLOUDFLARE_ACCOUNT_ID cargo run --locked --quiet --manifest-path tools/opsctl/Cargo.toml -- --root . d1 plan \
               --component "$COMPONENT" \
@@ -356,6 +361,7 @@ jobs:
               --known-good-manifest artifacts/d1-migration/known-good-release.json \
               --preconditions-json artifacts/d1-migration/preconditions.json \
               > artifacts/d1-migration/plan.json
+            plan_rc=$?
           else
             evaluated_at="$(date -u +%s)"
             env -u CLOUDFLARE_API_TOKEN -u CLOUDFLARE_ACCOUNT_ID cargo run --locked --quiet \
@@ -368,28 +374,51 @@ jobs:
               --expected-source-sha "$SOURCE_SHA" \
               --expected-release-set-id "$EXPECTED_RELEASE_SET_ID" \
               > artifacts/d1-migration/plan.json
+            plan_rc=$?
           fi
+          set -e
+          if [ "$plan_rc" -ne 0 ]; then
+            python scripts/d1-gate-diagnostics.py record \
+              --diagnostics "$diagnostics" \
+              --gate native-plan-command \
+              --reason-code D1_NATIVE_PLAN_COMMAND_FAILED \
+              --exit-code "$plan_rc" \
+              --detail 'credential-free native plan command returned non-zero'
+            exit "$plan_rc"
+          fi
+
+          set +e
           env -u CLOUDFLARE_API_TOKEN -u CLOUDFLARE_ACCOUNT_ID cargo run --locked --quiet --manifest-path tools/opsctl/Cargo.toml -- --root . d1 compatibility \
             --component "$COMPONENT" \
             --ledger-json artifacts/d1-migration/ledger-before.json \
             --release-manifest artifacts/d1-migration/target-release.json \
             > artifacts/d1-migration/compatibility.json
-          python - <<'PY'
-          import json
-          from pathlib import Path
-          plan = json.loads(Path('artifacts/d1-migration/plan.json').read_text())
-          compatibility = json.loads(Path('artifacts/d1-migration/compatibility.json').read_text())
-          assert plan['allowed'] is True, plan
-          assert compatibility['allowed'] is True, compatibility
-          blocked = {'CODE_ROLLBACK_BLOCKED', 'FAIL_FORWARD_REQUIRED', 'CONTRACT_BLOCKED', 'RECOVERY_REQUIRED'}
-          assert plan['decision'] not in blocked, plan
-          if plan['command'] == 'd1 contract-transition':
-              assert plan['planned_migrations'] == ['0032_pas2_payload_fingerprint_contract.sql'], plan
-              assert plan['recovery_strategy'] == 'FAIL_FORWARD_ONLY', plan
-          required = bool(plan.get('planned_migrations'))
-          Path('/tmp/d1-policy-output').write_text(f"apply_required={'true' if required else 'false'}\n", encoding='utf-8')
-          PY
-          cat /tmp/d1-policy-output >> "$GITHUB_OUTPUT"
+          compatibility_rc=$?
+          set -e
+          if [ "$compatibility_rc" -ne 0 ]; then
+            python scripts/d1-gate-diagnostics.py record \
+              --diagnostics "$diagnostics" \
+              --gate compatibility-command \
+              --reason-code D1_COMPATIBILITY_COMMAND_FAILED \
+              --exit-code "$compatibility_rc" \
+              --detail 'credential-free compatibility command returned non-zero'
+            exit "$compatibility_rc"
+          fi
+
+          python scripts/d1-gate-diagnostics.py evaluate \
+            --plan artifacts/d1-migration/plan.json \
+            --compatibility artifacts/d1-migration/compatibility.json \
+            --diagnostics "$diagnostics" \
+            --github-output "$GITHUB_OUTPUT"
+
+      - name: Upload metadata-only D1 gate diagnostics on policy failure
+        if: failure() && steps.policy.outcome == 'failure'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: d1-gate-diagnostics-${{ inputs.environment }}-${{ inputs.component }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: artifacts/d1-migration/d1-gate-diagnostics.jsonl
+          if-no-files-found: error
+          retention-days: 30
 
       - name: Materialize exactly native planned_migrations from typed successor projection
         run: |
