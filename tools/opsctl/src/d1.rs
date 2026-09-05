@@ -10,6 +10,8 @@ mod catalog_legacy;
 mod compatibility;
 #[path = "d1/contract_transition.rs"]
 mod contract_transition;
+#[path = "d1/executor_admission.rs"]
+pub mod executor_admission;
 #[path = "d1/model.rs"]
 mod model;
 #[path = "d1/plan.rs"]
