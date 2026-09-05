@@ -29,26 +29,6 @@ pub(super) fn required_string(
         .ok_or_else(|| D1Error::new(format!("required string field {key} is missing")))
 }
 
-pub(super) fn required_string_array(
-    object: &serde_json::Map<String, Value>,
-    key: &str,
-) -> Result<Vec<String>, D1Error> {
-    let values = object
-        .get(key)
-        .and_then(Value::as_array)
-        .ok_or_else(|| D1Error::new(format!("required array field {key} is missing")))?;
-    let mut result = Vec::with_capacity(values.len());
-    for value in values {
-        let item = value
-            .as_str()
-            .filter(|item| !item.is_empty())
-            .ok_or_else(|| D1Error::new(format!("{key} must contain non-empty strings")))?;
-        result.push(item.to_owned());
-    }
-    ensure_unique(&result, key)?;
-    Ok(result)
-}
-
 pub(super) fn resolve_input(root: &Path, path: &Path) -> PathBuf {
     if path.is_absolute() {
         path.to_path_buf()
