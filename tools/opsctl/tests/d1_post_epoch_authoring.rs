@@ -149,7 +149,10 @@ fn patch_resolver_future_spec(root: &Path) -> Result<(), Box<dyn Error>> {
     }
 "#;
     if source.matches(current).count() != 1 {
-        return Err("canonical Resolver future-migration dispatch changed; update the authoring proof".into());
+        return Err(
+            "canonical Resolver future-migration dispatch changed; update the authoring proof"
+                .into(),
+        );
     }
     source = source.replacen(current, patched, 1);
     fs::write(path, source)?;
@@ -197,7 +200,9 @@ fn patch_catalog_future_spec(root: &Path) -> Result<(), Box<dyn Error>> {
 ];
 "#;
     if source.matches(current).count() != 1 {
-        return Err("canonical Catalog successor policy changed; update the authoring proof".into());
+        return Err(
+            "canonical Catalog successor policy changed; update the authoring proof".into(),
+        );
     }
     source = source.replacen(current, patched, 1);
     fs::write(path, source)?;
@@ -253,7 +258,11 @@ fn catalog_baseline_names(root: &Path) -> Result<Vec<String>, Box<dyn Error>> {
     baseline.push(CATALOG_SUCCESSOR_EXPAND_REVISION.to_owned());
     baseline.extend_from_slice(&legacy[27..31]);
     baseline.push(CATALOG_BASELINE_REVISION.to_owned());
-    if baseline.len() != 32 || baseline.iter().any(|name| name == CATALOG_LEGACY_PAS2_REVISION) {
+    if baseline.len() != 32
+        || baseline
+            .iter()
+            .any(|name| name == CATALOG_LEGACY_PAS2_REVISION)
+    {
         return Err("Catalog executable baseline did not exclude superseded legacy 0027".into());
     }
     Ok(baseline)
@@ -346,13 +355,25 @@ fn prove_future_case(
         projected["post_epoch_migration_count"],
         case.expected_post_epoch_count
     );
-    assert_eq!(projected["current_repository_revision"], case.future_revision);
+    assert_eq!(
+        projected["current_repository_revision"],
+        case.future_revision
+    );
     assert_ne!(projected["history_digest"], case.frozen_epoch_digest);
 
     let target_contract = projected["release_schema_contract"].clone();
-    assert_eq!(target_contract["target_schema_revision"], case.future_revision);
-    assert_eq!(target_contract["supported_schema_min"], case.future_revision);
-    assert_eq!(target_contract["supported_schema_max"], case.future_revision);
+    assert_eq!(
+        target_contract["target_schema_revision"],
+        case.future_revision
+    );
+    assert_eq!(
+        target_contract["supported_schema_min"],
+        case.future_revision
+    );
+    assert_eq!(
+        target_contract["supported_schema_max"],
+        case.future_revision
+    );
 
     let mut current_contract = target_contract.clone();
     current_contract["target_schema_revision"] = json!(case.current_target_revision);
@@ -393,7 +414,10 @@ fn prove_future_case(
     assert_eq!(compatibility["ledger_state"], "BEHIND_KNOWN_PREFIX");
     assert_eq!(compatibility["decision"], "MIGRATION_REQUIRED");
     assert_eq!(compatibility["allowed"], true);
-    assert_eq!(compatibility["planned_migrations"], json!([case.future_revision]));
+    assert_eq!(
+        compatibility["planned_migrations"],
+        json!([case.future_revision])
+    );
     assert_eq!(
         compatibility["planned_migration_contracts"][0]["migration_class"],
         "EXPAND"
@@ -497,7 +521,10 @@ fn next_catalog_and_first_resolver_migrations_run_through_real_authoring_path()
         .as_array()
         .ok_or("future Catalog source map missing")?;
     assert_eq!(future_sources.len(), 33);
-    assert_eq!(future_sources[32]["migration_file"], CATALOG_FUTURE_REVISION);
+    assert_eq!(
+        future_sources[32]["migration_file"],
+        CATALOG_FUTURE_REVISION
+    );
     assert_eq!(future_sources[32]["source_root"], "migrations/d1-successor");
 
     let canonical_projection: Value = serde_json::from_str(&repository_projection(&repo_root())?)?;
@@ -524,14 +551,54 @@ fn next_catalog_and_first_resolver_migrations_run_through_real_authoring_path()
         RESOLVER_BASELINE_REVISION
     );
 
-    assert!(repo_root().join(format!("migrations/d1/{CATALOG_LEGACY_PAS2_REVISION}")).is_file());
-    assert!(repo_root().join(format!("migrations/d1-successor/{CATALOG_SUCCESSOR_EXPAND_REVISION}")).is_file());
-    assert!(repo_root().join("migrations/d1/0028_profile_assignment_detach.sql").is_file());
-    assert!(repo_root().join("migrations/d1/0029_profile_launch_authority.sql").is_file());
-    assert!(repo_root().join("migrations/d1/0030_profile_generation_successor_commit.sql").is_file());
-    assert!(repo_root().join(format!("migrations/d1/{CATALOG_RUNTIME_TARGET}")).is_file());
-    assert!(repo_root().join(format!("migrations/d1-successor/{CATALOG_BASELINE_REVISION}")).is_file());
-    assert!(!repo_root().join(format!("migrations/d1-successor/{CATALOG_FUTURE_REVISION}")).exists());
-    assert!(!repo_root().join(format!("migrations/resolver-d1/{RESOLVER_FUTURE_REVISION}")).exists());
+    assert!(
+        repo_root()
+            .join(format!("migrations/d1/{CATALOG_LEGACY_PAS2_REVISION}"))
+            .is_file()
+    );
+    assert!(
+        repo_root()
+            .join(format!(
+                "migrations/d1-successor/{CATALOG_SUCCESSOR_EXPAND_REVISION}"
+            ))
+            .is_file()
+    );
+    assert!(
+        repo_root()
+            .join("migrations/d1/0028_profile_assignment_detach.sql")
+            .is_file()
+    );
+    assert!(
+        repo_root()
+            .join("migrations/d1/0029_profile_launch_authority.sql")
+            .is_file()
+    );
+    assert!(
+        repo_root()
+            .join("migrations/d1/0030_profile_generation_successor_commit.sql")
+            .is_file()
+    );
+    assert!(
+        repo_root()
+            .join(format!("migrations/d1/{CATALOG_RUNTIME_TARGET}"))
+            .is_file()
+    );
+    assert!(
+        repo_root()
+            .join(format!(
+                "migrations/d1-successor/{CATALOG_BASELINE_REVISION}"
+            ))
+            .is_file()
+    );
+    assert!(
+        !repo_root()
+            .join(format!("migrations/d1-successor/{CATALOG_FUTURE_REVISION}"))
+            .exists()
+    );
+    assert!(
+        !repo_root()
+            .join(format!("migrations/resolver-d1/{RESOLVER_FUTURE_REVISION}"))
+            .exists()
+    );
     Ok(())
 }
