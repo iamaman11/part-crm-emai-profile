@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+import { execFileSync } from 'node:child_process';
 import { readFile, readdir } from 'node:fs/promises';
 import path from 'node:path';
 import process from 'node:process';
@@ -8,6 +9,7 @@ import { fileURLToPath } from 'node:url';
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const EXECUTOR = '.github/workflows/d1-migration-executor.yml';
 const ADAPTER = 'scripts/d1-executor-plan.py';
+const DIAGNOSTICS_HELPER = 'scripts/d1-gate-diagnostics.py';
 const CONTRACT_TRANSITION = 'tools/opsctl/src/d1/contract_transition.rs';
 const CONTRACT_EXAMPLE = 'tools/opsctl/examples/d1-contract-transition.rs';
 const PROMOTION = '.github/workflows/release-set-promotion.yml';
@@ -19,6 +21,18 @@ const DEPLOY_REF = 'CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}';
 const ORDINARY_CONFIRMATION = 'test "$CONFIRMATION" = "$SOURCE_SHA:$TARGET_ENVIRONMENT:$COMPONENT:$DATABASE_ID"';
 const CONTRACT_CONFIRMATION = 'test "$CONFIRMATION" = "$SOURCE_SHA:$TARGET_ENVIRONMENT:$COMPONENT:$DATABASE_ID:contract:$EXPECTED_RELEASE_SET_ID"';
 const POST_CONTRACT_LEDGER = '--post-ledger-json artifacts/d1-migration/ledger-after.json';
+const DIAGNOSTICS_PATH = 'artifacts/d1-migration/d1-gate-diagnostics.jsonl';
+const DIAGNOSTIC_REASON_CODES = [
+  'D1_NATIVE_PLAN_COMMAND_FAILED',
+  'D1_COMPATIBILITY_COMMAND_FAILED',
+  'D1_NATIVE_PLAN_OUTPUT_INVALID',
+  'D1_NATIVE_PLAN_DENIED',
+  'D1_COMPATIBILITY_OUTPUT_INVALID',
+  'D1_COMPATIBILITY_DENIED',
+  'D1_ROLLBACK_POLICY_BLOCKED',
+  'D1_CONTRACT_PLAN_MIGRATION_MISMATCH',
+  'D1_CONTRACT_RECOVERY_STRATEGY_MISMATCH',
+];
 
 function fail(message) {
   throw new Error(message);
@@ -36,6 +50,18 @@ function replaceFixture(label, text, from, to) {
   const mutated = text.replace(from, to);
   if (mutated === text) fail(`negative protected-executor fixture did not mutate source: ${label}`);
   return mutated;
+}
+
+function runDiagnosticsHelperSelfTest() {
+  const env = { ...process.env };
+  delete env.CLOUDFLARE_API_TOKEN;
+  delete env.CLOUDFLARE_ACCOUNT_ID;
+  const python = process.platform === 'win32' ? 'python' : 'python3';
+  execFileSync(python, [path.join(ROOT, DIAGNOSTICS_HELPER), 'self-test'], {
+    cwd: ROOT,
+    env,
+    stdio: 'inherit',
+  });
 }
 
 async function workflowPaths(root) {
@@ -59,6 +85,7 @@ function validateSharedMutationGroup(executorText, promotionText) {
 async function validateExecutor(text, root = ROOT) {
   const promotionText = await readFile(path.join(root, PROMOTION), 'utf8');
   const adapterText = await readFile(path.join(root, ADAPTER), 'utf8');
+  const diagnosticsText = await readFile(path.join(root, DIAGNOSTICS_HELPER), 'utf8');
   const contractText = await readFile(path.join(root, CONTRACT_TRANSITION), 'utf8');
   const contractExampleText = await readFile(path.join(root, CONTRACT_EXAMPLE), 'utf8');
   validateSharedMutationGroup(text, promotionText);
@@ -86,9 +113,23 @@ async function validateExecutor(text, root = ROOT) {
     "secret_material_recorded': False", 'actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a',
     '--experimental-provision=false', '--experimental-auto-create=false',
     'env -u CLOUDFLARE_API_TOKEN -u CLOUDFLARE_ACCOUNT_ID cargo run', OBSERVE_REF, DEPLOY_REF,
+    'python scripts/d1-gate-diagnostics.py self-test', 'python scripts/d1-gate-diagnostics.py record',
+    'python scripts/d1-gate-diagnostics.py evaluate', DIAGNOSTICS_PATH,
+    'Upload metadata-only D1 gate diagnostics on policy failure',
+    "if: failure() && steps.policy.outcome == 'failure'",
+    'D1_NATIVE_PLAN_COMMAND_FAILED', 'D1_COMPATIBILITY_COMMAND_FAILED',
   ];
   for (const marker of requiredMarkers) {
     if (!text.includes(marker)) fail(`protected D1 executor lost required contract marker: ${marker}`);
+  }
+  for (const reasonCode of DIAGNOSTIC_REASON_CODES) {
+    if (!diagnosticsText.includes(reasonCode)) fail(`D1 diagnostic helper lost stable reason code: ${reasonCode}`);
+  }
+  for (const marker of [
+    'schema_version', 'reason_code', 'exit_code', 'allowed', 'detail',
+    '::error title=', 'GITHUB_STEP_SUMMARY', 'self-test',
+  ]) {
+    if (!diagnosticsText.includes(marker)) fail(`D1 diagnostic helper lost metadata-only contract marker: ${marker}`);
   }
   if (occurrenceCount(text, ORDINARY_CONFIRMATION) !== 2) {
     fail(`ordinary mutation confirmation must be enforced exactly twice; observed=${occurrenceCount(text, ORDINARY_CONFIRMATION)}`);
@@ -184,11 +225,26 @@ async function validateExecutor(text, root = ROOT) {
   if (deploySteps !== 1) fail(`deploy-capable credential must appear exactly once; observed=${deploySteps}`);
 
   const policyIndex = text.indexOf('Run credential-free native plan, compatibility, and rollback-blocker gates');
+  const diagnosticUploadIndex = text.indexOf('Upload metadata-only D1 gate diagnostics on policy failure');
   const materializeIndex = text.indexOf('Materialize exactly native planned_migrations from typed successor projection');
   const firstPendingIndex = text.indexOf('Compare Wrangler pending list to exact native plan with observe credential');
   const deployIndex = text.indexOf(DEPLOY_REF);
-  if (!(policyIndex >= 0 && materializeIndex > policyIndex && firstPendingIndex > materializeIndex && deployIndex > firstPendingIndex)) {
-    fail('exact native policy, bounded materialization and read-only pending proof must all precede deploy credentials');
+  if (!(policyIndex >= 0 && diagnosticUploadIndex > policyIndex && materializeIndex > diagnosticUploadIndex && firstPendingIndex > materializeIndex && deployIndex > firstPendingIndex)) {
+    fail('exact native policy, durable failure diagnostics, bounded materialization and read-only pending proof must all precede deploy credentials');
+  }
+
+  const diagnosticStepEnd = text.indexOf('\n      - name:', diagnosticUploadIndex);
+  const diagnosticUploadStep = text.slice(diagnosticUploadIndex, diagnosticStepEnd < 0 ? text.length : diagnosticStepEnd);
+  for (const marker of [
+    "if: failure() && steps.policy.outcome == 'failure'",
+    DIAGNOSTICS_PATH,
+    'if-no-files-found: error',
+    'retention-days: 30',
+  ]) {
+    if (!diagnosticUploadStep.includes(marker)) fail(`D1 policy failure diagnostic upload lost marker: ${marker}`);
+  }
+  if (diagnosticUploadStep.includes('CLOUDFLARE_API_TOKEN') || diagnosticUploadStep.includes('ledger-before.json')) {
+    fail('D1 policy failure diagnostic upload must remain metadata-only');
   }
 
   const deployStepStart = text.lastIndexOf('\n      - name:', deployIndex);
@@ -239,6 +295,7 @@ async function expectRejected(label, text) {
 }
 
 async function selfTest(text) {
+  runDiagnosticsHelperSelfTest();
   await validateExecutor(text, ROOT);
   const promotionText = await readFile(path.join(ROOT, PROMOTION), 'utf8');
   let mutexRejected = false;
@@ -261,6 +318,10 @@ async function selfTest(text) {
     ['missing Wrangler pending fence', 'd1-executor-plan.py verify-pending', 'd1-executor-plan.py removed-pending-check'],
     ['missing contract confirmation binding', CONTRACT_CONFIRMATION, 'test -n "$CONFIRMATION"'],
     ['missing typed post-contract ledger proof', POST_CONTRACT_LEDGER, '--removed-post-ledger-json'],
+    ['missing plan command diagnostic', 'D1_NATIVE_PLAN_COMMAND_FAILED', 'D1_REMOVED_NATIVE_PLAN_COMMAND_DIAGNOSTIC'],
+    ['missing compatibility command diagnostic', 'D1_COMPATIBILITY_COMMAND_FAILED', 'D1_REMOVED_COMPATIBILITY_COMMAND_DIAGNOSTIC'],
+    ['missing durable diagnostic path', DIAGNOSTICS_PATH, 'artifacts/d1-migration/removed-diagnostics.jsonl'],
+    ['missing diagnostic failure condition', "if: failure() && steps.policy.outcome == 'failure'", "if: steps.policy.outcome == 'success'"],
   ]) {
     await expectRejected(label, replaceFixture(label, text, from, to));
   }
@@ -269,7 +330,7 @@ async function selfTest(text) {
     'second remote apply',
     `${text}\n# npx --yes ${PINNED_WRANGLER} d1 migrations apply X --remote --experimental-provision=false --experimental-auto-create=false\n`,
   );
-  console.log('Protected D1 executor exact-plan, bounded-lineage, typed post-CONTRACT verification, pending-list, confirmation-cardinality and double-ledger-fence negative fixtures passed.');
+  console.log('Protected D1 executor exact-plan, fail-closed diagnostics, bounded-lineage, typed post-CONTRACT verification, pending-list, confirmation-cardinality and double-ledger-fence negative fixtures passed.');
 }
 
 async function main() {
@@ -279,8 +340,9 @@ async function main() {
     return;
   }
   if (process.argv.length > 2) fail(`unknown arguments: ${process.argv.slice(2).join(' ')}`);
+  runDiagnosticsHelperSelfTest();
   await validateExecutor(text, ROOT);
-  console.log('Protected D1 executor contract passed: staging-only, exact native plan materialization, bounded successor lineage, Wrangler pending equality, provider/ledger re-fence, typed post-CONTRACT verification, confirmation cardinality, one remote apply owner, no automatic restore or provisioning.');
+  console.log('Protected D1 executor contract passed: staging-only, fail-closed metadata diagnostics, exact native plan materialization, bounded successor lineage, Wrangler pending equality, provider/ledger re-fence, typed post-CONTRACT verification, confirmation cardinality, one remote apply owner, no automatic restore or provisioning.');
 }
 
 main().catch((error) => {
