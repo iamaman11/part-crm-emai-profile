@@ -24,7 +24,7 @@ jobs:
   route:
     if: >-
       github.event.issue.number == 584 &&
-      startsWith(github.event.comment.body, '/v2-phase-a-d1\n')
+      startsWith(github.event.comment.body, '/v2-phase-a-d1')
     name: Validate exact Phase A command and dispatch canonical executor
     runs-on: ubuntu-24.04
     timeout-minutes: 12
