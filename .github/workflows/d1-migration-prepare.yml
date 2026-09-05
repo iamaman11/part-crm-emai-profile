@@ -5,6 +5,7 @@ on:
     paths:
       - 'scripts/d1-prepare.py'
       - '.github/workflows/d1-migration-prepare.yml'
+      - 'tools/opsctl/examples/d1-transaction-plan.rs'
       - 'tools/opsctl/src/d1.rs'
       - 'tools/opsctl/src/d1/**'
   push:
@@ -13,6 +14,7 @@ on:
     paths:
       - 'scripts/d1-prepare.py'
       - '.github/workflows/d1-migration-prepare.yml'
+      - 'tools/opsctl/examples/d1-transaction-plan.rs'
       - 'tools/opsctl/src/d1.rs'
       - 'tools/opsctl/src/d1/**'
   workflow_dispatch:
@@ -46,6 +48,18 @@ on:
         type: string
       preconditions_json:
         description: Typed D1 preconditions JSON
+        required: true
+        type: string
+      provider_observation_json:
+        description: Strict secret-free ProviderObservationInput JSON for the exact target
+        required: true
+        type: string
+      repository_projection_json:
+        description: Strict typed D1 repository projection JSON from its natural owner
+        required: true
+        type: string
+      transaction_input_json:
+        description: Strict TransactionIdentityInput JSON for the future transaction
         required: true
         type: string
 
@@ -86,6 +100,9 @@ jobs:
       CURRENT_RELEASE_MANIFEST_JSON: ${{ inputs.current_release_manifest_json }}
       KNOWN_GOOD_RELEASE_MANIFEST_JSON: ${{ inputs.known_good_release_manifest_json }}
       PRECONDITIONS_JSON: ${{ inputs.preconditions_json }}
+      PROVIDER_OBSERVATION_JSON: ${{ inputs.provider_observation_json }}
+      REPOSITORY_PROJECTION_JSON: ${{ inputs.repository_projection_json }}
+      TRANSACTION_INPUT_JSON: ${{ inputs.transaction_input_json }}
     steps:
       - name: Reject non-main or non-exact source before prepare
         run: |
@@ -123,6 +140,9 @@ jobs:
               'current-release.json': os.environ['CURRENT_RELEASE_MANIFEST_JSON'],
               'known-good-release.json': os.environ['KNOWN_GOOD_RELEASE_MANIFEST_JSON'],
               'preconditions.json': os.environ['PRECONDITIONS_JSON'],
+              'provider-observation.json': os.environ['PROVIDER_OBSERVATION_JSON'],
+              'repository-projection.json': os.environ['REPOSITORY_PROJECTION_JSON'],
+              'transaction-input.json': os.environ['TRANSACTION_INPUT_JSON'],
           }
           for name, raw in documents.items():
               value = json.loads(raw)
@@ -133,11 +153,13 @@ jobs:
               (root / name).write_text(json.dumps(value, sort_keys=True, indent=2) + '\n', encoding='utf-8')
           PY
 
-      - name: Build pinned credential-free opsctl
+      - name: Build pinned credential-free opsctl and transaction planner
         run: |
           set -euo pipefail
           env -u CLOUDFLARE_API_TOKEN -u CLOUDFLARE_ACCOUNT_ID \
             cargo build --locked --manifest-path tools/opsctl/Cargo.toml
+          env -u CLOUDFLARE_API_TOKEN -u CLOUDFLARE_ACCOUNT_ID \
+            cargo build --locked --manifest-path tools/opsctl/Cargo.toml --example d1-transaction-plan
 
       - name: Prepare before any mutation authorization
         id: prepare
@@ -162,6 +184,26 @@ jobs:
             artifacts/d1-prepare/prepare.json >/dev/null
           echo "exit_code=$rc" >> "$GITHUB_OUTPUT"
 
+      - name: Seal immutable transaction plan before authorization
+        if: steps.prepare.outputs.exit_code == '0'
+        run: |
+          set -euo pipefail
+          jq -e '.status == "PREPARE_READY" and .authorization_consumed == false and .mutation_executed == false and .provider_mutation_executed == false' \
+            artifacts/d1-prepare/prepare.json >/dev/null
+          env -u CLOUDFLARE_API_TOKEN -u CLOUDFLARE_ACCOUNT_ID \
+            tools/opsctl/target/debug/examples/d1-transaction-plan \
+              --prepare-json artifacts/d1-prepare/prepare.json \
+              --observation-json artifacts/d1-prepare/provider-observation.json \
+              --repository-json artifacts/d1-prepare/repository-projection.json \
+              --transaction-input-json artifacts/d1-prepare/transaction-input.json \
+              > artifacts/d1-prepare/transaction.json
+          jq -e '.status == "TRANSACTION_PREPARED" and .mode == "read-only" and .authorization_consumed == false and .mutation_executed == false and .provider_mutation_executed == false and (.transaction_id | test("^[0-9a-f]{64}$"))' \
+            artifacts/d1-prepare/transaction.json >/dev/null
+          tree_sha="$(git rev-parse 'HEAD^{tree}')"
+          jq -e --arg source "$SOURCE_SHA" --arg tree "$tree_sha" \
+            '.transaction_plan.source_sha == $source and .transaction_plan.tree_sha == $tree' \
+            artifacts/d1-prepare/transaction.json >/dev/null
+
       - name: Upload immutable secret-free prepare evidence
         if: always() && steps.prepare.outcome != 'skipped'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
@@ -171,11 +213,21 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
+      - name: Upload immutable transaction identity artifact
+        if: steps.prepare.outputs.exit_code == '0'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: d1-transaction-${{ inputs.component }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: artifacts/d1-prepare/transaction.json
+          if-no-files-found: error
+          retention-days: 30
+
       - name: Fail closed when prepare is blocked
         if: steps.prepare.outputs.exit_code != '0'
         run: |
           set -euo pipefail
           jq -e '.status == "PREPARE_BLOCKED" and (.gate_results | length) > 0' artifacts/d1-prepare/prepare.json >/dev/null
+          test ! -e artifacts/d1-prepare/transaction.json
           reason="$(jq -r '.gate_results[0].reason_code' artifacts/d1-prepare/prepare.json)"
           echo "::error title=PREPARE_BLOCKED::credential-free D1 prepare blocked reason_code=$reason"
           exit 3
