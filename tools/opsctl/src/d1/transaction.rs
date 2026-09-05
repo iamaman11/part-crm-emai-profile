@@ -662,8 +662,12 @@ mod tests {
         let baseline = build()?;
         let mut changed = observation();
         changed["deployment_identity"] = json!("deployment-2");
-        let changed =
-            build_transaction_projection(&prepare(), &changed, &repository(), &transaction_input())?;
+        let changed = build_transaction_projection(
+            &prepare(),
+            &changed,
+            &repository(),
+            &transaction_input(),
+        )?;
         assert_ne!(baseline.transaction_id, changed.transaction_id);
         Ok(())
     }
