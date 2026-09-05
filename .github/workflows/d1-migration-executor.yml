@@ -246,6 +246,7 @@ jobs:
           test "$(npx --yes wrangler@4.94.0 --version)" = "4.94.0"
           python scripts/d1-executor-plan.py self-test
           python scripts/d1-gate-diagnostics.py self-test
+          python scripts/d1-prepare.py self-test
           env -u CLOUDFLARE_API_TOKEN -u CLOUDFLARE_ACCOUNT_ID python scripts/check-opsctl-readonly.py
           env -u CLOUDFLARE_API_TOKEN -u CLOUDFLARE_ACCOUNT_ID cargo build --locked --manifest-path tools/opsctl/Cargo.toml
 
@@ -351,18 +352,37 @@ jobs:
           diagnostics="artifacts/d1-migration/d1-gate-diagnostics.jsonl"
           : > "$diagnostics"
 
-          set +e
           if [ "$TRANSITION_MODE" = ordinary ]; then
-            env -u CLOUDFLARE_API_TOKEN -u CLOUDFLARE_ACCOUNT_ID cargo run --locked --quiet --manifest-path tools/opsctl/Cargo.toml -- --root . d1 plan \
-              --component "$COMPONENT" \
-              --ledger-json artifacts/d1-migration/ledger-before.json \
-              --release-manifest artifacts/d1-migration/target-release.json \
-              --current-manifest artifacts/d1-migration/current-release.json \
-              --known-good-manifest artifacts/d1-migration/known-good-release.json \
-              --preconditions-json artifacts/d1-migration/preconditions.json \
-              > artifacts/d1-migration/plan.json
+            set +e
+            env -u CLOUDFLARE_API_TOKEN -u CLOUDFLARE_ACCOUNT_ID \
+              python scripts/d1-prepare.py prepare \
+                --opsctl tools/opsctl/target/debug/opsctl \
+                --root . \
+                --component "$COMPONENT" \
+                --ledger-json artifacts/d1-migration/ledger-before.json \
+                --release-manifest artifacts/d1-migration/target-release.json \
+                --current-manifest artifacts/d1-migration/current-release.json \
+                --known-good-manifest artifacts/d1-migration/known-good-release.json \
+                --preconditions-json artifacts/d1-migration/preconditions.json \
+                --output artifacts/d1-migration/prepare.json
             plan_rc=$?
+            set -e
+            if [ "$plan_rc" -ne 0 ]; then
+              python scripts/d1-gate-diagnostics.py record \
+                --diagnostics "$diagnostics" \
+                --gate native-plan-command \
+                --reason-code D1_NATIVE_PLAN_COMMAND_FAILED \
+                --exit-code "$plan_rc" \
+                --detail 'credential-free prepare blocked; exact inner cause is preserved in prepare.json'
+              exit "$plan_rc"
+            fi
+            jq -e '.status == "PREPARE_READY" and .authorization_consumed == false and .mutation_executed == false and .provider_mutation_executed == false' \
+              artifacts/d1-migration/prepare.json >/dev/null
+            jq -e '.plan != null and .compatibility != null' artifacts/d1-migration/prepare.json >/dev/null
+            jq '.plan' artifacts/d1-migration/prepare.json > artifacts/d1-migration/plan.json
+            jq '.compatibility' artifacts/d1-migration/prepare.json > artifacts/d1-migration/compatibility.json
           else
+            set +e
             evaluated_at="$(date -u +%s)"
             env -u CLOUDFLARE_API_TOKEN -u CLOUDFLARE_ACCOUNT_ID cargo run --locked --quiet \
               --manifest-path tools/opsctl/Cargo.toml --example d1-contract-transition -- \
@@ -375,34 +395,34 @@ jobs:
               --expected-release-set-id "$EXPECTED_RELEASE_SET_ID" \
               > artifacts/d1-migration/plan.json
             plan_rc=$?
-          fi
-          set -e
-          if [ "$plan_rc" -ne 0 ]; then
-            python scripts/d1-gate-diagnostics.py record \
-              --diagnostics "$diagnostics" \
-              --gate native-plan-command \
-              --reason-code D1_NATIVE_PLAN_COMMAND_FAILED \
-              --exit-code "$plan_rc" \
-              --detail 'credential-free native plan command returned non-zero'
-            exit "$plan_rc"
-          fi
+            set -e
+            if [ "$plan_rc" -ne 0 ]; then
+              python scripts/d1-gate-diagnostics.py record \
+                --diagnostics "$diagnostics" \
+                --gate native-plan-command \
+                --reason-code D1_NATIVE_PLAN_COMMAND_FAILED \
+                --exit-code "$plan_rc" \
+                --detail 'credential-free contract-transition plan command returned non-zero'
+              exit "$plan_rc"
+            fi
 
-          set +e
-          env -u CLOUDFLARE_API_TOKEN -u CLOUDFLARE_ACCOUNT_ID cargo run --locked --quiet --manifest-path tools/opsctl/Cargo.toml -- --root . d1 compatibility \
-            --component "$COMPONENT" \
-            --ledger-json artifacts/d1-migration/ledger-before.json \
-            --release-manifest artifacts/d1-migration/target-release.json \
-            > artifacts/d1-migration/compatibility.json
-          compatibility_rc=$?
-          set -e
-          if [ "$compatibility_rc" -ne 0 ]; then
-            python scripts/d1-gate-diagnostics.py record \
-              --diagnostics "$diagnostics" \
-              --gate compatibility-command \
-              --reason-code D1_COMPATIBILITY_COMMAND_FAILED \
-              --exit-code "$compatibility_rc" \
-              --detail 'credential-free compatibility command returned non-zero'
-            exit "$compatibility_rc"
+            set +e
+            env -u CLOUDFLARE_API_TOKEN -u CLOUDFLARE_ACCOUNT_ID cargo run --locked --quiet --manifest-path tools/opsctl/Cargo.toml -- --root . d1 compatibility \
+              --component "$COMPONENT" \
+              --ledger-json artifacts/d1-migration/ledger-before.json \
+              --release-manifest artifacts/d1-migration/target-release.json \
+              > artifacts/d1-migration/compatibility.json
+            compatibility_rc=$?
+            set -e
+            if [ "$compatibility_rc" -ne 0 ]; then
+              python scripts/d1-gate-diagnostics.py record \
+                --diagnostics "$diagnostics" \
+                --gate compatibility-command \
+                --reason-code D1_COMPATIBILITY_COMMAND_FAILED \
+                --exit-code "$compatibility_rc" \
+                --detail 'credential-free compatibility command returned non-zero'
+              exit "$compatibility_rc"
+            fi
           fi
 
           python scripts/d1-gate-diagnostics.py evaluate \
@@ -410,6 +430,15 @@ jobs:
             --compatibility artifacts/d1-migration/compatibility.json \
             --diagnostics "$diagnostics" \
             --github-output "$GITHUB_OUTPUT"
+
+      - name: Upload typed D1 prepare evidence on ordinary policy failure
+        if: failure() && steps.policy.outcome == 'failure' && inputs.transition_mode == 'ordinary'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: d1-prepare-blocked-${{ inputs.environment }}-${{ inputs.component }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: artifacts/d1-migration/prepare.json
+          if-no-files-found: error
+          retention-days: 30
 
       - name: Upload metadata-only D1 gate diagnostics on policy failure
         if: failure() && steps.policy.outcome == 'failure'
