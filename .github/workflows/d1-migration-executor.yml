@@ -432,7 +432,7 @@ jobs:
             --github-output "$GITHUB_OUTPUT"
 
       - name: Upload typed D1 prepare evidence on ordinary policy failure
-        if: failure() && steps.policy.outcome == 'failure' && inputs.transition_mode == 'ordinary'
+        if: inputs.transition_mode == 'ordinary' && failure() && steps.policy.outcome == 'failure'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: d1-prepare-blocked-${{ inputs.environment }}-${{ inputs.component }}-${{ github.run_id }}-${{ github.run_attempt }}
