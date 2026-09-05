@@ -43,9 +43,11 @@ fn migration_identity(root: &Path, relative: &str) -> Result<(Vec<Value>, String
     let mut identity = Vec::with_capacity(entries.len());
     for path in entries {
         if !path.is_file() || path.is_symlink() {
-            return Err(
-                format!("non-regular entry in migration directory: {}", path.display()).into(),
-            );
+            return Err(format!(
+                "non-regular entry in migration directory: {}",
+                path.display()
+            )
+            .into());
         }
         let name = path
             .file_name()
@@ -82,7 +84,11 @@ fn executable_identity_from_projection(
         }
         let path = root.join(source_root).join(name);
         if !path.is_file() || path.is_symlink() {
-            return Err(format!("Catalog executable source is not a regular file: {}", path.display()).into());
+            return Err(format!(
+                "Catalog executable source is not a regular file: {}",
+                path.display()
+            )
+            .into());
         }
         identity.push(json!({
             "name": name,
@@ -178,13 +184,23 @@ fn frozen_epoch_and_current_projection_are_derived_from_real_sql_bytes()
     assert_eq!(catalog_legacy.len(), 31);
     assert_eq!(catalog_legacy[25]["name"], "0026_outbound_mail_intents.sql");
     assert_eq!(catalog_legacy[26]["name"], LEGACY_PAS2_REVISION);
-    assert_eq!(identity_digest(&catalog_legacy[..26])?, CATALOG_EPOCH_DIGEST);
+    assert_eq!(
+        identity_digest(&catalog_legacy[..26])?,
+        CATALOG_EPOCH_DIGEST
+    );
     assert_eq!(catalog_current.len(), 32);
     assert_eq!(catalog_current[26]["name"], SUCCESSOR_EXPAND_REVISION);
     assert_eq!(catalog_current[31]["name"], SUCCESSOR_CONTRACT_REVISION);
-    assert!(catalog_current.iter().all(|entry| entry["name"] != LEGACY_PAS2_REVISION));
+    assert!(
+        catalog_current
+            .iter()
+            .all(|entry| entry["name"] != LEGACY_PAS2_REVISION)
+    );
     assert_eq!(catalog["migration_count"], 32);
-    assert_eq!(catalog["current_repository_revision"], SUCCESSOR_CONTRACT_REVISION);
+    assert_eq!(
+        catalog["current_repository_revision"],
+        SUCCESSOR_CONTRACT_REVISION
+    );
     assert_eq!(catalog["history_digest"], catalog_current_digest);
     assert_eq!(catalog["post_epoch_migration_count"], 6);
     assert_eq!(catalog["historical_epoch"]["migration_count"], 26);
@@ -197,18 +213,34 @@ fn frozen_epoch_and_current_projection_are_derived_from_real_sql_bytes()
         CATALOG_EPOCH_DIGEST
     );
     assert_eq!(catalog["legacy_history"]["immutable"], true);
-    assert_eq!(catalog["legacy_history"]["executable_by_successor_lineage"], false);
+    assert_eq!(
+        catalog["legacy_history"]["executable_by_successor_lineage"],
+        false
+    );
 
     let resolver = component(&projection, "resolver")?;
-    let (resolver_files, resolver_current_digest) = migration_identity(&root, "migrations/resolver-d1")?;
+    let (resolver_files, resolver_current_digest) =
+        migration_identity(&root, "migrations/resolver-d1")?;
     assert_eq!(resolver_files.len(), 4);
-    assert_eq!(resolver_files[3]["name"], "0004_refresh_owner_hmac_version.sql");
-    assert_eq!(identity_digest(&resolver_files[..4])?, RESOLVER_EPOCH_DIGEST);
+    assert_eq!(
+        resolver_files[3]["name"],
+        "0004_refresh_owner_hmac_version.sql"
+    );
+    assert_eq!(
+        identity_digest(&resolver_files[..4])?,
+        RESOLVER_EPOCH_DIGEST
+    );
     assert_eq!(resolver["migration_count"], 4);
-    assert_eq!(resolver["current_repository_revision"], "0004_refresh_owner_hmac_version.sql");
+    assert_eq!(
+        resolver["current_repository_revision"],
+        "0004_refresh_owner_hmac_version.sql"
+    );
     assert_eq!(resolver["history_digest"], resolver_current_digest);
     assert_eq!(resolver["post_epoch_migration_count"], 0);
-    assert_eq!(resolver["historical_epoch"]["accepted_history_digest"], RESOLVER_EPOCH_DIGEST);
+    assert_eq!(
+        resolver["historical_epoch"]["accepted_history_digest"],
+        RESOLVER_EPOCH_DIGEST
+    );
     Ok(())
 }
 
@@ -255,7 +287,9 @@ fn historical_sql_tampering_fails_closed_for_each_component() -> Result<(), Box<
             Err(error) => error,
         };
         assert!(
-            error.to_string().contains("historical epoch digest mismatch"),
+            error
+                .to_string()
+                .contains("historical epoch digest mismatch"),
             "unexpected fail-closed reason for {label}: {error}"
         );
     }
@@ -292,8 +326,8 @@ fn unowned_post_epoch_sql_fails_closed_for_each_component() -> Result<(), Box<dy
 }
 
 #[test]
-fn legacy_and_successor_pas2_revisions_have_distinct_governed_roles()
--> Result<(), Box<dyn Error>> {
+fn legacy_and_successor_pas2_revisions_have_distinct_governed_roles() -> Result<(), Box<dyn Error>>
+{
     let root = repo_root();
     let projection: Value = serde_json::from_str(&repository_projection(&root)?)?;
     let catalog = component(&projection, "catalog")?;
@@ -310,23 +344,36 @@ fn legacy_and_successor_pas2_revisions_have_distinct_governed_roles()
         "0026_outbound_mail_intents.sql"
     );
     assert_eq!(catalog_legacy[26]["name"], LEGACY_PAS2_REVISION);
-    assert_eq!(catalog_legacy[30]["name"], "0031_device_binding_governance.sql");
+    assert_eq!(
+        catalog_legacy[30]["name"],
+        "0031_device_binding_governance.sql"
+    );
     assert_eq!(successor_files.len(), 2);
     assert_eq!(successor_files[0]["name"], SUCCESSOR_EXPAND_REVISION);
     assert_eq!(successor_files[1]["name"], SUCCESSOR_CONTRACT_REVISION);
 
     assert_eq!(catalog["migration_count"], 32);
     assert_eq!(catalog["post_epoch_migration_count"], 6);
-    assert_eq!(catalog["current_repository_revision"], SUCCESSOR_CONTRACT_REVISION);
+    assert_eq!(
+        catalog["current_repository_revision"],
+        SUCCESSOR_CONTRACT_REVISION
+    );
     assert_eq!(catalog["migration_lineage"], "catalog-successor-v1");
     assert_eq!(sources.len(), 32);
     assert_eq!(sources[26]["migration_file"], SUCCESSOR_EXPAND_REVISION);
     assert_eq!(sources[26]["source_root"], "migrations/d1-successor");
-    assert_eq!(sources[27]["migration_file"], "0028_profile_assignment_detach.sql");
+    assert_eq!(
+        sources[27]["migration_file"],
+        "0028_profile_assignment_detach.sql"
+    );
     assert_eq!(sources[27]["source_root"], "migrations/d1");
     assert_eq!(sources[31]["migration_file"], SUCCESSOR_CONTRACT_REVISION);
     assert_eq!(sources[31]["source_root"], "migrations/d1-successor");
-    assert!(sources.iter().all(|source| source["migration_file"] != LEGACY_PAS2_REVISION));
+    assert!(
+        sources
+            .iter()
+            .all(|source| source["migration_file"] != LEGACY_PAS2_REVISION)
+    );
     assert_eq!(
         catalog["release_schema_contract"]["target_schema_revision"],
         "0031_device_binding_governance.sql"
