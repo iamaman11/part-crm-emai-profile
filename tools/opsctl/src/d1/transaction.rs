@@ -541,15 +541,6 @@ mod tests {
     use super::*;
     use serde_json::json;
 
-    fn target() -> TargetIdentity {
-        TargetIdentity {
-            environment: "rehearsal".to_owned(),
-            account_id: "account-1".to_owned(),
-            database_name: "d1-rehearsal".to_owned(),
-            database_id: "database-1".to_owned(),
-        }
-    }
-
     fn prepare() -> Value {
         json!({
             "status": "PREPARE_READY",
