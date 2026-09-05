@@ -74,7 +74,8 @@ fn ledger(names: &[String]) -> Value {
 
 #[test]
 fn public_contract_transition_enforces_exact_fail_closed_matrix_and_post_verify()
--> Result<(), Box<dyn Error>> {
+-> Result<(), Box<dyn Error>>
+{
     let root = repo_root();
     let projection: Value = serde_json::from_str(&repository_projection(&root)?)?;
     let catalog = catalog(&projection)?;
@@ -160,7 +161,10 @@ fn public_contract_transition_enforces_exact_fail_closed_matrix_and_post_verify(
     assert_eq!(planned["decision"], "MIGRATION_REQUIRED");
     assert_eq!(planned["remote_revision"], PREDECESSOR_REVISION);
     assert_eq!(planned["target_revision"], CONTRACT_REVISION);
-    assert_eq!(planned["planned_migrations"], json!([CONTRACT_REVISION]));
+    assert_eq!(
+        planned["planned_migrations"],
+        json!([CONTRACT_REVISION])
+    );
     assert_eq!(planned["recovery_strategy"], "FAIL_FORWARD_ONLY");
     assert_eq!(planned["allowed"], true);
     assert_eq!(planned["mutation_executed"], false);
@@ -175,7 +179,11 @@ fn public_contract_transition_enforces_exact_fail_closed_matrix_and_post_verify(
         expected_release_set_id: &release_set_id,
     })
     .expect_err("wrong predecessor with multiple pending migrations must fail closed");
-    assert!(multiple_pending.to_string().contains("exact canonical prefix through 0031"));
+    assert!(
+        multiple_pending
+            .to_string()
+            .contains("exact canonical prefix through 0031")
+    );
 
     let mut split_evidence = evidence.clone();
     split_evidence["deployment"]["single_version"] = json!(false);
@@ -191,7 +199,11 @@ fn public_contract_transition_enforces_exact_fail_closed_matrix_and_post_verify(
         expected_release_set_id: &release_set_id,
     })
     .expect_err("split deployment evidence must fail closed");
-    assert!(split.to_string().contains("deployment.single_version must be true"));
+    assert!(
+        split
+            .to_string()
+            .contains("deployment.single_version must be true")
+    );
 
     let mut missing_recovery = evidence.clone();
     missing_recovery
@@ -242,9 +254,11 @@ fn public_contract_transition_enforces_exact_fail_closed_matrix_and_post_verify(
         expected_release_set_id: &release_set_id,
     })
     .expect_err("source identity mismatch must fail closed");
-    assert!(identity_mismatch
-        .to_string()
-        .contains("source SHA does not match the exact expected accepted source"));
+    assert!(
+        identity_mismatch
+            .to_string()
+            .contains("source SHA does not match the exact expected accepted source")
+    );
 
     let output = contract_transition_verify(D1ContractTransitionVerificationRequest {
         root: &root,
@@ -264,7 +278,10 @@ fn public_contract_transition_enforces_exact_fail_closed_matrix_and_post_verify(
     assert_eq!(verified["runtime_target_revision"], PREDECESSOR_REVISION);
     assert_eq!(verified["supported_schema_min"], PREDECESSOR_REVISION);
     assert_eq!(verified["supported_schema_max"], CONTRACT_REVISION);
-    assert_eq!(verified["transition_migrations"], json!([CONTRACT_REVISION]));
+    assert_eq!(
+        verified["transition_migrations"],
+        json!([CONTRACT_REVISION])
+    );
     assert_eq!(verified["planned_migrations"], json!([]));
     assert_eq!(verified["recovery_strategy"], "FAIL_FORWARD_ONLY");
     assert_eq!(verified["allowed"], true);
