@@ -1,5 +1,7 @@
 #[path = "d1/authority.rs"]
 mod authority;
+#[path = "d1/authorization.rs"]
+pub mod authorization;
 #[path = "d1/catalog_successor.rs"]
 mod catalog;
 #[path = "d1/catalog.rs"]
