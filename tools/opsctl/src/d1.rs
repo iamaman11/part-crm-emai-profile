@@ -18,6 +18,8 @@ mod plan;
 mod status;
 #[path = "d1/transaction.rs"]
 pub mod transaction;
+#[path = "d1/transaction_integrity.rs"]
+pub mod transaction_integrity;
 #[path = "d1/util.rs"]
 mod util;
 #[path = "d1/verify.rs"]
