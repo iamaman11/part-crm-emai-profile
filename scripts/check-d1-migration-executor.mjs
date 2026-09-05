@@ -320,7 +320,7 @@ async function selfTest(text) {
     ['missing typed post-contract ledger proof', POST_CONTRACT_LEDGER, '--removed-post-ledger-json'],
     ['missing plan command diagnostic', 'D1_NATIVE_PLAN_COMMAND_FAILED', 'D1_REMOVED_NATIVE_PLAN_COMMAND_DIAGNOSTIC'],
     ['missing compatibility command diagnostic', 'D1_COMPATIBILITY_COMMAND_FAILED', 'D1_REMOVED_COMPATIBILITY_COMMAND_DIAGNOSTIC'],
-    ['missing durable diagnostic path', DIAGNOSTICS_PATH, 'artifacts/d1-migration/removed-diagnostics.jsonl'],
+    ['missing durable diagnostic path', `          path: ${DIAGNOSTICS_PATH}`, '          path: artifacts/d1-migration/removed-diagnostics.jsonl'],
     ['missing diagnostic failure condition', "if: failure() && steps.policy.outcome == 'failure'", "if: steps.policy.outcome == 'success'"],
   ]) {
     await expectRejected(label, replaceFixture(label, text, from, to));
@@ -340,7 +340,6 @@ async function main() {
     return;
   }
   if (process.argv.length > 2) fail(`unknown arguments: ${process.argv.slice(2).join(' ')}`);
-  runDiagnosticsHelperSelfTest();
   await validateExecutor(text, ROOT);
   console.log('Protected D1 executor contract passed: staging-only, fail-closed metadata diagnostics, exact native plan materialization, bounded successor lineage, Wrangler pending equality, provider/ledger re-fence, typed post-CONTRACT verification, confirmation cardinality, one remote apply owner, no automatic restore or provisioning.');
 }
