@@ -369,10 +369,7 @@ fn repository_identity(
 ) -> Result<RepositoryIdentity, D1Error> {
     let repository_identity_sha256 =
         required_str(repository, "repository_identity_sha256")?.to_owned();
-    validate_sha256(
-        &repository_identity_sha256,
-        "repository_identity_sha256",
-    )?;
+    validate_sha256(&repository_identity_sha256, "repository_identity_sha256")?;
     let component = required_str_from_map(plan, "component")?;
     let components = repository
         .get("components")
@@ -441,9 +438,7 @@ fn validate_transaction_input(
         ));
     }
     if input.release_manifest_digests.is_empty() {
-        return Err(D1Error::new(
-            "release_manifest_digests must not be empty",
-        ));
+        return Err(D1Error::new("release_manifest_digests must not be empty"));
     }
     for (name, digest) in &input.release_manifest_digests {
         validate_non_empty(name, "release manifest digest name")?;
@@ -659,13 +654,9 @@ mod tests {
         let baseline = build();
         let mut changed = observation();
         changed["deployment_identity"] = json!("deployment-2");
-        let changed = build_transaction_projection(
-            &prepare(),
-            &changed,
-            &repository(),
-            &transaction_input(),
-        )
-        .unwrap();
+        let changed =
+            build_transaction_projection(&prepare(), &changed, &repository(), &transaction_input())
+                .unwrap();
         assert_ne!(baseline.transaction_id, changed.transaction_id);
     }
 
