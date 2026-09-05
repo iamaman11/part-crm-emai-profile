@@ -1,0 +1,176 @@
+name: D1 Migration Prepare
+
+on:
+  pull_request:
+    paths:
+      - 'scripts/d1-prepare.py'
+      - '.github/workflows/d1-migration-prepare.yml'
+      - 'tools/opsctl/src/d1.rs'
+      - 'tools/opsctl/src/d1/**'
+  push:
+    branches:
+      - main
+    paths:
+      - 'scripts/d1-prepare.py'
+      - '.github/workflows/d1-migration-prepare.yml'
+      - 'tools/opsctl/src/d1.rs'
+      - 'tools/opsctl/src/d1/**'
+  workflow_dispatch:
+    inputs:
+      source_sha:
+        description: Exact accepted protected-main source SHA
+        required: true
+        type: string
+      component:
+        description: D1 component
+        required: true
+        type: choice
+        options:
+          - catalog
+          - resolver
+      ledger_json:
+        description: Secret-free observed D1 migration ledger JSON
+        required: true
+        type: string
+      target_release_manifest_json:
+        description: Exact target component release manifest JSON
+        required: true
+        type: string
+      current_release_manifest_json:
+        description: Exact current component release manifest JSON
+        required: true
+        type: string
+      known_good_release_manifest_json:
+        description: Exact last-known-good component release manifest JSON
+        required: true
+        type: string
+      preconditions_json:
+        description: Typed D1 preconditions JSON
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  self-test:
+    name: Credential-free prepare contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Checkout exact source
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+      - name: Compile prepare adapter
+        run: python -m py_compile scripts/d1-prepare.py
+      - name: Exercise ready, blocked, and historical Attempt A fixtures
+        run: python scripts/d1-prepare.py self-test
+
+  prepare:
+    if: github.event_name == 'workflow_dispatch'
+    name: Exact credential-free prepare
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    env:
+      SOURCE_SHA: ${{ inputs.source_sha }}
+      COMPONENT: ${{ inputs.component }}
+      LEDGER_JSON: ${{ inputs.ledger_json }}
+      TARGET_RELEASE_MANIFEST_JSON: ${{ inputs.target_release_manifest_json }}
+      CURRENT_RELEASE_MANIFEST_JSON: ${{ inputs.current_release_manifest_json }}
+      KNOWN_GOOD_RELEASE_MANIFEST_JSON: ${{ inputs.known_good_release_manifest_json }}
+      PRECONDITIONS_JSON: ${{ inputs.preconditions_json }}
+    steps:
+      - name: Reject non-main or non-exact source before prepare
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = "refs/heads/main"
+          test -n "$SOURCE_SHA"
+          test "$GITHUB_SHA" = "$SOURCE_SHA"
+          test "$COMPONENT" = catalog || test "$COMPONENT" = resolver
+
+      - name: Checkout exact accepted-main source
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        with:
+          ref: ${{ inputs.source_sha }}
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Verify exact checkout
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+
+      - name: Materialize secret-free typed inputs
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts/d1-prepare
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          root = Path('artifacts/d1-prepare')
+          documents = {
+              'ledger.json': os.environ['LEDGER_JSON'],
+              'target-release.json': os.environ['TARGET_RELEASE_MANIFEST_JSON'],
+              'current-release.json': os.environ['CURRENT_RELEASE_MANIFEST_JSON'],
+              'known-good-release.json': os.environ['KNOWN_GOOD_RELEASE_MANIFEST_JSON'],
+              'preconditions.json': os.environ['PRECONDITIONS_JSON'],
+          }
+          for name, raw in documents.items():
+              value = json.loads(raw)
+              if not isinstance(value, (dict, list)):
+                  raise SystemExit(f'{name} must be structured JSON')
+              if name != 'ledger.json' and not isinstance(value, dict):
+                  raise SystemExit(f'{name} must be one JSON object')
+              (root / name).write_text(json.dumps(value, sort_keys=True, indent=2) + '\n', encoding='utf-8')
+          PY
+
+      - name: Build pinned credential-free opsctl
+        run: |
+          set -euo pipefail
+          env -u CLOUDFLARE_API_TOKEN -u CLOUDFLARE_ACCOUNT_ID \
+            cargo build --locked --manifest-path tools/opsctl/Cargo.toml
+
+      - name: Prepare before any mutation authorization
+        id: prepare
+        run: |
+          set -euo pipefail
+          set +e
+          env -u CLOUDFLARE_API_TOKEN -u CLOUDFLARE_ACCOUNT_ID \
+            python scripts/d1-prepare.py prepare \
+              --opsctl tools/opsctl/target/debug/opsctl \
+              --root . \
+              --component "$COMPONENT" \
+              --ledger-json artifacts/d1-prepare/ledger.json \
+              --release-manifest artifacts/d1-prepare/target-release.json \
+              --current-manifest artifacts/d1-prepare/current-release.json \
+              --known-good-manifest artifacts/d1-prepare/known-good-release.json \
+              --preconditions-json artifacts/d1-prepare/preconditions.json \
+              --output artifacts/d1-prepare/prepare.json
+          rc=$?
+          set -e
+          test -f artifacts/d1-prepare/prepare.json
+          jq -e '.command == "d1 prepare" and .mode == "read-only" and .mutation_executed == false and .provider_mutation_executed == false and .authorization_consumed == false and (.status == "PREPARE_READY" or .status == "PREPARE_BLOCKED")' \
+            artifacts/d1-prepare/prepare.json >/dev/null
+          echo "exit_code=$rc" >> "$GITHUB_OUTPUT"
+
+      - name: Upload immutable secret-free prepare evidence
+        if: always() && steps.prepare.outcome != 'skipped'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: d1-prepare-${{ inputs.component }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: artifacts/d1-prepare/prepare.json
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Fail closed when prepare is blocked
+        if: steps.prepare.outputs.exit_code != '0'
+        run: |
+          set -euo pipefail
+          jq -e '.status == "PREPARE_BLOCKED" and (.gate_results | length) > 0' artifacts/d1-prepare/prepare.json >/dev/null
+          reason="$(jq -r '.gate_results[0].reason_code' artifacts/d1-prepare/prepare.json)"
+          echo "::error title=PREPARE_BLOCKED::credential-free D1 prepare blocked reason_code=$reason"
+          exit 3
