@@ -269,8 +269,9 @@ mod tests {
             deployment_identity: Some("deployment-1".to_owned()),
             time_travel_bookmark_capable: true,
         };
-        let observation_value = serde_json::to_value(&observation_input)
-            .map_err(|error| D1Error::new(format!("cannot serialize observation fixture: {error}")))?;
+        let observation_value = serde_json::to_value(&observation_input).map_err(|error| {
+            D1Error::new(format!("cannot serialize observation fixture: {error}"))
+        })?;
         let canonical_observation = canonical_json(&observation_value).map_err(D1Error::new)?;
         let observation_digest = sha256_hex(canonical_observation.as_bytes());
         let provider_observation = ProviderObservationBundle {
@@ -318,8 +319,9 @@ mod tests {
                 "PRODUCTION_MUTATION".to_owned(),
             ],
         };
-        let plan_value = serde_json::to_value(&transaction_plan)
-            .map_err(|error| D1Error::new(format!("cannot serialize transaction fixture: {error}")))?;
+        let plan_value = serde_json::to_value(&transaction_plan).map_err(|error| {
+            D1Error::new(format!("cannot serialize transaction fixture: {error}"))
+        })?;
         let canonical_plan = canonical_json(&plan_value).map_err(D1Error::new)?;
         Ok(TransactionProjection {
             schema_version: 1,
