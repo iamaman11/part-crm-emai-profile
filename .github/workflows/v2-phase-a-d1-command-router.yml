@@ -34,7 +34,7 @@ jobs:
       COMMENT_AUTHOR: ${{ github.event.comment.user.login }}
       COMMENT_AUTHOR_ASSOCIATION: ${{ github.event.comment.author_association }}
       SOURCE_SHA: ${{ github.sha }}
-      AUTHORIZATION_BASE_SHA: 4c65c8b7903e0d8dfa6abc97b36815c45c56d4e0
+      AUTHORIZATION_BASE_SHA: 1cab09b314436452680f8b0451bf5bb6a9b7184e
       EXPECTED_ACTOR: iamaman11
       EXPECTED_ISSUE: '584'
       EXPECTED_CURRENT_RELEASE_SET_ID: release-set-v3-sha256-e01338de30cdc4c334e210f9e2bd75a67837420dd370b83964caae452f77522c
