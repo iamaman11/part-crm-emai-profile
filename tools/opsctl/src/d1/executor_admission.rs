@@ -6,6 +6,15 @@ use serde_json::Value;
 
 const EXECUTOR_ADMISSION_SCHEMA_VERSION: u64 = 1;
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExecutorAdmissionExpectation {
+    pub transaction_id: String,
+    pub source_sha: String,
+    pub tree_sha: String,
+    pub target: TargetIdentity,
+    pub phase: TransactionPhase,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ExecutorAdmissionBinding {
     pub schema_version: u64,
@@ -23,43 +32,38 @@ pub struct ExecutorAdmissionBinding {
     pub evaluated_at_unix_seconds: i64,
 }
 
-#[allow(clippy::too_many_arguments)]
 pub fn bind_executor_admission(
     transaction: &TransactionProjection,
     authorization_value: &Value,
     evaluated_at_unix_seconds: i64,
-    expected_transaction_id: &str,
-    expected_source_sha: &str,
-    expected_tree_sha: &str,
-    expected_target: &TargetIdentity,
-    expected_phase: TransactionPhase,
+    expectation: &ExecutorAdmissionExpectation,
 ) -> Result<ExecutorAdmissionBinding, D1Error> {
-    validate_sha256(expected_transaction_id, "expected_transaction_id")?;
-    validate_git_object_id(expected_source_sha, "expected_source_sha")?;
-    validate_git_object_id(expected_tree_sha, "expected_tree_sha")?;
-    validate_target(expected_target)?;
+    validate_sha256(&expectation.transaction_id, "expected_transaction_id")?;
+    validate_git_object_id(&expectation.source_sha, "expected_source_sha")?;
+    validate_git_object_id(&expectation.tree_sha, "expected_tree_sha")?;
+    validate_target(&expectation.target)?;
 
-    if transaction.transaction_id != expected_transaction_id {
+    if transaction.transaction_id != expectation.transaction_id {
         return Err(D1Error::new(
             "executor expected_transaction_id must exactly equal prepared transaction_id",
         ));
     }
-    if transaction.transaction_plan.source_sha != expected_source_sha {
+    if transaction.transaction_plan.source_sha != expectation.source_sha {
         return Err(D1Error::new(
             "executor exact checkout source_sha must equal prepared transaction source_sha",
         ));
     }
-    if transaction.transaction_plan.tree_sha != expected_tree_sha {
+    if transaction.transaction_plan.tree_sha != expectation.tree_sha {
         return Err(D1Error::new(
             "executor exact checkout tree_sha must equal prepared transaction tree_sha",
         ));
     }
-    if transaction.transaction_plan.target != *expected_target {
+    if transaction.transaction_plan.target != expectation.target {
         return Err(D1Error::new(
             "executor exact target must equal prepared transaction target",
         ));
     }
-    if transaction.transaction_plan.phase != expected_phase {
+    if transaction.transaction_plan.phase != expectation.phase {
         return Err(D1Error::new(
             "executor expected phase must equal prepared transaction phase",
         ));
@@ -70,9 +74,9 @@ pub fn bind_executor_admission(
         authorization_value,
         evaluated_at_unix_seconds,
     )?;
-    if authorization.transaction_id != expected_transaction_id
-        || authorization.target != *expected_target
-        || authorization.phase != expected_phase
+    if authorization.transaction_id != expectation.transaction_id
+        || authorization.target != expectation.target
+        || authorization.phase != expectation.phase
     {
         return Err(D1Error::new(
             "verified authorization binding drifted from executor admission expectation",
@@ -88,10 +92,10 @@ pub fn bind_executor_admission(
         provider_mutation_executed: false,
         transaction_id: authorization.transaction_id,
         authorization_digest: authorization.authorization_digest,
-        source_sha: expected_source_sha.to_owned(),
-        tree_sha: expected_tree_sha.to_owned(),
-        target: expected_target.clone(),
-        phase: expected_phase,
+        source_sha: expectation.source_sha.clone(),
+        tree_sha: expectation.tree_sha.clone(),
+        target: expectation.target.clone(),
+        phase: expectation.phase,
         evaluated_at_unix_seconds,
     })
 }
@@ -179,8 +183,9 @@ mod tests {
             deployment_identity: Some("deployment-1".to_owned()),
             time_travel_bookmark_capable: true,
         };
-        let observation_value = serde_json::to_value(&observation_input)
-            .map_err(|error| D1Error::new(format!("cannot serialize observation fixture: {error}")))?;
+        let observation_value = serde_json::to_value(&observation_input).map_err(|error| {
+            D1Error::new(format!("cannot serialize observation fixture: {error}"))
+        })?;
         let canonical_observation = canonical_json(&observation_value).map_err(D1Error::new)?;
         let observation_digest = sha256_hex(canonical_observation.as_bytes());
         let provider_observation = ProviderObservationBundle {
@@ -228,8 +233,9 @@ mod tests {
                 "PRODUCTION_MUTATION".to_owned(),
             ],
         };
-        let plan_value = serde_json::to_value(&transaction_plan)
-            .map_err(|error| D1Error::new(format!("cannot serialize transaction fixture: {error}")))?;
+        let plan_value = serde_json::to_value(&transaction_plan).map_err(|error| {
+            D1Error::new(format!("cannot serialize transaction fixture: {error}"))
+        })?;
         let canonical_plan = canonical_json(&plan_value).map_err(D1Error::new)?;
         Ok(TransactionProjection {
             schema_version: 1,
@@ -258,6 +264,16 @@ mod tests {
         })
     }
 
+    fn expectation(transaction: &TransactionProjection) -> ExecutorAdmissionExpectation {
+        ExecutorAdmissionExpectation {
+            transaction_id: transaction.transaction_id.clone(),
+            source_sha: transaction.transaction_plan.source_sha.clone(),
+            tree_sha: transaction.transaction_plan.tree_sha.clone(),
+            target: transaction.transaction_plan.target.clone(),
+            phase: TransactionPhase::Ordinary,
+        }
+    }
+
     #[test]
     fn exact_executor_admission_binds_transaction_authorization_and_checkout() -> Result<(), D1Error> {
         let transaction = transaction()?;
@@ -265,11 +281,7 @@ mod tests {
             &transaction,
             &authorization(&transaction),
             EVALUATED_AT,
-            &transaction.transaction_id,
-            &transaction.transaction_plan.source_sha,
-            &transaction.transaction_plan.tree_sha,
-            &transaction.transaction_plan.target,
-            TransactionPhase::Ordinary,
+            &expectation(&transaction),
         )?;
         assert_eq!(binding.status, "EXECUTOR_ADMISSION_VERIFIED");
         assert_eq!(binding.transaction_id, transaction.transaction_id);
@@ -284,15 +296,13 @@ mod tests {
     #[test]
     fn source_checkout_drift_is_rejected() -> Result<(), D1Error> {
         let transaction = transaction()?;
+        let mut expected = expectation(&transaction);
+        expected.source_sha = "ab".repeat(20);
         assert!(bind_executor_admission(
             &transaction,
             &authorization(&transaction),
             EVALUATED_AT,
-            &transaction.transaction_id,
-            &"ab".repeat(20),
-            &transaction.transaction_plan.tree_sha,
-            &transaction.transaction_plan.target,
-            TransactionPhase::Ordinary,
+            &expected,
         )
         .is_err());
         Ok(())
@@ -301,15 +311,13 @@ mod tests {
     #[test]
     fn tree_checkout_drift_is_rejected() -> Result<(), D1Error> {
         let transaction = transaction()?;
+        let mut expected = expectation(&transaction);
+        expected.tree_sha = "cd".repeat(20);
         assert!(bind_executor_admission(
             &transaction,
             &authorization(&transaction),
             EVALUATED_AT,
-            &transaction.transaction_id,
-            &transaction.transaction_plan.source_sha,
-            &"cd".repeat(20),
-            &transaction.transaction_plan.target,
-            TransactionPhase::Ordinary,
+            &expected,
         )
         .is_err());
         Ok(())
@@ -318,17 +326,13 @@ mod tests {
     #[test]
     fn target_drift_is_rejected() -> Result<(), D1Error> {
         let transaction = transaction()?;
-        let mut drifted = transaction.transaction_plan.target.clone();
-        drifted.database_id = "database-2".to_owned();
+        let mut expected = expectation(&transaction);
+        expected.target.database_id = "database-2".to_owned();
         assert!(bind_executor_admission(
             &transaction,
             &authorization(&transaction),
             EVALUATED_AT,
-            &transaction.transaction_id,
-            &transaction.transaction_plan.source_sha,
-            &transaction.transaction_plan.tree_sha,
-            &drifted,
-            TransactionPhase::Ordinary,
+            &expected,
         )
         .is_err());
         Ok(())
@@ -337,15 +341,13 @@ mod tests {
     #[test]
     fn transaction_id_drift_is_rejected() -> Result<(), D1Error> {
         let transaction = transaction()?;
+        let mut expected = expectation(&transaction);
+        expected.transaction_id = "ef".repeat(32);
         assert!(bind_executor_admission(
             &transaction,
             &authorization(&transaction),
             EVALUATED_AT,
-            &"ef".repeat(32),
-            &transaction.transaction_plan.source_sha,
-            &transaction.transaction_plan.tree_sha,
-            &transaction.transaction_plan.target,
-            TransactionPhase::Ordinary,
+            &expected,
         )
         .is_err());
         Ok(())
