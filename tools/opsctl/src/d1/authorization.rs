@@ -62,14 +62,13 @@ pub fn bind_transaction_authorization(
         })?;
     validate_authorization_input(transaction, &authorization, evaluated_at_unix_seconds)?;
 
-    let canonical_authorization = canonical_json(
-        &serde_json::to_value(&authorization).map_err(|error| {
+    let canonical_authorization =
+        canonical_json(&serde_json::to_value(&authorization).map_err(|error| {
             D1Error::new(format!(
                 "cannot serialize transaction authorization: {error}"
             ))
-        })?,
-    )
-    .map_err(D1Error::new)?;
+        })?)
+        .map_err(D1Error::new)?;
 
     Ok(TransactionAuthorizationBinding {
         schema_version: AUTHORIZATION_SCHEMA_VERSION,
@@ -85,8 +84,7 @@ pub fn bind_transaction_authorization(
         authorized_provider_effects: authorization.authorized_provider_effects,
         issued_at_unix_seconds: authorization.issued_at_unix_seconds,
         expires_at_unix_seconds: authorization.expires_at_unix_seconds,
-        observation_fresh_until_unix_seconds: authorization
-            .observation_fresh_until_unix_seconds,
+        observation_fresh_until_unix_seconds: authorization.observation_fresh_until_unix_seconds,
         authorization_reference: authorization.authorization_reference,
         evaluated_at_unix_seconds,
     })
@@ -158,7 +156,11 @@ fn validate_transaction_projection(transaction: &TransactionProjection) -> Resul
         &transaction.transaction_plan.allowed_provider_effects,
         "transaction allowed_provider_effects",
     )?;
-    if transaction.transaction_plan.allowed_provider_effects.is_empty() {
+    if transaction
+        .transaction_plan
+        .allowed_provider_effects
+        .is_empty()
+    {
         return Err(D1Error::new(
             "transaction allowed_provider_effects must not be empty",
         ));
@@ -191,7 +193,10 @@ fn validate_authorization_input(
             "transaction authorization schema_version must be {AUTHORIZATION_SCHEMA_VERSION}"
         )));
     }
-    validate_sha256(&authorization.transaction_id, "authorization transaction_id")?;
+    validate_sha256(
+        &authorization.transaction_id,
+        "authorization transaction_id",
+    )?;
     if authorization.transaction_id != transaction.transaction_id {
         return Err(D1Error::new(
             "authorization transaction_id must exactly equal the prepared transaction_id",
@@ -230,16 +235,16 @@ fn validate_authorization_input(
             "authorization timestamps require positive issued_at and expires_at > issued_at",
         ));
     }
-    if authorization.issued_at_unix_seconds
-        < transaction.transaction_plan.observed_at_unix_seconds
+    if authorization.issued_at_unix_seconds < transaction.transaction_plan.observed_at_unix_seconds
     {
         return Err(D1Error::new(
             "authorization cannot be issued before the provider observation used by the transaction",
         ));
     }
 
-    let freshness_seconds = i64::try_from(transaction.transaction_plan.freshness_max_age_seconds)
-        .map_err(|_| D1Error::new("transaction freshness window does not fit i64"))?;
+    let freshness_seconds =
+        i64::try_from(transaction.transaction_plan.freshness_max_age_seconds)
+            .map_err(|_| D1Error::new("transaction freshness window does not fit i64"))?;
     let expected_fresh_until = transaction
         .transaction_plan
         .observed_at_unix_seconds
@@ -274,9 +279,7 @@ fn validate_effect_scope(effects: &[String], label: &str) -> Result<(), D1Error>
     for effect in effects {
         validate_non_empty(effect, label)?;
         if !unique.insert(effect) {
-            return Err(D1Error::new(format!(
-                "{label} must not contain duplicates"
-            )));
+            return Err(D1Error::new(format!("{label} must not contain duplicates")));
         }
     }
     Ok(())
@@ -312,10 +315,10 @@ fn validate_sha256(value: &str, label: &str) -> Result<(), D1Error> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::transaction::{
         MigrationTransactionPlan, ProviderObservationBundle, RecoveryStrategy, TransactionKind,
     };
+    use super::*;
     use serde_json::json;
     use std::collections::BTreeMap;
 
@@ -365,14 +368,8 @@ mod tests {
                 phase: TransactionPhase::Ordinary,
                 source_sha: "66".repeat(20),
                 tree_sha: "77".repeat(20),
-                release_candidate_id: format!(
-                    "release-set-v3-sha256-{}",
-                    "88".repeat(32)
-                ),
-                release_manifest_digests: BTreeMap::from([(
-                    "catalog".to_owned(),
-                    "99".repeat(32),
-                )]),
+                release_candidate_id: format!("release-set-v3-sha256-{}", "88".repeat(32)),
+                release_manifest_digests: BTreeMap::from([("catalog".to_owned(), "99".repeat(32))]),
                 migration_lineage_digest: "aa".repeat(32),
                 target,
                 observation_digest,
@@ -464,10 +461,8 @@ mod tests {
     fn provider_effect_widening_is_rejected() {
         let transaction = transaction();
         let mut input = authorization(&transaction);
-        input["authorized_provider_effects"] = json!([
-            "D1_MIGRATIONS_APPLY_EXACT_PLAN",
-            "D1_DELETE"
-        ]);
+        input["authorized_provider_effects"] =
+            json!(["D1_MIGRATIONS_APPLY_EXACT_PLAN", "D1_DELETE"]);
         assert!(bind_transaction_authorization(&transaction, &input, EVALUATED_AT).is_err());
     }
 
@@ -494,9 +489,7 @@ mod tests {
     fn expired_authorization_is_rejected() {
         let transaction = transaction();
         let input = authorization(&transaction);
-        assert!(
-            bind_transaction_authorization(&transaction, &input, EXPIRES_AT + 1).is_err()
-        );
+        assert!(bind_transaction_authorization(&transaction, &input, EXPIRES_AT + 1).is_err());
     }
 
     #[test]
