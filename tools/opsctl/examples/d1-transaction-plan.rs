@@ -80,7 +80,10 @@ fn read_strict(path: PathBuf, label: &str) -> Result<Value, Box<dyn Error>> {
 
 fn main() -> Result<(), Box<dyn Error>> {
     let args = parse_args()?;
-    let prepare = read_strict(required(args.prepare_json, "--prepare-json")?, "prepare input")?;
+    let prepare = read_strict(
+        required(args.prepare_json, "--prepare-json")?,
+        "prepare input",
+    )?;
     let observation = read_strict(
         required(args.observation_json, "--observation-json")?,
         "provider observation",
@@ -93,12 +96,8 @@ fn main() -> Result<(), Box<dyn Error>> {
         required(args.transaction_input_json, "--transaction-input-json")?,
         "transaction identity input",
     )?;
-    let projection = build_transaction_projection(
-        &prepare,
-        &observation,
-        &repository,
-        &transaction_input,
-    )?;
+    let projection =
+        build_transaction_projection(&prepare, &observation, &repository, &transaction_input)?;
     println!("{}", serialize_transaction_projection(&projection)?);
     Ok(())
 }
