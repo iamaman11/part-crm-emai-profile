@@ -393,8 +393,8 @@ def validate_profile_relationship_d1_behavior(errors: list[str]) -> None:
     database.execute("PRAGMA foreign_keys = ON")
     try:
         migrations = sorted(D1_MIGRATIONS.glob("*.sql"))
-        if not migrations or migrations[0].name != "0001_catalog.sql" or migrations[-1].name != "0032_pas2_payload_fingerprint_contract.sql":
-            errors.append("P1 D1 behavior proof requires the exact current Catalog migration range 0001..0032")
+        if not migrations or migrations[0].name != "0001_catalog.sql" or migrations[-1].name != "0031_device_binding_governance.sql":
+            errors.append("P1 D1 behavior proof requires the exact current Catalog migration range 0001..0031")
             return
 
         for migration in migrations:

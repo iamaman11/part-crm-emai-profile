@@ -1,7 +1,9 @@
 #[path = "d1/authority.rs"]
 mod authority;
-#[path = "d1/catalog.rs"]
+#[path = "d1/catalog_successor.rs"]
 mod catalog;
+#[path = "d1/catalog.rs"]
+mod catalog_legacy;
 #[path = "d1/compatibility.rs"]
 mod compatibility;
 #[path = "d1/model.rs"]
