@@ -1,5 +1,7 @@
 use super::model::D1Error;
-use super::transaction::{ProviderObservationInput, TransactionKind, TransactionPhase, TransactionProjection};
+use super::transaction::{
+    ProviderObservationInput, TransactionKind, TransactionPhase, TransactionProjection,
+};
 use crate::canonical::{canonical_json, sha256_hex};
 use std::collections::BTreeSet;
 
@@ -83,7 +85,10 @@ pub fn revalidate_transaction_projection(
         &plan.predecessor_ledger_sha256,
         "transaction plan predecessor_ledger_sha256",
     )?;
-    validate_sha256(&plan.observation_digest, "transaction plan observation_digest")?;
+    validate_sha256(
+        &plan.observation_digest,
+        "transaction plan observation_digest",
+    )?;
     validate_sha256(
         &observation.observation_digest,
         "provider observation observation_digest",
@@ -110,7 +115,10 @@ pub fn revalidate_transaction_projection(
         ));
     }
 
-    validate_non_empty(&observation.observation_source, "provider observation source")?;
+    validate_non_empty(
+        &observation.observation_source,
+        "provider observation source",
+    )?;
     validate_unique_strings(&observation.remote_migrations, "provider remote_migrations")?;
     validate_unique_strings(
         &observation.wrangler_pending_migrations,
@@ -127,11 +135,11 @@ pub fn revalidate_transaction_projection(
         deployment_identity: observation.deployment_identity.clone(),
         time_travel_bookmark_capable: observation.time_travel_bookmark_capable,
     };
-    let canonical_observation = canonical_json(
-        &serde_json::to_value(&observation_input)
-            .map_err(|error| D1Error::new(format!("cannot serialize provider observation: {error}")))?,
-    )
-    .map_err(D1Error::new)?;
+    let canonical_observation =
+        canonical_json(&serde_json::to_value(&observation_input).map_err(|error| {
+            D1Error::new(format!("cannot serialize provider observation: {error}"))
+        })?)
+        .map_err(D1Error::new)?;
     if sha256_hex(canonical_observation.as_bytes()) != observation.observation_digest {
         return Err(D1Error::new(
             "provider observation digest does not match its canonical sealed facts",
@@ -150,7 +158,10 @@ pub fn revalidate_transaction_projection(
     let mut migration_names = BTreeSet::new();
     for migration in &plan.planned_migrations {
         validate_non_empty(&migration.migration_file, "planned migration filename")?;
-        validate_sha256(&migration.content_sha256, "planned migration content digest")?;
+        validate_sha256(
+            &migration.content_sha256,
+            "planned migration content digest",
+        )?;
         if !migration_names.insert(&migration.migration_file) {
             return Err(D1Error::new(
                 "transaction plan planned_migrations must not contain duplicate filenames",
@@ -172,14 +183,23 @@ pub fn revalidate_transaction_projection(
         "transaction precondition_evidence_refs",
     )?;
     validate_non_empty(&plan.schema_target, "transaction schema_target")?;
-    validate_non_empty(&plan.supported_schema_min, "transaction supported_schema_min")?;
-    validate_non_empty(&plan.supported_schema_max, "transaction supported_schema_max")?;
+    validate_non_empty(
+        &plan.supported_schema_min,
+        "transaction supported_schema_min",
+    )?;
+    validate_non_empty(
+        &plan.supported_schema_max,
+        "transaction supported_schema_max",
+    )?;
     if !plan.expected_post_state.is_object() {
         return Err(D1Error::new(
             "transaction expected_post_state must be a JSON object",
         ));
     }
-    validate_effect_scope(&plan.allowed_provider_effects, "transaction allowed_provider_effects")?;
+    validate_effect_scope(
+        &plan.allowed_provider_effects,
+        "transaction allowed_provider_effects",
+    )?;
     if plan.allowed_provider_effects.is_empty() {
         return Err(D1Error::new(
             "transaction allowed_provider_effects must not be empty",
@@ -189,7 +209,10 @@ pub fn revalidate_transaction_projection(
         &plan.forbidden_provider_effects,
         "transaction forbidden_provider_effects",
     )?;
-    let forbidden = plan.forbidden_provider_effects.iter().collect::<BTreeSet<_>>();
+    let forbidden = plan
+        .forbidden_provider_effects
+        .iter()
+        .collect::<BTreeSet<_>>();
     if plan
         .allowed_provider_effects
         .iter()
@@ -200,13 +223,11 @@ pub fn revalidate_transaction_projection(
         ));
     }
 
-    let canonical_plan = canonical_json(
-        &serde_json::to_value(plan).map_err(|error| {
-            D1Error::new(format!(
-                "cannot serialize migration transaction plan for revalidation: {error}"
-            ))
-        })?,
-    )
+    let canonical_plan = canonical_json(&serde_json::to_value(plan).map_err(|error| {
+        D1Error::new(format!(
+            "cannot serialize migration transaction plan for revalidation: {error}"
+        ))
+    })?)
     .map_err(D1Error::new)?;
     if sha256_hex(canonical_plan.as_bytes()) != transaction.transaction_id {
         return Err(D1Error::new(
