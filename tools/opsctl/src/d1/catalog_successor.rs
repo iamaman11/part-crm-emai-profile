@@ -25,7 +25,6 @@ const LEGACY_POST_EPOCH: [&str; 5] = [
     "0030_profile_generation_successor_commit.sql",
     "0031_device_binding_governance.sql",
 ];
-const SUCCESSOR_FILES: [&str; 2] = [SUCCESSOR_EXPAND_REVISION, SUCCESSOR_CONTRACT_REVISION];
 
 #[derive(Debug, Clone, Copy)]
 struct MigrationSpec {
@@ -131,20 +130,28 @@ impl MigrationSpec {
 #[derive(Debug, Clone)]
 struct CatalogSuccessor {
     authority: ComponentAuthority,
+    migration_source_roots: Vec<&'static str>,
 }
 
 impl CatalogSuccessor {
     fn load(root: &Path) -> Result<Self, D1Error> {
         let legacy = catalog_legacy::component_authority(root, "catalog")?;
         validate_legacy_authority(&legacy)?;
-        validate_successor_directory(root)?;
+        let successor_files = expected_successor_files(&legacy)?;
+        validate_successor_directory(root, &successor_files)?;
 
         let mut ordered_history = legacy.ordered_history[..HISTORICAL_MIGRATION_COUNT].to_vec();
-        ordered_history.push(SUCCESSOR_EXPAND_REVISION.to_owned());
-        ordered_history.extend_from_slice(&legacy.ordered_history[27..31]);
-        ordered_history.push(SUCCESSOR_CONTRACT_REVISION.to_owned());
+        ordered_history.extend(
+            CATALOG_POST_EPOCH_MIGRATIONS
+                .iter()
+                .map(|spec| spec.revision.to_owned()),
+        );
+        let migration_source_roots = ordered_history
+            .iter()
+            .map(|name| migration_source_root(&legacy, &successor_files, name))
+            .collect::<Result<Vec<_>, _>>()?;
 
-        let history_digest = successor_history_digest(root, &legacy)?;
+        let history_digest = successor_history_digest(root, &ordered_history, &migration_source_roots)?;
         let policy_digest = legacy.policy_digest.clone();
         verify_policy_digest(&policy_digest)?;
         let post_epoch = CATALOG_POST_EPOCH_MIGRATIONS
@@ -152,6 +159,10 @@ impl CatalogSuccessor {
             .copied()
             .map(MigrationSpec::to_contract)
             .collect::<Result<Vec<_>, _>>()?;
+        let current_repository_revision = ordered_history
+            .last()
+            .cloned()
+            .ok_or_else(|| D1Error::new("Catalog successor migration lineage is empty"))?;
 
         Ok(Self {
             authority: ComponentAuthority {
@@ -159,14 +170,27 @@ impl CatalogSuccessor {
                 historical_len: HISTORICAL_MIGRATION_COUNT,
                 ordered_history,
                 post_epoch,
-                current_repository_revision: SUCCESSOR_CONTRACT_REVISION.to_owned(),
+                current_repository_revision,
                 history_digest,
                 policy_digest,
             },
+            migration_source_roots,
         })
     }
 
     fn identity_projection(&self) -> Value {
+        let executable_migration_sources = self
+            .authority
+            .ordered_history
+            .iter()
+            .zip(self.migration_source_roots.iter())
+            .map(|(migration_file, source_root)| {
+                json!({
+                    "migration_file": migration_file,
+                    "source_root": source_root,
+                })
+            })
+            .collect::<Vec<_>>();
         json!({
             "component_id": "catalog",
             "migration_root": LEGACY_ROOT,
@@ -177,6 +201,7 @@ impl CatalogSuccessor {
             "history_digest_algorithm": HISTORY_DIGEST_ALGORITHM,
             "history_digest": self.authority.history_digest,
             "compatibility_policy_digest": self.authority.policy_digest,
+            "executable_migration_sources": executable_migration_sources,
             "historical_epoch": {
                 "final_revision": HISTORICAL_FINAL_REVISION,
                 "migration_count": HISTORICAL_MIGRATION_COUNT,
@@ -193,21 +218,63 @@ impl CatalogSuccessor {
         })
     }
 
-    fn release_contract_projection(&self) -> Value {
-        json!({
+    fn release_contract_projection(&self) -> Result<Value, D1Error> {
+        let latest = self
+            .authority
+            .ordered_history
+            .last()
+            .ok_or_else(|| D1Error::new("Catalog successor migration lineage is empty"))?;
+        let trailing_contract_count = self
+            .authority
+            .post_epoch
+            .iter()
+            .rev()
+            .take_while(|contract| {
+                contract.migration_class == MigrationClass::Contract
+                    && contract.rollout_order == RolloutOrder::SeparateContractRelease
+            })
+            .count();
+        if trailing_contract_count > 1 {
+            return Err(D1Error::new(
+                "Catalog release schema projection supports at most one trailing SEPARATE_CONTRACT_RELEASE",
+            ));
+        }
+        let target = if trailing_contract_count == 1 {
+            let last_contract = self
+                .authority
+                .post_epoch
+                .last()
+                .ok_or_else(|| D1Error::new("trailing contract policy is missing"))?;
+            if last_contract.migration_file != *latest {
+                return Err(D1Error::new(
+                    "trailing contract policy does not match Catalog latest revision",
+                ));
+            }
+            self.authority
+                .ordered_history
+                .get(self.authority.ordered_history.len().saturating_sub(2))
+                .ok_or_else(|| {
+                    D1Error::new(
+                        "trailing contract release requires an immediate predecessor revision",
+                    )
+                })?
+        } else {
+            latest
+        };
+        Ok(json!({
             "database_component": "catalog",
-            "target_schema_revision": LEGACY_CURRENT_REVISION,
-            "supported_schema_min": LEGACY_CURRENT_REVISION,
-            "supported_schema_max": SUCCESSOR_CONTRACT_REVISION,
+            "target_schema_revision": target,
+            "supported_schema_min": target,
+            "supported_schema_max": latest,
             "migration_history_digest": self.authority.history_digest,
             "compatibility_policy_digest": self.authority.policy_digest,
-        })
+        }))
     }
 
-    fn inventory_projection(&self) -> Value {
+    fn inventory_projection(&self) -> Result<Value, D1Error> {
         let mut value = self.identity_projection();
-        value["release_schema_contract"] = self.release_contract_projection();
-        value
+        value["release_schema_contract"] = self.release_contract_projection()?;
+        Ok(value)
     }
 }
 
@@ -223,7 +290,7 @@ pub(crate) fn component_authority(
 
 pub(crate) fn release_contract(root: &Path, component: &str) -> Result<Value, D1Error> {
     if component == "catalog" {
-        return Ok(CatalogSuccessor::load(root)?.release_contract_projection());
+        return CatalogSuccessor::load(root)?.release_contract_projection();
     }
     catalog_legacy::release_contract(root, component)
 }
@@ -243,7 +310,7 @@ pub(crate) fn repository_projection(root: &Path) -> Result<String, D1Error> {
                 component.get("component_id").and_then(Value::as_str) == Some("catalog")
             })
             .ok_or_else(|| D1Error::new("legacy D1 projection is missing Catalog component"))?;
-        *catalog_slot = catalog.inventory_projection();
+        *catalog_slot = catalog.inventory_projection()?;
         repository_identity_from_components(components)?
     };
 
@@ -286,7 +353,31 @@ fn validate_legacy_authority(authority: &ComponentAuthority) -> Result<(), D1Err
     Ok(())
 }
 
-fn validate_successor_directory(root: &Path) -> Result<(), D1Error> {
+fn expected_successor_files(
+    legacy: &ComponentAuthority,
+) -> Result<Vec<&'static str>, D1Error> {
+    let mut expected = Vec::new();
+    for (index, spec) in CATALOG_POST_EPOCH_MIGRATIONS.iter().enumerate() {
+        let expected_revision = HISTORICAL_MIGRATION_COUNT + index + 1;
+        let actual_revision = revision_number(spec.revision)?;
+        if actual_revision != expected_revision {
+            return Err(D1Error::new(format!(
+                "Catalog successor typed migration order is not contiguous: expected={expected_revision:04}, actual={actual_revision:04}, file={}",
+                spec.revision
+            )));
+        }
+        match legacy.ordered_history.get(actual_revision.saturating_sub(1)) {
+            Some(legacy_name) if legacy_name == spec.revision => {}
+            _ => expected.push(spec.revision),
+        }
+    }
+    Ok(expected)
+}
+
+fn validate_successor_directory(
+    root: &Path,
+    expected_files: &[&str],
+) -> Result<(), D1Error> {
     let directory = root.join(SUCCESSOR_ROOT);
     let metadata = fs::symlink_metadata(&directory).map_err(|error| {
         D1Error::new(format!(
@@ -328,37 +419,74 @@ fn validate_successor_directory(root: &Path) -> Result<(), D1Error> {
         );
     }
     names.sort();
-    if names != SUCCESSOR_FILES {
+    let expected = expected_files
+        .iter()
+        .map(|name| (*name).to_owned())
+        .collect::<Vec<_>>();
+    if names != expected {
         return Err(D1Error::new(format!(
-            "Catalog successor migration inventory mismatch: expected={SUCCESSOR_FILES:?}, actual={names:?}"
+            "Catalog successor migration inventory mismatch: expected={expected:?}, actual={names:?}"
         )));
     }
     Ok(())
 }
 
+fn migration_source_root(
+    legacy: &ComponentAuthority,
+    successor_files: &[&str],
+    name: &str,
+) -> Result<&'static str, D1Error> {
+    if successor_files.iter().any(|candidate| *candidate == name) {
+        return Ok(SUCCESSOR_ROOT);
+    }
+    let revision = revision_number(name)?;
+    if legacy
+        .ordered_history
+        .get(revision.saturating_sub(1))
+        .map(String::as_str)
+        == Some(name)
+    {
+        return Ok(LEGACY_ROOT);
+    }
+    Err(D1Error::new(format!(
+        "Catalog executable migration lacks a canonical source: {name}"
+    )))
+}
+
+fn revision_number(name: &str) -> Result<usize, D1Error> {
+    let prefix = name
+        .get(..4)
+        .ok_or_else(|| D1Error::new(format!("invalid Catalog migration revision: {name}")))?;
+    if !prefix.bytes().all(|byte| byte.is_ascii_digit()) {
+        return Err(D1Error::new(format!(
+            "invalid Catalog migration revision: {name}"
+        )));
+    }
+    prefix.parse::<usize>().map_err(|error| {
+        D1Error::new(format!(
+            "invalid Catalog migration revision {name}: {error}"
+        ))
+    })
+}
+
 fn successor_history_digest(
     root: &Path,
-    legacy: &ComponentAuthority,
+    ordered_history: &[String],
+    migration_source_roots: &[&str],
 ) -> Result<String, D1Error> {
-    let mut identity = Vec::with_capacity(32);
-    for name in &legacy.ordered_history[..HISTORICAL_MIGRATION_COUNT] {
-        identity.push(migration_identity(root, LEGACY_ROOT, name)?);
+    if ordered_history.len() != migration_source_roots.len() {
+        return Err(D1Error::new(
+            "Catalog successor migration source map cardinality mismatch",
+        ));
     }
-    identity.push(migration_identity(
-        root,
-        SUCCESSOR_ROOT,
-        SUCCESSOR_EXPAND_REVISION,
-    )?);
-    for name in &legacy.ordered_history[27..31] {
-        identity.push(migration_identity(root, LEGACY_ROOT, name)?);
-    }
-    identity.push(migration_identity(
-        root,
-        SUCCESSOR_ROOT,
-        SUCCESSOR_CONTRACT_REVISION,
-    )?);
-    let value = Value::Array(identity);
-    canonical_json(&value)
+    let identity = Value::Array(
+        ordered_history
+            .iter()
+            .zip(migration_source_roots.iter())
+            .map(|(name, source_root)| migration_identity(root, source_root, name))
+            .collect::<Result<Vec<_>, _>>()?,
+    );
+    canonical_json(&identity)
         .map(|encoded| sha256_hex(encoded.as_bytes()))
         .map_err(D1Error::new)
 }
@@ -496,6 +624,15 @@ mod tests {
             .expect("catalog projection");
         assert_eq!(catalog["migration_lineage"], "catalog-successor-v1");
         assert_eq!(catalog["legacy_history"]["immutable"], true);
+        let sources = catalog["executable_migration_sources"]
+            .as_array()
+            .expect("executable migration source projection");
+        assert_eq!(sources.len(), 32);
+        assert_eq!(sources[26]["migration_file"], SUCCESSOR_EXPAND_REVISION);
+        assert_eq!(sources[26]["source_root"], "migrations/d1-successor");
+        assert_eq!(sources[27]["source_root"], "migrations/d1");
+        assert_eq!(sources[31]["migration_file"], SUCCESSOR_CONTRACT_REVISION);
+        assert_eq!(sources[31]["source_root"], "migrations/d1-successor");
         assert_eq!(
             projection["executable_schema_authority"],
             serde_json::json!([
