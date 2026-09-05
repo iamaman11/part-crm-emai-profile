@@ -440,8 +440,8 @@ pub(super) fn verify_post_transition(
 #[cfg(test)]
 mod tests {
     use super::{
-        CONTRACT_REVISION, ComponentAuthority, PREDECESSOR_REVISION, validate_exact_successor,
-        valid_release_set_id, valid_sha256, valid_source_sha,
+        CONTRACT_REVISION, ComponentAuthority, PREDECESSOR_REVISION, valid_release_set_id,
+        valid_sha256, valid_source_sha, validate_exact_successor,
     };
 
     #[test]
@@ -466,14 +466,20 @@ mod tests {
         let authority = ComponentAuthority {
             component_id: "catalog".to_owned(),
             historical_len: 0,
-            ordered_history: vec![PREDECESSOR_REVISION.to_owned(), CONTRACT_REVISION.to_owned()],
+            ordered_history: vec![
+                PREDECESSOR_REVISION.to_owned(),
+                CONTRACT_REVISION.to_owned(),
+            ],
             post_epoch: Vec::new(),
             current_repository_revision: CONTRACT_REVISION.to_owned(),
             history_digest: "history".to_owned(),
             policy_digest: "policy".to_owned(),
         };
         let predecessor = vec![PREDECESSOR_REVISION.to_owned()];
-        let exact = vec![PREDECESSOR_REVISION.to_owned(), CONTRACT_REVISION.to_owned()];
+        let exact = vec![
+            PREDECESSOR_REVISION.to_owned(),
+            CONTRACT_REVISION.to_owned(),
+        ];
         assert!(validate_exact_successor(&authority, &predecessor, &exact).is_ok());
         assert!(validate_exact_successor(&authority, &predecessor, &predecessor).is_err());
         let mut extra = exact.clone();
