@@ -399,8 +399,8 @@ jobs:
             if [ "$plan_rc" -ne 0 ]; then
               python scripts/d1-gate-diagnostics.py record \
                 --diagnostics "$diagnostics" \
-                --gate native-plan-command \
-                --reason-code D1_NATIVE_PLAN_COMMAND_FAILED \
+                --gate contract-transition-plan-command \
+                --reason-code D1_CONTRACT_TRANSITION_PLAN_COMMAND_FAILED \
                 --exit-code "$plan_rc" \
                 --detail 'credential-free contract-transition plan command returned non-zero'
               exit "$plan_rc"
