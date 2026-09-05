@@ -232,23 +232,27 @@ pub(crate) fn repository_projection(root: &Path) -> Result<String, D1Error> {
     let catalog = CatalogSuccessor::load(root)?;
     let mut projection: Value = serde_json::from_str(&catalog_legacy::repository_projection(root)?)
         .map_err(|error| D1Error::new(format!("cannot parse legacy D1 projection: {error}")))?;
-    let components = projection
-        .get_mut("components")
-        .and_then(Value::as_array_mut)
-        .ok_or_else(|| D1Error::new("legacy D1 projection is missing components"))?;
-    let catalog_slot = components
-        .iter_mut()
-        .find(|component| component.get("component_id").and_then(Value::as_str) == Some("catalog"))
-        .ok_or_else(|| D1Error::new("legacy D1 projection is missing Catalog component"))?;
-    *catalog_slot = catalog.inventory_projection();
+    let repository_identity = {
+        let components = projection
+            .get_mut("components")
+            .and_then(Value::as_array_mut)
+            .ok_or_else(|| D1Error::new("legacy D1 projection is missing components"))?;
+        let catalog_slot = components
+            .iter_mut()
+            .find(|component| {
+                component.get("component_id").and_then(Value::as_str) == Some("catalog")
+            })
+            .ok_or_else(|| D1Error::new("legacy D1 projection is missing Catalog component"))?;
+        *catalog_slot = catalog.inventory_projection();
+        repository_identity_from_components(components)?
+    };
 
     projection["executable_schema_authority"] = json!([
         LEGACY_ROOT,
         SUCCESSOR_ROOT,
         "migrations/resolver-d1"
     ]);
-    projection["repository_identity_sha256"] =
-        json!(repository_identity_from_components(components)?);
+    projection["repository_identity_sha256"] = json!(repository_identity);
     canonical_pretty_json(&projection).map_err(D1Error::new)
 }
 
