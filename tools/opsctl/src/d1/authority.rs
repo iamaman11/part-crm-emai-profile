@@ -170,11 +170,7 @@ mod tests {
     use std::path::PathBuf;
 
     fn fixture_path(name: &str) -> PathBuf {
-        std::env::temp_dir().join(format!(
-            "opsctl-d1-{name}-{}-{}.json",
-            std::process::id(),
-            std::thread::current().name().unwrap_or("unnamed")
-        ))
+        std::env::temp_dir().join(format!("opsctl-d1-{name}-{}.json", std::process::id()))
     }
 
     #[test]
