@@ -1,0 +1,248 @@
+name: V2 Phase A D1 Command Router
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  actions: write
+  contents: read
+  issues: read
+
+concurrency:
+  group: cap-exec-v2-phase-a-d1-command-router
+  cancel-in-progress: false
+
+# STAGE_BOUND_V2_PHASE_A_ROUTER
+# Thin GitHub-only orchestration for #584. This workflow owns no D1 semantics.
+# It validates an exact OWNER command + durable authorization record and then
+# dispatches the sole canonical mutation owner: d1-migration-executor.yml.
+# Production, Access/mTLS, Worker promotion, resolver, CONTRACT/0032 and manual SQL
+# are outside this router by construction.
+
+jobs:
+  route:
+    if: >-
+      github.event.issue.number == 584 &&
+      startsWith(github.event.comment.body, '/v2-phase-a-d1\n')
+    name: Validate exact Phase A command and dispatch canonical executor
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    env:
+      GH_TOKEN: ${{ github.token }}
+      COMMENT_BODY: ${{ github.event.comment.body }}
+      COMMENT_AUTHOR: ${{ github.event.comment.user.login }}
+      COMMENT_AUTHOR_ASSOCIATION: ${{ github.event.comment.author_association }}
+      SOURCE_SHA: ${{ github.sha }}
+      AUTHORIZATION_BASE_SHA: 1c9f8a26a85ae653759aea1f36c2ccb95152c5bb
+      EXPECTED_ACTOR: iamaman11
+      EXPECTED_ISSUE: '584'
+      EXPECTED_CURRENT_RELEASE_SET_ID: release-set-v3-sha256-e01338de30cdc4c334e210f9e2bd75a67837420dd370b83964caae452f77522c
+      EXPECTED_CURRENT_RELEASE_SOURCE: 852dd515121011130dbd3d7726b72483ecc85aaf
+      EXPECTED_CURRENT_MANIFEST_SHA256: cd57a6851a348c7044a628deae5a5804e0f7447cd0583c96bc61ad8f8812e10e
+      EXPECTED_TARGET_MIGRATION: 0031_device_binding_governance.sql
+      EXPECTED_SUPPORTED_MAX_MIGRATION: 0032_pas2_payload_fingerprint_contract.sql
+      EXPECTED_CURRENT_MIGRATION: 0026_outbound_mail_intents.sql
+      CLOUDFLARE_ACCOUNT_ID: 4426df1449e417511bc7697d60b7f62f
+      DATABASE_NAME: part-crm-catalog-staging-d3-20260815
+      DATABASE_ID: af9abfd1-cb0e-4c58-aa5e-f09c8147f23f
+      ROUTER_PATH: .github/workflows/v2-phase-a-d1-command-router.yml
+    steps:
+      - name: Parse exact owner command
+        run: |
+          set -euo pipefail
+          test "$COMMENT_AUTHOR" = "$EXPECTED_ACTOR"
+          test "$COMMENT_AUTHOR_ASSOCIATION" = "OWNER"
+          python - <<'PY'
+          import os
+          from pathlib import Path
+
+          lines = [line.strip() for line in os.environ['COMMENT_BODY'].strip().splitlines()]
+          if not lines or lines[0] != '/v2-phase-a-d1':
+              raise SystemExit('invalid command verb')
+          values = {}
+          for line in lines[1:]:
+              if not line:
+                  continue
+              if '=' not in line:
+                  raise SystemExit(f'invalid command line: {line!r}')
+              key, value = line.split('=', 1)
+              if key in values or not key or not value:
+                  raise SystemExit('duplicate/empty command field')
+              values[key] = value
+          required = {'source_sha', 'release_set_id', 'authorization_comment_id'}
+          if set(values) != required:
+              raise SystemExit(f'exact fields required: {sorted(required)}')
+          if len(values['source_sha']) != 40 or any(c not in '0123456789abcdef' for c in values['source_sha']):
+              raise SystemExit('invalid source_sha')
+          prefix = 'release-set-v3-sha256-'
+          rid = values['release_set_id']
+          if not rid.startswith(prefix) or len(rid) != len(prefix) + 64 or any(c not in '0123456789abcdef' for c in rid[len(prefix):]):
+              raise SystemExit('invalid release_set_id')
+          if not values['authorization_comment_id'].isdigit():
+              raise SystemExit('invalid authorization_comment_id')
+          out = Path(os.environ['GITHUB_ENV'])
+          with out.open('a', encoding='utf-8') as fh:
+              fh.write(f"COMMAND_SOURCE_SHA={values['source_sha']}\n")
+              fh.write(f"TARGET_RELEASE_SET_ID={rid}\n")
+              fh.write(f"AUTHORIZATION_COMMENT_ID={values['authorization_comment_id']}\n")
+          PY
+
+      - name: Checkout exact default-branch source
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 2
+          persist-credentials: false
+
+      - name: Fail closed unless source is the one bounded router-only successor
+        run: |
+          set -euo pipefail
+          test "$GITHUB_EVENT_NAME" = issue_comment
+          test "$COMMAND_SOURCE_SHA" = "$SOURCE_SHA"
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          test "$(git rev-parse HEAD^)" = "$AUTHORIZATION_BASE_SHA"
+          test "$(git rev-list --count "$AUTHORIZATION_BASE_SHA..$SOURCE_SHA")" -eq 1
+          mapfile -t changed < <(git diff --name-only "$AUTHORIZATION_BASE_SHA" "$SOURCE_SHA")
+          test "${#changed[@]}" -eq 1
+          test "${changed[0]}" = "$ROUTER_PATH"
+          main_sha="$(gh api "repos/$GITHUB_REPOSITORY/branches/main" --jq '.commit.sha')"
+          test "$main_sha" = "$SOURCE_SHA"
+
+      - name: Verify durable exact authorization record
+        run: |
+          set -euo pipefail
+          auth_json="$RUNNER_TEMP/phase-a-authorization.json"
+          gh api "repos/$GITHUB_REPOSITORY/issues/comments/$AUTHORIZATION_COMMENT_ID" > "$auth_json"
+          test "$(jq -r '.user.login' "$auth_json")" = "$EXPECTED_ACTOR"
+          test "$(jq -r '.author_association' "$auth_json")" = "OWNER"
+          test "$(jq -r '.issue_url' "$auth_json")" = "https://api.github.com/repos/$GITHUB_REPOSITORY/issues/$EXPECTED_ISSUE"
+          body="$(jq -r '.body' "$auth_json")"
+          grep -Fqx 'PHASE_A_AUTHORIZATION = YES' <<<"$body"
+          grep -Fqx "SOURCE_SHA = $SOURCE_SHA" <<<"$body"
+          grep -Fqx "RELEASE_CANDIDATE_ID = $TARGET_RELEASE_SET_ID" <<<"$body"
+          grep -Fqx 'ENVIRONMENT = staging' <<<"$body"
+          grep -Fqx 'COMPONENT = catalog' <<<"$body"
+          grep -Fqx "DATABASE_ID = $DATABASE_ID" <<<"$body"
+          grep -Fqx 'PREDECESSOR_LEDGER = EXACT_0001_0026' <<<"$body"
+          grep -Fqx 'TARGET_SCHEMA = 0031_device_binding_governance.sql' <<<"$body"
+          grep -Fqx 'CONTRACT_0032_AUTHORIZED = NO' <<<"$body"
+          grep -Fqx 'WORKER_PROMOTION_AUTHORIZED = NO' <<<"$body"
+          grep -Fqx 'ACCESS_MTLS_MUTATION_AUTHORIZED = NO' <<<"$body"
+          grep -Fqx 'PRODUCTION_AUTHORIZED = NO' <<<"$body"
+
+      - name: Resolve and verify exact target/current Release Sets
+        run: |
+          set -euo pipefail
+          target_json="$RUNNER_TEMP/target-release.json"
+          current_json="$RUNNER_TEMP/current-release.json"
+          gh api "repos/$GITHUB_REPOSITORY/releases/tags/$TARGET_RELEASE_SET_ID" > "$target_json"
+          gh api "repos/$GITHUB_REPOSITORY/releases/tags/$EXPECTED_CURRENT_RELEASE_SET_ID" > "$current_json"
+          test "$(jq -r '.target_commitish' "$target_json")" = "$SOURCE_SHA"
+          test "$(jq -r '.target_commitish' "$current_json")" = "$EXPECTED_CURRENT_RELEASE_SOURCE"
+          count="$(gh api --paginate "repos/$GITHUB_REPOSITORY/releases?per_page=100" | jq -s --arg sha "$SOURCE_SHA" '[.[][] | select(.target_commitish == $sha and (.tag_name | startswith("release-set-v3-sha256-")))] | length')"
+          test "$count" -eq 1
+
+      - name: Download immutable release metadata and control-plane archives
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP/v2-phase-a-router"
+          rm -rf "$root"
+          mkdir -p "$root/target" "$root/current"
+          gh release download "$TARGET_RELEASE_SET_ID" --repo "$GITHUB_REPOSITORY" --dir "$root/target" --pattern release-set.json --pattern control-plane.tar
+          gh release download "$EXPECTED_CURRENT_RELEASE_SET_ID" --repo "$GITHUB_REPOSITORY" --dir "$root/current" --pattern release-set.json --pattern control-plane.tar
+          test "$(find "$root/target" -maxdepth 1 -type f | wc -l)" -eq 2
+          test "$(find "$root/current" -maxdepth 1 -type f | wc -l)" -eq 2
+
+      - name: Verify immutable component manifests and schema window
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import hashlib, json, os, tarfile
+          from pathlib import Path, PurePosixPath
+
+          root = Path(os.environ['RUNNER_TEMP']) / 'v2-phase-a-router'
+
+          def sha256(raw: bytes) -> str:
+              return hashlib.sha256(raw).hexdigest()
+
+          def verify(label, release_set_id, source_sha, expected_target, expected_max, pinned_manifest_sha=None):
+              rs = json.loads((root / label / 'release-set.json').read_text(encoding='utf-8'))
+              if rs.get('schema_version') != 3 or rs.get('release_set_id') != release_set_id:
+                  raise SystemExit(f'{label}: release-set identity mismatch')
+              source = rs.get('source') or {}
+              if source.get('repository') != os.environ['GITHUB_REPOSITORY'] or source.get('commit_sha') != source_sha or source.get('accepted_main') is not True:
+                  raise SystemExit(f'{label}: accepted-main source mismatch')
+              component = (rs.get('components') or {}).get('control_plane')
+              if not isinstance(component, dict) or component.get('source_commit_sha') != source_sha:
+                  raise SystemExit(f'{label}: control-plane binding mismatch')
+              archive_raw = (root / label / 'control-plane.tar').read_bytes()
+              if sha256(archive_raw) != component.get('artifact_sha256'):
+                  raise SystemExit(f'{label}: archive digest mismatch')
+              with tarfile.open(root / label / 'control-plane.tar', mode='r:') as archive:
+                  members = [m for m in archive.getmembers() if m.isfile() and PurePosixPath(m.name).name == 'release-manifest.json']
+                  if len(members) != 1:
+                      raise SystemExit(f'{label}: exactly one release-manifest.json required')
+                  extracted = archive.extractfile(members[0])
+                  if extracted is None:
+                      raise SystemExit(f'{label}: manifest unreadable')
+                  raw = extracted.read()
+              digest = sha256(raw)
+              if digest != component.get('component_manifest_sha256'):
+                  raise SystemExit(f'{label}: manifest digest mismatch')
+              if pinned_manifest_sha is not None and digest != pinned_manifest_sha:
+                  raise SystemExit(f'{label}: pinned manifest digest mismatch')
+              manifest = json.loads(raw)
+              if (json.dumps(manifest, sort_keys=True, indent=2) + '\n').encode() != raw:
+                  raise SystemExit(f'{label}: manifest not canonical JSON')
+              migrations = manifest.get('migrations') or {}
+              contract = manifest.get('schema_contract') or {}
+              if migrations.get('latest') != expected_target:
+                  raise SystemExit(f'{label}: migration target mismatch')
+              if contract.get('database_component') != 'catalog' or contract.get('target_schema_revision') != expected_target:
+                  raise SystemExit(f'{label}: schema target mismatch')
+              if expected_max is not None and contract.get('supported_schema_max') != expected_max:
+                  raise SystemExit(f'{label}: supported max mismatch')
+              (root / f'{label}-manifest.json').write_bytes(raw)
+
+          verify('target', os.environ['TARGET_RELEASE_SET_ID'], os.environ['SOURCE_SHA'], os.environ['EXPECTED_TARGET_MIGRATION'], os.environ['EXPECTED_SUPPORTED_MAX_MIGRATION'])
+          verify('current', os.environ['EXPECTED_CURRENT_RELEASE_SET_ID'], os.environ['EXPECTED_CURRENT_RELEASE_SOURCE'], os.environ['EXPECTED_CURRENT_MIGRATION'], os.environ['EXPECTED_CURRENT_MIGRATION'], os.environ['EXPECTED_CURRENT_MANIFEST_SHA256'])
+          PY
+
+      - name: Race-check main and prove exact executor has not already been dispatched
+        run: |
+          set -euo pipefail
+          main_sha="$(gh api "repos/$GITHUB_REPOSITORY/branches/main" --jq '.commit.sha')"
+          test "$main_sha" = "$SOURCE_SHA"
+          gh api "repos/$GITHUB_REPOSITORY/actions/workflows/d1-migration-executor.yml/runs?event=workflow_dispatch&per_page=100" > "$RUNNER_TEMP/d1-executor-runs.json"
+          existing="$(jq --arg sha "$SOURCE_SHA" '[.workflow_runs[] | select(.head_sha == $sha)] | length' "$RUNNER_TEMP/d1-executor-runs.json")"
+          test "$existing" -eq 0
+
+      - name: Dispatch canonical Protected D1 Migration Executor exactly once
+        run: |
+          set -euo pipefail
+          main_sha="$(gh api "repos/$GITHUB_REPOSITORY/branches/main" --jq '.commit.sha')"
+          test "$main_sha" = "$SOURCE_SHA"
+          root="$RUNNER_TEMP/v2-phase-a-router"
+          target_manifest="$(jq -c . "$root/target-manifest.json")"
+          current_manifest="$(jq -c . "$root/current-manifest.json")"
+          confirmation="$SOURCE_SHA:staging:catalog:$DATABASE_ID"
+          jq -n \
+            --arg ref main \
+            --arg environment staging \
+            --arg source_sha "$SOURCE_SHA" \
+            --arg component catalog \
+            --arg account_id "$CLOUDFLARE_ACCOUNT_ID" \
+            --arg database_name "$DATABASE_NAME" \
+            --arg database_id "$DATABASE_ID" \
+            --arg target_release_manifest_json "$target_manifest" \
+            --arg current_release_manifest_json "$current_manifest" \
+            --arg known_good_release_manifest_json "$current_manifest" \
+            --arg preconditions_json '{}' \
+            --arg transition_mode ordinary \
+            --arg confirmation "$confirmation" \
+            '{ref:$ref,inputs:{environment:$environment,source_sha:$source_sha,component:$component,account_id:$account_id,database_name:$database_name,database_id:$database_id,target_release_manifest_json:$target_release_manifest_json,current_release_manifest_json:$current_release_manifest_json,known_good_release_manifest_json:$known_good_release_manifest_json,preconditions_json:$preconditions_json,transition_mode:$transition_mode,expected_release_set_id:"",mutation_authorized:true,confirmation:$confirmation}}' \
+            > "$RUNNER_TEMP/d1-dispatch.json"
+          gh api --method POST "repos/$GITHUB_REPOSITORY/actions/workflows/d1-migration-executor.yml/dispatches" --input "$RUNNER_TEMP/d1-dispatch.json"
+          rm -f "$RUNNER_TEMP/d1-dispatch.json"
+          echo "Canonical Phase A executor dispatch accepted for exact main $SOURCE_SHA and Release Set $TARGET_RELEASE_SET_ID."
