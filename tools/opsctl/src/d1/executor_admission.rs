@@ -100,11 +100,11 @@ pub fn bind_executor_admission(
     })
 }
 
-pub fn serialize_executor_admission(
-    binding: &ExecutorAdmissionBinding,
-) -> Result<String, D1Error> {
+pub fn serialize_executor_admission(binding: &ExecutorAdmissionBinding) -> Result<String, D1Error> {
     let value = serde_json::to_value(binding).map_err(|error| {
-        D1Error::new(format!("cannot serialize executor admission binding: {error}"))
+        D1Error::new(format!(
+            "cannot serialize executor admission binding: {error}"
+        ))
     })?;
     crate::canonical::canonical_json(&value).map_err(D1Error::new)
 }
@@ -275,7 +275,8 @@ mod tests {
     }
 
     #[test]
-    fn exact_executor_admission_binds_transaction_authorization_and_checkout() -> Result<(), D1Error> {
+    fn exact_executor_admission_binds_transaction_authorization_and_checkout() -> Result<(), D1Error>
+    {
         let transaction = transaction()?;
         let binding = bind_executor_admission(
             &transaction,
@@ -298,13 +299,15 @@ mod tests {
         let transaction = transaction()?;
         let mut expected = expectation(&transaction);
         expected.source_sha = "ab".repeat(20);
-        assert!(bind_executor_admission(
-            &transaction,
-            &authorization(&transaction),
-            EVALUATED_AT,
-            &expected,
-        )
-        .is_err());
+        assert!(
+            bind_executor_admission(
+                &transaction,
+                &authorization(&transaction),
+                EVALUATED_AT,
+                &expected,
+            )
+            .is_err()
+        );
         Ok(())
     }
 
@@ -313,13 +316,15 @@ mod tests {
         let transaction = transaction()?;
         let mut expected = expectation(&transaction);
         expected.tree_sha = "cd".repeat(20);
-        assert!(bind_executor_admission(
-            &transaction,
-            &authorization(&transaction),
-            EVALUATED_AT,
-            &expected,
-        )
-        .is_err());
+        assert!(
+            bind_executor_admission(
+                &transaction,
+                &authorization(&transaction),
+                EVALUATED_AT,
+                &expected,
+            )
+            .is_err()
+        );
         Ok(())
     }
 
@@ -328,13 +333,15 @@ mod tests {
         let transaction = transaction()?;
         let mut expected = expectation(&transaction);
         expected.target.database_id = "database-2".to_owned();
-        assert!(bind_executor_admission(
-            &transaction,
-            &authorization(&transaction),
-            EVALUATED_AT,
-            &expected,
-        )
-        .is_err());
+        assert!(
+            bind_executor_admission(
+                &transaction,
+                &authorization(&transaction),
+                EVALUATED_AT,
+                &expected,
+            )
+            .is_err()
+        );
         Ok(())
     }
 
@@ -343,13 +350,15 @@ mod tests {
         let transaction = transaction()?;
         let mut expected = expectation(&transaction);
         expected.transaction_id = "ef".repeat(32);
-        assert!(bind_executor_admission(
-            &transaction,
-            &authorization(&transaction),
-            EVALUATED_AT,
-            &expected,
-        )
-        .is_err());
+        assert!(
+            bind_executor_admission(
+                &transaction,
+                &authorization(&transaction),
+                EVALUATED_AT,
+                &expected,
+            )
+            .is_err()
+        );
         Ok(())
     }
 }
