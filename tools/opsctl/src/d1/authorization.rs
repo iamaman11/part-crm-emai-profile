@@ -1,12 +1,12 @@
 use super::model::D1Error;
 use super::transaction::{TargetIdentity, TransactionPhase, TransactionProjection};
+use super::transaction_integrity::revalidate_transaction_projection;
 use crate::canonical::{canonical_json, sha256_hex};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::BTreeSet;
 
 const AUTHORIZATION_SCHEMA_VERSION: u64 = 1;
-const TRANSACTION_SCHEMA_VERSION: u64 = 1;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -47,7 +47,7 @@ pub fn bind_transaction_authorization(
     authorization_value: &Value,
     evaluated_at_unix_seconds: i64,
 ) -> Result<TransactionAuthorizationBinding, D1Error> {
-    validate_transaction_projection(transaction)?;
+    revalidate_transaction_projection(transaction)?;
     if evaluated_at_unix_seconds <= 0 {
         return Err(D1Error::new(
             "authorization evaluation timestamp must be positive",
@@ -99,88 +99,6 @@ pub fn serialize_authorization_binding(
         ))
     })?;
     canonical_json(&value).map_err(D1Error::new)
-}
-
-fn validate_transaction_projection(transaction: &TransactionProjection) -> Result<(), D1Error> {
-    if transaction.schema_version != TRANSACTION_SCHEMA_VERSION
-        || transaction.transaction_plan.schema_version != TRANSACTION_SCHEMA_VERSION
-    {
-        return Err(D1Error::new(
-            "transaction authorization requires transaction schema_version 1",
-        ));
-    }
-    if transaction.status != "TRANSACTION_PREPARED" || transaction.mode != "read-only" {
-        return Err(D1Error::new(
-            "transaction authorization requires a read-only TRANSACTION_PREPARED projection",
-        ));
-    }
-    if transaction.authorization_consumed
-        || transaction.mutation_executed
-        || transaction.provider_mutation_executed
-    {
-        return Err(D1Error::new(
-            "transaction authorization requires an unconsumed, non-mutating transaction projection",
-        ));
-    }
-    validate_sha256(&transaction.transaction_id, "transaction_id")?;
-    validate_target(&transaction.transaction_plan.target)?;
-    if transaction.transaction_plan.target != transaction.provider_observation.target {
-        return Err(D1Error::new(
-            "transaction plan target must equal the sealed provider observation target",
-        ));
-    }
-    if transaction.transaction_plan.observation_digest
-        != transaction.provider_observation.observation_digest
-        || transaction.transaction_plan.observed_at_unix_seconds
-            != transaction.provider_observation.observed_at_unix_seconds
-    {
-        return Err(D1Error::new(
-            "transaction plan observation identity must equal the sealed provider observation",
-        ));
-    }
-    validate_sha256(
-        &transaction.transaction_plan.observation_digest,
-        "transaction observation_digest",
-    )?;
-    if transaction.transaction_plan.observed_at_unix_seconds <= 0 {
-        return Err(D1Error::new(
-            "transaction observed_at_unix_seconds must be positive",
-        ));
-    }
-    if transaction.transaction_plan.freshness_max_age_seconds == 0 {
-        return Err(D1Error::new(
-            "transaction freshness_max_age_seconds must be greater than zero",
-        ));
-    }
-    validate_effect_scope(
-        &transaction.transaction_plan.allowed_provider_effects,
-        "transaction allowed_provider_effects",
-    )?;
-    if transaction
-        .transaction_plan
-        .allowed_provider_effects
-        .is_empty()
-    {
-        return Err(D1Error::new(
-            "transaction allowed_provider_effects must not be empty",
-        ));
-    }
-    let forbidden = transaction
-        .transaction_plan
-        .forbidden_provider_effects
-        .iter()
-        .collect::<BTreeSet<_>>();
-    if transaction
-        .transaction_plan
-        .allowed_provider_effects
-        .iter()
-        .any(|effect| forbidden.contains(effect))
-    {
-        return Err(D1Error::new(
-            "transaction allowed and forbidden provider effects must be disjoint",
-        ));
-    }
-    Ok(())
 }
 
 fn validate_authorization_input(
@@ -316,7 +234,8 @@ fn validate_sha256(value: &str, label: &str) -> Result<(), D1Error> {
 #[cfg(test)]
 mod tests {
     use super::super::transaction::{
-        MigrationTransactionPlan, ProviderObservationBundle, RecoveryStrategy, TransactionKind,
+        MigrationTransactionPlan, ProviderObservationBundle, ProviderObservationInput,
+        RecoveryStrategy, TransactionKind,
     };
     use super::*;
     use serde_json::json;
@@ -339,7 +258,68 @@ mod tests {
 
     fn transaction() -> TransactionProjection {
         let target = target();
-        let observation_digest = "11".repeat(32);
+        let observation_input = ProviderObservationInput {
+            schema_version: 1,
+            target: target.clone(),
+            observed_at_unix_seconds: OBSERVED_AT,
+            observation_source: "fixture".to_owned(),
+            remote_ledger_sha256: "22".repeat(32),
+            remote_migrations: vec!["0030_profile_generation_successor_commit.sql".to_owned()],
+            wrangler_pending_migrations: vec!["0031_device_binding_governance.sql".to_owned()],
+            deployment_identity: Some("deployment-1".to_owned()),
+            time_travel_bookmark_capable: true,
+        };
+        let canonical_observation = canonical_json(
+            &serde_json::to_value(&observation_input).expect("serialize observation fixture"),
+        )
+        .expect("canonicalize observation fixture");
+        let observation_digest = sha256_hex(canonical_observation.as_bytes());
+        let provider_observation = ProviderObservationBundle {
+            schema_version: observation_input.schema_version,
+            observation_digest: observation_digest.clone(),
+            target: observation_input.target,
+            observed_at_unix_seconds: observation_input.observed_at_unix_seconds,
+            observation_source: observation_input.observation_source,
+            remote_ledger_sha256: observation_input.remote_ledger_sha256,
+            remote_migrations: observation_input.remote_migrations,
+            wrangler_pending_migrations: observation_input.wrangler_pending_migrations,
+            deployment_identity: observation_input.deployment_identity,
+            time_travel_bookmark_capable: observation_input.time_travel_bookmark_capable,
+        };
+        let transaction_plan = MigrationTransactionPlan {
+            schema_version: 1,
+            repository_identity_sha256: "44".repeat(32),
+            planner_policy_digest: "55".repeat(32),
+            transaction_kind: TransactionKind::D1Migration,
+            phase: TransactionPhase::Ordinary,
+            source_sha: "66".repeat(20),
+            tree_sha: "77".repeat(20),
+            release_candidate_id: format!("release-set-v3-sha256-{}", "88".repeat(32)),
+            release_manifest_digests: BTreeMap::from([("catalog".to_owned(), "99".repeat(32))]),
+            migration_lineage_digest: "aa".repeat(32),
+            target,
+            observation_digest,
+            observed_at_unix_seconds: OBSERVED_AT,
+            freshness_max_age_seconds: 900,
+            predecessor_ledger_sha256: "22".repeat(32),
+            planned_migrations: Vec::new(),
+            schema_target: "0031_device_binding_governance.sql".to_owned(),
+            supported_schema_min: "0031_device_binding_governance.sql".to_owned(),
+            supported_schema_max: "0032_pas2_payload_fingerprint_contract.sql".to_owned(),
+            precondition_evidence_refs: vec!["fixture:precondition".to_owned()],
+            recovery_strategy: RecoveryStrategy::NoopRetry,
+            expected_post_state: json!({"revision": "0031_device_binding_governance.sql"}),
+            allowed_provider_effects: vec!["D1_MIGRATIONS_APPLY_EXACT_PLAN".to_owned()],
+            forbidden_provider_effects: vec![
+                "D1_CREATE".to_owned(),
+                "D1_DELETE".to_owned(),
+                "PRODUCTION_MUTATION".to_owned(),
+            ],
+        };
+        let canonical_plan = canonical_json(
+            &serde_json::to_value(&transaction_plan).expect("serialize transaction fixture"),
+        )
+        .expect("canonicalize transaction fixture");
         TransactionProjection {
             schema_version: 1,
             status: "TRANSACTION_PREPARED".to_owned(),
@@ -347,49 +327,9 @@ mod tests {
             authorization_consumed: false,
             mutation_executed: false,
             provider_mutation_executed: false,
-            provider_observation: ProviderObservationBundle {
-                schema_version: 1,
-                observation_digest: observation_digest.clone(),
-                target: target.clone(),
-                observed_at_unix_seconds: OBSERVED_AT,
-                observation_source: "fixture".to_owned(),
-                remote_ledger_sha256: "22".repeat(32),
-                remote_migrations: vec!["0030_profile_generation_successor_commit.sql".to_owned()],
-                wrangler_pending_migrations: vec!["0031_device_binding_governance.sql".to_owned()],
-                deployment_identity: Some("deployment-1".to_owned()),
-                time_travel_bookmark_capable: true,
-            },
-            transaction_id: "33".repeat(32),
-            transaction_plan: MigrationTransactionPlan {
-                schema_version: 1,
-                repository_identity_sha256: "44".repeat(32),
-                planner_policy_digest: "55".repeat(32),
-                transaction_kind: TransactionKind::D1Migration,
-                phase: TransactionPhase::Ordinary,
-                source_sha: "66".repeat(20),
-                tree_sha: "77".repeat(20),
-                release_candidate_id: format!("release-set-v3-sha256-{}", "88".repeat(32)),
-                release_manifest_digests: BTreeMap::from([("catalog".to_owned(), "99".repeat(32))]),
-                migration_lineage_digest: "aa".repeat(32),
-                target,
-                observation_digest,
-                observed_at_unix_seconds: OBSERVED_AT,
-                freshness_max_age_seconds: 900,
-                predecessor_ledger_sha256: "22".repeat(32),
-                planned_migrations: Vec::new(),
-                schema_target: "0031_device_binding_governance.sql".to_owned(),
-                supported_schema_min: "0031_device_binding_governance.sql".to_owned(),
-                supported_schema_max: "0032_pas2_payload_fingerprint_contract.sql".to_owned(),
-                precondition_evidence_refs: vec!["fixture:precondition".to_owned()],
-                recovery_strategy: RecoveryStrategy::NoopRetry,
-                expected_post_state: json!({"revision": "0031_device_binding_governance.sql"}),
-                allowed_provider_effects: vec!["D1_MIGRATIONS_APPLY_EXACT_PLAN".to_owned()],
-                forbidden_provider_effects: vec![
-                    "D1_CREATE".to_owned(),
-                    "D1_DELETE".to_owned(),
-                    "PRODUCTION_MUTATION".to_owned(),
-                ],
-            },
+            provider_observation,
+            transaction_id: sha256_hex(canonical_plan.as_bytes()),
+            transaction_plan,
         }
     }
 
@@ -446,6 +386,23 @@ mod tests {
         let transaction = transaction();
         let mut input = authorization(&transaction);
         input["transaction_id"] = json!("ff".repeat(32));
+        assert!(bind_transaction_authorization(&transaction, &input, EVALUATED_AT).is_err());
+    }
+
+    #[test]
+    fn forged_transaction_plan_with_stale_id_is_rejected() {
+        let mut transaction = transaction();
+        transaction.transaction_plan.schema_target = "forged-schema.sql".to_owned();
+        let input = authorization(&transaction);
+        assert!(bind_transaction_authorization(&transaction, &input, EVALUATED_AT).is_err());
+    }
+
+    #[test]
+    fn forged_provider_observation_digest_is_rejected() {
+        let mut transaction = transaction();
+        transaction.provider_observation.deployment_identity = Some("forged-deployment".to_owned());
+        transaction.transaction_plan.observation_digest = transaction.provider_observation.observation_digest.clone();
+        let input = authorization(&transaction);
         assert!(bind_transaction_authorization(&transaction, &input, EVALUATED_AT).is_err());
     }
 
