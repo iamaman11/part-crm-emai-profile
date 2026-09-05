@@ -1,4 +1,6 @@
-use super::model::{ComponentAuthority, D1Error, MigrationClass, ReleaseSchemaContract, RolloutOrder};
+use super::model::{
+    ComponentAuthority, D1Error, MigrationClass, ReleaseSchemaContract, RolloutOrder,
+};
 use serde_json::{Map, Value, json};
 use std::collections::BTreeSet;
 
@@ -59,11 +61,17 @@ fn required_true(object: &Map<String, Value>, key: &str, label: &str) -> Result<
 }
 
 fn valid_source_sha(value: &str) -> bool {
-    value.len() == 40 && value.bytes().all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+    value.len() == 40
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
 }
 
 fn valid_sha256(value: &str) -> bool {
-    value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+    value.len() == 64
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
 }
 
 fn valid_release_set_id(value: &str) -> bool {
@@ -118,13 +126,17 @@ fn validate_release_contract(
     Ok(())
 }
 
-fn validate_exact_predecessor(authority: &ComponentAuthority, remote_names: &[String]) -> Result<(), D1Error> {
+fn validate_exact_predecessor(
+    authority: &ComponentAuthority,
+    remote_names: &[String],
+) -> Result<(), D1Error> {
     let contract_index = authority
         .ordered_history
         .iter()
         .position(|name| name == CONTRACT_REVISION)
         .ok_or_else(|| D1Error::new("Catalog 0032 CONTRACT is absent from typed history"))?;
-    if contract_index == 0 || authority.ordered_history[contract_index - 1] != PREDECESSOR_REVISION {
+    if contract_index == 0 || authority.ordered_history[contract_index - 1] != PREDECESSOR_REVISION
+    {
         return Err(D1Error::new(
             "Catalog 0032 CONTRACT does not have the exact governed 0031 predecessor",
         ));
@@ -162,7 +174,8 @@ fn validate_evidence(input: &ContractTransitionInput<'_>) -> Result<i64, D1Error
         || evidence.get("kind").and_then(Value::as_str) != Some(EVIDENCE_KIND)
         || evidence.get("environment").and_then(Value::as_str) != Some("staging")
         || evidence.get("component").and_then(Value::as_str) != Some("catalog")
-        || evidence.get("predecessor_revision").and_then(Value::as_str) != Some(PREDECESSOR_REVISION)
+        || evidence.get("predecessor_revision").and_then(Value::as_str)
+            != Some(PREDECESSOR_REVISION)
         || evidence.get("contract_revision").and_then(Value::as_str) != Some(CONTRACT_REVISION)
         || evidence.get("recovery_strategy").and_then(Value::as_str) != Some(RECOVERY_STRATEGY)
     {
@@ -172,7 +185,10 @@ fn validate_evidence(input: &ContractTransitionInput<'_>) -> Result<i64, D1Error
     }
     for (field, expected) in [
         ("release_manifest_sha256", input.release_manifest_sha256),
-        ("repository_identity_sha256", input.repository_identity_sha256),
+        (
+            "repository_identity_sha256",
+            input.repository_identity_sha256,
+        ),
         ("ledger_sha256", input.ledger_sha256),
     ] {
         let observed = required_string(evidence, field, "contract-transition evidence")?;
@@ -186,7 +202,9 @@ fn validate_evidence(input: &ContractTransitionInput<'_>) -> Result<i64, D1Error
     let observed_at = evidence
         .get("observed_at_unix_seconds")
         .and_then(Value::as_i64)
-        .ok_or_else(|| D1Error::new("contract-transition evidence observed_at_unix_seconds is missing"))?;
+        .ok_or_else(|| {
+            D1Error::new("contract-transition evidence observed_at_unix_seconds is missing")
+        })?;
     if observed_at < 0
         || input.evaluated_at_unix_seconds < observed_at
         || input.evaluated_at_unix_seconds - observed_at > MAX_EVIDENCE_AGE_SECONDS
@@ -197,10 +215,14 @@ fn validate_evidence(input: &ContractTransitionInput<'_>) -> Result<i64, D1Error
     }
 
     if !valid_source_sha(input.expected_source_sha) {
-        return Err(D1Error::new("expected source SHA must be 40 lowercase hexadecimal characters"));
+        return Err(D1Error::new(
+            "expected source SHA must be 40 lowercase hexadecimal characters",
+        ));
     }
     if !valid_release_set_id(input.expected_release_set_id) {
-        return Err(D1Error::new("expected Release Set identity is malformed or unsupported"));
+        return Err(D1Error::new(
+            "expected Release Set identity is malformed or unsupported",
+        ));
     }
     let deployment = object(
         evidence
@@ -255,9 +277,9 @@ fn validate_evidence(input: &ContractTransitionInput<'_>) -> Result<i64, D1Error
     }
 
     let preconditions = object(
-        evidence
-            .get("preconditions")
-            .ok_or_else(|| D1Error::new("contract-transition evidence preconditions are missing"))?,
+        evidence.get("preconditions").ok_or_else(|| {
+            D1Error::new("contract-transition evidence preconditions are missing")
+        })?,
         "contract-transition evidence preconditions",
     )?;
     exact_keys(
@@ -316,7 +338,11 @@ pub(super) fn evaluate(input: ContractTransitionInput<'_>) -> Result<String, D1E
     });
     serde_json::to_string(&output)
         .map(|value| value + "\n")
-        .map_err(|error| D1Error::new(format!("cannot serialize contract-transition result: {error}")))
+        .map_err(|error| {
+            D1Error::new(format!(
+                "cannot serialize contract-transition result: {error}"
+            ))
+        })
 }
 
 #[cfg(test)]
