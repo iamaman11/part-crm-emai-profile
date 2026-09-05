@@ -373,7 +373,7 @@ jobs:
                 --gate native-plan-command \
                 --reason-code D1_NATIVE_PLAN_COMMAND_FAILED \
                 --exit-code "$plan_rc" \
-                --detail 'credential-free prepare blocked; exact inner cause is preserved in prepare.json'
+                --detail 'credential-free prepare wrapping ordinary d1 plan blocked; exact inner cause is preserved in prepare.json'
               exit "$plan_rc"
             fi
             jq -e '.status == "PREPARE_READY" and .authorization_consumed == false and .mutation_executed == false and .provider_mutation_executed == false' \
