@@ -53,87 +53,46 @@ async function validateExecutor(text, root = ROOT) {
   validateSharedMutationGroup(text, promotionText);
 
   const requiredMarkers = [
-    'workflow_call:',
-    'workflow_dispatch:',
-    'environment: staging',
-    `group: ${SHARED_MUTATION_GROUP}`,
-    'cancel-in-progress: false',
-    'authorize:',
-    'needs: authorize',
-    'test "$TARGET_ENVIRONMENT" = "staging"',
-    'test "$GITHUB_REF" = "refs/heads/main"',
-    'test "$GITHUB_SHA" = "$SOURCE_SHA"',
-    'test "$MUTATION_AUTHORIZED" = "true"',
+    'workflow_call:', 'workflow_dispatch:', 'environment: staging', `group: ${SHARED_MUTATION_GROUP}`,
+    'cancel-in-progress: false', 'authorize:', 'needs: authorize',
+    'test "$TARGET_ENVIRONMENT" = "staging"', 'test "$GITHUB_REF" = "refs/heads/main"',
+    'test "$GITHUB_SHA" = "$SOURCE_SHA"', 'test "$MUTATION_AUTHORIZED" = "true"',
     'test "$CONFIRMATION" = "$SOURCE_SHA:$TARGET_ENVIRONMENT:$COMPONENT:$DATABASE_ID"',
     'test "$CONFIRMATION" = "$SOURCE_SHA:$TARGET_ENVIRONMENT:$COMPONENT:$DATABASE_ID:contract:$EXPECTED_RELEASE_SET_ID"',
-    'transition_mode:',
-    'expected_release_set_id:',
-    "'migrations_dir': 'migrations-bounded'",
-    'd1 repository',
-    'd1 info',
-    'SELECT id, name FROM d1_migrations ORDER BY id',
-    'd1 status',
-    'd1 plan',
-    '--example d1-contract-transition',
-    'FAIL_FORWARD_ONLY',
-    'd1 compatibility',
-    'd1-executor-plan.py materialize',
-    'expected-pending.json',
-    'ledger-before-names.json',
-    'd1 migrations list',
-    'd1-executor-plan.py verify-pending',
-    'd1 time-travel info',
-    'ledger-fence.json',
-    'status-fence.json',
+    'transition_mode:', 'expected_release_set_id:', "'migrations_dir': 'migrations-bounded'", 'd1 repository',
+    'd1 info', 'SELECT id, name FROM d1_migrations ORDER BY id', 'd1 status', 'd1 plan',
+    '--example d1-contract-transition', 'FAIL_FORWARD_ONLY', 'd1 compatibility',
+    'd1-executor-plan.py materialize', 'expected-pending.json', 'ledger-before-names.json',
+    'd1 migrations list', 'd1-executor-plan.py verify-pending', 'd1 time-travel info',
+    'ledger-fence.json', 'status-fence.json',
     'cmp --silent artifacts/d1-migration/status-before.json artifacts/d1-migration/status-fence.json',
     'ledger-fence-names.json',
     'cmp --silent artifacts/d1-migration/ledger-before-names.json artifacts/d1-migration/ledger-fence-names.json',
-    'wrangler-pending-fence.txt',
-    'd1 migrations apply',
-    'expected-after.json',
-    'ledger-after-names.json',
-    'd1 verify',
-    'PRAGMA foreign_key_check',
-    'PRAGMA integrity_check',
-    "provider_mutation_executed': bool(plan.get('planned_migrations'))",
-    "automatic_restore_executed': False",
-    "secret_material_recorded': False",
-    'actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a',
-    '--experimental-provision=false',
-    '--experimental-auto-create=false',
-    'env -u CLOUDFLARE_API_TOKEN -u CLOUDFLARE_ACCOUNT_ID cargo run',
-    OBSERVE_REF,
-    DEPLOY_REF,
+    'wrangler-pending-fence.txt', 'd1 migrations apply', 'expected-after.json', 'ledger-after-names.json',
+    'd1 verify', 'PRAGMA foreign_key_check', 'PRAGMA integrity_check',
+    "provider_mutation_executed': bool(plan.get('planned_migrations'))", "automatic_restore_executed': False",
+    "secret_material_recorded': False", 'actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a',
+    '--experimental-provision=false', '--experimental-auto-create=false',
+    'env -u CLOUDFLARE_API_TOKEN -u CLOUDFLARE_ACCOUNT_ID cargo run', OBSERVE_REF, DEPLOY_REF,
   ];
   for (const marker of requiredMarkers) {
     if (!text.includes(marker)) fail(`protected D1 executor lost required contract marker: ${marker}`);
   }
 
-  const adapterMarkers = [
-    'native D1 plan',
-    'typed repository projection',
-    'remote ledger is not an exact prefix',
+  for (const marker of [
+    'native D1 plan', 'typed repository projection', 'remote ledger is not an exact prefix',
     'ordinary d1 plan must never authorize the separate fail-forward CONTRACT',
     'contract-transition must authorize exactly the sole Catalog 0032 CONTRACT',
     'Wrangler pending list differs from native planned_migrations',
-  ];
-  for (const marker of adapterMarkers) {
+  ]) {
     if (!adapterText.includes(marker)) fail(`exact-plan adapter lost fail-closed marker: ${marker}`);
   }
 
   for (const forbidden of [
-    "'migrations_dir': '../../migrations/d1'",
-    '"migrations_dir": "../../migrations/d1"',
-    'migrations_dir = ../../migrations/d1',
-    'd1 time-travel restore',
-    'time-travel restore',
-    'd1 create',
-    'database create',
-    'experimental-provision=true',
-    'experimental-auto-create=true',
-    'cancel-in-progress: true',
-    '          - production',
-    'environment: ${{ inputs.environment }}',
+    "'migrations_dir': '../../migrations/d1'", '"migrations_dir": "../../migrations/d1"',
+    'migrations_dir = ../../migrations/d1', 'd1 time-travel restore', 'time-travel restore', 'd1 create',
+    'database create', 'experimental-provision=true', 'experimental-auto-create=true', 'cancel-in-progress: true',
+    '          - production', 'environment: ${{ inputs.environment }}',
   ]) {
     if (text.includes(forbidden)) fail(`protected D1 executor contains forbidden marker: ${forbidden}`);
   }
@@ -150,11 +109,8 @@ async function validateExecutor(text, root = ROOT) {
   if (authorizeBody.includes('environment:')) fail('preflight authorization job must not bind any GitHub Environment');
   if (authorizeBody.includes('CLOUDFLARE_API_TOKEN')) fail('preflight authorization job must not receive provider credentials');
   for (const marker of [
-    'test "$TARGET_ENVIRONMENT" = "staging"',
-    'test "$COMPONENT" = "catalog" || test "$COMPONENT" = "resolver"',
-    'test "$MUTATION_AUTHORIZED" = "true"',
-    'test "$COMPONENT" = "catalog"',
-    'test -n "$EXPECTED_RELEASE_SET_ID"',
+    'test "$TARGET_ENVIRONMENT" = "staging"', 'test "$COMPONENT" = "catalog" || test "$COMPONENT" = "resolver"',
+    'test "$MUTATION_AUTHORIZED" = "true"', 'test "$COMPONENT" = "catalog"', 'test -n "$EXPECTED_RELEASE_SET_ID"',
   ]) {
     if (!authorizeBody.includes(marker)) fail(`preflight authorization lost fail-closed marker: ${marker}`);
   }
@@ -169,17 +125,22 @@ async function validateExecutor(text, root = ROOT) {
 
   const normalized = normalizedShell(text);
   const escapedWrangler = PINNED_WRANGLER.replaceAll('.', '\\.');
-  const applyPattern = new RegExp(`npx --yes ${escapedWrangler} d1 migrations apply\\b`, 'g');
-  if ((normalized.match(applyPattern) ?? []).length !== 1) {
+  if ((normalized.match(new RegExp(`npx --yes ${escapedWrangler} d1 migrations apply\\b`, 'g')) ?? []).length !== 1) {
     fail('protected D1 executor must contain exactly one pinned Wrangler migrations apply site');
   }
-  const remoteApplyPattern = new RegExp(`npx --yes ${escapedWrangler} d1 migrations apply\\b[^\\n]*?--remote\\b`, 'g');
-  if ((normalized.match(remoteApplyPattern) ?? []).length !== 1) {
+  if ((normalized.match(new RegExp(`npx --yes ${escapedWrangler} d1 migrations apply\\b[^\\n]*?--remote\\b`, 'g')) ?? []).length !== 1) {
     fail('the sole protected D1 migration apply site must explicitly target --remote');
   }
+  const pendingListSites = normalized.match(new RegExp(`npx --yes ${escapedWrangler} d1 migrations list\\b`, 'g')) ?? [];
+  if (pendingListSites.length !== 2) {
+    fail(`protected D1 executor must observe Wrangler pending migrations exactly twice; observed=${pendingListSites.length}`);
+  }
+  const pendingVerifySites = text.match(/d1-executor-plan\.py verify-pending/g) ?? [];
+  if (pendingVerifySites.length !== 2) {
+    fail(`protected D1 executor must verify the native/Wrangler pending equality exactly twice; observed=${pendingVerifySites.length}`);
+  }
   const providerPattern = new RegExp(
-    `npx --yes ${escapedWrangler} d1 (?:info|execute|time-travel info|migrations list|migrations apply)\\b`,
-    'g',
+    `npx --yes ${escapedWrangler} d1 (?:info|execute|time-travel info|migrations list|migrations apply)\\b`, 'g',
   );
   const providerSites = normalized.match(providerPattern) ?? [];
   if (providerSites.length === 0) fail('protected D1 executor contains no pinned Wrangler provider operations');
@@ -191,9 +152,7 @@ async function validateExecutor(text, root = ROOT) {
   }
 
   const observeSteps = (text.match(/CLOUDFLARE_API_TOKEN: \$\{\{ secrets\.CLOUDFLARE_OBSERVE_API_TOKEN \}\}/g) ?? []).length;
-  if (observeSteps < 6) {
-    fail(`provider observations must use the dedicated observe credential; observed=${observeSteps}`);
-  }
+  if (observeSteps < 6) fail(`provider observations must use the dedicated observe credential; observed=${observeSteps}`);
   const deploySteps = (text.match(/CLOUDFLARE_API_TOKEN: \$\{\{ secrets\.CLOUDFLARE_API_TOKEN \}\}/g) ?? []).length;
   if (deploySteps !== 1) fail(`deploy-capable credential must appear exactly once; observed=${deploySteps}`);
 
@@ -264,10 +223,7 @@ async function selfTest(text) {
   ]) {
     await expectRejected(label, replaceFixture(label, text, from, to));
   }
-  await expectRejected(
-    'deploy token used for observation',
-    replaceFixture('deploy token used for observation', text, OBSERVE_REF, DEPLOY_REF),
-  );
+  await expectRejected('deploy token used for observation', replaceFixture('deploy token used for observation', text, OBSERVE_REF, DEPLOY_REF));
   await expectRejected(
     'second remote apply',
     `${text}\n# npx --yes ${PINNED_WRANGLER} d1 migrations apply X --remote --experimental-provision=false --experimental-auto-create=false\n`,
