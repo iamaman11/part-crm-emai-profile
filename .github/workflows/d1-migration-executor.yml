@@ -40,16 +40,26 @@ on:
         required: true
         type: string
       preconditions_json:
-        description: Mechanical CONTRACT precondition evidence JSON; use {} when not applicable
+        description: Ordinary D1 preconditions or exact Phase-C contract-transition evidence
         required: false
         default: '{}'
+        type: string
+      transition_mode:
+        description: ordinary or the separately governed contract transition
+        required: false
+        default: ordinary
+        type: string
+      expected_release_set_id:
+        description: Exact deployed Release Set identity; required only for contract transition
+        required: false
+        default: ''
         type: string
       mutation_authorized:
         description: Explicit caller authorization for the staging migration mutation
         required: true
         type: boolean
       confirmation:
-        description: Must equal source_sha:environment:component:database_id
+        description: Ordinary source:environment:component:database_id; contract additionally binds mode and Release Set
         required: true
         type: string
     secrets:
@@ -101,9 +111,22 @@ on:
         required: true
         type: string
       preconditions_json:
-        description: Mechanical CONTRACT precondition evidence JSON; use {} when not applicable
+        description: Ordinary D1 preconditions or exact Phase-C contract-transition evidence
         required: false
         default: '{}'
+        type: string
+      transition_mode:
+        description: D1 transition mode
+        required: false
+        default: ordinary
+        type: choice
+        options:
+          - ordinary
+          - contract
+      expected_release_set_id:
+        description: Exact deployed Release Set identity; required for contract mode
+        required: false
+        default: ''
         type: string
       mutation_authorized:
         description: Explicitly authorize this staging migration mutation
@@ -111,7 +134,7 @@ on:
         default: false
         type: boolean
       confirmation:
-        description: Must equal source_sha:environment:component:database_id
+        description: Exact mutation confirmation string
         required: true
         type: string
 
@@ -131,9 +154,9 @@ jobs:
       SOURCE_SHA: ${{ inputs.source_sha }}
       TARGET_ENVIRONMENT: ${{ inputs.environment }}
       COMPONENT: ${{ inputs.component }}
-      CLOUDFLARE_ACCOUNT_ID: ${{ inputs.account_id }}
-      DATABASE_NAME: ${{ inputs.database_name }}
       DATABASE_ID: ${{ inputs.database_id }}
+      TRANSITION_MODE: ${{ inputs.transition_mode }}
+      EXPECTED_RELEASE_SET_ID: ${{ inputs.expected_release_set_id }}
       MUTATION_AUTHORIZED: ${{ inputs.mutation_authorized }}
       CONFIRMATION: ${{ inputs.confirmation }}
     steps:
@@ -142,12 +165,17 @@ jobs:
           set -euo pipefail
           test "$TARGET_ENVIRONMENT" = "staging"
           test "$COMPONENT" = "catalog" || test "$COMPONENT" = "resolver"
+          test "$TRANSITION_MODE" = "ordinary" || test "$TRANSITION_MODE" = "contract"
           test "$MUTATION_AUTHORIZED" = "true"
           test -n "$SOURCE_SHA"
-          test -n "$CLOUDFLARE_ACCOUNT_ID"
-          test -n "$DATABASE_NAME"
           test -n "$DATABASE_ID"
-          test "$CONFIRMATION" = "$SOURCE_SHA:$TARGET_ENVIRONMENT:$COMPONENT:$DATABASE_ID"
+          if [ "$TRANSITION_MODE" = ordinary ]; then
+            test "$CONFIRMATION" = "$SOURCE_SHA:$TARGET_ENVIRONMENT:$COMPONENT:$DATABASE_ID"
+          else
+            test "$COMPONENT" = "catalog"
+            test -n "$EXPECTED_RELEASE_SET_ID"
+            test "$CONFIRMATION" = "$SOURCE_SHA:$TARGET_ENVIRONMENT:$COMPONENT:$DATABASE_ID:contract:$EXPECTED_RELEASE_SET_ID"
+          fi
 
   migrate:
     needs: authorize
@@ -166,6 +194,8 @@ jobs:
       CURRENT_RELEASE_MANIFEST_JSON: ${{ inputs.current_release_manifest_json }}
       KNOWN_GOOD_RELEASE_MANIFEST_JSON: ${{ inputs.known_good_release_manifest_json }}
       PRECONDITIONS_JSON: ${{ inputs.preconditions_json }}
+      TRANSITION_MODE: ${{ inputs.transition_mode }}
+      EXPECTED_RELEASE_SET_ID: ${{ inputs.expected_release_set_id }}
       MUTATION_AUTHORIZED: ${{ inputs.mutation_authorized }}
       CONFIRMATION: ${{ inputs.confirmation }}
     steps:
@@ -176,10 +206,17 @@ jobs:
           test "$GITHUB_SHA" = "$SOURCE_SHA"
           test "$TARGET_ENVIRONMENT" = "staging"
           test "$COMPONENT" = "catalog" || test "$COMPONENT" = "resolver"
+          test "$TRANSITION_MODE" = "ordinary" || test "$TRANSITION_MODE" = "contract"
           test "$MUTATION_AUTHORIZED" = "true"
-          test "$CONFIRMATION" = "$SOURCE_SHA:$TARGET_ENVIRONMENT:$COMPONENT:$DATABASE_ID"
           test -n "$CLOUDFLARE_ACCOUNT_ID"
           test "$CLOUDFLARE_ACCOUNT_ID" = "${{ inputs.account_id }}"
+          if [ "$TRANSITION_MODE" = ordinary ]; then
+            test "$CONFIRMATION" = "$SOURCE_SHA:$TARGET_ENVIRONMENT:$COMPONENT:$DATABASE_ID"
+          else
+            test "$COMPONENT" = catalog
+            test -n "$EXPECTED_RELEASE_SET_ID"
+            test "$CONFIRMATION" = "$SOURCE_SHA:$TARGET_ENVIRONMENT:$COMPONENT:$DATABASE_ID:contract:$EXPECTED_RELEASE_SET_ID"
+          fi
 
       - name: Checkout exact accepted-main source
         uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
@@ -192,7 +229,7 @@ jobs:
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
-          test "$TARGET_ENVIRONMENT" = "staging"
+          test "$TARGET_ENVIRONMENT" = staging
 
       - name: Set up pinned Node and npm
         uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
@@ -207,10 +244,11 @@ jobs:
           npm install --global npm@11.17.0
           test "$(npm --version)" = "11.17.0"
           test "$(npx --yes wrangler@4.94.0 --version)" = "4.94.0"
+          python scripts/d1-executor-plan.py self-test
           env -u CLOUDFLARE_API_TOKEN -u CLOUDFLARE_ACCOUNT_ID python scripts/check-opsctl-readonly.py
           env -u CLOUDFLARE_API_TOKEN -u CLOUDFLARE_ACCOUNT_ID cargo build --locked --manifest-path tools/opsctl/Cargo.toml
 
-      - name: Materialize exact metadata inputs and provider config
+      - name: Materialize exact metadata inputs and bounded provider config
         run: |
           set -euo pipefail
           mkdir -p artifacts/d1-migration
@@ -231,16 +269,7 @@ jobs:
               if not isinstance(value, dict):
                   raise SystemExit(f'{name} must contain exactly one JSON object')
               (out / name).write_text(json.dumps(value, sort_keys=True, indent=2) + '\n', encoding='utf-8')
-
-          component = os.environ['COMPONENT']
-          if component == 'catalog':
-              binding = 'CATALOG_DB'
-              migrations_dir = '../../migrations/d1'
-          elif component == 'resolver':
-              binding = 'RESOLVER_DB'
-              migrations_dir = '../../migrations/resolver-d1'
-          else:
-              raise SystemExit('unsupported component')
+          binding = {'catalog': 'CATALOG_DB', 'resolver': 'RESOLVER_DB'}[os.environ['COMPONENT']]
           config = {
               'name': 'd1-migration-executor',
               'main': '../../tests/d1-runtime/worker.mjs',
@@ -250,22 +279,26 @@ jobs:
                   'binding': binding,
                   'database_name': os.environ['DATABASE_NAME'],
                   'database_id': os.environ['DATABASE_ID'],
-                  'migrations_dir': migrations_dir,
+                  'migrations_dir': 'migrations-bounded',
               }],
           }
           (out / 'wrangler.json').write_text(json.dumps(config, sort_keys=True, indent=2) + '\n', encoding='utf-8')
           (out / 'context.json').write_text(json.dumps({
-              'schema_version': 1,
+              'schema_version': 2,
               'source_sha': os.environ['SOURCE_SHA'],
               'environment': os.environ['TARGET_ENVIRONMENT'],
-              'component': component,
+              'component': os.environ['COMPONENT'],
               'database_name': os.environ['DATABASE_NAME'],
               'database_id': os.environ['DATABASE_ID'],
+              'transition_mode': os.environ['TRANSITION_MODE'],
+              'expected_release_set_id': os.environ['EXPECTED_RELEASE_SET_ID'] or None,
               'mutation_authorized': True,
               'automatic_restore_allowed': False,
               'resource_auto_provisioning_allowed': False,
           }, sort_keys=True, indent=2) + '\n', encoding='utf-8')
           PY
+          env -u CLOUDFLARE_API_TOKEN -u CLOUDFLARE_ACCOUNT_ID cargo run --locked --quiet --manifest-path tools/opsctl/Cargo.toml -- --root . d1 repository \
+            > artifacts/d1-migration/repository.json
 
       - name: Verify exact remote database identity with observe credential
         env:
@@ -274,26 +307,22 @@ jobs:
           set -euo pipefail
           test -n "$CLOUDFLARE_API_TOKEN"
           npx --yes wrangler@4.94.0 d1 info "$DATABASE_NAME" \
-            --config artifacts/d1-migration/wrangler.json \
-            --json \
-            --experimental-provision=false \
-            --experimental-auto-create=false > artifacts/d1-migration/provider-identity.json
+            --config artifacts/d1-migration/wrangler.json --json \
+            --experimental-provision=false --experimental-auto-create=false \
+            > artifacts/d1-migration/provider-identity.json
           python - <<'PY'
-          import json
-          import os
+          import json, os
           from pathlib import Path
-          document = json.loads(Path('artifacts/d1-migration/provider-identity.json').read_text())
+          value = json.loads(Path('artifacts/d1-migration/provider-identity.json').read_text())
           expected = {os.environ['DATABASE_NAME'], os.environ['DATABASE_ID']}
-          def paired(value):
-              if isinstance(value, dict):
-                  scalar_values = {item for item in value.values() if isinstance(item, str)}
-                  if expected.issubset(scalar_values):
-                      return True
-                  return any(paired(item) for item in value.values())
-              if isinstance(value, list):
-                  return any(paired(item) for item in value)
+          def paired(item):
+              if isinstance(item, dict):
+                  values = {value for value in item.values() if isinstance(value, str)}
+                  return expected.issubset(values) or any(paired(value) for value in item.values())
+              if isinstance(item, list):
+                  return any(paired(value) for value in item)
               return False
-          assert paired(document), 'provider identity does not contain the exact database name and UUID in one object'
+          assert paired(value), 'provider identity does not contain exact database name and UUID in one object'
           PY
 
       - name: Read remote migration ledger with observe credential
@@ -301,37 +330,50 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_OBSERVE_API_TOKEN }}
         run: |
           set -euo pipefail
-          test -n "$CLOUDFLARE_API_TOKEN"
-          npx --yes wrangler@4.94.0 d1 execute "$DATABASE_NAME" \
-            --remote \
+          npx --yes wrangler@4.94.0 d1 execute "$DATABASE_NAME" --remote \
             --config artifacts/d1-migration/wrangler.json \
-            --command "SELECT id, name FROM d1_migrations ORDER BY id" \
-            --json \
-            --experimental-provision=false \
-            --experimental-auto-create=false > artifacts/d1-migration/ledger-before.json
+            --command "SELECT id, name FROM d1_migrations ORDER BY id" --json \
+            --experimental-provision=false --experimental-auto-create=false \
+            > artifacts/d1-migration/ledger-before.json
 
       - name: Normalize and classify remote ledger with credential-free opsctl
         run: |
           set -euo pipefail
           env -u CLOUDFLARE_API_TOKEN -u CLOUDFLARE_ACCOUNT_ID cargo run --locked --quiet --manifest-path tools/opsctl/Cargo.toml -- --root . d1 status \
-            --component "$COMPONENT" \
-            --ledger-json artifacts/d1-migration/ledger-before.json > artifacts/d1-migration/status-before.json
+            --component "$COMPONENT" --ledger-json artifacts/d1-migration/ledger-before.json \
+            > artifacts/d1-migration/status-before.json
 
       - name: Run credential-free native plan, compatibility, and rollback-blocker gates
         id: policy
         run: |
           set -euo pipefail
-          env -u CLOUDFLARE_API_TOKEN -u CLOUDFLARE_ACCOUNT_ID cargo run --locked --quiet --manifest-path tools/opsctl/Cargo.toml -- --root . d1 plan \
-            --component "$COMPONENT" \
-            --ledger-json artifacts/d1-migration/ledger-before.json \
-            --release-manifest artifacts/d1-migration/target-release.json \
-            --current-manifest artifacts/d1-migration/current-release.json \
-            --known-good-manifest artifacts/d1-migration/known-good-release.json \
-            --preconditions-json artifacts/d1-migration/preconditions.json > artifacts/d1-migration/plan.json
+          if [ "$TRANSITION_MODE" = ordinary ]; then
+            env -u CLOUDFLARE_API_TOKEN -u CLOUDFLARE_ACCOUNT_ID cargo run --locked --quiet --manifest-path tools/opsctl/Cargo.toml -- --root . d1 plan \
+              --component "$COMPONENT" \
+              --ledger-json artifacts/d1-migration/ledger-before.json \
+              --release-manifest artifacts/d1-migration/target-release.json \
+              --current-manifest artifacts/d1-migration/current-release.json \
+              --known-good-manifest artifacts/d1-migration/known-good-release.json \
+              --preconditions-json artifacts/d1-migration/preconditions.json \
+              > artifacts/d1-migration/plan.json
+          else
+            evaluated_at="$(date -u +%s)"
+            env -u CLOUDFLARE_API_TOKEN -u CLOUDFLARE_ACCOUNT_ID cargo run --locked --quiet \
+              --manifest-path tools/opsctl/Cargo.toml --example d1-contract-transition -- \
+              --root . \
+              --ledger-json artifacts/d1-migration/ledger-before.json \
+              --release-manifest artifacts/d1-migration/target-release.json \
+              --evidence-json artifacts/d1-migration/preconditions.json \
+              --evaluated-at-unix-seconds "$evaluated_at" \
+              --expected-source-sha "$SOURCE_SHA" \
+              --expected-release-set-id "$EXPECTED_RELEASE_SET_ID" \
+              > artifacts/d1-migration/plan.json
+          fi
           env -u CLOUDFLARE_API_TOKEN -u CLOUDFLARE_ACCOUNT_ID cargo run --locked --quiet --manifest-path tools/opsctl/Cargo.toml -- --root . d1 compatibility \
             --component "$COMPONENT" \
             --ledger-json artifacts/d1-migration/ledger-before.json \
-            --release-manifest artifacts/d1-migration/target-release.json > artifacts/d1-migration/compatibility.json
+            --release-manifest artifacts/d1-migration/target-release.json \
+            > artifacts/d1-migration/compatibility.json
           python - <<'PY'
           import json
           from pathlib import Path
@@ -341,11 +383,49 @@ jobs:
           assert compatibility['allowed'] is True, compatibility
           blocked = {'CODE_ROLLBACK_BLOCKED', 'FAIL_FORWARD_REQUIRED', 'CONTRACT_BLOCKED', 'RECOVERY_REQUIRED'}
           assert plan['decision'] not in blocked, plan
+          if plan['command'] == 'd1 contract-transition':
+              assert plan['planned_migrations'] == ['0032_pas2_payload_fingerprint_contract.sql'], plan
+              assert plan['recovery_strategy'] == 'FAIL_FORWARD_ONLY', plan
           required = bool(plan.get('planned_migrations'))
-          with Path('/tmp/d1-policy-output').open('w', encoding='utf-8') as handle:
-              handle.write(f"apply_required={'true' if required else 'false'}\n")
+          Path('/tmp/d1-policy-output').write_text(f"apply_required={'true' if required else 'false'}\n", encoding='utf-8')
           PY
           cat /tmp/d1-policy-output >> "$GITHUB_OUTPUT"
+
+      - name: Materialize exactly native planned_migrations from typed successor projection
+        run: |
+          set -euo pipefail
+          python scripts/d1-executor-plan.py materialize \
+            --repo-root . \
+            --repository artifacts/d1-migration/repository.json \
+            --plan artifacts/d1-migration/plan.json \
+            --ledger artifacts/d1-migration/ledger-before.json \
+            --component "$COMPONENT" \
+            --mode "$TRANSITION_MODE" \
+            --output-dir artifacts/d1-migration/migrations-bounded \
+            --expected-pending artifacts/d1-migration/expected-pending.json \
+            --normalized-ledger artifacts/d1-migration/ledger-before-names.json
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          before = json.loads(Path('artifacts/d1-migration/ledger-before-names.json').read_text())
+          planned = json.loads(Path('artifacts/d1-migration/expected-pending.json').read_text())
+          Path('artifacts/d1-migration/expected-after.json').write_text(
+              json.dumps(before + planned, sort_keys=True, indent=2) + '\n', encoding='utf-8'
+          )
+          PY
+
+      - name: Compare Wrangler pending list to exact native plan with observe credential
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_OBSERVE_API_TOKEN }}
+        run: |
+          set -euo pipefail
+          npx --yes wrangler@4.94.0 d1 migrations list "$DATABASE_NAME" --remote \
+            --config artifacts/d1-migration/wrangler.json \
+            --experimental-provision=false --experimental-auto-create=false \
+            > artifacts/d1-migration/wrangler-pending-before.txt
+          python scripts/d1-executor-plan.py verify-pending \
+            --expected artifacts/d1-migration/expected-pending.json \
+            --wrangler-output artifacts/d1-migration/wrangler-pending-before.txt
 
       - name: Capture metadata-only pre-migration Time Travel bookmark with observe credential
         if: steps.policy.outputs.apply_required == 'true'
@@ -353,12 +433,10 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_OBSERVE_API_TOKEN }}
         run: |
           set -euo pipefail
-          test -n "$CLOUDFLARE_API_TOKEN"
           npx --yes wrangler@4.94.0 d1 time-travel info "$DATABASE_NAME" \
-            --config artifacts/d1-migration/wrangler.json \
-            --json \
-            --experimental-provision=false \
-            --experimental-auto-create=false > artifacts/d1-migration/pre-migration-bookmark.json
+            --config artifacts/d1-migration/wrangler.json --json \
+            --experimental-provision=false --experimental-auto-create=false \
+            > artifacts/d1-migration/pre-migration-bookmark.json
 
       - name: Revalidate exact ledger fence and apply planned migrations with deploy credential
         if: steps.policy.outputs.apply_required == 'true'
@@ -367,74 +445,95 @@ jobs:
         run: |
           set -euo pipefail
           test -n "$CLOUDFLARE_API_TOKEN"
-          npx --yes wrangler@4.94.0 d1 execute "$DATABASE_NAME" \
-            --remote \
+          npx --yes wrangler@4.94.0 d1 info "$DATABASE_NAME" \
+            --config artifacts/d1-migration/wrangler.json --json \
+            --experimental-provision=false --experimental-auto-create=false \
+            > artifacts/d1-migration/provider-identity-fence.json
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          value = json.loads(Path('artifacts/d1-migration/provider-identity-fence.json').read_text())
+          expected = {os.environ['DATABASE_NAME'], os.environ['DATABASE_ID']}
+          def paired(item):
+              if isinstance(item, dict):
+                  values = {value for value in item.values() if isinstance(value, str)}
+                  return expected.issubset(values) or any(paired(value) for value in item.values())
+              if isinstance(item, list):
+                  return any(paired(value) for value in item)
+              return False
+          assert paired(value), 'provider identity drifted before mutation'
+          PY
+          npx --yes wrangler@4.94.0 d1 execute "$DATABASE_NAME" --remote \
             --config artifacts/d1-migration/wrangler.json \
-            --command "SELECT id, name FROM d1_migrations ORDER BY id" \
-            --json \
-            --experimental-provision=false \
-            --experimental-auto-create=false > artifacts/d1-migration/ledger-fence.json
+            --command "SELECT id, name FROM d1_migrations ORDER BY id" --json \
+            --experimental-provision=false --experimental-auto-create=false \
+            > artifacts/d1-migration/ledger-fence.json
           env -u CLOUDFLARE_API_TOKEN -u CLOUDFLARE_ACCOUNT_ID cargo run --locked --quiet --manifest-path tools/opsctl/Cargo.toml -- --root . d1 status \
-            --component "$COMPONENT" \
-            --ledger-json artifacts/d1-migration/ledger-fence.json > artifacts/d1-migration/status-fence.json
+            --component "$COMPONENT" --ledger-json artifacts/d1-migration/ledger-fence.json \
+            > artifacts/d1-migration/status-fence.json
           cmp --silent artifacts/d1-migration/status-before.json artifacts/d1-migration/status-fence.json
-          npx --yes wrangler@4.94.0 d1 migrations apply "$DATABASE_NAME" \
-            --remote \
+          python scripts/d1-executor-plan.py normalize-ledger \
+            --ledger artifacts/d1-migration/ledger-fence.json \
+            --output artifacts/d1-migration/ledger-fence-names.json
+          cmp --silent artifacts/d1-migration/ledger-before-names.json artifacts/d1-migration/ledger-fence-names.json
+          npx --yes wrangler@4.94.0 d1 migrations list "$DATABASE_NAME" --remote \
             --config artifacts/d1-migration/wrangler.json \
-            --experimental-provision=false \
-            --experimental-auto-create=false
+            --experimental-provision=false --experimental-auto-create=false \
+            > artifacts/d1-migration/wrangler-pending-fence.txt
+          python scripts/d1-executor-plan.py verify-pending \
+            --expected artifacts/d1-migration/expected-pending.json \
+            --wrangler-output artifacts/d1-migration/wrangler-pending-fence.txt
+          npx --yes wrangler@4.94.0 d1 migrations apply "$DATABASE_NAME" --remote \
+            --config artifacts/d1-migration/wrangler.json \
+            --experimental-provision=false --experimental-auto-create=false
 
       - name: Reread remote ledger with observe credential
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_OBSERVE_API_TOKEN }}
         run: |
           set -euo pipefail
-          test -n "$CLOUDFLARE_API_TOKEN"
-          npx --yes wrangler@4.94.0 d1 execute "$DATABASE_NAME" \
-            --remote \
+          npx --yes wrangler@4.94.0 d1 execute "$DATABASE_NAME" --remote \
             --config artifacts/d1-migration/wrangler.json \
-            --command "SELECT id, name FROM d1_migrations ORDER BY id" \
-            --json \
-            --experimental-provision=false \
-            --experimental-auto-create=false > artifacts/d1-migration/ledger-after.json
+            --command "SELECT id, name FROM d1_migrations ORDER BY id" --json \
+            --experimental-provision=false --experimental-auto-create=false \
+            > artifacts/d1-migration/ledger-after.json
+          python scripts/d1-executor-plan.py normalize-ledger \
+            --ledger artifacts/d1-migration/ledger-after.json \
+            --output artifacts/d1-migration/ledger-after-names.json
+          cmp --silent artifacts/d1-migration/expected-after.json artifacts/d1-migration/ledger-after-names.json
 
       - name: Require exact target through credential-free opsctl verify
         run: |
           set -euo pipefail
-          env -u CLOUDFLARE_API_TOKEN -u CLOUDFLARE_ACCOUNT_ID cargo run --locked --quiet --manifest-path tools/opsctl/Cargo.toml -- --root . d1 verify \
-            --component "$COMPONENT" \
-            --ledger-json artifacts/d1-migration/ledger-after.json \
-            --release-manifest artifacts/d1-migration/target-release.json > artifacts/d1-migration/verify.json
-          python - <<'PY'
-          import json
-          from pathlib import Path
-          verify = json.loads(Path('artifacts/d1-migration/verify.json').read_text())
-          assert verify['ledger_state'] == 'EXACT', verify
-          assert verify['decision'] == 'SAFE', verify
-          assert verify['allowed'] is True, verify
-          assert verify['mutation_executed'] is False, verify
-          PY
+          if [ "$TRANSITION_MODE" = ordinary ]; then
+            env -u CLOUDFLARE_API_TOKEN -u CLOUDFLARE_ACCOUNT_ID cargo run --locked --quiet --manifest-path tools/opsctl/Cargo.toml -- --root . d1 verify \
+              --component "$COMPONENT" \
+              --ledger-json artifacts/d1-migration/ledger-after.json \
+              --release-manifest artifacts/d1-migration/target-release.json \
+              > artifacts/d1-migration/verify.json
+            jq -e '.ledger_state == "EXACT" and .decision == "SAFE" and .allowed == true and .mutation_executed == false' \
+              artifacts/d1-migration/verify.json >/dev/null
+          else
+            env -u CLOUDFLARE_API_TOKEN -u CLOUDFLARE_ACCOUNT_ID cargo run --locked --quiet --manifest-path tools/opsctl/Cargo.toml -- --root . d1 status \
+              --component catalog --ledger-json artifacts/d1-migration/ledger-after.json \
+              > artifacts/d1-migration/verify.json
+            jq -e '.ledger_state == "EXACT" and .remote_revision == "0032_pas2_payload_fingerprint_contract.sql" and .decision == "SAFE" and .allowed == true and .mutation_executed == false' \
+              artifacts/d1-migration/verify.json >/dev/null
+          fi
 
       - name: Verify post-apply database invariants with observe credential
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_OBSERVE_API_TOKEN }}
         run: |
           set -euo pipefail
-          test -n "$CLOUDFLARE_API_TOKEN"
-          npx --yes wrangler@4.94.0 d1 execute "$DATABASE_NAME" \
-            --remote \
-            --config artifacts/d1-migration/wrangler.json \
-            --command "PRAGMA foreign_key_check" \
-            --json \
-            --experimental-provision=false \
-            --experimental-auto-create=false > artifacts/d1-migration/foreign-key-check.json
-          npx --yes wrangler@4.94.0 d1 execute "$DATABASE_NAME" \
-            --remote \
-            --config artifacts/d1-migration/wrangler.json \
-            --command "PRAGMA integrity_check" \
-            --json \
-            --experimental-provision=false \
-            --experimental-auto-create=false > artifacts/d1-migration/integrity-check.json
+          npx --yes wrangler@4.94.0 d1 execute "$DATABASE_NAME" --remote \
+            --config artifacts/d1-migration/wrangler.json --command "PRAGMA foreign_key_check" --json \
+            --experimental-provision=false --experimental-auto-create=false \
+            > artifacts/d1-migration/foreign-key-check.json
+          npx --yes wrangler@4.94.0 d1 execute "$DATABASE_NAME" --remote \
+            --config artifacts/d1-migration/wrangler.json --command "PRAGMA integrity_check" --json \
+            --experimental-provision=false --experimental-auto-create=false \
+            > artifacts/d1-migration/integrity-check.json
           python - <<'PY'
           import json
           from pathlib import Path
@@ -450,6 +549,7 @@ jobs:
         run: |
           set -euo pipefail
           python - <<'PY'
+          import hashlib
           import json
           from pathlib import Path
           root = Path('artifacts/d1-migration')
@@ -458,9 +558,14 @@ jobs:
               if optional and not path.exists():
                   return None
               return json.loads(path.read_text(encoding='utf-8'))
+          def digest(name, optional=False):
+              path = root / name
+              if optional and not path.exists():
+                  return None
+              return hashlib.sha256(path.read_bytes()).hexdigest()
           plan = load('plan.json')
           evidence = {
-              'schema_version': 1,
+              'schema_version': 2,
               'evidence_kind': 'protected-d1-migration-execution',
               'context': load('context.json'),
               'provider_identity': load('provider-identity.json'),
@@ -468,6 +573,9 @@ jobs:
               'status_fence': load('status-fence.json', optional=True),
               'plan': plan,
               'compatibility': load('compatibility.json'),
+              'expected_pending_migrations': load('expected-pending.json'),
+              'wrangler_pending_before_sha256': digest('wrangler-pending-before.txt'),
+              'wrangler_pending_fence_sha256': digest('wrangler-pending-fence.txt', optional=True),
               'pre_migration_bookmark': load('pre-migration-bookmark.json', optional=True),
               'ledger_before': load('ledger-before.json'),
               'ledger_after': load('ledger-after.json'),
@@ -479,7 +587,10 @@ jobs:
               'secret_material_recorded': False,
           }
           (root / 'evidence.json').write_text(json.dumps(evidence, sort_keys=True, indent=2) + '\n', encoding='utf-8')
-          for sensitive in ('wrangler.json', 'target-release.json', 'current-release.json', 'known-good-release.json', 'preconditions.json', 'ledger-fence.json'):
+          for sensitive in (
+              'wrangler.json', 'target-release.json', 'current-release.json', 'known-good-release.json',
+              'preconditions.json', 'ledger-fence.json', 'provider-identity-fence.json',
+          ):
               (root / sensitive).unlink(missing_ok=True)
           PY
 
