@@ -19,10 +19,10 @@ mod util;
 #[path = "d1/verify.rs"]
 mod verify;
 
+use crate::canonical::{canonical_json, sha256_hex};
 use authority::{load_preconditions, load_release_contract, load_wrangler_ledger};
 use catalog::component_authority;
 use contract_transition::ContractTransitionInput;
-use crate::canonical::{canonical_json, sha256_hex};
 use model::{Evaluation, Preconditions, ReleaseSchemaContract};
 use plan::evaluate;
 use serde_json::{Value, json};
