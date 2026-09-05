@@ -97,24 +97,25 @@ pub(super) fn load_preconditions(path: &Path, component: &str) -> Result<Precond
         ))
     })?;
 
-    let precondition_component = object
-        .get("component")
-        .and_then(Value::as_str)
-        .ok_or_else(|| {
-            D1Error::blocked(GateResult::blocked(
-                "INPUT_VALIDATION",
-                "d1.preconditions.schema",
-                "D1_PRECONDITIONS_COMPONENT_INVALID",
-                "D1 contract preconditions require a string component field",
-                Some(format!("component={component:?}")),
-                Some(if object.contains_key("component") {
-                    "component present but not a string".to_owned()
-                } else {
-                    "component field absent".to_owned()
-                }),
-                REMEDIATION,
-            ))
-        })?;
+    let precondition_component =
+        object
+            .get("component")
+            .and_then(Value::as_str)
+            .ok_or_else(|| {
+                D1Error::blocked(GateResult::blocked(
+                    "INPUT_VALIDATION",
+                    "d1.preconditions.schema",
+                    "D1_PRECONDITIONS_COMPONENT_INVALID",
+                    "D1 contract preconditions require a string component field",
+                    Some(format!("component={component:?}")),
+                    Some(if object.contains_key("component") {
+                        "component present but not a string".to_owned()
+                    } else {
+                        "component field absent".to_owned()
+                    }),
+                    REMEDIATION,
+                ))
+            })?;
     if precondition_component != component {
         return Err(D1Error::blocked(GateResult::blocked(
             "INPUT_VALIDATION",
@@ -181,21 +182,22 @@ mod tests {
         std::fs::remove_file(&path)?;
         let error = match result {
             Err(error) => error,
-            Ok(_) => return Err(std::io::Error::other("empty preconditions must fail closed")),
+            Ok(_) => {
+                return Err(std::io::Error::other(
+                    "empty preconditions must fail closed",
+                ));
+            }
         };
         let gate = error.gate_result_json();
         assert_eq!(gate["status"], "BLOCKED");
         assert_eq!(gate["phase"], "INPUT_VALIDATION");
         assert_eq!(gate["gate_id"], "d1.preconditions.schema");
-        assert_eq!(
-            gate["reason_code"],
-            "D1_PRECONDITIONS_COMPONENT_INVALID"
-        );
+        assert_eq!(gate["reason_code"], "D1_PRECONDITIONS_COMPONENT_INVALID");
         assert_eq!(gate["observed"], "component field absent");
         assert!(
-            gate["remediation"]
-                .as_str()
-                .is_some_and(|value| value.contains("rerun prepare before requesting authorization"))
+            gate["remediation"].as_str().is_some_and(
+                |value| value.contains("rerun prepare before requesting authorization")
+            )
         );
         assert_eq!(gate["transaction_id"], serde_json::Value::Null);
         Ok(())
@@ -213,10 +215,7 @@ mod tests {
         };
         let gate = error.gate_result_json();
         assert_eq!(gate["status"], "BLOCKED");
-        assert_eq!(
-            gate["reason_code"],
-            "D1_PRECONDITIONS_COMPLETED_INVALID"
-        );
+        assert_eq!(gate["reason_code"], "D1_PRECONDITIONS_COMPLETED_INVALID");
         assert_eq!(gate["observed"], "completed field absent");
         Ok(())
     }
