@@ -1,3 +1,4 @@
+use serde_json::{Value, json};
 use std::collections::HashSet;
 use std::fmt;
 use std::path::Path;
@@ -150,16 +151,105 @@ impl RolloutOrder {
     }
 }
 
+/// Secret-free machine-readable diagnostic emitted by every D1 semantic failure.
+///
+/// The D1 policy layer owns reason codes and remediation. Workflow/Python adapters
+/// may persist this object, but must not reinterpret or duplicate its semantics.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GateResult {
+    phase: &'static str,
+    gate_id: &'static str,
+    status: &'static str,
+    reason_code: &'static str,
+    summary: String,
+    expected: Option<String>,
+    observed: Option<String>,
+    remediation: &'static str,
+}
+
+impl GateResult {
+    fn error(summary: String) -> Self {
+        Self {
+            phase: "D1_POLICY",
+            gate_id: "d1.semantic",
+            status: "ERROR",
+            reason_code: "D1_SEMANTIC_ERROR",
+            summary,
+            expected: None,
+            observed: None,
+            remediation: "Use the typed D1 diagnostic summary to repair the repository/input condition, then rerun prepare before requesting authorization.",
+        }
+    }
+
+    pub(super) fn blocked(
+        phase: &'static str,
+        gate_id: &'static str,
+        reason_code: &'static str,
+        summary: impl Into<String>,
+        expected: Option<String>,
+        observed: Option<String>,
+        remediation: &'static str,
+    ) -> Self {
+        Self {
+            phase,
+            gate_id,
+            status: "BLOCKED",
+            reason_code,
+            summary: summary.into(),
+            expected,
+            observed,
+            remediation,
+        }
+    }
+
+    #[must_use]
+    pub(crate) fn json_value(&self) -> Value {
+        json!({
+            "schema_version": 1,
+            "prepare_id": Value::Null,
+            "transaction_id": Value::Null,
+            "phase": self.phase,
+            "gate_id": self.gate_id,
+            "status": self.status,
+            "reason_code": self.reason_code,
+            "summary": self.summary,
+            "expected": self.expected,
+            "observed": self.observed,
+            "remediation": self.remediation,
+            "tool": {
+                "name": "opsctl",
+                "surface": "d1",
+                "version": env!("CARGO_PKG_VERSION")
+            }
+        })
+    }
+}
+
 #[derive(Debug, PartialEq, Eq)]
 pub struct D1Error {
     message: String,
+    gate_result: GateResult,
 }
 
 impl D1Error {
     pub(super) fn new(message: impl Into<String>) -> Self {
+        let message = message.into();
         Self {
-            message: message.into(),
+            gate_result: GateResult::error(message.clone()),
+            message,
         }
+    }
+
+    pub(super) fn blocked(gate_result: GateResult) -> Self {
+        Self {
+            message: gate_result.summary.clone(),
+            gate_result,
+        }
+    }
+
+    #[must_use]
+    pub(crate) fn gate_result_json(&self) -> Value {
+        self.gate_result.json_value()
     }
 }
 
