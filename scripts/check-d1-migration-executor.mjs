@@ -14,6 +14,8 @@ const PINNED_WRANGLER = 'wrangler@4.94.0';
 const SHARED_MUTATION_GROUP = 'release-set-promotion-staging';
 const OBSERVE_REF = 'CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_OBSERVE_API_TOKEN }}';
 const DEPLOY_REF = 'CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}';
+const ORDINARY_CONFIRMATION = 'test "$CONFIRMATION" = "$SOURCE_SHA:$TARGET_ENVIRONMENT:$COMPONENT:$DATABASE_ID"';
+const CONTRACT_CONFIRMATION = 'test "$CONFIRMATION" = "$SOURCE_SHA:$TARGET_ENVIRONMENT:$COMPONENT:$DATABASE_ID:contract:$EXPECTED_RELEASE_SET_ID"';
 
 function fail(message) {
   throw new Error(message);
@@ -21,6 +23,10 @@ function fail(message) {
 
 function normalizedShell(text) {
   return text.replace(/\\\s*\n\s*/g, ' ');
+}
+
+function occurrenceCount(text, marker) {
+  return text.split(marker).length - 1;
 }
 
 function replaceFixture(label, text, from, to) {
@@ -57,8 +63,7 @@ async function validateExecutor(text, root = ROOT) {
     'cancel-in-progress: false', 'authorize:', 'needs: authorize',
     'test "$TARGET_ENVIRONMENT" = "staging"', 'test "$GITHUB_REF" = "refs/heads/main"',
     'test "$GITHUB_SHA" = "$SOURCE_SHA"', 'test "$MUTATION_AUTHORIZED" = "true"',
-    'test "$CONFIRMATION" = "$SOURCE_SHA:$TARGET_ENVIRONMENT:$COMPONENT:$DATABASE_ID"',
-    'test "$CONFIRMATION" = "$SOURCE_SHA:$TARGET_ENVIRONMENT:$COMPONENT:$DATABASE_ID:contract:$EXPECTED_RELEASE_SET_ID"',
+    ORDINARY_CONFIRMATION, CONTRACT_CONFIRMATION,
     'transition_mode:', 'expected_release_set_id:', "'migrations_dir': 'migrations-bounded'", 'd1 repository',
     'd1 info', 'SELECT id, name FROM d1_migrations ORDER BY id', 'd1 status', 'd1 plan',
     '--example d1-contract-transition', 'FAIL_FORWARD_ONLY', 'd1 compatibility',
@@ -77,6 +82,12 @@ async function validateExecutor(text, root = ROOT) {
   ];
   for (const marker of requiredMarkers) {
     if (!text.includes(marker)) fail(`protected D1 executor lost required contract marker: ${marker}`);
+  }
+  if (occurrenceCount(text, ORDINARY_CONFIRMATION) !== 2) {
+    fail(`ordinary mutation confirmation must be enforced exactly twice; observed=${occurrenceCount(text, ORDINARY_CONFIRMATION)}`);
+  }
+  if (occurrenceCount(text, CONTRACT_CONFIRMATION) !== 2) {
+    fail(`contract mutation confirmation must be enforced exactly twice; observed=${occurrenceCount(text, CONTRACT_CONFIRMATION)}`);
   }
 
   for (const marker of [
@@ -219,7 +230,7 @@ async function selfTest(text) {
     ['raw legacy Catalog execution root', "'migrations_dir': 'migrations-bounded'", "'migrations_dir': '../../migrations/d1'"],
     ['missing normalized ledger fence', 'cmp --silent artifacts/d1-migration/ledger-before-names.json artifacts/d1-migration/ledger-fence-names.json', '# removed-ledger-fence'],
     ['missing Wrangler pending fence', 'd1-executor-plan.py verify-pending', 'd1-executor-plan.py removed-pending-check'],
-    ['missing contract confirmation binding', 'test "$CONFIRMATION" = "$SOURCE_SHA:$TARGET_ENVIRONMENT:$COMPONENT:$DATABASE_ID:contract:$EXPECTED_RELEASE_SET_ID"', 'test -n "$CONFIRMATION"'],
+    ['missing contract confirmation binding', CONTRACT_CONFIRMATION, 'test -n "$CONFIRMATION"'],
   ]) {
     await expectRejected(label, replaceFixture(label, text, from, to));
   }
@@ -228,7 +239,7 @@ async function selfTest(text) {
     'second remote apply',
     `${text}\n# npx --yes ${PINNED_WRANGLER} d1 migrations apply X --remote --experimental-provision=false --experimental-auto-create=false\n`,
   );
-  console.log('Protected D1 executor exact-plan, bounded-lineage, pending-list and double-ledger-fence negative fixtures passed.');
+  console.log('Protected D1 executor exact-plan, bounded-lineage, pending-list, confirmation-cardinality and double-ledger-fence negative fixtures passed.');
 }
 
 async function main() {
@@ -239,7 +250,7 @@ async function main() {
   }
   if (process.argv.length > 2) fail(`unknown arguments: ${process.argv.slice(2).join(' ')}`);
   await validateExecutor(text, ROOT);
-  console.log('Protected D1 executor contract passed: staging-only, exact native plan materialization, bounded successor lineage, Wrangler pending equality, provider/ledger re-fence, one remote apply owner, no automatic restore or provisioning.');
+  console.log('Protected D1 executor contract passed: staging-only, exact native plan materialization, bounded successor lineage, Wrangler pending equality, provider/ledger re-fence, confirmation cardinality, one remote apply owner, no automatic restore or provisioning.');
 }
 
 main().catch((error) => {
