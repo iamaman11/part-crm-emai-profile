@@ -116,8 +116,8 @@ fn main() -> Result<(), Box<dyn Error>> {
     let expected_release_set_id =
         required(args.expected_release_set_id, "--expected-release-set-id")?;
     let output = match args.post_ledger_json {
-        Some(post_ledger_json) => contract_transition_verify(
-            D1ContractTransitionVerificationRequest {
+        Some(post_ledger_json) => {
+            contract_transition_verify(D1ContractTransitionVerificationRequest {
                 root: &root,
                 predecessor_ledger_json: &ledger_json,
                 ledger_json: &post_ledger_json,
@@ -126,8 +126,8 @@ fn main() -> Result<(), Box<dyn Error>> {
                 evaluated_at_unix_seconds,
                 expected_source_sha: &expected_source_sha,
                 expected_release_set_id: &expected_release_set_id,
-            },
-        )?,
+            })?
+        }
         None => contract_transition(D1ContractTransitionRequest {
             root: &root,
             ledger_json: &ledger_json,
