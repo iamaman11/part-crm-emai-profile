@@ -120,6 +120,7 @@ def record_diagnostic(
     reason_code: str,
     exit_code: int,
     detail: str,
+    publish: bool = True,
 ) -> None:
     if reason_code not in REASON_CODES:
         raise SystemExit(f"unknown D1 diagnostic reason code: {reason_code}")
@@ -134,6 +135,9 @@ def record_diagnostic(
     }
     with diagnostics_path.open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(record, sort_keys=True, separators=(",", ":")) + "\n")
+
+    if not publish:
+        return
 
     print(
         f"::error title={_gha_escape(reason_code)}::"
@@ -265,6 +269,7 @@ def command_self_test(_: argparse.Namespace) -> int:
                 reason_code=reason_code,
                 exit_code=17,
                 detail="self-test command failure",
+                publish=False,
             )
         records = [json.loads(line) for line in diagnostics_path.read_text(encoding="utf-8").splitlines()]
         assert [record["reason_code"] for record in records] == [
