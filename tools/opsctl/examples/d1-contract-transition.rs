@@ -81,7 +81,9 @@ fn parse_args() -> Result<Args, Box<dyn Error>> {
                     .map_err(|_| "expected Release Set id must be valid UTF-8")?;
                 set_once(&mut args.expected_release_set_id, value, flag)?;
             }
-            other => return Err(format!("unsupported contract-transition argument: {other}").into()),
+            other => {
+                return Err(format!("unsupported contract-transition argument: {other}").into());
+            }
         }
     }
     Ok(args)
@@ -102,10 +104,8 @@ fn main() -> Result<(), Box<dyn Error>> {
         "--evaluated-at-unix-seconds",
     )?;
     let expected_source_sha = required(args.expected_source_sha, "--expected-source-sha")?;
-    let expected_release_set_id = required(
-        args.expected_release_set_id,
-        "--expected-release-set-id",
-    )?;
+    let expected_release_set_id =
+        required(args.expected_release_set_id, "--expected-release-set-id")?;
     let output = contract_transition(D1ContractTransitionRequest {
         root: &root,
         ledger_json: &ledger_json,
