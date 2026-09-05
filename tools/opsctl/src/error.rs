@@ -40,7 +40,10 @@ impl OpsctlError {
         if let Some(gate_result) = &self.gate_result {
             output["gate_result"] = gate_result.clone();
         }
-        serde_json::to_string(&output).expect("OpsctlError JSON serialization cannot fail") + "\n"
+        match serde_json::to_string(&output) {
+            Ok(serialized) => serialized + "\n",
+            Err(_) => "{\"schema_version\":1,\"command\":\"opsctl\",\"status\":\"error\",\"mode\":\"read-only\",\"mutation_executed\":false,\"error\":\"OPSCTL_ERROR_SERIALIZATION_FAILED\"}\n".to_owned(),
+        }
     }
 }
 
@@ -57,13 +60,14 @@ mod tests {
     use super::OpsctlError;
 
     #[test]
-    fn ordinary_errors_remain_secret_free_read_only_json() {
+    fn ordinary_errors_remain_secret_free_read_only_json() -> Result<(), serde_json::Error> {
         let parsed: serde_json::Value =
-            serde_json::from_str(&OpsctlError::new("doctor", "broken").json()).unwrap();
+            serde_json::from_str(&OpsctlError::new("doctor", "broken").json())?;
         assert_eq!(parsed["command"], "doctor");
         assert_eq!(parsed["status"], "error");
         assert_eq!(parsed["mutation_executed"], false);
         assert_eq!(parsed["error"], "broken");
         assert!(parsed.get("gate_result").is_none());
+        Ok(())
     }
 }
