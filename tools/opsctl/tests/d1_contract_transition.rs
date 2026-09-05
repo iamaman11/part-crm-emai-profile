@@ -74,8 +74,7 @@ fn ledger(names: &[String]) -> Value {
 
 #[test]
 fn public_contract_transition_enforces_exact_fail_closed_matrix_and_post_verify()
--> Result<(), Box<dyn Error>>
-{
+-> Result<(), Box<dyn Error>> {
     let root = repo_root();
     let projection: Value = serde_json::from_str(&repository_projection(&root)?)?;
     let catalog = catalog(&projection)?;
@@ -161,10 +160,7 @@ fn public_contract_transition_enforces_exact_fail_closed_matrix_and_post_verify(
     assert_eq!(planned["decision"], "MIGRATION_REQUIRED");
     assert_eq!(planned["remote_revision"], PREDECESSOR_REVISION);
     assert_eq!(planned["target_revision"], CONTRACT_REVISION);
-    assert_eq!(
-        planned["planned_migrations"],
-        json!([CONTRACT_REVISION])
-    );
+    assert_eq!(planned["planned_migrations"], json!([CONTRACT_REVISION]));
     assert_eq!(planned["recovery_strategy"], "FAIL_FORWARD_ONLY");
     assert_eq!(planned["allowed"], true);
     assert_eq!(planned["mutation_executed"], false);
@@ -222,7 +218,11 @@ fn public_contract_transition_enforces_exact_fail_closed_matrix_and_post_verify(
         expected_release_set_id: &release_set_id,
     })
     .expect_err("missing recovery strategy must fail closed");
-    assert!(missing_recovery.to_string().contains("exact governed schema"));
+    assert!(
+        missing_recovery
+            .to_string()
+            .contains("exact governed schema")
+    );
 
     let mut incomplete_preconditions = evidence.clone();
     incomplete_preconditions["preconditions"]
@@ -298,8 +298,10 @@ fn public_contract_transition_enforces_exact_fail_closed_matrix_and_post_verify(
         expected_release_set_id: &release_set_id,
     })
     .expect_err("unchanged 0031 ledger must not pass post-contract verification");
-    assert!(unchanged
-        .to_string()
-        .contains("exactly one canonical 0031 -> 0032 transition"));
+    assert!(
+        unchanged
+            .to_string()
+            .contains("exactly one canonical 0031 -> 0032 transition")
+    );
     Ok(())
 }
