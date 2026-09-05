@@ -582,57 +582,64 @@ mod tests {
     }
 
     fn observation() -> Value {
-        serde_json::to_value(ProviderObservationInput {
-            schema_version: 1,
-            target: target(),
-            observed_at_unix_seconds: 1_788_640_000,
-            observation_source: "fixture".to_owned(),
-            remote_ledger_sha256: "22".repeat(32),
-            remote_migrations: vec!["0030_profile_generation_successor_commit.sql".to_owned()],
-            wrangler_pending_migrations: vec!["0031_device_binding_governance.sql".to_owned()],
-            deployment_identity: Some("deployment-1".to_owned()),
-            time_travel_bookmark_capable: true,
+        json!({
+            "schema_version": 1,
+            "target": {
+                "environment": "rehearsal",
+                "account_id": "account-1",
+                "database_name": "d1-rehearsal",
+                "database_id": "database-1"
+            },
+            "observed_at_unix_seconds": 1_788_640_000,
+            "observation_source": "fixture",
+            "remote_ledger_sha256": "22".repeat(32),
+            "remote_migrations": ["0030_profile_generation_successor_commit.sql"],
+            "wrangler_pending_migrations": ["0031_device_binding_governance.sql"],
+            "deployment_identity": "deployment-1",
+            "time_travel_bookmark_capable": true
         })
-        .unwrap()
     }
 
     fn transaction_input() -> Value {
-        serde_json::to_value(TransactionIdentityInput {
-            schema_version: 1,
-            source_sha: "33".repeat(20),
-            tree_sha: "44".repeat(20),
-            release_candidate_id: format!("release-set-v3-sha256-{}", "55".repeat(32)),
-            release_manifest_digests: BTreeMap::from([("catalog".to_owned(), "66".repeat(32))]),
-            transaction_kind: TransactionKind::D1Migration,
-            phase: TransactionPhase::Ordinary,
-            target: target(),
-            freshness_max_age_seconds: 900,
-            predecessor_ledger_sha256: "22".repeat(32),
-            planned_migrations: vec![PlannedMigrationDigest {
-                migration_file: "0031_device_binding_governance.sql".to_owned(),
-                content_sha256: "88".repeat(32),
+        json!({
+            "schema_version": 1,
+            "source_sha": "33".repeat(20),
+            "tree_sha": "44".repeat(20),
+            "release_candidate_id": format!("release-set-v3-sha256-{}", "55".repeat(32)),
+            "release_manifest_digests": {"catalog": "66".repeat(32)},
+            "transaction_kind": "D1_MIGRATION",
+            "phase": "ORDINARY",
+            "target": {
+                "environment": "rehearsal",
+                "account_id": "account-1",
+                "database_name": "d1-rehearsal",
+                "database_id": "database-1"
+            },
+            "freshness_max_age_seconds": 900,
+            "predecessor_ledger_sha256": "22".repeat(32),
+            "planned_migrations": [{
+                "migration_file": "0031_device_binding_governance.sql",
+                "content_sha256": "88".repeat(32)
             }],
-            precondition_evidence_refs: vec!["fixture:precondition".to_owned()],
-            recovery_strategy: RecoveryStrategy::NoopRetry,
-            expected_post_state: json!({"revision": "0031_device_binding_governance.sql"}),
+            "precondition_evidence_refs": ["fixture:precondition"],
+            "recovery_strategy": "NOOP_RETRY",
+            "expected_post_state": {"revision": "0031_device_binding_governance.sql"}
         })
-        .unwrap()
     }
 
-    fn build() -> TransactionProjection {
+    fn build() -> Result<TransactionProjection, D1Error> {
         build_transaction_projection(
             &prepare(),
             &observation(),
             &repository(),
             &transaction_input(),
         )
-        .unwrap()
     }
 
     #[test]
-    fn identical_inputs_produce_identical_transaction_identity() {
-        let left = build();
-        let right = build();
+    fn identical_inputs_produce_identical_transaction_identity() -> Result<(), D1Error> {
+        let left = build()?;
+        let right = build()?;
         assert_eq!(left.transaction_id, right.transaction_id);
         assert_eq!(left.transaction_plan, right.transaction_plan);
         assert_eq!(
@@ -647,33 +654,34 @@ mod tests {
         assert!(!left.authorization_consumed);
         assert!(!left.mutation_executed);
         assert!(!left.provider_mutation_executed);
+        Ok(())
     }
 
     #[test]
-    fn provider_observation_drift_changes_transaction_identity() {
-        let baseline = build();
+    fn provider_observation_drift_changes_transaction_identity() -> Result<(), D1Error> {
+        let baseline = build()?;
         let mut changed = observation();
         changed["deployment_identity"] = json!("deployment-2");
         let changed =
-            build_transaction_projection(&prepare(), &changed, &repository(), &transaction_input())
-                .unwrap();
+            build_transaction_projection(&prepare(), &changed, &repository(), &transaction_input())?;
         assert_ne!(baseline.transaction_id, changed.transaction_id);
+        Ok(())
     }
 
     #[test]
-    fn source_drift_changes_transaction_identity() {
-        let baseline = build();
+    fn source_drift_changes_transaction_identity() -> Result<(), D1Error> {
+        let baseline = build()?;
         let mut changed = transaction_input();
         changed["source_sha"] = json!("77".repeat(20));
         let changed =
-            build_transaction_projection(&prepare(), &observation(), &repository(), &changed)
-                .unwrap();
+            build_transaction_projection(&prepare(), &observation(), &repository(), &changed)?;
         assert_ne!(baseline.transaction_id, changed.transaction_id);
+        Ok(())
     }
 
     #[test]
-    fn repository_identity_drift_changes_transaction_identity() {
-        let baseline = build();
+    fn repository_identity_drift_changes_transaction_identity() -> Result<(), D1Error> {
+        let baseline = build()?;
         let mut changed = repository();
         changed["repository_identity_sha256"] = json!("bb".repeat(32));
         let changed = build_transaction_projection(
@@ -681,14 +689,14 @@ mod tests {
             &observation(),
             &changed,
             &transaction_input(),
-        )
-        .unwrap();
+        )?;
         assert_ne!(baseline.transaction_id, changed.transaction_id);
+        Ok(())
     }
 
     #[test]
-    fn repository_policy_drift_changes_transaction_identity() {
-        let baseline = build();
+    fn repository_policy_drift_changes_transaction_identity() -> Result<(), D1Error> {
+        let baseline = build()?;
         let mut changed = repository();
         changed["components"][0]["compatibility_policy_digest"] = json!("bb".repeat(32));
         let changed = build_transaction_projection(
@@ -696,9 +704,9 @@ mod tests {
             &observation(),
             &changed,
             &transaction_input(),
-        )
-        .unwrap();
+        )?;
         assert_ne!(baseline.transaction_id, changed.transaction_id);
+        Ok(())
     }
 
     #[test]
