@@ -8,6 +8,8 @@ import { fileURLToPath } from 'node:url';
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const EXECUTOR = '.github/workflows/d1-migration-executor.yml';
 const ADAPTER = 'scripts/d1-executor-plan.py';
+const CONTRACT_TRANSITION = 'tools/opsctl/src/d1/contract_transition.rs';
+const CONTRACT_EXAMPLE = 'tools/opsctl/examples/d1-contract-transition.rs';
 const PROMOTION = '.github/workflows/release-set-promotion.yml';
 const WORKFLOWS = '.github/workflows';
 const PINNED_WRANGLER = 'wrangler@4.94.0';
@@ -16,6 +18,7 @@ const OBSERVE_REF = 'CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_OBSERVE_API_TO
 const DEPLOY_REF = 'CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}';
 const ORDINARY_CONFIRMATION = 'test "$CONFIRMATION" = "$SOURCE_SHA:$TARGET_ENVIRONMENT:$COMPONENT:$DATABASE_ID"';
 const CONTRACT_CONFIRMATION = 'test "$CONFIRMATION" = "$SOURCE_SHA:$TARGET_ENVIRONMENT:$COMPONENT:$DATABASE_ID:contract:$EXPECTED_RELEASE_SET_ID"';
+const POST_CONTRACT_LEDGER = '--post-ledger-json artifacts/d1-migration/ledger-after.json';
 
 function fail(message) {
   throw new Error(message);
@@ -56,6 +59,8 @@ function validateSharedMutationGroup(executorText, promotionText) {
 async function validateExecutor(text, root = ROOT) {
   const promotionText = await readFile(path.join(root, PROMOTION), 'utf8');
   const adapterText = await readFile(path.join(root, ADAPTER), 'utf8');
+  const contractText = await readFile(path.join(root, CONTRACT_TRANSITION), 'utf8');
+  const contractExampleText = await readFile(path.join(root, CONTRACT_EXAMPLE), 'utf8');
   validateSharedMutationGroup(text, promotionText);
 
   const requiredMarkers = [
@@ -74,7 +79,9 @@ async function validateExecutor(text, root = ROOT) {
     'ledger-fence-names.json',
     'cmp --silent artifacts/d1-migration/ledger-before-names.json artifacts/d1-migration/ledger-fence-names.json',
     'wrangler-pending-fence.txt', 'd1 migrations apply', 'expected-after.json', 'ledger-after-names.json',
-    'd1 verify', 'PRAGMA foreign_key_check', 'PRAGMA integrity_check',
+    'd1 verify', POST_CONTRACT_LEDGER, 'd1 contract-transition verify', 'predecessor_ledger_state',
+    'runtime_target_revision', 'transition_migrations',
+    'PRAGMA foreign_key_check', 'PRAGMA integrity_check',
     "provider_mutation_executed': bool(plan.get('planned_migrations'))", "automatic_restore_executed': False",
     "secret_material_recorded': False", 'actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a',
     '--experimental-provision=false', '--experimental-auto-create=false',
@@ -97,6 +104,15 @@ async function validateExecutor(text, root = ROOT) {
     'Wrangler pending list differs from native planned_migrations',
   ]) {
     if (!adapterText.includes(marker)) fail(`exact-plan adapter lost fail-closed marker: ${marker}`);
+  }
+  for (const marker of [
+    'verify_post_transition', 'post-contract verification requires exactly one canonical 0031 -> 0032 transition',
+    'd1 contract-transition verify', 'EXACT_ONE_STEP_0032_CONTRACT', 'RUNTIME_WINDOW_0031_0032_VERIFIED',
+  ]) {
+    if (!contractText.includes(marker)) fail(`typed contract-transition lost post-CONTRACT invariant: ${marker}`);
+  }
+  for (const marker of ['--post-ledger-json', 'contract_transition_verify']) {
+    if (!contractExampleText.includes(marker)) fail(`contract-transition entrypoint lost post-CONTRACT route: ${marker}`);
   }
 
   for (const forbidden of [
@@ -190,6 +206,19 @@ async function validateExecutor(text, root = ROOT) {
     fail('deploy step must re-fence provider identity/ledger and Wrangler pending list before apply');
   }
 
+  const postVerifyIndex = text.indexOf('Require exact target through credential-free opsctl verify');
+  const postInvariantIndex = text.indexOf('Verify post-apply database invariants with observe credential', postVerifyIndex);
+  if (postVerifyIndex < 0 || postInvariantIndex <= postVerifyIndex) {
+    fail('post-apply verification step is missing or malformed');
+  }
+  const postVerifyBody = text.slice(postVerifyIndex, postInvariantIndex);
+  for (const marker of [
+    POST_CONTRACT_LEDGER, 'd1 contract-transition verify', 'predecessor_ledger_state',
+    'runtime_target_revision', 'supported_schema_max', 'transition_migrations',
+  ]) {
+    if (!postVerifyBody.includes(marker)) fail(`post-CONTRACT verification lost required typed proof: ${marker}`);
+  }
+
   const remoteMutationPaths = [];
   for (const workflowPath of await workflowPaths(root)) {
     const candidate = normalizedShell(await readFile(path.join(root, workflowPath), 'utf8'));
@@ -231,6 +260,7 @@ async function selfTest(text) {
     ['missing normalized ledger fence', 'cmp --silent artifacts/d1-migration/ledger-before-names.json artifacts/d1-migration/ledger-fence-names.json', '# removed-ledger-fence'],
     ['missing Wrangler pending fence', 'd1-executor-plan.py verify-pending', 'd1-executor-plan.py removed-pending-check'],
     ['missing contract confirmation binding', CONTRACT_CONFIRMATION, 'test -n "$CONFIRMATION"'],
+    ['missing typed post-contract ledger proof', POST_CONTRACT_LEDGER, '--removed-post-ledger-json'],
   ]) {
     await expectRejected(label, replaceFixture(label, text, from, to));
   }
@@ -239,7 +269,7 @@ async function selfTest(text) {
     'second remote apply',
     `${text}\n# npx --yes ${PINNED_WRANGLER} d1 migrations apply X --remote --experimental-provision=false --experimental-auto-create=false\n`,
   );
-  console.log('Protected D1 executor exact-plan, bounded-lineage, pending-list, confirmation-cardinality and double-ledger-fence negative fixtures passed.');
+  console.log('Protected D1 executor exact-plan, bounded-lineage, typed post-CONTRACT verification, pending-list, confirmation-cardinality and double-ledger-fence negative fixtures passed.');
 }
 
 async function main() {
@@ -250,7 +280,7 @@ async function main() {
   }
   if (process.argv.length > 2) fail(`unknown arguments: ${process.argv.slice(2).join(' ')}`);
   await validateExecutor(text, ROOT);
-  console.log('Protected D1 executor contract passed: staging-only, exact native plan materialization, bounded successor lineage, Wrangler pending equality, provider/ledger re-fence, confirmation cardinality, one remote apply owner, no automatic restore or provisioning.');
+  console.log('Protected D1 executor contract passed: staging-only, exact native plan materialization, bounded successor lineage, Wrangler pending equality, provider/ledger re-fence, typed post-CONTRACT verification, confirmation cardinality, one remote apply owner, no automatic restore or provisioning.');
 }
 
 main().catch((error) => {
