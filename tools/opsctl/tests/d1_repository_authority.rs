@@ -10,6 +10,9 @@ const CATALOG_EPOCH_DIGEST: &str =
     "4d1d8b8d3bba5d0903385d05fc18e0036628ff1123e0e26e9a080a340f7b5e2e";
 const RESOLVER_EPOCH_DIGEST: &str =
     "98fd6f91a839223b06c441df4901dbd4fda8e69f2f90606f00e43faad91877ec";
+const LEGACY_PAS2_REVISION: &str = "0027_pas2_payload_fingerprint.sql";
+const SUCCESSOR_EXPAND_REVISION: &str = "0027_pas2_payload_fingerprint_expand.sql";
+const SUCCESSOR_CONTRACT_REVISION: &str = "0032_pas2_payload_fingerprint_contract.sql";
 
 fn repo_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
@@ -39,9 +42,9 @@ fn migration_identity(root: &Path, relative: &str) -> Result<(Vec<Value>, String
 
     let mut identity = Vec::with_capacity(entries.len());
     for path in entries {
-        if !path.is_file() {
+        if !path.is_file() || path.is_symlink() {
             return Err(
-                format!("non-file entry in migration directory: {}", path.display()).into(),
+                format!("non-regular entry in migration directory: {}", path.display()).into(),
             );
         }
         let name = path
@@ -59,6 +62,37 @@ fn migration_identity(root: &Path, relative: &str) -> Result<(Vec<Value>, String
     Ok((identity, digest))
 }
 
+fn executable_identity_from_projection(
+    root: &Path,
+    component: &Value,
+) -> Result<(Vec<Value>, String), Box<dyn Error>> {
+    let sources = component["executable_migration_sources"]
+        .as_array()
+        .ok_or("Catalog executable_migration_sources projection is missing")?;
+    let mut identity = Vec::with_capacity(sources.len());
+    for source in sources {
+        let name = source["migration_file"]
+            .as_str()
+            .ok_or("Catalog executable migration filename is missing")?;
+        let source_root = source["source_root"]
+            .as_str()
+            .ok_or("Catalog executable migration source root is missing")?;
+        if !matches!(source_root, "migrations/d1" | "migrations/d1-successor") {
+            return Err(format!("unexpected Catalog source root: {source_root}").into());
+        }
+        let path = root.join(source_root).join(name);
+        if !path.is_file() || path.is_symlink() {
+            return Err(format!("Catalog executable source is not a regular file: {}", path.display()).into());
+        }
+        identity.push(json!({
+            "name": name,
+            "sha256": sha256_hex(&fs::read(path)?),
+        }));
+    }
+    let digest = identity_digest(&identity)?;
+    Ok((identity, digest))
+}
+
 struct TempRepository {
     path: PathBuf,
 }
@@ -71,6 +105,10 @@ impl TempRepository {
             std::process::id()
         ));
         copy_directory(&source.join("migrations/d1"), &path.join("migrations/d1"))?;
+        copy_directory(
+            &source.join("migrations/d1-successor"),
+            &path.join("migrations/d1-successor"),
+        )?;
         copy_directory(
             &source.join("migrations/resolver-d1"),
             &path.join("migrations/resolver-d1"),
@@ -93,9 +131,9 @@ fn copy_directory(source: &Path, target: &Path) -> Result<(), Box<dyn Error>> {
     fs::create_dir_all(target)?;
     for entry in fs::read_dir(source)? {
         let entry = entry?;
-        if !entry.file_type()?.is_file() {
+        if !entry.file_type()?.is_file() || entry.path().is_symlink() {
             return Err(format!(
-                "unexpected non-file migration entry: {}",
+                "unexpected non-regular migration entry: {}",
                 entry.path().display()
             )
             .into());
@@ -133,65 +171,44 @@ fn frozen_epoch_and_current_projection_are_derived_from_real_sql_bytes()
     let root = repo_root();
     let projection: Value = serde_json::from_str(&repository_projection(&root)?)?;
 
-    for (
-        id,
-        migration_root,
-        historical_count,
-        historical_revision,
-        current_count,
-        current_revision,
-        post_epoch_count,
-        accepted_digest,
-    ) in [
-        (
-            "catalog",
-            "migrations/d1",
-            26_usize,
-            "0026_outbound_mail_intents.sql",
-            31_u64,
-            "0031_device_binding_governance.sql",
-            5_u64,
-            CATALOG_EPOCH_DIGEST,
-        ),
-        (
-            "resolver",
-            "migrations/resolver-d1",
-            4_usize,
-            "0004_refresh_owner_hmac_version.sql",
-            4_u64,
-            "0004_refresh_owner_hmac_version.sql",
-            0_u64,
-            RESOLVER_EPOCH_DIGEST,
-        ),
-    ] {
-        let (files, computed_current_digest) = migration_identity(&root, migration_root)?;
-        let current = component(&projection, id)?;
-        let historical = &files[..historical_count];
-        let computed_historical_digest = identity_digest(historical)?;
+    let catalog = component(&projection, "catalog")?;
+    let (catalog_legacy, _) = migration_identity(&root, "migrations/d1")?;
+    let (catalog_current, catalog_current_digest) =
+        executable_identity_from_projection(&root, catalog)?;
+    assert_eq!(catalog_legacy.len(), 31);
+    assert_eq!(catalog_legacy[25]["name"], "0026_outbound_mail_intents.sql");
+    assert_eq!(catalog_legacy[26]["name"], LEGACY_PAS2_REVISION);
+    assert_eq!(identity_digest(&catalog_legacy[..26])?, CATALOG_EPOCH_DIGEST);
+    assert_eq!(catalog_current.len(), 32);
+    assert_eq!(catalog_current[26]["name"], SUCCESSOR_EXPAND_REVISION);
+    assert_eq!(catalog_current[31]["name"], SUCCESSOR_CONTRACT_REVISION);
+    assert!(catalog_current.iter().all(|entry| entry["name"] != LEGACY_PAS2_REVISION));
+    assert_eq!(catalog["migration_count"], 32);
+    assert_eq!(catalog["current_repository_revision"], SUCCESSOR_CONTRACT_REVISION);
+    assert_eq!(catalog["history_digest"], catalog_current_digest);
+    assert_eq!(catalog["post_epoch_migration_count"], 6);
+    assert_eq!(catalog["historical_epoch"]["migration_count"], 26);
+    assert_eq!(
+        catalog["historical_epoch"]["final_revision"],
+        "0026_outbound_mail_intents.sql"
+    );
+    assert_eq!(
+        catalog["historical_epoch"]["accepted_history_digest"],
+        CATALOG_EPOCH_DIGEST
+    );
+    assert_eq!(catalog["legacy_history"]["immutable"], true);
+    assert_eq!(catalog["legacy_history"]["executable_by_successor_lineage"], false);
 
-        assert_eq!(files.len() as u64, current_count);
-        assert_eq!(
-            historical.last().and_then(|value| value["name"].as_str()),
-            Some(historical_revision)
-        );
-        assert_eq!(computed_historical_digest, accepted_digest);
-        assert_eq!(current["migration_count"], current_count);
-        assert_eq!(current["current_repository_revision"], current_revision);
-        assert_eq!(current["history_digest"], computed_current_digest);
-        assert_eq!(current["post_epoch_migration_count"], post_epoch_count);
-        assert_eq!(
-            current["historical_epoch"]["migration_count"],
-            historical_count as u64
-        );
-        assert_eq!(
-            current["historical_epoch"]["final_revision"],
-            historical_revision
-        );
-        assert_eq!(
-            current["historical_epoch"]["accepted_history_digest"],
-            accepted_digest
-        );
-    }
+    let resolver = component(&projection, "resolver")?;
+    let (resolver_files, resolver_current_digest) = migration_identity(&root, "migrations/resolver-d1")?;
+    assert_eq!(resolver_files.len(), 4);
+    assert_eq!(resolver_files[3]["name"], "0004_refresh_owner_hmac_version.sql");
+    assert_eq!(identity_digest(&resolver_files[..4])?, RESOLVER_EPOCH_DIGEST);
+    assert_eq!(resolver["migration_count"], 4);
+    assert_eq!(resolver["current_repository_revision"], "0004_refresh_owner_hmac_version.sql");
+    assert_eq!(resolver["history_digest"], resolver_current_digest);
+    assert_eq!(resolver["post_epoch_migration_count"], 0);
+    assert_eq!(resolver["historical_epoch"]["accepted_history_digest"], RESOLVER_EPOCH_DIGEST);
     Ok(())
 }
 
@@ -207,7 +224,11 @@ fn repository_projection_is_deterministic_and_effect_free() -> Result<(), Box<dy
     assert_eq!(value["semantic_authority"], "tools/opsctl/src/d1");
     assert_eq!(
         value["executable_schema_authority"],
-        json!(["migrations/d1", "migrations/resolver-d1"])
+        json!([
+            "migrations/d1",
+            "migrations/d1-successor",
+            "migrations/resolver-d1"
+        ])
     );
     assert_eq!(value["effect_boundary"]["network"], false);
     assert_eq!(value["effect_boundary"]["provider_credentials"], false);
@@ -234,9 +255,8 @@ fn historical_sql_tampering_fails_closed_for_each_component() -> Result<(), Box<
             Err(error) => error,
         };
         assert!(
-            error
-                .to_string()
-                .contains("historical epoch digest mismatch")
+            error.to_string().contains("historical epoch digest mismatch"),
+            "unexpected fail-closed reason for {label}: {error}"
         );
     }
     Ok(())
@@ -245,11 +265,16 @@ fn historical_sql_tampering_fails_closed_for_each_component() -> Result<(), Box<
 #[test]
 fn unowned_post_epoch_sql_fails_closed_for_each_component() -> Result<(), Box<dyn Error>> {
     let source = repo_root();
-    for (label, relative) in [
-        ("catalog-post-epoch", "migrations/d1/0032_unowned.sql"),
+    for (label, relative, expected_reason) in [
+        (
+            "catalog-successor-post-epoch",
+            "migrations/d1-successor/0033_unowned.sql",
+            "Catalog successor migration inventory mismatch",
+        ),
         (
             "resolver-post-epoch",
             "migrations/resolver-d1/0005_unowned.sql",
+            "post-epoch migration/spec count mismatch",
         ),
     ] {
         let repository = TempRepository::copy_from(&source, label)?;
@@ -259,9 +284,7 @@ fn unowned_post_epoch_sql_fails_closed_for_each_component() -> Result<(), Box<dy
             Err(error) => error,
         };
         assert!(
-            error
-                .to_string()
-                .contains("post-epoch migration/spec count mismatch"),
+            error.to_string().contains(expected_reason),
             "unexpected fail-closed reason for {label}: {error}"
         );
     }
@@ -269,43 +292,52 @@ fn unowned_post_epoch_sql_fails_closed_for_each_component() -> Result<(), Box<dy
 }
 
 #[test]
-fn catalog_0027_is_the_typed_first_post_epoch_revision() -> Result<(), Box<dyn Error>> {
+fn legacy_and_successor_pas2_revisions_have_distinct_governed_roles()
+-> Result<(), Box<dyn Error>> {
     let root = repo_root();
     let projection: Value = serde_json::from_str(&repository_projection(&root)?)?;
     let catalog = component(&projection, "catalog")?;
     let resolver = component(&projection, "resolver")?;
-    let (catalog_files, _) = migration_identity(&root, "migrations/d1")?;
+    let (catalog_legacy, _) = migration_identity(&root, "migrations/d1")?;
+    let successor_files = migration_identity(&root, "migrations/d1-successor")?.0;
+    let sources = catalog["executable_migration_sources"]
+        .as_array()
+        .ok_or("Catalog executable migration source projection missing")?;
 
     assert_eq!(catalog["historical_epoch"]["migration_count"], 26);
     assert_eq!(
         catalog["historical_epoch"]["final_revision"],
         "0026_outbound_mail_intents.sql"
     );
+    assert_eq!(catalog_legacy[26]["name"], LEGACY_PAS2_REVISION);
+    assert_eq!(catalog_legacy[30]["name"], "0031_device_binding_governance.sql");
+    assert_eq!(successor_files.len(), 2);
+    assert_eq!(successor_files[0]["name"], SUCCESSOR_EXPAND_REVISION);
+    assert_eq!(successor_files[1]["name"], SUCCESSOR_CONTRACT_REVISION);
+
+    assert_eq!(catalog["migration_count"], 32);
+    assert_eq!(catalog["post_epoch_migration_count"], 6);
+    assert_eq!(catalog["current_repository_revision"], SUCCESSOR_CONTRACT_REVISION);
+    assert_eq!(catalog["migration_lineage"], "catalog-successor-v1");
+    assert_eq!(sources.len(), 32);
+    assert_eq!(sources[26]["migration_file"], SUCCESSOR_EXPAND_REVISION);
+    assert_eq!(sources[26]["source_root"], "migrations/d1-successor");
+    assert_eq!(sources[27]["migration_file"], "0028_profile_assignment_detach.sql");
+    assert_eq!(sources[27]["source_root"], "migrations/d1");
+    assert_eq!(sources[31]["migration_file"], SUCCESSOR_CONTRACT_REVISION);
+    assert_eq!(sources[31]["source_root"], "migrations/d1-successor");
+    assert!(sources.iter().all(|source| source["migration_file"] != LEGACY_PAS2_REVISION));
     assert_eq!(
-        catalog_files[26]["name"],
-        "0027_pas2_payload_fingerprint.sql"
-    );
-    assert_eq!(
-        catalog_files[27]["name"],
-        "0028_profile_assignment_detach.sql"
-    );
-    assert_eq!(
-        catalog_files[28]["name"],
-        "0029_profile_launch_authority.sql"
-    );
-    assert_eq!(
-        catalog_files[29]["name"],
-        "0030_profile_generation_successor_commit.sql"
-    );
-    assert_eq!(
-        catalog_files[30]["name"],
+        catalog["release_schema_contract"]["target_schema_revision"],
         "0031_device_binding_governance.sql"
     );
-    assert_eq!(catalog["migration_count"], 31);
-    assert_eq!(catalog["post_epoch_migration_count"], 5);
     assert_eq!(
-        catalog["current_repository_revision"],
+        catalog["release_schema_contract"]["supported_schema_min"],
         "0031_device_binding_governance.sql"
+    );
+    assert_eq!(
+        catalog["release_schema_contract"]["supported_schema_max"],
+        SUCCESSOR_CONTRACT_REVISION
     );
 
     assert_eq!(resolver["historical_epoch"]["migration_count"], 4);
