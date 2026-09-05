@@ -175,7 +175,9 @@ fn public_contract_transition_enforces_exact_fail_closed_matrix_and_post_verify(
         expected_release_set_id: &release_set_id,
     }) {
         Ok(_) => {
-            return Err("wrong predecessor with multiple pending migrations unexpectedly passed".into());
+            return Err(
+                "wrong predecessor with multiple pending migrations unexpectedly passed".into(),
+            );
         }
         Err(error) => error,
     };
@@ -309,7 +311,11 @@ fn public_contract_transition_enforces_exact_fail_closed_matrix_and_post_verify(
         expected_source_sha: &source_sha,
         expected_release_set_id: &release_set_id,
     }) {
-        Ok(_) => return Err("unchanged 0031 ledger unexpectedly passed post-contract verification".into()),
+        Ok(_) => {
+            return Err(
+                "unchanged 0031 ledger unexpectedly passed post-contract verification".into(),
+            );
+        }
         Err(error) => error,
     };
     assert!(
