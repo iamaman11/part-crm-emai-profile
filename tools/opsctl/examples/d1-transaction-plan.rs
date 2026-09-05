@@ -12,6 +12,15 @@ use std::path::{Path, PathBuf};
 
 const OBSERVATION_SCHEMA_VERSION: u64 = 1;
 const TRANSACTION_SCHEMA_VERSION: u64 = 1;
+const RELEASE_SET_PREFIX: &str = "release-set-v3-sha256-";
+const ALLOWED_PROVIDER_EFFECT: &str = "D1_MIGRATIONS_APPLY_EXACT_PLAN";
+const FORBIDDEN_PROVIDER_EFFECTS: [&str; 5] = [
+    "D1_CREATE",
+    "D1_DELETE",
+    "D1_TIME_TRAVEL_RESTORE",
+    "RESOURCE_AUTO_PROVISION",
+    "PRODUCTION_MUTATION",
+];
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -20,6 +29,29 @@ struct TargetIdentity {
     account_id: String,
     database_name: String,
     database_id: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+enum TransactionKind {
+    D1Migration,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+enum TransactionPhase {
+    Ordinary,
+    Contract,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+enum RecoveryStrategy {
+    NoopRetry,
+    RollForward,
+    FailForwardOnly,
+    TimeTravelRestoreRequiresSeparateAuth,
+    ManualRepairRequired,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -67,8 +99,8 @@ struct TransactionIdentityInput {
     release_manifest_digests: BTreeMap<String, String>,
     planner_policy_digest: String,
     migration_lineage_digest: String,
-    transaction_kind: String,
-    phase: String,
+    transaction_kind: TransactionKind,
+    phase: TransactionPhase,
     target: TargetIdentity,
     freshness_max_age_seconds: u64,
     predecessor_ledger_sha256: String,
@@ -77,18 +109,16 @@ struct TransactionIdentityInput {
     supported_schema_min: String,
     supported_schema_max: String,
     precondition_evidence_refs: Vec<String>,
-    recovery_strategy: String,
+    recovery_strategy: RecoveryStrategy,
     expected_post_state: Value,
-    allowed_provider_effects: Vec<String>,
-    forbidden_provider_effects: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 struct MigrationTransactionPlan {
     schema_version: u64,
     planner_policy_digest: String,
-    transaction_kind: String,
-    phase: String,
+    transaction_kind: TransactionKind,
+    phase: TransactionPhase,
     source_sha: String,
     tree_sha: String,
     release_candidate_id: String,
@@ -104,10 +134,10 @@ struct MigrationTransactionPlan {
     supported_schema_min: String,
     supported_schema_max: String,
     precondition_evidence_refs: Vec<String>,
-    recovery_strategy: String,
+    recovery_strategy: RecoveryStrategy,
     expected_post_state: Value,
-    allowed_provider_effects: Vec<String>,
-    forbidden_provider_effects: Vec<String>,
+    allowed_provider_effects: [&'static str; 1],
+    forbidden_provider_effects: [&'static str; 5],
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -170,7 +200,9 @@ fn parse_args() -> Result<Args, Box<dyn Error>> {
                 PathBuf::from(next_value(&mut iterator, flag)?),
                 flag,
             )?,
-            other => return Err(format!("unsupported transaction-plan argument: {other}").into()),
+            other => {
+                return Err(format!("unsupported transaction-plan argument: {other}").into());
+            }
         }
     }
     Ok(args)
@@ -194,12 +226,40 @@ where
         .map_err(|error| format!("{label} does not match the typed contract: {error}").into())
 }
 
+fn is_lower_hex(value: &str) -> bool {
+    value
+        .bytes()
+        .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
+
 fn validate_sha256(value: &str, label: &str) -> Result<(), Box<dyn Error>> {
-    let valid = value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit());
-    if !valid {
-        return Err(format!("{label} must be exactly 64 hexadecimal characters").into());
+    if value.len() != 64 || !is_lower_hex(value) {
+        return Err(format!(
+            "{label} must be exactly 64 lowercase hexadecimal characters"
+        )
+        .into());
     }
     Ok(())
+}
+
+fn validate_git_object_id(value: &str, label: &str) -> Result<(), Box<dyn Error>> {
+    if !matches!(value.len(), 40 | 64) || !is_lower_hex(value) {
+        return Err(format!(
+            "{label} must be a 40- or 64-character lowercase Git object id"
+        )
+        .into());
+    }
+    Ok(())
+}
+
+fn validate_release_candidate_id(value: &str) -> Result<(), Box<dyn Error>> {
+    let Some(digest) = value.strip_prefix(RELEASE_SET_PREFIX) else {
+        return Err(format!(
+            "release_candidate_id must start with {RELEASE_SET_PREFIX}"
+        )
+        .into());
+    };
+    validate_sha256(digest, "release_candidate_id digest")
 }
 
 fn validate_non_empty(value: &str, label: &str) -> Result<(), Box<dyn Error>> {
@@ -230,15 +290,18 @@ fn validate_observation(input: &ProviderObservationInput) -> Result<(), Box<dyn 
     if input.observed_at_unix_seconds <= 0 {
         return Err("observed_at_unix_seconds must be positive".into());
     }
-    let unique = input.remote_migrations.iter().collect::<BTreeSet<_>>();
-    if unique.len() != input.remote_migrations.len() {
+    if input.remote_migrations.iter().collect::<BTreeSet<_>>().len()
+        != input.remote_migrations.len()
+    {
         return Err("remote_migrations must not contain duplicates".into());
     }
-    let pending_unique = input
+    if input
         .wrangler_pending_migrations
         .iter()
-        .collect::<BTreeSet<_>>();
-    if pending_unique.len() != input.wrangler_pending_migrations.len() {
+        .collect::<BTreeSet<_>>()
+        .len()
+        != input.wrangler_pending_migrations.len()
+    {
         return Err("wrangler_pending_migrations must not contain duplicates".into());
     }
     Ok(())
@@ -248,8 +311,7 @@ fn seal_observation(
     input: ProviderObservationInput,
 ) -> Result<ProviderObservationBundle, Box<dyn Error>> {
     validate_observation(&input)?;
-    let value = serde_json::to_value(&input)?;
-    let canonical = canonical_json(&value)?;
+    let canonical = canonical_json(&serde_json::to_value(&input)?)?;
     let observation_digest = sha256_hex(canonical.as_bytes());
     Ok(ProviderObservationBundle {
         schema_version: input.schema_version,
@@ -284,7 +346,9 @@ fn prepare_plan(value: &Value) -> Result<&serde_json::Map<String, Value>, Box<dy
         .ok_or_else(|| "PREPARE_READY input must contain a plan object".into())
 }
 
-fn prepare_planned_migrations(plan: &serde_json::Map<String, Value>) -> Result<Vec<String>, Box<dyn Error>> {
+fn prepare_planned_migrations(
+    plan: &serde_json::Map<String, Value>,
+) -> Result<Vec<String>, Box<dyn Error>> {
     plan.get("planned_migrations")
         .and_then(Value::as_array)
         .ok_or("prepare plan must contain planned_migrations array")?
@@ -313,34 +377,34 @@ fn validate_transaction_input(
     if input.target != observation.target {
         return Err("transaction target must exactly equal provider observation target".into());
     }
+    validate_git_object_id(&input.source_sha, "source_sha")?;
+    validate_git_object_id(&input.tree_sha, "tree_sha")?;
+    validate_release_candidate_id(&input.release_candidate_id)?;
     for (value, label) in [
-        (&input.source_sha, "source_sha"),
-        (&input.tree_sha, "tree_sha"),
         (&input.planner_policy_digest, "planner_policy_digest"),
         (&input.migration_lineage_digest, "migration_lineage_digest"),
         (&input.predecessor_ledger_sha256, "predecessor_ledger_sha256"),
     ] {
         validate_sha256(value, label)?;
     }
-    validate_non_empty(&input.release_candidate_id, "release_candidate_id")?;
-    validate_non_empty(&input.transaction_kind, "transaction_kind")?;
-    validate_non_empty(&input.phase, "phase")?;
     validate_non_empty(&input.schema_target, "schema_target")?;
     validate_non_empty(&input.supported_schema_min, "supported_schema_min")?;
     validate_non_empty(&input.supported_schema_max, "supported_schema_max")?;
-    validate_non_empty(&input.recovery_strategy, "recovery_strategy")?;
     if input.freshness_max_age_seconds == 0 {
         return Err("freshness_max_age_seconds must be greater than zero".into());
     }
     if input.predecessor_ledger_sha256 != observation.remote_ledger_sha256 {
-        return Err("predecessor ledger digest must equal the sealed provider observation ledger digest".into());
+        return Err(
+            "predecessor ledger digest must equal the sealed provider observation ledger digest"
+                .into(),
+        );
+    }
+    if input.release_manifest_digests.is_empty() {
+        return Err("release_manifest_digests must not be empty".into());
     }
     for (name, digest) in &input.release_manifest_digests {
         validate_non_empty(name, "release manifest digest name")?;
         validate_sha256(digest, "release manifest digest")?;
-    }
-    if input.release_manifest_digests.is_empty() {
-        return Err("release_manifest_digests must not be empty".into());
     }
     let plan = prepare_plan(prepare)?;
     let expected = prepare_planned_migrations(plan)?;
@@ -350,7 +414,10 @@ fn validate_transaction_input(
         .map(|migration| migration.migration_file.clone())
         .collect::<Vec<_>>();
     if supplied != expected {
-        return Err("planned migration digest order must exactly equal PREPARE_READY planned_migrations".into());
+        return Err(
+            "planned migration digest order must exactly equal PREPARE_READY planned_migrations"
+                .into(),
+        );
     }
     let mut names = BTreeSet::new();
     for migration in &input.planned_migrations {
@@ -367,12 +434,6 @@ fn validate_transaction_input(
     }
     if plan.get("target_revision").and_then(Value::as_str) != Some(input.schema_target.as_str()) {
         return Err("schema_target must equal PREPARE_READY plan.target_revision".into());
-    }
-    if input.allowed_provider_effects.is_empty() {
-        return Err("allowed_provider_effects must not be empty".into());
-    }
-    if input.forbidden_provider_effects.is_empty() {
-        return Err("forbidden_provider_effects must not be empty".into());
     }
     Ok(())
 }
@@ -406,14 +467,13 @@ fn build_projection(
         precondition_evidence_refs: transaction_input.precondition_evidence_refs,
         recovery_strategy: transaction_input.recovery_strategy,
         expected_post_state: transaction_input.expected_post_state,
-        allowed_provider_effects: transaction_input.allowed_provider_effects,
-        forbidden_provider_effects: transaction_input.forbidden_provider_effects,
+        allowed_provider_effects: [ALLOWED_PROVIDER_EFFECT],
+        forbidden_provider_effects: FORBIDDEN_PROVIDER_EFFECTS,
     };
-    let plan_value = serde_json::to_value(&transaction_plan)?;
-    let canonical_plan = canonical_json(&plan_value)?;
+    let canonical_plan = canonical_json(&serde_json::to_value(&transaction_plan)?)?;
     let transaction_id = sha256_hex(canonical_plan.as_bytes());
     Ok(TransactionProjection {
-        schema_version: 1,
+        schema_version: TRANSACTION_SCHEMA_VERSION,
         status: "TRANSACTION_PREPARED",
         mode: "read-only",
         authorization_consumed: false,
@@ -427,28 +487,33 @@ fn build_projection(
 
 fn main() -> Result<(), Box<dyn Error>> {
     let args = parse_args()?;
-    let prepare_path = required(args.prepare_json, "--prepare-json")?;
-    let observation_path = required(args.observation_json, "--observation-json")?;
-    let transaction_input_path = required(args.transaction_input_json, "--transaction-input-json")?;
-    let prepare = read_strict_value(&prepare_path, "prepare input")?;
-    let observation_value = read_strict_value(&observation_path, "provider observation")?;
-    let transaction_value = read_strict_value(&transaction_input_path, "transaction identity input")?;
+    let prepare = read_strict_value(
+        &required(args.prepare_json, "--prepare-json")?,
+        "prepare input",
+    )?;
+    let observation_value = read_strict_value(
+        &required(args.observation_json, "--observation-json")?,
+        "provider observation",
+    )?;
+    let transaction_value = read_strict_value(
+        &required(args.transaction_input_json, "--transaction-input-json")?,
+        "transaction identity input",
+    )?;
     let observation_input: ProviderObservationInput =
         typed_from_value(&observation_value, "provider observation")?;
     let transaction_input: TransactionIdentityInput =
         typed_from_value(&transaction_value, "transaction identity input")?;
     let projection = build_projection(&prepare, observation_input, transaction_input)?;
-    let value = serde_json::to_value(projection)?;
-    let output = canonical_json(&value)?;
-    println!("{output}");
+    println!("{}", canonical_json(&serde_json::to_value(projection)?)?);
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
-        PlannedMigrationDigest, ProviderObservationInput, TargetIdentity, TransactionIdentityInput,
-        build_projection,
+        PlannedMigrationDigest, ProviderObservationInput, RecoveryStrategy, TargetIdentity,
+        TransactionIdentityInput, TransactionKind, TransactionPhase, build_projection,
+        typed_from_value,
     };
     use serde_json::json;
     use std::collections::BTreeMap;
@@ -493,34 +558,36 @@ mod tests {
     fn transaction_input() -> TransactionIdentityInput {
         TransactionIdentityInput {
             schema_version: 1,
-            source_sha: "33".repeat(32),
-            tree_sha: "44".repeat(32),
-            release_candidate_id: "release-set-v3-sha256-fixture".to_owned(),
-            release_manifest_digests: BTreeMap::from([("catalog".to_owned(), "55".repeat(32))]),
-            planner_policy_digest: "66".repeat(32),
+            source_sha: "33".repeat(20),
+            tree_sha: "44".repeat(20),
+            release_candidate_id: format!("release-set-v3-sha256-{}", "55".repeat(32)),
+            release_manifest_digests: BTreeMap::from([(
+                "catalog".to_owned(),
+                "66".repeat(32),
+            )]),
+            planner_policy_digest: "77".repeat(32),
             migration_lineage_digest: "11".repeat(32),
-            transaction_kind: "D1_MIGRATION".to_owned(),
-            phase: "ORDINARY".to_owned(),
+            transaction_kind: TransactionKind::D1Migration,
+            phase: TransactionPhase::Ordinary,
             target: target(),
             freshness_max_age_seconds: 900,
             predecessor_ledger_sha256: "22".repeat(32),
             planned_migrations: vec![PlannedMigrationDigest {
                 migration_file: "0031_device_binding_governance.sql".to_owned(),
-                content_sha256: "77".repeat(32),
+                content_sha256: "88".repeat(32),
             }],
             schema_target: "0031_device_binding_governance.sql".to_owned(),
             supported_schema_min: "0031_device_binding_governance.sql".to_owned(),
             supported_schema_max: "0032_pas2_payload_fingerprint_contract.sql".to_owned(),
             precondition_evidence_refs: vec!["fixture:precondition".to_owned()],
-            recovery_strategy: "NOOP_RETRY".to_owned(),
+            recovery_strategy: RecoveryStrategy::NoopRetry,
             expected_post_state: json!({"revision": "0031_device_binding_governance.sql"}),
-            allowed_provider_effects: vec!["D1_MIGRATIONS_APPLY_EXACT_PLAN".to_owned()],
-            forbidden_provider_effects: vec!["D1_CREATE".to_owned(), "PRODUCTION_MUTATION".to_owned()],
         }
     }
 
     #[test]
-    fn identical_inputs_produce_identical_transaction_identity() -> Result<(), Box<dyn std::error::Error>> {
+    fn identical_inputs_produce_identical_transaction_identity()
+    -> Result<(), Box<dyn std::error::Error>> {
         let left = build_projection(&prepare(), observation(), transaction_input())?;
         let right = build_projection(&prepare(), observation(), transaction_input())?;
         assert_eq!(left.transaction_id, right.transaction_id);
@@ -532,7 +599,8 @@ mod tests {
     }
 
     #[test]
-    fn provider_observation_drift_changes_transaction_identity() -> Result<(), Box<dyn std::error::Error>> {
+    fn provider_observation_drift_changes_transaction_identity()
+    -> Result<(), Box<dyn std::error::Error>> {
         let baseline = build_projection(&prepare(), observation(), transaction_input())?;
         let mut changed_observation = observation();
         changed_observation.deployment_identity = Some("deployment-2".to_owned());
@@ -549,7 +617,7 @@ mod tests {
     fn source_drift_changes_transaction_identity() -> Result<(), Box<dyn std::error::Error>> {
         let baseline = build_projection(&prepare(), observation(), transaction_input())?;
         let mut input = transaction_input();
-        input.source_sha = "88".repeat(32);
+        input.source_sha = "99".repeat(20);
         let changed = build_projection(&prepare(), observation(), input)?;
         assert_ne!(baseline.transaction_id, changed.transaction_id);
         Ok(())
@@ -558,24 +626,55 @@ mod tests {
     #[test]
     fn plan_drift_is_rejected_instead_of_silently_replanned() {
         let mut input = transaction_input();
-        input.planned_migrations[0].migration_file = "0032_pas2_payload_fingerprint_contract.sql".to_owned();
-        let result = build_projection(&prepare(), observation(), input);
-        assert!(result.is_err());
+        input.planned_migrations[0].migration_file =
+            "0032_pas2_payload_fingerprint_contract.sql".to_owned();
+        assert!(build_projection(&prepare(), observation(), input).is_err());
     }
 
     #[test]
     fn target_drift_is_rejected() {
         let mut input = transaction_input();
         input.target.database_id = "different-database".to_owned();
-        let result = build_projection(&prepare(), observation(), input);
-        assert!(result.is_err());
+        assert!(build_projection(&prepare(), observation(), input).is_err());
     }
 
     #[test]
     fn blocked_prepare_cannot_produce_transaction_identity() {
         let mut blocked = prepare();
         blocked["status"] = json!("PREPARE_BLOCKED");
-        let result = build_projection(&blocked, observation(), transaction_input());
-        assert!(result.is_err());
+        assert!(build_projection(&blocked, observation(), transaction_input()).is_err());
+    }
+
+    #[test]
+    fn provider_observation_rejects_policy_verdict_fields() {
+        let value = json!({
+            "schema_version": 1,
+            "target": target(),
+            "observed_at_unix_seconds": 1_788_640_000,
+            "observation_source": "fixture",
+            "remote_ledger_sha256": "22".repeat(32),
+            "remote_migrations": [],
+            "wrangler_pending_migrations": [],
+            "deployment_identity": null,
+            "time_travel_bookmark_capable": true,
+            "allowed": true
+        });
+        let parsed: Result<ProviderObservationInput, _> =
+            typed_from_value(&value, "provider observation");
+        assert!(parsed.is_err());
+    }
+
+    #[test]
+    fn malformed_git_object_id_is_rejected() {
+        let mut input = transaction_input();
+        input.source_sha = "aa".repeat(32);
+        assert!(build_projection(&prepare(), observation(), input).is_err());
+    }
+
+    #[test]
+    fn noncanonical_release_candidate_id_is_rejected() {
+        let mut input = transaction_input();
+        input.release_candidate_id = "candidate-fixture".to_owned();
+        assert!(build_projection(&prepare(), observation(), input).is_err());
     }
 }
