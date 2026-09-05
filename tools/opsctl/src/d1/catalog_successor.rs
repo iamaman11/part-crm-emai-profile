@@ -298,6 +298,16 @@ pub(crate) fn repository_projection(root: &Path) -> Result<String, D1Error> {
     let catalog = CatalogSuccessor::load(root)?;
     let mut projection: Value = serde_json::from_str(&catalog_legacy::repository_projection(root)?)
         .map_err(|error| D1Error::new(format!("cannot parse legacy D1 projection: {error}")))?;
+    let legacy_identity = catalog_legacy::repository_identity_sha256(root)?;
+    if projection
+        .get("repository_identity_sha256")
+        .and_then(Value::as_str)
+        != Some(legacy_identity.as_str())
+    {
+        return Err(D1Error::new(
+            "legacy D1 repository identity projection drifted from its canonical identity helper",
+        ));
+    }
     let repository_identity = {
         let components = projection
             .get_mut("components")
@@ -432,7 +442,7 @@ fn migration_source_root(
     successor_files: &[&str],
     name: &str,
 ) -> Result<&'static str, D1Error> {
-    if successor_files.iter().any(|candidate| *candidate == name) {
+    if successor_files.contains(&name) {
         return Ok(SUCCESSOR_ROOT);
     }
     let revision = revision_number(name)?;
@@ -587,6 +597,7 @@ mod tests {
         component_authority, release_contract, repository_projection,
     };
     use serde_json::Value;
+    use std::error::Error;
     use std::path::PathBuf;
 
     fn repository_root() -> PathBuf {
@@ -594,9 +605,10 @@ mod tests {
     }
 
     #[test]
-    fn current_catalog_lineage_composes_immutable_legacy_and_successor_sql() {
+    fn current_catalog_lineage_composes_immutable_legacy_and_successor_sql()
+    -> Result<(), Box<dyn Error>> {
         let root = repository_root();
-        let authority = component_authority(&root, "catalog").expect("catalog authority");
+        let authority = component_authority(&root, "catalog")?;
         assert_eq!(authority.ordered_history.len(), 32);
         assert_eq!(authority.ordered_history[26], SUCCESSOR_EXPAND_REVISION);
         assert_eq!(authority.ordered_history[31], SUCCESSOR_CONTRACT_REVISION);
@@ -605,26 +617,26 @@ mod tests {
             SUCCESSOR_CONTRACT_REVISION
         );
         assert_eq!(authority.post_epoch.len(), 6);
+        Ok(())
     }
 
     #[test]
-    fn release_window_stops_before_trailing_contract() {
+    fn release_window_stops_before_trailing_contract() -> Result<(), Box<dyn Error>> {
         let root = repository_root();
-        let contract = release_contract(&root, "catalog").expect("release contract");
+        let contract = release_contract(&root, "catalog")?;
         assert_eq!(contract["target_schema_revision"], LEGACY_CURRENT_REVISION);
         assert_eq!(contract["supported_schema_min"], LEGACY_CURRENT_REVISION);
         assert_eq!(
             contract["supported_schema_max"],
             SUCCESSOR_CONTRACT_REVISION
         );
+        Ok(())
     }
 
     #[test]
-    fn repository_projection_exposes_one_successor_lineage_without_hiding_legacy_history() {
-        let projection: Value = serde_json::from_str(
-            &repository_projection(&repository_root()).expect("repository projection"),
-        )
-        .expect("projection json");
+    fn repository_projection_exposes_one_successor_lineage_without_hiding_legacy_history()
+    -> Result<(), Box<dyn Error>> {
+        let projection: Value = serde_json::from_str(&repository_projection(&repository_root())?)?;
         let catalog = projection["components"]
             .as_array()
             .and_then(|components| {
@@ -632,12 +644,12 @@ mod tests {
                     .iter()
                     .find(|component| component["component_id"] == "catalog")
             })
-            .expect("catalog projection");
+            .ok_or("catalog projection is missing")?;
         assert_eq!(catalog["migration_lineage"], "catalog-successor-v1");
         assert_eq!(catalog["legacy_history"]["immutable"], true);
         let sources = catalog["executable_migration_sources"]
             .as_array()
-            .expect("executable migration source projection");
+            .ok_or("executable migration source projection is missing")?;
         assert_eq!(sources.len(), 32);
         assert_eq!(sources[26]["migration_file"], SUCCESSOR_EXPAND_REVISION);
         assert_eq!(sources[26]["source_root"], "migrations/d1-successor");
@@ -652,5 +664,6 @@ mod tests {
                 "migrations/resolver-d1"
             ])
         );
+        Ok(())
     }
 }
