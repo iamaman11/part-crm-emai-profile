@@ -163,3 +163,65 @@ pub(super) fn load_preconditions(path: &Path, component: &str) -> Result<Precond
 
     Ok(Preconditions { completed })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::load_preconditions;
+    use std::path::PathBuf;
+
+    fn fixture_path(name: &str) -> PathBuf {
+        std::env::temp_dir().join(format!(
+            "opsctl-d1-{name}-{}-{}.json",
+            std::process::id(),
+            std::thread::current().name().unwrap_or("unnamed")
+        ))
+    }
+
+    #[test]
+    fn historical_empty_preconditions_are_self_explaining() -> Result<(), std::io::Error> {
+        let path = fixture_path("empty-preconditions");
+        std::fs::write(&path, "{}")?;
+        let result = load_preconditions(&path, "catalog");
+        std::fs::remove_file(&path)?;
+        let error = match result {
+            Err(error) => error,
+            Ok(_) => return Err(std::io::Error::other("empty preconditions must fail closed")),
+        };
+        let gate = error.gate_result_json();
+        assert_eq!(gate["status"], "BLOCKED");
+        assert_eq!(gate["phase"], "INPUT_VALIDATION");
+        assert_eq!(gate["gate_id"], "d1.preconditions.schema");
+        assert_eq!(
+            gate["reason_code"],
+            "D1_PRECONDITIONS_COMPONENT_INVALID"
+        );
+        assert_eq!(gate["observed"], "component field absent");
+        assert!(
+            gate["remediation"]
+                .as_str()
+                .is_some_and(|value| value.contains("rerun prepare before requesting authorization"))
+        );
+        assert_eq!(gate["transaction_id"], serde_json::Value::Null);
+        Ok(())
+    }
+
+    #[test]
+    fn missing_completed_field_has_distinct_durable_reason() -> Result<(), std::io::Error> {
+        let path = fixture_path("missing-completed");
+        std::fs::write(&path, r#"{"component":"catalog"}"#)?;
+        let result = load_preconditions(&path, "catalog");
+        std::fs::remove_file(&path)?;
+        let error = match result {
+            Err(error) => error,
+            Ok(_) => return Err(std::io::Error::other("missing completed must fail closed")),
+        };
+        let gate = error.gate_result_json();
+        assert_eq!(gate["status"], "BLOCKED");
+        assert_eq!(
+            gate["reason_code"],
+            "D1_PRECONDITIONS_COMPLETED_INVALID"
+        );
+        assert_eq!(gate["observed"], "completed field absent");
+        Ok(())
+    }
+}
