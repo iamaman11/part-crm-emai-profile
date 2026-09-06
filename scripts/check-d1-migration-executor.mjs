@@ -27,7 +27,12 @@ const POST_CONTRACT_LEDGER = '--post-ledger-json artifacts/d1-migration/ledger-a
 const DIAGNOSTICS_PATH = 'artifacts/d1-migration/d1-gate-diagnostics.jsonl';
 const SEALED_PLAN_EXTRACTION = "jq '.execution_plan' artifacts/d1-migration/executor-admission.json > artifacts/d1-migration/plan.json";
 const AUTH_DIGEST_MARKER = "hashlib.sha256(raw.encode('utf-8')).hexdigest()";
+const AUTH_PROVENANCE_STEP = 'Bind ordinary authorization to immutable GitHub provenance';
+const REPLAY_PROOF_STEP = 'Prove ordinary transaction authorization has not been consumed';
+const CONSUMPTION_STEP = 'Consume ordinary transaction authorization';
 const REPLAY_RUN_MARKER = '.run_number < $current_number';
+const REPLAY_SUCCESS_MARKER = '.name == $step and .conclusion == "success"';
+const CONSUMPTION_ARTIFACT = 'artifacts/d1-migration/authorization-consumption.json';
 const DIAGNOSTIC_REASON_CODES = [
   'D1_NATIVE_PLAN_COMMAND_FAILED',
   'D1_COMPATIBILITY_COMMAND_FAILED',
@@ -111,8 +116,11 @@ async function validateExecutor(text, root = ROOT) {
     'D1_TRANSACTION_AUTHORIZATION_V1', 'authorization_reference must identify an issue comment in this repository',
     "comment.get('author_association') != 'OWNER'", "updated_at != created_at",
     'authorization comment must be durably recorded inside its declared validity window',
-    'display_title', 'GITHUB_RUN_NUMBER', REPLAY_RUN_MARKER,
+    'display_title', 'GITHUB_RUN_NUMBER', AUTH_PROVENANCE_STEP, REPLAY_PROOF_STEP, CONSUMPTION_STEP,
+    REPLAY_RUN_MARKER, REPLAY_SUCCESS_MARKER,
     'actions/workflows/d1-migration-executor.yml/runs?event=workflow_dispatch&per_page=100',
+    'actions/runs/$run_id/jobs?per_page=100', 'test "$consumed" -eq 0',
+    CONSUMPTION_ARTIFACT, 'AUTHORIZATION_CONSUMPTION_READY',
     '.authorization_digest == $authorization_digest',
     ORDINARY_CONFIRMATION, CONTRACT_CONFIRMATION,
     'transition_mode:', 'expected_release_set_id:', "'migrations_dir': 'migrations-bounded'", 'd1 repository',
@@ -144,6 +152,8 @@ async function validateExecutor(text, root = ROOT) {
   }
   for (const forbidden of [
     'workflow_call:', 'issues: write',
+    'Bind ordinary authorization to immutable GitHub provenance and consume one-shot dispatch identity',
+    'test "$prior" -eq 0',
     "'migrations_dir': '../../migrations/d1'", '"migrations_dir": "../../migrations/d1"',
     'migrations_dir = ../../migrations/d1', 'd1 time-travel restore', 'time-travel restore', 'd1 create',
     'database create', 'experimental-provision=true', 'experimental-auto-create=true', 'cancel-in-progress: true',
@@ -241,11 +251,19 @@ async function validateExecutor(text, root = ROOT) {
   for (const marker of [
     'test "$TARGET_ENVIRONMENT" = "staging"', 'test "$COMPONENT" = "catalog" || test "$COMPONENT" = "resolver"',
     'test "$MUTATION_AUTHORIZED" = "true"', 'test "$COMPONENT" = "catalog"', 'test -n "$EXPECTED_RELEASE_SET_ID"',
-    'Bind ordinary authorization to immutable GitHub provenance and consume one-shot dispatch identity',
-    AUTH_DIGEST_MARKER, 'D1_TRANSACTION_AUTHORIZATION_V1', "comment.get('author_association') != 'OWNER'",
-    REPLAY_RUN_MARKER, 'test "$prior" -eq 0',
+    AUTH_PROVENANCE_STEP, AUTH_DIGEST_MARKER, 'D1_TRANSACTION_AUTHORIZATION_V1',
+    "comment.get('author_association') != 'OWNER'", 'display_title',
   ]) {
     if (!authorizeBody.includes(marker)) fail(`preflight authorization lost fail-closed marker: ${marker}`);
+  }
+  for (const forbidden of [
+    REPLAY_PROOF_STEP, CONSUMPTION_STEP, REPLAY_RUN_MARKER,
+    'actions/workflows/d1-migration-executor.yml/runs?event=workflow_dispatch&per_page=100',
+    CONSUMPTION_ARTIFACT,
+  ]) {
+    if (authorizeBody.includes(forbidden)) {
+      fail(`preflight authorization must not consume or replay-fence before typed executor admission: ${forbidden}`);
+    }
   }
 
   const migrateStepsIndex = text.indexOf('\n    steps:', migrateIndex);
@@ -289,16 +307,45 @@ async function validateExecutor(text, root = ROOT) {
   const deploySteps = (text.match(/CLOUDFLARE_API_TOKEN: \$\{\{ secrets\.CLOUDFLARE_API_TOKEN \}\}/g) ?? []).length;
   if (deploySteps !== 1) fail(`deploy-capable credential must appear exactly once; observed=${deploySteps}`);
 
-  const replayIndex = text.indexOf('Bind ordinary authorization to immutable GitHub provenance and consume one-shot dispatch identity');
+  const provenanceIndex = text.indexOf(`\n      - name: ${AUTH_PROVENANCE_STEP}`);
   const admissionIndex = text.indexOf('Load immutable prepared transaction and verify typed executor admission');
+  const replayIndex = text.indexOf(`\n      - name: ${REPLAY_PROOF_STEP}`);
+  const consumptionIndex = text.indexOf(`\n      - name: ${CONSUMPTION_STEP}`);
   const policyIndex = text.indexOf('Consume sealed ordinary plan and run fresh compatibility or contract gates');
   const diagnosticUploadIndex = text.indexOf('Upload metadata-only D1 gate diagnostics on policy failure');
   const materializeIndex = text.indexOf('Materialize exactly authorized planned_migrations from typed successor projection');
   const firstPendingIndex = text.indexOf('Compare Wrangler pending list to exact authorized plan with observe credential');
+  const observeIndex = text.indexOf(OBSERVE_REF);
   const deployIndex = text.indexOf(DEPLOY_REF);
-  if (!(replayIndex >= 0 && admissionIndex > replayIndex && policyIndex > admissionIndex && diagnosticUploadIndex > policyIndex && materializeIndex > diagnosticUploadIndex && firstPendingIndex > materializeIndex && deployIndex > firstPendingIndex)) {
-    fail('one-shot authorization provenance/replay, typed admission, sealed-plan policy, diagnostics, materialization and read-only pending proof must all precede deploy credentials');
+  if (!(provenanceIndex >= 0 && admissionIndex > provenanceIndex && replayIndex > admissionIndex && consumptionIndex > replayIndex && materializeIndex > consumptionIndex && observeIndex > materializeIndex && policyIndex > observeIndex && diagnosticUploadIndex > policyIndex && firstPendingIndex > diagnosticUploadIndex && deployIndex > firstPendingIndex)) {
+    fail('authorization provenance must precede typed admission; successful-marker replay proof and consumption must follow admission and precede every provider credential');
   }
+
+  const replayStepEnd = text.indexOf('\n      - name:', replayIndex + 1);
+  const replayBody = text.slice(replayIndex, replayStepEnd < 0 ? text.length : replayStepEnd);
+  for (const marker of [
+    'actions/workflows/d1-migration-executor.yml/runs?event=workflow_dispatch&per_page=100',
+    REPLAY_RUN_MARKER, 'actions/runs/$run_id/jobs?per_page=100', REPLAY_SUCCESS_MARKER,
+    'test "$consumed" -eq 0', CONSUMPTION_ARTIFACT, 'AUTHORIZATION_CONSUMPTION_READY',
+  ]) {
+    if (!replayBody.includes(marker)) fail(`post-admission replay proof lost successful-consumption invariant: ${marker}`);
+  }
+  if (replayBody.includes('CLOUDFLARE_API_TOKEN')) {
+    fail('post-admission replay proof must remain provider-credential-free');
+  }
+
+  const consumptionStepEnd = text.indexOf('\n      - name:', consumptionIndex + 1);
+  const consumptionBody = text.slice(consumptionIndex, consumptionStepEnd < 0 ? text.length : consumptionStepEnd);
+  for (const marker of [
+    'actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a',
+    CONSUMPTION_ARTIFACT, 'if-no-files-found: error', 'retention-days: 30',
+  ]) {
+    if (!consumptionBody.includes(marker)) fail(`authorization consumption marker lost durable artifact contract: ${marker}`);
+  }
+  if (consumptionBody.includes('CLOUDFLARE_API_TOKEN')) {
+    fail('authorization consumption marker must be emitted before provider credentials are exposed');
+  }
+
   const policyBody = text.slice(policyIndex, diagnosticUploadIndex);
   if (!policyBody.includes(SEALED_PLAN_EXTRACTION)) {
     fail('ordinary post-authorization policy must consume executor-admission.execution_plan verbatim');
@@ -410,9 +457,20 @@ async function selfTest(text) {
     ['missing authorization digest recomputation', AUTH_DIGEST_MARKER, "hashlib.sha256(b'unsafe').hexdigest()"],
     ['missing immutable authorization comment', "updated_at != created_at", "updated_at == created_at"],
     ['missing prior-run replay fence', REPLAY_RUN_MARKER, '.run_number == $current_number'],
+    ['missing successful consumption criterion', REPLAY_SUCCESS_MARKER, '.name == $step'],
+    ['missing consumption marker step', `      - name: ${CONSUMPTION_STEP}`, '      - name: Removed authorization consumption marker'],
   ]) {
     await expectRejected(label, replaceFixture(label, text, from, to));
   }
+  await expectRejected(
+    'pre-admission run-existence replay fence',
+    replaceFixture(
+      'pre-admission run-existence replay fence',
+      text,
+      '          current_run="$RUNNER_TEMP/current-d1-executor-run.json"',
+      '          # actions/workflows/d1-migration-executor.yml/runs?event=workflow_dispatch&per_page=100\n          current_run="$RUNNER_TEMP/current-d1-executor-run.json"',
+    ),
+  );
   await expectRejected(
     'post-authorization ordinary replanning',
     replaceFixture(
@@ -431,7 +489,7 @@ async function selfTest(text) {
     'second remote apply',
     `${text}\n# npx --yes ${PINNED_WRANGLER} d1 migrations apply X --remote --experimental-provision=false --experimental-auto-create=false\n`,
   );
-  console.log('Protected D1 executor one-shot authorization provenance/replay, sealed-plan, exact-prestate, digest-bound materialization, fail-closed diagnostics, typed post-CONTRACT, pending-list, confirmation-cardinality and double-ledger-fence negative fixtures passed.');
+  console.log('Protected D1 executor typed-admission-before-consumption, successful-marker replay, sealed-plan, exact-prestate, digest-bound materialization, fail-closed diagnostics, typed post-CONTRACT, pending-list, confirmation-cardinality and double-ledger-fence negative fixtures passed.');
 }
 
 async function main() {
@@ -442,7 +500,7 @@ async function main() {
   }
   if (process.argv.length > 2) fail(`unknown arguments: ${process.argv.slice(2).join(' ')}`);
   await validateExecutor(text, ROOT);
-  console.log('Protected D1 executor contract passed: workflow-dispatch-only, one-shot immutable OWNER authorization provenance/replay fencing, staging-only, sealed ordinary plan consumption, exact sealed prestate, digest-bound materialization, fail-closed diagnostics, bounded successor lineage, Wrangler pending equality, provider/ledger re-fence, typed post-CONTRACT verification, one remote apply owner, no automatic restore or provisioning.');
+  console.log('Protected D1 executor contract passed: workflow-dispatch-only, immutable OWNER authorization provenance, typed admission before durable one-shot consumption/replay fencing, staging-only, sealed ordinary plan consumption, exact sealed prestate, digest-bound materialization, fail-closed diagnostics, bounded successor lineage, Wrangler pending equality, provider/ledger re-fence, typed post-CONTRACT verification, one remote apply owner, no automatic restore or provisioning.');
 }
 
 main().catch((error) => {
