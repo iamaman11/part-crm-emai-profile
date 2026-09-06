@@ -9,12 +9,12 @@
 **Production authorization:** NOT GRANTED
 
 This is the single repository document that owns the ordered implementation program produced by the
-completed CAP research. Issue #266 owns the live transaction pointer and accepted-main evidence. This
+completed CAP research. Issue #266 owns the live stage pointer and accepted-main evidence. This
 document deliberately contains no moving SHA, workflow count, provider observation, readiness result or
 environment state.
 
 Chat history, handoff text, a stale branch and historical plans never authorize work. An agent must read
-fresh protected `main`, Issue #266 and the owning bounded Issue before starting a transaction.
+fresh protected `main`, Issue #266 and the one CURRENT stage Issue before starting a transaction.
 
 ## 1. Permanent authorities
 
@@ -64,8 +64,13 @@ Binding rules:
 
 ## 3. Binding execution order
 
-Each row is a separate bounded Issue, branch, PR and accepted-main reread. A later row cannot start merely
-because its code is easy or an earlier branch is green.
+The table below is the accepted top-level sequence. Issue #266 may also select a newly justified named
+bounded stage (for example `TX-6` or `M2`) when fresh evidence proves that the stage has its own
+objective, entry/exit criteria and DoD and is required before the next table row can proceed. Such a
+stage is a peer executable stage, not a child of a simultaneously active "program" Issue.
+
+Every executable stage selected by #266 has exactly one CURRENT owning Issue while it is active. A
+later stage cannot start merely because its code is easy or an earlier branch is green.
 
 | Order | Transaction | Natural owner and required outcome |
 |---|---|---|
@@ -87,27 +92,37 @@ because its code is easy or an earlier branch is green.
 | R2 | Pilot readiness package | Without Production mutation, bind cohort, blast radius, stop, rollback/recovery and expansion conditions to the unchanged release candidate and Production target envelope. Mandatory security/data guarantees cannot be waived. |
 | R3 | Production Authorization and controlled activation | A named authority first issues GO/PILOT or NO-GO for the exact release candidate + target envelope. Only GO/PILOT permits the protected bounded activation and observation described by that decision; NO-GO performs no Production mutation. |
 
-The owning Issue must refine one row without widening it. If fresh evidence invalidates a prerequisite,
-stop that transaction and record the exact blocker in Issue #266; do not skip ahead or invent a phase.
+The CURRENT stage Issue must refine only its selected stage without widening it. If fresh evidence
+invalidates a prerequisite, stop that stage and record the exact blocker in Issue #266; do not skip
+ahead or invent an implicit parallel phase.
 
 ## 4. Transaction protocol
 
 ```text
 fresh protected-main + GitHub re-baseline
--> select exactly one row and one bounded Issue
--> identify natural owner, effects, contracts, consumers and predecessor
+-> #266 selects exactly one CURRENT stage and one owning Issue
+-> identify one bounded concern, natural owner, effects, contracts, consumers and predecessor
+-> declare the coherent write-set/invariants and open one bounded mutation window
 -> implement the smallest coherent change
 -> cut over callers and remove the replaced path
 -> inspect full diff and simplification ledger
 -> run targeted positive + negative proof
 -> atomic commit and exact-head applicable CI
 -> required contexts green; behind_by = 0; reviews/threads clear
+-> FRESH PRE-MERGE RE-BASELINE
 -> guarded merge bound to the proven head
--> reread accepted main and update Issue #266
--> only then select the next row
+-> FRESH POST-MERGE protected-main reread
+-> record accepted evidence in the CURRENT stage Issue and update #266
+-> if stage DoD remains open, continue with its next bounded concern
+-> if stage DoD is satisfied, close it and only then select the next stage
 ```
 
-Every implementation Issue must state:
+A fresh re-baseline opens one bounded mutation window. Expected self-authored writes inside the declared
+coherent write-set do not recursively restart discovery. Re-baseline only when the window is invalidated
+by real unexpected drift/scope/authority expansion or at the explicit pre-merge, post-merge and provider-
+effect boundaries defined by root `AGENTS.md`.
+
+Every implementation stage Issue must state:
 
 - accepted finding or product obligation;
 - natural owner and exact affected surface;
@@ -116,36 +131,68 @@ Every implementation Issue must state:
 - consumers and bounded blast radius;
 - predecessor deletion or evidenced retirement condition;
 - minimum tests/evidence and execution tier;
-- exit criteria, failure/recovery behavior and explicit non-goals;
+- exit criteria/DoD, failure/recovery behavior and explicit non-goals;
 - whether external, governance or Production mutation is authorized.
 
-### 4.1 Owning Issue lifecycle
+### 4.1 CURRENT stage Issue lifecycle
 
-Every executable program row has exactly one owning GitHub Issue. The Issue is created only after a
-fresh protected-main/GitHub re-baseline confirms that Issue #266 selected that row as the sole current
-transaction. Do not pre-create Issues for later rows: an unstarted future Issue looks like competing
-current work and becomes stale before its prerequisites are known.
+Issue #266 is the sole mutable execution pointer and sits above all executable stages. Exactly one stage
+may be CURRENT at a time, and that stage has exactly one owning GitHub Issue. Named stages such as
+`TX-6`, `V2` and `M2` are peers when selected by #266; they do not require an additional simultaneously
+active program Issue above or below them.
+
+Create a stage Issue only after a fresh protected-main/GitHub re-baseline confirms that #266 selected
+that stage as CURRENT. Do not pre-create Issues for later stages: an unstarted future Issue looks like
+competing current work and becomes stale before its prerequisites are known.
 
 ```text
 accepted-main reread + fresh GitHub re-baseline
--> #266 selects one row as CURRENT (discovery only; no source/provider mutation yet)
--> create or identify exactly one owning Issue: CAP-EXEC <ID> — <plan row title>
--> link #266 <-> owning Issue and record the exact accepted base SHA
--> complete the mandatory change envelope, consumers, blockers and acceptance plan
--> only then create/mutate cap-exec/<id>-<bounded-slug>
--> one PR accumulates exact-head candidate and CI evidence in the same Issue
--> merge the proven head and reread protected main
--> record accepted PR/head/tree/check evidence and final disposition in the owning Issue
--> update #266: <ID> COMPLETE, accepted evidence, next permitted row
--> close the owning Issue as durable transaction provenance
+-> #266 selects one named stage as CURRENT (discovery only; no source/provider mutation yet)
+-> create or identify exactly one owning Issue for that stage
+-> link #266 <-> CURRENT stage Issue and record the exact accepted base SHA
+-> complete the mandatory change envelope, DoD, consumers, blockers and acceptance plan
+-> execute one or more bounded implementation transactions/PRs while the same stage DoD remains open
+-> after each merge, reread protected main and record exact accepted evidence in the same stage Issue
+-> when stage DoD is satisfied, update #266: <STAGE> COMPLETE + accepted evidence + next permitted stage
+-> close the completed stage Issue as durable provenance
+-> only then create/select the next stage Issue
 ```
 
-The owning Issue is bounded working memory and evidence for one transaction. It never becomes a
-second roadmap, stable product/architecture contract, release selector or current-program pointer.
-Permanent decisions must land in Git at their natural documentation/code/test owner in the same
-transaction; Issue #266 alone owns mutable program position. If discovery blocks or supersedes the
-row, the same Issue records the exact blocker/disposition and #266 is updated before it is closed or
-before any different row is considered. A second Issue for the same current row is forbidden.
+The CURRENT stage Issue is bounded working memory and evidence for one stage. It never becomes a second
+roadmap, stable product/architecture contract, release selector or live pointer. Permanent decisions
+must land in Git at their natural documentation/code/test owner. Historical parent/precursor Issues may
+remain linked for provenance or aggregate history, but they do not duplicate the CURRENT snapshot and
+do not remain a second current-stage owner. If discovery blocks or supersedes the stage, the same Issue
+records the exact blocker/disposition and #266 is updated before any different stage is considered.
+
+A second CURRENT Issue for the same stage is forbidden. A future-stage Issue is forbidden before #266
+selects it. Multiple PRs are allowed only when they are bounded implementation units of the same stage
+objective/DoD; a new independent objective/DoD or authorization/acceptance boundary is a new stage and
+requires a #266 transition.
+
+### 4.2 Provider-effect authorization boundary
+
+Source/PR/CI acceptance never authorizes an external provider effect. Any rehearsal, deploy, D1
+mutation, recovery mutation or Production mutation is a separate provider-effect mutation window.
+Before the first provider write, the CURRENT stage Issue must contain or point to an explicit exact
+transaction-scoped authorization that binds the immutable operation being permitted.
+
+At minimum the authorization binds:
+
+```text
+exact target identity
+exact accepted source / prepared transaction identity
+exact effect scope
+required provider pre-state / observation identity
+expiry or freshness rule when applicable
+fence / recovery boundary when applicable
+```
+
+The authorization is one-shot for that exact transaction/attempt unless the stage contract explicitly
+states otherwise. Any material change to target, source, transaction ID/plan, observed pre-state, effect
+scope, authority or freshness invalidates it. Re-observe/re-prepare and obtain a new exact authorization
+before any provider write. Green CI means the implementation is accepted; it does not mean the real
+provider mutation is authorized.
 
 ## 5. Gates and stop rules
 
@@ -333,7 +380,7 @@ provider incident response, determine applicable law, accept a contract or grant
 
 The following work may be performed only as separately authorized natural-owner transactions and must
 not become a second pre-Production program. They may run before or after R3 only when dependency-
-independent from the active row. Reachable release/security/data obligations still block through V2/R1;
+independent from the active stage. Reachable release/security/data obligations still block through V2/R1;
 the word `non-blocking` applies only to debt outside the exact release surface.
 
 ### 6.1 Verification and executable-authority retirement
@@ -424,5 +471,5 @@ The temporary program closes only when:
 8. there is no second roadmap or generic debt registry;
 9. #266 is closed as provenance only after criteria 1–8 hold.
 
-Until then, Issue #266 is the only live transaction pointer. Never copy its mutable state into README,
+Until then, Issue #266 is the only live stage pointer. Never copy its mutable state into README,
 AGENTS, projections or handoff documents.
