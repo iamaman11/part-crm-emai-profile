@@ -9,9 +9,11 @@
 **Production authorization:** NOT GRANTED
 
 This is the single repository document that owns the ordered implementation program produced by the
-completed CAP research. Issue #266 owns the live stage pointer and accepted-main evidence. This
-document deliberately contains no moving SHA, workflow count, provider observation, readiness result or
-environment state.
+completed CAP research, including every justified insertion into the future execution order. Issue #266
+owns only the live CURRENT-stage pointer and minimum accepted checkpoint for that stage; it is not a
+roadmap and must not carry `NEXT`, `PAUSED_NEXT_STAGE`, `NEXT_NEXT`, a future queue or any equivalent
+copy of the order owned here. This document deliberately contains no moving SHA, workflow count,
+provider observation, readiness result or environment state.
 
 Chat history, handoff text, a stale branch and historical plans never authorize work. An agent must read
 fresh protected `main`, Issue #266 and the one CURRENT stage Issue before starting a transaction.
@@ -61,13 +63,17 @@ Binding rules:
    another standing architecture program.
 8. Production is authorized only for one exact release candidate, one target-specific deployment
    authorization envelope and one enabled capability set by the CAP-08 model.
+9. Future execution order lives only in this protected-main plan. Issue #266 selects only what is
+   CURRENT; CURRENT stage Issues own only their stage scope/evidence; closed/reference Issues are
+   provenance. None may become a second roadmap.
 
 ## 3. Binding execution order
 
-The table below is the accepted top-level sequence. Issue #266 may also select a newly justified named
-bounded stage (for example `TX-6` or `M2`) when fresh evidence proves that the stage has its own
-objective, entry/exit criteria and DoD and is required before the next table row can proceed. Such a
-stage is a peer executable stage, not a child of a simultaneously active "program" Issue.
+The table below is the accepted top-level sequence and the sole authority for future-stage order. A
+newly justified named bounded stage must first be inserted here by an accepted protected-main governance
+change when fresh evidence proves that it has its own objective, entry/exit criteria and DoD and is
+required before the next stage can proceed. Only after its predecessor is accepted may #266 select that
+stage as CURRENT. Issue #266 must not itself store or infer the future queue.
 
 Every executable stage selected by #266 has exactly one CURRENT owning Issue while it is active. A
 later stage cannot start merely because its code is easy or an earlier branch is green.
@@ -87,14 +93,79 @@ later stage cannot start merely because its code is easy or an earlier branch is
 | A0 | Environment authorization wiring | Existing capability/release admission consumes a verified target authorization observation instead of a hard-coded `NotAuthorized`; rehearsal/staging may be admitted only by their exact envelope and Production stays fail-closed until R3. No second authorization owner. |
 | S0 | Windows shipping/recovery closure | Windows release owner: immutable Bridge/runtime artifact identity, trusted signing/distribution, SBOM/provenance, updater compatibility, rollback and clean-host recovery are candidate-bound and proven. No alternate launcher/updater. |
 | V1 | Release-facing verification and quality convergence | Apply accepted CAP-05 risk tiers to the exact reachable release surface; give every CAP-05 finding an evidenced disposition, resolve every `UNKNOWN`, and retire/narrow only proven duplicate orchestration without losing an invariant. |
+| TX-6 | Isolated non-Production D1 rehearsal acceptance | D1 migration control plane: prove one exact transaction-scoped, recoverable rehearsal on a separately isolated non-Production target through the existing typed policy owners and sole protected D1 executor. V2 staging Catalog and Production are not rehearsal targets. |
+| TX-7 | D1 operator-control usability acceptance | D1 operations natural owners: reduce the accepted control plane to one standard operator protocol/control surface that automatically composes observation/qualification, immutable prepare + `TransactionId`, exact authorization boundary, sole-executor execution, receipt and post-verify without requiring architecture archaeology or manual cross-assembly of internal contracts. Preserve all fail-closed semantics and introduce no second semantic/mutation owner or mutable status database. |
 | V2 | CAP12-I4 exact scenario acceptance | On one immutable non-Production release identity prove B1–B10, including the positive path and negative, replay, concurrency, recovery, hosted identity and exact-environment evidence. |
 | R1 | Exact candidate and evidence | Freeze the release candidate identity and instantiate the CAP-08 target envelope: source/artifacts, migrations/contracts, target/config, capability digest/effective set, evidence, risks and named authorities. |
 | R2 | Pilot readiness package | Without Production mutation, bind cohort, blast radius, stop, rollback/recovery and expansion conditions to the unchanged release candidate and Production target envelope. Mandatory security/data guarantees cannot be waived. |
 | R3 | Production Authorization and controlled activation | A named authority first issues GO/PILOT or NO-GO for the exact release candidate + target envelope. Only GO/PILOT permits the protected bounded activation and observation described by that decision; NO-GO performs no Production mutation. |
 
+The binding pre-V2 order is therefore:
+
+```text
+V1 -> TX-6 -> TX-7 -> V2 -> R1 -> R2 -> R3
+```
+
 The CURRENT stage Issue must refine only its selected stage without widening it. If fresh evidence
 invalidates a prerequisite, stop that stage and record the exact blocker in Issue #266; do not skip
 ahead or invent an implicit parallel phase.
+
+### 3.1 TX-7 binding outcome — ordinary D1 migration must become operationally simple
+
+TX-7 exists because TX-6 demonstrated that the semantic control plane can be strict while the operator
+still has to reconstruct too much internal architecture to drive it. TX-7 is not permission to weaken
+those controls. It is the stage that makes the already accepted controls mechanically composable behind
+one normal operating procedure.
+
+Entry condition:
+
+```text
+TX-6 = ACCEPTED
+```
+
+Required operator protocol, independent of the eventual command spelling:
+
+```text
+1. fresh re-baseline / establish exact CURRENT authority
+2. observe + qualify exact target
+3. prepare exact immutable transaction
+4. obtain TransactionId and exact authorization envelope
+5. STOP until exact transaction-scoped authorization exists
+6. execute only through the sole protected D1 mutation owner
+7. obtain ExecutionReceipt
+8. verify exact post-state / recovery-required state
+9. record durable evidence
+```
+
+TX-7 exit criteria:
+
+1. after context loss, an agent can start from fresh protected `main` -> #266 -> the one CURRENT stage
+   Issue and execute the ordinary D1 procedure without reading #597 history or reverse-engineering the
+   internal workflow graph;
+2. one standard operator-facing entry surface composes the existing natural owners instead of copying
+   their semantics into YAML, UI or a second controller;
+3. source/tree and ReleaseCandidate binding, exact target identity, predecessor ledger equality,
+   per-migration digests, Wrangler pending equality, Time Travel/recovery metadata, target fence,
+   authorization freshness/expiry, replay protection and post-state verification are derived or checked
+   mechanically from their existing natural owners;
+4. the surface produces a deterministic `PREPARE_READY`/typed `PREPARE_BLOCKED` result and immutable
+   `TransactionId` before any provider authorization is consumed;
+5. execution still has exactly one D1 mutation owner: `.github/workflows/d1-migration-executor.yml`;
+6. every failure gives one durable typed cause/remediation boundary; ordinary operation does not require
+   manual log archaeology or hand-built JSON assembled from unrelated artifacts;
+7. success yields an exact `ExecutionReceipt` plus post-effect verification/recovery disposition that is
+   sufficient for the CURRENT stage Issue to record acceptance without reconstructing hidden state;
+8. replay/no-op, stale observation/authorization, target/source drift and pre-write abort remain
+   fail-closed and mechanically distinguishable;
+9. at least one ordinary non-Production rehearsal and the required negative cases prove that a second
+   run is a mechanical use of the standard procedure rather than a new architecture investigation;
+10. no second semantic owner, mutation owner, mutable status database, automatic restore path, generic
+    migration framework or Production authorization is introduced.
+
+The stage may add a thin operator command/transport if required, but it must orchestrate the accepted
+`opsctl d1`/release/provider-observation/executor owners rather than replace them. The exact command name
+is an implementation decision of the future CURRENT TX-7 Issue, not a permanent API invented by this
+roadmap.
 
 ## 4. Transaction protocol
 
@@ -138,8 +209,14 @@ Every implementation stage Issue must state:
 
 Issue #266 is the sole mutable execution pointer and sits above all executable stages. Exactly one stage
 may be CURRENT at a time, and that stage has exactly one owning GitHub Issue. Named stages such as
-`TX-6`, `V2` and `M2` are peers when selected by #266; they do not require an additional simultaneously
-active program Issue above or below them.
+`TX-6`, `TX-7`, `V2` and `M2` are peers when selected by #266; they do not require an additional
+simultaneously active program Issue above or below them.
+
+Future execution order lives only in this protected-main plan. #266 may contain the CURRENT stage/Issue,
+current stage status, minimum accepted checkpoint/identity, current authorization flags and a link back
+to this order authority. It must not contain `NEXT`, `PAUSED_NEXT_STAGE`, `NEXT_NEXT`, `FUTURE`, a queue,
+or any equivalent copied future ordering. A future stage is discovered/inserted here first; #266 remains
+on the existing CURRENT stage until that stage's DoD is accepted.
 
 Create a stage Issue only after a fresh protected-main/GitHub re-baseline confirms that #266 selected
 that stage as CURRENT. Do not pre-create Issues for later stages: an unstarted future Issue looks like
@@ -153,7 +230,8 @@ accepted-main reread + fresh GitHub re-baseline
 -> complete the mandatory change envelope, DoD, consumers, blockers and acceptance plan
 -> execute one or more bounded implementation transactions/PRs while the same stage DoD remains open
 -> after each merge, reread protected main and record exact accepted evidence in the same stage Issue
--> when stage DoD is satisfied, update #266: <STAGE> COMPLETE + accepted evidence + next permitted stage
+-> when stage DoD is satisfied, update #266: <STAGE> COMPLETE + accepted evidence; select only the next
+   stage permitted by this protected-main plan
 -> close the completed stage Issue as durable provenance
 -> only then create/select the next stage Issue
 ```
@@ -168,7 +246,7 @@ records the exact blocker/disposition and #266 is updated before any different s
 A second CURRENT Issue for the same stage is forbidden. A future-stage Issue is forbidden before #266
 selects it. Multiple PRs are allowed only when they are bounded implementation units of the same stage
 objective/DoD; a new independent objective/DoD or authorization/acceptance boundary is a new stage and
-requires a #266 transition.
+requires a protected-main order change plus a later #266 transition when its predecessor is accepted.
 
 ### 4.2 Provider-effect authorization boundary
 
@@ -198,6 +276,8 @@ provider mutation is authorized.
 
 - D0, E0–E4 and C0 authorize no provider, staging or Production mutation. A0 may wire and prove
   rehearsal/staging authorization only through its owning Issue; it never authorizes Production.
+- TX-6/TX-7 existence or acceptance never grants provider or Production mutation authority. Any
+  non-Production rehearsal still requires the exact provider-effect boundary in section 4.2.
 - P1–P3 implement only the accepted CAP-12 first-release scenario; Mailboxes, Notifications,
   Automation, Yahoo/new providers, tenant-wide Audit, global Sessions UI, complex roles, mobile parity
   and generic export are non-goals.
@@ -457,7 +537,8 @@ finding is reachable from it or invalidates its accepted evidence.
 
 The temporary program closes only when:
 
-1. E0–V2 have accepted evidence on protected `main`;
+1. every binding pre-R1 stage in section 3, including TX-6, TX-7 and V2, has accepted evidence on
+   protected `main`;
 2. one exact candidate envelope is complete and all universal/reachable guarantees are decided;
 3. R2/R3 record the named authorization outcome;
 4. no temporary execution owner is still needed for ordinary feature development;
@@ -472,4 +553,5 @@ The temporary program closes only when:
 9. #266 is closed as provenance only after criteria 1–8 hold.
 
 Until then, Issue #266 is the only live stage pointer. Never copy its mutable state into README,
-AGENTS, projections or handoff documents.
+AGENTS, projections or handoff documents, and never copy the future execution order from this plan back
+into #266 or a stage Issue.
