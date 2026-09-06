@@ -72,347 +72,60 @@ jobs:
             --ledger-json tests/d1-evolution/valid-exact-resolver-ledger.json \
             --release-manifest tests/d1-evolution/resolver-release-compatible.json | python -m json.tool >/dev/null
 
-      - name: Materialize exact Catalog executable lineage from typed projection
+      - name: Execute reusable D1 fault and recovery harness
+        env:
+          PYTHONDONTWRITEBYTECODE: '1'
         run: |
           set -euo pipefail
-          mkdir -p artifacts/d1-evolution .wrangler/ar9-catalog/migrations .wrangler/ar9-catalog/state
-          cargo run --locked --quiet --manifest-path tools/opsctl/Cargo.toml -- --root . d1 repository \
-            > artifacts/d1-evolution/repository-projection.json
+          python -m py_compile scripts/d1-fault-recovery-harness.py
+          python scripts/d1-fault-recovery-harness.py \
+            --root . \
+            --wrangler-version 4.94.0 \
+            --report artifacts/d1-evolution/fault-recovery-report.json
           python - <<'PY'
           import json
-          import shutil
           from pathlib import Path
 
-          projection = json.loads(Path('artifacts/d1-evolution/repository-projection.json').read_text())
-          catalog = next(component for component in projection['components'] if component['component_id'] == 'catalog')
-          sources = catalog['executable_migration_sources']
-          assert len(sources) == 32, sources
-          output = Path('.wrangler/ar9-catalog/migrations')
-          names = []
-          for item in sources:
-              name = item['migration_file']
-              source_root = item['source_root']
-              assert source_root in {'migrations/d1', 'migrations/d1-successor'}, item
-              source = Path(source_root) / name
-              assert source.is_file() and not source.is_symlink(), source
-              target = output / name
-              assert not target.exists(), target
-              shutil.copyfile(source, target)
-              names.append(name)
-          assert names[26] == '0027_pas2_payload_fingerprint_expand.sql', names[26]
-          assert names[-1] == '0032_pas2_payload_fingerprint_contract.sql', names[-1]
-          assert '0027_pas2_payload_fingerprint.sql' not in names, names
-          assert Path('migrations/d1/0027_pas2_payload_fingerprint.sql').is_file()
-          assert not (output / '0027_pas2_payload_fingerprint.sql').exists()
-          assert sorted(path.name for path in output.glob('*.sql')) == sorted(names)
-          PY
-          cat > .wrangler/ar9-catalog/wrangler.jsonc <<'JSON'
-          {
-            "name": "ar9-catalog-successor-proof",
-            "main": "../../tests/d1-runtime/worker.mjs",
-            "compatibility_date": "2026-08-05",
-            "d1_databases": [
-              {
-                "binding": "CATALOG_DB",
-                "database_name": "ar9-catalog-successor-proof",
-                "database_id": "00000000-0000-0000-0000-000000000001",
-                "migrations_dir": "migrations"
-              }
-            ]
+          report = json.loads(Path('artifacts/d1-evolution/fault-recovery-report.json').read_text(encoding='utf-8'))
+          required = {
+              'ledger_noncanonical',
+              'supported_ahead_recovery_window',
+              'expand_old_new_runtime_rollout',
+              'contract_rejection_admission',
+              'contract_exact_successor',
+              'transaction_observation_plan_target_drift',
+              'authorization_freshness_and_scope_drift',
+              'executor_checkout_identity_drift',
+              'stale_or_unknown_target_fence',
+              'runner_interruption_requires_recovery',
+              'canonical_prefix_matrix_catalog',
+              'canonical_prefix_matrix_resolver',
+              'clean_bootstrap_and_replay_catalog',
+              'clean_bootstrap_and_replay_resolver',
+              'future_migration_append_catalog',
+              'future_migration_append_resolver',
+              'partial_prefix_failure',
+              'repair_and_safe_continuation',
           }
-          JSON
-
-      - name: Prove Catalog pinned-Wrangler migration and replay no-op
-        run: |
-          npx --yes wrangler@4.94.0 d1 migrations apply CATALOG_DB \
-            --local \
-            --config .wrangler/ar9-catalog/wrangler.jsonc \
-            --persist-to .wrangler/ar9-catalog/state \
-            --experimental-provision=false \
-            --experimental-auto-create=false
-          npx --yes wrangler@4.94.0 d1 migrations apply CATALOG_DB \
-            --local \
-            --config .wrangler/ar9-catalog/wrangler.jsonc \
-            --persist-to .wrangler/ar9-catalog/state \
-            --experimental-provision=false \
-            --experimental-auto-create=false
-          npx --yes wrangler@4.94.0 d1 execute CATALOG_DB \
-            --local \
-            --config .wrangler/ar9-catalog/wrangler.jsonc \
-            --persist-to .wrangler/ar9-catalog/state \
-            --command "SELECT id, name FROM d1_migrations ORDER BY id" \
-            --json \
-            --experimental-provision=false \
-            --experimental-auto-create=false > artifacts/d1-evolution/catalog-ledger.json
-          cargo run --locked --quiet --manifest-path tools/opsctl/Cargo.toml -- --root . d1 status \
-            --component catalog \
-            --ledger-json artifacts/d1-evolution/catalog-ledger.json > artifacts/d1-evolution/catalog-status.json
-          python - <<'PY'
-          import json
-          from pathlib import Path
-          status = json.loads(Path('artifacts/d1-evolution/catalog-status.json').read_text())
-          assert status['ledger_state'] == 'EXACT', status
-          assert status['decision'] == 'SAFE', status
-          assert status['mutation_executed'] is False, status
+          observed = {item['scenario_id'] for item in report['scenarios']}
+          assert report['schema_version'] == 1, report
+          assert report['status'] == 'PASS', report
+          assert report['mode'] == 'LOCAL_TEST_ONLY', report
+          assert report['provider_mutation'] is False, report
+          assert report['production_mutation'] is False, report
+          assert report['remote_provider_credentials_present'] is False, report
+          assert report['scenario_count'] == len(report['scenarios']), report
+          assert required <= observed, sorted(required - observed)
+          assert all(item['status'] == 'PASS' for item in report['scenarios']), report
           PY
 
-      - name: Prove Resolver pinned-Wrangler migration and replay no-op
-        run: |
-          npx --yes wrangler@4.94.0 d1 migrations apply RESOLVER_DB \
-            --local \
-            --config deploy/cloudflare/wrangler.resolver-d1-test.jsonc \
-            --persist-to .wrangler/ar9-resolver \
-            --experimental-provision=false \
-            --experimental-auto-create=false
-          npx --yes wrangler@4.94.0 d1 migrations apply RESOLVER_DB \
-            --local \
-            --config deploy/cloudflare/wrangler.resolver-d1-test.jsonc \
-            --persist-to .wrangler/ar9-resolver \
-            --experimental-provision=false \
-            --experimental-auto-create=false
-          npx --yes wrangler@4.94.0 d1 execute RESOLVER_DB \
-            --local \
-            --config deploy/cloudflare/wrangler.resolver-d1-test.jsonc \
-            --persist-to .wrangler/ar9-resolver \
-            --command "SELECT id, name FROM d1_migrations ORDER BY id" \
-            --json \
-            --experimental-provision=false \
-            --experimental-auto-create=false > artifacts/d1-evolution/resolver-ledger.json
-          cargo run --locked --quiet --manifest-path tools/opsctl/Cargo.toml -- --root . d1 status \
-            --component resolver \
-            --ledger-json artifacts/d1-evolution/resolver-ledger.json > artifacts/d1-evolution/resolver-status.json
-          python - <<'PY'
-          import json
-          from pathlib import Path
-          status = json.loads(Path('artifacts/d1-evolution/resolver-status.json').read_text())
-          assert status['ledger_state'] == 'EXACT', status
-          assert status['decision'] == 'SAFE', status
-          assert status['mutation_executed'] is False, status
-          PY
-
-      - name: Prove next Catalog and first Resolver post-epoch SQL with pinned Wrangler
-        run: |
-          mkdir -p artifacts/d1-evolution
-          mkdir -p .wrangler/ar9-post-epoch-catalog/migrations .wrangler/ar9-post-epoch-catalog/state
-          mkdir -p .wrangler/ar9-post-epoch-resolver/migrations .wrangler/ar9-post-epoch-resolver/state
-
-          cp .wrangler/ar9-catalog/migrations/*.sql .wrangler/ar9-post-epoch-catalog/migrations/
-          cp tests/d1-evolution/post-epoch/catalog/0027_post_epoch_probe.sql \
-            .wrangler/ar9-post-epoch-catalog/migrations/0033_post_epoch_probe.sql
-          test ! -e .wrangler/ar9-post-epoch-catalog/migrations/0027_pas2_payload_fingerprint.sql
-          test -e .wrangler/ar9-post-epoch-catalog/migrations/0027_pas2_payload_fingerprint_expand.sql
-          test -e .wrangler/ar9-post-epoch-catalog/migrations/0032_pas2_payload_fingerprint_contract.sql
-          cp migrations/resolver-d1/*.sql .wrangler/ar9-post-epoch-resolver/migrations/
-          cp tests/d1-evolution/post-epoch/resolver/0005_post_epoch_probe.sql \
-            .wrangler/ar9-post-epoch-resolver/migrations/
-
-          cat > .wrangler/ar9-post-epoch-catalog/wrangler.jsonc <<'JSON'
-          {
-            "name": "ar9-post-epoch-catalog-proof",
-            "main": "../../tests/d1-runtime/worker.mjs",
-            "compatibility_date": "2026-08-05",
-            "d1_databases": [
-              {
-                "binding": "CATALOG_DB",
-                "database_name": "ar9-post-epoch-catalog-proof",
-                "database_id": "00000000-0000-0000-0000-000000000027",
-                "migrations_dir": "migrations"
-              }
-            ]
-          }
-          JSON
-          cat > .wrangler/ar9-post-epoch-resolver/wrangler.jsonc <<'JSON'
-          {
-            "name": "ar9-post-epoch-resolver-proof",
-            "main": "../../tests/d1-runtime/worker.mjs",
-            "compatibility_date": "2026-08-05",
-            "d1_databases": [
-              {
-                "binding": "RESOLVER_DB",
-                "database_name": "ar9-post-epoch-resolver-proof",
-                "database_id": "00000000-0000-0000-0000-000000000005",
-                "migrations_dir": "migrations"
-              }
-            ]
-          }
-          JSON
-
-          for pass in 1 2; do
-            echo "post-epoch Wrangler replay pass ${pass}"
-            npx --yes wrangler@4.94.0 d1 migrations apply CATALOG_DB \
-              --local \
-              --config .wrangler/ar9-post-epoch-catalog/wrangler.jsonc \
-              --persist-to .wrangler/ar9-post-epoch-catalog/state \
-              --experimental-provision=false \
-              --experimental-auto-create=false
-            npx --yes wrangler@4.94.0 d1 migrations apply RESOLVER_DB \
-              --local \
-              --config .wrangler/ar9-post-epoch-resolver/wrangler.jsonc \
-              --persist-to .wrangler/ar9-post-epoch-resolver/state \
-              --experimental-provision=false \
-              --experimental-auto-create=false
-          done
-
-          npx --yes wrangler@4.94.0 d1 execute CATALOG_DB \
-            --local \
-            --config .wrangler/ar9-post-epoch-catalog/wrangler.jsonc \
-            --persist-to .wrangler/ar9-post-epoch-catalog/state \
-            --command "SELECT id, name FROM d1_migrations ORDER BY id" \
-            --json \
-            --experimental-provision=false \
-            --experimental-auto-create=false > artifacts/d1-evolution/post-epoch-catalog-ledger.json
-          npx --yes wrangler@4.94.0 d1 execute CATALOG_DB \
-            --local \
-            --config .wrangler/ar9-post-epoch-catalog/wrangler.jsonc \
-            --persist-to .wrangler/ar9-post-epoch-catalog/state \
-            --command "SELECT COUNT(*) AS present FROM sqlite_master WHERE type='table' AND name='ar9_post_epoch_catalog_probe'" \
-            --json \
-            --experimental-provision=false \
-            --experimental-auto-create=false > artifacts/d1-evolution/post-epoch-catalog-table.json
-          npx --yes wrangler@4.94.0 d1 execute RESOLVER_DB \
-            --local \
-            --config .wrangler/ar9-post-epoch-resolver/wrangler.jsonc \
-            --persist-to .wrangler/ar9-post-epoch-resolver/state \
-            --command "SELECT id, name FROM d1_migrations ORDER BY id" \
-            --json \
-            --experimental-provision=false \
-            --experimental-auto-create=false > artifacts/d1-evolution/post-epoch-resolver-ledger.json
-          npx --yes wrangler@4.94.0 d1 execute RESOLVER_DB \
-            --local \
-            --config .wrangler/ar9-post-epoch-resolver/wrangler.jsonc \
-            --persist-to .wrangler/ar9-post-epoch-resolver/state \
-            --command "SELECT COUNT(*) AS present FROM sqlite_master WHERE type='table' AND name='ar9_post_epoch_resolver_probe'" \
-            --json \
-            --experimental-provision=false \
-            --experimental-auto-create=false > artifacts/d1-evolution/post-epoch-resolver-table.json
-
-          python - <<'PY'
-          import json
-          from pathlib import Path
-
-          catalog = json.loads(Path('artifacts/d1-evolution/post-epoch-catalog-ledger.json').read_text())
-          resolver = json.loads(Path('artifacts/d1-evolution/post-epoch-resolver-ledger.json').read_text())
-          catalog_table = json.loads(Path('artifacts/d1-evolution/post-epoch-catalog-table.json').read_text())
-          resolver_table = json.loads(Path('artifacts/d1-evolution/post-epoch-resolver-table.json').read_text())
-
-          catalog_rows = catalog[0]['results']
-          resolver_rows = resolver[0]['results']
-          assert len(catalog_rows) == 33, catalog_rows
-          assert catalog_rows[26]['name'] == '0027_pas2_payload_fingerprint_expand.sql', catalog_rows[26]
-          assert catalog_rows[31]['name'] == '0032_pas2_payload_fingerprint_contract.sql', catalog_rows[31]
-          assert catalog_rows[-1]['name'] == '0033_post_epoch_probe.sql', catalog_rows[-1]
-          assert all(row['name'] != '0027_pas2_payload_fingerprint.sql' for row in catalog_rows), catalog_rows
-          assert len(resolver_rows) == 5, resolver_rows
-          assert resolver_rows[-1]['name'] == '0005_post_epoch_probe.sql', resolver_rows[-1]
-          assert catalog_table[0]['results'][0]['present'] == 1, catalog_table
-          assert resolver_table[0]['results'][0]['present'] == 1, resolver_table
-          PY
-
-      - name: Prove Wrangler partial failure leaves a valid canonical prefix
-        run: |
-          mkdir -p .wrangler/ar9-partial/migrations .wrangler/ar9-partial/state
-          cat > .wrangler/ar9-partial/wrangler.jsonc <<'JSON'
-          {
-            "name": "ar9-d1-partial-failure-proof",
-            "main": "../../tests/d1-runtime/worker.mjs",
-            "compatibility_date": "2026-08-05",
-            "d1_databases": [
-              {
-                "binding": "RESOLVER_DB",
-                "database_name": "ar9-partial-failure-proof",
-                "database_id": "00000000-0000-0000-0000-000000000009",
-                "migrations_dir": "migrations"
-              }
-            ]
-          }
-          JSON
-          cp migrations/resolver-d1/0001_resolver_security_boundary.sql .wrangler/ar9-partial/migrations/
-          cp migrations/resolver-d1/0003_lookup_hmac_versions.sql .wrangler/ar9-partial/migrations/
-          cp migrations/resolver-d1/0004_refresh_owner_hmac_version.sql .wrangler/ar9-partial/migrations/
-          cat > .wrangler/ar9-partial/migrations/0002_oauth_refresh_fencing.sql <<'SQL'
-          CREATE TABLE ar9_partial_failure_residue (id INTEGER PRIMARY KEY);
-          INSERT INTO ar9_missing_table (id) VALUES (1);
-          SQL
-          if npx --yes wrangler@4.94.0 d1 migrations apply RESOLVER_DB \
-            --local \
-            --config .wrangler/ar9-partial/wrangler.jsonc \
-            --persist-to .wrangler/ar9-partial/state \
-            --experimental-provision=false \
-            --experimental-auto-create=false; then
-            echo "Intentional failing migration unexpectedly succeeded." >&2
-            exit 1
-          fi
-          npx --yes wrangler@4.94.0 d1 execute RESOLVER_DB \
-            --local \
-            --config .wrangler/ar9-partial/wrangler.jsonc \
-            --persist-to .wrangler/ar9-partial/state \
-            --command "SELECT id, name FROM d1_migrations ORDER BY id" \
-            --json \
-            --experimental-provision=false \
-            --experimental-auto-create=false > artifacts/d1-evolution/partial-ledger.json
-          npx --yes wrangler@4.94.0 d1 execute RESOLVER_DB \
-            --local \
-            --config .wrangler/ar9-partial/wrangler.jsonc \
-            --persist-to .wrangler/ar9-partial/state \
-            --command "SELECT COUNT(*) AS residue FROM sqlite_master WHERE name='ar9_partial_failure_residue'" \
-            --json \
-            --experimental-provision=false \
-            --experimental-auto-create=false > artifacts/d1-evolution/partial-residue.json
-          cargo run --locked --quiet --manifest-path tools/opsctl/Cargo.toml -- --root . d1 status \
-            --component resolver \
-            --ledger-json artifacts/d1-evolution/partial-ledger.json > artifacts/d1-evolution/partial-status.json
-          cargo run --locked --quiet --manifest-path tools/opsctl/Cargo.toml -- --root . d1 plan \
-            --component resolver \
-            --ledger-json artifacts/d1-evolution/partial-ledger.json \
-            --release-manifest tests/d1-evolution/resolver-release-compatible.json \
-            --current-manifest tests/d1-evolution/resolver-release-compatible.json \
-            --known-good-manifest tests/d1-evolution/resolver-release-compatible.json \
-            > artifacts/d1-evolution/partial-plan.json
-          python - <<'PY'
-          import json
-          from pathlib import Path
-          status = json.loads(Path('artifacts/d1-evolution/partial-status.json').read_text())
-          plan = json.loads(Path('artifacts/d1-evolution/partial-plan.json').read_text())
-          residue = json.loads(Path('artifacts/d1-evolution/partial-residue.json').read_text())
-          assert status['ledger_state'] == 'BEHIND_KNOWN_PREFIX', status
-          assert status['planned_migrations'][0] == '0002_oauth_refresh_fencing.sql', status
-          assert plan['ledger_state'] == 'BEHIND_KNOWN_PREFIX', plan
-          assert plan['decision'] == 'MIGRATION_REQUIRED', plan
-          assert plan['allowed'] is False, plan
-          assert 'HISTORICAL_COMPATIBILITY_UNKNOWN' in plan['reason_codes'], plan
-          assert residue[0]['results'][0]['residue'] == 0, residue
-          PY
-
-      - name: Prove safe continuation after fixing the failed migration
-        run: |
-          cp migrations/resolver-d1/0002_oauth_refresh_fencing.sql .wrangler/ar9-partial/migrations/
-          npx --yes wrangler@4.94.0 d1 migrations apply RESOLVER_DB \
-            --local \
-            --config .wrangler/ar9-partial/wrangler.jsonc \
-            --persist-to .wrangler/ar9-partial/state \
-            --experimental-provision=false \
-            --experimental-auto-create=false
-          npx --yes wrangler@4.94.0 d1 execute RESOLVER_DB \
-            --local \
-            --config .wrangler/ar9-partial/wrangler.jsonc \
-            --persist-to .wrangler/ar9-partial/state \
-            --command "SELECT id, name FROM d1_migrations ORDER BY id" \
-            --json \
-            --experimental-provision=false \
-            --experimental-auto-create=false > artifacts/d1-evolution/recovered-ledger.json
-          cargo run --locked --quiet --manifest-path tools/opsctl/Cargo.toml -- --root . d1 verify \
-            --component resolver \
-            --ledger-json artifacts/d1-evolution/recovered-ledger.json \
-            --release-manifest tests/d1-evolution/resolver-release-compatible.json \
-            > artifacts/d1-evolution/recovered-verify.json
-          python - <<'PY'
-          import json
-          from pathlib import Path
-          value = json.loads(Path('artifacts/d1-evolution/recovered-verify.json').read_text())
-          assert value['ledger_state'] == 'EXACT', value
-          assert value['decision'] == 'SAFE', value
-          assert value['allowed'] is True, value
-          PY
+      - name: Upload D1 fault and recovery evidence
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: d1-fault-recovery-${{ github.run_id }}-${{ github.run_attempt }}
+          path: artifacts/d1-evolution/fault-recovery-report.json
+          if-no-files-found: error
+          retention-days: 30
 
   windows-cli:
     name: Native opsctl D1 CLI portability on Windows
