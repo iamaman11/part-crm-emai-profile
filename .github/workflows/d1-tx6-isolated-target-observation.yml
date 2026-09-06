@@ -44,20 +44,13 @@ jobs:
     timeout-minutes: 5
     environment: staging
     steps:
-      - name: Checkout exact accepted-main source
-        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
-        with:
-          ref: ${{ github.sha }}
-          fetch-depth: 1
-          persist-credentials: false
-
-      - name: Verify accepted-main read-only execution
+      - name: Verify accepted-main read-only observation context
         env:
           SOURCE_SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
           test "$GITHUB_REF" = 'refs/heads/main'
-          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          test -n "$SOURCE_SHA"
 
       - name: Observe staging D1 inventory with read-only credential
         env:
