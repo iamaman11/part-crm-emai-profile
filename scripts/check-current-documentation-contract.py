@@ -3,7 +3,8 @@
 
 Owner/consumer: CAP-06 documentation authority; developers and the existing Quality Gate.
 Risk: copied mutable order or stale status/setup prose can select unauthorized work after context loss.
-Invariant: one binding program document, one linked live pointer, projections/history fail closed.
+Invariant: one binding program document, one linked live stage pointer, one CURRENT stage Issue;
+projections/history fail closed.
 Tier/lifecycle: cheap repository-source check in the existing required Quality Gate; retire only when
 these facts move to an equivalent or stronger natural-owner proof.
 """
@@ -33,16 +34,22 @@ AGENT_REQUIRED_MARKERS = (
     "capability/profile impact disposition",
     "source_present != production_enabled",
     "exactly one owning Issue",
-    "Do not pre-create owning Issues for future rows",
+    "Do not pre-create Issues for future stages",
+    "sole live stage pointer",
+    "bounded mutation window",
+    "Expected self-authored writes",
+    "drift",
+    "provider-effect window",
 )
 PROGRAM_REQUIRED_MARKERS = (
     "capability lifecycle/profile impact",
     "selected profile/effective-set and current-selector disposition",
-    "Owning Issue lifecycle",
-    "exactly one owning GitHub Issue",
-    "Do not pre-create Issues for later rows",
-    "durable transaction provenance",
-    "Issue #266 alone owns mutable program position",
+    "CURRENT stage Issue lifecycle",
+    "exactly one CURRENT owning Issue",
+    "Do not pre-create Issues for later stages",
+    "durable provenance",
+    "sole mutable execution pointer",
+    "Provider-effect authorization boundary",
 )
 INDEX_REQUIRED_MARKERS = (
     "Bounded transaction record, change envelope and evidence",
@@ -161,7 +168,7 @@ def check(root: Path, markdown_files: list[Path] | None = None) -> list[str]:
     if "CURRENT TEMPORARY EXECUTION AUTHORITY" not in program or "Binding execution order" not in program:
         errors.append(f"{PROGRAM} must remain the single explicit temporary program/order owner")
     if "Issue #266" not in program:
-        errors.append(f"{PROGRAM} must link the sole live transaction pointer #266")
+        errors.append(f"{PROGRAM} must link the sole live stage pointer #266")
     for marker in ("Permanent normative knowledge", "Temporary execution authority", "Live state", "Projection/navigation", "History/provenance"):
         if marker not in index:
             errors.append(f"{INDEX} is missing authority class: {marker}")
