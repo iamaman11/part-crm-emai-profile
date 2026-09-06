@@ -11,9 +11,14 @@ workflow or readiness state.
    prospective invariants for every change.
 4. [Current CAP execution program](ARCHITECTURE_REBASELINE_V3_PLAN.md) — the single ordered
    implementation program.
-5. [Issue #266](https://github.com/iamaman11/part-crm-emai-profile/issues/266) — live transaction pointer
-   and accepted-main evidence; from it open the one linked owning Issue for the current transaction.
+5. [Issue #266](https://github.com/iamaman11/part-crm-emai-profile/issues/266) — the **sole live stage
+   pointer**; from it open exactly one owning Issue for the CURRENT stage.
 6. [AGENTS.md](../AGENTS.md) and [CONTRIBUTING.md](../CONTRIBUTING.md) — execution protocol.
+
+For recovery after complete chat/context loss, reference Issue
+[#625](https://github.com/iamaman11/part-crm-emai-profile/issues/625) explains how these owners compose.
+It is orientation/provenance only: it is not a CURRENT stage, live pointer, roadmap or authorization
+owner.
 
 ## Knowledge owners
 
@@ -24,8 +29,9 @@ workflow or readiness state.
 | Mandatory architecture invariants | [APPLICATION_ARCHITECTURE_MANDATORY_REQUIREMENTS.md](APPLICATION_ARCHITECTURE_MANDATORY_REQUIREMENTS.md) |
 | Architecture change/simplification quality | [ARCHITECTURE_EVOLUTION_QUALITY_CONTRACT.md](ARCHITECTURE_EVOLUTION_QUALITY_CONTRACT.md) |
 | Temporary ordered execution | [ARCHITECTURE_REBASELINE_V3_PLAN.md](ARCHITECTURE_REBASELINE_V3_PLAN.md) |
-| Live program position and accepted-main summary | [Issue #266](https://github.com/iamaman11/part-crm-emai-profile/issues/266) |
-| Bounded transaction record, change envelope and evidence | Exactly one current owning Issue linked from [Issue #266](https://github.com/iamaman11/part-crm-emai-profile/issues/266); durable provenance after close |
+| Live stage position and minimal accepted-main summary | [Issue #266](https://github.com/iamaman11/part-crm-emai-profile/issues/266) |
+| CURRENT stage objective, change envelope and evidence | Exactly one CURRENT stage Issue selected and linked from [Issue #266](https://github.com/iamaman11/part-crm-emai-profile/issues/266); durable provenance after completion/close |
+| Execution-model orientation after context loss | [Reference Issue #625](https://github.com/iamaman11/part-crm-emai-profile/issues/625) — explanatory only, never authority |
 | Research coverage and decisions | [CAP-INDEX #505](https://github.com/iamaman11/part-crm-emai-profile/issues/505) and owning CAP Issues |
 | Non-active future product-evolution options | [FUTURE_DEVELOPMENT.md](FUTURE_DEVELOPMENT.md) — never execution authority or `NEXT` |
 | Public contract evolution | [CONTRACT_POLICY.md](CONTRACT_POLICY.md) |
@@ -43,24 +49,27 @@ workflow or readiness state.
   product, architecture, security, contract or lifecycle meaning changes.
 - **Temporary execution authority** lives only in the CAP execution program. It owns order and gates,
   not mutable completion state.
-- **Live state** lives in protected Git/GitHub/provider owners. Issue #266 is the sole live transaction
-  pointer; the one linked owning Issue contains bounded discovery/change/acceptance evidence and becomes
-  provenance after close; exact environment and candidate evidence lives with its owning R-stage evidence.
+- **Live state** lives in protected Git/GitHub/provider owners. Issue #266 is the sole live stage
+  pointer; the exactly one linked CURRENT stage Issue contains bounded discovery/change/acceptance
+  evidence and becomes provenance after completion; exact environment and candidate evidence lives
+  with its natural stage/evidence owner.
 - **Future product options** may be recorded in `FUTURE_DEVELOPMENT.md`, but they cannot select work,
   create `NEXT`, authorize a provider mutation or justify pre-creating an execution Issue. They are
-  reconsidered from then-current accepted `main` only when the live tracker selects that concern.
-- **Projection/navigation** may summarize canonical owners but cannot create status, readiness, order
-  or authority. `DEVELOPMENT_PLAN.md`, generated status JSON and capability/evidence matrices are in
-  this class unless a listed bounded contract explicitly assigns them a narrower role.
+  reconsidered from then-current accepted `main` only when #266 selects that concern as a CURRENT stage.
+- **Projection/navigation/reference** may summarize canonical owners but cannot create status,
+  readiness, order, CURRENT-stage selection or authorization. `DEVELOPMENT_PLAN.md`, reference Issue
+  #625, generated status JSON and capability/evidence matrices are in this class unless a listed bounded
+  contract explicitly assigns a narrower role.
 - **History/provenance** explains accepted decisions and evidence but cannot select work or authorize
-  runtime, staging or Production effects.
+  runtime, staging or Production effects. An open historical Issue is still non-current unless #266
+  explicitly selects it as the one CURRENT stage Issue.
 
 The program sequence is intentionally not duplicated here. Read the current execution program for its
-meaning and fresh #266 for the single active transaction.
+meaning and fresh #266 for the single CURRENT stage.
 
 ## Bounded contracts
 
-Use the natural owner's document when a transaction touches that boundary:
+Use the natural owner's document when a transaction inside the CURRENT stage touches that boundary:
 
 - [UI architecture](UI_ARCHITECTURE.md)
 - [Client application boundary](CLIENT_APPLICATION_BOUNDARY.md)
@@ -87,8 +96,9 @@ owner; do not recreate a mutable current-state status mirror.
 
 Documents named for completed Phase, Pre-2J, AR, PF, PAS or Functional Closure work are historical
 provenance unless this index explicitly lists them as a current bounded contract. Historical documents
-may preserve evidence and rationale; they do not select the next transaction.
+may preserve evidence and rationale; they do not select the next stage.
 
 `architecture/architecture-program-sequence.json` and its evaluator are the frozen AR-program
-acceptance model, not the CAP execution sequence or active-transaction owner. Any retirement of their
-remaining executable consumers belongs to a separately accepted CAP-05/CAP-06 transaction.
+acceptance model, not the CAP execution sequence or CURRENT-stage owner. Any retirement of their
+remaining executable consumers belongs to a separately accepted CAP-05/CAP-06 transaction inside a
+stage selected by #266.

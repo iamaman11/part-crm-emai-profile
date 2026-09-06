@@ -2,21 +2,27 @@
 
 ## Authority and current work
 
-Changes are delivered as bounded increments through a branch and pull request.
+Changes are delivered as bounded implementation transactions through a branch and pull request inside
+one CURRENT stage.
 
 Current work is discovered through:
 
-1. `docs/ARCHITECTURE_REBASELINE_V3_PLAN.md` — canonical program authority;
-2. protected `main` + live tracker #266 — mutable active-transaction and accepted-evidence state;
-3. `docs/DEVELOPMENT_PLAN.md` — compact developer-facing projection only.
+1. `docs/ARCHITECTURE_REBASELINE_V3_PLAN.md` — canonical ordered program authority;
+2. protected `main` + Issue #266 — the **sole live stage pointer** and minimal accepted checkpoint;
+3. exactly one CURRENT stage Issue selected by #266 — objective, DoD, current bounded concern and stage evidence;
+4. `docs/DEVELOPMENT_PLAN.md` — compact developer-facing projection only.
 
-A projection, CAP research Issue, chat handoff or historical plan never overrides the canonical plan,
-Issue #266 or accepted protected `main`. Do not invent a numbered phase merely to continue development
-or isolate a bounded defect.
+A projection, reference Issue, CAP research Issue, chat handoff or historical plan never overrides the
+canonical plan, fresh #266, the CURRENT stage Issue or accepted protected `main`. Do not invent a
+numbered stage merely to continue development or isolate a PR-sized defect.
 
-For each current program row, follow section 4.1 of the canonical plan: create exactly one owning Issue
-only after fresh #266 selection, complete its change envelope before branch mutation, and never
-pre-create Issues for future rows.
+Follow section 4.1 of the canonical plan: #266 selects exactly one CURRENT stage; exactly one owning
+Issue exists for that stage; one or more bounded implementation transactions/PRs may execute while the
+same stage objective and DoD remain open. **Future-stage Issues are not pre-created.** A new stage is
+justified only by an independent objective/DoD or a real acceptance/authority boundary.
+
+Reference Issue #625 explains this execution model for context-loss recovery. It is orientation only,
+not a stage, pointer, roadmap or authorization owner.
 
 ## Local toolchain and first checkout
 
@@ -66,7 +72,7 @@ This is a developer-tooling rule only. It does not move GitHub/network/provider 
 
 Each PR must:
 
-1. state its fresh accepted baseline and bounded objective;
+1. state its fresh accepted baseline, CURRENT stage Issue and bounded objective;
 2. identify affected natural owners/contracts/effects and any predecessor being retired;
 3. preserve architecture, security and compatibility invariants;
 4. include positive and negative/fail-closed tests for changed behavior;
@@ -77,7 +83,10 @@ Each PR must:
 9. have zero blocking reviews and zero unresolved review threads before merge;
 10. follow the current binding merge/acceptance protocol and reread accepted `main` after merge.
 
-Do not start the next sequential architecture transaction from an unaccepted sibling branch. Parallel work is allowed only when dependency-independent and non-competing.
+Do not start a different stage from an unaccepted sibling branch. Multiple PRs inside the same CURRENT
+stage are allowed only when they remain bounded implementation units of that stage's unchanged
+objective/DoD. Dependency-independent non-competing work does not acquire CURRENT-stage authority merely
+because it can be developed in parallel.
 
 ## Fast local verification
 
@@ -125,7 +134,7 @@ For D1 migration replay and Worker release packaging use the pinned commands fro
 Optimize for the shortest safe path to accepted capability:
 
 - one semantic fact has one natural owner;
-- prefer small reviewable PRs, but do not turn every PR into a new program phase;
+- prefer small reviewable PRs, but do not turn every PR into a new stage;
 - no current consumer + no durable/persisted obligation means no speculative compatibility bridge;
 - cut over callers, prove `old_current_callers=0` and `old_unique_current_invariants=0`, then delete/demote the DEAD predecessor;
 - do not replace retired JSON/Python/Node authorities with equivalent successor registries in another format;
@@ -172,4 +181,4 @@ Permanent pull-request jobs must test the literal candidate head, not GitHub's s
 
 Do **not** hard-code an obsolete merge mechanism in contributor guidance. Architecture acceptance follows `docs/ARCHITECTURE_ACCEPTANCE_PROTOCOL.md` and current live governance; the current protocol uses a guarded squash merge bound to the expected candidate head and requires candidate-tree == accepted-merge-tree plus accepted-main reread. If the binding protocol changes later, this guide follows it rather than creating a competing rule.
 
-An open branch, draft PR or green historical run is never an accepted baseline.
+An open branch, draft PR, green historical run or open historical Issue is never an accepted baseline or CURRENT-stage selector.
