@@ -24,6 +24,7 @@ pub struct TargetFenceLeaseInput {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct TargetFenceLease {
     pub schema_version: u64,
     pub status: String,
@@ -53,6 +54,7 @@ pub struct TargetFenceObservation {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct TargetFenceVerification {
     pub schema_version: u64,
     pub status: String,
@@ -89,6 +91,7 @@ pub struct ExecutionEventInput {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ExecutionEvent {
     pub sequence: u64,
     pub kind: ExecutionEventKind,
@@ -110,7 +113,23 @@ pub struct ExecutionReceiptSeed {
     pub fence: TargetFenceLease,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+struct ExecutionReceiptIdentity {
+    schema_version: u64,
+    target: TargetIdentity,
+    phase: TransactionPhase,
+    operation_identity: String,
+    transaction_id: Option<String>,
+    authorization_digest: Option<String>,
+    source_sha: String,
+    recovery_strategy: RecoveryStrategy,
+    fence_id: String,
+    executor_run_id: u64,
+    fence_epoch: u64,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ExecutionReceipt {
     pub schema_version: u64,
     pub receipt_id: String,
@@ -207,7 +226,7 @@ pub fn verify_target_fence(
         }
     }
 
-    Ok(TargetFenceVerification {
+    let verification = TargetFenceVerification {
         schema_version: EXECUTION_CONTROL_SCHEMA_VERSION,
         status: "TARGET_FENCE_VERIFIED".to_owned(),
         fence_id: lease.fence_id.clone(),
@@ -216,7 +235,9 @@ pub fn verify_target_fence(
         executor_run_id: lease.executor_run_id,
         fence_epoch: lease.fence_epoch,
         observed_at_unix_seconds: observation.observed_at_unix_seconds,
-    })
+    };
+    validate_verification(&verification)?;
+    Ok(verification)
 }
 
 pub fn initialize_execution_receipt(
@@ -230,14 +251,11 @@ pub fn initialize_execution_receipt(
             "execution receipt PREPARED/AUTHORIZED timestamps must be positive and monotonic",
         ));
     }
-    let canonical_seed = canonical_json(
-        &serde_json::to_value(&seed)
-            .map_err(|error| D1Error::new(format!("cannot serialize execution receipt seed: {error}")))?,
-    )
-    .map_err(D1Error::new)?;
-    Ok(ExecutionReceipt {
+    let identity = receipt_identity_from_seed(&seed);
+    let receipt_id = receipt_identity_digest(&identity)?;
+    let receipt = ExecutionReceipt {
         schema_version: EXECUTION_CONTROL_SCHEMA_VERSION,
-        receipt_id: sha256_hex(canonical_seed.as_bytes()),
+        receipt_id,
         target: seed.target,
         phase: seed.phase,
         operation_identity: seed.operation_identity,
@@ -262,7 +280,9 @@ pub fn initialize_execution_receipt(
                 migration_id: None,
             },
         ],
-    })
+    };
+    validate_receipt(&receipt)?;
+    Ok(receipt)
 }
 
 pub fn append_execution_event(
@@ -280,7 +300,7 @@ pub fn append_execution_event(
             "execution receipt event timestamps must be monotonic",
         ));
     }
-    validate_transition(receipt, previous.kind, &input)?;
+    validate_transition(previous.kind, &input, &receipt.events)?;
 
     let mut next = receipt.clone();
     next.events.push(ExecutionEvent {
@@ -290,6 +310,7 @@ pub fn append_execution_event(
         occurred_at_unix_seconds: input.occurred_at_unix_seconds,
         migration_id: input.migration_id,
     });
+    validate_receipt(&next)?;
     Ok(next)
 }
 
@@ -305,6 +326,7 @@ pub fn serialize_target_fence_lease(lease: &TargetFenceLease) -> Result<String, 
 pub fn serialize_target_fence_verification(
     verification: &TargetFenceVerification,
 ) -> Result<String, D1Error> {
+    validate_verification(verification)?;
     canonical_json(&serde_json::to_value(verification).map_err(|error| {
         D1Error::new(format!("cannot serialize target fence verification: {error}"))
     })?)
@@ -386,6 +408,33 @@ fn validate_lease(lease: &TargetFenceLease) -> Result<(), D1Error> {
     Ok(())
 }
 
+fn validate_verification(verification: &TargetFenceVerification) -> Result<(), D1Error> {
+    if verification.schema_version != EXECUTION_CONTROL_SCHEMA_VERSION {
+        return Err(D1Error::new(format!(
+            "target fence verification schema_version must be {EXECUTION_CONTROL_SCHEMA_VERSION}"
+        )));
+    }
+    if verification.status != "TARGET_FENCE_VERIFIED" {
+        return Err(D1Error::new(
+            "target fence verification status must be TARGET_FENCE_VERIFIED",
+        ));
+    }
+    validate_sha256(&verification.fence_id, "fence_id")?;
+    validate_target(&verification.target)?;
+    validate_non_empty(&verification.operation_identity, "operation_identity")?;
+    if verification.executor_run_id == 0 || verification.fence_epoch == 0 {
+        return Err(D1Error::new(
+            "target fence verification executor_run_id and fence_epoch must be positive",
+        ));
+    }
+    if verification.observed_at_unix_seconds <= 0 {
+        return Err(D1Error::new(
+            "target fence verification observed_at_unix_seconds must be positive",
+        ));
+    }
+    Ok(())
+}
+
 fn validate_receipt_seed(seed: &ExecutionReceiptSeed) -> Result<(), D1Error> {
     if seed.schema_version != EXECUTION_CONTROL_SCHEMA_VERSION {
         return Err(D1Error::new(format!(
@@ -415,6 +464,48 @@ fn validate_receipt_seed(seed: &ExecutionReceiptSeed) -> Result<(), D1Error> {
     Ok(())
 }
 
+fn receipt_identity_from_seed(seed: &ExecutionReceiptSeed) -> ExecutionReceiptIdentity {
+    ExecutionReceiptIdentity {
+        schema_version: EXECUTION_CONTROL_SCHEMA_VERSION,
+        target: seed.target.clone(),
+        phase: seed.phase,
+        operation_identity: seed.operation_identity.clone(),
+        transaction_id: seed.transaction_id.clone(),
+        authorization_digest: seed.authorization_digest.clone(),
+        source_sha: seed.source_sha.clone(),
+        recovery_strategy: seed.recovery_strategy,
+        fence_id: seed.fence.fence_id.clone(),
+        executor_run_id: seed.fence.executor_run_id,
+        fence_epoch: seed.fence.fence_epoch,
+    }
+}
+
+fn receipt_identity_from_receipt(receipt: &ExecutionReceipt) -> ExecutionReceiptIdentity {
+    ExecutionReceiptIdentity {
+        schema_version: receipt.schema_version,
+        target: receipt.target.clone(),
+        phase: receipt.phase,
+        operation_identity: receipt.operation_identity.clone(),
+        transaction_id: receipt.transaction_id.clone(),
+        authorization_digest: receipt.authorization_digest.clone(),
+        source_sha: receipt.source_sha.clone(),
+        recovery_strategy: receipt.recovery_strategy,
+        fence_id: receipt.fence_id.clone(),
+        executor_run_id: receipt.executor_run_id,
+        fence_epoch: receipt.fence_epoch,
+    }
+}
+
+fn receipt_identity_digest(identity: &ExecutionReceiptIdentity) -> Result<String, D1Error> {
+    let canonical = canonical_json(&serde_json::to_value(identity).map_err(|error| {
+        D1Error::new(format!(
+            "cannot serialize execution receipt identity: {error}"
+        ))
+    })?)
+    .map_err(D1Error::new)?;
+    Ok(sha256_hex(canonical.as_bytes()))
+}
+
 fn validate_receipt(receipt: &ExecutionReceipt) -> Result<(), D1Error> {
     if receipt.schema_version != EXECUTION_CONTROL_SCHEMA_VERSION {
         return Err(D1Error::new(format!(
@@ -436,6 +527,12 @@ fn validate_receipt(receipt: &ExecutionReceipt) -> Result<(), D1Error> {
             "execution receipt executor_run_id and fence_epoch must be positive",
         ));
     }
+    let expected_receipt_id = receipt_identity_digest(&receipt_identity_from_receipt(receipt))?;
+    if receipt.receipt_id != expected_receipt_id {
+        return Err(D1Error::new(
+            "execution receipt_id does not match the exact canonical persisted attempt identity",
+        ));
+    }
     if receipt.events.len() < 2
         || receipt.events[0].kind != ExecutionEventKind::Prepared
         || receipt.events[1].kind != ExecutionEventKind::Authorized
@@ -444,6 +541,7 @@ fn validate_receipt(receipt: &ExecutionReceipt) -> Result<(), D1Error> {
             "execution receipt must begin with PREPARED then AUTHORIZED",
         ));
     }
+
     let mut previous_time = 0;
     for (index, event) in receipt.events.iter().enumerate() {
         if event.sequence != u64::try_from(index + 1).unwrap_or(u64::MAX) {
@@ -451,20 +549,26 @@ fn validate_receipt(receipt: &ExecutionReceipt) -> Result<(), D1Error> {
                 "execution receipt event sequence must be contiguous and one-based",
             ));
         }
-        if event.occurred_at_unix_seconds <= 0 || event.occurred_at_unix_seconds < previous_time {
+        let input = ExecutionEventInput {
+            kind: event.kind,
+            occurred_at_unix_seconds: event.occurred_at_unix_seconds,
+            migration_id: event.migration_id.clone(),
+        };
+        validate_event_input(&input)?;
+        if event.occurred_at_unix_seconds < previous_time {
             return Err(D1Error::new(
                 "execution receipt event timestamps must be positive and monotonic",
             ));
         }
-        if event.kind == ExecutionEventKind::MigrationApplied {
-            validate_non_empty(
-                event.migration_id.as_deref().unwrap_or_default(),
-                "MIGRATION_APPLIED migration_id",
-            )?;
-        } else if event.migration_id.is_some() {
-            return Err(D1Error::new(
-                "only MIGRATION_APPLIED may carry migration_id",
-            ));
+        if index == 0 && event.kind != ExecutionEventKind::Prepared {
+            return Err(D1Error::new("execution receipt event 1 must be PREPARED"));
+        }
+        if index == 1 && event.kind != ExecutionEventKind::Authorized {
+            return Err(D1Error::new("execution receipt event 2 must be AUTHORIZED"));
+        }
+        if index >= 2 {
+            let previous = receipt.events[index - 1].kind;
+            validate_transition(previous, &input, &receipt.events[..index])?;
         }
         previous_time = event.occurred_at_unix_seconds;
     }
@@ -491,9 +595,9 @@ fn validate_event_input(input: &ExecutionEventInput) -> Result<(), D1Error> {
 }
 
 fn validate_transition(
-    receipt: &ExecutionReceipt,
     previous: ExecutionEventKind,
     input: &ExecutionEventInput,
+    prior_events: &[ExecutionEvent],
 ) -> Result<(), D1Error> {
     use ExecutionEventKind::{
         Authorized, Completed, FailedNoEffect, MigrationApplied, MutationStarted, PostObserved,
@@ -502,7 +606,7 @@ fn validate_transition(
     let allowed = match (previous, input.kind) {
         (Authorized, PrewriteFencePass | PrewriteAborted) => true,
         (PrewriteAborted, FailedNoEffect) => true,
-        (PrewriteFencePass, MutationStarted | PostObserved) => true,
+        (PrewriteFencePass, MutationStarted | PostObserved | FailedNoEffect) => true,
         (MutationStarted, MigrationApplied | PostObserved | RecoveryRequired) => true,
         (MigrationApplied, MigrationApplied | PostObserved | RecoveryRequired) => true,
         (PostObserved, Verified | RecoveryRequired) => true,
@@ -518,7 +622,7 @@ fn validate_transition(
     }
     if input.kind == MigrationApplied {
         let migration_id = input.migration_id.as_deref().unwrap_or_default();
-        if receipt.events.iter().any(|event| {
+        if prior_events.iter().any(|event| {
             event.kind == MigrationApplied && event.migration_id.as_deref() == Some(migration_id)
         }) {
             return Err(D1Error::new(format!(
@@ -730,6 +834,14 @@ mod tests {
     }
 
     #[test]
+    fn tampered_fence_id_is_rejected() -> Result<(), D1Error> {
+        let mut lease = acquire_target_fence(ordinary_input(7, "db-1"))?;
+        lease.fence_id = "ff".repeat(32);
+        assert!(serialize_target_fence_lease(&lease).is_err());
+        Ok(())
+    }
+
+    #[test]
     fn successful_mutation_receipt_is_strictly_append_only() -> Result<(), D1Error> {
         let lease = acquire_target_fence(ordinary_input(7, "db-1"))?;
         let mut receipt = initialize_execution_receipt(receipt_seed(lease), T0 + 20, T0 + 21)?;
@@ -745,7 +857,11 @@ mod tests {
         receipt = append(&receipt, ExecutionEventKind::Verified, 26, None)?;
         receipt = append(&receipt, ExecutionEventKind::Completed, 27, None)?;
         assert_eq!(receipt.events.len(), 8);
-        assert_eq!(receipt.events.last().map(|event| event.kind), Some(ExecutionEventKind::Completed));
+        assert_eq!(
+            receipt.events.last().map(|event| event.kind),
+            Some(ExecutionEventKind::Completed)
+        );
+        serialize_execution_receipt(&receipt)?;
         Ok(())
     }
 
@@ -755,7 +871,10 @@ mod tests {
         let receipt = initialize_execution_receipt(receipt_seed(lease), T0 + 20, T0 + 21)?;
         let receipt = append(&receipt, ExecutionEventKind::PrewriteAborted, 22, None)?;
         let receipt = append(&receipt, ExecutionEventKind::FailedNoEffect, 23, None)?;
-        assert_eq!(receipt.events.last().map(|event| event.kind), Some(ExecutionEventKind::FailedNoEffect));
+        assert_eq!(
+            receipt.events.last().map(|event| event.kind),
+            Some(ExecutionEventKind::FailedNoEffect)
+        );
         assert!(append(&receipt, ExecutionEventKind::Completed, 24, None).is_err());
         Ok(())
     }
@@ -768,7 +887,10 @@ mod tests {
         receipt = append(&receipt, ExecutionEventKind::MutationStarted, 23, None)?;
         assert!(append(&receipt, ExecutionEventKind::FailedNoEffect, 24, None).is_err());
         let receipt = append(&receipt, ExecutionEventKind::RecoveryRequired, 24, None)?;
-        assert_eq!(receipt.events.last().map(|event| event.kind), Some(ExecutionEventKind::RecoveryRequired));
+        assert_eq!(
+            receipt.events.last().map(|event| event.kind),
+            Some(ExecutionEventKind::RecoveryRequired)
+        );
         Ok(())
     }
 
@@ -777,10 +899,31 @@ mod tests {
         let lease = acquire_target_fence(ordinary_input(7, "db-1"))?;
         let mut receipt = initialize_execution_receipt(receipt_seed(lease), T0 + 20, T0 + 21)?;
         receipt = append(&receipt, ExecutionEventKind::PrewriteFencePass, 22, None)?;
-        assert!(append(&receipt, ExecutionEventKind::MigrationApplied, 23, Some("0031.sql")).is_err());
+        assert!(
+            append(
+                &receipt,
+                ExecutionEventKind::MigrationApplied,
+                23,
+                Some("0031.sql")
+            )
+            .is_err()
+        );
         receipt = append(&receipt, ExecutionEventKind::MutationStarted, 23, None)?;
-        receipt = append(&receipt, ExecutionEventKind::MigrationApplied, 24, Some("0031.sql"))?;
-        assert!(append(&receipt, ExecutionEventKind::MigrationApplied, 25, Some("0031.sql")).is_err());
+        receipt = append(
+            &receipt,
+            ExecutionEventKind::MigrationApplied,
+            24,
+            Some("0031.sql"),
+        )?;
+        assert!(
+            append(
+                &receipt,
+                ExecutionEventKind::MigrationApplied,
+                25,
+                Some("0031.sql")
+            )
+            .is_err()
+        );
         Ok(())
     }
 
@@ -792,7 +935,47 @@ mod tests {
         receipt = append(&receipt, ExecutionEventKind::PostObserved, 23, None)?;
         receipt = append(&receipt, ExecutionEventKind::Verified, 24, None)?;
         receipt = append(&receipt, ExecutionEventKind::Completed, 25, None)?;
-        assert_eq!(receipt.events.last().map(|event| event.kind), Some(ExecutionEventKind::Completed));
+        assert_eq!(
+            receipt.events.last().map(|event| event.kind),
+            Some(ExecutionEventKind::Completed)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn persisted_receipt_identity_is_recomputed_and_tamper_evident() -> Result<(), D1Error> {
+        let lease = acquire_target_fence(ordinary_input(7, "db-1"))?;
+        let receipt = initialize_execution_receipt(receipt_seed(lease), T0 + 20, T0 + 21)?;
+        let mut tampered = receipt.clone();
+        tampered.source_sha = "44".repeat(20);
+        assert!(serialize_execution_receipt(&tampered).is_err());
+        let mut tampered_id = receipt;
+        tampered_id.receipt_id = "ff".repeat(32);
+        assert!(serialize_execution_receipt(&tampered_id).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn persisted_receipt_revalidates_entire_historical_state_machine() -> Result<(), D1Error> {
+        let lease = acquire_target_fence(ordinary_input(7, "db-1"))?;
+        let mut receipt = initialize_execution_receipt(receipt_seed(lease), T0 + 20, T0 + 21)?;
+        receipt = append(&receipt, ExecutionEventKind::PrewriteFencePass, 22, None)?;
+        receipt = append(&receipt, ExecutionEventKind::MutationStarted, 23, None)?;
+        let mut tampered = receipt.clone();
+        tampered.events[2].kind = ExecutionEventKind::Completed;
+        assert!(serialize_execution_receipt(&tampered).is_err());
+        assert!(
+            append(&tampered, ExecutionEventKind::PostObserved, 24, None).is_err()
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn receipt_id_is_stable_for_one_fenced_attempt_identity() -> Result<(), D1Error> {
+        let lease = acquire_target_fence(ordinary_input(7, "db-1"))?;
+        let first = initialize_execution_receipt(receipt_seed(lease.clone()), T0 + 20, T0 + 21)?;
+        let second = initialize_execution_receipt(receipt_seed(lease), T0 + 30, T0 + 31)?;
+        assert_eq!(first.receipt_id, second.receipt_id);
         Ok(())
     }
 
