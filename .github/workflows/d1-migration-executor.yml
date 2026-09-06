@@ -54,6 +54,26 @@ on:
         required: false
         default: ''
         type: string
+      prepared_transaction_run_id:
+        description: Exact successful D1 Migration Prepare run carrying the immutable ordinary transaction
+        required: false
+        default: ''
+        type: string
+      prepared_transaction_run_attempt:
+        description: Exact prepare run attempt that published the immutable ordinary transaction artifact
+        required: false
+        default: ''
+        type: string
+      transaction_id:
+        description: Exact immutable ordinary TRANSACTION_ID
+        required: false
+        default: ''
+        type: string
+      transaction_authorization_json:
+        description: Strict secret-free transaction-scoped authorization JSON for the ordinary transaction
+        required: false
+        default: ''
+        type: string
       mutation_authorized:
         description: Explicit caller authorization for the staging migration mutation
         required: true
@@ -128,6 +148,26 @@ on:
         required: false
         default: ''
         type: string
+      prepared_transaction_run_id:
+        description: Exact successful D1 Migration Prepare run carrying the immutable ordinary transaction
+        required: false
+        default: ''
+        type: string
+      prepared_transaction_run_attempt:
+        description: Exact prepare run attempt that published the immutable ordinary transaction artifact
+        required: false
+        default: ''
+        type: string
+      transaction_id:
+        description: Exact immutable ordinary TRANSACTION_ID
+        required: false
+        default: ''
+        type: string
+      transaction_authorization_json:
+        description: Strict secret-free transaction-scoped authorization JSON for the ordinary transaction
+        required: false
+        default: ''
+        type: string
       mutation_authorized:
         description: Explicitly authorize this staging migration mutation
         required: true
@@ -139,6 +179,7 @@ on:
         type: string
 
 permissions:
+  actions: read
   contents: read
 
 concurrency:
@@ -157,6 +198,10 @@ jobs:
       DATABASE_ID: ${{ inputs.database_id }}
       TRANSITION_MODE: ${{ inputs.transition_mode }}
       EXPECTED_RELEASE_SET_ID: ${{ inputs.expected_release_set_id }}
+      PREPARED_TRANSACTION_RUN_ID: ${{ inputs.prepared_transaction_run_id }}
+      PREPARED_TRANSACTION_RUN_ATTEMPT: ${{ inputs.prepared_transaction_run_attempt }}
+      TRANSACTION_ID: ${{ inputs.transaction_id }}
+      TRANSACTION_AUTHORIZATION_JSON: ${{ inputs.transaction_authorization_json }}
       MUTATION_AUTHORIZED: ${{ inputs.mutation_authorized }}
       CONFIRMATION: ${{ inputs.confirmation }}
     steps:
@@ -171,6 +216,11 @@ jobs:
           test -n "$DATABASE_ID"
           if [ "$TRANSITION_MODE" = ordinary ]; then
             test "$CONFIRMATION" = "$SOURCE_SHA:$TARGET_ENVIRONMENT:$COMPONENT:$DATABASE_ID"
+            [[ "$PREPARED_TRANSACTION_RUN_ID" =~ ^[0-9]+$ ]]
+            [[ "$PREPARED_TRANSACTION_RUN_ATTEMPT" =~ ^[1-9][0-9]*$ ]]
+            [[ "$TRANSACTION_ID" =~ ^[0-9a-f]{64}$ ]]
+            test -n "$TRANSACTION_AUTHORIZATION_JSON"
+            jq -e 'type == "object"' <<<"$TRANSACTION_AUTHORIZATION_JSON" >/dev/null
           else
             test "$COMPONENT" = "catalog"
             test -n "$EXPECTED_RELEASE_SET_ID"
@@ -196,6 +246,10 @@ jobs:
       PRECONDITIONS_JSON: ${{ inputs.preconditions_json }}
       TRANSITION_MODE: ${{ inputs.transition_mode }}
       EXPECTED_RELEASE_SET_ID: ${{ inputs.expected_release_set_id }}
+      PREPARED_TRANSACTION_RUN_ID: ${{ inputs.prepared_transaction_run_id }}
+      PREPARED_TRANSACTION_RUN_ATTEMPT: ${{ inputs.prepared_transaction_run_attempt }}
+      TRANSACTION_ID: ${{ inputs.transaction_id }}
+      TRANSACTION_AUTHORIZATION_JSON: ${{ inputs.transaction_authorization_json }}
       MUTATION_AUTHORIZED: ${{ inputs.mutation_authorized }}
       CONFIRMATION: ${{ inputs.confirmation }}
     steps:
@@ -212,6 +266,10 @@ jobs:
           test "$CLOUDFLARE_ACCOUNT_ID" = "${{ inputs.account_id }}"
           if [ "$TRANSITION_MODE" = ordinary ]; then
             test "$CONFIRMATION" = "$SOURCE_SHA:$TARGET_ENVIRONMENT:$COMPONENT:$DATABASE_ID"
+            [[ "$PREPARED_TRANSACTION_RUN_ID" =~ ^[0-9]+$ ]]
+            [[ "$PREPARED_TRANSACTION_RUN_ATTEMPT" =~ ^[1-9][0-9]*$ ]]
+            [[ "$TRANSACTION_ID" =~ ^[0-9a-f]{64}$ ]]
+            test -n "$TRANSACTION_AUTHORIZATION_JSON"
           else
             test "$COMPONENT" = catalog
             test -n "$EXPECTED_RELEASE_SET_ID"
@@ -249,6 +307,53 @@ jobs:
           python scripts/d1-prepare.py self-test
           env -u CLOUDFLARE_API_TOKEN -u CLOUDFLARE_ACCOUNT_ID python scripts/check-opsctl-readonly.py
           env -u CLOUDFLARE_API_TOKEN -u CLOUDFLARE_ACCOUNT_ID cargo build --locked --manifest-path tools/opsctl/Cargo.toml
+          env -u CLOUDFLARE_API_TOKEN -u CLOUDFLARE_ACCOUNT_ID cargo build --locked --manifest-path tools/opsctl/Cargo.toml --example d1-executor-admission
+
+      - name: Load immutable prepared transaction and verify typed executor admission
+        if: inputs.transition_mode == 'ordinary'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts/d1-migration/prepared-transaction
+          run_json="$RUNNER_TEMP/d1-prepared-transaction-run.json"
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$PREPARED_TRANSACTION_RUN_ID" > "$run_json"
+          jq -e \
+            --arg source "$SOURCE_SHA" \
+            --argjson attempt "$PREPARED_TRANSACTION_RUN_ATTEMPT" \
+            '.path == ".github/workflows/d1-migration-prepare.yml" and .event == "workflow_dispatch" and .head_sha == $source and .status == "completed" and .conclusion == "success" and .run_attempt == $attempt' \
+            "$run_json" >/dev/null
+          artifact_name="d1-transaction-$COMPONENT-$PREPARED_TRANSACTION_RUN_ID-$PREPARED_TRANSACTION_RUN_ATTEMPT"
+          gh run download "$PREPARED_TRANSACTION_RUN_ID" \
+            --repo "$GITHUB_REPOSITORY" \
+            --name "$artifact_name" \
+            --dir artifacts/d1-migration/prepared-transaction
+          test -f artifacts/d1-migration/prepared-transaction/transaction.json
+          test "$(find artifacts/d1-migration/prepared-transaction -type f | wc -l)" -eq 1
+          cp artifacts/d1-migration/prepared-transaction/transaction.json artifacts/d1-migration/transaction.json
+          printf '%s\n' "$TRANSACTION_AUTHORIZATION_JSON" > artifacts/d1-migration/transaction-authorization.json
+          tree_sha="$(git rev-parse 'HEAD^{tree}')"
+          evaluated_at="$(date -u +%s)"
+          env -u CLOUDFLARE_API_TOKEN -u CLOUDFLARE_ACCOUNT_ID \
+            tools/opsctl/target/debug/examples/d1-executor-admission \
+              --transaction-json artifacts/d1-migration/transaction.json \
+              --authorization-json artifacts/d1-migration/transaction-authorization.json \
+              --evaluated-at-unix-seconds "$evaluated_at" \
+              --expected-transaction-id "$TRANSACTION_ID" \
+              --expected-source-sha "$SOURCE_SHA" \
+              --expected-tree-sha "$tree_sha" \
+              --expected-environment "$TARGET_ENVIRONMENT" \
+              --expected-account-id "$CLOUDFLARE_ACCOUNT_ID" \
+              --expected-database-name "$DATABASE_NAME" \
+              --expected-database-id "$DATABASE_ID" \
+              --expected-phase ORDINARY \
+              > artifacts/d1-migration/executor-admission.json
+          jq -e \
+            --arg transaction_id "$TRANSACTION_ID" \
+            --arg source "$SOURCE_SHA" \
+            --arg tree "$tree_sha" \
+            '.schema_version == 1 and .status == "EXECUTOR_ADMISSION_VERIFIED" and .mode == "read-only" and .authorization_consumed == false and .mutation_executed == false and .provider_mutation_executed == false and .transaction_id == $transaction_id and .source_sha == $source and .tree_sha == $tree and .phase == "ORDINARY"' \
+            artifacts/d1-migration/executor-admission.json >/dev/null
 
       - name: Materialize exact metadata inputs and bounded provider config
         run: |
@@ -294,6 +399,9 @@ jobs:
               'database_id': os.environ['DATABASE_ID'],
               'transition_mode': os.environ['TRANSITION_MODE'],
               'expected_release_set_id': os.environ['EXPECTED_RELEASE_SET_ID'] or None,
+              'transaction_id': os.environ['TRANSACTION_ID'] or None,
+              'prepared_transaction_run_id': os.environ['PREPARED_TRANSACTION_RUN_ID'] or None,
+              'prepared_transaction_run_attempt': os.environ['PREPARED_TRANSACTION_RUN_ATTEMPT'] or None,
               'mutation_authorized': True,
               'automatic_restore_allowed': False,
               'resource_auto_provisioning_allowed': False,
@@ -635,6 +743,7 @@ jobs:
               'schema_version': 2,
               'evidence_kind': 'protected-d1-migration-execution',
               'context': load('context.json'),
+              'executor_admission': load('executor-admission.json', optional=True),
               'provider_identity': load('provider-identity.json'),
               'status_before': load('status-before.json'),
               'status_fence': load('status-fence.json', optional=True),
@@ -657,6 +766,7 @@ jobs:
           for sensitive in (
               'wrangler.json', 'target-release.json', 'current-release.json', 'known-good-release.json',
               'preconditions.json', 'ledger-fence.json', 'provider-identity-fence.json',
+              'transaction-authorization.json',
           ):
               (root / sensitive).unlink(missing_ok=True)
           PY
