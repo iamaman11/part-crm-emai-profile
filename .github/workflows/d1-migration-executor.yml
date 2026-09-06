@@ -152,7 +152,7 @@ jobs:
             test "$CONFIRMATION" = "$SOURCE_SHA:$TARGET_ENVIRONMENT:$COMPONENT:$DATABASE_ID:contract:$EXPECTED_RELEASE_SET_ID"
           fi
 
-      - name: Bind ordinary authorization to immutable GitHub provenance and consume one-shot dispatch identity
+      - name: Bind ordinary authorization to immutable GitHub provenance
         if: inputs.transition_mode == 'ordinary'
         env:
           GH_TOKEN: ${{ github.token }}
@@ -212,7 +212,6 @@ jobs:
           )
           PY
           comment_id="$(jq -r '.comment_id' "$auth_meta")"
-          issue_number="$(jq -r '.issue_number' "$auth_meta")"
           gh api "repos/$GITHUB_REPOSITORY/issues/comments/$comment_id" > "$auth_comment"
           python - <<'PY'
           import json
@@ -256,13 +255,6 @@ jobs:
             --argjson number "$GITHUB_RUN_NUMBER" \
             '.path == ".github/workflows/d1-migration-executor.yml" and .event == "workflow_dispatch" and .head_branch == "main" and .head_sha == $source and .display_title == $title and .run_number == $number and .run_attempt == 1' \
             "$current_run" >/dev/null
-          prior="$(
-            gh api --paginate \
-              "repos/$GITHUB_REPOSITORY/actions/workflows/d1-migration-executor.yml/runs?event=workflow_dispatch&per_page=100" |
-              jq -s --arg title "$expected_title" --argjson current_number "$GITHUB_RUN_NUMBER" \
-                '[.[].workflow_runs[] | select(.display_title == $title and .run_number < $current_number)] | length'
-          )"
-          test "$prior" -eq 0
 
   migrate:
     needs: authorize
@@ -397,6 +389,66 @@ jobs:
             --arg component "$COMPONENT" \
             '.schema_version == 1 and .status == "EXECUTOR_ADMISSION_VERIFIED" and .mode == "read-only" and .authorization_consumed == false and .mutation_executed == false and .provider_mutation_executed == false and .transaction_id == $transaction_id and .authorization_digest == $authorization_digest and .source_sha == $source and .tree_sha == $tree and .phase == "ORDINARY" and (.execution_plan | .schema_version == 1 and .command == "d1 plan" and .mode == "read-only" and .mutation_executed == false and .component == $component and .allowed == true and (.apply_required == ((.planned_migrations | length) > 0)) and (.planned_migrations | type == "array") and (.planned_migration_digests | type == "array") and ((.planned_migration_digests | length) == (.planned_migrations | length)))' \
             artifacts/d1-migration/executor-admission.json >/dev/null
+
+      - name: Prove ordinary transaction authorization has not been consumed
+        if: inputs.transition_mode == 'ordinary'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          expected_title="D1 authorization=$AUTHORIZATION_DIGEST"
+          consumption_step="Consume ordinary transaction authorization"
+          prior_runs="$RUNNER_TEMP/prior-d1-authorization-runs.json"
+          gh api --paginate \
+            "repos/$GITHUB_REPOSITORY/actions/workflows/d1-migration-executor.yml/runs?event=workflow_dispatch&per_page=100" |
+            jq -s --arg title "$expected_title" --argjson current_number "$GITHUB_RUN_NUMBER" \
+              '[.[].workflow_runs[] | select(.display_title == $title and .run_number < $current_number) | .id] | unique' \
+              > "$prior_runs"
+          consumed=0
+          while IFS= read -r run_id; do
+            jobs_json="$RUNNER_TEMP/prior-d1-authorization-jobs-$run_id.json"
+            gh api --paginate "repos/$GITHUB_REPOSITORY/actions/runs/$run_id/jobs?per_page=100" > "$jobs_json"
+            hits="$(
+              jq -s --arg step "$consumption_step" \
+                '[.[].jobs[]? | .steps[]? | select(.name == $step and .conclusion == "success")] | length' \
+                "$jobs_json"
+            )"
+            if [ "$hits" -gt 0 ]; then
+              consumed=1
+              break
+            fi
+          done < <(jq -r '.[]' "$prior_runs")
+          test "$consumed" -eq 0
+          mkdir -p artifacts/d1-migration
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          value = {
+              'schema_version': 1,
+              'status': 'AUTHORIZATION_CONSUMPTION_READY',
+              'transaction_id': os.environ['TRANSACTION_ID'],
+              'authorization_digest': os.environ['AUTHORIZATION_DIGEST'],
+              'source_sha': os.environ['SOURCE_SHA'],
+              'executor_run_id': os.environ['GITHUB_RUN_ID'],
+              'executor_run_number': os.environ['GITHUB_RUN_NUMBER'],
+              'executor_run_attempt': os.environ['GITHUB_RUN_ATTEMPT'],
+              'provider_mutation_executed': False,
+          }
+          Path('artifacts/d1-migration/authorization-consumption.json').write_text(
+              json.dumps(value, sort_keys=True, indent=2) + '\n', encoding='utf-8'
+          )
+          PY
+
+      - name: Consume ordinary transaction authorization
+        if: inputs.transition_mode == 'ordinary'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: d1-authorization-consumption-${{ inputs.authorization_digest }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: artifacts/d1-migration/authorization-consumption.json
+          if-no-files-found: error
+          retention-days: 30
 
       - name: Materialize exact metadata inputs and bounded provider config
         run: |
