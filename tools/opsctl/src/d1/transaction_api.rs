@@ -31,8 +31,11 @@ fn verify_release_manifest_binding(
 ) -> Result<(), D1Error> {
     let release_manifest_text = std::str::from_utf8(release_manifest_raw)
         .map_err(|_| D1Error::new("release manifest must be valid UTF-8"))?;
-    let release_manifest = parse_strict_json(release_manifest_text)
-        .map_err(|error| D1Error::new(format!("release manifest is not strict bounded JSON: {error}")))?;
+    let release_manifest = parse_strict_json(release_manifest_text).map_err(|error| {
+        D1Error::new(format!(
+            "release manifest is not strict bounded JSON: {error}"
+        ))
+    })?;
     if !release_manifest.is_object() {
         return Err(D1Error::new("release manifest must be one JSON object"));
     }
@@ -102,7 +105,9 @@ mod tests {
     fn manifest_content_drift_is_rejected() {
         let raw = manifest();
         let changed = b"{\"schema_version\":2}\n";
-        assert!(verify_release_manifest_binding(&prepare(), &transaction_input(&raw), changed).is_err());
+        assert!(
+            verify_release_manifest_binding(&prepare(), &transaction_input(&raw), changed).is_err()
+        );
     }
 
     #[test]
