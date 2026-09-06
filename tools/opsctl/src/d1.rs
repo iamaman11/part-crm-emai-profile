@@ -18,8 +18,10 @@ mod model;
 mod plan;
 #[path = "d1/status.rs"]
 mod status;
-#[path = "d1/transaction.rs"]
+#[path = "d1/transaction_api.rs"]
 pub mod transaction;
+#[path = "d1/transaction.rs"]
+mod transaction_core;
 #[path = "d1/transaction_integrity.rs"]
 pub mod transaction_integrity;
 #[path = "d1/util.rs"]

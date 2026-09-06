@@ -196,6 +196,7 @@ jobs:
               --observation-json artifacts/d1-prepare/provider-observation.json \
               --repository-json artifacts/d1-prepare/repository-projection.json \
               --transaction-input-json artifacts/d1-prepare/transaction-input.json \
+              --release-manifest-json artifacts/d1-prepare/target-release.json \
               > artifacts/d1-prepare/transaction.json
           jq -e '.status == "TRANSACTION_PREPARED" and .mode == "read-only" and .authorization_consumed == false and .mutation_executed == false and .provider_mutation_executed == false and (.transaction_id | test("^[0-9a-f]{64}$"))' \
             artifacts/d1-prepare/transaction.json >/dev/null

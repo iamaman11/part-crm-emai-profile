@@ -15,6 +15,7 @@ struct Args {
     observation_json: Option<PathBuf>,
     repository_json: Option<PathBuf>,
     transaction_input_json: Option<PathBuf>,
+    release_manifest_json: Option<PathBuf>,
 }
 
 fn next_value(
@@ -62,6 +63,11 @@ fn parse_args() -> Result<Args, Box<dyn Error>> {
                 PathBuf::from(next_value(&mut iterator, flag)?),
                 flag,
             )?,
+            "--release-manifest-json" => set_once(
+                &mut args.release_manifest_json,
+                PathBuf::from(next_value(&mut iterator, flag)?),
+                flag,
+            )?,
             other => return Err(format!("unsupported transaction-plan argument: {other}").into()),
         }
     }
@@ -96,8 +102,17 @@ fn main() -> Result<(), Box<dyn Error>> {
         required(args.transaction_input_json, "--transaction-input-json")?,
         "transaction identity input",
     )?;
-    let projection =
-        build_transaction_projection(&prepare, &observation, &repository, &transaction_input)?;
+    let release_manifest = fs::read(required(
+        args.release_manifest_json,
+        "--release-manifest-json",
+    )?)?;
+    let projection = build_transaction_projection(
+        &prepare,
+        &observation,
+        &repository,
+        &transaction_input,
+        &release_manifest,
+    )?;
     println!("{}", serialize_transaction_projection(&projection)?);
     Ok(())
 }
