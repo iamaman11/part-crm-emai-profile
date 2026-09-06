@@ -126,7 +126,10 @@ pub fn bind_executor_admission(
         mutation_executed: false,
         component: expectation.component.clone(),
         allowed: true,
-        predecessor_ledger_sha256: transaction.transaction_plan.predecessor_ledger_sha256.clone(),
+        predecessor_ledger_sha256: transaction
+            .transaction_plan
+            .predecessor_ledger_sha256
+            .clone(),
         predecessor_migrations: transaction.provider_observation.remote_migrations.clone(),
         apply_required: !planned_migrations.is_empty(),
         planned_migrations,
