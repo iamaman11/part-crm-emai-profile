@@ -88,6 +88,7 @@ async function validateExecutor(text, root = ROOT) {
   const promotionText = await readFile(path.join(root, PROMOTION), 'utf8');
   const adapterText = await readFile(path.join(root, ADAPTER), 'utf8');
   const admissionText = await readFile(path.join(root, EXECUTOR_ADMISSION), 'utf8');
+  const compactAdmissionText = admissionText.replace(/\s+/g, '');
   const diagnosticsText = await readFile(path.join(root, DIAGNOSTICS_HELPER), 'utf8');
   const contractText = await readFile(path.join(root, CONTRACT_TRANSITION), 'utf8');
   const contractExampleText = await readFile(path.join(root, CONTRACT_EXAMPLE), 'utf8');
@@ -157,12 +158,12 @@ async function validateExecutor(text, root = ROOT) {
     if (!adapterText.includes(marker)) fail(`exact-plan adapter lost fail-closed marker: ${marker}`);
   }
   for (const marker of [
-    'pub predecessor_ledger_sha256: String',
-    'pub predecessor_migrations: Vec<String>',
-    'predecessor_ledger_sha256: transaction.transaction_plan.predecessor_ledger_sha256.clone()',
-    'predecessor_migrations: transaction.provider_observation.remote_migrations.clone()',
+    'pubpredecessor_ledger_sha256:String',
+    'pubpredecessor_migrations:Vec<String>',
+    'predecessor_ledger_sha256:transaction.transaction_plan.predecessor_ledger_sha256.clone()',
+    'predecessor_migrations:transaction.provider_observation.remote_migrations.clone()',
   ]) {
-    if (!admissionText.includes(marker)) fail(`typed executor admission lost sealed predecessor projection: ${marker}`);
+    if (!compactAdmissionText.includes(marker)) fail(`typed executor admission lost sealed predecessor projection: ${marker}`);
   }
   for (const marker of [
     'verify_post_transition', 'post-contract verification requires exactly one canonical 0031 -> 0032 transition',
