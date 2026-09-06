@@ -311,14 +311,15 @@ async function validateExecutor(text, root = ROOT) {
   const admissionIndex = text.indexOf('Load immutable prepared transaction and verify typed executor admission');
   const replayIndex = text.indexOf(`\n      - name: ${REPLAY_PROOF_STEP}`);
   const consumptionIndex = text.indexOf(`\n      - name: ${CONSUMPTION_STEP}`);
+  const metadataIndex = text.indexOf('Materialize exact metadata inputs and bounded provider config');
   const policyIndex = text.indexOf('Consume sealed ordinary plan and run fresh compatibility or contract gates');
   const diagnosticUploadIndex = text.indexOf('Upload metadata-only D1 gate diagnostics on policy failure');
   const materializeIndex = text.indexOf('Materialize exactly authorized planned_migrations from typed successor projection');
   const firstPendingIndex = text.indexOf('Compare Wrangler pending list to exact authorized plan with observe credential');
   const observeIndex = text.indexOf(OBSERVE_REF);
   const deployIndex = text.indexOf(DEPLOY_REF);
-  if (!(provenanceIndex >= 0 && admissionIndex > provenanceIndex && replayIndex > admissionIndex && consumptionIndex > replayIndex && materializeIndex > consumptionIndex && observeIndex > materializeIndex && policyIndex > observeIndex && diagnosticUploadIndex > policyIndex && firstPendingIndex > diagnosticUploadIndex && deployIndex > firstPendingIndex)) {
-    fail('authorization provenance must precede typed admission; successful-marker replay proof and consumption must follow admission and precede every provider credential');
+  if (!(provenanceIndex >= 0 && admissionIndex > provenanceIndex && replayIndex > admissionIndex && consumptionIndex > replayIndex && metadataIndex > consumptionIndex && observeIndex > metadataIndex && policyIndex > observeIndex && diagnosticUploadIndex > policyIndex && materializeIndex > diagnosticUploadIndex && firstPendingIndex > materializeIndex && deployIndex > firstPendingIndex)) {
+    fail('authorization provenance must precede typed admission; successful-marker replay proof and consumption must follow admission and precede every provider credential; bounded materialization remains after read-only policy');
   }
 
   const replayStepEnd = text.indexOf('\n      - name:', replayIndex + 1);
