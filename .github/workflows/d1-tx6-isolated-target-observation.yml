@@ -1,0 +1,148 @@
+name: D1 TX-6 Isolated Target Observation
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/d1-tx6-isolated-target-observation.yml'
+  push:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/d1-tx6-isolated-target-observation.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: d1-tx6-isolated-target-observation-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  contract:
+    name: TX-6 isolated observation contract
+    runs-on: ubuntu-24.04
+    timeout-minutes: 3
+    steps:
+      - name: Checkout exact candidate source
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Verify exact source checkout
+        env:
+          EXPECTED_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: python -c "import os, subprocess; actual = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(); expected = os.environ['EXPECTED_SOURCE_SHA']; assert actual == expected, f'expected {expected}, got {actual}'"
+
+  observe:
+    name: TX-6 isolated target hosted observation
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    needs: contract
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    environment: staging
+    steps:
+      - name: Verify accepted-main read-only observation context
+        env:
+          SOURCE_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = 'refs/heads/main'
+          test -n "$SOURCE_SHA"
+
+      - name: Observe staging D1 inventory with read-only credential
+        env:
+          CLOUDFLARE_OBSERVE_API_TOKEN: ${{ secrets.CLOUDFLARE_OBSERVE_API_TOKEN }}
+          CLOUDFLARE_DEPLOY_MANIFEST_JSON: ${{ secrets.CLOUDFLARE_DEPLOY_MANIFEST_JSON }}
+          SOURCE_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          test -n "$CLOUDFLARE_OBSERVE_API_TOKEN"
+          test -n "$CLOUDFLARE_DEPLOY_MANIFEST_JSON"
+          echo "::add-mask::$CLOUDFLARE_OBSERVE_API_TOKEN"
+          umask 077
+
+          raw="$RUNNER_TEMP/d1-tx6-isolated-target-observation"
+          evidence="artifacts/d1-tx6-isolated-target-observation"
+          mkdir -p "$raw" "$evidence"
+          manifest="$raw/deploy-manifest.json"
+          printf '%s' "$CLOUDFLARE_DEPLOY_MANIFEST_JSON" > "$manifest"
+
+          account_id="$(jq -er '.control_plane.account_id // .account_id | select(type == "string" and length == 32)' "$manifest")"
+          catalog_name="$(jq -er '.control_plane.d1_database_name // .d1_database_name | select(type == "string" and length > 0)' "$manifest")"
+
+          verify_code="$(curl --silent --show-error --output "$raw/token-verify.json" --write-out '%{http_code}' \
+            -H "Authorization: Bearer $CLOUDFLARE_OBSERVE_API_TOKEN" \
+            'https://api.cloudflare.com/client/v4/user/tokens/verify')"
+          test "$verify_code" = 200
+          jq -e '.success == true and (.errors | length) == 0 and .result.status == "active"' "$raw/token-verify.json" >/dev/null
+
+          inventory_code="$(curl --silent --show-error --output "$raw/d1-databases.json" --write-out '%{http_code}' \
+            -H "Authorization: Bearer $CLOUDFLARE_OBSERVE_API_TOKEN" \
+            "https://api.cloudflare.com/client/v4/accounts/$account_id/d1/database?per_page=100")"
+          test "$inventory_code" = 200
+          jq -e '.success == true and (.errors | length) == 0 and (.result | type == "array")' "$raw/d1-databases.json" >/dev/null
+
+          observed_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          python - "$raw/d1-databases.json" "$evidence/observation.json" "$SOURCE_SHA" "$account_id" "$catalog_name" "$observed_at" <<'PY'
+          import json
+          import sys
+
+          source_path, output_path, source_sha, account_id, catalog_name, observed_at = sys.argv[1:]
+          source = json.load(open(source_path, encoding='utf-8'))
+          databases = []
+          for item in source.get('result', []):
+              if not isinstance(item, dict):
+                  raise SystemExit('D1 inventory item must be an object')
+              database_id = item.get('uuid')
+              name = item.get('name')
+              if not isinstance(database_id, str) or not database_id:
+                  raise SystemExit('D1 inventory item missing uuid')
+              if not isinstance(name, str) or not name:
+                  raise SystemExit('D1 inventory item missing name')
+              databases.append({
+                  'database_id': database_id,
+                  'database_name': name,
+                  'created_at': item.get('created_at'),
+                  'version': item.get('version'),
+                  'jurisdiction': item.get('jurisdiction'),
+                  'is_v2_catalog_reference': name == catalog_name,
+              })
+          databases.sort(key=lambda item: (item['database_name'], item['database_id']))
+          document = {
+              'schema_version': 1,
+              'kind': 'D1_TX6_ISOLATED_TARGET_INVENTORY',
+              'source_sha': source_sha,
+              'environment': 'staging',
+              'observed_at': observed_at,
+              'account_id': account_id,
+              'v2_catalog_database_name': catalog_name,
+              'databases': databases,
+              'non_catalog_databases': [item for item in databases if not item['is_v2_catalog_reference']],
+              'provider_mutation': False,
+              'd1_mutation': False,
+              'production_mutation': False,
+          }
+          with open(output_path, 'w', encoding='utf-8') as handle:
+              json.dump(document, handle, sort_keys=True, indent=2)
+              handle.write('\n')
+          PY
+
+          SOURCE_SHA="$SOURCE_SHA" jq -e \
+            '.schema_version == 1 and .kind == "D1_TX6_ISOLATED_TARGET_INVENTORY" and .source_sha == env.SOURCE_SHA and .environment == "staging" and .provider_mutation == false and .d1_mutation == false and .production_mutation == false and (.databases | type == "array") and (.non_catalog_databases | type == "array")' \
+            "$evidence/observation.json" >/dev/null
+          python -m json.tool "$evidence/observation.json" >/dev/null
+
+      - name: Publish secret-free isolated-target observation
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: d1-tx6-isolated-target-observation-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.sha }}
+          path: artifacts/d1-tx6-isolated-target-observation/observation.json
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Remove raw provider observations from runner temp
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/d1-tx6-isolated-target-observation"
