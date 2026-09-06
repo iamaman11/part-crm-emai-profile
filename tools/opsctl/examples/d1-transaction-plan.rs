@@ -1,6 +1,6 @@
 #![forbid(unsafe_code)]
 
-use opsctl::canonical::{parse_strict_json, sha256_hex};
+use opsctl::canonical::parse_strict_json;
 use opsctl::d1::transaction::{build_transaction_projection, serialize_transaction_projection};
 use serde_json::Value;
 use std::env;
@@ -84,40 +84,6 @@ fn read_strict(path: PathBuf, label: &str) -> Result<Value, Box<dyn Error>> {
         .map_err(|error| format!("{label} is not strict bounded JSON: {error}").into())
 }
 
-fn verify_release_manifest_digest(
-    prepare: &Value,
-    transaction_input: &Value,
-    path: PathBuf,
-) -> Result<(), Box<dyn Error>> {
-    let raw = fs::read(path)?;
-    let text = std::str::from_utf8(&raw).map_err(|_| "release manifest must be valid UTF-8")?;
-    let manifest = parse_strict_json(text)
-        .map_err(|error| format!("release manifest is not strict bounded JSON: {error}"))?;
-    if !manifest.is_object() {
-        return Err("release manifest must be one JSON object".into());
-    }
-    let component = prepare
-        .pointer("/plan/component")
-        .and_then(Value::as_str)
-        .ok_or("PREPARE_READY input is missing plan.component")?;
-    let digests = transaction_input
-        .get("release_manifest_digests")
-        .and_then(Value::as_object)
-        .ok_or("transaction identity input is missing release_manifest_digests")?;
-    let expected = digests
-        .get(component)
-        .and_then(Value::as_str)
-        .ok_or_else(|| format!("transaction identity input is missing release manifest digest for {component}"))?;
-    let actual = sha256_hex(&raw);
-    if expected != actual {
-        return Err(format!(
-            "transaction release manifest digest does not match exact PREPARE_READY target manifest bytes: component={component} expected={expected} actual={actual}"
-        )
-        .into());
-    }
-    Ok(())
-}
-
 fn main() -> Result<(), Box<dyn Error>> {
     let args = parse_args()?;
     let prepare = read_strict(
@@ -136,13 +102,17 @@ fn main() -> Result<(), Box<dyn Error>> {
         required(args.transaction_input_json, "--transaction-input-json")?,
         "transaction identity input",
     )?;
-    verify_release_manifest_digest(
+    let release_manifest = fs::read(required(
+        args.release_manifest_json,
+        "--release-manifest-json",
+    )?)?;
+    let projection = build_transaction_projection(
         &prepare,
+        &observation,
+        &repository,
         &transaction_input,
-        required(args.release_manifest_json, "--release-manifest-json")?,
+        &release_manifest,
     )?;
-    let projection =
-        build_transaction_projection(&prepare, &observation, &repository, &transaction_input)?;
     println!("{}", serialize_transaction_projection(&projection)?);
     Ok(())
 }
