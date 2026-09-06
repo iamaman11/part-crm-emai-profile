@@ -229,7 +229,7 @@ def materialize(
     canonical = [name for name, _ in inventory]
     planned = planned_names(plan, mode, component_id)
     digests = planned_digests(plan, planned, require_plan_digests)
-    predecessor = sealed_predecessor(plan, require_sealed_predecessor)
+    predecessor = sealed_predecessor(plan, require_sealed_predecessor or require_plan_digests)
     if remote != canonical[: len(remote)]:
         fail("remote ledger is not an exact prefix of the typed executable lineage")
     if predecessor is not None and remote != predecessor:
@@ -423,7 +423,7 @@ def self_test() -> None:
                 root / "missing-predecessor-expected.json",
                 root / "missing-predecessor-ledger.json",
                 True,
-                True,
+                False,
             )
         except PlanAdapterError:
             pass
@@ -451,7 +451,7 @@ def self_test() -> None:
                 root / "drifted-no-op-expected.json",
                 root / "drifted-no-op-ledger.json",
                 True,
-                True,
+                False,
             )
         except PlanAdapterError:
             pass
