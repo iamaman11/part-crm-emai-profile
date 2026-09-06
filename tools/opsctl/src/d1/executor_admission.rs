@@ -26,6 +26,8 @@ pub struct SealedExecutionPlan {
     pub mutation_executed: bool,
     pub component: String,
     pub allowed: bool,
+    pub predecessor_ledger_sha256: String,
+    pub predecessor_migrations: Vec<String>,
     pub planned_migrations: Vec<String>,
     pub planned_migration_digests: Vec<PlannedMigrationDigest>,
     pub apply_required: bool,
@@ -124,6 +126,11 @@ pub fn bind_executor_admission(
         mutation_executed: false,
         component: expectation.component.clone(),
         allowed: true,
+        predecessor_ledger_sha256: transaction
+            .transaction_plan
+            .predecessor_ledger_sha256
+            .clone(),
+        predecessor_migrations: transaction.provider_observation.remote_migrations.clone(),
         apply_required: !planned_migrations.is_empty(),
         planned_migrations,
         planned_migration_digests,
@@ -348,6 +355,14 @@ mod tests {
         assert_eq!(binding.tree_sha, transaction.transaction_plan.tree_sha);
         assert_eq!(binding.component, "catalog");
         assert_eq!(binding.execution_plan.command, "d1 plan");
+        assert_eq!(
+            binding.execution_plan.predecessor_ledger_sha256,
+            transaction.transaction_plan.predecessor_ledger_sha256
+        );
+        assert_eq!(
+            binding.execution_plan.predecessor_migrations,
+            transaction.provider_observation.remote_migrations
+        );
         assert_eq!(
             binding.execution_plan.planned_migrations,
             vec!["0031_device_binding_governance.sql"]

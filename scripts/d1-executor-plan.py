@@ -1,14 +1,15 @@
 #!/usr/bin/env python3
-"""Materialize exactly the native opsctl D1 plan for the protected Wrangler executor.
+"""Materialize exactly the admitted D1 plan for the protected Wrangler executor.
 
-This adapter owns no migration policy. It only proves that the already-evaluated native
-plan is a contiguous suffix of the exact remote ledger against the typed repository
-projection, copies that bounded prefix, and compares Wrangler's pending-list observation
-with the same native plan.
+This adapter owns no migration policy. It proves that the fresh remote ledger still equals
+the sealed predecessor for an admitted ordinary transaction, that the already-evaluated
+plan is the exact contiguous suffix of the typed repository projection, that authorized
+SQL content digests still match, and that Wrangler observes the same pending set.
 """
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import re
 import shutil
@@ -18,6 +19,7 @@ from pathlib import Path
 from typing import Any
 
 MIGRATION_RE = re.compile(r"\b[0-9]{4}_[a-z0-9_]+\.sql\b")
+SHA256_RE = re.compile(r"[0-9a-f]{64}")
 CONTRACT_REVISION = "0032_pas2_payload_fingerprint_contract.sql"
 
 
@@ -158,6 +160,52 @@ def planned_names(plan: Any, mode: str, component: str) -> list[str]:
     return names
 
 
+def planned_digests(plan: Any, planned: list[str], require: bool) -> dict[str, str]:
+    if not isinstance(plan, dict):
+        fail("native D1 plan must be one object")
+    values = plan.get("planned_migration_digests")
+    if values is None:
+        if require:
+            fail("authorized ordinary execution plan must contain planned_migration_digests")
+        return {}
+    if not isinstance(values, list) or len(values) != len(planned):
+        fail("planned_migration_digests cardinality must exactly match planned_migrations")
+    result: dict[str, str] = {}
+    for index, (item, expected_name) in enumerate(zip(values, planned, strict=True)):
+        if not isinstance(item, dict) or set(item) != {"migration", "sha256"}:
+            fail("planned_migration_digests entries must contain exactly migration/sha256")
+        name = migration_name(item.get("migration"), f"planned migration digest[{index}].migration")
+        if name != expected_name:
+            fail(
+                "planned_migration_digests order/name differs from planned_migrations: "
+                f"index={index}, expected={expected_name}, observed={name}"
+            )
+        digest = item.get("sha256")
+        if not isinstance(digest, str) or SHA256_RE.fullmatch(digest) is None:
+            fail(f"planned migration digest must be canonical lowercase sha256: {digest!r}")
+        result[name] = digest
+    return result
+
+
+def sealed_predecessor(plan: Any, require: bool) -> list[str] | None:
+    if not isinstance(plan, dict):
+        fail("native D1 plan must be one object")
+    values = plan.get("predecessor_migrations")
+    digest = plan.get("predecessor_ledger_sha256")
+    if values is None and digest is None:
+        if require:
+            fail("authorized ordinary execution plan must contain sealed predecessor state")
+        return None
+    if not isinstance(values, list):
+        fail("predecessor_migrations must be an array")
+    names = [migration_name(value, "predecessor migration") for value in values]
+    if len(names) != len(set(names)):
+        fail("predecessor_migrations contains duplicate migrations")
+    if not isinstance(digest, str) or SHA256_RE.fullmatch(digest) is None:
+        fail("predecessor_ledger_sha256 must be canonical lowercase sha256")
+    return names
+
+
 def materialize(
     repo_root: Path,
     repository_path: Path,
@@ -168,6 +216,8 @@ def materialize(
     output_dir: Path,
     expected_pending_path: Path,
     normalized_ledger_path: Path,
+    require_plan_digests: bool = False,
+    require_sealed_predecessor: bool = False,
 ) -> None:
     if output_dir.exists() or output_dir.is_symlink():
         fail(f"bounded migrations output must not pre-exist: {output_dir}")
@@ -178,8 +228,15 @@ def materialize(
     inventory = source_inventory(repo_root, component)
     canonical = [name for name, _ in inventory]
     planned = planned_names(plan, mode, component_id)
+    digests = planned_digests(plan, planned, require_plan_digests)
+    predecessor = sealed_predecessor(plan, require_sealed_predecessor or require_plan_digests)
     if remote != canonical[: len(remote)]:
         fail("remote ledger is not an exact prefix of the typed executable lineage")
+    if predecessor is not None and remote != predecessor:
+        fail(
+            "fresh remote ledger differs from the sealed authorized predecessor: "
+            f"expected={predecessor}, observed={remote}"
+        )
     expected_plan = canonical[len(remote) : len(remote) + len(planned)]
     if planned != expected_plan:
         fail(
@@ -188,8 +245,18 @@ def materialize(
         )
     if len(remote) + len(planned) > len(canonical):
         fail("native plan exceeds the typed executable lineage")
-    output_dir.mkdir(parents=True)
     source_by_name = dict(inventory)
+    for name in planned:
+        expected_digest = digests.get(name)
+        if expected_digest is None:
+            continue
+        observed_digest = hashlib.sha256(source_by_name[name].read_bytes()).hexdigest()
+        if observed_digest != expected_digest:
+            fail(
+                "materialized migration content digest differs from authorized execution plan: "
+                f"migration={name}, expected={expected_digest}, observed={observed_digest}"
+            )
+    output_dir.mkdir(parents=True)
     bounded = remote + planned
     for name in bounded:
         source = source_by_name[name]
@@ -254,6 +321,7 @@ def self_test() -> None:
             }],
         }
         ledger = [{"success": True, "results": [{"id": 1, "name": "0001_base.sql"}]}]
+        expand_digest = hashlib.sha256((root / "migrations/d1-successor/0002_expand.sql").read_bytes()).hexdigest()
         ordinary_plan = {
             "schema_version": 1,
             "command": "d1 plan",
@@ -261,7 +329,10 @@ def self_test() -> None:
             "mutation_executed": False,
             "component": "catalog",
             "allowed": True,
+            "predecessor_ledger_sha256": "1" * 64,
+            "predecessor_migrations": ["0001_base.sql"],
             "planned_migrations": ["0002_expand.sql"],
+            "planned_migration_digests": [{"migration": "0002_expand.sql", "sha256": expand_digest}],
         }
         for name, value in (("repository.json", repository), ("ledger.json", ledger), ("plan.json", ordinary_plan)):
             (root / name).write_text(json.dumps(value), encoding="utf-8")
@@ -275,11 +346,14 @@ def self_test() -> None:
             root / "bounded",
             root / "expected.json",
             root / "ledger-names.json",
+            True,
+            True,
         )
         if sorted(path.name for path in (root / "bounded").glob("*.sql")) != ["0001_base.sql", "0002_expand.sql"]:
             fail("self-test ordinary materialization was not bounded")
         (root / "wrangler.txt").write_text("Migrations to be applied:\n0002_expand.sql\n", encoding="utf-8")
         verify_pending(root / "expected.json", root / "wrangler.txt")
+
         leaked = dict(ordinary_plan)
         leaked["planned_migrations"] = ["0002_expand.sql", CONTRACT_REVISION]
         try:
@@ -288,6 +362,102 @@ def self_test() -> None:
             pass
         else:
             fail("self-test accepted CONTRACT leakage through ordinary d1 plan")
+
+        missing_digest = dict(ordinary_plan)
+        missing_digest.pop("planned_migration_digests")
+        (root / "missing-digest.json").write_text(json.dumps(missing_digest), encoding="utf-8")
+        try:
+            materialize(
+                root,
+                root / "repository.json",
+                root / "missing-digest.json",
+                root / "ledger.json",
+                "catalog",
+                "ordinary",
+                root / "missing-digest-bounded",
+                root / "missing-digest-expected.json",
+                root / "missing-digest-ledger.json",
+                True,
+                True,
+            )
+        except PlanAdapterError:
+            pass
+        else:
+            fail("self-test accepted missing authorized planned_migration_digests")
+
+        wrong_digest = dict(ordinary_plan)
+        wrong_digest["planned_migration_digests"] = [{"migration": "0002_expand.sql", "sha256": "0" * 64}]
+        (root / "wrong-digest.json").write_text(json.dumps(wrong_digest), encoding="utf-8")
+        try:
+            materialize(
+                root,
+                root / "repository.json",
+                root / "wrong-digest.json",
+                root / "ledger.json",
+                "catalog",
+                "ordinary",
+                root / "wrong-digest-bounded",
+                root / "wrong-digest-expected.json",
+                root / "wrong-digest-ledger.json",
+                True,
+                True,
+            )
+        except PlanAdapterError:
+            pass
+        else:
+            fail("self-test accepted migration content digest drift from authorized execution plan")
+
+        missing_predecessor = dict(ordinary_plan)
+        missing_predecessor.pop("predecessor_migrations")
+        missing_predecessor.pop("predecessor_ledger_sha256")
+        (root / "missing-predecessor.json").write_text(json.dumps(missing_predecessor), encoding="utf-8")
+        try:
+            materialize(
+                root,
+                root / "repository.json",
+                root / "missing-predecessor.json",
+                root / "ledger.json",
+                "catalog",
+                "ordinary",
+                root / "missing-predecessor-bounded",
+                root / "missing-predecessor-expected.json",
+                root / "missing-predecessor-ledger.json",
+                True,
+                False,
+            )
+        except PlanAdapterError:
+            pass
+        else:
+            fail("self-test accepted ordinary execution plan without sealed predecessor state")
+
+        no_op_plan = dict(ordinary_plan)
+        no_op_plan["planned_migrations"] = []
+        no_op_plan["planned_migration_digests"] = []
+        (root / "no-op.json").write_text(json.dumps(no_op_plan), encoding="utf-8")
+        drifted_ledger = [{"success": True, "results": [
+            {"id": 1, "name": "0001_base.sql"},
+            {"id": 2, "name": "0002_expand.sql"},
+        ]}]
+        (root / "drifted-ledger.json").write_text(json.dumps(drifted_ledger), encoding="utf-8")
+        try:
+            materialize(
+                root,
+                root / "repository.json",
+                root / "no-op.json",
+                root / "drifted-ledger.json",
+                "catalog",
+                "ordinary",
+                root / "drifted-no-op-bounded",
+                root / "drifted-no-op-expected.json",
+                root / "drifted-no-op-ledger.json",
+                True,
+                False,
+            )
+        except PlanAdapterError:
+            pass
+        else:
+            fail("self-test accepted fresh ledger drift for a sealed no-op transaction")
+
         (root / "wrong.txt").write_text(f"{CONTRACT_REVISION}\n", encoding="utf-8")
         try:
             verify_pending(root / "expected.json", root / "wrong.txt")
@@ -311,6 +481,8 @@ def parser() -> argparse.ArgumentParser:
     materialize_parser.add_argument("--output-dir", type=Path, required=True)
     materialize_parser.add_argument("--expected-pending", type=Path, required=True)
     materialize_parser.add_argument("--normalized-ledger", type=Path, required=True)
+    materialize_parser.add_argument("--require-plan-digests", action="store_true")
+    materialize_parser.add_argument("--require-sealed-predecessor", action="store_true")
     pending_parser = subparsers.add_parser("verify-pending")
     pending_parser.add_argument("--expected", type=Path, required=True)
     pending_parser.add_argument("--wrangler-output", type=Path, required=True)
@@ -335,6 +507,8 @@ def main() -> int:
                 args.output_dir,
                 args.expected_pending,
                 args.normalized_ledger,
+                args.require_plan_digests,
+                args.require_sealed_predecessor,
             )
         elif args.command == "verify-pending":
             verify_pending(args.expected, args.wrangler_output)

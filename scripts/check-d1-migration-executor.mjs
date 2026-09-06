@@ -9,6 +9,7 @@ import { fileURLToPath } from 'node:url';
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const EXECUTOR = '.github/workflows/d1-migration-executor.yml';
 const ADAPTER = 'scripts/d1-executor-plan.py';
+const EXECUTOR_ADMISSION = 'tools/opsctl/src/d1/executor_admission.rs';
 const DIAGNOSTICS_HELPER = 'scripts/d1-gate-diagnostics.py';
 const CONTRACT_TRANSITION = 'tools/opsctl/src/d1/contract_transition.rs';
 const CONTRACT_EXAMPLE = 'tools/opsctl/examples/d1-contract-transition.rs';
@@ -22,6 +23,7 @@ const ORDINARY_CONFIRMATION = 'test "$CONFIRMATION" = "$SOURCE_SHA:$TARGET_ENVIR
 const CONTRACT_CONFIRMATION = 'test "$CONFIRMATION" = "$SOURCE_SHA:$TARGET_ENVIRONMENT:$COMPONENT:$DATABASE_ID:contract:$EXPECTED_RELEASE_SET_ID"';
 const POST_CONTRACT_LEDGER = '--post-ledger-json artifacts/d1-migration/ledger-after.json';
 const DIAGNOSTICS_PATH = 'artifacts/d1-migration/d1-gate-diagnostics.jsonl';
+const SEALED_PLAN_EXTRACTION = "jq '.execution_plan' artifacts/d1-migration/executor-admission.json > artifacts/d1-migration/plan.json";
 const DIAGNOSTIC_REASON_CODES = [
   'D1_NATIVE_PLAN_COMMAND_FAILED',
   'D1_COMPATIBILITY_COMMAND_FAILED',
@@ -85,6 +87,8 @@ function validateSharedMutationGroup(executorText, promotionText) {
 async function validateExecutor(text, root = ROOT) {
   const promotionText = await readFile(path.join(root, PROMOTION), 'utf8');
   const adapterText = await readFile(path.join(root, ADAPTER), 'utf8');
+  const admissionText = await readFile(path.join(root, EXECUTOR_ADMISSION), 'utf8');
+  const compactAdmissionText = admissionText.replace(/\s+/g, '');
   const diagnosticsText = await readFile(path.join(root, DIAGNOSTICS_HELPER), 'utf8');
   const contractText = await readFile(path.join(root, CONTRACT_TRANSITION), 'utf8');
   const contractExampleText = await readFile(path.join(root, CONTRACT_EXAMPLE), 'utf8');
@@ -99,7 +103,8 @@ async function validateExecutor(text, root = ROOT) {
     'transition_mode:', 'expected_release_set_id:', "'migrations_dir': 'migrations-bounded'", 'd1 repository',
     'd1 info', 'SELECT id, name FROM d1_migrations ORDER BY id', 'd1 status', 'd1 plan',
     '--example d1-contract-transition', 'FAIL_FORWARD_ONLY', 'd1 compatibility',
-    'd1-executor-plan.py materialize', 'expected-pending.json', 'ledger-before-names.json',
+    'executor-admission.json', '.execution_plan', 'planned_migration_digests', SEALED_PLAN_EXTRACTION,
+    'd1-executor-plan.py materialize', '--require-plan-digests', 'expected-pending.json', 'ledger-before-names.json',
     'd1 migrations list', 'd1-executor-plan.py verify-pending', 'd1 time-travel info',
     'ledger-fence.json', 'status-fence.json',
     'cmp --silent artifacts/d1-migration/status-before.json artifacts/d1-migration/status-fence.json',
@@ -117,7 +122,7 @@ async function validateExecutor(text, root = ROOT) {
     'python scripts/d1-gate-diagnostics.py evaluate', DIAGNOSTICS_PATH,
     'Upload metadata-only D1 gate diagnostics on policy failure',
     "if: failure() && steps.policy.outcome == 'failure'",
-    'D1_NATIVE_PLAN_COMMAND_FAILED', 'D1_COMPATIBILITY_COMMAND_FAILED',
+    'D1_COMPATIBILITY_COMMAND_FAILED',
   ];
   for (const marker of requiredMarkers) {
     if (!text.includes(marker)) fail(`protected D1 executor lost required contract marker: ${marker}`);
@@ -143,8 +148,22 @@ async function validateExecutor(text, root = ROOT) {
     'ordinary d1 plan must never authorize the separate fail-forward CONTRACT',
     'contract-transition must authorize exactly the sole Catalog 0032 CONTRACT',
     'Wrangler pending list differs from native planned_migrations',
+    'authorized ordinary execution plan must contain planned_migration_digests',
+    'planned_migration_digests cardinality must exactly match planned_migrations',
+    'materialized migration content digest differs from authorized execution plan',
+    'authorized ordinary execution plan must contain sealed predecessor state',
+    'fresh remote ledger differs from the sealed authorized predecessor',
+    'self-test accepted fresh ledger drift for a sealed no-op transaction',
   ]) {
     if (!adapterText.includes(marker)) fail(`exact-plan adapter lost fail-closed marker: ${marker}`);
+  }
+  for (const marker of [
+    'pubpredecessor_ledger_sha256:String',
+    'pubpredecessor_migrations:Vec<String>',
+    'predecessor_ledger_sha256:transaction.transaction_plan.predecessor_ledger_sha256.clone()',
+    'predecessor_migrations:transaction.provider_observation.remote_migrations.clone()',
+  ]) {
+    if (!compactAdmissionText.includes(marker)) fail(`typed executor admission lost sealed predecessor projection: ${marker}`);
   }
   for (const marker of [
     'verify_post_transition', 'post-contract verification requires exactly one canonical 0031 -> 0032 transition',
@@ -166,6 +185,9 @@ async function validateExecutor(text, root = ROOT) {
   }
   if (/create\s+table\s+[^\n;]*(?:d1|migration)[^\n;]*lock/is.test(text)) {
     fail('protected D1 executor must not invent a database-resident migration lock');
+  }
+  if (text.includes('python scripts/d1-prepare.py prepare')) {
+    fail('protected ordinary executor must consume the admitted sealed plan and must never re-run prepare after authorization');
   }
 
   const authorizeIndex = text.indexOf('\n  authorize:');
@@ -224,13 +246,29 @@ async function validateExecutor(text, root = ROOT) {
   const deploySteps = (text.match(/CLOUDFLARE_API_TOKEN: \$\{\{ secrets\.CLOUDFLARE_API_TOKEN \}\}/g) ?? []).length;
   if (deploySteps !== 1) fail(`deploy-capable credential must appear exactly once; observed=${deploySteps}`);
 
-  const policyIndex = text.indexOf('Run credential-free native plan, compatibility, and rollback-blocker gates');
+  const admissionIndex = text.indexOf('Load immutable prepared transaction and verify typed executor admission');
+  const policyIndex = text.indexOf('Consume sealed ordinary plan and run fresh compatibility or contract gates');
   const diagnosticUploadIndex = text.indexOf('Upload metadata-only D1 gate diagnostics on policy failure');
-  const materializeIndex = text.indexOf('Materialize exactly native planned_migrations from typed successor projection');
-  const firstPendingIndex = text.indexOf('Compare Wrangler pending list to exact native plan with observe credential');
+  const materializeIndex = text.indexOf('Materialize exactly authorized planned_migrations from typed successor projection');
+  const firstPendingIndex = text.indexOf('Compare Wrangler pending list to exact authorized plan with observe credential');
   const deployIndex = text.indexOf(DEPLOY_REF);
-  if (!(policyIndex >= 0 && diagnosticUploadIndex > policyIndex && materializeIndex > diagnosticUploadIndex && firstPendingIndex > materializeIndex && deployIndex > firstPendingIndex)) {
-    fail('exact native policy, durable failure diagnostics, bounded materialization and read-only pending proof must all precede deploy credentials');
+  if (!(admissionIndex >= 0 && policyIndex > admissionIndex && diagnosticUploadIndex > policyIndex && materializeIndex > diagnosticUploadIndex && firstPendingIndex > materializeIndex && deployIndex > firstPendingIndex)) {
+    fail('typed executor admission, sealed-plan consumption, durable failure diagnostics, digest/prestate-bound materialization and read-only pending proof must all precede deploy credentials');
+  }
+  const policyBody = text.slice(policyIndex, diagnosticUploadIndex);
+  if (!policyBody.includes(SEALED_PLAN_EXTRACTION)) {
+    fail('ordinary post-authorization policy must consume executor-admission.execution_plan verbatim');
+  }
+  if (policyBody.includes('d1-prepare.py prepare')) {
+    fail('ordinary post-authorization policy must abort on drift instead of replanning an authorized transaction');
+  }
+  if (!policyBody.includes('d1 compatibility')) {
+    fail('fresh compatibility must remain a fail-closed pre-write drift gate after sealed-plan admission');
+  }
+  const materializeBodyEnd = text.indexOf('\n      - name:', materializeIndex + 1);
+  const materializeBody = text.slice(materializeIndex, materializeBodyEnd < 0 ? text.length : materializeBodyEnd);
+  if (!materializeBody.includes('--require-plan-digests')) {
+    fail('ordinary authorized materialization must require sealed migration digests and predecessor state');
   }
 
   const diagnosticStepEnd = text.indexOf('\n      - name:', diagnosticUploadIndex);
@@ -318,19 +356,29 @@ async function selfTest(text) {
     ['missing Wrangler pending fence', 'd1-executor-plan.py verify-pending', 'd1-executor-plan.py removed-pending-check'],
     ['missing contract confirmation binding', CONTRACT_CONFIRMATION, 'test -n "$CONFIRMATION"'],
     ['missing typed post-contract ledger proof', POST_CONTRACT_LEDGER, '--removed-post-ledger-json'],
-    ['missing plan command diagnostic', 'D1_NATIVE_PLAN_COMMAND_FAILED', 'D1_REMOVED_NATIVE_PLAN_COMMAND_DIAGNOSTIC'],
     ['missing compatibility command diagnostic', 'D1_COMPATIBILITY_COMMAND_FAILED', 'D1_REMOVED_COMPATIBILITY_COMMAND_DIAGNOSTIC'],
+    ['missing sealed ordinary plan extraction', SEALED_PLAN_EXTRACTION, '# removed-sealed-plan-extraction'],
+    ['missing authorized migration digest enforcement', '--require-plan-digests', '--removed-require-plan-digests'],
     ['missing durable diagnostic path', `          path: ${DIAGNOSTICS_PATH}`, '          path: artifacts/d1-migration/removed-diagnostics.jsonl'],
     ['missing diagnostic failure condition', "if: failure() && steps.policy.outcome == 'failure'", "if: steps.policy.outcome == 'success'"],
   ]) {
     await expectRejected(label, replaceFixture(label, text, from, to));
   }
+  await expectRejected(
+    'post-authorization ordinary replanning',
+    replaceFixture(
+      'post-authorization ordinary replanning',
+      text,
+      SEALED_PLAN_EXTRACTION,
+      'python scripts/d1-prepare.py prepare # forbidden post-authorization replan',
+    ),
+  );
   await expectRejected('deploy token used for observation', replaceFixture('deploy token used for observation', text, OBSERVE_REF, DEPLOY_REF));
   await expectRejected(
     'second remote apply',
     `${text}\n# npx --yes ${PINNED_WRANGLER} d1 migrations apply X --remote --experimental-provision=false --experimental-auto-create=false\n`,
   );
-  console.log('Protected D1 executor exact-plan, fail-closed diagnostics, bounded-lineage, typed post-CONTRACT verification, pending-list, confirmation-cardinality and double-ledger-fence negative fixtures passed.');
+  console.log('Protected D1 executor sealed-plan, exact-prestate, digest-bound materialization, fail-closed diagnostics, bounded-lineage, typed post-CONTRACT verification, pending-list, confirmation-cardinality and double-ledger-fence negative fixtures passed.');
 }
 
 async function main() {
@@ -341,7 +389,7 @@ async function main() {
   }
   if (process.argv.length > 2) fail(`unknown arguments: ${process.argv.slice(2).join(' ')}`);
   await validateExecutor(text, ROOT);
-  console.log('Protected D1 executor contract passed: staging-only, fail-closed metadata diagnostics, exact native plan materialization, bounded successor lineage, Wrangler pending equality, provider/ledger re-fence, typed post-CONTRACT verification, confirmation cardinality, one remote apply owner, no automatic restore or provisioning.');
+  console.log('Protected D1 executor contract passed: staging-only, sealed ordinary plan consumption, exact sealed prestate, digest-bound materialization, fail-closed metadata diagnostics, bounded successor lineage, Wrangler pending equality, provider/ledger re-fence, typed post-CONTRACT verification, confirmation cardinality, one remote apply owner, no automatic restore or provisioning.');
 }
 
 main().catch((error) => {
