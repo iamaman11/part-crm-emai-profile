@@ -20,9 +20,13 @@ future providers do not block that slice.
 4. [Current CAP execution program](docs/ARCHITECTURE_REBASELINE_V3_PLAN.md)
 5. [Repository agent contract](AGENTS.md) and [contributor guide](CONTRIBUTING.md)
 
-[Issue #266](https://github.com/iamaman11/part-crm-emai-profile/issues/266) is the live transaction
-pointer. Always read fresh protected `main`, the tracker and the owning bounded Issue; README never
-duplicates a current SHA, provider/readiness observation or workflow state.
+[Issue #266](https://github.com/iamaman11/part-crm-emai-profile/issues/266) is the **sole live stage
+pointer**. Always read fresh protected `main`, #266 and the exactly one CURRENT stage Issue selected by
+#266; README never duplicates a current SHA, provider/readiness observation or stage status.
+
+For a context-loss explanation of this model, see reference Issue
+[#625](https://github.com/iamaman11/part-crm-emai-profile/issues/625). It is orientation/provenance only,
+never a stage, pointer or execution authority.
 
 ## Architecture invariants
 
@@ -47,12 +51,14 @@ Permanent rules live in
 ## Current delivery program
 
 The complete ordered program, stage meanings and exit criteria have exactly one repository owner: the
-[current execution program](docs/ARCHITECTURE_REBASELINE_V3_PLAN.md). The sole active transaction and
-accepted-main evidence live in fresh [Issue #266](https://github.com/iamaman11/part-crm-emai-profile/issues/266).
-Every transaction uses its own bounded Issue/branch/PR and accepted-main reread; this README deliberately
-does not copy the mutable order.
+[current execution program](docs/ARCHITECTURE_REBASELINE_V3_PLAN.md). Fresh
+[Issue #266](https://github.com/iamaman11/part-crm-emai-profile/issues/266) selects exactly one CURRENT
+stage and links its one owning Issue. A CURRENT stage may use one or more bounded implementation
+transactions/PRs while its objective and DoD remain unchanged; this README deliberately does not copy
+the mutable stage position.
 
 ## Historical material
 
-Completed AR, PF, PAS and Functional Closure documents and Issues are provenance. They may explain why a
-current invariant exists, but they do not select current work or authorize staging/Production actions.
+Completed AR, PF, PAS, Functional Closure, predecessor-stage and superseded execution Issues are
+provenance. They may explain why a current invariant exists, but they do not select current work or
+authorize staging/Production actions.
