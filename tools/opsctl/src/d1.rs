@@ -226,7 +226,7 @@ fn load_optional_release(
 ) -> Result<Option<ReleaseSchemaContract>, D1Error> {
     match path {
         Some(value) => {
-            let resolved = resolve_input(request.root, value);
+            let resolved = resolve_input(root, value);
             Ok(Some(load_release_contract(&resolved, component)?))
         }
         None if required => Err(D1Error::new(format!(
