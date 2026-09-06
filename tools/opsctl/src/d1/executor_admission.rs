@@ -333,7 +333,8 @@ mod tests {
     }
 
     #[test]
-    fn exact_executor_admission_binds_transaction_authorization_checkout_and_plan() -> Result<(), D1Error> {
+    fn exact_executor_admission_binds_transaction_authorization_checkout_and_plan()
+    -> Result<(), D1Error> {
         let transaction = transaction()?;
         let binding = bind_executor_admission(
             &transaction,
