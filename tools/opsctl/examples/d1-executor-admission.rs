@@ -136,6 +136,18 @@ fn read_strict(path: PathBuf, label: &str) -> Result<Value, Box<dyn Error>> {
         .map_err(|error| format!("{label} is not strict bounded JSON: {error}").into())
 }
 
+fn sealed_component(transaction: &TransactionProjection) -> Result<String, Box<dyn Error>> {
+    let digests = &transaction.transaction_plan.release_manifest_digests;
+    if digests.len() != 1 {
+        return Err("prepared transaction must seal exactly one release-manifest component".into());
+    }
+    digests
+        .keys()
+        .next()
+        .cloned()
+        .ok_or_else(|| "prepared transaction has no sealed release-manifest component".into())
+}
+
 fn main() -> Result<(), Box<dyn Error>> {
     let args = parse_args()?;
     let transaction_value = read_strict(
@@ -146,6 +158,10 @@ fn main() -> Result<(), Box<dyn Error>> {
         serde_json::from_value(transaction_value).map_err(|error| {
             format!("prepared transaction does not match the typed contract: {error}")
         })?;
+    let component = match args.expected_component {
+        Some(value) => value,
+        None => sealed_component(&transaction)?,
+    };
     let authorization = read_strict(
         required(args.authorization_json, "--authorization-json")?,
         "transaction authorization",
@@ -154,7 +170,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         transaction_id: required(args.expected_transaction_id, "--expected-transaction-id")?,
         source_sha: required(args.expected_source_sha, "--expected-source-sha")?,
         tree_sha: required(args.expected_tree_sha, "--expected-tree-sha")?,
-        component: required(args.expected_component, "--expected-component")?,
+        component,
         target: TargetIdentity {
             environment: required(args.expected_environment, "--expected-environment")?,
             account_id: required(args.expected_account_id, "--expected-account-id")?,
