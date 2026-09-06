@@ -49,13 +49,14 @@ jobs:
           import os
           from pathlib import Path
           source = Path('.github/workflows/d1-tx6-isolated-target-observation.yml').read_text(encoding='utf-8')
-          for forbidden in (
-              'secrets.CLOUDFLARE_API_TOKEN',
-              'd1 migrations apply',
-              'd1 create',
-              'd1 delete',
-              'd1 time-travel restore',
-          ):
+          forbidden_effect_surfaces = (
+              'secrets.' + 'CLOUDFLARE_API_TOKEN',
+              'd1 migrations' + ' apply',
+              'd1 ' + 'create',
+              'd1 ' + 'delete',
+              'd1 time-travel' + ' restore',
+          )
+          for forbidden in forbidden_effect_surfaces:
               assert forbidden not in source, f'read-only TX-6 observer contains forbidden effect surface: {forbidden}'
           assert os.environ['TX6_READ_ONLY_CANDIDATE_NAME'] in source
           assert os.environ['TX6_READ_ONLY_CANDIDATE_ID'] in source
