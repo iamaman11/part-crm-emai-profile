@@ -20,6 +20,7 @@ struct Args {
     expected_transaction_id: Option<String>,
     expected_source_sha: Option<String>,
     expected_tree_sha: Option<String>,
+    expected_component: Option<String>,
     expected_environment: Option<String>,
     expected_account_id: Option<String>,
     expected_database_name: Option<String>,
@@ -95,6 +96,10 @@ fn parse_args() -> Result<Args, Box<dyn Error>> {
                 let value = utf8_value(&mut iterator, flag)?;
                 set_once(&mut args.expected_tree_sha, value, flag)?;
             }
+            "--expected-component" => {
+                let value = utf8_value(&mut iterator, flag)?;
+                set_once(&mut args.expected_component, value, flag)?;
+            }
             "--expected-environment" => {
                 let value = utf8_value(&mut iterator, flag)?;
                 set_once(&mut args.expected_environment, value, flag)?;
@@ -149,6 +154,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         transaction_id: required(args.expected_transaction_id, "--expected-transaction-id")?,
         source_sha: required(args.expected_source_sha, "--expected-source-sha")?,
         tree_sha: required(args.expected_tree_sha, "--expected-tree-sha")?,
+        component: required(args.expected_component, "--expected-component")?,
         target: TargetIdentity {
             environment: required(args.expected_environment, "--expected-environment")?,
             account_id: required(args.expected_account_id, "--expected-account-id")?,
