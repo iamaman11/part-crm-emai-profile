@@ -43,6 +43,21 @@ const TARGET_FENCE_OBSERVATION = 'artifacts/d1-migration/target-fence-observatio
 const TARGET_FENCE_VERIFICATION = 'artifacts/d1-migration/target-fence-verification.json';
 const TARGET_FENCE_NEWER_RUN_MARKER = '.run_number > $current_number';
 const TARGET_FENCE_SUCCESS_MARKER = '.name == $step and .conclusion == "success"';
+const RECEIPT = 'artifacts/d1-migration/execution-receipt.json';
+const RECEIPT_INIT_STEP = 'Initialize execution receipt after durable target fence';
+const RECEIPT_INITIAL_MARKER_STEP = 'Persist initial execution receipt snapshot';
+const RECEIPT_PREWRITE_STEP = 'Append PREWRITE_FENCE_PASS to execution receipt';
+const PREAPPLY_OBSERVE_STEP = 'Revalidate exact ledger fence with observe credential';
+const RECEIPT_MUTATION_STARTED_STEP = 'Append MUTATION_STARTED to execution receipt';
+const RECEIPT_MUTATION_MARKER_STEP = 'Persist MUTATION_STARTED execution receipt snapshot';
+const APPLY_STEP = 'Apply planned migrations with deploy credential';
+const RECEIPT_APPLIED_STEP = 'Append mechanically known MIGRATION_APPLIED events';
+const RECEIPT_APPLIED_MARKER_STEP = 'Persist applied migration execution receipt snapshot';
+const REREAD_STEP = 'Reread remote ledger with observe credential';
+const RECEIPT_POST_OBSERVED_STEP = 'Append POST_OBSERVED to execution receipt';
+const RECEIPT_COMPLETE_STEP = 'Complete execution receipt after verified post-state';
+const RECEIPT_TERMINALIZE_STEP = 'Terminalize execution receipt fail closed';
+const RECEIPT_TERMINAL_MARKER_STEP = 'Persist terminal execution receipt snapshot';
 const DIAGNOSTIC_REASON_CODES = [
   'D1_NATIVE_PLAN_COMMAND_FAILED',
   'D1_COMPATIBILITY_COMMAND_FAILED',
@@ -71,6 +86,13 @@ function replaceFixture(label, text, from, to) {
   const mutated = text.replace(from, to);
   if (mutated === text) fail(`negative protected-executor fixture did not mutate source: ${label}`);
   return mutated;
+}
+
+function stepBody(text, stepName) {
+  const start = text.indexOf(`\n      - name: ${stepName}`);
+  if (start < 0) fail(`protected D1 executor step is missing: ${stepName}`);
+  const end = text.indexOf('\n      - name:', start + 1);
+  return text.slice(start, end < 0 ? text.length : end);
 }
 
 function runDiagnosticsHelperSelfTest() {
@@ -143,6 +165,7 @@ async function validateExecutor(text, root = ROOT) {
     'd1 migrations list', 'd1-executor-plan.py verify-pending', 'd1 time-travel info',
     TARGET_FENCE_CREATE_STEP, TARGET_FENCE_MARKER_STEP, TARGET_FENCE_VERIFY_STEP,
     '--example d1-execution-control', 'd1-execution-control acquire-fence', 'd1-execution-control verify-fence',
+    'd1-execution-control initialize-receipt', 'd1-execution-control append-receipt',
     "'fence_epoch': int(os.environ['GITHUB_RUN_NUMBER'])", "'executor_run_id': int(os.environ['GITHUB_RUN_ID'])",
     "'run_attempt': int(os.environ['GITHUB_RUN_ATTEMPT'])", TARGET_FENCE_LEASE,
     'd1-target-fence-${{ github.run_number }}-${{ github.run_id }}-${{ github.run_attempt }}',
@@ -150,6 +173,18 @@ async function validateExecutor(text, root = ROOT) {
     'actions/runs/$run_id/artifacts?per_page=100', TARGET_FENCE_SUCCESS_MARKER,
     "'history_complete': True", "'current_marker_succeeded': True", TARGET_FENCE_OBSERVATION,
     TARGET_FENCE_VERIFICATION, 'TARGET_FENCE_ACQUIRED', 'TARGET_FENCE_VERIFIED',
+    RECEIPT_INIT_STEP, RECEIPT_INITIAL_MARKER_STEP, RECEIPT_PREWRITE_STEP, PREAPPLY_OBSERVE_STEP,
+    RECEIPT_MUTATION_STARTED_STEP, RECEIPT_MUTATION_MARKER_STEP, APPLY_STEP, RECEIPT_APPLIED_STEP,
+    RECEIPT_APPLIED_MARKER_STEP, REREAD_STEP, RECEIPT_POST_OBSERVED_STEP, RECEIPT_COMPLETE_STEP,
+    RECEIPT_TERMINALIZE_STEP, RECEIPT_TERMINAL_MARKER_STEP, RECEIPT,
+    'PREWRITE_FENCE_PASS', 'PREWRITE_ABORTED', 'MUTATION_STARTED', 'MIGRATION_APPLIED',
+    'POST_OBSERVED', 'VERIFIED', 'COMPLETED', 'RECOVERY_REQUIRED', 'FAILED_NO_EFFECT',
+    'd1-execution-receipt-${{ github.run_number }}-${{ github.run_id }}-${{ github.run_attempt }}-initial',
+    'd1-execution-receipt-${{ github.run_number }}-${{ github.run_id }}-${{ github.run_attempt }}-mutation-started',
+    'd1-execution-receipt-${{ github.run_number }}-${{ github.run_id }}-${{ github.run_attempt }}-applied',
+    'd1-execution-receipt-${{ github.run_number }}-${{ github.run_id }}-${{ github.run_attempt }}-terminal',
+    "hashFiles('artifacts/d1-migration/execution-receipt.json')", "'execution_receipt': receipt",
+    "'execution_receipt_id': receipt['receipt_id']",
     'ledger-fence.json', 'status-fence.json',
     'cmp --silent artifacts/d1-migration/status-before.json artifacts/d1-migration/status-fence.json',
     'ledger-fence-names.json',
@@ -247,14 +282,24 @@ async function validateExecutor(text, root = ROOT) {
   }
   for (const marker of [
     'pub fn acquire_target_fence', 'pub fn verify_target_fence',
+    'pub fn initialize_execution_receipt', 'pub fn append_execution_event',
     'target fence history is incomplete or unknown; abort before provider mutation',
     'stale executor fence rejected', 'split-brain target fence rejected',
     'same_target(&observed.target, &lease.target)', 'input.run_attempt != 1',
+    '(Authorized, PrewriteFencePass | PrewriteAborted)',
+    '(PrewriteAborted, FailedNoEffect)',
+    '(PrewriteFencePass, MutationStarted | PostObserved | FailedNoEffect)',
+    '(MutationStarted, MigrationApplied | PostObserved | RecoveryRequired)',
+    '(PostObserved, Verified | RecoveryRequired)', '(Verified, Completed)',
+    'only MIGRATION_APPLIED may carry migration_id',
   ]) {
-    if (!executionControlText.includes(marker)) fail(`typed target-fence owner lost fail-closed marker: ${marker}`);
+    if (!executionControlText.includes(marker)) fail(`typed execution-control owner lost fail-closed marker: ${marker}`);
   }
-  for (const marker of ['"acquire-fence"', '"verify-fence"', 'TargetFenceObservation', 'TargetFenceLease']) {
-    if (!executionControlExampleText.includes(marker)) fail(`headless target-fence adapter lost marker: ${marker}`);
+  for (const marker of [
+    '"acquire-fence"', '"verify-fence"', '"initialize-receipt"', '"append-receipt"',
+    'TargetFenceObservation', 'TargetFenceLease', 'ExecutionReceiptSeed', 'ExecutionEventInput',
+  ]) {
+    if (!executionControlExampleText.includes(marker)) fail(`headless execution-control adapter lost marker: ${marker}`);
   }
   for (const marker of [
     'verify_post_transition', 'post-contract verification requires exactly one canonical 0031 -> 0032 transition',
@@ -293,9 +338,10 @@ async function validateExecutor(text, root = ROOT) {
     REPLAY_PROOF_STEP, CONSUMPTION_STEP, REPLAY_RUN_MARKER,
     'actions/workflows/d1-migration-executor.yml/runs?event=workflow_dispatch&per_page=100',
     CONSUMPTION_ARTIFACT, TARGET_FENCE_CREATE_STEP, TARGET_FENCE_MARKER_STEP, TARGET_FENCE_VERIFY_STEP,
+    RECEIPT_INIT_STEP, RECEIPT_MUTATION_STARTED_STEP,
   ]) {
     if (authorizeBody.includes(forbidden)) {
-      fail(`preflight authorization must not consume or target-fence before typed executor admission: ${forbidden}`);
+      fail(`preflight authorization must not consume, fence, or journal execution before typed executor admission: ${forbidden}`);
     }
   }
 
@@ -336,7 +382,7 @@ async function validateExecutor(text, root = ROOT) {
   }
 
   const observeSteps = (text.match(/CLOUDFLARE_API_TOKEN: \$\{\{ secrets\.CLOUDFLARE_OBSERVE_API_TOKEN \}\}/g) ?? []).length;
-  if (observeSteps < 6) fail(`provider observations must use the dedicated observe credential; observed=${observeSteps}`);
+  if (observeSteps < 7) fail(`provider observations must use the dedicated observe credential, including exact preapply revalidation; observed=${observeSteps}`);
   const deploySteps = (text.match(/CLOUDFLARE_API_TOKEN: \$\{\{ secrets\.CLOUDFLARE_API_TOKEN \}\}/g) ?? []).length;
   if (deploySteps !== 1) fail(`deploy-capable credential must appear exactly once; observed=${deploySteps}`);
 
@@ -346,20 +392,66 @@ async function validateExecutor(text, root = ROOT) {
   const consumptionIndex = text.indexOf(`\n      - name: ${CONSUMPTION_STEP}`);
   const targetFenceCreateIndex = text.indexOf(`\n      - name: ${TARGET_FENCE_CREATE_STEP}`);
   const targetFenceMarkerIndex = text.indexOf(`\n      - name: ${TARGET_FENCE_MARKER_STEP}`);
+  const receiptInitIndex = text.indexOf(`\n      - name: ${RECEIPT_INIT_STEP}`);
+  const receiptInitialMarkerIndex = text.indexOf(`\n      - name: ${RECEIPT_INITIAL_MARKER_STEP}`);
   const metadataIndex = text.indexOf('Materialize exact metadata inputs and bounded provider config');
   const policyIndex = text.indexOf('Consume sealed ordinary plan and run fresh compatibility or contract gates');
   const diagnosticUploadIndex = text.indexOf('Upload metadata-only D1 gate diagnostics on policy failure');
   const materializeIndex = text.indexOf('Materialize exactly authorized planned_migrations from typed successor projection');
   const firstPendingIndex = text.indexOf('Compare Wrangler pending list to exact authorized plan with observe credential');
   const targetFenceVerifyIndex = text.indexOf(`\n      - name: ${TARGET_FENCE_VERIFY_STEP}`);
+  const receiptPrewriteIndex = text.indexOf(`\n      - name: ${RECEIPT_PREWRITE_STEP}`);
+  const preapplyObserveIndex = text.indexOf(`\n      - name: ${PREAPPLY_OBSERVE_STEP}`);
+  const receiptMutationStartedIndex = text.indexOf(`\n      - name: ${RECEIPT_MUTATION_STARTED_STEP}`);
+  const receiptMutationMarkerIndex = text.indexOf(`\n      - name: ${RECEIPT_MUTATION_MARKER_STEP}`);
+  const applyStepIndex = text.indexOf(`\n      - name: ${APPLY_STEP}`);
+  const receiptAppliedIndex = text.indexOf(`\n      - name: ${RECEIPT_APPLIED_STEP}`);
+  const receiptAppliedMarkerIndex = text.indexOf(`\n      - name: ${RECEIPT_APPLIED_MARKER_STEP}`);
+  const rereadIndex = text.indexOf(`\n      - name: ${REREAD_STEP}`);
+  const receiptPostObservedIndex = text.indexOf(`\n      - name: ${RECEIPT_POST_OBSERVED_STEP}`);
+  const postVerifyIndex = text.indexOf('Require exact target through credential-free opsctl verify');
+  const postInvariantIndex = text.indexOf('Verify post-apply database invariants with observe credential', postVerifyIndex);
+  const receiptCompleteIndex = text.indexOf(`\n      - name: ${RECEIPT_COMPLETE_STEP}`);
+  const receiptTerminalizeIndex = text.indexOf(`\n      - name: ${RECEIPT_TERMINALIZE_STEP}`);
+  const receiptTerminalMarkerIndex = text.indexOf(`\n      - name: ${RECEIPT_TERMINAL_MARKER_STEP}`);
+  const evidenceIndex = text.indexOf('Build metadata-only migration evidence');
   const observeIndex = text.indexOf(OBSERVE_REF);
   const deployIndex = text.indexOf(DEPLOY_REF);
-  if (!(provenanceIndex >= 0 && admissionIndex > provenanceIndex && replayIndex > admissionIndex && consumptionIndex > replayIndex && targetFenceCreateIndex > consumptionIndex && targetFenceMarkerIndex > targetFenceCreateIndex && metadataIndex > targetFenceMarkerIndex && observeIndex > metadataIndex && policyIndex > observeIndex && diagnosticUploadIndex > policyIndex && materializeIndex > diagnosticUploadIndex && firstPendingIndex > materializeIndex && targetFenceVerifyIndex > firstPendingIndex && deployIndex > targetFenceVerifyIndex)) {
-    fail('authorization provenance must precede typed admission and one-shot consumption; typed target-fence acquisition must precede every provider credential; typed prewrite fence verification must precede the sole deploy credential');
+  if (!(provenanceIndex >= 0
+      && admissionIndex > provenanceIndex
+      && replayIndex > admissionIndex
+      && consumptionIndex > replayIndex
+      && targetFenceCreateIndex > consumptionIndex
+      && targetFenceMarkerIndex > targetFenceCreateIndex
+      && receiptInitIndex > targetFenceMarkerIndex
+      && receiptInitialMarkerIndex > receiptInitIndex
+      && metadataIndex > receiptInitialMarkerIndex
+      && observeIndex > metadataIndex
+      && policyIndex > observeIndex
+      && diagnosticUploadIndex > policyIndex
+      && materializeIndex > diagnosticUploadIndex
+      && firstPendingIndex > materializeIndex
+      && targetFenceVerifyIndex > firstPendingIndex
+      && receiptPrewriteIndex > targetFenceVerifyIndex
+      && preapplyObserveIndex > receiptPrewriteIndex
+      && receiptMutationStartedIndex > preapplyObserveIndex
+      && receiptMutationMarkerIndex > receiptMutationStartedIndex
+      && applyStepIndex > receiptMutationMarkerIndex
+      && deployIndex > receiptMutationMarkerIndex
+      && receiptAppliedIndex > applyStepIndex
+      && receiptAppliedMarkerIndex > receiptAppliedIndex
+      && rereadIndex > receiptAppliedMarkerIndex
+      && receiptPostObservedIndex > rereadIndex
+      && postVerifyIndex > receiptPostObservedIndex
+      && postInvariantIndex > postVerifyIndex
+      && receiptCompleteIndex > postInvariantIndex
+      && receiptTerminalizeIndex > receiptCompleteIndex
+      && receiptTerminalMarkerIndex > receiptTerminalizeIndex
+      && evidenceIndex > receiptTerminalMarkerIndex)) {
+    fail('TX-4C ordering must preserve admission -> durable fence -> durable initial receipt -> typed prewrite fence -> observe-only revalidation -> durable MUTATION_STARTED -> sole deploy apply -> mechanically known applied events -> post-observed -> verified/completed -> fail-closed terminal receipt -> evidence');
   }
 
-  const replayStepEnd = text.indexOf('\n      - name:', replayIndex + 1);
-  const replayBody = text.slice(replayIndex, replayStepEnd < 0 ? text.length : replayStepEnd);
+  const replayBody = stepBody(text, REPLAY_PROOF_STEP);
   for (const marker of [
     'actions/workflows/d1-migration-executor.yml/runs?event=workflow_dispatch&per_page=100',
     REPLAY_RUN_MARKER, 'actions/runs/$run_id/jobs?per_page=100', REPLAY_SUCCESS_MARKER,
@@ -371,8 +463,7 @@ async function validateExecutor(text, root = ROOT) {
     fail('post-admission replay proof must remain provider-credential-free');
   }
 
-  const consumptionStepEnd = text.indexOf('\n      - name:', consumptionIndex + 1);
-  const consumptionBody = text.slice(consumptionIndex, consumptionStepEnd < 0 ? text.length : consumptionStepEnd);
+  const consumptionBody = stepBody(text, CONSUMPTION_STEP);
   for (const marker of [
     'actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a',
     CONSUMPTION_ARTIFACT, 'if-no-files-found: error', 'retention-days: 30',
@@ -383,8 +474,7 @@ async function validateExecutor(text, root = ROOT) {
     fail('authorization consumption marker must be emitted before provider credentials are exposed');
   }
 
-  const targetFenceCreateEnd = text.indexOf('\n      - name:', targetFenceCreateIndex + 1);
-  const targetFenceCreateBody = text.slice(targetFenceCreateIndex, targetFenceCreateEnd < 0 ? text.length : targetFenceCreateEnd);
+  const targetFenceCreateBody = stepBody(text, TARGET_FENCE_CREATE_STEP);
   for (const marker of [
     "'fence_epoch': int(os.environ['GITHUB_RUN_NUMBER'])", "'executor_run_id': int(os.environ['GITHUB_RUN_ID'])",
     "'run_attempt': int(os.environ['GITHUB_RUN_ATTEMPT'])", 'd1-execution-control acquire-fence',
@@ -396,8 +486,7 @@ async function validateExecutor(text, root = ROOT) {
     fail('typed target-fence acquisition must remain provider-credential-free');
   }
 
-  const targetFenceMarkerEnd = text.indexOf('\n      - name:', targetFenceMarkerIndex + 1);
-  const targetFenceMarkerBody = text.slice(targetFenceMarkerIndex, targetFenceMarkerEnd < 0 ? text.length : targetFenceMarkerEnd);
+  const targetFenceMarkerBody = stepBody(text, TARGET_FENCE_MARKER_STEP);
   for (const marker of [
     'actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a',
     'd1-target-fence-${{ github.run_number }}-${{ github.run_id }}-${{ github.run_attempt }}',
@@ -409,8 +498,30 @@ async function validateExecutor(text, root = ROOT) {
     fail('durable target-fence marker must remain provider-credential-free');
   }
 
-  const targetFenceVerifyEnd = text.indexOf('\n      - name:', targetFenceVerifyIndex + 1);
-  const targetFenceVerifyBody = text.slice(targetFenceVerifyIndex, targetFenceVerifyEnd < 0 ? text.length : targetFenceVerifyEnd);
+  const receiptInitBody = stepBody(text, RECEIPT_INIT_STEP);
+  for (const marker of [
+    'execution-receipt-seed.json', "transaction_plan', {}).get('recovery_strategy')",
+    "recovery = 'FAIL_FORWARD_ONLY'", 'd1-execution-control initialize-receipt',
+    '--prepared-at-unix-seconds', '--authorized-at-unix-seconds', RECEIPT,
+    '.events[0].kind == "PREPARED"', '.events[1].kind == "AUTHORIZED"',
+  ]) {
+    if (!receiptInitBody.includes(marker)) fail(`execution receipt initialization lost typed attempt binding: ${marker}`);
+  }
+  if (receiptInitBody.includes('CLOUDFLARE_API_TOKEN: ${{ secrets.')) {
+    fail('execution receipt initialization must be credential-free');
+  }
+
+  const receiptInitialBody = stepBody(text, RECEIPT_INITIAL_MARKER_STEP);
+  for (const marker of [
+    'actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a', RECEIPT,
+    'd1-execution-receipt-${{ github.run_number }}-${{ github.run_id }}-${{ github.run_attempt }}-initial',
+    'if-no-files-found: error', 'retention-days: 30',
+  ]) {
+    if (!receiptInitialBody.includes(marker)) fail(`initial receipt snapshot lost durable artifact contract: ${marker}`);
+  }
+  if (receiptInitialBody.includes('CLOUDFLARE_API_TOKEN')) fail('initial receipt snapshot must remain credential-free');
+
+  const targetFenceVerifyBody = stepBody(text, TARGET_FENCE_VERIFY_STEP);
   for (const marker of [
     'actions/workflows/d1-migration-executor.yml/runs?event=workflow_dispatch&per_page=100',
     TARGET_FENCE_NEWER_RUN_MARKER, 'actions/runs/$run_id/jobs?filter=all&per_page=100',
@@ -425,6 +536,12 @@ async function validateExecutor(text, root = ROOT) {
     fail('typed prewrite target-fence verification must complete before provider mutation credentials exist');
   }
 
+  const receiptPrewriteBody = stepBody(text, RECEIPT_PREWRITE_STEP);
+  for (const marker of ['PREWRITE_FENCE_PASS', 'd1-execution-control append-receipt', RECEIPT]) {
+    if (!receiptPrewriteBody.includes(marker)) fail(`PREWRITE_FENCE_PASS receipt projection lost marker: ${marker}`);
+  }
+  if (receiptPrewriteBody.includes('CLOUDFLARE_API_TOKEN: ${{ secrets.')) fail('PREWRITE_FENCE_PASS append must be credential-free');
+
   const policyBody = text.slice(policyIndex, diagnosticUploadIndex);
   if (!policyBody.includes(SEALED_PLAN_EXTRACTION)) {
     fail('ordinary post-authorization policy must consume executor-admission.execution_plan verbatim');
@@ -435,19 +552,15 @@ async function validateExecutor(text, root = ROOT) {
   if (!policyBody.includes('d1 compatibility')) {
     fail('fresh compatibility must remain a fail-closed pre-write drift gate after sealed-plan admission');
   }
-  const materializeBodyEnd = text.indexOf('\n      - name:', materializeIndex + 1);
-  const materializeBody = text.slice(materializeIndex, materializeBodyEnd < 0 ? text.length : materializeBodyEnd);
+  const materializeBody = stepBody(text, 'Materialize exactly authorized planned_migrations from typed successor projection');
   if (!materializeBody.includes('--require-plan-digests')) {
     fail('ordinary authorized materialization must require sealed migration digests and predecessor state');
   }
 
-  const diagnosticStepEnd = text.indexOf('\n      - name:', diagnosticUploadIndex);
-  const diagnosticUploadStep = text.slice(diagnosticUploadIndex, diagnosticStepEnd < 0 ? text.length : diagnosticStepEnd);
+  const diagnosticUploadStep = stepBody(text, 'Upload metadata-only D1 gate diagnostics on policy failure');
   for (const marker of [
-    "if: failure() && steps.policy.outcome == 'failure'",
-    DIAGNOSTICS_PATH,
-    'if-no-files-found: error',
-    'retention-days: 30',
+    "if: failure() && steps.policy.outcome == 'failure'", DIAGNOSTICS_PATH,
+    'if-no-files-found: error', 'retention-days: 30',
   ]) {
     if (!diagnosticUploadStep.includes(marker)) fail(`D1 policy failure diagnostic upload lost marker: ${marker}`);
   }
@@ -455,23 +568,60 @@ async function validateExecutor(text, root = ROOT) {
     fail('D1 policy failure diagnostic upload must remain metadata-only');
   }
 
-  const deployStepStart = text.lastIndexOf('\n      - name:', deployIndex);
-  const deployStepEndCandidate = text.indexOf('\n      - name:', deployIndex);
-  const deployStepEnd = deployStepEndCandidate < 0 ? text.length : deployStepEndCandidate;
-  const deployStep = text.slice(deployStepStart, deployStepEnd);
-  const fenceRead = deployStep.indexOf('ledger-fence.json');
-  const fenceStatus = deployStep.indexOf('status-fence.json');
-  const statusCompare = deployStep.indexOf('cmp --silent artifacts/d1-migration/status-before.json artifacts/d1-migration/status-fence.json');
-  const ledgerCompare = deployStep.indexOf('cmp --silent artifacts/d1-migration/ledger-before-names.json artifacts/d1-migration/ledger-fence-names.json');
-  const pendingList = deployStep.indexOf('wrangler-pending-fence.txt');
-  const pendingVerify = deployStep.indexOf('d1-executor-plan.py verify-pending');
-  const apply = deployStep.indexOf('d1 migrations apply');
-  if (!(fenceRead >= 0 && fenceStatus > fenceRead && statusCompare > fenceStatus && ledgerCompare > statusCompare && pendingList > ledgerCompare && pendingVerify > pendingList && apply > pendingVerify)) {
-    fail('deploy step must re-fence provider identity/ledger and Wrangler pending list before apply');
+  const preapplyObserveBody = stepBody(text, PREAPPLY_OBSERVE_STEP);
+  for (const marker of [
+    OBSERVE_REF, 'provider-identity-fence.json', 'ledger-fence.json', 'status-fence.json',
+    'cmp --silent artifacts/d1-migration/status-before.json artifacts/d1-migration/status-fence.json',
+    'cmp --silent artifacts/d1-migration/ledger-before-names.json artifacts/d1-migration/ledger-fence-names.json',
+    'wrangler-pending-fence.txt', 'd1-executor-plan.py verify-pending',
+  ]) {
+    if (!preapplyObserveBody.includes(marker)) fail(`observe-only preapply revalidation lost marker: ${marker}`);
+  }
+  if (preapplyObserveBody.includes(DEPLOY_REF) || preapplyObserveBody.includes('d1 migrations apply')) {
+    fail('preapply identity/ledger/pending revalidation must use observe credential only and must not mutate provider state');
   }
 
-  const postVerifyIndex = text.indexOf('Require exact target through credential-free opsctl verify');
-  const postInvariantIndex = text.indexOf('Verify post-apply database invariants with observe credential', postVerifyIndex);
+  const mutationStartedBody = stepBody(text, RECEIPT_MUTATION_STARTED_STEP);
+  for (const marker of ['MUTATION_STARTED', 'd1-execution-control append-receipt', RECEIPT]) {
+    if (!mutationStartedBody.includes(marker)) fail(`MUTATION_STARTED receipt projection lost marker: ${marker}`);
+  }
+  if (mutationStartedBody.includes('CLOUDFLARE_API_TOKEN: ${{ secrets.')) fail('MUTATION_STARTED append must be credential-free');
+
+  const mutationMarkerBody = stepBody(text, RECEIPT_MUTATION_MARKER_STEP);
+  for (const marker of [
+    'actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a', RECEIPT,
+    'd1-execution-receipt-${{ github.run_number }}-${{ github.run_id }}-${{ github.run_attempt }}-mutation-started',
+    'if-no-files-found: error', 'retention-days: 30',
+  ]) {
+    if (!mutationMarkerBody.includes(marker)) fail(`durable MUTATION_STARTED snapshot lost marker: ${marker}`);
+  }
+  if (mutationMarkerBody.includes('CLOUDFLARE_API_TOKEN')) fail('durable MUTATION_STARTED snapshot must be credential-free');
+
+  const deployStep = stepBody(text, APPLY_STEP);
+  for (const marker of [DEPLOY_REF, 'test -n "$CLOUDFLARE_API_TOKEN"', 'd1 migrations apply', '--remote']) {
+    if (!deployStep.includes(marker)) fail(`sole deploy step lost exact apply marker: ${marker}`);
+  }
+  for (const forbidden of [OBSERVE_REF, 'd1 info', 'd1 execute', 'd1 migrations list', 'ledger-fence.json', 'status-fence.json', 'verify-pending']) {
+    if (deployStep.includes(forbidden)) fail(`sole deploy credential step must contain only actual apply boundary, not read-only revalidation: ${forbidden}`);
+  }
+
+  const appliedBody = stepBody(text, RECEIPT_APPLIED_STEP);
+  for (const marker of ['MIGRATION_APPLIED', 'expected-pending.json', 'd1-execution-control append-receipt', RECEIPT]) {
+    if (!appliedBody.includes(marker)) fail(`mechanically known MIGRATION_APPLIED projection lost marker: ${marker}`);
+  }
+  if (appliedBody.includes('CLOUDFLARE_API_TOKEN: ${{ secrets.')) fail('MIGRATION_APPLIED append must be credential-free and occur only after successful apply');
+
+  const appliedMarkerBody = stepBody(text, RECEIPT_APPLIED_MARKER_STEP);
+  if (!appliedMarkerBody.includes(RECEIPT) || !appliedMarkerBody.includes('-applied')) {
+    fail('post-apply receipt snapshot must durably preserve mechanically known applied events');
+  }
+
+  const postObservedBody = stepBody(text, RECEIPT_POST_OBSERVED_STEP);
+  for (const marker of ['POST_OBSERVED', 'd1-execution-control append-receipt', RECEIPT]) {
+    if (!postObservedBody.includes(marker)) fail(`POST_OBSERVED receipt projection lost marker: ${marker}`);
+  }
+  if (postObservedBody.includes('CLOUDFLARE_API_TOKEN: ${{ secrets.')) fail('POST_OBSERVED append must be credential-free');
+
   if (postVerifyIndex < 0 || postInvariantIndex <= postVerifyIndex) {
     fail('post-apply verification step is missing or malformed');
   }
@@ -481,6 +631,41 @@ async function validateExecutor(text, root = ROOT) {
     'runtime_target_revision', 'supported_schema_max', 'transition_migrations',
   ]) {
     if (!postVerifyBody.includes(marker)) fail(`post-CONTRACT verification lost required typed proof: ${marker}`);
+  }
+
+  const completeBody = stepBody(text, RECEIPT_COMPLETE_STEP);
+  for (const marker of ['VERIFIED', 'COMPLETED', 'd1-execution-control append-receipt', RECEIPT]) {
+    if (!completeBody.includes(marker)) fail(`successful receipt completion lost marker: ${marker}`);
+  }
+  if (completeBody.includes('CLOUDFLARE_API_TOKEN: ${{ secrets.')) fail('VERIFIED/COMPLETED receipt append must be credential-free');
+
+  const terminalizeBody = stepBody(text, RECEIPT_TERMINALIZE_STEP);
+  for (const marker of [
+    'if: always()', 'AUTHORIZED)', 'append_event PREWRITE_ABORTED', 'append_event FAILED_NO_EFFECT',
+    'PREWRITE_FENCE_PASS)', 'MUTATION_STARTED|MIGRATION_APPLIED|POST_OBSERVED)',
+    'append_event RECOVERY_REQUIRED', 'VERIFIED)', 'append_event COMPLETED',
+    'COMPLETED|RECOVERY_REQUIRED|FAILED_NO_EFFECT)', 'd1-execution-control append-receipt', RECEIPT,
+  ]) {
+    if (!terminalizeBody.includes(marker)) fail(`fail-closed receipt terminalizer lost marker: ${marker}`);
+  }
+  if (terminalizeBody.includes('CLOUDFLARE_API_TOKEN: ${{ secrets.')) fail('receipt terminalizer must be credential-free');
+
+  const terminalMarkerBody = stepBody(text, RECEIPT_TERMINAL_MARKER_STEP);
+  for (const marker of [
+    "if: always() && hashFiles('artifacts/d1-migration/execution-receipt.json') != ''",
+    'actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a', RECEIPT,
+    'd1-execution-receipt-${{ github.run_number }}-${{ github.run_id }}-${{ github.run_attempt }}-terminal',
+    'if-no-files-found: error', 'retention-days: 30',
+  ]) {
+    if (!terminalMarkerBody.includes(marker)) fail(`terminal receipt artifact lost marker: ${marker}`);
+  }
+
+  const evidenceBody = stepBody(text, 'Build metadata-only migration evidence');
+  for (const marker of [
+    "receipt = load('execution-receipt.json')", "receipt['events'][-1]['kind'] != 'COMPLETED'",
+    "'execution_receipt': receipt", "'execution_receipt_id': receipt['receipt_id']",
+  ]) {
+    if (!evidenceBody.includes(marker)) fail(`successful migration evidence lost final receipt binding: ${marker}`);
   }
 
   const remoteMutationPaths = [];
@@ -543,6 +728,16 @@ async function selfTest(text) {
     ['missing newer target-fence horizon', TARGET_FENCE_NEWER_RUN_MARKER, '.run_number < $current_number'],
     ['missing complete target-fence history', "'history_complete': True", "'history_complete': False"],
     ['missing typed target-fence verification', 'd1-execution-control verify-fence', 'd1-execution-control removed-verify-fence'],
+    ['missing receipt initialization', 'd1-execution-control initialize-receipt', 'd1-execution-control removed-initialize-receipt'],
+    ['missing initial receipt durability', `      - name: ${RECEIPT_INITIAL_MARKER_STEP}`, '      - name: Removed initial execution receipt snapshot'],
+    ['missing PREWRITE_FENCE_PASS projection', `      - name: ${RECEIPT_PREWRITE_STEP}`, '      - name: Removed PREWRITE_FENCE_PASS receipt'],
+    ['missing MUTATION_STARTED projection', `      - name: ${RECEIPT_MUTATION_STARTED_STEP}`, '      - name: Removed MUTATION_STARTED receipt'],
+    ['missing durable MUTATION_STARTED snapshot', `      - name: ${RECEIPT_MUTATION_MARKER_STEP}`, '      - name: Removed durable MUTATION_STARTED snapshot'],
+    ['missing mechanically known MIGRATION_APPLIED events', `      - name: ${RECEIPT_APPLIED_STEP}`, '      - name: Removed MIGRATION_APPLIED receipt'],
+    ['missing POST_OBSERVED projection', `      - name: ${RECEIPT_POST_OBSERVED_STEP}`, '      - name: Removed POST_OBSERVED receipt'],
+    ['missing fail-closed receipt terminalizer', `      - name: ${RECEIPT_TERMINALIZE_STEP}`, '      - name: Removed receipt terminalizer'],
+    ['missing terminal receipt durability', `      - name: ${RECEIPT_TERMINAL_MARKER_STEP}`, '      - name: Removed terminal receipt snapshot'],
+    ['missing receipt evidence binding', "'execution_receipt': receipt", "'removed_execution_receipt': receipt"],
   ]) {
     await expectRejected(label, replaceFixture(label, text, from, to));
   }
@@ -573,7 +768,7 @@ async function selfTest(text) {
     'second remote apply',
     `${text}\n# npx --yes ${PINNED_WRANGLER} d1 migrations apply X --remote --experimental-provision=false --experimental-auto-create=false\n`,
   );
-  console.log('Protected D1 executor typed-admission-before-consumption, durable target-fence acquisition, complete newer-marker scan, typed prewrite fence verification, sealed-plan, exact-prestate, digest-bound materialization, fail-closed diagnostics, typed post-CONTRACT, pending-list and one-owner negative fixtures passed.');
+  console.log('Protected D1 executor typed-admission, durable target fence, append-only ExecutionReceipt ordering/durability, observe-only preapply revalidation, durable MUTATION_STARTED-before-deploy, fail-closed terminalization, sealed-plan, exact-prestate, diagnostics, post-CONTRACT and one-owner negative fixtures passed.');
 }
 
 async function main() {
@@ -584,7 +779,7 @@ async function main() {
   }
   if (process.argv.length > 2) fail(`unknown arguments: ${process.argv.slice(2).join(' ')}`);
   await validateExecutor(text, ROOT);
-  console.log('Protected D1 executor contract passed: workflow-dispatch-only, immutable OWNER authorization provenance, typed admission before durable one-shot consumption/replay fencing, target-scoped typed fence acquisition and prewrite verification, staging-only, sealed ordinary plan consumption, exact sealed prestate, digest-bound materialization, fail-closed diagnostics, bounded successor lineage, Wrangler pending equality, provider/ledger re-fence, typed post-CONTRACT verification, one remote apply owner, no automatic restore or provisioning.');
+  console.log('Protected D1 executor contract passed: workflow-dispatch-only, immutable OWNER authorization provenance, typed admission before one-shot consumption, target-scoped typed fence, append-only ExecutionReceipt, observe-only preapply revalidation, durable MUTATION_STARTED before sole deploy credential/apply, mechanically known applied events, fail-closed terminal receipt, exact sealed plan/prestate, typed post-CONTRACT verification, one remote apply owner, no automatic restore or provisioning.');
 }
 
 main().catch((error) => {
