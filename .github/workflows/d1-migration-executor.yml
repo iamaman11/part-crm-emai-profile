@@ -352,7 +352,8 @@ jobs:
             --arg transaction_id "$TRANSACTION_ID" \
             --arg source "$SOURCE_SHA" \
             --arg tree "$tree_sha" \
-            '.schema_version == 1 and .status == "EXECUTOR_ADMISSION_VERIFIED" and .mode == "read-only" and .authorization_consumed == false and .mutation_executed == false and .provider_mutation_executed == false and .transaction_id == $transaction_id and .source_sha == $source and .tree_sha == $tree and .phase == "ORDINARY"' \
+            --arg component "$COMPONENT" \
+            '.schema_version == 1 and .status == "EXECUTOR_ADMISSION_VERIFIED" and .mode == "read-only" and .authorization_consumed == false and .mutation_executed == false and .provider_mutation_executed == false and .transaction_id == $transaction_id and .source_sha == $source and .tree_sha == $tree and .phase == "ORDINARY" and (.execution_plan | .schema_version == 1 and .command == "d1 plan" and .mode == "read-only" and .mutation_executed == false and .component == $component and .allowed == true and (.apply_required == ((.planned_migrations | length) > 0)) and (.planned_migrations | type == "array") and (.planned_migration_digests | type == "array") and ((.planned_migration_digests | length) == (.planned_migrations | length)))' \
             artifacts/d1-migration/executor-admission.json >/dev/null
 
       - name: Materialize exact metadata inputs and bounded provider config
@@ -453,7 +454,7 @@ jobs:
             --component "$COMPONENT" --ledger-json artifacts/d1-migration/ledger-before.json \
             > artifacts/d1-migration/status-before.json
 
-      - name: Run credential-free native plan, compatibility, and rollback-blocker gates
+      - name: Consume sealed ordinary plan and run fresh compatibility or contract gates
         id: policy
         run: |
           set -euo pipefail
@@ -461,34 +462,11 @@ jobs:
           : > "$diagnostics"
 
           if [ "$TRANSITION_MODE" = ordinary ]; then
-            set +e
-            env -u CLOUDFLARE_API_TOKEN -u CLOUDFLARE_ACCOUNT_ID \
-              python scripts/d1-prepare.py prepare \
-                --opsctl tools/opsctl/target/debug/opsctl \
-                --root . \
-                --component "$COMPONENT" \
-                --ledger-json artifacts/d1-migration/ledger-before.json \
-                --release-manifest artifacts/d1-migration/target-release.json \
-                --current-manifest artifacts/d1-migration/current-release.json \
-                --known-good-manifest artifacts/d1-migration/known-good-release.json \
-                --preconditions-json artifacts/d1-migration/preconditions.json \
-                --output artifacts/d1-migration/prepare.json
-            plan_rc=$?
-            set -e
-            if [ "$plan_rc" -ne 0 ]; then
-              python scripts/d1-gate-diagnostics.py record \
-                --diagnostics "$diagnostics" \
-                --gate native-plan-command \
-                --reason-code D1_NATIVE_PLAN_COMMAND_FAILED \
-                --exit-code "$plan_rc" \
-                --detail 'credential-free prepare wrapping ordinary d1 plan blocked; exact inner cause is preserved in prepare.json'
-              exit "$plan_rc"
-            fi
-            jq -e '.status == "PREPARE_READY" and .authorization_consumed == false and .mutation_executed == false and .provider_mutation_executed == false' \
-              artifacts/d1-migration/prepare.json >/dev/null
-            jq -e '.plan != null and .compatibility != null' artifacts/d1-migration/prepare.json >/dev/null
-            jq '.plan' artifacts/d1-migration/prepare.json > artifacts/d1-migration/plan.json
-            jq '.compatibility' artifacts/d1-migration/prepare.json > artifacts/d1-migration/compatibility.json
+            jq -e \
+              --arg component "$COMPONENT" \
+              '.status == "EXECUTOR_ADMISSION_VERIFIED" and (.execution_plan | .schema_version == 1 and .command == "d1 plan" and .mode == "read-only" and .mutation_executed == false and .component == $component and .allowed == true and (.apply_required == ((.planned_migrations | length) > 0)) and (.planned_migrations | type == "array") and (.planned_migration_digests | type == "array") and ((.planned_migration_digests | length) == (.planned_migrations | length)))' \
+              artifacts/d1-migration/executor-admission.json >/dev/null
+            jq '.execution_plan' artifacts/d1-migration/executor-admission.json > artifacts/d1-migration/plan.json
           else
             set +e
             evaluated_at="$(date -u +%s)"
@@ -513,24 +491,24 @@ jobs:
                 --detail 'credential-free contract-transition plan command returned non-zero'
               exit "$plan_rc"
             fi
+          fi
 
-            set +e
-            env -u CLOUDFLARE_API_TOKEN -u CLOUDFLARE_ACCOUNT_ID cargo run --locked --quiet --manifest-path tools/opsctl/Cargo.toml -- --root . d1 compatibility \
-              --component "$COMPONENT" \
-              --ledger-json artifacts/d1-migration/ledger-before.json \
-              --release-manifest artifacts/d1-migration/target-release.json \
-              > artifacts/d1-migration/compatibility.json
-            compatibility_rc=$?
-            set -e
-            if [ "$compatibility_rc" -ne 0 ]; then
-              python scripts/d1-gate-diagnostics.py record \
-                --diagnostics "$diagnostics" \
-                --gate compatibility-command \
-                --reason-code D1_COMPATIBILITY_COMMAND_FAILED \
-                --exit-code "$compatibility_rc" \
-                --detail 'credential-free compatibility command returned non-zero'
-              exit "$compatibility_rc"
-            fi
+          set +e
+          env -u CLOUDFLARE_API_TOKEN -u CLOUDFLARE_ACCOUNT_ID cargo run --locked --quiet --manifest-path tools/opsctl/Cargo.toml -- --root . d1 compatibility \
+            --component "$COMPONENT" \
+            --ledger-json artifacts/d1-migration/ledger-before.json \
+            --release-manifest artifacts/d1-migration/target-release.json \
+            > artifacts/d1-migration/compatibility.json
+          compatibility_rc=$?
+          set -e
+          if [ "$compatibility_rc" -ne 0 ]; then
+            python scripts/d1-gate-diagnostics.py record \
+              --diagnostics "$diagnostics" \
+              --gate compatibility-command \
+              --reason-code D1_COMPATIBILITY_COMMAND_FAILED \
+              --exit-code "$compatibility_rc" \
+              --detail 'credential-free compatibility command returned non-zero'
+            exit "$compatibility_rc"
           fi
 
           python scripts/d1-gate-diagnostics.py evaluate \
@@ -538,15 +516,6 @@ jobs:
             --compatibility artifacts/d1-migration/compatibility.json \
             --diagnostics "$diagnostics" \
             --github-output "$GITHUB_OUTPUT"
-
-      - name: Upload typed D1 prepare evidence on ordinary policy failure
-        if: inputs.transition_mode == 'ordinary' && failure() && steps.policy.outcome == 'failure'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
-        with:
-          name: d1-prepare-blocked-${{ inputs.environment }}-${{ inputs.component }}-${{ github.run_id }}-${{ github.run_attempt }}
-          path: artifacts/d1-migration/prepare.json
-          if-no-files-found: error
-          retention-days: 30
 
       - name: Upload metadata-only D1 gate diagnostics on policy failure
         if: failure() && steps.policy.outcome == 'failure'
@@ -557,9 +526,13 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
-      - name: Materialize exactly native planned_migrations from typed successor projection
+      - name: Materialize exactly authorized planned_migrations from typed successor projection
         run: |
           set -euo pipefail
+          digest_args=()
+          if [ "$TRANSITION_MODE" = ordinary ]; then
+            digest_args+=(--require-plan-digests)
+          fi
           python scripts/d1-executor-plan.py materialize \
             --repo-root . \
             --repository artifacts/d1-migration/repository.json \
@@ -569,7 +542,8 @@ jobs:
             --mode "$TRANSITION_MODE" \
             --output-dir artifacts/d1-migration/migrations-bounded \
             --expected-pending artifacts/d1-migration/expected-pending.json \
-            --normalized-ledger artifacts/d1-migration/ledger-before-names.json
+            --normalized-ledger artifacts/d1-migration/ledger-before-names.json \
+            "${digest_args[@]}"
           python - <<'PY'
           import json
           from pathlib import Path
@@ -580,7 +554,7 @@ jobs:
           )
           PY
 
-      - name: Compare Wrangler pending list to exact native plan with observe credential
+      - name: Compare Wrangler pending list to exact authorized plan with observe credential
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_OBSERVE_API_TOKEN }}
         run: |
