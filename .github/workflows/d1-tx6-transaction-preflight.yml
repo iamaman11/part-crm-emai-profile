@@ -18,7 +18,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  actions: read
+  actions: write
   contents: read
 
 concurrency:
@@ -102,14 +102,18 @@ jobs:
           cargo build --locked --manifest-path tools/opsctl/Cargo.toml
           python scripts/d1-prepare.py self-test
 
-      - name: Resolve same-source canonical observer evidence
+      - name: Dispatch and resolve same-source canonical observer evidence
         run: |
           set -euo pipefail
           root="$RUNNER_TEMP/tx6-preflight"
           mkdir -p "$root/observer" artifacts/d1-tx6-transaction-preflight
+          existing="$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/$TX6_OBSERVER_WORKFLOW_ID/runs?head_sha=$SOURCE_SHA&per_page=20" --jq '.workflow_runs[] | select(.status == "completed" and .conclusion == "success") | .id' | head -n1)"
+          if [ -z "$existing" ]; then
+            gh workflow run "$TX6_OBSERVER_WORKFLOW_ID" --repo "$GITHUB_REPOSITORY" --ref main
+          fi
           observer_run=''
           for _ in $(seq 1 48); do
-            observer_run="$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/$TX6_OBSERVER_WORKFLOW_ID/runs?head_sha=$SOURCE_SHA&event=push&per_page=20" --jq '.workflow_runs[] | select(.status == "completed" and .conclusion == "success") | .id' | head -n1)"
+            observer_run="$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/$TX6_OBSERVER_WORKFLOW_ID/runs?head_sha=$SOURCE_SHA&per_page=20" --jq '.workflow_runs[] | select(.status == "completed" and .conclusion == "success") | .id' | head -n1)"
             if [ -n "$observer_run" ]; then break; fi
             sleep 15
           done
@@ -250,6 +254,9 @@ jobs:
           json.dump(value, open(sys.argv[3], 'w', encoding='utf-8'), sort_keys=True, indent=2)
           open(sys.argv[3], 'a', encoding='utf-8').write('\n')
           PY
+          echo 'TX-6 secret-free preflight disposition:'
+          cat "$evidence/summary.json"
+          jq -c '{status, gate_results, plan: (if .status == "PREPARE_READY" then {decision: .plan.decision, ledger_state: .plan.ledger_state, planned_migrations: .plan.planned_migrations} else null end)}' "$evidence/prepare.json"
 
       - name: Publish secret-free TX-6 transaction preflight
         if: always()
