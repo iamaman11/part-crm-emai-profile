@@ -9,6 +9,7 @@ import { fileURLToPath } from 'node:url';
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const EXECUTOR = '.github/workflows/d1-migration-executor.yml';
 const ADAPTER = 'scripts/d1-executor-plan.py';
+const EXECUTOR_ADMISSION = 'tools/opsctl/src/d1/executor_admission.rs';
 const DIAGNOSTICS_HELPER = 'scripts/d1-gate-diagnostics.py';
 const CONTRACT_TRANSITION = 'tools/opsctl/src/d1/contract_transition.rs';
 const CONTRACT_EXAMPLE = 'tools/opsctl/examples/d1-contract-transition.rs';
@@ -86,6 +87,7 @@ function validateSharedMutationGroup(executorText, promotionText) {
 async function validateExecutor(text, root = ROOT) {
   const promotionText = await readFile(path.join(root, PROMOTION), 'utf8');
   const adapterText = await readFile(path.join(root, ADAPTER), 'utf8');
+  const admissionText = await readFile(path.join(root, EXECUTOR_ADMISSION), 'utf8');
   const diagnosticsText = await readFile(path.join(root, DIAGNOSTICS_HELPER), 'utf8');
   const contractText = await readFile(path.join(root, CONTRACT_TRANSITION), 'utf8');
   const contractExampleText = await readFile(path.join(root, CONTRACT_EXAMPLE), 'utf8');
@@ -148,8 +150,19 @@ async function validateExecutor(text, root = ROOT) {
     'authorized ordinary execution plan must contain planned_migration_digests',
     'planned_migration_digests cardinality must exactly match planned_migrations',
     'materialized migration content digest differs from authorized execution plan',
+    'authorized ordinary execution plan must contain sealed predecessor state',
+    'fresh remote ledger differs from the sealed authorized predecessor',
+    'self-test accepted fresh ledger drift for a sealed no-op transaction',
   ]) {
     if (!adapterText.includes(marker)) fail(`exact-plan adapter lost fail-closed marker: ${marker}`);
+  }
+  for (const marker of [
+    'pub predecessor_ledger_sha256: String',
+    'pub predecessor_migrations: Vec<String>',
+    'predecessor_ledger_sha256: transaction.transaction_plan.predecessor_ledger_sha256.clone()',
+    'predecessor_migrations: transaction.provider_observation.remote_migrations.clone()',
+  ]) {
+    if (!admissionText.includes(marker)) fail(`typed executor admission lost sealed predecessor projection: ${marker}`);
   }
   for (const marker of [
     'verify_post_transition', 'post-contract verification requires exactly one canonical 0031 -> 0032 transition',
@@ -239,7 +252,7 @@ async function validateExecutor(text, root = ROOT) {
   const firstPendingIndex = text.indexOf('Compare Wrangler pending list to exact authorized plan with observe credential');
   const deployIndex = text.indexOf(DEPLOY_REF);
   if (!(admissionIndex >= 0 && policyIndex > admissionIndex && diagnosticUploadIndex > policyIndex && materializeIndex > diagnosticUploadIndex && firstPendingIndex > materializeIndex && deployIndex > firstPendingIndex)) {
-    fail('typed executor admission, sealed-plan consumption, durable failure diagnostics, digest-bound materialization and read-only pending proof must all precede deploy credentials');
+    fail('typed executor admission, sealed-plan consumption, durable failure diagnostics, digest/prestate-bound materialization and read-only pending proof must all precede deploy credentials');
   }
   const policyBody = text.slice(policyIndex, diagnosticUploadIndex);
   if (!policyBody.includes(SEALED_PLAN_EXTRACTION)) {
@@ -254,7 +267,7 @@ async function validateExecutor(text, root = ROOT) {
   const materializeBodyEnd = text.indexOf('\n      - name:', materializeIndex + 1);
   const materializeBody = text.slice(materializeIndex, materializeBodyEnd < 0 ? text.length : materializeBodyEnd);
   if (!materializeBody.includes('--require-plan-digests')) {
-    fail('ordinary authorized materialization must require sealed planned migration digests');
+    fail('ordinary authorized materialization must require sealed migration digests and predecessor state');
   }
 
   const diagnosticStepEnd = text.indexOf('\n      - name:', diagnosticUploadIndex);
@@ -364,7 +377,7 @@ async function selfTest(text) {
     'second remote apply',
     `${text}\n# npx --yes ${PINNED_WRANGLER} d1 migrations apply X --remote --experimental-provision=false --experimental-auto-create=false\n`,
   );
-  console.log('Protected D1 executor sealed-plan, digest-bound materialization, fail-closed diagnostics, bounded-lineage, typed post-CONTRACT verification, pending-list, confirmation-cardinality and double-ledger-fence negative fixtures passed.');
+  console.log('Protected D1 executor sealed-plan, exact-prestate, digest-bound materialization, fail-closed diagnostics, bounded-lineage, typed post-CONTRACT verification, pending-list, confirmation-cardinality and double-ledger-fence negative fixtures passed.');
 }
 
 async function main() {
@@ -375,7 +388,7 @@ async function main() {
   }
   if (process.argv.length > 2) fail(`unknown arguments: ${process.argv.slice(2).join(' ')}`);
   await validateExecutor(text, ROOT);
-  console.log('Protected D1 executor contract passed: staging-only, sealed ordinary plan consumption, digest-bound materialization, fail-closed metadata diagnostics, bounded successor lineage, Wrangler pending equality, provider/ledger re-fence, typed post-CONTRACT verification, confirmation cardinality, one remote apply owner, no automatic restore or provisioning.');
+  console.log('Protected D1 executor contract passed: staging-only, sealed ordinary plan consumption, exact sealed prestate, digest-bound materialization, fail-closed metadata diagnostics, bounded successor lineage, Wrangler pending equality, provider/ledger re-fence, typed post-CONTRACT verification, confirmation cardinality, one remote apply owner, no automatic restore or provisioning.');
 }
 
 main().catch((error) => {
