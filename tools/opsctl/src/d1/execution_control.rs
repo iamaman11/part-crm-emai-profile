@@ -148,11 +148,11 @@ pub struct ExecutionReceipt {
 
 pub fn acquire_target_fence(input: TargetFenceLeaseInput) -> Result<TargetFenceLease, D1Error> {
     validate_fence_input(&input)?;
-    let canonical = canonical_json(
-        &serde_json::to_value(&input)
-            .map_err(|error| D1Error::new(format!("cannot serialize target fence input: {error}")))?,
-    )
-    .map_err(D1Error::new)?;
+    let canonical =
+        canonical_json(&serde_json::to_value(&input).map_err(|error| {
+            D1Error::new(format!("cannot serialize target fence input: {error}"))
+        })?)
+        .map_err(D1Error::new)?;
     Ok(TargetFenceLease {
         schema_version: input.schema_version,
         status: "TARGET_FENCE_ACQUIRED".to_owned(),
@@ -317,8 +317,9 @@ pub fn append_execution_event(
 pub fn serialize_target_fence_lease(lease: &TargetFenceLease) -> Result<String, D1Error> {
     validate_lease(lease)?;
     canonical_json(
-        &serde_json::to_value(lease)
-            .map_err(|error| D1Error::new(format!("cannot serialize target fence lease: {error}")))?,
+        &serde_json::to_value(lease).map_err(|error| {
+            D1Error::new(format!("cannot serialize target fence lease: {error}"))
+        })?,
     )
     .map_err(D1Error::new)
 }
@@ -328,7 +329,9 @@ pub fn serialize_target_fence_verification(
 ) -> Result<String, D1Error> {
     validate_verification(verification)?;
     canonical_json(&serde_json::to_value(verification).map_err(|error| {
-        D1Error::new(format!("cannot serialize target fence verification: {error}"))
+        D1Error::new(format!(
+            "cannot serialize target fence verification: {error}"
+        ))
     })?)
     .map_err(D1Error::new)
 }
@@ -336,8 +339,9 @@ pub fn serialize_target_fence_verification(
 pub fn serialize_execution_receipt(receipt: &ExecutionReceipt) -> Result<String, D1Error> {
     validate_receipt(receipt)?;
     canonical_json(
-        &serde_json::to_value(receipt)
-            .map_err(|error| D1Error::new(format!("cannot serialize execution receipt: {error}")))?,
+        &serde_json::to_value(receipt).map_err(|error| {
+            D1Error::new(format!("cannot serialize execution receipt: {error}"))
+        })?,
     )
     .map_err(D1Error::new)
 }
@@ -395,11 +399,11 @@ fn validate_lease(lease: &TargetFenceLease) -> Result<(), D1Error> {
         acquired_at_unix_seconds: lease.acquired_at_unix_seconds,
     };
     validate_fence_input(&input)?;
-    let canonical = canonical_json(
-        &serde_json::to_value(&input)
-            .map_err(|error| D1Error::new(format!("cannot serialize target fence input: {error}")))?,
-    )
-    .map_err(D1Error::new)?;
+    let canonical =
+        canonical_json(&serde_json::to_value(&input).map_err(|error| {
+            D1Error::new(format!("cannot serialize target fence input: {error}"))
+        })?)
+        .map_err(D1Error::new)?;
     if lease.fence_id != sha256_hex(canonical.as_bytes()) {
         return Err(D1Error::new(
             "target fence_id does not match the exact canonical lease input",
@@ -641,9 +645,8 @@ fn validate_operation_binding(
 ) -> Result<(), D1Error> {
     match phase {
         TransactionPhase::Ordinary => {
-            let transaction_id = transaction_id.ok_or_else(|| {
-                D1Error::new("ordinary target fence requires transaction_id")
-            })?;
+            let transaction_id = transaction_id
+                .ok_or_else(|| D1Error::new("ordinary target fence requires transaction_id"))?;
             let authorization_digest = authorization_digest.ok_or_else(|| {
                 D1Error::new("ordinary target fence requires authorization_digest")
             })?;
@@ -964,9 +967,7 @@ mod tests {
         let mut tampered = receipt.clone();
         tampered.events[2].kind = ExecutionEventKind::Completed;
         assert!(serialize_execution_receipt(&tampered).is_err());
-        assert!(
-            append(&tampered, ExecutionEventKind::PostObserved, 24, None).is_err()
-        );
+        assert!(append(&tampered, ExecutionEventKind::PostObserved, 24, None).is_err());
         Ok(())
     }
 

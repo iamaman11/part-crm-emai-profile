@@ -125,7 +125,9 @@ fn parse_args() -> Result<(Command, Args), Box<dyn Error>> {
                 let value = utf8_value(&mut iterator, flag)?.parse::<i64>()?;
                 set_once(&mut args.authorized_at_unix_seconds, value, flag)?;
             }
-            other => return Err(format!("unsupported d1 execution-control argument: {other}").into()),
+            other => {
+                return Err(format!("unsupported d1 execution-control argument: {other}").into());
+            }
         }
     }
 
@@ -170,7 +172,8 @@ fn acquire(args: Args) -> Result<String, Box<dyn Error>> {
         "--authorized-at-unix-seconds",
         "acquire-fence",
     )?;
-    let input: TargetFenceLeaseInput = read_typed(required(args.input, "--input")?, "target fence input")?;
+    let input: TargetFenceLeaseInput =
+        read_typed(required(args.input, "--input")?, "target fence input")?;
     let lease = acquire_target_fence(input)?;
     Ok(serialize_target_fence_lease(&lease)?)
 }
@@ -190,7 +193,8 @@ fn verify(args: Args) -> Result<String, Box<dyn Error>> {
         "--authorized-at-unix-seconds",
         "verify-fence",
     )?;
-    let lease: TargetFenceLease = read_typed(required(args.lease, "--lease")?, "target fence lease")?;
+    let lease: TargetFenceLease =
+        read_typed(required(args.lease, "--lease")?, "target fence lease")?;
     let observation: TargetFenceObservation = read_typed(
         required(args.observation, "--observation")?,
         "target fence observation",
@@ -209,10 +213,7 @@ fn initialize(args: Args) -> Result<String, Box<dyn Error>> {
         read_typed(required(args.seed, "--seed")?, "execution receipt seed")?;
     let receipt = initialize_execution_receipt(
         seed,
-        required(
-            args.prepared_at_unix_seconds,
-            "--prepared-at-unix-seconds",
-        )?,
+        required(args.prepared_at_unix_seconds, "--prepared-at-unix-seconds")?,
         required(
             args.authorized_at_unix_seconds,
             "--authorized-at-unix-seconds",
