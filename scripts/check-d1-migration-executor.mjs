@@ -12,6 +12,8 @@ const V2_ROUTER = '.github/workflows/v2-phase-a-d1-command-router.yml';
 const LEGACY_V2_ONE_CLICK = '.github/workflows/v2-d1-one-click-dispatcher.yml';
 const ADAPTER = 'scripts/d1-executor-plan.py';
 const EXECUTOR_ADMISSION = 'tools/opsctl/src/d1/executor_admission.rs';
+const EXECUTION_CONTROL = 'tools/opsctl/src/d1/execution_control.rs';
+const EXECUTION_CONTROL_EXAMPLE = 'tools/opsctl/examples/d1-execution-control.rs';
 const DIAGNOSTICS_HELPER = 'scripts/d1-gate-diagnostics.py';
 const CONTRACT_TRANSITION = 'tools/opsctl/src/d1/contract_transition.rs';
 const CONTRACT_EXAMPLE = 'tools/opsctl/examples/d1-contract-transition.rs';
@@ -33,6 +35,14 @@ const CONSUMPTION_STEP = 'Consume ordinary transaction authorization';
 const REPLAY_RUN_MARKER = '.run_number < $current_number';
 const REPLAY_SUCCESS_MARKER = '.name == $step and .conclusion == "success"';
 const CONSUMPTION_ARTIFACT = 'artifacts/d1-migration/authorization-consumption.json';
+const TARGET_FENCE_CREATE_STEP = 'Create typed target fence lease';
+const TARGET_FENCE_MARKER_STEP = 'Acquire durable target fence';
+const TARGET_FENCE_VERIFY_STEP = 'Verify typed target fence immediately before provider mutation';
+const TARGET_FENCE_LEASE = 'artifacts/d1-migration/target-fence-lease.json';
+const TARGET_FENCE_OBSERVATION = 'artifacts/d1-migration/target-fence-observation.json';
+const TARGET_FENCE_VERIFICATION = 'artifacts/d1-migration/target-fence-verification.json';
+const TARGET_FENCE_NEWER_RUN_MARKER = '.run_number > $current_number';
+const TARGET_FENCE_SUCCESS_MARKER = '.name == $step and .conclusion == "success"';
 const DIAGNOSTIC_REASON_CODES = [
   'D1_NATIVE_PLAN_COMMAND_FAILED',
   'D1_COMPATIBILITY_COMMAND_FAILED',
@@ -99,6 +109,8 @@ async function validateExecutor(text, root = ROOT) {
   const adapterText = await readFile(path.join(root, ADAPTER), 'utf8');
   const admissionText = await readFile(path.join(root, EXECUTOR_ADMISSION), 'utf8');
   const compactAdmissionText = admissionText.replace(/\s+/g, '');
+  const executionControlText = await readFile(path.join(root, EXECUTION_CONTROL), 'utf8');
+  const executionControlExampleText = await readFile(path.join(root, EXECUTION_CONTROL_EXAMPLE), 'utf8');
   const diagnosticsText = await readFile(path.join(root, DIAGNOSTICS_HELPER), 'utf8');
   const contractText = await readFile(path.join(root, CONTRACT_TRANSITION), 'utf8');
   const contractExampleText = await readFile(path.join(root, CONTRACT_EXAMPLE), 'utf8');
@@ -129,6 +141,15 @@ async function validateExecutor(text, root = ROOT) {
     'executor-admission.json', '.execution_plan', 'planned_migration_digests', SEALED_PLAN_EXTRACTION,
     'd1-executor-plan.py materialize', '--require-plan-digests', 'expected-pending.json', 'ledger-before-names.json',
     'd1 migrations list', 'd1-executor-plan.py verify-pending', 'd1 time-travel info',
+    TARGET_FENCE_CREATE_STEP, TARGET_FENCE_MARKER_STEP, TARGET_FENCE_VERIFY_STEP,
+    '--example d1-execution-control', 'd1-execution-control acquire-fence', 'd1-execution-control verify-fence',
+    "'fence_epoch': int(os.environ['GITHUB_RUN_NUMBER'])", "'executor_run_id': int(os.environ['GITHUB_RUN_ID'])",
+    "'run_attempt': int(os.environ['GITHUB_RUN_ATTEMPT'])", TARGET_FENCE_LEASE,
+    'd1-target-fence-${{ github.run_number }}-${{ github.run_id }}-${{ github.run_attempt }}',
+    TARGET_FENCE_NEWER_RUN_MARKER, 'actions/runs/$run_id/jobs?filter=all&per_page=100',
+    'actions/runs/$run_id/artifacts?per_page=100', TARGET_FENCE_SUCCESS_MARKER,
+    "'history_complete': True", "'current_marker_succeeded': True", TARGET_FENCE_OBSERVATION,
+    TARGET_FENCE_VERIFICATION, 'TARGET_FENCE_ACQUIRED', 'TARGET_FENCE_VERIFIED',
     'ledger-fence.json', 'status-fence.json',
     'cmp --silent artifacts/d1-migration/status-before.json artifacts/d1-migration/status-fence.json',
     'ledger-fence-names.json',
@@ -137,6 +158,7 @@ async function validateExecutor(text, root = ROOT) {
     'd1 verify', POST_CONTRACT_LEDGER, 'd1 contract-transition verify', 'predecessor_ledger_state',
     'runtime_target_revision', 'transition_migrations',
     'PRAGMA foreign_key_check', 'PRAGMA integrity_check',
+    "'target_fence': load('target-fence-lease.json')", "'target_fence_verification': load('target-fence-verification.json')",
     "provider_mutation_executed': bool(plan.get('planned_migrations'))", "automatic_restore_executed': False",
     "secret_material_recorded': False", 'actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a',
     '--experimental-provision=false', '--experimental-auto-create=false',
@@ -224,6 +246,17 @@ async function validateExecutor(text, root = ROOT) {
     if (!compactAdmissionText.includes(marker)) fail(`typed executor admission lost sealed transaction/authorization projection: ${marker}`);
   }
   for (const marker of [
+    'pub fn acquire_target_fence', 'pub fn verify_target_fence',
+    'target fence history is incomplete or unknown; abort before provider mutation',
+    'stale executor fence rejected', 'split-brain target fence rejected',
+    'same_target(&observed.target, &lease.target)', 'input.run_attempt != 1',
+  ]) {
+    if (!executionControlText.includes(marker)) fail(`typed target-fence owner lost fail-closed marker: ${marker}`);
+  }
+  for (const marker of ['"acquire-fence"', '"verify-fence"', 'TargetFenceObservation', 'TargetFenceLease']) {
+    if (!executionControlExampleText.includes(marker)) fail(`headless target-fence adapter lost marker: ${marker}`);
+  }
+  for (const marker of [
     'verify_post_transition', 'post-contract verification requires exactly one canonical 0031 -> 0032 transition',
     'd1 contract-transition verify', 'EXACT_ONE_STEP_0032_CONTRACT', 'RUNTIME_WINDOW_0031_0032_VERIFIED',
   ]) {
@@ -259,10 +292,10 @@ async function validateExecutor(text, root = ROOT) {
   for (const forbidden of [
     REPLAY_PROOF_STEP, CONSUMPTION_STEP, REPLAY_RUN_MARKER,
     'actions/workflows/d1-migration-executor.yml/runs?event=workflow_dispatch&per_page=100',
-    CONSUMPTION_ARTIFACT,
+    CONSUMPTION_ARTIFACT, TARGET_FENCE_CREATE_STEP, TARGET_FENCE_MARKER_STEP, TARGET_FENCE_VERIFY_STEP,
   ]) {
     if (authorizeBody.includes(forbidden)) {
-      fail(`preflight authorization must not consume or replay-fence before typed executor admission: ${forbidden}`);
+      fail(`preflight authorization must not consume or target-fence before typed executor admission: ${forbidden}`);
     }
   }
 
@@ -311,15 +344,18 @@ async function validateExecutor(text, root = ROOT) {
   const admissionIndex = text.indexOf('Load immutable prepared transaction and verify typed executor admission');
   const replayIndex = text.indexOf(`\n      - name: ${REPLAY_PROOF_STEP}`);
   const consumptionIndex = text.indexOf(`\n      - name: ${CONSUMPTION_STEP}`);
+  const targetFenceCreateIndex = text.indexOf(`\n      - name: ${TARGET_FENCE_CREATE_STEP}`);
+  const targetFenceMarkerIndex = text.indexOf(`\n      - name: ${TARGET_FENCE_MARKER_STEP}`);
   const metadataIndex = text.indexOf('Materialize exact metadata inputs and bounded provider config');
   const policyIndex = text.indexOf('Consume sealed ordinary plan and run fresh compatibility or contract gates');
   const diagnosticUploadIndex = text.indexOf('Upload metadata-only D1 gate diagnostics on policy failure');
   const materializeIndex = text.indexOf('Materialize exactly authorized planned_migrations from typed successor projection');
   const firstPendingIndex = text.indexOf('Compare Wrangler pending list to exact authorized plan with observe credential');
+  const targetFenceVerifyIndex = text.indexOf(`\n      - name: ${TARGET_FENCE_VERIFY_STEP}`);
   const observeIndex = text.indexOf(OBSERVE_REF);
   const deployIndex = text.indexOf(DEPLOY_REF);
-  if (!(provenanceIndex >= 0 && admissionIndex > provenanceIndex && replayIndex > admissionIndex && consumptionIndex > replayIndex && metadataIndex > consumptionIndex && observeIndex > metadataIndex && policyIndex > observeIndex && diagnosticUploadIndex > policyIndex && materializeIndex > diagnosticUploadIndex && firstPendingIndex > materializeIndex && deployIndex > firstPendingIndex)) {
-    fail('authorization provenance must precede typed admission; successful-marker replay proof and consumption must follow admission and precede every provider credential; bounded materialization remains after read-only policy');
+  if (!(provenanceIndex >= 0 && admissionIndex > provenanceIndex && replayIndex > admissionIndex && consumptionIndex > replayIndex && targetFenceCreateIndex > consumptionIndex && targetFenceMarkerIndex > targetFenceCreateIndex && metadataIndex > targetFenceMarkerIndex && observeIndex > metadataIndex && policyIndex > observeIndex && diagnosticUploadIndex > policyIndex && materializeIndex > diagnosticUploadIndex && firstPendingIndex > materializeIndex && targetFenceVerifyIndex > firstPendingIndex && deployIndex > targetFenceVerifyIndex)) {
+    fail('authorization provenance must precede typed admission and one-shot consumption; typed target-fence acquisition must precede every provider credential; typed prewrite fence verification must precede the sole deploy credential');
   }
 
   const replayStepEnd = text.indexOf('\n      - name:', replayIndex + 1);
@@ -345,6 +381,48 @@ async function validateExecutor(text, root = ROOT) {
   }
   if (consumptionBody.includes('CLOUDFLARE_API_TOKEN')) {
     fail('authorization consumption marker must be emitted before provider credentials are exposed');
+  }
+
+  const targetFenceCreateEnd = text.indexOf('\n      - name:', targetFenceCreateIndex + 1);
+  const targetFenceCreateBody = text.slice(targetFenceCreateIndex, targetFenceCreateEnd < 0 ? text.length : targetFenceCreateEnd);
+  for (const marker of [
+    "'fence_epoch': int(os.environ['GITHUB_RUN_NUMBER'])", "'executor_run_id': int(os.environ['GITHUB_RUN_ID'])",
+    "'run_attempt': int(os.environ['GITHUB_RUN_ATTEMPT'])", 'd1-execution-control acquire-fence',
+    TARGET_FENCE_LEASE, 'TARGET_FENCE_ACQUIRED',
+  ]) {
+    if (!targetFenceCreateBody.includes(marker)) fail(`typed target-fence acquisition lost marker: ${marker}`);
+  }
+  if (targetFenceCreateBody.includes('CLOUDFLARE_API_TOKEN: ${{ secrets.')) {
+    fail('typed target-fence acquisition must remain provider-credential-free');
+  }
+
+  const targetFenceMarkerEnd = text.indexOf('\n      - name:', targetFenceMarkerIndex + 1);
+  const targetFenceMarkerBody = text.slice(targetFenceMarkerIndex, targetFenceMarkerEnd < 0 ? text.length : targetFenceMarkerEnd);
+  for (const marker of [
+    'actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a',
+    'd1-target-fence-${{ github.run_number }}-${{ github.run_id }}-${{ github.run_attempt }}',
+    TARGET_FENCE_LEASE, 'if-no-files-found: error', 'retention-days: 30',
+  ]) {
+    if (!targetFenceMarkerBody.includes(marker)) fail(`durable target-fence marker lost artifact contract: ${marker}`);
+  }
+  if (targetFenceMarkerBody.includes('CLOUDFLARE_API_TOKEN')) {
+    fail('durable target-fence marker must remain provider-credential-free');
+  }
+
+  const targetFenceVerifyEnd = text.indexOf('\n      - name:', targetFenceVerifyIndex + 1);
+  const targetFenceVerifyBody = text.slice(targetFenceVerifyIndex, targetFenceVerifyEnd < 0 ? text.length : targetFenceVerifyEnd);
+  for (const marker of [
+    'actions/workflows/d1-migration-executor.yml/runs?event=workflow_dispatch&per_page=100',
+    TARGET_FENCE_NEWER_RUN_MARKER, 'actions/runs/$run_id/jobs?filter=all&per_page=100',
+    TARGET_FENCE_SUCCESS_MARKER, 'actions/runs/$run_id/artifacts?per_page=100',
+    "'history_complete': True", "'current_marker_succeeded': True",
+    TARGET_FENCE_OBSERVATION, 'd1-execution-control verify-fence', TARGET_FENCE_VERIFICATION,
+    'TARGET_FENCE_VERIFIED',
+  ]) {
+    if (!targetFenceVerifyBody.includes(marker)) fail(`typed prewrite target-fence verification lost marker: ${marker}`);
+  }
+  if (targetFenceVerifyBody.includes('CLOUDFLARE_API_TOKEN: ${{ secrets.')) {
+    fail('typed prewrite target-fence verification must complete before provider mutation credentials exist');
   }
 
   const policyBody = text.slice(policyIndex, diagnosticUploadIndex);
@@ -460,6 +538,11 @@ async function selfTest(text) {
     ['missing prior-run replay fence', REPLAY_RUN_MARKER, '.run_number == $current_number'],
     ['missing successful consumption criterion', REPLAY_SUCCESS_MARKER, '.name == $step'],
     ['missing consumption marker step', `      - name: ${CONSUMPTION_STEP}`, '      - name: Removed authorization consumption marker'],
+    ['missing canonical target-fence epoch', "'fence_epoch': int(os.environ['GITHUB_RUN_NUMBER'])", "'fence_epoch': 1"],
+    ['missing durable target-fence marker', `      - name: ${TARGET_FENCE_MARKER_STEP}`, '      - name: Removed durable target fence'],
+    ['missing newer target-fence horizon', TARGET_FENCE_NEWER_RUN_MARKER, '.run_number < $current_number'],
+    ['missing complete target-fence history', "'history_complete': True", "'history_complete': False"],
+    ['missing typed target-fence verification', 'd1-execution-control verify-fence', 'd1-execution-control removed-verify-fence'],
   ]) {
     await expectRejected(label, replaceFixture(label, text, from, to));
   }
@@ -490,7 +573,7 @@ async function selfTest(text) {
     'second remote apply',
     `${text}\n# npx --yes ${PINNED_WRANGLER} d1 migrations apply X --remote --experimental-provision=false --experimental-auto-create=false\n`,
   );
-  console.log('Protected D1 executor typed-admission-before-consumption, successful-marker replay, sealed-plan, exact-prestate, digest-bound materialization, fail-closed diagnostics, typed post-CONTRACT, pending-list, confirmation-cardinality and double-ledger-fence negative fixtures passed.');
+  console.log('Protected D1 executor typed-admission-before-consumption, durable target-fence acquisition, complete newer-marker scan, typed prewrite fence verification, sealed-plan, exact-prestate, digest-bound materialization, fail-closed diagnostics, typed post-CONTRACT, pending-list and one-owner negative fixtures passed.');
 }
 
 async function main() {
@@ -501,7 +584,7 @@ async function main() {
   }
   if (process.argv.length > 2) fail(`unknown arguments: ${process.argv.slice(2).join(' ')}`);
   await validateExecutor(text, ROOT);
-  console.log('Protected D1 executor contract passed: workflow-dispatch-only, immutable OWNER authorization provenance, typed admission before durable one-shot consumption/replay fencing, staging-only, sealed ordinary plan consumption, exact sealed prestate, digest-bound materialization, fail-closed diagnostics, bounded successor lineage, Wrangler pending equality, provider/ledger re-fence, typed post-CONTRACT verification, one remote apply owner, no automatic restore or provisioning.');
+  console.log('Protected D1 executor contract passed: workflow-dispatch-only, immutable OWNER authorization provenance, typed admission before durable one-shot consumption/replay fencing, target-scoped typed fence acquisition and prewrite verification, staging-only, sealed ordinary plan consumption, exact sealed prestate, digest-bound materialization, fail-closed diagnostics, bounded successor lineage, Wrangler pending equality, provider/ledger re-fence, typed post-CONTRACT verification, one remote apply owner, no automatic restore or provisioning.');
 }
 
 main().catch((error) => {
