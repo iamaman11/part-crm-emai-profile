@@ -341,6 +341,7 @@ jobs:
           env -u CLOUDFLARE_API_TOKEN -u CLOUDFLARE_ACCOUNT_ID python scripts/check-opsctl-readonly.py
           env -u CLOUDFLARE_API_TOKEN -u CLOUDFLARE_ACCOUNT_ID cargo build --locked --manifest-path tools/opsctl/Cargo.toml
           env -u CLOUDFLARE_API_TOKEN -u CLOUDFLARE_ACCOUNT_ID cargo build --locked --manifest-path tools/opsctl/Cargo.toml --example d1-executor-admission
+          env -u CLOUDFLARE_API_TOKEN -u CLOUDFLARE_ACCOUNT_ID cargo build --locked --manifest-path tools/opsctl/Cargo.toml --example d1-execution-control
 
       - name: Load immutable prepared transaction and verify typed executor admission
         if: inputs.transition_mode == 'ordinary'
@@ -447,6 +448,79 @@ jobs:
         with:
           name: d1-authorization-consumption-${{ inputs.authorization_digest }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: artifacts/d1-migration/authorization-consumption.json
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Create typed target fence lease
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts/d1-migration
+          python - <<'PY'
+          import json
+          import os
+          import time
+          from pathlib import Path
+
+          ordinary = os.environ['TRANSITION_MODE'] == 'ordinary'
+          value = {
+              'schema_version': 1,
+              'target': {
+                  'environment': os.environ['TARGET_ENVIRONMENT'],
+                  'account_id': os.environ['CLOUDFLARE_ACCOUNT_ID'],
+                  'database_name': os.environ['DATABASE_NAME'],
+                  'database_id': os.environ['DATABASE_ID'],
+              },
+              'phase': 'ORDINARY' if ordinary else 'CONTRACT',
+              'operation_identity': os.environ['TRANSACTION_ID'] if ordinary else os.environ['EXPECTED_RELEASE_SET_ID'],
+              'transaction_id': os.environ['TRANSACTION_ID'] if ordinary else None,
+              'authorization_digest': os.environ['AUTHORIZATION_DIGEST'] if ordinary else None,
+              'source_sha': os.environ['SOURCE_SHA'],
+              'executor_run_id': int(os.environ['GITHUB_RUN_ID']),
+              'fence_epoch': int(os.environ['GITHUB_RUN_NUMBER']),
+              'run_attempt': int(os.environ['GITHUB_RUN_ATTEMPT']),
+              'acquired_at_unix_seconds': int(time.time()),
+          }
+          Path('artifacts/d1-migration/target-fence-input.json').write_text(
+              json.dumps(value, sort_keys=True, separators=(',', ':')) + '\n', encoding='utf-8'
+          )
+          PY
+          env -u CLOUDFLARE_API_TOKEN -u CLOUDFLARE_ACCOUNT_ID \
+            tools/opsctl/target/debug/examples/d1-execution-control acquire-fence \
+              --input artifacts/d1-migration/target-fence-input.json \
+              > artifacts/d1-migration/target-fence-lease.json
+          operation_identity="$TRANSACTION_ID"
+          expected_phase=ORDINARY
+          if [ "$TRANSITION_MODE" = contract ]; then
+            operation_identity="$EXPECTED_RELEASE_SET_ID"
+            expected_phase=CONTRACT
+          fi
+          jq -e \
+            --arg environment "$TARGET_ENVIRONMENT" \
+            --arg account_id "$CLOUDFLARE_ACCOUNT_ID" \
+            --arg database_name "$DATABASE_NAME" \
+            --arg database_id "$DATABASE_ID" \
+            --arg phase "$expected_phase" \
+            --arg operation_identity "$operation_identity" \
+            --arg source_sha "$SOURCE_SHA" \
+            --argjson executor_run_id "$GITHUB_RUN_ID" \
+            --argjson fence_epoch "$GITHUB_RUN_NUMBER" \
+            '.schema_version == 1 and .status == "TARGET_FENCE_ACQUIRED" and .target.environment == $environment and .target.account_id == $account_id and .target.database_name == $database_name and .target.database_id == $database_id and .phase == $phase and .operation_identity == $operation_identity and .source_sha == $source_sha and .executor_run_id == $executor_run_id and .fence_epoch == $fence_epoch and .run_attempt == 1 and (.fence_id | test("^[0-9a-f]{64}$"))' \
+            artifacts/d1-migration/target-fence-lease.json >/dev/null
+          if [ "$TRANSITION_MODE" = ordinary ]; then
+            jq -e \
+              --arg transaction_id "$TRANSACTION_ID" \
+              --arg authorization_digest "$AUTHORIZATION_DIGEST" \
+              '.transaction_id == $transaction_id and .authorization_digest == $authorization_digest' \
+              artifacts/d1-migration/target-fence-lease.json >/dev/null
+          else
+            jq -e '.transaction_id == null and .authorization_digest == null' artifacts/d1-migration/target-fence-lease.json >/dev/null
+          fi
+
+      - name: Acquire durable target fence
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: d1-target-fence-${{ github.run_number }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: artifacts/d1-migration/target-fence-lease.json
           if-no-files-found: error
           retention-days: 30
 
@@ -676,6 +750,89 @@ jobs:
             --experimental-provision=false --experimental-auto-create=false \
             > artifacts/d1-migration/pre-migration-bookmark.json
 
+      - name: Verify typed target fence immediately before provider mutation
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          newer_runs="$RUNNER_TEMP/d1-target-fence-newer-runs.json"
+          gh api --paginate \
+            "repos/$GITHUB_REPOSITORY/actions/workflows/d1-migration-executor.yml/runs?event=workflow_dispatch&per_page=100" |
+            jq -s --argjson current_number "$GITHUB_RUN_NUMBER" \
+              '[.[].workflow_runs[] | select(.run_number > $current_number) | {id, run_number}] | unique_by(.id)' \
+              > "$newer_runs"
+          leases_jsonl="$RUNNER_TEMP/d1-target-fence-observed-leases.jsonl"
+          : > "$leases_jsonl"
+          while IFS=$'\t' read -r run_id run_number; do
+            jobs_json="$RUNNER_TEMP/d1-target-fence-jobs-$run_id.json"
+            gh api --paginate "repos/$GITHUB_REPOSITORY/actions/runs/$run_id/jobs?filter=all&per_page=100" |
+              jq -s '[.[].jobs[]?]' > "$jobs_json"
+            hits="$(jq --arg step 'Acquire durable target fence' '[.[] | .steps[]? | select(.name == $step and .conclusion == "success")] | length' "$jobs_json")"
+            if [ "$hits" -eq 0 ]; then
+              continue
+            fi
+            test "$hits" -eq 1
+            artifact_name="d1-target-fence-$run_number-$run_id-1"
+            artifacts_json="$RUNNER_TEMP/d1-target-fence-artifacts-$run_id.json"
+            gh api --paginate "repos/$GITHUB_REPOSITORY/actions/runs/$run_id/artifacts?per_page=100" |
+              jq -s '[.[].artifacts[]?]' > "$artifacts_json"
+            jq -e --arg name "$artifact_name" '[.[] | select(.name == $name and .expired == false)] | length == 1' "$artifacts_json" >/dev/null
+            lease_dir="$RUNNER_TEMP/d1-target-fence-lease-$run_id"
+            rm -rf "$lease_dir"
+            mkdir -p "$lease_dir"
+            gh run download "$run_id" --repo "$GITHUB_REPOSITORY" --name "$artifact_name" --dir "$lease_dir"
+            test -f "$lease_dir/target-fence-lease.json"
+            test "$(find "$lease_dir" -type f | wc -l)" -eq 1
+            jq -c '.' "$lease_dir/target-fence-lease.json" >> "$leases_jsonl"
+          done < <(jq -r '.[] | [.id, .run_number] | @tsv' "$newer_runs")
+          python - <<'PY'
+          import json
+          import os
+          import time
+          from pathlib import Path
+
+          leases_path = Path(os.environ['RUNNER_TEMP'], 'd1-target-fence-observed-leases.jsonl')
+          leases = []
+          for line in leases_path.read_text(encoding='utf-8').splitlines():
+              value = json.loads(line)
+              if not isinstance(value, dict):
+                  raise SystemExit('observed target fence lease must be one JSON object')
+              leases.append(value)
+          observation = {
+              'schema_version': 1,
+              'observed_at_unix_seconds': int(time.time()),
+              'history_complete': True,
+              'current_marker_succeeded': True,
+              'current_executor_run_id': int(os.environ['GITHUB_RUN_ID']),
+              'current_fence_epoch': int(os.environ['GITHUB_RUN_NUMBER']),
+              'observed_acquired_leases': leases,
+          }
+          Path('artifacts/d1-migration/target-fence-observation.json').write_text(
+              json.dumps(observation, sort_keys=True, separators=(',', ':')) + '\n', encoding='utf-8'
+          )
+          PY
+          env -u CLOUDFLARE_API_TOKEN -u CLOUDFLARE_ACCOUNT_ID \
+            tools/opsctl/target/debug/examples/d1-execution-control verify-fence \
+              --lease artifacts/d1-migration/target-fence-lease.json \
+              --observation artifacts/d1-migration/target-fence-observation.json \
+              > artifacts/d1-migration/target-fence-verification.json
+          fence_id="$(jq -r '.fence_id' artifacts/d1-migration/target-fence-lease.json)"
+          operation_identity="$TRANSACTION_ID"
+          if [ "$TRANSITION_MODE" = contract ]; then
+            operation_identity="$EXPECTED_RELEASE_SET_ID"
+          fi
+          jq -e \
+            --arg fence_id "$fence_id" \
+            --arg environment "$TARGET_ENVIRONMENT" \
+            --arg account_id "$CLOUDFLARE_ACCOUNT_ID" \
+            --arg database_name "$DATABASE_NAME" \
+            --arg database_id "$DATABASE_ID" \
+            --arg operation_identity "$operation_identity" \
+            --argjson executor_run_id "$GITHUB_RUN_ID" \
+            --argjson fence_epoch "$GITHUB_RUN_NUMBER" \
+            '.schema_version == 1 and .status == "TARGET_FENCE_VERIFIED" and .fence_id == $fence_id and .target.environment == $environment and .target.account_id == $account_id and .target.database_name == $database_name and .target.database_id == $database_id and .operation_identity == $operation_identity and .executor_run_id == $executor_run_id and .fence_epoch == $fence_epoch' \
+            artifacts/d1-migration/target-fence-verification.json >/dev/null
+
       - name: Revalidate exact ledger fence and apply planned migrations with deploy credential
         if: steps.policy.outputs.apply_required == 'true'
         env:
@@ -816,6 +973,8 @@ jobs:
               'evidence_kind': 'protected-d1-migration-execution',
               'context': load('context.json'),
               'executor_admission': load('executor-admission.json', optional=True),
+              'target_fence': load('target-fence-lease.json'),
+              'target_fence_verification': load('target-fence-verification.json'),
               'provider_identity': load('provider-identity.json'),
               'status_before': load('status-before.json'),
               'status_fence': load('status-fence.json', optional=True),
@@ -838,7 +997,7 @@ jobs:
           for sensitive in (
               'wrangler.json', 'target-release.json', 'current-release.json', 'known-good-release.json',
               'preconditions.json', 'ledger-fence.json', 'provider-identity-fence.json',
-              'transaction-authorization.json',
+              'transaction-authorization.json', 'target-fence-input.json', 'target-fence-observation.json',
           ):
               (root / sensitive).unlink(missing_ok=True)
           PY
