@@ -1,0 +1,72 @@
+name: D1 TX-6 Orphan Registration Retirement
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/d1-tx6-transaction-preflight.yml'
+
+permissions:
+  actions: write
+  contents: read
+
+concurrency:
+  group: d1-tx6-orphan-registration-retirement-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+env:
+  ORPHAN_WORKFLOW_ID: '351850738'
+  ORPHAN_WORKFLOW_PATH: '.github/workflows/d1-tx6-transaction-preflight.yml'
+
+jobs:
+  retire:
+    name: Retire exact orphan Actions registration
+    if: github.event.pull_request.number == 628 && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 4
+    steps:
+      - name: Checkout exact candidate source
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Verify exact source checkout
+        env:
+          EXPECTED_SOURCE_SHA: ${{ github.event.pull_request.head.sha }}
+        run: python -c "import os, subprocess; actual = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(); expected = os.environ['EXPECTED_SOURCE_SHA']; assert actual == expected, f'expected {expected}, got {actual}'"
+
+      - name: Disable only the exact orphan registration and prove terminal state
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          before="$RUNNER_TEMP/orphan-before.json"
+          after="$RUNNER_TEMP/orphan-after.json"
+          endpoint="repos/$GITHUB_REPOSITORY/actions/workflows/$ORPHAN_WORKFLOW_ID"
+
+          gh api "$endpoint" > "$before"
+          test "$(jq -er '.id | tostring' "$before")" = "$ORPHAN_WORKFLOW_ID"
+          test "$(jq -er '.path' "$before")" = "$ORPHAN_WORKFLOW_PATH"
+          state="$(jq -er '.state' "$before")"
+
+          case "$state" in
+            active)
+              gh api --method PUT "$endpoint/disable"
+              ;;
+            disabled_manually)
+              ;;
+            *)
+              echo "Unexpected orphan workflow state: $state" >&2
+              exit 1
+              ;;
+          esac
+
+          gh api "$endpoint" > "$after"
+          test "$(jq -er '.id | tostring' "$after")" = "$ORPHAN_WORKFLOW_ID"
+          test "$(jq -er '.path' "$after")" = "$ORPHAN_WORKFLOW_PATH"
+          test "$(jq -er '.state' "$after")" = 'disabled_manually'
+
+          echo "ORPHAN_WORKFLOW_ID=$ORPHAN_WORKFLOW_ID"
+          echo "ORPHAN_WORKFLOW_PATH=$ORPHAN_WORKFLOW_PATH"
+          echo "ORPHAN_WORKFLOW_STATE=disabled_manually"
