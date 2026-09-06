@@ -173,6 +173,7 @@ jobs:
           test "$(jq -r '.author_association' "$auth_json")" = "OWNER"
           test "$(jq -r '.issue_url' "$auth_json")" = "https://api.github.com/repos/$GITHUB_REPOSITORY/issues/$EXPECTED_ISSUE"
           python - <<'PY'
+          import hashlib
           import json
           import os
           from pathlib import Path
@@ -208,8 +209,10 @@ jobs:
               raise SystemExit('authorization transaction_id does not match command')
           if value.get('authorization_reference') != comment.get('html_url'):
               raise SystemExit('authorization_reference must equal this exact GitHub comment URL')
+          authorization_digest = hashlib.sha256(raw.encode('utf-8')).hexdigest()
           with Path(os.environ['GITHUB_ENV']).open('a', encoding='utf-8') as fh:
               fh.write(f'TRANSACTION_AUTHORIZATION_JSON={raw}\n')
+              fh.write(f'AUTHORIZATION_DIGEST={authorization_digest}\n')
           PY
 
       - name: Checkout exact accepted-main source
@@ -330,17 +333,11 @@ jobs:
               raise SystemExit('current latest migration does not match sealed predecessor')
           PY
 
-      - name: Race-check main and conservatively prove source has not been dispatched
+      - name: Race-check main before dispatch
         run: |
           set -euo pipefail
           main_sha="$(gh api "repos/$GITHUB_REPOSITORY/branches/main" --jq '.commit.sha')"
           test "$main_sha" = "$SOURCE_SHA"
-          existing="$(
-            gh api --paginate \
-              "repos/$GITHUB_REPOSITORY/actions/workflows/d1-migration-executor.yml/runs?event=workflow_dispatch&per_page=100" |
-              jq -s --arg sha "$SOURCE_SHA" '[.[].workflow_runs[] | select(.head_sha == $sha)] | length'
-          )"
-          test "$existing" -eq 0
 
       - name: Dispatch sole canonical executor with exact typed transaction authorization
         run: |
@@ -366,10 +363,11 @@ jobs:
             --arg prepared_transaction_run_id "$PREPARED_TRANSACTION_RUN_ID" \
             --arg prepared_transaction_run_attempt "$PREPARED_TRANSACTION_RUN_ATTEMPT" \
             --arg transaction_id "$TRANSACTION_ID" \
+            --arg authorization_digest "$AUTHORIZATION_DIGEST" \
             --arg transaction_authorization_json "$TRANSACTION_AUTHORIZATION_JSON" \
             --arg confirmation "$confirmation" \
-            '{ref:$ref,inputs:{environment:$environment,source_sha:$source_sha,component:$component,account_id:$account_id,database_name:$database_name,database_id:$database_id,target_release_manifest_json:$target_release_manifest_json,current_release_manifest_json:$current_release_manifest_json,known_good_release_manifest_json:$known_good_release_manifest_json,transition_mode:$transition_mode,prepared_transaction_run_id:$prepared_transaction_run_id,prepared_transaction_run_attempt:$prepared_transaction_run_attempt,transaction_id:$transaction_id,transaction_authorization_json:$transaction_authorization_json,mutation_authorized:true,confirmation:$confirmation}}' \
+            '{ref:$ref,inputs:{environment:$environment,source_sha:$source_sha,component:$component,account_id:$account_id,database_name:$database_name,database_id:$database_id,target_release_manifest_json:$target_release_manifest_json,current_release_manifest_json:$current_release_manifest_json,known_good_release_manifest_json:$known_good_release_manifest_json,transition_mode:$transition_mode,prepared_transaction_run_id:$prepared_transaction_run_id,prepared_transaction_run_attempt:$prepared_transaction_run_attempt,transaction_id:$transaction_id,authorization_digest:$authorization_digest,transaction_authorization_json:$transaction_authorization_json,mutation_authorized:true,confirmation:$confirmation}}' \
             > "$RUNNER_TEMP/d1-dispatch.json"
           gh api --method POST "repos/$GITHUB_REPOSITORY/actions/workflows/d1-migration-executor.yml/dispatches" --input "$RUNNER_TEMP/d1-dispatch.json"
           rm -f "$RUNNER_TEMP/d1-dispatch.json"
-          echo "Canonical Phase A executor dispatch accepted for exact transaction $TRANSACTION_ID on main $SOURCE_SHA."
+          echo "Canonical Phase A executor dispatch accepted for exact transaction $TRANSACTION_ID authorization $AUTHORIZATION_DIGEST on main $SOURCE_SHA."

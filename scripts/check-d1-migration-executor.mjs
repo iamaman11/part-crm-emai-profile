@@ -8,6 +8,8 @@ import { fileURLToPath } from 'node:url';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const EXECUTOR = '.github/workflows/d1-migration-executor.yml';
+const V2_ROUTER = '.github/workflows/v2-phase-a-d1-command-router.yml';
+const LEGACY_V2_ONE_CLICK = '.github/workflows/v2-d1-one-click-dispatcher.yml';
 const ADAPTER = 'scripts/d1-executor-plan.py';
 const EXECUTOR_ADMISSION = 'tools/opsctl/src/d1/executor_admission.rs';
 const DIAGNOSTICS_HELPER = 'scripts/d1-gate-diagnostics.py';
@@ -24,6 +26,8 @@ const CONTRACT_CONFIRMATION = 'test "$CONFIRMATION" = "$SOURCE_SHA:$TARGET_ENVIR
 const POST_CONTRACT_LEDGER = '--post-ledger-json artifacts/d1-migration/ledger-after.json';
 const DIAGNOSTICS_PATH = 'artifacts/d1-migration/d1-gate-diagnostics.jsonl';
 const SEALED_PLAN_EXTRACTION = "jq '.execution_plan' artifacts/d1-migration/executor-admission.json > artifacts/d1-migration/plan.json";
+const AUTH_DIGEST_MARKER = "hashlib.sha256(raw.encode('utf-8')).hexdigest()";
+const REPLAY_RUN_MARKER = '.run_number < $current_number';
 const DIAGNOSTIC_REASON_CODES = [
   'D1_NATIVE_PLAN_COMMAND_FAILED',
   'D1_COMPATIBILITY_COMMAND_FAILED',
@@ -86,19 +90,30 @@ function validateSharedMutationGroup(executorText, promotionText) {
 
 async function validateExecutor(text, root = ROOT) {
   const promotionText = await readFile(path.join(root, PROMOTION), 'utf8');
+  const routerText = await readFile(path.join(root, V2_ROUTER), 'utf8');
   const adapterText = await readFile(path.join(root, ADAPTER), 'utf8');
   const admissionText = await readFile(path.join(root, EXECUTOR_ADMISSION), 'utf8');
   const compactAdmissionText = admissionText.replace(/\s+/g, '');
   const diagnosticsText = await readFile(path.join(root, DIAGNOSTICS_HELPER), 'utf8');
   const contractText = await readFile(path.join(root, CONTRACT_TRANSITION), 'utf8');
   const contractExampleText = await readFile(path.join(root, CONTRACT_EXAMPLE), 'utf8');
+  const workflows = await workflowPaths(root);
   validateSharedMutationGroup(text, promotionText);
 
   const requiredMarkers = [
-    'workflow_call:', 'workflow_dispatch:', 'environment: staging', `group: ${SHARED_MUTATION_GROUP}`,
-    'cancel-in-progress: false', 'authorize:', 'needs: authorize',
+    'workflow_dispatch:', 'run-name: D1 authorization=', 'issues: read', 'environment: staging',
+    `group: ${SHARED_MUTATION_GROUP}`, 'cancel-in-progress: false', 'authorize:', 'needs: authorize',
+    'authorization_digest:', 'AUTHORIZATION_DIGEST: ${{ inputs.authorization_digest }}',
     'test "$TARGET_ENVIRONMENT" = "staging"', 'test "$GITHUB_REF" = "refs/heads/main"',
     'test "$GITHUB_SHA" = "$SOURCE_SHA"', 'test "$MUTATION_AUTHORIZED" = "true"',
+    'test "$GITHUB_EVENT_NAME" = "workflow_dispatch"', 'test "$GITHUB_RUN_ATTEMPT" = "1"',
+    '[[ "$AUTHORIZATION_DIGEST" =~ ^[0-9a-f]{64}$ ]]', AUTH_DIGEST_MARKER,
+    'D1_TRANSACTION_AUTHORIZATION_V1', 'authorization_reference must identify an issue comment in this repository',
+    "comment.get('author_association') != 'OWNER'", "updated_at != created_at",
+    'authorization comment must be durably recorded inside its declared validity window',
+    'display_title', 'GITHUB_RUN_NUMBER', REPLAY_RUN_MARKER,
+    'actions/workflows/d1-migration-executor.yml/runs?event=workflow_dispatch&per_page=100',
+    '.authorization_digest == $authorization_digest',
     ORDINARY_CONFIRMATION, CONTRACT_CONFIRMATION,
     'transition_mode:', 'expected_release_set_id:', "'migrations_dir': 'migrations-bounded'", 'd1 repository',
     'd1 info', 'SELECT id, name FROM d1_migrations ORDER BY id', 'd1 status', 'd1 plan',
@@ -127,6 +142,43 @@ async function validateExecutor(text, root = ROOT) {
   for (const marker of requiredMarkers) {
     if (!text.includes(marker)) fail(`protected D1 executor lost required contract marker: ${marker}`);
   }
+  for (const forbidden of [
+    'workflow_call:', 'issues: write',
+    "'migrations_dir': '../../migrations/d1'", '"migrations_dir": "../../migrations/d1"',
+    'migrations_dir = ../../migrations/d1', 'd1 time-travel restore', 'time-travel restore', 'd1 create',
+    'database create', 'experimental-provision=true', 'experimental-auto-create=true', 'cancel-in-progress: true',
+    '          - production', 'environment: ${{ inputs.environment }}',
+  ]) {
+    if (text.includes(forbidden)) fail(`protected D1 executor contains forbidden marker: ${forbidden}`);
+  }
+  if (occurrenceCount(text, 'test "$GITHUB_RUN_ATTEMPT" = "1"') !== 2) {
+    fail('ordinary one-shot authorization must reject reruns in exactly the pre-Environment and mutation jobs');
+  }
+  if (occurrenceCount(text, '[[ "$AUTHORIZATION_DIGEST" =~ ^[0-9a-f]{64}$ ]]') !== 2) {
+    fail('authorization digest format must be enforced in exactly the pre-Environment and mutation jobs');
+  }
+  if (occurrenceCount(text, ORDINARY_CONFIRMATION) !== 2) {
+    fail(`ordinary mutation confirmation must be enforced exactly twice; observed=${occurrenceCount(text, ORDINARY_CONFIRMATION)}`);
+  }
+  if (occurrenceCount(text, CONTRACT_CONFIRMATION) !== 2) {
+    fail(`contract mutation confirmation must be enforced exactly twice; observed=${occurrenceCount(text, CONTRACT_CONFIRMATION)}`);
+  }
+  if (workflows.includes(LEGACY_V2_ONE_CLICK)) {
+    fail('superseded V2 one-click executor caller must remain retired');
+  }
+
+  for (const marker of [
+    AUTH_DIGEST_MARKER, 'AUTHORIZATION_DIGEST', '--arg authorization_digest "$AUTHORIZATION_DIGEST"',
+    'authorization_digest:$authorization_digest', 'TRANSACTION_AUTHORIZATION_JSON',
+  ]) {
+    if (!routerText.includes(marker)) fail(`V2 router lost exact typed authorization transport marker: ${marker}`);
+  }
+  for (const forbidden of [
+    'select(.head_sha == $sha)', 'conservatively prove source has not been dispatched',
+  ]) {
+    if (routerText.includes(forbidden)) fail(`V2 router revived source-wide replay fence: ${forbidden}`);
+  }
+
   for (const reasonCode of DIAGNOSTIC_REASON_CODES) {
     if (!diagnosticsText.includes(reasonCode)) fail(`D1 diagnostic helper lost stable reason code: ${reasonCode}`);
   }
@@ -135,12 +187,6 @@ async function validateExecutor(text, root = ROOT) {
     '::error title=', 'GITHUB_STEP_SUMMARY', 'self-test',
   ]) {
     if (!diagnosticsText.includes(marker)) fail(`D1 diagnostic helper lost metadata-only contract marker: ${marker}`);
-  }
-  if (occurrenceCount(text, ORDINARY_CONFIRMATION) !== 2) {
-    fail(`ordinary mutation confirmation must be enforced exactly twice; observed=${occurrenceCount(text, ORDINARY_CONFIRMATION)}`);
-  }
-  if (occurrenceCount(text, CONTRACT_CONFIRMATION) !== 2) {
-    fail(`contract mutation confirmation must be enforced exactly twice; observed=${occurrenceCount(text, CONTRACT_CONFIRMATION)}`);
   }
 
   for (const marker of [
@@ -162,8 +208,10 @@ async function validateExecutor(text, root = ROOT) {
     'pubpredecessor_migrations:Vec<String>',
     'predecessor_ledger_sha256:transaction.transaction_plan.predecessor_ledger_sha256.clone()',
     'predecessor_migrations:transaction.provider_observation.remote_migrations.clone()',
+    'pubauthorization_digest:String',
+    'authorization_digest:authorization.authorization_digest',
   ]) {
-    if (!compactAdmissionText.includes(marker)) fail(`typed executor admission lost sealed predecessor projection: ${marker}`);
+    if (!compactAdmissionText.includes(marker)) fail(`typed executor admission lost sealed transaction/authorization projection: ${marker}`);
   }
   for (const marker of [
     'verify_post_transition', 'post-contract verification requires exactly one canonical 0031 -> 0032 transition',
@@ -175,14 +223,6 @@ async function validateExecutor(text, root = ROOT) {
     if (!contractExampleText.includes(marker)) fail(`contract-transition entrypoint lost post-CONTRACT route: ${marker}`);
   }
 
-  for (const forbidden of [
-    "'migrations_dir': '../../migrations/d1'", '"migrations_dir": "../../migrations/d1"',
-    'migrations_dir = ../../migrations/d1', 'd1 time-travel restore', 'time-travel restore', 'd1 create',
-    'database create', 'experimental-provision=true', 'experimental-auto-create=true', 'cancel-in-progress: true',
-    '          - production', 'environment: ${{ inputs.environment }}',
-  ]) {
-    if (text.includes(forbidden)) fail(`protected D1 executor contains forbidden marker: ${forbidden}`);
-  }
   if (/create\s+table\s+[^\n;]*(?:d1|migration)[^\n;]*lock/is.test(text)) {
     fail('protected D1 executor must not invent a database-resident migration lock');
   }
@@ -201,6 +241,9 @@ async function validateExecutor(text, root = ROOT) {
   for (const marker of [
     'test "$TARGET_ENVIRONMENT" = "staging"', 'test "$COMPONENT" = "catalog" || test "$COMPONENT" = "resolver"',
     'test "$MUTATION_AUTHORIZED" = "true"', 'test "$COMPONENT" = "catalog"', 'test -n "$EXPECTED_RELEASE_SET_ID"',
+    'Bind ordinary authorization to immutable GitHub provenance and consume one-shot dispatch identity',
+    AUTH_DIGEST_MARKER, 'D1_TRANSACTION_AUTHORIZATION_V1', "comment.get('author_association') != 'OWNER'",
+    REPLAY_RUN_MARKER, 'test "$prior" -eq 0',
   ]) {
     if (!authorizeBody.includes(marker)) fail(`preflight authorization lost fail-closed marker: ${marker}`);
   }
@@ -246,14 +289,15 @@ async function validateExecutor(text, root = ROOT) {
   const deploySteps = (text.match(/CLOUDFLARE_API_TOKEN: \$\{\{ secrets\.CLOUDFLARE_API_TOKEN \}\}/g) ?? []).length;
   if (deploySteps !== 1) fail(`deploy-capable credential must appear exactly once; observed=${deploySteps}`);
 
+  const replayIndex = text.indexOf('Bind ordinary authorization to immutable GitHub provenance and consume one-shot dispatch identity');
   const admissionIndex = text.indexOf('Load immutable prepared transaction and verify typed executor admission');
   const policyIndex = text.indexOf('Consume sealed ordinary plan and run fresh compatibility or contract gates');
   const diagnosticUploadIndex = text.indexOf('Upload metadata-only D1 gate diagnostics on policy failure');
   const materializeIndex = text.indexOf('Materialize exactly authorized planned_migrations from typed successor projection');
   const firstPendingIndex = text.indexOf('Compare Wrangler pending list to exact authorized plan with observe credential');
   const deployIndex = text.indexOf(DEPLOY_REF);
-  if (!(admissionIndex >= 0 && policyIndex > admissionIndex && diagnosticUploadIndex > policyIndex && materializeIndex > diagnosticUploadIndex && firstPendingIndex > materializeIndex && deployIndex > firstPendingIndex)) {
-    fail('typed executor admission, sealed-plan consumption, durable failure diagnostics, digest/prestate-bound materialization and read-only pending proof must all precede deploy credentials');
+  if (!(replayIndex >= 0 && admissionIndex > replayIndex && policyIndex > admissionIndex && diagnosticUploadIndex > policyIndex && materializeIndex > diagnosticUploadIndex && firstPendingIndex > materializeIndex && deployIndex > firstPendingIndex)) {
+    fail('one-shot authorization provenance/replay, typed admission, sealed-plan policy, diagnostics, materialization and read-only pending proof must all precede deploy credentials');
   }
   const policyBody = text.slice(policyIndex, diagnosticUploadIndex);
   if (!policyBody.includes(SEALED_PLAN_EXTRACTION)) {
@@ -314,7 +358,7 @@ async function validateExecutor(text, root = ROOT) {
   }
 
   const remoteMutationPaths = [];
-  for (const workflowPath of await workflowPaths(root)) {
+  for (const workflowPath of workflows) {
     const candidate = normalizedShell(await readFile(path.join(root, workflowPath), 'utf8'));
     if (/d1 migrations apply\b[^\n]*?--remote\b/.test(candidate)) remoteMutationPaths.push(workflowPath);
   }
@@ -361,6 +405,11 @@ async function selfTest(text) {
     ['missing authorized migration digest enforcement', '--require-plan-digests', '--removed-require-plan-digests'],
     ['missing durable diagnostic path', `          path: ${DIAGNOSTICS_PATH}`, '          path: artifacts/d1-migration/removed-diagnostics.jsonl'],
     ['missing diagnostic failure condition', "if: failure() && steps.policy.outcome == 'failure'", "if: steps.policy.outcome == 'success'"],
+    ['missing authorization digest format gate', '[[ "$AUTHORIZATION_DIGEST" =~ ^[0-9a-f]{64}$ ]]', 'test -n "$AUTHORIZATION_DIGEST"'],
+    ['missing ordinary rerun rejection', 'test "$GITHUB_RUN_ATTEMPT" = "1"', 'test -n "$GITHUB_RUN_ATTEMPT"'],
+    ['missing authorization digest recomputation', AUTH_DIGEST_MARKER, "hashlib.sha256(b'unsafe').hexdigest()"],
+    ['missing immutable authorization comment', "updated_at != created_at", "updated_at == created_at"],
+    ['missing prior-run replay fence', REPLAY_RUN_MARKER, '.run_number == $current_number'],
   ]) {
     await expectRejected(label, replaceFixture(label, text, from, to));
   }
@@ -373,12 +422,16 @@ async function selfTest(text) {
       'python scripts/d1-prepare.py prepare # forbidden post-authorization replan',
     ),
   );
+  await expectRejected(
+    'reintroduced workflow-call bypass',
+    `# workflow_call:\n${text}`,
+  );
   await expectRejected('deploy token used for observation', replaceFixture('deploy token used for observation', text, OBSERVE_REF, DEPLOY_REF));
   await expectRejected(
     'second remote apply',
     `${text}\n# npx --yes ${PINNED_WRANGLER} d1 migrations apply X --remote --experimental-provision=false --experimental-auto-create=false\n`,
   );
-  console.log('Protected D1 executor sealed-plan, exact-prestate, digest-bound materialization, fail-closed diagnostics, bounded-lineage, typed post-CONTRACT verification, pending-list, confirmation-cardinality and double-ledger-fence negative fixtures passed.');
+  console.log('Protected D1 executor one-shot authorization provenance/replay, sealed-plan, exact-prestate, digest-bound materialization, fail-closed diagnostics, typed post-CONTRACT, pending-list, confirmation-cardinality and double-ledger-fence negative fixtures passed.');
 }
 
 async function main() {
@@ -389,7 +442,7 @@ async function main() {
   }
   if (process.argv.length > 2) fail(`unknown arguments: ${process.argv.slice(2).join(' ')}`);
   await validateExecutor(text, ROOT);
-  console.log('Protected D1 executor contract passed: staging-only, sealed ordinary plan consumption, exact sealed prestate, digest-bound materialization, fail-closed metadata diagnostics, bounded successor lineage, Wrangler pending equality, provider/ledger re-fence, typed post-CONTRACT verification, confirmation cardinality, one remote apply owner, no automatic restore or provisioning.');
+  console.log('Protected D1 executor contract passed: workflow-dispatch-only, one-shot immutable OWNER authorization provenance/replay fencing, staging-only, sealed ordinary plan consumption, exact sealed prestate, digest-bound materialization, fail-closed diagnostics, bounded successor lineage, Wrangler pending equality, provider/ledger re-fence, typed post-CONTRACT verification, one remote apply owner, no automatic restore or provisioning.');
 }
 
 main().catch((error) => {

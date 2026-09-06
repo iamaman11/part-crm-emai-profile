@@ -1,92 +1,8 @@
 name: Protected D1 Migration Executor
 
+run-name: D1 authorization=${{ inputs.authorization_digest || inputs.expected_release_set_id || 'none' }}
+
 on:
-  workflow_call:
-    inputs:
-      environment:
-        description: Exact protected target environment; AR-11 permits staging only
-        required: true
-        type: string
-      source_sha:
-        description: Exact accepted-main source SHA
-        required: true
-        type: string
-      component:
-        description: catalog or resolver
-        required: true
-        type: string
-      account_id:
-        description: Exact Cloudflare account ID for staging
-        required: true
-        type: string
-      database_name:
-        description: Exact existing D1 database name
-        required: true
-        type: string
-      database_id:
-        description: Exact existing D1 database UUID
-        required: true
-        type: string
-      target_release_manifest_json:
-        description: Exact target component release manifest JSON
-        required: true
-        type: string
-      current_release_manifest_json:
-        description: Exact currently deployed component release manifest JSON
-        required: true
-        type: string
-      known_good_release_manifest_json:
-        description: Exact last-known-good component release manifest JSON
-        required: true
-        type: string
-      preconditions_json:
-        description: Ordinary D1 preconditions or exact Phase-C contract-transition evidence
-        required: false
-        default: '{}'
-        type: string
-      transition_mode:
-        description: ordinary or the separately governed contract transition
-        required: false
-        default: ordinary
-        type: string
-      expected_release_set_id:
-        description: Exact deployed Release Set identity; required only for contract transition
-        required: false
-        default: ''
-        type: string
-      prepared_transaction_run_id:
-        description: Exact successful D1 Migration Prepare run carrying the immutable ordinary transaction
-        required: false
-        default: ''
-        type: string
-      prepared_transaction_run_attempt:
-        description: Exact prepare run attempt that published the immutable ordinary transaction artifact
-        required: false
-        default: ''
-        type: string
-      transaction_id:
-        description: Exact immutable ordinary TRANSACTION_ID
-        required: false
-        default: ''
-        type: string
-      transaction_authorization_json:
-        description: Strict secret-free transaction-scoped authorization JSON for the ordinary transaction
-        required: false
-        default: ''
-        type: string
-      mutation_authorized:
-        description: Explicit caller authorization for the staging migration mutation
-        required: true
-        type: boolean
-      confirmation:
-        description: Ordinary source:environment:component:database_id; contract additionally binds mode and Release Set
-        required: true
-        type: string
-    secrets:
-      CLOUDFLARE_OBSERVE_API_TOKEN:
-        required: true
-      CLOUDFLARE_API_TOKEN:
-        required: true
   workflow_dispatch:
     inputs:
       environment:
@@ -163,6 +79,11 @@ on:
         required: false
         default: ''
         type: string
+      authorization_digest:
+        description: SHA-256 of the exact canonical ordinary transaction authorization JSON
+        required: false
+        default: ''
+        type: string
       transaction_authorization_json:
         description: Strict secret-free transaction-scoped authorization JSON for the ordinary transaction
         required: false
@@ -181,6 +102,7 @@ on:
 permissions:
   actions: read
   contents: read
+  issues: read
 
 concurrency:
   group: release-set-promotion-staging
@@ -201,6 +123,7 @@ jobs:
       PREPARED_TRANSACTION_RUN_ID: ${{ inputs.prepared_transaction_run_id }}
       PREPARED_TRANSACTION_RUN_ATTEMPT: ${{ inputs.prepared_transaction_run_attempt }}
       TRANSACTION_ID: ${{ inputs.transaction_id }}
+      AUTHORIZATION_DIGEST: ${{ inputs.authorization_digest }}
       TRANSACTION_AUTHORIZATION_JSON: ${{ inputs.transaction_authorization_json }}
       MUTATION_AUTHORIZED: ${{ inputs.mutation_authorized }}
       CONFIRMATION: ${{ inputs.confirmation }}
@@ -208,6 +131,7 @@ jobs:
       - name: Fail closed before any Environment binding
         run: |
           set -euo pipefail
+          test "$GITHUB_EVENT_NAME" = "workflow_dispatch"
           test "$TARGET_ENVIRONMENT" = "staging"
           test "$COMPONENT" = "catalog" || test "$COMPONENT" = "resolver"
           test "$TRANSITION_MODE" = "ordinary" || test "$TRANSITION_MODE" = "contract"
@@ -215,17 +139,130 @@ jobs:
           test -n "$SOURCE_SHA"
           test -n "$DATABASE_ID"
           if [ "$TRANSITION_MODE" = ordinary ]; then
+            test "$GITHUB_RUN_ATTEMPT" = "1"
             test "$CONFIRMATION" = "$SOURCE_SHA:$TARGET_ENVIRONMENT:$COMPONENT:$DATABASE_ID"
             [[ "$PREPARED_TRANSACTION_RUN_ID" =~ ^[0-9]+$ ]]
             [[ "$PREPARED_TRANSACTION_RUN_ATTEMPT" =~ ^[1-9][0-9]*$ ]]
             [[ "$TRANSACTION_ID" =~ ^[0-9a-f]{64}$ ]]
+            [[ "$AUTHORIZATION_DIGEST" =~ ^[0-9a-f]{64}$ ]]
             test -n "$TRANSACTION_AUTHORIZATION_JSON"
-            jq -e 'type == "object"' <<<"$TRANSACTION_AUTHORIZATION_JSON" >/dev/null
           else
             test "$COMPONENT" = "catalog"
             test -n "$EXPECTED_RELEASE_SET_ID"
             test "$CONFIRMATION" = "$SOURCE_SHA:$TARGET_ENVIRONMENT:$COMPONENT:$DATABASE_ID:contract:$EXPECTED_RELEASE_SET_ID"
           fi
+
+      - name: Bind ordinary authorization to immutable GitHub provenance and consume one-shot dispatch identity
+        if: inputs.transition_mode == 'ordinary'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          auth_meta="$RUNNER_TEMP/d1-authorization-meta.json"
+          auth_comment="$RUNNER_TEMP/d1-authorization-comment.json"
+          python - <<'PY'
+          import hashlib
+          import json
+          import os
+          import re
+          from pathlib import Path
+
+          raw = os.environ['TRANSACTION_AUTHORIZATION_JSON']
+
+          def strict_object(pairs):
+              result = {}
+              for key, value in pairs:
+                  if key in result:
+                      raise ValueError(f'duplicate JSON key: {key}')
+                  result[key] = value
+              return result
+
+          try:
+              value = json.loads(raw, object_pairs_hook=strict_object)
+          except (json.JSONDecodeError, ValueError) as exc:
+              raise SystemExit(f'authorization payload is not strict JSON: {exc}')
+          if not isinstance(value, dict):
+              raise SystemExit('authorization payload must be one JSON object')
+          canonical = json.dumps(value, sort_keys=True, separators=(',', ':'), ensure_ascii=False)
+          if raw != canonical:
+              raise SystemExit('authorization payload must be exact canonical compact sorted JSON')
+          actual_digest = hashlib.sha256(raw.encode('utf-8')).hexdigest()
+          if actual_digest != os.environ['AUTHORIZATION_DIGEST']:
+              raise SystemExit('authorization_digest does not equal SHA-256 of exact canonical authorization JSON')
+          reference = value.get('authorization_reference')
+          if not isinstance(reference, str):
+              raise SystemExit('authorization_reference must be a GitHub issue comment URL')
+          repository = re.escape(os.environ['GITHUB_REPOSITORY'])
+          match = re.fullmatch(
+              rf'https://github\.com/{repository}/issues/([1-9][0-9]*)#issuecomment-([1-9][0-9]*)',
+              reference,
+          )
+          if match is None:
+              raise SystemExit('authorization_reference must identify an issue comment in this repository')
+          meta = {
+              'authorization_digest': actual_digest,
+              'authorization_reference': reference,
+              'issue_number': int(match.group(1)),
+              'comment_id': int(match.group(2)),
+              'issued_at_unix_seconds': value.get('issued_at_unix_seconds'),
+              'expires_at_unix_seconds': value.get('expires_at_unix_seconds'),
+          }
+          Path(os.environ['RUNNER_TEMP'], 'd1-authorization-meta.json').write_text(
+              json.dumps(meta, sort_keys=True, indent=2) + '\n', encoding='utf-8'
+          )
+          PY
+          comment_id="$(jq -r '.comment_id' "$auth_meta")"
+          issue_number="$(jq -r '.issue_number' "$auth_meta")"
+          gh api "repos/$GITHUB_REPOSITORY/issues/comments/$comment_id" > "$auth_comment"
+          python - <<'PY'
+          import json
+          import os
+          from datetime import datetime
+          from pathlib import Path
+
+          root = Path(os.environ['RUNNER_TEMP'])
+          meta = json.loads((root / 'd1-authorization-meta.json').read_text(encoding='utf-8'))
+          comment = json.loads((root / 'd1-authorization-comment.json').read_text(encoding='utf-8'))
+          raw = os.environ['TRANSACTION_AUTHORIZATION_JSON']
+          expected_body = f'D1_TRANSACTION_AUTHORIZATION_V1\n{raw}'
+          if not isinstance(comment.get('body'), str) or comment['body'].strip() != expected_body:
+              raise SystemExit('authorization reference comment body does not contain the exact typed authorization envelope')
+          if comment.get('html_url') != meta['authorization_reference']:
+              raise SystemExit('authorization reference URL does not equal fetched comment html_url')
+          expected_issue_url = f"https://api.github.com/repos/{os.environ['GITHUB_REPOSITORY']}/issues/{meta['issue_number']}"
+          if comment.get('issue_url') != expected_issue_url:
+              raise SystemExit('authorization comment issue provenance drifted')
+          if comment.get('author_association') != 'OWNER':
+              raise SystemExit('transaction authorization must be recorded by repository OWNER')
+          created_at = comment.get('created_at')
+          updated_at = comment.get('updated_at')
+          if not isinstance(created_at, str) or updated_at != created_at:
+              raise SystemExit('transaction authorization comment must be immutable after creation')
+          created_epoch = int(datetime.fromisoformat(created_at.replace('Z', '+00:00')).timestamp())
+          issued_at = meta.get('issued_at_unix_seconds')
+          expires_at = meta.get('expires_at_unix_seconds')
+          if not isinstance(issued_at, int) or not isinstance(expires_at, int):
+              raise SystemExit('authorization timestamps must be integers')
+          if created_epoch < issued_at or created_epoch > expires_at:
+              raise SystemExit('authorization comment must be durably recorded inside its declared validity window')
+          PY
+
+          expected_title="D1 authorization=$AUTHORIZATION_DIGEST"
+          current_run="$RUNNER_TEMP/current-d1-executor-run.json"
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" > "$current_run"
+          jq -e \
+            --arg title "$expected_title" \
+            --arg source "$SOURCE_SHA" \
+            --argjson number "$GITHUB_RUN_NUMBER" \
+            '.path == ".github/workflows/d1-migration-executor.yml" and .event == "workflow_dispatch" and .head_branch == "main" and .head_sha == $source and .display_title == $title and .run_number == $number and .run_attempt == 1' \
+            "$current_run" >/dev/null
+          prior="$(
+            gh api --paginate \
+              "repos/$GITHUB_REPOSITORY/actions/workflows/d1-migration-executor.yml/runs?event=workflow_dispatch&per_page=100" |
+              jq -s --arg title "$expected_title" --argjson current_number "$GITHUB_RUN_NUMBER" \
+                '[.[].workflow_runs[] | select(.display_title == $title and .run_number < $current_number)] | length'
+          )"
+          test "$prior" -eq 0
 
   migrate:
     needs: authorize
@@ -249,6 +286,7 @@ jobs:
       PREPARED_TRANSACTION_RUN_ID: ${{ inputs.prepared_transaction_run_id }}
       PREPARED_TRANSACTION_RUN_ATTEMPT: ${{ inputs.prepared_transaction_run_attempt }}
       TRANSACTION_ID: ${{ inputs.transaction_id }}
+      AUTHORIZATION_DIGEST: ${{ inputs.authorization_digest }}
       TRANSACTION_AUTHORIZATION_JSON: ${{ inputs.transaction_authorization_json }}
       MUTATION_AUTHORIZED: ${{ inputs.mutation_authorized }}
       CONFIRMATION: ${{ inputs.confirmation }}
@@ -256,6 +294,7 @@ jobs:
       - name: Reject non-main, non-exact, production, or disabled mutation authority
         run: |
           set -euo pipefail
+          test "$GITHUB_EVENT_NAME" = "workflow_dispatch"
           test "$GITHUB_REF" = "refs/heads/main"
           test "$GITHUB_SHA" = "$SOURCE_SHA"
           test "$TARGET_ENVIRONMENT" = "staging"
@@ -265,10 +304,12 @@ jobs:
           test -n "$CLOUDFLARE_ACCOUNT_ID"
           test "$CLOUDFLARE_ACCOUNT_ID" = "${{ inputs.account_id }}"
           if [ "$TRANSITION_MODE" = ordinary ]; then
+            test "$GITHUB_RUN_ATTEMPT" = "1"
             test "$CONFIRMATION" = "$SOURCE_SHA:$TARGET_ENVIRONMENT:$COMPONENT:$DATABASE_ID"
             [[ "$PREPARED_TRANSACTION_RUN_ID" =~ ^[0-9]+$ ]]
             [[ "$PREPARED_TRANSACTION_RUN_ATTEMPT" =~ ^[1-9][0-9]*$ ]]
             [[ "$TRANSACTION_ID" =~ ^[0-9a-f]{64}$ ]]
+            [[ "$AUTHORIZATION_DIGEST" =~ ^[0-9a-f]{64}$ ]]
             test -n "$TRANSACTION_AUTHORIZATION_JSON"
           else
             test "$COMPONENT" = catalog
@@ -350,10 +391,11 @@ jobs:
               > artifacts/d1-migration/executor-admission.json
           jq -e \
             --arg transaction_id "$TRANSACTION_ID" \
+            --arg authorization_digest "$AUTHORIZATION_DIGEST" \
             --arg source "$SOURCE_SHA" \
             --arg tree "$tree_sha" \
             --arg component "$COMPONENT" \
-            '.schema_version == 1 and .status == "EXECUTOR_ADMISSION_VERIFIED" and .mode == "read-only" and .authorization_consumed == false and .mutation_executed == false and .provider_mutation_executed == false and .transaction_id == $transaction_id and .source_sha == $source and .tree_sha == $tree and .phase == "ORDINARY" and (.execution_plan | .schema_version == 1 and .command == "d1 plan" and .mode == "read-only" and .mutation_executed == false and .component == $component and .allowed == true and (.apply_required == ((.planned_migrations | length) > 0)) and (.planned_migrations | type == "array") and (.planned_migration_digests | type == "array") and ((.planned_migration_digests | length) == (.planned_migrations | length)))' \
+            '.schema_version == 1 and .status == "EXECUTOR_ADMISSION_VERIFIED" and .mode == "read-only" and .authorization_consumed == false and .mutation_executed == false and .provider_mutation_executed == false and .transaction_id == $transaction_id and .authorization_digest == $authorization_digest and .source_sha == $source and .tree_sha == $tree and .phase == "ORDINARY" and (.execution_plan | .schema_version == 1 and .command == "d1 plan" and .mode == "read-only" and .mutation_executed == false and .component == $component and .allowed == true and (.apply_required == ((.planned_migrations | length) > 0)) and (.planned_migrations | type == "array") and (.planned_migration_digests | type == "array") and ((.planned_migration_digests | length) == (.planned_migrations | length)))' \
             artifacts/d1-migration/executor-admission.json >/dev/null
 
       - name: Materialize exact metadata inputs and bounded provider config
@@ -401,8 +443,12 @@ jobs:
               'transition_mode': os.environ['TRANSITION_MODE'],
               'expected_release_set_id': os.environ['EXPECTED_RELEASE_SET_ID'] or None,
               'transaction_id': os.environ['TRANSACTION_ID'] or None,
+              'authorization_digest': os.environ['AUTHORIZATION_DIGEST'] or None,
               'prepared_transaction_run_id': os.environ['PREPARED_TRANSACTION_RUN_ID'] or None,
               'prepared_transaction_run_attempt': os.environ['PREPARED_TRANSACTION_RUN_ATTEMPT'] or None,
+              'executor_run_id': os.environ['GITHUB_RUN_ID'],
+              'executor_run_number': os.environ['GITHUB_RUN_NUMBER'],
+              'executor_run_attempt': os.environ['GITHUB_RUN_ATTEMPT'],
               'mutation_authorized': True,
               'automatic_restore_allowed': False,
               'resource_auto_provisioning_allowed': False,
