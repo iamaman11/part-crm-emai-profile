@@ -1,0 +1,267 @@
+name: D1 TX-6 Transaction Preflight
+
+# TX-6/#624 transitional read-only adapter. It owns no D1 semantics and no provider
+# mutation. Retire it after the isolated rehearsal acceptance is durably complete.
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/d1-tx6-transaction-preflight.yml'
+      - 'scripts/d1-prepare.py'
+      - 'scripts/d1-executor-plan.py'
+      - 'tools/opsctl/src/d1/**'
+      - 'migrations/d1/**'
+      - 'migrations/d1-successor/**'
+  push:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/d1-tx6-transaction-preflight.yml'
+      - 'scripts/d1-prepare.py'
+      - 'scripts/d1-executor-plan.py'
+      - 'tools/opsctl/src/d1/**'
+      - 'migrations/d1/**'
+      - 'migrations/d1-successor/**'
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: d1-tx6-transaction-preflight-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  TX6_DATABASE_NAME: part-crm-d3a-bootstrap-proof
+  TX6_DATABASE_ID: 713dd6f2-646b-46ad-93eb-103d2d0b63c4
+  TX6_COMPONENT: catalog
+  TX6_KNOWN_GOOD_RELEASE_SET_ID: release-set-v3-sha256-e01338de30cdc4c334e210f9e2bd75a67837420dd370b83964caae452f77522c
+  TX6_KNOWN_GOOD_SOURCE_SHA: 852dd515121011130dbd3d7726b72483ecc85aaf
+  TX6_KNOWN_GOOD_MANIFEST_SHA256: cd57a6851a348c7044a628deae5a5804e0f7447cd0583c96bc61ad8f8812e10e
+
+jobs:
+  contract:
+    name: TX-6 transaction preflight contract
+    runs-on: ubuntu-24.04
+    timeout-minutes: 4
+    steps:
+      - name: Checkout exact candidate source
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Verify exact source checkout
+        env:
+          EXPECTED_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: python -c "import os, subprocess; actual = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(); expected = os.environ['EXPECTED_SOURCE_SHA']; assert actual == expected, f'expected {expected}, got {actual}'"
+
+      - name: Prove TX-6 preflight remains read-only and transitional
+        run: |
+          set -euo pipefail
+          python scripts/d1-prepare.py self-test
+          python scripts/d1-executor-plan.py self-test
+          python - <<'PY'
+          from pathlib import Path
+          source = Path('.github/workflows/d1-tx6-transaction-preflight.yml').read_text(encoding='utf-8')
+          forbidden = (
+              'secrets.' + 'CLOUDFLARE_API_TOKEN',
+              'd1 migrations' + ' apply',
+              'd1 time-travel' + ' restore',
+              'd1 ' + 'create',
+              'd1 ' + 'delete',
+              'd1-migration-executor.yml' + '/dispatches',
+          )
+          for value in forbidden:
+              assert value not in source, f'TX-6 preflight contains forbidden effect surface: {value}'
+          assert 'Retire it after the isolated rehearsal acceptance' in source
+          PY
+
+  preflight:
+    name: TX-6 hosted credential-free prepare preflight
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    needs: contract
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    environment: staging
+    env:
+      GH_TOKEN: ${{ github.token }}
+      CLOUDFLARE_OBSERVE_API_TOKEN: ${{ secrets.CLOUDFLARE_OBSERVE_API_TOKEN }}
+      CLOUDFLARE_DEPLOY_MANIFEST_JSON: ${{ secrets.CLOUDFLARE_DEPLOY_MANIFEST_JSON }}
+      SOURCE_SHA: ${{ github.sha }}
+    steps:
+      - name: Checkout exact accepted-main source
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Verify exact source checkout
+        env:
+          EXPECTED_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: python -c "import os, subprocess; actual = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(); expected = os.environ['EXPECTED_SOURCE_SHA']; assert actual == expected, f'expected {expected}, got {actual}'"
+
+      - name: Set up pinned Node for read-only Wrangler adapter
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
+        with:
+          node-version: '24.19.0'
+          package-manager-cache: false
+
+      - name: Build credential-free typed D1 owners
+        run: |
+          set -euo pipefail
+          env -u CLOUDFLARE_OBSERVE_API_TOKEN -u CLOUDFLARE_API_TOKEN -u CLOUDFLARE_ACCOUNT_ID \
+            cargo build --locked --manifest-path tools/opsctl/Cargo.toml
+          python scripts/d1-prepare.py self-test
+          python scripts/d1-executor-plan.py self-test
+
+      - name: Resolve exact source-bound target and accepted known-good manifests
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP/tx6-preflight"
+          mkdir -p "$root/target" "$root/known-good" artifacts/d1-tx6-transaction-preflight
+          target_release=''
+          for _ in $(seq 1 48); do
+            gh api "repos/$GITHUB_REPOSITORY/releases?per_page=100" > "$root/releases.json"
+            target_release="$(python - "$root/releases.json" "$SOURCE_SHA" <<'PY'
+          import json, sys
+          releases = json.load(open(sys.argv[1], encoding='utf-8'))
+          source = sys.argv[2]
+          matches = [r for r in releases if r.get('target_commitish') == source and isinstance(r.get('tag_name'), str) and r['tag_name'].startswith('release-set-v3-sha256-') and not r.get('draft')]
+          if len(matches) > 1:
+              raise SystemExit('multiple source-bound Release Sets found')
+          print(matches[0]['tag_name'] if matches else '')
+          PY
+          )"
+            if [ -n "$target_release" ]; then break; fi
+            sleep 15
+          done
+          test -n "$target_release"
+          gh release download "$target_release" --repo "$GITHUB_REPOSITORY" --pattern release-set.json --pattern control-plane.tar --dir "$root/target"
+          gh release download "$TX6_KNOWN_GOOD_RELEASE_SET_ID" --repo "$GITHUB_REPOSITORY" --pattern release-set.json --pattern control-plane.tar --dir "$root/known-good"
+          python - "$root" "$target_release" "$SOURCE_SHA" "$TX6_KNOWN_GOOD_RELEASE_SET_ID" "$TX6_KNOWN_GOOD_SOURCE_SHA" "$TX6_KNOWN_GOOD_MANIFEST_SHA256" <<'PY'
+          import hashlib, json, sys, tarfile
+          from pathlib import Path
+          root, target_id, source_sha, known_id, known_source, known_manifest_sha = sys.argv[1:]
+          root = Path(root)
+          def extract(folder, expected_id, expected_source, output):
+              rs = json.load(open(folder / 'release-set.json', encoding='utf-8'))
+              if rs.get('schema_version') != 3 or rs.get('release_set_id') != expected_id:
+                  raise SystemExit(f'Release Set identity mismatch for {folder}')
+              source = rs.get('source') or {}
+              if source.get('repository') != 'iamaman11/part-crm-emai-profile' or source.get('commit_sha') != expected_source or source.get('accepted_main') is not True:
+                  raise SystemExit(f'Release Set source mismatch for {folder}')
+              component = (rs.get('components') or {}).get('control_plane') or {}
+              if component.get('source_commit_sha') != expected_source:
+                  raise SystemExit(f'control_plane source mismatch for {folder}')
+              archive = folder / 'control-plane.tar'
+              if hashlib.sha256(archive.read_bytes()).hexdigest() != component.get('artifact_sha256'):
+                  raise SystemExit(f'control_plane artifact digest mismatch for {folder}')
+              with tarfile.open(archive, 'r:*') as tar:
+                  members = [m for m in tar.getmembers() if m.isfile() and Path(m.name).name == 'release-manifest.json']
+                  if len(members) != 1:
+                      raise SystemExit(f'control_plane manifest missing/ambiguous for {folder}')
+                  raw = tar.extractfile(members[0]).read()
+              if hashlib.sha256(raw).hexdigest() != component.get('component_manifest_sha256'):
+                  raise SystemExit(f'control_plane manifest digest mismatch for {folder}')
+              Path(output).write_bytes(raw)
+          extract(root / 'target', target_id, source_sha, root / 'target-manifest.json')
+          extract(root / 'known-good', known_id, known_source, root / 'known-good-manifest.json')
+          actual_known = hashlib.sha256((root / 'known-good-manifest.json').read_bytes()).hexdigest()
+          if actual_known != known_manifest_sha:
+              raise SystemExit(f'known-good exact manifest digest drifted: {actual_known}')
+          target = json.load(open(root / 'target-manifest.json', encoding='utf-8'))['schema_contract']
+          known = json.load(open(root / 'known-good-manifest.json', encoding='utf-8'))['schema_contract']
+          if target.get('database_component') != 'catalog' or target.get('target_schema_revision') != '0031_device_binding_governance.sql':
+              raise SystemExit('target release is not exact ordinary Catalog 0031')
+          if known.get('database_component') != 'catalog' or known.get('target_schema_revision') != '0026_outbound_mail_intents.sql':
+              raise SystemExit('known-good release is not exact historical Catalog 0026')
+          PY
+          printf '%s\n' "$target_release" > "$root/target-release-set-id.txt"
+
+      - name: Fresh exact target observation and canonical prepare
+        run: |
+          set -euo pipefail
+          test -n "$CLOUDFLARE_OBSERVE_API_TOKEN"
+          test -n "$CLOUDFLARE_DEPLOY_MANIFEST_JSON"
+          echo "::add-mask::$CLOUDFLARE_OBSERVE_API_TOKEN"
+          umask 077
+          root="$RUNNER_TEMP/tx6-preflight"
+          evidence="artifacts/d1-tx6-transaction-preflight"
+          printf '%s' "$CLOUDFLARE_DEPLOY_MANIFEST_JSON" > "$root/deploy-manifest.json"
+          account_id="$(jq -er '.control_plane.account_id // .account_id | select(type == "string" and length == 32)' "$root/deploy-manifest.json")"
+          catalog_name="$(jq -er '.control_plane.d1_database_name // .d1_database_name | select(type == "string" and length > 0)' "$root/deploy-manifest.json")"
+          test "$TX6_DATABASE_NAME" != "$catalog_name"
+          env -u CLOUDFLARE_OBSERVE_API_TOKEN -u CLOUDFLARE_API_TOKEN -u CLOUDFLARE_ACCOUNT_ID \
+            cargo run --locked --quiet --manifest-path tools/opsctl/Cargo.toml -- --root . d1 repository > "$root/repository.json"
+          python - "$root/repository.json" "$root/bounded-lineage" <<'PY'
+          import json, shutil, sys
+          from pathlib import Path
+          projection = json.load(open(sys.argv[1], encoding='utf-8'))
+          output = Path(sys.argv[2]); output.mkdir(parents=True, exist_ok=True)
+          catalog = next((x for x in projection.get('components', []) if x.get('component_id') == 'catalog'), None)
+          if not isinstance(catalog, dict): raise SystemExit('typed Catalog projection missing')
+          target = (catalog.get('release_schema_contract') or {}).get('target_schema_revision')
+          sources = catalog.get('executable_migration_sources')
+          if not isinstance(target, str) or not isinstance(sources, list): raise SystemExit('typed ordinary target/source projection missing')
+          copied=[]
+          for item in sources:
+              name=item.get('migration_file'); root=item.get('source_root')
+              if root not in {'migrations/d1','migrations/d1-successor'} or not isinstance(name,str): raise SystemExit('typed migration source escaped governed roots')
+              source=Path(root)/name; dest=output/name
+              if source.is_symlink() or not source.is_file() or dest.exists(): raise SystemExit(f'invalid typed migration source: {source}')
+              shutil.copyfile(source,dest); copied.append(name)
+              if name == target: break
+          if not copied or copied[-1] != target: raise SystemExit('ordinary target not reached while materializing bounded lineage')
+          if any(name == '0032_pas2_payload_fingerprint_contract.sql' for name in copied): raise SystemExit('ordinary bounded lineage crossed CONTRACT boundary')
+          PY
+          python - "$root/wrangler.json" "$account_id" "$root/bounded-lineage" <<'PY'
+          import json, sys
+          out, account, lineage = sys.argv[1:]
+          json.dump({'name':'tx6-transaction-preflight','compatibility_date':'2026-08-15','account_id':account,'d1_databases':[{'binding':'TX6_REHEARSAL_DB','database_name':'part-crm-d3a-bootstrap-proof','database_id':'713dd6f2-646b-46ad-93eb-103d2d0b63c4','migrations_dir':lineage}]}, open(out,'w',encoding='utf-8'), sort_keys=True, indent=2)
+          PY
+          export CLOUDFLARE_API_TOKEN="$CLOUDFLARE_OBSERVE_API_TOKEN"
+          export CLOUDFLARE_ACCOUNT_ID="$account_id"
+          npx --yes wrangler@4.94.0 d1 info "$TX6_DATABASE_NAME" --config "$root/wrangler.json" --json --experimental-provision=false --experimental-auto-create=false > "$root/provider-identity.json"
+          python - "$root/provider-identity.json" "$TX6_DATABASE_NAME" "$TX6_DATABASE_ID" <<'PY'
+          import json, sys
+          value=json.load(open(sys.argv[1],encoding='utf-8')); name,dbid=sys.argv[2:]
+          def pair(x):
+              if isinstance(x,dict):
+                  if (x.get('name') or x.get('database_name'))==name and (x.get('uuid') or x.get('id') or x.get('database_id'))==dbid: return True
+                  return any(pair(v) for v in x.values())
+              if isinstance(x,list): return any(pair(v) for v in x)
+              return False
+          if not pair(value): raise SystemExit('provider identity does not preserve exact TX-6 target')
+          PY
+          npx --yes wrangler@4.94.0 d1 execute "$TX6_DATABASE_NAME" --remote --config "$root/wrangler.json" --command "SELECT id, name FROM d1_migrations ORDER BY id" --json --experimental-provision=false --experimental-auto-create=false > "$root/ledger.json"
+          printf '{"component":"catalog","completed":[]}\n' > "$root/preconditions.json"
+          env -u CLOUDFLARE_API_TOKEN -u CLOUDFLARE_ACCOUNT_ID \
+            python scripts/d1-prepare.py prepare --root . --component catalog --ledger-json "$root/ledger.json" --release-manifest "$root/target-manifest.json" --current-manifest "$root/known-good-manifest.json" --known-good-manifest "$root/known-good-manifest.json" --preconditions-json "$root/preconditions.json" --output "$evidence/prepare.json"
+          jq -e '.status == "PREPARE_READY" or .status == "PREPARE_BLOCKED"' "$evidence/prepare.json" >/dev/null
+          cp "$root/repository.json" "$evidence/repository.json"
+          cp "$root/target-release-set-id.txt" "$evidence/target-release-set-id.txt"
+          cp "$root/provider-identity.json" "$evidence/provider-identity.json"
+          python - "$evidence/prepare.json" "$evidence/summary.json" <<'PY'
+          import json, os, sys
+          prepare=json.load(open(sys.argv[1],encoding='utf-8'))
+          value={'schema_version':1,'kind':'D1_TX6_TRANSACTION_PREFLIGHT','source_sha':os.environ['SOURCE_SHA'],'target_database_name':os.environ['TX6_DATABASE_NAME'],'target_database_id':os.environ['TX6_DATABASE_ID'],'status':prepare.get('status'),'provider_mutation':False,'d1_mutation':False,'production_mutation':False}
+          if prepare.get('status')=='PREPARE_BLOCKED': value['gate_result']=prepare.get('gate_result')
+          else: value['planned_migrations']=(prepare.get('plan') or {}).get('planned_migrations',[])
+          json.dump(value,open(sys.argv[2],'w',encoding='utf-8'),sort_keys=True,indent=2); open(sys.argv[2],'a',encoding='utf-8').write('\n')
+          PY
+
+      - name: Publish secret-free TX-6 transaction preflight
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: d1-tx6-transaction-preflight-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.sha }}
+          path: artifacts/d1-tx6-transaction-preflight
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Remove raw provider observations from runner temp
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/tx6-preflight"
