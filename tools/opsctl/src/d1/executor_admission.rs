@@ -1,6 +1,8 @@
 use super::authorization::bind_transaction_authorization;
 use super::model::D1Error;
-use super::transaction::{TargetIdentity, TransactionPhase, TransactionProjection};
+use super::transaction::{
+    PlannedMigrationDigest, TargetIdentity, TransactionPhase, TransactionProjection,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -11,8 +13,22 @@ pub struct ExecutorAdmissionExpectation {
     pub transaction_id: String,
     pub source_sha: String,
     pub tree_sha: String,
+    pub component: String,
     pub target: TargetIdentity,
     pub phase: TransactionPhase,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SealedExecutionPlan {
+    pub schema_version: u64,
+    pub command: String,
+    pub mode: String,
+    pub mutation_executed: bool,
+    pub component: String,
+    pub allowed: bool,
+    pub planned_migrations: Vec<String>,
+    pub planned_migration_digests: Vec<PlannedMigrationDigest>,
+    pub apply_required: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -27,9 +43,11 @@ pub struct ExecutorAdmissionBinding {
     pub authorization_digest: String,
     pub source_sha: String,
     pub tree_sha: String,
+    pub component: String,
     pub target: TargetIdentity,
     pub phase: TransactionPhase,
     pub evaluated_at_unix_seconds: i64,
+    pub execution_plan: SealedExecutionPlan,
 }
 
 pub fn bind_executor_admission(
@@ -41,6 +59,7 @@ pub fn bind_executor_admission(
     validate_sha256(&expectation.transaction_id, "expected_transaction_id")?;
     validate_git_object_id(&expectation.source_sha, "expected_source_sha")?;
     validate_git_object_id(&expectation.tree_sha, "expected_tree_sha")?;
+    validate_component(&expectation.component)?;
     validate_target(&expectation.target)?;
 
     if transaction.transaction_id != expectation.transaction_id {
@@ -68,6 +87,16 @@ pub fn bind_executor_admission(
             "executor expected phase must equal prepared transaction phase",
         ));
     }
+    if transaction.transaction_plan.release_manifest_digests.len() != 1
+        || !transaction
+            .transaction_plan
+            .release_manifest_digests
+            .contains_key(&expectation.component)
+    {
+        return Err(D1Error::new(
+            "executor expected component must be the sole release-manifest component sealed by the prepared transaction",
+        ));
+    }
 
     let authorization = bind_transaction_authorization(
         transaction,
@@ -83,6 +112,23 @@ pub fn bind_executor_admission(
         ));
     }
 
+    let planned_migration_digests = transaction.transaction_plan.planned_migrations.clone();
+    let planned_migrations = planned_migration_digests
+        .iter()
+        .map(|migration| migration.migration_file.clone())
+        .collect::<Vec<_>>();
+    let execution_plan = SealedExecutionPlan {
+        schema_version: 1,
+        command: "d1 plan".to_owned(),
+        mode: "read-only".to_owned(),
+        mutation_executed: false,
+        component: expectation.component.clone(),
+        allowed: true,
+        apply_required: !planned_migrations.is_empty(),
+        planned_migrations,
+        planned_migration_digests,
+    };
+
     Ok(ExecutorAdmissionBinding {
         schema_version: EXECUTOR_ADMISSION_SCHEMA_VERSION,
         status: "EXECUTOR_ADMISSION_VERIFIED".to_owned(),
@@ -94,9 +140,11 @@ pub fn bind_executor_admission(
         authorization_digest: authorization.authorization_digest,
         source_sha: expectation.source_sha.clone(),
         tree_sha: expectation.tree_sha.clone(),
+        component: expectation.component.clone(),
         target: expectation.target.clone(),
         phase: expectation.phase,
         evaluated_at_unix_seconds,
+        execution_plan,
     })
 }
 
@@ -107,6 +155,15 @@ pub fn serialize_executor_admission(binding: &ExecutorAdmissionBinding) -> Resul
         ))
     })?;
     crate::canonical::canonical_json(&value).map_err(D1Error::new)
+}
+
+fn validate_component(component: &str) -> Result<(), D1Error> {
+    if !matches!(component, "catalog" | "resolver") {
+        return Err(D1Error::new(
+            "expected_component must be exactly catalog or resolver",
+        ));
+    }
+    Ok(())
 }
 
 fn validate_target(target: &TargetIdentity) -> Result<(), D1Error> {
@@ -269,14 +326,15 @@ mod tests {
             transaction_id: transaction.transaction_id.clone(),
             source_sha: transaction.transaction_plan.source_sha.clone(),
             tree_sha: transaction.transaction_plan.tree_sha.clone(),
+            component: "catalog".to_owned(),
             target: transaction.transaction_plan.target.clone(),
             phase: TransactionPhase::Ordinary,
         }
     }
 
     #[test]
-    fn exact_executor_admission_binds_transaction_authorization_and_checkout() -> Result<(), D1Error>
-    {
+    fn exact_executor_admission_binds_transaction_authorization_checkout_and_plan(
+    ) -> Result<(), D1Error> {
         let transaction = transaction()?;
         let binding = bind_executor_admission(
             &transaction,
@@ -288,6 +346,17 @@ mod tests {
         assert_eq!(binding.transaction_id, transaction.transaction_id);
         assert_eq!(binding.source_sha, transaction.transaction_plan.source_sha);
         assert_eq!(binding.tree_sha, transaction.transaction_plan.tree_sha);
+        assert_eq!(binding.component, "catalog");
+        assert_eq!(binding.execution_plan.command, "d1 plan");
+        assert_eq!(
+            binding.execution_plan.planned_migrations,
+            vec!["0031_device_binding_governance.sql"]
+        );
+        assert_eq!(
+            binding.execution_plan.planned_migration_digests,
+            transaction.transaction_plan.planned_migrations
+        );
+        assert!(binding.execution_plan.apply_required);
         assert!(!binding.authorization_consumed);
         assert!(!binding.mutation_executed);
         assert!(!binding.provider_mutation_executed);
@@ -350,6 +419,23 @@ mod tests {
         let transaction = transaction()?;
         let mut expected = expectation(&transaction);
         expected.transaction_id = "ef".repeat(32);
+        assert!(
+            bind_executor_admission(
+                &transaction,
+                &authorization(&transaction),
+                EVALUATED_AT,
+                &expected,
+            )
+            .is_err()
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn component_drift_is_rejected() -> Result<(), D1Error> {
+        let transaction = transaction()?;
+        let mut expected = expectation(&transaction);
+        expected.component = "resolver".to_owned();
         assert!(
             bind_executor_admission(
                 &transaction,
