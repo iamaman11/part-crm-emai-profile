@@ -4,7 +4,7 @@
 Owner/consumer: CAP-06 documentation authority; developers and the existing Quality Gate.
 Risk: copied mutable order or stale status/setup prose can select unauthorized work after context loss.
 Invariant: one binding program document, one linked live stage pointer, one CURRENT stage Issue;
-projections/history fail closed.
+projections/history/reference material fail closed.
 Tier/lifecycle: cheap repository-source check in the existing required Quality Gate; retire only when
 these facts move to an equivalent or stronger natural-owner proof.
 """
@@ -52,8 +52,11 @@ PROGRAM_REQUIRED_MARKERS = (
     "Provider-effect authorization boundary",
 )
 INDEX_REQUIRED_MARKERS = (
-    "Bounded transaction record, change envelope and evidence",
-    "Exactly one current owning Issue linked from",
+    "sole live stage",
+    "exactly one owning Issue for the CURRENT stage",
+    "CURRENT stage objective, change envelope and evidence",
+    "Reference Issue #625",
+    "orientation/provenance only",
 )
 MANDATORY_REQUIREMENTS_MARKERS = (
     "Product scope -> selected profile reconciliation",
@@ -67,6 +70,29 @@ NAVIGATION = (
     Path("docs/INDEX.md"),
     Path("docs/DEVELOPMENT_PLAN.md"),
 )
+CONTEXT_LOSS_ENTRYPOINTS = {
+    Path("README.md"): (
+        "sole live stage",
+        "CURRENT stage Issue",
+        "#625",
+    ),
+    Path("docs/README.md"): (
+        "CURRENT stage Issue",
+        "Issue #266",
+        "#625",
+    ),
+    Path("docs/INDEX.md"): INDEX_REQUIRED_MARKERS,
+    Path("docs/DEVELOPMENT_PLAN.md"): (
+        "CURRENT stage Issue",
+        "Future-stage Issues are not pre-created",
+        "#625",
+    ),
+    Path("CONTRIBUTING.md"): (
+        "CURRENT stage",
+        "sole live stage pointer",
+        "Future-stage Issues are not pre-created",
+    ),
+}
 CURRENT_AUTHORITY_DOCS = NAVIGATION + (
     Path("docs/PRODUCT.md"),
     Path("docs/ARCHITECTURE.md"),
@@ -102,6 +128,17 @@ FORBIDDEN_CURRENT_CLAIMS = (
     re.compile(r"текущ(?:ий|его|ая|ие).{0,40}(?:статус|факт).{0,60}status\.json", re.I),
     re.compile(r"current execution order (?:lives|is|resides) in.{0,50}DEVELOPMENT_PLAN", re.I),
     re.compile(r"DEVELOPMENT_PLAN\.md.{0,60}(?:only normative|current execution order)", re.I),
+)
+# These phrases assign live selection to the superseded transaction/program-row model. They are checked
+# only in context-loss navigation entrypoints, so ordinary references to an implementation transaction
+# inside detailed protocols remain valid.
+FORBIDDEN_NAVIGATION_STAGE_CLAIMS = (
+    re.compile(r"\blive transaction pointer\b", re.I),
+    re.compile(r"\bsole active transaction\b", re.I),
+    re.compile(r"\bmutable active-transaction\b", re.I),
+    re.compile(r"\bcurrent program row\b", re.I),
+    re.compile(r"\bactive row\b", re.I),
+    re.compile(r"\bwhich bounded transaction is live\b", re.I),
 )
 
 
@@ -169,18 +206,12 @@ def check(root: Path, markdown_files: list[Path] | None = None) -> list[str]:
         errors.append(f"{PROGRAM} must remain the single explicit temporary program/order owner")
     if "Issue #266" not in program:
         errors.append(f"{PROGRAM} must link the sole live stage pointer #266")
-    for marker in ("Permanent normative knowledge", "Temporary execution authority", "Live state", "Projection/navigation", "History/provenance"):
+    for marker in ("Permanent normative knowledge", "Temporary execution authority", "Live state", "Projection/navigation/reference", "History/provenance"):
         if marker not in index:
             errors.append(f"{INDEX} is missing authority class: {marker}")
-    errors.extend(
-        require_markers(AGENT_BOOTSTRAP, agents, AGENT_REQUIRED_MARKERS)
-    )
-    errors.extend(
-        require_markers(PROGRAM, program, PROGRAM_REQUIRED_MARKERS)
-    )
-    errors.extend(
-        require_markers(INDEX, index, INDEX_REQUIRED_MARKERS)
-    )
+    errors.extend(require_markers(AGENT_BOOTSTRAP, agents, AGENT_REQUIRED_MARKERS))
+    errors.extend(require_markers(PROGRAM, program, PROGRAM_REQUIRED_MARKERS))
+    errors.extend(require_markers(INDEX, index, INDEX_REQUIRED_MARKERS))
     errors.extend(
         require_markers(
             MANDATORY_REQUIREMENTS,
@@ -188,6 +219,15 @@ def check(root: Path, markdown_files: list[Path] | None = None) -> list[str]:
             MANDATORY_REQUIREMENTS_MARKERS,
         )
     )
+
+    for relative, markers in CONTEXT_LOSS_ENTRYPOINTS.items():
+        text = read(root, relative, errors)
+        errors.extend(require_markers(relative, text, markers))
+        for pattern in FORBIDDEN_NAVIGATION_STAGE_CLAIMS:
+            if pattern.search(text):
+                errors.append(
+                    f"{relative} contains superseded live transaction/program-row claim: {pattern.pattern}"
+                )
 
     for relative in NAVIGATION:
         text = read(root, relative, errors)
@@ -260,12 +300,28 @@ def self_test() -> None:
         raise AssertionError("positive status.json authority claim was not detected")
     if any(pattern.search("status.json is a projection, not current authority") for pattern in FORBIDDEN_CURRENT_CLAIMS):
         raise AssertionError("negative status.json authority rule was rejected")
-    for relative, markers in (
+
+    stale_navigation = (
+        "Issue #266 is the live transaction pointer",
+        "Issue #266 stores the sole active transaction",
+        "For each current program row create an Issue",
+        "never infer the active row from this file",
+        "Issue #266 records which bounded transaction is live",
+    )
+    for stale in stale_navigation:
+        if not any(pattern.search(stale) for pattern in FORBIDDEN_NAVIGATION_STAGE_CLAIMS):
+            raise AssertionError(f"superseded navigation claim was not detected: {stale}")
+    valid_navigation = "Issue #266 is the sole live stage pointer and selects one CURRENT stage Issue"
+    if any(pattern.search(valid_navigation) for pattern in FORBIDDEN_NAVIGATION_STAGE_CLAIMS):
+        raise AssertionError("valid current-stage navigation rule was rejected")
+
+    marker_sets = (
         (AGENT_BOOTSTRAP, AGENT_REQUIRED_MARKERS),
         (PROGRAM, PROGRAM_REQUIRED_MARKERS),
         (INDEX, INDEX_REQUIRED_MARKERS),
         (MANDATORY_REQUIREMENTS, MANDATORY_REQUIREMENTS_MARKERS),
-    ):
+    ) + tuple(CONTEXT_LOSS_ENTRYPOINTS.items())
+    for relative, markers in marker_sets:
         complete = "\n".join(markers)
         if require_markers(relative, complete, markers):
             raise AssertionError(f"complete authority marker set was rejected: {relative}")
@@ -292,7 +348,7 @@ def main() -> int:
         for error in errors:
             print(error)
         return 1
-    print("Documentation authority, setup pins, tombstones and tracked local links are consistent.")
+    print("Documentation authority, context-loss stage navigation, setup pins, tombstones and tracked local links are consistent.")
     return 0
 
 
