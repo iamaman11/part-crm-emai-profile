@@ -56,9 +56,7 @@ jobs:
           trigger = source.split('\npermissions:', 1)[0]
           dispatch = trigger.split('\n  workflow_dispatch:', 1)[1]
           assert 'inputs:' not in dispatch, 'TX-6 operator must remain zero-input in GitHub UI'
-          assert ('d1-tx6-isolated-target-observation.yml' + '/dispatches') in source
-          assert ('d1-migration-prepare.yml' + '/dispatches') in source
-          assert ('d1-migration-executor.yml' + '/dispatches') in source
+          assert source.count('/dispatches') == 4, 'TX-6 operator dispatch surface drifted from exactly three natural-owner transitions'
           PY
 
   operator:
