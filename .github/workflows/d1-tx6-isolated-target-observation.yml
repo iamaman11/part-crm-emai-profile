@@ -69,6 +69,10 @@ jobs:
           assert os.environ['TX6_READ_ONLY_CANDIDATE_ID'] in source
           assert os.environ['TX6_READ_ONLY_CANDIDATE_COMPONENT'] == 'catalog'
           assert "opsctl='tools/opsctl/target/debug/opsctl'" in source
+          assert 'pre_migration_runtime_schema_contract' in source
+          assert '--current-manifest "$root/current-runtime-manifest.json"' in source
+          assert '--known-good-manifest "$root/known-good-runtime-manifest.json"' in source
+          assert '--current-manifest "$root/known-good-manifest.json"' not in source
           PY
 
   observe:
@@ -441,6 +445,68 @@ jobs:
           PY
           printf '%s\n' "$target_release" > "$evidence/target-release-set-id.txt"
 
+          "$opsctl" --root . d1 repository > "$root/d1-repository.json"
+          python - \
+            "$root/d1-repository.json" \
+            "$root/known-good-manifest.json" \
+            "$root/current-runtime-manifest.json" \
+            "$root/known-good-runtime-manifest.json" \
+            "$evidence/runtime-context.json" <<'PY'
+          import json, os, sys
+          repository_path, historical_path, current_output, known_output, evidence_output = sys.argv[1:]
+          repository = json.load(open(repository_path, encoding='utf-8'))
+          matches = [item for item in repository.get('components', []) if item.get('component_id') == 'catalog']
+          if len(matches) != 1:
+              raise SystemExit('typed Catalog repository projection missing/ambiguous during preflight')
+          catalog = matches[0]
+          runtime = catalog.get('pre_migration_runtime_schema_contract')
+          release = catalog.get('release_schema_contract')
+          historical = json.load(open(historical_path, encoding='utf-8')).get('schema_contract')
+          if not isinstance(runtime, dict) or not isinstance(release, dict) or not isinstance(historical, dict):
+              raise SystemExit('typed runtime/release/historical schema contracts are incomplete')
+          base = '0026_outbound_mail_intents.sql'
+          ordinary_target = '0031_device_binding_governance.sql'
+          protected_contract = '0032_pas2_payload_fingerprint_contract.sql'
+          if runtime.get('database_component') != 'catalog':
+              raise SystemExit('typed pre-migration runtime contract component drifted')
+          if runtime.get('target_schema_revision') != base or runtime.get('supported_schema_min') != base:
+              raise SystemExit('typed pre-migration runtime contract lost exact historical runtime target')
+          if runtime.get('supported_schema_max') != ordinary_target:
+              raise SystemExit('typed pre-migration runtime safe horizon is not exact ordinary 0031')
+          if runtime.get('migration_history_digest') != catalog.get('history_digest'):
+              raise SystemExit('typed pre-migration runtime contract is not bound to current successor history')
+          if runtime.get('compatibility_policy_digest') != catalog.get('compatibility_policy_digest'):
+              raise SystemExit('typed pre-migration runtime contract is not bound to current D1 policy')
+          if release.get('target_schema_revision') != ordinary_target or release.get('supported_schema_max') != protected_contract:
+              raise SystemExit('typed release schema window drifted from ordinary 0031 / protected 0032 topology')
+          if runtime.get('supported_schema_max') != release.get('target_schema_revision'):
+              raise SystemExit('pre-migration runtime safe horizon does not reach the exact ordinary release target')
+          if historical.get('target_schema_revision') != runtime.get('target_schema_revision'):
+              raise SystemExit('immutable historical known-good release no longer identifies the runtime base revision')
+          if historical.get('migration_history_digest') == runtime.get('migration_history_digest'):
+              raise SystemExit('historical immutable manifest was incorrectly reused as current runtime compatibility identity')
+          manifest = {'schema_contract': runtime}
+          for output in (current_output, known_output):
+              with open(output, 'w', encoding='utf-8') as handle:
+                  json.dump(manifest, handle, sort_keys=True, indent=2)
+                  handle.write('\n')
+          evidence = {
+              'schema_version': 1,
+              'kind': 'D1_TX6_PRE_MIGRATION_RUNTIME_CONTEXT',
+              'source_sha': os.environ['SOURCE_SHA'],
+              'basis': 'CURRENT_TYPED_MIGRATION_CONTRACTS',
+              'historical_release_target': historical.get('target_schema_revision'),
+              'schema_contract': runtime,
+              'provider_mutation': False,
+              'd1_mutation': False,
+              'production_mutation': False,
+          }
+          with open(evidence_output, 'w', encoding='utf-8') as handle:
+              json.dump(evidence, handle, sort_keys=True, indent=2)
+              handle.write('\n')
+          PY
+          python -m json.tool "$evidence/runtime-context.json" >/dev/null
+
           python - "$observation" "$SOURCE_SHA" "$TX6_READ_ONLY_CANDIDATE_NAME" "$TX6_READ_ONLY_CANDIDATE_ID" "$root/ledger.json" <<'PY'
           import json, sys, time
           path, source, name, dbid, ledger_path = sys.argv[1:]
@@ -476,8 +542,8 @@ jobs:
             --component catalog \
             --ledger-json "$root/ledger.json" \
             --release-manifest "$root/target-manifest.json" \
-            --current-manifest "$root/known-good-manifest.json" \
-            --known-good-manifest "$root/known-good-manifest.json" \
+            --current-manifest "$root/current-runtime-manifest.json" \
+            --known-good-manifest "$root/known-good-runtime-manifest.json" \
             --preconditions-json "$root/preconditions.json" \
             --output "$evidence/prepare.json"
           rc=$?
@@ -486,17 +552,31 @@ jobs:
           jq -e '.status == "PREPARE_READY" or .status == "PREPARE_BLOCKED"' "$evidence/prepare.json" >/dev/null
           cp "$observation" "$evidence/provider-observation.json"
 
-          python - "$evidence/prepare.json" "$evidence/provider-observation.json" "$evidence/summary.json" <<'PY'
+          python - \
+            "$evidence/prepare.json" \
+            "$evidence/provider-observation.json" \
+            "$evidence/runtime-context.json" \
+            "$evidence/summary.json" <<'PY'
           import json, os, sys
           prepare = json.load(open(sys.argv[1], encoding='utf-8'))
           observation = json.load(open(sys.argv[2], encoding='utf-8'))
+          runtime_context = json.load(open(sys.argv[3], encoding='utf-8'))
+          runtime_contract = runtime_context.get('schema_contract') or {}
           value = {
               'schema_version': 1,
               'kind': 'D1_TX6_TRANSACTION_PREFLIGHT',
               'source_sha': os.environ['SOURCE_SHA'],
               'observation_run_id': os.environ['GITHUB_RUN_ID'],
+              'observation_run_attempt': os.environ['GITHUB_RUN_ATTEMPT'],
+              'workflow_name': os.environ['GITHUB_WORKFLOW'],
+              'workflow_ref': os.environ.get('GITHUB_WORKFLOW_REF'),
+              'workflow_sha': os.environ.get('GITHUB_WORKFLOW_SHA'),
+              'event_name': os.environ['GITHUB_EVENT_NAME'],
+              'ref': os.environ['GITHUB_REF'],
               'target_database_name': os.environ['TX6_READ_ONLY_CANDIDATE_NAME'],
               'target_database_id': os.environ['TX6_READ_ONLY_CANDIDATE_ID'],
+              'runtime_context_target_revision': runtime_contract.get('target_schema_revision'),
+              'runtime_context_supported_max': runtime_contract.get('supported_schema_max'),
               'status': prepare.get('status'),
               'raw_wrangler_pending_migrations': (observation.get('provider_observation_input') or {}).get('wrangler_pending_migrations'),
               'provider_mutation': False,
@@ -507,7 +587,7 @@ jobs:
               value['planned_migrations'] = (prepare.get('plan') or {}).get('planned_migrations', [])
           else:
               value['gate_results'] = prepare.get('gate_results', [])
-          with open(sys.argv[3], 'w', encoding='utf-8') as handle:
+          with open(sys.argv[4], 'w', encoding='utf-8') as handle:
               json.dump(value, handle, sort_keys=True, indent=2)
               handle.write('\n')
           PY
