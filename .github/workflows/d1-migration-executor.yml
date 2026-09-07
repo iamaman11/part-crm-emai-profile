@@ -189,6 +189,19 @@ jobs:
           actual_digest = hashlib.sha256(raw.encode('utf-8')).hexdigest()
           if actual_digest != os.environ['AUTHORIZATION_DIGEST']:
               raise SystemExit('authorization_digest does not equal SHA-256 of exact canonical authorization JSON')
+          expected_keys = {
+              'schema_version',
+              'transaction_id',
+              'target',
+              'phase',
+              'authorized_provider_effects',
+              'issued_at_unix_seconds',
+              'expires_at_unix_seconds',
+              'observation_fresh_until_unix_seconds',
+              'authorization_reference',
+          }
+          if set(value) != expected_keys:
+              raise SystemExit('authorization payload fields do not match the exact v1 typed contract')
           reference = value.get('authorization_reference')
           if not isinstance(reference, str):
               raise SystemExit('authorization_reference must be a GitHub issue comment URL')
@@ -223,9 +236,21 @@ jobs:
           meta = json.loads((root / 'd1-authorization-meta.json').read_text(encoding='utf-8'))
           comment = json.loads((root / 'd1-authorization-comment.json').read_text(encoding='utf-8'))
           raw = os.environ['TRANSACTION_AUTHORIZATION_JSON']
-          expected_body = f'D1_TRANSACTION_AUTHORIZATION_V1\n{raw}'
+          value = json.loads(raw)
+          intent = {
+              'schema_version': value['schema_version'],
+              'transaction_id': value['transaction_id'],
+              'target': value['target'],
+              'phase': value['phase'],
+              'authorized_provider_effects': value['authorized_provider_effects'],
+              'issued_at_unix_seconds': value['issued_at_unix_seconds'],
+              'expires_at_unix_seconds': value['expires_at_unix_seconds'],
+              'observation_fresh_until_unix_seconds': value['observation_fresh_until_unix_seconds'],
+          }
+          intent_canonical = json.dumps(intent, sort_keys=True, separators=(',', ':'), ensure_ascii=False)
+          expected_body = f'D1_TRANSACTION_AUTHORIZATION_V1\n{intent_canonical}'
           if not isinstance(comment.get('body'), str) or comment['body'].strip() != expected_body:
-              raise SystemExit('authorization reference comment body does not contain the exact typed authorization envelope')
+              raise SystemExit('authorization reference comment body does not contain the exact constructible transaction intent')
           if comment.get('html_url') != meta['authorization_reference']:
               raise SystemExit('authorization reference URL does not equal fetched comment html_url')
           expected_issue_url = f"https://api.github.com/repos/{os.environ['GITHUB_REPOSITORY']}/issues/{meta['issue_number']}"
@@ -599,7 +624,8 @@ jobs:
               if not isinstance(value, dict):
                   raise SystemExit(f'{name} must contain exactly one JSON object')
               (out / name).write_text(json.dumps(value, sort_keys=True, indent=2) + '\n', encoding='utf-8')
-          binding = {'catalog': 'CATALOG_DB', 'resolver': 'RESOLVER_DB'}[os.environ['COMPONENT']]
+          binding = {'catalog': 'CATALOG_DB', 'resolver': 'RESOLVER_DB'}[os.environ['COMPONENT']
+          ]
           config = {
               'name': 'd1-migration-executor',
               'main': '../../tests/d1-runtime/worker.mjs',
