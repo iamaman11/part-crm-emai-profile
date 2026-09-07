@@ -687,7 +687,10 @@ mod tests {
         assert_eq!(runtime["target_schema_revision"], HISTORICAL_FINAL_REVISION);
         assert_eq!(runtime["supported_schema_min"], HISTORICAL_FINAL_REVISION);
         assert_eq!(runtime["supported_schema_max"], LEGACY_CURRENT_REVISION);
-        assert_eq!(runtime["migration_history_digest"], catalog["history_digest"]);
+        assert_eq!(
+            runtime["migration_history_digest"],
+            catalog["history_digest"]
+        );
         assert_eq!(
             runtime["compatibility_policy_digest"],
             catalog["compatibility_policy_digest"]
