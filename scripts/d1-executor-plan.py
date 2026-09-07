@@ -172,15 +172,17 @@ def planned_digests(plan: Any, planned: list[str], require: bool) -> dict[str, s
         fail("planned_migration_digests cardinality must exactly match planned_migrations")
     result: dict[str, str] = {}
     for index, (item, expected_name) in enumerate(zip(values, planned, strict=True)):
-        if not isinstance(item, dict) or set(item) != {"migration", "sha256"}:
-            fail("planned_migration_digests entries must contain exactly migration/sha256")
-        name = migration_name(item.get("migration"), f"planned migration digest[{index}].migration")
+        if not isinstance(item, dict) or set(item) != {"migration_file", "content_sha256"}:
+            fail("planned_migration_digests entries must contain exactly migration_file/content_sha256")
+        name = migration_name(
+            item.get("migration_file"), f"planned migration digest[{index}].migration_file"
+        )
         if name != expected_name:
             fail(
                 "planned_migration_digests order/name differs from planned_migrations: "
                 f"index={index}, expected={expected_name}, observed={name}"
             )
-        digest = item.get("sha256")
+        digest = item.get("content_sha256")
         if not isinstance(digest, str) or SHA256_RE.fullmatch(digest) is None:
             fail(f"planned migration digest must be canonical lowercase sha256: {digest!r}")
         result[name] = digest
@@ -332,7 +334,9 @@ def self_test() -> None:
             "predecessor_ledger_sha256": "1" * 64,
             "predecessor_migrations": ["0001_base.sql"],
             "planned_migrations": ["0002_expand.sql"],
-            "planned_migration_digests": [{"migration": "0002_expand.sql", "sha256": expand_digest}],
+            "planned_migration_digests": [
+                {"migration_file": "0002_expand.sql", "content_sha256": expand_digest}
+            ],
         }
         for name, value in (("repository.json", repository), ("ledger.json", ledger), ("plan.json", ordinary_plan)):
             (root / name).write_text(json.dumps(value), encoding="utf-8")
@@ -386,7 +390,9 @@ def self_test() -> None:
             fail("self-test accepted missing authorized planned_migration_digests")
 
         wrong_digest = dict(ordinary_plan)
-        wrong_digest["planned_migration_digests"] = [{"migration": "0002_expand.sql", "sha256": "0" * 64}]
+        wrong_digest["planned_migration_digests"] = [
+            {"migration_file": "0002_expand.sql", "content_sha256": "0" * 64}
+        ]
         (root / "wrong-digest.json").write_text(json.dumps(wrong_digest), encoding="utf-8")
         try:
             materialize(
