@@ -460,11 +460,12 @@ fn validate_transaction_input(
         ));
     }
     let expected = expected_planned_migrations(plan)?;
-    if observation.wrangler_pending_migrations != expected {
-        return Err(D1Error::new(
-            "sealed Wrangler pending migrations must exactly equal PREPARE_READY planned_migrations",
-        ));
-    }
+    validate_wrangler_pending_scope(
+        &observation.wrangler_pending_migrations,
+        &expected,
+        &repository.schema_target,
+        &repository.supported_schema_max,
+    )?;
     let supplied = input
         .planned_migrations
         .iter()
@@ -517,6 +518,36 @@ fn expected_planned_migrations(
                 .ok_or_else(|| D1Error::new("planned migration names must be strings"))
         })
         .collect()
+}
+
+pub(super) fn validate_wrangler_pending_scope(
+    observed: &[String],
+    planned: &[String],
+    schema_target: &str,
+    supported_schema_max: &str,
+) -> Result<(), D1Error> {
+    if observed.len() < planned.len() || observed[..planned.len()] != planned[..] {
+        return Err(D1Error::new(
+            "sealed Wrangler pending migrations must begin with PREPARE_READY planned_migrations",
+        ));
+    }
+
+    let trailing = &observed[planned.len()..];
+    if supported_schema_max == schema_target {
+        if !trailing.is_empty() {
+            return Err(D1Error::new(
+                "sealed Wrangler pending migrations contain migrations beyond the prepared schema target",
+            ));
+        }
+        return Ok(());
+    }
+
+    if trailing.len() != 1 || trailing[0] != supported_schema_max {
+        return Err(D1Error::new(
+            "sealed Wrangler pending migrations beyond the ordinary plan must contain exactly the separately governed supported_schema_max",
+        ));
+    }
+    Ok(())
 }
 
 fn required_str<'a>(value: &'a Value, field: &str) -> Result<&'a str, D1Error> {
@@ -585,7 +616,10 @@ mod tests {
             "observation_source": "fixture",
             "remote_ledger_sha256": "22".repeat(32),
             "remote_migrations": ["0030_profile_generation_successor_commit.sql"],
-            "wrangler_pending_migrations": ["0031_device_binding_governance.sql"],
+            "wrangler_pending_migrations": [
+                "0031_device_binding_governance.sql",
+                "0032_pas2_payload_fingerprint_contract.sql"
+            ],
             "deployment_identity": "deployment-1",
             "time_travel_bookmark_capable": true
         })
@@ -734,6 +768,63 @@ mod tests {
     fn wrangler_pending_drift_is_rejected() {
         let mut changed = observation();
         changed["wrangler_pending_migrations"] = json!([]);
+        assert!(
+            build_transaction_projection(
+                &prepare(),
+                &changed,
+                &repository(),
+                &transaction_input(),
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn trailing_separate_contract_is_sealed_but_not_planned() -> Result<(), D1Error> {
+        let transaction = build()?;
+        assert_eq!(
+            transaction.provider_observation.wrangler_pending_migrations,
+            vec![
+                "0031_device_binding_governance.sql".to_owned(),
+                "0032_pas2_payload_fingerprint_contract.sql".to_owned(),
+            ]
+        );
+        assert_eq!(
+            transaction
+                .transaction_plan
+                .planned_migrations
+                .iter()
+                .map(|migration| migration.migration_file.as_str())
+                .collect::<Vec<_>>(),
+            vec!["0031_device_binding_governance.sql"]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn unowned_trailing_pending_migration_is_rejected() {
+        let mut changed = observation();
+        changed["wrangler_pending_migrations"] =
+            json!(["0031_device_binding_governance.sql", "0033_unowned.sql"]);
+        assert!(
+            build_transaction_projection(
+                &prepare(),
+                &changed,
+                &repository(),
+                &transaction_input(),
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn interposed_pending_migration_is_rejected() {
+        let mut changed = observation();
+        changed["wrangler_pending_migrations"] = json!([
+            "0030_unexpected.sql",
+            "0031_device_binding_governance.sql",
+            "0032_pas2_payload_fingerprint_contract.sql"
+        ]);
         assert!(
             build_transaction_projection(
                 &prepare(),
