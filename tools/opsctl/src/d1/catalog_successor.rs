@@ -270,9 +270,47 @@ impl CatalogSuccessor {
         }))
     }
 
+    fn pre_migration_runtime_contract_projection(&self) -> Result<Value, D1Error> {
+        let historical = self
+            .authority
+            .ordered_history
+            .get(self.authority.historical_len.saturating_sub(1))
+            .ok_or_else(|| D1Error::new("Catalog historical runtime boundary is missing"))?;
+        if historical != HISTORICAL_FINAL_REVISION {
+            return Err(D1Error::new(
+                "Catalog historical runtime boundary drifted from the accepted epoch",
+            ));
+        }
+
+        let mut supported_max = historical.as_str();
+        for contract in &self.authority.post_epoch {
+            let migration_before_code_compatible = matches!(
+                contract.rollout_order,
+                RolloutOrder::MigrateBeforeCode | RolloutOrder::Either
+            ) && contract.code_rollback_allowed
+                && !contract.destructive
+                && !contract.fail_forward_required;
+            if !migration_before_code_compatible {
+                break;
+            }
+            supported_max = contract.migration_file.as_str();
+        }
+
+        Ok(json!({
+            "database_component": "catalog",
+            "target_schema_revision": historical,
+            "supported_schema_min": historical,
+            "supported_schema_max": supported_max,
+            "migration_history_digest": self.authority.history_digest,
+            "compatibility_policy_digest": self.authority.policy_digest,
+        }))
+    }
+
     fn inventory_projection(&self) -> Result<Value, D1Error> {
         let mut value = self.identity_projection();
         value["release_schema_contract"] = self.release_contract_projection()?;
+        value["pre_migration_runtime_schema_contract"] =
+            self.pre_migration_runtime_contract_projection()?;
         Ok(value)
     }
 }
@@ -593,8 +631,8 @@ fn repository_identity_from_components(components: &[Value]) -> Result<String, D
 #[cfg(test)]
 mod tests {
     use super::{
-        LEGACY_CURRENT_REVISION, SUCCESSOR_CONTRACT_REVISION, SUCCESSOR_EXPAND_REVISION,
-        component_authority, release_contract, repository_projection,
+        HISTORICAL_FINAL_REVISION, LEGACY_CURRENT_REVISION, SUCCESSOR_CONTRACT_REVISION,
+        SUCCESSOR_EXPAND_REVISION, component_authority, release_contract, repository_projection,
     };
     use serde_json::Value;
     use std::error::Error;
@@ -630,6 +668,34 @@ mod tests {
             contract["supported_schema_max"],
             SUCCESSOR_CONTRACT_REVISION
         );
+        Ok(())
+    }
+
+    #[test]
+    fn pre_migration_runtime_window_is_derived_from_typed_rollback_safe_prefix()
+    -> Result<(), Box<dyn Error>> {
+        let projection: Value = serde_json::from_str(&repository_projection(&repository_root())?)?;
+        let catalog = projection["components"]
+            .as_array()
+            .and_then(|components| {
+                components
+                    .iter()
+                    .find(|component| component["component_id"] == "catalog")
+            })
+            .ok_or("catalog projection is missing")?;
+        let runtime = &catalog["pre_migration_runtime_schema_contract"];
+        assert_eq!(runtime["target_schema_revision"], HISTORICAL_FINAL_REVISION);
+        assert_eq!(runtime["supported_schema_min"], HISTORICAL_FINAL_REVISION);
+        assert_eq!(runtime["supported_schema_max"], LEGACY_CURRENT_REVISION);
+        assert_eq!(
+            runtime["migration_history_digest"],
+            catalog["history_digest"]
+        );
+        assert_eq!(
+            runtime["compatibility_policy_digest"],
+            catalog["compatibility_policy_digest"]
+        );
+        assert_ne!(runtime["supported_schema_max"], SUCCESSOR_CONTRACT_REVISION);
         Ok(())
     }
 
