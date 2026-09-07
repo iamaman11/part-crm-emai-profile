@@ -72,7 +72,8 @@ jobs:
           assert 'pre_migration_runtime_schema_contract' in source
           assert '--current-manifest "$root/current-runtime-manifest.json"' in source
           assert '--known-good-manifest "$root/known-good-runtime-manifest.json"' in source
-          assert '--current-manifest "$root/known-good-manifest.json"' not in source
+          old_bad_wiring = '--current-manifest "$root/' + 'known-good-manifest.json"'
+          assert old_bad_wiring not in source
           PY
 
   observe:
