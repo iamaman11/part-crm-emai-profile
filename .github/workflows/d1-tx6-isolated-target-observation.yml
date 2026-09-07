@@ -127,8 +127,8 @@ jobs:
           manifest="$raw/deploy-manifest.json"
           printf '%s' "$CLOUDFLARE_DEPLOY_MANIFEST_JSON" > "$manifest"
 
-          account_id="$(jq -er '.control_plane.account_id // .account_id | select(type == \"string\" and length == 32)' "$manifest")"
-          catalog_name="$(jq -er '.control_plane.d1_database_name // .d1_database_name | select(type == \"string\" and length > 0)' "$manifest")"
+          account_id="$(jq -er '.control_plane.account_id // .account_id | select(type == "string" and length == 32)' "$manifest")"
+          catalog_name="$(jq -er '.control_plane.d1_database_name // .d1_database_name | select(type == "string" and length > 0)' "$manifest")"
           test "$TX6_READ_ONLY_CANDIDATE_NAME" != "$catalog_name"
 
           env -u CLOUDFLARE_OBSERVE_API_TOKEN -u CLOUDFLARE_API_TOKEN -u CLOUDFLARE_ACCOUNT_ID \
