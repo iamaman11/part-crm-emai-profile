@@ -66,6 +66,7 @@ jobs:
           assert os.environ['TX6_READ_ONLY_CANDIDATE_NAME'] in source
           assert os.environ['TX6_READ_ONLY_CANDIDATE_ID'] in source
           assert os.environ['TX6_READ_ONLY_CANDIDATE_COMPONENT'] == 'catalog'
+          assert "opsctl='tools/opsctl/target/debug/opsctl'" in source
           PY
 
   observe:
@@ -385,6 +386,8 @@ jobs:
           test -f "$observation"
 
           cargo build --locked --manifest-path tools/opsctl/Cargo.toml
+          opsctl='tools/opsctl/target/debug/opsctl'
+          test -x "$opsctl"
           python scripts/d1-prepare.py self-test
 
           target_release=''
@@ -466,7 +469,7 @@ jobs:
 
           set +e
           python scripts/d1-prepare.py prepare \
-            --opsctl target/debug/opsctl \
+            --opsctl "$opsctl" \
             --root . \
             --component catalog \
             --ledger-json "$root/ledger.json" \
