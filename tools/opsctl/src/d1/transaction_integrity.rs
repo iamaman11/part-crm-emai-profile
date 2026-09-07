@@ -2,6 +2,7 @@ use super::model::D1Error;
 use super::transaction::{
     ProviderObservationInput, TransactionKind, TransactionPhase, TransactionProjection,
 };
+use super::transaction_core::validate_wrangler_pending_scope;
 use crate::canonical::{canonical_json, sha256_hex};
 use std::collections::BTreeSet;
 
@@ -173,11 +174,12 @@ pub fn revalidate_transaction_projection(
         .iter()
         .map(|migration| migration.migration_file.clone())
         .collect::<Vec<_>>();
-    if observation.wrangler_pending_migrations != planned_names {
-        return Err(D1Error::new(
-            "sealed Wrangler pending migrations must exactly equal prepared transaction planned_migrations",
-        ));
-    }
+    validate_wrangler_pending_scope(
+        &observation.wrangler_pending_migrations,
+        &planned_names,
+        &plan.schema_target,
+        &plan.supported_schema_max,
+    )?;
     validate_unique_strings(
         &plan.precondition_evidence_refs,
         "transaction precondition_evidence_refs",
