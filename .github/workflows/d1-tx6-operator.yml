@@ -45,20 +45,20 @@ jobs:
           forbidden = (
               'secrets.' + 'CLOUDFLARE_API_TOKEN',
               'secrets.' + 'CLOUDFLARE_OBSERVE_API_TOKEN',
-              'wrangler ',
-              'd1 migrations apply',
-              'd1 create',
-              'd1 delete',
-              'd1 time-travel restore',
+              'wrang' + 'ler ',
+              'd1 migrations ' + 'apply',
+              'd1 ' + 'create',
+              'd1 ' + 'delete',
+              'd1 time-travel ' + 'restore',
           )
           for value in forbidden:
               assert value not in source, f'TX-6 operator acquired forbidden provider surface: {value}'
           trigger = source.split('\npermissions:', 1)[0]
           dispatch = trigger.split('\n  workflow_dispatch:', 1)[1]
           assert 'inputs:' not in dispatch, 'TX-6 operator must remain zero-input in GitHub UI'
-          assert 'd1-tx6-isolated-target-observation.yml/dispatches' in source
-          assert 'd1-migration-prepare.yml/dispatches' in source
-          assert 'd1-migration-executor.yml/dispatches' in source
+          assert ('d1-tx6-isolated-target-observation.yml' + '/dispatches') in source
+          assert ('d1-migration-prepare.yml' + '/dispatches') in source
+          assert ('d1-migration-executor.yml' + '/dispatches') in source
           PY
 
   operator:
