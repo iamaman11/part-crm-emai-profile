@@ -265,7 +265,10 @@ mod tests {
             observation_source: "fixture".to_owned(),
             remote_ledger_sha256: "22".repeat(32),
             remote_migrations: vec!["0030_profile_generation_successor_commit.sql".to_owned()],
-            wrangler_pending_migrations: vec!["0031_device_binding_governance.sql".to_owned()],
+            wrangler_pending_migrations: vec![
+                "0031_device_binding_governance.sql".to_owned(),
+                "0032_pas2_payload_fingerprint_contract.sql".to_owned(),
+            ],
             deployment_identity: Some("deployment-1".to_owned()),
             time_travel_bookmark_capable: true,
         };

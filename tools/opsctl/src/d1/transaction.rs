@@ -804,10 +804,8 @@ mod tests {
     #[test]
     fn unowned_trailing_pending_migration_is_rejected() {
         let mut changed = observation();
-        changed["wrangler_pending_migrations"] = json!([
-            "0031_device_binding_governance.sql",
-            "0033_unowned.sql"
-        ]);
+        changed["wrangler_pending_migrations"] =
+            json!(["0031_device_binding_governance.sql", "0033_unowned.sql"]);
         assert!(
             build_transaction_projection(
                 &prepare(),
