@@ -1,0 +1,672 @@
+name: TX-6 One-Click Operator
+
+run-name: TX-6 operator / ${{ github.event_name }} / ${{ github.sha }}
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/d1-tx6-operator.yml'
+  push:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/d1-tx6-operator.yml'
+  workflow_dispatch:
+
+permissions:
+  actions: write
+  contents: read
+  issues: read
+
+concurrency:
+  group: d1-tx6-one-click-operator-main
+  cancel-in-progress: false
+
+jobs:
+  contract:
+    name: One-click operator is transport-only
+    runs-on: ubuntu-24.04
+    timeout-minutes: 3
+    steps:
+      - name: Checkout exact source
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Verify exact source checkout
+        env:
+          EXPECTED_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: python -c "import os, subprocess; actual = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(); expected = os.environ['EXPECTED_SOURCE_SHA']; assert actual == expected, f'expected {expected}, got {actual}'"
+
+      - name: Prove no provider mutation authority exists here
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('.github/workflows/d1-tx6-operator.yml')
+          source = path.read_text(encoding='utf-8')
+          forbidden = (
+              'secrets.' + 'CLOUDFLARE_API_TOKEN',
+              'secrets.' + 'CLOUDFLARE_OBSERVE_API_TOKEN',
+              'wrang' + 'ler ',
+              'd1 migrations ' + 'apply',
+              'd1 ' + 'create',
+              'd1 ' + 'delete',
+              'd1 time-travel ' + 'restore',
+          )
+          for value in forbidden:
+              assert value not in source, f'TX-6 operator acquired forbidden provider surface: {value}'
+          trigger = source.split('\npermissions:', 1)[0]
+          dispatch = trigger.split('\n  workflow_dispatch:', 1)[1]
+          assert 'inputs:' not in dispatch, 'TX-6 operator must remain zero-input in GitHub UI'
+          assert source.count('/dispatches') == 4, 'TX-6 operator dispatch surface drifted from exactly three natural-owner transitions'
+          PY
+
+  operator:
+    name: Resolve current TX-6 state and perform one bounded transition
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    needs: contract
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Checkout exact protected-main source
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Verify exact source checkout
+        env:
+          EXPECTED_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: python -c "import os, subprocess; actual = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(); expected = os.environ['EXPECTED_SOURCE_SHA']; assert actual == expected, f'expected {expected}, got {actual}'"
+
+      - name: Verify exact source and build credential-free typed authority
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = refs/heads/main
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          if [ "$GITHUB_EVENT_NAME" = workflow_dispatch ]; then
+            test "$GITHUB_RUN_ATTEMPT" = 1
+            test "$GITHUB_ACTOR" = "$GITHUB_REPOSITORY_OWNER"
+          fi
+          env -u CLOUDFLARE_API_TOKEN -u CLOUDFLARE_ACCOUNT_ID \
+            cargo build --locked --manifest-path tools/opsctl/Cargo.toml
+          test -x tools/opsctl/target/debug/opsctl
+
+      - name: Resolve, prepare, or dispatch the exact authorized transaction
+        env:
+          SOURCE_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import hashlib
+          import json
+          import os
+          import shutil
+          import subprocess
+          import tarfile
+          import tempfile
+          import time
+          from datetime import datetime, timezone
+          from pathlib import Path
+
+          REPO = os.environ['GITHUB_REPOSITORY']
+          SOURCE = os.environ['SOURCE_SHA']
+          EVENT = os.environ['GITHUB_EVENT_NAME']
+          RUN_ID = int(os.environ['GITHUB_RUN_ID'])
+          OWNER = os.environ['GITHUB_REPOSITORY_OWNER']
+          ACTOR = os.environ['GITHUB_ACTOR']
+          SUMMARY = Path(os.environ['GITHUB_STEP_SUMMARY'])
+          OPSCTL = Path('tools/opsctl/target/debug/opsctl')
+          PREPARE_WORKFLOW = 'd1-migration-prepare.yml'
+          OBSERVE_WORKFLOW = 'd1-tx6-isolated-target-observation.yml'
+          EXECUTOR_WORKFLOW = 'd1-migration-executor.yml'
+          ISSUE = 624
+          FRESHNESS = 900
+          ORDINARY_TARGET = '0031_device_binding_governance.sql'
+          PROTECTED_CONTRACT = '0032_pas2_payload_fingerprint_contract.sql'
+
+          def shell(args, *, input_text=None, check=True):
+              result = subprocess.run(
+                  args,
+                  input=input_text,
+                  text=True,
+                  stdout=subprocess.PIPE,
+                  stderr=subprocess.PIPE,
+                  check=False,
+              )
+              if check and result.returncode != 0:
+                  raise SystemExit(
+                      f"command failed ({result.returncode}): {' '.join(args)}\n{result.stderr.strip()}"
+                  )
+              return result
+
+          def gh_json(endpoint):
+              return json.loads(shell(['gh', 'api', endpoint]).stdout)
+
+          def api_post(endpoint, payload):
+              with tempfile.NamedTemporaryFile('w', encoding='utf-8', suffix='.json', delete=False) as handle:
+                  json.dump(payload, handle, sort_keys=True, separators=(',', ':'))
+                  handle.write('\n')
+                  temp = handle.name
+              try:
+                  shell(['gh', 'api', '--method', 'POST', endpoint, '--input', temp])
+              finally:
+                  Path(temp).unlink(missing_ok=True)
+
+          def epoch(value):
+              return int(datetime.fromisoformat(value.replace('Z', '+00:00')).timestamp())
+
+          def workflow_runs(workflow, limit=50):
+              value = gh_json(
+                  f'repos/{REPO}/actions/workflows/{workflow}/runs?branch=main&per_page={limit}'
+              )
+              return value.get('workflow_runs') or []
+
+          def artifacts(run_id):
+              return (gh_json(f'repos/{REPO}/actions/runs/{run_id}/artifacts?per_page=100').get('artifacts') or [])
+
+          def artifact_exact(run_id, name):
+              matches = [item for item in artifacts(run_id) if item.get('name') == name and not item.get('expired')]
+              if len(matches) != 1:
+                  return None
+              return matches[0]
+
+          def download(run_id, name, destination):
+              destination = Path(destination)
+              shutil.rmtree(destination, ignore_errors=True)
+              destination.mkdir(parents=True, exist_ok=True)
+              result = shell(
+                  ['gh', 'run', 'download', str(run_id), '--repo', REPO, '--name', name, '--dir', str(destination)],
+                  check=False,
+              )
+              if result.returncode != 0:
+                  shutil.rmtree(destination, ignore_errors=True)
+                  return False
+              return True
+
+          def current_tree():
+              return shell(['git', 'rev-parse', 'HEAD^{tree}']).stdout.strip()
+
+          def repo_projection():
+              raw = shell([str(OPSCTL), '--root', '.', 'd1', 'repository']).stdout
+              value = json.loads(raw)
+              if value.get('schema_version') != 1:
+                  raise SystemExit('typed D1 repository projection schema drifted')
+              return value
+
+          def latest_executor_epoch():
+              values = [
+                  epoch(run['created_at'])
+                  for run in workflow_runs(EXECUTOR_WORKFLOW)
+                  if run.get('event') == 'workflow_dispatch' and run.get('head_sha') == SOURCE
+              ]
+              return max(values, default=0)
+
+          def validate_transaction(tx, now):
+              if not isinstance(tx, dict) or tx.get('schema_version') != 1:
+                  return None
+              if tx.get('status') != 'TRANSACTION_PREPARED' or tx.get('mode') != 'read-only':
+                  return None
+              if tx.get('authorization_consumed') or tx.get('mutation_executed') or tx.get('provider_mutation_executed'):
+                  return None
+              plan = tx.get('transaction_plan') or {}
+              obs = tx.get('provider_observation') or {}
+              if plan.get('source_sha') != SOURCE or plan.get('tree_sha') != current_tree():
+                  return None
+              if plan.get('phase') != 'ORDINARY' or plan.get('transaction_kind') != 'D1_MIGRATION':
+                  return None
+              target = plan.get('target') or {}
+              if target.get('environment') != 'staging' or target.get('database_name') == 'part-crm-catalog-production':
+                  return None
+              planned = [item.get('migration_file') for item in plan.get('planned_migrations') or []]
+              if planned != [
+                  '0027_pas2_payload_fingerprint_expand.sql',
+                  '0028_profile_assignment_detach.sql',
+                  '0029_profile_launch_authority.sql',
+                  '0030_profile_generation_successor_commit.sql',
+                  ORDINARY_TARGET,
+              ]:
+                  return None
+              if PROTECTED_CONTRACT in planned:
+                  return None
+              if plan.get('allowed_provider_effects') != ['D1_MIGRATIONS_APPLY_EXACT_PLAN']:
+                  return None
+              observed = plan.get('observed_at_unix_seconds')
+              freshness = plan.get('freshness_max_age_seconds')
+              if not isinstance(observed, int) or freshness != FRESHNESS:
+                  return None
+              fresh_until = observed + freshness
+              if now > fresh_until:
+                  return None
+              if obs.get('remote_ledger_sha256') != plan.get('predecessor_ledger_sha256'):
+                  return None
+              txid = tx.get('transaction_id')
+              if not isinstance(txid, str) or len(txid) != 64 or any(ch not in '0123456789abcdef' for ch in txid):
+                  return None
+              return fresh_until
+
+          def resolve_fresh_transaction():
+              now = int(time.time())
+              executor_cutoff = latest_executor_epoch()
+              candidates = []
+              for run in workflow_runs(PREPARE_WORKFLOW):
+                  if run.get('event') != 'workflow_dispatch' or run.get('head_sha') != SOURCE:
+                      continue
+                  if run.get('status') != 'completed' or run.get('conclusion') != 'success':
+                      continue
+                  if epoch(run['created_at']) <= executor_cutoff:
+                      continue
+                  attempt = int(run.get('run_attempt') or 0)
+                  if attempt < 1:
+                      continue
+                  name = f"d1-transaction-catalog-{run['id']}-{attempt}"
+                  if artifact_exact(run['id'], name) is None:
+                      continue
+                  with tempfile.TemporaryDirectory(prefix='tx6-transaction-') as directory:
+                      if not download(run['id'], name, directory):
+                          continue
+                      path = Path(directory) / 'transaction.json'
+                      if not path.is_file():
+                          continue
+                      tx = json.loads(path.read_text(encoding='utf-8'))
+                      fresh_until = validate_transaction(tx, now)
+                      if fresh_until is None:
+                          continue
+                      candidates.append((epoch(run['created_at']), run, tx, fresh_until))
+              if not candidates:
+                  return None
+              candidates.sort(key=lambda item: item[0], reverse=True)
+              _, run, tx, fresh_until = candidates[0]
+              return {
+                  'run_id': int(run['id']),
+                  'run_attempt': int(run['run_attempt']),
+                  'transaction': tx,
+                  'fresh_until': fresh_until,
+              }
+
+          def wait_for_dispatched_run(workflow, started_at, timeout_seconds):
+              deadline = time.time() + timeout_seconds
+              selected = None
+              while time.time() < deadline:
+                  matching = [
+                      run for run in workflow_runs(workflow)
+                      if run.get('event') == 'workflow_dispatch'
+                      and run.get('head_sha') == SOURCE
+                      and epoch(run['created_at']) >= started_at - 5
+                  ]
+                  if matching:
+                      matching.sort(key=lambda item: epoch(item['created_at']), reverse=True)
+                      selected = matching[0]
+                      if selected.get('status') == 'completed':
+                          if selected.get('conclusion') != 'success':
+                              raise SystemExit(
+                                  f"{workflow} run {selected['id']} completed as {selected.get('conclusion')}"
+                              )
+                          return selected
+                  time.sleep(10)
+              raise SystemExit(f'timed out waiting for {workflow} workflow_dispatch run')
+
+          def fresh_observation():
+              start = int(time.time())
+              api_post(
+                  f'repos/{REPO}/actions/workflows/{OBSERVE_WORKFLOW}/dispatches',
+                  {'ref': 'main'},
+              )
+              run = wait_for_dispatched_run(OBSERVE_WORKFLOW, start, 1800)
+              attempt = int(run['run_attempt'])
+              preflight_name = f"d1-tx6-transaction-preflight-{run['id']}-{attempt}-{SOURCE}"
+              preflight_artifact = artifact_exact(run['id'], preflight_name)
+              if preflight_artifact is None:
+                  raise SystemExit('fresh observation preflight artifact missing or ambiguous')
+              jobs = gh_json(f"repos/{REPO}/actions/runs/{run['id']}/jobs?filter=latest&per_page=100").get('jobs') or []
+              hosted = [job for job in jobs if job.get('name') == 'TX-6 isolated target hosted observation and preflight']
+              if len(hosted) != 1 or hosted[0].get('conclusion') != 'success':
+                  raise SystemExit('fresh observation hosted job missing/ambiguous/not successful')
+              directory = Path(tempfile.mkdtemp(prefix='tx6-preflight-'))
+              if not download(run['id'], preflight_name, directory):
+                  raise SystemExit('cannot download fresh observation preflight artifact')
+              required = {
+                  'prepare.json', 'provider-observation.json', 'runtime-context.json',
+                  'summary.json', 'target-release-set-id.txt'
+              }
+              present = {path.name for path in directory.iterdir() if path.is_file()}
+              if present != required:
+                  raise SystemExit(f'fresh preflight artifact file set drifted: {sorted(present)}')
+              summary = json.loads((directory / 'summary.json').read_text(encoding='utf-8'))
+              if summary.get('status') != 'PREPARE_READY' or summary.get('source_sha') != SOURCE:
+                  raise SystemExit('fresh observation preflight is not PREPARE_READY for exact source')
+              observation_doc = json.loads((directory / 'provider-observation.json').read_text(encoding='utf-8'))
+              observation = observation_doc.get('provider_observation_input') or {}
+              observed = observation.get('observed_at_unix_seconds')
+              if not isinstance(observed, int) or int(time.time()) > observed + FRESHNESS:
+                  raise SystemExit('fresh observation expired before Prepare construction')
+              return {
+                  'run': run,
+                  'attempt': attempt,
+                  'job_id': int(hosted[0]['id']),
+                  'artifact_id': int(preflight_artifact['id']),
+                  'directory': directory,
+                  'observation': observation,
+              }
+
+          def extract_target_manifest(release_id, destination):
+              destination = Path(destination)
+              destination.mkdir(parents=True, exist_ok=True)
+              shell([
+                  'gh', 'release', 'download', release_id, '--repo', REPO,
+                  '--pattern', 'release-set.json', '--pattern', 'control-plane.tar',
+                  '--dir', str(destination),
+              ])
+              release_set_raw = (destination / 'release-set.json').read_bytes()
+              release_set = json.loads(release_set_raw)
+              if release_set.get('schema_version') != 3 or release_set.get('release_set_id') != release_id:
+                  raise SystemExit('target Release Set identity mismatch')
+              source = release_set.get('source') or {}
+              if source.get('repository') != REPO or source.get('commit_sha') != SOURCE or source.get('accepted_main') is not True:
+                  raise SystemExit('target Release Set is not bound to exact accepted main')
+              component = (release_set.get('components') or {}).get('control_plane') or {}
+              archive = destination / 'control-plane.tar'
+              if hashlib.sha256(archive.read_bytes()).hexdigest() != component.get('artifact_sha256'):
+                  raise SystemExit('target control-plane archive digest mismatch')
+              with tarfile.open(archive, 'r:*') as handle:
+                  members = [m for m in handle.getmembers() if m.isfile() and Path(m.name).name == 'release-manifest.json']
+                  if len(members) != 1:
+                      raise SystemExit('target control-plane release-manifest missing/ambiguous')
+                  raw = handle.extractfile(members[0]).read()
+              if hashlib.sha256(raw).hexdigest() != component.get('component_manifest_sha256'):
+                  raise SystemExit('target control-plane manifest digest mismatch')
+              value = json.loads(raw)
+              schema = value.get('schema_contract') or {}
+              if schema.get('database_component') != 'catalog' or schema.get('target_schema_revision') != ORDINARY_TARGET:
+                  raise SystemExit('target release manifest is not exact ordinary Catalog 0031')
+              return raw, value
+
+          def compact(value):
+              return json.dumps(value, sort_keys=True, separators=(',', ':'), ensure_ascii=False)
+
+          def build_prepare_payload(observed):
+              directory = observed['directory']
+              preflight_prepare = json.loads((directory / 'prepare.json').read_text(encoding='utf-8'))
+              if preflight_prepare.get('status') != 'PREPARE_READY':
+                  raise SystemExit('observation preflight prepare is not ready')
+              planned_names = (preflight_prepare.get('plan') or {}).get('planned_migrations') or []
+              if planned_names != [
+                  '0027_pas2_payload_fingerprint_expand.sql',
+                  '0028_profile_assignment_detach.sql',
+                  '0029_profile_launch_authority.sql',
+                  '0030_profile_generation_successor_commit.sql',
+                  ORDINARY_TARGET,
+              ]:
+                  raise SystemExit('observation ordinary plan drifted')
+              if PROTECTED_CONTRACT in planned_names:
+                  raise SystemExit('protected CONTRACT migration entered ordinary plan')
+
+              release_id = (directory / 'target-release-set-id.txt').read_text(encoding='utf-8').strip()
+              with tempfile.TemporaryDirectory(prefix='tx6-release-') as release_dir:
+                  target_raw, target_manifest = extract_target_manifest(release_id, release_dir)
+
+              runtime_context = json.loads((directory / 'runtime-context.json').read_text(encoding='utf-8'))
+              runtime = runtime_context.get('schema_contract') or {}
+              if runtime.get('target_schema_revision') != '0026_outbound_mail_intents.sql' or runtime.get('supported_schema_max') != ORDINARY_TARGET:
+                  raise SystemExit('pre-migration runtime context drifted')
+              current_manifest = {'schema_contract': runtime}
+              known_good_manifest = {'schema_contract': runtime}
+              repository = repo_projection()
+              components = [item for item in repository.get('components') or [] if item.get('component_id') == 'catalog']
+              if len(components) != 1:
+                  raise SystemExit('Catalog typed repository projection missing/ambiguous')
+              sources = components[0].get('executable_migration_sources') or []
+              source_by_name = {item.get('migration_file'): item.get('source_root') for item in sources}
+              planned = []
+              for name in planned_names:
+                  root = source_by_name.get(name)
+                  if root not in {'migrations/d1', 'migrations/d1-successor'}:
+                      raise SystemExit(f'planned migration source root invalid: {name} -> {root}')
+                  path = Path(root) / name
+                  if path.is_symlink() or not path.is_file():
+                      raise SystemExit(f'planned migration source missing/unsafe: {path}')
+                  planned.append({
+                      'migration_file': name,
+                      'content_sha256': hashlib.sha256(path.read_bytes()).hexdigest(),
+                  })
+
+              observation = observed['observation']
+              target = observation.get('target') or {}
+              if target.get('environment') != 'staging' or target.get('database_name') == 'part-crm-catalog-production':
+                  raise SystemExit('provider observation target escaped isolated staging')
+              names = observation.get('remote_migrations')
+              if not isinstance(names, list) or not all(isinstance(item, str) for item in names):
+                  raise SystemExit('provider observation remote ledger invalid')
+              ledger = [{'results': [{'id': index + 1, 'name': name} for index, name in enumerate(names)], 'success': True}]
+              preconditions = {'component': 'catalog', 'completed': []}
+              evidence_ref = (
+                  f"github-actions:run:{observed['run']['id']}:attempt:{observed['attempt']}:"
+                  f"job:{observed['job_id']}:artifact:{observed['artifact_id']}"
+              )
+              transaction_input = {
+                  'schema_version': 1,
+                  'transaction_kind': 'D1_MIGRATION',
+                  'phase': 'ORDINARY',
+                  'source_sha': SOURCE,
+                  'tree_sha': current_tree(),
+                  'release_candidate_id': release_id,
+                  'release_manifest_digests': {'catalog': hashlib.sha256(target_raw).hexdigest()},
+                  'target': target,
+                  'predecessor_ledger_sha256': observation.get('remote_ledger_sha256'),
+                  'planned_migrations': planned,
+                  'freshness_max_age_seconds': FRESHNESS,
+                  'precondition_evidence_refs': [evidence_ref],
+                  'recovery_strategy': 'NOOP_RETRY',
+                  'expected_post_state': {'revision': ORDINARY_TARGET},
+              }
+              payload = {
+                  'ref': 'main',
+                  'inputs': {
+                      'source_sha': SOURCE,
+                      'component': 'catalog',
+                      'ledger_json': compact(ledger),
+                      'target_release_manifest_json': compact(target_manifest),
+                      'current_release_manifest_json': compact(current_manifest),
+                      'known_good_release_manifest_json': compact(known_good_manifest),
+                      'preconditions_json': compact(preconditions),
+                      'provider_observation_json': compact(observation),
+                      'repository_projection_json': compact(repository),
+                      'transaction_input_json': compact(transaction_input),
+                  },
+              }
+              return payload
+
+          def dispatch_prepare_and_wait(observed):
+              payload = build_prepare_payload(observed)
+              start = int(time.time())
+              api_post(f'repos/{REPO}/actions/workflows/{PREPARE_WORKFLOW}/dispatches', payload)
+              run = wait_for_dispatched_run(PREPARE_WORKFLOW, start, 900)
+              attempt = int(run['run_attempt'])
+              name = f"d1-transaction-catalog-{run['id']}-{attempt}"
+              if artifact_exact(run['id'], name) is None:
+                  raise SystemExit('successful Prepare run missing exact transaction artifact')
+              with tempfile.TemporaryDirectory(prefix='tx6-prepared-') as directory:
+                  if not download(run['id'], name, directory):
+                      raise SystemExit('cannot download prepared transaction artifact')
+                  tx = json.loads((Path(directory) / 'transaction.json').read_text(encoding='utf-8'))
+              fresh_until = validate_transaction(tx, int(time.time()))
+              if fresh_until is None:
+                  raise SystemExit('new Prepare produced invalid/stale transaction')
+              return {
+                  'run_id': int(run['id']),
+                  'run_attempt': attempt,
+                  'transaction': tx,
+                  'fresh_until': fresh_until,
+              }
+
+          def valid_authorizations(candidate):
+              tx = candidate['transaction']
+              plan = tx['transaction_plan']
+              txid = tx['transaction_id']
+              now = int(time.time())
+              found = []
+              page = 1
+              while True:
+                  comments = gh_json(f'repos/{REPO}/issues/{ISSUE}/comments?per_page=100&page={page}')
+                  if not isinstance(comments, list):
+                      raise SystemExit('issue comments response is not a list')
+                  for comment in comments:
+                      if comment.get('author_association') != 'OWNER':
+                          continue
+                      if comment.get('created_at') != comment.get('updated_at'):
+                          continue
+                      body = comment.get('body')
+                      if not isinstance(body, str):
+                          continue
+                      parts = body.strip().splitlines()
+                      if len(parts) != 2 or parts[0] != 'D1_TRANSACTION_AUTHORIZATION_V1':
+                          continue
+                      try:
+                          intent = json.loads(parts[1])
+                      except json.JSONDecodeError:
+                          continue
+                      if compact(intent) != parts[1]:
+                          continue
+                      if intent.get('schema_version') != 1 or intent.get('transaction_id') != txid:
+                          continue
+                      if intent.get('target') != plan.get('target') or intent.get('phase') != plan.get('phase'):
+                          continue
+                      if intent.get('authorized_provider_effects') != plan.get('allowed_provider_effects'):
+                          continue
+                      expected_fresh = plan['observed_at_unix_seconds'] + plan['freshness_max_age_seconds']
+                      if intent.get('observation_fresh_until_unix_seconds') != expected_fresh:
+                          continue
+                      issued = intent.get('issued_at_unix_seconds')
+                      expires = intent.get('expires_at_unix_seconds')
+                      if not isinstance(issued, int) or not isinstance(expires, int) or expires <= issued:
+                          continue
+                      created = epoch(comment['created_at'])
+                      if created < issued or created > expires or expires > expected_fresh or now > expires:
+                          continue
+                      full = dict(intent)
+                      full['authorization_reference'] = comment.get('html_url')
+                      canonical = compact(full)
+                      found.append({
+                          'comment': comment,
+                          'authorization_json': canonical,
+                          'authorization_digest': hashlib.sha256(canonical.encode('utf-8')).hexdigest(),
+                      })
+                  if len(comments) < 100:
+                      break
+                  page += 1
+              return found
+
+          def reconstruct_executor_manifests(candidate):
+              tx = candidate['transaction']
+              plan = tx['transaction_plan']
+              release_id = plan.get('release_candidate_id')
+              with tempfile.TemporaryDirectory(prefix='tx6-executor-release-') as release_dir:
+                  raw, target_manifest = extract_target_manifest(release_id, release_dir)
+              expected_digest = (plan.get('release_manifest_digests') or {}).get('catalog')
+              if hashlib.sha256(raw).hexdigest() != expected_digest:
+                  raise SystemExit('executor target release manifest digest differs from sealed transaction')
+              repository = repo_projection()
+              components = [item for item in repository.get('components') or [] if item.get('component_id') == 'catalog']
+              if len(components) != 1:
+                  raise SystemExit('Catalog repository projection missing during executor dispatch')
+              runtime = components[0].get('pre_migration_runtime_schema_contract')
+              if not isinstance(runtime, dict) or runtime.get('target_schema_revision') != '0026_outbound_mail_intents.sql' or runtime.get('supported_schema_max') != ORDINARY_TARGET:
+                  raise SystemExit('executor pre-migration runtime contract drifted')
+              runtime_manifest = {'schema_contract': runtime}
+              return target_manifest, runtime_manifest, runtime_manifest, {'component': 'catalog', 'completed': []}
+
+          def dispatch_executor(candidate, authorization):
+              tx = candidate['transaction']
+              plan = tx['transaction_plan']
+              target = plan['target']
+              target_manifest, current_manifest, known_good_manifest, preconditions = reconstruct_executor_manifests(candidate)
+              confirmation = f"{SOURCE}:staging:catalog:{target['database_id']}"
+              payload = {
+                  'ref': 'main',
+                  'inputs': {
+                      'environment': 'staging',
+                      'source_sha': SOURCE,
+                      'component': 'catalog',
+                      'account_id': target['account_id'],
+                      'database_name': target['database_name'],
+                      'database_id': target['database_id'],
+                      'target_release_manifest_json': compact(target_manifest),
+                      'current_release_manifest_json': compact(current_manifest),
+                      'known_good_release_manifest_json': compact(known_good_manifest),
+                      'preconditions_json': compact(preconditions),
+                      'transition_mode': 'ordinary',
+                      'expected_release_set_id': '',
+                      'prepared_transaction_run_id': str(candidate['run_id']),
+                      'prepared_transaction_run_attempt': str(candidate['run_attempt']),
+                      'transaction_id': tx['transaction_id'],
+                      'authorization_digest': authorization['authorization_digest'],
+                      'transaction_authorization_json': authorization['authorization_json'],
+                      'mutation_authorized': True,
+                      'confirmation': confirmation,
+                  },
+              }
+              api_post(f'repos/{REPO}/actions/workflows/{EXECUTOR_WORKFLOW}/dispatches', payload)
+
+          candidate = resolve_fresh_transaction()
+          if candidate is None:
+              observed = fresh_observation()
+              candidate = dispatch_prepare_and_wait(observed)
+              tx = candidate['transaction']
+              SUMMARY.write_text(
+                  '# TX-6 prepared\n\n'
+                  f"- TransactionId: `{tx['transaction_id']}`\n"
+                  f"- Prepare run: `{candidate['run_id']}` attempt `{candidate['run_attempt']}`\n"
+                  f"- Fresh until unix: `{candidate['fresh_until']}`\n"
+                  '- Provider mutation: `NO`\n'
+                  '- Next: explicit transaction authorization, then run this workflow once.\n',
+                  encoding='utf-8',
+              )
+              print(f"TX6_OPERATOR_STATE=TRANSACTION_PREPARED transaction_id={tx['transaction_id']}")
+              raise SystemExit(0)
+
+          tx = candidate['transaction']
+          if EVENT != 'workflow_dispatch':
+              SUMMARY.write_text(
+                  '# TX-6 transaction already prepared\n\n'
+                  f"- TransactionId: `{tx['transaction_id']}`\n"
+                  '- No executor dispatch from a push event.\n',
+                  encoding='utf-8',
+              )
+              print(f"TX6_OPERATOR_STATE=TRANSACTION_PREPARED transaction_id={tx['transaction_id']}")
+              raise SystemExit(0)
+
+          if ACTOR != OWNER:
+              raise SystemExit('only repository OWNER may use the one-click executor transition')
+          auths = valid_authorizations(candidate)
+          if len(auths) == 0:
+              SUMMARY.write_text(
+                  '# TX-6 authorization required\n\n'
+                  f"- TransactionId: `{tx['transaction_id']}`\n"
+                  '- No exact immutable OWNER authorization exists in issue #624.\n'
+                  '- No executor was dispatched.\n',
+                  encoding='utf-8',
+              )
+              print(f"TX6_OPERATOR_STATE=AUTHORIZATION_REQUIRED transaction_id={tx['transaction_id']}")
+              raise SystemExit(0)
+          if len(auths) != 1:
+              raise SystemExit('multiple valid OWNER authorizations exist for the same fresh transaction')
+
+          dispatch_executor(candidate, auths[0])
+          SUMMARY.write_text(
+              '# TX-6 executor dispatched\n\n'
+              f"- TransactionId: `{tx['transaction_id']}`\n"
+              f"- Authorization digest: `{auths[0]['authorization_digest']}`\n"
+              '- Mutation authority remains solely in d1-migration-executor.yml.\n',
+              encoding='utf-8',
+          )
+          print(
+              'TX6_OPERATOR_STATE=EXECUTOR_DISPATCHED '
+              f"transaction_id={tx['transaction_id']} authorization_digest={auths[0]['authorization_digest']}"
+          )
+          PY
