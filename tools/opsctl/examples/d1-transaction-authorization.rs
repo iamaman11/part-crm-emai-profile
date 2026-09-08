@@ -1,6 +1,6 @@
 #![forbid(unsafe_code)]
 
-use opsctl::canonical::parse_strict_json;
+use opsctl::canonical::{canonical_json, parse_strict_json};
 use opsctl::d1::authorization::{bind_transaction_authorization, serialize_authorization_binding};
 use opsctl::d1::transaction::TransactionProjection;
 use serde_json::Value;
@@ -80,7 +80,7 @@ fn read_strict(path: PathBuf, label: &str) -> Result<Value, Box<dyn Error>> {
         .map_err(|error| format!("{label} is not strict bounded JSON: {error}").into())
 }
 
-fn main() -> Result<(), Box<dyn Error>> {
+fn run() -> Result<(), Box<dyn Error>> {
     let args = parse_args()?;
     let transaction_value = read_strict(
         required(args.transaction_json, "--transaction-json")?,
@@ -98,7 +98,18 @@ fn main() -> Result<(), Box<dyn Error>> {
         args.evaluated_at_unix_seconds,
         "--evaluated-at-unix-seconds",
     )?;
-    let binding = bind_transaction_authorization(&transaction, &authorization, evaluated_at)?;
-    println!("{}", serialize_authorization_binding(&binding)?);
-    Ok(())
+    match bind_transaction_authorization(&transaction, &authorization, evaluated_at) {
+        Ok(binding) => {
+            println!("{}", serialize_authorization_binding(&binding)?);
+            Ok(())
+        }
+        Err(error) => {
+            println!("{}", canonical_json(error.gate_result_json())?);
+            Err(error.into())
+        }
+    }
+}
+
+fn main() -> Result<(), Box<dyn Error>> {
+    run()
 }

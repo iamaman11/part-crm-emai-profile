@@ -1,9 +1,11 @@
 #![forbid(unsafe_code)]
 
 use opsctl::canonical::{canonical_json, parse_strict_json};
+use opsctl::d1::D1Error;
+use opsctl::d1::operator_outcome::{
+    serialize_operator_transaction_verification, verify_operator_transaction,
+};
 use opsctl::d1::transaction::TransactionProjection;
-use opsctl::d1::transaction_integrity::revalidate_transaction_projection;
-use serde_json::json;
 use std::env;
 use std::error::Error;
 use std::ffi::OsString;
@@ -77,7 +79,9 @@ where
                 let value = utf8_value(&mut iterator, flag)?.parse::<i64>()?;
                 set_once(&mut args.evaluated_at_unix_seconds, value, flag)?;
             }
-            other => return Err(format!("unsupported transaction-verify argument: {other}").into()),
+            other => {
+                return Err(format!("unsupported transaction-verify argument: {other}").into());
+            }
         }
     }
     Ok(args)
@@ -95,8 +99,6 @@ fn verify(args: Args) -> Result<String, Box<dyn Error>> {
     let transaction: TransactionProjection = serde_json::from_value(value).map_err(|error| {
         format!("prepared transaction does not match the typed contract: {error}")
     })?;
-    revalidate_transaction_projection(&transaction)?;
-
     let expected_source = required(args.expected_source_sha, "--expected-source-sha")?;
     let expected_tree = required(args.expected_tree_sha, "--expected-tree-sha")?;
     let expected_environment = required(args.expected_environment, "--expected-environment")?;
@@ -104,74 +106,35 @@ fn verify(args: Args) -> Result<String, Box<dyn Error>> {
         args.evaluated_at_unix_seconds,
         "--evaluated-at-unix-seconds",
     )?;
-    let plan = &transaction.transaction_plan;
-    if plan.source_sha != expected_source {
-        return Err(
-            "prepared transaction source_sha does not equal exact checked-out source".into(),
-        );
-    }
-    if plan.tree_sha != expected_tree {
-        return Err("prepared transaction tree_sha does not equal exact checked-out tree".into());
-    }
-    if plan.target.environment != expected_environment {
-        return Err(
-            "prepared transaction target environment does not equal operator environment".into(),
-        );
-    }
-    if expected_environment != "staging" {
-        return Err("ordinary D1 operator currently permits staging only".into());
-    }
-    if evaluated_at <= 0 {
-        return Err("transaction evaluation timestamp must be positive".into());
-    }
-    let freshness = i64::try_from(plan.freshness_max_age_seconds)
-        .map_err(|_| "transaction freshness window does not fit i64")?;
-    let fresh_until = plan
-        .observed_at_unix_seconds
-        .checked_add(freshness)
-        .ok_or("transaction freshness deadline overflow")?;
-    if evaluated_at > fresh_until {
-        return Err("prepared provider observation is stale".into());
-    }
 
-    let components = plan
-        .release_manifest_digests
-        .keys()
-        .cloned()
-        .collect::<Vec<_>>();
-    if components.len() != 1 {
-        return Err(
-            "prepared ordinary transaction must bind exactly one release-manifest component".into(),
-        );
-    }
-    let component = components[0].clone();
-    if !matches!(component.as_str(), "catalog" | "resolver") {
-        return Err("prepared transaction component is unsupported".into());
-    }
+    let verification = verify_operator_transaction(
+        &transaction,
+        &expected_source,
+        &expected_tree,
+        &expected_environment,
+        evaluated_at,
+    )?;
+    serialize_operator_transaction_verification(&verification).map_err(Into::into)
+}
 
-    canonical_json(&json!({
-        "schema_version": 1,
-        "status": "TRANSACTION_VERIFIED",
-        "mode": "read-only",
-        "authorization_consumed": false,
-        "mutation_executed": false,
-        "provider_mutation_executed": false,
-        "transaction_id": transaction.transaction_id,
-        "source_sha": plan.source_sha,
-        "tree_sha": plan.tree_sha,
-        "release_candidate_id": plan.release_candidate_id,
-        "component": component,
-        "target": plan.target,
-        "fresh_until_unix_seconds": fresh_until,
-        "schema_target": plan.schema_target,
-        "recovery_strategy": plan.recovery_strategy,
-    }))
-    .map_err(Into::into)
+fn run() -> Result<(), Box<dyn Error>> {
+    let args = parse_args(env::args_os())?;
+    match verify(args) {
+        Ok(output) => {
+            println!("{output}");
+            Ok(())
+        }
+        Err(error) => {
+            if let Some(d1_error) = error.downcast_ref::<D1Error>() {
+                println!("{}", canonical_json(d1_error.gate_result_json())?);
+            }
+            Err(error)
+        }
+    }
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
-    println!("{}", verify(parse_args(env::args_os())?)?);
-    Ok(())
+    run()
 }
 
 #[cfg(test)]
@@ -182,6 +145,7 @@ mod tests {
         MigrationTransactionPlan, PlannedMigrationDigest, ProviderObservationBundle,
         RecoveryStrategy, TargetIdentity, TransactionKind, TransactionPhase,
     };
+    use serde_json::json;
     use std::collections::BTreeMap;
     use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -293,6 +257,14 @@ mod tests {
         }
     }
 
+    fn reason_code<'a>(error: &'a (dyn Error + 'static)) -> Option<&'a str> {
+        error
+            .downcast_ref::<D1Error>()?
+            .gate_result_json()
+            .get("reason_code")
+            .and_then(serde_json::Value::as_str)
+    }
+
     #[test]
     fn exact_fresh_transaction_is_verified() {
         let transaction = transaction();
@@ -306,32 +278,38 @@ mod tests {
     }
 
     #[test]
-    fn stale_transaction_is_rejected() {
+    fn stale_transaction_preserves_owner_diagnostic() {
         let transaction = transaction();
         let path = write_fixture(&transaction);
-        let result = verify(args(path.clone(), 1_788_640_901));
+        let error = verify(args(path.clone(), 1_788_640_901)).expect_err("stale transaction");
         fs::remove_file(path).ok();
-        assert!(result.is_err());
+        assert_eq!(reason_code(error.as_ref()), Some("STALE_OBSERVATION"));
     }
 
     #[test]
-    fn source_drift_is_rejected() {
+    fn source_drift_preserves_owner_diagnostic() {
         let transaction = transaction();
         let path = write_fixture(&transaction);
         let mut input = args(path.clone(), 1_788_640_100);
         input.expected_source_sha = Some("ff".repeat(20));
-        let result = verify(input);
+        let error = verify(input).expect_err("source drift");
         fs::remove_file(path).ok();
-        assert!(result.is_err());
+        assert_eq!(
+            reason_code(error.as_ref()),
+            Some("SOURCE_TREE_TRANSACTION_DRIFT")
+        );
     }
 
     #[test]
-    fn transaction_identity_tamper_is_rejected() {
+    fn transaction_identity_tamper_preserves_owner_diagnostic() {
         let mut transaction = transaction();
         transaction.transaction_plan.planned_migrations[0].content_sha256 = "bb".repeat(32);
         let path = write_fixture(&transaction);
-        let result = verify(args(path.clone(), 1_788_640_100));
+        let error = verify(args(path.clone(), 1_788_640_100)).expect_err("tamper");
         fs::remove_file(path).ok();
-        assert!(result.is_err());
+        assert_eq!(
+            reason_code(error.as_ref()),
+            Some("SOURCE_TREE_TRANSACTION_DRIFT")
+        );
     }
 }

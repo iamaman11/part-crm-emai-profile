@@ -1,4 +1,4 @@
-use super::model::D1Error;
+use super::model::{D1Error, GateResult};
 use super::transaction::{TargetIdentity, TransactionPhase, TransactionProjection};
 use super::transaction_integrity::revalidate_transaction_projection;
 use crate::canonical::{canonical_json, sha256_hex};
@@ -7,6 +7,8 @@ use serde_json::Value;
 use std::collections::BTreeSet;
 
 const AUTHORIZATION_SCHEMA_VERSION: u64 = 1;
+const INVALID_AUTH_REMEDIATION: &str = "Correct the exact authorization envelope to match the immutable prepared transaction without broadening provider effects, then retry only while the transaction remains fresh.";
+const STALE_AUTH_REMEDIATION: &str = "Do not reuse the expired authorization. Re-observe/re-prepare if needed and obtain a new exact transaction-scoped authorization.";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -49,14 +51,14 @@ pub fn bind_transaction_authorization(
 ) -> Result<TransactionAuthorizationBinding, D1Error> {
     revalidate_transaction_projection(transaction)?;
     if evaluated_at_unix_seconds <= 0 {
-        return Err(D1Error::new(
+        return Err(invalid_authorization(
             "authorization evaluation timestamp must be positive",
         ));
     }
 
     let authorization: TransactionAuthorizationInput =
         serde_json::from_value(authorization_value.clone()).map_err(|error| {
-            D1Error::new(format!(
+            invalid_authorization(format!(
                 "transaction authorization does not match the typed contract: {error}"
             ))
         })?;
@@ -107,7 +109,7 @@ fn validate_authorization_input(
     evaluated_at_unix_seconds: i64,
 ) -> Result<(), D1Error> {
     if authorization.schema_version != AUTHORIZATION_SCHEMA_VERSION {
-        return Err(D1Error::new(format!(
+        return Err(invalid_authorization(format!(
             "transaction authorization schema_version must be {AUTHORIZATION_SCHEMA_VERSION}"
         )));
     }
@@ -116,18 +118,18 @@ fn validate_authorization_input(
         "authorization transaction_id",
     )?;
     if authorization.transaction_id != transaction.transaction_id {
-        return Err(D1Error::new(
+        return Err(invalid_authorization(
             "authorization transaction_id must exactly equal the prepared transaction_id",
         ));
     }
     validate_target(&authorization.target)?;
     if authorization.target != transaction.transaction_plan.target {
-        return Err(D1Error::new(
+        return Err(invalid_authorization(
             "authorization target must exactly equal the prepared transaction target",
         ));
     }
     if authorization.phase != transaction.transaction_plan.phase {
-        return Err(D1Error::new(
+        return Err(invalid_authorization(
             "authorization phase must exactly equal the prepared transaction phase",
         ));
     }
@@ -138,7 +140,7 @@ fn validate_authorization_input(
     if authorization.authorized_provider_effects
         != transaction.transaction_plan.allowed_provider_effects
     {
-        return Err(D1Error::new(
+        return Err(invalid_authorization(
             "authorization provider effect scope must exactly equal the prepared transaction allowed effects",
         ));
     }
@@ -149,13 +151,13 @@ fn validate_authorization_input(
     if authorization.issued_at_unix_seconds <= 0
         || authorization.expires_at_unix_seconds <= authorization.issued_at_unix_seconds
     {
-        return Err(D1Error::new(
+        return Err(invalid_authorization(
             "authorization timestamps require positive issued_at and expires_at > issued_at",
         ));
     }
     if authorization.issued_at_unix_seconds < transaction.transaction_plan.observed_at_unix_seconds
     {
-        return Err(D1Error::new(
+        return Err(invalid_authorization(
             "authorization cannot be issued before the provider observation used by the transaction",
         ));
     }
@@ -169,27 +171,54 @@ fn validate_authorization_input(
         .checked_add(freshness_seconds)
         .ok_or_else(|| D1Error::new("transaction freshness deadline overflow"))?;
     if authorization.observation_fresh_until_unix_seconds != expected_fresh_until {
-        return Err(D1Error::new(
+        return Err(invalid_authorization(
             "authorization observation freshness deadline must be derived exactly from the prepared transaction",
         ));
     }
     if authorization.expires_at_unix_seconds > expected_fresh_until {
-        return Err(D1Error::new(
+        return Err(invalid_authorization(
             "authorization expiry cannot outlive the prepared provider observation freshness window",
         ));
     }
     if evaluated_at_unix_seconds < authorization.issued_at_unix_seconds {
-        return Err(D1Error::new("authorization is not yet valid"));
+        return Err(invalid_authorization("authorization is not yet valid"));
     }
     if evaluated_at_unix_seconds > authorization.expires_at_unix_seconds {
-        return Err(D1Error::new("authorization has expired"));
+        return Err(stale_authorization("authorization has expired"));
     }
     if evaluated_at_unix_seconds > expected_fresh_until {
-        return Err(D1Error::new(
+        return Err(stale_authorization(
             "prepared provider observation is stale for authorization",
         ));
     }
     Ok(())
+}
+
+fn invalid_authorization(summary: impl Into<String>) -> D1Error {
+    D1Error::blocked(GateResult::blocked(
+        "AUTHORIZATION",
+        "d1.authorization",
+        "INVALID_AUTHORIZATION",
+        summary,
+        Some("exact immutable transaction-scoped authorization".to_owned()),
+        None,
+        INVALID_AUTH_REMEDIATION,
+    ))
+}
+
+fn stale_authorization(summary: impl Into<String>) -> D1Error {
+    D1Error::blocked(GateResult::blocked(
+        "AUTHORIZATION",
+        "d1.authorization.freshness",
+        "STALE_AUTHORIZATION",
+        summary,
+        Some(
+            "authorization evaluated within its exact expiry and observation freshness window"
+                .to_owned(),
+        ),
+        None,
+        STALE_AUTH_REMEDIATION,
+    ))
 }
 
 fn validate_effect_scope(effects: &[String], label: &str) -> Result<(), D1Error> {
@@ -197,7 +226,9 @@ fn validate_effect_scope(effects: &[String], label: &str) -> Result<(), D1Error>
     for effect in effects {
         validate_non_empty(effect, label)?;
         if !unique.insert(effect) {
-            return Err(D1Error::new(format!("{label} must not contain duplicates")));
+            return Err(invalid_authorization(format!(
+                "{label} must not contain duplicates"
+            )));
         }
     }
     Ok(())
@@ -213,7 +244,7 @@ fn validate_target(target: &TargetIdentity) -> Result<(), D1Error> {
 
 fn validate_non_empty(value: &str, label: &str) -> Result<(), D1Error> {
     if value.trim().is_empty() {
-        return Err(D1Error::new(format!("{label} must not be empty")));
+        return Err(invalid_authorization(format!("{label} must not be empty")));
     }
     Ok(())
 }
@@ -224,7 +255,7 @@ fn validate_sha256(value: &str, label: &str) -> Result<(), D1Error> {
             .bytes()
             .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
     {
-        return Err(D1Error::new(format!(
+        return Err(invalid_authorization(format!(
             "{label} must be exactly 64 lowercase hexadecimal characters"
         )));
     }
@@ -358,6 +389,13 @@ mod tests {
         })
     }
 
+    fn reason_code(error: &D1Error) -> Option<&str> {
+        error
+            .gate_result_json()
+            .get("reason_code")
+            .and_then(Value::as_str)
+    }
+
     #[test]
     fn exact_authorization_binds_without_consuming_or_mutating() -> Result<(), D1Error> {
         let transaction = transaction()?;
@@ -392,7 +430,10 @@ mod tests {
         let transaction = transaction()?;
         let mut input = authorization(&transaction);
         input["transaction_id"] = json!("ff".repeat(32));
-        assert!(bind_transaction_authorization(&transaction, &input, EVALUATED_AT).is_err());
+        let error = bind_transaction_authorization(&transaction, &input, EVALUATED_AT)
+            .err()
+            .ok_or_else(|| D1Error::new("transaction id drift unexpectedly passed"))?;
+        assert_eq!(reason_code(&error), Some("INVALID_AUTHORIZATION"));
         Ok(())
     }
 
@@ -469,7 +510,10 @@ mod tests {
     fn expired_authorization_is_rejected() -> Result<(), D1Error> {
         let transaction = transaction()?;
         let input = authorization(&transaction);
-        assert!(bind_transaction_authorization(&transaction, &input, EXPIRES_AT + 1).is_err());
+        let error = bind_transaction_authorization(&transaction, &input, EXPIRES_AT + 1)
+            .err()
+            .ok_or_else(|| D1Error::new("expired authorization unexpectedly passed"))?;
+        assert_eq!(reason_code(&error), Some("STALE_AUTHORIZATION"));
         Ok(())
     }
 
@@ -477,7 +521,10 @@ mod tests {
     fn authorization_not_yet_valid_is_rejected() -> Result<(), D1Error> {
         let transaction = transaction()?;
         let input = authorization(&transaction);
-        assert!(bind_transaction_authorization(&transaction, &input, ISSUED_AT - 1).is_err());
+        let error = bind_transaction_authorization(&transaction, &input, ISSUED_AT - 1)
+            .err()
+            .ok_or_else(|| D1Error::new("early authorization unexpectedly passed"))?;
+        assert_eq!(reason_code(&error), Some("INVALID_AUTHORIZATION"));
         Ok(())
     }
 

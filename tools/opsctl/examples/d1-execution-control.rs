@@ -1,6 +1,6 @@
 #![forbid(unsafe_code)]
 
-use opsctl::canonical::parse_strict_json;
+use opsctl::canonical::{canonical_json, parse_strict_json};
 use opsctl::d1::execution_control::{
     ExecutionEventInput, ExecutionReceipt, ExecutionReceiptSeed, TargetFenceLease,
     TargetFenceLeaseInput, TargetFenceObservation, acquire_target_fence, append_execution_event,
@@ -314,7 +314,7 @@ fn verify_post_state(args: Args) -> Result<String, Box<dyn Error>> {
         required(args.observation, "--observation")?,
         "post-state provider observation",
     )?;
-    let verification = verify_execution_post_state(
+    match verify_execution_post_state(
         &transaction,
         &receipt,
         &observation,
@@ -322,8 +322,13 @@ fn verify_post_state(args: Args) -> Result<String, Box<dyn Error>> {
             args.evaluated_at_unix_seconds,
             "--evaluated-at-unix-seconds",
         )?,
-    )?;
-    Ok(serialize_execution_post_state_verification(&verification)?)
+    ) {
+        Ok(verification) => Ok(serialize_execution_post_state_verification(&verification)?),
+        Err(error) => {
+            println!("{}", canonical_json(error.gate_result_json())?);
+            Err(error.into())
+        }
+    }
 }
 
 fn main() -> Result<(), Box<dyn Error>> {

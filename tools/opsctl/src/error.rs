@@ -23,7 +23,7 @@ impl OpsctlError {
         Self {
             command: "d1",
             message: error.to_string(),
-            gate_result: Some(error.gate_result_json()),
+            gate_result: Some(error.gate_result_json().clone()),
         }
     }
 

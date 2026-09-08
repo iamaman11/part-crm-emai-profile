@@ -1,5 +1,5 @@
 use super::authorization::bind_transaction_authorization;
-use super::model::D1Error;
+use super::model::{D1Error, GateResult};
 use super::transaction::{
     PlannedMigrationDigest, TargetIdentity, TransactionPhase, TransactionProjection,
 };
@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 const EXECUTOR_ADMISSION_SCHEMA_VERSION: u64 = 1;
+const ADMISSION_DRIFT_REMEDIATION: &str = "Do not consume or broaden provider authority. Discard the drifted admission attempt, establish fresh exact protected-main source/tree and immutable TransactionId/target identity, then re-observe/re-prepare and obtain a new exact authorization if a write is still required.";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExecutorAdmissionExpectation {
@@ -65,27 +66,27 @@ pub fn bind_executor_admission(
     validate_target(&expectation.target)?;
 
     if transaction.transaction_id != expectation.transaction_id {
-        return Err(D1Error::new(
+        return Err(admission_drift(
             "executor expected_transaction_id must exactly equal prepared transaction_id",
         ));
     }
     if transaction.transaction_plan.source_sha != expectation.source_sha {
-        return Err(D1Error::new(
+        return Err(admission_drift(
             "executor exact checkout source_sha must equal prepared transaction source_sha",
         ));
     }
     if transaction.transaction_plan.tree_sha != expectation.tree_sha {
-        return Err(D1Error::new(
+        return Err(admission_drift(
             "executor exact checkout tree_sha must equal prepared transaction tree_sha",
         ));
     }
     if transaction.transaction_plan.target != expectation.target {
-        return Err(D1Error::new(
+        return Err(admission_drift(
             "executor exact target must equal prepared transaction target",
         ));
     }
     if transaction.transaction_plan.phase != expectation.phase {
-        return Err(D1Error::new(
+        return Err(admission_drift(
             "executor expected phase must equal prepared transaction phase",
         ));
     }
@@ -95,7 +96,7 @@ pub fn bind_executor_admission(
             .release_manifest_digests
             .contains_key(&expectation.component)
     {
-        return Err(D1Error::new(
+        return Err(admission_drift(
             "executor expected component must be the sole release-manifest component sealed by the prepared transaction",
         ));
     }
@@ -109,7 +110,7 @@ pub fn bind_executor_admission(
         || authorization.target != expectation.target
         || authorization.phase != expectation.phase
     {
-        return Err(D1Error::new(
+        return Err(admission_drift(
             "verified authorization binding drifted from executor admission expectation",
         ));
     }
@@ -164,9 +165,21 @@ pub fn serialize_executor_admission(binding: &ExecutorAdmissionBinding) -> Resul
     crate::canonical::canonical_json(&value).map_err(D1Error::new)
 }
 
+fn admission_drift(summary: impl Into<String>) -> D1Error {
+    D1Error::blocked(GateResult::blocked(
+        "EXECUTOR_ADMISSION",
+        "d1.executor_admission.identity",
+        "SOURCE_TREE_TRANSACTION_DRIFT",
+        summary,
+        Some("exact immutable prepared transaction identity equal to the executor admission expectation".to_owned()),
+        None,
+        ADMISSION_DRIFT_REMEDIATION,
+    ))
+}
+
 fn validate_component(component: &str) -> Result<(), D1Error> {
     if !matches!(component, "catalog" | "resolver") {
-        return Err(D1Error::new(
+        return Err(admission_drift(
             "expected_component must be exactly catalog or resolver",
         ));
     }
@@ -181,7 +194,7 @@ fn validate_target(target: &TargetIdentity) -> Result<(), D1Error> {
         ("target.database_id", target.database_id.as_str()),
     ] {
         if value.trim().is_empty() {
-            return Err(D1Error::new(format!("{label} must not be empty")));
+            return Err(admission_drift(format!("{label} must not be empty")));
         }
     }
     Ok(())
@@ -189,7 +202,7 @@ fn validate_target(target: &TargetIdentity) -> Result<(), D1Error> {
 
 fn validate_git_object_id(value: &str, label: &str) -> Result<(), D1Error> {
     if value.len() != 40 || !is_lower_hex(value) {
-        return Err(D1Error::new(format!(
+        return Err(admission_drift(format!(
             "{label} must be exactly 40 lowercase hexadecimal characters"
         )));
     }
@@ -198,7 +211,7 @@ fn validate_git_object_id(value: &str, label: &str) -> Result<(), D1Error> {
 
 fn validate_sha256(value: &str, label: &str) -> Result<(), D1Error> {
     if value.len() != 64 || !is_lower_hex(value) {
-        return Err(D1Error::new(format!(
+        return Err(admission_drift(format!(
             "{label} must be exactly 64 lowercase hexadecimal characters"
         )));
     }
@@ -342,6 +355,13 @@ mod tests {
         }
     }
 
+    fn reason_code(error: &D1Error) -> Option<&str> {
+        error
+            .gate_result_json()
+            .get("reason_code")
+            .and_then(Value::as_str)
+    }
+
     #[test]
     fn exact_executor_admission_binds_transaction_authorization_checkout_and_plan()
     -> Result<(), D1Error> {
@@ -386,15 +406,15 @@ mod tests {
         let transaction = transaction()?;
         let mut expected = expectation(&transaction);
         expected.source_sha = "ab".repeat(20);
-        assert!(
-            bind_executor_admission(
-                &transaction,
-                &authorization(&transaction),
-                EVALUATED_AT,
-                &expected,
-            )
-            .is_err()
-        );
+        let error = bind_executor_admission(
+            &transaction,
+            &authorization(&transaction),
+            EVALUATED_AT,
+            &expected,
+        )
+        .err()
+        .ok_or_else(|| D1Error::new("source checkout drift unexpectedly passed"))?;
+        assert_eq!(reason_code(&error), Some("SOURCE_TREE_TRANSACTION_DRIFT"));
         Ok(())
     }
 
@@ -403,15 +423,15 @@ mod tests {
         let transaction = transaction()?;
         let mut expected = expectation(&transaction);
         expected.tree_sha = "cd".repeat(20);
-        assert!(
-            bind_executor_admission(
-                &transaction,
-                &authorization(&transaction),
-                EVALUATED_AT,
-                &expected,
-            )
-            .is_err()
-        );
+        let error = bind_executor_admission(
+            &transaction,
+            &authorization(&transaction),
+            EVALUATED_AT,
+            &expected,
+        )
+        .err()
+        .ok_or_else(|| D1Error::new("tree checkout drift unexpectedly passed"))?;
+        assert_eq!(reason_code(&error), Some("SOURCE_TREE_TRANSACTION_DRIFT"));
         Ok(())
     }
 
@@ -420,15 +440,15 @@ mod tests {
         let transaction = transaction()?;
         let mut expected = expectation(&transaction);
         expected.target.database_id = "database-2".to_owned();
-        assert!(
-            bind_executor_admission(
-                &transaction,
-                &authorization(&transaction),
-                EVALUATED_AT,
-                &expected,
-            )
-            .is_err()
-        );
+        let error = bind_executor_admission(
+            &transaction,
+            &authorization(&transaction),
+            EVALUATED_AT,
+            &expected,
+        )
+        .err()
+        .ok_or_else(|| D1Error::new("executor target identity drift unexpectedly passed"))?;
+        assert_eq!(reason_code(&error), Some("SOURCE_TREE_TRANSACTION_DRIFT"));
         Ok(())
     }
 
@@ -437,15 +457,15 @@ mod tests {
         let transaction = transaction()?;
         let mut expected = expectation(&transaction);
         expected.transaction_id = "ef".repeat(32);
-        assert!(
-            bind_executor_admission(
-                &transaction,
-                &authorization(&transaction),
-                EVALUATED_AT,
-                &expected,
-            )
-            .is_err()
-        );
+        let error = bind_executor_admission(
+            &transaction,
+            &authorization(&transaction),
+            EVALUATED_AT,
+            &expected,
+        )
+        .err()
+        .ok_or_else(|| D1Error::new("transaction id drift unexpectedly passed"))?;
+        assert_eq!(reason_code(&error), Some("SOURCE_TREE_TRANSACTION_DRIFT"));
         Ok(())
     }
 
@@ -454,15 +474,15 @@ mod tests {
         let transaction = transaction()?;
         let mut expected = expectation(&transaction);
         expected.component = "resolver".to_owned();
-        assert!(
-            bind_executor_admission(
-                &transaction,
-                &authorization(&transaction),
-                EVALUATED_AT,
-                &expected,
-            )
-            .is_err()
-        );
+        let error = bind_executor_admission(
+            &transaction,
+            &authorization(&transaction),
+            EVALUATED_AT,
+            &expected,
+        )
+        .err()
+        .ok_or_else(|| D1Error::new("component drift unexpectedly passed"))?;
+        assert_eq!(reason_code(&error), Some("SOURCE_TREE_TRANSACTION_DRIFT"));
         Ok(())
     }
 }

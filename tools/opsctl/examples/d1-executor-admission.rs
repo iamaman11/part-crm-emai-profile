@@ -1,6 +1,6 @@
 #![forbid(unsafe_code)]
 
-use opsctl::canonical::parse_strict_json;
+use opsctl::canonical::{canonical_json, parse_strict_json};
 use opsctl::d1::executor_admission::{
     ExecutorAdmissionExpectation, bind_executor_admission, serialize_executor_admission,
 };
@@ -148,7 +148,7 @@ fn sealed_component(transaction: &TransactionProjection) -> Result<String, Box<d
         .ok_or_else(|| "prepared transaction has no sealed release-manifest component".into())
 }
 
-fn main() -> Result<(), Box<dyn Error>> {
+fn run() -> Result<(), Box<dyn Error>> {
     let args = parse_args()?;
     let transaction_value = read_strict(
         required(args.transaction_json, "--transaction-json")?,
@@ -179,7 +179,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         },
         phase: required(args.expected_phase, "--expected-phase")?,
     };
-    let binding = bind_executor_admission(
+    match bind_executor_admission(
         &transaction,
         &authorization,
         required(
@@ -187,7 +187,18 @@ fn main() -> Result<(), Box<dyn Error>> {
             "--evaluated-at-unix-seconds",
         )?,
         &expectation,
-    )?;
-    println!("{}", serialize_executor_admission(&binding)?);
-    Ok(())
+    ) {
+        Ok(binding) => {
+            println!("{}", serialize_executor_admission(&binding)?);
+            Ok(())
+        }
+        Err(error) => {
+            println!("{}", canonical_json(error.gate_result_json())?);
+            Err(error.into())
+        }
+    }
+}
+
+fn main() -> Result<(), Box<dyn Error>> {
+    run()
 }

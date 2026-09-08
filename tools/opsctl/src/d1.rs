@@ -18,6 +18,8 @@ mod execution_post_state;
 pub mod executor_admission;
 #[path = "d1/model.rs"]
 mod model;
+#[path = "d1/operator_outcome.rs"]
+pub mod operator_outcome;
 #[path = "d1/plan.rs"]
 mod plan;
 #[path = "d1/status.rs"]
