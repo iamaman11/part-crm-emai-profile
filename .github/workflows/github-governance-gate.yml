@@ -117,7 +117,6 @@ jobs:
 
       - name: Prove Actions registry drift fails closed
         run: node .github/scripts/github-actions-registry.mjs self-test
-
       - name: Validate accepted AR-8C operational credential lifecycle provenance
         run: node .github/scripts/credential-lifecycle.mjs contract
 
@@ -170,15 +169,18 @@ jobs:
       - name: Audit current live hosted GitHub governance
         run: node .github/scripts/github-governance.mjs live
 
+      - name: Reconcile accepted GitHub hosted metadata
+        env:
+          GH_ADMIN_OPERATOR_TOKEN: ${{ secrets.GH_ADMIN_OPERATOR_TOKEN }}
+        run: |
+          set -euo pipefail
+          printf '%s' "$GH_ADMIN_OPERATOR_TOKEN" | node .github/scripts/github-actions-registry.mjs reconcile
+          node .github/scripts/credential-lifecycle.mjs github-live
+
       - name: Audit live Actions registry against canonical projection
         env:
           GITHUB_ACTIONS_READ_AUTH: ${{ github.token }}
         run: printf '%s' "$GITHUB_ACTIONS_READ_AUTH" | node .github/scripts/github-actions-registry.mjs live
-
-      - name: Reconcile GitHub credential binding metadata
-        env:
-          GH_ADMIN_OPERATOR_TOKEN: ${{ secrets.GH_ADMIN_OPERATOR_TOKEN }}
-        run: node .github/scripts/credential-lifecycle.mjs github-live
 
   operational-credential-state:
     name: Operational Credential Hosted State
