@@ -8,9 +8,11 @@ on:
       - '.github/workflows/d1-operator.yml'
       - '.github/workflows/d1-isolated-target-observation.yml'
       - '.github/workflows/d1-migration-prepare.yml'
+      - '.github/workflows/d1-migration-executor.yml'
       - 'scripts/d1-prepare.py'
       - 'tools/opsctl/src/d1/**'
       - 'tools/opsctl/examples/d1-transaction-verify.rs'
+      - 'tools/opsctl/examples/d1-executor-admission.rs'
       - 'tools/opsctl/examples/d1-execution-control.rs'
       - 'tools/opsctl/examples/d1-operator-outcome.rs'
   push:
@@ -20,9 +22,11 @@ on:
       - '.github/workflows/d1-operator.yml'
       - '.github/workflows/d1-isolated-target-observation.yml'
       - '.github/workflows/d1-migration-prepare.yml'
+      - '.github/workflows/d1-migration-executor.yml'
       - 'scripts/d1-prepare.py'
       - 'tools/opsctl/src/d1/**'
       - 'tools/opsctl/examples/d1-transaction-verify.rs'
+      - 'tools/opsctl/examples/d1-executor-admission.rs'
       - 'tools/opsctl/examples/d1-execution-control.rs'
       - 'tools/opsctl/examples/d1-operator-outcome.rs'
   workflow_dispatch:
@@ -89,6 +93,8 @@ jobs:
           assert 'D1_TRANSACTION_AUTHORIZATION_V1' in source
           assert 'd1-transaction-authorization' in source
           assert 'd1-transaction-verify' in source
+          assert 'd1-executor-admission-' in source
+          assert '--authorization-rejection-kind' in source
           assert 'd1-execution-control' in source and 'inspect-receipt' in source and 'verify-post-state' in source
           assert 'D1_OPERATOR_OUTCOME_V1' in source and 'd1-operator-outcome' in source
           artifact_name = 'd1-operator-outcome-' + '$' + '{{ github.run_id }}-' + '$' + '{{ github.run_attempt }}'
@@ -103,6 +109,8 @@ jobs:
               assert terminal in source, f'operator terminal reconciliation missing {terminal}'
           for outcome in ('PREPARE_BLOCKED', 'STALE_OBSERVATION', 'SOURCE_TREE_TRANSACTION_DRIFT', 'TARGET_PRESTATE_DRIFT'):
               assert outcome in source, f'operator typed cause transport missing {outcome}'
+          assert "summary.get('status') == 'PREPARE_BLOCKED'" in source, 'observer PREPARE_BLOCKED must remain typed'
+          assert ('latest = rejected[0]') not in source, 'authorization rejection-set policy must not live in workflow ordering'
           assert ('def validate_' + 'transaction(') not in source, 'operator must not duplicate typed transaction-integrity policy'
           assert ('def validate_' + 'post_state(') not in source, 'operator must not duplicate typed post-state policy'
           assert ('def reconstruct_executor_' + 'manifests(') not in source, 'operator must consume immutable Prepare inputs instead of reconstructing executor manifests'
@@ -115,11 +123,11 @@ jobs:
               ast.parse(textwrap.dedent(body), filename=f'd1-operator-inline-{index}.py')
           PY
 
-      - name: Exercise typed transaction, execution-control, and outcome adapters
+      - name: Exercise typed transaction, admission, execution-control, and outcome adapters
         run: |
           set -euo pipefail
           env -u CLOUDFLARE_API_TOKEN -u CLOUDFLARE_ACCOUNT_ID \
-            cargo test --locked --manifest-path tools/opsctl/Cargo.toml --example d1-transaction-verify --example d1-execution-control --example d1-operator-outcome
+            cargo test --locked --manifest-path tools/opsctl/Cargo.toml --example d1-transaction-verify --example d1-executor-admission --example d1-execution-control --example d1-operator-outcome
 
   operator:
     name: Resolve current D1 state and perform one bounded transition
@@ -152,10 +160,11 @@ jobs:
           env -u CLOUDFLARE_API_TOKEN -u CLOUDFLARE_ACCOUNT_ID \
             cargo build --locked --manifest-path tools/opsctl/Cargo.toml
           env -u CLOUDFLARE_API_TOKEN -u CLOUDFLARE_ACCOUNT_ID \
-            cargo build --locked --manifest-path tools/opsctl/Cargo.toml --example d1-transaction-authorization --example d1-transaction-verify --example d1-execution-control --example d1-operator-outcome
+            cargo build --locked --manifest-path tools/opsctl/Cargo.toml --example d1-transaction-authorization --example d1-transaction-verify --example d1-executor-admission --example d1-execution-control --example d1-operator-outcome
           test -x tools/opsctl/target/debug/opsctl
           test -x tools/opsctl/target/debug/examples/d1-transaction-authorization
           test -x tools/opsctl/target/debug/examples/d1-transaction-verify
+          test -x tools/opsctl/target/debug/examples/d1-executor-admission
           test -x tools/opsctl/target/debug/examples/d1-execution-control
           test -x tools/opsctl/target/debug/examples/d1-operator-outcome
           python scripts/d1-prepare.py self-test
@@ -226,11 +235,9 @@ jobs:
           def current_tree():
               return shell(['git', 'rev-parse', 'HEAD^{tree}']).stdout.strip()
 
-          def typed_owner_diagnostic(process, allowed_reasons):
-              try:
-                  diagnostic = json.loads(process.stdout)
-              except json.JSONDecodeError as exc:
-                  raise SystemExit(f'natural owner rejected without typed JSON diagnostic: {exc}')
+          def typed_owner_diagnostic_value(diagnostic, allowed_reasons):
+              if not isinstance(diagnostic, dict):
+                  raise SystemExit('natural owner diagnostic is not one typed JSON object')
               tool = diagnostic.get('tool') or {}
               reason = diagnostic.get('reason_code')
               if (diagnostic.get('schema_version') != 1
@@ -241,11 +248,22 @@ jobs:
                   raise SystemExit('natural owner returned unsupported typed D1 diagnostic')
               return diagnostic
 
-          def emit_outcome(kind, issue, candidate=None, owner_diagnostic=None, evidence_refs=None):
+          def typed_owner_diagnostic(process, allowed_reasons):
+              try:
+                  diagnostic = json.loads(process.stdout)
+              except json.JSONDecodeError as exc:
+                  raise SystemExit(f'natural owner rejected without typed JSON diagnostic: {exc}')
+              return typed_owner_diagnostic_value(diagnostic, allowed_reasons)
+
+          def emit_outcome(kind, issue, candidate=None, owner_diagnostic=None, evidence_refs=None,
+                           authorization_rejections=None):
               evidence_refs = evidence_refs or {}
+              authorization_rejections = authorization_rejections or []
               args = [str(OUTCOME_TOOL)]
               if kind is not None:
                   args.extend(['--kind', kind])
+              for rejection in authorization_rejections:
+                  args.extend(['--authorization-rejection-kind', rejection])
               args.extend(['--source-sha', SOURCE, '--tree-sha', current_tree(),
                            '--current-stage-issue', str(issue)])
               tx = (candidate or {}).get('transaction') or {}
@@ -274,8 +292,12 @@ jobs:
               expected_kind = kind or ((owner_diagnostic or {}).get('reason_code'))
               if process.stdout.strip() != canonical:
                   raise SystemExit('typed D1 operator outcome is not canonical')
+              if authorization_rejections:
+                  if outcome.get('outcome') not in {'INVALID_AUTHORIZATION', 'STALE_AUTHORIZATION'}:
+                      raise SystemExit('typed authorization rejection-set disposition escaped allowed outcomes')
+              elif outcome.get('outcome') != expected_kind:
+                  raise SystemExit('typed D1 operator outcome kind drifted')
               if (outcome.get('contract') != 'D1_OPERATOR_OUTCOME_V1'
-                      or outcome.get('outcome') != expected_kind
                       or outcome.get('source_sha') != SOURCE
                       or outcome.get('tree_sha') != current_tree()
                       or outcome.get('current_stage_issue') != issue
@@ -460,9 +482,26 @@ jobs:
               if present != required:
                   raise SystemExit(f'fresh preflight artifact file set drifted: {sorted(present)}')
               summary = json.loads((directory / 'summary.json').read_text(encoding='utf-8'))
-              if summary.get('status') != 'PREPARE_READY' or summary.get('source_sha') != SOURCE:
-                  raise SystemExit('fresh observation preflight is not PREPARE_READY for exact source')
               prepare = json.loads((directory / 'prepare.json').read_text(encoding='utf-8'))
+              preflight_ref = f"github-actions:run:{run['id']}:attempt:{attempt}:artifact:{artifact['id']}"
+              if summary.get('source_sha') != SOURCE:
+                  raise SystemExit('fresh observation preflight source identity drifted')
+              if summary.get('status') == 'PREPARE_BLOCKED':
+                  gates = prepare.get('gate_results')
+                  if (prepare.get('status') != 'PREPARE_BLOCKED'
+                          or summary.get('gate_results') != gates
+                          or not isinstance(gates, list)
+                          or not gates
+                          or not isinstance(gates[0], dict)):
+                      raise SystemExit('fresh observation PREPARE_BLOCKED evidence is missing or mismatched')
+                  raise TypedStop(
+                      'PREPARE_BLOCKED',
+                      'read-only observation preflight returned canonical PREPARE_BLOCKED',
+                      owner_diagnostic=gates[0],
+                      evidence_refs={'observation_preflight': preflight_ref},
+                  )
+              if summary.get('status') != 'PREPARE_READY' or prepare.get('status') != 'PREPARE_READY':
+                  raise SystemExit('fresh observation preflight is not one supported exact Prepare disposition')
               policy = ((prepare.get('plan') or {}).get('transaction_policy') or {})
               freshness = policy.get('observation_freshness_max_age_seconds')
               if isinstance(freshness, bool) or not isinstance(freshness, int) or freshness <= 0:
@@ -476,7 +515,7 @@ jobs:
                   raise TypedStop(
                       'STALE_OBSERVATION',
                       'fresh provider observation expired before Prepare construction',
-                      evidence_refs={'observation': f"github-actions:run:{run['id']}:attempt:{attempt}:artifact:{artifact['id']}"},
+                      evidence_refs={'observation': preflight_ref},
                   )
               return {'run': run, 'attempt': attempt, 'job_id': int(hosted[0]['id']),
                       'artifact_id': int(artifact['id']), 'directory': directory}
@@ -714,6 +753,43 @@ jobs:
               run_id = int(run['id'])
               run_number = int(run['run_number'])
               run_attempt = int(run['run_attempt'])
+
+              admission_name = f"d1-executor-admission-{authorization['authorization_digest']}-{run_id}-{run_attempt}"
+              admission_artifact = artifact_exact(run_id, admission_name)
+              if admission_artifact is not None:
+                  with tempfile.TemporaryDirectory(prefix='d1-executor-admission-') as directory:
+                      if not download(run_id, admission_name, directory):
+                          raise SystemExit('cannot download exact executor admission artifact')
+                      root = Path(directory)
+                      present = {path.name for path in root.iterdir() if path.is_file()}
+                      if present != {'executor-admission.json'}:
+                          raise SystemExit(f'executor admission artifact file set drifted: {sorted(present)}')
+                      admission = json.loads((root / 'executor-admission.json').read_text(encoding='utf-8'))
+                  admission_ref = f"github-actions:run:{run_id}:attempt:{run_attempt}:artifact:{admission_artifact['id']}"
+                  if admission.get('status') == 'EXECUTOR_ADMISSION_VERIFIED':
+                      if (admission.get('transaction_id') != tx['transaction_id']
+                              or admission.get('authorization_digest') != authorization['authorization_digest']
+                              or admission.get('source_sha') != SOURCE
+                              or admission.get('tree_sha') != current_tree()
+                              or admission.get('component') != verification['component']
+                              or admission.get('target') != target
+                              or admission.get('phase') != 'ORDINARY'
+                              or admission.get('authorization_consumed') is not False
+                              or admission.get('mutation_executed') is not False
+                              or admission.get('provider_mutation_executed') is not False):
+                          raise SystemExit('executor admission success evidence identity drifted')
+                  else:
+                      diagnostic = typed_owner_diagnostic_value(
+                          admission,
+                          {'SOURCE_TREE_TRANSACTION_DRIFT', 'INVALID_AUTHORIZATION', 'STALE_AUTHORIZATION'},
+                      )
+                      raise TypedStop(
+                          None,
+                          diagnostic.get('summary') or diagnostic['reason_code'],
+                          owner_diagnostic=diagnostic,
+                          evidence_refs={'executor_admission': admission_ref},
+                      )
+
               receipt_name = f'd1-execution-receipt-{run_number}-{run_id}-{run_attempt}-terminal'
               receipt_artifact = require_artifact(run_id, receipt_name)
               with tempfile.TemporaryDirectory(prefix='d1-terminal-receipt-') as directory:
@@ -933,17 +1009,25 @@ jobs:
           auths = authorization_set['valid']
           rejected = authorization_set['rejected']
           if len(auths) == 0 and rejected:
-              latest = rejected[0]
-              diagnostic = latest['diagnostic']
-              outcome = emit_outcome(None if diagnostic is not None else latest['reason_code'], issue, candidate,
-                                     owner_diagnostic=diagnostic,
-                                     evidence_refs={
-                                         'prepare': f"github-actions:run:{candidate['run_id']}:attempt:{candidate['run_attempt']}",
-                                         'authorization_candidate': latest['authorization_reference'],
-                                     })
+              rejection_refs = {
+                  'prepare': f"github-actions:run:{candidate['run_id']}:attempt:{candidate['run_attempt']}"
+              }
+              for index, rejected_candidate in enumerate(rejected, start=1):
+                  reference = rejected_candidate.get('authorization_reference')
+                  if not isinstance(reference, str) or not reference:
+                      raise SystemExit('rejected authorization candidate lost durable reference')
+                  rejection_refs[f'authorization_candidate_{index:03d}'] = reference
+              outcome = emit_outcome(
+                  None,
+                  issue,
+                  candidate,
+                  evidence_refs=rejection_refs,
+                  authorization_rejections=[item['reason_code'] for item in rejected],
+              )
               SUMMARY.write_text('# D1 authorization rejected\n\n'
                                  f"- Current stage issue: `#{issue}`\n- TransactionId: `{tx['transaction_id']}`\n"
-                                 f"- Typed outcome: `{outcome['outcome']}`\n- No executor was dispatched.\n",
+                                 f"- Typed outcome: `{outcome['outcome']}`\n- Rejected candidates: `{len(rejected)}`\n"
+                                 '- No executor was dispatched.\n',
                                  encoding='utf-8')
               raise SystemExit(1)
           if len(auths) == 0:
@@ -964,6 +1048,14 @@ jobs:
           try:
               executor_run = dispatch_executor(candidate, auths[0])
               result = reconcile_executor(candidate, auths[0], executor_run)
+          except TypedStop as stop:
+              emit_outcome(stop.kind, issue, candidate, owner_diagnostic=stop.owner_diagnostic,
+                           evidence_refs={
+                               'prepare': f"github-actions:run:{candidate['run_id']}:attempt:{candidate['run_attempt']}",
+                               'authorization': auths[0]['authorization_reference'],
+                               **stop.evidence_refs,
+                           })
+              raise SystemExit(1)
           except SystemExit:
               if not OUTCOME_PATH.is_file():
                   emit_outcome('RECEIPT_OR_EVIDENCE_MISSING_OR_MISMATCHED', issue, candidate,
