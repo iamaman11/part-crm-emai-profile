@@ -625,7 +625,9 @@ mod tests {
         observation.target.database_id = "different-database".to_owned();
         let error = verify_execution_post_state(&transaction, &receipt, &observation, T0 + 50)
             .err()
-            .ok_or_else(|| D1Error::new("completed observation target mismatch unexpectedly passed"))?;
+            .ok_or_else(|| {
+                D1Error::new("completed observation target mismatch unexpectedly passed")
+            })?;
         assert_eq!(
             error
                 .gate_result_json()
@@ -653,14 +655,10 @@ mod tests {
     fn failed_no_effect_drift_has_typed_target_prestate_diagnostic() -> Result<(), D1Error> {
         let transaction = transaction()?;
         let receipt = receipt(&transaction, ExecutionEventKind::FailedNoEffect)?;
-        let error = verify_execution_post_state(
-            &transaction,
-            &receipt,
-            &post_observation(true),
-            T0 + 50,
-        )
-        .err()
-        .ok_or_else(|| D1Error::new("provider drift unexpectedly passed"))?;
+        let error =
+            verify_execution_post_state(&transaction, &receipt, &post_observation(true), T0 + 50)
+                .err()
+                .ok_or_else(|| D1Error::new("provider drift unexpectedly passed"))?;
         assert_eq!(
             error
                 .gate_result_json()
