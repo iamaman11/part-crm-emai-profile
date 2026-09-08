@@ -193,7 +193,7 @@ fn run() -> Result<(), Box<dyn Error>> {
             Ok(())
         }
         Err(error) => {
-            println!("{}", canonical_json(&error.gate_result_json())?);
+            println!("{}", canonical_json(error.gate_result_json())?);
             Err(error.into())
         }
     }
