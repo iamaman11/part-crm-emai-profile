@@ -6,6 +6,7 @@ on:
   pull_request:
     paths:
       - '.github/workflows/d1-operator.yml'
+      - '.github/workflows/d1-migration-prepare.yml'
       - 'scripts/d1-prepare.py'
       - 'tools/opsctl/examples/d1-transaction-verify.rs'
   push:
@@ -13,6 +14,7 @@ on:
       - main
     paths:
       - '.github/workflows/d1-operator.yml'
+      - '.github/workflows/d1-migration-prepare.yml'
       - 'scripts/d1-prepare.py'
       - 'tools/opsctl/examples/d1-transaction-verify.rs'
   workflow_dispatch:
@@ -73,8 +75,10 @@ jobs:
           assert 'D1_TRANSACTION_AUTHORIZATION_V1' in source
           assert 'd1-transaction-authorization' in source
           assert 'd1-transaction-verify' in source
+          assert 'd1-executor-inputs-' in source
           assert 'scripts/d1-prepare.py' in source and 'operator-input' in source
           assert ('def validate_' + 'transaction(') not in source, 'operator must not duplicate typed transaction-integrity policy'
+          assert ('def reconstruct_executor_' + 'manifests(') not in source, 'operator must consume immutable Prepare inputs instead of reconstructing executor manifests'
           marker = "python - <<'P" + "Y'\n"
           terminator = "\n          P" + "Y"
           blocks = source.split(marker)[1:]
@@ -225,12 +229,6 @@ jobs:
                   return False
               return True
 
-          def repo_projection():
-              value = json.loads(shell([str(OPSCTL), '--root', '.', 'd1', 'repository']).stdout)
-              if value.get('schema_version') != 1:
-                  raise SystemExit('typed D1 repository projection schema drifted')
-              return value
-
           def verify_transaction(path, evaluated_at):
               process = shell([
                   str(VERIFY_TOOL),
@@ -274,6 +272,11 @@ jobs:
               ]
               return matches[0] if len(matches) == 1 else None
 
+          def executor_input_artifact(run, component):
+              attempt = int(run.get('run_attempt') or 0)
+              name = f"d1-executor-inputs-{component}-{run['id']}-{attempt}"
+              return artifact_exact(run['id'], name)
+
           def resolve_fresh_transaction():
               now = int(time.time())
               cutoff = latest_executor_epoch()
@@ -297,17 +300,21 @@ jobs:
                       verification = verify_transaction(path, now)
                       if verification is None:
                           continue
+                      executor_artifact = executor_input_artifact(run, verification['component'])
+                      if executor_artifact is None:
+                          continue
                       tx = json.loads(path.read_text(encoding='utf-8'))
-                      candidates.append((epoch(run['created_at']), run, tx, verification))
+                      candidates.append((epoch(run['created_at']), run, tx, verification, executor_artifact['name']))
               if not candidates:
                   return None
               candidates.sort(key=lambda item: item[0], reverse=True)
-              _, run, tx, verification = candidates[0]
+              _, run, tx, verification, executor_artifact_name = candidates[0]
               return {
                   'run_id': int(run['id']),
                   'run_attempt': int(run['run_attempt']),
                   'transaction': tx,
                   'verification': verification,
+                  'executor_artifact_name': executor_artifact_name,
                   'fresh_until': int(verification['fresh_until_unix_seconds']),
               }
 
@@ -399,7 +406,7 @@ jobs:
               schema = value.get('schema_contract') or {}
               if schema.get('database_component') != component or schema.get('target_schema_revision') != target_revision:
                   raise SystemExit('target release manifest disagrees with typed PREPARE_READY component/revision')
-              return raw, value
+              return raw
 
           def build_prepare_payload(observed):
               directory = observed['directory']
@@ -415,7 +422,7 @@ jobs:
                   f"job:{observed['job_id']}:artifact:{observed['artifact_id']}"
               )
               with tempfile.TemporaryDirectory(prefix='d1-release-') as release_dir:
-                  raw, _ = extract_target_manifest(release_id, release_dir, component, target_revision)
+                  raw = extract_target_manifest(release_id, release_dir, component, target_revision)
                   manifest_path = Path(release_dir) / 'operator-target-release.json'
                   manifest_path.write_bytes(raw)
                   output_path = Path(release_dir) / 'operator-input.json'
@@ -444,11 +451,14 @@ jobs:
               api_post(f'repos/{REPO}/actions/workflows/{PREPARE_WORKFLOW}/dispatches', payload)
               run = wait_for_dispatched_run(PREPARE_WORKFLOW, start, 900)
               attempt = int(run['run_attempt'])
-              name = f"d1-transaction-{component}-{run['id']}-{attempt}"
-              if artifact_exact(run['id'], name) is None:
+              transaction_name = f"d1-transaction-{component}-{run['id']}-{attempt}"
+              executor_name = f"d1-executor-inputs-{component}-{run['id']}-{attempt}"
+              if artifact_exact(run['id'], transaction_name) is None:
                   raise SystemExit('successful Prepare run missing exact transaction artifact')
+              if artifact_exact(run['id'], executor_name) is None:
+                  raise SystemExit('successful Prepare run missing immutable executor input bundle')
               with tempfile.TemporaryDirectory(prefix='d1-prepared-') as directory:
-                  if not download(run['id'], name, directory):
+                  if not download(run['id'], transaction_name, directory):
                       raise SystemExit('cannot download prepared transaction artifact')
                   path = Path(directory) / 'transaction.json'
                   if not path.is_file():
@@ -462,6 +472,7 @@ jobs:
                   'run_attempt': attempt,
                   'transaction': tx,
                   'verification': verification,
+                  'executor_artifact_name': executor_name,
                   'fresh_until': int(verification['fresh_until_unix_seconds']),
               }
 
@@ -523,37 +534,32 @@ jobs:
                   page += 1
               return found
 
-          def reconstruct_executor_manifests(candidate):
-              tx = candidate['transaction']
-              plan = tx['transaction_plan']
-              verification = candidate['verification']
-              component = verification['component']
-              release_id = verification['release_candidate_id']
-              with tempfile.TemporaryDirectory(prefix='d1-executor-release-') as release_dir:
-                  raw, target_manifest = extract_target_manifest(release_id, release_dir, component, verification['schema_target'])
-              expected_digest = plan['release_manifest_digests'].get(component)
-              if hashlib.sha256(raw).hexdigest() != expected_digest:
-                  raise SystemExit('executor target release manifest digest differs from sealed transaction')
-              repository = repo_projection()
-              components = [item for item in repository.get('components') or [] if item.get('component_id') == component]
-              if len(components) != 1:
-                  raise SystemExit('typed repository projection missing prepared D1 component')
-              runtime = components[0].get('pre_migration_runtime_schema_contract')
-              if not isinstance(runtime, dict):
-                  raise SystemExit('typed pre-migration runtime contract is missing')
-              if runtime.get('database_component') != component or runtime.get('supported_schema_max') != verification['schema_target']:
-                  raise SystemExit('typed pre-migration runtime contract disagrees with sealed transaction target')
-              if runtime.get('migration_history_digest') != plan.get('migration_lineage_digest'):
-                  raise SystemExit('runtime migration history digest disagrees with sealed transaction')
-              if runtime.get('compatibility_policy_digest') != plan.get('planner_policy_digest'):
-                  raise SystemExit('runtime compatibility policy digest disagrees with sealed transaction')
-              runtime_manifest = {'schema_contract': runtime}
-              return component, target_manifest, runtime_manifest, runtime_manifest, {'component': component, 'completed': []}
+          def load_executor_inputs(candidate):
+              expected = {
+                  'target-release.json', 'current-release.json',
+                  'known-good-release.json', 'preconditions.json'
+              }
+              with tempfile.TemporaryDirectory(prefix='d1-executor-inputs-') as directory:
+                  if not download(candidate['run_id'], candidate['executor_artifact_name'], directory):
+                      raise SystemExit('cannot download immutable executor input bundle')
+                  root = Path(directory)
+                  present = {path.name for path in root.iterdir() if path.is_file()}
+                  if present != expected:
+                      raise SystemExit(f'immutable executor input bundle file set drifted: {sorted(present)}')
+                  values = {}
+                  for name in expected:
+                      value = json.loads((root / name).read_text(encoding='utf-8'))
+                      if not isinstance(value, dict):
+                          raise SystemExit(f'immutable executor input {name} must be one JSON object')
+                      values[name] = value
+              return values
 
           def dispatch_executor(candidate, authorization):
               tx = candidate['transaction']
+              verification = candidate['verification']
               target = tx['transaction_plan']['target']
-              component, target_manifest, current_manifest, known_good_manifest, preconditions = reconstruct_executor_manifests(candidate)
+              component = verification['component']
+              inputs = load_executor_inputs(candidate)
               confirmation = f"{SOURCE}:{target['environment']}:{component}:{target['database_id']}"
               payload = {
                   'ref': 'main',
@@ -564,10 +570,10 @@ jobs:
                       'account_id': target['account_id'],
                       'database_name': target['database_name'],
                       'database_id': target['database_id'],
-                      'target_release_manifest_json': compact(target_manifest),
-                      'current_release_manifest_json': compact(current_manifest),
-                      'known_good_release_manifest_json': compact(known_good_manifest),
-                      'preconditions_json': compact(preconditions),
+                      'target_release_manifest_json': compact(inputs['target-release.json']),
+                      'current_release_manifest_json': compact(inputs['current-release.json']),
+                      'known_good_release_manifest_json': compact(inputs['known-good-release.json']),
+                      'preconditions_json': compact(inputs['preconditions.json']),
                       'transition_mode': 'ordinary',
                       'expected_release_set_id': '',
                       'prepared_transaction_run_id': str(candidate['run_id']),
