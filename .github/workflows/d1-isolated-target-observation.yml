@@ -43,7 +43,7 @@ jobs:
           EXPECTED_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: python -c "import os, subprocess; actual = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(); expected = os.environ['EXPECTED_SOURCE_SHA']; assert actual == expected, f'expected {expected}, got {actual}'"
 
-      - name: Prove qualification and preflight adapter remains read-only and exact-target bounded
+      - name: Prove qualification and preflight adapter remains read-only and facts-only
         run: |
           set -euo pipefail
           python scripts/d1-executor-plan.py self-test
@@ -62,9 +62,19 @@ jobs:
           )
           for forbidden in forbidden_effect_surfaces:
               assert forbidden not in source, f'read-only isolated D1 observer/preflight contains forbidden effect surface: {forbidden}'
-          assert ('TX' + '6_') not in source
-          assert ('TX' + '-6') not in source
-          assert ('d1-' + 'tx6-') not in source
+          forbidden_stage_policy = (
+              'TX' + '6_',
+              'TX' + '-6',
+              'd1-' + 'tx6-',
+              '0026_' + 'outbound_mail_intents.sql',
+              '0031_' + 'device_binding_governance.sql',
+              '0032_' + 'pas2_payload_fingerprint_contract.sql',
+              'post_' + 'apply_invariants',
+              'exact_' + 'ordinary_revision',
+              'protected_' + 'contract_absent',
+          )
+          for forbidden in forbidden_stage_policy:
+              assert forbidden not in source, f'isolated D1 observer acquired stage-specific migration policy: {forbidden}'
           trigger = source.split('\npermissions:', 1)[0]
           push_block = trigger.split('\n  push:', 1)[1].split('\n  workflow_dispatch:', 1)[0]
           observe_source = source.split('\n  observe:', 1)[1]
@@ -75,6 +85,7 @@ jobs:
           assert os.environ['D1_REHEARSAL_COMPONENT'] == 'catalog'
           assert "opsctl='tools/opsctl/target/debug/opsctl'" in source
           assert 'pre_migration_runtime_schema_contract' in source
+          assert 'release_schema_contract' in source
           assert '--current-manifest "$root/current-runtime-manifest.json"' in source
           assert '--known-good-manifest "$root/known-good-runtime-manifest.json"' in source
           assert '--command "PRAGMA foreign_key_check"' in observe_source
@@ -82,7 +93,8 @@ jobs:
           assert '--command "PRAGMA integrity_check"' not in observe_source
           assert 'foreign_key_exit_code=$?' in observe_source
           assert 'quick_check_exit_code=$?' in observe_source
-          assert "'post_apply_invariants': post_apply_invariants" in observe_source
+          assert "'provider_diagnostics': provider_diagnostics" in observe_source
+          assert 'Fail closed on unusable provider diagnostics' in source
           old_bad_wiring = '--current-manifest "$root/' + 'known-good-manifest.json"'
           assert old_bad_wiring not in source
           PY
@@ -372,13 +384,6 @@ jobs:
           quick_result = quick_check['result']
           canonical_ledger = json.dumps(ledger, sort_keys=True, separators=(',', ':'), ensure_ascii=False)
           ledger_sha256 = hashlib.sha256(canonical_ledger.encode('utf-8')).hexdigest()
-          ordinary_target = '0031_device_binding_governance.sql'
-          protected_contract = '0032_pas2_payload_fingerprint_contract.sql'
-          exact_ordinary_revision = (
-              bool(remote_migrations)
-              and remote_migrations[-1] == ordinary_target
-              and protected_contract not in remote_migrations
-          )
           foreign_key_ok = (
               foreign_key_check['exit_code'] == 0
               and foreign_key_check['json_valid']
@@ -402,17 +407,12 @@ jobs:
               and isinstance(quick_rows[0], dict)
               and list(quick_rows[0].values()) == ['ok']
           )
-          post_apply_invariants = {
-              'schema_version': 3,
-              'expected_terminal_revision': ordinary_target,
-              'ledger_terminal_revision': remote_migrations[-1] if remote_migrations else None,
-              'exact_ordinary_revision': exact_ordinary_revision,
-              'protected_contract_absent': protected_contract not in remote_migrations,
+          provider_diagnostics = {
+              'schema_version': 1,
               'foreign_key_check_ok': foreign_key_ok,
               'quick_check_ok': quick_ok,
               'foreign_key_check': foreign_key_check,
               'quick_check': quick_check,
-              'status': 'PASS' if exact_ordinary_revision and foreign_key_ok and quick_ok else 'FAIL',
           }
           provider_observation = {
               'schema_version': 1,
@@ -447,7 +447,7 @@ jobs:
                   'inventory_match_count': sum(1 for item in databases if item.get('name') == target_name and item.get('uuid') == target_id),
               },
               'provider_observation_input': provider_observation,
-              'post_apply_invariants': post_apply_invariants,
+              'provider_diagnostics': provider_diagnostics,
               'provider_identity_observed': bool(identity),
               'time_travel_observation_present': bool(time_travel),
               'provider_mutation': False,
@@ -462,7 +462,7 @@ jobs:
           PY
 
           SOURCE_SHA="$SOURCE_SHA" jq -e \
-            '.schema_version == 3 and .kind == "D1_ISOLATED_TARGET_OBSERVATION" and .source_sha == env.SOURCE_SHA and .environment == "staging" and .candidate.database_name == env.D1_REHEARSAL_TARGET_NAME and .candidate.database_id == env.D1_REHEARSAL_TARGET_ID and .candidate.is_v2_catalog_reference == false and .candidate.inventory_match_count == 1 and .provider_observation_input.target.database_name == env.D1_REHEARSAL_TARGET_NAME and .provider_observation_input.target.database_id == env.D1_REHEARSAL_TARGET_ID and .provider_observation_input.time_travel_bookmark_capable == true and .post_apply_invariants.schema_version == 3 and .post_apply_invariants.foreign_key_check.exit_code >= 0 and .post_apply_invariants.quick_check.exit_code >= 0 and .provider_mutation == false and .d1_mutation == false and .production_mutation == false' \
+            '.schema_version == 3 and .kind == "D1_ISOLATED_TARGET_OBSERVATION" and .source_sha == env.SOURCE_SHA and .environment == "staging" and .candidate.database_name == env.D1_REHEARSAL_TARGET_NAME and .candidate.database_id == env.D1_REHEARSAL_TARGET_ID and .candidate.is_v2_catalog_reference == false and .candidate.inventory_match_count == 1 and .provider_observation_input.target.database_name == env.D1_REHEARSAL_TARGET_NAME and .provider_observation_input.target.database_id == env.D1_REHEARSAL_TARGET_ID and .provider_observation_input.time_travel_bookmark_capable == true and .provider_diagnostics.schema_version == 1 and .provider_diagnostics.foreign_key_check.exit_code >= 0 and .provider_diagnostics.quick_check.exit_code >= 0 and .provider_mutation == false and .d1_mutation == false and .production_mutation == false' \
             "$evidence/observation.json" >/dev/null
           python -m json.tool "$evidence/observation.json" >/dev/null
 
@@ -474,11 +474,11 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
-      - name: Fail closed on non-passing isolated-target post-apply invariants
+      - name: Fail closed on unusable provider diagnostics
         run: |
           set -euo pipefail
           jq -e \
-            '.post_apply_invariants.status == "PASS" and .post_apply_invariants.exact_ordinary_revision == true and .post_apply_invariants.protected_contract_absent == true and .post_apply_invariants.foreign_key_check.exit_code == 0 and .post_apply_invariants.foreign_key_check.json_valid == true and .post_apply_invariants.foreign_key_check_ok == true and .post_apply_invariants.quick_check.exit_code == 0 and .post_apply_invariants.quick_check.json_valid == true and .post_apply_invariants.quick_check_ok == true' \
+            '.provider_diagnostics.foreign_key_check.exit_code == 0 and .provider_diagnostics.foreign_key_check.json_valid == true and .provider_diagnostics.foreign_key_check_ok == true and .provider_diagnostics.quick_check.exit_code == 0 and .provider_diagnostics.quick_check.json_valid == true and .provider_diagnostics.quick_check_ok == true' \
             artifacts/d1-isolated-target-observation/observation.json >/dev/null
 
       - name: Run canonical credential-free transaction preflight
@@ -510,10 +510,10 @@ jobs:
           gh release download "$target_release" --repo "$GITHUB_REPOSITORY" --pattern release-set.json --pattern control-plane.tar --dir "$root/target"
           gh release download "$D1_REHEARSAL_KNOWN_GOOD_RELEASE_SET_ID" --repo "$GITHUB_REPOSITORY" --pattern release-set.json --pattern control-plane.tar --dir "$root/known-good"
 
-          python - "$root" "$target_release" "$SOURCE_SHA" "$D1_REHEARSAL_KNOWN_GOOD_RELEASE_SET_ID" "$D1_REHEARSAL_KNOWN_GOOD_SOURCE_SHA" "$D1_REHEARSAL_KNOWN_GOOD_MANIFEST_SHA256" <<'PY'
+          python - "$root" "$target_release" "$SOURCE_SHA" "$D1_REHEARSAL_KNOWN_GOOD_RELEASE_SET_ID" "$D1_REHEARSAL_KNOWN_GOOD_SOURCE_SHA" "$D1_REHEARSAL_KNOWN_GOOD_MANIFEST_SHA256" "$D1_REHEARSAL_COMPONENT" <<'PY'
           import hashlib, json, sys, tarfile
           from pathlib import Path
-          root, target_id, source_sha, known_id, known_source, known_manifest_sha = sys.argv[1:]
+          root, target_id, source_sha, known_id, known_source, known_manifest_sha, component_id = sys.argv[1:]
           root = Path(root)
           def extract(folder, expected_id, expected_source, output):
               rs = json.load(open(folder / 'release-set.json', encoding='utf-8'))
@@ -540,53 +540,61 @@ jobs:
           extract(root / 'known-good', known_id, known_source, root / 'known-good-manifest.json')
           if hashlib.sha256((root / 'known-good-manifest.json').read_bytes()).hexdigest() != known_manifest_sha:
               raise SystemExit('known-good exact manifest digest drifted')
-          target = json.load(open(root / 'target-manifest.json', encoding='utf-8'))['schema_contract']
-          known = json.load(open(root / 'known-good-manifest.json', encoding='utf-8'))['schema_contract']
-          if target.get('database_component') != 'catalog' or target.get('target_schema_revision') != '0031_device_binding_governance.sql':
-              raise SystemExit('target release is not exact ordinary Catalog 0031')
-          if known.get('database_component') != 'catalog' or known.get('target_schema_revision') != '0026_outbound_mail_intents.sql':
-              raise SystemExit('known-good release is not exact historical Catalog 0026')
+          for path, label in ((root / 'target-manifest.json', 'target'), (root / 'known-good-manifest.json', 'known-good')):
+              schema = json.load(open(path, encoding='utf-8')).get('schema_contract')
+              if not isinstance(schema, dict) or schema.get('database_component') != component_id:
+                  raise SystemExit(f'{label} release manifest is not for the isolated D1 component')
           PY
           printf '%s\n' "$target_release" > "$evidence/target-release-set-id.txt"
 
           "$opsctl" --root . d1 repository > "$root/d1-repository.json"
           python - \
             "$root/d1-repository.json" \
+            "$root/target-manifest.json" \
             "$root/known-good-manifest.json" \
             "$root/current-runtime-manifest.json" \
             "$root/known-good-runtime-manifest.json" \
             "$evidence/runtime-context.json" <<'PY'
           import json, os, sys
-          repository_path, historical_path, current_output, known_output, evidence_output = sys.argv[1:]
+          repository_path, target_path, historical_path, current_output, known_output, evidence_output = sys.argv[1:]
+          component_id = os.environ['D1_REHEARSAL_COMPONENT']
           repository = json.load(open(repository_path, encoding='utf-8'))
-          matches = [item for item in repository.get('components', []) if item.get('component_id') == 'catalog']
+          matches = [item for item in repository.get('components', []) if item.get('component_id') == component_id]
           if len(matches) != 1:
-              raise SystemExit('typed Catalog repository projection missing/ambiguous during preflight')
-          catalog = matches[0]
-          runtime = catalog.get('pre_migration_runtime_schema_contract')
-          release = catalog.get('release_schema_contract')
+              raise SystemExit('typed D1 repository projection missing/ambiguous during preflight')
+          component = matches[0]
+          runtime = component.get('pre_migration_runtime_schema_contract')
+          release = component.get('release_schema_contract')
+          target = json.load(open(target_path, encoding='utf-8')).get('schema_contract')
           historical = json.load(open(historical_path, encoding='utf-8')).get('schema_contract')
-          if not isinstance(runtime, dict) or not isinstance(release, dict) or not isinstance(historical, dict):
-              raise SystemExit('typed runtime/release/historical schema contracts are incomplete')
-          base = '0026_outbound_mail_intents.sql'
-          ordinary_target = '0031_device_binding_governance.sql'
-          protected_contract = '0032_pas2_payload_fingerprint_contract.sql'
-          if runtime.get('database_component') != 'catalog':
-              raise SystemExit('typed pre-migration runtime contract component drifted')
-          if runtime.get('target_schema_revision') != base or runtime.get('supported_schema_min') != base:
-              raise SystemExit('typed pre-migration runtime contract lost exact historical runtime target')
-          if runtime.get('supported_schema_max') != ordinary_target:
-              raise SystemExit('typed pre-migration runtime safe horizon is not exact ordinary 0031')
-          if runtime.get('migration_history_digest') != catalog.get('history_digest'):
-              raise SystemExit('typed pre-migration runtime contract is not bound to current successor history')
-          if runtime.get('compatibility_policy_digest') != catalog.get('compatibility_policy_digest'):
-              raise SystemExit('typed pre-migration runtime contract is not bound to current D1 policy')
-          if release.get('target_schema_revision') != ordinary_target or release.get('supported_schema_max') != protected_contract:
-              raise SystemExit('typed release schema window drifted from ordinary 0031 / protected 0032 topology')
+          if not all(isinstance(value, dict) for value in (runtime, release, target, historical)):
+              raise SystemExit('typed runtime/release/target/historical schema contracts are incomplete')
+          if runtime.get('database_component') != component_id or release.get('database_component') != component_id:
+              raise SystemExit('typed D1 schema contract component drifted')
+          if runtime.get('target_schema_revision') != runtime.get('supported_schema_min'):
+              raise SystemExit('typed pre-migration runtime contract target/min relation drifted')
           if runtime.get('supported_schema_max') != release.get('target_schema_revision'):
-              raise SystemExit('pre-migration runtime safe horizon does not reach the exact ordinary release target')
+              raise SystemExit('typed pre-migration runtime safe horizon does not reach the typed ordinary release target')
+          for field, owner_field in (
+              ('migration_history_digest', 'history_digest'),
+              ('compatibility_policy_digest', 'compatibility_policy_digest'),
+          ):
+              if runtime.get(field) != component.get(owner_field) or release.get(field) != component.get(owner_field):
+                  raise SystemExit(f'typed D1 {field} is not bound to current repository authority')
+          for field in (
+              'database_component',
+              'target_schema_revision',
+              'supported_schema_min',
+              'supported_schema_max',
+              'migration_history_digest',
+              'compatibility_policy_digest',
+          ):
+              if target.get(field) != release.get(field):
+                  raise SystemExit(f'target Release Set schema contract drifted from typed D1 release authority: {field}')
+          if historical.get('database_component') != component_id:
+              raise SystemExit('immutable historical known-good release component drifted')
           if historical.get('target_schema_revision') != runtime.get('target_schema_revision'):
-              raise SystemExit('immutable historical known-good release no longer identifies the runtime base revision')
+              raise SystemExit('immutable historical known-good release no longer identifies the typed runtime base revision')
           if historical.get('migration_history_digest') == runtime.get('migration_history_digest'):
               raise SystemExit('historical immutable manifest was incorrectly reused as current runtime compatibility identity')
           manifest = {'schema_contract': runtime}
@@ -601,6 +609,7 @@ jobs:
               'basis': 'CURRENT_TYPED_MIGRATION_CONTRACTS',
               'historical_release_target': historical.get('target_schema_revision'),
               'schema_contract': runtime,
+              'release_schema_contract': release,
               'provider_mutation': False,
               'd1_mutation': False,
               'production_mutation': False,
@@ -637,13 +646,13 @@ jobs:
               json.dump(payload, handle, sort_keys=True, indent=2)
               handle.write('\n')
           PY
-          printf '{"component":"catalog","completed":[]}\n' > "$root/preconditions.json"
+          printf '{"component":"%s","completed":[]}\n' "$D1_REHEARSAL_COMPONENT" > "$root/preconditions.json"
 
           set +e
           python scripts/d1-prepare.py prepare \
             --opsctl "$opsctl" \
             --root . \
-            --component catalog \
+            --component "$D1_REHEARSAL_COMPONENT" \
             --ledger-json "$root/ledger.json" \
             --release-manifest "$root/target-manifest.json" \
             --current-manifest "$root/current-runtime-manifest.json" \
@@ -666,6 +675,7 @@ jobs:
           observation = json.load(open(sys.argv[2], encoding='utf-8'))
           runtime_context = json.load(open(sys.argv[3], encoding='utf-8'))
           runtime_contract = runtime_context.get('schema_contract') or {}
+          release_contract = runtime_context.get('release_schema_contract') or {}
           value = {
               'schema_version': 1,
               'kind': 'D1_TRANSACTION_PREFLIGHT',
@@ -681,6 +691,8 @@ jobs:
               'target_database_id': os.environ['D1_REHEARSAL_TARGET_ID'],
               'runtime_context_target_revision': runtime_contract.get('target_schema_revision'),
               'runtime_context_supported_max': runtime_contract.get('supported_schema_max'),
+              'release_target_revision': release_contract.get('target_schema_revision'),
+              'release_supported_max': release_contract.get('supported_schema_max'),
               'status': prepare.get('status'),
               'raw_wrangler_pending_migrations': (observation.get('provider_observation_input') or {}).get('wrangler_pending_migrations'),
               'provider_mutation': False,
