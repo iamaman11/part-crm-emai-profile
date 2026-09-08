@@ -402,7 +402,7 @@ mod tests {
     }
 
     #[test]
-    fn source_checkout_drift_is_typed() -> Result<(), D1Error> {
+    fn source_checkout_drift_is_rejected() -> Result<(), D1Error> {
         let transaction = transaction()?;
         let mut expected = expectation(&transaction);
         expected.source_sha = "ab".repeat(20);
@@ -419,7 +419,7 @@ mod tests {
     }
 
     #[test]
-    fn tree_checkout_drift_is_typed() -> Result<(), D1Error> {
+    fn tree_checkout_drift_is_rejected() -> Result<(), D1Error> {
         let transaction = transaction()?;
         let mut expected = expectation(&transaction);
         expected.tree_sha = "cd".repeat(20);
@@ -436,7 +436,7 @@ mod tests {
     }
 
     #[test]
-    fn target_drift_is_typed_as_transaction_identity_drift() -> Result<(), D1Error> {
+    fn target_drift_is_rejected() -> Result<(), D1Error> {
         let transaction = transaction()?;
         let mut expected = expectation(&transaction);
         expected.target.database_id = "database-2".to_owned();
@@ -453,7 +453,7 @@ mod tests {
     }
 
     #[test]
-    fn transaction_id_drift_is_typed() -> Result<(), D1Error> {
+    fn transaction_id_drift_is_rejected() -> Result<(), D1Error> {
         let transaction = transaction()?;
         let mut expected = expectation(&transaction);
         expected.transaction_id = "ef".repeat(32);
@@ -470,7 +470,7 @@ mod tests {
     }
 
     #[test]
-    fn component_drift_is_typed() -> Result<(), D1Error> {
+    fn component_drift_is_rejected() -> Result<(), D1Error> {
         let transaction = transaction()?;
         let mut expected = expectation(&transaction);
         expected.component = "resolver".to_owned();
