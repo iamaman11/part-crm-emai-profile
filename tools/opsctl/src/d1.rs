@@ -26,6 +26,8 @@ pub mod transaction;
 mod transaction_core;
 #[path = "d1/transaction_integrity.rs"]
 pub mod transaction_integrity;
+#[path = "d1/transaction_policy.rs"]
+mod transaction_policy;
 #[path = "d1/util.rs"]
 mod util;
 #[path = "d1/verify.rs"]
@@ -256,7 +258,7 @@ fn serialize_evaluation(
             })
         })
         .collect::<Vec<_>>();
-    let output = json!({
+    let mut output = json!({
         "schema_version": 1,
         "command": format!("d1 {}", action.name()),
         "status": if evaluation.allowed { "ok" } else { "blocked" },
@@ -275,6 +277,9 @@ fn serialize_evaluation(
         "reason_codes": evaluation.reason_codes,
         "allowed": evaluation.allowed
     });
+    if action == D1Action::Plan {
+        output["transaction_policy"] = transaction_policy::ordinary_projection();
+    }
     serde_json::to_string(&output)
         .map(|value| value + "\n")
         .map_err(|error| D1Error::new(format!("cannot serialize d1 result: {error}")))
