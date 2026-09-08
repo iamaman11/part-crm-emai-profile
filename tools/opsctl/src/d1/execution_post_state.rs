@@ -1,5 +1,5 @@
 use super::execution_control::{ExecutionEventKind, ExecutionReceipt, serialize_execution_receipt};
-use super::model::D1Error;
+use super::model::{D1Error, GateResult};
 use super::transaction::{
     ProviderObservationInput, TargetIdentity, TransactionPhase, TransactionProjection,
 };
@@ -9,6 +9,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 
 const POST_STATE_SCHEMA_VERSION: u64 = 1;
+const TARGET_PRESTATE_DRIFT_REMEDIATION: &str = "Do not retry the sealed transaction. Re-observe the exact target, rebuild canonical Prepare/TransactionId for the newly observed predecessor state, and obtain a new exact authorization before any provider write.";
+const STALE_OBSERVATION_REMEDIATION: &str = "Discard the stale observation. Run the existing read-only observation owner again and re-evaluate the exact transaction/post-state without inferring success from logs or target revision alone.";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
@@ -81,12 +83,14 @@ pub fn verify_execution_post_state(
             "post-state verification requires an ORDINARY execution receipt",
         ));
     }
-    if receipt.target != plan.target
-        || predecessor.target != plan.target
-        || post_observation.target != plan.target
-    {
+    if receipt.target != plan.target || predecessor.target != plan.target {
         return Err(D1Error::new(
-            "post-state verification requires exact transaction/receipt/observation target equality",
+            "post-state verification requires exact transaction/receipt/predecessor target equality",
+        ));
+    }
+    if post_observation.target != plan.target {
+        return Err(target_prestate_drift(
+            "fresh post-state provider observation target drifted from the sealed target identity",
         ));
     }
     if receipt.transaction_id.as_deref() != Some(transaction.transaction_id.as_str())
@@ -102,12 +106,12 @@ pub fn verify_execution_post_state(
         ));
     }
     if post_observation.deployment_identity != predecessor.deployment_identity {
-        return Err(D1Error::new(
+        return Err(target_prestate_drift(
             "post-state deployment identity drifted from the sealed predecessor observation",
         ));
     }
     if post_observation.time_travel_bookmark_capable != predecessor.time_travel_bookmark_capable {
-        return Err(D1Error::new(
+        return Err(target_prestate_drift(
             "post-state Time Travel capability drifted from the sealed predecessor observation",
         ));
     }
@@ -135,8 +139,8 @@ pub fn verify_execution_post_state(
         ));
     }
     if post_observation.observed_at_unix_seconds < terminal_event.occurred_at_unix_seconds {
-        return Err(D1Error::new(
-            "post-state provider observation must not predate the terminal execution receipt event",
+        return Err(stale_observation(
+            "post-state provider observation predates the terminal execution receipt event",
         ));
     }
     let age = evaluated_at_unix_seconds - post_observation.observed_at_unix_seconds;
@@ -144,7 +148,7 @@ pub fn verify_execution_post_state(
         D1Error::new("transaction freshness window exceeds supported timestamp range")
     })?;
     if age > max_age {
-        return Err(D1Error::new(
+        return Err(stale_observation(
             "post-state provider observation is stale under the prepared transaction freshness policy",
         ));
     }
@@ -182,11 +186,21 @@ pub fn verify_execution_post_state(
     expected_migrations.extend(applied.iter().cloned());
     let expected_pending = predecessor.wrangler_pending_migrations[applied.len()..].to_vec();
     if post_observation.remote_migrations != expected_migrations {
+        if terminal_state == ExecutionEventKind::FailedNoEffect && applied.is_empty() {
+            return Err(target_prestate_drift(
+                "FAILED_NO_EFFECT post-state remote migration ledger no longer equals the sealed predecessor ledger",
+            ));
+        }
         return Err(D1Error::new(
             "fresh post-state remote migration ledger does not equal predecessor ledger plus receipt-applied migrations",
         ));
     }
     if post_observation.wrangler_pending_migrations != expected_pending {
+        if terminal_state == ExecutionEventKind::FailedNoEffect && applied.is_empty() {
+            return Err(target_prestate_drift(
+                "FAILED_NO_EFFECT post-state Wrangler pending list no longer equals the sealed predecessor pending list",
+            ));
+        }
         return Err(D1Error::new(
             "fresh post-state Wrangler pending list does not equal predecessor pending list minus receipt-applied migrations",
         ));
@@ -224,11 +238,14 @@ pub fn verify_execution_post_state(
             ExecutionPostStateDisposition::CompletedVerified
         }
         ExecutionEventKind::FailedNoEffect => {
-            if !applied.is_empty()
-                || post_observation.remote_ledger_sha256 != predecessor.remote_ledger_sha256
-            {
+            if !applied.is_empty() {
                 return Err(D1Error::new(
-                    "FAILED_NO_EFFECT receipt requires unchanged provider ledger identity and zero applied migrations",
+                    "FAILED_NO_EFFECT receipt requires zero applied migrations",
+                ));
+            }
+            if post_observation.remote_ledger_sha256 != predecessor.remote_ledger_sha256 {
+                return Err(target_prestate_drift(
+                    "FAILED_NO_EFFECT post-state ledger digest drifted from the sealed predecessor ledger identity",
                 ));
             }
             ExecutionPostStateDisposition::FailedNoEffectVerified
@@ -268,6 +285,30 @@ pub fn serialize_execution_post_state_verification(
         ))
     })?)
     .map_err(D1Error::new)
+}
+
+fn target_prestate_drift(summary: impl Into<String>) -> D1Error {
+    D1Error::blocked(GateResult::blocked(
+        "POST_STATE",
+        "d1.execution_post_state.prestate",
+        "TARGET_PRESTATE_DRIFT",
+        summary,
+        Some("fresh provider state equal to the immutable prepared predecessor when the receipt proves FAILED_NO_EFFECT".to_owned()),
+        None,
+        TARGET_PRESTATE_DRIFT_REMEDIATION,
+    ))
+}
+
+fn stale_observation(summary: impl Into<String>) -> D1Error {
+    D1Error::blocked(GateResult::blocked(
+        "POST_STATE",
+        "d1.execution_post_state.freshness",
+        "STALE_OBSERVATION",
+        summary,
+        Some("fresh post-state observation within the prepared transaction freshness policy and after the terminal receipt".to_owned()),
+        None,
+        STALE_OBSERVATION_REMEDIATION,
+    ))
 }
 
 fn validate_target(target: &TargetIdentity, label: &str) -> Result<(), D1Error> {
@@ -576,6 +617,24 @@ mod tests {
     }
 
     #[test]
+    fn failed_no_effect_drift_has_typed_target_prestate_diagnostic() -> Result<(), D1Error> {
+        let transaction = transaction()?;
+        let receipt = receipt(&transaction, ExecutionEventKind::FailedNoEffect)?;
+        let error = verify_execution_post_state(
+            &transaction,
+            &receipt,
+            &post_observation(true),
+            T0 + 50,
+        )
+        .expect_err("provider drift must fail closed");
+        assert_eq!(
+            error.gate_result_json().get("reason_code").and_then(serde_json::Value::as_str),
+            Some("TARGET_PRESTATE_DRIFT")
+        );
+        Ok(())
+    }
+
+    #[test]
     fn recovery_required_never_promotes_to_completed_when_target_revision_is_present()
     -> Result<(), D1Error> {
         let transaction = transaction()?;
@@ -596,8 +655,11 @@ mod tests {
         let receipt = receipt(&transaction, ExecutionEventKind::Completed)?;
         let mut observation = post_observation(true);
         observation.observed_at_unix_seconds = T0 + 26;
-        assert!(
-            verify_execution_post_state(&transaction, &receipt, &observation, T0 + 50).is_err()
+        let error = verify_execution_post_state(&transaction, &receipt, &observation, T0 + 50)
+            .expect_err("old observation must fail closed");
+        assert_eq!(
+            error.gate_result_json().get("reason_code").and_then(serde_json::Value::as_str),
+            Some("STALE_OBSERVATION")
         );
         Ok(())
     }
@@ -606,14 +668,16 @@ mod tests {
     fn stale_post_observation_fails_closed() -> Result<(), D1Error> {
         let transaction = transaction()?;
         let receipt = receipt(&transaction, ExecutionEventKind::Completed)?;
-        assert!(
-            verify_execution_post_state(
-                &transaction,
-                &receipt,
-                &post_observation(true),
-                T0 + 1_000,
-            )
-            .is_err()
+        let error = verify_execution_post_state(
+            &transaction,
+            &receipt,
+            &post_observation(true),
+            T0 + 1_000,
+        )
+        .expect_err("stale post observation must fail closed");
+        assert_eq!(
+            error.gate_result_json().get("reason_code").and_then(serde_json::Value::as_str),
+            Some("STALE_OBSERVATION")
         );
         Ok(())
     }
