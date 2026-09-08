@@ -92,7 +92,8 @@ jobs:
           python - <<'PY'
           from pathlib import Path
           source = Path('.github/workflows/d1-migration-prepare.yml').read_text(encoding='utf-8')
-          assert source.count('name: d1-executor-inputs-') == 1
+          artifact_name_prefix = 'name: d1-executor-' + 'inputs-'
+          assert source.count(artifact_name_prefix) == 1
           for name in ('target-release.json', 'current-release.json', 'known-good-release.json', 'preconditions.json'):
               assert f'artifacts/d1-prepare/{name}' in source
           PY
