@@ -15,6 +15,7 @@ pub fn build_transaction_projection(
     transaction_value: &Value,
     release_manifest_raw: &[u8],
 ) -> Result<TransactionProjection, D1Error> {
+    super::transaction_policy::validate_ordinary_transaction_binding(prepare, transaction_value)?;
     verify_release_manifest_binding(prepare, transaction_value, release_manifest_raw)?;
     super::transaction_core::build_transaction_projection(
         prepare,
