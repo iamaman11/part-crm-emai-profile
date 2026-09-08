@@ -11,6 +11,7 @@ on:
       - 'scripts/d1-prepare.py'
       - 'tools/opsctl/src/d1/**'
       - 'tools/opsctl/examples/d1-transaction-verify.rs'
+      - 'tools/opsctl/examples/d1-execution-control.rs'
   push:
     branches:
       - main
@@ -21,6 +22,7 @@ on:
       - 'scripts/d1-prepare.py'
       - 'tools/opsctl/src/d1/**'
       - 'tools/opsctl/examples/d1-transaction-verify.rs'
+      - 'tools/opsctl/examples/d1-execution-control.rs'
   workflow_dispatch:
 
 permissions:
@@ -85,9 +87,14 @@ jobs:
           assert 'D1_TRANSACTION_AUTHORIZATION_V1' in source
           assert 'd1-transaction-authorization' in source
           assert 'd1-transaction-verify' in source
+          assert 'd1-execution-control' in source and 'inspect-receipt' in source
           assert 'd1-executor-inputs-' in source
+          assert 'd1-execution-receipt-' in source and 'd1-migration-evidence-' in source
           assert 'scripts/d1-prepare.py' in source and 'operator-input' in source
           assert 'transaction_policy' in source and 'observation_freshness_max_age_seconds' in source
+          assert ('EXECUTOR_' + 'DISPATCHED') not in source, 'operator must reconcile terminal executor evidence instead of stopping after dispatch'
+          for terminal in ('COMPLETED', 'RECOVERY_REQUIRED', 'FAILED_NO_EFFECT'):
+              assert terminal in source, f'operator terminal reconciliation missing {terminal}'
           assert ('def validate_' + 'transaction(') not in source, 'operator must not duplicate typed transaction-integrity policy'
           assert ('def reconstruct_executor_' + 'manifests(') not in source, 'operator must consume immutable Prepare inputs instead of reconstructing executor manifests'
           marker = "python - <<'P" + "Y'\n"
@@ -99,18 +106,18 @@ jobs:
               ast.parse(textwrap.dedent(body), filename=f'd1-operator-inline-{index}.py')
           PY
 
-      - name: Exercise typed transaction verifier positive and negative fixtures
+      - name: Exercise typed transaction and execution-control adapters
         run: |
           set -euo pipefail
           env -u CLOUDFLARE_API_TOKEN -u CLOUDFLARE_ACCOUNT_ID \
-            cargo test --locked --manifest-path tools/opsctl/Cargo.toml --example d1-transaction-verify
+            cargo test --locked --manifest-path tools/opsctl/Cargo.toml --example d1-transaction-verify --example d1-execution-control
 
   operator:
     name: Resolve current D1 state and perform one bounded transition
     if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
     needs: contract
     runs-on: ubuntu-24.04
-    timeout-minutes: 40
+    timeout-minutes: 80
     env:
       GH_TOKEN: ${{ github.token }}
     steps:
@@ -136,13 +143,14 @@ jobs:
           env -u CLOUDFLARE_API_TOKEN -u CLOUDFLARE_ACCOUNT_ID \
             cargo build --locked --manifest-path tools/opsctl/Cargo.toml
           env -u CLOUDFLARE_API_TOKEN -u CLOUDFLARE_ACCOUNT_ID \
-            cargo build --locked --manifest-path tools/opsctl/Cargo.toml --example d1-transaction-authorization --example d1-transaction-verify
+            cargo build --locked --manifest-path tools/opsctl/Cargo.toml --example d1-transaction-authorization --example d1-transaction-verify --example d1-execution-control
           test -x tools/opsctl/target/debug/opsctl
           test -x tools/opsctl/target/debug/examples/d1-transaction-authorization
           test -x tools/opsctl/target/debug/examples/d1-transaction-verify
+          test -x tools/opsctl/target/debug/examples/d1-execution-control
           python scripts/d1-prepare.py self-test
 
-      - name: Resolve, prepare, stop for authorization, or dispatch sole executor
+      - name: Resolve, prepare, stop for authorization, or reconcile sole executor
         env:
           SOURCE_SHA: ${{ github.sha }}
         run: |
@@ -166,6 +174,7 @@ jobs:
           OPSCTL = Path('tools/opsctl/target/debug/opsctl')
           AUTH_TOOL = Path('tools/opsctl/target/debug/examples/d1-transaction-authorization')
           VERIFY_TOOL = Path('tools/opsctl/target/debug/examples/d1-transaction-verify')
+          EXECUTION_CONTROL = Path('tools/opsctl/target/debug/examples/d1-execution-control')
           PREPARE_WORKFLOW = 'd1-migration-prepare.yml'
           OBSERVE_WORKFLOW = 'd1-isolated-target-observation.yml'
           EXECUTOR_WORKFLOW = 'd1-migration-executor.yml'
@@ -222,6 +231,12 @@ jobs:
           def artifact_exact(run_id, name):
               matches = [item for item in artifacts(run_id) if item.get('name') == name and not item.get('expired')]
               return matches[0] if len(matches) == 1 else None
+
+          def require_artifact(run_id, name):
+              matches = [item for item in artifacts(run_id) if item.get('name') == name and not item.get('expired')]
+              if len(matches) != 1:
+                  raise SystemExit(f'exact artifact {name} missing or ambiguous for run {run_id}')
+              return matches[0]
 
           def download(run_id, name, destination):
               destination = Path(destination)
@@ -320,6 +335,27 @@ jobs:
                           return selected
                   time.sleep(10)
               raise SystemExit(f'timed out waiting for {workflow} workflow_dispatch run')
+
+          def wait_for_executor_attempt(started_at, authorization_digest, timeout_seconds):
+              expected_title = f'D1 authorization={authorization_digest}'
+              deadline = time.time() + timeout_seconds
+              while time.time() < deadline:
+                  matching = [run for run in workflow_runs(EXECUTOR_WORKFLOW, 100)
+                              if run.get('event') == 'workflow_dispatch'
+                              and run.get('head_sha') == SOURCE
+                              and run.get('path') == '.github/workflows/d1-migration-executor.yml'
+                              and run.get('display_title') == expected_title
+                              and epoch(run['created_at']) >= started_at - 5]
+                  if len(matching) > 1:
+                      raise SystemExit('sole executor dispatch resolved to multiple matching workflow attempts')
+                  if len(matching) == 1:
+                      run = matching[0]
+                      if int(run.get('run_attempt') or 0) != 1:
+                          raise SystemExit('sole executor attempt drifted from required run_attempt=1')
+                      if run.get('status') == 'completed':
+                          return run
+                  time.sleep(10)
+              raise SystemExit('timed out waiting for exact sole executor attempt')
 
           def fresh_observation():
               start = int(time.time())
@@ -531,7 +567,120 @@ jobs:
                   'authorization_digest': authorization['authorization_digest'],
                   'transaction_authorization_json': authorization['authorization_json'], 'mutation_authorized': True,
                   'confirmation': confirmation}}
+              started_at = int(time.time())
               api_post(f'repos/{REPO}/actions/workflows/{EXECUTOR_WORKFLOW}/dispatches', payload)
+              return wait_for_executor_attempt(started_at, authorization['authorization_digest'], 1800)
+
+          def reconcile_executor(candidate, authorization, run):
+              tx = candidate['transaction']
+              verification = candidate['verification']
+              target = tx['transaction_plan']['target']
+              run_id = int(run['id'])
+              run_number = int(run['run_number'])
+              run_attempt = int(run['run_attempt'])
+              receipt_name = f'd1-execution-receipt-{run_number}-{run_id}-{run_attempt}-terminal'
+              receipt_artifact = require_artifact(run_id, receipt_name)
+              with tempfile.TemporaryDirectory(prefix='d1-terminal-receipt-') as directory:
+                  if not download(run_id, receipt_name, directory):
+                      raise SystemExit('cannot download exact terminal execution receipt')
+                  root = Path(directory)
+                  present = {path.name for path in root.iterdir() if path.is_file()}
+                  if present != {'execution-receipt.json'}:
+                      raise SystemExit(f'terminal execution receipt artifact file set drifted: {sorted(present)}')
+                  receipt_path = root / 'execution-receipt.json'
+                  inspected = shell([str(EXECUTION_CONTROL), 'inspect-receipt', '--receipt', str(receipt_path)])
+                  try:
+                      receipt = json.loads(inspected.stdout)
+                  except json.JSONDecodeError as exc:
+                      raise SystemExit(f'typed execution receipt inspection emitted invalid JSON: {exc}')
+                  canonical_receipt = compact(receipt)
+                  if inspected.stdout.strip() != canonical_receipt:
+                      raise SystemExit('typed execution receipt inspection is not canonical')
+
+              if receipt.get('schema_version') != 1:
+                  raise SystemExit('terminal execution receipt schema drifted')
+              if receipt.get('target') != target:
+                  raise SystemExit('terminal execution receipt target does not match prepared transaction')
+              if receipt.get('phase') != 'ORDINARY':
+                  raise SystemExit('terminal execution receipt phase is not ORDINARY')
+              if receipt.get('operation_identity') != tx['transaction_id'] or receipt.get('transaction_id') != tx['transaction_id']:
+                  raise SystemExit('terminal execution receipt transaction identity mismatch')
+              if receipt.get('authorization_digest') != authorization['authorization_digest']:
+                  raise SystemExit('terminal execution receipt authorization digest mismatch')
+              if receipt.get('source_sha') != SOURCE:
+                  raise SystemExit('terminal execution receipt source mismatch')
+              if receipt.get('executor_run_id') != run_id or receipt.get('fence_epoch') != run_number:
+                  raise SystemExit('terminal execution receipt executor attempt identity mismatch')
+              if not isinstance(receipt.get('receipt_id'), str) or re.fullmatch(r'[0-9a-f]{64}', receipt['receipt_id']) is None:
+                  raise SystemExit('terminal execution receipt_id is invalid')
+              events = receipt.get('events')
+              if not isinstance(events, list) or not events or not isinstance(events[-1], dict):
+                  raise SystemExit('terminal execution receipt has no typed terminal event')
+              terminal = events[-1].get('kind')
+              if terminal not in {'COMPLETED', 'RECOVERY_REQUIRED', 'FAILED_NO_EFFECT'}:
+                  raise SystemExit(f'unrecognized terminal execution receipt state: {terminal}')
+              receipt_sha256 = hashlib.sha256(canonical_receipt.encode('utf-8')).hexdigest()
+
+              evidence_artifact_id = None
+              evidence_sha256 = None
+              if terminal == 'COMPLETED':
+                  if run.get('conclusion') != 'success':
+                      raise SystemExit('COMPLETED receipt disagrees with non-success executor conclusion')
+                  evidence_name = f"d1-migration-evidence-{target['environment']}-{verification['component']}-{run_id}-{run_attempt}"
+                  evidence_artifact = require_artifact(run_id, evidence_name)
+                  with tempfile.TemporaryDirectory(prefix='d1-terminal-evidence-') as directory:
+                      if not download(run_id, evidence_name, directory):
+                          raise SystemExit('cannot download exact completed execution evidence')
+                      root = Path(directory)
+                      present = {path.name for path in root.iterdir() if path.is_file()}
+                      if present != {'evidence.json'}:
+                          raise SystemExit(f'completed execution evidence artifact file set drifted: {sorted(present)}')
+                      evidence_path = root / 'evidence.json'
+                      evidence = json.loads(evidence_path.read_text(encoding='utf-8'))
+                      evidence_sha256 = hashlib.sha256(evidence_path.read_bytes()).hexdigest()
+                  if evidence.get('schema_version') != 3 or evidence.get('evidence_kind') != 'protected-d1-migration-execution':
+                      raise SystemExit('completed execution evidence schema/kind mismatch')
+                  if evidence.get('execution_receipt') != receipt or evidence.get('execution_receipt_id') != receipt['receipt_id']:
+                      raise SystemExit('completed execution evidence does not bind exact terminal receipt')
+                  context = evidence.get('context')
+                  if not isinstance(context, dict):
+                      raise SystemExit('completed execution evidence context missing')
+                  expected_context = {
+                      'source_sha': SOURCE,
+                      'environment': target['environment'],
+                      'component': verification['component'],
+                      'database_name': target['database_name'],
+                      'database_id': target['database_id'],
+                      'transition_mode': 'ordinary',
+                      'transaction_id': tx['transaction_id'],
+                      'authorization_digest': authorization['authorization_digest'],
+                      'prepared_transaction_run_id': str(candidate['run_id']),
+                      'prepared_transaction_run_attempt': str(candidate['run_attempt']),
+                      'executor_run_id': str(run_id),
+                      'executor_run_number': str(run_number),
+                      'executor_run_attempt': str(run_attempt),
+                  }
+                  for key, expected in expected_context.items():
+                      if context.get(key) != expected:
+                          raise SystemExit(f'completed execution evidence context mismatch for {key}')
+                  if context.get('mutation_authorized') is not True:
+                      raise SystemExit('completed execution evidence lost exact mutation authorization binding')
+                  evidence_artifact_id = int(evidence_artifact['id'])
+              elif run.get('conclusion') == 'success':
+                  raise SystemExit(f'{terminal} receipt disagrees with successful executor conclusion')
+
+              return {
+                  'state': terminal,
+                  'executor_run_id': run_id,
+                  'executor_run_number': run_number,
+                  'executor_run_attempt': run_attempt,
+                  'executor_conclusion': run.get('conclusion'),
+                  'receipt_artifact_id': int(receipt_artifact['id']),
+                  'receipt_id': receipt['receipt_id'],
+                  'receipt_sha256': receipt_sha256,
+                  'evidence_artifact_id': evidence_artifact_id,
+                  'evidence_sha256': evidence_sha256,
+              }
 
           issue = current_stage_issue()
           candidate = resolve_fresh_transaction()
@@ -560,11 +709,26 @@ jobs:
           if len(auths) != 1:
               raise SystemExit('multiple valid OWNER authorizations exist for the same fresh transaction')
 
-          dispatch_executor(candidate, auths[0])
-          SUMMARY.write_text('# Sole D1 executor dispatched\n\n'
+          executor_run = dispatch_executor(candidate, auths[0])
+          result = reconcile_executor(candidate, auths[0], executor_run)
+          evidence_line = '- Completed evidence artifact: `N/A`\n- Completed evidence SHA-256: `N/A`\n'
+          if result['evidence_artifact_id'] is not None:
+              evidence_line = (f"- Completed evidence artifact: `{result['evidence_artifact_id']}`\n"
+                               f"- Completed evidence SHA-256: `{result['evidence_sha256']}`\n")
+          SUMMARY.write_text('# Sole D1 executor reconciled\n\n'
                              f"- Current stage issue: `#{issue}`\n- TransactionId: `{tx['transaction_id']}`\n"
                              f"- Authorization digest: `{auths[0]['authorization_digest']}`\n"
-                             '- Mutation authority remains solely in d1-migration-executor.yml.\n', encoding='utf-8')
-          print('D1_OPERATOR_STATE=EXECUTOR_DISPATCHED '
-                f"transaction_id={tx['transaction_id']} authorization_digest={auths[0]['authorization_digest']} issue={issue}")
+                             f"- Executor run: `{result['executor_run_id']}` attempt `{result['executor_run_attempt']}`\n"
+                             f"- Executor conclusion: `{result['executor_conclusion']}`\n"
+                             f"- Terminal receipt state: `{result['state']}`\n"
+                             f"- Receipt artifact: `{result['receipt_artifact_id']}`\n"
+                             f"- ReceiptId: `{result['receipt_id']}`\n"
+                             f"- Receipt SHA-256: `{result['receipt_sha256']}`\n"
+                             + evidence_line
+                             + '- Mutation authority remained solely in d1-migration-executor.yml.\n', encoding='utf-8')
+          print(f"D1_OPERATOR_STATE={result['state']} transaction_id={tx['transaction_id']} "
+                f"authorization_digest={auths[0]['authorization_digest']} executor_run_id={result['executor_run_id']} "
+                f"receipt_id={result['receipt_id']} issue={issue}")
+          if result['state'] != 'COMPLETED':
+              raise SystemExit(1)
           PY
