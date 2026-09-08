@@ -92,8 +92,10 @@ jobs:
           assert "github.event.issue.pull_request == null" in router
           route_source = router.split('\n  route:', 1)[1]
           assert 'actions: write' in route_source, 'read-only observer dispatch must use the bounded ephemeral Actions permission'
-          assert "GH_TOKEN: ${{ github.token }}" in route_source
-          assert "GH_TOKEN: ${{ secrets.GH_ADMIN_OPERATOR_TOKEN }}" in route_source
+          github_token_expr = '$' + '{{ github.token }}'
+          admin_token_expr = '$' + '{{ ' + secret_prefix + 'GH_ADMIN_OPERATOR_TOKEN }}'
+          assert f'GH_TOKEN: {github_token_expr}' in route_source
+          assert f'GH_TOKEN: {admin_token_expr}' in route_source
 
           operator_trigger = operator.split('\npermissions:', 1)[0]
           operator_dispatch = operator_trigger.split('\n  workflow_dispatch:', 1)[1]
