@@ -12,6 +12,7 @@ on:
       - 'tools/opsctl/src/d1/**'
       - 'tools/opsctl/examples/d1-transaction-verify.rs'
       - 'tools/opsctl/examples/d1-execution-control.rs'
+      - 'tools/opsctl/examples/d1-operator-outcome.rs'
   push:
     branches:
       - main
@@ -23,6 +24,7 @@ on:
       - 'tools/opsctl/src/d1/**'
       - 'tools/opsctl/examples/d1-transaction-verify.rs'
       - 'tools/opsctl/examples/d1-execution-control.rs'
+      - 'tools/opsctl/examples/d1-operator-outcome.rs'
   workflow_dispatch:
 
 permissions:
@@ -88,6 +90,8 @@ jobs:
           assert 'd1-transaction-authorization' in source
           assert 'd1-transaction-verify' in source
           assert 'd1-execution-control' in source and 'inspect-receipt' in source and 'verify-post-state' in source
+          assert 'D1_OPERATOR_OUTCOME_V1' in source and 'd1-operator-outcome' in source
+          assert 'd1-operator-outcome-${{ github.run_id }}-${{ github.run_attempt }}' in source
           assert 'd1-executor-inputs-' in source
           assert 'd1-execution-receipt-' in source and 'd1-migration-evidence-' in source
           assert 'scripts/d1-prepare.py' in source and 'operator-input' in source
@@ -107,11 +111,11 @@ jobs:
               ast.parse(textwrap.dedent(body), filename=f'd1-operator-inline-{index}.py')
           PY
 
-      - name: Exercise typed transaction and execution-control adapters
+      - name: Exercise typed transaction, execution-control, and outcome adapters
         run: |
           set -euo pipefail
           env -u CLOUDFLARE_API_TOKEN -u CLOUDFLARE_ACCOUNT_ID \
-            cargo test --locked --manifest-path tools/opsctl/Cargo.toml --example d1-transaction-verify --example d1-execution-control
+            cargo test --locked --manifest-path tools/opsctl/Cargo.toml --example d1-transaction-verify --example d1-execution-control --example d1-operator-outcome
 
   operator:
     name: Resolve current D1 state and perform one bounded transition
@@ -144,11 +148,12 @@ jobs:
           env -u CLOUDFLARE_API_TOKEN -u CLOUDFLARE_ACCOUNT_ID \
             cargo build --locked --manifest-path tools/opsctl/Cargo.toml
           env -u CLOUDFLARE_API_TOKEN -u CLOUDFLARE_ACCOUNT_ID \
-            cargo build --locked --manifest-path tools/opsctl/Cargo.toml --example d1-transaction-authorization --example d1-transaction-verify --example d1-execution-control
+            cargo build --locked --manifest-path tools/opsctl/Cargo.toml --example d1-transaction-authorization --example d1-transaction-verify --example d1-execution-control --example d1-operator-outcome
           test -x tools/opsctl/target/debug/opsctl
           test -x tools/opsctl/target/debug/examples/d1-transaction-authorization
           test -x tools/opsctl/target/debug/examples/d1-transaction-verify
           test -x tools/opsctl/target/debug/examples/d1-execution-control
+          test -x tools/opsctl/target/debug/examples/d1-operator-outcome
           python scripts/d1-prepare.py self-test
 
       - name: Resolve, prepare, stop for authorization, or reconcile sole executor
@@ -176,6 +181,8 @@ jobs:
           AUTH_TOOL = Path('tools/opsctl/target/debug/examples/d1-transaction-authorization')
           VERIFY_TOOL = Path('tools/opsctl/target/debug/examples/d1-transaction-verify')
           EXECUTION_CONTROL = Path('tools/opsctl/target/debug/examples/d1-execution-control')
+          OUTCOME_TOOL = Path('tools/opsctl/target/debug/examples/d1-operator-outcome')
+          OUTCOME_PATH = Path('d1-operator-outcome.json')
           PREPARE_WORKFLOW = 'd1-migration-prepare.yml'
           OBSERVE_WORKFLOW = 'd1-isolated-target-observation.yml'
           EXECUTOR_WORKFLOW = 'd1-migration-executor.yml'
@@ -207,6 +214,47 @@ jobs:
 
           def current_tree():
               return shell(['git', 'rev-parse', 'HEAD^{tree}']).stdout.strip()
+
+          def emit_outcome(kind, issue, candidate=None, owner_diagnostic=None, evidence_refs=None):
+              evidence_refs = evidence_refs or {}
+              args = [str(OUTCOME_TOOL), '--kind', kind, '--source-sha', SOURCE,
+                      '--tree-sha', current_tree(), '--current-stage-issue', str(issue)]
+              tx = (candidate or {}).get('transaction') or {}
+              transaction_id = tx.get('transaction_id')
+              if isinstance(transaction_id, str):
+                  args.extend(['--transaction-id', transaction_id])
+              target = (tx.get('transaction_plan') or {}).get('target')
+              with tempfile.TemporaryDirectory(prefix='d1-operator-outcome-') as directory:
+                  root = Path(directory)
+                  if isinstance(target, dict):
+                      target_path = root / 'target.json'
+                      target_path.write_text(compact(target) + '\n', encoding='utf-8')
+                      args.extend(['--target-json', str(target_path)])
+                  if owner_diagnostic is not None:
+                      diagnostic_path = root / 'owner-diagnostic.json'
+                      diagnostic_path.write_text(compact(owner_diagnostic) + '\n', encoding='utf-8')
+                      args.extend(['--owner-diagnostic-json', str(diagnostic_path)])
+                  for name, reference in sorted(evidence_refs.items()):
+                      args.extend(['--evidence-ref', f'{name}={reference}'])
+                  process = shell(args)
+              try:
+                  outcome = json.loads(process.stdout)
+              except json.JSONDecodeError as exc:
+                  raise SystemExit(f'typed D1 operator outcome emitted invalid JSON: {exc}')
+              canonical = compact(outcome)
+              if process.stdout.strip() != canonical:
+                  raise SystemExit('typed D1 operator outcome is not canonical')
+              if (outcome.get('contract') != 'D1_OPERATOR_OUTCOME_V1'
+                      or outcome.get('outcome') != kind
+                      or outcome.get('source_sha') != SOURCE
+                      or outcome.get('tree_sha') != current_tree()
+                      or outcome.get('current_stage_issue') != issue
+                      or outcome.get('operator_has_provider_credentials') is not False):
+                  raise SystemExit('typed D1 operator outcome identity drifted')
+              if owner_diagnostic is not None and outcome.get('owner_diagnostic') != owner_diagnostic:
+                  raise SystemExit('typed D1 operator outcome did not preserve natural-owner diagnostic verbatim')
+              OUTCOME_PATH.write_text(canonical + '\n', encoding='utf-8')
+              return outcome
 
           def current_stage_issue():
               tracker = gh_json(f'repos/{REPO}/issues/266')
@@ -483,6 +531,7 @@ jobs:
               tx = candidate['transaction']
               now = int(time.time())
               found = []
+              rejected = []
               page = 1
               while True:
                   comments = gh_json(f'repos/{REPO}/issues/{issue}/comments?per_page=100&page={page}')
@@ -521,16 +570,27 @@ jobs:
                           process = shell([str(AUTH_TOOL), '--transaction-json', str(tx_path), '--authorization-json', str(auth_path),
                                            '--evaluated-at-unix-seconds', str(now)], check=False)
                       if process.returncode != 0:
+                          try:
+                              diagnostic = json.loads(process.stdout)
+                          except json.JSONDecodeError:
+                              raise SystemExit('authorization natural owner rejected a candidate without typed JSON diagnostic')
+                          tool = diagnostic.get('tool') or {}
+                          reason = diagnostic.get('reason_code')
+                          if (reason not in {'INVALID_AUTHORIZATION', 'STALE_AUTHORIZATION'}
+                                  or tool.get('name') != 'opsctl' or tool.get('surface') != 'd1'):
+                              raise SystemExit('authorization natural owner returned an unsupported rejection diagnostic')
+                          rejected.append({'diagnostic': diagnostic,
+                                           'authorization_reference': authorization['authorization_reference']})
                           continue
                       binding = json.loads(process.stdout)
                       if binding.get('status') != 'AUTHORIZATION_VERIFIED' or binding.get('transaction_id') != tx.get('transaction_id'):
-                          continue
+                          raise SystemExit('authorization natural owner returned an invalid success binding')
                       found.append({'authorization_json': canonical, 'authorization_digest': binding.get('authorization_digest'),
                                     'authorization_reference': authorization['authorization_reference']})
                   if len(comments) < 100:
                       break
                   page += 1
-              return found
+              return {'valid': found, 'rejected': rejected}
 
           def load_executor_inputs(candidate):
               expected = {'target-release.json', 'current-release.json', 'known-good-release.json', 'preconditions.json'}
@@ -734,34 +794,118 @@ jobs:
           issue = current_stage_issue()
           candidate = resolve_fresh_transaction()
           if candidate is None:
-              observed = fresh_observation()
-              candidate = dispatch_prepare_and_wait(observed)
+              try:
+                  observed = fresh_observation()
+                  candidate = dispatch_prepare_and_wait(observed)
+              except SystemExit:
+                  emit_outcome('RECEIPT_OR_EVIDENCE_MISSING_OR_MISMATCHED', issue)
+                  raise
               tx = candidate['transaction']
+              planned = (tx.get('transaction_plan') or {}).get('planned_migrations')
+              if planned == []:
+                  outcome = emit_outcome('REPLAY_OR_NOOP', issue, candidate,
+                                         evidence_refs={'prepare': f"github-actions:run:{candidate['run_id']}:attempt:{candidate['run_attempt']}"})
+                  SUMMARY.write_text('# D1 mechanical replay/no-op\n\n'
+                                     f"- Current stage issue: `#{issue}`\n- TransactionId: `{tx['transaction_id']}`\n"
+                                     f"- Typed outcome: `{outcome['outcome']}`\n- Provider mutation: `NO`\n",
+                                     encoding='utf-8')
+                  raise SystemExit(0)
+              outcome = emit_outcome('AUTHORIZATION_REQUIRED', issue, candidate,
+                                     evidence_refs={'prepare': f"github-actions:run:{candidate['run_id']}:attempt:{candidate['run_attempt']}"})
               SUMMARY.write_text('# D1 transaction prepared\n\n'
                                  f"- Current stage issue: `#{issue}`\n- TransactionId: `{tx['transaction_id']}`\n"
                                  f"- Prepare run: `{candidate['run_id']}` attempt `{candidate['run_attempt']}`\n"
-                                 f"- Fresh until unix: `{candidate['fresh_until']}`\n- Provider mutation: `NO`\n"
-                                 '- Next: record one exact transaction authorization in the CURRENT stage issue, then run this workflow once.\n',
-                                 encoding='utf-8')
-              print(f"D1_OPERATOR_STATE=TRANSACTION_PREPARED transaction_id={tx['transaction_id']} issue={issue}")
-              raise SystemExit(0)
-
-          tx = candidate['transaction']
-          auths = valid_authorizations(candidate, issue)
-          if len(auths) == 0:
-              SUMMARY.write_text('# D1 authorization required\n\n'
-                                 f"- Current stage issue: `#{issue}`\n- TransactionId: `{tx['transaction_id']}`\n"
-                                 '- No exact immutable OWNER authorization exists for this fresh transaction.\n- No executor was dispatched.\n',
+                                 f"- Fresh until unix: `{candidate['fresh_until']}`\n- Typed outcome: `{outcome['outcome']}`\n"
+                                 '- Provider mutation: `NO`\n- Next: record one exact transaction authorization in the CURRENT stage issue, then run this workflow once.\n',
                                  encoding='utf-8')
               print(f"D1_OPERATOR_STATE=AUTHORIZATION_REQUIRED transaction_id={tx['transaction_id']} issue={issue}")
               raise SystemExit(0)
+
+          tx = candidate['transaction']
+          planned = (tx.get('transaction_plan') or {}).get('planned_migrations')
+          if planned == []:
+              emit_outcome('REPLAY_OR_NOOP', issue, candidate,
+                           evidence_refs={'prepare': f"github-actions:run:{candidate['run_id']}:attempt:{candidate['run_attempt']}"})
+              raise SystemExit(0)
+
+          try:
+              authorization_set = valid_authorizations(candidate, issue)
+          except SystemExit:
+              emit_outcome('RECEIPT_OR_EVIDENCE_MISSING_OR_MISMATCHED', issue, candidate,
+                           evidence_refs={'prepare': f"github-actions:run:{candidate['run_id']}:attempt:{candidate['run_attempt']}"})
+              raise
+          auths = authorization_set['valid']
+          rejected = authorization_set['rejected']
+          if len(auths) == 0 and rejected:
+              diagnostic = rejected[0]['diagnostic']
+              kind = diagnostic['reason_code']
+              outcome = emit_outcome(kind, issue, candidate, owner_diagnostic=diagnostic,
+                                     evidence_refs={
+                                         'prepare': f"github-actions:run:{candidate['run_id']}:attempt:{candidate['run_attempt']}",
+                                         'authorization_candidate': rejected[0]['authorization_reference'],
+                                     })
+              SUMMARY.write_text('# D1 authorization rejected\n\n'
+                                 f"- Current stage issue: `#{issue}`\n- TransactionId: `{tx['transaction_id']}`\n"
+                                 f"- Typed outcome: `{outcome['outcome']}`\n- No executor was dispatched.\n",
+                                 encoding='utf-8')
+              raise SystemExit(1)
+          if len(auths) == 0:
+              outcome = emit_outcome('NO_AUTHORIZATION', issue, candidate,
+                                     evidence_refs={'prepare': f"github-actions:run:{candidate['run_id']}:attempt:{candidate['run_attempt']}"})
+              SUMMARY.write_text('# D1 authorization required\n\n'
+                                 f"- Current stage issue: `#{issue}`\n- TransactionId: `{tx['transaction_id']}`\n"
+                                 f"- Typed outcome: `{outcome['outcome']}`\n"
+                                 '- No exact immutable OWNER authorization exists for this fresh transaction.\n- No executor was dispatched.\n',
+                                 encoding='utf-8')
+              print(f"D1_OPERATOR_STATE=NO_AUTHORIZATION transaction_id={tx['transaction_id']} issue={issue}")
+              raise SystemExit(0)
           if len(auths) != 1:
+              emit_outcome('MULTIPLE_AUTHORIZATIONS', issue, candidate,
+                           evidence_refs={'prepare': f"github-actions:run:{candidate['run_id']}:attempt:{candidate['run_attempt']}"})
               raise SystemExit('multiple valid OWNER authorizations exist for the same fresh transaction')
 
-          executor_run = dispatch_executor(candidate, auths[0])
-          result = reconcile_executor(candidate, auths[0], executor_run)
-          post_state = reconcile_post_state(candidate, result)
+          try:
+              executor_run = dispatch_executor(candidate, auths[0])
+              result = reconcile_executor(candidate, auths[0], executor_run)
+          except SystemExit:
+              if not OUTCOME_PATH.is_file():
+                  emit_outcome('RECEIPT_OR_EVIDENCE_MISSING_OR_MISMATCHED', issue, candidate,
+                               evidence_refs={
+                                   'prepare': f"github-actions:run:{candidate['run_id']}:attempt:{candidate['run_attempt']}",
+                                   'authorization': auths[0]['authorization_reference'],
+                               })
+              raise
+          try:
+              post_state = reconcile_post_state(candidate, result)
+          except SystemExit:
+              emit_outcome('RECEIPT_OR_EVIDENCE_MISSING_OR_MISMATCHED', issue, candidate,
+                           evidence_refs={
+                               'prepare': f"github-actions:run:{candidate['run_id']}:attempt:{candidate['run_attempt']}",
+                               'authorization': auths[0]['authorization_reference'],
+                               'executor': f"github-actions:run:{result['executor_run_id']}:attempt:{result['executor_run_attempt']}",
+                               'receipt': f"github-actions:run:{result['executor_run_id']}:artifact:{result['receipt_artifact_id']}:receipt:{result['receipt_id']}",
+                           })
+              raise
           post = post_state['verification']
+          evidence_refs = {
+              'prepare': f"github-actions:run:{candidate['run_id']}:attempt:{candidate['run_attempt']}",
+              'authorization': auths[0]['authorization_reference'],
+              'executor': f"github-actions:run:{result['executor_run_id']}:attempt:{result['executor_run_attempt']}",
+              'receipt': f"github-actions:run:{result['executor_run_id']}:artifact:{result['receipt_artifact_id']}:receipt:{result['receipt_id']}",
+              'post_state': f"github-actions:run:{post_state['observation_run_id']}:attempt:{post_state['observation_run_attempt']}:artifact:{post_state['observation_artifact_id']}:sha256:{post_state['verification_sha256']}",
+          }
+          if result['evidence_artifact_id'] is not None:
+              evidence_refs['execution_evidence'] = f"github-actions:run:{result['executor_run_id']}:artifact:{result['evidence_artifact_id']}:sha256:{result['evidence_sha256']}"
+          if result['state'] == 'COMPLETED':
+              outcome_kind = 'COMPLETED_VERIFIED'
+          elif result['state'] == 'RECOVERY_REQUIRED':
+              outcome_kind = 'RECOVERY_REQUIRED'
+          else:
+              event_kinds = [event.get('kind') for event in result['receipt'].get('events', []) if isinstance(event, dict)]
+              outcome_kind = ('PREWRITE_ABORT' if 'PREWRITE_ABORTED' in event_kinds and 'MUTATION_STARTED' not in event_kinds
+                              else 'EXECUTOR_FAILED_NO_EFFECT')
+          outcome = emit_outcome(outcome_kind, issue, candidate, evidence_refs=evidence_refs)
+
           evidence_line = '- Completed evidence artifact: `N/A`\n- Completed evidence SHA-256: `N/A`\n'
           if result['evidence_artifact_id'] is not None:
               evidence_line = (f"- Completed evidence artifact: `{result['evidence_artifact_id']}`\n"
@@ -772,6 +916,7 @@ jobs:
                              f"- Executor run: `{result['executor_run_id']}` attempt `{result['executor_run_attempt']}`\n"
                              f"- Executor conclusion: `{result['executor_conclusion']}`\n"
                              f"- Terminal receipt state: `{result['state']}`\n"
+                             f"- Typed outcome: `{outcome['outcome']}`\n"
                              f"- Receipt artifact: `{result['receipt_artifact_id']}`\n"
                              f"- ReceiptId: `{result['receipt_id']}`\n"
                              f"- Receipt SHA-256: `{result['receipt_sha256']}`\n"
@@ -784,9 +929,18 @@ jobs:
                              f"- Post-state verification SHA-256: `{post_state['verification_sha256']}`\n"
                              + '- Mutation authority remained solely in d1-migration-executor.yml; post-state observation was read-only.\n',
                              encoding='utf-8')
-          print(f"D1_OPERATOR_STATE={result['state']} transaction_id={tx['transaction_id']} "
+          print(f"D1_OPERATOR_STATE={outcome['outcome']} transaction_id={tx['transaction_id']} "
                 f"authorization_digest={auths[0]['authorization_digest']} executor_run_id={result['executor_run_id']} "
                 f"receipt_id={result['receipt_id']} post_state={post['disposition']} issue={issue}")
           if result['state'] != 'COMPLETED':
               raise SystemExit(1)
           PY
+
+      - name: Upload durable typed D1 operator outcome
+        if: always() && hashFiles('d1-operator-outcome.json') != ''
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: d1-operator-outcome-${{ github.run_id }}-${{ github.run_attempt }}
+          path: d1-operator-outcome.json
+          if-no-files-found: error
+          retention-days: 30
