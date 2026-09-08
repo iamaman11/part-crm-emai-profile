@@ -214,8 +214,6 @@ def _build_operator_inputs(
     release_id: str,
     release_manifest_raw: bytes,
     evidence_ref: str,
-    freshness_seconds: int,
-    recovery_strategy: str,
 ) -> dict[str, Any]:
     if prepare.get("status") != "PREPARE_READY":
         raise ValueError("operator input requires PREPARE_READY observation evidence")
@@ -230,6 +228,7 @@ def _build_operator_inputs(
     component = plan.get("component")
     target_revision = plan.get("target_revision")
     planned_names = plan.get("planned_migrations")
+    transaction_policy = plan.get("transaction_policy")
     if not isinstance(component, str) or not component:
         raise ValueError("PREPARE_READY plan.component must be one non-empty string")
     if not isinstance(target_revision, str) or not target_revision:
@@ -238,6 +237,20 @@ def _build_operator_inputs(
         raise ValueError("PREPARE_READY plan.planned_migrations must be a non-empty string array")
     if len(set(planned_names)) != len(planned_names):
         raise ValueError("PREPARE_READY plan.planned_migrations must not contain duplicates")
+    if not isinstance(transaction_policy, dict):
+        raise ValueError("PREPARE_READY plan.transaction_policy must be one typed object")
+    transaction_kind = transaction_policy.get("transaction_kind")
+    phase = transaction_policy.get("phase")
+    freshness_seconds = transaction_policy.get("observation_freshness_max_age_seconds")
+    recovery_strategy = transaction_policy.get("recovery_strategy")
+    if not isinstance(transaction_kind, str) or not transaction_kind:
+        raise ValueError("typed transaction policy transaction_kind must be one non-empty string")
+    if not isinstance(phase, str) or not phase:
+        raise ValueError("typed transaction policy phase must be one non-empty string")
+    if isinstance(freshness_seconds, bool) or not isinstance(freshness_seconds, int) or freshness_seconds <= 0:
+        raise ValueError("typed transaction policy observation freshness must be one positive integer")
+    if not isinstance(recovery_strategy, str) or not recovery_strategy:
+        raise ValueError("typed transaction policy recovery_strategy must be one non-empty string")
 
     observation = observation_document.get("provider_observation_input")
     if not isinstance(observation, dict):
@@ -311,8 +324,8 @@ def _build_operator_inputs(
     preconditions = {"component": component, "completed": []}
     transaction_input = {
         "schema_version": 1,
-        "transaction_kind": "D1_MIGRATION",
-        "phase": "ORDINARY",
+        "transaction_kind": transaction_kind,
+        "phase": phase,
         "source_sha": source_sha,
         "tree_sha": tree_sha,
         "release_candidate_id": release_id,
@@ -372,8 +385,6 @@ def command_operator_input(args: argparse.Namespace) -> int:
         release_id=args.release_id,
         release_manifest_raw=release_manifest_raw,
         evidence_ref=args.evidence_ref,
-        freshness_seconds=args.freshness_seconds,
-        recovery_strategy=args.recovery_strategy,
     )
     Path(args.output).write_text(json.dumps(result, sort_keys=True, indent=2) + "\n", encoding="utf-8")
     return 0
@@ -444,6 +455,13 @@ def command_self_test(_: argparse.Namespace) -> int:
                 "component": "catalog",
                 "target_revision": "0042_dynamic_operator_fixture.sql",
                 "planned_migrations": ["0042_dynamic_operator_fixture.sql"],
+                "transaction_policy": {
+                    "schema_version": 17,
+                    "transaction_kind": "FIXTURE_TRANSACTION_KIND",
+                    "phase": "FIXTURE_PHASE",
+                    "observation_freshness_max_age_seconds": 321,
+                    "recovery_strategy": "FIXTURE_RECOVERY",
+                },
             },
         }
         observation = {
@@ -486,8 +504,6 @@ def command_self_test(_: argparse.Namespace) -> int:
             release_id=f"release-set-v3-sha256-{'55' * 32}",
             release_manifest_raw=release_raw,
             evidence_ref="fixture:observation",
-            freshness_seconds=900,
-            recovery_strategy="NOOP_RETRY",
         )
         assert projection["command"] == "d1 operator-input"
         assert projection["mutation_executed"] is False
@@ -496,6 +512,10 @@ def command_self_test(_: argparse.Namespace) -> int:
         assert tx_input["planned_migrations"][0]["migration_file"] == "0042_dynamic_operator_fixture.sql"
         assert tx_input["expected_post_state"] == {"revision": "0042_dynamic_operator_fixture.sql"}
         assert tx_input["planned_migrations"][0]["content_sha256"] == hashlib.sha256(migration.read_bytes()).hexdigest()
+        assert tx_input["transaction_kind"] == "FIXTURE_TRANSACTION_KIND"
+        assert tx_input["phase"] == "FIXTURE_PHASE"
+        assert tx_input["freshness_max_age_seconds"] == 321
+        assert tx_input["recovery_strategy"] == "FIXTURE_RECOVERY"
         assert "0031_device_binding_governance.sql" not in projection["inputs"]["transaction_input_json"]
 
         broken_prepare = json.loads(json.dumps(prepare))
@@ -512,13 +532,31 @@ def command_self_test(_: argparse.Namespace) -> int:
                 release_id=f"release-set-v3-sha256-{'55' * 32}",
                 release_manifest_raw=release_raw,
                 evidence_ref="fixture:observation",
-                freshness_seconds=900,
-                recovery_strategy="NOOP_RETRY",
             )
         except ValueError as exc:
             assert "no executable source" in str(exc)
         else:
             raise AssertionError("operator input must fail closed when typed migration source is absent")
+
+        missing_policy = json.loads(json.dumps(prepare))
+        del missing_policy["plan"]["transaction_policy"]
+        try:
+            _build_operator_inputs(
+                root=root,
+                prepare=missing_policy,
+                observation_document=observation,
+                runtime_context=runtime_context,
+                repository=repository,
+                source_sha="33" * 20,
+                tree_sha="44" * 20,
+                release_id=f"release-set-v3-sha256-{'55' * 32}",
+                release_manifest_raw=release_raw,
+                evidence_ref="fixture:observation",
+            )
+        except ValueError as exc:
+            assert "transaction_policy" in str(exc)
+        else:
+            raise AssertionError("operator input must fail closed when typed transaction policy is absent")
 
         output = root / "prepare.json"
         output.write_text(json.dumps(blocked, sort_keys=True, indent=2) + "\n", encoding="utf-8")
@@ -558,18 +596,6 @@ def parser() -> argparse.ArgumentParser:
     operator_input.add_argument("--release-id", required=True)
     operator_input.add_argument("--release-manifest", required=True)
     operator_input.add_argument("--evidence-ref", required=True)
-    operator_input.add_argument("--freshness-seconds", required=True, type=int)
-    operator_input.add_argument(
-        "--recovery-strategy",
-        required=True,
-        choices=(
-            "NOOP_RETRY",
-            "ROLL_FORWARD",
-            "FAIL_FORWARD_ONLY",
-            "TIME_TRAVEL_RESTORE_REQUIRES_SEPARATE_AUTH",
-            "MANUAL_REPAIR_REQUIRED",
-        ),
-    )
     operator_input.add_argument("--output", required=True)
     operator_input.set_defaults(func=command_operator_input)
 
