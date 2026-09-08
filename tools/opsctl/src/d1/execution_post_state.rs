@@ -607,8 +607,12 @@ mod tests {
     fn failed_no_effect_requires_exact_unchanged_state() -> Result<(), D1Error> {
         let transaction = transaction()?;
         let receipt = receipt(&transaction, ExecutionEventKind::FailedNoEffect)?;
-        let verified =
-            verify_execution_post_state(&transaction, &receipt, &post_observation(false), T0 + 50)?;
+        let verified = verify_execution_post_state(
+            &transaction,
+            &receipt,
+            &post_observation(false),
+            T0 + 50,
+        )?;
         assert_eq!(
             verified.disposition,
             ExecutionPostStateDisposition::FailedNoEffectVerified
@@ -628,7 +632,10 @@ mod tests {
         )
         .expect_err("provider drift must fail closed");
         assert_eq!(
-            error.gate_result_json().get("reason_code").and_then(serde_json::Value::as_str),
+            error
+                .gate_result_json()
+                .get("reason_code")
+                .and_then(serde_json::Value::as_str),
             Some("TARGET_PRESTATE_DRIFT")
         );
         Ok(())
@@ -658,7 +665,10 @@ mod tests {
         let error = verify_execution_post_state(&transaction, &receipt, &observation, T0 + 50)
             .expect_err("old observation must fail closed");
         assert_eq!(
-            error.gate_result_json().get("reason_code").and_then(serde_json::Value::as_str),
+            error
+                .gate_result_json()
+                .get("reason_code")
+                .and_then(serde_json::Value::as_str),
             Some("STALE_OBSERVATION")
         );
         Ok(())
@@ -676,7 +686,10 @@ mod tests {
         )
         .expect_err("stale post observation must fail closed");
         assert_eq!(
-            error.gate_result_json().get("reason_code").and_then(serde_json::Value::as_str),
+            error
+                .gate_result_json()
+                .get("reason_code")
+                .and_then(serde_json::Value::as_str),
             Some("STALE_OBSERVATION")
         );
         Ok(())
