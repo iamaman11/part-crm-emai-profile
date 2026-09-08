@@ -74,9 +74,10 @@ jobs:
           assert '--current-manifest "$root/current-runtime-manifest.json"' in source
           assert '--known-good-manifest "$root/known-good-runtime-manifest.json"' in source
           assert '--command "PRAGMA foreign_key_check"' in observe_source
-          assert '--command "PRAGMA integrity_check"' in observe_source
+          assert '--command "PRAGMA quick_check"' in observe_source
+          assert '--command "PRAGMA integrity_check"' not in observe_source
           assert 'foreign_key_exit_code=$?' in observe_source
-          assert 'integrity_check_exit_code=$?' in observe_source
+          assert 'quick_check_exit_code=$?' in observe_source
           assert "'post_apply_invariants': post_apply_invariants" in observe_source
           old_bad_wiring = '--current-manifest "$root/' + 'known-good-manifest.json"'
           assert old_bad_wiring not in source
@@ -281,13 +282,13 @@ jobs:
             > "$raw/foreign-key-check.stdout"
           foreign_key_exit_code=$?
           npx --yes wrangler@4.94.0 d1 execute "$TX6_READ_ONLY_CANDIDATE_NAME" --remote \
-            --config "$raw/wrangler.json" --command "PRAGMA integrity_check" --json \
+            --config "$raw/wrangler.json" --command "PRAGMA quick_check" --json \
             --experimental-provision=false --experimental-auto-create=false \
-            > "$raw/integrity-check.stdout"
-          integrity_check_exit_code=$?
+            > "$raw/quick-check.stdout"
+          quick_check_exit_code=$?
           set -e
           printf '%s\n' "$foreign_key_exit_code" > "$raw/foreign-key-check.exit-code"
-          printf '%s\n' "$integrity_check_exit_code" > "$raw/integrity-check.exit-code"
+          printf '%s\n' "$quick_check_exit_code" > "$raw/quick-check.exit-code"
 
           npx --yes wrangler@4.94.0 d1 migrations list "$TX6_READ_ONLY_CANDIDATE_NAME" --remote \
             --config "$raw/wrangler.json" \
@@ -323,8 +324,8 @@ jobs:
             "$raw/time-travel.json" \
             "$raw/foreign-key-check.stdout" \
             "$raw/foreign-key-check.exit-code" \
-            "$raw/integrity-check.stdout" \
-            "$raw/integrity-check.exit-code" \
+            "$raw/quick-check.stdout" \
+            "$raw/quick-check.exit-code" \
             "$evidence/observation.json" \
             "$SOURCE_SHA" "$account_id" "$catalog_name" \
             "$TX6_READ_ONLY_CANDIDATE_NAME" "$TX6_READ_ONLY_CANDIDATE_ID" \
@@ -334,7 +335,7 @@ jobs:
               inventory_path, ledger_path, ledger_names_path, pending_path,
               identity_path, time_travel_path,
               foreign_key_stdout_path, foreign_key_exit_path,
-              integrity_stdout_path, integrity_exit_path,
+              quick_stdout_path, quick_exit_path,
               output_path, source_sha, account_id, catalog_name, target_name,
               target_id, observed_at, observed_at_unix_seconds, observation_source,
           ) = sys.argv[1:]
@@ -362,9 +363,9 @@ jobs:
               }
 
           foreign_key_check = diagnostic(foreign_key_stdout_path, foreign_key_exit_path)
-          integrity_check = diagnostic(integrity_stdout_path, integrity_exit_path)
+          quick_check = diagnostic(quick_stdout_path, quick_exit_path)
           foreign_key_result = foreign_key_check['result']
-          integrity_result = integrity_check['result']
+          quick_result = quick_check['result']
           canonical_ledger = json.dumps(ledger, sort_keys=True, separators=(',', ':'), ensure_ascii=False)
           ledger_sha256 = hashlib.sha256(canonical_ledger.encode('utf-8')).hexdigest()
           ordinary_target = '0031_device_binding_governance.sql'
@@ -383,31 +384,31 @@ jobs:
               and foreign_key_result[0].get('success') is True
               and foreign_key_result[0].get('results') == []
           )
-          integrity_rows = integrity_result[0].get('results') if (
-              integrity_check['exit_code'] == 0
-              and integrity_check['json_valid']
-              and isinstance(integrity_result, list)
-              and len(integrity_result) == 1
-              and isinstance(integrity_result[0], dict)
-              and integrity_result[0].get('success') is True
+          quick_rows = quick_result[0].get('results') if (
+              quick_check['exit_code'] == 0
+              and quick_check['json_valid']
+              and isinstance(quick_result, list)
+              and len(quick_result) == 1
+              and isinstance(quick_result[0], dict)
+              and quick_result[0].get('success') is True
           ) else None
-          integrity_ok = (
-              isinstance(integrity_rows, list)
-              and len(integrity_rows) == 1
-              and isinstance(integrity_rows[0], dict)
-              and list(integrity_rows[0].values()) == ['ok']
+          quick_ok = (
+              isinstance(quick_rows, list)
+              and len(quick_rows) == 1
+              and isinstance(quick_rows[0], dict)
+              and list(quick_rows[0].values()) == ['ok']
           )
           post_apply_invariants = {
-              'schema_version': 2,
+              'schema_version': 3,
               'expected_terminal_revision': ordinary_target,
               'ledger_terminal_revision': remote_migrations[-1] if remote_migrations else None,
               'exact_ordinary_revision': exact_ordinary_revision,
               'protected_contract_absent': protected_contract not in remote_migrations,
               'foreign_key_check_ok': foreign_key_ok,
-              'integrity_check_ok': integrity_ok,
+              'quick_check_ok': quick_ok,
               'foreign_key_check': foreign_key_check,
-              'integrity_check': integrity_check,
-              'status': 'PASS' if exact_ordinary_revision and foreign_key_ok and integrity_ok else 'FAIL',
+              'quick_check': quick_check,
+              'status': 'PASS' if exact_ordinary_revision and foreign_key_ok and quick_ok else 'FAIL',
           }
           provider_observation = {
               'schema_version': 1,
@@ -427,7 +428,7 @@ jobs:
           }
           databases = inventory.get('result', [])
           document = {
-              'schema_version': 2,
+              'schema_version': 3,
               'kind': 'D1_TX6_EXACT_CANDIDATE_OBSERVATION',
               'source_sha': source_sha,
               'environment': 'staging',
@@ -457,7 +458,7 @@ jobs:
           PY
 
           SOURCE_SHA="$SOURCE_SHA" jq -e \
-            '.schema_version == 2 and .kind == "D1_TX6_EXACT_CANDIDATE_OBSERVATION" and .source_sha == env.SOURCE_SHA and .environment == "staging" and .candidate.database_name == env.TX6_READ_ONLY_CANDIDATE_NAME and .candidate.database_id == env.TX6_READ_ONLY_CANDIDATE_ID and .candidate.is_v2_catalog_reference == false and .candidate.inventory_match_count == 1 and .provider_observation_input.target.database_name == env.TX6_READ_ONLY_CANDIDATE_NAME and .provider_observation_input.target.database_id == env.TX6_READ_ONLY_CANDIDATE_ID and .provider_observation_input.time_travel_bookmark_capable == true and .post_apply_invariants.schema_version == 2 and .post_apply_invariants.foreign_key_check.exit_code >= 0 and .post_apply_invariants.integrity_check.exit_code >= 0 and .provider_mutation == false and .d1_mutation == false and .production_mutation == false' \
+            '.schema_version == 3 and .kind == "D1_TX6_EXACT_CANDIDATE_OBSERVATION" and .source_sha == env.SOURCE_SHA and .environment == "staging" and .candidate.database_name == env.TX6_READ_ONLY_CANDIDATE_NAME and .candidate.database_id == env.TX6_READ_ONLY_CANDIDATE_ID and .candidate.is_v2_catalog_reference == false and .candidate.inventory_match_count == 1 and .provider_observation_input.target.database_name == env.TX6_READ_ONLY_CANDIDATE_NAME and .provider_observation_input.target.database_id == env.TX6_READ_ONLY_CANDIDATE_ID and .provider_observation_input.time_travel_bookmark_capable == true and .post_apply_invariants.schema_version == 3 and .post_apply_invariants.foreign_key_check.exit_code >= 0 and .post_apply_invariants.quick_check.exit_code >= 0 and .provider_mutation == false and .d1_mutation == false and .production_mutation == false' \
             "$evidence/observation.json" >/dev/null
           python -m json.tool "$evidence/observation.json" >/dev/null
 
@@ -473,7 +474,7 @@ jobs:
         run: |
           set -euo pipefail
           jq -e \
-            '.post_apply_invariants.status == "PASS" and .post_apply_invariants.exact_ordinary_revision == true and .post_apply_invariants.protected_contract_absent == true and .post_apply_invariants.foreign_key_check.exit_code == 0 and .post_apply_invariants.foreign_key_check.json_valid == true and .post_apply_invariants.foreign_key_check_ok == true and .post_apply_invariants.integrity_check.exit_code == 0 and .post_apply_invariants.integrity_check.json_valid == true and .post_apply_invariants.integrity_check_ok == true' \
+            '.post_apply_invariants.status == "PASS" and .post_apply_invariants.exact_ordinary_revision == true and .post_apply_invariants.protected_contract_absent == true and .post_apply_invariants.foreign_key_check.exit_code == 0 and .post_apply_invariants.foreign_key_check.json_valid == true and .post_apply_invariants.foreign_key_check_ok == true and .post_apply_invariants.quick_check.exit_code == 0 and .post_apply_invariants.quick_check.json_valid == true and .post_apply_invariants.quick_check_ok == true' \
             artifacts/d1-tx6-isolated-target-observation/observation.json >/dev/null
 
       - name: Run canonical credential-free transaction preflight
