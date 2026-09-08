@@ -1,9 +1,10 @@
-name: D1 TX-6 Isolated Target Observation
+name: D1 Isolated Target Observation
 
 on:
   pull_request:
     paths:
-      - '.github/workflows/d1-tx6-isolated-target-observation.yml'
+      - '.github/workflows/d1-isolated-target-observation.yml'
+      - '.github/workflows/d1-operator.yml'
   push:
     branches:
       - main
@@ -13,20 +14,20 @@ permissions:
   contents: read
 
 concurrency:
-  group: d1-tx6-isolated-target-observation-${{ github.workflow }}-${{ github.ref }}
+  group: d1-isolated-target-observation-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 env:
-  TX6_READ_ONLY_CANDIDATE_NAME: part-crm-d3a-bootstrap-proof
-  TX6_READ_ONLY_CANDIDATE_ID: 713dd6f2-646b-46ad-93eb-103d2d0b63c4
-  TX6_READ_ONLY_CANDIDATE_COMPONENT: catalog
-  TX6_KNOWN_GOOD_RELEASE_SET_ID: release-set-v3-sha256-e01338de30cdc4c334e210f9e2bd75a67837420dd370b83964caae452f77522c
-  TX6_KNOWN_GOOD_SOURCE_SHA: 852dd515121011130dbd3d7726b72483ecc85aaf
-  TX6_KNOWN_GOOD_MANIFEST_SHA256: cd57a6851a348c7044a628deae5a5804e0f7447cd0583c96bc61ad8f8812e10e
+  D1_REHEARSAL_TARGET_NAME: part-crm-d3a-bootstrap-proof
+  D1_REHEARSAL_TARGET_ID: 713dd6f2-646b-46ad-93eb-103d2d0b63c4
+  D1_REHEARSAL_COMPONENT: catalog
+  D1_REHEARSAL_KNOWN_GOOD_RELEASE_SET_ID: release-set-v3-sha256-e01338de30cdc4c334e210f9e2bd75a67837420dd370b83964caae452f77522c
+  D1_REHEARSAL_KNOWN_GOOD_SOURCE_SHA: 852dd515121011130dbd3d7726b72483ecc85aaf
+  D1_REHEARSAL_KNOWN_GOOD_MANIFEST_SHA256: cd57a6851a348c7044a628deae5a5804e0f7447cd0583c96bc61ad8f8812e10e
 
 jobs:
   contract:
-    name: TX-6 isolated observation contract
+    name: Isolated D1 observation contract
     runs-on: ubuntu-24.04
     timeout-minutes: 4
     steps:
@@ -50,7 +51,7 @@ jobs:
           python - <<'PY'
           import os
           from pathlib import Path
-          source = Path('.github/workflows/d1-tx6-isolated-target-observation.yml').read_text(encoding='utf-8')
+          source = Path('.github/workflows/d1-isolated-target-observation.yml').read_text(encoding='utf-8')
           forbidden_effect_surfaces = (
               'secrets.' + 'CLOUDFLARE_API_TOKEN',
               'd1 migrations' + ' apply',
@@ -60,15 +61,18 @@ jobs:
               'd1-migration-executor.yml' + '/dispatches',
           )
           for forbidden in forbidden_effect_surfaces:
-              assert forbidden not in source, f'read-only TX-6 observer/preflight contains forbidden effect surface: {forbidden}'
+              assert forbidden not in source, f'read-only isolated D1 observer/preflight contains forbidden effect surface: {forbidden}'
+          assert 'TX6_' not in source
+          assert 'TX-6' not in source
+          assert 'd1-tx6-' not in source
           trigger = source.split('\npermissions:', 1)[0]
           push_block = trigger.split('\n  push:', 1)[1].split('\n  workflow_dispatch:', 1)[0]
           observe_source = source.split('\n  observe:', 1)[1]
           assert '\n    branches:\n      - main' in push_block
           assert '\n    paths:' not in push_block, 'exact-main observation must not be path-filtered'
-          assert os.environ['TX6_READ_ONLY_CANDIDATE_NAME'] in source
-          assert os.environ['TX6_READ_ONLY_CANDIDATE_ID'] in source
-          assert os.environ['TX6_READ_ONLY_CANDIDATE_COMPONENT'] == 'catalog'
+          assert os.environ['D1_REHEARSAL_TARGET_NAME'] in source
+          assert os.environ['D1_REHEARSAL_TARGET_ID'] in source
+          assert os.environ['D1_REHEARSAL_COMPONENT'] == 'catalog'
           assert "opsctl='tools/opsctl/target/debug/opsctl'" in source
           assert 'pre_migration_runtime_schema_contract' in source
           assert '--current-manifest "$root/current-runtime-manifest.json"' in source
@@ -84,7 +88,7 @@ jobs:
           PY
 
   observe:
-    name: TX-6 isolated target hosted observation and preflight
+    name: Isolated D1 target hosted observation and preflight
     if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
     needs: contract
     runs-on: ubuntu-24.04
@@ -110,9 +114,9 @@ jobs:
           set -euo pipefail
           test "$GITHUB_REF" = 'refs/heads/main'
           test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
-          test "$TX6_READ_ONLY_CANDIDATE_COMPONENT" = catalog
-          test -n "$TX6_READ_ONLY_CANDIDATE_NAME"
-          test -n "$TX6_READ_ONLY_CANDIDATE_ID"
+          test "$D1_REHEARSAL_COMPONENT" = catalog
+          test -n "$D1_REHEARSAL_TARGET_NAME"
+          test -n "$D1_REHEARSAL_TARGET_ID"
 
       - name: Set up pinned Node for Wrangler read adapter
         uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
@@ -120,7 +124,7 @@ jobs:
           node-version: '24.19.0'
           package-manager-cache: false
 
-      - name: Observe exact TX-6 candidate with read-only credential
+      - name: Observe exact isolated rehearsal target with read-only credential
         env:
           CLOUDFLARE_OBSERVE_API_TOKEN: ${{ secrets.CLOUDFLARE_OBSERVE_API_TOKEN }}
           CLOUDFLARE_DEPLOY_MANIFEST_JSON: ${{ secrets.CLOUDFLARE_DEPLOY_MANIFEST_JSON }}
@@ -132,8 +136,8 @@ jobs:
           echo "::add-mask::$CLOUDFLARE_OBSERVE_API_TOKEN"
           umask 077
 
-          raw="$RUNNER_TEMP/d1-tx6-isolated-target-observation"
-          evidence="artifacts/d1-tx6-isolated-target-observation"
+          raw="$RUNNER_TEMP/d1-isolated-target-observation"
+          evidence="artifacts/d1-isolated-target-observation"
           lineage="$raw/catalog-lineage"
           mkdir -p "$raw" "$evidence" "$lineage"
           manifest="$raw/deploy-manifest.json"
@@ -141,7 +145,7 @@ jobs:
 
           account_id="$(jq -er '.control_plane.account_id // .account_id | select(type == "string" and length == 32)' "$manifest")"
           catalog_name="$(jq -er '.control_plane.d1_database_name // .d1_database_name | select(type == "string" and length > 0)' "$manifest")"
-          test "$TX6_READ_ONLY_CANDIDATE_NAME" != "$catalog_name"
+          test "$D1_REHEARSAL_TARGET_NAME" != "$catalog_name"
 
           env -u CLOUDFLARE_OBSERVE_API_TOKEN -u CLOUDFLARE_API_TOKEN -u CLOUDFLARE_ACCOUNT_ID \
             cargo run --locked --quiet --manifest-path tools/opsctl/Cargo.toml -- --root . d1 repository \
@@ -182,30 +186,30 @@ jobs:
           test "$inventory_code" = 200
           jq -e '.success == true and (.errors | length) == 0 and (.result | type == "array")' "$raw/d1-databases.json" >/dev/null
 
-          python - "$raw/d1-databases.json" "$account_id" "$catalog_name" "$TX6_READ_ONLY_CANDIDATE_NAME" "$TX6_READ_ONLY_CANDIDATE_ID" <<'PY'
+          python - "$raw/d1-databases.json" "$account_id" "$catalog_name" "$D1_REHEARSAL_TARGET_NAME" "$D1_REHEARSAL_TARGET_ID" <<'PY'
           import json, sys
           path, account_id, catalog_name, target_name, target_id = sys.argv[1:]
           doc = json.load(open(path, encoding='utf-8'))
           matches = [item for item in doc.get('result', []) if item.get('name') == target_name and item.get('uuid') == target_id]
           if len(matches) != 1:
-              raise SystemExit('exact TX-6 read-only candidate id/name pair missing or ambiguous in fresh staging inventory')
+              raise SystemExit('exact isolated rehearsal target id/name pair missing or ambiguous in fresh staging inventory')
           if target_name == catalog_name:
-              raise SystemExit('TX-6 candidate equals forbidden V2 staging Catalog reference')
+              raise SystemExit('isolated rehearsal target equals forbidden V2 staging Catalog reference')
           candidate = matches[0]
           if candidate.get('name') == 'part-crm-catalog-production':
-              raise SystemExit('TX-6 candidate resolved to Production catalog')
+              raise SystemExit('isolated rehearsal target resolved to Production catalog')
           print(json.dumps({'account_id': account_id, 'candidate': candidate}, sort_keys=True))
           PY
 
-          python - "$raw/wrangler.json" "$account_id" "$TX6_READ_ONLY_CANDIDATE_NAME" "$TX6_READ_ONLY_CANDIDATE_ID" "$lineage" <<'PY'
+          python - "$raw/wrangler.json" "$account_id" "$D1_REHEARSAL_TARGET_NAME" "$D1_REHEARSAL_TARGET_ID" "$lineage" <<'PY'
           import json, sys
           output, account_id, name, database_id, lineage = sys.argv[1:]
           value = {
-              'name': 'tx6-read-only-observer',
+              'name': 'd1-isolated-read-only-observer',
               'compatibility_date': '2026-08-15',
               'account_id': account_id,
               'd1_databases': [{
-                  'binding': 'TX6_REHEARSAL_DB',
+                  'binding': 'D1_REHEARSAL_DB',
                   'database_name': name,
                   'database_id': database_id,
                   'migrations_dir': lineage,
@@ -219,12 +223,12 @@ jobs:
           export CLOUDFLARE_API_TOKEN="$CLOUDFLARE_OBSERVE_API_TOKEN"
           export CLOUDFLARE_ACCOUNT_ID="$account_id"
 
-          npx --yes wrangler@4.94.0 d1 info "$TX6_READ_ONLY_CANDIDATE_NAME" \
+          npx --yes wrangler@4.94.0 d1 info "$D1_REHEARSAL_TARGET_NAME" \
             --config "$raw/wrangler.json" --json \
             --experimental-provision=false --experimental-auto-create=false \
             > "$raw/provider-identity.json"
 
-          python - "$raw/provider-identity.json" "$TX6_READ_ONLY_CANDIDATE_NAME" "$TX6_READ_ONLY_CANDIDATE_ID" <<'PY'
+          python - "$raw/provider-identity.json" "$D1_REHEARSAL_TARGET_NAME" "$D1_REHEARSAL_TARGET_ID" <<'PY'
           import json, sys
           value = json.load(open(sys.argv[1], encoding='utf-8'))
           name, database_id = sys.argv[2:]
@@ -239,10 +243,10 @@ jobs:
                   return any(paired(v) for v in item)
               return False
           if not paired(value):
-              raise SystemExit('provider identity does not preserve exact TX-6 candidate id/name pair')
+              raise SystemExit('provider identity does not preserve exact isolated rehearsal target id/name pair')
           PY
 
-          npx --yes wrangler@4.94.0 d1 execute "$TX6_READ_ONLY_CANDIDATE_NAME" --remote \
+          npx --yes wrangler@4.94.0 d1 execute "$D1_REHEARSAL_TARGET_NAME" --remote \
             --config "$raw/wrangler.json" \
             --command "SELECT name FROM sqlite_master WHERE type='table' AND name='d1_migrations'" --json \
             --experimental-provision=false --experimental-auto-create=false \
@@ -262,7 +266,7 @@ jobs:
           raise SystemExit(0 if contains(value) else 1)
           PY
           then
-            npx --yes wrangler@4.94.0 d1 execute "$TX6_READ_ONLY_CANDIDATE_NAME" --remote \
+            npx --yes wrangler@4.94.0 d1 execute "$D1_REHEARSAL_TARGET_NAME" --remote \
               --config "$raw/wrangler.json" \
               --command "SELECT id, name FROM d1_migrations ORDER BY id" --json \
               --experimental-provision=false --experimental-auto-create=false \
@@ -276,12 +280,12 @@ jobs:
             --output "$raw/ledger-names.json"
 
           set +e
-          npx --yes wrangler@4.94.0 d1 execute "$TX6_READ_ONLY_CANDIDATE_NAME" --remote \
+          npx --yes wrangler@4.94.0 d1 execute "$D1_REHEARSAL_TARGET_NAME" --remote \
             --config "$raw/wrangler.json" --command "PRAGMA foreign_key_check" --json \
             --experimental-provision=false --experimental-auto-create=false \
             > "$raw/foreign-key-check.stdout"
           foreign_key_exit_code=$?
-          npx --yes wrangler@4.94.0 d1 execute "$TX6_READ_ONLY_CANDIDATE_NAME" --remote \
+          npx --yes wrangler@4.94.0 d1 execute "$D1_REHEARSAL_TARGET_NAME" --remote \
             --config "$raw/wrangler.json" --command "PRAGMA quick_check" --json \
             --experimental-provision=false --experimental-auto-create=false \
             > "$raw/quick-check.stdout"
@@ -290,7 +294,7 @@ jobs:
           printf '%s\n' "$foreign_key_exit_code" > "$raw/foreign-key-check.exit-code"
           printf '%s\n' "$quick_check_exit_code" > "$raw/quick-check.exit-code"
 
-          npx --yes wrangler@4.94.0 d1 migrations list "$TX6_READ_ONLY_CANDIDATE_NAME" --remote \
+          npx --yes wrangler@4.94.0 d1 migrations list "$D1_REHEARSAL_TARGET_NAME" --remote \
             --config "$raw/wrangler.json" \
             --experimental-provision=false --experimental-auto-create=false \
             > "$raw/wrangler-pending.txt"
@@ -306,7 +310,7 @@ jobs:
               handle.write('\n')
           PY
 
-          npx --yes wrangler@4.94.0 d1 time-travel info "$TX6_READ_ONLY_CANDIDATE_NAME" \
+          npx --yes wrangler@4.94.0 d1 time-travel info "$D1_REHEARSAL_TARGET_NAME" \
             --config "$raw/wrangler.json" --json \
             --experimental-provision=false --experimental-auto-create=false \
             > "$raw/time-travel.json"
@@ -328,7 +332,7 @@ jobs:
             "$raw/quick-check.exit-code" \
             "$evidence/observation.json" \
             "$SOURCE_SHA" "$account_id" "$catalog_name" \
-            "$TX6_READ_ONLY_CANDIDATE_NAME" "$TX6_READ_ONLY_CANDIDATE_ID" \
+            "$D1_REHEARSAL_TARGET_NAME" "$D1_REHEARSAL_TARGET_ID" \
             "$observed_at" "$observed_at_unix_seconds" "$observation_source" <<'PY'
           import hashlib, json, sys
           (
@@ -429,7 +433,7 @@ jobs:
           databases = inventory.get('result', [])
           document = {
               'schema_version': 3,
-              'kind': 'D1_TX6_EXACT_CANDIDATE_OBSERVATION',
+              'kind': 'D1_ISOLATED_TARGET_OBSERVATION',
               'source_sha': source_sha,
               'environment': 'staging',
               'observed_at': observed_at,
@@ -451,31 +455,31 @@ jobs:
               'production_mutation': False,
           }
           if document['candidate']['inventory_match_count'] != 1 or document['candidate']['is_v2_catalog_reference']:
-              raise SystemExit('TX-6 exact candidate lost isolated target identity')
+              raise SystemExit('isolated rehearsal target lost exact isolated identity')
           with open(output_path, 'w', encoding='utf-8') as handle:
               json.dump(document, handle, sort_keys=True, indent=2)
               handle.write('\n')
           PY
 
           SOURCE_SHA="$SOURCE_SHA" jq -e \
-            '.schema_version == 3 and .kind == "D1_TX6_EXACT_CANDIDATE_OBSERVATION" and .source_sha == env.SOURCE_SHA and .environment == "staging" and .candidate.database_name == env.TX6_READ_ONLY_CANDIDATE_NAME and .candidate.database_id == env.TX6_READ_ONLY_CANDIDATE_ID and .candidate.is_v2_catalog_reference == false and .candidate.inventory_match_count == 1 and .provider_observation_input.target.database_name == env.TX6_READ_ONLY_CANDIDATE_NAME and .provider_observation_input.target.database_id == env.TX6_READ_ONLY_CANDIDATE_ID and .provider_observation_input.time_travel_bookmark_capable == true and .post_apply_invariants.schema_version == 3 and .post_apply_invariants.foreign_key_check.exit_code >= 0 and .post_apply_invariants.quick_check.exit_code >= 0 and .provider_mutation == false and .d1_mutation == false and .production_mutation == false' \
+            '.schema_version == 3 and .kind == "D1_ISOLATED_TARGET_OBSERVATION" and .source_sha == env.SOURCE_SHA and .environment == "staging" and .candidate.database_name == env.D1_REHEARSAL_TARGET_NAME and .candidate.database_id == env.D1_REHEARSAL_TARGET_ID and .candidate.is_v2_catalog_reference == false and .candidate.inventory_match_count == 1 and .provider_observation_input.target.database_name == env.D1_REHEARSAL_TARGET_NAME and .provider_observation_input.target.database_id == env.D1_REHEARSAL_TARGET_ID and .provider_observation_input.time_travel_bookmark_capable == true and .post_apply_invariants.schema_version == 3 and .post_apply_invariants.foreign_key_check.exit_code >= 0 and .post_apply_invariants.quick_check.exit_code >= 0 and .provider_mutation == false and .d1_mutation == false and .production_mutation == false' \
             "$evidence/observation.json" >/dev/null
           python -m json.tool "$evidence/observation.json" >/dev/null
 
       - name: Publish secret-free isolated-target observation
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: d1-tx6-isolated-target-observation-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.sha }}
-          path: artifacts/d1-tx6-isolated-target-observation/observation.json
+          name: d1-isolated-target-observation-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.sha }}
+          path: artifacts/d1-isolated-target-observation/observation.json
           if-no-files-found: error
           retention-days: 30
 
-      - name: Fail closed on non-passing TX-6 post-apply invariants
+      - name: Fail closed on non-passing isolated-target post-apply invariants
         run: |
           set -euo pipefail
           jq -e \
             '.post_apply_invariants.status == "PASS" and .post_apply_invariants.exact_ordinary_revision == true and .post_apply_invariants.protected_contract_absent == true and .post_apply_invariants.foreign_key_check.exit_code == 0 and .post_apply_invariants.foreign_key_check.json_valid == true and .post_apply_invariants.foreign_key_check_ok == true and .post_apply_invariants.quick_check.exit_code == 0 and .post_apply_invariants.quick_check.json_valid == true and .post_apply_invariants.quick_check_ok == true' \
-            artifacts/d1-tx6-isolated-target-observation/observation.json >/dev/null
+            artifacts/d1-isolated-target-observation/observation.json >/dev/null
 
       - name: Run canonical credential-free transaction preflight
         env:
@@ -485,9 +489,9 @@ jobs:
           set -euo pipefail
           test -z "${CLOUDFLARE_API_TOKEN:-}"
           test -z "${CLOUDFLARE_OBSERVE_API_TOKEN:-}"
-          root="$RUNNER_TEMP/tx6-preflight"
-          evidence="artifacts/d1-tx6-transaction-preflight"
-          observation="artifacts/d1-tx6-isolated-target-observation/observation.json"
+          root="$RUNNER_TEMP/d1-preflight"
+          evidence="artifacts/d1-transaction-preflight"
+          observation="artifacts/d1-isolated-target-observation/observation.json"
           mkdir -p "$root/target" "$root/known-good" "$evidence"
           test -f "$observation"
 
@@ -504,9 +508,9 @@ jobs:
           done
           test -n "$target_release"
           gh release download "$target_release" --repo "$GITHUB_REPOSITORY" --pattern release-set.json --pattern control-plane.tar --dir "$root/target"
-          gh release download "$TX6_KNOWN_GOOD_RELEASE_SET_ID" --repo "$GITHUB_REPOSITORY" --pattern release-set.json --pattern control-plane.tar --dir "$root/known-good"
+          gh release download "$D1_REHEARSAL_KNOWN_GOOD_RELEASE_SET_ID" --repo "$GITHUB_REPOSITORY" --pattern release-set.json --pattern control-plane.tar --dir "$root/known-good"
 
-          python - "$root" "$target_release" "$SOURCE_SHA" "$TX6_KNOWN_GOOD_RELEASE_SET_ID" "$TX6_KNOWN_GOOD_SOURCE_SHA" "$TX6_KNOWN_GOOD_MANIFEST_SHA256" <<'PY'
+          python - "$root" "$target_release" "$SOURCE_SHA" "$D1_REHEARSAL_KNOWN_GOOD_RELEASE_SET_ID" "$D1_REHEARSAL_KNOWN_GOOD_SOURCE_SHA" "$D1_REHEARSAL_KNOWN_GOOD_MANIFEST_SHA256" <<'PY'
           import hashlib, json, sys, tarfile
           from pathlib import Path
           root, target_id, source_sha, known_id, known_source, known_manifest_sha = sys.argv[1:]
@@ -592,7 +596,7 @@ jobs:
                   handle.write('\n')
           evidence = {
               'schema_version': 1,
-              'kind': 'D1_TX6_PRE_MIGRATION_RUNTIME_CONTEXT',
+              'kind': 'D1_PRE_MIGRATION_RUNTIME_CONTEXT',
               'source_sha': os.environ['SOURCE_SHA'],
               'basis': 'CURRENT_TYPED_MIGRATION_CONTRACTS',
               'historical_release_target': historical.get('target_schema_revision'),
@@ -607,13 +611,13 @@ jobs:
           PY
           python -m json.tool "$evidence/runtime-context.json" >/dev/null
 
-          python - "$observation" "$SOURCE_SHA" "$TX6_READ_ONLY_CANDIDATE_NAME" "$TX6_READ_ONLY_CANDIDATE_ID" "$root/ledger.json" <<'PY'
+          python - "$observation" "$SOURCE_SHA" "$D1_REHEARSAL_TARGET_NAME" "$D1_REHEARSAL_TARGET_ID" "$root/ledger.json" <<'PY'
           import json, sys, time
           path, source, name, dbid, ledger_path = sys.argv[1:]
           doc = json.load(open(path, encoding='utf-8'))
           obs = doc.get('provider_observation_input') or {}
           target = obs.get('target') or {}
-          if doc.get('source_sha') != source or doc.get('kind') != 'D1_TX6_EXACT_CANDIDATE_OBSERVATION':
+          if doc.get('source_sha') != source or doc.get('kind') != 'D1_ISOLATED_TARGET_OBSERVATION':
               raise SystemExit('observer evidence is not bound to exact accepted-main source')
           if target.get('database_name') != name or target.get('database_id') != dbid or target.get('environment') != 'staging':
               raise SystemExit('observer target identity drifted')
@@ -621,7 +625,7 @@ jobs:
               raise SystemExit('observer evidence claims mutation')
           observed = obs.get('observed_at_unix_seconds')
           if not isinstance(observed, int) or observed > int(time.time()) + 60 or int(time.time()) - observed > 1800:
-              raise SystemExit('observer evidence is stale for TX-6 prepare preflight')
+              raise SystemExit('observer evidence is stale for prepare preflight')
           names = obs.get('remote_migrations')
           pending = obs.get('wrangler_pending_migrations')
           if not isinstance(names, list) or not all(isinstance(x, str) for x in names):
@@ -664,7 +668,7 @@ jobs:
           runtime_contract = runtime_context.get('schema_contract') or {}
           value = {
               'schema_version': 1,
-              'kind': 'D1_TX6_TRANSACTION_PREFLIGHT',
+              'kind': 'D1_TRANSACTION_PREFLIGHT',
               'source_sha': os.environ['SOURCE_SHA'],
               'observation_run_id': os.environ['GITHUB_RUN_ID'],
               'observation_run_attempt': os.environ['GITHUB_RUN_ATTEMPT'],
@@ -673,8 +677,8 @@ jobs:
               'workflow_sha': os.environ.get('GITHUB_WORKFLOW_SHA'),
               'event_name': os.environ['GITHUB_EVENT_NAME'],
               'ref': os.environ['GITHUB_REF'],
-              'target_database_name': os.environ['TX6_READ_ONLY_CANDIDATE_NAME'],
-              'target_database_id': os.environ['TX6_READ_ONLY_CANDIDATE_ID'],
+              'target_database_name': os.environ['D1_REHEARSAL_TARGET_NAME'],
+              'target_database_id': os.environ['D1_REHEARSAL_TARGET_ID'],
               'runtime_context_target_revision': runtime_contract.get('target_schema_revision'),
               'runtime_context_supported_max': runtime_contract.get('supported_schema_max'),
               'status': prepare.get('status'),
@@ -691,20 +695,20 @@ jobs:
               json.dump(value, handle, sort_keys=True, indent=2)
               handle.write('\n')
           PY
-          echo 'TX-6 secret-free preflight disposition:'
+          echo 'D1 secret-free preflight disposition:'
           cat "$evidence/summary.json"
           jq -c '{status, gate_results, plan: (if .status == "PREPARE_READY" then {decision: .plan.decision, ledger_state: .plan.ledger_state, planned_migrations: .plan.planned_migrations} else null end)}' "$evidence/prepare.json"
 
-      - name: Publish secret-free TX-6 transaction preflight
+      - name: Publish secret-free D1 transaction preflight
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: d1-tx6-transaction-preflight-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.sha }}
-          path: artifacts/d1-tx6-transaction-preflight
+          name: d1-transaction-preflight-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.sha }}
+          path: artifacts/d1-transaction-preflight
           if-no-files-found: error
           retention-days: 30
 
       - name: Remove raw provider observations and preflight inputs from runner temp
         if: always()
         run: |
-          rm -rf "$RUNNER_TEMP/d1-tx6-isolated-target-observation"
-          rm -rf "$RUNNER_TEMP/tx6-preflight"
+          rm -rf "$RUNNER_TEMP/d1-isolated-target-observation"
+          rm -rf "$RUNNER_TEMP/d1-preflight"
