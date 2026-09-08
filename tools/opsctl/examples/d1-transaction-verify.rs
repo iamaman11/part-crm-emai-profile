@@ -1,12 +1,14 @@
 #![forbid(unsafe_code)]
 
 use opsctl::canonical::{canonical_json, parse_strict_json};
+use opsctl::d1::operator_outcome::D1OperatorOutcomeKind;
 use opsctl::d1::transaction::TransactionProjection;
 use opsctl::d1::transaction_integrity::revalidate_transaction_projection;
-use serde_json::json;
+use serde_json::{Value, json};
 use std::env;
 use std::error::Error;
 use std::ffi::OsString;
+use std::fmt;
 use std::fs;
 use std::path::PathBuf;
 
@@ -18,6 +20,48 @@ struct Args {
     expected_environment: Option<String>,
     evaluated_at_unix_seconds: Option<i64>,
 }
+
+#[derive(Debug)]
+struct VerifyFailure {
+    kind: D1OperatorOutcomeKind,
+    detail: String,
+}
+
+impl VerifyFailure {
+    fn new(kind: D1OperatorOutcomeKind, detail: impl Into<String>) -> Self {
+        Self {
+            kind,
+            detail: detail.into(),
+        }
+    }
+
+    fn diagnostic_json(&self) -> Value {
+        json!({
+            "schema_version": 1,
+            "reason_code": self.kind.as_str(),
+            "summary": self.kind.summary(),
+            "detail": self.detail,
+            "remediation": self.kind.remediation(),
+            "tool": {
+                "name": "opsctl",
+                "surface": "d1",
+                "version": env!("CARGO_PKG_VERSION"),
+            },
+        })
+    }
+
+    fn canonical_diagnostic(&self) -> Result<String, Box<dyn Error>> {
+        canonical_json(&self.diagnostic_json()).map_err(Into::into)
+    }
+}
+
+impl fmt::Display for VerifyFailure {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(&self.detail)
+    }
+}
+
+impl Error for VerifyFailure {}
 
 fn next_value(
     iterator: &mut impl Iterator<Item = OsString>,
@@ -87,51 +131,82 @@ fn required<T>(value: Option<T>, flag: &str) -> Result<T, Box<dyn Error>> {
     value.ok_or_else(|| format!("{flag} is required").into())
 }
 
-fn verify(args: Args) -> Result<String, Box<dyn Error>> {
-    let transaction_path = required(args.transaction_json, "--transaction-json")?;
-    let raw = fs::read_to_string(transaction_path)?;
-    let value = parse_strict_json(&raw)
-        .map_err(|error| format!("prepared transaction is not strict bounded JSON: {error}"))?;
-    let transaction: TransactionProjection = serde_json::from_value(value).map_err(|error| {
-        format!("prepared transaction does not match the typed contract: {error}")
-    })?;
-    revalidate_transaction_projection(&transaction)?;
+fn transaction_drift(detail: impl Into<String>) -> VerifyFailure {
+    VerifyFailure::new(D1OperatorOutcomeKind::SourceTreeTransactionDrift, detail)
+}
 
-    let expected_source = required(args.expected_source_sha, "--expected-source-sha")?;
-    let expected_tree = required(args.expected_tree_sha, "--expected-tree-sha")?;
-    let expected_environment = required(args.expected_environment, "--expected-environment")?;
-    let evaluated_at = required(
-        args.evaluated_at_unix_seconds,
-        "--evaluated-at-unix-seconds",
-    )?;
+fn stale_observation(detail: impl Into<String>) -> VerifyFailure {
+    VerifyFailure::new(D1OperatorOutcomeKind::StaleObservation, detail)
+}
+
+fn verify(args: Args) -> Result<String, VerifyFailure> {
+    let transaction_path = args
+        .transaction_json
+        .ok_or_else(|| transaction_drift("--transaction-json is required"))?;
+    let raw = fs::read_to_string(transaction_path)
+        .map_err(|error| transaction_drift(format!("cannot read prepared transaction: {error}")))?;
+    let value = parse_strict_json(&raw).map_err(|error| {
+        transaction_drift(format!(
+            "prepared transaction is not strict bounded JSON: {error}"
+        ))
+    })?;
+    let transaction: TransactionProjection = serde_json::from_value(value).map_err(|error| {
+        transaction_drift(format!(
+            "prepared transaction does not match the typed contract: {error}"
+        ))
+    })?;
+    revalidate_transaction_projection(&transaction).map_err(|error| {
+        transaction_drift(format!(
+            "prepared transaction integrity revalidation failed: {error}"
+        ))
+    })?;
+
+    let expected_source = args
+        .expected_source_sha
+        .ok_or_else(|| transaction_drift("--expected-source-sha is required"))?;
+    let expected_tree = args
+        .expected_tree_sha
+        .ok_or_else(|| transaction_drift("--expected-tree-sha is required"))?;
+    let expected_environment = args
+        .expected_environment
+        .ok_or_else(|| transaction_drift("--expected-environment is required"))?;
+    let evaluated_at = args
+        .evaluated_at_unix_seconds
+        .ok_or_else(|| transaction_drift("--evaluated-at-unix-seconds is required"))?;
     let plan = &transaction.transaction_plan;
     if plan.source_sha != expected_source {
-        return Err(
-            "prepared transaction source_sha does not equal exact checked-out source".into(),
-        );
+        return Err(transaction_drift(
+            "prepared transaction source_sha does not equal exact checked-out source",
+        ));
     }
     if plan.tree_sha != expected_tree {
-        return Err("prepared transaction tree_sha does not equal exact checked-out tree".into());
+        return Err(transaction_drift(
+            "prepared transaction tree_sha does not equal exact checked-out tree",
+        ));
     }
     if plan.target.environment != expected_environment {
-        return Err(
-            "prepared transaction target environment does not equal operator environment".into(),
-        );
+        return Err(transaction_drift(
+            "prepared transaction target environment does not equal operator environment",
+        ));
     }
     if expected_environment != "staging" {
-        return Err("ordinary D1 operator currently permits staging only".into());
+        return Err(transaction_drift(
+            "ordinary D1 operator currently permits staging only",
+        ));
     }
     if evaluated_at <= 0 {
-        return Err("transaction evaluation timestamp must be positive".into());
+        return Err(transaction_drift(
+            "transaction evaluation timestamp must be positive",
+        ));
     }
     let freshness = i64::try_from(plan.freshness_max_age_seconds)
-        .map_err(|_| "transaction freshness window does not fit i64")?;
+        .map_err(|_| transaction_drift("transaction freshness window does not fit i64"))?;
     let fresh_until = plan
         .observed_at_unix_seconds
         .checked_add(freshness)
-        .ok_or("transaction freshness deadline overflow")?;
+        .ok_or_else(|| transaction_drift("transaction freshness deadline overflow"))?;
     if evaluated_at > fresh_until {
-        return Err("prepared provider observation is stale".into());
+        return Err(stale_observation("prepared provider observation is stale"));
     }
 
     let components = plan
@@ -140,13 +215,15 @@ fn verify(args: Args) -> Result<String, Box<dyn Error>> {
         .cloned()
         .collect::<Vec<_>>();
     if components.len() != 1 {
-        return Err(
-            "prepared ordinary transaction must bind exactly one release-manifest component".into(),
-        );
+        return Err(transaction_drift(
+            "prepared ordinary transaction must bind exactly one release-manifest component",
+        ));
     }
     let component = components[0].clone();
     if !matches!(component.as_str(), "catalog" | "resolver") {
-        return Err("prepared transaction component is unsupported".into());
+        return Err(transaction_drift(
+            "prepared transaction component is unsupported",
+        ));
     }
 
     canonical_json(&json!({
@@ -166,12 +243,25 @@ fn verify(args: Args) -> Result<String, Box<dyn Error>> {
         "schema_target": plan.schema_target,
         "recovery_strategy": plan.recovery_strategy,
     }))
-    .map_err(Into::into)
+    .map_err(|error| transaction_drift(format!("cannot serialize transaction verification: {error}")))
+}
+
+fn run() -> Result<(), Box<dyn Error>> {
+    let args = parse_args(env::args_os())?;
+    match verify(args) {
+        Ok(output) => {
+            println!("{output}");
+            Ok(())
+        }
+        Err(error) => {
+            println!("{}", error.canonical_diagnostic()?);
+            Err(error.into())
+        }
+    }
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
-    println!("{}", verify(parse_args(env::args_os())?)?);
-    Ok(())
+    run()
 }
 
 #[cfg(test)]
@@ -306,32 +396,40 @@ mod tests {
     }
 
     #[test]
-    fn stale_transaction_is_rejected() {
+    fn stale_transaction_has_typed_stale_observation_diagnostic() {
         let transaction = transaction();
         let path = write_fixture(&transaction);
-        let result = verify(args(path.clone(), 1_788_640_901));
+        let error = verify(args(path.clone(), 1_788_640_901)).expect_err("stale transaction");
         fs::remove_file(path).ok();
-        assert!(result.is_err());
+        assert_eq!(error.kind, D1OperatorOutcomeKind::StaleObservation);
+        let diagnostic = error.diagnostic_json();
+        assert_eq!(diagnostic["reason_code"], "STALE_OBSERVATION");
+        assert_eq!(diagnostic["tool"]["name"], "opsctl");
+        assert_eq!(diagnostic["tool"]["surface"], "d1");
     }
 
     #[test]
-    fn source_drift_is_rejected() {
+    fn source_drift_has_typed_transaction_drift_diagnostic() {
         let transaction = transaction();
         let path = write_fixture(&transaction);
         let mut input = args(path.clone(), 1_788_640_100);
         input.expected_source_sha = Some("ff".repeat(20));
-        let result = verify(input);
+        let error = verify(input).expect_err("source drift");
         fs::remove_file(path).ok();
-        assert!(result.is_err());
+        assert_eq!(error.kind, D1OperatorOutcomeKind::SourceTreeTransactionDrift);
+        assert_eq!(
+            error.diagnostic_json()["reason_code"],
+            "SOURCE_TREE_TRANSACTION_DRIFT"
+        );
     }
 
     #[test]
-    fn transaction_identity_tamper_is_rejected() {
+    fn transaction_identity_tamper_has_typed_transaction_drift_diagnostic() {
         let mut transaction = transaction();
         transaction.transaction_plan.planned_migrations[0].content_sha256 = "bb".repeat(32);
         let path = write_fixture(&transaction);
-        let result = verify(args(path.clone(), 1_788_640_100));
+        let error = verify(args(path.clone(), 1_788_640_100)).expect_err("tamper");
         fs::remove_file(path).ok();
-        assert!(result.is_err());
+        assert_eq!(error.kind, D1OperatorOutcomeKind::SourceTreeTransactionDrift);
     }
 }
