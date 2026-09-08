@@ -110,6 +110,11 @@ jobs:
           for outcome in ('PREPARE_BLOCKED', 'STALE_OBSERVATION', 'SOURCE_TREE_TRANSACTION_DRIFT', 'TARGET_PRESTATE_DRIFT'):
               assert outcome in source, f'operator typed cause transport missing {outcome}'
           assert "summary.get('status') == 'PREPARE_BLOCKED'" in source, 'observer PREPARE_BLOCKED must remain typed'
+          observed_noop = "observed_planned = observed['planned_migrations']"
+          prepare_dispatch = 'candidate = dispatch_prepare_and_wait(observed)'
+          assert observed_noop in source, 'fresh PREPARE_READY empty-plan disposition must be explicit'
+          assert source.index(observed_noop) < source.index(prepare_dispatch), 'fresh empty plan must stop before canonical Prepare transaction rendering'
+          assert "'planned_migrations': planned" in source and "'preflight_ref': preflight_ref" in source, 'fresh observation must transport typed no-op evidence'
           forbidden_rejected_index = 'latest = rejected' + '[0]'
           assert forbidden_rejected_index not in source, 'authorization rejection-set policy must not live in workflow ordering'
           assert ('def validate_' + 'transaction(') not in source, 'operator must not duplicate typed transaction-integrity policy'
@@ -503,7 +508,13 @@ jobs:
                   )
               if summary.get('status') != 'PREPARE_READY' or prepare.get('status') != 'PREPARE_READY':
                   raise SystemExit('fresh observation preflight is not one supported exact Prepare disposition')
-              policy = ((prepare.get('plan') or {}).get('transaction_policy') or {})
+              plan = prepare.get('plan')
+              if not isinstance(plan, dict):
+                  raise SystemExit('fresh observation PREPARE_READY evidence is missing typed plan')
+              planned = plan.get('planned_migrations')
+              if not isinstance(planned, list) or not all(isinstance(item, str) and item for item in planned):
+                  raise SystemExit('fresh observation PREPARE_READY plan has no typed planned_migrations array')
+              policy = plan.get('transaction_policy') or {}
               freshness = policy.get('observation_freshness_max_age_seconds')
               if isinstance(freshness, bool) or not isinstance(freshness, int) or freshness <= 0:
                   raise SystemExit('fresh observation PREPARE_READY plan has no usable typed freshness policy')
@@ -519,7 +530,8 @@ jobs:
                       evidence_refs={'observation': preflight_ref},
                   )
               return {'run': run, 'attempt': attempt, 'job_id': int(hosted[0]['id']),
-                      'artifact_id': int(artifact['id']), 'directory': directory}
+                      'artifact_id': int(artifact['id']), 'directory': directory,
+                      'planned_migrations': planned, 'preflight_ref': preflight_ref}
 
           def extract_target_manifest(release_id, destination, component, target_revision):
               destination = Path(destination)
@@ -960,6 +972,19 @@ jobs:
               candidate = resolve_fresh_transaction()
               if candidate is None:
                   observed = fresh_observation()
+                  observed_planned = observed['planned_migrations']
+                  if observed_planned == []:
+                      outcome = emit_outcome('REPLAY_OR_NOOP', issue,
+                                             evidence_refs={'observation_preflight': observed['preflight_ref']})
+                      SUMMARY.write_text('# D1 mechanical replay/no-op\n\n'
+                                         f"- Current stage issue: `#{issue}`\n"
+                                         '- TransactionId: `N/A` (no transaction minted)\n'
+                                         f"- Observation run: `{observed['run']['id']}` attempt `{observed['attempt']}`\n"
+                                         f"- Typed outcome: `{outcome['outcome']}`\n"
+                                         '- Prepare dispatch: `NO`\n- Executor dispatch: `NO`\n- Provider mutation: `NO`\n',
+                                         encoding='utf-8')
+                      print(f"D1_OPERATOR_STATE=REPLAY_OR_NOOP observation_run_id={observed['run']['id']} issue={issue}")
+                      raise SystemExit(0)
                   candidate = dispatch_prepare_and_wait(observed)
                   tx = candidate['transaction']
                   planned = (tx.get('transaction_plan') or {}).get('planned_migrations')
