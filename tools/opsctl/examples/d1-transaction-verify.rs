@@ -1,11 +1,11 @@
 #![forbid(unsafe_code)]
 
 use opsctl::canonical::{canonical_json, parse_strict_json};
+use opsctl::d1::D1Error;
 use opsctl::d1::operator_outcome::{
     serialize_operator_transaction_verification, verify_operator_transaction,
 };
 use opsctl::d1::transaction::TransactionProjection;
-use opsctl::d1::D1Error;
 use std::env;
 use std::error::Error;
 use std::ffi::OsString;
