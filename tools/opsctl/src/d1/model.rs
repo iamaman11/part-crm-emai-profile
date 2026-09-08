@@ -228,22 +228,24 @@ impl GateResult {
 #[derive(Debug, PartialEq, Eq)]
 pub struct D1Error {
     message: String,
-    gate_result: Box<GateResult>,
+    gate_result_json: Value,
 }
 
 impl D1Error {
     pub(super) fn new(message: impl Into<String>) -> Self {
         let message = message.into();
+        let gate_result = GateResult::error(message.clone());
         Self {
-            gate_result: Box::new(GateResult::error(message.clone())),
+            gate_result_json: gate_result.json_value(),
             message,
         }
     }
 
     pub(super) fn blocked(gate_result: GateResult) -> Self {
+        let message = gate_result.summary.clone();
         Self {
-            message: gate_result.summary.clone(),
-            gate_result: Box::new(gate_result),
+            gate_result_json: gate_result.json_value(),
+            message,
         }
     }
 
@@ -252,8 +254,8 @@ impl D1Error {
     /// Adapters may persist or embed this value verbatim. They must not parse stderr
     /// or synthesize competing reason/remediation semantics.
     #[must_use]
-    pub fn gate_result_json(&self) -> Value {
-        self.gate_result.json_value()
+    pub fn gate_result_json(&self) -> &Value {
+        &self.gate_result_json
     }
 }
 
