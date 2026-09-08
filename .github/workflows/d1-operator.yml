@@ -48,6 +48,8 @@ jobs:
         run: |
           set -euo pipefail
           python - <<'PY'
+          import ast
+          import textwrap
           from pathlib import Path
           source = Path('.github/workflows/d1-operator.yml').read_text(encoding='utf-8')
           forbidden = (
@@ -73,6 +75,13 @@ jobs:
           assert 'd1-transaction-verify' in source
           assert 'scripts/d1-prepare.py' in source and 'operator-input' in source
           assert 'def validate_transaction(' not in source, 'operator must not duplicate typed transaction-integrity policy'
+          marker = "python - <<'P" + "Y'\n"
+          terminator = "\n          P" + "Y"
+          blocks = source.split(marker)[1:]
+          assert len(blocks) == 2, f'expected exactly two embedded Python blocks, got {len(blocks)}'
+          for index, block in enumerate(blocks, start=1):
+              body = block.split(terminator, 1)[0]
+              ast.parse(textwrap.dedent(body), filename=f'd1-operator-inline-{index}.py')
           PY
 
       - name: Exercise typed transaction verifier positive and negative fixtures
@@ -330,7 +339,7 @@ jobs:
               artifact = artifact_exact(run['id'], name)
               if artifact is None:
                   raise SystemExit('fresh observation preflight artifact missing or ambiguous')
-              jobs = gh_json(f"repos/{REPO}/actions/runs/{run['id']}/jobs?filter=latest&per_page=100').get('jobs') or []
+              jobs = gh_json(f"repos/{REPO}/actions/runs/{run['id']}/jobs?filter=latest&per_page=100").get('jobs') or []
               hosted = [job for job in jobs if job.get('name') == 'TX-6 isolated target hosted observation and preflight']
               if len(hosted) != 1 or hosted[0].get('conclusion') != 'success':
                   raise SystemExit('fresh observation hosted job missing/ambiguous/not successful')
