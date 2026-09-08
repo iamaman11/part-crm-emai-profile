@@ -74,7 +74,7 @@ jobs:
           assert 'd1-transaction-authorization' in source
           assert 'd1-transaction-verify' in source
           assert 'scripts/d1-prepare.py' in source and 'operator-input' in source
-          assert 'def validate_transaction(' not in source, 'operator must not duplicate typed transaction-integrity policy'
+          assert ('def validate_' + 'transaction(') not in source, 'operator must not duplicate typed transaction-integrity policy'
           marker = "python - <<'P" + "Y'\n"
           terminator = "\n          P" + "Y"
           blocks = source.split(marker)[1:]
