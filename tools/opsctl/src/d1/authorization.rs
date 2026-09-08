@@ -431,7 +431,8 @@ mod tests {
         let mut input = authorization(&transaction);
         input["transaction_id"] = json!("ff".repeat(32));
         let error = bind_transaction_authorization(&transaction, &input, EVALUATED_AT)
-            .expect_err("transaction id drift must be rejected");
+            .err()
+            .ok_or_else(|| D1Error::new("transaction id drift unexpectedly passed"))?;
         assert_eq!(reason_code(&error), Some("INVALID_AUTHORIZATION"));
         Ok(())
     }
@@ -510,7 +511,8 @@ mod tests {
         let transaction = transaction()?;
         let input = authorization(&transaction);
         let error = bind_transaction_authorization(&transaction, &input, EXPIRES_AT + 1)
-            .expect_err("expired authorization must be rejected");
+            .err()
+            .ok_or_else(|| D1Error::new("expired authorization unexpectedly passed"))?;
         assert_eq!(reason_code(&error), Some("STALE_AUTHORIZATION"));
         Ok(())
     }
@@ -520,7 +522,8 @@ mod tests {
         let transaction = transaction()?;
         let input = authorization(&transaction);
         let error = bind_transaction_authorization(&transaction, &input, ISSUED_AT - 1)
-            .expect_err("early authorization must be rejected");
+            .err()
+            .ok_or_else(|| D1Error::new("early authorization unexpectedly passed"))?;
         assert_eq!(reason_code(&error), Some("INVALID_AUTHORIZATION"));
         Ok(())
     }
