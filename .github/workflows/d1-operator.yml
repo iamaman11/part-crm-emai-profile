@@ -97,9 +97,12 @@ jobs:
           assert 'd1-execution-receipt-' in source and 'd1-migration-evidence-' in source
           assert 'scripts/d1-prepare.py' in source and 'operator-input' in source
           assert 'transaction_policy' in source and 'observation_freshness_max_age_seconds' in source
+          assert 'class TypedStop' in source and 'typed_owner_diagnostic' in source
           assert ('EXECUTOR_' + 'DISPATCHED') not in source, 'operator must reconcile terminal executor evidence instead of stopping after dispatch'
           for terminal in ('COMPLETED', 'RECOVERY_REQUIRED', 'FAILED_NO_EFFECT'):
               assert terminal in source, f'operator terminal reconciliation missing {terminal}'
+          for outcome in ('PREPARE_BLOCKED', 'STALE_OBSERVATION', 'SOURCE_TREE_TRANSACTION_DRIFT', 'TARGET_PRESTATE_DRIFT'):
+              assert outcome in source, f'operator typed cause transport missing {outcome}'
           assert ('def validate_' + 'transaction(') not in source, 'operator must not duplicate typed transaction-integrity policy'
           assert ('def validate_' + 'post_state(') not in source, 'operator must not duplicate typed post-state policy'
           assert ('def reconstruct_executor_' + 'manifests(') not in source, 'operator must consume immutable Prepare inputs instead of reconstructing executor manifests'
@@ -188,6 +191,13 @@ jobs:
           OBSERVE_WORKFLOW = 'd1-isolated-target-observation.yml'
           EXECUTOR_WORKFLOW = 'd1-migration-executor.yml'
 
+          class TypedStop(Exception):
+              def __init__(self, kind, message, owner_diagnostic=None, evidence_refs=None):
+                  super().__init__(message)
+                  self.kind = kind
+                  self.owner_diagnostic = owner_diagnostic
+                  self.evidence_refs = evidence_refs or {}
+
           def shell(args, *, check=True):
               result = subprocess.run(args, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False)
               if check and result.returncode != 0:
@@ -216,10 +226,28 @@ jobs:
           def current_tree():
               return shell(['git', 'rev-parse', 'HEAD^{tree}']).stdout.strip()
 
+          def typed_owner_diagnostic(process, allowed_reasons):
+              try:
+                  diagnostic = json.loads(process.stdout)
+              except json.JSONDecodeError as exc:
+                  raise SystemExit(f'natural owner rejected without typed JSON diagnostic: {exc}')
+              tool = diagnostic.get('tool') or {}
+              reason = diagnostic.get('reason_code')
+              if (diagnostic.get('schema_version') != 1
+                      or reason not in allowed_reasons
+                      or not isinstance(diagnostic.get('remediation'), str)
+                      or tool.get('name') != 'opsctl'
+                      or tool.get('surface') != 'd1'):
+                  raise SystemExit('natural owner returned unsupported typed D1 diagnostic')
+              return diagnostic
+
           def emit_outcome(kind, issue, candidate=None, owner_diagnostic=None, evidence_refs=None):
               evidence_refs = evidence_refs or {}
-              args = [str(OUTCOME_TOOL), '--kind', kind, '--source-sha', SOURCE,
-                      '--tree-sha', current_tree(), '--current-stage-issue', str(issue)]
+              args = [str(OUTCOME_TOOL)]
+              if kind is not None:
+                  args.extend(['--kind', kind])
+              args.extend(['--source-sha', SOURCE, '--tree-sha', current_tree(),
+                           '--current-stage-issue', str(issue)])
               tx = (candidate or {}).get('transaction') or {}
               transaction_id = tx.get('transaction_id')
               if isinstance(transaction_id, str):
@@ -243,10 +271,11 @@ jobs:
               except json.JSONDecodeError as exc:
                   raise SystemExit(f'typed D1 operator outcome emitted invalid JSON: {exc}')
               canonical = compact(outcome)
+              expected_kind = kind or ((owner_diagnostic or {}).get('reason_code'))
               if process.stdout.strip() != canonical:
                   raise SystemExit('typed D1 operator outcome is not canonical')
               if (outcome.get('contract') != 'D1_OPERATOR_OUTCOME_V1'
-                      or outcome.get('outcome') != kind
+                      or outcome.get('outcome') != expected_kind
                       or outcome.get('source_sha') != SOURCE
                       or outcome.get('tree_sha') != current_tree()
                       or outcome.get('current_stage_issue') != issue
@@ -305,17 +334,24 @@ jobs:
                   '--evaluated-at-unix-seconds', str(evaluated_at),
               ], check=False)
               if process.returncode != 0:
-                  return None
+                  diagnostic = typed_owner_diagnostic(
+                      process, {'STALE_OBSERVATION', 'SOURCE_TREE_TRANSACTION_DRIFT'}
+                  )
+                  raise TypedStop(
+                      None,
+                      diagnostic.get('summary') or diagnostic['reason_code'],
+                      owner_diagnostic=diagnostic,
+                  )
               try:
                   value = json.loads(process.stdout)
-              except json.JSONDecodeError:
-                  return None
+              except json.JSONDecodeError as exc:
+                  raise SystemExit(f'transaction verifier emitted invalid JSON: {exc}')
               if value.get('status') != 'TRANSACTION_VERIFIED' or value.get('mode') != 'read-only':
-                  return None
+                  raise SystemExit('transaction verifier returned invalid success contract')
               if value.get('authorization_consumed') or value.get('mutation_executed') or value.get('provider_mutation_executed'):
-                  return None
+                  raise SystemExit('transaction verifier success contract acquired an effect')
               if value.get('source_sha') != SOURCE or value.get('tree_sha') != current_tree():
-                  return None
+                  raise SystemExit('transaction verifier success identity drifted')
               return value
 
           def latest_executor_epoch():
@@ -339,38 +375,34 @@ jobs:
           def resolve_fresh_transaction():
               now = int(time.time())
               cutoff = latest_executor_epoch()
-              candidates = []
-              for run in workflow_runs(PREPARE_WORKFLOW):
-                  if run.get('event') != 'workflow_dispatch' or run.get('head_sha') != SOURCE:
-                      continue
-                  if run.get('status') != 'completed' or run.get('conclusion') != 'success' or epoch(run['created_at']) <= cutoff:
-                      continue
+              runs = [run for run in workflow_runs(PREPARE_WORKFLOW)
+                      if run.get('event') == 'workflow_dispatch'
+                      and run.get('head_sha') == SOURCE
+                      and run.get('status') == 'completed'
+                      and run.get('conclusion') == 'success'
+                      and epoch(run['created_at']) > cutoff]
+              runs.sort(key=lambda item: epoch(item['created_at']), reverse=True)
+              for run in runs:
                   artifact = transaction_artifact(run)
                   if artifact is None:
-                      continue
+                      raise SystemExit(f"successful Prepare run {run['id']} missing/ambiguous transaction artifact")
                   with tempfile.TemporaryDirectory(prefix='d1-transaction-') as directory:
                       if not download(run['id'], artifact['name'], directory):
-                          continue
+                          raise SystemExit(f"cannot download transaction artifact from Prepare run {run['id']}")
                       path = Path(directory) / 'transaction.json'
                       if not path.is_file():
-                          continue
+                          raise SystemExit(f"Prepare run {run['id']} transaction artifact is missing transaction.json")
                       verification = verify_transaction(path, now)
-                      if verification is None:
-                          continue
                       executor_artifact = executor_input_artifact(run, verification['component'])
                       if executor_artifact is None:
-                          continue
+                          raise SystemExit(f"Prepare run {run['id']} missing immutable executor input bundle")
                       tx = json.loads(path.read_text(encoding='utf-8'))
-                      candidates.append((epoch(run['created_at']), run, tx, verification, executor_artifact['name']))
-              if not candidates:
-                  return None
-              candidates.sort(key=lambda item: item[0], reverse=True)
-              _, run, tx, verification, executor_artifact_name = candidates[0]
-              return {'run_id': int(run['id']), 'run_attempt': int(run['run_attempt']), 'transaction': tx,
-                      'verification': verification, 'executor_artifact_name': executor_artifact_name,
-                      'fresh_until': int(verification['fresh_until_unix_seconds'])}
+                  return {'run_id': int(run['id']), 'run_attempt': int(run['run_attempt']), 'transaction': tx,
+                          'verification': verification, 'executor_artifact_name': executor_artifact['name'],
+                          'fresh_until': int(verification['fresh_until_unix_seconds'])}
+              return None
 
-          def wait_for_dispatched_run(workflow, started_at, timeout_seconds):
+          def wait_for_dispatched_run(workflow, started_at, timeout_seconds, require_success=True):
               deadline = time.time() + timeout_seconds
               while time.time() < deadline:
                   matching = [run for run in workflow_runs(workflow)
@@ -380,7 +412,7 @@ jobs:
                       matching.sort(key=lambda item: epoch(item['created_at']), reverse=True)
                       selected = matching[0]
                       if selected.get('status') == 'completed':
-                          if selected.get('conclusion') != 'success':
+                          if require_success and selected.get('conclusion') != 'success':
                               raise SystemExit(f"{workflow} run {selected['id']} completed as {selected.get('conclusion')}")
                           return selected
                   time.sleep(10)
@@ -438,8 +470,14 @@ jobs:
               observation_doc = json.loads((directory / 'provider-observation.json').read_text(encoding='utf-8'))
               observation = observation_doc.get('provider_observation_input') or {}
               observed = observation.get('observed_at_unix_seconds')
-              if not isinstance(observed, int) or int(time.time()) > observed + freshness:
-                  raise SystemExit('fresh observation expired before Prepare construction')
+              if not isinstance(observed, int):
+                  raise SystemExit('fresh observation has no typed observed_at_unix_seconds')
+              if int(time.time()) > observed + freshness:
+                  raise TypedStop(
+                      'STALE_OBSERVATION',
+                      'fresh provider observation expired before Prepare construction',
+                      evidence_refs={'observation': f"github-actions:run:{run['id']}:attempt:{attempt}:artifact:{artifact['id']}"},
+                  )
               return {'run': run, 'attempt': attempt, 'job_id': int(hosted[0]['id']),
                       'artifact_id': int(artifact['id']), 'directory': directory}
 
@@ -506,8 +544,32 @@ jobs:
               component = payload['inputs']['component']
               start = int(time.time())
               api_post(f'repos/{REPO}/actions/workflows/{PREPARE_WORKFLOW}/dispatches', payload)
-              run = wait_for_dispatched_run(PREPARE_WORKFLOW, start, 900)
+              run = wait_for_dispatched_run(PREPARE_WORKFLOW, start, 900, require_success=False)
               attempt = int(run['run_attempt'])
+              prepare_name = f"d1-prepare-{component}-{run['id']}-{attempt}"
+              prepare_artifact = artifact_exact(run['id'], prepare_name)
+              if prepare_artifact is None:
+                  raise SystemExit('Prepare run missing/ambiguous immutable prepare evidence')
+              with tempfile.TemporaryDirectory(prefix='d1-prepare-result-') as directory:
+                  if not download(run['id'], prepare_name, directory):
+                      raise SystemExit('cannot download immutable Prepare evidence')
+                  prepare_path = Path(directory) / 'prepare.json'
+                  if not prepare_path.is_file():
+                      raise SystemExit('Prepare evidence artifact missing prepare.json')
+                  prepare_result = json.loads(prepare_path.read_text(encoding='utf-8'))
+              prepare_ref = f"github-actions:run:{run['id']}:attempt:{attempt}:artifact:{prepare_artifact['id']}"
+              if run.get('conclusion') != 'success':
+                  gates = prepare_result.get('gate_results')
+                  if prepare_result.get('status') == 'PREPARE_BLOCKED' and isinstance(gates, list) and gates and isinstance(gates[0], dict):
+                      raise TypedStop(
+                          'PREPARE_BLOCKED',
+                          'canonical D1 Prepare returned PREPARE_BLOCKED',
+                          owner_diagnostic=gates[0],
+                          evidence_refs={'prepare': prepare_ref},
+                      )
+                  raise SystemExit(f"Prepare run {run['id']} failed without typed PREPARE_BLOCKED evidence")
+              if prepare_result.get('status') != 'PREPARE_READY':
+                  raise SystemExit('successful Prepare run did not publish PREPARE_READY evidence')
               transaction_name = f"d1-transaction-{component}-{run['id']}-{attempt}"
               executor_name = f"d1-executor-inputs-{component}-{run['id']}-{attempt}"
               if artifact_exact(run['id'], transaction_name) is None:
@@ -521,12 +583,20 @@ jobs:
                   if not path.is_file():
                       raise SystemExit('successful Prepare transaction artifact is missing transaction.json')
                   verification = verify_transaction(path, int(time.time()))
-                  if verification is None:
-                      raise SystemExit('new Prepare produced invalid or stale transaction')
                   tx = json.loads(path.read_text(encoding='utf-8'))
               return {'run_id': int(run['id']), 'run_attempt': attempt, 'transaction': tx,
                       'verification': verification, 'executor_artifact_name': executor_name,
-                      'fresh_until': int(verification['fresh_until_unix_seconds'])}
+                      'fresh_until': int(verification['fresh_until_unix_seconds']),
+                      'prepare_evidence_ref': prepare_ref}
+
+          def invalid_authorization_reference(comment, detail):
+              return {
+                  'diagnostic': None,
+                  'reason_code': 'INVALID_AUTHORIZATION',
+                  'authorization_reference': comment.get('html_url'),
+                  'created_epoch': epoch(comment['created_at']),
+                  'detail': detail,
+              }
 
           def valid_authorizations(candidate, issue):
               tx = candidate['transaction']
@@ -545,20 +615,27 @@ jobs:
                       if not isinstance(body, str):
                           continue
                       parts = body.strip().splitlines()
-                      if len(parts) != 2 or parts[0] != 'D1_TRANSACTION_AUTHORIZATION_V1':
+                      if not parts or parts[0] != 'D1_TRANSACTION_AUTHORIZATION_V1':
+                          continue
+                      if len(parts) != 2:
+                          rejected.append(invalid_authorization_reference(comment, 'authorization marker must contain exactly one JSON intent line'))
                           continue
                       try:
                           intent = json.loads(parts[1])
                       except json.JSONDecodeError:
+                          rejected.append(invalid_authorization_reference(comment, 'authorization intent is not valid JSON'))
                           continue
                       if not isinstance(intent, dict) or compact(intent) != parts[1]:
+                          rejected.append(invalid_authorization_reference(comment, 'authorization intent is not one canonical compact JSON object'))
                           continue
                       issued = intent.get('issued_at_unix_seconds')
                       expires = intent.get('expires_at_unix_seconds')
                       if not isinstance(issued, int) or not isinstance(expires, int):
+                          rejected.append(invalid_authorization_reference(comment, 'authorization validity fields must be integers'))
                           continue
                       created = epoch(comment['created_at'])
                       if created < issued or created > expires:
+                          rejected.append(invalid_authorization_reference(comment, 'authorization comment was recorded outside its declared validity window'))
                           continue
                       authorization = dict(intent)
                       authorization['authorization_reference'] = comment.get('html_url')
@@ -571,26 +648,23 @@ jobs:
                           process = shell([str(AUTH_TOOL), '--transaction-json', str(tx_path), '--authorization-json', str(auth_path),
                                            '--evaluated-at-unix-seconds', str(now)], check=False)
                       if process.returncode != 0:
-                          try:
-                              diagnostic = json.loads(process.stdout)
-                          except json.JSONDecodeError:
-                              raise SystemExit('authorization natural owner rejected a candidate without typed JSON diagnostic')
-                          tool = diagnostic.get('tool') or {}
-                          reason = diagnostic.get('reason_code')
-                          if (reason not in {'INVALID_AUTHORIZATION', 'STALE_AUTHORIZATION'}
-                                  or tool.get('name') != 'opsctl' or tool.get('surface') != 'd1'):
-                              raise SystemExit('authorization natural owner returned an unsupported rejection diagnostic')
+                          diagnostic = typed_owner_diagnostic(process, {'INVALID_AUTHORIZATION', 'STALE_AUTHORIZATION'})
                           rejected.append({'diagnostic': diagnostic,
-                                           'authorization_reference': authorization['authorization_reference']})
+                                           'reason_code': diagnostic['reason_code'],
+                                           'authorization_reference': authorization['authorization_reference'],
+                                           'created_epoch': created,
+                                           'detail': diagnostic.get('summary')})
                           continue
                       binding = json.loads(process.stdout)
                       if binding.get('status') != 'AUTHORIZATION_VERIFIED' or binding.get('transaction_id') != tx.get('transaction_id'):
                           raise SystemExit('authorization natural owner returned an invalid success binding')
                       found.append({'authorization_json': canonical, 'authorization_digest': binding.get('authorization_digest'),
-                                    'authorization_reference': authorization['authorization_reference']})
+                                    'authorization_reference': authorization['authorization_reference'], 'created_epoch': created})
                   if len(comments) < 100:
                       break
                   page += 1
+              found.sort(key=lambda item: (item['created_epoch'], item['authorization_reference']))
+              rejected.sort(key=lambda item: (item['created_epoch'], item['authorization_reference'] or ''), reverse=True)
               return {'valid': found, 'rejected': rejected}
 
           def load_executor_inputs(candidate):
@@ -793,34 +867,43 @@ jobs:
               }
 
           issue = current_stage_issue()
-          candidate = resolve_fresh_transaction()
-          if candidate is None:
-              try:
+          try:
+              candidate = resolve_fresh_transaction()
+              if candidate is None:
                   observed = fresh_observation()
                   candidate = dispatch_prepare_and_wait(observed)
-              except SystemExit:
-                  emit_outcome('RECEIPT_OR_EVIDENCE_MISSING_OR_MISMATCHED', issue)
-                  raise
-              tx = candidate['transaction']
-              planned = (tx.get('transaction_plan') or {}).get('planned_migrations')
-              if planned == []:
-                  outcome = emit_outcome('REPLAY_OR_NOOP', issue, candidate,
-                                         evidence_refs={'prepare': f"github-actions:run:{candidate['run_id']}:attempt:{candidate['run_attempt']}"})
-                  SUMMARY.write_text('# D1 mechanical replay/no-op\n\n'
+                  tx = candidate['transaction']
+                  planned = (tx.get('transaction_plan') or {}).get('planned_migrations')
+                  if planned == []:
+                      outcome = emit_outcome('REPLAY_OR_NOOP', issue, candidate,
+                                             evidence_refs={'prepare': candidate.get('prepare_evidence_ref') or f"github-actions:run:{candidate['run_id']}:attempt:{candidate['run_attempt']}"})
+                      SUMMARY.write_text('# D1 mechanical replay/no-op\n\n'
+                                         f"- Current stage issue: `#{issue}`\n- TransactionId: `{tx['transaction_id']}`\n"
+                                         f"- Typed outcome: `{outcome['outcome']}`\n- Provider mutation: `NO`\n",
+                                         encoding='utf-8')
+                      raise SystemExit(0)
+                  outcome = emit_outcome('AUTHORIZATION_REQUIRED', issue, candidate,
+                                         evidence_refs={'prepare': candidate.get('prepare_evidence_ref') or f"github-actions:run:{candidate['run_id']}:attempt:{candidate['run_attempt']}"})
+                  SUMMARY.write_text('# D1 transaction prepared\n\n'
                                      f"- Current stage issue: `#{issue}`\n- TransactionId: `{tx['transaction_id']}`\n"
-                                     f"- Typed outcome: `{outcome['outcome']}`\n- Provider mutation: `NO`\n",
+                                     f"- Prepare run: `{candidate['run_id']}` attempt `{candidate['run_attempt']}`\n"
+                                     f"- Fresh until unix: `{candidate['fresh_until']}`\n- Typed outcome: `{outcome['outcome']}`\n"
+                                     '- Provider mutation: `NO`\n- Next: record one exact transaction authorization in the CURRENT stage issue, then run this workflow once.\n',
                                      encoding='utf-8')
+                  print(f"D1_OPERATOR_STATE=AUTHORIZATION_REQUIRED transaction_id={tx['transaction_id']} issue={issue}")
                   raise SystemExit(0)
-              outcome = emit_outcome('AUTHORIZATION_REQUIRED', issue, candidate,
-                                     evidence_refs={'prepare': f"github-actions:run:{candidate['run_id']}:attempt:{candidate['run_attempt']}"})
-              SUMMARY.write_text('# D1 transaction prepared\n\n'
-                                 f"- Current stage issue: `#{issue}`\n- TransactionId: `{tx['transaction_id']}`\n"
-                                 f"- Prepare run: `{candidate['run_id']}` attempt `{candidate['run_attempt']}`\n"
-                                 f"- Fresh until unix: `{candidate['fresh_until']}`\n- Typed outcome: `{outcome['outcome']}`\n"
-                                 '- Provider mutation: `NO`\n- Next: record one exact transaction authorization in the CURRENT stage issue, then run this workflow once.\n',
+          except TypedStop as stop:
+              outcome = emit_outcome(stop.kind, issue, owner_diagnostic=stop.owner_diagnostic,
+                                     evidence_refs=stop.evidence_refs)
+              SUMMARY.write_text('# D1 operator blocked before authorization/dispatch\n\n'
+                                 f"- Current stage issue: `#{issue}`\n- Typed outcome: `{outcome['outcome']}`\n"
+                                 f"- Detail: `{str(stop)}`\n- Provider mutation: `NO`\n",
                                  encoding='utf-8')
-              print(f"D1_OPERATOR_STATE=AUTHORIZATION_REQUIRED transaction_id={tx['transaction_id']} issue={issue}")
-              raise SystemExit(0)
+              raise SystemExit(1)
+          except SystemExit:
+              if not OUTCOME_PATH.is_file():
+                  emit_outcome('RECEIPT_OR_EVIDENCE_MISSING_OR_MISMATCHED', issue)
+              raise
 
           tx = candidate['transaction']
           planned = (tx.get('transaction_plan') or {}).get('planned_migrations')
@@ -838,12 +921,13 @@ jobs:
           auths = authorization_set['valid']
           rejected = authorization_set['rejected']
           if len(auths) == 0 and rejected:
-              diagnostic = rejected[0]['diagnostic']
-              kind = diagnostic['reason_code']
-              outcome = emit_outcome(kind, issue, candidate, owner_diagnostic=diagnostic,
+              latest = rejected[0]
+              diagnostic = latest['diagnostic']
+              outcome = emit_outcome(None if diagnostic is not None else latest['reason_code'], issue, candidate,
+                                     owner_diagnostic=diagnostic,
                                      evidence_refs={
                                          'prepare': f"github-actions:run:{candidate['run_id']}:attempt:{candidate['run_attempt']}",
-                                         'authorization_candidate': rejected[0]['authorization_reference'],
+                                         'authorization_candidate': latest['authorization_reference'],
                                      })
               SUMMARY.write_text('# D1 authorization rejected\n\n'
                                  f"- Current stage issue: `#{issue}`\n- TransactionId: `{tx['transaction_id']}`\n"
@@ -878,6 +962,16 @@ jobs:
               raise
           try:
               post_state = reconcile_post_state(candidate, result)
+          except TypedStop as stop:
+              emit_outcome(stop.kind, issue, candidate, owner_diagnostic=stop.owner_diagnostic,
+                           evidence_refs={
+                               'prepare': f"github-actions:run:{candidate['run_id']}:attempt:{candidate['run_attempt']}",
+                               'authorization': auths[0]['authorization_reference'],
+                               'executor': f"github-actions:run:{result['executor_run_id']}:attempt:{result['executor_run_attempt']}",
+                               'receipt': f"github-actions:run:{result['executor_run_id']}:artifact:{result['receipt_artifact_id']}:receipt:{result['receipt_id']}",
+                               **stop.evidence_refs,
+                           })
+              raise SystemExit(1)
           except SystemExit:
               emit_outcome('RECEIPT_OR_EVIDENCE_MISSING_OR_MISMATCHED', issue, candidate,
                            evidence_refs={
@@ -903,8 +997,12 @@ jobs:
               outcome_kind = 'RECOVERY_REQUIRED'
           else:
               event_kinds = [event.get('kind') for event in result['receipt'].get('events', []) if isinstance(event, dict)]
-              outcome_kind = ('PREWRITE_ABORT' if 'PREWRITE_ABORTED' in event_kinds and 'MUTATION_STARTED' not in event_kinds
-                              else 'EXECUTOR_FAILED_NO_EFFECT')
+              if 'PREWRITE_ABORTED' in event_kinds and 'MUTATION_STARTED' not in event_kinds:
+                  outcome_kind = 'PREWRITE_ABORT'
+              elif 'PREWRITE_FENCE_PASS' in event_kinds and 'MUTATION_STARTED' not in event_kinds:
+                  outcome_kind = 'TARGET_PRESTATE_DRIFT'
+              else:
+                  outcome_kind = 'EXECUTOR_FAILED_NO_EFFECT'
           outcome = emit_outcome(outcome_kind, issue, candidate, evidence_refs=evidence_refs)
 
           evidence_line = '- Completed evidence artifact: `N/A`\n- Completed evidence SHA-256: `N/A`\n'
