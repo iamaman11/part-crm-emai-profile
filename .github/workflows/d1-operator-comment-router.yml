@@ -164,8 +164,8 @@ jobs:
             echo
             echo "- command issue: #$COMMENT_ISSUE_NUMBER"
             echo "- protected main: $GITHUB_SHA"
-            echo '- command: `/d1 operator`'
-            echo '- downstream: `d1-operator.yml` / `main` / zero inputs'
+            echo "- command: \`/d1 operator\`"
+            echo "- downstream: \`d1-operator.yml\` / \`main\` / zero inputs"
             echo '- provider credentials in router: NO'
             echo '- downstream actor preservation: owner-scoped GitHub dispatch token'
           } >> "$GITHUB_STEP_SUMMARY"
