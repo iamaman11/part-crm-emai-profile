@@ -7,6 +7,10 @@ use opsctl::d1::execution_control::{
     initialize_execution_receipt, serialize_execution_receipt, serialize_target_fence_lease,
     serialize_target_fence_verification, verify_target_fence,
 };
+use opsctl::d1::transaction::{ProviderObservationInput, TransactionProjection};
+use opsctl::d1::{
+    serialize_execution_post_state_verification, verify_execution_post_state,
+};
 use serde::de::DeserializeOwned;
 use std::env;
 use std::error::Error;
@@ -21,6 +25,7 @@ enum Command {
     InitializeReceipt,
     AppendReceipt,
     InspectReceipt,
+    VerifyPostState,
 }
 
 impl Command {
@@ -31,6 +36,7 @@ impl Command {
             "initialize-receipt" => Ok(Self::InitializeReceipt),
             "append-receipt" => Ok(Self::AppendReceipt),
             "inspect-receipt" => Ok(Self::InspectReceipt),
+            "verify-post-state" => Ok(Self::VerifyPostState),
             _ => Err(format!("unsupported d1 execution-control command: {value}").into()),
         }
     }
@@ -46,6 +52,7 @@ struct Args {
     event: Option<PathBuf>,
     prepared_at_unix_seconds: Option<i64>,
     authorized_at_unix_seconds: Option<i64>,
+    evaluated_at_unix_seconds: Option<i64>,
 }
 
 fn next_value(
@@ -127,6 +134,10 @@ fn parse_args() -> Result<(Command, Args), Box<dyn Error>> {
                 let value = utf8_value(&mut iterator, flag)?.parse::<i64>()?;
                 set_once(&mut args.authorized_at_unix_seconds, value, flag)?;
             }
+            "--evaluated-at-unix-seconds" => {
+                let value = utf8_value(&mut iterator, flag)?.parse::<i64>()?;
+                set_once(&mut args.evaluated_at_unix_seconds, value, flag)?;
+            }
             other => {
                 return Err(format!("unsupported d1 execution-control argument: {other}").into());
             }
@@ -145,6 +156,14 @@ fn reject_present<T>(value: &Option<T>, flag: &str, command: &str) -> Result<(),
         return Err(format!("{flag} is not valid for {command}").into());
     }
     Ok(())
+}
+
+fn reject_evaluated_at(args: &Args, command: &str) -> Result<(), Box<dyn Error>> {
+    reject_present(
+        &args.evaluated_at_unix_seconds,
+        "--evaluated-at-unix-seconds",
+        command,
+    )
 }
 
 fn read_typed<T>(path: PathBuf, label: &str) -> Result<T, Box<dyn Error>>
@@ -174,6 +193,7 @@ fn acquire(args: Args) -> Result<String, Box<dyn Error>> {
         "--authorized-at-unix-seconds",
         "acquire-fence",
     )?;
+    reject_evaluated_at(&args, "acquire-fence")?;
     let input: TargetFenceLeaseInput =
         read_typed(required(args.input, "--input")?, "target fence input")?;
     let lease = acquire_target_fence(input)?;
@@ -195,6 +215,7 @@ fn verify(args: Args) -> Result<String, Box<dyn Error>> {
         "--authorized-at-unix-seconds",
         "verify-fence",
     )?;
+    reject_evaluated_at(&args, "verify-fence")?;
     let lease: TargetFenceLease =
         read_typed(required(args.lease, "--lease")?, "target fence lease")?;
     let observation: TargetFenceObservation = read_typed(
@@ -211,6 +232,7 @@ fn initialize(args: Args) -> Result<String, Box<dyn Error>> {
     reject_present(&args.observation, "--observation", "initialize-receipt")?;
     reject_present(&args.receipt, "--receipt", "initialize-receipt")?;
     reject_present(&args.event, "--event", "initialize-receipt")?;
+    reject_evaluated_at(&args, "initialize-receipt")?;
     let seed: ExecutionReceiptSeed =
         read_typed(required(args.seed, "--seed")?, "execution receipt seed")?;
     let receipt = initialize_execution_receipt(
@@ -239,6 +261,7 @@ fn append(args: Args) -> Result<String, Box<dyn Error>> {
         "--authorized-at-unix-seconds",
         "append-receipt",
     )?;
+    reject_evaluated_at(&args, "append-receipt")?;
     let receipt: ExecutionReceipt =
         read_typed(required(args.receipt, "--receipt")?, "execution receipt")?;
     let event: ExecutionEventInput =
@@ -263,9 +286,44 @@ fn inspect(args: Args) -> Result<String, Box<dyn Error>> {
         "--authorized-at-unix-seconds",
         "inspect-receipt",
     )?;
+    reject_evaluated_at(&args, "inspect-receipt")?;
     let receipt: ExecutionReceipt =
         read_typed(required(args.receipt, "--receipt")?, "execution receipt")?;
     Ok(serialize_execution_receipt(&receipt)?)
+}
+
+fn verify_post_state(args: Args) -> Result<String, Box<dyn Error>> {
+    reject_present(&args.lease, "--lease", "verify-post-state")?;
+    reject_present(&args.seed, "--seed", "verify-post-state")?;
+    reject_present(&args.event, "--event", "verify-post-state")?;
+    reject_present(
+        &args.prepared_at_unix_seconds,
+        "--prepared-at-unix-seconds",
+        "verify-post-state",
+    )?;
+    reject_present(
+        &args.authorized_at_unix_seconds,
+        "--authorized-at-unix-seconds",
+        "verify-post-state",
+    )?;
+    let transaction: TransactionProjection =
+        read_typed(required(args.input, "--input")?, "prepared transaction")?;
+    let receipt: ExecutionReceipt =
+        read_typed(required(args.receipt, "--receipt")?, "terminal execution receipt")?;
+    let observation: ProviderObservationInput = read_typed(
+        required(args.observation, "--observation")?,
+        "post-state provider observation",
+    )?;
+    let verification = verify_execution_post_state(
+        &transaction,
+        &receipt,
+        &observation,
+        required(
+            args.evaluated_at_unix_seconds,
+            "--evaluated-at-unix-seconds",
+        )?,
+    )?;
+    Ok(serialize_execution_post_state_verification(&verification)?)
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
@@ -276,6 +334,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         Command::InitializeReceipt => initialize(args)?,
         Command::AppendReceipt => append(args)?,
         Command::InspectReceipt => inspect(args)?,
+        Command::VerifyPostState => verify_post_state(args)?,
     };
     println!("{output}");
     Ok(())
