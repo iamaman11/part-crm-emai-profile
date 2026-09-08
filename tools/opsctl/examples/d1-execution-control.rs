@@ -8,9 +8,7 @@ use opsctl::d1::execution_control::{
     serialize_target_fence_verification, verify_target_fence,
 };
 use opsctl::d1::transaction::{ProviderObservationInput, TransactionProjection};
-use opsctl::d1::{
-    serialize_execution_post_state_verification, verify_execution_post_state,
-};
+use opsctl::d1::{serialize_execution_post_state_verification, verify_execution_post_state};
 use serde::de::DeserializeOwned;
 use std::env;
 use std::error::Error;
@@ -308,8 +306,10 @@ fn verify_post_state(args: Args) -> Result<String, Box<dyn Error>> {
     )?;
     let transaction: TransactionProjection =
         read_typed(required(args.input, "--input")?, "prepared transaction")?;
-    let receipt: ExecutionReceipt =
-        read_typed(required(args.receipt, "--receipt")?, "terminal execution receipt")?;
+    let receipt: ExecutionReceipt = read_typed(
+        required(args.receipt, "--receipt")?,
+        "terminal execution receipt",
+    )?;
     let observation: ProviderObservationInput = read_typed(
         required(args.observation, "--observation")?,
         "post-state provider observation",
