@@ -125,13 +125,12 @@ fn read_strict(path: PathBuf, label: &str) -> Result<Value, Box<dyn Error>> {
     parse_strict_json(&raw).map_err(|error| format!("{label} is not strict bounded JSON: {error}").into())
 }
 
-fn diagnostic_kind(diagnostic: &Value) -> Result<D1OperatorOutcomeKind, Box<dyn Error>> {
+fn diagnostic_kind(diagnostic: &Value) -> Result<Option<D1OperatorOutcomeKind>, Box<dyn Error>> {
     let reason = diagnostic
         .get("reason_code")
         .and_then(Value::as_str)
         .ok_or("owner diagnostic is missing string reason_code")?;
-    D1OperatorOutcomeKind::from_str(reason)
-        .map_err(|_| format!("owner diagnostic reason_code is not a supported D1 operator outcome: {reason}").into())
+    Ok(D1OperatorOutcomeKind::from_str(reason).ok())
 }
 
 fn resolve_kind(
@@ -140,10 +139,11 @@ fn resolve_kind(
 ) -> Result<D1OperatorOutcomeKind, Box<dyn Error>> {
     match (explicit, owner_diagnostic) {
         (Some(kind), Some(diagnostic)) => {
-            let diagnostic_kind = diagnostic_kind(diagnostic)?;
-            if kind != diagnostic_kind {
+            if let Some(diagnostic_kind) = diagnostic_kind(diagnostic)?
+                && kind != diagnostic_kind
+            {
                 return Err(format!(
-                    "--kind {} disagrees with owner diagnostic reason_code {}",
+                    "--kind {} disagrees with operator-level owner diagnostic reason_code {}",
                     kind.as_str(),
                     diagnostic_kind.as_str()
                 )
@@ -152,7 +152,9 @@ fn resolve_kind(
             Ok(kind)
         }
         (Some(kind), None) => Ok(kind),
-        (None, Some(diagnostic)) => diagnostic_kind(diagnostic),
+        (None, Some(diagnostic)) => diagnostic_kind(diagnostic)?.ok_or_else(|| {
+            "--kind is required when owner diagnostic reason_code is lower-level than the operator outcome vocabulary".into()
+        }),
         (None, None) => Err("--kind is required when no owner diagnostic is supplied".into()),
     }
 }
@@ -257,7 +259,7 @@ mod tests {
     }
 
     #[test]
-    fn kind_is_derived_from_typed_owner_diagnostic() -> Result<(), Box<dyn Error>> {
+    fn kind_is_derived_from_operator_level_owner_diagnostic() -> Result<(), Box<dyn Error>> {
         let path = write_diagnostic("STALE_OBSERVATION");
         let mut args = base_args(D1OperatorOutcomeKind::CompletedVerified);
         args.kind = None;
@@ -271,12 +273,25 @@ mod tests {
     }
 
     #[test]
-    fn explicit_kind_must_match_owner_diagnostic() {
+    fn explicit_kind_must_match_operator_level_owner_diagnostic() {
         let path = write_diagnostic("INVALID_AUTHORIZATION");
         let mut args = base_args(D1OperatorOutcomeKind::StaleAuthorization);
         args.owner_diagnostic_json = Some(path.clone());
         let result = render(args);
         fs::remove_file(path).ok();
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn lower_level_owner_diagnostic_is_preserved_under_explicit_operator_kind() -> Result<(), Box<dyn Error>> {
+        let path = write_diagnostic("D1_PRECONDITION_BLOCKED");
+        let mut args = base_args(D1OperatorOutcomeKind::PrepareBlocked);
+        args.owner_diagnostic_json = Some(path.clone());
+        let output = render(args)?;
+        fs::remove_file(path).ok();
+        let value: Value = serde_json::from_str(&output)?;
+        assert_eq!(value["outcome"], "PREPARE_BLOCKED");
+        assert_eq!(value["owner_diagnostic"]["reason_code"], "D1_PRECONDITION_BLOCKED");
+        Ok(())
     }
 }
