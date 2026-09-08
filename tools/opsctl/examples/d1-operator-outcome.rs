@@ -3,7 +3,7 @@
 use opsctl::canonical::parse_strict_json;
 use opsctl::d1::operator_outcome::{
     D1OperatorOutcomeContext, D1OperatorOutcomeKind, build_operator_outcome,
-    serialize_operator_outcome,
+    resolve_authorization_rejection_kind, serialize_operator_outcome,
 };
 use opsctl::d1::transaction::TargetIdentity;
 use serde_json::Value;
@@ -18,6 +18,7 @@ use std::str::FromStr;
 #[derive(Default)]
 struct Args {
     kind: Option<D1OperatorOutcomeKind>,
+    authorization_rejections: Vec<D1OperatorOutcomeKind>,
     source_sha: Option<String>,
     tree_sha: Option<String>,
     current_stage_issue: Option<u64>,
@@ -67,6 +68,10 @@ where
             "--kind" => {
                 let value = D1OperatorOutcomeKind::from_str(&utf8_value(&mut iterator, flag)?)?;
                 set_once(&mut args.kind, value, flag)?;
+            }
+            "--authorization-rejection-kind" => {
+                let value = D1OperatorOutcomeKind::from_str(&utf8_value(&mut iterator, flag)?)?;
+                args.authorization_rejections.push(value);
             }
             "--source-sha" => {
                 let value = utf8_value(&mut iterator, flag)?;
@@ -138,8 +143,15 @@ fn diagnostic_kind(diagnostic: &Value) -> Result<Option<D1OperatorOutcomeKind>, 
 
 fn resolve_kind(
     explicit: Option<D1OperatorOutcomeKind>,
+    authorization_rejections: &[D1OperatorOutcomeKind],
     owner_diagnostic: Option<&Value>,
 ) -> Result<D1OperatorOutcomeKind, Box<dyn Error>> {
+    if !authorization_rejections.is_empty() {
+        if explicit.is_some() || owner_diagnostic.is_some() {
+            return Err("authorization rejection-set disposition cannot be combined with --kind or --owner-diagnostic-json".into());
+        }
+        return resolve_authorization_rejection_kind(authorization_rejections).map_err(Into::into);
+    }
     match (explicit, owner_diagnostic) {
         (Some(kind), Some(diagnostic)) => {
             if let Some(diagnostic_kind) = diagnostic_kind(diagnostic)?
@@ -176,7 +188,11 @@ fn render(args: Args) -> Result<String, Box<dyn Error>> {
         Some(path) => Some(read_strict(path, "owner diagnostic")?),
         None => None,
     };
-    let kind = resolve_kind(args.kind, owner_diagnostic.as_ref())?;
+    let kind = resolve_kind(
+        args.kind,
+        &args.authorization_rejections,
+        owner_diagnostic.as_ref(),
+    )?;
     let outcome = build_operator_outcome(
         kind,
         D1OperatorOutcomeContext {
@@ -206,6 +222,7 @@ mod tests {
     fn base_args(kind: D1OperatorOutcomeKind) -> Args {
         Args {
             kind: Some(kind),
+            authorization_rejections: Vec::new(),
             source_sha: Some("aa".repeat(20)),
             tree_sha: Some("bb".repeat(20)),
             current_stage_issue: Some(642),
@@ -252,6 +269,27 @@ mod tests {
             );
             assert_eq!(value["operator_has_provider_credentials"], false);
         }
+        Ok(())
+    }
+
+    #[test]
+    fn rejection_set_disposition_is_order_independent() -> Result<(), Box<dyn Error>> {
+        let mut left = base_args(D1OperatorOutcomeKind::CompletedVerified);
+        left.kind = None;
+        left.authorization_rejections = vec![
+            D1OperatorOutcomeKind::StaleAuthorization,
+            D1OperatorOutcomeKind::InvalidAuthorization,
+        ];
+        let mut right = base_args(D1OperatorOutcomeKind::CompletedVerified);
+        right.kind = None;
+        right.authorization_rejections = vec![
+            D1OperatorOutcomeKind::InvalidAuthorization,
+            D1OperatorOutcomeKind::StaleAuthorization,
+        ];
+        let left_value: Value = serde_json::from_str(&render(left)?)?;
+        let right_value: Value = serde_json::from_str(&render(right)?)?;
+        assert_eq!(left_value["outcome"], "INVALID_AUTHORIZATION");
+        assert_eq!(right_value["outcome"], left_value["outcome"]);
         Ok(())
     }
 
