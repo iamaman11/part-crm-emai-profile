@@ -1,15 +1,18 @@
 use super::model::D1Error;
+use super::transaction_core::{RecoveryStrategy, TransactionKind, TransactionPhase};
 use serde_json::{Value, json};
 
 const POLICY_SCHEMA_VERSION: u64 = 1;
 const ORDINARY_OBSERVATION_FRESHNESS_MAX_AGE_SECONDS: u64 = 900;
-const ORDINARY_RECOVERY_STRATEGY: &str = "NOOP_RETRY";
+const ORDINARY_TRANSACTION_KIND: TransactionKind = TransactionKind::D1Migration;
+const ORDINARY_TRANSACTION_PHASE: TransactionPhase = TransactionPhase::Ordinary;
+const ORDINARY_RECOVERY_STRATEGY: RecoveryStrategy = RecoveryStrategy::NoopRetry;
 
 pub(crate) fn ordinary_projection() -> Value {
     json!({
         "schema_version": POLICY_SCHEMA_VERSION,
-        "transaction_kind": "D1_MIGRATION",
-        "phase": "ORDINARY",
+        "transaction_kind": ORDINARY_TRANSACTION_KIND,
+        "phase": ORDINARY_TRANSACTION_PHASE,
         "observation_freshness_max_age_seconds": ORDINARY_OBSERVATION_FRESHNESS_MAX_AGE_SECONDS,
         "recovery_strategy": ORDINARY_RECOVERY_STRATEGY,
     })
@@ -29,46 +32,23 @@ pub(crate) fn validate_ordinary_transaction_binding(
         ));
     }
 
-    let transaction_kind = transaction
-        .get("transaction_kind")
-        .and_then(Value::as_str)
-        .ok_or_else(|| D1Error::new("transaction identity input is missing transaction_kind"))?;
-    if transaction_kind != "D1_MIGRATION" {
-        return Err(D1Error::new(
-            "ordinary D1 transaction policy requires transaction_kind=D1_MIGRATION",
-        ));
-    }
-
-    let phase = transaction
-        .get("phase")
-        .and_then(Value::as_str)
-        .ok_or_else(|| D1Error::new("transaction identity input is missing phase"))?;
-    if phase != "ORDINARY" {
-        return Err(D1Error::new(
-            "ordinary D1 transaction policy requires phase=ORDINARY",
-        ));
-    }
-
-    let freshness = transaction
-        .get("freshness_max_age_seconds")
-        .and_then(Value::as_u64)
-        .ok_or_else(|| {
-            D1Error::new("transaction identity input is missing freshness_max_age_seconds")
+    for (input_field, policy_field) in [
+        ("transaction_kind", "transaction_kind"),
+        ("phase", "phase"),
+        ("freshness_max_age_seconds", "observation_freshness_max_age_seconds"),
+        ("recovery_strategy", "recovery_strategy"),
+    ] {
+        let actual = transaction.get(input_field).ok_or_else(|| {
+            D1Error::new(format!("transaction identity input is missing {input_field}"))
         })?;
-    if freshness != ORDINARY_OBSERVATION_FRESHNESS_MAX_AGE_SECONDS {
-        return Err(D1Error::new(format!(
-            "transaction freshness drifted from typed ordinary D1 policy: expected={ORDINARY_OBSERVATION_FRESHNESS_MAX_AGE_SECONDS} actual={freshness}"
-        )));
-    }
-
-    let recovery = transaction
-        .get("recovery_strategy")
-        .and_then(Value::as_str)
-        .ok_or_else(|| D1Error::new("transaction identity input is missing recovery_strategy"))?;
-    if recovery != ORDINARY_RECOVERY_STRATEGY {
-        return Err(D1Error::new(format!(
-            "transaction recovery strategy drifted from typed ordinary D1 policy: expected={ORDINARY_RECOVERY_STRATEGY} actual={recovery}"
-        )));
+        let expected_value = expected.get(policy_field).ok_or_else(|| {
+            D1Error::new(format!("typed ordinary D1 policy is missing {policy_field}"))
+        })?;
+        if actual != expected_value {
+            return Err(D1Error::new(format!(
+                "transaction {input_field} drifted from typed ordinary D1 policy"
+            )));
+        }
     }
 
     Ok(())
@@ -89,8 +69,8 @@ mod tests {
 
     fn transaction() -> Value {
         json!({
-            "transaction_kind": "D1_MIGRATION",
-            "phase": "ORDINARY",
+            "transaction_kind": ORDINARY_TRANSACTION_KIND,
+            "phase": ORDINARY_TRANSACTION_PHASE,
             "freshness_max_age_seconds": ORDINARY_OBSERVATION_FRESHNESS_MAX_AGE_SECONDS,
             "recovery_strategy": ORDINARY_RECOVERY_STRATEGY,
         })
@@ -100,13 +80,13 @@ mod tests {
     fn ordinary_policy_projection_is_stable_and_typed() {
         let policy = ordinary_projection();
         assert_eq!(policy["schema_version"], POLICY_SCHEMA_VERSION);
-        assert_eq!(policy["transaction_kind"], "D1_MIGRATION");
-        assert_eq!(policy["phase"], "ORDINARY");
+        assert_eq!(policy["transaction_kind"], json!(ORDINARY_TRANSACTION_KIND));
+        assert_eq!(policy["phase"], json!(ORDINARY_TRANSACTION_PHASE));
         assert_eq!(
             policy["observation_freshness_max_age_seconds"],
             ORDINARY_OBSERVATION_FRESHNESS_MAX_AGE_SECONDS
         );
-        assert_eq!(policy["recovery_strategy"], ORDINARY_RECOVERY_STRATEGY);
+        assert_eq!(policy["recovery_strategy"], json!(ORDINARY_RECOVERY_STRATEGY));
     }
 
     #[test]
@@ -124,7 +104,7 @@ mod tests {
     #[test]
     fn recovery_drift_is_rejected() {
         let mut changed = transaction();
-        changed["recovery_strategy"] = json!("ROLL_FORWARD");
+        changed["recovery_strategy"] = json!(RecoveryStrategy::RollForward);
         assert!(validate_ordinary_transaction_binding(&prepare(), &changed).is_err());
     }
 
