@@ -91,7 +91,8 @@ jobs:
           assert 'd1-transaction-verify' in source
           assert 'd1-execution-control' in source and 'inspect-receipt' in source and 'verify-post-state' in source
           assert 'D1_OPERATOR_OUTCOME_V1' in source and 'd1-operator-outcome' in source
-          assert 'd1-operator-outcome-${{ github.run_id }}-${{ github.run_attempt }}' in source
+          artifact_name = 'd1-operator-outcome-' + '$' + '{{ github.run_id }}-' + '$' + '{{ github.run_attempt }}'
+          assert artifact_name in source
           assert 'd1-executor-inputs-' in source
           assert 'd1-execution-receipt-' in source and 'd1-migration-evidence-' in source
           assert 'scripts/d1-prepare.py' in source and 'operator-input' in source
