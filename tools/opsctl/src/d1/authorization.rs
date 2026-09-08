@@ -212,7 +212,10 @@ fn stale_authorization(summary: impl Into<String>) -> D1Error {
         "d1.authorization.freshness",
         "STALE_AUTHORIZATION",
         summary,
-        Some("authorization evaluated within its exact expiry and observation freshness window".to_owned()),
+        Some(
+            "authorization evaluated within its exact expiry and observation freshness window"
+                .to_owned(),
+        ),
         None,
         STALE_AUTH_REMEDIATION,
     ))
