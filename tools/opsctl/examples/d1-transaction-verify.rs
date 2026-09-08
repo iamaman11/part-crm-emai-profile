@@ -257,7 +257,7 @@ mod tests {
         }
     }
 
-    fn reason_code(error: &(dyn Error + 'static)) -> Option<&str> {
+    fn reason_code<'a>(error: &'a (dyn Error + 'static)) -> Option<&'a str> {
         error
             .downcast_ref::<D1Error>()?
             .gate_result_json()
