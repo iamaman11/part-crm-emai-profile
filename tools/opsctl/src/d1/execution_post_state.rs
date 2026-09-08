@@ -607,12 +607,8 @@ mod tests {
     fn failed_no_effect_requires_exact_unchanged_state() -> Result<(), D1Error> {
         let transaction = transaction()?;
         let receipt = receipt(&transaction, ExecutionEventKind::FailedNoEffect)?;
-        let verified = verify_execution_post_state(
-            &transaction,
-            &receipt,
-            &post_observation(false),
-            T0 + 50,
-        )?;
+        let verified =
+            verify_execution_post_state(&transaction, &receipt, &post_observation(false), T0 + 50)?;
         assert_eq!(
             verified.disposition,
             ExecutionPostStateDisposition::FailedNoEffectVerified
@@ -624,13 +620,9 @@ mod tests {
     fn failed_no_effect_drift_has_typed_target_prestate_diagnostic() -> Result<(), D1Error> {
         let transaction = transaction()?;
         let receipt = receipt(&transaction, ExecutionEventKind::FailedNoEffect)?;
-        let error = verify_execution_post_state(
-            &transaction,
-            &receipt,
-            &post_observation(true),
-            T0 + 50,
-        )
-        .expect_err("provider drift must fail closed");
+        let error =
+            verify_execution_post_state(&transaction, &receipt, &post_observation(true), T0 + 50)
+                .expect_err("provider drift must fail closed");
         assert_eq!(
             error
                 .gate_result_json()
