@@ -7,12 +7,14 @@ on:
     paths:
       - '.github/workflows/d1-operator-comment-router.yml'
       - '.github/workflows/d1-operator.yml'
+      - 'architecture/credential-authority-ar11-extension.json'
   push:
     branches:
       - main
     paths:
       - '.github/workflows/d1-operator-comment-router.yml'
       - '.github/workflows/d1-operator.yml'
+      - 'architecture/credential-authority-ar11-extension.json'
   issue_comment:
     types:
       - created
@@ -50,6 +52,7 @@ jobs:
 
           router = Path('.github/workflows/d1-operator-comment-router.yml').read_text(encoding='utf-8')
           operator = Path('.github/workflows/d1-operator.yml').read_text(encoding='utf-8')
+          credential_authority = Path('architecture/credential-authority-ar11-extension.json').read_text(encoding='utf-8')
 
           forbidden = (
               'CLOUD' + 'FLARE_',
@@ -61,14 +64,17 @@ jobs:
               'D1_TRANSACTION_' + 'AUTHORIZATION_V1',
               'issues:' + ' write',
               'contents:' + ' write',
+              'D1_OPERATOR_' + 'DISPATCH_TOKEN',
           )
           for value in forbidden:
               assert value not in router, f'comment router acquired forbidden authority: {value}'
 
           secret_prefix = 'sec' + 'rets.'
-          dispatch_secret = secret_prefix + 'D1_OPERATOR_DISPATCH_TOKEN'
-          assert router.count(secret_prefix) == 1, 'comment router may consume only one GitHub transport secret'
-          assert dispatch_secret in router, 'comment router must use the owner-scoped GitHub dispatch token'
+          dispatch_secret = secret_prefix + 'GH_ADMIN_OPERATOR_TOKEN'
+          assert router.count(secret_prefix) == 1, 'comment router may consume only one governed GitHub transport secret'
+          assert dispatch_secret in router, 'comment router must reuse the governed GitHub admin operator credential'
+          assert '"credential_id": "github.hosted-admin-operator"' in credential_authority
+          assert '".github/workflows/d1-operator-comment-router.yml"' in credential_authority
 
           dispatch_token = '/' + 'dispatches'
           assert router.count(dispatch_token) == 1, 'comment router must expose exactly one downstream dispatch'
@@ -149,7 +155,7 @@ jobs:
 
       - name: Dispatch zero-input standard D1 operator as repository owner
         env:
-          GH_TOKEN: ${{ secrets.D1_OPERATOR_DISPATCH_TOKEN }}
+          GH_TOKEN: ${{ secrets.GH_ADMIN_OPERATOR_TOKEN }}
         run: |
           set -euo pipefail
           test -n "$GH_TOKEN"
@@ -167,5 +173,5 @@ jobs:
             echo "- command: \`/d1 operator\`"
             echo "- downstream: \`d1-operator.yml\` / \`main\` / zero inputs"
             echo '- provider credentials in router: NO'
-            echo '- downstream actor preservation: owner-scoped GitHub dispatch token'
+            echo '- downstream actor preservation: governed GitHub admin operator credential'
           } >> "$GITHUB_STEP_SUMMARY"
