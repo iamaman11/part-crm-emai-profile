@@ -88,11 +88,6 @@ pub fn verify_execution_post_state(
             "post-state verification requires exact transaction/receipt/predecessor target equality",
         ));
     }
-    if post_observation.target != plan.target {
-        return Err(target_prestate_drift(
-            "fresh post-state provider observation target drifted from the sealed target identity",
-        ));
-    }
     if receipt.transaction_id.as_deref() != Some(transaction.transaction_id.as_str())
         || receipt.operation_identity != transaction.transaction_id
     {
@@ -103,16 +98,6 @@ pub fn verify_execution_post_state(
     if receipt.source_sha != plan.source_sha {
         return Err(D1Error::new(
             "post-state execution receipt source_sha does not match prepared transaction source",
-        ));
-    }
-    if post_observation.deployment_identity != predecessor.deployment_identity {
-        return Err(target_prestate_drift(
-            "post-state deployment identity drifted from the sealed predecessor observation",
-        ));
-    }
-    if post_observation.time_travel_bookmark_capable != predecessor.time_travel_bookmark_capable {
-        return Err(target_prestate_drift(
-            "post-state Time Travel capability drifted from the sealed predecessor observation",
         ));
     }
 
@@ -130,6 +115,26 @@ pub fn verify_execution_post_state(
             "post-state verification requires COMPLETED, RECOVERY_REQUIRED, or FAILED_NO_EFFECT receipt",
         ));
     }
+
+    if post_observation.target != plan.target {
+        return Err(prestate_mismatch(
+            terminal_state,
+            "fresh post-state provider observation target drifted from the sealed target identity",
+        ));
+    }
+    if post_observation.deployment_identity != predecessor.deployment_identity {
+        return Err(prestate_mismatch(
+            terminal_state,
+            "post-state deployment identity drifted from the sealed predecessor observation",
+        ));
+    }
+    if post_observation.time_travel_bookmark_capable != predecessor.time_travel_bookmark_capable {
+        return Err(prestate_mismatch(
+            terminal_state,
+            "post-state Time Travel capability drifted from the sealed predecessor observation",
+        ));
+    }
+
     if evaluated_at_unix_seconds <= 0
         || post_observation.observed_at_unix_seconds <= 0
         || post_observation.observed_at_unix_seconds > evaluated_at_unix_seconds
@@ -285,6 +290,15 @@ pub fn serialize_execution_post_state_verification(
         ))
     })?)
     .map_err(D1Error::new)
+}
+
+fn prestate_mismatch(terminal_state: ExecutionEventKind, summary: impl Into<String>) -> D1Error {
+    let summary = summary.into();
+    if terminal_state == ExecutionEventKind::FailedNoEffect {
+        target_prestate_drift(summary)
+    } else {
+        D1Error::new(summary)
+    }
 }
 
 fn target_prestate_drift(summary: impl Into<String>) -> D1Error {
@@ -599,6 +613,24 @@ mod tests {
         assert!(
             verify_execution_post_state(&transaction, &receipt, &post_observation(false), T0 + 50,)
                 .is_err()
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn completed_target_mismatch_is_not_prestate_drift() -> Result<(), D1Error> {
+        let transaction = transaction()?;
+        let receipt = receipt(&transaction, ExecutionEventKind::Completed)?;
+        let mut observation = post_observation(true);
+        observation.target.database_id = "different-database".to_owned();
+        let error = verify_execution_post_state(&transaction, &receipt, &observation, T0 + 50)
+            .expect_err("completed observation target mismatch must fail closed");
+        assert_eq!(
+            error
+                .gate_result_json()
+                .get("reason_code")
+                .and_then(serde_json::Value::as_str),
+            Some("D1_SEMANTIC_ERROR")
         );
         Ok(())
     }
