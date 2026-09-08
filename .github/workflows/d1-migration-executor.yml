@@ -1109,18 +1109,18 @@ jobs:
             --experimental-provision=false --experimental-auto-create=false \
             > artifacts/d1-migration/foreign-key-check.json
           npx --yes wrangler@4.94.0 d1 execute "$DATABASE_NAME" --remote \
-            --config artifacts/d1-migration/wrangler.json --command "PRAGMA integrity_check" --json \
+            --config artifacts/d1-migration/wrangler.json --command "PRAGMA quick_check" --json \
             --experimental-provision=false --experimental-auto-create=false \
-            > artifacts/d1-migration/integrity-check.json
+            > artifacts/d1-migration/quick-check.json
           python - <<'PY'
           import json
           from pathlib import Path
           fk = json.loads(Path('artifacts/d1-migration/foreign-key-check.json').read_text())
-          integrity = json.loads(Path('artifacts/d1-migration/integrity-check.json').read_text())
+          quick = json.loads(Path('artifacts/d1-migration/quick-check.json').read_text())
           assert len(fk) == 1 and fk[0]['success'] is True and fk[0]['results'] == [], fk
-          assert len(integrity) == 1 and integrity[0]['success'] is True, integrity
-          rows = integrity[0]['results']
-          assert len(rows) == 1 and list(rows[0].values()) == ['ok'], integrity
+          assert len(quick) == 1 and quick[0]['success'] is True, quick
+          rows = quick[0]['results']
+          assert len(rows) == 1 and list(rows[0].values()) == ['ok'], quick
           PY
 
       - name: Complete execution receipt after verified post-state
@@ -1217,7 +1217,7 @@ jobs:
           if receipt['events'][-1]['kind'] != 'COMPLETED':
               raise SystemExit('successful migration evidence requires terminal COMPLETED execution receipt')
           evidence = {
-              'schema_version': 2,
+              'schema_version': 3,
               'evidence_kind': 'protected-d1-migration-execution',
               'context': load('context.json'),
               'executor_admission': load('executor-admission.json', optional=True),
@@ -1238,7 +1238,7 @@ jobs:
               'ledger_after': load('ledger-after.json'),
               'verify': load('verify.json'),
               'foreign_key_check': load('foreign-key-check.json'),
-              'integrity_check': load('integrity-check.json'),
+              'quick_check': load('quick-check.json'),
               'provider_mutation_executed': bool(plan.get('planned_migrations')),
               'automatic_restore_executed': False,
               'secret_material_recorded': False,

@@ -55,6 +55,7 @@ const RECEIPT_APPLIED_STEP = 'Append mechanically known MIGRATION_APPLIED events
 const RECEIPT_APPLIED_MARKER_STEP = 'Persist applied migration execution receipt snapshot';
 const REREAD_STEP = 'Reread remote ledger with observe credential';
 const RECEIPT_POST_OBSERVED_STEP = 'Append POST_OBSERVED to execution receipt';
+const POST_INVARIANT_STEP = 'Verify post-apply database invariants with observe credential';
 const RECEIPT_COMPLETE_STEP = 'Complete execution receipt after verified post-state';
 const RECEIPT_TERMINALIZE_STEP = 'Terminalize execution receipt fail closed';
 const RECEIPT_TERMINAL_MARKER_STEP = 'Persist terminal execution receipt snapshot';
@@ -175,7 +176,7 @@ async function validateExecutor(text, root = ROOT) {
     TARGET_FENCE_VERIFICATION, 'TARGET_FENCE_ACQUIRED', 'TARGET_FENCE_VERIFIED',
     RECEIPT_INIT_STEP, RECEIPT_INITIAL_MARKER_STEP, RECEIPT_PREWRITE_STEP, PREAPPLY_OBSERVE_STEP,
     RECEIPT_MUTATION_STARTED_STEP, RECEIPT_MUTATION_MARKER_STEP, APPLY_STEP, RECEIPT_APPLIED_STEP,
-    RECEIPT_APPLIED_MARKER_STEP, REREAD_STEP, RECEIPT_POST_OBSERVED_STEP, RECEIPT_COMPLETE_STEP,
+    RECEIPT_APPLIED_MARKER_STEP, REREAD_STEP, RECEIPT_POST_OBSERVED_STEP, POST_INVARIANT_STEP, RECEIPT_COMPLETE_STEP,
     RECEIPT_TERMINALIZE_STEP, RECEIPT_TERMINAL_MARKER_STEP, RECEIPT,
     'PREWRITE_FENCE_PASS', 'PREWRITE_ABORTED', 'MUTATION_STARTED', 'MIGRATION_APPLIED',
     'POST_OBSERVED', 'VERIFIED', 'COMPLETED', 'RECOVERY_REQUIRED', 'FAILED_NO_EFFECT',
@@ -192,7 +193,7 @@ async function validateExecutor(text, root = ROOT) {
     'wrangler-pending-fence.txt', 'd1 migrations apply', 'expected-after.json', 'ledger-after-names.json',
     'd1 verify', POST_CONTRACT_LEDGER, 'd1 contract-transition verify', 'predecessor_ledger_state',
     'runtime_target_revision', 'transition_migrations',
-    'PRAGMA foreign_key_check', 'PRAGMA integrity_check',
+    'PRAGMA foreign_key_check', 'PRAGMA quick_check', 'quick-check.json',
     "'target_fence': load('target-fence-lease.json')", "'target_fence_verification': load('target-fence-verification.json')",
     "provider_mutation_executed': bool(plan.get('planned_migrations'))", "automatic_restore_executed': False",
     "secret_material_recorded': False", 'actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a',
@@ -215,6 +216,7 @@ async function validateExecutor(text, root = ROOT) {
     'migrations_dir = ../../migrations/d1', 'd1 time-travel restore', 'time-travel restore', 'd1 create',
     'database create', 'experimental-provision=true', 'experimental-auto-create=true', 'cancel-in-progress: true',
     '          - production', 'environment: ${{ inputs.environment }}',
+    'PRAGMA integrity_check', 'integrity-check.json', "'integrity_check':",
   ]) {
     if (text.includes(forbidden)) fail(`protected D1 executor contains forbidden marker: ${forbidden}`);
   }
@@ -410,7 +412,7 @@ async function validateExecutor(text, root = ROOT) {
   const rereadIndex = text.indexOf(`\n      - name: ${REREAD_STEP}`);
   const receiptPostObservedIndex = text.indexOf(`\n      - name: ${RECEIPT_POST_OBSERVED_STEP}`);
   const postVerifyIndex = text.indexOf('Require exact target through credential-free opsctl verify');
-  const postInvariantIndex = text.indexOf('Verify post-apply database invariants with observe credential', postVerifyIndex);
+  const postInvariantIndex = text.indexOf(POST_INVARIANT_STEP, postVerifyIndex);
   const receiptCompleteIndex = text.indexOf(`\n      - name: ${RECEIPT_COMPLETE_STEP}`);
   const receiptTerminalizeIndex = text.indexOf(`\n      - name: ${RECEIPT_TERMINALIZE_STEP}`);
   const receiptTerminalMarkerIndex = text.indexOf(`\n      - name: ${RECEIPT_TERMINAL_MARKER_STEP}`);
@@ -633,6 +635,18 @@ async function validateExecutor(text, root = ROOT) {
     if (!postVerifyBody.includes(marker)) fail(`post-CONTRACT verification lost required typed proof: ${marker}`);
   }
 
+  const postInvariantBody = stepBody(text, POST_INVARIANT_STEP);
+  for (const marker of [
+    OBSERVE_REF, 'PRAGMA foreign_key_check', 'PRAGMA quick_check',
+    'artifacts/d1-migration/foreign-key-check.json', 'artifacts/d1-migration/quick-check.json',
+    "fk[0]['results'] == []", "list(rows[0].values()) == ['ok']",
+  ]) {
+    if (!postInvariantBody.includes(marker)) fail(`D1-supported post-apply diagnostic lost fail-closed marker: ${marker}`);
+  }
+  for (const forbidden of [DEPLOY_REF, 'PRAGMA integrity_check', 'integrity-check.json']) {
+    if (postInvariantBody.includes(forbidden)) fail(`post-apply diagnostics must remain observe-only and D1-supported: ${forbidden}`);
+  }
+
   const completeBody = stepBody(text, RECEIPT_COMPLETE_STEP);
   for (const marker of ['VERIFIED', 'COMPLETED', 'd1-execution-control append-receipt', RECEIPT]) {
     if (!completeBody.includes(marker)) fail(`successful receipt completion lost marker: ${marker}`);
@@ -663,9 +677,14 @@ async function validateExecutor(text, root = ROOT) {
   const evidenceBody = stepBody(text, 'Build metadata-only migration evidence');
   for (const marker of [
     "receipt = load('execution-receipt.json')", "receipt['events'][-1]['kind'] != 'COMPLETED'",
+    "'schema_version': 3", "'evidence_kind': 'protected-d1-migration-execution'",
     "'execution_receipt': receipt", "'execution_receipt_id': receipt['receipt_id']",
+    "'foreign_key_check': load('foreign-key-check.json')", "'quick_check': load('quick-check.json')",
   ]) {
-    if (!evidenceBody.includes(marker)) fail(`successful migration evidence lost final receipt binding: ${marker}`);
+    if (!evidenceBody.includes(marker)) fail(`successful migration evidence lost v3 post-verify binding: ${marker}`);
+  }
+  for (const forbidden of ["'schema_version': 2", "'integrity_check':", 'integrity-check.json']) {
+    if (evidenceBody.includes(forbidden)) fail(`protected D1 execution evidence must not masquerade legacy v2 diagnostic schema: ${forbidden}`);
   }
 
   const remoteMutationPaths = [];
@@ -735,12 +754,19 @@ async function selfTest(text) {
     ['missing durable MUTATION_STARTED snapshot', `      - name: ${RECEIPT_MUTATION_MARKER_STEP}`, '      - name: Removed durable MUTATION_STARTED snapshot'],
     ['missing mechanically known MIGRATION_APPLIED events', `      - name: ${RECEIPT_APPLIED_STEP}`, '      - name: Removed MIGRATION_APPLIED receipt'],
     ['missing POST_OBSERVED projection', `      - name: ${RECEIPT_POST_OBSERVED_STEP}`, '      - name: Removed POST_OBSERVED receipt'],
+    ['missing supported quick check', 'PRAGMA quick_check', 'PRAGMA removed_quick_check'],
+    ['evidence schema v3 downgrade', "'schema_version': 3", "'schema_version': 2"],
+    ['missing quick-check evidence binding', "'quick_check': load('quick-check.json')", "'removed_quick_check': load('quick-check.json')"],
     ['missing fail-closed receipt terminalizer', `      - name: ${RECEIPT_TERMINALIZE_STEP}`, '      - name: Removed receipt terminalizer'],
     ['missing terminal receipt durability', `      - name: ${RECEIPT_TERMINAL_MARKER_STEP}`, '      - name: Removed terminal receipt snapshot'],
     ['missing receipt evidence binding', "'execution_receipt': receipt", "'removed_execution_receipt': receipt"],
   ]) {
     await expectRejected(label, replaceFixture(label, text, from, to));
   }
+  await expectRejected(
+    'reintroduced unsupported integrity check',
+    replaceFixture('reintroduced unsupported integrity check', text, 'PRAGMA quick_check', 'PRAGMA integrity_check'),
+  );
   await expectRejected(
     'pre-admission run-existence replay fence',
     replaceFixture(
@@ -768,7 +794,7 @@ async function selfTest(text) {
     'second remote apply',
     `${text}\n# npx --yes ${PINNED_WRANGLER} d1 migrations apply X --remote --experimental-provision=false --experimental-auto-create=false\n`,
   );
-  console.log('Protected D1 executor typed-admission, durable target fence, append-only ExecutionReceipt ordering/durability, observe-only preapply revalidation, durable MUTATION_STARTED-before-deploy, fail-closed terminalization, sealed-plan, exact-prestate, diagnostics, post-CONTRACT and one-owner negative fixtures passed.');
+  console.log('Protected D1 executor typed-admission, durable target fence, append-only ExecutionReceipt ordering/durability, observe-only preapply revalidation, durable MUTATION_STARTED-before-deploy, fail-closed terminalization, sealed-plan, exact-prestate, D1-supported quick-check diagnostics, evidence v3, post-CONTRACT and one-owner negative fixtures passed.');
 }
 
 async function main() {
@@ -779,7 +805,7 @@ async function main() {
   }
   if (process.argv.length > 2) fail(`unknown arguments: ${process.argv.slice(2).join(' ')}`);
   await validateExecutor(text, ROOT);
-  console.log('Protected D1 executor contract passed: workflow-dispatch-only, immutable OWNER authorization provenance, typed admission before one-shot consumption, target-scoped typed fence, append-only ExecutionReceipt, observe-only preapply revalidation, durable MUTATION_STARTED before sole deploy credential/apply, mechanically known applied events, fail-closed terminal receipt, exact sealed plan/prestate, typed post-CONTRACT verification, one remote apply owner, no automatic restore or provisioning.');
+  console.log('Protected D1 executor contract passed: workflow-dispatch-only, immutable OWNER authorization provenance, typed admission before one-shot consumption, target-scoped typed fence, append-only ExecutionReceipt, observe-only preapply revalidation, durable MUTATION_STARTED before sole deploy credential/apply, mechanically known applied events, D1-supported fail-closed post-verify diagnostics, evidence v3, fail-closed terminal receipt, exact sealed plan/prestate, typed post-CONTRACT verification, one remote apply owner, no automatic restore or provisioning.');
 }
 
 main().catch((error) => {
