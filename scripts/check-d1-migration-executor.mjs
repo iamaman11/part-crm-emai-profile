@@ -51,6 +51,9 @@ const PREAPPLY_OBSERVE_STEP = 'Revalidate exact ledger fence with observe creden
 const RECEIPT_MUTATION_STARTED_STEP = 'Append MUTATION_STARTED to execution receipt';
 const RECEIPT_MUTATION_MARKER_STEP = 'Persist MUTATION_STARTED execution receipt snapshot';
 const APPLY_STEP = 'Apply planned migrations with deploy credential';
+const RESTORE_PREWRITE_STEP = 'Fresh pre-write provider identity, ledger, diagnostics and bookmark proof';
+const RESTORE_APPLY_STEP = 'Restore exact D1 bookmark with deploy credential';
+const RESTORE_POSTVERIFY_STEP = 'Fresh post-restore ledger and diagnostics proof';
 const RECEIPT_APPLIED_STEP = 'Append mechanically known MIGRATION_APPLIED events';
 const RECEIPT_APPLIED_MARKER_STEP = 'Persist applied migration execution receipt snapshot';
 const REREAD_STEP = 'Reread remote ledger with observe credential';
@@ -386,7 +389,7 @@ async function validateExecutor(text, root = ROOT) {
   const observeSteps = (text.match(/CLOUDFLARE_API_TOKEN: \$\{\{ secrets\.CLOUDFLARE_OBSERVE_API_TOKEN \}\}/g) ?? []).length;
   if (observeSteps < 7) fail(`provider observations must use the dedicated observe credential, including exact preapply revalidation; observed=${observeSteps}`);
   const deploySteps = (text.match(/CLOUDFLARE_API_TOKEN: \$\{\{ secrets\.CLOUDFLARE_API_TOKEN \}\}/g) ?? []).length;
-  if (deploySteps !== 1) fail(`deploy-capable credential must appear exactly once; observed=${deploySteps}`);
+  if (deploySteps !== 2) fail(`deploy-capable credential must appear exactly once in each mutually exclusive migration/restore write step; observed=${deploySteps}`);
 
   const provenanceIndex = text.indexOf(`\n      - name: ${AUTH_PROVENANCE_STEP}`);
   const admissionIndex = text.indexOf('Load immutable prepared transaction and verify typed executor admission');
@@ -607,6 +610,28 @@ async function validateExecutor(text, root = ROOT) {
     if (deployStep.includes(forbidden)) fail(`sole deploy credential step must contain only actual apply boundary, not read-only revalidation: ${forbidden}`);
   }
 
+  const restorePrewriteStep = stepBody(text, RESTORE_PREWRITE_STEP);
+  if (!restorePrewriteStep.includes(OBSERVE_REF)) fail('restore pre-write proof must use the dedicated observe credential');
+  if (restorePrewriteStep.includes(DEPLOY_REF)) fail('restore pre-write proof must never receive the deploy credential');
+  for (const marker of ['d1 info', 'SELECT id, name FROM d1_migrations ORDER BY id', 'd1 time-travel info', 'PRAGMA foreign_key_check', 'PRAGMA quick_check']) {
+    if (!restorePrewriteStep.includes(marker)) fail(`restore pre-write proof lost read-only marker: ${marker}`);
+  }
+
+  const restoreDeployStep = stepBody(text, RESTORE_APPLY_STEP);
+  for (const marker of [DEPLOY_REF, 'test -n "$CLOUDFLARE_API_TOKEN"', '--request POST', '/time_travel/restore?bookmark=$RESTORE_BOOKMARK']) {
+    if (!restoreDeployStep.includes(marker)) fail(`restore deploy step lost exact write marker: ${marker}`);
+  }
+  for (const forbidden of [OBSERVE_REF, 'd1 migrations apply', 'd1 create', 'd1 delete', 'PRAGMA ']) {
+    if (restoreDeployStep.includes(forbidden)) fail(`restore deploy credential step acquired forbidden read/migration surface: ${forbidden}`);
+  }
+
+  const restorePostverifyStep = stepBody(text, RESTORE_POSTVERIFY_STEP);
+  if (!restorePostverifyStep.includes(OBSERVE_REF)) fail('restore post-verify must use the dedicated observe credential');
+  if (restorePostverifyStep.includes(DEPLOY_REF)) fail('restore post-verify must never receive the deploy credential');
+  for (const marker of ['SELECT id, name FROM d1_migrations ORDER BY id', 'PRAGMA foreign_key_check', 'PRAGMA quick_check', 'expected-post-ledger.json']) {
+    if (!restorePostverifyStep.includes(marker)) fail(`restore post-verify lost fail-closed marker: ${marker}`);
+  }
+
   const appliedBody = stepBody(text, RECEIPT_APPLIED_STEP);
   for (const marker of ['MIGRATION_APPLIED', 'expected-pending.json', 'd1-execution-control append-receipt', RECEIPT]) {
     if (!appliedBody.includes(marker)) fail(`mechanically known MIGRATION_APPLIED projection lost marker: ${marker}`);
@@ -694,6 +719,15 @@ async function validateExecutor(text, root = ROOT) {
   }
   if (remoteMutationPaths.length !== 1 || remoteMutationPaths[0] !== EXECUTOR) {
     fail(`exactly one workflow may own remote D1 migrations apply; observed=${JSON.stringify(remoteMutationPaths)}`);
+  }
+
+  const restoreMutationPaths = [];
+  for (const workflowPath of workflows) {
+    const candidate = normalizedShell(await readFile(path.join(root, workflowPath), 'utf8'));
+    if (candidate.includes(DEPLOY_REF) && /\/time_travel\/restore\?bookmark=/.test(candidate)) restoreMutationPaths.push(workflowPath);
+  }
+  if (restoreMutationPaths.length !== 1 || restoreMutationPaths[0] !== EXECUTOR) {
+    fail(`exactly one workflow may own D1 Time Travel restore; observed=${JSON.stringify(restoreMutationPaths)}`);
   }
 }
 
@@ -791,6 +825,10 @@ async function selfTest(text) {
   );
   await expectRejected('deploy token used for observation', replaceFixture('deploy token used for observation', text, OBSERVE_REF, DEPLOY_REF));
   await expectRejected(
+    'third deploy credential exposure',
+    `${text}\n# ${DEPLOY_REF}\n`,
+  );
+  await expectRejected(
     'second remote apply',
     `${text}\n# npx --yes ${PINNED_WRANGLER} d1 migrations apply X --remote --experimental-provision=false --experimental-auto-create=false\n`,
   );
@@ -805,7 +843,7 @@ async function main() {
   }
   if (process.argv.length > 2) fail(`unknown arguments: ${process.argv.slice(2).join(' ')}`);
   await validateExecutor(text, ROOT);
-  console.log('Protected D1 executor contract passed: workflow-dispatch-only, immutable OWNER authorization provenance, typed admission before one-shot consumption, target-scoped typed fence, append-only ExecutionReceipt, observe-only preapply revalidation, durable MUTATION_STARTED before sole deploy credential/apply, mechanically known applied events, D1-supported fail-closed post-verify diagnostics, evidence v3, fail-closed terminal receipt, exact sealed plan/prestate, typed post-CONTRACT verification, one remote apply owner, no automatic restore or provisioning.');
+  console.log('Protected D1 executor contract passed: workflow-dispatch-only, immutable OWNER authorization provenance, typed admission before one-shot consumption, target-scoped typed fence, append-only ExecutionReceipt, observe-only preapply revalidation, durable MUTATION_STARTED before bounded deploy credential writes, mechanically known applied events, D1-supported fail-closed post-verify diagnostics, evidence v3, fail-closed terminal receipt, exact sealed plan/prestate, typed post-CONTRACT verification, one remote apply owner, no automatic restore or provisioning.');
 }
 
 main().catch((error) => {
