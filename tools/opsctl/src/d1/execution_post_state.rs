@@ -624,7 +624,8 @@ mod tests {
         let mut observation = post_observation(true);
         observation.target.database_id = "different-database".to_owned();
         let error = verify_execution_post_state(&transaction, &receipt, &observation, T0 + 50)
-            .expect_err("completed observation target mismatch must fail closed");
+            .err()
+            .ok_or_else(|| D1Error::new("completed observation target mismatch unexpectedly passed"))?;
         assert_eq!(
             error
                 .gate_result_json()
@@ -652,9 +653,14 @@ mod tests {
     fn failed_no_effect_drift_has_typed_target_prestate_diagnostic() -> Result<(), D1Error> {
         let transaction = transaction()?;
         let receipt = receipt(&transaction, ExecutionEventKind::FailedNoEffect)?;
-        let error =
-            verify_execution_post_state(&transaction, &receipt, &post_observation(true), T0 + 50)
-                .expect_err("provider drift must fail closed");
+        let error = verify_execution_post_state(
+            &transaction,
+            &receipt,
+            &post_observation(true),
+            T0 + 50,
+        )
+        .err()
+        .ok_or_else(|| D1Error::new("provider drift unexpectedly passed"))?;
         assert_eq!(
             error
                 .gate_result_json()
@@ -687,7 +693,8 @@ mod tests {
         let mut observation = post_observation(true);
         observation.observed_at_unix_seconds = T0 + 26;
         let error = verify_execution_post_state(&transaction, &receipt, &observation, T0 + 50)
-            .expect_err("old observation must fail closed");
+            .err()
+            .ok_or_else(|| D1Error::new("old observation unexpectedly passed"))?;
         assert_eq!(
             error
                 .gate_result_json()
@@ -708,7 +715,8 @@ mod tests {
             &post_observation(true),
             T0 + 1_000,
         )
-        .expect_err("stale post observation must fail closed");
+        .err()
+        .ok_or_else(|| D1Error::new("stale post observation unexpectedly passed"))?;
         assert_eq!(
             error
                 .gate_result_json()
