@@ -20,6 +20,7 @@ enum Command {
     VerifyFence,
     InitializeReceipt,
     AppendReceipt,
+    InspectReceipt,
 }
 
 impl Command {
@@ -29,6 +30,7 @@ impl Command {
             "verify-fence" => Ok(Self::VerifyFence),
             "initialize-receipt" => Ok(Self::InitializeReceipt),
             "append-receipt" => Ok(Self::AppendReceipt),
+            "inspect-receipt" => Ok(Self::InspectReceipt),
             _ => Err(format!("unsupported d1 execution-control command: {value}").into()),
         }
     }
@@ -245,6 +247,27 @@ fn append(args: Args) -> Result<String, Box<dyn Error>> {
     Ok(serialize_execution_receipt(&next)?)
 }
 
+fn inspect(args: Args) -> Result<String, Box<dyn Error>> {
+    reject_present(&args.input, "--input", "inspect-receipt")?;
+    reject_present(&args.lease, "--lease", "inspect-receipt")?;
+    reject_present(&args.observation, "--observation", "inspect-receipt")?;
+    reject_present(&args.seed, "--seed", "inspect-receipt")?;
+    reject_present(&args.event, "--event", "inspect-receipt")?;
+    reject_present(
+        &args.prepared_at_unix_seconds,
+        "--prepared-at-unix-seconds",
+        "inspect-receipt",
+    )?;
+    reject_present(
+        &args.authorized_at_unix_seconds,
+        "--authorized-at-unix-seconds",
+        "inspect-receipt",
+    )?;
+    let receipt: ExecutionReceipt =
+        read_typed(required(args.receipt, "--receipt")?, "execution receipt")?;
+    Ok(serialize_execution_receipt(&receipt)?)
+}
+
 fn main() -> Result<(), Box<dyn Error>> {
     let (command, args) = parse_args()?;
     let output = match command {
@@ -252,6 +275,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         Command::VerifyFence => verify(args)?,
         Command::InitializeReceipt => initialize(args)?,
         Command::AppendReceipt => append(args)?,
+        Command::InspectReceipt => inspect(args)?,
     };
     println!("{output}");
     Ok(())
