@@ -8,6 +8,7 @@ on:
       - '.github/workflows/d1-operator-comment-router.yml'
       - '.github/workflows/d1-operator.yml'
       - '.github/workflows/d1-isolated-target-observation.yml'
+      - '.github/workflows/d1-migration-executor.yml'
       - 'architecture/credential-authority-ar11-extension.json'
   push:
     branches:
@@ -16,6 +17,7 @@ on:
       - '.github/workflows/d1-operator-comment-router.yml'
       - '.github/workflows/d1-operator.yml'
       - '.github/workflows/d1-isolated-target-observation.yml'
+      - '.github/workflows/d1-migration-executor.yml'
       - 'architecture/credential-authority-ar11-extension.json'
   issue_comment:
     types:
@@ -55,6 +57,7 @@ jobs:
           router = Path('.github/workflows/d1-operator-comment-router.yml').read_text(encoding='utf-8')
           operator = Path('.github/workflows/d1-operator.yml').read_text(encoding='utf-8')
           observer = Path('.github/workflows/d1-isolated-target-observation.yml').read_text(encoding='utf-8')
+          executor = Path('.github/workflows/d1-migration-executor.yml').read_text(encoding='utf-8')
           credential_authority = Path('architecture/credential-authority-ar11-extension.json').read_text(encoding='utf-8')
 
           forbidden = (
@@ -74,17 +77,45 @@ jobs:
 
           secret_prefix = 'sec' + 'rets.'
           dispatch_secret = secret_prefix + 'GH_ADMIN_OPERATOR_TOKEN'
-          assert router.count(secret_prefix) == 1, 'comment router may consume only one governed GitHub transport secret'
-          assert dispatch_secret in router, 'comment router must reuse the governed GitHub admin operator credential only for owner-actor operator dispatch'
+          assert router.count(secret_prefix) == 2, 'governed GitHub admin credential may appear only in the two privileged dispatch steps'
+          assert router.count(dispatch_secret) == 2, 'operator and restore dispatch must reuse only the governed GitHub admin credential'
           assert '"credential_id": "github.hosted-admin-operator"' in credential_authority
           assert '".github/workflows/d1-operator-comment-router.yml"' in credential_authority
 
           dispatch_token = '/' + 'dispatches'
-          assert router.count(dispatch_token) == 2, 'comment router must expose exactly two bounded downstream dispatches'
+          assert router.count(dispatch_token) == 3, 'comment router must expose exactly three bounded downstream dispatches'
           assert ('actions/workflows/d1-operator.yml/' + 'dispatches') in router
           assert ('actions/workflows/d1-isolated-target-observation.yml/' + 'dispatches') in router
+          assert ('actions/workflows/d1-migration-executor.yml/' + 'dispatches') in router
           assert "github.event.comment.body == '/d1 operator'" in router
           assert "startsWith(github.event.comment.body, '/d1 time-travel-info ')" in router
+          assert "startsWith(github.event.comment.body, '/d1 time-travel-restore ')" in router
+          assert 'operation_mode:' in executor and 'time_travel_restore' in executor
+          assert 'authorize_restore:' in executor and 'Restore exact D1 bookmark with deploy credential' in executor
+          assert executor.count("if: inputs.operation_mode == 'migration'") == 2, 'existing migration authorize+execute jobs must both be guarded from restore mode'
+          restore_source = executor.split('\n  authorize_restore:', 1)[1]
+          migration_apply = 'd1 migrations ' + 'apply'
+          d1_create = 'd1 ' + 'create'
+          d1_delete = 'd1 ' + 'delete'
+          provider_secret_prefix = secret_prefix + 'CLOUD' + 'FLARE_'
+          deploy_secret = provider_secret_prefix + 'API_TOKEN'
+          observe_secret = provider_secret_prefix + 'OBSERVE_API_TOKEN'
+          assert migration_apply not in restore_source, 'restore mode must never apply migrations'
+          assert d1_create not in restore_source and d1_delete not in restore_source
+          assert restore_source.count(deploy_secret) == 1, 'restore mode may expose deploy credential only to the exact restore write step'
+          assert restore_source.count(observe_secret) == 2, 'restore mode must use read-only credential only for pre/post provider proof'
+          assert 'environment: staging' in restore_source
+          assert 'D1_TIME_TRAVEL_RESTORE_AUTHORIZATION_V1' in restore_source
+          assert '/time_travel/restore?bookmark=$RESTORE_BOOKMARK' in restore_source
+          order = [
+              restore_source.index('Prove restore authorization has not been consumed'),
+              restore_source.index('Consume Time Travel restore authorization'),
+              restore_source.index('Persist restore MUTATION_STARTED receipt'),
+              restore_source.index('Restore exact D1 bookmark with deploy credential'),
+              restore_source.index('Fresh post-restore ledger and diagnostics proof'),
+              restore_source.index('Terminalize restore receipt fail closed'),
+          ]
+          assert order == sorted(order), 'restore one-shot/receipt/postverify ordering drifted'
           assert "github.event.comment.author_association == 'OWNER'" in router
           assert 'github.actor == github.repository_owner' in router
           assert 'CURRENT_STAGE_ISSUE = #' in router
@@ -118,7 +149,8 @@ jobs:
       github.event.issue.state == 'open' &&
       (
         github.event.comment.body == '/d1 operator' ||
-        startsWith(github.event.comment.body, '/d1 time-travel-info ')
+        startsWith(github.event.comment.body, '/d1 time-travel-info ') ||
+        startsWith(github.event.comment.body, '/d1 time-travel-restore ')
       ) &&
       github.event.comment.author_association == 'OWNER' &&
       github.actor == github.repository_owner
@@ -150,18 +182,26 @@ jobs:
           import sys
 
           body, env_path = sys.argv[1:]
+          restore_comment = ''
           if body == '/d1 operator':
               kind = 'operator'
               timestamp = ''
           else:
-              match = re.fullmatch(r'/d1 time-travel-info ([0-9]{10})', body)
-              if match is None:
+              info = re.fullmatch(r'/d1 time-travel-info ([0-9]{10})', body)
+              restore = re.fullmatch(r'/d1 time-travel-restore ([1-9][0-9]*)', body)
+              if info is not None:
+                  kind = 'time_travel_info'
+                  timestamp = info.group(1)
+              elif restore is not None:
+                  kind = 'time_travel_restore'
+                  timestamp = ''
+                  restore_comment = restore.group(1)
+              else:
                   raise SystemExit('owner D1 command is not an exact supported transport command')
-              kind = 'time_travel_info'
-              timestamp = match.group(1)
           with open(env_path, 'a', encoding='utf-8') as handle:
               handle.write(f'D1_ROUTE_KIND={kind}\n')
               handle.write(f'D1_TIME_TRAVEL_UNIX_SECONDS={timestamp}\n')
+              handle.write(f'D1_RESTORE_AUTHORIZATION_COMMENT_ID={restore_comment}\n')
           PY
 
           main_json="$RUNNER_TEMP/main.json"
@@ -218,13 +258,69 @@ jobs:
             "repos/$GITHUB_REPOSITORY/actions/workflows/d1-isolated-target-observation.yml/dispatches" \
             --input "$payload"
 
+      - name: Resolve exact restore transport envelope from OWNER authorization
+        if: env.D1_ROUTE_KIND == 'time_travel_restore'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          auth="$RUNNER_TEMP/d1-restore-authorization.json"
+          gh api "repos/$GITHUB_REPOSITORY/issues/comments/$D1_RESTORE_AUTHORIZATION_COMMENT_ID" > "$auth"
+          python - "$auth" "$GITHUB_ENV" <<'PY_RESTORE_ROUTE'
+          import json, os, sys
+          path, env_path = sys.argv[1:]
+          comment = json.load(open(path, encoding='utf-8'))
+          if (comment.get('user') or {}).get('login') != os.environ['REPOSITORY_OWNER'] or comment.get('author_association') != 'OWNER':
+              raise SystemExit('restore authorization must be OWNER-authored')
+          body = comment.get('body')
+          if not isinstance(body, str):
+              raise SystemExit('restore authorization body missing')
+          lines = body.strip().splitlines()
+          if len(lines) != 2 or lines[0] != 'D1_TIME_TRAVEL_RESTORE_AUTHORIZATION_V1':
+              raise SystemExit('restore authorization envelope invalid')
+          raw = lines[1]
+          value = json.loads(raw)
+          if json.dumps(value, sort_keys=True, separators=(',', ':'), ensure_ascii=False) != raw:
+              raise SystemExit('restore authorization must be canonical JSON')
+          if value.get('source_sha') != os.environ['GITHUB_SHA']:
+              raise SystemExit('restore authorization source does not match protected main')
+          if value.get('authorized_provider_effects') != ['D1_TIME_TRAVEL_RESTORE_ONLY']:
+              raise SystemExit('restore authorization effect mismatch')
+          target = value.get('target') or {}
+          if target.get('environment') != 'staging' or target.get('component') != 'catalog':
+              raise SystemExit('restore target must be staging catalog')
+          with open(env_path, 'a', encoding='utf-8') as handle:
+              handle.write(f"RESTORE_COMPONENT={target.get('component','')}\n")
+              handle.write(f"RESTORE_ACCOUNT_ID={target.get('account_id','')}\n")
+              handle.write(f"RESTORE_DATABASE_NAME={target.get('database_name','')}\n")
+              handle.write(f"RESTORE_DATABASE_ID={target.get('database_id','')}\n")
+          PY_RESTORE_ROUTE
+
+      - name: Dispatch one-shot Time Travel restore through sole D1 mutation owner
+        if: env.D1_ROUTE_KIND == 'time_travel_restore'
+        env:
+          GH_TOKEN: ${{ secrets.GH_ADMIN_OPERATOR_TOKEN }}
+        run: |
+          set -euo pipefail
+          test -n "$GH_TOKEN"
+          confirmation="$GITHUB_SHA:staging:time_travel_restore:$D1_RESTORE_AUTHORIZATION_COMMENT_ID"
+          payload="$RUNNER_TEMP/d1-time-travel-restore-dispatch.json"
+          jq -nc --arg ref main --arg source "$GITHUB_SHA" --arg component "$RESTORE_COMPONENT" \
+            --arg account "$RESTORE_ACCOUNT_ID" --arg name "$RESTORE_DATABASE_NAME" --arg id "$RESTORE_DATABASE_ID" \
+            --arg comment "$D1_RESTORE_AUTHORIZATION_COMMENT_ID" --arg confirmation "$confirmation" \
+            '{ref:$ref,inputs:{operation_mode:"time_travel_restore",restore_authorization_comment_id:$comment,environment:"staging",source_sha:$source,component:$component,account_id:$account,database_name:$name,database_id:$id,target_release_manifest_json:"{}",current_release_manifest_json:"{}",known_good_release_manifest_json:"{}",preconditions_json:"{}",transition_mode:"ordinary",expected_release_set_id:"",prepared_transaction_run_id:"",prepared_transaction_run_attempt:"",transaction_id:"",authorization_digest:"",transaction_authorization_json:"",mutation_authorized:true,confirmation:$confirmation}}' \
+            > "$payload"
+          gh api --method POST "repos/$GITHUB_REPOSITORY/actions/workflows/d1-migration-executor.yml/dispatches" --input "$payload"
+
       - name: Record transport result
         run: |
           set -euo pipefail
           if [ "$D1_ROUTE_KIND" = operator ]; then
             downstream='d1-operator.yml / main / zero inputs / owner actor'
-          else
+          elif [ "$D1_ROUTE_KIND" = time_travel_info ]; then
             downstream="d1-isolated-target-observation.yml / main / read-only timestamp=$D1_TIME_TRAVEL_UNIX_SECONDS"
+          else
+            downstream="d1-migration-executor.yml / main / one-shot time_travel_restore authorization_comment=$D1_RESTORE_AUTHORIZATION_COMMENT_ID"
           fi
           {
             echo '## D1 owner comment transport'
@@ -235,6 +331,6 @@ jobs:
             echo "- downstream: \`$downstream\`"
             echo '- provider credentials in router: NO'
             echo '- provider mutation authority in router: NO'
-            echo '- standard operator owner actor: governed GitHub admin operator credential only'
-            echo '- read-only observer dispatch: ephemeral GitHub Actions token only'
+            echo '- privileged operator/restore dispatch actor: governed GitHub admin operator credential only'
+            echo '- read-only observer and authorization reads: ephemeral GitHub Actions token only'
           } >> "$GITHUB_STEP_SUMMARY"
