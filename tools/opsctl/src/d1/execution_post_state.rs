@@ -1,8 +1,8 @@
-use super::execution_control::{
-    ExecutionEventKind, ExecutionReceipt, serialize_execution_receipt,
-};
+use super::execution_control::{ExecutionEventKind, ExecutionReceipt, serialize_execution_receipt};
 use super::model::D1Error;
-use super::transaction::{ProviderObservationInput, TargetIdentity, TransactionPhase, TransactionProjection};
+use super::transaction::{
+    ProviderObservationInput, TargetIdentity, TransactionPhase, TransactionProjection,
+};
 use super::transaction_integrity::revalidate_transaction_projection;
 use crate::canonical::canonical_json;
 use serde::{Deserialize, Serialize};
@@ -53,7 +53,10 @@ pub fn verify_execution_post_state(
             "post-state provider observation schema_version must be {POST_STATE_SCHEMA_VERSION}"
         )));
     }
-    validate_target(&post_observation.target, "post-state provider observation target")?;
+    validate_target(
+        &post_observation.target,
+        "post-state provider observation target",
+    )?;
     validate_non_empty(
         &post_observation.observation_source,
         "post-state provider observation_source",
@@ -109,10 +112,9 @@ pub fn verify_execution_post_state(
         ));
     }
 
-    let terminal_event = receipt
-        .events
-        .last()
-        .ok_or_else(|| D1Error::new("post-state verification requires a terminal execution event"))?;
+    let terminal_event = receipt.events.last().ok_or_else(|| {
+        D1Error::new("post-state verification requires a terminal execution event")
+    })?;
     let terminal_state = terminal_event.kind;
     if !matches!(
         terminal_state,
@@ -138,8 +140,9 @@ pub fn verify_execution_post_state(
         ));
     }
     let age = evaluated_at_unix_seconds - post_observation.observed_at_unix_seconds;
-    let max_age = i64::try_from(plan.freshness_max_age_seconds)
-        .map_err(|_| D1Error::new("transaction freshness window exceeds supported timestamp range"))?;
+    let max_age = i64::try_from(plan.freshness_max_age_seconds).map_err(|_| {
+        D1Error::new("transaction freshness window exceeds supported timestamp range")
+    })?;
     if age > max_age {
         return Err(D1Error::new(
             "post-state provider observation is stale under the prepared transaction freshness policy",
@@ -307,13 +310,13 @@ fn validate_sha256(value: &str, label: &str) -> Result<(), D1Error> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::execution_control::{
         ExecutionEventInput, ExecutionReceiptSeed, TargetFenceLeaseInput, acquire_target_fence,
         append_execution_event, initialize_execution_receipt,
     };
     use super::super::transaction::{RecoveryStrategy, TransactionPhase};
     use super::super::transaction_core::build_transaction_projection;
+    use super::*;
     use serde_json::json;
 
     const T0: i64 = 1_788_700_000;
@@ -391,7 +394,10 @@ mod tests {
             .expect("valid transaction fixture")
     }
 
-    fn receipt(transaction: &TransactionProjection, terminal: ExecutionEventKind) -> ExecutionReceipt {
+    fn receipt(
+        transaction: &TransactionProjection,
+        terminal: ExecutionEventKind,
+    ) -> ExecutionReceipt {
         let plan = &transaction.transaction_plan;
         let lease = acquire_target_fence(TargetFenceLeaseInput {
             schema_version: 1,
@@ -418,8 +424,8 @@ mod tests {
             recovery_strategy: RecoveryStrategy::NoopRetry,
             fence: lease,
         };
-        let mut value = initialize_execution_receipt(seed, T0 + 20, T0 + 21)
-            .expect("valid receipt fixture");
+        let mut value =
+            initialize_execution_receipt(seed, T0 + 20, T0 + 21).expect("valid receipt fixture");
         let append = |receipt: &ExecutionReceipt, kind, at, migration_id: Option<&str>| {
             append_execution_event(
                 receipt,
@@ -475,7 +481,11 @@ mod tests {
             },
             observed_at_unix_seconds: T0 + 40,
             observation_source: "fixture:post-state".to_owned(),
-            remote_ledger_sha256: if applied { "33".repeat(32) } else { "22".repeat(32) },
+            remote_ledger_sha256: if applied {
+                "33".repeat(32)
+            } else {
+                "22".repeat(32)
+            },
             remote_migrations: if applied {
                 vec![
                     "0030_profile_generation_successor_commit.sql".to_owned(),
@@ -501,13 +511,9 @@ mod tests {
     fn completed_receipt_requires_exact_fresh_post_state() {
         let transaction = transaction();
         let receipt = receipt(&transaction, ExecutionEventKind::Completed);
-        let verified = verify_execution_post_state(
-            &transaction,
-            &receipt,
-            &post_observation(true),
-            T0 + 50,
-        )
-        .expect("matching completed post-state must verify");
+        let verified =
+            verify_execution_post_state(&transaction, &receipt, &post_observation(true), T0 + 50)
+                .expect("matching completed post-state must verify");
         assert_eq!(
             verified.disposition,
             ExecutionPostStateDisposition::CompletedVerified
@@ -520,13 +526,8 @@ mod tests {
         let transaction = transaction();
         let receipt = receipt(&transaction, ExecutionEventKind::Completed);
         assert!(
-            verify_execution_post_state(
-                &transaction,
-                &receipt,
-                &post_observation(false),
-                T0 + 50,
-            )
-            .is_err()
+            verify_execution_post_state(&transaction, &receipt, &post_observation(false), T0 + 50,)
+                .is_err()
         );
     }
 
@@ -534,13 +535,9 @@ mod tests {
     fn failed_no_effect_requires_exact_unchanged_state() {
         let transaction = transaction();
         let receipt = receipt(&transaction, ExecutionEventKind::FailedNoEffect);
-        let verified = verify_execution_post_state(
-            &transaction,
-            &receipt,
-            &post_observation(false),
-            T0 + 50,
-        )
-        .expect("unchanged failed-no-effect state must verify");
+        let verified =
+            verify_execution_post_state(&transaction, &receipt, &post_observation(false), T0 + 50)
+                .expect("unchanged failed-no-effect state must verify");
         assert_eq!(
             verified.disposition,
             ExecutionPostStateDisposition::FailedNoEffectVerified
@@ -551,13 +548,9 @@ mod tests {
     fn recovery_required_never_promotes_to_completed_when_target_revision_is_present() {
         let transaction = transaction();
         let receipt = receipt(&transaction, ExecutionEventKind::RecoveryRequired);
-        let verified = verify_execution_post_state(
-            &transaction,
-            &receipt,
-            &post_observation(true),
-            T0 + 50,
-        )
-        .expect("matching recovery-required post-state must verify as recovery");
+        let verified =
+            verify_execution_post_state(&transaction, &receipt, &post_observation(true), T0 + 50)
+                .expect("matching recovery-required post-state must verify as recovery");
         assert_eq!(
             verified.disposition,
             ExecutionPostStateDisposition::RecoveryRequiredConfirmed
