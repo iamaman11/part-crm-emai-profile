@@ -125,6 +125,38 @@ fn read_strict(path: PathBuf, label: &str) -> Result<Value, Box<dyn Error>> {
     parse_strict_json(&raw).map_err(|error| format!("{label} is not strict bounded JSON: {error}").into())
 }
 
+fn diagnostic_kind(diagnostic: &Value) -> Result<D1OperatorOutcomeKind, Box<dyn Error>> {
+    let reason = diagnostic
+        .get("reason_code")
+        .and_then(Value::as_str)
+        .ok_or("owner diagnostic is missing string reason_code")?;
+    D1OperatorOutcomeKind::from_str(reason)
+        .map_err(|_| format!("owner diagnostic reason_code is not a supported D1 operator outcome: {reason}").into())
+}
+
+fn resolve_kind(
+    explicit: Option<D1OperatorOutcomeKind>,
+    owner_diagnostic: Option<&Value>,
+) -> Result<D1OperatorOutcomeKind, Box<dyn Error>> {
+    match (explicit, owner_diagnostic) {
+        (Some(kind), Some(diagnostic)) => {
+            let diagnostic_kind = diagnostic_kind(diagnostic)?;
+            if kind != diagnostic_kind {
+                return Err(format!(
+                    "--kind {} disagrees with owner diagnostic reason_code {}",
+                    kind.as_str(),
+                    diagnostic_kind.as_str()
+                )
+                .into());
+            }
+            Ok(kind)
+        }
+        (Some(kind), None) => Ok(kind),
+        (None, Some(diagnostic)) => diagnostic_kind(diagnostic),
+        (None, None) => Err("--kind is required when no owner diagnostic is supplied".into()),
+    }
+}
+
 fn render(args: Args) -> Result<String, Box<dyn Error>> {
     let target = match args.target_json {
         Some(path) => Some(
@@ -137,8 +169,9 @@ fn render(args: Args) -> Result<String, Box<dyn Error>> {
         Some(path) => Some(read_strict(path, "owner diagnostic")?),
         None => None,
     };
+    let kind = resolve_kind(args.kind, owner_diagnostic.as_ref())?;
     let outcome = build_operator_outcome(
-        required(args.kind, "--kind")?,
+        kind,
         D1OperatorOutcomeContext {
             source_sha: required(args.source_sha, "--source-sha")?,
             tree_sha: required(args.tree_sha, "--tree-sha")?,
@@ -160,6 +193,8 @@ fn main() -> Result<(), Box<dyn Error>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     fn base_args(kind: D1OperatorOutcomeKind) -> Args {
         Args {
@@ -172,6 +207,27 @@ mod tests {
             owner_diagnostic_json: None,
             evidence_refs: BTreeMap::new(),
         }
+    }
+
+    fn write_diagnostic(reason_code: &str) -> PathBuf {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let path = env::temp_dir().join(format!("d1-operator-diagnostic-{unique}.json"));
+        fs::write(
+            &path,
+            serde_json::to_string(&json!({
+                "schema_version": 1,
+                "reason_code": reason_code,
+                "summary": "fixture",
+                "remediation": "fixture remediation",
+                "tool": {"name": "opsctl", "surface": "d1", "version": "fixture"}
+            }))
+            .expect("serialize diagnostic"),
+        )
+        .expect("write diagnostic");
+        path
     }
 
     #[test]
@@ -198,5 +254,29 @@ mod tests {
         assert_eq!(value["evidence_refs"]["receipt"], "run:1:artifact:2");
         assert_eq!(value["evidence_refs"]["post_state"], "run:3:artifact:4");
         Ok(())
+    }
+
+    #[test]
+    fn kind_is_derived_from_typed_owner_diagnostic() -> Result<(), Box<dyn Error>> {
+        let path = write_diagnostic("STALE_OBSERVATION");
+        let mut args = base_args(D1OperatorOutcomeKind::CompletedVerified);
+        args.kind = None;
+        args.owner_diagnostic_json = Some(path.clone());
+        let output = render(args)?;
+        fs::remove_file(path).ok();
+        let value: Value = serde_json::from_str(&output)?;
+        assert_eq!(value["outcome"], "STALE_OBSERVATION");
+        assert_eq!(value["owner_diagnostic"]["reason_code"], "STALE_OBSERVATION");
+        Ok(())
+    }
+
+    #[test]
+    fn explicit_kind_must_match_owner_diagnostic() {
+        let path = write_diagnostic("INVALID_AUTHORIZATION");
+        let mut args = base_args(D1OperatorOutcomeKind::StaleAuthorization);
+        args.owner_diagnostic_json = Some(path.clone());
+        let result = render(args);
+        fs::remove_file(path).ok();
+        assert!(result.is_err());
     }
 }
