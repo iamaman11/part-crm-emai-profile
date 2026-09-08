@@ -84,8 +84,19 @@ jobs:
         run: python -c "import os, subprocess; actual = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(); expected = os.environ['EXPECTED_SOURCE_SHA']; assert actual == expected, f'expected {expected}, got {actual}'"
       - name: Compile prepare adapter
         run: python -m py_compile scripts/d1-prepare.py
-      - name: Exercise ready, blocked, and historical Attempt A fixtures
+      - name: Exercise ready, blocked, and operator-input fixtures
         run: python scripts/d1-prepare.py self-test
+      - name: Prove successful Prepare publishes one immutable executor-input bundle
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          source = Path('.github/workflows/d1-migration-prepare.yml').read_text(encoding='utf-8')
+          artifact_name_prefix = 'name: d1-executor-' + 'inputs-'
+          assert source.count(artifact_name_prefix) == 1
+          for name in ('target-release.json', 'current-release.json', 'known-good-release.json', 'preconditions.json'):
+              assert f'artifacts/d1-prepare/{name}' in source
+          PY
 
   prepare:
     if: github.event_name == 'workflow_dispatch'
@@ -220,6 +231,19 @@ jobs:
         with:
           name: d1-transaction-${{ inputs.component }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: artifacts/d1-prepare/transaction.json
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Upload immutable executor input bundle
+        if: steps.prepare.outputs.exit_code == '0'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: d1-executor-inputs-${{ inputs.component }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            artifacts/d1-prepare/target-release.json
+            artifacts/d1-prepare/current-release.json
+            artifacts/d1-prepare/known-good-release.json
+            artifacts/d1-prepare/preconditions.json
           if-no-files-found: error
           retention-days: 30
 

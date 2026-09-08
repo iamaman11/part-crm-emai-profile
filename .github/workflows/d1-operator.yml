@@ -1,0 +1,555 @@
+name: D1 Standard Operator
+
+run-name: D1 operator / ${{ github.event_name }} / ${{ github.sha }}
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/d1-operator.yml'
+      - '.github/workflows/d1-migration-prepare.yml'
+      - 'scripts/d1-prepare.py'
+      - 'tools/opsctl/examples/d1-transaction-verify.rs'
+  push:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/d1-operator.yml'
+      - '.github/workflows/d1-migration-prepare.yml'
+      - 'scripts/d1-prepare.py'
+      - 'tools/opsctl/examples/d1-transaction-verify.rs'
+  workflow_dispatch:
+
+permissions:
+  actions: write
+  contents: read
+  issues: read
+
+concurrency:
+  group: d1-standard-operator-main
+  cancel-in-progress: false
+
+jobs:
+  contract:
+    name: Standard D1 operator is transport-only
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Checkout exact source
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Verify exact source checkout
+        env:
+          EXPECTED_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: python -c "import os, subprocess; actual = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(); expected = os.environ['EXPECTED_SOURCE_SHA']; assert actual == expected, f'expected {expected}, got {actual}'"
+
+      - name: Prove operator has no provider authority or migration-specific policy
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import ast
+          import textwrap
+          from pathlib import Path
+          source = Path('.github/workflows/d1-operator.yml').read_text(encoding='utf-8')
+          forbidden = (
+              'secrets.' + 'CLOUDFLARE_API_TOKEN',
+              'secrets.' + 'CLOUDFLARE_OBSERVE_API_TOKEN',
+              'wrang' + 'ler ',
+              'd1 migrations ' + 'apply',
+              'd1 ' + 'create',
+              'd1 ' + 'delete',
+              'd1 time-travel ' + 'restore',
+              '0027_' + 'pas2_payload_fingerprint_expand.sql',
+              '0031_' + 'device_binding_governance.sql',
+              '0032_' + 'pas2_payload_fingerprint_contract.sql',
+          )
+          for value in forbidden:
+              assert value not in source, f'D1 operator acquired forbidden policy/effect surface: {value}'
+          trigger = source.split('\npermissions:', 1)[0]
+          dispatch = trigger.split('\n  workflow_dispatch:', 1)[1]
+          assert 'inputs:' not in dispatch, 'D1 operator must remain zero-input in GitHub UI'
+          assert source.count('/dispatches') == 4, 'D1 operator dispatch surface drifted from exactly three natural-owner transitions'
+          assert 'D1_TRANSACTION_AUTHORIZATION_V1' in source
+          assert 'd1-transaction-authorization' in source
+          assert 'd1-transaction-verify' in source
+          assert 'd1-executor-inputs-' in source
+          assert 'scripts/d1-prepare.py' in source and 'operator-input' in source
+          assert ('def validate_' + 'transaction(') not in source, 'operator must not duplicate typed transaction-integrity policy'
+          assert ('def reconstruct_executor_' + 'manifests(') not in source, 'operator must consume immutable Prepare inputs instead of reconstructing executor manifests'
+          marker = "python - <<'P" + "Y'\n"
+          terminator = "\n          P" + "Y"
+          blocks = source.split(marker)[1:]
+          assert len(blocks) == 2, f'expected exactly two embedded Python blocks, got {len(blocks)}'
+          for index, block in enumerate(blocks, start=1):
+              body = block.split(terminator, 1)[0]
+              ast.parse(textwrap.dedent(body), filename=f'd1-operator-inline-{index}.py')
+          PY
+
+      - name: Exercise typed transaction verifier positive and negative fixtures
+        run: |
+          set -euo pipefail
+          env -u CLOUDFLARE_API_TOKEN -u CLOUDFLARE_ACCOUNT_ID \
+            cargo test --locked --manifest-path tools/opsctl/Cargo.toml --example d1-transaction-verify
+
+  operator:
+    name: Resolve current D1 state and perform one bounded transition
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
+    needs: contract
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Checkout exact protected-main source
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Verify exact source checkout
+        env:
+          EXPECTED_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: python -c "import os, subprocess; actual = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(); expected = os.environ['EXPECTED_SOURCE_SHA']; assert actual == expected, f'expected {expected}, got {actual}'"
+
+      - name: Build credential-free natural owners
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = refs/heads/main
+          test "$GITHUB_RUN_ATTEMPT" = 1
+          test "$GITHUB_ACTOR" = "$GITHUB_REPOSITORY_OWNER"
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          env -u CLOUDFLARE_API_TOKEN -u CLOUDFLARE_ACCOUNT_ID \
+            cargo build --locked --manifest-path tools/opsctl/Cargo.toml
+          env -u CLOUDFLARE_API_TOKEN -u CLOUDFLARE_ACCOUNT_ID \
+            cargo build --locked --manifest-path tools/opsctl/Cargo.toml --example d1-transaction-authorization --example d1-transaction-verify
+          test -x tools/opsctl/target/debug/opsctl
+          test -x tools/opsctl/target/debug/examples/d1-transaction-authorization
+          test -x tools/opsctl/target/debug/examples/d1-transaction-verify
+          python scripts/d1-prepare.py self-test
+
+      - name: Resolve, prepare, stop for authorization, or dispatch sole executor
+        env:
+          SOURCE_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import hashlib
+          import json
+          import os
+          import re
+          import shutil
+          import subprocess
+          import tarfile
+          import tempfile
+          import time
+          from datetime import datetime
+          from pathlib import Path
+
+          REPO = os.environ['GITHUB_REPOSITORY']
+          SOURCE = os.environ['SOURCE_SHA']
+          SUMMARY = Path(os.environ['GITHUB_STEP_SUMMARY'])
+          OPSCTL = Path('tools/opsctl/target/debug/opsctl')
+          AUTH_TOOL = Path('tools/opsctl/target/debug/examples/d1-transaction-authorization')
+          VERIFY_TOOL = Path('tools/opsctl/target/debug/examples/d1-transaction-verify')
+          PREPARE_WORKFLOW = 'd1-migration-prepare.yml'
+          OBSERVE_WORKFLOW = 'd1-tx6-isolated-target-observation.yml'
+          EXECUTOR_WORKFLOW = 'd1-migration-executor.yml'
+          FRESHNESS = 900
+
+          def shell(args, *, check=True):
+              result = subprocess.run(args, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False)
+              if check and result.returncode != 0:
+                  raise SystemExit(f"command failed ({result.returncode}): {' '.join(map(str, args))}\n{result.stderr.strip()}")
+              return result
+
+          def compact(value):
+              return json.dumps(value, sort_keys=True, separators=(',', ':'), ensure_ascii=False)
+
+          def gh_json(endpoint):
+              return json.loads(shell(['gh', 'api', endpoint]).stdout)
+
+          def api_post(endpoint, payload):
+              with tempfile.NamedTemporaryFile('w', encoding='utf-8', suffix='.json', delete=False) as handle:
+                  json.dump(payload, handle, sort_keys=True, separators=(',', ':'))
+                  handle.write('\n')
+                  temp = handle.name
+              try:
+                  shell(['gh', 'api', '--method', 'POST', endpoint, '--input', temp])
+              finally:
+                  Path(temp).unlink(missing_ok=True)
+
+          def epoch(value):
+              return int(datetime.fromisoformat(value.replace('Z', '+00:00')).timestamp())
+
+          def current_tree():
+              return shell(['git', 'rev-parse', 'HEAD^{tree}']).stdout.strip()
+
+          def current_stage_issue():
+              tracker = gh_json(f'repos/{REPO}/issues/266')
+              body = tracker.get('body')
+              if not isinstance(body, str):
+                  raise SystemExit('live stage pointer #266 has no readable body')
+              matches = re.findall(r'^CURRENT_STAGE_ISSUE = #([1-9][0-9]*)$', body, re.MULTILINE)
+              if len(matches) != 1:
+                  raise SystemExit('live stage pointer #266 does not select exactly one CURRENT stage issue')
+              issue = int(matches[0])
+              owner = gh_json(f'repos/{REPO}/issues/{issue}')
+              if owner.get('state') != 'open':
+                  raise SystemExit('CURRENT stage issue is not open')
+              return issue
+
+          def workflow_runs(workflow, limit=50):
+              value = gh_json(f'repos/{REPO}/actions/workflows/{workflow}/runs?branch=main&per_page={limit}')
+              return value.get('workflow_runs') or []
+
+          def artifacts(run_id):
+              return gh_json(f'repos/{REPO}/actions/runs/{run_id}/artifacts?per_page=100').get('artifacts') or []
+
+          def artifact_exact(run_id, name):
+              matches = [item for item in artifacts(run_id) if item.get('name') == name and not item.get('expired')]
+              return matches[0] if len(matches) == 1 else None
+
+          def download(run_id, name, destination):
+              destination = Path(destination)
+              shutil.rmtree(destination, ignore_errors=True)
+              destination.mkdir(parents=True, exist_ok=True)
+              result = shell(['gh', 'run', 'download', str(run_id), '--repo', REPO, '--name', name, '--dir', str(destination)], check=False)
+              if result.returncode != 0:
+                  shutil.rmtree(destination, ignore_errors=True)
+                  return False
+              return True
+
+          def verify_transaction(path, evaluated_at):
+              process = shell([
+                  str(VERIFY_TOOL), '--transaction-json', str(path), '--expected-source-sha', SOURCE,
+                  '--expected-tree-sha', current_tree(), '--expected-environment', 'staging',
+                  '--evaluated-at-unix-seconds', str(evaluated_at),
+              ], check=False)
+              if process.returncode != 0:
+                  return None
+              try:
+                  value = json.loads(process.stdout)
+              except json.JSONDecodeError:
+                  return None
+              if value.get('status') != 'TRANSACTION_VERIFIED' or value.get('mode') != 'read-only':
+                  return None
+              if value.get('authorization_consumed') or value.get('mutation_executed') or value.get('provider_mutation_executed'):
+                  return None
+              if value.get('source_sha') != SOURCE or value.get('tree_sha') != current_tree():
+                  return None
+              return value
+
+          def latest_executor_epoch():
+              values = [epoch(run['created_at']) for run in workflow_runs(EXECUTOR_WORKFLOW)
+                        if run.get('event') == 'workflow_dispatch' and run.get('head_sha') == SOURCE]
+              return max(values, default=0)
+
+          def transaction_artifact(run):
+              attempt = int(run.get('run_attempt') or 0)
+              suffix = f"-{run['id']}-{attempt}"
+              matches = [item for item in artifacts(run['id'])
+                         if isinstance(item.get('name'), str) and item['name'].startswith('d1-transaction-')
+                         and item['name'].endswith(suffix) and not item.get('expired')]
+              return matches[0] if len(matches) == 1 else None
+
+          def executor_input_artifact(run, component):
+              attempt = int(run.get('run_attempt') or 0)
+              name = f"d1-executor-inputs-{component}-{run['id']}-{attempt}"
+              return artifact_exact(run['id'], name)
+
+          def resolve_fresh_transaction():
+              now = int(time.time())
+              cutoff = latest_executor_epoch()
+              candidates = []
+              for run in workflow_runs(PREPARE_WORKFLOW):
+                  if run.get('event') != 'workflow_dispatch' or run.get('head_sha') != SOURCE:
+                      continue
+                  if run.get('status') != 'completed' or run.get('conclusion') != 'success' or epoch(run['created_at']) <= cutoff:
+                      continue
+                  artifact = transaction_artifact(run)
+                  if artifact is None:
+                      continue
+                  with tempfile.TemporaryDirectory(prefix='d1-transaction-') as directory:
+                      if not download(run['id'], artifact['name'], directory):
+                          continue
+                      path = Path(directory) / 'transaction.json'
+                      if not path.is_file():
+                          continue
+                      verification = verify_transaction(path, now)
+                      if verification is None:
+                          continue
+                      executor_artifact = executor_input_artifact(run, verification['component'])
+                      if executor_artifact is None:
+                          continue
+                      tx = json.loads(path.read_text(encoding='utf-8'))
+                      candidates.append((epoch(run['created_at']), run, tx, verification, executor_artifact['name']))
+              if not candidates:
+                  return None
+              candidates.sort(key=lambda item: item[0], reverse=True)
+              _, run, tx, verification, executor_artifact_name = candidates[0]
+              return {'run_id': int(run['id']), 'run_attempt': int(run['run_attempt']), 'transaction': tx,
+                      'verification': verification, 'executor_artifact_name': executor_artifact_name,
+                      'fresh_until': int(verification['fresh_until_unix_seconds'])}
+
+          def wait_for_dispatched_run(workflow, started_at, timeout_seconds):
+              deadline = time.time() + timeout_seconds
+              while time.time() < deadline:
+                  matching = [run for run in workflow_runs(workflow)
+                              if run.get('event') == 'workflow_dispatch' and run.get('head_sha') == SOURCE
+                              and epoch(run['created_at']) >= started_at - 5]
+                  if matching:
+                      matching.sort(key=lambda item: epoch(item['created_at']), reverse=True)
+                      selected = matching[0]
+                      if selected.get('status') == 'completed':
+                          if selected.get('conclusion') != 'success':
+                              raise SystemExit(f"{workflow} run {selected['id']} completed as {selected.get('conclusion')}")
+                          return selected
+                  time.sleep(10)
+              raise SystemExit(f'timed out waiting for {workflow} workflow_dispatch run')
+
+          def fresh_observation():
+              start = int(time.time())
+              api_post(f'repos/{REPO}/actions/workflows/{OBSERVE_WORKFLOW}/dispatches', {'ref': 'main'})
+              run = wait_for_dispatched_run(OBSERVE_WORKFLOW, start, 1800)
+              attempt = int(run['run_attempt'])
+              name = f"d1-tx6-transaction-preflight-{run['id']}-{attempt}-{SOURCE}"
+              artifact = artifact_exact(run['id'], name)
+              if artifact is None:
+                  raise SystemExit('fresh observation preflight artifact missing or ambiguous')
+              jobs = gh_json(f"repos/{REPO}/actions/runs/{run['id']}/jobs?filter=latest&per_page=100").get('jobs') or []
+              hosted = [job for job in jobs if job.get('name') == 'TX-6 isolated target hosted observation and preflight']
+              if len(hosted) != 1 or hosted[0].get('conclusion') != 'success':
+                  raise SystemExit('fresh observation hosted job missing/ambiguous/not successful')
+              directory = Path(tempfile.mkdtemp(prefix='d1-preflight-'))
+              if not download(run['id'], name, directory):
+                  raise SystemExit('cannot download fresh observation preflight artifact')
+              required = {'prepare.json', 'provider-observation.json', 'runtime-context.json', 'summary.json', 'target-release-set-id.txt'}
+              present = {path.name for path in directory.iterdir() if path.is_file()}
+              if present != required:
+                  raise SystemExit(f'fresh preflight artifact file set drifted: {sorted(present)}')
+              summary = json.loads((directory / 'summary.json').read_text(encoding='utf-8'))
+              if summary.get('status') != 'PREPARE_READY' or summary.get('source_sha') != SOURCE:
+                  raise SystemExit('fresh observation preflight is not PREPARE_READY for exact source')
+              observation_doc = json.loads((directory / 'provider-observation.json').read_text(encoding='utf-8'))
+              observation = observation_doc.get('provider_observation_input') or {}
+              observed = observation.get('observed_at_unix_seconds')
+              if not isinstance(observed, int) or int(time.time()) > observed + FRESHNESS:
+                  raise SystemExit('fresh observation expired before Prepare construction')
+              return {'run': run, 'attempt': attempt, 'job_id': int(hosted[0]['id']),
+                      'artifact_id': int(artifact['id']), 'directory': directory}
+
+          def extract_target_manifest(release_id, destination, component, target_revision):
+              destination = Path(destination)
+              destination.mkdir(parents=True, exist_ok=True)
+              shell(['gh', 'release', 'download', release_id, '--repo', REPO,
+                     '--pattern', 'release-set.json', '--pattern', 'control-plane.tar', '--dir', str(destination)])
+              release_set_raw = (destination / 'release-set.json').read_bytes()
+              release_set = json.loads(release_set_raw)
+              if release_set.get('schema_version') != 3 or release_set.get('release_set_id') != release_id:
+                  raise SystemExit('target Release Set identity mismatch')
+              source = release_set.get('source') or {}
+              if source.get('repository') != REPO or source.get('commit_sha') != SOURCE or source.get('accepted_main') is not True:
+                  raise SystemExit('target Release Set is not bound to exact accepted main')
+              release_component = (release_set.get('components') or {}).get('control_plane') or {}
+              archive = destination / 'control-plane.tar'
+              if hashlib.sha256(archive.read_bytes()).hexdigest() != release_component.get('artifact_sha256'):
+                  raise SystemExit('target control-plane archive digest mismatch')
+              with tarfile.open(archive, 'r:*') as handle:
+                  members = [member for member in handle.getmembers() if member.isfile() and Path(member.name).name == 'release-manifest.json']
+                  if len(members) != 1:
+                      raise SystemExit('target control-plane release-manifest missing/ambiguous')
+                  raw = handle.extractfile(members[0]).read()
+              if hashlib.sha256(raw).hexdigest() != release_component.get('component_manifest_sha256'):
+                  raise SystemExit('target control-plane manifest digest mismatch')
+              value = json.loads(raw)
+              schema = value.get('schema_contract') or {}
+              if schema.get('database_component') != component or schema.get('target_schema_revision') != target_revision:
+                  raise SystemExit('target release manifest disagrees with typed PREPARE_READY component/revision')
+              return raw
+
+          def build_prepare_payload(observed):
+              directory = observed['directory']
+              prepare = json.loads((directory / 'prepare.json').read_text(encoding='utf-8'))
+              plan = prepare.get('plan') or {}
+              component = plan.get('component')
+              target_revision = plan.get('target_revision')
+              if prepare.get('status') != 'PREPARE_READY' or component not in {'catalog', 'resolver'} or not isinstance(target_revision, str):
+                  raise SystemExit('observation preflight prepare identity is invalid')
+              release_id = (directory / 'target-release-set-id.txt').read_text(encoding='utf-8').strip()
+              evidence_ref = f"github-actions:run:{observed['run']['id']}:attempt:{observed['attempt']}:job:{observed['job_id']}:artifact:{observed['artifact_id']}"
+              with tempfile.TemporaryDirectory(prefix='d1-release-') as release_dir:
+                  raw = extract_target_manifest(release_id, release_dir, component, target_revision)
+                  manifest_path = Path(release_dir) / 'operator-target-release.json'
+                  manifest_path.write_bytes(raw)
+                  output_path = Path(release_dir) / 'operator-input.json'
+                  shell(['python', 'scripts/d1-prepare.py', 'operator-input', '--opsctl', str(OPSCTL), '--root', '.',
+                         '--preflight-dir', str(directory), '--source-sha', SOURCE, '--tree-sha', current_tree(),
+                         '--release-id', release_id, '--release-manifest', str(manifest_path), '--evidence-ref', evidence_ref,
+                         '--freshness-seconds', str(FRESHNESS), '--recovery-strategy', 'NOOP_RETRY', '--output', str(output_path)])
+                  projection = json.loads(output_path.read_text(encoding='utf-8'))
+              if projection.get('command') != 'd1 operator-input' or projection.get('mode') != 'read-only':
+                  raise SystemExit('canonical operator input projection contract drifted')
+              if projection.get('mutation_executed') or projection.get('provider_mutation_executed') or projection.get('authorization_consumed'):
+                  raise SystemExit('canonical operator input projection acquired an effect')
+              inputs = projection.get('inputs')
+              if not isinstance(inputs, dict) or inputs.get('component') != component or inputs.get('source_sha') != SOURCE:
+                  raise SystemExit('canonical operator input projection identity drifted')
+              return {'ref': 'main', 'inputs': inputs}
+
+          def dispatch_prepare_and_wait(observed):
+              payload = build_prepare_payload(observed)
+              component = payload['inputs']['component']
+              start = int(time.time())
+              api_post(f'repos/{REPO}/actions/workflows/{PREPARE_WORKFLOW}/dispatches', payload)
+              run = wait_for_dispatched_run(PREPARE_WORKFLOW, start, 900)
+              attempt = int(run['run_attempt'])
+              transaction_name = f"d1-transaction-{component}-{run['id']}-{attempt}"
+              executor_name = f"d1-executor-inputs-{component}-{run['id']}-{attempt}"
+              if artifact_exact(run['id'], transaction_name) is None:
+                  raise SystemExit('successful Prepare run missing exact transaction artifact')
+              if artifact_exact(run['id'], executor_name) is None:
+                  raise SystemExit('successful Prepare run missing immutable executor input bundle')
+              with tempfile.TemporaryDirectory(prefix='d1-prepared-') as directory:
+                  if not download(run['id'], transaction_name, directory):
+                      raise SystemExit('cannot download prepared transaction artifact')
+                  path = Path(directory) / 'transaction.json'
+                  if not path.is_file():
+                      raise SystemExit('successful Prepare transaction artifact is missing transaction.json')
+                  verification = verify_transaction(path, int(time.time()))
+                  if verification is None:
+                      raise SystemExit('new Prepare produced invalid or stale transaction')
+                  tx = json.loads(path.read_text(encoding='utf-8'))
+              return {'run_id': int(run['id']), 'run_attempt': attempt, 'transaction': tx,
+                      'verification': verification, 'executor_artifact_name': executor_name,
+                      'fresh_until': int(verification['fresh_until_unix_seconds'])}
+
+          def valid_authorizations(candidate, issue):
+              tx = candidate['transaction']
+              now = int(time.time())
+              found = []
+              page = 1
+              while True:
+                  comments = gh_json(f'repos/{REPO}/issues/{issue}/comments?per_page=100&page={page}')
+                  if not isinstance(comments, list):
+                      raise SystemExit('stage issue comments response is not a list')
+                  for comment in comments:
+                      if comment.get('author_association') != 'OWNER' or comment.get('created_at') != comment.get('updated_at'):
+                          continue
+                      body = comment.get('body')
+                      if not isinstance(body, str):
+                          continue
+                      parts = body.strip().splitlines()
+                      if len(parts) != 2 or parts[0] != 'D1_TRANSACTION_AUTHORIZATION_V1':
+                          continue
+                      try:
+                          intent = json.loads(parts[1])
+                      except json.JSONDecodeError:
+                          continue
+                      if not isinstance(intent, dict) or compact(intent) != parts[1]:
+                          continue
+                      issued = intent.get('issued_at_unix_seconds')
+                      expires = intent.get('expires_at_unix_seconds')
+                      if not isinstance(issued, int) or not isinstance(expires, int):
+                          continue
+                      created = epoch(comment['created_at'])
+                      if created < issued or created > expires:
+                          continue
+                      authorization = dict(intent)
+                      authorization['authorization_reference'] = comment.get('html_url')
+                      canonical = compact(authorization)
+                      with tempfile.TemporaryDirectory(prefix='d1-authorization-') as directory:
+                          tx_path = Path(directory) / 'transaction.json'
+                          auth_path = Path(directory) / 'authorization.json'
+                          tx_path.write_text(json.dumps(tx, sort_keys=True, indent=2) + '\n', encoding='utf-8')
+                          auth_path.write_text(canonical + '\n', encoding='utf-8')
+                          process = shell([str(AUTH_TOOL), '--transaction-json', str(tx_path), '--authorization-json', str(auth_path),
+                                           '--evaluated-at-unix-seconds', str(now)], check=False)
+                      if process.returncode != 0:
+                          continue
+                      binding = json.loads(process.stdout)
+                      if binding.get('status') != 'AUTHORIZATION_VERIFIED' or binding.get('transaction_id') != tx.get('transaction_id'):
+                          continue
+                      found.append({'authorization_json': canonical, 'authorization_digest': binding.get('authorization_digest'),
+                                    'authorization_reference': authorization['authorization_reference']})
+                  if len(comments) < 100:
+                      break
+                  page += 1
+              return found
+
+          def load_executor_inputs(candidate):
+              expected = {'target-release.json', 'current-release.json', 'known-good-release.json', 'preconditions.json'}
+              with tempfile.TemporaryDirectory(prefix='d1-executor-inputs-') as directory:
+                  if not download(candidate['run_id'], candidate['executor_artifact_name'], directory):
+                      raise SystemExit('cannot download immutable executor input bundle')
+                  root = Path(directory)
+                  present = {path.name for path in root.iterdir() if path.is_file()}
+                  if present != expected:
+                      raise SystemExit(f'immutable executor input bundle file set drifted: {sorted(present)}')
+                  values = {}
+                  for name in expected:
+                      value = json.loads((root / name).read_text(encoding='utf-8'))
+                      if not isinstance(value, dict):
+                          raise SystemExit(f'immutable executor input {name} must be one JSON object')
+                      values[name] = value
+              return values
+
+          def dispatch_executor(candidate, authorization):
+              tx = candidate['transaction']
+              verification = candidate['verification']
+              target = tx['transaction_plan']['target']
+              component = verification['component']
+              inputs = load_executor_inputs(candidate)
+              confirmation = f"{SOURCE}:{target['environment']}:{component}:{target['database_id']}"
+              payload = {'ref': 'main', 'inputs': {
+                  'environment': target['environment'], 'source_sha': SOURCE, 'component': component,
+                  'account_id': target['account_id'], 'database_name': target['database_name'], 'database_id': target['database_id'],
+                  'target_release_manifest_json': compact(inputs['target-release.json']),
+                  'current_release_manifest_json': compact(inputs['current-release.json']),
+                  'known_good_release_manifest_json': compact(inputs['known-good-release.json']),
+                  'preconditions_json': compact(inputs['preconditions.json']), 'transition_mode': 'ordinary',
+                  'expected_release_set_id': '', 'prepared_transaction_run_id': str(candidate['run_id']),
+                  'prepared_transaction_run_attempt': str(candidate['run_attempt']), 'transaction_id': tx['transaction_id'],
+                  'authorization_digest': authorization['authorization_digest'],
+                  'transaction_authorization_json': authorization['authorization_json'], 'mutation_authorized': True,
+                  'confirmation': confirmation}}
+              api_post(f'repos/{REPO}/actions/workflows/{EXECUTOR_WORKFLOW}/dispatches', payload)
+
+          issue = current_stage_issue()
+          candidate = resolve_fresh_transaction()
+          if candidate is None:
+              observed = fresh_observation()
+              candidate = dispatch_prepare_and_wait(observed)
+              tx = candidate['transaction']
+              SUMMARY.write_text('# D1 transaction prepared\n\n'
+                                 f"- Current stage issue: `#{issue}`\n- TransactionId: `{tx['transaction_id']}`\n"
+                                 f"- Prepare run: `{candidate['run_id']}` attempt `{candidate['run_attempt']}`\n"
+                                 f"- Fresh until unix: `{candidate['fresh_until']}`\n- Provider mutation: `NO`\n"
+                                 '- Next: record one exact transaction authorization in the CURRENT stage issue, then run this workflow once.\n',
+                                 encoding='utf-8')
+              print(f"D1_OPERATOR_STATE=TRANSACTION_PREPARED transaction_id={tx['transaction_id']} issue={issue}")
+              raise SystemExit(0)
+
+          tx = candidate['transaction']
+          auths = valid_authorizations(candidate, issue)
+          if len(auths) == 0:
+              SUMMARY.write_text('# D1 authorization required\n\n'
+                                 f"- Current stage issue: `#{issue}`\n- TransactionId: `{tx['transaction_id']}`\n"
+                                 '- No exact immutable OWNER authorization exists for this fresh transaction.\n- No executor was dispatched.\n',
+                                 encoding='utf-8')
+              print(f"D1_OPERATOR_STATE=AUTHORIZATION_REQUIRED transaction_id={tx['transaction_id']} issue={issue}")
+              raise SystemExit(0)
+          if len(auths) != 1:
+              raise SystemExit('multiple valid OWNER authorizations exist for the same fresh transaction')
+
+          dispatch_executor(candidate, auths[0])
+          SUMMARY.write_text('# Sole D1 executor dispatched\n\n'
+                             f"- Current stage issue: `#{issue}`\n- TransactionId: `{tx['transaction_id']}`\n"
+                             f"- Authorization digest: `{auths[0]['authorization_digest']}`\n"
+                             '- Mutation authority remains solely in d1-migration-executor.yml.\n', encoding='utf-8')
+          print('D1_OPERATOR_STATE=EXECUTOR_DISPATCHED '
+                f"transaction_id={tx['transaction_id']} authorization_digest={auths[0]['authorization_digest']} issue={issue}")
+          PY
