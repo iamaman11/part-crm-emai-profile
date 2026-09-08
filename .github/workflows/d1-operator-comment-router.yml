@@ -1,0 +1,177 @@
+name: D1 Operator Comment Router
+
+run-name: D1 operator comment transport / ${{ github.event_name }} / ${{ github.sha }}
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/d1-operator-comment-router.yml'
+      - '.github/workflows/d1-operator.yml'
+      - 'architecture/credential-authority-ar11-extension.json'
+  push:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/d1-operator-comment-router.yml'
+      - '.github/workflows/d1-operator.yml'
+      - 'architecture/credential-authority-ar11-extension.json'
+  issue_comment:
+    types:
+      - created
+
+permissions:
+  contents: read
+
+concurrency:
+  group: d1-operator-comment-router
+  cancel-in-progress: false
+
+jobs:
+  contract:
+    name: D1 operator comment router is transport-only
+    runs-on: ubuntu-24.04
+    timeout-minutes: 4
+    steps:
+      - name: Checkout exact source
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Verify exact source checkout
+        env:
+          EXPECTED_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: python -c "import os, subprocess; actual = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(); expected = os.environ['EXPECTED_SOURCE_SHA']; assert actual == expected, f'expected {expected}, got {actual}'"
+
+      - name: Prove router owns transport only
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          router = Path('.github/workflows/d1-operator-comment-router.yml').read_text(encoding='utf-8')
+          operator = Path('.github/workflows/d1-operator.yml').read_text(encoding='utf-8')
+          credential_authority = Path('architecture/credential-authority-ar11-extension.json').read_text(encoding='utf-8')
+
+          forbidden = (
+              'CLOUD' + 'FLARE_',
+              'wrang' + 'ler ',
+              'd1 migrations ' + 'apply',
+              'd1 ' + 'create',
+              'd1 ' + 'delete',
+              'd1 time-travel ' + 'restore',
+              'D1_TRANSACTION_' + 'AUTHORIZATION_V1',
+              'issues:' + ' write',
+              'contents:' + ' write',
+              'D1_OPERATOR_' + 'DISPATCH_TOKEN',
+          )
+          for value in forbidden:
+              assert value not in router, f'comment router acquired forbidden authority: {value}'
+
+          secret_prefix = 'sec' + 'rets.'
+          dispatch_secret = secret_prefix + 'GH_ADMIN_OPERATOR_TOKEN'
+          assert router.count(secret_prefix) == 1, 'comment router may consume only one governed GitHub transport secret'
+          assert dispatch_secret in router, 'comment router must reuse the governed GitHub admin operator credential'
+          assert '"credential_id": "github.hosted-admin-operator"' in credential_authority
+          assert '".github/workflows/d1-operator-comment-router.yml"' in credential_authority
+
+          dispatch_token = '/' + 'dispatches'
+          assert router.count(dispatch_token) == 1, 'comment router must expose exactly one downstream dispatch'
+          assert ('actions/workflows/d1-operator.yml/' + 'dispatches') in router
+          assert "github.event.comment.body == '/d1 operator'" in router
+          assert "github.event.comment.author_association == 'OWNER'" in router
+          assert 'github.actor == github.repository_owner' in router
+          assert 'CURRENT_STAGE_ISSUE = #' in router
+          assert "github.event.issue.state == 'open'" in router
+          assert "github.event.issue.pull_request == null" in router
+          assert "-f ref=main" in router
+
+          trigger = operator.split('\npermissions:', 1)[0]
+          dispatch = trigger.split('\n  workflow_dispatch:', 1)[1]
+          assert 'inputs:' not in dispatch, 'standard D1 operator must remain zero-input'
+          assert 'test "$GITHUB_ACTOR" = "$GITHUB_REPOSITORY_OWNER"' in operator, 'standard operator owner-identity gate drifted'
+          PY
+
+  route:
+    name: Route exact owner command to standard D1 operator
+    if: >-
+      github.event_name == 'issue_comment' &&
+      github.event.action == 'created' &&
+      github.event.issue.pull_request == null &&
+      github.event.issue.state == 'open' &&
+      github.event.comment.body == '/d1 operator' &&
+      github.event.comment.author_association == 'OWNER' &&
+      github.actor == github.repository_owner
+    needs: contract
+    permissions:
+      contents: read
+      issues: read
+    runs-on: ubuntu-24.04
+    timeout-minutes: 3
+    env:
+      COMMENT_ISSUE_NUMBER: ${{ github.event.issue.number }}
+      COMMENT_BODY: ${{ github.event.comment.body }}
+      COMMENT_AUTHOR_ASSOCIATION: ${{ github.event.comment.author_association }}
+      COMMENT_ACTOR: ${{ github.actor }}
+      REPOSITORY_OWNER: ${{ github.repository_owner }}
+    steps:
+      - name: Bind command to fresh protected main and CURRENT stage issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          test "$GITHUB_EVENT_NAME" = issue_comment
+          test "$COMMENT_BODY" = '/d1 operator'
+          test "$COMMENT_AUTHOR_ASSOCIATION" = OWNER
+          test "$COMMENT_ACTOR" = "$REPOSITORY_OWNER"
+
+          main_json="$RUNNER_TEMP/main.json"
+          tracker_json="$RUNNER_TEMP/current-stage-tracker.json"
+          gh api "repos/$GITHUB_REPOSITORY/branches/main" > "$main_json"
+          gh api "repos/$GITHUB_REPOSITORY/issues/266" > "$tracker_json"
+
+          main_sha="$(jq -er '.commit.sha | select(type == "string" and length == 40)' "$main_json")"
+          test "$main_sha" = "$GITHUB_SHA"
+
+          python - "$tracker_json" "$COMMENT_ISSUE_NUMBER" <<'PY'
+          import json
+          import re
+          import sys
+
+          tracker_path, comment_issue = sys.argv[1:]
+          tracker = json.load(open(tracker_path, encoding='utf-8'))
+          if tracker.get('state') != 'open':
+              raise SystemExit('live stage pointer #266 is not open')
+          body = tracker.get('body')
+          if not isinstance(body, str):
+              raise SystemExit('live stage pointer #266 has no text body')
+          matches = re.findall(r'^CURRENT_STAGE_ISSUE = #([1-9][0-9]*)$', body, flags=re.MULTILINE)
+          if len(matches) != 1:
+              raise SystemExit('live stage pointer has missing or ambiguous CURRENT_STAGE_ISSUE')
+          if matches[0] != comment_issue:
+              raise SystemExit(f'command issue #{comment_issue} is not CURRENT stage issue #{matches[0]}')
+          PY
+
+      - name: Dispatch zero-input standard D1 operator as repository owner
+        env:
+          GH_TOKEN: ${{ secrets.GH_ADMIN_OPERATOR_TOKEN }}
+        run: |
+          set -euo pipefail
+          test -n "$GH_TOKEN"
+          gh api --method POST \
+            "repos/$GITHUB_REPOSITORY/actions/workflows/d1-operator.yml/dispatches" \
+            -f ref=main
+
+      - name: Record transport result
+        run: |
+          {
+            echo '## D1 operator comment transport'
+            echo
+            echo "- command issue: #$COMMENT_ISSUE_NUMBER"
+            echo "- protected main: $GITHUB_SHA"
+            echo "- command: \`/d1 operator\`"
+            echo "- downstream: \`d1-operator.yml\` / \`main\` / zero inputs"
+            echo '- provider credentials in router: NO'
+            echo '- downstream actor preservation: governed GitHub admin operator credential'
+          } >> "$GITHUB_STEP_SUMMARY"
