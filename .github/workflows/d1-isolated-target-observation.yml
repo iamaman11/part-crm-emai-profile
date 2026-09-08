@@ -95,6 +95,11 @@ jobs:
           assert 'quick_check_exit_code=$?' in observe_source
           assert "'provider_diagnostics': provider_diagnostics" in observe_source
           assert 'Fail closed on unusable provider diagnostics' in source
+          assert 'D1_ISOLATED_TARGET_DISCOVERY' in observe_source
+          assert "'selection_performed': False" in observe_source
+          assert "'unqualified_inventory_candidates': candidates" in observe_source
+          discovery_artifact_name = 'd1-isolated-target-discovery-' + '$' + '{{ github.run_id }}-' + '$' + '{{ github.run_attempt }}-' + '$' + '{{ github.sha }}'
+          assert discovery_artifact_name in source
           old_bad_wiring = '--current-manifest "$root/' + 'known-good-manifest.json"'
           assert old_bad_wiring not in source
           PY
@@ -197,6 +202,58 @@ jobs:
             "https://api.cloudflare.com/client/v4/accounts/$account_id/d1/database?per_page=100")"
           test "$inventory_code" = 200
           jq -e '.success == true and (.errors | length) == 0 and (.result | type == "array")' "$raw/d1-databases.json" >/dev/null
+
+          python - \
+            "$raw/d1-databases.json" \
+            "$catalog_name" \
+            "$D1_REHEARSAL_TARGET_NAME" \
+            "$D1_REHEARSAL_TARGET_ID" \
+            "$SOURCE_SHA" \
+            "$evidence/discovery.json" <<'PY'
+          import json, sys
+          inventory_path, catalog_name, consumed_name, consumed_id, source_sha, output_path = sys.argv[1:]
+          inventory = json.load(open(inventory_path, encoding='utf-8'))
+          databases = inventory.get('result')
+          if not isinstance(databases, list):
+              raise SystemExit('D1 inventory result is not a list')
+          candidates = []
+          identities = set()
+          for item in databases:
+              if not isinstance(item, dict):
+                  raise SystemExit('D1 inventory contains a non-object entry')
+              name = item.get('name')
+              database_id = item.get('uuid')
+              if not isinstance(name, str) or not name or not isinstance(database_id, str) or not database_id:
+                  raise SystemExit('D1 inventory entry is missing exact name/uuid identity')
+              identity = (name, database_id)
+              if identity in identities:
+                  raise SystemExit('D1 inventory contains a duplicate exact name/uuid identity')
+              identities.add(identity)
+              if name == catalog_name or name == 'part-crm-catalog-production':
+                  continue
+              if name == consumed_name or database_id == consumed_id:
+                  continue
+              candidates.append({'database_name': name, 'database_id': database_id})
+          candidates.sort(key=lambda item: (item['database_name'], item['database_id']))
+          discovery = {
+              'schema_version': 1,
+              'kind': 'D1_ISOLATED_TARGET_DISCOVERY',
+              'source_sha': source_sha,
+              'environment': 'staging',
+              'candidate_count': len(candidates),
+              'selection_performed': False,
+              'unqualified_inventory_candidates': candidates,
+              'provider_mutation': False,
+              'd1_mutation': False,
+              'production_mutation': False,
+          }
+          with open(output_path, 'w', encoding='utf-8') as handle:
+              json.dump(discovery, handle, sort_keys=True, indent=2)
+              handle.write('\n')
+          PY
+          SOURCE_SHA="$SOURCE_SHA" jq -e \
+            '.schema_version == 1 and .kind == "D1_ISOLATED_TARGET_DISCOVERY" and .source_sha == env.SOURCE_SHA and .environment == "staging" and .selection_performed == false and .candidate_count == (.unqualified_inventory_candidates | length) and all(.unqualified_inventory_candidates[]; (.database_name | type == "string") and (.database_name | length > 0) and (.database_id | type == "string") and (.database_id | length > 0)) and .provider_mutation == false and .d1_mutation == false and .production_mutation == false' \
+            "$evidence/discovery.json" >/dev/null
 
           python - "$raw/d1-databases.json" "$account_id" "$catalog_name" "$D1_REHEARSAL_TARGET_NAME" "$D1_REHEARSAL_TARGET_ID" <<'PY'
           import json, sys
@@ -465,6 +522,14 @@ jobs:
             '.schema_version == 3 and .kind == "D1_ISOLATED_TARGET_OBSERVATION" and .source_sha == env.SOURCE_SHA and .environment == "staging" and .candidate.database_name == env.D1_REHEARSAL_TARGET_NAME and .candidate.database_id == env.D1_REHEARSAL_TARGET_ID and .candidate.is_v2_catalog_reference == false and .candidate.inventory_match_count == 1 and .provider_observation_input.target.database_name == env.D1_REHEARSAL_TARGET_NAME and .provider_observation_input.target.database_id == env.D1_REHEARSAL_TARGET_ID and .provider_observation_input.time_travel_bookmark_capable == true and .provider_diagnostics.schema_version == 1 and .provider_diagnostics.foreign_key_check.exit_code >= 0 and .provider_diagnostics.quick_check.exit_code >= 0 and .provider_mutation == false and .d1_mutation == false and .production_mutation == false' \
             "$evidence/observation.json" >/dev/null
           python -m json.tool "$evidence/observation.json" >/dev/null
+
+      - name: Publish secret-free isolated-target discovery
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: d1-isolated-target-discovery-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.sha }}
+          path: artifacts/d1-isolated-target-observation/discovery.json
+          if-no-files-found: error
+          retention-days: 30
 
       - name: Publish secret-free isolated-target observation
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
