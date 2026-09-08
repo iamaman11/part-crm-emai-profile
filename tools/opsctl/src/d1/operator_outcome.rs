@@ -160,7 +160,7 @@ impl D1OperatorOutcomeKind {
                 "Do not dispatch the executor. Resolve the ambiguous authorization set in the CURRENT stage issue and prepare a fresh transaction before retrying."
             }
             Self::InvalidAuthorization => {
-                "Use the embedded typed authorization diagnostic, correct the authorization envelope without broadening effect scope, and rerun only while the transaction remains fresh."
+                "Use the typed authorization rejection evidence or embedded owner diagnostic, correct the authorization envelope without broadening effect scope, and rerun only while the transaction remains fresh."
             }
             Self::StaleAuthorization => {
                 "Do not reuse the expired authorization. Re-observe/re-prepare if necessary and obtain a new exact transaction-scoped authorization."
@@ -202,6 +202,34 @@ impl FromStr for D1OperatorOutcomeKind {
             .find(|kind| kind.as_str() == value)
             .ok_or_else(|| D1Error::new(format!("unsupported D1 operator outcome kind: {value}")))
     }
+}
+
+pub fn resolve_authorization_rejection_kind(
+    rejections: &[D1OperatorOutcomeKind],
+) -> Result<D1OperatorOutcomeKind, D1Error> {
+    if rejections.is_empty() {
+        return Err(D1Error::new(
+            "authorization rejection disposition requires at least one rejected candidate",
+        ));
+    }
+    let mut saw_invalid = false;
+    for kind in rejections {
+        match kind {
+            D1OperatorOutcomeKind::InvalidAuthorization => saw_invalid = true,
+            D1OperatorOutcomeKind::StaleAuthorization => {}
+            _ => {
+                return Err(D1Error::new(format!(
+                    "authorization rejection disposition does not accept {}",
+                    kind.as_str()
+                )));
+            }
+        }
+    }
+    Ok(if saw_invalid {
+        D1OperatorOutcomeKind::InvalidAuthorization
+    } else {
+        D1OperatorOutcomeKind::StaleAuthorization
+    })
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -529,6 +557,36 @@ mod tests {
             assert!(!outcome.operator_has_provider_credentials);
         }
         Ok(())
+    }
+
+    #[test]
+    fn authorization_rejection_set_is_order_independent() -> Result<(), D1Error> {
+        let left = resolve_authorization_rejection_kind(&[
+            D1OperatorOutcomeKind::StaleAuthorization,
+            D1OperatorOutcomeKind::InvalidAuthorization,
+        ])?;
+        let right = resolve_authorization_rejection_kind(&[
+            D1OperatorOutcomeKind::InvalidAuthorization,
+            D1OperatorOutcomeKind::StaleAuthorization,
+        ])?;
+        assert_eq!(left, D1OperatorOutcomeKind::InvalidAuthorization);
+        assert_eq!(right, left);
+        assert_eq!(
+            resolve_authorization_rejection_kind(&[
+                D1OperatorOutcomeKind::StaleAuthorization,
+                D1OperatorOutcomeKind::StaleAuthorization,
+            ])?,
+            D1OperatorOutcomeKind::StaleAuthorization
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn authorization_rejection_set_rejects_empty_or_unrelated_kinds() {
+        assert!(resolve_authorization_rejection_kind(&[]).is_err());
+        assert!(
+            resolve_authorization_rejection_kind(&[D1OperatorOutcomeKind::PrepareBlocked]).is_err()
+        );
     }
 
     #[test]
