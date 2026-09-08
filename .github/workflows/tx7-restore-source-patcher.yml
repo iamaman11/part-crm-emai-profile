@@ -6,7 +6,7 @@ on:
       - tx7-issue-triggered-restore
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   patch:
@@ -14,11 +14,12 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
-      - name: Checkout exact branch source
+      - name: Checkout exact branch source with governed workflow-capable token
         uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
         with:
           ref: tx7-issue-triggered-restore
           fetch-depth: 0
+          token: ${{ secrets.GH_ADMIN_OPERATOR_TOKEN }}
 
       - name: Apply exact bounded source patch
         run: python .github/tx7_restore_source_patch.py
