@@ -841,7 +841,19 @@ jobs:
                       '--receipt', str(receipt_path),
                       '--observation', str(provider_path),
                       '--evaluated-at-unix-seconds', str(int(time.time())),
-                  ])
+                  ], check=False)
+                  if process.returncode != 0:
+                      diagnostic = typed_owner_diagnostic(
+                          process, {'TARGET_PRESTATE_DRIFT', 'STALE_OBSERVATION'}
+                      )
+                      raise TypedStop(
+                          None,
+                          diagnostic.get('summary') or diagnostic['reason_code'],
+                          owner_diagnostic=diagnostic,
+                          evidence_refs={
+                              'post_state_observation': f"github-actions:run:{observed['run']['id']}:attempt:{observed['attempt']}:artifact:{observed['artifact_id']}"
+                          },
+                      )
                   try:
                       verification = json.loads(process.stdout)
                   except json.JSONDecodeError as exc:
@@ -997,12 +1009,8 @@ jobs:
               outcome_kind = 'RECOVERY_REQUIRED'
           else:
               event_kinds = [event.get('kind') for event in result['receipt'].get('events', []) if isinstance(event, dict)]
-              if 'PREWRITE_ABORTED' in event_kinds and 'MUTATION_STARTED' not in event_kinds:
-                  outcome_kind = 'PREWRITE_ABORT'
-              elif 'PREWRITE_FENCE_PASS' in event_kinds and 'MUTATION_STARTED' not in event_kinds:
-                  outcome_kind = 'TARGET_PRESTATE_DRIFT'
-              else:
-                  outcome_kind = 'EXECUTOR_FAILED_NO_EFFECT'
+              outcome_kind = ('PREWRITE_ABORT' if 'PREWRITE_ABORTED' in event_kinds and 'MUTATION_STARTED' not in event_kinds
+                              else 'EXECUTOR_FAILED_NO_EFFECT')
           outcome = emit_outcome(outcome_kind, issue, candidate, evidence_refs=evidence_refs)
 
           evidence_line = '- Completed evidence artifact: `N/A`\n- Completed evidence SHA-256: `N/A`\n'
