@@ -6,6 +6,7 @@ on:
   pull_request:
     paths:
       - '.github/workflows/d1-operator.yml'
+      - '.github/workflows/d1-isolated-target-observation.yml'
       - '.github/workflows/d1-migration-prepare.yml'
       - 'scripts/d1-prepare.py'
       - 'tools/opsctl/examples/d1-transaction-verify.rs'
@@ -14,6 +15,7 @@ on:
       - main
     paths:
       - '.github/workflows/d1-operator.yml'
+      - '.github/workflows/d1-isolated-target-observation.yml'
       - '.github/workflows/d1-migration-prepare.yml'
       - 'scripts/d1-prepare.py'
       - 'tools/opsctl/examples/d1-transaction-verify.rs'
@@ -156,7 +158,7 @@ jobs:
           AUTH_TOOL = Path('tools/opsctl/target/debug/examples/d1-transaction-authorization')
           VERIFY_TOOL = Path('tools/opsctl/target/debug/examples/d1-transaction-verify')
           PREPARE_WORKFLOW = 'd1-migration-prepare.yml'
-          OBSERVE_WORKFLOW = 'd1-tx6-isolated-target-observation.yml'
+          OBSERVE_WORKFLOW = 'd1-isolated-target-observation.yml'
           EXECUTOR_WORKFLOW = 'd1-migration-executor.yml'
           FRESHNESS = 900
 
