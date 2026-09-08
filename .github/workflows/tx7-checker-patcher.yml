@@ -48,7 +48,6 @@ jobs:
               "const RESTORE_POSTVERIFY_STEP = 'Fresh post-restore ledger and diagnostics proof';\n",
               'restore step constants',
           )
-
           replace_once(
               "  if (deploySteps !== 1) fail(`deploy-capable credential must appear exactly once; observed=${deploySteps}`);\n",
               "  if (deploySteps !== 2) fail(`deploy-capable credential must appear exactly once in each mutually exclusive migration/restore write step; observed=${deploySteps}`);\n",
@@ -87,7 +86,7 @@ jobs:
           restore_owner += "  const restoreMutationPaths = [];\n"
           restore_owner += "  for (const workflowPath of workflows) {\n"
           restore_owner += "    const candidate = normalizedShell(await readFile(path.join(root, workflowPath), 'utf8'));\n"
-          restore_owner += "    if (/\\/time_travel\\/restore\\?bookmark=/.test(candidate)) restoreMutationPaths.push(workflowPath);\n"
+          restore_owner += "    if (candidate.includes(DEPLOY_REF) && /\\/time_travel\\/restore\\?bookmark=/.test(candidate)) restoreMutationPaths.push(workflowPath);\n"
           restore_owner += "  }\n"
           restore_owner += "  if (restoreMutationPaths.length !== 1 || restoreMutationPaths[0] !== EXECUTOR) {\n"
           restore_owner += "    fail(`exactly one workflow may own D1 Time Travel restore; observed=${JSON.stringify(restoreMutationPaths)}`);\n"
