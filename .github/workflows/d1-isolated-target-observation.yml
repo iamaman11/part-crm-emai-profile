@@ -9,6 +9,11 @@ on:
     branches:
       - main
   workflow_dispatch:
+    inputs:
+      time_travel_unix_seconds:
+        description: 'Optional exact Unix-seconds timestamp for read-only D1 Time Travel bookmark lookup'
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -77,9 +82,13 @@ jobs:
               assert forbidden not in source, f'isolated D1 observer acquired stage-specific migration policy: {forbidden}'
           trigger = source.split('\npermissions:', 1)[0]
           push_block = trigger.split('\n  push:', 1)[1].split('\n  workflow_dispatch:', 1)[0]
+          dispatch_block = trigger.split('\n  workflow_dispatch:', 1)[1]
           observe_source = source.split('\n  observe:', 1)[1]
           assert '\n    branches:\n      - main' in push_block
           assert '\n    paths:' not in push_block, 'exact-main observation must not be path-filtered'
+          assert '\n    inputs:\n      time_travel_unix_seconds:' in dispatch_block
+          assert 'required: false' in dispatch_block
+          assert 'type: string' in dispatch_block
           assert os.environ['D1_REHEARSAL_TARGET_NAME'] in source
           assert os.environ['D1_REHEARSAL_TARGET_ID'] in source
           assert os.environ['D1_REHEARSAL_COMPONENT'] == 'catalog'
@@ -98,8 +107,15 @@ jobs:
           assert 'D1_ISOLATED_TARGET_DISCOVERY' in observe_source
           assert "'selection_performed': False" in observe_source
           assert "'unqualified_inventory_candidates': candidates" in observe_source
+          assert 'D1_TIME_TRAVEL_LOOKUP_V1' in observe_source
+          assert '--timestamp "$REQUESTED_TIME_TRAVEL_UNIX_SECONDS"' in observe_source
+          assert "'provider_mutation': False" in observe_source
+          assert "'d1_mutation': False" in observe_source
+          assert "'production_mutation': False" in observe_source
           discovery_artifact_name = 'd1-isolated-target-discovery-' + '$' + '{{ github.run_id }}-' + '$' + '{{ github.run_attempt }}-' + '$' + '{{ github.sha }}'
           assert discovery_artifact_name in source
+          lookup_artifact_name = 'd1-time-travel-lookup-' + '$' + '{{ github.run_id }}-' + '$' + '{{ github.run_attempt }}-' + '$' + '{{ github.sha }}'
+          assert lookup_artifact_name in source
           old_bad_wiring = '--current-manifest "$root/' + 'known-good-manifest.json"'
           assert old_bad_wiring not in source
           PY
@@ -127,6 +143,7 @@ jobs:
       - name: Verify accepted-main read-only observation context
         env:
           SOURCE_SHA: ${{ github.sha }}
+          REQUESTED_TIME_TRAVEL_UNIX_SECONDS: ${{ github.event.inputs.time_travel_unix_seconds || '' }}
         run: |
           set -euo pipefail
           test "$GITHUB_REF" = 'refs/heads/main'
@@ -134,6 +151,13 @@ jobs:
           test "$D1_REHEARSAL_COMPONENT" = catalog
           test -n "$D1_REHEARSAL_TARGET_NAME"
           test -n "$D1_REHEARSAL_TARGET_ID"
+          if [ -n "$REQUESTED_TIME_TRAVEL_UNIX_SECONDS" ]; then
+            python - "$REQUESTED_TIME_TRAVEL_UNIX_SECONDS" <<'PY'
+          import re, sys
+          if re.fullmatch(r'[0-9]{10}', sys.argv[1]) is None:
+              raise SystemExit('time_travel_unix_seconds must be exactly 10 decimal Unix-seconds digits')
+          PY
+          fi
 
       - name: Set up pinned Node for Wrangler read adapter
         uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
@@ -146,6 +170,7 @@ jobs:
           CLOUDFLARE_OBSERVE_API_TOKEN: ${{ secrets.CLOUDFLARE_OBSERVE_API_TOKEN }}
           CLOUDFLARE_DEPLOY_MANIFEST_JSON: ${{ secrets.CLOUDFLARE_DEPLOY_MANIFEST_JSON }}
           SOURCE_SHA: ${{ github.sha }}
+          REQUESTED_TIME_TRAVEL_UNIX_SECONDS: ${{ github.event.inputs.time_travel_unix_seconds || '' }}
         run: |
           set -euo pipefail
           test -n "$CLOUDFLARE_OBSERVE_API_TOKEN"
@@ -379,15 +404,68 @@ jobs:
               handle.write('\n')
           PY
 
+          time_travel_args=()
+          if [ -n "$REQUESTED_TIME_TRAVEL_UNIX_SECONDS" ]; then
+            python - "$REQUESTED_TIME_TRAVEL_UNIX_SECONDS" <<'PY'
+          import re, sys
+          if re.fullmatch(r'[0-9]{10}', sys.argv[1]) is None:
+              raise SystemExit('time_travel_unix_seconds must be exactly 10 decimal Unix-seconds digits')
+          PY
+            time_travel_args=(--timestamp "$REQUESTED_TIME_TRAVEL_UNIX_SECONDS")
+          fi
           npx --yes wrangler@4.94.0 d1 time-travel info "$D1_REHEARSAL_TARGET_NAME" \
             --config "$raw/wrangler.json" --json \
+            "${time_travel_args[@]}" \
             --experimental-provision=false --experimental-auto-create=false \
             > "$raw/time-travel.json"
-          python -m json.tool "$raw/time-travel.json" >/dev/null
+          jq -e 'type == "object" and (keys == ["bookmark"]) and (.bookmark | type == "string" and length > 0)' \
+            "$raw/time-travel.json" >/dev/null
 
           observed_at_unix_seconds="$(date -u +%s)"
           observed_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
           observation_source="github-actions://$GITHUB_REPOSITORY/$GITHUB_WORKFLOW/$GITHUB_RUN_ID/$GITHUB_RUN_ATTEMPT"
+
+          if [ -n "$REQUESTED_TIME_TRAVEL_UNIX_SECONDS" ]; then
+            python - \
+              "$raw/time-travel.json" \
+              "$evidence/time-travel-lookup.json" \
+              "$SOURCE_SHA" \
+              "$D1_REHEARSAL_TARGET_NAME" \
+              "$D1_REHEARSAL_TARGET_ID" \
+              "$REQUESTED_TIME_TRAVEL_UNIX_SECONDS" \
+              "$observed_at" \
+              "$observation_source" <<'PY'
+          import json, sys
+          raw_path, output_path, source_sha, target_name, target_id, timestamp, observed_at, observation_source = sys.argv[1:]
+          value = json.load(open(raw_path, encoding='utf-8'))
+          if set(value) != {'bookmark'} or not isinstance(value.get('bookmark'), str) or not value['bookmark']:
+              raise SystemExit('Wrangler Time Travel lookup JSON is not the closed BookmarkResponse shape')
+          document = {
+              'schema_version': 1,
+              'kind': 'D1_TIME_TRAVEL_LOOKUP_V1',
+              'source_sha': source_sha,
+              'environment': 'staging',
+              'target': {
+                  'database_name': target_name,
+                  'database_id': target_id,
+              },
+              'requested_unix_seconds': int(timestamp),
+              'bookmark': value['bookmark'],
+              'observed_at': observed_at,
+              'observation_source': observation_source,
+              'provider_mutation': False,
+              'd1_mutation': False,
+              'production_mutation': False,
+          }
+          with open(output_path, 'w', encoding='utf-8') as handle:
+              json.dump(document, handle, sort_keys=True, indent=2)
+              handle.write('\n')
+          PY
+            SOURCE_SHA="$SOURCE_SHA" REQUESTED_TIME_TRAVEL_UNIX_SECONDS="$REQUESTED_TIME_TRAVEL_UNIX_SECONDS" jq -e \
+              '.schema_version == 1 and .kind == "D1_TIME_TRAVEL_LOOKUP_V1" and .source_sha == env.SOURCE_SHA and .environment == "staging" and .target.database_name == env.D1_REHEARSAL_TARGET_NAME and .target.database_id == env.D1_REHEARSAL_TARGET_ID and .requested_unix_seconds == (env.REQUESTED_TIME_TRAVEL_UNIX_SECONDS | tonumber) and (.bookmark | type == "string" and length > 0) and .provider_mutation == false and .d1_mutation == false and .production_mutation == false' \
+              "$evidence/time-travel-lookup.json" >/dev/null
+          fi
+
           python - \
             "$raw/d1-databases.json" \
             "$raw/ledger.json" \
@@ -522,6 +600,15 @@ jobs:
             '.schema_version == 3 and .kind == "D1_ISOLATED_TARGET_OBSERVATION" and .source_sha == env.SOURCE_SHA and .environment == "staging" and .candidate.database_name == env.D1_REHEARSAL_TARGET_NAME and .candidate.database_id == env.D1_REHEARSAL_TARGET_ID and .candidate.is_v2_catalog_reference == false and .candidate.inventory_match_count == 1 and .provider_observation_input.target.database_name == env.D1_REHEARSAL_TARGET_NAME and .provider_observation_input.target.database_id == env.D1_REHEARSAL_TARGET_ID and .provider_observation_input.time_travel_bookmark_capable == true and .provider_diagnostics.schema_version == 1 and .provider_diagnostics.foreign_key_check.exit_code >= 0 and .provider_diagnostics.quick_check.exit_code >= 0 and .provider_mutation == false and .d1_mutation == false and .production_mutation == false' \
             "$evidence/observation.json" >/dev/null
           python -m json.tool "$evidence/observation.json" >/dev/null
+
+      - name: Publish secret-free exact Time Travel lookup
+        if: github.event_name == 'workflow_dispatch' && github.event.inputs.time_travel_unix_seconds != ''
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: d1-time-travel-lookup-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.sha }}
+          path: artifacts/d1-isolated-target-observation/time-travel-lookup.json
+          if-no-files-found: error
+          retention-days: 30
 
       - name: Publish secret-free isolated-target discovery
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
