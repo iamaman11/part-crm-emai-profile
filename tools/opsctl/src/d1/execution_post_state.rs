@@ -459,18 +459,9 @@ mod tests {
                     T0 + 24,
                     Some("0031_device_binding_governance.sql"),
                 )?;
-                value = append_fixture_event(
-                    &value,
-                    ExecutionEventKind::PostObserved,
-                    T0 + 25,
-                    None,
-                )?;
-                value = append_fixture_event(
-                    &value,
-                    ExecutionEventKind::Verified,
-                    T0 + 26,
-                    None,
-                )?;
+                value =
+                    append_fixture_event(&value, ExecutionEventKind::PostObserved, T0 + 25, None)?;
+                value = append_fixture_event(&value, ExecutionEventKind::Verified, T0 + 26, None)?;
                 append_fixture_event(&value, ExecutionEventKind::Completed, T0 + 27, None)
             }
             ExecutionEventKind::RecoveryRequired => {
@@ -492,12 +483,7 @@ mod tests {
                     T0 + 24,
                     Some("0031_device_binding_governance.sql"),
                 )?;
-                append_fixture_event(
-                    &value,
-                    ExecutionEventKind::RecoveryRequired,
-                    T0 + 25,
-                    None,
-                )
+                append_fixture_event(&value, ExecutionEventKind::RecoveryRequired, T0 + 25, None)
             }
             ExecutionEventKind::FailedNoEffect => {
                 value = append_fixture_event(
@@ -506,12 +492,7 @@ mod tests {
                     T0 + 22,
                     None,
                 )?;
-                append_fixture_event(
-                    &value,
-                    ExecutionEventKind::FailedNoEffect,
-                    T0 + 23,
-                    None,
-                )
+                append_fixture_event(&value, ExecutionEventKind::FailedNoEffect, T0 + 23, None)
             }
             _ => Err(D1Error::new(
                 "test receipt fixture supports only terminal execution states",
@@ -560,12 +541,8 @@ mod tests {
     fn completed_receipt_requires_exact_fresh_post_state() -> Result<(), D1Error> {
         let transaction = transaction()?;
         let receipt = receipt(&transaction, ExecutionEventKind::Completed)?;
-        let verified = verify_execution_post_state(
-            &transaction,
-            &receipt,
-            &post_observation(true),
-            T0 + 50,
-        )?;
+        let verified =
+            verify_execution_post_state(&transaction, &receipt, &post_observation(true), T0 + 50)?;
         assert_eq!(
             verified.disposition,
             ExecutionPostStateDisposition::CompletedVerified
@@ -579,13 +556,8 @@ mod tests {
         let transaction = transaction()?;
         let receipt = receipt(&transaction, ExecutionEventKind::Completed)?;
         assert!(
-            verify_execution_post_state(
-                &transaction,
-                &receipt,
-                &post_observation(false),
-                T0 + 50,
-            )
-            .is_err()
+            verify_execution_post_state(&transaction, &receipt, &post_observation(false), T0 + 50,)
+                .is_err()
         );
         Ok(())
     }
@@ -594,12 +566,8 @@ mod tests {
     fn failed_no_effect_requires_exact_unchanged_state() -> Result<(), D1Error> {
         let transaction = transaction()?;
         let receipt = receipt(&transaction, ExecutionEventKind::FailedNoEffect)?;
-        let verified = verify_execution_post_state(
-            &transaction,
-            &receipt,
-            &post_observation(false),
-            T0 + 50,
-        )?;
+        let verified =
+            verify_execution_post_state(&transaction, &receipt, &post_observation(false), T0 + 50)?;
         assert_eq!(
             verified.disposition,
             ExecutionPostStateDisposition::FailedNoEffectVerified
@@ -608,16 +576,12 @@ mod tests {
     }
 
     #[test]
-    fn recovery_required_never_promotes_to_completed_when_target_revision_is_present(
-    ) -> Result<(), D1Error> {
+    fn recovery_required_never_promotes_to_completed_when_target_revision_is_present()
+    -> Result<(), D1Error> {
         let transaction = transaction()?;
         let receipt = receipt(&transaction, ExecutionEventKind::RecoveryRequired)?;
-        let verified = verify_execution_post_state(
-            &transaction,
-            &receipt,
-            &post_observation(true),
-            T0 + 50,
-        )?;
+        let verified =
+            verify_execution_post_state(&transaction, &receipt, &post_observation(true), T0 + 50)?;
         assert_eq!(
             verified.disposition,
             ExecutionPostStateDisposition::RecoveryRequiredConfirmed
