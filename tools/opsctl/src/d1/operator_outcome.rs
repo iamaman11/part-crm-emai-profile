@@ -1,5 +1,6 @@
-use super::model::D1Error;
-use super::transaction::TargetIdentity;
+use super::model::{D1Error, GateResult};
+use super::transaction::{RecoveryStrategy, TargetIdentity, TransactionProjection};
+use super::transaction_integrity::revalidate_transaction_projection;
 use crate::canonical::canonical_json;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -92,42 +93,102 @@ impl D1OperatorOutcomeKind {
     #[must_use]
     pub const fn summary(self) -> &'static str {
         match self {
-            Self::PrepareBlocked => "Canonical D1 Prepare rejected the current observed target or inputs.",
-            Self::AuthorizationRequired => "A fresh immutable transaction is prepared and requires one exact transaction-scoped authorization.",
-            Self::StaleObservation => "The provider observation bound to the operation is outside its typed freshness window.",
-            Self::NoAuthorization => "No valid exact authorization exists for the current fresh transaction.",
-            Self::MultipleAuthorizations => "More than one valid exact authorization exists for the same transaction.",
-            Self::InvalidAuthorization => "An authorization candidate exists but does not satisfy the typed transaction authorization contract.",
-            Self::StaleAuthorization => "The exact authorization is no longer valid within its typed expiry/freshness boundary.",
-            Self::SourceTreeTransactionDrift => "The prepared transaction no longer binds the exact checked-out source/tree transaction identity.",
-            Self::TargetPrestateDrift => "The provider target no longer matches the immutable prepared predecessor state.",
-            Self::PrewriteAbort => "The sole executor aborted before a provider write because a fail-closed admission fence did not pass.",
-            Self::ExecutorFailedNoEffect => "The sole executor failed and typed receipt/post-state evidence verifies that no provider effect occurred.",
-            Self::RecoveryRequired => "The sole executor receipt and post-state evidence require explicit recovery disposition.",
-            Self::CompletedVerified => "The sole executor completed and fresh typed post-state evidence verifies the expected state.",
-            Self::ReplayOrNoop => "The operation is a mechanical replay/no-op and requires no new provider effect.",
-            Self::ReceiptOrEvidenceMissingOrMismatched => "Terminal receipt or required evidence is missing, ambiguous, stale, or does not bind the exact transaction.",
+            Self::PrepareBlocked => {
+                "Canonical D1 Prepare rejected the current observed target or inputs."
+            }
+            Self::AuthorizationRequired => {
+                "A fresh immutable transaction is prepared and requires one exact transaction-scoped authorization."
+            }
+            Self::StaleObservation => {
+                "The provider observation bound to the operation is outside its typed freshness window."
+            }
+            Self::NoAuthorization => {
+                "No valid exact authorization exists for the current fresh transaction."
+            }
+            Self::MultipleAuthorizations => {
+                "More than one valid exact authorization exists for the same transaction."
+            }
+            Self::InvalidAuthorization => {
+                "An authorization candidate exists but does not satisfy the typed transaction authorization contract."
+            }
+            Self::StaleAuthorization => {
+                "The exact authorization is no longer valid within its typed expiry/freshness boundary."
+            }
+            Self::SourceTreeTransactionDrift => {
+                "The prepared transaction no longer binds the exact checked-out source/tree transaction identity."
+            }
+            Self::TargetPrestateDrift => {
+                "The provider target no longer matches the immutable prepared predecessor state."
+            }
+            Self::PrewriteAbort => {
+                "The sole executor aborted before a provider write because a fail-closed admission fence did not pass."
+            }
+            Self::ExecutorFailedNoEffect => {
+                "The sole executor failed and typed receipt/post-state evidence verifies that no provider effect occurred."
+            }
+            Self::RecoveryRequired => {
+                "The sole executor receipt and post-state evidence require explicit recovery disposition."
+            }
+            Self::CompletedVerified => {
+                "The sole executor completed and fresh typed post-state evidence verifies the expected state."
+            }
+            Self::ReplayOrNoop => {
+                "The operation is a mechanical replay/no-op and requires no new provider effect."
+            }
+            Self::ReceiptOrEvidenceMissingOrMismatched => {
+                "Terminal receipt or required evidence is missing, ambiguous, stale, or does not bind the exact transaction."
+            }
         }
     }
 
     #[must_use]
     pub const fn remediation(self) -> &'static str {
         match self {
-            Self::PrepareBlocked => "Use the canonical PREPARE_BLOCKED GateResult remediation, repair only the named natural-owner condition, then rerun the zero-input operator.",
-            Self::AuthorizationRequired => "Record exactly one fresh immutable OWNER authorization for this TransactionId in the CURRENT stage issue, then rerun the zero-input operator once.",
-            Self::StaleObservation => "Run the existing read-only observation owner again and rebuild Prepare; do not reuse the stale transaction or authorization.",
-            Self::NoAuthorization => "Do not dispatch the executor. Record exactly one valid transaction-scoped authorization or allow the transaction to expire and rebuild it.",
-            Self::MultipleAuthorizations => "Do not dispatch the executor. Resolve the ambiguous authorization set in the CURRENT stage issue and prepare a fresh transaction before retrying.",
-            Self::InvalidAuthorization => "Use the embedded typed authorization diagnostic, correct the authorization envelope without broadening effect scope, and rerun only while the transaction remains fresh.",
-            Self::StaleAuthorization => "Do not reuse the expired authorization. Re-observe/re-prepare if necessary and obtain a new exact transaction-scoped authorization.",
-            Self::SourceTreeTransactionDrift => "Discard the stale/drifted transaction, establish fresh protected-main authority, then re-observe and re-prepare before requesting authorization.",
-            Self::TargetPrestateDrift => "Do not write. Re-observe the exact target and build a new canonical Prepare/TransactionId for the newly observed predecessor state.",
-            Self::PrewriteAbort => "Do not bypass the failing fence. Use the executor/receipt diagnostic to repair the named pre-write condition, then start again from fresh observation and Prepare.",
-            Self::ExecutorFailedNoEffect => "Use the terminal ExecutionReceipt diagnostic, repair the executor failure, then restart from fresh observation/Prepare with a new authorization if a write is still required.",
-            Self::RecoveryRequired => "Stop automatic progression. Follow the typed receipt/post-state recovery disposition through the existing recovery owner; do not auto-restore or silently retry.",
-            Self::CompletedVerified => "Record the immutable receipt and post-state evidence locators in the CURRENT stage issue; no recovery action is required.",
-            Self::ReplayOrNoop => "Record the mechanical no-op/replay proof; do not consume stale authorization or introduce a synthetic write merely to create evidence.",
-            Self::ReceiptOrEvidenceMissingOrMismatched => "Fail closed. Reconcile the exact sole-executor attempt and existing immutable evidence owners; never infer success from logs or target revision alone.",
+            Self::PrepareBlocked => {
+                "Use the canonical PREPARE_BLOCKED GateResult remediation, repair only the named natural-owner condition, then rerun the zero-input operator."
+            }
+            Self::AuthorizationRequired => {
+                "Record exactly one fresh immutable OWNER authorization for this TransactionId in the CURRENT stage issue, then rerun the zero-input operator once."
+            }
+            Self::StaleObservation => {
+                "Run the existing read-only observation owner again and rebuild Prepare; do not reuse the stale transaction or authorization."
+            }
+            Self::NoAuthorization => {
+                "Do not dispatch the executor. Record exactly one valid transaction-scoped authorization or allow the transaction to expire and rebuild it."
+            }
+            Self::MultipleAuthorizations => {
+                "Do not dispatch the executor. Resolve the ambiguous authorization set in the CURRENT stage issue and prepare a fresh transaction before retrying."
+            }
+            Self::InvalidAuthorization => {
+                "Use the embedded typed authorization diagnostic, correct the authorization envelope without broadening effect scope, and rerun only while the transaction remains fresh."
+            }
+            Self::StaleAuthorization => {
+                "Do not reuse the expired authorization. Re-observe/re-prepare if necessary and obtain a new exact transaction-scoped authorization."
+            }
+            Self::SourceTreeTransactionDrift => {
+                "Discard the stale/drifted transaction, establish fresh protected-main authority, then re-observe and re-prepare before requesting authorization."
+            }
+            Self::TargetPrestateDrift => {
+                "Do not write. Re-observe the exact target and build a new canonical Prepare/TransactionId for the newly observed predecessor state."
+            }
+            Self::PrewriteAbort => {
+                "Do not bypass the failing fence. Use the executor/receipt diagnostic to repair the named pre-write condition, then start again from fresh observation and Prepare."
+            }
+            Self::ExecutorFailedNoEffect => {
+                "Use the terminal ExecutionReceipt diagnostic, repair the executor failure, then restart from fresh observation/Prepare with a new authorization if a write is still required."
+            }
+            Self::RecoveryRequired => {
+                "Stop automatic progression. Follow the typed receipt/post-state recovery disposition through the existing recovery owner; do not auto-restore or silently retry."
+            }
+            Self::CompletedVerified => {
+                "Record the immutable receipt and post-state evidence locators in the CURRENT stage issue; no recovery action is required."
+            }
+            Self::ReplayOrNoop => {
+                "Record the mechanical no-op/replay proof; do not consume stale authorization or introduce a synthetic write merely to create evidence."
+            }
+            Self::ReceiptOrEvidenceMissingOrMismatched => {
+                "Fail closed. Reconcile the exact sole-executor attempt and existing immutable evidence owners; never infer success from logs or target revision alone."
+            }
         }
     }
 }
@@ -177,6 +238,25 @@ pub struct D1OperatorOutcome {
     pub evidence_refs: BTreeMap<String, String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct D1OperatorTransactionVerification {
+    pub schema_version: u64,
+    pub status: &'static str,
+    pub mode: &'static str,
+    pub authorization_consumed: bool,
+    pub mutation_executed: bool,
+    pub provider_mutation_executed: bool,
+    pub transaction_id: String,
+    pub source_sha: String,
+    pub tree_sha: String,
+    pub release_candidate_id: String,
+    pub component: String,
+    pub target: TargetIdentity,
+    pub fresh_until_unix_seconds: i64,
+    pub schema_target: String,
+    pub recovery_strategy: RecoveryStrategy,
+}
+
 pub fn build_operator_outcome(
     kind: D1OperatorOutcomeKind,
     context: D1OperatorOutcomeContext,
@@ -184,7 +264,9 @@ pub fn build_operator_outcome(
     validate_hex(&context.source_sha, 40, "operator outcome source_sha")?;
     validate_hex(&context.tree_sha, 40, "operator outcome tree_sha")?;
     if context.current_stage_issue == 0 {
-        return Err(D1Error::new("operator outcome current_stage_issue must be positive"));
+        return Err(D1Error::new(
+            "operator outcome current_stage_issue must be positive",
+        ));
     }
     if let Some(transaction_id) = context.transaction_id.as_deref() {
         validate_hex(transaction_id, 64, "operator outcome transaction_id")?;
@@ -197,7 +279,9 @@ pub fn build_operator_outcome(
             ("target.database_id", target.database_id.as_str()),
         ] {
             if value.trim().is_empty() {
-                return Err(D1Error::new(format!("operator outcome {label} must not be empty")));
+                return Err(D1Error::new(format!(
+                    "operator outcome {label} must not be empty"
+                )));
             }
         }
     }
@@ -232,10 +316,135 @@ pub fn build_operator_outcome(
     })
 }
 
+pub fn verify_operator_transaction(
+    transaction: &TransactionProjection,
+    expected_source_sha: &str,
+    expected_tree_sha: &str,
+    expected_environment: &str,
+    evaluated_at_unix_seconds: i64,
+) -> Result<D1OperatorTransactionVerification, D1Error> {
+    revalidate_transaction_projection(transaction).map_err(|error| {
+        operator_block(
+            D1OperatorOutcomeKind::SourceTreeTransactionDrift,
+            format!("prepared transaction integrity revalidation failed: {error}"),
+        )
+    })?;
+
+    let plan = &transaction.transaction_plan;
+    if plan.source_sha != expected_source_sha {
+        return Err(operator_block(
+            D1OperatorOutcomeKind::SourceTreeTransactionDrift,
+            "prepared transaction source_sha does not equal exact checked-out source",
+        ));
+    }
+    if plan.tree_sha != expected_tree_sha {
+        return Err(operator_block(
+            D1OperatorOutcomeKind::SourceTreeTransactionDrift,
+            "prepared transaction tree_sha does not equal exact checked-out tree",
+        ));
+    }
+    if plan.target.environment != expected_environment {
+        return Err(operator_block(
+            D1OperatorOutcomeKind::SourceTreeTransactionDrift,
+            "prepared transaction target environment does not equal operator environment",
+        ));
+    }
+    if expected_environment != "staging" {
+        return Err(operator_block(
+            D1OperatorOutcomeKind::SourceTreeTransactionDrift,
+            "ordinary D1 operator currently permits staging only",
+        ));
+    }
+    if evaluated_at_unix_seconds <= 0 {
+        return Err(operator_block(
+            D1OperatorOutcomeKind::SourceTreeTransactionDrift,
+            "transaction evaluation timestamp must be positive",
+        ));
+    }
+
+    let freshness = i64::try_from(plan.freshness_max_age_seconds).map_err(|_| {
+        operator_block(
+            D1OperatorOutcomeKind::SourceTreeTransactionDrift,
+            "transaction freshness window does not fit i64",
+        )
+    })?;
+    let fresh_until_unix_seconds = plan
+        .observed_at_unix_seconds
+        .checked_add(freshness)
+        .ok_or_else(|| {
+            operator_block(
+                D1OperatorOutcomeKind::SourceTreeTransactionDrift,
+                "transaction freshness deadline overflow",
+            )
+        })?;
+    if evaluated_at_unix_seconds > fresh_until_unix_seconds {
+        return Err(operator_block(
+            D1OperatorOutcomeKind::StaleObservation,
+            "prepared provider observation is stale",
+        ));
+    }
+
+    let components = plan.release_manifest_digests.keys().collect::<Vec<_>>();
+    if components.len() != 1 {
+        return Err(operator_block(
+            D1OperatorOutcomeKind::SourceTreeTransactionDrift,
+            "prepared ordinary transaction must bind exactly one release-manifest component",
+        ));
+    }
+    let component = components[0].as_str();
+    if !matches!(component, "catalog" | "resolver") {
+        return Err(operator_block(
+            D1OperatorOutcomeKind::SourceTreeTransactionDrift,
+            "prepared transaction component is unsupported",
+        ));
+    }
+
+    Ok(D1OperatorTransactionVerification {
+        schema_version: OPERATOR_OUTCOME_SCHEMA_VERSION,
+        status: "TRANSACTION_VERIFIED",
+        mode: "read-only",
+        authorization_consumed: false,
+        mutation_executed: false,
+        provider_mutation_executed: false,
+        transaction_id: transaction.transaction_id.clone(),
+        source_sha: plan.source_sha.clone(),
+        tree_sha: plan.tree_sha.clone(),
+        release_candidate_id: plan.release_candidate_id.clone(),
+        component: component.to_owned(),
+        target: plan.target.clone(),
+        fresh_until_unix_seconds,
+        schema_target: plan.schema_target.clone(),
+        recovery_strategy: plan.recovery_strategy,
+    })
+}
+
 pub fn serialize_operator_outcome(outcome: &D1OperatorOutcome) -> Result<String, D1Error> {
     let value = serde_json::to_value(outcome)
         .map_err(|error| D1Error::new(format!("cannot serialize D1 operator outcome: {error}")))?;
     canonical_json(&value).map_err(D1Error::new)
+}
+
+pub fn serialize_operator_transaction_verification(
+    verification: &D1OperatorTransactionVerification,
+) -> Result<String, D1Error> {
+    let value = serde_json::to_value(verification).map_err(|error| {
+        D1Error::new(format!(
+            "cannot serialize D1 operator transaction verification: {error}"
+        ))
+    })?;
+    canonical_json(&value).map_err(D1Error::new)
+}
+
+fn operator_block(kind: D1OperatorOutcomeKind, summary: impl Into<String>) -> D1Error {
+    D1Error::blocked(GateResult::blocked(
+        "OPERATOR",
+        "d1.operator.transaction",
+        kind.as_str(),
+        summary,
+        None,
+        None,
+        kind.remediation(),
+    ))
 }
 
 fn validate_owner_diagnostic(value: &Value) -> Result<(), D1Error> {
