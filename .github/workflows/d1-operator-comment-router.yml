@@ -54,22 +54,23 @@ jobs:
           operator = Path('.github/workflows/d1-operator.yml').read_text(encoding='utf-8')
 
           forbidden = (
-              'secrets.',
-              'CLOUDFLARE_',
+              'sec' + 'rets.',
+              'CLOUD' + 'FLARE_',
               'wrang' + 'ler ',
               'd1 migrations ' + 'apply',
               'd1 ' + 'create',
               'd1 ' + 'delete',
               'd1 time-travel ' + 'restore',
               'D1_TRANSACTION_' + 'AUTHORIZATION_V1',
-              'issues: write',
-              'contents: write',
+              'issues:' + ' write',
+              'contents:' + ' write',
           )
           for value in forbidden:
               assert value not in router, f'comment router acquired forbidden authority: {value}'
 
-          assert router.count('/dispatches') == 1, 'comment router must expose exactly one downstream dispatch'
-          assert 'actions/workflows/d1-operator.yml/dispatches' in router
+          dispatch_token = '/' + 'dispatches'
+          assert router.count(dispatch_token) == 1, 'comment router must expose exactly one downstream dispatch'
+          assert ('actions/workflows/d1-operator.yml/' + 'dispatches') in router
           assert "github.event.comment.body == '/d1 operator'" in router
           assert "github.event.comment.author_association == 'OWNER'" in router
           assert 'github.actor == github.repository_owner' in router
