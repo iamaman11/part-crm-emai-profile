@@ -92,8 +92,9 @@ fn verify(args: Args) -> Result<String, Box<dyn Error>> {
     let raw = fs::read_to_string(transaction_path)?;
     let value = parse_strict_json(&raw)
         .map_err(|error| format!("prepared transaction is not strict bounded JSON: {error}"))?;
-    let transaction: TransactionProjection = serde_json::from_value(value)
-        .map_err(|error| format!("prepared transaction does not match the typed contract: {error}"))?;
+    let transaction: TransactionProjection = serde_json::from_value(value).map_err(|error| {
+        format!("prepared transaction does not match the typed contract: {error}")
+    })?;
     revalidate_transaction_projection(&transaction)?;
 
     let expected_source = required(args.expected_source_sha, "--expected-source-sha")?;
@@ -105,13 +106,17 @@ fn verify(args: Args) -> Result<String, Box<dyn Error>> {
     )?;
     let plan = &transaction.transaction_plan;
     if plan.source_sha != expected_source {
-        return Err("prepared transaction source_sha does not equal exact checked-out source".into());
+        return Err(
+            "prepared transaction source_sha does not equal exact checked-out source".into(),
+        );
     }
     if plan.tree_sha != expected_tree {
         return Err("prepared transaction tree_sha does not equal exact checked-out tree".into());
     }
     if plan.target.environment != expected_environment {
-        return Err("prepared transaction target environment does not equal operator environment".into());
+        return Err(
+            "prepared transaction target environment does not equal operator environment".into(),
+        );
     }
     if expected_environment != "staging" {
         return Err("ordinary D1 operator currently permits staging only".into());
@@ -129,9 +134,15 @@ fn verify(args: Args) -> Result<String, Box<dyn Error>> {
         return Err("prepared provider observation is stale".into());
     }
 
-    let components = plan.release_manifest_digests.keys().cloned().collect::<Vec<_>>();
+    let components = plan
+        .release_manifest_digests
+        .keys()
+        .cloned()
+        .collect::<Vec<_>>();
     if components.len() != 1 {
-        return Err("prepared ordinary transaction must bind exactly one release-manifest component".into());
+        return Err(
+            "prepared ordinary transaction must bind exactly one release-manifest component".into(),
+        );
     }
     let component = components[0].clone();
     if !matches!(component.as_str(), "catalog" | "resolver") {
@@ -168,8 +179,8 @@ mod tests {
     use super::*;
     use opsctl::canonical::{canonical_json, sha256_hex};
     use opsctl::d1::transaction::{
-        MigrationTransactionPlan, PlannedMigrationDigest, ProviderObservationBundle, RecoveryStrategy,
-        TargetIdentity, TransactionKind, TransactionPhase,
+        MigrationTransactionPlan, PlannedMigrationDigest, ProviderObservationBundle,
+        RecoveryStrategy, TargetIdentity, TransactionKind, TransactionPhase,
     };
     use std::collections::BTreeMap;
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -192,7 +203,8 @@ mod tests {
             deployment_identity: Some("deployment-1".to_owned()),
             time_travel_bookmark_capable: true,
         };
-        let observation_value = serde_json::to_value(&observation_input).expect("observation value");
+        let observation_value =
+            serde_json::to_value(&observation_input).expect("observation value");
         let observation_digest = sha256_hex(
             canonical_json(&observation_value)
                 .expect("canonical observation")
