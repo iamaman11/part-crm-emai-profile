@@ -321,7 +321,7 @@ mod tests {
 
     const T0: i64 = 1_788_700_000;
 
-    fn transaction() -> TransactionProjection {
+    fn transaction() -> Result<TransactionProjection, D1Error> {
         let prepare = json!({
             "status": "PREPARE_READY",
             "authorization_consumed": false,
@@ -391,13 +391,28 @@ mod tests {
             "expected_post_state": {"revision": "0031_device_binding_governance.sql"}
         });
         build_transaction_projection(&prepare, &observation, &repository, &input)
-            .expect("valid transaction fixture")
+    }
+
+    fn append_fixture_event(
+        receipt: &ExecutionReceipt,
+        kind: ExecutionEventKind,
+        occurred_at_unix_seconds: i64,
+        migration_id: Option<&str>,
+    ) -> Result<ExecutionReceipt, D1Error> {
+        append_execution_event(
+            receipt,
+            ExecutionEventInput {
+                kind,
+                occurred_at_unix_seconds,
+                migration_id: migration_id.map(str::to_owned),
+            },
+        )
     }
 
     fn receipt(
         transaction: &TransactionProjection,
         terminal: ExecutionEventKind,
-    ) -> ExecutionReceipt {
+    ) -> Result<ExecutionReceipt, D1Error> {
         let plan = &transaction.transaction_plan;
         let lease = acquire_target_fence(TargetFenceLeaseInput {
             schema_version: 1,
@@ -411,8 +426,7 @@ mod tests {
             fence_epoch: 42,
             run_attempt: 1,
             acquired_at_unix_seconds: T0 + 10,
-        })
-        .expect("valid fence fixture");
+        })?;
         let seed = ExecutionReceiptSeed {
             schema_version: 1,
             target: plan.target.clone(),
@@ -424,49 +438,84 @@ mod tests {
             recovery_strategy: RecoveryStrategy::NoopRetry,
             fence: lease,
         };
-        let mut value =
-            initialize_execution_receipt(seed, T0 + 20, T0 + 21).expect("valid receipt fixture");
-        let append = |receipt: &ExecutionReceipt, kind, at, migration_id: Option<&str>| {
-            append_execution_event(
-                receipt,
-                ExecutionEventInput {
-                    kind,
-                    occurred_at_unix_seconds: at,
-                    migration_id: migration_id.map(str::to_owned),
-                },
-            )
-            .expect("valid receipt transition")
-        };
+        let mut value = initialize_execution_receipt(seed, T0 + 20, T0 + 21)?;
         match terminal {
             ExecutionEventKind::Completed => {
-                value = append(&value, ExecutionEventKind::PrewriteFencePass, T0 + 22, None);
-                value = append(&value, ExecutionEventKind::MutationStarted, T0 + 23, None);
-                value = append(
+                value = append_fixture_event(
+                    &value,
+                    ExecutionEventKind::PrewriteFencePass,
+                    T0 + 22,
+                    None,
+                )?;
+                value = append_fixture_event(
+                    &value,
+                    ExecutionEventKind::MutationStarted,
+                    T0 + 23,
+                    None,
+                )?;
+                value = append_fixture_event(
                     &value,
                     ExecutionEventKind::MigrationApplied,
                     T0 + 24,
                     Some("0031_device_binding_governance.sql"),
-                );
-                value = append(&value, ExecutionEventKind::PostObserved, T0 + 25, None);
-                value = append(&value, ExecutionEventKind::Verified, T0 + 26, None);
-                append(&value, ExecutionEventKind::Completed, T0 + 27, None)
+                )?;
+                value = append_fixture_event(
+                    &value,
+                    ExecutionEventKind::PostObserved,
+                    T0 + 25,
+                    None,
+                )?;
+                value = append_fixture_event(
+                    &value,
+                    ExecutionEventKind::Verified,
+                    T0 + 26,
+                    None,
+                )?;
+                append_fixture_event(&value, ExecutionEventKind::Completed, T0 + 27, None)
             }
             ExecutionEventKind::RecoveryRequired => {
-                value = append(&value, ExecutionEventKind::PrewriteFencePass, T0 + 22, None);
-                value = append(&value, ExecutionEventKind::MutationStarted, T0 + 23, None);
-                value = append(
+                value = append_fixture_event(
+                    &value,
+                    ExecutionEventKind::PrewriteFencePass,
+                    T0 + 22,
+                    None,
+                )?;
+                value = append_fixture_event(
+                    &value,
+                    ExecutionEventKind::MutationStarted,
+                    T0 + 23,
+                    None,
+                )?;
+                value = append_fixture_event(
                     &value,
                     ExecutionEventKind::MigrationApplied,
                     T0 + 24,
                     Some("0031_device_binding_governance.sql"),
-                );
-                append(&value, ExecutionEventKind::RecoveryRequired, T0 + 25, None)
+                )?;
+                append_fixture_event(
+                    &value,
+                    ExecutionEventKind::RecoveryRequired,
+                    T0 + 25,
+                    None,
+                )
             }
             ExecutionEventKind::FailedNoEffect => {
-                value = append(&value, ExecutionEventKind::PrewriteAborted, T0 + 22, None);
-                append(&value, ExecutionEventKind::FailedNoEffect, T0 + 23, None)
+                value = append_fixture_event(
+                    &value,
+                    ExecutionEventKind::PrewriteAborted,
+                    T0 + 22,
+                    None,
+                )?;
+                append_fixture_event(
+                    &value,
+                    ExecutionEventKind::FailedNoEffect,
+                    T0 + 23,
+                    None,
+                )
             }
-            other => panic!("unsupported terminal fixture: {other:?}"),
+            _ => Err(D1Error::new(
+                "test receipt fixture supports only terminal execution states",
+            )),
         }
     }
 
@@ -508,71 +557,91 @@ mod tests {
     }
 
     #[test]
-    fn completed_receipt_requires_exact_fresh_post_state() {
-        let transaction = transaction();
-        let receipt = receipt(&transaction, ExecutionEventKind::Completed);
-        let verified =
-            verify_execution_post_state(&transaction, &receipt, &post_observation(true), T0 + 50)
-                .expect("matching completed post-state must verify");
+    fn completed_receipt_requires_exact_fresh_post_state() -> Result<(), D1Error> {
+        let transaction = transaction()?;
+        let receipt = receipt(&transaction, ExecutionEventKind::Completed)?;
+        let verified = verify_execution_post_state(
+            &transaction,
+            &receipt,
+            &post_observation(true),
+            T0 + 50,
+        )?;
         assert_eq!(
             verified.disposition,
             ExecutionPostStateDisposition::CompletedVerified
         );
         assert!(verified.expected_post_state_reached);
+        Ok(())
     }
 
     #[test]
-    fn completed_receipt_rejects_unchanged_provider_state() {
-        let transaction = transaction();
-        let receipt = receipt(&transaction, ExecutionEventKind::Completed);
+    fn completed_receipt_rejects_unchanged_provider_state() -> Result<(), D1Error> {
+        let transaction = transaction()?;
+        let receipt = receipt(&transaction, ExecutionEventKind::Completed)?;
         assert!(
-            verify_execution_post_state(&transaction, &receipt, &post_observation(false), T0 + 50,)
-                .is_err()
+            verify_execution_post_state(
+                &transaction,
+                &receipt,
+                &post_observation(false),
+                T0 + 50,
+            )
+            .is_err()
         );
+        Ok(())
     }
 
     #[test]
-    fn failed_no_effect_requires_exact_unchanged_state() {
-        let transaction = transaction();
-        let receipt = receipt(&transaction, ExecutionEventKind::FailedNoEffect);
-        let verified =
-            verify_execution_post_state(&transaction, &receipt, &post_observation(false), T0 + 50)
-                .expect("unchanged failed-no-effect state must verify");
+    fn failed_no_effect_requires_exact_unchanged_state() -> Result<(), D1Error> {
+        let transaction = transaction()?;
+        let receipt = receipt(&transaction, ExecutionEventKind::FailedNoEffect)?;
+        let verified = verify_execution_post_state(
+            &transaction,
+            &receipt,
+            &post_observation(false),
+            T0 + 50,
+        )?;
         assert_eq!(
             verified.disposition,
             ExecutionPostStateDisposition::FailedNoEffectVerified
         );
+        Ok(())
     }
 
     #[test]
-    fn recovery_required_never_promotes_to_completed_when_target_revision_is_present() {
-        let transaction = transaction();
-        let receipt = receipt(&transaction, ExecutionEventKind::RecoveryRequired);
-        let verified =
-            verify_execution_post_state(&transaction, &receipt, &post_observation(true), T0 + 50)
-                .expect("matching recovery-required post-state must verify as recovery");
+    fn recovery_required_never_promotes_to_completed_when_target_revision_is_present(
+    ) -> Result<(), D1Error> {
+        let transaction = transaction()?;
+        let receipt = receipt(&transaction, ExecutionEventKind::RecoveryRequired)?;
+        let verified = verify_execution_post_state(
+            &transaction,
+            &receipt,
+            &post_observation(true),
+            T0 + 50,
+        )?;
         assert_eq!(
             verified.disposition,
             ExecutionPostStateDisposition::RecoveryRequiredConfirmed
         );
         assert!(verified.expected_post_state_reached);
+        Ok(())
     }
 
     #[test]
-    fn post_observation_must_be_after_terminal_receipt() {
-        let transaction = transaction();
-        let receipt = receipt(&transaction, ExecutionEventKind::Completed);
+    fn post_observation_must_be_after_terminal_receipt() -> Result<(), D1Error> {
+        let transaction = transaction()?;
+        let receipt = receipt(&transaction, ExecutionEventKind::Completed)?;
         let mut observation = post_observation(true);
         observation.observed_at_unix_seconds = T0 + 26;
         assert!(
             verify_execution_post_state(&transaction, &receipt, &observation, T0 + 50).is_err()
         );
+        Ok(())
     }
 
     #[test]
-    fn stale_post_observation_fails_closed() {
-        let transaction = transaction();
-        let receipt = receipt(&transaction, ExecutionEventKind::Completed);
+    fn stale_post_observation_fails_closed() -> Result<(), D1Error> {
+        let transaction = transaction()?;
+        let receipt = receipt(&transaction, ExecutionEventKind::Completed)?;
         assert!(
             verify_execution_post_state(
                 &transaction,
@@ -582,5 +651,6 @@ mod tests {
             )
             .is_err()
         );
+        Ok(())
     }
 }
