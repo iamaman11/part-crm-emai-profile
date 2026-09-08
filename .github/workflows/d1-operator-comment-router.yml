@@ -7,6 +7,7 @@ on:
     paths:
       - '.github/workflows/d1-operator-comment-router.yml'
       - '.github/workflows/d1-operator.yml'
+      - '.github/workflows/d1-isolated-target-observation.yml'
       - 'architecture/credential-authority-ar11-extension.json'
   push:
     branches:
@@ -14,6 +15,7 @@ on:
     paths:
       - '.github/workflows/d1-operator-comment-router.yml'
       - '.github/workflows/d1-operator.yml'
+      - '.github/workflows/d1-isolated-target-observation.yml'
       - 'architecture/credential-authority-ar11-extension.json'
   issue_comment:
     types:
@@ -52,6 +54,7 @@ jobs:
 
           router = Path('.github/workflows/d1-operator-comment-router.yml').read_text(encoding='utf-8')
           operator = Path('.github/workflows/d1-operator.yml').read_text(encoding='utf-8')
+          observer = Path('.github/workflows/d1-isolated-target-observation.yml').read_text(encoding='utf-8')
           credential_authority = Path('architecture/credential-authority-ar11-extension.json').read_text(encoding='utf-8')
 
           forbidden = (
@@ -72,41 +75,56 @@ jobs:
           secret_prefix = 'sec' + 'rets.'
           dispatch_secret = secret_prefix + 'GH_ADMIN_OPERATOR_TOKEN'
           assert router.count(secret_prefix) == 1, 'comment router may consume only one governed GitHub transport secret'
-          assert dispatch_secret in router, 'comment router must reuse the governed GitHub admin operator credential'
+          assert dispatch_secret in router, 'comment router must reuse the governed GitHub admin operator credential only for owner-actor operator dispatch'
           assert '"credential_id": "github.hosted-admin-operator"' in credential_authority
           assert '".github/workflows/d1-operator-comment-router.yml"' in credential_authority
 
           dispatch_token = '/' + 'dispatches'
-          assert router.count(dispatch_token) == 1, 'comment router must expose exactly one downstream dispatch'
+          assert router.count(dispatch_token) == 2, 'comment router must expose exactly two bounded downstream dispatches'
           assert ('actions/workflows/d1-operator.yml/' + 'dispatches') in router
+          assert ('actions/workflows/d1-isolated-target-observation.yml/' + 'dispatches') in router
           assert "github.event.comment.body == '/d1 operator'" in router
+          assert "startsWith(github.event.comment.body, '/d1 time-travel-info ')" in router
           assert "github.event.comment.author_association == 'OWNER'" in router
           assert 'github.actor == github.repository_owner' in router
           assert 'CURRENT_STAGE_ISSUE = #' in router
           assert "github.event.issue.state == 'open'" in router
           assert "github.event.issue.pull_request == null" in router
-          assert "-f ref=main" in router
+          route_source = router.split('\n  route:', 1)[1]
+          assert 'actions: write' in route_source, 'read-only observer dispatch must use the bounded ephemeral Actions permission'
+          assert "GH_TOKEN: ${{ github.token }}" in route_source
+          assert "GH_TOKEN: ${{ secrets.GH_ADMIN_OPERATOR_TOKEN }}" in route_source
 
-          trigger = operator.split('\npermissions:', 1)[0]
-          dispatch = trigger.split('\n  workflow_dispatch:', 1)[1]
-          assert 'inputs:' not in dispatch, 'standard D1 operator must remain zero-input'
+          operator_trigger = operator.split('\npermissions:', 1)[0]
+          operator_dispatch = operator_trigger.split('\n  workflow_dispatch:', 1)[1]
+          assert 'inputs:' not in operator_dispatch, 'standard D1 operator must remain zero-input'
           assert 'test "$GITHUB_ACTOR" = "$GITHUB_REPOSITORY_OWNER"' in operator, 'standard operator owner-identity gate drifted'
+
+          observer_trigger = observer.split('\npermissions:', 1)[0]
+          observer_dispatch = observer_trigger.split('\n  workflow_dispatch:', 1)[1]
+          assert 'time_travel_unix_seconds:' in observer_dispatch, 'existing observer must own the optional read-only Time Travel timestamp input'
+          assert 'required: false' in observer_dispatch
+          assert 'type: string' in observer_dispatch
           PY
 
   route:
-    name: Route exact owner command to standard D1 operator
+    name: Route exact owner command to bounded D1 read/operator workflow
     if: >-
       github.event_name == 'issue_comment' &&
       github.event.action == 'created' &&
       github.event.issue.pull_request == null &&
       github.event.issue.state == 'open' &&
-      github.event.comment.body == '/d1 operator' &&
+      (
+        github.event.comment.body == '/d1 operator' ||
+        startsWith(github.event.comment.body, '/d1 time-travel-info ')
+      ) &&
       github.event.comment.author_association == 'OWNER' &&
       github.actor == github.repository_owner
     needs: contract
     permissions:
       contents: read
       issues: read
+      actions: write
     runs-on: ubuntu-24.04
     timeout-minutes: 3
     env:
@@ -122,9 +140,27 @@ jobs:
         run: |
           set -euo pipefail
           test "$GITHUB_EVENT_NAME" = issue_comment
-          test "$COMMENT_BODY" = '/d1 operator'
           test "$COMMENT_AUTHOR_ASSOCIATION" = OWNER
           test "$COMMENT_ACTOR" = "$REPOSITORY_OWNER"
+
+          python - "$COMMENT_BODY" "$GITHUB_ENV" <<'PY'
+          import re
+          import sys
+
+          body, env_path = sys.argv[1:]
+          if body == '/d1 operator':
+              kind = 'operator'
+              timestamp = ''
+          else:
+              match = re.fullmatch(r'/d1 time-travel-info ([0-9]{10})', body)
+              if match is None:
+                  raise SystemExit('owner D1 command is not an exact supported transport command')
+              kind = 'time_travel_info'
+              timestamp = match.group(1)
+          with open(env_path, 'a', encoding='utf-8') as handle:
+              handle.write(f'D1_ROUTE_KIND={kind}\n')
+              handle.write(f'D1_TIME_TRAVEL_UNIX_SECONDS={timestamp}\n')
+          PY
 
           main_json="$RUNNER_TEMP/main.json"
           tracker_json="$RUNNER_TEMP/current-stage-tracker.json"
@@ -154,6 +190,7 @@ jobs:
           PY
 
       - name: Dispatch zero-input standard D1 operator as repository owner
+        if: env.D1_ROUTE_KIND == 'operator'
         env:
           GH_TOKEN: ${{ secrets.GH_ADMIN_OPERATOR_TOKEN }}
         run: |
@@ -163,15 +200,39 @@ jobs:
             "repos/$GITHUB_REPOSITORY/actions/workflows/d1-operator.yml/dispatches" \
             -f ref=main
 
+      - name: Dispatch exact read-only Time Travel lookup through existing observer
+        if: env.D1_ROUTE_KIND == 'time_travel_info'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          test -n "$D1_TIME_TRAVEL_UNIX_SECONDS"
+          payload="$RUNNER_TEMP/d1-time-travel-info-dispatch.json"
+          jq -nc \
+            --arg ref main \
+            --arg timestamp "$D1_TIME_TRAVEL_UNIX_SECONDS" \
+            '{ref:$ref,inputs:{time_travel_unix_seconds:$timestamp}}' > "$payload"
+          gh api --method POST \
+            "repos/$GITHUB_REPOSITORY/actions/workflows/d1-isolated-target-observation.yml/dispatches" \
+            --input "$payload"
+
       - name: Record transport result
         run: |
+          set -euo pipefail
+          if [ "$D1_ROUTE_KIND" = operator ]; then
+            downstream='d1-operator.yml / main / zero inputs / owner actor'
+          else
+            downstream="d1-isolated-target-observation.yml / main / read-only timestamp=$D1_TIME_TRAVEL_UNIX_SECONDS"
+          fi
           {
-            echo '## D1 operator comment transport'
+            echo '## D1 owner comment transport'
             echo
             echo "- command issue: #$COMMENT_ISSUE_NUMBER"
             echo "- protected main: $GITHUB_SHA"
-            echo "- command: \`/d1 operator\`"
-            echo "- downstream: \`d1-operator.yml\` / \`main\` / zero inputs"
+            echo "- command: \`$COMMENT_BODY\`"
+            echo "- downstream: \`$downstream\`"
             echo '- provider credentials in router: NO'
-            echo '- downstream actor preservation: governed GitHub admin operator credential'
+            echo '- provider mutation authority in router: NO'
+            echo '- standard operator owner actor: governed GitHub admin operator credential only'
+            echo '- read-only observer dispatch: ephemeral GitHub Actions token only'
           } >> "$GITHUB_STEP_SUMMARY"
