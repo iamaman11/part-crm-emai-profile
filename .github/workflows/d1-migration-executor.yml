@@ -416,6 +416,15 @@ jobs:
             '.schema_version == 1 and .status == "EXECUTOR_ADMISSION_VERIFIED" and .mode == "read-only" and .authorization_consumed == false and .mutation_executed == false and .provider_mutation_executed == false and .transaction_id == $transaction_id and .authorization_digest == $authorization_digest and .source_sha == $source and .tree_sha == $tree and .phase == "ORDINARY" and (.execution_plan | .schema_version == 1 and .command == "d1 plan" and .mode == "read-only" and .mutation_executed == false and .component == $component and .allowed == true and (.apply_required == ((.planned_migrations | length) > 0)) and (.planned_migrations | type == "array") and (.planned_migration_digests | type == "array") and ((.planned_migration_digests | length) == (.planned_migrations | length)))' \
             artifacts/d1-migration/executor-admission.json >/dev/null
 
+      - name: Persist typed executor admission evidence
+        if: always() && inputs.transition_mode == 'ordinary' && hashFiles('artifacts/d1-migration/executor-admission.json') != ''
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: d1-executor-admission-${{ inputs.authorization_digest }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: artifacts/d1-migration/executor-admission.json
+          if-no-files-found: error
+          retention-days: 30
+
       - name: Prove ordinary transaction authorization has not been consumed
         if: inputs.transition_mode == 'ordinary'
         env:
