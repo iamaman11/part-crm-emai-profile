@@ -67,8 +67,8 @@ jobs:
               '0027_' + 'pas2_payload_fingerprint_expand.sql',
               '0031_' + 'device_binding_governance.sql',
               '0032_' + 'pas2_payload_fingerprint_contract.sql',
-              'd1-tx6-',
-              'TX-6 isolated target',
+              'd1-' + 'tx6-',
+              'TX' + '-6 isolated target',
           )
           for value in forbidden:
               assert value not in source, f'D1 operator acquired forbidden policy/effect surface: {value}'
