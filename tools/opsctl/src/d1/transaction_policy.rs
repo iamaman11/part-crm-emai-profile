@@ -35,14 +35,21 @@ pub(crate) fn validate_ordinary_transaction_binding(
     for (input_field, policy_field) in [
         ("transaction_kind", "transaction_kind"),
         ("phase", "phase"),
-        ("freshness_max_age_seconds", "observation_freshness_max_age_seconds"),
+        (
+            "freshness_max_age_seconds",
+            "observation_freshness_max_age_seconds",
+        ),
         ("recovery_strategy", "recovery_strategy"),
     ] {
         let actual = transaction.get(input_field).ok_or_else(|| {
-            D1Error::new(format!("transaction identity input is missing {input_field}"))
+            D1Error::new(format!(
+                "transaction identity input is missing {input_field}"
+            ))
         })?;
         let expected_value = expected.get(policy_field).ok_or_else(|| {
-            D1Error::new(format!("typed ordinary D1 policy is missing {policy_field}"))
+            D1Error::new(format!(
+                "typed ordinary D1 policy is missing {policy_field}"
+            ))
         })?;
         if actual != expected_value {
             return Err(D1Error::new(format!(
@@ -86,7 +93,10 @@ mod tests {
             policy["observation_freshness_max_age_seconds"],
             ORDINARY_OBSERVATION_FRESHNESS_MAX_AGE_SECONDS
         );
-        assert_eq!(policy["recovery_strategy"], json!(ORDINARY_RECOVERY_STRATEGY));
+        assert_eq!(
+            policy["recovery_strategy"],
+            json!(ORDINARY_RECOVERY_STRATEGY)
+        );
     }
 
     #[test]
@@ -111,8 +121,7 @@ mod tests {
     #[test]
     fn prepare_policy_drift_is_rejected() {
         let mut changed = prepare();
-        changed["plan"]["transaction_policy"]["observation_freshness_max_age_seconds"] =
-            json!(901);
+        changed["plan"]["transaction_policy"]["observation_freshness_max_age_seconds"] = json!(901);
         assert!(validate_ordinary_transaction_binding(&changed, &transaction()).is_err());
     }
 }
