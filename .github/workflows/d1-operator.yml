@@ -110,7 +110,7 @@ jobs:
           fetch-depth: 1
           persist-credentials: false
 
-      - name: Verify exact protected-main checkout
+      - name: Verify exact source checkout
         env:
           EXPECTED_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: python -c "import os, subprocess; actual = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(); expected = os.environ['EXPECTED_SOURCE_SHA']; assert actual == expected, f'expected {expected}, got {actual}'"
@@ -161,17 +161,9 @@ jobs:
           FRESHNESS = 900
 
           def shell(args, *, check=True):
-              result = subprocess.run(
-                  args,
-                  text=True,
-                  stdout=subprocess.PIPE,
-                  stderr=subprocess.PIPE,
-                  check=False,
-              )
+              result = subprocess.run(args, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False)
               if check and result.returncode != 0:
-                  raise SystemExit(
-                      f"command failed ({result.returncode}): {' '.join(map(str, args))}\n{result.stderr.strip()}"
-                  )
+                  raise SystemExit(f"command failed ({result.returncode}): {' '.join(map(str, args))}\n{result.stderr.strip()}")
               return result
 
           def compact(value):
@@ -225,10 +217,7 @@ jobs:
               destination = Path(destination)
               shutil.rmtree(destination, ignore_errors=True)
               destination.mkdir(parents=True, exist_ok=True)
-              result = shell(
-                  ['gh', 'run', 'download', str(run_id), '--repo', REPO, '--name', name, '--dir', str(destination)],
-                  check=False,
-              )
+              result = shell(['gh', 'run', 'download', str(run_id), '--repo', REPO, '--name', name, '--dir', str(destination)], check=False)
               if result.returncode != 0:
                   shutil.rmtree(destination, ignore_errors=True)
                   return False
@@ -236,11 +225,8 @@ jobs:
 
           def verify_transaction(path, evaluated_at):
               process = shell([
-                  str(VERIFY_TOOL),
-                  '--transaction-json', str(path),
-                  '--expected-source-sha', SOURCE,
-                  '--expected-tree-sha', current_tree(),
-                  '--expected-environment', 'staging',
+                  str(VERIFY_TOOL), '--transaction-json', str(path), '--expected-source-sha', SOURCE,
+                  '--expected-tree-sha', current_tree(), '--expected-environment', 'staging',
                   '--evaluated-at-unix-seconds', str(evaluated_at),
               ], check=False)
               if process.returncode != 0:
@@ -258,23 +244,16 @@ jobs:
               return value
 
           def latest_executor_epoch():
-              values = [
-                  epoch(run['created_at'])
-                  for run in workflow_runs(EXECUTOR_WORKFLOW)
-                  if run.get('event') == 'workflow_dispatch' and run.get('head_sha') == SOURCE
-              ]
+              values = [epoch(run['created_at']) for run in workflow_runs(EXECUTOR_WORKFLOW)
+                        if run.get('event') == 'workflow_dispatch' and run.get('head_sha') == SOURCE]
               return max(values, default=0)
 
           def transaction_artifact(run):
               attempt = int(run.get('run_attempt') or 0)
               suffix = f"-{run['id']}-{attempt}"
-              matches = [
-                  item for item in artifacts(run['id'])
-                  if isinstance(item.get('name'), str)
-                  and item['name'].startswith('d1-transaction-')
-                  and item['name'].endswith(suffix)
-                  and not item.get('expired')
-              ]
+              matches = [item for item in artifacts(run['id'])
+                         if isinstance(item.get('name'), str) and item['name'].startswith('d1-transaction-')
+                         and item['name'].endswith(suffix) and not item.get('expired')]
               return matches[0] if len(matches) == 1 else None
 
           def executor_input_artifact(run, component):
@@ -289,9 +268,7 @@ jobs:
               for run in workflow_runs(PREPARE_WORKFLOW):
                   if run.get('event') != 'workflow_dispatch' or run.get('head_sha') != SOURCE:
                       continue
-                  if run.get('status') != 'completed' or run.get('conclusion') != 'success':
-                      continue
-                  if epoch(run['created_at']) <= cutoff:
+                  if run.get('status') != 'completed' or run.get('conclusion') != 'success' or epoch(run['created_at']) <= cutoff:
                       continue
                   artifact = transaction_artifact(run)
                   if artifact is None:
@@ -314,24 +291,16 @@ jobs:
                   return None
               candidates.sort(key=lambda item: item[0], reverse=True)
               _, run, tx, verification, executor_artifact_name = candidates[0]
-              return {
-                  'run_id': int(run['id']),
-                  'run_attempt': int(run['run_attempt']),
-                  'transaction': tx,
-                  'verification': verification,
-                  'executor_artifact_name': executor_artifact_name,
-                  'fresh_until': int(verification['fresh_until_unix_seconds']),
-              }
+              return {'run_id': int(run['id']), 'run_attempt': int(run['run_attempt']), 'transaction': tx,
+                      'verification': verification, 'executor_artifact_name': executor_artifact_name,
+                      'fresh_until': int(verification['fresh_until_unix_seconds'])}
 
           def wait_for_dispatched_run(workflow, started_at, timeout_seconds):
               deadline = time.time() + timeout_seconds
               while time.time() < deadline:
-                  matching = [
-                      run for run in workflow_runs(workflow)
-                      if run.get('event') == 'workflow_dispatch'
-                      and run.get('head_sha') == SOURCE
-                      and epoch(run['created_at']) >= started_at - 5
-                  ]
+                  matching = [run for run in workflow_runs(workflow)
+                              if run.get('event') == 'workflow_dispatch' and run.get('head_sha') == SOURCE
+                              and epoch(run['created_at']) >= started_at - 5]
                   if matching:
                       matching.sort(key=lambda item: epoch(item['created_at']), reverse=True)
                       selected = matching[0]
@@ -358,10 +327,7 @@ jobs:
               directory = Path(tempfile.mkdtemp(prefix='d1-preflight-'))
               if not download(run['id'], name, directory):
                   raise SystemExit('cannot download fresh observation preflight artifact')
-              required = {
-                  'prepare.json', 'provider-observation.json', 'runtime-context.json',
-                  'summary.json', 'target-release-set-id.txt'
-              }
+              required = {'prepare.json', 'provider-observation.json', 'runtime-context.json', 'summary.json', 'target-release-set-id.txt'}
               present = {path.name for path in directory.iterdir() if path.is_file()}
               if present != required:
                   raise SystemExit(f'fresh preflight artifact file set drifted: {sorted(present)}')
@@ -373,22 +339,14 @@ jobs:
               observed = observation.get('observed_at_unix_seconds')
               if not isinstance(observed, int) or int(time.time()) > observed + FRESHNESS:
                   raise SystemExit('fresh observation expired before Prepare construction')
-              return {
-                  'run': run,
-                  'attempt': attempt,
-                  'job_id': int(hosted[0]['id']),
-                  'artifact_id': int(artifact['id']),
-                  'directory': directory,
-              }
+              return {'run': run, 'attempt': attempt, 'job_id': int(hosted[0]['id']),
+                      'artifact_id': int(artifact['id']), 'directory': directory}
 
           def extract_target_manifest(release_id, destination, component, target_revision):
               destination = Path(destination)
               destination.mkdir(parents=True, exist_ok=True)
-              shell([
-                  'gh', 'release', 'download', release_id, '--repo', REPO,
-                  '--pattern', 'release-set.json', '--pattern', 'control-plane.tar',
-                  '--dir', str(destination),
-              ])
+              shell(['gh', 'release', 'download', release_id, '--repo', REPO,
+                     '--pattern', 'release-set.json', '--pattern', 'control-plane.tar', '--dir', str(destination)])
               release_set_raw = (destination / 'release-set.json').read_bytes()
               release_set = json.loads(release_set_raw)
               if release_set.get('schema_version') != 3 or release_set.get('release_set_id') != release_id:
@@ -422,23 +380,16 @@ jobs:
               if prepare.get('status') != 'PREPARE_READY' or component not in {'catalog', 'resolver'} or not isinstance(target_revision, str):
                   raise SystemExit('observation preflight prepare identity is invalid')
               release_id = (directory / 'target-release-set-id.txt').read_text(encoding='utf-8').strip()
-              evidence_ref = (
-                  f"github-actions:run:{observed['run']['id']}:attempt:{observed['attempt']}:"
-                  f"job:{observed['job_id']}:artifact:{observed['artifact_id']}"
-              )
+              evidence_ref = f"github-actions:run:{observed['run']['id']}:attempt:{observed['attempt']}:job:{observed['job_id']}:artifact:{observed['artifact_id']}"
               with tempfile.TemporaryDirectory(prefix='d1-release-') as release_dir:
                   raw = extract_target_manifest(release_id, release_dir, component, target_revision)
                   manifest_path = Path(release_dir) / 'operator-target-release.json'
                   manifest_path.write_bytes(raw)
                   output_path = Path(release_dir) / 'operator-input.json'
-                  shell([
-                      'python', 'scripts/d1-prepare.py', 'operator-input',
-                      '--opsctl', str(OPSCTL), '--root', '.', '--preflight-dir', str(directory),
-                      '--source-sha', SOURCE, '--tree-sha', current_tree(), '--release-id', release_id,
-                      '--release-manifest', str(manifest_path), '--evidence-ref', evidence_ref,
-                      '--freshness-seconds', str(FRESHNESS), '--recovery-strategy', 'NOOP_RETRY',
-                      '--output', str(output_path),
-                  ])
+                  shell(['python', 'scripts/d1-prepare.py', 'operator-input', '--opsctl', str(OPSCTL), '--root', '.',
+                         '--preflight-dir', str(directory), '--source-sha', SOURCE, '--tree-sha', current_tree(),
+                         '--release-id', release_id, '--release-manifest', str(manifest_path), '--evidence-ref', evidence_ref,
+                         '--freshness-seconds', str(FRESHNESS), '--recovery-strategy', 'NOOP_RETRY', '--output', str(output_path)])
                   projection = json.loads(output_path.read_text(encoding='utf-8'))
               if projection.get('command') != 'd1 operator-input' or projection.get('mode') != 'read-only':
                   raise SystemExit('canonical operator input projection contract drifted')
@@ -472,14 +423,9 @@ jobs:
                   if verification is None:
                       raise SystemExit('new Prepare produced invalid or stale transaction')
                   tx = json.loads(path.read_text(encoding='utf-8'))
-              return {
-                  'run_id': int(run['id']),
-                  'run_attempt': attempt,
-                  'transaction': tx,
-                  'verification': verification,
-                  'executor_artifact_name': executor_name,
-                  'fresh_until': int(verification['fresh_until_unix_seconds']),
-              }
+              return {'run_id': int(run['id']), 'run_attempt': attempt, 'transaction': tx,
+                      'verification': verification, 'executor_artifact_name': executor_name,
+                      'fresh_until': int(verification['fresh_until_unix_seconds'])}
 
           def valid_authorizations(candidate, issue):
               tx = candidate['transaction']
@@ -520,30 +466,22 @@ jobs:
                           auth_path = Path(directory) / 'authorization.json'
                           tx_path.write_text(json.dumps(tx, sort_keys=True, indent=2) + '\n', encoding='utf-8')
                           auth_path.write_text(canonical + '\n', encoding='utf-8')
-                          process = shell([
-                              str(AUTH_TOOL), '--transaction-json', str(tx_path), '--authorization-json', str(auth_path),
-                              '--evaluated-at-unix-seconds', str(now),
-                          ], check=False)
+                          process = shell([str(AUTH_TOOL), '--transaction-json', str(tx_path), '--authorization-json', str(auth_path),
+                                           '--evaluated-at-unix-seconds', str(now)], check=False)
                       if process.returncode != 0:
                           continue
                       binding = json.loads(process.stdout)
                       if binding.get('status') != 'AUTHORIZATION_VERIFIED' or binding.get('transaction_id') != tx.get('transaction_id'):
                           continue
-                      found.append({
-                          'authorization_json': canonical,
-                          'authorization_digest': binding.get('authorization_digest'),
-                          'authorization_reference': authorization['authorization_reference'],
-                      })
+                      found.append({'authorization_json': canonical, 'authorization_digest': binding.get('authorization_digest'),
+                                    'authorization_reference': authorization['authorization_reference']})
                   if len(comments) < 100:
                       break
                   page += 1
               return found
 
           def load_executor_inputs(candidate):
-              expected = {
-                  'target-release.json', 'current-release.json',
-                  'known-good-release.json', 'preconditions.json'
-              }
+              expected = {'target-release.json', 'current-release.json', 'known-good-release.json', 'preconditions.json'}
               with tempfile.TemporaryDirectory(prefix='d1-executor-inputs-') as directory:
                   if not download(candidate['run_id'], candidate['executor_artifact_name'], directory):
                       raise SystemExit('cannot download immutable executor input bundle')
@@ -566,30 +504,18 @@ jobs:
               component = verification['component']
               inputs = load_executor_inputs(candidate)
               confirmation = f"{SOURCE}:{target['environment']}:{component}:{target['database_id']}"
-              payload = {
-                  'ref': 'main',
-                  'inputs': {
-                      'environment': target['environment'],
-                      'source_sha': SOURCE,
-                      'component': component,
-                      'account_id': target['account_id'],
-                      'database_name': target['database_name'],
-                      'database_id': target['database_id'],
-                      'target_release_manifest_json': compact(inputs['target-release.json']),
-                      'current_release_manifest_json': compact(inputs['current-release.json']),
-                      'known_good_release_manifest_json': compact(inputs['known-good-release.json']),
-                      'preconditions_json': compact(inputs['preconditions.json']),
-                      'transition_mode': 'ordinary',
-                      'expected_release_set_id': '',
-                      'prepared_transaction_run_id': str(candidate['run_id']),
-                      'prepared_transaction_run_attempt': str(candidate['run_attempt']),
-                      'transaction_id': tx['transaction_id'],
-                      'authorization_digest': authorization['authorization_digest'],
-                      'transaction_authorization_json': authorization['authorization_json'],
-                      'mutation_authorized': True,
-                      'confirmation': confirmation,
-                  },
-              }
+              payload = {'ref': 'main', 'inputs': {
+                  'environment': target['environment'], 'source_sha': SOURCE, 'component': component,
+                  'account_id': target['account_id'], 'database_name': target['database_name'], 'database_id': target['database_id'],
+                  'target_release_manifest_json': compact(inputs['target-release.json']),
+                  'current_release_manifest_json': compact(inputs['current-release.json']),
+                  'known_good_release_manifest_json': compact(inputs['known-good-release.json']),
+                  'preconditions_json': compact(inputs['preconditions.json']), 'transition_mode': 'ordinary',
+                  'expected_release_set_id': '', 'prepared_transaction_run_id': str(candidate['run_id']),
+                  'prepared_transaction_run_attempt': str(candidate['run_attempt']), 'transaction_id': tx['transaction_id'],
+                  'authorization_digest': authorization['authorization_digest'],
+                  'transaction_authorization_json': authorization['authorization_json'], 'mutation_authorized': True,
+                  'confirmation': confirmation}}
               api_post(f'repos/{REPO}/actions/workflows/{EXECUTOR_WORKFLOW}/dispatches', payload)
 
           issue = current_stage_issue()
@@ -598,46 +524,32 @@ jobs:
               observed = fresh_observation()
               candidate = dispatch_prepare_and_wait(observed)
               tx = candidate['transaction']
-              SUMMARY.write_text(
-                  '# D1 transaction prepared\n\n'
-                  f"- Current stage issue: `#{issue}`\n"
-                  f"- TransactionId: `{tx['transaction_id']}`\n"
-                  f"- Prepare run: `{candidate['run_id']}` attempt `{candidate['run_attempt']}`\n"
-                  f"- Fresh until unix: `{candidate['fresh_until']}`\n"
-                  '- Provider mutation: `NO`\n'
-                  '- Next: record one exact transaction authorization in the CURRENT stage issue, then run this workflow once.\n',
-                  encoding='utf-8',
-              )
+              SUMMARY.write_text('# D1 transaction prepared\n\n'
+                                 f"- Current stage issue: `#{issue}`\n- TransactionId: `{tx['transaction_id']}`\n"
+                                 f"- Prepare run: `{candidate['run_id']}` attempt `{candidate['run_attempt']}`\n"
+                                 f"- Fresh until unix: `{candidate['fresh_until']}`\n- Provider mutation: `NO`\n"
+                                 '- Next: record one exact transaction authorization in the CURRENT stage issue, then run this workflow once.\n',
+                                 encoding='utf-8')
               print(f"D1_OPERATOR_STATE=TRANSACTION_PREPARED transaction_id={tx['transaction_id']} issue={issue}")
               raise SystemExit(0)
 
           tx = candidate['transaction']
           auths = valid_authorizations(candidate, issue)
           if len(auths) == 0:
-              SUMMARY.write_text(
-                  '# D1 authorization required\n\n'
-                  f"- Current stage issue: `#{issue}`\n"
-                  f"- TransactionId: `{tx['transaction_id']}`\n"
-                  '- No exact immutable OWNER authorization exists for this fresh transaction.\n'
-                  '- No executor was dispatched.\n',
-                  encoding='utf-8',
-              )
+              SUMMARY.write_text('# D1 authorization required\n\n'
+                                 f"- Current stage issue: `#{issue}`\n- TransactionId: `{tx['transaction_id']}`\n"
+                                 '- No exact immutable OWNER authorization exists for this fresh transaction.\n- No executor was dispatched.\n',
+                                 encoding='utf-8')
               print(f"D1_OPERATOR_STATE=AUTHORIZATION_REQUIRED transaction_id={tx['transaction_id']} issue={issue}")
               raise SystemExit(0)
           if len(auths) != 1:
               raise SystemExit('multiple valid OWNER authorizations exist for the same fresh transaction')
 
           dispatch_executor(candidate, auths[0])
-          SUMMARY.write_text(
-              '# Sole D1 executor dispatched\n\n'
-              f"- Current stage issue: `#{issue}`\n"
-              f"- TransactionId: `{tx['transaction_id']}`\n"
-              f"- Authorization digest: `{auths[0]['authorization_digest']}`\n"
-              '- Mutation authority remains solely in d1-migration-executor.yml.\n',
-              encoding='utf-8',
-          )
-          print(
-              'D1_OPERATOR_STATE=EXECUTOR_DISPATCHED '
-              f"transaction_id={tx['transaction_id']} authorization_digest={auths[0]['authorization_digest']} issue={issue}"
-          )
+          SUMMARY.write_text('# Sole D1 executor dispatched\n\n'
+                             f"- Current stage issue: `#{issue}`\n- TransactionId: `{tx['transaction_id']}`\n"
+                             f"- Authorization digest: `{auths[0]['authorization_digest']}`\n"
+                             '- Mutation authority remains solely in d1-migration-executor.yml.\n', encoding='utf-8')
+          print('D1_OPERATOR_STATE=EXECUTOR_DISPATCHED '
+                f"transaction_id={tx['transaction_id']} authorization_digest={auths[0]['authorization_digest']} issue={issue}")
           PY
