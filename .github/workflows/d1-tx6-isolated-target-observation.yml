@@ -72,6 +72,9 @@ jobs:
           assert 'pre_migration_runtime_schema_contract' in source
           assert '--current-manifest "$root/current-runtime-manifest.json"' in source
           assert '--known-good-manifest "$root/known-good-runtime-manifest.json"' in source
+          assert '--command "PRAGMA foreign_key_check" --json' in source
+          assert '--command "PRAGMA integrity_check" --json' in source
+          assert 'database-invariants.json' in source
           old_bad_wiring = '--current-manifest "$root/' + 'known-good-manifest.json"'
           assert old_bad_wiring not in source
           PY
@@ -268,6 +271,63 @@ jobs:
             --ledger "$raw/ledger.json" \
             --output "$raw/ledger-names.json"
 
+          set +e
+          npx --yes wrangler@4.94.0 d1 execute "$TX6_READ_ONLY_CANDIDATE_NAME" --remote \
+            --config "$raw/wrangler.json" --command "PRAGMA foreign_key_check" --json \
+            --experimental-provision=false --experimental-auto-create=false \
+            > "$evidence/foreign-key-check.json"
+          foreign_key_rc=$?
+          npx --yes wrangler@4.94.0 d1 execute "$TX6_READ_ONLY_CANDIDATE_NAME" --remote \
+            --config "$raw/wrangler.json" --command "PRAGMA integrity_check" --json \
+            --experimental-provision=false --experimental-auto-create=false \
+            > "$evidence/integrity-check.json"
+          integrity_rc=$?
+          set -e
+
+          python - "$evidence/foreign-key-check.json" "$foreign_key_rc" "$evidence/integrity-check.json" "$integrity_rc" "$evidence/database-invariants.json" <<'PY'
+          import json, sys
+          fk_path, fk_rc, integrity_path, integrity_rc, output_path = sys.argv[1:]
+          def read(path):
+              try:
+                  with open(path, encoding='utf-8') as handle:
+                      return json.load(handle), None
+              except Exception as exc:
+                  return None, f'{type(exc).__name__}: {exc}'
+          fk, fk_error = read(fk_path)
+          integrity, integrity_error = read(integrity_path)
+          fk_pass = (
+              fk_rc == '0' and isinstance(fk, list) and len(fk) == 1 and
+              isinstance(fk[0], dict) and fk[0].get('success') is True and
+              fk[0].get('results') == []
+          )
+          integrity_pass = False
+          if integrity_rc == '0' and isinstance(integrity, list) and len(integrity) == 1 and isinstance(integrity[0], dict) and integrity[0].get('success') is True:
+              rows = integrity[0].get('results')
+              integrity_pass = isinstance(rows, list) and len(rows) == 1 and isinstance(rows[0], dict) and list(rows[0].values()) == ['ok']
+          document = {
+              'schema_version': 1,
+              'kind': 'D1_TX6_DATABASE_INVARIANT_OBSERVATION',
+              'foreign_key_check': {
+                  'command_exit_code': int(fk_rc),
+                  'parse_error': fk_error,
+                  'pass': fk_pass,
+              },
+              'integrity_check': {
+                  'command_exit_code': int(integrity_rc),
+                  'parse_error': integrity_error,
+                  'pass': integrity_pass,
+              },
+              'verdict': 'PASS' if fk_pass and integrity_pass else 'FAIL',
+              'provider_mutation': False,
+              'd1_mutation': False,
+              'production_mutation': False,
+          }
+          with open(output_path, 'w', encoding='utf-8') as handle:
+              json.dump(document, handle, sort_keys=True, indent=2)
+              handle.write('\n')
+          PY
+          python -m json.tool "$evidence/database-invariants.json" >/dev/null
+
           npx --yes wrangler@4.94.0 d1 migrations list "$TX6_READ_ONLY_CANDIDATE_NAME" --remote \
             --config "$raw/wrangler.json" \
             --experimental-provision=false --experimental-auto-create=false \
@@ -374,7 +434,7 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: d1-tx6-isolated-target-observation-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.sha }}
-          path: artifacts/d1-tx6-isolated-target-observation/observation.json
+          path: artifacts/d1-tx6-isolated-target-observation
           if-no-files-found: error
           retention-days: 30
 
