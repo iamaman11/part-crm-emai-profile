@@ -110,7 +110,9 @@ where
                     return Err(format!("duplicate --evidence-ref name: {name}").into());
                 }
             }
-            other => return Err(format!("unsupported d1-operator-outcome argument: {other}").into()),
+            other => {
+                return Err(format!("unsupported d1-operator-outcome argument: {other}").into());
+            }
         }
     }
     Ok(args)
@@ -122,7 +124,8 @@ fn required<T>(value: Option<T>, flag: &str) -> Result<T, Box<dyn Error>> {
 
 fn read_strict(path: PathBuf, label: &str) -> Result<Value, Box<dyn Error>> {
     let raw = fs::read_to_string(path)?;
-    parse_strict_json(&raw).map_err(|error| format!("{label} is not strict bounded JSON: {error}").into())
+    parse_strict_json(&raw)
+        .map_err(|error| format!("{label} is not strict bounded JSON: {error}").into())
 }
 
 fn diagnostic_kind(diagnostic: &Value) -> Result<Option<D1OperatorOutcomeKind>, Box<dyn Error>> {
@@ -163,7 +166,9 @@ fn render(args: Args) -> Result<String, Box<dyn Error>> {
     let target = match args.target_json {
         Some(path) => Some(
             serde_json::from_value::<TargetIdentity>(read_strict(path, "operator target")?)
-                .map_err(|error| format!("operator target does not match typed target contract: {error}"))?,
+                .map_err(|error| {
+                    format!("operator target does not match typed target contract: {error}")
+                })?,
         ),
         None => None,
     };
@@ -240,7 +245,11 @@ mod tests {
             assert_eq!(value["contract"], "D1_OPERATOR_OUTCOME_V1");
             assert_eq!(value["outcome"], kind.as_str());
             assert_eq!(value["reason_code"], kind.as_str());
-            assert!(value["remediation"].as_str().is_some_and(|value| !value.is_empty()));
+            assert!(
+                value["remediation"]
+                    .as_str()
+                    .is_some_and(|value| !value.is_empty())
+            );
             assert_eq!(value["operator_has_provider_credentials"], false);
         }
         Ok(())
@@ -249,8 +258,10 @@ mod tests {
     #[test]
     fn evidence_refs_are_stable_and_sorted() -> Result<(), Box<dyn Error>> {
         let mut args = base_args(D1OperatorOutcomeKind::CompletedVerified);
-        args.evidence_refs.insert("receipt".to_owned(), "run:1:artifact:2".to_owned());
-        args.evidence_refs.insert("post_state".to_owned(), "run:3:artifact:4".to_owned());
+        args.evidence_refs
+            .insert("receipt".to_owned(), "run:1:artifact:2".to_owned());
+        args.evidence_refs
+            .insert("post_state".to_owned(), "run:3:artifact:4".to_owned());
         let output = render(args)?;
         let value: Value = serde_json::from_str(&output)?;
         assert_eq!(value["evidence_refs"]["receipt"], "run:1:artifact:2");
@@ -268,7 +279,10 @@ mod tests {
         fs::remove_file(path).ok();
         let value: Value = serde_json::from_str(&output)?;
         assert_eq!(value["outcome"], "STALE_OBSERVATION");
-        assert_eq!(value["owner_diagnostic"]["reason_code"], "STALE_OBSERVATION");
+        assert_eq!(
+            value["owner_diagnostic"]["reason_code"],
+            "STALE_OBSERVATION"
+        );
         Ok(())
     }
 
@@ -283,7 +297,8 @@ mod tests {
     }
 
     #[test]
-    fn lower_level_owner_diagnostic_is_preserved_under_explicit_operator_kind() -> Result<(), Box<dyn Error>> {
+    fn lower_level_owner_diagnostic_is_preserved_under_explicit_operator_kind()
+    -> Result<(), Box<dyn Error>> {
         let path = write_diagnostic("D1_PRECONDITION_BLOCKED");
         let mut args = base_args(D1OperatorOutcomeKind::PrepareBlocked);
         args.owner_diagnostic_json = Some(path.clone());
@@ -291,7 +306,10 @@ mod tests {
         fs::remove_file(path).ok();
         let value: Value = serde_json::from_str(&output)?;
         assert_eq!(value["outcome"], "PREPARE_BLOCKED");
-        assert_eq!(value["owner_diagnostic"]["reason_code"], "D1_PRECONDITION_BLOCKED");
+        assert_eq!(
+            value["owner_diagnostic"]["reason_code"],
+            "D1_PRECONDITION_BLOCKED"
+        );
         Ok(())
     }
 }
