@@ -12,6 +12,8 @@ mod compatibility;
 mod contract_transition;
 #[path = "d1/execution_control.rs"]
 pub mod execution_control;
+#[path = "d1/execution_post_state.rs"]
+mod execution_post_state;
 #[path = "d1/executor_admission.rs"]
 pub mod executor_admission;
 #[path = "d1/model.rs"]
@@ -43,6 +45,10 @@ use serde_json::{Value, json};
 use std::path::Path;
 use util::{read_json, resolve_input};
 
+pub use execution_post_state::{
+    ExecutionPostStateDisposition, ExecutionPostStateVerification,
+    serialize_execution_post_state_verification, verify_execution_post_state,
+};
 pub use model::{D1Action, D1Error, D1RunRequest};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
