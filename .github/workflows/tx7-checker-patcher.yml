@@ -50,52 +50,58 @@ jobs:
           )
 
           replace_once(
-              "  const deploySteps = (text.match(/CLOUDFLARE_API_TOKEN: \\\\$\\{\\{ secrets\\.CLOUDFLARE_API_TOKEN \\\\$\\}\\}/g) ?? []).length;\n"
               "  if (deploySteps !== 1) fail(`deploy-capable credential must appear exactly once; observed=${deploySteps}`);\n",
-              "  const deploySteps = (text.match(/CLOUDFLARE_API_TOKEN: \\\\$\\{\\{ secrets\\.CLOUDFLARE_API_TOKEN \\\\$\\}\\}/g) ?? []).length;\n"
               "  if (deploySteps !== 2) fail(`deploy-capable credential must appear exactly once in each mutually exclusive migration/restore write step; observed=${deploySteps}`);\n",
               'deploy reference cardinality',
           )
 
-          anchor = "  for (const forbidden of [OBSERVE_REF, 'd1 info', 'd1 execute', 'd1 migrations list', 'ledger-fence.json', 'status-fence.json', 'verify-pending']) {\n"
-          anchor += "    if (deployStep.includes(forbidden)) fail(`sole deploy credential step must contain only actual apply boundary, not read-only revalidation: ${forbidden}`);\n"
-          anchor += "  }\n"
-          addition = anchor + "\n"
-          addition += "  const restorePrewriteStep = stepBody(text, RESTORE_PREWRITE_STEP);\n"
-          addition += "  if (!restorePrewriteStep.includes(OBSERVE_REF)) fail('restore pre-write proof must use the dedicated observe credential');\n"
-          addition += "  if (restorePrewriteStep.includes(DEPLOY_REF)) fail('restore pre-write proof must never receive the deploy credential');\n"
-          addition += "  for (const marker of ['d1 info', 'SELECT id, name FROM d1_migrations ORDER BY id', 'd1 time-travel info', 'PRAGMA foreign_key_check', 'PRAGMA quick_check']) {\n"
-          addition += "    if (!restorePrewriteStep.includes(marker)) fail(`restore pre-write proof lost read-only marker: ${marker}`);\n"
-          addition += "  }\n\n"
-          addition += "  const restoreDeployStep = stepBody(text, RESTORE_APPLY_STEP);\n"
-          addition += "  for (const marker of [DEPLOY_REF, 'test -n \"$CLOUDFLARE_API_TOKEN\"', '--request POST', '/time_travel/restore?bookmark=$RESTORE_BOOKMARK']) {\n"
-          addition += "    if (!restoreDeployStep.includes(marker)) fail(`restore deploy step lost exact write marker: ${marker}`);\n"
-          addition += "  }\n"
-          addition += "  for (const forbidden of [OBSERVE_REF, 'd1 migrations apply', 'd1 create', 'd1 delete', 'PRAGMA ']) {\n"
-          addition += "    if (restoreDeployStep.includes(forbidden)) fail(`restore deploy credential step acquired forbidden read/migration surface: ${forbidden}`);\n"
-          addition += "  }\n\n"
-          addition += "  const restorePostverifyStep = stepBody(text, RESTORE_POSTVERIFY_STEP);\n"
-          addition += "  if (!restorePostverifyStep.includes(OBSERVE_REF)) fail('restore post-verify must use the dedicated observe credential');\n"
-          addition += "  if (restorePostverifyStep.includes(DEPLOY_REF)) fail('restore post-verify must never receive the deploy credential');\n"
-          addition += "  for (const marker of ['SELECT id, name FROM d1_migrations ORDER BY id', 'PRAGMA foreign_key_check', 'PRAGMA quick_check', 'expected-post-ledger.json']) {\n"
-          addition += "    if (!restorePostverifyStep.includes(marker)) fail(`restore post-verify lost fail-closed marker: ${marker}`);\n"
-          addition += "  }\n"
-          replace_once(anchor, addition, 'restore credential/effect structure')
+          deploy_anchor = "  for (const forbidden of [OBSERVE_REF, 'd1 info', 'd1 execute', 'd1 migrations list', 'ledger-fence.json', 'status-fence.json', 'verify-pending']) {\n"
+          deploy_anchor += "    if (deployStep.includes(forbidden)) fail(`sole deploy credential step must contain only actual apply boundary, not read-only revalidation: ${forbidden}`);\n"
+          deploy_anchor += "  }\n"
+          restore_checks = deploy_anchor + "\n"
+          restore_checks += "  const restorePrewriteStep = stepBody(text, RESTORE_PREWRITE_STEP);\n"
+          restore_checks += "  if (!restorePrewriteStep.includes(OBSERVE_REF)) fail('restore pre-write proof must use the dedicated observe credential');\n"
+          restore_checks += "  if (restorePrewriteStep.includes(DEPLOY_REF)) fail('restore pre-write proof must never receive the deploy credential');\n"
+          restore_checks += "  for (const marker of ['d1 info', 'SELECT id, name FROM d1_migrations ORDER BY id', 'd1 time-travel info', 'PRAGMA foreign_key_check', 'PRAGMA quick_check']) {\n"
+          restore_checks += "    if (!restorePrewriteStep.includes(marker)) fail(`restore pre-write proof lost read-only marker: ${marker}`);\n"
+          restore_checks += "  }\n\n"
+          restore_checks += "  const restoreDeployStep = stepBody(text, RESTORE_APPLY_STEP);\n"
+          restore_checks += "  for (const marker of [DEPLOY_REF, 'test -n \"$CLOUDFLARE_API_TOKEN\"', '--request POST', '/time_travel/restore?bookmark=$RESTORE_BOOKMARK']) {\n"
+          restore_checks += "    if (!restoreDeployStep.includes(marker)) fail(`restore deploy step lost exact write marker: ${marker}`);\n"
+          restore_checks += "  }\n"
+          restore_checks += "  for (const forbidden of [OBSERVE_REF, 'd1 migrations apply', 'd1 create', 'd1 delete', 'PRAGMA ']) {\n"
+          restore_checks += "    if (restoreDeployStep.includes(forbidden)) fail(`restore deploy credential step acquired forbidden read/migration surface: ${forbidden}`);\n"
+          restore_checks += "  }\n\n"
+          restore_checks += "  const restorePostverifyStep = stepBody(text, RESTORE_POSTVERIFY_STEP);\n"
+          restore_checks += "  if (!restorePostverifyStep.includes(OBSERVE_REF)) fail('restore post-verify must use the dedicated observe credential');\n"
+          restore_checks += "  if (restorePostverifyStep.includes(DEPLOY_REF)) fail('restore post-verify must never receive the deploy credential');\n"
+          restore_checks += "  for (const marker of ['SELECT id, name FROM d1_migrations ORDER BY id', 'PRAGMA foreign_key_check', 'PRAGMA quick_check', 'expected-post-ledger.json']) {\n"
+          restore_checks += "    if (!restorePostverifyStep.includes(marker)) fail(`restore post-verify lost fail-closed marker: ${marker}`);\n"
+          restore_checks += "  }\n"
+          replace_once(deploy_anchor, restore_checks, 'restore credential/effect structure')
 
-          old_owner = "  const remoteMutationPaths = [];\n  for (const workflowPath of workflows) {\n    const candidate = normalizedShell(await readFile(path.join(root, workflowPath), 'utf8'));\n    if (/d1 migrations apply\\b[^\\n]*?--remote\\b/.test(candidate)) remoteMutationPaths.push(workflowPath);\n  }\n  if (remoteMutationPaths.length !== 1 || remoteMutationPaths[0] !== EXECUTOR) {\n    fail(`exactly one workflow may own remote D1 migrations apply; observed=${JSON.stringify(remoteMutationPaths)}`);\n  }\n"
-          new_owner = "  const remoteMutationPaths = [];\n  const restoreMutationPaths = [];\n  for (const workflowPath of workflows) {\n    const candidate = normalizedShell(await readFile(path.join(root, workflowPath), 'utf8'));\n    if (/d1 migrations apply\\b[^\\n]*?--remote\\b/.test(candidate)) remoteMutationPaths.push(workflowPath);\n    if (/\\/time_travel\\/restore\\?bookmark=/.test(candidate)) restoreMutationPaths.push(workflowPath);\n  }\n  if (remoteMutationPaths.length !== 1 || remoteMutationPaths[0] !== EXECUTOR) {\n    fail(`exactly one workflow may own remote D1 migrations apply; observed=${JSON.stringify(remoteMutationPaths)}`);\n  }\n  if (restoreMutationPaths.length !== 1 || restoreMutationPaths[0] !== EXECUTOR) {\n    fail(`exactly one workflow may own D1 Time Travel restore; observed=${JSON.stringify(restoreMutationPaths)}`);\n  }\n"
-          replace_once(old_owner, new_owner, 'sole restore mutation owner')
+          owner_anchor = "  if (remoteMutationPaths.length !== 1 || remoteMutationPaths[0] !== EXECUTOR) {\n"
+          owner_anchor += "    fail(`exactly one workflow may own remote D1 migrations apply; observed=${JSON.stringify(remoteMutationPaths)}`);\n"
+          owner_anchor += "  }\n"
+          restore_owner = owner_anchor + "\n"
+          restore_owner += "  const restoreMutationPaths = [];\n"
+          restore_owner += "  for (const workflowPath of workflows) {\n"
+          restore_owner += "    const candidate = normalizedShell(await readFile(path.join(root, workflowPath), 'utf8'));\n"
+          restore_owner += "    if (/\\/time_travel\\/restore\\?bookmark=/.test(candidate)) restoreMutationPaths.push(workflowPath);\n"
+          restore_owner += "  }\n"
+          restore_owner += "  if (restoreMutationPaths.length !== 1 || restoreMutationPaths[0] !== EXECUTOR) {\n"
+          restore_owner += "    fail(`exactly one workflow may own D1 Time Travel restore; observed=${JSON.stringify(restoreMutationPaths)}`);\n"
+          restore_owner += "  }\n"
+          replace_once(owner_anchor, restore_owner, 'sole restore mutation owner')
 
           negative_anchor = "  await expectRejected('deploy token used for observation', replaceFixture('deploy token used for observation', text, OBSERVE_REF, DEPLOY_REF));\n"
           negative = negative_anchor
           negative += "  await expectRejected(\n    'third deploy credential exposure',\n    `${text}\\n# ${DEPLOY_REF}\\n`,\n  );\n"
           replace_once(negative_anchor, negative, 'deploy credential negative fixture')
 
-          replace_once(
-              "durable MUTATION_STARTED before sole deploy credential/apply, mechanically known applied events, D1-supported fail-closed post-verify diagnostics",
-              "durable MUTATION_STARTED before bounded deploy credential writes, mechanically known applied events, D1-supported fail-closed post-verify diagnostics",
-              'success message',
-          )
+          old_message = 'durable MUTATION_STARTED before sole deploy credential/apply, mechanically known applied events, D1-supported fail-closed post-verify diagnostics'
+          if old_message in text:
+              text = text.replace(old_message, 'durable MUTATION_STARTED before bounded deploy credential writes, mechanically known applied events, D1-supported fail-closed post-verify diagnostics', 1)
 
           path.write_text(text, encoding='utf-8')
           PY
