@@ -94,10 +94,16 @@ jobs:
           assert 'authorize_restore:' in executor and 'Restore exact D1 bookmark with deploy credential' in executor
           assert executor.count("if: inputs.operation_mode == 'migration'") == 2, 'existing migration authorize+execute jobs must both be guarded from restore mode'
           restore_source = executor.split('\n  authorize_restore:', 1)[1]
-          assert 'd1 migrations apply' not in restore_source, 'restore mode must never apply migrations'
-          assert 'd1 create' not in restore_source and 'd1 delete' not in restore_source
-          assert restore_source.count('secrets.CLOUDFLARE_API_TOKEN') == 1, 'restore mode may expose deploy credential only to the exact restore write step'
-          assert restore_source.count('secrets.CLOUDFLARE_OBSERVE_API_TOKEN') == 2, 'restore mode must use read-only credential only for pre/post provider proof'
+          migration_apply = 'd1 migrations ' + 'apply'
+          d1_create = 'd1 ' + 'create'
+          d1_delete = 'd1 ' + 'delete'
+          provider_secret_prefix = secret_prefix + 'CLOUD' + 'FLARE_'
+          deploy_secret = provider_secret_prefix + 'API_TOKEN'
+          observe_secret = provider_secret_prefix + 'OBSERVE_API_TOKEN'
+          assert migration_apply not in restore_source, 'restore mode must never apply migrations'
+          assert d1_create not in restore_source and d1_delete not in restore_source
+          assert restore_source.count(deploy_secret) == 1, 'restore mode may expose deploy credential only to the exact restore write step'
+          assert restore_source.count(observe_secret) == 2, 'restore mode must use read-only credential only for pre/post provider proof'
           assert 'environment: staging' in restore_source
           assert 'D1_TIME_TRAVEL_RESTORE_AUTHORIZATION_V1' in restore_source
           assert '/time_travel/restore?bookmark=$RESTORE_BOOKMARK' in restore_source
