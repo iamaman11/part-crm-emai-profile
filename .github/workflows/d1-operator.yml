@@ -67,6 +67,8 @@ jobs:
               '0027_' + 'pas2_payload_fingerprint_expand.sql',
               '0031_' + 'device_binding_governance.sql',
               '0032_' + 'pas2_payload_fingerprint_contract.sql',
+              'd1-tx6-',
+              'TX-6 isolated target',
           )
           for value in forbidden:
               assert value not in source, f'D1 operator acquired forbidden policy/effect surface: {value}'
@@ -318,12 +320,12 @@ jobs:
               api_post(f'repos/{REPO}/actions/workflows/{OBSERVE_WORKFLOW}/dispatches', {'ref': 'main'})
               run = wait_for_dispatched_run(OBSERVE_WORKFLOW, start, 1800)
               attempt = int(run['run_attempt'])
-              name = f"d1-tx6-transaction-preflight-{run['id']}-{attempt}-{SOURCE}"
+              name = f"d1-transaction-preflight-{run['id']}-{attempt}-{SOURCE}"
               artifact = artifact_exact(run['id'], name)
               if artifact is None:
                   raise SystemExit('fresh observation preflight artifact missing or ambiguous')
               jobs = gh_json(f"repos/{REPO}/actions/runs/{run['id']}/jobs?filter=latest&per_page=100").get('jobs') or []
-              hosted = [job for job in jobs if job.get('name') == 'TX-6 isolated target hosted observation and preflight']
+              hosted = [job for job in jobs if job.get('name') == 'Isolated D1 target hosted observation and preflight']
               if len(hosted) != 1 or hosted[0].get('conclusion') != 'success':
                   raise SystemExit('fresh observation hosted job missing/ambiguous/not successful')
               directory = Path(tempfile.mkdtemp(prefix='d1-preflight-'))
