@@ -247,8 +247,12 @@ impl D1Error {
         }
     }
 
+    /// Returns the immutable secret-free typed D1 diagnostic owned by `opsctl d1`.
+    ///
+    /// Adapters may persist or embed this value verbatim. They must not parse stderr
+    /// or synthesize competing reason/remediation semantics.
     #[must_use]
-    pub(crate) fn gate_result_json(&self) -> Value {
+    pub fn gate_result_json(&self) -> Value {
         self.gate_result.json_value()
     }
 }
