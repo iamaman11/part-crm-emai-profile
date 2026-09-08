@@ -7,12 +7,14 @@ on:
     paths:
       - '.github/workflows/d1-operator.yml'
       - 'scripts/d1-prepare.py'
+      - 'tools/opsctl/examples/d1-transaction-verify.rs'
   push:
     branches:
       - main
     paths:
       - '.github/workflows/d1-operator.yml'
       - 'scripts/d1-prepare.py'
+      - 'tools/opsctl/examples/d1-transaction-verify.rs'
   workflow_dispatch:
 
 permissions:
@@ -28,7 +30,7 @@ jobs:
   contract:
     name: Standard D1 operator is transport-only
     runs-on: ubuntu-24.04
-    timeout-minutes: 3
+    timeout-minutes: 5
     steps:
       - name: Checkout exact source
         uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
@@ -56,9 +58,9 @@ jobs:
               'd1 ' + 'create',
               'd1 ' + 'delete',
               'd1 time-travel ' + 'restore',
-              '0027_pas2_payload_fingerprint_expand.sql',
-              '0031_device_binding_governance.sql',
-              '0032_pas2_payload_fingerprint_contract.sql',
+              '0027_' + 'pas2_payload_fingerprint_expand.sql',
+              '0031_' + 'device_binding_governance.sql',
+              '0032_' + 'pas2_payload_fingerprint_contract.sql',
           )
           for value in forbidden:
               assert value not in source, f'D1 operator acquired forbidden policy/effect surface: {value}'
@@ -68,8 +70,16 @@ jobs:
           assert source.count('/dispatches') == 4, 'D1 operator dispatch surface drifted from exactly three natural-owner transitions'
           assert 'D1_TRANSACTION_AUTHORIZATION_V1' in source
           assert 'd1-transaction-authorization' in source
+          assert 'd1-transaction-verify' in source
           assert 'scripts/d1-prepare.py' in source and 'operator-input' in source
+          assert 'def validate_transaction(' not in source, 'operator must not duplicate typed transaction-integrity policy'
           PY
+
+      - name: Exercise typed transaction verifier positive and negative fixtures
+        run: |
+          set -euo pipefail
+          env -u CLOUDFLARE_API_TOKEN -u CLOUDFLARE_ACCOUNT_ID \
+            cargo test --locked --manifest-path tools/opsctl/Cargo.toml --example d1-transaction-verify
 
   operator:
     name: Resolve current D1 state and perform one bounded transition
@@ -97,9 +107,10 @@ jobs:
           env -u CLOUDFLARE_API_TOKEN -u CLOUDFLARE_ACCOUNT_ID \
             cargo build --locked --manifest-path tools/opsctl/Cargo.toml
           env -u CLOUDFLARE_API_TOKEN -u CLOUDFLARE_ACCOUNT_ID \
-            cargo build --locked --manifest-path tools/opsctl/Cargo.toml --example d1-transaction-authorization
+            cargo build --locked --manifest-path tools/opsctl/Cargo.toml --example d1-transaction-authorization --example d1-transaction-verify
           test -x tools/opsctl/target/debug/opsctl
           test -x tools/opsctl/target/debug/examples/d1-transaction-authorization
+          test -x tools/opsctl/target/debug/examples/d1-transaction-verify
           python scripts/d1-prepare.py self-test
 
       - name: Resolve, prepare, stop for authorization, or dispatch sole executor
@@ -125,6 +136,7 @@ jobs:
           SUMMARY = Path(os.environ['GITHUB_STEP_SUMMARY'])
           OPSCTL = Path('tools/opsctl/target/debug/opsctl')
           AUTH_TOOL = Path('tools/opsctl/target/debug/examples/d1-transaction-authorization')
+          VERIFY_TOOL = Path('tools/opsctl/target/debug/examples/d1-transaction-verify')
           PREPARE_WORKFLOW = 'd1-migration-prepare.yml'
           OBSERVE_WORKFLOW = 'd1-tx6-isolated-target-observation.yml'
           EXECUTOR_WORKFLOW = 'd1-migration-executor.yml'
@@ -210,14 +222,28 @@ jobs:
                   raise SystemExit('typed D1 repository projection schema drifted')
               return value
 
-          def component_from_plan(plan):
-              digests = plan.get('release_manifest_digests')
-              if not isinstance(digests, dict) or len(digests) != 1:
-                  raise SystemExit('prepared transaction must bind exactly one D1 component release manifest')
-              component = next(iter(digests))
-              if component not in {'catalog', 'resolver'}:
-                  raise SystemExit('prepared transaction component is unsupported')
-              return component
+          def verify_transaction(path, evaluated_at):
+              process = shell([
+                  str(VERIFY_TOOL),
+                  '--transaction-json', str(path),
+                  '--expected-source-sha', SOURCE,
+                  '--expected-tree-sha', current_tree(),
+                  '--expected-environment', 'staging',
+                  '--evaluated-at-unix-seconds', str(evaluated_at),
+              ], check=False)
+              if process.returncode != 0:
+                  return None
+              try:
+                  value = json.loads(process.stdout)
+              except json.JSONDecodeError:
+                  return None
+              if value.get('status') != 'TRANSACTION_VERIFIED' or value.get('mode') != 'read-only':
+                  return None
+              if value.get('authorization_consumed') or value.get('mutation_executed') or value.get('provider_mutation_executed'):
+                  return None
+              if value.get('source_sha') != SOURCE or value.get('tree_sha') != current_tree():
+                  return None
+              return value
 
           def latest_executor_epoch():
               values = [
@@ -226,59 +252,6 @@ jobs:
                   if run.get('event') == 'workflow_dispatch' and run.get('head_sha') == SOURCE
               ]
               return max(values, default=0)
-
-          def validate_transaction(tx, now):
-              if not isinstance(tx, dict) or tx.get('schema_version') != 1:
-                  return None
-              if tx.get('status') != 'TRANSACTION_PREPARED' or tx.get('mode') != 'read-only':
-                  return None
-              if tx.get('authorization_consumed') or tx.get('mutation_executed') or tx.get('provider_mutation_executed'):
-                  return None
-              plan = tx.get('transaction_plan') or {}
-              obs = tx.get('provider_observation') or {}
-              if plan.get('source_sha') != SOURCE or plan.get('tree_sha') != current_tree():
-                  return None
-              if plan.get('phase') != 'ORDINARY' or plan.get('transaction_kind') != 'D1_MIGRATION':
-                  return None
-              target = plan.get('target') or {}
-              if target.get('environment') != 'staging' or target.get('database_name') == 'part-crm-catalog-production':
-                  return None
-              try:
-                  component_from_plan(plan)
-              except SystemExit:
-                  return None
-              planned = plan.get('planned_migrations')
-              if not isinstance(planned, list) or not planned:
-                  return None
-              names = [item.get('migration_file') for item in planned if isinstance(item, dict)]
-              if len(names) != len(planned) or len(set(names)) != len(names) or not all(isinstance(item, str) and item for item in names):
-                  return None
-              if any(not isinstance(item.get('content_sha256'), str) or not re.fullmatch(r'[0-9a-f]{64}', item['content_sha256']) for item in planned):
-                  return None
-              if plan.get('allowed_provider_effects') != ['D1_MIGRATIONS_APPLY_EXACT_PLAN']:
-                  return None
-              observed = plan.get('observed_at_unix_seconds')
-              freshness = plan.get('freshness_max_age_seconds')
-              if not isinstance(observed, int) or freshness != FRESHNESS:
-                  return None
-              fresh_until = observed + freshness
-              if now > fresh_until:
-                  return None
-              if obs.get('remote_ledger_sha256') != plan.get('predecessor_ledger_sha256'):
-                  return None
-              pending = obs.get('wrangler_pending_migrations')
-              if not isinstance(pending, list) or pending[:len(names)] != names:
-                  return None
-              trailing = pending[len(names):]
-              if trailing and trailing != [plan.get('supported_schema_max')]:
-                  return None
-              expected_post = plan.get('expected_post_state') or {}
-              if expected_post.get('revision') != plan.get('schema_target'):
-                  return None
-              txid = tx.get('transaction_id')
-              if not isinstance(txid, str) or not re.fullmatch(r'[0-9a-f]{64}', txid):
-                  return None
-              return fresh_until
 
           def transaction_artifact(run):
               attempt = int(run.get('run_attempt') or 0)
@@ -312,20 +285,21 @@ jobs:
                       path = Path(directory) / 'transaction.json'
                       if not path.is_file():
                           continue
-                      tx = json.loads(path.read_text(encoding='utf-8'))
-                      fresh_until = validate_transaction(tx, now)
-                      if fresh_until is None:
+                      verification = verify_transaction(path, now)
+                      if verification is None:
                           continue
-                      candidates.append((epoch(run['created_at']), run, tx, fresh_until))
+                      tx = json.loads(path.read_text(encoding='utf-8'))
+                      candidates.append((epoch(run['created_at']), run, tx, verification))
               if not candidates:
                   return None
               candidates.sort(key=lambda item: item[0], reverse=True)
-              _, run, tx, fresh_until = candidates[0]
+              _, run, tx, verification = candidates[0]
               return {
                   'run_id': int(run['id']),
                   'run_attempt': int(run['run_attempt']),
                   'transaction': tx,
-                  'fresh_until': fresh_until,
+                  'verification': verification,
+                  'fresh_until': int(verification['fresh_until_unix_seconds']),
               }
 
           def wait_for_dispatched_run(workflow, started_at, timeout_seconds):
@@ -356,7 +330,7 @@ jobs:
               artifact = artifact_exact(run['id'], name)
               if artifact is None:
                   raise SystemExit('fresh observation preflight artifact missing or ambiguous')
-              jobs = gh_json(f"repos/{REPO}/actions/runs/{run['id']}/jobs?filter=latest&per_page=100").get('jobs') or []
+              jobs = gh_json(f"repos/{REPO}/actions/runs/{run['id']}/jobs?filter=latest&per_page=100').get('jobs') or []
               hosted = [job for job in jobs if job.get('name') == 'TX-6 isolated target hosted observation and preflight']
               if len(hosted) != 1 or hosted[0].get('conclusion') != 'success':
                   raise SystemExit('fresh observation hosted job missing/ambiguous/not successful')
@@ -467,11 +441,20 @@ jobs:
               with tempfile.TemporaryDirectory(prefix='d1-prepared-') as directory:
                   if not download(run['id'], name, directory):
                       raise SystemExit('cannot download prepared transaction artifact')
-                  tx = json.loads((Path(directory) / 'transaction.json').read_text(encoding='utf-8'))
-              fresh_until = validate_transaction(tx, int(time.time()))
-              if fresh_until is None:
-                  raise SystemExit('new Prepare produced invalid/stale transaction')
-              return {'run_id': int(run['id']), 'run_attempt': attempt, 'transaction': tx, 'fresh_until': fresh_until}
+                  path = Path(directory) / 'transaction.json'
+                  if not path.is_file():
+                      raise SystemExit('successful Prepare transaction artifact is missing transaction.json')
+                  verification = verify_transaction(path, int(time.time()))
+                  if verification is None:
+                      raise SystemExit('new Prepare produced invalid or stale transaction')
+                  tx = json.loads(path.read_text(encoding='utf-8'))
+              return {
+                  'run_id': int(run['id']),
+                  'run_attempt': attempt,
+                  'transaction': tx,
+                  'verification': verification,
+                  'fresh_until': int(verification['fresh_until_unix_seconds']),
+              }
 
           def valid_authorizations(candidate, issue):
               tx = candidate['transaction']
@@ -534,10 +517,11 @@ jobs:
           def reconstruct_executor_manifests(candidate):
               tx = candidate['transaction']
               plan = tx['transaction_plan']
-              component = component_from_plan(plan)
-              release_id = plan['release_candidate_id']
+              verification = candidate['verification']
+              component = verification['component']
+              release_id = verification['release_candidate_id']
               with tempfile.TemporaryDirectory(prefix='d1-executor-release-') as release_dir:
-                  raw, target_manifest = extract_target_manifest(release_id, release_dir, component, plan['schema_target'])
+                  raw, target_manifest = extract_target_manifest(release_id, release_dir, component, verification['schema_target'])
               expected_digest = plan['release_manifest_digests'].get(component)
               if hashlib.sha256(raw).hexdigest() != expected_digest:
                   raise SystemExit('executor target release manifest digest differs from sealed transaction')
@@ -548,7 +532,7 @@ jobs:
               runtime = components[0].get('pre_migration_runtime_schema_contract')
               if not isinstance(runtime, dict):
                   raise SystemExit('typed pre-migration runtime contract is missing')
-              if runtime.get('database_component') != component or runtime.get('supported_schema_max') != plan.get('schema_target'):
+              if runtime.get('database_component') != component or runtime.get('supported_schema_max') != verification['schema_target']:
                   raise SystemExit('typed pre-migration runtime contract disagrees with sealed transaction target')
               if runtime.get('migration_history_digest') != plan.get('migration_lineage_digest'):
                   raise SystemExit('runtime migration history digest disagrees with sealed transaction')
@@ -559,8 +543,7 @@ jobs:
 
           def dispatch_executor(candidate, authorization):
               tx = candidate['transaction']
-              plan = tx['transaction_plan']
-              target = plan['target']
+              target = tx['transaction_plan']['target']
               component, target_manifest, current_manifest, known_good_manifest, preconditions = reconstruct_executor_manifests(candidate)
               confirmation = f"{SOURCE}:{target['environment']}:{component}:{target['database_id']}"
               payload = {
