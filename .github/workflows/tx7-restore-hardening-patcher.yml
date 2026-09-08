@@ -1,0 +1,39 @@
+name: TX-7 Restore Hardening Patcher
+
+on:
+  push:
+    branches:
+      - tx7-issue-triggered-restore
+
+permissions:
+  contents: read
+
+jobs:
+  patch:
+    if: github.actor == 'iamaman11' && github.ref == 'refs/heads/tx7-issue-triggered-restore'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Checkout exact branch source with governed workflow-capable token
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        with:
+          ref: tx7-issue-triggered-restore
+          fetch-depth: 0
+          token: ${{ secrets.GH_ADMIN_OPERATOR_TOKEN }}
+
+      - name: Apply restore transport hardening
+        run: python .github/tx7_restore_hardening.py
+
+      - name: Verify final persistent write-set and commit
+        run: |
+          set -euo pipefail
+          git diff --check
+          test ! -e .github/tx7_restore_hardening.py
+          test ! -e .github/workflows/tx7-restore-hardening-patcher.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          changed="$(git diff --cached --name-only | sort | tr '\n' ' ')"
+          test "$changed" = ".github/tx7_restore_hardening.py .github/workflows/d1-operator-comment-router.yml .github/workflows/tx7-restore-hardening-patcher.yml "
+          git commit -m 'TX-7: harden issue-triggered restore transport'
+          git push origin HEAD:tx7-issue-triggered-restore
