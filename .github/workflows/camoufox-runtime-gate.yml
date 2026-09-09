@@ -28,6 +28,11 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
+      - name: Verify exact source checkout
+        env:
+          EXPECTED_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: python -c "import os, subprocess; actual = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(); expected = os.environ['EXPECTED_SOURCE_SHA']; assert actual == expected, f'expected {expected}, got {actual}'"
+
       - name: Classify accepted-main or strictly allowlisted release-ops PR
         id: scope
         env:
