@@ -57,7 +57,14 @@
     "production_first_rollout_owner": "PC-1",
     "unknown_compatibility": "BLOCK",
     "same_environment_concurrency": "SERIALIZED",
-    "stale_plan_protection": "EXPECTED_CURRENT_FENCE"
+    "stale_plan_protection": "EXPECTED_CURRENT_FENCE",
+    "read_only_ready_before_mutation_authorization": true,
+    "ready_to_mutate_evidence_required_for_authorization": true,
+    "authorization_binds_ready_evidence": true,
+    "expected_current_refence_immediately_before_mutation": true,
+    "d1_refence_immediately_before_mutation": true,
+    "accepted_main_heavy_runtime_replay": true,
+    "pr_change_aware_runtime_gate": "FAIL_CLOSED_STRICT_RELEASE_OPS_ALLOWLIST"
   },
   "component_release_owners": [
     {"component_id":"control_plane","owner":"apps/control-plane-worker + frontend","existing_release_builder":"control-plane release builder","build_once":true},
