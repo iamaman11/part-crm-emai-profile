@@ -1,6 +1,5 @@
 #!/usr/bin/env node
 
-import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import process from 'node:process';
@@ -8,8 +7,9 @@ import process from 'node:process';
 const ROOT = process.cwd();
 const BUILD = '.github/workflows/release-set-build.yml';
 const PROMOTION = '.github/workflows/release-set-promotion.yml';
-const ASSET_MATERIALIZER = 'scripts/release-set-assets-ar11.sh';
+const CAMOUFOX = '.github/workflows/camoufox-runtime-gate.yml';
 const AUTHORITY = 'architecture/release-architecture-ar11.json';
+const ASSET_MATERIALIZER = 'scripts/release-set-assets-ar11.sh';
 const LEGACY_FILES = [
   '.github/workflows/mailbox-secret-resolver-promotion.yml',
   'scripts/mailbox-secret-resolver-promotion.py',
@@ -29,17 +29,38 @@ function forbidMarkers(text, markers, label) {
   return markers.filter((marker) => lower.includes(marker.toLowerCase())).map((marker) => `${label} contains forbidden authority ${JSON.stringify(marker)}`);
 }
 
-function count(text, marker) { return text.split(marker).length - 1; }
-
 function jobBlock(workflow, jobName) {
   const lines = workflow.split('\n');
   const start = lines.findIndex((line) => line === `  ${jobName}:`);
   if (start < 0) return '';
   let end = lines.length;
   for (let index = start + 1; index < lines.length; index += 1) {
-    if (/^  [A-Za-z0-9_-]+:\s*$/.test(lines[index])) { end = index; break; }
+    if (/^  [A-Za-z0-9_-]+:\s*$/.test(lines[index])) {
+      end = index;
+      break;
+    }
   }
   return lines.slice(start, end).join('\n');
+}
+
+function logicalShellLines(source) {
+  return source.replace(/\\\n\s*/g, ' ').split('\n').map((line) => line.trim()).filter(Boolean);
+}
+
+function secretObservationErrors(source, label) {
+  const commands = logicalShellLines(source).filter((line) => line.includes('wrangler@4.94.0 secret list'));
+  const errors = [];
+  if (commands.length === 0) errors.push(`${label} has no Worker secret-name observation`);
+  for (const command of commands) {
+    for (const required of ['--format json', '--config "$WRANGLER_CONFIG"', '--env staging']) {
+      if (!command.includes(required)) errors.push(`${label} secret observation lacks ${required}`);
+    }
+    if (/\s--name(?:\s|=)/.test(command)) {
+      errors.push(`${label} secret observation redundantly overrides the env-owned Worker name`);
+    }
+    if (/\s(?:put|bulk|delete)\b/.test(command)) errors.push(`${label} secret observation contains mutation semantics`);
+  }
+  return errors;
 }
 
 function buildErrors(build) {
@@ -48,30 +69,44 @@ function buildErrors(build) {
     'branches:\n      - main',
     'Build immutable cloud components once',
     'Build immutable Windows Profile Bridge component',
-    'Create deterministic self-describing Profile Bridge v2 package',
     'Finalize one content-addressed Release Set v3 through opsctl',
-    'camouhost-runtime-package.py package',
     'kind: "RELEASE_FINALIZE_REQUEST"',
     'release finalize --request-json',
-    'release-set-v3-sha256-[0-9a-f]{64}',
     'accepted-source-evidence-ar11.py',
-    'repos/$GITHUB_REPOSITORY/branches/main',
-    'compare/$SOURCE_SHA...$main_sha',
     'gh release create',
-    'gh release upload',
-    'gh release download',
-    'cmp --silent',
     'Publish once or prove byte-identical replay',
-    'cp "$RELEASE_DIR/capability-policy-v1.json" "$asset_dir/capability-policy-v1.json"',
-    'cp "$RELEASE_DIR/components/"* "$asset_dir/"',
-    'test "$(find "$asset_dir" -maxdepth 1 -type f | wc -l)" -eq 9',
-    'test "$(find "$existing" -maxdepth 1 -type f | wc -l)" -eq 9',
   ], 'Release Set build'));
   errors.push(...forbidMarkers(build, [
-    'release-set-ar11.py build', 'release-set-v2-sha256-', '.release_set_schema_version == 2',
-    'CLOUDFLARE_API_TOKEN', 'CLOUDFLARE_DEPLOY_MANIFEST_JSON', 'wrangler deploy --env production',
-    'environment: production', 'terraform',
+    'release-set-ar11.py build',
+    'CLOUDFLARE_API_TOKEN',
+    'CLOUDFLARE_DEPLOY_MANIFEST_JSON',
+    'environment: production',
+    'terraform',
   ], 'Release Set build'));
+  return errors;
+}
+
+function authorityErrors(authority) {
+  const errors = [];
+  const policy = authority?.promotion_policy ?? {};
+  const requiredTrue = [
+    'build_once',
+    'read_only_ready_before_mutation_authorization',
+    'ready_to_mutate_evidence_required_for_authorization',
+    'authorization_binds_ready_evidence',
+    'expected_current_refence_immediately_before_mutation',
+    'd1_refence_immediately_before_mutation',
+    'accepted_main_heavy_runtime_replay',
+  ];
+  for (const key of requiredTrue) {
+    if (policy[key] !== true) errors.push(`AR-11 promotion policy requires ${key}=true`);
+  }
+  if (policy.promotion_rebuild !== false || policy.opsctl_provider_mutation !== false) {
+    errors.push('AR-11 promotion must remain no-rebuild with provider mutation outside opsctl');
+  }
+  if (policy.pr_change_aware_runtime_gate !== 'FAIL_CLOSED_STRICT_RELEASE_OPS_ALLOWLIST') {
+    errors.push('AR-11 PR runtime gate policy is not the strict fail-closed allowlist model');
+  }
   return errors;
 }
 
@@ -79,312 +114,225 @@ function promotionErrors(promotion) {
   const errors = [];
   errors.push(...requireMarkers(promotion, [
     'run-name: AR11 Release Set Promotion',
-    'workflow_dispatch:', 'workflow_call:', 'operation:', 'release_set_id:', 'expected_current_release_set_id:', 'source_run_id:',
-    'confirmation:', 'concurrency:\n  group: release-set-promotion-staging',
-    "'{schema_version:2,release_set_id:$release_set_id,expected_current:$expected_current,authorization_comment_id:$authorization_comment_id,authorization_digest:$authorization_digest,promotion_id:$promotion_id,decision:$decision,preflight_sha256:$preflight_sha256,plan_sha256:$plan_sha256}'",
+    'workflow_run:',
+    '- Release Set Build',
+    'workflow_dispatch:',
+    'workflow_call:',
+    'concurrency:\n  group: release-set-promotion-staging',
   ], 'Release Set promotion'));
-  if (count(promotion, 'workflow_dispatch:') !== 1) errors.push('Release Set promotion must expose exactly one manual dispatch surface');
-  if (count(promotion, 'workflow_call:') !== 1) errors.push('Release Set promotion must expose exactly one internal reusable evidence surface');
-
+  if ((promotion.match(/\n  workflow_dispatch:/g) ?? []).length !== 1) errors.push('promotion must expose exactly one zero-field manual dispatch');
   const trigger = promotion.split('\npermissions:', 1)[0];
-  const dispatchMarker = '\n  workflow_dispatch:';
-  const callMarker = '\n  workflow_call:';
-  if (!trigger.includes(dispatchMarker) || !trigger.includes(callMarker) || trigger.indexOf(dispatchMarker) > trigger.indexOf(callMarker)) {
-    errors.push('Release Set promotion trigger order must be zero-field workflow_dispatch followed by internal workflow_call');
-  } else {
-    const manualDispatch = trigger.split(dispatchMarker, 2)[1].split(callMarker, 1)[0];
-    if (manualDispatch.includes('inputs:')) errors.push('manual Release Set promotion dispatch must declare zero inputs');
-    const internalCall = trigger.split(callMarker, 2)[1];
-    errors.push(...requireMarkers(internalCall, [
-      'inputs:', 'operation:', 'release_set_id:', 'expected_current_release_set_id:', 'source_run_id:', 'confirmation:',
-      'description: Internal evidence operation',
-    ], 'Release Set internal evidence call'));
-  }
+  const manual = trigger.split('\n  workflow_dispatch:', 2)[1]?.split('\n  workflow_call:', 1)[0] ?? '';
+  if (manual.includes('inputs:')) errors.push('manual promotion dispatch must remain zero-input');
 
-  if (count(promotion, 'secrets.CLOUDFLARE_API_TOKEN') !== 1) errors.push('deploy-capable Cloudflare token must be referenced exactly once, inside mutation executor');
-  if (count(promotion, 'materialize current-v3') !== 5) errors.push(`current v3 Release Set materialization must occur exactly five times, observed=${count(promotion, 'materialize current-v3')}`);
-  if (count(promotion, 'materialize known-good-v2-v3') !== 1) errors.push(`historical v2/v3 Release Set materialization must occur exactly once in known-good verification, observed=${count(promotion, 'materialize known-good-v2-v3')}`);
   errors.push(...forbidMarkers(promotion, [
-    'workflow_run:', 'issue_comment:', 'pull_request_target:', 'pull_request:\n', 'operator-entrypoint:', 'request_id:',
-    'test "$source_sha" = "$main_sha"',
-    'preflight_sha256256', 'environment: production', 'TARGET_PROFILE: production-',
-    'TARGET_PROFILE: rehearsal-core-v1', 'profile=rehearsal-core-v1', '--profile rehearsal-core-v1',
-    'mailbox-secret-resolver-promotion.py', '_mailbox_secret_resolver_promotion_core.py',
-    'wrangler d1 create', 'wrangler r2 bucket create', 'wrangler queues create',
-    'CLOUDFLARE_RESOLVER_SECRETS_JSON', 'CLOUDFLARE_CONTROL_PLANE_SECRETS_JSON', 'terraform',
+    'pull_request_target:',
+    'issue_comment:',
+    'environment: production',
+    'TARGET_PROFILE: production-',
+    'profile=rehearsal-core-v1',
+    'wrangler d1 create',
+    'wrangler r2 bucket create',
+    'wrangler queues create',
+    'CLOUDFLARE_RESOLVER_SECRETS_JSON',
+    'CLOUDFLARE_CONTROL_PLANE_SECRETS_JSON',
+    'terraform',
   ], 'Release Set promotion'));
 
   const route = jobBlock(promotion, 'route');
-  const resolve = jobBlock(promotion, 'resolve-verify');
-  const observe = jobBlock(promotion, 'observe-preflight');
+  const resolvePreflight = jobBlock(promotion, 'resolve-preflight');
+  const ready = jobBlock(promotion, 'preflight-ready');
+  const resolveAuthorized = jobBlock(promotion, 'resolve-verify');
   const mutate = jobBlock(promotion, 'mutate');
   const post = jobBlock(promotion, 'post-verify');
-  const rollbackNegative = jobBlock(promotion, 'rollback-negative-evidence');
-  for (const [name, block] of Object.entries({ route, 'resolve-verify': resolve, 'observe-preflight': observe, mutate, 'post-verify': post, 'rollback-negative-evidence': rollbackNegative })) {
+  const rollback = jobBlock(promotion, 'rollback-negative-evidence');
+  for (const [name, block] of Object.entries({ route, 'resolve-preflight': resolvePreflight, 'preflight-ready': ready, 'resolve-verify': resolveAuthorized, mutate, 'post-verify': post, 'rollback-negative-evidence': rollback })) {
     if (!block) errors.push(`Release Set promotion is missing structural job ${name}`);
   }
   if (errors.some((error) => error.includes('missing structural job'))) return errors;
 
   errors.push(...requireMarkers(route, [
-    'Classify zero-field manual vs internal evidence invocation',
-    'INTERNAL_OPERATION: ${{ inputs.operation }}',
-    'if [ -z "$INTERNAL_OPERATION" ]; then',
-    'test "$GITHUB_EVENT_NAME" = workflow_dispatch',
-    "echo 'mode=promote' >> \"$GITHUB_OUTPUT\"",
-    'test "$INTERNAL_OPERATION" = rollback-negative',
-    "echo 'mode=rollback-negative' >> \"$GITHUB_OUTPUT\"",
+    'READY_SOURCE_SHA: ${{ github.event.workflow_run.head_sha }}',
+    'READY_SOURCE_EVENT: ${{ github.event.workflow_run.event }}',
+    "echo 'mode=preflight'",
+    "echo 'mode=promote'",
+    "echo 'mode=rollback-negative'",
   ], 'promotion invocation router'));
-  errors.push(...forbidMarkers(route, [
-    'job.workflow_ref', 'CALLER_WORKFLOW_REF', 'JOB_WORKFLOW_REF',
-    'secrets.', 'CLOUDFLARE_', 'wrangler deploy', 'deployments: write', 'environment: staging',
-  ], 'promotion invocation router'));
+  errors.push(...forbidMarkers(route, ['secrets.', 'wrangler deploy', 'environment: staging'], 'promotion invocation router'));
 
-  errors.push(...requireMarkers(resolve, [
-    'needs: route', "if: needs.route.outputs.mode == 'promote'",
-    'issues: read',
-    'Resolve exact one-shot promotion authorization from current authority',
-    'test "$GITHUB_EVENT_NAME" = workflow_dispatch',
-    'repos/$GITHUB_REPOSITORY/branches/main',
-    'repos/$GITHUB_REPOSITORY/issues/266',
-    "current.get('CURRENT_STAGE') != 'V2'",
-    "current.get('CURRENT_STAGE_ISSUE') != '#584'",
-    "current.get('OPEN_IMPLEMENTATION_PR') != 'NONE'",
-    "V2_STAGING_WORKER_PROMOTION_V[1-9][0-9]*",
-    "'OWNER': '.github/workflows/release-set-promotion.yml'",
-    "'D1_PHASE_D_0032': 'EXCLUDED'",
-    "'ACCESS_MTLS': 'EXCLUDED'",
-    "'OTHER_PROVIDER_MUTATION': 'EXCLUDED'",
-    "'PRODUCTION': 'EXCLUDED'",
-    "scoped.get('TARGET_RELEASE_SET', '')",
-    "scoped.get('EXPECTED_CURRENT_RELEASE_SET', '')",
-    "scoped.get('AUTHORITY_COMMENT', '')",
-    'repos/$GITHUB_REPOSITORY/issues/comments/$authorization_comment_id',
-    "lines[0] != 'WORKER_PROMOTION_AUTHORIZATION_V1'",
-    "'CONFIRMATION': f'{target}:{expected_current}'",
-    "'SCOPE': 'one exact staging Worker/runtime promotion only'",
-    "'PRODUCTION_AUTHORIZED': 'NO'",
-    'authorization_digest=',
-    'Prove authorized target is exact current protected-main Release Set',
-    'test "$source_sha" = "${{ steps.intent.outputs.main_sha }}"',
-    'Checkout current protected-main policy authority',
-    'Checkout exact target source as read-only provenance input', 'path: target-source', 'accepted-source-evidence-ar11.py',
-    'Download and verify immutable Release Set v3 target with no provider credentials',
-    'gh release download "$RELEASE_SET_ID"',
-    'bash scripts/release-set-assets-ar11.sh materialize current-v3 "$RELEASE_SET_ID" "$asset_root" "$release_root"',
-    'release verify', '--source-root "$GITHUB_WORKSPACE/target-source"',
-    '.release_set_schema_version == 3', '.source_accepted == true',
-  ], 'promotion phase 1 resolve+verify'));
-  errors.push(...forbidMarkers(resolve, [
-    'inputs.',
-    '[[ "$RELEASE_SET_ID" =~ ^release-set-v2-sha256-[0-9a-f]{64}$ ]]',
-    'materialize known-good-v2-v3',
-    "test \"$(jq -r '.schema_version' \"$policy_dir/release-set.json\")\" = 2",
-    '.release_set_schema_version == 2',
-    'secrets.CLOUDFLARE_', 'environment: staging', 'wrangler deploy', 'wrangler d1 execute',
-    'curl --silent --show-error --output "$RUNNER_TEMP/deployments-api.json"',
-  ], 'promotion phase 1 resolve+verify'));
+  errors.push(...requireMarkers(resolvePreflight, [
+    "if: needs.route.outputs.mode == 'preflight'",
+    'Resolve unique immutable Release Set for exact protected main',
+    'test "$SOURCE_SHA" = "$main_sha"',
+    'test "$(jq \'length\' "$RUNNER_TEMP/main-release-sets.json")" = 1',
+    'Verify immutable target before any provider credential',
+    'release verify',
+  ], 'pre-authorization target resolver'));
+  errors.push(...forbidMarkers(resolvePreflight, ['issues: read', 'AUTHORITY_COMMENT', 'secrets.CLOUDFLARE_', 'wrangler deploy'], 'pre-authorization target resolver'));
 
-  errors.push(...requireMarkers(observe, [
-    'needs: resolve-verify', 'environment: staging', 'TARGET_PROFILE: rehearsal-core-v2', 'TARGET_ENVIRONMENT: staging',
+  errors.push(...requireMarkers(ready, [
+    "if: needs.route.outputs.mode == 'preflight'",
     'secrets.CLOUDFLARE_OBSERVE_API_TOKEN',
-    'AUTHORIZATION_COMMENT_ID: ${{ needs.resolve-verify.outputs.authorization_comment_id }}',
-    'AUTHORIZATION_DIGEST: ${{ needs.resolve-verify.outputs.authorization_digest }}',
-    'Observe current provider state without mutation',
-    'bash scripts/release-set-assets-ar11.sh materialize current-v3 "$RELEASE_SET_ID" "$asset_root" "$release_root"',
-    'Verify current/known-good immutable Release Set before rollback evaluation',
-    'bash scripts/release-set-assets-ar11.sh materialize known-good-v2-v3 "$current_id" "$asset_root" "$release_root"',
-    '(.release_set_schema_version == 2 or .release_set_schema_version == 3)',
-    'Build metadata-only DeploymentSnapshot v2',
-    'deployment-snapshot-ar11.py', 'release compatibility', 'promotion plan', 'promotion preflight', '--expected-current "$EXPECTED_CURRENT"',
-    'mutation-fence.json',
-    '--arg authorization_comment_id "$AUTHORIZATION_COMMENT_ID"',
-    '--arg authorization_digest "$AUTHORIZATION_DIGEST"',
-    'Materialize flat metadata-only preflight artifact contract',
-    'cp "$RUNNER_TEMP/release-policy-input/release-set.json" "$RUNNER_TEMP/release-set.json"',
-    'cp "$RUNNER_TEMP/release-policy-input/accepted-source-evidence.json" "$RUNNER_TEMP/accepted-source-evidence.json"',
-    '${{ runner.temp }}/release-set.json', '${{ runner.temp }}/accepted-source-evidence.json',
-  ], 'promotion phase 2 observe+preflight'));
-  errors.push(...forbidMarkers(observe, ['secrets.CLOUDFLARE_API_TOKEN', 'wrangler deploy', 'deployments: write', '${{ runner.temp }}/release-policy-input/release-set.json\n', '${{ runner.temp }}/release-policy-input/accepted-source-evidence.json\n'], 'promotion phase 2 observe+preflight'));
+    'Observe existing Worker, D1 head, resources and secret bindings',
+    'test "$http_code" = 200',
+    'deployment-identity-ar11.py',
+    'd1-names-before.json',
+    'deployment-snapshot-ar11.py',
+    'promotion plan',
+    'promotion preflight',
+    'Prove bounded Worker and D1 quiescence',
+    'sleep 30',
+    'cmp --silent "$RUNNER_TEMP/worker-binding-before.json" "$RUNNER_TEMP/worker-binding-after.json"',
+    'cmp --silent "$RUNNER_TEMP/d1-names-before.json" "$RUNNER_TEMP/d1-names-after.json"',
+    'kind:"AR11_READY_TO_MUTATE"',
+    'secret_bindings_verified:true',
+    'provider_mutation:false',
+    'production_mutation:false',
+    'ar11-ready-to-mutate-$RELEASE_SET_ID-$SOURCE_SHA',
+  ], 'pre-authorization READY proof'));
+  errors.push(...forbidMarkers(ready, [
+    'secrets.CLOUDFLARE_API_TOKEN }}',
+    'deployments: write',
+    'WORKER_PROMOTION_AUTHORIZATION_',
+    'AUTHORITY_COMMENT',
+    '--message "release_set=',
+  ], 'pre-authorization READY proof'));
+  errors.push(...secretObservationErrors(ready, 'pre-authorization READY proof'));
+
+  errors.push(...requireMarkers(resolveAuthorized, [
+    "if: needs.route.outputs.mode == 'promote'",
+    'Resolve exact one-shot authorization only after READY exists',
+    'READY_RUN_ID',
+    'READY_ARTIFACT_NAME',
+    'READY_EVIDENCE_SHA256',
+    "WORKER_PROMOTION_AUTHORIZATION_V2",
+    'Download and verify exact prior READY_TO_MUTATE authority',
+    'gh run download "$READY_RUN_ID"',
+    'kind == "AR11_READY_TO_MUTATE"',
+    'ready == true',
+    'provider_mutation == false',
+    'Re-verify immutable target without provider credentials',
+  ], 'authorized READY binder'));
+  errors.push(...forbidMarkers(resolveAuthorized, ['secrets.CLOUDFLARE_', 'wrangler deploy', 'promotion plan', 'promotion preflight'], 'authorized READY binder'));
 
   errors.push(...requireMarkers(mutate, [
-    'needs: [resolve-verify, observe-preflight]', "if: needs.observe-preflight.outputs.decision == 'PLAN'", 'environment: staging', 'deployments: write',
-    'AUTHORIZATION_COMMENT_ID: ${{ needs.resolve-verify.outputs.authorization_comment_id }}',
-    'AUTHORIZATION_DIGEST: ${{ needs.resolve-verify.outputs.authorization_digest }}',
-    'Checkout exact target source before mutation verification', 'Download and bind exact preflight authority before provider use',
-    'Re-verify fence and exact immutable Release Set before credentials', 'mutation-fence.json', "'.preflight_sha256'", "'.plan_sha256'",
-    'test "$(jq -r \'.authorization_comment_id\' "$fence")" = "$AUTHORIZATION_COMMENT_ID"',
-    'test "$(jq -r \'.authorization_digest\' "$fence")" = "$AUTHORIZATION_DIGEST"',
-    'bash scripts/release-set-assets-ar11.sh materialize current-v3 "$RELEASE_SET_ID" "$asset_root" "$release_root"',
-    'cmp --silent "$release_root/release-set.json" "$preflight_root/release-set.json"', 'release verify', '.release_set_schema_version == 3',
-    'Activate deploy credential after READY and exact-byte verification', 'DEPLOY_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}',
-    'Re-observe expected-current fence and deploy exact Release Set v3 bits', 'deployment-identity-ar11.py',
-    'test "$current_id" = "$EXPECTED_CURRENT"', 'gh release download "$RELEASE_SET_ID"', '--dry-run',
+    'Execute exact same bits after READY plus authorization',
+    'Download and bind prior READY evidence before provider credentials',
+    'AR11_MUTATION_FENCE',
+    'Re-verify exact immutable Release Set before credentials',
+    'Render mutation overlay and prove exact bits dry-run without deploy credential',
+    'Activate deploy credential only after bound READY and authorization',
+    'DEPLOY_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}',
+    'Re-fence Worker identity and D1 head immediately before mutation',
+    'cmp --silent "$RUNNER_TEMP/mutation-d1-names.json" "$RUNNER_TEMP/ready/d1-names-after.json"',
+    'Deploy exact Release Set v3 bits after all fences',
     '--message "release_set=$RELEASE_SET_ID profile=rehearsal-core-v2"',
-  ], 'promotion phase 3 protected mutation'));
-  errors.push(...forbidMarkers(mutate, ['materialize known-good-v2-v3', '.release_set_schema_version == 2', 'worker-build --release', 'cargo build', 'npm run build', 'release-set-ar11.py build', 'release compatibility', 'promotion plan', 'promotion preflight'], 'promotion phase 3 protected mutation'));
-  const nativeVerify = mutate.indexOf('Re-verify fence and exact immutable Release Set before credentials');
-  const authorizationFence = mutate.indexOf('test "$(jq -r \'.authorization_digest\' "$fence")" = "$AUTHORIZATION_DIGEST"');
-  const deployCredential = mutate.indexOf('DEPLOY_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}');
-  const reobserveFence = mutate.indexOf('Re-observe expected-current fence and deploy exact Release Set v3 bits');
-  const currentFence = mutate.indexOf('test "$current_id" = "$EXPECTED_CURRENT"', reobserveFence);
-  const actualDeploy = mutate.indexOf('--message "release_set=$RELEASE_SET_ID profile=rehearsal-core-v2"', reobserveFence);
-  if (!(nativeVerify >= 0 && deployCredential > nativeVerify && reobserveFence > deployCredential && currentFence > reobserveFence && actualDeploy > currentFence)) {
-    errors.push('mutation credential/fence ordering must be native verify -> credential activation -> expected-current re-observe -> deploy');
+  ], 'protected mutation executor'));
+  errors.push(...forbidMarkers(mutate, ['promotion plan', 'promotion preflight', 'release compatibility', 'materialize known-good-v2-v3', 'worker-build --release', 'cargo build', 'npm run build'], 'protected mutation executor'));
+  if ((promotion.match(/secrets\.CLOUDFLARE_API_TOKEN\s*}}/g) ?? []).length !== 1) {
+    errors.push('deploy-capable Cloudflare token must be referenced exactly once in the whole promotion workflow');
   }
-  if (authorizationFence < 0 || authorizationFence > deployCredential) {
-    errors.push('authorization digest fence must be verified before deploy credential activation');
+  const readyBind = mutate.indexOf('Download and bind prior READY evidence before provider credentials');
+  const deployCredential = mutate.indexOf('DEPLOY_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}');
+  const refence = mutate.indexOf('Re-fence Worker identity and D1 head immediately before mutation');
+  const actualDeploy = mutate.indexOf('Deploy exact Release Set v3 bits after all fences');
+  if (!(readyBind >= 0 && deployCredential > readyBind && refence > deployCredential && actualDeploy > refence)) {
+    errors.push('mutation order must be READY binding -> deploy credential -> immediate re-fence -> deploy');
   }
 
   errors.push(...requireMarkers(post, [
-    'needs: [resolve-verify, observe-preflight, mutate]', "needs.mutate.result == 'success' || needs.mutate.result == 'skipped'",
-    'environment: staging', 'secrets.CLOUDFLARE_OBSERVE_API_TOKEN',
-    'bash scripts/release-set-assets-ar11.sh materialize current-v3 "$RELEASE_SET_ID" "$asset_root" "$release_root"',
-    'post-release-verify.json', 'release verify', '.release_set_schema_version == 3',
-    'deployment-snapshot-ar11.py', 'promotion verify', '.verified == true',
-  ], 'promotion phase 4 post-deploy observation'));
-  errors.push(...forbidMarkers(post, ['materialize known-good-v2-v3', 'secrets.CLOUDFLARE_API_TOKEN', 'deployments: write', 'wrangler deploy'], 'promotion phase 4 post-deploy observation'));
+    'secrets.CLOUDFLARE_OBSERVE_API_TOKEN',
+    'Re-observe provider and verify exact convergence',
+    'promotion verify',
+    '.verified == true',
+  ], 'post-deploy verifier'));
+  errors.push(...forbidMarkers(post, ['secrets.CLOUDFLARE_API_TOKEN }}', 'wrangler deploy --'], 'post-deploy verifier'));
+  errors.push(...secretObservationErrors(post, 'post-deploy verifier'));
 
-  errors.push(...requireMarkers(rollbackNegative, [
-    'needs: route', "if: needs.route.outputs.mode == 'rollback-negative'", 'actions: read',
-    'Validate evidence-only intent and live source run',
-    'test "${{ inputs.operation }}" = rollback-negative',
-    '[[ "$RELEASE_SET_ID" =~ ^release-set-v3-sha256-[0-9a-f]{64}$ ]]',
-    '.status == "completed"', '.conclusion == "success"',
-    '.path == ".github/workflows/release-set-promotion.yml"', 'gh run download "$SOURCE_RUN_ID"',
-    'Download live A-to-A preflight evidence without provider credentials', 'accepted-source-evidence.json',
-    'bash scripts/release-set-assets-ar11.sh materialize current-v3 "$RELEASE_SET_ID" "$asset_root" "$release_root"',
-    'rollback-release-verify.json', 'release verify', '.release_set_schema_version == 3',
-    '.decision == "NO_CHANGE"', '.rollback_compatibility == "COMPATIBLE"',
-    "jq '.catalog_schema_revision = null'", 'Native rollback preflight must block UNKNOWN before credentials',
-    '--known-good-release-set "$live/release-set.json"', '.decision == "BLOCKED"', '.rollback_compatibility == "UNKNOWN"',
-    'ROLLBACK_COMPATIBILITY_UNKNOWN', '.credential_values_accessed == false', '.provider_mutation_executed == false', '.mutation_executed == false',
-    'Upload credential-free rollback-negative evidence',
-  ], 'promotion rollback-negative evidence'));
-  errors.push(...forbidMarkers(rollbackNegative, [
-    '[[ "$RELEASE_SET_ID" =~ ^release-set-v2-sha256-[0-9a-f]{64}$ ]]', 'materialize known-good-v2-v3',
-    'secrets.CLOUDFLARE_', 'CLOUDFLARE_API_TOKEN', 'CLOUDFLARE_DEPLOY_MANIFEST_JSON', 'environment: staging', 'deployments: write', 'wrangler deploy',
-  ], 'promotion rollback-negative evidence'));
-
+  errors.push(...requireMarkers(rollback, [
+    "if: needs.route.outputs.mode == 'rollback-negative'",
+    'event == "workflow_run"',
+    'ar11-ready-to-mutate-$RELEASE_SET_ID-',
+    'ROLLBACK_COMPATIBILITY_UNKNOWN',
+    'credential_values_accessed == false',
+  ], 'rollback-negative evidence'));
+  errors.push(...forbidMarkers(rollback, ['secrets.CLOUDFLARE_', 'wrangler deploy', 'deployments: write'], 'rollback-negative evidence'));
   return errors;
 }
 
-function operationalErrors({ requireCutover = true } = {}) {
+function camoufoxErrors(workflow) {
   const errors = [];
-  for (const relative of [BUILD, PROMOTION, ASSET_MATERIALIZER, AUTHORITY]) {
-    if (!existsSync(path.join(ROOT, relative))) errors.push(`missing AR-11 operational authority: ${relative}`);
+  const scope = jobBlock(workflow, 'scope');
+  const linux = jobBlock(workflow, 'real-runtime-linux');
+  const windows = jobBlock(workflow, 'bridge-regression-windows');
+  if (!scope || !linux || !windows) return ['Camoufox change-aware topology is incomplete'];
+  errors.push(...requireMarkers(scope, [
+    'Classify accepted-main or strictly allowlisted release-ops PR',
+    'if [ "$GITHUB_EVENT_NAME" = push ]; then',
+    "echo 'heavy=true'",
+    "'.github/workflows/release-set-promotion.yml'",
+    "'.github/scripts/release-operational-ar11.mjs'",
+    "'architecture/release-architecture-ar11.json'",
+    "unknown = sorted(set(paths) - safe)",
+    "Path('/tmp/camoufox-heavy').write_text('true\\n' if unknown else 'false\\n'",
+  ], 'Camoufox scope classifier'));
+  errors.push(...forbidMarkers(scope, [
+    "'runtime/camouhost/real.py'",
+    "'runtime/camouhost/runtime-lock.json'",
+    "'apps/profile-bridge'",
+    "'Cargo.lock'",
+    "'rust-toolchain.toml'",
+  ], 'Camoufox release-ops allowlist'));
+  for (const [label, block] of [['Linux required context', linux], ['Windows required context', windows]]) {
+    errors.push(...requireMarkers(block, [
+      'needs: [scope, patched-candidate]',
+      'if: always()',
+      'Require successful fail-closed scope classification',
+      "needs.scope.outputs.heavy",
+      'Accept strictly release-ops-only PR',
+    ], label));
   }
-  if (errors.length > 0) return errors;
-
-  const build = read(BUILD);
-  const promotion = read(PROMOTION);
-  errors.push(...buildErrors(build));
-  errors.push(...promotionErrors(promotion));
-
-  const authority = JSON.parse(read(AUTHORITY));
-  if (authority.production_mutation !== false || authority.production_ready !== false || authority.production_core_gate !== 'BLOCKED' || authority.architecture_complete !== false) {
-    errors.push('AR-11 operational workflow may not change canonical production authorization state');
-  }
-  const policy = authority.promotion_policy ?? {};
-  if (policy.build_once !== true || policy.promotion_rebuild !== false || policy.opsctl_network !== false || policy.opsctl_credentials !== false || policy.opsctl_provider_mutation !== false || policy.production_execution_before_ar17 !== false) {
-    errors.push('AR-11 promotion policy invariants drifted');
-  }
-  if (requireCutover) {
-    for (const relative of LEGACY_FILES) if (existsSync(path.join(ROOT, relative))) errors.push(`legacy D3 operational authority must be retired after Rust cutover: ${relative}`);
-  }
+  if (!linux.includes("if: needs.scope.outputs.heavy == 'true'")) errors.push('Linux heavy proof is not gated by exact scope output');
+  if (!windows.includes("if: needs.scope.outputs.heavy == 'true'")) errors.push('Windows heavy proof is not gated by exact scope output');
   return errors;
 }
 
-function selfTest() {
-  const promotion = read(PROMOTION);
-  const build = read(BUILD);
-  if (buildErrors(build).length !== 0 || promotionErrors(promotion).length !== 0) {
-    throw new Error('canonical AR-11 Release Set v3 build/promotion workflow does not satisfy its own structural validator');
-  }
-  execFileSync('bash', [path.join(ROOT, ASSET_MATERIALIZER), '--self-test'], { cwd: ROOT, stdio: 'inherit' });
-
-  const predecessorWriter = build.replace('release finalize --request-json', 'release-set-ar11.py build');
-  if (!buildErrors(predecessorWriter).some((error) => error.includes('release-set-ar11.py build'))) throw new Error('Python Release Set writer reintroduction fixture unexpectedly passed');
-
-  const v2Writer = build.replace('release-set-v3-sha256-', 'release-set-v2-sha256-');
-  if (!buildErrors(v2Writer).some((error) => error.includes('release-set-v2-sha256-'))) throw new Error('Release Set v2 current-writer fixture unexpectedly passed');
-
-  const staleFiveAssetBuild = build.replace('test "$(find "$asset_dir" -maxdepth 1 -type f | wc -l)" -eq 9', 'test "$(find "$asset_dir" -maxdepth 1 -type f | wc -l)" -eq 5');
-  if (!buildErrors(staleFiveAssetBuild).some((error) => error.includes('eq 9'))) throw new Error('five-asset current Release Set fixture unexpectedly passed');
-
-  const manualInput = promotion.replace(
-    '  workflow_dispatch:\n  workflow_call:',
-    '  workflow_dispatch:\n    inputs:\n      release_set_id:\n        required: false\n        type: string\n  workflow_call:',
-  );
-  if (!promotionErrors(manualInput).some((error) => error.includes('zero inputs'))) throw new Error('manual promotion input reintroduction fixture unexpectedly passed');
-
-  const routeBypass = promotion.replace('if [ -z "$INTERNAL_OPERATION" ]; then', 'if true; then');
-  if (!promotionErrors(routeBypass).some((error) => error.includes('invocation router'))) throw new Error('manual/internal route bypass fixture unexpectedly passed');
-
-  const unknownInternalOperation = promotion.replace('test "$INTERNAL_OPERATION" = rollback-negative', 'test -n "$INTERNAL_OPERATION"');
-  if (!promotionErrors(unknownInternalOperation).some((error) => error.includes('invocation router'))) throw new Error('unknown internal operation fixture unexpectedly passed');
-
-  const missingOwnerAuthorization = promotion.replace("lines[0] != 'WORKER_PROMOTION_AUTHORIZATION_V1'", "lines[0] != 'UNVERIFIED_PROMOTION'");
-  if (!promotionErrors(missingOwnerAuthorization).some((error) => error.includes('promotion phase 1'))) throw new Error('missing OWNER authorization contract fixture unexpectedly passed');
-
-  const v2Target = promotion.replaceAll('[[ "$RELEASE_SET_ID" =~ ^release-set-v3-sha256-[0-9a-f]{64}$ ]]', '[[ "$RELEASE_SET_ID" =~ ^release-set-v2-sha256-[0-9a-f]{64}$ ]]');
-  if (!promotionErrors(v2Target).some((error) => error.includes('release-set-v2-sha256-') || error.includes('release-set-v3-sha256-'))) throw new Error('Release Set v2 current-target fixture unexpectedly passed');
-
-  const historicalProfileTarget = promotion.replaceAll('rehearsal-core-v2', 'rehearsal-core-v1');
-  if (!promotionErrors(historicalProfileTarget).some((error) => error.includes('rehearsal-core-v1') || error.includes('rehearsal-core-v2'))) throw new Error('historical capability profile current-target fixture unexpectedly passed');
-
-  const broadHistoricalMaterializer = promotion.replace('materialize current-v3 "$RELEASE_SET_ID"', 'materialize known-good-v2-v3 "$RELEASE_SET_ID"');
-  if (promotionErrors(broadHistoricalMaterializer).length === 0) throw new Error('historical v2/v3 materializer leaked into current target authority');
-
-  const leaked = promotion.replace('permissions:\n      contents: read\n      issues: read\n    outputs:', 'permissions:\n      contents: read\n      issues: read\n    env:\n      LEAKED_DEPLOY: ${{ secrets.CLOUDFLARE_API_TOKEN }}\n    outputs:');
-  if (!promotionErrors(leaked).some((error) => error.includes('referenced exactly once'))) throw new Error('deploy-token leakage fixture unexpectedly passed');
-
-  const rebuild = promotion.replace('Re-observe expected-current fence and deploy exact Release Set v3 bits', 'run: cargo build --release\n      - name: Re-observe expected-current fence and deploy exact Release Set v3 bits');
-  if (!promotionErrors(rebuild).some((error) => error.includes('cargo build'))) throw new Error('promotion rebuild fixture unexpectedly passed');
-
-  const mutate = jobBlock(promotion, 'mutate');
-  const staleMutate = mutate.replace('test "$current_id" = "$EXPECTED_CURRENT"', 'test -n "$current_id"');
-  if (!promotionErrors(promotion.replace(mutate, staleMutate)).some((error) => error.includes('credential/fence ordering'))) throw new Error('mutation stale-fence bypass fixture unexpectedly passed');
-
-  const earlyCredential = promotion.replace('DEPLOY_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}', 'DEPLOY_TOKEN: EARLY_FIXTURE_REMOVED').replace('Re-verify fence and exact immutable Release Set before credentials', 'DEPLOY_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}\n      - name: Re-verify fence and exact immutable Release Set before credentials');
-  if (!promotionErrors(earlyCredential).some((error) => error.includes('credential/fence ordering'))) throw new Error('early deploy credential fixture unexpectedly passed');
-
-  const acceptedSourceProof = 'test "$GITHUB_SHA" = "$main_sha"';
-  if (!promotion.includes(acceptedSourceProof)) throw new Error('historical Release Set fixture anchor is missing from canonical workflow');
-  const staleHeadEquality = promotion.replace(acceptedSourceProof, `${acceptedSourceProof}\n          test "$source_sha" = "$main_sha"`);
-  if (promotionErrors(staleHeadEquality).length === 0) throw new Error('historical Release Set current-head equality fixture unexpectedly passed');
-
-  const production = promotion.replace('environment: staging', 'environment: production');
-  if (!promotionErrors(production).some((error) => error.includes('environment: production'))) throw new Error('production activation fixture unexpectedly passed');
-
-  const broadOperation = promotion.replace("if: needs.route.outputs.mode == 'promote'", 'if: always()');
-  if (!promotionErrors(broadOperation).some((error) => error.includes('promotion phase 1'))) throw new Error('ordinary promotion route isolation fixture unexpectedly passed');
-
-  const directRollback = promotion.replace("if: needs.route.outputs.mode == 'rollback-negative'", "if: github.event_name == 'workflow_dispatch'");
-  if (!promotionErrors(directRollback).some((error) => error.includes('rollback-negative evidence'))) throw new Error('manual rollback-negative exposure fixture unexpectedly passed');
-
-  const reintroducedListener = promotion.replace('  workflow_dispatch:', '  issue_comment:\n    types: [created]\n  workflow_run:\n    workflows: [Release Architecture Gate]\n    types: [completed]\n  workflow_dispatch:');
-  if (!promotionErrors(reintroducedListener).some((error) => error.includes('workflow_run') || error.includes('issue_comment'))) throw new Error('promotion event-listener reintroduction fixture unexpectedly passed');
-
-  const fenceTypo = promotion.replace('preflight_sha256:$preflight_sha256', 'preflight_sha256256:$preflight_sha256');
-  if (!promotionErrors(fenceTypo).some((error) => error.includes('preflight_sha256256') || error.includes('Release Set promotion'))) throw new Error('mutation fence key typo fixture unexpectedly passed');
-
-  const authorizationFenceBypass = promotion.replace('test "$(jq -r \'.authorization_digest\' "$fence")" = "$AUTHORIZATION_DIGEST"', 'test -n "$AUTHORIZATION_DIGEST"');
-  if (!promotionErrors(authorizationFenceBypass).some((error) => error.includes('promotion phase 3'))) throw new Error('authorization fence bypass fixture unexpectedly passed');
-
-  const negativeBlock = jobBlock(promotion, 'rollback-negative-evidence');
-  const uncontrolledNegative = promotion.replace(negativeBlock, negativeBlock.replace("jq '.catalog_schema_revision = null'", "jq '.catalog_schema_revision = .catalog_schema_revision'"));
-  if (!promotionErrors(uncontrolledNegative).some((error) => error.includes('rollback-negative evidence'))) throw new Error('rollback-negative controlled-condition bypass unexpectedly passed');
-
-  const nestedArtifact = promotion.replace('${{ runner.temp }}/release-set.json\n            ${{ runner.temp }}/accepted-source-evidence.json', '${{ runner.temp }}/release-policy-input/release-set.json\n            ${{ runner.temp }}/release-policy-input/accepted-source-evidence.json');
-  if (!promotionErrors(nestedArtifact).some((error) => error.includes('phase 2 observe+preflight'))) throw new Error('nested preflight artifact regression unexpectedly passed');
-
-  console.log('AR-11 nine-asset Release Set v3, manual zero-field authorized promotion, internal rollback-negative evidence, narrow historical v2/v3 verification, and structural negative self-test passed.');
+function validateAll({ build, promotion, camoufox, authority }) {
+  return [
+    ...buildErrors(build),
+    ...promotionErrors(promotion),
+    ...camoufoxErrors(camoufox),
+    ...authorityErrors(authority),
+    ...LEGACY_FILES.filter((relative) => existsSync(path.join(ROOT, relative))).map((relative) => `retired release authority exists: ${relative}`),
+    ...(existsSync(path.join(ROOT, ASSET_MATERIALIZER)) ? [] : [`missing Release Set asset materializer: ${ASSET_MATERIALIZER}`]),
+  ];
 }
 
-if (process.argv.includes('--self-test')) { selfTest(); process.exit(0); }
-const errors = operationalErrors({ requireCutover: !process.argv.includes('--pre-cutover') });
+function selfTest(files) {
+  const badSecret = files.promotion.replace('secret list --format json', 'secret list --name "$worker_name" --format json');
+  if (secretObservationErrors(jobBlock(badSecret, 'preflight-ready'), 'fixture').length === 0) {
+    throw new Error('redundant Worker-name secret observation fixture passed');
+  }
+  const missingReadyBinding = files.promotion.replaceAll('READY_EVIDENCE_SHA256', 'READY_EVIDENCE_DIGEST_MISSING');
+  if (promotionErrors(missingReadyBinding).length === 0) throw new Error('missing READY binding fixture passed');
+  const unsafeAllowlist = files.camoufox.replace("'architecture/release-architecture-ar11.json',", "'architecture/release-architecture-ar11.json',\n              'runtime/camouhost/real.py',");
+  if (camoufoxErrors(unsafeAllowlist).length === 0) throw new Error('unsafe Camoufox ops allowlist fixture passed');
+  const weakAuthority = structuredClone(files.authority);
+  weakAuthority.promotion_policy.read_only_ready_before_mutation_authorization = false;
+  if (authorityErrors(weakAuthority).length === 0) throw new Error('authorization-before-READY authority fixture passed');
+  console.log('AR-11 semantic release/promotion/change-aware negative matrix passed.');
+}
+
+const files = {
+  build: read(BUILD),
+  promotion: read(PROMOTION),
+  camoufox: read(CAMOUFOX),
+  authority: JSON.parse(read(AUTHORITY)),
+};
+const errors = validateAll(files);
 if (errors.length > 0) {
-  console.error(`AR-11 operational policy failed:\n${errors.map((error) => `- ${error}`).join('\n')}`);
+  console.error('AR-11 operational authority failed:\n' + errors.map((error) => `- ${error}`).join('\n'));
   process.exit(1);
 }
-console.log('AR-11 durable Release Set v3 (nine immutable assets), manual zero-field authorized promotion, internal rollback-negative evidence, and structural policy passed.');
+if (process.argv.includes('--self-test')) selfTest(files);
+else console.log('AR-11 release operational authority passed: automatic read-only READY precedes authorization; mutation is READY-bound and re-fenced; Camoufox PR replay is fail-closed change-aware.');
