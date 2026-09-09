@@ -100,16 +100,20 @@ HUMAN_INTERACTION_BUDGET <= ONE_SIMPLE_UI_ACTION
 
 If the available integration can dispatch the canonical operation directly, require no additional
 human action. If it cannot dispatch but GitHub exposes the canonical manual Action, the maximum fallback
-is to ask the user to open the already prepared Action and press `Run workflow` with ordinary defaults.
-Do not ask the user to transcribe or assemble source/tree SHAs, Release Set IDs, TransactionIds,
-`expected_current`, database IDs, digests, JSON payloads, request IDs or derived confirmation strings
-when those values can be resolved mechanically.
+is to ask the user to open the already prepared Action and press `Run workflow`. For an ordinary GitHub
+`workflow_dispatch` surface, **zero-input means the manual dispatch schema itself declares no user
+inputs**: the GitHub UI must not expose unrelated advanced/evidence/recovery fields merely because the
+ordinary path would ignore or default them. Do not ask the user to transcribe or assemble source/tree
+SHAs, Release Set IDs, TransactionIds, `expected_current`, database IDs, digests, JSON payloads,
+request IDs or derived confirmation strings when those values can be resolved mechanically.
 
-A canonical workflow may retain explicitly labeled advanced/evidence/recovery inputs only when they are
-genuine non-derivable inputs for that non-ordinary mode. The default ordinary path must not require
-filling them. Preserve every existing authorization, freshness, target-fence, replay and fail-closed
-guarantee by resolving and verifying those facts inside the existing natural owner; do not satisfy this
-rule by adding a second wrapper/controller, a mutable status database or a weaker confirmation path.
+Advanced/evidence/recovery parameters may exist only on a non-operator/internal surface of the same
+natural owner — for example `workflow_call` — or another already-owned non-manual contract. Keep that
+surface structurally isolated from the ordinary manual effect path and fail closed if invocation mode
+is ambiguous. Preserve every existing authorization, freshness, target-fence, replay and fail-closed
+guarantee by resolving and verifying machine-known facts inside the existing natural owner; do not
+satisfy this rule by adding a second wrapper/controller, a mutable status database, a duplicate
+mutation path or a weaker confirmation path.
 
 ## 2. One CURRENT stage at a time
 
