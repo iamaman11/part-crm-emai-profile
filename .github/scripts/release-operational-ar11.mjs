@@ -77,7 +77,7 @@ function readyMutationByteIdentityErrors(mutate) {
 
 function immediateMutationFenceErrors(mutate) {
   const lines = logicalShellLines(mutate);
-  const workerFence = 'test "$(jq -r \' .release_set_id\' "$RUNNER_TEMP/mutation-current-identity.json")" = "$EXPECTED_CURRENT"'.replace("' .release_set_id'", "'.release_set_id'");
+  const workerFence = 'test "$(jq -r \'.release_set_id\' "$RUNNER_TEMP/mutation-current-identity.json")" = "$EXPECTED_CURRENT"';
   const d1Fence = 'cmp --silent "$RUNNER_TEMP/mutation-d1-names.json" "$RUNNER_TEMP/ready/d1-names-after.json"';
   const workerMatches = lines.filter((line) => line.includes(workerFence));
   const d1Matches = lines.filter((line) => line.includes(d1Fence));
@@ -393,7 +393,7 @@ function selfTest(files) {
   if (brokenByteIdentity === files.promotion) throw new Error('READY-to-mutation Release Set byte-identity fixture setup failed');
   if (!promotionErrors(brokenByteIdentity).some((error) => error.includes('byte-compare'))) throw new Error('READY-to-mutation Release Set byte-identity fixture passed');
   const staleFenceBypass = files.promotion.replace(
-    'test "$(jq -r \' .release_set_id\' "$RUNNER_TEMP/mutation-current-identity.json")" = "$EXPECTED_CURRENT"'.replace("' .release_set_id'", "'.release_set_id'"),
+    'test "$(jq -r \'.release_set_id\' "$RUNNER_TEMP/mutation-current-identity.json")" = "$EXPECTED_CURRENT"',
     'echo "expected-current Worker fence bypassed"',
   );
   if (!promotionErrors(staleFenceBypass).some((error) => error.includes('expected-current Worker fence'))) {
