@@ -103,6 +103,16 @@ fn public_api_contract_matches(
     Ok(resolved_input(resolved, "public_api_root")?.sha256.as_str() == observed_sha256)
 }
 
+fn source_runtime_protocols_match(
+    observed_camouhost_ipc: u64,
+    expected_camouhost_ipc: u64,
+    resolver_protocol: &str,
+    mailbox_admin: bool,
+) -> bool {
+    observed_camouhost_ipc == expected_camouhost_ipc
+        && (!mailbox_admin || resolver_protocol == "mailbox-secret-resolver-v1")
+}
+
 fn protocols_match(
     resolved: &[ResolvedReleaseInput],
     manifest: &ReleaseCompatibilityView,
@@ -120,15 +130,17 @@ fn protocols_match(
     let expected_ipc = lock["camouhost_ipc_version"].as_u64().ok_or_else(|| {
         ReleaseModelError::new("runtime lock camouhost_ipc_version must be unsigned")
     })?;
-    if manifest.protocols.camouhost_ipc_version != expected_ipc
-        || manifest.protocols.profile_bridge_protocol_version != expected_ipc
-    {
-        return Ok(false);
-    }
-    if mailbox_admin && manifest.protocols.resolver_protocol != "mailbox-secret-resolver-v1" {
-        return Ok(false);
-    }
-    Ok(true)
+
+    // Profile Bridge has its own protocol version space. The Release Set projection is derived
+    // from the packaged component manifest and `verify_component_manifests` verifies that value
+    // against the embedded Profile Bridge manifest. Static source compatibility owns only the
+    // Camouhost IPC authority (plus the resolver protocol when mailbox-admin capability is used).
+    Ok(source_runtime_protocols_match(
+        manifest.protocols.camouhost_ipc_version,
+        expected_ipc,
+        &manifest.protocols.resolver_protocol,
+        mailbox_admin,
+    ))
 }
 
 fn schemas_match(
@@ -244,7 +256,7 @@ fn resolved_input<'a>(
 
 #[cfg(test)]
 mod tests {
-    use super::{public_api_contract_matches, resolved_input};
+    use super::{public_api_contract_matches, resolved_input, source_runtime_protocols_match};
     use crate::release::digest::{canonical_json, sha256_hex};
     use crate::release::input_topology::ReleaseInputTopology;
     use crate::release::model::ReleaseModelError;
@@ -311,6 +323,51 @@ mod tests {
             &resolved,
             &aggregate_contracts_sha256
         )?);
+        Ok(())
+    }
+
+    #[test]
+    fn profile_bridge_protocol_is_independent_from_camouhost_ipc() {
+        let camouhost_ipc_version = 3;
+        let profile_bridge_protocol_version = 1;
+        assert_ne!(profile_bridge_protocol_version, camouhost_ipc_version);
+        assert!(source_runtime_protocols_match(
+            camouhost_ipc_version,
+            3,
+            "mailbox-secret-resolver-v1",
+            true,
+        ));
+    }
+
+    #[test]
+    fn real_camouhost_ipc_mismatch_fails_closed() {
+        assert!(!source_runtime_protocols_match(
+            4,
+            3,
+            "mailbox-secret-resolver-v1",
+            true,
+        ));
+    }
+
+    #[test]
+    fn runtime_lock_json_order_does_not_change_protocol_semantics()
+    -> Result<(), serde_json::Error> {
+        let first: Value = serde_json::from_str(
+            r#"{"camouhost_ipc_version":3,"runtime_role":"real_camoufox"}"#,
+        )?;
+        let reordered: Value = serde_json::from_str(
+            r#"{"runtime_role":"real_camoufox","camouhost_ipc_version":3}"#,
+        )?;
+
+        let expected_ipc = 3;
+        for lock in [first, reordered] {
+            assert!(source_runtime_protocols_match(
+                lock["camouhost_ipc_version"].as_u64().expect("typed IPC version"),
+                expected_ipc,
+                "mailbox-secret-resolver-v1",
+                true,
+            ));
+        }
         Ok(())
     }
 }
