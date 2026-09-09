@@ -94,6 +94,27 @@ function immediateMutationFenceErrors(mutate) {
   return errors;
 }
 
+function deployCredentialBoundaryErrors(promotion, mutate) {
+  const token = 'DEPLOY_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}';
+  const readyBind = 'Download and bind prior READY evidence before provider credentials';
+  const dryRun = 'Render mutation overlay and prove exact bits dry-run without deploy credential';
+  const activation = 'Activate deploy credential only after bound READY and authorization';
+  const promotionCount = promotion.split(token).length - 1;
+  const mutateCount = mutate.split(token).length - 1;
+  const readyIndex = mutate.indexOf(readyBind);
+  const dryRunIndex = mutate.indexOf(dryRun);
+  const activationIndex = mutate.indexOf(activation);
+  const tokenIndex = mutate.indexOf(token);
+  const errors = [];
+  if (promotionCount !== 1 || mutateCount !== 1) {
+    errors.push(`deploy-capable credential must be referenced exactly once and only by the protected mutation executor; workflow=${promotionCount} mutate=${mutateCount}`);
+  }
+  if (!(readyIndex >= 0 && dryRunIndex > readyIndex && activationIndex > dryRunIndex && tokenIndex > activationIndex)) {
+    errors.push('deploy-capable credential must remain behind bound READY, exact-bits dry-run, and the explicit activation proof boundary');
+  }
+  return errors;
+}
+
 function legacyAuthorityErrors(exists = existsSync) {
   const errors = [];
   for (const relative of LEGACY_FILES) {
@@ -271,6 +292,7 @@ function promotionErrors(promotion) {
   ], 'protected mutation executor'));
   errors.push(...readyMutationByteIdentityErrors(mutate));
   errors.push(...immediateMutationFenceErrors(mutate));
+  errors.push(...deployCredentialBoundaryErrors(promotion, mutate));
   errors.push(...forbidMarkers(mutate, ['promotion plan', 'promotion preflight', 'release compatibility', 'materialize known-good-v2-v3', 'worker-build --release', 'cargo build', 'npm run build'], 'protected mutation executor'));
   if ((promotion.match(/secrets\.CLOUDFLARE_API_TOKEN\s*}}/g) ?? []).length !== 1) {
     errors.push('deploy-capable Cloudflare token must be referenced exactly once in the whole promotion workflow');
@@ -375,6 +397,13 @@ function selfTest(files) {
   );
   if (!promotionErrors(staleFenceBypass).some((error) => error.includes('expected-current Worker fence'))) {
     throw new Error('mutation stale-fence bypass fixture unexpectedly passed');
+  }
+  const earlyDeployCredential = files.promotion.replace(
+    '      - name: Activate deploy credential only after bound READY and authorization\n        env:\n          DEPLOY_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}',
+    '      - name: Early deploy credential fixture\n        env:\n          DEPLOY_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}\n        run: echo early\n\n      - name: Activate deploy credential only after bound READY and authorization\n        env:\n          DEPLOY_TOKEN: inherited',
+  );
+  if (!promotionErrors(earlyDeployCredential).some((error) => error.includes('explicit activation proof boundary'))) {
+    throw new Error('early deploy credential fixture unexpectedly passed');
   }
   const legacyFixture = legacyAuthorityErrors((candidate) => candidate.endsWith(LEGACY_FILES[0]));
   if (legacyFixture.length !== 1 || !legacyFixture[0].includes('legacy D3 operational authority must be retired after Rust cutover')) {
