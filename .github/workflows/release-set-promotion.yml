@@ -14,13 +14,14 @@ on:
           - promote
           - rollback-negative
       release_set_id:
-        description: Immutable GitHub Release tag `release-set-v3-sha256-...`
-        required: true
+        description: 'Advanced rollback-negative only; leave blank for ordinary promote'
+        required: false
+        default: ''
         type: string
       expected_current_release_set_id:
-        description: Current provider Release Set v2/v3 ID or NONE for a clean staging environment
-        required: true
-        default: NONE
+        description: 'Advanced rollback-negative only; leave blank for ordinary promote'
+        required: false
+        default: ''
         type: string
       source_run_id:
         description: Completed canonical A-to-A run id; required only for rollback-negative evidence
@@ -33,8 +34,9 @@ on:
         default: MANUAL
         type: string
       confirmation:
-        description: 'Promote: `<release_set_id>:<expected_current_release_set_id>`; negative: `<release_set_id>:<source_run_id>`'
-        required: true
+        description: 'Advanced rollback-negative only; leave blank for ordinary promote'
+        required: false
+        default: ''
         type: string
 
 permissions:
@@ -51,53 +53,222 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+      issues: read
     outputs:
-      source_sha: ${{ steps.resolve.outputs.source_sha }}
-      main_sha: ${{ steps.resolve.outputs.main_sha }}
+      source_sha: ${{ steps.target.outputs.source_sha }}
+      main_sha: ${{ steps.intent.outputs.main_sha }}
+      release_set_id: ${{ steps.intent.outputs.release_set_id }}
+      expected_current: ${{ steps.intent.outputs.expected_current }}
+      authorization_comment_id: ${{ steps.intent.outputs.authorization_comment_id }}
+      authorization_digest: ${{ steps.intent.outputs.authorization_digest }}
     env:
       GH_TOKEN: ${{ github.token }}
-      RELEASE_SET_ID: ${{ inputs.release_set_id }}
-      EXPECTED_CURRENT: ${{ inputs.expected_current_release_set_id }}
     steps:
-      - name: Validate exact v3 target and historical/current fence
+      - name: Resolve exact one-shot promotion authorization from current authority
+        id: intent
         run: |
           set -euo pipefail
           test "$GITHUB_EVENT_NAME" = workflow_dispatch
           test "${{ inputs.operation }}" = promote
           test "$GITHUB_REF" = refs/heads/main
-          [[ "$RELEASE_SET_ID" =~ ^release-set-v3-sha256-[0-9a-f]{64}$ ]]
-          [[ "$EXPECTED_CURRENT" == NONE || "$EXPECTED_CURRENT" =~ ^release-set-v(2|3)-sha256-[0-9a-f]{64}$ ]]
+          test -z "${{ inputs.release_set_id }}"
+          test -z "${{ inputs.expected_current_release_set_id }}"
           test -z "${{ inputs.source_run_id }}"
-          test "${{ inputs.confirmation }}" = "$RELEASE_SET_ID:$EXPECTED_CURRENT"
+          test -z "${{ inputs.confirmation }}"
 
-      - name: Prove target source was accepted protected main
-        id: resolve
+          gh api "repos/$GITHUB_REPOSITORY/branches/main" > "$RUNNER_TEMP/protected-main.json"
+          test "$(jq -r '.protected' "$RUNNER_TEMP/protected-main.json")" = true
+          main_sha="$(jq -r '.commit.sha' "$RUNNER_TEMP/protected-main.json")"
+          [[ "$main_sha" =~ ^[0-9a-f]{40}$ ]]
+          test "$GITHUB_SHA" = "$main_sha"
+
+          gh api "repos/$GITHUB_REPOSITORY/issues/266" > "$RUNNER_TEMP/live-pointer.json"
+          python - "$RUNNER_TEMP/live-pointer.json" "$main_sha" "$RUNNER_TEMP/authorized-intent.json" <<'PY'
+          import json, re, sys
+
+          pointer_path, main_sha, output_path = sys.argv[1:]
+          issue = json.load(open(pointer_path, encoding='utf-8'))
+          body = issue.get('body')
+          if not isinstance(body, str):
+              raise SystemExit('live pointer body is missing')
+
+          def parse_block(block):
+              fields = {}
+              for raw in block.splitlines():
+                  line = raw.strip()
+                  match = re.fullmatch(r'([A-Z0-9_]+)\s*=\s*(.*?)\s*', line)
+                  if not match:
+                      continue
+                  key, value = match.groups()
+                  if key in fields:
+                      raise SystemExit(f'duplicate field in authorization block: {key}')
+                  fields[key] = value
+              return fields
+
+          blocks = re.findall(r'```(?:text)?\s*\n(.*?)```', body, flags=re.S)
+          parsed = [parse_block(block) for block in blocks]
+
+          current = [item for item in parsed if item.get('CURRENT_STAGE')]
+          if len(current) != 1:
+              raise SystemExit('live pointer CURRENT block missing or ambiguous')
+          current = current[0]
+          if current.get('CURRENT_STAGE') != 'V2' or current.get('CURRENT_STAGE_ISSUE') != '#584':
+              raise SystemExit('live pointer does not select V2/#584')
+          if current.get('PROTECTED_MAIN') != main_sha:
+              raise SystemExit('live pointer protected-main binding is stale')
+          if current.get('OPEN_IMPLEMENTATION_PR') != 'NONE':
+              raise SystemExit('ordinary provider promotion requires no open implementation PR')
+
+          scoped = [
+              item for item in parsed
+              if re.fullmatch(r'V2_STAGING_WORKER_PROMOTION_V[1-9][0-9]*', item.get('SCOPED_EXCEPTION', ''))
+          ]
+          if len(scoped) != 1:
+              raise SystemExit('active staging Worker promotion exception missing or ambiguous')
+          scoped = scoped[0]
+          required = {
+              'STATE': 'ACTIVE_UNTIL_ONE_MATCHING_ATTEMPT_OR_DRIFT',
+              'ENVIRONMENT': 'staging',
+              'OWNER': '.github/workflows/release-set-promotion.yml',
+              'OPERATION': 'promote',
+              'PROTECTED_MAIN': main_sha,
+              'D1_PHASE_D_0032': 'EXCLUDED',
+              'ACCESS_MTLS': 'EXCLUDED',
+              'OTHER_PROVIDER_MUTATION': 'EXCLUDED',
+              'PRODUCTION': 'EXCLUDED',
+          }
+          for key, expected in required.items():
+              if scoped.get(key) != expected:
+                  raise SystemExit(f'scoped authorization mismatch for {key}: {scoped.get(key)!r}')
+
+          target = scoped.get('TARGET_RELEASE_SET', '')
+          expected_current = scoped.get('EXPECTED_CURRENT_RELEASE_SET', '')
+          if not re.fullmatch(r'release-set-v3-sha256-[0-9a-f]{64}', target):
+              raise SystemExit('scoped target Release Set is invalid')
+          if not (expected_current == 'NONE' or re.fullmatch(r'release-set-v(?:2|3)-sha256-[0-9a-f]{64}', expected_current)):
+              raise SystemExit('scoped expected-current Release Set is invalid')
+
+          locator = scoped.get('AUTHORITY_COMMENT', '')
+          match = re.fullmatch(r'#584\s*/\s*([1-9][0-9]*)', locator)
+          if not match:
+              raise SystemExit('scoped authority comment locator is invalid')
+
+          document = {
+              'schema_version': 1,
+              'kind': 'WORKER_PROMOTION_AUTHORIZED_INTENT',
+              'exception': scoped['SCOPED_EXCEPTION'],
+              'environment': 'staging',
+              'owner': '.github/workflows/release-set-promotion.yml',
+              'operation': 'promote',
+              'protected_main': main_sha,
+              'release_set_id': target,
+              'expected_current_release_set_id': expected_current,
+              'authorization_issue': 584,
+              'authorization_comment_id': int(match.group(1)),
+              'excluded_effects': ['D1_PHASE_D_0032', 'ACCESS_MTLS', 'OTHER_PROVIDER_MUTATION', 'PRODUCTION'],
+          }
+          with open(output_path, 'w', encoding='utf-8') as handle:
+              json.dump(document, handle, sort_keys=True, indent=2)
+              handle.write('\n')
+          PY
+
+          release_set_id="$(jq -er '.release_set_id' "$RUNNER_TEMP/authorized-intent.json")"
+          expected_current="$(jq -er '.expected_current_release_set_id' "$RUNNER_TEMP/authorized-intent.json")"
+          authorization_comment_id="$(jq -er '.authorization_comment_id | tostring' "$RUNNER_TEMP/authorized-intent.json")"
+          authorization_digest="$(jq -cS . "$RUNNER_TEMP/authorized-intent.json" | sha256sum | cut -d' ' -f1)"
+
+          gh api "repos/$GITHUB_REPOSITORY/issues/comments/$authorization_comment_id" > "$RUNNER_TEMP/authority-comment.json"
+          RELEASE_SET_ID="$release_set_id" EXPECTED_CURRENT="$expected_current" \
+          python - "$RUNNER_TEMP/authority-comment.json" "$GITHUB_REPOSITORY_OWNER" <<'PY'
+          import json, os, re, sys
+
+          comment_path, repository_owner = sys.argv[1:]
+          comment = json.load(open(comment_path, encoding='utf-8'))
+          if (comment.get('user') or {}).get('login') != repository_owner:
+              raise SystemExit('promotion authorization comment is not OWNER-authored')
+          if not str(comment.get('issue_url', '')).endswith('/issues/584'):
+              raise SystemExit('promotion authorization comment is not bound to #584')
+          body = comment.get('body')
+          if not isinstance(body, str):
+              raise SystemExit('promotion authorization comment body missing')
+
+          blocks = re.findall(r'```(?:text)?\s*\n(.*?)```', body, flags=re.S)
+          matches = []
+          for block in blocks:
+              lines = [line.strip() for line in block.splitlines() if line.strip()]
+              if not lines or lines[0] != 'WORKER_PROMOTION_AUTHORIZATION_V1':
+                  continue
+              fields = {}
+              for line in lines[1:]:
+                  match = re.fullmatch(r'([A-Z0-9_]+)\s*=\s*(.*?)\s*', line)
+                  if not match:
+                      continue
+                  key, value = match.groups()
+                  if key in fields:
+                      raise SystemExit(f'duplicate field in OWNER authorization: {key}')
+                  fields[key] = value
+              matches.append(fields)
+          if len(matches) != 1:
+              raise SystemExit('OWNER promotion authorization block missing or ambiguous')
+          fields = matches[0]
+          target = os.environ['RELEASE_SET_ID']
+          expected_current = os.environ['EXPECTED_CURRENT']
+          required = {
+              'ENVIRONMENT': 'staging',
+              'OWNER': '.github/workflows/release-set-promotion.yml',
+              'OPERATION': 'promote',
+              'RELEASE_SET_ID': target,
+              'EXPECTED_CURRENT_RELEASE_SET_ID': expected_current,
+              'CONFIRMATION': f'{target}:{expected_current}',
+              'SCOPE': 'one exact staging Worker/runtime promotion only',
+              'D1_PHASE_D_0032_AUTHORIZED': 'NO',
+              'ACCESS_MTLS_MUTATION_AUTHORIZED': 'NO',
+              'OTHER_PROVIDER_MUTATION_AUTHORIZED': 'NO',
+              'PRODUCTION_AUTHORIZED': 'NO',
+          }
+          for key, expected in required.items():
+              if fields.get(key) != expected:
+                  raise SystemExit(f'OWNER authorization mismatch for {key}: {fields.get(key)!r}')
+          PY
+
+          {
+            echo "main_sha=$main_sha"
+            echo "release_set_id=$release_set_id"
+            echo "expected_current=$expected_current"
+            echo "authorization_comment_id=$authorization_comment_id"
+            echo "authorization_digest=$authorization_digest"
+          } >> "$GITHUB_OUTPUT"
+          {
+            echo "RELEASE_SET_ID=$release_set_id"
+            echo "EXPECTED_CURRENT=$expected_current"
+            echo "AUTHORIZATION_COMMENT_ID=$authorization_comment_id"
+            echo "AUTHORIZATION_DIGEST=$authorization_digest"
+          } >> "$GITHUB_ENV"
+
+      - name: Prove authorized target is exact current protected-main Release Set
+        id: target
         run: |
           set -euo pipefail
           gh api "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_SET_ID" > "$RUNNER_TEMP/target-release.json"
           source_sha="$(jq -r '.target_commitish' "$RUNNER_TEMP/target-release.json")"
           [[ "$source_sha" =~ ^[0-9a-f]{40}$ ]]
-          gh api "repos/$GITHUB_REPOSITORY/branches/main" > "$RUNNER_TEMP/protected-main.json"
-          test "$(jq -r '.protected' "$RUNNER_TEMP/protected-main.json")" = true
-          main_sha="$(jq -r '.commit.sha' "$RUNNER_TEMP/protected-main.json")"
-          test "$GITHUB_SHA" = "$main_sha"
-          gh api "repos/$GITHUB_REPOSITORY/compare/$source_sha...$main_sha" > "$RUNNER_TEMP/accepted-source-compare.json"
+          test "$source_sha" = "${{ steps.intent.outputs.main_sha }}"
+          gh api "repos/$GITHUB_REPOSITORY/compare/$source_sha...${{ steps.intent.outputs.main_sha }}" > "$RUNNER_TEMP/accepted-source-compare.json"
           test "$(jq -r '.merge_base_commit.sha' "$RUNNER_TEMP/accepted-source-compare.json")" = "$source_sha"
           test "$(jq -r '.behind_by' "$RUNNER_TEMP/accepted-source-compare.json")" = 0
           echo "source_sha=$source_sha" >> "$GITHUB_OUTPUT"
-          echo "main_sha=$main_sha" >> "$GITHUB_OUTPUT"
 
       - name: Checkout current protected-main policy authority
         uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
         with:
-          ref: ${{ steps.resolve.outputs.main_sha }}
+          ref: ${{ steps.intent.outputs.main_sha }}
           fetch-depth: 0
           persist-credentials: false
 
       - name: Checkout exact target source as read-only provenance input
         uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
         with:
-          ref: ${{ steps.resolve.outputs.source_sha }}
+          ref: ${{ steps.target.outputs.source_sha }}
           path: target-source
           fetch-depth: 0
           persist-credentials: false
@@ -116,7 +287,7 @@ jobs:
           python scripts/accepted-source-evidence-ar11.py \
             --repository "$GITHUB_REPOSITORY" \
             --release-set-id "$RELEASE_SET_ID" \
-            --source-sha "${{ steps.resolve.outputs.source_sha }}" \
+            --source-sha "${{ steps.target.outputs.source_sha }}" \
             --branch-json "$RUNNER_TEMP/protected-main.json" \
             --compare-json "$RUNNER_TEMP/accepted-source-compare.json" \
             --output "$policy_dir/accepted-source-evidence.json"
@@ -142,8 +313,10 @@ jobs:
       custom_domain: ${{ steps.observe.outputs.custom_domain }}
     env:
       GH_TOKEN: ${{ github.token }}
-      RELEASE_SET_ID: ${{ inputs.release_set_id }}
-      EXPECTED_CURRENT: ${{ inputs.expected_current_release_set_id }}
+      RELEASE_SET_ID: ${{ needs.resolve-verify.outputs.release_set_id }}
+      EXPECTED_CURRENT: ${{ needs.resolve-verify.outputs.expected_current }}
+      AUTHORIZATION_COMMENT_ID: ${{ needs.resolve-verify.outputs.authorization_comment_id }}
+      AUTHORIZATION_DIGEST: ${{ needs.resolve-verify.outputs.authorization_digest }}
       TARGET_PROFILE: rehearsal-core-v2
       TARGET_ENVIRONMENT: staging
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_OBSERVE_API_TOKEN }}
@@ -377,11 +550,13 @@ jobs:
           jq -n \
             --arg release_set_id "$RELEASE_SET_ID" \
             --arg expected_current "$EXPECTED_CURRENT" \
+            --arg authorization_comment_id "$AUTHORIZATION_COMMENT_ID" \
+            --arg authorization_digest "$AUTHORIZATION_DIGEST" \
             --arg promotion_id "$promotion_id" \
             --arg decision "$decision" \
             --arg preflight_sha256 "$(sha256sum "$RUNNER_TEMP/promotion-preflight.json" | cut -d' ' -f1)" \
             --arg plan_sha256 "$(sha256sum "$RUNNER_TEMP/promotion-plan.json" | cut -d' ' -f1)" \
-            '{schema_version:1,release_set_id:$release_set_id,expected_current:$expected_current,promotion_id:$promotion_id,decision:$decision,preflight_sha256:$preflight_sha256,plan_sha256:$plan_sha256}' \
+            '{schema_version:2,release_set_id:$release_set_id,expected_current:$expected_current,authorization_comment_id:$authorization_comment_id,authorization_digest:$authorization_digest,promotion_id:$promotion_id,decision:$decision,preflight_sha256:$preflight_sha256,plan_sha256:$plan_sha256}' \
             > "$RUNNER_TEMP/mutation-fence.json"
           fence_sha="$(sha256sum "$RUNNER_TEMP/mutation-fence.json" | cut -d' ' -f1)"
           {
@@ -401,7 +576,7 @@ jobs:
       - name: Upload metadata-only preflight authority
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: ar11-preflight-${{ inputs.release_set_id }}
+          name: ar11-preflight-${{ needs.resolve-verify.outputs.release_set_id }}
           path: |
             ${{ runner.temp }}/release-set.json
             ${{ runner.temp }}/accepted-source-evidence.json
@@ -426,8 +601,10 @@ jobs:
       deployments: write
     env:
       GH_TOKEN: ${{ github.token }}
-      RELEASE_SET_ID: ${{ inputs.release_set_id }}
-      EXPECTED_CURRENT: ${{ inputs.expected_current_release_set_id }}
+      RELEASE_SET_ID: ${{ needs.resolve-verify.outputs.release_set_id }}
+      EXPECTED_CURRENT: ${{ needs.resolve-verify.outputs.expected_current }}
+      AUTHORIZATION_COMMENT_ID: ${{ needs.resolve-verify.outputs.authorization_comment_id }}
+      AUTHORIZATION_DIGEST: ${{ needs.resolve-verify.outputs.authorization_digest }}
     steps:
       - name: Checkout exact current policy
         uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
@@ -447,7 +624,7 @@ jobs:
       - name: Download and bind exact preflight authority before provider use
         uses: actions/download-artifact@70fc10c6e5e1ce46ad2ea6f2b72d43f7d47b13c3
         with:
-          name: ar11-preflight-${{ inputs.release_set_id }}
+          name: ar11-preflight-${{ needs.resolve-verify.outputs.release_set_id }}
           path: .ar11-preflight
 
       - name: Re-verify fence and exact immutable Release Set before credentials
@@ -458,8 +635,11 @@ jobs:
           preflight="$preflight_root/promotion-preflight.json"
           plan="$preflight_root/promotion-plan.json"
           test "$(sha256sum "$fence" | cut -d' ' -f1)" = "${{ needs.observe-preflight.outputs.mutation_fence_sha256 }}"
+          test "$(jq -r '.schema_version' "$fence")" = 2
           test "$(jq -r '.release_set_id' "$fence")" = "$RELEASE_SET_ID"
           test "$(jq -r '.expected_current' "$fence")" = "$EXPECTED_CURRENT"
+          test "$(jq -r '.authorization_comment_id' "$fence")" = "$AUTHORIZATION_COMMENT_ID"
+          test "$(jq -r '.authorization_digest' "$fence")" = "$AUTHORIZATION_DIGEST"
           test "$(jq -r '.promotion_id' "$fence")" = "${{ needs.observe-preflight.outputs.promotion_id }}"
           test "$(jq -r '.decision' "$fence")" = PLAN
           test "$(jq -r '.preflight_sha256' "$fence")" = "$(sha256sum "$preflight" | cut -d' ' -f1)"
@@ -559,7 +739,7 @@ jobs:
       contents: read
     env:
       GH_TOKEN: ${{ github.token }}
-      RELEASE_SET_ID: ${{ inputs.release_set_id }}
+      RELEASE_SET_ID: ${{ needs.resolve-verify.outputs.release_set_id }}
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_OBSERVE_API_TOKEN }}
       CLOUDFLARE_ACCESS_CLIENT_ID: ${{ secrets.CLOUDFLARE_ACCESS_CLIENT_ID }}
       CLOUDFLARE_ACCESS_CLIENT_SECRET: ${{ secrets.CLOUDFLARE_ACCESS_CLIENT_SECRET }}
@@ -583,7 +763,7 @@ jobs:
       - name: Download preflight evidence and immutable target
         uses: actions/download-artifact@70fc10c6e5e1ce46ad2ea6f2b72d43f7d47b13c3
         with:
-          name: ar11-preflight-${{ inputs.release_set_id }}
+          name: ar11-preflight-${{ needs.resolve-verify.outputs.release_set_id }}
           path: ${{ runner.temp }}/preflight
 
       - name: Prepare target identity and read-only config
@@ -672,7 +852,7 @@ jobs:
       - name: Upload metadata-only post-deploy evidence
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: release-set-promotion-staging-${{ inputs.release_set_id }}
+          name: release-set-promotion-staging-${{ needs.resolve-verify.outputs.release_set_id }}
           path: |
             ${{ runner.temp }}/post-release-verify.json
             ${{ runner.temp }}/post-snapshot.json

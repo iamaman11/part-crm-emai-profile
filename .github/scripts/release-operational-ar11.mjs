@@ -80,7 +80,7 @@ function promotionErrors(promotion) {
   errors.push(...requireMarkers(promotion, [
     'workflow_dispatch:', 'operation:', 'release_set_id:', 'expected_current_release_set_id:', 'source_run_id:',
     'request_id:', 'confirmation:', 'concurrency:\n  group: release-set-promotion-staging',
-    "'{schema_version:1,release_set_id:$release_set_id,expected_current:$expected_current,promotion_id:$promotion_id,decision:$decision,preflight_sha256:$preflight_sha256,plan_sha256:$plan_sha256}'",
+    "'{schema_version:2,release_set_id:$release_set_id,expected_current:$expected_current,authorization_comment_id:$authorization_comment_id,authorization_digest:$authorization_digest,promotion_id:$promotion_id,decision:$decision,preflight_sha256:$preflight_sha256,plan_sha256:$plan_sha256}'",
   ], 'Release Set promotion'));
   if (count(promotion, 'workflow_dispatch:') !== 1) errors.push('Release Set promotion must expose exactly one manual dispatch surface');
   if (count(promotion, 'secrets.CLOUDFLARE_API_TOKEN') !== 1) errors.push('deploy-capable Cloudflare token must be referenced exactly once, inside mutation executor');
@@ -108,11 +108,36 @@ function promotionErrors(promotion) {
 
   errors.push(...requireMarkers(resolve, [
     "if: github.event_name == 'workflow_dispatch' && inputs.operation == 'promote'",
-    'test "${{ inputs.operation }}" = promote', 'test -z "${{ inputs.source_run_id }}"',
-    '[[ "$RELEASE_SET_ID" =~ ^release-set-v3-sha256-[0-9a-f]{64}$ ]]',
-    '[[ "$EXPECTED_CURRENT" == NONE || "$EXPECTED_CURRENT" =~ ^release-set-v(2|3)-sha256-[0-9a-f]{64}$ ]]',
-    'Prove target source was accepted protected main', "test \"$(jq -r '.protected' \"$RUNNER_TEMP/protected-main.json\")\" = true",
-    'compare/$source_sha...$main_sha', 'Checkout current protected-main policy authority',
+    'issues: read',
+    'Resolve exact one-shot promotion authorization from current authority',
+    'test "${{ inputs.operation }}" = promote',
+    'test -z "${{ inputs.release_set_id }}"',
+    'test -z "${{ inputs.expected_current_release_set_id }}"',
+    'test -z "${{ inputs.source_run_id }}"',
+    'test -z "${{ inputs.confirmation }}"',
+    'repos/$GITHUB_REPOSITORY/branches/main',
+    'repos/$GITHUB_REPOSITORY/issues/266',
+    "current.get('CURRENT_STAGE') != 'V2'",
+    "current.get('CURRENT_STAGE_ISSUE') != '#584'",
+    "current.get('OPEN_IMPLEMENTATION_PR') != 'NONE'",
+    "V2_STAGING_WORKER_PROMOTION_V[1-9][0-9]*",
+    "'OWNER': '.github/workflows/release-set-promotion.yml'",
+    "'D1_PHASE_D_0032': 'EXCLUDED'",
+    "'ACCESS_MTLS': 'EXCLUDED'",
+    "'OTHER_PROVIDER_MUTATION': 'EXCLUDED'",
+    "'PRODUCTION': 'EXCLUDED'",
+    "scoped.get('TARGET_RELEASE_SET', '')",
+    "scoped.get('EXPECTED_CURRENT_RELEASE_SET', '')",
+    "scoped.get('AUTHORITY_COMMENT', '')",
+    'repos/$GITHUB_REPOSITORY/issues/comments/$authorization_comment_id',
+    "lines[0] != 'WORKER_PROMOTION_AUTHORIZATION_V1'",
+    "'CONFIRMATION': f'{target}:{expected_current}'",
+    "'SCOPE': 'one exact staging Worker/runtime promotion only'",
+    "'PRODUCTION_AUTHORIZED': 'NO'",
+    'authorization_digest=',
+    'Prove authorized target is exact current protected-main Release Set',
+    'test "$source_sha" = "${{ steps.intent.outputs.main_sha }}"',
+    'Checkout current protected-main policy authority',
     'Checkout exact target source as read-only provenance input', 'path: target-source', 'accepted-source-evidence-ar11.py',
     'Download and verify immutable Release Set v3 target with no provider credentials',
     'gh release download "$RELEASE_SET_ID"',
@@ -131,14 +156,20 @@ function promotionErrors(promotion) {
 
   errors.push(...requireMarkers(observe, [
     'needs: resolve-verify', 'environment: staging', 'TARGET_PROFILE: rehearsal-core-v2', 'TARGET_ENVIRONMENT: staging',
-    'secrets.CLOUDFLARE_OBSERVE_API_TOKEN', 'Observe current provider state without mutation',
+    'secrets.CLOUDFLARE_OBSERVE_API_TOKEN',
+    'AUTHORIZATION_COMMENT_ID: ${{ needs.resolve-verify.outputs.authorization_comment_id }}',
+    'AUTHORIZATION_DIGEST: ${{ needs.resolve-verify.outputs.authorization_digest }}',
+    'Observe current provider state without mutation',
     'bash scripts/release-set-assets-ar11.sh materialize current-v3 "$RELEASE_SET_ID" "$asset_root" "$release_root"',
     'Verify current/known-good immutable Release Set before rollback evaluation',
     'bash scripts/release-set-assets-ar11.sh materialize known-good-v2-v3 "$current_id" "$asset_root" "$release_root"',
     '(.release_set_schema_version == 2 or .release_set_schema_version == 3)',
     'Build metadata-only DeploymentSnapshot v2',
     'deployment-snapshot-ar11.py', 'release compatibility', 'promotion plan', 'promotion preflight', '--expected-current "$EXPECTED_CURRENT"',
-    'mutation-fence.json', 'Materialize flat metadata-only preflight artifact contract',
+    'mutation-fence.json',
+    '--arg authorization_comment_id "$AUTHORIZATION_COMMENT_ID"',
+    '--arg authorization_digest "$AUTHORIZATION_DIGEST"',
+    'Materialize flat metadata-only preflight artifact contract',
     'cp "$RUNNER_TEMP/release-policy-input/release-set.json" "$RUNNER_TEMP/release-set.json"',
     'cp "$RUNNER_TEMP/release-policy-input/accepted-source-evidence.json" "$RUNNER_TEMP/accepted-source-evidence.json"',
     '${{ runner.temp }}/release-set.json', '${{ runner.temp }}/accepted-source-evidence.json',
@@ -147,8 +178,12 @@ function promotionErrors(promotion) {
 
   errors.push(...requireMarkers(mutate, [
     'needs: [resolve-verify, observe-preflight]', "if: needs.observe-preflight.outputs.decision == 'PLAN'", 'environment: staging', 'deployments: write',
+    'AUTHORIZATION_COMMENT_ID: ${{ needs.resolve-verify.outputs.authorization_comment_id }}',
+    'AUTHORIZATION_DIGEST: ${{ needs.resolve-verify.outputs.authorization_digest }}',
     'Checkout exact target source before mutation verification', 'Download and bind exact preflight authority before provider use',
     'Re-verify fence and exact immutable Release Set before credentials', 'mutation-fence.json', "'.preflight_sha256'", "'.plan_sha256'",
+    'test "$(jq -r \'.authorization_comment_id\' "$fence")" = "$AUTHORIZATION_COMMENT_ID"',
+    'test "$(jq -r \'.authorization_digest\' "$fence")" = "$AUTHORIZATION_DIGEST"',
     'bash scripts/release-set-assets-ar11.sh materialize current-v3 "$RELEASE_SET_ID" "$asset_root" "$release_root"',
     'cmp --silent "$release_root/release-set.json" "$preflight_root/release-set.json"', 'release verify', '.release_set_schema_version == 3',
     'Activate deploy credential after READY and exact-byte verification', 'DEPLOY_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}',
@@ -158,12 +193,16 @@ function promotionErrors(promotion) {
   ], 'promotion phase 3 protected mutation'));
   errors.push(...forbidMarkers(mutate, ['materialize known-good-v2-v3', '.release_set_schema_version == 2', 'worker-build --release', 'cargo build', 'npm run build', 'release-set-ar11.py build', 'release compatibility', 'promotion plan', 'promotion preflight'], 'promotion phase 3 protected mutation'));
   const nativeVerify = mutate.indexOf('Re-verify fence and exact immutable Release Set before credentials');
+  const authorizationFence = mutate.indexOf('test "$(jq -r \'.authorization_digest\' "$fence")" = "$AUTHORIZATION_DIGEST"');
   const deployCredential = mutate.indexOf('DEPLOY_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}');
   const reobserveFence = mutate.indexOf('Re-observe expected-current fence and deploy exact Release Set v3 bits');
   const currentFence = mutate.indexOf('test "$current_id" = "$EXPECTED_CURRENT"', reobserveFence);
   const actualDeploy = mutate.indexOf('--message "release_set=$RELEASE_SET_ID profile=rehearsal-core-v2"', reobserveFence);
   if (!(nativeVerify >= 0 && deployCredential > nativeVerify && reobserveFence > deployCredential && currentFence > reobserveFence && actualDeploy > currentFence)) {
     errors.push('mutation credential/fence ordering must be native verify -> credential activation -> expected-current re-observe -> deploy');
+  }
+  if (authorizationFence < 0 || authorizationFence > deployCredential) {
+    errors.push('authorization digest fence must be verified before deploy credential activation');
   }
 
   errors.push(...requireMarkers(post, [
@@ -241,6 +280,15 @@ function selfTest() {
   const staleFiveAssetBuild = build.replace('test "$(find "$asset_dir" -maxdepth 1 -type f | wc -l)" -eq 9', 'test "$(find "$asset_dir" -maxdepth 1 -type f | wc -l)" -eq 5');
   if (!buildErrors(staleFiveAssetBuild).some((error) => error.includes('eq 9'))) throw new Error('five-asset current Release Set fixture unexpectedly passed');
 
+  const manualTarget = promotion.replace('test -z "${{ inputs.release_set_id }}"', 'test -n "${{ inputs.release_set_id }}"');
+  if (!promotionErrors(manualTarget).some((error) => error.includes('promotion phase 1'))) throw new Error('manual ordinary target transport fixture unexpectedly passed');
+
+  const manualCurrent = promotion.replace('test -z "${{ inputs.expected_current_release_set_id }}"', 'test -n "${{ inputs.expected_current_release_set_id }}"');
+  if (!promotionErrors(manualCurrent).some((error) => error.includes('promotion phase 1'))) throw new Error('manual ordinary expected-current transport fixture unexpectedly passed');
+
+  const missingOwnerAuthorization = promotion.replace("lines[0] != 'WORKER_PROMOTION_AUTHORIZATION_V1'", "lines[0] != 'UNVERIFIED_PROMOTION'");
+  if (!promotionErrors(missingOwnerAuthorization).some((error) => error.includes('promotion phase 1'))) throw new Error('missing OWNER authorization contract fixture unexpectedly passed');
+
   const v2Target = promotion.replaceAll('[[ "$RELEASE_SET_ID" =~ ^release-set-v3-sha256-[0-9a-f]{64}$ ]]', '[[ "$RELEASE_SET_ID" =~ ^release-set-v2-sha256-[0-9a-f]{64}$ ]]');
   if (!promotionErrors(v2Target).some((error) => error.includes('release-set-v2-sha256-') || error.includes('release-set-v3-sha256-'))) throw new Error('Release Set v2 current-target fixture unexpectedly passed');
 
@@ -250,7 +298,7 @@ function selfTest() {
   const broadHistoricalMaterializer = promotion.replace('materialize current-v3 "$RELEASE_SET_ID"', 'materialize known-good-v2-v3 "$RELEASE_SET_ID"');
   if (promotionErrors(broadHistoricalMaterializer).length === 0) throw new Error('historical v2/v3 materializer leaked into current target authority');
 
-  const leaked = promotion.replace('permissions:\n      contents: read\n    outputs:', 'permissions:\n      contents: read\n    env:\n      LEAKED_DEPLOY: ${{ secrets.CLOUDFLARE_API_TOKEN }}\n    outputs:');
+  const leaked = promotion.replace('permissions:\n      contents: read\n      issues: read\n    outputs:', 'permissions:\n      contents: read\n      issues: read\n    env:\n      LEAKED_DEPLOY: ${{ secrets.CLOUDFLARE_API_TOKEN }}\n    outputs:');
   if (!promotionErrors(leaked).some((error) => error.includes('referenced exactly once'))) throw new Error('deploy-token leakage fixture unexpectedly passed');
 
   const rebuild = promotion.replace('Re-observe expected-current fence and deploy exact Release Set v3 bits', 'run: cargo build --release\n      - name: Re-observe expected-current fence and deploy exact Release Set v3 bits');
@@ -278,7 +326,10 @@ function selfTest() {
   if (!promotionErrors(reintroducedListener).some((error) => error.includes('workflow_run') || error.includes('issue_comment'))) throw new Error('promotion event-listener reintroduction fixture unexpectedly passed');
 
   const fenceTypo = promotion.replace('preflight_sha256:$preflight_sha256', 'preflight_sha256256:$preflight_sha256');
-  if (!promotionErrors(fenceTypo).some((error) => error.includes('preflight_sha256256') || error.includes('mutation-fence'))) throw new Error('mutation fence key typo fixture unexpectedly passed');
+  if (!promotionErrors(fenceTypo).some((error) => error.includes('preflight_sha256256') || error.includes('Release Set promotion'))) throw new Error('mutation fence key typo fixture unexpectedly passed');
+
+  const authorizationFenceBypass = promotion.replace('test "$(jq -r \'.authorization_digest\' "$fence")" = "$AUTHORIZATION_DIGEST"', 'test -n "$AUTHORIZATION_DIGEST"');
+  if (!promotionErrors(authorizationFenceBypass).some((error) => error.includes('promotion phase 3'))) throw new Error('authorization fence bypass fixture unexpectedly passed');
 
   const negativeBlock = jobBlock(promotion, 'rollback-negative-evidence');
   const uncontrolledNegative = promotion.replace(negativeBlock, negativeBlock.replace("jq '.catalog_schema_revision = null'", "jq '.catalog_schema_revision = .catalog_schema_revision'"));
@@ -287,7 +338,7 @@ function selfTest() {
   const nestedArtifact = promotion.replace('${{ runner.temp }}/release-set.json\n            ${{ runner.temp }}/accepted-source-evidence.json', '${{ runner.temp }}/release-policy-input/release-set.json\n            ${{ runner.temp }}/release-policy-input/accepted-source-evidence.json');
   if (!promotionErrors(nestedArtifact).some((error) => error.includes('phase 2 observe+preflight'))) throw new Error('nested preflight artifact regression unexpectedly passed');
 
-  console.log('AR-11 nine-asset Release Set v3, narrow historical v2/v3 verification, and structural promotion negative self-test passed.');
+  console.log('AR-11 nine-asset Release Set v3, authorized zero-input ordinary promotion, narrow historical v2/v3 verification, and structural negative self-test passed.');
 }
 
 if (process.argv.includes('--self-test')) { selfTest(); process.exit(0); }
@@ -296,4 +347,4 @@ if (errors.length > 0) {
   console.error(`AR-11 operational policy failed:\n${errors.map((error) => `- ${error}`).join('\n')}`);
   process.exit(1);
 }
-console.log('AR-11 durable Release Set v3 (nine immutable assets) and structural promotion policy passed.');
+console.log('AR-11 durable Release Set v3 (nine immutable assets), authorized zero-input promotion, and structural policy passed.');
