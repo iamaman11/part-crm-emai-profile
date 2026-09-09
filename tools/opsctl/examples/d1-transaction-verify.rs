@@ -147,7 +147,10 @@ mod tests {
     };
     use serde_json::json;
     use std::collections::BTreeMap;
+    use std::sync::atomic::{AtomicU64, Ordering};
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    static FIXTURE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
     fn transaction() -> TransactionProjection {
         let target = TargetIdentity {
@@ -234,11 +237,15 @@ mod tests {
     }
 
     fn write_fixture(transaction: &TransactionProjection) -> PathBuf {
-        let unique = SystemTime::now()
+        let timestamp = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .expect("clock")
             .as_nanos();
-        let path = env::temp_dir().join(format!("d1-transaction-verify-{unique}.json"));
+        let sequence = FIXTURE_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+        let process_id = std::process::id();
+        let path = env::temp_dir().join(format!(
+            "d1-transaction-verify-{process_id}-{timestamp}-{sequence}.json"
+        ));
         fs::write(
             &path,
             serde_json::to_string(transaction).expect("serialize transaction"),
