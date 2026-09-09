@@ -85,6 +85,32 @@ relevant PR, or provider evidence whose identity/freshness no longer matches the
 Drift does not require a separate polling system: detect it at the normal exact-state reads and
 optimistic-concurrency boundaries. If the predecessor no longer matches, stop and re-baseline.
 
+### 1.2 Human interaction budget for authorized operations
+
+After the user has granted the exact authorization required by the CURRENT stage, **machine-known
+operation inputs must remain machine-owned**. The operator must not become a manual transport layer for
+facts that are already available from protected `main`, #266/the CURRENT stage Issue, immutable
+Release/transaction artifacts, fresh provider observation or another existing natural owner.
+
+For an ordinary authorized operation:
+
+```text
+HUMAN_INTERACTION_BUDGET <= ONE_SIMPLE_UI_ACTION
+```
+
+If the available integration can dispatch the canonical operation directly, require no additional
+human action. If it cannot dispatch but GitHub exposes the canonical manual Action, the maximum fallback
+is to ask the user to open the already prepared Action and press `Run workflow` with ordinary defaults.
+Do not ask the user to transcribe or assemble source/tree SHAs, Release Set IDs, TransactionIds,
+`expected_current`, database IDs, digests, JSON payloads, request IDs or derived confirmation strings
+when those values can be resolved mechanically.
+
+A canonical workflow may retain explicitly labeled advanced/evidence/recovery inputs only when they are
+genuine non-derivable inputs for that non-ordinary mode. The default ordinary path must not require
+filling them. Preserve every existing authorization, freshness, target-fence, replay and fail-closed
+guarantee by resolving and verifying those facts inside the existing natural owner; do not satisfy this
+rule by adding a second wrapper/controller, a mutable status database or a weaker confirmation path.
+
 ## 2. One CURRENT stage at a time
 
 Every CURRENT named executable stage selected by Issue #266 uses the same execution lifecycle. A
