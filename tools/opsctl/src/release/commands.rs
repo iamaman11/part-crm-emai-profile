@@ -36,7 +36,11 @@ pub fn run(request: ReleaseRunRequest<'_>) -> Result<String, ReleaseModelError> 
                 .ok_or_else(|| ReleaseModelError::new("release verify requires --artifact-root"))?;
             let (_, source_verification) =
                 verify_release_source(request.release_set, &release_set)?;
-            if !release_set.is_historical_v2() {
+            let current_static_verification = current_static_verification_required(
+                release_set.is_historical_v2(),
+                &source_verification.lineage_status,
+            )?;
+            if current_static_verification {
                 let static_blockers = static_compatibility::evaluate(
                     request.source_root,
                     release_set.semantic(),
@@ -49,7 +53,12 @@ pub fn run(request: ReleaseRunRequest<'_>) -> Result<String, ReleaseModelError> 
                     )));
                 }
             }
-            verify(&release_set, artifact_root, &source_verification)?
+            verify(
+                &release_set,
+                artifact_root,
+                &source_verification,
+                current_static_verification,
+            )?
         }
         ReleaseAction::Compatibility => {
             // Compatibility is a current-target decision. Historical v2 may be supplied only via
@@ -81,6 +90,29 @@ pub fn run(request: ReleaseRunRequest<'_>) -> Result<String, ReleaseModelError> 
         .map_err(|error| {
             ReleaseModelError::new(format!("cannot serialize release output: {error}"))
         })
+}
+
+fn current_static_verification_required(
+    historical_v2: bool,
+    lineage_status: &str,
+) -> Result<bool, ReleaseModelError> {
+    if historical_v2 {
+        return Ok(false);
+    }
+    match lineage_status {
+        // A v3 release built from the exact protected main is a current target and must satisfy
+        // every current static identity invariant.
+        "identical" => Ok(true),
+        // An immutable v3 release from an accepted ancestor may be used as deployed/rollback
+        // context. Its source-specific policy was accepted at that source revision; applying the
+        // current binary's later compiled migration/profile policy to that older checkout would
+        // contaminate historical verification. Source ancestry and artifact integrity remain
+        // mandatory, while current target admission is evaluated separately and stays full/static.
+        "ahead" => Ok(false),
+        other => Err(ReleaseModelError::new(format!(
+            "SOURCE_NOT_ACCEPTED: unsupported accepted-source lineage status for release verification: {other}"
+        ))),
+    }
 }
 
 fn inspect(release_set: &LoadedReleaseSet, release_input_count: usize) -> serde_json::Value {
@@ -139,14 +171,15 @@ fn verify(
     release_set: &LoadedReleaseSet,
     artifact_root: &Path,
     source: &AcceptedSourceVerification,
+    current_static_verification: bool,
 ) -> Result<serde_json::Value, ReleaseModelError> {
     let artifacts = verify_artifacts(release_set, artifact_root)?;
     let manifest = release_set.semantic();
     let historical_v2 = release_set.is_historical_v2();
-    let verified_provenance_dimensions = if historical_v2 {
-        Vec::new()
-    } else {
+    let verified_provenance_dimensions = if current_static_verification {
         VERIFIED_PROVENANCE_DIMENSIONS.to_vec()
+    } else {
+        Vec::new()
     };
     Ok(json!({
         "schema_version": 1,
@@ -156,8 +189,10 @@ fn verify(
         "release_set_id": release_set.release_set_id(),
         "verification_scope": if historical_v2 {
             "HISTORICAL_V2_SOURCE_AND_ARTIFACT_INTEGRITY"
-        } else {
+        } else if current_static_verification {
             "CURRENT_V3_FULL_RELEASE_VERIFICATION"
+        } else {
+            "ACCEPTED_ANCESTOR_V3_SOURCE_LINEAGE_AND_ARTIFACT_INTEGRITY"
         },
         "historical_compatibility_only": historical_v2,
         "source_commit_sha": manifest.source.commit_sha,
@@ -179,4 +214,38 @@ fn required_text<'a>(value: Option<&'a str>, flag: &str) -> Result<&'a str, Rele
         return Err(ReleaseModelError::new(format!("{flag} must not be empty")));
     }
     Ok(value)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::current_static_verification_required;
+
+    #[test]
+    fn current_v3_requires_full_static_verification() {
+        assert_eq!(
+            current_static_verification_required(false, "identical"),
+            Ok(true)
+        );
+    }
+
+    #[test]
+    fn accepted_ancestor_v3_does_not_apply_current_compiled_policy() {
+        assert_eq!(
+            current_static_verification_required(false, "ahead"),
+            Ok(false)
+        );
+    }
+
+    #[test]
+    fn historical_v2_remains_integrity_only() {
+        assert_eq!(
+            current_static_verification_required(true, "ahead"),
+            Ok(false)
+        );
+    }
+
+    #[test]
+    fn unknown_lineage_status_fails_closed() {
+        assert!(current_static_verification_required(false, "unknown").is_err());
+    }
 }
