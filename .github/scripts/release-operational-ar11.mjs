@@ -78,6 +78,22 @@ function readyMutationByteIdentityErrors(mutate) {
   return [];
 }
 
+function immediateMutationFenceErrors(mutate) {
+  const lines = logicalShellLines(mutate);
+  const workerFence = 'test "$(jq -r \'.release_set_id\' "$RUNNER_TEMP/mutation-current-identity.json")" = "$EXPECTED_CURRENT"';
+  const d1Fence = 'cmp --silent "$RUNNER_TEMP/mutation-d1-names.json" "$RUNNER_TEMP/ready/d1-names-after.json"';
+  const workerMatches = lines.filter((line) => line.includes(workerFence));
+  const d1Matches = lines.filter((line) => line.includes(d1Fence));
+  const errors = [];
+  if (workerMatches.length !== 1) {
+    errors.push(`protected mutation expected-current Worker fence must exist exactly once immediately before deploy; observed=${workerMatches.length}`);
+  }
+  if (d1Matches.length !== 1) {
+    errors.push(`protected mutation READY-bound D1 ledger fence must exist exactly once immediately before deploy; observed=${d1Matches.length}`);
+  }
+  return errors;
+}
+
 function legacyAuthorityErrors(exists = existsSync) {
   const errors = [];
   for (const relative of LEGACY_FILES) {
@@ -254,6 +270,7 @@ function promotionErrors(promotion) {
     '--message "release_set=$RELEASE_SET_ID profile=rehearsal-core-v2"',
   ], 'protected mutation executor'));
   errors.push(...readyMutationByteIdentityErrors(mutate));
+  errors.push(...immediateMutationFenceErrors(mutate));
   errors.push(...forbidMarkers(mutate, ['promotion plan', 'promotion preflight', 'release compatibility', 'materialize known-good-v2-v3', 'worker-build --release', 'cargo build', 'npm run build'], 'protected mutation executor'));
   if ((promotion.match(/secrets\.CLOUDFLARE_API_TOKEN\s*}}/g) ?? []).length !== 1) {
     errors.push('deploy-capable Cloudflare token must be referenced exactly once in the whole promotion workflow');
@@ -352,6 +369,13 @@ function selfTest(files) {
     'cp "$release_root/release-set.json" "$RUNNER_TEMP/ready/release-set.json"',
   );
   if (!promotionErrors(brokenByteIdentity).some((error) => error.includes('byte-compare'))) throw new Error('READY-to-mutation Release Set byte-identity fixture passed');
+  const staleFenceBypass = files.promotion.replace(
+    'test "$(jq -r \'.release_set_id\' "$RUNNER_TEMP/mutation-current-identity.json")" = "$EXPECTED_CURRENT"',
+    'echo "expected-current Worker fence bypassed"',
+  );
+  if (!promotionErrors(staleFenceBypass).some((error) => error.includes('expected-current Worker fence'))) {
+    throw new Error('mutation stale-fence bypass fixture unexpectedly passed');
+  }
   const legacyFixture = legacyAuthorityErrors((candidate) => candidate.endsWith(LEGACY_FILES[0]));
   if (legacyFixture.length !== 1 || !legacyFixture[0].includes('legacy D3 operational authority must be retired after Rust cutover')) {
     throw new Error('retired D3 operational authority restoration fixture passed');
