@@ -105,6 +105,10 @@ jobs:
           assert "'provider_mutation': False" in observe_source
           assert "'d1_mutation': False" in observe_source
           assert "'production_mutation': False" in observe_source
+          assert 'gh release download' not in observe_source
+          assert 'browser_download_url' in observe_source
+          assert '--retry-all-errors' in observe_source
+          assert 'sha256sum' in observe_source
           artifact_name = 'd1-transaction-preflight-' + '$' + '{{ github.run_id }}-' + '$' + '{{ github.run_attempt }}-' + '$' + '{{ github.sha }}'
           assert artifact_name in source
           PY
@@ -558,8 +562,31 @@ jobs:
             sleep 15
           done
           test -n "$target_release"
-          gh release download "$target_release" --repo "$GITHUB_REPOSITORY" --pattern release-set.json --pattern control-plane.tar --dir "$root/target"
-          gh release download "$CURRENT_DEPLOYED_RELEASE_SET_ID" --repo "$GITHUB_REPOSITORY" --pattern release-set.json --pattern control-plane.tar --dir "$root/current"
+
+          download_release_assets() {
+            local release_tag="$1"
+            local output_dir="$2"
+            local release_json="$output_dir/release-api.json"
+            local asset_name asset_json asset_url asset_digest actual_digest
+            mkdir -p "$output_dir"
+            gh api "repos/$GITHUB_REPOSITORY/releases/tags/$release_tag" > "$release_json"
+            for asset_name in release-set.json control-plane.tar; do
+              asset_json="$(jq -ce --arg name "$asset_name" '
+                [.assets[] | select(.name == $name and .state == "uploaded")]
+                | if length == 1 then .[0] else error("release asset missing or ambiguous") end
+              ' "$release_json")"
+              asset_url="$(jq -er '.browser_download_url | select(type == "string" and length > 0)' <<<"$asset_json")"
+              asset_digest="$(jq -er '.digest | select(type == "string" and test("^sha256:[0-9a-f]{64}$"))' <<<"$asset_json")"
+              curl --fail --location --silent --show-error \
+                --retry 5 --retry-delay 2 --retry-all-errors \
+                --output "$output_dir/$asset_name" "$asset_url"
+              actual_digest="sha256:$(sha256sum "$output_dir/$asset_name" | awk '{print $1}')"
+              test "$actual_digest" = "$asset_digest"
+            done
+            rm -f "$release_json"
+          }
+          download_release_assets "$target_release" "$root/target"
+          download_release_assets "$CURRENT_DEPLOYED_RELEASE_SET_ID" "$root/current"
 
           python - \
             "$root" "$target_release" "$SOURCE_SHA" \
