@@ -67,11 +67,8 @@ function secretObservationErrors(source, label) {
 }
 
 function readyMutationByteIdentityErrors(mutate) {
-  const commands = logicalShellLines(mutate).filter((line) => line.startsWith('cmp ') || line.startsWith('cmp\t'));
-  const matches = commands.filter((line) =>
-    line.includes('"$release_root/release-set.json"') &&
-    line.includes('"$RUNNER_TEMP/ready/release-set.json"')
-  );
+  const expected = 'cmp --silent "$release_root/release-set.json" "$RUNNER_TEMP/ready/release-set.json"';
+  const matches = logicalShellLines(mutate).filter((line) => line === expected);
   if (matches.length !== 1) {
     return [`protected mutation must byte-compare the freshly materialized Release Set manifest to the exact bound READY manifest once; observed=${matches.length}`];
   }
@@ -80,7 +77,7 @@ function readyMutationByteIdentityErrors(mutate) {
 
 function immediateMutationFenceErrors(mutate) {
   const lines = logicalShellLines(mutate);
-  const workerFence = 'test "$(jq -r \'.release_set_id\' "$RUNNER_TEMP/mutation-current-identity.json")" = "$EXPECTED_CURRENT"';
+  const workerFence = 'test "$(jq -r \' .release_set_id\' "$RUNNER_TEMP/mutation-current-identity.json")" = "$EXPECTED_CURRENT"'.replace("' .release_set_id'", "'.release_set_id'");
   const d1Fence = 'cmp --silent "$RUNNER_TEMP/mutation-d1-names.json" "$RUNNER_TEMP/ready/d1-names-after.json"';
   const workerMatches = lines.filter((line) => line.includes(workerFence));
   const d1Matches = lines.filter((line) => line.includes(d1Fence));
@@ -386,13 +383,17 @@ function selfTest(files) {
     'run: cargo build --release\n      - name: Deploy exact Release Set v3 bits after all fences',
   );
   if (!promotionErrors(rebuild).some((error) => error.includes('cargo build'))) throw new Error('promotion rebuild fixture unexpectedly passed');
-  const brokenByteIdentity = files.promotion.replace(
+  const mutationBlock = jobBlock(files.promotion, 'mutate');
+  const brokenMutationBlock = mutationBlock.replace(
     'cmp --silent "$release_root/release-set.json" "$RUNNER_TEMP/ready/release-set.json"',
     'cp "$release_root/release-set.json" "$RUNNER_TEMP/ready/release-set.json"',
   );
+  if (brokenMutationBlock === mutationBlock) throw new Error('READY-to-mutation Release Set byte-identity fixture setup failed');
+  const brokenByteIdentity = files.promotion.replace(mutationBlock, brokenMutationBlock);
+  if (brokenByteIdentity === files.promotion) throw new Error('READY-to-mutation Release Set byte-identity fixture setup failed');
   if (!promotionErrors(brokenByteIdentity).some((error) => error.includes('byte-compare'))) throw new Error('READY-to-mutation Release Set byte-identity fixture passed');
   const staleFenceBypass = files.promotion.replace(
-    'test "$(jq -r \'.release_set_id\' "$RUNNER_TEMP/mutation-current-identity.json")" = "$EXPECTED_CURRENT"',
+    'test "$(jq -r \' .release_set_id\' "$RUNNER_TEMP/mutation-current-identity.json")" = "$EXPECTED_CURRENT"'.replace("' .release_set_id'", "'.release_set_id'"),
     'echo "expected-current Worker fence bypassed"',
   );
   if (!promotionErrors(staleFenceBypass).some((error) => error.includes('expected-current Worker fence'))) {
