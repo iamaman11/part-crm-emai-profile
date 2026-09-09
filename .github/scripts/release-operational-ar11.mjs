@@ -78,16 +78,34 @@ function buildErrors(build) {
 function promotionErrors(promotion) {
   const errors = [];
   errors.push(...requireMarkers(promotion, [
-    'workflow_dispatch:', 'operation:', 'release_set_id:', 'expected_current_release_set_id:', 'source_run_id:',
-    'request_id:', 'confirmation:', 'concurrency:\n  group: release-set-promotion-staging',
+    'run-name: AR11 Release Set Promotion',
+    'workflow_dispatch:', 'workflow_call:', 'operation:', 'release_set_id:', 'expected_current_release_set_id:', 'source_run_id:',
+    'confirmation:', 'concurrency:\n  group: release-set-promotion-staging',
     "'{schema_version:2,release_set_id:$release_set_id,expected_current:$expected_current,authorization_comment_id:$authorization_comment_id,authorization_digest:$authorization_digest,promotion_id:$promotion_id,decision:$decision,preflight_sha256:$preflight_sha256,plan_sha256:$plan_sha256}'",
   ], 'Release Set promotion'));
   if (count(promotion, 'workflow_dispatch:') !== 1) errors.push('Release Set promotion must expose exactly one manual dispatch surface');
+  if (count(promotion, 'workflow_call:') !== 1) errors.push('Release Set promotion must expose exactly one internal reusable evidence surface');
+
+  const trigger = promotion.split('\npermissions:', 1)[0];
+  const dispatchMarker = '\n  workflow_dispatch:';
+  const callMarker = '\n  workflow_call:';
+  if (!trigger.includes(dispatchMarker) || !trigger.includes(callMarker) || trigger.indexOf(dispatchMarker) > trigger.indexOf(callMarker)) {
+    errors.push('Release Set promotion trigger order must be zero-field workflow_dispatch followed by internal workflow_call');
+  } else {
+    const manualDispatch = trigger.split(dispatchMarker, 2)[1].split(callMarker, 1)[0];
+    if (manualDispatch.includes('inputs:')) errors.push('manual Release Set promotion dispatch must declare zero inputs');
+    const internalCall = trigger.split(callMarker, 2)[1];
+    errors.push(...requireMarkers(internalCall, [
+      'inputs:', 'operation:', 'release_set_id:', 'expected_current_release_set_id:', 'source_run_id:', 'confirmation:',
+      'description: Internal evidence operation',
+    ], 'Release Set internal evidence call'));
+  }
+
   if (count(promotion, 'secrets.CLOUDFLARE_API_TOKEN') !== 1) errors.push('deploy-capable Cloudflare token must be referenced exactly once, inside mutation executor');
   if (count(promotion, 'materialize current-v3') !== 5) errors.push(`current v3 Release Set materialization must occur exactly five times, observed=${count(promotion, 'materialize current-v3')}`);
   if (count(promotion, 'materialize known-good-v2-v3') !== 1) errors.push(`historical v2/v3 Release Set materialization must occur exactly once in known-good verification, observed=${count(promotion, 'materialize known-good-v2-v3')}`);
   errors.push(...forbidMarkers(promotion, [
-    'workflow_run:', 'issue_comment:', 'pull_request_target:', 'pull_request:\n', 'operator-entrypoint:',
+    'workflow_run:', 'issue_comment:', 'pull_request_target:', 'pull_request:\n', 'operator-entrypoint:', 'request_id:',
     'test "$source_sha" = "$main_sha"',
     'preflight_sha256256', 'environment: production', 'TARGET_PROFILE: production-',
     'TARGET_PROFILE: rehearsal-core-v1', 'profile=rehearsal-core-v1', '--profile rehearsal-core-v1',
@@ -96,25 +114,36 @@ function promotionErrors(promotion) {
     'CLOUDFLARE_RESOLVER_SECRETS_JSON', 'CLOUDFLARE_CONTROL_PLANE_SECRETS_JSON', 'terraform',
   ], 'Release Set promotion'));
 
+  const route = jobBlock(promotion, 'route');
   const resolve = jobBlock(promotion, 'resolve-verify');
   const observe = jobBlock(promotion, 'observe-preflight');
   const mutate = jobBlock(promotion, 'mutate');
   const post = jobBlock(promotion, 'post-verify');
   const rollbackNegative = jobBlock(promotion, 'rollback-negative-evidence');
-  for (const [name, block] of Object.entries({ 'resolve-verify': resolve, 'observe-preflight': observe, mutate, 'post-verify': post, 'rollback-negative-evidence': rollbackNegative })) {
+  for (const [name, block] of Object.entries({ route, 'resolve-verify': resolve, 'observe-preflight': observe, mutate, 'post-verify': post, 'rollback-negative-evidence': rollbackNegative })) {
     if (!block) errors.push(`Release Set promotion is missing structural job ${name}`);
   }
   if (errors.some((error) => error.includes('missing structural job'))) return errors;
 
+  errors.push(...requireMarkers(route, [
+    'Classify zero-field manual vs internal evidence invocation',
+    'INTERNAL_OPERATION: ${{ inputs.operation }}',
+    'if [ -z "$INTERNAL_OPERATION" ]; then',
+    'test "$GITHUB_EVENT_NAME" = workflow_dispatch',
+    "echo 'mode=promote' >> \"$GITHUB_OUTPUT\"",
+    'test "$INTERNAL_OPERATION" = rollback-negative',
+    "echo 'mode=rollback-negative' >> \"$GITHUB_OUTPUT\"",
+  ], 'promotion invocation router'));
+  errors.push(...forbidMarkers(route, [
+    'job.workflow_ref', 'CALLER_WORKFLOW_REF', 'JOB_WORKFLOW_REF',
+    'secrets.', 'CLOUDFLARE_', 'wrangler deploy', 'deployments: write', 'environment: staging',
+  ], 'promotion invocation router'));
+
   errors.push(...requireMarkers(resolve, [
-    "if: github.event_name == 'workflow_dispatch' && inputs.operation == 'promote'",
+    'needs: route', "if: needs.route.outputs.mode == 'promote'",
     'issues: read',
     'Resolve exact one-shot promotion authorization from current authority',
-    'test "${{ inputs.operation }}" = promote',
-    'test -z "${{ inputs.release_set_id }}"',
-    'test -z "${{ inputs.expected_current_release_set_id }}"',
-    'test -z "${{ inputs.source_run_id }}"',
-    'test -z "${{ inputs.confirmation }}"',
+    'test "$GITHUB_EVENT_NAME" = workflow_dispatch',
     'repos/$GITHUB_REPOSITORY/branches/main',
     'repos/$GITHUB_REPOSITORY/issues/266',
     "current.get('CURRENT_STAGE') != 'V2'",
@@ -146,6 +175,7 @@ function promotionErrors(promotion) {
     '.release_set_schema_version == 3', '.source_accepted == true',
   ], 'promotion phase 1 resolve+verify'));
   errors.push(...forbidMarkers(resolve, [
+    'inputs.',
     '[[ "$RELEASE_SET_ID" =~ ^release-set-v2-sha256-[0-9a-f]{64}$ ]]',
     'materialize known-good-v2-v3',
     "test \"$(jq -r '.schema_version' \"$policy_dir/release-set.json\")\" = 2",
@@ -215,8 +245,9 @@ function promotionErrors(promotion) {
   errors.push(...forbidMarkers(post, ['materialize known-good-v2-v3', 'secrets.CLOUDFLARE_API_TOKEN', 'deployments: write', 'wrangler deploy'], 'promotion phase 4 post-deploy observation'));
 
   errors.push(...requireMarkers(rollbackNegative, [
-    "if: github.event_name == 'workflow_dispatch' && inputs.operation == 'rollback-negative'", 'actions: read',
+    'needs: route', "if: needs.route.outputs.mode == 'rollback-negative'", 'actions: read',
     'Validate evidence-only intent and live source run',
+    'test "${{ inputs.operation }}" = rollback-negative',
     '[[ "$RELEASE_SET_ID" =~ ^release-set-v3-sha256-[0-9a-f]{64}$ ]]',
     '.status == "completed"', '.conclusion == "success"',
     '.path == ".github/workflows/release-set-promotion.yml"', 'gh run download "$SOURCE_RUN_ID"',
@@ -280,11 +311,17 @@ function selfTest() {
   const staleFiveAssetBuild = build.replace('test "$(find "$asset_dir" -maxdepth 1 -type f | wc -l)" -eq 9', 'test "$(find "$asset_dir" -maxdepth 1 -type f | wc -l)" -eq 5');
   if (!buildErrors(staleFiveAssetBuild).some((error) => error.includes('eq 9'))) throw new Error('five-asset current Release Set fixture unexpectedly passed');
 
-  const manualTarget = promotion.replace('test -z "${{ inputs.release_set_id }}"', 'test -n "${{ inputs.release_set_id }}"');
-  if (!promotionErrors(manualTarget).some((error) => error.includes('promotion phase 1'))) throw new Error('manual ordinary target transport fixture unexpectedly passed');
+  const manualInput = promotion.replace(
+    '  workflow_dispatch:\n  workflow_call:',
+    '  workflow_dispatch:\n    inputs:\n      release_set_id:\n        required: false\n        type: string\n  workflow_call:',
+  );
+  if (!promotionErrors(manualInput).some((error) => error.includes('zero inputs'))) throw new Error('manual promotion input reintroduction fixture unexpectedly passed');
 
-  const manualCurrent = promotion.replace('test -z "${{ inputs.expected_current_release_set_id }}"', 'test -n "${{ inputs.expected_current_release_set_id }}"');
-  if (!promotionErrors(manualCurrent).some((error) => error.includes('promotion phase 1'))) throw new Error('manual ordinary expected-current transport fixture unexpectedly passed');
+  const routeBypass = promotion.replace('if [ -z "$INTERNAL_OPERATION" ]; then', 'if true; then');
+  if (!promotionErrors(routeBypass).some((error) => error.includes('invocation router'))) throw new Error('manual/internal route bypass fixture unexpectedly passed');
+
+  const unknownInternalOperation = promotion.replace('test "$INTERNAL_OPERATION" = rollback-negative', 'test -n "$INTERNAL_OPERATION"');
+  if (!promotionErrors(unknownInternalOperation).some((error) => error.includes('invocation router'))) throw new Error('unknown internal operation fixture unexpectedly passed');
 
   const missingOwnerAuthorization = promotion.replace("lines[0] != 'WORKER_PROMOTION_AUTHORIZATION_V1'", "lines[0] != 'UNVERIFIED_PROMOTION'");
   if (!promotionErrors(missingOwnerAuthorization).some((error) => error.includes('promotion phase 1'))) throw new Error('missing OWNER authorization contract fixture unexpectedly passed');
@@ -319,8 +356,11 @@ function selfTest() {
   const production = promotion.replace('environment: staging', 'environment: production');
   if (!promotionErrors(production).some((error) => error.includes('environment: production'))) throw new Error('production activation fixture unexpectedly passed');
 
-  const broadOperation = promotion.replace("if: github.event_name == 'workflow_dispatch' && inputs.operation == 'promote'", "if: github.event_name == 'workflow_dispatch'");
-  if (!promotionErrors(broadOperation).some((error) => error.includes('promotion phase 1'))) throw new Error('operation isolation fixture unexpectedly passed');
+  const broadOperation = promotion.replace("if: needs.route.outputs.mode == 'promote'", 'if: always()');
+  if (!promotionErrors(broadOperation).some((error) => error.includes('promotion phase 1'))) throw new Error('ordinary promotion route isolation fixture unexpectedly passed');
+
+  const directRollback = promotion.replace("if: needs.route.outputs.mode == 'rollback-negative'", "if: github.event_name == 'workflow_dispatch'");
+  if (!promotionErrors(directRollback).some((error) => error.includes('rollback-negative evidence'))) throw new Error('manual rollback-negative exposure fixture unexpectedly passed');
 
   const reintroducedListener = promotion.replace('  workflow_dispatch:', '  issue_comment:\n    types: [created]\n  workflow_run:\n    workflows: [Release Architecture Gate]\n    types: [completed]\n  workflow_dispatch:');
   if (!promotionErrors(reintroducedListener).some((error) => error.includes('workflow_run') || error.includes('issue_comment'))) throw new Error('promotion event-listener reintroduction fixture unexpectedly passed');
@@ -338,7 +378,7 @@ function selfTest() {
   const nestedArtifact = promotion.replace('${{ runner.temp }}/release-set.json\n            ${{ runner.temp }}/accepted-source-evidence.json', '${{ runner.temp }}/release-policy-input/release-set.json\n            ${{ runner.temp }}/release-policy-input/accepted-source-evidence.json');
   if (!promotionErrors(nestedArtifact).some((error) => error.includes('phase 2 observe+preflight'))) throw new Error('nested preflight artifact regression unexpectedly passed');
 
-  console.log('AR-11 nine-asset Release Set v3, authorized zero-input ordinary promotion, narrow historical v2/v3 verification, and structural negative self-test passed.');
+  console.log('AR-11 nine-asset Release Set v3, manual zero-field authorized promotion, internal rollback-negative evidence, narrow historical v2/v3 verification, and structural negative self-test passed.');
 }
 
 if (process.argv.includes('--self-test')) { selfTest(); process.exit(0); }
@@ -347,4 +387,4 @@ if (errors.length > 0) {
   console.error(`AR-11 operational policy failed:\n${errors.map((error) => `- ${error}`).join('\n')}`);
   process.exit(1);
 }
-console.log('AR-11 durable Release Set v3 (nine immutable assets), authorized zero-input promotion, and structural policy passed.');
+console.log('AR-11 durable Release Set v3 (nine immutable assets), manual zero-field authorized promotion, internal rollback-negative evidence, and structural policy passed.');

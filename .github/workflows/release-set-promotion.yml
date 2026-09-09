@@ -1,42 +1,30 @@
 name: Release Set Promotion
 
-run-name: AR11 ${{ inputs.operation }} ${{ inputs.request_id }}
+run-name: AR11 Release Set Promotion
 
 on:
   workflow_dispatch:
+  workflow_call:
     inputs:
       operation:
-        description: 'Canonical operation: promote or rollback-negative evidence'
+        description: Internal evidence operation
         required: true
-        default: promote
-        type: choice
-        options:
-          - promote
-          - rollback-negative
+        type: string
       release_set_id:
-        description: 'Advanced rollback-negative only; leave blank for ordinary promote'
+        description: Internal rollback-negative Release Set identity
         required: false
-        default: ''
         type: string
       expected_current_release_set_id:
-        description: 'Advanced rollback-negative only; leave blank for ordinary promote'
+        description: Internal rollback-negative expected-current identity
         required: false
-        default: ''
         type: string
       source_run_id:
-        description: Completed canonical A-to-A run id; required only for rollback-negative evidence
+        description: Internal completed canonical A-to-A run id
         required: false
-        default: ''
-        type: string
-      request_id:
-        description: Bounded operator correlation id; MANUAL for direct UI dispatch
-        required: false
-        default: MANUAL
         type: string
       confirmation:
-        description: 'Advanced rollback-negative only; leave blank for ordinary promote'
+        description: Internal rollback-negative confirmation
         required: false
-        default: ''
         type: string
 
 permissions:
@@ -47,9 +35,31 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  route:
+    name: Classify zero-field manual vs internal evidence invocation
+    runs-on: ubuntu-latest
+    outputs:
+      mode: ${{ steps.route.outputs.mode }}
+    steps:
+      - name: Bind invocation surface fail closed
+        id: route
+        env:
+          INTERNAL_OPERATION: ${{ inputs.operation }}
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = refs/heads/main
+          if [ -z "$INTERNAL_OPERATION" ]; then
+            test "$GITHUB_EVENT_NAME" = workflow_dispatch
+            echo 'mode=promote' >> "$GITHUB_OUTPUT"
+          else
+            test "$INTERNAL_OPERATION" = rollback-negative
+            echo 'mode=rollback-negative' >> "$GITHUB_OUTPUT"
+          fi
+
   resolve-verify:
     name: Resolve and verify immutable intent
-    if: github.event_name == 'workflow_dispatch' && inputs.operation == 'promote'
+    needs: route
+    if: needs.route.outputs.mode == 'promote'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -69,12 +79,7 @@ jobs:
         run: |
           set -euo pipefail
           test "$GITHUB_EVENT_NAME" = workflow_dispatch
-          test "${{ inputs.operation }}" = promote
           test "$GITHUB_REF" = refs/heads/main
-          test -z "${{ inputs.release_set_id }}"
-          test -z "${{ inputs.expected_current_release_set_id }}"
-          test -z "${{ inputs.source_run_id }}"
-          test -z "${{ inputs.confirmation }}"
 
           gh api "repos/$GITHUB_REPOSITORY/branches/main" > "$RUNNER_TEMP/protected-main.json"
           test "$(jq -r '.protected' "$RUNNER_TEMP/protected-main.json")" = true
@@ -862,7 +867,8 @@ jobs:
 
   rollback-negative-evidence:
     name: Prove incompatible or unknown rollback blocks before mutation
-    if: github.event_name == 'workflow_dispatch' && inputs.operation == 'rollback-negative'
+    needs: route
+    if: needs.route.outputs.mode == 'rollback-negative'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -877,7 +883,7 @@ jobs:
         id: bind
         run: |
           set -euo pipefail
-          test "$GITHUB_EVENT_NAME" = workflow_dispatch
+          test "${{ inputs.operation }}" = rollback-negative
           test "$GITHUB_REF" = refs/heads/main
           [[ "$RELEASE_SET_ID" =~ ^release-set-v3-sha256-[0-9a-f]{64}$ ]]
           test "$EXPECTED_CURRENT" = "$RELEASE_SET_ID"
