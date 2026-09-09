@@ -78,6 +78,16 @@ function readyMutationByteIdentityErrors(mutate) {
   return [];
 }
 
+function legacyAuthorityErrors(exists = existsSync) {
+  const errors = [];
+  for (const relative of LEGACY_FILES) {
+    if (exists(path.join(ROOT, relative))) {
+      errors.push(`legacy D3 operational authority must be retired after Rust cutover: ${relative}`);
+    }
+  }
+  return errors;
+}
+
 function buildErrors(build) {
   const errors = [];
   errors.push(...requireMarkers(build, [
@@ -319,7 +329,7 @@ function validateAll({ build, promotion, camoufox, authority }) {
     ...promotionErrors(promotion),
     ...camoufoxErrors(camoufox),
     ...authorityErrors(authority),
-    ...LEGACY_FILES.filter((relative) => existsSync(path.join(ROOT, relative))).map((relative) => `retired release authority exists: ${relative}`),
+    ...legacyAuthorityErrors(),
     ...(existsSync(path.join(ROOT, ASSET_MATERIALIZER)) ? [] : [`missing Release Set asset materializer: ${ASSET_MATERIALIZER}`]),
   ];
 }
@@ -342,6 +352,10 @@ function selfTest(files) {
     'cp "$release_root/release-set.json" "$RUNNER_TEMP/ready/release-set.json"',
   );
   if (!promotionErrors(brokenByteIdentity).some((error) => error.includes('byte-compare'))) throw new Error('READY-to-mutation Release Set byte-identity fixture passed');
+  const legacyFixture = legacyAuthorityErrors((candidate) => candidate.endsWith(LEGACY_FILES[0]));
+  if (legacyFixture.length !== 1 || !legacyFixture[0].includes('legacy D3 operational authority must be retired after Rust cutover')) {
+    throw new Error('retired D3 operational authority restoration fixture passed');
+  }
   const unsafeAllowlist = files.camoufox.replace("'architecture/release-architecture-ar11.json',", "'architecture/release-architecture-ar11.json',\n              'runtime/camouhost/real.py',");
   if (camoufoxErrors(unsafeAllowlist).length === 0) throw new Error('unsafe Camoufox ops allowlist fixture passed');
   const weakAuthority = structuredClone(files.authority);
