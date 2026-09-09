@@ -127,19 +127,15 @@ function promotionErrors(promotion) {
 
   errors.push(...requireMarkers(route, [
     'Classify zero-field manual vs internal evidence invocation',
-    'CALLER_WORKFLOW_REF: ${{ github.workflow_ref }}',
-    'JOB_WORKFLOW_REF: ${{ job.workflow_ref }}',
     'INTERNAL_OPERATION: ${{ inputs.operation }}',
-    'expected_job_ref="$GITHUB_REPOSITORY/.github/workflows/release-set-promotion.yml@$GITHUB_REF"',
-    'test "$JOB_WORKFLOW_REF" = "$expected_job_ref"',
-    'if [ "$CALLER_WORKFLOW_REF" = "$JOB_WORKFLOW_REF" ]; then',
+    'if [ -z "$INTERNAL_OPERATION" ]; then',
     'test "$GITHUB_EVENT_NAME" = workflow_dispatch',
-    'test -z "$INTERNAL_OPERATION"',
     "echo 'mode=promote' >> \"$GITHUB_OUTPUT\"",
     'test "$INTERNAL_OPERATION" = rollback-negative',
     "echo 'mode=rollback-negative' >> \"$GITHUB_OUTPUT\"",
   ], 'promotion invocation router'));
   errors.push(...forbidMarkers(route, [
+    'job.workflow_ref', 'CALLER_WORKFLOW_REF', 'JOB_WORKFLOW_REF',
     'secrets.', 'CLOUDFLARE_', 'wrangler deploy', 'deployments: write', 'environment: staging',
   ], 'promotion invocation router'));
 
@@ -321,11 +317,11 @@ function selfTest() {
   );
   if (!promotionErrors(manualInput).some((error) => error.includes('zero inputs'))) throw new Error('manual promotion input reintroduction fixture unexpectedly passed');
 
-  const routeBypass = promotion.replace('test "$JOB_WORKFLOW_REF" = "$expected_job_ref"', 'test -n "$JOB_WORKFLOW_REF"');
-  if (!promotionErrors(routeBypass).some((error) => error.includes('invocation router'))) throw new Error('called-workflow identity route bypass fixture unexpectedly passed');
+  const routeBypass = promotion.replace('if [ -z "$INTERNAL_OPERATION" ]; then', 'if true; then');
+  if (!promotionErrors(routeBypass).some((error) => error.includes('invocation router'))) throw new Error('manual/internal route bypass fixture unexpectedly passed');
 
-  const manualOperationTransport = promotion.replace('test -z "$INTERNAL_OPERATION"', 'test "$INTERNAL_OPERATION" = promote');
-  if (!promotionErrors(manualOperationTransport).some((error) => error.includes('invocation router'))) throw new Error('manual operation transport fixture unexpectedly passed');
+  const unknownInternalOperation = promotion.replace('test "$INTERNAL_OPERATION" = rollback-negative', 'test -n "$INTERNAL_OPERATION"');
+  if (!promotionErrors(unknownInternalOperation).some((error) => error.includes('invocation router'))) throw new Error('unknown internal operation fixture unexpectedly passed');
 
   const missingOwnerAuthorization = promotion.replace("lines[0] != 'WORKER_PROMOTION_AUTHORIZATION_V1'", "lines[0] != 'UNVERIFIED_PROMOTION'");
   if (!promotionErrors(missingOwnerAuthorization).some((error) => error.includes('promotion phase 1'))) throw new Error('missing OWNER authorization contract fixture unexpectedly passed');
