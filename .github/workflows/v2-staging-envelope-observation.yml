@@ -6,15 +6,10 @@ on:
     branches:
       - main
   workflow_dispatch:
-    inputs:
-      phase_c_release_set_id:
-        description: Optional exact deployed Release Set v3 to prove Phase C without mutation
-        required: false
-        default: ''
-        type: string
 
 permissions:
   contents: read
+  issues: read
 
 concurrency:
   group: v2-staging-envelope-${{ github.workflow }}-${{ github.ref }}
@@ -266,14 +261,13 @@ jobs:
 
   phase-c:
     name: V2 Phase C Mechanical Contract Evidence
-    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.phase_c_release_set_id != ''
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
     needs: contract
     runs-on: ubuntu-24.04
     timeout-minutes: 12
     environment: staging
     env:
       GH_TOKEN: ${{ github.token }}
-      RELEASE_SET_ID: ${{ inputs.phase_c_release_set_id }}
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_OBSERVE_API_TOKEN }}
       CLOUDFLARE_DEPLOY_MANIFEST_JSON: ${{ secrets.CLOUDFLARE_DEPLOY_MANIFEST_JSON }}
     steps:
@@ -288,6 +282,66 @@ jobs:
         env:
           EXPECTED_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: python -c "import os, subprocess; actual = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(); expected = os.environ['EXPECTED_SOURCE_SHA']; assert actual == expected, f'expected {expected}, got {actual}'"
+
+      - name: Resolve exact current Release Set from sole live pointer
+        id: resolve
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = refs/heads/main
+          test "$GITHUB_EVENT_NAME" = workflow_dispatch
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          gh api "repos/$GITHUB_REPOSITORY/branches/main" > "$RUNNER_TEMP/phase-c-main.json"
+          test "$(jq -r '.protected' "$RUNNER_TEMP/phase-c-main.json")" = true
+          test "$(jq -r '.commit.sha' "$RUNNER_TEMP/phase-c-main.json")" = "$GITHUB_SHA"
+          gh api "repos/$GITHUB_REPOSITORY/issues/266" > "$RUNNER_TEMP/phase-c-live-pointer.json"
+          release_set_id="$(python - "$RUNNER_TEMP/phase-c-live-pointer.json" "$GITHUB_SHA" <<'PY'
+          import json
+          import re
+          import sys
+
+          pointer_path, expected_main = sys.argv[1:]
+          issue = json.load(open(pointer_path, encoding='utf-8'))
+          if issue.get('state') != 'open':
+              raise SystemExit('live pointer #266 is not open')
+          body = issue.get('body')
+          if not isinstance(body, str):
+              raise SystemExit('live pointer #266 body is missing')
+
+          def parse_block(block):
+              fields = {}
+              for raw in block.splitlines():
+                  match = re.fullmatch(r'\s*([A-Z0-9_]+)\s*=\s*(.*?)\s*', raw)
+                  if not match:
+                      continue
+                  key, value = match.groups()
+                  if key in fields:
+                      raise SystemExit(f'duplicate live-pointer field: {key}')
+                  fields[key] = value
+              return fields
+
+          blocks = re.findall(r'```(?:text)?\s*\n(.*?)```', body, flags=re.S)
+          current = [fields for fields in map(parse_block, blocks) if fields.get('CURRENT_STAGE')]
+          if len(current) != 1:
+              raise SystemExit('live pointer CURRENT block missing or ambiguous')
+          current = current[0]
+          required = {
+              'CURRENT_STAGE': 'V2',
+              'CURRENT_STAGE_ISSUE': '#584',
+              'PROTECTED_MAIN': expected_main,
+              'OPEN_IMPLEMENTATION_PR': 'NONE',
+          }
+          for key, expected in required.items():
+              if current.get(key) != expected:
+                  raise SystemExit(f'live pointer mismatch for {key}: {current.get(key)!r}')
+          release_set_id = current.get('CURRENT_RELEASE_CANDIDATE_ID', '')
+          if not re.fullmatch(r'release-set-v3-sha256-[0-9a-f]{64}', release_set_id):
+              raise SystemExit('current Release Set identity is missing or invalid')
+          print(release_set_id)
+          PY
+          )"
+          [[ "$release_set_id" =~ ^release-set-v3-sha256-[0-9a-f]{64}$ ]]
+          echo "RELEASE_SET_ID=$release_set_id" >> "$GITHUB_ENV"
+          echo "release_set_id=$release_set_id" >> "$GITHUB_OUTPUT"
 
       - name: Require exact current-main Release B identity
         run: |
@@ -419,7 +473,7 @@ jobs:
       - name: Publish secret-free Phase C contract evidence
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: v2-phase-c-contract-evidence-${{ inputs.phase_c_release_set_id }}-${{ github.sha }}
+          name: v2-phase-c-contract-evidence-${{ steps.resolve.outputs.release_set_id }}-${{ github.sha }}
           path: artifacts/v2-phase-c-contract-evidence
           if-no-files-found: error
           retention-days: 90
