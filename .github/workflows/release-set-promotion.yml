@@ -35,9 +35,36 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  route:
+    name: Classify zero-field manual vs internal evidence invocation
+    runs-on: ubuntu-latest
+    outputs:
+      mode: ${{ steps.route.outputs.mode }}
+    steps:
+      - name: Bind invocation surface fail closed
+        id: route
+        env:
+          CALLER_WORKFLOW_REF: ${{ github.workflow_ref }}
+          JOB_WORKFLOW_REF: ${{ job.workflow_ref }}
+          INTERNAL_OPERATION: ${{ inputs.operation }}
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = refs/heads/main
+          expected_job_ref="$GITHUB_REPOSITORY/.github/workflows/release-set-promotion.yml@$GITHUB_REF"
+          test "$JOB_WORKFLOW_REF" = "$expected_job_ref"
+          if [ "$CALLER_WORKFLOW_REF" = "$JOB_WORKFLOW_REF" ]; then
+            test "$GITHUB_EVENT_NAME" = workflow_dispatch
+            test -z "$INTERNAL_OPERATION"
+            echo 'mode=promote' >> "$GITHUB_OUTPUT"
+          else
+            test "$INTERNAL_OPERATION" = rollback-negative
+            echo 'mode=rollback-negative' >> "$GITHUB_OUTPUT"
+          fi
+
   resolve-verify:
     name: Resolve and verify immutable intent
-    if: github.event_name == 'workflow_dispatch'
+    needs: route
+    if: needs.route.outputs.mode == 'promote'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -845,7 +872,8 @@ jobs:
 
   rollback-negative-evidence:
     name: Prove incompatible or unknown rollback blocks before mutation
-    if: github.event_name == 'workflow_call' && inputs.operation == 'rollback-negative'
+    needs: route
+    if: needs.route.outputs.mode == 'rollback-negative'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -860,7 +888,7 @@ jobs:
         id: bind
         run: |
           set -euo pipefail
-          test "$GITHUB_EVENT_NAME" = workflow_call
+          test "${{ inputs.operation }}" = rollback-negative
           test "$GITHUB_REF" = refs/heads/main
           [[ "$RELEASE_SET_ID" =~ ^release-set-v3-sha256-[0-9a-f]{64}$ ]]
           test "$EXPECTED_CURRENT" = "$RELEASE_SET_ID"
