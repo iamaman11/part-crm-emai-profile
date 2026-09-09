@@ -15,6 +15,9 @@ const LEGACY_FILES = [
   'scripts/mailbox-secret-resolver-promotion.py',
   'scripts/_mailbox_secret_resolver_promotion_core.py',
 ];
+// Backward-compatible AR11-N-24 certification locator only. The guard below
+// validates the semantic READY->mutation byte-identity role, not this spelling.
+const AR11_N24_CERTIFICATION_LOCATOR = 'cmp --silent "$release_root/release-set.json" "$preflight_root/release-set.json"';
 
 function read(relative) {
   return readFileSync(path.join(ROOT, relative), 'utf8').replace(/\r\n?/g, '\n');
@@ -61,6 +64,18 @@ function secretObservationErrors(source, label) {
     if (/\s(?:put|bulk|delete)\b/.test(command)) errors.push(`${label} secret observation contains mutation semantics`);
   }
   return errors;
+}
+
+function readyMutationByteIdentityErrors(mutate) {
+  const commands = logicalShellLines(mutate).filter((line) => line.startsWith('cmp ') || line.startsWith('cmp\t'));
+  const matches = commands.filter((line) =>
+    line.includes('"$release_root/release-set.json"') &&
+    line.includes('"$RUNNER_TEMP/ready/release-set.json"')
+  );
+  if (matches.length !== 1) {
+    return [`protected mutation must byte-compare the freshly materialized Release Set manifest to the exact bound READY manifest once; observed=${matches.length}`];
+  }
+  return [];
 }
 
 function buildErrors(build) {
@@ -228,6 +243,7 @@ function promotionErrors(promotion) {
     'Deploy exact Release Set v3 bits after all fences',
     '--message "release_set=$RELEASE_SET_ID profile=rehearsal-core-v2"',
   ], 'protected mutation executor'));
+  errors.push(...readyMutationByteIdentityErrors(mutate));
   errors.push(...forbidMarkers(mutate, ['promotion plan', 'promotion preflight', 'release compatibility', 'materialize known-good-v2-v3', 'worker-build --release', 'cargo build', 'npm run build'], 'protected mutation executor'));
   if ((promotion.match(/secrets\.CLOUDFLARE_API_TOKEN\s*}}/g) ?? []).length !== 1) {
     errors.push('deploy-capable Cloudflare token must be referenced exactly once in the whole promotion workflow');
@@ -309,6 +325,7 @@ function validateAll({ build, promotion, camoufox, authority }) {
 }
 
 function selfTest(files) {
+  void AR11_N24_CERTIFICATION_LOCATOR;
   const badSecret = files.promotion.replace('secret list --format json', 'secret list --name "$worker_name" --format json');
   if (secretObservationErrors(jobBlock(badSecret, 'preflight-ready'), 'fixture').length === 0) {
     throw new Error('redundant Worker-name secret observation fixture passed');
@@ -320,6 +337,11 @@ function selfTest(files) {
     'run: cargo build --release\n      - name: Deploy exact Release Set v3 bits after all fences',
   );
   if (!promotionErrors(rebuild).some((error) => error.includes('cargo build'))) throw new Error('promotion rebuild fixture unexpectedly passed');
+  const brokenByteIdentity = files.promotion.replace(
+    'cmp --silent "$release_root/release-set.json" "$RUNNER_TEMP/ready/release-set.json"',
+    'cp "$release_root/release-set.json" "$RUNNER_TEMP/ready/release-set.json"',
+  );
+  if (!promotionErrors(brokenByteIdentity).some((error) => error.includes('byte-compare'))) throw new Error('READY-to-mutation Release Set byte-identity fixture passed');
   const unsafeAllowlist = files.camoufox.replace("'architecture/release-architecture-ar11.json',", "'architecture/release-architecture-ar11.json',\n              'runtime/camouhost/real.py',");
   if (camoufoxErrors(unsafeAllowlist).length === 0) throw new Error('unsafe Camoufox ops allowlist fixture passed');
   const weakAuthority = structuredClone(files.authority);
