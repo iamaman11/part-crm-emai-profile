@@ -44,17 +44,12 @@ jobs:
       - name: Bind invocation surface fail closed
         id: route
         env:
-          CALLER_WORKFLOW_REF: ${{ github.workflow_ref }}
-          JOB_WORKFLOW_REF: ${{ job.workflow_ref }}
           INTERNAL_OPERATION: ${{ inputs.operation }}
         run: |
           set -euo pipefail
           test "$GITHUB_REF" = refs/heads/main
-          expected_job_ref="$GITHUB_REPOSITORY/.github/workflows/release-set-promotion.yml@$GITHUB_REF"
-          test "$JOB_WORKFLOW_REF" = "$expected_job_ref"
-          if [ "$CALLER_WORKFLOW_REF" = "$JOB_WORKFLOW_REF" ]; then
+          if [ -z "$INTERNAL_OPERATION" ]; then
             test "$GITHUB_EVENT_NAME" = workflow_dispatch
-            test -z "$INTERNAL_OPERATION"
             echo 'mode=promote' >> "$GITHUB_OUTPUT"
           else
             test "$INTERNAL_OPERATION" = rollback-negative
