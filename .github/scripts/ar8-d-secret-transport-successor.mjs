@@ -12,6 +12,8 @@ const D3_MARKER = 'architecture/pre2j-d3-resolver-bootstrap-implementation.json'
 const AR11_AUTHORITY = 'architecture/release-architecture-ar11.json';
 const AR11_CHECKER = '.github/scripts/release-operational-ar11.mjs';
 const AR11_PROMOTION = '.github/workflows/release-set-promotion.yml';
+const WRANGLER_SOURCE = 'deploy/cloudflare/wrangler.jsonc';
+const CORE_OVERLAY = 'scripts/release-core-overlay-ar11.py';
 const BINDING_HELPER = '.github/scripts/worker-secret-bindings.mjs';
 const LEGACY_WORKFLOW = '.github/workflows/mailbox-secret-resolver-promotion.yml';
 const LEGACY_WRAPPER = 'scripts/mailbox-secret-resolver-promotion.py';
@@ -109,6 +111,31 @@ function secretObservationErrors(promotion) {
   return errors;
 }
 
+function renderedWorkerNameErrors(wranglerSource, overlaySource) {
+  const errors = [];
+  let config;
+  try {
+    config = JSON.parse(wranglerSource);
+  } catch (error) {
+    return [`canonical Wrangler source is not parseable JSON: ${error instanceof Error ? error.message : String(error)}`];
+  }
+  const stagingName = config?.env?.staging?.name;
+  if (stagingName !== '${STAGING_WORKER_NAME}') {
+    errors.push(`canonical Wrangler staging name must be exactly the one deploy-manifest placeholder; observed=${JSON.stringify(stagingName)}`);
+  }
+  if (String(stagingName ?? '').includes('staging-staging')) {
+    errors.push('canonical Wrangler staging name contains a duplicated environment suffix');
+  }
+  const exactProjection = '"${STAGING_WORKER_NAME}": manifest["worker_name"]';
+  if (!overlaySource.includes(exactProjection)) {
+    errors.push('AR-11 overlay no longer projects deploy-manifest worker_name exactly into the Wrangler staging name');
+  }
+  if (!overlaySource.includes('return replacements.get(value, value)')) {
+    errors.push('AR-11 overlay no longer performs exact placeholder substitution semantics');
+  }
+  return errors;
+}
+
 function promotionPolicyErrors(promotion) {
   const errors = [];
   const forbidden = [
@@ -155,9 +182,12 @@ function replayDependencyErrors(label, source) {
 
 function currentSuccessorErrors() {
   const errors = [];
-  for (const relative of [AR11_AUTHORITY, AR11_CHECKER, AR11_PROMOTION, BINDING_HELPER, CURRENT_D3_CHECKER]) if (!existsSync(path.join(ROOT, relative))) errors.push(`missing current D3/release successor artifact: ${relative}`);
+  for (const relative of [AR11_AUTHORITY, AR11_CHECKER, AR11_PROMOTION, WRANGLER_SOURCE, CORE_OVERLAY, BINDING_HELPER, CURRENT_D3_CHECKER]) {
+    if (!existsSync(path.join(ROOT, relative))) errors.push(`missing current D3/release successor artifact: ${relative}`);
+  }
   if (errors.length > 0) return errors;
   errors.push(...promotionPolicyErrors(read(AR11_PROMOTION)));
+  errors.push(...renderedWorkerNameErrors(read(WRANGLER_SOURCE), read(CORE_OVERLAY)));
   for (const relative of [CURRENT_D3_CHECKER, QUALITY_GATE, FAST_VERIFY]) {
     if (!existsSync(path.join(ROOT, relative))) { errors.push(`missing current D3 caller: ${relative}`); continue; }
     errors.push(...replayDependencyErrors(relative, read(relative)));
@@ -194,11 +224,15 @@ function selfTest() {
   if (promotionPolicyErrors(read(AR11_PROMOTION) + '\nCLOUDFLARE_RESOLVER_SECRETS_JSON\n').length === 0) throw new Error('superseded secret-bundle input negative fixture passed');
   const redundantNamePromotion = read(AR11_PROMOTION).replace('secret list --format json', 'secret list --name "$worker_name" --format json');
   if (promotionPolicyErrors(redundantNamePromotion).length === 0) throw new Error('redundant env-owned Worker name override negative fixture passed');
+  const duplicatedEnvName = read(WRANGLER_SOURCE).replace('"name": "${STAGING_WORKER_NAME}"', '"name": "${STAGING_WORKER_NAME}-staging"');
+  if (renderedWorkerNameErrors(duplicatedEnvName, read(CORE_OVERLAY)).length === 0) throw new Error('duplicated staging Worker suffix fixture passed');
+  const suffixedOverlay = read(CORE_OVERLAY).replace('"${STAGING_WORKER_NAME}": manifest["worker_name"]', '"${STAGING_WORKER_NAME}": manifest["worker_name"] + "-staging"');
+  if (renderedWorkerNameErrors(read(WRANGLER_SOURCE), suffixedOverlay).length === 0) throw new Error('suffixed rendered Worker-name projection fixture passed');
   if (promotionPolicyErrors(read(AR11_PROMOTION) + `\n${HISTORICAL_CHECKER}\n`).length === 0) throw new Error('historical implementation promotion dependency negative fixture passed');
   if (replayDependencyErrors(CURRENT_D3_CHECKER, `git show x\n${HISTORICAL_CHECKER}\n`).length === 0) throw new Error('historical executable replay negative fixture passed');
   const operationalSelfTest = run('node', [AR11_CHECKER, '--self-test'], { check: false });
   if (operationalSelfTest.status !== 0) throw new Error(`Release Set operational negative matrix failed: ${(operationalSelfTest.stderr || operationalSelfTest.stdout).trim()}`);
-  console.log('Static D3 transition provenance and semantic secret-transport negative matrix passed.');
+  console.log('Static D3 transition provenance, exact rendered Worker-name, and semantic secret-transport negative matrix passed.');
 }
 
 if (process.argv.includes('--self-test')) {
