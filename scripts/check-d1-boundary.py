@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import re
 import sys
 from pathlib import Path
 
@@ -32,7 +33,7 @@ D1_WORKFLOWS = Path(".github/workflows")
 D1_CONTRACT_MARKERS = (
     "PERMANENT NORMATIVE BOUNDED CONTRACT",
     "Permanent Migration Operations Contract",
-    "one standard operator-facing procedure",
+    "standard operator-facing procedure:",
     "manual internal JSON assembly = 0",
     "second ordinary D1 migration mutation owner = 0",
     "automatic destructive restore = 0",
@@ -79,6 +80,13 @@ EXECUTOR_MARKERS = (
     "RECOVERY_REQUIRED",
     "FAILED_NO_EFFECT",
     "automatic_restore_executed': False",
+)
+
+REMOTE_APPLY = re.compile(r"d1 migrations apply.{0,500}?--remote", re.DOTALL)
+TIME_TRAVEL_RESTORE_EFFECT = re.compile(
+    r"(?:--request POST.{0,800}?/time_travel/restore\?bookmark=|"
+    r"/time_travel/restore\?bookmark=.{0,800}?--request POST)",
+    re.DOTALL,
 )
 
 
@@ -136,9 +144,9 @@ def check_operations_contract(root: Path) -> list[str]:
     for path in workflow_paths:
         text = path.read_text(encoding="utf-8")
         relative = path.relative_to(root)
-        if "d1 migrations apply" in text:
+        if REMOTE_APPLY.search(text):
             apply_owners.append(relative)
-        if "/time_travel/restore?bookmark=" in text:
+        if TIME_TRAVEL_RESTORE_EFFECT.search(text):
             restore_owners.append(relative)
 
     if apply_owners != [MIGRATION_EXECUTOR]:
