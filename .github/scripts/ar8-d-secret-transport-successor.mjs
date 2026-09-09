@@ -141,8 +141,13 @@ function promotionPolicyErrors(promotion) {
       errors.push(`current Release Set promotion contains forbidden legacy/mutation authority: ${marker}`);
     }
   }
+  const redundantNameMarker = 'wrangler@4.94.0 secret list --name "$worker_name"';
+  if (promotion.includes(redundantNameMarker)) {
+    errors.push('current Release Set promotion secret observations must use the rendered env-owned Worker name without a redundant --name override');
+  }
   for (const marker of [
-    'wrangler@4.94.0 secret list --name "$worker_name" --format json',
+    'wrangler@4.94.0 secret list --format json \\\n            --config "$WRANGLER_CONFIG" --env staging > "$RUNNER_TEMP/secret-list.json"',
+    'wrangler@4.94.0 secret list --format json \\\n            --config "$WRANGLER_CONFIG" --env staging > "$RUNNER_TEMP/post-secret-list.json"',
     'promotion preflight',
     'promotion verify',
     'release-set-promotion-staging',
@@ -223,6 +228,13 @@ function selfTest() {
 
   if (promotionPolicyErrors(read(AR11_PROMOTION) + '\nCLOUDFLARE_RESOLVER_SECRETS_JSON\n').length === 0) {
     throw new Error('superseded secret-bundle input negative fixture passed');
+  }
+  const redundantNamePromotion = read(AR11_PROMOTION).replace(
+    'wrangler@4.94.0 secret list --format json',
+    'wrangler@4.94.0 secret list --name "$worker_name" --format json',
+  );
+  if (promotionPolicyErrors(redundantNamePromotion).length === 0) {
+    throw new Error('redundant env-owned Worker name override negative fixture passed');
   }
   if (promotionPolicyErrors(read(AR11_PROMOTION) + `\n${HISTORICAL_CHECKER}\n`).length === 0) {
     throw new Error('historical implementation promotion dependency negative fixture passed');
