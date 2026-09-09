@@ -3,6 +3,11 @@ name: Release Set Promotion
 run-name: AR11 Release Set Promotion
 
 on:
+  workflow_run:
+    workflows:
+      - Release Set Build
+    types:
+      - completed
   workflow_dispatch:
   workflow_call:
     inputs:
@@ -19,7 +24,7 @@ on:
         required: false
         type: string
       source_run_id:
-        description: Internal completed canonical A-to-A run id
+        description: Internal completed canonical READY run id
         required: false
         type: string
       confirmation:
@@ -36,249 +41,90 @@ concurrency:
 
 jobs:
   route:
-    name: Classify zero-field manual vs internal evidence invocation
+    name: Classify automatic READY vs zero-field mutation vs internal evidence
     runs-on: ubuntu-latest
     outputs:
       mode: ${{ steps.route.outputs.mode }}
+      source_sha: ${{ steps.route.outputs.source_sha }}
     steps:
       - name: Bind invocation surface fail closed
         id: route
         env:
           INTERNAL_OPERATION: ${{ inputs.operation }}
+          READY_SOURCE_SHA: ${{ github.event.workflow_run.head_sha }}
+          READY_SOURCE_BRANCH: ${{ github.event.workflow_run.head_branch }}
+          READY_SOURCE_EVENT: ${{ github.event.workflow_run.event }}
+          READY_SOURCE_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
         run: |
           set -euo pipefail
-          test "$GITHUB_REF" = refs/heads/main
-          if [ -z "$INTERNAL_OPERATION" ]; then
-            test "$GITHUB_EVENT_NAME" = workflow_dispatch
+          if [ "$GITHUB_EVENT_NAME" = workflow_run ]; then
+            test "$READY_SOURCE_BRANCH" = main
+            test "$READY_SOURCE_EVENT" = push
+            test "$READY_SOURCE_CONCLUSION" = success
+            [[ "$READY_SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
+            echo 'mode=preflight' >> "$GITHUB_OUTPUT"
+            echo "source_sha=$READY_SOURCE_SHA" >> "$GITHUB_OUTPUT"
+          elif [ "$GITHUB_EVENT_NAME" = workflow_dispatch ]; then
+            test "$GITHUB_REF" = refs/heads/main
+            test -z "$INTERNAL_OPERATION"
             echo 'mode=promote' >> "$GITHUB_OUTPUT"
+            echo "source_sha=$GITHUB_SHA" >> "$GITHUB_OUTPUT"
           else
             test "$INTERNAL_OPERATION" = rollback-negative
+            test "$GITHUB_REF" = refs/heads/main
             echo 'mode=rollback-negative' >> "$GITHUB_OUTPUT"
+            echo "source_sha=$GITHUB_SHA" >> "$GITHUB_OUTPUT"
           fi
 
-  resolve-verify:
-    name: Resolve and verify immutable intent
+  resolve-preflight:
+    name: Resolve exact accepted-main target before authorization
     needs: route
-    if: needs.route.outputs.mode == 'promote'
+    if: needs.route.outputs.mode == 'preflight'
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      issues: read
     outputs:
-      source_sha: ${{ steps.target.outputs.source_sha }}
-      main_sha: ${{ steps.intent.outputs.main_sha }}
-      release_set_id: ${{ steps.intent.outputs.release_set_id }}
-      expected_current: ${{ steps.intent.outputs.expected_current }}
-      authorization_comment_id: ${{ steps.intent.outputs.authorization_comment_id }}
-      authorization_digest: ${{ steps.intent.outputs.authorization_digest }}
+      source_sha: ${{ steps.resolve.outputs.source_sha }}
+      main_sha: ${{ steps.resolve.outputs.main_sha }}
+      release_set_id: ${{ steps.resolve.outputs.release_set_id }}
     env:
       GH_TOKEN: ${{ github.token }}
+      SOURCE_SHA: ${{ needs.route.outputs.source_sha }}
     steps:
-      - name: Resolve exact one-shot promotion authorization from current authority
-        id: intent
+      - name: Resolve unique immutable Release Set for exact protected main
+        id: resolve
         run: |
           set -euo pipefail
-          test "$GITHUB_EVENT_NAME" = workflow_dispatch
-          test "$GITHUB_REF" = refs/heads/main
-
           gh api "repos/$GITHUB_REPOSITORY/branches/main" > "$RUNNER_TEMP/protected-main.json"
           test "$(jq -r '.protected' "$RUNNER_TEMP/protected-main.json")" = true
           main_sha="$(jq -r '.commit.sha' "$RUNNER_TEMP/protected-main.json")"
           [[ "$main_sha" =~ ^[0-9a-f]{40}$ ]]
-          test "$GITHUB_SHA" = "$main_sha"
+          test "$SOURCE_SHA" = "$main_sha"
 
-          gh api "repos/$GITHUB_REPOSITORY/issues/266" > "$RUNNER_TEMP/live-pointer.json"
-          python - "$RUNNER_TEMP/live-pointer.json" "$main_sha" "$RUNNER_TEMP/authorized-intent.json" <<'PY'
-          import json, re, sys
-
-          pointer_path, main_sha, output_path = sys.argv[1:]
-          issue = json.load(open(pointer_path, encoding='utf-8'))
-          body = issue.get('body')
-          if not isinstance(body, str):
-              raise SystemExit('live pointer body is missing')
-
-          def parse_block(block):
-              fields = {}
-              for raw in block.splitlines():
-                  line = raw.strip()
-                  match = re.fullmatch(r'([A-Z0-9_]+)\s*=\s*(.*?)\s*', line)
-                  if not match:
-                      continue
-                  key, value = match.groups()
-                  if key in fields:
-                      raise SystemExit(f'duplicate field in authorization block: {key}')
-                  fields[key] = value
-              return fields
-
-          blocks = re.findall(r'```(?:text)?\s*\n(.*?)```', body, flags=re.S)
-          parsed = [parse_block(block) for block in blocks]
-
-          current = [item for item in parsed if item.get('CURRENT_STAGE')]
-          if len(current) != 1:
-              raise SystemExit('live pointer CURRENT block missing or ambiguous')
-          current = current[0]
-          if current.get('CURRENT_STAGE') != 'V2' or current.get('CURRENT_STAGE_ISSUE') != '#584':
-              raise SystemExit('live pointer does not select V2/#584')
-          if current.get('PROTECTED_MAIN') != main_sha:
-              raise SystemExit('live pointer protected-main binding is stale')
-          if current.get('OPEN_IMPLEMENTATION_PR') != 'NONE':
-              raise SystemExit('ordinary provider promotion requires no open implementation PR')
-
-          scoped = [
-              item for item in parsed
-              if re.fullmatch(r'V2_STAGING_WORKER_PROMOTION_V[1-9][0-9]*', item.get('SCOPED_EXCEPTION', ''))
-          ]
-          if len(scoped) != 1:
-              raise SystemExit('active staging Worker promotion exception missing or ambiguous')
-          scoped = scoped[0]
-          required = {
-              'STATE': 'ACTIVE_UNTIL_ONE_MATCHING_ATTEMPT_OR_DRIFT',
-              'ENVIRONMENT': 'staging',
-              'OWNER': '.github/workflows/release-set-promotion.yml',
-              'OPERATION': 'promote',
-              'PROTECTED_MAIN': main_sha,
-              'D1_PHASE_D_0032': 'EXCLUDED',
-              'ACCESS_MTLS': 'EXCLUDED',
-              'OTHER_PROVIDER_MUTATION': 'EXCLUDED',
-              'PRODUCTION': 'EXCLUDED',
-          }
-          for key, expected in required.items():
-              if scoped.get(key) != expected:
-                  raise SystemExit(f'scoped authorization mismatch for {key}: {scoped.get(key)!r}')
-
-          target = scoped.get('TARGET_RELEASE_SET', '')
-          expected_current = scoped.get('EXPECTED_CURRENT_RELEASE_SET', '')
-          if not re.fullmatch(r'release-set-v3-sha256-[0-9a-f]{64}', target):
-              raise SystemExit('scoped target Release Set is invalid')
-          if not (expected_current == 'NONE' or re.fullmatch(r'release-set-v(?:2|3)-sha256-[0-9a-f]{64}', expected_current)):
-              raise SystemExit('scoped expected-current Release Set is invalid')
-
-          locator = scoped.get('AUTHORITY_COMMENT', '')
-          match = re.fullmatch(r'#584\s*/\s*([1-9][0-9]*)', locator)
-          if not match:
-              raise SystemExit('scoped authority comment locator is invalid')
-
-          document = {
-              'schema_version': 1,
-              'kind': 'WORKER_PROMOTION_AUTHORIZED_INTENT',
-              'exception': scoped['SCOPED_EXCEPTION'],
-              'environment': 'staging',
-              'owner': '.github/workflows/release-set-promotion.yml',
-              'operation': 'promote',
-              'protected_main': main_sha,
-              'release_set_id': target,
-              'expected_current_release_set_id': expected_current,
-              'authorization_issue': 584,
-              'authorization_comment_id': int(match.group(1)),
-              'excluded_effects': ['D1_PHASE_D_0032', 'ACCESS_MTLS', 'OTHER_PROVIDER_MUTATION', 'PRODUCTION'],
-          }
-          with open(output_path, 'w', encoding='utf-8') as handle:
-              json.dump(document, handle, sort_keys=True, indent=2)
-              handle.write('\n')
-          PY
-
-          release_set_id="$(jq -er '.release_set_id' "$RUNNER_TEMP/authorized-intent.json")"
-          expected_current="$(jq -er '.expected_current_release_set_id' "$RUNNER_TEMP/authorized-intent.json")"
-          authorization_comment_id="$(jq -er '.authorization_comment_id | tostring' "$RUNNER_TEMP/authorized-intent.json")"
-          authorization_digest="$(jq -cS . "$RUNNER_TEMP/authorized-intent.json" | sha256sum | cut -d' ' -f1)"
-
-          gh api "repos/$GITHUB_REPOSITORY/issues/comments/$authorization_comment_id" > "$RUNNER_TEMP/authority-comment.json"
-          RELEASE_SET_ID="$release_set_id" EXPECTED_CURRENT="$expected_current" \
-          python - "$RUNNER_TEMP/authority-comment.json" "$GITHUB_REPOSITORY_OWNER" <<'PY'
-          import json, os, re, sys
-
-          comment_path, repository_owner = sys.argv[1:]
-          comment = json.load(open(comment_path, encoding='utf-8'))
-          if (comment.get('user') or {}).get('login') != repository_owner:
-              raise SystemExit('promotion authorization comment is not OWNER-authored')
-          if not str(comment.get('issue_url', '')).endswith('/issues/584'):
-              raise SystemExit('promotion authorization comment is not bound to #584')
-          body = comment.get('body')
-          if not isinstance(body, str):
-              raise SystemExit('promotion authorization comment body missing')
-
-          blocks = re.findall(r'```(?:text)?\s*\n(.*?)```', body, flags=re.S)
-          matches = []
-          for block in blocks:
-              lines = [line.strip() for line in block.splitlines() if line.strip()]
-              if not lines or lines[0] != 'WORKER_PROMOTION_AUTHORIZATION_V1':
-                  continue
-              fields = {}
-              for line in lines[1:]:
-                  match = re.fullmatch(r'([A-Z0-9_]+)\s*=\s*(.*?)\s*', line)
-                  if not match:
-                      continue
-                  key, value = match.groups()
-                  if key in fields:
-                      raise SystemExit(f'duplicate field in OWNER authorization: {key}')
-                  fields[key] = value
-              matches.append(fields)
-          if len(matches) != 1:
-              raise SystemExit('OWNER promotion authorization block missing or ambiguous')
-          fields = matches[0]
-          target = os.environ['RELEASE_SET_ID']
-          expected_current = os.environ['EXPECTED_CURRENT']
-          required = {
-              'ENVIRONMENT': 'staging',
-              'OWNER': '.github/workflows/release-set-promotion.yml',
-              'OPERATION': 'promote',
-              'RELEASE_SET_ID': target,
-              'EXPECTED_CURRENT_RELEASE_SET_ID': expected_current,
-              'CONFIRMATION': f'{target}:{expected_current}',
-              'SCOPE': 'one exact staging Worker/runtime promotion only',
-              'D1_PHASE_D_0032_AUTHORIZED': 'NO',
-              'ACCESS_MTLS_MUTATION_AUTHORIZED': 'NO',
-              'OTHER_PROVIDER_MUTATION_AUTHORIZED': 'NO',
-              'PRODUCTION_AUTHORIZED': 'NO',
-          }
-          for key, expected in required.items():
-              if fields.get(key) != expected:
-                  raise SystemExit(f'OWNER authorization mismatch for {key}: {fields.get(key)!r}')
-          PY
-
+          gh api --paginate "repos/$GITHUB_REPOSITORY/releases?per_page=100" \
+            | jq -s --arg sha "$main_sha" '
+                add
+                | [.[] | select(.target_commitish == $sha and (.tag_name | test("^release-set-v3-sha256-[0-9a-f]{64}$")))]
+              ' > "$RUNNER_TEMP/main-release-sets.json"
+          test "$(jq 'length' "$RUNNER_TEMP/main-release-sets.json")" = 1
+          release_set_id="$(jq -er '.[0].tag_name' "$RUNNER_TEMP/main-release-sets.json")"
+          [[ "$release_set_id" =~ ^release-set-v3-sha256-[0-9a-f]{64}$ ]]
           {
+            echo "source_sha=$main_sha"
             echo "main_sha=$main_sha"
             echo "release_set_id=$release_set_id"
-            echo "expected_current=$expected_current"
-            echo "authorization_comment_id=$authorization_comment_id"
-            echo "authorization_digest=$authorization_digest"
           } >> "$GITHUB_OUTPUT"
-          {
-            echo "RELEASE_SET_ID=$release_set_id"
-            echo "EXPECTED_CURRENT=$expected_current"
-            echo "AUTHORIZATION_COMMENT_ID=$authorization_comment_id"
-            echo "AUTHORIZATION_DIGEST=$authorization_digest"
-          } >> "$GITHUB_ENV"
 
-      - name: Prove authorized target is exact current protected-main Release Set
-        id: target
-        run: |
-          set -euo pipefail
-          gh api "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_SET_ID" > "$RUNNER_TEMP/target-release.json"
-          source_sha="$(jq -r '.target_commitish' "$RUNNER_TEMP/target-release.json")"
-          [[ "$source_sha" =~ ^[0-9a-f]{40}$ ]]
-          test "$source_sha" = "${{ steps.intent.outputs.main_sha }}"
-          gh api "repos/$GITHUB_REPOSITORY/compare/$source_sha...${{ steps.intent.outputs.main_sha }}" > "$RUNNER_TEMP/accepted-source-compare.json"
-          test "$(jq -r '.merge_base_commit.sha' "$RUNNER_TEMP/accepted-source-compare.json")" = "$source_sha"
-          test "$(jq -r '.behind_by' "$RUNNER_TEMP/accepted-source-compare.json")" = 0
-          echo "source_sha=$source_sha" >> "$GITHUB_OUTPUT"
-
-      - name: Checkout current protected-main policy authority
+      - name: Checkout exact accepted-main release policy
         uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
         with:
-          ref: ${{ steps.intent.outputs.main_sha }}
+          ref: ${{ steps.resolve.outputs.main_sha }}
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Checkout exact target source as read-only provenance input
-        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
-        with:
-          ref: ${{ steps.target.outputs.source_sha }}
-          path: target-source
-          fetch-depth: 0
-          persist-credentials: false
-
-      - name: Download and verify immutable Release Set v3 target with no provider credentials
+      - name: Verify immutable target before any provider credential
+        env:
+          RELEASE_SET_ID: ${{ steps.resolve.outputs.release_set_id }}
         run: |
           set -euo pipefail
           asset_root="$RUNNER_TEMP/target-assets"
@@ -288,40 +134,36 @@ jobs:
           gh release download "$RELEASE_SET_ID" --repo "$GITHUB_REPOSITORY" --dir "$asset_root"
           bash scripts/release-set-assets-ar11.sh materialize current-v3 "$RELEASE_SET_ID" "$asset_root" "$release_root"
           cp "$release_root/release-set.json" "$policy_dir/release-set.json"
-          test "$(jq -r '.release_set_id' "$policy_dir/release-set.json")" = "$RELEASE_SET_ID"
+          gh api "repos/$GITHUB_REPOSITORY/compare/${{ steps.resolve.outputs.main_sha }}...${{ steps.resolve.outputs.main_sha }}" > "$RUNNER_TEMP/accepted-source-compare.json"
           python scripts/accepted-source-evidence-ar11.py \
             --repository "$GITHUB_REPOSITORY" \
             --release-set-id "$RELEASE_SET_ID" \
-            --source-sha "${{ steps.target.outputs.source_sha }}" \
+            --source-sha "${{ steps.resolve.outputs.main_sha }}" \
             --branch-json "$RUNNER_TEMP/protected-main.json" \
             --compare-json "$RUNNER_TEMP/accepted-source-compare.json" \
             --output "$policy_dir/accepted-source-evidence.json"
           cargo run --locked --quiet --manifest-path tools/opsctl/Cargo.toml -- \
             --root . release verify \
             --release-set "$policy_dir/release-set.json" \
-            --source-root "$GITHUB_WORKSPACE/target-source" \
+            --source-root . \
             --artifact-root "$release_root" \
             | tee "$RUNNER_TEMP/release-verify.json" \
             | jq -e '.decision == "VALID" and .release_set_schema_version == 3 and .source_accepted == true and .mutation_executed == false' >/dev/null
 
-  observe-preflight:
-    name: Observe provider and prove READY without deploy credential
-    needs: resolve-verify
+  preflight-ready:
+    name: Observe provider and publish READY_TO_MUTATE before authorization
+    needs: [route, resolve-preflight]
+    if: needs.route.outputs.mode == 'preflight'
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     environment: staging
     permissions:
+      actions: read
       contents: read
-    outputs:
-      decision: ${{ steps.policy.outputs.decision }}
-      promotion_id: ${{ steps.policy.outputs.promotion_id }}
-      mutation_fence_sha256: ${{ steps.policy.outputs.mutation_fence_sha256 }}
-      custom_domain: ${{ steps.observe.outputs.custom_domain }}
     env:
       GH_TOKEN: ${{ github.token }}
-      RELEASE_SET_ID: ${{ needs.resolve-verify.outputs.release_set_id }}
-      EXPECTED_CURRENT: ${{ needs.resolve-verify.outputs.expected_current }}
-      AUTHORIZATION_COMMENT_ID: ${{ needs.resolve-verify.outputs.authorization_comment_id }}
-      AUTHORIZATION_DIGEST: ${{ needs.resolve-verify.outputs.authorization_digest }}
+      SOURCE_SHA: ${{ needs.resolve-preflight.outputs.source_sha }}
+      RELEASE_SET_ID: ${{ needs.resolve-preflight.outputs.release_set_id }}
       TARGET_PROFILE: rehearsal-core-v2
       TARGET_ENVIRONMENT: staging
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_OBSERVE_API_TOKEN }}
@@ -333,28 +175,20 @@ jobs:
           test -n "$CLOUDFLARE_API_TOKEN"
           test -n "$CLOUDFLARE_DEPLOY_MANIFEST_JSON"
 
-      - name: Checkout current protected-main policy authority
+      - name: Checkout exact accepted-main source
         uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
         with:
-          ref: ${{ needs.resolve-verify.outputs.main_sha }}
+          ref: ${{ needs.resolve-preflight.outputs.main_sha }}
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Checkout exact target source
-        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
-        with:
-          ref: ${{ needs.resolve-verify.outputs.source_sha }}
-          path: target-source
-          fetch-depth: 0
-          persist-credentials: false
-
-      - name: Set up pinned Node runtime for read-only observation
+      - name: Set up pinned Node runtime for read-only provider observation
         uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
         with:
           node-version: '24.19.0'
           package-manager-cache: false
 
-      - name: Re-resolve immutable target and render no-rebuild staging overlay
+      - name: Materialize exact target and rendered staging overlay
         run: |
           set -euo pipefail
           asset_root="$RUNNER_TEMP/target-assets"
@@ -364,18 +198,17 @@ jobs:
           gh release download "$RELEASE_SET_ID" --repo "$GITHUB_REPOSITORY" --dir "$asset_root"
           bash scripts/release-set-assets-ar11.sh materialize current-v3 "$RELEASE_SET_ID" "$asset_root" "$release_root"
           cp "$release_root/release-set.json" "$policy_dir/release-set.json"
-          branch_json="$RUNNER_TEMP/protected-main.json"
-          compare_json="$RUNNER_TEMP/accepted-source-compare.json"
-          gh api "repos/$GITHUB_REPOSITORY/branches/main" > "$branch_json"
-          gh api "repos/$GITHUB_REPOSITORY/compare/${{ needs.resolve-verify.outputs.source_sha }}...${{ needs.resolve-verify.outputs.main_sha }}" > "$compare_json"
+          gh api "repos/$GITHUB_REPOSITORY/branches/main" > "$RUNNER_TEMP/protected-main.json"
+          test "$(jq -r '.commit.sha' "$RUNNER_TEMP/protected-main.json")" = "$SOURCE_SHA"
+          gh api "repos/$GITHUB_REPOSITORY/compare/$SOURCE_SHA...$SOURCE_SHA" > "$RUNNER_TEMP/accepted-source-compare.json"
           python scripts/accepted-source-evidence-ar11.py \
             --repository "$GITHUB_REPOSITORY" --release-set-id "$RELEASE_SET_ID" \
-            --source-sha "${{ needs.resolve-verify.outputs.source_sha }}" \
-            --branch-json "$branch_json" --compare-json "$compare_json" \
+            --source-sha "$SOURCE_SHA" --branch-json "$RUNNER_TEMP/protected-main.json" \
+            --compare-json "$RUNNER_TEMP/accepted-source-compare.json" \
             --output "$policy_dir/accepted-source-evidence.json"
           cargo run --locked --quiet --manifest-path tools/opsctl/Cargo.toml -- \
             --root . release verify --release-set "$policy_dir/release-set.json" \
-            --source-root "$GITHUB_WORKSPACE/target-source" --artifact-root "$release_root" \
+            --source-root . --artifact-root "$release_root" \
             | tee "$RUNNER_TEMP/release-verify.json" \
             | jq -e '.decision == "VALID" and .release_set_schema_version == 3 and .source_accepted == true and .mutation_executed == false' >/dev/null
           control_extract="$RUNNER_TEMP/control-release"
@@ -395,47 +228,36 @@ jobs:
           {
             echo "TARGET_RELEASE_ROOT=$release_root"
             echo "TARGET_RELEASE_MANIFEST=$policy_dir/release-set.json"
-            echo "TARGET_SOURCE_ROOT=$GITHUB_WORKSPACE/target-source"
             echo "CONTROL_RELEASE_MANIFEST=$manifest"
             echo "DEPLOY_MANIFEST=$RUNNER_TEMP/deploy-manifest.json"
             echo "WRANGLER_CONFIG=$RUNNER_TEMP/wrangler.staging.json"
           } >> "$GITHUB_ENV"
 
-      - name: Observe current provider state without mutation
+      - name: Observe existing Worker, D1 head, resources and secret bindings
         id: observe
         run: |
           set -euo pipefail
-          account_id="$(jq -r '.control_plane.account_id // .account_id' "$DEPLOY_MANIFEST")"
-          worker_name="$(jq -r '.control_plane.worker_name // .worker_name' "$DEPLOY_MANIFEST")"
-          r2_bucket="$(jq -r '.control_plane.r2_bucket_name // .r2_bucket_name' "$DEPLOY_MANIFEST")"
-          queue_name="$(jq -r '.control_plane.integration_events_queue // .integration_events_queue' "$DEPLOY_MANIFEST")"
-          custom_domain="$(jq -r '.control_plane.custom_domain // .custom_domain' "$DEPLOY_MANIFEST")"
-          http_code="$(curl --silent --show-error --output "$RUNNER_TEMP/deployments-api.json" --write-out '%{http_code}' \
+          account_id="$(jq -er '.control_plane.account_id // .account_id' "$DEPLOY_MANIFEST")"
+          worker_name="$(jq -er '.control_plane.worker_name // .worker_name' "$DEPLOY_MANIFEST")"
+          r2_bucket="$(jq -er '.control_plane.r2_bucket_name // .r2_bucket_name' "$DEPLOY_MANIFEST")"
+          queue_name="$(jq -er '.control_plane.integration_events_queue // .integration_events_queue' "$DEPLOY_MANIFEST")"
+          custom_domain="$(jq -er '.control_plane.custom_domain // .custom_domain' "$DEPLOY_MANIFEST")"
+          http_code="$(curl --silent --show-error --output "$RUNNER_TEMP/deployments-before-api.json" --write-out '%{http_code}' \
             -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
             "https://api.cloudflare.com/client/v4/accounts/$account_id/workers/scripts/$worker_name/deployments")"
-          if [ "$http_code" = 200 ]; then
-            jq '.result.deployments[0] // {}' "$RUNNER_TEMP/deployments-api.json" > "$RUNNER_TEMP/current-deployment.json"
-          elif [ "$http_code" = 404 ]; then
-            printf '{}\n' > "$RUNNER_TEMP/current-deployment.json"
-          else
-            cat "$RUNNER_TEMP/deployments-api.json" >&2
-            exit 1
-          fi
+          test "$http_code" = 200
+          jq -e '.success == true and (.errors | length) == 0 and (.result.deployments | type == "array") and (.result.deployments | length) > 0' "$RUNNER_TEMP/deployments-before-api.json" >/dev/null
+          jq '.result.deployments[0]' "$RUNNER_TEMP/deployments-before-api.json" > "$RUNNER_TEMP/current-deployment.json"
           python scripts/deployment-identity-ar11.py --status "$RUNNER_TEMP/current-deployment.json" --output "$RUNNER_TEMP/current-identity.json"
-          current_id="$(jq -r '.release_set_id // "NONE"' "$RUNNER_TEMP/current-identity.json")"
-          test "$current_id" = "$EXPECTED_CURRENT"
-          if [ "$current_id" != NONE ]; then
-            gh api "repos/$GITHUB_REPOSITORY/releases/tags/$current_id" > "$RUNNER_TEMP/current-release-api.json"
-            known_good_source="$(jq -r '.target_commitish' "$RUNNER_TEMP/current-release-api.json")"
-            [[ "$known_good_source" =~ ^[0-9a-f]{40}$ ]]
-            echo "known_good_source=$known_good_source" >> "$GITHUB_OUTPUT"
-            echo "current_id=$current_id" >> "$GITHUB_OUTPUT"
-          else
-            echo "current_id=NONE" >> "$GITHUB_OUTPUT"
-          fi
+          current_id="$(jq -er '.release_set_id | select(type == "string")' "$RUNNER_TEMP/current-identity.json")"
+          [[ "$current_id" =~ ^release-set-v(2|3)-sha256-[0-9a-f]{64}$ ]]
+          gh api "repos/$GITHUB_REPOSITORY/releases/tags/$current_id" > "$RUNNER_TEMP/current-release-api.json"
+          known_good_source="$(jq -er '.target_commitish' "$RUNNER_TEMP/current-release-api.json")"
+          [[ "$known_good_source" =~ ^[0-9a-f]{40}$ ]]
+
           npx --yes wrangler@4.94.0 d1 execute CATALOG_DB --remote \
             --command 'SELECT name FROM d1_migrations ORDER BY name' --json \
-            --config "$WRANGLER_CONFIG" --env staging > "$RUNNER_TEMP/catalog-ledger.json"
+            --config "$WRANGLER_CONFIG" --env staging > "$RUNNER_TEMP/catalog-ledger-before.json"
           npx --yes wrangler@4.94.0 r2 bucket info "$r2_bucket" --json \
             --config "$WRANGLER_CONFIG" --env staging > "$RUNNER_TEMP/r2-info.json"
           npx --yes wrangler@4.94.0 queues info "$queue_name" \
@@ -443,10 +265,37 @@ jobs:
           jq -n --arg name "$queue_name" '{name:$name}' > "$RUNNER_TEMP/queue-info.json"
           npx --yes wrangler@4.94.0 secret list --format json \
             --config "$WRANGLER_CONFIG" --env staging > "$RUNNER_TEMP/secret-list.json"
-          echo "custom_domain=$custom_domain" >> "$GITHUB_OUTPUT"
 
-      - name: Checkout exact known-good source when replacing a deployment
-        if: steps.observe.outputs.current_id != 'NONE'
+          python - "$RUNNER_TEMP/catalog-ledger-before.json" "$RUNNER_TEMP/d1-names-before.json" <<'PY'
+          import json, re, sys
+          source, output = sys.argv[1:]
+          value = json.load(open(source, encoding='utf-8'))
+          names = set()
+          def walk(node):
+              if isinstance(node, dict):
+                  name = node.get('name')
+                  if isinstance(name, str) and re.fullmatch(r'\d{4}_[A-Za-z0-9_]+\.sql', name):
+                      names.add(name)
+                  for item in node.values(): walk(item)
+              elif isinstance(node, list):
+                  for item in node: walk(item)
+          walk(value)
+          ordered = sorted(names, key=lambda item: (int(item[:4]), item))
+          if not ordered:
+              raise SystemExit('Catalog D1 ledger is empty or unreadable')
+          json.dump(ordered, open(output, 'w', encoding='utf-8'), indent=2)
+          open(output, 'a', encoding='utf-8').write('\n')
+          PY
+          d1_head="$(jq -er '.[-1]' "$RUNNER_TEMP/d1-names-before.json")"
+          jq -S '{release_set_id,capability_profile_id}' "$RUNNER_TEMP/current-identity.json" > "$RUNNER_TEMP/worker-binding-before.json"
+          {
+            echo "current_id=$current_id"
+            echo "known_good_source=$known_good_source"
+            echo "d1_head=$d1_head"
+            echo "custom_domain=$custom_domain"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Checkout exact known-good source
         uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
         with:
           ref: ${{ steps.observe.outputs.known_good_source }}
@@ -454,8 +303,7 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Verify current/known-good immutable Release Set before rollback evaluation
-        if: steps.observe.outputs.current_id != 'NONE'
+      - name: Verify current immutable Release Set and build metadata snapshot
         run: |
           set -euo pipefail
           current_id="${{ steps.observe.outputs.current_id }}"
@@ -468,7 +316,7 @@ jobs:
           bash scripts/release-set-assets-ar11.sh materialize known-good-v2-v3 "$current_id" "$asset_root" "$release_root"
           cp "$release_root/release-set.json" "$policy_dir/release-set.json"
           gh api "repos/$GITHUB_REPOSITORY/branches/main" > "$RUNNER_TEMP/kg-main.json"
-          gh api "repos/$GITHUB_REPOSITORY/compare/$known_good_source...${{ needs.resolve-verify.outputs.main_sha }}" > "$RUNNER_TEMP/kg-compare.json"
+          gh api "repos/$GITHUB_REPOSITORY/compare/$known_good_source...$SOURCE_SHA" > "$RUNNER_TEMP/kg-compare.json"
           python scripts/accepted-source-evidence-ar11.py \
             --repository "$GITHUB_REPOSITORY" --release-set-id "$current_id" \
             --source-sha "$known_good_source" --branch-json "$RUNNER_TEMP/kg-main.json" \
@@ -479,110 +327,132 @@ jobs:
             | jq -e '.decision == "VALID" and (.release_set_schema_version == 2 or .release_set_schema_version == 3) and .source_accepted == true and .mutation_executed == false' >/dev/null
           echo "CURRENT_RELEASE_MANIFEST=$policy_dir/release-set.json" >> "$GITHUB_ENV"
 
-      - name: Build metadata-only DeploymentSnapshot v2
-        run: |
-          set -euo pipefail
-          snapshot_args=(
-            --environment staging
-            --collected-at "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-            --deployment-status "$RUNNER_TEMP/current-deployment.json"
-            --catalog-ledger "$RUNNER_TEMP/catalog-ledger.json"
-            --r2-list "$RUNNER_TEMP/r2-info.json"
-            --queue-list "$RUNNER_TEMP/queue-info.json"
-            --secret-list "$RUNNER_TEMP/secret-list.json"
-            --rendered-config "$WRANGLER_CONFIG"
-            --deploy-manifest "$DEPLOY_MANIFEST"
+          python scripts/deployment-snapshot-ar11.py \
+            --environment staging --collected-at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --deployment-status "$RUNNER_TEMP/current-deployment.json" \
+            --catalog-ledger "$RUNNER_TEMP/catalog-ledger-before.json" \
+            --r2-list "$RUNNER_TEMP/r2-info.json" \
+            --queue-list "$RUNNER_TEMP/queue-info.json" \
+            --secret-list "$RUNNER_TEMP/secret-list.json" \
+            --rendered-config "$WRANGLER_CONFIG" \
+            --deploy-manifest "$DEPLOY_MANIFEST" \
+            --current-release-set "$CURRENT_RELEASE_MANIFEST" \
             --output "$RUNNER_TEMP/pre-snapshot.json"
-          )
-          if [ "${{ steps.observe.outputs.current_id }}" != NONE ]; then
-            snapshot_args+=(--current-release-set "$CURRENT_RELEASE_MANIFEST")
-          fi
-          python scripts/deployment-snapshot-ar11.py "${snapshot_args[@]}"
           test "$(jq -r '.schema_version' "$RUNNER_TEMP/pre-snapshot.json")" = 2
 
-      - name: Produce native D1 and external compatibility evidence v2
+      - name: Prove native compatibility, plan and rollback-aware preflight
+        id: policy
         run: |
           set -euo pipefail
           cargo run --locked --quiet --manifest-path tools/opsctl/Cargo.toml -- \
             --root . d1 compatibility --component catalog \
-            --ledger-json "$RUNNER_TEMP/catalog-ledger.json" \
+            --ledger-json "$RUNNER_TEMP/catalog-ledger-before.json" \
             --release-manifest "$CONTROL_RELEASE_MANIFEST" \
             > "$RUNNER_TEMP/catalog-d1-compatibility.json"
           python scripts/release-compat-evidence-ar11.py \
             --release-set-id "$RELEASE_SET_ID" \
             --catalog-d1 "$RUNNER_TEMP/catalog-d1-compatibility.json" \
             --output "$RUNNER_TEMP/compatibility-evidence.json"
-          current_args=()
-          if [ "${{ steps.observe.outputs.current_id }}" != NONE ]; then
-            current_args=(--current-release-set "$CURRENT_RELEASE_MANIFEST")
-          fi
           cargo run --locked --quiet --manifest-path tools/opsctl/Cargo.toml -- \
             --root . release compatibility --release-set "$TARGET_RELEASE_MANIFEST" \
-            --source-root "$TARGET_SOURCE_ROOT" --profile "$TARGET_PROFILE" \
-            --environment "$TARGET_ENVIRONMENT" --evidence-json "$RUNNER_TEMP/compatibility-evidence.json" \
-            "${current_args[@]}" \
+            --source-root . --profile "$TARGET_PROFILE" --environment "$TARGET_ENVIRONMENT" \
+            --evidence-json "$RUNNER_TEMP/compatibility-evidence.json" \
+            --current-release-set "$CURRENT_RELEASE_MANIFEST" \
             | tee "$RUNNER_TEMP/release-compatibility.json" \
             | jq -e '.compatible == true and .mutation_executed == false' >/dev/null
-
-      - name: Native promotion plan and rollback-aware preflight
-        id: policy
-        run: |
-          set -euo pipefail
-          current_args=()
-          if [ "${{ steps.observe.outputs.current_id }}" != NONE ]; then
-            current_args=(--current-release-set "$CURRENT_RELEASE_MANIFEST" --known-good-release-set "$CURRENT_RELEASE_MANIFEST")
-          fi
           cargo run --locked --quiet --manifest-path tools/opsctl/Cargo.toml -- \
             --root . promotion plan --release-set "$TARGET_RELEASE_MANIFEST" \
-            --source-root "$TARGET_SOURCE_ROOT" --profile "$TARGET_PROFILE" \
-            --environment "$TARGET_ENVIRONMENT" --snapshot "$RUNNER_TEMP/pre-snapshot.json" \
-            --evidence-json "$RUNNER_TEMP/compatibility-evidence.json" --expected-current "$EXPECTED_CURRENT" \
-            "${current_args[@]:0:2}" > "$RUNNER_TEMP/promotion-plan.json"
-          preflight_current=()
-          if [ "${{ steps.observe.outputs.current_id }}" != NONE ]; then
-            preflight_current=(--current-release-set "$CURRENT_RELEASE_MANIFEST" --known-good-release-set "$CURRENT_RELEASE_MANIFEST")
-          fi
+            --source-root . --profile "$TARGET_PROFILE" --environment "$TARGET_ENVIRONMENT" \
+            --snapshot "$RUNNER_TEMP/pre-snapshot.json" \
+            --evidence-json "$RUNNER_TEMP/compatibility-evidence.json" \
+            --expected-current "${{ steps.observe.outputs.current_id }}" \
+            --current-release-set "$CURRENT_RELEASE_MANIFEST" \
+            > "$RUNNER_TEMP/promotion-plan.json"
+          jq -e '.decision == "PLAN" and .mutation_executed == false' "$RUNNER_TEMP/promotion-plan.json" >/dev/null
           cargo run --locked --quiet --manifest-path tools/opsctl/Cargo.toml -- \
             --root . promotion preflight --release-set "$TARGET_RELEASE_MANIFEST" \
-            --source-root "$TARGET_SOURCE_ROOT" --profile "$TARGET_PROFILE" \
-            --environment "$TARGET_ENVIRONMENT" --snapshot "$RUNNER_TEMP/pre-snapshot.json" \
-            --evidence-json "$RUNNER_TEMP/compatibility-evidence.json" --expected-current "$EXPECTED_CURRENT" \
-            "${preflight_current[@]}" > "$RUNNER_TEMP/promotion-preflight.json"
-          jq -e '.ready == true and .decision == "READY" and .mutation_executed == false' "$RUNNER_TEMP/promotion-preflight.json" >/dev/null
-          decision="$(jq -r '.decision' "$RUNNER_TEMP/promotion-plan.json")"
-          test "$decision" = PLAN -o "$decision" = NO_CHANGE
-          promotion_id="$(jq -r '.promotion_id' "$RUNNER_TEMP/promotion-preflight.json")"
-          jq -n \
-            --arg release_set_id "$RELEASE_SET_ID" \
-            --arg expected_current "$EXPECTED_CURRENT" \
-            --arg authorization_comment_id "$AUTHORIZATION_COMMENT_ID" \
-            --arg authorization_digest "$AUTHORIZATION_DIGEST" \
-            --arg promotion_id "$promotion_id" \
-            --arg decision "$decision" \
-            --arg preflight_sha256 "$(sha256sum "$RUNNER_TEMP/promotion-preflight.json" | cut -d' ' -f1)" \
-            --arg plan_sha256 "$(sha256sum "$RUNNER_TEMP/promotion-plan.json" | cut -d' ' -f1)" \
-            '{schema_version:2,release_set_id:$release_set_id,expected_current:$expected_current,authorization_comment_id:$authorization_comment_id,authorization_digest:$authorization_digest,promotion_id:$promotion_id,decision:$decision,preflight_sha256:$preflight_sha256,plan_sha256:$plan_sha256}' \
-            > "$RUNNER_TEMP/mutation-fence.json"
-          fence_sha="$(sha256sum "$RUNNER_TEMP/mutation-fence.json" | cut -d' ' -f1)"
-          {
-            echo "decision=$decision"
-            echo "promotion_id=$promotion_id"
-            echo "mutation_fence_sha256=$fence_sha"
-          } >> "$GITHUB_OUTPUT"
+            --source-root . --profile "$TARGET_PROFILE" --environment "$TARGET_ENVIRONMENT" \
+            --snapshot "$RUNNER_TEMP/pre-snapshot.json" \
+            --evidence-json "$RUNNER_TEMP/compatibility-evidence.json" \
+            --expected-current "${{ steps.observe.outputs.current_id }}" \
+            --current-release-set "$CURRENT_RELEASE_MANIFEST" \
+            --known-good-release-set "$CURRENT_RELEASE_MANIFEST" \
+            > "$RUNNER_TEMP/promotion-preflight.json"
+          jq -e '.ready == true and .decision == "READY" and .credential_values_accessed == false and .provider_mutation_executed == false and .mutation_executed == false' "$RUNNER_TEMP/promotion-preflight.json" >/dev/null
+          promotion_id="$(jq -er '.promotion_id' "$RUNNER_TEMP/promotion-preflight.json")"
+          echo "promotion_id=$promotion_id" >> "$GITHUB_OUTPUT"
 
-      - name: Materialize flat metadata-only preflight artifact contract
+      - name: Prove bounded Worker and D1 quiescence
+        run: |
+          set -euo pipefail
+          sleep 30
+          account_id="$(jq -er '.control_plane.account_id // .account_id' "$DEPLOY_MANIFEST")"
+          worker_name="$(jq -er '.control_plane.worker_name // .worker_name' "$DEPLOY_MANIFEST")"
+          http_code="$(curl --silent --show-error --output "$RUNNER_TEMP/deployments-after-api.json" --write-out '%{http_code}' \
+            -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+            "https://api.cloudflare.com/client/v4/accounts/$account_id/workers/scripts/$worker_name/deployments")"
+          test "$http_code" = 200
+          jq '.result.deployments[0]' "$RUNNER_TEMP/deployments-after-api.json" > "$RUNNER_TEMP/deployment-after.json"
+          python scripts/deployment-identity-ar11.py --status "$RUNNER_TEMP/deployment-after.json" --output "$RUNNER_TEMP/identity-after.json"
+          jq -S '{release_set_id,capability_profile_id}' "$RUNNER_TEMP/identity-after.json" > "$RUNNER_TEMP/worker-binding-after.json"
+          cmp --silent "$RUNNER_TEMP/worker-binding-before.json" "$RUNNER_TEMP/worker-binding-after.json"
+          npx --yes wrangler@4.94.0 d1 execute CATALOG_DB --remote \
+            --command 'SELECT name FROM d1_migrations ORDER BY name' --json \
+            --config "$WRANGLER_CONFIG" --env staging > "$RUNNER_TEMP/catalog-ledger-after.json"
+          python - "$RUNNER_TEMP/catalog-ledger-after.json" "$RUNNER_TEMP/d1-names-after.json" <<'PY'
+          import json, re, sys
+          source, output = sys.argv[1:]
+          value = json.load(open(source, encoding='utf-8'))
+          names = set()
+          def walk(node):
+              if isinstance(node, dict):
+                  name = node.get('name')
+                  if isinstance(name, str) and re.fullmatch(r'\d{4}_[A-Za-z0-9_]+\.sql', name):
+                      names.add(name)
+                  for item in node.values(): walk(item)
+              elif isinstance(node, list):
+                  for item in node: walk(item)
+          walk(value)
+          ordered = sorted(names, key=lambda item: (int(item[:4]), item))
+          json.dump(ordered, open(output, 'w', encoding='utf-8'), indent=2)
+          open(output, 'a', encoding='utf-8').write('\n')
+          PY
+          cmp --silent "$RUNNER_TEMP/d1-names-before.json" "$RUNNER_TEMP/d1-names-after.json"
+
+      - name: Materialize secret-free READY_TO_MUTATE evidence
+        id: ready
         run: |
           set -euo pipefail
           cp "$RUNNER_TEMP/release-policy-input/release-set.json" "$RUNNER_TEMP/release-set.json"
           cp "$RUNNER_TEMP/release-policy-input/accepted-source-evidence.json" "$RUNNER_TEMP/accepted-source-evidence.json"
-          cmp --silent "$RUNNER_TEMP/release-set.json" "$TARGET_RELEASE_MANIFEST"
-          cmp --silent "$RUNNER_TEMP/accepted-source-evidence.json" "$RUNNER_TEMP/release-policy-input/accepted-source-evidence.json"
+          worker_identity_sha="$(sha256sum "$RUNNER_TEMP/worker-binding-after.json" | cut -d' ' -f1)"
+          d1_ledger_sha="$(sha256sum "$RUNNER_TEMP/d1-names-after.json" | cut -d' ' -f1)"
+          jq -n \
+            --arg source_sha "$SOURCE_SHA" \
+            --arg release_set_id "$RELEASE_SET_ID" \
+            --arg expected_current "${{ steps.observe.outputs.current_id }}" \
+            --arg d1_head "${{ steps.observe.outputs.d1_head }}" \
+            --arg worker_identity_sha256 "$worker_identity_sha" \
+            --arg d1_ledger_sha256 "$d1_ledger_sha" \
+            --arg promotion_id "${{ steps.policy.outputs.promotion_id }}" \
+            --arg release_verify_sha256 "$(sha256sum "$RUNNER_TEMP/release-verify.json" | cut -d' ' -f1)" \
+            --arg preflight_sha256 "$(sha256sum "$RUNNER_TEMP/promotion-preflight.json" | cut -d' ' -f1)" \
+            --arg plan_sha256 "$(sha256sum "$RUNNER_TEMP/promotion-plan.json" | cut -d' ' -f1)" \
+            '{schema_version:1,kind:"AR11_READY_TO_MUTATE",ready:true,environment:"staging",source_sha:$source_sha,release_set_id:$release_set_id,expected_current_release_set_id:$expected_current,worker_exists:true,worker_identity_sha256:$worker_identity_sha256,d1_head:$d1_head,d1_ledger_sha256:$d1_ledger_sha256,secret_bindings_verified:true,quiescence:{seconds:30,worker_identity_stable:true,d1_ledger_stable:true},promotion_id:$promotion_id,release_verify_sha256:$release_verify_sha256,promotion_preflight_sha256:$preflight_sha256,promotion_plan_sha256:$plan_sha256,credential_values_accessed:false,provider_mutation:false,production_mutation:false}' \
+            > "$RUNNER_TEMP/ready-to-mutate.json"
+          jq -e --arg source "$SOURCE_SHA" --arg target "$RELEASE_SET_ID" --arg current "${{ steps.observe.outputs.current_id }}" '.kind == "AR11_READY_TO_MUTATE" and .ready == true and .source_sha == $source and .release_set_id == $target and .expected_current_release_set_id == $current and .worker_exists == true and .secret_bindings_verified == true and .quiescence.worker_identity_stable == true and .quiescence.d1_ledger_stable == true and .credential_values_accessed == false and .provider_mutation == false and .production_mutation == false' "$RUNNER_TEMP/ready-to-mutate.json" >/dev/null
+          ready_sha="$(sha256sum "$RUNNER_TEMP/ready-to-mutate.json" | cut -d' ' -f1)"
+          artifact_name="ar11-ready-to-mutate-$RELEASE_SET_ID-$SOURCE_SHA"
+          echo "READY_TO_MUTATE evidence sha256=$ready_sha"
+          echo "ready_sha256=$ready_sha" >> "$GITHUB_OUTPUT"
+          echo "artifact_name=$artifact_name" >> "$GITHUB_OUTPUT"
 
-      - name: Upload metadata-only preflight authority
+      - name: Upload metadata-only READY_TO_MUTATE authority
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: ar11-preflight-${{ needs.resolve-verify.outputs.release_set_id }}
+          name: ${{ steps.ready.outputs.artifact_name }}
           path: |
+            ${{ runner.temp }}/ready-to-mutate.json
             ${{ runner.temp }}/release-set.json
             ${{ runner.temp }}/accepted-source-evidence.json
             ${{ runner.temp }}/release-verify.json
@@ -591,96 +461,259 @@ jobs:
             ${{ runner.temp }}/promotion-plan.json
             ${{ runner.temp }}/promotion-preflight.json
             ${{ runner.temp }}/pre-snapshot.json
-            ${{ runner.temp }}/mutation-fence.json
+            ${{ runner.temp }}/worker-binding-before.json
+            ${{ runner.temp }}/worker-binding-after.json
+            ${{ runner.temp }}/d1-names-before.json
+            ${{ runner.temp }}/d1-names-after.json
           if-no-files-found: error
           retention-days: 30
 
+      - name: Remove raw provider material
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/deploy-manifest.json" "$RUNNER_TEMP/wrangler.staging.json" "$RUNNER_TEMP/target-assets" "$RUNNER_TEMP/target-release-set" "$RUNNER_TEMP/known-good-assets" "$RUNNER_TEMP/known-good-release-set" "$RUNNER_TEMP/secret-list.json"
+
+  resolve-verify:
+    name: Bind one-shot authorization to exact prior READY_TO_MUTATE evidence
+    needs: route
+    if: needs.route.outputs.mode == 'promote'
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+      issues: read
+    outputs:
+      source_sha: ${{ steps.intent.outputs.main_sha }}
+      main_sha: ${{ steps.intent.outputs.main_sha }}
+      release_set_id: ${{ steps.intent.outputs.release_set_id }}
+      expected_current: ${{ steps.intent.outputs.expected_current }}
+      authorization_comment_id: ${{ steps.intent.outputs.authorization_comment_id }}
+      authorization_digest: ${{ steps.intent.outputs.authorization_digest }}
+      ready_run_id: ${{ steps.intent.outputs.ready_run_id }}
+      ready_artifact_name: ${{ steps.intent.outputs.ready_artifact_name }}
+      ready_evidence_sha256: ${{ steps.intent.outputs.ready_evidence_sha256 }}
+      promotion_id: ${{ steps.ready.outputs.promotion_id }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Resolve exact one-shot authorization only after READY exists
+        id: intent
+        run: |
+          set -euo pipefail
+          test "$GITHUB_EVENT_NAME" = workflow_dispatch
+          test "$GITHUB_REF" = refs/heads/main
+          gh api "repos/$GITHUB_REPOSITORY/branches/main" > "$RUNNER_TEMP/protected-main.json"
+          test "$(jq -r '.protected' "$RUNNER_TEMP/protected-main.json")" = true
+          main_sha="$(jq -r '.commit.sha' "$RUNNER_TEMP/protected-main.json")"
+          [[ "$main_sha" =~ ^[0-9a-f]{40}$ ]]
+          test "$GITHUB_SHA" = "$main_sha"
+          gh api "repos/$GITHUB_REPOSITORY/issues/266" > "$RUNNER_TEMP/live-pointer.json"
+          python - "$RUNNER_TEMP/live-pointer.json" "$main_sha" "$RUNNER_TEMP/authorized-intent.json" <<'PY'
+          import json, re, sys
+          pointer_path, main_sha, output_path = sys.argv[1:]
+          issue = json.load(open(pointer_path, encoding='utf-8'))
+          body = issue.get('body')
+          if not isinstance(body, str): raise SystemExit('live pointer body is missing')
+          def parse(block):
+              fields = {}
+              for raw in block.splitlines():
+                  match = re.fullmatch(r'\s*([A-Z0-9_]+)\s*=\s*(.*?)\s*', raw)
+                  if match:
+                      key, value = match.groups()
+                      if key in fields: raise SystemExit(f'duplicate field: {key}')
+                      fields[key] = value
+              return fields
+          parsed = [parse(block) for block in re.findall(r'```(?:text)?\s*\n(.*?)```', body, flags=re.S)]
+          current = [item for item in parsed if item.get('CURRENT_STAGE')]
+          if len(current) != 1: raise SystemExit('CURRENT block missing or ambiguous')
+          current = current[0]
+          required_current = {'CURRENT_STAGE':'V2','CURRENT_STAGE_ISSUE':'#584','PROTECTED_MAIN':main_sha,'OPEN_IMPLEMENTATION_PR':'NONE'}
+          for key, expected in required_current.items():
+              if current.get(key) != expected: raise SystemExit(f'live pointer mismatch for {key}: {current.get(key)!r}')
+          scoped = [item for item in parsed if re.fullmatch(r'V2_STAGING_WORKER_PROMOTION_V[1-9][0-9]*', item.get('SCOPED_EXCEPTION',''))]
+          if len(scoped) != 1: raise SystemExit('active staging promotion exception missing or ambiguous')
+          scoped = scoped[0]
+          required = {'STATE':'ACTIVE_UNTIL_ONE_MATCHING_ATTEMPT_OR_DRIFT','ENVIRONMENT':'staging','OWNER':'.github/workflows/release-set-promotion.yml','OPERATION':'promote','PROTECTED_MAIN':main_sha,'D1_PHASE_D_0032':'EXCLUDED','ACCESS_MTLS':'EXCLUDED','OTHER_PROVIDER_MUTATION':'EXCLUDED','PRODUCTION':'EXCLUDED'}
+          for key, expected in required.items():
+              if scoped.get(key) != expected: raise SystemExit(f'scoped authorization mismatch for {key}: {scoped.get(key)!r}')
+          target = scoped.get('TARGET_RELEASE_SET','')
+          expected_current = scoped.get('EXPECTED_CURRENT_RELEASE_SET','')
+          ready_run_id = scoped.get('READY_RUN_ID','')
+          ready_artifact_name = scoped.get('READY_ARTIFACT_NAME','')
+          ready_evidence_sha256 = scoped.get('READY_EVIDENCE_SHA256','')
+          if not re.fullmatch(r'release-set-v3-sha256-[0-9a-f]{64}', target): raise SystemExit('target invalid')
+          if not re.fullmatch(r'release-set-v(?:2|3)-sha256-[0-9a-f]{64}', expected_current): raise SystemExit('expected-current invalid')
+          if not re.fullmatch(r'[1-9][0-9]*', ready_run_id): raise SystemExit('READY run id invalid')
+          expected_artifact = f'ar11-ready-to-mutate-{target}-{main_sha}'
+          if ready_artifact_name != expected_artifact: raise SystemExit('READY artifact identity mismatch')
+          if not re.fullmatch(r'[0-9a-f]{64}', ready_evidence_sha256): raise SystemExit('READY evidence digest invalid')
+          match = re.fullmatch(r'#584\s*/\s*([1-9][0-9]*)', scoped.get('AUTHORITY_COMMENT',''))
+          if not match: raise SystemExit('authority comment locator invalid')
+          document = {'schema_version':2,'kind':'WORKER_PROMOTION_AUTHORIZED_INTENT','exception':scoped['SCOPED_EXCEPTION'],'environment':'staging','owner':'.github/workflows/release-set-promotion.yml','operation':'promote','protected_main':main_sha,'release_set_id':target,'expected_current_release_set_id':expected_current,'ready_run_id':int(ready_run_id),'ready_artifact_name':ready_artifact_name,'ready_evidence_sha256':ready_evidence_sha256,'authorization_issue':584,'authorization_comment_id':int(match.group(1)),'excluded_effects':['D1_PHASE_D_0032','ACCESS_MTLS','OTHER_PROVIDER_MUTATION','PRODUCTION']}
+          json.dump(document, open(output_path,'w',encoding='utf-8'), sort_keys=True, indent=2); open(output_path,'a',encoding='utf-8').write('\n')
+          PY
+          release_set_id="$(jq -er '.release_set_id' "$RUNNER_TEMP/authorized-intent.json")"
+          expected_current="$(jq -er '.expected_current_release_set_id' "$RUNNER_TEMP/authorized-intent.json")"
+          ready_run_id="$(jq -er '.ready_run_id | tostring' "$RUNNER_TEMP/authorized-intent.json")"
+          ready_artifact_name="$(jq -er '.ready_artifact_name' "$RUNNER_TEMP/authorized-intent.json")"
+          ready_evidence_sha256="$(jq -er '.ready_evidence_sha256' "$RUNNER_TEMP/authorized-intent.json")"
+          authorization_comment_id="$(jq -er '.authorization_comment_id | tostring' "$RUNNER_TEMP/authorized-intent.json")"
+          authorization_digest="$(jq -cS . "$RUNNER_TEMP/authorized-intent.json" | sha256sum | cut -d' ' -f1)"
+          gh api "repos/$GITHUB_REPOSITORY/issues/comments/$authorization_comment_id" > "$RUNNER_TEMP/authority-comment.json"
+          RELEASE_SET_ID="$release_set_id" EXPECTED_CURRENT="$expected_current" READY_RUN_ID="$ready_run_id" READY_ARTIFACT_NAME="$ready_artifact_name" READY_EVIDENCE_SHA256="$ready_evidence_sha256" \
+          python - "$RUNNER_TEMP/authority-comment.json" "$GITHUB_REPOSITORY_OWNER" <<'PY'
+          import json, os, re, sys
+          comment = json.load(open(sys.argv[1], encoding='utf-8'))
+          if (comment.get('user') or {}).get('login') != sys.argv[2]: raise SystemExit('authorization is not OWNER-authored')
+          if not str(comment.get('issue_url','')).endswith('/issues/584'): raise SystemExit('authorization not bound to #584')
+          blocks = re.findall(r'```(?:text)?\s*\n(.*?)```', comment.get('body') or '', flags=re.S)
+          matches=[]
+          for block in blocks:
+              lines=[line.strip() for line in block.splitlines() if line.strip()]
+              if not lines or lines[0] != 'WORKER_PROMOTION_AUTHORIZATION_V2': continue
+              fields={}
+              for line in lines[1:]:
+                  m=re.fullmatch(r'([A-Z0-9_]+)\s*=\s*(.*?)\s*', line)
+                  if m: fields[m.group(1)]=m.group(2)
+              matches.append(fields)
+          if len(matches) != 1: raise SystemExit('OWNER authorization V2 missing or ambiguous')
+          fields=matches[0]
+          required={'ENVIRONMENT':'staging','OWNER':'.github/workflows/release-set-promotion.yml','OPERATION':'promote','RELEASE_SET_ID':os.environ['RELEASE_SET_ID'],'EXPECTED_CURRENT_RELEASE_SET_ID':os.environ['EXPECTED_CURRENT'],'READY_RUN_ID':os.environ['READY_RUN_ID'],'READY_ARTIFACT_NAME':os.environ['READY_ARTIFACT_NAME'],'READY_EVIDENCE_SHA256':os.environ['READY_EVIDENCE_SHA256'],'CONFIRMATION':f"{os.environ['RELEASE_SET_ID']}:{os.environ['EXPECTED_CURRENT']}:{os.environ['READY_EVIDENCE_SHA256']}",'SCOPE':'one exact staging Worker/runtime promotion only','D1_PHASE_D_0032_AUTHORIZED':'NO','ACCESS_MTLS_MUTATION_AUTHORIZED':'NO','OTHER_PROVIDER_MUTATION_AUTHORIZED':'NO','PRODUCTION_AUTHORIZED':'NO'}
+          for key, expected in required.items():
+              if fields.get(key) != expected: raise SystemExit(f'OWNER authorization mismatch for {key}: {fields.get(key)!r}')
+          PY
+          {
+            echo "main_sha=$main_sha"
+            echo "release_set_id=$release_set_id"
+            echo "expected_current=$expected_current"
+            echo "ready_run_id=$ready_run_id"
+            echo "ready_artifact_name=$ready_artifact_name"
+            echo "ready_evidence_sha256=$ready_evidence_sha256"
+            echo "authorization_comment_id=$authorization_comment_id"
+            echo "authorization_digest=$authorization_digest"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Download and verify exact prior READY_TO_MUTATE authority
+        id: ready
+        env:
+          READY_RUN_ID: ${{ steps.intent.outputs.ready_run_id }}
+          READY_ARTIFACT_NAME: ${{ steps.intent.outputs.ready_artifact_name }}
+          READY_EVIDENCE_SHA256: ${{ steps.intent.outputs.ready_evidence_sha256 }}
+          RELEASE_SET_ID: ${{ steps.intent.outputs.release_set_id }}
+          EXPECTED_CURRENT: ${{ steps.intent.outputs.expected_current }}
+          MAIN_SHA: ${{ steps.intent.outputs.main_sha }}
+        run: |
+          set -euo pipefail
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$READY_RUN_ID" > "$RUNNER_TEMP/ready-run.json"
+          jq -e --arg sha "$MAIN_SHA" '.event == "workflow_run" and .status == "completed" and .conclusion == "success" and .head_branch == "main" and .head_sha == $sha and .path == ".github/workflows/release-set-promotion.yml"' "$RUNNER_TEMP/ready-run.json" >/dev/null
+          ready_root="$RUNNER_TEMP/ready"
+          mkdir -p "$ready_root"
+          gh run download "$READY_RUN_ID" --repo "$GITHUB_REPOSITORY" --name "$READY_ARTIFACT_NAME" --dir "$ready_root"
+          for name in ready-to-mutate.json release-set.json accepted-source-evidence.json release-verify.json compatibility-evidence.json promotion-plan.json promotion-preflight.json pre-snapshot.json d1-names-after.json; do test -f "$ready_root/$name"; done
+          test "$(sha256sum "$ready_root/ready-to-mutate.json" | cut -d' ' -f1)" = "$READY_EVIDENCE_SHA256"
+          jq -e --arg source "$MAIN_SHA" --arg target "$RELEASE_SET_ID" --arg current "$EXPECTED_CURRENT" '.schema_version == 1 and .kind == "AR11_READY_TO_MUTATE" and .ready == true and .source_sha == $source and .release_set_id == $target and .expected_current_release_set_id == $current and .worker_exists == true and .secret_bindings_verified == true and .quiescence.worker_identity_stable == true and .quiescence.d1_ledger_stable == true and .credential_values_accessed == false and .provider_mutation == false and .production_mutation == false' "$ready_root/ready-to-mutate.json" >/dev/null
+          promotion_id="$(jq -er '.promotion_id' "$ready_root/ready-to-mutate.json")"
+          echo "promotion_id=$promotion_id" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout exact current protected-main source
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        with:
+          ref: ${{ steps.intent.outputs.main_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Re-verify immutable target without provider credentials
+        env:
+          RELEASE_SET_ID: ${{ steps.intent.outputs.release_set_id }}
+        run: |
+          set -euo pipefail
+          gh api "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_SET_ID" > "$RUNNER_TEMP/target-release.json"
+          test "$(jq -r '.target_commitish' "$RUNNER_TEMP/target-release.json")" = "${{ steps.intent.outputs.main_sha }}"
+          asset_root="$RUNNER_TEMP/target-assets"
+          release_root="$RUNNER_TEMP/target-release-set"
+          mkdir -p "$asset_root"
+          gh release download "$RELEASE_SET_ID" --repo "$GITHUB_REPOSITORY" --dir "$asset_root"
+          bash scripts/release-set-assets-ar11.sh materialize current-v3 "$RELEASE_SET_ID" "$asset_root" "$release_root"
+          cmp --silent "$release_root/release-set.json" "$RUNNER_TEMP/ready/release-set.json"
+          cargo run --locked --quiet --manifest-path tools/opsctl/Cargo.toml -- \
+            --root . release verify --release-set "$RUNNER_TEMP/ready/release-set.json" \
+            --source-root . --artifact-root "$release_root" \
+            | jq -e '.decision == "VALID" and .release_set_schema_version == 3 and .source_accepted == true and .mutation_executed == false' >/dev/null
+
   mutate:
-    name: Execute exact same bits after READY
-    needs: [resolve-verify, observe-preflight]
-    if: needs.observe-preflight.outputs.decision == 'PLAN'
+    name: Execute exact same bits after READY plus authorization
+    needs: [route, resolve-verify]
+    if: needs.route.outputs.mode == 'promote' && needs.resolve-verify.result == 'success'
     runs-on: ubuntu-latest
     environment: staging
     permissions:
+      actions: read
       contents: read
       deployments: write
     env:
       GH_TOKEN: ${{ github.token }}
       RELEASE_SET_ID: ${{ needs.resolve-verify.outputs.release_set_id }}
       EXPECTED_CURRENT: ${{ needs.resolve-verify.outputs.expected_current }}
+      READY_RUN_ID: ${{ needs.resolve-verify.outputs.ready_run_id }}
+      READY_ARTIFACT_NAME: ${{ needs.resolve-verify.outputs.ready_artifact_name }}
+      READY_EVIDENCE_SHA256: ${{ needs.resolve-verify.outputs.ready_evidence_sha256 }}
       AUTHORIZATION_COMMENT_ID: ${{ needs.resolve-verify.outputs.authorization_comment_id }}
       AUTHORIZATION_DIGEST: ${{ needs.resolve-verify.outputs.authorization_digest }}
     steps:
-      - name: Checkout exact current policy
+      - name: Checkout exact authorized source
         uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
         with:
           ref: ${{ needs.resolve-verify.outputs.main_sha }}
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Checkout exact target source before mutation verification
-        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
-        with:
-          ref: ${{ needs.resolve-verify.outputs.source_sha }}
-          path: target-source
-          fetch-depth: 0
-          persist-credentials: false
-
-      - name: Download and bind exact preflight authority before provider use
-        uses: actions/download-artifact@70fc10c6e5e1ce46ad2ea6f2b72d43f7d47b13c3
-        with:
-          name: ar11-preflight-${{ needs.resolve-verify.outputs.release_set_id }}
-          path: .ar11-preflight
-
-      - name: Re-verify fence and exact immutable Release Set before credentials
+      - name: Download and bind prior READY evidence before provider credentials
         run: |
           set -euo pipefail
-          preflight_root="$GITHUB_WORKSPACE/.ar11-preflight"
-          fence="$preflight_root/mutation-fence.json"
-          preflight="$preflight_root/promotion-preflight.json"
-          plan="$preflight_root/promotion-plan.json"
-          test "$(sha256sum "$fence" | cut -d' ' -f1)" = "${{ needs.observe-preflight.outputs.mutation_fence_sha256 }}"
-          test "$(jq -r '.schema_version' "$fence")" = 2
-          test "$(jq -r '.release_set_id' "$fence")" = "$RELEASE_SET_ID"
-          test "$(jq -r '.expected_current' "$fence")" = "$EXPECTED_CURRENT"
-          test "$(jq -r '.authorization_comment_id' "$fence")" = "$AUTHORIZATION_COMMENT_ID"
-          test "$(jq -r '.authorization_digest' "$fence")" = "$AUTHORIZATION_DIGEST"
-          test "$(jq -r '.promotion_id' "$fence")" = "${{ needs.observe-preflight.outputs.promotion_id }}"
-          test "$(jq -r '.decision' "$fence")" = PLAN
-          test "$(jq -r '.preflight_sha256' "$fence")" = "$(sha256sum "$preflight" | cut -d' ' -f1)"
-          test "$(jq -r '.plan_sha256' "$fence")" = "$(sha256sum "$plan" | cut -d' ' -f1)"
-          test "$(jq -r '.ready' "$preflight")" = true
-          test "$(jq -r '.promotion_id' "$preflight")" = "${{ needs.observe-preflight.outputs.promotion_id }}"
+          ready_root="$RUNNER_TEMP/ready"
+          mkdir -p "$ready_root"
+          gh run download "$READY_RUN_ID" --repo "$GITHUB_REPOSITORY" --name "$READY_ARTIFACT_NAME" --dir "$ready_root"
+          test "$(sha256sum "$ready_root/ready-to-mutate.json" | cut -d' ' -f1)" = "$READY_EVIDENCE_SHA256"
+          test "$(jq -r '.release_set_id' "$ready_root/ready-to-mutate.json")" = "$RELEASE_SET_ID"
+          test "$(jq -r '.expected_current_release_set_id' "$ready_root/ready-to-mutate.json")" = "$EXPECTED_CURRENT"
+          test "$(jq -r '.source_sha' "$ready_root/ready-to-mutate.json")" = "${{ needs.resolve-verify.outputs.main_sha }}"
+          test "$(jq -r '.ready' "$ready_root/ready-to-mutate.json")" = true
+          test "$(jq -r '.provider_mutation' "$ready_root/ready-to-mutate.json")" = false
+          jq -n \
+            --arg authorization_digest "$AUTHORIZATION_DIGEST" \
+            --arg ready_evidence_sha256 "$READY_EVIDENCE_SHA256" \
+            --arg release_set_id "$RELEASE_SET_ID" \
+            --arg expected_current "$EXPECTED_CURRENT" \
+            --arg source_sha "${{ needs.resolve-verify.outputs.main_sha }}" \
+            '{schema_version:1,kind:"AR11_MUTATION_FENCE",authorization_digest:$authorization_digest,ready_evidence_sha256:$ready_evidence_sha256,release_set_id:$release_set_id,expected_current_release_set_id:$expected_current,source_sha:$source_sha}' \
+            > "$RUNNER_TEMP/mutation-fence.json"
 
+      - name: Re-verify exact immutable Release Set before credentials
+        run: |
+          set -euo pipefail
           asset_root="$RUNNER_TEMP/target-assets"
           release_root="$RUNNER_TEMP/mutation-release-set"
-          policy_dir="$RUNNER_TEMP/mutation-policy"
-          mkdir -p "$asset_root" "$policy_dir"
+          mkdir -p "$asset_root"
           gh release download "$RELEASE_SET_ID" --repo "$GITHUB_REPOSITORY" --dir "$asset_root"
           bash scripts/release-set-assets-ar11.sh materialize current-v3 "$RELEASE_SET_ID" "$asset_root" "$release_root"
-          cmp --silent "$release_root/release-set.json" "$preflight_root/release-set.json"
-          cp "$preflight_root/release-set.json" "$policy_dir/release-set.json"
-          cp "$preflight_root/accepted-source-evidence.json" "$policy_dir/accepted-source-evidence.json"
+          cmp --silent "$release_root/release-set.json" "$RUNNER_TEMP/ready/release-set.json"
           cargo run --locked --quiet --manifest-path tools/opsctl/Cargo.toml -- \
-            --root . release verify --release-set "$policy_dir/release-set.json" \
-            --source-root "$GITHUB_WORKSPACE/target-source" --artifact-root "$release_root" \
+            --root . release verify --release-set "$RUNNER_TEMP/ready/release-set.json" \
+            --source-root . --artifact-root "$release_root" \
             | jq -e '.decision == "VALID" and .release_set_schema_version == 3 and .source_accepted == true and .mutation_executed == false' >/dev/null
-
           control_extract="$RUNNER_TEMP/control-release"
           mkdir -p "$control_extract"
           tar -xf "$release_root/components/control-plane.tar" -C "$control_extract"
           manifest="$(find "$control_extract" -type f -name release-manifest.json -print -quit)"
           test -n "$manifest"
-          control_root="$(dirname "$manifest")"
-          echo "CONTROL_RELEASE_ROOT=$control_root" >> "$GITHUB_ENV"
+          echo "CONTROL_RELEASE_ROOT=$(dirname "$manifest")" >> "$GITHUB_ENV"
 
-      - name: Set up pinned Node runtime before deploy credentials
+      - name: Set up pinned Node before deploy credential
         uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
         with:
           node-version: '24.19.0'
           package-manager-cache: false
 
-      - name: Materialize mutation overlay only after native verification
+      - name: Render mutation overlay and prove exact bits dry-run without deploy credential
         env:
           CLOUDFLARE_DEPLOY_MANIFEST_JSON: ${{ secrets.CLOUDFLARE_DEPLOY_MANIFEST_JSON }}
         run: |
@@ -693,12 +726,9 @@ jobs:
             --environment staging --output "$RUNNER_TEMP/wrangler.staging.json"
           echo "DEPLOY_MANIFEST=$RUNNER_TEMP/deploy-manifest.json" >> "$GITHUB_ENV"
           echo "WRANGLER_CONFIG=$RUNNER_TEMP/wrangler.staging.json" >> "$GITHUB_ENV"
+          npx --yes wrangler@4.94.0 deploy --dry-run --config "$RUNNER_TEMP/wrangler.staging.json" --env staging --experimental-autoconfig=false
 
-      - name: Prove exact extracted bits can deploy without rebuilding
-        run: |
-          npx --yes wrangler@4.94.0 deploy --dry-run --config "$WRANGLER_CONFIG" --env staging --experimental-autoconfig=false
-
-      - name: Activate deploy credential after READY and exact-byte verification
+      - name: Activate deploy credential only after bound READY and authorization
         env:
           DEPLOY_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
         run: |
@@ -707,85 +737,82 @@ jobs:
           echo "::add-mask::$DEPLOY_TOKEN"
           echo "CLOUDFLARE_API_TOKEN=$DEPLOY_TOKEN" >> "$GITHUB_ENV"
 
-      - name: Re-observe expected-current fence and deploy exact Release Set v3 bits
+      - name: Re-fence Worker identity and D1 head immediately before mutation
         run: |
           set -euo pipefail
-          account_id="$(jq -r '.control_plane.account_id // .account_id' "$DEPLOY_MANIFEST")"
-          worker_name="$(jq -r '.control_plane.worker_name // .worker_name' "$DEPLOY_MANIFEST")"
-          test -n "$account_id"
-          test -n "$worker_name"
-          http_code="$(curl --silent --show-error --output "$RUNNER_TEMP/mutation-current.json" --write-out '%{http_code}' \
+          account_id="$(jq -er '.control_plane.account_id // .account_id' "$DEPLOY_MANIFEST")"
+          worker_name="$(jq -er '.control_plane.worker_name // .worker_name' "$DEPLOY_MANIFEST")"
+          http_code="$(curl --silent --show-error --output "$RUNNER_TEMP/mutation-current-api.json" --write-out '%{http_code}' \
             -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
             "https://api.cloudflare.com/client/v4/accounts/$account_id/workers/scripts/$worker_name/deployments")"
-          if [ "$http_code" = 200 ]; then
-            jq '.result.deployments[0] // {}' "$RUNNER_TEMP/mutation-current.json" > "$RUNNER_TEMP/mutation-current-deployment.json"
-          elif [ "$http_code" = 404 ]; then
-            printf '{}\n' > "$RUNNER_TEMP/mutation-current-deployment.json"
-          else
-            cat "$RUNNER_TEMP/mutation-current.json" >&2
-            exit 1
-          fi
-          python scripts/deployment-identity-ar11.py \
-            --status "$RUNNER_TEMP/mutation-current-deployment.json" \
-            --output "$RUNNER_TEMP/mutation-current-identity.json"
-          current_id="$(jq -r '.release_set_id // "NONE"' "$RUNNER_TEMP/mutation-current-identity.json")"
-          test "$current_id" = "$EXPECTED_CURRENT"
+          test "$http_code" = 200
+          jq '.result.deployments[0]' "$RUNNER_TEMP/mutation-current-api.json" > "$RUNNER_TEMP/mutation-current-deployment.json"
+          python scripts/deployment-identity-ar11.py --status "$RUNNER_TEMP/mutation-current-deployment.json" --output "$RUNNER_TEMP/mutation-current-identity.json"
+          test "$(jq -r '.release_set_id' "$RUNNER_TEMP/mutation-current-identity.json")" = "$EXPECTED_CURRENT"
+          npx --yes wrangler@4.94.0 d1 execute CATALOG_DB --remote \
+            --command 'SELECT name FROM d1_migrations ORDER BY name' --json \
+            --config "$WRANGLER_CONFIG" --env staging > "$RUNNER_TEMP/mutation-catalog-ledger.json"
+          python - "$RUNNER_TEMP/mutation-catalog-ledger.json" "$RUNNER_TEMP/mutation-d1-names.json" <<'PY'
+          import json, re, sys
+          value=json.load(open(sys.argv[1],encoding='utf-8')); names=set()
+          def walk(node):
+              if isinstance(node,dict):
+                  name=node.get('name')
+                  if isinstance(name,str) and re.fullmatch(r'\d{4}_[A-Za-z0-9_]+\.sql',name): names.add(name)
+                  for item in node.values(): walk(item)
+              elif isinstance(node,list):
+                  for item in node: walk(item)
+          walk(value); ordered=sorted(names,key=lambda item:(int(item[:4]),item)); json.dump(ordered,open(sys.argv[2],'w',encoding='utf-8'),indent=2); open(sys.argv[2],'a',encoding='utf-8').write('\n')
+          PY
+          cmp --silent "$RUNNER_TEMP/mutation-d1-names.json" "$RUNNER_TEMP/ready/d1-names-after.json"
+
+      - name: Deploy exact Release Set v3 bits after all fences
+        run: |
+          set -euo pipefail
           npx --yes wrangler@4.94.0 deploy \
             --config "$WRANGLER_CONFIG" --env staging --experimental-autoconfig=false \
             --message "release_set=$RELEASE_SET_ID profile=rehearsal-core-v2"
 
   post-verify:
     name: Re-observe and prove convergence
-    needs: [resolve-verify, observe-preflight, mutate]
-    if: always() && needs.resolve-verify.result == 'success' && needs.observe-preflight.result == 'success' && (needs.mutate.result == 'success' || needs.mutate.result == 'skipped')
+    needs: [route, resolve-verify, mutate]
+    if: needs.route.outputs.mode == 'promote' && needs.mutate.result == 'success'
     runs-on: ubuntu-latest
     environment: staging
     permissions:
+      actions: read
       contents: read
     env:
       GH_TOKEN: ${{ github.token }}
       RELEASE_SET_ID: ${{ needs.resolve-verify.outputs.release_set_id }}
+      READY_RUN_ID: ${{ needs.resolve-verify.outputs.ready_run_id }}
+      READY_ARTIFACT_NAME: ${{ needs.resolve-verify.outputs.ready_artifact_name }}
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_OBSERVE_API_TOKEN }}
       CLOUDFLARE_ACCESS_CLIENT_ID: ${{ secrets.CLOUDFLARE_ACCESS_CLIENT_ID }}
       CLOUDFLARE_ACCESS_CLIENT_SECRET: ${{ secrets.CLOUDFLARE_ACCESS_CLIENT_SECRET }}
       CLOUDFLARE_DEPLOY_MANIFEST_JSON: ${{ secrets.CLOUDFLARE_DEPLOY_MANIFEST_JSON }}
     steps:
-      - name: Checkout current policy and exact target source
+      - name: Checkout exact promoted source
         uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
         with:
           ref: ${{ needs.resolve-verify.outputs.main_sha }}
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Checkout exact target source
-        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
-        with:
-          ref: ${{ needs.resolve-verify.outputs.source_sha }}
-          path: target-source
-          fetch-depth: 0
-          persist-credentials: false
-
-      - name: Download preflight evidence and immutable target
-        uses: actions/download-artifact@70fc10c6e5e1ce46ad2ea6f2b72d43f7d47b13c3
-        with:
-          name: ar11-preflight-${{ needs.resolve-verify.outputs.release_set_id }}
-          path: ${{ runner.temp }}/preflight
-
-      - name: Prepare target identity and read-only config
+      - name: Download prior READY evidence and prepare read-only target
         run: |
           set -euo pipefail
+          ready_root="$RUNNER_TEMP/ready"
+          mkdir -p "$ready_root"
+          gh run download "$READY_RUN_ID" --repo "$GITHUB_REPOSITORY" --name "$READY_ARTIFACT_NAME" --dir "$ready_root"
           asset_root="$RUNNER_TEMP/target-assets"
           release_root="$RUNNER_TEMP/post-release-set"
-          policy_dir="$RUNNER_TEMP/post-policy"
-          mkdir -p "$asset_root" "$policy_dir"
+          mkdir -p "$asset_root"
           gh release download "$RELEASE_SET_ID" --repo "$GITHUB_REPOSITORY" --dir "$asset_root"
           bash scripts/release-set-assets-ar11.sh materialize current-v3 "$RELEASE_SET_ID" "$asset_root" "$release_root"
-          cmp --silent "$release_root/release-set.json" "$RUNNER_TEMP/preflight/release-set.json"
-          cp "$RUNNER_TEMP/preflight/release-set.json" "$policy_dir/release-set.json"
-          cp "$RUNNER_TEMP/preflight/accepted-source-evidence.json" "$policy_dir/accepted-source-evidence.json"
-          cargo run --locked --quiet --manifest-path tools/opsctl/Cargo.toml -- \
-            --root . release verify --release-set "$policy_dir/release-set.json" \
-            --source-root "$GITHUB_WORKSPACE/target-source" --artifact-root "$release_root" \
+          cmp --silent "$release_root/release-set.json" "$ready_root/release-set.json"
+          cargo run --locked --quiet --manifest-path tools/opsctl/Cargo.toml -- --root . release verify \
+            --release-set "$ready_root/release-set.json" --source-root . --artifact-root "$release_root" \
             | tee "$RUNNER_TEMP/post-release-verify.json" \
             | jq -e '.decision == "VALID" and .release_set_schema_version == 3 and .source_accepted == true and .mutation_executed == false' >/dev/null
           control_extract="$RUNNER_TEMP/control-release"
@@ -793,65 +820,36 @@ jobs:
           tar -xf "$release_root/components/control-plane.tar" -C "$control_extract"
           manifest="$(find "$control_extract" -type f -name release-manifest.json -print -quit)"
           test -n "$manifest"
-          control_root="$(dirname "$manifest")"
           umask 077
           printf '%s' "$CLOUDFLARE_DEPLOY_MANIFEST_JSON" > "$RUNNER_TEMP/deploy-manifest.json"
-          python scripts/release-core-overlay-ar11.py \
-            --source-config "$control_root/deploy/cloudflare/wrangler.jsonc" \
-            --release-root "$control_root" --deploy-manifest "$RUNNER_TEMP/deploy-manifest.json" \
-            --environment staging --output "$RUNNER_TEMP/wrangler.staging.json"
-          {
-            echo "CONTROL_RELEASE_MANIFEST=$manifest"
-            echo "DEPLOY_MANIFEST=$RUNNER_TEMP/deploy-manifest.json"
-            echo "WRANGLER_CONFIG=$RUNNER_TEMP/wrangler.staging.json"
-          } >> "$GITHUB_ENV"
+          python scripts/release-core-overlay-ar11.py --source-config "$(dirname "$manifest")/deploy/cloudflare/wrangler.jsonc" --release-root "$(dirname "$manifest")" --deploy-manifest "$RUNNER_TEMP/deploy-manifest.json" --environment staging --output "$RUNNER_TEMP/wrangler.staging.json"
+          echo "DEPLOY_MANIFEST=$RUNNER_TEMP/deploy-manifest.json" >> "$GITHUB_ENV"
+          echo "WRANGLER_CONFIG=$RUNNER_TEMP/wrangler.staging.json" >> "$GITHUB_ENV"
 
-      - name: Set up pinned Node runtime for observation only
+      - name: Set up pinned Node for post-deploy observation
         uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
         with:
           node-version: '24.19.0'
           package-manager-cache: false
 
-      - name: Re-observe provider and verify convergence in Rust
+      - name: Re-observe provider and verify exact convergence
         run: |
           set -euo pipefail
-          account_id="$(jq -r '.control_plane.account_id // .account_id' "$DEPLOY_MANIFEST")"
-          worker_name="$(jq -r '.control_plane.worker_name // .worker_name' "$DEPLOY_MANIFEST")"
-          r2_bucket="$(jq -r '.control_plane.r2_bucket_name // .r2_bucket_name' "$DEPLOY_MANIFEST")"
-          queue_name="$(jq -r '.control_plane.integration_events_queue // .integration_events_queue' "$DEPLOY_MANIFEST")"
-          custom_domain="$(jq -r '.control_plane.custom_domain // .custom_domain' "$DEPLOY_MANIFEST")"
-          curl --fail-with-body --silent --show-error \
-            -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
-            "https://api.cloudflare.com/client/v4/accounts/$account_id/workers/scripts/$worker_name/deployments" \
-            | jq '.result.deployments[0]' > "$RUNNER_TEMP/post-deployment.json"
-          npx --yes wrangler@4.94.0 d1 execute CATALOG_DB --remote \
-            --command 'SELECT name FROM d1_migrations ORDER BY name' --json \
-            --config "$WRANGLER_CONFIG" --env staging > "$RUNNER_TEMP/post-catalog-ledger.json"
-          npx --yes wrangler@4.94.0 r2 bucket info "$r2_bucket" --json \
-            --config "$WRANGLER_CONFIG" --env staging > "$RUNNER_TEMP/post-r2-info.json"
+          account_id="$(jq -er '.control_plane.account_id // .account_id' "$DEPLOY_MANIFEST")"
+          worker_name="$(jq -er '.control_plane.worker_name // .worker_name' "$DEPLOY_MANIFEST")"
+          r2_bucket="$(jq -er '.control_plane.r2_bucket_name // .r2_bucket_name' "$DEPLOY_MANIFEST")"
+          queue_name="$(jq -er '.control_plane.integration_events_queue // .integration_events_queue' "$DEPLOY_MANIFEST")"
+          custom_domain="$(jq -er '.control_plane.custom_domain // .custom_domain' "$DEPLOY_MANIFEST")"
+          curl --fail-with-body --silent --show-error -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" "https://api.cloudflare.com/client/v4/accounts/$account_id/workers/scripts/$worker_name/deployments" | jq '.result.deployments[0]' > "$RUNNER_TEMP/post-deployment.json"
+          npx --yes wrangler@4.94.0 d1 execute CATALOG_DB --remote --command 'SELECT name FROM d1_migrations ORDER BY name' --json --config "$WRANGLER_CONFIG" --env staging > "$RUNNER_TEMP/post-catalog-ledger.json"
+          npx --yes wrangler@4.94.0 r2 bucket info "$r2_bucket" --json --config "$WRANGLER_CONFIG" --env staging > "$RUNNER_TEMP/post-r2-info.json"
           npx --yes wrangler@4.94.0 queues info "$queue_name" --config "$WRANGLER_CONFIG" --env staging >/dev/null
           jq -n --arg name "$queue_name" '{name:$name}' > "$RUNNER_TEMP/post-queue-info.json"
-          npx --yes wrangler@4.94.0 secret list --format json \
-            --config "$WRANGLER_CONFIG" --env staging > "$RUNNER_TEMP/post-secret-list.json"
-          python scripts/deployment-snapshot-ar11.py \
-            --environment staging --collected-at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-            --deployment-status "$RUNNER_TEMP/post-deployment.json" \
-            --catalog-ledger "$RUNNER_TEMP/post-catalog-ledger.json" \
-            --r2-list "$RUNNER_TEMP/post-r2-info.json" --queue-list "$RUNNER_TEMP/post-queue-info.json" \
-            --secret-list "$RUNNER_TEMP/post-secret-list.json" --rendered-config "$WRANGLER_CONFIG" \
-            --deploy-manifest "$DEPLOY_MANIFEST" --current-release-set "$RUNNER_TEMP/preflight/release-set.json" \
-            --output "$RUNNER_TEMP/post-snapshot.json"
-          cargo run --locked --quiet --manifest-path tools/opsctl/Cargo.toml -- \
-            --root . promotion verify --release-set "$RUNNER_TEMP/preflight/release-set.json" \
-            --source-root "$GITHUB_WORKSPACE/target-source" --profile rehearsal-core-v2 --environment staging \
-            --snapshot "$RUNNER_TEMP/post-snapshot.json" --evidence-json "$RUNNER_TEMP/preflight/compatibility-evidence.json" \
-            | tee "$RUNNER_TEMP/promotion-verify.json" \
-            | jq -e '.verified == true and .decision == "VERIFIED" and .mutation_executed == false' >/dev/null
+          npx --yes wrangler@4.94.0 secret list --format json --config "$WRANGLER_CONFIG" --env staging > "$RUNNER_TEMP/post-secret-list.json"
+          python scripts/deployment-snapshot-ar11.py --environment staging --collected-at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --deployment-status "$RUNNER_TEMP/post-deployment.json" --catalog-ledger "$RUNNER_TEMP/post-catalog-ledger.json" --r2-list "$RUNNER_TEMP/post-r2-info.json" --queue-list "$RUNNER_TEMP/post-queue-info.json" --secret-list "$RUNNER_TEMP/post-secret-list.json" --rendered-config "$WRANGLER_CONFIG" --deploy-manifest "$DEPLOY_MANIFEST" --current-release-set "$RUNNER_TEMP/ready/release-set.json" --output "$RUNNER_TEMP/post-snapshot.json"
+          cargo run --locked --quiet --manifest-path tools/opsctl/Cargo.toml -- --root . promotion verify --release-set "$RUNNER_TEMP/ready/release-set.json" --source-root . --profile rehearsal-core-v2 --environment staging --snapshot "$RUNNER_TEMP/post-snapshot.json" --evidence-json "$RUNNER_TEMP/ready/compatibility-evidence.json" | tee "$RUNNER_TEMP/promotion-verify.json" | jq -e '.verified == true and .decision == "VERIFIED" and .mutation_executed == false' >/dev/null
           response="$RUNNER_TEMP/health-response"
-          curl --silent --show-error --fail --connect-timeout 10 --max-time 30 \
-            -H "CF-Access-Client-Id: $CLOUDFLARE_ACCESS_CLIENT_ID" \
-            -H "CF-Access-Client-Secret: $CLOUDFLARE_ACCESS_CLIENT_SECRET" \
-            -o "$response" "https://$custom_domain/health"
+          curl --silent --show-error --fail --connect-timeout 10 --max-time 30 -H "CF-Access-Client-Id: $CLOUDFLARE_ACCESS_CLIENT_ID" -H "CF-Access-Client-Secret: $CLOUDFLARE_ACCESS_CLIENT_SECRET" -o "$response" "https://$custom_domain/health"
           test "$(cat "$response")" = ok
 
       - name: Upload metadata-only post-deploy evidence
@@ -871,15 +869,15 @@ jobs:
     if: needs.route.outputs.mode == 'rollback-negative'
     runs-on: ubuntu-latest
     permissions:
-      contents: read
       actions: read
+      contents: read
     env:
       GH_TOKEN: ${{ github.token }}
       RELEASE_SET_ID: ${{ inputs.release_set_id }}
       EXPECTED_CURRENT: ${{ inputs.expected_current_release_set_id }}
       SOURCE_RUN_ID: ${{ inputs.source_run_id }}
     steps:
-      - name: Validate evidence-only intent and live source run
+      - name: Validate evidence-only intent and prior READY run
         id: bind
         run: |
           set -euo pipefail
@@ -890,95 +888,35 @@ jobs:
           [[ "$SOURCE_RUN_ID" =~ ^[1-9][0-9]*$ ]]
           test "${{ inputs.confirmation }}" = "$RELEASE_SET_ID:$SOURCE_RUN_ID"
           gh api "repos/$GITHUB_REPOSITORY/branches/main" > "$RUNNER_TEMP/protected-main.json"
-          test "$(jq -r '.protected' "$RUNNER_TEMP/protected-main.json")" = true
-          main_sha="$(jq -r '.commit.sha' "$RUNNER_TEMP/protected-main.json")"
+          main_sha="$(jq -er '.commit.sha' "$RUNNER_TEMP/protected-main.json")"
           test "$GITHUB_SHA" = "$main_sha"
           gh api "repos/$GITHUB_REPOSITORY/actions/runs/$SOURCE_RUN_ID" > "$RUNNER_TEMP/source-run.json"
-          jq -e --arg sha "$main_sha" '
-            .event == "workflow_dispatch" and
-            .status == "completed" and
-            .conclusion == "success" and
-            .head_branch == "main" and
-            .head_sha == $sha and
-            .path == ".github/workflows/release-set-promotion.yml"
-          ' "$RUNNER_TEMP/source-run.json" >/dev/null
-          gh api "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_SET_ID" > "$RUNNER_TEMP/target-release.json"
-          source_sha="$(jq -r '.target_commitish' "$RUNNER_TEMP/target-release.json")"
-          [[ "$source_sha" =~ ^[0-9a-f]{40}$ ]]
-          echo "source_sha=$source_sha" >> "$GITHUB_OUTPUT"
+          jq -e --arg sha "$main_sha" '.event == "workflow_run" and .status == "completed" and .conclusion == "success" and .head_branch == "main" and .head_sha == $sha and .path == ".github/workflows/release-set-promotion.yml"' "$RUNNER_TEMP/source-run.json" >/dev/null
           echo "main_sha=$main_sha" >> "$GITHUB_OUTPUT"
 
-      - name: Checkout current protected-main policy authority
+      - name: Checkout exact current source
         uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
         with:
           ref: ${{ steps.bind.outputs.main_sha }}
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Checkout exact immutable target source
-        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
-        with:
-          ref: ${{ steps.bind.outputs.source_sha }}
-          path: target-source
-          fetch-depth: 0
-          persist-credentials: false
-
-      - name: Download live A-to-A preflight evidence without provider credentials
+      - name: Download READY evidence and prove controlled UNKNOWN rollback blocks
         run: |
           set -euo pipefail
-          live="$RUNNER_TEMP/live-preflight"
+          live="$RUNNER_TEMP/live-ready"
           mkdir -p "$live"
-          gh run download "$SOURCE_RUN_ID" --repo "$GITHUB_REPOSITORY" \
-            --name "ar11-preflight-$RELEASE_SET_ID" --dir "$live"
-          for name in release-set.json accepted-source-evidence.json release-verify.json compatibility-evidence.json promotion-plan.json promotion-preflight.json pre-snapshot.json; do
-            test -f "$live/$name"
-          done
-
-          asset_root="$RUNNER_TEMP/rollback-assets"
-          release_root="$RUNNER_TEMP/rollback-release-set"
-          mkdir -p "$asset_root"
-          gh release download "$RELEASE_SET_ID" --repo "$GITHUB_REPOSITORY" --dir "$asset_root"
-          bash scripts/release-set-assets-ar11.sh materialize current-v3 "$RELEASE_SET_ID" "$asset_root" "$release_root"
-          cmp --silent "$release_root/release-set.json" "$live/release-set.json"
-          cargo run --locked --quiet --manifest-path tools/opsctl/Cargo.toml -- \
-            --root . release verify --release-set "$live/release-set.json" \
-            --source-root "$GITHUB_WORKSPACE/target-source" --artifact-root "$release_root" \
-            | tee "$RUNNER_TEMP/rollback-release-verify.json" \
-            | jq -e '.decision == "VALID" and .release_set_schema_version == 3 and .source_accepted == true and .mutation_executed == false' >/dev/null
-
-          jq -e --arg id "$RELEASE_SET_ID" '.decision == "VALID" and .release_set_id == $id and .source_accepted == true and .mutation_executed == false' "$live/release-verify.json" >/dev/null
-          jq -e --arg id "$RELEASE_SET_ID" '.decision == "NO_CHANGE" and .observed_current_release_set_id == $id and .target_release_set_id == $id and (.actions | length) == 0 and .mutation_executed == false' "$live/promotion-plan.json" >/dev/null
-          jq -e --arg id "$RELEASE_SET_ID" '.decision == "READY" and .ready == true and .target_release_set_id == $id and .rollback_compatibility == "COMPATIBLE" and .credential_values_accessed == false and .provider_mutation_executed == false and .mutation_executed == false' "$live/promotion-preflight.json" >/dev/null
-          jq -e --arg id "$RELEASE_SET_ID" '.release_set_id == $id and .environment == "staging"' "$live/pre-snapshot.json" >/dev/null
+          gh run download "$SOURCE_RUN_ID" --repo "$GITHUB_REPOSITORY" --name "ar11-ready-to-mutate-$RELEASE_SET_ID-${{ steps.bind.outputs.main_sha }}" --dir "$live"
+          for name in release-set.json release-verify.json compatibility-evidence.json promotion-plan.json promotion-preflight.json pre-snapshot.json ready-to-mutate.json; do test -f "$live/$name"; done
+          jq -e --arg id "$RELEASE_SET_ID" '.release_set_id == $id and .ready == true and .provider_mutation == false' "$live/ready-to-mutate.json" >/dev/null
           jq '.catalog_schema_revision = null' "$live/pre-snapshot.json" > "$RUNNER_TEMP/controlled-unknown-snapshot.json"
-          test "$(jq -r '.release_set_id' "$RUNNER_TEMP/controlled-unknown-snapshot.json")" = "$RELEASE_SET_ID"
-
-      - name: Native rollback preflight must block UNKNOWN before credentials
-        run: |
-          set -euo pipefail
-          live="$RUNNER_TEMP/live-preflight"
           cargo run --locked --quiet --manifest-path tools/opsctl/Cargo.toml -- \
-            --root . promotion preflight \
-            --release-set "$live/release-set.json" \
-            --source-root "$GITHUB_WORKSPACE/target-source" \
-            --profile rehearsal-core-v2 \
-            --environment staging \
-            --snapshot "$RUNNER_TEMP/controlled-unknown-snapshot.json" \
-            --evidence-json "$live/compatibility-evidence.json" \
-            --current-release-set "$live/release-set.json" \
-            --known-good-release-set "$live/release-set.json" \
-            --expected-current "$RELEASE_SET_ID" \
+            --root . promotion preflight --release-set "$live/release-set.json" --source-root . \
+            --profile rehearsal-core-v2 --environment staging --snapshot "$RUNNER_TEMP/controlled-unknown-snapshot.json" \
+            --evidence-json "$live/compatibility-evidence.json" --current-release-set "$live/release-set.json" \
+            --known-good-release-set "$live/release-set.json" --expected-current "$RELEASE_SET_ID" \
             | tee "$RUNNER_TEMP/blocked-preflight.json"
-          jq -e '
-            .command == "promotion.preflight" and
-            .decision == "BLOCKED" and
-            .ready == false and
-            .rollback_compatibility == "UNKNOWN" and
-            (.blockers | index("ROLLBACK_COMPATIBILITY_UNKNOWN") != null) and
-            .credential_values_accessed == false and
-            .provider_mutation_executed == false and
-            .mutation_executed == false
-          ' "$RUNNER_TEMP/blocked-preflight.json" >/dev/null
+          jq -e '.command == "promotion.preflight" and .decision == "BLOCKED" and .ready == false and .rollback_compatibility == "UNKNOWN" and (.blockers | index("ROLLBACK_COMPATIBILITY_UNKNOWN") != null) and .credential_values_accessed == false and .provider_mutation_executed == false and .mutation_executed == false' "$RUNNER_TEMP/blocked-preflight.json" >/dev/null
 
       - name: Upload credential-free rollback-negative evidence
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
@@ -986,12 +924,9 @@ jobs:
           name: ar11-rollback-negative-${{ inputs.release_set_id }}
           path: |
             ${{ runner.temp }}/source-run.json
-            ${{ runner.temp }}/live-preflight/release-set.json
-            ${{ runner.temp }}/live-preflight/release-verify.json
-            ${{ runner.temp }}/rollback-release-verify.json
-            ${{ runner.temp }}/live-preflight/promotion-plan.json
-            ${{ runner.temp }}/live-preflight/promotion-preflight.json
-            ${{ runner.temp }}/live-preflight/pre-snapshot.json
+            ${{ runner.temp }}/live-ready/ready-to-mutate.json
+            ${{ runner.temp }}/live-ready/release-set.json
+            ${{ runner.temp }}/live-ready/promotion-preflight.json
             ${{ runner.temp }}/controlled-unknown-snapshot.json
             ${{ runner.temp }}/blocked-preflight.json
           if-no-files-found: error
