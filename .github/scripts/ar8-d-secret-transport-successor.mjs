@@ -12,6 +12,8 @@ const D3_MARKER = 'architecture/pre2j-d3-resolver-bootstrap-implementation.json'
 const AR11_AUTHORITY = 'architecture/release-architecture-ar11.json';
 const AR11_CHECKER = '.github/scripts/release-operational-ar11.mjs';
 const AR11_PROMOTION = '.github/workflows/release-set-promotion.yml';
+const WRANGLER_SOURCE = 'deploy/cloudflare/wrangler.jsonc';
+const CORE_OVERLAY = 'scripts/release-core-overlay-ar11.py';
 const BINDING_HELPER = '.github/scripts/worker-secret-bindings.mjs';
 const LEGACY_WORKFLOW = '.github/workflows/mailbox-secret-resolver-promotion.yml';
 const LEGACY_WRAPPER = 'scripts/mailbox-secret-resolver-promotion.py';
@@ -43,31 +45,16 @@ function ensureCommit(ref) {
 }
 
 function transitionIdentityErrors(authority) {
-  if (!authority || typeof authority !== 'object' || Array.isArray(authority)) {
-    return ['D3 transition record is missing or malformed'];
-  }
+  if (!authority || typeof authority !== 'object' || Array.isArray(authority)) return ['D3 transition record is missing or malformed'];
   const errors = [];
-  if (authority.schema_version !== 1 || authority.kind !== 'POLICY_TRANSITION' || authority.tracking_issue !== 361) {
-    errors.push('D3 transition record identity/version drifted');
-  }
+  if (authority.schema_version !== 1 || authority.kind !== 'POLICY_TRANSITION' || authority.tracking_issue !== 361) errors.push('D3 transition record identity/version drifted');
   const predecessor = authority.predecessor ?? {};
-  if (predecessor.d3_authority !== D3_AUTHORITY || predecessor.d3_implementation_marker !== D3_MARKER) {
-    errors.push('D3 predecessor authority/marker identity drifted');
-  }
-  if (!/^[0-9a-f]{40}$/.test(String(predecessor.transition_base_main ?? ''))) {
-    errors.push('D3 predecessor transition SHA is missing or malformed');
-  } else if (predecessor.transition_base_main !== EXPECTED_TRANSITION_BASE) {
-    errors.push('D3 predecessor transition SHA changed from the governed transition');
-  }
-  if (!/^[0-9a-f]{40}$/.test(String(predecessor.promotion_workflow_git_blob_sha ?? ''))) {
-    errors.push('D3 historical promotion workflow blob identity is missing or malformed');
-  } else if (predecessor.promotion_workflow_git_blob_sha !== EXPECTED_WORKFLOW_BLOB) {
-    errors.push('D3 historical promotion workflow blob identity drifted');
-  }
-  if (predecessor.promotion_workflow !== LEGACY_WORKFLOW) {
-    errors.push('D3 historical promotion workflow path drifted');
-  }
-
+  if (predecessor.d3_authority !== D3_AUTHORITY || predecessor.d3_implementation_marker !== D3_MARKER) errors.push('D3 predecessor authority/marker identity drifted');
+  if (!/^[0-9a-f]{40}$/.test(String(predecessor.transition_base_main ?? ''))) errors.push('D3 predecessor transition SHA is missing or malformed');
+  else if (predecessor.transition_base_main !== EXPECTED_TRANSITION_BASE) errors.push('D3 predecessor transition SHA changed from the governed transition');
+  if (!/^[0-9a-f]{40}$/.test(String(predecessor.promotion_workflow_git_blob_sha ?? ''))) errors.push('D3 historical promotion workflow blob identity is missing or malformed');
+  else if (predecessor.promotion_workflow_git_blob_sha !== EXPECTED_WORKFLOW_BLOB) errors.push('D3 historical promotion workflow blob identity drifted');
+  if (predecessor.promotion_workflow !== LEGACY_WORKFLOW) errors.push('D3 historical promotion workflow path drifted');
   const successor = authority.successor ?? {};
   if (
     successor.policy !== 'AR-11 Release Set promotion with steady-state Worker secret binding verification' ||
@@ -79,9 +66,7 @@ function transitionIdentityErrors(authority) {
     successor.routine_deploy_secret_value_transport !== false ||
     successor.routine_deploy_secret_mutation !== false ||
     successor.rotation_lifecycle !== 'separate_explicit_rotation_authority'
-  ) {
-    errors.push('current D3 secret-transport successor policy is missing or drifted');
-  }
+  ) errors.push('current D3 secret-transport successor policy is missing or drifted');
   return errors;
 }
 
@@ -91,16 +76,11 @@ function historicalProvenanceErrors(authority) {
   const ref = String(predecessor.transition_base_main ?? '');
   if (!/^[0-9a-f]{40}$/.test(ref)) return ['D3 predecessor transition SHA is not an exact commit'];
   ensureCommit(ref);
-
   const workflowBlob = run('git', ['rev-parse', `${ref}:${LEGACY_WORKFLOW}`], { check: false });
-  if (workflowBlob.status !== 0 || workflowBlob.stdout.trim() !== predecessor.promotion_workflow_git_blob_sha) {
-    errors.push('historical D3 promotion workflow blob does not match the governed transition base');
-  }
+  if (workflowBlob.status !== 0 || workflowBlob.stdout.trim() !== predecessor.promotion_workflow_git_blob_sha) errors.push('historical D3 promotion workflow blob does not match the governed transition base');
   for (const relative of [D3_AUTHORITY, D3_MARKER]) {
     const historical = run('git', ['show', `${ref}:${relative}`], { check: false });
-    if (historical.status !== 0 || historical.stdout.replace(/\r\n?/g, '\n') !== read(relative)) {
-      errors.push(`historical D3 provenance bytes drifted after transition: ${relative}`);
-    }
+    if (historical.status !== 0 || historical.stdout.replace(/\r\n?/g, '\n') !== read(relative)) errors.push(`historical D3 provenance bytes drifted after transition: ${relative}`);
   }
   return errors;
 }
@@ -108,9 +88,54 @@ function historicalProvenanceErrors(authority) {
 function retiredAuthorityErrors(exists = existsSync) {
   const errors = [];
   for (const relative of [LEGACY_WORKFLOW, LEGACY_WRAPPER, LEGACY_CORE, HISTORICAL_CHECKER]) {
-    if (exists(path.join(ROOT, relative))) {
-      errors.push(`retired D3 executable authority must be absent from current tree: ${relative}`);
+    if (exists(path.join(ROOT, relative))) errors.push(`retired D3 executable authority must be absent from current tree: ${relative}`);
+  }
+  return errors;
+}
+
+function logicalShellLines(source) {
+  return source.replace(/\\\n\s*/g, ' ').split('\n').map((line) => line.trim()).filter(Boolean);
+}
+
+function secretObservationErrors(promotion) {
+  const commands = logicalShellLines(promotion).filter((line) => line.includes('wrangler@4.94.0 secret list'));
+  const errors = [];
+  if (commands.length !== 2) errors.push(`current Release Set promotion must contain exactly two secret-name observations; observed=${commands.length}`);
+  for (const command of commands) {
+    for (const required of ['--format json', '--config "$WRANGLER_CONFIG"', '--env staging']) {
+      if (!command.includes(required)) errors.push(`Worker secret observation lacks ${required}`);
     }
+    if (/\s--name(?:\s|=)/.test(command)) errors.push('Worker secret observation redundantly overrides the rendered env-owned Worker name');
+    if (/\s(?:put|bulk|delete)\b/.test(command)) errors.push('Worker secret observation contains mutation semantics');
+  }
+  return errors;
+}
+
+function renderedWorkerNameErrors(wranglerSource, overlaySource) {
+  const errors = [];
+  let config;
+  try {
+    config = JSON.parse(wranglerSource);
+  } catch (error) {
+    return [`canonical Wrangler source is not parseable JSON: ${error instanceof Error ? error.message : String(error)}`];
+  }
+  const stagingName = config?.env?.staging?.name;
+  if (stagingName !== '${STAGING_WORKER_NAME}') {
+    errors.push(`canonical Wrangler staging name must be exactly the one deploy-manifest placeholder; observed=${JSON.stringify(stagingName)}`);
+  }
+  if (String(stagingName ?? '').includes('staging-staging')) {
+    errors.push('canonical Wrangler staging name contains a duplicated environment suffix');
+  }
+  const projectionLines = overlaySource
+    .split('\n')
+    .filter((line) => /^\s*"\$\{STAGING_WORKER_NAME\}"\s*:/.test(line));
+  if (projectionLines.length !== 1) {
+    errors.push(`AR-11 overlay must contain exactly one STAGING_WORKER_NAME projection; observed=${projectionLines.length}`);
+  } else if (!/^\s*"\$\{STAGING_WORKER_NAME\}"\s*:\s*manifest\["worker_name"\]\s*,?\s*$/.test(projectionLines[0])) {
+    errors.push('AR-11 overlay must project deploy-manifest worker_name as the exact staging Worker name without suffixes or expressions');
+  }
+  if (!overlaySource.includes('return replacements.get(value, value)')) {
+    errors.push('AR-11 overlay no longer performs exact placeholder substitution semantics');
   }
   return errors;
 }
@@ -120,44 +145,30 @@ function promotionPolicyErrors(promotion) {
   const forbidden = [
     'CLOUDFLARE_CONTROL_PLANE_SECRETS_JSON',
     'CLOUDFLARE_RESOLVER_SECRETS_JSON',
-    ' secret put ',
-    ' secret bulk ',
-    ' secret delete ',
-    ' secrets put ',
-    ' secrets bulk ',
-    ' secrets delete ',
-    'worker-build --release',
-    'cargo build',
-    'run: npm run build',
-    'environment: production',
-    LEGACY_WORKFLOW,
-    LEGACY_WRAPPER,
-    LEGACY_CORE,
-    HISTORICAL_CHECKER,
+    ' secret put ', ' secret bulk ', ' secret delete ', ' secrets put ', ' secrets bulk ', ' secrets delete ',
+    'worker-build --release', 'cargo build', 'run: npm run build', 'environment: production',
+    LEGACY_WORKFLOW, LEGACY_WRAPPER, LEGACY_CORE, HISTORICAL_CHECKER,
   ];
   const lowered = ` ${promotion.toLowerCase()} `;
-  for (const marker of forbidden) {
-    if (lowered.includes(marker.toLowerCase())) {
-      errors.push(`current Release Set promotion contains forbidden legacy/mutation authority: ${marker}`);
-    }
-  }
-  const redundantNameMarker = 'wrangler@4.94.0 secret list --name "$worker_name"';
-  if (promotion.includes(redundantNameMarker)) {
-    errors.push('current Release Set promotion secret observations must use the rendered env-owned Worker name without a redundant --name override');
-  }
-  const canonicalSecretMarker = 'wrangler@4.94.0 secret list --format json';
-  const canonicalSecretCount = promotion.split(canonicalSecretMarker).length - 1;
-  if (canonicalSecretCount !== 2) {
-    errors.push(`current Release Set promotion must contain exactly two env-owned secret observations; observed=${canonicalSecretCount}`);
-  }
+  for (const marker of forbidden) if (lowered.includes(marker.toLowerCase())) errors.push(`current Release Set promotion contains forbidden legacy/mutation authority: ${marker}`);
+  errors.push(...secretObservationErrors(promotion));
   for (const marker of [
-    '--config "$WRANGLER_CONFIG" --env staging > "$RUNNER_TEMP/secret-list.json"',
-    '--config "$WRANGLER_CONFIG" --env staging > "$RUNNER_TEMP/post-secret-list.json"',
+    'workflow_run:',
+    '- Release Set Build',
+    'AR11_READY_TO_MUTATE',
+    'WORKER_PROMOTION_AUTHORIZATION_V2',
     'promotion preflight',
     'promotion verify',
     'release-set-promotion-staging',
   ]) {
-    if (!promotion.includes(marker)) errors.push(`current Release Set promotion is missing ${JSON.stringify(marker)}`);
+    if (!promotion.includes(marker)) errors.push(`current Release Set promotion is missing semantic invariant ${JSON.stringify(marker)}`);
+  }
+  const ready = promotion.indexOf('Observe provider and publish READY_TO_MUTATE before authorization');
+  const authorization = promotion.indexOf('Resolve exact one-shot authorization only after READY exists');
+  const deployCredential = promotion.indexOf('DEPLOY_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}');
+  const deploy = promotion.indexOf('Deploy exact Release Set v3 bits after all fences');
+  if (!(ready >= 0 && authorization > ready && deployCredential > authorization && deploy > deployCredential)) {
+    errors.push('release successor must order read-only READY -> authorization binding -> deploy credential -> mutation');
   }
   return errors;
 }
@@ -168,33 +179,25 @@ function replayDependencyErrors(label, source) {
     if (source.includes(marker)) errors.push(`${label} still depends on retired D3 executable machinery: ${marker}`);
   }
   if (label === CURRENT_D3_CHECKER) {
-    for (const marker of ['git show', 'write_bytes(predecessor_', 'run_historical(']) {
-      if (source.includes(marker)) errors.push(`${label} still replays historical D3 implementation: ${marker}`);
-    }
+    for (const marker of ['git show', 'write_bytes(predecessor_', 'run_historical(']) if (source.includes(marker)) errors.push(`${label} still replays historical D3 implementation: ${marker}`);
   }
   return errors;
 }
 
 function currentSuccessorErrors() {
   const errors = [];
-  for (const relative of [AR11_AUTHORITY, AR11_CHECKER, AR11_PROMOTION, BINDING_HELPER, CURRENT_D3_CHECKER]) {
+  for (const relative of [AR11_AUTHORITY, AR11_CHECKER, AR11_PROMOTION, WRANGLER_SOURCE, CORE_OVERLAY, BINDING_HELPER, CURRENT_D3_CHECKER]) {
     if (!existsSync(path.join(ROOT, relative))) errors.push(`missing current D3/release successor artifact: ${relative}`);
   }
   if (errors.length > 0) return errors;
-
   errors.push(...promotionPolicyErrors(read(AR11_PROMOTION)));
+  errors.push(...renderedWorkerNameErrors(read(WRANGLER_SOURCE), read(CORE_OVERLAY)));
   for (const relative of [CURRENT_D3_CHECKER, QUALITY_GATE, FAST_VERIFY]) {
-    if (!existsSync(path.join(ROOT, relative))) {
-      errors.push(`missing current D3 caller: ${relative}`);
-      continue;
-    }
+    if (!existsSync(path.join(ROOT, relative))) { errors.push(`missing current D3 caller: ${relative}`); continue; }
     errors.push(...replayDependencyErrors(relative, read(relative)));
   }
-
   const checker = run('node', [AR11_CHECKER], { check: false });
-  if (checker.status !== 0) {
-    errors.push(`current Release Set operational authority failed: ${(checker.stderr || checker.stdout).trim()}`);
-  }
+  if (checker.status !== 0) errors.push(`current Release Set operational authority failed: ${(checker.stderr || checker.stdout).trim()}`);
   return errors;
 }
 
@@ -211,66 +214,43 @@ function validate() {
 
 function selfTest() {
   const authority = JSON.parse(read(AUTHORITY));
-
   if (transitionIdentityErrors(null).length === 0) throw new Error('missing transition record negative fixture passed');
-
-  const malformedSha = structuredClone(authority);
-  malformedSha.predecessor.transition_base_main = 'main';
+  const malformedSha = structuredClone(authority); malformedSha.predecessor.transition_base_main = 'main';
   if (transitionIdentityErrors(malformedSha).length === 0) throw new Error('malformed predecessor SHA negative fixture passed');
-
-  const missingBlob = structuredClone(authority);
-  delete missingBlob.predecessor.promotion_workflow_git_blob_sha;
+  const missingBlob = structuredClone(authority); delete missingBlob.predecessor.promotion_workflow_git_blob_sha;
   if (transitionIdentityErrors(missingBlob).length === 0) throw new Error('missing historical blob identity negative fixture passed');
-
-  const missingSuccessor = structuredClone(authority);
-  missingSuccessor.successor = {};
+  const missingSuccessor = structuredClone(authority); missingSuccessor.successor = {};
   if (transitionIdentityErrors(missingSuccessor).length === 0) throw new Error('missing successor policy negative fixture passed');
-
   for (const retired of [LEGACY_WORKFLOW, LEGACY_WRAPPER, LEGACY_CORE, HISTORICAL_CHECKER]) {
     const errors = retiredAuthorityErrors((candidate) => candidate.endsWith(retired));
     if (errors.length === 0) throw new Error(`retired executable restoration negative fixture passed: ${retired}`);
   }
-
-  if (promotionPolicyErrors(read(AR11_PROMOTION) + '\nCLOUDFLARE_RESOLVER_SECRETS_JSON\n').length === 0) {
-    throw new Error('superseded secret-bundle input negative fixture passed');
-  }
-  const redundantNamePromotion = read(AR11_PROMOTION).replace(
-    'wrangler@4.94.0 secret list --format json',
-    'wrangler@4.94.0 secret list --name "$worker_name" --format json',
-  );
-  if (promotionPolicyErrors(redundantNamePromotion).length === 0) {
-    throw new Error('redundant env-owned Worker name override negative fixture passed');
-  }
-  if (promotionPolicyErrors(read(AR11_PROMOTION) + `\n${HISTORICAL_CHECKER}\n`).length === 0) {
-    throw new Error('historical implementation promotion dependency negative fixture passed');
-  }
-  if (replayDependencyErrors(CURRENT_D3_CHECKER, `git show x\n${HISTORICAL_CHECKER}\n`).length === 0) {
-    throw new Error('historical executable replay negative fixture passed');
-  }
-
+  if (promotionPolicyErrors(read(AR11_PROMOTION) + '\nCLOUDFLARE_RESOLVER_SECRETS_JSON\n').length === 0) throw new Error('superseded secret-bundle input negative fixture passed');
+  const redundantNamePromotion = read(AR11_PROMOTION).replace('secret list --format json', 'secret list --name "$worker_name" --format json');
+  if (promotionPolicyErrors(redundantNamePromotion).length === 0) throw new Error('redundant env-owned Worker name override negative fixture passed');
+  const wranglerSource = read(WRANGLER_SOURCE);
+  const duplicatedEnvName = wranglerSource.replace('"name": "${STAGING_WORKER_NAME}"', '"name": "${STAGING_WORKER_NAME}-staging"');
+  if (duplicatedEnvName === wranglerSource) throw new Error('duplicated staging Worker suffix fixture setup failed');
+  if (renderedWorkerNameErrors(duplicatedEnvName, read(CORE_OVERLAY)).length === 0) throw new Error('duplicated staging Worker suffix fixture passed');
+  const overlaySource = read(CORE_OVERLAY);
+  const suffixedOverlay = overlaySource.replace('"${STAGING_WORKER_NAME}": manifest["worker_name"]', '"${STAGING_WORKER_NAME}": manifest["worker_name"] + "-staging"');
+  if (suffixedOverlay === overlaySource) throw new Error('suffixed rendered Worker-name projection fixture setup failed');
+  if (renderedWorkerNameErrors(wranglerSource, suffixedOverlay).length === 0) throw new Error('suffixed rendered Worker-name projection fixture passed');
+  if (promotionPolicyErrors(read(AR11_PROMOTION) + `\n${HISTORICAL_CHECKER}\n`).length === 0) throw new Error('historical implementation promotion dependency negative fixture passed');
+  if (replayDependencyErrors(CURRENT_D3_CHECKER, `git show x\n${HISTORICAL_CHECKER}\n`).length === 0) throw new Error('historical executable replay negative fixture passed');
   const operationalSelfTest = run('node', [AR11_CHECKER, '--self-test'], { check: false });
-  if (operationalSelfTest.status !== 0) {
-    throw new Error(`Release Set operational negative matrix failed: ${(operationalSelfTest.stderr || operationalSelfTest.stdout).trim()}`);
-  }
-  console.log('Static D3 transition provenance and retired-authority negative matrix passed.');
+  if (operationalSelfTest.status !== 0) throw new Error(`Release Set operational negative matrix failed: ${(operationalSelfTest.stderr || operationalSelfTest.stdout).trim()}`);
+  console.log('Static D3 transition provenance, exact rendered Worker-name, and semantic secret-transport negative matrix passed.');
 }
 
 if (process.argv.includes('--self-test')) {
-  try {
-    selfTest();
-    process.exit(0);
-  } catch (error) {
-    console.error(`Static D3 transition negative self-test failed: ${error instanceof Error ? error.message : String(error)}`);
-    process.exit(1);
-  }
+  try { selfTest(); process.exit(0); }
+  catch (error) { console.error(`Static D3 transition negative self-test failed: ${error instanceof Error ? error.message : String(error)}`); process.exit(1); }
 }
 
 try {
   const errors = validate();
-  if (errors.length > 0) {
-    console.error('Static D3 transition/current successor gate failed:\n' + errors.map((error) => `- ${error}`).join('\n'));
-    process.exit(1);
-  }
+  if (errors.length > 0) { console.error('Static D3 transition/current successor gate failed:\n' + errors.map((error) => `- ${error}`).join('\n')); process.exit(1); }
   console.log('Static D3 transition provenance and current Release Set secret-transport successor passed.');
 } catch (error) {
   console.error(`Static D3 transition/current successor gate failed: ${error instanceof Error ? error.message : String(error)}`);
