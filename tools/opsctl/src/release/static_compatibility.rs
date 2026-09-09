@@ -359,10 +359,10 @@ mod tests {
 
         let expected_ipc = 3;
         for lock in [first, reordered] {
+            let observed_ipc = lock["camouhost_ipc_version"].as_u64();
+            assert_eq!(observed_ipc, Some(expected_ipc));
             assert!(source_runtime_protocols_match(
-                lock["camouhost_ipc_version"]
-                    .as_u64()
-                    .expect("typed IPC version"),
+                observed_ipc.unwrap_or(u64::MAX),
                 expected_ipc,
                 "mailbox-secret-resolver-v1",
                 true,
