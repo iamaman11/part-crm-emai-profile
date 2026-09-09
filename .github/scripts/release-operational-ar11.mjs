@@ -315,6 +315,11 @@ function selfTest(files) {
   }
   const missingReadyBinding = files.promotion.replaceAll('READY_EVIDENCE_SHA256', 'READY_EVIDENCE_DIGEST_MISSING');
   if (promotionErrors(missingReadyBinding).length === 0) throw new Error('missing READY binding fixture passed');
+  const rebuild = files.promotion.replace(
+    'Deploy exact Release Set v3 bits after all fences',
+    'run: cargo build --release\n      - name: Deploy exact Release Set v3 bits after all fences',
+  );
+  if (!promotionErrors(rebuild).some((error) => error.includes('cargo build'))) throw new Error('promotion rebuild fixture unexpectedly passed');
   const unsafeAllowlist = files.camoufox.replace("'architecture/release-architecture-ar11.json',", "'architecture/release-architecture-ar11.json',\n              'runtime/camouhost/real.py',");
   if (camoufoxErrors(unsafeAllowlist).length === 0) throw new Error('unsafe Camoufox ops allowlist fixture passed');
   const weakAuthority = structuredClone(files.authority);
