@@ -145,9 +145,14 @@ function promotionPolicyErrors(promotion) {
   if (promotion.includes(redundantNameMarker)) {
     errors.push('current Release Set promotion secret observations must use the rendered env-owned Worker name without a redundant --name override');
   }
+  const canonicalSecretMarker = 'wrangler@4.94.0 secret list --format json';
+  const canonicalSecretCount = promotion.split(canonicalSecretMarker).length - 1;
+  if (canonicalSecretCount !== 2) {
+    errors.push(`current Release Set promotion must contain exactly two env-owned secret observations; observed=${canonicalSecretCount}`);
+  }
   for (const marker of [
-    'wrangler@4.94.0 secret list --format json \\\n            --config "$WRANGLER_CONFIG" --env staging > "$RUNNER_TEMP/secret-list.json"',
-    'wrangler@4.94.0 secret list --format json \\\n            --config "$WRANGLER_CONFIG" --env staging > "$RUNNER_TEMP/post-secret-list.json"',
+    '--config "$WRANGLER_CONFIG" --env staging > "$RUNNER_TEMP/secret-list.json"',
+    '--config "$WRANGLER_CONFIG" --env staging > "$RUNNER_TEMP/post-secret-list.json"',
     'promotion preflight',
     'promotion verify',
     'release-set-promotion-staging',
