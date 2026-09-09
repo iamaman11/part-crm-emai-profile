@@ -237,3 +237,51 @@ that stage accepted and select at most one next stage, then close the completed 
 provenance. If the stage remains CURRENT, #266 continues to point to the same Issue and only the next
 bounded concern advances. A handoff must instruct the next agent to repeat the fresh re-baseline rather
 than trust a copied SHA blindly.
+
+## 8. Current checkpoint and standard operator protocol
+
+For ordinary continuation, Issue #266 SHOULD remain a minimal selector rather than a copied status
+database. While a stage remains CURRENT, #266 may point to exactly one `CURRENT_CHECKPOINT` comment in
+the one CURRENT stage Issue.
+
+When `CURRENT_CHECKPOINT` is present, the normal cold-start path is:
+
+```text
+fresh protected main
+-> #266
+-> the one CURRENT_CHECKPOINT
+-> the relevant natural owner
+```
+
+Older stage-Issue comments and mutable snapshots in the stage-Issue body are provenance unless the
+current checkpoint explicitly points to them. Do not require an agent to scan historical comments,
+closed trackers, old Release Sets or consumed authorizations merely to discover the next ordinary
+action. Fresh protected-main/provider facts still override the checkpoint on real drift.
+
+The CURRENT stage Issue remains bounded working memory/evidence, not a semantic owner. Moving current
+state should be recorded in a new exact checkpoint and #266 moved to that checkpoint; permanent rules
+belong in their protected-main natural owners. Avoid maintaining a second mutable CURRENT snapshot in
+the stage-Issue body when a checkpoint is already the live continuation surface.
+
+For ordinary provider-effect operations, use one consistent human/operator protocol without creating a
+generic execution framework:
+
+```text
+READ_ONLY_READY
+-> EXPLICIT_ONE_SHOT_AUTH
+-> MACHINE-GENERATED ACTIVATION PROJECTION when the existing natural owner requires one
+-> ONE_ZERO_INPUT_ACTION only when direct dispatch is unavailable
+-> IMMEDIATE_EXACT_FENCE
+-> EFFECT THROUGH THE EXISTING SOLE NATURAL OWNER
+-> RECEIPT / POST_VERIFY
+```
+
+The semantic authorization envelope exists exactly once at its owning authority surface. A live pointer
+or workflow-required activation block may carry a generated projection only when an existing durable
+consumer requires it, the projection is generated from machine-known facts, the consumer independently
+re-loads and verifies the owning authorization/evidence, and the projection is consumed or invalidated
+on the one matching attempt or drift. The operator never transcribes SHA, Release Set, READY evidence,
+`expected_current`, TransactionId, digests, JSON or confirmation strings.
+
+This protocol standardizes operator interaction only. It does not create a second semantic owner,
+mutation owner, workflow router, mutable status database or generic provider/migration framework.
