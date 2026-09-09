@@ -126,9 +126,13 @@ function renderedWorkerNameErrors(wranglerSource, overlaySource) {
   if (String(stagingName ?? '').includes('staging-staging')) {
     errors.push('canonical Wrangler staging name contains a duplicated environment suffix');
   }
-  const exactProjection = '"${STAGING_WORKER_NAME}": manifest["worker_name"]';
-  if (!overlaySource.includes(exactProjection)) {
-    errors.push('AR-11 overlay no longer projects deploy-manifest worker_name exactly into the Wrangler staging name');
+  const projectionLines = overlaySource
+    .split('\n')
+    .filter((line) => /^\s*"\$\{STAGING_WORKER_NAME\}"\s*:/.test(line));
+  if (projectionLines.length !== 1) {
+    errors.push(`AR-11 overlay must contain exactly one STAGING_WORKER_NAME projection; observed=${projectionLines.length}`);
+  } else if (!/^\s*"\$\{STAGING_WORKER_NAME\}"\s*:\s*manifest\["worker_name"\]\s*,?\s*$/.test(projectionLines[0])) {
+    errors.push('AR-11 overlay must project deploy-manifest worker_name as the exact staging Worker name without suffixes or expressions');
   }
   if (!overlaySource.includes('return replacements.get(value, value)')) {
     errors.push('AR-11 overlay no longer performs exact placeholder substitution semantics');
@@ -224,10 +228,14 @@ function selfTest() {
   if (promotionPolicyErrors(read(AR11_PROMOTION) + '\nCLOUDFLARE_RESOLVER_SECRETS_JSON\n').length === 0) throw new Error('superseded secret-bundle input negative fixture passed');
   const redundantNamePromotion = read(AR11_PROMOTION).replace('secret list --format json', 'secret list --name "$worker_name" --format json');
   if (promotionPolicyErrors(redundantNamePromotion).length === 0) throw new Error('redundant env-owned Worker name override negative fixture passed');
-  const duplicatedEnvName = read(WRANGLER_SOURCE).replace('"name": "${STAGING_WORKER_NAME}"', '"name": "${STAGING_WORKER_NAME}-staging"');
+  const wranglerSource = read(WRANGLER_SOURCE);
+  const duplicatedEnvName = wranglerSource.replace('"name": "${STAGING_WORKER_NAME}"', '"name": "${STAGING_WORKER_NAME}-staging"');
+  if (duplicatedEnvName === wranglerSource) throw new Error('duplicated staging Worker suffix fixture setup failed');
   if (renderedWorkerNameErrors(duplicatedEnvName, read(CORE_OVERLAY)).length === 0) throw new Error('duplicated staging Worker suffix fixture passed');
-  const suffixedOverlay = read(CORE_OVERLAY).replace('"${STAGING_WORKER_NAME}": manifest["worker_name"]', '"${STAGING_WORKER_NAME}": manifest["worker_name"] + "-staging"');
-  if (renderedWorkerNameErrors(read(WRANGLER_SOURCE), suffixedOverlay).length === 0) throw new Error('suffixed rendered Worker-name projection fixture passed');
+  const overlaySource = read(CORE_OVERLAY);
+  const suffixedOverlay = overlaySource.replace('"${STAGING_WORKER_NAME}": manifest["worker_name"]', '"${STAGING_WORKER_NAME}": manifest["worker_name"] + "-staging"');
+  if (suffixedOverlay === overlaySource) throw new Error('suffixed rendered Worker-name projection fixture setup failed');
+  if (renderedWorkerNameErrors(wranglerSource, suffixedOverlay).length === 0) throw new Error('suffixed rendered Worker-name projection fixture passed');
   if (promotionPolicyErrors(read(AR11_PROMOTION) + `\n${HISTORICAL_CHECKER}\n`).length === 0) throw new Error('historical implementation promotion dependency negative fixture passed');
   if (replayDependencyErrors(CURRENT_D3_CHECKER, `git show x\n${HISTORICAL_CHECKER}\n`).length === 0) throw new Error('historical executable replay negative fixture passed');
   const operationalSelfTest = run('node', [AR11_CHECKER, '--self-test'], { check: false });
