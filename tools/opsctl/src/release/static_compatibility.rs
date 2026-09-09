@@ -350,19 +350,19 @@ mod tests {
     }
 
     #[test]
-    fn runtime_lock_json_order_does_not_change_protocol_semantics()
-    -> Result<(), serde_json::Error> {
-        let first: Value = serde_json::from_str(
-            r#"{"camouhost_ipc_version":3,"runtime_role":"real_camoufox"}"#,
-        )?;
-        let reordered: Value = serde_json::from_str(
-            r#"{"runtime_role":"real_camoufox","camouhost_ipc_version":3}"#,
-        )?;
+    fn runtime_lock_json_order_does_not_change_protocol_semantics() -> Result<(), serde_json::Error>
+    {
+        let first: Value =
+            serde_json::from_str(r#"{"camouhost_ipc_version":3,"runtime_role":"real_camoufox"}"#)?;
+        let reordered: Value =
+            serde_json::from_str(r#"{"runtime_role":"real_camoufox","camouhost_ipc_version":3}"#)?;
 
         let expected_ipc = 3;
         for lock in [first, reordered] {
             assert!(source_runtime_protocols_match(
-                lock["camouhost_ipc_version"].as_u64().expect("typed IPC version"),
+                lock["camouhost_ipc_version"]
+                    .as_u64()
+                    .expect("typed IPC version"),
                 expected_ipc,
                 "mailbox-secret-resolver-v1",
                 true,
