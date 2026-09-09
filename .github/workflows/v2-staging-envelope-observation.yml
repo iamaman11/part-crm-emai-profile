@@ -356,6 +356,10 @@ jobs:
           release_source="$(jq -r '.target_commitish' "$RUNNER_TEMP/phase-c-release-api.json")"
           [[ "$release_source" =~ ^[0-9a-f]{40}$ ]]
           test "$release_source" = "$GITHUB_SHA"
+          gh api "repos/$GITHUB_REPOSITORY/compare/$release_source...$GITHUB_SHA" > "$RUNNER_TEMP/phase-c-accepted-source-compare.json"
+          test "$(jq -r '.merge_base_commit.sha' "$RUNNER_TEMP/phase-c-accepted-source-compare.json")" = "$release_source"
+          test "$(jq -r '.ahead_by' "$RUNNER_TEMP/phase-c-accepted-source-compare.json")" = 0
+          test "$(jq -r '.behind_by' "$RUNNER_TEMP/phase-c-accepted-source-compare.json")" = 0
 
       - name: Set up pinned Node for read-only Wrangler observation
         uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
@@ -368,14 +372,23 @@ jobs:
           set -euo pipefail
           asset_root="$RUNNER_TEMP/phase-c-assets"
           release_root="$RUNNER_TEMP/phase-c-release-set"
-          mkdir -p "$asset_root"
+          policy_dir="$RUNNER_TEMP/phase-c-release-policy-input"
+          mkdir -p "$asset_root" "$policy_dir"
           gh release download "$RELEASE_SET_ID" --repo "$GITHUB_REPOSITORY" --dir "$asset_root"
           bash scripts/release-set-assets-ar11.sh materialize current-v3 "$RELEASE_SET_ID" "$asset_root" "$release_root"
-          test "$(jq -r '.release_set_id' "$release_root/release-set.json")" = "$RELEASE_SET_ID"
+          cp "$release_root/release-set.json" "$policy_dir/release-set.json"
+          test "$(jq -r '.release_set_id' "$policy_dir/release-set.json")" = "$RELEASE_SET_ID"
+          python scripts/accepted-source-evidence-ar11.py \
+            --repository "$GITHUB_REPOSITORY" \
+            --release-set-id "$RELEASE_SET_ID" \
+            --source-sha "$GITHUB_SHA" \
+            --branch-json "$RUNNER_TEMP/phase-c-main.json" \
+            --compare-json "$RUNNER_TEMP/phase-c-accepted-source-compare.json" \
+            --output "$policy_dir/accepted-source-evidence.json"
           cargo run --locked --quiet --manifest-path tools/opsctl/Cargo.toml -- \
-            --root . release verify --release-set "$release_root/release-set.json" \
+            --root . release verify --release-set "$policy_dir/release-set.json" \
             --source-root . --artifact-root "$release_root" \
-            | jq -e '.decision == "VALID" and .release_set_schema_version == 3 and .mutation_executed == false' >/dev/null
+            | jq -e '.decision == "VALID" and .release_set_schema_version == 3 and .source_accepted == true and .mutation_executed == false' >/dev/null
           control_extract="$RUNNER_TEMP/phase-c-control-release"
           mkdir -p "$control_extract"
           tar -xf "$release_root/components/control-plane.tar" -C "$control_extract"
@@ -480,4 +493,4 @@ jobs:
 
       - name: Remove raw Phase C provider observations
         if: always()
-        run: rm -rf "$RUNNER_TEMP/v2-phase-c-raw" "$RUNNER_TEMP/phase-c-assets" "$RUNNER_TEMP/phase-c-release-set" "$RUNNER_TEMP/phase-c-control-release"
+        run: rm -rf "$RUNNER_TEMP/v2-phase-c-raw" "$RUNNER_TEMP/phase-c-assets" "$RUNNER_TEMP/phase-c-release-set" "$RUNNER_TEMP/phase-c-release-policy-input" "$RUNNER_TEMP/phase-c-control-release"
