@@ -325,7 +325,8 @@ jobs:
             --root . release verify --release-set "$policy_dir/release-set.json" \
             --source-root "$GITHUB_WORKSPACE/known-good-source" --artifact-root "$release_root" \
             | jq -e '.decision == "VALID" and (.release_set_schema_version == 2 or .release_set_schema_version == 3) and .source_accepted == true and .mutation_executed == false' >/dev/null
-          echo "CURRENT_RELEASE_MANIFEST=$policy_dir/release-set.json" >> "$GITHUB_ENV"
+          current_release_manifest="$policy_dir/release-set.json"
+          echo "CURRENT_RELEASE_MANIFEST=$current_release_manifest" >> "$GITHUB_ENV"
 
           python scripts/deployment-snapshot-ar11.py \
             --environment staging --collected-at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
@@ -336,7 +337,7 @@ jobs:
             --secret-list "$RUNNER_TEMP/secret-list.json" \
             --rendered-config "$WRANGLER_CONFIG" \
             --deploy-manifest "$DEPLOY_MANIFEST" \
-            --current-release-set "$CURRENT_RELEASE_MANIFEST" \
+            --current-release-set "$current_release_manifest" \
             --output "$RUNNER_TEMP/pre-snapshot.json"
           test "$(jq -r '.schema_version' "$RUNNER_TEMP/pre-snapshot.json")" = 2
 
