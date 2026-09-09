@@ -105,7 +105,8 @@ jobs:
           assert "'provider_mutation': False" in observe_source
           assert "'d1_mutation': False" in observe_source
           assert "'production_mutation': False" in observe_source
-          assert 'd1-transaction-preflight-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.sha }}' in source
+          artifact_name = 'd1-transaction-preflight-' + '$' + '{{ github.run_id }}-' + '$' + '{{ github.run_attempt }}-' + '$' + '{{ github.sha }}'
+          assert artifact_name in source
           PY
 
   observe:
