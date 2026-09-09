@@ -5,6 +5,8 @@ on:
     paths:
       - '.github/workflows/d1-isolated-target-observation.yml'
       - '.github/workflows/d1-operator.yml'
+      - 'scripts/d1-prepare.py'
+      - 'scripts/deployment-identity-ar11.py'
   push:
     branches:
       - main
@@ -23,12 +25,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  D1_REHEARSAL_TARGET_NAME: part-crm-d3a-bootstrap-proof
-  D1_REHEARSAL_TARGET_ID: 713dd6f2-646b-46ad-93eb-103d2d0b63c4
-  D1_REHEARSAL_COMPONENT: catalog
-  D1_REHEARSAL_KNOWN_GOOD_RELEASE_SET_ID: release-set-v3-sha256-e01338de30cdc4c334e210f9e2bd75a67837420dd370b83964caae452f77522c
-  D1_REHEARSAL_KNOWN_GOOD_SOURCE_SHA: 852dd515121011130dbd3d7726b72483ecc85aaf
-  D1_REHEARSAL_KNOWN_GOOD_MANIFEST_SHA256: cd57a6851a348c7044a628deae5a5804e0f7447cd0583c96bc61ad8f8812e10e
+  D1_COMPONENT: catalog
 
 jobs:
   contract:
@@ -48,13 +45,13 @@ jobs:
           EXPECTED_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: python -c "import os, subprocess; actual = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(); expected = os.environ['EXPECTED_SOURCE_SHA']; assert actual == expected, f'expected {expected}, got {actual}'"
 
-      - name: Prove qualification and preflight adapter remains read-only and facts-only
+      - name: Prove current-target observation remains read-only and facts-only
         run: |
           set -euo pipefail
           python scripts/d1-executor-plan.py self-test
           python scripts/d1-prepare.py self-test
+          python scripts/deployment-identity-ar11.py --self-test
           python - <<'PY'
-          import os
           from pathlib import Path
           source = Path('.github/workflows/d1-isolated-target-observation.yml').read_text(encoding='utf-8')
           forbidden_effect_surfaces = (
@@ -66,11 +63,15 @@ jobs:
               'd1-migration-executor.yml' + '/dispatches',
           )
           for forbidden in forbidden_effect_surfaces:
-              assert forbidden not in source, f'read-only isolated D1 observer/preflight contains forbidden effect surface: {forbidden}'
+              assert forbidden not in source, f'read-only D1 observer contains forbidden effect surface: {forbidden}'
+          forbidden_rehearsal_identity = (
+              'D1_' + 'REHEARSAL_',
+              'part-crm-' + 'd3a-bootstrap-proof',
+              '713dd6f2-' + '646b-46ad-93eb-103d2d0b63c4',
+          )
+          for forbidden in forbidden_rehearsal_identity:
+              assert forbidden not in source, f'consumed rehearsal identity remains in standard observer: {forbidden}'
           forbidden_stage_policy = (
-              'TX' + '6_',
-              'TX' + '-6',
-              'd1-' + 'tx6-',
               '0026_' + 'outbound_mail_intents.sql',
               '0031_' + 'device_binding_governance.sql',
               '0032_' + 'pas2_payload_fingerprint_contract.sql',
@@ -79,7 +80,7 @@ jobs:
               'protected_' + 'contract_absent',
           )
           for forbidden in forbidden_stage_policy:
-              assert forbidden not in source, f'isolated D1 observer acquired stage-specific migration policy: {forbidden}'
+              assert forbidden not in source, f'D1 observer acquired stage-specific migration policy: {forbidden}'
           trigger = source.split('\npermissions:', 1)[0]
           push_block = trigger.split('\n  push:', 1)[1].split('\n  workflow_dispatch:', 1)[0]
           dispatch_block = trigger.split('\n  workflow_dispatch:', 1)[1]
@@ -87,11 +88,11 @@ jobs:
           assert '\n    branches:\n      - main' in push_block
           assert '\n    paths:' not in push_block, 'exact-main observation must not be path-filtered'
           assert '\n    inputs:\n      time_travel_unix_seconds:' in dispatch_block
-          assert 'required: false' in dispatch_block
-          assert 'type: string' in dispatch_block
-          assert os.environ['D1_REHEARSAL_TARGET_NAME'] in source
-          assert os.environ['D1_REHEARSAL_TARGET_ID'] in source
-          assert os.environ['D1_REHEARSAL_COMPONENT'] == 'catalog'
+          assert 'required: false' in dispatch_block and 'type: string' in dispatch_block
+          assert "D1_COMPONENT: catalog" in source
+          assert "d1_database_name // .d1_database_name" in observe_source
+          assert "workers/scripts/$worker_name/deployments" in observe_source
+          assert 'deployment-identity-ar11.py' in observe_source
           assert "opsctl='tools/opsctl/target/debug/opsctl'" in source
           assert 'pre_migration_runtime_schema_contract' in source
           assert 'release_schema_contract' in source
@@ -100,24 +101,12 @@ jobs:
           assert '--command "PRAGMA foreign_key_check"' in observe_source
           assert '--command "PRAGMA quick_check"' in observe_source
           assert '--command "PRAGMA integrity_check"' not in observe_source
-          assert 'foreign_key_exit_code=$?' in observe_source
-          assert 'quick_check_exit_code=$?' in observe_source
-          assert "'provider_diagnostics': provider_diagnostics" in observe_source
-          assert 'Fail closed on unusable provider diagnostics' in source
-          assert 'D1_ISOLATED_TARGET_DISCOVERY' in observe_source
-          assert "'selection_performed': False" in observe_source
-          assert "'unqualified_inventory_candidates': candidates" in observe_source
-          assert 'D1_TIME_TRAVEL_LOOKUP_V1' in observe_source
-          assert '--timestamp "$REQUESTED_TIME_TRAVEL_UNIX_SECONDS"' in observe_source
+          assert 'D1_CURRENT_TARGET_OBSERVATION' in observe_source
           assert "'provider_mutation': False" in observe_source
           assert "'d1_mutation': False" in observe_source
           assert "'production_mutation': False" in observe_source
-          discovery_artifact_name = 'd1-isolated-target-discovery-' + '$' + '{{ github.run_id }}-' + '$' + '{{ github.run_attempt }}-' + '$' + '{{ github.sha }}'
-          assert discovery_artifact_name in source
-          lookup_artifact_name = 'd1-time-travel-lookup-' + '$' + '{{ github.run_id }}-' + '$' + '{{ github.run_attempt }}-' + '$' + '{{ github.sha }}'
-          assert lookup_artifact_name in source
-          old_bad_wiring = '--current-manifest "$root/' + 'known-good-manifest.json"'
-          assert old_bad_wiring not in source
+          artifact_name = 'd1-transaction-preflight-' + '$' + '{{ github.run_id }}-' + '$' + '{{ github.run_attempt }}-' + '$' + '{{ github.sha }}'
+          assert artifact_name in source
           PY
 
   observe:
@@ -127,6 +116,8 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     environment: staging
+    env:
+      GH_TOKEN: ${{ github.token }}
     steps:
       - name: Checkout exact accepted-main source
         uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
@@ -140,7 +131,7 @@ jobs:
           EXPECTED_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: python -c "import os, subprocess; actual = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(); expected = os.environ['EXPECTED_SOURCE_SHA']; assert actual == expected, f'expected {expected}, got {actual}'"
 
-      - name: Verify accepted-main read-only observation context
+      - name: Verify exact accepted-main read-only context
         env:
           SOURCE_SHA: ${{ github.sha }}
           REQUESTED_TIME_TRAVEL_UNIX_SECONDS: ${{ github.event.inputs.time_travel_unix_seconds || '' }}
@@ -148,9 +139,7 @@ jobs:
           set -euo pipefail
           test "$GITHUB_REF" = 'refs/heads/main'
           test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
-          test "$D1_REHEARSAL_COMPONENT" = catalog
-          test -n "$D1_REHEARSAL_TARGET_NAME"
-          test -n "$D1_REHEARSAL_TARGET_ID"
+          test "$D1_COMPONENT" = catalog
           if [ -n "$REQUESTED_TIME_TRAVEL_UNIX_SECONDS" ]; then
             python - "$REQUESTED_TIME_TRAVEL_UNIX_SECONDS" <<'PY'
           import re, sys
@@ -165,7 +154,7 @@ jobs:
           node-version: '24.19.0'
           package-manager-cache: false
 
-      - name: Observe exact isolated rehearsal target with read-only credential
+      - name: Observe exact current staging Catalog with read-only credential
         env:
           CLOUDFLARE_OBSERVE_API_TOKEN: ${{ secrets.CLOUDFLARE_OBSERVE_API_TOKEN }}
           CLOUDFLARE_DEPLOY_MANIFEST_JSON: ${{ secrets.CLOUDFLARE_DEPLOY_MANIFEST_JSON }}
@@ -178,16 +167,17 @@ jobs:
           echo "::add-mask::$CLOUDFLARE_OBSERVE_API_TOKEN"
           umask 077
 
-          raw="$RUNNER_TEMP/d1-isolated-target-observation"
-          evidence="artifacts/d1-isolated-target-observation"
+          raw="$RUNNER_TEMP/d1-current-target-observation"
+          evidence="artifacts/d1-current-target-observation"
           lineage="$raw/catalog-lineage"
           mkdir -p "$raw" "$evidence" "$lineage"
           manifest="$raw/deploy-manifest.json"
           printf '%s' "$CLOUDFLARE_DEPLOY_MANIFEST_JSON" > "$manifest"
 
           account_id="$(jq -er '.control_plane.account_id // .account_id | select(type == "string" and length == 32)' "$manifest")"
-          catalog_name="$(jq -er '.control_plane.d1_database_name // .d1_database_name | select(type == "string" and length > 0)' "$manifest")"
-          test "$D1_REHEARSAL_TARGET_NAME" != "$catalog_name"
+          target_name="$(jq -er '.control_plane.d1_database_name // .d1_database_name | select(type == "string" and length > 0)' "$manifest")"
+          worker_name="$(jq -er '.control_plane.worker_name // .worker_name | select(type == "string" and length > 0)' "$manifest")"
+          test "$target_name" != 'part-crm-catalog-production'
 
           env -u CLOUDFLARE_OBSERVE_API_TOKEN -u CLOUDFLARE_API_TOKEN -u CLOUDFLARE_ACCOUNT_ID \
             cargo run --locked --quiet --manifest-path tools/opsctl/Cargo.toml -- --root . d1 repository \
@@ -228,82 +218,43 @@ jobs:
           test "$inventory_code" = 200
           jq -e '.success == true and (.errors | length) == 0 and (.result | type == "array")' "$raw/d1-databases.json" >/dev/null
 
-          python - \
-            "$raw/d1-databases.json" \
-            "$catalog_name" \
-            "$D1_REHEARSAL_TARGET_NAME" \
-            "$D1_REHEARSAL_TARGET_ID" \
-            "$SOURCE_SHA" \
-            "$evidence/discovery.json" <<'PY'
+          target_id="$(python - "$raw/d1-databases.json" "$target_name" <<'PY'
           import json, sys
-          inventory_path, catalog_name, consumed_name, consumed_id, source_sha, output_path = sys.argv[1:]
-          inventory = json.load(open(inventory_path, encoding='utf-8'))
-          databases = inventory.get('result')
-          if not isinstance(databases, list):
-              raise SystemExit('D1 inventory result is not a list')
-          candidates = []
-          identities = set()
-          for item in databases:
-              if not isinstance(item, dict):
-                  raise SystemExit('D1 inventory contains a non-object entry')
-              name = item.get('name')
-              database_id = item.get('uuid')
-              if not isinstance(name, str) or not name or not isinstance(database_id, str) or not database_id:
-                  raise SystemExit('D1 inventory entry is missing exact name/uuid identity')
-              identity = (name, database_id)
-              if identity in identities:
-                  raise SystemExit('D1 inventory contains a duplicate exact name/uuid identity')
-              identities.add(identity)
-              if name == catalog_name or name == 'part-crm-catalog-production':
-                  continue
-              if name == consumed_name or database_id == consumed_id:
-                  continue
-              candidates.append({'database_name': name, 'database_id': database_id})
-          candidates.sort(key=lambda item: (item['database_name'], item['database_id']))
-          discovery = {
-              'schema_version': 1,
-              'kind': 'D1_ISOLATED_TARGET_DISCOVERY',
-              'source_sha': source_sha,
-              'environment': 'staging',
-              'candidate_count': len(candidates),
-              'selection_performed': False,
-              'unqualified_inventory_candidates': candidates,
-              'provider_mutation': False,
-              'd1_mutation': False,
-              'production_mutation': False,
-          }
-          with open(output_path, 'w', encoding='utf-8') as handle:
-              json.dump(discovery, handle, sort_keys=True, indent=2)
-              handle.write('\n')
-          PY
-          SOURCE_SHA="$SOURCE_SHA" jq -e \
-            '.schema_version == 1 and .kind == "D1_ISOLATED_TARGET_DISCOVERY" and .source_sha == env.SOURCE_SHA and .environment == "staging" and .selection_performed == false and .candidate_count == (.unqualified_inventory_candidates | length) and all(.unqualified_inventory_candidates[]; (.database_name | type == "string") and (.database_name | length > 0) and (.database_id | type == "string") and (.database_id | length > 0)) and .provider_mutation == false and .d1_mutation == false and .production_mutation == false' \
-            "$evidence/discovery.json" >/dev/null
-
-          python - "$raw/d1-databases.json" "$account_id" "$catalog_name" "$D1_REHEARSAL_TARGET_NAME" "$D1_REHEARSAL_TARGET_ID" <<'PY'
-          import json, sys
-          path, account_id, catalog_name, target_name, target_id = sys.argv[1:]
-          doc = json.load(open(path, encoding='utf-8'))
-          matches = [item for item in doc.get('result', []) if item.get('name') == target_name and item.get('uuid') == target_id]
+          value = json.load(open(sys.argv[1], encoding='utf-8'))
+          name = sys.argv[2]
+          matches = [item for item in value.get('result', []) if isinstance(item, dict) and item.get('name') == name]
           if len(matches) != 1:
-              raise SystemExit('exact isolated rehearsal target id/name pair missing or ambiguous in fresh staging inventory')
-          if target_name == catalog_name:
-              raise SystemExit('isolated rehearsal target equals forbidden V2 staging Catalog reference')
-          candidate = matches[0]
-          if candidate.get('name') == 'part-crm-catalog-production':
-              raise SystemExit('isolated rehearsal target resolved to Production catalog')
-          print(json.dumps({'account_id': account_id, 'candidate': candidate}, sort_keys=True))
+              raise SystemExit('current staging Catalog name is missing/ambiguous in fresh D1 inventory')
+          database_id = matches[0].get('uuid')
+          if not isinstance(database_id, str) or not database_id:
+              raise SystemExit('current staging Catalog inventory row has no exact uuid')
+          print(database_id)
           PY
+          )"
+          test -n "$target_id"
 
-          python - "$raw/wrangler.json" "$account_id" "$D1_REHEARSAL_TARGET_NAME" "$D1_REHEARSAL_TARGET_ID" "$lineage" <<'PY'
+          deployments_code="$(curl --silent --show-error --output "$raw/deployments-api.json" --write-out '%{http_code}' \
+            -H "Authorization: Bearer $CLOUDFLARE_OBSERVE_API_TOKEN" \
+            "https://api.cloudflare.com/client/v4/accounts/$account_id/workers/scripts/$worker_name/deployments")"
+          test "$deployments_code" = 200
+          jq -e '.success == true and (.errors | length) == 0 and (.result.deployments | type == "array") and (.result.deployments | length) > 0' "$raw/deployments-api.json" >/dev/null
+          jq '.result.deployments[0]' "$raw/deployments-api.json" > "$raw/current-deployment.json"
+          python scripts/deployment-identity-ar11.py \
+            --status "$raw/current-deployment.json" \
+            --output "$raw/current-deployment-identity.json"
+          current_release_set_id="$(jq -er '.release_set_id | select(type == "string" and test("^release-set-v(2|3)-sha256-[0-9a-f]{64}$"))' "$raw/current-deployment-identity.json")"
+          gh api "repos/$GITHUB_REPOSITORY/releases/tags/$current_release_set_id" > "$raw/current-release-api.json"
+          current_release_source_sha="$(jq -er '.target_commitish | select(type == "string" and test("^[0-9a-f]{40}$"))' "$raw/current-release-api.json")"
+
+          python - "$raw/wrangler.json" "$account_id" "$target_name" "$target_id" "$lineage" <<'PY'
           import json, sys
           output, account_id, name, database_id, lineage = sys.argv[1:]
           value = {
-              'name': 'd1-isolated-read-only-observer',
+              'name': 'd1-current-target-read-only-observer',
               'compatibility_date': '2026-08-15',
               'account_id': account_id,
               'd1_databases': [{
-                  'binding': 'D1_REHEARSAL_DB',
+                  'binding': 'D1_CURRENT_TARGET_DB',
                   'database_name': name,
                   'database_id': database_id,
                   'migrations_dir': lineage,
@@ -317,12 +268,12 @@ jobs:
           export CLOUDFLARE_API_TOKEN="$CLOUDFLARE_OBSERVE_API_TOKEN"
           export CLOUDFLARE_ACCOUNT_ID="$account_id"
 
-          npx --yes wrangler@4.94.0 d1 info "$D1_REHEARSAL_TARGET_NAME" \
+          npx --yes wrangler@4.94.0 d1 info "$target_name" \
             --config "$raw/wrangler.json" --json \
             --experimental-provision=false --experimental-auto-create=false \
             > "$raw/provider-identity.json"
 
-          python - "$raw/provider-identity.json" "$D1_REHEARSAL_TARGET_NAME" "$D1_REHEARSAL_TARGET_ID" <<'PY'
+          python - "$raw/provider-identity.json" "$target_name" "$target_id" <<'PY'
           import json, sys
           value = json.load(open(sys.argv[1], encoding='utf-8'))
           name, database_id = sys.argv[2:]
@@ -337,10 +288,10 @@ jobs:
                   return any(paired(v) for v in item)
               return False
           if not paired(value):
-              raise SystemExit('provider identity does not preserve exact isolated rehearsal target id/name pair')
+              raise SystemExit('provider identity does not preserve exact current staging Catalog id/name pair')
           PY
 
-          npx --yes wrangler@4.94.0 d1 execute "$D1_REHEARSAL_TARGET_NAME" --remote \
+          npx --yes wrangler@4.94.0 d1 execute "$target_name" --remote \
             --config "$raw/wrangler.json" \
             --command "SELECT name FROM sqlite_master WHERE type='table' AND name='d1_migrations'" --json \
             --experimental-provision=false --experimental-auto-create=false \
@@ -360,7 +311,7 @@ jobs:
           raise SystemExit(0 if contains(value) else 1)
           PY
           then
-            npx --yes wrangler@4.94.0 d1 execute "$D1_REHEARSAL_TARGET_NAME" --remote \
+            npx --yes wrangler@4.94.0 d1 execute "$target_name" --remote \
               --config "$raw/wrangler.json" \
               --command "SELECT id, name FROM d1_migrations ORDER BY id" --json \
               --experimental-provision=false --experimental-auto-create=false \
@@ -374,12 +325,12 @@ jobs:
             --output "$raw/ledger-names.json"
 
           set +e
-          npx --yes wrangler@4.94.0 d1 execute "$D1_REHEARSAL_TARGET_NAME" --remote \
+          npx --yes wrangler@4.94.0 d1 execute "$target_name" --remote \
             --config "$raw/wrangler.json" --command "PRAGMA foreign_key_check" --json \
             --experimental-provision=false --experimental-auto-create=false \
             > "$raw/foreign-key-check.stdout"
           foreign_key_exit_code=$?
-          npx --yes wrangler@4.94.0 d1 execute "$D1_REHEARSAL_TARGET_NAME" --remote \
+          npx --yes wrangler@4.94.0 d1 execute "$target_name" --remote \
             --config "$raw/wrangler.json" --command "PRAGMA quick_check" --json \
             --experimental-provision=false --experimental-auto-create=false \
             > "$raw/quick-check.stdout"
@@ -388,7 +339,7 @@ jobs:
           printf '%s\n' "$foreign_key_exit_code" > "$raw/foreign-key-check.exit-code"
           printf '%s\n' "$quick_check_exit_code" > "$raw/quick-check.exit-code"
 
-          npx --yes wrangler@4.94.0 d1 migrations list "$D1_REHEARSAL_TARGET_NAME" --remote \
+          npx --yes wrangler@4.94.0 d1 migrations list "$target_name" --remote \
             --config "$raw/wrangler.json" \
             --experimental-provision=false --experimental-auto-create=false \
             > "$raw/wrangler-pending.txt"
@@ -406,20 +357,14 @@ jobs:
 
           time_travel_args=()
           if [ -n "$REQUESTED_TIME_TRAVEL_UNIX_SECONDS" ]; then
-            python - "$REQUESTED_TIME_TRAVEL_UNIX_SECONDS" <<'PY'
-          import re, sys
-          if re.fullmatch(r'[0-9]{10}', sys.argv[1]) is None:
-              raise SystemExit('time_travel_unix_seconds must be exactly 10 decimal Unix-seconds digits')
-          PY
             time_travel_args=(--timestamp "$REQUESTED_TIME_TRAVEL_UNIX_SECONDS")
           fi
-          npx --yes wrangler@4.94.0 d1 time-travel info "$D1_REHEARSAL_TARGET_NAME" \
+          npx --yes wrangler@4.94.0 d1 time-travel info "$target_name" \
             --config "$raw/wrangler.json" --json \
             "${time_travel_args[@]}" \
             --experimental-provision=false --experimental-auto-create=false \
             > "$raw/time-travel.json"
-          jq -e 'type == "object" and (keys == ["bookmark"]) and (.bookmark | type == "string" and length > 0)' \
-            "$raw/time-travel.json" >/dev/null
+          jq -e 'type == "object" and (keys == ["bookmark"]) and (.bookmark | type == "string" and length > 0)' "$raw/time-travel.json" >/dev/null
 
           observed_at_unix_seconds="$(date -u +%s)"
           observed_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
@@ -429,12 +374,8 @@ jobs:
             python - \
               "$raw/time-travel.json" \
               "$evidence/time-travel-lookup.json" \
-              "$SOURCE_SHA" \
-              "$D1_REHEARSAL_TARGET_NAME" \
-              "$D1_REHEARSAL_TARGET_ID" \
-              "$REQUESTED_TIME_TRAVEL_UNIX_SECONDS" \
-              "$observed_at" \
-              "$observation_source" <<'PY'
+              "$SOURCE_SHA" "$target_name" "$target_id" \
+              "$REQUESTED_TIME_TRAVEL_UNIX_SECONDS" "$observed_at" "$observation_source" <<'PY'
           import json, sys
           raw_path, output_path, source_sha, target_name, target_id, timestamp, observed_at, observation_source = sys.argv[1:]
           value = json.load(open(raw_path, encoding='utf-8'))
@@ -445,10 +386,7 @@ jobs:
               'kind': 'D1_TIME_TRAVEL_LOOKUP_V1',
               'source_sha': source_sha,
               'environment': 'staging',
-              'target': {
-                  'database_name': target_name,
-                  'database_id': target_id,
-              },
+              'target': {'database_name': target_name, 'database_id': target_id},
               'requested_unix_seconds': int(timestamp),
               'bookmark': value['bookmark'],
               'observed_at': observed_at,
@@ -461,36 +399,25 @@ jobs:
               json.dump(document, handle, sort_keys=True, indent=2)
               handle.write('\n')
           PY
-            SOURCE_SHA="$SOURCE_SHA" REQUESTED_TIME_TRAVEL_UNIX_SECONDS="$REQUESTED_TIME_TRAVEL_UNIX_SECONDS" jq -e \
-              '.schema_version == 1 and .kind == "D1_TIME_TRAVEL_LOOKUP_V1" and .source_sha == env.SOURCE_SHA and .environment == "staging" and .target.database_name == env.D1_REHEARSAL_TARGET_NAME and .target.database_id == env.D1_REHEARSAL_TARGET_ID and .requested_unix_seconds == (env.REQUESTED_TIME_TRAVEL_UNIX_SECONDS | tonumber) and (.bookmark | type == "string" and length > 0) and .provider_mutation == false and .d1_mutation == false and .production_mutation == false' \
-              "$evidence/time-travel-lookup.json" >/dev/null
           fi
 
           python - \
-            "$raw/d1-databases.json" \
-            "$raw/ledger.json" \
-            "$raw/ledger-names.json" \
-            "$raw/wrangler-pending.json" \
-            "$raw/provider-identity.json" \
-            "$raw/time-travel.json" \
-            "$raw/foreign-key-check.stdout" \
-            "$raw/foreign-key-check.exit-code" \
-            "$raw/quick-check.stdout" \
-            "$raw/quick-check.exit-code" \
-            "$evidence/observation.json" \
-            "$SOURCE_SHA" "$account_id" "$catalog_name" \
-            "$D1_REHEARSAL_TARGET_NAME" "$D1_REHEARSAL_TARGET_ID" \
+            "$raw/ledger.json" "$raw/ledger-names.json" "$raw/wrangler-pending.json" \
+            "$raw/provider-identity.json" "$raw/time-travel.json" \
+            "$raw/foreign-key-check.stdout" "$raw/foreign-key-check.exit-code" \
+            "$raw/quick-check.stdout" "$raw/quick-check.exit-code" \
+            "$evidence/provider-observation.json" \
+            "$SOURCE_SHA" "$account_id" "$target_name" "$target_id" \
+            "$current_release_set_id" "$current_release_source_sha" \
             "$observed_at" "$observed_at_unix_seconds" "$observation_source" <<'PY'
           import hashlib, json, sys
           (
-              inventory_path, ledger_path, ledger_names_path, pending_path,
-              identity_path, time_travel_path,
-              foreign_key_stdout_path, foreign_key_exit_path,
-              quick_stdout_path, quick_exit_path,
-              output_path, source_sha, account_id, catalog_name, target_name,
-              target_id, observed_at, observed_at_unix_seconds, observation_source,
+              ledger_path, ledger_names_path, pending_path, identity_path, time_travel_path,
+              foreign_key_stdout_path, foreign_key_exit_path, quick_stdout_path, quick_exit_path,
+              output_path, source_sha, account_id, target_name, target_id,
+              current_release_set_id, current_release_source_sha,
+              observed_at, observed_at_unix_seconds, observation_source,
           ) = sys.argv[1:]
-          inventory = json.load(open(inventory_path, encoding='utf-8'))
           ledger = json.load(open(ledger_path, encoding='utf-8'))
           remote_migrations = json.load(open(ledger_names_path, encoding='utf-8'))
           pending = json.load(open(pending_path, encoding='utf-8'))
@@ -506,49 +433,28 @@ jobs:
               except json.JSONDecodeError:
                   result = None
                   json_valid = False
-              return {
-                  'exit_code': exit_code,
-                  'json_valid': json_valid,
-                  'raw_stdout': raw_stdout,
-                  'result': result,
-              }
+              return {'exit_code': exit_code, 'json_valid': json_valid, 'raw_stdout': raw_stdout, 'result': result}
 
           foreign_key_check = diagnostic(foreign_key_stdout_path, foreign_key_exit_path)
           quick_check = diagnostic(quick_stdout_path, quick_exit_path)
           foreign_key_result = foreign_key_check['result']
           quick_result = quick_check['result']
-          canonical_ledger = json.dumps(ledger, sort_keys=True, separators=(',', ':'), ensure_ascii=False)
-          ledger_sha256 = hashlib.sha256(canonical_ledger.encode('utf-8')).hexdigest()
           foreign_key_ok = (
-              foreign_key_check['exit_code'] == 0
-              and foreign_key_check['json_valid']
-              and isinstance(foreign_key_result, list)
-              and len(foreign_key_result) == 1
-              and isinstance(foreign_key_result[0], dict)
-              and foreign_key_result[0].get('success') is True
+              foreign_key_check['exit_code'] == 0 and foreign_key_check['json_valid']
+              and isinstance(foreign_key_result, list) and len(foreign_key_result) == 1
+              and isinstance(foreign_key_result[0], dict) and foreign_key_result[0].get('success') is True
               and foreign_key_result[0].get('results') == []
           )
           quick_rows = quick_result[0].get('results') if (
-              quick_check['exit_code'] == 0
-              and quick_check['json_valid']
-              and isinstance(quick_result, list)
-              and len(quick_result) == 1
-              and isinstance(quick_result[0], dict)
-              and quick_result[0].get('success') is True
+              quick_check['exit_code'] == 0 and quick_check['json_valid']
+              and isinstance(quick_result, list) and len(quick_result) == 1
+              and isinstance(quick_result[0], dict) and quick_result[0].get('success') is True
           ) else None
           quick_ok = (
-              isinstance(quick_rows, list)
-              and len(quick_rows) == 1
-              and isinstance(quick_rows[0], dict)
-              and list(quick_rows[0].values()) == ['ok']
+              isinstance(quick_rows, list) and len(quick_rows) == 1
+              and isinstance(quick_rows[0], dict) and list(quick_rows[0].values()) == ['ok']
           )
-          provider_diagnostics = {
-              'schema_version': 1,
-              'foreign_key_check_ok': foreign_key_ok,
-              'quick_check_ok': quick_ok,
-              'foreign_key_check': foreign_key_check,
-              'quick_check': quick_check,
-          }
+          canonical_ledger = json.dumps(ledger, sort_keys=True, separators=(',', ':'), ensure_ascii=False)
           provider_observation = {
               'schema_version': 1,
               'target': {
@@ -559,70 +465,57 @@ jobs:
               },
               'observed_at_unix_seconds': int(observed_at_unix_seconds),
               'observation_source': observation_source,
-              'remote_ledger_sha256': ledger_sha256,
+              'remote_ledger_sha256': hashlib.sha256(canonical_ledger.encode('utf-8')).hexdigest(),
               'remote_migrations': remote_migrations,
               'wrangler_pending_migrations': pending,
-              'deployment_identity': None,
+              'deployment_identity': current_release_set_id,
               'time_travel_bookmark_capable': True,
           }
-          databases = inventory.get('result', [])
           document = {
-              'schema_version': 3,
-              'kind': 'D1_ISOLATED_TARGET_OBSERVATION',
+              'schema_version': 1,
+              'kind': 'D1_CURRENT_TARGET_OBSERVATION',
               'source_sha': source_sha,
               'environment': 'staging',
               'observed_at': observed_at,
-              'account_id': account_id,
-              'v2_catalog_database_name': catalog_name,
-              'candidate': {
-                  'database_name': target_name,
-                  'database_id': target_id,
-                  'component': 'catalog',
-                  'is_v2_catalog_reference': target_name == catalog_name,
-                  'inventory_match_count': sum(1 for item in databases if item.get('name') == target_name and item.get('uuid') == target_id),
-              },
+              'component': 'catalog',
+              'current_deployed_release_set_id': current_release_set_id,
+              'current_deployed_source_sha': current_release_source_sha,
               'provider_observation_input': provider_observation,
-              'provider_diagnostics': provider_diagnostics,
+              'provider_diagnostics': {
+                  'schema_version': 1,
+                  'foreign_key_check_ok': foreign_key_ok,
+                  'quick_check_ok': quick_ok,
+                  'foreign_key_check': foreign_key_check,
+                  'quick_check': quick_check,
+              },
               'provider_identity_observed': bool(identity),
               'time_travel_observation_present': bool(time_travel),
               'provider_mutation': False,
               'd1_mutation': False,
               'production_mutation': False,
           }
-          if document['candidate']['inventory_match_count'] != 1 or document['candidate']['is_v2_catalog_reference']:
-              raise SystemExit('isolated rehearsal target lost exact isolated identity')
           with open(output_path, 'w', encoding='utf-8') as handle:
               json.dump(document, handle, sort_keys=True, indent=2)
               handle.write('\n')
           PY
 
-          SOURCE_SHA="$SOURCE_SHA" jq -e \
-            '.schema_version == 3 and .kind == "D1_ISOLATED_TARGET_OBSERVATION" and .source_sha == env.SOURCE_SHA and .environment == "staging" and .candidate.database_name == env.D1_REHEARSAL_TARGET_NAME and .candidate.database_id == env.D1_REHEARSAL_TARGET_ID and .candidate.is_v2_catalog_reference == false and .candidate.inventory_match_count == 1 and .provider_observation_input.target.database_name == env.D1_REHEARSAL_TARGET_NAME and .provider_observation_input.target.database_id == env.D1_REHEARSAL_TARGET_ID and .provider_observation_input.time_travel_bookmark_capable == true and .provider_diagnostics.schema_version == 1 and .provider_diagnostics.foreign_key_check.exit_code >= 0 and .provider_diagnostics.quick_check.exit_code >= 0 and .provider_mutation == false and .d1_mutation == false and .production_mutation == false' \
-            "$evidence/observation.json" >/dev/null
-          python -m json.tool "$evidence/observation.json" >/dev/null
+          SOURCE_SHA="$SOURCE_SHA" TARGET_NAME="$target_name" TARGET_ID="$target_id" jq -e \
+            '.schema_version == 1 and .kind == "D1_CURRENT_TARGET_OBSERVATION" and .source_sha == env.SOURCE_SHA and .environment == "staging" and .component == "catalog" and .provider_observation_input.target.database_name == env.TARGET_NAME and .provider_observation_input.target.database_id == env.TARGET_ID and .provider_observation_input.target.environment == "staging" and (.current_deployed_release_set_id | test("^release-set-v(2|3)-sha256-[0-9a-f]{64}$")) and (.current_deployed_source_sha | test("^[0-9a-f]{40}$")) and .provider_observation_input.time_travel_bookmark_capable == true and .provider_diagnostics.schema_version == 1 and .provider_mutation == false and .d1_mutation == false and .production_mutation == false' \
+            "$evidence/provider-observation.json" >/dev/null
+
+          {
+            echo "CURRENT_TARGET_NAME=$target_name"
+            echo "CURRENT_TARGET_ID=$target_id"
+            echo "CURRENT_DEPLOYED_RELEASE_SET_ID=$current_release_set_id"
+            echo "CURRENT_DEPLOYED_SOURCE_SHA=$current_release_source_sha"
+          } >> "$GITHUB_ENV"
 
       - name: Publish secret-free exact Time Travel lookup
         if: github.event_name == 'workflow_dispatch' && github.event.inputs.time_travel_unix_seconds != ''
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: d1-time-travel-lookup-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.sha }}
-          path: artifacts/d1-isolated-target-observation/time-travel-lookup.json
-          if-no-files-found: error
-          retention-days: 30
-
-      - name: Publish secret-free isolated-target discovery
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
-        with:
-          name: d1-isolated-target-discovery-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.sha }}
-          path: artifacts/d1-isolated-target-observation/discovery.json
-          if-no-files-found: error
-          retention-days: 30
-
-      - name: Publish secret-free isolated-target observation
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
-        with:
-          name: d1-isolated-target-observation-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.sha }}
-          path: artifacts/d1-isolated-target-observation/observation.json
+          path: artifacts/d1-current-target-observation/time-travel-lookup.json
           if-no-files-found: error
           retention-days: 30
 
@@ -631,11 +524,10 @@ jobs:
           set -euo pipefail
           jq -e \
             '.provider_diagnostics.foreign_key_check.exit_code == 0 and .provider_diagnostics.foreign_key_check.json_valid == true and .provider_diagnostics.foreign_key_check_ok == true and .provider_diagnostics.quick_check.exit_code == 0 and .provider_diagnostics.quick_check.json_valid == true and .provider_diagnostics.quick_check_ok == true' \
-            artifacts/d1-isolated-target-observation/observation.json >/dev/null
+            artifacts/d1-current-target-observation/provider-observation.json >/dev/null
 
       - name: Run canonical credential-free transaction preflight
         env:
-          GH_TOKEN: ${{ github.token }}
           SOURCE_SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
@@ -643,8 +535,8 @@ jobs:
           test -z "${CLOUDFLARE_OBSERVE_API_TOKEN:-}"
           root="$RUNNER_TEMP/d1-preflight"
           evidence="artifacts/d1-transaction-preflight"
-          observation="artifacts/d1-isolated-target-observation/observation.json"
-          mkdir -p "$root/target" "$root/known-good" "$evidence"
+          observation="artifacts/d1-current-target-observation/provider-observation.json"
+          mkdir -p "$root/target" "$root/current" "$evidence"
           test -f "$observation"
 
           cargo build --locked --manifest-path tools/opsctl/Cargo.toml
@@ -654,22 +546,31 @@ jobs:
 
           target_release=''
           for _ in $(seq 1 48); do
-            target_release="$(gh api "repos/$GITHUB_REPOSITORY/releases?per_page=100" --jq ".[] | select(.target_commitish == \"$SOURCE_SHA\" and (.tag_name | startswith(\"release-set-v3-sha256-\")) and .draft == false) | .tag_name" | head -n1)"
-            if [ -n "$target_release" ]; then break; fi
+            mapfile -t releases < <(gh api "repos/$GITHUB_REPOSITORY/releases?per_page=100" --jq ".[] | select(.target_commitish == \"$SOURCE_SHA\" and (.tag_name | startswith(\"release-set-v3-sha256-\")) and .draft == false) | .tag_name")
+            if [ "${#releases[@]}" -gt 1 ]; then
+              printf 'multiple immutable Release Sets target exact current source: %s\n' "${releases[*]}" >&2
+              exit 1
+            fi
+            if [ "${#releases[@]}" -eq 1 ]; then
+              target_release="${releases[0]}"
+              break
+            fi
             sleep 15
           done
           test -n "$target_release"
           gh release download "$target_release" --repo "$GITHUB_REPOSITORY" --pattern release-set.json --pattern control-plane.tar --dir "$root/target"
-          gh release download "$D1_REHEARSAL_KNOWN_GOOD_RELEASE_SET_ID" --repo "$GITHUB_REPOSITORY" --pattern release-set.json --pattern control-plane.tar --dir "$root/known-good"
+          gh release download "$CURRENT_DEPLOYED_RELEASE_SET_ID" --repo "$GITHUB_REPOSITORY" --pattern release-set.json --pattern control-plane.tar --dir "$root/current"
 
-          python - "$root" "$target_release" "$SOURCE_SHA" "$D1_REHEARSAL_KNOWN_GOOD_RELEASE_SET_ID" "$D1_REHEARSAL_KNOWN_GOOD_SOURCE_SHA" "$D1_REHEARSAL_KNOWN_GOOD_MANIFEST_SHA256" "$D1_REHEARSAL_COMPONENT" <<'PY'
+          python - \
+            "$root" "$target_release" "$SOURCE_SHA" \
+            "$CURRENT_DEPLOYED_RELEASE_SET_ID" "$CURRENT_DEPLOYED_SOURCE_SHA" "$D1_COMPONENT" <<'PY'
           import hashlib, json, sys, tarfile
           from pathlib import Path
-          root, target_id, source_sha, known_id, known_source, known_manifest_sha, component_id = sys.argv[1:]
+          root, target_id, target_source, current_id, current_source, component_id = sys.argv[1:]
           root = Path(root)
           def extract(folder, expected_id, expected_source, output):
               rs = json.load(open(folder / 'release-set.json', encoding='utf-8'))
-              if rs.get('schema_version') != 3 or rs.get('release_set_id') != expected_id:
+              if rs.get('release_set_id') != expected_id or rs.get('schema_version') not in {2, 3}:
                   raise SystemExit(f'Release Set identity mismatch for {folder}')
               source = rs.get('source') or {}
               if source.get('repository') != 'iamaman11/part-crm-emai-profile' or source.get('commit_sha') != expected_source or source.get('accepted_main') is not True:
@@ -688,28 +589,23 @@ jobs:
               if hashlib.sha256(raw).hexdigest() != component.get('component_manifest_sha256'):
                   raise SystemExit(f'control_plane manifest digest mismatch for {folder}')
               Path(output).write_bytes(raw)
-          extract(root / 'target', target_id, source_sha, root / 'target-manifest.json')
-          extract(root / 'known-good', known_id, known_source, root / 'known-good-manifest.json')
-          if hashlib.sha256((root / 'known-good-manifest.json').read_bytes()).hexdigest() != known_manifest_sha:
-              raise SystemExit('known-good exact manifest digest drifted')
-          for path, label in ((root / 'target-manifest.json', 'target'), (root / 'known-good-manifest.json', 'known-good')):
+          extract(root / 'target', target_id, target_source, root / 'target-manifest.json')
+          extract(root / 'current', current_id, current_source, root / 'current-deployed-manifest.json')
+          for path, label in ((root / 'target-manifest.json', 'target'), (root / 'current-deployed-manifest.json', 'current-deployed')):
               schema = json.load(open(path, encoding='utf-8')).get('schema_contract')
               if not isinstance(schema, dict) or schema.get('database_component') != component_id:
-                  raise SystemExit(f'{label} release manifest is not for the isolated D1 component')
+                  raise SystemExit(f'{label} release manifest is not for the current D1 component')
           PY
           printf '%s\n' "$target_release" > "$evidence/target-release-set-id.txt"
 
           "$opsctl" --root . d1 repository > "$root/d1-repository.json"
           python - \
-            "$root/d1-repository.json" \
-            "$root/target-manifest.json" \
-            "$root/known-good-manifest.json" \
-            "$root/current-runtime-manifest.json" \
-            "$root/known-good-runtime-manifest.json" \
+            "$root/d1-repository.json" "$root/target-manifest.json" "$root/current-deployed-manifest.json" \
+            "$root/current-runtime-manifest.json" "$root/known-good-runtime-manifest.json" \
             "$evidence/runtime-context.json" <<'PY'
           import json, os, sys
-          repository_path, target_path, historical_path, current_output, known_output, evidence_output = sys.argv[1:]
-          component_id = os.environ['D1_REHEARSAL_COMPONENT']
+          repository_path, target_path, deployed_path, current_output, known_output, evidence_output = sys.argv[1:]
+          component_id = os.environ['D1_COMPONENT']
           repository = json.load(open(repository_path, encoding='utf-8'))
           matches = [item for item in repository.get('components', []) if item.get('component_id') == component_id]
           if len(matches) != 1:
@@ -718,15 +614,15 @@ jobs:
           runtime = component.get('pre_migration_runtime_schema_contract')
           release = component.get('release_schema_contract')
           target = json.load(open(target_path, encoding='utf-8')).get('schema_contract')
-          historical = json.load(open(historical_path, encoding='utf-8')).get('schema_contract')
-          if not all(isinstance(value, dict) for value in (runtime, release, target, historical)):
-              raise SystemExit('typed runtime/release/target/historical schema contracts are incomplete')
+          deployed = json.load(open(deployed_path, encoding='utf-8')).get('schema_contract')
+          if not all(isinstance(value, dict) for value in (runtime, release, target, deployed)):
+              raise SystemExit('typed runtime/release/target/deployed schema contracts are incomplete')
           if runtime.get('database_component') != component_id or release.get('database_component') != component_id:
               raise SystemExit('typed D1 schema contract component drifted')
           if runtime.get('target_schema_revision') != runtime.get('supported_schema_min'):
               raise SystemExit('typed pre-migration runtime contract target/min relation drifted')
           if runtime.get('supported_schema_max') != release.get('target_schema_revision'):
-              raise SystemExit('typed pre-migration runtime safe horizon does not reach the typed ordinary release target')
+              raise SystemExit('typed pre-migration runtime safe horizon does not reach typed ordinary release target')
           for field, owner_field in (
               ('migration_history_digest', 'history_digest'),
               ('compatibility_policy_digest', 'compatibility_policy_digest'),
@@ -734,21 +630,15 @@ jobs:
               if runtime.get(field) != component.get(owner_field) or release.get(field) != component.get(owner_field):
                   raise SystemExit(f'typed D1 {field} is not bound to current repository authority')
           for field in (
-              'database_component',
-              'target_schema_revision',
-              'supported_schema_min',
-              'supported_schema_max',
-              'migration_history_digest',
-              'compatibility_policy_digest',
+              'database_component', 'target_schema_revision', 'supported_schema_min', 'supported_schema_max',
+              'migration_history_digest', 'compatibility_policy_digest',
           ):
               if target.get(field) != release.get(field):
                   raise SystemExit(f'target Release Set schema contract drifted from typed D1 release authority: {field}')
-          if historical.get('database_component') != component_id:
-              raise SystemExit('immutable historical known-good release component drifted')
-          if historical.get('target_schema_revision') != runtime.get('target_schema_revision'):
-              raise SystemExit('immutable historical known-good release no longer identifies the typed runtime base revision')
-          if historical.get('migration_history_digest') == runtime.get('migration_history_digest'):
-              raise SystemExit('historical immutable manifest was incorrectly reused as current runtime compatibility identity')
+          if deployed.get('database_component') != component_id:
+              raise SystemExit('deployed Release Set component drifted')
+          if deployed.get('target_schema_revision') != runtime.get('target_schema_revision'):
+              raise SystemExit('deployed Release Set is not the typed pre-migration runtime base revision')
           manifest = {'schema_contract': runtime}
           for output in (current_output, known_output):
               with open(output, 'w', encoding='utf-8') as handle:
@@ -758,8 +648,10 @@ jobs:
               'schema_version': 1,
               'kind': 'D1_PRE_MIGRATION_RUNTIME_CONTEXT',
               'source_sha': os.environ['SOURCE_SHA'],
-              'basis': 'CURRENT_TYPED_MIGRATION_CONTRACTS',
-              'historical_release_target': historical.get('target_schema_revision'),
+              'basis': 'CURRENT_TYPED_MIGRATION_CONTRACTS_PLUS_DEPLOYED_RELEASE_IDENTITY',
+              'deployed_release_set_id': os.environ['CURRENT_DEPLOYED_RELEASE_SET_ID'],
+              'deployed_release_source_sha': os.environ['CURRENT_DEPLOYED_SOURCE_SHA'],
+              'deployed_release_target_revision': deployed.get('target_schema_revision'),
               'schema_contract': runtime,
               'release_schema_contract': release,
               'provider_mutation': False,
@@ -770,16 +662,15 @@ jobs:
               json.dump(evidence, handle, sort_keys=True, indent=2)
               handle.write('\n')
           PY
-          python -m json.tool "$evidence/runtime-context.json" >/dev/null
 
-          python - "$observation" "$SOURCE_SHA" "$D1_REHEARSAL_TARGET_NAME" "$D1_REHEARSAL_TARGET_ID" "$root/ledger.json" <<'PY'
+          python - "$observation" "$SOURCE_SHA" "$CURRENT_TARGET_NAME" "$CURRENT_TARGET_ID" "$root/ledger.json" <<'PY'
           import json, sys, time
           path, source, name, dbid, ledger_path = sys.argv[1:]
           doc = json.load(open(path, encoding='utf-8'))
           obs = doc.get('provider_observation_input') or {}
           target = obs.get('target') or {}
-          if doc.get('source_sha') != source or doc.get('kind') != 'D1_ISOLATED_TARGET_OBSERVATION':
-              raise SystemExit('observer evidence is not bound to exact accepted-main source')
+          if doc.get('source_sha') != source or doc.get('kind') != 'D1_CURRENT_TARGET_OBSERVATION':
+              raise SystemExit('observer evidence is not bound to exact accepted-main source/current target contract')
           if target.get('database_name') != name or target.get('database_id') != dbid or target.get('environment') != 'staging':
               raise SystemExit('observer target identity drifted')
           if doc.get('provider_mutation') or doc.get('d1_mutation') or doc.get('production_mutation'):
@@ -798,13 +689,13 @@ jobs:
               json.dump(payload, handle, sort_keys=True, indent=2)
               handle.write('\n')
           PY
-          printf '{"component":"%s","completed":[]}\n' "$D1_REHEARSAL_COMPONENT" > "$root/preconditions.json"
+          printf '{"component":"%s","completed":[]}\n' "$D1_COMPONENT" > "$root/preconditions.json"
 
           set +e
           python scripts/d1-prepare.py prepare \
             --opsctl "$opsctl" \
             --root . \
-            --component "$D1_REHEARSAL_COMPONENT" \
+            --component "$D1_COMPONENT" \
             --ledger-json "$root/ledger.json" \
             --release-manifest "$root/target-manifest.json" \
             --current-manifest "$root/current-runtime-manifest.json" \
@@ -818,9 +709,7 @@ jobs:
           cp "$observation" "$evidence/provider-observation.json"
 
           python - \
-            "$evidence/prepare.json" \
-            "$evidence/provider-observation.json" \
-            "$evidence/runtime-context.json" \
+            "$evidence/prepare.json" "$evidence/provider-observation.json" "$evidence/runtime-context.json" \
             "$evidence/summary.json" <<'PY'
           import json, os, sys
           prepare = json.load(open(sys.argv[1], encoding='utf-8'))
@@ -839,8 +728,9 @@ jobs:
               'workflow_sha': os.environ.get('GITHUB_WORKFLOW_SHA'),
               'event_name': os.environ['GITHUB_EVENT_NAME'],
               'ref': os.environ['GITHUB_REF'],
-              'target_database_name': os.environ['D1_REHEARSAL_TARGET_NAME'],
-              'target_database_id': os.environ['D1_REHEARSAL_TARGET_ID'],
+              'target_database_name': os.environ['CURRENT_TARGET_NAME'],
+              'target_database_id': os.environ['CURRENT_TARGET_ID'],
+              'current_deployed_release_set_id': os.environ['CURRENT_DEPLOYED_RELEASE_SET_ID'],
               'runtime_context_target_revision': runtime_contract.get('target_schema_revision'),
               'runtime_context_supported_max': runtime_contract.get('supported_schema_max'),
               'release_target_revision': release_contract.get('target_schema_revision'),
@@ -859,7 +749,7 @@ jobs:
               json.dump(value, handle, sort_keys=True, indent=2)
               handle.write('\n')
           PY
-          echo 'D1 secret-free preflight disposition:'
+          echo 'D1 secret-free current-target preflight disposition:'
           cat "$evidence/summary.json"
           jq -c '{status, gate_results, plan: (if .status == "PREPARE_READY" then {decision: .plan.decision, ledger_state: .plan.ledger_state, planned_migrations: .plan.planned_migrations} else null end)}' "$evidence/prepare.json"
 
@@ -874,5 +764,5 @@ jobs:
       - name: Remove raw provider observations and preflight inputs from runner temp
         if: always()
         run: |
-          rm -rf "$RUNNER_TEMP/d1-isolated-target-observation"
+          rm -rf "$RUNNER_TEMP/d1-current-target-observation"
           rm -rf "$RUNNER_TEMP/d1-preflight"
