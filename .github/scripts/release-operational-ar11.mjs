@@ -193,7 +193,7 @@ function promotionErrors(promotion) {
   ], 'promotion phase 3 protected mutation'));
   errors.push(...forbidMarkers(mutate, ['materialize known-good-v2-v3', '.release_set_schema_version == 2', 'worker-build --release', 'cargo build', 'npm run build', 'release-set-ar11.py build', 'release compatibility', 'promotion plan', 'promotion preflight'], 'promotion phase 3 protected mutation'));
   const nativeVerify = mutate.indexOf('Re-verify fence and exact immutable Release Set before credentials');
-  const authorizationFence = mutate.indexOf('test "$(jq -r \\' .authorization_digest \\' "$fence")" = "$AUTHORIZATION_DIGEST"'.replaceAll(' ', ''));
+  const authorizationFence = mutate.indexOf('test "$(jq -r \'.authorization_digest\' "$fence")" = "$AUTHORIZATION_DIGEST"');
   const deployCredential = mutate.indexOf('DEPLOY_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}');
   const reobserveFence = mutate.indexOf('Re-observe expected-current fence and deploy exact Release Set v3 bits');
   const currentFence = mutate.indexOf('test "$current_id" = "$EXPECTED_CURRENT"', reobserveFence);
@@ -201,7 +201,7 @@ function promotionErrors(promotion) {
   if (!(nativeVerify >= 0 && deployCredential > nativeVerify && reobserveFence > deployCredential && currentFence > reobserveFence && actualDeploy > currentFence)) {
     errors.push('mutation credential/fence ordering must be native verify -> credential activation -> expected-current re-observe -> deploy');
   }
-  if (authorizationFence >= 0 && authorizationFence > deployCredential) {
+  if (authorizationFence < 0 || authorizationFence > deployCredential) {
     errors.push('authorization digest fence must be verified before deploy credential activation');
   }
 
