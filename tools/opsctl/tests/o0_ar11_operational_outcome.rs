@@ -7,31 +7,33 @@ fn repository_root() -> PathBuf {
 }
 
 #[test]
-fn ar11_operational_outcome_fixture_matrix_is_credential_free_and_zero_effect() {
+fn ar11_operational_outcome_fixture_matrix_is_credential_free_and_zero_effect() -> Result<(), String> {
     let root = repository_root();
     let python = if cfg!(windows) { "python" } else { "python3" };
     let output = Command::new(python)
         .arg(root.join("scripts/promotion-operational-outcome-ar11.py"))
         .arg("--self-test")
         .output()
-        .expect("python runtime must be available for repository fixture proof");
-    assert!(
-        output.status.success(),
-        "OperationalOutcome fixture matrix failed:\nstdout={}\nstderr={}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
+        .map_err(|error| format!("python runtime must be available for repository fixture proof: {error}"))?;
+    if !output.status.success() {
+        return Err(format!(
+            "OperationalOutcome fixture matrix failed:\nstdout={}\nstderr={}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        ));
+    }
     assert!(
         String::from_utf8_lossy(&output.stdout)
             .contains("AR11 promotion OperationalOutcome fixture matrix passed.")
     );
+    Ok(())
 }
 
 #[test]
-fn ar11_workflow_terminalizes_after_owner_capture_and_before_final_assertion() {
+fn ar11_workflow_terminalizes_after_owner_capture_and_before_final_assertion() -> Result<(), String> {
     let root = repository_root();
     let workflow = fs::read_to_string(root.join(".github/workflows/release-set-promotion.yml"))
-        .expect("release-set-promotion workflow must exist");
+        .map_err(|error| format!("release-set-promotion workflow must exist: {error}"))?;
 
     assert!(workflow.contains("promotion-operational-outcome-ar11.py"));
     assert!(workflow.contains("promotion-operational-outcome.json"));
@@ -43,22 +45,25 @@ fn ar11_workflow_terminalizes_after_owner_capture_and_before_final_assertion() {
 
     let terminalize = workflow
         .find("Terminalize one lossless AR11 OperationalOutcome")
-        .expect("terminal outcome step must exist");
+        .ok_or_else(|| "terminal outcome step must exist".to_string())?;
     let enforce = workflow
         .find("Enforce terminal AR11 disposition after evidence publication")
-        .expect("final enforcement step must exist");
+        .ok_or_else(|| "final enforcement step must exist".to_string())?;
     assert!(
         terminalize < enforce,
         "outcome must survive before final assertion"
     );
+    Ok(())
 }
 
 #[test]
-fn repository_contract_states_permanent_lossless_owner_projection_rule() {
+fn repository_contract_states_permanent_lossless_owner_projection_rule() -> Result<(), String> {
     let root = repository_root();
-    let agents = fs::read_to_string(root.join("AGENTS.md")).expect("AGENTS.md must exist");
+    let agents = fs::read_to_string(root.join("AGENTS.md"))
+        .map_err(|error| format!("AGENTS.md must exist: {error}"))?;
     assert!(
         agents.contains("one natural-owner verdict -> one lossless terminal OperationalOutcome")
     );
     assert!(agents.contains("Capture before assert"));
+    Ok(())
 }
