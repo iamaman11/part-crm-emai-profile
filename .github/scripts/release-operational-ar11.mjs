@@ -80,13 +80,18 @@ function readyMutationByteIdentityErrors(mutate) {
 
 function immediateMutationFenceErrors(mutate) {
   const lines = logicalShellLines(mutate);
-  const workerFence = 'test "$(jq -r \'.release_set_id\' "$RUNNER_TEMP/mutation-current-identity.json")" = "$EXPECTED_CURRENT"';
+  const workerFence = 'test "$(jq -r \' .release_set_id\' "$RUNNER_TEMP/mutation-current-identity.json")" = "$EXPECTED_CURRENT"'.replace("' .release", "'.release");
+  const profileFence = 'test "$(jq -r \' .capability_profile_id\' "$RUNNER_TEMP/mutation-current-identity.json")" = "$EXPECTED_CURRENT_PROFILE"'.replace("' .capability", "'.capability");
   const d1Fence = 'cmp --silent "$RUNNER_TEMP/mutation-d1-names.json" "$RUNNER_TEMP/ready/d1-names-after.json"';
   const workerMatches = lines.filter((line) => line.includes(workerFence));
+  const profileMatches = lines.filter((line) => line.includes(profileFence));
   const d1Matches = lines.filter((line) => line.includes(d1Fence));
   const errors = [];
   if (workerMatches.length !== 1) {
     errors.push(`protected mutation expected-current Worker fence must exist exactly once immediately before deploy; observed=${workerMatches.length}`);
+  }
+  if (profileMatches.length !== 1) {
+    errors.push(`protected mutation expected-current capability-profile fence must exist exactly once immediately before deploy; observed=${profileMatches.length}`);
   }
   if (d1Matches.length !== 1) {
     errors.push(`protected mutation READY-bound D1 ledger fence must exist exactly once immediately before deploy; observed=${d1Matches.length}`);
@@ -253,6 +258,16 @@ function promotionErrors(promotion) {
     'deployment-identity-ar11.py',
     'd1-names-before.json',
     'deployment-snapshot-ar11.py',
+    'current_profile="$(jq -er \' .capability_profile_id'.replace("' .capability", "'.capability"),
+    '--root . promotion plan --release-set "$TARGET_RELEASE_MANIFEST"',
+    '--source-root . --profile "$TARGET_PROFILE" --environment "$TARGET_ENVIRONMENT"',
+    '.requested_target_capability_profile_id == $requested',
+    '.admission_mode == "DIRECT" or .admission_mode == "PREREQUISITE_RELEASE_BRIDGE"',
+    'target_profile="$(jq -er \' .target_capability_profile_id'.replace("' .target", "'.target"),
+    'admission_mode="$(jq -er \' .admission_mode'.replace("' .admission", "'.admission"),
+    '--source-root . --profile "$target_profile" --environment "$TARGET_ENVIRONMENT"',
+    '.target_capability_profile_id == $effective',
+    '.admission_mode == $mode',
     'promotion plan',
     'promotion preflight',
     'Prove bounded Worker and D1 quiescence',
@@ -260,12 +275,18 @@ function promotionErrors(promotion) {
     'cmp --silent "$RUNNER_TEMP/worker-binding-before.json" "$RUNNER_TEMP/worker-binding-after.json"',
     'cmp --silent "$RUNNER_TEMP/d1-names-before.json" "$RUNNER_TEMP/d1-names-after.json"',
     'kind:"AR11_READY_TO_MUTATE"',
+    'target_capability_profile_id:$target_profile',
+    'expected_current_capability_profile_id:$expected_current_profile',
+    'admission_mode:$admission_mode',
+    '--arg target_profile "${{ steps.policy.outputs.target_profile }}"',
+    '--arg admission_mode "${{ steps.policy.outputs.admission_mode }}"',
     'secret_bindings_verified:true',
     'provider_mutation:false',
     'production_mutation:false',
     'ar11-ready-to-mutate-$RELEASE_SET_ID-$SOURCE_SHA',
     'Terminalize one lossless AR11 OperationalOutcome',
     'promotion-operational-outcome-ar11.py',
+    '--profile-id "$effective_target_profile"',
     '--output "$RUNNER_TEMP/promotion-operational-outcome.json"',
     'Upload terminal AR11 OperationalOutcome evidence',
     'name: ar11-operational-outcome-${{ github.run_id }}-${{ github.run_attempt }}',
@@ -285,6 +306,7 @@ function promotionErrors(promotion) {
     'AUTHORITY_COMMENT',
     '--message "release_set=',
     '.status == "INFRASTRUCTURE_FAILURE"',
+    'if [ "$current_id" != "$RELEASE_SET_ID" ]; then',
   ], 'pre-authorization READY proof'));
   errors.push(...secretObservationErrors(ready, 'pre-authorization READY proof'));
   const readOnlyTerminalize = ready.indexOf('Terminalize one lossless AR11 OperationalOutcome');
@@ -303,6 +325,12 @@ function promotionErrors(promotion) {
     "WORKER_PROMOTION_AUTHORIZATION_V2",
     'Download and verify exact prior READY_TO_MUTATE authority',
     'gh run download "$READY_RUN_ID"',
+    'target_capability_profile_id',
+    'expected_current_capability_profile_id',
+    'target_profile="$(jq -er',
+    'expected_current_profile="$(jq -er',
+    'echo "target_profile=$target_profile"',
+    'echo "expected_current_profile=$expected_current_profile"',
     'kind == "AR11_READY_TO_MUTATE"',
     'ready == true',
     'provider_mutation == false',
@@ -312,8 +340,12 @@ function promotionErrors(promotion) {
 
   errors.push(...requireMarkers(mutate, [
     'Execute exact same bits after READY plus authorization',
+    'TARGET_PROFILE: ${{ needs.resolve-verify.outputs.target_profile }}',
+    'EXPECTED_CURRENT_PROFILE: ${{ needs.resolve-verify.outputs.expected_current_profile }}',
     'Download and bind prior READY evidence before provider credentials',
     'AR11_MUTATION_FENCE',
+    'target_capability_profile_id:$target_profile',
+    'expected_current_capability_profile_id:$expected_current_profile',
     'Re-verify exact immutable Release Set before credentials',
     'Render mutation overlay and prove exact bits dry-run without deploy credential',
     'Activate deploy credential only after bound READY and authorization',
@@ -321,12 +353,12 @@ function promotionErrors(promotion) {
     'Re-fence Worker identity and D1 head immediately before mutation',
     'cmp --silent "$RUNNER_TEMP/mutation-d1-names.json" "$RUNNER_TEMP/ready/d1-names-after.json"',
     'Deploy exact Release Set v3 bits after all fences',
-    '--message "release_set=$RELEASE_SET_ID profile=rehearsal-core-v2"',
+    '--message "release_set=$RELEASE_SET_ID profile=$TARGET_PROFILE"',
   ], 'protected mutation executor'));
   errors.push(...readyMutationByteIdentityErrors(mutate));
   errors.push(...immediateMutationFenceErrors(mutate));
   errors.push(...deployCredentialBoundaryErrors(promotion, mutate));
-  errors.push(...forbidMarkers(mutate, ['promotion plan', 'promotion preflight', 'release compatibility', 'materialize known-good-v2-v3', 'worker-build --release', 'cargo build', 'npm run build'], 'protected mutation executor'));
+  errors.push(...forbidMarkers(mutate, ['promotion plan', 'promotion preflight', 'release compatibility', 'materialize known-good-v2-v3', 'worker-build --release', 'cargo build', 'npm run build', 'profile=rehearsal-core-v2"'], 'protected mutation executor'));
   if ((promotion.match(/secrets\.CLOUDFLARE_API_TOKEN\s*}}/g) ?? []).length !== 1) {
     errors.push('deploy-capable Cloudflare token must be referenced exactly once in the whole promotion workflow');
   }
@@ -339,21 +371,25 @@ function promotionErrors(promotion) {
   }
 
   errors.push(...requireMarkers(post, [
+    'TARGET_PROFILE: ${{ needs.resolve-verify.outputs.target_profile }}',
     'secrets.CLOUDFLARE_OBSERVE_API_TOKEN',
     'Re-observe provider and capture promotion.verify natural-owner verdict',
     'promotion verify',
+    '--profile "$TARGET_PROFILE"',
     '> "$RUNNER_TEMP/promotion-verify.json"',
     'decision="$(jq -er',
     '$RUNNER_TEMP/promotion-verify.json',
     "if: steps.observe_verify.outputs.decision == 'VERIFIED'",
   ], 'post-deploy verifier'));
-  errors.push(...forbidMarkers(post, ['secrets.CLOUDFLARE_API_TOKEN }}', 'wrangler deploy --'], 'post-deploy verifier'));
+  errors.push(...forbidMarkers(post, ['secrets.CLOUDFLARE_API_TOKEN }}', 'wrangler deploy --', '--profile rehearsal-core-v2'], 'post-deploy verifier'));
   errors.push(...secretObservationErrors(post, 'post-deploy verifier'));
 
   errors.push(...requireMarkers(manualOutcome, [
     "if: always() && needs.route.outputs.mode == 'promote'",
+    'TARGET_PROFILE: ${{ needs.resolve-verify.outputs.target_profile }}',
     'Terminalize one lossless manual AR11 OperationalOutcome',
     '--mode manual',
+    '--profile-id "$profile_id"',
     'Upload terminal manual AR11 OperationalOutcome evidence',
     'Enforce terminal manual AR11 disposition after evidence publication',
     '.contract == "PROMOTION_OPERATOR_OUTCOME_V1"',
@@ -364,7 +400,7 @@ function promotionErrors(promotion) {
     '.production_mutation_executed == false',
     '.effect_state == "EFFECT_VERIFIED"',
   ], 'manual terminal outcome'));
-  errors.push(...forbidMarkers(manualOutcome, ['secrets.CLOUDFLARE_', 'wrangler deploy --', 'environment: production'], 'manual terminal outcome'));
+  errors.push(...forbidMarkers(manualOutcome, ['secrets.CLOUDFLARE_', 'wrangler deploy --', 'environment: production', '--profile-id rehearsal-core-v2'], 'manual terminal outcome'));
   const manualTerminalize = manualOutcome.indexOf('Terminalize one lossless manual AR11 OperationalOutcome');
   const manualUpload = manualOutcome.indexOf('Upload terminal manual AR11 OperationalOutcome evidence');
   const manualEnforce = manualOutcome.indexOf('Enforce terminal manual AR11 disposition after evidence publication');
@@ -503,6 +539,17 @@ function selfTest(files) {
   }
   const missingReadyBinding = files.promotion.replaceAll('READY_EVIDENCE_SHA256', 'READY_EVIDENCE_DIGEST_MISSING');
   if (promotionErrors(missingReadyBinding).length === 0) throw new Error('missing READY binding fixture passed');
+  const missingReadyProfile = files.promotion.replace('target_capability_profile_id:$target_profile', 'target_capability_profile_id:null');
+  if (!promotionErrors(missingReadyProfile).some((error) => error.includes('pre-authorization READY proof'))) {
+    throw new Error('missing READY target capability-profile binding fixture passed');
+  }
+  const workflowOwnedBridge = files.promotion.replace(
+    '[[ "$current_profile" =~ ^[a-z0-9][a-z0-9-]*$ ]]',
+    '[[ "$current_profile" =~ ^[a-z0-9][a-z0-9-]*$ ]]\n          if [ "$current_id" != "$RELEASE_SET_ID" ]; then echo workflow-policy; fi',
+  );
+  if (!promotionErrors(workflowOwnedBridge).some((error) => error.includes('pre-authorization READY proof'))) {
+    throw new Error('workflow-owned admission bridge fixture unexpectedly passed');
+  }
   const rebuild = files.promotion.replace(
     'Deploy exact Release Set v3 bits after all fences',
     'run: cargo build --release\n      - name: Deploy exact Release Set v3 bits after all fences',
@@ -518,11 +565,25 @@ function selfTest(files) {
   if (brokenByteIdentity === files.promotion) throw new Error('READY-to-mutation Release Set byte-identity fixture setup failed');
   if (!promotionErrors(brokenByteIdentity).some((error) => error.includes('byte-compare'))) throw new Error('READY-to-mutation Release Set byte-identity fixture passed');
   const staleFenceBypass = files.promotion.replace(
-    'test "$(jq -r \'.release_set_id\' "$RUNNER_TEMP/mutation-current-identity.json")" = "$EXPECTED_CURRENT"',
+    'test "$(jq -r \' .release_set_id\' "$RUNNER_TEMP/mutation-current-identity.json")" = "$EXPECTED_CURRENT"'.replace("' .release", "'.release"),
     'echo "expected-current Worker fence bypassed"',
   );
   if (!promotionErrors(staleFenceBypass).some((error) => error.includes('expected-current Worker fence'))) {
     throw new Error('mutation stale-fence bypass fixture unexpectedly passed');
+  }
+  const staleProfileFenceBypass = files.promotion.replace(
+    'test "$(jq -r \' .capability_profile_id\' "$RUNNER_TEMP/mutation-current-identity.json")" = "$EXPECTED_CURRENT_PROFILE"'.replace("' .capability", "'.capability"),
+    'echo "expected-current capability-profile fence bypassed"',
+  );
+  if (!promotionErrors(staleProfileFenceBypass).some((error) => error.includes('capability-profile fence'))) {
+    throw new Error('mutation stale capability-profile fence bypass fixture unexpectedly passed');
+  }
+  const hardcodedDeployProfile = files.promotion.replace(
+    '--message "release_set=$RELEASE_SET_ID profile=$TARGET_PROFILE"',
+    '--message "release_set=$RELEASE_SET_ID profile=rehearsal-core-v2"',
+  );
+  if (!promotionErrors(hardcodedDeployProfile).some((error) => error.includes('protected mutation executor'))) {
+    throw new Error('hard-coded mutation target capability-profile fixture unexpectedly passed');
   }
   const deployToken = '          DEPLOY_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}';
   const earlyCredentialAnchor = '      - name: Set up pinned Node before deploy credential';
@@ -600,4 +661,4 @@ if (errors.length > 0) {
   process.exit(1);
 }
 if (process.argv.includes('--self-test')) selfTest(files);
-else console.log('AR-11 release operational authority passed: automatic read-only READY/BLOCKED terminalizes before authorization; mutation is READY-bound and re-fenced; promotion run surfaces are explicit; Camoufox PR replay is fail-closed and runtime-impact-aware.');
+else console.log('AR-11 release operational authority passed: automatic read-only READY/BLOCKED terminalizes before authorization; opsctl owns prerequisite admission selection; target capability profile is READY-bound through authorization/fence/effect/postverify; promotion run surfaces are explicit; Camoufox PR replay is fail-closed and runtime-impact-aware.');
