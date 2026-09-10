@@ -616,7 +616,7 @@ jobs:
           set -euo pipefail
           test "${{ steps.outcome.outcome }}" = "success"
           test "${{ steps.outcome_upload.outcome }}" = "success"
-          jq -e '.contract == "PROMOTION_OPERATOR_OUTCOME_V1" and (.status == "READ_ONLY_READY" or .status == "NOOP") and .authorization_state == "NOT_AUTHORIZED_READ_ONLY" and .provider_mutation_started == false and .provider_mutation_executed == false and .production_mutation_executed == false and .effect_state == "EXACT_NO_EFFECT"' "$RUNNER_TEMP/promotion-operational-outcome.json" >/dev/null
+          jq -e '.contract == "PROMOTION_OPERATOR_OUTCOME_V1" and (.status == "READ_ONLY_READY" or .status == "NOOP" or .status == "BLOCKED") and .authorization_state == "NOT_AUTHORIZED_READ_ONLY" and .provider_mutation_started == false and .provider_mutation_executed == false and .production_mutation_executed == false and .effect_state == "EXACT_NO_EFFECT"' "$RUNNER_TEMP/promotion-operational-outcome.json" >/dev/null
 
       - name: Remove raw provider material
         if: always()

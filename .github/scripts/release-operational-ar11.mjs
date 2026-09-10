@@ -12,6 +12,7 @@ const CAMOUFOX_SCOPE = 'scripts/classify-camoufox-runtime-scope.py';
 const AUTHORITY = 'architecture/release-architecture-ar11.json';
 const ASSET_MATERIALIZER = 'scripts/release-set-assets-ar11.sh';
 const EXPECTED_PROMOTION_RUN_NAME = "run-name: AR11 Release Set Promotion — ${{ github.event_name == 'workflow_run' && 'READ-ONLY PREFLIGHT' || github.event_name == 'workflow_dispatch' && 'MANUAL PROMOTION (AUTHORIZATION REQUIRED)' || 'INTERNAL ROLLBACK-NEGATIVE EVIDENCE' }}";
+const READ_ONLY_TERMINAL_DISPOSITION = '(.status == "READ_ONLY_READY" or .status == "NOOP" or .status == "BLOCKED")';
 const LEGACY_FILES = [
   '.github/workflows/mailbox-secret-resolver-promotion.yml',
   'scripts/mailbox-secret-resolver-promotion.py',
@@ -270,6 +271,7 @@ function promotionErrors(promotion) {
     'name: ar11-operational-outcome-${{ github.run_id }}-${{ github.run_attempt }}',
     'Enforce terminal AR11 disposition after evidence publication',
     '.contract == "PROMOTION_OPERATOR_OUTCOME_V1"',
+    READ_ONLY_TERMINAL_DISPOSITION,
     '.authorization_state == "NOT_AUTHORIZED_READ_ONLY"',
     '.provider_mutation_started == false',
     '.provider_mutation_executed == false',
@@ -282,6 +284,7 @@ function promotionErrors(promotion) {
     'WORKER_PROMOTION_AUTHORIZATION_',
     'AUTHORITY_COMMENT',
     '--message "release_set=',
+    '.status == "INFRASTRUCTURE_FAILURE"',
   ], 'pre-authorization READY proof'));
   errors.push(...secretObservationErrors(ready, 'pre-authorization READY proof'));
   const readOnlyTerminalize = ready.indexOf('Terminalize one lossless AR11 OperationalOutcome');
@@ -542,6 +545,11 @@ function selfTest(files) {
   if (!promotionErrors(missingReadOnlyPublication).some((error) => error.includes('pre-authorization READY proof'))) {
     throw new Error('missing read-only terminal publication fixture unexpectedly passed');
   }
+  const blockedTerminalDispositionRemoved = files.promotion.replace(' or .status == "BLOCKED"', '');
+  if (blockedTerminalDispositionRemoved === files.promotion) throw new Error('BLOCKED terminal disposition fixture setup failed');
+  if (!promotionErrors(blockedTerminalDispositionRemoved).some((error) => error.includes('pre-authorization READY proof'))) {
+    throw new Error('missing semantic BLOCKED terminal disposition fixture unexpectedly passed');
+  }
   const missingManualTerminalization = files.promotion.replace('Terminalize one lossless manual AR11 OperationalOutcome', 'Terminalization fixture removed');
   if (!promotionErrors(missingManualTerminalization).some((error) => error.includes('manual terminal outcome'))) {
     throw new Error('missing manual terminalization fixture unexpectedly passed');
@@ -592,4 +600,4 @@ if (errors.length > 0) {
   process.exit(1);
 }
 if (process.argv.includes('--self-test')) selfTest(files);
-else console.log('AR-11 release operational authority passed: automatic read-only READY terminalizes before authorization; mutation is READY-bound and re-fenced; promotion run surfaces are explicit; Camoufox PR replay is fail-closed and runtime-impact-aware.');
+else console.log('AR-11 release operational authority passed: automatic read-only READY/BLOCKED terminalizes before authorization; mutation is READY-bound and re-fenced; promotion run surfaces are explicit; Camoufox PR replay is fail-closed and runtime-impact-aware.');
