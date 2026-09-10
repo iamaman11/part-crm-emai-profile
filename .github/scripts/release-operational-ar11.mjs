@@ -270,6 +270,7 @@ function promotionErrors(promotion) {
     'Upload terminal AR11 OperationalOutcome evidence',
     'name: ar11-operational-outcome-${{ github.run_id }}-${{ github.run_attempt }}',
     'Enforce terminal AR11 disposition after evidence publication',
+    '.contract == "PROMOTION_OPERATOR_OUTCOME_V1"',
     READ_ONLY_TERMINAL_DISPOSITION,
     '.authorization_state == "NOT_AUTHORIZED_READ_ONLY"',
     '.provider_mutation_started == false',
