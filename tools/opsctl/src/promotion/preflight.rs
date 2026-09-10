@@ -722,7 +722,8 @@ mod tests {
     }
 
     #[test]
-    fn missing_resolver_schema_is_unknown_when_required() -> Result<(), Box<dyn std::error::Error>> {
+    fn missing_resolver_schema_is_unknown_when_required() -> Result<(), Box<dyn std::error::Error>>
+    {
         let known_good = release()?;
         let mut state = snapshot();
         state.resolver_schema_revision = None;
