@@ -355,21 +355,22 @@ jobs:
         id: policy
         run: |
           set -uo pipefail
-          echo "read_only_ready=false" >> "$GITHUB_OUTPUT"
-          echo "infra_boundary=" >> "$GITHUB_OUTPUT"
-          echo "target_profile=" >> "$GITHUB_OUTPUT"
-          echo "admission_mode=" >> "$GITHUB_OUTPUT"
+          exec 3>>"$GITHUB_OUTPUT"
+          echo "read_only_ready=false" >&3
+          echo "infra_boundary=" >&3
+          echo "target_profile=" >&3
+          echo "admission_mode=" >&3
 
           if ! cargo run --locked --quiet --manifest-path tools/opsctl/Cargo.toml -- \
             --root . d1 compatibility --component catalog \
             --ledger-json "$RUNNER_TEMP/catalog-ledger-before.json" \
             --release-manifest "$CONTROL_RELEASE_MANIFEST" \
             > "$RUNNER_TEMP/catalog-d1-compatibility.json"; then
-            echo "infra_boundary=D1_COMPATIBILITY" >> "$GITHUB_OUTPUT"
+            echo "infra_boundary=D1_COMPATIBILITY" >&3
             exit 0
           fi
           if ! jq -e '.schema_version == 1 and .command == "d1 compatibility" and .component == "catalog" and .mode == "read-only" and .mutation_executed == false and (.allowed | type == "boolean") and (.reason_codes | type == "array")' "$RUNNER_TEMP/catalog-d1-compatibility.json" >/dev/null; then
-            echo "infra_boundary=D1_COMPATIBILITY" >> "$GITHUB_OUTPUT"
+            echo "infra_boundary=D1_COMPATIBILITY" >&3
             exit 0
           fi
           if ! jq -e '.allowed == true' "$RUNNER_TEMP/catalog-d1-compatibility.json" >/dev/null; then
@@ -380,7 +381,7 @@ jobs:
             --release-set-id "$RELEASE_SET_ID" \
             --catalog-d1 "$RUNNER_TEMP/catalog-d1-compatibility.json" \
             --output "$RUNNER_TEMP/compatibility-evidence.json"; then
-            echo "infra_boundary=RELEASE_COMPATIBILITY_EVIDENCE" >> "$GITHUB_OUTPUT"
+            echo "infra_boundary=RELEASE_COMPATIBILITY_EVIDENCE" >&3
             exit 0
           fi
 
@@ -392,18 +393,18 @@ jobs:
             --expected-current "${{ steps.observe.outputs.current_id }}" \
             --current-release-set "$CURRENT_RELEASE_MANIFEST" \
             > "$RUNNER_TEMP/promotion-plan.json"; then
-            echo "infra_boundary=PROMOTION_PLAN" >> "$GITHUB_OUTPUT"
+            echo "infra_boundary=PROMOTION_PLAN" >&3
             exit 0
           fi
           if ! jq -e --arg requested "$TARGET_PROFILE" '.schema_version == 1 and .command == "promotion.plan" and (.decision == "PLAN" or .decision == "NO_CHANGE" or .decision == "BLOCKED") and .requested_target_capability_profile_id == $requested and (.target_capability_profile_id | type == "string" and length > 0) and (.admission_mode == "DIRECT" or .admission_mode == "PREREQUISITE_RELEASE_BRIDGE") and .execution_authorized == false and .mutation_executed == false and (.blockers | type == "array")' "$RUNNER_TEMP/promotion-plan.json" >/dev/null; then
-            echo "infra_boundary=PROMOTION_PLAN" >> "$GITHUB_OUTPUT"
+            echo "infra_boundary=PROMOTION_PLAN" >&3
             exit 0
           fi
           target_profile="$(jq -er '.target_capability_profile_id' "$RUNNER_TEMP/promotion-plan.json")"
           admission_mode="$(jq -er '.admission_mode' "$RUNNER_TEMP/promotion-plan.json")"
           [[ "$target_profile" =~ ^[a-z0-9][a-z0-9-]*$ ]]
-          echo "target_profile=$target_profile" >> "$GITHUB_OUTPUT"
-          echo "admission_mode=$admission_mode" >> "$GITHUB_OUTPUT"
+          echo "target_profile=$target_profile" >&3
+          echo "admission_mode=$admission_mode" >&3
 
           if ! cargo run --locked --quiet --manifest-path tools/opsctl/Cargo.toml -- \
             --root . release compatibility --release-set "$TARGET_RELEASE_MANIFEST" \
@@ -411,11 +412,11 @@ jobs:
             --evidence-json "$RUNNER_TEMP/compatibility-evidence.json" \
             --current-release-set "$CURRENT_RELEASE_MANIFEST" \
             > "$RUNNER_TEMP/release-compatibility.json"; then
-            echo "infra_boundary=RELEASE_COMPATIBILITY" >> "$GITHUB_OUTPUT"
+            echo "infra_boundary=RELEASE_COMPATIBILITY" >&3
             exit 0
           fi
           if ! jq -e '.schema_version == 2 and .command == "release.compatibility" and .mutation_executed == false and (.compatible | type == "boolean") and (.blockers | type == "array") and (.required_steps | type == "array")' "$RUNNER_TEMP/release-compatibility.json" >/dev/null; then
-            echo "infra_boundary=RELEASE_COMPATIBILITY" >> "$GITHUB_OUTPUT"
+            echo "infra_boundary=RELEASE_COMPATIBILITY" >&3
             exit 0
           fi
           if ! jq -e '.compatible == true' "$RUNNER_TEMP/release-compatibility.json" >/dev/null; then
@@ -434,19 +435,19 @@ jobs:
             --current-release-set "$CURRENT_RELEASE_MANIFEST" \
             --known-good-release-set "$CURRENT_RELEASE_MANIFEST" \
             > "$RUNNER_TEMP/promotion-preflight.json"; then
-            echo "infra_boundary=PROMOTION_PREFLIGHT" >> "$GITHUB_OUTPUT"
+            echo "infra_boundary=PROMOTION_PREFLIGHT" >&3
             exit 0
           fi
           if ! jq -e --arg requested "$TARGET_PROFILE" --arg effective "$target_profile" --arg mode "$admission_mode" '.schema_version == 1 and .command == "promotion.preflight" and .requested_target_capability_profile_id == $requested and .target_capability_profile_id == $effective and .admission_mode == $mode and (.ready | type == "boolean") and (.decision == "READY" or .decision == "BLOCKED") and .credential_values_accessed == false and .provider_mutation_executed == false and .mutation_executed == false and (.blockers | type == "array") and (.required_steps | type == "array")' "$RUNNER_TEMP/promotion-preflight.json" >/dev/null; then
-            echo "infra_boundary=PROMOTION_PREFLIGHT" >> "$GITHUB_OUTPUT"
+            echo "infra_boundary=PROMOTION_PREFLIGHT" >&3
             exit 0
           fi
           if ! jq -e '.ready == true and .decision == "READY"' "$RUNNER_TEMP/promotion-preflight.json" >/dev/null; then
             exit 0
           fi
           promotion_id="$(jq -er '.promotion_id' "$RUNNER_TEMP/promotion-preflight.json")"
-          echo "promotion_id=$promotion_id" >> "$GITHUB_OUTPUT"
-          echo "read_only_ready=true" >> "$GITHUB_OUTPUT"
+          echo "promotion_id=$promotion_id" >&3
+          echo "read_only_ready=true" >&3
 
       - name: Prove bounded Worker and D1 quiescence
         id: quiescence
@@ -783,9 +784,11 @@ jobs:
           promotion_id="$(jq -er '.promotion_id' "$ready_root/ready-to-mutate.json")"
           target_profile="$(jq -er '.target_capability_profile_id' "$ready_root/ready-to-mutate.json")"
           expected_current_profile="$(jq -er '.expected_current_capability_profile_id' "$ready_root/ready-to-mutate.json")"
-          echo "promotion_id=$promotion_id" >> "$GITHUB_OUTPUT"
-          echo "target_profile=$target_profile" >> "$GITHUB_OUTPUT"
-          echo "expected_current_profile=$expected_current_profile" >> "$GITHUB_OUTPUT"
+          {
+            echo "promotion_id=$promotion_id"
+            echo "target_profile=$target_profile"
+            echo "expected_current_profile=$expected_current_profile"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Checkout exact current protected-main source
         id: source_checkout
