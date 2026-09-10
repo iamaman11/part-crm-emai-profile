@@ -448,9 +448,7 @@ jobs:
             -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
             "https://api.cloudflare.com/client/v4/accounts/$account_id/workers/scripts/$worker_name/deployments")"
           test "$http_code" = 200
-          jq '.result.deployments[0]' "$RUNNER_TEMP/deployment-after.json" > "$RUNNER_TEMP/deployment-after.json.tmp" 2>/dev/null || true
           jq '.result.deployments[0]' "$RUNNER_TEMP/deployments-after-api.json" > "$RUNNER_TEMP/deployment-after.json"
-          rm -f "$RUNNER_TEMP/deployment-after.json.tmp"
           python scripts/deployment-identity-ar11.py --status "$RUNNER_TEMP/deployment-after.json" --output "$RUNNER_TEMP/identity-after.json"
           jq -S '{release_set_id,capability_profile_id}' "$RUNNER_TEMP/identity-after.json" > "$RUNNER_TEMP/worker-binding-after.json"
           cmp --silent "$RUNNER_TEMP/worker-binding-before.json" "$RUNNER_TEMP/worker-binding-after.json"
