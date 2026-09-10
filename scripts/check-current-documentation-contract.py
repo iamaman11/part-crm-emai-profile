@@ -157,10 +157,11 @@ def read(root: Path, relative: Path, errors: list[str]) -> str:
 
 
 def require_markers(relative: Path, text: str, markers: tuple[str, ...]) -> list[str]:
+    normalized_text = " ".join(text.split())
     return [
         f"{relative} is missing required authority marker: {marker}"
         for marker in markers
-        if marker not in text
+        if " ".join(marker.split()) not in normalized_text
     ]
 
 
