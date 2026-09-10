@@ -27,6 +27,104 @@ pub struct PreflightRequest<'a> {
     pub expected_current_release_set_id: Option<&'a str>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RollbackDecision {
+    Compatible,
+    Incompatible,
+    Unknown,
+    NotApplicable,
+}
+
+impl RollbackDecision {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Compatible => "COMPATIBLE",
+            Self::Incompatible => "INCOMPATIBLE",
+            Self::Unknown => "UNKNOWN",
+            Self::NotApplicable => "NOT_APPLICABLE",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RollbackDiagnostic {
+    pub decision: RollbackDecision,
+    pub reason_code: String,
+    pub summary: String,
+    pub remediation: String,
+}
+
+impl RollbackDiagnostic {
+    fn new(
+        decision: RollbackDecision,
+        reason_code: impl Into<String>,
+        summary: impl Into<String>,
+        remediation: impl Into<String>,
+    ) -> Self {
+        Self {
+            decision,
+            reason_code: reason_code.into(),
+            summary: summary.into(),
+            remediation: remediation.into(),
+        }
+    }
+
+    fn compatible() -> Self {
+        Self::new(
+            RollbackDecision::Compatible,
+            "ROLLBACK_COMPATIBLE",
+            "rollback Release Set is compatible with the observed deployment state",
+            "NONE",
+        )
+    }
+
+    fn incompatible(
+        reason_code: impl Into<String>,
+        summary: impl Into<String>,
+        remediation: impl Into<String>,
+    ) -> Self {
+        Self::new(
+            RollbackDecision::Incompatible,
+            reason_code,
+            summary,
+            remediation,
+        )
+    }
+
+    fn unknown(
+        reason_code: impl Into<String>,
+        summary: impl Into<String>,
+        remediation: impl Into<String>,
+    ) -> Self {
+        Self::new(
+            RollbackDecision::Unknown,
+            reason_code,
+            summary,
+            remediation,
+        )
+    }
+
+    fn not_applicable() -> Self {
+        Self::new(
+            RollbackDecision::NotApplicable,
+            "NO_PREVIOUS_RELEASE_SET",
+            "fresh environment has no previous Release Set; rollback compatibility is not applicable",
+            "NONE",
+        )
+    }
+
+    #[must_use]
+    pub fn machine_json(&self) -> Value {
+        json!({
+            "decision": self.decision.as_str(),
+            "reason_code": self.reason_code,
+            "summary": self.summary,
+            "remediation": self.remediation
+        })
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct PreflightResult {
     pub ready: bool,
@@ -35,6 +133,7 @@ pub struct PreflightResult {
     pub warnings: Vec<String>,
     pub required_steps: Vec<String>,
     pub rollback_compatibility: String,
+    pub rollback_diagnostic: RollbackDiagnostic,
 }
 
 impl PreflightResult {
@@ -55,6 +154,7 @@ impl PreflightResult {
             "target_release_set_id": target_release_set_id,
             "target_capability_profile_id": target_profile_id,
             "rollback_compatibility": self.rollback_compatibility,
+            "rollback_diagnostic": self.rollback_diagnostic.machine_json(),
             "blockers": self.blockers,
             "warnings": self.warnings,
             "required_steps": self.required_steps,
@@ -138,35 +238,45 @@ fn preflight_from_plan(
         ));
     }
 
-    let rollback_compatibility = if request.snapshot.release_set_id.is_some() {
+    let rollback_diagnostic = if request.snapshot.release_set_id.is_some() {
         match (request.current_release, request.known_good_release) {
             (Some(_), Some(known_good)) => {
-                let result = evaluate_rollback_candidate(
+                let diagnostic = evaluate_rollback_candidate_diagnostic(
                     known_good,
                     request.snapshot,
                     request.target_profile_id,
                     plan.closure.required_resources.contains("resolver_d1"),
                     request.environment == "production",
                 );
-                match result {
-                    CompatibilityDecision::Compatible => "COMPATIBLE".to_owned(),
-                    CompatibilityDecision::Incompatible => {
+                match diagnostic.decision {
+                    RollbackDecision::Compatible => {}
+                    RollbackDecision::Incompatible => {
                         blockers.push("ROLLBACK_INCOMPATIBLE".to_owned());
-                        "INCOMPATIBLE".to_owned()
                     }
-                    CompatibilityDecision::Unknown => {
+                    RollbackDecision::Unknown => {
                         blockers.push("ROLLBACK_COMPATIBILITY_UNKNOWN".to_owned());
-                        "UNKNOWN".to_owned()
                     }
+                    RollbackDecision::NotApplicable => unreachable!(
+                        "rollback candidate evaluation is only called for an existing deployment"
+                    ),
                 }
+                diagnostic
             }
             (None, _) => {
                 blockers.push("PROVIDER_STATE_UNKNOWN".to_owned());
-                "UNKNOWN".to_owned()
+                RollbackDiagnostic::unknown(
+                    "CURRENT_RELEASE_OBSERVATION_MISSING",
+                    "the current deployed Release Set could not be resolved from provider observation",
+                    "collect a fresh provider deployment observation that resolves the current Release Set before promotion",
+                )
             }
             (_, None) => {
                 blockers.push("ROLLBACK_CANDIDATE_UNAVAILABLE".to_owned());
-                "UNKNOWN".to_owned()
+                RollbackDiagnostic::unknown(
+                    "ROLLBACK_CANDIDATE_UNAVAILABLE",
+                    "no immutable verified known-good Release Set is available for rollback evaluation",
+                    "resolve an immutable verified known-good Release Set before promotion",
+                )
             }
         }
     } else {
@@ -174,8 +284,9 @@ fn preflight_from_plan(
             "fresh environment has no previous Release Set; rollback artifact is not applicable"
                 .to_owned(),
         );
-        "NOT_APPLICABLE".to_owned()
+        RollbackDiagnostic::not_applicable()
     };
+    let rollback_compatibility = rollback_diagnostic.decision.as_str().to_owned();
 
     if request.snapshot.catalog_ledger_sha256.is_none()
         || request.snapshot.catalog_schema_revision.is_none()
@@ -213,6 +324,7 @@ fn preflight_from_plan(
         warnings,
         required_steps,
         rollback_compatibility,
+        rollback_diagnostic,
     })
 }
 
@@ -220,6 +332,198 @@ fn preflight_from_plan(
 /// actually observed current deployment state. Missing required observation is UNKNOWN
 /// and therefore blocks mutation. Exact equality is intentionally strict for protocol and
 /// runtime dimensions until an explicit compatibility window is owned by a later authority.
+fn evaluate_rollback_candidate_diagnostic(
+    known_good: &LoadedReleaseSet,
+    snapshot: &DeploymentSnapshot,
+    profile_id: &str,
+    resolver_required: bool,
+    windows_delivery_required: bool,
+) -> RollbackDiagnostic {
+    let known_good = known_good.semantic();
+    if !known_good
+        .capability_profile_compatibility
+        .iter()
+        .any(|value| value == profile_id)
+    {
+        return RollbackDiagnostic::incompatible(
+            "TARGET_PROFILE_UNSUPPORTED",
+            format!("rollback Release Set does not support target capability profile {profile_id}"),
+            "select a verified rollback Release Set that supports the target capability profile",
+        );
+    }
+
+    let Some(catalog_revision) = snapshot.catalog_schema_revision.as_deref() else {
+        return RollbackDiagnostic::unknown(
+            "CATALOG_SCHEMA_OBSERVATION_MISSING",
+            "Catalog D1 schema revision is missing from the provider observation",
+            "collect the current Catalog D1 schema revision before promotion",
+        );
+    };
+    if !known_good.schemas.catalog.supports(catalog_revision) {
+        return RollbackDiagnostic::incompatible(
+            "CATALOG_SCHEMA_UNSUPPORTED",
+            format!(
+                "rollback Release Set does not support observed Catalog D1 schema revision {catalog_revision}"
+            ),
+            "select a verified rollback Release Set that supports the observed Catalog D1 schema revision, or use the authorized schema recovery procedure before promotion",
+        );
+    }
+
+    if resolver_required {
+        let Some(resolver_revision) = snapshot.resolver_schema_revision.as_deref() else {
+            return RollbackDiagnostic::unknown(
+                "RESOLVER_SCHEMA_OBSERVATION_MISSING",
+                "Resolver D1 schema revision is missing from the provider observation",
+                "collect the current Resolver D1 schema revision before promotion",
+            );
+        };
+        if !known_good.schemas.resolver.supports(resolver_revision) {
+            return RollbackDiagnostic::incompatible(
+                "RESOLVER_SCHEMA_UNSUPPORTED",
+                format!(
+                    "rollback Release Set does not support observed Resolver D1 schema revision {resolver_revision}"
+                ),
+                "select a verified rollback Release Set that supports the observed Resolver D1 schema revision, or use the authorized schema recovery procedure before promotion",
+            );
+        }
+        let Some(resolver_protocol) = snapshot.resolver_protocol.as_deref() else {
+            return RollbackDiagnostic::unknown(
+                "RESOLVER_PROTOCOL_OBSERVATION_MISSING",
+                "Resolver protocol identity is missing from the provider observation",
+                "collect the current Resolver protocol identity before promotion",
+            );
+        };
+        if known_good.protocols.resolver_protocol != resolver_protocol {
+            return RollbackDiagnostic::incompatible(
+                "RESOLVER_PROTOCOL_MISMATCH",
+                format!(
+                    "rollback Release Set requires Resolver protocol {} but provider observation reports {resolver_protocol}",
+                    known_good.protocols.resolver_protocol
+                ),
+                "select a rollback Release Set matching the observed Resolver protocol or restore the compatible protocol through its authorized owner before promotion",
+            );
+        }
+    }
+
+    let Some(contracts_sha256) = snapshot.contracts_sha256.as_deref() else {
+        return RollbackDiagnostic::unknown(
+            "CONTRACTS_OBSERVATION_MISSING",
+            "deployed contract digest is missing from the provider observation",
+            "collect the deployed contract digest before promotion",
+        );
+    };
+    if known_good.contracts.sha256 != contracts_sha256 {
+        return RollbackDiagnostic::incompatible(
+            "CONTRACTS_MISMATCH",
+            format!(
+                "rollback Release Set contract digest {} does not match observed deployed contract digest {contracts_sha256}",
+                known_good.contracts.sha256
+            ),
+            "select a rollback Release Set matching the observed contracts or restore compatible contracts through their authorized owner before promotion",
+        );
+    }
+
+    let Some(camouhost_ipc_version) = snapshot.camouhost_ipc_version else {
+        return RollbackDiagnostic::unknown(
+            "CAMOUHOST_IPC_OBSERVATION_MISSING",
+            "Camouhost IPC version is missing from the provider observation",
+            "collect the deployed Camouhost IPC version before promotion",
+        );
+    };
+    if known_good.protocols.camouhost_ipc_version != camouhost_ipc_version {
+        return RollbackDiagnostic::incompatible(
+            "CAMOUHOST_IPC_MISMATCH",
+            format!(
+                "rollback Release Set requires Camouhost IPC version {} but provider observation reports {camouhost_ipc_version}",
+                known_good.protocols.camouhost_ipc_version
+            ),
+            "select a rollback Release Set matching the observed Camouhost IPC version or restore the compatible runtime through its authorized owner before promotion",
+        );
+    }
+
+    let Some(profile_bridge_protocol_version) = snapshot.profile_bridge_protocol_version else {
+        return RollbackDiagnostic::unknown(
+            "PROFILE_BRIDGE_PROTOCOL_OBSERVATION_MISSING",
+            "Profile Bridge protocol version is missing from the provider observation",
+            "collect the deployed Profile Bridge protocol version before promotion",
+        );
+    };
+    if known_good.protocols.profile_bridge_protocol_version != profile_bridge_protocol_version {
+        return RollbackDiagnostic::incompatible(
+            "PROFILE_BRIDGE_PROTOCOL_MISMATCH",
+            format!(
+                "rollback Release Set requires Profile Bridge protocol version {} but provider observation reports {profile_bridge_protocol_version}",
+                known_good.protocols.profile_bridge_protocol_version
+            ),
+            "select a rollback Release Set matching the observed Profile Bridge protocol version or restore the compatible runtime through its authorized owner before promotion",
+        );
+    }
+
+    let Some(runtime_role) = snapshot.runtime_role.as_deref() else {
+        return RollbackDiagnostic::unknown(
+            "RUNTIME_ROLE_OBSERVATION_MISSING",
+            "runtime role is missing from the provider observation",
+            "collect the deployed runtime role before promotion",
+        );
+    };
+    if known_good.runtime_compatibility.runtime_role != runtime_role {
+        return RollbackDiagnostic::incompatible(
+            "RUNTIME_ROLE_MISMATCH",
+            format!(
+                "rollback Release Set requires runtime role {} but provider observation reports {runtime_role}",
+                known_good.runtime_compatibility.runtime_role
+            ),
+            "select a rollback Release Set matching the observed runtime role or restore the compatible runtime through its authorized owner before promotion",
+        );
+    }
+
+    let Some(profile_format) = snapshot.profile_format.as_deref() else {
+        return RollbackDiagnostic::unknown(
+            "PROFILE_FORMAT_OBSERVATION_MISSING",
+            "profile format is missing from the provider observation",
+            "collect the deployed profile format before promotion",
+        );
+    };
+    if known_good.runtime_compatibility.profile_format != profile_format {
+        return RollbackDiagnostic::incompatible(
+            "PROFILE_FORMAT_MISMATCH",
+            format!(
+                "rollback Release Set requires profile format {} but provider observation reports {profile_format}",
+                known_good.runtime_compatibility.profile_format
+            ),
+            "select a rollback Release Set matching the observed profile format or restore a compatible format through its authorized owner before promotion",
+        );
+    }
+
+    let Some(browser_identity_policy) = snapshot.browser_identity_policy.as_deref() else {
+        return RollbackDiagnostic::unknown(
+            "BROWSER_IDENTITY_POLICY_OBSERVATION_MISSING",
+            "browser identity policy is missing from the provider observation",
+            "collect the deployed browser identity policy before promotion",
+        );
+    };
+    if known_good.runtime_compatibility.browser_identity_policy != browser_identity_policy {
+        return RollbackDiagnostic::incompatible(
+            "BROWSER_IDENTITY_POLICY_MISMATCH",
+            format!(
+                "rollback Release Set requires browser identity policy {} but provider observation reports {browser_identity_policy}",
+                known_good.runtime_compatibility.browser_identity_policy
+            ),
+            "select a rollback Release Set matching the observed browser identity policy or restore the compatible policy through its authorized owner before promotion",
+        );
+    }
+
+    if windows_delivery_required {
+        return RollbackDiagnostic::unknown(
+            "WINDOWS_DELIVERY_COMPATIBILITY_UNKNOWN",
+            "rollback Windows delivery compatibility is not proven for this production closure",
+            "provide authoritative Windows delivery compatibility evidence before relying on this rollback candidate",
+        );
+    }
+
+    RollbackDiagnostic::compatible()
+}
+
 fn evaluate_rollback_candidate(
     known_good: &LoadedReleaseSet,
     snapshot: &DeploymentSnapshot,
@@ -227,71 +531,22 @@ fn evaluate_rollback_candidate(
     resolver_required: bool,
     windows_delivery_required: bool,
 ) -> CompatibilityDecision {
-    let known_good = known_good.semantic();
-    if !known_good
-        .capability_profile_compatibility
-        .iter()
-        .any(|value| value == profile_id)
-    {
-        return CompatibilityDecision::Incompatible;
-    }
-
-    let Some(catalog_revision) = snapshot.catalog_schema_revision.as_deref() else {
-        return CompatibilityDecision::Unknown;
-    };
-    if !known_good.schemas.catalog.supports(catalog_revision) {
-        return CompatibilityDecision::Incompatible;
-    }
-
-    if resolver_required {
-        let Some(resolver_revision) = snapshot.resolver_schema_revision.as_deref() else {
-            return CompatibilityDecision::Unknown;
-        };
-        if !known_good.schemas.resolver.supports(resolver_revision) {
-            return CompatibilityDecision::Incompatible;
-        }
-        let Some(resolver_protocol) = snapshot.resolver_protocol.as_deref() else {
-            return CompatibilityDecision::Unknown;
-        };
-        if known_good.protocols.resolver_protocol != resolver_protocol {
-            return CompatibilityDecision::Incompatible;
-        }
-    }
-
-    let (
-        Some(contracts_sha256),
-        Some(camouhost_ipc_version),
-        Some(profile_bridge_protocol_version),
-        Some(runtime_role),
-        Some(profile_format),
-        Some(browser_identity_policy),
-    ) = (
-        snapshot.contracts_sha256.as_deref(),
-        snapshot.camouhost_ipc_version,
-        snapshot.profile_bridge_protocol_version,
-        snapshot.runtime_role.as_deref(),
-        snapshot.profile_format.as_deref(),
-        snapshot.browser_identity_policy.as_deref(),
+    match evaluate_rollback_candidate_diagnostic(
+        known_good,
+        snapshot,
+        profile_id,
+        resolver_required,
+        windows_delivery_required,
     )
-    else {
-        return CompatibilityDecision::Unknown;
-    };
-
-    if known_good.contracts.sha256 != contracts_sha256
-        || known_good.protocols.camouhost_ipc_version != camouhost_ipc_version
-        || known_good.protocols.profile_bridge_protocol_version != profile_bridge_protocol_version
-        || known_good.runtime_compatibility.runtime_role != runtime_role
-        || known_good.runtime_compatibility.profile_format != profile_format
-        || known_good.runtime_compatibility.browser_identity_policy != browser_identity_policy
+    .decision
     {
-        return CompatibilityDecision::Incompatible;
+        RollbackDecision::Compatible => CompatibilityDecision::Compatible,
+        RollbackDecision::Incompatible => CompatibilityDecision::Incompatible,
+        RollbackDecision::Unknown => CompatibilityDecision::Unknown,
+        RollbackDecision::NotApplicable => unreachable!(
+            "rollback candidate evaluation cannot return NOT_APPLICABLE for an explicit candidate"
+        ),
     }
-
-    if windows_delivery_required {
-        return CompatibilityDecision::Unknown;
-    }
-
-    CompatibilityDecision::Compatible
 }
 
 fn difference(left: &BTreeSet<String>, right: &BTreeSet<String>) -> Vec<String> {
@@ -300,7 +555,10 @@ fn difference(left: &BTreeSet<String>, right: &BTreeSet<String>) -> Vec<String> 
 
 #[cfg(test)]
 mod tests {
-    use super::evaluate_rollback_candidate;
+    use super::{
+        PreflightResult, RollbackDiagnostic, evaluate_rollback_candidate,
+        evaluate_rollback_candidate_diagnostic,
+    };
     use crate::promotion::snapshot::DeploymentSnapshot;
     use crate::release::digest::{canonical_json, sha256_hex};
     use crate::release::document::LoadedReleaseSet;
@@ -309,7 +567,7 @@ mod tests {
     use std::collections::BTreeSet;
 
     const SHA: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
-    const GIT: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    const GIT: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     const REPO: &str = "iamaman11/part-crm-emai-profile";
     const HISTORICAL_PREFIX: &str = "release-set-v2-sha256-";
 
@@ -391,6 +649,22 @@ mod tests {
     }
 
     #[test]
+    fn compatible_diagnostic_is_exact() -> Result<(), Box<dyn std::error::Error>> {
+        let known_good = release()?;
+        let diagnostic = evaluate_rollback_candidate_diagnostic(
+            &known_good,
+            &snapshot(),
+            "rehearsal-core-v1",
+            true,
+            false,
+        );
+        assert_eq!(diagnostic.decision.as_str(), "COMPATIBLE");
+        assert_eq!(diagnostic.reason_code, "ROLLBACK_COMPATIBLE");
+        assert_eq!(diagnostic.remediation, "NONE");
+        Ok(())
+    }
+
+    #[test]
     fn unsupported_catalog_schema_is_incompatible() -> Result<(), Box<dyn std::error::Error>> {
         let known_good = release()?;
         let mut state = snapshot();
@@ -399,6 +673,16 @@ mod tests {
             evaluate_rollback_candidate(&known_good, &state, "rehearsal-core-v1", false, false),
             CompatibilityDecision::Incompatible
         );
+        let diagnostic = evaluate_rollback_candidate_diagnostic(
+            &known_good,
+            &state,
+            "rehearsal-core-v1",
+            false,
+            false,
+        );
+        assert_eq!(diagnostic.reason_code, "CATALOG_SCHEMA_UNSUPPORTED");
+        assert!(diagnostic.summary.contains("9999_future.sql"));
+        assert!(diagnostic.remediation.contains("Catalog D1 schema revision"));
         Ok(())
     }
 
@@ -411,6 +695,15 @@ mod tests {
             evaluate_rollback_candidate(&known_good, &state, "rehearsal-core-v1", false, false),
             CompatibilityDecision::Unknown
         );
+        let diagnostic = evaluate_rollback_candidate_diagnostic(
+            &known_good,
+            &state,
+            "rehearsal-core-v1",
+            false,
+            false,
+        );
+        assert_eq!(diagnostic.reason_code, "CATALOG_SCHEMA_OBSERVATION_MISSING");
+        assert!(diagnostic.remediation.contains("collect"));
         Ok(())
     }
 
@@ -531,6 +824,16 @@ mod tests {
             evaluate_rollback_candidate(&known_good, &snapshot(), "unknown-profile", false, false),
             CompatibilityDecision::Incompatible
         );
+        let diagnostic = evaluate_rollback_candidate_diagnostic(
+            &known_good,
+            &snapshot(),
+            "unknown-profile",
+            false,
+            false,
+        );
+        assert_eq!(diagnostic.reason_code, "TARGET_PROFILE_UNSUPPORTED");
+        assert!(diagnostic.summary.contains("unknown-profile"));
+        assert!(diagnostic.remediation.contains("target capability profile"));
         Ok(())
     }
 
@@ -553,6 +856,46 @@ mod tests {
             evaluate_rollback_candidate(&known_good, &snapshot(), "rehearsal-core-v1", false, true),
             CompatibilityDecision::Unknown
         );
+        let diagnostic = evaluate_rollback_candidate_diagnostic(
+            &known_good,
+            &snapshot(),
+            "rehearsal-core-v1",
+            false,
+            true,
+        );
+        assert_eq!(
+            diagnostic.reason_code,
+            "WINDOWS_DELIVERY_COMPATIBILITY_UNKNOWN"
+        );
+        assert!(diagnostic.remediation.contains("Windows delivery"));
         Ok(())
+    }
+
+    #[test]
+    fn preflight_machine_json_emits_owner_rollback_diagnostic() {
+        let result = PreflightResult {
+            ready: false,
+            promotion_id: "promotion-test".to_owned(),
+            blockers: vec!["ROLLBACK_INCOMPATIBLE".to_owned()],
+            warnings: Vec::new(),
+            required_steps: Vec::new(),
+            rollback_compatibility: "INCOMPATIBLE".to_owned(),
+            rollback_diagnostic: RollbackDiagnostic::incompatible(
+                "CATALOG_SCHEMA_UNSUPPORTED",
+                "rollback cannot run against the observed Catalog schema",
+                "select a compatible rollback Release Set",
+            ),
+        };
+        let machine = result.machine_json("release-set-test", "profile-test", "staging");
+        assert_eq!(machine["rollback_compatibility"], "INCOMPATIBLE");
+        assert_eq!(machine["rollback_diagnostic"]["decision"], "INCOMPATIBLE");
+        assert_eq!(
+            machine["rollback_diagnostic"]["reason_code"],
+            "CATALOG_SCHEMA_UNSUPPORTED"
+        );
+        assert_eq!(
+            machine["rollback_diagnostic"]["remediation"],
+            "select a compatible rollback Release Set"
+        );
     }
 }
