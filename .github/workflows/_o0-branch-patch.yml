@@ -27,6 +27,33 @@ jobs:
           set -euo pipefail
           python scripts/_o0_apply_manual_ar11_patch.py
           sed -i '/assert!(workflow.contains("RECOVERY_REQUIRED"));/d' tools/opsctl/tests/o0_ar11_operational_outcome.rs
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('.github/scripts/release-operational-ar11.mjs')
+          text = path.read_text(encoding='utf-8')
+          def once(old, new, label):
+              global text
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f'{label}: expected one anchor, observed {count}')
+              text = text.replace(old, new, 1)
+          once(
+              "  const post = jobBlock(promotion, 'post-verify');\n  const rollback = jobBlock(promotion, 'rollback-negative-evidence');\n  for (const [name, block] of Object.entries({ route, 'resolve-preflight': resolvePreflight, 'preflight-ready': ready, 'resolve-verify': resolveAuthorized, mutate, 'post-verify': post, 'rollback-negative-evidence': rollback })) {",
+              "  const post = jobBlock(promotion, 'post-verify');\n  const manualOutcome = jobBlock(promotion, 'manual-outcome');\n  const rollback = jobBlock(promotion, 'rollback-negative-evidence');\n  for (const [name, block] of Object.entries({ route, 'resolve-preflight': resolvePreflight, 'preflight-ready': ready, 'resolve-verify': resolveAuthorized, mutate, 'post-verify': post, 'manual-outcome': manualOutcome, 'rollback-negative-evidence': rollback })) {",
+              'manual structural job',
+          )
+          once(
+              "  errors.push(...requireMarkers(post, [\n    'secrets.CLOUDFLARE_OBSERVE_API_TOKEN',\n    'Re-observe provider and verify exact convergence',\n    'promotion verify',\n    '.verified == true',\n  ], 'post-deploy verifier'));\n  errors.push(...forbidMarkers(post, ['secrets.CLOUDFLARE_API_TOKEN }}', 'wrangler deploy --'], 'post-deploy verifier'));\n  errors.push(...secretObservationErrors(post, 'post-deploy verifier'));\n",
+              "  errors.push(...requireMarkers(post, [\n    'secrets.CLOUDFLARE_OBSERVE_API_TOKEN',\n    'Re-observe provider and capture promotion.verify natural-owner verdict',\n    'promotion verify',\n    '> \"$RUNNER_TEMP/promotion-verify.json\"',\n    'decision=\"$(jq -er \\'.decision\\' \"$RUNNER_TEMP/promotion-verify.json\")\"',\n    \"if: steps.observe_verify.outputs.decision == 'VERIFIED'\",\n  ], 'post-deploy verifier'));\n  errors.push(...forbidMarkers(post, ['secrets.CLOUDFLARE_API_TOKEN }}', 'wrangler deploy --'], 'post-deploy verifier'));\n  errors.push(...secretObservationErrors(post, 'post-deploy verifier'));\n\n  errors.push(...requireMarkers(manualOutcome, [\n    \"if: always() && needs.route.outputs.mode == 'promote'\",\n    'Terminalize one lossless manual AR11 OperationalOutcome',\n    '--mode manual',\n    'Upload terminal manual AR11 OperationalOutcome evidence',\n    'Enforce terminal manual AR11 disposition after evidence publication',\n    '.contract == \"PROMOTION_OPERATOR_OUTCOME_V1\"',\n    '.procedure == \"AR11_RELEASE_SET_PROMOTION\"',\n    '.status == \"COMPLETED\"',\n    '.provider_mutation_started == true',\n    '.provider_mutation_executed == true',\n    '.production_mutation_executed == false',\n    '.effect_state == \"EFFECT_VERIFIED\"',\n  ], 'manual terminal outcome'));\n  errors.push(...forbidMarkers(manualOutcome, ['secrets.CLOUDFLARE_', 'wrangler deploy --', 'environment: production'], 'manual terminal outcome'));\n  const manualTerminalize = manualOutcome.indexOf('Terminalize one lossless manual AR11 OperationalOutcome');\n  const manualUpload = manualOutcome.indexOf('Upload terminal manual AR11 OperationalOutcome evidence');\n  const manualEnforce = manualOutcome.indexOf('Enforce terminal manual AR11 disposition after evidence publication');\n  if (!(manualTerminalize >= 0 && manualUpload > manualTerminalize && manualEnforce > manualUpload)) {\n    errors.push('manual AR11 must terminalize -> publish evidence -> enforce final disposition');\n  }\n",
+              'post verifier semantic gate',
+          )
+          once(
+              "  const legacyFixture = legacyAuthorityErrors((candidate) => candidate.endsWith(LEGACY_FILES[0]));",
+              "  const missingManualTerminalization = files.promotion.replace('Terminalize one lossless manual AR11 OperationalOutcome', 'Terminalization fixture removed');\n  if (!promotionErrors(missingManualTerminalization).some((error) => error.includes('manual terminal outcome'))) {\n    throw new Error('missing manual terminalization fixture unexpectedly passed');\n  }\n  const weakManualSuccess = files.promotion.replace('.status == \"COMPLETED\"', '.status == \"RECOVERY_REQUIRED\"');\n  if (!promotionErrors(weakManualSuccess).some((error) => error.includes('manual terminal outcome'))) {\n    throw new Error('manual success-without-COMPLETED fixture unexpectedly passed');\n  }\n  const legacyFixture = legacyAuthorityErrors((candidate) => candidate.endsWith(LEGACY_FILES[0]));",
+              'manual terminal negative fixtures',
+          )
+          path.write_text(text, encoding='utf-8')
+          PY
 
       - name: Verify transport fixtures and successor invariants before commit
         run: |
@@ -35,6 +62,8 @@ jobs:
           python -m py_compile scripts/promotion-operational-outcome-ar11.py
           python scripts/promotion-operational-outcome-ar11.py --self-test
           cargo test --locked --manifest-path tools/opsctl/Cargo.toml --test o0_ar11_operational_outcome
+          node .github/scripts/release-operational-ar11.mjs --self-test
+          node .github/scripts/release-operational-ar11.mjs
           node .github/scripts/ar8-d-secret-transport-successor.mjs --self-test
           node .github/scripts/ar8-d-secret-transport-successor.mjs
           test ! -e scripts/_o0_apply_manual_ar11_patch.py
