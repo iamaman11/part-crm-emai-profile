@@ -7,14 +7,17 @@ fn repository_root() -> PathBuf {
 }
 
 #[test]
-fn ar11_operational_outcome_fixture_matrix_is_credential_free_and_zero_effect() -> Result<(), String> {
+fn ar11_operational_outcome_fixture_matrix_is_credential_free_and_zero_effect() -> Result<(), String>
+{
     let root = repository_root();
     let python = if cfg!(windows) { "python" } else { "python3" };
     let output = Command::new(python)
         .arg(root.join("scripts/promotion-operational-outcome-ar11.py"))
         .arg("--self-test")
         .output()
-        .map_err(|error| format!("python runtime must be available for repository fixture proof: {error}"))?;
+        .map_err(|error| {
+            format!("python runtime must be available for repository fixture proof: {error}")
+        })?;
     if !output.status.success() {
         return Err(format!(
             "OperationalOutcome fixture matrix failed:\nstdout={}\nstderr={}",
@@ -30,7 +33,8 @@ fn ar11_operational_outcome_fixture_matrix_is_credential_free_and_zero_effect() 
 }
 
 #[test]
-fn ar11_workflow_terminalizes_after_owner_capture_and_before_final_assertion() -> Result<(), String> {
+fn ar11_workflow_terminalizes_after_owner_capture_and_before_final_assertion() -> Result<(), String>
+{
     let root = repository_root();
     let workflow = fs::read_to_string(root.join(".github/workflows/release-set-promotion.yml"))
         .map_err(|error| format!("release-set-promotion workflow must exist: {error}"))?;
