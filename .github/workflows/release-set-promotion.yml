@@ -186,6 +186,7 @@ jobs:
           persist-credentials: false
 
       - name: Set up pinned Node runtime for read-only provider observation
+        id: node_runtime
         uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
         with:
           node-version: '24.19.0'
@@ -537,6 +538,8 @@ jobs:
             failed_boundary="OBSERVATION_AUTHORITY"
           elif [ "${{ steps.source_checkout.outcome }}" = "failure" ]; then
             failed_boundary="SOURCE_CHECKOUT"
+          elif [ "${{ steps.node_runtime.outcome }}" = "failure" ]; then
+            failed_boundary="NODE_RUNTIME_SETUP"
           elif [ "${{ steps.materialize.outcome }}" = "failure" ]; then
             failed_boundary="TARGET_MATERIALIZATION"
           elif [ "${{ steps.observe.outcome }}" = "failure" ]; then
@@ -639,6 +642,7 @@ jobs:
       ready_artifact_name: ${{ steps.intent.outputs.ready_artifact_name }}
       ready_evidence_sha256: ${{ steps.intent.outputs.ready_evidence_sha256 }}
       promotion_id: ${{ steps.ready.outputs.promotion_id }}
+      phase_state_b64: ${{ steps.resolve_state.outputs.phase_state_b64 }}
     env:
       GH_TOKEN: ${{ github.token }}
     steps:
@@ -762,6 +766,7 @@ jobs:
           echo "promotion_id=$promotion_id" >> "$GITHUB_OUTPUT"
 
       - name: Checkout exact current protected-main source
+        id: source_checkout
         uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
         with:
           ref: ${{ steps.intent.outputs.main_sha }}
@@ -769,6 +774,7 @@ jobs:
           persist-credentials: false
 
       - name: Re-verify immutable target without provider credentials
+        id: target_verify
         env:
           RELEASE_SET_ID: ${{ steps.intent.outputs.release_set_id }}
         run: |
@@ -784,7 +790,39 @@ jobs:
           cargo run --locked --quiet --manifest-path tools/opsctl/Cargo.toml -- \
             --root . release verify --release-set "$RUNNER_TEMP/ready/release-set.json" \
             --source-root . --artifact-root "$release_root" \
-            | jq -e '.decision == "VALID" and .release_set_schema_version == 3 and .source_accepted == true and .mutation_executed == false' >/dev/null
+            > "$RUNNER_TEMP/manual-release-verify.json"
+          jq -e '.decision == "VALID" and .release_set_schema_version == 3 and .source_accepted == true and .mutation_executed == false' "$RUNNER_TEMP/manual-release-verify.json" >/dev/null
+
+      - name: Capture manual resolve phase state
+        id: resolve_state
+        if: always()
+        run: |
+          set -euo pipefail
+          source_sha="${{ steps.intent.outputs.main_sha }}"
+          test -n "$source_sha" || source_sha="${{ needs.route.outputs.source_sha }}"
+          release_set_id="${{ steps.intent.outputs.release_set_id }}"
+          promotion_id="${{ steps.ready.outputs.promotion_id }}"
+          failed_boundary=""
+          if [ "${{ steps.intent.outcome }}" = "failure" ]; then failed_boundary="AUTHORIZATION_BINDING"
+          elif [ "${{ steps.ready.outcome }}" = "failure" ]; then failed_boundary="READY_BINDING"
+          elif [ "${{ steps.source_checkout.outcome }}" = "failure" ]; then failed_boundary="SOURCE_CHECKOUT"
+          elif [ "${{ steps.target_verify.outcome }}" = "failure" ]; then failed_boundary="TARGET_RELEASE_VERIFY"
+          fi
+          authorization_bound=false
+          if [ "${{ steps.intent.outcome }}" = "success" ] && [ "${{ steps.ready.outcome }}" = "success" ]; then authorization_bound=true; fi
+          jq -n \
+            --arg source_sha "$source_sha" --arg release_set_id "$release_set_id" --arg promotion_id "$promotion_id" \
+            --arg failed_boundary "$failed_boundary" --argjson authorization_bound "$authorization_bound" \
+            --arg intent "${{ steps.intent.outcome }}" --arg ready "${{ steps.ready.outcome }}" \
+            --arg source_checkout "${{ steps.source_checkout.outcome }}" --arg target_verify "${{ steps.target_verify.outcome }}" \
+            '{schema_version:1,kind:"AR11_MANUAL_PHASE_STATE",phase:"RESOLVE_VERIFY",source_sha:$source_sha,release_set_id:(if $release_set_id=="" then null else $release_set_id end),promotion_id:(if $promotion_id=="" then null else $promotion_id end),authorization_bound:$authorization_bound,provider_mutation_started:false,provider_mutation_executed:false,production_mutation_executed:false,failed_boundary:(if $failed_boundary=="" then null else $failed_boundary end),step_outcomes:{intent:$intent,ready:$ready,source_checkout:$source_checkout,target_verify:$target_verify}}' \
+            > "$RUNNER_TEMP/manual-resolve-state.json"
+          if [ -f "$RUNNER_TEMP/authorized-intent.json" ]; then
+            jq -S . "$RUNNER_TEMP/authorized-intent.json" | sha256sum | cut -d' ' -f1 > "$RUNNER_TEMP/authorization-intent.sha256"
+          fi
+          phase_state_b64="$(base64 -w0 "$RUNNER_TEMP/manual-resolve-state.json")"
+          echo "phase_state_b64=$phase_state_b64" >> "$GITHUB_OUTPUT"
+
 
   mutate:
     name: Execute exact same bits after READY plus authorization
@@ -796,6 +834,8 @@ jobs:
       actions: read
       contents: read
       deployments: write
+    outputs:
+      phase_state_b64: ${{ steps.mutation_state.outputs.phase_state_b64 }}
     env:
       GH_TOKEN: ${{ github.token }}
       RELEASE_SET_ID: ${{ needs.resolve-verify.outputs.release_set_id }}
@@ -807,6 +847,7 @@ jobs:
       AUTHORIZATION_DIGEST: ${{ needs.resolve-verify.outputs.authorization_digest }}
     steps:
       - name: Checkout exact authorized source
+        id: authorized_checkout
         uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
         with:
           ref: ${{ needs.resolve-verify.outputs.main_sha }}
@@ -814,6 +855,7 @@ jobs:
           persist-credentials: false
 
       - name: Download and bind prior READY evidence before provider credentials
+        id: ready_bind
         run: |
           set -euo pipefail
           ready_root="$RUNNER_TEMP/ready"
@@ -835,6 +877,7 @@ jobs:
             > "$RUNNER_TEMP/mutation-fence.json"
 
       - name: Re-verify exact immutable Release Set before credentials
+        id: target_verify
         run: |
           set -euo pipefail
           asset_root="$RUNNER_TEMP/target-assets"
@@ -846,7 +889,8 @@ jobs:
           cargo run --locked --quiet --manifest-path tools/opsctl/Cargo.toml -- \
             --root . release verify --release-set "$RUNNER_TEMP/ready/release-set.json" \
             --source-root . --artifact-root "$release_root" \
-            | jq -e '.decision == "VALID" and .release_set_schema_version == 3 and .source_accepted == true and .mutation_executed == false' >/dev/null
+            > "$RUNNER_TEMP/manual-mutation-release-verify.json"
+          jq -e '.decision == "VALID" and .release_set_schema_version == 3 and .source_accepted == true and .mutation_executed == false' "$RUNNER_TEMP/manual-mutation-release-verify.json" >/dev/null
           control_extract="$RUNNER_TEMP/control-release"
           mkdir -p "$control_extract"
           tar -xf "$release_root/components/control-plane.tar" -C "$control_extract"
@@ -855,12 +899,14 @@ jobs:
           echo "CONTROL_RELEASE_ROOT=$(dirname "$manifest")" >> "$GITHUB_ENV"
 
       - name: Set up pinned Node before deploy credential
+        id: node_runtime
         uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
         with:
           node-version: '24.19.0'
           package-manager-cache: false
 
       - name: Render mutation overlay and prove exact bits dry-run without deploy credential
+        id: dry_run
         env:
           CLOUDFLARE_DEPLOY_MANIFEST_JSON: ${{ secrets.CLOUDFLARE_DEPLOY_MANIFEST_JSON }}
         run: |
@@ -876,6 +922,7 @@ jobs:
           npx --yes wrangler@4.94.0 deploy --dry-run --config "$RUNNER_TEMP/wrangler.staging.json" --env staging --experimental-autoconfig=false
 
       - name: Activate deploy credential only after bound READY and authorization
+        id: deploy_credential
         env:
           DEPLOY_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
         run: |
@@ -885,6 +932,7 @@ jobs:
           echo "CLOUDFLARE_API_TOKEN=$DEPLOY_TOKEN" >> "$GITHUB_ENV"
 
       - name: Re-fence Worker identity and D1 head immediately before mutation
+        id: exact_fence
         run: |
           set -euo pipefail
           account_id="$(jq -er '.control_plane.account_id // .account_id' "$DEPLOY_MANIFEST")"
@@ -913,12 +961,52 @@ jobs:
           PY
           cmp --silent "$RUNNER_TEMP/mutation-d1-names.json" "$RUNNER_TEMP/ready/d1-names-after.json"
 
+      - name: Mark provider mutation invocation boundary
+        id: mutation_start
+        run: |
+          set -euo pipefail
+          jq -n --arg source_sha "${{ needs.resolve-verify.outputs.main_sha }}" --arg release_set_id "$RELEASE_SET_ID" --arg promotion_id "${{ needs.resolve-verify.outputs.promotion_id }}" --arg authorization_digest "$AUTHORIZATION_DIGEST" --arg ready_evidence_sha256 "$READY_EVIDENCE_SHA256" '{schema_version:1,kind:"AR11_PROVIDER_MUTATION_INVOCATION",source_sha:$source_sha,release_set_id:$release_set_id,promotion_id:$promotion_id,authorization_digest:$authorization_digest,ready_evidence_sha256:$ready_evidence_sha256}' > "$RUNNER_TEMP/provider-mutation-invocation.json"
+
       - name: Deploy exact Release Set v3 bits after all fences
+        id: deploy
         run: |
           set -euo pipefail
           npx --yes wrangler@4.94.0 deploy \
             --config "$WRANGLER_CONFIG" --env staging --experimental-autoconfig=false \
             --message "release_set=$RELEASE_SET_ID profile=rehearsal-core-v2"
+
+      - name: Capture manual mutation phase state
+        id: mutation_state
+        if: always()
+        run: |
+          set -euo pipefail
+          failed_boundary=""
+          if [ "${{ steps.authorized_checkout.outcome }}" = "failure" ]; then failed_boundary="AUTHORIZED_SOURCE_CHECKOUT"
+          elif [ "${{ steps.ready_bind.outcome }}" = "failure" ]; then failed_boundary="READY_FENCE_BINDING"
+          elif [ "${{ steps.target_verify.outcome }}" = "failure" ]; then failed_boundary="TARGET_RELEASE_VERIFY"
+          elif [ "${{ steps.node_runtime.outcome }}" = "failure" ]; then failed_boundary="NODE_RUNTIME_SETUP"
+          elif [ "${{ steps.dry_run.outcome }}" = "failure" ]; then failed_boundary="MUTATION_DRY_RUN"
+          elif [ "${{ steps.deploy_credential.outcome }}" = "failure" ]; then failed_boundary="DEPLOY_CREDENTIAL_ACTIVATION"
+          elif [ "${{ steps.exact_fence.outcome }}" = "failure" ]; then failed_boundary="EXACT_CURRENT_FENCE"
+          elif [ "${{ steps.mutation_start.outcome }}" = "failure" ]; then failed_boundary="MUTATION_INVOCATION_BOUNDARY"
+          elif [ "${{ steps.deploy.outcome }}" = "failure" ]; then failed_boundary="PROVIDER_DEPLOY"
+          fi
+          mutation_started=false
+          mutation_executed=false
+          if [ "${{ steps.mutation_start.outcome }}" = "success" ]; then mutation_started=true; fi
+          if [ "${{ steps.deploy.outcome }}" = "success" ]; then mutation_executed=true; fi
+          jq -n \
+            --arg source_sha "${{ needs.resolve-verify.outputs.main_sha }}" --arg release_set_id "$RELEASE_SET_ID" --arg promotion_id "${{ needs.resolve-verify.outputs.promotion_id }}" \
+            --arg failed_boundary "$failed_boundary" --argjson mutation_started "$mutation_started" --argjson mutation_executed "$mutation_executed" \
+            --arg authorized_checkout "${{ steps.authorized_checkout.outcome }}" --arg ready_bind "${{ steps.ready_bind.outcome }}" \
+            --arg target_verify "${{ steps.target_verify.outcome }}" --arg node_runtime "${{ steps.node_runtime.outcome }}" \
+            --arg dry_run "${{ steps.dry_run.outcome }}" --arg deploy_credential "${{ steps.deploy_credential.outcome }}" \
+            --arg exact_fence "${{ steps.exact_fence.outcome }}" --arg mutation_start "${{ steps.mutation_start.outcome }}" --arg deploy "${{ steps.deploy.outcome }}" \
+            '{schema_version:1,kind:"AR11_MANUAL_PHASE_STATE",phase:"MUTATE",source_sha:$source_sha,release_set_id:$release_set_id,promotion_id:(if $promotion_id=="" then null else $promotion_id end),authorization_bound:true,provider_mutation_started:$mutation_started,provider_mutation_executed:$mutation_executed,production_mutation_executed:false,failed_boundary:(if $failed_boundary=="" then null else $failed_boundary end),step_outcomes:{authorized_checkout:$authorized_checkout,ready_bind:$ready_bind,target_verify:$target_verify,node_runtime:$node_runtime,dry_run:$dry_run,deploy_credential:$deploy_credential,exact_fence:$exact_fence,mutation_start:$mutation_start,deploy:$deploy}}' \
+            > "$RUNNER_TEMP/manual-mutation-state.json"
+          phase_state_b64="$(base64 -w0 "$RUNNER_TEMP/manual-mutation-state.json")"
+          echo "phase_state_b64=$phase_state_b64" >> "$GITHUB_OUTPUT"
+
 
   post-verify:
     name: Re-observe and prove convergence
@@ -929,6 +1017,9 @@ jobs:
     permissions:
       actions: read
       contents: read
+    outputs:
+      phase_state_b64: ${{ steps.post_state.outputs.phase_state_b64 }}
+      promotion_verify_b64: ${{ steps.post_state.outputs.promotion_verify_b64 }}
     env:
       GH_TOKEN: ${{ github.token }}
       RELEASE_SET_ID: ${{ needs.resolve-verify.outputs.release_set_id }}
@@ -940,6 +1031,7 @@ jobs:
       CLOUDFLARE_DEPLOY_MANIFEST_JSON: ${{ secrets.CLOUDFLARE_DEPLOY_MANIFEST_JSON }}
     steps:
       - name: Checkout exact promoted source
+        id: source_checkout
         uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
         with:
           ref: ${{ needs.resolve-verify.outputs.main_sha }}
@@ -947,6 +1039,7 @@ jobs:
           persist-credentials: false
 
       - name: Download prior READY evidence and prepare read-only target
+        id: target_prepare
         run: |
           set -euo pipefail
           ready_root="$RUNNER_TEMP/ready"
@@ -960,8 +1053,8 @@ jobs:
           cmp --silent "$release_root/release-set.json" "$ready_root/release-set.json"
           cargo run --locked --quiet --manifest-path tools/opsctl/Cargo.toml -- --root . release verify \
             --release-set "$ready_root/release-set.json" --source-root . --artifact-root "$release_root" \
-            | tee "$RUNNER_TEMP/post-release-verify.json" \
-            | jq -e '.decision == "VALID" and .release_set_schema_version == 3 and .source_accepted == true and .mutation_executed == false' >/dev/null
+            > "$RUNNER_TEMP/post-release-verify.json"
+          jq -e '.decision == "VALID" and .release_set_schema_version == 3 and .source_accepted == true and .mutation_executed == false' "$RUNNER_TEMP/post-release-verify.json" >/dev/null
           control_extract="$RUNNER_TEMP/control-release"
           mkdir -p "$control_extract"
           tar -xf "$release_root/components/control-plane.tar" -C "$control_extract"
@@ -974,19 +1067,20 @@ jobs:
           echo "WRANGLER_CONFIG=$RUNNER_TEMP/wrangler.staging.json" >> "$GITHUB_ENV"
 
       - name: Set up pinned Node for post-deploy observation
+        id: node_runtime
         uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
         with:
           node-version: '24.19.0'
           package-manager-cache: false
 
-      - name: Re-observe provider and verify exact convergence
+      - name: Re-observe provider and capture promotion.verify natural-owner verdict
+        id: observe_verify
         run: |
           set -euo pipefail
           account_id="$(jq -er '.control_plane.account_id // .account_id' "$DEPLOY_MANIFEST")"
           worker_name="$(jq -er '.control_plane.worker_name // .worker_name' "$DEPLOY_MANIFEST")"
           r2_bucket="$(jq -er '.control_plane.r2_bucket_name // .r2_bucket_name' "$DEPLOY_MANIFEST")"
           queue_name="$(jq -er '.control_plane.integration_events_queue // .integration_events_queue' "$DEPLOY_MANIFEST")"
-          custom_domain="$(jq -er '.control_plane.custom_domain // .custom_domain' "$DEPLOY_MANIFEST")"
           curl --fail-with-body --silent --show-error -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" "https://api.cloudflare.com/client/v4/accounts/$account_id/workers/scripts/$worker_name/deployments" | jq '.result.deployments[0]' > "$RUNNER_TEMP/post-deployment.json"
           npx --yes wrangler@4.94.0 d1 execute CATALOG_DB --remote --command 'SELECT name FROM d1_migrations ORDER BY name' --json --config "$WRANGLER_CONFIG" --env staging > "$RUNNER_TEMP/post-catalog-ledger.json"
           npx --yes wrangler@4.94.0 r2 bucket info "$r2_bucket" --json --config "$WRANGLER_CONFIG" --env staging > "$RUNNER_TEMP/post-r2-info.json"
@@ -994,12 +1088,24 @@ jobs:
           jq -n --arg name "$queue_name" '{name:$name}' > "$RUNNER_TEMP/post-queue-info.json"
           npx --yes wrangler@4.94.0 secret list --format json --config "$WRANGLER_CONFIG" --env staging > "$RUNNER_TEMP/post-secret-list.json"
           python scripts/deployment-snapshot-ar11.py --environment staging --collected-at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --deployment-status "$RUNNER_TEMP/post-deployment.json" --catalog-ledger "$RUNNER_TEMP/post-catalog-ledger.json" --r2-list "$RUNNER_TEMP/post-r2-info.json" --queue-list "$RUNNER_TEMP/post-queue-info.json" --secret-list "$RUNNER_TEMP/post-secret-list.json" --rendered-config "$WRANGLER_CONFIG" --deploy-manifest "$DEPLOY_MANIFEST" --current-release-set "$RUNNER_TEMP/ready/release-set.json" --output "$RUNNER_TEMP/post-snapshot.json"
-          cargo run --locked --quiet --manifest-path tools/opsctl/Cargo.toml -- --root . promotion verify --release-set "$RUNNER_TEMP/ready/release-set.json" --source-root . --profile rehearsal-core-v2 --environment staging --snapshot "$RUNNER_TEMP/post-snapshot.json" --evidence-json "$RUNNER_TEMP/ready/compatibility-evidence.json" | tee "$RUNNER_TEMP/promotion-verify.json" | jq -e '.verified == true and .decision == "VERIFIED" and .mutation_executed == false' >/dev/null
+          cargo run --locked --quiet --manifest-path tools/opsctl/Cargo.toml -- --root . promotion verify --release-set "$RUNNER_TEMP/ready/release-set.json" --source-root . --profile rehearsal-core-v2 --environment staging --snapshot "$RUNNER_TEMP/post-snapshot.json" --evidence-json "$RUNNER_TEMP/ready/compatibility-evidence.json" > "$RUNNER_TEMP/promotion-verify.json"
+          jq -e '.schema_version == 1 and .command == "promotion.verify" and (.decision == "VERIFIED" or .decision == "DRIFTED" or .decision == "INCOMPLETE" or .decision == "UNKNOWN") and (.verified | type == "boolean") and (.blockers | type == "array") and .mutation_executed == false' "$RUNNER_TEMP/promotion-verify.json" >/dev/null
+          decision="$(jq -er '.decision' "$RUNNER_TEMP/promotion-verify.json")"
+          echo "decision=$decision" >> "$GITHUB_OUTPUT"
+
+      - name: Verify health only after promotion owner reports VERIFIED
+        id: health
+        if: steps.observe_verify.outputs.decision == 'VERIFIED'
+        run: |
+          set -euo pipefail
+          custom_domain="$(jq -er '.control_plane.custom_domain // .custom_domain' "$DEPLOY_MANIFEST")"
           response="$RUNNER_TEMP/health-response"
           curl --silent --show-error --fail --connect-timeout 10 --max-time 30 -H "CF-Access-Client-Id: $CLOUDFLARE_ACCESS_CLIENT_ID" -H "CF-Access-Client-Secret: $CLOUDFLARE_ACCESS_CLIENT_SECRET" -o "$response" "https://$custom_domain/health"
           test "$(cat "$response")" = ok
 
       - name: Upload metadata-only post-deploy evidence
+        id: post_evidence
+        if: always() && steps.observe_verify.outcome == 'success'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: release-set-promotion-staging-${{ needs.resolve-verify.outputs.release_set_id }}
@@ -1009,6 +1115,148 @@ jobs:
             ${{ runner.temp }}/promotion-verify.json
           if-no-files-found: error
           retention-days: 30
+
+      - name: Capture manual post-verify phase state
+        id: post_state
+        if: always()
+        run: |
+          set -euo pipefail
+          failed_boundary=""
+          if [ "${{ steps.source_checkout.outcome }}" = "failure" ]; then failed_boundary="POST_SOURCE_CHECKOUT"
+          elif [ "${{ steps.target_prepare.outcome }}" = "failure" ]; then failed_boundary="POST_TARGET_MATERIALIZATION"
+          elif [ "${{ steps.node_runtime.outcome }}" = "failure" ]; then failed_boundary="NODE_RUNTIME_SETUP"
+          elif [ "${{ steps.observe_verify.outcome }}" = "failure" ]; then failed_boundary="POST_PROVIDER_OBSERVATION"
+          elif [ "${{ steps.observe_verify.outputs.decision }}" = "VERIFIED" ] && [ "${{ steps.health.outcome }}" = "failure" ]; then failed_boundary="HEALTH_VERIFICATION"
+          elif [ "${{ steps.post_evidence.outcome }}" = "failure" ]; then failed_boundary="POST_EVIDENCE_PUBLICATION"
+          fi
+          jq -n \
+            --arg source_sha "${{ needs.resolve-verify.outputs.main_sha }}" --arg release_set_id "$RELEASE_SET_ID" --arg promotion_id "${{ needs.resolve-verify.outputs.promotion_id }}" \
+            --arg failed_boundary "$failed_boundary" --arg source_checkout "${{ steps.source_checkout.outcome }}" \
+            --arg target_prepare "${{ steps.target_prepare.outcome }}" --arg node_runtime "${{ steps.node_runtime.outcome }}" \
+            --arg observe_verify "${{ steps.observe_verify.outcome }}" --arg verify_decision "${{ steps.observe_verify.outputs.decision }}" \
+            --arg health "${{ steps.health.outcome }}" --arg post_evidence "${{ steps.post_evidence.outcome }}" \
+            '{schema_version:1,kind:"AR11_MANUAL_PHASE_STATE",phase:"POST_VERIFY",source_sha:$source_sha,release_set_id:$release_set_id,promotion_id:(if $promotion_id=="" then null else $promotion_id end),authorization_bound:true,provider_mutation_started:true,provider_mutation_executed:true,production_mutation_executed:false,failed_boundary:(if $failed_boundary=="" then null else $failed_boundary end),step_outcomes:{source_checkout:$source_checkout,target_prepare:$target_prepare,node_runtime:$node_runtime,observe_verify:$observe_verify,verify_decision:$verify_decision,health:$health,post_evidence:$post_evidence}}' \
+            > "$RUNNER_TEMP/manual-post-verify-state.json"
+          phase_state_b64="$(base64 -w0 "$RUNNER_TEMP/manual-post-verify-state.json")"
+          echo "phase_state_b64=$phase_state_b64" >> "$GITHUB_OUTPUT"
+          promotion_verify_b64=""
+          if [ -f "$RUNNER_TEMP/promotion-verify.json" ]; then promotion_verify_b64="$(base64 -w0 "$RUNNER_TEMP/promotion-verify.json")"; fi
+          echo "promotion_verify_b64=$promotion_verify_b64" >> "$GITHUB_OUTPUT"
+
+
+
+  manual-outcome:
+    name: Publish one lossless manual AR11 terminal outcome
+    needs: [route, resolve-verify, mutate, post-verify]
+    if: always() && needs.route.outputs.mode == 'promote'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      SOURCE_SHA: ${{ needs.route.outputs.source_sha }}
+      RESOLVE_STATE_B64: ${{ needs.resolve-verify.outputs.phase_state_b64 }}
+      MUTATION_STATE_B64: ${{ needs.mutate.outputs.phase_state_b64 }}
+      POST_STATE_B64: ${{ needs.post-verify.outputs.phase_state_b64 }}
+      PROMOTION_VERIFY_B64: ${{ needs.post-verify.outputs.promotion_verify_b64 }}
+      RESOLVE_RESULT: ${{ needs.resolve-verify.result }}
+      MUTATE_RESULT: ${{ needs.mutate.result }}
+      POST_RESULT: ${{ needs.post-verify.result }}
+    steps:
+      - name: Checkout exact manual AR11 source
+        id: source_checkout
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        with:
+          ref: ${{ needs.route.outputs.source_sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Materialize captured manual phase transport
+        id: captured
+        run: |
+          set -euo pipefail
+          python - "$RUNNER_TEMP" <<'PY'
+          import base64, json, os, pathlib, sys
+          root = pathlib.Path(sys.argv[1])
+          source = os.environ['SOURCE_SHA']
+          def write_state(name, phase, encoded, result, conservative_started=False, conservative_executed=False):
+              path = root / name
+              if encoded:
+                  path.write_bytes(base64.b64decode(encoded, validate=True))
+                  return
+              state = {
+                  'schema_version': 1,
+                  'kind': 'AR11_MANUAL_PHASE_STATE',
+                  'phase': phase,
+                  'source_sha': source,
+                  'release_set_id': None,
+                  'promotion_id': None,
+                  'authorization_bound': False,
+                  'provider_mutation_started': conservative_started,
+                  'provider_mutation_executed': conservative_executed,
+                  'production_mutation_executed': False,
+                  'failed_boundary': f'{phase}_JOB_UNTERMINALIZED' if result == 'failure' else f'{phase}_JOB_{result.upper()}',
+                  'step_outcomes': {'job_result': result},
+              }
+              path.write_text(json.dumps(state, sort_keys=True, indent=2) + '\n', encoding='utf-8')
+          write_state('manual-resolve-state.json', 'RESOLVE_VERIFY', os.environ.get('RESOLVE_STATE_B64',''), os.environ['RESOLVE_RESULT'])
+          mutation_missing_started = os.environ['MUTATE_RESULT'] == 'failure'
+          write_state('manual-mutation-state.json', 'MUTATE', os.environ.get('MUTATION_STATE_B64',''), os.environ['MUTATE_RESULT'], mutation_missing_started, False)
+          post_missing_executed = os.environ['MUTATE_RESULT'] == 'success'
+          write_state('manual-post-verify-state.json', 'POST_VERIFY', os.environ.get('POST_STATE_B64',''), os.environ['POST_RESULT'], post_missing_executed, post_missing_executed)
+          encoded_verify = os.environ.get('PROMOTION_VERIFY_B64','')
+          verify_path = root / 'promotion-verify.json'
+          if encoded_verify:
+              verify_path.write_bytes(base64.b64decode(encoded_verify, validate=True))
+          else:
+              verify_path.write_text('{"transport":"unavailable"}\n', encoding='utf-8')
+          PY
+
+      - name: Terminalize one lossless manual AR11 OperationalOutcome
+        id: outcome
+        run: |
+          set -euo pipefail
+          tree_sha="$(git rev-parse "$SOURCE_SHA^{tree}")"
+          evidence_artifact="ar11-operational-outcome-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          python scripts/promotion-operational-outcome-ar11.py \
+            --mode manual \
+            --source-sha "$SOURCE_SHA" --tree-sha "$tree_sha" \
+            --environment staging --profile-id rehearsal-core-v2 \
+            --resolve-state-json "$RUNNER_TEMP/manual-resolve-state.json" \
+            --mutation-state-json "$RUNNER_TEMP/manual-mutation-state.json" \
+            --post-verify-state-json "$RUNNER_TEMP/manual-post-verify-state.json" \
+            --promotion-verify-json "$RUNNER_TEMP/promotion-verify.json" \
+            --evidence-artifact "$evidence_artifact" \
+            --output "$RUNNER_TEMP/promotion-operational-outcome.json"
+          terminal_dir="$RUNNER_TEMP/ar11-manual-terminal"
+          mkdir -p "$terminal_dir"
+          cp "$RUNNER_TEMP/promotion-operational-outcome.json" "$RUNNER_TEMP/manual-resolve-state.json" "$RUNNER_TEMP/manual-mutation-state.json" "$RUNNER_TEMP/manual-post-verify-state.json" "$RUNNER_TEMP/promotion-verify.json" "$terminal_dir/"
+          status="$(jq -er '.status' "$RUNNER_TEMP/promotion-operational-outcome.json")"
+          echo "status=$status" >> "$GITHUB_OUTPUT"
+          {
+            echo '## Manual AR11 OperationalOutcome'
+            echo
+            echo '```json'
+            jq '{contract,procedure,status,phase,failed_gate,owner,owner_contract,owner_reason_code,recovery_owner,summary,remediation,exact_next_action,source_sha,tree_sha,release_set_id,promotion_id,target_identity,authorization_state,provider_mutation_started,provider_mutation_executed,production_mutation_executed,effect_state,evidence_refs,evidence_digests}' "$RUNNER_TEMP/promotion-operational-outcome.json"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload terminal manual AR11 OperationalOutcome evidence
+        id: outcome_upload
+        if: always() && steps.outcome.outcome == 'success'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: ar11-operational-outcome-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/ar11-manual-terminal
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Enforce terminal manual AR11 disposition after evidence publication
+        if: always()
+        run: |
+          set -euo pipefail
+          test "${{ steps.outcome.outcome }}" = "success"
+          test "${{ steps.outcome_upload.outcome }}" = "success"
+          jq -e '.contract == "PROMOTION_OPERATOR_OUTCOME_V1" and .procedure == "AR11_RELEASE_SET_PROMOTION" and .status == "COMPLETED" and .authorization_state == "BOUND_ONE_SHOT" and .provider_mutation_started == true and .provider_mutation_executed == true and .production_mutation_executed == false and .effect_state == "EFFECT_VERIFIED"' "$RUNNER_TEMP/promotion-operational-outcome.json" >/dev/null
 
   rollback-negative-evidence:
     name: Prove incompatible or unknown rollback blocks before mutation
