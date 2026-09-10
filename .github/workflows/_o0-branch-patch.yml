@@ -1,0 +1,49 @@
+name: O0 one-shot branch patch
+
+on:
+  push:
+    branches:
+      - o0-ar11-manual-terminal-outcome
+    paths:
+      - 'scripts/_o0_apply_manual_ar11_patch.py'
+      - '.github/workflows/_o0-branch-patch.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Checkout exact patch commit
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+
+      - name: Apply bounded patch and delete temporary patch surfaces
+        run: python scripts/_o0_apply_manual_ar11_patch.py
+
+      - name: Verify transport fixtures and successor invariants before commit
+        run: |
+          set -euo pipefail
+          git diff --check
+          python -m py_compile scripts/promotion-operational-outcome-ar11.py
+          python scripts/promotion-operational-outcome-ar11.py --self-test
+          cargo test --locked --manifest-path tools/opsctl/Cargo.toml --test o0_ar11_operational_outcome
+          node .github/scripts/ar8-d-secret-transport-successor.mjs --self-test
+          node .github/scripts/ar8-d-secret-transport-successor.mjs
+          test ! -e scripts/_o0_apply_manual_ar11_patch.py
+          test ! -e .github/workflows/_o0-branch-patch.yml
+
+      - name: Commit only final bounded O0 changes
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git diff --cached --check
+          git diff --cached --quiet && { echo 'No patch changes produced'; exit 1; }
+          git commit -m 'O0: terminalize manual AR11 effect outcomes'
+          git push origin HEAD:o0-ar11-manual-terminal-outcome
