@@ -64,7 +64,10 @@
     "expected_current_refence_immediately_before_mutation": true,
     "d1_refence_immediately_before_mutation": true,
     "accepted_main_heavy_runtime_replay": true,
-    "pr_change_aware_runtime_gate": "FAIL_CLOSED_STRICT_RELEASE_OPS_ALLOWLIST"
+    "pr_change_aware_runtime_gate": "FAIL_CLOSED_PROVEN_RUNTIME_UNRELATED",
+    "pr_runtime_scope_classifier": "scripts/classify-camoufox-runtime-scope.py",
+    "pr_runtime_unknown_path_policy": "HEAVY",
+    "pr_runtime_accepted_main_policy": "ALWAYS_HEAVY"
   },
   "component_release_owners": [
     {"component_id":"control_plane","owner":"apps/control-plane-worker + frontend","existing_release_builder":"control-plane release builder","build_once":true},

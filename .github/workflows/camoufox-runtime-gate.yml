@@ -33,7 +33,7 @@ jobs:
           EXPECTED_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: python -c "import os, subprocess; actual = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(); expected = os.environ['EXPECTED_SOURCE_SHA']; assert actual == expected, f'expected {expected}, got {actual}'"
 
-      - name: Classify accepted-main or strictly allowlisted release-ops PR
+      - name: Classify accepted-main or mechanically proven runtime-unrelated PR
         id: scope
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
@@ -52,36 +52,11 @@ jobs:
           git cat-file -e "$BASE_SHA^{commit}"
           git diff --name-only "$BASE_SHA...$HEAD_SHA" > "$RUNNER_TEMP/changed-paths.txt"
           test -s "$RUNNER_TEMP/changed-paths.txt"
-          python - "$RUNNER_TEMP/changed-paths.txt" <<'PY'
-          from pathlib import Path
-          import sys
-
-          safe = {
-              '.github/workflows/release-set-promotion.yml',
-              '.github/workflows/v2-staging-envelope-observation.yml',
-              '.github/scripts/release-operational-ar11.mjs',
-              '.github/scripts/ar8-d-secret-transport-successor.mjs',
-              '.github/scripts/release-architecture-ar11.mjs',
-              'architecture/release-architecture-ar11.json',
-          }
-          paths = [line.strip() for line in Path(sys.argv[1]).read_text(encoding='utf-8').splitlines() if line.strip()]
-          if not paths:
-              raise SystemExit('changed path set is empty')
-          unknown = sorted(set(paths) - safe)
-          print('changed paths:')
-          for path in paths:
-              print(f'  {path}')
-          if unknown:
-              print('full runtime proof required; non-allowlisted paths:')
-              for path in unknown:
-                  print(f'  {path}')
-              print('HEAVY=true')
-          else:
-              print('strict release-ops-only PR; heavy browser replay is deferred to accepted main')
-              print('HEAVY=false')
-          Path('/tmp/camoufox-heavy').write_text('true\n' if unknown else 'false\n', encoding='utf-8')
-          PY
-          echo "heavy=$(cat /tmp/camoufox-heavy)" >> "$GITHUB_OUTPUT"
+          python3.12 -m py_compile scripts/classify-camoufox-runtime-scope.py
+          python3.12 scripts/classify-camoufox-runtime-scope.py --self-test
+          python3.12 scripts/classify-camoufox-runtime-scope.py \
+            --paths-file "$RUNNER_TEMP/changed-paths.txt" \
+            --github-output "$GITHUB_OUTPUT"
 
   patched-candidate:
     name: Resolve patched Camoufox candidate (${{ matrix.target }})
@@ -182,9 +157,9 @@ jobs:
           EXPECTED_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: python -c "import os, subprocess; actual = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(); expected = os.environ['EXPECTED_SOURCE_SHA']; assert actual == expected, f'expected {expected}, got {actual}'"
 
-      - name: Accept strictly release-ops-only PR without browser replay
+      - name: Accept mechanically proven runtime-unrelated PR without browser replay
         if: needs.scope.outputs.heavy == 'false'
-        run: echo 'Camoufox runtime inputs are untouched; Governance/Release Architecture own this release-ops PR, and full physical/runtime proof will run again on accepted main.'
+        run: echo 'Camoufox runtime inputs are mechanically proven untouched; full physical/runtime proof will run again on accepted main.'
 
       - name: Require Python 3.12 and virtual display support
         if: needs.scope.outputs.heavy == 'true'
@@ -331,10 +306,10 @@ jobs:
           EXPECTED_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: python -c "import os, subprocess; actual = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(); expected = os.environ['EXPECTED_SOURCE_SHA']; assert actual == expected, f'expected {expected}, got {actual}'"
 
-      - name: Accept strictly release-ops-only PR without Windows browser replay
+      - name: Accept mechanically proven runtime-unrelated PR without Windows browser replay
         if: needs.scope.outputs.heavy == 'false'
         shell: pwsh
-        run: Write-Host 'Camoufox/Bridge runtime inputs are untouched; full clean-host Windows proof will run on accepted main.'
+        run: Write-Host 'Camoufox/Bridge runtime inputs are mechanically proven untouched; full clean-host Windows proof will run on accepted main.'
 
       - name: Set up exact Windows dependency-lock Python
         if: needs.scope.outputs.heavy == 'true'
