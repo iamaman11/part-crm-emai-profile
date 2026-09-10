@@ -1,6 +1,6 @@
 name: Release Set Promotion
 
-run-name: AR11 Release Set Promotion
+run-name: AR11 Release Set Promotion — ${{ github.event_name == 'workflow_run' && 'READ-ONLY PREFLIGHT' || github.event_name == 'workflow_dispatch' && 'MANUAL PROMOTION (AUTHORIZATION REQUIRED)' || 'INTERNAL ROLLBACK-NEGATIVE EVIDENCE' }}
 
 on:
   workflow_run:

@@ -37,3 +37,6 @@ jobs:
         run: |
           python scripts/check-ar11-behavioural-certification.py
           python scripts/check-ar11-behavioural-certification.py --self-test
+
+      - name: Prove lossless AR11 terminal projection at CLI/file boundary
+        run: python scripts/promotion-operational-outcome-ar11.py --self-test

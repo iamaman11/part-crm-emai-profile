@@ -2,8 +2,8 @@
 """Project AR11 natural-owner verdicts into one lossless terminal operator outcome.
 
 This module is deliberately transport-only. It validates the already-owned D1, Release and
-Promotion JSON contracts, preserves the first authoritative blocker without translating its
-reason taxonomy, and terminalizes infrastructure loss without inventing semantic state.
+Promotion JSON contracts, preserves every authoritative blocker/action without translating the
+owner taxonomy, and terminalizes infrastructure loss without inventing semantic state.
 It has no provider client, credentials, mutation authority, or admission policy of its own.
 """
 
@@ -13,7 +13,9 @@ import argparse
 import hashlib
 import json
 import re
+import subprocess
 import sys
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -104,11 +106,20 @@ def valid_plan(value: dict[str, Any]) -> bool:
     )
 
 
+def valid_rollback_diagnostic(value: Any, rollback_compatibility: Any) -> bool:
+    return (
+        isinstance(value, dict)
+        and value.get("decision") == rollback_compatibility
+        and all(isinstance(value.get(key), str) and bool(value[key]) for key in ("reason_code", "summary", "remediation"))
+    )
+
+
 def valid_preflight(value: dict[str, Any]) -> bool:
     blockers = string_list(value.get("blockers"))
     steps = string_list(value.get("required_steps"))
     ready = value.get("ready")
     decision = value.get("decision")
+    rollback_compatibility = value.get("rollback_compatibility")
     return (
         value.get("schema_version") == 1
         and value.get("command") == "promotion.preflight"
@@ -120,7 +131,8 @@ def valid_preflight(value: dict[str, Any]) -> bool:
         and value.get("mutation_executed") is False
         and blockers is not None
         and steps is not None
-        and isinstance(value.get("rollback_compatibility"), str)
+        and isinstance(rollback_compatibility, str)
+        and valid_rollback_diagnostic(value.get("rollback_diagnostic"), rollback_compatibility)
         and (ready or bool(blockers))
     )
 
@@ -144,19 +156,31 @@ def first(values: list[str]) -> str | None:
     return values[0] if values else None
 
 
+def preflight_required_actions(preflight: dict[str, Any]) -> list[str]:
+    actions: list[str] = []
+    rollback_remediation = preflight["rollback_diagnostic"]["remediation"]
+    if rollback_remediation != "NONE":
+        actions.append(rollback_remediation)
+    for action in preflight["required_steps"]:
+        if action not in actions:
+            actions.append(action)
+    return actions
+
+
 def owner_blocked(
     base: dict[str, Any],
     *,
     phase: str,
     owner: str,
     owner_contract: str,
-    reason: str,
+    reasons: list[str],
     diagnostic: dict[str, Any],
-    remediation: str | None,
+    required_actions: list[str],
 ) -> dict[str, Any]:
-    remediation_text = remediation or (
-        f"Resolve only the condition reported by {owner} in owner_diagnostic, then rerun read-only AR11."
-    )
+    reason = first(reasons)
+    assert reason is not None
+    fallback = f"Resolve only the condition reported by {owner} in owner_diagnostic, then rerun read-only AR11."
+    remediation_text = "\n".join(required_actions) if required_actions else fallback
     return {
         **base,
         "status": "BLOCKED",
@@ -165,6 +189,8 @@ def owner_blocked(
         "owner": owner,
         "owner_contract": owner_contract,
         "owner_reason_code": reason,
+        "owner_reason_codes": list(reasons),
+        "owner_required_actions": list(required_actions),
         "owner_diagnostic": diagnostic,
         "summary": f"{owner} blocked AR11 at {phase} with owner reason {reason}.",
         "remediation": remediation_text,
@@ -183,6 +209,8 @@ def infrastructure_failure(
         "owner": None,
         "owner_contract": None,
         "owner_reason_code": None,
+        "owner_reason_codes": [],
+        "owner_required_actions": [],
         "owner_diagnostic": {"verdict_available": False, **detail},
         "summary": f"AR11 could not obtain a valid natural-owner verdict at {phase}.",
         "remediation": (
@@ -242,31 +270,27 @@ def compose(
     if d1 is None or not valid_d1(d1):
         return infrastructure_failure(base, "D1_COMPATIBILITY", states["d1"])
     if not d1["allowed"]:
-        reason = first(d1["reason_codes"])
-        assert reason is not None
         return owner_blocked(
             base,
             phase="D1_COMPATIBILITY",
             owner="opsctl.d1.compatibility",
             owner_contract="d1 compatibility/v1",
-            reason=reason,
+            reasons=d1["reason_codes"],
             diagnostic=d1,
-            remediation=None,
+            required_actions=[],
         )
 
     if release is None or not valid_release(release):
         return infrastructure_failure(base, "RELEASE_COMPATIBILITY", states["release"])
     if not release["compatible"]:
-        reason = first(release["blockers"])
-        assert reason is not None
         return owner_blocked(
             base,
             phase="RELEASE_COMPATIBILITY",
             owner="opsctl.release.compatibility",
             owner_contract="release.compatibility/v2",
-            reason=reason,
+            reasons=release["blockers"],
             diagnostic=release,
-            remediation=first(release["required_steps"]),
+            required_actions=release["required_steps"],
         )
 
     if plan is None or not valid_plan(plan):
@@ -274,16 +298,14 @@ def compose(
     if isinstance(plan.get("promotion_id"), str):
         base["promotion_id"] = plan["promotion_id"]
     if plan["decision"] == "BLOCKED":
-        reason = first(plan["blockers"])
-        assert reason is not None
         return owner_blocked(
             base,
             phase="PROMOTION_PLAN",
             owner="opsctl.promotion.plan",
             owner_contract="promotion.plan/v1",
-            reason=reason,
+            reasons=plan["blockers"],
             diagnostic=plan,
-            remediation=None,
+            required_actions=[],
         )
     if plan["decision"] == "NO_CHANGE":
         return {
@@ -294,6 +316,8 @@ def compose(
             "owner": "opsctl.promotion.plan",
             "owner_contract": "promotion.plan/v1",
             "owner_reason_code": "NO_CHANGE",
+            "owner_reason_codes": ["NO_CHANGE"],
+            "owner_required_actions": [],
             "owner_diagnostic": plan,
             "summary": "Promotion owner reports NO_CHANGE; the target is already converged.",
             "remediation": "No provider remediation or mutation is required.",
@@ -308,16 +332,14 @@ def compose(
     if isinstance(preflight.get("promotion_id"), str):
         base["promotion_id"] = preflight["promotion_id"]
     if not preflight["ready"]:
-        reason = first(preflight["blockers"])
-        assert reason is not None
         return owner_blocked(
             base,
             phase="PROMOTION_PREFLIGHT",
             owner="opsctl.promotion.preflight",
             owner_contract="promotion.preflight/v1",
-            reason=reason,
+            reasons=preflight["blockers"],
             diagnostic=preflight,
-            remediation=first(preflight["required_steps"]),
+            required_actions=preflight_required_actions(preflight),
         )
 
     if ready is None or not valid_ready(ready, source_sha, release_set_id):
@@ -331,6 +353,8 @@ def compose(
         "owner": "opsctl.promotion.preflight",
         "owner_contract": "promotion.preflight/v1",
         "owner_reason_code": "READY",
+        "owner_reason_codes": ["READY"],
+        "owner_required_actions": [],
         "owner_diagnostic": preflight,
         "summary": (
             "All read-only AR11 owners are READY and immutable READY_TO_MUTATE evidence exists; "
@@ -342,7 +366,6 @@ def compose(
             "mutation unless the owning stage records a fresh exact authorization."
         ),
     }
-
 
 
 def valid_manual_state(value: dict[str, Any], phase: str, source_sha: str) -> bool:
@@ -638,6 +661,7 @@ def build_manual_from_files(args: argparse.Namespace) -> dict[str, Any]:
         evidence_digests=evidence_digests,
     )
 
+
 def state_for(record: LoadedInput) -> dict[str, Any]:
     return {
         "input": record.label,
@@ -715,6 +739,12 @@ def fixture_inputs() -> dict[str, dict[str, Any]]:
             "ready": True,
             "promotion_id": promotion_id,
             "rollback_compatibility": "COMPATIBLE",
+            "rollback_diagnostic": {
+                "decision": "COMPATIBLE",
+                "reason_code": "ROLLBACK_COMPATIBLE",
+                "summary": "rollback Release Set is compatible with the observed deployment state",
+                "remediation": "NONE",
+            },
             "blockers": [],
             "required_steps": [],
             "credential_values_accessed": False,
@@ -765,6 +795,46 @@ def assert_zero_effect(outcome: dict[str, Any]) -> None:
     assert outcome["effect_state"] == "EXACT_NO_EFFECT"
 
 
+def cli_file_boundary_case(values: dict[str, dict[str, Any]]) -> dict[str, Any]:
+    with tempfile.TemporaryDirectory() as raw_directory:
+        directory = Path(raw_directory)
+        paths: dict[str, Path] = {}
+        for key, value in values.items():
+            path = directory / f"{key}.json"
+            path.write_text(json.dumps(value, sort_keys=True) + "\n", encoding="utf-8")
+            paths[key] = path
+        output = directory / "outcome.json"
+        command = [
+            sys.executable,
+            str(Path(__file__).resolve()),
+            "--mode",
+            "read-only",
+            "--source-sha",
+            "a" * 40,
+            "--tree-sha",
+            "d" * 40,
+            "--release-set-id",
+            "release-set-v3-sha256-" + "c" * 64,
+            "--d1-compatibility-json",
+            str(paths["d1"]),
+            "--release-compatibility-json",
+            str(paths["release"]),
+            "--promotion-plan-json",
+            str(paths["plan"]),
+            "--promotion-preflight-json",
+            str(paths["preflight"]),
+            "--ready-to-mutate-json",
+            str(paths["ready"]),
+            "--evidence-artifact",
+            "credential-free-fixture",
+            "--output",
+            str(output),
+        ]
+        completed = subprocess.run(command, check=False, capture_output=True, text=True)
+        assert completed.returncode == 0, (completed.stdout, completed.stderr)
+        return json.loads(output.read_text(encoding="utf-8"))
+
+
 def self_test() -> None:
     base = fixture_inputs()
 
@@ -776,28 +846,33 @@ def self_test() -> None:
 
     values = {key: dict(value) for key, value in base.items()}
     values["d1"]["allowed"] = False
-    values["d1"]["reason_codes"] = ["REMOTE_SCHEMA_OUTSIDE_RELEASE_WINDOW"]
+    values["d1"]["reason_codes"] = ["REMOTE_SCHEMA_OUTSIDE_RELEASE_WINDOW", "MIGRATION_LINEAGE_UNKNOWN"]
     outcome = fixture_compose(values)
     assert outcome["status"] == "BLOCKED" and outcome["phase"] == "D1_COMPATIBILITY"
     assert outcome["owner_reason_code"] == "REMOTE_SCHEMA_OUTSIDE_RELEASE_WINDOW"
+    assert outcome["owner_reason_codes"] == ["REMOTE_SCHEMA_OUTSIDE_RELEASE_WINDOW", "MIGRATION_LINEAGE_UNKNOWN"]
+    assert outcome["owner_required_actions"] == []
     assert_zero_effect(outcome)
 
     values = {key: dict(value) for key, value in base.items()}
     values["release"]["compatible"] = False
-    values["release"]["blockers"] = ["SCHEMA_INCOMPATIBLE"]
-    values["release"]["required_steps"] = ["apply accepted compatibility steps"]
+    values["release"]["blockers"] = ["SCHEMA_INCOMPATIBLE", "CAPABILITY_PROFILE_INCOMPATIBLE"]
+    values["release"]["required_steps"] = ["apply accepted compatibility steps", "select compatible capability profile"]
     outcome = fixture_compose(values)
     assert outcome["phase"] == "RELEASE_COMPATIBILITY"
     assert outcome["owner_reason_code"] == "SCHEMA_INCOMPATIBLE"
-    assert outcome["exact_next_action"] == "apply accepted compatibility steps"
+    assert outcome["owner_reason_codes"] == ["SCHEMA_INCOMPATIBLE", "CAPABILITY_PROFILE_INCOMPATIBLE"]
+    assert outcome["owner_required_actions"] == ["apply accepted compatibility steps", "select compatible capability profile"]
+    assert outcome["exact_next_action"] == "apply accepted compatibility steps\nselect compatible capability profile"
     assert_zero_effect(outcome)
 
     values = {key: dict(value) for key, value in base.items()}
     values["plan"]["decision"] = "BLOCKED"
-    values["plan"]["blockers"] = ["PROVIDER_STATE_UNKNOWN"]
+    values["plan"]["blockers"] = ["PROVIDER_STATE_UNKNOWN", "TARGET_IDENTITY_UNRESOLVED"]
     outcome = fixture_compose(values)
     assert outcome["status"] == "BLOCKED" and outcome["phase"] == "PROMOTION_PLAN"
     assert outcome["owner_reason_code"] == "PROVIDER_STATE_UNKNOWN"
+    assert outcome["owner_reason_codes"] == ["PROVIDER_STATE_UNKNOWN", "TARGET_IDENTITY_UNRESOLVED"]
     assert_zero_effect(outcome)
 
     values = {key: dict(value) for key, value in base.items()}
@@ -806,21 +881,67 @@ def self_test() -> None:
     assert outcome["status"] == "NOOP" and outcome["owner_reason_code"] == "NO_CHANGE"
     assert_zero_effect(outcome)
 
-    for rollback, reason in (
-        ("INCOMPATIBLE", "ROLLBACK_INCOMPATIBLE"),
-        ("UNKNOWN", "ROLLBACK_COMPATIBILITY_UNKNOWN"),
+    for rollback, broad_reason, exact_reason in (
+        ("INCOMPATIBLE", "ROLLBACK_INCOMPATIBLE", "TARGET_PROFILE_UNSUPPORTED"),
+        ("UNKNOWN", "ROLLBACK_COMPATIBILITY_UNKNOWN", "WINDOWS_DELIVERY_COMPATIBILITY_UNKNOWN"),
     ):
         values = {key: dict(value) for key, value in base.items()}
         values["preflight"]["ready"] = False
         values["preflight"]["decision"] = "BLOCKED"
         values["preflight"]["rollback_compatibility"] = rollback
-        values["preflight"]["blockers"] = [reason]
-        values["preflight"]["required_steps"] = ["repair rollback compatibility evidence"]
+        values["preflight"]["rollback_diagnostic"] = {
+            "decision": rollback,
+            "reason_code": exact_reason,
+            "summary": "fixture owner rollback diagnostic",
+            "remediation": "repair exact rollback owner condition",
+        }
+        values["preflight"]["blockers"] = [broad_reason]
+        values["preflight"]["required_steps"] = []
         outcome = fixture_compose(values)
         assert outcome["phase"] == "PROMOTION_PREFLIGHT"
-        assert outcome["owner_reason_code"] == reason
-        assert outcome["owner_diagnostic"]["rollback_compatibility"] == rollback
+        assert outcome["owner_reason_code"] == broad_reason
+        assert outcome["owner_reason_codes"] == [broad_reason]
+        assert outcome["owner_required_actions"] == ["repair exact rollback owner condition"]
+        assert outcome["exact_next_action"] == "repair exact rollback owner condition"
+        assert outcome["owner_diagnostic"]["rollback_diagnostic"]["reason_code"] == exact_reason
         assert_zero_effect(outcome)
+
+    values = {key: dict(value) for key, value in base.items()}
+    values["preflight"]["ready"] = False
+    values["preflight"]["decision"] = "BLOCKED"
+    values["preflight"]["rollback_compatibility"] = "INCOMPATIBLE"
+    values["preflight"]["rollback_diagnostic"] = {
+        "decision": "INCOMPATIBLE",
+        "reason_code": "TARGET_PROFILE_UNSUPPORTED",
+        "summary": "rollback target profile is unsupported",
+        "remediation": "select a compatible rollback Release Set",
+    }
+    values["preflight"]["blockers"] = ["ROLLBACK_INCOMPATIBLE", "REQUIRED_BINDINGS_NOT_READY"]
+    values["preflight"]["required_steps"] = [
+        "select a compatible rollback Release Set",
+        "prepare required bindings: worker_binding",
+    ]
+    outcome = cli_file_boundary_case(values)
+    assert outcome["status"] == "BLOCKED" and outcome["phase"] == "PROMOTION_PREFLIGHT"
+    assert outcome["owner_reason_code"] == "ROLLBACK_INCOMPATIBLE"
+    assert outcome["owner_reason_codes"] == ["ROLLBACK_INCOMPATIBLE", "REQUIRED_BINDINGS_NOT_READY"]
+    assert outcome["owner_required_actions"] == [
+        "select a compatible rollback Release Set",
+        "prepare required bindings: worker_binding",
+    ]
+    assert outcome["remediation"] == "select a compatible rollback Release Set\nprepare required bindings: worker_binding"
+    assert outcome["exact_next_action"] == outcome["remediation"]
+    assert outcome["owner_diagnostic"]["rollback_diagnostic"] == values["preflight"]["rollback_diagnostic"]
+    assert outcome["authorization_state"] == "NOT_AUTHORIZED_READ_ONLY"
+    assert_zero_effect(outcome)
+
+    malformed = {key: dict(value) for key, value in base.items()}
+    malformed["preflight"].pop("rollback_diagnostic")
+    outcome = fixture_compose(malformed)
+    assert outcome["status"] == "INFRASTRUCTURE_FAILURE"
+    assert outcome["phase"] == "PROMOTION_PREFLIGHT"
+    assert outcome["owner_reason_codes"] == []
+    assert_zero_effect(outcome)
 
     values = {key: dict(value) for key, value in base.items()}
     values["preflight"]["ready"] = False
@@ -854,8 +975,6 @@ def self_test() -> None:
     assert outcome["phase"] == "PROVIDER_OBSERVATION"
     assert outcome["owner_reason_code"] is None
     assert_zero_effect(outcome)
-
-
 
     manual_source = "a" * 40
     manual_release = "release-set-v3-sha256-" + "c" * 64

@@ -11,6 +11,7 @@ const CAMOUFOX = '.github/workflows/camoufox-runtime-gate.yml';
 const CAMOUFOX_SCOPE = 'scripts/classify-camoufox-runtime-scope.py';
 const AUTHORITY = 'architecture/release-architecture-ar11.json';
 const ASSET_MATERIALIZER = 'scripts/release-set-assets-ar11.sh';
+const EXPECTED_PROMOTION_RUN_NAME = "run-name: AR11 Release Set Promotion — ${{ github.event_name == 'workflow_run' && 'READ-ONLY PREFLIGHT' || github.event_name == 'workflow_dispatch' && 'MANUAL PROMOTION (AUTHORIZATION REQUIRED)' || 'INTERNAL ROLLBACK-NEGATIVE EVIDENCE' }}";
 const LEGACY_FILES = [
   '.github/workflows/mailbox-secret-resolver-promotion.yml',
   'scripts/mailbox-secret-resolver-promotion.py',
@@ -181,8 +182,11 @@ function authorityErrors(authority) {
 
 function promotionErrors(promotion) {
   const errors = [];
+  const runNameLine = promotion.split('\n').find((line) => line.startsWith('run-name: '));
+  if (runNameLine !== EXPECTED_PROMOTION_RUN_NAME) {
+    errors.push('promotion run-name must distinguish read-only preflight, authorization-required manual promotion, and internal rollback-negative evidence');
+  }
   errors.push(...requireMarkers(promotion, [
-    'run-name: AR11 Release Set Promotion',
     'workflow_run:',
     '- Release Set Build',
     'workflow_dispatch:',
@@ -259,6 +263,18 @@ function promotionErrors(promotion) {
     'provider_mutation:false',
     'production_mutation:false',
     'ar11-ready-to-mutate-$RELEASE_SET_ID-$SOURCE_SHA',
+    'Terminalize one lossless AR11 OperationalOutcome',
+    'promotion-operational-outcome-ar11.py',
+    '--output "$RUNNER_TEMP/promotion-operational-outcome.json"',
+    'Upload terminal AR11 OperationalOutcome evidence',
+    'name: ar11-operational-outcome-${{ github.run_id }}-${{ github.run_attempt }}',
+    'Enforce terminal AR11 disposition after evidence publication',
+    '.contract == "PROMOTION_OPERATOR_OUTCOME_V1"',
+    '.authorization_state == "NOT_AUTHORIZED_READ_ONLY"',
+    '.provider_mutation_started == false',
+    '.provider_mutation_executed == false',
+    '.production_mutation_executed == false',
+    '.effect_state == "EXACT_NO_EFFECT"',
   ], 'pre-authorization READY proof'));
   errors.push(...forbidMarkers(ready, [
     'secrets.CLOUDFLARE_API_TOKEN }}',
@@ -268,6 +284,12 @@ function promotionErrors(promotion) {
     '--message "release_set=',
   ], 'pre-authorization READY proof'));
   errors.push(...secretObservationErrors(ready, 'pre-authorization READY proof'));
+  const readOnlyTerminalize = ready.indexOf('Terminalize one lossless AR11 OperationalOutcome');
+  const readOnlyUpload = ready.indexOf('Upload terminal AR11 OperationalOutcome evidence');
+  const readOnlyEnforce = ready.indexOf('Enforce terminal AR11 disposition after evidence publication');
+  if (!(readOnlyTerminalize >= 0 && readOnlyUpload > readOnlyTerminalize && readOnlyEnforce > readOnlyUpload)) {
+    errors.push('read-only AR11 must terminalize -> publish evidence -> enforce final disposition');
+  }
 
   errors.push(...requireMarkers(resolveAuthorized, [
     "if: needs.route.outputs.mode == 'promote'",
@@ -472,6 +494,10 @@ function selfTest(files) {
   if (secretObservationErrors(jobBlock(badSecret, 'preflight-ready'), 'fixture').length === 0) {
     throw new Error('redundant Worker-name secret observation fixture passed');
   }
+  const ambiguousRunName = files.promotion.replace(EXPECTED_PROMOTION_RUN_NAME, 'run-name: AR11 Release Set Promotion');
+  if (!promotionErrors(ambiguousRunName).some((error) => error.includes('run-name must distinguish'))) {
+    throw new Error('ambiguous promotion run-name fixture unexpectedly passed');
+  }
   const missingReadyBinding = files.promotion.replaceAll('READY_EVIDENCE_SHA256', 'READY_EVIDENCE_DIGEST_MISSING');
   if (promotionErrors(missingReadyBinding).length === 0) throw new Error('missing READY binding fixture passed');
   const rebuild = files.promotion.replace(
@@ -507,6 +533,14 @@ function selfTest(files) {
   }
   if (!promotionErrors(earlyDeployCredential).some((error) => error.includes('explicit activation proof boundary'))) {
     throw new Error('early deploy credential fixture unexpectedly passed');
+  }
+  const missingReadOnlyTerminalization = files.promotion.replace('Terminalize one lossless AR11 OperationalOutcome', 'Read-only terminalization fixture removed');
+  if (!promotionErrors(missingReadOnlyTerminalization).some((error) => error.includes('pre-authorization READY proof'))) {
+    throw new Error('missing read-only terminalization fixture unexpectedly passed');
+  }
+  const missingReadOnlyPublication = files.promotion.replace('Upload terminal AR11 OperationalOutcome evidence', 'Read-only terminal publication fixture removed');
+  if (!promotionErrors(missingReadOnlyPublication).some((error) => error.includes('pre-authorization READY proof'))) {
+    throw new Error('missing read-only terminal publication fixture unexpectedly passed');
   }
   const missingManualTerminalization = files.promotion.replace('Terminalize one lossless manual AR11 OperationalOutcome', 'Terminalization fixture removed');
   if (!promotionErrors(missingManualTerminalization).some((error) => error.includes('manual terminal outcome'))) {
@@ -558,4 +592,4 @@ if (errors.length > 0) {
   process.exit(1);
 }
 if (process.argv.includes('--self-test')) selfTest(files);
-else console.log('AR-11 release operational authority passed: automatic read-only READY precedes authorization; mutation is READY-bound and re-fenced; Camoufox PR replay is fail-closed and runtime-impact-aware.');
+else console.log('AR-11 release operational authority passed: automatic read-only READY terminalizes before authorization; mutation is READY-bound and re-fenced; promotion run surfaces are explicit; Camoufox PR replay is fail-closed and runtime-impact-aware.');
