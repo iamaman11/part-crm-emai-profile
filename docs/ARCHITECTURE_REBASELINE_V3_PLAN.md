@@ -95,6 +95,7 @@ later stage cannot start merely because its code is easy or an earlier branch is
 | V1 | Release-facing verification and quality convergence | Apply accepted CAP-05 risk tiers to the exact reachable release surface; give every CAP-05 finding an evidenced disposition, resolve every `UNKNOWN`, and retire/narrow only proven duplicate orchestration without losing an invariant. |
 | TX-6 | Isolated non-Production D1 rehearsal acceptance | D1 migration control plane: prove one exact transaction-scoped, recoverable rehearsal on a separately isolated non-Production target through the existing typed policy owners and sole protected D1 executor. V2 staging Catalog and Production are not rehearsal targets. |
 | TX-7 | D1 operator-control usability acceptance | D1 operations natural owners: reduce the accepted control plane to one standard operator protocol/control surface that automatically composes observation/qualification, immutable prepare + `TransactionId`, exact authorization boundary, sole-executor execution, receipt and post-verify without requiring architecture archaeology or manual cross-assembly of internal contracts. Preserve all fail-closed semantics and introduce no second semantic/mutation owner or mutable status database. |
+| O0 | Operational outcome convergence | Critical operational procedures preserve existing natural-owner verdicts losslessly through orchestration to one durable terminal outcome with exact cause/effect state/next action. AR11 is the first mandatory proof. No second policy/mutation owner, provider client, mutable status DB or generic workflow framework. |
 | V2 | CAP12-I4 exact scenario acceptance | On one immutable non-Production release identity prove B1–B10, including the positive path and negative, replay, concurrency, recovery, hosted identity and exact-environment evidence. |
 | R1 | Exact candidate and evidence | Freeze the release candidate identity and instantiate the CAP-08 target envelope: source/artifacts, migrations/contracts, target/config, capability digest/effective set, evidence, risks and named authorities. |
 | R2 | Pilot readiness package | Without Production mutation, bind cohort, blast radius, stop, rollback/recovery and expansion conditions to the unchanged release candidate and Production target envelope. Mandatory security/data guarantees cannot be waived. |
@@ -103,7 +104,7 @@ later stage cannot start merely because its code is easy or an earlier branch is
 The binding pre-V2 order is therefore:
 
 ```text
-V1 -> TX-6 -> TX-7 -> V2 -> R1 -> R2 -> R3
+V1 -> TX-6 -> TX-7 -> O0 -> V2 -> R1 -> R2 -> R3
 ```
 
 The CURRENT stage Issue must refine only its selected stage without widening it. If fresh evidence
@@ -167,6 +168,85 @@ The stage may add a thin operator command/transport if required, but it must orc
 is an implementation decision of the future CURRENT TX-7 Issue, not a permanent API invented by this
 roadmap.
 
+### 3.2 O0 binding outcome — critical operations must be lossless at the operator boundary
+
+O0 exists because TX-7 correctly solved the D1 operator-control problem but V2/AR11 demonstrated the
+same class of operational-loss defect outside the D1-specific procedure: a natural owner may emit a
+structured blocker/remediation while workflow/shell composition redirects that output to a temporary
+file and exposes only a non-zero process status. Safe fail-closed semantics are preserved, but the
+operator is forced back into workflow/log/artifact archaeology.
+
+O0 does not introduce a universal policy engine. Its binding design and complete implementation plan are
+owned by [`OPERATIONAL_OUTCOME_CONVERGENCE_PLAN.md`](OPERATIONAL_OUTCOME_CONVERGENCE_PLAN.md).
+
+Entry conditions:
+
+```text
+TX-7 = ACCEPTED
+V2 = PAUSED_AT_CURRENT_SAFE_READ_ONLY_BOUNDARY
+PROVIDER_MUTATION_AUTHORIZED_BY_O0 = NO
+PRODUCTION_AUTHORIZED = NO
+```
+
+Binding principle:
+
+```text
+one fact -> one natural owner
+one operation -> one standard procedure
+one owner verdict -> lossless terminal projection
+one terminal operation -> one OperationalOutcome
+one blocked operation -> one exact cause + one exact next action
+```
+
+The terminal outcome is transport/projection only. Existing D1, Release, Promotion, authorization,
+provider-observation, mutation and recovery owners retain all semantic authority. YAML/shell may name
+an orchestration phase, but it may not duplicate or translate an available owner reason-code taxonomy.
+
+O0 is intentionally bounded:
+
+1. AR11 Release Set Promotion is the first mandatory end-to-end implementation/proof because it exposed
+   the current reachable defect on the V2 critical path;
+2. a permanent repository rule is added at its natural architecture/execution-contract owner so future
+   touched/new critical authorization/mutation/recovery/acceptance procedures cannot silently collapse a
+   structured owner verdict into an opaque shell failure;
+3. currently reachable pre-V2/R1 critical procedures are classified and only same-class reachable gaps
+   that would immediately recreate operator archaeology are corrected during O0;
+4. ordinary build/test CI is not retrofitted merely for uniformity;
+5. no second semantic owner, provider client, mutation owner, mutable status database, global registry,
+   generic orchestration framework or checker-for-checker is permitted.
+
+Minimum acceptance requires:
+
+- every reachable AR11 semantic blocker to identify the exact phase/gate, natural owner, owner reason,
+  remediation, provider-effect state and immutable evidence from one terminal outcome;
+- infrastructure failure before an owner verdict to remain explicitly distinguishable and never receive
+  a fabricated semantic cause;
+- failure evidence to terminalize whenever the runner remains able to publish it, including failures
+  before READ_ONLY_READY;
+- READY/COMPLETED/NOOP to use the same terminal contract as failures;
+- machine-known source/tree/Release Set/target/digest/transaction/promotion values to remain machine-owned;
+- credential-free negative proof at each AR11 composed semantic boundary plus a positive READY proof;
+- a hosted accepted-main AR11 read-only run to produce one self-contained terminal outcome whether the
+  real provider state is READY or legitimately BLOCKED;
+- provider-effect authorization, exact-current fencing, replay and post-verify semantics to remain
+  unchanged or stronger;
+- an explicit simplification ledger showing the reduction in opaque critical failure boundaries and
+  manual log/artifact joins, with zero new semantic/mutation owners.
+
+O0 capability impact is exactly:
+
+```text
+CAPABILITY_LIFECYCLE_IMPACT = NONE
+CORE_PROFILE_CHANGE = NONE
+EFFECTIVE_SET_CHANGE = NONE
+PRODUCT_RUNTIME_SEMANTICS_CHANGE = NONE
+```
+
+O0 completion does not require manufacturing a provider write. A genuine product/provider blocker that
+becomes visible through the new outcome returns to its existing natural owner when #266 re-selects V2.
+Repository/source changes made by O0 naturally invalidate stale candidate-bound V2 evidence and produce
+a fresh immutable Release Set; no compatibility shim may preserve a stale `ReleaseCandidateId`.
+
 ## 4. Transaction protocol
 
 ```text
@@ -209,7 +289,7 @@ Every implementation stage Issue must state:
 
 Issue #266 is the sole mutable execution pointer and sits above all executable stages. Exactly one stage
 may be CURRENT at a time, and that stage has exactly one owning GitHub Issue. Named stages such as
-`TX-6`, `TX-7`, `V2` and `M2` are peers when selected by #266; they do not require an additional
+`TX-6`, `TX-7`, `O0`, `V2` and `M2` are peers when selected by #266; they do not require an additional
 simultaneously active program Issue above or below them.
 
 Future execution order lives only in this protected-main plan. #266 may contain the CURRENT stage/Issue,
@@ -276,8 +356,8 @@ provider mutation is authorized.
 
 - D0, E0–E4 and C0 authorize no provider, staging or Production mutation. A0 may wire and prove
   rehearsal/staging authorization only through its owning Issue; it never authorizes Production.
-- TX-6/TX-7 existence or acceptance never grants provider or Production mutation authority. Any
-  non-Production rehearsal still requires the exact provider-effect boundary in section 4.2.
+- TX-6/TX-7/O0 existence or acceptance never grants provider or Production mutation authority. Any
+  non-Production rehearsal or effect still requires the exact provider-effect boundary in section 4.2.
 - P1–P3 implement only the accepted CAP-12 first-release scenario; Mailboxes, Notifications,
   Automation, Yahoo/new providers, tenant-wide Audit, global Sessions UI, complex roles, mobile parity
   and generic export are non-goals.
@@ -537,7 +617,7 @@ finding is reachable from it or invalidates its accepted evidence.
 
 The temporary program closes only when:
 
-1. every binding pre-R1 stage in section 3, including TX-6, TX-7 and V2, has accepted evidence on
+1. every binding pre-R1 stage in section 3, including TX-6, TX-7, O0 and V2, has accepted evidence on
    protected `main`;
 2. one exact candidate envelope is complete and all universal/reachable guarantees are decided;
 3. R2/R3 record the named authorization outcome;
