@@ -75,9 +75,18 @@ fn ar11_workflow_terminalizes_after_owner_capture_and_before_final_assertion() -
     let manual_enforce = workflow
         .find("Enforce terminal manual AR11 disposition after evidence publication")
         .ok_or_else(|| "manual final enforcement step must exist".to_string())?;
-    assert!(mutation_start < deploy, "effect-start marker must precede deploy invocation");
-    assert!(deploy < manual_terminalize, "manual terminal outcome must observe deploy result");
-    assert!(manual_terminalize < manual_enforce, "manual outcome must be published before final assertion");
+    assert!(
+        mutation_start < deploy,
+        "effect-start marker must precede deploy invocation"
+    );
+    assert!(
+        deploy < manual_terminalize,
+        "manual terminal outcome must observe deploy result"
+    );
+    assert!(
+        manual_terminalize < manual_enforce,
+        "manual outcome must be published before final assertion"
+    );
     Ok(())
 }
 
