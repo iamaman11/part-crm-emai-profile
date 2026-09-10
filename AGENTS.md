@@ -146,8 +146,7 @@ STAGE ENTRY
 ```
 
 Do not jump stages, continue from a superseded head, batch unrelated cleanup, or treat local/old CI as merge acceptance.
-Do not turn the re-baseline checkpoints above into a loop between individual expected writes inside one
-bounded mutation window.
+Do not turn the re-baseline checkpoints above into a loop between individual expected writes inside one bounded mutation window.
 
 If a stage itself contains separable authorities/effects, use separate bounded mutation windows at
 those real authority boundaries rather than one window per API call. In particular, source/PR/CI
@@ -181,6 +180,9 @@ An internal caller, validator, generator, drift gate, self-test or documentation
 ## 4. Permanent architecture boundaries
 
 - one semantic fact has one natural owner;
+- one natural-owner verdict -> one lossless terminal OperationalOutcome for every new or touched critical operational procedure;
+- **Capture before assert**: structured owner output must survive shell/YAML gate enforcement, and orchestration may name the phase/gate but must not rename or re-own an available semantic reason;
+- infrastructure failure before an owner verdict must remain explicitly non-semantic and must never fabricate an owner reason; provider effect is exact when provable and otherwise UNKNOWN/fail-closed;
 - Product Runtime never depends on `opsctl` or `opsctl-core`;
 - `opsctl` is local/offline typed policy, planning, verification and projection tooling, never Product Runtime, daemon, browser launcher, provider client or mutation executor;
 - raw JSON/provider responses/effect handles do not cross into pure semantic APIs;
