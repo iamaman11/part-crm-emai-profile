@@ -2,7 +2,9 @@ use crate::promotion::plan::{PlanRequest, PromotionPlan, build};
 use crate::promotion::snapshot::DeploymentSnapshot;
 use crate::release::compatibility::CompatibilityEvidence;
 use crate::release::document::LoadedReleaseSet;
-use crate::release::model::{CompatibilityDecision, ReleaseModelError};
+use crate::release::model::ReleaseModelError;
+#[cfg(test)]
+use crate::release::model::CompatibilityDecision;
 use serde_json::{Value, json};
 use std::collections::BTreeSet;
 use std::path::Path;
@@ -524,6 +526,7 @@ fn evaluate_rollback_candidate_diagnostic(
     RollbackDiagnostic::compatible()
 }
 
+#[cfg(test)]
 fn evaluate_rollback_candidate(
     known_good: &LoadedReleaseSet,
     snapshot: &DeploymentSnapshot,
@@ -567,7 +570,7 @@ mod tests {
     use std::collections::BTreeSet;
 
     const SHA: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
-    const GIT: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    const GIT: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     const REPO: &str = "iamaman11/part-crm-emai-profile";
     const HISTORICAL_PREFIX: &str = "release-set-v2-sha256-";
 
