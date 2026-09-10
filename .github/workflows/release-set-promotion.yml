@@ -258,11 +258,6 @@ jobs:
           current_profile="$(jq -er '.capability_profile_id | select(type == "string" and length > 0)' "$RUNNER_TEMP/current-identity.json")"
           [[ "$current_id" =~ ^release-set-v(2|3)-sha256-[0-9a-f]{64}$ ]]
           [[ "$current_profile" =~ ^[a-z0-9][a-z0-9-]*$ ]]
-          effective_target_profile="$TARGET_PROFILE"
-          if [ "$current_id" != "$RELEASE_SET_ID" ]; then
-            effective_target_profile="$current_profile"
-          fi
-          [[ "$effective_target_profile" =~ ^[a-z0-9][a-z0-9-]*$ ]]
           gh api "repos/$GITHUB_REPOSITORY/releases/tags/$current_id" > "$RUNNER_TEMP/current-release-api.json"
           known_good_source="$(jq -er '.target_commitish' "$RUNNER_TEMP/current-release-api.json")"
           [[ "$known_good_source" =~ ^[0-9a-f]{40}$ ]]
@@ -303,7 +298,6 @@ jobs:
           {
             echo "current_id=$current_id"
             echo "current_profile=$current_profile"
-            echo "effective_target_profile=$effective_target_profile"
             echo "known_good_source=$known_good_source"
             echo "d1_head=$d1_head"
             echo "custom_domain=$custom_domain"
@@ -359,12 +353,12 @@ jobs:
 
       - name: Capture native compatibility, plan and rollback-aware preflight
         id: policy
-        env:
-          EFFECTIVE_TARGET_PROFILE: ${{ steps.observe.outputs.effective_target_profile }}
         run: |
           set -uo pipefail
           echo "read_only_ready=false" >> "$GITHUB_OUTPUT"
           echo "infra_boundary=" >> "$GITHUB_OUTPUT"
+          echo "target_profile=" >> "$GITHUB_OUTPUT"
+          echo "admission_mode=" >> "$GITHUB_OUTPUT"
 
           if ! cargo run --locked --quiet --manifest-path tools/opsctl/Cargo.toml -- \
             --root . d1 compatibility --component catalog \
@@ -389,9 +383,31 @@ jobs:
             echo "infra_boundary=RELEASE_COMPATIBILITY_EVIDENCE" >> "$GITHUB_OUTPUT"
             exit 0
           fi
+
+          if ! cargo run --locked --quiet --manifest-path tools/opsctl/Cargo.toml -- \
+            --root . promotion plan --release-set "$TARGET_RELEASE_MANIFEST" \
+            --source-root . --profile "$TARGET_PROFILE" --environment "$TARGET_ENVIRONMENT" \
+            --snapshot "$RUNNER_TEMP/pre-snapshot.json" \
+            --evidence-json "$RUNNER_TEMP/compatibility-evidence.json" \
+            --expected-current "${{ steps.observe.outputs.current_id }}" \
+            --current-release-set "$CURRENT_RELEASE_MANIFEST" \
+            > "$RUNNER_TEMP/promotion-plan.json"; then
+            echo "infra_boundary=PROMOTION_PLAN" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if ! jq -e --arg requested "$TARGET_PROFILE" '.schema_version == 1 and .command == "promotion.plan" and (.decision == "PLAN" or .decision == "NO_CHANGE" or .decision == "BLOCKED") and .requested_target_capability_profile_id == $requested and (.target_capability_profile_id | type == "string" and length > 0) and (.admission_mode == "DIRECT" or .admission_mode == "PREREQUISITE_RELEASE_BRIDGE") and .execution_authorized == false and .mutation_executed == false and (.blockers | type == "array")' "$RUNNER_TEMP/promotion-plan.json" >/dev/null; then
+            echo "infra_boundary=PROMOTION_PLAN" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          target_profile="$(jq -er '.target_capability_profile_id' "$RUNNER_TEMP/promotion-plan.json")"
+          admission_mode="$(jq -er '.admission_mode' "$RUNNER_TEMP/promotion-plan.json")"
+          [[ "$target_profile" =~ ^[a-z0-9][a-z0-9-]*$ ]]
+          echo "target_profile=$target_profile" >> "$GITHUB_OUTPUT"
+          echo "admission_mode=$admission_mode" >> "$GITHUB_OUTPUT"
+
           if ! cargo run --locked --quiet --manifest-path tools/opsctl/Cargo.toml -- \
             --root . release compatibility --release-set "$TARGET_RELEASE_MANIFEST" \
-            --source-root . --profile "$EFFECTIVE_TARGET_PROFILE" --environment "$TARGET_ENVIRONMENT" \
+            --source-root . --profile "$target_profile" --environment "$TARGET_ENVIRONMENT" \
             --evidence-json "$RUNNER_TEMP/compatibility-evidence.json" \
             --current-release-set "$CURRENT_RELEASE_MANIFEST" \
             > "$RUNNER_TEMP/release-compatibility.json"; then
@@ -405,29 +421,13 @@ jobs:
           if ! jq -e '.compatible == true' "$RUNNER_TEMP/release-compatibility.json" >/dev/null; then
             exit 0
           fi
-
-          if ! cargo run --locked --quiet --manifest-path tools/opsctl/Cargo.toml -- \
-            --root . promotion plan --release-set "$TARGET_RELEASE_MANIFEST" \
-            --source-root . --profile "$EFFECTIVE_TARGET_PROFILE" --environment "$TARGET_ENVIRONMENT" \
-            --snapshot "$RUNNER_TEMP/pre-snapshot.json" \
-            --evidence-json "$RUNNER_TEMP/compatibility-evidence.json" \
-            --expected-current "${{ steps.observe.outputs.current_id }}" \
-            --current-release-set "$CURRENT_RELEASE_MANIFEST" \
-            > "$RUNNER_TEMP/promotion-plan.json"; then
-            echo "infra_boundary=PROMOTION_PLAN" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          if ! jq -e '.schema_version == 1 and .command == "promotion.plan" and (.decision == "PLAN" or .decision == "NO_CHANGE" or .decision == "BLOCKED") and .execution_authorized == false and .mutation_executed == false and (.blockers | type == "array")' "$RUNNER_TEMP/promotion-plan.json" >/dev/null; then
-            echo "infra_boundary=PROMOTION_PLAN" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
           if ! jq -e '.decision == "PLAN"' "$RUNNER_TEMP/promotion-plan.json" >/dev/null; then
             exit 0
           fi
 
           if ! cargo run --locked --quiet --manifest-path tools/opsctl/Cargo.toml -- \
             --root . promotion preflight --release-set "$TARGET_RELEASE_MANIFEST" \
-            --source-root . --profile "$EFFECTIVE_TARGET_PROFILE" --environment "$TARGET_ENVIRONMENT" \
+            --source-root . --profile "$TARGET_PROFILE" --environment "$TARGET_ENVIRONMENT" \
             --snapshot "$RUNNER_TEMP/pre-snapshot.json" \
             --evidence-json "$RUNNER_TEMP/compatibility-evidence.json" \
             --expected-current "${{ steps.observe.outputs.current_id }}" \
@@ -437,7 +437,7 @@ jobs:
             echo "infra_boundary=PROMOTION_PREFLIGHT" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          if ! jq -e '.schema_version == 1 and .command == "promotion.preflight" and (.ready | type == "boolean") and (.decision == "READY" or .decision == "BLOCKED") and .credential_values_accessed == false and .provider_mutation_executed == false and .mutation_executed == false and (.blockers | type == "array") and (.required_steps | type == "array")' "$RUNNER_TEMP/promotion-preflight.json" >/dev/null; then
+          if ! jq -e --arg requested "$TARGET_PROFILE" --arg effective "$target_profile" --arg mode "$admission_mode" '.schema_version == 1 and .command == "promotion.preflight" and .requested_target_capability_profile_id == $requested and .target_capability_profile_id == $effective and .admission_mode == $mode and (.ready | type == "boolean") and (.decision == "READY" or .decision == "BLOCKED") and .credential_values_accessed == false and .provider_mutation_executed == false and .mutation_executed == false and (.blockers | type == "array") and (.required_steps | type == "array")' "$RUNNER_TEMP/promotion-preflight.json" >/dev/null; then
             echo "infra_boundary=PROMOTION_PREFLIGHT" >> "$GITHUB_OUTPUT"
             exit 0
           fi
@@ -501,7 +501,8 @@ jobs:
             --arg release_set_id "$RELEASE_SET_ID" \
             --arg expected_current "${{ steps.observe.outputs.current_id }}" \
             --arg expected_current_profile "${{ steps.observe.outputs.current_profile }}" \
-            --arg target_profile "${{ steps.observe.outputs.effective_target_profile }}" \
+            --arg target_profile "${{ steps.policy.outputs.target_profile }}" \
+            --arg admission_mode "${{ steps.policy.outputs.admission_mode }}" \
             --arg d1_head "${{ steps.observe.outputs.d1_head }}" \
             --arg worker_identity_sha256 "$worker_identity_sha" \
             --arg d1_ledger_sha256 "$d1_ledger_sha" \
@@ -509,9 +510,9 @@ jobs:
             --arg release_verify_sha256 "$(sha256sum "$RUNNER_TEMP/release-verify.json" | cut -d' ' -f1)" \
             --arg preflight_sha256 "$(sha256sum "$RUNNER_TEMP/promotion-preflight.json" | cut -d' ' -f1)" \
             --arg plan_sha256 "$(sha256sum "$RUNNER_TEMP/promotion-plan.json" | cut -d' ' -f1)" \
-            '{schema_version:1,kind:"AR11_READY_TO_MUTATE",ready:true,environment:"staging",source_sha:$source_sha,release_set_id:$release_set_id,expected_current_release_set_id:$expected_current,expected_current_capability_profile_id:$expected_current_profile,target_capability_profile_id:$target_profile,worker_exists:true,worker_identity_sha256:$worker_identity_sha256,d1_head:$d1_head,d1_ledger_sha256:$d1_ledger_sha256,secret_bindings_verified:true,quiescence:{seconds:30,worker_identity_stable:true,d1_ledger_stable:true},promotion_id:$promotion_id,release_verify_sha256:$release_verify_sha256,promotion_preflight_sha256:$preflight_sha256,promotion_plan_sha256:$plan_sha256,credential_values_accessed:false,provider_mutation:false,production_mutation:false}' \
+            '{schema_version:1,kind:"AR11_READY_TO_MUTATE",ready:true,environment:"staging",source_sha:$source_sha,release_set_id:$release_set_id,expected_current_release_set_id:$expected_current,expected_current_capability_profile_id:$expected_current_profile,target_capability_profile_id:$target_profile,admission_mode:$admission_mode,worker_exists:true,worker_identity_sha256:$worker_identity_sha256,d1_head:$d1_head,d1_ledger_sha256:$d1_ledger_sha256,secret_bindings_verified:true,quiescence:{seconds:30,worker_identity_stable:true,d1_ledger_stable:true},promotion_id:$promotion_id,release_verify_sha256:$release_verify_sha256,promotion_preflight_sha256:$preflight_sha256,promotion_plan_sha256:$plan_sha256,credential_values_accessed:false,provider_mutation:false,production_mutation:false}' \
             > "$RUNNER_TEMP/ready-to-mutate.json"
-          jq -e --arg source "$SOURCE_SHA" --arg target "$RELEASE_SET_ID" --arg current "${{ steps.observe.outputs.current_id }}" --arg current_profile "${{ steps.observe.outputs.current_profile }}" --arg target_profile "${{ steps.observe.outputs.effective_target_profile }}" '.kind == "AR11_READY_TO_MUTATE" and .ready == true and .source_sha == $source and .release_set_id == $target and .expected_current_release_set_id == $current and .expected_current_capability_profile_id == $current_profile and .target_capability_profile_id == $target_profile and .worker_exists == true and .secret_bindings_verified == true and .quiescence.worker_identity_stable == true and .quiescence.d1_ledger_stable == true and .credential_values_accessed == false and .provider_mutation == false and .production_mutation == false' "$RUNNER_TEMP/ready-to-mutate.json" >/dev/null
+          jq -e --arg source "$SOURCE_SHA" --arg target "$RELEASE_SET_ID" --arg current "${{ steps.observe.outputs.current_id }}" --arg current_profile "${{ steps.observe.outputs.current_profile }}" --arg target_profile "${{ steps.policy.outputs.target_profile }}" --arg admission_mode "${{ steps.policy.outputs.admission_mode }}" '.kind == "AR11_READY_TO_MUTATE" and .ready == true and .source_sha == $source and .release_set_id == $target and .expected_current_release_set_id == $current and .expected_current_capability_profile_id == $current_profile and .target_capability_profile_id == $target_profile and .admission_mode == $admission_mode and .worker_exists == true and .secret_bindings_verified == true and .quiescence.worker_identity_stable == true and .quiescence.d1_ledger_stable == true and .credential_values_accessed == false and .provider_mutation == false and .production_mutation == false' "$RUNNER_TEMP/ready-to-mutate.json" >/dev/null
           ready_sha="$(sha256sum "$RUNNER_TEMP/ready-to-mutate.json" | cut -d' ' -f1)"
           artifact_name="ar11-ready-to-mutate-$RELEASE_SET_ID-$SOURCE_SHA"
           echo "READY_TO_MUTATE evidence sha256=$ready_sha"
@@ -571,7 +572,7 @@ jobs:
             failed_boundary="READY_EVIDENCE_PUBLICATION"
           fi
 
-          effective_target_profile="${{ steps.observe.outputs.effective_target_profile }}"
+          effective_target_profile="${{ steps.policy.outputs.target_profile }}"
           test -n "$effective_target_profile" || effective_target_profile="$TARGET_PROFILE"
           tree_sha="$(git rev-parse "$SOURCE_SHA^{tree}")"
           evidence_artifact="ar11-operational-outcome-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
@@ -778,7 +779,7 @@ jobs:
           gh run download "$READY_RUN_ID" --repo "$GITHUB_REPOSITORY" --name "$READY_ARTIFACT_NAME" --dir "$ready_root"
           for name in ready-to-mutate.json release-set.json accepted-source-evidence.json release-verify.json compatibility-evidence.json promotion-plan.json promotion-preflight.json pre-snapshot.json d1-names-after.json; do test -f "$ready_root/$name"; done
           test "$(sha256sum "$ready_root/ready-to-mutate.json" | cut -d' ' -f1)" = "$READY_EVIDENCE_SHA256"
-          jq -e --arg source "$MAIN_SHA" --arg target "$RELEASE_SET_ID" --arg current "$EXPECTED_CURRENT" '.schema_version == 1 and .kind == "AR11_READY_TO_MUTATE" and .ready == true and .source_sha == $source and .release_set_id == $target and .expected_current_release_set_id == $current and (.expected_current_capability_profile_id | type == "string" and length > 0) and (.target_capability_profile_id | type == "string" and length > 0) and .worker_exists == true and .secret_bindings_verified == true and .quiescence.worker_identity_stable == true and .quiescence.d1_ledger_stable == true and .credential_values_accessed == false and .provider_mutation == false and .production_mutation == false' "$ready_root/ready-to-mutate.json" >/dev/null
+          jq -e --arg source "$MAIN_SHA" --arg target "$RELEASE_SET_ID" --arg current "$EXPECTED_CURRENT" '.schema_version == 1 and .kind == "AR11_READY_TO_MUTATE" and .ready == true and .source_sha == $source and .release_set_id == $target and .expected_current_release_set_id == $current and (.expected_current_capability_profile_id | type == "string" and length > 0) and (.target_capability_profile_id | type == "string" and length > 0) and (.admission_mode == "DIRECT" or .admission_mode == "PREREQUISITE_RELEASE_BRIDGE") and .worker_exists == true and .secret_bindings_verified == true and .quiescence.worker_identity_stable == true and .quiescence.d1_ledger_stable == true and .credential_values_accessed == false and .provider_mutation == false and .production_mutation == false' "$ready_root/ready-to-mutate.json" >/dev/null
           promotion_id="$(jq -er '.promotion_id' "$ready_root/ready-to-mutate.json")"
           target_profile="$(jq -er '.target_capability_profile_id' "$ready_root/ready-to-mutate.json")"
           expected_current_profile="$(jq -er '.expected_current_capability_profile_id' "$ready_root/ready-to-mutate.json")"
