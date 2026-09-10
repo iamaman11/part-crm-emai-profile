@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const EXECUTOR = '.github/workflows/d1-migration-executor.yml';
-const V2_ROUTER = '.github/workflows/v2-phase-a-d1-command-router.yml';
+const LEGACY_V2_PHASE_A_ROUTER = '.github/workflows/v2-phase-a-d1-command-router.yml';
 const LEGACY_V2_ONE_CLICK = '.github/workflows/v2-d1-one-click-dispatcher.yml';
 const ADAPTER = 'scripts/d1-executor-plan.py';
 const EXECUTOR_ADMISSION = 'tools/opsctl/src/d1/executor_admission.rs';
@@ -131,7 +131,6 @@ function validateSharedMutationGroup(executorText, promotionText) {
 
 async function validateExecutor(text, root = ROOT) {
   const promotionText = await readFile(path.join(root, PROMOTION), 'utf8');
-  const routerText = await readFile(path.join(root, V2_ROUTER), 'utf8');
   const adapterText = await readFile(path.join(root, ADAPTER), 'utf8');
   const admissionText = await readFile(path.join(root, EXECUTOR_ADMISSION), 'utf8');
   const compactAdmissionText = admissionText.replace(/\s+/g, '');
@@ -238,17 +237,8 @@ async function validateExecutor(text, root = ROOT) {
   if (workflows.includes(LEGACY_V2_ONE_CLICK)) {
     fail('superseded V2 one-click executor caller must remain retired');
   }
-
-  for (const marker of [
-    AUTH_DIGEST_MARKER, 'AUTHORIZATION_DIGEST', '--arg authorization_digest "$AUTHORIZATION_DIGEST"',
-    'authorization_digest:$authorization_digest', 'TRANSACTION_AUTHORIZATION_JSON',
-  ]) {
-    if (!routerText.includes(marker)) fail(`V2 router lost exact typed authorization transport marker: ${marker}`);
-  }
-  for (const forbidden of [
-    'select(.head_sha == $sha)', 'conservatively prove source has not been dispatched',
-  ]) {
-    if (routerText.includes(forbidden)) fail(`V2 router revived source-wide replay fence: ${forbidden}`);
+  if (workflows.includes(LEGACY_V2_PHASE_A_ROUTER)) {
+    fail('superseded V2 Phase-A D1 router must remain retired');
   }
 
   for (const reasonCode of DIAGNOSTIC_REASON_CODES) {
@@ -500,7 +490,7 @@ async function validateExecutor(text, root = ROOT) {
     if (!targetFenceMarkerBody.includes(marker)) fail(`durable target-fence marker lost artifact contract: ${marker}`);
   }
   if (targetFenceMarkerBody.includes('CLOUDFLARE_API_TOKEN')) {
-    fail('durable target-fence marker must remain provider-credential-free');
+    fail('durable target-fence marker must remain credential-free');
   }
 
   const receiptInitBody = stepBody(text, RECEIPT_INIT_STEP);
