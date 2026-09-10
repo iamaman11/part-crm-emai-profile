@@ -3,8 +3,6 @@ use crate::promotion::snapshot::DeploymentSnapshot;
 use crate::release::compatibility::CompatibilityEvidence;
 use crate::release::document::LoadedReleaseSet;
 use crate::release::model::ReleaseModelError;
-#[cfg(test)]
-use crate::release::model::CompatibilityDecision;
 use serde_json::{Value, json};
 use std::collections::BTreeSet;
 use std::path::Path;
@@ -99,12 +97,7 @@ impl RollbackDiagnostic {
         summary: impl Into<String>,
         remediation: impl Into<String>,
     ) -> Self {
-        Self::new(
-            RollbackDecision::Unknown,
-            reason_code,
-            summary,
-            remediation,
-        )
+        Self::new(RollbackDecision::Unknown, reason_code, summary, remediation)
     }
 
     fn not_applicable() -> Self {
@@ -533,7 +526,9 @@ fn evaluate_rollback_candidate(
     profile_id: &str,
     resolver_required: bool,
     windows_delivery_required: bool,
-) -> CompatibilityDecision {
+) -> crate::release::model::CompatibilityDecision {
+    use crate::release::model::CompatibilityDecision;
+
     match evaluate_rollback_candidate_diagnostic(
         known_good,
         snapshot,
@@ -685,7 +680,11 @@ mod tests {
         );
         assert_eq!(diagnostic.reason_code, "CATALOG_SCHEMA_UNSUPPORTED");
         assert!(diagnostic.summary.contains("9999_future.sql"));
-        assert!(diagnostic.remediation.contains("Catalog D1 schema revision"));
+        assert!(
+            diagnostic
+                .remediation
+                .contains("Catalog D1 schema revision")
+        );
         Ok(())
     }
 
@@ -723,8 +722,7 @@ mod tests {
     }
 
     #[test]
-    fn missing_resolver_schema_is_unknown_when_required() -> Result<(), Box<dyn std::error::Error>>
-    {
+    fn missing_resolver_schema_is_unknown_when_required() -> Result<(), Box<dyn std::error::Error>> {
         let known_good = release()?;
         let mut state = snapshot();
         state.resolver_schema_revision = None;
