@@ -35,27 +35,44 @@ fn supports_profile(release: &LoadedReleaseSet, profile_id: &str) -> bool {
         .any(|candidate| candidate == profile_id)
 }
 
+fn select_admission_profile_from_facts<'a>(
+    requested_profile_id: &'a str,
+    target_release_set_id: &str,
+    observed_release_set_id: Option<&str>,
+    observed_profile_id: Option<&'a str>,
+    current_supports_requested: bool,
+    target_supports_observed: bool,
+) -> (&'a str, &'static str) {
+    let Some(observed_release_set_id) = observed_release_set_id else {
+        return (requested_profile_id, DIRECT_ADMISSION);
+    };
+    if observed_release_set_id == target_release_set_id {
+        return (requested_profile_id, DIRECT_ADMISSION);
+    }
+    let Some(observed_profile_id) = observed_profile_id else {
+        return (requested_profile_id, DIRECT_ADMISSION);
+    };
+    if observed_profile_id == requested_profile_id
+        || current_supports_requested
+        || !target_supports_observed
+    {
+        return (requested_profile_id, DIRECT_ADMISSION);
+    }
+    (observed_profile_id, PREREQUISITE_RELEASE_BRIDGE)
+}
+
 fn select_admission_profile<'a>(
     requested_profile_id: &'a str,
     target: &'a LoadedReleaseSet,
     current: Option<&LoadedReleaseSet>,
     snapshot: &'a DeploymentSnapshot,
 ) -> (&'a str, &'static str) {
-    let Some(observed_release_set_id) = snapshot.release_set_id.as_deref() else {
-        return (requested_profile_id, DIRECT_ADMISSION);
-    };
-    if observed_release_set_id == target.release_set_id() {
-        return (requested_profile_id, DIRECT_ADMISSION);
-    }
-    let Some(observed_profile_id) = snapshot.capability_profile_id.as_deref() else {
-        return (requested_profile_id, DIRECT_ADMISSION);
-    };
-    if observed_profile_id == requested_profile_id {
-        return (requested_profile_id, DIRECT_ADMISSION);
-    }
-    let Some(current_release) = current else {
-        return (requested_profile_id, DIRECT_ADMISSION);
-    };
+    let current_supports_requested = current
+        .is_some_and(|release| supports_profile(release, requested_profile_id));
+    let target_supports_observed = snapshot
+        .capability_profile_id
+        .as_deref()
+        .is_some_and(|profile_id| supports_profile(target, profile_id));
 
     // When the currently deployed/rollback Release Set cannot run the requested future
     // profile, but the exact target Release Set can run the profile that is actually
@@ -63,13 +80,14 @@ fn select_admission_profile<'a>(
     // first deploy the target bits while retaining the observed profile, then re-run
     // admission for the requested profile against that now-current exact Release Set.
     // This is promotion policy, so it lives here rather than in workflow orchestration.
-    if !supports_profile(current_release, requested_profile_id)
-        && supports_profile(target, observed_profile_id)
-    {
-        (observed_profile_id, PREREQUISITE_RELEASE_BRIDGE)
-    } else {
-        (requested_profile_id, DIRECT_ADMISSION)
-    }
+    select_admission_profile_from_facts(
+        requested_profile_id,
+        target.release_set_id(),
+        snapshot.release_set_id.as_deref(),
+        snapshot.capability_profile_id.as_deref(),
+        current_supports_requested,
+        target_supports_observed,
+    )
 }
 
 fn admission_json(
@@ -192,4 +210,69 @@ pub fn run(request: PromotionRunRequest<'_>) -> Result<String, ReleaseModelError
         .map_err(|error| {
             ReleaseModelError::new(format!("cannot serialize promotion output: {error}"))
         })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{DIRECT_ADMISSION, PREREQUISITE_RELEASE_BRIDGE, select_admission_profile_from_facts};
+
+    #[test]
+    fn release_bridge_retains_observed_profile_when_rollback_cannot_run_requested_profile() {
+        assert_eq!(
+            select_admission_profile_from_facts(
+                "rehearsal-core-v2",
+                "target",
+                Some("current"),
+                Some("rehearsal-core-v1"),
+                false,
+                true,
+            ),
+            ("rehearsal-core-v1", PREREQUISITE_RELEASE_BRIDGE)
+        );
+    }
+
+    #[test]
+    fn exact_target_release_admits_requested_profile_directly() {
+        assert_eq!(
+            select_admission_profile_from_facts(
+                "rehearsal-core-v2",
+                "target",
+                Some("target"),
+                Some("rehearsal-core-v1"),
+                false,
+                true,
+            ),
+            ("rehearsal-core-v2", DIRECT_ADMISSION)
+        );
+    }
+
+    #[test]
+    fn rollback_support_for_requested_profile_avoids_unnecessary_bridge() {
+        assert_eq!(
+            select_admission_profile_from_facts(
+                "rehearsal-core-v2",
+                "target",
+                Some("current"),
+                Some("rehearsal-core-v1"),
+                true,
+                true,
+            ),
+            ("rehearsal-core-v2", DIRECT_ADMISSION)
+        );
+    }
+
+    #[test]
+    fn target_that_cannot_run_observed_profile_does_not_fabricate_bridge() {
+        assert_eq!(
+            select_admission_profile_from_facts(
+                "rehearsal-core-v2",
+                "target",
+                Some("current"),
+                Some("rehearsal-core-v1"),
+                false,
+                false,
+            ),
+            ("rehearsal-core-v2", DIRECT_ADMISSION)
+        );
+    }
 }
