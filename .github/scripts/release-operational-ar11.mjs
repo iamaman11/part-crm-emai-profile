@@ -8,6 +8,7 @@ const ROOT = process.cwd();
 const BUILD = '.github/workflows/release-set-build.yml';
 const PROMOTION = '.github/workflows/release-set-promotion.yml';
 const CAMOUFOX = '.github/workflows/camoufox-runtime-gate.yml';
+const CAMOUFOX_SCOPE = 'scripts/classify-camoufox-runtime-scope.py';
 const AUTHORITY = 'architecture/release-architecture-ar11.json';
 const ASSET_MATERIALIZER = 'scripts/release-set-assets-ar11.sh';
 const LEGACY_FILES = [
@@ -163,8 +164,17 @@ function authorityErrors(authority) {
   if (policy.promotion_rebuild !== false || policy.opsctl_provider_mutation !== false) {
     errors.push('AR-11 promotion must remain no-rebuild with provider mutation outside opsctl');
   }
-  if (policy.pr_change_aware_runtime_gate !== 'FAIL_CLOSED_STRICT_RELEASE_OPS_ALLOWLIST') {
-    errors.push('AR-11 PR runtime gate policy is not the strict fail-closed allowlist model');
+  if (policy.pr_change_aware_runtime_gate !== 'FAIL_CLOSED_PROVEN_RUNTIME_UNRELATED') {
+    errors.push('AR-11 PR runtime gate policy must be fail-closed with only mechanically proven runtime-unrelated cheap paths');
+  }
+  if (policy.pr_runtime_scope_classifier !== CAMOUFOX_SCOPE) {
+    errors.push('AR-11 PR runtime gate must name the canonical Camoufox scope classifier');
+  }
+  if (policy.pr_runtime_unknown_path_policy !== 'HEAVY') {
+    errors.push('AR-11 PR runtime gate must classify unknown paths as HEAVY');
+  }
+  if (policy.pr_runtime_accepted_main_policy !== 'ALWAYS_HEAVY') {
+    errors.push('AR-11 accepted-main runtime policy must remain ALWAYS_HEAVY');
   }
   return errors;
 }
@@ -348,36 +358,96 @@ function promotionErrors(promotion) {
   return errors;
 }
 
-function camoufoxErrors(workflow) {
+function assignmentBlock(source, name, nextName) {
+  const start = source.indexOf(`${name} =`);
+  if (start < 0) return '';
+  const end = nextName ? source.indexOf(`${nextName} =`, start + name.length) : source.length;
+  return source.slice(start, end < 0 ? source.length : end);
+}
+
+function camoufoxClassifierErrors(classifier) {
+  const errors = [];
+  errors.push(...requireMarkers(classifier, [
+    'EXACT_PROVEN_UNRELATED = frozenset(',
+    'PROVEN_UNRELATED_PREFIXES = (',
+    'PROVEN_UNRELATED_GLOBS = (',
+    'return bool(heavy), unrelated, heavy',
+    '"o0-e3a-d1-only-regression"',
+    '"classifier-change-is-heavy"',
+    '"gate-change-is-heavy"',
+    '"mixed-fails-closed"',
+    '"unknown-fails-closed"',
+    'classify([])',
+  ], 'Camoufox runtime-impact classifier'));
+
+  const exact = assignmentBlock(classifier, 'EXACT_PROVEN_UNRELATED', 'PROVEN_UNRELATED_PREFIXES');
+  const prefixes = assignmentBlock(classifier, 'PROVEN_UNRELATED_PREFIXES', 'PROVEN_UNRELATED_GLOBS');
+  const globs = assignmentBlock(classifier, 'PROVEN_UNRELATED_GLOBS', 'def is_proven_unrelated');
+  errors.push(...requireMarkers(exact, [
+    '.github/workflows/release-set-promotion.yml',
+    '.github/scripts/release-operational-ar11.mjs',
+    'architecture/release-architecture-ar11.json',
+    '.github/workflows/v2-phase-a-d1-command-router.yml',
+  ], 'Camoufox exact proven-unrelated set'));
+  errors.push(...requireMarkers(prefixes, [
+    'docs/',
+    'migrations/d1/',
+    'tools/opsctl/',
+  ], 'Camoufox proven-unrelated prefixes'));
+  errors.push(...requireMarkers(globs, [
+    '.github/workflows/d1-*.yml',
+    '.github/scripts/d1-*',
+    'scripts/check-d1-*',
+    'scripts/d1-*',
+  ], 'Camoufox proven-unrelated globs'));
+
+  const safeAssignments = `${exact}\n${prefixes}\n${globs}`;
+  errors.push(...forbidMarkers(safeAssignments, [
+    'runtime/',
+    'apps/',
+    'crates/',
+    'frontend/',
+    'Cargo.lock',
+    'rust-toolchain.toml',
+    'scripts/classify-camoufox-runtime-scope.py',
+    '.github/workflows/camoufox-runtime-gate.yml',
+  ], 'Camoufox proven-unrelated classifier sets'));
+  errors.push(...requireMarkers(classifier, [
+    'runtime/camouhost/launcher.py',
+    'apps/profile-bridge/src/main.rs',
+    'Cargo.lock',
+    'scripts/classify-camoufox-runtime-scope.py',
+    '.github/workflows/camoufox-runtime-gate.yml',
+    'scripts/test-browser-mail-execution-d1.py',
+    'new-subsystem/file.txt',
+  ], 'Camoufox fail-closed heavy fixtures'));
+  return errors;
+}
+
+function camoufoxErrors(workflow, classifier) {
   const errors = [];
   const scope = jobBlock(workflow, 'scope');
   const linux = jobBlock(workflow, 'real-runtime-linux');
   const windows = jobBlock(workflow, 'bridge-regression-windows');
   if (!scope || !linux || !windows) return ['Camoufox change-aware topology is incomplete'];
   errors.push(...requireMarkers(scope, [
-    'Classify accepted-main or strictly allowlisted release-ops PR',
+    'Classify accepted-main or mechanically proven runtime-unrelated PR',
     'if [ "$GITHUB_EVENT_NAME" = push ]; then',
     "echo 'heavy=true'",
-    "'.github/workflows/release-set-promotion.yml'",
-    "'.github/scripts/release-operational-ar11.mjs'",
-    "'architecture/release-architecture-ar11.json'",
-    "unknown = sorted(set(paths) - safe)",
-    "Path('/tmp/camoufox-heavy').write_text('true\\n' if unknown else 'false\\n'",
-  ], 'Camoufox scope classifier'));
-  errors.push(...forbidMarkers(scope, [
-    "'runtime/camouhost/real.py'",
-    "'runtime/camouhost/runtime-lock.json'",
-    "'apps/profile-bridge'",
-    "'Cargo.lock'",
-    "'rust-toolchain.toml'",
-  ], 'Camoufox release-ops allowlist'));
+    'Accepted main always receives full real Camoufox/Windows proof.',
+    'python3.12 -m py_compile scripts/classify-camoufox-runtime-scope.py',
+    'python3.12 scripts/classify-camoufox-runtime-scope.py --self-test',
+    '--paths-file "$RUNNER_TEMP/changed-paths.txt"',
+    '--github-output "$GITHUB_OUTPUT"',
+  ], 'Camoufox scope routing'));
+  errors.push(...camoufoxClassifierErrors(classifier));
   for (const [label, block] of [['Linux required context', linux], ['Windows required context', windows]]) {
     errors.push(...requireMarkers(block, [
       'needs: [scope, patched-candidate]',
       'if: always()',
       'Require successful fail-closed scope classification',
       "needs.scope.outputs.heavy",
-      'Accept strictly release-ops-only PR',
+      'Accept mechanically proven runtime-unrelated PR',
     ], label));
   }
   if (!linux.includes("if: needs.scope.outputs.heavy == 'true'")) errors.push('Linux heavy proof is not gated by exact scope output');
@@ -385,11 +455,11 @@ function camoufoxErrors(workflow) {
   return errors;
 }
 
-function validateAll({ build, promotion, camoufox, authority }) {
+function validateAll({ build, promotion, camoufox, camoufoxClassifier, authority }) {
   return [
     ...buildErrors(build),
     ...promotionErrors(promotion),
-    ...camoufoxErrors(camoufox),
+    ...camoufoxErrors(camoufox, camoufoxClassifier),
     ...authorityErrors(authority),
     ...legacyAuthorityErrors(),
     ...(existsSync(path.join(ROOT, ASSET_MATERIALIZER)) ? [] : [`missing Release Set asset materializer: ${ASSET_MATERIALIZER}`]),
@@ -450,11 +520,28 @@ function selfTest(files) {
   if (legacyFixture.length !== 1 || !legacyFixture[0].includes('legacy D3 operational authority must be retired after Rust cutover')) {
     throw new Error('retired D3 operational authority restoration fixture passed');
   }
-  const unsafeAllowlist = files.camoufox.replace("'architecture/release-architecture-ar11.json',", "'architecture/release-architecture-ar11.json',\n              'runtime/camouhost/real.py',");
-  if (camoufoxErrors(unsafeAllowlist).length === 0) throw new Error('unsafe Camoufox ops allowlist fixture passed');
+  const missingClassifierCall = files.camoufox.replace(
+    'python3.12 scripts/classify-camoufox-runtime-scope.py --self-test',
+    'echo classifier-self-test-bypassed',
+  );
+  if (camoufoxErrors(missingClassifierCall, files.camoufoxClassifier).length === 0) {
+    throw new Error('Camoufox classifier self-test bypass fixture passed');
+  }
+  const unsafePrefixClassifier = files.camoufoxClassifier.replace('    "docs/",', '    "docs/",\n    "runtime/",');
+  if (unsafePrefixClassifier === files.camoufoxClassifier) throw new Error('unsafe Camoufox prefix fixture setup failed');
+  if (camoufoxClassifierErrors(unsafePrefixClassifier).length === 0) {
+    throw new Error('unsafe Camoufox runtime prefix fixture passed');
+  }
+  const missingUnknownFixture = files.camoufoxClassifier.replace('"unknown-fails-closed"', '"unknown-fixture-removed"');
+  if (camoufoxClassifierErrors(missingUnknownFixture).length === 0) {
+    throw new Error('Camoufox unknown fail-closed fixture removal passed');
+  }
   const weakAuthority = structuredClone(files.authority);
   weakAuthority.promotion_policy.read_only_ready_before_mutation_authorization = false;
   if (authorityErrors(weakAuthority).length === 0) throw new Error('authorization-before-READY authority fixture passed');
+  const weakRuntimeAuthority = structuredClone(files.authority);
+  weakRuntimeAuthority.promotion_policy.pr_runtime_unknown_path_policy = 'CHEAP';
+  if (authorityErrors(weakRuntimeAuthority).length === 0) throw new Error('unknown-path CHEAP authority fixture passed');
   console.log('AR-11 semantic release/promotion/change-aware negative matrix passed.');
 }
 
@@ -462,6 +549,7 @@ const files = {
   build: read(BUILD),
   promotion: read(PROMOTION),
   camoufox: read(CAMOUFOX),
+  camoufoxClassifier: read(CAMOUFOX_SCOPE),
   authority: JSON.parse(read(AUTHORITY)),
 };
 const errors = validateAll(files);
@@ -470,4 +558,4 @@ if (errors.length > 0) {
   process.exit(1);
 }
 if (process.argv.includes('--self-test')) selfTest(files);
-else console.log('AR-11 release operational authority passed: automatic read-only READY precedes authorization; mutation is READY-bound and re-fenced; Camoufox PR replay is fail-closed change-aware.');
+else console.log('AR-11 release operational authority passed: automatic read-only READY precedes authorization; mutation is READY-bound and re-fenced; Camoufox PR replay is fail-closed and runtime-impact-aware.');
