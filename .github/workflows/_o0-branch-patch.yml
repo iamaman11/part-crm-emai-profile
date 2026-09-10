@@ -30,7 +30,9 @@ jobs:
           sed -i '/assert!(workflow.contains("RECOVERY_REQUIRED"));/d' tools/opsctl/tests/o0_ar11_operational_outcome.rs
           python scripts/_o0_patch_release_operational_checker.py
 
-      - name: Verify transport fixtures and successor invariants before commit
+      - name: Verify transport fixtures and successor invariants before export
+        env:
+          CARGO_TARGET_DIR: ${{ runner.temp }}/o0-cargo-target
         run: |
           set -euo pipefail
           git diff --check
@@ -44,14 +46,26 @@ jobs:
           test ! -e scripts/_o0_apply_manual_ar11_patch.py
           test ! -e scripts/_o0_patch_release_operational_checker.py
           test ! -e .github/workflows/_o0-branch-patch.yml
+          test ! -e tools/opsctl/target
 
-      - name: Commit only final bounded O0 changes
+      - name: Export only verified target blobs outside workflow paths
         run: |
           set -euo pipefail
+          mkdir -p o0-candidate
+          cp .github/workflows/release-set-promotion.yml o0-candidate/release-set-promotion.yml
+          cp scripts/promotion-operational-outcome-ar11.py o0-candidate/promotion-operational-outcome-ar11.py
+          cp tools/opsctl/tests/o0_ar11_operational_outcome.rs o0-candidate/o0_ar11_operational_outcome.rs
+          cp .github/scripts/release-operational-ar11.mjs o0-candidate/release-operational-ar11.mjs
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add -A
+          git add o0-candidate
+          printf '%s\n' \
+            o0-candidate/o0_ar11_operational_outcome.rs \
+            o0-candidate/promotion-operational-outcome-ar11.py \
+            o0-candidate/release-operational-ar11.mjs \
+            o0-candidate/release-set-promotion.yml > "$RUNNER_TEMP/expected-files"
+          git diff --cached --name-only | sort > "$RUNNER_TEMP/actual-files"
+          diff -u "$RUNNER_TEMP/expected-files" "$RUNNER_TEMP/actual-files"
           git diff --cached --check
-          git diff --cached --quiet && { echo 'No patch changes produced'; exit 1; }
-          git commit -m 'O0: terminalize manual AR11 effect outcomes'
+          git commit -m 'O0: export verified manual AR11 candidate blobs'
           git push origin HEAD:o0-ar11-manual-terminal-outcome
