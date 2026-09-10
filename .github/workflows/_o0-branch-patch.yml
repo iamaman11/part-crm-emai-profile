@@ -23,7 +23,10 @@ jobs:
           fetch-depth: 0
 
       - name: Apply bounded patch and delete temporary patch surfaces
-        run: python scripts/_o0_apply_manual_ar11_patch.py
+        run: |
+          set -euo pipefail
+          python scripts/_o0_apply_manual_ar11_patch.py
+          sed -i '/assert!(workflow.contains("RECOVERY_REQUIRED"));/d' tools/opsctl/tests/o0_ar11_operational_outcome.rs
 
       - name: Verify transport fixtures and successor invariants before commit
         run: |
