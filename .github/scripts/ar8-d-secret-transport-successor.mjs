@@ -163,11 +163,15 @@ function promotionPolicyErrors(promotion) {
   ]) {
     if (!promotion.includes(marker)) errors.push(`current Release Set promotion is missing semantic invariant ${JSON.stringify(marker)}`);
   }
-  const ready = promotion.indexOf('Observe provider and publish READY_TO_MUTATE before authorization');
-  const authorization = promotion.indexOf('Resolve exact one-shot authorization only after READY exists');
-  const deployCredential = promotion.indexOf('DEPLOY_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}');
-  const deploy = promotion.indexOf('Deploy exact Release Set v3 bits after all fences');
-  if (!(ready >= 0 && authorization > ready && deployCredential > authorization && deploy > deployCredential)) {
+
+  const preflightJob = promotion.indexOf('\n  preflight-ready:\n');
+  const ready = promotion.indexOf('kind:"AR11_READY_TO_MUTATE"', preflightJob);
+  const resolveVerifyJob = promotion.indexOf('\n  resolve-verify:\n');
+  const authorization = promotion.indexOf('Resolve exact one-shot authorization only after READY exists', resolveVerifyJob);
+  const mutateJob = promotion.indexOf('\n  mutate:\n');
+  const deployCredential = promotion.indexOf('DEPLOY_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}', mutateJob);
+  const deploy = promotion.indexOf('Deploy exact Release Set v3 bits after all fences', mutateJob);
+  if (!(preflightJob >= 0 && ready > preflightJob && resolveVerifyJob > ready && authorization > resolveVerifyJob && mutateJob > authorization && deployCredential > mutateJob && deploy > deployCredential)) {
     errors.push('release successor must order read-only READY -> authorization binding -> deploy credential -> mutation');
   }
   return errors;
@@ -238,6 +242,21 @@ function selfTest() {
   if (renderedWorkerNameErrors(wranglerSource, suffixedOverlay).length === 0) throw new Error('suffixed rendered Worker-name projection fixture passed');
   if (promotionPolicyErrors(read(AR11_PROMOTION) + `\n${HISTORICAL_CHECKER}\n`).length === 0) throw new Error('historical implementation promotion dependency negative fixture passed');
   if (replayDependencyErrors(CURRENT_D3_CHECKER, `git show x\n${HISTORICAL_CHECKER}\n`).length === 0) throw new Error('historical executable replay negative fixture passed');
+
+  const promotion = read(AR11_PROMOTION);
+  const cosmeticLabel = 'Observe provider and publish lossless read-only terminal outcome';
+  if (promotion.includes(cosmeticLabel)) {
+    const renamedPromotion = promotion.replace(cosmeticLabel, 'Cosmetic AR11 preflight label');
+    if (promotionPolicyErrors(renamedPromotion).length !== 0) throw new Error('cosmetic AR11 label unexpectedly defines successor ordering');
+  }
+  const deployCredential = 'DEPLOY_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}';
+  const authorization = 'Resolve exact one-shot authorization only after READY exists';
+  const withoutDeployCredential = promotion.replace(deployCredential, 'DEPLOY_TOKEN_REMOVED_FOR_ORDER_FIXTURE');
+  const reorderedPromotion = withoutDeployCredential.replace(authorization, `${deployCredential}\n      - name: ${authorization}`);
+  if (!promotionPolicyErrors(reorderedPromotion).some((error) => error.includes('must order read-only READY'))) {
+    throw new Error('deploy-credential-before-authorization negative fixture passed');
+  }
+
   const operationalSelfTest = run('node', [AR11_CHECKER, '--self-test'], { check: false });
   if (operationalSelfTest.status !== 0) throw new Error(`Release Set operational negative matrix failed: ${(operationalSelfTest.stderr || operationalSelfTest.stdout).trim()}`);
   console.log('Static D3 transition provenance, exact rendered Worker-name, and semantic secret-transport negative matrix passed.');

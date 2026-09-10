@@ -151,7 +151,7 @@ jobs:
             | jq -e '.decision == "VALID" and .release_set_schema_version == 3 and .source_accepted == true and .mutation_executed == false' >/dev/null
 
   preflight-ready:
-    name: Observe provider and publish READY_TO_MUTATE before authorization
+    name: Observe provider and publish lossless read-only terminal outcome
     needs: [route, resolve-preflight]
     if: needs.route.outputs.mode == 'preflight'
     runs-on: ubuntu-latest
@@ -170,12 +170,15 @@ jobs:
       CLOUDFLARE_DEPLOY_MANIFEST_JSON: ${{ secrets.CLOUDFLARE_DEPLOY_MANIFEST_JSON }}
     steps:
       - name: Require read-only observation authority only
+        id: observation_authority
         run: |
           set -euo pipefail
           test -n "$CLOUDFLARE_API_TOKEN"
           test -n "$CLOUDFLARE_DEPLOY_MANIFEST_JSON"
 
       - name: Checkout exact accepted-main source
+        id: source_checkout
+        if: always()
         uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
         with:
           ref: ${{ needs.resolve-preflight.outputs.main_sha }}
@@ -189,6 +192,7 @@ jobs:
           package-manager-cache: false
 
       - name: Materialize exact target and rendered staging overlay
+        id: materialize
         run: |
           set -euo pipefail
           asset_root="$RUNNER_TEMP/target-assets"
@@ -296,6 +300,7 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
       - name: Checkout exact known-good source
+        id: known_good_checkout
         uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
         with:
           ref: ${{ steps.observe.outputs.known_good_source }}
@@ -304,6 +309,7 @@ jobs:
           persist-credentials: false
 
       - name: Verify current immutable Release Set and build metadata snapshot
+        id: snapshot
         run: |
           set -euo pipefail
           current_id="${{ steps.observe.outputs.current_id }}"
@@ -341,36 +347,73 @@ jobs:
             --output "$RUNNER_TEMP/pre-snapshot.json"
           test "$(jq -r '.schema_version' "$RUNNER_TEMP/pre-snapshot.json")" = 2
 
-      - name: Prove native compatibility, plan and rollback-aware preflight
+      - name: Capture native compatibility, plan and rollback-aware preflight
         id: policy
         run: |
-          set -euo pipefail
-          cargo run --locked --quiet --manifest-path tools/opsctl/Cargo.toml -- \
+          set -uo pipefail
+          echo "read_only_ready=false" >> "$GITHUB_OUTPUT"
+          echo "infra_boundary=" >> "$GITHUB_OUTPUT"
+
+          if ! cargo run --locked --quiet --manifest-path tools/opsctl/Cargo.toml -- \
             --root . d1 compatibility --component catalog \
             --ledger-json "$RUNNER_TEMP/catalog-ledger-before.json" \
             --release-manifest "$CONTROL_RELEASE_MANIFEST" \
-            > "$RUNNER_TEMP/catalog-d1-compatibility.json"
-          python scripts/release-compat-evidence-ar11.py \
+            > "$RUNNER_TEMP/catalog-d1-compatibility.json"; then
+            echo "infra_boundary=D1_COMPATIBILITY" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if ! jq -e '.schema_version == 1 and .command == "d1 compatibility" and .component == "catalog" and .mode == "read-only" and .mutation_executed == false and (.allowed | type == "boolean") and (.reason_codes | type == "array")' "$RUNNER_TEMP/catalog-d1-compatibility.json" >/dev/null; then
+            echo "infra_boundary=D1_COMPATIBILITY" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if ! jq -e '.allowed == true' "$RUNNER_TEMP/catalog-d1-compatibility.json" >/dev/null; then
+            exit 0
+          fi
+
+          if ! python scripts/release-compat-evidence-ar11.py \
             --release-set-id "$RELEASE_SET_ID" \
             --catalog-d1 "$RUNNER_TEMP/catalog-d1-compatibility.json" \
-            --output "$RUNNER_TEMP/compatibility-evidence.json"
-          cargo run --locked --quiet --manifest-path tools/opsctl/Cargo.toml -- \
+            --output "$RUNNER_TEMP/compatibility-evidence.json"; then
+            echo "infra_boundary=RELEASE_COMPATIBILITY_EVIDENCE" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if ! cargo run --locked --quiet --manifest-path tools/opsctl/Cargo.toml -- \
             --root . release compatibility --release-set "$TARGET_RELEASE_MANIFEST" \
             --source-root . --profile "$TARGET_PROFILE" --environment "$TARGET_ENVIRONMENT" \
             --evidence-json "$RUNNER_TEMP/compatibility-evidence.json" \
             --current-release-set "$CURRENT_RELEASE_MANIFEST" \
-            | tee "$RUNNER_TEMP/release-compatibility.json" \
-            | jq -e '.compatible == true and .mutation_executed == false' >/dev/null
-          cargo run --locked --quiet --manifest-path tools/opsctl/Cargo.toml -- \
+            > "$RUNNER_TEMP/release-compatibility.json"; then
+            echo "infra_boundary=RELEASE_COMPATIBILITY" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if ! jq -e '.schema_version == 2 and .command == "release.compatibility" and .mutation_executed == false and (.compatible | type == "boolean") and (.blockers | type == "array") and (.required_steps | type == "array")' "$RUNNER_TEMP/release-compatibility.json" >/dev/null; then
+            echo "infra_boundary=RELEASE_COMPATIBILITY" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if ! jq -e '.compatible == true' "$RUNNER_TEMP/release-compatibility.json" >/dev/null; then
+            exit 0
+          fi
+
+          if ! cargo run --locked --quiet --manifest-path tools/opsctl/Cargo.toml -- \
             --root . promotion plan --release-set "$TARGET_RELEASE_MANIFEST" \
             --source-root . --profile "$TARGET_PROFILE" --environment "$TARGET_ENVIRONMENT" \
             --snapshot "$RUNNER_TEMP/pre-snapshot.json" \
             --evidence-json "$RUNNER_TEMP/compatibility-evidence.json" \
             --expected-current "${{ steps.observe.outputs.current_id }}" \
             --current-release-set "$CURRENT_RELEASE_MANIFEST" \
-            > "$RUNNER_TEMP/promotion-plan.json"
-          jq -e '.decision == "PLAN" and .mutation_executed == false' "$RUNNER_TEMP/promotion-plan.json" >/dev/null
-          cargo run --locked --quiet --manifest-path tools/opsctl/Cargo.toml -- \
+            > "$RUNNER_TEMP/promotion-plan.json"; then
+            echo "infra_boundary=PROMOTION_PLAN" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if ! jq -e '.schema_version == 1 and .command == "promotion.plan" and (.decision == "PLAN" or .decision == "NO_CHANGE" or .decision == "BLOCKED") and .execution_authorized == false and .mutation_executed == false and (.blockers | type == "array")' "$RUNNER_TEMP/promotion-plan.json" >/dev/null; then
+            echo "infra_boundary=PROMOTION_PLAN" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if ! jq -e '.decision == "PLAN"' "$RUNNER_TEMP/promotion-plan.json" >/dev/null; then
+            exit 0
+          fi
+
+          if ! cargo run --locked --quiet --manifest-path tools/opsctl/Cargo.toml -- \
             --root . promotion preflight --release-set "$TARGET_RELEASE_MANIFEST" \
             --source-root . --profile "$TARGET_PROFILE" --environment "$TARGET_ENVIRONMENT" \
             --snapshot "$RUNNER_TEMP/pre-snapshot.json" \
@@ -378,12 +421,24 @@ jobs:
             --expected-current "${{ steps.observe.outputs.current_id }}" \
             --current-release-set "$CURRENT_RELEASE_MANIFEST" \
             --known-good-release-set "$CURRENT_RELEASE_MANIFEST" \
-            > "$RUNNER_TEMP/promotion-preflight.json"
-          jq -e '.ready == true and .decision == "READY" and .credential_values_accessed == false and .provider_mutation_executed == false and .mutation_executed == false' "$RUNNER_TEMP/promotion-preflight.json" >/dev/null
+            > "$RUNNER_TEMP/promotion-preflight.json"; then
+            echo "infra_boundary=PROMOTION_PREFLIGHT" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if ! jq -e '.schema_version == 1 and .command == "promotion.preflight" and (.ready | type == "boolean") and (.decision == "READY" or .decision == "BLOCKED") and .credential_values_accessed == false and .provider_mutation_executed == false and .mutation_executed == false and (.blockers | type == "array") and (.required_steps | type == "array")' "$RUNNER_TEMP/promotion-preflight.json" >/dev/null; then
+            echo "infra_boundary=PROMOTION_PREFLIGHT" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if ! jq -e '.ready == true and .decision == "READY"' "$RUNNER_TEMP/promotion-preflight.json" >/dev/null; then
+            exit 0
+          fi
           promotion_id="$(jq -er '.promotion_id' "$RUNNER_TEMP/promotion-preflight.json")"
           echo "promotion_id=$promotion_id" >> "$GITHUB_OUTPUT"
+          echo "read_only_ready=true" >> "$GITHUB_OUTPUT"
 
       - name: Prove bounded Worker and D1 quiescence
+        id: quiescence
+        if: steps.policy.outputs.read_only_ready == 'true'
         run: |
           set -euo pipefail
           sleep 30
@@ -422,6 +477,7 @@ jobs:
 
       - name: Materialize secret-free READY_TO_MUTATE evidence
         id: ready
+        if: steps.policy.outputs.read_only_ready == 'true' && steps.quiescence.outcome == 'success'
         run: |
           set -euo pipefail
           cp "$RUNNER_TEMP/release-policy-input/release-set.json" "$RUNNER_TEMP/release-set.json"
@@ -449,6 +505,8 @@ jobs:
           echo "artifact_name=$artifact_name" >> "$GITHUB_OUTPUT"
 
       - name: Upload metadata-only READY_TO_MUTATE authority
+        id: ready_upload
+        if: steps.ready.outcome == 'success'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: ${{ steps.ready.outputs.artifact_name }}
@@ -468,6 +526,94 @@ jobs:
             ${{ runner.temp }}/d1-names-after.json
           if-no-files-found: error
           retention-days: 30
+
+      - name: Terminalize one lossless AR11 OperationalOutcome
+        id: outcome
+        if: always()
+        run: |
+          set -euo pipefail
+          failed_boundary=""
+          if [ "${{ steps.observation_authority.outcome }}" = "failure" ]; then
+            failed_boundary="OBSERVATION_AUTHORITY"
+          elif [ "${{ steps.source_checkout.outcome }}" = "failure" ]; then
+            failed_boundary="SOURCE_CHECKOUT"
+          elif [ "${{ steps.materialize.outcome }}" = "failure" ]; then
+            failed_boundary="TARGET_MATERIALIZATION"
+          elif [ "${{ steps.observe.outcome }}" = "failure" ]; then
+            failed_boundary="PROVIDER_OBSERVATION"
+          elif [ "${{ steps.known_good_checkout.outcome }}" = "failure" ]; then
+            failed_boundary="KNOWN_GOOD_SOURCE"
+          elif [ "${{ steps.snapshot.outcome }}" = "failure" ]; then
+            failed_boundary="DEPLOYMENT_SNAPSHOT"
+          elif [ -n "${{ steps.policy.outputs.infra_boundary }}" ]; then
+            failed_boundary="${{ steps.policy.outputs.infra_boundary }}"
+          elif [ "${{ steps.quiescence.outcome }}" = "failure" ]; then
+            failed_boundary="QUIESCENCE"
+          elif [ "${{ steps.ready.outcome }}" = "failure" ]; then
+            failed_boundary="READ_ONLY_READY_EVIDENCE"
+          elif [ "${{ steps.ready_upload.outcome }}" = "failure" ]; then
+            failed_boundary="READY_EVIDENCE_PUBLICATION"
+          fi
+
+          tree_sha="$(git rev-parse "$SOURCE_SHA^{tree}")"
+          evidence_artifact="ar11-operational-outcome-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          python scripts/promotion-operational-outcome-ar11.py \
+            --source-sha "$SOURCE_SHA" \
+            --tree-sha "$tree_sha" \
+            --release-set-id "$RELEASE_SET_ID" \
+            --environment "$TARGET_ENVIRONMENT" \
+            --profile-id "$TARGET_PROFILE" \
+            --d1-compatibility-json "$RUNNER_TEMP/catalog-d1-compatibility.json" \
+            --release-compatibility-json "$RUNNER_TEMP/release-compatibility.json" \
+            --promotion-plan-json "$RUNNER_TEMP/promotion-plan.json" \
+            --promotion-preflight-json "$RUNNER_TEMP/promotion-preflight.json" \
+            --ready-to-mutate-json "$RUNNER_TEMP/ready-to-mutate.json" \
+            --failed-boundary "$failed_boundary" \
+            --evidence-artifact "$evidence_artifact" \
+            --output "$RUNNER_TEMP/promotion-operational-outcome.json"
+          terminal_dir="$RUNNER_TEMP/ar11-terminal-evidence"
+          mkdir -p "$terminal_dir"
+          cp "$RUNNER_TEMP/promotion-operational-outcome.json" "$terminal_dir/"
+          for candidate in \
+            catalog-d1-compatibility.json \
+            compatibility-evidence.json \
+            release-compatibility.json \
+            promotion-plan.json \
+            promotion-preflight.json \
+            ready-to-mutate.json \
+            release-verify.json \
+            pre-snapshot.json; do
+            if [ -f "$RUNNER_TEMP/$candidate" ]; then
+              cp "$RUNNER_TEMP/$candidate" "$terminal_dir/$candidate"
+            fi
+          done
+          status="$(jq -er '.status' "$RUNNER_TEMP/promotion-operational-outcome.json")"
+          echo "status=$status" >> "$GITHUB_OUTPUT"
+          {
+            echo '## AR11 OperationalOutcome'
+            echo
+            echo '```json'
+            jq '{contract,procedure,status,phase,failed_gate,owner,owner_contract,owner_reason_code,summary,remediation,exact_next_action,source_sha,tree_sha,release_set_id,promotion_id,target_identity,authorization_state,provider_mutation_started,provider_mutation_executed,production_mutation_executed,effect_state,evidence_refs,evidence_digests}' "$RUNNER_TEMP/promotion-operational-outcome.json"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload terminal AR11 OperationalOutcome evidence
+        id: outcome_upload
+        if: always() && steps.outcome.outcome == 'success'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: ar11-operational-outcome-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/ar11-terminal-evidence
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Enforce terminal AR11 disposition after evidence publication
+        if: always()
+        run: |
+          set -euo pipefail
+          test "${{ steps.outcome.outcome }}" = "success"
+          test "${{ steps.outcome_upload.outcome }}" = "success"
+          jq -e '.contract == "PROMOTION_OPERATOR_OUTCOME_V1" and (.status == "READ_ONLY_READY" or .status == "NOOP") and .authorization_state == "NOT_AUTHORIZED_READ_ONLY" and .provider_mutation_started == false and .provider_mutation_executed == false and .production_mutation_executed == false and .effect_state == "EXACT_NO_EFFECT"' "$RUNNER_TEMP/promotion-operational-outcome.json" >/dev/null
 
       - name: Remove raw provider material
         if: always()
