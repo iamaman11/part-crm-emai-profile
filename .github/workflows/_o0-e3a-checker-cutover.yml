@@ -1,21 +1,19 @@
 name: O0 E3A Checker Cutover
 
 on:
-  pull_request:
-    branches: [main]
+  push:
+    branches: [o0-e3a-retire-v2-phase-a-router]
 
 permissions:
   contents: write
 
 jobs:
   cutover:
-    if: >-
-      github.event.pull_request.head.repo.full_name == github.repository &&
-      github.event.pull_request.head.ref == 'o0-e3a-retire-v2-phase-a-router'
+    if: github.repository == 'iamaman11/part-crm-emai-profile'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
-      - name: Checkout exact PR branch
+      - name: Checkout exact cutover branch
         uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
         with:
           ref: o0-e3a-retire-v2-phase-a-router
