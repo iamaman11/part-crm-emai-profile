@@ -20,6 +20,38 @@ At entry to a new bounded transaction/mutation window, and whenever section 1.1 
 CAP-INDEX #505 and completed AR/PF/PAS/Functional Closure trackers are research/history provenance,
 not live execution state. Issue #266 is the sole live stage pointer.
 
+### 1.0 Project-wide cold-start context budget
+
+This rule applies to **every CURRENT stage now and in the future**, not to one named stage or one chat.
+After reading fresh Issue #266, use its exact `CURRENT_STAGE_ISSUE` and exact `CURRENT_CHECKPOINT` as the
+bounded live-context entrypoint:
+
+```text
+fresh protected main + governance
+-> permanent repository contracts
+-> fresh #266
+-> CURRENT stage Issue body for stable scope / DoD / non-goals
+-> exactly CURRENT_CHECKPOINT named by #266 for mutable current work
+-> only natural-owner contracts/files and PR/CI/evidence needed by that checkpoint
+```
+
+Do not fetch the full comment history of the CURRENT stage Issue, completed-stage Issue history, old PR
+history, or broad Actions history by default. Open historical comments/runs/PRs only when the exact
+`CURRENT_CHECKPOINT`, a DoD evidence locator, or a current natural owner points to them. A chat handoff
+may accelerate navigation but never expands this read set or replaces the fresh checkpoint.
+
+While an Issue is CURRENT, its body owns stable stage scope, objective, DoD, non-goals and immutable
+entry provenance. It must not be maintained as a second mutable current-state snapshot. Moving current
+SHA/tree, open PR/head, workflow run, Release Set, authorization and provider/readiness state belong to
+#266's minimum live selection/checkpoint or to their existing GitHub/provider natural owners. A prior
+checkpoint becomes append-only provenance as soon as #266 advances to a newer exact checkpoint.
+
+The exact `CURRENT_CHECKPOINT` must be sufficient to identify one next permitted bounded concern,
+its natural owner, current authorization state and the evidence locators needed to continue. If #266
+omits the checkpoint, points to a missing/stale checkpoint, or conflicts with fresh higher-authority
+facts, stop and repair/disposition the live pointer/current-stage record; **do not reconstruct current
+work by recursively rereading history**.
+
 Do not begin implementation until the current checkpoint and exactly one next permitted bounded concern are identified,
 and the mandatory change envelope records an explicit capability/profile impact disposition or `NONE`.
 
