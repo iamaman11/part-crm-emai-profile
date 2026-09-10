@@ -67,8 +67,8 @@ fn select_admission_profile<'a>(
     current: Option<&LoadedReleaseSet>,
     snapshot: &'a DeploymentSnapshot,
 ) -> (&'a str, &'static str) {
-    let current_supports_requested = current
-        .is_some_and(|release| supports_profile(release, requested_profile_id));
+    let current_supports_requested =
+        current.is_some_and(|release| supports_profile(release, requested_profile_id));
     let target_supports_observed = snapshot
         .capability_profile_id
         .as_deref()
@@ -126,12 +126,8 @@ pub fn run(request: PromotionRunRequest<'_>) -> Result<String, ReleaseModelError
 
     let value = match request.action {
         PromotionAction::Plan => {
-            let (effective_profile_id, admission_mode) = select_admission_profile(
-                request.profile_id,
-                &target,
-                current.as_ref(),
-                &snapshot,
-            );
+            let (effective_profile_id, admission_mode) =
+                select_admission_profile(request.profile_id, &target, current.as_ref(), &snapshot);
             admission_json(
                 build(PlanRequest {
                     root: request.root,
@@ -156,12 +152,8 @@ pub fn run(request: PromotionRunRequest<'_>) -> Result<String, ReleaseModelError
             )
         }
         PromotionAction::Preflight => {
-            let (effective_profile_id, admission_mode) = select_admission_profile(
-                request.profile_id,
-                &target,
-                current.as_ref(),
-                &snapshot,
-            );
+            let (effective_profile_id, admission_mode) =
+                select_admission_profile(request.profile_id, &target, current.as_ref(), &snapshot);
             admission_json(
                 preflight(PreflightRequest {
                     root: request.root,
@@ -214,7 +206,9 @@ pub fn run(request: PromotionRunRequest<'_>) -> Result<String, ReleaseModelError
 
 #[cfg(test)]
 mod tests {
-    use super::{DIRECT_ADMISSION, PREREQUISITE_RELEASE_BRIDGE, select_admission_profile_from_facts};
+    use super::{
+        DIRECT_ADMISSION, PREREQUISITE_RELEASE_BRIDGE, select_admission_profile_from_facts,
+    };
 
     #[test]
     fn release_bridge_retains_observed_profile_when_rollback_cannot_run_requested_profile() {
