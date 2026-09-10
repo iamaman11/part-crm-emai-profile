@@ -1,0 +1,86 @@
+name: O0 E3A Checker Cutover
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  cutover:
+    if: >-
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref == 'o0-e3a-retire-v2-phase-a-router'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout exact PR branch
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        with:
+          ref: o0-e3a-retire-v2-phase-a-router
+          fetch-depth: 1
+
+      - name: Remove only stale retired-router checker coupling
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('scripts/check-d1-migration-executor.mjs')
+          text = path.read_text(encoding='utf-8')
+
+          replacements = [
+              ("const V2_ROUTER = '.github/workflows/v2-phase-a-d1-command-router.yml';\n", ""),
+              ("  const routerText = await readFile(path.join(root, V2_ROUTER), 'utf8');\n", ""),
+              ('''  for (const marker of [
+    AUTH_DIGEST_MARKER, 'AUTHORIZATION_DIGEST', '--arg authorization_digest \"$AUTHORIZATION_DIGEST\"',
+    'authorization_digest:$authorization_digest', 'TRANSACTION_AUTHORIZATION_JSON',
+  ]) {
+    if (!routerText.includes(marker)) fail(`V2 router lost exact typed authorization transport marker: ${marker}`);
+  }
+  for (const forbidden of [
+    'select(.head_sha == $sha)', 'conservatively prove source has not been dispatched',
+  ]) {
+    if (routerText.includes(forbidden)) fail(`V2 router revived source-wide replay fence: ${forbidden}`);
+  }
+
+''', ""),
+          ]
+
+          for old, new in replacements:
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f'expected exactly one stale checker fragment, observed={count}: {old[:80]!r}')
+              text = text.replace(old, new, 1)
+
+          for forbidden in ['V2_ROUTER', 'routerText', 'v2-phase-a-d1-command-router.yml', 'V2 router lost exact typed authorization transport marker', 'V2 router revived source-wide replay fence']:
+              if forbidden in text:
+                  raise SystemExit(f'stale retired-router checker coupling remains: {forbidden}')
+
+          path.write_text(text, encoding='utf-8')
+          PY
+
+      - name: Prove protected executor checker remains strong
+        shell: bash
+        run: |
+          set -euo pipefail
+          node scripts/check-d1-migration-executor.mjs
+          node scripts/check-d1-migration-executor.mjs --self-test
+          git diff --check
+
+      - name: Commit only bounded final cutover
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm .github/workflows/_o0-e3a-checker-cutover.yml
+          git status --short
+          test ! -e .github/workflows/_o0-e3a-checker-cutover.yml
+          git diff --check
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add scripts/check-d1-migration-executor.mjs .github/workflows/_o0-e3a-checker-cutover.yml
+          git diff --cached --quiet && { echo 'expected bounded checker cutover diff'; exit 1; }
+          git commit -m 'O0: retire stale V2 router checker coupling'
+          git push origin HEAD:o0-e3a-retire-v2-phase-a-router
