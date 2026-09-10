@@ -3,8 +3,8 @@
 
 Owner/consumer: CAP-06 documentation authority; developers and the existing Quality Gate.
 Risk: copied mutable order or stale status/setup prose can select unauthorized work after context loss.
-Invariant: one binding program document, one linked live stage pointer, one CURRENT stage Issue;
-projections/history/reference material fail closed.
+Invariant: one binding program document, one linked live stage pointer, one CURRENT stage Issue, one
+exact CURRENT_CHECKPOINT context entrypoint; projections/history/reference material fail closed.
 Tier/lifecycle: cheap repository-source check in the existing required Quality Gate; retire only when
 these facts move to an equivalent or stronger natural-owner proof.
 """
@@ -36,6 +36,9 @@ AGENT_REQUIRED_MARKERS = (
     "exactly one owning Issue",
     "Do not pre-create Issues for future stages",
     "sole live stage pointer",
+    "CURRENT_CHECKPOINT",
+    "Do not fetch the full comment history",
+    "do not reconstruct current work by recursively rereading history",
     "bounded mutation window",
     "Expected self-authored writes",
     "drift",
@@ -54,7 +57,9 @@ PROGRAM_REQUIRED_MARKERS = (
 INDEX_REQUIRED_MARKERS = (
     "sole live stage",
     "exactly one owning Issue for the CURRENT stage",
-    "CURRENT stage objective, change envelope and evidence",
+    "CURRENT_CHECKPOINT",
+    "Do not fetch the full comment history",
+    "Mutable CURRENT work / exact next bounded concern",
     "Reference Issue #625",
     "orientation/provenance only",
 )
