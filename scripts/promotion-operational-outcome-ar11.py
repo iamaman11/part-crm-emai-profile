@@ -156,6 +156,17 @@ def first(values: list[str]) -> str | None:
     return values[0] if values else None
 
 
+def preflight_required_actions(preflight: dict[str, Any]) -> list[str]:
+    actions: list[str] = []
+    rollback_remediation = preflight["rollback_diagnostic"]["remediation"]
+    if rollback_remediation != "NONE":
+        actions.append(rollback_remediation)
+    for action in preflight["required_steps"]:
+        if action not in actions:
+            actions.append(action)
+    return actions
+
+
 def owner_blocked(
     base: dict[str, Any],
     *,
@@ -328,7 +339,7 @@ def compose(
             owner_contract="promotion.preflight/v1",
             reasons=preflight["blockers"],
             diagnostic=preflight,
-            required_actions=preflight["required_steps"],
+            required_actions=preflight_required_actions(preflight),
         )
 
     if ready is None or not valid_ready(ready, source_sha, release_set_id):
@@ -885,12 +896,13 @@ def self_test() -> None:
             "remediation": "repair exact rollback owner condition",
         }
         values["preflight"]["blockers"] = [broad_reason]
-        values["preflight"]["required_steps"] = ["repair rollback compatibility evidence"]
+        values["preflight"]["required_steps"] = []
         outcome = fixture_compose(values)
         assert outcome["phase"] == "PROMOTION_PREFLIGHT"
         assert outcome["owner_reason_code"] == broad_reason
         assert outcome["owner_reason_codes"] == [broad_reason]
-        assert outcome["owner_required_actions"] == ["repair rollback compatibility evidence"]
+        assert outcome["owner_required_actions"] == ["repair exact rollback owner condition"]
+        assert outcome["exact_next_action"] == "repair exact rollback owner condition"
         assert outcome["owner_diagnostic"]["rollback_diagnostic"]["reason_code"] == exact_reason
         assert_zero_effect(outcome)
 
@@ -902,7 +914,7 @@ def self_test() -> None:
         "decision": "INCOMPATIBLE",
         "reason_code": "TARGET_PROFILE_UNSUPPORTED",
         "summary": "rollback target profile is unsupported",
-        "remediation": "select a rollback Release Set compatible with the target profile",
+        "remediation": "select a compatible rollback Release Set",
     }
     values["preflight"]["blockers"] = ["ROLLBACK_INCOMPATIBLE", "REQUIRED_BINDINGS_NOT_READY"]
     values["preflight"]["required_steps"] = [
