@@ -204,8 +204,9 @@ function promotionErrors(promotion) {
   const resolveAuthorized = jobBlock(promotion, 'resolve-verify');
   const mutate = jobBlock(promotion, 'mutate');
   const post = jobBlock(promotion, 'post-verify');
+  const manualOutcome = jobBlock(promotion, 'manual-outcome');
   const rollback = jobBlock(promotion, 'rollback-negative-evidence');
-  for (const [name, block] of Object.entries({ route, 'resolve-preflight': resolvePreflight, 'preflight-ready': ready, 'resolve-verify': resolveAuthorized, mutate, 'post-verify': post, 'rollback-negative-evidence': rollback })) {
+  for (const [name, block] of Object.entries({ route, 'resolve-preflight': resolvePreflight, 'preflight-ready': ready, 'resolve-verify': resolveAuthorized, mutate, 'post-verify': post, 'manual-outcome': manualOutcome, 'rollback-negative-evidence': rollback })) {
     if (!block) errors.push(`Release Set promotion is missing structural job ${name}`);
   }
   if (errors.some((error) => error.includes('missing structural job'))) return errors;
@@ -304,12 +305,37 @@ function promotionErrors(promotion) {
 
   errors.push(...requireMarkers(post, [
     'secrets.CLOUDFLARE_OBSERVE_API_TOKEN',
-    'Re-observe provider and verify exact convergence',
+    'Re-observe provider and capture promotion.verify natural-owner verdict',
     'promotion verify',
-    '.verified == true',
+    '> "$RUNNER_TEMP/promotion-verify.json"',
+    'decision="$(jq -er',
+    '$RUNNER_TEMP/promotion-verify.json',
+    "if: steps.observe_verify.outputs.decision == 'VERIFIED'",
   ], 'post-deploy verifier'));
   errors.push(...forbidMarkers(post, ['secrets.CLOUDFLARE_API_TOKEN }}', 'wrangler deploy --'], 'post-deploy verifier'));
   errors.push(...secretObservationErrors(post, 'post-deploy verifier'));
+
+  errors.push(...requireMarkers(manualOutcome, [
+    "if: always() && needs.route.outputs.mode == 'promote'",
+    'Terminalize one lossless manual AR11 OperationalOutcome',
+    '--mode manual',
+    'Upload terminal manual AR11 OperationalOutcome evidence',
+    'Enforce terminal manual AR11 disposition after evidence publication',
+    '.contract == "PROMOTION_OPERATOR_OUTCOME_V1"',
+    '.procedure == "AR11_RELEASE_SET_PROMOTION"',
+    '.status == "COMPLETED"',
+    '.provider_mutation_started == true',
+    '.provider_mutation_executed == true',
+    '.production_mutation_executed == false',
+    '.effect_state == "EFFECT_VERIFIED"',
+  ], 'manual terminal outcome'));
+  errors.push(...forbidMarkers(manualOutcome, ['secrets.CLOUDFLARE_', 'wrangler deploy --', 'environment: production'], 'manual terminal outcome'));
+  const manualTerminalize = manualOutcome.indexOf('Terminalize one lossless manual AR11 OperationalOutcome');
+  const manualUpload = manualOutcome.indexOf('Upload terminal manual AR11 OperationalOutcome evidence');
+  const manualEnforce = manualOutcome.indexOf('Enforce terminal manual AR11 disposition after evidence publication');
+  if (!(manualTerminalize >= 0 && manualUpload > manualTerminalize && manualEnforce > manualUpload)) {
+    errors.push('manual AR11 must terminalize -> publish evidence -> enforce final disposition');
+  }
 
   errors.push(...requireMarkers(rollback, [
     "if: needs.route.outputs.mode == 'rollback-negative'",
@@ -399,12 +425,26 @@ function selfTest(files) {
   if (!promotionErrors(staleFenceBypass).some((error) => error.includes('expected-current Worker fence'))) {
     throw new Error('mutation stale-fence bypass fixture unexpectedly passed');
   }
-  const earlyDeployCredential = files.promotion.replace(
-    '      - name: Activate deploy credential only after bound READY and authorization\n        env:\n          DEPLOY_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}',
-    '      - name: Early deploy credential fixture\n        env:\n          DEPLOY_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}\n        run: echo early\n\n      - name: Activate deploy credential only after bound READY and authorization\n        env:\n          DEPLOY_TOKEN: inherited',
+  const deployToken = '          DEPLOY_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}';
+  const earlyCredentialAnchor = '      - name: Set up pinned Node before deploy credential';
+  let earlyDeployCredential = files.promotion.replace(deployToken, '          DEPLOY_TOKEN: inherited');
+  earlyDeployCredential = earlyDeployCredential.replace(
+    earlyCredentialAnchor,
+    '      - name: Early deploy credential fixture\n        env:\n          DEPLOY_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}\n        run: echo early\n\n' + earlyCredentialAnchor,
   );
+  if (earlyDeployCredential === files.promotion || !earlyDeployCredential.includes('Early deploy credential fixture')) {
+    throw new Error('early deploy credential fixture setup failed');
+  }
   if (!promotionErrors(earlyDeployCredential).some((error) => error.includes('explicit activation proof boundary'))) {
     throw new Error('early deploy credential fixture unexpectedly passed');
+  }
+  const missingManualTerminalization = files.promotion.replace('Terminalize one lossless manual AR11 OperationalOutcome', 'Terminalization fixture removed');
+  if (!promotionErrors(missingManualTerminalization).some((error) => error.includes('manual terminal outcome'))) {
+    throw new Error('missing manual terminalization fixture unexpectedly passed');
+  }
+  const weakManualSuccess = files.promotion.replace('.status == "COMPLETED"', '.status == "RECOVERY_REQUIRED"');
+  if (!promotionErrors(weakManualSuccess).some((error) => error.includes('manual terminal outcome'))) {
+    throw new Error('manual success-without-COMPLETED fixture unexpectedly passed');
   }
   const legacyFixture = legacyAuthorityErrors((candidate) => candidate.endsWith(LEGACY_FILES[0]));
   if (legacyFixture.length !== 1 || !legacyFixture[0].includes('legacy D3 operational authority must be retired after Rust cutover')) {

@@ -46,6 +46,12 @@ fn ar11_workflow_terminalizes_after_owner_capture_and_before_final_assertion() -
     assert!(workflow.contains("read_only_ready"));
     assert!(workflow.contains("READ_ONLY_READY"));
     assert!(workflow.contains("Enforce terminal AR11 disposition after evidence publication"));
+    assert!(workflow.contains("id: node_runtime"));
+    assert!(workflow.contains("NODE_RUNTIME_SETUP"));
+    assert!(workflow.contains("manual-outcome:"));
+    assert!(workflow.contains("AR11_RELEASE_SET_PROMOTION"));
+    assert!(workflow.contains("Mark provider mutation invocation boundary"));
+    assert!(!workflow.contains("promotion-verify.json\" | jq -e '.verified == true"));
 
     let terminalize = workflow
         .find("Terminalize one lossless AR11 OperationalOutcome")
@@ -56,6 +62,30 @@ fn ar11_workflow_terminalizes_after_owner_capture_and_before_final_assertion() -
     assert!(
         terminalize < enforce,
         "outcome must survive before final assertion"
+    );
+    let mutation_start = workflow
+        .find("Mark provider mutation invocation boundary")
+        .ok_or_else(|| "provider mutation invocation marker must exist".to_string())?;
+    let deploy = workflow
+        .find("Deploy exact Release Set v3 bits after all fences")
+        .ok_or_else(|| "provider deploy step must exist".to_string())?;
+    let manual_terminalize = workflow
+        .find("Terminalize one lossless manual AR11 OperationalOutcome")
+        .ok_or_else(|| "manual terminal outcome step must exist".to_string())?;
+    let manual_enforce = workflow
+        .find("Enforce terminal manual AR11 disposition after evidence publication")
+        .ok_or_else(|| "manual final enforcement step must exist".to_string())?;
+    assert!(
+        mutation_start < deploy,
+        "effect-start marker must precede deploy invocation"
+    );
+    assert!(
+        deploy < manual_terminalize,
+        "manual terminal outcome must observe deploy result"
+    );
+    assert!(
+        manual_terminalize < manual_enforce,
+        "manual outcome must be published before final assertion"
     );
     Ok(())
 }
