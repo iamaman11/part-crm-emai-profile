@@ -47,13 +47,18 @@ fn ar11_workflow_terminalizes_after_owner_capture_and_before_final_assertion() {
     let enforce = workflow
         .find("Enforce terminal AR11 disposition after evidence publication")
         .expect("final enforcement step must exist");
-    assert!(terminalize < enforce, "outcome must survive before final assertion");
+    assert!(
+        terminalize < enforce,
+        "outcome must survive before final assertion"
+    );
 }
 
 #[test]
 fn repository_contract_states_permanent_lossless_owner_projection_rule() {
     let root = repository_root();
     let agents = fs::read_to_string(root.join("AGENTS.md")).expect("AGENTS.md must exist");
-    assert!(agents.contains("one natural-owner verdict -> one lossless terminal OperationalOutcome"));
+    assert!(
+        agents.contains("one natural-owner verdict -> one lossless terminal OperationalOutcome")
+    );
     assert!(agents.contains("Capture before assert"));
 }
