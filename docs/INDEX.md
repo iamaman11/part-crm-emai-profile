@@ -12,8 +12,12 @@ workflow or readiness state.
 4. [Current CAP execution program](ARCHITECTURE_REBASELINE_V3_PLAN.md) — the single ordered
    implementation program.
 5. [Issue #266](https://github.com/iamaman11/part-crm-emai-profile/issues/266) — the **sole live stage
-   pointer**; from it open exactly one owning Issue for the CURRENT stage.
-6. [AGENTS.md](../AGENTS.md) and [CONTRIBUTING.md](../CONTRIBUTING.md) — execution protocol.
+   pointer**; from it open exactly one owning Issue for the CURRENT stage and exactly the
+   `CURRENT_CHECKPOINT` named by #266.
+6. Read the CURRENT stage Issue body for stable scope/DoD and the exact `CURRENT_CHECKPOINT` for mutable
+   current work; then load only natural-owner contracts/files and PR/CI/evidence needed by that
+   checkpoint. Do not fetch the full comment history by default.
+7. [AGENTS.md](../AGENTS.md) and [CONTRIBUTING.md](../CONTRIBUTING.md) — execution protocol.
 
 For recovery after complete chat/context loss, reference Issue
 [#625](https://github.com/iamaman11/part-crm-emai-profile/issues/625) explains how these owners compose.
@@ -30,7 +34,8 @@ owner.
 | Architecture change/simplification quality | [ARCHITECTURE_EVOLUTION_QUALITY_CONTRACT.md](ARCHITECTURE_EVOLUTION_QUALITY_CONTRACT.md) |
 | Temporary ordered execution | [ARCHITECTURE_REBASELINE_V3_PLAN.md](ARCHITECTURE_REBASELINE_V3_PLAN.md) |
 | Live stage position and minimal accepted-main summary | [Issue #266](https://github.com/iamaman11/part-crm-emai-profile/issues/266) |
-| CURRENT stage objective, change envelope and evidence | Exactly one CURRENT stage Issue selected and linked from [Issue #266](https://github.com/iamaman11/part-crm-emai-profile/issues/266); durable provenance after completion/close |
+| CURRENT stage objective/change envelope/DoD | Exactly one CURRENT stage Issue selected and linked from [Issue #266](https://github.com/iamaman11/part-crm-emai-profile/issues/266); its body is stable stage working memory, not a second mutable live snapshot |
+| Mutable CURRENT work / exact next bounded concern | Exactly `CURRENT_CHECKPOINT` named by fresh [Issue #266](https://github.com/iamaman11/part-crm-emai-profile/issues/266); older stage comments are provenance unless directly referenced as evidence |
 | Execution-model orientation after context loss | [Reference Issue #625](https://github.com/iamaman11/part-crm-emai-profile/issues/625) — explanatory only, never authority |
 | Research coverage and decisions | [CAP-INDEX #505](https://github.com/iamaman11/part-crm-emai-profile/issues/505) and owning CAP Issues |
 | Non-active future product-evolution options | [FUTURE_DEVELOPMENT.md](FUTURE_DEVELOPMENT.md) — never execution authority or `NEXT` |
@@ -50,9 +55,10 @@ owner.
 - **Temporary execution authority** lives only in the CAP execution program. It owns order and gates,
   not mutable completion state.
 - **Live state** lives in protected Git/GitHub/provider owners. Issue #266 is the sole live stage
-  pointer; the exactly one linked CURRENT stage Issue contains bounded discovery/change/acceptance
-  evidence and becomes provenance after completion; exact environment and candidate evidence lives
-  with its natural stage/evidence owner.
+  pointer; the exactly one linked CURRENT stage Issue contains stable bounded discovery/change/DoD
+  context and becomes provenance after completion. The exact `CURRENT_CHECKPOINT` named by #266 is the
+  bounded mutable continuation entrypoint. Exact environment and candidate evidence lives with its
+  natural stage/evidence owner.
 - **Future product options** may be recorded in `FUTURE_DEVELOPMENT.md`, but they cannot select work,
   create `NEXT`, authorize a provider mutation or justify pre-creating an execution Issue. They are
   reconsidered from then-current accepted `main` only when #266 selects that concern as a CURRENT stage.
@@ -62,10 +68,12 @@ owner.
   contract explicitly assigns a narrower role.
 - **History/provenance** explains accepted decisions and evidence but cannot select work or authorize
   runtime, staging or Production effects. An open historical Issue is still non-current unless #266
-  explicitly selects it as the one CURRENT stage Issue.
+  explicitly selects it as the one CURRENT stage Issue. Historical stage comments/PRs/runs are not part
+  of the default context load; consult them only through an exact checkpoint/evidence/natural-owner
+  locator.
 
 The program sequence is intentionally not duplicated here. Read the current execution program for its
-meaning and fresh #266 for the single CURRENT stage.
+meaning and fresh #266 for the single CURRENT stage and exact `CURRENT_CHECKPOINT`.
 
 ## Bounded contracts
 
