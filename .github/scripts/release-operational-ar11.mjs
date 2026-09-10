@@ -315,13 +315,15 @@ function promotionErrors(promotion) {
     'READY_RUN_ID',
     'READY_ARTIFACT_NAME',
     'READY_EVIDENCE_SHA256',
-    'TARGET_CAPABILITY_PROFILE_ID',
-    'EXPECTED_CURRENT_CAPABILITY_PROFILE_ID',
     "WORKER_PROMOTION_AUTHORIZATION_V2",
     'Download and verify exact prior READY_TO_MUTATE authority',
     'gh run download "$READY_RUN_ID"',
     'target_capability_profile_id',
     'expected_current_capability_profile_id',
+    'target_profile="$(jq -er',
+    'expected_current_profile="$(jq -er',
+    'echo "target_profile=$target_profile"',
+    'echo "expected_current_profile=$expected_current_profile"',
     'kind == "AR11_READY_TO_MUTATE"',
     'ready == true',
     'provider_mutation == false',
@@ -530,10 +532,6 @@ function selfTest(files) {
   }
   const missingReadyBinding = files.promotion.replaceAll('READY_EVIDENCE_SHA256', 'READY_EVIDENCE_DIGEST_MISSING');
   if (promotionErrors(missingReadyBinding).length === 0) throw new Error('missing READY binding fixture passed');
-  const missingProfileBinding = files.promotion.replaceAll('TARGET_CAPABILITY_PROFILE_ID', 'TARGET_CAPABILITY_PROFILE_UNBOUND');
-  if (!promotionErrors(missingProfileBinding).some((error) => error.includes('authorized READY binder'))) {
-    throw new Error('missing target capability-profile authorization binding fixture passed');
-  }
   const missingReadyProfile = files.promotion.replace('target_capability_profile_id:$target_profile', 'target_capability_profile_id:null');
   if (!promotionErrors(missingReadyProfile).some((error) => error.includes('pre-authorization READY proof'))) {
     throw new Error('missing READY target capability-profile binding fixture passed');
