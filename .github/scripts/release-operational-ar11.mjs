@@ -358,10 +358,10 @@ function promotionErrors(promotion) {
   return errors;
 }
 
-function assignmentBlock(source, name, nextName) {
+function assignmentBlock(source, name, nextMarker) {
   const start = source.indexOf(`${name} =`);
   if (start < 0) return '';
-  const end = nextName ? source.indexOf(`${nextName} =`, start + name.length) : source.length;
+  const end = nextMarker ? source.indexOf(nextMarker, start + name.length) : source.length;
   return source.slice(start, end < 0 ? source.length : end);
 }
 
@@ -380,8 +380,8 @@ function camoufoxClassifierErrors(classifier) {
     'classify([])',
   ], 'Camoufox runtime-impact classifier'));
 
-  const exact = assignmentBlock(classifier, 'EXACT_PROVEN_UNRELATED', 'PROVEN_UNRELATED_PREFIXES');
-  const prefixes = assignmentBlock(classifier, 'PROVEN_UNRELATED_PREFIXES', 'PROVEN_UNRELATED_GLOBS');
+  const exact = assignmentBlock(classifier, 'EXACT_PROVEN_UNRELATED', 'PROVEN_UNRELATED_PREFIXES =');
+  const prefixes = assignmentBlock(classifier, 'PROVEN_UNRELATED_PREFIXES', 'PROVEN_UNRELATED_GLOBS =');
   const globs = assignmentBlock(classifier, 'PROVEN_UNRELATED_GLOBS', 'def is_proven_unrelated');
   errors.push(...requireMarkers(exact, [
     '.github/workflows/release-set-promotion.yml',
