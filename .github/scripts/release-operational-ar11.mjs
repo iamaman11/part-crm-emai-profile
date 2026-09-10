@@ -259,12 +259,15 @@ function promotionErrors(promotion) {
     'd1-names-before.json',
     'deployment-snapshot-ar11.py',
     'current_profile="$(jq -er \' .capability_profile_id'.replace("' .capability", "'.capability"),
-    'effective_target_profile="$TARGET_PROFILE"',
-    'if [ "$current_id" != "$RELEASE_SET_ID" ]; then',
-    'effective_target_profile="$current_profile"',
-    'echo "effective_target_profile=$effective_target_profile"',
-    'EFFECTIVE_TARGET_PROFILE: ${{ steps.observe.outputs.effective_target_profile }}',
-    '--profile "$EFFECTIVE_TARGET_PROFILE"',
+    '--root . promotion plan --release-set "$TARGET_RELEASE_MANIFEST"',
+    '--source-root . --profile "$TARGET_PROFILE" --environment "$TARGET_ENVIRONMENT"',
+    '.requested_target_capability_profile_id == $requested',
+    '.admission_mode == "DIRECT" or .admission_mode == "PREREQUISITE_RELEASE_BRIDGE"',
+    'target_profile="$(jq -er \' .target_capability_profile_id'.replace("' .target", "'.target"),
+    'admission_mode="$(jq -er \' .admission_mode'.replace("' .admission", "'.admission"),
+    '--source-root . --profile "$target_profile" --environment "$TARGET_ENVIRONMENT"',
+    '.target_capability_profile_id == $effective',
+    '.admission_mode == $mode',
     'promotion plan',
     'promotion preflight',
     'Prove bounded Worker and D1 quiescence',
@@ -274,6 +277,9 @@ function promotionErrors(promotion) {
     'kind:"AR11_READY_TO_MUTATE"',
     'target_capability_profile_id:$target_profile',
     'expected_current_capability_profile_id:$expected_current_profile',
+    'admission_mode:$admission_mode',
+    '--arg target_profile "${{ steps.policy.outputs.target_profile }}"',
+    '--arg admission_mode "${{ steps.policy.outputs.admission_mode }}"',
     'secret_bindings_verified:true',
     'provider_mutation:false',
     'production_mutation:false',
@@ -300,6 +306,7 @@ function promotionErrors(promotion) {
     'AUTHORITY_COMMENT',
     '--message "release_set=',
     '.status == "INFRASTRUCTURE_FAILURE"',
+    'if [ "$current_id" != "$RELEASE_SET_ID" ]; then',
   ], 'pre-authorization READY proof'));
   errors.push(...secretObservationErrors(ready, 'pre-authorization READY proof'));
   const readOnlyTerminalize = ready.indexOf('Terminalize one lossless AR11 OperationalOutcome');
@@ -536,6 +543,13 @@ function selfTest(files) {
   if (!promotionErrors(missingReadyProfile).some((error) => error.includes('pre-authorization READY proof'))) {
     throw new Error('missing READY target capability-profile binding fixture passed');
   }
+  const workflowOwnedBridge = files.promotion.replace(
+    '[[ "$current_profile" =~ ^[a-z0-9][a-z0-9-]*$ ]]',
+    '[[ "$current_profile" =~ ^[a-z0-9][a-z0-9-]*$ ]]\n          if [ "$current_id" != "$RELEASE_SET_ID" ]; then echo workflow-policy; fi',
+  );
+  if (!promotionErrors(workflowOwnedBridge).some((error) => error.includes('pre-authorization READY proof'))) {
+    throw new Error('workflow-owned admission bridge fixture unexpectedly passed');
+  }
   const rebuild = files.promotion.replace(
     'Deploy exact Release Set v3 bits after all fences',
     'run: cargo build --release\n      - name: Deploy exact Release Set v3 bits after all fences',
@@ -647,4 +661,4 @@ if (errors.length > 0) {
   process.exit(1);
 }
 if (process.argv.includes('--self-test')) selfTest(files);
-else console.log('AR-11 release operational authority passed: automatic read-only READY/BLOCKED terminalizes before authorization; target capability profile is READY-bound through authorization/fence/effect/postverify; promotion run surfaces are explicit; Camoufox PR replay is fail-closed and runtime-impact-aware.');
+else console.log('AR-11 release operational authority passed: automatic read-only READY/BLOCKED terminalizes before authorization; opsctl owns prerequisite admission selection; target capability profile is READY-bound through authorization/fence/effect/postverify; promotion run surfaces are explicit; Camoufox PR replay is fail-closed and runtime-impact-aware.');
