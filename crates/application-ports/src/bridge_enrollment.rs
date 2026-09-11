@@ -429,10 +429,7 @@ pub trait BridgeEnrollmentAuthorityPort {
 }
 
 fn is_exact_der_sequence(value: &[u8]) -> bool {
-    if value.len() < 2
-        || value.len() > MAX_BRIDGE_ENROLLMENT_CSR_DER_BYTES
-        || value[0] != 0x30
-    {
+    if value.len() < 2 || value.len() > MAX_BRIDGE_ENROLLMENT_CSR_DER_BYTES || value[0] != 0x30 {
         return false;
     }
     let first_length = value[1];
@@ -513,8 +510,7 @@ mod tests {
         assert!(!format!("{request:?}").contains("30, 3, 2, 1, 0"));
 
         let substituted = [0x30, 0x03, 0x02, 0x01, 0x01];
-        let substituted_sha256 =
-            "1b65f68a522c858715f5dd951cd0402dc16691778814bf0759822b7a257421d0";
+        let substituted_sha256 = "1b65f68a522c858715f5dd951cd0402dc16691778814bf0759822b7a257421d0";
         assert!(matches!(
             BridgeEnrollmentCertificateSignRequest::new(
                 &reservation,
@@ -531,8 +527,7 @@ mod tests {
     #[test]
     fn signer_request_rejects_malformed_or_noncanonical_der_before_signer_boundary() -> TestResult {
         let malformed = [0x31, 0x00];
-        let malformed_sha256 =
-            "e79e418e48623569d75e2a7b09ae88ed9b77b126a445b9ff9dc6989a08efa079";
+        let malformed_sha256 = "e79e418e48623569d75e2a7b09ae88ed9b77b126a445b9ff9dc6989a08efa079";
         let reservation = reservation_for(malformed_sha256)?;
         assert!(matches!(
             BridgeEnrollmentCertificateSignRequest::new(
@@ -545,8 +540,7 @@ mod tests {
         ));
 
         let trailing = [0x30, 0x00, 0x00];
-        let trailing_sha256 =
-            "b0efbbc43054beee753cd10fab49ea0fe2fabdba420e72d0ba74fe2a0222dbf9";
+        let trailing_sha256 = "b0efbbc43054beee753cd10fab49ea0fe2fabdba420e72d0ba74fe2a0222dbf9";
         let reservation = reservation_for(trailing_sha256)?;
         assert!(matches!(
             BridgeEnrollmentCertificateSignRequest::new(
@@ -577,8 +571,7 @@ mod tests {
     #[test]
     fn signed_certificate_identity_cannot_be_reused_for_a_different_reserved_csr() -> TestResult {
         let first_der = [0x30, 0x03, 0x02, 0x01, 0x00];
-        let first_sha256 =
-            "b560833d6f787af46113b96aad4dd5b5d1ae00dccc69cf30cc92bed651c56617";
+        let first_sha256 = "b560833d6f787af46113b96aad4dd5b5d1ae00dccc69cf30cc92bed651c56617";
         let first_reservation = reservation_for(first_sha256)?;
         let first_request = BridgeEnrollmentCertificateSignRequest::new(
             &first_reservation,
@@ -592,8 +585,7 @@ mod tests {
         signed.validate_for_request(&first_request)?;
 
         let second_der = [0x30, 0x03, 0x02, 0x01, 0x01];
-        let second_sha256 =
-            "1b65f68a522c858715f5dd951cd0402dc16691778814bf0759822b7a257421d0";
+        let second_sha256 = "1b65f68a522c858715f5dd951cd0402dc16691778814bf0759822b7a257421d0";
         let second_reservation = reservation_for(second_sha256)?;
         let second_request = BridgeEnrollmentCertificateSignRequest::new(
             &second_reservation,
