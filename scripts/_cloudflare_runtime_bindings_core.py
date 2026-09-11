@@ -49,6 +49,10 @@ SOURCE_CONSTANTS = {
         "apps/control-plane-worker/src/access_session.rs",
         "ACCESS_AUDIENCE_VAR",
     ),
+    "bridge_access_audience": (
+        "apps/control-plane-worker/src/bridge_machine.rs",
+        "BRIDGE_ACCESS_AUDIENCE_VAR",
+    ),
     "contact_keyring": (
         "apps/control-plane-worker/src/composition.rs",
         "CLIENT_CONTACT_PROTECTION_KEYRING_BINDING",
@@ -321,7 +325,10 @@ def validate_config(
     for environment in ("staging", "production"):
         config = object_value(envs.get(environment), f"env.{environment}")
         variables = object_value(config.get("vars"), f"env.{environment}.vars")
-        if set(variables) != expected_vars:
+        expected_environment_vars = expected_vars | (
+            {source["bridge_access_audience"]} if environment == "staging" else set()
+        )
+        if set(variables) != expected_environment_vars:
             raise BindingInventoryError(f"{environment} vars do not match runtime source")
         validate_profile_selection(environment, variables, source, profiles)
 
