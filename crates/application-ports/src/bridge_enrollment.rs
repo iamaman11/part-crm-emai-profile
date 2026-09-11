@@ -1,7 +1,6 @@
 use crate::CommandExecutionEvidence;
 use core::fmt;
 use profile_platform_primitives::{ActorContext, ActorId, DeviceId, TenantId, UnixMillis};
-use sha2::{Digest, Sha256};
 
 const MAX_BRIDGE_ENROLLMENT_CSR_DER_BYTES: usize = 16 * 1024;
 
@@ -21,18 +20,6 @@ impl Sha256Hex {
             ));
         }
         Ok(Self(value))
-    }
-
-    #[must_use]
-    pub fn digest(value: &[u8]) -> Self {
-        let digest = Sha256::digest(value);
-        let mut encoded = String::with_capacity(64);
-        const HEX: &[u8; 16] = b"0123456789abcdef";
-        for byte in digest {
-            encoded.push(char::from(HEX[usize::from(byte >> 4)]));
-            encoded.push(char::from(HEX[usize::from(byte & 0x0f)]));
-        }
-        Self(encoded)
     }
 
     #[must_use]
@@ -249,10 +236,10 @@ impl std::error::Error for BridgeEnrollmentCertificateSignerError {}
 
 /// Transient, exact-identity CSR input accepted by the protected certificate signer boundary.
 ///
-/// Construction proves only two checks that belong outside the concrete signer: the input is one
-/// bounded DER SEQUENCE envelope and its SHA-256 identity is exactly the CSR already reserved by
-/// the one-shot enrollment authority. The signer implementation remains responsible for complete
-/// PKCS#10 validation, including proof-of-possession and the selected key/certificate profile.
+/// Construction proves the input is one bounded DER SEQUENCE envelope and that the machine-owned
+/// CSR digest supplied by the caller is exactly the digest already reserved by the one-shot
+/// enrollment authority. The signer MUST independently recompute SHA-256 from `csr_der` before
+/// signing, so caller digest drift or CSR substitution cannot cross the protected signer boundary.
 pub struct BridgeEnrollmentCertificateSignRequest<'a> {
     reservation: &'a BridgeEnrollmentReservation,
     csr_der: &'a [u8],
@@ -264,13 +251,13 @@ impl<'a> BridgeEnrollmentCertificateSignRequest<'a> {
     pub fn new(
         reservation: &'a BridgeEnrollmentReservation,
         csr_der: &'a [u8],
+        csr_sha256: Sha256Hex,
     ) -> Result<Self, BridgeEnrollmentCertificateSignerError> {
         if !is_exact_der_sequence(csr_der) {
             return Err(BridgeEnrollmentCertificateSignerError::new(
                 BridgeEnrollmentCertificateSignerErrorClass::MalformedCsr,
             ));
         }
-        let csr_sha256 = Sha256Hex::digest(csr_der);
         if &csr_sha256 != reservation.csr_sha256() {
             return Err(BridgeEnrollmentCertificateSignerError::new(
                 BridgeEnrollmentCertificateSignerErrorClass::CsrIdentityMismatch,
@@ -362,8 +349,9 @@ impl SignedBridgeEnrollmentCertificate {
 pub trait BridgeEnrollmentCertificateSignerPort {
     /// Validates and signs exactly the reserved CSR without persisting its bytes.
     ///
-    /// Implementations MUST parse exactly one DER PKCS#10 request, verify its signature/proof of
-    /// possession, enforce `WindowsRsaSha256ClientAuthV1` (RSA signing key of at least 2048 bits,
+    /// Implementations MUST independently SHA-256 the exact `csr_der` bytes and compare that value
+    /// with `request.csr_sha256()`, parse exactly one DER PKCS#10 request, verify its signature/proof
+    /// of possession, enforce `WindowsRsaSha256ClientAuthV1` (RSA signing key of at least 2048 bits,
     /// SHA-256 signature and ClientAuth-only certificate intent), and issue a certificate whose
     /// public key is the CSR subject public key. Malformed/unsupported/substituted requests fail
     /// closed. Provider credentials and signing keys remain private to the concrete signer adapter.
@@ -484,14 +472,14 @@ mod tests {
     };
     use profile_platform_primitives::{ActorId, DeviceId, TenantId};
 
-    fn reservation_for(csr_der: &[u8]) -> BridgeEnrollmentReservation {
-        BridgeEnrollmentReservation::new(
-            TenantId::parse("tenant-001").expect("test tenant ID must parse"),
-            ActorId::parse("actor-001").expect("test actor ID must parse"),
-            DeviceId::parse("device-001").expect("test device ID must parse"),
-            Sha256Hex::digest(csr_der),
+    fn reservation_for(csr_sha256: &str) -> Result<BridgeEnrollmentReservation, Box<dyn std::error::Error>> {
+        Ok(BridgeEnrollmentReservation::new(
+            TenantId::parse("tenant-001")?,
+            ActorId::parse("actor-001")?,
+            DeviceId::parse("device-001")?,
+            Sha256Hex::parse(csr_sha256)?,
             false,
-        )
+        ))
     }
 
     #[test]
@@ -503,86 +491,117 @@ mod tests {
                 if error.class() == BridgeEnrollmentAuthorityErrorClass::IntegrityFailure
         ));
         assert!(Sha256Hex::parse("ab".repeat(31)).is_err());
-        assert_eq!(
-            Sha256Hex::digest(b"abc").as_str(),
-            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
-        );
     }
 
     #[test]
-    fn signer_request_requires_exact_reserved_csr_identity() {
+    fn signer_request_requires_exact_reserved_csr_identity() -> Result<(), Box<dyn std::error::Error>> {
         let csr_der = [0x30, 0x03, 0x02, 0x01, 0x00];
-        let reservation = reservation_for(&csr_der);
-        let request = BridgeEnrollmentCertificateSignRequest::new(&reservation, &csr_der)
-            .expect("exact bounded DER CSR envelope must bind");
+        let csr_sha256 = "b560833d6f787af46113b96aad4dd5b5d1ae00dccc69cf30cc92bed651c56617";
+        let reservation = reservation_for(csr_sha256)?;
+        let request = BridgeEnrollmentCertificateSignRequest::new(
+            &reservation,
+            &csr_der,
+            Sha256Hex::parse(csr_sha256)?,
+        )?;
         assert_eq!(request.csr_sha256(), reservation.csr_sha256());
         assert!(!format!("{request:?}").contains("30, 3, 2, 1, 0"));
 
         let substituted = [0x30, 0x03, 0x02, 0x01, 0x01];
+        let substituted_sha256 =
+            "1b65f68a522c858715f5dd951cd0402dc16691778814bf0759822b7a257421d0";
         assert!(matches!(
-            BridgeEnrollmentCertificateSignRequest::new(&reservation, &substituted),
+            BridgeEnrollmentCertificateSignRequest::new(
+                &reservation,
+                &substituted,
+                Sha256Hex::parse(substituted_sha256)?,
+            ),
             Err(error)
                 if error.class()
                     == BridgeEnrollmentCertificateSignerErrorClass::CsrIdentityMismatch
         ));
+        Ok(())
     }
 
     #[test]
-    fn signer_request_rejects_malformed_or_noncanonical_der_before_signer_boundary() {
+    fn signer_request_rejects_malformed_or_noncanonical_der_before_signer_boundary(
+    ) -> Result<(), Box<dyn std::error::Error>> {
         let malformed = [0x31, 0x00];
-        let reservation = reservation_for(&malformed);
+        let malformed_sha256 =
+            "e79e418e48623569d75e2a7b09ae88ed9b77b126a445b9ff9dc6989a08efa079";
+        let reservation = reservation_for(malformed_sha256)?;
         assert!(matches!(
-            BridgeEnrollmentCertificateSignRequest::new(&reservation, &malformed),
+            BridgeEnrollmentCertificateSignRequest::new(
+                &reservation,
+                &malformed,
+                Sha256Hex::parse(malformed_sha256)?,
+            ),
             Err(error)
                 if error.class() == BridgeEnrollmentCertificateSignerErrorClass::MalformedCsr
         ));
 
         let trailing = [0x30, 0x00, 0x00];
-        let reservation = reservation_for(&trailing);
+        let trailing_sha256 =
+            "b0efbbc43054beee753cd10fab49ea0fe2fabdba420e72d0ba74fe2a0222dbf9";
+        let reservation = reservation_for(trailing_sha256)?;
         assert!(matches!(
-            BridgeEnrollmentCertificateSignRequest::new(&reservation, &trailing),
+            BridgeEnrollmentCertificateSignRequest::new(
+                &reservation,
+                &trailing,
+                Sha256Hex::parse(trailing_sha256)?,
+            ),
             Err(error)
                 if error.class() == BridgeEnrollmentCertificateSignerErrorClass::MalformedCsr
         ));
 
         let noncanonical_long_length = [0x30, 0x81, 0x01, 0x00];
-        let reservation = reservation_for(&noncanonical_long_length);
+        let noncanonical_sha256 =
+            "8bbb0488be844a0217e1a6f93bef03c33d30d120a8b457a5f7e9b299ecff1db2";
+        let reservation = reservation_for(noncanonical_sha256)?;
         assert!(matches!(
-            BridgeEnrollmentCertificateSignRequest::new(&reservation, &noncanonical_long_length),
+            BridgeEnrollmentCertificateSignRequest::new(
+                &reservation,
+                &noncanonical_long_length,
+                Sha256Hex::parse(noncanonical_sha256)?,
+            ),
             Err(error)
                 if error.class() == BridgeEnrollmentCertificateSignerErrorClass::MalformedCsr
         ));
+        Ok(())
     }
 
     #[test]
-    fn signed_certificate_identity_cannot_be_reused_for_a_different_reserved_csr() {
+    fn signed_certificate_identity_cannot_be_reused_for_a_different_reserved_csr(
+    ) -> Result<(), Box<dyn std::error::Error>> {
         let first_der = [0x30, 0x03, 0x02, 0x01, 0x00];
-        let first_reservation = reservation_for(&first_der);
+        let first_sha256 =
+            "b560833d6f787af46113b96aad4dd5b5d1ae00dccc69cf30cc92bed651c56617";
+        let first_reservation = reservation_for(first_sha256)?;
         let first_request = BridgeEnrollmentCertificateSignRequest::new(
             &first_reservation,
             &first_der,
-        )
-        .expect("first request must bind");
+            Sha256Hex::parse(first_sha256)?,
+        )?;
         let signed = SignedBridgeEnrollmentCertificate::for_request(
             &first_request,
-            Sha256Hex::parse("cd".repeat(32)).expect("certificate digest must parse"),
+            Sha256Hex::parse("cd".repeat(32))?,
         );
-        signed
-            .validate_for_request(&first_request)
-            .expect("same request identity must validate");
+        signed.validate_for_request(&first_request)?;
 
         let second_der = [0x30, 0x03, 0x02, 0x01, 0x01];
-        let second_reservation = reservation_for(&second_der);
+        let second_sha256 =
+            "1b65f68a522c858715f5dd951cd0402dc16691778814bf0759822b7a257421d0";
+        let second_reservation = reservation_for(second_sha256)?;
         let second_request = BridgeEnrollmentCertificateSignRequest::new(
             &second_reservation,
             &second_der,
-        )
-        .expect("second request must bind");
+            Sha256Hex::parse(second_sha256)?,
+        )?;
         assert!(matches!(
             signed.validate_for_request(&second_request),
             Err(error)
                 if error.class()
                     == BridgeEnrollmentCertificateSignerErrorClass::CertificateIdentityMismatch
         ));
+        Ok(())
     }
 }
