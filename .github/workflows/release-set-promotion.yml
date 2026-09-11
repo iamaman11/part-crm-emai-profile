@@ -1214,8 +1214,8 @@ jobs:
           set -euo pipefail
           custom_domain="$(jq -er '.control_plane.custom_domain // .custom_domain' "$DEPLOY_MANIFEST")"
           response="$RUNNER_TEMP/health-response"
-          curl --silent --show-error --fail --connect-timeout 10 --max-time 30 -H "CF-Access-Client-Id: $CLOUDFLARE_ACCESS_CLIENT_ID" -H "CF-Access-Client-Secret: $CLOUDFLARE_ACCESS_CLIENT_SECRET" -o "$response" "https://$custom_domain/health"
-          test "$(cat "$response")" = ok
+          curl --silent --show-error --fail --connect-timeout 10 --max-time 30 -H "CF-Access-Client-Id: $CLOUDFLARE_ACCESS_CLIENT_ID" -H "CF-Access-Client-Secret: $CLOUDFLARE_ACCESS_CLIENT_SECRET" -o "$response" "https://$custom_domain/api/v1/health"
+          jq -e '.status == "ok" and .contractVersion == "v1"' "$response" >/dev/null
 
       - name: Upload metadata-only post-deploy evidence
         id: post_evidence
