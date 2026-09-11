@@ -1,5 +1,7 @@
 use super::catalog_legacy;
-use super::model::{self, ComponentAuthority, D1Error, MigrationClass, MigrationContract, RolloutOrder};
+use super::model::{
+    self, ComponentAuthority, D1Error, MigrationClass, MigrationContract, RolloutOrder,
+};
 use crate::canonical::{canonical_json, canonical_pretty_json, sha256_hex};
 use serde_json::{Value, json};
 use std::fs;
