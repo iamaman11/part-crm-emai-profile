@@ -36,7 +36,6 @@ CORE_SECRET_CREDENTIALS = {
 CORE_NON_SECRET_CREDENTIALS = {
     "ACCESS_AUDIENCE",
     "ACCESS_ISSUER",
-    "BRIDGE_ACCESS_AUDIENCE",
 }
 
 
@@ -218,9 +217,9 @@ def secret_names(secret_list: Any) -> set[str]:
 def non_secret_credential_names(selected: dict[str, Any]) -> set[str]:
     """Project target-config readiness for non-secret credential metadata.
 
-    Access issuer/audience and the explicit Bridge audience alias are ordinary Worker vars, not
-    secret bindings. Their values are already bounded and placeholder-free by the existing
-    rendered Core overlay authority; only their logical names are projected into the snapshot.
+    ACCESS issuer/audience are ordinary Worker vars, not secret bindings. Their values are
+    already bounded and placeholder-free by the existing rendered Core overlay authority;
+    only their logical names are projected into the DeploymentSnapshot.
     """
     vars_value = object_value(selected.get("vars"), "rendered Core vars")
     observed: set[str] = set()
@@ -231,10 +230,6 @@ def non_secret_credential_names(selected: dict[str, Any]) -> set[str]:
         if not isinstance(value, str) or not value:
             fail(f"rendered Core vars.{name} must be a non-empty string when present")
         observed.add(name)
-    access_audience = vars_value.get("ACCESS_AUDIENCE")
-    bridge_audience = vars_value.get("BRIDGE_ACCESS_AUDIENCE")
-    if access_audience is not None and bridge_audience is not None and access_audience != bridge_audience:
-        fail("Bridge audience must alias the canonical shared Access application audience")
     return observed
 
 
@@ -395,11 +390,20 @@ def build(args: argparse.Namespace) -> dict[str, Any]:
         "release_set_id": release_set_id,
         "capability_profile_id": profile_id,
         "component_release_ids": components,
-        "logical_resources": sorted(logical_resources),
-        "bindings": sorted(bindings),
-        "credentials": sorted(credentials),
+        "workers": [{"observed": deployment_status not in ({}, [], None)}],
         "d1": d1,
-        "compatibility": compatibility,
+        "r2": [{"bucket_name": r2_name, "observed": "profile_objects" in logical_resources}],
+        "queues": [{"queue_name": queue_name, "observed": "integration_events" in logical_resources}],
+        "dlqs": [],
+        "durable_objects": [{"name": "PROFILE_COORDINATOR"}, {"name": "NOTIFICATION_HUB"}],
+        "service_bindings": [],
+        "routes": [str(control.get("custom_domain", ""))],
+        "schedules": ["* * * * *"],
+        "credential_metadata": [{"name": name} for name in sorted(credentials)],
+        "observed_logical_resources": sorted(logical_resources),
+        "observed_logical_bindings": sorted(bindings),
+        "observed_logical_credentials": sorted(credentials),
+        "observed_compatibility": compatibility,
     }
 
 
@@ -408,7 +412,6 @@ def native_inspection_fixture(schema_version: int, release_set_id: str) -> dict[
         "schema_version": 1,
         "command": "release.inspect",
         "decision": "VALID",
-        "mutation_executed": False,
         "release_set_schema_version": schema_version,
         "release_set_id": release_set_id,
         "component_release_ids": {"control-plane": "control-plane-test"},
@@ -417,37 +420,43 @@ def native_inspection_fixture(schema_version: int, release_set_id: str) -> dict[
             "resolver_protocol": "resolver-v1",
             "camouhost_ipc_version": 1,
             "profile_bridge_protocol_version": 1,
-            "runtime_role": "camoufox-profile-runtime",
+            "runtime_role": "desktop-profile-runtime",
             "profile_format": "profile-v1",
-            "browser_identity_policy": "camoufox-v1",
+            "browser_identity_policy": "stable",
         },
+        "mutation_executed": False,
     }
 
 
 def self_test() -> None:
+    v2 = "release-set-v2-sha256-" + "a" * 64
     v3 = "release-set-v3-sha256-" + "b" * 64
-    components, compatibility = release_observation_from_inspect(
-        native_inspection_fixture(3, v3), v3
-    )
-    if components != {"control-plane": "control-plane-test"} or compatibility["contracts_sha256"] != "a" * 64:
-        fail("native Release Set inspection projection fixture drifted")
-    expected_non_secret = {"ACCESS_AUDIENCE", "ACCESS_ISSUER", "BRIDGE_ACCESS_AUDIENCE"}
+    for release_id, profile in (
+        (v2, "rehearsal-core-v1"),
+        (v3, "rehearsal-core-v2"),
+    ):
+        if deployment_identity_from_output(
+            {
+                "schema_version": 2,
+                "kind": "DEPLOYMENT_IDENTITY_OBSERVATION",
+                "release_set_id": release_id,
+                "capability_profile_id": profile,
+            }
+        ) != (release_id, profile):
+            fail("deployment identity observation fixture was not retained")
+        components, compatibility = release_observation_from_inspect(
+            native_inspection_fixture(2 if release_id == v2 else 3, release_id),
+            release_id,
+        )
+        if components != {"control-plane": "control-plane-test"} or compatibility["contracts_sha256"] != "a" * 64:
+            fail("native Release Set inspection projection fixture drifted")
+    expected_non_secret = {"ACCESS_AUDIENCE", "ACCESS_ISSUER"}
     if non_secret_credential_names(
-        {"vars": {
-            "ACCESS_AUDIENCE": "audience-test",
-            "ACCESS_ISSUER": "https://example.test",
-            "BRIDGE_ACCESS_AUDIENCE": "audience-test",
-        }}
+        {"vars": {"ACCESS_AUDIENCE": "audience-test", "ACCESS_ISSUER": "https://example.test"}}
     ) != expected_non_secret:
         fail("non-secret credential metadata readiness fixture drifted")
     if non_secret_credential_names({"vars": {"ACCESS_ISSUER": "https://example.test"}}) != {"ACCESS_ISSUER"}:
         fail("missing non-secret credential metadata was fabricated")
-    try:
-        non_secret_credential_names({"vars": {"ACCESS_AUDIENCE": "audience-a", "BRIDGE_ACCESS_AUDIENCE": "audience-b"}})
-    except SnapshotError:
-        pass
-    else:
-        fail("divergent Bridge Access audience unexpectedly passed")
     try:
         non_secret_credential_names({"vars": {"ACCESS_AUDIENCE": 1}})
     except SnapshotError:
@@ -459,22 +468,24 @@ def self_test() -> None:
     except SnapshotError:
         pass
     else:
-        fail("unsupported current Release Set schema unexpectedly passed")
-    print("DeploymentSnapshot adapter self-test passed.")
+        fail("unsupported native Release Set inspection schema unexpectedly passed")
+    if any(value is not None for value in empty_compatibility().values()):
+        fail("fresh-environment compatibility observation must be UNKNOWN/null")
+    print("AR-11 DeploymentSnapshot v2 adapter self-test passed.")
 
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--environment", required=True)
-    parser.add_argument("--collected-at", required=True)
-    parser.add_argument("--deployment-status", type=Path, required=True)
-    parser.add_argument("--catalog-ledger", type=Path, required=True)
+    parser.add_argument("--environment")
+    parser.add_argument("--collected-at")
+    parser.add_argument("--deployment-status", type=Path)
+    parser.add_argument("--catalog-ledger", type=Path)
     parser.add_argument("--resolver-ledger", type=Path)
-    parser.add_argument("--r2-list", type=Path, required=True)
-    parser.add_argument("--queue-list", type=Path, required=True)
-    parser.add_argument("--secret-list", type=Path, required=True)
-    parser.add_argument("--rendered-config", type=Path, required=True)
-    parser.add_argument("--deploy-manifest", type=Path, required=True)
+    parser.add_argument("--r2-list", type=Path)
+    parser.add_argument("--queue-list", type=Path)
+    parser.add_argument("--secret-list", type=Path)
+    parser.add_argument("--rendered-config", type=Path)
+    parser.add_argument("--deploy-manifest", type=Path)
     parser.add_argument("--current-release-set", type=Path)
     parser.add_argument("--output", type=Path)
     parser.add_argument("--self-test", action="store_true")
@@ -483,16 +494,28 @@ def main() -> int:
         if args.self_test:
             self_test()
             return 0
-        if args.output is None:
-            fail("--output is required outside --self-test")
-        snapshot = build(args)
+        required = [
+            args.environment,
+            args.collected_at,
+            args.deployment_status,
+            args.catalog_ledger,
+            args.r2_list,
+            args.queue_list,
+            args.secret_list,
+            args.rendered_config,
+            args.deploy_manifest,
+            args.output,
+        ]
+        if any(value is None for value in required):
+            fail("all observation inputs except resolver/current-release-set are required")
+        result = build(args)
         if args.output.exists():
-            fail(f"output already exists: {args.output}")
+            fail(f"snapshot output already exists: {args.output}")
         args.output.parent.mkdir(parents=True, exist_ok=True)
-        args.output.write_text(json.dumps(snapshot, sort_keys=True, indent=2) + "\n", encoding="utf-8")
+        args.output.write_text(json.dumps(result, sort_keys=True, indent=2) + "\n", encoding="utf-8")
         return 0
     except (OSError, SnapshotError) as error:
-        print(f"DeploymentSnapshot error: {error}", file=sys.stderr)
+        print(f"AR-11 DeploymentSnapshot v2 error: {error}", file=sys.stderr)
         return 1
 
 
