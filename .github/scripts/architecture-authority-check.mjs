@@ -18,6 +18,7 @@ const EXPECTED_LIFECYCLE = new Set([
   'mailbox-resolver.caller-auth',
   'control-plane.client-contact-protection',
   'profile-generation.r2-access',
+  'profile-bridge.client-certificate-pki',
   'resolver.google-oauth-application',
   'resolver.microsoft-oauth-application',
 ]);
@@ -123,6 +124,29 @@ function validate(subjects, sources) {
   if (!r2 || r2.credential_pair_atomic !== true || r2.routine_release_rotation !== false) {
     errors.push('R2 credential pair must remain atomic and outside routine release rotation');
   }
+  const bridgePki = lifecycle.concerns?.find((entry) => entry.id === 'profile-bridge.client-certificate-pki');
+  if (!bridgePki
+      || bridgePki.externally_issued !== true
+      || bridgePki.environment_ownership !== 'EXPLICIT_ENVIRONMENT_SCOPED_PKI'
+      || bridgePki.v2_environment !== 'staging'
+      || bridgePki.production_enabled !== false
+      || bridgePki.routine_release_rotation !== false
+      || bridgePki.trust_model !== 'DEDICATED_ENVIRONMENT_SCOPED_CLIENT_CA_CHAIN'
+      || bridgePki.issuer !== 'EXTERNAL_PROTECTED_CERTIFICATE_AUTHORITY'
+      || bridgePki.ca_signing_material_policy !== 'NO_GIT_NO_ISSUE_NO_ARTIFACT_NO_PROVIDER_PAYLOAD_NO_READBACK'
+      || bridgePki.ca_public_chain_classification !== 'NON_SECRET_EXTERNAL_FACT'
+      || bridgePki.ca_public_chain_digest !== 'SHA256_REQUIRED'
+      || bridgePki.provider_generated_certificate_ids !== 'OBSERVED_NOT_SOURCE_AUTHORITY'
+      || bridgePki.ca_or_common_name_grants_device_authorization !== false
+      || bridgePki.device_authorization_owner !== 'EXISTING_D1_DEVICE_PRINCIPAL_FINGERPRINT_BINDING'
+      || bridgePki.client_certificate_scope !== 'UNIQUE_PER_DEVICE'
+      || bridgePki.client_auth_eku_oid !== '1.3.6.1.5.5.7.3.2'
+      || bridgePki.maximum_lifetime !== lifecycle.global_invariants?.exportable_static_credential_max_lifetime
+      || bridgePki.host_handoff !== 'PASSWORD_PROTECTED_PFX_TO_BRIDGE_HOST_OPS'
+      || bridgePki.windows_import_private_key_policy !== 'NON_EXPORTABLE'
+      || bridgePki.overlap_model !== 'REPLACEMENT_BOUND_AND_VERIFIED_BEFORE_PREVIOUS_CERTIFICATE_RETIREMENT') {
+    errors.push('Bridge client-certificate PKI lifecycle must remain staging-only, externally issued, fingerprint-authorized and verify-before-retire');
+  }
   if (profile.kind !== 'PROFILE_SECURITY_AUTHORITY' || profile.status !== 'current'
       || profile.credential_authority !== PATHS.authority) {
     errors.push('profile security authority root drifted');
@@ -200,6 +224,14 @@ function main() {
     const revokeFirst = structuredClone(subjects);
     revokeFirst.lifecycle.concerns[0].retire_previous_requires_verified_replacement = false;
     assertRejected('revoke-before-verify', revokeFirst, sources);
+
+    const bridgeCaAuthorizesDevice = structuredClone(subjects);
+    bridgeCaAuthorizesDevice.lifecycle.concerns.find((entry) => entry.id === 'profile-bridge.client-certificate-pki').ca_or_common_name_grants_device_authorization = true;
+    assertRejected('Bridge CA trust becoming device authorization', bridgeCaAuthorizesDevice, sources);
+
+    const bridgeProduction = structuredClone(subjects);
+    bridgeProduction.lifecycle.concerns.find((entry) => entry.id === 'profile-bridge.client-certificate-pki').production_enabled = true;
+    assertRejected('Bridge PKI Production pre-enable', bridgeProduction, sources);
 
     const insecureProfile = structuredClone(subjects);
     insecureProfile.profile.status = 'historical';
