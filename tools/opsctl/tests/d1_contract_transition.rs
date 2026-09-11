@@ -9,8 +9,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-const PREDECESSOR_REVISION: &str = "0031_device_binding_governance.sql";
-const CONTRACT_REVISION: &str = "0032_pas2_payload_fingerprint_contract.sql";
+const PREDECESSOR_REVISION: &str = "0032_bridge_device_enrollment_authority.sql";
+const CONTRACT_REVISION: &str = "0033_pas2_payload_fingerprint_contract.sql";
 
 fn repo_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
@@ -90,12 +90,12 @@ fn public_contract_transition_enforces_exact_fail_closed_matrix_and_post_verify(
                 .ok_or("Catalog migration filename is missing")
         })
         .collect::<Result<Vec<_>, _>>()?;
-    assert_eq!(names.len(), 32);
-    assert_eq!(names[30], PREDECESSOR_REVISION);
-    assert_eq!(names[31], CONTRACT_REVISION);
+    assert_eq!(names.len(), 33);
+    assert_eq!(names[31], PREDECESSOR_REVISION);
+    assert_eq!(names[32], CONTRACT_REVISION);
 
-    let predecessor_ledger = ledger(&names[..31]);
-    let multiple_pending_ledger = ledger(&names[..30]);
+    let predecessor_ledger = ledger(&names[..32]);
+    let multiple_pending_ledger = ledger(&names[..31]);
     let post_ledger = ledger(&names);
     let release_manifest = json!({
         "schema_contract": catalog["release_schema_contract"].clone()
@@ -184,7 +184,7 @@ fn public_contract_transition_enforces_exact_fail_closed_matrix_and_post_verify(
     assert!(
         multiple_pending
             .to_string()
-            .contains("exact canonical prefix through 0031")
+            .contains("exact canonical prefix through enrollment 0032")
     );
 
     let mut split_evidence = evidence.clone();
@@ -313,7 +313,7 @@ fn public_contract_transition_enforces_exact_fail_closed_matrix_and_post_verify(
     }) {
         Ok(_) => {
             return Err(
-                "unchanged 0031 ledger unexpectedly passed post-contract verification".into(),
+                "unchanged enrollment-0032 ledger unexpectedly passed post-contract verification".into(),
             );
         }
         Err(error) => error,
@@ -321,7 +321,7 @@ fn public_contract_transition_enforces_exact_fail_closed_matrix_and_post_verify(
     assert!(
         unchanged
             .to_string()
-            .contains("exactly one canonical 0031 -> 0032 transition")
+            .contains("exactly one canonical enrollment-0032 -> PAS2-0033 transition")
     );
     Ok(())
 }

@@ -1,5 +1,5 @@
 use super::catalog_legacy;
-use super::model::{self, ComponentAuthority, D1Error, MigrationClass, MigrationContract, RolloutOrder};
+use super::model::{ComponentAuthority, D1Error, MigrationClass, MigrationContract, RolloutOrder};
 use crate::canonical::{canonical_json, canonical_pretty_json, sha256_hex};
 use serde_json::{Value, json};
 use std::fs;
@@ -18,7 +18,8 @@ const SUCCESSOR_LINEAGE_ID: &str = "catalog-successor-v2";
 const PREDECESSOR_CONTRACT_REVISION: &str = "0032_pas2_payload_fingerprint_contract.sql";
 const BRIDGE_ENROLLMENT_REVISION: &str = "0032_bridge_device_enrollment_authority.sql";
 const SUCCESSOR_CONTRACT_REVISION: &str = "0033_pas2_payload_fingerprint_contract.sql";
-const CURRENT_SUCCESSOR_FILES: [&str; 2] = [BRIDGE_ENROLLMENT_REVISION, SUCCESSOR_CONTRACT_REVISION];
+const CURRENT_SUCCESSOR_FILES: [&str; 2] =
+    [BRIDGE_ENROLLMENT_REVISION, SUCCESSOR_CONTRACT_REVISION];
 
 #[derive(Debug, Clone)]
 struct CatalogSuccessor {
@@ -34,6 +35,7 @@ impl CatalogSuccessor {
         // boundary and the accepted v1 successor directory before v2 is composed.
         let predecessor_authority = predecessor::component_authority(root, "catalog")?;
         validate_predecessor_authority(&predecessor_authority)?;
+        validate_predecessor_repository_identity(root)?;
         validate_current_successor_directory(root)?;
         validate_deferred_contract_copy(root)?;
 
@@ -41,11 +43,15 @@ impl CatalogSuccessor {
         let historical_epoch = predecessor_projection
             .get("historical_epoch")
             .cloned()
-            .ok_or_else(|| D1Error::new("Catalog predecessor projection is missing historical_epoch"))?;
+            .ok_or_else(|| {
+                D1Error::new("Catalog predecessor projection is missing historical_epoch")
+            })?;
         let legacy_history = predecessor_projection
             .get("legacy_history")
             .cloned()
-            .ok_or_else(|| D1Error::new("Catalog predecessor projection is missing legacy_history"))?;
+            .ok_or_else(|| {
+                D1Error::new("Catalog predecessor projection is missing legacy_history")
+            })?;
 
         let mut ordered_history = predecessor_authority.ordered_history.clone();
         if ordered_history.pop().as_deref() != Some(PREDECESSOR_CONTRACT_REVISION) {
@@ -63,9 +69,9 @@ impl CatalogSuccessor {
         }
 
         let mut post_epoch = predecessor_authority.post_epoch.clone();
-        let mut deferred_contract = post_epoch
-            .pop()
-            .ok_or_else(|| D1Error::new("Catalog predecessor deferred CONTRACT metadata is missing"))?;
+        let mut deferred_contract = post_epoch.pop().ok_or_else(|| {
+            D1Error::new("Catalog predecessor deferred CONTRACT metadata is missing")
+        })?;
         validate_predecessor_contract(&deferred_contract)?;
 
         ordered_history.push(BRIDGE_ENROLLMENT_REVISION.to_owned());
@@ -172,7 +178,9 @@ impl CatalogSuccessor {
             .post_epoch
             .last()
             .ok_or_else(|| D1Error::new("trailing contract policy is missing"))?;
-        if last_contract.migration_file != *latest || last_contract.migration_file != SUCCESSOR_CONTRACT_REVISION {
+        if last_contract.migration_file != *latest
+            || last_contract.migration_file != SUCCESSOR_CONTRACT_REVISION
+        {
             return Err(D1Error::new(
                 "Catalog successor-v2 trailing contract policy does not match its latest revision",
             ));
@@ -181,7 +189,9 @@ impl CatalogSuccessor {
             .authority
             .ordered_history
             .get(self.authority.ordered_history.len().saturating_sub(2))
-            .ok_or_else(|| D1Error::new("trailing contract release requires an immediate predecessor revision"))?;
+            .ok_or_else(|| {
+                D1Error::new("trailing contract release requires an immediate predecessor revision")
+            })?;
         if target != BRIDGE_ENROLLMENT_REVISION {
             return Err(D1Error::new(
                 "Catalog successor-v2 deferred PAS-2 CONTRACT must immediately follow Bridge enrollment EXPAND",
@@ -257,7 +267,9 @@ pub(crate) fn release_contract(root: &Path, component: &str) -> Result<Value, D1
 pub(crate) fn repository_projection(root: &Path) -> Result<String, D1Error> {
     let catalog = CatalogSuccessor::load(root)?;
     let mut projection: Value = serde_json::from_str(&predecessor::repository_projection(root)?)
-        .map_err(|error| D1Error::new(format!("cannot parse predecessor D1 projection: {error}")))?;
+        .map_err(|error| {
+            D1Error::new(format!("cannot parse predecessor D1 projection: {error}"))
+        })?;
     let repository_identity = {
         let components = projection
             .get_mut("components")
@@ -265,8 +277,12 @@ pub(crate) fn repository_projection(root: &Path) -> Result<String, D1Error> {
             .ok_or_else(|| D1Error::new("predecessor D1 projection is missing components"))?;
         let catalog_slot = components
             .iter_mut()
-            .find(|component| component.get("component_id").and_then(Value::as_str) == Some("catalog"))
-            .ok_or_else(|| D1Error::new("predecessor D1 projection is missing Catalog component"))?;
+            .find(|component| {
+                component.get("component_id").and_then(Value::as_str) == Some("catalog")
+            })
+            .ok_or_else(|| {
+                D1Error::new("predecessor D1 projection is missing Catalog component")
+            })?;
         *catalog_slot = catalog.inventory_projection()?;
         repository_identity_from_components(components)?
     };
@@ -294,7 +310,8 @@ pub(crate) fn repository_identity_sha256(root: &Path) -> Result<String, D1Error>
 fn validate_predecessor_authority(authority: &ComponentAuthority) -> Result<(), D1Error> {
     if authority.component_id != "catalog"
         || authority.current_repository_revision != PREDECESSOR_CONTRACT_REVISION
-        || authority.ordered_history.last().map(String::as_str) != Some(PREDECESSOR_CONTRACT_REVISION)
+        || authority.ordered_history.last().map(String::as_str)
+            != Some(PREDECESSOR_CONTRACT_REVISION)
     {
         return Err(D1Error::new(
             "accepted Catalog predecessor successor boundary drifted before successor-v2 composition",
@@ -323,16 +340,36 @@ fn validate_predecessor_contract(contract: &MigrationContract) -> Result<(), D1E
     Ok(())
 }
 
+fn validate_predecessor_repository_identity(root: &Path) -> Result<(), D1Error> {
+    let projection: Value = serde_json::from_str(&predecessor::repository_projection(root)?)
+        .map_err(|error| {
+            D1Error::new(format!("cannot parse predecessor D1 projection: {error}"))
+        })?;
+    let projected = projection
+        .get("repository_identity_sha256")
+        .and_then(Value::as_str)
+        .ok_or_else(|| D1Error::new("predecessor D1 projection is missing repository identity"))?;
+    let computed = predecessor::repository_identity_sha256(root)?;
+    if projected != computed {
+        return Err(D1Error::new(
+            "accepted predecessor repository identity drifted before successor-v2 composition",
+        ));
+    }
+    Ok(())
+}
+
 fn predecessor_catalog_projection(root: &Path) -> Result<Value, D1Error> {
     let projection: Value = serde_json::from_str(&predecessor::repository_projection(root)?)
-        .map_err(|error| D1Error::new(format!("cannot parse predecessor D1 projection: {error}")))?;
+        .map_err(|error| {
+            D1Error::new(format!("cannot parse predecessor D1 projection: {error}"))
+        })?;
     projection
         .get("components")
         .and_then(Value::as_array)
         .and_then(|components| {
-            components
-                .iter()
-                .find(|component| component.get("component_id").and_then(Value::as_str) == Some("catalog"))
+            components.iter().find(|component| {
+                component.get("component_id").and_then(Value::as_str) == Some("catalog")
+            })
         })
         .cloned()
         .ok_or_else(|| D1Error::new("predecessor D1 projection is missing Catalog component"))
@@ -345,7 +382,9 @@ fn predecessor_source_roots(
     let sources = projection
         .get("executable_migration_sources")
         .and_then(Value::as_array)
-        .ok_or_else(|| D1Error::new("Catalog predecessor projection is missing executable migration sources"))?;
+        .ok_or_else(|| {
+            D1Error::new("Catalog predecessor projection is missing executable migration sources")
+        })?;
     if sources.len() != authority.ordered_history.len() {
         return Err(D1Error::new(
             "Catalog predecessor source projection cardinality drifted",
@@ -358,11 +397,15 @@ fn predecessor_source_roots(
             let name = entry
                 .get("migration_file")
                 .and_then(Value::as_str)
-                .ok_or_else(|| D1Error::new("Catalog predecessor source entry is missing migration_file"))?;
+                .ok_or_else(|| {
+                    D1Error::new("Catalog predecessor source entry is missing migration_file")
+                })?;
             let source_root = entry
                 .get("source_root")
                 .and_then(Value::as_str)
-                .ok_or_else(|| D1Error::new("Catalog predecessor source entry is missing source_root"))?;
+                .ok_or_else(|| {
+                    D1Error::new("Catalog predecessor source entry is missing source_root")
+                })?;
             if name != expected_name {
                 return Err(D1Error::new(
                     "Catalog predecessor executable migration source order drifted",
@@ -404,11 +447,20 @@ fn validate_current_successor_directory(root: &Path) -> Result<(), D1Error> {
     }
     let mut names = Vec::new();
     for entry in fs::read_dir(&directory).map_err(|error| {
-        D1Error::new(format!("cannot enumerate Catalog successor-v2 migration directory: {error}"))
+        D1Error::new(format!(
+            "cannot enumerate Catalog successor-v2 migration directory: {error}"
+        ))
     })? {
-        let entry = entry.map_err(|error| D1Error::new(format!("cannot inspect Catalog successor-v2 entry: {error}")))?;
+        let entry = entry.map_err(|error| {
+            D1Error::new(format!(
+                "cannot inspect Catalog successor-v2 entry: {error}"
+            ))
+        })?;
         let entry_metadata = fs::symlink_metadata(entry.path()).map_err(|error| {
-            D1Error::new(format!("cannot inspect Catalog successor-v2 migration {}: {error}", entry.path().display()))
+            D1Error::new(format!(
+                "cannot inspect Catalog successor-v2 migration {}: {error}",
+                entry.path().display()
+            ))
         })?;
         if entry_metadata.file_type().is_symlink() || !entry_metadata.is_file() {
             return Err(D1Error::new(format!(
@@ -417,10 +469,9 @@ fn validate_current_successor_directory(root: &Path) -> Result<(), D1Error> {
             )));
         }
         names.push(
-            entry
-                .file_name()
-                .into_string()
-                .map_err(|_| D1Error::new("Catalog successor-v2 migration filename must be UTF-8"))?,
+            entry.file_name().into_string().map_err(|_| {
+                D1Error::new("Catalog successor-v2 migration filename must be UTF-8")
+            })?,
         );
     }
     names.sort();
@@ -455,10 +506,14 @@ fn revision_number(name: &str) -> Result<usize, D1Error> {
         .get(..4)
         .ok_or_else(|| D1Error::new(format!("invalid Catalog migration revision: {name}")))?;
     if !prefix.bytes().all(|byte| byte.is_ascii_digit()) {
-        return Err(D1Error::new(format!("invalid Catalog migration revision: {name}")));
+        return Err(D1Error::new(format!(
+            "invalid Catalog migration revision: {name}"
+        )));
     }
     prefix.parse::<usize>().map_err(|error| {
-        D1Error::new(format!("invalid Catalog migration revision {name}: {error}"))
+        D1Error::new(format!(
+            "invalid Catalog migration revision {name}: {error}"
+        ))
     })
 }
 
@@ -491,26 +546,44 @@ fn migration_identity(root: &Path, migration_root: &str, name: &str) -> Result<V
 
 fn read_regular_repository_file(root: &Path, relative: &str) -> Result<Vec<u8>, D1Error> {
     let root_metadata = fs::symlink_metadata(root).map_err(|error| {
-        D1Error::new(format!("cannot inspect repository root {}: {error}", root.display()))
+        D1Error::new(format!(
+            "cannot inspect repository root {}: {error}",
+            root.display()
+        ))
     })?;
     if root_metadata.file_type().is_symlink() || !root_metadata.is_dir() {
-        return Err(D1Error::new("repository root must be a real directory, not a symlink"));
+        return Err(D1Error::new(
+            "repository root must be a real directory, not a symlink",
+        ));
     }
     let canonical_root = fs::canonicalize(root).map_err(|error| {
-        D1Error::new(format!("cannot canonicalize repository root {}: {error}", root.display()))
+        D1Error::new(format!(
+            "cannot canonicalize repository root {}: {error}",
+            root.display()
+        ))
     })?;
     let path = root.join(relative);
     let metadata = fs::symlink_metadata(&path).map_err(|error| {
-        D1Error::new(format!("cannot inspect migration source {}: {error}", path.display()))
+        D1Error::new(format!(
+            "cannot inspect migration source {}: {error}",
+            path.display()
+        ))
     })?;
     if metadata.file_type().is_symlink() || !metadata.is_file() {
-        return Err(D1Error::new(format!("migration source must be a regular file: {relative}")));
+        return Err(D1Error::new(format!(
+            "migration source must be a regular file: {relative}"
+        )));
     }
     let canonical_path = fs::canonicalize(&path).map_err(|error| {
-        D1Error::new(format!("cannot canonicalize migration source {}: {error}", path.display()))
+        D1Error::new(format!(
+            "cannot canonicalize migration source {}: {error}",
+            path.display()
+        ))
     })?;
     if !canonical_path.starts_with(&canonical_root) {
-        return Err(D1Error::new(format!("migration source escapes repository root: {relative}")));
+        return Err(D1Error::new(format!(
+            "migration source escapes repository root: {relative}"
+        )));
     }
     fs::read(canonical_path)
         .map_err(|error| D1Error::new(format!("cannot read migration source {relative}: {error}")))
@@ -568,18 +641,26 @@ mod tests {
         assert_eq!(authority.ordered_history.len(), 33);
         assert_eq!(authority.ordered_history[31], BRIDGE_ENROLLMENT_REVISION);
         assert_eq!(authority.ordered_history[32], SUCCESSOR_CONTRACT_REVISION);
-        assert_eq!(authority.current_repository_revision, SUCCESSOR_CONTRACT_REVISION);
+        assert_eq!(
+            authority.current_repository_revision,
+            SUCCESSOR_CONTRACT_REVISION
+        );
         assert_eq!(authority.post_epoch.len(), 7);
         Ok(())
     }
 
     #[test]
-    fn release_window_targets_enrollment_and_defers_pas2_contract()
-    -> Result<(), Box<dyn Error>> {
+    fn release_window_targets_enrollment_and_defers_pas2_contract() -> Result<(), Box<dyn Error>> {
         let contract = release_contract(&repository_root(), "catalog")?;
-        assert_eq!(contract["target_schema_revision"], BRIDGE_ENROLLMENT_REVISION);
+        assert_eq!(
+            contract["target_schema_revision"],
+            BRIDGE_ENROLLMENT_REVISION
+        );
         assert_eq!(contract["supported_schema_min"], BRIDGE_ENROLLMENT_REVISION);
-        assert_eq!(contract["supported_schema_max"], SUCCESSOR_CONTRACT_REVISION);
+        assert_eq!(
+            contract["supported_schema_max"],
+            SUCCESSOR_CONTRACT_REVISION
+        );
         Ok(())
     }
 
@@ -589,13 +670,20 @@ mod tests {
         let projection: Value = serde_json::from_str(&repository_projection(&repository_root())?)?;
         let catalog = projection["components"]
             .as_array()
-            .and_then(|components| components.iter().find(|component| component["component_id"] == "catalog"))
+            .and_then(|components| {
+                components
+                    .iter()
+                    .find(|component| component["component_id"] == "catalog")
+            })
             .ok_or("catalog projection is missing")?;
         assert_eq!(catalog["migration_lineage"], "catalog-successor-v2");
         assert_eq!(catalog["legacy_history"]["immutable"], true);
         assert_eq!(catalog["predecessor_successor_history"]["immutable"], true);
         let runtime = &catalog["pre_migration_runtime_schema_contract"];
-        assert_eq!(runtime["target_schema_revision"], catalog["historical_epoch"]["final_revision"]);
+        assert_eq!(
+            runtime["target_schema_revision"],
+            catalog["historical_epoch"]["final_revision"]
+        );
         assert_eq!(runtime["supported_schema_max"], BRIDGE_ENROLLMENT_REVISION);
         let sources = catalog["executable_migration_sources"]
             .as_array()
