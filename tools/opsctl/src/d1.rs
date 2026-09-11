@@ -22,6 +22,8 @@ mod model;
 pub mod operator_outcome;
 #[path = "d1/plan.rs"]
 mod plan;
+#[path = "d1/rollback_schema_tests.rs"]
+mod rollback_schema_tests;
 #[path = "d1/status.rs"]
 mod status;
 #[path = "d1/transaction_api.rs"]
@@ -61,6 +63,54 @@ pub(crate) struct D1ReleaseSchemaIdentity {
     pub supported_schema_max: String,
     pub migration_history_digest: String,
     pub compatibility_policy_digest: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum D1RollbackSchemaDecision {
+    Compatible,
+    Incompatible,
+    Unknown,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct D1RollbackSchemaVerdict {
+    pub decision: D1RollbackSchemaDecision,
+    pub reason_code: String,
+    pub summary: String,
+    pub remediation: String,
+}
+
+impl D1RollbackSchemaVerdict {
+    fn compatible(reason_code: &str, summary: String) -> Self {
+        Self {
+            decision: D1RollbackSchemaDecision::Compatible,
+            reason_code: reason_code.to_owned(),
+            summary,
+            remediation: "NONE".to_owned(),
+        }
+    }
+
+    fn incompatible(observed_revision: &str) -> Self {
+        Self {
+            decision: D1RollbackSchemaDecision::Incompatible,
+            reason_code: "CATALOG_SCHEMA_UNSUPPORTED".to_owned(),
+            summary: format!(
+                "rollback Release Set is not compatible with observed Catalog D1 schema revision {observed_revision} under the current typed D1 authority"
+            ),
+            remediation: "select a verified rollback Release Set supported by the current typed D1 authority, or use the separately authorized schema recovery procedure before promotion".to_owned(),
+        }
+    }
+
+    fn unknown(error: &D1Error) -> Self {
+        Self {
+            decision: D1RollbackSchemaDecision::Unknown,
+            reason_code: "D1_ROLLBACK_SCHEMA_AUTHORITY_UNAVAILABLE".to_owned(),
+            summary: format!(
+                "typed D1 rollback-schema authority could not evaluate the observed Catalog schema: {error}"
+            ),
+            remediation: "repair or restore the canonical typed D1 repository authority, then rerun read-only promotion preflight".to_owned(),
+        }
+    }
 }
 
 pub struct D1ContractTransitionRequest<'a> {
@@ -225,6 +275,166 @@ pub(crate) fn release_schema_identity(
         migration_history_digest: required("migration_history_digest")?,
         compatibility_policy_digest: required("compatibility_policy_digest")?,
     })
+}
+
+pub(crate) fn rollback_schema_compatibility(
+    root: &Path,
+    release: &opsctl_core::release::SchemaCompatibilityWindow,
+    observed_revision: &str,
+) -> D1RollbackSchemaVerdict {
+    if release.supports(observed_revision) {
+        return D1RollbackSchemaVerdict::compatible(
+            "IMMUTABLE_RELEASE_SCHEMA_WINDOW",
+            format!(
+                "rollback Release Set immutable Catalog schema window supports observed revision {observed_revision}"
+            ),
+        );
+    }
+
+    match historical_catalog_runtime_supports(root, release, observed_revision) {
+        Ok(true) => D1RollbackSchemaVerdict::compatible(
+            "D1_PRESENT_TIME_ROLLBACK_SCHEMA_COMPATIBLE",
+            format!(
+                "typed D1 authority proves the immutable historical Catalog runtime is code-rollback safe through observed revision {observed_revision}"
+            ),
+        ),
+        Ok(false) => D1RollbackSchemaVerdict::incompatible(observed_revision),
+        Err(error) => D1RollbackSchemaVerdict::unknown(&error),
+    }
+}
+
+fn historical_catalog_runtime_supports(
+    root: &Path,
+    release: &opsctl_core::release::SchemaCompatibilityWindow,
+    observed_revision: &str,
+) -> Result<bool, D1Error> {
+    if release.database_component != "catalog" {
+        return Ok(false);
+    }
+
+    let projection: Value =
+        serde_json::from_str(&catalog::repository_projection(root)?).map_err(|error| {
+            D1Error::new(format!(
+                "cannot parse typed D1 repository projection: {error}"
+            ))
+        })?;
+    let catalog_projection = projection
+        .get("components")
+        .and_then(Value::as_array)
+        .and_then(|components| {
+            components.iter().find(|component| {
+                component.get("component_id").and_then(Value::as_str) == Some("catalog")
+            })
+        })
+        .ok_or_else(|| {
+            D1Error::new("typed D1 repository projection is missing Catalog component")
+        })?;
+    let historical = catalog_projection
+        .get("historical_epoch")
+        .ok_or_else(|| D1Error::new("typed D1 Catalog projection is missing historical_epoch"))?;
+    let runtime = catalog_projection
+        .get("pre_migration_runtime_schema_contract")
+        .ok_or_else(|| {
+            D1Error::new("typed D1 Catalog projection is missing pre-migration runtime contract")
+        })?;
+
+    let required_string = |value: &Value, field: &str, label: &str| -> Result<String, D1Error> {
+        value
+            .get(field)
+            .and_then(Value::as_str)
+            .map(str::to_owned)
+            .ok_or_else(|| D1Error::new(format!("{label} is missing {field}")))
+    };
+    let historical_revision = required_string(historical, "final_revision", "historical_epoch")?;
+    let historical_digest =
+        required_string(historical, "accepted_history_digest", "historical_epoch")?;
+    let policy_digest = required_string(
+        catalog_projection,
+        "compatibility_policy_digest",
+        "Catalog projection",
+    )?;
+    let current_history_digest =
+        required_string(catalog_projection, "history_digest", "Catalog projection")?;
+    let runtime_target = required_string(
+        runtime,
+        "target_schema_revision",
+        "pre-migration runtime contract",
+    )?;
+    let runtime_min = required_string(
+        runtime,
+        "supported_schema_min",
+        "pre-migration runtime contract",
+    )?;
+    let runtime_max = required_string(
+        runtime,
+        "supported_schema_max",
+        "pre-migration runtime contract",
+    )?;
+    let runtime_history_digest = required_string(
+        runtime,
+        "migration_history_digest",
+        "pre-migration runtime contract",
+    )?;
+    let runtime_policy_digest = required_string(
+        runtime,
+        "compatibility_policy_digest",
+        "pre-migration runtime contract",
+    )?;
+
+    if historical
+        .get("retroactive_runtime_compatibility_claims")
+        .and_then(Value::as_bool)
+        != Some(false)
+        || catalog_projection
+            .get("legacy_history")
+            .and_then(|legacy| legacy.get("immutable"))
+            .and_then(Value::as_bool)
+            != Some(true)
+        || runtime_target != historical_revision
+        || runtime_min != historical_revision
+        || runtime_history_digest != current_history_digest
+        || runtime_policy_digest != policy_digest
+    {
+        return Err(D1Error::new(
+            "typed D1 historical/pre-migration rollback authority is internally inconsistent",
+        ));
+    }
+
+    let exact_historical_release = release.target_schema_revision == historical_revision
+        && release.supported_schema_min == historical_revision
+        && release.supported_schema_max == historical_revision
+        && release.migration_history_digest == historical_digest
+        && release.compatibility_policy_digest == policy_digest;
+    if !exact_historical_release {
+        return Ok(false);
+    }
+
+    let sources = catalog_projection
+        .get("executable_migration_sources")
+        .and_then(Value::as_array)
+        .ok_or_else(|| {
+            D1Error::new("typed D1 Catalog projection is missing executable migration sources")
+        })?;
+    let position = |revision: &str| {
+        sources
+            .iter()
+            .position(|entry| entry.get("migration_file").and_then(Value::as_str) == Some(revision))
+    };
+    let Some(historical_index) = position(&historical_revision) else {
+        return Err(D1Error::new(
+            "typed D1 Catalog lineage is missing historical runtime revision",
+        ));
+    };
+    let Some(runtime_max_index) = position(&runtime_max) else {
+        return Err(D1Error::new(
+            "typed D1 Catalog lineage is missing pre-migration supported maximum",
+        ));
+    };
+    let Some(observed_index) = position(observed_revision) else {
+        return Ok(false);
+    };
+
+    Ok(observed_index >= historical_index && observed_index <= runtime_max_index)
 }
 
 fn load_optional_release(

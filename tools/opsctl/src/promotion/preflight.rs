@@ -1,3 +1,4 @@
+use crate::d1::{D1RollbackSchemaDecision, rollback_schema_compatibility};
 use crate::promotion::plan::{PlanRequest, PromotionPlan, build};
 use crate::promotion::snapshot::DeploymentSnapshot;
 use crate::release::compatibility::CompatibilityEvidence;
@@ -237,6 +238,7 @@ fn preflight_from_plan(
         match (request.current_release, request.known_good_release) {
             (Some(_), Some(known_good)) => {
                 let diagnostic = evaluate_rollback_candidate_diagnostic(
+                    request.root,
                     known_good,
                     request.snapshot,
                     request.target_profile_id,
@@ -328,6 +330,7 @@ fn preflight_from_plan(
 /// and therefore blocks mutation. Exact equality is intentionally strict for protocol and
 /// runtime dimensions until an explicit compatibility window is owned by a later authority.
 fn evaluate_rollback_candidate_diagnostic(
+    root: &Path,
     known_good: &LoadedReleaseSet,
     snapshot: &DeploymentSnapshot,
     profile_id: &str,
@@ -354,14 +357,24 @@ fn evaluate_rollback_candidate_diagnostic(
             "collect the current Catalog D1 schema revision before promotion",
         );
     };
-    if !known_good.schemas.catalog.supports(catalog_revision) {
-        return RollbackDiagnostic::incompatible(
-            "CATALOG_SCHEMA_UNSUPPORTED",
-            format!(
-                "rollback Release Set does not support observed Catalog D1 schema revision {catalog_revision}"
-            ),
-            "select a verified rollback Release Set that supports the observed Catalog D1 schema revision, or use the authorized schema recovery procedure before promotion",
-        );
+    let catalog_schema =
+        rollback_schema_compatibility(root, &known_good.schemas.catalog, catalog_revision);
+    match catalog_schema.decision {
+        D1RollbackSchemaDecision::Compatible => {}
+        D1RollbackSchemaDecision::Incompatible => {
+            return RollbackDiagnostic::incompatible(
+                catalog_schema.reason_code,
+                catalog_schema.summary,
+                catalog_schema.remediation,
+            );
+        }
+        D1RollbackSchemaDecision::Unknown => {
+            return RollbackDiagnostic::unknown(
+                catalog_schema.reason_code,
+                catalog_schema.summary,
+                catalog_schema.remediation,
+            );
+        }
     }
 
     if resolver_required {
@@ -529,7 +542,9 @@ fn evaluate_rollback_candidate(
 ) -> crate::release::model::CompatibilityDecision {
     use crate::release::model::CompatibilityDecision;
 
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     match evaluate_rollback_candidate_diagnostic(
+        &root,
         known_good,
         snapshot,
         profile_id,
@@ -563,11 +578,33 @@ mod tests {
     use crate::release::model::{CompatibilityDecision, ReleaseModelError};
     use serde_json::{Value, json};
     use std::collections::BTreeSet;
+    use std::path::PathBuf;
 
     const SHA: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     const GIT: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     const REPO: &str = "iamaman11/part-crm-emai-profile";
     const HISTORICAL_PREFIX: &str = "release-set-v2-sha256-";
+
+    fn repository_root() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
+    }
+
+    fn diagnostic(
+        known_good: &LoadedReleaseSet,
+        snapshot: &DeploymentSnapshot,
+        profile_id: &str,
+        resolver_required: bool,
+        windows_delivery_required: bool,
+    ) -> RollbackDiagnostic {
+        evaluate_rollback_candidate_diagnostic(
+            &repository_root(),
+            known_good,
+            snapshot,
+            profile_id,
+            resolver_required,
+            windows_delivery_required,
+        )
+    }
 
     fn release() -> Result<LoadedReleaseSet, Box<dyn std::error::Error>> {
         let accepted = sha256_hex(
@@ -649,13 +686,7 @@ mod tests {
     #[test]
     fn compatible_diagnostic_is_exact() -> Result<(), Box<dyn std::error::Error>> {
         let known_good = release()?;
-        let diagnostic = evaluate_rollback_candidate_diagnostic(
-            &known_good,
-            &snapshot(),
-            "rehearsal-core-v1",
-            true,
-            false,
-        );
+        let diagnostic = diagnostic(&known_good, &snapshot(), "rehearsal-core-v1", true, false);
         assert_eq!(diagnostic.decision.as_str(), "COMPATIBLE");
         assert_eq!(diagnostic.reason_code, "ROLLBACK_COMPATIBLE");
         assert_eq!(diagnostic.remediation, "NONE");
@@ -671,20 +702,10 @@ mod tests {
             evaluate_rollback_candidate(&known_good, &state, "rehearsal-core-v1", false, false),
             CompatibilityDecision::Incompatible
         );
-        let diagnostic = evaluate_rollback_candidate_diagnostic(
-            &known_good,
-            &state,
-            "rehearsal-core-v1",
-            false,
-            false,
-        );
+        let diagnostic = diagnostic(&known_good, &state, "rehearsal-core-v1", false, false);
         assert_eq!(diagnostic.reason_code, "CATALOG_SCHEMA_UNSUPPORTED");
         assert!(diagnostic.summary.contains("9999_future.sql"));
-        assert!(
-            diagnostic
-                .remediation
-                .contains("Catalog D1 schema revision")
-        );
+        assert!(diagnostic.remediation.contains("typed D1 authority"));
         Ok(())
     }
 
@@ -697,13 +718,7 @@ mod tests {
             evaluate_rollback_candidate(&known_good, &state, "rehearsal-core-v1", false, false),
             CompatibilityDecision::Unknown
         );
-        let diagnostic = evaluate_rollback_candidate_diagnostic(
-            &known_good,
-            &state,
-            "rehearsal-core-v1",
-            false,
-            false,
-        );
+        let diagnostic = diagnostic(&known_good, &state, "rehearsal-core-v1", false, false);
         assert_eq!(diagnostic.reason_code, "CATALOG_SCHEMA_OBSERVATION_MISSING");
         assert!(diagnostic.remediation.contains("collect"));
         Ok(())
@@ -826,13 +841,7 @@ mod tests {
             evaluate_rollback_candidate(&known_good, &snapshot(), "unknown-profile", false, false),
             CompatibilityDecision::Incompatible
         );
-        let diagnostic = evaluate_rollback_candidate_diagnostic(
-            &known_good,
-            &snapshot(),
-            "unknown-profile",
-            false,
-            false,
-        );
+        let diagnostic = diagnostic(&known_good, &snapshot(), "unknown-profile", false, false);
         assert_eq!(diagnostic.reason_code, "TARGET_PROFILE_UNSUPPORTED");
         assert!(diagnostic.summary.contains("unknown-profile"));
         assert!(diagnostic.remediation.contains("target capability profile"));
@@ -858,13 +867,7 @@ mod tests {
             evaluate_rollback_candidate(&known_good, &snapshot(), "rehearsal-core-v1", false, true),
             CompatibilityDecision::Unknown
         );
-        let diagnostic = evaluate_rollback_candidate_diagnostic(
-            &known_good,
-            &snapshot(),
-            "rehearsal-core-v1",
-            false,
-            true,
-        );
+        let diagnostic = diagnostic(&known_good, &snapshot(), "rehearsal-core-v1", false, true);
         assert_eq!(
             diagnostic.reason_code,
             "WINDOWS_DELIVERY_COMPATIBILITY_UNKNOWN"
