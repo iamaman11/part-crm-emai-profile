@@ -8,16 +8,17 @@ At entry to a new bounded transaction/mutation window, and whenever section 1.1 
 
 1. read current protected `main`, current branch, merge-base, ahead/behind and working-tree state when a local checkout is available;
 2. refresh GitHub PRs, issues, checks, reviews, review threads and branch governance through the available authenticated GitHub tooling;
-3. read `docs/INDEX.md`, `docs/PRODUCT.md`, `docs/ARCHITECTURE_REBASELINE_V3_PLAN.md`, Issue #266,
+3. read `docs/INDEX.md`, `docs/PRODUCT.md`, fresh Issue #266,
    `docs/APPLICATION_ARCHITECTURE_MANDATORY_REQUIREMENTS.md`,
-   `docs/ARCHITECTURE_EVOLUTION_QUALITY_CONTRACT.md` and the one owning Issue for the live bounded
-   stage;
+   `docs/ARCHITECTURE_EVOLUTION_QUALITY_CONTRACT.md`, the one owning Issue selected by #266 and exactly
+   the `CURRENT_CHECKPOINT` named by #266;
 4. read the relevant current bounded contracts linked from `docs/INDEX.md`, such as
    `docs/OPSCTL_ARCHITECTURE_BOUNDARY.md`, `docs/OPSCTL_DOCTOR_CONTRACT.md` or
-   `docs/PYTHON_USAGE_BOUNDARY.md`;
+   `docs/PYTHON_USAGE_BOUNDARY.md`; read `docs/ARCHITECTURE_REBASELINE_V3_PLAN.md` only when the current
+   checkpoint requires stage-order/lifecycle reasoning or a stage transition;
 5. treat fresh Git/GitHub facts as higher authority than memory, chat history, handoff text, stale prose or an old SHA.
 
-CAP-INDEX #505 and completed AR/PF/PAS/Functional Closure trackers are research/history provenance,
+Completed research, acceptance, predecessor-stage and superseded execution trackers are history/provenance,
 not live execution state. Issue #266 is the sole live stage pointer.
 
 ### 1.0 Project-wide cold-start context budget
@@ -55,15 +56,14 @@ work by recursively rereading history**.
 Do not begin implementation until the current checkpoint and exactly one next permitted bounded concern are identified,
 and the mandatory change envelope records an explicit capability/profile impact disposition or `NONE`.
 
-For every CURRENT executable stage — for example a named `TX-*`, `V*`, `M*`, `R*` or another
-explicit bounded stage with its own entry/exit criteria and DoD — exactly one owning Issue must be
-linked from Issue #266 before branch mutation starts. Issue #266 sits above the stages and is the only
-mutable selector of which stage is CURRENT. Do not require a second "program" Issue plus a child Issue
-for the same CURRENT stage, and do not treat a historical parent/precursor Issue as a concurrent
-current-stage owner. Create a stage Issue only after a fresh re-baseline confirms that #266 selected
-that stage as CURRENT. Do not pre-create Issues for future stages. Follow the lifecycle in section 4.1
-of the binding plan; the stage Issue is bounded working memory/evidence, not a semantic owner or a
-second roadmap.
+For every CURRENT executable stage with its own entry/exit criteria and DoD, exactly one owning Issue
+must be linked from Issue #266 before branch mutation starts. Issue #266 sits above the stages and is
+the only mutable selector of which stage is CURRENT. Do not require a second "program" Issue plus a
+child Issue for the same CURRENT stage, and do not treat a historical parent/precursor Issue as a
+concurrent current-stage owner. Create a stage Issue only after a fresh re-baseline confirms that #266
+selected that stage as CURRENT. Do not pre-create Issues for future stages. Follow the lifecycle in the
+binding plan only when a stage-order/lifecycle boundary is actually being evaluated; the stage Issue is
+bounded working memory/evidence, not a semantic owner or a second roadmap.
 
 ### 1.1 Bounded mutation windows — anti-stale-write without analysis loops
 
@@ -230,15 +230,15 @@ An internal caller, validator, generator, drift gate, self-test or documentation
 The binding top-level order, stage meaning and gates are defined only by
 `docs/ARCHITECTURE_REBASELINE_V3_PLAN.md` plus any subsequently accepted stage split/disposition
 recorded by #266 and the CURRENT stage Issue. Do not infer or copy current position from this bootstrap
-file. Read fresh Issue #266 and the one CURRENT stage Issue to discover the sole permitted work.
-Named stages such as `TX-6`, `V2` or `M2` are peer CURRENT-stage units when #266 selects them; they are
-not required to sit beneath a simultaneously active program Issue. Historical parent/precursor Issues
-may remain linked as provenance but do not own the live pointer or duplicate the CURRENT snapshot.
+file. Read fresh Issue #266 and the one CURRENT stage Issue to discover the sole permitted work. A
+historical parent/precursor Issue may remain linked as provenance but does not own the live pointer or
+duplicate the CURRENT snapshot.
 
-`CODE_COMPLETE != SCENARIO_COMPLETE != PRODUCTION_AUTHORIZED`. E/P/V work does not authorize
+`CODE_COMPLETE != SCENARIO_COMPLETE != PRODUCTION_AUTHORIZED`. Source/CI work does not authorize
 provider, staging or Production mutation unless its owning stage explicitly says so. Production requires
-a separate R3 decision by the named authority for one unchanged exact candidate. Historical FC/AR
-ceremonies and old readiness observations cannot substitute for that decision.
+a separate explicit decision by the current named Production authority for one unchanged exact
+candidate. Historical acceptance ceremonies and old readiness observations cannot substitute for that
+decision.
 
 A source/CI transaction that prepares a later provider rehearsal or deployment does not pre-authorize
 that effect. Before the first provider write, require the exact authorization demanded by the CURRENT
