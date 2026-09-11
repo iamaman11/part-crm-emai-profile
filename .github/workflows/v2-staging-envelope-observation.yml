@@ -128,6 +128,12 @@ jobs:
           from pathlib import Path
           projection = json.load(open(sys.argv[1], encoding='utf-8'))
           output = Path(sys.argv[2])
+          authority = projection.get('executable_schema_authority')
+          if not isinstance(authority, list) or not authority or any(not isinstance(root, str) or not root for root in authority):
+              raise SystemExit('typed executable_schema_authority missing/malformed')
+          governed_roots = set(authority)
+          if len(governed_roots) != len(authority):
+              raise SystemExit('typed executable_schema_authority contains duplicates')
           matches = [item for item in projection.get('components', []) if item.get('component_id') == 'catalog']
           if len(matches) != 1:
               raise SystemExit('typed Catalog projection missing/ambiguous')
@@ -137,8 +143,8 @@ jobs:
           for item in sources:
               name = item.get('migration_file')
               root = item.get('source_root')
-              if root not in {'migrations/d1', 'migrations/d1-successor'} or not isinstance(name, str):
-                  raise SystemExit('typed Catalog migration source escaped governed roots')
+              if not isinstance(name, str) or root not in governed_roots:
+                  raise SystemExit('typed Catalog migration source escaped executable schema authority')
               source = Path(root) / name
               target = output / name
               if source.is_symlink() or not source.is_file() or target.exists():
