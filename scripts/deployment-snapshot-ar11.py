@@ -28,10 +28,14 @@ CORE_BINDINGS = {
     "NOTIFICATION_HUB",
     "INTEGRATION_EVENTS",
 }
-CORE_CREDENTIALS = {
+CORE_SECRET_CREDENTIALS = {
     "CLIENT_CONTACT_PROTECTION_KEYRING",
     "R2_GENERATION_ACCESS_KEY_ID",
     "R2_GENERATION_SECRET_ACCESS_KEY",
+}
+CORE_NON_SECRET_CREDENTIALS = {
+    "ACCESS_AUDIENCE",
+    "ACCESS_ISSUER",
 }
 
 
@@ -199,7 +203,7 @@ def binding_inventory(config: dict[str, Any], selected: dict[str, Any]) -> set[s
 
 
 def secret_names(secret_list: Any) -> set[str]:
-    observed = {value for value in strings(secret_list) if value in CORE_CREDENTIALS}
+    observed = {value for value in strings(secret_list) if value in CORE_SECRET_CREDENTIALS}
     unknown_sensitive = {
         value
         for value in strings(secret_list)
@@ -207,6 +211,25 @@ def secret_names(secret_list: Any) -> set[str]:
     }
     if unknown_sensitive:
         fail(f"Mail/resolver credentials unexpectedly present in Core secret observation: {sorted(unknown_sensitive)}")
+    return observed
+
+
+def non_secret_credential_names(selected: dict[str, Any]) -> set[str]:
+    """Project target-config readiness for non-secret credential metadata.
+
+    ACCESS issuer/audience are ordinary Worker vars, not secret bindings. Their values are
+    already bounded and placeholder-free by the existing rendered Core overlay authority;
+    only their logical names are projected into the DeploymentSnapshot.
+    """
+    vars_value = object_value(selected.get("vars"), "rendered Core vars")
+    observed: set[str] = set()
+    for name in CORE_NON_SECRET_CREDENTIALS:
+        value = vars_value.get(name)
+        if value is None:
+            continue
+        if not isinstance(value, str) or not value:
+            fail(f"rendered Core vars.{name} must be a non-empty string when present")
+        observed.add(name)
     return observed
 
 
@@ -333,7 +356,7 @@ def build(args: argparse.Namespace) -> dict[str, Any]:
         logical_resources.add("integration_events")
 
     bindings = binding_inventory(config, selected)
-    credentials = secret_names(secret_list)
+    credentials = secret_names(secret_list) | non_secret_credential_names(selected)
     d1_id = control.get("d1_database_id")
     if not isinstance(d1_id, str) or not d1_id:
         fail("control_plane deploy manifest lacks d1_database_id")
@@ -427,6 +450,19 @@ def self_test() -> None:
         )
         if components != {"control-plane": "control-plane-test"} or compatibility["contracts_sha256"] != "a" * 64:
             fail("native Release Set inspection projection fixture drifted")
+    expected_non_secret = {"ACCESS_AUDIENCE", "ACCESS_ISSUER"}
+    if non_secret_credential_names(
+        {"vars": {"ACCESS_AUDIENCE": "audience-test", "ACCESS_ISSUER": "https://example.test"}}
+    ) != expected_non_secret:
+        fail("non-secret credential metadata readiness fixture drifted")
+    if non_secret_credential_names({"vars": {"ACCESS_ISSUER": "https://example.test"}}) != {"ACCESS_ISSUER"}:
+        fail("missing non-secret credential metadata was fabricated")
+    try:
+        non_secret_credential_names({"vars": {"ACCESS_AUDIENCE": 1}})
+    except SnapshotError:
+        pass
+    else:
+        fail("malformed non-secret credential metadata unexpectedly passed")
     try:
         release_observation_from_inspect(native_inspection_fixture(4, v3), v3)
     except SnapshotError:
