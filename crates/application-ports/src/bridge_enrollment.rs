@@ -429,7 +429,10 @@ pub trait BridgeEnrollmentAuthorityPort {
 }
 
 fn is_exact_der_sequence(value: &[u8]) -> bool {
-    if value.len() < 2 || value.len() > MAX_BRIDGE_ENROLLMENT_CSR_DER_BYTES || value[0] != 0x30 {
+    if value.len() < 2
+        || value.len() > MAX_BRIDGE_ENROLLMENT_CSR_DER_BYTES
+        || value[0] != 0x30
+    {
         return false;
     }
     let first_length = value[1];
@@ -472,7 +475,10 @@ mod tests {
     };
     use profile_platform_primitives::{ActorId, DeviceId, TenantId};
 
-    fn reservation_for(csr_sha256: &str) -> Result<BridgeEnrollmentReservation, Box<dyn std::error::Error>> {
+    type TestError = Box<dyn std::error::Error>;
+    type TestResult = Result<(), TestError>;
+
+    fn reservation_for(csr_sha256: &str) -> Result<BridgeEnrollmentReservation, TestError> {
         Ok(BridgeEnrollmentReservation::new(
             TenantId::parse("tenant-001")?,
             ActorId::parse("actor-001")?,
@@ -494,7 +500,7 @@ mod tests {
     }
 
     #[test]
-    fn signer_request_requires_exact_reserved_csr_identity() -> Result<(), Box<dyn std::error::Error>> {
+    fn signer_request_requires_exact_reserved_csr_identity() -> TestResult {
         let csr_der = [0x30, 0x03, 0x02, 0x01, 0x00];
         let csr_sha256 = "b560833d6f787af46113b96aad4dd5b5d1ae00dccc69cf30cc92bed651c56617";
         let reservation = reservation_for(csr_sha256)?;
@@ -523,8 +529,7 @@ mod tests {
     }
 
     #[test]
-    fn signer_request_rejects_malformed_or_noncanonical_der_before_signer_boundary(
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    fn signer_request_rejects_malformed_or_noncanonical_der_before_signer_boundary() -> TestResult {
         let malformed = [0x31, 0x00];
         let malformed_sha256 =
             "e79e418e48623569d75e2a7b09ae88ed9b77b126a445b9ff9dc6989a08efa079";
@@ -570,8 +575,7 @@ mod tests {
     }
 
     #[test]
-    fn signed_certificate_identity_cannot_be_reused_for_a_different_reserved_csr(
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    fn signed_certificate_identity_cannot_be_reused_for_a_different_reserved_csr() -> TestResult {
         let first_der = [0x30, 0x03, 0x02, 0x01, 0x00];
         let first_sha256 =
             "b560833d6f787af46113b96aad4dd5b5d1ae00dccc69cf30cc92bed651c56617";
