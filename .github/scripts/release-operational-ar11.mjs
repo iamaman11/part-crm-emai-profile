@@ -49,6 +49,14 @@ function jobBlock(workflow, jobName) {
   return lines.slice(start, end).join('\n');
 }
 
+function stepBlock(job, stepName) {
+  const marker = `      - name: ${stepName}`;
+  const start = job.indexOf(marker);
+  if (start < 0) return '';
+  const next = job.indexOf('\n      - name: ', start + marker.length);
+  return job.slice(start, next < 0 ? job.length : next);
+}
+
 function logicalShellLines(source) {
   return source.replace(/\\\n\s*/g, ' ').split('\n').map((line) => line.trim()).filter(Boolean);
 }
@@ -96,6 +104,31 @@ function immediateMutationFenceErrors(mutate) {
   if (d1Matches.length !== 1) {
     errors.push(`protected mutation READY-bound D1 ledger fence must exist exactly once immediately before deploy; observed=${d1Matches.length}`);
   }
+
+  const fence = stepBlock(mutate, 'Re-fence Worker identity and D1 head immediately before mutation');
+  if (!fence) {
+    errors.push('protected mutation exact-current fence step is missing');
+    return errors;
+  }
+  errors.push(...requireMarkers(fence, [
+    'CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_OBSERVE_API_TOKEN }}',
+    'kind:"AR11_EXACT_CURRENT_FENCE"',
+    'credential_class:"READ_ONLY_OBSERVE"',
+    'provider_mutation:false',
+    'production_mutation:false',
+    'sub_fences:{deployment_read:$deployment_read,release_set_match:$release_set_match,capability_profile_match:$capability_profile_match,d1_read:$d1_read,d1_match:$d1_match}',
+    '> "$RUNNER_TEMP/exact-current-fence.json"',
+  ], 'protected mutation read-only exact-current fence'));
+  errors.push(...forbidMarkers(fence, [
+    'secrets.CLOUDFLARE_API_TOKEN }}',
+    'wrangler deploy --',
+  ], 'protected mutation read-only exact-current fence'));
+  errors.push(...requireMarkers(mutate, [
+    'exact_current_fence=\'null\'',
+    'exact_current_fence:$exact_current_fence',
+    '.kind == "AR11_EXACT_CURRENT_FENCE"',
+    '.credential_class == "READ_ONLY_OBSERVE"',
+  ], 'protected mutation lossless exact-current fence projection'));
   return errors;
 }
 
@@ -598,6 +631,19 @@ function selfTest(files) {
   if (!promotionErrors(earlyDeployCredential).some((error) => error.includes('explicit activation proof boundary'))) {
     throw new Error('early deploy credential fixture unexpectedly passed');
   }
+  const mutationWithDeployRead = mutationBlock.replace(
+    'CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_OBSERVE_API_TOKEN }}',
+    'CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}',
+  );
+  if (mutationWithDeployRead === mutationBlock) throw new Error('deploy-token exact-current read fence fixture setup failed');
+  const deployTokenFence = files.promotion.replace(mutationBlock, mutationWithDeployRead);
+  if (!promotionErrors(deployTokenFence).some((error) => error.includes('read-only exact-current fence'))) {
+    throw new Error('deploy-token exact-current read fence fixture unexpectedly passed');
+  }
+  const missingFenceProjection = files.promotion.replace('exact_current_fence:$exact_current_fence', 'exact_current_fence:null');
+  if (!promotionErrors(missingFenceProjection).some((error) => error.includes('lossless exact-current fence projection'))) {
+    throw new Error('lossy exact-current fence projection fixture unexpectedly passed');
+  }
   const missingReadOnlyTerminalization = files.promotion.replace('Terminalize one lossless AR11 OperationalOutcome', 'Read-only terminalization fixture removed');
   if (!promotionErrors(missingReadOnlyTerminalization).some((error) => error.includes('pre-authorization READY proof'))) {
     throw new Error('missing read-only terminalization fixture unexpectedly passed');
@@ -661,4 +707,4 @@ if (errors.length > 0) {
   process.exit(1);
 }
 if (process.argv.includes('--self-test')) selfTest(files);
-else console.log('AR-11 release operational authority passed: automatic read-only READY/BLOCKED terminalizes before authorization; opsctl owns prerequisite admission selection; target capability profile is READY-bound through authorization/fence/effect/postverify; promotion run surfaces are explicit; Camoufox PR replay is fail-closed and runtime-impact-aware.');
+else console.log('AR-11 release operational authority passed: automatic read-only READY/BLOCKED terminalizes before authorization; opsctl owns prerequisite admission selection; target capability profile is READY-bound through authorization/fence/effect/postverify; immediate exact-current re-fence uses read-only observation authority and preserves sub-fence evidence; promotion run surfaces are explicit; Camoufox PR replay is fail-closed and runtime-impact-aware.');
