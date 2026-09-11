@@ -62,7 +62,9 @@ impl fmt::Display for BridgeEnrollmentAuthorityError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(match self.class {
             BridgeEnrollmentAuthorityErrorClass::Conflict => "bridge enrollment authority conflict",
-            BridgeEnrollmentAuthorityErrorClass::NotFound => "bridge enrollment authority not found",
+            BridgeEnrollmentAuthorityErrorClass::NotFound => {
+                "bridge enrollment authority not found"
+            }
             BridgeEnrollmentAuthorityErrorClass::ReplayRejected => {
                 "bridge enrollment authority replay rejected"
             }
@@ -150,15 +152,25 @@ impl BridgeEnrollmentReservation {
     }
 
     #[must_use]
-    pub const fn tenant_id(&self) -> &TenantId { &self.tenant_id }
+    pub const fn tenant_id(&self) -> &TenantId {
+        &self.tenant_id
+    }
     #[must_use]
-    pub const fn actor_id(&self) -> &ActorId { &self.actor_id }
+    pub const fn actor_id(&self) -> &ActorId {
+        &self.actor_id
+    }
     #[must_use]
-    pub const fn device_id(&self) -> &DeviceId { &self.device_id }
+    pub const fn device_id(&self) -> &DeviceId {
+        &self.device_id
+    }
     #[must_use]
-    pub const fn csr_sha256(&self) -> &Sha256Hex { &self.csr_sha256 }
+    pub const fn csr_sha256(&self) -> &Sha256Hex {
+        &self.csr_sha256
+    }
     #[must_use]
-    pub const fn replayed(&self) -> bool { self.replayed }
+    pub const fn replayed(&self) -> bool {
+        self.replayed
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -175,15 +187,25 @@ impl CompletedBridgeEnrollmentAuthority {
         certificate_sha256: Sha256Hex,
         replayed: bool,
     ) -> Self {
-        Self { reservation, certificate_sha256, replayed }
+        Self {
+            reservation,
+            certificate_sha256,
+            replayed,
+        }
     }
 
     #[must_use]
-    pub const fn reservation(&self) -> &BridgeEnrollmentReservation { &self.reservation }
+    pub const fn reservation(&self) -> &BridgeEnrollmentReservation {
+        &self.reservation
+    }
     #[must_use]
-    pub const fn certificate_sha256(&self) -> &Sha256Hex { &self.certificate_sha256 }
+    pub const fn certificate_sha256(&self) -> &Sha256Hex {
+        &self.certificate_sha256
+    }
     #[must_use]
-    pub const fn replayed(&self) -> bool { self.replayed }
+    pub const fn replayed(&self) -> bool {
+        self.replayed
+    }
 }
 
 #[allow(async_fn_in_trait)]
@@ -226,7 +248,10 @@ mod tests {
     fn sha256_identity_is_canonical_lowercase_hex() {
         assert!(Sha256Hex::parse("ab".repeat(32)).is_ok());
         let error = Sha256Hex::parse("AB".repeat(32)).expect_err("uppercase must fail");
-        assert_eq!(error.class(), BridgeEnrollmentAuthorityErrorClass::IntegrityFailure);
+        assert_eq!(
+            error.class(),
+            BridgeEnrollmentAuthorityErrorClass::IntegrityFailure
+        );
         assert!(Sha256Hex::parse("ab".repeat(31)).is_err());
     }
 }

@@ -1,9 +1,9 @@
-use application_ports::{CommandExecutionEvidence, Sha256Hex};
 use application_ports::bridge_enrollment::{
     BridgeEnrollmentAuthorityError, BridgeEnrollmentAuthorityErrorClass,
-    BridgeEnrollmentAuthorityPort, BridgeEnrollmentReservation,
-    CompletedBridgeEnrollmentAuthority, IssuedBridgeEnrollmentAuthority,
+    BridgeEnrollmentAuthorityPort, BridgeEnrollmentReservation, CompletedBridgeEnrollmentAuthority,
+    IssuedBridgeEnrollmentAuthority,
 };
+use application_ports::{CommandExecutionEvidence, Sha256Hex};
 use hmac::{Hmac, KeyInit, Mac};
 use profile_platform_primitives::{ActorContext, ActorId, DeviceId, TenantId, UnixMillis};
 use serde::Deserialize;
@@ -344,8 +344,15 @@ impl BridgeEnrollmentAuthorityPort for D1BridgeEnrollmentAuthority {
             return Err(conflict());
         }
         match current.certificate_sha256.as_deref() {
-            Some(existing) if existing == certificate_sha256.as_str() && current.consumed_at_ms.is_some() => {
-                completion(&current, csr_sha256.clone(), certificate_sha256.clone(), true)
+            Some(existing)
+                if existing == certificate_sha256.as_str() && current.consumed_at_ms.is_some() =>
+            {
+                completion(
+                    &current,
+                    csr_sha256.clone(),
+                    certificate_sha256.clone(),
+                    true,
+                )
             }
             Some(_) => Err(conflict()),
             None => Err(integrity_failure()),
@@ -375,7 +382,9 @@ fn replay_issue(
     }
     let expires_at = i64_to_unix(row.expires_at_ms)?;
     let _issued_at = i64_to_unix(row.issued_at_ms)?;
-    Ok(IssuedBridgeEnrollmentAuthority::new(claim_code, expires_at, true))
+    Ok(IssuedBridgeEnrollmentAuthority::new(
+        claim_code, expires_at, true,
+    ))
 }
 
 fn classify_claim_identity(
