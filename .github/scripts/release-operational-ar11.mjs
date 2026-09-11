@@ -413,8 +413,10 @@ function promotionErrors(promotion) {
     'decision="$(jq -er',
     '$RUNNER_TEMP/promotion-verify.json',
     "if: steps.observe_verify.outputs.decision == 'VERIFIED'",
+    'https://$custom_domain/api/v1/health',
+    'jq -e \'.status == "ok" and .contractVersion == "v1"\' "$response" >/dev/null',
   ], 'post-deploy verifier'));
-  errors.push(...forbidMarkers(post, ['secrets.CLOUDFLARE_API_TOKEN }}', 'wrangler deploy --', '--profile rehearsal-core-v2'], 'post-deploy verifier'));
+  errors.push(...forbidMarkers(post, ['secrets.CLOUDFLARE_API_TOKEN }}', 'wrangler deploy --', '--profile rehearsal-core-v2', 'https://$custom_domain/health"'], 'post-deploy verifier'));
   errors.push(...secretObservationErrors(post, 'post-deploy verifier'));
 
   errors.push(...requireMarkers(manualOutcome, [
@@ -656,6 +658,17 @@ function selfTest(files) {
   if (blockedTerminalDispositionRemoved === files.promotion) throw new Error('BLOCKED terminal disposition fixture setup failed');
   if (!promotionErrors(blockedTerminalDispositionRemoved).some((error) => error.includes('pre-authorization READY proof'))) {
     throw new Error('missing semantic BLOCKED terminal disposition fixture unexpectedly passed');
+  }
+  const wrongHealthPath = files.promotion.replace('https://$custom_domain/api/v1/health', 'https://$custom_domain/health');
+  if (!promotionErrors(wrongHealthPath).some((error) => error.includes('post-deploy verifier'))) {
+    throw new Error('non-canonical health route fixture unexpectedly passed');
+  }
+  const weakHealthPayload = files.promotion.replace(
+    'jq -e \' .status == "ok" and .contractVersion == "v1"\' "$response" >/dev/null'.replace("' .status", "'.status"),
+    'test "$(cat "$response")" = ok',
+  );
+  if (!promotionErrors(weakHealthPayload).some((error) => error.includes('post-deploy verifier'))) {
+    throw new Error('weak raw health payload fixture unexpectedly passed');
   }
   const missingManualTerminalization = files.promotion.replace('Terminalize one lossless manual AR11 OperationalOutcome', 'Terminalization fixture removed');
   if (!promotionErrors(missingManualTerminalization).some((error) => error.includes('manual terminal outcome'))) {
