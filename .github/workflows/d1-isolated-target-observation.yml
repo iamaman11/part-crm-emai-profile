@@ -94,6 +94,7 @@ jobs:
           assert "workers/scripts/$worker_name/deployments" in observe_source
           assert 'deployment-identity-ar11.py' in observe_source
           assert "opsctl='tools/opsctl/target/debug/opsctl'" in source
+          assert 'executable_schema_authority' in observe_source
           assert 'pre_migration_runtime_schema_contract' not in observe_source
           assert 'release_schema_contract' in source
           assert 'CURRENT_DEPLOYED_IMMUTABLE_RELEASE_SCHEMA_CONTRACT' in observe_source
@@ -196,14 +197,25 @@ jobs:
           matches = [item for item in projection.get('components', []) if item.get('component_id') == 'catalog']
           if len(matches) != 1:
               raise SystemExit('typed Catalog projection missing/ambiguous')
+          schema_authority = projection.get('executable_schema_authority')
+          if (
+              not isinstance(schema_authority, list)
+              or not schema_authority
+              or any(not isinstance(root, str) or not root for root in schema_authority)
+              or len(schema_authority) != len(set(schema_authority))
+          ):
+              raise SystemExit('typed D1 executable_schema_authority missing/invalid')
+          governed_roots = set(schema_authority)
           sources = matches[0].get('executable_migration_sources')
           if not isinstance(sources, list) or not sources:
               raise SystemExit('typed Catalog executable_migration_sources missing')
           for item in sources:
+              if not isinstance(item, dict):
+                  raise SystemExit('typed Catalog migration source entry is invalid')
               name = item.get('migration_file')
               root = item.get('source_root')
-              if root not in {'migrations/d1', 'migrations/d1-successor', 'migrations/d1-successor-v2'} or not isinstance(name, str):
-                  raise SystemExit('typed Catalog migration source escaped governed roots')
+              if not isinstance(name, str) or not name or not isinstance(root, str) or root not in governed_roots:
+                  raise SystemExit('typed Catalog migration source escaped executable schema authority')
               source = Path(root) / name
               target = output / name
               if source.is_symlink() or not source.is_file() or target.exists():
