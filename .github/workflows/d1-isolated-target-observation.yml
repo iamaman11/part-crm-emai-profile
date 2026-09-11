@@ -202,7 +202,7 @@ jobs:
           for item in sources:
               name = item.get('migration_file')
               root = item.get('source_root')
-              if root not in {'migrations/d1', 'migrations/d1-successor'} or not isinstance(name, str):
+              if root not in {'migrations/d1', 'migrations/d1-successor', 'migrations/d1-successor-v2'} or not isinstance(name, str):
                   raise SystemExit('typed Catalog migration source escaped governed roots')
               source = Path(root) / name
               target = output / name
