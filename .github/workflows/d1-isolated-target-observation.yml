@@ -94,8 +94,9 @@ jobs:
           assert "workers/scripts/$worker_name/deployments" in observe_source
           assert 'deployment-identity-ar11.py' in observe_source
           assert "opsctl='tools/opsctl/target/debug/opsctl'" in source
-          assert 'pre_migration_runtime_schema_contract' in source
+          assert 'pre_migration_runtime_schema_contract' not in observe_source
           assert 'release_schema_contract' in source
+          assert 'CURRENT_DEPLOYED_IMMUTABLE_RELEASE_SCHEMA_CONTRACT' in observe_source
           assert '--current-manifest "$root/current-runtime-manifest.json"' in source
           assert '--known-good-manifest "$root/known-good-runtime-manifest.json"' in source
           assert '--command "PRAGMA foreign_key_check"' in observe_source
@@ -638,24 +639,19 @@ jobs:
           if len(matches) != 1:
               raise SystemExit('typed D1 repository projection missing/ambiguous during preflight')
           component = matches[0]
-          runtime = component.get('pre_migration_runtime_schema_contract')
           release = component.get('release_schema_contract')
           target = json.load(open(target_path, encoding='utf-8')).get('schema_contract')
           deployed = json.load(open(deployed_path, encoding='utf-8')).get('schema_contract')
-          if not all(isinstance(value, dict) for value in (runtime, release, target, deployed)):
-              raise SystemExit('typed runtime/release/target/deployed schema contracts are incomplete')
-          if runtime.get('database_component') != component_id or release.get('database_component') != component_id:
-              raise SystemExit('typed D1 schema contract component drifted')
-          if runtime.get('target_schema_revision') != runtime.get('supported_schema_min'):
-              raise SystemExit('typed pre-migration runtime contract target/min relation drifted')
-          if runtime.get('supported_schema_max') != release.get('target_schema_revision'):
-              raise SystemExit('typed pre-migration runtime safe horizon does not reach typed ordinary release target')
+          if not all(isinstance(value, dict) for value in (release, target, deployed)):
+              raise SystemExit('typed release/target/deployed schema contracts are incomplete')
+          if release.get('database_component') != component_id:
+              raise SystemExit('typed D1 release schema contract component drifted')
           for field, owner_field in (
               ('migration_history_digest', 'history_digest'),
               ('compatibility_policy_digest', 'compatibility_policy_digest'),
           ):
-              if runtime.get(field) != component.get(owner_field) or release.get(field) != component.get(owner_field):
-                  raise SystemExit(f'typed D1 {field} is not bound to current repository authority')
+              if release.get(field) != component.get(owner_field):
+                  raise SystemExit(f'typed D1 release {field} is not bound to current repository authority')
           for field in (
               'database_component', 'target_schema_revision', 'supported_schema_min', 'supported_schema_max',
               'migration_history_digest', 'compatibility_policy_digest',
@@ -664,22 +660,20 @@ jobs:
                   raise SystemExit(f'target Release Set schema contract drifted from typed D1 release authority: {field}')
           if deployed.get('database_component') != component_id:
               raise SystemExit('deployed Release Set component drifted')
-          if deployed.get('target_schema_revision') != runtime.get('target_schema_revision'):
-              raise SystemExit('deployed Release Set is not the typed pre-migration runtime base revision')
-          manifest = {'schema_contract': runtime}
+          manifest = {'schema_contract': deployed}
           for output in (current_output, known_output):
               with open(output, 'w', encoding='utf-8') as handle:
                   json.dump(manifest, handle, sort_keys=True, indent=2)
                   handle.write('\n')
           evidence = {
               'schema_version': 1,
-              'kind': 'D1_PRE_MIGRATION_RUNTIME_CONTEXT',
+              'kind': 'D1_DEPLOYED_RUNTIME_CONTEXT',
               'source_sha': os.environ['SOURCE_SHA'],
-              'basis': 'CURRENT_TYPED_MIGRATION_CONTRACTS_PLUS_DEPLOYED_RELEASE_IDENTITY',
+              'basis': 'CURRENT_DEPLOYED_IMMUTABLE_RELEASE_SCHEMA_CONTRACT',
               'deployed_release_set_id': os.environ['CURRENT_DEPLOYED_RELEASE_SET_ID'],
               'deployed_release_source_sha': os.environ['CURRENT_DEPLOYED_SOURCE_SHA'],
               'deployed_release_target_revision': deployed.get('target_schema_revision'),
-              'schema_contract': runtime,
+              'schema_contract': deployed,
               'release_schema_contract': release,
               'provider_mutation': False,
               'd1_mutation': False,
