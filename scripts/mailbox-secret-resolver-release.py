@@ -408,6 +408,9 @@ def fixture_root(root: Path) -> None:
     (worker / ".gitignore").write_text(".tmp/\n", encoding="utf-8")
     shutil.copytree(ROOT / "migrations" / "d1", root / "migrations" / "d1")
     shutil.copytree(ROOT / "migrations" / "d1-successor", root / "migrations" / "d1-successor")
+    shutil.copytree(
+        ROOT / "migrations" / "d1-successor-v2", root / "migrations" / "d1-successor-v2"
+    )
     shutil.copytree(ROOT / MIGRATIONS, root / MIGRATIONS)
     (root / CONFIG).parent.mkdir(parents=True)
     (root / CONFIG).write_text(
