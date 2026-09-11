@@ -91,6 +91,120 @@ if (Test-Path $path) {
 }
 "#;
 
+#[cfg(test)]
+const ENROLLMENT_CRYPTO_PROOF_SCRIPT: &str = r#"
+$ErrorActionPreference = 'Stop'
+$ProgressPreference = 'SilentlyContinue'
+
+$keyName = 'part-crm-hosted-enrollment-' + [Guid]::NewGuid().ToString('N')
+$thumbprint = $null
+$key = $null
+$rsa = $null
+$certificate = $null
+$store = $null
+
+try {
+    $parameters = New-Object System.Security.Cryptography.CngKeyCreationParameters
+    $parameters.Provider = [System.Security.Cryptography.CngProvider]::MicrosoftSoftwareKeyStorageProvider
+    $parameters.KeyCreationOptions = [System.Security.Cryptography.CngKeyCreationOptions]::MachineKey
+    $parameters.ExportPolicy = [System.Security.Cryptography.CngExportPolicies]::None
+    $parameters.KeyUsage = [System.Security.Cryptography.CngKeyUsages]::Signing
+
+    $key = [System.Security.Cryptography.CngKey]::Create(
+        [System.Security.Cryptography.CngAlgorithm]::Rsa,
+        $keyName,
+        $parameters
+    )
+    if ($key.ExportPolicy -ne [System.Security.Cryptography.CngExportPolicies]::None) {
+        throw 'device key is exportable'
+    }
+
+    $exportRejected = $false
+    try {
+        $null = $key.Export([System.Security.Cryptography.CngKeyBlobFormat]::Pkcs8PrivateBlob)
+    } catch [System.Security.Cryptography.CryptographicException] {
+        $exportRejected = $true
+    }
+    if (-not $exportRejected) {
+        throw 'private-key export unexpectedly succeeded'
+    }
+
+    $rsa = New-Object System.Security.Cryptography.RSACng($key)
+    $request = [System.Security.Cryptography.X509Certificates.CertificateRequest]::new(
+        'CN=bridge-hosted-enrollment-proof',
+        $rsa,
+        [System.Security.Cryptography.HashAlgorithmName]::SHA256,
+        [System.Security.Cryptography.RSASignaturePadding]::Pkcs1
+    )
+    $oids = New-Object System.Security.Cryptography.OidCollection
+    $null = $oids.Add((New-Object System.Security.Cryptography.Oid('1.3.6.1.5.5.7.3.2')))
+    $request.CertificateExtensions.Add(
+        (New-Object System.Security.Cryptography.X509Certificates.X509EnhancedKeyUsageExtension($oids, $false))
+    )
+
+    $csr = $request.CreateSigningRequest()
+    if ($null -eq $csr -or $csr.Length -lt 256) {
+        throw 'CSR generation failed'
+    }
+
+    # CI uses a self-signed public certificate only to prove that the exact local key can be
+    # attached to a certificate and consumed through the real LocalMachine/My adapter. This is
+    # deliberately not a runtime issuer or staging trust root.
+    $certificate = $request.CreateSelfSigned(
+        [DateTimeOffset]::UtcNow.AddMinutes(-1),
+        [DateTimeOffset]::UtcNow.AddHours(1)
+    )
+    if (-not $certificate.HasPrivateKey) {
+        throw 'certificate lost local private-key association'
+    }
+
+    $store = New-Object System.Security.Cryptography.X509Certificates.X509Store(
+        'My',
+        [System.Security.Cryptography.X509Certificates.StoreLocation]::LocalMachine
+    )
+    $store.Open([System.Security.Cryptography.X509Certificates.OpenFlags]::ReadWrite)
+    $store.Add($certificate)
+    $thumbprint = $certificate.Thumbprint.ToUpperInvariant()
+    $store.Close()
+    $store = $null
+
+    $installed = Get-Item -Path ("Cert:\LocalMachine\My\" + $thumbprint) -ErrorAction Stop
+    if (-not $installed.HasPrivateKey) {
+        throw 'installed certificate has no private key'
+    }
+    $clientAuth = $false
+    foreach ($extension in $installed.Extensions) {
+        if ($extension.Oid.Value -eq '2.5.29.37') {
+            $enhanced = New-Object System.Security.Cryptography.X509Certificates.X509EnhancedKeyUsageExtension($extension, $extension.Critical)
+            foreach ($usage in $enhanced.EnhancedKeyUsages) {
+                if ($usage.Value -eq '1.3.6.1.5.5.7.3.2') { $clientAuth = $true }
+            }
+        }
+    }
+    if (-not $clientAuth) {
+        throw 'installed certificate lost ClientAuth EKU'
+    }
+
+    Write-Output 'ok'
+} finally {
+    if ($null -ne $store) {
+        try { $store.Close() } catch {}
+    }
+    if ($null -ne $thumbprint) {
+        $path = "Cert:\LocalMachine\My\$thumbprint"
+        if (Test-Path $path) {
+            Remove-Item -Path $path -DeleteKey -Confirm:$false -ErrorAction SilentlyContinue
+        }
+    }
+    if ($null -ne $certificate) { $certificate.Dispose() }
+    if ($null -ne $rsa) { $rsa.Dispose() }
+    if ($null -ne $key) {
+        try { $key.Delete() } catch {}
+        $key.Dispose()
+    }
+}
+"#;
+
 pub fn inspect_certificate(thumbprint: &str) -> HostOpsResult<CertificateObservation> {
     let thumbprint = normalize_sha1_thumbprint(thumbprint)?;
     let mut command = powershell_command(INSPECT_SCRIPT)?;
@@ -282,6 +396,20 @@ fn run_command(
         return Err(HostOpsError::new("host_effect_output_too_large"));
     }
     String::from_utf8(output.stdout).map_err(|_| HostOpsError::new("host_effect_output_invalid"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ENROLLMENT_CRYPTO_PROOF_SCRIPT, powershell_command, run_command};
+
+    #[test]
+    fn windows_hosted_enrollment_crypto_path_uses_non_exportable_local_machine_key()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let command = powershell_command(ENROLLMENT_CRYPTO_PROOF_SCRIPT)?;
+        let output = run_command(command, None, 1_024)?;
+        assert_eq!(output.trim(), "ok");
+        Ok(())
+    }
 }
 
 #[allow(dead_code)]
