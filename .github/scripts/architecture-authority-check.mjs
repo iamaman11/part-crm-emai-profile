@@ -142,14 +142,47 @@ function validate(subjects, sources) {
       || bridgePki.client_certificate_scope !== 'UNIQUE_PER_DEVICE'
       || bridgePki.client_auth_eku_oid !== '1.3.6.1.5.5.7.3.2'
       || bridgePki.maximum_lifetime !== lifecycle.global_invariants?.exportable_static_credential_max_lifetime
+      || bridgePki.primary_enrollment !== 'AUTHENTICATED_ONE_SHOT_LOCAL_KEY_CSR'
+      || bridgePki.private_key_origin !== 'TARGET_WINDOWS_HOST'
+      || bridgePki.private_key_exportable !== false
+      || bridgePki.private_key_transport !== 'FORBIDDEN'
+      || bridgePki.enrollment_authority !== 'AUTHENTICATED_USER_SESSION_PLUS_ONE_SHOT_ENROLLMENT_CLAIM'
+      || bridgePki.certificate_delivery !== 'PUBLIC_CERTIFICATE_CHAIN_ONLY_TO_EXISTING_LOCAL_KEY'
+      || bridgePki.operator_pfx_primary_path !== false
+      || bridgePki.pfx_admin_recovery_path !== 'OPTIONAL_NOT_B7_PRIMARY_PATH'
       || bridgePki.host_handoff !== 'PASSWORD_PROTECTED_PFX_TO_BRIDGE_HOST_OPS'
+      || bridgePki.host_handoff_role !== 'OPTIONAL_ADMIN_RECOVERY_ONLY_NOT_PRIMARY_ENROLLMENT'
       || bridgePki.windows_import_private_key_policy !== 'NON_EXPORTABLE'
       || bridgePki.overlap_model !== 'REPLACEMENT_BOUND_AND_VERIFIED_BEFORE_PREVIOUS_CERTIFICATE_RETIREMENT') {
-    errors.push('Bridge client-certificate PKI lifecycle must remain staging-only, externally issued, fingerprint-authorized and verify-before-retire');
+    errors.push('Bridge certificate lifecycle must use automatic local-key enrollment; PFX is recovery-only and verify-before-retire remains mandatory');
   }
   if (profile.kind !== 'PROFILE_SECURITY_AUTHORITY' || profile.status !== 'current'
       || profile.credential_authority !== PATHS.authority) {
     errors.push('profile security authority root drifted');
+  }
+  const bridgeAdmission = profile.bridge_machine_mtls_admission;
+  if (!bridgeAdmission
+      || bridgeAdmission.client_certificate?.primary_enrollment !== 'AUTHENTICATED_ONE_SHOT_LOCAL_KEY_CSR'
+      || bridgeAdmission.client_certificate?.private_key_origin !== 'TARGET_WINDOWS_HOST'
+      || bridgeAdmission.client_certificate?.private_key_exportable !== false
+      || bridgeAdmission.client_certificate?.private_key_transport !== 'FORBIDDEN'
+      || bridgeAdmission.client_certificate?.enrollment_authority !== 'AUTHENTICATED_USER_SESSION_PLUS_ONE_SHOT_ENROLLMENT_CLAIM'
+      || bridgeAdmission.client_certificate?.certificate_delivery !== 'PUBLIC_CERTIFICATE_CHAIN_ONLY_TO_EXISTING_LOCAL_KEY'
+      || bridgeAdmission.client_certificate?.operator_pfx_primary_path !== false
+      || bridgeAdmission.client_certificate?.pfx_admin_recovery_path !== 'OPTIONAL_NOT_B7_PRIMARY_PATH') {
+    errors.push('profile security must keep Bridge enrollment local-key, automatic and free of operator PFX on the B7 primary path');
+  }
+  const deviceKey = profile.security_domains?.find((entry) => entry.id === 'profile-bridge.device-private-key');
+  const enrollmentClaim = profile.security_domains?.find((entry) => entry.id === 'profile-bridge.enrollment-claim');
+  if (!deviceKey
+      || deviceKey.application_boundary !== 'HANDLE_ONLY'
+      || deviceKey.material_readback !== false
+      || deviceKey.raw_handle_visibility !== false
+      || deviceKey.primary_enrollment_use !== 'LOCAL_NON_EXPORTABLE_KEY_FOR_CLIENT_CERTIFICATE_CSR'
+      || enrollmentClaim?.replay_policy !== 'REJECT_REPLAY_AND_DEVICE_REBIND'
+      || enrollmentClaim?.retirement_policy !== 'EXPIRE_OR_SINGLE_SUCCESSFUL_REDEMPTION'
+      || enrollmentClaim?.certificate_enrollment_scope !== 'ONE_LOCAL_DEVICE_KEY_ONE_CERTIFICATE_BINDING') {
+    errors.push('Bridge device-key/enrollment claim ownership drifted');
   }
 
   for (const [name, subject] of Object.entries({ authority, lifecycle, profile })) {
@@ -233,14 +266,26 @@ function main() {
     bridgeProduction.lifecycle.concerns.find((entry) => entry.id === 'profile-bridge.client-certificate-pki').production_enabled = true;
     assertRejected('Bridge PKI Production pre-enable', bridgeProduction, sources);
 
+    const pfxPrimary = structuredClone(subjects);
+    pfxPrimary.lifecycle.concerns.find((entry) => entry.id === 'profile-bridge.client-certificate-pki').operator_pfx_primary_path = true;
+    assertRejected('Bridge operator PFX becoming primary enrollment', pfxPrimary, sources);
+
+    const exportableDeviceKey = structuredClone(subjects);
+    exportableDeviceKey.profile.bridge_machine_mtls_admission.client_certificate.private_key_exportable = true;
+    assertRejected('Bridge primary device key becoming exportable', exportableDeviceKey, sources);
+
+    const reusableEnrollment = structuredClone(subjects);
+    reusableEnrollment.profile.security_domains.find((entry) => entry.id === 'profile-bridge.enrollment-claim').retirement_policy = 'REUSABLE';
+    assertRejected('Bridge enrollment claim becoming reusable', reusableEnrollment, sources);
+
     const insecureProfile = structuredClone(subjects);
     insecureProfile.profile.status = 'historical';
     assertRejected('profile authority rollback', insecureProfile, sources);
 
-    console.log('Credential/profile authority negative fixtures rejected; operator semantics remain Rust-owned.');
+    console.log('Credential/profile authority negative fixtures rejected; automatic Bridge enrollment remains local-key and fail-closed.');
     return;
   }
-  console.log('Credential lifecycle and profile security authorities are canonical; operator semantics are Rust-owned.');
+  console.log('Credential lifecycle and profile security authorities are canonical; automatic Bridge enrollment is local-key and operator-PFX-free on the primary path.');
 }
 
 try {

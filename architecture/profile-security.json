@@ -65,7 +65,14 @@
       "scope": "UNIQUE_PER_DEVICE",
       "client_auth_eku_oid": "1.3.6.1.5.5.7.3.2",
       "lifetime_policy": "MUST_NOT_EXCEED_CREDENTIAL_LIFECYCLE_EXPORTABLE_STATIC_MAXIMUM",
-      "host_handoff": "PASSWORD_PROTECTED_PFX_TO_BRIDGE_HOST_OPS",
+      "primary_enrollment": "AUTHENTICATED_ONE_SHOT_LOCAL_KEY_CSR",
+      "private_key_origin": "TARGET_WINDOWS_HOST",
+      "private_key_exportable": false,
+      "private_key_transport": "FORBIDDEN",
+      "enrollment_authority": "AUTHENTICATED_USER_SESSION_PLUS_ONE_SHOT_ENROLLMENT_CLAIM",
+      "certificate_delivery": "PUBLIC_CERTIFICATE_CHAIN_ONLY_TO_EXISTING_LOCAL_KEY",
+      "operator_pfx_primary_path": false,
+      "pfx_admin_recovery_path": "OPTIONAL_NOT_B7_PRIMARY_PATH",
       "windows_import_private_key_policy": "NON_EXPORTABLE",
       "fingerprint_binding_must_precede_effective_device_use": true,
       "revoke_or_rebind_uses_existing_d1_device_binding_owner": true
@@ -98,7 +105,7 @@
       "legitimate_mutable_authority": "one profile-generation root-key provider/keyring authority; no direct domain/runtime key-store mutation",
       "version_state_source": "canonical versioned root-key id plus authenticated per-generation metadata key id; no durable plaintext DEK or per-generation wrapped-key table",
       "plaintext_policy": "BOUNDED_MEMORY_ONLY_ZEROIZED_WHERE_OWNED",
-      "metadata_policy": "ROOT_KEY_ID_ALGORITHM_VERSION_AND_AUTHENTICATED_GENERATION_METADATA_ONLY_NO_DEK_BYTES",
+      "metadata_policy": "ROOT_KEY_ID_ALGORITHM_VERSION_AND_AUTHENTICATED_GENERATION_METADATA_KEY_ID_ONLY_NO_DEK_BYTES",
       "generation_dek_policy": "DOMAIN_SEPARATED_HMAC_SHA256_DERIVATION_FROM_VERSIONED_ROOT_KEY_BOUND_TO_TENANT_PROFILE_GENERATION_AND_PLAINTEXT_DIGEST",
       "generation_nonce_policy": "SEPARATE_DOMAIN_HMAC_SHA256_DERIVATION_BOUND_TO_THE_SAME_EXACT_CONTEXT_NO_RANDOM_OR_CALLER_SELECTED_NONCE_AUTHORITY",
       "retry_policy": "EXACT_CONTEXT_REDERIVATION_IS_DETERMINISTIC_SO_PRECOMMIT_RETRY_REUSES_THE_SAME_CANDIDATE_CRYPTO_IDENTITY",
@@ -132,6 +139,7 @@
       "application_boundary": "HANDLE_ONLY",
       "material_readback": false,
       "raw_handle_visibility": false,
+      "primary_enrollment_use": "LOCAL_NON_EXPORTABLE_KEY_FOR_CLIENT_CERTIFICATE_CSR",
       "implementation_owner": "AR-10 supported Profile Bridge runtime integration; physical/platform key-protection proof remains a later pre-production requirement",
       "production_proof_complete": false
     },
@@ -162,6 +170,7 @@
       "claim_value_visibility": "REDACTED_ONLY",
       "replay_policy": "REJECT_REPLAY_AND_DEVICE_REBIND",
       "retirement_policy": "EXPIRE_OR_SINGLE_SUCCESSFUL_REDEMPTION",
+      "certificate_enrollment_scope": "ONE_LOCAL_DEVICE_KEY_ONE_CERTIFICATE_BINDING",
       "production_proof_complete": false
     },
     {
