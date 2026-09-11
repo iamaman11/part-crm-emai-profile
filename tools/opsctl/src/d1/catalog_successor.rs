@@ -1,5 +1,5 @@
 use super::catalog_legacy;
-use super::model::{ComponentAuthority, D1Error, MigrationClass, MigrationContract, RolloutOrder};
+use super::model::{self, ComponentAuthority, D1Error, MigrationClass, MigrationContract, RolloutOrder};
 use crate::canonical::{canonical_json, canonical_pretty_json, sha256_hex};
 use serde_json::{Value, json};
 use std::fs;
@@ -340,7 +340,7 @@ fn validate_predecessor_contract(contract: &MigrationContract) -> Result<(), D1E
     Ok(())
 }
 
-fn validate_predecessor_repository_identity(root: &Path) -> Result<(), D1Error> {
+fn validate_predecessor_repository_identity(root: &Path) -> Result<(), model::D1Error> {
     let projection: Value = serde_json::from_str(&predecessor::repository_projection(root)?)
         .map_err(|error| {
             D1Error::new(format!("cannot parse predecessor D1 projection: {error}"))
