@@ -73,6 +73,7 @@
       "certificate_delivery": "PUBLIC_CERTIFICATE_CHAIN_ONLY_TO_EXISTING_LOCAL_KEY",
       "operator_pfx_primary_path": false,
       "pfx_admin_recovery_path": "OPTIONAL_NOT_B7_PRIMARY_PATH",
+      "windows_import_private_key_policy": "NON_EXPORTABLE",
       "fingerprint_binding_must_precede_effective_device_use": true,
       "revoke_or_rebind_uses_existing_d1_device_binding_owner": true
     },
