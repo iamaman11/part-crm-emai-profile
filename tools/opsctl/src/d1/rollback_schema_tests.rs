@@ -1,6 +1,6 @@
 #![cfg(test)]
 
-use super::{D1RollbackSchemaDecision, rollback_schema_compatibility, repository_projection};
+use super::{D1RollbackSchemaDecision, repository_projection, rollback_schema_compatibility};
 use opsctl_core::release::SchemaCompatibilityWindow;
 use serde_json::Value;
 use std::error::Error;
@@ -45,11 +45,8 @@ fn historical_runtime_is_present_time_compatible_through_rollback_safe_expand_pr
 -> Result<(), Box<dyn Error>> {
     let root = repository_root();
     let release = historical_release_schema(&root)?;
-    let verdict = rollback_schema_compatibility(
-        &root,
-        &release,
-        "0031_device_binding_governance.sql",
-    );
+    let verdict =
+        rollback_schema_compatibility(&root, &release, "0031_device_binding_governance.sql");
     assert_eq!(verdict.decision, D1RollbackSchemaDecision::Compatible);
     assert_eq!(
         verdict.reason_code,
@@ -79,11 +76,8 @@ fn historical_runtime_extension_requires_exact_frozen_lineage_identity()
     let mut release = historical_release_schema(&root)?;
     release.migration_history_digest =
         "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".to_owned();
-    let verdict = rollback_schema_compatibility(
-        &root,
-        &release,
-        "0031_device_binding_governance.sql",
-    );
+    let verdict =
+        rollback_schema_compatibility(&root, &release, "0031_device_binding_governance.sql");
     assert_eq!(verdict.decision, D1RollbackSchemaDecision::Incompatible);
     assert_eq!(verdict.reason_code, "CATALOG_SCHEMA_UNSUPPORTED");
     Ok(())
