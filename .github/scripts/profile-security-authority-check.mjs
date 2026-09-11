@@ -200,16 +200,13 @@ function validateAuthority(authority, errors) {
 }
 
 function validateBridgeAudienceBindings(config, errors) {
-  const cases = [
-    ['staging', '${STAGING_ACCESS_AUDIENCE}'],
-    ['production', '${PRODUCTION_ACCESS_AUDIENCE}'],
-  ];
-  for (const [environment, expectedAudience] of cases) {
-    const vars = config.env?.[environment]?.vars;
-    if (!vars || vars.ACCESS_AUDIENCE !== expectedAudience
-        || vars.BRIDGE_ACCESS_AUDIENCE !== expectedAudience) {
-      errors.push(`${environment}: Bridge and human audience vars must bind to the same canonical Access application audience`);
-    }
+  const vars = config.env?.staging?.vars;
+  if (!vars || vars.ACCESS_AUDIENCE !== '${STAGING_ACCESS_AUDIENCE}'
+      || vars.BRIDGE_ACCESS_AUDIENCE !== '${STAGING_ACCESS_AUDIENCE}') {
+    errors.push('staging: Bridge and human audience vars must bind to the same canonical Access application audience');
+  }
+  if (config.env?.production?.vars?.BRIDGE_ACCESS_AUDIENCE !== undefined) {
+    errors.push('production: V2 must not pre-enable the Bridge audience binding');
   }
 }
 
@@ -281,6 +278,12 @@ function main() {
     const audienceErrors = [];
     validateBridgeAudienceBindings(audienceMutated, audienceErrors);
     if (audienceErrors.length === 0) throw new Error('Bridge shared-perimeter audience negative fixture unexpectedly passed');
+
+    const productionMutated = structuredClone(wrangler);
+    productionMutated.env.production.vars.BRIDGE_ACCESS_AUDIENCE = '${PRODUCTION_ACCESS_AUDIENCE}';
+    const productionErrors = [];
+    validateBridgeAudienceBindings(productionMutated, productionErrors);
+    if (productionErrors.length === 0) throw new Error('Bridge production pre-enable negative fixture unexpectedly passed');
 
     const publicSource = `${readFileSync(PUBLIC_BOUNDARY_FILES[0], 'utf8')}\npub const proxy_secret_handle: &str = "forbidden";\n`;
     const boundaryErrors = [];
