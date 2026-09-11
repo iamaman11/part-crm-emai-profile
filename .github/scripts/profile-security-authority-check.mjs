@@ -5,6 +5,7 @@ import { extname, join, relative } from 'node:path';
 import process from 'node:process';
 
 const AUTHORITY_PATH = 'architecture/profile-security.json';
+const WRANGLER_PATH = 'deploy/cloudflare/wrangler.jsonc';
 const EXPECTED_DOMAINS = new Set([
   'profile-generation.encryption-key-hierarchy',
   'profile-identity.entropy-root',
@@ -111,6 +112,13 @@ function validateAuthority(authority, errors) {
       || mtls.production_enabled !== false
       || mtls.trust_model !== 'DEDICATED_ENVIRONMENT_SCOPED_CLIENT_CA_CHAIN'
       || mtls.environment_cross_trust !== 'FORBIDDEN'
+      || mtls.access_perimeter?.application_scope !== 'CANONICAL_ENVIRONMENT_SHARED_PERIMETER'
+      || mtls.access_perimeter?.bridge_route_scope !== '/bridge/*'
+      || mtls.access_perimeter?.separate_access_application_required !== false
+      || mtls.access_perimeter?.human_audience_var !== 'ACCESS_AUDIENCE'
+      || mtls.access_perimeter?.bridge_audience_var !== 'BRIDGE_ACCESS_AUDIENCE'
+      || mtls.access_perimeter?.audience_binding !== 'SAME_CANONICAL_ACCESS_APPLICATION_AUDIENCE'
+      || mtls.access_perimeter?.machine_identity_grants_human_actor !== false
       || mtls.access_policy?.action !== 'SERVICE_AUTH'
       || mtls.access_policy?.include_selector !== 'VALID_CERTIFICATE'
       || mtls.access_policy?.common_name_authorization !== false
@@ -133,10 +141,16 @@ function validateAuthority(authority, errors) {
       || mtls.machine_projection?.manual_provider_payload !== 'FORBIDDEN'
       || mtls.mutation_authorization !== 'SEPARATE_EXACT_CANDIDATE_ONE_SHOT_REQUIRED'
       || mtls.production_mutation !== false) {
-    errors.push('Bridge mTLS transport trust must remain environment-scoped, fingerprint-authorized and fail-closed');
+    errors.push('Bridge mTLS transport trust must remain shared-perimeter, fingerprint-authorized and fail-closed');
   }
   const mtlsInputs = mtls?.machine_projection?.required_non_secret_inputs ?? [];
-  const requiredMtlsInputs = ['canonical_environment', 'canonical_target_hostname', 'ca_chain_pem', 'ca_chain_sha256'];
+  const requiredMtlsInputs = [
+    'canonical_environment',
+    'canonical_target_hostname',
+    'canonical_access_audience',
+    'ca_chain_pem',
+    'ca_chain_sha256',
+  ];
   if (mtlsInputs.length !== requiredMtlsInputs.length
       || requiredMtlsInputs.some((input) => !mtlsInputs.includes(input))) {
     errors.push('Bridge mTLS projection inputs must remain exact and non-secret');
@@ -144,7 +158,7 @@ function validateAuthority(authority, errors) {
   const mtlsEffects = mtls?.machine_projection?.desired_access_effects ?? [];
   const requiredMtlsEffects = [
     'ENSURE_MTLS_CA_CHAIN_ASSOCIATED_WITH_CANONICAL_HOSTNAME',
-    'ENSURE_SERVICE_AUTH_VALID_CERTIFICATE_POLICY_ATTACHED_TO_EXISTING_ACCESS_APPLICATION',
+    'ENSURE_SERVICE_AUTH_VALID_CERTIFICATE_POLICY_ATTACHED_TO_CANONICAL_SHARED_ACCESS_APPLICATION',
   ];
   if (mtlsEffects.length !== requiredMtlsEffects.length
       || requiredMtlsEffects.some((effect) => !mtlsEffects.includes(effect))) {
@@ -183,6 +197,20 @@ function validateAuthority(authority, errors) {
     errors.push('browser profile generation payload classification/protection drifted');
   }
   scanForbidden(authority, 'profile-security', errors);
+}
+
+function validateBridgeAudienceBindings(config, errors) {
+  const cases = [
+    ['staging', '${STAGING_ACCESS_AUDIENCE}'],
+    ['production', '${PRODUCTION_ACCESS_AUDIENCE}'],
+  ];
+  for (const [environment, expectedAudience] of cases) {
+    const vars = config.env?.[environment]?.vars;
+    if (!vars || vars.ACCESS_AUDIENCE !== expectedAudience
+        || vars.BRIDGE_ACCESS_AUDIENCE !== expectedAudience) {
+      errors.push(`${environment}: Bridge and human audience vars must bind to the same canonical Access application audience`);
+    }
+  }
 }
 
 function proxyHandleProof(errors, injectedPublicSource = null) {
@@ -228,8 +256,10 @@ function proxyHandleProof(errors, injectedPublicSource = null) {
 
 function main() {
   const authority = load(AUTHORITY_PATH);
+  const wrangler = load(WRANGLER_PATH);
   const errors = [];
   validateAuthority(authority, errors);
+  validateBridgeAudienceBindings(wrangler, errors);
   const occurrences = proxyHandleProof(errors);
   if (errors.length > 0) throw new Error(errors.join('\n'));
 
@@ -246,12 +276,18 @@ function main() {
     validateAuthority(mtlsMutated, mtlsErrors);
     if (mtlsErrors.length === 0) throw new Error('Bridge mTLS authorization negative fixture unexpectedly passed');
 
+    const audienceMutated = structuredClone(wrangler);
+    audienceMutated.env.staging.vars.BRIDGE_ACCESS_AUDIENCE = '${STAGING_BRIDGE_ACCESS_AUDIENCE}';
+    const audienceErrors = [];
+    validateBridgeAudienceBindings(audienceMutated, audienceErrors);
+    if (audienceErrors.length === 0) throw new Error('Bridge shared-perimeter audience negative fixture unexpectedly passed');
+
     const publicSource = `${readFileSync(PUBLIC_BOUNDARY_FILES[0], 'utf8')}\npub const proxy_secret_handle: &str = "forbidden";\n`;
     const boundaryErrors = [];
     proxyHandleProof(boundaryErrors, publicSource);
     if (boundaryErrors.length === 0) throw new Error('public proxy handle negative fixture unexpectedly passed');
 
-    console.log('Profile-security, Bridge-mTLS and proxy-handle negative fixtures rejected as expected.');
+    console.log('Profile-security, Bridge-mTLS/shared-perimeter and proxy-handle negative fixtures rejected as expected.');
     return;
   }
   console.log(`Profile security authority validated; proxy raw-handle repository occurrences inspected=${occurrences}; public/API/operator/log boundaries clean.`);
