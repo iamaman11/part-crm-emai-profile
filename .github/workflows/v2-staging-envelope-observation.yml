@@ -40,6 +40,16 @@ jobs:
           python scripts/v2-phase-c-contract-evidence.py --self-test
           python scripts/deployment-identity-ar11.py --self-test
           cargo build --locked --manifest-path tools/opsctl/Cargo.toml --examples
+          temp_root="$(mktemp -d)"
+          trap 'rm -rf "$temp_root"' EXIT
+          cargo run --locked --quiet --manifest-path tools/opsctl/Cargo.toml -- --root . d1 repository \
+            > "$temp_root/d1-repository.json"
+          python scripts/d1_repository_projection.py materialize \
+            --projection "$temp_root/d1-repository.json" \
+            --repository-root . \
+            --component catalog \
+            --output "$temp_root/catalog-lineage"
+          test "$(find "$temp_root/catalog-lineage" -maxdepth 1 -type f | wc -l)" -gt 0
 
   observe:
     name: V2 Staging Envelope Hosted Observation
@@ -123,28 +133,11 @@ jobs:
             -u CLOUDFLARE_API_TOKEN -u CLOUDFLARE_ACCOUNT_ID \
             cargo run --locked --quiet --manifest-path tools/opsctl/Cargo.toml -- --root . d1 repository \
             > "$raw/d1-repository.json"
-          python - "$raw/d1-repository.json" "$lineage" <<'PY'
-          import json, shutil, sys
-          from pathlib import Path
-          projection = json.load(open(sys.argv[1], encoding='utf-8'))
-          output = Path(sys.argv[2])
-          matches = [item for item in projection.get('components', []) if item.get('component_id') == 'catalog']
-          if len(matches) != 1:
-              raise SystemExit('typed Catalog projection missing/ambiguous')
-          sources = matches[0].get('executable_migration_sources')
-          if not isinstance(sources, list) or not sources:
-              raise SystemExit('typed Catalog executable_migration_sources missing')
-          for item in sources:
-              name = item.get('migration_file')
-              root = item.get('source_root')
-              if root not in {'migrations/d1', 'migrations/d1-successor'} or not isinstance(name, str):
-                  raise SystemExit('typed Catalog migration source escaped governed roots')
-              source = Path(root) / name
-              target = output / name
-              if source.is_symlink() or not source.is_file() or target.exists():
-                  raise SystemExit(f'invalid typed Catalog migration source: {source}')
-              shutil.copyfile(source, target)
-          PY
+          python scripts/d1_repository_projection.py materialize \
+            --projection "$raw/d1-repository.json" \
+            --repository-root . \
+            --component catalog \
+            --output "$lineage"
 
           verify_code="$(curl --silent --show-error --output "$raw/zero-trust-token-verify.json" --write-out '%{http_code}' \
             -H "Authorization: Bearer $CLOUDFLARE_ZERO_TRUST_OBSERVE_API_TOKEN" \
