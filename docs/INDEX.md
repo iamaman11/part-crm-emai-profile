@@ -9,20 +9,22 @@ workflow or readiness state.
 2. [Architecture](ARCHITECTURE.md) — runtime topology, layers and data ownership.
 3. [Mandatory architecture requirements](APPLICATION_ARCHITECTURE_MANDATORY_REQUIREMENTS.md) —
    prospective invariants for every change.
-4. [Current CAP execution program](ARCHITECTURE_REBASELINE_V3_PLAN.md) — the single ordered
-   implementation program.
-5. [Issue #266](https://github.com/iamaman11/part-crm-emai-profile/issues/266) — the **sole live stage
+4. [Issue #266](https://github.com/iamaman11/part-crm-emai-profile/issues/266) — the **sole live stage
    pointer**; from it open exactly one owning Issue for the CURRENT stage and exactly the
    `CURRENT_CHECKPOINT` named by #266.
-6. Read the CURRENT stage Issue body for stable scope/DoD and the exact `CURRENT_CHECKPOINT` for mutable
+5. Read the CURRENT stage Issue body for stable scope/DoD and the exact `CURRENT_CHECKPOINT` for mutable
    current work; then load only natural-owner contracts/files and PR/CI/evidence needed by that
    checkpoint. Do not fetch the full comment history by default.
-7. [AGENTS.md](../AGENTS.md) and [CONTRIBUTING.md](../CONTRIBUTING.md) — execution protocol.
+6. Read bounded contracts from this index only when the current checkpoint touches their natural owner.
+7. Read the [current CAP execution program](ARCHITECTURE_REBASELINE_V3_PLAN.md) only when the current
+   checkpoint requires stage-order/lifecycle reasoning or a stage transition. Ordinary continuation
+   does not require reconstructing completed-stage history or knowing historical stage names.
+8. [AGENTS.md](../AGENTS.md) and [CONTRIBUTING.md](../CONTRIBUTING.md) — execution protocol.
 
-For recovery after complete chat/context loss, reference Issue
-[#625](https://github.com/iamaman11/part-crm-emai-profile/issues/625) explains how these owners compose.
-It is orientation/provenance only: it is not a CURRENT stage, live pointer, roadmap or authorization
-owner.
+Reference Issue
+[#625](https://github.com/iamaman11/part-crm-emai-profile/issues/625) may be consulted for optional
+execution-model orientation after context loss. It is orientation/provenance only: it is not required
+for an ordinary cold start and is not a CURRENT stage, live pointer, roadmap or authorization owner.
 
 ## Knowledge owners
 
@@ -72,8 +74,9 @@ owner.
   of the default context load; consult them only through an exact checkpoint/evidence/natural-owner
   locator.
 
-The program sequence is intentionally not duplicated here. Read the current execution program for its
-meaning and fresh #266 for the single CURRENT stage and exact `CURRENT_CHECKPOINT`.
+The program sequence is intentionally not duplicated here. Fresh #266 and its exact
+`CURRENT_CHECKPOINT` are sufficient for ordinary continuation; read the execution program only when
+its stage-order/lifecycle authority is actually needed.
 
 ## Bounded contracts
 
