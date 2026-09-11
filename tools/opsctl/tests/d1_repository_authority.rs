@@ -370,8 +370,14 @@ fn legacy_and_successor_pas2_revisions_have_distinct_governed_roles() -> Result<
         PREDECESSOR_CONTRACT_REVISION
     );
     assert_eq!(current_successor_files.len(), 2);
-    assert_eq!(current_successor_files[0]["name"], BRIDGE_ENROLLMENT_REVISION);
-    assert_eq!(current_successor_files[1]["name"], SUCCESSOR_CONTRACT_REVISION);
+    assert_eq!(
+        current_successor_files[0]["name"],
+        BRIDGE_ENROLLMENT_REVISION
+    );
+    assert_eq!(
+        current_successor_files[1]["name"],
+        SUCCESSOR_CONTRACT_REVISION
+    );
     assert_eq!(
         predecessor_successor_files[1]["sha256"],
         current_successor_files[1]["sha256"]
