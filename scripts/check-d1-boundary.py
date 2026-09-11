@@ -39,7 +39,6 @@ D1_CONTRACT_MARKERS = (
     "automatic destructive restore = 0",
     "post-authorization replanning = 0",
     "Production authorization implied by migration tooling = 0",
-    "Historical Issues #597, #624 and #642",
     "Ordinary operation starts from fresh protected",
 )
 
