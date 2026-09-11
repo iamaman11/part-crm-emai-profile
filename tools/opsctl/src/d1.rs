@@ -312,17 +312,23 @@ fn historical_catalog_runtime_supports(
         return Ok(false);
     }
 
-    let projection: Value = serde_json::from_str(&catalog::repository_projection(root)?)
-        .map_err(|error| D1Error::new(format!("cannot parse typed D1 repository projection: {error}")))?;
+    let projection: Value =
+        serde_json::from_str(&catalog::repository_projection(root)?).map_err(|error| {
+            D1Error::new(format!(
+                "cannot parse typed D1 repository projection: {error}"
+            ))
+        })?;
     let catalog_projection = projection
         .get("components")
         .and_then(Value::as_array)
         .and_then(|components| {
-            components
-                .iter()
-                .find(|component| component.get("component_id").and_then(Value::as_str) == Some("catalog"))
+            components.iter().find(|component| {
+                component.get("component_id").and_then(Value::as_str) == Some("catalog")
+            })
         })
-        .ok_or_else(|| D1Error::new("typed D1 repository projection is missing Catalog component"))?;
+        .ok_or_else(|| {
+            D1Error::new("typed D1 repository projection is missing Catalog component")
+        })?;
     let historical = catalog_projection
         .get("historical_epoch")
         .ok_or_else(|| D1Error::new("typed D1 Catalog projection is missing historical_epoch"))?;
@@ -410,9 +416,9 @@ fn historical_catalog_runtime_supports(
             D1Error::new("typed D1 Catalog projection is missing executable migration sources")
         })?;
     let position = |revision: &str| {
-        sources.iter().position(|entry| {
-            entry.get("migration_file").and_then(Value::as_str) == Some(revision)
-        })
+        sources
+            .iter()
+            .position(|entry| entry.get("migration_file").and_then(Value::as_str) == Some(revision))
     };
     let Some(historical_index) = position(&historical_revision) else {
         return Err(D1Error::new(
