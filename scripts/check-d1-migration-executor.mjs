@@ -253,8 +253,9 @@ async function validateExecutor(text, root = ROOT) {
 
   for (const marker of [
     'native D1 plan', 'typed repository projection', 'remote ledger is not an exact prefix',
+    'migrations/d1-successor-v2',
     'ordinary d1 plan must never authorize the separate fail-forward CONTRACT',
-    'contract-transition must authorize exactly the sole Catalog 0032 CONTRACT',
+    'contract-transition must authorize exactly the sole Catalog 0033 CONTRACT',
     'Wrangler pending list differs from native planned_migrations',
     'authorized ordinary execution plan must contain planned_migration_digests',
     'planned_migration_digests cardinality must exactly match planned_migrations',
@@ -297,8 +298,12 @@ async function validateExecutor(text, root = ROOT) {
     if (!executionControlExampleText.includes(marker)) fail(`headless execution-control adapter lost marker: ${marker}`);
   }
   for (const marker of [
-    'verify_post_transition', 'post-contract verification requires exactly one canonical 0031 -> 0032 transition',
-    'd1 contract-transition verify', 'EXACT_ONE_STEP_0032_CONTRACT', 'RUNTIME_WINDOW_0031_0032_VERIFIED',
+    'verify_post_transition',
+    'post-contract verification requires exactly one canonical enrollment-0032 -> PAS2-0033 transition',
+    'd1 contract-transition verify',
+    'EXACT_0032_ENROLLMENT_PREDECESSOR',
+    'EXACT_ONE_STEP_0033_CONTRACT',
+    'RUNTIME_WINDOW_0032_0033_VERIFIED',
   ]) {
     if (!contractText.includes(marker)) fail(`typed contract-transition lost post-CONTRACT invariant: ${marker}`);
   }
@@ -588,7 +593,7 @@ async function validateExecutor(text, root = ROOT) {
     'd1-execution-receipt-${{ github.run_number }}-${{ github.run_id }}-${{ github.run_attempt }}-mutation-started',
     'if-no-files-found: error', 'retention-days: 30',
   ]) {
-    if (!mutationMarkerBody.includes(marker)) fail(`durable MUTATION_STARTED snapshot lost marker: ${marker}`);
+    if (!mutationMarkerBody.includes(marker)) fail(`durable MUTATION_STARTED snapshot lost artifact contract: ${marker}`);
   }
   if (mutationMarkerBody.includes('CLOUDFLARE_API_TOKEN')) fail('durable MUTATION_STARTED snapshot must be credential-free');
 
@@ -686,7 +691,7 @@ async function validateExecutor(text, root = ROOT) {
     'd1-execution-receipt-${{ github.run_number }}-${{ github.run_id }}-${{ github.run_attempt }}-terminal',
     'if-no-files-found: error', 'retention-days: 30',
   ]) {
-    if (!terminalMarkerBody.includes(marker)) fail(`terminal receipt artifact lost marker: ${marker}`);
+    if (!terminalMarkerBody.includes(marker)) fail(`terminal receipt artifact lost durable artifact contract: ${marker}`);
   }
 
   const evidenceBody = stepBody(text, 'Build metadata-only migration evidence');

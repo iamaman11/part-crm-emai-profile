@@ -20,7 +20,7 @@ from typing import Any
 
 MIGRATION_RE = re.compile(r"\b[0-9]{4}_[a-z0-9_]+\.sql\b")
 SHA256_RE = re.compile(r"[0-9a-f]{64}")
-CONTRACT_REVISION = "0032_pas2_payload_fingerprint_contract.sql"
+CONTRACT_REVISION = "0033_pas2_payload_fingerprint_contract.sql"
 
 
 class PlanAdapterError(ValueError):
@@ -105,7 +105,12 @@ def source_inventory(repo_root: Path, component: dict[str, Any]) -> list[tuple[s
     if explicit is not None:
         if not isinstance(explicit, list) or not explicit:
             fail("executable_migration_sources must be a non-empty array")
-        allowed_roots = {"migrations/d1", "migrations/d1-successor", "migrations/resolver-d1"}
+        allowed_roots = {
+            "migrations/d1",
+            "migrations/d1-successor",
+            "migrations/d1-successor-v2",
+            "migrations/resolver-d1",
+        }
         for item in explicit:
             if not isinstance(item, dict) or set(item) != {"migration_file", "source_root"}:
                 fail("executable_migration_sources entries must contain exactly migration_file/source_root")
@@ -156,7 +161,7 @@ def planned_names(plan: Any, mode: str, component: str) -> list[str]:
     if mode == "ordinary" and CONTRACT_REVISION in names:
         fail("ordinary d1 plan must never authorize the separate fail-forward CONTRACT")
     if mode == "contract" and (component != "catalog" or names != [CONTRACT_REVISION]):
-        fail("contract-transition must authorize exactly the sole Catalog 0032 CONTRACT")
+        fail("contract-transition must authorize exactly the sole Catalog 0033 CONTRACT")
     return names
 
 
@@ -270,7 +275,7 @@ def materialize(
     if observed != sorted(bounded):
         fail(f"bounded migration directory drifted: expected={sorted(bounded)}, observed={observed}")
     if component_id == "catalog" and mode == "ordinary" and (output_dir / CONTRACT_REVISION).exists():
-        fail("ordinary Catalog materialization leaked the trailing 0032 CONTRACT")
+        fail("ordinary Catalog materialization leaked the trailing 0033 CONTRACT")
     write_json(expected_pending_path, planned)
     write_json(normalized_ledger_path, remote)
 
@@ -303,10 +308,11 @@ def self_test() -> None:
         root = Path(directory)
         (root / "migrations/d1").mkdir(parents=True)
         (root / "migrations/d1-successor").mkdir(parents=True)
+        (root / "migrations/d1-successor-v2").mkdir(parents=True)
         files = [
             ("0001_base.sql", "migrations/d1"),
             ("0002_expand.sql", "migrations/d1-successor"),
-            (CONTRACT_REVISION, "migrations/d1-successor"),
+            (CONTRACT_REVISION, "migrations/d1-successor-v2"),
         ]
         for name, source_root in files:
             (root / source_root / name).write_text(f"-- {name}\n", encoding="utf-8")
