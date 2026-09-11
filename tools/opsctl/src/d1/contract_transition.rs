@@ -4,8 +4,8 @@ use super::model::{
 use serde_json::{Map, Value, json};
 use std::collections::BTreeSet;
 
-const PREDECESSOR_REVISION: &str = "0031_device_binding_governance.sql";
-const CONTRACT_REVISION: &str = "0032_pas2_payload_fingerprint_contract.sql";
+const PREDECESSOR_REVISION: &str = "0032_bridge_device_enrollment_authority.sql";
+const CONTRACT_REVISION: &str = "0033_pas2_payload_fingerprint_contract.sql";
 const EVIDENCE_KIND: &str = "D1_CONTRACT_TRANSITION_EVIDENCE";
 const RECOVERY_STRATEGY: &str = "FAIL_FORWARD_ONLY";
 const MAX_EVIDENCE_AGE_SECONDS: i64 = 900;
@@ -106,7 +106,7 @@ fn validate_release_contract(
     }
     if authority.current_repository_revision != CONTRACT_REVISION {
         return Err(D1Error::new(
-            "Catalog repository authority does not end at the governed 0032 CONTRACT",
+            "Catalog repository authority does not end at the governed 0033 CONTRACT",
         ));
     }
     if release.target_schema_revision != PREDECESSOR_REVISION
@@ -116,13 +116,13 @@ fn validate_release_contract(
         || release.compatibility_policy_digest != authority.policy_digest
     {
         return Err(D1Error::new(
-            "contract-transition release schema window must be exact 0031..0032 and match typed repository identity",
+            "contract-transition release schema window must be exact enrollment-0032..PAS2-0033 and match typed repository identity",
         ));
     }
     let contract = authority
         .post_epoch
         .last()
-        .ok_or_else(|| D1Error::new("Catalog 0032 CONTRACT metadata is missing"))?;
+        .ok_or_else(|| D1Error::new("Catalog 0033 CONTRACT metadata is missing"))?;
     let mut preconditions = contract.contract_preconditions.clone();
     preconditions.sort();
     if contract.migration_file != CONTRACT_REVISION
@@ -134,7 +134,7 @@ fn validate_release_contract(
         || preconditions != REQUIRED_PRECONDITIONS
     {
         return Err(D1Error::new(
-            "Catalog 0032 CONTRACT metadata drifted from the fail-forward separate-release invariant",
+            "Catalog 0033 CONTRACT metadata drifted from the fail-forward separate-release invariant",
         ));
     }
     Ok(())
@@ -148,16 +148,16 @@ fn validate_exact_predecessor(
         .ordered_history
         .iter()
         .position(|name| name == CONTRACT_REVISION)
-        .ok_or_else(|| D1Error::new("Catalog 0032 CONTRACT is absent from typed history"))?;
+        .ok_or_else(|| D1Error::new("Catalog 0033 CONTRACT is absent from typed history"))?;
     if contract_index == 0 || authority.ordered_history[contract_index - 1] != PREDECESSOR_REVISION
     {
         return Err(D1Error::new(
-            "Catalog 0032 CONTRACT does not have the exact governed 0031 predecessor",
+            "Catalog 0033 CONTRACT does not have the exact governed enrollment-0032 predecessor",
         ));
     }
     if remote_names != &authority.ordered_history[..contract_index] {
         return Err(D1Error::new(
-            "contract-transition requires the remote ledger to equal the exact canonical prefix through 0031",
+            "contract-transition requires the remote ledger to equal the exact canonical prefix through enrollment 0032",
         ));
     }
     Ok(())
@@ -174,7 +174,7 @@ fn validate_exact_successor(
         || remote_names.last().map(String::as_str) != Some(CONTRACT_REVISION)
     {
         return Err(D1Error::new(
-            "post-contract verification requires exactly one canonical 0031 -> 0032 transition",
+            "post-contract verification requires exactly one canonical enrollment-0032 -> PAS2-0033 transition",
         ));
     }
     Ok(())
@@ -332,7 +332,7 @@ pub(super) fn evaluate(input: ContractTransitionInput<'_>) -> Result<String, D1E
         .authority
         .post_epoch
         .last()
-        .ok_or_else(|| D1Error::new("Catalog 0032 CONTRACT metadata is missing"))?;
+        .ok_or_else(|| D1Error::new("Catalog 0033 CONTRACT metadata is missing"))?;
     let output = json!({
         "schema_version": 1,
         "command": "d1 contract-transition",
@@ -360,7 +360,7 @@ pub(super) fn evaluate(input: ContractTransitionInput<'_>) -> Result<String, D1E
         "recovery_strategy": RECOVERY_STRATEGY,
         "evidence_age_seconds": evidence_age_seconds,
         "reason_codes": [
-            "EXACT_0031_PREDECESSOR",
+            "EXACT_0032_ENROLLMENT_PREDECESSOR",
             "PHASE_C_PRECONDITIONS_VERIFIED",
             "SINGLE_VERSION_QUIESCENCE_VERIFIED",
             "FAIL_FORWARD_RECOVERY_ACKNOWLEDGED"
@@ -420,11 +420,11 @@ pub(super) fn verify_post_transition(
         "recovery_strategy": RECOVERY_STRATEGY,
         "evidence_age_seconds": evidence_age_seconds,
         "reason_codes": [
-            "EXACT_0031_PREDECESSOR",
-            "EXACT_ONE_STEP_0032_CONTRACT",
+            "EXACT_0032_ENROLLMENT_PREDECESSOR",
+            "EXACT_ONE_STEP_0033_CONTRACT",
             "PHASE_C_PRECONDITIONS_VERIFIED",
             "SINGLE_VERSION_QUIESCENCE_VERIFIED",
-            "RUNTIME_WINDOW_0031_0032_VERIFIED"
+            "RUNTIME_WINDOW_0032_0033_VERIFIED"
         ],
         "allowed": true
     });
@@ -483,7 +483,7 @@ mod tests {
         assert!(validate_exact_successor(&authority, &predecessor, &exact).is_ok());
         assert!(validate_exact_successor(&authority, &predecessor, &predecessor).is_err());
         let mut extra = exact.clone();
-        extra.push("0033_unexpected.sql".to_owned());
+        extra.push("0034_unexpected.sql".to_owned());
         assert!(validate_exact_successor(&authority, &predecessor, &extra).is_err());
     }
 }

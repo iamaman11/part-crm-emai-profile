@@ -1,4 +1,4 @@
--- V2.3 / B7: bounded one-shot Bridge device enrollment authority.
+-- V2.1 / B7 prerequisite: bounded one-shot Bridge device enrollment authority.
 --
 -- This table is not a device registry, certificate store or PKI. It stores only short-lived
 -- enrollment authorization state. Raw bearer claim values, CSR bytes, certificate bytes and
