@@ -5,6 +5,7 @@ import { extname, join, relative } from 'node:path';
 import process from 'node:process';
 
 const AUTHORITY_PATH = 'architecture/profile-security.json';
+const WRANGLER_PATH = 'deploy/cloudflare/wrangler.jsonc';
 const EXPECTED_DOMAINS = new Set([
   'profile-generation.encryption-key-hierarchy',
   'profile-identity.entropy-root',
@@ -103,6 +104,66 @@ function validateAuthority(authority, errors) {
       || device.material_readback !== false || device.raw_handle_visibility !== false) {
     errors.push('device private key must remain handle-only with no readback');
   }
+  const mtls = authority.bridge_machine_mtls_admission;
+  if (!mtls
+      || mtls.owner !== 'profile-bridge-device-identity-authority'
+      || mtls.purpose !== 'TRANSPORT_AUTHENTICATION_ONLY_NOT_DEVICE_OR_RESOURCE_AUTHORIZATION'
+      || mtls.v2_environment !== 'staging'
+      || mtls.production_enabled !== false
+      || mtls.trust_model !== 'DEDICATED_ENVIRONMENT_SCOPED_CLIENT_CA_CHAIN'
+      || mtls.environment_cross_trust !== 'FORBIDDEN'
+      || mtls.access_perimeter?.application_scope !== 'CANONICAL_ENVIRONMENT_SHARED_PERIMETER'
+      || mtls.access_perimeter?.bridge_route_scope !== '/bridge/*'
+      || mtls.access_perimeter?.separate_access_application_required !== false
+      || mtls.access_perimeter?.human_audience_var !== 'ACCESS_AUDIENCE'
+      || mtls.access_perimeter?.bridge_audience_var !== 'BRIDGE_ACCESS_AUDIENCE'
+      || mtls.access_perimeter?.audience_binding !== 'SAME_CANONICAL_ACCESS_APPLICATION_AUDIENCE'
+      || mtls.access_perimeter?.machine_identity_grants_human_actor !== false
+      || mtls.access_policy?.action !== 'SERVICE_AUTH'
+      || mtls.access_policy?.include_selector !== 'VALID_CERTIFICATE'
+      || mtls.access_policy?.common_name_authorization !== false
+      || mtls.access_policy?.ca_trust_grants_device_authorization !== false
+      || mtls.device_authorization?.certificate_identity !== 'CANONICAL_LOWERCASE_SHA256_FINGERPRINT'
+      || mtls.device_authorization?.admission_rule !== 'ACCESS_ASSERTION_AND_VERIFIED_MTLS_AND_ACTIVE_D1_FINGERPRINT_BINDING'
+      || mtls.device_authorization?.ca_or_common_name_alone_authorizes_device !== false
+      || mtls.ca_chain?.basic_constraints_ca_required !== true
+      || mtls.ca_chain?.minimum_signature_policy !== 'SHA256_OR_STRONGER'
+      || mtls.ca_chain?.public_chain_classification !== 'NON_SECRET_EXTERNAL_FACT'
+      || mtls.ca_chain?.public_chain_digest !== 'SHA256_REQUIRED'
+      || mtls.ca_chain?.associated_hostname_source !== 'CANONICAL_ENVIRONMENT_DEPLOYMENT_TARGET'
+      || mtls.ca_chain?.provider_generated_certificate_ids_are_source_authority !== false
+      || mtls.client_certificate?.scope !== 'UNIQUE_PER_DEVICE'
+      || mtls.client_certificate?.client_auth_eku_oid !== '1.3.6.1.5.5.7.3.2'
+      || mtls.client_certificate?.windows_import_private_key_policy !== 'NON_EXPORTABLE'
+      || mtls.client_certificate?.fingerprint_binding_must_precede_effective_device_use !== true
+      || mtls.machine_projection?.provider_ids !== 'OBSERVED_NOT_SOURCE_AUTHORED'
+      || mtls.machine_projection?.missing_required_input !== 'NOT_READY_FAIL_CLOSED'
+      || mtls.machine_projection?.manual_provider_payload !== 'FORBIDDEN'
+      || mtls.mutation_authorization !== 'SEPARATE_EXACT_CANDIDATE_ONE_SHOT_REQUIRED'
+      || mtls.production_mutation !== false) {
+    errors.push('Bridge mTLS transport trust must remain shared-perimeter, fingerprint-authorized and fail-closed');
+  }
+  const mtlsInputs = mtls?.machine_projection?.required_non_secret_inputs ?? [];
+  const requiredMtlsInputs = [
+    'canonical_environment',
+    'canonical_target_hostname',
+    'canonical_access_audience',
+    'ca_chain_pem',
+    'ca_chain_sha256',
+  ];
+  if (mtlsInputs.length !== requiredMtlsInputs.length
+      || requiredMtlsInputs.some((input) => !mtlsInputs.includes(input))) {
+    errors.push('Bridge mTLS projection inputs must remain exact and non-secret');
+  }
+  const mtlsEffects = mtls?.machine_projection?.desired_access_effects ?? [];
+  const requiredMtlsEffects = [
+    'ENSURE_MTLS_CA_CHAIN_ASSOCIATED_WITH_CANONICAL_HOSTNAME',
+    'ENSURE_SERVICE_AUTH_VALID_CERTIFICATE_POLICY_ATTACHED_TO_CANONICAL_SHARED_ACCESS_APPLICATION',
+  ];
+  if (mtlsEffects.length !== requiredMtlsEffects.length
+      || requiredMtlsEffects.some((effect) => !mtlsEffects.includes(effect))) {
+    errors.push('Bridge mTLS desired provider effects drifted');
+  }
   const objectAccess = domains?.find((entry) => entry.id === 'profile-generation.short-lived-object-access');
   if (!objectAccess || objectAccess.lifetime_policy !== 'SHORT_LIVED_NO_STATIC_BRIDGE_R2_CREDENTIAL'
       || objectAccess.raw_bearer_visibility !== false) {
@@ -136,6 +197,17 @@ function validateAuthority(authority, errors) {
     errors.push('browser profile generation payload classification/protection drifted');
   }
   scanForbidden(authority, 'profile-security', errors);
+}
+
+function validateBridgeAudienceBindings(config, errors) {
+  const vars = config.env?.staging?.vars;
+  if (!vars || vars.ACCESS_AUDIENCE !== '${STAGING_ACCESS_AUDIENCE}'
+      || vars.BRIDGE_ACCESS_AUDIENCE !== '${STAGING_ACCESS_AUDIENCE}') {
+    errors.push('staging: Bridge and human audience vars must bind to the same canonical Access application audience');
+  }
+  if (config.env?.production?.vars?.BRIDGE_ACCESS_AUDIENCE !== undefined) {
+    errors.push('production: V2 must not pre-enable the Bridge audience binding');
+  }
 }
 
 function proxyHandleProof(errors, injectedPublicSource = null) {
@@ -181,8 +253,10 @@ function proxyHandleProof(errors, injectedPublicSource = null) {
 
 function main() {
   const authority = load(AUTHORITY_PATH);
+  const wrangler = load(WRANGLER_PATH);
   const errors = [];
   validateAuthority(authority, errors);
+  validateBridgeAudienceBindings(wrangler, errors);
   const occurrences = proxyHandleProof(errors);
   if (errors.length > 0) throw new Error(errors.join('\n'));
 
@@ -193,12 +267,30 @@ function main() {
     validateAuthority(mutated, mutatedErrors);
     if (mutatedErrors.length === 0) throw new Error('proxy visibility negative fixture unexpectedly passed');
 
+    const mtlsMutated = structuredClone(authority);
+    mtlsMutated.bridge_machine_mtls_admission.access_policy.common_name_authorization = true;
+    const mtlsErrors = [];
+    validateAuthority(mtlsMutated, mtlsErrors);
+    if (mtlsErrors.length === 0) throw new Error('Bridge mTLS authorization negative fixture unexpectedly passed');
+
+    const audienceMutated = structuredClone(wrangler);
+    audienceMutated.env.staging.vars.BRIDGE_ACCESS_AUDIENCE = '${STAGING_BRIDGE_ACCESS_AUDIENCE}';
+    const audienceErrors = [];
+    validateBridgeAudienceBindings(audienceMutated, audienceErrors);
+    if (audienceErrors.length === 0) throw new Error('Bridge shared-perimeter audience negative fixture unexpectedly passed');
+
+    const productionMutated = structuredClone(wrangler);
+    productionMutated.env.production.vars.BRIDGE_ACCESS_AUDIENCE = '${PRODUCTION_ACCESS_AUDIENCE}';
+    const productionErrors = [];
+    validateBridgeAudienceBindings(productionMutated, productionErrors);
+    if (productionErrors.length === 0) throw new Error('Bridge production pre-enable negative fixture unexpectedly passed');
+
     const publicSource = `${readFileSync(PUBLIC_BOUNDARY_FILES[0], 'utf8')}\npub const proxy_secret_handle: &str = "forbidden";\n`;
     const boundaryErrors = [];
     proxyHandleProof(boundaryErrors, publicSource);
     if (boundaryErrors.length === 0) throw new Error('public proxy handle negative fixture unexpectedly passed');
 
-    console.log('Profile-security and proxy-handle negative fixtures rejected as expected.');
+    console.log('Profile-security, Bridge-mTLS/shared-perimeter and proxy-handle negative fixtures rejected as expected.');
     return;
   }
   console.log(`Profile security authority validated; proxy raw-handle repository occurrences inspected=${occurrences}; public/API/operator/log boundaries clean.`);

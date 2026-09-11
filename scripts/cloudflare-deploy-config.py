@@ -196,7 +196,8 @@ def validate_environment_template(environment: str, config: dict[str, object]) -
         raise ConfigError(f"{environment} must expose exactly one controlled custom domain")
 
     variables = require_object(config.get("vars"), f"env.{environment}.vars")
-    if set(variables) != EXPECTED_VARS:
+    expected_vars = EXPECTED_VARS | ({"BRIDGE_ACCESS_AUDIENCE"} if environment == "staging" else set())
+    if set(variables) != expected_vars:
         raise ConfigError(f"{environment} vars do not match accepted Core runtime requirements")
     expected_variable_tokens = {
         "ACCESS_ISSUER": f"${{{prefix}_ACCESS_ISSUER}}",
@@ -204,6 +205,8 @@ def validate_environment_template(environment: str, config: dict[str, object]) -
         "R2_GENERATION_ACCOUNT_ID": f"${{{prefix}_ACCOUNT_ID}}",
         "R2_GENERATION_BUCKET_NAME": f"${{{prefix}_R2_BUCKET_NAME}}",
     }
+    if environment == "staging":
+        expected_variable_tokens["BRIDGE_ACCESS_AUDIENCE"] = "${STAGING_ACCESS_AUDIENCE}"
     for key, expected in expected_variable_tokens.items():
         if variables.get(key) != expected:
             raise ConfigError(f"{environment} variable placeholder drifted for {key}")
@@ -423,6 +426,10 @@ def self_test() -> None:
         raise ConfigError("staging R2 account identity diverged from deploy account")
     if production_vars["R2_GENERATION_ACCOUNT_ID"] != production["account_id"]:
         raise ConfigError("production R2 account identity diverged from deploy account")
+    if staging_vars["BRIDGE_ACCESS_AUDIENCE"] != staging["access_audience"]:
+        raise ConfigError("staging Bridge audience did not alias the canonical Access application audience")
+    if "BRIDGE_ACCESS_AUDIENCE" in production_vars:
+        raise ConfigError("production Bridge audience must remain disabled in V2")
     if staging_vars["CAPABILITY_PROFILE_ID"] != "rehearsal-core-v2":
         raise ConfigError("staging Core profile projection drifted")
     if production_vars["CAPABILITY_PROFILE_ID"] != "production-core-v2":
