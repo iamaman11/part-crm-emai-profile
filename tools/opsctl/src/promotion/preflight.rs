@@ -686,13 +686,7 @@ mod tests {
     #[test]
     fn compatible_diagnostic_is_exact() -> Result<(), Box<dyn std::error::Error>> {
         let known_good = release()?;
-        let diagnostic = diagnostic(
-            &known_good,
-            &snapshot(),
-            "rehearsal-core-v1",
-            true,
-            false,
-        );
+        let diagnostic = diagnostic(&known_good, &snapshot(), "rehearsal-core-v1", true, false);
         assert_eq!(diagnostic.decision.as_str(), "COMPATIBLE");
         assert_eq!(diagnostic.reason_code, "ROLLBACK_COMPATIBLE");
         assert_eq!(diagnostic.remediation, "NONE");
@@ -708,20 +702,10 @@ mod tests {
             evaluate_rollback_candidate(&known_good, &state, "rehearsal-core-v1", false, false),
             CompatibilityDecision::Incompatible
         );
-        let diagnostic = diagnostic(
-            &known_good,
-            &state,
-            "rehearsal-core-v1",
-            false,
-            false,
-        );
+        let diagnostic = diagnostic(&known_good, &state, "rehearsal-core-v1", false, false);
         assert_eq!(diagnostic.reason_code, "CATALOG_SCHEMA_UNSUPPORTED");
         assert!(diagnostic.summary.contains("9999_future.sql"));
-        assert!(
-            diagnostic
-                .remediation
-                .contains("typed D1 authority")
-        );
+        assert!(diagnostic.remediation.contains("typed D1 authority"));
         Ok(())
     }
 
@@ -734,13 +718,7 @@ mod tests {
             evaluate_rollback_candidate(&known_good, &state, "rehearsal-core-v1", false, false),
             CompatibilityDecision::Unknown
         );
-        let diagnostic = diagnostic(
-            &known_good,
-            &state,
-            "rehearsal-core-v1",
-            false,
-            false,
-        );
+        let diagnostic = diagnostic(&known_good, &state, "rehearsal-core-v1", false, false);
         assert_eq!(diagnostic.reason_code, "CATALOG_SCHEMA_OBSERVATION_MISSING");
         assert!(diagnostic.remediation.contains("collect"));
         Ok(())
@@ -863,13 +841,7 @@ mod tests {
             evaluate_rollback_candidate(&known_good, &snapshot(), "unknown-profile", false, false),
             CompatibilityDecision::Incompatible
         );
-        let diagnostic = diagnostic(
-            &known_good,
-            &snapshot(),
-            "unknown-profile",
-            false,
-            false,
-        );
+        let diagnostic = diagnostic(&known_good, &snapshot(), "unknown-profile", false, false);
         assert_eq!(diagnostic.reason_code, "TARGET_PROFILE_UNSUPPORTED");
         assert!(diagnostic.summary.contains("unknown-profile"));
         assert!(diagnostic.remediation.contains("target capability profile"));
@@ -895,13 +867,7 @@ mod tests {
             evaluate_rollback_candidate(&known_good, &snapshot(), "rehearsal-core-v1", false, true),
             CompatibilityDecision::Unknown
         );
-        let diagnostic = diagnostic(
-            &known_good,
-            &snapshot(),
-            "rehearsal-core-v1",
-            false,
-            true,
-        );
+        let diagnostic = diagnostic(&known_good, &snapshot(), "rehearsal-core-v1", false, true);
         assert_eq!(
             diagnostic.reason_code,
             "WINDOWS_DELIVERY_COMPATIBILITY_UNKNOWN"
