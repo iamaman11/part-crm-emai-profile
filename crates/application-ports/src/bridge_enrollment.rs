@@ -247,11 +247,11 @@ mod tests {
     #[test]
     fn sha256_identity_is_canonical_lowercase_hex() {
         assert!(Sha256Hex::parse("ab".repeat(32)).is_ok());
-        let error = Sha256Hex::parse("AB".repeat(32)).expect_err("uppercase must fail");
-        assert_eq!(
-            error.class(),
-            BridgeEnrollmentAuthorityErrorClass::IntegrityFailure
-        );
+        assert!(matches!(
+            Sha256Hex::parse("AB".repeat(32)),
+            Err(error)
+                if error.class() == BridgeEnrollmentAuthorityErrorClass::IntegrityFailure
+        ));
         assert!(Sha256Hex::parse("ab".repeat(31)).is_err());
     }
 }
