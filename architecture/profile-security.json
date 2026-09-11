@@ -22,6 +22,63 @@
     "production_key_recovery_proof_in_ar8": false,
     "production_mutation": false
   },
+  "bridge_machine_mtls_admission": {
+    "id": "profile-bridge.machine-mtls-admission",
+    "owner": "profile-bridge-device-identity-authority",
+    "purpose": "TRANSPORT_AUTHENTICATION_ONLY_NOT_DEVICE_OR_RESOURCE_AUTHORIZATION",
+    "v2_environment": "staging",
+    "production_enabled": false,
+    "trust_model": "DEDICATED_ENVIRONMENT_SCOPED_CLIENT_CA_CHAIN",
+    "environment_cross_trust": "FORBIDDEN",
+    "access_policy": {
+      "action": "SERVICE_AUTH",
+      "include_selector": "VALID_CERTIFICATE",
+      "common_name_authorization": false,
+      "ca_trust_grants_device_authorization": false,
+      "existing_non_bridge_service_token_policy_may_coexist": true
+    },
+    "device_authorization": {
+      "owner": "EXISTING_D1_DEVICE_PRINCIPAL_FINGERPRINT_BINDING",
+      "certificate_identity": "CANONICAL_LOWERCASE_SHA256_FINGERPRINT",
+      "admission_rule": "ACCESS_ASSERTION_AND_VERIFIED_MTLS_AND_ACTIVE_D1_FINGERPRINT_BINDING",
+      "ca_or_common_name_alone_authorizes_device": false
+    },
+    "ca_chain": {
+      "basic_constraints_ca_required": true,
+      "minimum_signature_policy": "SHA256_OR_STRONGER",
+      "public_chain_classification": "NON_SECRET_EXTERNAL_FACT",
+      "public_chain_digest": "SHA256_REQUIRED",
+      "associated_hostname_source": "CANONICAL_ENVIRONMENT_DEPLOYMENT_TARGET",
+      "signing_material_policy": "EXTERNAL_PROTECTED_CERTIFICATE_AUTHORITY_ONLY_NO_GIT_NO_ISSUE_NO_ARTIFACT_NO_PROVIDER_PAYLOAD",
+      "provider_generated_certificate_ids_are_source_authority": false
+    },
+    "client_certificate": {
+      "scope": "UNIQUE_PER_DEVICE",
+      "client_auth_eku_oid": "1.3.6.1.5.5.7.3.2",
+      "lifetime_policy": "MUST_NOT_EXCEED_CREDENTIAL_LIFECYCLE_EXPORTABLE_STATIC_MAXIMUM",
+      "host_handoff": "PASSWORD_PROTECTED_PFX_TO_BRIDGE_HOST_OPS",
+      "windows_import_private_key_policy": "NON_EXPORTABLE",
+      "fingerprint_binding_must_precede_effective_device_use": true,
+      "revoke_or_rebind_uses_existing_d1_device_binding_owner": true
+    },
+    "machine_projection": {
+      "required_non_secret_inputs": [
+        "canonical_environment",
+        "canonical_target_hostname",
+        "ca_chain_pem",
+        "ca_chain_sha256"
+      ],
+      "provider_ids": "OBSERVED_NOT_SOURCE_AUTHORED",
+      "missing_required_input": "NOT_READY_FAIL_CLOSED",
+      "desired_access_effects": [
+        "ENSURE_MTLS_CA_CHAIN_ASSOCIATED_WITH_CANONICAL_HOSTNAME",
+        "ENSURE_SERVICE_AUTH_VALID_CERTIFICATE_POLICY_ATTACHED_TO_EXISTING_ACCESS_APPLICATION"
+      ],
+      "manual_provider_payload": "FORBIDDEN"
+    },
+    "mutation_authorization": "SEPARATE_EXACT_CANDIDATE_ONE_SHOT_REQUIRED",
+    "production_mutation": false
+  },
   "security_domains": [
     {
       "id": "profile-generation.encryption-key-hierarchy",
