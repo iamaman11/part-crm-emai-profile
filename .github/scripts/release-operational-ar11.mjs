@@ -631,10 +631,12 @@ function selfTest(files) {
   if (!promotionErrors(earlyDeployCredential).some((error) => error.includes('explicit activation proof boundary'))) {
     throw new Error('early deploy credential fixture unexpectedly passed');
   }
-  const deployTokenFence = files.promotion.replace(
+  const mutationWithDeployRead = mutationBlock.replace(
     'CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_OBSERVE_API_TOKEN }}',
     'CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}',
   );
+  if (mutationWithDeployRead === mutationBlock) throw new Error('deploy-token exact-current read fence fixture setup failed');
+  const deployTokenFence = files.promotion.replace(mutationBlock, mutationWithDeployRead);
   if (!promotionErrors(deployTokenFence).some((error) => error.includes('read-only exact-current fence'))) {
     throw new Error('deploy-token exact-current read fence fixture unexpectedly passed');
   }
