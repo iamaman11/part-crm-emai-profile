@@ -313,7 +313,8 @@ fn public_contract_transition_enforces_exact_fail_closed_matrix_and_post_verify(
     }) {
         Ok(_) => {
             return Err(
-                "unchanged enrollment-0032 ledger unexpectedly passed post-contract verification".into(),
+                "unchanged enrollment-0032 ledger unexpectedly passed post-contract verification"
+                    .into(),
             );
         }
         Err(error) => error,
