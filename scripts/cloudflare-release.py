@@ -170,35 +170,161 @@ def contract_inventory(root: Path) -> dict[str, Any]:
     return inventory
 
 
-def migration_paths(root: Path) -> list[Path]:
-    directory = root / "migrations" / "d1"
-    require_directory(directory, "D1 migration directory")
-    migrations = sorted(directory.glob("*.sql"), key=lambda path: path.name)
-    numbers: list[int] = []
-    for migration in migrations:
-        match = MIGRATION_RE.fullmatch(migration.name)
-        if match is None:
-            fail(f"unexpected D1 migration filename: {migration.name}")
-        numbers.append(int(match.group("number")))
-    if not migrations:
-        fail("D1 migration set must not be empty")
-    if len(numbers) != len(set(numbers)) or numbers != sorted(numbers):
-        fail("D1 migration sequence must be unique and monotonically ordered")
-    return migrations
+def migration_source_projection(root: Path) -> tuple[dict[str, Any], list[dict[str, str]]]:
+    try:
+        projection = d1_repository.load(root)
+        catalog = d1_repository.component_from_projection(projection, "catalog")
+    except d1_repository.D1ProjectionError as error:
+        raise ReleaseError(f"typed catalog D1 repository projection failed: {error}") from error
+
+    raw_authority = projection.get("executable_schema_authority")
+    raw_sources = catalog.get("executable_migration_sources")
+    lineage = catalog.get("migration_lineage")
+    current_revision = catalog.get("current_repository_revision")
+    if not isinstance(raw_authority, list) or not raw_authority or any(
+        not isinstance(value, str) or not value for value in raw_authority
+    ):
+        fail("typed D1 executable schema authority is malformed")
+    if not isinstance(raw_sources, list) or not raw_sources:
+        fail("typed Catalog executable migration sources are missing")
+    if not isinstance(lineage, str) or not lineage:
+        fail("typed Catalog migration lineage identity is missing")
+    if not isinstance(current_revision, str) or not current_revision:
+        fail("typed Catalog current repository revision is missing")
+
+    allowed_roots = set(raw_authority)
+    sources: list[dict[str, str]] = []
+    seen_migrations: set[str] = set()
+    for entry in raw_sources:
+        if not isinstance(entry, dict) or set(entry) != {"migration_file", "source_root"}:
+            fail("typed Catalog executable migration source entry is malformed")
+        migration_file = entry.get("migration_file")
+        source_root = entry.get("source_root")
+        if not isinstance(migration_file, str) or MIGRATION_RE.fullmatch(migration_file) is None:
+            fail("typed Catalog executable migration filename is malformed")
+        if PurePosixPath(migration_file).name != migration_file:
+            fail("typed Catalog executable migration filename must be a basename")
+        if migration_file in seen_migrations:
+            fail(f"typed Catalog executable migration is duplicated: {migration_file}")
+        if not isinstance(source_root, str) or source_root not in allowed_roots:
+            fail(f"typed Catalog migration source root is not executable authority: {source_root!r}")
+        source_pure = PurePosixPath(source_root)
+        if source_pure.is_absolute() or ".." in source_pure.parts or not source_pure.parts:
+            fail(f"typed Catalog migration source root is unsafe: {source_root!r}")
+        source_path = root.joinpath(*source_pure.parts, migration_file)
+        require_regular_file(source_path, "typed Catalog migration source")
+        seen_migrations.add(migration_file)
+        sources.append({"migration_file": migration_file, "source_root": source_root})
+
+    if sources[-1]["migration_file"] != current_revision:
+        fail("typed Catalog current repository revision does not equal its final executable migration")
+    return catalog, sources
 
 
 def migration_inventory(root: Path) -> dict[str, Any]:
-    migrations = migration_paths(root)
-    inventory = inventory_repo_files(root, migrations)
-    inventory.update(
-        {
-            "engine": "cloudflare-d1",
-            "directory": "migrations/d1",
-            "first": migrations[0].name,
-            "latest": migrations[-1].name,
-        }
-    )
-    return inventory
+    catalog, sources = migration_source_projection(root)
+    materialized_root = "migrations/d1"
+    entries: list[dict[str, Any]] = []
+    source_projection: list[dict[str, str]] = []
+    for source in sources:
+        migration_file = source["migration_file"]
+        source_root = source["source_root"]
+        path = root.joinpath(*PurePosixPath(source_root).parts, migration_file)
+        materialized_path = f"{materialized_root}/{migration_file}"
+        entries.append(
+            {
+                "path": materialized_path,
+                "size": path.stat().st_size,
+                "sha256": sha256_file(path),
+            }
+        )
+        source_projection.append(
+            {
+                "migration_file": migration_file,
+                "source_root": source_root,
+            }
+        )
+    return {
+        "engine": "cloudflare-d1",
+        "directory": materialized_root,
+        "migration_lineage": catalog["migration_lineage"],
+        "first": sources[0]["migration_file"],
+        "latest": sources[-1]["migration_file"],
+        "file_count": len(entries),
+        "sha256": sha256_bytes(canonical_compact(entries)),
+        "files": entries,
+        "source_projection": source_projection,
+    }
+
+
+def materialized_migration_inventory(root: Path, expected: dict[str, Any]) -> dict[str, Any]:
+    directory_name = expected.get("directory")
+    files = expected.get("files")
+    source_projection = expected.get("source_projection")
+    if directory_name != "migrations/d1" or not isinstance(files, list) or not files:
+        fail("manifest D1 migration inventory shape is invalid")
+    if not isinstance(source_projection, list) or len(source_projection) != len(files):
+        fail("manifest D1 migration source projection is invalid")
+
+    directory = root / "migrations" / "d1"
+    require_directory(directory, "materialized D1 migration directory")
+    observed_names: list[str] = []
+    for path in directory.iterdir():
+        if path.is_symlink() or not path.is_file() or MIGRATION_RE.fullmatch(path.name) is None:
+            fail(f"materialized D1 migration directory contains unsupported entry: {path}")
+        observed_names.append(path.name)
+
+    expected_names: list[str] = []
+    entries: list[dict[str, Any]] = []
+    for expected_file, source in zip(files, source_projection, strict=True):
+        if not isinstance(expected_file, dict) or not isinstance(source, dict):
+            fail("manifest D1 migration entry is malformed")
+        migration_file = source.get("migration_file")
+        source_root = source.get("source_root")
+        if not isinstance(migration_file, str) or not isinstance(source_root, str):
+            fail("manifest D1 migration source entry is malformed")
+        expected_path = f"migrations/d1/{migration_file}"
+        if expected_file.get("path") != expected_path:
+            fail("manifest D1 materialized path does not match typed migration source")
+        path = directory / migration_file
+        require_regular_file(path, "materialized D1 migration")
+        expected_names.append(migration_file)
+        entries.append(
+            {
+                "path": expected_path,
+                "size": path.stat().st_size,
+                "sha256": sha256_file(path),
+            }
+        )
+
+    if sorted(observed_names) != sorted(expected_names):
+        fail("materialized D1 migration file set differs from typed executable lineage")
+    actual = dict(expected)
+    actual["file_count"] = len(entries)
+    actual["sha256"] = sha256_bytes(canonical_compact(entries))
+    actual["files"] = entries
+    return actual
+
+
+def copy_migrations(root: Path, destination: Path, expected: dict[str, Any]) -> None:
+    if destination.exists():
+        fail(f"immutable D1 migration destination already exists: {destination}")
+    source_projection = expected.get("source_projection")
+    if not isinstance(source_projection, list) or not source_projection:
+        fail("manifest D1 migration source projection is missing")
+    destination.mkdir(parents=True)
+    for source in source_projection:
+        if not isinstance(source, dict):
+            fail("manifest D1 migration source entry is malformed")
+        migration_file = source.get("migration_file")
+        source_root = source.get("source_root")
+        if not isinstance(migration_file, str) or not isinstance(source_root, str):
+            fail("manifest D1 migration source entry is malformed")
+        source_path = root.joinpath(*PurePosixPath(source_root).parts, migration_file)
+        require_regular_file(source_path, "typed Catalog migration source")
+        shutil.copyfile(source_path, destination / migration_file, follow_symlinks=False)
+    if materialized_migration_inventory(destination.parents[1], expected) != expected:
+        fail("materialized D1 migrations differ from typed executable lineage")
 
 
 def load_schema_contract(root: Path) -> dict[str, str]:
@@ -537,13 +663,15 @@ def verify_release_directory(
     build = manifest.get("build")
     actual_contracts = contract_inventory(root)
     actual_migrations = migration_inventory(root)
-    release_migrations = migration_inventory(release_directory)
+    if not isinstance(migrations, dict):
+        fail("release manifest D1 migration inventory is missing")
+    release_migrations = materialized_migration_inventory(release_directory, actual_migrations)
     actual_schema_contract = load_schema_contract(root)
     actual_build = load_toolchain_identity(root)
     if contracts != actual_contracts:
         fail("generated contract identity no longer matches the exact source checkout")
     if migrations != actual_migrations or migrations != release_migrations:
-        fail("D1 migration-set identity no longer matches the exact source checkout")
+        fail("D1 migration-set identity no longer matches the exact typed executable lineage")
     if schema_contract != actual_schema_contract:
         fail("Catalog schema contract no longer matches the exact D1 evolution authority")
     if build != actual_build:
@@ -690,7 +818,10 @@ def build_release(
     try:
         copy_tree_exact(frontend, release_directory / "frontend")
         copy_worker_runtime(worker, release_directory / "worker")
-        copy_tree_exact(root / "migrations" / "d1", release_directory / "migrations" / "d1")
+        migrations = manifest.get("migrations")
+        if not isinstance(migrations, dict):
+            fail("release manifest D1 migration inventory is missing")
+        copy_migrations(root, release_directory / "migrations" / "d1", migrations)
         deployment_config = root / DEPLOYMENT_CONFIG
         deployment_config_target = release_directory / DEPLOYMENT_CONFIG
         deployment_config_target.parent.mkdir(parents=True, exist_ok=True)
@@ -729,17 +860,29 @@ def check_repository_policy(root: Path) -> None:
     build = load_toolchain_identity(root)
     if contracts.get("version") != CONTRACT_VERSION:
         fail("generated contract version identity is not canonical v1")
-    if migrations.get("latest") is None:
-        fail("D1 migration latest identity is missing")
-    if schema_contract.get("target_schema_revision") != migrations.get("latest"):
-        fail("Catalog schema target must equal the exact current migration revision")
+    latest = migrations.get("latest")
+    source_projection = migrations.get("source_projection")
+    if not isinstance(latest, str) or not isinstance(source_projection, list):
+        fail("D1 migration latest/source identity is missing")
+    revisions = {
+        source.get("migration_file")
+        for source in source_projection
+        if isinstance(source, dict) and isinstance(source.get("migration_file"), str)
+    }
+    for field in ("target_schema_revision", "supported_schema_min", "supported_schema_max"):
+        revision = schema_contract.get(field)
+        if revision not in revisions:
+            fail(f"Catalog schema contract {field} is not present in the exact executable migration lineage")
+    if schema_contract.get("supported_schema_max") != latest:
+        fail("Catalog supported schema maximum must equal the exact current repository revision")
     if build["worker"]["worker_build"] == "latest":
         fail("mutable worker-build identity is prohibited")
     print(
         "Cloudflare D2 release policy passed: "
         f"contracts={contracts['sha256']} migrations={migrations['sha256']} "
-        f"schema={schema_contract['target_schema_revision']} rust={build['rust']['channel']} "
-        f"node={build['frontend']['node']} worker-build={build['worker']['worker_build']}."
+        f"schema={schema_contract['target_schema_revision']}..{schema_contract['supported_schema_max']} "
+        f"rust={build['rust']['channel']} node={build['frontend']['node']} "
+        f"worker-build={build['worker']['worker_build']}."
     )
 
 
@@ -766,6 +909,7 @@ def create_mock_repo(root: Path) -> None:
     (root / "openapi" / "v1" / "fragments" / "fixture.json").write_text('{"fixture":true}\n', encoding="utf-8")
     shutil.copytree(ROOT / "migrations" / "d1", root / "migrations" / "d1")
     shutil.copytree(ROOT / "migrations" / "d1-successor", root / "migrations" / "d1-successor")
+    shutil.copytree(ROOT / "migrations" / "d1-successor-v2", root / "migrations" / "d1-successor-v2")
     shutil.copytree(ROOT / "migrations" / "resolver-d1", root / "migrations" / "resolver-d1")
     (root / "frontend" / "package.json").write_text(
         json.dumps(
@@ -829,11 +973,16 @@ def self_test() -> None:
         schema_contract = first.get("schema_contract")
         if not isinstance(schema_contract, dict) or not (
             schema_contract.get("database_component") == "catalog"
-            and schema_contract.get("target_schema_revision") == "0031_device_binding_governance.sql"
-            and schema_contract.get("supported_schema_min") == "0031_device_binding_governance.sql"
-            and schema_contract.get("supported_schema_max") == "0032_pas2_payload_fingerprint_contract.sql"
+            and schema_contract.get("target_schema_revision") == "0032_bridge_device_enrollment_authority.sql"
+            and schema_contract.get("supported_schema_min") == "0032_bridge_device_enrollment_authority.sql"
+            and schema_contract.get("supported_schema_max") == "0033_pas2_payload_fingerprint_contract.sql"
         ):
-            fail("Catalog fixture release did not bind the exact bounded 0031..0032 schema contract")
+            fail("Catalog fixture release did not bind the exact bounded 0032..0033 schema contract")
+        for revision in (
+            "0032_bridge_device_enrollment_authority.sql",
+            "0033_pas2_payload_fingerprint_contract.sql",
+        ):
+            require_regular_file(first_dir / "migrations" / "d1" / revision, "materialized successor migration")
 
         mutated_frontend = first_dir / "frontend" / "index.html"
         mutated_frontend.write_text("mutated\n", encoding="utf-8")
