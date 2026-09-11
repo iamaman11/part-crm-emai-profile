@@ -12,7 +12,9 @@ const RESOLVER_EPOCH_DIGEST: &str =
     "98fd6f91a839223b06c441df4901dbd4fda8e69f2f90606f00e43faad91877ec";
 const LEGACY_PAS2_REVISION: &str = "0027_pas2_payload_fingerprint.sql";
 const SUCCESSOR_EXPAND_REVISION: &str = "0027_pas2_payload_fingerprint_expand.sql";
-const SUCCESSOR_CONTRACT_REVISION: &str = "0032_pas2_payload_fingerprint_contract.sql";
+const PREDECESSOR_CONTRACT_REVISION: &str = "0032_pas2_payload_fingerprint_contract.sql";
+const BRIDGE_ENROLLMENT_REVISION: &str = "0032_bridge_device_enrollment_authority.sql";
+const SUCCESSOR_CONTRACT_REVISION: &str = "0033_pas2_payload_fingerprint_contract.sql";
 
 fn repo_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
@@ -79,7 +81,10 @@ fn executable_identity_from_projection(
         let source_root = source["source_root"]
             .as_str()
             .ok_or("Catalog executable migration source root is missing")?;
-        if !matches!(source_root, "migrations/d1" | "migrations/d1-successor") {
+        if !matches!(
+            source_root,
+            "migrations/d1" | "migrations/d1-successor" | "migrations/d1-successor-v2"
+        ) {
             return Err(format!("unexpected Catalog source root: {source_root}").into());
         }
         let path = root.join(source_root).join(name);
@@ -114,6 +119,10 @@ impl TempRepository {
         copy_directory(
             &source.join("migrations/d1-successor"),
             &path.join("migrations/d1-successor"),
+        )?;
+        copy_directory(
+            &source.join("migrations/d1-successor-v2"),
+            &path.join("migrations/d1-successor-v2"),
         )?;
         copy_directory(
             &source.join("migrations/resolver-d1"),
@@ -188,21 +197,22 @@ fn frozen_epoch_and_current_projection_are_derived_from_real_sql_bytes()
         identity_digest(&catalog_legacy[..26])?,
         CATALOG_EPOCH_DIGEST
     );
-    assert_eq!(catalog_current.len(), 32);
+    assert_eq!(catalog_current.len(), 33);
     assert_eq!(catalog_current[26]["name"], SUCCESSOR_EXPAND_REVISION);
-    assert_eq!(catalog_current[31]["name"], SUCCESSOR_CONTRACT_REVISION);
+    assert_eq!(catalog_current[31]["name"], BRIDGE_ENROLLMENT_REVISION);
+    assert_eq!(catalog_current[32]["name"], SUCCESSOR_CONTRACT_REVISION);
     assert!(
         catalog_current
             .iter()
             .all(|entry| entry["name"] != LEGACY_PAS2_REVISION)
     );
-    assert_eq!(catalog["migration_count"], 32);
+    assert_eq!(catalog["migration_count"], 33);
     assert_eq!(
         catalog["current_repository_revision"],
         SUCCESSOR_CONTRACT_REVISION
     );
     assert_eq!(catalog["history_digest"], catalog_current_digest);
-    assert_eq!(catalog["post_epoch_migration_count"], 6);
+    assert_eq!(catalog["post_epoch_migration_count"], 7);
     assert_eq!(catalog["historical_epoch"]["migration_count"], 26);
     assert_eq!(
         catalog["historical_epoch"]["final_revision"],
@@ -259,6 +269,7 @@ fn repository_projection_is_deterministic_and_effect_free() -> Result<(), Box<dy
         json!([
             "migrations/d1",
             "migrations/d1-successor",
+            "migrations/d1-successor-v2",
             "migrations/resolver-d1"
         ])
     );
@@ -301,9 +312,9 @@ fn unowned_post_epoch_sql_fails_closed_for_each_component() -> Result<(), Box<dy
     let source = repo_root();
     for (label, relative, expected_reason) in [
         (
-            "catalog-successor-post-epoch",
-            "migrations/d1-successor/0033_unowned.sql",
-            "Catalog successor migration inventory mismatch",
+            "catalog-successor-v2-post-epoch",
+            "migrations/d1-successor-v2/0034_unowned.sql",
+            "Catalog successor-v2 migration inventory mismatch",
         ),
         (
             "resolver-post-epoch",
@@ -333,7 +344,8 @@ fn legacy_and_successor_pas2_revisions_have_distinct_governed_roles() -> Result<
     let catalog = component(&projection, "catalog")?;
     let resolver = component(&projection, "resolver")?;
     let (catalog_legacy, _) = migration_identity(&root, "migrations/d1")?;
-    let successor_files = migration_identity(&root, "migrations/d1-successor")?.0;
+    let predecessor_successor_files = migration_identity(&root, "migrations/d1-successor")?.0;
+    let current_successor_files = migration_identity(&root, "migrations/d1-successor-v2")?.0;
     let sources = catalog["executable_migration_sources"]
         .as_array()
         .ok_or("Catalog executable migration source projection missing")?;
@@ -348,18 +360,37 @@ fn legacy_and_successor_pas2_revisions_have_distinct_governed_roles() -> Result<
         catalog_legacy[30]["name"],
         "0031_device_binding_governance.sql"
     );
-    assert_eq!(successor_files.len(), 2);
-    assert_eq!(successor_files[0]["name"], SUCCESSOR_EXPAND_REVISION);
-    assert_eq!(successor_files[1]["name"], SUCCESSOR_CONTRACT_REVISION);
+    assert_eq!(predecessor_successor_files.len(), 2);
+    assert_eq!(
+        predecessor_successor_files[0]["name"],
+        SUCCESSOR_EXPAND_REVISION
+    );
+    assert_eq!(
+        predecessor_successor_files[1]["name"],
+        PREDECESSOR_CONTRACT_REVISION
+    );
+    assert_eq!(current_successor_files.len(), 2);
+    assert_eq!(
+        current_successor_files[0]["name"],
+        BRIDGE_ENROLLMENT_REVISION
+    );
+    assert_eq!(
+        current_successor_files[1]["name"],
+        SUCCESSOR_CONTRACT_REVISION
+    );
+    assert_eq!(
+        predecessor_successor_files[1]["sha256"],
+        current_successor_files[1]["sha256"]
+    );
 
-    assert_eq!(catalog["migration_count"], 32);
-    assert_eq!(catalog["post_epoch_migration_count"], 6);
+    assert_eq!(catalog["migration_count"], 33);
+    assert_eq!(catalog["post_epoch_migration_count"], 7);
     assert_eq!(
         catalog["current_repository_revision"],
         SUCCESSOR_CONTRACT_REVISION
     );
-    assert_eq!(catalog["migration_lineage"], "catalog-successor-v1");
-    assert_eq!(sources.len(), 32);
+    assert_eq!(catalog["migration_lineage"], "catalog-successor-v2");
+    assert_eq!(sources.len(), 33);
     assert_eq!(sources[26]["migration_file"], SUCCESSOR_EXPAND_REVISION);
     assert_eq!(sources[26]["source_root"], "migrations/d1-successor");
     assert_eq!(
@@ -367,24 +398,47 @@ fn legacy_and_successor_pas2_revisions_have_distinct_governed_roles() -> Result<
         "0028_profile_assignment_detach.sql"
     );
     assert_eq!(sources[27]["source_root"], "migrations/d1");
-    assert_eq!(sources[31]["migration_file"], SUCCESSOR_CONTRACT_REVISION);
-    assert_eq!(sources[31]["source_root"], "migrations/d1-successor");
+    assert_eq!(sources[31]["migration_file"], BRIDGE_ENROLLMENT_REVISION);
+    assert_eq!(sources[31]["source_root"], "migrations/d1-successor-v2");
+    assert_eq!(sources[32]["migration_file"], SUCCESSOR_CONTRACT_REVISION);
+    assert_eq!(sources[32]["source_root"], "migrations/d1-successor-v2");
     assert!(
         sources
             .iter()
             .all(|source| source["migration_file"] != LEGACY_PAS2_REVISION)
     );
     assert_eq!(
+        catalog["predecessor_successor_history"]["migration_root"],
+        "migrations/d1-successor"
+    );
+    assert_eq!(
+        catalog["predecessor_successor_history"]["accepted_contract_revision"],
+        PREDECESSOR_CONTRACT_REVISION
+    );
+    assert_eq!(catalog["predecessor_successor_history"]["immutable"], true);
+    assert_eq!(
+        catalog["predecessor_successor_history"]["reused_executable_revision"],
+        SUCCESSOR_EXPAND_REVISION
+    );
+    assert_eq!(
+        catalog["predecessor_successor_history"]["superseded_contract_revision"],
+        PREDECESSOR_CONTRACT_REVISION
+    );
+    assert_eq!(
         catalog["release_schema_contract"]["target_schema_revision"],
-        "0031_device_binding_governance.sql"
+        BRIDGE_ENROLLMENT_REVISION
     );
     assert_eq!(
         catalog["release_schema_contract"]["supported_schema_min"],
-        "0031_device_binding_governance.sql"
+        BRIDGE_ENROLLMENT_REVISION
     );
     assert_eq!(
         catalog["release_schema_contract"]["supported_schema_max"],
         SUCCESSOR_CONTRACT_REVISION
+    );
+    assert_eq!(
+        catalog["pre_migration_runtime_schema_contract"]["supported_schema_max"],
+        BRIDGE_ENROLLMENT_REVISION
     );
 
     assert_eq!(resolver["historical_epoch"]["migration_count"], 4);

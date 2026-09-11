@@ -262,7 +262,11 @@ class Harness:
         for item in catalog["executable_migration_sources"]:
             name = item["migration_file"]
             source_root = item["source_root"]
-            if source_root not in {"migrations/d1", "migrations/d1-successor"}:
+            if source_root not in {
+                "migrations/d1",
+                "migrations/d1-successor",
+                "migrations/d1-successor-v2",
+            }:
                 raise HarnessError(f"unexpected Catalog source root: {source_root}")
             source = self.root / source_root / name
             if not source.is_file() or source.is_symlink():
@@ -460,7 +464,7 @@ class Harness:
                 "catalog",
                 self.catalog_sources(projection),
                 self.root / "tests" / "d1-evolution" / "post-epoch" / "catalog" / "0027_post_epoch_probe.sql",
-                "0033_post_epoch_probe.sql",
+                "0034_post_epoch_probe.sql",
             ),
             (
                 "resolver",

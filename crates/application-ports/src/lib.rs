@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 
 pub mod audit;
+pub mod bridge_enrollment;
 pub mod browser_mail_execution;
 pub mod client_contact_lookup;
 pub mod client_creation;
@@ -48,6 +49,11 @@ pub mod sessions;
 pub mod standards_mailbox_onboarding;
 
 pub use audit::{AuditPort, AuditRecord, AuditResult};
+pub use bridge_enrollment::{
+    BridgeEnrollmentAuthorityError, BridgeEnrollmentAuthorityErrorClass,
+    BridgeEnrollmentAuthorityPort, BridgeEnrollmentReservation, CompletedBridgeEnrollmentAuthority,
+    IssuedBridgeEnrollmentAuthority, Sha256Hex,
+};
 pub use clients::ClientRepository;
 pub use clock::ClockPort;
 pub use commands::CommandExecutionEvidence;
