@@ -13,6 +13,7 @@ pub mod control_plane_queue;
 pub mod coordinator_ingress;
 pub mod d1_active_membership;
 pub mod d1_authenticated_device;
+pub mod d1_bridge_enrollment;
 pub mod d1_browser_mail_execution;
 pub mod d1_catalog;
 pub mod d1_client_mail_eligibility;
