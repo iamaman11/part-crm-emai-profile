@@ -22,6 +22,8 @@ const audience = "bridge-enrollment-e2e-audience";
 const subject = "bridge_e2e_subject_01";
 const keyId = "bridge-e2e-key-01";
 const MAX_BODY_BYTES = 512 * 1024;
+const SIGNER_TIMEOUT_MS = 30_000;
+const UPSTREAM_TIMEOUT_MS = 30_000;
 
 for (const [name, port] of [
   ["E2E_CONTROL_PORT", controlPort],
@@ -96,21 +98,33 @@ const runSigner = (body) =>
     );
     const stdout = [];
     const stderr = [];
+    let settled = false;
+    const finish = (callback, value) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      callback(value);
+    };
+    const timer = setTimeout(() => {
+      child.kill();
+      finish(reject, new Error("local signer timed out"));
+    }, SIGNER_TIMEOUT_MS);
     child.stdout.on("data", (chunk) => stdout.push(chunk));
     child.stderr.on("data", (chunk) => stderr.push(chunk));
-    child.on("error", reject);
+    child.on("error", (error) => finish(reject, error));
     child.on("close", (code) => {
+      if (settled) return;
       if (code !== 0) {
         process.stderr.write(`local signer failed with exit ${code}\n`);
-        reject(new Error("local signer rejected request"));
+        finish(reject, new Error("local signer rejected request"));
         return;
       }
       const output = Buffer.concat(stdout);
       if (output.length === 0 || output.length > MAX_BODY_BYTES) {
-        reject(new Error("local signer returned invalid output"));
+        finish(reject, new Error("local signer returned invalid output"));
         return;
       }
-      resolve(output);
+      finish(resolve, output);
     });
     child.stdin.end(body);
   });
@@ -199,6 +213,9 @@ const proxyToControlPlane = async (request, response) => {
       upstreamResponse.pipe(response);
     },
   );
+  upstream.setTimeout(UPSTREAM_TIMEOUT_MS, () => {
+    upstream.destroy(new Error("control-plane upstream timed out"));
+  });
   upstream.on("error", () => {
     if (!response.headersSent) response.writeHead(502, { "cache-control": "no-store" });
     response.end();
