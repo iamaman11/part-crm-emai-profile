@@ -62,11 +62,6 @@ function Write-JsonFile([string]$Path, [object]$Value) {
     (($Value | ConvertTo-Json -Depth 20) + "`n") | Set-Content -Path $Path -Encoding utf8NoBOM
 }
 
-function Invoke-Wrangler([string[]]$Arguments) {
-    & npx.cmd --yes 'wrangler@4.94.0' @Arguments
-    if ($LASTEXITCODE -ne 0) { throw "Wrangler failed: $($Arguments -join ' ')" }
-}
-
 function Stop-ProcessTree([System.Diagnostics.Process]$Process) {
     if ($null -eq $Process -or $Process.HasExited) { return }
     & taskkill.exe /PID $Process.Id /T /F 2>$null | Out-Null
@@ -97,12 +92,21 @@ function Invoke-BoundedExecutable(
         }
         $process.WaitForExit()
         $stdout = $stdoutTask.GetAwaiter().GetResult()
-        $null = $stderrTask.GetAwaiter().GetResult()
-        if ($process.ExitCode -ne 0) { throw "$Label failed with exit $($process.ExitCode)" }
+        $stderr = $stderrTask.GetAwaiter().GetResult()
+        if ($process.ExitCode -ne 0) {
+            $detail = if ([string]::IsNullOrWhiteSpace($stderr)) { '' } else { ": $($stderr.Trim())" }
+            throw "$Label failed with exit $($process.ExitCode)$detail"
+        }
         @($stdout -split "`r?`n" | Where-Object { -not [string]::IsNullOrEmpty($_) })
     } finally {
         $process.Dispose()
     }
+}
+
+function Invoke-Wrangler([string[]]$Arguments, [string]$Label, [int]$TimeoutSeconds = 90) {
+    $npx = (Get-Command npx.cmd).Source
+    $npxArguments = @('--yes', 'wrangler@4.94.0') + $Arguments
+    $null = Invoke-BoundedExecutable -FilePath $npx -Arguments $npxArguments -Label $Label -TimeoutSeconds $TimeoutSeconds
 }
 
 function Wait-HttpReady([string]$Uri, [System.Diagnostics.Process]$Process, [string]$Label, [int]$Attempts = 90) {
@@ -261,11 +265,14 @@ try {
         vars = [ordered]@{ TEST_SIGNER_ORIGIN = "http://127.0.0.1:$DependencyPort" }
     })
 
-    Write-Phase 'local-d1-setup'
-    Invoke-Wrangler @('d1', 'migrations', 'apply', 'CATALOG_DB', '--local', '--config', $ControlConfig, '--persist-to', $State, '--experimental-provision=false', '--experimental-auto-create=false')
+    Write-Phase 'local-d1-migrations'
+    Invoke-Wrangler -Arguments @('d1', 'migrations', 'apply', 'CATALOG_DB', '--local', '--config', $ControlConfig, '--persist-to', $State, '--experimental-provision=false', '--experimental-auto-create=false') -Label 'local D1 migrations apply' -TimeoutSeconds 90
+    Write-Phase 'local-d1-migrations-pass'
     $nowMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
     $seedSql = "INSERT INTO tenants (tenant_id, display_name, status, version, created_at_ms, updated_at_ms) VALUES ('$TenantId', 'Bridge Enrollment E2E', 'ACTIVE', 1, $nowMs, $nowMs); INSERT INTO identities (identity_id, access_subject, verified_contact_hint, created_at_ms) VALUES ('$IdentityId', '$AccessSubject', 'bridge-e2e@example.test', $nowMs); INSERT INTO memberships (tenant_id, actor_id, identity_id, role, status, version, created_at_ms, updated_at_ms) VALUES ('$TenantId', '$ActorId', '$IdentityId', 'TENANT_OWNER', 'ACTIVE', 1, $nowMs, $nowMs);"
-    Invoke-Wrangler @('d1', 'execute', 'CATALOG_DB', '--local', '--config', $ControlConfig, '--persist-to', $State, '--command', $seedSql, '--experimental-provision=false', '--experimental-auto-create=false')
+    Write-Phase 'local-d1-seed'
+    Invoke-Wrangler -Arguments @('d1', 'execute', 'CATALOG_DB', '--local', '--config', $ControlConfig, '--persist-to', $State, '--command', $seedSql, '--experimental-provision=false', '--experimental-auto-create=false') -Label 'local D1 seed execute' -TimeoutSeconds 90
+    Write-Phase 'local-d1-seed-pass'
 
     $tlsArguments = @{
         Subject = 'CN=localhost'
