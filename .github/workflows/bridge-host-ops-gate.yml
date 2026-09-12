@@ -69,3 +69,79 @@ jobs:
           cargo test --locked --manifest-path tools/bridge-host-ops/Cargo.toml
           cargo build --locked --release --manifest-path tools/bridge-host-ops/Cargo.toml
           cargo run --locked --quiet --manifest-path tools/bridge-host-ops/Cargo.toml -- self-test | ConvertFrom-Json | Out-Null
+
+  windows-enrollment-e2e:
+    name: Bridge Enrollment Hosted E2E (Windows)
+    needs: windows-compile
+    runs-on: windows-latest
+    timeout-minutes: 25
+    env:
+      WRANGLER_SEND_METRICS: 'false'
+    steps:
+      - name: Checkout exact candidate source
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify exact source checkout
+        env:
+          EXPECTED_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: python -c "import os, subprocess; actual = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(); expected = os.environ['EXPECTED_SOURCE_SHA']; assert actual == expected, f'expected {expected}, got {actual}'"
+
+      - name: Set up pinned Node for local Wrangler composition
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
+        with:
+          node-version: '24.19.0'
+          package-manager-cache: false
+
+      - name: Validate stage-specific E2E harness syntax
+        shell: pwsh
+        run: |
+          if ((node --version) -ne 'v24.19.0') { throw 'unexpected Node version' }
+          npm install --global npm@11.17.0
+          if ((npm --version) -ne '11.17.0') { throw 'unexpected npm version' }
+          node --check tests/bridge-enrollment-e2e/dependency-server.mjs
+          node --check tests/bridge-enrollment-e2e/signer-worker.mjs
+          foreach ($path in @('scripts/bridge-enrollment-hosted-e2e.ps1', 'tests/bridge-enrollment-e2e/sign-csr.ps1')) {
+            $tokens = $null
+            $errors = $null
+            $null = [System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path $path), [ref]$tokens, [ref]$errors)
+            if ($errors.Count -ne 0) { throw "PowerShell parse failure in $path`: $($errors[0].Message)" }
+          }
+
+      - name: Build shipping Windows host and shipping control-plane Worker
+        shell: pwsh
+        run: |
+          cargo build --locked --release --manifest-path tools/bridge-host-ops/Cargo.toml
+          cargo install worker-build --version 0.8.5 --locked
+          Push-Location apps/control-plane-worker
+          try { worker-build --release } finally { Pop-Location }
+          if (-not (Test-Path apps/control-plane-worker/build/worker/shim.mjs)) { throw 'Worker build output missing' }
+
+      - name: Prove hosted Windows positive and negative enrollment E2E
+        shell: pwsh
+        run: |
+          ./scripts/bridge-enrollment-hosted-e2e.ps1 -ReportPath artifacts/bridge-enrollment-e2e/evidence.json | ConvertFrom-Json | Out-Null
+          $evidence = Get-Content -Raw artifacts/bridge-enrollment-e2e/evidence.json | ConvertFrom-Json
+          if ($evidence.status -ne 'PASS' -or $evidence.kind -ne 'BRIDGE_ENROLLMENT_HOSTED_E2E') { throw 'Bridge enrollment E2E evidence failed' }
+          if ($evidence.providerMutation -or $evidence.productionMutation -or $evidence.remoteProviderCredentialsPresent) { throw 'Bridge enrollment E2E escaped local-only boundary' }
+          if (-not $evidence.shippingControlPlaneWorker -or -not $evidence.shippingHostEnroll -or -not $evidence.localD1FromTypedRepositoryProjection) { throw 'Bridge enrollment E2E did not use shipping owners' }
+          foreach ($value in @(
+            $evidence.negative.signerFailureReservationPersistence,
+            $evidence.negative.wrongCsrConflict,
+            $evidence.negative.exactCsrRecovery,
+            $evidence.negative.consumedReplayRejected,
+            $evidence.negative.expiryReplayRejected
+          )) {
+            if ($value -ne 'PASS') { throw 'Bridge enrollment negative proof is incomplete' }
+          }
+
+      - name: Publish secret-free Bridge enrollment E2E evidence
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: bridge-enrollment-hosted-e2e-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.sha }}
+          path: artifacts/bridge-enrollment-e2e/evidence.json
+          if-no-files-found: error
+          retention-days: 90
