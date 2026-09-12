@@ -30,7 +30,7 @@ $ControlConfig = Join-Path $Scratch 'control.wrangler.jsonc'
 $SignerConfig = Join-Path $Scratch 'signer.wrangler.jsonc'
 $TokenFile = Join-Path $Scratch 'access-token.txt'
 $TlsPfx = Join-Path $Scratch 'ingress.pfx'
-$TlsCaPem = Join-Path $Scratch 'ingress-ca.pem'
+$TlsCer = Join-Path $Scratch 'ingress.cer'
 $DependencyStdout = Join-Path $Scratch 'dependency.stdout.log'
 $DependencyStderr = Join-Path $Scratch 'dependency.stderr.log'
 $WranglerStdout = Join-Path $Scratch 'wrangler.stdout.log'
@@ -40,11 +40,14 @@ $SignerWorker = Join-Path $Root 'tests/bridge-enrollment-e2e/signer-worker.mjs'
 $SignerScript = Join-Path $Root 'tests/bridge-enrollment-e2e/sign-csr.ps1'
 $HostBinary = Join-Path $Root 'tools/bridge-host-ops/target/release/bridge-host-ops.exe'
 $WorkerShim = Join-Path $Root 'apps/control-plane-worker/build/worker/shim.mjs'
+$CertUtil = Join-Path $env:SystemRoot 'System32\certutil.exe'
 $Provider = [System.Security.Cryptography.CngProvider]::MicrosoftSoftwareKeyStorageProvider
 
 $DependencyProcess = $null
 $WranglerProcess = $null
 $TlsCertificate = $null
+$TlsTrustThumbprint = $null
+$TlsTrustAdded = $false
 $PositiveThumbprint = $null
 $PositiveDeviceId = $null
 $EvidenceWritten = $false
@@ -226,6 +229,7 @@ New-Item -ItemType Directory -Path $Scratch, $State, $MigrationDir -Force | Out-
 try {
     if (-not (Test-Path $HostBinary)) { throw 'release bridge-host-ops binary is missing' }
     if (-not (Test-Path $WorkerShim)) { throw 'control-plane Worker build output is missing' }
+    if (-not (Test-Path $CertUtil -PathType Leaf)) { throw 'Windows certutil is unavailable' }
 
     Write-Phase 'typed-d1-projection'
     $projectionText = & cargo run --locked --quiet --manifest-path (Join-Path $Root 'tools/opsctl/Cargo.toml') -- --root $Root d1 repository
@@ -308,10 +312,12 @@ try {
         NotAfter = [DateTimeOffset]::UtcNow.AddHours(2).DateTime
     }
     $TlsCertificate = New-SelfSignedCertificate @tlsArguments
-    $pemBody = [Convert]::ToBase64String($TlsCertificate.RawData, [System.Base64FormattingOptions]::InsertLineBreaks)
-    $pem = "-----BEGIN CERTIFICATE-----`r`n$pemBody`r`n-----END CERTIFICATE-----`r`n"
-    [System.IO.File]::WriteAllText($TlsCaPem, $pem, [System.Text.Encoding]::ASCII)
-    $env:CURL_CA_BUNDLE = $TlsCaPem
+    $TlsTrustThumbprint = $TlsCertificate.Thumbprint.ToUpperInvariant()
+    [System.IO.File]::WriteAllBytes($TlsCer, $TlsCertificate.RawData)
+    Write-Phase 'tls-trust-add'
+    $null = Invoke-BoundedExecutable -FilePath $CertUtil -Arguments @('-user', '-addstore', 'Root', $TlsCer) -Label 'temporary localhost trust add' -TimeoutSeconds 10
+    $TlsTrustAdded = $true
+    Write-Phase 'tls-trust-add-pass'
     $TlsPassword = Convert-BytesToLowerHex ([System.Security.Cryptography.RandomNumberGenerator]::GetBytes(18))
     $TlsSecurePassword = ConvertTo-SecureString -String $TlsPassword -AsPlainText -Force
     Export-PfxCertificate -Cert $TlsCertificate -FilePath $TlsPfx -Password $TlsSecurePassword | Out-Null
@@ -441,10 +447,19 @@ try {
     }
     Stop-ProcessTree -Process $WranglerProcess -Label 'Wrangler process tree'
     Stop-ProcessTree -Process $DependencyProcess -Label 'dependency process tree'
+    if ($TlsTrustAdded -and -not [string]::IsNullOrEmpty($TlsTrustThumbprint)) {
+        Write-Phase 'tls-trust-remove'
+        try {
+            $null = Invoke-BoundedExecutable -FilePath $CertUtil -Arguments @('-user', '-delstore', 'Root', $TlsTrustThumbprint) -Label 'temporary localhost trust remove' -TimeoutSeconds 10
+            Write-Phase 'tls-trust-remove-pass'
+        } catch {
+            Write-Warning "temporary localhost trust cleanup failed: $($_.Exception.Message)"
+        }
+    }
     if ($null -ne $TlsCertificate) {
         $TlsCertificate.Dispose()
     }
-    foreach ($name in @('E2E_CONTROL_PORT', 'E2E_DEPENDENCY_PORT', 'E2E_INGRESS_PORT', 'E2E_TLS_PFX', 'E2E_TLS_PFX_PASSWORD', 'E2E_TOKEN_FILE', 'E2E_SIGNER_SCRIPT', 'CURL_CA_BUNDLE')) {
+    foreach ($name in @('E2E_CONTROL_PORT', 'E2E_DEPENDENCY_PORT', 'E2E_INGRESS_PORT', 'E2E_TLS_PFX', 'E2E_TLS_PFX_PASSWORD', 'E2E_TOKEN_FILE', 'E2E_SIGNER_SCRIPT')) {
         [Environment]::SetEnvironmentVariable($name, $null)
     }
     if (Test-Path $Scratch) { Remove-Item -LiteralPath $Scratch -Recurse -Force -ErrorAction SilentlyContinue }
