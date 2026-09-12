@@ -11,11 +11,11 @@ use application_ports::{
 };
 use cloudflare_adapters::bridge_enrollment_signer::CloudflareBridgeEnrollmentCertificateSigner;
 use cloudflare_adapters::d1_bridge_enrollment::D1BridgeEnrollmentAuthority;
-use control_plane_contract::D1_CATALOG_BINDING;
 use control_plane_contract::bridge_enrollment_api::{
     BridgeEnrollmentIssueProjection, BridgeEnrollmentIssueRequest,
     BridgeEnrollmentRedemptionProjection, BridgeEnrollmentRedemptionRequest,
 };
+use control_plane_contract::D1_CATALOG_BINDING;
 use profile_platform_primitives::UnixMillis;
 use sha2::{Digest, Sha256};
 use worker::{Date, Env, Error, Request, Response, Result};
@@ -26,11 +26,7 @@ const REDEEM_PATH_SUFFIX: &str = "/bridge-enrollment/redemptions";
 
 pub async fn dispatch(request: &mut Request, env: &Env) -> Result<Response> {
     let path = request.path();
-    let tenant_id = path
-        .trim_matches('/')
-        .split('/')
-        .nth(3)
-        .unwrap_or_default();
+    let tenant_id = path.trim_matches('/').split('/').nth(3).unwrap_or_default();
     if path.ends_with(ISSUE_PATH_SUFFIX) {
         issue(request, env, tenant_id).await
     } else if path.ends_with(REDEEM_PATH_SUFFIX) {
@@ -94,6 +90,7 @@ async fn redeem(request: &mut Request, env: &Env, tenant_id: &str) -> Result<Res
     };
     let reservation = match authority
         .reserve_bridge_enrollment_csr(
+            actor.actor(),
             body.claim_code(),
             &csr_sha256,
             UnixMillis::new(Date::now().as_millis()),
@@ -106,7 +103,7 @@ async fn redeem(request: &mut Request, env: &Env, tenant_id: &str) -> Result<Res
     if reservation.tenant_id() != actor.actor().tenant_scope().tenant_id()
         || reservation.actor_id() != actor.actor().actor_id()
     {
-        return neutral_not_found(correlation_id);
+        return integrity_failure(correlation_id);
     }
 
     let sign_request = match BridgeEnrollmentCertificateSignRequest::new(
@@ -135,6 +132,7 @@ async fn redeem(request: &mut Request, env: &Env, tenant_id: &str) -> Result<Res
 
     let completion = match authority
         .finalize_bridge_enrollment_certificate(
+            actor.actor(),
             body.claim_code(),
             &csr_sha256,
             &exact_leaf_sha256,
@@ -263,7 +261,12 @@ fn invalid_request(correlation_id: &str) -> Result<Response> {
 }
 
 fn integrity_failure(correlation_id: &str) -> Result<Response> {
-    problem(correlation_id, 500, "integrity_failure", "Integrity Failure")
+    problem(
+        correlation_id,
+        500,
+        "integrity_failure",
+        "Integrity Failure",
+    )
 }
 
 fn dependency_unavailable(correlation_id: &str) -> Result<Response> {
@@ -284,8 +287,8 @@ mod tests {
     -> Result<(), Box<dyn std::error::Error>> {
         let der = [0x30, 0x03, 0x02, 0x01, 0x00];
         let encoded = hex_encode(&der);
-        let decoded = decode_exact_csr_der(&encoded)
-            .map_err(|()| std::io::Error::other("decode failed"))?;
+        let decoded =
+            decode_exact_csr_der(&encoded).map_err(|()| std::io::Error::other("decode failed"))?;
         assert_eq!(decoded.as_slice(), der.as_slice());
         assert!(decode_exact_csr_der("30FF").is_err());
         assert!(decode_exact_csr_der("300").is_err());
