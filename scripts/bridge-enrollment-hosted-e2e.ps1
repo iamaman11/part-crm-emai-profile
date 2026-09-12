@@ -66,7 +66,7 @@ function Stop-ProcessTree([System.Diagnostics.Process]$Process, [string]$Label) 
     if ($null -eq $Process -or $Process.HasExited) { return }
     try { $Process.Kill($true) } catch {}
     try {
-        if (-not $Process.WaitForExit(10_000)) {
+        if (-not $Process.WaitForExit(10000)) {
             Write-Warning "$Label cleanup did not exit within 10 seconds"
         }
     } catch {}
