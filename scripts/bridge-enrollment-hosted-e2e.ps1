@@ -30,6 +30,7 @@ $ControlConfig = Join-Path $Scratch 'control.wrangler.jsonc'
 $SignerConfig = Join-Path $Scratch 'signer.wrangler.jsonc'
 $TokenFile = Join-Path $Scratch 'access-token.txt'
 $TlsPfx = Join-Path $Scratch 'ingress.pfx'
+$TlsCaPem = Join-Path $Scratch 'ingress-ca.pem'
 $DependencyStdout = Join-Path $Scratch 'dependency.stdout.log'
 $DependencyStderr = Join-Path $Scratch 'dependency.stderr.log'
 $WranglerStdout = Join-Path $Scratch 'wrangler.stdout.log'
@@ -124,7 +125,16 @@ function Wait-HttpReady(
     while ($timer.Elapsed.TotalSeconds -lt $TimeoutSeconds) {
         if ($null -ne $Process -and $Process.HasExited) { throw "$Label exited before readiness" }
         try {
-            $response = Invoke-WebRequest -Uri $Uri -Method Get -TimeoutSec 2 -SkipHttpErrorCheck
+            $request = @{
+                Uri = $Uri
+                Method = 'Get'
+                TimeoutSec = 2
+                SkipHttpErrorCheck = $true
+            }
+            if ($Uri.StartsWith('https://localhost:', [System.StringComparison]::OrdinalIgnoreCase)) {
+                $request.SkipCertificateCheck = $true
+            }
+            $response = Invoke-WebRequest @request
             if ([int]$response.StatusCode -eq 200) { return }
         } catch {}
         Start-Sleep -Milliseconds 500
@@ -170,6 +180,7 @@ function Invoke-EnrollmentHttp(
         ContentType = 'application/json'
         Body = $Body
         SkipHttpErrorCheck = $true
+        SkipCertificateCheck = $true
         TimeoutSec = 15
     }
     $response = Invoke-WebRequest @request
@@ -297,10 +308,10 @@ try {
         NotAfter = [DateTimeOffset]::UtcNow.AddHours(2).DateTime
     }
     $TlsCertificate = New-SelfSignedCertificate @tlsArguments
-    $rootStore = [System.Security.Cryptography.X509Certificates.X509Store]::new('Root', [System.Security.Cryptography.X509Certificates.StoreLocation]::CurrentUser)
-    $rootStore.Open([System.Security.Cryptography.X509Certificates.OpenFlags]::ReadWrite)
-    $rootStore.Add($TlsCertificate)
-    $rootStore.Close()
+    $pemBody = [Convert]::ToBase64String($TlsCertificate.RawData, [System.Base64FormattingOptions]::InsertLineBreaks)
+    $pem = "-----BEGIN CERTIFICATE-----`r`n$pemBody`r`n-----END CERTIFICATE-----`r`n"
+    [System.IO.File]::WriteAllText($TlsCaPem, $pem, [System.Text.Encoding]::ASCII)
+    $env:CURL_CA_BUNDLE = $TlsCaPem
     $TlsPassword = Convert-BytesToLowerHex ([System.Security.Cryptography.RandomNumberGenerator]::GetBytes(18))
     $TlsSecurePassword = ConvertTo-SecureString -String $TlsPassword -AsPlainText -Force
     Export-PfxCertificate -Cert $TlsCertificate -FilePath $TlsPfx -Password $TlsSecurePassword | Out-Null
@@ -431,16 +442,9 @@ try {
     Stop-ProcessTree -Process $WranglerProcess -Label 'Wrangler process tree'
     Stop-ProcessTree -Process $DependencyProcess -Label 'dependency process tree'
     if ($null -ne $TlsCertificate) {
-        try {
-            $rootStore = [System.Security.Cryptography.X509Certificates.X509Store]::new('Root', [System.Security.Cryptography.X509Certificates.StoreLocation]::CurrentUser)
-            $rootStore.Open([System.Security.Cryptography.X509Certificates.OpenFlags]::ReadWrite)
-            foreach ($match in @($rootStore.Certificates | Where-Object { $_.Thumbprint -eq $TlsCertificate.Thumbprint })) { $rootStore.Remove($match) }
-            $rootStore.Close()
-        } catch {}
-        Remove-Item -Path "Cert:\CurrentUser\My\$($TlsCertificate.Thumbprint)" -DeleteKey -Confirm:$false -ErrorAction SilentlyContinue
         $TlsCertificate.Dispose()
     }
-    foreach ($name in @('E2E_CONTROL_PORT', 'E2E_DEPENDENCY_PORT', 'E2E_INGRESS_PORT', 'E2E_TLS_PFX', 'E2E_TLS_PFX_PASSWORD', 'E2E_TOKEN_FILE', 'E2E_SIGNER_SCRIPT')) {
+    foreach ($name in @('E2E_CONTROL_PORT', 'E2E_DEPENDENCY_PORT', 'E2E_INGRESS_PORT', 'E2E_TLS_PFX', 'E2E_TLS_PFX_PASSWORD', 'E2E_TOKEN_FILE', 'E2E_SIGNER_SCRIPT', 'CURL_CA_BUNDLE')) {
         [Environment]::SetEnvironmentVariable($name, $null)
     }
     if (Test-Path $Scratch) { Remove-Item -LiteralPath $Scratch -Recurse -Force -ErrorAction SilentlyContinue }
