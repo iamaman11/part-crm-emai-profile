@@ -74,7 +74,7 @@ jobs:
     name: Bridge Enrollment Hosted E2E (Windows)
     needs: windows-compile
     runs-on: windows-latest
-    timeout-minutes: 30
+    timeout-minutes: 25
     env:
       WRANGLER_SEND_METRICS: 'false'
     steps:
@@ -121,7 +121,7 @@ jobs:
           if (-not (Test-Path apps/control-plane-worker/build/worker/shim.mjs)) { throw 'Worker build output missing' }
 
       - name: Prove hosted Windows positive and negative enrollment E2E
-        timeout-minutes: 15
+        timeout-minutes: 12
         shell: pwsh
         run: |
           ./scripts/bridge-enrollment-hosted-e2e.ps1 -ReportPath artifacts/bridge-enrollment-e2e/evidence.json | ConvertFrom-Json | Out-Null
