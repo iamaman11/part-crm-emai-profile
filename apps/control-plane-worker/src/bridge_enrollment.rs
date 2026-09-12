@@ -11,11 +11,11 @@ use application_ports::{
 };
 use cloudflare_adapters::bridge_enrollment_signer::CloudflareBridgeEnrollmentCertificateSigner;
 use cloudflare_adapters::d1_bridge_enrollment::D1BridgeEnrollmentAuthority;
+use control_plane_contract::D1_CATALOG_BINDING;
 use control_plane_contract::bridge_enrollment_api::{
     BridgeEnrollmentIssueProjection, BridgeEnrollmentIssueRequest,
     BridgeEnrollmentRedemptionProjection, BridgeEnrollmentRedemptionRequest,
 };
-use control_plane_contract::D1_CATALOG_BINDING;
 use profile_platform_primitives::UnixMillis;
 use sha2::{Digest, Sha256};
 use worker::{Date, Env, Error, Request, Response, Result};
