@@ -6,6 +6,10 @@ export default {
     if (request.method !== "POST" || url.pathname !== "/v1/bridge-enrollment/sign") {
       return new Response("Not Found", { status: 404 });
     }
+    const contentType = request.headers.get("content-type");
+    if (contentType?.split(";", 1)[0].trim().toLowerCase() !== "application/json") {
+      return new Response("Invalid Request", { status: 422 });
+    }
 
     const body = await request.arrayBuffer();
     if (body.byteLength === 0 || body.byteLength > MAX_BODY_BYTES) {
