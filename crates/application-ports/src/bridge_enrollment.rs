@@ -464,21 +464,25 @@ pub trait BridgeEnrollmentAuthorityPort {
         evidence: &CommandExecutionEvidence,
     ) -> Result<IssuedBridgeEnrollmentAuthority, BridgeEnrollmentAuthorityError>;
 
-    /// Atomically reserves this one-shot authority for one exact local-key CSR. The device identity
-    /// is recovered from the claim-owned record; exact replay with the same CSR is idempotent and a
-    /// different CSR, expired or consumed claim fails closed.
+    /// Atomically reserves this one-shot authority for one exact local-key CSR and the current
+    /// authenticated actor. The device identity is recovered from claim-owned state; a foreign
+    /// tenant/actor must fail before mutation. Exact replay with the same actor/CSR is idempotent;
+    /// a different actor, CSR, expired or consumed claim fails closed.
     async fn reserve_bridge_enrollment_csr(
         &self,
+        actor: &ActorContext,
         claim_code: &str,
         csr_sha256: &Sha256Hex,
         now: UnixMillis,
     ) -> Result<BridgeEnrollmentReservation, BridgeEnrollmentAuthorityError>;
 
-    /// Finalizes only the exact previously reserved CSR with its public certificate fingerprint.
-    /// Device identity is recovered from the reservation owner. Finalization is replay-safe for the
-    /// same certificate identity and never stores private key or certificate bytes.
+    /// Finalizes only the exact previously reserved CSR for the current authenticated actor with its
+    /// public certificate fingerprint. Device identity is recovered from the reservation owner.
+    /// Finalization is replay-safe for the same actor/certificate identity and never stores private
+    /// key or certificate bytes.
     async fn finalize_bridge_enrollment_certificate(
         &self,
+        actor: &ActorContext,
         claim_code: &str,
         csr_sha256: &Sha256Hex,
         certificate_sha256: &Sha256Hex,
