@@ -121,10 +121,55 @@ jobs:
           if (-not (Test-Path apps/control-plane-worker/build/worker/shim.mjs)) { throw 'Worker build output missing' }
 
       - name: Prove hosted Windows positive and negative enrollment E2E
-        timeout-minutes: 12
+        timeout-minutes: 10
         shell: pwsh
         run: |
-          ./scripts/bridge-enrollment-hosted-e2e.ps1 -ReportPath artifacts/bridge-enrollment-e2e/evidence.json | ConvertFrom-Json | Out-Null
+          # GitHub-hosted Windows can stall inside the PKI cmdlet while creating a
+          # local-only TLS fixture. Keep this test fixture provider-independent:
+          # generate the self-signed localhost certificate in-process with .NET.
+          function global:New-SelfSignedCertificate {
+            param(
+              [string]$Subject,
+              [string]$DnsName,
+              [string]$CertStoreLocation,
+              [string]$KeyAlgorithm,
+              [int]$KeyLength,
+              [string]$HashAlgorithm,
+              [string]$KeyExportPolicy,
+              [datetime]$NotAfter
+            )
+            if ($Subject -ne 'CN=localhost' -or $DnsName -ne 'localhost' -or $KeyAlgorithm -ne 'RSA' -or $KeyLength -ne 2048 -or $HashAlgorithm -ne 'SHA256') {
+              throw 'unexpected local TLS fixture contract'
+            }
+            $rsa = [System.Security.Cryptography.RSA]::Create($KeyLength)
+            $request = [System.Security.Cryptography.X509Certificates.CertificateRequest]::new(
+              $Subject,
+              $rsa,
+              [System.Security.Cryptography.HashAlgorithmName]::SHA256,
+              [System.Security.Cryptography.RSASignaturePadding]::Pkcs1
+            )
+            $san = [System.Security.Cryptography.X509Certificates.SubjectAlternativeNameBuilder]::new()
+            $san.AddDnsName($DnsName)
+            $request.CertificateExtensions.Add($san.Build())
+            $request.CertificateExtensions.Add([System.Security.Cryptography.X509Certificates.X509BasicConstraintsExtension]::new($false, $false, 0, $true))
+            $request.CertificateExtensions.Add([System.Security.Cryptography.X509Certificates.X509KeyUsageExtension]::new(
+              [System.Security.Cryptography.X509Certificates.X509KeyUsageFlags]::DigitalSignature -bor [System.Security.Cryptography.X509Certificates.X509KeyUsageFlags]::KeyEncipherment,
+              $true
+            ))
+            $oids = [System.Security.Cryptography.OidCollection]::new()
+            $null = $oids.Add([System.Security.Cryptography.Oid]::new('1.3.6.1.5.5.7.3.1'))
+            $request.CertificateExtensions.Add([System.Security.Cryptography.X509Certificates.X509EnhancedKeyUsageExtension]::new($oids, $false))
+            $global:E2E_LOCAL_TLS_RSA = $rsa
+            $request.CreateSelfSigned([DateTimeOffset]::UtcNow.AddMinutes(-5), [DateTimeOffset]$NotAfter)
+          }
+          try {
+            ./scripts/bridge-enrollment-hosted-e2e.ps1 -ReportPath artifacts/bridge-enrollment-e2e/evidence.json | ConvertFrom-Json | Out-Null
+          } finally {
+            if ($null -ne $global:E2E_LOCAL_TLS_RSA) {
+              $global:E2E_LOCAL_TLS_RSA.Dispose()
+              $global:E2E_LOCAL_TLS_RSA = $null
+            }
+          }
           $evidence = Get-Content -Raw artifacts/bridge-enrollment-e2e/evidence.json | ConvertFrom-Json
           if ($evidence.status -ne 'PASS' -or $evidence.kind -ne 'BRIDGE_ENROLLMENT_HOSTED_E2E') { throw 'Bridge enrollment E2E evidence failed' }
           if ($evidence.providerMutation -or $evidence.productionMutation -or $evidence.remoteProviderCredentialsPresent) { throw 'Bridge enrollment E2E escaped local-only boundary' }
