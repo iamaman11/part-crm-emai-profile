@@ -159,7 +159,7 @@ pub fn problem_type_for_code(code: &str) -> &'static str {
 
 #[must_use]
 pub fn openapi_document() -> Value {
-    json!({
+    let mut document = json!({
         "openapi": "3.0.3",
         "info": {"title": "Part CRM Control Plane Public API", "version": "1.0.0"},
         "paths": {
@@ -365,13 +365,55 @@ pub fn openapi_document() -> Value {
                 }
             }
         }
-    })
+    });
+    merge_bridge_enrollment_fragment(&mut document);
+    document
 }
 
 pub fn openapi_json_pretty() -> Result<String, serde_json::Error> {
     let mut rendered = serde_json::to_string_pretty(&openapi_document())?;
     rendered.push('\n');
     Ok(rendered)
+}
+
+fn merge_bridge_enrollment_fragment(document: &mut Value) {
+    let fragment = crate::bridge_enrollment_api::openapi_fragment();
+    let Some(fragment_paths) = fragment.get("paths").and_then(Value::as_object) else {
+        return;
+    };
+    let Some(document_paths) = document.get_mut("paths").and_then(Value::as_object_mut) else {
+        return;
+    };
+    for path in [
+        crate::bridge_enrollment_api::BRIDGE_ENROLLMENT_ISSUE_PATH_TEMPLATE,
+        crate::bridge_enrollment_api::BRIDGE_ENROLLMENT_REDEEM_PATH_TEMPLATE,
+    ] {
+        if let Some(value) = fragment_paths.get(path) {
+            document_paths.insert(path.to_owned(), value.clone());
+        }
+    }
+
+    let Some(fragment_components) = fragment.get("components").and_then(Value::as_object) else {
+        return;
+    };
+    let Some(document_components) = document
+        .get_mut("components")
+        .and_then(Value::as_object_mut)
+    else {
+        return;
+    };
+    for group in ["schemas", "securitySchemes"] {
+        let Some(source) = fragment_components.get(group).and_then(Value::as_object) else {
+            continue;
+        };
+        let target = document_components.entry(group).or_insert_with(|| json!({}));
+        let Some(target) = target.as_object_mut() else {
+            continue;
+        };
+        for (name, value) in source {
+            target.insert(name.clone(), value.clone());
+        }
+    }
 }
 
 fn schema_ref(name: &str) -> Value {
@@ -531,6 +573,10 @@ mod tests {
             "NotificationReplayReceipt",
             "NotificationOperationsProjection",
             "ProblemPayload",
+            "BridgeEnrollmentIssueRequest",
+            "BridgeEnrollmentIssueProjection",
+            "BridgeEnrollmentRedemptionRequest",
+            "BridgeEnrollmentRedemptionProjection",
         ] {
             assert!(schemas.get(name).is_some(), "missing schema {name}");
         }
@@ -544,6 +590,10 @@ mod tests {
                 .get("requestDigest")
                 .is_none()
         );
+        let redemption_properties = &schemas["BridgeEnrollmentRedemptionRequest"]["properties"];
+        for forbidden in ["tenantId", "actorId", "deviceId", "csrSha256"] {
+            assert!(redemption_properties.get(forbidden).is_none());
+        }
         assert!(document["paths"]["/api/v1/session"]["get"].is_object());
         assert!(document["paths"]["/api/v1/tenants/{tenantId}/clients"]["post"].is_object());
         assert!(
@@ -556,6 +606,20 @@ mod tests {
         assert!(
             document["paths"]["/api/v1/tenants/{tenantId}/notifications/operations"]["get"]
                 .is_object()
+        );
+        assert!(
+            document["paths"]
+                ["/api/v1/tenants/{tenantId}/bridge-enrollment/authorities"]["post"]
+                .is_object()
+        );
+        assert!(
+            document["paths"]
+                ["/api/v1/tenants/{tenantId}/bridge-enrollment/redemptions"]["post"]
+                .is_object()
+        );
+        assert_eq!(
+            document["components"]["securitySchemes"]["cloudflareAccessJwt"]["name"],
+            "Cf-Access-Jwt-Assertion"
         );
     }
 
