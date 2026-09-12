@@ -186,6 +186,7 @@ const proxyToControlPlane = async (request, response) => {
   delete headers.host;
   delete headers.connection;
   delete headers["content-length"];
+  delete headers["accept-encoding"];
   delete headers["cf-access-token"];
   if (typeof accessToken === "string" && accessToken.length > 0) {
     headers["cf-access-jwt-assertion"] = accessToken;
