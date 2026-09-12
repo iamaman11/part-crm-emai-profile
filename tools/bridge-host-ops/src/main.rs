@@ -10,6 +10,7 @@ use std::collections::BTreeMap;
 use std::env;
 use std::path::Path;
 
+mod enrollment;
 #[cfg(windows)]
 mod windows;
 
@@ -37,6 +38,7 @@ fn run() -> HostOpsResult<String> {
     let flags = parse_flags(arguments)?;
     match command.as_str() {
         "self-test" => self_test(&flags),
+        "enroll" => enrollment::run(&flags),
         "inspect" => inspect(&flags),
         "import" => import(&flags),
         "bind" => bind(&flags, false),
@@ -95,6 +97,7 @@ fn self_test(flags: &BTreeMap<String, String>) -> HostOpsResult<String> {
         return Err(HostOpsError::new("self_test_failed"));
     }
     config.fill(0);
+    enrollment::self_test()?;
     Ok("{\"schemaVersion\":\"bridge-host-ops/v1\",\"status\":\"ok\"}".to_owned())
 }
 

@@ -19,7 +19,7 @@ The user does not handle a CA, PFX, certificate thumbprint or provider payload o
 
 The target Windows host owns the device private key. The key is created locally as non-exportable, is referenced through its platform handle, and is never transported to the control plane, GitHub, an Issue, an artifact or a provider payload.
 
-The intended shipping enrollment operation composes these already accepted responsibilities:
+The shipping enrollment operation composes these already accepted responsibilities:
 
 1. create one local non-exportable per-device Windows key;
 2. create a CSR for that exact local key;
@@ -33,7 +33,20 @@ The intended shipping enrollment operation composes these already accepted respo
 
 There is no second device registry. The existing D1 device-binding owner remains authoritative for active device authorization; mTLS is machine transport authentication only.
 
-The final shipping `enroll` command is **not yet exposed** by this source snapshot because the authenticated one-shot server enrollment/issuer path is still being implemented. The repository must not fake that missing server owner by silently using the recovery PFX path as product enrollment.
+The first-party `enroll` command is the shipping host enrollment composition:
+
+```powershell
+bridge-host-ops enroll `
+  --origin https://control.example.test `
+  --tenant-id tenant_... `
+  --access-token-file C:\secure\bridge-host-access.token `
+  --correlation-id corr_... `
+  --idempotency-key idem_...
+```
+
+Those are the only accepted enrollment inputs. The caller cannot supply authoritative `actorId`, `deviceId` or `csrSha256`; actor/device authority remains server-derived and the CSR fingerprint is derived from the exact locally generated CSR. The command performs authenticated issue -> local non-exportable CNG key/CSR -> authenticated redeem -> returned public leaf verification -> bind/install -> exact-key inspection. The Access token, one-shot claim and CSR request body are transported through stdin-only `curl.exe` configuration and are never placed in process arguments or ordinary output.
+
+The enrollment command does not perform the governed device-binding mutation itself and does not imply successful Bridge admission. The existing bind/rebind/revoke owner remains unchanged. Hosted real Windows enrollment E2E is a separate acceptance prerequisite and source acceptance of this command is not B7 acceptance.
 
 ## Security boundary
 
@@ -128,7 +141,7 @@ The tool never writes D1 directly.
 
 Do not supply `Cf-Access-Jwt-Assertion` directly. That is the origin-facing assertion verified by the Worker. External user authentication goes through the normal Cloudflare Access login flow.
 
-The currently retained admin/recovery commands accept a user-scoped Access token only through `--access-token-file`; the value is not accepted as a command-line value, printed in JSON output or forwarded in process arguments. It is written only to `curl.exe` configuration through stdin, and owned in-memory buffers are overwritten after handoff.
+Commands that require user-scoped Access authentication accept the token only through `--access-token-file`; the value is not accepted as a command-line value, printed in JSON output or forwarded in process arguments. It is written only to `curl.exe` configuration through stdin, and owned in-memory buffers are overwritten after handoff.
 
 This user credential is not the Bridge machine credential and is not a Cloudflare API/provider mutation token.
 
@@ -136,9 +149,11 @@ This user credential is not the Bridge machine credential and is not a Cloudflar
 
 Every operation fails closed and does not internally retry network or mutation operations.
 
+For `enroll`, failed or uncertain redeem cleans the still-unbound local machine key. Because certificate bytes are deliberately not persisted server-side for replay, the next enrollment attempt must obtain a fresh issue authorization using a fresh issue idempotency key. Failed certificate installation cleans incomplete local enrollment state. A deterministic enrollment key that is already bound to an installed certificate is treated as in-use: repeated enrollment fails closed and cleanup refuses to delete that key.
+
 For `rebind` and `revoke`, the authoritative server mutation happens before old local certificate/private-key deletion. If the server mutation succeeds but local cleanup fails, the process exits nonzero with `local_cleanup_required_after_server_commit` and writes one secret-free recovery receipt.
 
-Recovery is an **exact replay**, not a new mutation: rerun the same command with the same route/payload, `--correlation-id` and `--idempotency-key`. Do not invent a new idempotency key after a server-commit/local-cleanup split.
+Recovery for `rebind`/`revoke` is an **exact replay**, not a new mutation: rerun the same command with the same route/payload, `--correlation-id` and `--idempotency-key`. Do not invent a new idempotency key after a server-commit/local-cleanup split.
 
 Provider reconciliation remains outside this tool. Cloudflare Access/mTLS state may be observed by existing external-evidence owners, but this tool does not mutate provider state.
 
@@ -153,7 +168,7 @@ Successful host operations emit only non-secret evidence/shipping metadata, incl
 - authoritative binding result/version;
 - shipping values such as `PROFILE_BRIDGE_DEVICE_ID`, `PROFILE_BRIDGE_MACHINE_CERT_SHA1` and `PROFILE_BRIDGE_CONTROL_PLANE_ORIGIN`.
 
-Certificate bytes may be transported only where a certificate-enrollment/install operation explicitly requires the public certificate; private key material, PFX bytes/passwords, Access tokens, provider credentials, cookies and direct D1 material are never emitted as ordinary evidence.
+Certificate bytes may be transported only where a certificate-enrollment/install operation explicitly requires the public certificate; private key material, PFX bytes/passwords, Access tokens, enrollment claims, CSR request bodies, provider credentials, cookies and direct D1 material are never emitted as ordinary evidence.
 
 ## Development verification
 
@@ -174,6 +189,7 @@ create machine key with export policy NONE
 -> create CSR from that key
 -> attach a CI-only public ClientAuth certificate to the same key
 -> install/inspect it through LocalMachine/My
+-> prove an installed key is detected as in-use and cannot be removed by enrollment cleanup
 -> clean up certificate + key
 ```
 
