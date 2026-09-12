@@ -75,7 +75,6 @@ jobs:
     needs: windows-compile
     runs-on: windows-latest
     timeout-minutes: 25
-    environment: staging
     concurrency:
       group: bridge-enrollment-hosted-e2e
       cancel-in-progress: false
@@ -152,7 +151,7 @@ jobs:
         run: |
           $cloudflared = Join-Path $env:RUNNER_TEMP 'cloudflared-2026.9.0-windows-amd64.exe'
           if (-not (Test-Path -LiteralPath $cloudflared -PathType Leaf)) { throw 'pinned cloudflared binary missing' }
-          if ([string]::IsNullOrWhiteSpace($env:CLOUDFLARE_E2E_TUNNEL_TOKEN)) { throw 'CLOUDFLARE_E2E_TUNNEL_TOKEN is missing from staging environment' }
+          if ([string]::IsNullOrWhiteSpace($env:CLOUDFLARE_E2E_TUNNEL_TOKEN)) { throw 'CLOUDFLARE_E2E_TUNNEL_TOKEN repository Actions secret is missing' }
 
           $tunnelToken = $env:CLOUDFLARE_E2E_TUNNEL_TOKEN
           $startInfo = [System.Diagnostics.ProcessStartInfo]::new()
