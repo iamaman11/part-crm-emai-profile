@@ -48,6 +48,10 @@ $PositiveThumbprint = $null
 $PositiveDeviceId = $null
 $EvidenceWritten = $false
 
+function Write-Phase([string]$Name) {
+    Write-Host "bridge-enrollment-e2e phase=$Name"
+}
+
 function Convert-BytesToLowerHex([byte[]]$Bytes) {
     ([Convert]::ToHexString($Bytes)).ToLowerInvariant()
 }
@@ -66,6 +70,39 @@ function Invoke-Wrangler([string[]]$Arguments) {
 function Stop-ProcessTree([System.Diagnostics.Process]$Process) {
     if ($null -eq $Process -or $Process.HasExited) { return }
     & taskkill.exe /PID $Process.Id /T /F 2>$null | Out-Null
+}
+
+function Invoke-BoundedExecutable(
+    [string]$FilePath,
+    [string[]]$Arguments,
+    [string]$Label,
+    [int]$TimeoutSeconds = 60
+) {
+    $startInfo = [System.Diagnostics.ProcessStartInfo]::new()
+    $startInfo.FileName = $FilePath
+    $startInfo.UseShellExecute = $false
+    $startInfo.RedirectStandardOutput = $true
+    $startInfo.RedirectStandardError = $true
+    $startInfo.CreateNoWindow = $true
+    foreach ($argument in $Arguments) { $startInfo.ArgumentList.Add($argument) }
+    $process = [System.Diagnostics.Process]::new()
+    $process.StartInfo = $startInfo
+    try {
+        if (-not $process.Start()) { throw "$Label failed to start" }
+        $stdoutTask = $process.StandardOutput.ReadToEndAsync()
+        $stderrTask = $process.StandardError.ReadToEndAsync()
+        if (-not $process.WaitForExit($TimeoutSeconds * 1000)) {
+            try { $process.Kill($true) } catch {}
+            throw "$Label timed out after $TimeoutSeconds seconds"
+        }
+        $process.WaitForExit()
+        $stdout = $stdoutTask.GetAwaiter().GetResult()
+        $null = $stderrTask.GetAwaiter().GetResult()
+        if ($process.ExitCode -ne 0) { throw "$Label failed with exit $($process.ExitCode)" }
+        @($stdout -split "`r?`n" | Where-Object { -not [string]::IsNullOrEmpty($_) })
+    } finally {
+        $process.Dispose()
+    }
 }
 
 function Wait-HttpReady([string]$Uri, [System.Diagnostics.Process]$Process, [string]$Label, [int]$Attempts = 90) {
@@ -118,6 +155,7 @@ function Invoke-EnrollmentHttp(
         ContentType = 'application/json'
         Body = $Body
         SkipHttpErrorCheck = $true
+        TimeoutSec = 30
     }
     $response = Invoke-WebRequest @request
     $status = [int]$response.StatusCode
@@ -163,6 +201,7 @@ try {
     if (-not (Test-Path $HostBinary)) { throw 'release bridge-host-ops binary is missing' }
     if (-not (Test-Path $WorkerShim)) { throw 'control-plane Worker build output is missing' }
 
+    Write-Phase 'typed-d1-projection'
     $projectionText = & cargo run --locked --quiet --manifest-path (Join-Path $Root 'tools/opsctl/Cargo.toml') -- --root $Root d1 repository
     if ($LASTEXITCODE -ne 0) { throw 'typed D1 repository projection failed' }
     $projection = ($projectionText -join "`n") | ConvertFrom-Json
@@ -222,6 +261,7 @@ try {
         vars = [ordered]@{ TEST_SIGNER_ORIGIN = "http://127.0.0.1:$DependencyPort" }
     })
 
+    Write-Phase 'local-d1-setup'
     Invoke-Wrangler @('d1', 'migrations', 'apply', 'CATALOG_DB', '--local', '--config', $ControlConfig, '--persist-to', $State, '--experimental-provision=false', '--experimental-auto-create=false')
     $nowMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
     $seedSql = "INSERT INTO tenants (tenant_id, display_name, status, version, created_at_ms, updated_at_ms) VALUES ('$TenantId', 'Bridge Enrollment E2E', 'ACTIVE', 1, $nowMs, $nowMs); INSERT INTO identities (identity_id, access_subject, verified_contact_hint, created_at_ms) VALUES ('$IdentityId', '$AccessSubject', 'bridge-e2e@example.test', $nowMs); INSERT INTO memberships (tenant_id, actor_id, identity_id, role, status, version, created_at_ms, updated_at_ms) VALUES ('$TenantId', '$ActorId', '$IdentityId', 'TENANT_OWNER', 'ACTIVE', 1, $nowMs, $nowMs);"
@@ -276,25 +316,27 @@ try {
     $WranglerProcess = Start-Process @wranglerStart
     Wait-HttpReady -Uri "http://127.0.0.1:$ControlPort/api/v1/health" -Process $WranglerProcess -Label 'local shipping control-plane Worker' -Attempts 120
     Wait-HttpReady -Uri "$Origin/__e2e/ready" -Process $DependencyProcess -Label 'local HTTPS Access edge'
+    Write-Phase 'local-services-ready'
 
+    Write-Phase 'positive-host-enroll'
     $hostArgs = @('enroll', '--origin', $Origin, '--tenant-id', $TenantId, '--access-token-file', $TokenFile, '--correlation-id', 'corr_e2e_host_01', '--idempotency-key', 'idem_e2e_host_01')
-    $hostOutput = & $HostBinary @hostArgs
-    if ($LASTEXITCODE -ne 0) { throw 'shipping bridge-host-ops enroll failed' }
+    $hostOutput = Invoke-BoundedExecutable -FilePath $HostBinary -Arguments $hostArgs -Label 'shipping bridge-host-ops enroll' -TimeoutSeconds 60
     $hostReceipt = ($hostOutput -join "`n") | ConvertFrom-Json
     if ([string]$hostReceipt.schemaVersion -ne 'bridge-host-ops/v1' -or [string]$hostReceipt.operation -ne 'enroll' -or [string]$hostReceipt.controlPlaneOrigin -ne $Origin -or [string]$hostReceipt.certificateStore -ne 'LocalMachine/My' -or [string]$hostReceipt.deviceId -notmatch '^[A-Za-z0-9_-]{8,96}$' -or [string]$hostReceipt.certificateSha1 -notmatch '^[0-9A-F]{40}$' -or [string]$hostReceipt.certificateSha256 -notmatch '^[0-9a-f]{64}$') {
         throw 'shipping enroll receipt is malformed'
     }
     $PositiveThumbprint = [string]$hostReceipt.certificateSha1
     $PositiveDeviceId = [string]$hostReceipt.deviceId
-    $inspectOutput = & $HostBinary inspect --thumbprint $PositiveThumbprint
-    if ($LASTEXITCODE -ne 0) { throw 'shipping certificate inspect failed after enroll' }
+    $inspectOutput = Invoke-BoundedExecutable -FilePath $HostBinary -Arguments @('inspect', '--thumbprint', $PositiveThumbprint) -Label 'shipping certificate inspect' -TimeoutSeconds 30
     $inspectReceipt = ($inspectOutput -join "`n") | ConvertFrom-Json
     if ([string]$inspectReceipt.certificateSha256 -ne [string]$hostReceipt.certificateSha256) { throw 'post-enroll local certificate identity drifted' }
+    Write-Phase 'positive-host-enroll-pass'
 
+    Write-Phase 'negative-reservation-replay'
     $issue = Issue-Claim -CorrelationId 'corr_e2e_negative_01' -IdempotencyKey 'idem_e2e_negative_01'
     $csrA = New-TestCsrHex
     $csrB = New-TestCsrHex
-    $null = Invoke-WebRequest -Uri "http://127.0.0.1:$DependencyPort/__e2e/fail-next-signer" -Method Post -SkipHttpErrorCheck
+    $null = Invoke-WebRequest -Uri "http://127.0.0.1:$DependencyPort/__e2e/fail-next-signer" -Method Post -TimeoutSec 10 -SkipHttpErrorCheck
     $dependencyFailure = Redeem-Claim -Issue $issue -CsrHex $csrA -CorrelationId 'corr_e2e_negative_02' -ExpectedStatus @(503)
     Require-ProblemCode -Response $dependencyFailure -Code 'dependency_unavailable'
     $wrongCsr = Redeem-Claim -Issue $issue -CsrHex $csrB -CorrelationId 'corr_e2e_negative_03' -ExpectedStatus @(409)
@@ -303,13 +345,16 @@ try {
     if ([string]$recovery.Document.deviceId -ne [string]$issue.deviceId -or [string]$recovery.Document.certificateSha256 -notmatch '^[0-9a-f]{64}$') { throw 'exact-CSR recovery response is malformed' }
     $replay = Redeem-Claim -Issue $issue -CsrHex $csrA -CorrelationId 'corr_e2e_negative_05' -ExpectedStatus @(409)
     Require-ProblemCode -Response $replay -Code 'replay_rejected'
+    Write-Phase 'negative-reservation-replay-pass'
 
     $expiryIssue = Issue-Claim -CorrelationId 'corr_e2e_expiry_01' -IdempotencyKey 'idem_e2e_expiry_01'
     $expiryCsr = New-TestCsrHex
     $waitMs = ([int64]$expiryIssue.expiresAtMs + 1500) - [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+    Write-Phase "real-expiry-wait-ms-$([Math]::Max(0, $waitMs))"
     if ($waitMs -gt 0) { Start-Sleep -Milliseconds ([int][Math]::Min($waitMs, [int]::MaxValue)) }
     $expired = Redeem-Claim -Issue $expiryIssue -CsrHex $expiryCsr -CorrelationId 'corr_e2e_expiry_02' -ExpectedStatus @(409)
     Require-ProblemCode -Response $expired -Code 'replay_rejected'
+    Write-Phase 'real-expiry-pass'
 
     $report = [ordered]@{
         schemaVersion = 1
@@ -344,6 +389,7 @@ try {
     $absoluteReport = if ([System.IO.Path]::IsPathRooted($ReportPath)) { $ReportPath } else { Join-Path $Root $ReportPath }
     Write-JsonFile $absoluteReport $report
     $EvidenceWritten = $true
+    Write-Phase 'evidence-pass'
     Write-Output ($report | ConvertTo-Json -Compress -Depth 20)
 } finally {
     if ($null -ne $PositiveThumbprint -and (Test-Path "Cert:\LocalMachine\My\$PositiveThumbprint")) {
