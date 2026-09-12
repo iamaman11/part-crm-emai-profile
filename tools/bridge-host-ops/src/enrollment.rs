@@ -2,11 +2,12 @@ use super::{ensure_only, idempotency_header, required, validate_api_opaque_id};
 use bridge_host_ops::{
     CERTIFICATE_STORE, CertificateObservation, HostOpsError, HostOpsResult, SCHEMA_VERSION,
     SHIPPING_CERT_SHA1_ENV, SHIPPING_DEVICE_ID_ENV, SHIPPING_ORIGIN_ENV, build_access_config,
-    json_string, normalize_https_origin, parse_certificate_observation, validate_access_token,
-    validate_identifier, validate_sha256_fingerprint,
+    json_string, normalize_https_origin, validate_identifier, validate_sha256_fingerprint,
 };
 use std::collections::BTreeMap;
 
+#[cfg(windows)]
+use bridge_host_ops::{parse_certificate_observation, validate_access_token};
 #[cfg(windows)]
 use std::env;
 #[cfg(windows)]
@@ -26,22 +27,21 @@ const MAX_CSR_DER_HEX_LENGTH: usize = 32 * 1024;
 const MAX_CERTIFICATE_DER_HEX_LENGTH: usize = 64 * 1024;
 const MAX_CERTIFICATE_CHAIN_COUNT: usize = 8;
 const MAX_HTTP_OUTPUT_SIZE: usize = 640 * 1024;
-const KEY_NAME_PREFIX: &str = "part-crm-bridge-";
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Eq, PartialEq)]
 struct EnrollmentIssueProjection {
     claim_code: String,
     device_id: String,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Eq, PartialEq)]
 struct EnrollmentRedemptionProjection {
     device_id: String,
     certificate_sha256: String,
     leaf_certificate_der_hex: String,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Eq, PartialEq)]
 struct EnrollmentHttpPlan {
     url: String,
     body: String,
@@ -105,8 +105,14 @@ pub(crate) fn self_test() -> HostOpsResult<()> {
         "corr_enroll_self_test",
         "idem_enroll_self_test",
     )?;
-    if issue.curl_arguments().iter().any(|value| value.contains(token)) {
-        return Err(HostOpsError::new("enrollment_self_test_secret_argv_failure"));
+    if issue
+        .curl_arguments()
+        .iter()
+        .any(|value| value.contains(token))
+    {
+        return Err(HostOpsError::new(
+            "enrollment_self_test_secret_argv_failure",
+        ));
     }
     let claim = "ab".repeat(32);
     let csr = "3000";
@@ -122,7 +128,9 @@ pub(crate) fn self_test() -> HostOpsResult<()> {
         .iter()
         .any(|value| value.contains(token) || value.contains(&claim) || value.contains(csr))
     {
-        return Err(HostOpsError::new("enrollment_self_test_secret_argv_failure"));
+        return Err(HostOpsError::new(
+            "enrollment_self_test_secret_argv_failure",
+        ));
     }
     let mut config = redeem.stdin_config(token)?;
     let config_text = std::str::from_utf8(&config)
@@ -160,7 +168,13 @@ pub(crate) fn run(flags: &BTreeMap<String, String>) -> HostOpsResult<String> {
 
     #[cfg(not(windows))]
     {
-        let _ = (origin, tenant_id, correlation_id, idempotency_key, access_token_file);
+        let _ = (
+            origin,
+            tenant_id,
+            correlation_id,
+            idempotency_key,
+            access_token_file,
+        );
         Err(HostOpsError::new("windows_required"))
     }
 
@@ -188,13 +202,7 @@ fn run_windows(
         &issue_plan(origin, tenant_id, correlation_id, idempotency_key)?,
         access_token_file,
     )?;
-    let csr_der_hex = match create_or_reuse_machine_csr(&issue.device_id) {
-        Ok(value) => value,
-        Err(error) => {
-            let _ = cleanup_machine_key(&issue.device_id);
-            return Err(error);
-        }
-    };
+    let csr_der_hex = create_or_reuse_machine_csr(&issue.device_id)?;
     let redeem = match execute_redeem(
         &redeem_plan(
             origin,
@@ -207,15 +215,15 @@ fn run_windows(
     ) {
         Ok(value) => value,
         Err(error) => {
-            if cleanup_machine_key(&issue.device_id).is_err() {
-                return Err(HostOpsError::new("enrollment_key_cleanup_failed"));
+            if let Err(cleanup_error) = cleanup_machine_key(&issue.device_id) {
+                return Err(cleanup_error);
             }
             return Err(error);
         }
     };
     if redeem.device_id != issue.device_id {
-        if cleanup_machine_key(&issue.device_id).is_err() {
-            return Err(HostOpsError::new("enrollment_key_cleanup_failed"));
+        if let Err(cleanup_error) = cleanup_machine_key(&issue.device_id) {
+            return Err(cleanup_error);
         }
         return Err(HostOpsError::new("enrollment_device_identity_mismatch"));
     }
@@ -226,8 +234,8 @@ fn run_windows(
     ) {
         Ok(value) => value,
         Err(error) => {
-            if cleanup_machine_key(&issue.device_id).is_err() {
-                return Err(HostOpsError::new("enrollment_key_cleanup_failed"));
+            if let Err(cleanup_error) = cleanup_machine_key(&issue.device_id) {
+                return Err(cleanup_error);
             }
             return Err(error);
         }
@@ -236,9 +244,15 @@ fn run_windows(
         if super::windows::remove_certificate(certificate.sha1_thumbprint()).is_err() {
             return Err(HostOpsError::new("enrollment_certificate_cleanup_failed"));
         }
-        return Err(HostOpsError::new("enrollment_certificate_identity_mismatch"));
+        return Err(HostOpsError::new(
+            "enrollment_certificate_identity_mismatch",
+        ));
     }
-    Ok(render_enrollment_receipt(origin, &issue.device_id, &certificate))
+    Ok(render_enrollment_receipt(
+        origin,
+        &issue.device_id,
+        &certificate,
+    ))
 }
 
 fn issue_plan(
@@ -270,7 +284,11 @@ fn redeem_plan(
     validate_api_opaque_id(tenant_id)?;
     validate_api_opaque_id(correlation_id)?;
     validate_lower_hex_exact(claim_code, 64, "invalid_enrollment_claim")?;
-    validate_der_hex(csr_der_hex, MAX_CSR_DER_HEX_LENGTH, "invalid_enrollment_csr")?;
+    validate_der_hex(
+        csr_der_hex,
+        MAX_CSR_DER_HEX_LENGTH,
+        "invalid_enrollment_csr",
+    )?;
     Ok(EnrollmentHttpPlan {
         url: format!("{origin}/api/v1/tenants/{tenant_id}{REDEEM_PATH_SUFFIX}"),
         body: format!(
@@ -284,11 +302,7 @@ fn redeem_plan(
     })
 }
 
-fn append_curl_config_value(
-    config: &mut Vec<u8>,
-    name: &str,
-    value: &str,
-) -> HostOpsResult<()> {
+fn append_curl_config_value(config: &mut Vec<u8>, name: &str, value: &str) -> HostOpsResult<()> {
     if value.bytes().any(|byte| matches!(byte, b'\r' | b'\n' | 0)) {
         return Err(HostOpsError::new("invalid_enrollment_http_body"));
     }
@@ -333,12 +347,14 @@ fn parse_issue_output(value: &str, statuses: &[u16]) -> HostOpsResult<Enrollment
         break;
     }
     cursor.finish()?;
-    let claim_code = claim_code.ok_or_else(|| HostOpsError::new("invalid_enrollment_issue_response"))?;
+    let claim_code =
+        claim_code.ok_or_else(|| HostOpsError::new("invalid_enrollment_issue_response"))?;
     validate_lower_hex_exact(&claim_code, 64, "invalid_enrollment_issue_response")?;
     if expires_at_ms.ok_or_else(|| HostOpsError::new("invalid_enrollment_issue_response"))? == 0 {
         return Err(HostOpsError::new("invalid_enrollment_issue_response"));
     }
-    let device_id = device_id.ok_or_else(|| HostOpsError::new("invalid_enrollment_issue_response"))?;
+    let device_id =
+        device_id.ok_or_else(|| HostOpsError::new("invalid_enrollment_issue_response"))?;
     validate_identifier(&device_id)
         .map_err(|_| HostOpsError::new("invalid_enrollment_issue_response"))?;
     Ok(EnrollmentIssueProjection {
@@ -387,7 +403,8 @@ fn parse_redeem_output(
         break;
     }
     cursor.finish()?;
-    let device_id = device_id.ok_or_else(|| HostOpsError::new("invalid_enrollment_redeem_response"))?;
+    let device_id =
+        device_id.ok_or_else(|| HostOpsError::new("invalid_enrollment_redeem_response"))?;
     validate_identifier(&device_id)
         .map_err(|_| HostOpsError::new("invalid_enrollment_redeem_response"))?;
     let certificate_sha256 = certificate_sha256
@@ -605,8 +622,28 @@ fn render_enrollment_receipt(
 const CREATE_CSR_SCRIPT: &str = r#"
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
+function Test-KeyInUse([string]$keyName) {
+    foreach ($candidateCertificate in Get-ChildItem -Path 'Cert:\LocalMachine\My') {
+        if (-not $candidateCertificate.HasPrivateKey) { continue }
+        $candidateRsa = $null
+        try {
+            $candidateRsa = [System.Security.Cryptography.X509Certificates.RSACertificateExtensions]::GetRSAPrivateKey($candidateCertificate)
+            if ($null -ne $candidateRsa -and $candidateRsa.GetType().FullName -eq 'System.Security.Cryptography.RSACng' -and $candidateRsa.Key.KeyName -eq $keyName) {
+                return $true
+            }
+        } catch {
+        } finally {
+            if ($null -ne $candidateRsa) { $candidateRsa.Dispose() }
+        }
+    }
+    return $false
+}
 $keyName = 'part-crm-bridge-' + $env:BRIDGE_HOST_OPS_DEVICE_ID
 $provider = [System.Security.Cryptography.CngProvider]::MicrosoftSoftwareKeyStorageProvider
+if (Test-KeyInUse $keyName) {
+    Write-Output 'in_use'
+    exit 0
+}
 $key = $null
 $rsa = $null
 $created = $false
@@ -741,8 +778,28 @@ try {
 #[cfg(windows)]
 const CLEANUP_KEY_SCRIPT: &str = r#"
 $ErrorActionPreference = 'Stop'
+function Test-KeyInUse([string]$keyName) {
+    foreach ($candidateCertificate in Get-ChildItem -Path 'Cert:\LocalMachine\My') {
+        if (-not $candidateCertificate.HasPrivateKey) { continue }
+        $candidateRsa = $null
+        try {
+            $candidateRsa = [System.Security.Cryptography.X509Certificates.RSACertificateExtensions]::GetRSAPrivateKey($candidateCertificate)
+            if ($null -ne $candidateRsa -and $candidateRsa.GetType().FullName -eq 'System.Security.Cryptography.RSACng' -and $candidateRsa.Key.KeyName -eq $keyName) {
+                return $true
+            }
+        } catch {
+        } finally {
+            if ($null -ne $candidateRsa) { $candidateRsa.Dispose() }
+        }
+    }
+    return $false
+}
 $keyName = 'part-crm-bridge-' + $env:BRIDGE_HOST_OPS_DEVICE_ID
 $provider = [System.Security.Cryptography.CngProvider]::MicrosoftSoftwareKeyStorageProvider
+if (Test-KeyInUse $keyName) {
+    Write-Output 'in_use'
+    exit 0
+}
 if ([System.Security.Cryptography.CngKey]::Exists($keyName, $provider, [System.Security.Cryptography.CngKeyOpenOptions]::MachineKey)) {
     $key = [System.Security.Cryptography.CngKey]::Open($keyName, $provider, [System.Security.Cryptography.CngKeyOpenOptions]::MachineKey)
     try { $key.Delete() } finally { $key.Dispose() }
@@ -783,7 +840,10 @@ try {
 "#;
 
 #[cfg(windows)]
-fn execute_issue(plan: &EnrollmentHttpPlan, token_file: &Path) -> HostOpsResult<EnrollmentIssueProjection> {
+fn execute_issue(
+    plan: &EnrollmentHttpPlan,
+    token_file: &Path,
+) -> HostOpsResult<EnrollmentIssueProjection> {
     let output = execute_http(plan, token_file)?;
     parse_issue_output(&output, plan.success_statuses)
 }
@@ -824,7 +884,11 @@ fn execute_http(plan: &EnrollmentHttpPlan, token_file: &Path) -> HostOpsResult<S
     token.fill(0);
     let mut command = curl_command()?;
     command.args(plan.curl_arguments());
-    let output = run_command(command, Some(std::mem::take(&mut config)), MAX_HTTP_OUTPUT_SIZE)?;
+    let output = run_command(
+        command,
+        Some(std::mem::take(&mut config)),
+        MAX_HTTP_OUTPUT_SIZE,
+    )?;
     config.fill(0);
     Ok(output)
 }
@@ -836,6 +900,9 @@ fn create_or_reuse_machine_csr(device_id: &str) -> HostOpsResult<String> {
     command.env("BRIDGE_HOST_OPS_DEVICE_ID", device_id);
     let output = run_command(command, None, MAX_CSR_DER_HEX_LENGTH + 1_024)?;
     let csr = output.trim().to_owned();
+    if csr == "in_use" {
+        return Err(HostOpsError::new("enrollment_device_already_installed"));
+    }
     validate_der_hex(&csr, MAX_CSR_DER_HEX_LENGTH, "invalid_local_csr")?;
     Ok(csr)
 }
@@ -868,6 +935,7 @@ fn cleanup_machine_key(device_id: &str) -> HostOpsResult<()> {
     let output = run_command(command, None, 1_024)?;
     match output.trim() {
         "removed" | "absent" => Ok(()),
+        "in_use" => Err(HostOpsError::new("enrollment_key_in_use")),
         _ => Err(HostOpsError::new("enrollment_key_cleanup_failed")),
     }
 }
@@ -977,8 +1045,8 @@ fn run_command(
 #[cfg(test)]
 mod tests {
     use super::{
-        MAX_CERTIFICATE_DER_HEX_LENGTH, parse_issue_output, parse_redeem_output,
-        redeem_plan, render_enrollment_receipt, self_test,
+        MAX_CERTIFICATE_DER_HEX_LENGTH, parse_issue_output, parse_redeem_output, redeem_plan,
+        render_enrollment_receipt, self_test,
     };
     use bridge_host_ops::parse_certificate_observation;
 
@@ -994,7 +1062,10 @@ mod tests {
             &claim,
             "3000",
         )?;
-        assert_eq!(plan.body, format!("{{\"claimCode\":\"{claim}\",\"csrDerHex\":\"3000\"}}"));
+        assert_eq!(
+            plan.body,
+            format!("{{\"claimCode\":\"{claim}\",\"csrDerHex\":\"3000\"}}")
+        );
         for forbidden in ["tenantId", "actorId", "deviceId", "csrSha256"] {
             assert!(!plan.body.contains(forbidden));
         }
@@ -1002,11 +1073,13 @@ mod tests {
     }
 
     #[test]
-    fn issue_and_redeem_responses_are_strict_and_bounded()
-    -> Result<(), Box<dyn std::error::Error>> {
+    fn issue_and_redeem_responses_are_strict_and_bounded() -> Result<(), Box<dyn std::error::Error>>
+    {
         let claim = "ab".repeat(32);
         let issue = parse_issue_output(
-            &format!("{{\"deviceId\":\"device_01\",\"claimCode\":\"{claim}\",\"expiresAtMs\":1}}\n201"),
+            &format!(
+                "{{\"deviceId\":\"device_01\",\"claimCode\":\"{claim}\",\"expiresAtMs\":1}}\n201"
+            ),
             &[200, 201],
         )?;
         assert_eq!(issue.device_id, "device_01");
@@ -1016,7 +1089,10 @@ mod tests {
             &[200, 201],
         ).is_err());
         let redeem = parse_redeem_output(
-            &format!("{{\"certificateChainDerHex\":[],\"leafCertificateDerHex\":\"3000\",\"certificateSha256\":\"{}\",\"deviceId\":\"device_01\"}}\n200", "cd".repeat(32)),
+            &format!(
+                "{{\"certificateChainDerHex\":[],\"leafCertificateDerHex\":\"3000\",\"certificateSha256\":\"{}\",\"deviceId\":\"device_01\"}}\n200",
+                "cd".repeat(32)
+            ),
             &[200],
         )?;
         assert_eq!(redeem.device_id, "device_01");
@@ -1036,14 +1112,16 @@ mod tests {
             "AB".repeat(20),
             "cd".repeat(32)
         ))?;
-        let receipt = render_enrollment_receipt(
-            "https://control.example.test",
-            "device_01",
-            &certificate,
-        );
+        let receipt =
+            render_enrollment_receipt("https://control.example.test", "device_01", &certificate);
         assert!(receipt.contains("\"operation\":\"enroll\""));
         assert!(receipt.contains("\"deviceId\":\"device_01\""));
-        for forbidden in ["claimCode", "csrDerHex", "leafCertificateDerHex", "certificateChainDerHex"] {
+        for forbidden in [
+            "claimCode",
+            "csrDerHex",
+            "leafCertificateDerHex",
+            "certificateChainDerHex",
+        ] {
             assert!(!receipt.contains(forbidden));
         }
         Ok(())
@@ -1069,6 +1147,14 @@ mod tests {
         };
         let certificate = install_enrollment_certificate(&device_id, fingerprint, leaf)?;
         assert_eq!(certificate.sha256_fingerprint(), fingerprint);
+        assert_eq!(
+            create_or_reuse_machine_csr(&device_id).unwrap_err().code(),
+            "enrollment_device_already_installed"
+        );
+        assert_eq!(
+            cleanup_machine_key(&device_id).unwrap_err().code(),
+            "enrollment_key_in_use"
+        );
         super::super::windows::remove_certificate(certificate.sha1_thumbprint())?;
         Ok(())
     }
