@@ -115,8 +115,8 @@ jobs:
         timeout-minutes: 2
         shell: pwsh
         run: |
-          $version = (npx --yes wrangler@4.94.0 --version).Trim()
-          if ($LASTEXITCODE -ne 0 -or $version -notmatch '^4\.94\.0$') { throw "unexpected Wrangler version: $version" }
+          $version = (npx --yes wrangler@4.129.1 --version).Trim()
+          if ($LASTEXITCODE -ne 0 -or $version -notmatch '^4\.129\.1$') { throw "unexpected Wrangler version: $version" }
 
       - name: Build shipping Windows host and shipping control-plane Worker
         shell: pwsh
