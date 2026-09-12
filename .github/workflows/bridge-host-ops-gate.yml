@@ -111,6 +111,13 @@ jobs:
             if ($errors.Count -ne 0) { throw "PowerShell parse failure in $path`: $($errors[0].Message)" }
           }
 
+      - name: Warm exact Wrangler package once
+        timeout-minutes: 2
+        shell: pwsh
+        run: |
+          $version = (npx --yes wrangler@4.94.0 --version).Trim()
+          if ($LASTEXITCODE -ne 0 -or $version -notmatch '^4\.94\.0$') { throw "unexpected Wrangler version: $version" }
+
       - name: Build shipping Windows host and shipping control-plane Worker
         shell: pwsh
         run: |
