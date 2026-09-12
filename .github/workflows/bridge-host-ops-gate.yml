@@ -126,7 +126,7 @@ jobs:
         shell: pwsh
         run: |
           $version = '2026.9.0'
-          $expectedSha256 = '83e726ed18ea78c5ad5213c4c3a3a27051393950d2bc8ed4de69bec12d14eaae'
+          $expectedSha256 = '547057326266f0e1c7d50d102dbd22ff283d740c055bd61e94f10e2c606f89af'
           $cloudflared = Join-Path $env:RUNNER_TEMP 'cloudflared-2026.9.0-windows-amd64.exe'
           Invoke-WebRequest -Uri "https://github.com/cloudflare/cloudflared/releases/download/$version/cloudflared-windows-amd64.exe" -OutFile $cloudflared -TimeoutSec 60
           $actualSha256 = (Get-FileHash -LiteralPath $cloudflared -Algorithm SHA256).Hash.ToLowerInvariant()
