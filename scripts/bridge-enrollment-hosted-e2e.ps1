@@ -97,8 +97,20 @@ function Invoke-BoundedExecutable(
         $stdoutTask = $process.StandardOutput.ReadToEndAsync()
         $stderrTask = $process.StandardError.ReadToEndAsync()
         if (-not $process.WaitForExit($TimeoutSeconds * 1000)) {
+            $activeEffect = 'none'
+            try {
+                $effectNames = @(
+                    Get-CimInstance -ClassName Win32_Process -Filter "ParentProcessId = $($process.Id)" -ErrorAction Stop |
+                        ForEach-Object { [string]$_.Name } |
+                        Where-Object { $_ -in @('curl.exe', 'powershell.exe') } |
+                        Sort-Object -Unique
+                )
+                if ($effectNames.Count -gt 0) { $activeEffect = $effectNames -join ',' }
+            } catch {
+                $activeEffect = 'observation-unavailable'
+            }
             try { $process.Kill($true) } catch {}
-            throw "$Label timed out after $TimeoutSeconds seconds"
+            throw "$Label timed out after $TimeoutSeconds seconds; active-effect=$activeEffect"
         }
         $process.WaitForExit()
         $stdout = $stdoutTask.GetAwaiter().GetResult()
