@@ -406,7 +406,9 @@ fn merge_bridge_enrollment_fragment(document: &mut Value) {
         let Some(source) = fragment_components.get(group).and_then(Value::as_object) else {
             continue;
         };
-        let target = document_components.entry(group).or_insert_with(|| json!({}));
+        let target = document_components
+            .entry(group)
+            .or_insert_with(|| json!({}));
         let Some(target) = target.as_object_mut() else {
             continue;
         };
@@ -608,13 +610,11 @@ mod tests {
                 .is_object()
         );
         assert!(
-            document["paths"]
-                ["/api/v1/tenants/{tenantId}/bridge-enrollment/authorities"]["post"]
+            document["paths"]["/api/v1/tenants/{tenantId}/bridge-enrollment/authorities"]["post"]
                 .is_object()
         );
         assert!(
-            document["paths"]
-                ["/api/v1/tenants/{tenantId}/bridge-enrollment/redemptions"]["post"]
+            document["paths"]["/api/v1/tenants/{tenantId}/bridge-enrollment/redemptions"]["post"]
                 .is_object()
         );
         assert_eq!(
