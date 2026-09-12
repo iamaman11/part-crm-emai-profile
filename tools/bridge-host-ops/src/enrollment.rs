@@ -7,8 +7,7 @@ use std::collections::BTreeMap;
 #[cfg(any(windows, test))]
 use bridge_host_ops::{
     CERTIFICATE_STORE, CertificateObservation, SCHEMA_VERSION, SHIPPING_CERT_SHA1_ENV,
-    SHIPPING_DEVICE_ID_ENV, SHIPPING_ORIGIN_ENV, validate_identifier,
-    validate_sha256_fingerprint,
+    SHIPPING_DEVICE_ID_ENV, SHIPPING_ORIGIN_ENV, validate_identifier, validate_sha256_fingerprint,
 };
 #[cfg(windows)]
 use bridge_host_ops::{parse_certificate_observation, validate_access_token};
