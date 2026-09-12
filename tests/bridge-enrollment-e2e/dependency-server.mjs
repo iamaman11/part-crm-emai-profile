@@ -231,7 +231,7 @@ const ingressServer = https.createServer(
 dependencyServer.listen(dependencyPort, "127.0.0.1", () => {
   process.stdout.write(`dependency-ready:${dependencyPort}\n`);
 });
-ingressServer.listen(ingressPort, "127.0.0.1", () => {
+ingressServer.listen(ingressPort, "localhost", () => {
   process.stdout.write(`ingress-ready:${ingressPort}\n`);
 });
 
