@@ -51,54 +51,55 @@ pub struct BridgeEnrollmentRedemptionProjection {
 pub fn openapi_fragment() -> Value {
     json!({
         "paths": {
-            "/api/v1/tenants/{tenantId}/bridge-enrollment/authorities": {
+            BRIDGE_ENROLLMENT_ISSUE_PATH_TEMPLATE: {
                 "post": {
                     "operationId": "issueBridgeEnrollmentAuthority",
                     "security": [{"cloudflareAccessJwt": []}],
                     "parameters": [
-                        {"$ref": "#/components/parameters/TenantPath"},
-                        {"$ref": "#/components/parameters/CorrelationHeader"},
-                        {"$ref": "#/components/parameters/IdempotencyHeader"}
+                        tenant_path_parameter(),
+                        header_parameter("X-Correlation-Id", true),
+                        header_parameter("Idempotency-Key", true)
                     ],
-                    "requestBody": {
-                        "required": true,
-                        "content": {"application/json": {"schema": {"$ref": "#/components/schemas/BridgeEnrollmentIssueRequest"}}}
-                    },
+                    "requestBody": json_request("BridgeEnrollmentIssueRequest"),
                     "responses": {
-                        "200": {"description": "Idempotent enrollment authority replay"},
-                        "201": {"description": "Enrollment authority issued"},
-                        "400": {"$ref": "#/components/responses/InvalidRequest"},
-                        "404": {"$ref": "#/components/responses/NeutralNotFound"},
-                        "409": {"$ref": "#/components/responses/Conflict"},
-                        "500": {"$ref": "#/components/responses/InternalFailure"},
-                        "503": {"$ref": "#/components/responses/DependencyUnavailable"}
+                        "200": json_response("BridgeEnrollmentIssueProjection"),
+                        "201": json_response("BridgeEnrollmentIssueProjection"),
+                        "400": problem_response(),
+                        "404": problem_response(),
+                        "409": problem_response(),
+                        "500": problem_response(),
+                        "503": problem_response()
                     }
                 }
             },
-            "/api/v1/tenants/{tenantId}/bridge-enrollment/redemptions": {
+            BRIDGE_ENROLLMENT_REDEEM_PATH_TEMPLATE: {
                 "post": {
                     "operationId": "redeemBridgeEnrollmentAuthority",
                     "security": [{"cloudflareAccessJwt": []}],
                     "parameters": [
-                        {"$ref": "#/components/parameters/TenantPath"},
-                        {"$ref": "#/components/parameters/CorrelationHeader"}
+                        tenant_path_parameter(),
+                        header_parameter("X-Correlation-Id", true)
                     ],
-                    "requestBody": {
-                        "required": true,
-                        "content": {"application/json": {"schema": {"$ref": "#/components/schemas/BridgeEnrollmentRedemptionRequest"}}}
-                    },
+                    "requestBody": json_request("BridgeEnrollmentRedemptionRequest"),
                     "responses": {
-                        "200": {"description": "Public Bridge client certificate material"},
-                        "400": {"$ref": "#/components/responses/InvalidRequest"},
-                        "404": {"$ref": "#/components/responses/NeutralNotFound"},
-                        "409": {"$ref": "#/components/responses/Conflict"},
-                        "500": {"$ref": "#/components/responses/InternalFailure"},
-                        "503": {"$ref": "#/components/responses/DependencyUnavailable"}
+                        "200": json_response("BridgeEnrollmentRedemptionProjection"),
+                        "400": problem_response(),
+                        "404": problem_response(),
+                        "409": problem_response(),
+                        "500": problem_response(),
+                        "503": problem_response()
                     }
                 }
             }
         },
         "components": {
+            "securitySchemes": {
+                "cloudflareAccessJwt": {
+                    "type": "apiKey",
+                    "in": "header",
+                    "name": "Cf-Access-Jwt-Assertion"
+                }
+            },
             "schemas": {
                 "BridgeEnrollmentIssueRequest": {
                     "type": "object", "additionalProperties": false, "properties": {}
@@ -132,6 +133,43 @@ pub fn openapi_fragment() -> Value {
                 }
             }
         }
+    })
+}
+
+fn tenant_path_parameter() -> Value {
+    json!({
+        "name": "tenantId",
+        "in": "path",
+        "required": true,
+        "schema": {"type": "string"}
+    })
+}
+
+fn header_parameter(name: &str, required: bool) -> Value {
+    json!({
+        "name": name,
+        "in": "header",
+        "required": required,
+        "schema": {"type": "string"}
+    })
+}
+
+fn schema_ref(name: &str) -> Value {
+    json!({"$ref": format!("#/components/schemas/{name}")})
+}
+
+fn json_request(schema: &str) -> Value {
+    json!({"required": true, "content": {"application/json": {"schema": schema_ref(schema)}}})
+}
+
+fn json_response(schema: &str) -> Value {
+    json!({"description": "Successful response", "content": {"application/json": {"schema": schema_ref(schema)}}})
+}
+
+fn problem_response() -> Value {
+    json!({
+        "description": "Problem response",
+        "content": {"application/problem+json": {"schema": schema_ref("ProblemPayload")}}
     })
 }
 
@@ -175,18 +213,12 @@ mod tests {
     #[test]
     fn redemption_request_contains_only_claim_and_exact_csr_transport()
     -> Result<(), Box<dyn std::error::Error>> {
-        let valid = format!(
-            r#"{{"claimCode":"{}","csrDerHex":"3000"}}"#,
-            "a".repeat(64)
-        );
+        let valid = format!(r#"{{"claimCode":"{}","csrDerHex":"3000"}}"#, "a".repeat(64));
         let request = serde_json::from_str::<BridgeEnrollmentRedemptionRequest>(&valid)?;
         assert_eq!(request.claim_code().len(), 64);
         assert_eq!(request.csr_der_hex(), "3000");
         for forbidden in ["tenantId", "actorId", "deviceId", "csrSha256"] {
-            let invalid = valid.replace(
-                "}",
-                &format!(r#","{forbidden}":"caller-owned"}}"#),
-            );
+            let invalid = valid.replace("}", &format!(r#","{forbidden}":"caller-owned"}}"#));
             assert!(serde_json::from_str::<BridgeEnrollmentRedemptionRequest>(&invalid).is_err());
         }
         Ok(())
@@ -195,12 +227,16 @@ mod tests {
     #[test]
     fn fragment_has_no_caller_identity_or_digest_fields() {
         let fragment = openapi_fragment();
-        let request = &fragment["components"]["schemas"]["BridgeEnrollmentRedemptionRequest"]
-            ["properties"];
+        let request =
+            &fragment["components"]["schemas"]["BridgeEnrollmentRedemptionRequest"]["properties"];
         assert!(request.get("claimCode").is_some());
         assert!(request.get("csrDerHex").is_some());
         for forbidden in ["tenantId", "actorId", "deviceId", "csrSha256"] {
             assert!(request.get(forbidden).is_none());
         }
+        assert_eq!(
+            fragment["components"]["securitySchemes"]["cloudflareAccessJwt"]["name"],
+            "Cf-Access-Jwt-Assertion"
+        );
     }
 }
