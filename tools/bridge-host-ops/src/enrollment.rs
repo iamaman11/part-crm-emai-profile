@@ -1,11 +1,15 @@
 use super::{ensure_only, idempotency_header, required, validate_api_opaque_id};
 use bridge_host_ops::{
-    CERTIFICATE_STORE, CertificateObservation, HostOpsError, HostOpsResult, SCHEMA_VERSION,
-    SHIPPING_CERT_SHA1_ENV, SHIPPING_DEVICE_ID_ENV, SHIPPING_ORIGIN_ENV, build_access_config,
-    json_string, normalize_https_origin, validate_identifier, validate_sha256_fingerprint,
+    HostOpsError, HostOpsResult, build_access_config, json_string, normalize_https_origin,
 };
 use std::collections::BTreeMap;
 
+#[cfg(any(windows, test))]
+use bridge_host_ops::{
+    CERTIFICATE_STORE, CertificateObservation, SCHEMA_VERSION, SHIPPING_CERT_SHA1_ENV,
+    SHIPPING_DEVICE_ID_ENV, SHIPPING_ORIGIN_ENV, validate_identifier,
+    validate_sha256_fingerprint,
+};
 #[cfg(windows)]
 use bridge_host_ops::{parse_certificate_observation, validate_access_token};
 #[cfg(windows)]
@@ -24,16 +28,20 @@ use std::process::{Command, Stdio};
 const ISSUE_PATH_SUFFIX: &str = "/bridge-enrollment/authorities";
 const REDEEM_PATH_SUFFIX: &str = "/bridge-enrollment/redemptions";
 const MAX_CSR_DER_HEX_LENGTH: usize = 32 * 1024;
+#[cfg(any(windows, test))]
 const MAX_CERTIFICATE_DER_HEX_LENGTH: usize = 64 * 1024;
+#[cfg(any(windows, test))]
 const MAX_CERTIFICATE_CHAIN_COUNT: usize = 8;
 const MAX_HTTP_OUTPUT_SIZE: usize = 640 * 1024;
 
+#[cfg(any(windows, test))]
 #[derive(Clone, Eq, PartialEq)]
 struct EnrollmentIssueProjection {
     claim_code: String,
     device_id: String,
 }
 
+#[cfg(any(windows, test))]
 #[derive(Clone, Eq, PartialEq)]
 struct EnrollmentRedemptionProjection {
     device_id: String,
@@ -319,6 +327,7 @@ fn append_curl_config_value(config: &mut Vec<u8>, name: &str, value: &str) -> Ho
     Ok(())
 }
 
+#[cfg(any(windows, test))]
 fn parse_issue_output(value: &str, statuses: &[u16]) -> HostOpsResult<EnrollmentIssueProjection> {
     let body = success_body(value, statuses)?;
     let mut cursor = JsonCursor::new(body);
@@ -363,6 +372,7 @@ fn parse_issue_output(value: &str, statuses: &[u16]) -> HostOpsResult<Enrollment
     })
 }
 
+#[cfg(any(windows, test))]
 fn parse_redeem_output(
     value: &str,
     statuses: &[u16],
@@ -428,6 +438,7 @@ fn parse_redeem_output(
     })
 }
 
+#[cfg(any(windows, test))]
 fn parse_certificate_chain(cursor: &mut JsonCursor<'_>) -> HostOpsResult<()> {
     cursor.expect(b'[')?;
     let mut count = 0usize;
@@ -455,6 +466,7 @@ fn parse_certificate_chain(cursor: &mut JsonCursor<'_>) -> HostOpsResult<()> {
     }
 }
 
+#[cfg(any(windows, test))]
 fn success_body<'a>(value: &'a str, statuses: &[u16]) -> HostOpsResult<&'a str> {
     if value.len() > MAX_HTTP_OUTPUT_SIZE {
         return Err(HostOpsError::new("enrollment_http_output_too_large"));
@@ -493,7 +505,7 @@ fn validate_lower_hex_exact(value: &str, length: usize, code: &'static str) -> H
 fn validate_der_hex(value: &str, maximum_length: usize, code: &'static str) -> HostOpsResult<()> {
     if value.len() < 4
         || value.len() > maximum_length
-        || value.len() % 2 != 0
+        || !value.len().is_multiple_of(2)
         || !value
             .bytes()
             .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
@@ -503,11 +515,13 @@ fn validate_der_hex(value: &str, maximum_length: usize, code: &'static str) -> H
     Ok(())
 }
 
+#[cfg(any(windows, test))]
 struct JsonCursor<'a> {
     input: &'a [u8],
     position: usize,
 }
 
+#[cfg(any(windows, test))]
 impl<'a> JsonCursor<'a> {
     fn new(value: &'a str) -> Self {
         Self {
@@ -595,6 +609,7 @@ impl<'a> JsonCursor<'a> {
     }
 }
 
+#[cfg(any(windows, test))]
 fn render_enrollment_receipt(
     origin: &str,
     device_id: &str,
