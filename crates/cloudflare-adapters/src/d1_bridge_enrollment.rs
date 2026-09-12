@@ -14,6 +14,7 @@ use zeroize::Zeroizing;
 
 const CLAIM_TTL_MS: u64 = 300_000;
 const CLAIM_DOMAIN: &str = "part-crm:bridge-device-enrollment:v1";
+const DEVICE_ID_DOMAIN: &str = "part-crm:bridge-device-enrollment-device:v1";
 const MIN_KEY_BYTES: usize = 32;
 const MAX_KEY_BYTES: usize = 128;
 
@@ -110,6 +111,25 @@ impl D1BridgeEnrollmentAuthority {
         })
     }
 
+    fn derive_device_id(
+        &self,
+        actor: &ActorContext,
+        evidence: &CommandExecutionEvidence,
+    ) -> Result<DeviceId, BridgeEnrollmentAuthorityError> {
+        let canonical = format!(
+            "{DEVICE_ID_DOMAIN}\n{}\n{}\n{}\n{}",
+            actor.tenant_scope().tenant_id().as_str(),
+            actor.actor_id().as_str(),
+            evidence.idempotency_key().as_str(),
+            evidence.payload_fingerprint().as_str(),
+        );
+        let mut mac = <HmacSha256 as KeyInit>::new_from_slice(self.derivation_key.as_bytes())
+            .map_err(|_| integrity_failure())?;
+        mac.update(canonical.as_bytes());
+        let digest = hex_encode(mac.finalize().into_bytes().as_slice());
+        DeviceId::parse(format!("device_{digest}")).map_err(|_| integrity_failure())
+    }
+
     fn derive_claim_code(
         &self,
         actor: &ActorContext,
@@ -166,17 +186,24 @@ impl BridgeEnrollmentAuthorityPort for D1BridgeEnrollmentAuthority {
     async fn issue_bridge_enrollment_authority(
         &self,
         actor: &ActorContext,
-        device_id: &DeviceId,
         evidence: &CommandExecutionEvidence,
     ) -> Result<IssuedBridgeEnrollmentAuthority, BridgeEnrollmentAuthorityError> {
-        let claim_code = self.derive_claim_code(actor, device_id, evidence)?;
+        let device_id = self.derive_device_id(actor, evidence)?;
+        let claim_code = self.derive_claim_code(actor, &device_id, evidence)?;
         let claim_digest = digest_claim_code(&claim_code);
 
         if let Some(row) = self
             .load_by_idempotency(actor, evidence.idempotency_key().as_str())
             .await?
         {
-            return replay_issue(row, actor, device_id, evidence, claim_code, &claim_digest);
+            return replay_issue(
+                row,
+                actor,
+                &device_id,
+                evidence,
+                claim_code,
+                &claim_digest,
+            );
         }
 
         let expires_at = evidence
@@ -211,7 +238,10 @@ impl BridgeEnrollmentAuthorityPort for D1BridgeEnrollmentAuthority {
 
         if returned.is_some() {
             return Ok(IssuedBridgeEnrollmentAuthority::new(
-                claim_code, expires_at, false,
+                claim_code,
+                expires_at,
+                device_id,
+                false,
             ));
         }
 
@@ -219,13 +249,19 @@ impl BridgeEnrollmentAuthorityPort for D1BridgeEnrollmentAuthority {
             .load_by_idempotency(actor, evidence.idempotency_key().as_str())
             .await?
             .ok_or_else(integrity_failure)?;
-        replay_issue(row, actor, device_id, evidence, claim_code, &claim_digest)
+        replay_issue(
+            row,
+            actor,
+            &device_id,
+            evidence,
+            claim_code,
+            &claim_digest,
+        )
     }
 
     async fn reserve_bridge_enrollment_csr(
         &self,
         claim_code: &str,
-        device_id: &DeviceId,
         csr_sha256: &Sha256Hex,
         now: UnixMillis,
     ) -> Result<BridgeEnrollmentReservation, BridgeEnrollmentAuthorityError> {
@@ -233,7 +269,6 @@ impl BridgeEnrollmentAuthorityPort for D1BridgeEnrollmentAuthority {
             .load_by_claim(claim_code)
             .await?
             .ok_or_else(not_found)?;
-        classify_claim_identity(&row, device_id)?;
 
         if row.certificate_sha256.is_some() || row.consumed_at_ms.is_some() {
             return Err(replay_rejected());
@@ -256,7 +291,7 @@ impl BridgeEnrollmentAuthorityPort for D1BridgeEnrollmentAuthority {
             csr_sha256.as_str(),
             reserved_at_ms,
             claim_digest.as_str(),
-            device_id.as_str(),
+            row.device_id.as_str(),
             reserved_at_ms,
         )
         .map_err(map_worker_error)?
@@ -272,7 +307,6 @@ impl BridgeEnrollmentAuthorityPort for D1BridgeEnrollmentAuthority {
             .load_by_claim(claim_code)
             .await?
             .ok_or_else(not_found)?;
-        classify_claim_identity(&current, device_id)?;
         if current.certificate_sha256.is_some() {
             return Err(replay_rejected());
         }
@@ -288,7 +322,6 @@ impl BridgeEnrollmentAuthorityPort for D1BridgeEnrollmentAuthority {
     async fn finalize_bridge_enrollment_certificate(
         &self,
         claim_code: &str,
-        device_id: &DeviceId,
         csr_sha256: &Sha256Hex,
         certificate_sha256: &Sha256Hex,
         now: UnixMillis,
@@ -297,7 +330,6 @@ impl BridgeEnrollmentAuthorityPort for D1BridgeEnrollmentAuthority {
             .load_by_claim(claim_code)
             .await?
             .ok_or_else(not_found)?;
-        classify_claim_identity(&row, device_id)?;
         let existing_csr = row.reserved_csr_sha256.as_deref().ok_or_else(conflict)?;
         if existing_csr != csr_sha256.as_str() {
             return Err(conflict());
@@ -323,7 +355,7 @@ impl BridgeEnrollmentAuthorityPort for D1BridgeEnrollmentAuthority {
             certificate_sha256.as_str(),
             consumed_at_ms,
             claim_digest.as_str(),
-            device_id.as_str(),
+            row.device_id.as_str(),
             csr_sha256.as_str(),
         )
         .map_err(map_worker_error)?
@@ -339,7 +371,6 @@ impl BridgeEnrollmentAuthorityPort for D1BridgeEnrollmentAuthority {
             .load_by_claim(claim_code)
             .await?
             .ok_or_else(not_found)?;
-        classify_claim_identity(&current, device_id)?;
         if current.reserved_csr_sha256.as_deref() != Some(csr_sha256.as_str()) {
             return Err(conflict());
         }
@@ -383,18 +414,11 @@ fn replay_issue(
     let expires_at = i64_to_unix(row.expires_at_ms)?;
     let _issued_at = i64_to_unix(row.issued_at_ms)?;
     Ok(IssuedBridgeEnrollmentAuthority::new(
-        claim_code, expires_at, true,
+        claim_code,
+        expires_at,
+        device_id.clone(),
+        true,
     ))
-}
-
-fn classify_claim_identity(
-    row: &EnrollmentRow,
-    device_id: &DeviceId,
-) -> Result<(), BridgeEnrollmentAuthorityError> {
-    if row.device_id != device_id.as_str() {
-        return Err(not_found());
-    }
-    Ok(())
 }
 
 fn reservation(
@@ -482,7 +506,10 @@ fn map_worker_error(_error: worker::Error) -> BridgeEnrollmentAuthorityError {
 
 #[cfg(test)]
 mod tests {
-    use super::{CLAIM_DOMAIN, CLAIM_TTL_MS, FINALIZE_CERTIFICATE, INSERT_AUTHORITY, RESERVE_CSR};
+    use super::{
+        CLAIM_DOMAIN, CLAIM_TTL_MS, DEVICE_ID_DOMAIN, FINALIZE_CERTIFICATE, INSERT_AUTHORITY,
+        RESERVE_CSR,
+    };
 
     #[test]
     fn claim_storage_never_persists_raw_bearer_or_key_material() {
@@ -492,10 +519,14 @@ mod tests {
         assert!(!INSERT_AUTHORITY.contains("certificate_pem"));
         assert_eq!(CLAIM_TTL_MS, 300_000);
         assert_eq!(CLAIM_DOMAIN, "part-crm:bridge-device-enrollment:v1");
+        assert_eq!(
+            DEVICE_ID_DOMAIN,
+            "part-crm:bridge-device-enrollment-device:v1"
+        );
     }
 
     #[test]
-    fn reservation_is_atomic_device_csr_and_expiry_bound() {
+    fn reservation_is_atomic_stored_device_csr_and_expiry_bound() {
         for required in [
             "device_id = ?",
             "reserved_csr_sha256 IS NULL",

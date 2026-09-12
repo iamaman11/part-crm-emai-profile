@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 
 mod access_session;
+mod bridge_enrollment;
 mod bridge_machine;
 mod capability_gate;
 mod client_mail_query;
@@ -104,6 +105,7 @@ pub async fn main(mut request: Request, env: Env, _context: Context) -> Result<R
             )
             .await
         }
+        RouteClass::BridgeEnrollmentApi => bridge_enrollment::dispatch(&mut request, &env).await,
         RouteClass::ClientCollectionApi
         | RouteClass::ClientResourceApi
         | RouteClass::ClientArchiveApi

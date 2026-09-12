@@ -145,7 +145,8 @@ pub fn route_surface(route: RouteClass, path: &str) -> Option<RuntimeSurface> {
         | RouteClass::MembershipCollectionApi
         | RouteClass::MembershipStatusApi
         | RouteClass::DeviceBindingResourceApi
-        | RouteClass::DeviceBindingRevokeApi => Some(RuntimeSurface::HttpIdentity),
+        | RouteClass::DeviceBindingRevokeApi
+        | RouteClass::BridgeEnrollmentApi => Some(RuntimeSurface::HttpIdentity),
         RouteClass::ClientCollectionApi
         | RouteClass::ClientResourceApi
         | RouteClass::ClientArchiveApi
@@ -284,15 +285,22 @@ mod tests {
     }
 
     #[test]
-    fn device_binding_governance_routes_use_existing_identity_capability() {
-        for route in [
-            RouteClass::DeviceBindingResourceApi,
-            RouteClass::DeviceBindingRevokeApi,
-        ] {
-            let surface = route_surface(
-                route,
+    fn enrollment_and_device_binding_use_existing_identity_capability() {
+        for (route, path) in [
+            (
+                RouteClass::DeviceBindingResourceApi,
                 "/api/v1/tenants/tenant_01/members/actor_01/device-binding",
-            );
+            ),
+            (
+                RouteClass::DeviceBindingRevokeApi,
+                "/api/v1/tenants/tenant_01/members/actor_01/device-binding",
+            ),
+            (
+                RouteClass::BridgeEnrollmentApi,
+                "/api/v1/tenants/tenant_01/bridge-enrollment/authorities",
+            ),
+        ] {
+            let surface = route_surface(route, path);
             assert_eq!(surface, Some(RuntimeSurface::HttpIdentity));
             assert_eq!(
                 surface.map(RuntimeSurface::activation_unit),
