@@ -2,7 +2,9 @@ use crate::CommandExecutionEvidence;
 use core::fmt;
 use profile_platform_primitives::{ActorContext, ActorId, DeviceId, TenantId, UnixMillis};
 
-const MAX_BRIDGE_ENROLLMENT_CSR_DER_BYTES: usize = 16 * 1024;
+pub const MAX_BRIDGE_ENROLLMENT_CSR_DER_BYTES: usize = 16 * 1024;
+pub const MAX_BRIDGE_ENROLLMENT_CERTIFICATE_DER_BYTES: usize = 32 * 1024;
+pub const MAX_BRIDGE_ENROLLMENT_CERTIFICATE_CHAIN_LENGTH: usize = 8;
 
 #[derive(Clone, Eq, PartialEq)]
 pub struct Sha256Hex(String);
@@ -86,15 +88,22 @@ impl std::error::Error for BridgeEnrollmentAuthorityError {}
 pub struct IssuedBridgeEnrollmentAuthority {
     claim_code: String,
     expires_at: UnixMillis,
+    device_id: DeviceId,
     replayed: bool,
 }
 
 impl IssuedBridgeEnrollmentAuthority {
     #[must_use]
-    pub fn new(claim_code: String, expires_at: UnixMillis, replayed: bool) -> Self {
+    pub fn new(
+        claim_code: String,
+        expires_at: UnixMillis,
+        device_id: DeviceId,
+        replayed: bool,
+    ) -> Self {
         Self {
             claim_code,
             expires_at,
+            device_id,
             replayed,
         }
     }
@@ -110,6 +119,11 @@ impl IssuedBridgeEnrollmentAuthority {
     }
 
     #[must_use]
+    pub const fn device_id(&self) -> &DeviceId {
+        &self.device_id
+    }
+
+    #[must_use]
     pub const fn replayed(&self) -> bool {
         self.replayed
     }
@@ -121,6 +135,7 @@ impl fmt::Debug for IssuedBridgeEnrollmentAuthority {
             .debug_struct("IssuedBridgeEnrollmentAuthority")
             .field("claim_code", &"[REDACTED]")
             .field("expires_at", &self.expires_at)
+            .field("device_id", &self.device_id)
             .field("replayed", &self.replayed)
             .finish()
     }
@@ -253,7 +268,7 @@ impl<'a> BridgeEnrollmentCertificateSignRequest<'a> {
         csr_der: &'a [u8],
         csr_sha256: Sha256Hex,
     ) -> Result<Self, BridgeEnrollmentCertificateSignerError> {
-        if !is_exact_der_sequence(csr_der) {
+        if !is_exact_der_sequence(csr_der, MAX_BRIDGE_ENROLLMENT_CSR_DER_BYTES) {
             return Err(BridgeEnrollmentCertificateSignerError::new(
                 BridgeEnrollmentCertificateSignerErrorClass::MalformedCsr,
             ));
@@ -304,22 +319,39 @@ impl fmt::Debug for BridgeEnrollmentCertificateSignRequest<'_> {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Eq, PartialEq)]
 pub struct SignedBridgeEnrollmentCertificate {
     csr_sha256: Sha256Hex,
     certificate_sha256: Sha256Hex,
+    leaf_certificate_der: Vec<u8>,
+    certificate_chain_der: Vec<Vec<u8>>,
 }
 
 impl SignedBridgeEnrollmentCertificate {
-    #[must_use]
     pub fn for_request(
         request: &BridgeEnrollmentCertificateSignRequest<'_>,
         certificate_sha256: Sha256Hex,
-    ) -> Self {
-        Self {
+        leaf_certificate_der: Vec<u8>,
+        certificate_chain_der: Vec<Vec<u8>>,
+    ) -> Result<Self, BridgeEnrollmentCertificateSignerError> {
+        if !is_exact_der_sequence(
+            &leaf_certificate_der,
+            MAX_BRIDGE_ENROLLMENT_CERTIFICATE_DER_BYTES,
+        ) || certificate_chain_der.len() > MAX_BRIDGE_ENROLLMENT_CERTIFICATE_CHAIN_LENGTH
+            || certificate_chain_der.iter().any(|certificate| {
+                !is_exact_der_sequence(certificate, MAX_BRIDGE_ENROLLMENT_CERTIFICATE_DER_BYTES)
+            })
+        {
+            return Err(BridgeEnrollmentCertificateSignerError::new(
+                BridgeEnrollmentCertificateSignerErrorClass::CertificateIdentityMismatch,
+            ));
+        }
+        Ok(Self {
             csr_sha256: request.csr_sha256().clone(),
             certificate_sha256,
-        }
+            leaf_certificate_der,
+            certificate_chain_der,
+        })
     }
 
     #[must_use]
@@ -330,6 +362,16 @@ impl SignedBridgeEnrollmentCertificate {
     #[must_use]
     pub const fn certificate_sha256(&self) -> &Sha256Hex {
         &self.certificate_sha256
+    }
+
+    #[must_use]
+    pub fn leaf_certificate_der(&self) -> &[u8] {
+        &self.leaf_certificate_der
+    }
+
+    #[must_use]
+    pub fn certificate_chain_der(&self) -> &[Vec<u8>] {
+        &self.certificate_chain_der
     }
 
     pub fn validate_for_request(
@@ -345,6 +387,21 @@ impl SignedBridgeEnrollmentCertificate {
     }
 }
 
+impl fmt::Debug for SignedBridgeEnrollmentCertificate {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("SignedBridgeEnrollmentCertificate")
+            .field("csr_sha256", &self.csr_sha256)
+            .field("certificate_sha256", &self.certificate_sha256)
+            .field("leaf_certificate_der", &"[PUBLIC CERTIFICATE REDACTED]")
+            .field(
+                "certificate_chain_length",
+                &self.certificate_chain_der.len(),
+            )
+            .finish()
+    }
+}
+
 #[allow(async_fn_in_trait)]
 pub trait BridgeEnrollmentCertificateSignerPort {
     /// Validates and signs exactly the reserved CSR without persisting its bytes.
@@ -353,8 +410,9 @@ pub trait BridgeEnrollmentCertificateSignerPort {
     /// with `request.csr_sha256()`, parse exactly one DER PKCS#10 request, verify its signature/proof
     /// of possession, enforce `WindowsRsaSha256ClientAuthV1` (RSA signing key of at least 2048 bits,
     /// SHA-256 signature and ClientAuth-only certificate intent), and issue a certificate whose
-    /// public key is the CSR subject public key. Malformed/unsupported/substituted requests fail
-    /// closed. Provider credentials and signing keys remain private to the concrete signer adapter.
+    /// public key is the CSR subject public key. The result carries only bounded public leaf/chain
+    /// material plus exact certificate identity; CA/private signing material never crosses this port.
+    /// Malformed/unsupported/substituted requests fail closed.
     async fn sign_bridge_enrollment_certificate(
         &self,
         request: &BridgeEnrollmentCertificateSignRequest<'_>,
@@ -398,38 +456,42 @@ impl CompletedBridgeEnrollmentAuthority {
 
 #[allow(async_fn_in_trait)]
 pub trait BridgeEnrollmentAuthorityPort {
+    /// Issues one device-enrollment authority and derives the authoritative device identity inside
+    /// the existing authority owner. Callers never select the device identity.
     async fn issue_bridge_enrollment_authority(
         &self,
         actor: &ActorContext,
-        device_id: &DeviceId,
         evidence: &CommandExecutionEvidence,
     ) -> Result<IssuedBridgeEnrollmentAuthority, BridgeEnrollmentAuthorityError>;
 
-    /// Atomically reserves this one-shot authority for one exact local-key CSR. Exact replay with
-    /// the same CSR is idempotent; a different CSR, device, expired or consumed claim fails closed.
+    /// Atomically reserves this one-shot authority for one exact local-key CSR and the current
+    /// authenticated actor. The device identity is recovered from claim-owned state; a foreign
+    /// tenant/actor must fail before mutation. Exact replay with the same actor/CSR is idempotent;
+    /// a different actor, CSR, expired or consumed claim fails closed.
     async fn reserve_bridge_enrollment_csr(
         &self,
+        actor: &ActorContext,
         claim_code: &str,
-        device_id: &DeviceId,
         csr_sha256: &Sha256Hex,
         now: UnixMillis,
     ) -> Result<BridgeEnrollmentReservation, BridgeEnrollmentAuthorityError>;
 
-    /// Finalizes only the exact previously reserved CSR with its public certificate fingerprint.
-    /// Finalization is replay-safe for the same certificate identity and never stores private key
-    /// or certificate bytes.
+    /// Finalizes only the exact previously reserved CSR for the current authenticated actor with its
+    /// public certificate fingerprint. Device identity is recovered from the reservation owner.
+    /// Finalization is replay-safe for the same actor/certificate identity and never stores private
+    /// key or certificate bytes.
     async fn finalize_bridge_enrollment_certificate(
         &self,
+        actor: &ActorContext,
         claim_code: &str,
-        device_id: &DeviceId,
         csr_sha256: &Sha256Hex,
         certificate_sha256: &Sha256Hex,
         now: UnixMillis,
     ) -> Result<CompletedBridgeEnrollmentAuthority, BridgeEnrollmentAuthorityError>;
 }
 
-fn is_exact_der_sequence(value: &[u8]) -> bool {
-    if value.len() < 2 || value.len() > MAX_BRIDGE_ENROLLMENT_CSR_DER_BYTES || value[0] != 0x30 {
+fn is_exact_der_sequence(value: &[u8], maximum: usize) -> bool {
+    if value.len() < 2 || value.len() > maximum || value[0] != 0x30 {
         return false;
     }
     let first_length = value[1];
@@ -483,6 +545,10 @@ mod tests {
             Sha256Hex::parse(csr_sha256)?,
             false,
         ))
+    }
+
+    fn public_certificate_der() -> Vec<u8> {
+        vec![0x30, 0x03, 0x02, 0x01, 0x00]
     }
 
     #[test]
@@ -581,7 +647,9 @@ mod tests {
         let signed = SignedBridgeEnrollmentCertificate::for_request(
             &first_request,
             Sha256Hex::parse("cd".repeat(32))?,
-        );
+            public_certificate_der(),
+            Vec::new(),
+        )?;
         signed.validate_for_request(&first_request)?;
 
         let second_der = [0x30, 0x03, 0x02, 0x01, 0x01];
@@ -594,6 +662,39 @@ mod tests {
         )?;
         assert!(matches!(
             signed.validate_for_request(&second_request),
+            Err(error)
+                if error.class()
+                    == BridgeEnrollmentCertificateSignerErrorClass::CertificateIdentityMismatch
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn signed_result_accepts_only_bounded_exact_der_public_material() -> TestResult {
+        let csr_der = [0x30, 0x03, 0x02, 0x01, 0x00];
+        let csr_sha256 = "b560833d6f787af46113b96aad4dd5b5d1ae00dccc69cf30cc92bed651c56617";
+        let reservation = reservation_for(csr_sha256)?;
+        let request = BridgeEnrollmentCertificateSignRequest::new(
+            &reservation,
+            &csr_der,
+            Sha256Hex::parse(csr_sha256)?,
+        )?;
+        assert!(
+            SignedBridgeEnrollmentCertificate::for_request(
+                &request,
+                Sha256Hex::parse("cd".repeat(32))?,
+                public_certificate_der(),
+                vec![public_certificate_der()],
+            )
+            .is_ok()
+        );
+        assert!(matches!(
+            SignedBridgeEnrollmentCertificate::for_request(
+                &request,
+                Sha256Hex::parse("cd".repeat(32))?,
+                vec![0x31, 0x00],
+                Vec::new(),
+            ),
             Err(error)
                 if error.class()
                     == BridgeEnrollmentCertificateSignerErrorClass::CertificateIdentityMismatch

@@ -2,6 +2,7 @@
 
 pub mod access_identity;
 pub mod access_webcrypto;
+pub mod bridge_enrollment_signer;
 pub mod cloud_mail_query;
 pub mod cloud_mailbox_provider;
 mod cloud_mailbox_secrets;
