@@ -9,9 +9,16 @@ Set-StrictMode -Version Latest
 $Root = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 $SourceSha = (& git -C $Root rev-parse HEAD).Trim()
 if ($LASTEXITCODE -ne 0 -or $SourceSha -notmatch '^[0-9a-f]{40}$') { throw 'unable to resolve exact source SHA' }
-foreach ($name in @('CLOUDFLARE_API_TOKEN', 'CLOUDFLARE_OBSERVE_API_TOKEN', 'CLOUDFLARE_ZERO_TRUST_OBSERVE_API_TOKEN', 'CLOUDFLARE_ACCOUNT_ID')) {
+foreach ($name in @(
+    'CLOUDFLARE_API_TOKEN',
+    'CLOUDFLARE_OBSERVE_API_TOKEN',
+    'CLOUDFLARE_ZERO_TRUST_OBSERVE_API_TOKEN',
+    'CLOUDFLARE_ACCOUNT_ID',
+    'CLOUDFLARE_E2E_TUNNEL_TOKEN',
+    'TUNNEL_TOKEN'
+)) {
     if (-not [string]::IsNullOrEmpty([Environment]::GetEnvironmentVariable($name))) {
-        throw "$name must not be exposed to the local Bridge enrollment E2E harness"
+        throw "$name must not be exposed to the Bridge enrollment E2E harness"
     }
 }
 
@@ -22,15 +29,14 @@ $TenantId = 'tenant_e2e_01'
 $ActorId = 'actor_e2e_01'
 $IdentityId = 'identity_e2e_01'
 $AccessSubject = 'bridge_e2e_subject_01'
-$Origin = "https://localhost:$IngressPort"
+$TunnelHostname = 'bridge-e2e.alegria.by'
+$Origin = "https://$TunnelHostname"
 $Scratch = Join-Path $env:RUNNER_TEMP "bridge-enrollment-e2e-$PID"
 $State = Join-Path $Scratch 'state'
 $MigrationDir = Join-Path $Scratch 'migrations'
 $ControlConfig = Join-Path $Scratch 'control.wrangler.jsonc'
 $SignerConfig = Join-Path $Scratch 'signer.wrangler.jsonc'
 $TokenFile = Join-Path $Scratch 'access-token.txt'
-$TlsPfx = Join-Path $Scratch 'ingress.pfx'
-$TlsCer = Join-Path $Scratch 'ingress.cer'
 $DependencyStdout = Join-Path $Scratch 'dependency.stdout.log'
 $DependencyStderr = Join-Path $Scratch 'dependency.stderr.log'
 $WranglerStdout = Join-Path $Scratch 'wrangler.stdout.log'
@@ -40,17 +46,12 @@ $SignerWorker = Join-Path $Root 'tests/bridge-enrollment-e2e/signer-worker.mjs'
 $SignerScript = Join-Path $Root 'tests/bridge-enrollment-e2e/sign-csr.ps1'
 $HostBinary = Join-Path $Root 'tools/bridge-host-ops/target/release/bridge-host-ops.exe'
 $WorkerShim = Join-Path $Root 'apps/control-plane-worker/build/worker/shim.mjs'
-$CertUtil = Join-Path $env:SystemRoot 'System32\certutil.exe'
 $Provider = [System.Security.Cryptography.CngProvider]::MicrosoftSoftwareKeyStorageProvider
 
 $DependencyProcess = $null
 $WranglerProcess = $null
-$TlsCertificate = $null
-$TlsTrustThumbprint = $null
-$TlsTrustAdded = $false
 $PositiveThumbprint = $null
 $PositiveDeviceId = $null
-$EvidenceWritten = $false
 
 function Write-Phase([string]$Name) {
     Write-Host "bridge-enrollment-e2e phase=$Name"
@@ -128,16 +129,7 @@ function Wait-HttpReady(
     while ($timer.Elapsed.TotalSeconds -lt $TimeoutSeconds) {
         if ($null -ne $Process -and $Process.HasExited) { throw "$Label exited before readiness" }
         try {
-            $request = @{
-                Uri = $Uri
-                Method = 'Get'
-                TimeoutSec = 2
-                SkipHttpErrorCheck = $true
-            }
-            if ($Uri.StartsWith('https://localhost:', [System.StringComparison]::OrdinalIgnoreCase)) {
-                $request.SkipCertificateCheck = $true
-            }
-            $response = Invoke-WebRequest @request
+            $response = Invoke-WebRequest -Uri $Uri -Method Get -TimeoutSec 2 -SkipHttpErrorCheck
             if ([int]$response.StatusCode -eq 200) { return }
         } catch {}
         Start-Sleep -Milliseconds 500
@@ -183,7 +175,6 @@ function Invoke-EnrollmentHttp(
         ContentType = 'application/json'
         Body = $Body
         SkipHttpErrorCheck = $true
-        SkipCertificateCheck = $true
         TimeoutSec = 15
     }
     $response = Invoke-WebRequest @request
@@ -229,7 +220,6 @@ New-Item -ItemType Directory -Path $Scratch, $State, $MigrationDir -Force | Out-
 try {
     if (-not (Test-Path $HostBinary)) { throw 'release bridge-host-ops binary is missing' }
     if (-not (Test-Path $WorkerShim)) { throw 'control-plane Worker build output is missing' }
-    if (-not (Test-Path $CertUtil -PathType Leaf)) { throw 'Windows certutil is unavailable' }
 
     Write-Phase 'typed-d1-projection'
     $projectionText = & cargo run --locked --quiet --manifest-path (Join-Path $Root 'tools/opsctl/Cargo.toml') -- --root $Root d1 repository
@@ -300,34 +290,9 @@ try {
     Invoke-Wrangler -Arguments @('d1', 'execute', 'CATALOG_DB', '--local', '--config', $ControlConfig, '--persist-to', $State, '--command', $seedSql, '--experimental-provision=false', '--experimental-auto-create=false') -Label 'local D1 seed execute' -TimeoutSeconds 30
     Write-Phase 'local-d1-seed-pass'
 
-    Write-Phase 'tls-setup'
-    $tlsArguments = @{
-        Subject = 'CN=localhost'
-        DnsName = 'localhost'
-        CertStoreLocation = 'Cert:\CurrentUser\My'
-        KeyAlgorithm = 'RSA'
-        KeyLength = 2048
-        HashAlgorithm = 'SHA256'
-        KeyExportPolicy = 'Exportable'
-        NotAfter = [DateTimeOffset]::UtcNow.AddHours(2).DateTime
-    }
-    $TlsCertificate = New-SelfSignedCertificate @tlsArguments
-    $TlsTrustThumbprint = $TlsCertificate.Thumbprint.ToUpperInvariant()
-    [System.IO.File]::WriteAllBytes($TlsCer, $TlsCertificate.RawData)
-    Write-Phase 'tls-trust-add'
-    $null = Invoke-BoundedExecutable -FilePath $CertUtil -Arguments @('-user', '-addstore', 'Root', $TlsCer) -Label 'temporary localhost trust add' -TimeoutSeconds 10
-    $TlsTrustAdded = $true
-    Write-Phase 'tls-trust-add-pass'
-    $TlsPassword = Convert-BytesToLowerHex ([System.Security.Cryptography.RandomNumberGenerator]::GetBytes(18))
-    $TlsSecurePassword = ConvertTo-SecureString -String $TlsPassword -AsPlainText -Force
-    Export-PfxCertificate -Cert $TlsCertificate -FilePath $TlsPfx -Password $TlsSecurePassword | Out-Null
-    Write-Phase 'tls-setup-pass'
-
     $env:E2E_CONTROL_PORT = [string]$ControlPort
     $env:E2E_DEPENDENCY_PORT = [string]$DependencyPort
     $env:E2E_INGRESS_PORT = [string]$IngressPort
-    $env:E2E_TLS_PFX = $TlsPfx
-    $env:E2E_TLS_PFX_PASSWORD = $TlsPassword
     $env:E2E_TOKEN_FILE = $TokenFile
     $env:E2E_SIGNER_SCRIPT = $SignerScript
     $dependencyStart = @{
@@ -342,6 +307,8 @@ try {
     $DependencyProcess = Start-Process @dependencyStart
     Wait-HttpReady -Uri "http://127.0.0.1:$DependencyPort/cdn-cgi/access/certs" -Process $DependencyProcess -Label 'local dependency server' -TimeoutSeconds 20
     Write-Phase 'dependency-ready'
+    Wait-HttpReady -Uri "http://127.0.0.1:$IngressPort/__e2e/ready" -Process $DependencyProcess -Label 'local HTTP tunnel origin' -TimeoutSeconds 20
+    Write-Phase 'local-ingress-ready'
     if (-not (Test-Path $TokenFile -PathType Leaf)) { throw 'local Access token was not created' }
 
     $wranglerStart = @{
@@ -356,8 +323,8 @@ try {
     $WranglerProcess = Start-Process @wranglerStart
     Wait-HttpReady -Uri "http://127.0.0.1:$ControlPort/api/v1/health" -Process $WranglerProcess -Label 'local shipping control-plane Worker' -TimeoutSeconds 45
     Write-Phase 'wrangler-ready'
-    Wait-HttpReady -Uri "$Origin/__e2e/ready" -Process $DependencyProcess -Label 'local HTTPS Access edge' -TimeoutSeconds 20
-    Write-Phase 'https-ingress-ready'
+    Wait-HttpReady -Uri "$Origin/__e2e/ready" -Process $null -Label 'Cloudflare Tunnel public ingress' -TimeoutSeconds 45
+    Write-Phase 'cloudflare-tunnel-ready'
     Write-Phase 'local-services-ready'
 
     Write-Phase 'positive-host-enroll'
@@ -404,10 +371,15 @@ try {
         status = 'PASS'
         sourceSha = $SourceSha
         runner = 'windows'
-        mode = 'LOCAL_TEST_ONLY'
+        mode = 'HOSTED_CLOUDFLARE_TUNNEL_TEST_ONLY'
         providerMutation = $false
         productionMutation = $false
-        remoteProviderCredentialsPresent = $false
+        remoteProviderCredentialsPresent = $true
+        remoteProviderCredentialUsedByHarness = $false
+        remoteProviderCredentialUsedByWorkflowConnector = $true
+        cloudflareTunnelConnectorOnly = $true
+        cloudflareManagedPublicTls = $true
+        cloudflareTunnelHostname = $TunnelHostname
         shippingControlPlaneWorker = $true
         shippingHostEnroll = $true
         localD1FromTypedRepositoryProjection = $true
@@ -430,7 +402,6 @@ try {
     }
     $absoluteReport = if ([System.IO.Path]::IsPathRooted($ReportPath)) { $ReportPath } else { Join-Path $Root $ReportPath }
     Write-JsonFile $absoluteReport $report
-    $EvidenceWritten = $true
     Write-Phase 'evidence-pass'
     Write-Output ($report | ConvertTo-Json -Compress -Depth 20)
 } finally {
@@ -447,19 +418,7 @@ try {
     }
     Stop-ProcessTree -Process $WranglerProcess -Label 'Wrangler process tree'
     Stop-ProcessTree -Process $DependencyProcess -Label 'dependency process tree'
-    if ($TlsTrustAdded -and -not [string]::IsNullOrEmpty($TlsTrustThumbprint)) {
-        Write-Phase 'tls-trust-remove'
-        try {
-            $null = Invoke-BoundedExecutable -FilePath $CertUtil -Arguments @('-user', '-delstore', 'Root', $TlsTrustThumbprint) -Label 'temporary localhost trust remove' -TimeoutSeconds 10
-            Write-Phase 'tls-trust-remove-pass'
-        } catch {
-            Write-Warning "temporary localhost trust cleanup failed: $($_.Exception.Message)"
-        }
-    }
-    if ($null -ne $TlsCertificate) {
-        $TlsCertificate.Dispose()
-    }
-    foreach ($name in @('E2E_CONTROL_PORT', 'E2E_DEPENDENCY_PORT', 'E2E_INGRESS_PORT', 'E2E_TLS_PFX', 'E2E_TLS_PFX_PASSWORD', 'E2E_TOKEN_FILE', 'E2E_SIGNER_SCRIPT')) {
+    foreach ($name in @('E2E_CONTROL_PORT', 'E2E_DEPENDENCY_PORT', 'E2E_INGRESS_PORT', 'E2E_TOKEN_FILE', 'E2E_SIGNER_SCRIPT')) {
         [Environment]::SetEnvironmentVariable($name, $null)
     }
     if (Test-Path $Scratch) { Remove-Item -LiteralPath $Scratch -Recurse -Force -ErrorAction SilentlyContinue }

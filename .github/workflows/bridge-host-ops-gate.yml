@@ -75,6 +75,10 @@ jobs:
     needs: windows-compile
     runs-on: windows-latest
     timeout-minutes: 25
+    environment: staging
+    concurrency:
+      group: bridge-enrollment-hosted-e2e
+      cancel-in-progress: false
     env:
       WRANGLER_SEND_METRICS: 'false'
     steps:
@@ -118,6 +122,19 @@ jobs:
           $version = (npx --yes wrangler@4.129.1 --version).Trim()
           if ($LASTEXITCODE -ne 0 -or $version -notmatch '^4\.129\.1$') { throw "unexpected Wrangler version: $version" }
 
+      - name: Install pinned cloudflared tunnel connector
+        timeout-minutes: 2
+        shell: pwsh
+        run: |
+          $version = '2026.9.0'
+          $expectedSha256 = '83e726ed18ea78c5ad5213c4c3a3a27051393950d2bc8ed4de69bec12d14eaae'
+          $cloudflared = Join-Path $env:RUNNER_TEMP 'cloudflared-2026.9.0-windows-amd64.exe'
+          Invoke-WebRequest -Uri "https://github.com/cloudflare/cloudflared/releases/download/$version/cloudflared-windows-amd64.exe" -OutFile $cloudflared -TimeoutSec 60
+          $actualSha256 = (Get-FileHash -LiteralPath $cloudflared -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actualSha256 -ne $expectedSha256) { throw "cloudflared SHA256 mismatch: $actualSha256" }
+          $versionOutput = (& $cloudflared --version) -join "`n"
+          if ($LASTEXITCODE -ne 0 -or $versionOutput -notmatch '2026\.9\.0') { throw "unexpected cloudflared version: $versionOutput" }
+
       - name: Build shipping Windows host and shipping control-plane Worker
         shell: pwsh
         run: |
@@ -130,78 +147,77 @@ jobs:
       - name: Prove hosted Windows positive and negative enrollment E2E
         timeout-minutes: 10
         shell: pwsh
+        env:
+          CLOUDFLARE_E2E_TUNNEL_TOKEN: ${{ secrets.CLOUDFLARE_E2E_TUNNEL_TOKEN }}
         run: |
-          # Keep the local-only TLS fixture independent of Windows PKI cmdlets.
-          function global:New-SelfSignedCertificate {
-            param(
-              [string]$Subject,
-              [string]$DnsName,
-              [string]$CertStoreLocation,
-              [string]$KeyAlgorithm,
-              [int]$KeyLength,
-              [string]$HashAlgorithm,
-              [string]$KeyExportPolicy,
-              [datetime]$NotAfter
-            )
-            if ($Subject -ne 'CN=localhost' -or $DnsName -ne 'localhost' -or $KeyAlgorithm -ne 'RSA' -or $KeyLength -ne 2048 -or $HashAlgorithm -ne 'SHA256') {
-              throw 'unexpected local TLS fixture contract'
-            }
-            Write-Host 'bridge-enrollment-e2e phase=tls-cert-create'
-            $rsa = [System.Security.Cryptography.RSA]::Create($KeyLength)
-            $request = [System.Security.Cryptography.X509Certificates.CertificateRequest]::new(
-              $Subject,
-              $rsa,
-              [System.Security.Cryptography.HashAlgorithmName]::SHA256,
-              [System.Security.Cryptography.RSASignaturePadding]::Pkcs1
-            )
-            $san = [System.Security.Cryptography.X509Certificates.SubjectAlternativeNameBuilder]::new()
-            $san.AddDnsName($DnsName)
-            $request.CertificateExtensions.Add($san.Build())
-            $request.CertificateExtensions.Add([System.Security.Cryptography.X509Certificates.X509BasicConstraintsExtension]::new($false, $false, 0, $true))
-            $request.CertificateExtensions.Add([System.Security.Cryptography.X509Certificates.X509KeyUsageExtension]::new(
-              [System.Security.Cryptography.X509Certificates.X509KeyUsageFlags]::DigitalSignature -bor [System.Security.Cryptography.X509Certificates.X509KeyUsageFlags]::KeyEncipherment,
-              $true
-            ))
-            $oids = [System.Security.Cryptography.OidCollection]::new()
-            $null = $oids.Add([System.Security.Cryptography.Oid]::new('1.3.6.1.5.5.7.3.1'))
-            $request.CertificateExtensions.Add([System.Security.Cryptography.X509Certificates.X509EnhancedKeyUsageExtension]::new($oids, $false))
-            $global:E2E_LOCAL_TLS_RSA = $rsa
-            $certificate = $request.CreateSelfSigned([DateTimeOffset]::UtcNow.AddMinutes(-5), [DateTimeOffset]$NotAfter)
-            Write-Host 'bridge-enrollment-e2e phase=tls-cert-create-pass'
-            $certificate
+          $cloudflared = Join-Path $env:RUNNER_TEMP 'cloudflared-2026.9.0-windows-amd64.exe'
+          if (-not (Test-Path -LiteralPath $cloudflared -PathType Leaf)) { throw 'pinned cloudflared binary missing' }
+          if ([string]::IsNullOrWhiteSpace($env:CLOUDFLARE_E2E_TUNNEL_TOKEN)) { throw 'CLOUDFLARE_E2E_TUNNEL_TOKEN is missing from staging environment' }
+
+          $tunnelToken = $env:CLOUDFLARE_E2E_TUNNEL_TOKEN
+          $startInfo = [System.Diagnostics.ProcessStartInfo]::new()
+          $startInfo.FileName = $cloudflared
+          $startInfo.UseShellExecute = $false
+          $startInfo.CreateNoWindow = $true
+          foreach ($argument in @('tunnel', '--no-autoupdate', '--loglevel', 'warn', '--metrics', '127.0.0.1:2000', 'run')) {
+            $startInfo.ArgumentList.Add($argument)
           }
-          function global:Export-PfxCertificate {
-            param(
-              [System.Security.Cryptography.X509Certificates.X509Certificate2]$Cert,
-              [string]$FilePath,
-              [securestring]$Password
-            )
-            Write-Host 'bridge-enrollment-e2e phase=tls-pfx-export'
-            $plainPassword = [System.Net.NetworkCredential]::new('', $Password).Password
-            $bytes = $Cert.Export([System.Security.Cryptography.X509Certificates.X509ContentType]::Pfx, $plainPassword)
-            [System.IO.File]::WriteAllBytes([System.IO.Path]::GetFullPath($FilePath), $bytes)
-            Write-Host 'bridge-enrollment-e2e phase=tls-pfx-export-pass'
-          }
+          $null = $startInfo.Environment.Remove('CLOUDFLARE_E2E_TUNNEL_TOKEN')
+          $startInfo.Environment['TUNNEL_TOKEN'] = $tunnelToken
+          $tunnelProcess = [System.Diagnostics.Process]::new()
+          $tunnelProcess.StartInfo = $startInfo
+
           try {
-            ./scripts/bridge-enrollment-hosted-e2e.ps1 -ReportPath artifacts/bridge-enrollment-e2e/evidence.json | ConvertFrom-Json | Out-Null
-          } finally {
-            if ($null -ne $global:E2E_LOCAL_TLS_RSA) {
-              $global:E2E_LOCAL_TLS_RSA.Dispose()
-              $global:E2E_LOCAL_TLS_RSA = $null
+            Write-Host 'bridge-enrollment-e2e phase=cloudflare-tunnel-start'
+            if (-not $tunnelProcess.Start()) { throw 'cloudflared failed to start' }
+            $env:CLOUDFLARE_E2E_TUNNEL_TOKEN = $null
+            [Environment]::SetEnvironmentVariable('TUNNEL_TOKEN', $null)
+            $tunnelToken = $null
+
+            $ready = $false
+            $timer = [System.Diagnostics.Stopwatch]::StartNew()
+            while ($timer.Elapsed.TotalSeconds -lt 30) {
+              if ($tunnelProcess.HasExited) { throw "cloudflared exited before readiness with code $($tunnelProcess.ExitCode)" }
+              try {
+                $response = Invoke-WebRequest -Uri 'http://127.0.0.1:2000/ready' -Method Get -TimeoutSec 2 -SkipHttpErrorCheck
+                if ([int]$response.StatusCode -eq 200) { $ready = $true; break }
+              } catch {}
+              Start-Sleep -Milliseconds 500
             }
-          }
-          $evidence = Get-Content -Raw artifacts/bridge-enrollment-e2e/evidence.json | ConvertFrom-Json
-          if ($evidence.status -ne 'PASS' -or $evidence.kind -ne 'BRIDGE_ENROLLMENT_HOSTED_E2E') { throw 'Bridge enrollment E2E evidence failed' }
-          if ($evidence.providerMutation -or $evidence.productionMutation -or $evidence.remoteProviderCredentialsPresent) { throw 'Bridge enrollment E2E escaped local-only boundary' }
-          if (-not $evidence.shippingControlPlaneWorker -or -not $evidence.shippingHostEnroll -or -not $evidence.localD1FromTypedRepositoryProjection) { throw 'Bridge enrollment E2E did not use shipping owners' }
-          foreach ($value in @(
-            $evidence.negative.signerFailureReservationPersistence,
-            $evidence.negative.wrongCsrConflict,
-            $evidence.negative.exactCsrRecovery,
-            $evidence.negative.consumedReplayRejected,
-            $evidence.negative.expiryReplayRejected
-          )) {
-            if ($value -ne 'PASS') { throw 'Bridge enrollment negative proof is incomplete' }
+            if (-not $ready) { throw 'cloudflared did not become ready within 30 seconds' }
+            Write-Host 'bridge-enrollment-e2e phase=cloudflare-tunnel-connected'
+
+            ./scripts/bridge-enrollment-hosted-e2e.ps1 -ReportPath artifacts/bridge-enrollment-e2e/evidence.json | ConvertFrom-Json | Out-Null
+            $evidence = Get-Content -Raw artifacts/bridge-enrollment-e2e/evidence.json | ConvertFrom-Json
+            if ($evidence.status -ne 'PASS' -or $evidence.kind -ne 'BRIDGE_ENROLLMENT_HOSTED_E2E') { throw 'Bridge enrollment E2E evidence failed' }
+            if ($evidence.providerMutation -or $evidence.productionMutation) { throw 'Bridge enrollment E2E performed an unauthorized provider or Production mutation' }
+            if (-not $evidence.remoteProviderCredentialsPresent -or $evidence.remoteProviderCredentialUsedByHarness -or -not $evidence.remoteProviderCredentialUsedByWorkflowConnector) { throw 'Bridge enrollment E2E tunnel credential boundary is false' }
+            if (-not $evidence.cloudflareTunnelConnectorOnly -or -not $evidence.cloudflareManagedPublicTls -or $evidence.cloudflareTunnelHostname -ne 'bridge-e2e.alegria.by') { throw 'Bridge enrollment E2E did not prove the Cloudflare-managed ingress boundary' }
+            if (-not $evidence.shippingControlPlaneWorker -or -not $evidence.shippingHostEnroll -or -not $evidence.localD1FromTypedRepositoryProjection) { throw 'Bridge enrollment E2E did not use shipping owners' }
+            foreach ($value in @(
+              $evidence.negative.signerFailureReservationPersistence,
+              $evidence.negative.wrongCsrConflict,
+              $evidence.negative.exactCsrRecovery,
+              $evidence.negative.consumedReplayRejected,
+              $evidence.negative.expiryReplayRejected
+            )) {
+              if ($value -ne 'PASS') { throw 'Bridge enrollment negative proof is incomplete' }
+            }
+          } finally {
+            $env:CLOUDFLARE_E2E_TUNNEL_TOKEN = $null
+            [Environment]::SetEnvironmentVariable('TUNNEL_TOKEN', $null)
+            if ($null -ne $tunnelProcess) {
+              try {
+                if (-not $tunnelProcess.HasExited) {
+                  $tunnelProcess.Kill($true)
+                  if (-not $tunnelProcess.WaitForExit(10000)) { Write-Warning 'cloudflared cleanup did not exit within 10 seconds' }
+                }
+              } catch {
+                Write-Warning "cloudflared cleanup failed: $($_.Exception.Message)"
+              }
+              $tunnelProcess.Dispose()
+            }
+            Write-Host 'bridge-enrollment-e2e phase=cloudflare-tunnel-cleanup-pass'
           }
 
       - name: Publish secret-free Bridge enrollment E2E evidence

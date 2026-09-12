@@ -1,6 +1,5 @@
 import fs from "node:fs";
 import http from "node:http";
-import https from "node:https";
 import { spawn } from "node:child_process";
 import { generateKeyPairSync, sign } from "node:crypto";
 
@@ -13,8 +12,6 @@ const required = (name) => {
 const controlPort = Number.parseInt(required("E2E_CONTROL_PORT"), 10);
 const dependencyPort = Number.parseInt(required("E2E_DEPENDENCY_PORT"), 10);
 const ingressPort = Number.parseInt(required("E2E_INGRESS_PORT"), 10);
-const pfxPath = required("E2E_TLS_PFX");
-const pfxPassword = required("E2E_TLS_PFX_PASSWORD");
 const tokenFile = required("E2E_TOKEN_FILE");
 const signerScript = required("E2E_SIGNER_SCRIPT");
 const issuer = `http://127.0.0.1:${dependencyPort}`;
@@ -223,15 +220,12 @@ const proxyToControlPlane = async (request, response) => {
   upstream.end(body);
 };
 
-const ingressServer = https.createServer(
-  { pfx: fs.readFileSync(pfxPath), passphrase: pfxPassword, minVersion: "TLSv1.2" },
-  (request, response) => void proxyToControlPlane(request, response),
-);
+const ingressServer = http.createServer((request, response) => void proxyToControlPlane(request, response));
 
 dependencyServer.listen(dependencyPort, "127.0.0.1", () => {
   process.stdout.write(`dependency-ready:${dependencyPort}\n`);
 });
-ingressServer.listen(ingressPort, "localhost", () => {
+ingressServer.listen(ingressPort, "127.0.0.1", () => {
   process.stdout.write(`ingress-ready:${ingressPort}\n`);
 });
 
