@@ -339,10 +339,7 @@ impl SignedBridgeEnrollmentCertificate {
             MAX_BRIDGE_ENROLLMENT_CERTIFICATE_DER_BYTES,
         ) || certificate_chain_der.len() > MAX_BRIDGE_ENROLLMENT_CERTIFICATE_CHAIN_LENGTH
             || certificate_chain_der.iter().any(|certificate| {
-                !is_exact_der_sequence(
-                    certificate,
-                    MAX_BRIDGE_ENROLLMENT_CERTIFICATE_DER_BYTES,
-                )
+                !is_exact_der_sequence(certificate, MAX_BRIDGE_ENROLLMENT_CERTIFICATE_DER_BYTES)
             })
         {
             return Err(BridgeEnrollmentCertificateSignerError::new(
@@ -397,7 +394,10 @@ impl fmt::Debug for SignedBridgeEnrollmentCertificate {
             .field("csr_sha256", &self.csr_sha256)
             .field("certificate_sha256", &self.certificate_sha256)
             .field("leaf_certificate_der", &"[PUBLIC CERTIFICATE REDACTED]")
-            .field("certificate_chain_length", &self.certificate_chain_der.len())
+            .field(
+                "certificate_chain_length",
+                &self.certificate_chain_der.len(),
+            )
             .finish()
     }
 }
@@ -675,13 +675,15 @@ mod tests {
             &csr_der,
             Sha256Hex::parse(csr_sha256)?,
         )?;
-        assert!(SignedBridgeEnrollmentCertificate::for_request(
-            &request,
-            Sha256Hex::parse("cd".repeat(32))?,
-            public_certificate_der(),
-            vec![public_certificate_der()],
-        )
-        .is_ok());
+        assert!(
+            SignedBridgeEnrollmentCertificate::for_request(
+                &request,
+                Sha256Hex::parse("cd".repeat(32))?,
+                public_certificate_der(),
+                vec![public_certificate_der()],
+            )
+            .is_ok()
+        );
         assert!(matches!(
             SignedBridgeEnrollmentCertificate::for_request(
                 &request,

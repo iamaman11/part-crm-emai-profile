@@ -108,7 +108,10 @@ impl BridgeEnrollmentCertificateSignerPort for CloudflareBridgeEnrollmentCertifi
                 BridgeEnrollmentCertificateSignerErrorClass::CertificateIdentityMismatch,
             ));
         }
-        let document = response.bytes().await.map_err(|_| dependency_unavailable())?;
+        let document = response
+            .bytes()
+            .await
+            .map_err(|_| dependency_unavailable())?;
         if document.is_empty() || document.len() > MAX_SIGNER_RESPONSE_BYTES {
             return Err(signer_error(
                 BridgeEnrollmentCertificateSignerErrorClass::CertificateIdentityMismatch,
@@ -165,7 +168,9 @@ fn response_content_length_exceeds(
     let Some(value) = value else {
         return Ok(false);
     };
-    let length = value.parse::<usize>().map_err(|_| dependency_unavailable())?;
+    let length = value
+        .parse::<usize>()
+        .map_err(|_| dependency_unavailable())?;
     Ok(length > maximum)
 }
 

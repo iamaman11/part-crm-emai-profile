@@ -1,19 +1,21 @@
-use crate::access_session::{correlation_hint, neutral_not_found, problem, resolve_active_request_actor};
+use crate::access_session::{
+    correlation_hint, neutral_not_found, problem, resolve_active_request_actor,
+};
 use crate::command_evidence;
+use application_ports::bridge_enrollment::MAX_BRIDGE_ENROLLMENT_CSR_DER_BYTES;
 use application_ports::{
     BridgeEnrollmentAuthorityError, BridgeEnrollmentAuthorityErrorClass,
     BridgeEnrollmentAuthorityPort, BridgeEnrollmentCertificateSignRequest,
     BridgeEnrollmentCertificateSignerError, BridgeEnrollmentCertificateSignerErrorClass,
     BridgeEnrollmentCertificateSignerPort, Sha256Hex,
 };
-use application_ports::bridge_enrollment::MAX_BRIDGE_ENROLLMENT_CSR_DER_BYTES;
 use cloudflare_adapters::bridge_enrollment_signer::CloudflareBridgeEnrollmentCertificateSigner;
 use cloudflare_adapters::d1_bridge_enrollment::D1BridgeEnrollmentAuthority;
+use control_plane_contract::D1_CATALOG_BINDING;
 use control_plane_contract::bridge_enrollment_api::{
     BridgeEnrollmentIssueProjection, BridgeEnrollmentIssueRequest,
     BridgeEnrollmentRedemptionProjection, BridgeEnrollmentRedemptionRequest,
 };
-use control_plane_contract::D1_CATALOG_BINDING;
 use profile_platform_primitives::UnixMillis;
 use sha2::{Digest, Sha256};
 use worker::{Date, Env, Error, Request, Response, Result};
@@ -116,7 +118,10 @@ async fn redeem(request: &mut Request, env: &Env, tenant_id: &str) -> Result<Res
         Err(error) => return signer_failure(correlation_id, error),
     };
     let signer = CloudflareBridgeEnrollmentCertificateSigner::new(env);
-    let signed = match signer.sign_bridge_enrollment_certificate(&sign_request).await {
+    let signed = match signer
+        .sign_bridge_enrollment_certificate(&sign_request)
+        .await
+    {
         Ok(value) => value,
         Err(error) => return signer_failure(correlation_id, error),
     };
@@ -214,7 +219,10 @@ fn hex_encode(bytes: &[u8]) -> String {
     output
 }
 
-fn authority_failure(correlation_id: &str, error: BridgeEnrollmentAuthorityError) -> Result<Response> {
+fn authority_failure(
+    correlation_id: &str,
+    error: BridgeEnrollmentAuthorityError,
+) -> Result<Response> {
     match error.class() {
         BridgeEnrollmentAuthorityErrorClass::NotFound => neutral_not_found(correlation_id),
         BridgeEnrollmentAuthorityErrorClass::ReplayRejected => {
@@ -224,7 +232,9 @@ fn authority_failure(correlation_id: &str, error: BridgeEnrollmentAuthorityError
             problem(correlation_id, 409, "conflict", "Conflict")
         }
         BridgeEnrollmentAuthorityErrorClass::IntegrityFailure => integrity_failure(correlation_id),
-        BridgeEnrollmentAuthorityErrorClass::DependencyUnavailable => dependency_unavailable(correlation_id),
+        BridgeEnrollmentAuthorityErrorClass::DependencyUnavailable => {
+            dependency_unavailable(correlation_id)
+        }
     }
 }
 

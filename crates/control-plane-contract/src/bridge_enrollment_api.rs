@@ -150,9 +150,15 @@ mod tests {
             BRIDGE_ENROLLMENT_REDEEM_PATH_TEMPLATE,
         ] {
             let path = template.replace("{tenantId}", "tenant_01JENROLL");
-            assert_eq!(classify_route("POST", &path), RouteClass::BridgeEnrollmentApi);
+            assert_eq!(
+                classify_route("POST", &path),
+                RouteClass::BridgeEnrollmentApi
+            );
             for method in ["GET", "PUT", "DELETE"] {
-                assert_eq!(classify_route(method, &path), RouteClass::DynamicRouteNotFound);
+                assert_eq!(
+                    classify_route(method, &path),
+                    RouteClass::DynamicRouteNotFound
+                );
             }
         }
     }
@@ -169,12 +175,18 @@ mod tests {
     #[test]
     fn redemption_request_contains_only_claim_and_exact_csr_transport()
     -> Result<(), Box<dyn std::error::Error>> {
-        let valid = format!(r#"{{"claimCode":"{}","csrDerHex":"3000"}}"#, "a".repeat(64));
+        let valid = format!(
+            r#"{{"claimCode":"{}","csrDerHex":"3000"}}"#,
+            "a".repeat(64)
+        );
         let request = serde_json::from_str::<BridgeEnrollmentRedemptionRequest>(&valid)?;
         assert_eq!(request.claim_code().len(), 64);
         assert_eq!(request.csr_der_hex(), "3000");
         for forbidden in ["tenantId", "actorId", "deviceId", "csrSha256"] {
-            let invalid = valid.replace("}", &format!(r#","{forbidden}":"caller-owned"}}"#));
+            let invalid = valid.replace(
+                "}",
+                &format!(r#","{forbidden}":"caller-owned"}}"#),
+            );
             assert!(serde_json::from_str::<BridgeEnrollmentRedemptionRequest>(&invalid).is_err());
         }
         Ok(())
@@ -183,7 +195,8 @@ mod tests {
     #[test]
     fn fragment_has_no_caller_identity_or_digest_fields() {
         let fragment = openapi_fragment();
-        let request = &fragment["components"]["schemas"]["BridgeEnrollmentRedemptionRequest"]["properties"];
+        let request = &fragment["components"]["schemas"]["BridgeEnrollmentRedemptionRequest"]
+            ["properties"];
         assert!(request.get("claimCode").is_some());
         assert!(request.get("csrDerHex").is_some());
         for forbidden in ["tenantId", "actorId", "deviceId", "csrSha256"] {
