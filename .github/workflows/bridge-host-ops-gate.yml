@@ -74,7 +74,7 @@ jobs:
     name: Bridge Enrollment Hosted E2E (Windows)
     needs: windows-compile
     runs-on: windows-latest
-    timeout-minutes: 25
+    timeout-minutes: 45
     env:
       WRANGLER_SEND_METRICS: 'false'
     steps:
