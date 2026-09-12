@@ -98,19 +98,34 @@ function Invoke-BoundedExecutable(
         $stderrTask = $process.StandardError.ReadToEndAsync()
         if (-not $process.WaitForExit($TimeoutSeconds * 1000)) {
             $activeEffect = 'none'
+            $powershellStage = ''
             try {
-                $effectNames = @(
+                $effects = @(
                     Get-CimInstance -ClassName Win32_Process -Filter "ParentProcessId = $($process.Id)" -ErrorAction Stop |
-                        ForEach-Object { [string]$_.Name } |
-                        Where-Object { $_ -in @('curl.exe', 'powershell.exe') } |
-                        Sort-Object -Unique
+                        Where-Object { [string]$_.Name -in @('curl.exe', 'powershell.exe') }
                 )
+                $effectNames = @($effects | ForEach-Object { [string]$_.Name } | Sort-Object -Unique)
                 if ($effectNames.Count -gt 0) { $activeEffect = $effectNames -join ',' }
+                $powershellEffect = @($effects | Where-Object { [string]$_.Name -eq 'powershell.exe' } | Select-Object -First 1)
+                if ($powershellEffect.Count -eq 1) {
+                    $commandLine = [string]$powershellEffect[0].CommandLine
+                    if ($commandLine -like '*CreateSigningRequest*') {
+                        $powershellStage = 'csr-create'
+                    } elseif ($commandLine -like '*CopyWithPrivateKey*') {
+                        $powershellStage = 'certificate-install'
+                    } elseif ($commandLine -like "*Write-Output 'removed'*") {
+                        $powershellStage = 'key-cleanup'
+                    } else {
+                        $powershellStage = 'unknown'
+                    }
+                }
             } catch {
                 $activeEffect = 'observation-unavailable'
+                $powershellStage = ''
             }
             try { $process.Kill($true) } catch {}
-            throw "$Label timed out after $TimeoutSeconds seconds; active-effect=$activeEffect"
+            $stageDetail = if ([string]::IsNullOrEmpty($powershellStage)) { '' } else { "; powershell-stage=$powershellStage" }
+            throw "$Label timed out after $TimeoutSeconds seconds; active-effect=$activeEffect$stageDetail"
         }
         $process.WaitForExit()
         $stdout = $stdoutTask.GetAwaiter().GetResult()
