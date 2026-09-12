@@ -62,9 +62,14 @@ function Write-JsonFile([string]$Path, [object]$Value) {
     (($Value | ConvertTo-Json -Depth 20) + "`n") | Set-Content -Path $Path -Encoding utf8NoBOM
 }
 
-function Stop-ProcessTree([System.Diagnostics.Process]$Process) {
+function Stop-ProcessTree([System.Diagnostics.Process]$Process, [string]$Label) {
     if ($null -eq $Process -or $Process.HasExited) { return }
-    & taskkill.exe /PID $Process.Id /T /F 2>$null | Out-Null
+    try { $Process.Kill($true) } catch {}
+    try {
+        if (-not $Process.WaitForExit(10_000)) {
+            Write-Warning "$Label cleanup did not exit within 10 seconds"
+        }
+    } catch {}
 }
 
 function Invoke-BoundedExecutable(
@@ -103,22 +108,28 @@ function Invoke-BoundedExecutable(
     }
 }
 
-function Invoke-Wrangler([string[]]$Arguments, [string]$Label, [int]$TimeoutSeconds = 90) {
+function Invoke-Wrangler([string[]]$Arguments, [string]$Label, [int]$TimeoutSeconds = 75) {
     $npx = (Get-Command npx.cmd).Source
     $npxArguments = @('--yes', 'wrangler@4.94.0') + $Arguments
     $null = Invoke-BoundedExecutable -FilePath $npx -Arguments $npxArguments -Label $Label -TimeoutSeconds $TimeoutSeconds
 }
 
-function Wait-HttpReady([string]$Uri, [System.Diagnostics.Process]$Process, [string]$Label, [int]$Attempts = 90) {
-    for ($index = 0; $index -lt $Attempts; $index++) {
+function Wait-HttpReady(
+    [string]$Uri,
+    [System.Diagnostics.Process]$Process,
+    [string]$Label,
+    [int]$TimeoutSeconds = 30
+) {
+    $timer = [System.Diagnostics.Stopwatch]::StartNew()
+    while ($timer.Elapsed.TotalSeconds -lt $TimeoutSeconds) {
         if ($null -ne $Process -and $Process.HasExited) { throw "$Label exited before readiness" }
         try {
             $response = Invoke-WebRequest -Uri $Uri -Method Get -TimeoutSec 2 -SkipHttpErrorCheck
             if ([int]$response.StatusCode -eq 200) { return }
         } catch {}
-        Start-Sleep -Seconds 1
+        Start-Sleep -Milliseconds 500
     }
-    throw "$Label did not become ready"
+    throw "$Label did not become ready within $TimeoutSeconds seconds"
 }
 
 function New-TestCsrHex {
@@ -159,7 +170,7 @@ function Invoke-EnrollmentHttp(
         ContentType = 'application/json'
         Body = $Body
         SkipHttpErrorCheck = $true
-        TimeoutSec = 30
+        TimeoutSec = 15
     }
     $response = Invoke-WebRequest @request
     $status = [int]$response.StatusCode
@@ -266,14 +277,15 @@ try {
     })
 
     Write-Phase 'local-d1-migrations'
-    Invoke-Wrangler -Arguments @('d1', 'migrations', 'apply', 'CATALOG_DB', '--local', '--config', $ControlConfig, '--persist-to', $State, '--experimental-provision=false', '--experimental-auto-create=false') -Label 'local D1 migrations apply' -TimeoutSeconds 90
+    Invoke-Wrangler -Arguments @('d1', 'migrations', 'apply', 'CATALOG_DB', '--local', '--config', $ControlConfig, '--persist-to', $State, '--experimental-provision=false', '--experimental-auto-create=false') -Label 'local D1 migrations apply' -TimeoutSeconds 75
     Write-Phase 'local-d1-migrations-pass'
     $nowMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
     $seedSql = "INSERT INTO tenants (tenant_id, display_name, status, version, created_at_ms, updated_at_ms) VALUES ('$TenantId', 'Bridge Enrollment E2E', 'ACTIVE', 1, $nowMs, $nowMs); INSERT INTO identities (identity_id, access_subject, verified_contact_hint, created_at_ms) VALUES ('$IdentityId', '$AccessSubject', 'bridge-e2e@example.test', $nowMs); INSERT INTO memberships (tenant_id, actor_id, identity_id, role, status, version, created_at_ms, updated_at_ms) VALUES ('$TenantId', '$ActorId', '$IdentityId', 'TENANT_OWNER', 'ACTIVE', 1, $nowMs, $nowMs);"
     Write-Phase 'local-d1-seed'
-    Invoke-Wrangler -Arguments @('d1', 'execute', 'CATALOG_DB', '--local', '--config', $ControlConfig, '--persist-to', $State, '--command', $seedSql, '--experimental-provision=false', '--experimental-auto-create=false') -Label 'local D1 seed execute' -TimeoutSeconds 90
+    Invoke-Wrangler -Arguments @('d1', 'execute', 'CATALOG_DB', '--local', '--config', $ControlConfig, '--persist-to', $State, '--command', $seedSql, '--experimental-provision=false', '--experimental-auto-create=false') -Label 'local D1 seed execute' -TimeoutSeconds 30
     Write-Phase 'local-d1-seed-pass'
 
+    Write-Phase 'tls-setup'
     $tlsArguments = @{
         Subject = 'CN=localhost'
         DnsName = 'localhost'
@@ -292,6 +304,7 @@ try {
     $TlsPassword = Convert-BytesToLowerHex ([System.Security.Cryptography.RandomNumberGenerator]::GetBytes(18))
     $TlsSecurePassword = ConvertTo-SecureString -String $TlsPassword -AsPlainText -Force
     Export-PfxCertificate -Cert $TlsCertificate -FilePath $TlsPfx -Password $TlsSecurePassword | Out-Null
+    Write-Phase 'tls-setup-pass'
 
     $env:E2E_CONTROL_PORT = [string]$ControlPort
     $env:E2E_DEPENDENCY_PORT = [string]$DependencyPort
@@ -308,8 +321,10 @@ try {
         RedirectStandardOutput = $DependencyStdout
         RedirectStandardError = $DependencyStderr
     }
+    Write-Phase 'dependency-start'
     $DependencyProcess = Start-Process @dependencyStart
-    Wait-HttpReady -Uri "http://127.0.0.1:$DependencyPort/cdn-cgi/access/certs" -Process $DependencyProcess -Label 'local dependency server'
+    Wait-HttpReady -Uri "http://127.0.0.1:$DependencyPort/cdn-cgi/access/certs" -Process $DependencyProcess -Label 'local dependency server' -TimeoutSeconds 20
+    Write-Phase 'dependency-ready'
     if (-not (Test-Path $TokenFile -PathType Leaf)) { throw 'local Access token was not created' }
 
     $wranglerStart = @{
@@ -320,21 +335,24 @@ try {
         RedirectStandardOutput = $WranglerStdout
         RedirectStandardError = $WranglerStderr
     }
+    Write-Phase 'wrangler-start'
     $WranglerProcess = Start-Process @wranglerStart
-    Wait-HttpReady -Uri "http://127.0.0.1:$ControlPort/api/v1/health" -Process $WranglerProcess -Label 'local shipping control-plane Worker' -Attempts 120
-    Wait-HttpReady -Uri "$Origin/__e2e/ready" -Process $DependencyProcess -Label 'local HTTPS Access edge'
+    Wait-HttpReady -Uri "http://127.0.0.1:$ControlPort/api/v1/health" -Process $WranglerProcess -Label 'local shipping control-plane Worker' -TimeoutSeconds 45
+    Write-Phase 'wrangler-ready'
+    Wait-HttpReady -Uri "$Origin/__e2e/ready" -Process $DependencyProcess -Label 'local HTTPS Access edge' -TimeoutSeconds 20
+    Write-Phase 'https-ingress-ready'
     Write-Phase 'local-services-ready'
 
     Write-Phase 'positive-host-enroll'
     $hostArgs = @('enroll', '--origin', $Origin, '--tenant-id', $TenantId, '--access-token-file', $TokenFile, '--correlation-id', 'corr_e2e_host_01', '--idempotency-key', 'idem_e2e_host_01')
-    $hostOutput = Invoke-BoundedExecutable -FilePath $HostBinary -Arguments $hostArgs -Label 'shipping bridge-host-ops enroll' -TimeoutSeconds 60
+    $hostOutput = Invoke-BoundedExecutable -FilePath $HostBinary -Arguments $hostArgs -Label 'shipping bridge-host-ops enroll' -TimeoutSeconds 45
     $hostReceipt = ($hostOutput -join "`n") | ConvertFrom-Json
     if ([string]$hostReceipt.schemaVersion -ne 'bridge-host-ops/v1' -or [string]$hostReceipt.operation -ne 'enroll' -or [string]$hostReceipt.controlPlaneOrigin -ne $Origin -or [string]$hostReceipt.certificateStore -ne 'LocalMachine/My' -or [string]$hostReceipt.deviceId -notmatch '^[A-Za-z0-9_-]{8,96}$' -or [string]$hostReceipt.certificateSha1 -notmatch '^[0-9A-F]{40}$' -or [string]$hostReceipt.certificateSha256 -notmatch '^[0-9a-f]{64}$') {
         throw 'shipping enroll receipt is malformed'
     }
     $PositiveThumbprint = [string]$hostReceipt.certificateSha1
     $PositiveDeviceId = [string]$hostReceipt.deviceId
-    $inspectOutput = Invoke-BoundedExecutable -FilePath $HostBinary -Arguments @('inspect', '--thumbprint', $PositiveThumbprint) -Label 'shipping certificate inspect' -TimeoutSeconds 30
+    $inspectOutput = Invoke-BoundedExecutable -FilePath $HostBinary -Arguments @('inspect', '--thumbprint', $PositiveThumbprint) -Label 'shipping certificate inspect' -TimeoutSeconds 20
     $inspectReceipt = ($inspectOutput -join "`n") | ConvertFrom-Json
     if ([string]$inspectReceipt.certificateSha256 -ne [string]$hostReceipt.certificateSha256) { throw 'post-enroll local certificate identity drifted' }
     Write-Phase 'positive-host-enroll-pass'
@@ -399,6 +417,7 @@ try {
     Write-Phase 'evidence-pass'
     Write-Output ($report | ConvertTo-Json -Compress -Depth 20)
 } finally {
+    Write-Phase 'cleanup-start'
     if ($null -ne $PositiveThumbprint -and (Test-Path "Cert:\LocalMachine\My\$PositiveThumbprint")) {
         Remove-Item -Path "Cert:\LocalMachine\My\$PositiveThumbprint" -DeleteKey -Confirm:$false -ErrorAction SilentlyContinue
     }
@@ -409,8 +428,8 @@ try {
             try { $key.Delete() } finally { $key.Dispose() }
         }
     }
-    Stop-ProcessTree $WranglerProcess
-    Stop-ProcessTree $DependencyProcess
+    Stop-ProcessTree -Process $WranglerProcess -Label 'Wrangler process tree'
+    Stop-ProcessTree -Process $DependencyProcess -Label 'dependency process tree'
     if ($null -ne $TlsCertificate) {
         try {
             $rootStore = [System.Security.Cryptography.X509Certificates.X509Store]::new('Root', [System.Security.Cryptography.X509Certificates.StoreLocation]::CurrentUser)
@@ -425,5 +444,6 @@ try {
         [Environment]::SetEnvironmentVariable($name, $null)
     }
     if (Test-Path $Scratch) { Remove-Item -LiteralPath $Scratch -Recurse -Force -ErrorAction SilentlyContinue }
+    Write-Phase 'cleanup-pass'
     if (-not $EvidenceWritten -and $?) { throw 'Bridge enrollment hosted E2E did not produce PASS evidence' }
 }
