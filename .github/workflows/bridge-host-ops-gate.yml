@@ -36,6 +36,9 @@ jobs:
 
       - name: Verify host-operations policy and secret boundary
         run: |
+          cargo fmt --manifest-path platform/windows-device-key/Cargo.toml --all -- --check
+          cargo clippy --locked --manifest-path platform/windows-device-key/Cargo.toml --all-targets -- -D warnings
+          cargo test --locked --manifest-path platform/windows-device-key/Cargo.toml
           cargo fmt --manifest-path tools/bridge-host-ops/Cargo.toml --all -- --check
           cargo clippy --locked --manifest-path tools/bridge-host-ops/Cargo.toml --all-targets -- -D warnings
           cargo test --locked --manifest-path tools/bridge-host-ops/Cargo.toml
@@ -61,9 +64,12 @@ jobs:
         shell: pwsh
         run: rustup show active-toolchain
 
-      - name: Compile and test the real Windows host adapter
+      - name: Compile and test native Windows host and CNG device PoP adapters
         shell: pwsh
         run: |
+          cargo fmt --manifest-path platform/windows-device-key/Cargo.toml --all -- --check
+          cargo clippy --locked --manifest-path platform/windows-device-key/Cargo.toml --all-targets -- -D warnings
+          cargo test --locked --manifest-path platform/windows-device-key/Cargo.toml
           cargo fmt --manifest-path tools/bridge-host-ops/Cargo.toml --all -- --check
           cargo clippy --locked --manifest-path tools/bridge-host-ops/Cargo.toml --all-targets -- -D warnings
           cargo test --locked --manifest-path tools/bridge-host-ops/Cargo.toml

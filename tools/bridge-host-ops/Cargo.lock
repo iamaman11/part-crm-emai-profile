@@ -5,3 +5,23 @@ version = 4
 [[package]]
 name = "bridge-host-ops"
 version = "0.1.0"
+dependencies = [
+ "device-domain",
+ "profile-platform-primitives",
+ "windows-device-key",
+]
+
+[[package]]
+name = "device-domain"
+version = "0.1.0"
+dependencies = [
+ "profile-platform-primitives",
+]
+
+[[package]]
+name = "profile-platform-primitives"
+version = "0.1.0"
+
+[[package]]
+name = "windows-device-key"
+version = "0.1.0"
