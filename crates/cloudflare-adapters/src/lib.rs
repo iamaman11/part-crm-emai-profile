@@ -24,6 +24,7 @@ pub mod d1_client_registry;
 pub mod d1_clients;
 mod d1_command_identity;
 pub mod d1_contact_query;
+pub mod d1_device_application_authority;
 pub mod d1_device_authorization;
 pub mod d1_device_binding_governance;
 pub mod d1_device_generation_commit;
