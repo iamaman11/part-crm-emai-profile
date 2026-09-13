@@ -287,8 +287,9 @@ impl WindowsApplicationSessionHttp {
         if response.status() != 201 {
             return Err(BridgePortError::InvalidResponse);
         }
-        let projection = serde_json::from_slice::<DeviceApplicationSessionProjection>(response.body())
-            .map_err(|_| BridgePortError::InvalidResponse)?;
+        let projection =
+            serde_json::from_slice::<DeviceApplicationSessionProjection>(response.body())
+                .map_err(|_| BridgePortError::InvalidResponse)?;
         if projection.actor_id != self.binding.actor_id().as_str()
             || projection.device_id != self.binding.device_id().as_str()
             || !valid_lower_hex_exact(&projection.session_token, OPAQUE_TOKEN_HEX_LENGTH)
@@ -306,7 +307,10 @@ impl WindowsApplicationSessionHttp {
             token: Zeroizing::new(projection.session_token),
             expires_at,
         };
-        let mut guard = self.session.lock().map_err(|_| BridgePortError::Unavailable)?;
+        let mut guard = self
+            .session
+            .lock()
+            .map_err(|_| BridgePortError::Unavailable)?;
         *guard = Some(session.clone());
         Ok(session)
     }
@@ -319,7 +323,10 @@ impl WindowsApplicationSessionHttp {
             .map_err(|_| BridgePortError::Unavailable)?
             .as_ref()
             .filter(|session| {
-                session.expires_at.value().saturating_sub(observed_at.value())
+                session
+                    .expires_at
+                    .value()
+                    .saturating_sub(observed_at.value())
                     > SESSION_RENEWAL_MARGIN_MS
             })
             .cloned();
@@ -668,7 +675,9 @@ mod tests {
     fn curl_secret_expansion_requires_version_that_supports_variables() {
         assert!(curl_version_supports_variables(b"curl 8.3.0 (Windows)\r\n"));
         assert!(curl_version_supports_variables(b"curl 9.0.0 (Windows)\r\n"));
-        assert!(!curl_version_supports_variables(b"curl 8.2.1 (Windows)\r\n"));
+        assert!(!curl_version_supports_variables(
+            b"curl 8.2.1 (Windows)\r\n"
+        ));
         assert!(!curl_version_supports_variables(b"not-curl 8.3.0\r\n"));
     }
 
