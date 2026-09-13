@@ -669,13 +669,17 @@ mod tests {
     }
 
     #[test]
-    fn release_window_targets_latest_expand_and_defers_pas2_contract() -> Result<(), Box<dyn Error>> {
+    fn release_window_targets_latest_expand_and_defers_pas2_contract() -> Result<(), Box<dyn Error>>
+    {
         let contract = release_contract(&repository_root(), "catalog")?;
         assert_eq!(
             contract["target_schema_revision"],
             PUBLIC_KEY_BINDING_REVISION
         );
-        assert_eq!(contract["supported_schema_min"], PUBLIC_KEY_BINDING_REVISION);
+        assert_eq!(
+            contract["supported_schema_min"],
+            PUBLIC_KEY_BINDING_REVISION
+        );
         assert_eq!(
             contract["supported_schema_max"],
             SUCCESSOR_CONTRACT_REVISION
