@@ -1,8 +1,12 @@
 use core::fmt;
 use profile_platform_primitives::{ActorId, DeviceId, TenantId, UnixMillis};
 
-const MAX_P256_SPKI_DER_BYTES: usize = 512;
 pub const DEVICE_PROOF_NONCE_BYTES: usize = 32;
+const P256_SPKI_DER_BYTES: usize = 91;
+const P256_SPKI_PREFIX: [u8; 27] = [
+    0x30, 0x59, 0x30, 0x13, 0x06, 0x07, 0x2a, 0x86, 0x48, 0xce, 0x3d, 0x02, 0x01, 0x06, 0x08,
+    0x2a, 0x86, 0x48, 0xce, 0x3d, 0x03, 0x01, 0x07, 0x03, 0x42, 0x00, 0x04,
+];
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DevicePublicKeyAlgorithm {
@@ -16,8 +20,13 @@ pub struct DevicePublicKey {
 }
 
 impl DevicePublicKey {
+    /// Accepts the canonical DER transport shape for an uncompressed P-256 SubjectPublicKeyInfo.
+    ///
+    /// This validates the exact AlgorithmIdentifier (`id-ecPublicKey` + `prime256v1`) and the
+    /// uncompressed 65-byte EC point transport shape. The cryptographic adapter that imports the
+    /// key MUST still reject points that are not valid members of the P-256 curve.
     pub fn p256_spki_der(spki_der: Vec<u8>) -> Result<Self, DevicePairingError> {
-        if !is_exact_der_sequence(&spki_der, MAX_P256_SPKI_DER_BYTES) {
+        if !is_canonical_p256_spki(&spki_der) {
             return Err(DevicePairingError::InvalidPublicKey);
         }
         Ok(Self {
@@ -140,23 +149,21 @@ impl DevicePairingTransaction {
         now: UnixMillis,
     ) -> Result<RegisteredDeviceCredential, DevicePairingError> {
         self.require_live(now)?;
-        if current_user_auth_epoch == 0 {
-            return Err(DevicePairingError::InvalidAuthEpoch);
-        }
         if self.authorized_actor_id.as_ref() != Some(actor_id) {
             return Err(DevicePairingError::NotAuthorized);
         }
         if &self.device_id != device_id || &self.public_key != public_key {
             return Err(DevicePairingError::BindingMismatch);
         }
-        self.consumed_at = Some(now);
-        Ok(RegisteredDeviceCredential::new(
+        let credential = RegisteredDeviceCredential::issue(
             self.tenant_id.clone(),
             actor_id.clone(),
             self.device_id.clone(),
             self.public_key.clone(),
             current_user_auth_epoch,
-        ))
+        )?;
+        self.consumed_at = Some(now);
+        Ok(credential)
     }
 
     fn require_live(&self, now: UnixMillis) -> Result<(), DevicePairingError> {
@@ -184,22 +191,24 @@ pub struct RegisteredDeviceCredential {
 }
 
 impl RegisteredDeviceCredential {
-    #[must_use]
-    pub fn new(
+    pub fn issue(
         tenant_id: TenantId,
         actor_id: ActorId,
         device_id: DeviceId,
         public_key: DevicePublicKey,
         auth_epoch_at_registration: u64,
-    ) -> Self {
-        Self {
+    ) -> Result<Self, DevicePairingError> {
+        if auth_epoch_at_registration == 0 {
+            return Err(DevicePairingError::InvalidAuthEpoch);
+        }
+        Ok(Self {
             tenant_id,
             actor_id,
             device_id,
             public_key,
             auth_epoch_at_registration,
             enabled: true,
-        }
+        })
     }
 
     #[must_use]
@@ -400,30 +409,8 @@ impl fmt::Display for DeviceProofError {
 
 impl std::error::Error for DeviceProofError {}
 
-fn is_exact_der_sequence(bytes: &[u8], max_bytes: usize) -> bool {
-    if bytes.len() < 2 || bytes.len() > max_bytes || bytes[0] != 0x30 {
-        return false;
-    }
-    let first_length = bytes[1];
-    if first_length & 0x80 == 0 {
-        return usize::from(first_length) + 2 == bytes.len();
-    }
-
-    let length_bytes = usize::from(first_length & 0x7f);
-    if length_bytes == 0 || length_bytes > 2 || bytes.len() < 2 + length_bytes {
-        return false;
-    }
-    if bytes[2] == 0 {
-        return false;
-    }
-    let mut content_length = 0_usize;
-    for byte in &bytes[2..2 + length_bytes] {
-        content_length = (content_length << 8) | usize::from(*byte);
-    }
-    if content_length < 128 {
-        return false;
-    }
-    2 + length_bytes + content_length == bytes.len()
+fn is_canonical_p256_spki(bytes: &[u8]) -> bool {
+    bytes.len() == P256_SPKI_DER_BYTES && bytes.starts_with(&P256_SPKI_PREFIX)
 }
 
 #[cfg(test)]
@@ -431,11 +418,15 @@ mod tests {
     use super::{
         DeviceAuthorizationError, DevicePairingError, DevicePairingTransaction,
         DeviceProofChallenge, DeviceProofError, DevicePublicKey, DevicePublicKeyAlgorithm,
+        P256_SPKI_DER_BYTES, P256_SPKI_PREFIX, RegisteredDeviceCredential,
     };
     use profile_platform_primitives::{ActorId, DeviceId, TenantId, UnixMillis};
 
     fn key(last: u8) -> Result<DevicePublicKey, DevicePairingError> {
-        DevicePublicKey::p256_spki_der(vec![0x30, 0x03, 0x02, 0x01, last])
+        let mut spki = vec![0_u8; P256_SPKI_DER_BYTES];
+        spki[..P256_SPKI_PREFIX.len()].copy_from_slice(&P256_SPKI_PREFIX);
+        spki[P256_SPKI_DER_BYTES - 1] = last;
+        DevicePublicKey::p256_spki_der(spki)
     }
 
     #[test]
@@ -466,7 +457,7 @@ mod tests {
             Err(DevicePairingError::BindingMismatch)
         );
         assert_eq!(
-            pairing.complete(&actor_id, &device_id, &key(2)?, 7, UnixMillis::new(120),),
+            pairing.complete(&actor_id, &device_id, &key(2)?, 7, UnixMillis::new(120)),
             Err(DevicePairingError::BindingMismatch)
         );
         assert_eq!(
@@ -488,7 +479,7 @@ mod tests {
         assert_eq!(registration.public_key(), &public_key);
         assert_eq!(registration.auth_epoch_at_registration(), 7);
         assert_eq!(
-            pairing.complete(&actor_id, &device_id, &public_key, 7, UnixMillis::new(121),),
+            pairing.complete(&actor_id, &device_id, &public_key, 7, UnixMillis::new(121)),
             Err(DevicePairingError::ReplayRejected)
         );
         Ok(())
@@ -577,15 +568,14 @@ mod tests {
         let device_b = DeviceId::parse("device_01JPAIRINGB")?;
         let public_key = key(1)?;
 
-        let mut a = super::RegisteredDeviceCredential::new(
+        let mut a = RegisteredDeviceCredential::issue(
             tenant_id.clone(),
             actor_id.clone(),
             device_a,
             public_key.clone(),
             5,
-        );
-        let b =
-            super::RegisteredDeviceCredential::new(tenant_id, actor_id, device_b, public_key, 5);
+        )?;
+        let b = RegisteredDeviceCredential::issue(tenant_id, actor_id, device_b, public_key, 5)?;
         a.require_authorized(true, 5)?;
         b.require_authorized(true, 5)?;
 
@@ -603,18 +593,41 @@ mod tests {
             b.require_authorized(true, 6),
             Err(DeviceAuthorizationError::StaleAuthEpoch)
         );
+        assert_eq!(
+            RegisteredDeviceCredential::issue(
+                b.tenant_id().clone(),
+                b.actor_id().clone(),
+                b.device_id().clone(),
+                b.public_key().clone(),
+                0,
+            ),
+            Err(DevicePairingError::InvalidAuthEpoch)
+        );
         Ok(())
     }
 
     #[test]
-    fn public_key_transport_rejects_non_der_or_non_minimal_sequences() {
+    fn public_key_transport_requires_exact_p256_spki_profile() -> Result<(), DevicePairingError> {
+        let valid = key(1)?;
+        assert_eq!(valid.spki_der().len(), P256_SPKI_DER_BYTES);
+
+        let mut wrong_curve = valid.spki_der().to_vec();
+        wrong_curve[22] ^= 1;
         assert_eq!(
-            DevicePublicKey::p256_spki_der(vec![]),
+            DevicePublicKey::p256_spki_der(wrong_curve),
+            Err(DevicePairingError::InvalidPublicKey)
+        );
+
+        let mut compressed_point = valid.spki_der().to_vec();
+        compressed_point[P256_SPKI_PREFIX.len() - 1] = 0x02;
+        assert_eq!(
+            DevicePublicKey::p256_spki_der(compressed_point),
             Err(DevicePairingError::InvalidPublicKey)
         );
         assert_eq!(
-            DevicePublicKey::p256_spki_der(vec![0x30, 0x81, 0x03, 0x02, 0x01, 0x01]),
+            DevicePublicKey::p256_spki_der(valid.spki_der()[..90].to_vec()),
             Err(DevicePairingError::InvalidPublicKey)
         );
+        Ok(())
     }
 }
