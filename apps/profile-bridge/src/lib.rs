@@ -57,6 +57,8 @@ pub use test_fakes::{
 };
 
 #[cfg(windows)]
+pub mod windows_device_application;
+#[cfg(windows)]
 pub mod windows_generation_put;
 #[cfg(windows)]
 pub mod windows_native;
