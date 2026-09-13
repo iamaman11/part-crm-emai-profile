@@ -32,29 +32,37 @@ pub fn device_proof_message_v1(
             + DEVICE_PROOF_NONCE_BYTES,
     );
     message.extend_from_slice(DEVICE_PROOF_CONTEXT_V1);
-    append_identifier(&mut message, tenant_id.as_str());
-    append_identifier(&mut message, actor_id.as_str());
-    append_identifier(&mut message, device_id.as_str());
+    append_identifier(&mut message, tenant_id.as_str())?;
+    append_identifier(&mut message, actor_id.as_str())?;
+    append_identifier(&mut message, device_id.as_str())?;
     message.extend_from_slice(&expires_at.value().to_be_bytes());
     message.extend_from_slice(nonce);
     Ok(message)
 }
 
-fn append_identifier(message: &mut Vec<u8>, value: &str) {
+fn append_identifier(
+    message: &mut Vec<u8>,
+    value: &str,
+) -> Result<(), DeviceProofMessageError> {
     let length = u16::try_from(value.len())
-        .expect("validated platform identifiers are bounded below u16::MAX");
+        .map_err(|_| DeviceProofMessageError::InvalidIdentifierLength)?;
     message.extend_from_slice(&length.to_be_bytes());
     message.extend_from_slice(value.as_bytes());
+    Ok(())
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DeviceProofMessageError {
     InvalidNonceLength,
+    InvalidIdentifierLength,
 }
 
 impl fmt::Display for DeviceProofMessageError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str("device proof nonce length is invalid")
+        formatter.write_str(match self {
+            Self::InvalidNonceLength => "device proof nonce length is invalid",
+            Self::InvalidIdentifierLength => "device proof identifier length is invalid",
+        })
     }
 }
 
@@ -247,9 +255,21 @@ mod tests {
             UnixMillis::new(9_999),
         )?;
         assert!(message.starts_with(DEVICE_PROOF_CONTEXT_V1));
-        assert!(message.windows(tenant.as_str().len()).any(|w| w == tenant.as_str().as_bytes()));
-        assert!(message.windows(actor.as_str().len()).any(|w| w == actor.as_str().as_bytes()));
-        assert!(message.windows(device.as_str().len()).any(|w| w == device.as_str().as_bytes()));
+        assert!(
+            message
+                .windows(tenant.as_str().len())
+                .any(|window| window == tenant.as_str().as_bytes())
+        );
+        assert!(
+            message
+                .windows(actor.as_str().len())
+                .any(|window| window == actor.as_str().as_bytes())
+        );
+        assert!(
+            message
+                .windows(device.as_str().len())
+                .any(|window| window == device.as_str().as_bytes())
+        );
         assert!(message.ends_with(&nonce));
 
         let mut changed_nonce = nonce;
