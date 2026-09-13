@@ -6,21 +6,26 @@ pub(super) fn classify(method: &str, segments: &[&str]) -> Option<RouteClass> {
         ["api", "v1", "tenants", _, "device-pairings"] if method == "POST" => {
             Some(RouteClass::DevicePairingCollectionApi)
         }
-        ["api", "v1", "tenants", _, "device-pairings", "authorizations"]
-            if method == "POST" =>
-        {
-            Some(RouteClass::DevicePairingAuthorizationApi)
-        }
-        ["api", "v1", "tenants", _, "device-pairings", "completions"]
-            if method == "POST" =>
-        {
+        [
+            "api",
+            "v1",
+            "tenants",
+            _,
+            "device-pairings",
+            "authorizations",
+        ] if method == "POST" => Some(RouteClass::DevicePairingAuthorizationApi),
+        ["api", "v1", "tenants", _, "device-pairings", "completions"] if method == "POST" => {
             Some(RouteClass::DevicePairingCompletionApi)
         }
-        ["api", "v1", "tenants", _, "devices", _, "session-challenges"]
-            if method == "POST" =>
-        {
-            Some(RouteClass::DeviceSessionChallengeApi)
-        }
+        [
+            "api",
+            "v1",
+            "tenants",
+            _,
+            "devices",
+            _,
+            "session-challenges",
+        ] if method == "POST" => Some(RouteClass::DeviceSessionChallengeApi),
         ["api", "v1", "tenants", _, "devices", _, "sessions"] if method == "POST" => {
             Some(RouteClass::DeviceSessionCollectionApi)
         }
