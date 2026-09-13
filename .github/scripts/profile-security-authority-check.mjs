@@ -200,13 +200,14 @@ function validateAuthority(authority, errors) {
 }
 
 function validateBridgeAudienceBindings(config, errors) {
-  const vars = config.env?.staging?.vars;
-  if (!vars || vars.ACCESS_AUDIENCE !== '${STAGING_ACCESS_AUDIENCE}'
-      || vars.BRIDGE_ACCESS_AUDIENCE !== '${STAGING_ACCESS_AUDIENCE}') {
-    errors.push('staging: Bridge and human audience vars must bind to the same canonical Access application audience');
+  const stagingVars = config.env?.staging?.vars;
+  const productionVars = config.env?.production?.vars;
+  if (!stagingVars || stagingVars.ACCESS_AUDIENCE !== '${STAGING_ACCESS_AUDIENCE}') {
+    errors.push('staging: canonical human Access audience binding drifted');
   }
-  if (config.env?.production?.vars?.BRIDGE_ACCESS_AUDIENCE !== undefined) {
-    errors.push('production: V2 must not pre-enable the Bridge audience binding');
+  if (stagingVars?.BRIDGE_ACCESS_AUDIENCE !== undefined
+      || productionVars?.BRIDGE_ACCESS_AUDIENCE !== undefined) {
+    errors.push('application-session Bridge admission must not reintroduce the legacy Bridge Access audience');
   }
 }
 
@@ -277,20 +278,20 @@ function main() {
     audienceMutated.env.staging.vars.BRIDGE_ACCESS_AUDIENCE = '${STAGING_BRIDGE_ACCESS_AUDIENCE}';
     const audienceErrors = [];
     validateBridgeAudienceBindings(audienceMutated, audienceErrors);
-    if (audienceErrors.length === 0) throw new Error('Bridge shared-perimeter audience negative fixture unexpectedly passed');
+    if (audienceErrors.length === 0) throw new Error('legacy Bridge Access audience negative fixture unexpectedly passed');
 
     const productionMutated = structuredClone(wrangler);
     productionMutated.env.production.vars.BRIDGE_ACCESS_AUDIENCE = '${PRODUCTION_ACCESS_AUDIENCE}';
     const productionErrors = [];
     validateBridgeAudienceBindings(productionMutated, productionErrors);
-    if (productionErrors.length === 0) throw new Error('Bridge production pre-enable negative fixture unexpectedly passed');
+    if (productionErrors.length === 0) throw new Error('Bridge production audience negative fixture unexpectedly passed');
 
     const publicSource = `${readFileSync(PUBLIC_BOUNDARY_FILES[0], 'utf8')}\npub const proxy_secret_handle: &str = "forbidden";\n`;
     const boundaryErrors = [];
     proxyHandleProof(boundaryErrors, publicSource);
     if (boundaryErrors.length === 0) throw new Error('public proxy handle negative fixture unexpectedly passed');
 
-    console.log('Profile-security, Bridge-mTLS/shared-perimeter and proxy-handle negative fixtures rejected as expected.');
+    console.log('Profile-security, retired Bridge Access audience and proxy-handle negative fixtures rejected as expected.');
     return;
   }
   console.log(`Profile security authority validated; proxy raw-handle repository occurrences inspected=${occurrences}; public/API/operator/log boundaries clean.`);
