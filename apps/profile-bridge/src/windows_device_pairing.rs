@@ -21,8 +21,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use windows_device_key::{KeyDisposition, PersistedP256Key};
 use zeroize::{Zeroize, Zeroizing};
 
-const DEVICE_APPLICATION_BINDING_PATH_ENV: &str =
-    "PROFILE_BRIDGE_DEVICE_APPLICATION_BINDING_PATH";
+const DEVICE_APPLICATION_BINDING_PATH_ENV: &str = "PROFILE_BRIDGE_DEVICE_APPLICATION_BINDING_PATH";
 const CONTROL_PLANE_ORIGIN_ENV: &str = "PROFILE_BRIDGE_CONTROL_PLANE_ORIGIN";
 const MAX_CONTROL_PLANE_RESPONSE_BYTES: usize = 65_536;
 const MAX_BINDING_BYTES: u64 = 4_096;
@@ -63,8 +62,8 @@ pub fn run_start(uri: &DevicePairingStartUri) -> Result<(), BridgePortError> {
     require_binding_absent(&config.binding_path)?;
 
     let key_name = key_name(uri.device_id())?;
-    let key = PersistedP256Key::open_or_create(&key_name)
-        .map_err(|_| BridgePortError::Unavailable)?;
+    let key =
+        PersistedP256Key::open_or_create(&key_name).map_err(|_| BridgePortError::Unavailable)?;
     key.require_non_exportable()
         .map_err(|_| BridgePortError::InvalidResponse)?;
     let created_key = key.disposition() == KeyDisposition::Created;
@@ -128,18 +127,14 @@ pub fn run_complete(uri: &DevicePairingCompleteUri) -> Result<(), BridgePortErro
 
     let observed_at = now()?;
     if uri.expires_at() <= observed_at
-        || uri
-            .expires_at()
-            .value()
-            .saturating_sub(observed_at.value())
-            > CHALLENGE_MAX_LIFETIME_MS
+        || uri.expires_at().value().saturating_sub(observed_at.value()) > CHALLENGE_MAX_LIFETIME_MS
     {
         return Err(BridgePortError::InvalidResponse);
     }
 
     let key_name = key_name(uri.device_id())?;
-    let key = PersistedP256Key::open_or_create(&key_name)
-        .map_err(|_| BridgePortError::Unavailable)?;
+    let key =
+        PersistedP256Key::open_or_create(&key_name).map_err(|_| BridgePortError::Unavailable)?;
     if key.disposition() == KeyDisposition::Created {
         let _ = key.delete();
         return Err(BridgePortError::InvalidResponse);
@@ -147,8 +142,8 @@ pub fn run_complete(uri: &DevicePairingCompleteUri) -> Result<(), BridgePortErro
     key.require_non_exportable()
         .map_err(|_| BridgePortError::InvalidResponse)?;
 
-    let nonce = decode_exact_lower_hex::<32>(uri.nonce_hex())
-        .ok_or(BridgePortError::InvalidResponse)?;
+    let nonce =
+        decode_exact_lower_hex::<32>(uri.nonce_hex()).ok_or(BridgePortError::InvalidResponse)?;
     let message = device_proof_message_v1(
         uri.tenant_id(),
         uri.actor_id(),
@@ -228,8 +223,8 @@ impl BootstrapConfig {
             .map(PathBuf::from)
             .filter(|path| path.is_absolute())
             .ok_or(BridgePortError::InvalidResponse)?;
-        let origin = env::var(CONTROL_PLANE_ORIGIN_ENV)
-            .map_err(|_| BridgePortError::Unavailable)?;
+        let origin =
+            env::var(CONTROL_PLANE_ORIGIN_ENV).map_err(|_| BridgePortError::Unavailable)?;
         validate_https_origin(&origin)?;
         Ok(Self {
             binding_path,
