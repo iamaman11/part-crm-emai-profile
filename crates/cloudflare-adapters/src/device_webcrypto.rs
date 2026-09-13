@@ -104,9 +104,7 @@ fn base64url_no_pad(bytes: &[u8]) -> String {
     let mut output = String::with_capacity(bytes.len().div_ceil(3) * 4);
     let mut chunks = bytes.chunks_exact(3);
     for chunk in &mut chunks {
-        let value = (u32::from(chunk[0]) << 16)
-            | (u32::from(chunk[1]) << 8)
-            | u32::from(chunk[2]);
+        let value = (u32::from(chunk[0]) << 16) | (u32::from(chunk[1]) << 8) | u32::from(chunk[2]);
         output.push(char::from(TABLE[((value >> 18) & 0x3f) as usize]));
         output.push(char::from(TABLE[((value >> 12) & 0x3f) as usize]));
         output.push(char::from(TABLE[((value >> 6) & 0x3f) as usize]));
@@ -136,9 +134,7 @@ fn js_error(value: JsValue) -> Error {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        P256_COORDINATE_BYTES, P256_POINT_OFFSET, P256_SIGNATURE_BYTES, base64url_no_pad,
-    };
+    use super::{P256_COORDINATE_BYTES, P256_POINT_OFFSET, P256_SIGNATURE_BYTES, base64url_no_pad};
 
     #[test]
     fn p256_transport_offsets_match_uncompressed_spki_shape() {
