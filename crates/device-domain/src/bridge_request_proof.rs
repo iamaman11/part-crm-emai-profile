@@ -27,6 +27,10 @@ impl BridgeRequestProofMethod {
 /// bound together with the server-owned user/device identity, exact HTTP method/path, correlation
 /// id, exact request-body digest and a short proof expiry. A captured application-session bearer is
 /// therefore insufficient to authorize a Bridge request without the non-exportable device key.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "security proof keeps every signed identity, route, body and expiry binding explicit at call sites"
+)]
 pub fn bridge_request_proof_message_v1(
     tenant_id: &TenantId,
     actor_id: &ActorId,
