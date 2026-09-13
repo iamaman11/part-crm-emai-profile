@@ -10,7 +10,7 @@ use control_plane_contract::device_application_api::{
 };
 use device_domain::device_proof_message_v1;
 use profile_platform_primitives::{CorrelationId, DeviceId, TenantId, UnixMillis};
-use serde::Serialize;
+use serde::{Serialize, de::DeserializeOwned};
 use std::env;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
@@ -97,9 +97,7 @@ fn start_with_key(
         response.body.zeroize();
         return Err(BridgePortError::InvalidResponse);
     }
-    let projection = serde_json::from_slice::<DevicePairingCreateProjection>(&response.body)
-        .map_err(|_| BridgePortError::InvalidResponse)?;
-    response.body.zeroize();
+    let projection = parse_json_response::<DevicePairingCreateProjection>(&mut response)?;
     if !valid_lower_hex(&projection.pairing_token, OPAQUE_TOKEN_HEX_LENGTH) {
         return Err(BridgePortError::InvalidResponse);
     }
@@ -111,14 +109,14 @@ fn start_with_key(
         return Err(BridgePortError::InvalidResponse);
     }
     let pairing_token = Zeroizing::new(projection.pairing_token);
-    let authorization_url = format!(
+    let authorization_url = Zeroizing::new(format!(
         "{}/devices?tenant={}#pairing={}&device={}",
         config.origin,
         uri.tenant_id().as_str(),
         pairing_token.as_str(),
         uri.device_id().as_str()
-    );
-    open_default_browser(&authorization_url)
+    ));
+    open_default_browser(authorization_url.as_str())
 }
 
 pub fn run_complete(uri: &DevicePairingCompleteUri) -> Result<(), BridgePortError> {
@@ -170,9 +168,7 @@ pub fn run_complete(uri: &DevicePairingCompleteUri) -> Result<(), BridgePortErro
         response.body.zeroize();
         return Err(BridgePortError::InvalidResponse);
     }
-    let projection = serde_json::from_slice::<DeviceApplicationSessionProjection>(&response.body)
-        .map_err(|_| BridgePortError::InvalidResponse)?;
-    response.body.zeroize();
+    let projection = parse_json_response::<DeviceApplicationSessionProjection>(&mut response)?;
     if projection.actor_id != uri.actor_id().as_str()
         || projection.device_id != uri.device_id().as_str()
         || !valid_lower_hex(&projection.session_token, OPAQUE_TOKEN_HEX_LENGTH)
@@ -236,6 +232,14 @@ impl BootstrapConfig {
 struct HttpResponse {
     status: u16,
     body: Vec<u8>,
+}
+
+fn parse_json_response<T: DeserializeOwned>(
+    response: &mut HttpResponse,
+) -> Result<T, BridgePortError> {
+    let projection = serde_json::from_slice::<T>(&response.body);
+    response.body.zeroize();
+    projection.map_err(|_| BridgePortError::InvalidResponse)
 }
 
 fn post_json(
@@ -330,17 +334,19 @@ fn persist_binding(path: &Path, uri: &DevicePairingCompleteUri) -> Result<(), Br
         body.zeroize();
         return Err(BridgePortError::InvalidResponse);
     }
-    let result = (|| {
-        let mut file = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(path)
-            .map_err(|_| BridgePortError::Unavailable)?;
-        file.write_all(&body)
-            .and_then(|()| file.sync_all())
-            .map_err(|_| BridgePortError::Unavailable)
-    })();
+    let mut file = match OpenOptions::new().write(true).create_new(true).open(path) {
+        Ok(file) => file,
+        Err(_) => {
+            body.zeroize();
+            return Err(BridgePortError::Unavailable);
+        }
+    };
+    let result = file
+        .write_all(&body)
+        .and_then(|()| file.sync_all())
+        .map_err(|_| BridgePortError::Unavailable);
     body.zeroize();
+    drop(file);
     if result.is_err() {
         let _ = fs::remove_file(path);
     }
@@ -348,8 +354,13 @@ fn persist_binding(path: &Path, uri: &DevicePairingCompleteUri) -> Result<(), Br
 }
 
 fn require_binding_absent(path: &Path) -> Result<(), BridgePortError> {
-    if !path.is_absolute() || path.exists() {
+    if !path.is_absolute() {
         return Err(BridgePortError::InvalidResponse);
+    }
+    match fs::symlink_metadata(path) {
+        Ok(_) => return Err(BridgePortError::InvalidResponse),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(_) => return Err(BridgePortError::Unavailable),
     }
     let parent = path.parent().ok_or(BridgePortError::InvalidResponse)?;
     let metadata = fs::symlink_metadata(parent).map_err(|_| BridgePortError::Unavailable)?;
@@ -485,33 +496,37 @@ fn hex_encode(bytes: &[u8]) -> String {
 }
 
 fn decode_curl_http_output(
-    output: Output,
+    mut output: Output,
     max_body_bytes: usize,
 ) -> Result<(u16, Vec<u8>), BridgePortError> {
-    let max_output_bytes = max_body_bytes
-        .checked_add(HTTP_STATUS_MARKER.len())
-        .and_then(|value| value.checked_add(3))
-        .ok_or(BridgePortError::InvalidResponse)?;
-    if !output.status.success() || output.stdout.len() > max_output_bytes {
-        return Err(BridgePortError::Unavailable);
-    }
-    let marker = output
-        .stdout
-        .windows(HTTP_STATUS_MARKER.len())
-        .rposition(|window| window == HTTP_STATUS_MARKER)
-        .ok_or(BridgePortError::InvalidResponse)?;
-    if marker > max_body_bytes {
-        return Err(BridgePortError::Unavailable);
-    }
-    let status_bytes = &output.stdout[marker + HTTP_STATUS_MARKER.len()..];
-    if status_bytes.len() != 3 || !status_bytes.iter().all(u8::is_ascii_digit) {
-        return Err(BridgePortError::InvalidResponse);
-    }
-    let status = std::str::from_utf8(status_bytes)
-        .map_err(|_| BridgePortError::InvalidResponse)?
-        .parse::<u16>()
-        .map_err(|_| BridgePortError::InvalidResponse)?;
-    Ok((status, output.stdout[..marker].to_vec()))
+    let decoded = (|| {
+        let max_output_bytes = max_body_bytes
+            .checked_add(HTTP_STATUS_MARKER.len())
+            .and_then(|value| value.checked_add(3))
+            .ok_or(BridgePortError::InvalidResponse)?;
+        if !output.status.success() || output.stdout.len() > max_output_bytes {
+            return Err(BridgePortError::Unavailable);
+        }
+        let marker = output
+            .stdout
+            .windows(HTTP_STATUS_MARKER.len())
+            .rposition(|window| window == HTTP_STATUS_MARKER)
+            .ok_or(BridgePortError::InvalidResponse)?;
+        if marker > max_body_bytes {
+            return Err(BridgePortError::Unavailable);
+        }
+        let status_bytes = &output.stdout[marker + HTTP_STATUS_MARKER.len()..];
+        if status_bytes.len() != 3 || !status_bytes.iter().all(u8::is_ascii_digit) {
+            return Err(BridgePortError::InvalidResponse);
+        }
+        let status = std::str::from_utf8(status_bytes)
+            .map_err(|_| BridgePortError::InvalidResponse)?
+            .parse::<u16>()
+            .map_err(|_| BridgePortError::InvalidResponse)?;
+        Ok((status, output.stdout[..marker].to_vec()))
+    })();
+    output.stdout.zeroize();
+    decoded
 }
 
 #[cfg(test)]
