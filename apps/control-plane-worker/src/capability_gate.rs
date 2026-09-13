@@ -146,7 +146,12 @@ pub fn route_surface(route: RouteClass, path: &str) -> Option<RuntimeSurface> {
         | RouteClass::MembershipStatusApi
         | RouteClass::DeviceBindingResourceApi
         | RouteClass::DeviceBindingRevokeApi
-        | RouteClass::BridgeEnrollmentApi => Some(RuntimeSurface::HttpIdentity),
+        | RouteClass::BridgeEnrollmentApi
+        | RouteClass::DevicePairingCollectionApi
+        | RouteClass::DevicePairingAuthorizationApi
+        | RouteClass::DevicePairingCompletionApi
+        | RouteClass::DeviceSessionChallengeApi
+        | RouteClass::DeviceSessionCollectionApi => Some(RuntimeSurface::HttpIdentity),
         RouteClass::ClientCollectionApi
         | RouteClass::ClientResourceApi
         | RouteClass::ClientArchiveApi
@@ -285,7 +290,7 @@ mod tests {
     }
 
     #[test]
-    fn enrollment_and_device_binding_use_existing_identity_capability() {
+    fn enrollment_device_binding_and_device_application_use_existing_identity_capability() {
         for (route, path) in [
             (
                 RouteClass::DeviceBindingResourceApi,
@@ -298,6 +303,26 @@ mod tests {
             (
                 RouteClass::BridgeEnrollmentApi,
                 "/api/v1/tenants/tenant_01/bridge-enrollment/authorities",
+            ),
+            (
+                RouteClass::DevicePairingCollectionApi,
+                "/api/v1/tenants/tenant_01/device-pairings",
+            ),
+            (
+                RouteClass::DevicePairingAuthorizationApi,
+                "/api/v1/tenants/tenant_01/device-pairings/authorizations",
+            ),
+            (
+                RouteClass::DevicePairingCompletionApi,
+                "/api/v1/tenants/tenant_01/device-pairings/completions",
+            ),
+            (
+                RouteClass::DeviceSessionChallengeApi,
+                "/api/v1/tenants/tenant_01/devices/device_01/session-challenges",
+            ),
+            (
+                RouteClass::DeviceSessionCollectionApi,
+                "/api/v1/tenants/tenant_01/devices/device_01/sessions",
             ),
         ] {
             let surface = route_surface(route, path);

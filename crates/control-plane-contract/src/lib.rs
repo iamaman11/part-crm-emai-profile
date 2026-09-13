@@ -4,6 +4,7 @@ pub mod bridge_enrollment_api;
 pub mod client_mail_send_api;
 pub mod client_registry_api;
 pub mod coordinator_api;
+pub mod device_application_api;
 pub mod generation_key_api;
 pub mod generation_reopen_api;
 pub mod mailbox_api;
@@ -35,6 +36,11 @@ pub enum RouteClass {
     DeviceBindingResourceApi,
     DeviceBindingRevokeApi,
     BridgeEnrollmentApi,
+    DevicePairingCollectionApi,
+    DevicePairingAuthorizationApi,
+    DevicePairingCompletionApi,
+    DeviceSessionChallengeApi,
+    DeviceSessionCollectionApi,
     ClientCollectionApi,
     ClientResourceApi,
     ClientArchiveApi,
@@ -95,6 +101,8 @@ pub const fn is_authenticated_api(route: RouteClass) -> bool {
         route,
         RouteClass::HealthApi
             | RouteClass::BindingProbeApi
+            | RouteClass::DevicePairingCollectionApi
+            | RouteClass::DeviceSessionChallengeApi
             | RouteClass::DynamicRouteNotFound
             | RouteClass::BridgeDeniedByDefault
             | RouteClass::StaticAssets
@@ -322,6 +330,48 @@ mod tests {
             let actual = classify_route(method, path);
             assert_eq!(actual, expected);
             assert!(is_authenticated_api(actual));
+        }
+    }
+
+    #[test]
+    fn device_application_routes_are_exact_and_keep_bootstrap_surfaces_unauthenticated() {
+        let cases = [
+            (
+                "/api/v1/tenants/tenant_01/device-pairings",
+                RouteClass::DevicePairingCollectionApi,
+                false,
+            ),
+            (
+                "/api/v1/tenants/tenant_01/device-pairings/authorizations",
+                RouteClass::DevicePairingAuthorizationApi,
+                true,
+            ),
+            (
+                "/api/v1/tenants/tenant_01/device-pairings/completions",
+                RouteClass::DevicePairingCompletionApi,
+                true,
+            ),
+            (
+                "/api/v1/tenants/tenant_01/devices/device_01JPAIR/session-challenges",
+                RouteClass::DeviceSessionChallengeApi,
+                false,
+            ),
+            (
+                "/api/v1/tenants/tenant_01/devices/device_01JPAIR/sessions",
+                RouteClass::DeviceSessionCollectionApi,
+                true,
+            ),
+        ];
+        for (path, expected, authenticated) in cases {
+            let actual = classify_route("POST", path);
+            assert_eq!(actual, expected);
+            assert_eq!(is_authenticated_api(actual), authenticated);
+            for method in ["GET", "PUT", "DELETE"] {
+                assert_eq!(
+                    classify_route(method, path),
+                    RouteClass::DynamicRouteNotFound
+                );
+            }
         }
     }
 
