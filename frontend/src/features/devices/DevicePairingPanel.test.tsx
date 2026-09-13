@@ -30,7 +30,7 @@ function authenticatedSession() {
     role: 'TENANT_OWNER',
     profileId: 'rehearsal-core-v2',
     profileDigest: 'a'.repeat(64),
-    capabilities: ['foundation'],
+    capabilities: ['foundation'] as const,
   };
 }
 
