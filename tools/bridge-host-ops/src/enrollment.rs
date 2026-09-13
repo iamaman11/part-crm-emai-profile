@@ -632,9 +632,9 @@ $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 function Test-KeyInUse([string]$keyName) {
     foreach ($candidateCertificate in Get-ChildItem -Path 'Cert:\LocalMachine\My') {
-        if (-not $candidateCertificate.HasPrivateKey) { continue }
         $candidateRsa = $null
         try {
+            if (-not $candidateCertificate.HasPrivateKey) { continue }
             $candidateRsa = [System.Security.Cryptography.X509Certificates.RSACertificateExtensions]::GetRSAPrivateKey($candidateCertificate)
             if ($null -ne $candidateRsa -and $candidateRsa.GetType().FullName -eq 'System.Security.Cryptography.RSACng' -and $candidateRsa.Key.KeyName -eq $keyName) {
                 return $true
@@ -648,7 +648,8 @@ function Test-KeyInUse([string]$keyName) {
 }
 $keyName = 'part-crm-bridge-' + $env:BRIDGE_HOST_OPS_DEVICE_ID
 $provider = [System.Security.Cryptography.CngProvider]::MicrosoftSoftwareKeyStorageProvider
-if (Test-KeyInUse $keyName) {
+$keyExists = [System.Security.Cryptography.CngKey]::Exists($keyName, $provider, [System.Security.Cryptography.CngKeyOpenOptions]::MachineKey)
+if ($keyExists -and (Test-KeyInUse $keyName)) {
     Write-Output 'in_use'
     exit 0
 }
@@ -656,7 +657,7 @@ $key = $null
 $rsa = $null
 $created = $false
 try {
-    if ([System.Security.Cryptography.CngKey]::Exists($keyName, $provider, [System.Security.Cryptography.CngKeyOpenOptions]::MachineKey)) {
+    if ($keyExists) {
         $key = [System.Security.Cryptography.CngKey]::Open($keyName, $provider, [System.Security.Cryptography.CngKeyOpenOptions]::MachineKey)
     } else {
         $parameters = New-Object System.Security.Cryptography.CngKeyCreationParameters
