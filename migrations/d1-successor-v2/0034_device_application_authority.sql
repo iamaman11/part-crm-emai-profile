@@ -89,9 +89,12 @@ CREATE TABLE device_pairing_transactions (
     )
 ) STRICT;
 
-CREATE UNIQUE INDEX device_pairing_transactions_one_live_key
-    ON device_pairing_transactions(public_key_spki_der_hex)
-    WHERE consumed_at_ms IS NULL;
+-- Multiple pairing attempts may refer to the same native key. An expired, unconsumed attempt must
+-- never permanently lock that non-exportable device key out of a fresh browser pairing. The
+-- pairing_digest remains the transaction identity and every completion still requires a live,
+-- browser-authorized transaction plus a fresh one-shot PoP challenge.
+CREATE INDEX device_pairing_transactions_key_lookup
+    ON device_pairing_transactions(public_key_spki_der_hex, expires_at_ms);
 
 CREATE TRIGGER device_pairing_transactions_core_immutable
 BEFORE UPDATE OF tenant_id, pairing_digest, device_id, public_key_spki_der_hex, issued_at_ms, expires_at_ms
