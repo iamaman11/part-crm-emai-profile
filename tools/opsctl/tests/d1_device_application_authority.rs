@@ -16,7 +16,9 @@ fn expired_pairing_cannot_permanently_lock_the_native_public_key() -> Result<(),
         "CREATE INDEX device_pairing_transactions_key_lookup\n    ON device_pairing_transactions(public_key_spki_der_hex, expires_at_ms);"
     ));
     assert!(!sql.contains("CREATE UNIQUE INDEX device_pairing_transactions_one_live_key"));
-    assert!(!sql.contains("WHERE consumed_at_ms IS NULL;\n\nCREATE TRIGGER device_pairing_transactions_core_immutable"));
+    assert!(!sql.contains(
+        "WHERE consumed_at_ms IS NULL;\n\nCREATE TRIGGER device_pairing_transactions_core_immutable"
+    ));
 
     Ok(())
 }
