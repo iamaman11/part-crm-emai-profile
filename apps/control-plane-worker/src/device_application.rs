@@ -385,16 +385,14 @@ fn request_correlation_id(request: &Request) -> Option<CorrelationId> {
 }
 
 fn path_tenant_id(request: &Request) -> Option<TenantId> {
-    let value = request.path().trim_matches('/').split('/').nth(3)?;
+    let path = request.path();
+    let value = path.trim_matches('/').split('/').nth(3)?;
     TenantId::parse(value.to_owned()).ok()
 }
 
 fn path_device_id(request: &Request) -> Option<DeviceId> {
-    let segments = request
-        .path()
-        .trim_matches('/')
-        .split('/')
-        .collect::<Vec<_>>();
+    let path = request.path();
+    let segments = path.trim_matches('/').split('/').collect::<Vec<_>>();
     if segments.get(4).copied() != Some("devices") {
         return None;
     }
