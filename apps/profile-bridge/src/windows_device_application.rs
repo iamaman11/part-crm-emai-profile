@@ -9,7 +9,6 @@ use control_plane_contract::device_application_api::{
     DEVICE_REQUEST_PROOF_EXPIRES_HEADER, DEVICE_REQUEST_PROOF_SIGNATURE_HEADER,
     DEVICE_SESSION_CHALLENGE_PATH_TEMPLATE, DEVICE_SESSION_COLLECTION_PATH_TEMPLATE,
     DeviceApplicationSessionProjection, DeviceProofChallengeProjection, OPAQUE_TOKEN_HEX_LENGTH,
-    P256_SIGNATURE_P1363_HEX_LENGTH,
 };
 use device_domain::{
     BRIDGE_REQUEST_PROOF_MAX_LIFETIME_MS, BridgeRequestProofMethod,
@@ -246,9 +245,12 @@ impl WindowsApplicationSessionHttp {
         let nonce = decode_exact_lower_hex::<32>(&challenge.nonce_hex)
             .ok_or(BridgePortError::InvalidResponse)?;
         let challenge_expires_at = UnixMillis::new(challenge.expires_at_ms);
-        let now = now()?;
-        if challenge_expires_at <= now
-            || challenge_expires_at.value().saturating_sub(now.value()) > 120_000
+        let challenge_observed_at = now()?;
+        if challenge_expires_at <= challenge_observed_at
+            || challenge_expires_at
+                .value()
+                .saturating_sub(challenge_observed_at.value())
+                > 120_000
         {
             return Err(BridgePortError::InvalidResponse);
         }
