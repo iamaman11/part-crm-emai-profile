@@ -7,10 +7,12 @@ const ERROR_SUCCESS: i32 = 0;
 const NTE_BAD_SIGNATURE: i32 = 0x8009_0006_u32 as i32;
 const NTE_EXISTS: i32 = 0x8009_000F_u32 as i32;
 const NTE_BAD_KEYSET: i32 = 0x8009_0016_u32 as i32;
+const NTE_BUFFER_TOO_SMALL: i32 = 0x8009_0028_u32 as i32;
 const NCRYPT_PERSIST_FLAG: u32 = 0x8000_0000;
 
 const PROVIDER_NAME: &str = "Microsoft Software Key Storage Provider";
 const ECDSA_P256_ALGORITHM: &str = "ECDSA_P256";
+const SHA256_ALGORITHM: &str = "SHA256";
 const EXPORT_POLICY_PROPERTY: &str = "Export Policy";
 const ECC_PUBLIC_BLOB: &str = "ECCPUBLICBLOB";
 const ECC_PRIVATE_BLOB: &str = "ECCPRIVATEBLOB";
@@ -35,15 +37,48 @@ impl Status {
     }
 }
 
+pub(super) fn sha256(input: &[u8]) -> Result<[u8; 32], Status> {
+    let algorithm = wide(SHA256_ALGORITHM);
+    let mut handle = 0_usize;
+    let status = unsafe {
+        BCryptOpenAlgorithmProvider(&mut handle, algorithm.as_ptr(), ptr::null(), 0)
+    };
+    require_success(status)?;
+    let algorithm_handle = AlgorithmHandle(handle);
+    let mut digest = [0_u8; 32];
+    let input_len = u32::try_from(input.len()).map_err(|_| Status(NTE_BUFFER_TOO_SMALL))?;
+    let status = unsafe {
+        BCryptHash(
+            algorithm_handle.0,
+            ptr::null_mut(),
+            0,
+            input.as_ptr().cast_mut(),
+            input_len,
+            digest.as_mut_ptr(),
+            digest.len() as u32,
+        )
+    };
+    require_success(status)?;
+    Ok(digest)
+}
+
+struct AlgorithmHandle(usize);
+
+impl Drop for AlgorithmHandle {
+    fn drop(&mut self) {
+        if self.0 != 0 {
+            let _ = unsafe { BCryptCloseAlgorithmProvider(self.0, 0) };
+        }
+    }
+}
+
 pub(super) struct ProviderHandle(usize);
 
 impl ProviderHandle {
     pub(super) fn open() -> Result<Self, Status> {
         let provider_name = wide(PROVIDER_NAME);
         let mut handle = 0_usize;
-        let status = unsafe {
-            NCryptOpenStorageProvider(&mut handle, provider_name.as_ptr(), 0)
-        };
+        let status = unsafe { NCryptOpenStorageProvider(&mut handle, provider_name.as_ptr(), 0) };
         require_success(status)?;
         Ok(Self(handle))
     }
@@ -63,9 +98,7 @@ impl KeyHandle {
     pub(super) fn open(provider: &ProviderHandle, key_name: &str) -> Result<Self, Status> {
         let key_name = wide(key_name);
         let mut handle = 0_usize;
-        let status = unsafe {
-            NCryptOpenKey(provider.0, &mut handle, key_name.as_ptr(), 0, 0)
-        };
+        let status = unsafe { NCryptOpenKey(provider.0, &mut handle, key_name.as_ptr(), 0, 0) };
         require_success(status)?;
         Ok(Self(handle))
     }
@@ -96,7 +129,7 @@ impl KeyHandle {
                 self.0,
                 property.as_ptr(),
                 (&mut policy as *mut u32).cast::<u8>(),
-                u32::try_from(core::mem::size_of::<u32>()).unwrap_or(4),
+                4,
                 NCRYPT_PERSIST_FLAG,
             )
         };
@@ -123,7 +156,7 @@ impl KeyHandle {
         };
         require_success(status)?;
         if actual != bytes.len() as u32 {
-            return Err(Status(0x8009_0028_u32 as i32));
+            return Err(Status(NTE_BUFFER_TOO_SMALL));
         }
         Ok(u32::from_le_bytes(bytes))
     }
@@ -153,9 +186,9 @@ impl KeyHandle {
             )
         };
         require_success(status)?;
-        let actual = usize::try_from(actual).map_err(|_| Status(0x8009_0028_u32 as i32))?;
+        let actual = usize::try_from(actual).map_err(|_| Status(NTE_BUFFER_TOO_SMALL))?;
         if actual > output.len() {
-            return Err(Status(0x8009_0028_u32 as i32));
+            return Err(Status(NTE_BUFFER_TOO_SMALL));
         }
         Ok(output[..actual].to_vec())
     }
@@ -176,9 +209,9 @@ impl KeyHandle {
             )
         };
         require_success(status)?;
-        let actual = usize::try_from(actual).map_err(|_| Status(0x8009_0028_u32 as i32))?;
+        let actual = usize::try_from(actual).map_err(|_| Status(NTE_BUFFER_TOO_SMALL))?;
         if actual > signature.len() {
-            return Err(Status(0x8009_0028_u32 as i32));
+            return Err(Status(NTE_BUFFER_TOO_SMALL));
         }
         Ok(signature[..actual].to_vec())
     }
@@ -305,4 +338,24 @@ unsafe extern "system" {
     ) -> i32;
     fn NCryptDeleteKey(h_key: usize, dw_flags: u32) -> i32;
     fn NCryptFreeObject(h_object: usize) -> i32;
+}
+
+#[link(name = "bcrypt")]
+unsafe extern "system" {
+    fn BCryptOpenAlgorithmProvider(
+        ph_algorithm: *mut usize,
+        psz_alg_id: *const u16,
+        psz_implementation: *const u16,
+        dw_flags: u32,
+    ) -> i32;
+    fn BCryptHash(
+        h_algorithm: usize,
+        pb_secret: *mut u8,
+        cb_secret: u32,
+        pb_input: *mut u8,
+        cb_input: u32,
+        pb_output: *mut u8,
+        cb_output: u32,
+    ) -> i32;
+    fn BCryptCloseAlgorithmProvider(h_algorithm: usize, dw_flags: u32) -> i32;
 }
