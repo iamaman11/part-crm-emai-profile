@@ -9,6 +9,11 @@ default-run = "bridge-host-ops"
 [workspace]
 resolver = "3"
 
+[target.'cfg(windows)'.dev-dependencies]
+device-domain = { path = "../../crates/device-domain" }
+profile-platform-primitives = { path = "../../crates/primitives" }
+windows-device-key = { path = "../../platform/windows-device-key" }
+
 [lints.rust]
 unsafe_code = "forbid"
 
