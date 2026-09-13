@@ -780,7 +780,9 @@ fn hex_nibble(value: u8) -> Result<u8> {
     match value {
         b'0'..=b'9' => Ok(value - b'0'),
         b'a'..=b'f' => Ok(value - b'a' + 10),
-        _ => Err(Error::RustError("hex value is not lowercase canonical".to_owned())),
+        _ => Err(Error::RustError(
+            "hex value is not lowercase canonical".to_owned(),
+        )),
     }
 }
 
@@ -790,8 +792,8 @@ fn aggregate_version(value: i64, label: &str) -> Result<AggregateVersion> {
 }
 
 fn positive_u64(value: i64, label: &str) -> Result<u64> {
-    let value = u64::try_from(value)
-        .map_err(|_| Error::RustError(format!("{label} is negative")))?;
+    let value =
+        u64::try_from(value).map_err(|_| Error::RustError(format!("{label} is negative")))?;
     if value == 0 {
         return Err(Error::RustError(format!("{label} is zero")));
     }
@@ -799,8 +801,8 @@ fn positive_u64(value: i64, label: &str) -> Result<u64> {
 }
 
 fn unix_millis(value: i64, label: &str) -> Result<UnixMillis> {
-    let value = u64::try_from(value)
-        .map_err(|_| Error::RustError(format!("{label} is negative")))?;
+    let value =
+        u64::try_from(value).map_err(|_| Error::RustError(format!("{label} is negative")))?;
     Ok(UnixMillis::new(value))
 }
 
@@ -828,7 +830,11 @@ mod tests {
 
     #[test]
     fn proof_and_session_reads_recheck_all_live_authorities() {
-        for sql in [LOAD_PAIRING_PROOF, LOAD_SESSION_PROOF, RESOLVE_ACTIVE_SESSION] {
+        for sql in [
+            LOAD_PAIRING_PROOF,
+            LOAD_SESSION_PROOF,
+            RESOLVE_ACTIVE_SESSION,
+        ] {
             assert!(sql.contains("memberships"));
             assert!(sql.contains("device_user_authorization_state"));
         }
