@@ -229,6 +229,7 @@ async fn complete_pairing(request: &mut Request, env: &Env) -> Result<Response> 
     }
     Response::from_json(&DeviceApplicationSessionProjection {
         session_token,
+        actor_id: proof.actor_id().as_str().to_owned(),
         device_id: proof.device_id().as_str().to_owned(),
         expires_at_ms: session_expires_at.value(),
     })
@@ -367,6 +368,7 @@ async fn renew_session(request: &mut Request, env: &Env) -> Result<Response> {
     }
     Response::from_json(&DeviceApplicationSessionProjection {
         session_token,
+        actor_id: proof.actor_id().as_str().to_owned(),
         device_id: device_id.as_str().to_owned(),
         expires_at_ms: session_expires_at.value(),
     })
