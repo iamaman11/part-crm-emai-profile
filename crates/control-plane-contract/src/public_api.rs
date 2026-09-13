@@ -366,8 +366,14 @@ pub fn openapi_document() -> Value {
             }
         }
     });
-    merge_fragment(&mut document, crate::bridge_enrollment_api::openapi_fragment());
-    merge_fragment(&mut document, crate::device_application_api::openapi_fragment());
+    merge_fragment(
+        &mut document,
+        crate::bridge_enrollment_api::openapi_fragment(),
+    );
+    merge_fragment(
+        &mut document,
+        crate::device_application_api::openapi_fragment(),
+    );
     document
 }
 
@@ -621,15 +627,18 @@ mod tests {
             "/api/v1/tenants/{tenantId}/devices/{deviceId}/session-challenges",
             "/api/v1/tenants/{tenantId}/devices/{deviceId}/sessions",
         ] {
-            assert!(document["paths"][path]["post"].is_object(), "missing path {path}");
+            assert!(
+                document["paths"][path]["post"].is_object(),
+                "missing path {path}"
+            );
         }
         assert_eq!(
             document["components"]["securitySchemes"]["cloudflareAccessJwt"]["name"],
             "Cf-Access-Jwt-Assertion"
         );
         assert_eq!(
-            document["paths"]["/api/v1/tenants/{tenantId}/device-pairings/authorizations"]
-                ["post"]["security"][0]["cloudflareAccessJwt"],
+            document["paths"]["/api/v1/tenants/{tenantId}/device-pairings/authorizations"]["post"]
+                ["security"][0]["cloudflareAccessJwt"],
             json!([])
         );
         assert_eq!(
