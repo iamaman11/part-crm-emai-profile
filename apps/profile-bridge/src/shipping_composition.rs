@@ -125,20 +125,20 @@ mod windows {
         DeliveryHandoffCoordinator, DeliveryHandoffRestartDisposition,
     };
     use crate::windows_delivery_runtime::ActiveWindowsDeliveryRuntime;
-    use crate::windows_generation_put::WindowsSignedGenerationObjectPut;
-    use crate::windows_native::{
-        WindowsDeviceIdentity, WindowsMachineCertificate, WindowsSchannelMachineHttp,
-        WindowsSignedGenerationObjectGet,
+    use crate::windows_device_application::{
+        WindowsDeviceApplication, WindowsDeviceApplicationBinding,
     };
+    use crate::windows_generation_put::WindowsSignedGenerationObjectPut;
+    use crate::windows_native::{WindowsDeviceIdentity, WindowsSignedGenerationObjectGet};
     use bridge_domain::ClaimUri;
-    use profile_platform_primitives::{DeviceId, UnixMillis};
+    use profile_platform_primitives::UnixMillis;
     use std::env;
     use std::path::PathBuf;
     use std::thread;
     use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-    const DEVICE_ID_ENV: &str = "PROFILE_BRIDGE_DEVICE_ID";
-    const MACHINE_CERT_SHA1_ENV: &str = "PROFILE_BRIDGE_MACHINE_CERT_SHA1";
+    const DEVICE_APPLICATION_BINDING_PATH_ENV: &str =
+        "PROFILE_BRIDGE_DEVICE_APPLICATION_BINDING_PATH";
     const CONTROL_PLANE_ORIGIN_ENV: &str = "PROFILE_BRIDGE_CONTROL_PLANE_ORIGIN";
     const MATERIALIZATION_ROOT_ENV: &str = "PROFILE_BRIDGE_MATERIALIZATION_ROOT";
     const NETWORK_POLICY_PATH_ENV: &str = "PROFILE_BRIDGE_NETWORK_POLICY_PATH";
@@ -147,8 +147,7 @@ mod windows {
     const CONTROLLED_CLOSE_POLL_MS: u64 = 250;
 
     struct ShippingConfig {
-        device_id: DeviceId,
-        machine_cert_sha1: String,
+        device_application_binding_path: PathBuf,
         control_plane_origin: String,
         materialization_root: PathBuf,
         network_policy_path: PathBuf,
@@ -157,9 +156,8 @@ mod windows {
 
     impl ShippingConfig {
         fn from_environment() -> Result<Self, ShippingCompositionError> {
-            let device_id = DeviceId::parse(required_env(DEVICE_ID_ENV)?)
-                .map_err(|_| ShippingCompositionError::Configuration)?;
-            let machine_cert_sha1 = required_env(MACHINE_CERT_SHA1_ENV)?;
+            let device_application_binding_path =
+                absolute_path(required_env(DEVICE_APPLICATION_BINDING_PATH_ENV)?)?;
             let control_plane_origin = required_env(CONTROL_PLANE_ORIGIN_ENV)?;
             let materialization_root = materialization_root_path()?;
             let network_policy_path = absolute_path(required_env(NETWORK_POLICY_PATH_ENV)?)?;
@@ -167,8 +165,7 @@ mod windows {
                 .map(absolute_path)
                 .transpose()?;
             Ok(Self {
-                device_id,
-                machine_cert_sha1,
+                device_application_binding_path,
                 control_plane_origin,
                 materialization_root,
                 network_policy_path,
@@ -189,17 +186,13 @@ mod windows {
         let runtime_root = active_delivery.runtime_root().to_path_buf();
         let runtime_bundles = active_delivery.into_bundle_selection();
 
-        let identity = WindowsDeviceIdentity::new(config.device_id.clone());
-        let certificate = WindowsMachineCertificate::local_machine_my(
-            config.device_id.clone(),
-            &config.machine_cert_sha1,
-        )
-        .map_err(|_| ShippingCompositionError::Configuration)?;
-        let transport = WindowsSchannelMachineHttp::from_system(
-            config.control_plane_origin,
-            certificate.selector().to_owned(),
-        )
-        .map_err(|_| ShippingCompositionError::Configuration)?;
+        let binding = WindowsDeviceApplicationBinding::open(&config.device_application_binding_path)
+            .map_err(|_| ShippingCompositionError::Configuration)?;
+        let identity = WindowsDeviceIdentity::new(binding.device_id().clone());
+        let device_application =
+            WindowsDeviceApplication::from_system(config.control_plane_origin, binding)
+                .map_err(|_| ShippingCompositionError::Configuration)?;
+        let transport = device_application.transport();
         let save_transport = transport.clone();
         let signed_generation_get = WindowsSignedGenerationObjectGet::from_system()
             .map_err(|_| ShippingCompositionError::Configuration)?;
@@ -235,8 +228,8 @@ mod windows {
 
         let mut operator = ProfileBridgeOperator::new(
             identity,
-            certificate.clone(),
-            certificate,
+            device_application.clone(),
+            device_application,
             enrollment,
             coordinator,
             runtime_bundles,
