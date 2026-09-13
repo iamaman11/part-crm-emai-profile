@@ -60,6 +60,7 @@ pub mod d1_profiles;
 pub mod d1_query;
 pub mod d1_realtime_notifications;
 pub mod device_generation_commit_runtime;
+pub mod device_webcrypto;
 pub mod fake_mail_query;
 pub mod generation_keyring;
 mod gmail_mail_query;
