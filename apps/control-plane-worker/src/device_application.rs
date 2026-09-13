@@ -4,14 +4,16 @@ use crate::access_session::{
 use cloudflare_adapters::d1_device_application_authority::D1DeviceApplicationAuthority;
 use cloudflare_adapters::device_webcrypto::verify_p256_sha256;
 use control_plane_contract::device_application_api::{
-    DeviceApplicationSessionProjection, DevicePairingAuthorizeRequest, DevicePairingCompleteRequest,
-    DevicePairingCreateProjection, DevicePairingCreateRequest, DeviceProofChallengeProjection,
-    DeviceSessionChallengeRequest, DeviceSessionRenewRequest, OPAQUE_TOKEN_HEX_LENGTH,
-    P256_SIGNATURE_P1363_HEX_LENGTH, P256_SPKI_DER_HEX_LENGTH,
+    DeviceApplicationSessionProjection, DevicePairingAuthorizeRequest,
+    DevicePairingCompleteRequest, DevicePairingCreateProjection, DevicePairingCreateRequest,
+    DeviceProofChallengeProjection, DeviceSessionChallengeRequest, DeviceSessionRenewRequest,
+    OPAQUE_TOKEN_HEX_LENGTH, P256_SIGNATURE_P1363_HEX_LENGTH, P256_SPKI_DER_HEX_LENGTH,
 };
 use control_plane_contract::{D1_CATALOG_BINDING, RouteClass};
 use device_domain::{DevicePublicKey, device_proof_message_v1};
-use profile_platform_primitives::{AggregateVersion, CorrelationId, DeviceId, TenantId, UnixMillis};
+use profile_platform_primitives::{
+    AggregateVersion, CorrelationId, DeviceId, TenantId, UnixMillis,
+};
 use sha2::{Digest, Sha256};
 use worker::wasm_bindgen::JsCast;
 use worker::web_sys::WorkerGlobalScope;
@@ -177,12 +179,7 @@ async fn complete_pairing(request: &mut Request, env: &Env) -> Result<Response> 
     let completed_at = now();
     let authority = application_authority(env)?;
     let proof = match authority
-        .load_pairing_proof(
-            &tenant_id,
-            &pairing_digest,
-            &challenge_digest,
-            completed_at,
-        )
+        .load_pairing_proof(&tenant_id, &pairing_digest, &challenge_digest, completed_at)
         .await
     {
         Ok(Some(value)) => value,
@@ -259,7 +256,10 @@ async fn create_session_challenge(request: &mut Request, env: &Env) -> Result<Re
         return invalid_request(correlation_id.as_str());
     }
     let authority = application_authority(env)?;
-    let device = match authority.resolve_active_device(&tenant_id, &device_id).await {
+    let device = match authority
+        .resolve_active_device(&tenant_id, &device_id)
+        .await
+    {
         Ok(Some(value)) => value,
         Ok(None) => return neutral_not_found(correlation_id.as_str()),
         Err(_) => return dependency_unavailable(correlation_id.as_str()),
@@ -374,7 +374,9 @@ async fn renew_session(request: &mut Request, env: &Env) -> Result<Response> {
 }
 
 fn application_authority(env: &Env) -> Result<D1DeviceApplicationAuthority> {
-    Ok(D1DeviceApplicationAuthority::new(env.d1(D1_CATALOG_BINDING)?))
+    Ok(D1DeviceApplicationAuthority::new(
+        env.d1(D1_CATALOG_BINDING)?,
+    ))
 }
 
 fn request_correlation_id(request: &Request) -> Option<CorrelationId> {
@@ -388,7 +390,11 @@ fn path_tenant_id(request: &Request) -> Option<TenantId> {
 }
 
 fn path_device_id(request: &Request) -> Option<DeviceId> {
-    let segments = request.path().trim_matches('/').split('/').collect::<Vec<_>>();
+    let segments = request
+        .path()
+        .trim_matches('/')
+        .split('/')
+        .collect::<Vec<_>>();
     if segments.get(4).copied() != Some("devices") {
         return None;
     }
