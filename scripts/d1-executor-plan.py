@@ -20,7 +20,7 @@ from typing import Any
 
 MIGRATION_RE = re.compile(r"\b[0-9]{4}_[a-z0-9_]+\.sql\b")
 SHA256_RE = re.compile(r"[0-9a-f]{64}")
-CONTRACT_REVISION = "0034_pas2_payload_fingerprint_contract.sql"
+CONTRACT_REVISION = "0035_pas2_payload_fingerprint_contract.sql"
 
 
 class PlanAdapterError(ValueError):
@@ -161,7 +161,7 @@ def planned_names(plan: Any, mode: str, component: str) -> list[str]:
     if mode == "ordinary" and CONTRACT_REVISION in names:
         fail("ordinary d1 plan must never authorize the separate fail-forward CONTRACT")
     if mode == "contract" and (component != "catalog" or names != [CONTRACT_REVISION]):
-        fail("contract-transition must authorize exactly the sole Catalog 0034 CONTRACT")
+        fail("contract-transition must authorize exactly the sole Catalog 0035 CONTRACT")
     return names
 
 
@@ -275,7 +275,7 @@ def materialize(
     if observed != sorted(bounded):
         fail(f"bounded migration directory drifted: expected={sorted(bounded)}, observed={observed}")
     if component_id == "catalog" and mode == "ordinary" and (output_dir / CONTRACT_REVISION).exists():
-        fail("ordinary Catalog materialization leaked the trailing 0034 CONTRACT")
+        fail("ordinary Catalog materialization leaked the trailing 0035 CONTRACT")
     write_json(expected_pending_path, planned)
     write_json(normalized_ledger_path, remote)
 
