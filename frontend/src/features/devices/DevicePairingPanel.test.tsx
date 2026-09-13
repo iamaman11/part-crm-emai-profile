@@ -27,7 +27,7 @@ function authenticatedSession() {
   return {
     tenantId: 'tenant_01JTEST',
     actorId: 'actor_01JTEST',
-    role: 'TENANT_OWNER',
+    role: 'TENANT_OWNER' as const,
     profileId: 'rehearsal-core-v2',
     profileDigest: 'a'.repeat(64),
     capabilities: ['foundation'] as const,
