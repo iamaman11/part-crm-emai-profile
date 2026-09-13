@@ -65,10 +65,15 @@ jobs:
         shell: pwsh
         run: |
           cargo fmt --manifest-path tools/bridge-host-ops/Cargo.toml --all -- --check
+          if ($LASTEXITCODE -ne 0) { throw 'cargo fmt failed' }
           cargo clippy --locked --manifest-path tools/bridge-host-ops/Cargo.toml --all-targets -- -D warnings
+          if ($LASTEXITCODE -ne 0) { throw 'cargo clippy failed' }
           cargo test --locked --manifest-path tools/bridge-host-ops/Cargo.toml
+          if ($LASTEXITCODE -ne 0) { throw 'cargo test failed' }
           cargo build --locked --release --manifest-path tools/bridge-host-ops/Cargo.toml
+          if ($LASTEXITCODE -ne 0) { throw 'cargo build failed' }
           cargo run --locked --quiet --manifest-path tools/bridge-host-ops/Cargo.toml -- self-test | ConvertFrom-Json | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw 'bridge-host-ops self-test failed' }
 
   windows-enrollment-e2e:
     name: Bridge Enrollment Hosted E2E (Windows)
@@ -104,9 +109,12 @@ jobs:
         run: |
           if ((node --version) -ne 'v24.19.0') { throw 'unexpected Node version' }
           npm install --global npm@11.17.0
+          if ($LASTEXITCODE -ne 0) { throw 'npm install failed' }
           if ((npm --version) -ne '11.17.0') { throw 'unexpected npm version' }
           node --check tests/bridge-enrollment-e2e/dependency-server.mjs
+          if ($LASTEXITCODE -ne 0) { throw 'dependency-server.mjs syntax validation failed' }
           node --check tests/bridge-enrollment-e2e/signer-worker.mjs
+          if ($LASTEXITCODE -ne 0) { throw 'signer-worker.mjs syntax validation failed' }
           foreach ($path in @('scripts/bridge-enrollment-hosted-e2e.ps1', 'tests/bridge-enrollment-e2e/sign-csr.ps1')) {
             $tokens = $null
             $errors = $null
@@ -138,9 +146,16 @@ jobs:
         shell: pwsh
         run: |
           cargo build --locked --release --manifest-path tools/bridge-host-ops/Cargo.toml
+          if ($LASTEXITCODE -ne 0) { throw 'bridge-host-ops release build failed' }
           cargo install worker-build --version 0.8.5 --locked
+          if ($LASTEXITCODE -ne 0) { throw 'worker-build install failed' }
           Push-Location apps/control-plane-worker
-          try { worker-build --release } finally { Pop-Location }
+          try {
+            worker-build --release
+            if ($LASTEXITCODE -ne 0) { throw 'control-plane Worker build failed' }
+          } finally {
+            Pop-Location
+          }
           if (-not (Test-Path apps/control-plane-worker/build/worker/shim.mjs)) { throw 'Worker build output missing' }
 
       - name: Prove hosted Windows positive and negative enrollment E2E
