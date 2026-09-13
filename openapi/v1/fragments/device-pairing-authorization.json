@@ -1,0 +1,110 @@
+{
+  "paths": {
+    "/api/v1/tenants/{tenantId}/device-pairings/authorizations": {
+      "post": {
+        "operationId": "authorizeDevicePairing",
+        "security": [
+          {
+            "cloudflareAccessJwt": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/TenantPath"
+          },
+          {
+            "$ref": "#/components/parameters/CorrelationHeader"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DevicePairingAuthorizeRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Access-authenticated actor authorized the pending device pairing and received a bounded proof challenge",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeviceProofChallengeProjection"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/InvalidRequest"
+          },
+          "404": {
+            "$ref": "#/components/responses/NeutralNotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalFailure"
+          },
+          "503": {
+            "$ref": "#/components/responses/DependencyUnavailable"
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "DevicePairingAuthorizeRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "pairingToken"
+        ],
+        "properties": {
+          "pairingToken": {
+            "type": "string",
+            "minLength": 64,
+            "maxLength": 64,
+            "pattern": "^[0-9a-f]{64}$"
+          }
+        }
+      },
+      "DeviceProofChallengeProjection": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "challengeToken",
+          "deviceId",
+          "nonceHex",
+          "expiresAtMs"
+        ],
+        "properties": {
+          "challengeToken": {
+            "type": "string",
+            "minLength": 64,
+            "maxLength": 64,
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "deviceId": {
+            "$ref": "#/components/schemas/OpaqueId"
+          },
+          "nonceHex": {
+            "type": "string",
+            "minLength": 64,
+            "maxLength": 64,
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "expiresAtMs": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 1
+          }
+        }
+      }
+    }
+  }
+}
