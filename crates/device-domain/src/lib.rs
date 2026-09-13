@@ -14,8 +14,8 @@ pub use authorization::{
 };
 pub use bridge_request_proof::{
     BRIDGE_REQUEST_PROOF_DIGEST_BYTES, BRIDGE_REQUEST_PROOF_MAX_LIFETIME_MS,
-    BRIDGE_REQUEST_PROOF_MAX_PATH_BYTES, BridgeRequestProofMessageError,
-    BridgeRequestProofMethod, bridge_request_proof_message_v1,
+    BRIDGE_REQUEST_PROOF_MAX_PATH_BYTES, BridgeRequestProofMessageError, BridgeRequestProofMethod,
+    bridge_request_proof_message_v1,
 };
 pub use claim::{DeviceClaim, DeviceClaimError, DeviceClaimSnapshot};
 pub use id::{DeviceClaimId, DeviceJobId};

@@ -1,15 +1,14 @@
 use application_ports::profile_launch::ProfileLaunchMachineBinding;
 use cloudflare_adapters::d1_device_application_authority::D1DeviceApplicationAuthority;
 use cloudflare_adapters::device_webcrypto::verify_p256_sha256;
+use control_plane_contract::D1_CATALOG_BINDING;
 use control_plane_contract::device_application_api::{
     DEVICE_APPLICATION_SESSION_HEADER, DEVICE_REQUEST_PROOF_EXPIRES_HEADER,
     DEVICE_REQUEST_PROOF_SIGNATURE_HEADER, OPAQUE_TOKEN_HEX_LENGTH,
     P256_SIGNATURE_P1363_HEX_LENGTH,
 };
-use control_plane_contract::D1_CATALOG_BINDING;
 use device_domain::{
-    BRIDGE_REQUEST_PROOF_MAX_LIFETIME_MS, BridgeRequestProofMethod,
-    bridge_request_proof_message_v1,
+    BRIDGE_REQUEST_PROOF_MAX_LIFETIME_MS, BridgeRequestProofMethod, bridge_request_proof_message_v1,
 };
 use profile_platform_primitives::{CorrelationId, UnixMillis};
 use sha2::{Digest, Sha256};
@@ -166,14 +165,18 @@ fn proof_expiry_is_current(now: UnixMillis, expires_at: UnixMillis) -> bool {
         .is_some_and(|remaining| remaining > 0 && remaining <= BRIDGE_REQUEST_PROOF_MAX_LIFETIME_MS)
 }
 
-fn request_proof_signature(request: &Request) -> Result<Option<[u8; REQUEST_PROOF_SIGNATURE_BYTES]>> {
+fn request_proof_signature(
+    request: &Request,
+) -> Result<Option<[u8; REQUEST_PROOF_SIGNATURE_BYTES]>> {
     let Some(value) = request
         .headers()
         .get(DEVICE_REQUEST_PROOF_SIGNATURE_HEADER)?
     else {
         return Ok(None);
     };
-    Ok(decode_exact_lower_hex::<REQUEST_PROOF_SIGNATURE_BYTES>(&value))
+    Ok(decode_exact_lower_hex::<REQUEST_PROOF_SIGNATURE_BYTES>(
+        &value,
+    ))
 }
 
 fn request_proof_method(method: Method) -> Option<BridgeRequestProofMethod> {
@@ -184,7 +187,9 @@ fn request_proof_method(method: Method) -> Option<BridgeRequestProofMethod> {
     }
 }
 
-async fn request_body_digest(request: &Request) -> Result<Option<[u8; REQUEST_PROOF_DIGEST_BYTES]>> {
+async fn request_body_digest(
+    request: &Request,
+) -> Result<Option<[u8; REQUEST_PROOF_DIGEST_BYTES]>> {
     let mut clone = request.clone()?;
     let mut body = clone.bytes().await?;
     if body.len() > MAX_BRIDGE_PROOF_BODY_BYTES {

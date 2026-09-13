@@ -91,10 +91,7 @@ fn append_identifier(
     append_bytes(message, value.as_bytes())
 }
 
-fn append_bytes(
-    message: &mut Vec<u8>,
-    value: &[u8],
-) -> Result<(), BridgeRequestProofMessageError> {
+fn append_bytes(message: &mut Vec<u8>, value: &[u8]) -> Result<(), BridgeRequestProofMessageError> {
     let length = u16::try_from(value.len())
         .map_err(|_| BridgeRequestProofMessageError::InvalidFieldLength)?;
     message.extend_from_slice(&length.to_be_bytes());
