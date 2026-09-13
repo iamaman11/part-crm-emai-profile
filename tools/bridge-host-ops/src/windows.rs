@@ -398,6 +398,9 @@ fn run_command(
     String::from_utf8(output.stdout).map_err(|_| HostOpsError::new("host_effect_output_invalid"))
 }
 
+#[allow(dead_code)]
+fn _assert_os_str_is_not_logged(_: &OsStr) {}
+
 #[cfg(test)]
 mod tests {
     use super::{ENROLLMENT_CRYPTO_PROOF_SCRIPT, powershell_command, run_command};
@@ -411,6 +414,3 @@ mod tests {
         Ok(())
     }
 }
-
-#[allow(dead_code)]
-fn _assert_os_str_is_not_logged(_: &OsStr) {}

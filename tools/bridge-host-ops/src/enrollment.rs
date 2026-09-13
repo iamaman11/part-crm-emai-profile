@@ -222,16 +222,12 @@ fn run_windows(
     ) {
         Ok(value) => value,
         Err(error) => {
-            if let Err(cleanup_error) = cleanup_machine_key(&issue.device_id) {
-                return Err(cleanup_error);
-            }
+            cleanup_machine_key(&issue.device_id)?;
             return Err(error);
         }
     };
     if redeem.device_id != issue.device_id {
-        if let Err(cleanup_error) = cleanup_machine_key(&issue.device_id) {
-            return Err(cleanup_error);
-        }
+        cleanup_machine_key(&issue.device_id)?;
         return Err(HostOpsError::new("enrollment_device_identity_mismatch"));
     }
     let certificate = match install_enrollment_certificate(
@@ -241,9 +237,7 @@ fn run_windows(
     ) {
         Ok(value) => value,
         Err(error) => {
-            if let Err(cleanup_error) = cleanup_machine_key(&issue.device_id) {
-                return Err(cleanup_error);
-            }
+            cleanup_machine_key(&issue.device_id)?;
             return Err(error);
         }
     };
@@ -858,7 +852,7 @@ fn execute_issue(
     plan: &EnrollmentHttpPlan,
     token_file: &Path,
 ) -> HostOpsResult<EnrollmentIssueProjection> {
-    let output = execute_http(plan, token_file)?;
+    let output = execute_http(plan, token_file, "enrollment_issue_effect_failed")?;
     parse_issue_output(&output, plan.success_statuses)
 }
 
@@ -867,12 +861,16 @@ fn execute_redeem(
     plan: &EnrollmentHttpPlan,
     token_file: &Path,
 ) -> HostOpsResult<EnrollmentRedemptionProjection> {
-    let output = execute_http(plan, token_file)?;
+    let output = execute_http(plan, token_file, "enrollment_redeem_effect_failed")?;
     parse_redeem_output(&output, plan.success_statuses)
 }
 
 #[cfg(windows)]
-fn execute_http(plan: &EnrollmentHttpPlan, token_file: &Path) -> HostOpsResult<String> {
+fn execute_http(
+    plan: &EnrollmentHttpPlan,
+    token_file: &Path,
+    effect_failure_code: &'static str,
+) -> HostOpsResult<String> {
     let mut token = read_secret_file(token_file, 32_768)?;
     while matches!(token.last(), Some(b'\r' | b'\n')) {
         token.pop();
@@ -902,6 +900,7 @@ fn execute_http(plan: &EnrollmentHttpPlan, token_file: &Path) -> HostOpsResult<S
         command,
         Some(std::mem::take(&mut config)),
         MAX_HTTP_OUTPUT_SIZE,
+        effect_failure_code,
     )?;
     config.fill(0);
     Ok(output)
@@ -912,7 +911,12 @@ fn create_or_reuse_machine_csr(device_id: &str) -> HostOpsResult<String> {
     validate_identifier(device_id).map_err(|_| HostOpsError::new("invalid_server_device_id"))?;
     let mut command = powershell_command(CREATE_CSR_SCRIPT)?;
     command.env("BRIDGE_HOST_OPS_DEVICE_ID", device_id);
-    let output = run_command(command, None, MAX_CSR_DER_HEX_LENGTH + 1_024)?;
+    let output = run_command(
+        command,
+        None,
+        MAX_CSR_DER_HEX_LENGTH + 1_024,
+        "enrollment_csr_effect_failed",
+    )?;
     let csr = output.trim().to_owned();
     if csr == "in_use" {
         return Err(HostOpsError::new("enrollment_device_already_installed"));
@@ -937,7 +941,12 @@ fn install_enrollment_certificate(
     let mut command = powershell_command(INSTALL_CERTIFICATE_SCRIPT)?;
     command.env("BRIDGE_HOST_OPS_DEVICE_ID", device_id);
     let input = format!("{certificate_sha256}\n{leaf_certificate_der_hex}").into_bytes();
-    let output = run_command(command, Some(input), 8_192)?;
+    let output = run_command(
+        command,
+        Some(input),
+        8_192,
+        "enrollment_certificate_install_effect_failed",
+    )?;
     parse_certificate_observation(&output)
 }
 
@@ -946,7 +955,12 @@ fn cleanup_machine_key(device_id: &str) -> HostOpsResult<()> {
     validate_identifier(device_id).map_err(|_| HostOpsError::new("invalid_server_device_id"))?;
     let mut command = powershell_command(CLEANUP_KEY_SCRIPT)?;
     command.env("BRIDGE_HOST_OPS_DEVICE_ID", device_id);
-    let output = run_command(command, None, 1_024)?;
+    let output = run_command(
+        command,
+        None,
+        1_024,
+        "enrollment_key_cleanup_effect_failed",
+    )?;
     match output.trim() {
         "removed" | "absent" => Ok(()),
         "in_use" => Err(HostOpsError::new("enrollment_key_in_use")),
@@ -1014,6 +1028,7 @@ fn run_command(
     mut command: Command,
     mut input: Option<Vec<u8>>,
     maximum_output_size: usize,
+    effect_failure_code: &'static str,
 ) -> HostOpsResult<String> {
     command.stdout(Stdio::piped()).stderr(Stdio::null());
     if input.is_some() {
@@ -1048,7 +1063,7 @@ fn run_command(
         return Err(HostOpsError::new("host_effect_stdin_failed"));
     }
     if !output.status.success() {
-        return Err(HostOpsError::new("host_effect_failed"));
+        return Err(HostOpsError::new(effect_failure_code));
     }
     if output.stdout.len() > maximum_output_size {
         return Err(HostOpsError::new("host_effect_output_too_large"));
@@ -1154,21 +1169,28 @@ mod tests {
         assert!(csr.starts_with("30"));
         let mut command = powershell_command(TEST_PUBLIC_CERTIFICATE_SCRIPT)?;
         command.env("BRIDGE_HOST_OPS_DEVICE_ID", &device_id);
-        let public = run_command(command, None, MAX_CERTIFICATE_DER_HEX_LENGTH + 1_024)?;
+        let public = run_command(
+            command,
+            None,
+            MAX_CERTIFICATE_DER_HEX_LENGTH + 1_024,
+            "enrollment_test_certificate_effect_failed",
+        )?;
         let Some((fingerprint, leaf)) = public.trim().split_once('\t') else {
             cleanup_machine_key(&device_id)?;
             return Err("invalid test certificate output".into());
         };
         let certificate = install_enrollment_certificate(&device_id, fingerprint, leaf)?;
         assert_eq!(certificate.sha256_fingerprint(), fingerprint);
-        assert_eq!(
-            create_or_reuse_machine_csr(&device_id).unwrap_err().code(),
-            "enrollment_device_already_installed"
-        );
-        assert_eq!(
-            cleanup_machine_key(&device_id).unwrap_err().code(),
-            "enrollment_key_in_use"
-        );
+        let reuse_error = match create_or_reuse_machine_csr(&device_id) {
+            Ok(_) => return Err("installed enrollment key unexpectedly reusable".into()),
+            Err(error) => error,
+        };
+        assert_eq!(reuse_error.code(), "enrollment_device_already_installed");
+        let cleanup_error = match cleanup_machine_key(&device_id) {
+            Ok(()) => return Err("installed enrollment key unexpectedly removable".into()),
+            Err(error) => error,
+        };
+        assert_eq!(cleanup_error.code(), "enrollment_key_in_use");
         super::super::windows::remove_certificate(certificate.sha1_thumbprint())?;
         Ok(())
     }
