@@ -1001,24 +1001,12 @@ def firefox_writer_active(root: Path) -> bool:
     return True
 
 
-def firefox_legacy_lock_symlink_present(root: Path) -> bool:
-    """Observe Firefox's browser-owned legacy symlink without removing it."""
-    _primary_lock, legacy_lock = firefox_writer_locks(root)
-    return legacy_lock is not None and legacy_lock.is_symlink()
-
-
 def wait_for_browser_quiescence(root: Path) -> None:
-    """Wait for writer release and Firefox-owned legacy symlink cleanup within one deadline."""
+    """Wait for Firefox to release its OS profile lock; never remove lock artifacts."""
     deadline = time.monotonic() + BROWSER_CLOSE_QUIESCENCE_SECONDS
-    while True:
-        writer_active = firefox_writer_active(root)
-        legacy_symlink_present = firefox_legacy_lock_symlink_present(root)
-        if not writer_active and not legacy_symlink_present:
-            return
+    while firefox_writer_active(root):
         if time.monotonic() >= deadline:
-            if writer_active:
-                raise RuntimeContractError("Firefox writer lock remained active after clean close")
-            raise RuntimeContractError("Firefox legacy lock symlink remained after clean close")
+            raise RuntimeContractError("Firefox writer lock remained active after clean close")
         time.sleep(BROWSER_CLOSE_POLL_SECONDS)
 
 

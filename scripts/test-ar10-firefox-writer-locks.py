@@ -145,47 +145,6 @@ class FirefoxWriterLockTests(unittest.TestCase):
             self.assertFalse(runtime.firefox_writer_active(root))
             self.assertTrue(legacy.is_symlink(), "runtime must not delete Firefox lock artifacts")
 
-    @unittest.skipUnless(os.name == "posix" and sys.platform != "darwin", "Linux legacy lock semantics")
-    def test_quiescence_waits_for_firefox_to_remove_stale_legacy_symlink(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary:
-            root = self.profile_root(temporary)
-            primary, legacy = runtime.firefox_writer_locks(root)
-            self.assertIsNotNone(legacy)
-            assert legacy is not None
-            primary.write_bytes(b"")
-            legacy.symlink_to("localhost:+1234")
-            sleeps = 0
-
-            def release_legacy_lock(_seconds: float) -> None:
-                nonlocal sleeps
-                sleeps += 1
-                legacy.unlink()
-
-            with mock.patch.object(runtime.time, "sleep", side_effect=release_legacy_lock):
-                runtime.wait_for_browser_quiescence(root)
-
-            self.assertEqual(sleeps, 1)
-            self.assertFalse(legacy.is_symlink())
-
-    @unittest.skipUnless(os.name == "posix" and sys.platform != "darwin", "Linux legacy lock semantics")
-    def test_quiescence_times_out_if_stale_legacy_symlink_persists_without_deleting_it(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary:
-            root = self.profile_root(temporary)
-            primary, legacy = runtime.firefox_writer_locks(root)
-            self.assertIsNotNone(legacy)
-            assert legacy is not None
-            primary.write_bytes(b"")
-            legacy.symlink_to("localhost:+1234")
-            with (
-                mock.patch.object(runtime, "BROWSER_CLOSE_QUIESCENCE_SECONDS", 0.0),
-                self.assertRaisesRegex(
-                    runtime.RuntimeContractError,
-                    "legacy lock symlink remained",
-                ),
-            ):
-                runtime.wait_for_browser_quiescence(root)
-            self.assertTrue(legacy.is_symlink(), "runtime must not delete Firefox lock artifacts")
-
     @unittest.skipUnless(os.name == "posix", "POSIX Firefox lock semantics")
     def test_primary_symlink_shape_fails_closed(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
