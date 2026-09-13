@@ -234,7 +234,8 @@ mod tests {
     }
 
     #[test]
-    fn pairing_completion_redacts_one_time_capabilities() -> Result<(), Box<dyn std::error::Error>> {
+    fn pairing_completion_redacts_one_time_capabilities() -> Result<(), Box<dyn std::error::Error>>
+    {
         let pairing = "a".repeat(64);
         let challenge = "b".repeat(64);
         let nonce = "c".repeat(64);
