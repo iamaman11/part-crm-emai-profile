@@ -92,9 +92,8 @@ impl D1DevicePublicKeyBinding {
         if !is_canonical_sha256_hex(pairing_digest) {
             return Err(Error::RustError("pairing digest is invalid".to_owned()));
         }
-        let expected_previous_version = expected_previous_version
-            .map(sqlite_version)
-            .transpose()?;
+        let expected_previous_version =
+            expected_previous_version.map(sqlite_version).transpose()?;
         let next_version = sqlite_version(next_version)?;
         let now = sqlite_integer(now.value())?;
         let public_key_spki_der_hex = hex_encode(public_key.spki_der());
@@ -159,7 +158,10 @@ impl D1DevicePublicKeyBinding {
 }
 
 fn public_key_evidence_reference(public_key: &DevicePublicKey) -> String {
-    format!("{P256_EVIDENCE_PREFIX}{}", hex_encode(public_key.spki_der()))
+    format!(
+        "{P256_EVIDENCE_PREFIX}{}",
+        hex_encode(public_key.spki_der())
+    )
 }
 
 fn is_canonical_sha256_hex(value: &str) -> bool {
@@ -197,15 +199,16 @@ mod tests {
 
     fn public_key() -> Result<DevicePublicKey, Box<dyn std::error::Error>> {
         let mut der = vec![
-            0x30, 0x59, 0x30, 0x13, 0x06, 0x07, 0x2a, 0x86, 0x48, 0xce, 0x3d, 0x02, 0x01,
-            0x06, 0x08, 0x2a, 0x86, 0x48, 0xce, 0x3d, 0x03, 0x01, 0x07, 0x03, 0x42, 0x00, 0x04,
+            0x30, 0x59, 0x30, 0x13, 0x06, 0x07, 0x2a, 0x86, 0x48, 0xce, 0x3d, 0x02, 0x01, 0x06,
+            0x08, 0x2a, 0x86, 0x48, 0xce, 0x3d, 0x03, 0x01, 0x07, 0x03, 0x42, 0x00, 0x04,
         ];
         der.extend([0x11; 64]);
         Ok(DevicePublicKey::p256_spki_der(der)?)
     }
 
     #[test]
-    fn exact_p256_spki_is_the_persisted_device_evidence() -> Result<(), Box<dyn std::error::Error>> {
+    fn exact_p256_spki_is_the_persisted_device_evidence() -> Result<(), Box<dyn std::error::Error>>
+    {
         let reference = public_key_evidence_reference(&public_key()?);
         assert!(reference.starts_with(P256_EVIDENCE_PREFIX));
         assert_eq!(reference.len(), P256_EVIDENCE_PREFIX.len() + 182);
