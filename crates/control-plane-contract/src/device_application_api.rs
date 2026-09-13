@@ -368,8 +368,8 @@ mod tests {
     }
 
     #[test]
-    fn verified_session_projection_carries_restart_binding_but_challenge_does_not(
-    ) -> Result<(), serde_json::Error> {
+    fn verified_session_projection_carries_restart_binding_but_challenge_does_not()
+    -> Result<(), serde_json::Error> {
         let token = "a".repeat(OPAQUE_TOKEN_HEX_LENGTH);
         let projection = DeviceApplicationSessionProjection {
             session_token: token,
