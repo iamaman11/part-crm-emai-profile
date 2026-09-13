@@ -10,8 +10,8 @@ const P256_PUBLIC_BLOB_BYTES: usize = 72;
 const P256_COORDINATE_BYTES: usize = 32;
 const BCRYPT_ECDSA_PUBLIC_P256_MAGIC: u32 = 0x3153_4345;
 const P256_SPKI_PREFIX: [u8; 27] = [
-    0x30, 0x59, 0x30, 0x13, 0x06, 0x07, 0x2a, 0x86, 0x48, 0xce, 0x3d, 0x02, 0x01, 0x06,
-    0x08, 0x2a, 0x86, 0x48, 0xce, 0x3d, 0x03, 0x01, 0x07, 0x03, 0x42, 0x00, 0x04,
+    0x30, 0x59, 0x30, 0x13, 0x06, 0x07, 0x2a, 0x86, 0x48, 0xce, 0x3d, 0x02, 0x01, 0x06, 0x08, 0x2a,
+    0x86, 0x48, 0xce, 0x3d, 0x03, 0x01, 0x07, 0x03, 0x42, 0x00, 0x04,
 ];
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -79,9 +79,7 @@ impl PersistedP256Key {
         self.disposition
     }
 
-    pub fn public_key_spki_der(
-        &self,
-    ) -> Result<[u8; P256_SPKI_DER_BYTES], WindowsDeviceKeyError> {
+    pub fn public_key_spki_der(&self) -> Result<[u8; P256_SPKI_DER_BYTES], WindowsDeviceKeyError> {
         let blob = self
             .key
             .export_public_blob()
@@ -131,9 +129,9 @@ impl PersistedP256Key {
             .sign_hash(digest)
             .map_err(|status| WindowsDeviceKeyError::cng("NCryptSignHash", status))?;
         let actual = signature.len();
-        let signature: [u8; P1363_SIGNATURE_BYTES] = signature.try_into().map_err(|_| {
-            WindowsDeviceKeyError::UnexpectedSignatureLength { actual }
-        })?;
+        let signature: [u8; P1363_SIGNATURE_BYTES] = signature
+            .try_into()
+            .map_err(|_| WindowsDeviceKeyError::UnexpectedSignatureLength { actual })?;
         Ok(signature)
     }
 
@@ -148,10 +146,9 @@ impl PersistedP256Key {
     }
 
     pub fn private_key_export_blocked(&self) -> Result<bool, WindowsDeviceKeyError> {
-        let policy = self
-            .key
-            .export_policy()
-            .map_err(|status| WindowsDeviceKeyError::cng("NCryptGetProperty(Export Policy)", status))?;
+        let policy = self.key.export_policy().map_err(|status| {
+            WindowsDeviceKeyError::cng("NCryptGetProperty(Export Policy)", status)
+        })?;
         if policy != 0 {
             return Err(WindowsDeviceKeyError::UnexpectedExportPolicy { actual: policy });
         }
@@ -216,10 +213,17 @@ impl fmt::Display for WindowsDeviceKeyError {
         match self {
             Self::InvalidKeyName => formatter.write_str("Windows device key name is invalid"),
             Self::Cng { operation, status } => {
-                write!(formatter, "{operation} failed with CNG status 0x{:08X}", *status as u32)
+                write!(
+                    formatter,
+                    "{operation} failed with CNG status 0x{:08X}",
+                    *status as u32
+                )
             }
             Self::UnexpectedExportPolicy { actual } => {
-                write!(formatter, "Windows device key export policy is not disabled: 0x{actual:08X}")
+                write!(
+                    formatter,
+                    "Windows device key export policy is not disabled: 0x{actual:08X}"
+                )
             }
             Self::UnexpectedPublicBlob => {
                 formatter.write_str("Windows device key public blob is not canonical P-256 ECDSA")
@@ -228,7 +232,10 @@ impl fmt::Display for WindowsDeviceKeyError {
                 formatter.write_str("Windows device private key export unexpectedly succeeded")
             }
             Self::UnexpectedSignatureLength { actual } => {
-                write!(formatter, "Windows device signature length is {actual}, expected 64")
+                write!(
+                    formatter,
+                    "Windows device signature length is {actual}, expected 64"
+                )
             }
         }
     }
