@@ -117,6 +117,7 @@ impl DeviceSessionRenewRequest {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct DeviceApplicationSessionProjection {
     pub session_token: String,
+    pub actor_id: String,
     pub device_id: String,
     pub expires_at_ms: u64,
 }
@@ -251,9 +252,10 @@ pub fn openapi_fragment() -> Value {
                 },
                 "DeviceApplicationSessionProjection": {
                     "type": "object", "additionalProperties": false,
-                    "required": ["sessionToken", "deviceId", "expiresAtMs"],
+                    "required": ["sessionToken", "actorId", "deviceId", "expiresAtMs"],
                     "properties": {
                         "sessionToken": token_schema(),
+                        "actorId": {"type": "string", "minLength": 8, "maxLength": 96, "pattern": "^[A-Za-z0-9_-]+$"},
                         "deviceId": {"type": "string"},
                         "expiresAtMs": {"type": "integer", "minimum": 1}
                     }
@@ -318,9 +320,10 @@ fn problem_response() -> Value {
 #[cfg(test)]
 mod tests {
     use super::{
-        DevicePairingAuthorizeRequest, DevicePairingCompleteRequest, DevicePairingCreateRequest,
-        DeviceSessionChallengeRequest, DeviceSessionRenewRequest, OPAQUE_TOKEN_HEX_LENGTH,
-        P256_SIGNATURE_P1363_HEX_LENGTH, P256_SPKI_DER_HEX_LENGTH,
+        DeviceApplicationSessionProjection, DevicePairingAuthorizeRequest,
+        DevicePairingCompleteRequest, DevicePairingCreateRequest, DeviceSessionChallengeRequest,
+        DeviceSessionRenewRequest, OPAQUE_TOKEN_HEX_LENGTH, P256_SIGNATURE_P1363_HEX_LENGTH,
+        P256_SPKI_DER_HEX_LENGTH,
     };
 
     #[test]
@@ -357,6 +360,20 @@ mod tests {
                 assert!(!path.contains(secret));
             }
         }
+    }
+
+    #[test]
+    fn verified_session_projection_carries_restart_binding_but_challenge_does_not() {
+        let token = "a".repeat(OPAQUE_TOKEN_HEX_LENGTH);
+        let projection = DeviceApplicationSessionProjection {
+            session_token: token,
+            actor_id: "actor_01JSESSION".to_owned(),
+            device_id: "device_01JSESSION".to_owned(),
+            expires_at_ms: 100,
+        };
+        let json = serde_json::to_value(projection).expect("serialize session projection");
+        assert_eq!(json.get("actorId").and_then(Value::as_str), Some("actor_01JSESSION"));
+        assert!(json.get("tenantId").is_none());
     }
 
     #[test]
