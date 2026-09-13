@@ -4,7 +4,9 @@
 use device_domain::{DEVICE_PROOF_NONCE_BYTES, device_proof_message_v1};
 use profile_platform_primitives::{ActorId, DeviceId, TenantId, UnixMillis};
 use std::time::{SystemTime, UNIX_EPOCH};
-use windows_device_key::{KeyDisposition, P1363_SIGNATURE_BYTES, P256_SPKI_DER_BYTES, PersistedP256Key};
+use windows_device_key::{
+    KeyDisposition, P256_SPKI_DER_BYTES, P1363_SIGNATURE_BYTES, PersistedP256Key,
+};
 
 #[test]
 fn native_windows_cng_p256_key_is_reused_non_exportable_and_signs_canonical_pop()
@@ -24,13 +26,7 @@ fn native_windows_cng_p256_key_is_reused_non_exportable_and_signs_canonical_pop(
     let device_id = DeviceId::parse("device_01JV2CNG")?;
     let nonce = [0xA5_u8; DEVICE_PROOF_NONCE_BYTES];
     let expires_at = UnixMillis::new(1_900_000_000_000);
-    let message = device_proof_message_v1(
-        &tenant_id,
-        &actor_id,
-        &device_id,
-        &nonce,
-        expires_at,
-    )?;
+    let message = device_proof_message_v1(&tenant_id, &actor_id, &device_id, &nonce, expires_at)?;
     let signature = first.sign_sha256_message(&message)?;
     assert_eq!(signature.len(), P1363_SIGNATURE_BYTES);
     assert!(first.verify_sha256_message(&message, &signature)?);
@@ -43,13 +39,8 @@ fn native_windows_cng_p256_key_is_reused_non_exportable_and_signs_canonical_pop(
     assert!(reopened.verify_sha256_message(&message, &signature)?);
 
     let wrong_nonce = [0x5A_u8; DEVICE_PROOF_NONCE_BYTES];
-    let wrong_message = device_proof_message_v1(
-        &tenant_id,
-        &actor_id,
-        &device_id,
-        &wrong_nonce,
-        expires_at,
-    )?;
+    let wrong_message =
+        device_proof_message_v1(&tenant_id, &actor_id, &device_id, &wrong_nonce, expires_at)?;
     assert!(!reopened.verify_sha256_message(&wrong_message, &signature)?);
 
     reopened.delete()?;
