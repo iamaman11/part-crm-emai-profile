@@ -955,12 +955,7 @@ fn cleanup_machine_key(device_id: &str) -> HostOpsResult<()> {
     validate_identifier(device_id).map_err(|_| HostOpsError::new("invalid_server_device_id"))?;
     let mut command = powershell_command(CLEANUP_KEY_SCRIPT)?;
     command.env("BRIDGE_HOST_OPS_DEVICE_ID", device_id);
-    let output = run_command(
-        command,
-        None,
-        1_024,
-        "enrollment_key_cleanup_effect_failed",
-    )?;
+    let output = run_command(command, None, 1_024, "enrollment_key_cleanup_effect_failed")?;
     match output.trim() {
         "removed" | "absent" => Ok(()),
         "in_use" => Err(HostOpsError::new("enrollment_key_in_use")),
