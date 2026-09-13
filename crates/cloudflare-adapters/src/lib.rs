@@ -29,6 +29,7 @@ pub mod d1_device_binding_governance;
 pub mod d1_device_generation_commit;
 pub mod d1_device_jobs;
 pub mod d1_device_preconditions;
+pub mod d1_device_public_key_binding;
 pub mod d1_global_query;
 pub mod d1_governed_commands;
 pub mod d1_idempotency;

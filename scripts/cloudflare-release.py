@@ -973,14 +973,15 @@ def self_test() -> None:
         schema_contract = first.get("schema_contract")
         if not isinstance(schema_contract, dict) or not (
             schema_contract.get("database_component") == "catalog"
-            and schema_contract.get("target_schema_revision") == "0032_bridge_device_enrollment_authority.sql"
-            and schema_contract.get("supported_schema_min") == "0032_bridge_device_enrollment_authority.sql"
-            and schema_contract.get("supported_schema_max") == "0033_pas2_payload_fingerprint_contract.sql"
+            and schema_contract.get("target_schema_revision") == "0033_device_public_key_binding.sql"
+            and schema_contract.get("supported_schema_min") == "0033_device_public_key_binding.sql"
+            and schema_contract.get("supported_schema_max") == "0034_pas2_payload_fingerprint_contract.sql"
         ):
-            fail("Catalog fixture release did not bind the exact bounded 0032..0033 schema contract")
+            fail("Catalog fixture release did not bind the exact bounded 0033..0034 schema contract")
         for revision in (
             "0032_bridge_device_enrollment_authority.sql",
-            "0033_pas2_payload_fingerprint_contract.sql",
+            "0033_device_public_key_binding.sql",
+            "0034_pas2_payload_fingerprint_contract.sql",
         ):
             require_regular_file(first_dir / "migrations" / "d1" / revision, "materialized successor migration")
 

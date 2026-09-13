@@ -255,7 +255,7 @@ async function validateExecutor(text, root = ROOT) {
     'native D1 plan', 'typed repository projection', 'remote ledger is not an exact prefix',
     'migrations/d1-successor-v2',
     'ordinary d1 plan must never authorize the separate fail-forward CONTRACT',
-    'contract-transition must authorize exactly the sole Catalog 0033 CONTRACT',
+    'contract-transition must authorize exactly the sole Catalog 0034 CONTRACT',
     'Wrangler pending list differs from native planned_migrations',
     'authorized ordinary execution plan must contain planned_migration_digests',
     'planned_migration_digests cardinality must exactly match planned_migrations',
@@ -299,11 +299,11 @@ async function validateExecutor(text, root = ROOT) {
   }
   for (const marker of [
     'verify_post_transition',
-    'post-contract verification requires exactly one canonical enrollment-0032 -> PAS2-0033 transition',
+    'post-contract verification requires exactly one canonical public-key-0033 -> PAS2-0034 transition',
     'd1 contract-transition verify',
-    'EXACT_0032_ENROLLMENT_PREDECESSOR',
-    'EXACT_ONE_STEP_0033_CONTRACT',
-    'RUNTIME_WINDOW_0032_0033_VERIFIED',
+    'EXACT_0033_PUBLIC_KEY_PREDECESSOR',
+    'EXACT_ONE_STEP_0034_CONTRACT',
+    'RUNTIME_WINDOW_0033_0034_VERIFIED',
   ]) {
     if (!contractText.includes(marker)) fail(`typed contract-transition lost post-CONTRACT invariant: ${marker}`);
   }
