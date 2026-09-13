@@ -455,6 +455,7 @@ mod tests {
         NotificationOperationsProjection, NotificationReplayRequest, PROBLEM_CODES, ProblemPayload,
         openapi_document, problem_type_for_code,
     };
+    use serde_json::json;
 
     #[test]
     fn canonical_transport_models_keep_wire_field_names() -> Result<(), Box<dyn std::error::Error>>
