@@ -9,6 +9,7 @@ mod client_mail_send;
 mod clients;
 mod command_evidence;
 mod composition;
+mod device_application;
 mod device_binding_governance;
 mod device_generation_commit;
 mod device_generation_upload_capability;
@@ -106,6 +107,13 @@ pub async fn main(mut request: Request, env: Env, _context: Context) -> Result<R
             .await
         }
         RouteClass::BridgeEnrollmentApi => bridge_enrollment::dispatch(&mut request, &env).await,
+        RouteClass::DevicePairingCollectionApi
+        | RouteClass::DevicePairingAuthorizationApi
+        | RouteClass::DevicePairingCompletionApi
+        | RouteClass::DeviceSessionChallengeApi
+        | RouteClass::DeviceSessionCollectionApi => {
+            device_application::dispatch(route, &mut request, &env).await
+        }
         RouteClass::ClientCollectionApi
         | RouteClass::ClientResourceApi
         | RouteClass::ClientArchiveApi
