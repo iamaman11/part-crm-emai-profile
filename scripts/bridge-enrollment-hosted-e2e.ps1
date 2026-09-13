@@ -97,35 +97,8 @@ function Invoke-BoundedExecutable(
         $stdoutTask = $process.StandardOutput.ReadToEndAsync()
         $stderrTask = $process.StandardError.ReadToEndAsync()
         if (-not $process.WaitForExit($TimeoutSeconds * 1000)) {
-            $activeEffect = 'none'
-            $powershellStage = ''
-            try {
-                $effects = @(
-                    Get-CimInstance -ClassName Win32_Process -Filter "ParentProcessId = $($process.Id)" -ErrorAction Stop |
-                        Where-Object { [string]$_.Name -in @('curl.exe', 'powershell.exe') }
-                )
-                $effectNames = @($effects | ForEach-Object { [string]$_.Name } | Sort-Object -Unique)
-                if ($effectNames.Count -gt 0) { $activeEffect = $effectNames -join ',' }
-                $powershellEffect = @($effects | Where-Object { [string]$_.Name -eq 'powershell.exe' } | Select-Object -First 1)
-                if ($powershellEffect.Count -eq 1) {
-                    $commandLine = [string]$powershellEffect[0].CommandLine
-                    if ($commandLine -like '*CreateSigningRequest*') {
-                        $powershellStage = 'csr-create'
-                    } elseif ($commandLine -like '*CopyWithPrivateKey*') {
-                        $powershellStage = 'certificate-install'
-                    } elseif ($commandLine -like "*Write-Output 'removed'*") {
-                        $powershellStage = 'key-cleanup'
-                    } else {
-                        $powershellStage = 'unknown'
-                    }
-                }
-            } catch {
-                $activeEffect = 'observation-unavailable'
-                $powershellStage = ''
-            }
             try { $process.Kill($true) } catch {}
-            $stageDetail = if ([string]::IsNullOrEmpty($powershellStage)) { '' } else { "; powershell-stage=$powershellStage" }
-            throw "$Label timed out after $TimeoutSeconds seconds; active-effect=$activeEffect$stageDetail"
+            throw "$Label timed out after $TimeoutSeconds seconds"
         }
         $process.WaitForExit()
         $stdout = $stdoutTask.GetAwaiter().GetResult()
@@ -276,6 +249,7 @@ try {
     $localReleaseDigest = Convert-BytesToLowerHex ([System.Security.Cryptography.SHA256]::HashData($sourceIdentity))
     $targetObservation = "target-v1|staging|$profileId|$profileDigest|release-set-v3-sha256-$localReleaseDigest"
     $derivationKey = Convert-BytesToLowerHex ([System.Security.Cryptography.RandomNumberGenerator]::GetBytes(32))
+    $signerRoute = "/__e2e/signer/$derivationKey"
 
     $controlMain = [System.IO.Path]::GetRelativePath($Scratch, $WorkerShim).Replace('\', '/')
     $migrationsRelative = [System.IO.Path]::GetRelativePath($Scratch, $MigrationDir).Replace('\', '/')
@@ -305,7 +279,10 @@ try {
         name = 'bridge-enrollment-e2e-signer'
         main = $signerMain
         compatibility_date = '2026-08-05'
-        vars = [ordered]@{ TEST_SIGNER_ORIGIN = "http://127.0.0.1:$DependencyPort" }
+        vars = [ordered]@{
+            TEST_SIGNER_ORIGIN = $Origin
+            TEST_SIGNER_ROUTE = $signerRoute
+        }
     })
 
     Write-Phase 'local-d1-migrations'
@@ -322,6 +299,7 @@ try {
     $env:E2E_INGRESS_PORT = [string]$IngressPort
     $env:E2E_TOKEN_FILE = $TokenFile
     $env:E2E_SIGNER_SCRIPT = $SignerScript
+    $env:E2E_SIGNER_ROUTE_TOKEN = $derivationKey
     $dependencyStart = @{
         FilePath = (Get-Command node.exe).Source
         ArgumentList = @($DependencyServer)
@@ -445,7 +423,7 @@ try {
     }
     Stop-ProcessTree -Process $WranglerProcess -Label 'Wrangler process tree'
     Stop-ProcessTree -Process $DependencyProcess -Label 'dependency process tree'
-    foreach ($name in @('E2E_CONTROL_PORT', 'E2E_DEPENDENCY_PORT', 'E2E_INGRESS_PORT', 'E2E_TOKEN_FILE', 'E2E_SIGNER_SCRIPT')) {
+    foreach ($name in @('E2E_CONTROL_PORT', 'E2E_DEPENDENCY_PORT', 'E2E_INGRESS_PORT', 'E2E_TOKEN_FILE', 'E2E_SIGNER_SCRIPT', 'E2E_SIGNER_ROUTE_TOKEN')) {
         [Environment]::SetEnvironmentVariable($name, $null)
     }
     if (Test-Path $Scratch) { Remove-Item -LiteralPath $Scratch -Recurse -Force -ErrorAction SilentlyContinue }

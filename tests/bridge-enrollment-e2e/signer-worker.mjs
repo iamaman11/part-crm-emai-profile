@@ -16,7 +16,7 @@ export default {
       return new Response("Invalid Request", { status: 422 });
     }
 
-    const target = new URL("/sign", env.TEST_SIGNER_ORIGIN);
+    const target = new URL(env.TEST_SIGNER_ROUTE, env.TEST_SIGNER_ORIGIN);
     const response = await fetch(target, {
       method: "POST",
       headers: {

@@ -247,9 +247,10 @@ def validate_overlay(value: dict[str, Any]) -> None:
     expected_ids = {
         "cloudflare.release-observation-api",
         "cloudflare.staging-zero-trust-observation-api",
+        "cloudflare.v2-hosted-e2e-tunnel",
     }
     if set(by_id) != expected_ids:
-        raise ValueError("AR-11 credential overlay must own exactly the two bounded read-only observation credentials")
+        raise ValueError("AR-11 credential overlay must own exactly the bounded observation and V2.1 connector credentials")
 
     observation = by_id["cloudflare.release-observation-api"]
     if (
@@ -302,6 +303,31 @@ def validate_overlay(value: dict[str, Any]) -> None:
         raise ValueError("V2 Zero Trust observation credential binding drifted")
     if zero_trust.get("environment_scope") != {"kind": "environment", "environments": ["staging"]}:
         raise ValueError("V2 Zero Trust observation credential must remain staging-only")
+
+    tunnel = by_id["cloudflare.v2-hosted-e2e-tunnel"]
+    if (
+        tunnel.get("class") != "SERVICE_CONNECTOR_CREDENTIAL"
+        or tunnel.get("provider_system") != "CLOUDFLARE_TUNNEL"
+        or tunnel.get("owner") != "v2-bridge-enrollment-hosted-e2e"
+        or tunnel.get("consumers") != [".github/workflows/bridge-host-ops-gate.yml"]
+        or tunnel.get("provider_capability") != "CONNECTOR_ONLY_PREPROVISIONED_TUNNEL"
+        or tunnel.get("automation_class") != "STAGE_BOUND_TEST_CONNECTOR"
+        or tunnel.get("externally_issued") is not True
+        or tunnel.get("future_cutover") != "V2_1_PREREQUISITE_E_RETIRE"
+    ):
+        raise ValueError("V2.1 hosted E2E Tunnel credential least-privilege identity drifted")
+    tunnel_bindings = tunnel.get("bindings")
+    if (
+        not isinstance(tunnel_bindings, list)
+        or len(tunnel_bindings) != 1
+        or tunnel_bindings[0] != {
+            "surface": "github_actions_secret",
+            "name": "CLOUDFLARE_E2E_TUNNEL_TOKEN",
+        }
+    ):
+        raise ValueError("V2.1 hosted E2E Tunnel credential binding drifted")
+    if tunnel.get("environment_scope") != {"kind": "repository"}:
+        raise ValueError("V2.1 hosted E2E Tunnel credential must remain repository-scoped")
 
 
 def compose_registry(base: dict[str, Any], overlay: dict[str, Any]) -> dict[str, Any]:
@@ -563,6 +589,18 @@ def negative_self_test(state: State, root: Path = ROOT) -> None:
         pass
     else:
         raise AssertionError("V2 Zero Trust observation mutation-capability fixture unexpectedly passed")
+
+    bad_tunnel_overlay = copy.deepcopy(state.overlay)
+    tunnel = next(
+        item for item in bad_tunnel_overlay["credentials"] if item.get("id") == "cloudflare.v2-hosted-e2e-tunnel"
+    )
+    tunnel["provider_capability"] = "CLOUDFLARE_API_MUTATION"
+    try:
+        validate_overlay(bad_tunnel_overlay)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("V2.1 Tunnel credential capability-escalation fixture unexpectedly passed")
 
     missing_zero_trust_overlay = copy.deepcopy(state.overlay)
     missing_zero_trust_overlay["credentials"] = [

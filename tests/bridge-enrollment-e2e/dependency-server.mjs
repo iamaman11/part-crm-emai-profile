@@ -14,13 +14,16 @@ const dependencyPort = Number.parseInt(required("E2E_DEPENDENCY_PORT"), 10);
 const ingressPort = Number.parseInt(required("E2E_INGRESS_PORT"), 10);
 const tokenFile = required("E2E_TOKEN_FILE");
 const signerScript = required("E2E_SIGNER_SCRIPT");
+const signerRouteToken = required("E2E_SIGNER_ROUTE_TOKEN");
+if (!/^[0-9a-f]{64}$/.test(signerRouteToken)) throw new Error("invalid E2E_SIGNER_ROUTE_TOKEN");
+const signerRoute = `/__e2e/signer/${signerRouteToken}`;
 const issuer = `http://127.0.0.1:${dependencyPort}`;
 const audience = "bridge-enrollment-e2e-audience";
 const subject = "bridge_e2e_subject_01";
 const keyId = "bridge-e2e-key-01";
 const MAX_BODY_BYTES = 512 * 1024;
-const SIGNER_TIMEOUT_MS = 30_000;
-const UPSTREAM_TIMEOUT_MS = 30_000;
+const SIGNER_TIMEOUT_MS = 10_000;
+const UPSTREAM_TIMEOUT_MS = 20_000;
 
 for (const [name, port] of [
   ["E2E_CONTROL_PORT", controlPort],
@@ -126,6 +129,26 @@ const runSigner = (body) =>
     child.stdin.end(body);
   });
 
+const serveSigner = async (request, response) => {
+  const body = await readBody(request);
+  if (failNextSignerRequest) {
+    failNextSignerRequest = false;
+    jsonResponse(response, 503, { code: "test_dependency_unavailable" });
+    return;
+  }
+  try {
+    const signed = await runSigner(body);
+    response.writeHead(200, {
+      "content-type": "application/json",
+      "cache-control": "no-store",
+      "content-length": signed.length,
+    });
+    response.end(signed);
+  } catch {
+    jsonResponse(response, 422, { code: "test_signer_rejected" });
+  }
+};
+
 const dependencyServer = http.createServer(async (request, response) => {
   try {
     const url = new URL(request.url, issuer);
@@ -139,26 +162,6 @@ const dependencyServer = http.createServer(async (request, response) => {
       response.end();
       return;
     }
-    if (request.method === "POST" && url.pathname === "/sign") {
-      const body = await readBody(request);
-      if (failNextSignerRequest) {
-        failNextSignerRequest = false;
-        jsonResponse(response, 503, { code: "test_dependency_unavailable" });
-        return;
-      }
-      try {
-        const signed = await runSigner(body);
-        response.writeHead(200, {
-          "content-type": "application/json",
-          "cache-control": "no-store",
-          "content-length": signed.length,
-        });
-        response.end(signed);
-      } catch {
-        jsonResponse(response, 422, { code: "test_signer_rejected" });
-      }
-      return;
-    }
     response.writeHead(404, { "cache-control": "no-store" });
     response.end("Not Found");
   } catch {
@@ -167,9 +170,18 @@ const dependencyServer = http.createServer(async (request, response) => {
 });
 
 const proxyToControlPlane = async (request, response) => {
-  if (request.method === "GET" && request.url === "/__e2e/ready") {
+  const url = new URL(request.url, `http://127.0.0.1:${ingressPort}`);
+  if (request.method === "GET" && url.pathname === "/__e2e/ready") {
     response.writeHead(200, { "content-type": "text/plain", "cache-control": "no-store" });
     response.end("ready");
+    return;
+  }
+  if (request.method === "POST" && url.pathname === signerRoute) {
+    try {
+      await serveSigner(request, response);
+    } catch {
+      jsonResponse(response, 500, { code: "test_dependency_failure" });
+    }
     return;
   }
 
