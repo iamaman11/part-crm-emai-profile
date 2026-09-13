@@ -6,6 +6,7 @@ pub mod browser_mail_query;
 pub mod browser_mail_runtime;
 pub mod browser_preflight;
 pub mod camouhost_process;
+pub mod device_pairing;
 pub mod dirty_close;
 pub mod dirty_generation;
 #[cfg(any(test, feature = "synthetic-test-bin"))]
@@ -58,6 +59,8 @@ pub use test_fakes::{
 
 #[cfg(windows)]
 pub mod windows_device_application;
+#[cfg(windows)]
+mod windows_device_pairing;
 #[cfg(windows)]
 pub mod windows_generation_put;
 #[cfg(windows)]
