@@ -40,9 +40,8 @@ impl Status {
 pub(super) fn sha256(input: &[u8]) -> Result<[u8; 32], Status> {
     let algorithm = wide(SHA256_ALGORITHM);
     let mut handle = 0_usize;
-    let status = unsafe {
-        BCryptOpenAlgorithmProvider(&mut handle, algorithm.as_ptr(), ptr::null(), 0)
-    };
+    let status =
+        unsafe { BCryptOpenAlgorithmProvider(&mut handle, algorithm.as_ptr(), ptr::null(), 0) };
     require_success(status)?;
     let algorithm_handle = AlgorithmHandle(handle);
     let mut digest = [0_u8; 32];
