@@ -186,8 +186,9 @@ mod windows {
         let runtime_root = active_delivery.runtime_root().to_path_buf();
         let runtime_bundles = active_delivery.into_bundle_selection();
 
-        let binding = WindowsDeviceApplicationBinding::open(&config.device_application_binding_path)
-            .map_err(|_| ShippingCompositionError::Configuration)?;
+        let binding =
+            WindowsDeviceApplicationBinding::open(&config.device_application_binding_path)
+                .map_err(|_| ShippingCompositionError::Configuration)?;
         let identity = WindowsDeviceIdentity::new(binding.device_id().clone());
         let device_application =
             WindowsDeviceApplication::from_system(config.control_plane_origin, binding)
