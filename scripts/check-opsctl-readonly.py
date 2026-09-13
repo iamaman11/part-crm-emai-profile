@@ -119,7 +119,8 @@ REQUIRED_D1_MARKERS = (
     '"0032_bridge_device_enrollment_authority.sql"',
     '"0032_pas2_payload_fingerprint_contract.sql"',
     '"0033_device_public_key_binding.sql"',
-    '"0034_pas2_payload_fingerprint_contract.sql"',
+    '"0034_device_application_authority.sql"',
+    '"0035_pas2_payload_fingerprint_contract.sql"',
     '"0004_refresh_owner_hmac_version.sql"',
     '"4d1d8b8d3bba5d0903385d05fc18e0036628ff1123e0e26e9a080a340f7b5e2e"',
     '"98fd6f91a839223b06c441df4901dbd4fda8e69f2f90606f00e43faad91877ec"',
@@ -457,9 +458,9 @@ def validate_d1_projection(payload: dict[str, Any]) -> None:
         fail("Catalog live successor migration root drifted")
     if catalog.get("migration_lineage") != "catalog-successor-v2":
         fail("Catalog successor lineage identity drifted")
-    if catalog.get("current_repository_revision") != "0034_pas2_payload_fingerprint_contract.sql":
+    if catalog.get("current_repository_revision") != "0035_pas2_payload_fingerprint_contract.sql":
         fail("Catalog successor current repository revision drifted")
-    if catalog.get("migration_count") != 34 or catalog.get("post_epoch_migration_count") != 8:
+    if catalog.get("migration_count") != 35 or catalog.get("post_epoch_migration_count") != 9:
         fail("Catalog successor migration cardinality drifted")
     legacy = catalog.get("legacy_history")
     if legacy != {
@@ -482,11 +483,11 @@ def validate_d1_projection(payload: dict[str, Any]) -> None:
     if not isinstance(catalog_contract, dict):
         fail("Catalog successor release contract is missing")
     if (
-        catalog_contract.get("target_schema_revision") != "0033_device_public_key_binding.sql"
-        or catalog_contract.get("supported_schema_min") != "0033_device_public_key_binding.sql"
-        or catalog_contract.get("supported_schema_max") != "0034_pas2_payload_fingerprint_contract.sql"
+        catalog_contract.get("target_schema_revision") != "0034_device_application_authority.sql"
+        or catalog_contract.get("supported_schema_min") != "0034_device_application_authority.sql"
+        or catalog_contract.get("supported_schema_max") != "0035_pas2_payload_fingerprint_contract.sql"
     ):
-        fail("Catalog successor bounded public-key-0033..PAS2-0034 release window drifted")
+        fail("Catalog successor bounded device-application-0034..PAS2-0035 release window drifted")
 
 
 def validate(root: Path = ROOT) -> None:
