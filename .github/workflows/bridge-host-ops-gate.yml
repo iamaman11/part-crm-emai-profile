@@ -68,7 +68,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'cargo fmt failed' }
           cargo clippy --locked --manifest-path tools/bridge-host-ops/Cargo.toml --all-targets -- -D warnings
           if ($LASTEXITCODE -ne 0) { throw 'cargo clippy failed' }
-          cargo test --locked --manifest-path tools/bridge-host-ops/Cargo.toml
+          cargo test --locked --manifest-path tools/bridge-host-ops/Cargo.toml -- --test-threads=1
           if ($LASTEXITCODE -ne 0) { throw 'cargo test failed' }
           cargo build --locked --release --manifest-path tools/bridge-host-ops/Cargo.toml
           if ($LASTEXITCODE -ne 0) { throw 'cargo build failed' }
