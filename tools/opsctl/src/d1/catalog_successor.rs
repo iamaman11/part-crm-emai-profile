@@ -19,9 +19,13 @@ const CURRENT_SUCCESSOR_ROOT: &str = "migrations/d1-successor-v2";
 const SUCCESSOR_LINEAGE_ID: &str = "catalog-successor-v2";
 const PREDECESSOR_CONTRACT_REVISION: &str = "0032_pas2_payload_fingerprint_contract.sql";
 const BRIDGE_ENROLLMENT_REVISION: &str = "0032_bridge_device_enrollment_authority.sql";
-const SUCCESSOR_CONTRACT_REVISION: &str = "0033_pas2_payload_fingerprint_contract.sql";
-const CURRENT_SUCCESSOR_FILES: [&str; 2] =
-    [BRIDGE_ENROLLMENT_REVISION, SUCCESSOR_CONTRACT_REVISION];
+const PUBLIC_KEY_BINDING_REVISION: &str = "0033_device_public_key_binding.sql";
+const SUCCESSOR_CONTRACT_REVISION: &str = "0034_pas2_payload_fingerprint_contract.sql";
+const CURRENT_SUCCESSOR_FILES: [&str; 3] = [
+    BRIDGE_ENROLLMENT_REVISION,
+    PUBLIC_KEY_BINDING_REVISION,
+    SUCCESSOR_CONTRACT_REVISION,
+];
 
 #[derive(Debug, Clone)]
 struct CatalogSuccessor {
@@ -77,12 +81,23 @@ impl CatalogSuccessor {
         validate_predecessor_contract(&deferred_contract)?;
 
         ordered_history.push(BRIDGE_ENROLLMENT_REVISION.to_owned());
+        ordered_history.push(PUBLIC_KEY_BINDING_REVISION.to_owned());
         ordered_history.push(SUCCESSOR_CONTRACT_REVISION.to_owned());
+        migration_source_roots.push(CURRENT_SUCCESSOR_ROOT.to_owned());
         migration_source_roots.push(CURRENT_SUCCESSOR_ROOT.to_owned());
         migration_source_roots.push(CURRENT_SUCCESSOR_ROOT.to_owned());
 
         post_epoch.push(MigrationContract {
             migration_file: BRIDGE_ENROLLMENT_REVISION.to_owned(),
+            migration_class: MigrationClass::Expand,
+            rollout_order: RolloutOrder::MigrateBeforeCode,
+            fail_forward_required: false,
+            destructive: false,
+            code_rollback_allowed: true,
+            contract_preconditions: Vec::new(),
+        });
+        post_epoch.push(MigrationContract {
+            migration_file: PUBLIC_KEY_BINDING_REVISION.to_owned(),
             migration_class: MigrationClass::Expand,
             rollout_order: RolloutOrder::MigrateBeforeCode,
             fail_forward_required: false,
@@ -194,9 +209,9 @@ impl CatalogSuccessor {
             .ok_or_else(|| {
                 D1Error::new("trailing contract release requires an immediate predecessor revision")
             })?;
-        if target != BRIDGE_ENROLLMENT_REVISION {
+        if target != PUBLIC_KEY_BINDING_REVISION {
             return Err(D1Error::new(
-                "Catalog successor-v2 deferred PAS-2 CONTRACT must immediately follow Bridge enrollment EXPAND",
+                "Catalog successor-v2 deferred PAS-2 CONTRACT must immediately follow the latest EXPAND",
             ));
         }
         Ok(json!({
@@ -626,7 +641,8 @@ fn repository_identity_from_components(components: &[Value]) -> Result<String, D
 mod tests {
     use super::{
         BRIDGE_ENROLLMENT_REVISION, CURRENT_SUCCESSOR_ROOT, PREDECESSOR_SUCCESSOR_ROOT,
-        SUCCESSOR_CONTRACT_REVISION, component_authority, release_contract, repository_projection,
+        PUBLIC_KEY_BINDING_REVISION, SUCCESSOR_CONTRACT_REVISION, component_authority,
+        release_contract, repository_projection,
     };
     use serde_json::Value;
     use std::error::Error;
@@ -637,28 +653,29 @@ mod tests {
     }
 
     #[test]
-    fn current_catalog_lineage_inserts_enrollment_before_deferred_contract()
+    fn current_catalog_lineage_inserts_expands_before_deferred_contract()
     -> Result<(), Box<dyn Error>> {
         let authority = component_authority(&repository_root(), "catalog")?;
-        assert_eq!(authority.ordered_history.len(), 33);
+        assert_eq!(authority.ordered_history.len(), 34);
         assert_eq!(authority.ordered_history[31], BRIDGE_ENROLLMENT_REVISION);
-        assert_eq!(authority.ordered_history[32], SUCCESSOR_CONTRACT_REVISION);
+        assert_eq!(authority.ordered_history[32], PUBLIC_KEY_BINDING_REVISION);
+        assert_eq!(authority.ordered_history[33], SUCCESSOR_CONTRACT_REVISION);
         assert_eq!(
             authority.current_repository_revision,
             SUCCESSOR_CONTRACT_REVISION
         );
-        assert_eq!(authority.post_epoch.len(), 7);
+        assert_eq!(authority.post_epoch.len(), 8);
         Ok(())
     }
 
     #[test]
-    fn release_window_targets_enrollment_and_defers_pas2_contract() -> Result<(), Box<dyn Error>> {
+    fn release_window_targets_latest_expand_and_defers_pas2_contract() -> Result<(), Box<dyn Error>> {
         let contract = release_contract(&repository_root(), "catalog")?;
         assert_eq!(
             contract["target_schema_revision"],
-            BRIDGE_ENROLLMENT_REVISION
+            PUBLIC_KEY_BINDING_REVISION
         );
-        assert_eq!(contract["supported_schema_min"], BRIDGE_ENROLLMENT_REVISION);
+        assert_eq!(contract["supported_schema_min"], PUBLIC_KEY_BINDING_REVISION);
         assert_eq!(
             contract["supported_schema_max"],
             SUCCESSOR_CONTRACT_REVISION
@@ -686,17 +703,19 @@ mod tests {
             runtime["target_schema_revision"],
             catalog["historical_epoch"]["final_revision"]
         );
-        assert_eq!(runtime["supported_schema_max"], BRIDGE_ENROLLMENT_REVISION);
+        assert_eq!(runtime["supported_schema_max"], PUBLIC_KEY_BINDING_REVISION);
         let sources = catalog["executable_migration_sources"]
             .as_array()
             .ok_or("executable migration source projection is missing")?;
-        assert_eq!(sources.len(), 33);
+        assert_eq!(sources.len(), 34);
         assert_eq!(sources[26]["source_root"], PREDECESSOR_SUCCESSOR_ROOT);
         assert_eq!(sources[27]["source_root"], "migrations/d1");
         assert_eq!(sources[31]["migration_file"], BRIDGE_ENROLLMENT_REVISION);
         assert_eq!(sources[31]["source_root"], CURRENT_SUCCESSOR_ROOT);
-        assert_eq!(sources[32]["migration_file"], SUCCESSOR_CONTRACT_REVISION);
+        assert_eq!(sources[32]["migration_file"], PUBLIC_KEY_BINDING_REVISION);
         assert_eq!(sources[32]["source_root"], CURRENT_SUCCESSOR_ROOT);
+        assert_eq!(sources[33]["migration_file"], SUCCESSOR_CONTRACT_REVISION);
+        assert_eq!(sources[33]["source_root"], CURRENT_SUCCESSOR_ROOT);
         assert_eq!(
             projection["executable_schema_authority"],
             serde_json::json!([
