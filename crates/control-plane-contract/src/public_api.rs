@@ -366,7 +366,8 @@ pub fn openapi_document() -> Value {
             }
         }
     });
-    merge_bridge_enrollment_fragment(&mut document);
+    merge_fragment(&mut document, crate::bridge_enrollment_api::openapi_fragment());
+    merge_fragment(&mut document, crate::device_application_api::openapi_fragment());
     document
 }
 
@@ -376,21 +377,15 @@ pub fn openapi_json_pretty() -> Result<String, serde_json::Error> {
     Ok(rendered)
 }
 
-fn merge_bridge_enrollment_fragment(document: &mut Value) {
-    let fragment = crate::bridge_enrollment_api::openapi_fragment();
+fn merge_fragment(document: &mut Value, fragment: Value) {
     let Some(fragment_paths) = fragment.get("paths").and_then(Value::as_object) else {
         return;
     };
     let Some(document_paths) = document.get_mut("paths").and_then(Value::as_object_mut) else {
         return;
     };
-    for path in [
-        crate::bridge_enrollment_api::BRIDGE_ENROLLMENT_ISSUE_PATH_TEMPLATE,
-        crate::bridge_enrollment_api::BRIDGE_ENROLLMENT_REDEEM_PATH_TEMPLATE,
-    ] {
-        if let Some(value) = fragment_paths.get(path) {
-            document_paths.insert(path.to_owned(), value.clone());
-        }
+    for (path, value) in fragment_paths {
+        document_paths.insert(path.clone(), value.clone());
     }
 
     let Some(fragment_components) = fragment.get("components").and_then(Value::as_object) else {
@@ -579,6 +574,14 @@ mod tests {
             "BridgeEnrollmentIssueProjection",
             "BridgeEnrollmentRedemptionRequest",
             "BridgeEnrollmentRedemptionProjection",
+            "DevicePairingCreateRequest",
+            "DevicePairingCreateProjection",
+            "DevicePairingAuthorizeRequest",
+            "DeviceProofChallengeProjection",
+            "DevicePairingCompleteRequest",
+            "DeviceSessionChallengeRequest",
+            "DeviceSessionRenewRequest",
+            "DeviceApplicationSessionProjection",
         ] {
             assert!(schemas.get(name).is_some(), "missing schema {name}");
         }
@@ -609,17 +612,29 @@ mod tests {
             document["paths"]["/api/v1/tenants/{tenantId}/notifications/operations"]["get"]
                 .is_object()
         );
-        assert!(
-            document["paths"]["/api/v1/tenants/{tenantId}/bridge-enrollment/authorities"]["post"]
-                .is_object()
-        );
-        assert!(
-            document["paths"]["/api/v1/tenants/{tenantId}/bridge-enrollment/redemptions"]["post"]
-                .is_object()
-        );
+        for path in [
+            "/api/v1/tenants/{tenantId}/bridge-enrollment/authorities",
+            "/api/v1/tenants/{tenantId}/bridge-enrollment/redemptions",
+            "/api/v1/tenants/{tenantId}/device-pairings",
+            "/api/v1/tenants/{tenantId}/device-pairings/authorizations",
+            "/api/v1/tenants/{tenantId}/device-pairings/completions",
+            "/api/v1/tenants/{tenantId}/devices/{deviceId}/session-challenges",
+            "/api/v1/tenants/{tenantId}/devices/{deviceId}/sessions",
+        ] {
+            assert!(document["paths"][path]["post"].is_object(), "missing path {path}");
+        }
         assert_eq!(
             document["components"]["securitySchemes"]["cloudflareAccessJwt"]["name"],
             "Cf-Access-Jwt-Assertion"
+        );
+        assert_eq!(
+            document["paths"]["/api/v1/tenants/{tenantId}/device-pairings/authorizations"]
+                ["post"]["security"][0]["cloudflareAccessJwt"],
+            json!([])
+        );
+        assert_eq!(
+            document["paths"]["/api/v1/tenants/{tenantId}/device-pairings"]["post"]["security"],
+            json!([])
         );
     }
 
