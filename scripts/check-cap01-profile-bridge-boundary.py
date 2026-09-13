@@ -32,7 +32,9 @@ REQUIRED_MAIN_MARKERS = (
 )
 
 REQUIRED_COMPOSITION_MARKERS = (
-    "WindowsSchannelMachineHttp::from_system(",
+    "WindowsDeviceApplicationBinding::open(",
+    "WindowsDeviceApplication::from_system(",
+    ".transport()",
     "WindowsSignedGenerationObjectGet::from_system(",
     "WindowsSignedGenerationObjectPut::from_system(",
     "ControlPlaneEnrollment::new(",
@@ -98,6 +100,10 @@ FORBIDDEN_COMPOSITION_MARKERS = (
     "FakeProcessControl",
     "PROFILE_BRIDGE_RUNTIME_ROOT",
     "PROFILE_BRIDGE_RUNTIME_RELEASE_ID",
+    "PROFILE_BRIDGE_DEVICE_ID",
+    "PROFILE_BRIDGE_MACHINE_CERT_SHA1",
+    "WindowsMtlsClientIdentity",
+    "WindowsSchannelMachineHttp::from_system(",
     "FilesystemRuntimeBundleSelection::open(",
     "std::process::Command",
     "Command::new(",
@@ -261,7 +267,9 @@ def write_fixture(root: Path) -> None:
     )
     composition = root / PRODUCTION_COMPOSITION
     composition.write_text(
-        "// WindowsSchannelMachineHttp::from_system(\n"
+        "// WindowsDeviceApplicationBinding::open(\n"
+        "// WindowsDeviceApplication::from_system(\n"
+        "// .transport()\n"
         "// WindowsSignedGenerationObjectGet::from_system(\n"
         "// WindowsSignedGenerationObjectPut::from_system(\n"
         "// ControlPlaneEnrollment::new(\n"
@@ -411,6 +419,20 @@ def self_test() -> None:
         main.write_text(safe_main, encoding="utf-8")
 
         composition.write_text(
+            safe_composition.replace("// WindowsDeviceApplication::from_system(\n", ""),
+            encoding="utf-8",
+        )
+        expect_rejected(root, "missing device application session boundary")
+        composition.write_text(safe_composition, encoding="utf-8")
+
+        composition.write_text(
+            safe_composition + "// WindowsSchannelMachineHttp::from_system(\n",
+            encoding="utf-8",
+        )
+        expect_rejected(root, "legacy Schannel machine caller reintroduced")
+        composition.write_text(safe_composition, encoding="utf-8")
+
+        composition.write_text(
             safe_composition.replace("// ManagedCamouhostProcess::pair(\n", ""),
             encoding="utf-8",
         )
@@ -519,7 +541,8 @@ def main() -> int:
             print(
                 "CAP-01 Profile Bridge keeps one real governed authoritative shipping composition; "
                 "the same installed Bridge delegates one normal claim path plus two bounded delivery commands, "
-                "the running Bridge is bound through persisted active delivery state to one exact staged runtime, "
+                "the running Bridge is bound through a device-application session and persisted active delivery state to one exact staged runtime, "
+                "legacy Schannel/mTLS machine callers and caller-selected device identity are forbidden, "
                 "controlled close and canonical successor save are mandatory, caller-selected runtime predecessors are forbidden, "
                 "and synthetic executors remain production-unreachable."
             )
