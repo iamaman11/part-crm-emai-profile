@@ -61,7 +61,9 @@ where
 {
     let mut arguments = arguments.into_iter();
     let _program = arguments.next();
-    let argument = arguments.next().ok_or(BridgeCliError::MissingLaunchArgument)?;
+    let argument = arguments
+        .next()
+        .ok_or(BridgeCliError::MissingLaunchArgument)?;
     if arguments.next().is_some() {
         return Err(BridgeCliError::UnexpectedArgument);
     }
@@ -132,8 +134,8 @@ mod tests {
     }
 
     #[test]
-    fn pairing_commands_are_bounded_and_completion_tokens_are_redacted(
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    fn pairing_commands_are_bounded_and_completion_tokens_are_redacted()
+    -> Result<(), Box<dyn std::error::Error>> {
         let BridgeCommand::PairingStart(start) = parse_command([
             "profile-bridge".to_owned(),
             "profilebridge://pair/start/tenant_01JPAIR/device_01JPAIR".to_owned(),
@@ -158,7 +160,11 @@ mod tests {
         assert!(!debug.contains(&pairing));
         assert!(!debug.contains(&challenge));
         assert!(!BridgeCliError::PairingFailed.to_string().contains(&pairing));
-        assert!(!BridgeCliError::PairingFailed.to_string().contains(&challenge));
+        assert!(
+            !BridgeCliError::PairingFailed
+                .to_string()
+                .contains(&challenge)
+        );
         Ok(())
     }
 
