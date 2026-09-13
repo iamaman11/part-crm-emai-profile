@@ -103,6 +103,25 @@ impl PersistedP256Key {
         Ok(spki)
     }
 
+    pub fn sign_sha256_message(
+        &self,
+        message: &[u8],
+    ) -> Result<[u8; P1363_SIGNATURE_BYTES], WindowsDeviceKeyError> {
+        let digest = ffi::sha256(message)
+            .map_err(|status| WindowsDeviceKeyError::cng("BCryptHash(SHA256)", status))?;
+        self.sign_sha256_digest(&digest)
+    }
+
+    pub fn verify_sha256_message(
+        &self,
+        message: &[u8],
+        signature: &[u8; P1363_SIGNATURE_BYTES],
+    ) -> Result<bool, WindowsDeviceKeyError> {
+        let digest = ffi::sha256(message)
+            .map_err(|status| WindowsDeviceKeyError::cng("BCryptHash(SHA256)", status))?;
+        self.verify_sha256_digest(&digest, signature)
+    }
+
     pub fn sign_sha256_digest(
         &self,
         digest: &[u8; 32],
