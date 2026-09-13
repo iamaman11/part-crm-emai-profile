@@ -329,12 +329,13 @@ mod tests {
         let public_key = "b".repeat(P256_SPKI_DER_HEX_LENGTH);
         let signature = "c".repeat(P256_SIGNATURE_P1363_HEX_LENGTH);
 
-        let create = format!(
-            r#"{{"deviceId":"device_01JPAIR","publicKeySpkiDerHex":"{public_key}"}}"#
-        );
+        let create =
+            format!(r#"{{"deviceId":"device_01JPAIR","publicKeySpkiDerHex":"{public_key}"}}"#);
         assert!(serde_json::from_str::<DevicePairingCreateRequest>(&create).is_ok());
         assert!(serde_json::from_str::<DeviceSessionChallengeRequest>("{}").is_ok());
-        assert!(serde_json::from_str::<DeviceSessionChallengeRequest>(r#"{"deviceId":"x"}"#).is_err());
+        assert!(
+            serde_json::from_str::<DeviceSessionChallengeRequest>(r#"{"deviceId":"x"}"#).is_err()
+        );
 
         let authorize = format!(r#"{{"pairingToken":"{token}"}}"#);
         assert!(serde_json::from_str::<DevicePairingAuthorizeRequest>(&authorize).is_ok());
@@ -342,9 +343,7 @@ mod tests {
             r#"{{"pairingToken":"{token}","challengeToken":"{token}","signatureP1363Hex":"{signature}"}}"#
         );
         assert!(serde_json::from_str::<DevicePairingCompleteRequest>(&complete).is_ok());
-        let renew = format!(
-            r#"{{"challengeToken":"{token}","signatureP1363Hex":"{signature}"}}"#
-        );
+        let renew = format!(r#"{{"challengeToken":"{token}","signatureP1363Hex":"{signature}"}}"#);
         assert!(serde_json::from_str::<DeviceSessionRenewRequest>(&renew).is_ok());
 
         for secret in ["pairingToken", "challengeToken", "sessionToken"] {
