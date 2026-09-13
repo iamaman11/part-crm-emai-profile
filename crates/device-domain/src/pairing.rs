@@ -429,8 +429,8 @@ fn is_exact_der_sequence(bytes: &[u8], max_bytes: usize) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        DeviceAuthorizationError, DevicePairingError, DevicePairingTransaction, DeviceProofChallenge,
-        DeviceProofError, DevicePublicKey, DevicePublicKeyAlgorithm,
+        DeviceAuthorizationError, DevicePairingError, DevicePairingTransaction,
+        DeviceProofChallenge, DeviceProofError, DevicePublicKey, DevicePublicKeyAlgorithm,
     };
     use profile_platform_primitives::{ActorId, DeviceId, TenantId, UnixMillis};
 
@@ -466,13 +466,7 @@ mod tests {
             Err(DevicePairingError::BindingMismatch)
         );
         assert_eq!(
-            pairing.complete(
-                &actor_id,
-                &device_id,
-                &key(2)?,
-                7,
-                UnixMillis::new(120),
-            ),
+            pairing.complete(&actor_id, &device_id, &key(2)?, 7, UnixMillis::new(120),),
             Err(DevicePairingError::BindingMismatch)
         );
         assert_eq!(
@@ -486,26 +480,15 @@ mod tests {
             Err(DevicePairingError::NotAuthorized)
         );
 
-        let registration = pairing.complete(
-            &actor_id,
-            &device_id,
-            &public_key,
-            7,
-            UnixMillis::new(120),
-        )?;
+        let registration =
+            pairing.complete(&actor_id, &device_id, &public_key, 7, UnixMillis::new(120))?;
         assert_eq!(registration.tenant_id(), &tenant_id);
         assert_eq!(registration.actor_id(), &actor_id);
         assert_eq!(registration.device_id(), &device_id);
         assert_eq!(registration.public_key(), &public_key);
         assert_eq!(registration.auth_epoch_at_registration(), 7);
         assert_eq!(
-            pairing.complete(
-                &actor_id,
-                &device_id,
-                &public_key,
-                7,
-                UnixMillis::new(121),
-            ),
+            pairing.complete(&actor_id, &device_id, &public_key, 7, UnixMillis::new(121),),
             Err(DevicePairingError::ReplayRejected)
         );
         Ok(())
@@ -601,13 +584,8 @@ mod tests {
             public_key.clone(),
             5,
         );
-        let b = super::RegisteredDeviceCredential::new(
-            tenant_id,
-            actor_id,
-            device_b,
-            public_key,
-            5,
-        );
+        let b =
+            super::RegisteredDeviceCredential::new(tenant_id, actor_id, device_b, public_key, 5);
         a.require_authorized(true, 5)?;
         b.require_authorized(true, 5)?;
 
