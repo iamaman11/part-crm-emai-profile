@@ -26,6 +26,24 @@ INSERT INTO device_proof_challenges (
 ) VALUES (?, ?, 'PAIRING', ?, ?, ?, NULL, ?, ?, ?, NULL)
 "#;
 
+const CREATE_AUTHORIZED_PAIRING_CHALLENGE: &str = r#"
+INSERT INTO device_proof_challenges (
+    tenant_id, challenge_digest, purpose, actor_id, device_id, pairing_digest,
+    device_binding_version, nonce_hex, issued_at_ms, expires_at_ms, consumed_at_ms
+) VALUES (
+    ?, ?, 'PAIRING', ?,
+    (
+        SELECT device_id
+        FROM device_pairing_transactions
+        WHERE tenant_id = ?
+          AND pairing_digest = ?
+          AND authorized_actor_id = ?
+          AND consumed_at_ms IS NULL
+    ),
+    ?, NULL, ?, ?, ?, NULL
+)
+"#;
+
 const CREATE_SESSION_CHALLENGE: &str = r#"
 INSERT INTO device_proof_challenges (
     tenant_id, challenge_digest, purpose, actor_id, device_id, pairing_digest,
@@ -404,6 +422,47 @@ impl D1DeviceApplicationAuthority {
             sqlite_integer(authorized_at.value())?,
         )?;
         self.database.batch(vec![statement]).await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub async fn authorize_pairing_with_challenge(
+        &self,
+        actor: &ActorContext,
+        pairing_digest: &str,
+        challenge_digest: &str,
+        nonce: &[u8; 32],
+        issued_at: UnixMillis,
+        expires_at: UnixMillis,
+    ) -> Result<Vec<D1Result>> {
+        require_digest(pairing_digest, "pairing")?;
+        require_digest(challenge_digest, "challenge")?;
+        let tenant_id = actor.tenant_scope().tenant_id().as_str();
+        let actor_id = actor.actor_id().as_str();
+        let authorized_at = sqlite_integer(issued_at.value())?;
+        let authorize = query!(
+            &self.database,
+            AUTHORIZE_PAIRING,
+            tenant_id,
+            pairing_digest,
+            actor_id,
+            authorized_at,
+        )?;
+        let nonce_hex = hex_encode(nonce);
+        let challenge = query!(
+            &self.database,
+            CREATE_AUTHORIZED_PAIRING_CHALLENGE,
+            tenant_id,
+            challenge_digest,
+            actor_id,
+            tenant_id,
+            pairing_digest,
+            actor_id,
+            pairing_digest,
+            nonce_hex.as_str(),
+            authorized_at,
+            sqlite_integer(expires_at.value())?,
+        )?;
+        self.database.batch(vec![authorize, challenge]).await
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -824,8 +883,9 @@ fn sqlite_integer(value: u64) -> Result<i64> {
 #[cfg(test)]
 mod tests {
     use super::{
-        COMPLETE_PAIRING, COMPLETE_SESSION_RENEWAL, LOAD_ACTIVE_DEVICE, LOAD_PAIRING_PROOF,
-        LOAD_SESSION_PROOF, RESOLVE_ACTIVE_SESSION, hex_decode, require_digest,
+        COMPLETE_PAIRING, COMPLETE_SESSION_RENEWAL, CREATE_AUTHORIZED_PAIRING_CHALLENGE,
+        LOAD_ACTIVE_DEVICE, LOAD_PAIRING_PROOF, LOAD_SESSION_PROOF, RESOLVE_ACTIVE_SESSION,
+        hex_decode, require_digest,
     };
 
     #[test]
@@ -843,6 +903,14 @@ mod tests {
         assert!(RESOLVE_ACTIVE_SESSION.contains("session.revoked_at_ms IS NULL"));
         assert!(RESOLVE_ACTIVE_SESSION.contains("session.expires_at_ms > ?"));
         assert!(LOAD_ACTIVE_DEVICE.contains("p256_spki_der:%"));
+    }
+
+    #[test]
+    fn pairing_authorization_challenge_uses_existing_pairing_identity() {
+        assert!(CREATE_AUTHORIZED_PAIRING_CHALLENGE.contains("device_pairing_transactions"));
+        assert!(CREATE_AUTHORIZED_PAIRING_CHALLENGE.contains("authorized_actor_id = ?"));
+        assert!(CREATE_AUTHORIZED_PAIRING_CHALLENGE.contains("consumed_at_ms IS NULL"));
+        assert!(!CREATE_AUTHORIZED_PAIRING_CHALLENGE.contains("device_actor_bindings"));
     }
 
     #[test]
