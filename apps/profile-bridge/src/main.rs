@@ -13,6 +13,7 @@ use profile_bridge::windows_delivery_handoff::{
 use std::env;
 use std::fmt;
 use std::process::ExitCode;
+use zeroize::Zeroizing;
 
 fn main() -> ExitCode {
     match run(env::args()) {
@@ -61,9 +62,11 @@ where
 {
     let mut arguments = arguments.into_iter();
     let _program = arguments.next();
-    let argument = arguments
-        .next()
-        .ok_or(BridgeCliError::MissingLaunchArgument)?;
+    let argument = Zeroizing::new(
+        arguments
+            .next()
+            .ok_or(BridgeCliError::MissingLaunchArgument)?,
+    );
     if arguments.next().is_some() {
         return Err(BridgeCliError::UnexpectedArgument);
     }
