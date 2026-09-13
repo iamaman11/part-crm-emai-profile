@@ -20,10 +20,12 @@ const SUCCESSOR_LINEAGE_ID: &str = "catalog-successor-v2";
 const PREDECESSOR_CONTRACT_REVISION: &str = "0032_pas2_payload_fingerprint_contract.sql";
 const BRIDGE_ENROLLMENT_REVISION: &str = "0032_bridge_device_enrollment_authority.sql";
 const PUBLIC_KEY_BINDING_REVISION: &str = "0033_device_public_key_binding.sql";
-const SUCCESSOR_CONTRACT_REVISION: &str = "0034_pas2_payload_fingerprint_contract.sql";
-const CURRENT_SUCCESSOR_FILES: [&str; 3] = [
+const DEVICE_APPLICATION_AUTHORITY_REVISION: &str = "0034_device_application_authority.sql";
+const SUCCESSOR_CONTRACT_REVISION: &str = "0035_pas2_payload_fingerprint_contract.sql";
+const CURRENT_SUCCESSOR_FILES: [&str; 4] = [
     BRIDGE_ENROLLMENT_REVISION,
     PUBLIC_KEY_BINDING_REVISION,
+    DEVICE_APPLICATION_AUTHORITY_REVISION,
     SUCCESSOR_CONTRACT_REVISION,
 ];
 
@@ -82,7 +84,9 @@ impl CatalogSuccessor {
 
         ordered_history.push(BRIDGE_ENROLLMENT_REVISION.to_owned());
         ordered_history.push(PUBLIC_KEY_BINDING_REVISION.to_owned());
+        ordered_history.push(DEVICE_APPLICATION_AUTHORITY_REVISION.to_owned());
         ordered_history.push(SUCCESSOR_CONTRACT_REVISION.to_owned());
+        migration_source_roots.push(CURRENT_SUCCESSOR_ROOT.to_owned());
         migration_source_roots.push(CURRENT_SUCCESSOR_ROOT.to_owned());
         migration_source_roots.push(CURRENT_SUCCESSOR_ROOT.to_owned());
         migration_source_roots.push(CURRENT_SUCCESSOR_ROOT.to_owned());
@@ -98,6 +102,15 @@ impl CatalogSuccessor {
         });
         post_epoch.push(MigrationContract {
             migration_file: PUBLIC_KEY_BINDING_REVISION.to_owned(),
+            migration_class: MigrationClass::Expand,
+            rollout_order: RolloutOrder::MigrateBeforeCode,
+            fail_forward_required: false,
+            destructive: false,
+            code_rollback_allowed: true,
+            contract_preconditions: Vec::new(),
+        });
+        post_epoch.push(MigrationContract {
+            migration_file: DEVICE_APPLICATION_AUTHORITY_REVISION.to_owned(),
             migration_class: MigrationClass::Expand,
             rollout_order: RolloutOrder::MigrateBeforeCode,
             fail_forward_required: false,
@@ -209,7 +222,7 @@ impl CatalogSuccessor {
             .ok_or_else(|| {
                 D1Error::new("trailing contract release requires an immediate predecessor revision")
             })?;
-        if target != PUBLIC_KEY_BINDING_REVISION {
+        if target != DEVICE_APPLICATION_AUTHORITY_REVISION {
             return Err(D1Error::new(
                 "Catalog successor-v2 deferred PAS-2 CONTRACT must immediately follow the latest EXPAND",
             ));
@@ -640,9 +653,9 @@ fn repository_identity_from_components(components: &[Value]) -> Result<String, D
 #[cfg(test)]
 mod tests {
     use super::{
-        BRIDGE_ENROLLMENT_REVISION, CURRENT_SUCCESSOR_ROOT, PREDECESSOR_SUCCESSOR_ROOT,
-        PUBLIC_KEY_BINDING_REVISION, SUCCESSOR_CONTRACT_REVISION, component_authority,
-        release_contract, repository_projection,
+        BRIDGE_ENROLLMENT_REVISION, CURRENT_SUCCESSOR_ROOT, DEVICE_APPLICATION_AUTHORITY_REVISION,
+        PREDECESSOR_SUCCESSOR_ROOT, PUBLIC_KEY_BINDING_REVISION, SUCCESSOR_CONTRACT_REVISION,
+        component_authority, release_contract, repository_projection,
     };
     use serde_json::Value;
     use std::error::Error;
@@ -656,15 +669,19 @@ mod tests {
     fn current_catalog_lineage_inserts_expands_before_deferred_contract()
     -> Result<(), Box<dyn Error>> {
         let authority = component_authority(&repository_root(), "catalog")?;
-        assert_eq!(authority.ordered_history.len(), 34);
+        assert_eq!(authority.ordered_history.len(), 35);
         assert_eq!(authority.ordered_history[31], BRIDGE_ENROLLMENT_REVISION);
         assert_eq!(authority.ordered_history[32], PUBLIC_KEY_BINDING_REVISION);
-        assert_eq!(authority.ordered_history[33], SUCCESSOR_CONTRACT_REVISION);
+        assert_eq!(
+            authority.ordered_history[33],
+            DEVICE_APPLICATION_AUTHORITY_REVISION
+        );
+        assert_eq!(authority.ordered_history[34], SUCCESSOR_CONTRACT_REVISION);
         assert_eq!(
             authority.current_repository_revision,
             SUCCESSOR_CONTRACT_REVISION
         );
-        assert_eq!(authority.post_epoch.len(), 8);
+        assert_eq!(authority.post_epoch.len(), 9);
         Ok(())
     }
 
@@ -674,11 +691,11 @@ mod tests {
         let contract = release_contract(&repository_root(), "catalog")?;
         assert_eq!(
             contract["target_schema_revision"],
-            PUBLIC_KEY_BINDING_REVISION
+            DEVICE_APPLICATION_AUTHORITY_REVISION
         );
         assert_eq!(
             contract["supported_schema_min"],
-            PUBLIC_KEY_BINDING_REVISION
+            DEVICE_APPLICATION_AUTHORITY_REVISION
         );
         assert_eq!(
             contract["supported_schema_max"],
@@ -707,19 +724,27 @@ mod tests {
             runtime["target_schema_revision"],
             catalog["historical_epoch"]["final_revision"]
         );
-        assert_eq!(runtime["supported_schema_max"], PUBLIC_KEY_BINDING_REVISION);
+        assert_eq!(
+            runtime["supported_schema_max"],
+            DEVICE_APPLICATION_AUTHORITY_REVISION
+        );
         let sources = catalog["executable_migration_sources"]
             .as_array()
             .ok_or("executable migration source projection is missing")?;
-        assert_eq!(sources.len(), 34);
+        assert_eq!(sources.len(), 35);
         assert_eq!(sources[26]["source_root"], PREDECESSOR_SUCCESSOR_ROOT);
         assert_eq!(sources[27]["source_root"], "migrations/d1");
         assert_eq!(sources[31]["migration_file"], BRIDGE_ENROLLMENT_REVISION);
         assert_eq!(sources[31]["source_root"], CURRENT_SUCCESSOR_ROOT);
         assert_eq!(sources[32]["migration_file"], PUBLIC_KEY_BINDING_REVISION);
         assert_eq!(sources[32]["source_root"], CURRENT_SUCCESSOR_ROOT);
-        assert_eq!(sources[33]["migration_file"], SUCCESSOR_CONTRACT_REVISION);
+        assert_eq!(
+            sources[33]["migration_file"],
+            DEVICE_APPLICATION_AUTHORITY_REVISION
+        );
         assert_eq!(sources[33]["source_root"], CURRENT_SUCCESSOR_ROOT);
+        assert_eq!(sources[34]["migration_file"], SUCCESSOR_CONTRACT_REVISION);
+        assert_eq!(sources[34]["source_root"], CURRENT_SUCCESSOR_ROOT);
         assert_eq!(
             projection["executable_schema_authority"],
             serde_json::json!([
