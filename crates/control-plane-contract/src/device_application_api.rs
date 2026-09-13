@@ -368,7 +368,8 @@ mod tests {
     }
 
     #[test]
-    fn verified_session_projection_carries_restart_binding_but_challenge_does_not() {
+    fn verified_session_projection_carries_restart_binding_but_challenge_does_not(
+    ) -> Result<(), serde_json::Error> {
         let token = "a".repeat(OPAQUE_TOKEN_HEX_LENGTH);
         let projection = DeviceApplicationSessionProjection {
             session_token: token,
@@ -376,12 +377,13 @@ mod tests {
             device_id: "device_01JSESSION".to_owned(),
             expires_at_ms: 100,
         };
-        let json = serde_json::to_value(projection).expect("serialize session projection");
+        let json = serde_json::to_value(projection)?;
         assert_eq!(
             json.get("actorId").and_then(Value::as_str),
             Some("actor_01JSESSION")
         );
         assert!(json.get("tenantId").is_none());
+        Ok(())
     }
 
     #[test]
