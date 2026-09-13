@@ -40,12 +40,9 @@ pub fn device_proof_message_v1(
     Ok(message)
 }
 
-fn append_identifier(
-    message: &mut Vec<u8>,
-    value: &str,
-) -> Result<(), DeviceProofMessageError> {
-    let length = u16::try_from(value.len())
-        .map_err(|_| DeviceProofMessageError::InvalidIdentifierLength)?;
+fn append_identifier(message: &mut Vec<u8>, value: &str) -> Result<(), DeviceProofMessageError> {
+    let length =
+        u16::try_from(value.len()).map_err(|_| DeviceProofMessageError::InvalidIdentifierLength)?;
     message.extend_from_slice(&length.to_be_bytes());
     message.extend_from_slice(value.as_bytes());
     Ok(())
@@ -247,13 +244,8 @@ mod tests {
     -> Result<(), Box<dyn std::error::Error>> {
         let (tenant, actor, device) = ids()?;
         let nonce = [0x5a; DEVICE_PROOF_NONCE_BYTES];
-        let message = device_proof_message_v1(
-            &tenant,
-            &actor,
-            &device,
-            &nonce,
-            UnixMillis::new(9_999),
-        )?;
+        let message =
+            device_proof_message_v1(&tenant, &actor, &device, &nonce, UnixMillis::new(9_999))?;
         assert!(message.starts_with(DEVICE_PROOF_CONTEXT_V1));
         assert!(
             message
@@ -286,13 +278,7 @@ mod tests {
         );
         assert_ne!(
             message,
-            device_proof_message_v1(
-                &tenant,
-                &actor,
-                &device,
-                &nonce,
-                UnixMillis::new(10_000),
-            )?
+            device_proof_message_v1(&tenant, &actor, &device, &nonce, UnixMillis::new(10_000),)?
         );
         assert_eq!(
             device_proof_message_v1(&tenant, &actor, &device, &[0; 31], UnixMillis::new(9_999)),
@@ -347,8 +333,8 @@ mod tests {
     }
 
     #[test]
-    fn session_rejects_zero_epochs_and_invalid_timeline()
-    -> Result<(), Box<dyn std::error::Error>> {
+    fn session_rejects_zero_epochs_and_invalid_timeline() -> Result<(), Box<dyn std::error::Error>>
+    {
         let (tenant, actor, device) = ids()?;
         assert_eq!(
             DeviceApplicationSession::issue(
