@@ -4,7 +4,8 @@ use super::model::{D1Error, ReleaseSchemaContract};
 use super::transaction_core::TargetIdentity;
 use super::util::{read_json, resolve_input};
 use crate::canonical::{canonical_json, sha256_hex};
-use serde_json::{Value, json};
+use serde_json::{Map, Value, json};
+use std::collections::BTreeSet;
 use std::fs;
 use std::path::Path;
 
@@ -33,6 +34,15 @@ pub struct D1CurrentReconstructionPlanRequest<'a> {
     pub release_set_id: &'a str,
     pub observed_at_unix_seconds: i64,
     pub observation_source: &'a str,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ReconstructionAuthorizationSubject {
+    pub operation_id: String,
+    pub target: TargetIdentity,
+    pub allowed_provider_effects: Vec<String>,
+    pub observed_at_unix_seconds: i64,
+    pub freshness_max_age_seconds: u64,
 }
 
 pub(super) fn plan(request: D1CurrentReconstructionPlanRequest<'_>) -> Result<String, D1Error> {
@@ -264,6 +274,322 @@ pub(super) fn plan(request: D1CurrentReconstructionPlanRequest<'_>) -> Result<St
         "plan": plan_value,
     });
     canonical_json(&projection).map_err(D1Error::new)
+}
+
+pub(crate) fn authorization_subject(
+    projection: &Value,
+) -> Result<ReconstructionAuthorizationSubject, D1Error> {
+    let root = projection
+        .as_object()
+        .ok_or_else(|| D1Error::new("CURRENT reconstruction projection must be an object"))?;
+    require_exact_keys(
+        root,
+        &[
+            "schema_version",
+            "status",
+            "mode",
+            "authorization_required",
+            "authorization_consumed",
+            "mutation_executed",
+            "provider_mutation_executed",
+            "reconstruction_id",
+            "plan",
+        ],
+        "CURRENT reconstruction projection",
+    )?;
+    if root.get("schema_version").and_then(Value::as_u64) != Some(RECONSTRUCTION_SCHEMA_VERSION)
+        || root.get("status").and_then(Value::as_str) != Some("RECONSTRUCTION_PREPARED")
+        || root.get("mode").and_then(Value::as_str) != Some("read-only")
+        || root.get("authorization_required").and_then(Value::as_bool) != Some(true)
+        || root.get("authorization_consumed").and_then(Value::as_bool) != Some(false)
+        || root.get("mutation_executed").and_then(Value::as_bool) != Some(false)
+        || root
+            .get("provider_mutation_executed")
+            .and_then(Value::as_bool)
+            != Some(false)
+    {
+        return Err(D1Error::new(
+            "CURRENT reconstruction projection is not an unconsumed read-only prepared operation",
+        ));
+    }
+
+    let reconstruction_id = required_sha256(root.get("reconstruction_id"), "reconstruction_id")?;
+    let plan = root
+        .get("plan")
+        .and_then(Value::as_object)
+        .ok_or_else(|| D1Error::new("CURRENT reconstruction projection is missing plan"))?;
+    require_exact_keys(
+        plan,
+        &[
+            "schema_version",
+            "kind",
+            "disposition",
+            "component",
+            "source_sha",
+            "tree_sha",
+            "release_set_id",
+            "release_manifest_sha256",
+            "repository_identity_sha256",
+            "construction_sha256",
+            "target_schema_revision",
+            "supported_schema_min",
+            "supported_schema_max",
+            "provider_observation",
+            "observation_digest",
+            "freshness_max_age_seconds",
+            "allowed_provider_effects",
+            "forbidden_provider_effects",
+            "expected_post_state",
+        ],
+        "CURRENT reconstruction plan",
+    )?;
+    if plan.get("schema_version").and_then(Value::as_u64) != Some(RECONSTRUCTION_SCHEMA_VERSION)
+        || plan.get("kind").and_then(Value::as_str) != Some(CURRENT_RECONSTRUCTION_KIND)
+        || plan.get("disposition").and_then(Value::as_str) != Some(CURRENT_DISPOSITION)
+        || plan.get("component").and_then(Value::as_str) != Some("catalog")
+    {
+        return Err(D1Error::new(
+            "CURRENT reconstruction plan kind/disposition/component drifted",
+        ));
+    }
+    if sha256_canonical(&Value::Object(plan.clone()))? != reconstruction_id {
+        return Err(D1Error::new(
+            "CURRENT reconstruction_id does not bind the exact canonical plan",
+        ));
+    }
+
+    let source_sha = required_string(plan.get("source_sha"), "source_sha")?;
+    validate_git_object_id(source_sha, "source_sha")?;
+    let tree_sha = required_string(plan.get("tree_sha"), "tree_sha")?;
+    validate_git_object_id(tree_sha, "tree_sha")?;
+    validate_release_set_id(required_string(plan.get("release_set_id"), "release_set_id")?)?;
+    required_sha256(plan.get("release_manifest_sha256"), "release_manifest_sha256")?;
+    let repository_identity_sha256 = required_sha256(
+        plan.get("repository_identity_sha256"),
+        "repository_identity_sha256",
+    )?;
+    let construction_sha256 =
+        required_sha256(plan.get("construction_sha256"), "construction_sha256")?;
+    let target_schema_revision =
+        required_string(plan.get("target_schema_revision"), "target_schema_revision")?;
+    validate_non_empty(target_schema_revision, "target_schema_revision")?;
+    validate_non_empty(
+        required_string(plan.get("supported_schema_min"), "supported_schema_min")?,
+        "supported_schema_min",
+    )?;
+    validate_non_empty(
+        required_string(plan.get("supported_schema_max"), "supported_schema_max")?,
+        "supported_schema_max",
+    )?;
+
+    let freshness_max_age_seconds = plan
+        .get("freshness_max_age_seconds")
+        .and_then(Value::as_u64)
+        .ok_or_else(|| D1Error::new("CURRENT reconstruction freshness_max_age_seconds is missing"))?;
+    if freshness_max_age_seconds != OBSERVATION_FRESHNESS_MAX_AGE_SECONDS {
+        return Err(D1Error::new(
+            "CURRENT reconstruction freshness window drifted from the canonical bounded window",
+        ));
+    }
+
+    let allowed_provider_effects = string_array(
+        plan.get("allowed_provider_effects"),
+        "allowed_provider_effects",
+    )?;
+    if allowed_provider_effects != vec![ALLOWED_PROVIDER_EFFECT.to_owned()] {
+        return Err(D1Error::new(
+            "CURRENT reconstruction allowed provider effect must be exactly the canonical bootstrap effect",
+        ));
+    }
+    let forbidden_provider_effects = string_array(
+        plan.get("forbidden_provider_effects"),
+        "forbidden_provider_effects",
+    )?;
+    let expected_forbidden = FORBIDDEN_PROVIDER_EFFECTS
+        .iter()
+        .map(|value| (*value).to_owned())
+        .collect::<Vec<_>>();
+    if forbidden_provider_effects != expected_forbidden {
+        return Err(D1Error::new(
+            "CURRENT reconstruction forbidden provider effect set drifted",
+        ));
+    }
+
+    let provider_observation = plan
+        .get("provider_observation")
+        .and_then(Value::as_object)
+        .ok_or_else(|| D1Error::new("CURRENT reconstruction provider_observation is missing"))?;
+    require_exact_keys(
+        provider_observation,
+        &[
+            "target",
+            "observed_at_unix_seconds",
+            "fresh_until_unix_seconds",
+            "observation_source",
+            "predecessor_ledger_sha256",
+            "remote_migrations",
+        ],
+        "CURRENT reconstruction provider observation",
+    )?;
+    let target: TargetIdentity = serde_json::from_value(
+        provider_observation
+            .get("target")
+            .cloned()
+            .ok_or_else(|| D1Error::new("CURRENT reconstruction target is missing"))?,
+    )
+    .map_err(|error| {
+        D1Error::new(format!(
+            "CURRENT reconstruction authorization target does not match the typed target contract: {error}"
+        ))
+    })?;
+    validate_target(&target)?;
+    let observed_at_unix_seconds = provider_observation
+        .get("observed_at_unix_seconds")
+        .and_then(Value::as_i64)
+        .ok_or_else(|| D1Error::new("CURRENT reconstruction observed_at_unix_seconds is missing"))?;
+    if observed_at_unix_seconds <= 0 {
+        return Err(D1Error::new(
+            "CURRENT reconstruction observed_at_unix_seconds must be positive",
+        ));
+    }
+    let freshness_seconds = i64::try_from(freshness_max_age_seconds)
+        .map_err(|_| D1Error::new("CURRENT reconstruction freshness window does not fit i64"))?;
+    let expected_fresh_until = observed_at_unix_seconds
+        .checked_add(freshness_seconds)
+        .ok_or_else(|| D1Error::new("CURRENT reconstruction freshness deadline overflow"))?;
+    if provider_observation
+        .get("fresh_until_unix_seconds")
+        .and_then(Value::as_i64)
+        != Some(expected_fresh_until)
+    {
+        return Err(D1Error::new(
+            "CURRENT reconstruction provider observation freshness deadline drifted",
+        ));
+    }
+    validate_non_empty(
+        required_string(
+            provider_observation.get("observation_source"),
+            "observation_source",
+        )?,
+        "observation_source",
+    )?;
+    required_sha256(
+        provider_observation.get("predecessor_ledger_sha256"),
+        "predecessor_ledger_sha256",
+    )?;
+    let remote_migrations = provider_observation
+        .get("remote_migrations")
+        .and_then(Value::as_array)
+        .ok_or_else(|| D1Error::new("CURRENT reconstruction remote_migrations are missing"))?;
+    if !remote_migrations.is_empty() {
+        return Err(D1Error::new(
+            "CURRENT fresh-zero reconstruction authorization requires the sealed remote ledger to remain exactly empty",
+        ));
+    }
+    let observation_digest = required_sha256(plan.get("observation_digest"), "observation_digest")?;
+    if sha256_canonical(&Value::Object(provider_observation.clone()))? != observation_digest {
+        return Err(D1Error::new(
+            "CURRENT reconstruction observation_digest does not bind the exact provider observation",
+        ));
+    }
+
+    let expected_post_state = plan
+        .get("expected_post_state")
+        .and_then(Value::as_object)
+        .ok_or_else(|| D1Error::new("CURRENT reconstruction expected_post_state is missing"))?;
+    require_exact_keys(
+        expected_post_state,
+        &[
+            "component",
+            "target_schema_revision",
+            "ledger_migrations",
+            "construction_sha256",
+            "repository_identity_sha256",
+        ],
+        "CURRENT reconstruction expected post-state",
+    )?;
+    if expected_post_state.get("component").and_then(Value::as_str) != Some("catalog")
+        || expected_post_state
+            .get("target_schema_revision")
+            .and_then(Value::as_str)
+            != Some(target_schema_revision)
+        || expected_post_state
+            .get("construction_sha256")
+            .and_then(Value::as_str)
+            != Some(construction_sha256.as_str())
+        || expected_post_state
+            .get("repository_identity_sha256")
+            .and_then(Value::as_str)
+            != Some(repository_identity_sha256.as_str())
+    {
+        return Err(D1Error::new(
+            "CURRENT reconstruction expected post-state drifted from the bound construction/repository target",
+        ));
+    }
+    let ledger_migrations = string_array(
+        expected_post_state.get("ledger_migrations"),
+        "expected_post_state.ledger_migrations",
+    )?;
+    if ledger_migrations.is_empty()
+        || ledger_migrations.last().map(String::as_str) != Some(target_schema_revision)
+    {
+        return Err(D1Error::new(
+            "CURRENT reconstruction expected ledger must be non-empty and terminate at the target schema revision",
+        ));
+    }
+    let mut unique_migrations = BTreeSet::new();
+    if ledger_migrations
+        .iter()
+        .any(|migration| !unique_migrations.insert(migration.as_str()))
+    {
+        return Err(D1Error::new(
+            "CURRENT reconstruction expected ledger contains duplicate migrations",
+        ));
+    }
+
+    Ok(ReconstructionAuthorizationSubject {
+        operation_id: reconstruction_id,
+        target,
+        allowed_provider_effects,
+        observed_at_unix_seconds,
+        freshness_max_age_seconds,
+    })
+}
+
+fn require_exact_keys(
+    value: &Map<String, Value>,
+    expected: &[&str],
+    label: &str,
+) -> Result<(), D1Error> {
+    if value.len() != expected.len() || expected.iter().any(|key| !value.contains_key(*key)) {
+        return Err(D1Error::new(format!(
+            "{label} has missing or unexpected fields"
+        )));
+    }
+    Ok(())
+}
+
+fn string_array(value: Option<&Value>, label: &str) -> Result<Vec<String>, D1Error> {
+    let values = value
+        .and_then(Value::as_array)
+        .ok_or_else(|| D1Error::new(format!("CURRENT reconstruction {label} must be an array")))?;
+    let mut output = Vec::with_capacity(values.len());
+    for value in values {
+        let value = value.as_str().ok_or_else(|| {
+            D1Error::new(format!(
+                "CURRENT reconstruction {label} entries must be strings"
+            ))
+        })?;
+        validate_non_empty(value, label)?;
+        output.push(value.to_owned());
+    }
+    Ok(output)
+}
+
+fn required_string<'a>(value: Option<&'a Value>, label: &str) -> Result<&'a str, D1Error> {
+    value
+        .and_then(Value::as_str)
+        .ok_or_else(|| D1Error::new(format!("CURRENT reconstruction {label} is missing")))
 }
 
 fn validate_release_binding(
