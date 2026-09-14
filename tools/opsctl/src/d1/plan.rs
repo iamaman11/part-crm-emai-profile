@@ -167,20 +167,6 @@ pub(super) fn evaluate(
     };
 
     let contracts = post_epoch_slice(authority, remote_count, target_count)?;
-    if let Some(missing) = missing_contract_precondition(&contracts, preconditions) {
-        return Ok(Evaluation {
-            ledger_state: state,
-            decision: Decision::ContractBlocked,
-            remote_revision: remote_names.last().cloned(),
-            target_revision: target.target_schema_revision.clone(),
-            planned_migrations,
-            planned_contracts,
-            reason_codes: vec![format!("CONTRACT_PRECONDITION_MISSING:{missing}")],
-            rollback_context_complete: known_good.is_some(),
-            allowed: false,
-        });
-    }
-
     let current_supports_remote = runtime_supports_remote(authority, current, remote_count)?;
     if !current_supports_remote
         && same_schema_contract(current, target)
@@ -222,6 +208,20 @@ pub(super) fn evaluate(
             planned_migrations,
             planned_contracts,
             reason_codes: vec!["CURRENT_RUNTIME_ALREADY_SCHEMA_INCOMPATIBLE".to_owned()],
+            rollback_context_complete: true,
+            allowed: false,
+        });
+    }
+
+    if let Some(missing) = missing_contract_precondition(&contracts, preconditions) {
+        return Ok(Evaluation {
+            ledger_state: state,
+            decision: Decision::ContractBlocked,
+            remote_revision: remote_names.last().cloned(),
+            target_revision: target.target_schema_revision.clone(),
+            planned_migrations,
+            planned_contracts,
+            reason_codes: vec![format!("CONTRACT_PRECONDITION_MISSING:{missing}")],
             rollback_context_complete: true,
             allowed: false,
         });
