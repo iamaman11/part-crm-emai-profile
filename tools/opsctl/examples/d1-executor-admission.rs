@@ -2,7 +2,9 @@
 
 use opsctl::canonical::{canonical_json, parse_strict_json};
 use opsctl::d1::executor_admission::{
-    ExecutorAdmissionExpectation, bind_executor_admission, serialize_executor_admission,
+    ExecutorAdmissionExpectation, bind_current_reconstruction_executor_admission,
+    bind_executor_admission, serialize_current_reconstruction_executor_admission,
+    serialize_executor_admission,
 };
 use opsctl::d1::transaction::{TargetIdentity, TransactionPhase, TransactionProjection};
 use serde_json::Value;
@@ -15,6 +17,7 @@ use std::path::PathBuf;
 #[derive(Default)]
 struct Args {
     transaction_json: Option<PathBuf>,
+    reconstruction_json: Option<PathBuf>,
     authorization_json: Option<PathBuf>,
     evaluated_at_unix_seconds: Option<i64>,
     expected_transaction_id: Option<String>,
@@ -72,6 +75,11 @@ fn parse_args() -> Result<Args, Box<dyn Error>> {
         match flag {
             "--transaction-json" => set_once(
                 &mut args.transaction_json,
+                PathBuf::from(next_value(&mut iterator, flag)?),
+                flag,
+            )?,
+            "--reconstruction-json" => set_once(
+                &mut args.reconstruction_json,
                 PathBuf::from(next_value(&mut iterator, flag)?),
                 flag,
             )?,
@@ -149,53 +157,110 @@ fn sealed_component(transaction: &TransactionProjection) -> Result<String, Box<d
 }
 
 fn run() -> Result<(), Box<dyn Error>> {
-    let args = parse_args()?;
-    let transaction_value = read_strict(
-        required(args.transaction_json, "--transaction-json")?,
-        "prepared transaction",
-    )?;
-    let transaction: TransactionProjection =
-        serde_json::from_value(transaction_value).map_err(|error| {
-            format!("prepared transaction does not match the typed contract: {error}")
-        })?;
-    let component = match args.expected_component {
-        Some(value) => value,
-        None => sealed_component(&transaction)?,
-    };
+    let Args {
+        transaction_json,
+        reconstruction_json,
+        authorization_json,
+        evaluated_at_unix_seconds,
+        expected_transaction_id,
+        expected_source_sha,
+        expected_tree_sha,
+        expected_component,
+        expected_environment,
+        expected_account_id,
+        expected_database_name,
+        expected_database_id,
+        expected_phase,
+    } = parse_args()?;
+
     let authorization = read_strict(
-        required(args.authorization_json, "--authorization-json")?,
+        required(authorization_json, "--authorization-json")?,
         "transaction authorization",
     )?;
-    let expectation = ExecutorAdmissionExpectation {
-        transaction_id: required(args.expected_transaction_id, "--expected-transaction-id")?,
-        source_sha: required(args.expected_source_sha, "--expected-source-sha")?,
-        tree_sha: required(args.expected_tree_sha, "--expected-tree-sha")?,
-        component,
-        target: TargetIdentity {
-            environment: required(args.expected_environment, "--expected-environment")?,
-            account_id: required(args.expected_account_id, "--expected-account-id")?,
-            database_name: required(args.expected_database_name, "--expected-database-name")?,
-            database_id: required(args.expected_database_id, "--expected-database-id")?,
-        },
-        phase: required(args.expected_phase, "--expected-phase")?,
-    };
-    match bind_executor_admission(
-        &transaction,
-        &authorization,
-        required(
-            args.evaluated_at_unix_seconds,
-            "--evaluated-at-unix-seconds",
-        )?,
-        &expectation,
-    ) {
-        Ok(binding) => {
-            println!("{}", serialize_executor_admission(&binding)?);
-            Ok(())
+    let evaluated_at_unix_seconds =
+        required(evaluated_at_unix_seconds, "--evaluated-at-unix-seconds")?;
+
+    match (transaction_json, reconstruction_json) {
+        (Some(transaction_path), None) => {
+            let transaction_value = read_strict(transaction_path, "prepared transaction")?;
+            let transaction: TransactionProjection = serde_json::from_value(transaction_value)
+                .map_err(|error| {
+                    format!("prepared transaction does not match the typed contract: {error}")
+                })?;
+            let component = match expected_component {
+                Some(value) => value,
+                None => sealed_component(&transaction)?,
+            };
+            let expectation = ExecutorAdmissionExpectation {
+                transaction_id: required(expected_transaction_id, "--expected-transaction-id")?,
+                source_sha: required(expected_source_sha, "--expected-source-sha")?,
+                tree_sha: required(expected_tree_sha, "--expected-tree-sha")?,
+                component,
+                target: TargetIdentity {
+                    environment: required(expected_environment, "--expected-environment")?,
+                    account_id: required(expected_account_id, "--expected-account-id")?,
+                    database_name: required(expected_database_name, "--expected-database-name")?,
+                    database_id: required(expected_database_id, "--expected-database-id")?,
+                },
+                phase: required(expected_phase, "--expected-phase")?,
+            };
+            match bind_executor_admission(
+                &transaction,
+                &authorization,
+                evaluated_at_unix_seconds,
+                &expectation,
+            ) {
+                Ok(binding) => {
+                    println!("{}", serialize_executor_admission(&binding)?);
+                    Ok(())
+                }
+                Err(error) => {
+                    println!("{}", canonical_json(error.gate_result_json())?);
+                    Err(error.into())
+                }
+            }
         }
-        Err(error) => {
-            println!("{}", canonical_json(error.gate_result_json())?);
-            Err(error.into())
+        (None, Some(reconstruction_path)) => {
+            let reconstruction =
+                read_strict(reconstruction_path, "prepared CURRENT reconstruction")?;
+            let expectation = ExecutorAdmissionExpectation {
+                transaction_id: required(expected_transaction_id, "--expected-transaction-id")?,
+                source_sha: required(expected_source_sha, "--expected-source-sha")?,
+                tree_sha: required(expected_tree_sha, "--expected-tree-sha")?,
+                component: expected_component.unwrap_or_else(|| "catalog".to_owned()),
+                target: TargetIdentity {
+                    environment: required(expected_environment, "--expected-environment")?,
+                    account_id: required(expected_account_id, "--expected-account-id")?,
+                    database_name: required(expected_database_name, "--expected-database-name")?,
+                    database_id: required(expected_database_id, "--expected-database-id")?,
+                },
+                phase: required(expected_phase, "--expected-phase")?,
+            };
+            match bind_current_reconstruction_executor_admission(
+                &reconstruction,
+                &authorization,
+                evaluated_at_unix_seconds,
+                &expectation,
+            ) {
+                Ok(binding) => {
+                    println!(
+                        "{}",
+                        serialize_current_reconstruction_executor_admission(&binding)?
+                    );
+                    Ok(())
+                }
+                Err(error) => {
+                    println!("{}", canonical_json(error.gate_result_json())?);
+                    Err(error.into())
+                }
+            }
         }
+        (Some(_), Some(_)) => Err(
+            "exactly one of --transaction-json or --reconstruction-json must be supplied".into(),
+        ),
+        (None, None) => Err(
+            "exactly one of --transaction-json or --reconstruction-json must be supplied".into(),
+        ),
     }
 }
 

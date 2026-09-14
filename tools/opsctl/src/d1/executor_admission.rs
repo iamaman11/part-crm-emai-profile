@@ -1,5 +1,8 @@
-use super::authorization::bind_transaction_authorization;
+use super::authorization::{
+    bind_current_reconstruction_authorization, bind_transaction_authorization,
+};
 use super::model::{D1Error, GateResult};
+use super::reconstruction;
 use super::transaction::{
     PlannedMigrationDigest, TargetIdentity, TransactionPhase, TransactionProjection,
 };
@@ -8,6 +11,7 @@ use serde_json::Value;
 
 const EXECUTOR_ADMISSION_SCHEMA_VERSION: u64 = 1;
 const ADMISSION_DRIFT_REMEDIATION: &str = "Do not consume or broaden provider authority. Discard the drifted admission attempt, establish fresh exact protected-main source/tree and immutable TransactionId/target identity, then re-observe/re-prepare and obtain a new exact authorization if a write is still required.";
+const RECONSTRUCTION_ADMISSION_DRIFT_REMEDIATION: &str = "Do not consume or broaden provider authority. Discard the drifted reconstruction admission attempt, establish fresh exact protected-main source/tree and immutable reconstruction identity/target, then re-observe/re-prepare and obtain a new exact authorization if reconstruction is still required.";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExecutorAdmissionExpectation {
@@ -51,6 +55,43 @@ pub struct ExecutorAdmissionBinding {
     pub phase: TransactionPhase,
     pub evaluated_at_unix_seconds: i64,
     pub execution_plan: SealedExecutionPlan,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SealedReconstructionExecutionPlan {
+    pub schema_version: u64,
+    pub kind: String,
+    pub mode: String,
+    pub mutation_executed: bool,
+    pub component: String,
+    pub allowed: bool,
+    pub provider_effect: String,
+    pub predecessor_ledger_sha256: String,
+    pub predecessor_migrations: Vec<String>,
+    pub repository_identity_sha256: String,
+    pub construction_sha256: String,
+    pub target_schema_revision: String,
+    pub expected_ledger_migrations: Vec<String>,
+    pub apply_required: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReconstructionExecutorAdmissionBinding {
+    pub schema_version: u64,
+    pub status: String,
+    pub mode: String,
+    pub authorization_consumed: bool,
+    pub mutation_executed: bool,
+    pub provider_mutation_executed: bool,
+    pub operation_id: String,
+    pub authorization_digest: String,
+    pub source_sha: String,
+    pub tree_sha: String,
+    pub component: String,
+    pub target: TargetIdentity,
+    pub phase: TransactionPhase,
+    pub evaluated_at_unix_seconds: i64,
+    pub execution_plan: SealedReconstructionExecutionPlan,
 }
 
 pub fn bind_executor_admission(
@@ -156,10 +197,179 @@ pub fn bind_executor_admission(
     })
 }
 
+pub fn bind_current_reconstruction_executor_admission(
+    reconstruction_value: &Value,
+    authorization_value: &Value,
+    evaluated_at_unix_seconds: i64,
+    expectation: &ExecutorAdmissionExpectation,
+) -> Result<ReconstructionExecutorAdmissionBinding, D1Error> {
+    validate_reconstruction_expectation(expectation)?;
+    let subject = reconstruction::authorization_subject(reconstruction_value).map_err(|_| {
+        reconstruction_admission_drift(
+            "prepared CURRENT reconstruction failed exact revalidation before executor admission",
+        )
+    })?;
+    let plan = reconstruction_value
+        .get("plan")
+        .and_then(Value::as_object)
+        .ok_or_else(|| {
+            reconstruction_admission_drift(
+                "prepared CURRENT reconstruction is missing its sealed plan",
+            )
+        })?;
+    let source_sha = reconstruction_plan_string(plan, "source_sha")?;
+    let tree_sha = reconstruction_plan_string(plan, "tree_sha")?;
+
+    if subject.operation_id != expectation.transaction_id {
+        return Err(reconstruction_admission_drift(
+            "executor expected_transaction_id must exactly equal prepared reconstruction_id",
+        ));
+    }
+    if source_sha != expectation.source_sha {
+        return Err(reconstruction_admission_drift(
+            "executor exact checkout source_sha must equal prepared reconstruction source_sha",
+        ));
+    }
+    if tree_sha != expectation.tree_sha {
+        return Err(reconstruction_admission_drift(
+            "executor exact checkout tree_sha must equal prepared reconstruction tree_sha",
+        ));
+    }
+    if subject.target != expectation.target {
+        return Err(reconstruction_admission_drift(
+            "executor exact target must equal prepared reconstruction target",
+        ));
+    }
+    if expectation.phase != TransactionPhase::Ordinary {
+        return Err(reconstruction_admission_drift(
+            "CURRENT reconstruction executor admission phase must be ORDINARY",
+        ));
+    }
+
+    let authorization = bind_current_reconstruction_authorization(
+        reconstruction_value,
+        authorization_value,
+        evaluated_at_unix_seconds,
+    )?;
+    if authorization.transaction_id != expectation.transaction_id
+        || authorization.target != expectation.target
+        || authorization.phase != expectation.phase
+        || authorization.authorized_provider_effects != subject.allowed_provider_effects
+    {
+        return Err(reconstruction_admission_drift(
+            "verified reconstruction authorization drifted from executor admission expectation",
+        ));
+    }
+
+    let provider_observation = plan
+        .get("provider_observation")
+        .and_then(Value::as_object)
+        .ok_or_else(|| {
+            reconstruction_admission_drift(
+                "prepared CURRENT reconstruction is missing provider_observation",
+            )
+        })?;
+    let predecessor_ledger_sha256 =
+        reconstruction_plan_string(provider_observation, "predecessor_ledger_sha256")?;
+    let predecessor_migrations = reconstruction_string_array(
+        provider_observation.get("remote_migrations"),
+        "provider_observation.remote_migrations",
+    )?;
+    if !predecessor_migrations.is_empty() {
+        return Err(reconstruction_admission_drift(
+            "CURRENT reconstruction executor admission requires an exactly empty predecessor ledger",
+        ));
+    }
+
+    let expected_post_state = plan
+        .get("expected_post_state")
+        .and_then(Value::as_object)
+        .ok_or_else(|| {
+            reconstruction_admission_drift(
+                "prepared CURRENT reconstruction is missing expected_post_state",
+            )
+        })?;
+    let expected_ledger_migrations = reconstruction_string_array(
+        expected_post_state.get("ledger_migrations"),
+        "expected_post_state.ledger_migrations",
+    )?;
+    let repository_identity_sha256 =
+        reconstruction_plan_string(plan, "repository_identity_sha256")?;
+    let construction_sha256 = reconstruction_plan_string(plan, "construction_sha256")?;
+    let target_schema_revision = reconstruction_plan_string(plan, "target_schema_revision")?;
+    let provider_effect = subject
+        .allowed_provider_effects
+        .first()
+        .cloned()
+        .ok_or_else(|| {
+            reconstruction_admission_drift(
+                "CURRENT reconstruction has no exact provider effect for executor admission",
+            )
+        })?;
+    if subject.allowed_provider_effects.len() != 1
+        || provider_effect != "D1_BOOTSTRAP_CURRENT_EXACT_CONSTRUCTION"
+    {
+        return Err(reconstruction_admission_drift(
+            "CURRENT reconstruction executor admission provider effect drifted",
+        ));
+    }
+
+    let execution_plan = SealedReconstructionExecutionPlan {
+        schema_version: 1,
+        kind: "D1_CURRENT_FRESH_ZERO_RECONSTRUCTION".to_owned(),
+        mode: "read-only".to_owned(),
+        mutation_executed: false,
+        component: "catalog".to_owned(),
+        allowed: true,
+        provider_effect,
+        predecessor_ledger_sha256: predecessor_ledger_sha256.to_owned(),
+        predecessor_migrations,
+        repository_identity_sha256: repository_identity_sha256.to_owned(),
+        construction_sha256: construction_sha256.to_owned(),
+        target_schema_revision: target_schema_revision.to_owned(),
+        apply_required: !expected_ledger_migrations.is_empty(),
+        expected_ledger_migrations,
+    };
+    if !execution_plan.apply_required {
+        return Err(reconstruction_admission_drift(
+            "CURRENT reconstruction executor admission cannot seal an empty target ledger",
+        ));
+    }
+
+    Ok(ReconstructionExecutorAdmissionBinding {
+        schema_version: EXECUTOR_ADMISSION_SCHEMA_VERSION,
+        status: "RECONSTRUCTION_EXECUTOR_ADMISSION_VERIFIED".to_owned(),
+        mode: "read-only".to_owned(),
+        authorization_consumed: false,
+        mutation_executed: false,
+        provider_mutation_executed: false,
+        operation_id: authorization.transaction_id,
+        authorization_digest: authorization.authorization_digest,
+        source_sha: expectation.source_sha.clone(),
+        tree_sha: expectation.tree_sha.clone(),
+        component: "catalog".to_owned(),
+        target: expectation.target.clone(),
+        phase: expectation.phase,
+        evaluated_at_unix_seconds,
+        execution_plan,
+    })
+}
+
 pub fn serialize_executor_admission(binding: &ExecutorAdmissionBinding) -> Result<String, D1Error> {
     let value = serde_json::to_value(binding).map_err(|error| {
         D1Error::new(format!(
             "cannot serialize executor admission binding: {error}"
+        ))
+    })?;
+    crate::canonical::canonical_json(&value).map_err(D1Error::new)
+}
+
+pub fn serialize_current_reconstruction_executor_admission(
+    binding: &ReconstructionExecutorAdmissionBinding,
+) -> Result<String, D1Error> {
+    let value = serde_json::to_value(binding).map_err(|error| {
+        D1Error::new(format!(
+            "cannot serialize CURRENT reconstruction executor admission binding: {error}"
         ))
     })?;
     crate::canonical::canonical_json(&value).map_err(D1Error::new)
@@ -177,6 +387,21 @@ fn admission_drift(summary: impl Into<String>) -> D1Error {
     ))
 }
 
+fn reconstruction_admission_drift(summary: impl Into<String>) -> D1Error {
+    D1Error::blocked(GateResult::blocked(
+        "EXECUTOR_ADMISSION",
+        "d1.executor_admission.reconstruction_identity",
+        "SOURCE_TREE_RECONSTRUCTION_DRIFT",
+        summary,
+        Some(
+            "exact immutable prepared CURRENT reconstruction identity equal to the executor admission expectation"
+                .to_owned(),
+        ),
+        None,
+        RECONSTRUCTION_ADMISSION_DRIFT_REMEDIATION,
+    ))
+}
+
 fn validate_component(component: &str) -> Result<(), D1Error> {
     if !matches!(component, "catalog" | "resolver") {
         return Err(admission_drift(
@@ -184,6 +409,62 @@ fn validate_component(component: &str) -> Result<(), D1Error> {
         ));
     }
     Ok(())
+}
+
+fn validate_reconstruction_expectation(
+    expectation: &ExecutorAdmissionExpectation,
+) -> Result<(), D1Error> {
+    if validate_sha256(&expectation.transaction_id, "expected_transaction_id").is_err()
+        || validate_git_object_id(&expectation.source_sha, "expected_source_sha").is_err()
+        || validate_git_object_id(&expectation.tree_sha, "expected_tree_sha").is_err()
+        || validate_target(&expectation.target).is_err()
+    {
+        return Err(reconstruction_admission_drift(
+            "CURRENT reconstruction executor expectation has malformed identity fields",
+        ));
+    }
+    if expectation.component != "catalog" {
+        return Err(reconstruction_admission_drift(
+            "CURRENT reconstruction executor component must be exactly catalog",
+        ));
+    }
+    Ok(())
+}
+
+fn reconstruction_plan_string<'a>(
+    plan: &'a serde_json::Map<String, Value>,
+    field: &str,
+) -> Result<&'a str, D1Error> {
+    plan.get(field)
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| {
+            reconstruction_admission_drift(format!(
+                "CURRENT reconstruction executor admission is missing {field}"
+            ))
+        })
+}
+
+fn reconstruction_string_array(value: Option<&Value>, label: &str) -> Result<Vec<String>, D1Error> {
+    let values = value.and_then(Value::as_array).ok_or_else(|| {
+        reconstruction_admission_drift(format!(
+            "CURRENT reconstruction executor admission {label} must be an array"
+        ))
+    })?;
+    values
+        .iter()
+        .map(|value| {
+            value
+                .as_str()
+                .filter(|value| !value.is_empty())
+                .map(str::to_owned)
+                .ok_or_else(|| {
+                    reconstruction_admission_drift(format!(
+                        "CURRENT reconstruction executor admission {label} entries must be non-empty strings"
+                    ))
+                })
+        })
+        .collect()
 }
 
 fn validate_target(target: &TargetIdentity) -> Result<(), D1Error> {
