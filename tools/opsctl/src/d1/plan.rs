@@ -165,6 +165,26 @@ pub(super) fn evaluate(
             allowed: false,
         });
     };
+
+    let contracts = post_epoch_slice(authority, remote_count, target_count)?;
+    let current_supports_remote = runtime_supports_remote(authority, current, remote_count)?;
+    if !current_supports_remote
+        && same_schema_contract(current, target)
+        && canonical_forward_convergence_set(&contracts)
+    {
+        return Ok(Evaluation {
+            ledger_state: state,
+            decision: Decision::MigrationRequired,
+            remote_revision: remote_names.last().cloned(),
+            target_revision: target.target_schema_revision.clone(),
+            planned_migrations,
+            planned_contracts,
+            reason_codes: vec!["CURRENT_TARGET_CANONICAL_FORWARD_CONVERGENCE".to_owned()],
+            rollback_context_complete: false,
+            allowed: true,
+        });
+    }
+
     let Some(known_good) = known_good else {
         return Ok(Evaluation {
             ledger_state: state,
@@ -179,7 +199,7 @@ pub(super) fn evaluate(
         });
     };
 
-    if !runtime_supports_remote(authority, current, remote_count)? {
+    if !current_supports_remote {
         return Ok(Evaluation {
             ledger_state: state,
             decision: Decision::RecoveryRequired,
@@ -193,7 +213,6 @@ pub(super) fn evaluate(
         });
     }
 
-    let contracts = post_epoch_slice(authority, remote_count, target_count)?;
     if let Some(missing) = missing_contract_precondition(&contracts, preconditions) {
         return Ok(Evaluation {
             ledger_state: state,
@@ -256,6 +275,25 @@ pub(super) fn evaluate(
         rollback_context_complete: true,
         allowed,
     })
+}
+
+fn same_schema_contract(left: &ReleaseSchemaContract, right: &ReleaseSchemaContract) -> bool {
+    left.database_component == right.database_component
+        && left.target_schema_revision == right.target_schema_revision
+        && left.supported_schema_min == right.supported_schema_min
+        && left.supported_schema_max == right.supported_schema_max
+        && left.migration_history_digest == right.migration_history_digest
+        && left.compatibility_policy_digest == right.compatibility_policy_digest
+}
+
+fn canonical_forward_convergence_set(contracts: &[&MigrationContract]) -> bool {
+    !contracts.is_empty()
+        && contracts.iter().all(|contract| {
+            contract.migration_class != MigrationClass::Contract
+                && !contract.destructive
+                && !contract.fail_forward_required
+                && contract.rollout_order != RolloutOrder::SeparateContractRelease
+        })
 }
 
 fn post_epoch_slice(

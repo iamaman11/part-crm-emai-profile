@@ -109,6 +109,39 @@ Wrangler is pinned to `4.94.0` for the accepted control plane. Changing it is a
 compatibility change and must rerun the complete migration suite and relevant
 provider-path evidence before the changed path is accepted.
 
+### 5.1 Pre-Production canonical convergence
+
+Before the first accepted Production release, a historical non-Production
+runtime/schema/Release Set state is provenance, not a compatibility obligation.
+Ordinary staging drift converges to the current canonical target; it must not
+select an older runtime or Release Set merely to make stale staging state usable.
+
+```text
+pre-Production historical compatibility obligation = 0
+PREPROD_REMEDIATION_TARGET = CURRENT_CANONICAL_DESIRED_STATE
+```
+
+For D1, the typed natural owner may admit `CURRENT_TARGET_CANONICAL_FORWARD_CONVERGENCE`
+only when all of the following are true:
+
+- the observed ledger is a canonical known prefix;
+- the deployed current schema contract equals the current target schema contract;
+- every pending migration is additive/non-destructive;
+- no pending migration is `CONTRACT`, fail-forward, or `SEPARATE_CONTRACT_RELEASE`;
+- the exact planned target comes from the current release/schema authority, not
+  from a previous/known-good/historical release selected as remediation.
+
+This rule does not weaken data-safety recovery. Diverged/unknown/corrupt ledgers,
+destructive or CONTRACT transitions, missing required preconditions, identity or
+policy drift, and ambiguous provider state remain fail-closed. Time Travel restore
+remains a separately authorized durable-data recovery capability; it is not the
+ordinary remedy for pre-Production environment drift.
+
+After a first Production acceptance, backward/rolling compatibility may exist only
+through a separate bounded current contract naming its real consumer or durable
+obligation, supported versions/window, owner, tests and retirement condition.
+Historical implementation alone never creates that obligation.
+
 ## 6. Permanent Migration Operations Contract
 
 The accepted TX-1 through TX-7 result is permanent architecture meaning, not a
