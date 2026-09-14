@@ -22,6 +22,8 @@ mod model;
 pub mod operator_outcome;
 #[path = "d1/plan.rs"]
 mod plan;
+#[path = "d1/reconstruction.rs"]
+mod reconstruction;
 #[path = "d1/rollback_schema_tests.rs"]
 mod rollback_schema_tests;
 #[path = "d1/status.rs"]
@@ -54,6 +56,7 @@ pub use execution_post_state::{
     serialize_execution_post_state_verification, verify_execution_post_state,
 };
 pub use model::{D1Action, D1Error, D1RunRequest};
+pub use reconstruction::D1CurrentReconstructionPlanRequest;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct D1ReleaseSchemaIdentity {
@@ -174,6 +177,12 @@ pub fn run(request: D1RunRequest<'_>) -> Result<String, D1Error> {
         &preconditions,
     )?;
     serialize_evaluation(&authority, request.action, evaluation)
+}
+
+pub fn current_reconstruction_plan(
+    request: D1CurrentReconstructionPlanRequest<'_>,
+) -> Result<String, D1Error> {
+    reconstruction::plan(request)
 }
 
 pub fn contract_transition(request: D1ContractTransitionRequest<'_>) -> Result<String, D1Error> {
