@@ -200,7 +200,10 @@ fn reconstruction_executor_admission_seals_exact_read_only_bootstrap_operation()
         first.execution_plan.provider_effect,
         "D1_BOOTSTRAP_CURRENT_EXACT_CONSTRUCTION"
     );
-    assert_eq!(first.execution_plan.predecessor_migrations, Vec::<String>::new());
+    assert_eq!(
+        first.execution_plan.predecessor_migrations,
+        Vec::<String>::new()
+    );
     assert_eq!(
         first.execution_plan.target_schema_revision,
         projection["plan"]["target_schema_revision"]
@@ -237,7 +240,10 @@ fn reconstruction_executor_admission_rejects_checkout_identity_target_component_
     )
     .err()
     .ok_or_else(|| std::io::Error::other("source drift unexpectedly passed"))?;
-    assert_eq!(reason_code(&error), Some("SOURCE_TREE_RECONSTRUCTION_DRIFT"));
+    assert_eq!(
+        reason_code(&error),
+        Some("SOURCE_TREE_RECONSTRUCTION_DRIFT")
+    );
 
     let mut wrong_tree = expectation(&projection)?;
     wrong_tree.tree_sha = "bb".repeat(20);
@@ -343,7 +349,10 @@ fn reconstruction_executor_admission_rejects_authorization_scope_and_projection_
     )
     .err()
     .ok_or_else(|| std::io::Error::other("consumed reconstruction unexpectedly passed"))?;
-    assert_eq!(reason_code(&error), Some("SOURCE_TREE_RECONSTRUCTION_DRIFT"));
+    assert_eq!(
+        reason_code(&error),
+        Some("SOURCE_TREE_RECONSTRUCTION_DRIFT")
+    );
 
     let mut nonempty = projection.clone();
     nonempty["plan"]["provider_observation"]["remote_migrations"] =
