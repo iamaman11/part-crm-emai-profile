@@ -94,7 +94,9 @@ pub(super) fn plan(request: D1CurrentReconstructionPlanRequest<'_>) -> Result<St
     let construction_envelope = repository
         .get("fresh_zero_construction")
         .and_then(Value::as_object)
-        .ok_or_else(|| D1Error::new("typed D1 repository projection is missing fresh_zero_construction"))?;
+        .ok_or_else(|| {
+            D1Error::new("typed D1 repository projection is missing fresh_zero_construction")
+        })?;
     if construction_envelope.len() != 2
         || !construction_envelope.contains_key("construction")
         || !construction_envelope.contains_key("construction_sha256")
@@ -146,7 +148,9 @@ pub(super) fn plan(request: D1CurrentReconstructionPlanRequest<'_>) -> Result<St
     let migration_sources = construction
         .get("migration_sources")
         .and_then(Value::as_array)
-        .ok_or_else(|| D1Error::new("typed D1 fresh-zero construction migration_sources are missing"))?;
+        .ok_or_else(|| {
+            D1Error::new("typed D1 fresh-zero construction migration_sources are missing")
+        })?;
     if migration_sources.is_empty() {
         return Err(D1Error::new(
             "typed D1 fresh-zero construction must materialize at least one migration",
@@ -158,7 +162,9 @@ pub(super) fn plan(request: D1CurrentReconstructionPlanRequest<'_>) -> Result<St
             .get("migration_file")
             .and_then(Value::as_str)
             .filter(|value| !value.is_empty())
-            .ok_or_else(|| D1Error::new("typed D1 fresh-zero migration source is missing migration_file"))?;
+            .ok_or_else(|| {
+                D1Error::new("typed D1 fresh-zero migration source is missing migration_file")
+            })?;
         required_sha256(source.get("sha256"), "fresh-zero migration source sha256")?;
         if expected_ledger.iter().any(|value| value == migration_file) {
             return Err(D1Error::new(
@@ -175,7 +181,9 @@ pub(super) fn plan(request: D1CurrentReconstructionPlanRequest<'_>) -> Result<St
     let deferred_revisions = construction
         .get("deferred_revisions")
         .and_then(Value::as_array)
-        .ok_or_else(|| D1Error::new("typed D1 fresh-zero construction deferred_revisions are missing"))?;
+        .ok_or_else(|| {
+            D1Error::new("typed D1 fresh-zero construction deferred_revisions are missing")
+        })?;
     for deferred in deferred_revisions {
         let deferred = deferred
             .as_str()
@@ -196,7 +204,9 @@ pub(super) fn plan(request: D1CurrentReconstructionPlanRequest<'_>) -> Result<St
             })
         })
         .and_then(|component| component.get("release_schema_contract"))
-        .ok_or_else(|| D1Error::new("typed D1 repository projection is missing Catalog release contract"))?;
+        .ok_or_else(|| {
+            D1Error::new("typed D1 repository projection is missing Catalog release contract")
+        })?;
     validate_release_binding(&release, projected_release)?;
     if release.target_schema_revision != target_schema_revision {
         return Err(D1Error::new(
@@ -262,10 +272,22 @@ fn validate_release_binding(
 ) -> Result<(), D1Error> {
     let expected = [
         ("database_component", release.database_component.as_str()),
-        ("target_schema_revision", release.target_schema_revision.as_str()),
-        ("supported_schema_min", release.supported_schema_min.as_str()),
-        ("supported_schema_max", release.supported_schema_max.as_str()),
-        ("migration_history_digest", release.migration_history_digest.as_str()),
+        (
+            "target_schema_revision",
+            release.target_schema_revision.as_str(),
+        ),
+        (
+            "supported_schema_min",
+            release.supported_schema_min.as_str(),
+        ),
+        (
+            "supported_schema_max",
+            release.supported_schema_max.as_str(),
+        ),
+        (
+            "migration_history_digest",
+            release.migration_history_digest.as_str(),
+        ),
         (
             "compatibility_policy_digest",
             release.compatibility_policy_digest.as_str(),
