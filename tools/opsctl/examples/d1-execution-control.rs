@@ -1,6 +1,10 @@
 #![forbid(unsafe_code)]
 
 use opsctl::canonical::{canonical_json, parse_strict_json};
+use opsctl::d1::execution_control::reconstruction_post_state::{
+    serialize_current_reconstruction_post_state_verification,
+    verify_current_reconstruction_post_state,
+};
 use opsctl::d1::execution_control::{
     ExecutionEventInput, ExecutionReceipt, ExecutionReceiptSeed, TargetFenceLease,
     TargetFenceLeaseInput, TargetFenceObservation, acquire_target_fence, append_execution_event,
@@ -10,6 +14,7 @@ use opsctl::d1::execution_control::{
 use opsctl::d1::transaction::{ProviderObservationInput, TransactionProjection};
 use opsctl::d1::{serialize_execution_post_state_verification, verify_execution_post_state};
 use serde::de::DeserializeOwned;
+use serde_json::Value;
 use std::env;
 use std::error::Error;
 use std::ffi::OsString;
@@ -43,6 +48,7 @@ impl Command {
 #[derive(Default)]
 struct Args {
     input: Option<PathBuf>,
+    reconstruction: Option<PathBuf>,
     lease: Option<PathBuf>,
     observation: Option<PathBuf>,
     seed: Option<PathBuf>,
@@ -96,6 +102,11 @@ fn parse_args() -> Result<(Command, Args), Box<dyn Error>> {
         match flag {
             "--input" => set_once(
                 &mut args.input,
+                PathBuf::from(next_value(&mut iterator, flag)?),
+                flag,
+            )?,
+            "--reconstruction" => set_once(
+                &mut args.reconstruction,
                 PathBuf::from(next_value(&mut iterator, flag)?),
                 flag,
             )?,
@@ -156,6 +167,10 @@ fn reject_present<T>(value: &Option<T>, flag: &str, command: &str) -> Result<(),
     Ok(())
 }
 
+fn reject_reconstruction(args: &Args, command: &str) -> Result<(), Box<dyn Error>> {
+    reject_present(&args.reconstruction, "--reconstruction", command)
+}
+
 fn reject_evaluated_at(args: &Args, command: &str) -> Result<(), Box<dyn Error>> {
     reject_present(
         &args.evaluated_at_unix_seconds,
@@ -176,6 +191,7 @@ where
 }
 
 fn acquire(args: Args) -> Result<String, Box<dyn Error>> {
+    reject_reconstruction(&args, "acquire-fence")?;
     reject_present(&args.lease, "--lease", "acquire-fence")?;
     reject_present(&args.observation, "--observation", "acquire-fence")?;
     reject_present(&args.seed, "--seed", "acquire-fence")?;
@@ -199,6 +215,7 @@ fn acquire(args: Args) -> Result<String, Box<dyn Error>> {
 }
 
 fn verify(args: Args) -> Result<String, Box<dyn Error>> {
+    reject_reconstruction(&args, "verify-fence")?;
     reject_present(&args.input, "--input", "verify-fence")?;
     reject_present(&args.seed, "--seed", "verify-fence")?;
     reject_present(&args.receipt, "--receipt", "verify-fence")?;
@@ -225,6 +242,7 @@ fn verify(args: Args) -> Result<String, Box<dyn Error>> {
 }
 
 fn initialize(args: Args) -> Result<String, Box<dyn Error>> {
+    reject_reconstruction(&args, "initialize-receipt")?;
     reject_present(&args.input, "--input", "initialize-receipt")?;
     reject_present(&args.lease, "--lease", "initialize-receipt")?;
     reject_present(&args.observation, "--observation", "initialize-receipt")?;
@@ -245,6 +263,7 @@ fn initialize(args: Args) -> Result<String, Box<dyn Error>> {
 }
 
 fn append(args: Args) -> Result<String, Box<dyn Error>> {
+    reject_reconstruction(&args, "append-receipt")?;
     reject_present(&args.input, "--input", "append-receipt")?;
     reject_present(&args.lease, "--lease", "append-receipt")?;
     reject_present(&args.observation, "--observation", "append-receipt")?;
@@ -269,6 +288,7 @@ fn append(args: Args) -> Result<String, Box<dyn Error>> {
 }
 
 fn inspect(args: Args) -> Result<String, Box<dyn Error>> {
+    reject_reconstruction(&args, "inspect-receipt")?;
     reject_present(&args.input, "--input", "inspect-receipt")?;
     reject_present(&args.lease, "--lease", "inspect-receipt")?;
     reject_present(&args.observation, "--observation", "inspect-receipt")?;
@@ -304,8 +324,9 @@ fn verify_post_state(args: Args) -> Result<String, Box<dyn Error>> {
         "--authorized-at-unix-seconds",
         "verify-post-state",
     )?;
-    let transaction: TransactionProjection =
-        read_typed(required(args.input, "--input")?, "prepared transaction")?;
+    if args.input.is_some() == args.reconstruction.is_some() {
+        return Err("verify-post-state requires exactly one of --input or --reconstruction".into());
+    }
     let receipt: ExecutionReceipt = read_typed(
         required(args.receipt, "--receipt")?,
         "terminal execution receipt",
@@ -314,16 +335,31 @@ fn verify_post_state(args: Args) -> Result<String, Box<dyn Error>> {
         required(args.observation, "--observation")?,
         "post-state provider observation",
     )?;
-    match verify_execution_post_state(
-        &transaction,
-        &receipt,
-        &observation,
-        required(
-            args.evaluated_at_unix_seconds,
-            "--evaluated-at-unix-seconds",
-        )?,
-    ) {
-        Ok(verification) => Ok(serialize_execution_post_state_verification(&verification)?),
+    let evaluated_at = required(
+        args.evaluated_at_unix_seconds,
+        "--evaluated-at-unix-seconds",
+    )?;
+    let result = if let Some(input) = args.input {
+        let transaction: TransactionProjection = read_typed(input, "prepared transaction")?;
+        verify_execution_post_state(&transaction, &receipt, &observation, evaluated_at)
+            .and_then(|verification| serialize_execution_post_state_verification(&verification))
+    } else {
+        let reconstruction: Value = read_typed(
+            required(args.reconstruction, "--reconstruction")?,
+            "prepared CURRENT reconstruction",
+        )?;
+        verify_current_reconstruction_post_state(
+            &reconstruction,
+            &receipt,
+            &observation,
+            evaluated_at,
+        )
+        .and_then(|verification| {
+            serialize_current_reconstruction_post_state_verification(&verification)
+        })
+    };
+    match result {
+        Ok(output) => Ok(output),
         Err(error) => {
             println!("{}", canonical_json(error.gate_result_json())?);
             Err(error.into())
