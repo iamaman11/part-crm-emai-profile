@@ -1,3 +1,4 @@
+#[path = "execution_control/reconstruction_post_state.rs"]
 pub mod reconstruction_post_state;
 
 use super::model::D1Error;
@@ -613,9 +614,8 @@ fn validate_transition(
         (Authorized, PrewriteFencePass | PrewriteAborted) => true,
         (PrewriteAborted, FailedNoEffect) => true,
         (PrewriteFencePass, MutationStarted | PostObserved | FailedNoEffect) => true,
-        (MutationStarted, MigrationApplied | ReconstructionApplied | PostObserved | RecoveryRequired) => {
-            true
-        }
+        (MutationStarted, MigrationApplied | PostObserved | RecoveryRequired) => true,
+        (MutationStarted, ReconstructionApplied) => true,
         (MigrationApplied, MigrationApplied | PostObserved | RecoveryRequired) => true,
         (ReconstructionApplied, PostObserved | RecoveryRequired) => true,
         (PostObserved, Verified | RecoveryRequired) => true,
