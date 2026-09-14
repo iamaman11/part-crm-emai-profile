@@ -2,6 +2,7 @@ use opsctl::d1::{self, D1Action, D1RunRequest};
 use serde_json::{Value, json};
 use std::error::Error;
 use std::fs;
+use std::io;
 use std::path::PathBuf;
 
 fn repo_root() -> PathBuf {
@@ -20,14 +21,17 @@ fn current_catalog_release_contract(root: &std::path::Path) -> Result<Value, Box
     let projection: Value = serde_json::from_str(&d1::repository_projection(root)?)?;
     let components = projection["components"]
         .as_array()
-        .ok_or("typed D1 repository projection is missing components")?;
+        .ok_or_else(|| io::Error::other("typed D1 repository projection is missing components"))?;
     let catalog = components
         .iter()
         .find(|component| component["component_id"] == "catalog")
-        .ok_or("typed D1 repository projection is missing Catalog")?;
+        .ok_or_else(|| io::Error::other("typed D1 repository projection is missing Catalog"))?;
     let contract = catalog["release_schema_contract"].clone();
     if !contract.is_object() {
-        return Err("typed Catalog projection is missing release_schema_contract".into());
+        return Err(io::Error::other(
+            "typed Catalog projection is missing release_schema_contract",
+        )
+        .into());
     }
     Ok(contract)
 }
