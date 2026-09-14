@@ -22,9 +22,20 @@ SYNTHETIC_FEATURE = "synthetic-test-bin"
 
 REQUIRED_MAIN_MARKERS = (
     "use bridge_domain::ClaimUri;",
+    "use profile_bridge::device_pairing::{",
+    "DevicePairingCompleteUri",
+    "DevicePairingStartUri",
+    "PAIRING_COMPLETE_URI_PREFIX",
+    "PAIRING_START_URI_PREFIX",
+    "run_pairing_complete",
+    "run_pairing_start",
     "use profile_bridge::shipping_composition::run_claim;",
     "HANDOFF_ACTIVATE_ARGUMENT",
     "HANDOFF_ARRIVAL_ARGUMENT",
+    "DevicePairingStartUri::parse(value)",
+    "DevicePairingCompleteUri::parse(value)",
+    "run_pairing_start(&uri)",
+    "run_pairing_complete(&uri)",
     "ClaimUri::parse(&argument)",
     "run_claim(&claim)",
     "run_delivery_command(ShippingDeliveryCommand::ActivateStaged)",
@@ -32,7 +43,9 @@ REQUIRED_MAIN_MARKERS = (
 )
 
 REQUIRED_COMPOSITION_MARKERS = (
-    "WindowsSchannelMachineHttp::from_system(",
+    "WindowsDeviceApplicationBinding::open(",
+    "WindowsDeviceApplication::from_system(",
+    ".transport()",
     "WindowsSignedGenerationObjectGet::from_system(",
     "WindowsSignedGenerationObjectPut::from_system(",
     "ControlPlaneEnrollment::new(",
@@ -98,6 +111,10 @@ FORBIDDEN_COMPOSITION_MARKERS = (
     "FakeProcessControl",
     "PROFILE_BRIDGE_RUNTIME_ROOT",
     "PROFILE_BRIDGE_RUNTIME_RELEASE_ID",
+    "PROFILE_BRIDGE_DEVICE_ID",
+    "PROFILE_BRIDGE_MACHINE_CERT_SHA1",
+    "WindowsMtlsClientIdentity",
+    "WindowsSchannelMachineHttp::from_system(",
     "FilesystemRuntimeBundleSelection::open(",
     "std::process::Command",
     "Command::new(",
@@ -243,6 +260,7 @@ def write_fixture(root: Path) -> None:
     main.parent.mkdir(parents=True, exist_ok=True)
     main.write_text(
         "use bridge_domain::ClaimUri;\n"
+        "use profile_bridge::device_pairing::{DevicePairingCompleteUri, DevicePairingStartUri, PAIRING_COMPLETE_URI_PREFIX, PAIRING_START_URI_PREFIX, run_pairing_complete, run_pairing_start};\n"
         "use profile_bridge::shipping_composition::run_claim;\n"
         "use profile_bridge::shipping_composition::{ShippingDeliveryCommand, run_delivery_command};\n"
         "use profile_bridge::windows_delivery_handoff::{HANDOFF_ACTIVATE_ARGUMENT, HANDOFF_ARRIVAL_ARGUMENT};\n"
@@ -250,6 +268,14 @@ def write_fixture(root: Path) -> None:
         "    match argument.as_str() {\n"
         "        HANDOFF_ACTIVATE_ARGUMENT => run_delivery_command(ShippingDeliveryCommand::ActivateStaged).map_err(|_| ())?,\n"
         "        HANDOFF_ARRIVAL_ARGUMENT => run_delivery_command(ShippingDeliveryCommand::HandoffArrived).map_err(|_| ())?,\n"
+        "        value if value.starts_with(PAIRING_START_URI_PREFIX) => {\n"
+        "            let uri = DevicePairingStartUri::parse(value).map_err(|_| ())?;\n"
+        "            run_pairing_start(&uri).map_err(|_| ())?;\n"
+        "        }\n"
+        "        value if value.starts_with(PAIRING_COMPLETE_URI_PREFIX) => {\n"
+        "            let uri = DevicePairingCompleteUri::parse(value).map_err(|_| ())?;\n"
+        "            run_pairing_complete(&uri).map_err(|_| ())?;\n"
+        "        }\n"
         "        _ => {\n"
         "            let claim = ClaimUri::parse(&argument).map_err(|_| ())?;\n"
         "            run_claim(&claim).map_err(|_| ())?;\n"
@@ -261,7 +287,9 @@ def write_fixture(root: Path) -> None:
     )
     composition = root / PRODUCTION_COMPOSITION
     composition.write_text(
-        "// WindowsSchannelMachineHttp::from_system(\n"
+        "// WindowsDeviceApplicationBinding::open(\n"
+        "// WindowsDeviceApplication::from_system(\n"
+        "// .transport()\n"
         "// WindowsSignedGenerationObjectGet::from_system(\n"
         "// WindowsSignedGenerationObjectPut::from_system(\n"
         "// ControlPlaneEnrollment::new(\n"
@@ -369,6 +397,26 @@ def self_test() -> None:
 
         main.write_text(
             safe_main.replace(
+                "run_pairing_start(&uri).map_err(|_| ())?;",
+                "Ok(())?;",
+            ),
+            encoding="utf-8",
+        )
+        expect_rejected(root, "missing bounded device pairing start command")
+        main.write_text(safe_main, encoding="utf-8")
+
+        main.write_text(
+            safe_main.replace(
+                "run_pairing_complete(&uri).map_err(|_| ())?;",
+                "Ok(())?;",
+            ),
+            encoding="utf-8",
+        )
+        expect_rejected(root, "missing bounded device pairing completion command")
+        main.write_text(safe_main, encoding="utf-8")
+
+        main.write_text(
+            safe_main.replace(
                 "run_delivery_command(ShippingDeliveryCommand::ActivateStaged).map_err(|_| ())?",
                 "Ok(())?",
             ),
@@ -409,6 +457,20 @@ def self_test() -> None:
         )
         expect_rejected(root, "synthetic runtime import")
         main.write_text(safe_main, encoding="utf-8")
+
+        composition.write_text(
+            safe_composition.replace("// WindowsDeviceApplication::from_system(\n", ""),
+            encoding="utf-8",
+        )
+        expect_rejected(root, "missing device application session boundary")
+        composition.write_text(safe_composition, encoding="utf-8")
+
+        composition.write_text(
+            safe_composition + "// WindowsSchannelMachineHttp::from_system(\n",
+            encoding="utf-8",
+        )
+        expect_rejected(root, "legacy Schannel machine caller reintroduced")
+        composition.write_text(safe_composition, encoding="utf-8")
 
         composition.write_text(
             safe_composition.replace("// ManagedCamouhostProcess::pair(\n", ""),
@@ -518,8 +580,9 @@ def main() -> int:
             validate(args.root.resolve())
             print(
                 "CAP-01 Profile Bridge keeps one real governed authoritative shipping composition; "
-                "the same installed Bridge delegates one normal claim path plus two bounded delivery commands, "
-                "the running Bridge is bound through persisted active delivery state to one exact staged runtime, "
+                "the same installed Bridge delegates one normal claim path, two bounded device-pairing commands and two bounded delivery commands, "
+                "the running Bridge is bound through a device-application session and persisted active delivery state to one exact staged runtime, "
+                "legacy Schannel/mTLS machine callers and caller-selected device identity are forbidden, "
                 "controlled close and canonical successor save are mandatory, caller-selected runtime predecessors are forbidden, "
                 "and synthetic executors remain production-unreachable."
             )

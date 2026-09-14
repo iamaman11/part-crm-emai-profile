@@ -1,4 +1,5 @@
 import { Link, createRoute, type AnyRoute } from '@tanstack/react-router';
+import { DevicePairingPanel } from './DevicePairingPanel';
 
 function DevicesPage() {
   return (
@@ -7,10 +8,12 @@ function DevicesPage() {
         <span className="eyebrow">Device / Bridge boundary</span>
         <h2>Device operations</h2>
         <p>
-          Device claim, heartbeat, generation upload and outcome endpoints are machine-authenticated
-          protocol surfaces. This operator UI does not impersonate a device or expose device credentials.
+          Device claim, heartbeat, generation upload and outcome endpoints remain machine-authenticated
+          protocol surfaces. Browser participation is limited to the explicit one-time authorization used
+          to bind a non-exportable Profile Bridge device key to the signed-in actor.
         </p>
       </section>
+      <DevicePairingPanel />
       <section className="workspace-grid">
         <article className="panel">
           <h3>Profile execution state</h3>

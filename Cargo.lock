@@ -742,6 +742,7 @@ dependencies = [
  "bridge-domain",
  "browser-execution-domain",
  "control-plane-contract",
+ "device-domain",
  "encrypted-generation-domain",
  "profile-platform-primitives",
  "runtime-bundle-domain",
@@ -749,6 +750,8 @@ dependencies = [
  "serde_json",
  "session-domain",
  "sha2",
+ "windows-device-key",
+ "zeroize",
 ]
 
 [[package]]
@@ -1158,6 +1161,10 @@ dependencies = [
  "js-sys",
  "wasm-bindgen",
 ]
+
+[[package]]
+name = "windows-device-key"
+version = "0.1.0"
 
 [[package]]
 name = "worker"

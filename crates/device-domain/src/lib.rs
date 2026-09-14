@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 
 pub mod authorization;
+pub mod bridge_request_proof;
 pub mod claim;
 pub mod id;
 pub mod job;
@@ -10,6 +11,11 @@ pub mod target;
 pub use authorization::{
     DeviceApplicationSession, DeviceApplicationSessionError, DeviceProofMessageError,
     device_proof_message_v1,
+};
+pub use bridge_request_proof::{
+    BRIDGE_REQUEST_PROOF_DIGEST_BYTES, BRIDGE_REQUEST_PROOF_MAX_LIFETIME_MS,
+    BRIDGE_REQUEST_PROOF_MAX_PATH_BYTES, BridgeRequestProofMessageError, BridgeRequestProofMethod,
+    bridge_request_proof_message_v1,
 };
 pub use claim::{DeviceClaim, DeviceClaimError, DeviceClaimSnapshot};
 pub use id::{DeviceClaimId, DeviceJobId};

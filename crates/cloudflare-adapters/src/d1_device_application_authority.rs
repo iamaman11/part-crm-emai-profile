@@ -192,6 +192,38 @@ WHERE session.tenant_id = ?
 LIMIT 2
 "#;
 
+const RESOLVE_ACTIVE_SESSION_BY_DIGEST: &str = r#"
+SELECT
+    session.tenant_id,
+    session.actor_id,
+    session.device_id,
+    session.user_auth_epoch,
+    session.device_binding_version,
+    session.issued_at_ms,
+    session.expires_at_ms
+FROM device_application_sessions AS session
+JOIN memberships AS membership
+  ON membership.tenant_id = session.tenant_id
+ AND membership.actor_id = session.actor_id
+ AND membership.status = 'ACTIVE'
+JOIN device_user_authorization_state AS auth
+  ON auth.tenant_id = session.tenant_id
+ AND auth.actor_id = session.actor_id
+ AND auth.auth_epoch = session.user_auth_epoch
+JOIN device_actor_bindings AS binding
+  ON binding.tenant_id = session.tenant_id
+ AND binding.actor_id = session.actor_id
+ AND binding.device_id = session.device_id
+ AND binding.version = session.device_binding_version
+ AND binding.status = 'ACTIVE'
+ AND binding.evidence_reference LIKE 'p256_spki_der:%'
+WHERE session.session_digest = ?
+  AND session.revoked_at_ms IS NULL
+  AND session.issued_at_ms <= ?
+  AND session.expires_at_ms > ?
+LIMIT 2
+"#;
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PairingProofMaterial {
     actor_id: ActorId,
@@ -719,6 +751,41 @@ impl D1DeviceApplicationAuthority {
             expires_at: unix_millis(row.expires_at_ms, "session expires_at")?,
         }))
     }
+
+    pub async fn resolve_active_session_by_digest(
+        &self,
+        session_digest: &str,
+        now: UnixMillis,
+    ) -> Result<Option<ActiveApplicationSession>> {
+        require_digest(session_digest, "session")?;
+        let now = sqlite_integer(now.value())?;
+        let rows = query!(
+            &self.database,
+            RESOLVE_ACTIVE_SESSION_BY_DIGEST,
+            session_digest,
+            now,
+            now,
+        )?
+        .all()
+        .await?
+        .results::<ActiveSessionRow>()?;
+        let Some(row) = unique_row(rows, "active application session")? else {
+            return Ok(None);
+        };
+        Ok(Some(ActiveApplicationSession {
+            tenant_id: TenantId::parse(row.tenant_id)
+                .map_err(|error| Error::RustError(error.to_string()))?,
+            actor_id: parse_actor(&row.actor_id)?,
+            device_id: parse_device(&row.device_id)?,
+            user_auth_epoch: positive_u64(row.user_auth_epoch, "session auth epoch")?,
+            device_binding_version: aggregate_version(
+                row.device_binding_version,
+                "session device binding",
+            )?,
+            issued_at: unix_millis(row.issued_at_ms, "session issued_at")?,
+            expires_at: unix_millis(row.expires_at_ms, "session expires_at")?,
+        }))
+    }
 }
 
 #[derive(Deserialize)]
@@ -885,7 +952,7 @@ mod tests {
     use super::{
         COMPLETE_PAIRING, COMPLETE_SESSION_RENEWAL, CREATE_AUTHORIZED_PAIRING_CHALLENGE,
         LOAD_ACTIVE_DEVICE, LOAD_PAIRING_PROOF, LOAD_SESSION_PROOF, RESOLVE_ACTIVE_SESSION,
-        hex_decode, require_digest,
+        RESOLVE_ACTIVE_SESSION_BY_DIGEST, hex_decode, require_digest,
     };
 
     #[test]
@@ -894,15 +961,25 @@ mod tests {
             LOAD_PAIRING_PROOF,
             LOAD_SESSION_PROOF,
             RESOLVE_ACTIVE_SESSION,
+            RESOLVE_ACTIVE_SESSION_BY_DIGEST,
         ] {
             assert!(sql.contains("memberships"));
             assert!(sql.contains("device_user_authorization_state"));
         }
         assert!(LOAD_SESSION_PROOF.contains("binding.status = 'ACTIVE'"));
-        assert!(RESOLVE_ACTIVE_SESSION.contains("binding.status = 'ACTIVE'"));
-        assert!(RESOLVE_ACTIVE_SESSION.contains("session.revoked_at_ms IS NULL"));
-        assert!(RESOLVE_ACTIVE_SESSION.contains("session.expires_at_ms > ?"));
+        for sql in [RESOLVE_ACTIVE_SESSION, RESOLVE_ACTIVE_SESSION_BY_DIGEST] {
+            assert!(sql.contains("binding.status = 'ACTIVE'"));
+            assert!(sql.contains("session.revoked_at_ms IS NULL"));
+            assert!(sql.contains("session.expires_at_ms > ?"));
+        }
         assert!(LOAD_ACTIVE_DEVICE.contains("p256_spki_der:%"));
+    }
+
+    #[test]
+    fn digest_only_session_resolution_does_not_require_caller_owned_tenant_identity() {
+        assert!(RESOLVE_ACTIVE_SESSION_BY_DIGEST.contains("WHERE session.session_digest = ?"));
+        assert!(!RESOLVE_ACTIVE_SESSION_BY_DIGEST.contains("session.tenant_id = ?"));
+        assert!(RESOLVE_ACTIVE_SESSION_BY_DIGEST.contains("LIMIT 2"));
     }
 
     #[test]

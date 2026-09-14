@@ -12,6 +12,10 @@ pub const DEVICE_SESSION_CHALLENGE_PATH_TEMPLATE: &str =
 pub const DEVICE_SESSION_COLLECTION_PATH_TEMPLATE: &str =
     "/api/v1/tenants/{tenantId}/devices/{deviceId}/sessions";
 
+pub const DEVICE_APPLICATION_SESSION_HEADER: &str = "X-Device-Application-Session";
+pub const DEVICE_REQUEST_PROOF_EXPIRES_HEADER: &str = "X-Device-Request-Proof-Expires-Ms";
+pub const DEVICE_REQUEST_PROOF_SIGNATURE_HEADER: &str = "X-Device-Request-Proof-Signature";
+
 pub const OPAQUE_TOKEN_HEX_LENGTH: usize = 64;
 pub const P256_SPKI_DER_HEX_LENGTH: usize = 182;
 pub const P256_SIGNATURE_P1363_HEX_LENGTH: usize = 128;
@@ -117,6 +121,7 @@ impl DeviceSessionRenewRequest {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct DeviceApplicationSessionProjection {
     pub session_token: String,
+    pub actor_id: String,
     pub device_id: String,
     pub expires_at_ms: u64,
 }
@@ -251,9 +256,10 @@ pub fn openapi_fragment() -> Value {
                 },
                 "DeviceApplicationSessionProjection": {
                     "type": "object", "additionalProperties": false,
-                    "required": ["sessionToken", "deviceId", "expiresAtMs"],
+                    "required": ["sessionToken", "actorId", "deviceId", "expiresAtMs"],
                     "properties": {
                         "sessionToken": token_schema(),
+                        "actorId": {"type": "string", "minLength": 8, "maxLength": 96, "pattern": "^[A-Za-z0-9_-]+$"},
                         "deviceId": {"type": "string"},
                         "expiresAtMs": {"type": "integer", "minimum": 1}
                     }
@@ -318,10 +324,12 @@ fn problem_response() -> Value {
 #[cfg(test)]
 mod tests {
     use super::{
-        DevicePairingAuthorizeRequest, DevicePairingCompleteRequest, DevicePairingCreateRequest,
-        DeviceSessionChallengeRequest, DeviceSessionRenewRequest, OPAQUE_TOKEN_HEX_LENGTH,
-        P256_SIGNATURE_P1363_HEX_LENGTH, P256_SPKI_DER_HEX_LENGTH,
+        DeviceApplicationSessionProjection, DevicePairingAuthorizeRequest,
+        DevicePairingCompleteRequest, DevicePairingCreateRequest, DeviceSessionChallengeRequest,
+        DeviceSessionRenewRequest, OPAQUE_TOKEN_HEX_LENGTH, P256_SIGNATURE_P1363_HEX_LENGTH,
+        P256_SPKI_DER_HEX_LENGTH,
     };
+    use serde_json::Value;
 
     #[test]
     fn transport_is_strict_and_keeps_raw_secrets_out_of_paths() {
@@ -360,6 +368,25 @@ mod tests {
     }
 
     #[test]
+    fn verified_session_projection_carries_restart_binding_but_challenge_does_not()
+    -> Result<(), serde_json::Error> {
+        let token = "a".repeat(OPAQUE_TOKEN_HEX_LENGTH);
+        let projection = DeviceApplicationSessionProjection {
+            session_token: token,
+            actor_id: "actor_01JSESSION".to_owned(),
+            device_id: "device_01JSESSION".to_owned(),
+            expires_at_ms: 100,
+        };
+        let json = serde_json::to_value(projection)?;
+        assert_eq!(
+            json.get("actorId").and_then(Value::as_str),
+            Some("actor_01JSESSION")
+        );
+        assert!(json.get("tenantId").is_none());
+        Ok(())
+    }
+
+    #[test]
     fn requests_reject_caller_owned_identity_and_unknown_fields() {
         let public_key = "b".repeat(P256_SPKI_DER_HEX_LENGTH);
         for forbidden in ["tenantId", "actorId", "authEpoch", "bindingVersion"] {
@@ -367,6 +394,20 @@ mod tests {
                 r#"{{"deviceId":"device_01JPAIR","publicKeySpkiDerHex":"{public_key}","{forbidden}":"caller-owned"}}"#
             );
             assert!(serde_json::from_str::<DevicePairingCreateRequest>(&body).is_err());
+        }
+    }
+
+    #[test]
+    fn shipping_request_proof_headers_are_explicit_and_do_not_carry_identity() {
+        for header in [
+            super::DEVICE_APPLICATION_SESSION_HEADER,
+            super::DEVICE_REQUEST_PROOF_EXPIRES_HEADER,
+            super::DEVICE_REQUEST_PROOF_SIGNATURE_HEADER,
+        ] {
+            assert!(header.starts_with("X-Device-"));
+            assert!(!header.contains("Tenant"));
+            assert!(!header.contains("Actor"));
+            assert!(!header.contains("User"));
         }
     }
 }
