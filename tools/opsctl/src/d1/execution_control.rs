@@ -601,6 +601,7 @@ fn validate_event_input(input: &ExecutionEventInput) -> Result<(), D1Error> {
     }
     Ok(())
 }
+
 fn validate_transition(
     previous: ExecutionEventKind,
     input: &ExecutionEventInput,
