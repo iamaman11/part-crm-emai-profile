@@ -181,6 +181,9 @@ natural owners. The following are permanent invariants:
 ```text
 operator-visible ordinary D1 entry surfaces = 1
 manual internal JSON assembly = 0
+manual TransactionId input = 0
+manual issue/comment command as operator procedure = 0
+manual current-stage issue selection = 0
 second D1 migration semantic owner = 0
 second ordinary D1 migration mutation owner = 0
 mutable migration status database = 0
@@ -188,7 +191,43 @@ checker-for-checker = 0
 automatic destructive restore = 0
 post-authorization replanning = 0
 Production authorization implied by migration tooling = 0
+HUMAN_INTERACTION_BUDGET_PER_AUTHORIZED_OPERATION <= ONE_SIMPLE_UI_ACTION
 ```
+
+### 6.1 One-action operator UX
+
+The security boundary and the human UX are separate. Exact authorization remains
+transaction-scoped, immutable, freshness-bounded and auditable, but those machine
+facts are never operator-entered inputs.
+
+The ordinary user-facing contract is:
+
+```text
+machine-capable integration available
+-> system dispatches the zero-input D1 Standard Operator itself
+
+machine-capable integration unavailable
+-> present exactly one direct link to the existing D1 Standard Operator Actions UI
+-> user performs one simple `Run workflow` action
+-> no copied command, issue number, TransactionId, JSON, digest or provider input
+```
+
+Canonical fallback UI surface:
+`https://github.com/iamaman11/part-crm-emai-profile/actions/workflows/d1-operator.yml`
+
+`d1-operator-comment-router.yml` is automation transport/recovery transport only.
+It is not a human fallback procedure and users must never be instructed to choose
+an Issue, paste `/d1 operator`, copy a TransactionId, construct authorization JSON,
+or select an internal migration owner. If a connected integration can create the
+exact durable authorization record and dispatch the canonical operator, it does so
+without an extra user action. If it cannot dispatch, the only user fallback is the
+single canonical workflow UI link above.
+
+This does not weaken the authorization stop. A user approval authorizes only the
+already prepared immutable transaction/effect while it remains fresh. If freshness,
+source, tree, target, prestate, policy or transaction identity changes, the attempt
+fails closed and a new transaction requires a new explicit approval; the operator
+must never reinterpret an old approval as authorization for a replanned effect.
 
 Therefore:
 
