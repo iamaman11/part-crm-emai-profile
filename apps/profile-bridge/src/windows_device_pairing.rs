@@ -531,7 +531,41 @@ fn decode_curl_http_output(
 
 #[cfg(test)]
 mod tests {
-    use super::{valid_direct_https_url, validate_https_origin};
+    use super::{
+        DevicePairingCreateProjection, HttpResponse, WindowsDeviceApplicationBinding,
+        parse_json_response, persist_binding, require_binding_absent, valid_direct_https_url,
+        validate_https_origin,
+    };
+    use crate::device_pairing::DevicePairingCompleteUri;
+    use std::fs;
+    use std::path::PathBuf;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static TEST_SEQUENCE: AtomicU64 = AtomicU64::new(1);
+
+    fn temp_root(label: &str) -> Result<PathBuf, Box<dyn std::error::Error>> {
+        let sequence = TEST_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+        let root = std::env::temp_dir().join(format!(
+            "profile-bridge-device-pairing-{label}-{}-{sequence}",
+            std::process::id()
+        ));
+        match fs::remove_dir_all(&root) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error.into()),
+        }
+        fs::create_dir(&root)?;
+        Ok(root)
+    }
+
+    fn completion_uri() -> Result<DevicePairingCompleteUri, Box<dyn std::error::Error>> {
+        let pairing = "a".repeat(64);
+        let challenge = "b".repeat(64);
+        let nonce = "c".repeat(64);
+        Ok(DevicePairingCompleteUri::parse(&format!(
+            "profilebridge://pair/complete/tenant_01JPAIR/actor_01JPAIR/device_01JPAIR/{pairing}/{challenge}/{nonce}/123456789"
+        ))?)
+    }
 
     #[test]
     fn pairing_browser_urls_require_direct_https() {
@@ -543,5 +577,64 @@ mod tests {
         assert!(!valid_direct_https_url(
             "https://control.example.com/devices\nmalformed"
         ));
+    }
+
+    #[test]
+    fn pairing_response_body_is_zeroized_after_success_and_parse_failure()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let token = "a".repeat(64);
+        let mut valid = HttpResponse {
+            status: 201,
+            body: format!(r#"{{"pairingToken":"{token}","expiresAtMs":123}}"#).into_bytes(),
+        };
+        let projection = parse_json_response::<DevicePairingCreateProjection>(&mut valid)?;
+        assert_eq!(projection.pairing_token, token);
+        assert!(valid.body.iter().all(|byte| *byte == 0));
+
+        let mut malformed = HttpResponse {
+            status: 201,
+            body: b"{malformed-json".to_vec(),
+        };
+        assert!(parse_json_response::<DevicePairingCreateProjection>(&mut malformed).is_err());
+        assert!(malformed.body.iter().all(|byte| *byte == 0));
+        Ok(())
+    }
+
+    #[test]
+    fn pairing_completion_persists_only_nonsecret_binding_and_reopens_it()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let root = temp_root("persist")?;
+        let path = root.join("device-application-binding.json");
+        let uri = completion_uri()?;
+
+        assert!(require_binding_absent(&path).is_ok());
+        persist_binding(&path, &uri)?;
+        let binding = WindowsDeviceApplicationBinding::open(&path)?;
+        assert_eq!(binding.tenant_id(), uri.tenant_id());
+        assert_eq!(binding.actor_id(), uri.actor_id());
+        assert_eq!(binding.device_id(), uri.device_id());
+        let persisted = fs::read_to_string(&path)?;
+        assert!(!persisted.contains(uri.pairing_token_for_transport()));
+        assert!(!persisted.contains(uri.challenge_token_for_transport()));
+
+        fs::remove_dir_all(root)?;
+        Ok(())
+    }
+
+    #[test]
+    fn pairing_completion_never_overwrites_or_deletes_preexisting_binding()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let root = temp_root("preexisting")?;
+        let path = root.join("device-application-binding.json");
+        let uri = completion_uri()?;
+        let sentinel = b"preexisting-binding-owned-elsewhere";
+        fs::write(&path, sentinel)?;
+
+        assert!(require_binding_absent(&path).is_err());
+        assert!(persist_binding(&path, &uri).is_err());
+        assert_eq!(fs::read(&path)?, sentinel);
+
+        fs::remove_dir_all(root)?;
+        Ok(())
     }
 }
