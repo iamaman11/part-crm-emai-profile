@@ -54,9 +54,9 @@ fn current_fresh_zero_construction_is_owned_by_production_repository_projection(
         "same typed D1 authority must produce one deterministic repository projection"
     );
 
-    let envelope = first
-        .get("fresh_zero_construction")
-        .ok_or_else(|| io::Error::other("production D1 projection is missing fresh_zero_construction"))?;
+    let envelope = first.get("fresh_zero_construction").ok_or_else(|| {
+        io::Error::other("production D1 projection is missing fresh_zero_construction")
+    })?;
     let construction = envelope
         .get("construction")
         .ok_or_else(|| io::Error::other("fresh-zero construction identity is missing"))?;
