@@ -95,6 +95,21 @@ DIRECT_STANDARD_OPERATOR_DISPATCH = re.compile(
 )
 
 
+def dispatches_workflow(source: str, workflow_name: str) -> bool:
+    direct = f"actions/workflows/{workflow_name}/dispatches"
+    if direct in source:
+        return True
+
+    assignments = re.findall(
+        rf"\b([A-Z][A-Z0-9_]*)\s*=\s*['\"]{re.escape(workflow_name)}['\"]",
+        source,
+    )
+    return any(
+        f"actions/workflows/{{{variable}}}/dispatches" in source
+        for variable in assignments
+    )
+
+
 def read_text(root: Path, relative: Path, errors: list[str]) -> str:
     path = root / relative
     try:
@@ -169,7 +184,7 @@ def check_operator_topology(workflows: dict[Path, str]) -> list[str]:
     prepare_dispatchers = sorted(
         path
         for path, text in workflows.items()
-        if MIGRATION_PREPARE.name in text and "/dispatches" in text
+        if dispatches_workflow(text, MIGRATION_PREPARE.name)
     )
     if prepare_dispatchers != [STANDARD_OPERATOR]:
         errors.append(
@@ -180,7 +195,7 @@ def check_operator_topology(workflows: dict[Path, str]) -> list[str]:
     observer_dispatchers = sorted(
         path
         for path, text in workflows.items()
-        if READ_ONLY_OBSERVER.name in text and "/dispatches" in text
+        if dispatches_workflow(text, READ_ONLY_OBSERVER.name)
     )
     expected_observer_dispatchers = sorted([STANDARD_OPERATOR, COMMENT_ROUTER])
     if observer_dispatchers != expected_observer_dispatchers:
@@ -192,7 +207,7 @@ def check_operator_topology(workflows: dict[Path, str]) -> list[str]:
     executor_dispatchers = sorted(
         path
         for path, text in workflows.items()
-        if MIGRATION_EXECUTOR.name in text and "/dispatches" in text
+        if dispatches_workflow(text, MIGRATION_EXECUTOR.name)
     )
     expected_executor_dispatchers = sorted([STANDARD_OPERATOR, COMMENT_ROUTER])
     if executor_dispatchers != expected_executor_dispatchers:
