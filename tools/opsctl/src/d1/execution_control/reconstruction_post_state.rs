@@ -88,18 +88,24 @@ pub fn verify_current_reconstruction_post_state(
     let reconstruction_id = root
         .get("reconstruction_id")
         .and_then(Value::as_str)
-        .ok_or_else(|| D1Error::new("CURRENT reconstruction projection is missing reconstruction_id"))?;
+        .ok_or_else(|| {
+            D1Error::new("CURRENT reconstruction projection is missing reconstruction_id")
+        })?;
     let plan = root
         .get("plan")
         .and_then(Value::as_object)
         .ok_or_else(|| D1Error::new("CURRENT reconstruction projection is missing plan"))?;
     let source_sha = required_string(plan.get("source_sha"), "plan.source_sha")?;
-    let target_schema_revision =
-        required_string(plan.get("target_schema_revision"), "plan.target_schema_revision")?;
+    let target_schema_revision = required_string(
+        plan.get("target_schema_revision"),
+        "plan.target_schema_revision",
+    )?;
     let provider_observation = plan
         .get("provider_observation")
         .and_then(Value::as_object)
-        .ok_or_else(|| D1Error::new("CURRENT reconstruction plan is missing provider_observation"))?;
+        .ok_or_else(|| {
+            D1Error::new("CURRENT reconstruction plan is missing provider_observation")
+        })?;
     let predecessor_ledger_sha256 = required_string(
         provider_observation.get("predecessor_ledger_sha256"),
         "plan.provider_observation.predecessor_ledger_sha256",
@@ -108,7 +114,9 @@ pub fn verify_current_reconstruction_post_state(
     let expected_post_state = plan
         .get("expected_post_state")
         .and_then(Value::as_object)
-        .ok_or_else(|| D1Error::new("CURRENT reconstruction plan is missing expected_post_state"))?;
+        .ok_or_else(|| {
+            D1Error::new("CURRENT reconstruction plan is missing expected_post_state")
+        })?;
     let expected_ledger_migrations = string_array(
         expected_post_state.get("ledger_migrations"),
         "expected_post_state.ledger_migrations",
@@ -197,12 +205,12 @@ pub fn verify_current_reconstruction_post_state(
         ));
     }
     let reconstruction_applied = reconstruction_applied_count == 1;
-    let expected_post_state_reached =
-        post_observation.remote_migrations == expected_ledger_migrations
-            && post_observation
-                .remote_migrations
-                .last()
-                .is_some_and(|revision| revision == target_schema_revision);
+    let expected_post_state_reached = post_observation.remote_migrations
+        == expected_ledger_migrations
+        && post_observation
+            .remote_migrations
+            .last()
+            .is_some_and(|revision| revision == target_schema_revision);
 
     let disposition = match terminal_state {
         ExecutionEventKind::Completed => {
@@ -280,7 +288,10 @@ fn reconstruction_drift(summary: impl Into<String>) -> D1Error {
         "d1.reconstruction_execution.post_state",
         "RECONSTRUCTION_POST_STATE_DRIFT",
         summary,
-        Some("exact receipt-bound CURRENT reconstruction state with no migration fallback".to_owned()),
+        Some(
+            "exact receipt-bound CURRENT reconstruction state with no migration fallback"
+                .to_owned(),
+        ),
         None,
         RECONSTRUCTION_DRIFT_REMEDIATION,
     ))
@@ -323,7 +334,9 @@ fn string_array(value: Option<&Value>, label: &str) -> Result<Vec<String>, D1Err
     let mut output = Vec::with_capacity(values.len());
     for value in values {
         let value = value.as_str().ok_or_else(|| {
-            D1Error::new(format!("CURRENT reconstruction {label} entries must be strings"))
+            D1Error::new(format!(
+                "CURRENT reconstruction {label} entries must be strings"
+            ))
         })?;
         validate_non_empty(value, label)?;
         output.push(value.to_owned());
@@ -529,7 +542,11 @@ mod tests {
         receipt
     }
 
-    fn observation(reconstruction: &Value, completed: bool, observed_at: i64) -> ProviderObservationInput {
+    fn observation(
+        reconstruction: &Value,
+        completed: bool,
+        observed_at: i64,
+    ) -> ProviderObservationInput {
         let migrations = if completed {
             reconstruction["plan"]["expected_post_state"]["ledger_migrations"]
                 .as_array()
@@ -570,13 +587,9 @@ mod tests {
         let reconstruction = reconstruction();
         let receipt = receipt(&reconstruction, ExecutionEventKind::Completed);
         let post = observation(&reconstruction, true, T0 + 10);
-        let verified = verify_current_reconstruction_post_state(
-            &reconstruction,
-            &receipt,
-            &post,
-            T0 + 11,
-        )
-        .expect("verified completed reconstruction");
+        let verified =
+            verify_current_reconstruction_post_state(&reconstruction, &receipt, &post, T0 + 11)
+                .expect("verified completed reconstruction");
         assert_eq!(
             verified.disposition,
             ReconstructionPostStateDisposition::CompletedVerified
@@ -594,13 +607,9 @@ mod tests {
         let reconstruction = reconstruction();
         let receipt = receipt(&reconstruction, ExecutionEventKind::FailedNoEffect);
         let post = observation(&reconstruction, false, T0 + 10);
-        let verified = verify_current_reconstruction_post_state(
-            &reconstruction,
-            &receipt,
-            &post,
-            T0 + 11,
-        )
-        .expect("verified no effect");
+        let verified =
+            verify_current_reconstruction_post_state(&reconstruction, &receipt, &post, T0 + 11)
+                .expect("verified no effect");
         assert_eq!(
             verified.disposition,
             ReconstructionPostStateDisposition::FailedNoEffectVerified
@@ -616,13 +625,8 @@ mod tests {
         post.remote_migrations
             .push("0035_pas2_payload_fingerprint_contract.sql".to_owned());
         assert!(
-            verify_current_reconstruction_post_state(
-                &reconstruction,
-                &receipt,
-                &post,
-                T0 + 11
-            )
-            .is_err()
+            verify_current_reconstruction_post_state(&reconstruction, &receipt, &post, T0 + 11)
+                .is_err()
         );
     }
 
@@ -631,17 +635,10 @@ mod tests {
         let reconstruction = reconstruction();
         let receipt = receipt(&reconstruction, ExecutionEventKind::Completed);
         let post = observation(&reconstruction, true, T0 + 10);
-        let error = verify_current_reconstruction_post_state(
-            &reconstruction,
-            &receipt,
-            &post,
-            T0 + 911,
-        )
-        .expect_err("stale observation");
-        assert_eq!(
-            error.gate_result_json()["reason_code"],
-            "STALE_OBSERVATION"
-        );
+        let error =
+            verify_current_reconstruction_post_state(&reconstruction, &receipt, &post, T0 + 911)
+                .expect_err("stale observation");
+        assert_eq!(error.gate_result_json()["reason_code"], "STALE_OBSERVATION");
     }
 
     #[test]
@@ -649,13 +646,9 @@ mod tests {
         let reconstruction = reconstruction();
         let receipt = receipt(&reconstruction, ExecutionEventKind::RecoveryRequired);
         let post = observation(&reconstruction, false, T0 + 10);
-        let verified = verify_current_reconstruction_post_state(
-            &reconstruction,
-            &receipt,
-            &post,
-            T0 + 11,
-        )
-        .expect("recovery required confirmed");
+        let verified =
+            verify_current_reconstruction_post_state(&reconstruction, &receipt, &post, T0 + 11)
+                .expect("recovery required confirmed");
         assert_eq!(
             verified.disposition,
             ReconstructionPostStateDisposition::RecoveryRequiredConfirmed
