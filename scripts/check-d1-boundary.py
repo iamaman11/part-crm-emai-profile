@@ -26,6 +26,7 @@ RESOLVER_D1_BOUNDARY_FILES = {
 
 D1_CONTRACT = Path("docs/D1_CATALOG.md")
 D1_INDEX = Path("docs/INDEX.md")
+D1_PLAN = Path("tools/opsctl/src/d1/plan.rs")
 STANDARD_OPERATOR = Path(".github/workflows/d1-operator.yml")
 COMMENT_ROUTER = Path(".github/workflows/d1-operator-comment-router.yml")
 READ_ONLY_OBSERVER = Path(".github/workflows/d1-isolated-target-observation.yml")
@@ -43,6 +44,20 @@ D1_CONTRACT_MARKERS = (
     "post-authorization replanning = 0",
     "Production authorization implied by migration tooling = 0",
     "Ordinary operation starts from fresh protected",
+    "Pre-Production canonical convergence",
+    "pre-Production historical compatibility obligation = 0",
+    "PREPROD_REMEDIATION_TARGET = CURRENT_CANONICAL_DESIRED_STATE",
+    "CURRENT_TARGET_CANONICAL_FORWARD_CONVERGENCE",
+)
+
+CANONICAL_FORWARD_MARKERS = (
+    "CURRENT_TARGET_CANONICAL_FORWARD_CONVERGENCE",
+    "same_schema_contract(current, target)",
+    "canonical_forward_convergence_set(&contracts)",
+    "contract.migration_class != MigrationClass::Contract",
+    "!contract.destructive",
+    "!contract.fail_forward_required",
+    "contract.rollout_order != RolloutOrder::SeparateContractRelease",
 )
 
 STANDARD_OPERATOR_MARKERS = (
@@ -125,6 +140,59 @@ def workflow_dispatch_block(source: str) -> str | None:
     if marker not in trigger:
         return None
     return trigger.split(marker, 1)[1]
+
+
+def check_canonical_forward_convergence(source: str) -> list[str]:
+    """Protect the narrow current-target forward-convergence exception."""
+
+    errors: list[str] = []
+    for marker in CANONICAL_FORWARD_MARKERS:
+        if marker not in source:
+            errors.append(
+                f"{D1_PLAN}: D1_CANONICAL_FORWARD_CONVERGENCE_MARKER_MISSING: {marker}"
+            )
+
+    start = source.find("    let current_supports_remote = runtime_supports_remote")
+    special = source.find("CURRENT_TARGET_CANONICAL_FORWARD_CONVERGENCE")
+    known_good = source.find("    let Some(known_good) = known_good else", max(start, 0))
+    recovery = source.find("CURRENT_RUNTIME_ALREADY_SCHEMA_INCOMPATIBLE", max(known_good, 0))
+    if min(start, special, known_good, recovery) < 0 or not (
+        start < special < known_good < recovery
+    ):
+        errors.append(
+            f"{D1_PLAN}: D1_CANONICAL_FORWARD_CONVERGENCE_ORDER_DRIFT"
+        )
+    elif "known_good" in source[start:known_good]:
+        errors.append(
+            f"{D1_PLAN}: D1_CANONICAL_FORWARD_CONVERGENCE_MUST_NOT_SELECT_HISTORICAL_KNOWN_GOOD"
+        )
+
+    return errors
+
+
+def prove_canonical_forward_negative_cases(source: str) -> list[str]:
+    """Same-checker mutations prove that exact-target and safety fences are mandatory."""
+
+    errors: list[str] = []
+    for marker, label in (
+        ("same_schema_contract(current, target)", "current-target identity"),
+        ("!contract.destructive", "destructive migration fence"),
+        ("!contract.fail_forward_required", "fail-forward fence"),
+        (
+            "contract.migration_class != MigrationClass::Contract",
+            "CONTRACT migration fence",
+        ),
+    ):
+        if marker not in source:
+            continue
+        mutated = source.replace(marker, "true /* negative fixture removed fence */", 1)
+        fixture_errors = check_canonical_forward_convergence(mutated)
+        if not fixture_errors:
+            errors.append(
+                "D1 canonical forward-convergence negative fixture failed: "
+                f"{label} removal was not rejected"
+            )
+    return errors
 
 
 def check_operator_topology(workflows: dict[Path, str]) -> list[str]:
@@ -310,12 +378,16 @@ def check_operations_contract(root: Path) -> list[str]:
     errors: list[str] = []
     contract = read_text(root, D1_CONTRACT, errors)
     index = read_text(root, D1_INDEX, errors)
+    plan = read_text(root, D1_PLAN, errors)
     operator = read_text(root, STANDARD_OPERATOR, errors)
     executor = read_text(root, MIGRATION_EXECUTOR, errors)
 
     for marker in D1_CONTRACT_MARKERS:
         if marker not in contract:
             errors.append(f"{D1_CONTRACT}: permanent D1 operations marker missing: {marker}")
+
+    errors.extend(check_canonical_forward_convergence(plan))
+    errors.extend(prove_canonical_forward_negative_cases(plan))
 
     if "D1 catalog" not in index or "D1_CATALOG.md" not in index:
         errors.append(f"{D1_INDEX}: D1 permanent bounded contract is not discoverable")
