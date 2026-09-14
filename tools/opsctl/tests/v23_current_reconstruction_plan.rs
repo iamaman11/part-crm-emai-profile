@@ -1,4 +1,6 @@
-use opsctl::d1::{D1CurrentReconstructionPlanRequest, current_reconstruction_plan, repository_projection};
+use opsctl::d1::{
+    D1CurrentReconstructionPlanRequest, current_reconstruction_plan, repository_projection,
+};
 use serde_json::{Value, json};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -124,9 +126,8 @@ fn current_empty_staging_target_gets_one_deterministic_non_mutating_plan()
         projection["plan"]["construction_sha256"],
         repository["fresh_zero_construction"]["construction_sha256"]
     );
-    let target_schema = repository["fresh_zero_construction"]["construction"]
-        ["target_schema_revision"]
-        .clone();
+    let target_schema =
+        repository["fresh_zero_construction"]["construction"]["target_schema_revision"].clone();
     assert_eq!(projection["plan"]["target_schema_revision"], target_schema);
     assert_eq!(
         projection["plan"]["expected_post_state"]["target_schema_revision"],
@@ -149,7 +150,10 @@ fn reconstruction_rejects_production_nonempty_and_historical_target()
     let release = fixture_path("negative-release.json");
     let target = fixture_path("negative-target.json");
     write_json(&ledger, &json!({"rows": []}))?;
-    write_json(&release, &json!({"schema_contract": release_contract.clone()}))?;
+    write_json(
+        &release,
+        &json!({"schema_contract": release_contract.clone()}),
+    )?;
     write_json(
         &target,
         &json!({
@@ -179,10 +183,7 @@ fn reconstruction_rejects_production_nonempty_and_historical_target()
     write_json(&ledger, &json!({"rows": []}))?;
     let mut historical_release = release_contract;
     historical_release["target_schema_revision"] = json!("0001_historical_state.sql");
-    write_json(
-        &release,
-        &json!({"schema_contract": historical_release}),
-    )?;
+    write_json(&release, &json!({"schema_contract": historical_release}))?;
     assert!(build_plan(&root, &ledger, &release, &target).is_err());
 
     for path in [&ledger, &release, &target] {
