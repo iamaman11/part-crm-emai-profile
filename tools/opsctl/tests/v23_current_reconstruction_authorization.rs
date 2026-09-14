@@ -146,7 +146,10 @@ fn current_reconstruction_binds_through_the_shared_exact_authorization_core()
     assert_eq!(first.mode, "read-only");
     assert_eq!(first.transaction_id, projection["reconstruction_id"]);
     assert_eq!(first.target.environment, "staging");
-    assert_eq!(first.phase, opsctl::d1::transaction::TransactionPhase::Ordinary);
+    assert_eq!(
+        first.phase,
+        opsctl::d1::transaction::TransactionPhase::Ordinary
+    );
     assert_eq!(
         first.authorized_provider_effects,
         vec!["D1_BOOTSTRAP_CURRENT_EXACT_CONSTRUCTION".to_owned()]
@@ -166,14 +169,13 @@ fn reconstruction_authorization_rejects_scope_target_phase_and_freshness_drift()
     let mut wrong_effect = authorization(&projection);
     wrong_effect["authorized_provider_effects"] = json!(["D1_MIGRATIONS_APPLY_EXACT_PLAN"]);
     assert!(
-        bind_current_reconstruction_authorization(&projection, &wrong_effect, EVALUATED_AT).is_err()
+        bind_current_reconstruction_authorization(&projection, &wrong_effect, EVALUATED_AT)
+            .is_err()
     );
 
     let mut widened_effect = authorization(&projection);
-    widened_effect["authorized_provider_effects"] = json!([
-        "D1_BOOTSTRAP_CURRENT_EXACT_CONSTRUCTION",
-        "D1_DELETE"
-    ]);
+    widened_effect["authorized_provider_effects"] =
+        json!(["D1_BOOTSTRAP_CURRENT_EXACT_CONSTRUCTION", "D1_DELETE"]);
     assert!(
         bind_current_reconstruction_authorization(&projection, &widened_effect, EVALUATED_AT)
             .is_err()
@@ -182,7 +184,8 @@ fn reconstruction_authorization_rejects_scope_target_phase_and_freshness_drift()
     let mut wrong_target = authorization(&projection);
     wrong_target["target"]["database_id"] = json!("different-database");
     assert!(
-        bind_current_reconstruction_authorization(&projection, &wrong_target, EVALUATED_AT).is_err()
+        bind_current_reconstruction_authorization(&projection, &wrong_target, EVALUATED_AT)
+            .is_err()
     );
 
     let mut wrong_phase = authorization(&projection);
@@ -207,7 +210,9 @@ fn reconstruction_authorization_rejects_scope_target_phase_and_freshness_drift()
 
     let mut overlong = authorization(&projection);
     overlong["expires_at_unix_seconds"] = json!(FRESH_UNTIL + 1);
-    assert!(bind_current_reconstruction_authorization(&projection, &overlong, EVALUATED_AT).is_err());
+    assert!(
+        bind_current_reconstruction_authorization(&projection, &overlong, EVALUATED_AT).is_err()
+    );
 
     let stale = authorization(&projection);
     let error = bind_current_reconstruction_authorization(&projection, &stale, EXPIRES_AT + 1)
@@ -252,12 +257,8 @@ fn reconstruction_projection_tamper_is_rejected_even_when_forged_fields_are_reha
     let mut migration_auth = authorization(&migration_effect);
     migration_auth["authorized_provider_effects"] = json!(["D1_MIGRATIONS_APPLY_EXACT_PLAN"]);
     assert!(
-        bind_current_reconstruction_authorization(
-            &migration_effect,
-            &migration_auth,
-            EVALUATED_AT
-        )
-        .is_err()
+        bind_current_reconstruction_authorization(&migration_effect, &migration_auth, EVALUATED_AT)
+            .is_err()
     );
 
     let mut nonempty = projection.clone();
