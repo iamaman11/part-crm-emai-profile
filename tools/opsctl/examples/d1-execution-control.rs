@@ -325,9 +325,7 @@ fn verify_post_state(args: Args) -> Result<String, Box<dyn Error>> {
         "verify-post-state",
     )?;
     if args.input.is_some() == args.reconstruction.is_some() {
-        return Err(
-            "verify-post-state requires exactly one of --input or --reconstruction".into(),
-        );
+        return Err("verify-post-state requires exactly one of --input or --reconstruction".into());
     }
     let receipt: ExecutionReceipt = read_typed(
         required(args.receipt, "--receipt")?,
@@ -350,10 +348,15 @@ fn verify_post_state(args: Args) -> Result<String, Box<dyn Error>> {
             required(args.reconstruction, "--reconstruction")?,
             "prepared CURRENT reconstruction",
         )?;
-        verify_current_reconstruction_post_state(&reconstruction, &receipt, &observation, evaluated_at)
-            .and_then(|verification| {
-                serialize_current_reconstruction_post_state_verification(&verification)
-            })
+        verify_current_reconstruction_post_state(
+            &reconstruction,
+            &receipt,
+            &observation,
+            evaluated_at,
+        )
+        .and_then(|verification| {
+            serialize_current_reconstruction_post_state_verification(&verification)
+        })
     };
     match result {
         Ok(output) => Ok(output),
