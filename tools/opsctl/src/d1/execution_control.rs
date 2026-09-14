@@ -320,9 +320,11 @@ pub fn append_execution_event(
 
 pub fn serialize_target_fence_lease(lease: &TargetFenceLease) -> Result<String, D1Error> {
     validate_lease(lease)?;
-    canonical_json(&serde_json::to_value(lease).map_err(|error| {
-        D1Error::new(format!("cannot serialize target fence lease: {error}"))
-    })?)
+    canonical_json(
+        &serde_json::to_value(lease).map_err(|error| {
+            D1Error::new(format!("cannot serialize target fence lease: {error}"))
+        })?,
+    )
     .map_err(D1Error::new)
 }
 
@@ -340,9 +342,11 @@ pub fn serialize_target_fence_verification(
 
 pub fn serialize_execution_receipt(receipt: &ExecutionReceipt) -> Result<String, D1Error> {
     validate_receipt(receipt)?;
-    canonical_json(&serde_json::to_value(receipt).map_err(|error| {
-        D1Error::new(format!("cannot serialize execution receipt: {error}"))
-    })?)
+    canonical_json(
+        &serde_json::to_value(receipt).map_err(|error| {
+            D1Error::new(format!("cannot serialize execution receipt: {error}"))
+        })?,
+    )
     .map_err(D1Error::new)
 }
 
@@ -597,7 +601,6 @@ fn validate_event_input(input: &ExecutionEventInput) -> Result<(), D1Error> {
     }
     Ok(())
 }
-
 fn validate_transition(
     previous: ExecutionEventKind,
     input: &ExecutionEventInput,
@@ -895,7 +898,12 @@ mod tests {
         let mut receipt = initialize_execution_receipt(receipt_seed(lease), T0 + 20, T0 + 21)?;
         receipt = append(&receipt, ExecutionEventKind::PrewriteFencePass, 22, None)?;
         receipt = append(&receipt, ExecutionEventKind::MutationStarted, 23, None)?;
-        receipt = append(&receipt, ExecutionEventKind::ReconstructionApplied, 24, None)?;
+        receipt = append(
+            &receipt,
+            ExecutionEventKind::ReconstructionApplied,
+            24,
+            None,
+        )?;
         receipt = append(&receipt, ExecutionEventKind::PostObserved, 25, None)?;
         receipt = append(&receipt, ExecutionEventKind::Verified, 26, None)?;
         receipt = append(&receipt, ExecutionEventKind::Completed, 27, None)?;
@@ -907,10 +915,12 @@ mod tests {
                 .count(),
             1
         );
-        assert!(receipt
-            .events
-            .iter()
-            .all(|event| event.kind != ExecutionEventKind::MigrationApplied));
+        assert!(
+            receipt
+                .events
+                .iter()
+                .all(|event| event.kind != ExecutionEventKind::MigrationApplied)
+        );
         serialize_execution_receipt(&receipt)?;
         Ok(())
     }
@@ -921,7 +931,12 @@ mod tests {
         let mut receipt = initialize_execution_receipt(receipt_seed(lease), T0 + 20, T0 + 21)?;
         receipt = append(&receipt, ExecutionEventKind::PrewriteFencePass, 22, None)?;
         receipt = append(&receipt, ExecutionEventKind::MutationStarted, 23, None)?;
-        receipt = append(&receipt, ExecutionEventKind::ReconstructionApplied, 24, None)?;
+        receipt = append(
+            &receipt,
+            ExecutionEventKind::ReconstructionApplied,
+            24,
+            None,
+        )?;
         assert!(
             append(
                 &receipt,
