@@ -177,10 +177,8 @@ fn run() -> Result<(), Box<dyn Error>> {
         required(authorization_json, "--authorization-json")?,
         "transaction authorization",
     )?;
-    let evaluated_at_unix_seconds = required(
-        evaluated_at_unix_seconds,
-        "--evaluated-at-unix-seconds",
-    )?;
+    let evaluated_at_unix_seconds =
+        required(evaluated_at_unix_seconds, "--evaluated-at-unix-seconds")?;
 
     match (transaction_json, reconstruction_json) {
         (Some(transaction_path), None) => {
@@ -194,20 +192,14 @@ fn run() -> Result<(), Box<dyn Error>> {
                 None => sealed_component(&transaction)?,
             };
             let expectation = ExecutorAdmissionExpectation {
-                transaction_id: required(
-                    expected_transaction_id,
-                    "--expected-transaction-id",
-                )?,
+                transaction_id: required(expected_transaction_id, "--expected-transaction-id")?,
                 source_sha: required(expected_source_sha, "--expected-source-sha")?,
                 tree_sha: required(expected_tree_sha, "--expected-tree-sha")?,
                 component,
                 target: TargetIdentity {
                     environment: required(expected_environment, "--expected-environment")?,
                     account_id: required(expected_account_id, "--expected-account-id")?,
-                    database_name: required(
-                        expected_database_name,
-                        "--expected-database-name",
-                    )?,
+                    database_name: required(expected_database_name, "--expected-database-name")?,
                     database_id: required(expected_database_id, "--expected-database-id")?,
                 },
                 phase: required(expected_phase, "--expected-phase")?,
@@ -229,22 +221,17 @@ fn run() -> Result<(), Box<dyn Error>> {
             }
         }
         (None, Some(reconstruction_path)) => {
-            let reconstruction = read_strict(reconstruction_path, "prepared CURRENT reconstruction")?;
+            let reconstruction =
+                read_strict(reconstruction_path, "prepared CURRENT reconstruction")?;
             let expectation = ExecutorAdmissionExpectation {
-                transaction_id: required(
-                    expected_transaction_id,
-                    "--expected-transaction-id",
-                )?,
+                transaction_id: required(expected_transaction_id, "--expected-transaction-id")?,
                 source_sha: required(expected_source_sha, "--expected-source-sha")?,
                 tree_sha: required(expected_tree_sha, "--expected-tree-sha")?,
                 component: expected_component.unwrap_or_else(|| "catalog".to_owned()),
                 target: TargetIdentity {
                     environment: required(expected_environment, "--expected-environment")?,
                     account_id: required(expected_account_id, "--expected-account-id")?,
-                    database_name: required(
-                        expected_database_name,
-                        "--expected-database-name",
-                    )?,
+                    database_name: required(expected_database_name, "--expected-database-name")?,
                     database_id: required(expected_database_id, "--expected-database-id")?,
                 },
                 phase: required(expected_phase, "--expected-phase")?,
