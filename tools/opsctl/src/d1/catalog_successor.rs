@@ -282,11 +282,15 @@ impl CatalogSuccessor {
         let target = contract
             .get("target_schema_revision")
             .and_then(Value::as_str)
-            .ok_or_else(|| D1Error::new("Catalog release contract is missing target_schema_revision"))?;
+            .ok_or_else(|| {
+                D1Error::new("Catalog release contract is missing target_schema_revision")
+            })?;
         let supported_max = contract
             .get("supported_schema_max")
             .and_then(Value::as_str)
-            .ok_or_else(|| D1Error::new("Catalog release contract is missing supported_schema_max"))?;
+            .ok_or_else(|| {
+                D1Error::new("Catalog release contract is missing supported_schema_max")
+            })?;
 
         let target_positions = self
             .authority
