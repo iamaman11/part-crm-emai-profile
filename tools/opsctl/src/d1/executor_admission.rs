@@ -445,10 +445,7 @@ fn reconstruction_plan_string<'a>(
         })
 }
 
-fn reconstruction_string_array(
-    value: Option<&Value>,
-    label: &str,
-) -> Result<Vec<String>, D1Error> {
+fn reconstruction_string_array(value: Option<&Value>, label: &str) -> Result<Vec<String>, D1Error> {
     let values = value.and_then(Value::as_array).ok_or_else(|| {
         reconstruction_admission_drift(format!(
             "CURRENT reconstruction executor admission {label} must be an array"
