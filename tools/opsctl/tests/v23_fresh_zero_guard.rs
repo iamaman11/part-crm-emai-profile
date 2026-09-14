@@ -19,9 +19,9 @@ fn unique_temp_path(label: &str) -> PathBuf {
 
 fn current_catalog_release_contract(root: &std::path::Path) -> Result<Value, Box<dyn Error>> {
     let projection: Value = serde_json::from_str(&d1::repository_projection(root)?)?;
-    let components = projection["components"].as_array().ok_or_else(|| {
-        io::Error::other("typed D1 repository projection is missing components")
-    })?;
+    let components = projection["components"]
+        .as_array()
+        .ok_or_else(|| io::Error::other("typed D1 repository projection is missing components"))?;
     let catalog = components
         .iter()
         .find(|component| component["component_id"] == "catalog")
