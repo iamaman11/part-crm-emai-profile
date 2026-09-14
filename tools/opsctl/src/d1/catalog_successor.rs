@@ -46,8 +46,6 @@ struct CatalogSuccessor {
 
 impl CatalogSuccessor {
     fn load(root: &Path) -> Result<Self, D1Error> {
-        // Loading the predecessor also mechanically validates the immutable legacy 0001..0031
-        // boundary and the accepted v1 successor directory before v2 is composed.
         let predecessor_authority = predecessor::component_authority(root, "catalog")?;
         validate_predecessor_authority(&predecessor_authority)?;
         validate_predecessor_repository_identity(root)?;
@@ -324,10 +322,8 @@ impl CatalogSuccessor {
                     "fresh-zero migration source escaped executable schema authority",
                 ));
             }
-            let bytes = read_regular_repository_file(
-                root,
-                &format!("{source_root}/{migration_file}"),
-            )?;
+            let bytes =
+                read_regular_repository_file(root, &format!("{source_root}/{migration_file}"))?;
             migration_sources.push(json!({
                 "migration_file": migration_file,
                 "source_root": source_root,
@@ -713,4 +709,143 @@ fn read_regular_repository_file(root: &Path, relative: &str) -> Result<Vec<u8>, 
     }
     fs::read(canonical_path)
         .map_err(|error| D1Error::new(format!("cannot read migration source {relative}: {error}")))
+}
+
+fn compatibility_policy_projection() -> Value {
+    json!({
+        "historical_epoch_runtime_compatibility": "UNKNOWN_FAIL_CLOSED",
+        "new_migrations_require_full_contract": true,
+        "remote_ledger_must_be_known_canonical_order": true,
+        "known_prefix_is_recoverable": true,
+        "unknown_or_diverged_is_fail_closed": true,
+    })
+}
+
+fn repository_identity_from_components(components: &[Value]) -> Result<String, D1Error> {
+    let mut identities = Vec::with_capacity(components.len());
+    for component in components {
+        let mut identity = component.clone();
+        identity
+            .as_object_mut()
+            .ok_or_else(|| D1Error::new("D1 component projection must be an object"))?
+            .remove("release_schema_contract");
+        identities.push(identity);
+    }
+    let value = json!({
+        "schema_version": 1,
+        "kind": "D1_REPOSITORY_IDENTITY",
+        "components": identities,
+        "compatibility_policy": compatibility_policy_projection(),
+    });
+    canonical_json(&value)
+        .map(|encoded| sha256_hex(encoded.as_bytes()))
+        .map_err(D1Error::new)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        BRIDGE_ENROLLMENT_REVISION, CURRENT_SUCCESSOR_ROOT, DEVICE_APPLICATION_AUTHORITY_REVISION,
+        PREDECESSOR_SUCCESSOR_ROOT, PUBLIC_KEY_BINDING_REVISION, SUCCESSOR_CONTRACT_REVISION,
+        component_authority, release_contract, repository_projection,
+    };
+    use serde_json::Value;
+    use std::error::Error;
+    use std::path::PathBuf;
+
+    fn repository_root() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
+    }
+
+    #[test]
+    fn current_catalog_lineage_inserts_expands_before_deferred_contract()
+    -> Result<(), Box<dyn Error>> {
+        let authority = component_authority(&repository_root(), "catalog")?;
+        assert_eq!(authority.ordered_history.len(), 35);
+        assert_eq!(authority.ordered_history[31], BRIDGE_ENROLLMENT_REVISION);
+        assert_eq!(authority.ordered_history[32], PUBLIC_KEY_BINDING_REVISION);
+        assert_eq!(
+            authority.ordered_history[33],
+            DEVICE_APPLICATION_AUTHORITY_REVISION
+        );
+        assert_eq!(authority.ordered_history[34], SUCCESSOR_CONTRACT_REVISION);
+        assert_eq!(
+            authority.current_repository_revision,
+            SUCCESSOR_CONTRACT_REVISION
+        );
+        assert_eq!(authority.post_epoch.len(), 9);
+        Ok(())
+    }
+
+    #[test]
+    fn release_window_targets_latest_expand_and_defers_pas2_contract() -> Result<(), Box<dyn Error>>
+    {
+        let contract = release_contract(&repository_root(), "catalog")?;
+        assert_eq!(
+            contract["target_schema_revision"],
+            DEVICE_APPLICATION_AUTHORITY_REVISION
+        );
+        assert_eq!(
+            contract["supported_schema_min"],
+            DEVICE_APPLICATION_AUTHORITY_REVISION
+        );
+        assert_eq!(
+            contract["supported_schema_max"],
+            SUCCESSOR_CONTRACT_REVISION
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn projection_preserves_predecessor_successor_and_exposes_one_live_v2_lineage()
+    -> Result<(), Box<dyn Error>> {
+        let projection: Value = serde_json::from_str(&repository_projection(&repository_root())?)?;
+        let catalog = projection["components"]
+            .as_array()
+            .and_then(|components| {
+                components
+                    .iter()
+                    .find(|component| component["component_id"] == "catalog")
+            })
+            .ok_or("catalog projection is missing")?;
+        assert_eq!(catalog["migration_lineage"], "catalog-successor-v2");
+        assert_eq!(catalog["legacy_history"]["immutable"], true);
+        assert_eq!(catalog["predecessor_successor_history"]["immutable"], true);
+        let runtime = &catalog["pre_migration_runtime_schema_contract"];
+        assert_eq!(
+            runtime["target_schema_revision"],
+            catalog["historical_epoch"]["final_revision"]
+        );
+        assert_eq!(
+            runtime["supported_schema_max"],
+            DEVICE_APPLICATION_AUTHORITY_REVISION
+        );
+        let sources = catalog["executable_migration_sources"]
+            .as_array()
+            .ok_or("executable migration source projection is missing")?;
+        assert_eq!(sources.len(), 35);
+        assert_eq!(sources[26]["source_root"], PREDECESSOR_SUCCESSOR_ROOT);
+        assert_eq!(sources[27]["source_root"], "migrations/d1");
+        assert_eq!(sources[31]["migration_file"], BRIDGE_ENROLLMENT_REVISION);
+        assert_eq!(sources[31]["source_root"], CURRENT_SUCCESSOR_ROOT);
+        assert_eq!(sources[32]["migration_file"], PUBLIC_KEY_BINDING_REVISION);
+        assert_eq!(sources[32]["source_root"], CURRENT_SUCCESSOR_ROOT);
+        assert_eq!(
+            sources[33]["migration_file"],
+            DEVICE_APPLICATION_AUTHORITY_REVISION
+        );
+        assert_eq!(sources[33]["source_root"], CURRENT_SUCCESSOR_ROOT);
+        assert_eq!(sources[34]["migration_file"], SUCCESSOR_CONTRACT_REVISION);
+        assert_eq!(sources[34]["source_root"], CURRENT_SUCCESSOR_ROOT);
+        assert_eq!(
+            projection["executable_schema_authority"],
+            serde_json::json!([
+                "migrations/d1",
+                "migrations/d1-successor",
+                "migrations/d1-successor-v2",
+                "migrations/resolver-d1"
+            ])
+        );
+        Ok(())
+    }
 }
