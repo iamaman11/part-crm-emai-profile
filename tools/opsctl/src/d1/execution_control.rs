@@ -152,11 +152,11 @@ pub struct ExecutionReceipt {
 
 pub fn acquire_target_fence(input: TargetFenceLeaseInput) -> Result<TargetFenceLease, D1Error> {
     validate_fence_input(&input)?;
-    let canonical = canonical_json(
-        &serde_json::to_value(&input)
-            .map_err(|error| D1Error::new(format!("cannot serialize target fence input: {error}")))?,
-    )
-    .map_err(D1Error::new)?;
+    let canonical =
+        canonical_json(&serde_json::to_value(&input).map_err(|error| {
+            D1Error::new(format!("cannot serialize target fence input: {error}"))
+        })?)
+        .map_err(D1Error::new)?;
     Ok(TargetFenceLease {
         schema_version: input.schema_version,
         status: "TARGET_FENCE_ACQUIRED".to_owned(),
@@ -320,10 +320,9 @@ pub fn append_execution_event(
 
 pub fn serialize_target_fence_lease(lease: &TargetFenceLease) -> Result<String, D1Error> {
     validate_lease(lease)?;
-    canonical_json(
-        &serde_json::to_value(lease)
-            .map_err(|error| D1Error::new(format!("cannot serialize target fence lease: {error}")))?,
-    )
+    canonical_json(&serde_json::to_value(lease).map_err(|error| {
+        D1Error::new(format!("cannot serialize target fence lease: {error}"))
+    })?)
     .map_err(D1Error::new)
 }
 
@@ -341,10 +340,9 @@ pub fn serialize_target_fence_verification(
 
 pub fn serialize_execution_receipt(receipt: &ExecutionReceipt) -> Result<String, D1Error> {
     validate_receipt(receipt)?;
-    canonical_json(
-        &serde_json::to_value(receipt)
-            .map_err(|error| D1Error::new(format!("cannot serialize execution receipt: {error}")))?,
-    )
+    canonical_json(&serde_json::to_value(receipt).map_err(|error| {
+        D1Error::new(format!("cannot serialize execution receipt: {error}"))
+    })?)
     .map_err(D1Error::new)
 }
 
@@ -401,11 +399,11 @@ fn validate_lease(lease: &TargetFenceLease) -> Result<(), D1Error> {
         acquired_at_unix_seconds: lease.acquired_at_unix_seconds,
     };
     validate_fence_input(&input)?;
-    let canonical = canonical_json(
-        &serde_json::to_value(&input)
-            .map_err(|error| D1Error::new(format!("cannot serialize target fence input: {error}")))?,
-    )
-    .map_err(D1Error::new)?;
+    let canonical =
+        canonical_json(&serde_json::to_value(&input).map_err(|error| {
+            D1Error::new(format!("cannot serialize target fence input: {error}"))
+        })?)
+        .map_err(D1Error::new)?;
     if lease.fence_id != sha256_hex(canonical.as_bytes()) {
         return Err(D1Error::new(
             "target fence_id does not match the exact canonical lease input",
@@ -909,12 +907,10 @@ mod tests {
                 .count(),
             1
         );
-        assert!(
-            receipt
-                .events
-                .iter()
-                .all(|event| event.kind != ExecutionEventKind::MigrationApplied)
-        );
+        assert!(receipt
+            .events
+            .iter()
+            .all(|event| event.kind != ExecutionEventKind::MigrationApplied));
         serialize_execution_receipt(&receipt)?;
         Ok(())
     }
