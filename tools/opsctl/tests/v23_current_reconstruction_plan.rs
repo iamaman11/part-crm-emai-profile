@@ -29,7 +29,10 @@ fn catalog_release_contract(repository: &Value) -> Result<Value, Box<dyn std::er
         })
         .and_then(|component| component.get("release_schema_contract"))
         .cloned()
-        .ok_or_else(|| "typed repository projection is missing Catalog release contract".into())
+        .ok_or_else(|| {
+            std::io::Error::other("typed repository projection is missing Catalog release contract")
+                .into()
+        })
 }
 
 fn write_json(path: &Path, value: &Value) -> Result<(), Box<dyn std::error::Error>> {
@@ -102,7 +105,7 @@ fn current_empty_staging_target_gets_one_deterministic_non_mutating_plan()
     );
     let forbidden = projection["plan"]["forbidden_provider_effects"]
         .as_array()
-        .ok_or("forbidden_provider_effects must be an array")?;
+        .ok_or_else(|| std::io::Error::other("forbidden_provider_effects must be an array"))?;
     for effect in [
         "D1_MIGRATIONS_APPLY_EXACT_PLAN",
         "D1_CREATE",
