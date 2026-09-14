@@ -404,13 +404,14 @@ mod tests {
         }
     }
 
-    fn canonical_sha(value: &Value) -> String {
-        sha256_hex(canonical_json(value).expect("canonical json").as_bytes())
+    fn canonical_sha(value: &Value) -> Result<String, D1Error> {
+        let canonical = canonical_json(value).map_err(D1Error::new)?;
+        Ok(sha256_hex(canonical.as_bytes()))
     }
 
-    fn reconstruction() -> Value {
+    fn reconstruction() -> Result<Value, D1Error> {
         let predecessor = json!({"remote_migrations": []});
-        let predecessor_sha = canonical_sha(&predecessor);
+        let predecessor_sha = canonical_sha(&predecessor)?;
         let provider_observation = json!({
             "target": target(),
             "observed_at_unix_seconds": T0,
@@ -419,7 +420,7 @@ mod tests {
             "predecessor_ledger_sha256": predecessor_sha,
             "remote_migrations": []
         });
-        let observation_digest = canonical_sha(&provider_observation);
+        let observation_digest = canonical_sha(&provider_observation)?;
         let expected_ledger = vec![
             "0032_bridge_device_enrollment_authority.sql",
             "0033_device_public_key_binding.sql",
@@ -459,8 +460,8 @@ mod tests {
                 "repository_identity_sha256": "55".repeat(32)
             }
         });
-        let reconstruction_id = canonical_sha(&plan);
-        json!({
+        let reconstruction_id = canonical_sha(&plan)?;
+        Ok(json!({
             "schema_version": 1,
             "status": "RECONSTRUCTION_PREPARED",
             "mode": "read-only",
@@ -470,14 +471,33 @@ mod tests {
             "provider_mutation_executed": false,
             "reconstruction_id": reconstruction_id,
             "plan": plan
-        })
+        }))
     }
 
-    fn receipt(reconstruction: &Value, terminal: ExecutionEventKind) -> ExecutionReceipt {
-        let operation_id = reconstruction["reconstruction_id"]
-            .as_str()
-            .expect("reconstruction id")
-            .to_owned();
+    fn append_fixture_event(
+        receipt: &ExecutionReceipt,
+        kind: ExecutionEventKind,
+        offset: i64,
+    ) -> Result<ExecutionReceipt, D1Error> {
+        append_execution_event(
+            receipt,
+            ExecutionEventInput {
+                kind,
+                occurred_at_unix_seconds: T0 + offset,
+                migration_id: None,
+            },
+        )
+    }
+
+    fn receipt(
+        reconstruction: &Value,
+        terminal: ExecutionEventKind,
+    ) -> Result<ExecutionReceipt, D1Error> {
+        let operation_id = required_string(
+            reconstruction.get("reconstruction_id"),
+            "fixture.reconstruction_id",
+        )?
+        .to_owned();
         let lease = acquire_target_fence(TargetFenceLeaseInput {
             schema_version: 1,
             target: target(),
@@ -490,8 +510,7 @@ mod tests {
             fence_epoch: 10,
             run_attempt: 1,
             acquired_at_unix_seconds: T0 + 1,
-        })
-        .expect("fence");
+        })?;
         let mut receipt = initialize_execution_receipt(
             ExecutionReceiptSeed {
                 schema_version: 1,
@@ -506,66 +525,57 @@ mod tests {
             },
             T0 + 2,
             T0 + 3,
-        )
-        .expect("receipt");
-        let mut append = |kind, offset| {
-            receipt = append_execution_event(
-                &receipt,
-                ExecutionEventInput {
-                    kind,
-                    occurred_at_unix_seconds: T0 + offset,
-                    migration_id: None,
-                },
-            )
-            .expect("append event");
-        };
+        )?;
         match terminal {
             ExecutionEventKind::Completed => {
-                append(ExecutionEventKind::PrewriteFencePass, 4);
-                append(ExecutionEventKind::MutationStarted, 5);
-                append(ExecutionEventKind::ReconstructionApplied, 6);
-                append(ExecutionEventKind::PostObserved, 7);
-                append(ExecutionEventKind::Verified, 8);
-                append(ExecutionEventKind::Completed, 9);
+                receipt = append_fixture_event(&receipt, ExecutionEventKind::PrewriteFencePass, 4)?;
+                receipt = append_fixture_event(&receipt, ExecutionEventKind::MutationStarted, 5)?;
+                receipt =
+                    append_fixture_event(&receipt, ExecutionEventKind::ReconstructionApplied, 6)?;
+                receipt = append_fixture_event(&receipt, ExecutionEventKind::PostObserved, 7)?;
+                receipt = append_fixture_event(&receipt, ExecutionEventKind::Verified, 8)?;
+                receipt = append_fixture_event(&receipt, ExecutionEventKind::Completed, 9)?;
             }
             ExecutionEventKind::RecoveryRequired => {
-                append(ExecutionEventKind::PrewriteFencePass, 4);
-                append(ExecutionEventKind::MutationStarted, 5);
-                append(ExecutionEventKind::RecoveryRequired, 6);
+                receipt = append_fixture_event(&receipt, ExecutionEventKind::PrewriteFencePass, 4)?;
+                receipt = append_fixture_event(&receipt, ExecutionEventKind::MutationStarted, 5)?;
+                receipt = append_fixture_event(&receipt, ExecutionEventKind::RecoveryRequired, 6)?;
             }
             ExecutionEventKind::FailedNoEffect => {
-                append(ExecutionEventKind::PrewriteAborted, 4);
-                append(ExecutionEventKind::FailedNoEffect, 5);
+                receipt = append_fixture_event(&receipt, ExecutionEventKind::PrewriteAborted, 4)?;
+                receipt = append_fixture_event(&receipt, ExecutionEventKind::FailedNoEffect, 5)?;
             }
-            _ => panic!("unsupported fixture terminal"),
+            _ => return Err(D1Error::new("unsupported fixture terminal")),
         }
-        receipt
+        Ok(receipt)
     }
 
     fn observation(
         reconstruction: &Value,
         completed: bool,
         observed_at: i64,
-    ) -> ProviderObservationInput {
+    ) -> Result<ProviderObservationInput, D1Error> {
         let migrations = if completed {
-            reconstruction["plan"]["expected_post_state"]["ledger_migrations"]
-                .as_array()
-                .expect("expected ledger")
-                .iter()
-                .map(|value| value.as_str().expect("migration").to_owned())
-                .collect::<Vec<_>>()
+            string_array(
+                Some(&reconstruction["plan"]["expected_post_state"]["ledger_migrations"]),
+                "fixture.expected_post_state.ledger_migrations",
+            )?
         } else {
             Vec::new()
         };
         let digest = if completed {
-            canonical_sha(&json!({"remote_migrations": migrations}))
+            canonical_sha(&json!({"remote_migrations": &migrations}))?
         } else {
-            reconstruction["plan"]["provider_observation"]["predecessor_ledger_sha256"]
-                .as_str()
-                .expect("predecessor digest")
-                .to_owned()
+            required_string(
+                Some(
+                    &reconstruction["plan"]["provider_observation"]
+                        ["predecessor_ledger_sha256"],
+                ),
+                "fixture.provider_observation.predecessor_ledger_sha256",
+            )?
+            .to_owned()
         };
-        ProviderObservationInput {
+        Ok(ProviderObservationInput {
             schema_version: 1,
             target: target(),
             observed_at_unix_seconds: observed_at,
@@ -579,17 +589,16 @@ mod tests {
             },
             deployment_identity: None,
             time_travel_bookmark_capable: true,
-        }
+        })
     }
 
     #[test]
-    fn completed_reconstruction_requires_exact_current_ledger() {
-        let reconstruction = reconstruction();
-        let receipt = receipt(&reconstruction, ExecutionEventKind::Completed);
-        let post = observation(&reconstruction, true, T0 + 10);
+    fn completed_reconstruction_requires_exact_current_ledger() -> Result<(), D1Error> {
+        let reconstruction = reconstruction()?;
+        let receipt = receipt(&reconstruction, ExecutionEventKind::Completed)?;
+        let post = observation(&reconstruction, true, T0 + 10)?;
         let verified =
-            verify_current_reconstruction_post_state(&reconstruction, &receipt, &post, T0 + 11)
-                .expect("verified completed reconstruction");
+            verify_current_reconstruction_post_state(&reconstruction, &receipt, &post, T0 + 11)?;
         assert_eq!(
             verified.disposition,
             ReconstructionPostStateDisposition::CompletedVerified
@@ -600,59 +609,65 @@ mod tests {
             verified.observed_pending_migrations,
             vec!["0035_pas2_payload_fingerprint_contract.sql"]
         );
+        Ok(())
     }
 
     #[test]
-    fn failed_no_effect_requires_exact_empty_predecessor() {
-        let reconstruction = reconstruction();
-        let receipt = receipt(&reconstruction, ExecutionEventKind::FailedNoEffect);
-        let post = observation(&reconstruction, false, T0 + 10);
+    fn failed_no_effect_requires_exact_empty_predecessor() -> Result<(), D1Error> {
+        let reconstruction = reconstruction()?;
+        let receipt = receipt(&reconstruction, ExecutionEventKind::FailedNoEffect)?;
+        let post = observation(&reconstruction, false, T0 + 10)?;
         let verified =
-            verify_current_reconstruction_post_state(&reconstruction, &receipt, &post, T0 + 11)
-                .expect("verified no effect");
+            verify_current_reconstruction_post_state(&reconstruction, &receipt, &post, T0 + 11)?;
         assert_eq!(
             verified.disposition,
             ReconstructionPostStateDisposition::FailedNoEffectVerified
         );
         assert!(!verified.reconstruction_applied);
+        Ok(())
     }
 
     #[test]
-    fn completed_with_partial_or_deferred_materialization_fails_closed() {
-        let reconstruction = reconstruction();
-        let receipt = receipt(&reconstruction, ExecutionEventKind::Completed);
-        let mut post = observation(&reconstruction, true, T0 + 10);
+    fn completed_with_partial_or_deferred_materialization_fails_closed() -> Result<(), D1Error> {
+        let reconstruction = reconstruction()?;
+        let receipt = receipt(&reconstruction, ExecutionEventKind::Completed)?;
+        let mut post = observation(&reconstruction, true, T0 + 10)?;
         post.remote_migrations
             .push("0035_pas2_payload_fingerprint_contract.sql".to_owned());
         assert!(
             verify_current_reconstruction_post_state(&reconstruction, &receipt, &post, T0 + 11)
                 .is_err()
         );
+        Ok(())
     }
 
     #[test]
-    fn stale_post_state_fails_closed() {
-        let reconstruction = reconstruction();
-        let receipt = receipt(&reconstruction, ExecutionEventKind::Completed);
-        let post = observation(&reconstruction, true, T0 + 10);
-        let error =
+    fn stale_post_state_fails_closed() -> Result<(), D1Error> {
+        let reconstruction = reconstruction()?;
+        let receipt = receipt(&reconstruction, ExecutionEventKind::Completed)?;
+        let post = observation(&reconstruction, true, T0 + 10)?;
+        let Err(error) =
             verify_current_reconstruction_post_state(&reconstruction, &receipt, &post, T0 + 911)
-                .expect_err("stale observation");
+        else {
+            return Err(D1Error::new("stale fixture observation unexpectedly passed"));
+        };
         assert_eq!(error.gate_result_json()["reason_code"], "STALE_OBSERVATION");
+        Ok(())
     }
 
     #[test]
-    fn recovery_required_preserves_ambiguous_state_without_claiming_success() {
-        let reconstruction = reconstruction();
-        let receipt = receipt(&reconstruction, ExecutionEventKind::RecoveryRequired);
-        let post = observation(&reconstruction, false, T0 + 10);
+    fn recovery_required_preserves_ambiguous_state_without_claiming_success() -> Result<(), D1Error>
+    {
+        let reconstruction = reconstruction()?;
+        let receipt = receipt(&reconstruction, ExecutionEventKind::RecoveryRequired)?;
+        let post = observation(&reconstruction, false, T0 + 10)?;
         let verified =
-            verify_current_reconstruction_post_state(&reconstruction, &receipt, &post, T0 + 11)
-                .expect("recovery required confirmed");
+            verify_current_reconstruction_post_state(&reconstruction, &receipt, &post, T0 + 11)?;
         assert_eq!(
             verified.disposition,
             ReconstructionPostStateDisposition::RecoveryRequiredConfirmed
         );
         assert!(!verified.expected_post_state_reached);
+        Ok(())
     }
 }
