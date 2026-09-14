@@ -27,6 +27,9 @@ RESOLVER_D1_BOUNDARY_FILES = {
 D1_CONTRACT = Path("docs/D1_CATALOG.md")
 D1_INDEX = Path("docs/INDEX.md")
 STANDARD_OPERATOR = Path(".github/workflows/d1-operator.yml")
+COMMENT_ROUTER = Path(".github/workflows/d1-operator-comment-router.yml")
+READ_ONLY_OBSERVER = Path(".github/workflows/d1-isolated-target-observation.yml")
+MIGRATION_PREPARE = Path(".github/workflows/d1-migration-prepare.yml")
 MIGRATION_EXECUTOR = Path(".github/workflows/d1-migration-executor.yml")
 D1_WORKFLOWS = Path(".github/workflows")
 
@@ -87,6 +90,9 @@ TIME_TRAVEL_RESTORE_EFFECT = re.compile(
     r"/time_travel/restore\?bookmark=.{0,800}?--request POST)",
     re.DOTALL,
 )
+DIRECT_STANDARD_OPERATOR_DISPATCH = re.compile(
+    r"actions/workflows/d1-operator\.yml/dispatches"
+)
 
 
 def read_text(root: Path, relative: Path, errors: list[str]) -> str:
@@ -96,6 +102,193 @@ def read_text(root: Path, relative: Path, errors: list[str]) -> str:
     except OSError as error:
         errors.append(f"{relative}: missing/unreadable permanent D1 owner: {error}")
         return ""
+
+
+def workflow_dispatch_block(source: str) -> str | None:
+    trigger = source.split("\npermissions:", 1)[0]
+    marker = "\n  workflow_dispatch:"
+    if marker not in trigger:
+        return None
+    return trigger.split(marker, 1)[1]
+
+
+def check_operator_topology(workflows: dict[Path, str]) -> list[str]:
+    """Protect the current D1 operator graph, not historical stage names."""
+
+    errors: list[str] = []
+    operator = workflows.get(STANDARD_OPERATOR, "")
+    router = workflows.get(COMMENT_ROUTER, "")
+
+    dispatch = workflow_dispatch_block(operator)
+    if dispatch is None:
+        errors.append(
+            f"{STANDARD_OPERATOR}: D1_OPERATOR_TOPOLOGY_MISSING_STANDARD_DISPATCH"
+        )
+    elif "inputs:" in dispatch:
+        errors.append(
+            f"{STANDARD_OPERATOR}: D1_OPERATOR_TOPOLOGY_MANUAL_MACHINE_INPUTS_FORBIDDEN"
+        )
+
+    ordinary_route_marker = (
+        "- name: Dispatch zero-input standard D1 operator as repository owner"
+    )
+    if ordinary_route_marker not in router:
+        errors.append(
+            f"{COMMENT_ROUTER}: D1_OPERATOR_TOPOLOGY_MISSING_ZERO_INPUT_COMMENT_ROUTE"
+        )
+    else:
+        ordinary_route = router.split(ordinary_route_marker, 1)[1].split(
+            "\n      - name:", 1
+        )[0]
+        if (
+            "\"repos/$GITHUB_REPOSITORY/actions/workflows/d1-operator.yml/dispatches\""
+            not in ordinary_route
+            or "-f ref=main" not in ordinary_route
+            or "--input" in ordinary_route
+        ):
+            errors.append(
+                f"{COMMENT_ROUTER}: D1_OPERATOR_TOPOLOGY_COMMENT_ROUTE_MUST_BE_ZERO_INPUT"
+            )
+
+    if "github.event.comment.body == '/d1 operator'" not in router:
+        errors.append(
+            f"{COMMENT_ROUTER}: D1_OPERATOR_TOPOLOGY_COMMENT_COMMAND_MUST_BE_EXACT"
+        )
+
+    standard_operator_dispatchers = sorted(
+        path
+        for path, text in workflows.items()
+        if DIRECT_STANDARD_OPERATOR_DISPATCH.search(text)
+    )
+    if standard_operator_dispatchers != [COMMENT_ROUTER]:
+        errors.append(
+            "D1_OPERATOR_TOPOLOGY_STANDARD_OPERATOR_DISPATCHERS "
+            f"expected={[COMMENT_ROUTER]} observed={standard_operator_dispatchers}"
+        )
+
+    prepare_dispatchers = sorted(
+        path
+        for path, text in workflows.items()
+        if MIGRATION_PREPARE.name in text and "/dispatches" in text
+    )
+    if prepare_dispatchers != [STANDARD_OPERATOR]:
+        errors.append(
+            "D1_OPERATOR_TOPOLOGY_PREPARE_DISPATCHERS "
+            f"expected={[STANDARD_OPERATOR]} observed={prepare_dispatchers}"
+        )
+
+    observer_dispatchers = sorted(
+        path
+        for path, text in workflows.items()
+        if READ_ONLY_OBSERVER.name in text and "/dispatches" in text
+    )
+    expected_observer_dispatchers = sorted([STANDARD_OPERATOR, COMMENT_ROUTER])
+    if observer_dispatchers != expected_observer_dispatchers:
+        errors.append(
+            "D1_OPERATOR_TOPOLOGY_OBSERVER_DISPATCHERS "
+            f"expected={expected_observer_dispatchers} observed={observer_dispatchers}"
+        )
+
+    executor_dispatchers = sorted(
+        path
+        for path, text in workflows.items()
+        if MIGRATION_EXECUTOR.name in text and "/dispatches" in text
+    )
+    expected_executor_dispatchers = sorted([STANDARD_OPERATOR, COMMENT_ROUTER])
+    if executor_dispatchers != expected_executor_dispatchers:
+        errors.append(
+            "D1_OPERATOR_TOPOLOGY_EXECUTOR_DISPATCHERS "
+            f"expected={expected_executor_dispatchers} observed={executor_dispatchers}"
+        )
+
+    restore_marker = "- name: Dispatch one-shot Time Travel restore through sole D1 mutation owner"
+    if restore_marker not in router:
+        errors.append(
+            f"{COMMENT_ROUTER}: D1_OPERATOR_TOPOLOGY_MISSING_BOUNDED_RECOVERY_ROUTE"
+        )
+    else:
+        restore_route = router.split(restore_marker, 1)[1].split(
+            "\n      - name:", 1
+        )[0]
+        if (
+            "operation_mode:\"time_travel_restore\"" not in restore_route
+            or "d1-migration-executor.yml/dispatches" not in restore_route
+            or "D1_TIME_TRAVEL_RESTORE_AUTHORIZATION" in restore_route
+        ):
+            errors.append(
+                f"{COMMENT_ROUTER}: D1_OPERATOR_TOPOLOGY_RECOVERY_ROUTE_DRIFT"
+            )
+
+    return errors
+
+
+def prove_operator_topology_negative_cases(workflows: dict[Path, str]) -> list[str]:
+    """Run small same-checker negative fixtures so the topology guard cannot silently weaken."""
+
+    errors: list[str] = []
+
+    second_router = dict(workflows)
+    second_router[Path(".github/workflows/fixture-second-d1-router.yml")] = (
+        "name: forbidden second D1 router\n"
+        "on:\n  workflow_dispatch:\n"
+        "jobs:\n  route:\n    steps:\n"
+        "      - run: gh api --method POST "
+        "\"repos/$GITHUB_REPOSITORY/actions/workflows/d1-migration-prepare.yml/dispatches\"\n"
+    )
+    second_router_errors = check_operator_topology(second_router)
+    if not any(
+        "D1_OPERATOR_TOPOLOGY_PREPARE_DISPATCHERS" in error
+        for error in second_router_errors
+    ):
+        errors.append(
+            "D1 operator topology negative fixture failed: second prepare router was not rejected"
+        )
+
+    manual_input = dict(workflows)
+    source = manual_input.get(STANDARD_OPERATOR, "")
+    expected = "  workflow_dispatch:\n\npermissions:"
+    if expected not in source:
+        errors.append(
+            "D1 operator topology negative fixture unavailable: standard zero-input dispatch marker missing"
+        )
+    else:
+        manual_input[STANDARD_OPERATOR] = source.replace(
+            expected,
+            "  workflow_dispatch:\n"
+            "    inputs:\n"
+            "      transaction_id:\n"
+            "        required: true\n"
+            "        type: string\n\n"
+            "permissions:",
+            1,
+        )
+        manual_input_errors = check_operator_topology(manual_input)
+        if not any(
+            "D1_OPERATOR_TOPOLOGY_MANUAL_MACHINE_INPUTS_FORBIDDEN" in error
+            for error in manual_input_errors
+        ):
+            errors.append(
+                "D1 operator topology negative fixture failed: manual machine-known input was not rejected"
+            )
+
+    second_operator_transport = dict(workflows)
+    second_operator_transport[Path(".github/workflows/fixture-second-operator-transport.yml")] = (
+        "name: forbidden second operator transport\n"
+        "on:\n  issue_comment:\n    types: [created]\n"
+        "jobs:\n  route:\n    steps:\n"
+        "      - run: gh api --method POST "
+        "\"repos/$GITHUB_REPOSITORY/actions/workflows/d1-operator.yml/dispatches\" -f ref=main\n"
+    )
+    second_operator_errors = check_operator_topology(second_operator_transport)
+    if not any(
+        "D1_OPERATOR_TOPOLOGY_STANDARD_OPERATOR_DISPATCHERS" in error
+        for error in second_operator_errors
+    ):
+        errors.append(
+            "D1 operator topology negative fixture failed: second operator transport was not rejected"
+        )
+
+    return errors
 
 
 def check_operations_contract(root: Path) -> list[str]:
@@ -130,6 +323,7 @@ def check_operations_contract(root: Path) -> list[str]:
     apply_owners: list[Path] = []
     restore_owners: list[Path] = []
     workflow_root = root / D1_WORKFLOWS
+    workflows: dict[Path, str] = {}
     try:
         workflow_paths = sorted(
             path
@@ -143,6 +337,7 @@ def check_operations_contract(root: Path) -> list[str]:
     for path in workflow_paths:
         text = path.read_text(encoding="utf-8")
         relative = path.relative_to(root)
+        workflows[relative] = text
         if REMOTE_APPLY.search(text):
             apply_owners.append(relative)
         if TIME_TRAVEL_RESTORE_EFFECT.search(text):
@@ -158,6 +353,9 @@ def check_operations_contract(root: Path) -> list[str]:
             "sanctioned D1 Time Travel restore must have exactly one workflow owner "
             f"{MIGRATION_EXECUTOR}; observed={restore_owners}"
         )
+
+    errors.extend(check_operator_topology(workflows))
+    errors.extend(prove_operator_topology_negative_cases(workflows))
 
     return errors
 
