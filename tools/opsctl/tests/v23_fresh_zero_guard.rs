@@ -19,9 +19,9 @@ fn unique_temp_path(label: &str) -> PathBuf {
 
 fn current_catalog_release_contract(root: &std::path::Path) -> Result<Value, Box<dyn Error>> {
     let projection: Value = serde_json::from_str(&d1::repository_projection(root)?)?;
-    let components = projection["components"]
-        .as_array()
-        .ok_or_else(|| io::Error::other("typed D1 repository projection is missing components"))?;
+    let components = projection["components"].as_array().ok_or_else(|| {
+        io::Error::other("typed D1 repository projection is missing components")
+    })?;
     let catalog = components
         .iter()
         .find(|component| component["component_id"] == "catalog")
@@ -37,8 +37,7 @@ fn current_catalog_release_contract(root: &std::path::Path) -> Result<Value, Box
 }
 
 #[test]
-fn empty_catalog_ledger_cannot_bypass_historical_compatibility_as_fresh_zero()
--> Result<(), Box<dyn Error>> {
+fn empty_catalog_ordinary_plan_stays_fail_closed() -> Result<(), Box<dyn Error>> {
     let root = repo_root();
     let contract = current_catalog_release_contract(&root)?;
     let ledger_path = unique_temp_path("empty-ledger");
