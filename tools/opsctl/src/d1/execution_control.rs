@@ -1,3 +1,5 @@
+pub mod reconstruction_post_state;
+
 use super::model::D1Error;
 use super::transaction::{RecoveryStrategy, TargetIdentity, TransactionPhase};
 use crate::canonical::{canonical_json, sha256_hex};
@@ -75,6 +77,7 @@ pub enum ExecutionEventKind {
     PrewriteAborted,
     MutationStarted,
     MigrationApplied,
+    ReconstructionApplied,
     PostObserved,
     Verified,
     Completed,
@@ -148,11 +151,11 @@ pub struct ExecutionReceipt {
 
 pub fn acquire_target_fence(input: TargetFenceLeaseInput) -> Result<TargetFenceLease, D1Error> {
     validate_fence_input(&input)?;
-    let canonical =
-        canonical_json(&serde_json::to_value(&input).map_err(|error| {
-            D1Error::new(format!("cannot serialize target fence input: {error}"))
-        })?)
-        .map_err(D1Error::new)?;
+    let canonical = canonical_json(
+        &serde_json::to_value(&input)
+            .map_err(|error| D1Error::new(format!("cannot serialize target fence input: {error}")))?,
+    )
+    .map_err(D1Error::new)?;
     Ok(TargetFenceLease {
         schema_version: input.schema_version,
         status: "TARGET_FENCE_ACQUIRED".to_owned(),
@@ -317,9 +320,8 @@ pub fn append_execution_event(
 pub fn serialize_target_fence_lease(lease: &TargetFenceLease) -> Result<String, D1Error> {
     validate_lease(lease)?;
     canonical_json(
-        &serde_json::to_value(lease).map_err(|error| {
-            D1Error::new(format!("cannot serialize target fence lease: {error}"))
-        })?,
+        &serde_json::to_value(lease)
+            .map_err(|error| D1Error::new(format!("cannot serialize target fence lease: {error}")))?,
     )
     .map_err(D1Error::new)
 }
@@ -339,9 +341,8 @@ pub fn serialize_target_fence_verification(
 pub fn serialize_execution_receipt(receipt: &ExecutionReceipt) -> Result<String, D1Error> {
     validate_receipt(receipt)?;
     canonical_json(
-        &serde_json::to_value(receipt).map_err(|error| {
-            D1Error::new(format!("cannot serialize execution receipt: {error}"))
-        })?,
+        &serde_json::to_value(receipt)
+            .map_err(|error| D1Error::new(format!("cannot serialize execution receipt: {error}")))?,
     )
     .map_err(D1Error::new)
 }
@@ -399,11 +400,11 @@ fn validate_lease(lease: &TargetFenceLease) -> Result<(), D1Error> {
         acquired_at_unix_seconds: lease.acquired_at_unix_seconds,
     };
     validate_fence_input(&input)?;
-    let canonical =
-        canonical_json(&serde_json::to_value(&input).map_err(|error| {
-            D1Error::new(format!("cannot serialize target fence input: {error}"))
-        })?)
-        .map_err(D1Error::new)?;
+    let canonical = canonical_json(
+        &serde_json::to_value(&input)
+            .map_err(|error| D1Error::new(format!("cannot serialize target fence input: {error}")))?,
+    )
+    .map_err(D1Error::new)?;
     if lease.fence_id != sha256_hex(canonical.as_bytes()) {
         return Err(D1Error::new(
             "target fence_id does not match the exact canonical lease input",
@@ -605,14 +606,18 @@ fn validate_transition(
 ) -> Result<(), D1Error> {
     use ExecutionEventKind::{
         Authorized, Completed, FailedNoEffect, MigrationApplied, MutationStarted, PostObserved,
-        Prepared, PrewriteAborted, PrewriteFencePass, RecoveryRequired, Verified,
+        Prepared, PrewriteAborted, PrewriteFencePass, ReconstructionApplied, RecoveryRequired,
+        Verified,
     };
     let allowed = match (previous, input.kind) {
         (Authorized, PrewriteFencePass | PrewriteAborted) => true,
         (PrewriteAborted, FailedNoEffect) => true,
         (PrewriteFencePass, MutationStarted | PostObserved | FailedNoEffect) => true,
-        (MutationStarted, MigrationApplied | PostObserved | RecoveryRequired) => true,
+        (MutationStarted, MigrationApplied | ReconstructionApplied | PostObserved | RecoveryRequired) => {
+            true
+        }
         (MigrationApplied, MigrationApplied | PostObserved | RecoveryRequired) => true,
+        (ReconstructionApplied, PostObserved | RecoveryRequired) => true,
         (PostObserved, Verified | RecoveryRequired) => true,
         (Verified, Completed) => true,
         (Prepared | Completed | RecoveryRequired | FailedNoEffect, _) => false,
@@ -625,6 +630,14 @@ fn validate_transition(
         )));
     }
     if input.kind == MigrationApplied {
+        if prior_events
+            .iter()
+            .any(|event| event.kind == ReconstructionApplied)
+        {
+            return Err(D1Error::new(
+                "execution receipt cannot mix MIGRATION_APPLIED with RECONSTRUCTION_APPLIED",
+            ));
+        }
         let migration_id = input.migration_id.as_deref().unwrap_or_default();
         if prior_events.iter().any(|event| {
             event.kind == MigrationApplied && event.migration_id.as_deref() == Some(migration_id)
@@ -632,6 +645,16 @@ fn validate_transition(
             return Err(D1Error::new(format!(
                 "execution receipt cannot record MIGRATION_APPLIED twice for {migration_id}"
             )));
+        }
+    }
+    if input.kind == ReconstructionApplied {
+        if prior_events
+            .iter()
+            .any(|event| matches!(event.kind, MigrationApplied | ReconstructionApplied))
+        {
+            return Err(D1Error::new(
+                "execution receipt permits exactly one RECONSTRUCTION_APPLIED and never mixes it with MIGRATION_APPLIED",
+            ));
         }
     }
     Ok(())
@@ -865,6 +888,53 @@ mod tests {
             Some(ExecutionEventKind::Completed)
         );
         serialize_execution_receipt(&receipt)?;
+        Ok(())
+    }
+
+    #[test]
+    fn successful_reconstruction_receipt_is_distinct_from_migration() -> Result<(), D1Error> {
+        let lease = acquire_target_fence(ordinary_input(7, "db-1"))?;
+        let mut receipt = initialize_execution_receipt(receipt_seed(lease), T0 + 20, T0 + 21)?;
+        receipt = append(&receipt, ExecutionEventKind::PrewriteFencePass, 22, None)?;
+        receipt = append(&receipt, ExecutionEventKind::MutationStarted, 23, None)?;
+        receipt = append(&receipt, ExecutionEventKind::ReconstructionApplied, 24, None)?;
+        receipt = append(&receipt, ExecutionEventKind::PostObserved, 25, None)?;
+        receipt = append(&receipt, ExecutionEventKind::Verified, 26, None)?;
+        receipt = append(&receipt, ExecutionEventKind::Completed, 27, None)?;
+        assert_eq!(
+            receipt
+                .events
+                .iter()
+                .filter(|event| event.kind == ExecutionEventKind::ReconstructionApplied)
+                .count(),
+            1
+        );
+        assert!(
+            receipt
+                .events
+                .iter()
+                .all(|event| event.kind != ExecutionEventKind::MigrationApplied)
+        );
+        serialize_execution_receipt(&receipt)?;
+        Ok(())
+    }
+
+    #[test]
+    fn reconstruction_and_migration_applied_events_cannot_mix() -> Result<(), D1Error> {
+        let lease = acquire_target_fence(ordinary_input(7, "db-1"))?;
+        let mut receipt = initialize_execution_receipt(receipt_seed(lease), T0 + 20, T0 + 21)?;
+        receipt = append(&receipt, ExecutionEventKind::PrewriteFencePass, 22, None)?;
+        receipt = append(&receipt, ExecutionEventKind::MutationStarted, 23, None)?;
+        receipt = append(&receipt, ExecutionEventKind::ReconstructionApplied, 24, None)?;
+        assert!(
+            append(
+                &receipt,
+                ExecutionEventKind::MigrationApplied,
+                25,
+                Some("0031.sql")
+            )
+            .is_err()
+        );
         Ok(())
     }
 
