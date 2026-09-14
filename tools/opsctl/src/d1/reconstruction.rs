@@ -362,8 +362,14 @@ pub(crate) fn authorization_subject(
     validate_git_object_id(source_sha, "source_sha")?;
     let tree_sha = required_string(plan.get("tree_sha"), "tree_sha")?;
     validate_git_object_id(tree_sha, "tree_sha")?;
-    validate_release_set_id(required_string(plan.get("release_set_id"), "release_set_id")?)?;
-    required_sha256(plan.get("release_manifest_sha256"), "release_manifest_sha256")?;
+    validate_release_set_id(required_string(
+        plan.get("release_set_id"),
+        "release_set_id",
+    )?)?;
+    required_sha256(
+        plan.get("release_manifest_sha256"),
+        "release_manifest_sha256",
+    )?;
     let repository_identity_sha256 = required_sha256(
         plan.get("repository_identity_sha256"),
         "repository_identity_sha256",
@@ -385,7 +391,9 @@ pub(crate) fn authorization_subject(
     let freshness_max_age_seconds = plan
         .get("freshness_max_age_seconds")
         .and_then(Value::as_u64)
-        .ok_or_else(|| D1Error::new("CURRENT reconstruction freshness_max_age_seconds is missing"))?;
+        .ok_or_else(|| {
+            D1Error::new("CURRENT reconstruction freshness_max_age_seconds is missing")
+        })?;
     if freshness_max_age_seconds != OBSERVATION_FRESHNESS_MAX_AGE_SECONDS {
         return Err(D1Error::new(
             "CURRENT reconstruction freshness window drifted from the canonical bounded window",
@@ -446,7 +454,9 @@ pub(crate) fn authorization_subject(
     let observed_at_unix_seconds = provider_observation
         .get("observed_at_unix_seconds")
         .and_then(Value::as_i64)
-        .ok_or_else(|| D1Error::new("CURRENT reconstruction observed_at_unix_seconds is missing"))?;
+        .ok_or_else(|| {
+            D1Error::new("CURRENT reconstruction observed_at_unix_seconds is missing")
+        })?;
     if observed_at_unix_seconds <= 0 {
         return Err(D1Error::new(
             "CURRENT reconstruction observed_at_unix_seconds must be positive",
