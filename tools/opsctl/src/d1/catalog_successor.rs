@@ -16,6 +16,13 @@ const HISTORY_DIGEST_ALGORITHM: &str = "sha256(canonical-json(name+sha256))";
 const LEGACY_ROOT: &str = "migrations/d1";
 const PREDECESSOR_SUCCESSOR_ROOT: &str = "migrations/d1-successor";
 const CURRENT_SUCCESSOR_ROOT: &str = "migrations/d1-successor-v2";
+const RESOLVER_ROOT: &str = "migrations/resolver-d1";
+const EXECUTABLE_SCHEMA_ROOTS: [&str; 4] = [
+    LEGACY_ROOT,
+    PREDECESSOR_SUCCESSOR_ROOT,
+    CURRENT_SUCCESSOR_ROOT,
+    RESOLVER_ROOT,
+];
 const SUCCESSOR_LINEAGE_ID: &str = "catalog-successor-v2";
 const PREDECESSOR_CONTRACT_REVISION: &str = "0032_pas2_payload_fingerprint_contract.sql";
 const BRIDGE_ENROLLMENT_REVISION: &str = "0032_bridge_device_enrollment_authority.sql";
@@ -39,8 +46,6 @@ struct CatalogSuccessor {
 
 impl CatalogSuccessor {
     fn load(root: &Path) -> Result<Self, D1Error> {
-        // Loading the predecessor also mechanically validates the immutable legacy 0001..0031
-        // boundary and the accepted v1 successor directory before v2 is composed.
         let predecessor_authority = predecessor::component_authority(root, "catalog")?;
         validate_predecessor_authority(&predecessor_authority)?;
         validate_predecessor_repository_identity(root)?;
@@ -268,6 +273,99 @@ impl CatalogSuccessor {
         }))
     }
 
+    fn fresh_zero_construction_projection(
+        &self,
+        root: &Path,
+        repository_identity_sha256: &str,
+    ) -> Result<Value, D1Error> {
+        let contract = self.release_contract_projection()?;
+        let target = contract
+            .get("target_schema_revision")
+            .and_then(Value::as_str)
+            .ok_or_else(|| {
+                D1Error::new("Catalog release contract is missing target_schema_revision")
+            })?;
+        let supported_max = contract
+            .get("supported_schema_max")
+            .and_then(Value::as_str)
+            .ok_or_else(|| {
+                D1Error::new("Catalog release contract is missing supported_schema_max")
+            })?;
+
+        let target_positions = self
+            .authority
+            .ordered_history
+            .iter()
+            .enumerate()
+            .filter_map(|(index, migration_file)| (migration_file == target).then_some(index))
+            .collect::<Vec<_>>();
+        if target_positions.len() != 1 {
+            return Err(D1Error::new(
+                "CURRENT Catalog target is missing or ambiguous in executable lineage",
+            ));
+        }
+        let target_index = target_positions[0];
+
+        let mut migration_sources = Vec::with_capacity(target_index + 1);
+        for (migration_file, source_root) in self
+            .authority
+            .ordered_history
+            .iter()
+            .zip(self.migration_source_roots.iter())
+            .take(target_index + 1)
+        {
+            if Path::new(migration_file).components().count() != 1
+                || !migration_file.ends_with(".sql")
+            {
+                return Err(D1Error::new(
+                    "fresh-zero migration filename is not one repository-local SQL file",
+                ));
+            }
+            if !EXECUTABLE_SCHEMA_ROOTS.contains(&source_root.as_str()) {
+                return Err(D1Error::new(
+                    "fresh-zero migration source escaped executable schema authority",
+                ));
+            }
+            let bytes =
+                read_regular_repository_file(root, &format!("{source_root}/{migration_file}"))?;
+            migration_sources.push(json!({
+                "migration_file": migration_file,
+                "source_root": source_root,
+                "sha256": sha256_hex(&bytes),
+            }));
+        }
+
+        let deferred_revisions = self.authority.ordered_history[target_index + 1..].to_vec();
+        if target == supported_max {
+            if !deferred_revisions.is_empty() {
+                return Err(D1Error::new(
+                    "Catalog lineage contains deferred revisions outside an exact release target",
+                ));
+            }
+        } else if deferred_revisions.last().map(String::as_str) != Some(supported_max) {
+            return Err(D1Error::new(
+                "Catalog deferred lineage does not terminate at supported_schema_max",
+            ));
+        }
+
+        let construction = json!({
+            "schema_version": 1,
+            "kind": "D1_CURRENT_FRESH_ZERO_CONSTRUCTION",
+            "component_id": "catalog",
+            "repository_identity_sha256": repository_identity_sha256,
+            "target_schema_revision": target,
+            "migration_sources": migration_sources,
+            "deferred_revisions": deferred_revisions,
+            "provider_mutation_authorized": false,
+            "production_mutation_authorized": false,
+        });
+        let canonical = canonical_json(&construction).map_err(D1Error::new)?;
+        Ok(json!({
+            "construction": construction,
+            "construction_sha256": sha256_hex(canonical.as_bytes()),
+        }))
+    }
+
     fn inventory_projection(&self) -> Result<Value, D1Error> {
         let mut value = self.identity_projection();
         value["release_schema_contract"] = self.release_contract_projection()?;
@@ -316,14 +414,12 @@ pub(crate) fn repository_projection(root: &Path) -> Result<String, D1Error> {
         *catalog_slot = catalog.inventory_projection()?;
         repository_identity_from_components(components)?
     };
+    let fresh_zero_construction =
+        catalog.fresh_zero_construction_projection(root, &repository_identity)?;
 
-    projection["executable_schema_authority"] = json!([
-        LEGACY_ROOT,
-        PREDECESSOR_SUCCESSOR_ROOT,
-        CURRENT_SUCCESSOR_ROOT,
-        "migrations/resolver-d1"
-    ]);
+    projection["executable_schema_authority"] = json!(EXECUTABLE_SCHEMA_ROOTS);
     projection["repository_identity_sha256"] = json!(repository_identity);
+    projection["fresh_zero_construction"] = fresh_zero_construction;
     canonical_pretty_json(&projection).map_err(D1Error::new)
 }
 
