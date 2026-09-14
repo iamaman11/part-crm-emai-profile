@@ -1,4 +1,5 @@
 use super::model::{D1Error, GateResult};
+use super::reconstruction;
 use super::transaction::{TargetIdentity, TransactionPhase, TransactionProjection};
 use super::transaction_integrity::revalidate_transaction_projection;
 use crate::canonical::{canonical_json, sha256_hex};
@@ -7,8 +8,8 @@ use serde_json::Value;
 use std::collections::BTreeSet;
 
 const AUTHORIZATION_SCHEMA_VERSION: u64 = 1;
-const INVALID_AUTH_REMEDIATION: &str = "Correct the exact authorization envelope to match the immutable prepared transaction without broadening provider effects, then retry only while the transaction remains fresh.";
-const STALE_AUTH_REMEDIATION: &str = "Do not reuse the expired authorization. Re-observe/re-prepare if needed and obtain a new exact transaction-scoped authorization.";
+const INVALID_AUTH_REMEDIATION: &str = "Correct the exact authorization envelope to match the immutable prepared operation without broadening provider effects, then retry only while the operation remains fresh.";
+const STALE_AUTH_REMEDIATION: &str = "Do not reuse the expired authorization. Re-observe/re-prepare if needed and obtain a new exact operation-scoped authorization.";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -44,12 +45,59 @@ pub struct TransactionAuthorizationBinding {
     pub evaluated_at_unix_seconds: i64,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct AuthorizationSubject {
+    operation_id: String,
+    target: TargetIdentity,
+    phase: TransactionPhase,
+    allowed_provider_effects: Vec<String>,
+    observed_at_unix_seconds: i64,
+    freshness_max_age_seconds: u64,
+}
+
 pub fn bind_transaction_authorization(
     transaction: &TransactionProjection,
     authorization_value: &Value,
     evaluated_at_unix_seconds: i64,
 ) -> Result<TransactionAuthorizationBinding, D1Error> {
     revalidate_transaction_projection(transaction)?;
+    let subject = AuthorizationSubject {
+        operation_id: transaction.transaction_id.clone(),
+        target: transaction.transaction_plan.target.clone(),
+        phase: transaction.transaction_plan.phase,
+        allowed_provider_effects: transaction.transaction_plan.allowed_provider_effects.clone(),
+        observed_at_unix_seconds: transaction.transaction_plan.observed_at_unix_seconds,
+        freshness_max_age_seconds: transaction.transaction_plan.freshness_max_age_seconds,
+    };
+    bind_authorization_subject(&subject, authorization_value, evaluated_at_unix_seconds)
+}
+
+pub fn bind_current_reconstruction_authorization(
+    reconstruction_value: &Value,
+    authorization_value: &Value,
+    evaluated_at_unix_seconds: i64,
+) -> Result<TransactionAuthorizationBinding, D1Error> {
+    let reconstruction = reconstruction::authorization_subject(reconstruction_value).map_err(|_| {
+        invalid_authorization(
+            "prepared CURRENT reconstruction projection failed exact revalidation before authorization",
+        )
+    })?;
+    let subject = AuthorizationSubject {
+        operation_id: reconstruction.operation_id,
+        target: reconstruction.target,
+        phase: TransactionPhase::Ordinary,
+        allowed_provider_effects: reconstruction.allowed_provider_effects,
+        observed_at_unix_seconds: reconstruction.observed_at_unix_seconds,
+        freshness_max_age_seconds: reconstruction.freshness_max_age_seconds,
+    };
+    bind_authorization_subject(&subject, authorization_value, evaluated_at_unix_seconds)
+}
+
+fn bind_authorization_subject(
+    subject: &AuthorizationSubject,
+    authorization_value: &Value,
+    evaluated_at_unix_seconds: i64,
+) -> Result<TransactionAuthorizationBinding, D1Error> {
     if evaluated_at_unix_seconds <= 0 {
         return Err(invalid_authorization(
             "authorization evaluation timestamp must be positive",
@@ -62,7 +110,7 @@ pub fn bind_transaction_authorization(
                 "transaction authorization does not match the typed contract: {error}"
             ))
         })?;
-    validate_authorization_input(transaction, &authorization, evaluated_at_unix_seconds)?;
+    validate_authorization_input(subject, &authorization, evaluated_at_unix_seconds)?;
 
     let canonical_authorization =
         canonical_json(&serde_json::to_value(&authorization).map_err(|error| {
@@ -104,7 +152,7 @@ pub fn serialize_authorization_binding(
 }
 
 fn validate_authorization_input(
-    transaction: &TransactionProjection,
+    subject: &AuthorizationSubject,
     authorization: &TransactionAuthorizationInput,
     evaluated_at_unix_seconds: i64,
 ) -> Result<(), D1Error> {
@@ -117,31 +165,29 @@ fn validate_authorization_input(
         &authorization.transaction_id,
         "authorization transaction_id",
     )?;
-    if authorization.transaction_id != transaction.transaction_id {
+    if authorization.transaction_id != subject.operation_id {
         return Err(invalid_authorization(
-            "authorization transaction_id must exactly equal the prepared transaction_id",
+            "authorization transaction_id must exactly equal the prepared operation identity",
         ));
     }
     validate_target(&authorization.target)?;
-    if authorization.target != transaction.transaction_plan.target {
+    if authorization.target != subject.target {
         return Err(invalid_authorization(
-            "authorization target must exactly equal the prepared transaction target",
+            "authorization target must exactly equal the prepared operation target",
         ));
     }
-    if authorization.phase != transaction.transaction_plan.phase {
+    if authorization.phase != subject.phase {
         return Err(invalid_authorization(
-            "authorization phase must exactly equal the prepared transaction phase",
+            "authorization phase must exactly equal the prepared operation phase",
         ));
     }
     validate_effect_scope(
         &authorization.authorized_provider_effects,
         "authorization authorized_provider_effects",
     )?;
-    if authorization.authorized_provider_effects
-        != transaction.transaction_plan.allowed_provider_effects
-    {
+    if authorization.authorized_provider_effects != subject.allowed_provider_effects {
         return Err(invalid_authorization(
-            "authorization provider effect scope must exactly equal the prepared transaction allowed effects",
+            "authorization provider effect scope must exactly equal the prepared operation allowed effects",
         ));
     }
     validate_non_empty(
@@ -155,24 +201,21 @@ fn validate_authorization_input(
             "authorization timestamps require positive issued_at and expires_at > issued_at",
         ));
     }
-    if authorization.issued_at_unix_seconds < transaction.transaction_plan.observed_at_unix_seconds
-    {
+    if authorization.issued_at_unix_seconds < subject.observed_at_unix_seconds {
         return Err(invalid_authorization(
-            "authorization cannot be issued before the provider observation used by the transaction",
+            "authorization cannot be issued before the provider observation used by the prepared operation",
         ));
     }
 
-    let freshness_seconds =
-        i64::try_from(transaction.transaction_plan.freshness_max_age_seconds)
-            .map_err(|_| D1Error::new("transaction freshness window does not fit i64"))?;
-    let expected_fresh_until = transaction
-        .transaction_plan
+    let freshness_seconds = i64::try_from(subject.freshness_max_age_seconds)
+        .map_err(|_| D1Error::new("operation freshness window does not fit i64"))?;
+    let expected_fresh_until = subject
         .observed_at_unix_seconds
         .checked_add(freshness_seconds)
-        .ok_or_else(|| D1Error::new("transaction freshness deadline overflow"))?;
+        .ok_or_else(|| D1Error::new("operation freshness deadline overflow"))?;
     if authorization.observation_fresh_until_unix_seconds != expected_fresh_until {
         return Err(invalid_authorization(
-            "authorization observation freshness deadline must be derived exactly from the prepared transaction",
+            "authorization observation freshness deadline must be derived exactly from the prepared operation",
         ));
     }
     if authorization.expires_at_unix_seconds > expected_fresh_until {
@@ -200,7 +243,7 @@ fn invalid_authorization(summary: impl Into<String>) -> D1Error {
         "d1.authorization",
         "INVALID_AUTHORIZATION",
         summary,
-        Some("exact immutable transaction-scoped authorization".to_owned()),
+        Some("exact immutable operation-scoped authorization".to_owned()),
         None,
         INVALID_AUTH_REMEDIATION,
     ))
@@ -345,7 +388,7 @@ mod tests {
             supported_schema_max: "0032_pas2_payload_fingerprint_contract.sql".to_owned(),
             precondition_evidence_refs: vec!["fixture:precondition".to_owned()],
             recovery_strategy: RecoveryStrategy::NoopRetry,
-            expected_post_state: json!({"revision": "0031_device_binding_governance.sql"}),
+            expected_post_state: serde_json::json!({"revision": "0031_device_binding_governance.sql"}),
             allowed_provider_effects: vec!["D1_MIGRATIONS_APPLY_EXACT_PLAN".to_owned()],
             forbidden_provider_effects: vec![
                 "D1_CREATE".to_owned(),
