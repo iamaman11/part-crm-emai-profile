@@ -31,10 +31,15 @@ fn catalog_projection(projection: &Value) -> Result<&Value, Box<dyn Error>> {
         .ok_or_else(|| io::Error::other("typed D1 projection is missing components"))?;
     let matches = components
         .iter()
-        .filter(|component| component.get("component_id").and_then(Value::as_str) == Some("catalog"))
+        .filter(|component| {
+            component.get("component_id").and_then(Value::as_str) == Some("catalog")
+        })
         .collect::<Vec<_>>();
     if matches.len() != 1 {
-        return Err(io::Error::other("typed D1 projection must contain exactly one Catalog component").into());
+        return Err(io::Error::other(
+            "typed D1 projection must contain exactly one Catalog component",
+        )
+        .into());
     }
     Ok(matches[0])
 }
@@ -45,7 +50,10 @@ fn read_governed_source(
     migration_file: &str,
 ) -> Result<Vec<u8>, Box<dyn Error>> {
     if Path::new(migration_file).components().count() != 1 || !migration_file.ends_with(".sql") {
-        return Err(io::Error::other("fresh-zero migration filename is not one repository-local SQL file").into());
+        return Err(io::Error::other(
+            "fresh-zero migration filename is not one repository-local SQL file",
+        )
+        .into());
     }
     let canonical_root = fs::canonicalize(root)?;
     let migration_root = root.join(source_root);
@@ -67,11 +75,16 @@ fn read_governed_source(
 
 fn derive_current_construction(root: &Path, projection: &Value) -> Result<Value, Box<dyn Error>> {
     let catalog = catalog_projection(projection)?;
-    let contract = catalog
-        .get("release_schema_contract")
-        .ok_or_else(|| io::Error::other("typed Catalog projection is missing release_schema_contract"))?;
-    let target = required_string(contract, "target_schema_revision", "Catalog release contract")?;
-    let supported_max = required_string(contract, "supported_schema_max", "Catalog release contract")?;
+    let contract = catalog.get("release_schema_contract").ok_or_else(|| {
+        io::Error::other("typed Catalog projection is missing release_schema_contract")
+    })?;
+    let target = required_string(
+        contract,
+        "target_schema_revision",
+        "Catalog release contract",
+    )?;
+    let supported_max =
+        required_string(contract, "supported_schema_max", "Catalog release contract")?;
     let repository_identity = required_string(
         projection,
         "repository_identity_sha256",
@@ -81,7 +94,9 @@ fn derive_current_construction(root: &Path, projection: &Value) -> Result<Value,
     let governed_roots = projection
         .get("executable_schema_authority")
         .and_then(Value::as_array)
-        .ok_or_else(|| io::Error::other("typed D1 projection is missing executable_schema_authority"))?
+        .ok_or_else(|| {
+            io::Error::other("typed D1 projection is missing executable_schema_authority")
+        })?
         .iter()
         .map(|value| {
             value
@@ -97,7 +112,9 @@ fn derive_current_construction(root: &Path, projection: &Value) -> Result<Value,
     let sources = catalog
         .get("executable_migration_sources")
         .and_then(Value::as_array)
-        .ok_or_else(|| io::Error::other("typed Catalog projection is missing executable_migration_sources"))?;
+        .ok_or_else(|| {
+            io::Error::other("typed Catalog projection is missing executable_migration_sources")
+        })?;
     let target_positions = sources
         .iter()
         .enumerate()
@@ -106,7 +123,10 @@ fn derive_current_construction(root: &Path, projection: &Value) -> Result<Value,
         })
         .collect::<Vec<_>>();
     if target_positions.len() != 1 {
-        return Err(io::Error::other("CURRENT Catalog target is missing or ambiguous in executable lineage").into());
+        return Err(io::Error::other(
+            "CURRENT Catalog target is missing or ambiguous in executable lineage",
+        )
+        .into());
     }
     let target_index = target_positions[0];
 
@@ -115,7 +135,10 @@ fn derive_current_construction(root: &Path, projection: &Value) -> Result<Value,
         let migration_file = required_string(source, "migration_file", "Catalog migration source")?;
         let source_root = required_string(source, "source_root", "Catalog migration source")?;
         if !governed_roots.contains(source_root) {
-            return Err(io::Error::other("fresh-zero migration source escaped executable schema authority").into());
+            return Err(io::Error::other(
+                "fresh-zero migration source escaped executable schema authority",
+            )
+            .into());
         }
         let bytes = read_governed_source(root, source_root, migration_file)?;
         construction_sources.push(json!({
@@ -127,14 +150,23 @@ fn derive_current_construction(root: &Path, projection: &Value) -> Result<Value,
 
     let deferred_revisions = sources[target_index + 1..]
         .iter()
-        .map(|source| required_string(source, "migration_file", "deferred Catalog migration").map(str::to_owned))
+        .map(|source| {
+            required_string(source, "migration_file", "deferred Catalog migration")
+                .map(str::to_owned)
+        })
         .collect::<Result<Vec<_>, _>>()?;
     if target == supported_max {
         if !deferred_revisions.is_empty() {
-            return Err(io::Error::other("Catalog lineage contains deferred revisions outside an exact release target").into());
+            return Err(io::Error::other(
+                "Catalog lineage contains deferred revisions outside an exact release target",
+            )
+            .into());
         }
     } else if deferred_revisions.last().map(String::as_str) != Some(supported_max) {
-        return Err(io::Error::other("Catalog deferred lineage does not terminate at supported_schema_max").into());
+        return Err(io::Error::other(
+            "Catalog deferred lineage does not terminate at supported_schema_max",
+        )
+        .into());
     }
 
     let identity = json!({
@@ -156,14 +188,17 @@ fn derive_current_construction(root: &Path, projection: &Value) -> Result<Value,
 }
 
 #[test]
-fn current_fresh_zero_construction_is_projection_derived_digest_bound_and_contract_safe(
-) -> Result<(), Box<dyn Error>> {
+fn current_fresh_zero_construction_is_projection_derived_digest_bound_and_contract_safe()
+-> Result<(), Box<dyn Error>> {
     let root = repo_root();
     let projection: Value = serde_json::from_str(&d1::repository_projection(&root)?)?;
 
     let first = derive_current_construction(&root, &projection)?;
     let second = derive_current_construction(&root, &projection)?;
-    assert_eq!(first, second, "same typed D1 authority must produce one deterministic construction identity");
+    assert_eq!(
+        first, second,
+        "same typed D1 authority must produce one deterministic construction identity"
+    );
 
     let construction = first
         .get("construction")
@@ -172,8 +207,13 @@ fn current_fresh_zero_construction_is_projection_derived_digest_bound_and_contra
     let contract = catalog
         .get("release_schema_contract")
         .ok_or_else(|| io::Error::other("Catalog release contract is missing"))?;
-    let target = required_string(contract, "target_schema_revision", "Catalog release contract")?;
-    let supported_max = required_string(contract, "supported_schema_max", "Catalog release contract")?;
+    let target = required_string(
+        contract,
+        "target_schema_revision",
+        "Catalog release contract",
+    )?;
+    let supported_max =
+        required_string(contract, "supported_schema_max", "Catalog release contract")?;
 
     assert_eq!(construction["target_schema_revision"], target);
     assert_eq!(
@@ -187,24 +227,45 @@ fn current_fresh_zero_construction_is_projection_derived_digest_bound_and_contra
         .as_array()
         .ok_or_else(|| io::Error::other("construction migration_sources are missing"))?;
     assert!(!migration_sources.is_empty());
-    assert_eq!(migration_sources.last().and_then(|entry| entry["migration_file"].as_str()), Some(target));
+    assert_eq!(
+        migration_sources
+            .last()
+            .and_then(|entry| entry["migration_file"].as_str()),
+        Some(target)
+    );
     assert!(migration_sources.iter().all(|entry| {
-        entry["sha256"]
-            .as_str()
-            .is_some_and(|digest| digest.len() == 64 && digest.chars().all(|ch| ch.is_ascii_hexdigit() && !ch.is_ascii_uppercase()))
+        entry["sha256"].as_str().is_some_and(|digest| {
+            digest.len() == 64
+                && digest
+                    .chars()
+                    .all(|ch| ch.is_ascii_hexdigit() && !ch.is_ascii_uppercase())
+        })
     }));
 
     let deferred = construction["deferred_revisions"]
         .as_array()
         .ok_or_else(|| io::Error::other("construction deferred_revisions are missing"))?;
-    assert!(deferred.iter().all(|revision| revision.as_str() != Some(target)));
+    assert!(
+        deferred
+            .iter()
+            .all(|revision| revision.as_str() != Some(target))
+    );
     if target != supported_max {
         assert_eq!(deferred.last().and_then(Value::as_str), Some(supported_max));
-        assert!(migration_sources.iter().all(|entry| entry["migration_file"].as_str() != Some(supported_max)));
+        assert!(
+            migration_sources
+                .iter()
+                .all(|entry| entry["migration_file"].as_str() != Some(supported_max))
+        );
     }
 
-    let construction_sha256 = required_string(&first, "construction_sha256", "fresh-zero construction")?;
+    let construction_sha256 =
+        required_string(&first, "construction_sha256", "fresh-zero construction")?;
     assert_eq!(construction_sha256.len(), 64);
-    assert!(construction_sha256.chars().all(|ch| ch.is_ascii_hexdigit() && !ch.is_ascii_uppercase()));
+    assert!(
+        construction_sha256
+            .chars()
+            .all(|ch| ch.is_ascii_hexdigit() && !ch.is_ascii_uppercase())
+    );
     Ok(())
 }
