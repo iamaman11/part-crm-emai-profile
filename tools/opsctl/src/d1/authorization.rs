@@ -65,7 +65,10 @@ pub fn bind_transaction_authorization(
         operation_id: transaction.transaction_id.clone(),
         target: transaction.transaction_plan.target.clone(),
         phase: transaction.transaction_plan.phase,
-        allowed_provider_effects: transaction.transaction_plan.allowed_provider_effects.clone(),
+        allowed_provider_effects: transaction
+            .transaction_plan
+            .allowed_provider_effects
+            .clone(),
         observed_at_unix_seconds: transaction.transaction_plan.observed_at_unix_seconds,
         freshness_max_age_seconds: transaction.transaction_plan.freshness_max_age_seconds,
     };
