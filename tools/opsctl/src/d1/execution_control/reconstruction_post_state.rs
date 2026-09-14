@@ -567,10 +567,7 @@ mod tests {
             canonical_sha(&json!({"remote_migrations": &migrations}))?
         } else {
             required_string(
-                Some(
-                    &reconstruction["plan"]["provider_observation"]
-                        ["predecessor_ledger_sha256"],
-                ),
+                Some(&reconstruction["plan"]["provider_observation"]["predecessor_ledger_sha256"]),
                 "fixture.provider_observation.predecessor_ledger_sha256",
             )?
             .to_owned()
@@ -649,7 +646,9 @@ mod tests {
         let Err(error) =
             verify_current_reconstruction_post_state(&reconstruction, &receipt, &post, T0 + 911)
         else {
-            return Err(D1Error::new("stale fixture observation unexpectedly passed"));
+            return Err(D1Error::new(
+                "stale fixture observation unexpectedly passed",
+            ));
         };
         assert_eq!(error.gate_result_json()["reason_code"], "STALE_OBSERVATION");
         Ok(())
