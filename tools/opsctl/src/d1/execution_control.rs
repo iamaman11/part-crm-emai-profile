@@ -649,15 +649,14 @@ fn validate_transition(
             )));
         }
     }
-    if input.kind == ReconstructionApplied {
-        if prior_events
+    if input.kind == ReconstructionApplied
+        && prior_events
             .iter()
             .any(|event| matches!(event.kind, MigrationApplied | ReconstructionApplied))
-        {
-            return Err(D1Error::new(
-                "execution receipt permits exactly one RECONSTRUCTION_APPLIED and never mixes it with MIGRATION_APPLIED",
-            ));
-        }
+    {
+        return Err(D1Error::new(
+            "execution receipt permits exactly one RECONSTRUCTION_APPLIED and never mixes it with MIGRATION_APPLIED",
+        ));
     }
     Ok(())
 }
