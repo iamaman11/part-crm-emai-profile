@@ -12,6 +12,26 @@ on:
       - main
   workflow_dispatch:
     inputs:
+      operation_mode:
+        description: 'Observation mode; reconstruction is an explicit exact-target Prepare dispatch'
+        required: false
+        default: current
+        type: choice
+        options:
+          - current
+          - reconstruction
+      target_database_name:
+        description: 'Exact non-Production D1 database name for reconstruction mode'
+        required: false
+        type: string
+      target_database_id:
+        description: 'Exact non-Production D1 database UUID for reconstruction mode'
+        required: false
+        type: string
+      release_set_id:
+        description: 'Exact current Release Set identity for reconstruction mode'
+        required: false
+        type: string
       time_travel_unix_seconds:
         description: 'Optional exact Unix-seconds timestamp for read-only D1 Time Travel bookmark lookup'
         required: false
@@ -87,8 +107,13 @@ jobs:
           observe_source = source.split('\n  observe:', 1)[1]
           assert '\n    branches:\n      - main' in push_block
           assert '\n    paths:' not in push_block, 'exact-main observation must not be path-filtered'
-          assert '\n    inputs:\n      time_travel_unix_seconds:' in dispatch_block
+          assert '\n    inputs:\n      operation_mode:' in dispatch_block
+          assert '\n      time_travel_unix_seconds:' in dispatch_block
           assert 'required: false' in dispatch_block and 'type: string' in dispatch_block
+          assert '\n      operation_mode:' in dispatch_block
+          assert '\n      target_database_name:' in dispatch_block
+          assert '\n      target_database_id:' in dispatch_block
+          assert '\n      release_set_id:' in dispatch_block
           assert "D1_COMPONENT: catalog" in source
           assert "d1_database_name // .d1_database_name" in observe_source
           assert "workers/scripts/$worker_name/deployments" in observe_source
@@ -120,7 +145,7 @@ jobs:
 
   observe:
     name: Isolated D1 target hosted observation and preflight
-    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main' && (github.event_name != 'workflow_dispatch' || inputs.operation_mode != 'reconstruction')
     needs: contract
     runs-on: ubuntu-24.04
     timeout-minutes: 30
@@ -858,3 +883,307 @@ jobs:
         run: |
           rm -rf "$RUNNER_TEMP/d1-current-target-observation"
           rm -rf "$RUNNER_TEMP/d1-preflight"
+
+  reconstruct:
+    name: Exact target observation and existing Prepare dispatch
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.operation_mode == 'reconstruction'
+    needs: contract
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      actions: write
+    environment: staging
+    env:
+      GH_TOKEN: ${{ github.token }}
+      SOURCE_SHA: ${{ github.sha }}
+      TARGET_DATABASE_NAME: ${{ inputs.target_database_name }}
+      TARGET_DATABASE_ID: ${{ inputs.target_database_id }}
+      RELEASE_SET_ID: ${{ inputs.release_set_id }}
+    steps:
+      - name: Checkout exact accepted-main source
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Verify protected main and exact reconstruction selector
+        env:
+          CLOUDFLARE_DEPLOY_MANIFEST_JSON: ${{ secrets.CLOUDFLARE_DEPLOY_MANIFEST_JSON }}
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = 'refs/heads/main'
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          test -n "$TARGET_DATABASE_NAME"
+          test "$TARGET_DATABASE_NAME" != 'part-crm-catalog-production'
+          [[ "$TARGET_DATABASE_ID" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]]
+          [[ "$RELEASE_SET_ID" =~ ^release-set-v3-sha256-[0-9a-f]{64}$ ]]
+          test -n "$CLOUDFLARE_DEPLOY_MANIFEST_JSON"
+          printf '%s' "$CLOUDFLARE_DEPLOY_MANIFEST_JSON" > "$RUNNER_TEMP/deploy-manifest.json"
+          jq -er '.control_plane.account_id // .account_id | select(type == "string" and test("^[0-9a-f]{32}$"))' "$RUNNER_TEMP/deploy-manifest.json" > "$RUNNER_TEMP/account-id.txt"
+          account_id="$(cat "$RUNNER_TEMP/account-id.txt")"
+          printf 'ACCOUNT_ID=%s\n' "$account_id" >> "$GITHUB_ENV"
+          branch_sha="$(gh api "repos/$GITHUB_REPOSITORY/branches/main" --jq '.commit.sha')"
+          test "$branch_sha" = "$SOURCE_SHA"
+          gh api "repos/$GITHUB_REPOSITORY/branches/main" --jq '.protected' | grep -qx true
+
+      - name: Set up pinned Node for Wrangler read adapter
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
+        with:
+          node-version: '24.19.0'
+          package-manager-cache: false
+
+      - name: Observe exact selected target with read-only credential
+        env:
+          CLOUDFLARE_OBSERVE_API_TOKEN: ${{ secrets.CLOUDFLARE_OBSERVE_API_TOKEN }}
+        run: |
+          set -euo pipefail
+          test -n "$CLOUDFLARE_OBSERVE_API_TOKEN"
+          echo "::add-mask::$CLOUDFLARE_OBSERVE_API_TOKEN"
+          umask 077
+          raw="$RUNNER_TEMP/d1-reconstruction-observation"
+          evidence="artifacts/d1-reconstruction-observation"
+          lineage="$raw/catalog-lineage"
+          mkdir -p "$raw" "$evidence" "$lineage"
+          env -u CLOUDFLARE_OBSERVE_API_TOKEN -u CLOUDFLARE_API_TOKEN -u CLOUDFLARE_ACCOUNT_ID \
+            cargo run --locked --quiet --manifest-path tools/opsctl/Cargo.toml -- --root . d1 repository \
+            > "$raw/repository-projection.json"
+          python - "$raw/repository-projection.json" "$lineage" <<'PY'
+          import json, shutil, sys
+          from pathlib import Path
+          projection = json.load(open(sys.argv[1], encoding='utf-8'))
+          output = Path(sys.argv[2])
+          matches = [item for item in projection.get('components', []) if item.get('component_id') == 'catalog']
+          if len(matches) != 1:
+              raise SystemExit('typed Catalog projection missing/ambiguous')
+          authority = projection.get('executable_schema_authority')
+          if not isinstance(authority, list) or not authority or len(authority) != len(set(authority)) or any(not isinstance(root, str) or not root for root in authority):
+              raise SystemExit('typed D1 executable_schema_authority missing/invalid')
+          sources = matches[0].get('executable_migration_sources')
+          if not isinstance(sources, list) or not sources:
+              raise SystemExit('typed Catalog executable_migration_sources missing')
+          for item in sources:
+              if not isinstance(item, dict) or not isinstance(item.get('migration_file'), str) or item.get('source_root') not in set(authority):
+                  raise SystemExit('typed Catalog migration source escaped executable schema authority')
+              source = Path(item['source_root']) / item['migration_file']
+              target = output / item['migration_file']
+              if source.is_symlink() or not source.is_file() or target.exists():
+                  raise SystemExit(f'invalid typed Catalog migration source: {source}')
+              shutil.copyfile(source, target)
+          PY
+
+          inventory_code="$(curl --silent --show-error --output "$raw/d1-databases.json" --write-out '%{http_code}' \
+            -H "Authorization: Bearer $CLOUDFLARE_OBSERVE_API_TOKEN" \
+            "https://api.cloudflare.com/client/v4/accounts/$ACCOUNT_ID/d1/database?per_page=100")"
+          test "$inventory_code" = 200
+          jq -e '.success == true and (.errors | length) == 0 and (.result | type == "array") and ((.result_info.total_pages // 1) == 1)' "$raw/d1-databases.json" >/dev/null
+          python - "$raw/d1-databases.json" "$evidence/database-inventory.json" "$SOURCE_SHA" "$ACCOUNT_ID" "$TARGET_DATABASE_NAME" "$TARGET_DATABASE_ID" <<'PY'
+          import json, re, sys, time
+          raw_path, output_path, source, account, target_name, target_id = sys.argv[1:]
+          value = json.load(open(raw_path, encoding='utf-8'))
+          rows = value.get('result')
+          if value.get('success') is not True or value.get('errors') != [] or not isinstance(rows, list) or (value.get('result_info') or {}).get('total_pages', 1) != 1:
+              raise SystemExit('D1 inventory is not a fresh complete result')
+          databases, names, ids = [], set(), set()
+          for row in rows:
+              if not isinstance(row, dict) or not isinstance(row.get('name'), str) or not row.get('name') or re.fullmatch(r'[0-9a-f-]{36}', str(row.get('uuid') or '')) is None:
+                  raise SystemExit('D1 inventory row lacks exact name/UUID identity')
+              name, database_id = row['name'], row['uuid']
+              if name in names or database_id in ids:
+                  raise SystemExit('D1 inventory contains duplicate name or UUID identity')
+              names.add(name); ids.add(database_id)
+              databases.append({'database_name': name, 'database_id': database_id})
+          matches = [row for row in databases if row == {'database_name': target_name, 'database_id': target_id}]
+          if len(matches) != 1:
+              raise SystemExit('fresh complete D1 inventory does not prove exactly one exact target name+UUID record')
+          document = {
+              'schema_version': 1, 'kind': 'D1_DATABASE_INVENTORY_OBSERVATION_V1',
+              'source_sha': source, 'environment': 'staging', 'account_id': account,
+              'observed_at_unix_seconds': int(time.time()), 'inventory_complete': True,
+              'databases': sorted(databases, key=lambda item: (item['database_name'], item['database_id'])),
+              'provider_mutation': False, 'd1_mutation': False, 'production_mutation': False,
+          }
+          document['observation_source'] = f"github-actions://{__import__('os').environ['GITHUB_REPOSITORY']}/{__import__('os').environ['GITHUB_WORKFLOW']}/{__import__('os').environ['GITHUB_RUN_ID']}/{__import__('os').environ['GITHUB_RUN_ATTEMPT']}"
+          with open(output_path, 'w', encoding='utf-8') as handle:
+              json.dump(document, handle, sort_keys=True, indent=2); handle.write('\n')
+          PY
+
+          python - "$raw/wrangler.json" "$ACCOUNT_ID" "$TARGET_DATABASE_NAME" "$TARGET_DATABASE_ID" "$lineage" <<'PY'
+          import json, sys
+          output, account, name, database_id, lineage = sys.argv[1:]
+          with open(output, 'w', encoding='utf-8') as handle:
+              json.dump({'name': 'd1-exact-target-read-only-observer', 'compatibility_date': '2026-08-15', 'account_id': account, 'd1_databases': [{'binding': 'D1_CURRENT_TARGET_DB', 'database_name': name, 'database_id': database_id, 'migrations_dir': lineage}]}, handle, sort_keys=True, indent=2); handle.write('\n')
+          PY
+          export CLOUDFLARE_API_TOKEN="$CLOUDFLARE_OBSERVE_API_TOKEN"
+          export CLOUDFLARE_ACCOUNT_ID="$ACCOUNT_ID"
+          npx --yes wrangler@4.94.0 d1 info "$TARGET_DATABASE_NAME" --config "$raw/wrangler.json" --json --experimental-provision=false --experimental-auto-create=false > "$raw/provider-identity.json"
+          python - "$raw/provider-identity.json" "$TARGET_DATABASE_NAME" "$TARGET_DATABASE_ID" <<'PY'
+          import json, sys
+          value = json.load(open(sys.argv[1], encoding='utf-8')); name, database_id = sys.argv[2:]
+          def paired(item):
+              if isinstance(item, dict):
+                  if (item.get('name') or item.get('database_name')) == name and (item.get('uuid') or item.get('id') or item.get('database_id')) == database_id:
+                      return True
+                  return any(paired(v) for v in item.values())
+              return any(paired(v) for v in item) if isinstance(item, list) else False
+          if not paired(value):
+              raise SystemExit('d1 info does not preserve exact selected target name/UUID pair')
+          PY
+          npx --yes wrangler@4.94.0 d1 execute "$TARGET_DATABASE_NAME" --remote --config "$raw/wrangler.json" --command "SELECT name FROM sqlite_master WHERE type='table' AND name='d1_migrations'" --json --experimental-provision=false --experimental-auto-create=false > "$raw/ledger-table.json"
+          if python - "$raw/ledger-table.json" <<'PY'
+          import json, sys
+          value = json.load(open(sys.argv[1], encoding='utf-8'))
+          def contains(item):
+              if isinstance(item, dict):
+                  return item.get('name') == 'd1_migrations' or any(contains(v) for v in item.values())
+              return any(contains(v) for v in item) if isinstance(item, list) else False
+          raise SystemExit(0 if contains(value) else 1)
+          PY
+          then
+            npx --yes wrangler@4.94.0 d1 execute "$TARGET_DATABASE_NAME" --remote --config "$raw/wrangler.json" --command "SELECT id, name FROM d1_migrations ORDER BY id" --json --experimental-provision=false --experimental-auto-create=false > "$raw/ledger.json"
+          else
+            printf '[{"results":[],"success":true}]\n' > "$raw/ledger.json"
+          fi
+          python scripts/d1-executor-plan.py normalize-ledger --ledger "$raw/ledger.json" --output "$raw/ledger-names.json"
+          jq -e 'type == "array" and length == 0' "$raw/ledger-names.json" >/dev/null
+          printf '[{"results":[],"success":true}]\n' > "$raw/canonical-ledger.json"
+          npx --yes wrangler@4.94.0 d1 migrations list "$TARGET_DATABASE_NAME" --remote --config "$raw/wrangler.json" --experimental-provision=false --experimental-auto-create=false > "$raw/wrangler-pending.txt"
+          python - "$raw/wrangler-pending.txt" "$raw/wrangler-pending.json" <<'PY'
+          import json, re, sys
+          matches = re.findall(r'\b[0-9]{4}_[a-z0-9_]+\.sql\b', open(sys.argv[1], encoding='utf-8').read())
+          if len(matches) != len(set(matches)):
+              raise SystemExit('Wrangler pending list is ambiguous/duplicated')
+          with open(sys.argv[2], 'w', encoding='utf-8') as handle:
+              json.dump(matches, handle, indent=2); handle.write('\n')
+          PY
+          python - "$raw/wrangler-pending.json" "$evidence/provider-observation-input.json" "$SOURCE_SHA" "$ACCOUNT_ID" "$TARGET_DATABASE_NAME" "$TARGET_DATABASE_ID" "$RELEASE_SET_ID" <<'PY'
+          import hashlib, json, os, sys, time
+          pending_path, output_path, source, account, name, database_id, release_set = sys.argv[1:]
+          pending = json.load(open(pending_path, encoding='utf-8'))
+          observed = int(time.time())
+          canonical_digest = hashlib.sha256(b'{"remote_migrations":[]}').hexdigest()
+          expected_digest = '18bb30916ec8d7c0eaa18e5ebebdc9b5284fe07cfbf9db69aeaee3bee3211bf2'
+          if canonical_digest != expected_digest:
+              raise SystemExit('canonical empty-ledger digest contract drifted')
+          value = {
+              'schema_version': 1,
+              'target': {'environment': 'staging', 'account_id': account, 'database_name': name, 'database_id': database_id},
+              'observed_at_unix_seconds': observed,
+              'observation_source': f"github-actions://{os.environ['GITHUB_REPOSITORY']}/{os.environ['GITHUB_WORKFLOW']}/{os.environ['GITHUB_RUN_ID']}/{os.environ['GITHUB_RUN_ATTEMPT']}",
+              'remote_ledger_sha256': canonical_digest,
+              'remote_migrations': [],
+              'wrangler_pending_migrations': pending,
+              'deployment_identity': release_set,
+              'time_travel_bookmark_capable': False,
+          }
+          with open(output_path, 'w', encoding='utf-8') as handle:
+              json.dump(value, handle, sort_keys=True, indent=2); handle.write('\n')
+          PY
+          jq -e '(.remote_migrations == []) and .remote_ledger_sha256 == "18bb30916ec8d7c0eaa18e5ebebdc9b5284fe07cfbf9db69aeaee3bee3211bf2" and .target.environment == "staging"' "$evidence/provider-observation-input.json" >/dev/null
+          cp "$raw/provider-identity.json" "$evidence/d1-info.json"
+          cp "$raw/ledger-table.json" "$evidence/sqlite-master.json"
+          cp "$raw/canonical-ledger.json" "$evidence/ledger.json"
+          cp "$raw/wrangler-pending.json" "$evidence/wrangler-pending.json"
+
+      - name: Resolve exact current Release Set and prepare dispatch inputs
+        run: |
+          set -euo pipefail
+          raw="$RUNNER_TEMP/d1-reconstruction-observation"
+          root="$RUNNER_TEMP/d1-reconstruction-prepare"
+          mkdir -p "$root"
+          gh api "repos/$GITHUB_REPOSITORY/releases?per_page=100" > "$raw/releases.json"
+          python - "$raw/releases.json" "$SOURCE_SHA" "$RELEASE_SET_ID" <<'PY'
+          import json, sys
+          releases = json.load(open(sys.argv[1], encoding='utf-8'))
+          source, requested = sys.argv[2:]
+          matches = [item.get('tag_name') for item in releases if isinstance(item, dict) and item.get('target_commitish') == source and item.get('tag_name', '').startswith('release-set-v3-sha256-') and item.get('draft') is False]
+          if matches != [requested]:
+              raise SystemExit(f'exact current Release Set mismatch: {matches!r}')
+          PY
+          gh api "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_SET_ID" > "$raw/release-api.json"
+          jq -e --arg source "$SOURCE_SHA" --arg tag "$RELEASE_SET_ID" '.tag_name == $tag and .target_commitish == $source and .draft == false and .prerelease == false' "$raw/release-api.json" >/dev/null
+          for asset_name in release-set.json control-plane.tar; do
+            asset_json="$(jq -ce --arg name "$asset_name" '[.assets[] | select(.name == $name and .state == "uploaded")] | if length == 1 then .[0] else error("release asset missing or ambiguous") end' "$raw/release-api.json")"
+            asset_url="$(jq -er '.browser_download_url | select(type == "string" and length > 0)' <<<"$asset_json")"
+            asset_digest="$(jq -er '.digest | select(type == "string" and test("^sha256:[0-9a-f]{64}$"))' <<<"$asset_json")"
+            curl --fail --location --silent --show-error --retry 5 --retry-delay 2 --retry-all-errors --output "$root/$asset_name" "$asset_url"
+            test "sha256:$(sha256sum "$root/$asset_name" | awk '{print $1}')" = "$asset_digest"
+          done
+          python - "$root/release-set.json" "$root/control-plane.tar" "$root/target-release-manifest.json" "$SOURCE_SHA" "$RELEASE_SET_ID" <<'PY'
+          import hashlib, json, sys, tarfile
+          from pathlib import Path
+          release_path, archive_path, output_path, source, release_id = sys.argv[1:]
+          release = json.load(open(release_path, encoding='utf-8'))
+          if release.get('schema_version') != 3 or release.get('release_set_id') != release_id or release.get('source', {}).get('repository') != 'iamaman11/part-crm-emai-profile' or release.get('source', {}).get('commit_sha') != source or release.get('source', {}).get('accepted_main') is not True:
+              raise SystemExit('Release Set is not bound to exact protected main')
+          component = (release.get('components') or {}).get('control_plane') or {}
+          if component.get('source_commit_sha') != source or hashlib.sha256(Path(archive_path).read_bytes()).hexdigest() != component.get('artifact_sha256'):
+              raise SystemExit('control-plane Release Set artifact identity mismatch')
+          with tarfile.open(archive_path, 'r:*') as archive:
+              members = [member for member in archive.getmembers() if member.isfile() and Path(member.name).name == 'release-manifest.json']
+              if len(members) != 1:
+                  raise SystemExit('control-plane release manifest missing/ambiguous')
+              raw = archive.extractfile(members[0]).read()
+          if hashlib.sha256(raw).hexdigest() != component.get('component_manifest_sha256'):
+              raise SystemExit('control-plane release manifest digest mismatch')
+          value = json.loads(raw)
+          if (value.get('schema_contract') or {}).get('database_component') != 'catalog':
+              raise SystemExit('current Release Set manifest is not the Catalog component')
+          Path(output_path).write_bytes(raw)
+          PY
+          cp "$root/target-release-manifest.json" "$root/current-release-manifest.json"
+          cp "$root/target-release-manifest.json" "$root/known-good-release-manifest.json"
+          "$PWD/tools/opsctl/target/debug/opsctl" --root . d1 repository > "$root/repository-projection.json" 2>/dev/null || cargo run --locked --quiet --manifest-path tools/opsctl/Cargo.toml -- --root . d1 repository > "$root/repository-projection.json"
+          printf '{"component":"catalog","completed":[]}\n' > "$root/preconditions.json"
+
+      - name: Dispatch existing credential-free Prepare only
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP/d1-reconstruction-prepare"
+          python - "$root/dispatch.json" "$SOURCE_SHA" "$RELEASE_SET_ID" <<'PY'
+          import json, pathlib, sys
+          output, source, release_set = sys.argv[1:]
+          root = pathlib.Path(output).parent
+          def text(name):
+              return (root / name).read_text(encoding='utf-8')
+          payload = {'ref': 'main', 'inputs': {
+              'source_sha': source,
+              'operation_mode': 'reconstruction',
+              'component': 'catalog',
+              'ledger_json': '[{"results":[],"success":true}]',
+              'target_release_manifest_json': text('target-release-manifest.json'),
+              'current_release_manifest_json': text('current-release-manifest.json'),
+              'known_good_release_manifest_json': text('known-good-release-manifest.json'),
+              'preconditions_json': text('preconditions.json'),
+              'provider_observation_json': text('../d1-reconstruction-observation/provider-observation-input.json'),
+              'repository_projection_json': text('repository-projection.json'),
+              'transaction_input_json': '{}',
+              'release_set_id': release_set,
+          }}
+          pathlib.Path(output).write_text(json.dumps(payload, sort_keys=True, separators=(',', ':')) + '\n', encoding='utf-8')
+          PY
+          dispatch_code="$(gh api --method POST --input "$root/dispatch.json" --include "repos/$GITHUB_REPOSITORY/actions/workflows/d1-migration-prepare.yml/dispatches" | sed -n '1p' | awk '{print $2}')"
+          test "$dispatch_code" = 204
+          jq -e '.inputs.operation_mode == "reconstruction" and .inputs.component == "catalog" and .inputs.release_set_id == env.RELEASE_SET_ID' "$root/dispatch.json" >/dev/null
+          {
+            echo "Prepare dispatch accepted: workflow=d1-migration-prepare.yml operation_mode=reconstruction component=catalog"
+            echo "Provider mutation: NO"
+            echo "D1 mutation: NO"
+            echo "Production mutation: NO"
+            echo "Executor dispatch: NO"
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Publish secret-free reconstruction observation evidence
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: d1-reconstruction-observation-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.sha }}
+          path: artifacts/d1-reconstruction-observation
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Remove raw reconstruction inputs from runner temp
+        if: always()
+        run: |
+          rm -rf "$RUNNER_TEMP/d1-reconstruction-observation"
+          rm -rf "$RUNNER_TEMP/d1-reconstruction-prepare"
