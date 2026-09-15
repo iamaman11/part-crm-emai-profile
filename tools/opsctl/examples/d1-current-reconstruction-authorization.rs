@@ -62,10 +62,9 @@ fn parse_args() -> Result<Args, Box<dyn Error>> {
                 set_once(&mut args.evaluated_at_unix_seconds, value, flag)?;
             }
             other => {
-                return Err(format!(
-                    "unsupported reconstruction-authorization argument: {other}"
-                )
-                .into());
+                return Err(
+                    format!("unsupported reconstruction-authorization argument: {other}").into(),
+                );
             }
         }
     }
@@ -96,11 +95,7 @@ fn run() -> Result<(), Box<dyn Error>> {
         args.evaluated_at_unix_seconds,
         "--evaluated-at-unix-seconds",
     )?;
-    match bind_current_reconstruction_authorization(
-        &reconstruction,
-        &authorization,
-        evaluated_at,
-    ) {
+    match bind_current_reconstruction_authorization(&reconstruction, &authorization, evaluated_at) {
         Ok(binding) => {
             println!("{}", serialize_authorization_binding(&binding)?);
             Ok(())
