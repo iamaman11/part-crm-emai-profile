@@ -6,6 +6,7 @@ on:
       - 'scripts/d1-prepare.py'
       - '.github/workflows/d1-migration-prepare.yml'
       - 'tools/opsctl/examples/d1-transaction-plan.rs'
+      - 'tools/opsctl/examples/d1-current-reconstruction-plan.rs'
       - 'tools/opsctl/src/d1.rs'
       - 'tools/opsctl/src/d1/**'
   push:
@@ -15,6 +16,7 @@ on:
       - 'scripts/d1-prepare.py'
       - '.github/workflows/d1-migration-prepare.yml'
       - 'tools/opsctl/examples/d1-transaction-plan.rs'
+      - 'tools/opsctl/examples/d1-current-reconstruction-plan.rs'
       - 'tools/opsctl/src/d1.rs'
       - 'tools/opsctl/src/d1/**'
   workflow_dispatch:
@@ -23,6 +25,14 @@ on:
         description: Exact accepted protected-main source SHA
         required: true
         type: string
+      operation_mode:
+        description: Credential-free D1 prepare mode
+        required: false
+        default: migration
+        type: choice
+        options:
+          - migration
+          - reconstruction
       component:
         description: D1 component
         required: true
@@ -59,8 +69,14 @@ on:
         required: true
         type: string
       transaction_input_json:
-        description: Strict TransactionIdentityInput JSON for the future transaction
-        required: true
+        description: Strict TransactionIdentityInput JSON for an ordinary future transaction
+        required: false
+        default: '{}'
+        type: string
+      release_set_id:
+        description: Exact CURRENT Release Set identity for reconstruction mode
+        required: false
+        default: ''
         type: string
 
 permissions:
@@ -86,7 +102,7 @@ jobs:
         run: python -m py_compile scripts/d1-prepare.py
       - name: Exercise ready, blocked, and operator-input fixtures
         run: python scripts/d1-prepare.py self-test
-      - name: Prove successful Prepare publishes one immutable executor-input bundle
+      - name: Prove successful Prepare publishes immutable executor inputs and reconstruction identity
         run: |
           set -euo pipefail
           python - <<'PY'
@@ -94,6 +110,9 @@ jobs:
           source = Path('.github/workflows/d1-migration-prepare.yml').read_text(encoding='utf-8')
           artifact_name_prefix = 'name: d1-executor-' + 'inputs-'
           assert source.count(artifact_name_prefix) == 1
+          assert 'name: d1-reconstruction-${{ inputs.component }}-${{ github.run_id }}-${{ github.run_attempt }}' in source
+          assert 'd1-current-reconstruction-plan' in source
+          assert 'D1_CURRENT_FRESH_ZERO_RECONSTRUCTION' in source
           for name in ('target-release.json', 'current-release.json', 'known-good-release.json', 'preconditions.json'):
               assert f'artifacts/d1-prepare/{name}' in source
           PY
@@ -105,6 +124,7 @@ jobs:
     timeout-minutes: 8
     env:
       SOURCE_SHA: ${{ inputs.source_sha }}
+      OPERATION_MODE: ${{ inputs.operation_mode }}
       COMPONENT: ${{ inputs.component }}
       LEDGER_JSON: ${{ inputs.ledger_json }}
       TARGET_RELEASE_MANIFEST_JSON: ${{ inputs.target_release_manifest_json }}
@@ -114,6 +134,7 @@ jobs:
       PROVIDER_OBSERVATION_JSON: ${{ inputs.provider_observation_json }}
       REPOSITORY_PROJECTION_JSON: ${{ inputs.repository_projection_json }}
       TRANSACTION_INPUT_JSON: ${{ inputs.transaction_input_json }}
+      RELEASE_SET_ID: ${{ inputs.release_set_id }}
     steps:
       - name: Reject non-main or non-exact source before prepare
         run: |
@@ -121,7 +142,12 @@ jobs:
           test "$GITHUB_REF" = "refs/heads/main"
           test -n "$SOURCE_SHA"
           test "$GITHUB_SHA" = "$SOURCE_SHA"
+          test "$OPERATION_MODE" = migration || test "$OPERATION_MODE" = reconstruction
           test "$COMPONENT" = catalog || test "$COMPONENT" = resolver
+          if [ "$OPERATION_MODE" = reconstruction ]; then
+            test "$COMPONENT" = catalog
+            [[ "$RELEASE_SET_ID" =~ ^release-set-v3-sha256-[0-9a-f]{64}$ ]]
+          fi
 
       - name: Checkout exact accepted-main source
         uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
@@ -140,6 +166,7 @@ jobs:
           set -euo pipefail
           mkdir -p artifacts/d1-prepare
           python - <<'PY'
+          import hashlib
           import json
           import os
           from pathlib import Path
@@ -155,25 +182,57 @@ jobs:
               'repository-projection.json': os.environ['REPOSITORY_PROJECTION_JSON'],
               'transaction-input.json': os.environ['TRANSACTION_INPUT_JSON'],
           }
+          parsed = {}
           for name, raw in documents.items():
               value = json.loads(raw)
               if not isinstance(value, (dict, list)):
                   raise SystemExit(f'{name} must be structured JSON')
               if name != 'ledger.json' and not isinstance(value, dict):
                   raise SystemExit(f'{name} must be one JSON object')
+              parsed[name] = value
               (root / name).write_text(json.dumps(value, sort_keys=True, indent=2) + '\n', encoding='utf-8')
+
+          if os.environ['OPERATION_MODE'] == 'reconstruction':
+              observation = parsed['provider-observation.json']
+              expected_keys = {
+                  'schema_version', 'target', 'observed_at_unix_seconds', 'observation_source',
+                  'remote_ledger_sha256', 'remote_migrations', 'wrangler_pending_migrations',
+                  'deployment_identity', 'time_travel_bookmark_capable',
+              }
+              if set(observation) != expected_keys or observation.get('schema_version') != 1:
+                  raise SystemExit('reconstruction provider observation does not match ProviderObservationInput v1')
+              target = observation.get('target')
+              if not isinstance(target, dict) or set(target) != {'environment', 'account_id', 'database_name', 'database_id'}:
+                  raise SystemExit('reconstruction target does not match the exact typed target contract')
+              if target.get('environment') != 'staging':
+                  raise SystemExit('reconstruction target must be staging')
+              if observation.get('remote_migrations') != []:
+                  raise SystemExit('reconstruction provider observation must have an exactly empty remote ledger')
+              canonical = json.dumps({'remote_migrations': []}, sort_keys=True, separators=(',', ':'))
+              if hashlib.sha256(canonical.encode()).hexdigest() != observation.get('remote_ledger_sha256'):
+                  raise SystemExit('reconstruction provider observation ledger digest is detached from remote_migrations')
+              observed_at = observation.get('observed_at_unix_seconds')
+              source = observation.get('observation_source')
+              if isinstance(observed_at, bool) or not isinstance(observed_at, int) or observed_at <= 0:
+                  raise SystemExit('reconstruction observed_at_unix_seconds must be positive')
+              if not isinstance(source, str) or not source:
+                  raise SystemExit('reconstruction observation_source must be non-empty')
+              (root / 'target.json').write_text(json.dumps(target, sort_keys=True, indent=2) + '\n', encoding='utf-8')
           PY
 
-      - name: Build pinned credential-free opsctl and transaction planner
+      - name: Build pinned credential-free opsctl and planners
         run: |
           set -euo pipefail
           env -u CLOUDFLARE_API_TOKEN -u CLOUDFLARE_ACCOUNT_ID \
             cargo build --locked --manifest-path tools/opsctl/Cargo.toml
           env -u CLOUDFLARE_API_TOKEN -u CLOUDFLARE_ACCOUNT_ID \
             cargo build --locked --manifest-path tools/opsctl/Cargo.toml --example d1-transaction-plan
+          env -u CLOUDFLARE_API_TOKEN -u CLOUDFLARE_ACCOUNT_ID \
+            cargo build --locked --manifest-path tools/opsctl/Cargo.toml --example d1-current-reconstruction-plan
 
-      - name: Prepare before any mutation authorization
+      - name: Prepare ordinary migration before any mutation authorization
         id: prepare
+        if: inputs.operation_mode == 'migration'
         run: |
           set -euo pipefail
           set +e
@@ -195,8 +254,8 @@ jobs:
             artifacts/d1-prepare/prepare.json >/dev/null
           echo "exit_code=$rc" >> "$GITHUB_OUTPUT"
 
-      - name: Seal immutable transaction plan before authorization
-        if: steps.prepare.outputs.exit_code == '0'
+      - name: Seal immutable ordinary transaction plan before authorization
+        if: inputs.operation_mode == 'migration' && steps.prepare.outputs.exit_code == '0'
         run: |
           set -euo pipefail
           jq -e '.status == "PREPARE_READY" and .authorization_consumed == false and .mutation_executed == false and .provider_mutation_executed == false' \
@@ -216,8 +275,35 @@ jobs:
             '.transaction_plan.source_sha == $source and .transaction_plan.tree_sha == $tree' \
             artifacts/d1-prepare/transaction.json >/dev/null
 
+      - name: Seal immutable CURRENT reconstruction plan before authorization
+        id: reconstruction
+        if: inputs.operation_mode == 'reconstruction'
+        run: |
+          set -euo pipefail
+          tree_sha="$(git rev-parse 'HEAD^{tree}')"
+          observed_at="$(jq -er '.observed_at_unix_seconds' artifacts/d1-prepare/provider-observation.json)"
+          observation_source="$(jq -er '.observation_source' artifacts/d1-prepare/provider-observation.json)"
+          env -u CLOUDFLARE_API_TOKEN -u CLOUDFLARE_ACCOUNT_ID \
+            tools/opsctl/target/debug/examples/d1-current-reconstruction-plan \
+              --root . \
+              --ledger-json artifacts/d1-prepare/ledger.json \
+              --release-manifest artifacts/d1-prepare/target-release.json \
+              --target-json artifacts/d1-prepare/target.json \
+              --source-sha "$SOURCE_SHA" \
+              --tree-sha "$tree_sha" \
+              --release-set-id "$RELEASE_SET_ID" \
+              --observed-at-unix-seconds "$observed_at" \
+              --observation-source "$observation_source" \
+              > artifacts/d1-prepare/reconstruction.json
+          jq -e \
+            --arg source "$SOURCE_SHA" \
+            --arg tree "$tree_sha" \
+            --arg release_set "$RELEASE_SET_ID" \
+            '.schema_version == 1 and .status == "RECONSTRUCTION_PREPARED" and .mode == "read-only" and .authorization_required == true and .authorization_consumed == false and .mutation_executed == false and .provider_mutation_executed == false and (.reconstruction_id | test("^[0-9a-f]{64}$")) and .plan.kind == "D1_CURRENT_FRESH_ZERO_RECONSTRUCTION" and .plan.disposition == "PREPROD_BASELINE_DRIFT" and .plan.component == "catalog" and .plan.source_sha == $source and .plan.tree_sha == $tree and .plan.release_set_id == $release_set and .plan.allowed_provider_effects == ["D1_BOOTSTRAP_CURRENT_EXACT_CONSTRUCTION"] and (.plan.forbidden_provider_effects | index("D1_MIGRATIONS_APPLY_EXACT_PLAN") != null) and (.plan.forbidden_provider_effects | index("PRODUCTION_MUTATION") != null) and .plan.provider_observation.remote_migrations == []' \
+            artifacts/d1-prepare/reconstruction.json >/dev/null
+
       - name: Upload immutable secret-free prepare evidence
-        if: always() && steps.prepare.outcome != 'skipped'
+        if: always() && inputs.operation_mode == 'migration' && steps.prepare.outcome != 'skipped'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: d1-prepare-${{ inputs.component }}-${{ github.run_id }}-${{ github.run_attempt }}
@@ -225,8 +311,8 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
-      - name: Upload immutable transaction identity artifact
-        if: steps.prepare.outputs.exit_code == '0'
+      - name: Upload immutable ordinary transaction identity artifact
+        if: inputs.operation_mode == 'migration' && steps.prepare.outputs.exit_code == '0'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: d1-transaction-${{ inputs.component }}-${{ github.run_id }}-${{ github.run_attempt }}
@@ -234,8 +320,17 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
+      - name: Upload immutable CURRENT reconstruction identity artifact
+        if: inputs.operation_mode == 'reconstruction' && steps.reconstruction.outcome == 'success'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: d1-reconstruction-${{ inputs.component }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: artifacts/d1-prepare/reconstruction.json
+          if-no-files-found: error
+          retention-days: 30
+
       - name: Upload immutable executor input bundle
-        if: steps.prepare.outputs.exit_code == '0'
+        if: (inputs.operation_mode == 'migration' && steps.prepare.outputs.exit_code == '0') || (inputs.operation_mode == 'reconstruction' && steps.reconstruction.outcome == 'success')
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: d1-executor-inputs-${{ inputs.component }}-${{ github.run_id }}-${{ github.run_attempt }}
@@ -247,8 +342,8 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
-      - name: Fail closed when prepare is blocked
-        if: steps.prepare.outputs.exit_code != '0'
+      - name: Fail closed when ordinary prepare is blocked
+        if: inputs.operation_mode == 'migration' && steps.prepare.outputs.exit_code != '0'
         run: |
           set -euo pipefail
           jq -e '.status == "PREPARE_BLOCKED" and (.gate_results | length) > 0' artifacts/d1-prepare/prepare.json >/dev/null
