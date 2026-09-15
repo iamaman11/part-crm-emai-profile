@@ -94,7 +94,10 @@ fn parse_args() -> Result<Args, Box<dyn Error>> {
                 set_once(&mut args.observation_source, value, flag)?;
             }
             other => {
-                return Err(format!("unsupported CURRENT reconstruction planner argument: {other}").into());
+                return Err(format!(
+                    "unsupported CURRENT reconstruction planner argument: {other}"
+                )
+                .into());
             }
         }
     }
@@ -114,10 +117,8 @@ fn run() -> Result<(), Box<dyn Error>> {
     let source_sha = required(args.source_sha, "--source-sha")?;
     let tree_sha = required(args.tree_sha, "--tree-sha")?;
     let release_set_id = required(args.release_set_id, "--release-set-id")?;
-    let observed_at_unix_seconds = required(
-        args.observed_at_unix_seconds,
-        "--observed-at-unix-seconds",
-    )?;
+    let observed_at_unix_seconds =
+        required(args.observed_at_unix_seconds, "--observed-at-unix-seconds")?;
     let observation_source = required(args.observation_source, "--observation-source")?;
 
     let projection = current_reconstruction_plan(D1CurrentReconstructionPlanRequest {
