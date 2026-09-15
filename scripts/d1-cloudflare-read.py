@@ -43,6 +43,7 @@ LEDGER_TABLE_SQL = "SELECT name FROM sqlite_master WHERE type='table' AND name='
 LEDGER_SQL = "SELECT id, name FROM d1_migrations ORDER BY id"
 FOREIGN_KEY_SQL = "PRAGMA foreign_key_check"
 QUICK_CHECK_SQL = "PRAGMA quick_check"
+READ_ONLY_SQL = frozenset((LEDGER_TABLE_SQL, LEDGER_SQL, FOREIGN_KEY_SQL, QUICK_CHECK_SQL))
 
 
 class ObservationError(ValueError):
@@ -59,6 +60,13 @@ def _load_json(path: Path, label: str) -> Any:
         return json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
         raise ObservationError(f"{label} is unavailable or invalid JSON: {path}") from exc
+
+
+def _require_fixed_read_sql(sql: str) -> None:
+    if sql not in READ_ONLY_SQL:
+        raise ObservationError("D1 Query API call escaped the fixed read-only SQL contract")
+    if not (sql.startswith("SELECT ") or sql in {FOREIGN_KEY_SQL, QUICK_CHECK_SQL}):
+        raise ObservationError("D1 Query API call is not structurally read-only")
 
 
 def _require_success_envelope(value: Any, label: str) -> Any:
@@ -198,6 +206,7 @@ class CloudflareReadClient:
 
 
 def _query(client: CloudflareReadClient, account_id: str, database_id: str, sql: str, label: str) -> tuple[dict[str, Any], dict[str, Any]]:
+    _require_fixed_read_sql(sql)
     status, envelope = client.request(
         "POST",
         f"/accounts/{account_id}/d1/database/{database_id}/query",
@@ -284,8 +293,8 @@ def command_observe(args: argparse.Namespace) -> int:
         ledger_query = {"results": [], "success": True, "meta": {"changed_db": False, "changes": 0, "rows_written": 0}}
         ledger_envelope = None
         migration_rows = []
-    wrangler_compatible_ledger = [{"results": migration_rows, "success": True, "meta": ledger_query.get("meta", {})}]
-    _write_json(output / "ledger.json", wrangler_compatible_ledger)
+    canonical_ledger_payload = [{"results": migration_rows, "success": True, "meta": ledger_query.get("meta", {})}]
+    _write_json(output / "ledger.json", canonical_ledger_payload)
     _write_json(output / "ledger-names.json", [row["name"] for row in migration_rows])
     if ledger_envelope is not None:
         _write_json(output / "ledger-api.json", ledger_envelope)
@@ -349,6 +358,21 @@ def command_self_test() -> int:
         }],
     }
     assert _require_read_query(good, "self-test")["results"] == [{"name": "d1_migrations"}]
+    for sql in READ_ONLY_SQL:
+        _require_fixed_read_sql(sql)
+    for forbidden_sql in (
+        "SELECT 1",
+        "INSERT INTO d1_migrations(id, name) VALUES (1, 'x')",
+        "UPDATE d1_migrations SET name='x'",
+        "DELETE FROM d1_migrations",
+        "PRAGMA journal_mode=WAL",
+    ):
+        try:
+            _require_fixed_read_sql(forbidden_sql)
+        except ObservationError:
+            pass
+        else:
+            raise AssertionError(f"noncanonical SQL must fail before provider request: {forbidden_sql}")
     for mutated in (
         {"changed_db": True, "changes": 0, "rows_written": 0},
         {"changed_db": False, "changes": 1, "rows_written": 0},
