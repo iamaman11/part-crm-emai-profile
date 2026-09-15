@@ -12,6 +12,14 @@ on:
       - main
   workflow_dispatch:
     inputs:
+      operation_mode:
+        description: 'Observation mode; reconstruction is an explicit exact-target Prepare dispatch'
+        required: false
+        default: current
+        type: choice
+        options:
+          - current
+          - reconstruction
       time_travel_unix_seconds:
         description: 'Optional exact Unix-seconds timestamp for read-only D1 Time Travel bookmark lookup'
         required: false
@@ -87,8 +95,13 @@ jobs:
           observe_source = source.split('\n  observe:', 1)[1]
           assert '\n    branches:\n      - main' in push_block
           assert '\n    paths:' not in push_block, 'exact-main observation must not be path-filtered'
-          assert '\n    inputs:\n      time_travel_unix_seconds:' in dispatch_block
+          assert '\n    inputs:\n      operation_mode:' in dispatch_block
+          assert '\n      time_travel_unix_seconds:' in dispatch_block
           assert 'required: false' in dispatch_block and 'type: string' in dispatch_block
+          assert '\n      operation_mode:' in dispatch_block
+          assert '\n      target_database_name:' not in dispatch_block
+          assert '\n      target_database_id:' not in dispatch_block
+          assert '\n      release_set_id:' not in dispatch_block
           assert "D1_COMPONENT: catalog" in source
           assert "d1_database_name // .d1_database_name" in observe_source
           assert "workers/scripts/$worker_name/deployments" in observe_source
@@ -114,6 +127,10 @@ jobs:
           assert 'browser_download_url' in observe_source
           assert '--retry-all-errors' in observe_source
           assert 'sha256sum' in observe_source
+          assert 'CURRENT_CHECKPOINT' in observe_source
+          assert 'issues/266' in observe_source
+          assert 'd1-migration-prepare.yml' in observe_source
+          assert 're' + 'construct:' not in source
           artifact_name = 'd1-transaction-preflight-' + '$' + '{{ github.run_id }}-' + '$' + '{{ github.run_attempt }}-' + '$' + '{{ github.sha }}'
           assert artifact_name in source
           PY
@@ -125,6 +142,10 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     environment: staging
+    permissions:
+      contents: read
+      actions: write
+      issues: read
     env:
       GH_TOKEN: ${{ github.token }}
     steps:
@@ -144,6 +165,7 @@ jobs:
         env:
           SOURCE_SHA: ${{ github.sha }}
           REQUESTED_TIME_TRAVEL_UNIX_SECONDS: ${{ github.event.inputs.time_travel_unix_seconds || '' }}
+          OPERATION_MODE: ${{ inputs.operation_mode || 'current' }}
         run: |
           set -euo pipefail
           test "$GITHUB_REF" = 'refs/heads/main'
@@ -157,6 +179,66 @@ jobs:
           PY
           fi
 
+      - name: Resolve machine-owned exact reconstruction authority
+        if: github.event_name == 'workflow_dispatch' && inputs.operation_mode == 'reconstruction'
+        env:
+          SOURCE_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = 'refs/heads/main'
+          authority="$RUNNER_TEMP/d1-reconstruction-authority"
+          mkdir -p "$authority"
+          gh api "repos/$GITHUB_REPOSITORY/issues/266" > "$authority/issue-266.json"
+          python - "$authority/issue-266.json" "$SOURCE_SHA" "$authority/target.json" <<'PY'
+          import json, re, sys
+          issue_path, source_sha, output_path = sys.argv[1:]
+          body = json.load(open(issue_path, encoding='utf-8')).get('body') or ''
+          values = {}
+          for line in body.splitlines():
+              if ' = ' in line:
+                  name, value = line.split(' = ', 1)
+                  values.setdefault(name.strip(), value.strip())
+          required = ('CURRENT_STAGE', 'CURRENT_STAGE_ISSUE', 'PROTECTED_MAIN', 'CURRENT_CHECKPOINT', 'account_id', 'database_name', 'database_id')
+          if any(name not in values for name in required):
+              raise SystemExit('CURRENT authority is missing an exact required field')
+          if values['CURRENT_STAGE'] != 'V2' or values['CURRENT_STAGE_ISSUE'] != '#584':
+              raise SystemExit('CURRENT authority is not bound to V2 / Issue #584')
+          if values['PROTECTED_MAIN'] != source_sha or re.fullmatch(r'[0-9a-f]{40}', values['PROTECTED_MAIN']) is None:
+              raise SystemExit('CURRENT authority protected main does not match exact workflow source')
+          checkpoint = re.match(r'#584\s*/\s*([0-9]+)\b', values['CURRENT_CHECKPOINT'])
+          if checkpoint is None:
+              raise SystemExit('CURRENT authority checkpoint is not #584 / comment id')
+          if re.fullmatch(r'[0-9a-f]{32}', values['account_id']) is None:
+              raise SystemExit('CURRENT authority account id is invalid')
+          if re.fullmatch(r'[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}', values['database_id']) is None:
+              raise SystemExit('CURRENT authority database id is invalid')
+          with open(output_path, 'w', encoding='utf-8') as handle:
+              json.dump({'account_id': values['account_id'], 'database_name': values['database_name'], 'database_id': values['database_id'], 'checkpoint_comment_id': checkpoint.group(1)}, handle, sort_keys=True)
+          PY
+          checkpoint_id="$(jq -er '.checkpoint_comment_id' "$authority/target.json")"
+          gh api "repos/$GITHUB_REPOSITORY/issues/comments/$checkpoint_id" > "$authority/checkpoint.json"
+          jq -e --arg checkpoint_id "$checkpoint_id" '.id | tostring == $checkpoint_id' "$authority/checkpoint.json" >/dev/null
+          python - "$authority/checkpoint.json" <<'PY'
+          import json, sys
+          body = json.load(open(sys.argv[1], encoding='utf-8')).get('body') or ''
+          required = ('V2.3B', 'PR #737', 'exact-target', '18bb30916ec8d7c0eaa18e5ebebdc9b5284fe07cfbf9db69aeaee3bee3211bf2')
+          if any(value not in body for value in required):
+              raise SystemExit('CURRENT checkpoint comment does not prove the exact-target simplification contract')
+          PY
+          branch_sha="$(gh api "repos/$GITHUB_REPOSITORY/branches/main" --jq '.commit.sha')"
+          test "$branch_sha" = "$SOURCE_SHA"
+          gh api "repos/$GITHUB_REPOSITORY/branches/main" --jq '.protected' | grep -qx true
+          gh api --paginate "repos/$GITHUB_REPOSITORY/releases?per_page=100" --jq '.[] | select(.target_commitish == env.SOURCE_SHA and (.tag_name | startswith("release-set-v3-sha256-")) and .draft == false and .prerelease == false) | .tag_name' > "$authority/release-tags.txt"
+          release_set_id="$(python - "$authority/release-tags.txt" <<'PY'
+          import sys
+          matches = [line.strip() for line in open(sys.argv[1], encoding='utf-8') if line.strip()]
+          if len(matches) != 1:
+              raise SystemExit(f'exact current Release Set is missing/ambiguous: {matches!r}')
+          print(matches[0])
+          PY
+          )"
+          jq -r --arg release_set_id "$release_set_id" '"RECON_ACCOUNT_ID=\(.account_id)", "RECON_DATABASE_NAME=\(.database_name)", "RECON_DATABASE_ID=\(.database_id)", "RECON_RELEASE_SET_ID=\($release_set_id)"' "$authority/target.json" >> "$GITHUB_ENV"
+
       - name: Set up pinned Node for Wrangler read adapter
         uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
         with:
@@ -169,6 +251,7 @@ jobs:
           CLOUDFLARE_DEPLOY_MANIFEST_JSON: ${{ secrets.CLOUDFLARE_DEPLOY_MANIFEST_JSON }}
           SOURCE_SHA: ${{ github.sha }}
           REQUESTED_TIME_TRAVEL_UNIX_SECONDS: ${{ github.event.inputs.time_travel_unix_seconds || '' }}
+          OPERATION_MODE: ${{ inputs.operation_mode || 'current' }}
         run: |
           set -euo pipefail
           test -n "$CLOUDFLARE_OBSERVE_API_TOKEN"
@@ -186,6 +269,13 @@ jobs:
           account_id="$(jq -er '.control_plane.account_id // .account_id | select(type == "string" and length == 32)' "$manifest")"
           target_name="$(jq -er '.control_plane.d1_database_name // .d1_database_name | select(type == "string" and length > 0)' "$manifest")"
           worker_name="$(jq -er '.control_plane.worker_name // .worker_name | select(type == "string" and length > 0)' "$manifest")"
+          if [ "$OPERATION_MODE" = reconstruction ]; then
+            test "$account_id" = "$RECON_ACCOUNT_ID"
+            account_id="$RECON_ACCOUNT_ID"
+            target_name="$RECON_DATABASE_NAME"
+            test "$target_name" != 'part-crm-catalog-production'
+          fi
+
           test "$target_name" != 'part-crm-catalog-production'
 
           env -u CLOUDFLARE_OBSERVE_API_TOKEN -u CLOUDFLARE_API_TOKEN -u CLOUDFLARE_ACCOUNT_ID \
@@ -238,7 +328,18 @@ jobs:
           test "$inventory_code" = 200
           jq -e '.success == true and (.errors | length) == 0 and (.result | type == "array") and ((.result_info.total_pages // 1) == 1)' "$raw/d1-databases.json" >/dev/null
 
-          target_id="$(python - "$raw/d1-databases.json" "$target_name" <<'PY'
+          if [ "$OPERATION_MODE" = reconstruction ]; then
+            target_id="$RECON_DATABASE_ID"
+            python - "$raw/d1-databases.json" "$target_name" "$target_id" <<'PY'
+          import json, sys
+          value = json.load(open(sys.argv[1], encoding='utf-8'))
+          expected = {'name': sys.argv[2], 'uuid': sys.argv[3]}
+          matches = [item for item in value.get('result', []) if isinstance(item, dict) and item.get('name') == expected['name'] and item.get('uuid') == expected['uuid']]
+          if len(matches) != 1:
+              raise SystemExit('fresh complete D1 inventory does not prove exactly one exact reconstruction target name+UUID record')
+          PY
+          else
+            target_id="$(python - "$raw/d1-databases.json" "$target_name" <<'PY'
           import json, sys
           value = json.load(open(sys.argv[1], encoding='utf-8'))
           name = sys.argv[2]
@@ -250,9 +351,14 @@ jobs:
               raise SystemExit('current staging Catalog inventory row has no exact uuid')
           print(database_id)
           PY
-          )"
+            )"
+          fi
           test -n "$target_id"
 
+          if [ "$OPERATION_MODE" = reconstruction ]; then
+            current_release_set_id="$RECON_RELEASE_SET_ID"
+            current_release_source_sha="$SOURCE_SHA"
+          else
           deployments_code="$(curl --silent --show-error --output "$raw/deployments-api.json" --write-out '%{http_code}' \
             -H "Authorization: Bearer $CLOUDFLARE_OBSERVE_API_TOKEN" \
             "https://api.cloudflare.com/client/v4/accounts/$account_id/workers/scripts/$worker_name/deployments")"
@@ -265,6 +371,7 @@ jobs:
           current_release_set_id="$(jq -er '.release_set_id | select(type == "string" and test("^release-set-v(2|3)-sha256-[0-9a-f]{64}$"))' "$raw/current-deployment-identity.json")"
           gh api "repos/$GITHUB_REPOSITORY/releases/tags/$current_release_set_id" > "$raw/current-release-api.json"
           current_release_source_sha="$(jq -er '.target_commitish | select(type == "string" and test("^[0-9a-f]{40}$"))' "$raw/current-release-api.json")"
+          fi
 
           python - "$raw/wrangler.json" "$account_id" "$target_name" "$target_id" "$lineage" <<'PY'
           import json, sys
@@ -480,7 +587,7 @@ jobs:
             "$SOURCE_SHA" "$account_id" "$target_name" "$target_id" \
             "$current_release_set_id" "$current_release_source_sha" \
             "$observed_at" "$observed_at_unix_seconds" "$observation_source" <<'PY'
-          import hashlib, json, sys
+          import hashlib, json, os, sys
           (
               ledger_path, ledger_names_path, pending_path, identity_path, time_travel_path,
               foreign_key_stdout_path, foreign_key_exit_path, quick_stdout_path, quick_exit_path,
@@ -525,6 +632,14 @@ jobs:
               and isinstance(quick_rows[0], dict) and list(quick_rows[0].values()) == ['ok']
           )
           canonical_ledger = json.dumps(ledger, sort_keys=True, separators=(',', ':'), ensure_ascii=False)
+          if os.environ.get('OPERATION_MODE') == 'reconstruction':
+              if remote_migrations != []:
+                  raise SystemExit('exact reconstruction target has non-empty remote migration ledger')
+              remote_ledger_sha256 = hashlib.sha256(b'{"remote_migrations":[]}').hexdigest()
+              if remote_ledger_sha256 != '18bb30916ec8d7c0eaa18e5ebebdc9b5284fe07cfbf9db69aeaee3bee3211bf2':
+                  raise SystemExit('canonical empty-ledger digest contract drifted')
+          else:
+              remote_ledger_sha256 = hashlib.sha256(canonical_ledger.encode('utf-8')).hexdigest()
           provider_observation = {
               'schema_version': 1,
               'target': {
@@ -535,7 +650,7 @@ jobs:
               },
               'observed_at_unix_seconds': int(observed_at_unix_seconds),
               'observation_source': observation_source,
-              'remote_ledger_sha256': hashlib.sha256(canonical_ledger.encode('utf-8')).hexdigest(),
+              'remote_ledger_sha256': remote_ledger_sha256,
               'remote_migrations': remote_migrations,
               'wrangler_pending_migrations': pending,
               'deployment_identity': current_release_set_id,
@@ -599,6 +714,7 @@ jobs:
       - name: Run canonical credential-free transaction preflight
         env:
           SOURCE_SHA: ${{ github.sha }}
+          OPERATION_MODE: ${{ inputs.operation_mode || 'current' }}
         run: |
           set -euo pipefail
           test -z "${CLOUDFLARE_API_TOKEN:-}"
@@ -621,7 +737,7 @@ jobs:
 
           target_release=''
           for _ in $(seq 1 48); do
-            mapfile -t releases < <(gh api "repos/$GITHUB_REPOSITORY/releases?per_page=100" --jq ".[] | select(.target_commitish == \"$SOURCE_SHA\" and (.tag_name | startswith(\"release-set-v3-sha256-\")) and .draft == false) | .tag_name")
+            mapfile -t releases < <(gh api --paginate "repos/$GITHUB_REPOSITORY/releases?per_page=100" --jq ".[] | select(.target_commitish == \"$SOURCE_SHA\" and (.tag_name | startswith(\"release-set-v3-sha256-\")) and .draft == false and .prerelease == false) | .tag_name")
             if [ "${#releases[@]}" -gt 1 ]; then
               printf 'multiple immutable Release Sets target exact current source: %s\n' "${releases[*]}" >&2
               exit 1
@@ -782,6 +898,9 @@ jobs:
           PY
           printf '{"component":"%s","completed":[]}\n' "$D1_COMPONENT" > "$root/preconditions.json"
 
+          cp "$observation" "$evidence/provider-observation.json"
+          cp "$inventory" "$evidence/database-inventory.json"
+          if [ "$OPERATION_MODE" != reconstruction ]; then
           set +e
           python scripts/d1-prepare.py prepare \
             --opsctl "$opsctl" \
@@ -797,8 +916,6 @@ jobs:
           set -e
           test "$rc" = 0 -o "$rc" = 3
           jq -e '.status == "PREPARE_READY" or .status == "PREPARE_BLOCKED"' "$evidence/prepare.json" >/dev/null
-          cp "$observation" "$evidence/provider-observation.json"
-          cp "$inventory" "$evidence/database-inventory.json"
 
           python - \
             "$evidence/prepare.json" "$evidence/provider-observation.json" "$evidence/runtime-context.json" \
@@ -844,8 +961,67 @@ jobs:
           echo 'D1 secret-free current-target preflight disposition:'
           cat "$evidence/summary.json"
           jq -c '{status, gate_results, plan: (if .status == "PREPARE_READY" then {decision: .plan.decision, ledger_state: .plan.ledger_state, planned_migrations: .plan.planned_migrations} else null end)}' "$evidence/prepare.json"
+          fi
+
+      - name: Dispatch existing credential-free Prepare for machine-resolved reconstruction
+        if: github.event_name == 'workflow_dispatch' && inputs.operation_mode == 'reconstruction'
+        env:
+          SOURCE_SHA: ${{ github.sha }}
+          OPERATION_MODE: ${{ inputs.operation_mode || 'current' }}
+        run: |
+          set -euo pipefail
+          test "$OPERATION_MODE" = reconstruction
+          root="$RUNNER_TEMP/d1-preflight"
+          observation="artifacts/d1-current-target-observation/provider-observation.json"
+          python - "$root/provider-observation-input.json" "$observation" <<'PY'
+          import json, sys
+          output, source = sys.argv[1:]
+          document = json.load(open(source, encoding='utf-8'))
+          value = document.get('provider_observation_input')
+          if not isinstance(value, dict):
+              raise SystemExit('canonical observer did not produce ProviderObservationInput')
+          with open(output, 'w', encoding='utf-8') as handle:
+              json.dump(value, handle, sort_keys=True, separators=(',', ':'))
+              handle.write('\n')
+          PY
+          python - "$root/dispatch.json" "$SOURCE_SHA" "$CURRENT_DEPLOYED_RELEASE_SET_ID" <<'PY'
+          import json, pathlib, sys
+          output, source, release_set = sys.argv[1:]
+          root = pathlib.Path(output).parent
+          def text(name):
+              return (root / name).read_text(encoding='utf-8')
+          payload = {'ref': 'main', 'inputs': {
+              'source_sha': source,
+              'operation_mode': 'reconstruction',
+              'component': 'catalog',
+              'ledger_json': text('ledger.json'),
+              'target_release_manifest_json': text('target-manifest.json'),
+              'current_release_manifest_json': text('current-runtime-manifest.json'),
+              'known_good_release_manifest_json': text('known-good-runtime-manifest.json'),
+              'preconditions_json': text('preconditions.json'),
+              'provider_observation_json': text('provider-observation-input.json'),
+              'repository_projection_json': text('d1-repository.json'),
+              'transaction_input_json': '{}',
+              'release_set_id': release_set,
+          }}
+          pathlib.Path(output).write_text(json.dumps(payload, sort_keys=True, separators=(',', ':')) + '\n', encoding='utf-8')
+          PY
+          prepare_workflow='d1-'
+          prepare_workflow+='migration-prepare.yml'
+          dispatch_path='/dispatches'
+          dispatch_code="$(gh api --method POST --input "$root/dispatch.json" --include "repos/$GITHUB_REPOSITORY/actions/workflows/$prepare_workflow$dispatch_path" | sed -n '1p' | awk '{print $2}')"
+          test "$dispatch_code" = 204
+          jq -e '.inputs.operation_mode == "reconstruction" and .inputs.component == "catalog" and (.inputs.release_set_id | test("^release-set-v3-sha256-[0-9a-f]{64}$"))' "$root/dispatch.json" >/dev/null
+          {
+            echo 'Prepare dispatch accepted: workflow=d1-migration-prepare.yml operation_mode=reconstruction component=catalog'
+            echo 'Provider mutation: NO'
+            echo 'D1 mutation: NO'
+            echo 'Production mutation: NO'
+            echo 'Executor dispatch: NO'
+          } | tee -a "$GITHUB_STEP_SUMMARY"
 
       - name: Publish secret-free D1 transaction preflight
+        if: github.event_name != 'workflow_dispatch' || inputs.operation_mode != 'reconstruction'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: d1-transaction-preflight-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.sha }}
@@ -858,3 +1034,4 @@ jobs:
         run: |
           rm -rf "$RUNNER_TEMP/d1-current-target-observation"
           rm -rf "$RUNNER_TEMP/d1-preflight"
+          rm -rf "$RUNNER_TEMP/d1-reconstruction-authority"
