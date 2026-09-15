@@ -62,6 +62,7 @@ jobs:
           python scripts/d1-prepare.py self-test
           python scripts/deployment-identity-ar11.py --self-test
           python - <<'PY'
+          import re
           from pathlib import Path
           source = Path('.github/workflows/d1-isolated-target-observation.yml').read_text(encoding='utf-8')
           adapter = Path('scripts/d1-cloudflare-read.py').read_text(encoding='utf-8')
@@ -96,6 +97,12 @@ jobs:
           push_block = trigger.split('\n  push:', 1)[1].split('\n  workflow_dispatch:', 1)[0]
           dispatch_block = trigger.split('\n  workflow_dispatch:', 1)[1]
           observe_source = source.split('\n  observe:', 1)[1]
+          authority_source = observe_source.split('\n      - name: Resolve machine-owned exact reconstruction authority', 1)[1].split('\n      - name: Observe exact current staging Catalog with canonical Cloudflare D1 Read API', 1)[0]
+          assert re.search(r'PR #[0-9]+', authority_source) is None, 'reconstruction authority must not depend on historical implementation PR numbers'
+          assert "checkpoint.get('author_association')" in authority_source
+          assert "'PROTECTED_MAIN'" in authority_source
+          assert "'account_id'" in authority_source and "'database_name'" in authority_source and "'database_id'" in authority_source
+          assert "'canonical_empty_ledger_sha256'" in authority_source and "'canonical_predecessor_sha256'" in authority_source
           assert '\n    branches:\n      - main' in push_block
           assert '\n    paths:' not in push_block, 'exact-main observation must not be path-filtered'
           assert '\n    inputs:\n      operation_mode:' in dispatch_block
@@ -229,12 +236,40 @@ jobs:
           checkpoint_id="$(jq -er '.checkpoint_comment_id' "$authority/target.json")"
           gh api "repos/$GITHUB_REPOSITORY/issues/comments/$checkpoint_id" > "$authority/checkpoint.json"
           jq -e --arg checkpoint_id "$checkpoint_id" '.id | tostring == $checkpoint_id' "$authority/checkpoint.json" >/dev/null
-          python - "$authority/checkpoint.json" <<'PY'
+          python - "$authority/checkpoint.json" "$authority/target.json" "$SOURCE_SHA" <<'PY'
           import json, sys
-          body = json.load(open(sys.argv[1], encoding='utf-8')).get('body') or ''
-          required = ('V2.3B', 'PR #737', 'exact-target', '18bb30916ec8d7c0eaa18e5ebebdc9b5284fe07cfbf9db69aeaee3bee3211bf2')
-          if any(value not in body for value in required):
-              raise SystemExit('CURRENT checkpoint comment does not prove the exact-target simplification contract')
+          checkpoint_path, target_path, source_sha = sys.argv[1:]
+          checkpoint = json.load(open(checkpoint_path, encoding='utf-8'))
+          target = json.load(open(target_path, encoding='utf-8'))
+          if checkpoint.get('author_association') != 'OWNER':
+              raise SystemExit('CURRENT checkpoint comment is not OWNER-authored authority')
+          issue_url = checkpoint.get('issue_url')
+          if not isinstance(issue_url, str) or not issue_url.endswith('/issues/584'):
+              raise SystemExit('CURRENT checkpoint comment is not owned by Issue #584')
+          body = checkpoint.get('body') or ''
+          if 'V2.3B' not in body:
+              raise SystemExit('CURRENT checkpoint comment does not bind V2.3B')
+          values = {}
+          for line in body.splitlines():
+              if ' = ' in line:
+                  name, value = line.split(' = ', 1)
+                  values.setdefault(name.strip(), value.strip())
+          expected = {
+              'PROTECTED_MAIN': source_sha,
+              'account_id': target['account_id'],
+              'database_name': target['database_name'],
+              'database_id': target['database_id'],
+          }
+          for name, value in expected.items():
+              if values.get(name) != value:
+                  raise SystemExit(f'CURRENT checkpoint semantic identity mismatch: {name}')
+          empty_ledger_sha256 = '18bb30916ec8d7c0eaa18e5ebebdc9b5284fe07cfbf9db69aeaee3bee3211bf2'
+          checkpoint_fingerprints = {
+              values.get('canonical_empty_ledger_sha256'),
+              values.get('canonical_predecessor_sha256'),
+          }
+          if empty_ledger_sha256 not in checkpoint_fingerprints:
+              raise SystemExit('CURRENT checkpoint does not bind the canonical fresh-zero ledger fingerprint')
           PY
           branch_sha="$(gh api "repos/$GITHUB_REPOSITORY/branches/main" --jq '.commit.sha')"
           test "$branch_sha" = "$SOURCE_SHA"
