@@ -362,8 +362,8 @@ async function validateExecutor(text, root = ROOT) {
     fail('the sole protected D1 migration apply site must explicitly target --remote');
   }
   const pendingListSites = normalized.match(new RegExp(`npx --yes ${escapedWrangler} d1 migrations list\\b`, 'g')) ?? [];
-  if (pendingListSites.length !== 2) {
-    fail(`protected D1 executor must observe Wrangler pending migrations exactly twice; observed=${pendingListSites.length}`);
+  if (pendingListSites.length !== 4) {
+    fail(`protected D1 executor must observe Wrangler pending migrations exactly four times across ordinary migration and reconstruction; observed=${pendingListSites.length}`);
   }
   const pendingVerifySites = text.match(/d1-executor-plan\.py verify-pending/g) ?? [];
   if (pendingVerifySites.length !== 2) {
