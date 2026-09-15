@@ -191,3 +191,60 @@ fn reconstruction_rejects_production_nonempty_and_historical_target()
     }
     Ok(())
 }
+
+#[test]
+fn protected_executor_has_one_machine_distinct_reconstruction_mode()
+-> Result<(), Box<dyn std::error::Error>> {
+    let root = repository_root();
+    let workflow = fs::read_to_string(root.join(".github/workflows/d1-migration-executor.yml"))?;
+
+    assert!(workflow.contains(
+        "          - migration\n          - reconstruction\n          - time_travel_restore"
+    ));
+    assert!(workflow.contains("  reconstruct:\n"));
+    assert!(workflow.contains("if: inputs.operation_mode == 'reconstruction'"));
+
+    let start = workflow
+        .find("\n  reconstruct:\n")
+        .ok_or_else(|| std::io::Error::other("sole executor is missing reconstruct job"))?;
+    let remainder = &workflow[start + 1..];
+    let end = remainder.find("\n  authorize_restore:\n").ok_or_else(|| {
+        std::io::Error::other(
+            "reconstruct job must remain inside the sole executor before restore owner",
+        )
+    })?;
+    let reconstruct = &remainder[..end];
+
+    for required in [
+        "D1_BOOTSTRAP_CURRENT_EXACT_CONSTRUCTION",
+        "d1-current-reconstruction-materialize.py materialize",
+        "--reconstruction-json",
+        "RECONSTRUCTION_EXECUTOR_ADMISSION_VERIFIED",
+        "RECONSTRUCTION_APPLIED",
+        "verify-post-state",
+        "RECONSTRUCTION_POST_STATE_VERIFIED",
+        "environment: staging",
+        "[[ \"$AUTHORIZATION_DIGEST\" =~ ^[0-9a-f]{64}$ ]]",
+        "test \"$CONFIRMATION\" = \"$SOURCE_SHA:$TARGET_ENVIRONMENT:$COMPONENT:$DATABASE_ID\"",
+        "--experimental-provision=false",
+        "--experimental-auto-create=false",
+    ] {
+        assert!(
+            reconstruct.contains(required),
+            "reconstruction executor is missing required invariant: {required}"
+        );
+    }
+    for forbidden in [
+        "d1 migrations apply",
+        "MIGRATION_APPLIED",
+        "D1_MIGRATIONS_APPLY_EXACT_PLAN",
+        "d1 time-travel restore",
+        "--experimental-auto-create=true",
+    ] {
+        assert!(
+            !reconstruct.contains(forbidden),
+            "reconstruction executor reached forbidden path: {forbidden}"
+        );
+    }
+    Ok(())
+}
