@@ -198,7 +198,9 @@ fn protected_executor_has_one_machine_distinct_reconstruction_mode()
     let root = repository_root();
     let workflow = fs::read_to_string(root.join(".github/workflows/d1-migration-executor.yml"))?;
 
-    assert!(workflow.contains("          - migration\n          - reconstruction\n          - time_travel_restore"));
+    assert!(workflow.contains(
+        "          - migration\n          - reconstruction\n          - time_travel_restore"
+    ));
     assert!(workflow.contains("  reconstruct:\n"));
     assert!(workflow.contains("if: inputs.operation_mode == 'reconstruction'"));
 
@@ -206,9 +208,11 @@ fn protected_executor_has_one_machine_distinct_reconstruction_mode()
         .find("\n  reconstruct:\n")
         .ok_or_else(|| std::io::Error::other("sole executor is missing reconstruct job"))?;
     let remainder = &workflow[start + 1..];
-    let end = remainder
-        .find("\n  authorize_restore:\n")
-        .ok_or_else(|| std::io::Error::other("reconstruct job must remain inside the sole executor before restore owner"))?;
+    let end = remainder.find("\n  authorize_restore:\n").ok_or_else(|| {
+        std::io::Error::other(
+            "reconstruct job must remain inside the sole executor before restore owner",
+        )
+    })?;
     let reconstruct = &remainder[..end];
 
     for required in [
@@ -220,6 +224,8 @@ fn protected_executor_has_one_machine_distinct_reconstruction_mode()
         "verify-post-state",
         "RECONSTRUCTION_POST_STATE_VERIFIED",
         "environment: staging",
+        "[[ \"$AUTHORIZATION_DIGEST\" =~ ^[0-9a-f]{64}$ ]]",
+        "test \"$CONFIRMATION\" = \"$SOURCE_SHA:$TARGET_ENVIRONMENT:$COMPONENT:$DATABASE_ID\"",
         "--experimental-provision=false",
         "--experimental-auto-create=false",
     ] {
