@@ -209,6 +209,100 @@ legacy predecessor retained only by internal CI/docs/self-test = 0
 
 An internal caller, validator, generator, drift gate, self-test or documentation reference that exists only because a legacy artifact exists is deletion scope, not proof of a durable consumer.
 
+### 3.1 Project simplicity invariant
+
+**Reliability comes from fewer authoritative paths with stronger invariants, not from more layers.**
+The project-wide default is to reuse or simplify an existing natural owner and shipping path. Adding
+architecture is exceptional, not the default response to a new requirement, failed test or missing
+proof.
+
+A change may introduce a new semantic owner, runtime/service, persistent state store, execution path,
+operator step, abstraction/framework/registry or checker only when the bounded change demonstrates all
+of the following:
+
+1. no existing natural owner can correctly own the current requirement;
+2. the requirement is necessary for current correctness, security or the CURRENT stage DoD, not for
+   anticipated future reuse or aesthetic symmetry;
+3. extending the existing owner would violate an accepted hard architecture/security boundary;
+4. the new element removes at least equivalent semantic/execution ambiguity, or its unavoidable net
+   complexity is explicitly justified;
+5. user/operator complexity does not increase unless the underlying product requirement inherently
+   requires that interaction;
+6. no simpler design preserves the same correctness and security guarantees.
+
+If any item cannot be demonstrated, **do not add the new architectural element**. Prefer deletion,
+composition through the existing owner, or a bounded test/evidence adapter that cannot become a second
+shipping authority.
+
+Every new or materially changed implementation PR/change envelope must include this disposition,
+using `0` when there is no increase:
+
+```text
+COMPLEXITY_DISPOSITION
+new semantic owner = 0
+new runtime/service = 0
+new persistent state = 0
+new execution path = 0
+new operator step = 0
+new framework/registry/checker = 0
+removed/replaced complexity = <what or NONE>
+```
+
+If any `new ...` value is non-zero, the same disposition must state:
+
+```text
+WHY EXISTING OWNER CANNOT HANDLE IT = <current concrete boundary>
+WHY THIS IS CURRENTLY REQUIRED = <current correctness/security/DoD obligation>
+SIMPLER ALTERNATIVE REJECTED BECAUSE = <specific failed invariant or hard boundary>
+```
+
+A vague claim such as "cleaner", "more flexible", "future-proof", "reusable", "easier to test" or
+"may be needed later" is not sufficient justification for new project architecture.
+
+### 3.2 Test complexity is not production authority
+
+Test/evidence scaffolding may be more complex than the product path when that complexity is required to
+prove real security or failure semantics. Its existence does not justify a production abstraction.
+
+```text
+test-only adapter/harness != reusable production abstraction
+proof orchestration        != semantic owner
+CI state                    != product state
+```
+
+A test-only adapter must remain bounded to evidence generation and must not become a second production
+runtime, control plane, authorization path, persistence authority or mutation owner. Negative tests for
+replay, expiry, concurrency, recovery or similar states should exercise the same shipping owner/state
+machine rather than create one production mechanism per negative case.
+
+### 3.3 Product complexity and verification complexity are accounted separately
+
+Verification may be intentionally thorough while the shipping product remains simple. Additional
+verification complexity must not, by itself, increase any of:
+
+```text
+user actions
+operator inputs
+shipping runtime services
+shipping persistent stores
+semantic owners
+production execution paths
+```
+
+At a real stage/architecture cutover, perform one bounded simplification disposition: identify temporary
+scaffolding, superseded predecessors and stage-only artifacts that can now be removed. Delete only what
+has a proved absence of durable consumers; do not turn this into speculative refactoring or a new
+simplification framework/checker.
+
+The target shape remains:
+
+```text
+one fact
+-> one natural owner
+-> one shipping path
+-> one standard operator procedure
+```
+
 ## 4. Permanent architecture boundaries
 
 - one semantic fact has one natural owner;
