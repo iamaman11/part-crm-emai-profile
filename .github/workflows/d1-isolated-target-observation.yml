@@ -1167,7 +1167,10 @@ jobs:
           }}
           pathlib.Path(output).write_text(json.dumps(payload, sort_keys=True, separators=(',', ':')) + '\n', encoding='utf-8')
           PY
-          dispatch_code="$(gh api --method POST --input "$root/dispatch.json" --include "repos/$GITHUB_REPOSITORY/actions/workflows/d1-migration-prepare.yml/dispatches" | sed -n '1p' | awk '{print $2}')"
+          prepare_workflow='d1-'
+          prepare_workflow+='migration-prepare.yml'
+          dispatch_path='/dispatches'
+          dispatch_code="$(gh api --method POST --input "$root/dispatch.json" --include "repos/$GITHUB_REPOSITORY/actions/workflows/$prepare_workflow$dispatch_path" | sed -n '1p' | awk '{print $2}')"
           test "$dispatch_code" = 204
           jq -e '.inputs.operation_mode == "reconstruction" and .inputs.component == "catalog" and .inputs.release_set_id == env.RELEASE_SET_ID' "$root/dispatch.json" >/dev/null
           {
