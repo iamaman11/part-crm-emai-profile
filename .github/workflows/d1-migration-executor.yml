@@ -22,6 +22,7 @@ on:
         type: choice
         options:
           - migration
+          - reconstruction
           - time_travel_restore
       restore_authorization_comment_id:
         description: Exact OWNER authorization comment for one-shot Time Travel restore
@@ -78,32 +79,32 @@ on:
         default: ''
         type: string
       prepared_transaction_run_id:
-        description: Exact successful D1 Migration Prepare run carrying the immutable ordinary transaction
+        description: Exact successful D1 Migration Prepare run carrying the immutable transaction or reconstruction
         required: false
         default: ''
         type: string
       prepared_transaction_run_attempt:
-        description: Exact prepare run attempt that published the immutable ordinary transaction artifact
+        description: Exact prepare run attempt that published the immutable operation artifact
         required: false
         default: ''
         type: string
       transaction_id:
-        description: Exact immutable ordinary TRANSACTION_ID
+        description: Exact immutable ordinary TRANSACTION_ID or reconstruction_id
         required: false
         default: ''
         type: string
       authorization_digest:
-        description: SHA-256 of the exact canonical ordinary transaction authorization JSON
+        description: SHA-256 of the exact canonical operation authorization JSON
         required: false
         default: ''
         type: string
       transaction_authorization_json:
-        description: Strict secret-free transaction-scoped authorization JSON for the ordinary transaction
+        description: Strict secret-free transaction-scoped authorization JSON
         required: false
         default: ''
         type: string
       mutation_authorized:
-        description: Explicitly authorize this staging migration mutation
+        description: Explicitly authorize this exact staging D1 mutation
         required: true
         default: false
         type: boolean
@@ -123,11 +124,12 @@ concurrency:
 
 jobs:
   authorize:
-    if: inputs.operation_mode == 'migration'
+    if: inputs.operation_mode == 'migration' || inputs.operation_mode == 'reconstruction'
     name: Validate D1 mutation inputs before protected Environment
     runs-on: ubuntu-latest
     timeout-minutes: 2
     env:
+      OPERATION_MODE: ${{ inputs.operation_mode }}
       SOURCE_SHA: ${{ inputs.source_sha }}
       TARGET_ENVIRONMENT: ${{ inputs.environment }}
       COMPONENT: ${{ inputs.component }}
@@ -147,8 +149,14 @@ jobs:
           set -euo pipefail
           test "$GITHUB_EVENT_NAME" = "workflow_dispatch"
           test "$TARGET_ENVIRONMENT" = "staging"
-          test "$COMPONENT" = "catalog" || test "$COMPONENT" = "resolver"
-          test "$TRANSITION_MODE" = "ordinary" || test "$TRANSITION_MODE" = "contract"
+          test "$OPERATION_MODE" = migration || test "$OPERATION_MODE" = reconstruction
+          if [ "$OPERATION_MODE" = reconstruction ]; then
+            test "$COMPONENT" = catalog
+            test "$TRANSITION_MODE" = ordinary
+          else
+            test "$COMPONENT" = "catalog" || test "$COMPONENT" = "resolver"
+            test "$TRANSITION_MODE" = "ordinary" || test "$TRANSITION_MODE" = "contract"
+          fi
           test "$MUTATION_AUTHORIZED" = "true"
           test -n "$SOURCE_SHA"
           test -n "$DATABASE_ID"
@@ -161,6 +169,7 @@ jobs:
             [[ "$AUTHORIZATION_DIGEST" =~ ^[0-9a-f]{64}$ ]]
             test -n "$TRANSACTION_AUTHORIZATION_JSON"
           else
+            test "$OPERATION_MODE" = migration
             test "$COMPONENT" = "catalog"
             test -n "$EXPECTED_RELEASE_SET_ID"
             test "$CONFIRMATION" = "$SOURCE_SHA:$TARGET_ENVIRONMENT:$COMPONENT:$DATABASE_ID:contract:$EXPECTED_RELEASE_SET_ID"
@@ -648,8 +657,7 @@ jobs:
               if not isinstance(value, dict):
                   raise SystemExit(f'{name} must contain exactly one JSON object')
               (out / name).write_text(json.dumps(value, sort_keys=True, indent=2) + '\n', encoding='utf-8')
-          binding = {'catalog': 'CATALOG_DB', 'resolver': 'RESOLVER_DB'}[os.environ['COMPONENT']
-          ]
+          binding = {'catalog': 'CATALOG_DB', 'resolver': 'RESOLVER_DB'}[os.environ['COMPONENT']]
           config = {
               'name': 'd1-migration-executor',
               'main': '../../tests/d1-runtime/worker.mjs',
@@ -1284,6 +1292,609 @@ jobs:
           path: artifacts/d1-migration/evidence.json
           if-no-files-found: error
           retention-days: 30
+
+  reconstruct:
+    if: inputs.operation_mode == 'reconstruction'
+    needs: authorize
+    name: staging / catalog / exact CURRENT D1 reconstruction
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: staging
+    env:
+      CLOUDFLARE_ACCOUNT_ID: ${{ inputs.account_id }}
+      SOURCE_SHA: ${{ inputs.source_sha }}
+      TARGET_ENVIRONMENT: ${{ inputs.environment }}
+      COMPONENT: ${{ inputs.component }}
+      DATABASE_NAME: ${{ inputs.database_name }}
+      DATABASE_ID: ${{ inputs.database_id }}
+      PREPARED_TRANSACTION_RUN_ID: ${{ inputs.prepared_transaction_run_id }}
+      PREPARED_TRANSACTION_RUN_ATTEMPT: ${{ inputs.prepared_transaction_run_attempt }}
+      TRANSACTION_ID: ${{ inputs.transaction_id }}
+      AUTHORIZATION_DIGEST: ${{ inputs.authorization_digest }}
+      TRANSACTION_AUTHORIZATION_JSON: ${{ inputs.transaction_authorization_json }}
+      MUTATION_AUTHORIZED: ${{ inputs.mutation_authorized }}
+      CONFIRMATION: ${{ inputs.confirmation }}
+    steps:
+      - name: Reject non-main, non-exact, non-staging reconstruction authority
+        run: |
+          set -euo pipefail
+          test "$GITHUB_EVENT_NAME" = workflow_dispatch
+          test "$GITHUB_REF" = refs/heads/main
+          test "$GITHUB_SHA" = "$SOURCE_SHA"
+          test "$TARGET_ENVIRONMENT" = staging
+          test "$COMPONENT" = catalog
+          test "$MUTATION_AUTHORIZED" = true
+          test "$GITHUB_RUN_ATTEMPT" = 1
+          test "$CONFIRMATION" = "$SOURCE_SHA:$TARGET_ENVIRONMENT:$COMPONENT:$DATABASE_ID"
+          [[ "$PREPARED_TRANSACTION_RUN_ID" =~ ^[0-9]+$ ]]
+          [[ "$PREPARED_TRANSACTION_RUN_ATTEMPT" =~ ^[1-9][0-9]*$ ]]
+          [[ "$TRANSACTION_ID" =~ ^[0-9a-f]{64}$ ]]
+          [[ "$AUTHORIZATION_DIGEST" =~ ^[0-9a-f]{64}$ ]]
+          test -n "$TRANSACTION_AUTHORIZATION_JSON"
+          test -n "$CLOUDFLARE_ACCOUNT_ID"
+          test "$CLOUDFLARE_ACCOUNT_ID" = "${{ inputs.account_id }}"
+
+      - name: Checkout exact accepted-main source
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        with:
+          ref: ${{ inputs.source_sha }}
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Set up pinned provider tooling
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
+        with:
+          node-version: '24.19.0'
+          package-manager-cache: false
+
+      - name: Build accepted reconstruction natural owners
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          npm install --global npm@11.17.0
+          test "$(node --version)" = v24.19.0
+          test "$(npm --version)" = 11.17.0
+          test "$(npx --yes wrangler@4.94.0 --version)" = 4.94.0
+          python scripts/d1-current-reconstruction-materialize.py self-test
+          env -u CLOUDFLARE_API_TOKEN -u CLOUDFLARE_ACCOUNT_ID cargo build --locked --manifest-path tools/opsctl/Cargo.toml --example d1-executor-admission
+          env -u CLOUDFLARE_API_TOKEN -u CLOUDFLARE_ACCOUNT_ID cargo build --locked --manifest-path tools/opsctl/Cargo.toml --example d1-execution-control
+
+      - name: Load immutable reconstruction and verify typed executor admission
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          root=artifacts/d1-reconstruction
+          mkdir -p "$root/prepared"
+          run_json="$RUNNER_TEMP/d1-prepared-reconstruction-run.json"
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$PREPARED_TRANSACTION_RUN_ID" > "$run_json"
+          jq -e \
+            --arg source "$SOURCE_SHA" \
+            --argjson attempt "$PREPARED_TRANSACTION_RUN_ATTEMPT" \
+            '.path == ".github/workflows/d1-migration-prepare.yml" and .event == "workflow_dispatch" and .head_branch == "main" and .head_sha == $source and .status == "completed" and .conclusion == "success" and .run_attempt == $attempt' \
+            "$run_json" >/dev/null
+          artifact_name="d1-reconstruction-catalog-$PREPARED_TRANSACTION_RUN_ID-$PREPARED_TRANSACTION_RUN_ATTEMPT"
+          gh run download "$PREPARED_TRANSACTION_RUN_ID" --repo "$GITHUB_REPOSITORY" --name "$artifact_name" --dir "$root/prepared"
+          test -f "$root/prepared/reconstruction.json"
+          test "$(find "$root/prepared" -type f | wc -l)" -eq 1
+          cp "$root/prepared/reconstruction.json" "$root/reconstruction.json"
+          printf '%s\n' "$TRANSACTION_AUTHORIZATION_JSON" > "$root/authorization.json"
+          tree_sha="$(git rev-parse 'HEAD^{tree}')"
+          evaluated_at="$(date -u +%s)"
+          env -u CLOUDFLARE_API_TOKEN -u CLOUDFLARE_ACCOUNT_ID \
+            tools/opsctl/target/debug/examples/d1-executor-admission \
+              --reconstruction-json "$root/reconstruction.json" \
+              --authorization-json "$root/authorization.json" \
+              --evaluated-at-unix-seconds "$evaluated_at" \
+              --expected-transaction-id "$TRANSACTION_ID" \
+              --expected-source-sha "$SOURCE_SHA" \
+              --expected-tree-sha "$tree_sha" \
+              --expected-component catalog \
+              --expected-environment staging \
+              --expected-account-id "$CLOUDFLARE_ACCOUNT_ID" \
+              --expected-database-name "$DATABASE_NAME" \
+              --expected-database-id "$DATABASE_ID" \
+              --expected-phase ORDINARY \
+              > "$root/executor-admission.json"
+          jq -e \
+            --arg operation_id "$TRANSACTION_ID" \
+            --arg authorization_digest "$AUTHORIZATION_DIGEST" \
+            '.status == "RECONSTRUCTION_EXECUTOR_ADMISSION_VERIFIED" and .operation_id == $operation_id and .authorization_digest == $authorization_digest and .phase == "ORDINARY" and .target.environment == "staging" and .component == "catalog" and .execution_plan.kind == "D1_CURRENT_FRESH_ZERO_RECONSTRUCTION" and .execution_plan.provider_effect == "D1_BOOTSTRAP_CURRENT_EXACT_CONSTRUCTION" and .execution_plan.predecessor_migrations == [] and .execution_plan.apply_required == true' \
+            "$root/executor-admission.json" >/dev/null
+
+      - name: Prove reconstruction authorization has not been consumed
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          root=artifacts/d1-reconstruction
+          expected_title="D1 authorization=$AUTHORIZATION_DIGEST"
+          prior_runs="$RUNNER_TEMP/prior-d1-reconstruction-authorization-runs.json"
+          gh api --paginate \
+            "repos/$GITHUB_REPOSITORY/actions/workflows/d1-migration-executor.yml/runs?event=workflow_dispatch&per_page=100" |
+            jq -s --arg title "$expected_title" --argjson current_number "$GITHUB_RUN_NUMBER" \
+              '[.[].workflow_runs[] | select(.display_title == $title and .run_number < $current_number) | .id] | unique' \
+              > "$prior_runs"
+          consumed=0
+          while IFS= read -r run_id; do
+            jobs_json="$RUNNER_TEMP/prior-d1-reconstruction-authorization-jobs-$run_id.json"
+            gh api --paginate "repos/$GITHUB_REPOSITORY/actions/runs/$run_id/jobs?filter=all&per_page=100" |
+              jq -s '[.[].jobs[]?]' > "$jobs_json"
+            hits="$(jq '[.[] | .steps[]? | select(.name == "Consume reconstruction authorization" and .conclusion == "success")] | length' "$jobs_json")"
+            if [ "$hits" -gt 0 ]; then consumed=1; break; fi
+          done < <(jq -r '.[]' "$prior_runs")
+          test "$consumed" -eq 0
+          now="$(date -u +%s)"
+          jq -n \
+            --arg operation_id "$TRANSACTION_ID" \
+            --arg authorization_digest "$AUTHORIZATION_DIGEST" \
+            --arg source "$SOURCE_SHA" \
+            --argjson run_id "$GITHUB_RUN_ID" \
+            --argjson run_number "$GITHUB_RUN_NUMBER" \
+            --argjson run_attempt "$GITHUB_RUN_ATTEMPT" \
+            --argjson consumed "$now" \
+            '{schema_version:1,status:"RECONSTRUCTION_AUTHORIZATION_CONSUMPTION_READY",operation_id:$operation_id,authorization_digest:$authorization_digest,source_sha:$source,executor_run_id:$run_id,executor_run_number:$run_number,executor_run_attempt:$run_attempt,consumed_at_unix_seconds:$consumed,provider_mutation_executed:false}' \
+            > "$root/authorization-consumption.json"
+
+      - name: Consume reconstruction authorization
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: d1-reconstruction-authorization-consumption-${{ inputs.authorization_digest }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: artifacts/d1-reconstruction/authorization-consumption.json
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Materialize deterministic CURRENT bootstrap and bounded provider config
+        run: |
+          set -euo pipefail
+          root=artifacts/d1-reconstruction
+          python scripts/d1-current-reconstruction-materialize.py materialize \
+            --reconstruction-json "$root/reconstruction.json" \
+            --output-sql "$root/bootstrap.sql" \
+            --output-metadata "$root/materialization.json"
+          jq -e \
+            --arg operation_id "$TRANSACTION_ID" \
+            --arg source "$SOURCE_SHA" \
+            --arg account "$CLOUDFLARE_ACCOUNT_ID" \
+            --arg name "$DATABASE_NAME" \
+            --arg id "$DATABASE_ID" \
+            '.kind == "D1_CURRENT_RECONSTRUCTION_MATERIALIZATION" and .mode == "read-only" and .reconstruction_id == $operation_id and .source_sha == $source and .target.environment == "staging" and .target.account_id == $account and .target.database_name == $name and .target.database_id == $id and .provider_effect == "D1_BOOTSTRAP_CURRENT_EXACT_CONSTRUCTION" and .provider_mutation_authorized == false and .production_mutation_authorized == false and (.expected_ledger_migrations | length) > 0 and (.deferred_revisions | index("0035_pas2_payload_fingerprint_contract.sql") != null)' \
+            "$root/materialization.json" >/dev/null
+          jq -n --arg account "$CLOUDFLARE_ACCOUNT_ID" --arg name "$DATABASE_NAME" --arg id "$DATABASE_ID" \
+            '{name:"d1-current-reconstruction-executor",main:"../../tests/d1-runtime/worker.mjs",compatibility_date:"2026-08-15",account_id:$account,d1_databases:[{binding:"CATALOG_DB",database_name:$name,database_id:$id}]}' \
+            > "$root/wrangler.json"
+
+      - name: Fresh exactly-empty provider pre-state with observe credential
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_OBSERVE_API_TOKEN }}
+        run: |
+          set -euo pipefail
+          root=artifacts/d1-reconstruction
+          test -n "$CLOUDFLARE_API_TOKEN"
+          npx --yes wrangler@4.94.0 d1 info "$DATABASE_NAME" --config "$root/wrangler.json" --json \
+            --experimental-provision=false --experimental-auto-create=false > "$root/provider-identity-before.json"
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          value=json.loads(Path('artifacts/d1-reconstruction/provider-identity-before.json').read_text())
+          expected={os.environ['DATABASE_NAME'],os.environ['DATABASE_ID']}
+          def paired(item):
+              if isinstance(item,dict):
+                  values={v for v in item.values() if isinstance(v,str)}
+                  return expected.issubset(values) or any(paired(v) for v in item.values())
+              if isinstance(item,list): return any(paired(v) for v in item)
+              return False
+          if not paired(value): raise SystemExit('reconstruction provider identity mismatch')
+          PY
+          npx --yes wrangler@4.94.0 d1 execute "$DATABASE_NAME" --remote --config "$root/wrangler.json" \
+            --command "SELECT name FROM sqlite_master WHERE type='table' AND name='d1_migrations'" --json \
+            --experimental-provision=false --experimental-auto-create=false > "$root/ledger-table-before.json"
+          if jq -e '[.. | objects | select(.name? == "d1_migrations")] | length > 0' "$root/ledger-table-before.json" >/dev/null; then
+            npx --yes wrangler@4.94.0 d1 execute "$DATABASE_NAME" --remote --config "$root/wrangler.json" \
+              --command "SELECT id, name FROM d1_migrations ORDER BY id" --json \
+              --experimental-provision=false --experimental-auto-create=false > "$root/ledger-before.json"
+          else
+            printf '[{"results":[],"success":true}]\n' > "$root/ledger-before.json"
+          fi
+          python scripts/d1-executor-plan.py normalize-ledger \
+            --ledger "$root/ledger-before.json" --output "$root/ledger-before-names.json"
+          jq -e 'length == 0' "$root/ledger-before-names.json" >/dev/null
+          python - <<'PY'
+          import hashlib, json
+          from pathlib import Path
+          root=Path('artifacts/d1-reconstruction')
+          names=json.loads((root/'ledger-before-names.json').read_text())
+          canonical=json.dumps({'remote_migrations':names},sort_keys=True,separators=(',',':'))
+          digest=hashlib.sha256(canonical.encode()).hexdigest()
+          reconstruction=json.loads((root/'reconstruction.json').read_text())
+          expected=reconstruction['plan']['provider_observation']['predecessor_ledger_sha256']
+          if digest != expected: raise SystemExit('fresh exactly-empty predecessor digest drifted')
+          (root/'predecessor-ledger-sha256.txt').write_text(digest+'\n')
+          PY
+
+      - name: Create typed reconstruction target fence lease
+        run: |
+          set -euo pipefail
+          root=artifacts/d1-reconstruction
+          now="$(date -u +%s)"
+          jq -n \
+            --arg environment "$TARGET_ENVIRONMENT" \
+            --arg account "$CLOUDFLARE_ACCOUNT_ID" \
+            --arg name "$DATABASE_NAME" \
+            --arg id "$DATABASE_ID" \
+            --arg operation "$TRANSACTION_ID" \
+            --arg authorization "$AUTHORIZATION_DIGEST" \
+            --arg source "$SOURCE_SHA" \
+            --argjson run_id "$GITHUB_RUN_ID" \
+            --argjson epoch "$GITHUB_RUN_NUMBER" \
+            --argjson attempt "$GITHUB_RUN_ATTEMPT" \
+            --argjson acquired "$now" \
+            '{schema_version:1,target:{environment:$environment,account_id:$account,database_name:$name,database_id:$id},phase:"ORDINARY",operation_identity:$operation,transaction_id:$operation,authorization_digest:$authorization,source_sha:$source,executor_run_id:$run_id,fence_epoch:$epoch,run_attempt:$attempt,acquired_at_unix_seconds:$acquired}' \
+            > "$root/target-fence-input.json"
+          env -u CLOUDFLARE_API_TOKEN -u CLOUDFLARE_ACCOUNT_ID \
+            tools/opsctl/target/debug/examples/d1-execution-control acquire-fence \
+              --input "$root/target-fence-input.json" > "$root/target-fence-lease.json"
+          jq -e \
+            --arg operation "$TRANSACTION_ID" \
+            --arg authorization "$AUTHORIZATION_DIGEST" \
+            '.status == "TARGET_FENCE_ACQUIRED" and .phase == "ORDINARY" and .operation_identity == $operation and .transaction_id == $operation and .authorization_digest == $authorization and .target.environment == "staging" and (.fence_id | test("^[0-9a-f]{64}$"))' \
+            "$root/target-fence-lease.json" >/dev/null
+
+      - name: Acquire durable target fence
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: d1-target-fence-${{ github.run_number }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: artifacts/d1-reconstruction/target-fence-lease.json
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Initialize reconstruction execution receipt
+        run: |
+          set -euo pipefail
+          root=artifacts/d1-reconstruction
+          jq -n \
+            --slurpfile fence "$root/target-fence-lease.json" \
+            --arg source "$SOURCE_SHA" \
+            --arg operation "$TRANSACTION_ID" \
+            --arg authorization "$AUTHORIZATION_DIGEST" \
+            '{schema_version:1,target:$fence[0].target,phase:"ORDINARY",operation_identity:$operation,transaction_id:$operation,authorization_digest:$authorization,source_sha:$source,recovery_strategy:"FAIL_FORWARD_ONLY",fence:$fence[0]}' \
+            > "$root/execution-receipt-seed.json"
+          now="$(date -u +%s)"
+          env -u CLOUDFLARE_API_TOKEN -u CLOUDFLARE_ACCOUNT_ID \
+            tools/opsctl/target/debug/examples/d1-execution-control initialize-receipt \
+              --seed "$root/execution-receipt-seed.json" \
+              --prepared-at-unix-seconds "$now" \
+              --authorized-at-unix-seconds "$now" \
+              > "$root/execution-receipt.json"
+          jq -e '.events[0].kind == "PREPARED" and .events[1].kind == "AUTHORIZED" and (.events | length) == 2 and .recovery_strategy == "FAIL_FORWARD_ONLY"' \
+            "$root/execution-receipt.json" >/dev/null
+
+      - name: Persist initial reconstruction receipt
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: d1-reconstruction-receipt-${{ github.run_id }}-${{ github.run_attempt }}-initial
+          path: artifacts/d1-reconstruction/execution-receipt.json
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Verify typed target fence immediately before reconstruction
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          root=artifacts/d1-reconstruction
+          newer_runs="$RUNNER_TEMP/d1-reconstruction-newer-fence-runs.json"
+          gh api --paginate \
+            "repos/$GITHUB_REPOSITORY/actions/workflows/d1-migration-executor.yml/runs?event=workflow_dispatch&per_page=100" |
+            jq -s --argjson current_number "$GITHUB_RUN_NUMBER" \
+              '[.[].workflow_runs[] | select(.run_number > $current_number) | {id,run_number}] | unique_by(.id)' \
+              > "$newer_runs"
+          leases="$RUNNER_TEMP/d1-reconstruction-observed-leases.jsonl"
+          : > "$leases"
+          while IFS=$'\t' read -r run_id run_number; do
+            jobs="$RUNNER_TEMP/d1-reconstruction-fence-jobs-$run_id.json"
+            gh api --paginate "repos/$GITHUB_REPOSITORY/actions/runs/$run_id/jobs?filter=all&per_page=100" |
+              jq -s '[.[].jobs[]?]' > "$jobs"
+            hits="$(jq '[.[] | .steps[]? | select(.name == "Acquire durable target fence" and .conclusion == "success")] | length' "$jobs")"
+            if [ "$hits" -eq 0 ]; then continue; fi
+            test "$hits" -eq 1
+            artifact_name="d1-target-fence-$run_number-$run_id-1"
+            artifact_dir="$RUNNER_TEMP/d1-reconstruction-fence-$run_id"
+            rm -rf "$artifact_dir"
+            mkdir -p "$artifact_dir"
+            gh run download "$run_id" --repo "$GITHUB_REPOSITORY" --name "$artifact_name" --dir "$artifact_dir"
+            test -f "$artifact_dir/target-fence-lease.json"
+            jq -c '.' "$artifact_dir/target-fence-lease.json" >> "$leases"
+          done < <(jq -r '.[] | [.id,.run_number] | @tsv' "$newer_runs")
+          python - <<'PY'
+          import json, os, time
+          from pathlib import Path
+          path=Path(os.environ['RUNNER_TEMP'],'d1-reconstruction-observed-leases.jsonl')
+          leases=[json.loads(line) for line in path.read_text().splitlines() if line]
+          observation={
+              'schema_version':1,
+              'observed_at_unix_seconds':int(time.time()),
+              'history_complete':True,
+              'current_marker_succeeded':True,
+              'current_executor_run_id':int(os.environ['GITHUB_RUN_ID']),
+              'current_fence_epoch':int(os.environ['GITHUB_RUN_NUMBER']),
+              'observed_acquired_leases':leases,
+          }
+          Path('artifacts/d1-reconstruction/target-fence-observation.json').write_text(
+              json.dumps(observation,sort_keys=True,separators=(',',':'))+'\n'
+          )
+          PY
+          env -u CLOUDFLARE_API_TOKEN -u CLOUDFLARE_ACCOUNT_ID \
+            tools/opsctl/target/debug/examples/d1-execution-control verify-fence \
+              --lease "$root/target-fence-lease.json" \
+              --observation "$root/target-fence-observation.json" \
+              > "$root/target-fence-verification.json"
+          jq -e --arg operation "$TRANSACTION_ID" \
+            '.status == "TARGET_FENCE_VERIFIED" and .operation_identity == $operation and .target.environment == "staging"' \
+            "$root/target-fence-verification.json" >/dev/null
+
+      - name: Fresh exactly-empty re-observation immediately before write
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_OBSERVE_API_TOKEN }}
+        run: |
+          set -euo pipefail
+          root=artifacts/d1-reconstruction
+          npx --yes wrangler@4.94.0 d1 info "$DATABASE_NAME" --config "$root/wrangler.json" --json \
+            --experimental-provision=false --experimental-auto-create=false > "$root/provider-identity-fence.json"
+          npx --yes wrangler@4.94.0 d1 execute "$DATABASE_NAME" --remote --config "$root/wrangler.json" \
+            --command "SELECT name FROM sqlite_master WHERE type='table' AND name='d1_migrations'" --json \
+            --experimental-provision=false --experimental-auto-create=false > "$root/ledger-table-fence.json"
+          if jq -e '[.. | objects | select(.name? == "d1_migrations")] | length > 0' "$root/ledger-table-fence.json" >/dev/null; then
+            npx --yes wrangler@4.94.0 d1 execute "$DATABASE_NAME" --remote --config "$root/wrangler.json" \
+              --command "SELECT id, name FROM d1_migrations ORDER BY id" --json \
+              --experimental-provision=false --experimental-auto-create=false > "$root/ledger-fence.json"
+          else
+            printf '[{"results":[],"success":true}]\n' > "$root/ledger-fence.json"
+          fi
+          python scripts/d1-executor-plan.py normalize-ledger \
+            --ledger "$root/ledger-fence.json" --output "$root/ledger-fence-names.json"
+          cmp --silent "$root/ledger-before-names.json" "$root/ledger-fence-names.json"
+          jq -e 'length == 0' "$root/ledger-fence-names.json" >/dev/null
+
+      - name: Append PREWRITE_FENCE_PASS and MUTATION_STARTED
+        run: |
+          set -euo pipefail
+          root=artifacts/d1-reconstruction
+          append_event() {
+            kind="$1"
+            now="$(date -u +%s)"
+            jq -n --arg kind "$kind" --argjson occurred "$now" \
+              '{kind:$kind,occurred_at_unix_seconds:$occurred,migration_id:null}' > "$root/event.json"
+            env -u CLOUDFLARE_API_TOKEN -u CLOUDFLARE_ACCOUNT_ID \
+              tools/opsctl/target/debug/examples/d1-execution-control append-receipt \
+                --receipt "$root/execution-receipt.json" --event "$root/event.json" > "$root/receipt.next.json"
+            mv "$root/receipt.next.json" "$root/execution-receipt.json"
+          }
+          append_event PREWRITE_FENCE_PASS
+          append_event MUTATION_STARTED
+          jq -e '.events[-2].kind == "PREWRITE_FENCE_PASS" and .events[-1].kind == "MUTATION_STARTED"' \
+            "$root/execution-receipt.json" >/dev/null
+
+      - name: Persist reconstruction MUTATION_STARTED receipt
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: d1-reconstruction-receipt-${{ github.run_id }}-${{ github.run_attempt }}-mutation-started
+          path: artifacts/d1-reconstruction/execution-receipt.json
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Execute D1_BOOTSTRAP_CURRENT_EXACT_CONSTRUCTION once
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          set -euo pipefail
+          root=artifacts/d1-reconstruction
+          test -n "$CLOUDFLARE_API_TOKEN"
+          npx --yes wrangler@4.94.0 d1 execute "$DATABASE_NAME" --remote \
+            --config "$root/wrangler.json" --file "$root/bootstrap.sql" \
+            --experimental-provision=false --experimental-auto-create=false
+
+      - name: Append RECONSTRUCTION_APPLIED
+        run: |
+          set -euo pipefail
+          root=artifacts/d1-reconstruction
+          now="$(date -u +%s)"
+          jq -n --argjson occurred "$now" \
+            '{kind:"RECONSTRUCTION_APPLIED",occurred_at_unix_seconds:$occurred,migration_id:null}' > "$root/event.json"
+          env -u CLOUDFLARE_API_TOKEN -u CLOUDFLARE_ACCOUNT_ID \
+            tools/opsctl/target/debug/examples/d1-execution-control append-receipt \
+              --receipt "$root/execution-receipt.json" --event "$root/event.json" > "$root/receipt.next.json"
+          mv "$root/receipt.next.json" "$root/execution-receipt.json"
+          jq -e '[.events[] | select(.kind == "RECONSTRUCTION_APPLIED")] | length == 1' \
+            "$root/execution-receipt.json" >/dev/null
+
+      - name: Fresh post-reconstruction provider observation
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_OBSERVE_API_TOKEN }}
+        run: |
+          set -euo pipefail
+          root=artifacts/d1-reconstruction
+          npx --yes wrangler@4.94.0 d1 execute "$DATABASE_NAME" --remote --config "$root/wrangler.json" \
+            --command "SELECT id, name FROM d1_migrations ORDER BY id" --json \
+            --experimental-provision=false --experimental-auto-create=false > "$root/ledger-after.json"
+          python scripts/d1-executor-plan.py normalize-ledger \
+            --ledger "$root/ledger-after.json" --output "$root/ledger-after-names.json"
+          jq '.plan.expected_post_state.ledger_migrations' "$root/reconstruction.json" > "$root/expected-after.json"
+          cmp --silent "$root/expected-after.json" "$root/ledger-after-names.json"
+          npx --yes wrangler@4.94.0 d1 migrations list "$DATABASE_NAME" --remote \
+            --config "$root/wrangler.json" \
+            --experimental-provision=false --experimental-auto-create=false > "$root/wrangler-pending-after.txt"
+          python - <<'PY'
+          import json,re
+          from pathlib import Path
+          root=Path('artifacts/d1-reconstruction')
+          text=(root/'wrangler-pending-after.txt').read_text(encoding='utf-8')
+          matches=re.findall(r'\b[0-9]{4}_[a-z0-9_]+\.sql\b',text)
+          if len(matches)!=len(set(matches)): raise SystemExit('Wrangler pending output is ambiguous')
+          (root/'wrangler-pending-after.json').write_text(json.dumps(matches,indent=2)+'\n')
+          PY
+
+      - name: Append POST_OBSERVED after exact ledger comparison
+        run: |
+          set -euo pipefail
+          root=artifacts/d1-reconstruction
+          now="$(date -u +%s)"
+          jq -n --argjson occurred "$now" \
+            '{kind:"POST_OBSERVED",occurred_at_unix_seconds:$occurred,migration_id:null}' > "$root/event.json"
+          env -u CLOUDFLARE_API_TOKEN -u CLOUDFLARE_ACCOUNT_ID \
+            tools/opsctl/target/debug/examples/d1-execution-control append-receipt \
+              --receipt "$root/execution-receipt.json" --event "$root/event.json" > "$root/receipt.next.json"
+          mv "$root/receipt.next.json" "$root/execution-receipt.json"
+
+      - name: Verify exact reconstructed database invariants
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_OBSERVE_API_TOKEN }}
+        run: |
+          set -euo pipefail
+          root=artifacts/d1-reconstruction
+          npx --yes wrangler@4.94.0 d1 execute "$DATABASE_NAME" --remote \
+            --config "$root/wrangler.json" --command "PRAGMA foreign_key_check" --json \
+            --experimental-provision=false --experimental-auto-create=false > "$root/foreign-key-check.json"
+          npx --yes wrangler@4.94.0 d1 execute "$DATABASE_NAME" --remote \
+            --config "$root/wrangler.json" --command "PRAGMA quick_check" --json \
+            --experimental-provision=false --experimental-auto-create=false > "$root/quick-check.json"
+          jq -e 'length == 1 and .[0].success == true and .[0].results == []' "$root/foreign-key-check.json" >/dev/null
+          jq -e 'length == 1 and .[0].success == true and (.[0].results | length) == 1 and (.[0].results[0] | to_entries | map(.value)) == ["ok"]' "$root/quick-check.json" >/dev/null
+
+      - name: Complete reconstruction receipt after exact local post-state proof
+        run: |
+          set -euo pipefail
+          root=artifacts/d1-reconstruction
+          for kind in VERIFIED COMPLETED; do
+            now="$(date -u +%s)"
+            jq -n --arg kind "$kind" --argjson occurred "$now" \
+              '{kind:$kind,occurred_at_unix_seconds:$occurred,migration_id:null}' > "$root/event.json"
+            env -u CLOUDFLARE_API_TOKEN -u CLOUDFLARE_ACCOUNT_ID \
+              tools/opsctl/target/debug/examples/d1-execution-control append-receipt \
+                --receipt "$root/execution-receipt.json" --event "$root/event.json" > "$root/receipt.next.json"
+            mv "$root/receipt.next.json" "$root/execution-receipt.json"
+          done
+          jq -e '.events[-2].kind == "VERIFIED" and .events[-1].kind == "COMPLETED"' "$root/execution-receipt.json" >/dev/null
+
+      - name: Fresh terminal observation and typed reconstruction post-state verification
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_OBSERVE_API_TOKEN }}
+        run: |
+          set -euo pipefail
+          root=artifacts/d1-reconstruction
+          npx --yes wrangler@4.94.0 d1 execute "$DATABASE_NAME" --remote --config "$root/wrangler.json" \
+            --command "SELECT id, name FROM d1_migrations ORDER BY id" --json \
+            --experimental-provision=false --experimental-auto-create=false > "$root/ledger-terminal.json"
+          python scripts/d1-executor-plan.py normalize-ledger \
+            --ledger "$root/ledger-terminal.json" --output "$root/ledger-terminal-names.json"
+          cmp --silent "$root/expected-after.json" "$root/ledger-terminal-names.json"
+          npx --yes wrangler@4.94.0 d1 migrations list "$DATABASE_NAME" --remote \
+            --config "$root/wrangler.json" \
+            --experimental-provision=false --experimental-auto-create=false > "$root/wrangler-pending-terminal.txt"
+          python - <<'PY'
+          import hashlib,json,os,re,time
+          from pathlib import Path
+          root=Path('artifacts/d1-reconstruction')
+          remote=json.loads((root/'ledger-terminal-names.json').read_text())
+          text=(root/'wrangler-pending-terminal.txt').read_text(encoding='utf-8')
+          pending=re.findall(r'\b[0-9]{4}_[a-z0-9_]+\.sql\b',text)
+          if len(pending)!=len(set(pending)): raise SystemExit('terminal pending output is ambiguous')
+          canonical=json.dumps({'remote_migrations':remote},sort_keys=True,separators=(',',':'))
+          materialization=json.loads((root/'materialization.json').read_text())
+          observation={
+              'schema_version':1,
+              'target':{
+                  'environment':'staging',
+                  'account_id':os.environ['CLOUDFLARE_ACCOUNT_ID'],
+                  'database_name':os.environ['DATABASE_NAME'],
+                  'database_id':os.environ['DATABASE_ID'],
+              },
+              'observed_at_unix_seconds':int(time.time()),
+              'observation_source':f"github-actions://{os.environ['GITHUB_REPOSITORY']}/{os.environ['GITHUB_WORKFLOW']}/{os.environ['GITHUB_RUN_ID']}/{os.environ['GITHUB_RUN_ATTEMPT']}/terminal",
+              'remote_ledger_sha256':hashlib.sha256(canonical.encode()).hexdigest(),
+              'remote_migrations':remote,
+              'wrangler_pending_migrations':pending,
+              'deployment_identity':materialization['release_set_id'],
+              'time_travel_bookmark_capable':True,
+          }
+          (root/'post-observation.json').write_text(json.dumps(observation,sort_keys=True,separators=(',',':'))+'\n')
+          PY
+          evaluated_at="$(date -u +%s)"
+          env -u CLOUDFLARE_API_TOKEN -u CLOUDFLARE_ACCOUNT_ID \
+            tools/opsctl/target/debug/examples/d1-execution-control verify-post-state \
+              --reconstruction "$root/reconstruction.json" \
+              --receipt "$root/execution-receipt.json" \
+              --observation "$root/post-observation.json" \
+              --evaluated-at-unix-seconds "$evaluated_at" \
+              > "$root/post-state-verification.json"
+          jq -e \
+            '.status == "RECONSTRUCTION_POST_STATE_VERIFIED" and .disposition == "COMPLETED_VERIFIED" and .terminal_state == "COMPLETED" and .reconstruction_applied == true and .expected_post_state_reached == true' \
+            "$root/post-state-verification.json" >/dev/null
+
+      - name: Terminalize reconstruction receipt fail closed
+        if: always()
+        run: |
+          set -euo pipefail
+          root=artifacts/d1-reconstruction
+          receipt="$root/execution-receipt.json"
+          if [ ! -f "$receipt" ]; then exit 0; fi
+          append_event() {
+            kind="$1"
+            now="$(date -u +%s)"
+            jq -n --arg kind "$kind" --argjson occurred "$now" \
+              '{kind:$kind,occurred_at_unix_seconds:$occurred,migration_id:null}' > "$root/event.json"
+            env -u CLOUDFLARE_API_TOKEN -u CLOUDFLARE_ACCOUNT_ID \
+              tools/opsctl/target/debug/examples/d1-execution-control append-receipt \
+                --receipt "$receipt" --event "$root/event.json" > "$root/receipt.next.json"
+            mv "$root/receipt.next.json" "$receipt"
+          }
+          last="$(jq -r '.events[-1].kind' "$receipt")"
+          case "$last" in
+            AUTHORIZED) append_event PREWRITE_ABORTED; append_event FAILED_NO_EFFECT ;;
+            PREWRITE_FENCE_PASS) append_event FAILED_NO_EFFECT ;;
+            MUTATION_STARTED|RECONSTRUCTION_APPLIED|POST_OBSERVED) append_event RECOVERY_REQUIRED ;;
+            VERIFIED) append_event COMPLETED ;;
+            COMPLETED|RECOVERY_REQUIRED|FAILED_NO_EFFECT) ;;
+            *) echo "unclassified reconstruction receipt state: $last" >&2; exit 1 ;;
+          esac
+          jq -e '.events[-1].kind == "COMPLETED" or .events[-1].kind == "RECOVERY_REQUIRED" or .events[-1].kind == "FAILED_NO_EFFECT"' "$receipt" >/dev/null
+
+      - name: Persist terminal reconstruction evidence
+        if: always() && hashFiles('artifacts/d1-reconstruction/execution-receipt.json') != ''
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: d1-reconstruction-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            artifacts/d1-reconstruction/executor-admission.json
+            artifacts/d1-reconstruction/materialization.json
+            artifacts/d1-reconstruction/target-fence-lease.json
+            artifacts/d1-reconstruction/target-fence-verification.json
+            artifacts/d1-reconstruction/execution-receipt.json
+            artifacts/d1-reconstruction/ledger-before-names.json
+            artifacts/d1-reconstruction/ledger-terminal-names.json
+            artifacts/d1-reconstruction/post-state-verification.json
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Remove raw provider and authorization material
+        if: always()
+        run: |
+          rm -f \
+            artifacts/d1-reconstruction/authorization.json \
+            artifacts/d1-reconstruction/bootstrap.sql \
+            artifacts/d1-reconstruction/wrangler.json \
+            artifacts/d1-reconstruction/provider-identity-before.json \
+            artifacts/d1-reconstruction/provider-identity-fence.json \
+            artifacts/d1-reconstruction/ledger-before.json \
+            artifacts/d1-reconstruction/ledger-fence.json \
+            artifacts/d1-reconstruction/ledger-after.json \
+            artifacts/d1-reconstruction/ledger-terminal.json \
+            artifacts/d1-reconstruction/wrangler-pending-after.txt \
+            artifacts/d1-reconstruction/wrangler-pending-terminal.txt \
+            artifacts/d1-reconstruction/event.json \
+            artifacts/d1-reconstruction/receipt.next.json \
+            artifacts/d1-reconstruction/target-fence-input.json \
+            artifacts/d1-reconstruction/target-fence-observation.json
 
   authorize_restore:
     if: inputs.operation_mode == 'time_travel_restore'
