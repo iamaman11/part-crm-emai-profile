@@ -108,9 +108,10 @@ jobs:
           python - <<'PY'
           from pathlib import Path
           source = Path('.github/workflows/d1-migration-prepare.yml').read_text(encoding='utf-8')
-          artifact_name_prefix = 'name: d1-executor-' + 'inputs-'
-          assert source.count(artifact_name_prefix) == 1
-          assert source.count('name: d1-reconstruction-') == 1
+          executor_artifact_prefix = 'name: d1-executor-' + 'inputs-'
+          reconstruction_artifact_prefix = 'name: d1-' + 'reconstruction-'
+          assert source.count(executor_artifact_prefix) == 1
+          assert source.count(reconstruction_artifact_prefix) == 1
           assert 'path: artifacts/d1-prepare/reconstruction.json' in source
           assert 'd1-current-reconstruction-plan' in source
           assert 'D1_CURRENT_FRESH_ZERO_RECONSTRUCTION' in source
