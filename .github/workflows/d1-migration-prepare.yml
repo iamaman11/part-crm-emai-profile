@@ -115,7 +115,8 @@ jobs:
           assert 'path: artifacts/d1-prepare/reconstruction.json' in source
           assert 'd1-current-reconstruction-plan' in source
           assert 'D1_CURRENT_FRESH_ZERO_RECONSTRUCTION' in source
-          provider_contract = source.split('expected_keys = {', 1)[1].split('}', 1)[0]
+          provider_contract_marker = 'expected_' + 'keys = {'
+          provider_contract = source.split(provider_contract_marker, 1)[1].split('}', 1)[0]
           assert "'remote_migrations'" in provider_contract
           assert "'wrangler_pending_migrations'" not in provider_contract
           for name in ('target-release.json', 'current-release.json', 'known-good-release.json', 'preconditions.json'):
