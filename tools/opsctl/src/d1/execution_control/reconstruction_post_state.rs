@@ -1,5 +1,5 @@
 use super::{ExecutionEventKind, ExecutionReceipt, serialize_execution_receipt};
-use crate::canonical::canonical_json;
+use crate::canonical::{canonical_json, sha256_hex};
 use crate::d1::model::{D1Error, GateResult};
 use crate::d1::reconstruction;
 use crate::d1::transaction::{ProviderObservationInput, TargetIdentity, TransactionPhase};
@@ -68,6 +68,16 @@ pub fn verify_current_reconstruction_post_state(
         &post_observation.remote_migrations,
         "post-state remote_migrations",
     )?;
+    let normalized_ledger = serde_json::json!({
+        "remote_migrations": &post_observation.remote_migrations,
+    });
+    let normalized_ledger_json = canonical_json(&normalized_ledger).map_err(D1Error::new)?;
+    let expected_remote_ledger_sha256 = sha256_hex(normalized_ledger_json.as_bytes());
+    if post_observation.remote_ledger_sha256 != expected_remote_ledger_sha256 {
+        return Err(reconstruction_drift(
+            "fresh reconstruction post-state remote_ledger_sha256 does not bind the exact normalized remote_migrations",
+        ));
+    }
     validate_unique_strings(
         &post_observation.wrangler_pending_migrations,
         "post-state wrangler_pending_migrations",
@@ -634,6 +644,25 @@ mod tests {
         assert!(
             verify_current_reconstruction_post_state(&reconstruction, &receipt, &post, T0 + 11)
                 .is_err()
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn post_state_rejects_digest_that_does_not_bind_observed_migrations() -> Result<(), D1Error> {
+        let reconstruction = reconstruction()?;
+        let receipt = receipt(&reconstruction, ExecutionEventKind::Completed)?;
+        let mut post = observation(&reconstruction, true, T0 + 10)?;
+        post.remote_ledger_sha256 = "ff".repeat(32);
+        let error =
+            verify_current_reconstruction_post_state(&reconstruction, &receipt, &post, T0 + 11)
+                .err()
+                .ok_or_else(|| {
+                    D1Error::new("mismatched normalized ledger digest unexpectedly passed")
+                })?;
+        assert_eq!(
+            error.gate_result_json()["reason_code"],
+            "RECONSTRUCTION_POST_STATE_DRIFT"
         );
         Ok(())
     }
