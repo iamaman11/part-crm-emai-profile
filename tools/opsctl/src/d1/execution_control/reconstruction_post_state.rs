@@ -657,7 +657,9 @@ mod tests {
         let error =
             verify_current_reconstruction_post_state(&reconstruction, &receipt, &post, T0 + 11)
                 .err()
-                .ok_or_else(|| D1Error::new("mismatched normalized ledger digest unexpectedly passed"))?;
+                .ok_or_else(|| {
+                    D1Error::new("mismatched normalized ledger digest unexpectedly passed")
+                })?;
         assert_eq!(
             error.gate_result_json()["reason_code"],
             "RECONSTRUCTION_POST_STATE_DRIFT"
