@@ -104,6 +104,9 @@ jobs:
           assert '--command "PRAGMA quick_check"' in observe_source
           assert '--command "PRAGMA integrity_check"' not in observe_source
           assert 'D1_CURRENT_TARGET_OBSERVATION' in observe_source
+          assert 'D1_DATABASE_INVENTORY_OBSERVATION_V1' in observe_source
+          assert 'database-inventory.json' in observe_source
+          assert "'inventory_complete': True" in observe_source
           assert "'provider_mutation': False" in observe_source
           assert "'d1_mutation': False" in observe_source
           assert "'production_mutation': False" in observe_source
@@ -233,7 +236,7 @@ jobs:
             -H "Authorization: Bearer $CLOUDFLARE_OBSERVE_API_TOKEN" \
             "https://api.cloudflare.com/client/v4/accounts/$account_id/d1/database?per_page=100")"
           test "$inventory_code" = 200
-          jq -e '.success == true and (.errors | length) == 0 and (.result | type == "array")' "$raw/d1-databases.json" >/dev/null
+          jq -e '.success == true and (.errors | length) == 0 and (.result | type == "array") and ((.result_info.total_pages // 1) == 1)' "$raw/d1-databases.json" >/dev/null
 
           target_id="$(python - "$raw/d1-databases.json" "$target_name" <<'PY'
           import json, sys
@@ -386,6 +389,56 @@ jobs:
           observed_at_unix_seconds="$(date -u +%s)"
           observed_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
           observation_source="github-actions://$GITHUB_REPOSITORY/$GITHUB_WORKFLOW/$GITHUB_RUN_ID/$GITHUB_RUN_ATTEMPT"
+
+          python - \
+            "$raw/d1-databases.json" "$evidence/database-inventory.json" \
+            "$SOURCE_SHA" "$account_id" "$observed_at" "$observed_at_unix_seconds" "$observation_source" <<'PY'
+          import json, re, sys
+          raw_path, output_path, source_sha, account_id, observed_at, observed_at_unix_seconds, observation_source = sys.argv[1:]
+          value = json.load(open(raw_path, encoding='utf-8'))
+          if value.get('success') is not True or value.get('errors') != [] or not isinstance(value.get('result'), list):
+              raise SystemExit('D1 inventory response is not a successful complete result array')
+          result_info = value.get('result_info') or {}
+          if result_info.get('total_pages', 1) != 1:
+              raise SystemExit('D1 inventory response is paginated; exact absence cannot be proven from a partial inventory')
+          databases = []
+          seen_names = set()
+          seen_ids = set()
+          for item in value['result']:
+              if not isinstance(item, dict):
+                  raise SystemExit('D1 inventory contains a non-object row')
+              name = item.get('name')
+              database_id = item.get('uuid')
+              if not isinstance(name, str) or not name or not isinstance(database_id, str) or re.fullmatch(r'[0-9a-f-]{36}', database_id) is None:
+                  raise SystemExit('D1 inventory row is missing exact name/uuid identity')
+              if name in seen_names or database_id in seen_ids:
+                  raise SystemExit('D1 inventory contains duplicate name or uuid identity')
+              seen_names.add(name)
+              seen_ids.add(database_id)
+              databases.append({'database_name': name, 'database_id': database_id})
+          databases.sort(key=lambda item: (item['database_name'], item['database_id']))
+          document = {
+              'schema_version': 1,
+              'kind': 'D1_DATABASE_INVENTORY_OBSERVATION_V1',
+              'source_sha': source_sha,
+              'environment': 'staging',
+              'account_id': account_id,
+              'observed_at': observed_at,
+              'observed_at_unix_seconds': int(observed_at_unix_seconds),
+              'observation_source': observation_source,
+              'inventory_complete': True,
+              'databases': databases,
+              'provider_mutation': False,
+              'd1_mutation': False,
+              'production_mutation': False,
+          }
+          with open(output_path, 'w', encoding='utf-8') as handle:
+              json.dump(document, handle, sort_keys=True, indent=2)
+              handle.write('\n')
+          PY
+          SOURCE_SHA="$SOURCE_SHA" ACCOUNT_ID="$account_id" jq -e \
+            '.schema_version == 1 and .kind == "D1_DATABASE_INVENTORY_OBSERVATION_V1" and .source_sha == env.SOURCE_SHA and .environment == "staging" and .account_id == env.ACCOUNT_ID and .inventory_complete == true and (.databases | type == "array") and .provider_mutation == false and .d1_mutation == false and .production_mutation == false' \
+            "$evidence/database-inventory.json" >/dev/null
 
           if [ -n "$REQUESTED_TIME_TRAVEL_UNIX_SECONDS" ]; then
             python - \
@@ -553,8 +606,13 @@ jobs:
           root="$RUNNER_TEMP/d1-preflight"
           evidence="artifacts/d1-transaction-preflight"
           observation="artifacts/d1-current-target-observation/provider-observation.json"
+          inventory="artifacts/d1-current-target-observation/database-inventory.json"
           mkdir -p "$root/target" "$root/current" "$evidence"
           test -f "$observation"
+          test -f "$inventory"
+          SOURCE_SHA="$SOURCE_SHA" jq -e \
+            '.schema_version == 1 and .kind == "D1_DATABASE_INVENTORY_OBSERVATION_V1" and .source_sha == env.SOURCE_SHA and .environment == "staging" and .inventory_complete == true and (.databases | type == "array") and .provider_mutation == false and .d1_mutation == false and .production_mutation == false' \
+            "$inventory" >/dev/null
 
           cargo build --locked --manifest-path tools/opsctl/Cargo.toml
           opsctl='tools/opsctl/target/debug/opsctl'
@@ -740,6 +798,7 @@ jobs:
           test "$rc" = 0 -o "$rc" = 3
           jq -e '.status == "PREPARE_READY" or .status == "PREPARE_BLOCKED"' "$evidence/prepare.json" >/dev/null
           cp "$observation" "$evidence/provider-observation.json"
+          cp "$inventory" "$evidence/database-inventory.json"
 
           python - \
             "$evidence/prepare.json" "$evidence/provider-observation.json" "$evidence/runtime-context.json" \
