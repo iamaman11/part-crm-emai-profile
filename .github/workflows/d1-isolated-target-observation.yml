@@ -145,6 +145,7 @@ jobs:
     permissions:
       contents: read
       actions: write
+      issues: read
     env:
       GH_TOKEN: ${{ github.token }}
     steps:
@@ -227,12 +228,10 @@ jobs:
           branch_sha="$(gh api "repos/$GITHUB_REPOSITORY/branches/main" --jq '.commit.sha')"
           test "$branch_sha" = "$SOURCE_SHA"
           gh api "repos/$GITHUB_REPOSITORY/branches/main" --jq '.protected' | grep -qx true
-          gh api "repos/$GITHUB_REPOSITORY/releases?per_page=100" > "$authority/releases.json"
-          release_set_id="$(python - "$authority/releases.json" "$SOURCE_SHA" <<'PY'
-          import json, sys
-          releases = json.load(open(sys.argv[1], encoding='utf-8'))
-          source = sys.argv[2]
-          matches = [item.get('tag_name') for item in releases if isinstance(item, dict) and item.get('target_commitish') == source and item.get('tag_name', '').startswith('release-set-v3-sha256-') and item.get('draft') is False and item.get('prerelease') is False]
+          gh api --paginate "repos/$GITHUB_REPOSITORY/releases?per_page=100" --jq '.[] | select(.target_commitish == env.SOURCE_SHA and (.tag_name | startswith("release-set-v3-sha256-")) and .draft == false and .prerelease == false) | .tag_name' > "$authority/release-tags.txt"
+          release_set_id="$(python - "$authority/release-tags.txt" <<'PY'
+          import sys
+          matches = [line.strip() for line in open(sys.argv[1], encoding='utf-8') if line.strip()]
           if len(matches) != 1:
               raise SystemExit(f'exact current Release Set is missing/ambiguous: {matches!r}')
           print(matches[0])
@@ -738,7 +737,7 @@ jobs:
 
           target_release=''
           for _ in $(seq 1 48); do
-            mapfile -t releases < <(gh api "repos/$GITHUB_REPOSITORY/releases?per_page=100" --jq ".[] | select(.target_commitish == \"$SOURCE_SHA\" and (.tag_name | startswith(\"release-set-v3-sha256-\")) and .draft == false) | .tag_name")
+            mapfile -t releases < <(gh api --paginate "repos/$GITHUB_REPOSITORY/releases?per_page=100" --jq ".[] | select(.target_commitish == \"$SOURCE_SHA\" and (.tag_name | startswith(\"release-set-v3-sha256-\")) and .draft == false and .prerelease == false) | .tag_name")
             if [ "${#releases[@]}" -gt 1 ]; then
               printf 'multiple immutable Release Sets target exact current source: %s\n' "${releases[*]}" >&2
               exit 1
