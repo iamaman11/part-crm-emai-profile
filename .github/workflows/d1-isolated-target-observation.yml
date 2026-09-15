@@ -5,6 +5,7 @@ on:
     paths:
       - '.github/workflows/d1-isolated-target-observation.yml'
       - '.github/workflows/d1-operator.yml'
+      - 'scripts/d1-cloudflare-read.py'
       - 'scripts/d1-prepare.py'
       - 'scripts/deployment-identity-ar11.py'
   push:
@@ -57,11 +58,13 @@ jobs:
         run: |
           set -euo pipefail
           python scripts/d1-executor-plan.py self-test
+          python scripts/d1-cloudflare-read.py self-test
           python scripts/d1-prepare.py self-test
           python scripts/deployment-identity-ar11.py --self-test
           python - <<'PY'
           from pathlib import Path
           source = Path('.github/workflows/d1-isolated-target-observation.yml').read_text(encoding='utf-8')
+          adapter = Path('scripts/d1-cloudflare-read.py').read_text(encoding='utf-8')
           forbidden_effect_surfaces = (
               'secrets.' + 'CLOUDFLARE_API_TOKEN',
               'd1 migrations' + ' apply',
@@ -106,16 +109,24 @@ jobs:
           assert "d1_database_name // .d1_database_name" in observe_source
           assert "workers/scripts/$worker_name/deployments" in observe_source
           assert 'deployment-identity-ar11.py' in observe_source
+          assert 'python scripts/d1-cloudflare-read.py observe' in observe_source
+          assert 'wrangler@4.94.0' not in observe_source
+          assert 'npx --yes wrangler' not in observe_source
+          assert 'actions/setup-node@' not in observe_source
           assert "opsctl='tools/opsctl/target/debug/opsctl'" in source
-          assert 'executable_schema_authority' in observe_source
+          assert 'executable_schema_authority' in adapter
+          assert '--sql' not in adapter
+          assert 'SELECT name FROM sqlite_master' in adapter
+          assert 'SELECT id, name FROM d1_migrations ORDER BY id' in adapter
+          assert 'PRAGMA foreign_key_check' in adapter
+          assert 'PRAGMA quick_check' in adapter
+          assert 'subparsers.add_parser("restore")' not in adapter
           assert 'pre_migration_runtime_schema_contract' not in observe_source
           assert 'release_schema_contract' in source
           assert 'CURRENT_DEPLOYED_IMMUTABLE_RELEASE_SCHEMA_CONTRACT' in observe_source
           assert '--current-manifest "$root/current-runtime-manifest.json"' in source
           assert '--known-good-manifest "$root/known-good-runtime-manifest.json"' in source
-          assert '--command "PRAGMA foreign_key_check"' in observe_source
-          assert '--command "PRAGMA quick_check"' in observe_source
-          assert '--command "PRAGMA integrity_check"' not in observe_source
+          assert 'D1_CLOUDFLARE_READ_CONTRACT_V1' in observe_source
           assert 'D1_CURRENT_TARGET_OBSERVATION' in observe_source
           assert 'D1_DATABASE_INVENTORY_OBSERVATION_V1' in observe_source
           assert 'database-inventory.json' in observe_source
@@ -239,13 +250,7 @@ jobs:
           )"
           jq -r --arg release_set_id "$release_set_id" '"RECON_ACCOUNT_ID=\(.account_id)", "RECON_DATABASE_NAME=\(.database_name)", "RECON_DATABASE_ID=\(.database_id)", "RECON_RELEASE_SET_ID=\($release_set_id)"' "$authority/target.json" >> "$GITHUB_ENV"
 
-      - name: Set up pinned Node for Wrangler read adapter
-        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
-        with:
-          node-version: '24.19.0'
-          package-manager-cache: false
-
-      - name: Observe exact current staging Catalog with read-only credential
+      - name: Observe exact current staging Catalog with canonical Cloudflare D1 Read API
         env:
           CLOUDFLARE_OBSERVE_API_TOKEN: ${{ secrets.CLOUDFLARE_OBSERVE_API_TOKEN }}
           CLOUDFLARE_DEPLOY_MANIFEST_JSON: ${{ secrets.CLOUDFLARE_DEPLOY_MANIFEST_JSON }}
@@ -261,8 +266,7 @@ jobs:
 
           raw="$RUNNER_TEMP/d1-current-target-observation"
           evidence="artifacts/d1-current-target-observation"
-          lineage="$raw/catalog-lineage"
-          mkdir -p "$raw" "$evidence" "$lineage"
+          mkdir -p "$raw" "$evidence"
           manifest="$raw/deploy-manifest.json"
           printf '%s' "$CLOUDFLARE_DEPLOY_MANIFEST_JSON" > "$manifest"
 
@@ -281,40 +285,6 @@ jobs:
           env -u CLOUDFLARE_OBSERVE_API_TOKEN -u CLOUDFLARE_API_TOKEN -u CLOUDFLARE_ACCOUNT_ID \
             cargo run --locked --quiet --manifest-path tools/opsctl/Cargo.toml -- --root . d1 repository \
             > "$raw/d1-repository.json"
-
-          python - "$raw/d1-repository.json" "$lineage" <<'PY'
-          import json, shutil, sys
-          from pathlib import Path
-          projection = json.load(open(sys.argv[1], encoding='utf-8'))
-          output = Path(sys.argv[2])
-          matches = [item for item in projection.get('components', []) if item.get('component_id') == 'catalog']
-          if len(matches) != 1:
-              raise SystemExit('typed Catalog projection missing/ambiguous')
-          schema_authority = projection.get('executable_schema_authority')
-          if (
-              not isinstance(schema_authority, list)
-              or not schema_authority
-              or any(not isinstance(root, str) or not root for root in schema_authority)
-              or len(schema_authority) != len(set(schema_authority))
-          ):
-              raise SystemExit('typed D1 executable_schema_authority missing/invalid')
-          governed_roots = set(schema_authority)
-          sources = matches[0].get('executable_migration_sources')
-          if not isinstance(sources, list) or not sources:
-              raise SystemExit('typed Catalog executable_migration_sources missing')
-          for item in sources:
-              if not isinstance(item, dict):
-                  raise SystemExit('typed Catalog migration source entry is invalid')
-              name = item.get('migration_file')
-              root = item.get('source_root')
-              if not isinstance(name, str) or not name or not isinstance(root, str) or root not in governed_roots:
-                  raise SystemExit('typed Catalog migration source escaped executable schema authority')
-              source = Path(root) / name
-              target = output / name
-              if source.is_symlink() or not source.is_file() or target.exists():
-                  raise SystemExit(f'invalid typed Catalog migration source: {source}')
-              shutil.copyfile(source, target)
-          PY
 
           verify_code="$(curl --silent --show-error --output "$raw/token-verify.json" --write-out '%{http_code}' \
             -H "Authorization: Bearer $CLOUDFLARE_OBSERVE_API_TOKEN" \
@@ -373,125 +343,30 @@ jobs:
           current_release_source_sha="$(jq -er '.target_commitish | select(type == "string" and test("^[0-9a-f]{40}$"))' "$raw/current-release-api.json")"
           fi
 
-          python - "$raw/wrangler.json" "$account_id" "$target_name" "$target_id" "$lineage" <<'PY'
-          import json, sys
-          output, account_id, name, database_id, lineage = sys.argv[1:]
-          value = {
-              'name': 'd1-current-target-read-only-observer',
-              'compatibility_date': '2026-08-15',
-              'account_id': account_id,
-              'd1_databases': [{
-                  'binding': 'D1_CURRENT_TARGET_DB',
-                  'database_name': name,
-                  'database_id': database_id,
-                  'migrations_dir': lineage,
-              }],
-          }
-          with open(output, 'w', encoding='utf-8') as handle:
-              json.dump(value, handle, sort_keys=True, indent=2)
-              handle.write('\n')
-          PY
-
-          export CLOUDFLARE_API_TOKEN="$CLOUDFLARE_OBSERVE_API_TOKEN"
-          export CLOUDFLARE_ACCOUNT_ID="$account_id"
-
-          npx --yes wrangler@4.94.0 d1 info "$target_name" \
-            --config "$raw/wrangler.json" --json \
-            --experimental-provision=false --experimental-auto-create=false \
-            > "$raw/provider-identity.json"
-
-          python - "$raw/provider-identity.json" "$target_name" "$target_id" <<'PY'
-          import json, sys
-          value = json.load(open(sys.argv[1], encoding='utf-8'))
-          name, database_id = sys.argv[2:]
-          def paired(item):
-              if isinstance(item, dict):
-                  direct_name = item.get('name') or item.get('database_name')
-                  direct_id = item.get('uuid') or item.get('id') or item.get('database_id')
-                  if direct_name == name and direct_id == database_id:
-                      return True
-                  return any(paired(v) for v in item.values())
-              if isinstance(item, list):
-                  return any(paired(v) for v in item)
-              return False
-          if not paired(value):
-              raise SystemExit('provider identity does not preserve exact current staging Catalog id/name pair')
-          PY
-
-          npx --yes wrangler@4.94.0 d1 execute "$target_name" --remote \
-            --config "$raw/wrangler.json" \
-            --command "SELECT name FROM sqlite_master WHERE type='table' AND name='d1_migrations'" --json \
-            --experimental-provision=false --experimental-auto-create=false \
-            > "$raw/ledger-table.json"
-
-          if python - "$raw/ledger-table.json" <<'PY'
-          import json, sys
-          value = json.load(open(sys.argv[1], encoding='utf-8'))
-          def contains(item):
-              if isinstance(item, dict):
-                  if item.get('name') == 'd1_migrations':
-                      return True
-                  return any(contains(v) for v in item.values())
-              if isinstance(item, list):
-                  return any(contains(v) for v in item)
-              return False
-          raise SystemExit(0 if contains(value) else 1)
-          PY
-          then
-            npx --yes wrangler@4.94.0 d1 execute "$target_name" --remote \
-              --config "$raw/wrangler.json" \
-              --command "SELECT id, name FROM d1_migrations ORDER BY id" --json \
-              --experimental-provision=false --experimental-auto-create=false \
-              > "$raw/ledger.json"
-          else
-            printf '[{"results":[],"success":true}]\n' > "$raw/ledger.json"
-          fi
+          python scripts/d1-cloudflare-read.py observe \
+            --root . \
+            --environment staging \
+            --account-id "$account_id" \
+            --database-name "$target_name" \
+            --database-id "$target_id" \
+            --repository-json "$raw/d1-repository.json" \
+            --output-dir "$raw" \
+            --time-travel-unix-seconds "$REQUESTED_TIME_TRAVEL_UNIX_SECONDS"
 
           python scripts/d1-executor-plan.py normalize-ledger \
             --ledger "$raw/ledger.json" \
-            --output "$raw/ledger-names.json"
-
-          set +e
-          npx --yes wrangler@4.94.0 d1 execute "$target_name" --remote \
-            --config "$raw/wrangler.json" --command "PRAGMA foreign_key_check" --json \
-            --experimental-provision=false --experimental-auto-create=false \
-            > "$raw/foreign-key-check.stdout"
-          foreign_key_exit_code=$?
-          npx --yes wrangler@4.94.0 d1 execute "$target_name" --remote \
-            --config "$raw/wrangler.json" --command "PRAGMA quick_check" --json \
-            --experimental-provision=false --experimental-auto-create=false \
-            > "$raw/quick-check.stdout"
-          quick_check_exit_code=$?
-          set -e
-          printf '%s\n' "$foreign_key_exit_code" > "$raw/foreign-key-check.exit-code"
-          printf '%s\n' "$quick_check_exit_code" > "$raw/quick-check.exit-code"
-
-          npx --yes wrangler@4.94.0 d1 migrations list "$target_name" --remote \
-            --config "$raw/wrangler.json" \
-            --experimental-provision=false --experimental-auto-create=false \
-            > "$raw/wrangler-pending.txt"
-
-          python - "$raw/wrangler-pending.txt" "$raw/wrangler-pending.json" <<'PY'
-          import json, re, sys
-          text = open(sys.argv[1], encoding='utf-8').read()
-          matches = re.findall(r'\b[0-9]{4}_[a-z0-9_]+\.sql\b', text)
-          if len(matches) != len(set(matches)):
-              raise SystemExit(f'Wrangler pending-list output is ambiguous/duplicated: {matches}')
-          with open(sys.argv[2], 'w', encoding='utf-8') as handle:
-              json.dump(matches, handle, sort_keys=False, indent=2)
-              handle.write('\n')
+            --output "$raw/ledger-names-normalized.json"
+          python - "$raw/ledger-names.json" "$raw/ledger-names-normalized.json" <<'PY'
+          import json, sys
+          left = json.load(open(sys.argv[1], encoding='utf-8'))
+          right = json.load(open(sys.argv[2], encoding='utf-8'))
+          if left != right:
+              raise SystemExit('Cloudflare REST ledger normalization disagrees with existing canonical ledger normalizer')
           PY
 
-          time_travel_args=()
-          if [ -n "$REQUESTED_TIME_TRAVEL_UNIX_SECONDS" ]; then
-            time_travel_args=(--timestamp "$REQUESTED_TIME_TRAVEL_UNIX_SECONDS")
-          fi
-          npx --yes wrangler@4.94.0 d1 time-travel info "$target_name" \
-            --config "$raw/wrangler.json" --json \
-            "${time_travel_args[@]}" \
-            --experimental-provision=false --experimental-auto-create=false \
-            > "$raw/time-travel.json"
-          jq -e 'type == "object" and (keys == ["bookmark"]) and (.bookmark | type == "string" and length > 0)' "$raw/time-travel.json" >/dev/null
+          jq -e \
+            '.schema_version == 1 and .kind == "D1_CLOUDFLARE_READ_CONTRACT_V1" and .environment == "staging" and .query_mutation_proof.ledger_table_changed_db == false and .query_mutation_proof.ledger_changed_db == false and .query_mutation_proof.foreign_key_changed_db == false and .query_mutation_proof.quick_check_changed_db == false and .time_travel_bookmark_present == true and .provider_mutation == false and .d1_mutation == false and .production_mutation == false' \
+            "$raw/read-contract.json" >/dev/null
 
           observed_at_unix_seconds="$(date -u +%s)"
           observed_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
@@ -557,7 +432,7 @@ jobs:
           raw_path, output_path, source_sha, target_name, target_id, timestamp, observed_at, observation_source = sys.argv[1:]
           value = json.load(open(raw_path, encoding='utf-8'))
           if set(value) != {'bookmark'} or not isinstance(value.get('bookmark'), str) or not value['bookmark']:
-              raise SystemExit('Wrangler Time Travel lookup JSON is not the closed BookmarkResponse shape')
+              raise SystemExit('Cloudflare Time Travel lookup JSON is not the closed BookmarkResponse shape')
           document = {
               'schema_version': 1,
               'kind': 'D1_TIME_TRAVEL_LOOKUP_V1',
@@ -579,8 +454,8 @@ jobs:
           fi
 
           python - \
-            "$raw/ledger.json" "$raw/ledger-names.json" "$raw/wrangler-pending.json" \
-            "$raw/provider-identity.json" "$raw/time-travel.json" \
+            "$raw/ledger.json" "$raw/ledger-names.json" "$raw/provider-pending.json" \
+            "$raw/provider-identity.json" "$raw/time-travel.json" "$raw/read-contract.json" \
             "$raw/foreign-key-check.stdout" "$raw/foreign-key-check.exit-code" \
             "$raw/quick-check.stdout" "$raw/quick-check.exit-code" \
             "$evidence/provider-observation.json" \
@@ -589,7 +464,7 @@ jobs:
             "$observed_at" "$observed_at_unix_seconds" "$observation_source" <<'PY'
           import hashlib, json, os, sys
           (
-              ledger_path, ledger_names_path, pending_path, identity_path, time_travel_path,
+              ledger_path, ledger_names_path, pending_path, identity_path, time_travel_path, read_contract_path,
               foreign_key_stdout_path, foreign_key_exit_path, quick_stdout_path, quick_exit_path,
               output_path, source_sha, account_id, target_name, target_id,
               current_release_set_id, current_release_source_sha,
@@ -600,6 +475,23 @@ jobs:
           pending = json.load(open(pending_path, encoding='utf-8'))
           identity = json.load(open(identity_path, encoding='utf-8'))
           time_travel = json.load(open(time_travel_path, encoding='utf-8'))
+          read_contract = json.load(open(read_contract_path, encoding='utf-8'))
+
+          if read_contract.get('kind') != 'D1_CLOUDFLARE_READ_CONTRACT_V1' or read_contract.get('environment') != 'staging':
+              raise SystemExit('canonical Cloudflare D1 read contract is missing or invalid')
+          if read_contract.get('target') != {'database_name': target_name, 'database_id': target_id}:
+              raise SystemExit('canonical Cloudflare D1 read contract target drifted')
+          if read_contract.get('remote_migrations') != remote_migrations:
+              raise SystemExit('canonical Cloudflare D1 read contract ledger drifted')
+          if read_contract.get('provider_pending_migrations') != pending:
+              raise SystemExit('canonical Cloudflare D1 read contract pending diagnostic drifted')
+          mutation_proof = read_contract.get('query_mutation_proof') or {}
+          if any(mutation_proof.get(name) is not False for name in (
+              'ledger_table_changed_db', 'ledger_changed_db', 'foreign_key_changed_db', 'quick_check_changed_db'
+          )):
+              raise SystemExit('canonical Cloudflare D1 read contract did not prove every query mutation-free')
+          if read_contract.get('provider_mutation') is not False or read_contract.get('d1_mutation') is not False or read_contract.get('production_mutation') is not False:
+              raise SystemExit('canonical Cloudflare D1 read contract claims mutation')
 
           def diagnostic(stdout_path, exit_path):
               raw_stdout = open(stdout_path, encoding='utf-8', errors='replace').read()
@@ -652,7 +544,6 @@ jobs:
               'observation_source': observation_source,
               'remote_ledger_sha256': remote_ledger_sha256,
               'remote_migrations': remote_migrations,
-              'wrangler_pending_migrations': pending,
               'deployment_identity': current_release_set_id,
               'time_travel_bookmark_capable': True,
           }
@@ -668,6 +559,8 @@ jobs:
               'provider_observation_input': provider_observation,
               'provider_diagnostics': {
                   'schema_version': 1,
+                  'provider_pending_migrations': pending,
+                  'read_contract': read_contract,
                   'foreign_key_check_ok': foreign_key_ok,
                   'quick_check_ok': quick_ok,
                   'foreign_key_check': foreign_key_check,
@@ -685,7 +578,7 @@ jobs:
           PY
 
           SOURCE_SHA="$SOURCE_SHA" TARGET_NAME="$target_name" TARGET_ID="$target_id" jq -e \
-            '.schema_version == 1 and .kind == "D1_CURRENT_TARGET_OBSERVATION" and .source_sha == env.SOURCE_SHA and .environment == "staging" and .component == "catalog" and .provider_observation_input.target.database_name == env.TARGET_NAME and .provider_observation_input.target.database_id == env.TARGET_ID and .provider_observation_input.target.environment == "staging" and (.current_deployed_release_set_id | test("^release-set-v(2|3)-sha256-[0-9a-f]{64}$")) and (.current_deployed_source_sha | test("^[0-9a-f]{40}$")) and .provider_observation_input.time_travel_bookmark_capable == true and .provider_diagnostics.schema_version == 1 and .provider_mutation == false and .d1_mutation == false and .production_mutation == false' \
+            '.schema_version == 1 and .kind == "D1_CURRENT_TARGET_OBSERVATION" and .source_sha == env.SOURCE_SHA and .environment == "staging" and .component == "catalog" and .provider_observation_input.target.database_name == env.TARGET_NAME and .provider_observation_input.target.database_id == env.TARGET_ID and .provider_observation_input.target.environment == "staging" and (.current_deployed_release_set_id | test("^release-set-v(2|3)-sha256-[0-9a-f]{64}$")) and (.current_deployed_source_sha | test("^[0-9a-f]{40}$")) and .provider_observation_input.time_travel_bookmark_capable == true and .provider_diagnostics.schema_version == 1 and .provider_diagnostics.read_contract.kind == "D1_CLOUDFLARE_READ_CONTRACT_V1" and .provider_diagnostics.read_contract.query_mutation_proof.ledger_table_changed_db == false and .provider_diagnostics.read_contract.query_mutation_proof.ledger_changed_db == false and .provider_diagnostics.read_contract.query_mutation_proof.foreign_key_changed_db == false and .provider_diagnostics.read_contract.query_mutation_proof.quick_check_changed_db == false and .provider_mutation == false and .d1_mutation == false and .production_mutation == false' \
             "$evidence/provider-observation.json" >/dev/null
 
           {
@@ -708,7 +601,7 @@ jobs:
         run: |
           set -euo pipefail
           jq -e \
-            '.provider_diagnostics.foreign_key_check.exit_code == 0 and .provider_diagnostics.foreign_key_check.json_valid == true and .provider_diagnostics.foreign_key_check_ok == true and .provider_diagnostics.quick_check.exit_code == 0 and .provider_diagnostics.quick_check.json_valid == true and .provider_diagnostics.quick_check_ok == true' \
+            '.provider_diagnostics.foreign_key_check.exit_code == 0 and .provider_diagnostics.foreign_key_check.json_valid == true and .provider_diagnostics.foreign_key_check_ok == true and .provider_diagnostics.quick_check.exit_code == 0 and .provider_diagnostics.quick_check.json_valid == true and .provider_diagnostics.quick_check_ok == true and .provider_diagnostics.read_contract.kind == "D1_CLOUDFLARE_READ_CONTRACT_V1" and .provider_diagnostics.read_contract.time_travel_bookmark_present == true and .provider_diagnostics.read_contract.provider_mutation == false and .provider_diagnostics.read_contract.d1_mutation == false and .provider_diagnostics.read_contract.production_mutation == false' \
             artifacts/d1-current-target-observation/provider-observation.json >/dev/null
 
       - name: Run canonical credential-free transaction preflight
@@ -886,11 +779,8 @@ jobs:
           if not isinstance(observed, int) or observed > int(time.time()) + 60 or int(time.time()) - observed > 1800:
               raise SystemExit('observer evidence is stale for prepare preflight')
           names = obs.get('remote_migrations')
-          pending = obs.get('wrangler_pending_migrations')
           if not isinstance(names, list) or not all(isinstance(x, str) for x in names):
               raise SystemExit('observer remote migration ledger is invalid')
-          if not isinstance(pending, list) or not all(isinstance(x, str) for x in pending):
-              raise SystemExit('observer Wrangler pending list is invalid')
           payload = [{'results': [{'id': i + 1, 'name': value} for i, value in enumerate(names)], 'success': True}]
           with open(ledger_path, 'w', encoding='utf-8') as handle:
               json.dump(payload, handle, sort_keys=True, indent=2)
@@ -926,6 +816,7 @@ jobs:
           runtime_context = json.load(open(sys.argv[3], encoding='utf-8'))
           runtime_contract = runtime_context.get('schema_contract') or {}
           release_contract = runtime_context.get('release_schema_contract') or {}
+          diagnostics = observation.get('provider_diagnostics') or {}
           value = {
               'schema_version': 1,
               'kind': 'D1_TRANSACTION_PREFLIGHT',
@@ -945,7 +836,7 @@ jobs:
               'release_target_revision': release_contract.get('target_schema_revision'),
               'release_supported_max': release_contract.get('supported_schema_max'),
               'status': prepare.get('status'),
-              'raw_wrangler_pending_migrations': (observation.get('provider_observation_input') or {}).get('wrangler_pending_migrations'),
+              'provider_pending_migrations': diagnostics.get('provider_pending_migrations'),
               'provider_mutation': False,
               'd1_mutation': False,
               'production_mutation': False,
