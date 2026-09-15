@@ -23,6 +23,12 @@ const PINNED_WRANGLER = 'wrangler@4.94.0';
 const SHARED_MUTATION_GROUP = 'release-set-promotion-staging';
 const OBSERVE_REF = 'CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_OBSERVE_API_TOKEN }}';
 const DEPLOY_REF = 'CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}';
+const MIGRATION_DEPLOY_READINESS_STEP = 'Verify deploy credential readiness before migration effect';
+const RECONSTRUCTION_DEPLOY_READINESS_STEP = 'Verify deploy credential readiness before reconstruction effect';
+const RESTORE_DEPLOY_READINESS_STEP = 'Verify deploy credential readiness before Time Travel restore effect';
+const RECONSTRUCTION_MUTATION_STARTED_STEP = 'Append PREWRITE_FENCE_PASS and MUTATION_STARTED';
+const RESTORE_MUTATION_STARTED_STEP = 'Persist restore MUTATION_STARTED receipt';
+const DEPLOY_VERIFY_ENDPOINT = 'https://api.cloudflare.com/client/v4/user/tokens/verify';
 const ORDINARY_CONFIRMATION = 'test "$CONFIRMATION" = "$SOURCE_SHA:$TARGET_ENVIRONMENT:$COMPONENT:$DATABASE_ID"';
 const CONTRACT_CONFIRMATION = 'test "$CONFIRMATION" = "$SOURCE_SHA:$TARGET_ENVIRONMENT:$COMPONENT:$DATABASE_ID:contract:$EXPECTED_RELEASE_SET_ID"';
 const POST_CONTRACT_LEDGER = '--post-ledger-json artifacts/d1-migration/ledger-after.json';
@@ -97,6 +103,37 @@ function stepBody(text, stepName) {
   if (start < 0) fail(`protected D1 executor step is missing: ${stepName}`);
   const end = text.indexOf('\n      - name:', start + 1);
   return text.slice(start, end < 0 ? text.length : end);
+}
+
+function validateDeployReadinessStep(text, stepName) {
+  const body = stepBody(text, stepName);
+  for (const marker of [
+    DEPLOY_REF,
+    DEPLOY_VERIFY_ENDPOINT,
+    'test "$verify_code" = 200',
+    '.result.status == "active"',
+    'd1 info',
+    '--experimental-provision=false',
+    '--experimental-auto-create=false',
+    '$CLOUDFLARE_ACCOUNT_ID',
+    '$DATABASE_NAME',
+    '$DATABASE_ID',
+    'deploy credential D1 target identity mismatch',
+  ]) {
+    if (!body.includes(marker)) fail(`${stepName} lost fail-closed readiness marker: ${marker}`);
+  }
+  for (const forbidden of [
+    OBSERVE_REF,
+    'd1 migrations apply',
+    '--request POST',
+    '/time_travel/restore?bookmark=',
+    '--file "$root/bootstrap.sql"',
+    'd1 create',
+    'd1 delete',
+  ]) {
+    if (body.includes(forbidden)) fail(`${stepName} must remain read-only: ${forbidden}`);
+  }
+  return body;
 }
 
 function runDiagnosticsHelperSelfTest() {
@@ -177,6 +214,8 @@ async function validateExecutor(text, root = ROOT) {
     "'history_complete': True", "'current_marker_succeeded': True", TARGET_FENCE_OBSERVATION,
     TARGET_FENCE_VERIFICATION, 'TARGET_FENCE_ACQUIRED', 'TARGET_FENCE_VERIFIED',
     RECEIPT_INIT_STEP, RECEIPT_INITIAL_MARKER_STEP, RECEIPT_PREWRITE_STEP, PREAPPLY_OBSERVE_STEP,
+    MIGRATION_DEPLOY_READINESS_STEP, RECONSTRUCTION_DEPLOY_READINESS_STEP, RESTORE_DEPLOY_READINESS_STEP,
+    DEPLOY_VERIFY_ENDPOINT,
     RECEIPT_MUTATION_STARTED_STEP, RECEIPT_MUTATION_MARKER_STEP, APPLY_STEP, RECEIPT_APPLIED_STEP,
     RECEIPT_APPLIED_MARKER_STEP, REREAD_STEP, RECEIPT_POST_OBSERVED_STEP, POST_INVARIANT_STEP, RECEIPT_COMPLETE_STEP,
     RECEIPT_TERMINALIZE_STEP, RECEIPT_TERMINAL_MARKER_STEP, RECEIPT,
@@ -384,7 +423,11 @@ async function validateExecutor(text, root = ROOT) {
   const observeSteps = (text.match(/CLOUDFLARE_API_TOKEN: \$\{\{ secrets\.CLOUDFLARE_OBSERVE_API_TOKEN \}\}/g) ?? []).length;
   if (observeSteps < 7) fail(`provider observations must use the dedicated observe credential, including exact preapply revalidation; observed=${observeSteps}`);
   const deploySteps = (text.match(/CLOUDFLARE_API_TOKEN: \$\{\{ secrets\.CLOUDFLARE_API_TOKEN \}\}/g) ?? []).length;
-  if (deploySteps !== 3) fail(`deploy-capable credential must appear exactly once in each mutually exclusive migration/reconstruction/restore write step; observed=${deploySteps}`);
+  if (deploySteps !== 6) fail(`deploy-capable credential must appear exactly in three read-only readiness fences plus three mutually exclusive write steps; observed=${deploySteps}`);
+
+  validateDeployReadinessStep(text, MIGRATION_DEPLOY_READINESS_STEP);
+  validateDeployReadinessStep(text, RECONSTRUCTION_DEPLOY_READINESS_STEP);
+  validateDeployReadinessStep(text, RESTORE_DEPLOY_READINESS_STEP);
 
   const provenanceIndex = text.indexOf(`\n      - name: ${AUTH_PROVENANCE_STEP}`);
   const admissionIndex = text.indexOf('Load immutable prepared transaction and verify typed executor admission');
@@ -402,6 +445,7 @@ async function validateExecutor(text, root = ROOT) {
   const targetFenceVerifyIndex = text.indexOf(`\n      - name: ${TARGET_FENCE_VERIFY_STEP}`);
   const receiptPrewriteIndex = text.indexOf(`\n      - name: ${RECEIPT_PREWRITE_STEP}`);
   const preapplyObserveIndex = text.indexOf(`\n      - name: ${PREAPPLY_OBSERVE_STEP}`);
+  const migrationReadinessIndex = text.indexOf(`\n      - name: ${MIGRATION_DEPLOY_READINESS_STEP}`);
   const receiptMutationStartedIndex = text.indexOf(`\n      - name: ${RECEIPT_MUTATION_STARTED_STEP}`);
   const receiptMutationMarkerIndex = text.indexOf(`\n      - name: ${RECEIPT_MUTATION_MARKER_STEP}`);
   const applyStepIndex = text.indexOf(`\n      - name: ${APPLY_STEP}`);
@@ -434,10 +478,11 @@ async function validateExecutor(text, root = ROOT) {
       && targetFenceVerifyIndex > firstPendingIndex
       && receiptPrewriteIndex > targetFenceVerifyIndex
       && preapplyObserveIndex > receiptPrewriteIndex
-      && receiptMutationStartedIndex > preapplyObserveIndex
+      && migrationReadinessIndex > preapplyObserveIndex
+      && receiptMutationStartedIndex > migrationReadinessIndex
       && receiptMutationMarkerIndex > receiptMutationStartedIndex
       && applyStepIndex > receiptMutationMarkerIndex
-      && deployIndex > receiptMutationMarkerIndex
+      && deployIndex > migrationReadinessIndex
       && receiptAppliedIndex > applyStepIndex
       && receiptAppliedMarkerIndex > receiptAppliedIndex
       && rereadIndex > receiptAppliedMarkerIndex
@@ -448,7 +493,35 @@ async function validateExecutor(text, root = ROOT) {
       && receiptTerminalizeIndex > receiptCompleteIndex
       && receiptTerminalMarkerIndex > receiptTerminalizeIndex
       && evidenceIndex > receiptTerminalMarkerIndex)) {
-    fail('TX-4C ordering must preserve admission -> durable fence -> durable initial receipt -> typed prewrite fence -> observe-only revalidation -> durable MUTATION_STARTED -> sole deploy apply -> mechanically known applied events -> post-observed -> verified/completed -> fail-closed terminal receipt -> evidence');
+    fail('TX-4C ordering must preserve admission -> durable fence -> durable initial receipt -> typed prewrite fence -> observe-only revalidation -> deploy credential READY -> durable MUTATION_STARTED -> sole deploy apply -> mechanically known applied events -> post-observed -> verified/completed -> fail-closed terminal receipt -> evidence');
+  }
+
+  const reconstructIndex = text.indexOf('\n  reconstruct:');
+  const reconstructObserveIndex = text.indexOf('Fresh exactly-empty re-observation immediately before write', reconstructIndex);
+  const reconstructReadinessIndex = text.indexOf(`\n      - name: ${RECONSTRUCTION_DEPLOY_READINESS_STEP}`, reconstructIndex);
+  const reconstructMutationIndex = text.indexOf(`\n      - name: ${RECONSTRUCTION_MUTATION_STARTED_STEP}`, reconstructIndex);
+  const reconstructApplyIndex = text.indexOf('Execute D1_BOOTSTRAP_CURRENT_EXACT_CONSTRUCTION once', reconstructIndex);
+  if (!(reconstructIndex > migrateIndex
+      && reconstructObserveIndex > reconstructIndex
+      && reconstructReadinessIndex > reconstructObserveIndex
+      && reconstructMutationIndex > reconstructReadinessIndex
+      && reconstructApplyIndex > reconstructMutationIndex)) {
+    fail('reconstruction must prove observe-only exact prestate -> deploy credential READY -> MUTATION_STARTED -> exact construction effect');
+  }
+
+  const restoreIndex = text.indexOf('\n  restore:');
+  const restorePrewriteIndex = text.indexOf(`\n      - name: ${RESTORE_PREWRITE_STEP}`, restoreIndex);
+  const restoreConsumptionIndex = text.indexOf('Persist one-shot restore authorization consumption', restoreIndex);
+  const restoreReadinessIndex = text.indexOf(`\n      - name: ${RESTORE_DEPLOY_READINESS_STEP}`, restoreIndex);
+  const restoreMutationIndex = text.indexOf(`\n      - name: ${RESTORE_MUTATION_STARTED_STEP}`, restoreIndex);
+  const restoreApplyIndex = text.indexOf(`\n      - name: ${RESTORE_APPLY_STEP}`, restoreIndex);
+  if (!(restoreIndex > reconstructIndex
+      && restorePrewriteIndex > restoreIndex
+      && restoreConsumptionIndex > restorePrewriteIndex
+      && restoreReadinessIndex > restoreConsumptionIndex
+      && restoreMutationIndex > restoreReadinessIndex
+      && restoreApplyIndex > restoreMutationIndex)) {
+    fail('Time Travel restore must prove observe-only prestate -> consume one-shot authorization -> deploy credential READY -> MUTATION_STARTED -> restore effect');
   }
 
   const replayBody = stepBody(text, REPLAY_PROOF_STEP);
@@ -735,6 +808,14 @@ async function expectRejected(label, text) {
   fail(`negative protected-executor fixture unexpectedly passed: ${label}`);
 }
 
+function swapStepNames(text, first, second) {
+  const marker = '__D1_EXECUTOR_STEP_SWAP__';
+  return text
+    .replace(`      - name: ${first}`, `      - name: ${marker}`)
+    .replace(`      - name: ${second}`, `      - name: ${first}`)
+    .replace(`      - name: ${marker}`, `      - name: ${second}`);
+}
+
 async function selfTest(text) {
   runDiagnosticsHelperSelfTest();
   await validateExecutor(text, ROOT);
@@ -779,6 +860,9 @@ async function selfTest(text) {
     ['missing receipt initialization', 'd1-execution-control initialize-receipt', 'd1-execution-control removed-initialize-receipt'],
     ['missing initial receipt durability', `      - name: ${RECEIPT_INITIAL_MARKER_STEP}`, '      - name: Removed initial execution receipt snapshot'],
     ['missing PREWRITE_FENCE_PASS projection', `      - name: ${RECEIPT_PREWRITE_STEP}`, '      - name: Removed PREWRITE_FENCE_PASS receipt'],
+    ['missing migration deploy readiness fence', `      - name: ${MIGRATION_DEPLOY_READINESS_STEP}`, '      - name: Removed migration deploy readiness'],
+    ['missing reconstruction deploy readiness fence', `      - name: ${RECONSTRUCTION_DEPLOY_READINESS_STEP}`, '      - name: Removed reconstruction deploy readiness'],
+    ['missing restore deploy readiness fence', `      - name: ${RESTORE_DEPLOY_READINESS_STEP}`, '      - name: Removed restore deploy readiness'],
     ['missing MUTATION_STARTED projection', `      - name: ${RECEIPT_MUTATION_STARTED_STEP}`, '      - name: Removed MUTATION_STARTED receipt'],
     ['missing durable MUTATION_STARTED snapshot', `      - name: ${RECEIPT_MUTATION_MARKER_STEP}`, '      - name: Removed durable MUTATION_STARTED snapshot'],
     ['missing mechanically known MIGRATION_APPLIED events', `      - name: ${RECEIPT_APPLIED_STEP}`, '      - name: Removed MIGRATION_APPLIED receipt'],
@@ -820,14 +904,35 @@ async function selfTest(text) {
   );
   await expectRejected('deploy token used for observation', replaceFixture('deploy token used for observation', text, OBSERVE_REF, DEPLOY_REF));
   await expectRejected(
-    'fourth deploy credential exposure',
+    'seventh deploy credential exposure',
     `${text}\n# ${DEPLOY_REF}\n`,
+  );
+  await expectRejected(
+    'provider mutation inside migration readiness fence',
+    replaceFixture(
+      'provider mutation inside migration readiness fence',
+      text,
+      `      - name: ${MIGRATION_DEPLOY_READINESS_STEP}`,
+      `      - name: ${MIGRATION_DEPLOY_READINESS_STEP}\n        # d1 migrations apply forbidden-readiness-mutation`,
+    ),
+  );
+  await expectRejected(
+    'migration readiness moved after MUTATION_STARTED',
+    swapStepNames(text, MIGRATION_DEPLOY_READINESS_STEP, RECEIPT_MUTATION_STARTED_STEP),
+  );
+  await expectRejected(
+    'reconstruction readiness moved after MUTATION_STARTED',
+    swapStepNames(text, RECONSTRUCTION_DEPLOY_READINESS_STEP, RECONSTRUCTION_MUTATION_STARTED_STEP),
+  );
+  await expectRejected(
+    'restore readiness moved after MUTATION_STARTED',
+    swapStepNames(text, RESTORE_DEPLOY_READINESS_STEP, RESTORE_MUTATION_STARTED_STEP),
   );
   await expectRejected(
     'second remote apply',
     `${text}\n# npx --yes ${PINNED_WRANGLER} d1 migrations apply X --remote --experimental-provision=false --experimental-auto-create=false\n`,
   );
-  console.log('Protected D1 executor typed-admission, durable target fence, append-only ExecutionReceipt ordering/durability, observe-only preapply revalidation, durable MUTATION_STARTED-before-deploy, fail-closed terminalization, sealed-plan, exact-prestate, D1-supported quick-check diagnostics, evidence v3, post-CONTRACT and one-owner negative fixtures passed.');
+  console.log('Protected D1 executor typed-admission, durable target fence, append-only ExecutionReceipt ordering/durability, observe-only preapply revalidation, deploy-credential READY before MUTATION_STARTED, fail-closed terminalization, sealed-plan, exact-prestate, D1-supported quick-check diagnostics, evidence v3, post-CONTRACT and one-owner negative fixtures passed.');
 }
 
 async function main() {
@@ -838,7 +943,7 @@ async function main() {
   }
   if (process.argv.length > 2) fail(`unknown arguments: ${process.argv.slice(2).join(' ')}`);
   await validateExecutor(text, ROOT);
-  console.log('Protected D1 executor contract passed: workflow-dispatch-only, immutable OWNER authorization provenance, typed admission before one-shot consumption, target-scoped typed fence, append-only ExecutionReceipt, observe-only preapply revalidation, durable MUTATION_STARTED before bounded deploy credential writes, mechanically known applied events, D1-supported fail-closed post-verify diagnostics, evidence v3, fail-closed terminal receipt, exact sealed plan/prestate, typed post-CONTRACT verification, one remote apply owner, no automatic restore or provisioning.');
+  console.log('Protected D1 executor contract passed: workflow-dispatch-only, immutable OWNER authorization provenance, typed admission before one-shot consumption, target-scoped typed fence, append-only ExecutionReceipt, observe-only preapply revalidation, deploy-credential READY before MUTATION_STARTED/effect, mechanically known applied events, D1-supported fail-closed post-verify diagnostics, evidence v3, fail-closed terminal receipt, exact sealed plan/prestate, typed post-CONTRACT verification, one remote apply owner, no automatic restore or provisioning.');
 }
 
 main().catch((error) => {
