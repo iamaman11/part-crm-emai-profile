@@ -196,7 +196,8 @@ fn reconstruction_rejects_production_nonempty_and_historical_target()
 fn protected_executor_has_one_machine_distinct_reconstruction_mode()
 -> Result<(), Box<dyn std::error::Error>> {
     let root = repository_root();
-    let workflow = fs::read_to_string(root.join(".github/workflows/d1-migration-executor.yml"))?;
+    let workflow = fs::read_to_string(root.join(".github/workflows/d1-migration-executor.yml"))?
+        .replace("\r\n", "\n");
 
     assert!(workflow.contains(
         "          - migration\n          - reconstruction\n          - time_travel_restore"
