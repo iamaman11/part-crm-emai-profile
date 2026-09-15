@@ -1006,6 +1006,42 @@ jobs:
             --expected artifacts/d1-migration/expected-pending.json \
             --wrangler-output artifacts/d1-migration/wrangler-pending-fence.txt
 
+      - name: Verify deploy credential readiness before migration effect
+        if: steps.policy.outputs.apply_required == 'true'
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          set -euo pipefail
+          test -n "$CLOUDFLARE_API_TOKEN"
+          echo "::add-mask::$CLOUDFLARE_API_TOKEN"
+          verify="$RUNNER_TEMP/d1-migration-deploy-token-verify.json"
+          target="$RUNNER_TEMP/d1-migration-deploy-target.json"
+          verify_code="$(curl --silent --show-error --output "$verify" --write-out '%{http_code}' \
+            -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+            'https://api.cloudflare.com/client/v4/user/tokens/verify')"
+          test "$verify_code" = 200
+          jq -e '.success == true and (.errors | length) == 0 and .result.status == "active"' "$verify" >/dev/null
+          cfg=artifacts/d1-migration/wrangler.json
+          jq -e --arg account "$CLOUDFLARE_ACCOUNT_ID" --arg name "$DATABASE_NAME" --arg id "$DATABASE_ID" \
+            '.account_id == $account and ([.d1_databases[] | select(.database_name == $name and .database_id == $id)] | length) == 1' "$cfg" >/dev/null
+          npx --yes wrangler@4.94.0 d1 info "$DATABASE_NAME" --config "$cfg" --json \
+            --experimental-provision=false --experimental-auto-create=false > "$target"
+          python - "$target" <<'PY'
+          import json, os, sys
+          value = json.load(open(sys.argv[1], encoding='utf-8'))
+          expected = {os.environ['DATABASE_NAME'], os.environ['DATABASE_ID']}
+          def paired(item):
+              if isinstance(item, dict):
+                  values = {v for v in item.values() if isinstance(v, str)}
+                  return expected.issubset(values) or any(paired(v) for v in item.values())
+              if isinstance(item, list):
+                  return any(paired(v) for v in item)
+              return False
+          if not paired(value):
+              raise SystemExit('deploy credential D1 target identity mismatch')
+          PY
+          rm -f "$verify" "$target"
+
       - name: Append MUTATION_STARTED to execution receipt
         if: steps.policy.outputs.apply_required == 'true'
         run: |
@@ -1656,6 +1692,42 @@ jobs:
           cmp --silent "$root/ledger-before-names.json" "$root/ledger-fence-names.json"
           jq -e 'length == 0' "$root/ledger-fence-names.json" >/dev/null
 
+      - name: Verify deploy credential readiness before reconstruction effect
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          set -euo pipefail
+          root=artifacts/d1-reconstruction
+          test -n "$CLOUDFLARE_API_TOKEN"
+          echo "::add-mask::$CLOUDFLARE_API_TOKEN"
+          verify="$RUNNER_TEMP/d1-reconstruction-deploy-token-verify.json"
+          target="$RUNNER_TEMP/d1-reconstruction-deploy-target.json"
+          verify_code="$(curl --silent --show-error --output "$verify" --write-out '%{http_code}' \
+            -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+            'https://api.cloudflare.com/client/v4/user/tokens/verify')"
+          test "$verify_code" = 200
+          jq -e '.success == true and (.errors | length) == 0 and .result.status == "active"' "$verify" >/dev/null
+          cfg="$root/wrangler.json"
+          jq -e --arg account "$CLOUDFLARE_ACCOUNT_ID" --arg name "$DATABASE_NAME" --arg id "$DATABASE_ID" \
+            '.account_id == $account and ([.d1_databases[] | select(.database_name == $name and .database_id == $id)] | length) == 1' "$cfg" >/dev/null
+          npx --yes wrangler@4.94.0 d1 info "$DATABASE_NAME" --config "$cfg" --json \
+            --experimental-provision=false --experimental-auto-create=false > "$target"
+          python - "$target" <<'PY'
+          import json, os, sys
+          value = json.load(open(sys.argv[1], encoding='utf-8'))
+          expected = {os.environ['DATABASE_NAME'], os.environ['DATABASE_ID']}
+          def paired(item):
+              if isinstance(item, dict):
+                  values = {v for v in item.values() if isinstance(v, str)}
+                  return expected.issubset(values) or any(paired(v) for v in item.values())
+              if isinstance(item, list):
+                  return any(paired(v) for v in item)
+              return False
+          if not paired(value):
+              raise SystemExit('deploy credential D1 target identity mismatch')
+          PY
+          rm -f "$verify" "$target"
+
       - name: Append PREWRITE_FENCE_PASS and MUTATION_STARTED
         run: |
           set -euo pipefail
@@ -2208,6 +2280,41 @@ jobs:
           path: artifacts/d1-time-travel-restore/authorization-consumption.json
           if-no-files-found: error
           retention-days: 30
+
+      - name: Verify deploy credential readiness before Time Travel restore effect
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          set -euo pipefail
+          test -n "$CLOUDFLARE_API_TOKEN"
+          echo "::add-mask::$CLOUDFLARE_API_TOKEN"
+          verify="$RUNNER_TEMP/d1-restore-deploy-token-verify.json"
+          target="$RUNNER_TEMP/d1-restore-deploy-target.json"
+          verify_code="$(curl --silent --show-error --output "$verify" --write-out '%{http_code}' \
+            -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+            'https://api.cloudflare.com/client/v4/user/tokens/verify')"
+          test "$verify_code" = 200
+          jq -e '.success == true and (.errors | length) == 0 and .result.status == "active"' "$verify" >/dev/null
+          cfg=artifacts/d1-time-travel-restore/wrangler.json
+          jq -e --arg account "$CLOUDFLARE_ACCOUNT_ID" --arg name "$DATABASE_NAME" --arg id "$DATABASE_ID" \
+            '.account_id == $account and ([.d1_databases[] | select(.database_name == $name and .database_id == $id)] | length) == 1' "$cfg" >/dev/null
+          npx --yes wrangler@4.94.0 d1 info "$DATABASE_NAME" --config "$cfg" --json \
+            --experimental-provision=false --experimental-auto-create=false > "$target"
+          python - "$target" <<'PY'
+          import json, os, sys
+          value = json.load(open(sys.argv[1], encoding='utf-8'))
+          expected = {os.environ['DATABASE_NAME'], os.environ['DATABASE_ID']}
+          def paired(item):
+              if isinstance(item, dict):
+                  values = {v for v in item.values() if isinstance(v, str)}
+                  return expected.issubset(values) or any(paired(v) for v in item.values())
+              if isinstance(item, list):
+                  return any(paired(v) for v in item)
+              return False
+          if not paired(value):
+              raise SystemExit('deploy credential D1 target identity mismatch')
+          PY
+          rm -f "$verify" "$target"
 
       - name: Persist restore MUTATION_STARTED receipt
         run: |
