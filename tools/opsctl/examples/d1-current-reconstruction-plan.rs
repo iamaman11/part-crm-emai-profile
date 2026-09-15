@@ -93,7 +93,9 @@ fn parse_args() -> Result<Args, Box<dyn Error>> {
                 let value = utf8_value(&mut iterator, flag)?;
                 set_once(&mut args.observation_source, value, flag)?;
             }
-            other => return Err(format!("unsupported reconstruction-plan argument: {other}").into()),
+            other => {
+                return Err(format!("unsupported reconstruction-plan argument: {other}").into());
+            }
         }
     }
     Ok(args)
@@ -123,10 +125,8 @@ fn run() -> Result<(), Box<dyn Error>> {
     let source_sha = required(source_sha, "--source-sha")?;
     let tree_sha = required(tree_sha, "--tree-sha")?;
     let release_set_id = required(release_set_id, "--release-set-id")?;
-    let observed_at_unix_seconds = required(
-        observed_at_unix_seconds,
-        "--observed-at-unix-seconds",
-    )?;
+    let observed_at_unix_seconds =
+        required(observed_at_unix_seconds, "--observed-at-unix-seconds")?;
     let observation_source = required(observation_source, "--observation-source")?;
 
     let output = current_reconstruction_plan(D1CurrentReconstructionPlanRequest {
