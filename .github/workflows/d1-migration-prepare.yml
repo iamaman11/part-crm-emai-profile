@@ -110,7 +110,8 @@ jobs:
           source = Path('.github/workflows/d1-migration-prepare.yml').read_text(encoding='utf-8')
           artifact_name_prefix = 'name: d1-executor-' + 'inputs-'
           assert source.count(artifact_name_prefix) == 1
-          assert 'name: d1-reconstruction-${{ inputs.component }}-${{ github.run_id }}-${{ github.run_attempt }}' in source
+          assert source.count('name: d1-reconstruction-') == 1
+          assert 'path: artifacts/d1-prepare/reconstruction.json' in source
           assert 'd1-current-reconstruction-plan' in source
           assert 'D1_CURRENT_FRESH_ZERO_RECONSTRUCTION' in source
           for name in ('target-release.json', 'current-release.json', 'known-good-release.json', 'preconditions.json'):
