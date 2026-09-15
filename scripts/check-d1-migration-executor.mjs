@@ -225,11 +225,11 @@ async function validateExecutor(text, root = ROOT) {
   if (occurrenceCount(text, 'test "$GITHUB_RUN_ATTEMPT" = "1"') !== 2) {
     fail('ordinary one-shot authorization must reject reruns in exactly the pre-Environment and mutation jobs');
   }
-  if (occurrenceCount(text, '[[ "$AUTHORIZATION_DIGEST" =~ ^[0-9a-f]{64}$ ]]') !== 2) {
-    fail('authorization digest format must be enforced in exactly the pre-Environment and mutation jobs');
+  if (occurrenceCount(text, '[[ "$AUTHORIZATION_DIGEST" =~ ^[0-9a-f]{64}$ ]]') !== 3) {
+    fail('authorization digest format must be enforced in the shared pre-Environment gate and both typed mutation jobs');
   }
-  if (occurrenceCount(text, ORDINARY_CONFIRMATION) !== 2) {
-    fail(`ordinary mutation confirmation must be enforced exactly twice; observed=${occurrenceCount(text, ORDINARY_CONFIRMATION)}`);
+  if (occurrenceCount(text, ORDINARY_CONFIRMATION) !== 3) {
+    fail(`staging D1 mutation confirmation must be enforced in the shared pre-Environment gate and both typed mutation jobs; observed=${occurrenceCount(text, ORDINARY_CONFIRMATION)}`);
   }
   if (occurrenceCount(text, CONTRACT_CONFIRMATION) !== 2) {
     fail(`contract mutation confirmation must be enforced exactly twice; observed=${occurrenceCount(text, CONTRACT_CONFIRMATION)}`);
@@ -384,7 +384,7 @@ async function validateExecutor(text, root = ROOT) {
   const observeSteps = (text.match(/CLOUDFLARE_API_TOKEN: \$\{\{ secrets\.CLOUDFLARE_OBSERVE_API_TOKEN \}\}/g) ?? []).length;
   if (observeSteps < 7) fail(`provider observations must use the dedicated observe credential, including exact preapply revalidation; observed=${observeSteps}`);
   const deploySteps = (text.match(/CLOUDFLARE_API_TOKEN: \$\{\{ secrets\.CLOUDFLARE_API_TOKEN \}\}/g) ?? []).length;
-  if (deploySteps !== 2) fail(`deploy-capable credential must appear exactly once in each mutually exclusive migration/restore write step; observed=${deploySteps}`);
+  if (deploySteps !== 3) fail(`deploy-capable credential must appear exactly once in each mutually exclusive migration/reconstruction/restore write step; observed=${deploySteps}`);
 
   const provenanceIndex = text.indexOf(`\n      - name: ${AUTH_PROVENANCE_STEP}`);
   const admissionIndex = text.indexOf('Load immutable prepared transaction and verify typed executor admission');
@@ -595,7 +595,7 @@ async function validateExecutor(text, root = ROOT) {
   ]) {
     if (!mutationMarkerBody.includes(marker)) fail(`durable MUTATION_STARTED snapshot lost artifact contract: ${marker}`);
   }
-  if (mutationMarkerBody.includes('CLOUDFLARE_API_TOKEN')) fail('durable MUTATION_STARTED snapshot must be credential-free');
+  if (mutationMarkerBody.includes('CLOUDFLARE_API_TOKEN')) fail('durable MUTATION_STARTED snapshot must remain credential-free');
 
   const deployStep = stepBody(text, APPLY_STEP);
   for (const marker of [DEPLOY_REF, 'test -n "$CLOUDFLARE_API_TOKEN"', 'd1 migrations apply', '--remote']) {
@@ -820,7 +820,7 @@ async function selfTest(text) {
   );
   await expectRejected('deploy token used for observation', replaceFixture('deploy token used for observation', text, OBSERVE_REF, DEPLOY_REF));
   await expectRejected(
-    'third deploy credential exposure',
+    'fourth deploy credential exposure',
     `${text}\n# ${DEPLOY_REF}\n`,
   );
   await expectRejected(
