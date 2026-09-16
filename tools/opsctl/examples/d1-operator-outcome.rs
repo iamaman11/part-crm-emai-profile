@@ -141,6 +141,19 @@ fn diagnostic_kind(diagnostic: &Value) -> Result<Option<D1OperatorOutcomeKind>, 
     Ok(D1OperatorOutcomeKind::from_str(reason).ok())
 }
 
+fn explicit_kind_accepts_diagnostic(
+    kind: D1OperatorOutcomeKind,
+    diagnostic_kind: D1OperatorOutcomeKind,
+) -> bool {
+    kind == diagnostic_kind
+        || (kind == D1OperatorOutcomeKind::RefreshRequired
+            && matches!(
+                diagnostic_kind,
+                D1OperatorOutcomeKind::StaleObservation
+                    | D1OperatorOutcomeKind::SourceTreeTransactionDrift
+            ))
+}
+
 fn resolve_kind(
     explicit: Option<D1OperatorOutcomeKind>,
     authorization_rejections: &[D1OperatorOutcomeKind],
@@ -155,7 +168,7 @@ fn resolve_kind(
     match (explicit, owner_diagnostic) {
         (Some(kind), Some(diagnostic)) => {
             if let Some(diagnostic_kind) = diagnostic_kind(diagnostic)?
-                && kind != diagnostic_kind
+                && !explicit_kind_accepts_diagnostic(kind, diagnostic_kind)
             {
                 return Err(format!(
                     "--kind {} disagrees with operator-level owner diagnostic reason_code {}",
@@ -325,9 +338,36 @@ mod tests {
     }
 
     #[test]
+    fn refresh_required_preserves_exact_typed_predecessor_barrier_cause()
+    -> Result<(), Box<dyn Error>> {
+        for reason in ["STALE_OBSERVATION", "SOURCE_TREE_TRANSACTION_DRIFT"] {
+            let path = write_diagnostic(reason);
+            let mut args = base_args(D1OperatorOutcomeKind::RefreshRequired);
+            args.owner_diagnostic_json = Some(path.clone());
+            let output = render(args)?;
+            fs::remove_file(path).ok();
+            let value: Value = serde_json::from_str(&output)?;
+            assert_eq!(value["outcome"], "REFRESH_REQUIRED");
+            assert_eq!(value["reason_code"], "REFRESH_REQUIRED");
+            assert_eq!(value["owner_diagnostic"]["reason_code"], reason);
+        }
+        Ok(())
+    }
+
+    #[test]
     fn explicit_kind_must_match_operator_level_owner_diagnostic() {
         let path = write_diagnostic("INVALID_AUTHORIZATION");
         let mut args = base_args(D1OperatorOutcomeKind::StaleAuthorization);
+        args.owner_diagnostic_json = Some(path.clone());
+        let result = render(args);
+        fs::remove_file(path).ok();
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn refresh_required_rejects_unrelated_operator_diagnostic() {
+        let path = write_diagnostic("INVALID_AUTHORIZATION");
+        let mut args = base_args(D1OperatorOutcomeKind::RefreshRequired);
         args.owner_diagnostic_json = Some(path.clone());
         let result = render(args);
         fs::remove_file(path).ok();
