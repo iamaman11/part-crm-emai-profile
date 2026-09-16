@@ -95,6 +95,7 @@ jobs:
           assert '--authorization-rejection-kind' in source
           assert 'd1-execution-control' in source and 'inspect-receipt' in source and 'verify-post-state' in source
           assert 'D1_OPERATOR_OUTCOME_V1' in source and 'd1-operator-outcome' in source
+          assert 'REFRESH_REQUIRED' in source
           artifact_name = 'd1-operator-outcome-' + '$' + '{{ github.run_id }}-' + '$' + '{{ github.run_attempt }}'
           assert artifact_name in source
           assert 'd1-executor-inputs-' in source
@@ -111,16 +112,22 @@ jobs:
           assert "summary.get('status') == 'PREPARE_BLOCKED'" in source, 'observer PREPARE_BLOCKED must remain typed'
           observed_noop = "observed_planned = observed['planned_migrations']"
           prepare_dispatch = 'candidate = dispatch_' + 'prepare_and_wait(observed)'
-          stale_marker = '# STALE_PREPARED_TRANSACTION_IS_' + 'PROVENANCE'
+          barrier_marker = '# PREPARED_PREDECESSOR_REQUIRES_' + 'EXPLICIT_REFRESH'
           auth_marker = '# NONCURRENT_AUTHORIZATION_IS_' + 'PROVENANCE'
-          stale_branch = "if reason == " + "'STALE_OBSERVATION':"
           auth_subject_filter = "if intent.get('transaction_id') != tx.get(" + "'transaction_id'):"
           assert observed_noop in source, 'fresh PREPARE_READY empty-plan disposition must be explicit'
           assert source.index(observed_noop) < source.index(prepare_dispatch), 'fresh empty plan must stop before canonical Prepare transaction rendering'
-          assert source.count(prepare_dispatch) == 1, 'one ordinary operator invocation may mint at most one fresh Prepare transaction'
-          assert source.count(stale_marker) == 1, 'stale prepared transaction must be non-current provenance'
+          assert source.count(prepare_dispatch) == 1, 'one operator invocation may mint at most one fresh Prepare transaction'
+          assert source.count(barrier_marker) == 2, 'executor and stale/source-drift predecessor origins must both terminate behind explicit refresh barrier'
           assert source.count(auth_marker) == 1, 'authorization for another transaction must be non-current provenance'
-          assert stale_branch in source, 'stale prepared transaction must fall through to one fresh Observe/Prepare cycle'
+          assert 'requested_refresh != predecessor_transaction_id' in source, 'refresh intent must bind exact predecessor TransactionId'
+          assert 'D1_OPERATOR_STATE=REFRESH_REQUIRED' in source, 'ordinary blocked predecessor must emit terminal REFRESH_REQUIRED'
+          assert 'Resolve one-shot OWNER predecessor refresh intent' in source
+          assert 'CURRENT_OPERATOR_RUN_ID' in source and 'D1 operator comment transport / issue_comment /' in source
+          assert 'REFRESH_STALE_TRANSACTION_ID' in source, 'predecessor refresh intent must be derived from durable OWNER transport'
+          assert "reason in {'STALE_OBSERVATION', 'SOURCE_TREE_TRANSACTION_DRIFT'}" in source, 'stale and source/tree drift must both become refresh barriers'
+          assert "epoch(run['created_at']) > prepare_epoch" in source, 'an Executor attempt after Prepare must become a refresh barrier rather than mint a successor automatically'
+          assert "and run.get('head_sha') == SOURCE" not in source.split('def resolve_transaction_state():', 1)[1].split('def wait_for_dispatched_run', 1)[0], 'predecessor resolution must survive protected-main source changes'
           assert auth_subject_filter in source, 'authorization discovery must first bind to the current transaction id'
           assert "'planned_migrations': planned" in source and "'preflight_ref': preflight_ref" in source, 'fresh observation must transport typed no-op evidence'
           forbidden_rejected_index = 'latest = rejected' + '[0]'
@@ -183,6 +190,91 @@ jobs:
           test -x tools/opsctl/target/debug/examples/d1-operator-outcome
           python scripts/d1-prepare.py self-test
 
+      - name: Resolve one-shot OWNER predecessor refresh intent
+        env:
+          SOURCE_SHA: ${{ github.sha }}
+          CURRENT_OPERATOR_RUN_ID: ${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          python - <<'PY_REFRESH'
+          import json
+          import os
+          import re
+          import subprocess
+          from datetime import datetime
+
+          repo = os.environ['GITHUB_REPOSITORY']
+          source = os.environ['SOURCE_SHA']
+          current_run_id = int(os.environ['CURRENT_OPERATOR_RUN_ID'])
+
+          def gh(endpoint):
+              process = subprocess.run(['gh', 'api', endpoint], text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False)
+              if process.returncode != 0:
+                  raise SystemExit(f'gh api failed for {endpoint}: {process.stderr.strip()}')
+              return json.loads(process.stdout)
+
+          def epoch(value):
+              return int(datetime.fromisoformat(value.replace('Z', '+00:00')).timestamp())
+
+          tracker = gh(f'repos/{repo}/issues/266')
+          body = tracker.get('body')
+          if not isinstance(body, str):
+              raise SystemExit('live stage pointer #266 has no readable body')
+          matches = re.findall(r'^CURRENT_STAGE_ISSUE = #([1-9][0-9]*)$', body, re.MULTILINE)
+          if len(matches) != 1:
+              raise SystemExit('live stage pointer #266 does not select exactly one CURRENT stage issue')
+          issue = int(matches[0])
+
+          commands = []
+          page = 1
+          while True:
+              comments = gh(f'repos/{repo}/issues/{issue}/comments?per_page=100&page={page}')
+              if not isinstance(comments, list):
+                  raise SystemExit('CURRENT stage issue comments response is not a list')
+              for comment in comments:
+                  if comment.get('author_association') != 'OWNER' or comment.get('created_at') != comment.get('updated_at'):
+                      continue
+                  text = comment.get('body')
+                  if text == '/d1 operator':
+                      commands.append((epoch(comment['created_at']), int(comment['id']), 'operator', ''))
+                      continue
+                  match = re.fullmatch(r'/d1 operator-refresh ([0-9a-f]{64})', text or '')
+                  if match is not None:
+                      commands.append((epoch(comment['created_at']), int(comment['id']), 'operator_refresh', match.group(1)))
+              if len(comments) < 100:
+                  break
+              page += 1
+
+          requested = ''
+          if commands:
+              commands.sort(reverse=True)
+              created, comment_id, kind, transaction_id = commands[0]
+              if kind == 'operator_refresh':
+                  expected_title = f'D1 operator comment transport / issue_comment / {comment_id} / {source}'
+                  routes_doc = gh(f'repos/{repo}/actions/workflows/d1-operator-comment-router.yml/runs?event=issue_comment&branch=main&per_page=100')
+                  routes = [run for run in (routes_doc.get('workflow_runs') or [])
+                            if run.get('display_title') == expected_title
+                            and run.get('head_sha') == source]
+                  if len(routes) != 1:
+                      raise SystemExit('exact OWNER refresh comment has missing or ambiguous router run')
+                  route = routes[0]
+                  if int(route.get('run_attempt') or 0) != 1 or epoch(route['created_at']) < created:
+                      raise SystemExit('exact OWNER refresh router provenance is invalid')
+                  operator_doc = gh(f'repos/{repo}/actions/workflows/d1-operator.yml/runs?event=workflow_dispatch&branch=main&per_page=100')
+                  earliest = [run for run in (operator_doc.get('workflow_runs') or [])
+                              if run.get('head_sha') == source
+                              and run.get('path') == '.github/workflows/d1-operator.yml'
+                              and int(run.get('run_attempt') or 0) == 1
+                              and epoch(run['created_at']) >= epoch(route['created_at']) - 5]
+                  earliest.sort(key=lambda run: (epoch(run['created_at']), int(run.get('run_number') or 0), int(run['id'])))
+                  if earliest and int(earliest[0]['id']) == current_run_id:
+                      requested = transaction_id
+
+          with open(os.environ['GITHUB_ENV'], 'a', encoding='utf-8') as handle:
+              handle.write(f'REFRESH_STALE_TRANSACTION_ID={requested}\n')
+          print(f'D1_REFRESH_INTENT={requested or "NONE"}')
+          PY_REFRESH
+
       - name: Resolve, prepare, stop for authorization, or reconcile sole executor
         env:
           SOURCE_SHA: ${{ github.sha }}
@@ -213,6 +305,9 @@ jobs:
           PREPARE_WORKFLOW = 'd1-migration-prepare.yml'
           OBSERVE_WORKFLOW = 'd1-isolated-target-observation.yml'
           EXECUTOR_WORKFLOW = 'd1-migration-executor.yml'
+          REQUESTED_REFRESH = os.environ.get('REFRESH_STALE_TRANSACTION_ID', '').strip()
+          if REQUESTED_REFRESH and re.fullmatch(r'[0-9a-f]{64}', REQUESTED_REFRESH) is None:
+              raise SystemExit('predecessor refresh intent must be empty or one exact 64-hex TransactionId')
 
           class TypedStop(Exception):
               def __init__(self, kind, message, owner_diagnostic=None, evidence_refs=None):
@@ -391,8 +486,9 @@ jobs:
               return value
 
           def latest_executor_epoch():
-              values = [epoch(run['created_at']) for run in workflow_runs(EXECUTOR_WORKFLOW)
-                        if run.get('event') == 'workflow_dispatch' and run.get('head_sha') == SOURCE]
+              values = [epoch(run['created_at']) for run in workflow_runs(EXECUTOR_WORKFLOW, 100)
+                        if run.get('event') == 'workflow_dispatch'
+                        and run.get('path') == '.github/workflows/d1-migration-executor.yml']
               return max(values, default=0)
 
           def transaction_artifact(run):
@@ -408,42 +504,67 @@ jobs:
               name = f"d1-executor-inputs-{component}-{run['id']}-{attempt}"
               return artifact_exact(run['id'], name)
 
-          def resolve_fresh_transaction():
+          def resolve_transaction_state():
               now = int(time.time())
-              cutoff = latest_executor_epoch()
-              runs = [run for run in workflow_runs(PREPARE_WORKFLOW)
+              executor_epoch = latest_executor_epoch()
+              runs = [run for run in workflow_runs(PREPARE_WORKFLOW, 100)
                       if run.get('event') == 'workflow_dispatch'
-                      and run.get('head_sha') == SOURCE
                       and run.get('status') == 'completed'
-                      and run.get('conclusion') == 'success'
-                      and epoch(run['created_at']) > cutoff]
+                      and run.get('conclusion') == 'success']
               runs.sort(key=lambda item: epoch(item['created_at']), reverse=True)
               for run in runs:
+                  run_artifacts = artifacts(run['id'])
                   artifact = transaction_artifact(run)
                   if artifact is None:
-                      raise SystemExit(f"successful Prepare run {run['id']} missing/ambiguous transaction artifact")
+                      names = [item.get('name') for item in run_artifacts if isinstance(item.get('name'), str)]
+                      if any(name.startswith('d1-reconstruction-') for name in names):
+                          continue
+                      raise SystemExit(f"successful ordinary Prepare run {run['id']} missing/ambiguous transaction artifact")
+                  prepare_epoch = epoch(run['created_at'])
                   with tempfile.TemporaryDirectory(prefix='d1-transaction-') as directory:
                       if not download(run['id'], artifact['name'], directory):
                           raise SystemExit(f"cannot download transaction artifact from Prepare run {run['id']}")
                       path = Path(directory) / 'transaction.json'
                       if not path.is_file():
                           raise SystemExit(f"Prepare run {run['id']} transaction artifact is missing transaction.json")
+                      tx = json.loads(path.read_text(encoding='utf-8'))
+                      transaction_id = tx.get('transaction_id')
+                      if not isinstance(transaction_id, str) or re.fullmatch(r'[0-9a-f]{64}', transaction_id) is None:
+                          raise SystemExit('prepared predecessor lost exact typed TransactionId')
+                      base = {
+                          'run_id': int(run['id']),
+                          'run_attempt': int(run['run_attempt']),
+                          'transaction': tx,
+                          'prepare_evidence_ref': f"github-actions:run:{run['id']}:attempt:{run['run_attempt']}",
+                      }
+                      if executor_epoch and executor_epoch > prepare_epoch:
+                          # PREPARED_PREDECESSOR_REQUIRES_EXPLICIT_REFRESH
+                          barrier = dict(base)
+                          barrier['barrier_cause'] = 'EXECUTOR_ATTEMPT_AFTER_PREPARE'
+                          barrier['owner_diagnostic'] = None
+                          return {'fresh': None, 'barrier': barrier}
                       try:
                           verification = verify_transaction(path, now)
                       except TypedStop as stop:
                           reason = (stop.owner_diagnostic or {}).get('reason_code')
-                          if reason == 'STALE_OBSERVATION':
-                              # STALE_PREPARED_TRANSACTION_IS_PROVENANCE
-                              continue
+                          if reason in {'STALE_OBSERVATION', 'SOURCE_TREE_TRANSACTION_DRIFT'}:
+                              # PREPARED_PREDECESSOR_REQUIRES_EXPLICIT_REFRESH
+                              barrier = dict(base)
+                              barrier['barrier_cause'] = reason
+                              barrier['owner_diagnostic'] = stop.owner_diagnostic
+                              return {'fresh': None, 'barrier': barrier}
                           raise
                       executor_artifact = executor_input_artifact(run, verification['component'])
                       if executor_artifact is None:
                           raise SystemExit(f"Prepare run {run['id']} missing immutable executor input bundle")
-                      tx = json.loads(path.read_text(encoding='utf-8'))
-                  return {'run_id': int(run['id']), 'run_attempt': int(run['run_attempt']), 'transaction': tx,
-                          'verification': verification, 'executor_artifact_name': executor_artifact['name'],
-                          'fresh_until': int(verification['fresh_until_unix_seconds'])}
-              return None
+                  candidate = dict(base)
+                  candidate.update({
+                      'verification': verification,
+                      'executor_artifact_name': executor_artifact['name'],
+                      'fresh_until': int(verification['fresh_until_unix_seconds']),
+                  })
+                  return {'fresh': candidate, 'barrier': None}
+              return {'fresh': None, 'barrier': None}
 
           def wait_for_dispatched_run(workflow, started_at, timeout_seconds, require_success=True):
               deadline = time.time() + timeout_seconds
@@ -986,8 +1107,46 @@ jobs:
               }
 
           issue = current_stage_issue()
+          requested_refresh = REQUESTED_REFRESH
           try:
-              candidate = resolve_fresh_transaction()
+              state = resolve_transaction_state()
+              candidate = state['fresh']
+              barrier = state['barrier']
+              if barrier is not None:
+                  predecessor_transaction_id = barrier['transaction'].get('transaction_id')
+                  if not isinstance(predecessor_transaction_id, str) or re.fullmatch(r'[0-9a-f]{64}', predecessor_transaction_id) is None:
+                      raise SystemExit('blocked predecessor lost exact typed TransactionId')
+                  if requested_refresh != predecessor_transaction_id:
+                      outcome = emit_outcome(
+                          'REFRESH_REQUIRED',
+                          issue,
+                          barrier,
+                          owner_diagnostic=barrier.get('owner_diagnostic'),
+                          evidence_refs={'prepare': barrier['prepare_evidence_ref']},
+                      )
+                      refresh_detail = ('none' if not requested_refresh else requested_refresh)
+                      cause = barrier.get('barrier_cause') or 'UNKNOWN'
+                      SUMMARY.write_text('# D1 predecessor stopped before successor refresh\n\n'
+                                         f"- Current stage issue: `#{issue}`\n- Predecessor TransactionId: `{predecessor_transaction_id}`\n"
+                                         f"- Barrier cause: `{cause}`\n- Requested refresh TransactionId: `{refresh_detail}`\n"
+                                         f"- Typed outcome: `{outcome['outcome']}`\n"
+                                         '- Observation dispatch: `NO`\n- Prepare dispatch: `NO`\n- Executor dispatch: `NO`\n- Provider mutation: `NO`\n'
+                                         f'- Required next action: `/d1 operator-refresh {predecessor_transaction_id}`\n',
+                                         encoding='utf-8')
+                      print(f"D1_OPERATOR_STATE=REFRESH_REQUIRED transaction_id={predecessor_transaction_id} cause={cause} refresh_required=true issue={issue}")
+                      raise SystemExit(1)
+                  candidate = None
+              elif requested_refresh:
+                  outcome = emit_outcome('REPLAY_OR_NOOP', issue, candidate)
+                  SUMMARY.write_text('# D1 predecessor refresh is not applicable\n\n'
+                                     f"- Current stage issue: `#{issue}`\n- Requested predecessor TransactionId: `{requested_refresh}`\n"
+                                     f"- Typed outcome: `{outcome['outcome']}`\n"
+                                     '- No blocked current predecessor exists for this refresh intent.\n'
+                                     '- Observation dispatch: `NO`\n- Prepare dispatch: `NO`\n- Executor dispatch: `NO`\n- Provider mutation: `NO`\n',
+                                     encoding='utf-8')
+                  print(f"D1_OPERATOR_STATE=REPLAY_OR_NOOP refresh_transaction_id={requested_refresh} issue={issue}")
+                  raise SystemExit(0)
+
               if candidate is None:
                   observed = fresh_observation()
                   observed_planned = observed['planned_migrations']
@@ -1016,11 +1175,15 @@ jobs:
                       raise SystemExit(0)
                   outcome = emit_outcome('AUTHORIZATION_REQUIRED', issue, candidate,
                                          evidence_refs={'prepare': candidate.get('prepare_evidence_ref') or f"github-actions:run:{candidate['run_id']}:attempt:{candidate['run_attempt']}"})
+                  refresh_line = ''
+                  if requested_refresh:
+                      refresh_line = f'- Explicit predecessor refresh consumed by transition from TransactionId: `{requested_refresh}`\n'
                   SUMMARY.write_text('# D1 transaction prepared\n\n'
                                      f"- Current stage issue: `#{issue}`\n- TransactionId: `{tx['transaction_id']}`\n"
                                      f"- Prepare run: `{candidate['run_id']}` attempt `{candidate['run_attempt']}`\n"
                                      f"- Fresh until unix: `{candidate['fresh_until']}`\n- Typed outcome: `{outcome['outcome']}`\n"
-                                     '- Provider mutation: `NO`\n- Next: record one exact transaction authorization in the CURRENT stage issue, then run this workflow once.\n',
+                                     + refresh_line
+                                     + '- Provider mutation: `NO`\n- Next: record one exact transaction authorization in the CURRENT stage issue, then run this workflow once.\n',
                                      encoding='utf-8')
                   print(f"D1_OPERATOR_STATE=AUTHORIZATION_REQUIRED transaction_id={tx['transaction_id']} issue={issue}")
                   raise SystemExit(0)

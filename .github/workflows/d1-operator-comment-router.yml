@@ -89,10 +89,12 @@ jobs:
           assert route_source.count('actions/workflows/d1-isolated-target-observation.yml/' + 'dispatches') == 2
           assert route_source.count('actions/workflows/d1-migration-executor.yml/' + 'dispatches') == 2
           assert "github.event.comment.body == '/d1 operator'" in route_source
+          assert "startsWith(github.event.comment.body, '/d1 operator-refresh ')" in route_source
           assert "github.event.comment.body == '/d1 reconstruction'" in route_source
           assert "startsWith(github.event.comment.body, '/d1 reconstruction-execute ')" in route_source
           assert "startsWith(github.event.comment.body, '/d1 time-travel-info ')" in route_source
           assert "startsWith(github.event.comment.body, '/d1 time-travel-restore ')" in route_source
+          assert 'D1_REFRESH_STALE_TRANSACTION_ID' in route_source
           auth_marker = 'D1_TRANSACTION_' + 'AUTHORIZATION_V1'
           assert route_source.count(auth_marker) == 1, 'router may transport but must not own transaction authorization semantics'
 
@@ -105,6 +107,8 @@ jobs:
           assert 'title="D1 authorization=$RECON_AUTHORIZATION_DIGEST"' in route_source
           assert 'select(.display_title == $title and .head_sha == $source)' in route_source
           assert 'NO automatic Observe/Prepare retry' in route_source
+          zero_input_route_marker = '- name: Dispatch zero-input ' + 'standard D1 operator as repository owner'
+          assert zero_input_route_marker in route_source
 
           assert 'operation_mode:' in executor and 'time_travel_restore' in executor and 'reconstruction' in executor
           assert 'authorize_restore:' in executor and 'Restore exact D1 bookmark with deploy credential' in executor
@@ -166,6 +170,7 @@ jobs:
       github.event.issue.state == 'open' &&
       (
         github.event.comment.body == '/d1 operator' ||
+        startsWith(github.event.comment.body, '/d1 operator-refresh ') ||
         github.event.comment.body == '/d1 reconstruction' ||
         startsWith(github.event.comment.body, '/d1 reconstruction-execute ') ||
         startsWith(github.event.comment.body, '/d1 time-travel-info ') ||
@@ -205,6 +210,7 @@ jobs:
           restore_comment = ''
           reconstruction_prepare_run = ''
           reconstruction_authorization_comment = ''
+          refresh_stale_transaction_id = ''
           if body == '/d1 operator':
               kind = 'operator'
               timestamp = ''
@@ -212,10 +218,15 @@ jobs:
               kind = 'reconstruction'
               timestamp = ''
           else:
+              operator_refresh = re.fullmatch(r'/d1 operator-refresh ([0-9a-f]{64})', body)
               reconstruction_execute = re.fullmatch(r'/d1 reconstruction-execute ([1-9][0-9]*) ([1-9][0-9]*)', body)
               info = re.fullmatch(r'/d1 time-travel-info ([0-9]{10})', body)
               restore = re.fullmatch(r'/d1 time-travel-restore ([1-9][0-9]*)', body)
-              if reconstruction_execute is not None:
+              if operator_refresh is not None:
+                  kind = 'operator_refresh'
+                  timestamp = ''
+                  refresh_stale_transaction_id = operator_refresh.group(1)
+              elif reconstruction_execute is not None:
                   kind = 'reconstruction_execute'
                   timestamp = ''
                   reconstruction_prepare_run = reconstruction_execute.group(1)
@@ -231,6 +242,7 @@ jobs:
                   raise SystemExit('owner D1 command is not an exact supported transport command')
           with open(env_path, 'a', encoding='utf-8') as handle:
               handle.write(f'D1_ROUTE_KIND={kind}\n')
+              handle.write(f'D1_REFRESH_STALE_TRANSACTION_ID={refresh_stale_transaction_id}\n')
               handle.write(f'D1_TIME_TRAVEL_UNIX_SECONDS={timestamp}\n')
               handle.write(f'D1_RESTORE_AUTHORIZATION_COMMENT_ID={restore_comment}\n')
               handle.write(f'D1_RECONSTRUCTION_PREPARE_RUN_ID={reconstruction_prepare_run}\n')
@@ -279,12 +291,17 @@ jobs:
           fi
 
       - name: Dispatch zero-input standard D1 operator as repository owner
-        if: env.D1_ROUTE_KIND == 'operator' && env.D1_ROUTE_ALREADY_HANDLED != 'true'
+        if: >-
+          (env.D1_ROUTE_KIND == 'operator' || env.D1_ROUTE_KIND == 'operator_refresh') &&
+          env.D1_ROUTE_ALREADY_HANDLED != 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_ADMIN_OPERATOR_TOKEN }}
         run: |
           set -euo pipefail
           test -n "$GH_TOKEN"
+          if [ "$D1_ROUTE_KIND" = operator_refresh ]; then
+            [[ "$D1_REFRESH_STALE_TRANSACTION_ID" =~ ^[0-9a-f]{64}$ ]]
+          fi
           gh api --method POST \
             "repos/$GITHUB_REPOSITORY/actions/workflows/d1-operator.yml/dispatches" \
             -f ref=main
@@ -483,6 +500,8 @@ jobs:
             downstream='NOOP / exact OWNER command or authorization dispatch already handled; new OWNER comment required for a new attempt'
           elif [ "$D1_ROUTE_KIND" = operator ]; then
             downstream='d1-operator.yml / main / zero inputs / owner actor'
+          elif [ "$D1_ROUTE_KIND" = operator_refresh ]; then
+            downstream="d1-operator.yml / main / zero inputs / refresh intent remains in immutable OWNER comment tx=$D1_REFRESH_STALE_TRANSACTION_ID"
           elif [ "$D1_ROUTE_KIND" = reconstruction ]; then
             downstream='d1-isolated-target-observation.yml / main / operation_mode=reconstruction / observer dispatches one credential-free Prepare'
           elif [ "$D1_ROUTE_KIND" = reconstruction_execute ]; then
@@ -502,7 +521,9 @@ jobs:
             echo "- downstream: \`$downstream\`"
             echo "- already handled: \`$D1_ROUTE_ALREADY_HANDLED\`"
             echo '- one OWNER comment: at most one downstream dispatch'
-            echo '- stale/failed operation: NO automatic Observe/Prepare retry; a new OWNER command is required'
+            echo '- standard operator transport: zero machine inputs'
+            echo '- stale transaction: ordinary operator is terminal/no-effect; refresh requires exact /d1 operator-refresh <TransactionId>'
+            echo '- stale/failed operation: NO automatic Observe/Prepare retry; a new exact OWNER command is required'
             echo '- provider credentials in router: NO'
             echo '- provider mutation authority in router: NO'
             echo '- privileged operator/reconstruction/restore dispatch actor: governed GitHub admin operator credential only'
