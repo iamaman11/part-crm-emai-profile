@@ -169,8 +169,10 @@ function validate(subjects, sources) {
       || bridgeAdmission.human_identity?.owner !== 'CLOUDFLARE_ACCESS_INITIAL_BROWSER_USER_IDENTITY_ONLY'
       || bridgeAdmission.human_identity?.audience_var !== 'ACCESS_AUDIENCE'
       || bridgeAdmission.human_identity?.ordinary_restart_browser_login_required !== false
+      || bridgeAdmission.human_identity?.machine_identity_grants_human_actor !== false
       || bridgeAdmission.device_key?.platform !== 'WINDOWS_CNG'
       || bridgeAdmission.device_key?.algorithm !== 'P-256'
+      || bridgeAdmission.device_key?.scope !== 'UNIQUE_PER_DEVICE'
       || bridgeAdmission.device_key?.private_key_origin !== 'TARGET_WINDOWS_HOST'
       || bridgeAdmission.device_key?.private_key_exportable !== false
       || bridgeAdmission.device_key?.private_key_transport !== 'FORBIDDEN'
@@ -183,6 +185,7 @@ function validate(subjects, sources) {
       || bridgeAdmission.application_session?.binding !== 'USER_PLUS_REGISTERED_DEVICE_PLUS_AUTH_EPOCH'
       || bridgeAdmission.application_session?.revocable !== true
       || bridgeAdmission.application_session?.shared_by_ui_and_bridge_runtime !== true
+      || bridgeAdmission.application_session?.cloudflare_access_session_revoke_alone_is_sufficient !== false
       || bridgeAdmission.request_proof?.key !== 'REGISTERED_DEVICE_P256_PUBLIC_KEY'
       || bridgeAdmission.request_proof?.private_key_provider !== 'WINDOWS_CNG_NON_EXPORTABLE'
       || bridgeAdmission.request_proof?.freshness !== 'BOUNDED_FRESH_CHALLENGE_OR_REQUEST_PROOF'
@@ -195,9 +198,24 @@ function validate(subjects, sources) {
       || bridgeAdmission.legacy_admission?.custom_ca_required !== false
       || bridgeAdmission.legacy_admission?.x509_client_certificate_required !== false
       || bridgeAdmission.legacy_admission?.csr_required !== false
+      || bridgeAdmission.machine_projection?.provider_ids !== 'OBSERVED_NOT_SOURCE_AUTHORED'
+      || bridgeAdmission.machine_projection?.missing_required_input !== 'NOT_READY_FAIL_CLOSED'
+      || bridgeAdmission.machine_projection?.manual_provider_payload !== 'FORBIDDEN'
       || bridgeAdmission.mutation_authorization !== 'SEPARATE_EXACT_CANDIDATE_ONE_SHOT_REQUIRED'
       || bridgeAdmission.production_mutation !== false) {
     errors.push('profile security must keep Bridge admission on local CNG device registration, revocable application session and fresh proof with no PKI/service-token fallback');
+  }
+
+  const requiredInputs = ['canonical_environment', 'canonical_target_hostname', 'canonical_access_audience'];
+  if (!sameSet(bridgeAdmission?.machine_projection?.required_non_secret_inputs, new Set(requiredInputs))) {
+    errors.push('Bridge device/application projection inputs must remain exact and non-secret');
+  }
+  const requiredEffects = new Set([
+    'ENSURE_HUMAN_ACCESS_IDENTITY_REMAINS_BROWSER_ONLY',
+    'ENSURE_LEGACY_BRIDGE_SERVICE_TOKEN_OR_MTLS_ADMISSION_ABSENT',
+  ]);
+  if (!sameSet(bridgeAdmission?.machine_projection?.desired_access_effects, requiredEffects)) {
+    errors.push('Bridge device/application desired Access effects drifted');
   }
 
   const deviceKey = profile.security_domains?.find((entry) => entry.id === 'profile-bridge.device-private-key');
