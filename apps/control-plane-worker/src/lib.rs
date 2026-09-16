@@ -89,9 +89,9 @@ pub async fn main(mut request: Request, env: Env, _context: Context) -> Result<R
         RouteClass::BindingProbeApi => {
             binding_probe(&env, require_capability_context(&capability_context)?)
         }
-        RouteClass::DynamicRouteNotFound
-        | RouteClass::BridgeDeniedByDefault
-        | RouteClass::BridgeEnrollmentApi => Response::error("Not Found", 404),
+        RouteClass::DynamicRouteNotFound | RouteClass::BridgeDeniedByDefault => {
+            Response::error("Not Found", 404)
+        }
         RouteClass::StaticAssets => {
             env.assets(STATIC_ASSETS_BINDING)?
                 .fetch_request(request)
