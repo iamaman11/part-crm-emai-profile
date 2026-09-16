@@ -25,7 +25,7 @@ on:
           - reconstruction
           - time_travel_restore
       restore_authorization_comment_id:
-        description: Exact OWNER authorization comment for one-shot Time Travel restore
+        description: Exact OWNER authorization comment for one-shot D1 Time Travel restore
         required: false
         default: ''
         type: string
@@ -1014,13 +1014,21 @@ jobs:
           set -euo pipefail
           test -n "$CLOUDFLARE_API_TOKEN"
           echo "::add-mask::$CLOUDFLARE_API_TOKEN"
-          verify="$RUNNER_TEMP/d1-migration-deploy-token-verify.json"
+          account_verify="$RUNNER_TEMP/d1-migration-deploy-account-token-verify.json"
+          user_verify="$RUNNER_TEMP/d1-migration-deploy-user-token-verify.json"
           target="$RUNNER_TEMP/d1-migration-deploy-target.json"
-          verify_code="$(curl --silent --show-error --output "$verify" --write-out '%{http_code}' \
+          account_code="$(curl --silent --show-error --output "$account_verify" --write-out '%{http_code}' \
             -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
-            'https://api.cloudflare.com/client/v4/user/tokens/verify')"
-          test "$verify_code" = 200
-          jq -e '.success == true and (.errors | length) == 0 and .result.status == "active"' "$verify" >/dev/null
+            "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/tokens/verify")"
+          if [ "$account_code" = 200 ] && jq -e '.success == true and (.errors | length) == 0 and .result.status == "active"' "$account_verify" >/dev/null; then
+            :
+          else
+            user_code="$(curl --silent --show-error --output "$user_verify" --write-out '%{http_code}' \
+              -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+              'https://api.cloudflare.com/client/v4/user/tokens/verify')"
+            test "$user_code" = 200
+            jq -e '.success == true and (.errors | length) == 0 and .result.status == "active"' "$user_verify" >/dev/null
+          fi
           cfg=artifacts/d1-migration/wrangler.json
           jq -e --arg account "$CLOUDFLARE_ACCOUNT_ID" --arg name "$DATABASE_NAME" --arg id "$DATABASE_ID" \
             '.account_id == $account and ([.d1_databases[] | select(.database_name == $name and .database_id == $id)] | length) == 1' "$cfg" >/dev/null
@@ -1040,7 +1048,7 @@ jobs:
           if not paired(value):
               raise SystemExit('deploy credential D1 target identity mismatch')
           PY
-          rm -f "$verify" "$target"
+          rm -f "$account_verify" "$user_verify" "$target"
 
       - name: Append MUTATION_STARTED to execution receipt
         if: steps.policy.outputs.apply_required == 'true'
@@ -1700,13 +1708,21 @@ jobs:
           root=artifacts/d1-reconstruction
           test -n "$CLOUDFLARE_API_TOKEN"
           echo "::add-mask::$CLOUDFLARE_API_TOKEN"
-          verify="$RUNNER_TEMP/d1-reconstruction-deploy-token-verify.json"
+          account_verify="$RUNNER_TEMP/d1-reconstruction-deploy-account-token-verify.json"
+          user_verify="$RUNNER_TEMP/d1-reconstruction-deploy-user-token-verify.json"
           target="$RUNNER_TEMP/d1-reconstruction-deploy-target.json"
-          verify_code="$(curl --silent --show-error --output "$verify" --write-out '%{http_code}' \
+          account_code="$(curl --silent --show-error --output "$account_verify" --write-out '%{http_code}' \
             -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
-            'https://api.cloudflare.com/client/v4/user/tokens/verify')"
-          test "$verify_code" = 200
-          jq -e '.success == true and (.errors | length) == 0 and .result.status == "active"' "$verify" >/dev/null
+            "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/tokens/verify")"
+          if [ "$account_code" = 200 ] && jq -e '.success == true and (.errors | length) == 0 and .result.status == "active"' "$account_verify" >/dev/null; then
+            :
+          else
+            user_code="$(curl --silent --show-error --output "$user_verify" --write-out '%{http_code}' \
+              -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+              'https://api.cloudflare.com/client/v4/user/tokens/verify')"
+            test "$user_code" = 200
+            jq -e '.success == true and (.errors | length) == 0 and .result.status == "active"' "$user_verify" >/dev/null
+          fi
           cfg="$root/wrangler.json"
           jq -e --arg account "$CLOUDFLARE_ACCOUNT_ID" --arg name "$DATABASE_NAME" --arg id "$DATABASE_ID" \
             '.account_id == $account and ([.d1_databases[] | select(.database_name == $name and .database_id == $id)] | length) == 1' "$cfg" >/dev/null
@@ -1726,7 +1742,7 @@ jobs:
           if not paired(value):
               raise SystemExit('deploy credential D1 target identity mismatch')
           PY
-          rm -f "$verify" "$target"
+          rm -f "$account_verify" "$user_verify" "$target"
 
       - name: Append PREWRITE_FENCE_PASS and MUTATION_STARTED
         run: |
@@ -2288,13 +2304,21 @@ jobs:
           set -euo pipefail
           test -n "$CLOUDFLARE_API_TOKEN"
           echo "::add-mask::$CLOUDFLARE_API_TOKEN"
-          verify="$RUNNER_TEMP/d1-restore-deploy-token-verify.json"
+          account_verify="$RUNNER_TEMP/d1-restore-deploy-account-token-verify.json"
+          user_verify="$RUNNER_TEMP/d1-restore-deploy-user-token-verify.json"
           target="$RUNNER_TEMP/d1-restore-deploy-target.json"
-          verify_code="$(curl --silent --show-error --output "$verify" --write-out '%{http_code}' \
+          account_code="$(curl --silent --show-error --output "$account_verify" --write-out '%{http_code}' \
             -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
-            'https://api.cloudflare.com/client/v4/user/tokens/verify')"
-          test "$verify_code" = 200
-          jq -e '.success == true and (.errors | length) == 0 and .result.status == "active"' "$verify" >/dev/null
+            "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/tokens/verify")"
+          if [ "$account_code" = 200 ] && jq -e '.success == true and (.errors | length) == 0 and .result.status == "active"' "$account_verify" >/dev/null; then
+            :
+          else
+            user_code="$(curl --silent --show-error --output "$user_verify" --write-out '%{http_code}' \
+              -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+              'https://api.cloudflare.com/client/v4/user/tokens/verify')"
+            test "$user_code" = 200
+            jq -e '.success == true and (.errors | length) == 0 and .result.status == "active"' "$user_verify" >/dev/null
+          fi
           cfg=artifacts/d1-time-travel-restore/wrangler.json
           jq -e --arg account "$CLOUDFLARE_ACCOUNT_ID" --arg name "$DATABASE_NAME" --arg id "$DATABASE_ID" \
             '.account_id == $account and ([.d1_databases[] | select(.database_name == $name and .database_id == $id)] | length) == 1' "$cfg" >/dev/null
@@ -2314,7 +2338,7 @@ jobs:
           if not paired(value):
               raise SystemExit('deploy credential D1 target identity mismatch')
           PY
-          rm -f "$verify" "$target"
+          rm -f "$account_verify" "$user_verify" "$target"
 
       - name: Persist restore MUTATION_STARTED receipt
         run: |
