@@ -125,7 +125,7 @@ jobs:
           assert observed_noop in source, 'fresh PREPARE_READY empty-plan disposition must be explicit'
           assert source.index(observed_noop) < source.index(prepare_dispatch), 'fresh empty plan must stop before canonical Prepare transaction rendering'
           assert source.count(prepare_dispatch) == 1, 'one operator invocation may mint at most one fresh Prepare transaction'
-          assert source.count(barrier_marker) == 1, 'stale/drifted/executed predecessor must terminate behind one explicit refresh barrier'
+          assert source.count(barrier_marker) == 2, 'executor and stale/source-drift predecessor origins must both terminate behind explicit refresh barrier'
           assert source.count(auth_marker) == 1, 'authorization for another transaction must be non-current provenance'
           assert 'requested_refresh != predecessor_transaction_id' in source, 'refresh intent must bind exact predecessor TransactionId'
           assert 'D1_OPERATOR_STATE=REFRESH_REQUIRED' in source, 'ordinary blocked predecessor must emit terminal REFRESH_REQUIRED'
@@ -919,7 +919,7 @@ jobs:
                       root = Path(directory)
                       present = {path.name for path in root.iterdir() if path.is_file()}
                       if present != {'evidence.json'}:
-                          raise SystemExit(f'completed execution evidence file set drifted: {sorted(present)}')
+                          raise SystemExit(f'completed execution evidence artifact file set drifted: {sorted(present)}')
                       evidence_path = root / 'evidence.json'
                       evidence = json.loads(evidence_path.read_text(encoding='utf-8'))
                       evidence_sha256 = hashlib.sha256(evidence_path.read_bytes()).hexdigest()
