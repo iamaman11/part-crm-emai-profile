@@ -458,9 +458,8 @@ pub fn verify_operator_transaction(
 }
 
 pub fn serialize_operator_outcome(outcome: &D1OperatorOutcome) -> Result<String, D1Error> {
-    let value = serde_json::to_value(outcome).map_err(|error| {
-        D1Error::new(format!("cannot serialize D1 operator outcome: {error}"))
-    })?;
+    let value = serde_json::to_value(outcome)
+        .map_err(|error| D1Error::new(format!("cannot serialize D1 operator outcome: {error}")))?;
     canonical_json(&value).map_err(D1Error::new)
 }
 
@@ -578,7 +577,11 @@ mod tests {
         assert_eq!(outcome.status, "ACTION_REQUIRED");
         assert_eq!(outcome.outcome, "REFRESH_REQUIRED");
         assert_eq!(outcome.transaction_id.as_deref(), Some(expected.as_str()));
-        assert!(outcome.remediation.contains("exact predecessor TransactionId"));
+        assert!(
+            outcome
+                .remediation
+                .contains("exact predecessor TransactionId")
+        );
         Ok(())
     }
 
