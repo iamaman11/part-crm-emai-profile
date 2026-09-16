@@ -16,6 +16,7 @@ import importlib.util
 import json
 import re
 import sys
+import tempfile
 from pathlib import Path
 from types import ModuleType
 from typing import Any, Callable
@@ -296,6 +297,28 @@ def write_exact(path: Path, payload: bytes) -> None:
     path.write_bytes(payload)
 
 
+def materialize_wrangler_migration_inventory(bootstrap: ModuleType, output_root: Path) -> list[str]:
+    source_dir = Path(bootstrap.MIGRATIONS_DIR)
+    migrations = bootstrap.validated_migrations(source_dir)
+    target_dir = output_root / "migrations"
+    if target_dir.exists():
+        if target_dir.is_symlink() or not target_dir.is_dir():
+            fail(f"Wrangler migration output must be a real directory: {target_dir}")
+        if any(target_dir.iterdir()):
+            fail(f"Wrangler migration output must start empty: {target_dir}")
+    else:
+        target_dir.mkdir(parents=True)
+    names: list[str] = []
+    for source in migrations:
+        payload = source.read_bytes()
+        target = target_dir / source.name
+        write_exact(target, payload)
+        if target.read_bytes() != payload:
+            fail(f"Wrangler migration materialization drifted: {source.name}")
+        names.append(source.name)
+    return names
+
+
 def materialize(reconstruction_path: Path, output_sql: Path, output_metadata: Path) -> dict[str, Any]:
     bootstrap = load_bootstrap_authority()
     reconstruction = read_strict_json(reconstruction_path, "CURRENT reconstruction JSON")
@@ -306,6 +329,7 @@ def materialize(reconstruction_path: Path, output_sql: Path, output_metadata: Pa
     payload_sha256 = sha256_bytes(payload)
     if convergence.get("bootstrap_sha256") != payload_sha256:
         fail("CURRENT bootstrap bytes differ from convergence proof identity")
+    wrangler_inventory = materialize_wrangler_migration_inventory(bootstrap, output_sql.parent)
     metadata = {
         "schema_version": 1,
         "kind": "D1_CURRENT_RECONSTRUCTION_MATERIALIZATION",
@@ -314,6 +338,7 @@ def materialize(reconstruction_path: Path, output_sql: Path, output_metadata: Pa
         "provider_effect": ALLOWED_EFFECT,
         "bootstrap_sha256": payload_sha256,
         "bootstrap_bytes": len(payload),
+        "wrangler_migration_inventory": wrangler_inventory,
         "provider_mutation_authorized": False,
         "production_mutation_authorized": False,
     }
@@ -401,6 +426,18 @@ def self_test() -> None:
     if binding["expected_ledger_migrations"][-1] != binding["target_schema_revision"]:
         fail("self-test CURRENT ledger does not terminate at target revision")
 
+    expected_inventory = [path.name for path in bootstrap.validated_migrations(bootstrap.MIGRATIONS_DIR)]
+    with tempfile.TemporaryDirectory(prefix="d1-reconstruction-wrangler-") as temp_dir:
+        output_root = Path(temp_dir)
+        actual_inventory = materialize_wrangler_migration_inventory(bootstrap, output_root)
+        if actual_inventory != expected_inventory:
+            fail("self-test Wrangler migration inventory differs from canonical Catalog migrations")
+        for name in actual_inventory:
+            source = Path(bootstrap.MIGRATIONS_DIR) / name
+            target = output_root / "migrations" / name
+            if sha256_bytes(source.read_bytes()) != sha256_bytes(target.read_bytes()):
+                fail(f"self-test Wrangler migration bytes drifted: {name}")
+
     repository_drift = copy.deepcopy(valid)
     repository_drift["plan"]["repository_identity_sha256"] = "0" * 64
     repository_drift["reconstruction_id"] = canonical_sha256(repository_drift["plan"])
@@ -450,7 +487,8 @@ def self_test() -> None:
         "CURRENT reconstruction materializer adapter passed: "
         f"reconstruction_id={binding['reconstruction_id']} "
         f"target={binding['target_schema_revision']} "
-        f"bootstrap_sha256={sha256_bytes(first)} provider_mutation=NO production_mutation=NO"
+        f"bootstrap_sha256={sha256_bytes(first)} "
+        f"wrangler_migrations={len(expected_inventory)} provider_mutation=NO production_mutation=NO"
     )
 
 
