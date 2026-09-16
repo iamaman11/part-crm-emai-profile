@@ -8,7 +8,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 const OBSERVED_AT: i64 = 1_789_410_000;
-const FRESH_UNTIL: i64 = OBSERVED_AT + 900;
+const FRESH_UNTIL: i64 = OBSERVED_AT + 3600;
 const ISSUED_AT: i64 = OBSERVED_AT + 10;
 const EXPIRES_AT: i64 = OBSERVED_AT + 600;
 const EVALUATED_AT: i64 = OBSERVED_AT + 20;

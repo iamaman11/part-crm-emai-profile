@@ -425,7 +425,7 @@ mod tests {
         let provider_observation = json!({
             "target": target(),
             "observed_at_unix_seconds": T0,
-            "fresh_until_unix_seconds": T0 + 900,
+            "fresh_until_unix_seconds": T0 + 3600,
             "observation_source": "fixture:empty-staging",
             "predecessor_ledger_sha256": predecessor_sha,
             "remote_migrations": []
@@ -452,7 +452,7 @@ mod tests {
             "supported_schema_max": "0035_pas2_payload_fingerprint_contract.sql",
             "provider_observation": provider_observation,
             "observation_digest": observation_digest,
-            "freshness_max_age_seconds": 900,
+            "freshness_max_age_seconds": 3600,
             "allowed_provider_effects": ["D1_BOOTSTRAP_CURRENT_EXACT_CONSTRUCTION"],
             "forbidden_provider_effects": [
                 "D1_MIGRATIONS_APPLY_EXACT_PLAN",
@@ -673,13 +673,18 @@ mod tests {
         let receipt = receipt(&reconstruction, ExecutionEventKind::Completed)?;
         let post = observation(&reconstruction, true, T0 + 10)?;
         let Err(error) =
-            verify_current_reconstruction_post_state(&reconstruction, &receipt, &post, T0 + 911)
+            verify_current_reconstruction_post_state(&reconstruction, &receipt, &post, T0 + 3611)
         else {
             return Err(D1Error::new(
                 "stale fixture observation unexpectedly passed",
             ));
         };
-        assert_eq!(error.gate_result_json()["reason_code"], "STALE_OBSERVATION");
+        assert_eq!(
+            error.gate_result_json()["reason_code"],
+            "STALE_OBSERVATION",
+            "unexpected stale-post-state diagnostic: {}",
+            error.gate_result_json()
+        );
         Ok(())
     }
 
