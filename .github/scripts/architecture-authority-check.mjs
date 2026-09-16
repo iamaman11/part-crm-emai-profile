@@ -18,7 +18,7 @@ const EXPECTED_LIFECYCLE = new Set([
   'mailbox-resolver.caller-auth',
   'control-plane.client-contact-protection',
   'profile-generation.r2-access',
-  'profile-bridge.client-certificate-pki',
+  'profile-bridge.device-application-identity',
   'resolver.google-oauth-application',
   'resolver.microsoft-oauth-application',
 ]);
@@ -124,65 +124,112 @@ function validate(subjects, sources) {
   if (!r2 || r2.credential_pair_atomic !== true || r2.routine_release_rotation !== false) {
     errors.push('R2 credential pair must remain atomic and outside routine release rotation');
   }
-  const bridgePki = lifecycle.concerns?.find((entry) => entry.id === 'profile-bridge.client-certificate-pki');
-  if (!bridgePki
-      || bridgePki.externally_issued !== true
-      || bridgePki.environment_ownership !== 'EXPLICIT_ENVIRONMENT_SCOPED_PKI'
-      || bridgePki.v2_environment !== 'staging'
-      || bridgePki.production_enabled !== false
-      || bridgePki.routine_release_rotation !== false
-      || bridgePki.trust_model !== 'DEDICATED_ENVIRONMENT_SCOPED_CLIENT_CA_CHAIN'
-      || bridgePki.issuer !== 'EXTERNAL_PROTECTED_CERTIFICATE_AUTHORITY'
-      || bridgePki.ca_signing_material_policy !== 'NO_GIT_NO_ISSUE_NO_ARTIFACT_NO_PROVIDER_PAYLOAD_NO_READBACK'
-      || bridgePki.ca_public_chain_classification !== 'NON_SECRET_EXTERNAL_FACT'
-      || bridgePki.ca_public_chain_digest !== 'SHA256_REQUIRED'
-      || bridgePki.provider_generated_certificate_ids !== 'OBSERVED_NOT_SOURCE_AUTHORITY'
-      || bridgePki.ca_or_common_name_grants_device_authorization !== false
-      || bridgePki.device_authorization_owner !== 'EXISTING_D1_DEVICE_PRINCIPAL_FINGERPRINT_BINDING'
-      || bridgePki.client_certificate_scope !== 'UNIQUE_PER_DEVICE'
-      || bridgePki.client_auth_eku_oid !== '1.3.6.1.5.5.7.3.2'
-      || bridgePki.maximum_lifetime !== lifecycle.global_invariants?.exportable_static_credential_max_lifetime
-      || bridgePki.primary_enrollment !== 'AUTHENTICATED_ONE_SHOT_LOCAL_KEY_CSR'
-      || bridgePki.private_key_origin !== 'TARGET_WINDOWS_HOST'
-      || bridgePki.private_key_exportable !== false
-      || bridgePki.private_key_transport !== 'FORBIDDEN'
-      || bridgePki.enrollment_authority !== 'AUTHENTICATED_USER_SESSION_PLUS_ONE_SHOT_ENROLLMENT_CLAIM'
-      || bridgePki.certificate_delivery !== 'PUBLIC_CERTIFICATE_CHAIN_ONLY_TO_EXISTING_LOCAL_KEY'
-      || bridgePki.operator_pfx_primary_path !== false
-      || bridgePki.pfx_admin_recovery_path !== 'OPTIONAL_NOT_B7_PRIMARY_PATH'
-      || bridgePki.host_handoff !== 'PASSWORD_PROTECTED_PFX_TO_BRIDGE_HOST_OPS'
-      || bridgePki.host_handoff_role !== 'OPTIONAL_ADMIN_RECOVERY_ONLY_NOT_PRIMARY_ENROLLMENT'
-      || bridgePki.windows_import_private_key_policy !== 'NON_EXPORTABLE'
-      || bridgePki.overlap_model !== 'REPLACEMENT_BOUND_AND_VERIFIED_BEFORE_PREVIOUS_CERTIFICATE_RETIREMENT') {
-    errors.push('Bridge certificate lifecycle must use automatic local-key enrollment; PFX is recovery-only and verify-before-retire remains mandatory');
+
+  const bridgeIdentity = lifecycle.concerns?.find((entry) => entry.id === 'profile-bridge.device-application-identity');
+  if (!bridgeIdentity
+      || bridgeIdentity.externally_issued !== false
+      || bridgeIdentity.environment_ownership !== 'BACKEND_REGISTERED_DEVICE_AND_APPLICATION_SESSION_AUTHORITY'
+      || bridgeIdentity.v2_environment !== 'staging'
+      || bridgeIdentity.production_enabled !== false
+      || bridgeIdentity.routine_release_rotation !== false
+      || bridgeIdentity.key_platform !== 'WINDOWS_CNG'
+      || bridgeIdentity.key_algorithm !== 'P-256'
+      || bridgeIdentity.device_key_scope !== 'UNIQUE_PER_DEVICE'
+      || bridgeIdentity.private_key_origin !== 'TARGET_WINDOWS_HOST'
+      || bridgeIdentity.private_key_exportable !== false
+      || bridgeIdentity.private_key_transport !== 'FORBIDDEN'
+      || bridgeIdentity.material_readback !== false
+      || bridgeIdentity.registration_authority !== 'AUTHENTICATED_USER_PLUS_ONE_TIME_BROWSER_PAIRING'
+      || bridgeIdentity.registration_binding !== 'AUTHENTICATED_USER_PLUS_DEVICE_ID_PLUS_PUBLIC_KEY_PLUS_PROOF_OF_POSSESSION'
+      || bridgeIdentity.application_session_owner !== 'BACKEND_APPLICATION_AUTHORIZATION'
+      || bridgeIdentity.application_session_binding !== 'USER_PLUS_REGISTERED_DEVICE_PLUS_AUTH_EPOCH'
+      || bridgeIdentity.application_session_revocable !== true
+      || bridgeIdentity.request_proof !== 'BOUNDED_FRESH_CHALLENGE_OR_REQUEST_PROOF'
+      || bridgeIdentity.legacy_service_token_fallback !== false
+      || bridgeIdentity.legacy_access_mtls_fallback !== false
+      || bridgeIdentity.x509_client_certificate_required !== false
+      || bridgeIdentity.csr_required !== false
+      || bridgeIdentity.overlap_model !== 'REPLACEMENT_KEY_REGISTERED_AND_PROVED_BEFORE_PREVIOUS_DEVICE_KEY_RETIREMENT') {
+    errors.push('Bridge identity lifecycle must remain local CNG device registration plus revocable application session/proof with no PKI fallback');
   }
+
   if (profile.kind !== 'PROFILE_SECURITY_AUTHORITY' || profile.status !== 'current'
       || profile.credential_authority !== PATHS.authority) {
     errors.push('profile security authority root drifted');
   }
-  const bridgeAdmission = profile.bridge_machine_mtls_admission;
-  if (!bridgeAdmission
-      || bridgeAdmission.client_certificate?.primary_enrollment !== 'AUTHENTICATED_ONE_SHOT_LOCAL_KEY_CSR'
-      || bridgeAdmission.client_certificate?.private_key_origin !== 'TARGET_WINDOWS_HOST'
-      || bridgeAdmission.client_certificate?.private_key_exportable !== false
-      || bridgeAdmission.client_certificate?.private_key_transport !== 'FORBIDDEN'
-      || bridgeAdmission.client_certificate?.enrollment_authority !== 'AUTHENTICATED_USER_SESSION_PLUS_ONE_SHOT_ENROLLMENT_CLAIM'
-      || bridgeAdmission.client_certificate?.certificate_delivery !== 'PUBLIC_CERTIFICATE_CHAIN_ONLY_TO_EXISTING_LOCAL_KEY'
-      || bridgeAdmission.client_certificate?.operator_pfx_primary_path !== false
-      || bridgeAdmission.client_certificate?.pfx_admin_recovery_path !== 'OPTIONAL_NOT_B7_PRIMARY_PATH') {
-    errors.push('profile security must keep Bridge enrollment local-key, automatic and free of operator PFX on the B7 primary path');
+  if (profile.bridge_machine_mtls_admission !== undefined) {
+    errors.push('historical Bridge mTLS admission must not remain current profile authority');
   }
+  const bridgeAdmission = profile.bridge_device_application_admission;
+  if (!bridgeAdmission
+      || bridgeAdmission.owner !== 'profile-bridge-device-identity-authority'
+      || bridgeAdmission.purpose !== 'DEVICE_BOUND_APPLICATION_AUTHORIZATION'
+      || bridgeAdmission.v2_environment !== 'staging'
+      || bridgeAdmission.production_enabled !== false
+      || bridgeAdmission.human_identity?.owner !== 'CLOUDFLARE_ACCESS_INITIAL_BROWSER_USER_IDENTITY_ONLY'
+      || bridgeAdmission.human_identity?.audience_var !== 'ACCESS_AUDIENCE'
+      || bridgeAdmission.human_identity?.ordinary_restart_browser_login_required !== false
+      || bridgeAdmission.human_identity?.machine_identity_grants_human_actor !== false
+      || bridgeAdmission.device_key?.platform !== 'WINDOWS_CNG'
+      || bridgeAdmission.device_key?.algorithm !== 'P-256'
+      || bridgeAdmission.device_key?.scope !== 'UNIQUE_PER_DEVICE'
+      || bridgeAdmission.device_key?.private_key_origin !== 'TARGET_WINDOWS_HOST'
+      || bridgeAdmission.device_key?.private_key_exportable !== false
+      || bridgeAdmission.device_key?.private_key_transport !== 'FORBIDDEN'
+      || bridgeAdmission.device_key?.material_readback !== false
+      || bridgeAdmission.device_registration?.binding !== 'AUTHENTICATED_USER_PLUS_DEVICE_ID_PLUS_PUBLIC_KEY_PLUS_PROOF_OF_POSSESSION'
+      || bridgeAdmission.device_registration?.one_time_browser_pairing !== true
+      || bridgeAdmission.device_registration?.backend_registered_device_state !== true
+      || bridgeAdmission.device_registration?.disabled_user_or_device !== 'FAIL_CLOSED'
+      || bridgeAdmission.application_session?.owner !== 'BACKEND_APPLICATION_AUTHORIZATION'
+      || bridgeAdmission.application_session?.binding !== 'USER_PLUS_REGISTERED_DEVICE_PLUS_AUTH_EPOCH'
+      || bridgeAdmission.application_session?.revocable !== true
+      || bridgeAdmission.application_session?.shared_by_ui_and_bridge_runtime !== true
+      || bridgeAdmission.application_session?.cloudflare_access_session_revoke_alone_is_sufficient !== false
+      || bridgeAdmission.request_proof?.key !== 'REGISTERED_DEVICE_P256_PUBLIC_KEY'
+      || bridgeAdmission.request_proof?.private_key_provider !== 'WINDOWS_CNG_NON_EXPORTABLE'
+      || bridgeAdmission.request_proof?.freshness !== 'BOUNDED_FRESH_CHALLENGE_OR_REQUEST_PROOF'
+      || bridgeAdmission.request_proof?.invalid_signature !== 'REJECT'
+      || bridgeAdmission.request_proof?.replay_or_expiry !== 'REJECT'
+      || bridgeAdmission.request_proof?.stale_session_or_auth_epoch !== 'REJECT'
+      || bridgeAdmission.legacy_admission?.bridge_access_audience !== 'FORBIDDEN'
+      || bridgeAdmission.legacy_admission?.service_token_fallback !== false
+      || bridgeAdmission.legacy_admission?.access_mtls_fallback !== false
+      || bridgeAdmission.legacy_admission?.custom_ca_required !== false
+      || bridgeAdmission.legacy_admission?.x509_client_certificate_required !== false
+      || bridgeAdmission.legacy_admission?.csr_required !== false
+      || bridgeAdmission.machine_projection?.provider_ids !== 'OBSERVED_NOT_SOURCE_AUTHORED'
+      || bridgeAdmission.machine_projection?.missing_required_input !== 'NOT_READY_FAIL_CLOSED'
+      || bridgeAdmission.machine_projection?.manual_provider_payload !== 'FORBIDDEN'
+      || bridgeAdmission.mutation_authorization !== 'SEPARATE_EXACT_CANDIDATE_ONE_SHOT_REQUIRED'
+      || bridgeAdmission.production_mutation !== false) {
+    errors.push('profile security must keep Bridge admission on local CNG device registration, revocable application session and fresh proof with no PKI/service-token fallback');
+  }
+
+  const requiredInputs = ['canonical_environment', 'canonical_target_hostname', 'canonical_access_audience'];
+  if (!sameSet(bridgeAdmission?.machine_projection?.required_non_secret_inputs, new Set(requiredInputs))) {
+    errors.push('Bridge device/application projection inputs must remain exact and non-secret');
+  }
+  const requiredEffects = new Set([
+    'ENSURE_HUMAN_ACCESS_IDENTITY_REMAINS_BROWSER_ONLY',
+    'ENSURE_LEGACY_BRIDGE_SERVICE_TOKEN_OR_MTLS_ADMISSION_ABSENT',
+  ]);
+  if (!sameSet(bridgeAdmission?.machine_projection?.desired_access_effects, requiredEffects)) {
+    errors.push('Bridge device/application desired Access effects drifted');
+  }
+
   const deviceKey = profile.security_domains?.find((entry) => entry.id === 'profile-bridge.device-private-key');
   const enrollmentClaim = profile.security_domains?.find((entry) => entry.id === 'profile-bridge.enrollment-claim');
   if (!deviceKey
       || deviceKey.application_boundary !== 'HANDLE_ONLY'
       || deviceKey.material_readback !== false
       || deviceKey.raw_handle_visibility !== false
-      || deviceKey.primary_enrollment_use !== 'LOCAL_NON_EXPORTABLE_KEY_FOR_CLIENT_CERTIFICATE_CSR'
+      || deviceKey.primary_enrollment_use !== 'APPLICATION_DEVICE_REGISTRATION_AND_FRESH_PROOF_OF_POSSESSION'
       || enrollmentClaim?.replay_policy !== 'REJECT_REPLAY_AND_DEVICE_REBIND'
       || enrollmentClaim?.retirement_policy !== 'EXPIRE_OR_SINGLE_SUCCESSFUL_REDEMPTION'
-      || enrollmentClaim?.certificate_enrollment_scope !== 'ONE_LOCAL_DEVICE_KEY_ONE_CERTIFICATE_BINDING') {
-    errors.push('Bridge device-key/enrollment claim ownership drifted');
+      || enrollmentClaim?.device_registration_scope !== 'ONE_AUTHENTICATED_USER_ONE_DEVICE_KEY_ONE_DEVICE_REGISTRATION'
+      || enrollmentClaim?.certificate_enrollment_scope !== undefined) {
+    errors.push('Bridge device-key/enrollment claim ownership drifted from one-shot application device registration');
   }
 
   for (const [name, subject] of Object.entries({ authority, lifecycle, profile })) {
@@ -258,34 +305,54 @@ function main() {
     revokeFirst.lifecycle.concerns[0].retire_previous_requires_verified_replacement = false;
     assertRejected('revoke-before-verify', revokeFirst, sources);
 
-    const bridgeCaAuthorizesDevice = structuredClone(subjects);
-    bridgeCaAuthorizesDevice.lifecycle.concerns.find((entry) => entry.id === 'profile-bridge.client-certificate-pki').ca_or_common_name_grants_device_authorization = true;
-    assertRejected('Bridge CA trust becoming device authorization', bridgeCaAuthorizesDevice, sources);
-
     const bridgeProduction = structuredClone(subjects);
-    bridgeProduction.lifecycle.concerns.find((entry) => entry.id === 'profile-bridge.client-certificate-pki').production_enabled = true;
-    assertRejected('Bridge PKI Production pre-enable', bridgeProduction, sources);
+    bridgeProduction.lifecycle.concerns.find((entry) => entry.id === 'profile-bridge.device-application-identity').production_enabled = true;
+    assertRejected('Bridge device identity Production pre-enable', bridgeProduction, sources);
 
-    const pfxPrimary = structuredClone(subjects);
-    pfxPrimary.lifecycle.concerns.find((entry) => entry.id === 'profile-bridge.client-certificate-pki').operator_pfx_primary_path = true;
-    assertRejected('Bridge operator PFX becoming primary enrollment', pfxPrimary, sources);
+    const lifecycleExportableKey = structuredClone(subjects);
+    lifecycleExportableKey.lifecycle.concerns.find((entry) => entry.id === 'profile-bridge.device-application-identity').private_key_exportable = true;
+    assertRejected('Bridge lifecycle key becoming exportable', lifecycleExportableKey, sources);
+
+    const lifecycleMtlsFallback = structuredClone(subjects);
+    lifecycleMtlsFallback.lifecycle.concerns.find((entry) => entry.id === 'profile-bridge.device-application-identity').legacy_access_mtls_fallback = true;
+    assertRejected('Bridge lifecycle mTLS fallback', lifecycleMtlsFallback, sources);
+
+    const lifecycleServiceTokenFallback = structuredClone(subjects);
+    lifecycleServiceTokenFallback.lifecycle.concerns.find((entry) => entry.id === 'profile-bridge.device-application-identity').legacy_service_token_fallback = true;
+    assertRejected('Bridge lifecycle service-token fallback', lifecycleServiceTokenFallback, sources);
+
+    const lifecycleCertificate = structuredClone(subjects);
+    lifecycleCertificate.lifecycle.concerns.find((entry) => entry.id === 'profile-bridge.device-application-identity').x509_client_certificate_required = true;
+    assertRejected('Bridge lifecycle certificate admission', lifecycleCertificate, sources);
+
+    const legacyAdmission = structuredClone(subjects);
+    legacyAdmission.profile.bridge_machine_mtls_admission = { owner: 'legacy' };
+    assertRejected('legacy Bridge mTLS profile authority', legacyAdmission, sources);
 
     const exportableDeviceKey = structuredClone(subjects);
-    exportableDeviceKey.profile.bridge_machine_mtls_admission.client_certificate.private_key_exportable = true;
+    exportableDeviceKey.profile.bridge_device_application_admission.device_key.private_key_exportable = true;
     assertRejected('Bridge primary device key becoming exportable', exportableDeviceKey, sources);
+
+    const profileServiceTokenFallback = structuredClone(subjects);
+    profileServiceTokenFallback.profile.bridge_device_application_admission.legacy_admission.service_token_fallback = true;
+    assertRejected('Bridge profile service-token fallback', profileServiceTokenFallback, sources);
 
     const reusableEnrollment = structuredClone(subjects);
     reusableEnrollment.profile.security_domains.find((entry) => entry.id === 'profile-bridge.enrollment-claim').retirement_policy = 'REUSABLE';
     assertRejected('Bridge enrollment claim becoming reusable', reusableEnrollment, sources);
 
+    const certificateEnrollment = structuredClone(subjects);
+    certificateEnrollment.profile.security_domains.find((entry) => entry.id === 'profile-bridge.enrollment-claim').certificate_enrollment_scope = 'legacy';
+    assertRejected('Bridge certificate enrollment resurrection', certificateEnrollment, sources);
+
     const insecureProfile = structuredClone(subjects);
     insecureProfile.profile.status = 'historical';
     assertRejected('profile authority rollback', insecureProfile, sources);
 
-    console.log('Credential/profile authority negative fixtures rejected; automatic Bridge enrollment remains local-key and fail-closed.');
+    console.log('Credential/profile authority negative fixtures rejected; Bridge admission remains local CNG device-bound, session-revocable and PKI-fallback-free.');
     return;
   }
-  console.log('Credential lifecycle and profile security authorities are canonical; automatic Bridge enrollment is local-key and operator-PFX-free on the primary path.');
+  console.log('Credential lifecycle and profile security authorities are canonical; Bridge admission is device-bound CNG/application-session proof with historical PKI fallback absent.');
 }
 
 try {

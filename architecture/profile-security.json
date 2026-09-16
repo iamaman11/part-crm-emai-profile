@@ -22,74 +22,67 @@
     "production_key_recovery_proof_in_ar8": false,
     "production_mutation": false
   },
-  "bridge_machine_mtls_admission": {
-    "id": "profile-bridge.machine-mtls-admission",
+  "bridge_device_application_admission": {
+    "id": "profile-bridge.device-application-admission",
     "owner": "profile-bridge-device-identity-authority",
-    "purpose": "TRANSPORT_AUTHENTICATION_ONLY_NOT_DEVICE_OR_RESOURCE_AUTHORIZATION",
+    "purpose": "DEVICE_BOUND_APPLICATION_AUTHORIZATION",
     "v2_environment": "staging",
     "production_enabled": false,
-    "trust_model": "DEDICATED_ENVIRONMENT_SCOPED_CLIENT_CA_CHAIN",
-    "environment_cross_trust": "FORBIDDEN",
-    "access_perimeter": {
-      "application_scope": "CANONICAL_ENVIRONMENT_SHARED_PERIMETER",
-      "bridge_route_scope": "/bridge/*",
-      "separate_access_application_required": false,
-      "human_audience_var": "ACCESS_AUDIENCE",
-      "bridge_audience_var": "BRIDGE_ACCESS_AUDIENCE",
-      "audience_binding": "SAME_CANONICAL_ACCESS_APPLICATION_AUDIENCE",
+    "human_identity": {
+      "owner": "CLOUDFLARE_ACCESS_INITIAL_BROWSER_USER_IDENTITY_ONLY",
+      "audience_var": "ACCESS_AUDIENCE",
+      "ordinary_restart_browser_login_required": false,
       "machine_identity_grants_human_actor": false
     },
-    "access_policy": {
-      "action": "SERVICE_AUTH",
-      "include_selector": "VALID_CERTIFICATE",
-      "common_name_authorization": false,
-      "ca_trust_grants_device_authorization": false,
-      "existing_non_bridge_service_token_policy_may_coexist": true
-    },
-    "device_authorization": {
-      "owner": "EXISTING_D1_DEVICE_PRINCIPAL_FINGERPRINT_BINDING",
-      "certificate_identity": "CANONICAL_LOWERCASE_SHA256_FINGERPRINT",
-      "admission_rule": "ACCESS_ASSERTION_AND_VERIFIED_MTLS_AND_ACTIVE_D1_FINGERPRINT_BINDING",
-      "ca_or_common_name_alone_authorizes_device": false
-    },
-    "ca_chain": {
-      "basic_constraints_ca_required": true,
-      "minimum_signature_policy": "SHA256_OR_STRONGER",
-      "public_chain_classification": "NON_SECRET_EXTERNAL_FACT",
-      "public_chain_digest": "SHA256_REQUIRED",
-      "associated_hostname_source": "CANONICAL_ENVIRONMENT_DEPLOYMENT_TARGET",
-      "signing_material_policy": "EXTERNAL_PROTECTED_CERTIFICATE_AUTHORITY_ONLY_NO_GIT_NO_ISSUE_NO_ARTIFACT_NO_PROVIDER_PAYLOAD",
-      "provider_generated_certificate_ids_are_source_authority": false
-    },
-    "client_certificate": {
+    "device_key": {
+      "platform": "WINDOWS_CNG",
+      "algorithm": "P-256",
       "scope": "UNIQUE_PER_DEVICE",
-      "client_auth_eku_oid": "1.3.6.1.5.5.7.3.2",
-      "lifetime_policy": "MUST_NOT_EXCEED_CREDENTIAL_LIFECYCLE_EXPORTABLE_STATIC_MAXIMUM",
-      "primary_enrollment": "AUTHENTICATED_ONE_SHOT_LOCAL_KEY_CSR",
       "private_key_origin": "TARGET_WINDOWS_HOST",
       "private_key_exportable": false,
       "private_key_transport": "FORBIDDEN",
-      "enrollment_authority": "AUTHENTICATED_USER_SESSION_PLUS_ONE_SHOT_ENROLLMENT_CLAIM",
-      "certificate_delivery": "PUBLIC_CERTIFICATE_CHAIN_ONLY_TO_EXISTING_LOCAL_KEY",
-      "operator_pfx_primary_path": false,
-      "pfx_admin_recovery_path": "OPTIONAL_NOT_B7_PRIMARY_PATH",
-      "windows_import_private_key_policy": "NON_EXPORTABLE",
-      "fingerprint_binding_must_precede_effective_device_use": true,
-      "revoke_or_rebind_uses_existing_d1_device_binding_owner": true
+      "material_readback": false
+    },
+    "device_registration": {
+      "binding": "AUTHENTICATED_USER_PLUS_DEVICE_ID_PLUS_PUBLIC_KEY_PLUS_PROOF_OF_POSSESSION",
+      "one_time_browser_pairing": true,
+      "backend_registered_device_state": true,
+      "disabled_user_or_device": "FAIL_CLOSED"
+    },
+    "application_session": {
+      "owner": "BACKEND_APPLICATION_AUTHORIZATION",
+      "binding": "USER_PLUS_REGISTERED_DEVICE_PLUS_AUTH_EPOCH",
+      "revocable": true,
+      "shared_by_ui_and_bridge_runtime": true,
+      "cloudflare_access_session_revoke_alone_is_sufficient": false
+    },
+    "request_proof": {
+      "key": "REGISTERED_DEVICE_P256_PUBLIC_KEY",
+      "private_key_provider": "WINDOWS_CNG_NON_EXPORTABLE",
+      "freshness": "BOUNDED_FRESH_CHALLENGE_OR_REQUEST_PROOF",
+      "invalid_signature": "REJECT",
+      "replay_or_expiry": "REJECT",
+      "stale_session_or_auth_epoch": "REJECT"
+    },
+    "legacy_admission": {
+      "bridge_access_audience": "FORBIDDEN",
+      "service_token_fallback": false,
+      "access_mtls_fallback": false,
+      "custom_ca_required": false,
+      "x509_client_certificate_required": false,
+      "csr_required": false
     },
     "machine_projection": {
       "required_non_secret_inputs": [
         "canonical_environment",
         "canonical_target_hostname",
-        "canonical_access_audience",
-        "ca_chain_pem",
-        "ca_chain_sha256"
+        "canonical_access_audience"
       ],
       "provider_ids": "OBSERVED_NOT_SOURCE_AUTHORED",
       "missing_required_input": "NOT_READY_FAIL_CLOSED",
       "desired_access_effects": [
-        "ENSURE_MTLS_CA_CHAIN_ASSOCIATED_WITH_CANONICAL_HOSTNAME",
-        "ENSURE_SERVICE_AUTH_VALID_CERTIFICATE_POLICY_ATTACHED_TO_CANONICAL_SHARED_ACCESS_APPLICATION"
+        "ENSURE_HUMAN_ACCESS_IDENTITY_REMAINS_BROWSER_ONLY",
+        "ENSURE_LEGACY_BRIDGE_SERVICE_TOKEN_OR_MTLS_ADMISSION_ABSENT"
       ],
       "manual_provider_payload": "FORBIDDEN"
     },
@@ -133,14 +126,14 @@
       "id": "profile-bridge.device-private-key",
       "class": "DEVICE_PRIVATE_KEY",
       "owner": "profile-bridge-device-identity-authority",
-      "protected_value_authority": "platform secure device-key store behind opaque key handle; production provider not yet accepted",
-      "legitimate_mutable_authority": "single platform device-key adapter behind DeviceKeyPort",
-      "version_state_source": "device identity/provider/key-version status; never raw key handle or private material",
+      "protected_value_authority": "native Windows CNG non-exportable P-256 application key behind opaque key handle",
+      "legitimate_mutable_authority": "single native Windows CNG device-key adapter behind DeviceKeyPort",
+      "version_state_source": "device identity/public-key version/status; never raw key handle or private material",
       "application_boundary": "HANDLE_ONLY",
       "material_readback": false,
       "raw_handle_visibility": false,
-      "primary_enrollment_use": "LOCAL_NON_EXPORTABLE_KEY_FOR_CLIENT_CERTIFICATE_CSR",
-      "implementation_owner": "AR-10 supported Profile Bridge runtime integration; physical/platform key-protection proof remains a later pre-production requirement",
+      "primary_enrollment_use": "APPLICATION_DEVICE_REGISTRATION_AND_FRESH_PROOF_OF_POSSESSION",
+      "implementation_owner": "shipping Windows Profile Bridge native device-key adapter",
       "production_proof_complete": false
     },
     {
@@ -170,7 +163,7 @@
       "claim_value_visibility": "REDACTED_ONLY",
       "replay_policy": "REJECT_REPLAY_AND_DEVICE_REBIND",
       "retirement_policy": "EXPIRE_OR_SINGLE_SUCCESSFUL_REDEMPTION",
-      "certificate_enrollment_scope": "ONE_LOCAL_DEVICE_KEY_ONE_CERTIFICATE_BINDING",
+      "device_registration_scope": "ONE_AUTHENTICATED_USER_ONE_DEVICE_KEY_ONE_DEVICE_REGISTRATION",
       "production_proof_complete": false
     },
     {
