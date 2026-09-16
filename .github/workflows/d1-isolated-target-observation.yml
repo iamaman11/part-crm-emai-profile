@@ -14,7 +14,7 @@ on:
   workflow_dispatch:
     inputs:
       operation_mode:
-        description: 'Observation mode; reconstruction is an explicit exact-target Prepare dispatch'
+        description: 'Observation mode; reconstruction continues the machine-owned reconstruction state machine'
         required: false
         default: current
         type: choice
@@ -101,6 +101,8 @@ jobs:
           assert re.search(r'PR #[0-9]+', authority_source) is None, 'reconstruction authority must not depend on historical implementation PR numbers'
           assert "checkpoint.get('author_association')" in authority_source
           assert "'PROTECTED_MAIN'" in authority_source
+          assert "'ACTIVE_RECONSTRUCTION_ID'" in authority_source
+          assert 'RECOVERY_REQUIRED' in authority_source and 'FAIL_FORWARD_ONLY' in authority_source
           assert "'account_id'" in authority_source and "'database_name'" in authority_source and "'database_id'" in authority_source
           assert "'canonical_empty_ledger_sha256'" in authority_source and "'canonical_predecessor_sha256'" in authority_source
           assert '\n    branches:\n      - main' in push_block
@@ -121,6 +123,10 @@ jobs:
           assert 'npx --yes wrangler' not in observe_source
           assert 'actions/setup-node@' not in observe_source
           assert "opsctl='tools/opsctl/target/debug/opsctl'" in source
+          assert 'd1-execution-control' in observe_source
+          assert 'RECOVERY_REQUIRED_CONFIRMED' in observe_source
+          assert 'expected_post_state_reached == true' in observe_source
+          assert 'RECON_RECOVERY' in observe_source
           assert 'executable_schema_authority' in adapter
           assert '--sql' not in adapter
           assert 'SELECT name FROM sqlite_master' in adapter
@@ -151,6 +157,8 @@ jobs:
           assert 're' + 'construct:' not in source
           artifact_name = 'd1-transaction-preflight-' + '$' + '{{ github.run_id }}-' + '$' + '{{ github.run_attempt }}-' + '$' + '{{ github.sha }}'
           assert artifact_name in source
+          recovery_artifact = 'd1-reconstruction-recovery-' + '$' + '{{ github.run_id }}-' + '$' + '{{ github.run_attempt }}-' + '$' + '{{ github.sha }}'
+          assert recovery_artifact in source
           PY
 
   observe:
@@ -216,7 +224,7 @@ jobs:
               if ' = ' in line:
                   name, value = line.split(' = ', 1)
                   values.setdefault(name.strip(), value.strip())
-          required = ('CURRENT_STAGE', 'CURRENT_STAGE_ISSUE', 'PROTECTED_MAIN', 'CURRENT_CHECKPOINT', 'account_id', 'database_name', 'database_id')
+          required = ('CURRENT_STAGE', 'CURRENT_STAGE_ISSUE', 'PROTECTED_MAIN', 'CURRENT_CHECKPOINT', 'ACTIVE_RECONSTRUCTION_ID', 'account_id', 'database_name', 'database_id')
           if any(name not in values for name in required):
               raise SystemExit('CURRENT authority is missing an exact required field')
           if values['CURRENT_STAGE'] != 'V2' or values['CURRENT_STAGE_ISSUE'] != '#584':
@@ -230,14 +238,30 @@ jobs:
               raise SystemExit('CURRENT authority account id is invalid')
           if re.fullmatch(r'[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}', values['database_id']) is None:
               raise SystemExit('CURRENT authority database id is invalid')
+          active = values['ACTIVE_RECONSTRUCTION_ID']
+          recovery = False
+          reconstruction_id = ''
+          if active != 'NONE':
+              match = re.fullmatch(r'([0-9a-f]{64}) / RECOVERY_REQUIRED / FAIL_FORWARD_ONLY', active)
+              if match is None:
+                  raise SystemExit('active reconstruction state is neither NONE nor exact fail-forward recovery')
+              recovery = True
+              reconstruction_id = match.group(1)
           with open(output_path, 'w', encoding='utf-8') as handle:
-              json.dump({'account_id': values['account_id'], 'database_name': values['database_name'], 'database_id': values['database_id'], 'checkpoint_comment_id': checkpoint.group(1)}, handle, sort_keys=True)
+              json.dump({
+                  'account_id': values['account_id'],
+                  'database_name': values['database_name'],
+                  'database_id': values['database_id'],
+                  'checkpoint_comment_id': checkpoint.group(1),
+                  'recovery': recovery,
+                  'reconstruction_id': reconstruction_id,
+              }, handle, sort_keys=True)
           PY
           checkpoint_id="$(jq -er '.checkpoint_comment_id' "$authority/target.json")"
           gh api "repos/$GITHUB_REPOSITORY/issues/comments/$checkpoint_id" > "$authority/checkpoint.json"
           jq -e --arg checkpoint_id "$checkpoint_id" '.id | tostring == $checkpoint_id' "$authority/checkpoint.json" >/dev/null
           python - "$authority/checkpoint.json" "$authority/target.json" "$SOURCE_SHA" <<'PY'
-          import json, sys
+          import json, re, sys
           checkpoint_path, target_path, source_sha = sys.argv[1:]
           checkpoint = json.load(open(checkpoint_path, encoding='utf-8'))
           target = json.load(open(target_path, encoding='utf-8'))
@@ -254,36 +278,68 @@ jobs:
               if ' = ' in line:
                   name, value = line.split(' = ', 1)
                   values.setdefault(name.strip(), value.strip())
-          expected = {
-              'PROTECTED_MAIN': source_sha,
-              'account_id': target['account_id'],
-              'database_name': target['database_name'],
-              'database_id': target['database_id'],
-          }
-          for name, value in expected.items():
-              if values.get(name) != value:
-                  raise SystemExit(f'CURRENT checkpoint semantic identity mismatch: {name}')
-          empty_ledger_sha256 = '18bb30916ec8d7c0eaa18e5ebebdc9b5284fe07cfbf9db69aeaee3bee3211bf2'
-          checkpoint_fingerprints = {
-              values.get('canonical_empty_ledger_sha256'),
-              values.get('canonical_predecessor_sha256'),
-          }
-          if empty_ledger_sha256 not in checkpoint_fingerprints:
-              raise SystemExit('CURRENT checkpoint does not bind the canonical fresh-zero ledger fingerprint')
+          if target['recovery']:
+              if values.get('PROTECTED_MAIN') != source_sha:
+                  raise SystemExit('recovery checkpoint is not rebound to exact current protected main')
+              if values.get('account_id') != target['account_id'] or values.get('database_name') != target['database_name'] or values.get('database_id') != target['database_id']:
+                  raise SystemExit('recovery checkpoint target identity drifted')
+              if values.get('reconstruction_id') != target['reconstruction_id']:
+                  raise SystemExit('recovery checkpoint reconstruction_id drifted')
+              prepared = values.get('prepared_run', '')
+              executor = values.get('executor_run', '')
+              effect_source = values.get('reconstruction_source_sha', '')
+              release_set = values.get('reconstruction_release_set_id', '')
+              if re.fullmatch(r'[1-9][0-9]*', prepared) is None or re.fullmatch(r'[1-9][0-9]*', executor) is None:
+                  raise SystemExit('recovery checkpoint prepare/executor run identity is invalid')
+              if re.fullmatch(r'[0-9a-f]{40}', effect_source) is None:
+                  raise SystemExit('recovery checkpoint effect source is invalid')
+              if re.fullmatch(r'release-set-v3-sha256-[0-9a-f]{64}', release_set) is None:
+                  raise SystemExit('recovery checkpoint Release Set identity is invalid')
+              if values.get('SECOND_RECONSTRUCTION_AUTHORIZED') != 'NO' or values.get('EXECUTOR_RERUN_AUTHORIZED') != 'NO':
+                  raise SystemExit('recovery checkpoint does not preserve the no-retry boundary')
+              target.update({
+                  'prepared_run_id': prepared,
+                  'executor_run_id': executor,
+                  'effect_source_sha': effect_source,
+                  'release_set_id': release_set,
+              })
+              with open(target_path, 'w', encoding='utf-8') as handle:
+                  json.dump(target, handle, sort_keys=True)
+          else:
+              expected = {
+                  'PROTECTED_MAIN': source_sha,
+                  'account_id': target['account_id'],
+                  'database_name': target['database_name'],
+                  'database_id': target['database_id'],
+              }
+              for name, value in expected.items():
+                  if values.get(name) != value:
+                      raise SystemExit(f'CURRENT checkpoint semantic identity mismatch: {name}')
+              empty_ledger_sha256 = '18bb30916ec8d7c0eaa18e5ebebdc9b5284fe07cfbf9db69aeaee3bee3211bf2'
+              checkpoint_fingerprints = {
+                  values.get('canonical_empty_ledger_sha256'),
+                  values.get('canonical_predecessor_sha256'),
+              }
+              if empty_ledger_sha256 not in checkpoint_fingerprints:
+                  raise SystemExit('CURRENT checkpoint does not bind the canonical fresh-zero ledger fingerprint')
           PY
           branch_sha="$(gh api "repos/$GITHUB_REPOSITORY/branches/main" --jq '.commit.sha')"
           test "$branch_sha" = "$SOURCE_SHA"
           gh api "repos/$GITHUB_REPOSITORY/branches/main" --jq '.protected' | grep -qx true
-          gh api --paginate "repos/$GITHUB_REPOSITORY/releases?per_page=100" --jq '.[] | select(.target_commitish == env.SOURCE_SHA and (.tag_name | startswith("release-set-v3-sha256-")) and .draft == false and .prerelease == false) | .tag_name' > "$authority/release-tags.txt"
-          release_set_id="$(python - "$authority/release-tags.txt" <<'PY'
+          if [ "$(jq -r '.recovery' "$authority/target.json")" = true ]; then
+            jq -r '"RECON_RECOVERY=true", "RECON_ACCOUNT_ID=\(.account_id)", "RECON_DATABASE_NAME=\(.database_name)", "RECON_DATABASE_ID=\(.database_id)", "RECON_RECONSTRUCTION_ID=\(.reconstruction_id)", "RECON_PREPARED_RUN_ID=\(.prepared_run_id)", "RECON_EXECUTOR_RUN_ID=\(.executor_run_id)", "RECON_EFFECT_SOURCE_SHA=\(.effect_source_sha)", "RECON_RELEASE_SET_ID=\(.release_set_id)"' "$authority/target.json" >> "$GITHUB_ENV"
+          else
+            gh api --paginate "repos/$GITHUB_REPOSITORY/releases?per_page=100" --jq '.[] | select(.target_commitish == env.SOURCE_SHA and (.tag_name | startswith("release-set-v3-sha256-")) and .draft == false and .prerelease == false) | .tag_name' > "$authority/release-tags.txt"
+            release_set_id="$(python - "$authority/release-tags.txt" <<'PY'
           import sys
           matches = [line.strip() for line in open(sys.argv[1], encoding='utf-8') if line.strip()]
           if len(matches) != 1:
               raise SystemExit(f'exact current Release Set is missing/ambiguous: {matches!r}')
           print(matches[0])
           PY
-          )"
-          jq -r --arg release_set_id "$release_set_id" '"RECON_ACCOUNT_ID=\(.account_id)", "RECON_DATABASE_NAME=\(.database_name)", "RECON_DATABASE_ID=\(.database_id)", "RECON_RELEASE_SET_ID=\($release_set_id)"' "$authority/target.json" >> "$GITHUB_ENV"
+            )"
+            jq -r --arg release_set_id "$release_set_id" '"RECON_RECOVERY=false", "RECON_ACCOUNT_ID=\(.account_id)", "RECON_DATABASE_NAME=\(.database_name)", "RECON_DATABASE_ID=\(.database_id)", "RECON_RELEASE_SET_ID=\($release_set_id)"' "$authority/target.json" >> "$GITHUB_ENV"
+          fi
 
       - name: Observe exact current staging Catalog with canonical Cloudflare D1 Read API
         env:
@@ -362,13 +418,14 @@ jobs:
 
           if [ "$OPERATION_MODE" = reconstruction ]; then
             current_release_set_id="$RECON_RELEASE_SET_ID"
-            current_release_source_sha="$SOURCE_SHA"
+            current_release_source_sha="${RECON_EFFECT_SOURCE_SHA:-$SOURCE_SHA}"
           else
           deployments_code="$(curl --silent --show-error --output "$raw/deployments-api.json" --write-out '%{http_code}' \
             -H "Authorization: Bearer $CLOUDFLARE_OBSERVE_API_TOKEN" \
             "https://api.cloudflare.com/client/v4/accounts/$account_id/workers/scripts/$worker_name/deployments")"
           test "$deployments_code" = 200
           jq -e '.success == true and (.errors | length) == 0 and (.result.deployments | type == "array") and (.result.deployments | length) > 0' "$raw/deployments-api.json" >/dev/null
+          jq '.result.deployments[0]' "$raw/current-deployment.json" > /dev/null 2>&1 || true
           jq '.result.deployments[0]' "$raw/deployments-api.json" > "$raw/current-deployment.json"
           python scripts/deployment-identity-ar11.py \
             --status "$raw/current-deployment.json" \
@@ -558,15 +615,16 @@ jobs:
               isinstance(quick_rows, list) and len(quick_rows) == 1
               and isinstance(quick_rows[0], dict) and list(quick_rows[0].values()) == ['ok']
           )
-          canonical_ledger = json.dumps(ledger, sort_keys=True, separators=(',', ':'), ensure_ascii=False)
-          if os.environ.get('OPERATION_MODE') == 'reconstruction':
+          recovery = os.environ.get('RECON_RECOVERY') == 'true'
+          if os.environ.get('OPERATION_MODE') == 'reconstruction' and not recovery:
               if remote_migrations != []:
-                  raise SystemExit('exact reconstruction target has non-empty remote migration ledger')
+                  raise SystemExit('exact fresh reconstruction target has non-empty remote migration ledger')
               remote_ledger_sha256 = hashlib.sha256(b'{"remote_migrations":[]}').hexdigest()
               if remote_ledger_sha256 != '18bb30916ec8d7c0eaa18e5ebebdc9b5284fe07cfbf9db69aeaee3bee3211bf2':
                   raise SystemExit('canonical empty-ledger digest contract drifted')
           else:
-              remote_ledger_sha256 = hashlib.sha256(canonical_ledger.encode('utf-8')).hexdigest()
+              canonical = json.dumps({'remote_migrations': remote_migrations}, sort_keys=True, separators=(',', ':'))
+              remote_ledger_sha256 = hashlib.sha256(canonical.encode()).hexdigest()
           provider_observation = {
               'schema_version': 1,
               'target': {
@@ -639,7 +697,133 @@ jobs:
             '.provider_diagnostics.foreign_key_check.exit_code == 0 and .provider_diagnostics.foreign_key_check.json_valid == true and .provider_diagnostics.foreign_key_check_ok == true and .provider_diagnostics.quick_check.exit_code == 0 and .provider_diagnostics.quick_check.json_valid == true and .provider_diagnostics.quick_check_ok == true and .provider_diagnostics.read_contract.kind == "D1_CLOUDFLARE_READ_CONTRACT_V1" and .provider_diagnostics.read_contract.time_travel_bookmark_present == true and .provider_diagnostics.read_contract.provider_mutation == false and .provider_diagnostics.read_contract.d1_mutation == false and .provider_diagnostics.read_contract.production_mutation == false' \
             artifacts/d1-current-target-observation/provider-observation.json >/dev/null
 
+      - name: Verify fail-forward reconstruction post-state without provider mutation
+        if: env.RECON_RECOVERY == 'true'
+        env:
+          SOURCE_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          test "$RECON_RECOVERY" = true
+          test -n "$RECON_PREPARED_RUN_ID"
+          test -n "$RECON_EXECUTOR_RUN_ID"
+          test -n "$RECON_RECONSTRUCTION_ID"
+          test -n "$RECON_EFFECT_SOURCE_SHA"
+          root="artifacts/d1-reconstruction-recovery"
+          mkdir -p "$root/prepared" "$root/executor"
+          prepare_api="$RUNNER_TEMP/recovery-prepare-run.json"
+          executor_api="$RUNNER_TEMP/recovery-executor-run.json"
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$RECON_PREPARED_RUN_ID" > "$prepare_api"
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$RECON_EXECUTOR_RUN_ID" > "$executor_api"
+          jq -e --arg source "$RECON_EFFECT_SOURCE_SHA" \
+            '.path == ".github/workflows/d1-migration-prepare.yml" and .event == "workflow_dispatch" and .head_branch == "main" and .head_sha == $source and .status == "completed" and .conclusion == "success" and .run_attempt == 1' \
+            "$prepare_api" >/dev/null
+          jq -e --arg source "$RECON_EFFECT_SOURCE_SHA" \
+            '.path == ".github/workflows/d1-migration-executor.yml" and .event == "workflow_dispatch" and .head_branch == "main" and .head_sha == $source and .status == "completed" and .conclusion == "failure" and .run_attempt == 1' \
+            "$executor_api" >/dev/null
+          gh run download "$RECON_PREPARED_RUN_ID" --repo "$GITHUB_REPOSITORY" \
+            --name "d1-reconstruction-catalog-$RECON_PREPARED_RUN_ID-1" --dir "$root/prepared"
+          gh run download "$RECON_EXECUTOR_RUN_ID" --repo "$GITHUB_REPOSITORY" \
+            --name "d1-reconstruction-evidence-$RECON_EXECUTOR_RUN_ID-1" --dir "$root/executor"
+          reconstruction="$root/prepared/reconstruction.json"
+          receipt="$root/executor/execution-receipt.json"
+          materialization="$root/executor/materialization.json"
+          test -f "$reconstruction" && test -f "$receipt" && test -f "$materialization"
+          jq -e --arg id "$RECON_RECONSTRUCTION_ID" --arg source "$RECON_EFFECT_SOURCE_SHA" --arg release "$RECON_RELEASE_SET_ID" \
+            '.reconstruction_id == $id and .plan.source_sha == $source and .plan.release_set_id == $release and .plan.provider_observation.target.environment == "staging"' \
+            "$reconstruction" >/dev/null
+          jq -e --arg id "$RECON_RECONSTRUCTION_ID" --arg source "$RECON_EFFECT_SOURCE_SHA" \
+            '.operation_identity == $id and .transaction_id == $id and .source_sha == $source and .recovery_strategy == "FAIL_FORWARD_ONLY" and .events[-2].kind == "RECONSTRUCTION_APPLIED" and .events[-1].kind == "RECOVERY_REQUIRED" and ([.events[] | select(.kind == "RECONSTRUCTION_APPLIED")] | length) == 1' \
+            "$receipt" >/dev/null
+          jq -e --arg id "$RECON_RECONSTRUCTION_ID" --arg release "$RECON_RELEASE_SET_ID" \
+            '.reconstruction_id == $id and .release_set_id == $release and .provider_effect == "D1_BOOTSTRAP_CURRENT_EXACT_CONSTRUCTION" and .provider_mutation_authorized == false and .production_mutation_authorized == false' \
+            "$materialization" >/dev/null
+          python - \
+            artifacts/d1-current-target-observation/provider-observation.json \
+            "$reconstruction" "$materialization" "$root/post-observation.json" <<'PY'
+          import hashlib, json, sys
+          observation_path, reconstruction_path, materialization_path, output_path = sys.argv[1:]
+          document = json.load(open(observation_path, encoding='utf-8'))
+          reconstruction = json.load(open(reconstruction_path, encoding='utf-8'))
+          materialization = json.load(open(materialization_path, encoding='utf-8'))
+          provider = document.get('provider_observation_input') or {}
+          diagnostics = document.get('provider_diagnostics') or {}
+          remote = provider.get('remote_migrations')
+          pending = diagnostics.get('provider_pending_migrations')
+          expected = ((reconstruction.get('plan') or {}).get('expected_post_state') or {}).get('ledger_migrations')
+          deferred = materialization.get('deferred_revisions')
+          sealed_target = ((reconstruction.get('plan') or {}).get('provider_observation') or {}).get('target')
+          if provider.get('target') != sealed_target:
+              raise SystemExit('fresh recovery observation target differs from sealed reconstruction target')
+          if remote != expected or not isinstance(remote, list) or not remote:
+              raise SystemExit('fresh recovery observation did not reach the exact sealed reconstruction ledger')
+          if pending != deferred or not isinstance(pending, list):
+              raise SystemExit('fresh recovery pending set differs from materialized deferred revisions')
+          if any(item in remote for item in pending):
+              raise SystemExit('fresh recovery reports one migration as both applied and deferred')
+          if diagnostics.get('foreign_key_check_ok') is not True or diagnostics.get('quick_check_ok') is not True:
+              raise SystemExit('fresh recovery database invariants are not clean')
+          read_contract = diagnostics.get('read_contract') or {}
+          if read_contract.get('provider_mutation') is not False or read_contract.get('d1_mutation') is not False or read_contract.get('production_mutation') is not False:
+              raise SystemExit('fresh recovery observation is not read-only')
+          canonical = json.dumps({'remote_migrations': remote}, sort_keys=True, separators=(',', ':'))
+          typed = {
+              'schema_version': 1,
+              'target': provider['target'],
+              'observed_at_unix_seconds': provider['observed_at_unix_seconds'],
+              'observation_source': provider['observation_source'] + '/fail-forward-recovery',
+              'remote_ledger_sha256': hashlib.sha256(canonical.encode()).hexdigest(),
+              'remote_migrations': remote,
+              'wrangler_pending_migrations': pending,
+              'deployment_identity': materialization['release_set_id'],
+              'time_travel_bookmark_capable': provider.get('time_travel_bookmark_capable') is True,
+          }
+          with open(output_path, 'w', encoding='utf-8') as handle:
+              json.dump(typed, handle, sort_keys=True, separators=(',', ':'))
+              handle.write('\n')
+          PY
+          cargo build --locked --manifest-path tools/opsctl/Cargo.toml --example d1-execution-control
+          evaluated_at="$(date -u +%s)"
+          env -u CLOUDFLARE_API_TOKEN -u CLOUDFLARE_ACCOUNT_ID \
+            tools/opsctl/target/debug/examples/d1-execution-control verify-post-state \
+              --reconstruction "$reconstruction" \
+              --receipt "$receipt" \
+              --observation "$root/post-observation.json" \
+              --evaluated-at-unix-seconds "$evaluated_at" \
+              > "$root/post-state-verification.json"
+          jq -e \
+            '.status == "RECONSTRUCTION_POST_STATE_VERIFIED" and .disposition == "RECOVERY_REQUIRED_CONFIRMED" and .terminal_state == "RECOVERY_REQUIRED" and .reconstruction_applied == true and .expected_post_state_reached == true and .observed_migrations == .expected_ledger_migrations' \
+            "$root/post-state-verification.json" >/dev/null
+          jq -n \
+            --arg current_source "$SOURCE_SHA" \
+            --arg effect_source "$RECON_EFFECT_SOURCE_SHA" \
+            --arg reconstruction_id "$RECON_RECONSTRUCTION_ID" \
+            --argjson prepare_run "$RECON_PREPARED_RUN_ID" \
+            --argjson executor_run "$RECON_EXECUTOR_RUN_ID" \
+            --slurpfile verification "$root/post-state-verification.json" \
+            '{schema_version:1,kind:"D1_RECONSTRUCTION_FAIL_FORWARD_RECOVERY_V1",status:"EXPECTED_POST_STATE_VERIFIED_READ_ONLY",current_source_sha:$current_source,reconstruction_source_sha:$effect_source,reconstruction_id:$reconstruction_id,prepared_run_id:$prepare_run,executor_run_id:$executor_run,typed_post_state_verification:$verification[0],provider_mutation:false,d1_mutation:false,production_mutation:false,second_reconstruction:false,executor_rerun:false}' \
+            > "$root/recovery-verification.json"
+          jq -e '.status == "EXPECTED_POST_STATE_VERIFIED_READ_ONLY" and .typed_post_state_verification.expected_post_state_reached == true and .provider_mutation == false and .d1_mutation == false and .production_mutation == false and .second_reconstruction == false and .executor_rerun == false' \
+            "$root/recovery-verification.json" >/dev/null
+
+      - name: Publish fail-forward reconstruction recovery evidence
+        if: env.RECON_RECOVERY == 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: d1-reconstruction-recovery-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.sha }}
+          path: |
+            artifacts/d1-reconstruction-recovery/recovery-verification.json
+            artifacts/d1-reconstruction-recovery/post-state-verification.json
+            artifacts/d1-reconstruction-recovery/post-observation.json
+            artifacts/d1-reconstruction-recovery/prepared/reconstruction.json
+            artifacts/d1-reconstruction-recovery/executor/execution-receipt.json
+            artifacts/d1-reconstruction-recovery/executor/materialization.json
+            artifacts/d1-current-target-observation/provider-observation.json
+            artifacts/d1-current-target-observation/database-inventory.json
+          if-no-files-found: error
+          retention-days: 30
+
       - name: Run canonical credential-free transaction preflight
+        if: env.RECON_RECOVERY != 'true'
         env:
           SOURCE_SHA: ${{ github.sha }}
           OPERATION_MODE: ${{ inputs.operation_mode || 'current' }}
@@ -890,13 +1074,14 @@ jobs:
           fi
 
       - name: Dispatch existing credential-free Prepare for machine-resolved reconstruction
-        if: github.event_name == 'workflow_dispatch' && inputs.operation_mode == 'reconstruction'
+        if: github.event_name == 'workflow_dispatch' && inputs.operation_mode == 'reconstruction' && env.RECON_RECOVERY != 'true'
         env:
           SOURCE_SHA: ${{ github.sha }}
           OPERATION_MODE: ${{ inputs.operation_mode || 'current' }}
         run: |
           set -euo pipefail
           test "$OPERATION_MODE" = reconstruction
+          test "$RECON_RECOVERY" = false
           root="$RUNNER_TEMP/d1-preflight"
           observation="artifacts/d1-current-target-observation/provider-observation.json"
           python - "$root/provider-observation-input.json" "$observation" <<'PY'
@@ -947,7 +1132,7 @@ jobs:
           } | tee -a "$GITHUB_STEP_SUMMARY"
 
       - name: Publish secret-free D1 transaction preflight
-        if: github.event_name != 'workflow_dispatch' || inputs.operation_mode != 'reconstruction'
+        if: env.RECON_RECOVERY != 'true' && (github.event_name != 'workflow_dispatch' || inputs.operation_mode != 'reconstruction')
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: d1-transaction-preflight-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.sha }}
