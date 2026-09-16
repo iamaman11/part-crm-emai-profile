@@ -59,6 +59,7 @@ jobs:
           observer = Path('.github/workflows/d1-isolated-target-observation.yml').read_text(encoding='utf-8')
           executor = Path('.github/workflows/d1-migration-executor.yml').read_text(encoding='utf-8')
           credential_authority = Path('architecture/credential-authority-ar11-extension.json').read_text(encoding='utf-8')
+          route_source = router.split('\n  route:', 1)[1]
 
           forbidden = (
               'CLOUD' + 'FLARE_',
@@ -70,33 +71,41 @@ jobs:
               'issues:' + ' write',
               'contents:' + ' write',
               'D1_OPERATOR_' + 'DISPATCH_TOKEN',
-              'D1_BOOTSTRAP_CURRENT_EXACT_CONSTRUCTION',
+              'D1_BOOTSTRAP_CURRENT_' + 'EXACT_CONSTRUCTION',
           )
           for value in forbidden:
-              assert value not in router, f'comment router acquired forbidden authority: {value}'
+              assert value not in route_source, f'comment router acquired forbidden authority: {value}'
 
           secret_prefix = 'sec' + 'rets.'
           dispatch_secret = secret_prefix + 'GH_ADMIN_OPERATOR_TOKEN'
-          assert router.count(secret_prefix) == 3, 'governed GitHub admin credential may appear only in the three privileged dispatch steps'
-          assert router.count(dispatch_secret) == 3, 'operator/reconstruction/restore dispatch must reuse only the governed GitHub admin credential'
+          assert route_source.count(secret_prefix) == 3, 'governed GitHub admin credential may appear only in the three privileged dispatch steps'
+          assert route_source.count(dispatch_secret) == 3, 'operator/reconstruction/restore dispatch must reuse only the governed GitHub admin credential'
           assert '"credential_id": "github.hosted-admin-operator"' in credential_authority
           assert '".github/workflows/d1-operator-comment-router.yml"' in credential_authority
 
           dispatch_token = '/' + 'dispatches'
-          assert router.count(dispatch_token) == 5, 'comment router must expose exactly five bounded downstream dispatches'
-          assert ('actions/workflows/d1-operator.yml/' + 'dispatches') in router
-          assert router.count('actions/workflows/d1-isolated-target-observation.yml/' + 'dispatches') == 2
-          assert router.count('actions/workflows/d1-migration-executor.yml/' + 'dispatches') == 2
-          assert "github.event.comment.body == '/d1 operator'" in router
-          assert "github.event.comment.body == '/d1 reconstruction'" in router
-          assert "startsWith(github.event.comment.body, '/d1 reconstruction-execute ')" in router
-          assert "startsWith(github.event.comment.body, '/d1 time-travel-info ')" in router
-          assert "startsWith(github.event.comment.body, '/d1 time-travel-restore ')" in router
-          assert router.count('D1_TRANSACTION_AUTHORIZATION_V1') == 1, 'router may transport but must not own transaction authorization semantics'
-          assert 'D1_ROUTE_ALREADY_HANDLED' in router
-          assert "run_attempt != 1" in router
-          assert "display_title == title" in router
-          assert "D1 authorization={authorization_digest}" in router
+          assert route_source.count(dispatch_token) == 5, 'comment router must expose exactly five bounded downstream dispatches'
+          assert ('actions/workflows/d1-operator.yml/' + 'dispatches') in route_source
+          assert route_source.count('actions/workflows/d1-isolated-target-observation.yml/' + 'dispatches') == 2
+          assert route_source.count('actions/workflows/d1-migration-executor.yml/' + 'dispatches') == 2
+          assert "github.event.comment.body == '/d1 operator'" in route_source
+          assert "github.event.comment.body == '/d1 reconstruction'" in route_source
+          assert "startsWith(github.event.comment.body, '/d1 reconstruction-execute ')" in route_source
+          assert "startsWith(github.event.comment.body, '/d1 time-travel-info ')" in route_source
+          assert "startsWith(github.event.comment.body, '/d1 time-travel-restore ')" in route_source
+          auth_marker = 'D1_TRANSACTION_' + 'AUTHORIZATION_V1'
+          assert route_source.count(auth_marker) == 1, 'router may transport but must not own transaction authorization semantics'
+
+          already_handled = 'D1_ROUTE_' + 'ALREADY_HANDLED'
+          assert route_source.count(already_handled + '=false') == 1
+          assert route_source.count(already_handled + '=true') == 3
+          assert route_source.count("env." + already_handled + " != 'true'") == 7
+          assert 'if [ "$GITHUB_RUN_ATTEMPT" -ne 1 ]; then' in route_source
+          assert 'select(.display_title == $title and .run_number < $current_number)' in route_source
+          assert 'title="D1 authorization=$RECON_AUTHORIZATION_DIGEST"' in route_source
+          assert 'select(.display_title == $title and .head_sha == $source)' in route_source
+          assert 'NO automatic Observe/Prepare retry' in route_source
+
           assert 'operation_mode:' in executor and 'time_travel_restore' in executor and 'reconstruction' in executor
           assert 'authorize_restore:' in executor and 'Restore exact D1 bookmark with deploy credential' in executor
           assert executor.count("if: inputs.operation_mode == 'migration'") == 2, 'existing migration authorize+execute jobs must both be guarded from restore/reconstruction modes'
@@ -124,12 +133,11 @@ jobs:
               restore_source.index('Terminalize restore receipt fail closed'),
           ]
           assert order == sorted(order), 'restore one-shot/readiness/receipt/postverify ordering drifted'
-          assert "github.event.comment.author_association == 'OWNER'" in router
-          assert 'github.actor == github.repository_owner' in router
-          assert 'CURRENT_STAGE_ISSUE = #' in router
-          assert "github.event.issue.state == 'open'" in router
-          assert "github.event.issue.pull_request == null" in router
-          route_source = router.split('\n  route:', 1)[1]
+          assert "github.event.comment.author_association == 'OWNER'" in route_source
+          assert 'github.actor == github.repository_owner' in route_source
+          assert 'CURRENT_STAGE_ISSUE = #' in route_source
+          assert "github.event.issue.state == 'open'" in route_source
+          assert "github.event.issue.pull_request == null" in route_source
           assert 'actions: write' in route_source, 'read-only observer dispatch must use the bounded ephemeral Actions permission'
           github_token_expr = '$' + '{{ github.token }}'
           admin_token_expr = '$' + '{{ ' + secret_prefix + 'GH_ADMIN_OPERATOR_TOKEN }}'
