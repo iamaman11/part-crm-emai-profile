@@ -102,7 +102,7 @@ jobs:
           observe_secret = provider_secret_prefix + 'OBSERVE_API_TOKEN'
           assert migration_apply not in restore_source, 'restore mode must never apply migrations'
           assert d1_create not in restore_source and d1_delete not in restore_source
-          assert restore_source.count(deploy_secret) == 1, 'restore mode may expose deploy credential only to the exact restore write step'
+          assert restore_source.count(deploy_secret) == 2, 'restore mode may expose deploy credential only to readiness and exact restore write steps'
           assert restore_source.count(observe_secret) == 2, 'restore mode must use read-only credential only for pre/post provider proof'
           assert 'environment: staging' in restore_source
           assert 'D1_TIME_TRAVEL_RESTORE_AUTHORIZATION_V1' in restore_source
@@ -110,12 +110,13 @@ jobs:
           order = [
               restore_source.index('Prove restore authorization has not been consumed'),
               restore_source.index('Consume Time Travel restore authorization'),
+              restore_source.index('Verify deploy credential readiness before Time Travel restore effect'),
               restore_source.index('Persist restore MUTATION_STARTED receipt'),
               restore_source.index('Restore exact D1 bookmark with deploy credential'),
               restore_source.index('Fresh post-restore ledger and diagnostics proof'),
               restore_source.index('Terminalize restore receipt fail closed'),
           ]
-          assert order == sorted(order), 'restore one-shot/receipt/postverify ordering drifted'
+          assert order == sorted(order), 'restore one-shot/readiness/receipt/postverify ordering drifted'
           assert "github.event.comment.author_association == 'OWNER'" in router
           assert 'github.actor == github.repository_owner' in router
           assert 'CURRENT_STAGE_ISSUE = #' in router
