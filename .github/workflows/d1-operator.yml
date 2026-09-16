@@ -30,12 +30,6 @@ on:
       - 'tools/opsctl/examples/d1-execution-control.rs'
       - 'tools/opsctl/examples/d1-operator-outcome.rs'
   workflow_dispatch:
-    inputs:
-      refresh_stale_transaction_id:
-        description: 'Exact predecessor TransactionId authorized for one read-only Observe/Prepare refresh'
-        required: false
-        type: string
-        default: ''
 
 permissions:
   actions: write
@@ -92,8 +86,7 @@ jobs:
               assert value not in source, f'D1 operator acquired forbidden policy/effect surface: {value}'
           trigger = source.split('\npermissions:', 1)[0]
           dispatch = trigger.split('\n  workflow_dispatch:', 1)[1]
-          assert dispatch.count('refresh_stale_transaction_id:') == 1, 'D1 operator may expose only one exact predecessor-refresh intent input'
-          assert 'required: false' in dispatch and 'type: string' in dispatch and "default: ''" in dispatch
+          assert 'inputs:' not in dispatch, 'D1 operator must remain zero-input in GitHub UI'
           assert source.count('/dispatches') == 4, 'D1 operator dispatch surface drifted from exactly three natural-owner transitions'
           assert 'D1_TRANSACTION_AUTHORIZATION_V1' in source
           assert 'd1-transaction-authorization' in source
@@ -129,7 +122,9 @@ jobs:
           assert source.count(auth_marker) == 1, 'authorization for another transaction must be non-current provenance'
           assert 'requested_refresh != predecessor_transaction_id' in source, 'refresh intent must bind exact predecessor TransactionId'
           assert 'D1_OPERATOR_STATE=REFRESH_REQUIRED' in source, 'ordinary blocked predecessor must emit terminal REFRESH_REQUIRED'
-          assert 'REFRESH_STALE_TRANSACTION_ID' in source, 'predecessor refresh intent must be explicit workflow input'
+          assert 'Resolve one-shot OWNER predecessor refresh intent' in source
+          assert 'CURRENT_OPERATOR_RUN_ID' in source and 'D1 operator comment transport / issue_comment /' in source
+          assert 'REFRESH_STALE_TRANSACTION_ID' in source, 'predecessor refresh intent must be derived from durable OWNER transport'
           assert "reason in {'STALE_OBSERVATION', 'SOURCE_TREE_TRANSACTION_DRIFT'}" in source, 'stale and source/tree drift must both become refresh barriers'
           assert "epoch(run['created_at']) > prepare_epoch" in source, 'an Executor attempt after Prepare must become a refresh barrier rather than mint a successor automatically'
           assert "and run.get('head_sha') == SOURCE" not in source.split('def resolve_transaction_state():', 1)[1].split('def wait_for_dispatched_run', 1)[0], 'predecessor resolution must survive protected-main source changes'
@@ -163,7 +158,6 @@ jobs:
     timeout-minutes: 80
     env:
       GH_TOKEN: ${{ github.token }}
-      REFRESH_STALE_TRANSACTION_ID: ${{ inputs.refresh_stale_transaction_id || '' }}
     steps:
       - name: Checkout exact protected-main source
         uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
@@ -195,6 +189,91 @@ jobs:
           test -x tools/opsctl/target/debug/examples/d1-execution-control
           test -x tools/opsctl/target/debug/examples/d1-operator-outcome
           python scripts/d1-prepare.py self-test
+
+      - name: Resolve one-shot OWNER predecessor refresh intent
+        env:
+          SOURCE_SHA: ${{ github.sha }}
+          CURRENT_OPERATOR_RUN_ID: ${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          python - <<'PY_REFRESH'
+          import json
+          import os
+          import re
+          import subprocess
+          from datetime import datetime
+
+          repo = os.environ['GITHUB_REPOSITORY']
+          source = os.environ['SOURCE_SHA']
+          current_run_id = int(os.environ['CURRENT_OPERATOR_RUN_ID'])
+
+          def gh(endpoint):
+              process = subprocess.run(['gh', 'api', endpoint], text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False)
+              if process.returncode != 0:
+                  raise SystemExit(f'gh api failed for {endpoint}: {process.stderr.strip()}')
+              return json.loads(process.stdout)
+
+          def epoch(value):
+              return int(datetime.fromisoformat(value.replace('Z', '+00:00')).timestamp())
+
+          tracker = gh(f'repos/{repo}/issues/266')
+          body = tracker.get('body')
+          if not isinstance(body, str):
+              raise SystemExit('live stage pointer #266 has no readable body')
+          matches = re.findall(r'^CURRENT_STAGE_ISSUE = #([1-9][0-9]*)$', body, re.MULTILINE)
+          if len(matches) != 1:
+              raise SystemExit('live stage pointer #266 does not select exactly one CURRENT stage issue')
+          issue = int(matches[0])
+
+          commands = []
+          page = 1
+          while True:
+              comments = gh(f'repos/{repo}/issues/{issue}/comments?per_page=100&page={page}')
+              if not isinstance(comments, list):
+                  raise SystemExit('CURRENT stage issue comments response is not a list')
+              for comment in comments:
+                  if comment.get('author_association') != 'OWNER' or comment.get('created_at') != comment.get('updated_at'):
+                      continue
+                  text = comment.get('body')
+                  if text == '/d1 operator':
+                      commands.append((epoch(comment['created_at']), int(comment['id']), 'operator', ''))
+                      continue
+                  match = re.fullmatch(r'/d1 operator-refresh ([0-9a-f]{64})', text or '')
+                  if match is not None:
+                      commands.append((epoch(comment['created_at']), int(comment['id']), 'operator_refresh', match.group(1)))
+              if len(comments) < 100:
+                  break
+              page += 1
+
+          requested = ''
+          if commands:
+              commands.sort(reverse=True)
+              created, comment_id, kind, transaction_id = commands[0]
+              if kind == 'operator_refresh':
+                  expected_title = f'D1 operator comment transport / issue_comment / {comment_id} / {source}'
+                  routes_doc = gh(f'repos/{repo}/actions/workflows/d1-operator-comment-router.yml/runs?event=issue_comment&branch=main&per_page=100')
+                  routes = [run for run in (routes_doc.get('workflow_runs') or [])
+                            if run.get('display_title') == expected_title
+                            and run.get('head_sha') == source]
+                  if len(routes) != 1:
+                      raise SystemExit('exact OWNER refresh comment has missing or ambiguous router run')
+                  route = routes[0]
+                  if int(route.get('run_attempt') or 0) != 1 or epoch(route['created_at']) < created:
+                      raise SystemExit('exact OWNER refresh router provenance is invalid')
+                  operator_doc = gh(f'repos/{repo}/actions/workflows/d1-operator.yml/runs?event=workflow_dispatch&branch=main&per_page=100')
+                  earliest = [run for run in (operator_doc.get('workflow_runs') or [])
+                              if run.get('head_sha') == source
+                              and run.get('path') == '.github/workflows/d1-operator.yml'
+                              and int(run.get('run_attempt') or 0) == 1
+                              and epoch(run['created_at']) >= epoch(route['created_at']) - 5]
+                  earliest.sort(key=lambda run: (epoch(run['created_at']), int(run.get('run_number') or 0), int(run['id'])))
+                  if earliest and int(earliest[0]['id']) == current_run_id:
+                      requested = transaction_id
+
+          with open(os.environ['GITHUB_ENV'], 'a', encoding='utf-8') as handle:
+              handle.write(f'REFRESH_STALE_TRANSACTION_ID={requested}\n')
+          print(f'D1_REFRESH_INTENT={requested or "NONE"}')
+          PY_REFRESH
 
       - name: Resolve, prepare, stop for authorization, or reconcile sole executor
         env:
