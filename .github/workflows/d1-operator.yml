@@ -32,7 +32,7 @@ on:
   workflow_dispatch:
     inputs:
       refresh_stale_transaction_id:
-        description: 'Exact stale TransactionId authorized for one read-only Observe/Prepare refresh'
+        description: 'Exact predecessor TransactionId authorized for one read-only Observe/Prepare refresh'
         required: false
         type: string
         default: ''
@@ -92,7 +92,7 @@ jobs:
               assert value not in source, f'D1 operator acquired forbidden policy/effect surface: {value}'
           trigger = source.split('\npermissions:', 1)[0]
           dispatch = trigger.split('\n  workflow_dispatch:', 1)[1]
-          assert dispatch.count('refresh_stale_transaction_id:') == 1, 'D1 operator may expose only one stale-refresh intent input'
+          assert dispatch.count('refresh_stale_transaction_id:') == 1, 'D1 operator may expose only one exact predecessor-refresh intent input'
           assert 'required: false' in dispatch and 'type: string' in dispatch and "default: ''" in dispatch
           assert source.count('/dispatches') == 4, 'D1 operator dispatch surface drifted from exactly three natural-owner transitions'
           assert 'D1_TRANSACTION_AUTHORIZATION_V1' in source
@@ -102,6 +102,7 @@ jobs:
           assert '--authorization-rejection-kind' in source
           assert 'd1-execution-control' in source and 'inspect-receipt' in source and 'verify-post-state' in source
           assert 'D1_OPERATOR_OUTCOME_V1' in source and 'd1-operator-outcome' in source
+          assert 'REFRESH_REQUIRED' in source
           artifact_name = 'd1-operator-outcome-' + '$' + '{{ github.run_id }}-' + '$' + '{{ github.run_attempt }}'
           assert artifact_name in source
           assert 'd1-executor-inputs-' in source
@@ -118,17 +119,20 @@ jobs:
           assert "summary.get('status') == 'PREPARE_BLOCKED'" in source, 'observer PREPARE_BLOCKED must remain typed'
           observed_noop = "observed_planned = observed['planned_migrations']"
           prepare_dispatch = 'candidate = dispatch_' + 'prepare_and_wait(observed)'
-          stale_marker = '# STALE_PREPARED_TRANSACTION_REQUIRES_' + 'EXPLICIT_REFRESH'
+          barrier_marker = '# PREPARED_PREDECESSOR_REQUIRES_' + 'EXPLICIT_REFRESH'
           auth_marker = '# NONCURRENT_AUTHORIZATION_IS_' + 'PROVENANCE'
           auth_subject_filter = "if intent.get('transaction_id') != tx.get(" + "'transaction_id'):"
           assert observed_noop in source, 'fresh PREPARE_READY empty-plan disposition must be explicit'
           assert source.index(observed_noop) < source.index(prepare_dispatch), 'fresh empty plan must stop before canonical Prepare transaction rendering'
-          assert source.count(prepare_dispatch) == 1, 'one ordinary operator invocation may mint at most one fresh Prepare transaction'
-          assert source.count(stale_marker) == 1, 'stale prepared transaction must terminate behind an explicit refresh barrier'
+          assert source.count(prepare_dispatch) == 1, 'one operator invocation may mint at most one fresh Prepare transaction'
+          assert source.count(barrier_marker) == 1, 'stale/drifted/executed predecessor must terminate behind one explicit refresh barrier'
           assert source.count(auth_marker) == 1, 'authorization for another transaction must be non-current provenance'
-          assert 'requested_refresh != stale_transaction_id' in source, 'refresh intent must bind exact stale TransactionId'
-          assert 'D1_OPERATOR_STATE=STALE_OBSERVATION' in source, 'ordinary stale transaction must emit terminal stale outcome'
-          assert 'REFRESH_STALE_TRANSACTION_ID' in source, 'stale refresh intent must be explicit workflow input'
+          assert 'requested_refresh != predecessor_transaction_id' in source, 'refresh intent must bind exact predecessor TransactionId'
+          assert 'D1_OPERATOR_STATE=REFRESH_REQUIRED' in source, 'ordinary blocked predecessor must emit terminal REFRESH_REQUIRED'
+          assert 'REFRESH_STALE_TRANSACTION_ID' in source, 'predecessor refresh intent must be explicit workflow input'
+          assert "reason in {'STALE_OBSERVATION', 'SOURCE_TREE_TRANSACTION_DRIFT'}" in source, 'stale and source/tree drift must both become refresh barriers'
+          assert "epoch(run['created_at']) > prepare_epoch" in source, 'an Executor attempt after Prepare must become a refresh barrier rather than mint a successor automatically'
+          assert "and run.get('head_sha') == SOURCE" not in source.split('def resolve_transaction_state():', 1)[1].split('def wait_for_dispatched_run', 1)[0], 'predecessor resolution must survive protected-main source changes'
           assert auth_subject_filter in source, 'authorization discovery must first bind to the current transaction id'
           assert "'planned_migrations': planned" in source and "'preflight_ref': preflight_ref" in source, 'fresh observation must transport typed no-op evidence'
           forbidden_rejected_index = 'latest = rejected' + '[0]'
@@ -224,7 +228,7 @@ jobs:
           EXECUTOR_WORKFLOW = 'd1-migration-executor.yml'
           REQUESTED_REFRESH = os.environ.get('REFRESH_STALE_TRANSACTION_ID', '').strip()
           if REQUESTED_REFRESH and re.fullmatch(r'[0-9a-f]{64}', REQUESTED_REFRESH) is None:
-              raise SystemExit('stale refresh intent must be empty or one exact 64-hex TransactionId')
+              raise SystemExit('predecessor refresh intent must be empty or one exact 64-hex TransactionId')
 
           class TypedStop(Exception):
               def __init__(self, kind, message, owner_diagnostic=None, evidence_refs=None):
@@ -403,8 +407,9 @@ jobs:
               return value
 
           def latest_executor_epoch():
-              values = [epoch(run['created_at']) for run in workflow_runs(EXECUTOR_WORKFLOW)
-                        if run.get('event') == 'workflow_dispatch' and run.get('head_sha') == SOURCE]
+              values = [epoch(run['created_at']) for run in workflow_runs(EXECUTOR_WORKFLOW, 100)
+                        if run.get('event') == 'workflow_dispatch'
+                        and run.get('path') == '.github/workflows/d1-migration-executor.yml']
               return max(values, default=0)
 
           def transaction_artifact(run):
@@ -422,18 +427,21 @@ jobs:
 
           def resolve_transaction_state():
               now = int(time.time())
-              cutoff = latest_executor_epoch()
-              runs = [run for run in workflow_runs(PREPARE_WORKFLOW)
+              executor_epoch = latest_executor_epoch()
+              runs = [run for run in workflow_runs(PREPARE_WORKFLOW, 100)
                       if run.get('event') == 'workflow_dispatch'
-                      and run.get('head_sha') == SOURCE
                       and run.get('status') == 'completed'
-                      and run.get('conclusion') == 'success'
-                      and epoch(run['created_at']) > cutoff]
+                      and run.get('conclusion') == 'success']
               runs.sort(key=lambda item: epoch(item['created_at']), reverse=True)
               for run in runs:
+                  run_artifacts = artifacts(run['id'])
                   artifact = transaction_artifact(run)
                   if artifact is None:
-                      raise SystemExit(f"successful Prepare run {run['id']} missing/ambiguous transaction artifact")
+                      names = [item.get('name') for item in run_artifacts if isinstance(item.get('name'), str)]
+                      if any(name.startswith('d1-reconstruction-') for name in names):
+                          continue
+                      raise SystemExit(f"successful ordinary Prepare run {run['id']} missing/ambiguous transaction artifact")
+                  prepare_epoch = epoch(run['created_at'])
                   with tempfile.TemporaryDirectory(prefix='d1-transaction-') as directory:
                       if not download(run['id'], artifact['name'], directory):
                           raise SystemExit(f"cannot download transaction artifact from Prepare run {run['id']}")
@@ -441,29 +449,43 @@ jobs:
                       if not path.is_file():
                           raise SystemExit(f"Prepare run {run['id']} transaction artifact is missing transaction.json")
                       tx = json.loads(path.read_text(encoding='utf-8'))
+                      transaction_id = tx.get('transaction_id')
+                      if not isinstance(transaction_id, str) or re.fullmatch(r'[0-9a-f]{64}', transaction_id) is None:
+                          raise SystemExit('prepared predecessor lost exact typed TransactionId')
+                      base = {
+                          'run_id': int(run['id']),
+                          'run_attempt': int(run['run_attempt']),
+                          'transaction': tx,
+                          'prepare_evidence_ref': f"github-actions:run:{run['id']}:attempt:{run['run_attempt']}",
+                      }
+                      if executor_epoch and executor_epoch > prepare_epoch:
+                          # PREPARED_PREDECESSOR_REQUIRES_EXPLICIT_REFRESH
+                          barrier = dict(base)
+                          barrier['barrier_cause'] = 'EXECUTOR_ATTEMPT_AFTER_PREPARE'
+                          barrier['owner_diagnostic'] = None
+                          return {'fresh': None, 'barrier': barrier}
                       try:
                           verification = verify_transaction(path, now)
                       except TypedStop as stop:
                           reason = (stop.owner_diagnostic or {}).get('reason_code')
-                          if reason == 'STALE_OBSERVATION':
-                              # STALE_PREPARED_TRANSACTION_REQUIRES_EXPLICIT_REFRESH
-                              stale = {
-                                  'run_id': int(run['id']),
-                                  'run_attempt': int(run['run_attempt']),
-                                  'transaction': tx,
-                                  'owner_diagnostic': stop.owner_diagnostic,
-                                  'prepare_evidence_ref': f"github-actions:run:{run['id']}:attempt:{run['run_attempt']}",
-                              }
-                              return {'fresh': None, 'stale': stale}
+                          if reason in {'STALE_OBSERVATION', 'SOURCE_TREE_TRANSACTION_DRIFT'}:
+                              # PREPARED_PREDECESSOR_REQUIRES_EXPLICIT_REFRESH
+                              barrier = dict(base)
+                              barrier['barrier_cause'] = reason
+                              barrier['owner_diagnostic'] = stop.owner_diagnostic
+                              return {'fresh': None, 'barrier': barrier}
                           raise
                       executor_artifact = executor_input_artifact(run, verification['component'])
                       if executor_artifact is None:
                           raise SystemExit(f"Prepare run {run['id']} missing immutable executor input bundle")
-                  candidate = {'run_id': int(run['id']), 'run_attempt': int(run['run_attempt']), 'transaction': tx,
-                               'verification': verification, 'executor_artifact_name': executor_artifact['name'],
-                               'fresh_until': int(verification['fresh_until_unix_seconds'])}
-                  return {'fresh': candidate, 'stale': None}
-              return {'fresh': None, 'stale': None}
+                  candidate = dict(base)
+                  candidate.update({
+                      'verification': verification,
+                      'executor_artifact_name': executor_artifact['name'],
+                      'fresh_until': int(verification['fresh_until_unix_seconds']),
+                  })
+                  return {'fresh': candidate, 'barrier': None}
+              return {'fresh': None, 'barrier': None}
 
           def wait_for_dispatched_run(workflow, started_at, timeout_seconds, require_success=True):
               deadline = time.time() + timeout_seconds
@@ -1010,36 +1032,37 @@ jobs:
           try:
               state = resolve_transaction_state()
               candidate = state['fresh']
-              stale = state['stale']
-              if stale is not None:
-                  stale_transaction_id = stale['transaction'].get('transaction_id')
-                  if not isinstance(stale_transaction_id, str) or re.fullmatch(r'[0-9a-f]{64}', stale_transaction_id) is None:
-                      raise SystemExit('stale transaction lost exact typed TransactionId')
-                  if requested_refresh != stale_transaction_id:
+              barrier = state['barrier']
+              if barrier is not None:
+                  predecessor_transaction_id = barrier['transaction'].get('transaction_id')
+                  if not isinstance(predecessor_transaction_id, str) or re.fullmatch(r'[0-9a-f]{64}', predecessor_transaction_id) is None:
+                      raise SystemExit('blocked predecessor lost exact typed TransactionId')
+                  if requested_refresh != predecessor_transaction_id:
                       outcome = emit_outcome(
-                          'STALE_OBSERVATION',
+                          'REFRESH_REQUIRED',
                           issue,
-                          stale,
-                          owner_diagnostic=stale.get('owner_diagnostic'),
-                          evidence_refs={'prepare': stale['prepare_evidence_ref']},
+                          barrier,
+                          owner_diagnostic=barrier.get('owner_diagnostic'),
+                          evidence_refs={'prepare': barrier['prepare_evidence_ref']},
                       )
                       refresh_detail = ('none' if not requested_refresh else requested_refresh)
-                      SUMMARY.write_text('# D1 stale transaction stopped before refresh\n\n'
-                                         f"- Current stage issue: `#{issue}`\n- Stale TransactionId: `{stale_transaction_id}`\n"
-                                         f"- Requested refresh TransactionId: `{refresh_detail}`\n"
+                      cause = barrier.get('barrier_cause') or 'UNKNOWN'
+                      SUMMARY.write_text('# D1 predecessor stopped before successor refresh\n\n'
+                                         f"- Current stage issue: `#{issue}`\n- Predecessor TransactionId: `{predecessor_transaction_id}`\n"
+                                         f"- Barrier cause: `{cause}`\n- Requested refresh TransactionId: `{refresh_detail}`\n"
                                          f"- Typed outcome: `{outcome['outcome']}`\n"
                                          '- Observation dispatch: `NO`\n- Prepare dispatch: `NO`\n- Executor dispatch: `NO`\n- Provider mutation: `NO`\n'
-                                         f'- Required next action: `/d1 operator-refresh {stale_transaction_id}`\n',
+                                         f'- Required next action: `/d1 operator-refresh {predecessor_transaction_id}`\n',
                                          encoding='utf-8')
-                      print(f"D1_OPERATOR_STATE=STALE_OBSERVATION transaction_id={stale_transaction_id} refresh_required=true issue={issue}")
+                      print(f"D1_OPERATOR_STATE=REFRESH_REQUIRED transaction_id={predecessor_transaction_id} cause={cause} refresh_required=true issue={issue}")
                       raise SystemExit(1)
                   candidate = None
               elif requested_refresh:
                   outcome = emit_outcome('REPLAY_OR_NOOP', issue, candidate)
-                  SUMMARY.write_text('# D1 stale refresh is not applicable\n\n'
-                                     f"- Current stage issue: `#{issue}`\n- Requested stale TransactionId: `{requested_refresh}`\n"
+                  SUMMARY.write_text('# D1 predecessor refresh is not applicable\n\n'
+                                     f"- Current stage issue: `#{issue}`\n- Requested predecessor TransactionId: `{requested_refresh}`\n"
                                      f"- Typed outcome: `{outcome['outcome']}`\n"
-                                     '- No stale current transaction exists for this refresh intent.\n'
+                                     '- No blocked current predecessor exists for this refresh intent.\n'
                                      '- Observation dispatch: `NO`\n- Prepare dispatch: `NO`\n- Executor dispatch: `NO`\n- Provider mutation: `NO`\n',
                                      encoding='utf-8')
                   print(f"D1_OPERATOR_STATE=REPLAY_OR_NOOP refresh_transaction_id={requested_refresh} issue={issue}")
@@ -1075,7 +1098,7 @@ jobs:
                                          evidence_refs={'prepare': candidate.get('prepare_evidence_ref') or f"github-actions:run:{candidate['run_id']}:attempt:{candidate['run_attempt']}"})
                   refresh_line = ''
                   if requested_refresh:
-                      refresh_line = f'- Refresh intent consumed by transition from stale TransactionId: `{requested_refresh}`\n'
+                      refresh_line = f'- Explicit predecessor refresh consumed by transition from TransactionId: `{requested_refresh}`\n'
                   SUMMARY.write_text('# D1 transaction prepared\n\n'
                                      f"- Current stage issue: `#{issue}`\n- TransactionId: `{tx['transaction_id']}`\n"
                                      f"- Prepare run: `{candidate['run_id']}` attempt `{candidate['run_attempt']}`\n"
