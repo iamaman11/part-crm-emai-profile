@@ -102,6 +102,9 @@ jobs:
           assert "checkpoint.get('author_association')" in authority_source
           assert "'PROTECTED_MAIN'" in authority_source
           assert "'ACTIVE_RECONSTRUCTION_ID'" in authority_source
+          assert "'NEW_D1_RECONSTRUCTION_AUTHORIZED'" in authority_source
+          assert "values['NEW_D1_RECONSTRUCTION_AUTHORIZED'] != 'YES'" in authority_source
+          assert 'fresh-zero reconstruction is not explicitly authorized' in authority_source
           assert 'RECOVERY_REQUIRED' in authority_source and 'FAIL_FORWARD_ONLY' in authority_source
           assert "'account_id'" in authority_source and "'database_name'" in authority_source and "'database_id'" in authority_source
           assert "'canonical_empty_ledger_sha256'" in authority_source and "'canonical_predecessor_sha256'" in authority_source
@@ -224,7 +227,7 @@ jobs:
               if ' = ' in line:
                   name, value = line.split(' = ', 1)
                   values.setdefault(name.strip(), value.strip())
-          required = ('CURRENT_STAGE', 'CURRENT_STAGE_ISSUE', 'PROTECTED_MAIN', 'CURRENT_CHECKPOINT', 'ACTIVE_RECONSTRUCTION_ID', 'account_id', 'database_name', 'database_id')
+          required = ('CURRENT_STAGE', 'CURRENT_STAGE_ISSUE', 'PROTECTED_MAIN', 'CURRENT_CHECKPOINT', 'ACTIVE_RECONSTRUCTION_ID', 'NEW_D1_RECONSTRUCTION_AUTHORIZED', 'account_id', 'database_name', 'database_id')
           if any(name not in values for name in required):
               raise SystemExit('CURRENT authority is missing an exact required field')
           if values['CURRENT_STAGE'] != 'V2' or values['CURRENT_STAGE_ISSUE'] != '#584':
@@ -247,6 +250,8 @@ jobs:
                   raise SystemExit('active reconstruction state is neither NONE nor exact fail-forward recovery')
               recovery = True
               reconstruction_id = match.group(1)
+          elif values['NEW_D1_RECONSTRUCTION_AUTHORIZED'] != 'YES':
+              raise SystemExit('fresh-zero reconstruction is not explicitly authorized by CURRENT authority')
           with open(output_path, 'w', encoding='utf-8') as handle:
               json.dump({
                   'account_id': values['account_id'],
