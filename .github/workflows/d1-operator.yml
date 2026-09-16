@@ -30,6 +30,12 @@ on:
       - 'tools/opsctl/examples/d1-execution-control.rs'
       - 'tools/opsctl/examples/d1-operator-outcome.rs'
   workflow_dispatch:
+    inputs:
+      refresh_stale_transaction_id:
+        description: 'Exact stale TransactionId authorized for one read-only Observe/Prepare refresh'
+        required: false
+        type: string
+        default: ''
 
 permissions:
   actions: write
@@ -86,7 +92,8 @@ jobs:
               assert value not in source, f'D1 operator acquired forbidden policy/effect surface: {value}'
           trigger = source.split('\npermissions:', 1)[0]
           dispatch = trigger.split('\n  workflow_dispatch:', 1)[1]
-          assert 'inputs:' not in dispatch, 'D1 operator must remain zero-input in GitHub UI'
+          assert dispatch.count('refresh_stale_transaction_id:') == 1, 'D1 operator may expose only one stale-refresh intent input'
+          assert 'required: false' in dispatch and 'type: string' in dispatch and "default: ''" in dispatch
           assert source.count('/dispatches') == 4, 'D1 operator dispatch surface drifted from exactly three natural-owner transitions'
           assert 'D1_TRANSACTION_AUTHORIZATION_V1' in source
           assert 'd1-transaction-authorization' in source
@@ -111,16 +118,17 @@ jobs:
           assert "summary.get('status') == 'PREPARE_BLOCKED'" in source, 'observer PREPARE_BLOCKED must remain typed'
           observed_noop = "observed_planned = observed['planned_migrations']"
           prepare_dispatch = 'candidate = dispatch_' + 'prepare_and_wait(observed)'
-          stale_marker = '# STALE_PREPARED_TRANSACTION_IS_' + 'PROVENANCE'
+          stale_marker = '# STALE_PREPARED_TRANSACTION_REQUIRES_' + 'EXPLICIT_REFRESH'
           auth_marker = '# NONCURRENT_AUTHORIZATION_IS_' + 'PROVENANCE'
-          stale_branch = "if reason == " + "'STALE_OBSERVATION':"
           auth_subject_filter = "if intent.get('transaction_id') != tx.get(" + "'transaction_id'):"
           assert observed_noop in source, 'fresh PREPARE_READY empty-plan disposition must be explicit'
           assert source.index(observed_noop) < source.index(prepare_dispatch), 'fresh empty plan must stop before canonical Prepare transaction rendering'
           assert source.count(prepare_dispatch) == 1, 'one ordinary operator invocation may mint at most one fresh Prepare transaction'
-          assert source.count(stale_marker) == 1, 'stale prepared transaction must be non-current provenance'
+          assert source.count(stale_marker) == 1, 'stale prepared transaction must terminate behind an explicit refresh barrier'
           assert source.count(auth_marker) == 1, 'authorization for another transaction must be non-current provenance'
-          assert stale_branch in source, 'stale prepared transaction must fall through to one fresh Observe/Prepare cycle'
+          assert 'requested_refresh != stale_transaction_id' in source, 'refresh intent must bind exact stale TransactionId'
+          assert 'D1_OPERATOR_STATE=STALE_OBSERVATION' in source, 'ordinary stale transaction must emit terminal stale outcome'
+          assert 'REFRESH_STALE_TRANSACTION_ID' in source, 'stale refresh intent must be explicit workflow input'
           assert auth_subject_filter in source, 'authorization discovery must first bind to the current transaction id'
           assert "'planned_migrations': planned" in source and "'preflight_ref': preflight_ref" in source, 'fresh observation must transport typed no-op evidence'
           forbidden_rejected_index = 'latest = rejected' + '[0]'
@@ -151,6 +159,7 @@ jobs:
     timeout-minutes: 80
     env:
       GH_TOKEN: ${{ github.token }}
+      REFRESH_STALE_TRANSACTION_ID: ${{ inputs.refresh_stale_transaction_id || '' }}
     steps:
       - name: Checkout exact protected-main source
         uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
@@ -213,6 +222,9 @@ jobs:
           PREPARE_WORKFLOW = 'd1-migration-prepare.yml'
           OBSERVE_WORKFLOW = 'd1-isolated-target-observation.yml'
           EXECUTOR_WORKFLOW = 'd1-migration-executor.yml'
+          REQUESTED_REFRESH = os.environ.get('REFRESH_STALE_TRANSACTION_ID', '').strip()
+          if REQUESTED_REFRESH and re.fullmatch(r'[0-9a-f]{64}', REQUESTED_REFRESH) is None:
+              raise SystemExit('stale refresh intent must be empty or one exact 64-hex TransactionId')
 
           class TypedStop(Exception):
               def __init__(self, kind, message, owner_diagnostic=None, evidence_refs=None):
@@ -408,7 +420,7 @@ jobs:
               name = f"d1-executor-inputs-{component}-{run['id']}-{attempt}"
               return artifact_exact(run['id'], name)
 
-          def resolve_fresh_transaction():
+          def resolve_transaction_state():
               now = int(time.time())
               cutoff = latest_executor_epoch()
               runs = [run for run in workflow_runs(PREPARE_WORKFLOW)
@@ -428,22 +440,30 @@ jobs:
                       path = Path(directory) / 'transaction.json'
                       if not path.is_file():
                           raise SystemExit(f"Prepare run {run['id']} transaction artifact is missing transaction.json")
+                      tx = json.loads(path.read_text(encoding='utf-8'))
                       try:
                           verification = verify_transaction(path, now)
                       except TypedStop as stop:
                           reason = (stop.owner_diagnostic or {}).get('reason_code')
                           if reason == 'STALE_OBSERVATION':
-                              # STALE_PREPARED_TRANSACTION_IS_PROVENANCE
-                              continue
+                              # STALE_PREPARED_TRANSACTION_REQUIRES_EXPLICIT_REFRESH
+                              stale = {
+                                  'run_id': int(run['id']),
+                                  'run_attempt': int(run['run_attempt']),
+                                  'transaction': tx,
+                                  'owner_diagnostic': stop.owner_diagnostic,
+                                  'prepare_evidence_ref': f"github-actions:run:{run['id']}:attempt:{run['run_attempt']}",
+                              }
+                              return {'fresh': None, 'stale': stale}
                           raise
                       executor_artifact = executor_input_artifact(run, verification['component'])
                       if executor_artifact is None:
                           raise SystemExit(f"Prepare run {run['id']} missing immutable executor input bundle")
-                      tx = json.loads(path.read_text(encoding='utf-8'))
-                  return {'run_id': int(run['id']), 'run_attempt': int(run['run_attempt']), 'transaction': tx,
-                          'verification': verification, 'executor_artifact_name': executor_artifact['name'],
-                          'fresh_until': int(verification['fresh_until_unix_seconds'])}
-              return None
+                  candidate = {'run_id': int(run['id']), 'run_attempt': int(run['run_attempt']), 'transaction': tx,
+                               'verification': verification, 'executor_artifact_name': executor_artifact['name'],
+                               'fresh_until': int(verification['fresh_until_unix_seconds'])}
+                  return {'fresh': candidate, 'stale': None}
+              return {'fresh': None, 'stale': None}
 
           def wait_for_dispatched_run(workflow, started_at, timeout_seconds, require_success=True):
               deadline = time.time() + timeout_seconds
@@ -877,7 +897,7 @@ jobs:
                       root = Path(directory)
                       present = {path.name for path in root.iterdir() if path.is_file()}
                       if present != {'evidence.json'}:
-                          raise SystemExit(f'completed execution evidence artifact file set drifted: {sorted(present)}')
+                          raise SystemExit(f'completed execution evidence file set drifted: {sorted(present)}')
                       evidence_path = root / 'evidence.json'
                       evidence = json.loads(evidence_path.read_text(encoding='utf-8'))
                       evidence_sha256 = hashlib.sha256(evidence_path.read_bytes()).hexdigest()
@@ -986,8 +1006,45 @@ jobs:
               }
 
           issue = current_stage_issue()
+          requested_refresh = REQUESTED_REFRESH
           try:
-              candidate = resolve_fresh_transaction()
+              state = resolve_transaction_state()
+              candidate = state['fresh']
+              stale = state['stale']
+              if stale is not None:
+                  stale_transaction_id = stale['transaction'].get('transaction_id')
+                  if not isinstance(stale_transaction_id, str) or re.fullmatch(r'[0-9a-f]{64}', stale_transaction_id) is None:
+                      raise SystemExit('stale transaction lost exact typed TransactionId')
+                  if requested_refresh != stale_transaction_id:
+                      outcome = emit_outcome(
+                          'STALE_OBSERVATION',
+                          issue,
+                          stale,
+                          owner_diagnostic=stale.get('owner_diagnostic'),
+                          evidence_refs={'prepare': stale['prepare_evidence_ref']},
+                      )
+                      refresh_detail = ('none' if not requested_refresh else requested_refresh)
+                      SUMMARY.write_text('# D1 stale transaction stopped before refresh\n\n'
+                                         f"- Current stage issue: `#{issue}`\n- Stale TransactionId: `{stale_transaction_id}`\n"
+                                         f"- Requested refresh TransactionId: `{refresh_detail}`\n"
+                                         f"- Typed outcome: `{outcome['outcome']}`\n"
+                                         '- Observation dispatch: `NO`\n- Prepare dispatch: `NO`\n- Executor dispatch: `NO`\n- Provider mutation: `NO`\n'
+                                         f'- Required next action: `/d1 operator-refresh {stale_transaction_id}`\n',
+                                         encoding='utf-8')
+                      print(f"D1_OPERATOR_STATE=STALE_OBSERVATION transaction_id={stale_transaction_id} refresh_required=true issue={issue}")
+                      raise SystemExit(1)
+                  candidate = None
+              elif requested_refresh:
+                  outcome = emit_outcome('REPLAY_OR_NOOP', issue, candidate)
+                  SUMMARY.write_text('# D1 stale refresh is not applicable\n\n'
+                                     f"- Current stage issue: `#{issue}`\n- Requested stale TransactionId: `{requested_refresh}`\n"
+                                     f"- Typed outcome: `{outcome['outcome']}`\n"
+                                     '- No stale current transaction exists for this refresh intent.\n'
+                                     '- Observation dispatch: `NO`\n- Prepare dispatch: `NO`\n- Executor dispatch: `NO`\n- Provider mutation: `NO`\n',
+                                     encoding='utf-8')
+                  print(f"D1_OPERATOR_STATE=REPLAY_OR_NOOP refresh_transaction_id={requested_refresh} issue={issue}")
+                  raise SystemExit(0)
+
               if candidate is None:
                   observed = fresh_observation()
                   observed_planned = observed['planned_migrations']
@@ -1016,11 +1073,15 @@ jobs:
                       raise SystemExit(0)
                   outcome = emit_outcome('AUTHORIZATION_REQUIRED', issue, candidate,
                                          evidence_refs={'prepare': candidate.get('prepare_evidence_ref') or f"github-actions:run:{candidate['run_id']}:attempt:{candidate['run_attempt']}"})
+                  refresh_line = ''
+                  if requested_refresh:
+                      refresh_line = f'- Refresh intent consumed by transition from stale TransactionId: `{requested_refresh}`\n'
                   SUMMARY.write_text('# D1 transaction prepared\n\n'
                                      f"- Current stage issue: `#{issue}`\n- TransactionId: `{tx['transaction_id']}`\n"
                                      f"- Prepare run: `{candidate['run_id']}` attempt `{candidate['run_attempt']}`\n"
                                      f"- Fresh until unix: `{candidate['fresh_until']}`\n- Typed outcome: `{outcome['outcome']}`\n"
-                                     '- Provider mutation: `NO`\n- Next: record one exact transaction authorization in the CURRENT stage issue, then run this workflow once.\n',
+                                     + refresh_line
+                                     + '- Provider mutation: `NO`\n- Next: record one exact transaction authorization in the CURRENT stage issue, then run this workflow once.\n',
                                      encoding='utf-8')
                   print(f"D1_OPERATOR_STATE=AUTHORIZATION_REQUIRED transaction_id={tx['transaction_id']} issue={issue}")
                   raise SystemExit(0)
