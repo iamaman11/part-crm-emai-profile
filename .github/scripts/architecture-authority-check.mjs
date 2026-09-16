@@ -219,17 +219,21 @@ function validate(subjects, sources) {
   }
 
   const deviceKey = profile.security_domains?.find((entry) => entry.id === 'profile-bridge.device-private-key');
-  const enrollmentClaim = profile.security_domains?.find((entry) => entry.id === 'profile-bridge.enrollment-claim');
+  const pairingToken = profile.security_domains?.find((entry) => entry.id === 'profile-bridge.device-pairing-token');
   if (!deviceKey
       || deviceKey.application_boundary !== 'HANDLE_ONLY'
       || deviceKey.material_readback !== false
       || deviceKey.raw_handle_visibility !== false
       || deviceKey.primary_enrollment_use !== 'APPLICATION_DEVICE_REGISTRATION_AND_FRESH_PROOF_OF_POSSESSION'
-      || enrollmentClaim?.replay_policy !== 'REJECT_REPLAY_AND_DEVICE_REBIND'
-      || enrollmentClaim?.retirement_policy !== 'EXPIRE_OR_SINGLE_SUCCESSFUL_REDEMPTION'
-      || enrollmentClaim?.device_registration_scope !== 'ONE_AUTHENTICATED_USER_ONE_DEVICE_KEY_ONE_DEVICE_REGISTRATION'
-      || enrollmentClaim?.certificate_enrollment_scope !== undefined) {
-    errors.push('Bridge device-key/enrollment claim ownership drifted from one-shot application device registration');
+      || !pairingToken
+      || pairingToken.class !== 'EPHEMERAL_DEVICE_PAIRING_SECRET'
+      || pairingToken.owner !== 'profile-bridge-device-identity-authority'
+      || pairingToken.legitimate_mutable_authority !== 'single device application pairing state machine'
+      || pairingToken.replay_policy !== 'REJECT_REPLAY_AND_DEVICE_REBIND'
+      || pairingToken.retirement_policy !== 'EXPIRE_OR_SINGLE_SUCCESSFUL_PAIRING_COMPLETION'
+      || pairingToken.device_registration_scope !== 'ONE_AUTHENTICATED_USER_ONE_DEVICE_KEY_ONE_DEVICE_REGISTRATION'
+      || pairingToken.certificate_enrollment_scope !== undefined) {
+    errors.push('Bridge device-key/pairing-token ownership drifted from the single device application authority');
   }
 
   for (const [name, subject] of Object.entries({ authority, lifecycle, profile })) {
@@ -337,22 +341,26 @@ function main() {
     profileServiceTokenFallback.profile.bridge_device_application_admission.legacy_admission.service_token_fallback = true;
     assertRejected('Bridge profile service-token fallback', profileServiceTokenFallback, sources);
 
-    const reusableEnrollment = structuredClone(subjects);
-    reusableEnrollment.profile.security_domains.find((entry) => entry.id === 'profile-bridge.enrollment-claim').retirement_policy = 'REUSABLE';
-    assertRejected('Bridge enrollment claim becoming reusable', reusableEnrollment, sources);
+    const reusablePairing = structuredClone(subjects);
+    reusablePairing.profile.security_domains.find((entry) => entry.id === 'profile-bridge.device-pairing-token').retirement_policy = 'REUSABLE';
+    assertRejected('Bridge pairing token becoming reusable', reusablePairing, sources);
+
+    const duplicatePairingOwner = structuredClone(subjects);
+    duplicatePairingOwner.profile.security_domains.find((entry) => entry.id === 'profile-bridge.device-pairing-token').owner = 'profile-bridge-enrollment-authority';
+    assertRejected('Bridge duplicate pairing owner resurrection', duplicatePairingOwner, sources);
 
     const certificateEnrollment = structuredClone(subjects);
-    certificateEnrollment.profile.security_domains.find((entry) => entry.id === 'profile-bridge.enrollment-claim').certificate_enrollment_scope = 'legacy';
+    certificateEnrollment.profile.security_domains.find((entry) => entry.id === 'profile-bridge.device-pairing-token').certificate_enrollment_scope = 'legacy';
     assertRejected('Bridge certificate enrollment resurrection', certificateEnrollment, sources);
 
     const insecureProfile = structuredClone(subjects);
     insecureProfile.profile.status = 'historical';
     assertRejected('profile authority rollback', insecureProfile, sources);
 
-    console.log('Credential/profile authority negative fixtures rejected; Bridge admission remains local CNG device-bound, session-revocable and PKI-fallback-free.');
+    console.log('Credential/profile authority negative fixtures rejected; Bridge admission remains one-owner local CNG device-bound, session-revocable and PKI-fallback-free.');
     return;
   }
-  console.log('Credential lifecycle and profile security authorities are canonical; Bridge admission is device-bound CNG/application-session proof with historical PKI fallback absent.');
+  console.log('Credential lifecycle and profile security authorities are canonical; Bridge admission and pairing are device-bound under one current owner with historical PKI fallback absent.');
 }
 
 try {

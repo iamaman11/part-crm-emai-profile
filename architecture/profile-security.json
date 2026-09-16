@@ -153,16 +153,16 @@
       "production_proof_complete": false
     },
     {
-      "id": "profile-bridge.enrollment-claim",
-      "class": "EPHEMERAL_DEVICE_ENROLLMENT_SECRET",
-      "owner": "profile-bridge-enrollment-authority",
-      "protected_value_authority": "bounded ephemeral claim value in the issuing/redemption flow only",
-      "legitimate_mutable_authority": "single enrollment claim issue/redeem state machine",
-      "version_state_source": "claim expiry/redemption/device binding metadata without claim value",
+      "id": "profile-bridge.device-pairing-token",
+      "class": "EPHEMERAL_DEVICE_PAIRING_SECRET",
+      "owner": "profile-bridge-device-identity-authority",
+      "protected_value_authority": "bounded ephemeral pairing token in the device application create/authorize/complete flow only",
+      "legitimate_mutable_authority": "single device application pairing state machine",
+      "version_state_source": "pairing expiry/authorization/challenge/device binding metadata without pairing-token value",
       "debug_policy": "REDACTED",
-      "claim_value_visibility": "REDACTED_ONLY",
+      "pairing_token_visibility": "REDACTED_ONLY",
       "replay_policy": "REJECT_REPLAY_AND_DEVICE_REBIND",
-      "retirement_policy": "EXPIRE_OR_SINGLE_SUCCESSFUL_REDEMPTION",
+      "retirement_policy": "EXPIRE_OR_SINGLE_SUCCESSFUL_PAIRING_COMPLETION",
       "device_registration_scope": "ONE_AUTHENTICATED_USER_ONE_DEVICE_KEY_ONE_DEVICE_REGISTRATION",
       "production_proof_complete": false
     },
@@ -191,7 +191,7 @@
       "id": "profile-session.launch-intent-state",
       "credential_authority": false,
       "class": "CONFIDENTIAL_EPHEMERAL_AUTHORIZATION_STATE",
-      "secret_redemption_mapping": "profile-bridge.enrollment-claim"
+      "secret_redemption_mapping": "profile-bridge.device-pairing-token"
     },
     {
       "id": "profile-session.fencing-token",
