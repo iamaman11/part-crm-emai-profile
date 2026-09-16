@@ -162,6 +162,18 @@ jobs:
           test "$apps_code" = 200
           jq -e '.success == true and (.errors | length) == 0 and (.result | type == "array")' "$raw/access-apps.json" >/dev/null
 
+          identity_providers_code="$(curl --silent --show-error --output "$raw/access-identity-providers.json" --write-out '%{http_code}' \
+            -H "Authorization: Bearer $CLOUDFLARE_ZERO_TRUST_OBSERVE_API_TOKEN" \
+            "https://api.cloudflare.com/client/v4/accounts/$account_id/access/identity_providers?per_page=1000")"
+          test "$identity_providers_code" = 200
+          jq -e '.success == true and (.errors | length) == 0 and (.result | type == "array")' "$raw/access-identity-providers.json" >/dev/null
+
+          groups_code="$(curl --silent --show-error --output "$raw/access-groups.json" --write-out '%{http_code}' \
+            -H "Authorization: Bearer $CLOUDFLARE_ZERO_TRUST_OBSERVE_API_TOKEN" \
+            "https://api.cloudflare.com/client/v4/accounts/$account_id/access/groups?per_page=1000")"
+          test "$groups_code" = 200
+          jq -e '.success == true and (.errors | length) == 0 and (.result | type == "array")' "$raw/access-groups.json" >/dev/null
+
           organization_code="$(curl --silent --show-error --output "$raw/access-organization.json" --write-out '%{http_code}' \
             -H "Authorization: Bearer $CLOUDFLARE_ZERO_TRUST_OBSERVE_API_TOKEN" \
             "https://api.cloudflare.com/client/v4/accounts/$account_id/access/organizations")"
@@ -240,6 +252,8 @@ jobs:
             --zero-trust-token-verify "$raw/zero-trust-token-verify.json" \
             --apps "$raw/access-apps.json" \
             --organization "$raw/access-organization.json" \
+            --identity-providers "$raw/access-identity-providers.json" \
+            --groups "$raw/access-groups.json" \
             --certificates "$raw/access-certificates.json" \
             --policies-dir "$policies" \
             --d1-ledger "$raw/d1-ledger.json" \
@@ -247,7 +261,7 @@ jobs:
             --output "$evidence/evidence.json"
 
           SOURCE_SHA="$SOURCE_SHA" jq -e \
-            '.schema_version == 1 and .kind == "V2_STAGING_ENVELOPE_OBSERVATION" and .source_sha == env.SOURCE_SHA and .environment == "staging" and .provider_mutation == false and .production_mutation == false' \
+            '.schema_version == 1 and .kind == "V2_STAGING_ENVELOPE_OBSERVATION" and .source_sha == env.SOURCE_SHA and .environment == "staging" and .provider_mutation == false and .production_mutation == false and (.access.identity_providers | type == "array") and (.access.groups | type == "array")' \
             "$evidence/evidence.json" >/dev/null
           python -m json.tool "$evidence/evidence.json" >/dev/null
 
