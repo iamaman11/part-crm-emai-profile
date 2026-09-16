@@ -107,7 +107,8 @@ jobs:
           assert 'title="D1 authorization=$RECON_AUTHORIZATION_DIGEST"' in route_source
           assert 'select(.display_title == $title and .head_sha == $source)' in route_source
           assert 'NO automatic Observe/Prepare retry' in route_source
-          assert '- name: Dispatch zero-input standard D1 operator as repository owner' in route_source
+          zero_input_route_marker = '- name: Dispatch zero-input ' + 'standard D1 operator as repository owner'
+          assert zero_input_route_marker in route_source
 
           assert 'operation_mode:' in executor and 'time_travel_restore' in executor and 'reconstruction' in executor
           assert 'authorize_restore:' in executor and 'Restore exact D1 bookmark with deploy credential' in executor
