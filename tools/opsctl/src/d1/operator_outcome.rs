@@ -14,6 +14,7 @@ const OPERATOR_OUTCOME_SCHEMA_VERSION: u64 = 1;
 pub enum D1OperatorOutcomeKind {
     PrepareBlocked,
     AuthorizationRequired,
+    RefreshRequired,
     StaleObservation,
     NoAuthorization,
     MultipleAuthorizations,
@@ -30,9 +31,10 @@ pub enum D1OperatorOutcomeKind {
 }
 
 impl D1OperatorOutcomeKind {
-    pub const ALL: [Self; 15] = [
+    pub const ALL: [Self; 16] = [
         Self::PrepareBlocked,
         Self::AuthorizationRequired,
+        Self::RefreshRequired,
         Self::StaleObservation,
         Self::NoAuthorization,
         Self::MultipleAuthorizations,
@@ -53,6 +55,7 @@ impl D1OperatorOutcomeKind {
         match self {
             Self::PrepareBlocked => "PREPARE_BLOCKED",
             Self::AuthorizationRequired => "AUTHORIZATION_REQUIRED",
+            Self::RefreshRequired => "REFRESH_REQUIRED",
             Self::StaleObservation => "STALE_OBSERVATION",
             Self::NoAuthorization => "NO_AUTHORIZATION",
             Self::MultipleAuthorizations => "MULTIPLE_AUTHORIZATIONS",
@@ -74,7 +77,9 @@ impl D1OperatorOutcomeKind {
     #[must_use]
     pub const fn status(self) -> &'static str {
         match self {
-            Self::AuthorizationRequired | Self::NoAuthorization => "ACTION_REQUIRED",
+            Self::AuthorizationRequired | Self::RefreshRequired | Self::NoAuthorization => {
+                "ACTION_REQUIRED"
+            }
             Self::RecoveryRequired => "RECOVERY_REQUIRED",
             Self::CompletedVerified => "COMPLETED",
             Self::ReplayOrNoop => "NOOP",
@@ -98,6 +103,9 @@ impl D1OperatorOutcomeKind {
             }
             Self::AuthorizationRequired => {
                 "A fresh immutable transaction is prepared and requires one exact transaction-scoped authorization."
+            }
+            Self::RefreshRequired => {
+                "The latest prepared predecessor cannot progress in the current operator invocation and requires one explicit exact transaction-scoped refresh intent before any successor Observe/Prepare transition."
             }
             Self::StaleObservation => {
                 "The provider observation bound to the operation is outside its typed freshness window."
@@ -145,43 +153,46 @@ impl D1OperatorOutcomeKind {
     pub const fn remediation(self) -> &'static str {
         match self {
             Self::PrepareBlocked => {
-                "Use the canonical PREPARE_BLOCKED GateResult remediation, repair only the named natural-owner condition, then rerun the zero-input operator."
+                "Use the canonical PREPARE_BLOCKED GateResult remediation, repair only the named natural-owner condition, then rerun the operator through a new explicit OWNER action."
             }
             Self::AuthorizationRequired => {
-                "Record exactly one fresh immutable OWNER authorization for this TransactionId in the CURRENT stage issue, then rerun the zero-input operator once."
+                "Record exactly one fresh immutable OWNER authorization for this TransactionId in the CURRENT stage issue, then rerun the operator once."
+            }
+            Self::RefreshRequired => {
+                "Do not auto-observe, auto-prepare, or reuse authorization. Record one new explicit OWNER refresh action bound to this exact predecessor TransactionId; that action may perform at most one read-only Observe and one Prepare before stopping for a new authorization."
             }
             Self::StaleObservation => {
-                "Run the existing read-only observation owner again and rebuild Prepare; do not reuse the stale transaction or authorization."
+                "Do not automatically rebuild the transaction. Require a new explicit OWNER refresh action bound to the exact stale TransactionId before one read-only re-observation and Prepare."
             }
             Self::NoAuthorization => {
-                "Do not dispatch the executor. Record exactly one valid transaction-scoped authorization or allow the transaction to expire and rebuild it."
+                "Do not dispatch the executor. Record exactly one valid transaction-scoped authorization or allow the transaction to expire and then require an explicit exact refresh action."
             }
             Self::MultipleAuthorizations => {
-                "Do not dispatch the executor. Resolve the ambiguous authorization set in the CURRENT stage issue and prepare a fresh transaction before retrying."
+                "Do not dispatch the executor. Resolve the ambiguous authorization set in the CURRENT stage issue; any successor transaction requires a new explicit exact refresh action."
             }
             Self::InvalidAuthorization => {
                 "Use the typed authorization rejection evidence or embedded owner diagnostic, correct the authorization envelope without broadening effect scope, and rerun only while the transaction remains fresh."
             }
             Self::StaleAuthorization => {
-                "Do not reuse the expired authorization. Re-observe/re-prepare if necessary and obtain a new exact transaction-scoped authorization."
+                "Do not reuse the expired authorization. Stop with no effect; any successor Observe/Prepare requires a new explicit OWNER refresh action bound to the exact predecessor TransactionId."
             }
             Self::SourceTreeTransactionDrift => {
-                "Discard the stale/drifted transaction, establish fresh protected-main authority, then re-observe and re-prepare before requesting authorization."
+                "Do not automatically re-observe or re-prepare. Establish fresh protected-main authority, then require a new explicit OWNER refresh action bound to the exact drifted predecessor TransactionId."
             }
             Self::TargetPrestateDrift => {
-                "Do not write. Re-observe the exact target and build a new canonical Prepare/TransactionId for the newly observed predecessor state."
+                "Do not write. Require a new explicit OWNER refresh action before re-observing the exact target and building a new canonical Prepare/TransactionId."
             }
             Self::PrewriteAbort => {
-                "Do not bypass the failing fence. Use the executor/receipt diagnostic to repair the named pre-write condition, then start again from fresh observation and Prepare."
+                "Do not bypass the failing fence or automatically retry. Use the executor/receipt diagnostic to repair the named pre-write condition; a successor transaction requires a new explicit exact OWNER refresh action."
             }
             Self::ExecutorFailedNoEffect => {
-                "Use the terminal ExecutionReceipt diagnostic, repair the executor failure, then restart from fresh observation/Prepare with a new authorization if a write is still required."
+                "Use the terminal ExecutionReceipt diagnostic and repair the executor failure. Do not automatically Observe/Prepare; a successor transaction requires a new explicit exact OWNER refresh action and a new authorization if a write is still required."
             }
             Self::RecoveryRequired => {
                 "Stop automatic progression. Follow the typed receipt/post-state recovery disposition through the existing recovery owner; do not auto-restore or silently retry."
             }
             Self::CompletedVerified => {
-                "Record the immutable receipt and post-state evidence locators in the CURRENT stage issue; no recovery action is required."
+                "Record the immutable receipt and post-state evidence locators in the CURRENT stage issue; no recovery action is required. Any later successor transaction starts only from a new explicit OWNER action."
             }
             Self::ReplayOrNoop => {
                 "Record the mechanical no-op/replay proof; do not consume stale authorization or introduce a synthetic write merely to create evidence."
@@ -261,7 +272,6 @@ pub struct D1OperatorOutcome {
     pub transaction_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub target: Option<TargetIdentity>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub owner_diagnostic: Option<Value>,
     pub evidence_refs: BTreeMap<String, String>,
 }
@@ -448,7 +458,7 @@ pub fn verify_operator_transaction(
 
 pub fn serialize_operator_outcome(outcome: &D1OperatorOutcome) -> Result<String, D1Error> {
     let value = serde_json::to_value(outcome)
-        .map_err(|error| D1Error::new(format!("cannot serialize D1 operator outcome: {error}")))?;
+        .map_err(|error| D1Error::new(format!("cannot serialize outcome test JSON: {error}")))?;
     canonical_json(&value).map_err(D1Error::new)
 }
 
@@ -556,6 +566,16 @@ mod tests {
             assert_eq!(outcome.mode, "read-only");
             assert!(!outcome.operator_has_provider_credentials);
         }
+        Ok(())
+    }
+
+    #[test]
+    fn refresh_required_is_action_required_and_exact_transaction_scoped() -> Result<(), D1Error> {
+        let outcome = build_operator_outcome(D1OperatorOutcomeKind::RefreshRequired, context())?;
+        assert_eq!(outcome.status, "ACTION_REQUIRED");
+        assert_eq!(outcome.outcome, "REFRESH_REQUIRED");
+        assert_eq!(outcome.transaction_id.as_deref(), Some(&"cc".repeat(32)));
+        assert!(outcome.remediation.contains("exact predecessor TransactionId"));
         Ok(())
     }
 
