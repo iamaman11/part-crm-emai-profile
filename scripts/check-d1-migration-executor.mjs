@@ -28,7 +28,8 @@ const RECONSTRUCTION_DEPLOY_READINESS_STEP = 'Verify deploy credential readiness
 const RESTORE_DEPLOY_READINESS_STEP = 'Verify deploy credential readiness before Time Travel restore effect';
 const RECONSTRUCTION_MUTATION_STARTED_STEP = 'Append PREWRITE_FENCE_PASS and MUTATION_STARTED';
 const RESTORE_MUTATION_STARTED_STEP = 'Persist restore MUTATION_STARTED receipt';
-const DEPLOY_VERIFY_ENDPOINT = 'https://api.cloudflare.com/client/v4/user/tokens/verify';
+const DEPLOY_ACCOUNT_VERIFY_ENDPOINT = 'https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/tokens/verify';
+const DEPLOY_USER_VERIFY_ENDPOINT = 'https://api.cloudflare.com/client/v4/user/tokens/verify';
 const ORDINARY_CONFIRMATION = 'test "$CONFIRMATION" = "$SOURCE_SHA:$TARGET_ENVIRONMENT:$COMPONENT:$DATABASE_ID"';
 const CONTRACT_CONFIRMATION = 'test "$CONFIRMATION" = "$SOURCE_SHA:$TARGET_ENVIRONMENT:$COMPONENT:$DATABASE_ID:contract:$EXPECTED_RELEASE_SET_ID"';
 const POST_CONTRACT_LEDGER = '--post-ledger-json artifacts/d1-migration/ledger-after.json';
@@ -109,8 +110,12 @@ function validateDeployReadinessStep(text, stepName) {
   const body = stepBody(text, stepName);
   for (const marker of [
     DEPLOY_REF,
-    DEPLOY_VERIFY_ENDPOINT,
-    'test "$verify_code" = 200',
+    DEPLOY_ACCOUNT_VERIFY_ENDPOINT,
+    DEPLOY_USER_VERIFY_ENDPOINT,
+    'if [ "$account_code" = 200 ] && jq -e',
+    '"$account_verify" >/dev/null; then',
+    'test "$user_code" = 200',
+    '"$user_verify" >/dev/null',
     '.result.status == "active"',
     'd1 info',
     '--experimental-provision=false',
@@ -215,7 +220,7 @@ async function validateExecutor(text, root = ROOT) {
     TARGET_FENCE_VERIFICATION, 'TARGET_FENCE_ACQUIRED', 'TARGET_FENCE_VERIFIED',
     RECEIPT_INIT_STEP, RECEIPT_INITIAL_MARKER_STEP, RECEIPT_PREWRITE_STEP, PREAPPLY_OBSERVE_STEP,
     MIGRATION_DEPLOY_READINESS_STEP, RECONSTRUCTION_DEPLOY_READINESS_STEP, RESTORE_DEPLOY_READINESS_STEP,
-    DEPLOY_VERIFY_ENDPOINT,
+    DEPLOY_ACCOUNT_VERIFY_ENDPOINT, DEPLOY_USER_VERIFY_ENDPOINT,
     RECEIPT_MUTATION_STARTED_STEP, RECEIPT_MUTATION_MARKER_STEP, APPLY_STEP, RECEIPT_APPLIED_STEP,
     RECEIPT_APPLIED_MARKER_STEP, REREAD_STEP, RECEIPT_POST_OBSERVED_STEP, POST_INVARIANT_STEP, RECEIPT_COMPLETE_STEP,
     RECEIPT_TERMINALIZE_STEP, RECEIPT_TERMINAL_MARKER_STEP, RECEIPT,
@@ -863,6 +868,8 @@ async function selfTest(text) {
     ['missing migration deploy readiness fence', `      - name: ${MIGRATION_DEPLOY_READINESS_STEP}`, '      - name: Removed migration deploy readiness'],
     ['missing reconstruction deploy readiness fence', `      - name: ${RECONSTRUCTION_DEPLOY_READINESS_STEP}`, '      - name: Removed reconstruction deploy readiness'],
     ['missing restore deploy readiness fence', `      - name: ${RESTORE_DEPLOY_READINESS_STEP}`, '      - name: Removed restore deploy readiness'],
+    ['missing account-owned deploy token verification', DEPLOY_ACCOUNT_VERIFY_ENDPOINT, 'https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/tokens/removed-verify'],
+    ['missing user-owned deploy token fallback', DEPLOY_USER_VERIFY_ENDPOINT, 'https://api.cloudflare.com/client/v4/user/tokens/removed-verify'],
     ['missing MUTATION_STARTED projection', `      - name: ${RECEIPT_MUTATION_STARTED_STEP}`, '      - name: Removed MUTATION_STARTED receipt'],
     ['missing durable MUTATION_STARTED snapshot', `      - name: ${RECEIPT_MUTATION_MARKER_STEP}`, '      - name: Removed durable MUTATION_STARTED snapshot'],
     ['missing mechanically known MIGRATION_APPLIED events', `      - name: ${RECEIPT_APPLIED_STEP}`, '      - name: Removed MIGRATION_APPLIED receipt'],
@@ -932,7 +939,7 @@ async function selfTest(text) {
     'second remote apply',
     `${text}\n# npx --yes ${PINNED_WRANGLER} d1 migrations apply X --remote --experimental-provision=false --experimental-auto-create=false\n`,
   );
-  console.log('Protected D1 executor typed-admission, durable target fence, append-only ExecutionReceipt ordering/durability, observe-only preapply revalidation, deploy-credential READY before MUTATION_STARTED, fail-closed terminalization, sealed-plan, exact-prestate, D1-supported quick-check diagnostics, evidence v3, post-CONTRACT and one-owner negative fixtures passed.');
+  console.log('Protected D1 executor typed-admission, durable target fence, append-only ExecutionReceipt ordering/durability, observe-only preapply revalidation, token-owner-neutral deploy-credential READY before MUTATION_STARTED, fail-closed terminalization, sealed-plan, exact-prestate, D1-supported quick-check diagnostics, evidence v3, post-CONTRACT and one-owner negative fixtures passed.');
 }
 
 async function main() {
@@ -943,7 +950,7 @@ async function main() {
   }
   if (process.argv.length > 2) fail(`unknown arguments: ${process.argv.slice(2).join(' ')}`);
   await validateExecutor(text, ROOT);
-  console.log('Protected D1 executor contract passed: workflow-dispatch-only, immutable OWNER authorization provenance, typed admission before one-shot consumption, target-scoped typed fence, append-only ExecutionReceipt, observe-only preapply revalidation, deploy-credential READY before MUTATION_STARTED/effect, mechanically known applied events, D1-supported fail-closed post-verify diagnostics, evidence v3, fail-closed terminal receipt, exact sealed plan/prestate, typed post-CONTRACT verification, one remote apply owner, no automatic restore or provisioning.');
+  console.log('Protected D1 executor contract passed: workflow-dispatch-only, immutable OWNER authorization provenance, typed admission before one-shot consumption, target-scoped typed fence, append-only ExecutionReceipt, observe-only preapply revalidation, token-owner-neutral deploy-credential READY before MUTATION_STARTED/effect, mechanically known applied events, D1-supported fail-closed post-verify diagnostics, evidence v3, fail-closed terminal receipt, exact sealed plan/prestate, typed post-CONTRACT verification, one remote apply owner, no automatic restore or provisioning.');
 }
 
 main().catch((error) => {
