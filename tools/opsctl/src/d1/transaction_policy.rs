@@ -122,7 +122,8 @@ mod tests {
     #[test]
     fn prepare_policy_drift_is_rejected() {
         let mut changed = prepare();
-        changed["plan"]["transaction_policy"]["observation_freshness_max_age_seconds"] = json!(3601);
+        changed["plan"]["transaction_policy"]["observation_freshness_max_age_seconds"] =
+            json!(3601);
         assert!(validate_ordinary_transaction_binding(&changed, &transaction()).is_err());
     }
 }
