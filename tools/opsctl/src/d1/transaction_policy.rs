@@ -3,7 +3,7 @@ use super::transaction_core::{RecoveryStrategy, TransactionKind, TransactionPhas
 use serde_json::{Value, json};
 
 const POLICY_SCHEMA_VERSION: u64 = 1;
-const ORDINARY_OBSERVATION_FRESHNESS_MAX_AGE_SECONDS: u64 = 900;
+const ORDINARY_OBSERVATION_FRESHNESS_MAX_AGE_SECONDS: u64 = 3600;
 const ORDINARY_TRANSACTION_KIND: TransactionKind = TransactionKind::D1Migration;
 const ORDINARY_TRANSACTION_PHASE: TransactionPhase = TransactionPhase::Ordinary;
 const ORDINARY_RECOVERY_STRATEGY: RecoveryStrategy = RecoveryStrategy::NoopRetry;
@@ -86,6 +86,7 @@ mod tests {
     #[test]
     fn ordinary_policy_projection_is_stable_and_typed() {
         let policy = ordinary_projection();
+        assert_eq!(ORDINARY_OBSERVATION_FRESHNESS_MAX_AGE_SECONDS, 3600);
         assert_eq!(policy["schema_version"], POLICY_SCHEMA_VERSION);
         assert_eq!(policy["transaction_kind"], json!(ORDINARY_TRANSACTION_KIND));
         assert_eq!(policy["phase"], json!(ORDINARY_TRANSACTION_PHASE));
@@ -107,7 +108,7 @@ mod tests {
     #[test]
     fn freshness_drift_is_rejected() {
         let mut changed = transaction();
-        changed["freshness_max_age_seconds"] = json!(901);
+        changed["freshness_max_age_seconds"] = json!(3601);
         assert!(validate_ordinary_transaction_binding(&prepare(), &changed).is_err());
     }
 
@@ -121,7 +122,7 @@ mod tests {
     #[test]
     fn prepare_policy_drift_is_rejected() {
         let mut changed = prepare();
-        changed["plan"]["transaction_policy"]["observation_freshness_max_age_seconds"] = json!(901);
+        changed["plan"]["transaction_policy"]["observation_freshness_max_age_seconds"] = json!(3601);
         assert!(validate_ordinary_transaction_binding(&changed, &transaction()).is_err());
     }
 }
