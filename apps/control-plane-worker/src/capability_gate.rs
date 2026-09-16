@@ -146,7 +146,6 @@ pub fn route_surface(route: RouteClass, path: &str) -> Option<RuntimeSurface> {
         | RouteClass::MembershipStatusApi
         | RouteClass::DeviceBindingResourceApi
         | RouteClass::DeviceBindingRevokeApi
-        | RouteClass::BridgeEnrollmentApi
         | RouteClass::DevicePairingCollectionApi
         | RouteClass::DevicePairingAuthorizationApi
         | RouteClass::DevicePairingCompletionApi
@@ -290,7 +289,7 @@ mod tests {
     }
 
     #[test]
-    fn enrollment_device_binding_and_device_application_use_existing_identity_capability() {
+    fn device_binding_and_device_application_use_existing_identity_capability() {
         for (route, path) in [
             (
                 RouteClass::DeviceBindingResourceApi,
@@ -299,10 +298,6 @@ mod tests {
             (
                 RouteClass::DeviceBindingRevokeApi,
                 "/api/v1/tenants/tenant_01/members/actor_01/device-binding",
-            ),
-            (
-                RouteClass::BridgeEnrollmentApi,
-                "/api/v1/tenants/tenant_01/bridge-enrollment/authorities",
             ),
             (
                 RouteClass::DevicePairingCollectionApi,
