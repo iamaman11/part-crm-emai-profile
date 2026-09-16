@@ -368,10 +368,6 @@ pub fn openapi_document() -> Value {
     });
     merge_fragment(
         &mut document,
-        crate::bridge_enrollment_api::openapi_fragment(),
-    );
-    merge_fragment(
-        &mut document,
         crate::device_application_api::openapi_fragment(),
     );
     document
@@ -577,10 +573,6 @@ mod tests {
             "NotificationReplayReceipt",
             "NotificationOperationsProjection",
             "ProblemPayload",
-            "BridgeEnrollmentIssueRequest",
-            "BridgeEnrollmentIssueProjection",
-            "BridgeEnrollmentRedemptionRequest",
-            "BridgeEnrollmentRedemptionProjection",
             "DevicePairingCreateRequest",
             "DevicePairingCreateProjection",
             "DevicePairingAuthorizeRequest",
@@ -602,10 +594,6 @@ mod tests {
                 .get("requestDigest")
                 .is_none()
         );
-        let redemption_properties = &schemas["BridgeEnrollmentRedemptionRequest"]["properties"];
-        for forbidden in ["tenantId", "actorId", "deviceId", "csrSha256"] {
-            assert!(redemption_properties.get(forbidden).is_none());
-        }
         assert!(document["paths"]["/api/v1/session"]["get"].is_object());
         assert!(document["paths"]["/api/v1/tenants/{tenantId}/clients"]["post"].is_object());
         assert!(
@@ -620,8 +608,6 @@ mod tests {
                 .is_object()
         );
         for path in [
-            "/api/v1/tenants/{tenantId}/bridge-enrollment/authorities",
-            "/api/v1/tenants/{tenantId}/bridge-enrollment/redemptions",
             "/api/v1/tenants/{tenantId}/device-pairings",
             "/api/v1/tenants/{tenantId}/device-pairings/authorizations",
             "/api/v1/tenants/{tenantId}/device-pairings/completions",
@@ -633,6 +619,16 @@ mod tests {
                 "missing path {path}"
             );
         }
+        assert!(
+            document["paths"]
+                .get("/api/v1/tenants/{tenantId}/bridge-enrollment/authorities")
+                .is_none()
+        );
+        assert!(
+            document["paths"]
+                .get("/api/v1/tenants/{tenantId}/bridge-enrollment/redemptions")
+                .is_none()
+        );
         assert_eq!(
             document["components"]["securitySchemes"]["cloudflareAccessJwt"]["name"],
             "Cf-Access-Jwt-Assertion"

@@ -1,6 +1,5 @@
 #![forbid(unsafe_code)]
 
-pub mod bridge_enrollment_api;
 pub mod client_mail_send_api;
 pub mod client_registry_api;
 pub mod coordinator_api;
@@ -35,7 +34,6 @@ pub enum RouteClass {
     MembershipStatusApi,
     DeviceBindingResourceApi,
     DeviceBindingRevokeApi,
-    BridgeEnrollmentApi,
     DevicePairingCollectionApi,
     DevicePairingAuthorizationApi,
     DevicePairingCompletionApi,
