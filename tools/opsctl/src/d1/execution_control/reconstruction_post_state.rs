@@ -679,7 +679,12 @@ mod tests {
                 "stale fixture observation unexpectedly passed",
             ));
         };
-        assert_eq!(error.gate_result_json()["reason_code"], "STALE_OBSERVATION");
+        assert_eq!(
+            error.gate_result_json()["reason_code"],
+            "STALE_OBSERVATION",
+            "unexpected stale-post-state diagnostic: {}",
+            error.gate_result_json()
+        );
         Ok(())
     }
 
