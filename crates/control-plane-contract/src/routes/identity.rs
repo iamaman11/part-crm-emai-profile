@@ -27,14 +27,6 @@ pub(super) fn classify(method: &str, segments: &[&str]) -> Option<RouteClass> {
         ["api", "v1", "tenants", _, "members", _, "device-binding"] if method == "DELETE" => {
             Some(RouteClass::DeviceBindingRevokeApi)
         }
-        [
-            "api",
-            "v1",
-            "tenants",
-            _,
-            "bridge-enrollment",
-            "authorities" | "redemptions",
-        ] if method == "POST" => Some(RouteClass::BridgeEnrollmentApi),
         _ => None,
     }
 }
@@ -69,7 +61,7 @@ mod tests {
     }
 
     #[test]
-    fn bridge_enrollment_human_ingress_is_exact_and_post_only() {
+    fn retired_bridge_enrollment_ingress_is_not_classified() {
         for tail in ["authorities", "redemptions"] {
             let segments = [
                 "api",
@@ -79,11 +71,7 @@ mod tests {
                 "bridge-enrollment",
                 tail,
             ];
-            assert_eq!(
-                classify("POST", &segments),
-                Some(RouteClass::BridgeEnrollmentApi)
-            );
-            for method in ["GET", "PUT", "DELETE", "PATCH"] {
+            for method in ["GET", "POST", "PUT", "DELETE", "PATCH"] {
                 assert_eq!(classify(method, &segments), None);
             }
         }
