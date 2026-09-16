@@ -272,6 +272,7 @@ pub struct D1OperatorOutcome {
     pub transaction_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub target: Option<TargetIdentity>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub owner_diagnostic: Option<Value>,
     pub evidence_refs: BTreeMap<String, String>,
 }
@@ -457,8 +458,9 @@ pub fn verify_operator_transaction(
 }
 
 pub fn serialize_operator_outcome(outcome: &D1OperatorOutcome) -> Result<String, D1Error> {
-    let value = serde_json::to_value(outcome)
-        .map_err(|error| D1Error::new(format!("cannot serialize outcome test JSON: {error}")))?;
+    let value = serde_json::to_value(outcome).map_err(|error| {
+        D1Error::new(format!("cannot serialize D1 operator outcome: {error}"))
+    })?;
     canonical_json(&value).map_err(D1Error::new)
 }
 
@@ -571,10 +573,11 @@ mod tests {
 
     #[test]
     fn refresh_required_is_action_required_and_exact_transaction_scoped() -> Result<(), D1Error> {
+        let expected = "cc".repeat(32);
         let outcome = build_operator_outcome(D1OperatorOutcomeKind::RefreshRequired, context())?;
         assert_eq!(outcome.status, "ACTION_REQUIRED");
         assert_eq!(outcome.outcome, "REFRESH_REQUIRED");
-        assert_eq!(outcome.transaction_id.as_deref(), Some(&"cc".repeat(32)));
+        assert_eq!(outcome.transaction_id.as_deref(), Some(expected.as_str()));
         assert!(outcome.remediation.contains("exact predecessor TransactionId"));
         Ok(())
     }
@@ -623,6 +626,7 @@ mod tests {
         assert_eq!(serialized, canonical_json(&value).map_err(D1Error::new)?);
         assert_eq!(value["outcome"], "COMPLETED_VERIFIED");
         assert_eq!(value["operator_has_provider_credentials"], false);
+        assert!(value.get("owner_diagnostic").is_none());
         Ok(())
     }
 
