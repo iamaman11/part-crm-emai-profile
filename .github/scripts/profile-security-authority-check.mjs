@@ -11,7 +11,7 @@ const EXPECTED_DOMAINS = new Set([
   'profile-identity.entropy-root',
   'profile-bridge.device-private-key',
   'profile-network.proxy-credential',
-  'profile-bridge.enrollment-claim',
+  'profile-bridge.device-pairing-token',
   'profile-generation.short-lived-object-access',
 ]);
 const EXPECTED_NONCREDENTIAL = new Set([
@@ -178,12 +178,15 @@ function validateAuthority(authority, errors) {
     errors.push('Bridge device/application desired Access effects drifted');
   }
 
-  const enrollment = domains?.find((entry) => entry.id === 'profile-bridge.enrollment-claim');
-  if (!enrollment
-      || enrollment.device_registration_scope !== 'ONE_AUTHENTICATED_USER_ONE_DEVICE_KEY_ONE_DEVICE_REGISTRATION'
-      || enrollment.certificate_enrollment_scope !== undefined
-      || enrollment.replay_policy !== 'REJECT_REPLAY_AND_DEVICE_REBIND') {
-    errors.push('Bridge enrollment claim must remain one-shot device registration, not certificate enrollment');
+  const pairing = domains?.find((entry) => entry.id === 'profile-bridge.device-pairing-token');
+  if (!pairing
+      || pairing.class !== 'EPHEMERAL_DEVICE_PAIRING_SECRET'
+      || pairing.owner !== 'profile-bridge-device-identity-authority'
+      || pairing.legitimate_mutable_authority !== 'single device application pairing state machine'
+      || pairing.device_registration_scope !== 'ONE_AUTHENTICATED_USER_ONE_DEVICE_KEY_ONE_DEVICE_REGISTRATION'
+      || pairing.certificate_enrollment_scope !== undefined
+      || pairing.replay_policy !== 'REJECT_REPLAY_AND_DEVICE_REBIND') {
+    errors.push('Bridge pairing token must remain one-shot device registration under the existing device identity owner, not a second enrollment or certificate authority');
   }
 
   const objectAccess = domains?.find((entry) => entry.id === 'profile-generation.short-lived-object-access');
@@ -210,6 +213,11 @@ function validateAuthority(authority, errors) {
       || noncredentialIds.some((id) => !EXPECTED_NONCREDENTIAL.has(id))
       || noncredential.some((entry) => entry.credential_authority !== false)) {
     errors.push('coordination/authorization state must not become credential authority');
+  }
+  const launchIntent = noncredential.find((entry) => entry.id === 'profile-session.launch-intent-state');
+  if (!launchIntent
+      || launchIntent.secret_redemption_mapping !== 'profile-bridge.device-pairing-token') {
+    errors.push('launch intent must reference the current device-pairing token domain');
   }
 
   const payload = authority.credential_equivalent_assets?.find((entry) => entry.id === 'browser-profile-generation-payload');
@@ -305,7 +313,10 @@ function main() {
       candidate.bridge_device_application_admission.device_key.private_key_exportable = true;
     }, 'exportable Windows device key');
     expectRejected(authority, (candidate) => {
-      candidate.security_domains.find((entry) => entry.id === 'profile-bridge.enrollment-claim').certificate_enrollment_scope = 'legacy';
+      candidate.security_domains.find((entry) => entry.id === 'profile-bridge.device-pairing-token').owner = 'profile-bridge-enrollment-authority';
+    }, 'duplicate pairing owner');
+    expectRejected(authority, (candidate) => {
+      candidate.security_domains.find((entry) => entry.id === 'profile-bridge.device-pairing-token').certificate_enrollment_scope = 'legacy';
     }, 'certificate enrollment');
 
     const audienceMutated = structuredClone(wrangler);
@@ -325,10 +336,10 @@ function main() {
     proxyHandleProof(boundaryErrors, publicSource);
     if (boundaryErrors.length === 0) throw new Error('public proxy handle negative fixture unexpectedly passed');
 
-    console.log('Profile-security current device/session authority and legacy Bridge admission negative fixtures rejected as expected.');
+    console.log('Profile-security current device/session authority and legacy/duplicate Bridge admission negative fixtures rejected as expected.');
     return;
   }
-  console.log(`Profile security authority validated; current Bridge device/session admission enforced; proxy raw-handle repository occurrences inspected=${occurrences}; public/API/operator/log boundaries clean.`);
+  console.log(`Profile security authority validated; single current Bridge device/pairing/session authority enforced; proxy raw-handle repository occurrences inspected=${occurrences}; public/API/operator/log boundaries clean.`);
 }
 
 try {
