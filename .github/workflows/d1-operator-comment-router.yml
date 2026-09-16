@@ -1,6 +1,6 @@
 name: D1 Operator Comment Router
 
-run-name: D1 operator comment transport / ${{ github.event_name }} / ${{ github.sha }}
+run-name: D1 operator comment transport / ${{ github.event_name }} / ${{ github.event.comment.id || 'contract' }} / ${{ github.sha }}
 
 on:
   pull_request:
@@ -67,32 +67,39 @@ jobs:
               'd1 ' + 'create',
               'd1 ' + 'delete',
               'd1 time-travel ' + 'restore',
-              'D1_TRANSACTION_' + 'AUTHORIZATION_V1',
               'issues:' + ' write',
               'contents:' + ' write',
               'D1_OPERATOR_' + 'DISPATCH_TOKEN',
+              'D1_BOOTSTRAP_CURRENT_EXACT_CONSTRUCTION',
           )
           for value in forbidden:
               assert value not in router, f'comment router acquired forbidden authority: {value}'
 
           secret_prefix = 'sec' + 'rets.'
           dispatch_secret = secret_prefix + 'GH_ADMIN_OPERATOR_TOKEN'
-          assert router.count(secret_prefix) == 2, 'governed GitHub admin credential may appear only in the two privileged dispatch steps'
-          assert router.count(dispatch_secret) == 2, 'operator and restore dispatch must reuse only the governed GitHub admin credential'
+          assert router.count(secret_prefix) == 3, 'governed GitHub admin credential may appear only in the three privileged dispatch steps'
+          assert router.count(dispatch_secret) == 3, 'operator/reconstruction/restore dispatch must reuse only the governed GitHub admin credential'
           assert '"credential_id": "github.hosted-admin-operator"' in credential_authority
           assert '".github/workflows/d1-operator-comment-router.yml"' in credential_authority
 
           dispatch_token = '/' + 'dispatches'
-          assert router.count(dispatch_token) == 3, 'comment router must expose exactly three bounded downstream dispatches'
+          assert router.count(dispatch_token) == 5, 'comment router must expose exactly five bounded downstream dispatches'
           assert ('actions/workflows/d1-operator.yml/' + 'dispatches') in router
-          assert ('actions/workflows/d1-isolated-target-observation.yml/' + 'dispatches') in router
-          assert ('actions/workflows/d1-migration-executor.yml/' + 'dispatches') in router
+          assert router.count('actions/workflows/d1-isolated-target-observation.yml/' + 'dispatches') == 2
+          assert router.count('actions/workflows/d1-migration-executor.yml/' + 'dispatches') == 2
           assert "github.event.comment.body == '/d1 operator'" in router
+          assert "github.event.comment.body == '/d1 reconstruction'" in router
+          assert "startsWith(github.event.comment.body, '/d1 reconstruction-execute ')" in router
           assert "startsWith(github.event.comment.body, '/d1 time-travel-info ')" in router
           assert "startsWith(github.event.comment.body, '/d1 time-travel-restore ')" in router
-          assert 'operation_mode:' in executor and 'time_travel_restore' in executor
+          assert router.count('D1_TRANSACTION_AUTHORIZATION_V1') == 1, 'router may transport but must not own transaction authorization semantics'
+          assert 'D1_ROUTE_ALREADY_HANDLED' in router
+          assert "run_attempt != 1" in router
+          assert "display_title == title" in router
+          assert "D1 authorization={authorization_digest}" in router
+          assert 'operation_mode:' in executor and 'time_travel_restore' in executor and 'reconstruction' in executor
           assert 'authorize_restore:' in executor and 'Restore exact D1 bookmark with deploy credential' in executor
-          assert executor.count("if: inputs.operation_mode == 'migration'") == 2, 'existing migration authorize+execute jobs must both be guarded from restore mode'
+          assert executor.count("if: inputs.operation_mode == 'migration'") == 2, 'existing migration authorize+execute jobs must both be guarded from restore/reconstruction modes'
           restore_source = executor.split('\n  authorize_restore:', 1)[1]
           migration_apply = 'd1 migrations ' + 'apply'
           d1_create = 'd1 ' + 'create'
@@ -136,6 +143,7 @@ jobs:
 
           observer_trigger = observer.split('\npermissions:', 1)[0]
           observer_dispatch = observer_trigger.split('\n  workflow_dispatch:', 1)[1]
+          assert 'operation_mode:' in observer_dispatch and '- reconstruction' in observer_dispatch
           assert 'time_travel_unix_seconds:' in observer_dispatch, 'existing observer must own the optional read-only Time Travel timestamp input'
           assert 'required: false' in observer_dispatch
           assert 'type: string' in observer_dispatch
@@ -150,6 +158,8 @@ jobs:
       github.event.issue.state == 'open' &&
       (
         github.event.comment.body == '/d1 operator' ||
+        github.event.comment.body == '/d1 reconstruction' ||
+        startsWith(github.event.comment.body, '/d1 reconstruction-execute ') ||
         startsWith(github.event.comment.body, '/d1 time-travel-info ') ||
         startsWith(github.event.comment.body, '/d1 time-travel-restore ')
       ) &&
@@ -163,6 +173,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 3
     env:
+      COMMENT_ID: ${{ github.event.comment.id }}
       COMMENT_ISSUE_NUMBER: ${{ github.event.issue.number }}
       COMMENT_BODY: ${{ github.event.comment.body }}
       COMMENT_AUTHOR_ASSOCIATION: ${{ github.event.comment.author_association }}
@@ -184,13 +195,24 @@ jobs:
 
           body, env_path = sys.argv[1:]
           restore_comment = ''
+          reconstruction_prepare_run = ''
+          reconstruction_authorization_comment = ''
           if body == '/d1 operator':
               kind = 'operator'
               timestamp = ''
+          elif body == '/d1 reconstruction':
+              kind = 'reconstruction'
+              timestamp = ''
           else:
+              reconstruction_execute = re.fullmatch(r'/d1 reconstruction-execute ([1-9][0-9]*) ([1-9][0-9]*)', body)
               info = re.fullmatch(r'/d1 time-travel-info ([0-9]{10})', body)
               restore = re.fullmatch(r'/d1 time-travel-restore ([1-9][0-9]*)', body)
-              if info is not None:
+              if reconstruction_execute is not None:
+                  kind = 'reconstruction_execute'
+                  timestamp = ''
+                  reconstruction_prepare_run = reconstruction_execute.group(1)
+                  reconstruction_authorization_comment = reconstruction_execute.group(2)
+              elif info is not None:
                   kind = 'time_travel_info'
                   timestamp = info.group(1)
               elif restore is not None:
@@ -203,6 +225,9 @@ jobs:
               handle.write(f'D1_ROUTE_KIND={kind}\n')
               handle.write(f'D1_TIME_TRAVEL_UNIX_SECONDS={timestamp}\n')
               handle.write(f'D1_RESTORE_AUTHORIZATION_COMMENT_ID={restore_comment}\n')
+              handle.write(f'D1_RECONSTRUCTION_PREPARE_RUN_ID={reconstruction_prepare_run}\n')
+              handle.write(f'D1_RECONSTRUCTION_AUTHORIZATION_COMMENT_ID={reconstruction_authorization_comment}\n')
+              handle.write('D1_ROUTE_ALREADY_HANDLED=false\n')
           PY
 
           main_json="$RUNNER_TEMP/main.json"
@@ -232,8 +257,21 @@ jobs:
               raise SystemExit(f'command issue #{comment_issue} is not CURRENT stage issue #{matches[0]}')
           PY
 
+          if [ "$GITHUB_RUN_ATTEMPT" -ne 1 ]; then
+            echo 'D1_ROUTE_ALREADY_HANDLED=true' >> "$GITHUB_ENV"
+            exit 0
+          fi
+          expected_title="D1 operator comment transport / issue_comment / $COMMENT_ID / $GITHUB_SHA"
+          prior_count="$(gh api --paginate \
+            "repos/$GITHUB_REPOSITORY/actions/workflows/d1-operator-comment-router.yml/runs?event=issue_comment&branch=main&per_page=100" |
+            jq -s --arg title "$expected_title" --argjson current_number "$GITHUB_RUN_NUMBER" \
+              '[.[].workflow_runs[] | select(.display_title == $title and .run_number < $current_number)] | length')"
+          if [ "$prior_count" -gt 0 ]; then
+            echo 'D1_ROUTE_ALREADY_HANDLED=true' >> "$GITHUB_ENV"
+          fi
+
       - name: Dispatch zero-input standard D1 operator as repository owner
-        if: env.D1_ROUTE_KIND == 'operator'
+        if: env.D1_ROUTE_KIND == 'operator' && env.D1_ROUTE_ALREADY_HANDLED != 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_ADMIN_OPERATOR_TOKEN }}
         run: |
@@ -243,8 +281,20 @@ jobs:
             "repos/$GITHUB_REPOSITORY/actions/workflows/d1-operator.yml/dispatches" \
             -f ref=main
 
+      - name: Dispatch one reconstruction observation and Prepare chain
+        if: env.D1_ROUTE_KIND == 'reconstruction' && env.D1_ROUTE_ALREADY_HANDLED != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          payload="$RUNNER_TEMP/d1-reconstruction-dispatch.json"
+          jq -nc --arg ref main '{ref:$ref,inputs:{operation_mode:"reconstruction"}}' > "$payload"
+          gh api --method POST \
+            "repos/$GITHUB_REPOSITORY/actions/workflows/d1-isolated-target-observation.yml/dispatches" \
+            --input "$payload"
+
       - name: Dispatch exact read-only Time Travel lookup through existing observer
-        if: env.D1_ROUTE_KIND == 'time_travel_info'
+        if: env.D1_ROUTE_KIND == 'time_travel_info' && env.D1_ROUTE_ALREADY_HANDLED != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -259,8 +309,111 @@ jobs:
             "repos/$GITHUB_REPOSITORY/actions/workflows/d1-isolated-target-observation.yml/dispatches" \
             --input "$payload"
 
+      - name: Resolve exact reconstruction executor transport envelope
+        if: env.D1_ROUTE_KIND == 'reconstruction_execute' && env.D1_ROUTE_ALREADY_HANDLED != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          run_json="$RUNNER_TEMP/d1-reconstruction-prepare-run.json"
+          auth_json="$RUNNER_TEMP/d1-reconstruction-authorization-comment.json"
+          prepared="$RUNNER_TEMP/d1-reconstruction-prepared"
+          rm -rf "$prepared"
+          mkdir -p "$prepared"
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$D1_RECONSTRUCTION_PREPARE_RUN_ID" > "$run_json"
+          attempt="$(jq -er '.run_attempt | select(type == "number" and . >= 1)' "$run_json")"
+          jq -e --arg source "$GITHUB_SHA" \
+            '.path == ".github/workflows/d1-migration-prepare.yml" and .event == "workflow_dispatch" and .head_branch == "main" and .head_sha == $source and .status == "completed" and .conclusion == "success"' \
+            "$run_json" >/dev/null
+          artifact_name="d1-reconstruction-catalog-$D1_RECONSTRUCTION_PREPARE_RUN_ID-$attempt"
+          gh run download "$D1_RECONSTRUCTION_PREPARE_RUN_ID" --repo "$GITHUB_REPOSITORY" --name "$artifact_name" --dir "$prepared"
+          test -f "$prepared/reconstruction.json"
+          test "$(find "$prepared" -type f | wc -l)" -eq 1
+          gh api "repos/$GITHUB_REPOSITORY/issues/comments/$D1_RECONSTRUCTION_AUTHORIZATION_COMMENT_ID" > "$auth_json"
+          python - "$prepared/reconstruction.json" "$auth_json" "$COMMENT_ISSUE_NUMBER" "$GITHUB_SHA" "$attempt" "$GITHUB_ENV" "$RUNNER_TEMP/d1-reconstruction-authorization.json" <<'PY_RECON_ROUTE'
+          import hashlib, json, os, re, sys
+          reconstruction_path, auth_path, issue, source, attempt, env_path, output_path = sys.argv[1:]
+          reconstruction = json.load(open(reconstruction_path, encoding='utf-8'))
+          comment = json.load(open(auth_path, encoding='utf-8'))
+          operation_id = reconstruction.get('reconstruction_id')
+          plan = reconstruction.get('plan') or {}
+          observation = plan.get('provider_observation') or {}
+          target = observation.get('target') or {}
+          if (reconstruction.get('schema_version') != 1
+                  or reconstruction.get('status') != 'RECONSTRUCTION_PREPARED'
+                  or reconstruction.get('authorization_required') is not True
+                  or reconstruction.get('authorization_consumed') is not False
+                  or reconstruction.get('provider_mutation_executed') is not False):
+              raise SystemExit('prepared reconstruction transport envelope is not unconsumed RECONSTRUCTION_PREPARED')
+          if not isinstance(operation_id, str) or re.fullmatch(r'[0-9a-f]{64}', operation_id) is None:
+              raise SystemExit('prepared reconstruction has invalid operation identity')
+          if plan.get('source_sha') != source or plan.get('component') != 'catalog':
+              raise SystemExit('prepared reconstruction source/component does not match current transport')
+          required_target = ('environment', 'account_id', 'database_name', 'database_id')
+          if target.get('environment') != 'staging' or any(not isinstance(target.get(key), str) or not target[key] for key in required_target):
+              raise SystemExit('prepared reconstruction target is not exact staging identity')
+          if (comment.get('user') or {}).get('login') != os.environ['REPOSITORY_OWNER'] or comment.get('author_association') != 'OWNER':
+              raise SystemExit('reconstruction authorization must be OWNER-authored')
+          if comment.get('created_at') != comment.get('updated_at'):
+              raise SystemExit('reconstruction authorization comment must be immutable')
+          expected_issue_url = f"https://api.github.com/repos/{os.environ['GITHUB_REPOSITORY']}/issues/{issue}"
+          if comment.get('issue_url') != expected_issue_url:
+              raise SystemExit('reconstruction authorization is not on CURRENT stage issue')
+          body = comment.get('body')
+          lines = body.strip().splitlines() if isinstance(body, str) else []
+          if len(lines) != 2 or lines[0] != 'D1_TRANSACTION_AUTHORIZATION_V1':
+              raise SystemExit('reconstruction authorization transport envelope invalid')
+          raw = lines[1]
+          intent = json.loads(raw)
+          if not isinstance(intent, dict) or json.dumps(intent, sort_keys=True, separators=(',', ':'), ensure_ascii=False) != raw:
+              raise SystemExit('reconstruction authorization intent must be exact canonical JSON')
+          if intent.get('transaction_id') != operation_id or intent.get('target') != target:
+              raise SystemExit('reconstruction authorization transport identity does not match prepared reconstruction')
+          authorization = dict(intent)
+          authorization['authorization_reference'] = comment.get('html_url')
+          canonical = json.dumps(authorization, sort_keys=True, separators=(',', ':'), ensure_ascii=False)
+          authorization_digest = hashlib.sha256(canonical.encode('utf-8')).hexdigest()
+          with open(output_path, 'w', encoding='utf-8') as handle:
+              handle.write(canonical + '\n')
+          with open(env_path, 'a', encoding='utf-8') as handle:
+              handle.write(f'RECON_PREPARE_ATTEMPT={attempt}\n')
+              handle.write(f'RECON_TRANSACTION_ID={operation_id}\n')
+              handle.write(f'RECON_AUTHORIZATION_DIGEST={authorization_digest}\n')
+              handle.write(f"RECON_ACCOUNT_ID={target['account_id']}\n")
+              handle.write(f"RECON_DATABASE_NAME={target['database_name']}\n")
+              handle.write(f"RECON_DATABASE_ID={target['database_id']}\n")
+          PY_RECON_ROUTE
+
+          title="D1 authorization=$RECON_AUTHORIZATION_DIGEST"
+          existing="$(gh api --paginate \
+            "repos/$GITHUB_REPOSITORY/actions/workflows/d1-migration-executor.yml/runs?event=workflow_dispatch&branch=main&per_page=100" |
+            jq -s --arg title "$title" --arg source "$GITHUB_SHA" \
+              '[.[].workflow_runs[] | select(.display_title == $title and .head_sha == $source)] | length')"
+          if [ "$existing" -gt 0 ]; then
+            echo 'D1_ROUTE_ALREADY_HANDLED=true' >> "$GITHUB_ENV"
+          fi
+
+      - name: Dispatch one-shot reconstruction through sole D1 mutation owner
+        if: env.D1_ROUTE_KIND == 'reconstruction_execute' && env.D1_ROUTE_ALREADY_HANDLED != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GH_ADMIN_OPERATOR_TOKEN }}
+        run: |
+          set -euo pipefail
+          test -n "$GH_TOKEN"
+          authorization_json="$(cat "$RUNNER_TEMP/d1-reconstruction-authorization.json")"
+          confirmation="$GITHUB_SHA:staging:catalog:$RECON_DATABASE_ID"
+          payload="$RUNNER_TEMP/d1-reconstruction-executor-dispatch.json"
+          jq -nc --arg ref main --arg source "$GITHUB_SHA" \
+            --arg account "$RECON_ACCOUNT_ID" --arg name "$RECON_DATABASE_NAME" --arg id "$RECON_DATABASE_ID" \
+            --arg prepare_run "$D1_RECONSTRUCTION_PREPARE_RUN_ID" --arg prepare_attempt "$RECON_PREPARE_ATTEMPT" \
+            --arg transaction "$RECON_TRANSACTION_ID" --arg digest "$RECON_AUTHORIZATION_DIGEST" \
+            --arg authorization "$authorization_json" --arg confirmation "$confirmation" \
+            '{ref:$ref,inputs:{operation_mode:"reconstruction",restore_authorization_comment_id:"",environment:"staging",source_sha:$source,component:"catalog",account_id:$account,database_name:$name,database_id:$id,target_release_manifest_json:"{}",current_release_manifest_json:"{}",known_good_release_manifest_json:"{}",preconditions_json:"{}",transition_mode:"ordinary",expected_release_set_id:"",prepared_transaction_run_id:$prepare_run,prepared_transaction_run_attempt:$prepare_attempt,transaction_id:$transaction,authorization_digest:$digest,transaction_authorization_json:$authorization,mutation_authorized:true,confirmation:$confirmation}}' \
+            > "$payload"
+          gh api --method POST "repos/$GITHUB_REPOSITORY/actions/workflows/d1-migration-executor.yml/dispatches" --input "$payload"
+
       - name: Resolve exact restore transport envelope from OWNER authorization
-        if: env.D1_ROUTE_KIND == 'time_travel_restore'
+        if: env.D1_ROUTE_KIND == 'time_travel_restore' && env.D1_ROUTE_ALREADY_HANDLED != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -298,7 +451,7 @@ jobs:
           PY_RESTORE_ROUTE
 
       - name: Dispatch one-shot Time Travel restore through sole D1 mutation owner
-        if: env.D1_ROUTE_KIND == 'time_travel_restore'
+        if: env.D1_ROUTE_KIND == 'time_travel_restore' && env.D1_ROUTE_ALREADY_HANDLED != 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_ADMIN_OPERATOR_TOKEN }}
         run: |
@@ -316,8 +469,14 @@ jobs:
       - name: Record transport result
         run: |
           set -euo pipefail
-          if [ "$D1_ROUTE_KIND" = operator ]; then
+          if [ "$D1_ROUTE_ALREADY_HANDLED" = true ]; then
+            downstream='NOOP / exact OWNER command or authorization dispatch already handled; new OWNER comment required for a new attempt'
+          elif [ "$D1_ROUTE_KIND" = operator ]; then
             downstream='d1-operator.yml / main / zero inputs / owner actor'
+          elif [ "$D1_ROUTE_KIND" = reconstruction ]; then
+            downstream='d1-isolated-target-observation.yml / main / operation_mode=reconstruction / observer dispatches one credential-free Prepare'
+          elif [ "$D1_ROUTE_KIND" = reconstruction_execute ]; then
+            downstream="d1-migration-executor.yml / main / one-shot reconstruction prepare_run=$D1_RECONSTRUCTION_PREPARE_RUN_ID authorization_comment=$D1_RECONSTRUCTION_AUTHORIZATION_COMMENT_ID"
           elif [ "$D1_ROUTE_KIND" = time_travel_info ]; then
             downstream="d1-isolated-target-observation.yml / main / read-only timestamp=$D1_TIME_TRAVEL_UNIX_SECONDS"
           else
@@ -327,11 +486,15 @@ jobs:
             echo '## D1 owner comment transport'
             echo
             echo "- command issue: #$COMMENT_ISSUE_NUMBER"
+            echo "- command comment id: $COMMENT_ID"
             echo "- protected main: $GITHUB_SHA"
             echo "- command: \`$COMMENT_BODY\`"
             echo "- downstream: \`$downstream\`"
+            echo "- already handled: \`$D1_ROUTE_ALREADY_HANDLED\`"
+            echo '- one OWNER comment: at most one downstream dispatch'
+            echo '- stale/failed operation: NO automatic Observe/Prepare retry; a new OWNER command is required'
             echo '- provider credentials in router: NO'
             echo '- provider mutation authority in router: NO'
-            echo '- privileged operator/restore dispatch actor: governed GitHub admin operator credential only'
+            echo '- privileged operator/reconstruction/restore dispatch actor: governed GitHub admin operator credential only'
             echo '- read-only observer and authorization reads: ephemeral GitHub Actions token only'
           } >> "$GITHUB_STEP_SUMMARY"
