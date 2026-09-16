@@ -118,7 +118,7 @@ jobs:
           provider_contract_marker = 'expected_' + 'keys = {'
           provider_contract = source.split(provider_contract_marker, 1)[1].split('}', 1)[0]
           assert "'remote_migrations'" in provider_contract
-          assert "'wrangler_pending_migrations'" not in provider_contract
+          assert "'wrangler_pending_migrations'" in provider_contract
           for name in ('target-release.json', 'current-release.json', 'known-good-release.json', 'preconditions.json'):
               assert f'artifacts/d1-prepare/{name}' in source
           PY
@@ -202,7 +202,7 @@ jobs:
               observation = parsed['provider-observation.json']
               expected_keys = {
                   'schema_version', 'target', 'observed_at_unix_seconds', 'observation_source',
-                  'remote_ledger_sha256', 'remote_migrations',
+                  'remote_ledger_sha256', 'remote_migrations', 'wrangler_pending_migrations',
                   'deployment_identity', 'time_travel_bookmark_capable',
               }
               if set(observation) != expected_keys or observation.get('schema_version') != 1:
@@ -214,6 +214,9 @@ jobs:
                   raise SystemExit('reconstruction target must be staging')
               if observation.get('remote_migrations') != []:
                   raise SystemExit('reconstruction provider observation must have an exactly empty remote ledger')
+              pending = observation.get('wrangler_pending_migrations')
+              if not isinstance(pending, list) or not all(isinstance(name, str) and name for name in pending) or len(set(pending)) != len(pending):
+                  raise SystemExit('reconstruction wrangler_pending_migrations must be a duplicate-free string list')
               canonical = json.dumps({'remote_migrations': []}, sort_keys=True, separators=(',', ':'))
               if hashlib.sha256(canonical.encode()).hexdigest() != observation.get('remote_ledger_sha256'):
                   raise SystemExit('reconstruction provider observation ledger digest is detached from remote_migrations')
