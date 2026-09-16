@@ -101,12 +101,13 @@ jobs:
           assert 'd1-execution-receipt-' in source and 'd1-migration-evidence-' in source
           assert 'scripts/d1-prepare.py' in source and 'operator-input' in source
           assert 'transaction_policy' in source and 'observation_freshness_max_age_seconds' in source
+          assert "'database-inventory.json'" in source, 'standard operator must consume canonical D1 database inventory evidence'
           assert 'class TypedStop' in source and 'typed_owner_diagnostic' in source
           assert ('EXECUTOR_' + 'DISPATCHED') not in source, 'operator must reconcile terminal executor evidence instead of stopping after dispatch'
           for terminal in ('COMPLETED', 'RECOVERY_REQUIRED', 'FAILED_NO_EFFECT'):
               assert terminal in source, f'operator terminal reconciliation missing {terminal}'
           for outcome in ('PREPARE_BLOCKED', 'STALE_OBSERVATION', 'SOURCE_TREE_TRANSACTION_DRIFT', 'TARGET_PRESTATE_DRIFT'):
-              assert outcome in source, f'operator typed cause transport missing {outcome}'
+              assert outcome in source, f'D1 operator typed cause transport missing {outcome}'
           assert "summary.get('status') == 'PREPARE_BLOCKED'" in source, 'observer PREPARE_BLOCKED must remain typed'
           observed_noop = "observed_planned = observed['planned_migrations']"
           prepare_dispatch = 'candidate = dispatch_prepare_and_wait(observed)'
@@ -481,7 +482,7 @@ jobs:
               directory = Path(tempfile.mkdtemp(prefix='d1-preflight-'))
               if not download(run['id'], name, directory):
                   raise SystemExit('cannot download fresh observation preflight artifact')
-              required = {'prepare.json', 'provider-observation.json', 'runtime-context.json', 'summary.json', 'target-release-set-id.txt'}
+              required = {'database-inventory.json', 'prepare.json', 'provider-observation.json', 'runtime-context.json', 'summary.json', 'target-release-set-id.txt'}
               present = {path.name for path in directory.iterdir() if path.is_file()}
               if present != required:
                   raise SystemExit(f'fresh preflight artifact file set drifted: {sorted(present)}')
