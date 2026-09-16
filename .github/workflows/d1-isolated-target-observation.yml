@@ -144,6 +144,7 @@ jobs:
           assert '--known-good-manifest "$root/known-good-runtime-manifest.json"' in source
           assert 'D1_CLOUDFLARE_READ_CONTRACT_V1' in observe_source
           assert 'D1_CURRENT_TARGET_OBSERVATION' in observe_source
+          assert "'wrangler_pending_migrations': pending" in observe_source
           assert 'D1_DATABASE_INVENTORY_OBSERVATION_V1' in observe_source
           assert 'database-inventory.json' in observe_source
           assert "'inventory_complete': True" in observe_source
@@ -642,6 +643,7 @@ jobs:
               'observation_source': observation_source,
               'remote_ledger_sha256': remote_ledger_sha256,
               'remote_migrations': remote_migrations,
+              'wrangler_pending_migrations': pending,
               'deployment_identity': current_release_set_id,
               'time_travel_bookmark_capable': True,
           }
@@ -676,7 +678,7 @@ jobs:
           PY
 
           SOURCE_SHA="$SOURCE_SHA" TARGET_NAME="$target_name" TARGET_ID="$target_id" jq -e \
-            '.schema_version == 1 and .kind == "D1_CURRENT_TARGET_OBSERVATION" and .source_sha == env.SOURCE_SHA and .environment == "staging" and .component == "catalog" and .provider_observation_input.target.database_name == env.TARGET_NAME and .provider_observation_input.target.database_id == env.TARGET_ID and .provider_observation_input.target.environment == "staging" and (.current_deployed_release_set_id | test("^release-set-v(2|3)-sha256-[0-9a-f]{64}$")) and (.current_deployed_source_sha | test("^[0-9a-f]{40}$")) and .provider_observation_input.time_travel_bookmark_capable == true and .provider_diagnostics.schema_version == 1 and .provider_diagnostics.read_contract.kind == "D1_CLOUDFLARE_READ_CONTRACT_V1" and .provider_diagnostics.read_contract.query_mutation_proof.ledger_table_changed_db == false and .provider_diagnostics.read_contract.query_mutation_proof.ledger_changed_db == false and .provider_diagnostics.read_contract.query_mutation_proof.foreign_key_changed_db == false and .provider_diagnostics.read_contract.query_mutation_proof.quick_check_changed_db == false and .provider_mutation == false and .d1_mutation == false and .production_mutation == false' \
+            '.schema_version == 1 and .kind == "D1_CURRENT_TARGET_OBSERVATION" and .source_sha == env.SOURCE_SHA and .environment == "staging" and .component == "catalog" and .provider_observation_input.target.database_name == env.TARGET_NAME and .provider_observation_input.target.database_id == env.TARGET_ID and .provider_observation_input.target.environment == "staging" and (.provider_observation_input.wrangler_pending_migrations | type == "array") and .provider_observation_input.wrangler_pending_migrations == .provider_diagnostics.provider_pending_migrations and (.current_deployed_release_set_id | test("^release-set-v(2|3)-sha256-[0-9a-f]{64}$")) and (.current_deployed_source_sha | test("^[0-9a-f]{40}$")) and .provider_observation_input.time_travel_bookmark_capable == true and .provider_diagnostics.schema_version == 1 and .provider_diagnostics.read_contract.kind == "D1_CLOUDFLARE_READ_CONTRACT_V1" and .provider_diagnostics.read_contract.query_mutation_proof.ledger_table_changed_db == false and .provider_diagnostics.read_contract.query_mutation_proof.ledger_changed_db == false and .provider_diagnostics.read_contract.query_mutation_proof.foreign_key_changed_db == false and .provider_diagnostics.read_contract.query_mutation_proof.quick_check_changed_db == false and .provider_mutation == false and .d1_mutation == false and .production_mutation == false' \
             "$evidence/provider-observation.json" >/dev/null
 
           {
