@@ -392,6 +392,8 @@ jobs:
               handle.write(f"RECON_DATABASE_ID={target['database_id']}\n")
           PY_RECON_ROUTE
 
+          RECON_AUTHORIZATION_DIGEST="$(sed -n 's/^RECON_AUTHORIZATION_DIGEST=//p' "$GITHUB_ENV")"
+          [[ "$RECON_AUTHORIZATION_DIGEST" =~ ^[0-9a-f]{64}$ ]]
           title="D1 authorization=$RECON_AUTHORIZATION_DIGEST"
           existing="$(gh api --paginate \
             "repos/$GITHUB_REPOSITORY/actions/workflows/d1-migration-executor.yml/runs?event=workflow_dispatch&branch=main&per_page=100" |
