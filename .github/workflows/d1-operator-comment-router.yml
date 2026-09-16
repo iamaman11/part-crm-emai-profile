@@ -107,6 +107,7 @@ jobs:
           assert 'title="D1 authorization=$RECON_AUTHORIZATION_DIGEST"' in route_source
           assert 'select(.display_title == $title and .head_sha == $source)' in route_source
           assert 'NO automatic Observe/Prepare retry' in route_source
+          assert '- name: Dispatch zero-input standard D1 operator as repository owner' in route_source
 
           assert 'operation_mode:' in executor and 'time_travel_restore' in executor and 'reconstruction' in executor
           assert 'authorize_restore:' in executor and 'Restore exact D1 bookmark with deploy credential' in executor
@@ -148,8 +149,7 @@ jobs:
 
           operator_trigger = operator.split('\npermissions:', 1)[0]
           operator_dispatch = operator_trigger.split('\n  workflow_dispatch:', 1)[1]
-          assert operator_dispatch.count('refresh_stale_transaction_id:') == 1, 'operator may expose exactly one stale-refresh input'
-          assert 'required: false' in operator_dispatch and 'type: string' in operator_dispatch and "default: ''" in operator_dispatch
+          assert 'inputs:' not in operator_dispatch, 'standard D1 operator must remain zero-input'
           assert 'test "$GITHUB_ACTOR" = "$GITHUB_REPOSITORY_OWNER"' in operator, 'standard operator owner-identity gate drifted'
 
           observer_trigger = observer.split('\npermissions:', 1)[0]
@@ -289,7 +289,7 @@ jobs:
             echo 'D1_ROUTE_ALREADY_HANDLED=true' >> "$GITHUB_ENV"
           fi
 
-      - name: Dispatch standard D1 operator or exact stale refresh as repository owner
+      - name: Dispatch zero-input standard D1 operator as repository owner
         if: >-
           (env.D1_ROUTE_KIND == 'operator' || env.D1_ROUTE_KIND == 'operator_refresh') &&
           env.D1_ROUTE_ALREADY_HANDLED != 'true'
@@ -298,17 +298,12 @@ jobs:
         run: |
           set -euo pipefail
           test -n "$GH_TOKEN"
-          payload="$RUNNER_TEMP/d1-operator-dispatch.json"
-          if [ "$D1_ROUTE_KIND" = operator ]; then
-            jq -nc --arg ref main '{ref:$ref}' > "$payload"
-          else
+          if [ "$D1_ROUTE_KIND" = operator_refresh ]; then
             [[ "$D1_REFRESH_STALE_TRANSACTION_ID" =~ ^[0-9a-f]{64}$ ]]
-            jq -nc --arg ref main --arg transaction "$D1_REFRESH_STALE_TRANSACTION_ID" \
-              '{ref:$ref,inputs:{refresh_stale_transaction_id:$transaction}}' > "$payload"
           fi
           gh api --method POST \
             "repos/$GITHUB_REPOSITORY/actions/workflows/d1-operator.yml/dispatches" \
-            --input "$payload"
+            -f ref=main
 
       - name: Dispatch one reconstruction observation and Prepare chain
         if: env.D1_ROUTE_KIND == 'reconstruction' && env.D1_ROUTE_ALREADY_HANDLED != 'true'
@@ -503,9 +498,9 @@ jobs:
           if [ "$D1_ROUTE_ALREADY_HANDLED" = true ]; then
             downstream='NOOP / exact OWNER command or authorization dispatch already handled; new OWNER comment required for a new attempt'
           elif [ "$D1_ROUTE_KIND" = operator ]; then
-            downstream='d1-operator.yml / main / no refresh intent / owner actor'
+            downstream='d1-operator.yml / main / zero inputs / owner actor'
           elif [ "$D1_ROUTE_KIND" = operator_refresh ]; then
-            downstream="d1-operator.yml / main / refresh_stale_transaction_id=$D1_REFRESH_STALE_TRANSACTION_ID / owner actor"
+            downstream="d1-operator.yml / main / zero inputs / refresh intent remains in immutable OWNER comment tx=$D1_REFRESH_STALE_TRANSACTION_ID"
           elif [ "$D1_ROUTE_KIND" = reconstruction ]; then
             downstream='d1-isolated-target-observation.yml / main / operation_mode=reconstruction / observer dispatches one credential-free Prepare'
           elif [ "$D1_ROUTE_KIND" = reconstruction_execute ]; then
@@ -525,6 +520,7 @@ jobs:
             echo "- downstream: \`$downstream\`"
             echo "- already handled: \`$D1_ROUTE_ALREADY_HANDLED\`"
             echo '- one OWNER comment: at most one downstream dispatch'
+            echo '- standard operator transport: zero machine inputs'
             echo '- stale transaction: ordinary operator is terminal/no-effect; refresh requires exact /d1 operator-refresh <TransactionId>'
             echo '- stale/failed operation: NO automatic Observe/Prepare retry; a new exact OWNER command is required'
             echo '- provider credentials in router: NO'
