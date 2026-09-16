@@ -110,14 +110,18 @@ jobs:
               assert outcome in source, f'D1 operator typed cause transport missing {outcome}'
           assert "summary.get('status') == 'PREPARE_BLOCKED'" in source, 'observer PREPARE_BLOCKED must remain typed'
           observed_noop = "observed_planned = observed['planned_migrations']"
-          prepare_dispatch = 'candidate = dispatch_prepare_and_wait(observed)'
+          prepare_dispatch = 'candidate = dispatch_' + 'prepare_and_wait(observed)'
+          stale_marker = '# STALE_PREPARED_TRANSACTION_IS_' + 'PROVENANCE'
+          auth_marker = '# NONCURRENT_AUTHORIZATION_IS_' + 'PROVENANCE'
+          stale_branch = "if reason == " + "'STALE_OBSERVATION':"
+          auth_subject_filter = "if intent.get('transaction_id') != tx.get(" + "'transaction_id'):"
           assert observed_noop in source, 'fresh PREPARE_READY empty-plan disposition must be explicit'
           assert source.index(observed_noop) < source.index(prepare_dispatch), 'fresh empty plan must stop before canonical Prepare transaction rendering'
           assert source.count(prepare_dispatch) == 1, 'one ordinary operator invocation may mint at most one fresh Prepare transaction'
-          assert source.count('# STALE_PREPARED_TRANSACTION_IS_PROVENANCE') == 1, 'stale prepared transaction must be non-current provenance'
-          assert source.count('# NONCURRENT_AUTHORIZATION_IS_PROVENANCE') == 1, 'authorization for another transaction must be non-current provenance'
-          assert "if reason == 'STALE_OBSERVATION':" in source, 'stale prepared transaction must fall through to one fresh Observe/Prepare cycle'
-          assert "if intent.get('transaction_id') != tx.get('transaction_id'):" in source, 'authorization discovery must first bind to the current transaction id'
+          assert source.count(stale_marker) == 1, 'stale prepared transaction must be non-current provenance'
+          assert source.count(auth_marker) == 1, 'authorization for another transaction must be non-current provenance'
+          assert stale_branch in source, 'stale prepared transaction must fall through to one fresh Observe/Prepare cycle'
+          assert auth_subject_filter in source, 'authorization discovery must first bind to the current transaction id'
           assert "'planned_migrations': planned" in source and "'preflight_ref': preflight_ref" in source, 'fresh observation must transport typed no-op evidence'
           forbidden_rejected_index = 'latest = rejected' + '[0]'
           assert forbidden_rejected_index not in source, 'authorization rejection-set policy must not live in workflow ordering'
