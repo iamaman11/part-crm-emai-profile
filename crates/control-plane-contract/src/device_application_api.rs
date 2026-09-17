@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 pub const DEVICE_PAIRING_COLLECTION_PATH_TEMPLATE: &str =
-    "/api/v1/tenants/{tenantId}/device-pairings";
+    "/api/v1/tenants/{tenantId}/device-pairings/requests";
 pub const DEVICE_PAIRING_AUTHORIZATION_PATH_TEMPLATE: &str =
     "/api/v1/tenants/{tenantId}/device-pairings/authorizations";
 pub const DEVICE_PAIRING_COMPLETION_PATH_TEMPLATE: &str =
@@ -330,6 +330,20 @@ mod tests {
         P256_SPKI_DER_HEX_LENGTH,
     };
     use serde_json::Value;
+
+    #[test]
+    fn pairing_create_path_is_a_leaf_sibling_of_human_authorization() {
+        assert_eq!(
+            super::DEVICE_PAIRING_COLLECTION_PATH_TEMPLATE,
+            "/api/v1/tenants/{tenantId}/device-pairings/requests"
+        );
+        assert!(
+            !super::DEVICE_PAIRING_AUTHORIZATION_PATH_TEMPLATE.starts_with(&format!(
+                "{}/",
+                super::DEVICE_PAIRING_COLLECTION_PATH_TEMPLATE
+            ))
+        );
+    }
 
     #[test]
     fn transport_is_strict_and_keeps_raw_secrets_out_of_paths() {
