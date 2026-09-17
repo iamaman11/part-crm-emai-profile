@@ -2,18 +2,18 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { fireEvent, render, screen } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { TenantProvider } from '../../app/TenantContext';
+import { getTenantContexts } from '../session';
 import {
   authorizeDevicePairing,
   getAuthenticatedDevicePairingSession,
 } from './api';
 import { DevicePairingPanel } from './DevicePairingPanel';
-import { getTenantContexts } from '../session/api';
 
 vi.mock('./api', () => ({
   authorizeDevicePairing: vi.fn(),
   getAuthenticatedDevicePairingSession: vi.fn(),
 }));
-vi.mock('../session/api', () => ({ getTenantContexts: vi.fn() }));
+vi.mock('../session', () => ({ getTenantContexts: vi.fn() }));
 
 const mockedAuthorizeDevicePairing = vi.mocked(authorizeDevicePairing);
 const mockedGetAuthenticatedDevicePairingSession = vi.mocked(getAuthenticatedDevicePairingSession);
