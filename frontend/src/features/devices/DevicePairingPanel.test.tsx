@@ -2,7 +2,6 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { fireEvent, render, screen } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { TenantProvider } from '../../app/TenantContext';
-import { getTenantContexts } from '../session';
 import {
   authorizeDevicePairing,
   getAuthenticatedDevicePairingSession,
@@ -13,16 +12,27 @@ vi.mock('./api', () => ({
   authorizeDevicePairing: vi.fn(),
   getAuthenticatedDevicePairingSession: vi.fn(),
 }));
-vi.mock('../session', () => ({ getTenantContexts: vi.fn() }));
 
 const mockedAuthorizeDevicePairing = vi.mocked(authorizeDevicePairing);
 const mockedGetAuthenticatedDevicePairingSession = vi.mocked(getAuthenticatedDevicePairingSession);
-const mockedGetTenantContexts = vi.mocked(getTenantContexts);
 
 function renderPanel() {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
-    <QueryClientProvider client={queryClient}><TenantProvider><DevicePairingPanel /></TenantProvider></QueryClientProvider>,
+    <QueryClientProvider client={queryClient}>
+      <TenantProvider
+        loadTenantContexts={async () => ({
+          tenants: [{
+            tenantId: 'tenant_01JTEST',
+            displayName: 'Test organization',
+            actorId: 'actor_01JTEST',
+            role: 'TENANT_OWNER',
+          }],
+        })}
+      >
+        <DevicePairingPanel />
+      </TenantProvider>
+    </QueryClientProvider>,
   );
 }
 
@@ -41,7 +51,6 @@ describe('DevicePairingPanel', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     window.history.replaceState(null, '', '/devices?tenant=tenant_01JTEST');
-    mockedGetTenantContexts.mockResolvedValue({ tenants: [{ tenantId: 'tenant_01JTEST', displayName: 'Test organization', actorId: 'actor_01JTEST', role: 'TENANT_OWNER' }] });
   });
 
   it('starts pairing with only safe tenant and browser-generated device identity', async () => {
