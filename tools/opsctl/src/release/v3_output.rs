@@ -230,6 +230,7 @@ mod tests {
             },
             runtime_compatibility: RuntimeCompatibilityIdentityDto {
                 runtime_lock_sha256: digest('f'),
+                runtime_component_inputs_sha256: Some(digest('0')),
                 runtime_role: "camouhost".to_owned(),
                 profile_format: "profile-v1".to_owned(),
                 browser_identity_policy: "browser-identity-v1".to_owned(),
