@@ -213,16 +213,19 @@ jobs:
           $artifactSha = $lock.candidates.windows.artifact_sha256
           $buildSourceCommit = $lock.candidates.windows.build_source_commit
           if ($artifactSha -notmatch '^[0-9a-f]{64}$' -or $buildSourceCommit -notmatch '^[0-9a-f]{40}$') { throw 'Camoufox candidate lock identity is invalid' }
+          $releaseId = "camoufox-v1-windows-sha256-$artifactSha"
           "CAMOUFOX_ARTIFACT_SHA256=$artifactSha" >> $env:GITHUB_ENV
           "CAMOUFOX_BUILD_SOURCE_COMMIT=$buildSourceCommit" >> $env:GITHUB_ENV
-          "CAMOUFOX_RELEASE_ID=camoufox-v1-windows-sha256-$artifactSha" >> $env:GITHUB_ENV
+          "CAMOUFOX_RELEASE_ID=$releaseId" >> $env:GITHUB_ENV
 
           New-Item -ItemType Directory -Force -Path artifacts/ar11-browser-candidate | Out-Null
-          gh release download "$env:CAMOUFOX_RELEASE_ID" --repo "$env:GITHUB_REPOSITORY" --dir artifacts/ar11-browser-candidate --pattern camoufox-windows.x86_64.zip --pattern camoufox-windows.provenance.json
+          gh release download "$releaseId" --repo "$env:GITHUB_REPOSITORY" --dir artifacts/ar11-browser-candidate --pattern camoufox-windows.x86_64.zip --pattern camoufox-windows.provenance.json
+          if ($LASTEXITCODE -ne 0) { throw 'exact Camoufox candidate download failed' }
           $archive = 'artifacts/ar11-browser-candidate/camoufox-windows.x86_64.zip'
           $provenance = 'artifacts/ar11-browser-candidate/camoufox-windows.provenance.json'
-          if ((Get-FileHash -Algorithm SHA256 $archive).Hash.ToLowerInvariant() -ne $env:CAMOUFOX_ARTIFACT_SHA256) { throw 'Camoufox candidate digest mismatch' }
-          python scripts/verify-camoufox-patched-candidate.py --archive "$archive" --provenance "$provenance" --target windows --build-source-commit "$env:CAMOUFOX_BUILD_SOURCE_COMMIT" | Out-Null
+          if (-not (Test-Path -LiteralPath $archive -PathType Leaf) -or -not (Test-Path -LiteralPath $provenance -PathType Leaf)) { throw 'exact Camoufox candidate assets are incomplete' }
+          if ((Get-FileHash -Algorithm SHA256 $archive).Hash.ToLowerInvariant() -ne $artifactSha) { throw 'Camoufox candidate digest mismatch' }
+          python scripts/verify-camoufox-patched-candidate.py --archive "$archive" --provenance "$provenance" --target windows --build-source-commit "$buildSourceCommit" | Out-Null
 
       - name: Materialize exact clean-host Windows runtime on cache miss
         if: steps.runtime-identity.outputs.reuse != 'true'
