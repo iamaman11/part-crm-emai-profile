@@ -26,7 +26,16 @@ function renderPanel(outboundMailEnabled = true) {
   });
   return render(
     <QueryClientProvider client={queryClient}>
-      <TenantProvider>
+      <TenantProvider
+        loadTenantContexts={async () => ({
+          tenants: [{
+            tenantId: 'tenant_current',
+            displayName: 'Current organization',
+            actorId: 'actor_current',
+            role: 'TENANT_OWNER',
+          }],
+        })}
+      >
         <ClientMailPanel
           clientId="client_current"
           outboundMailEnabled={outboundMailEnabled}
@@ -38,6 +47,7 @@ function renderPanel(outboundMailEnabled = true) {
 
 describe('ClientMailPanel mailbox scoping', () => {
   beforeEach(() => {
+    vi.clearAllMocks();
     window.history.replaceState(null, '', '/clients/client_current?tenant=tenant_current');
     mockedListMailboxes.mockResolvedValue({
       mailboxes: [

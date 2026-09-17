@@ -137,7 +137,9 @@ pub fn route_surface(route: RouteClass, path: &str) -> Option<RuntimeSurface> {
     match route {
         RouteClass::HealthApi => None,
         RouteClass::BindingProbeApi => Some(RuntimeSurface::HttpBindings),
-        RouteClass::AuthenticatedSessionApi => Some(RuntimeSurface::HttpSession),
+        RouteClass::AuthenticatedSessionApi | RouteClass::AuthenticatedTenantContextsApi => {
+            Some(RuntimeSurface::HttpSession)
+        }
         RouteClass::OwnerBootstrapApi
         | RouteClass::OwnerTransferApi
         | RouteClass::InvitationCollectionApi

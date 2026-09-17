@@ -84,6 +84,42 @@
         }
       }
     },
+    "/api/v1/session/tenants": {
+      "get": {
+        "operationId": "getAuthenticatedTenantContexts",
+        "security": [
+          {
+            "cloudflareAccessJwt": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/CorrelationHeader"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "ACTIVE tenant contexts authorized for the verified Access identity",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TenantContextsProjection"
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/NeutralNotFound"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalFailure"
+          },
+          "503": {
+            "$ref": "#/components/responses/InternalFailure"
+          }
+        }
+      }
+    },
     "/api/v1/tenants/{tenantId}/owner/bootstrap": {
       "post": {
         "operationId": "bootstrapTenantOwner",
@@ -891,6 +927,51 @@
             "uniqueItems": true,
             "items": {
               "$ref": "#/components/schemas/ActivationUnit"
+            }
+          }
+        }
+      },
+      "TenantContextProjection": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "tenantId",
+          "displayName",
+          "actorId",
+          "role"
+        ],
+        "properties": {
+          "tenantId": {
+            "$ref": "#/components/schemas/OpaqueId"
+          },
+          "displayName": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "actorId": {
+            "$ref": "#/components/schemas/OpaqueId"
+          },
+          "role": {
+            "type": "string",
+            "enum": [
+              "TENANT_OWNER",
+              "MEMBER"
+            ]
+          }
+        }
+      },
+      "TenantContextsProjection": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "tenants"
+        ],
+        "properties": {
+          "tenants": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TenantContextProjection"
             }
           }
         }

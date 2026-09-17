@@ -18,6 +18,10 @@ export function ProfileDirectory({
   });
   const profiles = query.data?.profiles ?? [];
 
+  if (!tenantId) {
+    return <section className="panel full-span" aria-labelledby="profile-directory-title"><h2 id="profile-directory-title">Visible profiles</h2><p>Select an authorized organization before loading profiles.</p></section>;
+  }
+
   return (
     <section className="panel full-span" aria-labelledby="profile-directory-title">
       <span className="eyebrow">Authorized read model</span>

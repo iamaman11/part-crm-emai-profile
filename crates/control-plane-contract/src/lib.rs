@@ -26,6 +26,7 @@ pub enum RouteClass {
     HealthApi,
     BindingProbeApi,
     AuthenticatedSessionApi,
+    AuthenticatedTenantContextsApi,
     OwnerBootstrapApi,
     OwnerTransferApi,
     InvitationCollectionApi,

@@ -3,14 +3,16 @@ import { render, screen } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { TenantProvider } from '../../app/TenantContext';
 import { ApiProblem } from '../../shared/api/openapi-runtime';
-import { getSession } from './api';
+import { getSession, getTenantContexts } from './api';
 import { SessionPanel } from './SessionPanel';
 
 vi.mock('./api', () => ({
   getSession: vi.fn(),
+  getTenantContexts: vi.fn(),
 }));
 
 const mockedGetSession = vi.mocked(getSession);
+const mockedGetTenantContexts = vi.mocked(getTenantContexts);
 
 function renderPanel() {
   const queryClient = new QueryClient({
@@ -28,6 +30,7 @@ function renderPanel() {
 describe('SessionPanel', () => {
   beforeEach(() => {
     window.history.replaceState(null, '', '/?tenant=tenant_01JTEST');
+    mockedGetTenantContexts.mockResolvedValue({ tenants: [{ tenantId: 'tenant_01JTEST', displayName: 'Test organization', actorId: 'actor_01JTEST', role: 'TENANT_OWNER' }] });
   });
 
   it('renders the authenticated actor projection returned by the Worker', async () => {

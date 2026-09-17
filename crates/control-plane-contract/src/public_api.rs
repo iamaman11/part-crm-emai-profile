@@ -38,6 +38,21 @@ pub struct ActorSession {
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct TenantContextProjection {
+    pub tenant_id: String,
+    pub display_name: String,
+    pub actor_id: String,
+    pub role: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TenantContextsProjection {
+    pub tenants: Vec<TenantContextProjection>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct HealthResponse {
     pub status: String,
     pub contract_version: String,
@@ -169,6 +184,15 @@ pub fn openapi_document() -> Value {
                     "responses": {"200": json_response("ActorSession"), "404": problem_response()}
                 }
             },
+            "/api/v1/session/tenants": {
+                "get": {
+                    "operationId": "getAuthenticatedTenantContexts",
+                    "responses": {
+                        "200": json_response("TenantContextsProjection"),
+                        "404": problem_response(), "500": problem_response(), "503": problem_response()
+                    }
+                }
+            },
             "/api/v1/tenants/{tenantId}/clients": {
                 "post": {
                     "operationId": "createClient",
@@ -282,6 +306,19 @@ pub fn openapi_document() -> Value {
                     "type": "object", "additionalProperties": false,
                     "required": ["tenantId", "actorId", "role"],
                     "properties": {"tenantId": {"type": "string"}, "actorId": {"type": "string"}, "role": schema_ref("MembershipRole")}
+                },
+                "TenantContextProjection": {
+                    "type": "object", "additionalProperties": false,
+                    "required": ["tenantId", "displayName", "actorId", "role"],
+                    "properties": {
+                        "tenantId": {"type": "string"}, "displayName": {"type": "string"},
+                        "actorId": {"type": "string"}, "role": schema_ref("MembershipRole")
+                    }
+                },
+                "TenantContextsProjection": {
+                    "type": "object", "additionalProperties": false,
+                    "required": ["tenants"],
+                    "properties": {"tenants": {"type": "array", "items": schema_ref("TenantContextProjection")}}
                 },
                 "MutationReceipt": {
                     "type": "object", "additionalProperties": false,
