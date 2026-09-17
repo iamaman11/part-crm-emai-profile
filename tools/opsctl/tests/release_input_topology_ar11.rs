@@ -147,9 +147,9 @@ fn canonical_repository_topology_still_resolves() -> Result<(), Box<dyn std::err
         "camoufox_candidate_verifier_policy",
         "camoufox_webgl_patch_check_policy",
     ] {
-        assert!(resolved
-            .iter()
-            .any(|input| input.input.input_id == input_id && input.sha256.len() == 64));
+        assert!(resolved.iter().any(|input| {
+            input.input.input_id == input_id && input.sha256.len() == 64
+        }));
     }
     Ok(())
 }
