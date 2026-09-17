@@ -33,6 +33,8 @@ pub mod d1_global_query;
 pub mod d1_governed_commands;
 pub mod d1_idempotency;
 pub mod d1_identity_acl;
+#[cfg(test)]
+mod d1_identity_acl_contract_tests;
 pub mod d1_identity_ceremonies;
 mod d1_identity_failure;
 pub mod d1_identity_governance;
