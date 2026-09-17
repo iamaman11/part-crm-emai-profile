@@ -335,7 +335,7 @@ mod tests {
     fn device_application_routes_are_exact_and_keep_bootstrap_surfaces_unauthenticated() {
         let cases = [
             (
-                "/api/v1/tenants/tenant_01/device-pairings",
+                "/api/v1/tenants/tenant_01/device-pairings/requests",
                 RouteClass::DevicePairingCollectionApi,
                 false,
             ),
