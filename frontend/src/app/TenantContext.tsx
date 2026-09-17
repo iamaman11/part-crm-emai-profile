@@ -10,15 +10,27 @@ interface TenantContextValue {
   retry: () => void;
 }
 
+type TenantContextsLoader = (signal?: AbortSignal) => Promise<TenantContextsProjection>;
+
 const TenantContext = createContext<TenantContextValue | null>(null);
 
 function tenantFromUrl(): string {
   return new URLSearchParams(window.location.search).get('tenant')?.trim() ?? '';
 }
 
-export function TenantProvider({ children }: { children: ReactNode }) {
+export function TenantProvider({
+  children,
+  loadTenantContexts = getTenantContexts,
+}: {
+  children: ReactNode;
+  loadTenantContexts?: TenantContextsLoader;
+}) {
   const [tenantId, setTenantState] = useState('');
-  const query = useQuery({ queryKey: ['authenticated-tenant-contexts'], queryFn: ({ signal }) => getTenantContexts(signal), retry: false });
+  const query = useQuery({
+    queryKey: ['authenticated-tenant-contexts'],
+    queryFn: ({ signal }) => loadTenantContexts(signal),
+    retry: false,
+  });
   const contexts = query.data?.tenants ?? [];
   const state: TenantContextValue['state'] = query.isPending ? 'loading' : query.error ? 'error' : contexts.length === 0 ? 'empty' : tenantId ? 'ready' : 'selecting';
 
@@ -32,7 +44,7 @@ export function TenantProvider({ children }: { children: ReactNode }) {
     if (next) url.searchParams.set('tenant', next);
     else url.searchParams.delete('tenant');
     window.history.replaceState(null, '', url);
-  }, [query.data]);
+  }, [query.data, contexts]);
 
   const value = useMemo<TenantContextValue>(() => ({
     tenantId,
