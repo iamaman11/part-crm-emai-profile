@@ -1142,7 +1142,7 @@ mod tests {
             source_commit_sha: "1".repeat(40),
             components: WindowsDeliveryComponents {
                 profile_bridge: component(bridge_bytes, "profile-bridge-v2-sha256-"),
-                runtime_bundle: component(runtime_bytes, "runtime-bundle-v2-sha256-"),
+                runtime_bundle: component(runtime_bytes, "runtime-bundle-v3-sha256-"),
             },
             evidence: WindowsDeliveryEvidence {
                 sbom_sha256: "e".repeat(64),
@@ -1151,7 +1151,7 @@ mod tests {
             compatibility: WindowsDeliveryCompatibility {
                 profile_bridge_protocol_version: 1,
                 camouhost_ipc_version: CAMOUHOST_IPC_VERSION,
-                runtime_bundle_version: "2.0.0".to_owned(),
+                runtime_bundle_version: "3.0.0".to_owned(),
             },
         };
         let manifest_bytes = serde_json::to_vec(&manifest)?;
@@ -1264,7 +1264,7 @@ mod tests {
         )?;
         let marker_path = staged.path().join(MARKER_NAME);
         let mut marker: StageMarker = serde_json::from_slice(&fs::read(&marker_path)?)?;
-        marker.runtime_bundle.release_id = format!("runtime-bundle-v2-sha256-{}", "9".repeat(64));
+        marker.runtime_bundle.release_id = format!("runtime-bundle-v3-sha256-{}", "9".repeat(64));
         fs::write(&marker_path, serde_json::to_vec(&marker)?)?;
         assert_eq!(
             reopen_staged_delivery(&root, &candidate.identity()),
