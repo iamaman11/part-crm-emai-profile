@@ -260,9 +260,9 @@ fn verify_runtime_manifest_v3(
         ("runtime_lock", "camouhost/runtime-lock.json"),
     ]);
     if entrypoints.len() != expected_entrypoints.len()
-        || expected_entrypoints.iter().any(|(key, expected)| {
-            entrypoints.get(*key).and_then(Value::as_str) != Some(*expected)
-        })
+        || expected_entrypoints
+            .iter()
+            .any(|(key, expected)| entrypoints.get(*key).and_then(Value::as_str) != Some(*expected))
     {
         return Err(mismatch("runtime_bundle v3 entrypoint identity mismatch"));
     }
