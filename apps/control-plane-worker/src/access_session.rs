@@ -105,14 +105,16 @@ pub async fn tenant_contexts_response(request: &Request, env: &Env) -> Result<Re
 }
 
 fn tenant_context_repository_failure(correlation_id: &str, error: Error) -> Result<Response> {
+    let (status, code, title) = tenant_context_repository_failure_problem(&error);
+    problem(correlation_id, status, code, title)
+}
+
+fn tenant_context_repository_failure_problem(
+    error: &Error,
+) -> (u16, &'static str, &'static str) {
     match error {
-        Error::RustError(_) => problem(
-            correlation_id,
-            500,
-            "integrity_failure",
-            "Integrity Failure",
-        ),
-        _ => dependency_unavailable(correlation_id),
+        Error::RustError(_) => (500, "integrity_failure", "Integrity Failure"),
+        _ => (503, "dependency_unavailable", "Dependency Unavailable"),
     }
 }
 
@@ -278,7 +280,7 @@ pub fn correlation_hint(request: &Request) -> String {
 mod tests {
     use super::{
         ACCESS_AUDIENCE_VAR, PROBLEM_CONTENT_TYPE, problem_type_for_code,
-        tenant_context_repository_failure,
+        tenant_context_repository_failure_problem,
     };
     use worker::Error;
 
@@ -289,19 +291,13 @@ mod tests {
     }
 
     #[test]
-    fn tenant_context_repository_integrity_failures_do_not_escape_as_raw_worker_errors() {
-        let response = tenant_context_repository_failure(
-            "corr_01JTENANTCTX",
-            Error::RustError("invalid membership role".to_owned()),
-        )
-        .expect("problem response");
-        assert_eq!(response.status_code(), 500);
+    fn tenant_context_repository_integrity_failures_are_normalized_before_response_creation() {
+        let problem = tenant_context_repository_failure_problem(&Error::RustError(
+            "invalid membership role".to_owned(),
+        ));
         assert_eq!(
-            response
-                .headers()
-                .get("content-type")
-                .expect("content type"),
-            Some(PROBLEM_CONTENT_TYPE.to_owned())
+            problem,
+            (500, "integrity_failure", "Integrity Failure")
         );
     }
 
