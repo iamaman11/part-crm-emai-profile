@@ -135,6 +135,10 @@ fn compose_release_set(
         },
         runtime_compatibility: core::RuntimeCompatibilityIdentity {
             runtime_lock_sha256: runtime_input.sha256.clone(),
+            runtime_component_inputs_sha256: Some(input_scope_identity_sha256(
+                &resolved,
+                "runtime_bundle.files",
+            )?),
             runtime_role: runtime.runtime_role,
             profile_format: runtime.profile_format,
             browser_identity_policy: runtime.browser_identity_policy,
@@ -158,6 +162,38 @@ fn compose_release_set(
             "Release Set v3 semantic validation failed: {error}"
         ))
     })
+}
+
+fn input_scope_identity_sha256(
+    resolved: &[ResolvedReleaseInput],
+    consumer: &str,
+) -> Result<String, ReleaseFinalizeError> {
+    let mut files = resolved
+        .iter()
+        .filter(|input| input.input.consumed_by(consumer))
+        .map(|input| ProvenanceDigestRow {
+            path: &input.input.release_identity_source,
+            sha256: &input.sha256,
+            size_bytes: input.size_bytes,
+        })
+        .collect::<Vec<_>>();
+    if files.is_empty() {
+        return Err(ReleaseFinalizeError::new(format!(
+            "canonical release input topology has no {consumer} inputs"
+        )));
+    }
+    files.sort_by(|left, right| left.path.cmp(right.path));
+    let value = serde_json::to_value(&files).map_err(|error| {
+        ReleaseFinalizeError::new(format!(
+            "cannot serialize {consumer} identity scope: {error}"
+        ))
+    })?;
+    let canonical = canonical_json(&value).map_err(|error| {
+        ReleaseFinalizeError::new(format!(
+            "cannot canonicalize {consumer} identity scope: {error}"
+        ))
+    })?;
+    Ok(sha256_hex(canonical.as_bytes()))
 }
 
 fn contracts_identity(
