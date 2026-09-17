@@ -639,8 +639,7 @@ mod tests {
             json!([])
         );
         assert_eq!(
-            document["paths"]["/api/v1/tenants/{tenantId}/device-pairings/requests"]["post"]
-                ["security"],
+            document["paths"]["/api/v1/tenants/{tenantId}/device-pairings/requests"]["post"]["security"],
             json!([])
         );
     }
