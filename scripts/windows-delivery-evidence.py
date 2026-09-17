@@ -386,7 +386,7 @@ def self_test() -> None:
                 bridge_archive_path=bridge_archive,
                 runtime_manifest_path=runtime_manifest_path,
                 runtime_artifact_sha256="8" * 64,
-            runtime_artifact_size_bytes=456,
+                runtime_artifact_size_bytes=456,
             ),
             "identity mismatch",
         )
