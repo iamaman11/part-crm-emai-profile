@@ -794,7 +794,7 @@ mod tests {
                     component_manifest_sha256: "c".repeat(64),
                 },
                 runtime_bundle: WindowsDeliveryComponent {
-                    release_id: format!("runtime-bundle-v2-sha256-{}", "d".repeat(64)),
+                    release_id: format!("runtime-bundle-v3-sha256-{}", "d".repeat(64)),
                     artifact_sha256: runtime_sha,
                     artifact_size_bytes: u64::try_from(runtime.len())?,
                     component_manifest_sha256: "e".repeat(64),
