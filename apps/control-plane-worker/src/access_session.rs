@@ -297,7 +297,10 @@ mod tests {
         .expect("problem response");
         assert_eq!(response.status_code(), 500);
         assert_eq!(
-            response.headers().get("content-type").expect("content type"),
+            response
+                .headers()
+                .get("content-type")
+                .expect("content type"),
             Some(PROBLEM_CONTENT_TYPE.to_owned())
         );
     }
