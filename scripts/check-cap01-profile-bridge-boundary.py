@@ -82,7 +82,7 @@ REQUIRED_ACTIVE_DELIVERY_MARKERS = (
     "verify_embedded_release_id(",
     "active.runtime_bundle_release_id",
     'const RUNTIME_MANIFEST: &str = "runtime-manifest.json";',
-    'const RUNTIME_RELEASE_PREFIX: &str = "runtime-bundle-v2-sha256-";',
+    'const RUNTIME_RELEASE_PREFIX: &str = "runtime-bundle-v3-sha256-";',
 )
 
 FORBIDDEN_CLAIM_ONLY_SUCCESS_MARKERS = (
@@ -327,7 +327,7 @@ def write_fixture(root: Path) -> None:
         "// verify_embedded_release_id(\n"
         "// active.runtime_bundle_release_id\n"
         '// const RUNTIME_MANIFEST: &str = "runtime-manifest.json";\n'
-        '// const RUNTIME_RELEASE_PREFIX: &str = "runtime-bundle-v2-sha256-";\n',
+        '// const RUNTIME_RELEASE_PREFIX: &str = "runtime-bundle-v3-sha256-";\n',
         encoding="utf-8",
     )
     manifest = root / MANIFEST

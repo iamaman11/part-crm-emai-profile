@@ -20,6 +20,8 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 const RELEASE_SET_PREFIX: &str = "release-set-v3-sha256-";
+#[cfg(any(test, windows))]
+const RUNTIME_BUNDLE_PREFIX: &str = "runtime-bundle-v3-sha256-";
 const PROFILE_BRIDGE_ASSET: &str = "profile-bridge.zip";
 const RUNTIME_BUNDLE_ASSET: &str = "runtime-bundle.tar";
 #[cfg(any(test, windows))]
@@ -210,7 +212,7 @@ pub fn download_verified_delivery<F: DeliveryAssetFetcher>(
     )?;
     let runtime_bundle = materialize_asset(
         &release_directory,
-        &manifest.release_set_id,
+        &manifest.components.runtime_bundle.release_id,
         RUNTIME_BUNDLE_ASSET,
         &manifest.components.runtime_bundle,
         fetcher,
@@ -431,13 +433,16 @@ fn encode_lower_hex(bytes: &[u8]) -> String {
 }
 
 #[cfg(any(test, windows))]
-fn release_asset_url(release_set_id: &str, asset_name: &str) -> Option<String> {
-    if !prefixed_sha256(release_set_id, RELEASE_SET_PREFIX)
-        || !matches!(asset_name, PROFILE_BRIDGE_ASSET | RUNTIME_BUNDLE_ASSET)
-    {
+fn release_asset_url(release_id: &str, asset_name: &str) -> Option<String> {
+    let valid_release = match asset_name {
+        PROFILE_BRIDGE_ASSET => prefixed_sha256(release_id, RELEASE_SET_PREFIX),
+        RUNTIME_BUNDLE_ASSET => prefixed_sha256(release_id, RUNTIME_BUNDLE_PREFIX),
+        _ => false,
+    };
+    if !valid_release {
         return None;
     }
-    Some(format!("{RELEASE_BASE_URL}/{release_set_id}/{asset_name}"))
+    Some(format!("{RELEASE_BASE_URL}/{release_id}/{asset_name}"))
 }
 
 fn metadata_is_link_or_reparse(metadata: &Metadata) -> bool {
@@ -729,7 +734,7 @@ mod tests {
     struct FakeFetcher {
         bridge: Vec<u8>,
         runtime: Vec<u8>,
-        calls: Vec<String>,
+        calls: Vec<(String, String)>,
     }
 
     impl DeliveryAssetFetcher for FakeFetcher {
@@ -737,12 +742,13 @@ mod tests {
 
         fn fetch_release_asset(
             &mut self,
-            _release_set_id: &str,
+            release_set_id: &str,
             asset_name: &str,
             destination: &Path,
             _expected_size_bytes: u64,
         ) -> Result<(), Self::Error> {
-            self.calls.push(asset_name.to_owned());
+            self.calls
+                .push((release_set_id.to_owned(), asset_name.to_owned()));
             let bytes = match asset_name {
                 PROFILE_BRIDGE_ASSET => &self.bridge,
                 RUNTIME_BUNDLE_ASSET => &self.runtime,
@@ -794,7 +800,7 @@ mod tests {
                     component_manifest_sha256: "c".repeat(64),
                 },
                 runtime_bundle: WindowsDeliveryComponent {
-                    release_id: format!("runtime-bundle-v2-sha256-{}", "d".repeat(64)),
+                    release_id: format!("runtime-bundle-v3-sha256-{}", "d".repeat(64)),
                     artifact_sha256: runtime_sha,
                     artifact_size_bytes: u64::try_from(runtime.len())?,
                     component_manifest_sha256: "e".repeat(64),
@@ -807,7 +813,7 @@ mod tests {
             compatibility: WindowsDeliveryCompatibility {
                 profile_bridge_protocol_version: 1,
                 camouhost_ipc_version: CAMOUHOST_IPC_VERSION,
-                runtime_bundle_version: "2.0.0".to_owned(),
+                runtime_bundle_version: "3.0.0".to_owned(),
             },
         };
         let manifest_bytes = serde_json::to_vec(&manifest)?;
@@ -851,8 +857,19 @@ mod tests {
         assert_eq!(
             fetcher.calls,
             [
-                PROFILE_BRIDGE_ASSET.to_owned(),
-                RUNTIME_BUNDLE_ASSET.to_owned()
+                (
+                    candidate.manifest().release_set_id.clone(),
+                    PROFILE_BRIDGE_ASSET.to_owned()
+                ),
+                (
+                    candidate
+                        .manifest()
+                        .components
+                        .runtime_bundle
+                        .release_id
+                        .clone(),
+                    RUNTIME_BUNDLE_ASSET.to_owned()
+                )
             ]
         );
 
@@ -903,12 +920,20 @@ mod tests {
     #[test]
     fn release_url_is_exact_and_never_discovers_latest() {
         let release_set_id = format!("{RELEASE_SET_PREFIX}{}", "a".repeat(64));
+        let runtime_release_id = format!("{RUNTIME_BUNDLE_PREFIX}{}", "b".repeat(64));
         assert_eq!(
             release_asset_url(&release_set_id, PROFILE_BRIDGE_ASSET),
             Some(format!(
                 "{RELEASE_BASE_URL}/{release_set_id}/{PROFILE_BRIDGE_ASSET}"
             ))
         );
+        assert_eq!(
+            release_asset_url(&runtime_release_id, RUNTIME_BUNDLE_ASSET),
+            Some(format!(
+                "{RELEASE_BASE_URL}/{runtime_release_id}/{RUNTIME_BUNDLE_ASSET}"
+            ))
+        );
+        assert!(release_asset_url(&release_set_id, RUNTIME_BUNDLE_ASSET).is_none());
         assert!(release_asset_url("latest", PROFILE_BRIDGE_ASSET).is_none());
         assert!(release_asset_url(&release_set_id, "arbitrary.zip").is_none());
     }

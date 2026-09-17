@@ -489,13 +489,25 @@ mod tests {
         assert!(patch.consumed_by("release_set.build_provenance"));
 
         let resolved = topology.resolve(&root())?;
-        assert_eq!(resolved.len(), 19);
+        assert_eq!(resolved.len(), 23);
         assert!(resolved.iter().any(|input| {
             input.input.input_id == "camoufox_patch_lock" && input.sha256.len() == 64
         }));
         assert!(resolved.iter().any(|input| {
             input.input.input_id == "camoufox_webgl_patch" && input.sha256.len() == 64
         }));
+        for input_id in [
+            "camouhost_runtime_materializer_policy",
+            "camouhost_runtime_packager_policy",
+            "camoufox_candidate_verifier_policy",
+            "camoufox_webgl_patch_check_policy",
+        ] {
+            assert!(
+                resolved
+                    .iter()
+                    .any(|input| { input.input.input_id == input_id && input.sha256.len() == 64 })
+            );
+        }
         Ok(())
     }
 

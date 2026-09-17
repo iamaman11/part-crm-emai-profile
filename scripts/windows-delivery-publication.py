@@ -20,7 +20,7 @@ from typing import Any, Callable
 REPOSITORY = "iamaman11/part-crm-emai-profile"
 RELEASE_SET_PREFIX = "release-set-v3-sha256-"
 BRIDGE_PREFIX = "profile-bridge-v2-sha256-"
-RUNTIME_PREFIX = "runtime-bundle-v2-sha256-"
+RUNTIME_PREFIX = "runtime-bundle-v3-sha256-"
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
 WINDOWS_SBOM_PATH = "windows/windows-sbom-v1.json"
@@ -247,7 +247,7 @@ def render_manifest(
         "compatibility": {
             "profile_bridge_protocol_version": bridge_protocol,
             "camouhost_ipc_version": camouhost_ipc,
-            "runtime_bundle_version": "2.0.0",
+            "runtime_bundle_version": "3.0.0",
         },
     }
     return json.dumps(manifest, separators=(",", ":"), ensure_ascii=False).encode("utf-8")

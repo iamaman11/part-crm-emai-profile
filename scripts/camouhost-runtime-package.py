@@ -21,8 +21,7 @@ from typing import Any, BinaryIO
 ROOT = Path(__file__).resolve().parents[1]
 RELEASE_ARCHITECTURE = ROOT / "architecture" / "release-architecture-ar11.json"
 RUNTIME_CONSUMER = "runtime_bundle.files"
-RELEASE_PREFIX = "runtime-bundle-v2-sha256-"
-COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
+RELEASE_PREFIX = "runtime-bundle-v3-sha256-"
 MAX_RUNTIME_FILES = 500_000
 MAX_RUNTIME_BYTES = 2 * 1024 * 1024 * 1024
 REQUIRED_RUNTIME_PATHS = {
@@ -69,12 +68,6 @@ def sha256_file(path: Path) -> str:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
-
-
-def source_sha(value: str) -> str:
-    if COMMIT_RE.fullmatch(value) is None:
-        fail("source SHA must be exact 40 lowercase hexadecimal")
-    return value
 
 
 def safe_repo_relative(value: str, label: str) -> Path:
@@ -238,17 +231,28 @@ def runtime_tree_identity(files: list[tuple[str, Path]]) -> dict[str, Any]:
     }
 
 
+def runtime_input_identity(source_files: list[Path] | None = None) -> dict[str, Any]:
+    source_files = runtime_source_files() if source_files is None else source_files
+    source_inputs = source_file_set_identity(source_files)
+    return {
+        "schema_version": 1,
+        "kind": "CAMOUFOX_WINDOWS_RUNTIME_INPUT_IDENTITY",
+        "platform": "windows-x86_64",
+        "source_inputs": source_inputs,
+        "release_id": RELEASE_PREFIX + source_inputs["sha256"],
+    }
+
+
 def runtime_manifest(
-    commit_sha: str,
     source_files: list[Path],
     runtime_files: list[tuple[str, Path]],
 ) -> tuple[dict[str, Any], bytes]:
+    identity = runtime_input_identity(source_files)
     manifest: dict[str, Any] = {
-        "schema_version": 2,
+        "schema_version": 3,
         "kind": "CAMOUFOX_WINDOWS_RUNTIME_COMPONENT",
         "platform": "windows-x86_64",
-        "source_commit_sha": source_sha(commit_sha),
-        "source_inputs": source_file_set_identity(source_files),
+        "source_inputs": identity["source_inputs"],
         "files": runtime_tree_identity(runtime_files),
         "entrypoints": {
             "browser": "browser/camoufox.exe",
@@ -256,9 +260,58 @@ def runtime_manifest(
             "python": "python/python.exe",
             "runtime_lock": "camouhost/runtime-lock.json",
         },
+        "release_id": identity["release_id"],
     }
-    manifest["release_id"] = RELEASE_PREFIX + sha256_bytes(canonical(manifest))
     return manifest, document(manifest)
+
+
+def verify_manifest_file(path: Path) -> dict[str, Any]:
+    if path.is_symlink() or not path.is_file():
+        fail("runtime manifest must be a regular file")
+    try:
+        manifest = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise RuntimePackageError("runtime manifest is invalid JSON") from error
+    expected_fields = {
+        "schema_version",
+        "kind",
+        "platform",
+        "source_inputs",
+        "files",
+        "entrypoints",
+        "release_id",
+    }
+    if not isinstance(manifest, dict) or set(manifest) != expected_fields:
+        fail("runtime manifest field inventory mismatch")
+    if (
+        manifest.get("schema_version") != 3
+        or manifest.get("kind") != "CAMOUFOX_WINDOWS_RUNTIME_COMPONENT"
+        or manifest.get("platform") != "windows-x86_64"
+    ):
+        fail("runtime manifest identity mismatch")
+    expected = runtime_input_identity()
+    if manifest.get("source_inputs") != expected["source_inputs"]:
+        fail("runtime manifest source input identity differs from current authority")
+    if manifest.get("release_id") != expected["release_id"]:
+        fail("runtime manifest release ID differs from current input identity")
+    files = manifest.get("files")
+    if (
+        not isinstance(files, dict)
+        or set(files) != {"files", "sha256"}
+        or not isinstance(files.get("files"), list)
+        or not files["files"]
+        or not isinstance(files.get("sha256"), str)
+        or re.fullmatch(r"[0-9a-f]{64}", files["sha256"]) is None
+    ):
+        fail("runtime manifest file inventory identity is invalid")
+    if manifest.get("entrypoints") != {
+        "browser": "browser/camoufox.exe",
+        "camouhost": "camouhost/real.py",
+        "python": "python/python.exe",
+        "runtime_lock": "camouhost/runtime-lock.json",
+    }:
+        fail("runtime manifest entrypoints mismatch")
+    return manifest
 
 
 def deterministic_member(name: str, size: int) -> tarfile.TarInfo:
@@ -306,7 +359,6 @@ def deterministic_archive(
 
 def package_runtime(
     *,
-    commit_sha: str,
     runtime_root: Path,
     archive_path: Path,
     manifest_path: Path,
@@ -315,7 +367,7 @@ def package_runtime(
         fail(f"runtime package manifest already exists: {manifest_path}")
     source_files = runtime_source_files()
     files = runtime_tree_files(runtime_root)
-    _, manifest_bytes = runtime_manifest(commit_sha, source_files, files)
+    _, manifest_bytes = runtime_manifest(source_files, files)
     deterministic_archive(archive_path, manifest_bytes, files)
     manifest_path.parent.mkdir(parents=True, exist_ok=True)
     manifest_path.write_bytes(manifest_bytes)
@@ -362,7 +414,6 @@ def assert_archive(
 
 
 def self_test() -> None:
-    commit_sha = "1" * 40
     with tempfile.TemporaryDirectory(prefix="camouhost-runtime-package-") as directory:
         temp = Path(directory)
         runtime_root = temp / "runtime"
@@ -373,13 +424,11 @@ def self_test() -> None:
         second_archive = temp / "second.tar"
         second_manifest = temp / "second.json"
         package_runtime(
-            commit_sha=commit_sha,
             runtime_root=runtime_root,
             archive_path=first_archive,
             manifest_path=first_manifest,
         )
         package_runtime(
-            commit_sha=commit_sha,
             runtime_root=runtime_root,
             archive_path=second_archive,
             manifest_path=second_manifest,
@@ -391,23 +440,20 @@ def self_test() -> None:
 
         manifest = json.loads(first_manifest.read_text(encoding="utf-8"))
         if (
-            manifest.get("schema_version") != 2
+            manifest.get("schema_version") != 3
             or manifest.get("kind") != "CAMOUFOX_WINDOWS_RUNTIME_COMPONENT"
-            or manifest.get("source_commit_sha") != commit_sha
             or manifest.get("platform") != "windows-x86_64"
         ):
             fail("runtime manifest identity self-test failed")
         release_id = manifest.get("release_id")
-        if not isinstance(release_id, str) or not release_id.startswith(RELEASE_PREFIX):
+        if (
+            not isinstance(release_id, str)
+            or release_id != RELEASE_PREFIX + manifest["source_inputs"]["sha256"]
+        ):
             fail("runtime release ID self-test failed")
+        if verify_manifest_file(first_manifest)["release_id"] != release_id:
+            fail("runtime manifest current-input verification self-test failed")
         assert_archive(first_archive, expected_files)
-
-        try:
-            source_sha("X" * 40)
-        except RuntimePackageError:
-            pass
-        else:
-            fail("invalid source SHA negative self-test unexpectedly passed")
 
         observed = set()
         register_casefold_unique_path("alias.txt", observed)
@@ -424,8 +470,11 @@ def self_test() -> None:
 def parser() -> argparse.ArgumentParser:
     result = argparse.ArgumentParser()
     subcommands = result.add_subparsers(dest="command", required=True)
+    identity = subcommands.add_parser("identity")
+    identity.add_argument("--output", type=Path)
+    verify = subcommands.add_parser("verify-manifest")
+    verify.add_argument("--manifest", type=Path, required=True)
     package = subcommands.add_parser("package")
-    package.add_argument("--source-sha", required=True)
     package.add_argument("--runtime-root", type=Path, required=True)
     package.add_argument("--archive", type=Path, required=True)
     package.add_argument("--manifest", type=Path, required=True)
@@ -438,9 +487,20 @@ def main() -> int:
     try:
         if args.command == "self-test":
             self_test()
+        elif args.command == "identity":
+            payload = document(runtime_input_identity())
+            if args.output is None:
+                print(payload.decode("utf-8"), end="")
+            else:
+                if args.output.exists():
+                    fail("runtime input identity output already exists")
+                args.output.parent.mkdir(parents=True, exist_ok=True)
+                args.output.write_bytes(payload)
+        elif args.command == "verify-manifest":
+            manifest = verify_manifest_file(args.manifest)
+            print(document(manifest).decode("utf-8"), end="")
         elif args.command == "package":
             package_runtime(
-                commit_sha=args.source_sha,
                 runtime_root=args.runtime_root,
                 archive_path=args.archive,
                 manifest_path=args.manifest,

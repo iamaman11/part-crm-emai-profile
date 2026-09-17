@@ -208,8 +208,23 @@ function validatePublicationWiring(authority) {
     '.kind == "capability-policy"',
     'cp "$capability_policy_json" "$release_dir/capability-policy-v1.json"',
     'cp "$RELEASE_DIR/capability-policy-v1.json" "$asset_dir/capability-policy-v1.json"',
+    'runtime-component-observation.json',
+    'runtime-bundle-v3-sha256-',
+    'gh release upload "$env:RUNTIME_RELEASE_ID"',
+    'CAMOUFOX_ARTIFACT_SHA256=$artifactSha',
+    "if ($artifactSha -notmatch '^[0-9a-f]{64}$' -or $buildSourceCommit -notmatch '^[0-9a-f]{40}$')",
   ]) {
-    if (!workflow.includes(marker)) fail(`Release Set build workflow lacks capability manifest wiring: ${marker}`);
+    if (!workflow.includes(marker)) fail(`Release Set build workflow lacks required publication wiring: ${marker}`);
+  }
+  const jobCount = (marker) => workflow.split(marker).length - 1;
+  if (jobCount('\n  runtime-bundle:\n') !== 1 || jobCount('\n  assemble-publish:\n') !== 1) {
+    fail('Release Set build workflow must contain exactly one runtime owner and one aggregate publisher');
+  }
+  for (const forbidden of [
+    'cp artifacts/ar11-inputs/runtime-bundle.tar "$component_root/runtime-bundle.tar"',
+    'cp "$component_root/runtime-bundle.tar" "$release_dir/components/runtime-bundle.tar"',
+  ]) {
+    if (workflow.includes(forbidden)) fail(`aggregate Release Set must not duplicate heavy runtime bytes: ${forbidden}`);
   }
   if (authority.capability_policy_projection.generated_manifest !== 'capability-policy-v1.json') {
     fail('release workflow and architecture projection path disagree');

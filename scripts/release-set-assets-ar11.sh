@@ -95,7 +95,19 @@ materialize() {
   schema="$(jq -er '.schema_version' "$document")"
   test "$document_id" = "$release_id" || fail "release-set id mismatch: expected=$release_id observed=$document_id"
 
-  local common=(control-plane.tar secret-resolver.tar runtime-bundle.tar profile-bridge.zip)
+  local runtime_release_id=""
+  local runtime_external=0
+  if [ "$schema" = 3 ]; then
+    runtime_release_id="$(jq -r '.components.runtime_bundle.release_id // ""' "$document")"
+    if [[ "$runtime_release_id" =~ ^runtime-bundle-v3-sha256-[0-9a-f]{64}$ ]]; then
+      runtime_external=1
+    fi
+  fi
+
+  local common=(control-plane.tar secret-resolver.tar profile-bridge.zip)
+  if [ "$runtime_external" -eq 0 ]; then
+    common+=(runtime-bundle.tar)
+  fi
   local expected=(release-set.json)
 
   case "$schema" in
@@ -124,7 +136,11 @@ materialize() {
       if [ "$has_sbom" -eq 1 ]; then
         profile=current-v3-windows-delivery
         expected+=(capability-policy-v1.json "${common[@]}" windows-sbom-v1.json windows-provenance-v1.json windows-delivery-manifest.json)
-        flat_expected_count=9
+        if [ "$runtime_external" -eq 1 ]; then
+          flat_expected_count=8
+        else
+          flat_expected_count=9
+        fi
         materialized_expected_count=8
       elif [ "$has_capability" -eq 1 ]; then
         profile=historical-v3-capability
@@ -166,7 +182,20 @@ materialize() {
   fi
   cp "$asset_root/control-plane.tar" "$release_root/components/control-plane.tar"
   cp "$asset_root/secret-resolver.tar" "$release_root/components/secret-resolver.tar"
-  cp "$asset_root/runtime-bundle.tar" "$release_root/components/runtime-bundle.tar"
+  if [ "$runtime_external" -eq 1 ]; then
+    command -v gh >/dev/null 2>&1 || fail "GitHub CLI is required to hydrate exact runtime component"
+    local runtime_download
+    runtime_download="$(mktemp -d)"
+    if ! gh release download "$runtime_release_id"       --repo "${GITHUB_REPOSITORY:-iamaman11/part-crm-emai-profile}"       --dir "$runtime_download"       --pattern runtime-bundle.tar; then
+      rm -rf "$runtime_download"
+      fail "exact runtime component download failed: $runtime_release_id"
+    fi
+    require_regular_file "$runtime_download/runtime-bundle.tar"
+    cp "$runtime_download/runtime-bundle.tar" "$release_root/components/runtime-bundle.tar"
+    rm -rf "$runtime_download"
+  else
+    cp "$asset_root/runtime-bundle.tar" "$release_root/components/runtime-bundle.tar"
+  fi
   cp "$asset_root/profile-bridge.zip" "$release_root/components/profile-bridge.zip"
 
   if [ "$profile" = current-v3-windows-delivery ]; then
@@ -221,7 +250,7 @@ self_test() {
           > "$dir/windows-delivery-manifest.json"
       fi
       jq -n --argjson schema "$schema" --arg id "$id" --arg source "$source_sha" --argjson inventory "$inventory" \
-        '{schema_version:$schema,release_set_id:$id,source:{commit_sha:$source},artifact_inventory:$inventory}' \
+        '{schema_version:$schema,release_set_id:$id,source:{commit_sha:$source},components:{runtime_bundle:{release_id:("runtime-bundle-v2-sha256-" + ("8" * 64))}},artifact_inventory:$inventory}' \
         > "$dir/release-set.json"
     else
       printf '{"schema_version":%s,"release_set_id":"%s"}\n' "$schema" "$id" > "$dir/release-set.json"
@@ -237,6 +266,42 @@ self_test() {
   test -f "$root/v3-current-root/windows/windows-sbom-v1.json"
   test -f "$root/v3-current-root/windows/windows-provenance-v1.json"
   test ! -e "$root/v3-current-root/windows-delivery-manifest.json"
+
+  local external_runtime="runtime-bundle-v3-sha256-$(printf '8%.0s' {1..64})"
+  cp -R "$root/v3-current" "$root/v3-external"
+  jq --arg runtime "$external_runtime" '.components.runtime_bundle.release_id = $runtime'     "$root/v3-external/release-set.json" > "$root/v3-external/release-set.tmp"
+  mv "$root/v3-external/release-set.tmp" "$root/v3-external/release-set.json"
+  rm "$root/v3-external/runtime-bundle.tar"
+  printf 'exact-runtime-component' > "$root/runtime-component.tar"
+  mkdir -p "$root/fake-bin"
+  cat > "$root/fake-bin/gh" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+test "$1" = release
+test "$2" = download
+shift 2
+destination=""
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --dir)
+      destination="$2"
+      shift 2
+      ;;
+    --repo|--pattern)
+      shift 2
+      ;;
+    *)
+      shift
+      ;;
+  esac
+done
+test -n "$destination"
+mkdir -p "$destination"
+cp "$AR11_RUNTIME_COMPONENT_FIXTURE" "$destination/runtime-bundle.tar"
+EOF
+  chmod +x "$root/fake-bin/gh"
+  PATH="$root/fake-bin:$PATH"     AR11_RUNTIME_COMPONENT_FIXTURE="$root/runtime-component.tar"     materialize current-v3 "$v3" "$root/v3-external" "$root/v3-external-root"
+  cmp --silent "$root/runtime-component.tar" "$root/v3-external-root/components/runtime-bundle.tar"
 
   make_assets 3 "$v3" "$root/v3-capability" capability
   materialize known-good-v2-v3 "$v3" "$root/v3-capability" "$root/v3-capability-root"

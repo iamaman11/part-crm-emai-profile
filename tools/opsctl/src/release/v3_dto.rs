@@ -145,6 +145,8 @@ pub struct SchemaIdentityDto {
 #[serde(deny_unknown_fields)]
 pub struct RuntimeCompatibilityIdentityDto {
     pub runtime_lock_sha256: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub runtime_component_inputs_sha256: Option<String>,
     pub runtime_role: String,
     pub profile_format: String,
     pub browser_identity_policy: String,
@@ -351,6 +353,7 @@ impl RuntimeCompatibilityIdentityDto {
     fn into_core(self) -> core::RuntimeCompatibilityIdentity {
         core::RuntimeCompatibilityIdentity {
             runtime_lock_sha256: self.runtime_lock_sha256,
+            runtime_component_inputs_sha256: self.runtime_component_inputs_sha256,
             runtime_role: self.runtime_role,
             profile_format: self.profile_format,
             browser_identity_policy: self.browser_identity_policy,
@@ -493,6 +496,7 @@ impl From<&core::RuntimeCompatibilityIdentity> for RuntimeCompatibilityIdentityD
     fn from(value: &core::RuntimeCompatibilityIdentity) -> Self {
         Self {
             runtime_lock_sha256: value.runtime_lock_sha256.clone(),
+            runtime_component_inputs_sha256: value.runtime_component_inputs_sha256.clone(),
             runtime_role: value.runtime_role.clone(),
             profile_format: value.profile_format.clone(),
             browser_identity_policy: value.browser_identity_policy.clone(),
@@ -629,6 +633,7 @@ mod tests {
             },
             runtime_compatibility: RuntimeCompatibilityIdentityDto {
                 runtime_lock_sha256: digest('f'),
+                runtime_component_inputs_sha256: Some(digest('0')),
                 runtime_role: "camouhost".to_owned(),
                 profile_format: "profile-v1".to_owned(),
                 browser_identity_policy: "browser-identity-v1".to_owned(),

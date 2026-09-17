@@ -22,7 +22,7 @@ REPOSITORY = "iamaman11/part-crm-emai-profile"
 COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 BRIDGE_PREFIX = "profile-bridge-v2-sha256-"
-RUNTIME_PREFIX = "runtime-bundle-v2-sha256-"
+RUNTIME_PREFIX = "runtime-bundle-v3-sha256-"
 MAX_COMPONENT_MANIFEST_BYTES = 128 * 1024 * 1024
 
 CANONICAL_INPUTS = {
@@ -156,14 +156,13 @@ def validate_bridge_manifest(manifest: dict[str, Any], source_sha: str) -> dict[
     return manifest
 
 
-def validate_runtime_manifest(manifest: dict[str, Any], source_sha: str) -> dict[str, Any]:
+def validate_runtime_manifest(manifest: dict[str, Any]) -> dict[str, Any]:
     exact_object(
         manifest,
         {
             "schema_version",
             "kind",
             "platform",
-            "source_commit_sha",
             "source_inputs",
             "files",
             "entrypoints",
@@ -172,22 +171,19 @@ def validate_runtime_manifest(manifest: dict[str, Any], source_sha: str) -> dict
         "runtime manifest",
     )
     if (
-        manifest["schema_version"] != 2
+        manifest["schema_version"] != 3
         or manifest["kind"] != "CAMOUFOX_WINDOWS_RUNTIME_COMPONENT"
         or manifest["platform"] != "windows-x86_64"
-        or manifest["source_commit_sha"] != source_sha
     ):
         fail("runtime manifest identity mismatch")
-    release_id = exact_string(manifest["release_id"], "runtime release_id")
-    if not release_id.startswith(RUNTIME_PREFIX) or SHA256_RE.fullmatch(
-        release_id[len(RUNTIME_PREFIX) :]
-    ) is None:
-        fail("runtime release_id format mismatch")
     for label in ("source_inputs", "files"):
         identity = exact_object(manifest[label], {"files", "sha256"}, f"runtime {label}")
         validate_digest(identity["sha256"], f"runtime {label} digest")
         if not isinstance(identity["files"], list) or not identity["files"]:
             fail(f"runtime {label} files must be a non-empty list")
+    release_id = exact_string(manifest["release_id"], "runtime release_id")
+    if release_id != RUNTIME_PREFIX + manifest["source_inputs"]["sha256"]:
+        fail("runtime release_id does not match exact runtime input identity")
     entrypoints = exact_object(
         manifest["entrypoints"],
         {"browser", "camouhost", "python", "runtime_lock"},
@@ -217,7 +213,8 @@ def build_evidence(
     bridge_manifest_path: Path,
     bridge_archive_path: Path,
     runtime_manifest_path: Path,
-    runtime_archive_path: Path,
+    runtime_artifact_sha256: str,
+    runtime_artifact_size_bytes: int,
 ) -> tuple[bytes, bytes]:
     source_sha = validate_source_sha(source_sha)
     bridge_manifest, bridge_manifest_bytes = load_manifest(
@@ -225,11 +222,14 @@ def build_evidence(
     )
     runtime_manifest, runtime_manifest_bytes = load_manifest(runtime_manifest_path, "runtime")
     validate_bridge_manifest(bridge_manifest, source_sha)
-    validate_runtime_manifest(runtime_manifest, source_sha)
+    validate_runtime_manifest(runtime_manifest)
     canonical_inputs = canonical_input_identities()
 
     bridge_archive = file_identity(bridge_archive_path)
-    runtime_archive = file_identity(runtime_archive_path)
+    runtime_archive = {
+        "sha256": validate_digest(runtime_artifact_sha256, "runtime artifact digest"),
+        "size_bytes": exact_positive_int(runtime_artifact_size_bytes, "runtime artifact size"),
+    }
     bridge_manifest_digest = sha256_bytes(bridge_manifest_bytes)
     runtime_manifest_digest = sha256_bytes(runtime_manifest_bytes)
 
@@ -312,9 +312,7 @@ def self_test() -> None:
     with tempfile.TemporaryDirectory(prefix="windows-delivery-evidence-") as directory:
         root = Path(directory)
         bridge_archive = root / "profile-bridge.zip"
-        runtime_archive = root / "runtime-bundle.tar"
         bridge_archive.write_bytes(b"bridge-archive")
-        runtime_archive.write_bytes(b"runtime-archive")
         bridge_manifest = {
             "schema_version": 2,
             "kind": "PROFILE_BRIDGE_COMPONENT",
@@ -328,10 +326,9 @@ def self_test() -> None:
             "release_id": BRIDGE_PREFIX + "3" * 64,
         }
         runtime_manifest = {
-            "schema_version": 2,
+            "schema_version": 3,
             "kind": "CAMOUFOX_WINDOWS_RUNTIME_COMPONENT",
             "platform": "windows-x86_64",
-            "source_commit_sha": source_sha,
             "source_inputs": {
                 "files": [{"path": "runtime/camouhost/runtime-lock.json", "sha256": "4" * 64, "size_bytes": 1}],
                 "sha256": "5" * 64,
@@ -346,7 +343,7 @@ def self_test() -> None:
                 "python": "python/python.exe",
                 "runtime_lock": "camouhost/runtime-lock.json",
             },
-            "release_id": RUNTIME_PREFIX + "8" * 64,
+            "release_id": RUNTIME_PREFIX + "5" * 64,
         }
         bridge_manifest_path = root / "profile-bridge-manifest.json"
         runtime_manifest_path = root / "runtime-manifest.json"
@@ -358,14 +355,16 @@ def self_test() -> None:
             bridge_manifest_path=bridge_manifest_path,
             bridge_archive_path=bridge_archive,
             runtime_manifest_path=runtime_manifest_path,
-            runtime_archive_path=runtime_archive,
+            runtime_artifact_sha256="8" * 64,
+            runtime_artifact_size_bytes=456,
         )
         second = build_evidence(
             source_sha=source_sha,
             bridge_manifest_path=bridge_manifest_path,
             bridge_archive_path=bridge_archive,
             runtime_manifest_path=runtime_manifest_path,
-            runtime_archive_path=runtime_archive,
+            runtime_artifact_sha256="8" * 64,
+            runtime_artifact_size_bytes=456,
         )
         if first != second:
             fail("Windows delivery evidence is not deterministic")
@@ -386,7 +385,8 @@ def self_test() -> None:
                 bridge_manifest_path=wrong_path,
                 bridge_archive_path=bridge_archive,
                 runtime_manifest_path=runtime_manifest_path,
-                runtime_archive_path=runtime_archive,
+                runtime_artifact_sha256="8" * 64,
+                runtime_artifact_size_bytes=456,
             ),
             "identity mismatch",
         )
@@ -402,7 +402,8 @@ def parser() -> argparse.ArgumentParser:
     build.add_argument("--profile-bridge-manifest", type=Path, required=True)
     build.add_argument("--profile-bridge-archive", type=Path, required=True)
     build.add_argument("--runtime-manifest", type=Path, required=True)
-    build.add_argument("--runtime-archive", type=Path, required=True)
+    build.add_argument("--runtime-artifact-sha256", required=True)
+    build.add_argument("--runtime-artifact-size-bytes", type=int, required=True)
     build.add_argument("--sbom", type=Path, required=True)
     build.add_argument("--provenance", type=Path, required=True)
     commands.add_parser("self-test")
@@ -420,7 +421,8 @@ def main() -> int:
                 bridge_manifest_path=args.profile_bridge_manifest,
                 bridge_archive_path=args.profile_bridge_archive,
                 runtime_manifest_path=args.runtime_manifest,
-                runtime_archive_path=args.runtime_archive,
+                runtime_artifact_sha256=args.runtime_artifact_sha256,
+                runtime_artifact_size_bytes=args.runtime_artifact_size_bytes,
             )
             write_new(args.sbom, sbom, "SBOM")
             write_new(args.provenance, provenance, "provenance")

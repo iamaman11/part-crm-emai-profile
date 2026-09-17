@@ -111,6 +111,12 @@ fn verify_manifest(
             component.component_id
         )));
     }
+    if component.component_id == "runtime_bundle"
+        && object.get("schema_version").and_then(Value::as_u64) == Some(3)
+    {
+        return verify_runtime_manifest_v3(component, release_set, object);
+    }
+
     let source_sha = object
         .get("source")
         .and_then(Value::as_object)
@@ -137,6 +143,137 @@ fn verify_manifest(
         ));
     }
     Ok(())
+}
+
+fn verify_runtime_manifest_v3(
+    component: &ReleaseComponentIdentity,
+    release_set: &ReleaseSetV3,
+    object: &serde_json::Map<String, Value>,
+) -> Result<(), ReleaseModelError> {
+    let allowed = BTreeSet::from([
+        "schema_version",
+        "kind",
+        "platform",
+        "source_inputs",
+        "files",
+        "entrypoints",
+        "release_id",
+    ]);
+    if object.keys().any(|key| !allowed.contains(key.as_str())) || object.len() != allowed.len() {
+        return Err(mismatch(
+            "runtime_bundle v3 manifest field inventory is not canonical",
+        ));
+    }
+    if object.get("kind").and_then(Value::as_str) != Some("CAMOUFOX_WINDOWS_RUNTIME_COMPONENT")
+        || object.get("platform").and_then(Value::as_str) != Some("windows-x86_64")
+    {
+        return Err(mismatch("runtime_bundle v3 manifest identity mismatch"));
+    }
+
+    let source_inputs = object
+        .get("source_inputs")
+        .and_then(Value::as_object)
+        .ok_or_else(|| mismatch("runtime_bundle v3 source_inputs must be an object"))?;
+    if source_inputs.len() != 2
+        || !source_inputs.contains_key("files")
+        || !source_inputs.contains_key("sha256")
+    {
+        return Err(mismatch(
+            "runtime_bundle v3 source_inputs field inventory mismatch",
+        ));
+    }
+    let source_files = source_inputs
+        .get("files")
+        .and_then(Value::as_array)
+        .filter(|files| !files.is_empty())
+        .ok_or_else(|| mismatch("runtime_bundle v3 source_inputs.files must be non-empty"))?;
+    let source_sha = source_inputs
+        .get("sha256")
+        .and_then(Value::as_str)
+        .filter(|value| is_lower_hex(value, 64))
+        .ok_or_else(|| mismatch("runtime_bundle v3 source_inputs.sha256 is invalid"))?;
+    let canonical_source_files =
+        canonical_json(&Value::Array(source_files.clone())).map_err(|error| {
+            mismatch(format!(
+                "runtime_bundle v3 source input canonicalization failed: {error}"
+            ))
+        })?;
+    if sha256_hex(canonical_source_files.as_bytes()) != source_sha {
+        return Err(mismatch(
+            "runtime_bundle v3 source_inputs digest does not match its exact file inventory",
+        ));
+    }
+    let expected_input_sha = release_set
+        .runtime_compatibility
+        .runtime_component_inputs_sha256
+        .as_deref()
+        .ok_or_else(|| mismatch("runtime_bundle v3 requires Release Set runtime input identity"))?;
+    if source_sha != expected_input_sha {
+        return Err(ReleaseModelError::new(
+            "SOURCE_IDENTITY_MISMATCH: runtime_bundle input identity differs from current Release Set",
+        ));
+    }
+    let expected_release_id = format!("runtime-bundle-v3-sha256-{source_sha}");
+    if component.release_id != expected_release_id {
+        return Err(mismatch(
+            "runtime_bundle v3 release_id is not content-addressed by current runtime inputs",
+        ));
+    }
+
+    let files = object
+        .get("files")
+        .and_then(Value::as_object)
+        .ok_or_else(|| mismatch("runtime_bundle v3 files must be an object"))?;
+    if files.len() != 2 || !files.contains_key("files") || !files.contains_key("sha256") {
+        return Err(mismatch("runtime_bundle v3 files field inventory mismatch"));
+    }
+    let inventory = files
+        .get("files")
+        .and_then(Value::as_array)
+        .filter(|rows| !rows.is_empty())
+        .ok_or_else(|| mismatch("runtime_bundle v3 files.files must be non-empty"))?;
+    let inventory_sha = files
+        .get("sha256")
+        .and_then(Value::as_str)
+        .filter(|value| is_lower_hex(value, 64))
+        .ok_or_else(|| mismatch("runtime_bundle v3 files.sha256 is invalid"))?;
+    let canonical_inventory =
+        canonical_json(&Value::Array(inventory.clone())).map_err(|error| {
+            mismatch(format!(
+                "runtime_bundle v3 inventory canonicalization failed: {error}"
+            ))
+        })?;
+    if sha256_hex(canonical_inventory.as_bytes()) != inventory_sha {
+        return Err(mismatch(
+            "runtime_bundle v3 file inventory digest does not match its exact rows",
+        ));
+    }
+
+    let entrypoints = object
+        .get("entrypoints")
+        .and_then(Value::as_object)
+        .ok_or_else(|| mismatch("runtime_bundle v3 entrypoints must be an object"))?;
+    let expected_entrypoints = BTreeMap::from([
+        ("browser", "browser/camoufox.exe"),
+        ("camouhost", "camouhost/real.py"),
+        ("python", "python/python.exe"),
+        ("runtime_lock", "camouhost/runtime-lock.json"),
+    ]);
+    if entrypoints.len() != expected_entrypoints.len()
+        || expected_entrypoints
+            .iter()
+            .any(|(key, expected)| entrypoints.get(*key).and_then(Value::as_str) != Some(*expected))
+    {
+        return Err(mismatch("runtime_bundle v3 entrypoint identity mismatch"));
+    }
+    Ok(())
+}
+
+fn is_lower_hex(value: &str, length: usize) -> bool {
+    value.len() == length
+        && value
+            .bytes()
+            .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
 }
 
 fn verify_profile_bridge_manifest(

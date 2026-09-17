@@ -833,7 +833,7 @@ mod tests {
                     component_manifest_sha256: identity_digest.clone(),
                 },
                 runtime_bundle: WindowsDeliveryComponent {
-                    release_id: format!("runtime-bundle-v2-sha256-{identity_digest}"),
+                    release_id: format!("runtime-bundle-v3-sha256-{identity_digest}"),
                     artifact_sha256: sha256_hex(&runtime_archive_bytes),
                     artifact_size_bytes: runtime_archive_bytes.len() as u64,
                     component_manifest_sha256: identity_digest.clone(),
@@ -846,7 +846,7 @@ mod tests {
             compatibility: WindowsDeliveryCompatibility {
                 profile_bridge_protocol_version: 1,
                 camouhost_ipc_version: CAMOUHOST_IPC_VERSION,
-                runtime_bundle_version: "2.0.0".to_owned(),
+                runtime_bundle_version: "3.0.0".to_owned(),
             },
         };
         let manifest_bytes = serde_json::to_vec(&manifest)?;
