@@ -109,6 +109,41 @@ def safe_id(value: object, label: str) -> str:
     return value
 
 
+def sanitize_destinations(value: object, target_host: str) -> list[dict]:
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        raise ObservationError("access_app_destinations_must_be_array")
+    output: list[dict] = []
+    for destination in value:
+        if not isinstance(destination, dict):
+            raise ObservationError("access_app_destination_must_be_object")
+        destination_type = safe_text(destination.get("type"), "access_destination_type")
+        raw_uri = safe_text(destination.get("uri"), "access_destination_uri")
+        parsed = urlsplit(raw_uri if "://" in raw_uri else f"https://{raw_uri}")
+        if (
+            parsed.scheme.lower() != "https"
+            or not parsed.hostname
+            or parsed.username is not None
+            or parsed.password is not None
+            or bool(parsed.query)
+            or bool(parsed.fragment)
+        ):
+            raise ObservationError("access_destination_uri_unsafe")
+        path = parsed.path or "/"
+        if not path.startswith("/") or len(path) > 512:
+            raise ObservationError("access_destination_path_invalid")
+        target_match = parsed.hostname.rstrip(".").lower() == target_host
+        item = {"type": destination_type, "target_host": target_match}
+        if target_match:
+            item["path"] = path
+        output.append(item)
+    return sorted(
+        output,
+        key=lambda item: (str(item["type"]), bool(item["target_host"]), str(item.get("path", ""))),
+    )
+
+
 def rule_selectors(value: object) -> list[str]:
     if not isinstance(value, list):
         return []
@@ -160,12 +195,15 @@ def sanitize_applications(apps_path: Path, policies_dir: Path, target_host: str)
         if not isinstance(policy_result, list):
             raise ObservationError("access_policies_result_must_be_array")
         policies = [sanitize_policy(policy) for policy in policy_result if isinstance(policy, dict)]
+        destinations = sanitize_destinations(app.get("destinations"), target_host)
         output.append(
             {
                 "id": app_id,
                 "domain": domain,
                 "type": normalize_scalar(app.get("type")),
                 "aud": normalize_scalar(app.get("aud")),
+                "destination_count": len(destinations),
+                "destinations": destinations,
                 "policies": sorted(policies, key=lambda item: (str(item.get("precedence")), item["id"])),
             }
         )
@@ -397,7 +435,11 @@ def self_test() -> bool:
         manifest.write_text(json.dumps({"control_plane": {"account_id": fixture_account_id, "custom_domain": "staging.example.test"}}), encoding="utf-8")
         verify.write_text(json.dumps({"success": True, "errors": [], "result": {"id": "token_12345678", "status": "active"}}), encoding="utf-8")
         apps.write_text(json.dumps({"success": True, "errors": [], "result": [
-            {"id": app_id, "domain": "staging.example.test", "type": "self_hosted", "aud": "aud-test"},
+            {"id": app_id, "domain": "staging.example.test", "type": "self_hosted", "aud": "aud-test",
+             "destinations": [
+                 {"type": "public", "uri": "https://staging.example.test/api/v1/tenants/*/device-pairings/requests", "private": "DO_NOT_EXPORT_DESTINATION_SECRET"},
+                 {"type": "public", "uri": "https://private.example.test/internal"},
+             ]},
             {"id": "app_other", "domain": "other.example.test", "type": "self_hosted", "aud": "other"},
         ]}), encoding="utf-8")
         org.write_text(json.dumps({"success": True, "errors": [], "result": {"auth_domain": "team.cloudflareaccess.com", "name": "private-name"}}), encoding="utf-8")
@@ -439,6 +481,9 @@ def self_test() -> bool:
         encoded = json.dumps(output, sort_keys=True)
         group = output["access"]["groups"][0]
         idp = output["access"]["identity_providers"][0]
+        app = output["access"]["applications"][0]
+        target_destinations = [item for item in app["destinations"] if item["target_host"]]
+        foreign_destinations = [item for item in app["destinations"] if not item["target_host"]]
         checks = [
             output["access"]["application_count_for_target"] == 1,
             output["access"]["identity_provider_count"] == 1,
@@ -448,6 +493,9 @@ def self_test() -> bool:
             group["include_selectors"] == ["email", "login_method"],
             group["require_selectors"] == ["email_domain"],
             group["exclude_selectors"] == ["ip"],
+            app["destination_count"] == 2,
+            target_destinations == [{"type": "public", "target_host": True, "path": "/api/v1/tenants/*/device-pairings/requests"}],
+            foreign_destinations == [{"type": "public", "target_host": False}],
             output["mtls"]["matching_certificate_count"] == 1,
             output["access"]["applications"][0]["policies"][0]["mtls_selector_present"] is True,
             output["d1"]["has_0031_device_binding_governance"] is True,
@@ -459,6 +507,7 @@ def self_test() -> bool:
             "DO_NOT_EXPORT_MEMBER" not in encoded,
             "DO_NOT_EXPORT_IDP_SECRET" not in encoded,
             "private-idp@example.test" not in encoded,
+            "DO_NOT_EXPORT_DESTINATION_SECRET" not in encoded,
             "DO_NOT_EXPORT" not in encoded,
             "private-name" not in encoded,
             fixture_account_id not in encoded,
@@ -487,6 +536,19 @@ def self_test() -> bool:
         else:
             return False
         idps.write_text(original_idps, encoding="utf-8")
+
+        original_apps = apps.read_text(encoding="utf-8")
+        unsafe_apps = json.loads(original_apps)
+        unsafe_apps["result"][0]["destinations"][0]["uri"] = "https://staging.example.test/api/v1/tenants/*/device-pairings/requests?token=DO_NOT_EXPORT"
+        apps.write_text(json.dumps(unsafe_apps), encoding="utf-8")
+        try:
+            render(args)
+        except ObservationError as error:
+            if str(error) != "access_destination_uri_unsafe":
+                return False
+        else:
+            return False
+        apps.write_text(original_apps, encoding="utf-8")
 
         disabled = json.loads(verify.read_text(encoding="utf-8"))
         disabled["result"]["status"] = "disabled"
