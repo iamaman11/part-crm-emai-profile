@@ -88,6 +88,18 @@ def normalize_scalar(value: object) -> str | int | bool | None:
     return None
 
 
+def safe_text(value: object, label: str) -> str:
+    if not isinstance(value, str) or not value.strip() or len(value) > 512:
+        raise ObservationError(f"{label}_invalid")
+    return value.strip()
+
+
+def safe_id(value: object, label: str) -> str:
+    if not isinstance(value, str) or not SAFE_ID_RE.fullmatch(value):
+        raise ObservationError(f"{label}_invalid")
+    return value
+
+
 def rule_selectors(value: object) -> list[str]:
     if not isinstance(value, list):
         return []
@@ -95,7 +107,7 @@ def rule_selectors(value: object) -> list[str]:
     for item in value:
         if not isinstance(item, dict):
             continue
-        selectors.update(key for key in item if isinstance(key, str))
+        selectors.update(key for key in item if isinstance(key, str) and key)
     return sorted(selectors)
 
 
@@ -104,9 +116,7 @@ def sanitize_policy(policy: dict) -> dict:
     exclude = rule_selectors(policy.get("exclude"))
     require = rule_selectors(policy.get("require"))
     selectors = set(include) | set(exclude) | set(require)
-    policy_id = policy.get("id")
-    if not isinstance(policy_id, str) or not SAFE_ID_RE.fullmatch(policy_id):
-        raise ObservationError("policy_id_invalid")
+    policy_id = safe_id(policy.get("id"), "policy_id")
     return {
         "id": policy_id,
         "decision": normalize_scalar(policy.get("decision")),
@@ -135,9 +145,7 @@ def sanitize_applications(apps_path: Path, policies_dir: Path, target_host: str)
             continue
         if app_host != target_host:
             continue
-        app_id = app.get("id")
-        if not isinstance(app_id, str) or not SAFE_ID_RE.fullmatch(app_id):
-            raise ObservationError("access_app_id_invalid")
+        app_id = safe_id(app.get("id"), "access_app_id")
         policy_path = policies_dir / f"{app_id}.json"
         policy_result = cloudflare_result(policy_path, f"access_policies_{app_id}")
         if not isinstance(policy_result, list):
@@ -152,6 +160,48 @@ def sanitize_applications(apps_path: Path, policies_dir: Path, target_host: str)
                 "policies": sorted(policies, key=lambda item: (str(item.get("precedence")), item["id"])),
             }
         )
+    return sorted(output, key=lambda item: item["id"])
+
+
+def sanitize_identity_providers(path: Path) -> list[dict]:
+    result = cloudflare_result(path, "access_identity_providers")
+    if not isinstance(result, list):
+        raise ObservationError("access_identity_providers_result_must_be_array")
+    output: list[dict] = []
+    for provider in result:
+        if not isinstance(provider, dict):
+            raise ObservationError("access_identity_provider_must_be_object")
+        item = {
+            "id": safe_id(provider.get("id"), "access_identity_provider_id"),
+            "name": safe_text(provider.get("name"), "access_identity_provider_name"),
+            "type": safe_text(provider.get("type"), "access_identity_provider_type"),
+        }
+        read_only = provider.get("read_only")
+        if isinstance(read_only, bool):
+            item["read_only"] = read_only
+        output.append(item)
+    return sorted(output, key=lambda item: item["id"])
+
+
+def sanitize_groups(path: Path) -> list[dict]:
+    result = cloudflare_result(path, "access_groups")
+    if not isinstance(result, list):
+        raise ObservationError("access_groups_result_must_be_array")
+    output: list[dict] = []
+    for group in result:
+        if not isinstance(group, dict):
+            raise ObservationError("access_group_must_be_object")
+        item = {
+            "id": safe_id(group.get("id"), "access_group_id"),
+            "name": safe_text(group.get("name"), "access_group_name"),
+            "include_selectors": rule_selectors(group.get("include")),
+            "exclude_selectors": rule_selectors(group.get("exclude")),
+            "require_selectors": rule_selectors(group.get("require")),
+        }
+        is_default = group.get("is_default")
+        if isinstance(is_default, bool):
+            item["is_default"] = is_default
+        output.append(item)
     return sorted(output, key=lambda item: item["id"])
 
 
@@ -187,9 +237,7 @@ def sanitize_certificates(path: Path, target_host: str, observed_at: datetime) -
                 continue
         if not matching_hosts:
             continue
-        certificate_id = certificate.get("id")
-        if not isinstance(certificate_id, str) or not SAFE_ID_RE.fullmatch(certificate_id):
-            raise ObservationError("access_certificate_id_invalid")
+        certificate_id = safe_id(certificate.get("id"), "access_certificate_id")
         expires_on = certificate.get("expires_on")
         valid_now = None
         if isinstance(expires_on, str):
@@ -274,6 +322,8 @@ def render(args: argparse.Namespace) -> dict:
     observed_at = parse_observed_at(args.observed_at)
     token = verified_token(args.zero_trust_token_verify)
     apps = sanitize_applications(args.apps, args.policies_dir, target_host)
+    idps = sanitize_identity_providers(args.identity_providers)
+    groups = sanitize_groups(args.groups)
     certs = sanitize_certificates(args.certificates, target_host, observed_at)
     org = organization(args.organization)
     d1 = d1_state(args.d1_ledger, args.migrations_dir)
@@ -294,6 +344,10 @@ def render(args: argparse.Namespace) -> dict:
             "application_count_for_target": len(apps),
             "applications": apps,
             "organization": org,
+            "identity_provider_count": len(idps),
+            "identity_providers": idps,
+            "group_count": len(groups),
+            "groups": groups,
         },
         "mtls": {
             "matching_certificate_count": len(certs),
@@ -304,6 +358,8 @@ def render(args: argparse.Namespace) -> dict:
             "zero_trust_token_verify": sha256_file(args.zero_trust_token_verify),
             "access_apps": sha256_file(args.apps),
             "access_organization": sha256_file(args.organization),
+            "access_identity_providers": sha256_file(args.identity_providers),
+            "access_groups": sha256_file(args.groups),
             "access_certificates": sha256_file(args.certificates),
             "access_policies": policy_digests,
         },
@@ -323,6 +379,8 @@ def self_test() -> bool:
         verify = root / "verify.json"
         apps = root / "apps.json"
         org = root / "org.json"
+        idps = root / "idps.json"
+        groups = root / "groups.json"
         certs = root / "certs.json"
         ledger = root / "ledger.json"
         app_id = "app_12345678"
@@ -334,6 +392,17 @@ def self_test() -> bool:
             {"id": "app_other", "domain": "other.example.test", "type": "self_hosted", "aud": "other"},
         ]}), encoding="utf-8")
         org.write_text(json.dumps({"success": True, "errors": [], "result": {"auth_domain": "team.cloudflareaccess.com", "name": "private-name"}}), encoding="utf-8")
+        idps.write_text(json.dumps({"success": True, "errors": [], "result": [
+            {"id": "idp_12345678", "name": "Canonical human login", "type": "oidc", "read_only": True,
+             "config": {"client_secret": "DO_NOT_EXPORT_IDP_SECRET", "email": "private-idp@example.test"}},
+        ]}), encoding="utf-8")
+        groups.write_text(json.dumps({"success": True, "errors": [], "result": [
+            {"id": "group_12345678", "name": "Canonical humans", "is_default": False,
+             "include": [{"email": {"email": "person@example.test"}}, {"login_method": {"id": "idp_12345678"}}],
+             "require": [{"email_domain": {"domain": "private.example.test"}}],
+             "exclude": [{"ip": {"ip": "192.0.2.5"}}],
+             "private_membership": ["DO_NOT_EXPORT_MEMBER"]},
+        ]}), encoding="utf-8")
         certs.write_text(json.dumps({"success": True, "errors": [], "result": [
             {"id": "cert_12345678", "associated_hostnames": ["staging.example.test"], "expires_on": "2030-01-01T00:00:00Z", "certificate": "-----BEGIN CERTIFICATE-----DO_NOT_EXPORT"},
         ]}), encoding="utf-8")
@@ -350,6 +419,8 @@ def self_test() -> bool:
             zero_trust_token_verify=verify,
             apps=apps,
             organization=org,
+            identity_providers=idps,
+            groups=groups,
             certificates=certs,
             policies_dir=policies,
             d1_ledger=ledger,
@@ -357,20 +428,54 @@ def self_test() -> bool:
         )
         output = render(args)
         encoded = json.dumps(output, sort_keys=True)
+        group = output["access"]["groups"][0]
         checks = [
             output["access"]["application_count_for_target"] == 1,
+            output["access"]["identity_provider_count"] == 1,
+            output["access"]["group_count"] == 1,
+            group["include_selectors"] == ["email", "login_method"],
+            group["require_selectors"] == ["email_domain"],
+            group["exclude_selectors"] == ["ip"],
             output["mtls"]["matching_certificate_count"] == 1,
             output["access"]["applications"][0]["policies"][0]["mtls_selector_present"] is True,
             output["d1"]["has_0031_device_binding_governance"] is True,
             output["d1"]["unknown_extra_migrations"] == [],
             output["d1"]["missing_canonical_migrations"] == [],
             "person@example.test" not in encoded,
+            "private.example.test" not in encoded,
+            "192.0.2.5" not in encoded,
+            "DO_NOT_EXPORT_MEMBER" not in encoded,
+            "DO_NOT_EXPORT_IDP_SECRET" not in encoded,
+            "private-idp@example.test" not in encoded,
             "DO_NOT_EXPORT" not in encoded,
             "private-name" not in encoded,
             fixture_account_id not in encoded,
         ]
         if not all(checks):
             return False
+
+        original_groups = groups.read_text(encoding="utf-8")
+        groups.write_text(json.dumps({"success": False, "errors": [{"code": 10000}], "result": []}), encoding="utf-8")
+        try:
+            render(args)
+        except ObservationError as error:
+            if str(error) != "access_groups_unsuccessful":
+                return False
+        else:
+            return False
+        groups.write_text(original_groups, encoding="utf-8")
+
+        original_idps = idps.read_text(encoding="utf-8")
+        idps.write_text(json.dumps({"success": True, "errors": [], "result": {}}), encoding="utf-8")
+        try:
+            render(args)
+        except ObservationError as error:
+            if str(error) != "access_identity_providers_result_must_be_array":
+                return False
+        else:
+            return False
+        idps.write_text(original_idps, encoding="utf-8")
+
         disabled = json.loads(verify.read_text(encoding="utf-8"))
         disabled["result"]["status"] = "disabled"
         verify.write_text(json.dumps(disabled), encoding="utf-8")
@@ -394,6 +499,8 @@ def main() -> int:
     parser.add_argument("--zero-trust-token-verify", type=Path)
     parser.add_argument("--apps", type=Path)
     parser.add_argument("--organization", type=Path)
+    parser.add_argument("--identity-providers", type=Path)
+    parser.add_argument("--groups", type=Path)
     parser.add_argument("--certificates", type=Path)
     parser.add_argument("--policies-dir", type=Path)
     parser.add_argument("--d1-ledger", type=Path)
@@ -409,6 +516,8 @@ def main() -> int:
         "zero_trust_token_verify",
         "apps",
         "organization",
+        "identity_providers",
+        "groups",
         "certificates",
         "policies_dir",
         "d1_ledger",
