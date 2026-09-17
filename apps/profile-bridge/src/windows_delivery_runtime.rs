@@ -20,7 +20,7 @@ const PROFILE_BRIDGE_EXECUTABLE: &str = "profile-bridge.exe";
 const RELEASES_DIRECTORY: &str = "releases";
 const STATE_DIRECTORY: &str = "state";
 const RUNTIME_MANIFEST: &str = "runtime-manifest.json";
-const RUNTIME_RELEASE_PREFIX: &str = "runtime-bundle-v2-sha256-";
+const RUNTIME_RELEASE_PREFIX: &str = "runtime-bundle-v3-sha256-";
 const MAX_RUNTIME_MANIFEST_BYTES: u64 = 64 * 1024 * 1024;
 const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0400;
 
@@ -526,7 +526,7 @@ mod tests {
             release_set_id: format!("release-set-v3-sha256-{digest}"),
             manifest_sha256: digest.clone(),
             profile_bridge_release_id: format!("profile-bridge-v2-sha256-{digest}"),
-            runtime_bundle_release_id: format!("runtime-bundle-v2-sha256-{digest}"),
+            runtime_bundle_release_id: format!("runtime-bundle-v3-sha256-{digest}"),
         }
     }
 
