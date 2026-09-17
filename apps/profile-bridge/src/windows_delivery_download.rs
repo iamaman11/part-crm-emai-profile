@@ -20,6 +20,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 const RELEASE_SET_PREFIX: &str = "release-set-v3-sha256-";
+#[cfg(any(test, windows))]
 const RUNTIME_BUNDLE_PREFIX: &str = "runtime-bundle-v3-sha256-";
 const PROFILE_BRIDGE_ASSET: &str = "profile-bridge.zip";
 const RUNTIME_BUNDLE_ASSET: &str = "runtime-bundle.tar";
