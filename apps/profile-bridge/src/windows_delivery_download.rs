@@ -20,6 +20,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 const RELEASE_SET_PREFIX: &str = "release-set-v3-sha256-";
+const RUNTIME_BUNDLE_PREFIX: &str = "runtime-bundle-v3-sha256-";
 const PROFILE_BRIDGE_ASSET: &str = "profile-bridge.zip";
 const RUNTIME_BUNDLE_ASSET: &str = "runtime-bundle.tar";
 #[cfg(any(test, windows))]
@@ -431,13 +432,16 @@ fn encode_lower_hex(bytes: &[u8]) -> String {
 }
 
 #[cfg(any(test, windows))]
-fn release_asset_url(release_set_id: &str, asset_name: &str) -> Option<String> {
-    if !prefixed_sha256(release_set_id, RELEASE_SET_PREFIX)
-        || !matches!(asset_name, PROFILE_BRIDGE_ASSET | RUNTIME_BUNDLE_ASSET)
-    {
+fn release_asset_url(release_id: &str, asset_name: &str) -> Option<String> {
+    let valid_release = match asset_name {
+        PROFILE_BRIDGE_ASSET => prefixed_sha256(release_id, RELEASE_SET_PREFIX),
+        RUNTIME_BUNDLE_ASSET => prefixed_sha256(release_id, RUNTIME_BUNDLE_PREFIX),
+        _ => false,
+    };
+    if !valid_release {
         return None;
     }
-    Some(format!("{RELEASE_BASE_URL}/{release_set_id}/{asset_name}"))
+    Some(format!("{RELEASE_BASE_URL}/{release_id}/{asset_name}"))
 }
 
 fn metadata_is_link_or_reparse(metadata: &Metadata) -> bool {
@@ -915,12 +919,20 @@ mod tests {
     #[test]
     fn release_url_is_exact_and_never_discovers_latest() {
         let release_set_id = format!("{RELEASE_SET_PREFIX}{}", "a".repeat(64));
+        let runtime_release_id = format!("{RUNTIME_BUNDLE_PREFIX}{}", "b".repeat(64));
         assert_eq!(
             release_asset_url(&release_set_id, PROFILE_BRIDGE_ASSET),
             Some(format!(
                 "{RELEASE_BASE_URL}/{release_set_id}/{PROFILE_BRIDGE_ASSET}"
             ))
         );
+        assert_eq!(
+            release_asset_url(&runtime_release_id, RUNTIME_BUNDLE_ASSET),
+            Some(format!(
+                "{RELEASE_BASE_URL}/{runtime_release_id}/{RUNTIME_BUNDLE_ASSET}"
+            ))
+        );
+        assert!(release_asset_url(&release_set_id, RUNTIME_BUNDLE_ASSET).is_none());
         assert!(release_asset_url("latest", PROFILE_BRIDGE_ASSET).is_none());
         assert!(release_asset_url(&release_set_id, "arbitrary.zip").is_none());
     }
