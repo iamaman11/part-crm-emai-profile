@@ -328,6 +328,7 @@ fn historical_v2_to_compatibility(historical: &HistoricalReleaseSetV2) -> Releas
         },
         runtime_compatibility: core::RuntimeCompatibilityIdentity {
             runtime_lock_sha256: historical.runtime_compatibility.runtime_lock_sha256.clone(),
+            runtime_component_inputs_sha256: None,
             runtime_role: historical.runtime_compatibility.runtime_role.clone(),
             profile_format: historical.runtime_compatibility.profile_format.clone(),
             browser_identity_policy: historical
@@ -471,6 +472,7 @@ mod tests {
             },
             runtime_compatibility: RuntimeCompatibilityIdentityDto {
                 runtime_lock_sha256: SHA.to_owned(),
+                runtime_component_inputs_sha256: Some(SHA.to_owned()),
                 runtime_role: "real_camoufox".to_owned(),
                 profile_format: "profile-v1".to_owned(),
                 browser_identity_policy: "browser-identity-v1".to_owned(),
