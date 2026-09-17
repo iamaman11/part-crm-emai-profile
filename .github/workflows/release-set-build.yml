@@ -345,12 +345,12 @@ jobs:
           cp artifacts/ar11-inputs/control-plane.tar "$component_root/control-plane.tar"
           cp artifacts/ar11-inputs/secret-resolver.tar "$component_root/secret-resolver.tar"
           cp artifacts/ar11-inputs/profile-bridge.zip "$component_root/profile-bridge.zip"
-          cp artifacts/ar11-inputs/runtime-bundle.tar "$component_root/runtime-bundle.tar"
 
           control_manifest=artifacts/ar11-inputs/control-plane-manifest.json
           resolver_manifest=artifacts/ar11-inputs/secret-resolver-manifest.json
           bridge_manifest=artifacts/ar11-inputs/profile-bridge-manifest.json
           runtime_manifest=artifacts/ar11-inputs/runtime-manifest.json
+          runtime_observation=artifacts/ar11-inputs/runtime-component-observation.json
 
           control_release_id="$(jq -er '.release_id' "$control_manifest")"
           resolver_release_id="$(jq -er '.release_id' "$resolver_manifest")"
@@ -360,8 +360,10 @@ jobs:
           control_source_sha="$(jq -er '.source.commit_sha' "$control_manifest")"
           resolver_source_sha="$(jq -er '.source_commit_sha' "$resolver_manifest")"
           bridge_source_sha="$(jq -er '.source_commit_sha' "$bridge_manifest")"
-          runtime_source_sha="$(jq -er '.source_commit_sha' "$runtime_manifest")"
+          runtime_source_sha="$SOURCE_SHA"
           bridge_protocol="$(jq -er '.protocol_version' "$bridge_manifest")"
+          test "$(jq -er '.release_id' "$runtime_observation")" = "$runtime_release_id"
+          test "$(jq -er '.artifact_path' "$runtime_observation")" = "components/runtime-bundle.tar"
 
           if [[ "$resolver_release_id" =~ ^(.+)-sha256-[0-9a-f]{64}$ ]]; then
             resolver_protocol="${BASH_REMATCH[1]}"
@@ -376,15 +378,18 @@ jobs:
           control_sha="$(sha256_file "$component_root/control-plane.tar")"
           resolver_sha="$(sha256_file "$component_root/secret-resolver.tar")"
           bridge_sha="$(sha256_file "$component_root/profile-bridge.zip")"
-          runtime_sha="$(sha256_file "$component_root/runtime-bundle.tar")"
+          runtime_sha="$(jq -er '.artifact_sha256' "$runtime_observation")"
           control_size="$(size_bytes "$component_root/control-plane.tar")"
           resolver_size="$(size_bytes "$component_root/secret-resolver.tar")"
           bridge_size="$(size_bytes "$component_root/profile-bridge.zip")"
-          runtime_size="$(size_bytes "$component_root/runtime-bundle.tar")"
+          runtime_size="$(jq -er '.artifact_size_bytes' "$runtime_observation")"
           control_manifest_sha="$(sha256_file "$control_manifest")"
           resolver_manifest_sha="$(sha256_file "$resolver_manifest")"
           bridge_manifest_sha="$(sha256_file "$bridge_manifest")"
           runtime_manifest_sha="$(sha256_file "$runtime_manifest")"
+          test "$runtime_manifest_sha" = "$(jq -er '.component_manifest_sha256' "$runtime_observation")"
+          [[ "$runtime_sha" =~ ^[0-9a-f]{64}$ ]]
+          test "$runtime_size" -gt 0
 
           python -m py_compile scripts/windows-delivery-evidence.py scripts/windows-delivery-publication.py
           python scripts/windows-delivery-evidence.py self-test
@@ -398,7 +403,8 @@ jobs:
             --profile-bridge-manifest "$bridge_manifest" \
             --profile-bridge-archive "$component_root/profile-bridge.zip" \
             --runtime-manifest "$runtime_manifest" \
-            --runtime-archive "$component_root/runtime-bundle.tar" \
+            --runtime-artifact-sha256 "$runtime_sha" \
+            --runtime-artifact-size-bytes "$runtime_size" \
             --sbom "$sbom_json" \
             --provenance "$provenance_json"
           sbom_sha="$(sha256_file "$sbom_json")"
@@ -484,7 +490,6 @@ jobs:
           cp "$capability_policy_json" "$release_dir/capability-policy-v1.json"
           cp "$component_root/control-plane.tar" "$release_dir/components/control-plane.tar"
           cp "$component_root/secret-resolver.tar" "$release_dir/components/secret-resolver.tar"
-          cp "$component_root/runtime-bundle.tar" "$release_dir/components/runtime-bundle.tar"
           cp "$component_root/profile-bridge.zip" "$release_dir/components/profile-bridge.zip"
           cp "$sbom_json" "$release_dir/windows/windows-sbom-v1.json"
           cp "$provenance_json" "$release_dir/windows/windows-provenance-v1.json"
@@ -493,7 +498,7 @@ jobs:
           test "$delivery_sequence" -gt 0
           python scripts/windows-delivery-publication.py manifest --release-set "$release_dir/release-set.json" --sbom "$release_dir/windows/windows-sbom-v1.json" --provenance "$release_dir/windows/windows-provenance-v1.json" --sequence "$delivery_sequence" --output "$release_dir/windows-delivery-manifest.json"
           jq -e --arg release_id "$release_id" --arg source_sha "$SOURCE_SHA" --arg sbom_sha "$sbom_sha" --arg provenance_sha "$provenance_sha" '.schema_version == 1 and .kind == "WINDOWS_PROFILE_BRIDGE_DELIVERY" and .release_set_id == $release_id and .source_commit_sha == $source_sha and .evidence.sbom_sha256 == $sbom_sha and .evidence.provenance_sha256 == $provenance_sha and .sequence > 0' "$release_dir/windows-delivery-manifest.json" >/dev/null
-          test "$(find "$release_dir" -type f | wc -l)" -eq 9
+          test "$(find "$release_dir" -type f | wc -l)" -eq 8
 
           policy_dir="$RUNNER_TEMP/release-policy-input"
           mkdir -p "$policy_dir"
@@ -525,7 +530,7 @@ jobs:
           cp "$RELEASE_DIR/windows/windows-sbom-v1.json" "$asset_dir/windows-sbom-v1.json"
           cp "$RELEASE_DIR/windows/windows-provenance-v1.json" "$asset_dir/windows-provenance-v1.json"
           cp "$RELEASE_DIR/windows-delivery-manifest.json" "$asset_dir/windows-delivery-manifest.json"
-          test "$(find "$asset_dir" -maxdepth 1 -type f | wc -l)" -eq 9
+          test "$(find "$asset_dir" -maxdepth 1 -type f | wc -l)" -eq 8
           if gh release view "$RELEASE_ID" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             existing="$RUNNER_TEMP/existing-release"
             mkdir -p "$existing"
@@ -535,10 +540,12 @@ jobs:
               test -f "$existing/$name"
               cmp --silent "$file" "$existing/$name"
             done
-            test "$(find "$existing" -maxdepth 1 -type f | wc -l)" -eq 9
+            test "$(find "$existing" -maxdepth 1 -type f | wc -l)" -eq 8
           else
+            echo "Publishing aggregate $RELEASE_ID without duplicating the heavy runtime component."
             gh release create "$RELEASE_ID" --repo "$GITHUB_REPOSITORY" --target "$SOURCE_SHA" --title "$RELEASE_ID" --notes "Immutable Release Set v3 built once from accepted main $SOURCE_SHA."
             gh release upload "$RELEASE_ID" --repo "$GITHUB_REPOSITORY" "$asset_dir"/*
+            echo "Aggregate Release Set publication completed: $RELEASE_ID"
           fi
 
       - name: Upload metadata-only CI evidence
