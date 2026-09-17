@@ -2,11 +2,11 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { TenantProvider } from '../../app/TenantContext';
-import { getTenantContexts } from '../session/api';
+import { getTenantContexts } from '../session';
 import { listProfiles } from './api';
 import { ProfileDirectory } from './ProfileDirectory';
 
-vi.mock('../session/api', () => ({ getTenantContexts: vi.fn() }));
+vi.mock('../session', () => ({ getTenantContexts: vi.fn() }));
 vi.mock('./api', () => ({ listProfiles: vi.fn() }));
 
 const mockedGetTenantContexts = vi.mocked(getTenantContexts);
