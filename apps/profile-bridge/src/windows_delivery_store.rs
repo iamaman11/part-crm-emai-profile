@@ -679,7 +679,7 @@ mod tests {
             release_set_id: format!("release-set-v3-sha256-{}", "1".repeat(64)),
             manifest_sha256: "2".repeat(64),
             profile_bridge_release_id: format!("profile-bridge-v2-sha256-{}", "3".repeat(64)),
-            runtime_bundle_release_id: format!("runtime-bundle-v2-sha256-{}", "4".repeat(64)),
+            runtime_bundle_release_id: format!("runtime-bundle-v3-sha256-{}", "4".repeat(64)),
         }
     }
 
