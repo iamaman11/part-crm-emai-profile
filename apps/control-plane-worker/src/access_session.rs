@@ -70,12 +70,23 @@ pub async fn session_response(
 }
 
 pub async fn tenant_contexts_response(request: &Request, env: &Env) -> Result<Response> {
-    let Some((identity, _correlation_id)) = verify_human_identity(request, env).await? else {
-        return neutral_not_found(&correlation_hint(request));
+    let correlation = correlation_hint(request);
+    let (identity, correlation_id) = match verify_human_identity(request, env).await {
+        Ok(Some(verified)) => verified,
+        Ok(None) => return neutral_not_found(&correlation),
+        Err(_) => return dependency_unavailable(&correlation),
     };
-    let contexts = D1IdentityAclRepository::new(env.d1(D1_CATALOG_BINDING)?)
+    let database = match env.d1(D1_CATALOG_BINDING) {
+        Ok(database) => database,
+        Err(_) => return dependency_unavailable(correlation_id.as_str()),
+    };
+    let contexts = match D1IdentityAclRepository::new(database)
         .active_tenant_contexts(&identity)
-        .await?;
+        .await
+    {
+        Ok(contexts) => contexts,
+        Err(error) => return tenant_context_repository_failure(correlation_id.as_str(), error),
+    };
     Response::from_json(&TenantContextsProjection {
         tenants: contexts
             .into_iter()
@@ -91,6 +102,27 @@ pub async fn tenant_contexts_response(request: &Request, env: &Env) -> Result<Re
             })
             .collect(),
     })
+}
+
+fn tenant_context_repository_failure(correlation_id: &str, error: Error) -> Result<Response> {
+    match error {
+        Error::RustError(_) => problem(
+            correlation_id,
+            500,
+            "integrity_failure",
+            "Integrity Failure",
+        ),
+        _ => dependency_unavailable(correlation_id),
+    }
+}
+
+fn dependency_unavailable(correlation_id: &str) -> Result<Response> {
+    problem(
+        correlation_id,
+        503,
+        "dependency_unavailable",
+        "Dependency Unavailable",
+    )
 }
 
 pub async fn resolve_active_request_actor(
@@ -244,12 +276,30 @@ pub fn correlation_hint(request: &Request) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{ACCESS_AUDIENCE_VAR, PROBLEM_CONTENT_TYPE, problem_type_for_code};
+    use super::{
+        ACCESS_AUDIENCE_VAR, PROBLEM_CONTENT_TYPE, problem_type_for_code,
+        tenant_context_repository_failure,
+    };
+    use worker::Error;
 
     #[test]
     fn human_access_audience_remains_explicit_and_separate_from_machine_ingress() {
         assert_eq!(ACCESS_AUDIENCE_VAR, "ACCESS_AUDIENCE");
         assert_ne!(ACCESS_AUDIENCE_VAR, "BRIDGE_ACCESS_AUDIENCE");
+    }
+
+    #[test]
+    fn tenant_context_repository_integrity_failures_do_not_escape_as_raw_worker_errors() {
+        let response = tenant_context_repository_failure(
+            "corr_01JTENANTCTX",
+            Error::RustError("invalid membership role".to_owned()),
+        )
+        .expect("problem response");
+        assert_eq!(response.status_code(), 500);
+        assert_eq!(
+            response.headers().get("content-type").expect("content type"),
+            Some(PROBLEM_CONTENT_TYPE.to_owned())
+        );
     }
 
     #[test]
