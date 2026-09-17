@@ -192,7 +192,7 @@ fn verify_runtime_manifest_v3(
         .and_then(Value::as_str)
         .filter(|value| is_lower_hex(value, 64))
         .ok_or_else(|| mismatch("runtime_bundle v3 source_inputs.sha256 is invalid"))?;
-    let canonical_source_files = canonical_json(&Value::Array(source_files.clone())).map_err(mismatch)?;
+    let canonical_source_files = canonical_json(&Value::Array(source_files.clone()))\n        .map_err(|error| mismatch(format!("runtime_bundle v3 source input canonicalization failed: {error}")))?;
     if sha256_hex(canonical_source_files.as_bytes()) != source_sha {
         return Err(mismatch(
             "runtime_bundle v3 source_inputs digest does not match its exact file inventory",
@@ -234,7 +234,7 @@ fn verify_runtime_manifest_v3(
         .and_then(Value::as_str)
         .filter(|value| is_lower_hex(value, 64))
         .ok_or_else(|| mismatch("runtime_bundle v3 files.sha256 is invalid"))?;
-    let canonical_inventory = canonical_json(&Value::Array(inventory.clone())).map_err(mismatch)?;
+    let canonical_inventory = canonical_json(&Value::Array(inventory.clone()))\n        .map_err(|error| mismatch(format!("runtime_bundle v3 inventory canonicalization failed: {error}")))?;
     if sha256_hex(canonical_inventory.as_bytes()) != inventory_sha {
         return Err(mismatch(
             "runtime_bundle v3 file inventory digest does not match its exact rows",
