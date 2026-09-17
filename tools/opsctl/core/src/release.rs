@@ -104,6 +104,7 @@ pub struct SchemaIdentity {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RuntimeCompatibilityIdentity {
     pub runtime_lock_sha256: String,
+    pub runtime_component_inputs_sha256: Option<String>,
     pub runtime_role: String,
     pub profile_format: String,
     pub browser_identity_policy: String,
@@ -374,6 +375,12 @@ fn validate_runtime(runtime: &RuntimeCompatibilityIdentity) -> Result<(), Releas
         &runtime.runtime_lock_sha256,
         "runtime_compatibility.runtime_lock_sha256",
     )?;
+    if let Some(identity) = &runtime.runtime_component_inputs_sha256 {
+        validate_sha256(
+            identity,
+            "runtime_compatibility.runtime_component_inputs_sha256",
+        )?;
+    }
     non_empty(&runtime.runtime_role, "runtime_compatibility.runtime_role")?;
     non_empty(
         &runtime.profile_format,
@@ -635,6 +642,7 @@ mod tests {
             },
             runtime_compatibility: RuntimeCompatibilityIdentity {
                 runtime_lock_sha256: SHA.to_owned(),
+                runtime_component_inputs_sha256: Some(SHA.to_owned()),
                 runtime_role: "camouhost".to_owned(),
                 profile_format: "camoufox-fingerprint-v1".to_owned(),
                 browser_identity_policy: "browser-identity-v1".to_owned(),
