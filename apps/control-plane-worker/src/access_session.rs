@@ -109,9 +109,7 @@ fn tenant_context_repository_failure(correlation_id: &str, error: Error) -> Resu
     problem(correlation_id, status, code, title)
 }
 
-fn tenant_context_repository_failure_problem(
-    error: &Error,
-) -> (u16, &'static str, &'static str) {
+fn tenant_context_repository_failure_problem(error: &Error) -> (u16, &'static str, &'static str) {
     match error {
         Error::RustError(_) => (500, "integrity_failure", "Integrity Failure"),
         _ => (503, "dependency_unavailable", "Dependency Unavailable"),
@@ -295,10 +293,7 @@ mod tests {
         let problem = tenant_context_repository_failure_problem(&Error::RustError(
             "invalid membership role".to_owned(),
         ));
-        assert_eq!(
-            problem,
-            (500, "integrity_failure", "Integrity Failure")
-        );
+        assert_eq!(problem, (500, "integrity_failure", "Integrity Failure"));
     }
 
     #[test]
