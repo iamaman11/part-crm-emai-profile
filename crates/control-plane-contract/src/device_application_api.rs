@@ -337,10 +337,12 @@ mod tests {
             super::DEVICE_PAIRING_COLLECTION_PATH_TEMPLATE,
             "/api/v1/tenants/{tenantId}/device-pairings/requests"
         );
-        assert!(!super::DEVICE_PAIRING_AUTHORIZATION_PATH_TEMPLATE.starts_with(&format!(
-            "{}/",
-            super::DEVICE_PAIRING_COLLECTION_PATH_TEMPLATE
-        )));
+        assert!(
+            !super::DEVICE_PAIRING_AUTHORIZATION_PATH_TEMPLATE.starts_with(&format!(
+                "{}/",
+                super::DEVICE_PAIRING_COLLECTION_PATH_TEMPLATE
+            ))
+        );
     }
 
     #[test]
