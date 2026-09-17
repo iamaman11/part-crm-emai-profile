@@ -208,8 +208,125 @@ function validatePublicationWiring(authority) {
     '.kind == "capability-policy"',
     'cp "$capability_policy_json" "$release_dir/capability-policy-v1.json"',
     'cp "$RELEASE_DIR/capability-policy-v1.json" "$asset_dir/capability-policy-v1.json"',
+    'runtime-component-observation.json',
+    'runtime-bundle-v3-sha256-',
+    'gh release upload "$env:RUNTIME_RELEASE_ID"',
+    'CAMOUFOX_ARTIFACT_SHA256=$artifactSha',
+    "if ($artifactSha -notmatch '^[0-9a-f]{64}
+function selfTest(authority) {
+  const duplicateOwner = structuredClone(authority);
+  duplicateOwner.activation_units = [];
+  let rejected = false;
+  try {
+    validateAuthority(duplicateOwner);
+  } catch {
+    rejected = true;
+  }
+  if (!rejected) fail('duplicate capability semantic authority fixture was accepted');
+
+  const semanticInput = structuredClone(authority);
+  semanticInput.capability_policy_projection.manifest_semantic_input = true;
+  rejected = false;
+  try {
+    validateAuthority(semanticInput);
+  } catch {
+    rejected = true;
+  }
+  if (!rejected) fail('manifest-as-semantic-input fixture was accepted');
+
+  const forbiddenBinding = structuredClone(authority);
+  forbiddenBinding.deployment_closures
+    .find((closure) => closure.closure_id === 'production-core-v2')
+    .required_bindings.push('MAILBOX_JOBS');
+  rejected = false;
+  try {
+    validateDeploymentClosures(forbiddenBinding);
+  } catch {
+    rejected = true;
+  }
+  if (!rejected) fail('forbidden core provider binding fixture was accepted');
+}
+
+const authority = loadJson(authorityPath);
+validateAuthority(authority);
+validateDeploymentClosures(authority);
+validateReleasePromotion(authority);
+validateReleaseInputs(authority);
+validateComponentOwners(authority);
+validatePublicationWiring(authority);
+
+if (process.argv.includes('--self-test')) {
+  selfTest(authority);
+  console.log('AR-11 release architecture negative self-test passed.');
+} else {
+  console.log(
+    `AR-11 release architecture valid: ${authority.deployment_closures.length} deployment closures, ${authority.release_inputs.length} release inputs; capability semantics owned by crates/capability-policy.`,
+  );
+}
+ -or $buildSourceCommit -notmatch '^[0-9a-f]{40}
+function selfTest(authority) {
+  const duplicateOwner = structuredClone(authority);
+  duplicateOwner.activation_units = [];
+  let rejected = false;
+  try {
+    validateAuthority(duplicateOwner);
+  } catch {
+    rejected = true;
+  }
+  if (!rejected) fail('duplicate capability semantic authority fixture was accepted');
+
+  const semanticInput = structuredClone(authority);
+  semanticInput.capability_policy_projection.manifest_semantic_input = true;
+  rejected = false;
+  try {
+    validateAuthority(semanticInput);
+  } catch {
+    rejected = true;
+  }
+  if (!rejected) fail('manifest-as-semantic-input fixture was accepted');
+
+  const forbiddenBinding = structuredClone(authority);
+  forbiddenBinding.deployment_closures
+    .find((closure) => closure.closure_id === 'production-core-v2')
+    .required_bindings.push('MAILBOX_JOBS');
+  rejected = false;
+  try {
+    validateDeploymentClosures(forbiddenBinding);
+  } catch {
+    rejected = true;
+  }
+  if (!rejected) fail('forbidden core provider binding fixture was accepted');
+}
+
+const authority = loadJson(authorityPath);
+validateAuthority(authority);
+validateDeploymentClosures(authority);
+validateReleasePromotion(authority);
+validateReleaseInputs(authority);
+validateComponentOwners(authority);
+validatePublicationWiring(authority);
+
+if (process.argv.includes('--self-test')) {
+  selfTest(authority);
+  console.log('AR-11 release architecture negative self-test passed.');
+} else {
+  console.log(
+    `AR-11 release architecture valid: ${authority.deployment_closures.length} deployment closures, ${authority.release_inputs.length} release inputs; capability semantics owned by crates/capability-policy.`,
+  );
+}
+)",
   ]) {
-    if (!workflow.includes(marker)) fail(`Release Set build workflow lacks capability manifest wiring: ${marker}`);
+    if (!workflow.includes(marker)) fail(`Release Set build workflow lacks required publication wiring: ${marker}`);
+  }
+  const jobCount = (marker) => workflow.split(marker).length - 1;
+  if (jobCount('\n  runtime-bundle:\n') !== 1 || jobCount('\n  assemble-publish:\n') !== 1) {
+    fail('Release Set build workflow must contain exactly one runtime owner and one aggregate publisher');
+  }
+  for (const forbidden of [
+    'cp artifacts/ar11-inputs/runtime-bundle.tar "$component_root/runtime-bundle.tar"',
+    'cp "$component_root/runtime-bundle.tar" "$release_dir/components/runtime-bundle.tar"',
+  ]) {
+    if (workflow.includes(forbidden)) fail(`aggregate Release Set must not duplicate heavy runtime bytes: ${forbidden}`);
   }
   if (authority.capability_policy_projection.generated_manifest !== 'capability-policy-v1.json') {
     fail('release workflow and architecture projection path disagree');
