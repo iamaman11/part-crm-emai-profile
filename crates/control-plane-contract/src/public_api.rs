@@ -608,7 +608,7 @@ mod tests {
                 .is_object()
         );
         for path in [
-            "/api/v1/tenants/{tenantId}/device-pairings",
+            "/api/v1/tenants/{tenantId}/device-pairings/requests",
             "/api/v1/tenants/{tenantId}/device-pairings/authorizations",
             "/api/v1/tenants/{tenantId}/device-pairings/completions",
             "/api/v1/tenants/{tenantId}/devices/{deviceId}/session-challenges",
@@ -639,7 +639,8 @@ mod tests {
             json!([])
         );
         assert_eq!(
-            document["paths"]["/api/v1/tenants/{tenantId}/device-pairings"]["post"]["security"],
+            document["paths"]["/api/v1/tenants/{tenantId}/device-pairings/requests"]["post"]
+                ["security"],
             json!([])
         );
     }
