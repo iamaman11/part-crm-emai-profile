@@ -94,6 +94,15 @@ def safe_text(value: object, label: str) -> str:
     return value.strip()
 
 
+def optional_safe_text(value: object, label: str) -> str | None:
+    if value is None:
+        return None
+    if not isinstance(value, str) or len(value) > 512:
+        raise ObservationError(f"{label}_invalid")
+    normalized = value.strip()
+    return normalized or None
+
+
 def safe_id(value: object, label: str) -> str:
     if not isinstance(value, str) or not SAFE_ID_RE.fullmatch(value):
         raise ObservationError(f"{label}_invalid")
@@ -173,7 +182,7 @@ def sanitize_identity_providers(path: Path) -> list[dict]:
             raise ObservationError("access_identity_provider_must_be_object")
         item = {
             "id": safe_id(provider.get("id"), "access_identity_provider_id"),
-            "name": safe_text(provider.get("name"), "access_identity_provider_name"),
+            "name": optional_safe_text(provider.get("name"), "access_identity_provider_name"),
             "type": safe_text(provider.get("type"), "access_identity_provider_type"),
         }
         read_only = provider.get("read_only")
@@ -393,8 +402,8 @@ def self_test() -> bool:
         ]}), encoding="utf-8")
         org.write_text(json.dumps({"success": True, "errors": [], "result": {"auth_domain": "team.cloudflareaccess.com", "name": "private-name"}}), encoding="utf-8")
         idps.write_text(json.dumps({"success": True, "errors": [], "result": [
-            {"id": "idp_12345678", "name": "Canonical human login", "type": "oidc", "read_only": True,
-             "config": {"client_secret": "DO_NOT_EXPORT_IDP_SECRET", "email": "private-idp@example.test"}},
+            {"id": "idp_12345678", "name": "", "type": "cloudflare",
+             "config": {"restrict_to_account_members": True, "client_secret": "DO_NOT_EXPORT_IDP_SECRET", "email": "private-idp@example.test"}},
         ]}), encoding="utf-8")
         groups.write_text(json.dumps({"success": True, "errors": [], "result": [
             {"id": "group_12345678", "name": "Canonical humans", "is_default": False,
@@ -429,10 +438,13 @@ def self_test() -> bool:
         output = render(args)
         encoded = json.dumps(output, sort_keys=True)
         group = output["access"]["groups"][0]
+        idp = output["access"]["identity_providers"][0]
         checks = [
             output["access"]["application_count_for_target"] == 1,
             output["access"]["identity_provider_count"] == 1,
             output["access"]["group_count"] == 1,
+            idp["name"] is None,
+            idp["type"] == "cloudflare",
             group["include_selectors"] == ["email", "login_method"],
             group["require_selectors"] == ["email_domain"],
             group["exclude_selectors"] == ["ip"],
