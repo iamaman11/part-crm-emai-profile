@@ -210,7 +210,7 @@ pub fn download_verified_delivery<F: DeliveryAssetFetcher>(
     )?;
     let runtime_bundle = materialize_asset(
         &release_directory,
-        &manifest.release_set_id,
+        &manifest.components.runtime_bundle.release_id,
         RUNTIME_BUNDLE_ASSET,
         &manifest.components.runtime_bundle,
         fetcher,
@@ -729,7 +729,7 @@ mod tests {
     struct FakeFetcher {
         bridge: Vec<u8>,
         runtime: Vec<u8>,
-        calls: Vec<String>,
+        calls: Vec<(String, String)>,
     }
 
     impl DeliveryAssetFetcher for FakeFetcher {
@@ -737,12 +737,13 @@ mod tests {
 
         fn fetch_release_asset(
             &mut self,
-            _release_set_id: &str,
+            release_set_id: &str,
             asset_name: &str,
             destination: &Path,
             _expected_size_bytes: u64,
         ) -> Result<(), Self::Error> {
-            self.calls.push(asset_name.to_owned());
+            self.calls
+                .push((release_set_id.to_owned(), asset_name.to_owned()));
             let bytes = match asset_name {
                 PROFILE_BRIDGE_ASSET => &self.bridge,
                 RUNTIME_BUNDLE_ASSET => &self.runtime,
@@ -807,7 +808,7 @@ mod tests {
             compatibility: WindowsDeliveryCompatibility {
                 profile_bridge_protocol_version: 1,
                 camouhost_ipc_version: CAMOUHOST_IPC_VERSION,
-                runtime_bundle_version: "2.0.0".to_owned(),
+                runtime_bundle_version: "3.0.0".to_owned(),
             },
         };
         let manifest_bytes = serde_json::to_vec(&manifest)?;
@@ -851,8 +852,19 @@ mod tests {
         assert_eq!(
             fetcher.calls,
             [
-                PROFILE_BRIDGE_ASSET.to_owned(),
-                RUNTIME_BUNDLE_ASSET.to_owned()
+                (
+                    candidate.manifest().release_set_id.clone(),
+                    PROFILE_BRIDGE_ASSET.to_owned()
+                ),
+                (
+                    candidate
+                        .manifest()
+                        .components
+                        .runtime_bundle
+                        .release_id
+                        .clone(),
+                    RUNTIME_BUNDLE_ASSET.to_owned()
+                )
             ]
         );
 
