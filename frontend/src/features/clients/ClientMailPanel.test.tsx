@@ -4,8 +4,8 @@ import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { TenantProvider } from '../../app/TenantContext';
 import { getMailboxClientAssociation, listMailboxes } from '../mailboxes';
+import { getTenantContexts } from '../session';
 import { ClientMailPanel } from './ClientMailPanel';
-import { getTenantContexts } from '../session/api';
 
 vi.mock('../mailboxes', () => ({
   getMailboxClientAssociation: vi.fn(),
@@ -17,7 +17,7 @@ vi.mock('./api', () => ({
   searchClientMail: vi.fn(),
   sendClientMail: vi.fn(),
 }));
-vi.mock('../session/api', () => ({ getTenantContexts: vi.fn() }));
+vi.mock('../session', () => ({ getTenantContexts: vi.fn() }));
 
 const mockedListMailboxes = vi.mocked(listMailboxes);
 const mockedAssociation = vi.mocked(getMailboxClientAssociation);
