@@ -4,7 +4,6 @@ import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { TenantProvider } from '../../app/TenantContext';
 import { getMailboxClientAssociation, listMailboxes } from '../mailboxes';
-import { getTenantContexts } from '../session';
 import { ClientMailPanel } from './ClientMailPanel';
 
 vi.mock('../mailboxes', () => ({
@@ -17,11 +16,9 @@ vi.mock('./api', () => ({
   searchClientMail: vi.fn(),
   sendClientMail: vi.fn(),
 }));
-vi.mock('../session', () => ({ getTenantContexts: vi.fn() }));
 
 const mockedListMailboxes = vi.mocked(listMailboxes);
 const mockedAssociation = vi.mocked(getMailboxClientAssociation);
-const mockedGetTenantContexts = vi.mocked(getTenantContexts);
 
 function renderPanel(outboundMailEnabled = true) {
   const queryClient = new QueryClient({
@@ -29,7 +26,16 @@ function renderPanel(outboundMailEnabled = true) {
   });
   return render(
     <QueryClientProvider client={queryClient}>
-      <TenantProvider>
+      <TenantProvider
+        loadTenantContexts={async () => ({
+          tenants: [{
+            tenantId: 'tenant_current',
+            displayName: 'Current organization',
+            actorId: 'actor_current',
+            role: 'TENANT_OWNER',
+          }],
+        })}
+      >
         <ClientMailPanel
           clientId="client_current"
           outboundMailEnabled={outboundMailEnabled}
@@ -41,8 +47,8 @@ function renderPanel(outboundMailEnabled = true) {
 
 describe('ClientMailPanel mailbox scoping', () => {
   beforeEach(() => {
+    vi.clearAllMocks();
     window.history.replaceState(null, '', '/clients/client_current?tenant=tenant_current');
-    mockedGetTenantContexts.mockResolvedValue({ tenants: [{ tenantId: 'tenant_current', displayName: 'Current organization', actorId: 'actor_current', role: 'TENANT_OWNER' }] });
     mockedListMailboxes.mockResolvedValue({
       mailboxes: [
         { bindingId: 'binding_current', provider: 'GMAIL_API', status: 'ACTIVE', version: 1 },
