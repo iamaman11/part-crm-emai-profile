@@ -11,9 +11,9 @@ const SIGNATURE_SCHEMA_VERSION: u32 = 1;
 const SIGNATURE_KIND: &str = "WINDOWS_PROFILE_BRIDGE_DELIVERY_CMS";
 const RELEASE_SET_PREFIX: &str = "release-set-v3-sha256-";
 const PROFILE_BRIDGE_PREFIX: &str = "profile-bridge-v2-sha256-";
-const RUNTIME_BUNDLE_PREFIX: &str = "runtime-bundle-v2-sha256-";
+const RUNTIME_BUNDLE_PREFIX: &str = "runtime-bundle-v3-sha256-";
 const PROFILE_BRIDGE_PROTOCOL_VERSION: u32 = 1;
-const RUNTIME_BUNDLE_VERSION: &str = "2.0.0";
+const RUNTIME_BUNDLE_VERSION: &str = "3.0.0";
 const MAX_SIGNATURE_BYTES: usize = 1024 * 1024;
 const LOWER_HEX: &[u8; 16] = b"0123456789abcdef";
 
@@ -1040,7 +1040,7 @@ mod tests {
     fn incompatible_manifest_and_malformed_signature_fail_closed() -> TestResult {
         let trust = trust()?;
         let mut incompatible = manifest(7, 'a');
-        incompatible.compatibility.runtime_bundle_version = "3.0.0".to_owned();
+        incompatible.compatibility.runtime_bundle_version = "2.0.0".to_owned();
         assert_eq!(
             verify(&incompatible, &trust, None),
             Err(DeliveryPolicyError::IncompatibleCandidate)
