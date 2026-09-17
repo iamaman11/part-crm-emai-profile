@@ -1,3 +1,4 @@
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { fireEvent, render, screen } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { TenantProvider } from '../../app/TenantContext';
@@ -6,20 +7,22 @@ import {
   getAuthenticatedDevicePairingSession,
 } from './api';
 import { DevicePairingPanel } from './DevicePairingPanel';
+import { getTenantContexts } from '../session/api';
 
 vi.mock('./api', () => ({
   authorizeDevicePairing: vi.fn(),
   getAuthenticatedDevicePairingSession: vi.fn(),
 }));
+vi.mock('../session/api', () => ({ getTenantContexts: vi.fn() }));
 
 const mockedAuthorizeDevicePairing = vi.mocked(authorizeDevicePairing);
 const mockedGetAuthenticatedDevicePairingSession = vi.mocked(getAuthenticatedDevicePairingSession);
+const mockedGetTenantContexts = vi.mocked(getTenantContexts);
 
 function renderPanel() {
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
-    <TenantProvider>
-      <DevicePairingPanel />
-    </TenantProvider>,
+    <QueryClientProvider client={queryClient}><TenantProvider><DevicePairingPanel /></TenantProvider></QueryClientProvider>,
   );
 }
 
@@ -38,12 +41,13 @@ describe('DevicePairingPanel', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     window.history.replaceState(null, '', '/devices?tenant=tenant_01JTEST');
+    mockedGetTenantContexts.mockResolvedValue({ tenants: [{ tenantId: 'tenant_01JTEST', displayName: 'Test organization', actorId: 'actor_01JTEST', role: 'TENANT_OWNER' }] });
   });
 
-  it('starts pairing with only safe tenant and browser-generated device identity', () => {
+  it('starts pairing with only safe tenant and browser-generated device identity', async () => {
     renderPanel();
 
-    const link = screen.getByRole('link', { name: 'Connect this computer' });
+    const link = await screen.findByRole('link', { name: 'Connect this computer' });
     expect(link.getAttribute('href')).toMatch(
       /^profilebridge:\/\/pair\/start\/tenant_01JTEST\/device_[0-9a-f]{32}$/,
     );
@@ -68,7 +72,7 @@ describe('DevicePairingPanel', () => {
     });
 
     renderPanel();
-    fireEvent.click(screen.getByRole('button', { name: 'Authorize this computer' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Authorize this computer' }));
 
     const finish = await screen.findByRole('link', { name: 'Finish connecting' });
     expect(finish.getAttribute('href')).toBe(
@@ -97,14 +101,14 @@ describe('DevicePairingPanel', () => {
     });
 
     renderPanel();
-    fireEvent.click(screen.getByRole('button', { name: 'Authorize this computer' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Authorize this computer' }));
 
     expect(await screen.findByText('Device pairing response failed validation.')).toBeTruthy();
     expect(screen.queryByRole('link', { name: 'Finish connecting' })).toBeNull();
     expect(window.location.hash).toContain('pairing=');
   });
 
-  it('renders the native completion receipt without exposing a credential', () => {
+  it('renders the native completion receipt without exposing a credential', async () => {
     window.history.replaceState(
       null,
       '',
@@ -113,7 +117,7 @@ describe('DevicePairingPanel', () => {
 
     renderPanel();
 
-    expect(screen.getByText('This computer is connected')).toBeTruthy();
+    expect(await screen.findByText('This computer is connected')).toBeTruthy();
     expect(screen.getByText('device_01JTEST')).toBeTruthy();
     expect(mockedAuthorizeDevicePairing).not.toHaveBeenCalled();
   });

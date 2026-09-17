@@ -1,8 +1,13 @@
-import { createContext, useContext, useMemo, useState, type FormEvent, type ReactNode } from 'react';
+import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useQuery } from '@tanstack/react-query';
+import { getTenantContexts, type TenantContextsProjection } from '../features/session/api';
 
 interface TenantContextValue {
   tenantId: string;
-  setTenantId: (tenantId: string) => void;
+  contexts: TenantContextsProjection['tenants'];
+  state: 'loading' | 'error' | 'empty' | 'selecting' | 'ready';
+  selectTenant: (tenantId: string) => void;
+  retry: () => void;
 }
 
 const TenantContext = createContext<TenantContextValue | null>(null);
@@ -12,18 +17,36 @@ function tenantFromUrl(): string {
 }
 
 export function TenantProvider({ children }: { children: ReactNode }) {
-  const [tenantId, setTenantState] = useState(tenantFromUrl);
+  const [tenantId, setTenantState] = useState('');
+  const query = useQuery({ queryKey: ['authenticated-tenant-contexts'], queryFn: ({ signal }) => getTenantContexts(signal), retry: false });
+  const contexts = query.data?.tenants ?? [];
+  const state: TenantContextValue['state'] = query.isPending ? 'loading' : query.error ? 'error' : contexts.length === 0 ? 'empty' : tenantId ? 'ready' : 'selecting';
+
+  useEffect(() => {
+    if (!query.data) return;
+    const requested = tenantFromUrl();
+    const allowed = contexts.some((context) => context.tenantId === requested);
+    const next = allowed ? requested : contexts.length === 1 ? (contexts[0]?.tenantId ?? '') : '';
+    setTenantState(next);
+    const url = new URL(window.location.href);
+    if (next) url.searchParams.set('tenant', next);
+    else url.searchParams.delete('tenant');
+    window.history.replaceState(null, '', url);
+  }, [query.data]);
+
   const value = useMemo<TenantContextValue>(() => ({
     tenantId,
-    setTenantId: (next) => {
-      const normalized = next.trim();
+    contexts,
+    state,
+    selectTenant: (next) => {
+      if (!contexts.some((context) => context.tenantId === next)) return;
       const url = new URL(window.location.href);
-      if (normalized) url.searchParams.set('tenant', normalized);
-      else url.searchParams.delete('tenant');
+      url.searchParams.set('tenant', next);
       window.history.replaceState(null, '', url);
-      setTenantState(normalized);
+      setTenantState(next);
     },
-  }), [tenantId]);
+    retry: () => { void query.refetch(); },
+  }), [tenantId, contexts, state, query]);
   return <TenantContext.Provider value={value}>{children}</TenantContext.Provider>;
 }
 
@@ -34,25 +57,17 @@ export function useTenant(): TenantContextValue {
 }
 
 export function TenantChooser() {
-  const { tenantId, setTenantId } = useTenant();
-  const [draft, setDraft] = useState(tenantId);
-  const submit = (event: FormEvent) => {
-    event.preventDefault();
-    setTenantId(draft);
-  };
+  const { tenantId, contexts, state, selectTenant, retry } = useTenant();
+  if (state === 'loading') return <p className="tenant-chooser" role="status">Resolving your organizations…</p>;
+  if (state === 'error') return <div className="tenant-chooser" role="alert">Unable to resolve your organizations. <button type="button" onClick={retry}>Retry</button></div>;
+  if (state === 'empty') return <p className="tenant-chooser" role="status">No organization access is active for this identity.</p>;
+  if (contexts.length === 1) return <p className="tenant-chooser" role="status">Organization: {contexts[0]?.displayName ?? ''}</p>;
   return (
-    <form className="tenant-chooser" onSubmit={submit}>
-      <label htmlFor="tenant-id">Tenant ID</label>
-      <input
-        id="tenant-id"
-        name="tenantId"
-        value={draft}
-        onChange={(event) => setDraft(event.currentTarget.value)}
-        autoComplete="off"
-        placeholder="tenant_..."
-        required
-      />
-      <button type="submit">Use tenant</button>
-    </form>
+    <label className="tenant-chooser" htmlFor="tenant-context">Organization
+      <select id="tenant-context" value={tenantId} onChange={(event) => selectTenant(event.currentTarget.value)}>
+        <option value="" disabled>Select an organization</option>
+        {contexts.map((context) => <option key={context.tenantId} value={context.tenantId}>{context.displayName}</option>)}
+      </select>
+    </label>
   );
 }

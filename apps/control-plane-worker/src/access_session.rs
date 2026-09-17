@@ -6,7 +6,8 @@ use cloudflare_adapters::d1_identity_acl::{
 };
 use control_plane_contract::D1_CATALOG_BINDING;
 use control_plane_contract::public_api::{
-    ActorSession, PROBLEM_CONTENT_TYPE, ProblemPayload, problem_type_for_code,
+    ActorSession, PROBLEM_CONTENT_TYPE, ProblemPayload, TenantContextProjection,
+    TenantContextsProjection, problem_type_for_code,
 };
 use identity_access_domain::MembershipRole;
 use profile_platform_primitives::{CorrelationId, TenantId, TenantScope};
@@ -68,6 +69,30 @@ pub async fn session_response(
     })
 }
 
+pub async fn tenant_contexts_response(request: &Request, env: &Env) -> Result<Response> {
+    let Some((identity, _correlation_id)) = verify_human_identity(request, env).await? else {
+        return neutral_not_found(&correlation_hint(request));
+    };
+    let contexts = D1IdentityAclRepository::new(env.d1(D1_CATALOG_BINDING)?)
+        .active_tenant_contexts(&identity)
+        .await?;
+    Response::from_json(&TenantContextsProjection {
+        tenants: contexts
+            .into_iter()
+            .map(|context| TenantContextProjection {
+                tenant_id: context.tenant_id().as_str().to_owned(),
+                display_name: context.display_name().to_owned(),
+                actor_id: context.actor_id().as_str().to_owned(),
+                role: match context.role() {
+                    ResolvedMembershipRole::TenantOwner => "TENANT_OWNER",
+                    ResolvedMembershipRole::Member => "MEMBER",
+                }
+                .to_owned(),
+            })
+            .collect(),
+    })
+}
+
 pub async fn resolve_active_request_actor(
     request: &Request,
     env: &Env,
@@ -107,19 +132,11 @@ pub async fn verify_request_identity(
             value
         }
     };
-    let Some(correlation_value) = request.headers().get(CORRELATION_HEADER)? else {
-        return Ok(None);
-    };
-
     let tenant_id = match TenantId::parse(tenant_value) {
         Ok(value) => value,
         Err(_) => return Ok(None),
     };
-    let correlation_id = match CorrelationId::parse(correlation_value) {
-        Ok(value) => value,
-        Err(_) => return Ok(None),
-    };
-    let Some(identity) = verify_access_assertion(request, env, ACCESS_AUDIENCE_VAR).await? else {
+    let Some((identity, correlation_id)) = verify_human_identity(request, env).await? else {
         return Ok(None);
     };
 
@@ -128,6 +145,23 @@ pub async fn verify_request_identity(
         correlation_id,
         identity,
     }))
+}
+
+async fn verify_human_identity(
+    request: &Request,
+    env: &Env,
+) -> Result<Option<(VerifiedExternalIdentity, CorrelationId)>> {
+    let Some(correlation_value) = request.headers().get(CORRELATION_HEADER)? else {
+        return Ok(None);
+    };
+    let correlation_id = match CorrelationId::parse(correlation_value) {
+        Ok(value) => value,
+        Err(_) => return Ok(None),
+    };
+    let Some(identity) = verify_access_assertion(request, env, ACCESS_AUDIENCE_VAR).await? else {
+        return Ok(None);
+    };
+    Ok(Some((identity, correlation_id)))
 }
 
 /// Verify a Cloudflare Access assertion against one explicit audience variable.

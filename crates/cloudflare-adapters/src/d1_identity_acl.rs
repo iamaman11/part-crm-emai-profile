@@ -1,7 +1,7 @@
 use crate::access_identity::VerifiedExternalIdentity;
 use profile_platform_primitives::{
     ActorContext, ActorId, AggregateVersion, AuditEventId, ClientId, CorrelationId, IdempotencyKey,
-    IdentityId, InvitationId, OutboxEventId, PayloadFingerprint, ProfileId, TenantScope,
+    IdentityId, InvitationId, OutboxEventId, PayloadFingerprint, ProfileId, TenantId, TenantScope,
     UnixMillis,
 };
 use serde::Deserialize;
@@ -64,6 +64,33 @@ pub enum ResolvedMembershipRole {
 pub struct ResolvedActor {
     actor: ActorContext,
     role: ResolvedMembershipRole,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ActiveTenantContext {
+    tenant_id: TenantId,
+    actor_id: ActorId,
+    display_name: String,
+    role: ResolvedMembershipRole,
+}
+
+impl ActiveTenantContext {
+    #[must_use]
+    pub const fn tenant_id(&self) -> &TenantId {
+        &self.tenant_id
+    }
+    #[must_use]
+    pub const fn actor_id(&self) -> &ActorId {
+        &self.actor_id
+    }
+    #[must_use]
+    pub fn display_name(&self) -> &str {
+        &self.display_name
+    }
+    #[must_use]
+    pub const fn role(&self) -> ResolvedMembershipRole {
+        self.role
+    }
 }
 
 impl ResolvedActor {
@@ -314,6 +341,53 @@ impl D1IdentityAclRepository {
         .transpose()
     }
 
+    pub async fn active_tenant_contexts(
+        &self,
+        identity: &VerifiedExternalIdentity,
+    ) -> Result<Vec<ActiveTenantContext>> {
+        let result = query!(
+            &self.database,
+            r#"
+            SELECT membership.tenant_id, membership.actor_id, membership.role, tenant.display_name
+            FROM identities AS identity
+            JOIN memberships AS membership
+              ON membership.identity_id = identity.identity_id
+             AND membership.status = 'ACTIVE'
+            JOIN tenants AS tenant
+              ON tenant.tenant_id = membership.tenant_id
+             AND tenant.status = 'ACTIVE'
+            WHERE identity.access_subject = ?
+            ORDER BY tenant.display_name ASC, membership.tenant_id ASC
+            "#,
+            identity.subject()
+        )?
+        .all()
+        .await?;
+        result
+            .results::<ActiveTenantContextRow>()?
+            .into_iter()
+            .map(|row| {
+                let tenant_id =
+                    TenantId::parse(row.tenant_id).map_err(invalid_adapter_identifier)?;
+                let actor_id = ActorId::parse(row.actor_id).map_err(invalid_adapter_identifier)?;
+                let role = match row.role.as_str() {
+                    "TENANT_OWNER" => ResolvedMembershipRole::TenantOwner,
+                    "MEMBER" => ResolvedMembershipRole::Member,
+                    _ => return Err(Error::RustError("invalid membership role".to_owned())),
+                };
+                if row.display_name.trim().is_empty() {
+                    return Err(Error::RustError("invalid tenant display name".to_owned()));
+                }
+                Ok(ActiveTenantContext {
+                    tenant_id,
+                    actor_id,
+                    display_name: row.display_name,
+                    role,
+                })
+            })
+            .collect()
+    }
+
     pub async fn tenant_boundary(&self, scope: &TenantScope) -> Result<TenantBoundaryRow> {
         let statement = query!(
             &self.database,
@@ -497,6 +571,14 @@ impl D1IdentityAclRepository {
 struct MembershipRow {
     actor_id: String,
     role: String,
+}
+
+#[derive(Deserialize)]
+struct ActiveTenantContextRow {
+    tenant_id: String,
+    actor_id: String,
+    role: String,
+    display_name: String,
 }
 
 #[derive(Deserialize)]

@@ -39,7 +39,7 @@ mod request_evidence;
 pub use profile_coordinator::ProfileCoordinator;
 pub use realtime_notifications::NotificationHub;
 
-use access_session::session_response;
+use access_session::{session_response, tenant_contexts_response};
 use capability_gate::{ActivationUnit, RuntimeCapabilityContext, RuntimeSurface};
 use cloudflare_adapters::control_plane_queue::ControlPlaneQueueMessage;
 use cloudflare_adapters::d1_catalog::D1CatalogRepository;
@@ -104,6 +104,9 @@ pub async fn main(mut request: Request, env: Env, _context: Context) -> Result<R
                 require_capability_context(&capability_context)?,
             )
             .await
+        }
+        RouteClass::AuthenticatedTenantContextsApi => {
+            tenant_contexts_response(&request, &env).await
         }
         RouteClass::DevicePairingCollectionApi
         | RouteClass::DevicePairingAuthorizationApi
