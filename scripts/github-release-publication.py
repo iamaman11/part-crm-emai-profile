@@ -254,9 +254,30 @@ def run_gh(
 
 
 def get_release(repository: str, release_tag: str) -> dict[str, Any] | None:
-    # The by-tag REST endpoint returns only published releases. Listing releases
-    # with push access includes drafts, which is required for resumable partial
-    # publication.
+    # Fast path: normal reuse is a published release and GitHub supports exact
+    # lookup by tag. Only the exceptional recovery path needs draft discovery.
+    published = run_gh(
+        ["api", f"repos/{repository}/releases/tags/{release_tag}"],
+        timeout_seconds=API_TIMEOUT_SECONDS,
+        capture=True,
+    )
+    if published.returncode == 0:
+        try:
+            payload = json.loads(published.stdout)
+        except json.JSONDecodeError as error:
+            raise PublicationError("GitHub release response is invalid JSON") from error
+        if not isinstance(payload, dict):
+            fail("GitHub release response is not an object")
+        return payload
+    published_error = published.stderr or ""
+    if "HTTP 404" not in published_error and "Not Found" not in published_error:
+        fail(
+            "GitHub published release lookup failed: "
+            f"{published_error.strip() or published.returncode}"
+        )
+
+    # Draft releases are not addressable by the by-tag endpoint. Listing with
+    # push access includes drafts; paginate only on this exceptional path.
     result = run_gh(
         [
             "api",
@@ -269,7 +290,7 @@ def get_release(repository: str, release_tag: str) -> dict[str, Any] | None:
     )
     if result.returncode != 0:
         fail(
-            "GitHub release listing failed: "
+            "GitHub draft release listing failed: "
             f"{(result.stderr or '').strip() or result.returncode}"
         )
     try:
