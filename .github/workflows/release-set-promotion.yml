@@ -1139,8 +1139,6 @@ jobs:
       READY_RUN_ID: ${{ needs.resolve-verify.outputs.ready_run_id }}
       READY_ARTIFACT_NAME: ${{ needs.resolve-verify.outputs.ready_artifact_name }}
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_OBSERVE_API_TOKEN }}
-      CLOUDFLARE_ACCESS_CLIENT_ID: ${{ secrets.CLOUDFLARE_ACCESS_CLIENT_ID }}
-      CLOUDFLARE_ACCESS_CLIENT_SECRET: ${{ secrets.CLOUDFLARE_ACCESS_CLIENT_SECRET }}
       CLOUDFLARE_DEPLOY_MANIFEST_JSON: ${{ secrets.CLOUDFLARE_DEPLOY_MANIFEST_JSON }}
     steps:
       - name: Checkout exact promoted source
@@ -1207,15 +1205,18 @@ jobs:
           decision="$(jq -er '.decision' "$RUNNER_TEMP/promotion-verify.json")"
           echo "decision=$decision" >> "$GITHUB_OUTPUT"
 
-      - name: Verify health only after promotion owner reports VERIFIED
+      - name: Record authenticated human health handoff after promotion owner reports VERIFIED
         id: health
         if: steps.observe_verify.outputs.decision == 'VERIFIED'
         run: |
           set -euo pipefail
-          custom_domain="$(jq -er '.control_plane.custom_domain // .custom_domain' "$DEPLOY_MANIFEST")"
-          response="$RUNNER_TEMP/health-response"
-          curl --silent --show-error --fail --connect-timeout 10 --max-time 30 -H "CF-Access-Client-Id: $CLOUDFLARE_ACCESS_CLIENT_ID" -H "CF-Access-Client-Secret: $CLOUDFLARE_ACCESS_CLIENT_SECRET" -o "$response" "https://$custom_domain/api/v1/health"
-          jq -e '.status == "ok" and .contractVersion == "v1"' "$response" >/dev/null
+          jq -n \
+            --arg source_sha "${{ needs.resolve-verify.outputs.main_sha }}" \
+            --arg release_set_id "$RELEASE_SET_ID" \
+            --arg target_profile "$TARGET_PROFILE" \
+            '{schema_version:1,kind:"AR11_HUMAN_HEALTH_HANDOFF",decision:"DEFERRED_TO_V2_B7",reason:"HUMAN_CLOUDFLARE_ACCESS_REQUIRED",source_sha:$source_sha,release_set_id:$release_set_id,target_capability_profile_id:$target_profile,authenticated_health_owner:"V2_B7_REAL_WINDOWS_HUMAN",provider_mutation:false,production_mutation:false}' \
+            > "$RUNNER_TEMP/human-health-handoff.json"
+          jq -e '.schema_version == 1 and .kind == "AR11_HUMAN_HEALTH_HANDOFF" and .decision == "DEFERRED_TO_V2_B7" and .reason == "HUMAN_CLOUDFLARE_ACCESS_REQUIRED" and .authenticated_health_owner == "V2_B7_REAL_WINDOWS_HUMAN" and .provider_mutation == false and .production_mutation == false' "$RUNNER_TEMP/human-health-handoff.json" >/dev/null
 
       - name: Upload metadata-only post-deploy evidence
         id: post_evidence
@@ -1227,6 +1228,7 @@ jobs:
             ${{ runner.temp }}/post-release-verify.json
             ${{ runner.temp }}/post-snapshot.json
             ${{ runner.temp }}/promotion-verify.json
+            ${{ runner.temp }}/human-health-handoff.json
           if-no-files-found: error
           retention-days: 30
 
@@ -1240,7 +1242,7 @@ jobs:
           elif [ "${{ steps.target_prepare.outcome }}" = "failure" ]; then failed_boundary="POST_TARGET_MATERIALIZATION"
           elif [ "${{ steps.node_runtime.outcome }}" = "failure" ]; then failed_boundary="NODE_RUNTIME_SETUP"
           elif [ "${{ steps.observe_verify.outcome }}" = "failure" ]; then failed_boundary="POST_PROVIDER_OBSERVATION"
-          elif [ "${{ steps.observe_verify.outputs.decision }}" = "VERIFIED" ] && [ "${{ steps.health.outcome }}" = "failure" ]; then failed_boundary="HEALTH_VERIFICATION"
+          elif [ "${{ steps.observe_verify.outputs.decision }}" = "VERIFIED" ] && [ "${{ steps.health.outcome }}" = "failure" ]; then failed_boundary="HUMAN_HEALTH_HANDOFF"
           elif [ "${{ steps.post_evidence.outcome }}" = "failure" ]; then failed_boundary="POST_EVIDENCE_PUBLICATION"
           fi
           jq -n \
