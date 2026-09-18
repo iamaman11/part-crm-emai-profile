@@ -246,23 +246,42 @@ def run_gh(
 
 
 def get_release(repository: str, release_tag: str) -> dict[str, Any] | None:
+    # The by-tag REST endpoint returns only published releases. Listing releases
+    # with push access includes drafts, which is required for resumable partial
+    # publication.
     result = run_gh(
-        ["api", f"repos/{repository}/releases/tags/{release_tag}"],
+        [
+            "api",
+            "--paginate",
+            "--slurp",
+            f"repos/{repository}/releases?per_page=100",
+        ],
         timeout_seconds=API_TIMEOUT_SECONDS,
         capture=True,
     )
-    if result.returncode == 0:
-        try:
-            payload = json.loads(result.stdout)
-        except json.JSONDecodeError as error:
-            raise PublicationError("GitHub release response is invalid JSON") from error
-        if not isinstance(payload, dict):
-            fail("GitHub release response is not an object")
-        return payload
-    stderr = result.stderr or ""
-    if "HTTP 404" in stderr or "Not Found" in stderr:
-        return None
-    fail(f"GitHub release lookup failed: {stderr.strip() or result.returncode}")
+    if result.returncode != 0:
+        fail(
+            "GitHub release listing failed: "
+            f"{(result.stderr or '').strip() or result.returncode}"
+        )
+    try:
+        pages = json.loads(result.stdout)
+    except json.JSONDecodeError as error:
+        raise PublicationError("GitHub release list response is invalid JSON") from error
+    if not isinstance(pages, list):
+        fail("GitHub release list response is not an array")
+    matches: list[dict[str, Any]] = []
+    for page in pages:
+        if not isinstance(page, list):
+            fail("GitHub release list page is not an array")
+        for release in page:
+            if not isinstance(release, dict):
+                fail("GitHub release list entry is invalid")
+            if release.get("tag_name") == release_tag:
+                matches.append(release)
+    if len(matches) > 1:
+        fail(f"multiple GitHub releases claim the same tag: {release_tag}")
+    return matches[0] if matches else None
 
 
 def delete_starter_asset(repository: str, asset: RemoteAsset) -> None:
@@ -285,12 +304,12 @@ def delete_starter_asset(repository: str, asset: RemoteAsset) -> None:
         )
 
 
-def upload_one(
+def _upload_asset(
     repository: str,
     release_tag: str,
     local: LocalAsset,
-) -> None:
-    result = run_gh(
+) -> subprocess.CompletedProcess[str]:
+    return run_gh(
         [
             "release",
             "upload",
@@ -302,17 +321,51 @@ def upload_one(
         timeout_seconds=UPLOAD_TIMEOUT_SECONDS,
         capture=False,
     )
+
+
+def upload_one(
+    repository: str,
+    release_tag: str,
+    local: LocalAsset,
+    expected_names: set[str],
+) -> None:
+    result = _upload_asset(repository, release_tag, local)
     if result.returncode == 0:
         return
 
+    # A concurrent exact publisher may have won the name race. Re-observe
+    # before deciding this upload failed.
     release = get_release(repository, release_tag)
     if release is None:
         fail(f"release disappeared after failed upload: {release_tag}")
-    analysis = analyze_release(release, release_tag, {local.name})
+    analysis = analyze_release(release, release_tag, expected_names)
     candidates = [asset for asset in analysis.assets if asset.name == local.name]
     if len(candidates) == 1 and candidates[0].state == "uploaded":
         assert_remote_matches_local(candidates[0], local)
         return
+
+    # A failed upload may leave a GitHub "starter" asset. Only an incomplete
+    # asset on our still-draft transaction is removable; uploaded conflicting
+    # bytes are never clobbered.
+    if (
+        release.get("draft") is True
+        and len(candidates) == 1
+        and candidates[0].state != "uploaded"
+    ):
+        delete_starter_asset(repository, candidates[0])
+        retry = _upload_asset(repository, release_tag, local)
+        if retry.returncode == 0:
+            return
+        final = get_release(repository, release_tag)
+        if final is not None:
+            final_analysis = analyze_release(final, release_tag, expected_names)
+            final_asset = {
+                asset.name: asset for asset in final_analysis.assets
+            }.get(local.name)
+            if final_asset is not None and final_asset.state == "uploaded":
+                assert_remote_matches_local(final_asset, local)
+                return
+
     fail(f"release asset upload failed and no exact concurrent asset appeared: {local.name}")
 
 
@@ -404,7 +457,7 @@ def publish(
             continue
         if remote is not None:
             delete_starter_asset(repository, remote)
-        upload_one(repository, release_tag, local)
+        upload_one(repository, release_tag, local, expected_names)
 
         current = get_release(repository, release_tag)
         if current is None or current.get("draft") is not True:
