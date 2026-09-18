@@ -460,8 +460,16 @@ def publish(
         upload_one(repository, release_tag, local, expected_names)
 
         current = get_release(repository, release_tag)
-        if current is None or current.get("draft") is not True:
-            fail("draft release disappeared or published before asset verification")
+        if current is None:
+            fail("draft release disappeared before asset verification")
+        if current.get("draft") is not True:
+            assert_complete_exact(
+                current,
+                release_tag,
+                assets,
+                require_published=True,
+            )
+            return "published-by-peer"
         current_analysis = analyze_release(current, release_tag, expected_names)
         exact = {asset.name: asset for asset in current_analysis.assets}.get(name)
         if exact is None:
@@ -469,8 +477,16 @@ def publish(
         assert_remote_matches_local(exact, local)
 
     completed_draft = get_release(repository, release_tag)
-    if completed_draft is None or completed_draft.get("draft") is not True:
+    if completed_draft is None:
         fail("completed draft release cannot be observed")
+    if completed_draft.get("draft") is not True:
+        assert_complete_exact(
+            completed_draft,
+            release_tag,
+            assets,
+            require_published=True,
+        )
+        return "published-by-peer"
     assert_metadata_owned(completed_draft, release_tag, title, notes)
     assert_complete_exact(
         completed_draft,
