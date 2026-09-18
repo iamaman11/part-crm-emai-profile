@@ -313,6 +313,35 @@ def get_release(repository: str, release_tag: str) -> dict[str, Any] | None:
     return matches[0] if matches else None
 
 
+def release_numeric_id(release: dict[str, Any]) -> int:
+    release_id = release.get("id")
+    if not isinstance(release_id, int) or release_id <= 0:
+        fail("GitHub release id is invalid")
+    return release_id
+
+
+def get_release_by_id(repository: str, release_id: int) -> dict[str, Any]:
+    result = run_gh(
+        ["api", f"repos/{repository}/releases/{release_id}"],
+        timeout_seconds=API_TIMEOUT_SECONDS,
+        capture=True,
+    )
+    if result.returncode != 0:
+        fail(
+            "GitHub exact release-id lookup failed: "
+            f"{(result.stderr or '').strip() or result.returncode}"
+        )
+    try:
+        payload = json.loads(result.stdout)
+    except json.JSONDecodeError as error:
+        raise PublicationError("GitHub exact release-id response is invalid JSON") from error
+    if not isinstance(payload, dict):
+        fail("GitHub exact release-id response is not an object")
+    if release_numeric_id(payload) != release_id:
+        fail("GitHub exact release-id lookup returned a different release")
+    return payload
+
+
 def delete_starter_asset(repository: str, asset: RemoteAsset) -> None:
     if asset.state == "uploaded":
         fail(f"refusing to delete uploaded release asset: {asset.name}")
@@ -338,10 +367,8 @@ def release_asset_upload_url(
     repository: str,
     asset_name: str,
 ) -> str:
-    release_id = release.get("id")
+    release_id = release_numeric_id(release)
     template = release.get("upload_url")
-    if not isinstance(release_id, int) or release_id <= 0:
-        fail("GitHub draft release id is invalid")
     if not isinstance(template, str) or not template:
         fail("GitHub draft release upload_url is missing")
     base = template.split("{", 1)[0]
@@ -444,9 +471,7 @@ def upload_one(
     # Re-observe once and accept only exact durable bytes. With the accepted-main
     # workflow serialized, incomplete draft residue is recovered by the next run
     # rather than blindly retrying a heavy upload in the same transaction.
-    observed = get_release(repository, release_tag)
-    if observed is None:
-        fail(f"release disappeared after failed upload: {release_tag}")
+    observed = get_release_by_id(repository, release_numeric_id(release))
     analysis = analyze_release(observed, release_tag, expected_names)
     candidates = [asset for asset in analysis.assets if asset.name == local.name]
     if len(candidates) == 1 and candidates[0].state == "uploaded":
@@ -558,6 +583,7 @@ def publish(
     if release.get("draft") is not True:
         fail("incomplete publication cannot be resumed from a non-draft release")
     assert_metadata_owned(release, release_tag, title, notes)
+    release_id = release_numeric_id(release)
 
     remote_by_name = {asset.name: asset for asset in analysis.assets}
     for name, local in assets.items():
@@ -569,9 +595,7 @@ def publish(
             delete_starter_asset(repository, remote)
         upload_one(repository, release_tag, release, local, expected_names)
 
-        current = get_release(repository, release_tag)
-        if current is None:
-            fail("draft release disappeared before asset verification")
+        current = get_release_by_id(repository, release_id)
         if current.get("draft") is not True:
             assert_complete_exact(
                 current,
@@ -586,9 +610,7 @@ def publish(
             fail(f"uploaded release asset cannot be observed: {name}")
         assert_remote_matches_local(exact, local)
 
-    completed_draft = get_release(repository, release_tag)
-    if completed_draft is None:
-        fail("completed draft release cannot be observed")
+    completed_draft = get_release_by_id(repository, release_id)
     if completed_draft.get("draft") is not True:
         assert_complete_exact(
             completed_draft,
@@ -605,9 +627,7 @@ def publish(
         require_published=False,
     )
 
-    completed_release_id = completed_draft.get("id")
-    if not isinstance(completed_release_id, int) or completed_release_id <= 0:
-        fail("completed draft release id is invalid")
+    completed_release_id = release_id
     edit = run_gh(
         [
             "api",
@@ -623,18 +643,11 @@ def publish(
         capture=True,
     )
     if edit.returncode != 0:
-        final = get_release(repository, release_tag)
-        if final is None:
-            fail(
-                "draft publication failed and release disappeared: "
-                f"{(edit.stderr or '').strip() or edit.returncode}"
-            )
+        final = get_release_by_id(repository, release_id)
         assert_complete_exact(final, release_tag, assets, require_published=True)
         return "published-by-peer"
 
-    final = get_release(repository, release_tag)
-    if final is None:
-        fail("published release cannot be observed")
+    final = get_release_by_id(repository, release_id)
     assert_complete_exact(final, release_tag, assets, require_published=True)
     return "published"
 
