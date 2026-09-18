@@ -749,6 +749,40 @@ def self_test() -> None:
     else:
         fail("release upload URL boundary negative self-test unexpectedly passed")
 
+    exact_fixture = {
+        "id": 10,
+        "tag_name": release_tag,
+        "draft": True,
+        "prerelease": False,
+        "assets": [],
+    }
+    original_run_gh = globals()["run_gh"]
+
+    def fake_exact_run_gh(
+        args: list[str],
+        *,
+        timeout_seconds: int,
+        capture: bool = False,
+    ) -> subprocess.CompletedProcess[str]:
+        if args != ["api", "repos/owner/repo/releases/10"]:
+            fail(f"unexpected exact release lookup command in self-test: {args}")
+        if timeout_seconds != API_TIMEOUT_SECONDS or capture is not True:
+            fail("exact release lookup self-test command options changed")
+        return subprocess.CompletedProcess(
+            ["gh", *args],
+            0,
+            json.dumps(exact_fixture),
+            "",
+        )
+
+    globals()["run_gh"] = fake_exact_run_gh
+    try:
+        exact_observed = get_release_by_id("owner/repo", 10)
+    finally:
+        globals()["run_gh"] = original_run_gh
+    if exact_observed != exact_fixture:
+        fail("exact release-id lookup self-test failed")
+
     complete = {
         "id": 10,
         "tag_name": release_tag,
