@@ -4,8 +4,14 @@
 /migrations/d1-successor-v2/*.sql text eol=lf
 /migrations/resolver-d1/*.sql text eol=lf
 
-# S0 packages the Camouhost source and digests canonical runtime/candidate locks; checkout
-# bytes must therefore be identical on Windows and POSIX rather than subject to autocrlf.
+# Runtime component identity hashes checkout bytes for every runtime_bundle.files input.
+# Keep those exact source bytes platform-stable on Windows and POSIX.
+/runtime/camouhost/camoufox-patch-lock.json text eol=lf
+/runtime/camouhost/camoufox-patches/0001-webgl-checked-arrays.patch text eol=lf
+/runtime/camouhost/main.py text eol=lf
 /runtime/camouhost/real.py text eol=lf
 /runtime/camouhost/runtime-lock.json text eol=lf
-/runtime/camouhost/camoufox-patch-lock.json text eol=lf
+/scripts/camouhost-runtime-build-windows.py text eol=lf
+/scripts/camouhost-runtime-package.py text eol=lf
+/scripts/check-camoufox-webgl-patch.py text eol=lf
+/scripts/verify-camoufox-patched-candidate.py text eol=lf

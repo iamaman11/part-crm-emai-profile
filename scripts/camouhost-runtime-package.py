@@ -20,6 +20,7 @@ from typing import Any, BinaryIO
 
 ROOT = Path(__file__).resolve().parents[1]
 RELEASE_ARCHITECTURE = ROOT / "architecture" / "release-architecture-ar11.json"
+GITATTRIBUTES = ROOT / ".gitattributes"
 RUNTIME_CONSUMER = "runtime_bundle.files"
 RELEASE_PREFIX = "runtime-bundle-v3-sha256-"
 MAX_RUNTIME_FILES = 500_000
@@ -89,6 +90,27 @@ def safe_repo_relative(value: str, label: str) -> Path:
     return relative
 
 
+def verify_checkout_identity_policy(paths: list[Path]) -> None:
+    try:
+        lines = {
+            line.strip()
+            for line in GITATTRIBUTES.read_text(encoding="utf-8").splitlines()
+            if line.strip() and not line.lstrip().startswith("#")
+        }
+    except OSError as error:
+        raise RuntimePackageError(
+            f"cannot read runtime checkout identity policy: {error}"
+        ) from error
+
+    for relative in paths:
+        rule = f"/{relative.as_posix()} text eol=lf"
+        if rule not in lines:
+            fail(
+                "runtime component identity input lacks platform-stable checkout "
+                f"policy: {relative.as_posix()}"
+            )
+
+
 def runtime_source_files() -> list[Path]:
     try:
         authority = json.loads(RELEASE_ARCHITECTURE.read_text(encoding="utf-8"))
@@ -149,6 +171,7 @@ def runtime_source_files() -> list[Path]:
     selected.sort(key=lambda item: item.as_posix())
     if not selected:
         fail(f"canonical release input topology has no inputs for {RUNTIME_CONSUMER}")
+    verify_checkout_identity_policy(selected)
     return selected
 
 
