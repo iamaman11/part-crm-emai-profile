@@ -10,7 +10,9 @@ permissions:
   contents: read
 
 concurrency:
-  group: release-set-build-${{ github.sha }}
+  # One natural publication owner for accepted-main. This prevents two source
+  # SHAs with the same runtime identity from racing the same immutable release.
+  group: release-set-build-main
   cancel-in-progress: false
 
 jobs:
