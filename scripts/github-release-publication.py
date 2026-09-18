@@ -11,17 +11,25 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import http.client
 import json
+import os
 import re
+import ssl
 import subprocess
 import sys
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable
+from urllib.parse import urlencode, urlsplit
 
 DIGEST_RE = re.compile(r"^sha256:([0-9a-f]{64})$")
 API_TIMEOUT_SECONDS = 120
 UPLOAD_TIMEOUT_SECONDS = 5_400
+UPLOAD_SOCKET_TIMEOUT_SECONDS = 120
+UPLOAD_CHUNK_BYTES = 8 * 1024 * 1024
+UPLOAD_PROGRESS_BYTES = 128 * 1024 * 1024
 
 
 class PublicationError(RuntimeError):
@@ -304,58 +312,140 @@ def delete_starter_asset(repository: str, asset: RemoteAsset) -> None:
         )
 
 
+def release_asset_upload_url(
+    release: dict[str, Any],
+    repository: str,
+    asset_name: str,
+) -> str:
+    release_id = release.get("id")
+    template = release.get("upload_url")
+    if not isinstance(release_id, int) or release_id <= 0:
+        fail("GitHub draft release id is invalid")
+    if not isinstance(template, str) or not template:
+        fail("GitHub draft release upload_url is missing")
+    base = template.split("{", 1)[0]
+    parsed = urlsplit(base)
+    expected_path = f"/repos/{repository}/releases/{release_id}/assets"
+    if (
+        parsed.scheme != "https"
+        or parsed.hostname != "uploads.github.com"
+        or parsed.port not in (None, 443)
+        or parsed.path.casefold() != expected_path.casefold()
+        or parsed.query
+        or parsed.fragment
+    ):
+        fail("GitHub draft release upload_url is outside the exact release boundary")
+    return base + "?" + urlencode({"name": asset_name})
+
+
 def _upload_asset(
     repository: str,
-    release_tag: str,
+    release: dict[str, Any],
     local: LocalAsset,
-) -> subprocess.CompletedProcess[str]:
-    return run_gh(
-        [
-            "release",
-            "upload",
-            release_tag,
-            "--repo",
-            repository,
-            str(local.path),
-        ],
-        timeout_seconds=UPLOAD_TIMEOUT_SECONDS,
-        capture=False,
+) -> tuple[int | None, RemoteAsset | None, str]:
+    token = os.environ.get("GH_TOKEN")
+    if not token:
+        fail("GH_TOKEN is required for release asset upload")
+
+    url = release_asset_upload_url(release, repository, local.name)
+    parsed = urlsplit(url)
+    target = parsed.path + (f"?{parsed.query}" if parsed.query else "")
+    connection = http.client.HTTPSConnection(
+        parsed.hostname,
+        parsed.port or 443,
+        timeout=UPLOAD_SOCKET_TIMEOUT_SECONDS,
+        context=ssl.create_default_context(),
     )
+    deadline = time.monotonic() + UPLOAD_TIMEOUT_SECONDS
+    sent = 0
+    next_progress = UPLOAD_PROGRESS_BYTES
+    try:
+        connection.putrequest("POST", target, skip_accept_encoding=True)
+        connection.putheader("Accept", "application/vnd.github+json")
+        connection.putheader("Authorization", f"Bearer {token}")
+        connection.putheader("X-GitHub-Api-Version", "2022-11-28")
+        connection.putheader("User-Agent", "part-crm-release-publication/1")
+        connection.putheader("Content-Type", "application/octet-stream")
+        connection.putheader("Content-Length", str(local.size))
+        connection.endheaders()
+
+        with local.path.open("rb") as handle:
+            while True:
+                if time.monotonic() > deadline:
+                    return None, None, "release asset upload exceeded bounded deadline"
+                chunk = handle.read(UPLOAD_CHUNK_BYTES)
+                if not chunk:
+                    break
+                connection.send(chunk)
+                sent += len(chunk)
+                if sent >= next_progress or sent == local.size:
+                    print(
+                        f"release upload progress {local.name}: "
+                        f"{sent}/{local.size} bytes",
+                        flush=True,
+                    )
+                    next_progress += UPLOAD_PROGRESS_BYTES
+        if sent != local.size:
+            return None, None, "release asset upload byte count changed during read"
+
+        response = connection.getresponse()
+        body_bytes = response.read(1024 * 1024)
+        body = body_bytes.decode("utf-8", errors="replace")
+        if response.status != 201:
+            return response.status, None, body.strip()
+        try:
+            payload = json.loads(body)
+        except json.JSONDecodeError:
+            return response.status, None, "GitHub upload response is invalid JSON"
+        if not isinstance(payload, dict):
+            return response.status, None, "GitHub upload response is not an object"
+        remote = _remote_assets({"assets": [payload]})[0]
+        return response.status, remote, ""
+    except (OSError, TimeoutError, http.client.HTTPException) as error:
+        return None, None, f"{type(error).__name__}: {error}"
+    finally:
+        connection.close()
 
 
 def upload_one(
     repository: str,
     release_tag: str,
+    release: dict[str, Any],
     local: LocalAsset,
     expected_names: set[str],
 ) -> None:
-    result = _upload_asset(repository, release_tag, local)
-    if result.returncode == 0:
+    status, uploaded, detail = _upload_asset(repository, release, local)
+    if status == 201 and uploaded is not None:
+        assert_remote_matches_local(uploaded, local)
         return
 
-    # The CLI can fail after GitHub has already committed the upload. Re-observe
-    # once and accept only exact durable bytes. The workflow has one serialized
-    # publication owner, so an incomplete draft asset is left for the next run
-    # to recover instead of blind delete/retry in the same transaction.
-    release = get_release(repository, release_tag)
-    if release is None:
+    # A transport/API failure can happen after GitHub committed the bytes.
+    # Re-observe once and accept only exact durable bytes. With the accepted-main
+    # workflow serialized, incomplete draft residue is recovered by the next run
+    # rather than blindly retrying a heavy upload in the same transaction.
+    observed = get_release(repository, release_tag)
+    if observed is None:
         fail(f"release disappeared after failed upload: {release_tag}")
-    analysis = analyze_release(release, release_tag, expected_names)
+    analysis = analyze_release(observed, release_tag, expected_names)
     candidates = [asset for asset in analysis.assets if asset.name == local.name]
     if len(candidates) == 1 and candidates[0].state == "uploaded":
         assert_remote_matches_local(candidates[0], local)
         return
     if (
-        release.get("draft") is True
+        observed.get("draft") is True
         and len(candidates) == 1
         and candidates[0].state != "uploaded"
     ):
         fail(
             "release asset upload left an incomplete draft asset; "
-            f"next serialized run will recover it: {local.name}"
+            f"next serialized run will recover it: {local.name}; "
+            f"status={status!r} detail={detail!r}"
         )
 
-    fail(f"release asset upload failed without exact durable bytes: {local.name}")
+    fail(
+        "release asset upload failed without exact durable bytes: "
+        f"{local.name}; status={status!r} detail={detail!r}"
+    )
 
 
 def ensure_draft_release(
@@ -371,18 +461,22 @@ def ensure_draft_release(
 
     result = run_gh(
         [
-            "release",
-            "create",
-            release_tag,
-            "--repo",
-            repository,
-            "--target",
-            target,
-            "--title",
-            title,
-            "--notes",
-            notes,
-            "--draft",
+            "api",
+            "--method",
+            "POST",
+            f"repos/{repository}/releases",
+            "-f",
+            f"tag_name={release_tag}",
+            "-f",
+            f"target_commitish={target}",
+            "-f",
+            f"name={title}",
+            "-f",
+            f"body={notes}",
+            "-F",
+            "draft=true",
+            "-F",
+            "prerelease=false",
         ],
         timeout_seconds=API_TIMEOUT_SECONDS,
         capture=True,
@@ -395,10 +489,16 @@ def ensure_draft_release(
                 f"{(result.stderr or '').strip() or result.returncode}"
             )
         return release
-
-    release = get_release(repository, release_tag)
-    if release is None:
-        fail("draft release was created but cannot be observed")
+    try:
+        release = json.loads(result.stdout)
+    except json.JSONDecodeError as error:
+        raise PublicationError("draft release creation response is invalid JSON") from error
+    if not isinstance(release, dict):
+        fail("draft release creation response is not an object")
+    if release.get("draft") is not True:
+        fail("new release was not created as draft")
+    if release.get("tag_name") != release_tag:
+        fail("new draft release tag identity mismatch")
     return release
 
 
@@ -446,7 +546,7 @@ def publish(
             continue
         if remote is not None:
             delete_starter_asset(repository, remote)
-        upload_one(repository, release_tag, local, expected_names)
+        upload_one(repository, release_tag, release, local, expected_names)
 
         current = get_release(repository, release_tag)
         if current is None:
@@ -484,14 +584,19 @@ def publish(
         require_published=False,
     )
 
+    completed_release_id = completed_draft.get("id")
+    if not isinstance(completed_release_id, int) or completed_release_id <= 0:
+        fail("completed draft release id is invalid")
     edit = run_gh(
         [
-            "release",
-            "edit",
-            release_tag,
-            "--repo",
-            repository,
-            "--draft=false",
+            "api",
+            "--method",
+            "PATCH",
+            f"repos/{repository}/releases/{completed_release_id}",
+            "-F",
+            "draft=false",
+            "-F",
+            "prerelease=false",
         ],
         timeout_seconds=API_TIMEOUT_SECONDS,
         capture=True,
@@ -549,6 +654,41 @@ def self_test() -> None:
 
     if analyze_release(None, release_tag, expected).state != "absent":
         fail("absent release self-test failed")
+
+    upload_fixture = {
+        "id": 10,
+        "upload_url": (
+            "https://uploads.github.com/repos/owner/repo/releases/10/assets"
+            "{?name,label}"
+        ),
+    }
+    expected_upload = (
+        "https://uploads.github.com/repos/owner/repo/releases/10/assets"
+        "?name=runtime-bundle.tar"
+    )
+    if (
+        release_asset_upload_url(
+            upload_fixture,
+            "owner/repo",
+            "runtime-bundle.tar",
+        )
+        != expected_upload
+    ):
+        fail("release upload URL self-test failed")
+    escaped_upload = dict(upload_fixture)
+    escaped_upload["upload_url"] = (
+        "https://evil.example/repos/owner/repo/releases/10/assets{?name,label}"
+    )
+    try:
+        release_asset_upload_url(
+            escaped_upload,
+            "owner/repo",
+            "runtime-bundle.tar",
+        )
+    except PublicationError:
+        pass
+    else:
+        fail("release upload URL boundary negative self-test unexpectedly passed")
 
     complete = {
         "id": 10,
