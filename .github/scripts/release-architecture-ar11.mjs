@@ -209,9 +209,16 @@ function validatePublicationWiring(authority) {
     'cp "$capability_policy_json" "$release_dir/capability-policy-v1.json"',
     'cp "$RELEASE_DIR/capability-policy-v1.json" "$asset_dir/capability-policy-v1.json"',
     'runtime-component-observation.json',
+    'runtime-release-probe.json',
+    'group: release-set-build-main',
     'runtime-bundle-v3-sha256-',
-    'gh release upload "$env:RUNTIME_RELEASE_ID"',
+    'python scripts/github-release-publication.py probe',
+    '--expected-asset runtime-bundle.tar',
+    '--expected-asset runtime-manifest.json',
+    'python scripts/github-release-publication.py publish',
     'CAMOUFOX_ARTIFACT_SHA256=$artifactSha',
+    '$releaseId = "camoufox-v1-windows-sha256-$artifactSha"',
+    'gh release download "$releaseId"',
     "if ($artifactSha -notmatch '^[0-9a-f]{64}$' -or $buildSourceCommit -notmatch '^[0-9a-f]{40}$')",
   ]) {
     if (!workflow.includes(marker)) fail(`Release Set build workflow lacks required publication wiring: ${marker}`);
@@ -220,11 +227,24 @@ function validatePublicationWiring(authority) {
   if (jobCount('\n  runtime-bundle:\n') !== 1 || jobCount('\n  assemble-publish:\n') !== 1) {
     fail('Release Set build workflow must contain exactly one runtime owner and one aggregate publisher');
   }
+  if (jobCount('python scripts/github-release-publication.py publish') !== 2) {
+    fail('runtime component and aggregate Release Set must share exactly one publication primitive');
+  }
   for (const forbidden of [
     'cp artifacts/ar11-inputs/runtime-bundle.tar "$component_root/runtime-bundle.tar"',
     'cp "$component_root/runtime-bundle.tar" "$release_dir/components/runtime-bundle.tar"',
+    'gh release download "$env:CAMOUFOX_RELEASE_ID"',
+    'group: release-set-build-${{ github.sha }}',
   ]) {
     if (workflow.includes(forbidden)) fail(`aggregate Release Set must not duplicate heavy runtime bytes: ${forbidden}`);
+  }
+  for (const forbidden of [
+    'gh release create "$env:RUNTIME_RELEASE_ID"',
+    'gh release upload "$env:RUNTIME_RELEASE_ID"',
+    'gh release create "$RELEASE_ID"',
+    'gh release upload "$RELEASE_ID"',
+  ]) {
+    if (workflow.includes(forbidden)) fail(`Release Set workflow bypasses the shared publication primitive: ${forbidden}`);
   }
   if (authority.capability_policy_projection.generated_manifest !== 'capability-policy-v1.json') {
     fail('release workflow and architecture projection path disagree');

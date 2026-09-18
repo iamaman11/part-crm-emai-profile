@@ -173,7 +173,9 @@ function buildErrors(build) {
     'kind: "RELEASE_FINALIZE_REQUEST"',
     'release finalize --request-json',
     'accepted-source-evidence-ar11.py',
-    'gh release create',
+    'group: release-set-build-main',
+    'python scripts/github-release-publication.py probe',
+    'python scripts/github-release-publication.py publish',
     'Publish once or prove byte-identical replay',
   ], 'Release Set build'));
   errors.push(...forbidMarkers(build, [
@@ -182,6 +184,10 @@ function buildErrors(build) {
     'CLOUDFLARE_DEPLOY_MANIFEST_JSON',
     'environment: production',
     'terraform',
+    'gh release create "$env:RUNTIME_RELEASE_ID"',
+    'gh release upload "$env:RUNTIME_RELEASE_ID"',
+    'gh release create "$RELEASE_ID"',
+    'gh release upload "$RELEASE_ID"',
   ], 'Release Set build'));
   return errors;
 }

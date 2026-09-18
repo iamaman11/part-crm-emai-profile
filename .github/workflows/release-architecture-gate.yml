@@ -33,6 +33,12 @@ jobs:
       - name: Validate frontend capability projection
         run: node .github/scripts/frontend-capability-ar11.mjs
 
+      - name: Validate release publication transaction
+        run: |
+          node .github/scripts/release-architecture-ar11.mjs --self-test
+          python -m py_compile scripts/github-release-publication.py
+          python scripts/github-release-publication.py self-test
+
       - name: Prove complete AR-11 behavioural certification traceability
         run: |
           python scripts/check-ar11-behavioural-certification.py
