@@ -50,7 +50,7 @@ For an exact current runtime-input identity:
 2. Probe that exact GitHub Release identity and exact expected asset inventory.
 3. If no release exists, build once on Windows and stage publication as a draft.
 4. Upload only the exact expected assets, prove their SHA-256/size metadata, and publish the draft only after the inventory is complete.
-5. If an exact draft exists from an interrupted or concurrent publication, resume it only when every already-uploaded asset is byte-identical. An incomplete GitHub `starter` asset may be deleted only while the release is still draft and then retried once.
+5. Release Set publication has one serialized accepted-main owner. If an exact draft exists from an interrupted prior run, resume it only when every already-uploaded asset is byte-identical. An incomplete GitHub `starter` asset may be deleted only while the release is still draft; a failed upload is not blindly retried in the same run.
 6. If an already-published release is incomplete, has unexpected assets, or any uploaded asset conflicts with local bytes, fail closed. Never clobber a published content-addressed release.
 7. If a complete exact published component already exists, download only the small manifest and observe exact release-asset SHA-256/size metadata; do not download, rebuild or re-upload the heavy runtime.
 8. Publish only a small runtime observation as CI transport for aggregate Release Set finalization.
@@ -72,8 +72,9 @@ The recurring cost is removed by immutable component reuse. A future compressed 
 - Individual GitHub API operations and heavy asset upload are bounded independently by the shared publication helper.
 - Aggregate Release Set publication has a much smaller bounded job timeout because it no longer carries the runtime tar.
 - New content-addressed publications are staged as drafts; only an exact complete inventory is promoted to published state.
-- Interrupted draft publication is resumable without deleting uploaded exact bytes. Only incomplete draft `starter` residue is eligible for deterministic cleanup.
-- Concurrent publishers are accepted only when the observed durable bytes are exact; conflicting bytes or an incomplete published release fail closed.
+- Accepted-main Release Set builds are serialized under one publication owner, so two source SHAs cannot race the same runtime identity.
+- Interrupted draft publication is resumable without deleting uploaded exact bytes. Only incomplete draft `starter` residue is eligible for deterministic cleanup on a subsequent serialized run.
+- Conflicting bytes or an incomplete published release fail closed.
 - A failed component publication does not trigger alternate component selection, latest/known-good fallback, or blind clobber.
 - Byte-identical replay remains accepted only for the exact same content-addressed identity.
 - The publication helper's decision logic is exercised in pull-request CI, so the post-merge push workflow does not own an untested copy of the lifecycle.
