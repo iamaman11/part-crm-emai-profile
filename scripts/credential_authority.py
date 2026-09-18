@@ -113,7 +113,7 @@ def validate_composition(root: Path, value: dict[str, Any]) -> tuple[str, str, s
     overlays = value.get("registry_overlay_sources")
     if not isinstance(overlays, list) or overlays != [EXPECTED_REGISTRY_OVERLAY]:
         raise ValueError("current credential registry overlay set drifted")
-    if value.get("registry_overlay_role") != "CURRENT_ADDITIVE_METADATA_AUTHORITY":
+    if value.get("registry_overlay_role") != "CURRENT_METADATA_PROJECTION_AUTHORITY":
         raise ValueError("current credential registry overlay role drifted")
     overlay_path = repo_path(overlays[0], "registry_overlay_sources[0]")
     provenance = value.get("historical_provenance")
@@ -231,6 +231,14 @@ def validate_overlay(value: dict[str, Any]) -> None:
         raw = value.get(section)
         if not isinstance(raw, list) or any(not isinstance(item, dict) for item in raw):
             raise ValueError(f"overlay {section} must be a list of objects")
+    retired = value.get("retired_base_credential_ids")
+    if (
+        not isinstance(retired, list)
+        or retired != ["cloudflare.access-service-auth"]
+        or any(not isinstance(item, str) or not item for item in retired)
+        or len(set(retired)) != len(retired)
+    ):
+        raise ValueError("current credential overlay retired-base set drifted")
     for location, key, nested in walk(value):
         if key.lower() in FORBIDDEN_VALUE_FIELDS:
             raise ValueError(f"forbidden value-bearing field {location}.{key}")
@@ -306,6 +314,26 @@ def validate_overlay(value: dict[str, Any]) -> None:
 
 def compose_registry(base: dict[str, Any], overlay: dict[str, Any]) -> dict[str, Any]:
     result = copy.deepcopy(base)
+    retired = overlay.get("retired_base_credential_ids")
+    base_credentials = result.get("credentials")
+    overlay_credentials = overlay.get("credentials")
+    if not isinstance(retired, list) or not isinstance(base_credentials, list) or not isinstance(overlay_credentials, list):
+        raise ValueError("credential retirement projection is malformed")
+
+    base_ids = [item.get("id") for item in base_credentials if isinstance(item, dict)]
+    if len(base_ids) != len(base_credentials) or len(set(base_ids)) != len(base_ids):
+        raise ValueError("accepted base credential identities are malformed or duplicated")
+    overlay_ids = {item.get("id") for item in overlay_credentials if isinstance(item, dict)}
+    for logical_id in retired:
+        if logical_id not in base_ids:
+            raise ValueError(f"retired base credential is unknown: {logical_id}")
+        if logical_id in overlay_ids:
+            raise ValueError(f"retired base credential may not be reintroduced by current overlay: {logical_id}")
+    retired_set = set(retired)
+    result["credentials"] = [
+        item for item in base_credentials if item.get("id") not in retired_set
+    ]
+
     for section in ("credentials", "dynamic_credential_domains", "future_trust_domains"):
         base_items = result.get(section)
         overlay_items = overlay.get(section)
@@ -576,6 +604,24 @@ def negative_self_test(state: State, root: Path = ROOT) -> None:
         pass
     else:
         raise AssertionError("missing V2 Zero Trust observation credential fixture unexpectedly passed")
+
+    missing_retirement = copy.deepcopy(state.overlay)
+    missing_retirement["retired_base_credential_ids"] = []
+    try:
+        validate_overlay(missing_retirement)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("missing retired base credential fixture unexpectedly passed")
+
+    unknown_retirement = copy.deepcopy(state.overlay)
+    unknown_retirement["retired_base_credential_ids"] = ["unknown.credential"]
+    try:
+        validate_overlay(unknown_retirement)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("unknown retired base credential fixture unexpectedly passed")
 
     bad_lifecycle = copy.deepcopy(state.lifecycle)
     bad_lifecycle["routine_release_secret_transport"] = True

@@ -265,6 +265,56 @@ jobs:
             "$evidence/evidence.json" >/dev/null
           python -m json.tool "$evidence/evidence.json" >/dev/null
 
+          human_edge_headers="$raw/human-access-edge.headers"
+          human_edge_body="$raw/human-access-edge.body"
+          human_edge_status="$(curl --silent --show-error --output "$human_edge_body" --dump-header "$human_edge_headers" --write-out '%{http_code}' --connect-timeout 10 --max-time 30 "https://$target_host/api/v1/health")"
+          test "$human_edge_status" = 302
+          python - "$raw/access-organization.json" "$human_edge_headers" "$human_edge_status" "$evidence/human-access-edge.json" <<'PY'
+          import json
+          import sys
+          from urllib.parse import urlsplit
+
+          organization_path, headers_path, status, output_path = sys.argv[1:]
+          organization = json.load(open(organization_path, encoding='utf-8'))
+          result = organization.get('result')
+          if not isinstance(result, dict):
+              raise SystemExit('Access organization result missing')
+          auth_domain = result.get('auth_domain')
+          if not isinstance(auth_domain, str) or not auth_domain:
+              raise SystemExit('Access auth domain missing')
+          expected_host = urlsplit(auth_domain if '://' in auth_domain else 'https://' + auth_domain).hostname
+          if not expected_host:
+              raise SystemExit('Access auth domain invalid')
+
+          location = None
+          for raw in open(headers_path, encoding='utf-8', errors='strict'):
+              name, sep, value = raw.partition(':')
+              if sep and name.strip().lower() == 'location':
+                  location = value.strip()
+          if not location:
+              raise SystemExit('Access login redirect location missing')
+          parsed = urlsplit(location)
+          if parsed.scheme.lower() != 'https' or parsed.hostname != expected_host:
+              raise SystemExit('Access login redirect escaped organization issuer')
+
+          evidence = {
+              'schema_version': 1,
+              'kind': 'V2_HUMAN_ACCESS_EDGE_OBSERVATION',
+              'decision': 'ACCESS_LOGIN_REQUIRED',
+              'http_status': int(status),
+              'target_path': '/api/v1/health',
+              'access_issuer': f'https://{expected_host}',
+              'authenticated_origin_health_owner': 'V2_B7_REAL_WINDOWS_HUMAN',
+              'credential_values_accessed': False,
+              'provider_mutation': False,
+              'production_mutation': False,
+          }
+          with open(output_path, 'w', encoding='utf-8') as handle:
+              json.dump(evidence, handle, sort_keys=True, indent=2)
+              handle.write('\n')
+          PY
+          jq -e '.schema_version == 1 and .kind == "V2_HUMAN_ACCESS_EDGE_OBSERVATION" and .decision == "ACCESS_LOGIN_REQUIRED" and .http_status == 302 and .target_path == "/api/v1/health" and .authenticated_origin_health_owner == "V2_B7_REAL_WINDOWS_HUMAN" and .credential_values_accessed == false and .provider_mutation == false and .production_mutation == false' "$evidence/human-access-edge.json" >/dev/null
+
       - name: Publish secret-free V2 staging envelope observation
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:

@@ -419,8 +419,23 @@ function promotionErrors(promotion) {
     'decision="$(jq -er',
     '$RUNNER_TEMP/promotion-verify.json',
     "if: steps.observe_verify.outputs.decision == 'VERIFIED'",
+    'Record authenticated human health handoff after promotion owner reports VERIFIED',
+    'kind:"AR11_HUMAN_HEALTH_HANDOFF"',
+    'decision:"DEFERRED_TO_V2_B7"',
+    'reason:"HUMAN_CLOUDFLARE_ACCESS_REQUIRED"',
+    'authenticated_health_owner:"V2_B7_REAL_WINDOWS_HUMAN"',
+    'human-health-handoff.json',
   ], 'post-deploy verifier'));
-  errors.push(...forbidMarkers(post, ['secrets.CLOUDFLARE_API_TOKEN }}', 'wrangler deploy --', '--profile rehearsal-core-v2'], 'post-deploy verifier'));
+  errors.push(...forbidMarkers(post, [
+    'secrets.CLOUDFLARE_API_TOKEN }}',
+    'wrangler deploy --',
+    '--profile rehearsal-core-v2',
+    'CLOUDFLARE_ACCESS_CLIENT_ID',
+    'CLOUDFLARE_ACCESS_CLIENT_SECRET',
+    'CF-Access-Client-Id',
+    'CF-Access-Client-Secret',
+    'https://$custom_domain/api/v1/health',
+  ], 'post-deploy verifier'));
   errors.push(...secretObservationErrors(post, 'post-deploy verifier'));
 
   errors.push(...requireMarkers(manualOutcome, [
