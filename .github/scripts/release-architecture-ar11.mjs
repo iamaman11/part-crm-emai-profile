@@ -210,6 +210,7 @@ function validatePublicationWiring(authority) {
     'cp "$RELEASE_DIR/capability-policy-v1.json" "$asset_dir/capability-policy-v1.json"',
     'runtime-component-observation.json',
     'runtime-release-probe.json',
+    'group: release-set-build-main',
     'runtime-bundle-v3-sha256-',
     'python scripts/github-release-publication.py probe',
     '--expected-asset runtime-bundle.tar',
@@ -233,6 +234,7 @@ function validatePublicationWiring(authority) {
     'cp artifacts/ar11-inputs/runtime-bundle.tar "$component_root/runtime-bundle.tar"',
     'cp "$component_root/runtime-bundle.tar" "$release_dir/components/runtime-bundle.tar"',
     'gh release download "$env:CAMOUFOX_RELEASE_ID"',
+    'group: release-set-build-${{ github.sha }}',
   ]) {
     if (workflow.includes(forbidden)) fail(`aggregate Release Set must not duplicate heavy runtime bytes: ${forbidden}`);
   }
