@@ -333,8 +333,10 @@ def upload_one(
     if result.returncode == 0:
         return
 
-    # A concurrent exact publisher may have won the name race. Re-observe
-    # before deciding this upload failed.
+    # The CLI can fail after GitHub has already committed the upload. Re-observe
+    # once and accept only exact durable bytes. The workflow has one serialized
+    # publication owner, so an incomplete draft asset is left for the next run
+    # to recover instead of blind delete/retry in the same transaction.
     release = get_release(repository, release_tag)
     if release is None:
         fail(f"release disappeared after failed upload: {release_tag}")
@@ -343,30 +345,17 @@ def upload_one(
     if len(candidates) == 1 and candidates[0].state == "uploaded":
         assert_remote_matches_local(candidates[0], local)
         return
-
-    # A failed upload may leave a GitHub "starter" asset. Only an incomplete
-    # asset on our still-draft transaction is removable; uploaded conflicting
-    # bytes are never clobbered.
     if (
         release.get("draft") is True
         and len(candidates) == 1
         and candidates[0].state != "uploaded"
     ):
-        delete_starter_asset(repository, candidates[0])
-        retry = _upload_asset(repository, release_tag, local)
-        if retry.returncode == 0:
-            return
-        final = get_release(repository, release_tag)
-        if final is not None:
-            final_analysis = analyze_release(final, release_tag, expected_names)
-            final_asset = {
-                asset.name: asset for asset in final_analysis.assets
-            }.get(local.name)
-            if final_asset is not None and final_asset.state == "uploaded":
-                assert_remote_matches_local(final_asset, local)
-                return
+        fail(
+            "release asset upload left an incomplete draft asset; "
+            f"next serialized run will recover it: {local.name}"
+        )
 
-    fail(f"release asset upload failed and no exact concurrent asset appeared: {local.name}")
+    fail(f"release asset upload failed without exact durable bytes: {local.name}")
 
 
 def ensure_draft_release(
