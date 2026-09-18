@@ -174,11 +174,12 @@ jobs:
         run: |
           python --version
           if ((python -c "import sys; print('.'.join(map(str, sys.version_info[:3])))").Trim() -ne '3.12.10') { throw 'build Python mismatch' }
-          python -m py_compile scripts/camouhost-runtime-build-windows.py scripts/camouhost-runtime-package.py scripts/verify-camoufox-patched-candidate.py scripts/check-camoufox-webgl-patch.py
+          python -m py_compile scripts/camouhost-runtime-build-windows.py scripts/camouhost-runtime-package.py scripts/verify-camoufox-patched-candidate.py scripts/check-camoufox-webgl-patch.py scripts/github-release-publication.py
           python scripts/check-camoufox-webgl-patch.py --self-test
           python scripts/verify-camoufox-patched-candidate.py --self-test
           python scripts/camouhost-runtime-build-windows.py self-test
           python scripts/camouhost-runtime-package.py self-test
+          python scripts/github-release-publication.py self-test
           New-Item -ItemType Directory -Force -Path artifacts/ar11-runtime-component | Out-Null
           python scripts/camouhost-runtime-package.py identity --output artifacts/ar11-runtime-component/runtime-input-identity.json
           $identity = Get-Content artifacts/ar11-runtime-component/runtime-input-identity.json -Raw | ConvertFrom-Json
@@ -186,14 +187,19 @@ jobs:
           if ($releaseId -notmatch '^runtime-bundle-v3-sha256-[0-9a-f]{64}$') { throw 'runtime input release identity mismatch' }
           "release_id=$releaseId" >> $env:GITHUB_OUTPUT
 
-          gh release view "$releaseId" --repo "$env:GITHUB_REPOSITORY" *> $null
-          if ($LASTEXITCODE -eq 0) {
-            Write-Host "Exact runtime component already exists: $releaseId"
+          $probePath = 'artifacts/ar11-runtime-component/runtime-release-probe.json'
+          python scripts/github-release-publication.py probe --repository "$env:GITHUB_REPOSITORY" --release-id "$releaseId" --expected-asset runtime-bundle.tar --expected-asset runtime-manifest.json --output "$probePath"
+          if ($LASTEXITCODE -ne 0) { throw 'runtime publication probe failed' }
+          $probe = Get-Content $probePath -Raw | ConvertFrom-Json
+          if ($probe.release_id -ne $releaseId) { throw 'runtime publication probe identity mismatch' }
+          if ($probe.state -eq 'reuse') {
+            Write-Host "Exact complete runtime component already exists: $releaseId"
             "reuse=true" >> $env:GITHUB_OUTPUT
-          } else {
-            Write-Host "Exact runtime component is absent and will be built once: $releaseId"
+          } elseif ($probe.state -eq 'absent' -or $probe.state -eq 'resume') {
+            Write-Host "Exact runtime component requires materialization/publication: $releaseId state=$($probe.state)"
             "reuse=false" >> $env:GITHUB_OUTPUT
-            $global:LASTEXITCODE = 0
+          } else {
+            throw "unsupported runtime publication probe state: $($probe.state)"
           }
 
       - name: Resolve existing immutable runtime manifest
@@ -259,9 +265,16 @@ jobs:
           $manifest = 'artifacts/ar11-runtime-component/runtime-manifest.json'
           $size = (Get-Item -LiteralPath $archive).Length
           Write-Host "Publishing exact immutable runtime component $env:RUNTIME_RELEASE_ID ($size bytes)."
-          gh release create "$env:RUNTIME_RELEASE_ID" --repo "$env:GITHUB_REPOSITORY" --target "$env:SOURCE_SHA" --title "$env:RUNTIME_RELEASE_ID" --notes "Immutable Windows runtime component derived from exact declared runtime inputs."
-          gh release upload "$env:RUNTIME_RELEASE_ID" --repo "$env:GITHUB_REPOSITORY" "$archive" "$manifest"
-          Write-Host "Runtime component publication completed: $env:RUNTIME_RELEASE_ID"
+          python scripts/github-release-publication.py publish `
+            --repository "$env:GITHUB_REPOSITORY" `
+            --release-id "$env:RUNTIME_RELEASE_ID" `
+            --target "$env:SOURCE_SHA" `
+            --title "$env:RUNTIME_RELEASE_ID" `
+            --notes "Immutable Windows runtime component derived from exact declared runtime inputs." `
+            --asset "$archive" `
+            --asset "$manifest"
+          if ($LASTEXITCODE -ne 0) { throw 'runtime component publication failed' }
+          Write-Host "Runtime component publication completed or exact replay proved: $env:RUNTIME_RELEASE_ID"
 
       - name: Observe and verify exact durable runtime component
         shell: pwsh
@@ -303,6 +316,7 @@ jobs:
           name: ar11-runtime-component-${{ github.sha }}
           path: |
             artifacts/ar11-runtime-component/runtime-input-identity.json
+            artifacts/ar11-runtime-component/runtime-release-probe.json
             artifacts/ar11-runtime-component/runtime-manifest.json
             artifacts/ar11-runtime-component/runtime-component-observation.json
           if-no-files-found: error
@@ -533,22 +547,25 @@ jobs:
           cp "$RELEASE_DIR/windows/windows-provenance-v1.json" "$asset_dir/windows-provenance-v1.json"
           cp "$RELEASE_DIR/windows-delivery-manifest.json" "$asset_dir/windows-delivery-manifest.json"
           test "$(find "$asset_dir" -maxdepth 1 -type f | wc -l)" -eq 8
-          if gh release view "$RELEASE_ID" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            existing="$RUNNER_TEMP/existing-release"
-            mkdir -p "$existing"
-            gh release download "$RELEASE_ID" --repo "$GITHUB_REPOSITORY" --dir "$existing"
-            for file in "$asset_dir"/*; do
-              name="$(basename "$file")"
-              test -f "$existing/$name"
-              cmp --silent "$file" "$existing/$name"
-            done
-            test "$(find "$existing" -maxdepth 1 -type f | wc -l)" -eq 8
-          else
-            echo "Publishing aggregate $RELEASE_ID without duplicating the heavy runtime component."
-            gh release create "$RELEASE_ID" --repo "$GITHUB_REPOSITORY" --target "$SOURCE_SHA" --title "$RELEASE_ID" --notes "Immutable Release Set v3 built once from accepted main $SOURCE_SHA."
-            gh release upload "$RELEASE_ID" --repo "$GITHUB_REPOSITORY" "$asset_dir"/*
-            echo "Aggregate Release Set publication completed: $RELEASE_ID"
-          fi
+
+          python -m py_compile scripts/github-release-publication.py
+          python scripts/github-release-publication.py self-test
+          echo "Publishing aggregate $RELEASE_ID without duplicating the heavy runtime component."
+          python scripts/github-release-publication.py publish \
+            --repository "$GITHUB_REPOSITORY" \
+            --release-id "$RELEASE_ID" \
+            --target "$SOURCE_SHA" \
+            --title "$RELEASE_ID" \
+            --notes "Immutable Release Set v3 built once from accepted main $SOURCE_SHA." \
+            --asset "$asset_dir/release-set.json" \
+            --asset "$asset_dir/capability-policy-v1.json" \
+            --asset "$asset_dir/control-plane.tar" \
+            --asset "$asset_dir/secret-resolver.tar" \
+            --asset "$asset_dir/profile-bridge.zip" \
+            --asset "$asset_dir/windows-sbom-v1.json" \
+            --asset "$asset_dir/windows-provenance-v1.json" \
+            --asset "$asset_dir/windows-delivery-manifest.json"
+          echo "Aggregate Release Set publication completed or exact replay proved: $RELEASE_ID"
 
       - name: Upload metadata-only CI evidence
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
