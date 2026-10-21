@@ -72,3 +72,24 @@ Cloudflare Access подтверждает identity, но не выдает reso
 standalone deployment обслуживает одну организацию. Добавление второго tenant
 требует отдельного D1 isolation/sharding ADR; при CRM integration PostgreSQL
 adapter добавляет `FORCE ROW LEVEL SECURITY` без изменения domain semantics.
+
+## Initial organization setup
+
+The first organization is initialized through the existing identity ceremony owner.
+Cloudflare Access verifies the caller; it does not itself grant organization ownership.
+`INITIAL_OWNER_EMAIL` pre-authorizes exactly one verified contact for initial setup.
+Missing, malformed or nonmatching configuration/verified contact disables bootstrap.
+The value belongs to the target's reviewed configuration, never to browser input or Git.
+
+The ordinary setup request contains only the organization display name. The server
+derives the initial tenant from the accepted Access issuer/audience, and derives actor
+and identity identifiers from that target and the verified subject. Stable identifiers
+preserve retry and concurrent-first-request safety without a second bootstrap registry.
+The existing empty-boundary/idempotency checks and atomic tenant, identity, owner,
+audit and outbox transaction remain authoritative. A suspended/revoked owner cannot
+regain access by repeating setup. Initial setup cannot create another organization.
+
+The authenticated tenant-context projection reports setup eligibility. An eligible
+identity with no organization sees a name field and Create organization. Other
+identities see an access-required explanation; the UI never guesses a tenant or grants
+access locally. Successful setup refreshes that same authorized context/session path.
