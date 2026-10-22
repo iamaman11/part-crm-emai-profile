@@ -399,6 +399,17 @@ mod tests {
             &mut control,
             &mut downloader,
         )?;
+        // The next open selects this same server generation and must use its local materialization.
+        ensure_authoritative_generation(
+            &fixture.root,
+            &fixture.tenant_id,
+            &fixture.profile_id,
+            &fixture.generation_id,
+            &mut control,
+            &mut downloader,
+        )?;
+        assert_eq!(downloader.calls, 1);
+        assert_eq!(control.opening_calls, 1);
         let workspace = fixture.root.open_generation(
             &fixture.tenant_id,
             &fixture.profile_id,

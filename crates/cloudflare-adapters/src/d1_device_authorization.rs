@@ -2,7 +2,7 @@ use application_ports::device_jobs::{
     DeviceJobAuthorizationPort, DeviceJobCapability, DeviceJobPortError, DeviceJobPortErrorClass,
 };
 use device_domain::DeviceJobTarget;
-use profile_platform_primitives::ActorContext;
+use profile_platform_primitives::{ActorContext, DeviceId, ProfileId, UnixMillis};
 use serde::Deserialize;
 use worker::d1::D1Database;
 use worker::query;
@@ -34,6 +34,33 @@ WHERE authorization.tenant_id = ?
   )
 "#;
 
+const ADMIT_PROFILE_DEVICE: &str = r#"
+INSERT INTO device_authorizations (
+    tenant_id, device_id, profile_id, generation_id, version, status,
+    evidence_reference, authorized_by_actor_id, updated_by_actor_id,
+    authorized_at_ms, updated_at_ms, revoked_at_ms
+)
+SELECT profile.tenant_id, binding.device_id, profile.profile_id, generation.generation_id,
+    1, 'ACTIVE', 'r2sha256:' || generation.container_digest, member.actor_id, member.actor_id,
+    ?4, ?4, NULL
+FROM browser_profiles AS profile
+JOIN profile_generations AS generation ON generation.tenant_id = profile.tenant_id
+ AND generation.profile_id = profile.profile_id AND generation.generation_id = profile.active_generation_id
+JOIN memberships AS member ON member.tenant_id = profile.tenant_id AND member.actor_id = ?2
+JOIN device_actor_bindings AS binding ON binding.tenant_id = member.tenant_id AND binding.actor_id = member.actor_id
+WHERE profile.tenant_id = ?1 AND profile.profile_id = ?3
+ AND profile.status = 'READY' AND generation.status = 'VERIFIED'
+ AND generation.verification_reference IS NOT NULL
+ AND member.status = 'ACTIVE' AND binding.status = 'ACTIVE' AND binding.device_id = ?5
+ AND binding.evidence_reference LIKE 'p256_spki_der:%'
+ AND (member.role = 'TENANT_OWNER' OR (member.role = 'MEMBER' AND EXISTS (
+     SELECT 1 FROM profile_grants AS grant WHERE grant.tenant_id = profile.tenant_id
+       AND grant.profile_id = profile.profile_id AND grant.actor_id = member.actor_id
+       AND grant.role = 'PROFILE_OPERATOR'
+ )))
+ON CONFLICT(tenant_id, device_id, profile_id, generation_id) DO NOTHING
+"#;
+
 #[derive(Deserialize)]
 struct AuthorizationRow {
     grant_version: i64,
@@ -48,6 +75,31 @@ impl D1DeviceJobAuthorization {
     #[must_use]
     pub const fn new(database: D1Database) -> Self {
         Self { database }
+    }
+    /// Materialize execution evidence from current user/Profile/device permission. No overwrite of
+    /// revoked evidence and no permission transfer from assignment, creator or previous writer.
+    pub async fn admit_profile_device(
+        &self,
+        actor: &ActorContext,
+        profile: &ProfileId,
+        device: &DeviceId,
+        now: UnixMillis,
+    ) -> Result<(), DeviceJobPortError> {
+        let now = i64::try_from(now.value()).map_err(|_| integrity_failure())?;
+        query!(
+            &self.database,
+            ADMIT_PROFILE_DEVICE,
+            actor.tenant_scope().tenant_id().as_str(),
+            actor.actor_id().as_str(),
+            profile.as_str(),
+            now,
+            device.as_str()
+        )
+        .map_err(map_worker_error)?
+        .run()
+        .await
+        .map_err(map_worker_error)?;
+        Ok(())
     }
 }
 

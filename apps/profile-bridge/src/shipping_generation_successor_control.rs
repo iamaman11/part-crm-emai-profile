@@ -205,7 +205,7 @@ where
     Ok(response.body().to_vec())
 }
 
-fn decode_upload_authorization<S>(
+pub(crate) fn decode_upload_authorization<S>(
     decoded: BridgeGenerationUploadCapabilityResponse,
 ) -> Result<GenerationUploadAuthorization, GenerationSuccessorControlError<S>> {
     match decoded.state.as_str() {

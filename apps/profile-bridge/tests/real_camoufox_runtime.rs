@@ -1,7 +1,7 @@
 #![forbid(unsafe_code)]
 
 use bridge_domain::{BridgePortError, CamouhostMessage, CamouhostPort};
-use browser_execution_domain::{BrowserIdentityManifest, MaterializationBinding};
+use browser_execution_domain::MaterializationBinding;
 use profile_bridge::browser_execution::persist_materialization_binding;
 use profile_bridge::camouhost_process::{
     ManagedCamouhostConfig, ManagedCamouhostProcess, RuntimeBindingSlot, RuntimeDisplayMode,
@@ -9,9 +9,7 @@ use profile_bridge::camouhost_process::{
 use profile_bridge::local_profile::{BridgeWorkspaceLock, MaterializationRoot};
 use profile_bridge::operator_flow::BrowserLaunchPreflightPort;
 use profile_bridge::runtime_bundle::{ApprovedRuntimeBundle, RuntimeSessionOrchestrator};
-use profile_bridge::shipping_preflight::{
-    ShippingBrowserLaunchPreflight, profile_stable_identity_from_config_bytes,
-};
+use profile_bridge::shipping_preflight::ShippingBrowserLaunchPreflight;
 use profile_platform_primitives::{DeviceId, GenerationId, ProfileId, SessionId, TenantId};
 use runtime_bundle_domain::{
     BundleRelativePath, InventoryEntry, RuntimeInventory, RuntimeManifest, RuntimePlatform,
@@ -21,7 +19,6 @@ use sha2::{Digest, Sha256};
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 const ENABLE_ENV: &str = "AR10_REAL_CAMOUFOX";
@@ -29,8 +26,6 @@ const PYTHON_ENV: &str = "AR10_PYTHON";
 const RUNTIME_ROOT_ENV: &str = "AR10_RUNTIME_ROOT";
 const HEADLESS_ENV: &str = "AR10_REAL_CAMOUFOX_HEADLESS";
 const LOWER_HEX: &[u8; 16] = b"0123456789abcdef";
-const MAX_DIAGNOSTIC_SYMLINKS: usize = 32;
-const CONFIG_NAME: &str = "camoufox-config.json";
 const MANAGED_COLD_LAUNCH_ATTEMPTS: usize = 3;
 
 struct StageTracingCamouhost<C> {
@@ -94,27 +89,6 @@ fn digest_file(path: &Path) -> Result<(u64, String), Box<dyn std::error::Error>>
     Ok((metadata.len(), sha256_hex(&bytes)))
 }
 
-fn json_field(report: &str, field: &str) -> Result<String, Box<dyn std::error::Error>> {
-    let prefix = format!("\"{field}\":\"");
-    let start = report
-        .find(&prefix)
-        .ok_or("candidate materialization report field is missing")?
-        + prefix.len();
-    let rest = &report[start..];
-    let end = rest
-        .find('"')
-        .ok_or("candidate materialization report field is unterminated")?;
-    let value = &rest[..end];
-    if value.len() != 64
-        || !value
-            .bytes()
-            .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
-    {
-        return Err("candidate materialization digest is invalid".into());
-    }
-    Ok(value.to_owned())
-}
-
 fn inventory_digest(entries: &[(String, u64, String)]) -> String {
     let mut canonical = String::from("[");
     for (index, (path, length, sha256)) in entries.iter().enumerate() {
@@ -175,35 +149,6 @@ fn approved_runtime(
     )?)
 }
 
-fn collect_symlink_paths(
-    root: &Path,
-    current: &Path,
-    output: &mut Vec<String>,
-) -> Result<(), Box<dyn std::error::Error>> {
-    if output.len() >= MAX_DIAGNOSTIC_SYMLINKS {
-        return Ok(());
-    }
-    let mut children = fs::read_dir(current)?.collect::<Result<Vec<_>, _>>()?;
-    children.sort_by_key(fs::DirEntry::file_name);
-    for child in children {
-        if output.len() >= MAX_DIAGNOSTIC_SYMLINKS {
-            break;
-        }
-        let path = child.path();
-        let metadata = fs::symlink_metadata(&path)?;
-        if metadata.file_type().is_symlink() {
-            output.push(
-                path.strip_prefix(root)?
-                    .to_string_lossy()
-                    .replace('\\', "/"),
-            );
-        } else if metadata.is_dir() {
-            collect_symlink_paths(root, &path, output)?;
-        }
-    }
-    Ok(())
-}
-
 fn root_path() -> Result<PathBuf, Box<dyn std::error::Error>> {
     let nonce = SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos();
     Ok(env::temp_dir().join(format!(
@@ -215,8 +160,6 @@ fn root_path() -> Result<PathBuf, Box<dyn std::error::Error>> {
 fn run_managed_cold_launch_cycle() -> Result<(), Box<dyn std::error::Error>> {
     let python = PathBuf::from(env::var(PYTHON_ENV)?).canonicalize()?;
     let runtime_root = PathBuf::from(env::var(RUNTIME_ROOT_ENV)?).canonicalize()?;
-    let real_runtime = runtime_root.join("camouhost/real.py");
-    let runtime_lock = runtime_root.join("camouhost/runtime-lock.json");
     let root_path = root_path()?;
     let root = MaterializationRoot::open_or_create(&root_path)?;
     let tenant = TenantId::parse("tenant_01JAR10REAL")?;
@@ -232,47 +175,16 @@ fn run_managed_cold_launch_cycle() -> Result<(), Box<dyn std::error::Error>> {
         _ => return Err(format!("{HEADLESS_ENV} must be exactly false or virtual").into()),
     };
 
-    let output = Command::new(&python)
-        .arg(&real_runtime)
-        .arg("--materialize-identity")
-        .arg(workspace.path())
-        .env("CAMOUHOST_RUNTIME_LOCK", &runtime_lock)
-        .env("CAMOUHOST_HEADLESS_MODE", &headless)
-        .output()?;
-    if !output.status.success() {
-        return Err(format!(
-            "real Camoufox candidate materialization failed: {}",
-            String::from_utf8_lossy(&output.stderr)
-        )
-        .into());
-    }
-    let report = String::from_utf8(output.stdout)?;
-    let config_sha256 = json_field(&report, "fingerprint_config_sha256")?;
-    let probe_sha256 = json_field(&report, "profile_stable_probe_sha256")?;
-    let runtime_lock_sha256 = json_field(&report, "runtime_lock_sha256")?;
-    let (_, actual_runtime_lock_sha256) = digest_file(&runtime_lock)?;
-    if runtime_lock_sha256 != actual_runtime_lock_sha256 {
-        return Err("candidate report runtime-lock identity drifted".into());
-    }
-
-    let mut symlinks = Vec::new();
-    collect_symlink_paths(workspace.path(), workspace.path(), &mut symlinks)?;
-    if !symlinks.is_empty() {
-        eprintln!("AR10_DIAGNOSTIC_SYMLINKS={symlinks:?}");
-    }
-
     let bundle = approved_runtime(&runtime_root)?;
-    let config_bytes = fs::read(workspace.path().join(CONFIG_NAME))?;
-    let typed_identity = profile_stable_identity_from_config_bytes(&config_bytes)?;
-    let browser_identity = BrowserIdentityManifest::new(
-        2,
-        "profile-stability-v1",
-        bundle.manifest().runtime_version(),
-        bundle.manifest().inventory_sha256().as_str(),
-        format!("profile-stability-v1-probe-{probe_sha256}"),
-        config_sha256,
-        typed_identity,
+    let config = ManagedCamouhostConfig::new(
+        python.clone(),
+        runtime_root.clone(),
+        display_mode,
+        None,
+        None,
     )?;
+    let browser_identity = config.materialize_initial_identity(&workspace, &bundle)?;
+
     let binding = MaterializationBinding::new(
         tenant,
         profile,

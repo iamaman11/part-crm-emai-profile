@@ -21,6 +21,7 @@ JOIN memberships AS membership
 WHERE binding.tenant_id = ?
   AND binding.actor_id = ?
   AND binding.status = 'ACTIVE'
+  AND (? IS NULL OR binding.device_id = ?)
 ORDER BY binding.version DESC
 LIMIT 2
 "#;
@@ -54,12 +55,22 @@ struct MachineBindingRow {
 
 pub struct D1AuthenticatedDevice {
     database: D1Database,
+    selected_device: Option<DeviceId>,
 }
 
 impl D1AuthenticatedDevice {
     #[must_use]
     pub const fn new(database: D1Database) -> Self {
-        Self { database }
+        Self {
+            database,
+            selected_device: None,
+        }
+    }
+
+    #[must_use]
+    pub fn select_device(mut self, device_id: DeviceId) -> Self {
+        self.selected_device = Some(device_id);
+        self
     }
 
     /// Resolve an edge-verified mTLS client certificate through the existing device-principal
@@ -113,7 +124,9 @@ impl AuthenticatedDevicePort for D1AuthenticatedDevice {
             &self.database,
             LOAD_ACTIVE_DEVICE_BINDING,
             actor.tenant_scope().tenant_id().as_str(),
-            actor.actor_id().as_str()
+            actor.actor_id().as_str(),
+            self.selected_device.as_ref().map(DeviceId::as_str),
+            self.selected_device.as_ref().map(DeviceId::as_str)
         )
         .map_err(map_worker_error)?
         .all()

@@ -2,6 +2,7 @@
 
 pub mod coordinator_ingress;
 pub mod error;
+pub mod generation_initialization;
 pub mod generations;
 pub mod identity_acl;
 pub mod profile_assignments;

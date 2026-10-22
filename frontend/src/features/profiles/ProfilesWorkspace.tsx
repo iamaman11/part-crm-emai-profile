@@ -1,3 +1,5 @@
+import { openBrowserProfile } from './api';
+import { newIdempotencyKey } from '../../shared/api/idempotency';
 import { useMutation } from '@tanstack/react-query';
 import { useEffect, useState, type FormEvent } from 'react';
 import { useTenant } from '../../app/TenantContext';
@@ -43,6 +45,7 @@ export function ProfilesWorkspace({
   const [generation, setGeneration] = useState<GenerationProjection | null>(null);
   const [coordinator, setCoordinator] = useState<CoordinatorResponse | null>(null);
 
+  const launch = useMutation({ mutationFn: () => openBrowserProfile(tenantId, profileId, newIdempotencyKey()) });
   const lookup = useMutation({
     mutationFn: (id: string) => getProfile(tenantId, id),
     onSuccess: (data) => setProfile(data ?? null),
@@ -108,6 +111,12 @@ export function ProfilesWorkspace({
     if (tenantId && nextProfileId) lookup.mutate(nextProfileId);
   }, [tenantId, selectedProfileId]);
 
+  useEffect(() => {
+    const refresh = () => { if (tenantId && selectedProfileId) lookup.mutate(selectedProfileId); };
+    globalThis.addEventListener('focus', refresh);
+    return () => globalThis.removeEventListener('focus', refresh);
+  }, [tenantId, selectedProfileId]);
+
   const enabled = tenantId.length > 0;
   const profileLoaded = enabled && profileId.length > 0 && profile !== null;
 
@@ -131,6 +140,10 @@ export function ProfilesWorkspace({
         {selectedProfileId && !lookup.isPending && !profile && !lookup.error && (
           <p>The selected profile is not visible to the active actor.</p>
         )}
+        {profile && <>
+          <button type="button" disabled={launch.isPending || !['DRAFT', 'READY'].includes(profile.status)} onClick={() => launch.mutate()}>{launch.isPending ? 'Opening…' : 'Open browser'}</button>
+          <StatusMessage state={launch.error ?? (launch.isPending ? 'Preparing and opening your profile…' : null)} />
+        </>}
         {profile && (
           <dl className="projection">
             <div><dt>ID</dt><dd>{profile.profileId}</dd></div>
@@ -147,10 +160,12 @@ export function ProfilesWorkspace({
         <p>Active members may create a profile. Access is granted only to the creator; client assignment does not grant profile access.</p>
         <form className="stack-form" onSubmit={(event) => {
           event.preventDefault();
-          create.mutate(field(new FormData(event.currentTarget), 'profileId'));
+          create.mutate(field(new FormData(event.currentTarget), 'profileId') || `profile_${globalThis.crypto.randomUUID().replaceAll('-', '')}`);
         }}>
-          <label htmlFor="profile-create-id">Profile ID</label>
-          <input id="profile-create-id" name="profileId" placeholder="profile_..." required disabled={!enabled} />
+          <details><summary>Advanced: custom identifier</summary>
+            <label htmlFor="profile-create-id">Profile ID</label>
+            <input id="profile-create-id" name="profileId" placeholder="Generated automatically" disabled={!enabled} />
+          </details>
           <button type="submit" disabled={!enabled || create.isPending}>Create</button>
         </form>
         <StatusMessage state={create.error ?? (create.data ? `${create.data.resultCode}: ${create.data.resourceId}` : null)} />
@@ -168,6 +183,7 @@ export function ProfilesWorkspace({
         </dl>
       </section>
 
+      <details className="panel full-span"><summary>Administration and diagnostics</summary>
       <section className="panel">
         <span className="eyebrow">Explicit profile ACL</span>
         <h2>Profile grant</h2>
@@ -245,6 +261,7 @@ export function ProfilesWorkspace({
           </>
         )}
       </section>
+      </details>
     </div>
   );
 }

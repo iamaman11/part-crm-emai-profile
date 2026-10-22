@@ -58,6 +58,9 @@ pub struct GenerationSealingMaterial {
 }
 
 impl GenerationSealingMaterial {
+    pub(crate) fn into_parts(self) -> (GenerationDek, NoncePrefix, u32) {
+        (self.dek, self.nonce_prefix, self.chunk_size)
+    }
     #[must_use]
     pub const fn new(dek: GenerationDek, nonce_prefix: NoncePrefix, chunk_size: u32) -> Self {
         Self {

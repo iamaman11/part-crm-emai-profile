@@ -4,6 +4,7 @@ pub mod client_mail_send_api;
 pub mod client_registry_api;
 pub mod coordinator_api;
 pub mod device_application_api;
+pub mod generation_initialization_api;
 pub mod generation_key_api;
 pub mod generation_reopen_api;
 pub mod mailbox_api;

@@ -5,6 +5,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         [kind] if kind == "device-registration" => serde_json::to_string_pretty(
             &control_plane_contract::device_application_api::registration_openapi_fragment(),
         )?,
+        [kind] if kind == "profile-launch" => serde_json::to_string_pretty(
+            &control_plane_contract::profile_launch_api::openapi_fragment(),
+        )?,
         _ => return Err("unsupported OpenAPI export".into()),
     };
     print!("{output}");

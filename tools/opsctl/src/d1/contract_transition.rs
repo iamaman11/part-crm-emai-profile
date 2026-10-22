@@ -104,9 +104,13 @@ fn validate_release_contract(
             "contract-transition is bounded to the Catalog component",
         ));
     }
-    if authority.current_repository_revision != CONTRACT_REVISION {
+    if !authority
+        .ordered_history
+        .iter()
+        .any(|revision| revision == CONTRACT_REVISION)
+    {
         return Err(D1Error::new(
-            "Catalog repository authority does not end at the governed 0035 CONTRACT",
+            "Catalog repository authority lacks the governed 0035 CONTRACT",
         ));
     }
     if release.target_schema_revision != PREDECESSOR_REVISION
@@ -121,7 +125,8 @@ fn validate_release_contract(
     }
     let contract = authority
         .post_epoch
-        .last()
+        .iter()
+        .find(|contract| contract.migration_file == CONTRACT_REVISION)
         .ok_or_else(|| D1Error::new("Catalog 0035 CONTRACT metadata is missing"))?;
     let mut preconditions = contract.contract_preconditions.clone();
     preconditions.sort();
@@ -331,7 +336,8 @@ pub(super) fn evaluate(input: ContractTransitionInput<'_>) -> Result<String, D1E
     let contract = input
         .authority
         .post_epoch
-        .last()
+        .iter()
+        .find(|contract| contract.migration_file == CONTRACT_REVISION)
         .ok_or_else(|| D1Error::new("Catalog 0035 CONTRACT metadata is missing"))?;
     let output = json!({
         "schema_version": 1,

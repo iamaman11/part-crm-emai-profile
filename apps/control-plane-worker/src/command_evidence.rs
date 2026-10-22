@@ -27,6 +27,24 @@ pub fn from_request<T: Serialize>(
     evidence(actor, idempotency_key, payload_fingerprint)
 }
 
+pub fn from_profile_initialization<T: Serialize>(
+    request: &Request,
+    actor: &ActorContext,
+    generation_id: &profile_platform_primitives::GenerationId,
+    payload: &T,
+    launch: bool,
+) -> Result<CommandExecutionEvidence> {
+    let material = format!(
+        "profile-initialization-v1\n{}\n{}\n{}\n{launch}",
+        actor.tenant_scope().tenant_id().as_str(),
+        actor.actor_id().as_str(),
+        generation_id.as_str()
+    );
+    let key = IdempotencyKey::parse(format!("initial_{}", hex_digest(material.as_bytes())))
+        .map_err(|error| Error::RustError(error.to_string()))?;
+    evidence(actor, key, fingerprint_typed_request(request, payload)?)
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn from_standards_password_onboarding(
     request: &Request,

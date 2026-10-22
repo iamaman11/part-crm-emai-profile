@@ -104,6 +104,14 @@ fn bridge_profile_generation_machine_route(method: &str, path: &str) -> bool {
             _,
             "profiles",
             _,
+            "generation-initialization"
+        ] | [
+            "bridge",
+            "v1",
+            "tenants",
+            _,
+            "profiles",
+            _,
             "generation-successor",
             "upload-capability" | "sealing-material" | "commit"
         ] | [

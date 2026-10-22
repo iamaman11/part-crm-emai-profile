@@ -111,3 +111,23 @@ Pure fake-port tests independently prove mutation authorization, metadata valida
 No real object-store redesign, generation lifecycle feature, coordinator/Bridge expansion, public API feature change, remaining governance migration, or production-readiness promotion is part of this slice.
 
 `production_ready=false` remains unchanged.
+
+## Ordinary first opening
+
+The five technical mutation APIs above remain owner-only. Ordinary Profile opening does not call them
+as an owner or ask users to supply generation IDs, digests or registry commands. The existing Profile
+Operate permission admits an active owner or an active member with an explicit PROFILE_OPERATOR grant.
+The authenticated native device then uses the closed initialization protocol under the existing machine
+ingress. DRAFT preparation creates a real Camouhost identity, a base-less encrypted snapshot and an
+immutable object; exact verification precedes the atomic register/verify/device-evidence/activate batch.
+Migration0036 adds initialization evidence to the existing command journal and rechecks membership,
+Profile grant, device and expected DRAFT version in the database. No second generation registry exists.
+
+For READY profiles the same first request continues to the existing launch-authority owner without
+creating a snapshot or uploading data. Every authorized user can open through their own registered
+computer. Generation-specific device rows are derived execution evidence, never a creator/last-writer
+business permission. CNG device trust, revocation, current Profile ACL and lease/fence remain mandatory.
+
+A confirmed copy proves consistent encrypted browser data and an authoritative commit, not successful
+website login/account status. Failed saves retain the previous confirmed generation. User-labelled
+control copies remain outside this bounded implementation.

@@ -134,6 +134,16 @@ async fn execute_authorized(
     role: MembershipRole,
     bridge_device: Option<&DeviceId>,
 ) -> Result<Response> {
+    let bridge_operation = bridge_device.and_then(|_| {
+        crate::profile_generation_successor_ingress::operation(&request.path(), request.method())
+    });
+    if let Some(device_id) = bridge_device
+        && bridge_operation == Some(crate::profile_generation_successor_ingress::BridgeGenerationMachineOperation::Initialize)
+    {
+        // A DRAFT profile has no coordinator lease or base generation. Initialization owns its
+        // Profile Operate check and atomic DRAFT/version/device validation, after CNG authentication.
+        return crate::profile_generation_successor_ingress::dispatch_authorized(request, env, profile_id, actor, device_id, crate::profile_generation_successor_ingress::BridgeGenerationMachineOperation::Initialize, role).await;
+    }
     let application = CloudflareCoordinatorIngressApplication::new(
         env,
         D1_CATALOG_BINDING,
@@ -145,13 +155,10 @@ async fn execute_authorized(
     };
 
     if let Some(device_id) = bridge_device
-        && let Some(operation) = crate::profile_generation_successor_ingress::operation(
-            &request.path(),
-            request.method(),
-        )
+        && let Some(operation) = bridge_operation
     {
         return crate::profile_generation_successor_ingress::dispatch_authorized(
-            request, env, profile_id, actor, device_id, operation,
+            request, env, profile_id, actor, device_id, operation, role,
         )
         .await;
     }

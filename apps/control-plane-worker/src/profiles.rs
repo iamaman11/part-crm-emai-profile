@@ -1,4 +1,4 @@
-mod profile_launch;
+pub(crate) mod profile_launch;
 mod profile_launch_composition;
 
 use crate::access_session::{

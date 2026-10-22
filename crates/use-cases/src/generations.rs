@@ -406,7 +406,7 @@ fn fresh_outcome(
     }
 }
 
-fn map_port_error(error: GenerationPortError) -> GenerationOperationError {
+pub(crate) fn map_port_error(error: GenerationPortError) -> GenerationOperationError {
     match error.class() {
         GenerationPortErrorClass::NotFound => GenerationOperationError::NotFound,
         GenerationPortErrorClass::VersionConflict => GenerationOperationError::VersionConflict,

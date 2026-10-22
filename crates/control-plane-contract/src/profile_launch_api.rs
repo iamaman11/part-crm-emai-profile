@@ -11,6 +11,13 @@ pub const BRIDGE_PROFILE_LAUNCH_REDEMPTION_PATH: &str = "/bridge/v1/profile-laun
 pub const BRIDGE_PROFILE_COORDINATOR_PATH_TEMPLATE: &str =
     "/bridge/v1/tenants/{tenantId}/profiles/{profileId}/coordinator";
 
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ProfileLaunchIntentProjectionV2 {
+    pub schema_version: u8,
+    pub launch_uri: String,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProfileLaunchProjection {
@@ -99,10 +106,10 @@ pub fn openapi_fragment() -> Value {
                     ],
                     "responses": {
                         "200": {
-                            "description": "Bounded single-use Profile Bridge launch authority",
+                            "description": "Version 2 native open intent; machine authentication and current profile authorization precede claim issuance",
                             "content": {
                                 "application/json": {
-                                    "schema": {"$ref": "#/components/schemas/ProfileLaunchProjection"}
+                                    "schema": {"$ref": "#/components/schemas/ProfileLaunchIntentProjectionV2"}
                                 }
                             }
                         },
@@ -117,6 +124,14 @@ pub fn openapi_fragment() -> Value {
         },
         "components": {
             "schemas": {
+                "ProfileLaunchIntentProjectionV2": {
+                    "type": "object", "additionalProperties": false,
+                    "required": ["schemaVersion", "launchUri"],
+                    "properties": {
+                        "schemaVersion": {"type": "integer", "enum": [2]},
+                        "launchUri": {"type": "string", "pattern": "^profilebridge://open/v1/[A-Za-z0-9_-]{8,96}/[A-Za-z0-9_-]{8,96}/[A-Za-z0-9_-]{8,96}/[1-9][0-9]{0,18}$"}
+                    }
+                },
                 "ProfileLaunchProjection": {
                     "type": "object",
                     "additionalProperties": false,

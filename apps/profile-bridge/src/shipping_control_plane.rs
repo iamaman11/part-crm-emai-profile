@@ -504,21 +504,7 @@ where
             )
             .map_err(|_| Self::Error::Transport);
         body.fill(0);
-        let response = decode_sealing_material_response(response?)?;
-        let (key_id, dek_hex, nonce_prefix_hex, chunk_size) = response.into_parts();
-        if chunk_size != GENERATION_SEALING_CHUNK_BYTES {
-            return Err(Self::Error::InvalidResponse);
-        }
-        let key_id = KeyId::parse(key_id).map_err(|_| Self::Error::InvalidResponse)?;
-        GenerationRootKeyVersion::from_key_id(&key_id).map_err(|_| Self::Error::InvalidResponse)?;
-        let dek = decode_secret_dek(dek_hex.as_str()).ok_or(Self::Error::InvalidResponse)?;
-        let nonce_prefix =
-            decode_lower_hex::<16>(&nonce_prefix_hex).ok_or(Self::Error::InvalidResponse)?;
-        Ok(GenerationSealingMaterial::new(
-            GenerationDek::new(key_id, dek.0),
-            NoncePrefix::new(nonce_prefix),
-            chunk_size,
-        ))
+        sealing_material_from_response(response?)
     }
 }
 
@@ -971,6 +957,28 @@ fn next_session_id() -> Result<SessionId, ShippingControlPlaneError> {
 
 fn next_idempotency_key() -> Result<IdempotencyKey, ShippingControlPlaneError> {
     IdempotencyKey::parse(unique_value("idem")?).map_err(|_| ShippingControlPlaneError::Clock)
+}
+
+pub(crate) fn sealing_material_from_response(
+    response: MachineHttpResponse,
+) -> Result<GenerationSealingMaterial, ShippingControlPlaneError> {
+    let response = decode_sealing_material_response(response)?;
+    let (key_id, dek_hex, nonce_prefix_hex, chunk_size) = response.into_parts();
+    if chunk_size != GENERATION_SEALING_CHUNK_BYTES {
+        return Err(ShippingControlPlaneError::InvalidResponse);
+    }
+    let key_id = KeyId::parse(key_id).map_err(|_| ShippingControlPlaneError::InvalidResponse)?;
+    GenerationRootKeyVersion::from_key_id(&key_id)
+        .map_err(|_| ShippingControlPlaneError::InvalidResponse)?;
+    let dek =
+        decode_secret_dek(dek_hex.as_str()).ok_or(ShippingControlPlaneError::InvalidResponse)?;
+    let nonce_prefix = decode_lower_hex::<16>(&nonce_prefix_hex)
+        .ok_or(ShippingControlPlaneError::InvalidResponse)?;
+    Ok(GenerationSealingMaterial::new(
+        GenerationDek::new(key_id, dek.0),
+        NoncePrefix::new(nonce_prefix),
+        chunk_size,
+    ))
 }
 
 #[cfg(test)]
