@@ -526,6 +526,18 @@ impl D1DeviceApplicationAuthority {
         self.database.batch(vec![statement]).await
     }
 
+    /// Human-facing read: the existing live device authority must also belong to this actor.
+    pub async fn resolve_owned_active_device(
+        &self,
+        actor: &ActorContext,
+        device_id: &DeviceId,
+    ) -> Result<Option<ActiveDeviceAuthorization>> {
+        let device = self
+            .resolve_active_device(actor.tenant_scope().tenant_id(), device_id)
+            .await?;
+        Ok(device.filter(|device| device.actor_id() == actor.actor_id()))
+    }
+
     pub async fn resolve_active_device(
         &self,
         tenant_id: &TenantId,

@@ -11,6 +11,8 @@ pub const DEVICE_SESSION_CHALLENGE_PATH_TEMPLATE: &str =
     "/api/v1/tenants/{tenantId}/devices/{deviceId}/session-challenges";
 pub const DEVICE_SESSION_COLLECTION_PATH_TEMPLATE: &str =
     "/api/v1/tenants/{tenantId}/devices/{deviceId}/sessions";
+pub const DEVICE_REGISTRATION_PATH_TEMPLATE: &str =
+    "/api/v1/tenants/{tenantId}/devices/{deviceId}/registration";
 
 pub const DEVICE_APPLICATION_SESSION_HEADER: &str = "X-Device-Application-Session";
 pub const DEVICE_REQUEST_PROOF_EXPIRES_HEADER: &str = "X-Device-Request-Proof-Expires-Ms";
@@ -124,6 +126,60 @@ pub struct DeviceApplicationSessionProjection {
     pub actor_id: String,
     pub device_id: String,
     pub expires_at_ms: u64,
+}
+
+/// A server-owned active registration, not evidence of local runtime readiness.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DeviceRegistrationProjection {
+    pub tenant_id: String,
+    pub actor_id: String,
+    pub device_id: String,
+    pub binding_version: u64,
+    pub status: DeviceRegistrationStatus,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum DeviceRegistrationStatus {
+    Registered,
+}
+
+/// Browser-query projection of this device capability's Rust wire owner.
+#[must_use]
+pub fn registration_openapi_fragment() -> Value {
+    json!({
+        "paths": {
+            DEVICE_REGISTRATION_PATH_TEMPLATE: {
+                "get": {
+                    "operationId": "getDeviceRegistration",
+                    "security": [{"cloudflareAccessJwt": []}],
+                    "parameters": [tenant_path_parameter(), device_path_parameter(), correlation_header()],
+                    "responses": {
+                        "200": json_response("DeviceRegistrationProjection"),
+                        "404": {"$ref": "#/components/responses/NeutralNotFound"},
+                        "500": {"$ref": "#/components/responses/InternalFailure"},
+                        "503": {"$ref": "#/components/responses/InternalFailure"}
+                    }
+                }
+            }
+        },
+        "components": {
+            "schemas": {
+                "DeviceRegistrationProjection": {
+                    "type": "object", "additionalProperties": false,
+                    "required": ["tenantId", "actorId", "deviceId", "bindingVersion", "status"],
+                    "properties": {
+                        "tenantId": {"type": "string", "minLength": 8, "maxLength": 96, "pattern": "^[A-Za-z0-9_-]+$"},
+                        "actorId": {"type": "string", "minLength": 8, "maxLength": 96, "pattern": "^[A-Za-z0-9_-]+$"},
+                        "deviceId": {"type": "string", "minLength": 8, "maxLength": 96, "pattern": "^[A-Za-z0-9_-]+$"},
+                        "bindingVersion": {"type": "integer", "minimum": 1},
+                        "status": {"type": "string", "enum": ["REGISTERED"]}
+                    }
+                }
+            }
+        }
+    })
 }
 
 #[must_use]
@@ -330,6 +386,26 @@ mod tests {
         P256_SPKI_DER_HEX_LENGTH,
     };
     use serde_json::Value;
+
+    #[test]
+    fn device_registration_is_not_a_runtime_readiness_or_credential_projection()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let value = super::DeviceRegistrationProjection {
+            tenant_id: "tenant_01JTEST".to_owned(),
+            actor_id: "actor_01JTEST".to_owned(),
+            device_id: "device_01JTEST".to_owned(),
+            binding_version: 1,
+            status: super::DeviceRegistrationStatus::Registered,
+        };
+        let mut wire = serde_json::to_value(value)?;
+        assert_eq!(wire["status"], "REGISTERED");
+        for forbidden in ["runtimeReady", "sessionToken", "publicKey", "privateKey"] {
+            assert!(wire.get(forbidden).is_none());
+        }
+        wire["status"] = serde_json::json!("READY");
+        assert!(serde_json::from_value::<super::DeviceRegistrationProjection>(wire).is_err());
+        Ok(())
+    }
 
     #[test]
     fn pairing_create_path_is_a_leaf_sibling_of_human_authorization() {

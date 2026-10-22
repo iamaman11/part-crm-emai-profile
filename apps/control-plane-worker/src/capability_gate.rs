@@ -148,6 +148,7 @@ pub fn route_surface(route: RouteClass, path: &str) -> Option<RuntimeSurface> {
         | RouteClass::MembershipStatusApi
         | RouteClass::DeviceBindingResourceApi
         | RouteClass::DeviceBindingRevokeApi
+        | RouteClass::DeviceRegistrationApi
         | RouteClass::DevicePairingCollectionApi
         | RouteClass::DevicePairingAuthorizationApi
         | RouteClass::DevicePairingCompletionApi

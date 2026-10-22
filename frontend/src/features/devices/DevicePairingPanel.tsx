@@ -1,9 +1,11 @@
 import { useMemo, useState } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import { useTenant } from '../../app/TenantContext';
 import { StatusMessage } from '../../shared/ui/StatusMessage';
 import {
   authorizeDevicePairing,
   getAuthenticatedDevicePairingSession,
+  getDeviceRegistration,
 } from './api';
 
 const OPAQUE_ID_PATTERN = /^[A-Za-z0-9_-]{8,96}$/;
@@ -70,6 +72,35 @@ function validateOpaqueId(value: string): boolean {
   return OPAQUE_ID_PATTERN.test(value);
 }
 
+function RegistrationConfirmation({ tenantId, deviceId }: { tenantId: string; deviceId: string }) {
+  const registration = useQuery({
+    queryKey: ['device-registration', tenantId, deviceId],
+    queryFn: ({ signal }) => getDeviceRegistration(tenantId, deviceId, signal),
+    retry: false,
+    staleTime: 0,
+    refetchOnMount: 'always',
+  });
+  const checking = registration.isPending || registration.isFetching;
+  const confirmed = !checking && !registration.error && registration.data !== undefined;
+
+  return (
+    <section className="panel" aria-label="Device registration confirmation">
+      <span className="eyebrow">Profile Bridge</span>
+      <h3>{checking ? 'Checking device registration' : confirmed ? 'Device registration confirmed' : 'Device registration not confirmed'}</h3>
+      {confirmed ? (
+        <p>This device is registered to your account. Browser components still need a readiness check before profiles can open.</p>
+      ) : (
+        <p>The browser return alone does not confirm a connection. Check registration with the application before continuing.</p>
+      )}
+      <StatusMessage state={registration.error ?? (checking ? 'Checking with the application…' : null)} />
+      {confirmed ? <details><summary>Device details</summary><p>{registration.data?.deviceId}</p></details> : null}
+      <button type="button" disabled={checking} onClick={() => void registration.refetch()}>
+        {checking ? 'Checking…' : 'Check again'}
+      </button>
+    </section>
+  );
+}
+
 export function DevicePairingPanel() {
   const { tenantId } = useTenant();
   const fragment = parseDeviceFragment(window.location.hash);
@@ -88,13 +119,7 @@ export function DevicePairingPanel() {
     return <StatusMessage state="The device pairing callback is invalid." />;
   }
   if (fragment.kind === 'connected') {
-    return (
-      <section className="panel" aria-label="Connected device">
-        <span className="eyebrow">Profile Bridge</span>
-        <h3>This computer is connected</h3>
-        <p>Device identity: <strong>{fragment.deviceId}</strong></p>
-      </section>
-    );
+    return <RegistrationConfirmation tenantId={tenantId} deviceId={fragment.deviceId} />;
   }
 
   const startUri = `profilebridge://pair/start/${tenantId}/${deviceId}`;

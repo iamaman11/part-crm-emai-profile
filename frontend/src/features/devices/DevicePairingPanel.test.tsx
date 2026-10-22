@@ -5,16 +5,19 @@ import { TenantProvider } from '../../app/TenantContext';
 import {
   authorizeDevicePairing,
   getAuthenticatedDevicePairingSession,
+  getDeviceRegistration,
 } from './api';
 import { DevicePairingPanel } from './DevicePairingPanel';
 
 vi.mock('./api', () => ({
   authorizeDevicePairing: vi.fn(),
   getAuthenticatedDevicePairingSession: vi.fn(),
+  getDeviceRegistration: vi.fn(),
 }));
 
 const mockedAuthorizeDevicePairing = vi.mocked(authorizeDevicePairing);
 const mockedGetAuthenticatedDevicePairingSession = vi.mocked(getAuthenticatedDevicePairingSession);
+const mockedGetDeviceRegistration = vi.mocked(getDeviceRegistration);
 
 function renderPanel() {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -117,17 +120,55 @@ describe('DevicePairingPanel', () => {
     expect(window.location.hash).toContain('pairing=');
   });
 
-  it('renders the native completion receipt without exposing a credential', async () => {
+  it('checks a native completion locator against the server before showing registration', async () => {
     window.history.replaceState(
       null,
       '',
       '/devices?tenant=tenant_01JTEST#connected=device_01JTEST',
     );
+    mockedGetDeviceRegistration.mockResolvedValue({
+      tenantId: 'tenant_01JTEST', actorId: 'actor_01JTEST', deviceId: 'device_01JTEST',
+      bindingVersion: 1, status: 'REGISTERED',
+    });
 
     renderPanel();
 
-    expect(await screen.findByText('This computer is connected')).toBeTruthy();
+    expect(await screen.findByText('Device registration confirmed')).toBeTruthy();
     expect(screen.getByText('device_01JTEST')).toBeTruthy();
+    expect(screen.getByText(/Browser components still need a readiness check/)).toBeTruthy();
+    expect(mockedGetDeviceRegistration).toHaveBeenCalledWith('tenant_01JTEST', 'device_01JTEST', expect.any(AbortSignal));
+    expect(mockedAuthorizeDevicePairing).not.toHaveBeenCalled();
+  });
+
+  it('never treats a forged callback or an unavailable registration as success', async () => {
+    window.history.replaceState(null, '', '/devices?tenant=tenant_01JTEST#connected=device_01JTEST');
+    mockedGetDeviceRegistration.mockRejectedValue(new Error('Registration unavailable.'));
+    renderPanel();
+    expect(await screen.findByText('Device registration not confirmed')).toBeTruthy();
+    expect(screen.queryByText('This computer is connected')).toBeNull();
+    expect(screen.queryByText('Device registration confirmed')).toBeNull();
+    expect(mockedAuthorizeDevicePairing).not.toHaveBeenCalled();
+  });
+
+  it('keeps a stalled server check pending rather than inferring connection from a callback', async () => {
+    window.history.replaceState(null, '', '/devices?tenant=tenant_01JTEST#connected=device_01JTEST');
+    mockedGetDeviceRegistration.mockReturnValue(new Promise(() => {}));
+    renderPanel();
+    expect(await screen.findByText('Checking device registration')).toBeTruthy();
+    expect(screen.queryByText('Device registration confirmed')).toBeNull();
+  });
+
+  it('retries only the registration read after an unavailable response', async () => {
+    window.history.replaceState(null, '', '/devices?tenant=tenant_01JTEST#connected=device_01JTEST');
+    mockedGetDeviceRegistration.mockRejectedValueOnce(new Error('Connection unavailable.'));
+    mockedGetDeviceRegistration.mockResolvedValueOnce({
+      tenantId: 'tenant_01JTEST', actorId: 'actor_01JTEST', deviceId: 'device_01JTEST',
+      bindingVersion: 1, status: 'REGISTERED',
+    });
+    renderPanel();
+    fireEvent.click(await screen.findByRole('button', { name: 'Check again' }));
+    expect(await screen.findByText('Device registration confirmed')).toBeTruthy();
+    expect(mockedGetDeviceRegistration).toHaveBeenCalledTimes(2);
     expect(mockedAuthorizeDevicePairing).not.toHaveBeenCalled();
   });
 });
