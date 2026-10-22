@@ -58,6 +58,13 @@ describe('deployed Windows installer through the generated operation', () => {
     await expect(getDeviceInstaller(tenantId)).resolves.toEqual({ schemaVersion: 1, releaseSetId, downloadUrl });
     expect(fetch.mock.calls[0]?.[0]).toBe(`/api/v1/tenants/${tenantId}/devices/installer`);
   });
+  it.each([404, 503])('preserves installer metadata failure %s and correlation', async (status) => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({
+      type: 'https://example.invalid/problems/installer', title: 'Installer unavailable',
+      status, code: status === 404 ? 'not_found' : 'internal_failure', correlation_id: 'corr_01JTEST',
+    }), { status, headers: { 'content-type': 'application/problem+json' } })));
+    await expect(getDeviceInstaller(tenantId)).rejects.toMatchObject({ correlationId: 'corr_01JTEST', status });
+  });
   it.each([
     'https://example.com/installer.exe',
     'https://github.com/iamaman11/part-crm-emai-profile/releases/latest/download/ProfileBridgeSetup.exe',

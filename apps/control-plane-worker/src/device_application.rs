@@ -42,7 +42,12 @@ pub(crate) async fn installer(
         return neutral_not_found(&correlation_hint(request));
     };
     let Some(release_set_id) = context.windows_installer_release_set() else {
-        return dependency_unavailable(actor.actor().correlation_id().as_str());
+        return problem(
+            actor.actor().correlation_id().as_str(),
+            503,
+            "internal_failure",
+            "Windows installer unavailable",
+        );
     };
     let mut response = Response::from_json(
         &control_plane_contract::device_application_api::DeviceInstallerProjectionV1 {
