@@ -222,16 +222,12 @@ fn run_windows(
     ) {
         Ok(value) => value,
         Err(error) => {
-            if let Err(cleanup_error) = cleanup_machine_key(&issue.device_id) {
-                return Err(cleanup_error);
-            }
+            cleanup_machine_key(&issue.device_id)?;
             return Err(error);
         }
     };
     if redeem.device_id != issue.device_id {
-        if let Err(cleanup_error) = cleanup_machine_key(&issue.device_id) {
-            return Err(cleanup_error);
-        }
+        cleanup_machine_key(&issue.device_id)?;
         return Err(HostOpsError::new("enrollment_device_identity_mismatch"));
     }
     let certificate = match install_enrollment_certificate(
@@ -241,9 +237,7 @@ fn run_windows(
     ) {
         Ok(value) => value,
         Err(error) => {
-            if let Err(cleanup_error) = cleanup_machine_key(&issue.device_id) {
-                return Err(cleanup_error);
-            }
+            cleanup_machine_key(&issue.device_id)?;
             return Err(error);
         }
     };
@@ -1150,26 +1144,30 @@ mod tests {
             install_enrollment_certificate, powershell_command, run_command,
         };
         let device_id = format!("device_{}", "a".repeat(32));
-        let csr = create_or_reuse_machine_csr(&device_id)?;
+        let csr = create_or_reuse_machine_csr(&device_id)
+            .map_err(|error| format!("fixture CSR creation: {error}"))?;
         assert!(csr.starts_with("30"));
         let mut command = powershell_command(TEST_PUBLIC_CERTIFICATE_SCRIPT)?;
         command.env("BRIDGE_HOST_OPS_DEVICE_ID", &device_id);
-        let public = run_command(command, None, MAX_CERTIFICATE_DER_HEX_LENGTH + 1_024)?;
+        let public = run_command(command, None, MAX_CERTIFICATE_DER_HEX_LENGTH + 1_024)
+            .map_err(|error| format!("fixture public certificate creation: {error}"))?;
         let Some((fingerprint, leaf)) = public.trim().split_once('\t') else {
             cleanup_machine_key(&device_id)?;
             return Err("invalid test certificate output".into());
         };
-        let certificate = install_enrollment_certificate(&device_id, fingerprint, leaf)?;
+        let certificate = install_enrollment_certificate(&device_id, fingerprint, leaf)
+            .map_err(|error| format!("fixture exact-key certificate installation: {error}"))?;
         assert_eq!(certificate.sha256_fingerprint(), fingerprint);
-        assert_eq!(
-            create_or_reuse_machine_csr(&device_id).unwrap_err().code(),
-            "enrollment_device_already_installed"
-        );
-        assert_eq!(
-            cleanup_machine_key(&device_id).unwrap_err().code(),
-            "enrollment_key_in_use"
-        );
-        super::super::windows::remove_certificate(certificate.sha1_thumbprint())?;
+        assert!(matches!(
+            create_or_reuse_machine_csr(&device_id),
+            Err(error) if error.code() == "enrollment_device_already_installed"
+        ));
+        assert!(matches!(
+            cleanup_machine_key(&device_id),
+            Err(error) if error.code() == "enrollment_key_in_use"
+        ));
+        super::super::windows::remove_certificate(certificate.sha1_thumbprint())
+            .map_err(|error| format!("fixture certificate cleanup: {error}"))?;
         Ok(())
     }
 }

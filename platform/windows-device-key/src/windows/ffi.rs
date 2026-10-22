@@ -1,5 +1,3 @@
-#![allow(unsafe_code)]
-
 use core::ffi::c_void;
 use std::ptr;
 
