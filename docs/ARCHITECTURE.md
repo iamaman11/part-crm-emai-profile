@@ -380,7 +380,13 @@ invariants remain stable beyond the phase:
   implicitly between launches, while runtime upgrades use an explicit candidate-generation migration
   and re-certification path rather than blindly preserving or regenerating individual low-level values;
 - proxy/network behavior is represented by provider-neutral `NetworkIdentityPolicy` and observed through
-  the actual egress route used for the browser job. Policy may constrain country/region, timezone
+  the actual egress route used for the browser job when restrictions require observation. Ordinary
+  profiles explicitly use Direct mode without geographical/network-class restrictions or invented
+  observations. Restricted policy belongs to the authenticated profile generation as the optional
+  `profile-network-policy.json`; its presence, absence and bytes are bound by materialization inventory.
+  An unreadable/malformed policy or a missing required observation never selects Direct. Ambient
+  manual network/proxy configuration is rejected rather than silently discarded. Policy may constrain
+  country/region, timezone
   compatibility, network class and optional ASN/carrier allowlists, and may require session stickiness;
   no architecture rule assumes that per-session mobile-IP rotation is universally safe;
 - a browser writer is considered unavailable whenever local workspace lease/token/epoch, supervised

@@ -4,14 +4,16 @@ use bridge_domain::BridgePortError;
 use browser_execution_domain::{NetworkClass, NetworkIdentityObservation, NetworkIdentityPolicy};
 use profile_platform_primitives::{DeviceId, GenerationId};
 use serde::Deserialize;
-use std::fs;
-use std::path::Path;
+use std::fs::{self, File};
+use std::io::Read;
+use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 const NETWORK_POLICY_SCHEMA: &str = "profile-bridge-network-policy-v1";
 const NETWORK_OBSERVATION_SCHEMA: &str = "profile-bridge-network-observation-v1";
 const MAX_EVIDENCE_BYTES: u64 = 32 * 1024;
 const MAX_EVIDENCE_LIFETIME_MS: u64 = 5 * 60 * 1000;
+pub const PROFILE_NETWORK_POLICY_FILE: &str = "profile-network-policy.json";
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
@@ -42,16 +44,27 @@ struct NetworkObservationDocument {
 }
 
 #[derive(Clone, Debug)]
-pub struct FilesystemNetworkEvidence {
+pub struct GenerationNetworkEvidence {
     policy: NetworkIdentityPolicy,
+    workspace: PathBuf,
 }
 
-impl FilesystemNetworkEvidence {
-    pub fn open(policy_path: &Path) -> Result<Self, BridgePortError> {
-        if !policy_path.is_absolute() {
-            return Err(BridgePortError::InvalidResponse);
+impl GenerationNetworkEvidence {
+    /// Policy bytes (including their absence for Direct) belong to the authenticated generation
+    /// and its materialization inventory. A read/decode failure never selects Direct.
+    pub fn open(workspace: &GenerationWorkspace) -> Result<Self, BridgePortError> {
+        let policy_path = workspace.path().join(PROFILE_NETWORK_POLICY_FILE);
+        match fs::symlink_metadata(&policy_path) {
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                return Ok(Self {
+                    policy: NetworkIdentityPolicy::direct(),
+                    workspace: workspace.path().to_path_buf(),
+                });
+            }
+            Err(_) => return Err(BridgePortError::Unavailable),
+            Ok(_) => {}
         }
-        let policy_document = read_json::<NetworkPolicyDocument>(policy_path)?;
+        let policy_document = read_json::<NetworkPolicyDocument>(&policy_path)?;
         if policy_document.schema != NETWORK_POLICY_SCHEMA {
             return Err(BridgePortError::InvalidResponse);
         }
@@ -69,7 +82,10 @@ impl FilesystemNetworkEvidence {
             policy_document.required_route_identity,
         )
         .map_err(|_| BridgePortError::InvalidResponse)?;
-        Ok(Self { policy })
+        Ok(Self {
+            policy,
+            workspace: workspace.path().to_path_buf(),
+        })
     }
 
     #[must_use]
@@ -78,7 +94,7 @@ impl FilesystemNetworkEvidence {
     }
 }
 
-impl BrowserRuntimeObservationPort for FilesystemNetworkEvidence {
+impl BrowserRuntimeObservationPort for GenerationNetworkEvidence {
     type Error = BridgePortError;
 
     fn observe(
@@ -86,6 +102,14 @@ impl BrowserRuntimeObservationPort for FilesystemNetworkEvidence {
         workspace: &GenerationWorkspace,
         device_id: &DeviceId,
     ) -> Result<BrowserRuntimeObservation, Self::Error> {
+        if self.workspace != workspace.path() {
+            return Err(BridgePortError::InvalidResponse);
+        }
+        if !self.policy.requires_observation() {
+            return Ok(BrowserRuntimeObservation::without_network_observation(
+                false,
+            ));
+        }
         let generation_value = workspace
             .path()
             .file_name()
@@ -142,7 +166,13 @@ where
     {
         return Err(BridgePortError::InvalidResponse);
     }
-    let bytes = fs::read(path).map_err(|_| BridgePortError::Unavailable)?;
+    let mut bytes = Vec::new();
+    File::open(path)
+        .and_then(|file| file.take(MAX_EVIDENCE_BYTES + 1).read_to_end(&mut bytes))
+        .map_err(|_| BridgePortError::Unavailable)?;
+    if bytes.len() as u64 > MAX_EVIDENCE_BYTES {
+        return Err(BridgePortError::InvalidResponse);
+    }
     serde_json::from_slice(&bytes).map_err(|_| BridgePortError::InvalidResponse)
 }
 
@@ -166,43 +196,178 @@ fn now_ms() -> Result<u64, BridgePortError> {
 
 #[cfg(test)]
 mod tests {
-    use super::{FilesystemNetworkEvidence, NETWORK_POLICY_SCHEMA};
-    use crate::browser_preflight::BrowserRuntimeObservationPort;
-    use crate::local_profile::MaterializationRoot;
+    use super::{GenerationNetworkEvidence, NETWORK_POLICY_SCHEMA, PROFILE_NETWORK_POLICY_FILE};
+    use crate::browser_preflight::{BrowserRuntimeObservation, BrowserRuntimeObservationPort};
+    use crate::local_profile::{GenerationWorkspace, MaterializationRoot};
     use profile_platform_primitives::{DeviceId, GenerationId, ProfileId, TenantId};
+    use serde_json::json;
     use std::fs;
+    use std::path::PathBuf;
+    use std::sync::atomic::{AtomicU64, Ordering};
     use std::time::{SystemTime, UNIX_EPOCH};
 
-    fn root_path() -> Result<PathBuf, Box<dyn std::error::Error>> {
-        let nonce = SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos();
-        Ok(std::env::temp_dir().join(format!(
-            "profile-bridge-p2-network-{}-{nonce}",
-            std::process::id()
-        )))
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    type TestResult = Result<(), Box<dyn std::error::Error>>;
+
+    struct Fixture {
+        root: PathBuf,
+        workspace: GenerationWorkspace,
+        device: DeviceId,
     }
 
-    use std::path::PathBuf;
+    impl Fixture {
+        fn new() -> Result<Self, Box<dyn std::error::Error>> {
+            let root = std::env::temp_dir().join(format!(
+                "profile-network-{}-{}",
+                std::process::id(),
+                NEXT.fetch_add(1, Ordering::Relaxed)
+            ));
+            let materialization = MaterializationRoot::open_or_create(&root)?;
+            let workspace = materialization.create_generation(
+                &TenantId::parse("tenant_01JP2NETWORK")?,
+                &ProfileId::parse("profile_01JP2NETWORK")?,
+                &GenerationId::parse("generation_01JP2NETWORK")?,
+            )?;
+            Ok(Self {
+                root,
+                workspace,
+                device: DeviceId::parse("device_01JP2NETWORK")?,
+            })
+        }
+
+        fn restrict(&self) -> TestResult {
+            fs::write(
+                self.workspace.path().join(PROFILE_NETWORK_POLICY_FILE),
+                serde_json::to_vec(&json!({
+                    "schema": NETWORK_POLICY_SCHEMA, "country": "PL", "region": "Mazowieckie",
+                    "timezone": "Europe/Warsaw", "allowedNetworkClasses": ["mobile"],
+                    "allowedAsns": [5617], "requiredRouteIdentity": "route-a"
+                }))?,
+            )?;
+            Ok(())
+        }
+
+        fn observation(&self) -> Result<serde_json::Value, Box<dyn std::error::Error>> {
+            let now = u64::try_from(SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis())?;
+            Ok(json!({"schema": "profile-bridge-network-observation-v1",
+                "generationId": "generation_01JP2NETWORK", "deviceId": self.device.as_str(),
+                "observedAtMs": now, "validUntilMs": now + 60000,
+                "country": "PL", "region": "Mazowieckie", "timezone": "Europe/Warsaw",
+                "networkClass": "mobile", "asn": 5617, "routeIdentity": "route-a"}))
+        }
+
+        fn write_observation(&self, document: &serde_json::Value) -> TestResult {
+            let parent = self.workspace.path().parent().ok_or("workspace parent")?;
+            fs::write(
+                parent.join(".generation_01JP2NETWORK.network-observation.json"),
+                serde_json::to_vec(document)?,
+            )?;
+            Ok(())
+        }
+    }
+
+    impl Drop for Fixture {
+        fn drop(&mut self) {
+            if self.root.parent() == Some(std::env::temp_dir().as_path()) {
+                let _ = fs::remove_dir_all(&self.root);
+            }
+        }
+    }
 
     #[test]
-    fn missing_generation_observation_fails_closed() -> Result<(), Box<dyn std::error::Error>> {
-        let root_path = root_path()?;
-        let policy_path = root_path.with_extension("policy.json");
-        fs::write(
-            &policy_path,
-            format!(
-                "{{\"schema\":\"{NETWORK_POLICY_SCHEMA}\",\"country\":\"PL\",\"region\":\"Mazowieckie\",\"timezone\":\"Europe/Warsaw\",\"allowedNetworkClasses\":[\"mobile\"],\"allowedAsns\":[5617],\"requiredRouteIdentity\":\"route-a\"}}"
-            ),
+    fn direct_profile_does_not_invent_or_require_network_observations() -> TestResult {
+        let fixture = Fixture::new()?;
+        let mut evidence = GenerationNetworkEvidence::open(&fixture.workspace)?;
+        assert!(!evidence.policy().requires_observation());
+        assert_eq!(
+            evidence.observe(&fixture.workspace, &fixture.device)?,
+            BrowserRuntimeObservation::without_network_observation(false)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn configured_restriction_still_requires_generation_device_and_freshness() -> TestResult {
+        let fixture = Fixture::new()?;
+        fixture.restrict()?;
+        let mut evidence = GenerationNetworkEvidence::open(&fixture.workspace)?;
+        assert!(evidence.policy().requires_observation());
+        assert!(
+            evidence
+                .observe(&fixture.workspace, &fixture.device)
+                .is_err()
+        );
+        let valid = fixture.observation()?;
+        fixture.write_observation(&valid)?;
+        assert!(
+            evidence
+                .observe(&fixture.workspace, &fixture.device)
+                .is_ok()
+        );
+        for (key, value) in [
+            ("deviceId", json!("device_other")),
+            ("generationId", json!("generation_other")),
+            ("validUntilMs", json!(1)),
+            ("validUntilMs", json!(u64::MAX)),
+        ] {
+            let mut invalid = valid.clone();
+            invalid[key] = value;
+            fixture.write_observation(&invalid)?;
+            assert!(
+                evidence
+                    .observe(&fixture.workspace, &fixture.device)
+                    .is_err()
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn malformed_or_non_file_policy_cannot_select_direct() -> TestResult {
+        let fixture = Fixture::new()?;
+        let path = fixture.workspace.path().join(PROFILE_NETWORK_POLICY_FILE);
+        for bytes in [b"{}".as_slice(), b"{", b"null", b"[]"] {
+            fs::write(&path, bytes)?;
+            assert!(GenerationNetworkEvidence::open(&fixture.workspace).is_err());
+        }
+        fs::write(&path, vec![b'x'; 32 * 1024 + 1])?;
+        assert!(GenerationNetworkEvidence::open(&fixture.workspace).is_err());
+        fixture.restrict()?;
+        let original = fs::read_to_string(&path)?;
+        for invalid in [
+            original.replacen("{", "{\"unexpected\":true,", 1),
+            original.replacen("{", "{\"country\":\"PL\",", 1),
+        ] {
+            fs::write(&path, invalid)?;
+            assert!(GenerationNetworkEvidence::open(&fixture.workspace).is_err());
+        }
+        fs::remove_file(&path)?;
+        fs::create_dir(&path)?;
+        assert!(GenerationNetworkEvidence::open(&fixture.workspace).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn direct_selection_cannot_be_reused_for_another_workspace() -> TestResult {
+        let first = Fixture::new()?;
+        let second = Fixture::new()?;
+        second.restrict()?;
+        let mut evidence = GenerationNetworkEvidence::open(&first.workspace)?;
+        assert!(evidence.observe(&second.workspace, &second.device).is_err());
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn linked_policy_is_rejected() -> TestResult {
+        let first = Fixture::new()?;
+        first.restrict()?;
+        let second = Fixture::new()?;
+        std::os::unix::fs::symlink(
+            first.workspace.path().join(PROFILE_NETWORK_POLICY_FILE),
+            second.workspace.path().join(PROFILE_NETWORK_POLICY_FILE),
         )?;
-        let root = MaterializationRoot::open_or_create(&root_path)?;
-        let tenant = TenantId::parse("tenant_01JP2NETWORK")?;
-        let profile = ProfileId::parse("profile_01JP2NETWORK")?;
-        let generation = GenerationId::parse("generation_01JP2NETWORK")?;
-        let device = DeviceId::parse("device_01JP2NETWORK")?;
-        let workspace = root.create_generation(&tenant, &profile, &generation)?;
-        let mut evidence = FilesystemNetworkEvidence::open(&policy_path)?;
-        assert!(evidence.observe(&workspace, &device).is_err());
-        fs::remove_dir_all(&root_path)?;
-        fs::remove_file(policy_path)?;
+        assert!(GenerationNetworkEvidence::open(&second.workspace).is_err());
         Ok(())
     }
 }

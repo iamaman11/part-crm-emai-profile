@@ -35,7 +35,7 @@ const WEBGL_ARRAY_CONTRACTS: [(&str, WebGlValueContract); 10] = [
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct BrowserRuntimeObservation {
-    network: NetworkIdentityObservation,
+    network: Option<NetworkIdentityObservation>,
     supervised_writer_active: bool,
 }
 
@@ -43,7 +43,15 @@ impl BrowserRuntimeObservation {
     #[must_use]
     pub const fn new(network: NetworkIdentityObservation, supervised_writer_active: bool) -> Self {
         Self {
-            network,
+            network: Some(network),
+            supervised_writer_active,
+        }
+    }
+
+    #[must_use]
+    pub const fn without_network_observation(supervised_writer_active: bool) -> Self {
+        Self {
+            network: None,
             supervised_writer_active,
         }
     }
@@ -142,7 +150,7 @@ where
             workspace_epoch,
             &self.expected,
             &self.network_policy,
-            &observation.network,
+            observation.network.as_ref(),
             observation.supervised_writer_active,
         )
     }

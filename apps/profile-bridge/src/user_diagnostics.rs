@@ -66,6 +66,9 @@ impl UserDiagnostic {
             Self::Launch(error) => match error {
                 ShippingCompositionError::UnsupportedPlatform => "BRIDGE_WINDOWS_REQUIRED",
                 ShippingCompositionError::Configuration => "BRIDGE_SETUP_INCOMPLETE",
+                ShippingCompositionError::ExternalNetworkConfiguration => {
+                    "BRIDGE_MANUAL_NETWORK_SETTINGS"
+                }
                 ShippingCompositionError::Clock => "BRIDGE_CLOCK_UNAVAILABLE",
                 ShippingCompositionError::ControlPlane => "BRIDGE_SESSION_NOT_AUTHORIZED",
                 ShippingCompositionError::DeliveryHealth => "BRIDGE_RUNTIME_NOT_READY",
@@ -121,6 +124,9 @@ impl UserDiagnostic {
             }
             Self::Pairing(Pairing::Configuration) | Self::Launch(Launch::Configuration) => {
                 "Profile Bridge setup is incomplete. Return to the application to finish computer setup. This computer is not ready to open profiles."
+            }
+            Self::Launch(Launch::ExternalNetworkConfiguration) => {
+                "Profile Bridge found network settings from a manual installation. Installation needs repair before this profile can start. Existing profile restrictions and data have been preserved."
             }
             Self::Pairing(Pairing::ExistingBinding) => {
                 "A connection is already stored on this computer. Return to the application and check the existing device before attempting a new connection."
