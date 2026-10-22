@@ -53,7 +53,10 @@ pub(super) async fn dispatch(
         .await?
         {
             Ok(launch) => machine_json(&InitialGenerationPrepared::Launch { launch }),
-            Err(_) => failure(actor, GenerationOperationError::InvalidState),
+            Err(error) => crate::profiles::profile_launch::application_failure(
+                actor.correlation_id().as_str(),
+                error,
+            ),
         };
     }
     // A commit replay is evaluated by the application before requiring DRAFT again.
@@ -169,12 +172,10 @@ pub(super) async fn dispatch(
                 .await?
                 {
                     Ok(value) => value,
-                    Err(_error) => {
-                        return crate::access_session::problem(
+                    Err(error) => {
+                        return crate::profiles::profile_launch::application_failure(
                             actor.correlation_id().as_str(),
-                            409,
-                            "launch_unavailable",
-                            "Profile prepared; refresh the application to open it",
+                            error,
                         );
                     }
                 };

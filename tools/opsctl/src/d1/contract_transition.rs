@@ -174,7 +174,10 @@ fn validate_exact_successor(
     remote_names: &[String],
 ) -> Result<(), D1Error> {
     validate_exact_predecessor(authority, predecessor_remote_names)?;
-    if remote_names != authority.ordered_history.as_slice()
+    if authority
+        .ordered_history
+        .get(..=predecessor_remote_names.len())
+        != Some(remote_names)
         || remote_names.len() != predecessor_remote_names.len() + 1
         || remote_names.last().map(String::as_str) != Some(CONTRACT_REVISION)
     {
