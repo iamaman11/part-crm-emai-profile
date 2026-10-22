@@ -26,12 +26,16 @@ use std::process::Child;
 #[cfg(any(windows, test))]
 use std::process::Command;
 
+#[cfg(any(windows, test))]
+mod first_install;
+
 const PROFILE_BRIDGE_DIRECTORY: &str = "profile-bridge";
 const PROFILE_BRIDGE_EXECUTABLE: &str = "profile-bridge.exe";
 const RELEASES_DIRECTORY: &str = "releases";
 const STATE_DIRECTORY: &str = "state";
 pub const HANDOFF_ACTIVATE_ARGUMENT: &str = "--delivery-activate-staged";
 pub const HANDOFF_ARRIVAL_ARGUMENT: &str = "--delivery-handoff-arrived";
+pub const FIRST_INSTALL_ARGUMENT: &str = "--delivery-install-staged";
 #[cfg(any(windows, test))]
 const PARENT_PID_ENV: &str = "PART_CRM_DELIVERY_HANDOFF_PARENT_PID";
 #[cfg(any(windows, test))]
@@ -215,6 +219,19 @@ pub struct DeliveryHandoffCoordinator {
 }
 
 impl DeliveryHandoffCoordinator {
+    /// All shipping activation and profile operations use the same installed workspace boundary.
+    pub fn installed_profile_root(&self) -> Result<PathBuf, DeliveryHandoffError> {
+        let root = self
+            .staging_root
+            .path()
+            .parent()
+            .ok_or(DeliveryHandoffError::InvalidInstalledLayout)?;
+        if self.state_root != root.join(STATE_DIRECTORY) {
+            return Err(DeliveryHandoffError::InvalidInstalledLayout);
+        }
+        Ok(root.join("profiles"))
+    }
+
     #[must_use]
     pub fn new(staging_root: DeliveryStagingRoot, state_root: impl Into<PathBuf>) -> Self {
         Self {
@@ -703,6 +720,8 @@ fn canonical_regular_executable(path: &Path) -> Result<PathBuf, DeliveryHandoffE
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DeliveryHandoffError {
+    FirstInstallationConflict,
+    ActivationGuardUnavailable,
     InvalidTarget,
     InvalidCurrentProcess,
     InvalidInstalledLayout,
@@ -723,6 +742,10 @@ pub enum DeliveryHandoffError {
 impl fmt::Display for DeliveryHandoffError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(match self {
+            Self::FirstInstallationConflict => {
+                "Windows first installation conflicts with existing delivery history"
+            }
+            Self::ActivationGuardUnavailable => "Windows delivery activation guard is unavailable",
             Self::InvalidTarget => "Windows delivery handoff target is invalid",
             Self::InvalidCurrentProcess => "Windows delivery handoff current process is invalid",
             Self::InvalidInstalledLayout => "Windows delivery handoff installed layout is invalid",
@@ -748,6 +771,7 @@ impl std::error::Error for DeliveryHandoffError {}
 
 #[cfg(test)]
 mod tests {
+    mod first_install;
     use super::*;
     use crate::local_profile::{DeliveryActivationGuard, MaterializationRoot};
     use crate::windows_delivery::{
@@ -934,7 +958,7 @@ mod tests {
         })
     }
 
-    fn first_install_started_fixture(label: &str) -> Result<Fixture, Box<dyn std::error::Error>> {
+    fn first_install_prepared_fixture(label: &str) -> Result<Fixture, Box<dyn std::error::Error>> {
         let directory = TestDirectory::create(label)?;
         let releases = directory.0.join(RELEASES_DIRECTORY);
         fs::create_dir(&releases)?;
@@ -950,9 +974,7 @@ mod tests {
             fs::canonicalize(stage.profile_bridge_root().join(PROFILE_BRIDGE_EXECUTABLE))?;
         let mut state = crate::windows_delivery::DeliveryState::default();
         state.stage(&candidate)?;
-        state.activate_staged(true)?;
-        let evidence = DeliveryHandoffEvidence::activation_started(&state, &identity)?;
-        store.persist_handoff(&state, evidence)?;
+        store.persist(&state)?;
         Ok(Fixture {
             _directory: directory,
             staging,
@@ -963,6 +985,16 @@ mod tests {
             first_executable: executable.clone(),
             second_executable: executable,
         })
+    }
+
+    fn first_install_started_fixture(label: &str) -> Result<Fixture, Box<dyn std::error::Error>> {
+        let fixture = first_install_prepared_fixture(label)?;
+        let mut store = DeliveryStateStore::open(&fixture.state_root)?;
+        let mut state = store.state().clone();
+        state.activate_staged(true)?;
+        let evidence = DeliveryHandoffEvidence::activation_started(&state, &fixture.first)?;
+        store.persist_handoff(&state, evidence)?;
+        Ok(fixture)
     }
 
     fn trust() -> Result<TrustedSignerSet, Box<dyn std::error::Error>> {

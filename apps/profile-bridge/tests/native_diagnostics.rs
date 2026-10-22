@@ -50,3 +50,16 @@ fn fresh_machine_pairing_fails_before_key_or_network_effects_with_a_setup_diagno
     assert!(!stderr.contains("device_01JDIAG"));
     Ok(())
 }
+
+#[cfg(windows)]
+#[test]
+fn installer_entry_rejects_an_unpackaged_executable_before_installation_effects()
+-> Result<(), Box<dyn std::error::Error>> {
+    let output = captured(&["--delivery-install-staged"])?;
+    assert_eq!(output.status.code(), Some(2));
+    assert!(output.stdout.is_empty());
+    let stderr = String::from_utf8(output.stderr)?;
+    assert!(stderr.contains("BRIDGE_INSTALLATION_FILES_INVALID"));
+    assert!(!stderr.contains("PROFILE_BRIDGE_"));
+    Ok(())
+}

@@ -11,7 +11,7 @@ use profile_bridge::shipping_composition::{
 };
 use profile_bridge::user_diagnostics::UserDiagnostic;
 use profile_bridge::windows_delivery_handoff::{
-    HANDOFF_ACTIVATE_ARGUMENT, HANDOFF_ARRIVAL_ARGUMENT,
+    FIRST_INSTALL_ARGUMENT, HANDOFF_ACTIVATE_ARGUMENT, HANDOFF_ARRIVAL_ARGUMENT,
 };
 use std::env;
 use std::fmt;
@@ -45,6 +45,10 @@ where
             run_delivery_command(ShippingDeliveryCommand::ActivateStaged)
                 .map_err(BridgeCliError::DeliveryFailed)
         }
+        BridgeCommand::DeliveryInstallStaged => {
+            run_delivery_command(ShippingDeliveryCommand::InstallStaged)
+                .map_err(BridgeCliError::DeliveryFailed)
+        }
         BridgeCommand::DeliveryHandoffArrived => {
             run_delivery_command(ShippingDeliveryCommand::HandoffArrived)
                 .map_err(BridgeCliError::DeliveryFailed)
@@ -57,6 +61,7 @@ enum BridgeCommand {
     PairingStart(DevicePairingStartUri),
     PairingComplete(DevicePairingCompleteUri),
     DeliveryActivateStaged,
+    DeliveryInstallStaged,
     DeliveryHandoffArrived,
 }
 
@@ -75,6 +80,7 @@ where
         return Err(BridgeCliError::UnexpectedArgument);
     }
     match argument.as_str() {
+        FIRST_INSTALL_ARGUMENT => Ok(BridgeCommand::DeliveryInstallStaged),
         HANDOFF_ACTIVATE_ARGUMENT => Ok(BridgeCommand::DeliveryActivateStaged),
         HANDOFF_ARRIVAL_ARGUMENT => Ok(BridgeCommand::DeliveryHandoffArrived),
         value if value.starts_with(PAIRING_START_URI_PREFIX) => DevicePairingStartUri::parse(value)
@@ -128,6 +134,7 @@ impl std::error::Error for BridgeCliError {}
 
 #[cfg(test)]
 mod tests {
+    use super::FIRST_INSTALL_ARGUMENT;
     use super::{BridgeCliError, BridgeCommand, parse_command};
     use profile_bridge::windows_delivery_handoff::{
         HANDOFF_ACTIVATE_ARGUMENT, HANDOFF_ARRIVAL_ARGUMENT,
@@ -181,6 +188,22 @@ mod tests {
     #[test]
     fn delivery_commands_are_bounded_and_carry_no_claim() -> Result<(), Box<dyn std::error::Error>>
     {
+        assert!(matches!(
+            parse_command([
+                "profile-bridge".to_owned(),
+                FIRST_INSTALL_ARGUMENT.to_owned()
+            ])?,
+            BridgeCommand::DeliveryInstallStaged
+        ));
+        assert_eq!(
+            parse_command([
+                "profile-bridge".to_owned(),
+                FIRST_INSTALL_ARGUMENT.to_owned(),
+                "profilebridge://claim/claim_01JBRIDGE_FEASIBILITY".to_owned(),
+            ])
+            .err(),
+            Some(BridgeCliError::UnexpectedArgument)
+        );
         assert!(matches!(
             parse_command([
                 "profile-bridge".to_owned(),
