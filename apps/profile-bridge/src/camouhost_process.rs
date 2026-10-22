@@ -1,4 +1,5 @@
 mod browser_visible_wire;
+mod initial_identity;
 
 use self::browser_visible_wire::{HostRuntimeEvidence, verify_browser_visible_payload};
 use crate::ProcessControlPort;
@@ -453,35 +454,7 @@ impl ManagedCamouhostProcess {
         if let Some(path) = &self.config.proxy_config_path {
             command.env("CAMOUHOST_PROXY_CONFIG_PATH", path);
         }
-        for key in [
-            "DBUS_SESSION_BUS_ADDRESS",
-            "DISPLAY",
-            "GDK_BACKEND",
-            "HOME",
-            "LANG",
-            "LC_ALL",
-            "LOCALAPPDATA",
-            "LOGNAME",
-            "PATH",
-            "SHELL",
-            "SystemRoot",
-            "TEMP",
-            "TMP",
-            "TMPDIR",
-            "USER",
-            "USERPROFILE",
-            "WAYLAND_DISPLAY",
-            "WINDIR",
-            "WSL_DISTRO_NAME",
-            "WSL_INTEROP",
-            "XDG_CACHE_HOME",
-            "XDG_CONFIG_HOME",
-            "XDG_RUNTIME_DIR",
-        ] {
-            if let Some(value) = env::var_os(key) {
-                command.env(key, value);
-            }
-        }
+        inherit_runtime_environment(&mut command);
         let child = command.spawn().map_err(|_| BridgePortError::Unavailable)?;
         if child.id() == 0 || session_id.as_str().is_empty() {
             return Err(BridgePortError::InvalidResponse);
@@ -921,6 +894,38 @@ fn verify_file_digest(path: &Path, expected: &str) -> Result<(), BridgePortError
         return Err(BridgePortError::InvalidResponse);
     }
     Ok(())
+}
+
+fn inherit_runtime_environment(command: &mut Command) {
+    for key in [
+        "DBUS_SESSION_BUS_ADDRESS",
+        "DISPLAY",
+        "GDK_BACKEND",
+        "HOME",
+        "LANG",
+        "LC_ALL",
+        "LOCALAPPDATA",
+        "LOGNAME",
+        "PATH",
+        "SHELL",
+        "SystemRoot",
+        "TEMP",
+        "TMP",
+        "TMPDIR",
+        "USER",
+        "USERPROFILE",
+        "WAYLAND_DISPLAY",
+        "WINDIR",
+        "WSL_DISTRO_NAME",
+        "WSL_INTEROP",
+        "XDG_CACHE_HOME",
+        "XDG_CONFIG_HOME",
+        "XDG_RUNTIME_DIR",
+    ] {
+        if let Some(value) = env::var_os(key) {
+            command.env(key, value);
+        }
+    }
 }
 
 #[cfg(test)]

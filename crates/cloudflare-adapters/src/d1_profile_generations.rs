@@ -1,3 +1,5 @@
+mod initialization;
+
 use crate::d1_command_identity::command_journal_id;
 use crate::d1_identity_acl::{MutationEnvelope, ResolvedMembershipRole};
 use profile_platform_primitives::{
@@ -390,12 +392,22 @@ impl D1ProfileGenerationRepository {
         command: D1PreparedStatement,
         evidence: CommandEvidence<'_>,
     ) -> Result<Vec<D1Result>> {
+        self.execute_commands(actor, envelope, vec![command], evidence)
+            .await
+    }
+
+    async fn execute_commands(
+        &self,
+        actor: &ActorContext,
+        envelope: &MutationEnvelope<'_>,
+        mut statements: Vec<D1PreparedStatement>,
+        evidence: CommandEvidence<'_>,
+    ) -> Result<Vec<D1Result>> {
         let tenant_id = actor.tenant_scope().tenant_id().as_str();
         let actor_id = actor.actor_id().as_str();
         let now = sqlite_integer(envelope.now.value())?;
         let expires_at = sqlite_integer(envelope.idempotency_expires_at.value())?;
-        let statements = vec![
-            command,
+        statements.extend([
             idempotency_statement(
                 &self.database,
                 tenant_id,
@@ -428,7 +440,7 @@ impl D1ProfileGenerationRepository {
                 envelope,
                 now,
             )?,
-        ];
+        ]);
         self.database.batch(statements).await
     }
 

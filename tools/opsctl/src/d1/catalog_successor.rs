@@ -29,11 +29,13 @@ const BRIDGE_ENROLLMENT_REVISION: &str = "0032_bridge_device_enrollment_authorit
 const PUBLIC_KEY_BINDING_REVISION: &str = "0033_device_public_key_binding.sql";
 const DEVICE_APPLICATION_AUTHORITY_REVISION: &str = "0034_device_application_authority.sql";
 const SUCCESSOR_CONTRACT_REVISION: &str = "0035_pas2_payload_fingerprint_contract.sql";
-const CURRENT_SUCCESSOR_FILES: [&str; 4] = [
+const INITIAL_GENERATION_REVISION: &str = "0036_profile_generation_initialization.sql";
+const CURRENT_SUCCESSOR_FILES: [&str; 5] = [
     BRIDGE_ENROLLMENT_REVISION,
     PUBLIC_KEY_BINDING_REVISION,
     DEVICE_APPLICATION_AUTHORITY_REVISION,
     SUCCESSOR_CONTRACT_REVISION,
+    INITIAL_GENERATION_REVISION,
 ];
 
 #[derive(Debug, Clone)]
@@ -126,6 +128,17 @@ impl CatalogSuccessor {
         deferred_contract.migration_file = SUCCESSOR_CONTRACT_REVISION.to_owned();
         post_epoch.push(deferred_contract);
 
+        ordered_history.push(INITIAL_GENERATION_REVISION.to_owned());
+        migration_source_roots.push(CURRENT_SUCCESSOR_ROOT.to_owned());
+        post_epoch.push(MigrationContract {
+            migration_file: INITIAL_GENERATION_REVISION.to_owned(),
+            migration_class: MigrationClass::Expand,
+            rollout_order: RolloutOrder::MigrateBeforeCode,
+            fail_forward_required: false,
+            destructive: false,
+            code_rollback_allowed: true,
+            contract_preconditions: Vec::new(),
+        });
         validate_contiguous_history(&ordered_history, predecessor_authority.historical_len)?;
         let history_digest =
             successor_history_digest(root, &ordered_history, &migration_source_roots)?;
@@ -193,45 +206,12 @@ impl CatalogSuccessor {
             .ordered_history
             .last()
             .ok_or_else(|| D1Error::new("Catalog successor-v2 migration lineage is empty"))?;
-        let trailing_contract_count = self
-            .authority
-            .post_epoch
-            .iter()
-            .rev()
-            .take_while(|contract| {
-                contract.migration_class == MigrationClass::Contract
-                    && contract.rollout_order == RolloutOrder::SeparateContractRelease
-            })
-            .count();
-        if trailing_contract_count != 1 {
+        if latest != INITIAL_GENERATION_REVISION {
             return Err(D1Error::new(
-                "Catalog successor-v2 must contain exactly one trailing SEPARATE_CONTRACT_RELEASE",
+                "Catalog initial-generation runtime requires exact schema0036",
             ));
         }
-        let last_contract = self
-            .authority
-            .post_epoch
-            .last()
-            .ok_or_else(|| D1Error::new("trailing contract policy is missing"))?;
-        if last_contract.migration_file != *latest
-            || last_contract.migration_file != SUCCESSOR_CONTRACT_REVISION
-        {
-            return Err(D1Error::new(
-                "Catalog successor-v2 trailing contract policy does not match its latest revision",
-            ));
-        }
-        let target = self
-            .authority
-            .ordered_history
-            .get(self.authority.ordered_history.len().saturating_sub(2))
-            .ok_or_else(|| {
-                D1Error::new("trailing contract release requires an immediate predecessor revision")
-            })?;
-        if target != DEVICE_APPLICATION_AUTHORITY_REVISION {
-            return Err(D1Error::new(
-                "Catalog successor-v2 deferred PAS-2 CONTRACT must immediately follow the latest EXPAND",
-            ));
-        }
+        let target = latest;
         Ok(json!({
             "database_component": "catalog",
             "target_schema_revision": target,
@@ -750,8 +730,8 @@ fn repository_identity_from_components(components: &[Value]) -> Result<String, D
 mod tests {
     use super::{
         BRIDGE_ENROLLMENT_REVISION, CURRENT_SUCCESSOR_ROOT, DEVICE_APPLICATION_AUTHORITY_REVISION,
-        PREDECESSOR_SUCCESSOR_ROOT, PUBLIC_KEY_BINDING_REVISION, SUCCESSOR_CONTRACT_REVISION,
-        component_authority, release_contract, repository_projection,
+        INITIAL_GENERATION_REVISION, PREDECESSOR_SUCCESSOR_ROOT, PUBLIC_KEY_BINDING_REVISION,
+        SUCCESSOR_CONTRACT_REVISION, component_authority, release_contract, repository_projection,
     };
     use serde_json::Value;
     use std::error::Error;
@@ -762,10 +742,9 @@ mod tests {
     }
 
     #[test]
-    fn current_catalog_lineage_inserts_expands_before_deferred_contract()
-    -> Result<(), Box<dyn Error>> {
+    fn current_catalog_appends_initialization_after_pas2_contract() -> Result<(), Box<dyn Error>> {
         let authority = component_authority(&repository_root(), "catalog")?;
-        assert_eq!(authority.ordered_history.len(), 35);
+        assert_eq!(authority.ordered_history.len(), 36);
         assert_eq!(authority.ordered_history[31], BRIDGE_ENROLLMENT_REVISION);
         assert_eq!(authority.ordered_history[32], PUBLIC_KEY_BINDING_REVISION);
         assert_eq!(
@@ -775,27 +754,26 @@ mod tests {
         assert_eq!(authority.ordered_history[34], SUCCESSOR_CONTRACT_REVISION);
         assert_eq!(
             authority.current_repository_revision,
-            SUCCESSOR_CONTRACT_REVISION
+            INITIAL_GENERATION_REVISION
         );
-        assert_eq!(authority.post_epoch.len(), 9);
+        assert_eq!(authority.post_epoch.len(), 10);
         Ok(())
     }
 
     #[test]
-    fn release_window_targets_latest_expand_and_defers_pas2_contract() -> Result<(), Box<dyn Error>>
-    {
+    fn release_window_requires_exact_initialization_schema() -> Result<(), Box<dyn Error>> {
         let contract = release_contract(&repository_root(), "catalog")?;
         assert_eq!(
             contract["target_schema_revision"],
-            DEVICE_APPLICATION_AUTHORITY_REVISION
+            INITIAL_GENERATION_REVISION
         );
         assert_eq!(
             contract["supported_schema_min"],
-            DEVICE_APPLICATION_AUTHORITY_REVISION
+            INITIAL_GENERATION_REVISION
         );
         assert_eq!(
             contract["supported_schema_max"],
-            SUCCESSOR_CONTRACT_REVISION
+            INITIAL_GENERATION_REVISION
         );
         Ok(())
     }
@@ -827,7 +805,7 @@ mod tests {
         let sources = catalog["executable_migration_sources"]
             .as_array()
             .ok_or("executable migration source projection is missing")?;
-        assert_eq!(sources.len(), 35);
+        assert_eq!(sources.len(), 36);
         assert_eq!(sources[26]["source_root"], PREDECESSOR_SUCCESSOR_ROOT);
         assert_eq!(sources[27]["source_root"], "migrations/d1");
         assert_eq!(sources[31]["migration_file"], BRIDGE_ENROLLMENT_REVISION);

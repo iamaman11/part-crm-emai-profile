@@ -1168,12 +1168,17 @@ def current_fresh_zero_self_test() -> None:
         for component in deferred_materialized["components"]
         if component.get("component_id") == "catalog"
     )
-    deferred_name = deferred_materialized["fresh_zero_construction"]["construction"]["deferred_revisions"][0]
-    deferred_source = next(
-        source
-        for source in catalog["executable_migration_sources"]
-        if source["migration_file"] == deferred_name
+    # Exercise a deferred suffix even when CURRENT materializes the full lineage.
+    deferred_source = {
+        "migration_file": "9999_deferred_fixture.sql",
+        "source_root": catalog["executable_migration_sources"][-1]["source_root"],
+    }
+    catalog["executable_migration_sources"].append(deferred_source)
+    deferred_materialized["fresh_zero_construction"]["construction"]["deferred_revisions"].append(
+        deferred_source["migration_file"]
     )
+    rebind_current_construction_digest(deferred_materialized)
+    validate_current_fresh_zero_projection(deferred_materialized)
     deferred_materialized["fresh_zero_construction"]["construction"]["migration_sources"].append(
         {
             "migration_file": deferred_source["migration_file"],

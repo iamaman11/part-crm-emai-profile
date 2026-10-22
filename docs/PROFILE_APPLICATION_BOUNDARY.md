@@ -31,7 +31,7 @@ Profile ACL owner, construct ad-hoc authorization SQL or duplicate application p
 The application use case owns these decisions and ordering rules:
 
 1. only a tenant owner may execute profile create; non-owner disclosure remains neutral `not_found`;
-2. owner authorization is evaluated before request-body/idempotency parsing, preserving the disclosure boundary;
+2. active organization membership authorization is evaluated before request-body/idempotency parsing, preserving the disclosure boundary;
 3. the use case creates the typed `BrowserProfile` aggregate in its initial state;
 4. exact idempotency replay returns the prior logical result without a new write;
 5. a concurrent unique conflict is rechecked for exact replay and is otherwise a conflict;
@@ -72,42 +72,32 @@ The public Profile launch operation is an orchestration capability, not a new au
 The canonical chain is:
 
 ```text
-Client Detail / Profile action
-  -> generated `launchProfile` operation
-  -> Profile launch admission
-  -> existing Profile open authorization
-  -> server-owned active actor-bound device resolution
-  -> existing device/Profile/generation authorization
-  -> existing execution preconditions
-  -> bounded one-time launch authority
-  -> machine-authenticated Bridge redemption
-  -> fresh authorization/state revalidation
-  -> atomic one-time claim consumption
+Client Detail / Profile action -> generated launchProfile
+-> existing Profile Operate ACL -> versioned v2 native open intent (no bearer/device selector)
+-> installed Bridge checks tenant + actor against its stored connection
+-> native CNG proof / fresh device-bound session -> current Profile Operate ACL
+-> DRAFT: real initial snapshot / immutable exact verification / atomic activation
+-> READY: existing launch authorization / exact current generation / current authenticated device
+-> existing one-time launch authority -> machine-authenticated redemption / fresh revalidation
+-> existing lease/fence / validated local cache or authoritative materialization -> Camoufox
 ```
 
-Permanent rules:
+The browser chooses a Profile action; it cannot assert device or generation authority. Its non-cacheable
+v2 intent contains typed tenant/actor/Profile locators and the observed Profile version, never a claim
+or credential. The native application resolves the computer from its installed binding and proves its
+non-exportable CNG key. No browser device-locator storage or device selection procedure is required.
+One user may register several computers; another computer does not revoke earlier ones. Any user with
+Profile Operate access may open the Profile, irrespective of creator, assignment or last writer.
 
-1. the browser/public request selects the Profile action only; it does **not** assert trusted `deviceId`
-   or `generationId`;
-2. active generation and active actor-bound device are resolved from authoritative server state;
-3. Profile access uses the existing Profile authorization owner; launch-specific code must not duplicate
-   Profile ACL SQL or policy;
-4. device authorization and execution-readiness semantics remain in their existing owners and are
-   composed by launch orchestration;
-5. the one-time launch-authority store owns issuance, digest-only persistence, exact target binding,
-   bounded expiry, replay/concurrency semantics and atomic consumption; it does not become a second ACL
-   owner;
-6. raw claim material is bearer material and is never persisted server-side, logged or emitted in
-   telemetry/evidence; the browser response is non-cacheable;
-7. Bridge redemption authenticates the actual machine through the dedicated machine perimeter and the
-   existing device-principal owner, using edge-verified mTLS certificate identity rather than a retained
-   human Access bearer or new static launch bearer;
-8. redemption re-resolves current actor/Profile/device/generation/readiness state **before** consuming
-   the claim. Revocation, reassignment, generation change, expiry, replay or wrong machine fails closed;
-9. successful redemption returns only the bounded typed identity needed by the existing Bridge/operator
-   and coordinator boundaries;
-10. assignment remains irrelevant to authorization except as independently authorized UI projection
-    context.
+The existing Profile ACL remains the business authority. The existing launch-authority store still
+owns exact actor/Profile/device/generation binding, bounded expiry, digest-only persistence, replay
+and atomic consumption. Actual claims remain on the device-proven native path and are not browser UI
+state. Registered device trust/session revocation and all coordinator writer/fence checks remain.
+
+The exact active VERIFIED generation is selected by the server. A matching validated local copy avoids
+R2 download; absence/staleness causes materialization of that exact generation before Camoufox starts.
+Dirty recovery state is not silently overwritten or represented as Saved. There is no local-clock
+version selection, unverified activation, hardware ownership grant or owner impersonation.
 
 The canonical browser HTTP contract is authored in the Rust control-plane contract and projected through
 OpenAPI into generated TypeScript operation/validator code. Handwritten frontend method/path/response

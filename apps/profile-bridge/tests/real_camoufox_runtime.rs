@@ -1,17 +1,14 @@
 #![forbid(unsafe_code)]
 
 use bridge_domain::{BridgePortError, CamouhostMessage, CamouhostPort};
-use browser_execution_domain::{BrowserIdentityManifest, MaterializationBinding};
-use profile_bridge::browser_execution::persist_materialization_binding;
+use profile_bridge::browser_execution::load_materialization_binding;
 use profile_bridge::camouhost_process::{
     ManagedCamouhostConfig, ManagedCamouhostProcess, RuntimeBindingSlot, RuntimeDisplayMode,
 };
 use profile_bridge::local_profile::{BridgeWorkspaceLock, MaterializationRoot};
 use profile_bridge::operator_flow::BrowserLaunchPreflightPort;
 use profile_bridge::runtime_bundle::{ApprovedRuntimeBundle, RuntimeSessionOrchestrator};
-use profile_bridge::shipping_preflight::{
-    ShippingBrowserLaunchPreflight, profile_stable_identity_from_config_bytes,
-};
+use profile_bridge::shipping_preflight::ShippingBrowserLaunchPreflight;
 use profile_platform_primitives::{DeviceId, GenerationId, ProfileId, SessionId, TenantId};
 use runtime_bundle_domain::{
     BundleRelativePath, InventoryEntry, RuntimeInventory, RuntimeManifest, RuntimePlatform,
@@ -21,7 +18,6 @@ use sha2::{Digest, Sha256};
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 const ENABLE_ENV: &str = "AR10_REAL_CAMOUFOX";
@@ -29,8 +25,6 @@ const PYTHON_ENV: &str = "AR10_PYTHON";
 const RUNTIME_ROOT_ENV: &str = "AR10_RUNTIME_ROOT";
 const HEADLESS_ENV: &str = "AR10_REAL_CAMOUFOX_HEADLESS";
 const LOWER_HEX: &[u8; 16] = b"0123456789abcdef";
-const MAX_DIAGNOSTIC_SYMLINKS: usize = 32;
-const CONFIG_NAME: &str = "camoufox-config.json";
 const MANAGED_COLD_LAUNCH_ATTEMPTS: usize = 3;
 
 struct StageTracingCamouhost<C> {
@@ -94,27 +88,6 @@ fn digest_file(path: &Path) -> Result<(u64, String), Box<dyn std::error::Error>>
     Ok((metadata.len(), sha256_hex(&bytes)))
 }
 
-fn json_field(report: &str, field: &str) -> Result<String, Box<dyn std::error::Error>> {
-    let prefix = format!("\"{field}\":\"");
-    let start = report
-        .find(&prefix)
-        .ok_or("candidate materialization report field is missing")?
-        + prefix.len();
-    let rest = &report[start..];
-    let end = rest
-        .find('"')
-        .ok_or("candidate materialization report field is unterminated")?;
-    let value = &rest[..end];
-    if value.len() != 64
-        || !value
-            .bytes()
-            .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
-    {
-        return Err("candidate materialization digest is invalid".into());
-    }
-    Ok(value.to_owned())
-}
-
 fn inventory_digest(entries: &[(String, u64, String)]) -> String {
     let mut canonical = String::from("[");
     for (index, (path, length, sha256)) in entries.iter().enumerate() {
@@ -175,35 +148,6 @@ fn approved_runtime(
     )?)
 }
 
-fn collect_symlink_paths(
-    root: &Path,
-    current: &Path,
-    output: &mut Vec<String>,
-) -> Result<(), Box<dyn std::error::Error>> {
-    if output.len() >= MAX_DIAGNOSTIC_SYMLINKS {
-        return Ok(());
-    }
-    let mut children = fs::read_dir(current)?.collect::<Result<Vec<_>, _>>()?;
-    children.sort_by_key(fs::DirEntry::file_name);
-    for child in children {
-        if output.len() >= MAX_DIAGNOSTIC_SYMLINKS {
-            break;
-        }
-        let path = child.path();
-        let metadata = fs::symlink_metadata(&path)?;
-        if metadata.file_type().is_symlink() {
-            output.push(
-                path.strip_prefix(root)?
-                    .to_string_lossy()
-                    .replace('\\', "/"),
-            );
-        } else if metadata.is_dir() {
-            collect_symlink_paths(root, &path, output)?;
-        }
-    }
-    Ok(())
-}
-
 fn root_path() -> Result<PathBuf, Box<dyn std::error::Error>> {
     let nonce = SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos();
     Ok(env::temp_dir().join(format!(
@@ -212,19 +156,109 @@ fn root_path() -> Result<PathBuf, Box<dyn std::error::Error>> {
     )))
 }
 
+// Synthetic remote ports exercise the real native initializer and cipher without provider writes.
+// The browser/materializer/runtime are real; this is not hosted B7 or device-pairing acceptance.
+#[derive(Default)]
+struct InitialObject {
+    generation: Option<GenerationId>,
+    container: Vec<u8>,
+    verified: bool,
+    committed: bool,
+}
+struct InitialControl(std::rc::Rc<std::cell::RefCell<InitialObject>>);
+impl profile_bridge::shipping_control_plane::MachineHttpPort for InitialControl {
+    type Error = BridgePortError;
+    fn request(
+        &mut self,
+        _: profile_bridge::shipping_control_plane::MachineHttpMethod,
+        _: &str,
+        _: &profile_platform_primitives::CorrelationId,
+        body: Option<&[u8]>,
+    ) -> Result<profile_bridge::shipping_control_plane::MachineHttpResponse, Self::Error> {
+        use control_plane_contract::generation_initialization_api::{
+            InitialGenerationCommitted, InitialGenerationPrepared,
+            InitialGenerationRequest as Request,
+        };
+        use control_plane_contract::generation_key_api::{
+            BridgeGenerationSealingMaterialResponse, GENERATION_SEALING_CHUNK_BYTES,
+        };
+        use control_plane_contract::profile_generation_api::BridgeGenerationUploadCapabilityResponse;
+        let error = || BridgePortError::InvalidResponse;
+        let request =
+            serde_json::from_slice::<Request>(body.ok_or_else(error)?).map_err(|_| error())?;
+        let mut object = self.0.borrow_mut();
+        let response = match request {
+            Request::Prepare { generation_id, expected_profile_version } => {
+                object.generation = Some(GenerationId::parse(&generation_id).map_err(|_| error())?);
+                serde_json::to_vec(&InitialGenerationPrepared::Initialize { generation_id, expected_profile_version })
+            }
+            Request::SealingMaterial {..} => serde_json::to_vec(&BridgeGenerationSealingMaterialResponse::new("profile-generation-root-v1-2", "ab".repeat(32), "cd".repeat(16), GENERATION_SEALING_CHUNK_BYTES)),
+            Request::UploadCapability { metadata_digest, container_digest, container_bytes, .. } => {
+                if object.container.is_empty() {
+                    serde_json::to_vec(&BridgeGenerationUploadCapabilityResponse::upload_required("https://0123456789abcdef0123456789abcdef.r2.cloudflarestorage.com/test/initial?X-Amz-Signature=TEST", &[("if-none-match".to_owned(), "*".to_owned())], 300))
+                } else {
+                    let inspected = encrypted_generation_domain::inspect_generation_metadata_prelude(&object.container).map_err(|_| error())?;
+                    let actual_metadata = inspected.metadata_digest().bytes().iter().map(|b| format!("{b:02x}")).collect::<String>();
+                    if actual_metadata != metadata_digest || sha256_hex(&object.container) != container_digest || u64::try_from(object.container.len()).ok() != Some(container_bytes) || inspected.metadata().base_generation_id().is_some() { return Err(error()); }
+                    let generation = object.generation.as_ref().ok_or_else(error)?;
+                    let dek = encrypted_generation_domain::GenerationDek::new(encrypted_generation_domain::KeyId::parse("profile-generation-root-v1-2").map_err(|_| error())?, [0xab; 32]);
+                    let opened = encrypted_generation_domain::open_generation_expected(&object.container, &dek, &TenantId::parse("tenant_01JAR10REAL").map_err(|_| error())?, &ProfileId::parse("profile_01JAR10REAL").map_err(|_| error())?, generation).map_err(|_| error())?;
+                    if !opened.plaintext().starts_with(b"BPGW0001") { return Err(error()); }
+                    object.verified = true;
+                    serde_json::to_vec(&BridgeGenerationUploadCapabilityResponse::verified())
+                }
+            }
+            Request::Commit { generation_id, expected_profile_version, container_digest, .. } => {
+                if !object.verified || sha256_hex(&object.container) != container_digest { return Err(error()); }
+                object.committed = true;
+                serde_json::to_vec(&InitialGenerationCommitted { generation_id, profile_version: expected_profile_version + 1, replayed: false,
+                    launch: control_plane_contract::profile_launch_api::ProfileLaunchProjection { launch_uri: "profilebridge://claim/claim_01JAR10_INITIAL_CONFIRMED".to_owned(), expires_at_ms: 1000 } })
+            }
+        }.map_err(|_| error())?;
+        Ok(profile_bridge::shipping_control_plane::MachineHttpResponse::new(200, response))
+    }
+}
+struct InitialUpload(std::rc::Rc<std::cell::RefCell<InitialObject>>);
+impl profile_bridge::shipping_generation_save::SignedGenerationObjectPutPort for InitialUpload {
+    type Error = BridgePortError;
+    fn put_exact(
+        &mut self,
+        capability: &profile_bridge::shipping_generation_save::SignedGenerationUploadCapability,
+        bytes: &[u8],
+    ) -> Result<(), Self::Error> {
+        if capability
+            .headers()
+            .map_err(|_| BridgePortError::InvalidResponse)?
+            != vec![("if-none-match", "*")]
+            || !self.0.borrow().container.is_empty()
+        {
+            return Err(BridgePortError::InvalidResponse);
+        }
+        self.0.borrow_mut().container = bytes.to_vec();
+        Ok(())
+    }
+}
+struct InitialBundle(ApprovedRuntimeBundle);
+impl profile_bridge::operator_flow::RuntimeBundleSelectionPort for InitialBundle {
+    type Error = BridgePortError;
+    fn select_bundle(
+        &mut self,
+        _: &profile_platform_primitives::ActorContext,
+        _: &ProfileId,
+        _: &GenerationId,
+    ) -> Result<ApprovedRuntimeBundle, Self::Error> {
+        Ok(self.0.clone())
+    }
+}
+
 fn run_managed_cold_launch_cycle() -> Result<(), Box<dyn std::error::Error>> {
     let python = PathBuf::from(env::var(PYTHON_ENV)?).canonicalize()?;
     let runtime_root = PathBuf::from(env::var(RUNTIME_ROOT_ENV)?).canonicalize()?;
-    let real_runtime = runtime_root.join("camouhost/real.py");
-    let runtime_lock = runtime_root.join("camouhost/runtime-lock.json");
     let root_path = root_path()?;
     let root = MaterializationRoot::open_or_create(&root_path)?;
     let tenant = TenantId::parse("tenant_01JAR10REAL")?;
     let profile = ProfileId::parse("profile_01JAR10REAL")?;
-    let generation = GenerationId::parse("generation_01JAR10REAL")?;
     let device = DeviceId::parse("device_01JAR10REAL")?;
-    let workspace = root.create_generation(&tenant, &profile, &generation)?;
-    let lock = BridgeWorkspaceLock::acquire(&workspace, &device, 9)?;
     let headless = env::var(HEADLESS_ENV).unwrap_or_else(|_| "virtual".to_owned());
     let display_mode = match headless.as_str() {
         "false" => RuntimeDisplayMode::Headful,
@@ -232,56 +266,55 @@ fn run_managed_cold_launch_cycle() -> Result<(), Box<dyn std::error::Error>> {
         _ => return Err(format!("{HEADLESS_ENV} must be exactly false or virtual").into()),
     };
 
-    let output = Command::new(&python)
-        .arg(&real_runtime)
-        .arg("--materialize-identity")
-        .arg(workspace.path())
-        .env("CAMOUHOST_RUNTIME_LOCK", &runtime_lock)
-        .env("CAMOUHOST_HEADLESS_MODE", &headless)
-        .output()?;
-    if !output.status.success() {
-        return Err(format!(
-            "real Camoufox candidate materialization failed: {}",
-            String::from_utf8_lossy(&output.stderr)
-        )
-        .into());
-    }
-    let report = String::from_utf8(output.stdout)?;
-    let config_sha256 = json_field(&report, "fingerprint_config_sha256")?;
-    let probe_sha256 = json_field(&report, "profile_stable_probe_sha256")?;
-    let runtime_lock_sha256 = json_field(&report, "runtime_lock_sha256")?;
-    let (_, actual_runtime_lock_sha256) = digest_file(&runtime_lock)?;
-    if runtime_lock_sha256 != actual_runtime_lock_sha256 {
-        return Err("candidate report runtime-lock identity drifted".into());
-    }
-
-    let mut symlinks = Vec::new();
-    collect_symlink_paths(workspace.path(), workspace.path(), &mut symlinks)?;
-    if !symlinks.is_empty() {
-        eprintln!("AR10_DIAGNOSTIC_SYMLINKS={symlinks:?}");
-    }
-
     let bundle = approved_runtime(&runtime_root)?;
-    let config_bytes = fs::read(workspace.path().join(CONFIG_NAME))?;
-    let typed_identity = profile_stable_identity_from_config_bytes(&config_bytes)?;
-    let browser_identity = BrowserIdentityManifest::new(
-        2,
-        "profile-stability-v1",
-        bundle.manifest().runtime_version(),
-        bundle.manifest().inventory_sha256().as_str(),
-        format!("profile-stability-v1-probe-{probe_sha256}"),
-        config_sha256,
-        typed_identity,
+    let config = ManagedCamouhostConfig::new(
+        python.clone(),
+        runtime_root.clone(),
+        display_mode,
+        None,
+        None,
     )?;
-    let binding = MaterializationBinding::new(
-        tenant,
-        profile,
-        generation,
-        "d".repeat(64),
-        workspace.materialization_inventory_digest()?,
-        browser_identity,
+    let intent = profile_bridge::generation_initialization::InitialProfileOpen::parse(
+        "profilebridge://open/v1/tenant_01JAR10REAL/actor_01JAR10REAL/profile_01JAR10REAL/1",
     )?;
-    persist_materialization_binding(&workspace, &binding)?;
+    let actor = profile_platform_primitives::ActorContext::new(
+        profile_platform_primitives::TenantScope::new(tenant.clone()),
+        profile_platform_primitives::ActorId::parse("actor_01JAR10REAL")?,
+        profile_platform_primitives::CorrelationId::parse("corr_01JAR10REAL")?,
+    );
+    let object = std::rc::Rc::new(std::cell::RefCell::new(InitialObject::default()));
+    profile_bridge::generation_initialization::initialize(
+        &intent,
+        &actor,
+        &device,
+        &root,
+        |workspace, bundle| {
+            config
+                .materialize_initial_identity(workspace, bundle)
+                .map_err(|_| {
+                    profile_bridge::generation_initialization::InitialProfileError::Runtime
+                })
+        },
+        &mut InitialBundle(bundle.clone()),
+        &mut InitialControl(object.clone()),
+        &mut InitialUpload(object.clone()),
+    )
+    .map_err(|error| format!("initial profile preparation failed at {error:?}"))?;
+    let evidence = object.borrow();
+    if !evidence.committed || !evidence.verified {
+        return Err("initial generation was not confirmed".into());
+    }
+    let generation = evidence
+        .generation
+        .clone()
+        .ok_or("missing committed initial generation")?;
+    let workspace = root.open_generation(&tenant, &profile, &generation)?;
+    let binding = load_materialization_binding(&workspace, &tenant, &profile, &generation)?;
+    if binding.source_container_sha256() != sha256_hex(&evidence.container) {
+        return Err("initial materialization lost exact confirmed container identity".into());
+    }
+    drop(evidence);
+    let lock = BridgeWorkspaceLock::acquire(&workspace, &device, 9)?;
 
     let slot = RuntimeBindingSlot::new();
     let mut preflight = ShippingBrowserLaunchPreflight::new(slot.clone());

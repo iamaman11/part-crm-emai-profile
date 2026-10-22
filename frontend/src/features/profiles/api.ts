@@ -1,3 +1,4 @@
+import { invokeProfileBridgeLaunch } from './launchBridge';
 import {
   activateProfileGeneration as activateProfileGenerationOperation,
   assignProfileToClient as assignProfileToClientOperation,
@@ -27,7 +28,7 @@ import type {
   ProfileDetachmentRequest,
   ProfileGenerationResponse,
   ProfileGrantRequest,
-  ProfileLaunchProjection,
+  ProfileLaunchIntentProjectionV2,
   ProfileListPageDto,
   ProfileView,
   RegisterProfileGenerationRequest,
@@ -44,7 +45,7 @@ export type ChangeGenerationActivationInput = { readonly expectedProfileVersion:
 export type QuarantineGenerationInput = { readonly expectedGenerationVersion: number };
 export type ProfileProjection = ProfileView;
 export type GenerationProjection = ProfileGenerationResponse;
-export type ProfileLaunch = ProfileLaunchProjection;
+export type ProfileLaunch = ProfileLaunchIntentProjectionV2;
 export type CoordinatorResponse = CoordinatorResponseDto;
 export type CoordinatorCommandDto = GeneratedCoordinatorCommandDto;
 export type { CoordinatorCommandRequestDto, ProfileListPageDto };
@@ -213,4 +214,9 @@ export function commandCoordinator(
   input: CoordinatorCommandRequestDto,
 ): Promise<CoordinatorResponse> {
   return issueProfileCoordinatorCommandOperation({ tenantId, profileId, body: input });
+}
+
+export async function openBrowserProfile(tenantId: string, profileId: string, idempotencyKey: string): Promise<void> {
+  const launch = await launchProfile(tenantId, profileId, idempotencyKey);
+  invokeProfileBridgeLaunch(launch.launchUri);
 }

@@ -1,3 +1,5 @@
+mod initialization;
+
 use crate::access_session::problem;
 use crate::composition::{
     device_execution_preconditions, device_job_authorization,
@@ -57,6 +59,7 @@ type DownloadSigningTimeResult =
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum BridgeGenerationMachineOperation {
+    Initialize,
     SealingMaterial,
     UploadCapability,
     Commit,
@@ -75,6 +78,15 @@ pub(crate) fn operation(path: &str, method: Method) -> Option<BridgeGenerationMa
         .filter(|segment| !segment.is_empty())
         .collect();
     match segments.as_slice() {
+        [
+            "bridge",
+            "v1",
+            "tenants",
+            _,
+            "profiles",
+            _,
+            "generation-initialization",
+        ] => Some(BridgeGenerationMachineOperation::Initialize),
         [
             "bridge",
             "v1",
@@ -136,7 +148,11 @@ pub(crate) async fn dispatch_authorized(
     actor: &ActorContext,
     device_id: &DeviceId,
     operation: BridgeGenerationMachineOperation,
+    role: identity_access_domain::MembershipRole,
 ) -> Result<Response> {
+    if operation == BridgeGenerationMachineOperation::Initialize {
+        return initialization::dispatch(request, env, profile_id, actor, device_id, role).await;
+    }
     if operation == BridgeGenerationMachineOperation::SealingMaterial {
         return dispatch_sealing_material(request, env, profile_id, actor, device_id).await;
     }
@@ -234,7 +250,8 @@ pub(crate) async fn dispatch_authorized(
 
     let verifier = generation_object_verifier(env)?;
     match operation {
-        BridgeGenerationMachineOperation::SealingMaterial
+        BridgeGenerationMachineOperation::Initialize
+        | BridgeGenerationMachineOperation::SealingMaterial
         | BridgeGenerationMachineOperation::DownloadCapability
         | BridgeGenerationMachineOperation::OpeningMaterial => {
             unreachable!("handled before successor DTO")

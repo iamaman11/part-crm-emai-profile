@@ -69,6 +69,19 @@ impl UserDiagnostic {
                 ShippingCompositionError::ExternalNetworkConfiguration => {
                     "BRIDGE_MANUAL_NETWORK_SETTINGS"
                 }
+                ShippingCompositionError::Initialization(error) => match error {
+                    crate::generation_initialization::InitialProfileError::Runtime => {
+                        "BRIDGE_FIRST_OPEN_RUNTIME_FAILED"
+                    }
+                    crate::generation_initialization::InitialProfileError::Upload
+                    | crate::generation_initialization::InitialProfileError::Verification => {
+                        "BRIDGE_FIRST_SAVE_UPLOAD_FAILED"
+                    }
+                    crate::generation_initialization::InitialProfileError::SavedRecovery => {
+                        "BRIDGE_SAVED_LOCAL_RECOVERY_REQUIRED"
+                    }
+                    _ => "BRIDGE_PROFILE_OPEN_INCOMPLETE",
+                },
                 ShippingCompositionError::Clock => "BRIDGE_CLOCK_UNAVAILABLE",
                 ShippingCompositionError::ControlPlane => "BRIDGE_SESSION_NOT_AUTHORIZED",
                 ShippingCompositionError::DeliveryHealth => "BRIDGE_RUNTIME_NOT_READY",
@@ -175,6 +188,9 @@ impl UserDiagnostic {
             }
             Self::Launch(Launch::InstalledConnection(_)) => {
                 "Profile Bridge connection settings need repair. Return to computer setup in the application. Keep existing device and profile files; setup must not silently switch the connected server."
+            }
+            Self::Launch(Launch::Initialization(_)) => {
+                "The profile could not open. Return to the application to check access, connection and session status, then try Open again. Keep local profile files; a failed request is not proof of a saved copy."
             }
             Self::Launch(Launch::Operator) => {
                 "The profile operation did not complete. Return to the application and check session and save status. Keep local profile files until recovery is confirmed."

@@ -1,1 +1,99 @@
-{"components":{"schemas":{"ProfileLaunchProjection":{"additionalProperties":false,"properties":{"expiresAtMs":{"minimum":1,"type":"integer"},"launchUri":{"maxLength":118,"minLength":46,"pattern":"^profilebridge://claim/[A-Za-z0-9_-]{24,96}$","type":"string"}},"required":["launchUri","expiresAtMs"],"type":"object"}}},"paths":{"/api/v1/tenants/{tenantId}/profiles/{profileId}/launch":{"post":{"operationId":"launchProfile","parameters":[{"$ref":"#/components/parameters/TenantPath"},{"$ref":"#/components/parameters/ProfilePath"},{"$ref":"#/components/parameters/CorrelationHeader"},{"$ref":"#/components/parameters/IdempotencyHeader"}],"responses":{"200":{"content":{"application/json":{"schema":{"$ref":"#/components/schemas/ProfileLaunchProjection"}}},"description":"Bounded single-use Profile Bridge launch authority"},"400":{"$ref":"#/components/responses/InvalidRequest"},"404":{"$ref":"#/components/responses/NeutralNotFound"},"409":{"$ref":"#/components/responses/Conflict"},"500":{"$ref":"#/components/responses/InternalFailure"},"503":{"$ref":"#/components/responses/DependencyUnavailable"}},"security":[{"cloudflareAccessJwt":[]}]}}}}
+{
+  "components": {
+    "schemas": {
+      "ProfileLaunchIntentProjectionV2": {
+        "additionalProperties": false,
+        "properties": {
+          "launchUri": {
+            "pattern": "^profilebridge://open/v1/[A-Za-z0-9_-]{8,96}/[A-Za-z0-9_-]{8,96}/[A-Za-z0-9_-]{8,96}/[1-9][0-9]{0,18}$",
+            "type": "string"
+          },
+          "schemaVersion": {
+            "enum": [
+              2
+            ],
+            "type": "integer"
+          }
+        },
+        "required": [
+          "schemaVersion",
+          "launchUri"
+        ],
+        "type": "object"
+      },
+      "ProfileLaunchProjection": {
+        "additionalProperties": false,
+        "properties": {
+          "expiresAtMs": {
+            "minimum": 1,
+            "type": "integer"
+          },
+          "launchUri": {
+            "maxLength": 118,
+            "minLength": 46,
+            "pattern": "^profilebridge://claim/[A-Za-z0-9_-]{24,96}$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "launchUri",
+          "expiresAtMs"
+        ],
+        "type": "object"
+      }
+    }
+  },
+  "paths": {
+    "/api/v1/tenants/{tenantId}/profiles/{profileId}/launch": {
+      "post": {
+        "operationId": "launchProfile",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/TenantPath"
+          },
+          {
+            "$ref": "#/components/parameters/ProfilePath"
+          },
+          {
+            "$ref": "#/components/parameters/CorrelationHeader"
+          },
+          {
+            "$ref": "#/components/parameters/IdempotencyHeader"
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProfileLaunchIntentProjectionV2"
+                }
+              }
+            },
+            "description": "Version 2 native open intent; machine authentication and current profile authorization precede claim issuance"
+          },
+          "400": {
+            "$ref": "#/components/responses/InvalidRequest"
+          },
+          "404": {
+            "$ref": "#/components/responses/NeutralNotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalFailure"
+          },
+          "503": {
+            "$ref": "#/components/responses/DependencyUnavailable"
+          }
+        },
+        "security": [
+          {
+            "cloudflareAccessJwt": []
+          }
+        ]
+      }
+    }
+  }
+}

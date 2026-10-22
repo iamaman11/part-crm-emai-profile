@@ -1,8 +1,6 @@
-const PROFILE_BRIDGE_SCHEME = 'profilebridge://claim/';
+const PROFILE_BRIDGE_OPEN = /^profilebridge:\/\/open\/v1\/[A-Za-z0-9_-]{8,96}\/[A-Za-z0-9_-]{8,96}\/[A-Za-z0-9_-]{8,96}\/[1-9][0-9]{0,18}$/;
 
 export function invokeProfileBridgeLaunch(launchUri: string): void {
-  if (!launchUri.startsWith(PROFILE_BRIDGE_SCHEME)) {
-    throw new Error('Profile Bridge launch response failed closed');
-  }
+  if (!PROFILE_BRIDGE_OPEN.test(launchUri)) throw new Error('Profile Bridge open response failed closed');
   globalThis.location.assign(launchUri);
 }

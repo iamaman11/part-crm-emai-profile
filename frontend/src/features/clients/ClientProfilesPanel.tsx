@@ -1,11 +1,11 @@
+import { ApiProblem } from '../../shared/api/openapi-runtime';
 import { useInfiniteQuery, useQueryClient } from '@tanstack/react-query';
 import { useState, type FormEvent } from 'react';
 import {
   assignProfile,
   detachProfile,
   getProfile,
-  invokeProfileBridgeLaunch,
-  launchProfile,
+  openBrowserProfile,
 } from '../profiles';
 import { newIdempotencyKey } from '../../shared/api/idempotency';
 import { ConfirmAction } from '../../shared/ui/ConfirmAction';
@@ -87,10 +87,9 @@ export function ClientProfilesPanel({
     setLaunchError(null);
     setLaunchingProfileId(profileId);
     try {
-      const launch = await launchProfile(tenantId, profileId, newIdempotencyKey());
-      invokeProfileBridgeLaunch(launch.launchUri);
-    } catch {
-      setLaunchError(new Error('Profile launch failed. Retry from this profile.'));
+      await openBrowserProfile(tenantId, profileId, newIdempotencyKey());
+    } catch (error) {
+      setLaunchError(error instanceof ApiProblem ? error : new Error('Profile launch failed. Retry from this profile.'));
     } finally {
       setLaunchingProfileId(null);
     }

@@ -38,8 +38,9 @@ def database() -> sqlite3.Connection:
     connection = sqlite3.connect(":memory:")
     connection.row_factory = sqlite3.Row
     connection.execute("PRAGMA foreign_keys = ON")
-    for migration in migration_files():
-        connection.executescript(migration.read_text(encoding="utf-8"))
+    for migration in migration_files() + sorted((ROOT / "migrations" / "d1-successor-v2").glob("*.sql")):
+        source = ROOT / "migrations/d1-successor/0027_pas2_payload_fingerprint_expand.sql" if migration.name.startswith("0027_") else migration
+        connection.executescript(source.read_text(encoding="utf-8"))
     connection.commit()
     return connection
 
@@ -443,7 +444,91 @@ def test_quarantine(connection: sqlite3.Connection) -> None:
     assert generation_row(connection)["status"] == "QUARANTINED"
 
 
+
+def initial_database(role: str = "PROFILE_OPERATOR") -> sqlite3.Connection:
+    connection = database()
+    seed(connection)
+    connection.execute("INSERT INTO profile_grants (tenant_id, profile_id, actor_id, role, granted_by_actor_id, reason, created_at_ms) VALUES (?, ?, ?, ?, ?, 'self service', 20)", (TENANT, PROFILE, MEMBER, role, OWNER))
+    connection.execute("INSERT INTO device_public_key_binding_commands (tenant_id, pairing_digest, actor_id, device_id, public_key_spki_der_hex, expected_previous_version, next_version, executed_at_ms) VALUES (?, ?, ?, 'device_initial_member', ?, NULL, 1, 30)", (TENANT, "c" * 64, MEMBER, "a" * 182))
+    connection.commit()
+    return connection
+
+
+def initialize(connection: sqlite3.Connection, device: str = "device_initial_member", version: int = 1, fail_late: bool = False) -> None:
+    # Production SQL comes from the existing D1 repository, not a second initializer.
+    import re
+    source = (ROOT / "crates/cloudflare-adapters/src/d1_profile_generations/initialization.rs").read_text()
+    repository = (ROOT / "crates/cloudflare-adapters/src/d1_profile_generations.rs").read_text()
+    def sql(name: str, text: str = source) -> str:
+        match = re.search(r'const ' + name + r': &str = r#"(.*?)"#;', text, re.S)
+        assert match, name
+        return match.group(1)
+    with connection:
+        connection.execute(sql("INITIAL_REGISTER_COMMAND"), (TENANT, "initial_test", MEMBER, PROFILE, GENERATION, OBJECT_KEY, METADATA_DIGEST, CONTAINER_DIGEST, 40, device, version))
+        connection.execute(sql("VERIFY_COMMAND", repository), (TENANT, "initial_test", MEMBER, PROFILE, GENERATION, 1, "r2sha256:" + CONTAINER_DIGEST, 40))
+        connection.execute(sql("INITIAL_DEVICE_ADMISSION"), (TENANT, MEMBER, device, PROFILE, GENERATION, "r2sha256:" + CONTAINER_DIGEST, 40, version))
+        connection.execute(sql("ACTIVATE_COMMAND", repository), (TENANT, "initial_test", MEMBER, PROFILE, GENERATION, version, 40))
+        if fail_late:
+            connection.execute("INSERT INTO profile_generation_activate_commands SELECT * FROM profile_generation_activate_commands")
+
+
+def test_initial_self_service() -> None:
+    with initial_database() as connection:
+        initialize(connection)
+        assert tuple(profile_row(connection)) == ("READY", GENERATION, 2)
+        assert generation_row(connection)["status"] == "VERIFIED"
+        admission = connection.execute("SELECT device_id, generation_id, status FROM device_authorizations").fetchall()
+        assert [tuple(row) for row in admission] == [("device_initial_member", GENERATION, "ACTIVE")]
+        # Old technical APIs remain owner-only for the same MEMBER.
+        expect_integrity_error(lambda: register(connection, actor_id=MEMBER, command_id="member_admin_denied", generation_id=SECOND_GENERATION, object_key="profiles/v1/second.enc"), "owner_required")
+        connection.rollback()
+    for role, device, version, late in [("PROFILE_VIEWER", "device_initial_member", 1, False), ("PROFILE_OPERATOR", "device_foreign", 1, False), ("PROFILE_OPERATOR", "device_initial_member", 2, False), ("PROFILE_OPERATOR", "device_initial_member", 1, True)]:
+        with initial_database(role) as connection:
+            expect_integrity_error(lambda: initialize(connection, device, version, late), "")
+            assert tuple(profile_row(connection)) == ("DRAFT", None, 1)
+            assert connection.execute("SELECT COUNT(*) FROM profile_generations").fetchone()[0] == 0
+            assert connection.execute("SELECT COUNT(*) FROM device_authorizations").fetchone()[0] == 0
+    with initial_database() as connection:
+        connection.execute("DELETE FROM profile_grants WHERE actor_id = ?", (MEMBER,))
+        connection.commit()
+        expect_integrity_error(lambda: initialize(connection), "access_required")
+        assert tuple(profile_row(connection)) == ("DRAFT", None, 1)
+
+
+def test_user_access_on_registered_computers() -> None:
+    import re
+    source = (ROOT / "crates/cloudflare-adapters/src/d1_device_authorization.rs").read_text()
+    match = re.search(r'const ADMIT_PROFILE_DEVICE: &str = r#"(.*?)"#;', source, re.S)
+    assert match
+    admission_sql = match.group(1)
+    with initial_database() as connection:
+        initialize(connection)
+        # Same user, second computer: pairing does not revoke the first.
+        connection.execute("INSERT INTO device_public_key_binding_commands VALUES (?, ?, ?, ?, ?, 1, 2, 50)", (TENANT, "d" * 64, MEMBER, "device_member_second", "b" * 182))
+        assert connection.execute("SELECT COUNT(*) FROM device_actor_bindings WHERE actor_id = ? AND status = 'ACTIVE'", (MEMBER,)).fetchone()[0] == 2
+        # Another authorized user also opens the same profile on their own machine.
+        connection.execute("INSERT INTO device_public_key_binding_commands VALUES (?, ?, ?, ?, ?, NULL, 1, 50)", (TENANT, "e" * 64, OWNER, "device_owner_second", "c" * 182))
+        for actor, device in [(MEMBER, "device_member_second"), (OWNER, "device_owner_second")]:
+            connection.execute(admission_sql, (TENANT, actor, PROFILE, 60, device))
+            assert connection.execute("SELECT COUNT(*) FROM device_authorizations WHERE device_id = ? AND generation_id = ? AND status = 'ACTIVE'", (device, GENERATION)).fetchone()[0] == 1
+        # A locator for someone else's device grants nothing, even for the tenant owner.
+        connection.execute("DELETE FROM device_authorizations WHERE device_id = 'device_member_second'")
+        connection.execute(admission_sql, (TENANT, OWNER, PROFILE, 60, "device_member_second"))
+        assert connection.execute("SELECT COUNT(*) FROM device_authorizations WHERE device_id = 'device_member_second'").fetchone()[0] == 0
+        # Revoking the first computer by exact binding version leaves the second active.
+        connection.execute("INSERT INTO device_binding_revoke_commands VALUES (?, 'revoke_first', ?, ?, 1, 70)", (TENANT, OWNER, MEMBER))
+        assert connection.execute("SELECT status FROM device_actor_bindings WHERE actor_id = ? AND version = 1", (MEMBER,)).fetchone()[0] == "REVOKED"
+        assert connection.execute("SELECT status FROM device_actor_bindings WHERE actor_id = ? AND version = 2", (MEMBER,)).fetchone()[0] == "ACTIVE"
+        # ACL revocation prevents admission to the current generation, despite ACTIVE device state.
+        connection.execute("DELETE FROM profile_grants WHERE actor_id = ?", (MEMBER,))
+        connection.execute(admission_sql, (TENANT, MEMBER, PROFILE, 80, "device_member_second"))
+        assert connection.execute("SELECT COUNT(*) FROM device_authorizations WHERE device_id = 'device_member_second'").fetchone()[0] == 0
+        assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
+
+
 def main() -> int:
+    test_initial_self_service()
+    test_user_access_on_registered_computers()
     connection = database()
     try:
         seed(connection)

@@ -18,6 +18,10 @@ vi.mock('../profiles', () => ({
   getProfile: vi.fn(),
   invokeProfileBridgeLaunch: vi.fn(),
   launchProfile: vi.fn(),
+  openBrowserProfile: async (tenant: string, profile: string, key: string) => {
+    const result = await mockedLaunchProfile(tenant, profile, key);
+    mockedInvokeProfileBridgeLaunch(result.launchUri);
+  },
 }));
 
 vi.mock('./api', () => ({
@@ -73,8 +77,8 @@ describe('ClientProfilesPanel P1 relationship and P2 launch workflow', () => {
       aggregateVersion: 5,
     });
     mockedLaunchProfile.mockResolvedValue({
-      launchUri: 'profilebridge://claim/claim_0123456789abcdef0123456789abcdef',
-      expiresAtMs: 1_000,
+      launchUri: 'profilebridge://open/v1/tenant_01JCLIENTPROFILES/actor_01JCLIENTPROFILES/profile_01JCLIENTPROFILES_LAUNCH/4',
+      schemaVersion: 2,
     });
   });
 
@@ -126,7 +130,7 @@ describe('ClientProfilesPanel P1 relationship and P2 launch workflow', () => {
     expect(idempotencyKey).not.toContain('device');
     expect(idempotencyKey).not.toContain('generation');
     expect(mockedInvokeProfileBridgeLaunch).toHaveBeenCalledWith(
-      'profilebridge://claim/claim_0123456789abcdef0123456789abcdef',
+      'profilebridge://open/v1/tenant_01JCLIENTPROFILES/actor_01JCLIENTPROFILES/profile_01JCLIENTPROFILES_LAUNCH/4',
     );
     expect(screen.queryByText(/claim_0123456789abcdef/u)).toBeNull();
   });

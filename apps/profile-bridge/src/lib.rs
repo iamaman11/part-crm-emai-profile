@@ -16,6 +16,7 @@ mod dirty_generation_local;
 #[cfg(any(test, feature = "synthetic-test-bin"))]
 pub mod dirty_generation_publish;
 pub mod fake_mail_query;
+pub mod generation_initialization;
 pub mod generation_reopen;
 mod generation_snapshot;
 pub mod installed_connection;

@@ -458,9 +458,9 @@ def validate_d1_projection(payload: dict[str, Any]) -> None:
         fail("Catalog live successor migration root drifted")
     if catalog.get("migration_lineage") != "catalog-successor-v2":
         fail("Catalog successor lineage identity drifted")
-    if catalog.get("current_repository_revision") != "0035_pas2_payload_fingerprint_contract.sql":
+    if catalog.get("current_repository_revision") != "0036_profile_generation_initialization.sql":
         fail("Catalog successor current repository revision drifted")
-    if catalog.get("migration_count") != 35 or catalog.get("post_epoch_migration_count") != 9:
+    if catalog.get("migration_count") != 36 or catalog.get("post_epoch_migration_count") != 10:
         fail("Catalog successor migration cardinality drifted")
     legacy = catalog.get("legacy_history")
     if legacy != {
@@ -483,11 +483,11 @@ def validate_d1_projection(payload: dict[str, Any]) -> None:
     if not isinstance(catalog_contract, dict):
         fail("Catalog successor release contract is missing")
     if (
-        catalog_contract.get("target_schema_revision") != "0034_device_application_authority.sql"
-        or catalog_contract.get("supported_schema_min") != "0034_device_application_authority.sql"
-        or catalog_contract.get("supported_schema_max") != "0035_pas2_payload_fingerprint_contract.sql"
+        catalog_contract.get("target_schema_revision") != "0036_profile_generation_initialization.sql"
+        or catalog_contract.get("supported_schema_min") != "0036_profile_generation_initialization.sql"
+        or catalog_contract.get("supported_schema_max") != "0036_profile_generation_initialization.sql"
     ):
-        fail("Catalog successor bounded device-application-0034..PAS2-0035 release window drifted")
+        fail("Catalog successor exact initialization0036 release window drifted")
 
 
 def validate(root: Path = ROOT) -> None:

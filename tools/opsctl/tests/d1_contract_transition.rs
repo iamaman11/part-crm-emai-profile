@@ -90,16 +90,24 @@ fn public_contract_transition_enforces_exact_fail_closed_matrix_and_post_verify(
                 .ok_or("Catalog migration filename is missing")
         })
         .collect::<Result<Vec<_>, _>>()?;
-    assert_eq!(names.len(), 35);
+    assert_eq!(names.len(), 36);
     assert_eq!(names[33], PREDECESSOR_REVISION);
     assert_eq!(names[34], CONTRACT_REVISION);
 
     let predecessor_ledger = ledger(&names[..34]);
     let multiple_pending_ledger = ledger(&names[..33]);
-    let post_ledger = ledger(&names);
-    let release_manifest = json!({
-        "schema_contract": catalog["release_schema_contract"].clone()
-    });
+    let post_ledger = ledger(&names[..35]);
+    // This operation still proves only0034 ->0035. Its synthetic running-runtime fixture must
+    // support that exact window; the new0036-only application is not predecessor evidence.
+    let mut predecessor_runtime_contract = catalog["release_schema_contract"].clone();
+    assert_eq!(
+        predecessor_runtime_contract["target_schema_revision"],
+        "0036_profile_generation_initialization.sql"
+    );
+    predecessor_runtime_contract["target_schema_revision"] = json!(PREDECESSOR_REVISION);
+    predecessor_runtime_contract["supported_schema_min"] = json!(PREDECESSOR_REVISION);
+    predecessor_runtime_contract["supported_schema_max"] = json!(CONTRACT_REVISION);
+    let release_manifest = json!({"schema_contract": predecessor_runtime_contract});
     let repository_identity_sha256 = projection["repository_identity_sha256"]
         .as_str()
         .ok_or("repository identity is missing")?
@@ -145,6 +153,28 @@ fn public_contract_transition_enforces_exact_fail_closed_matrix_and_post_verify(
     write_json(&post_path, &post_ledger)?;
     write_json(&release_path, &release_manifest)?;
     write_json(&evidence_path, &evidence)?;
+
+    let initialization_runtime_path = temp.path("initialization-runtime.json");
+    write_json(
+        &initialization_runtime_path,
+        &json!({"schema_contract": catalog["release_schema_contract"].clone()}),
+    )?;
+    let incompatible = contract_transition(D1ContractTransitionRequest {
+        root: &root,
+        ledger_json: &predecessor_path,
+        release_manifest: &initialization_runtime_path,
+        evidence_json: &evidence_path,
+        evaluated_at_unix_seconds: 101,
+        expected_source_sha: &source_sha,
+        expected_release_set_id: &release_set_id,
+    })
+    .err()
+    .ok_or("0036-only runtime incorrectly proved pre-contract compatibility")?;
+    assert!(
+        incompatible
+            .to_string()
+            .contains("release schema window must be exact")
+    );
 
     let planned = contract_transition(D1ContractTransitionRequest {
         root: &root,
@@ -285,6 +315,25 @@ fn public_contract_transition_enforces_exact_fail_closed_matrix_and_post_verify(
         expected_release_set_id: &release_set_id,
     })?;
     let verified: Value = serde_json::from_str(&output)?;
+    let beyond_contract_path = temp.path("beyond-contract-ledger.json");
+    write_json(&beyond_contract_path, &ledger(&names))?;
+    let beyond_contract = contract_transition_verify(D1ContractTransitionVerificationRequest {
+        root: &root,
+        predecessor_ledger_json: &predecessor_path,
+        ledger_json: &beyond_contract_path,
+        release_manifest: &release_path,
+        evidence_json: &evidence_path,
+        evaluated_at_unix_seconds: 101,
+        expected_source_sha: &source_sha,
+        expected_release_set_id: &release_set_id,
+    })
+    .err()
+    .ok_or("0035 transition incorrectly accepted an extra0036 effect")?;
+    assert!(
+        beyond_contract
+            .to_string()
+            .contains("exactly one canonical")
+    );
     assert_eq!(verified["command"], "d1 contract-transition verify");
     assert_eq!(verified["decision"], "SAFE");
     assert_eq!(verified["predecessor_revision"], PREDECESSOR_REVISION);

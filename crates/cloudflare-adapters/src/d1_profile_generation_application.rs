@@ -1,3 +1,5 @@
+mod initialization;
+
 use crate::d1_idempotency::{D1IdempotencyRepository, IdempotencyDecision};
 use crate::d1_identity_acl::{MutationEnvelope, ResolvedMembershipRole};
 use crate::d1_profile_generations::{
@@ -241,6 +243,7 @@ fn map_dependency_error(_error: Error) -> GenerationPortError {
 
 fn classify_write_failure(message: &str) -> GenerationPortErrorClass {
     if message.contains("owner_required")
+        || message.contains("initialization_access_required")
         || message.contains("profile_missing")
         || message.contains("generation_missing")
         || message.contains("profile_generation_missing")

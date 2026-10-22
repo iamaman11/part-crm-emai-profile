@@ -6,6 +6,7 @@ use profile_bridge::device_pairing::{
     DevicePairingBootstrapError, DevicePairingCompleteUri, DevicePairingStartUri,
     PAIRING_COMPLETE_URI_PREFIX, PAIRING_START_URI_PREFIX, run_pairing_complete, run_pairing_start,
 };
+use profile_bridge::generation_initialization::{INITIAL_OPEN_URI_PREFIX, InitialProfileOpen};
 use profile_bridge::installed_connection::ControlPlaneOrigin;
 use profile_bridge::shipping_composition::run_claim;
 use profile_bridge::shipping_composition::{
@@ -57,6 +58,10 @@ where
             );
             result.map_err(BridgeCliError::InstallationFailed)
         }
+        BridgeCommand::InitialProfile(intent) => {
+            profile_bridge::shipping_composition::run_initial_profile(&intent)
+                .map_err(BridgeCliError::LaunchFailed)
+        }
         BridgeCommand::Claim(claim) => run_claim(&claim).map_err(BridgeCliError::LaunchFailed),
         BridgeCommand::PairingStart(uri) => {
             run_pairing_start(&uri).map_err(BridgeCliError::PairingFailed)
@@ -82,6 +87,7 @@ where
 enum BridgeCommand {
     PrepareInstallation(PathBuf, PathBuf),
     Claim(ClaimUri),
+    InitialProfile(InitialProfileOpen),
     PairingStart(DevicePairingStartUri),
     PairingComplete(DevicePairingCompleteUri),
     DeliveryActivateStaged,
@@ -136,6 +142,9 @@ where
     match argument.as_str() {
         HANDOFF_ACTIVATE_ARGUMENT => Ok(BridgeCommand::DeliveryActivateStaged),
         HANDOFF_ARRIVAL_ARGUMENT => Ok(BridgeCommand::DeliveryHandoffArrived),
+        value if value.starts_with(INITIAL_OPEN_URI_PREFIX) => InitialProfileOpen::parse(value)
+            .map(BridgeCommand::InitialProfile)
+            .map_err(|_| BridgeCliError::InvalidClaimUri),
         value if value.starts_with(PAIRING_START_URI_PREFIX) => DevicePairingStartUri::parse(value)
             .map(BridgeCommand::PairingStart)
             .map_err(|_| BridgeCliError::InvalidPairingUri),

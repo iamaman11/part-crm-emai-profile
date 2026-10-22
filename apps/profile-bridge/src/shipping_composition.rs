@@ -23,6 +23,7 @@ pub enum ShippingCompositionError {
     DeliveryRecoveryRequired,
     Operator,
     CommittedRecoveryRequired,
+    Initialization(crate::generation_initialization::InitialProfileError),
 }
 
 impl core::fmt::Display for ShippingCompositionError {
@@ -43,6 +44,7 @@ impl core::fmt::Display for ShippingCompositionError {
                 "shipping Profile Bridge delivery recovery is required"
             }
             Self::Operator => "shipping Profile Bridge operator flow failed",
+            Self::Initialization(_) => "profile first-open preparation failed",
             Self::CommittedRecoveryRequired => {
                 "generation successor committed but local recovery is required"
             }
@@ -93,6 +95,20 @@ pub fn run_claim(claim: &ClaimUri) -> Result<(), ShippingCompositionError> {
     #[cfg(not(windows))]
     {
         let _ = claim;
+        Err(ShippingCompositionError::UnsupportedPlatform)
+    }
+}
+
+pub fn run_initial_profile(
+    intent: &crate::generation_initialization::InitialProfileOpen,
+) -> Result<(), ShippingCompositionError> {
+    #[cfg(windows)]
+    {
+        windows::run_initial(intent)
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = intent;
         Err(ShippingCompositionError::UnsupportedPlatform)
     }
 }
@@ -174,6 +190,91 @@ mod windows {
                 materialization_root,
             })
         }
+    }
+
+    pub fn run_initial(
+        intent: &crate::generation_initialization::InitialProfileOpen,
+    ) -> Result<(), ShippingCompositionError> {
+        use crate::operator_flow::DeviceAuthenticationPort;
+        use bridge_domain::DeviceKeyPort;
+        use profile_platform_primitives::{ActorContext, CorrelationId, TenantScope};
+        if recover_delivery_before_claim()? {
+            return Ok(());
+        }
+        let config = ShippingConfig::from_installation()?;
+        let active = ActiveWindowsDeliveryRuntime::resolve_current()
+            .map_err(|_| ShippingCompositionError::Configuration)?;
+        let pending_health = active.pending_health_confirmation();
+        let runtime_root = active.runtime_root().to_path_buf();
+        let mut bundles = active.into_bundle_selection();
+        let binding =
+            WindowsDeviceApplicationBinding::open(&config.device_application_binding_path)
+                .map_err(|_| ShippingCompositionError::Configuration)?;
+        if binding.tenant_id() != &intent.tenant_id || binding.actor_id() != &intent.actor_id {
+            return Err(ShippingCompositionError::ControlPlane);
+        }
+        let device = binding.device_id().clone();
+        let actor = ActorContext::new(
+            TenantScope::new(binding.tenant_id().clone()),
+            binding.actor_id().clone(),
+            CorrelationId::parse("corr_initial_profile")
+                .map_err(|_| ShippingCompositionError::Configuration)?,
+        );
+        let mut application =
+            WindowsDeviceApplication::from_system(config.control_plane_origin, binding)
+                .map_err(|_| ShippingCompositionError::Configuration)?;
+        let key = application
+            .ensure_key_handle(&device)
+            .map_err(|_| ShippingCompositionError::ControlPlane)?;
+        application
+            .authenticate(&device, &key)
+            .map_err(|_| ShippingCompositionError::ControlPlane)?;
+        let mut transport = application.transport();
+        let root = MaterializationRoot::open_or_create(&config.materialization_root)
+            .map_err(|_| ShippingCompositionError::Configuration)?;
+        let runtime = ManagedCamouhostConfig::new(
+            runtime_root.join(PACKAGED_PYTHON_EXECUTABLE),
+            runtime_root,
+            RuntimeDisplayMode::Headful,
+            None,
+            None,
+        )
+        .map_err(|_| ShippingCompositionError::Configuration)?;
+        let mut uploader = WindowsSignedGenerationObjectPut::from_system()
+            .map_err(|_| ShippingCompositionError::Configuration)?;
+        let materialize =
+            |workspace: &crate::local_profile::GenerationWorkspace,
+             bundle: &crate::runtime_bundle::ApprovedRuntimeBundle| {
+                use crate::generation_initialization::InitialProfileError;
+                let started = pending_health
+                    .map(|pending| {
+                        pending
+                            .start_before_runtime_health()
+                            .map_err(|_| InitialProfileError::Runtime)
+                    })
+                    .transpose()?;
+                let identity = runtime
+                    .materialize_initial_identity(workspace, bundle)
+                    .map_err(|_| InitialProfileError::Runtime)?;
+                if let Some(started) = started {
+                    started
+                        .confirm_after_runtime_ready()
+                        .map_err(|_| InitialProfileError::Runtime)?;
+                }
+                Ok(identity)
+            };
+        let claim = crate::generation_initialization::initialize(
+            intent,
+            &actor,
+            &device,
+            &root,
+            materialize,
+            &mut bundles,
+            &mut transport,
+            &mut uploader,
+        )
+        .map_err(ShippingCompositionError::Initialization)?;
+        run(&claim)
     }
 
     pub fn run(claim: &ClaimUri) -> Result<(), ShippingCompositionError> {

@@ -5,7 +5,6 @@ use crate::access_session::{
     correlation_hint, membership_role, neutral_not_found, problem, resolve_active_request_actor,
 };
 use crate::bridge_machine::resolve_bridge_machine;
-use crate::command_evidence;
 use crate::composition::{
     authenticated_device, device_execution_preconditions, device_job_authorization,
 };
@@ -13,10 +12,9 @@ use cloudflare_adapters::d1_active_membership::D1ActiveMembership;
 use control_plane_contract::D1_CATALOG_BINDING;
 use control_plane_contract::profile_launch_api::{
     BridgeProfileLaunchRedemptionProjection, BridgeProfileLaunchRedemptionRequest,
-    ProfileLaunchProjection,
+    ProfileLaunchIntentProjectionV2, ProfileLaunchProjection,
 };
-use profile_platform_primitives::{CorrelationId, ProfileId, UnixMillis};
-use serde::Serialize;
+use profile_platform_primitives::{CorrelationId, DeviceId, ProfileId, UnixMillis};
 use use_cases::profile_launch::authorize_profile_launch;
 use use_cases::profile_launch_authority::issue_profile_launch_authority;
 use use_cases::profile_launch_redemption::{
@@ -27,12 +25,6 @@ use use_cases::{ApplicationError, ProblemCode};
 use worker::{Date, Env, Request, Response, Result};
 
 use super::profile_launch_composition::{launch_authority, launch_context};
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct ProfileLaunchCommandEvidence<'a> {
-    profile_id: &'a str,
-}
 
 pub(super) async fn launch(
     request: &mut Request,
@@ -47,7 +39,7 @@ pub(super) async fn launch(
 }
 
 async fn issue_for_operator(
-    request: &Request,
+    request: &mut Request,
     env: &Env,
     tenant_id: &str,
     profile_id: &str,
@@ -60,25 +52,76 @@ async fn issue_for_operator(
         Ok(value) => value,
         Err(_) => return neutral_not_found(actor.correlation_id().as_str()),
     };
-    let evidence = match command_evidence::from_request(
-        request,
-        actor,
-        &ProfileLaunchCommandEvidence {
-            profile_id: profile_id.as_str(),
-        },
-    ) {
-        Ok(value) => value,
-        Err(_) => return invalid_request(actor.correlation_id().as_str()),
-    };
-
-    let context = launch_context(env)?;
-    let device = authenticated_device(env)?;
-    let authorization = device_job_authorization(env)?;
-    let preconditions = device_execution_preconditions(env)?;
-    let target = match authorize_profile_launch(
+    let application = crate::composition::profile_generation_application(env)?;
+    let context = match use_cases::generation_initialization::authorize_initial_generation_access(
         actor,
         membership_role(&resolved),
         &profile_id,
+        &application,
+    )
+    .await
+    {
+        Ok(value) => value,
+        Err(_) => return neutral_not_found(actor.correlation_id().as_str()),
+    };
+    if !matches!(
+        context.status,
+        application_ports::profiles::ProfileStatus::Draft
+            | application_ports::profiles::ProfileStatus::Ready
+    ) {
+        return problem(
+            actor.correlation_id().as_str(),
+            409,
+            "invalid_state",
+            "Profile is not ready to open",
+        );
+    }
+    let mut response = Response::from_json(&ProfileLaunchIntentProjectionV2 {
+        schema_version: 2,
+        launch_uri: format!(
+            "profilebridge://open/v1/{}/{}/{}/{}",
+            actor.tenant_scope().tenant_id().as_str(),
+            actor.actor_id().as_str(),
+            profile_id.as_str(),
+            context.version.value()
+        ),
+    })?;
+    response.headers_mut().set("cache-control", "no-store")?;
+    response.headers_mut().set("pragma", "no-cache")?;
+    Ok(response)
+}
+
+/// Both browser launch and automatic first preparation use the same authorization/claim owner.
+pub(crate) async fn issue_for_device(
+    env: &Env,
+    actor: &profile_platform_primitives::ActorContext,
+    role: identity_access_domain::MembershipRole,
+    profile_id: &ProfileId,
+    selected_device: &DeviceId,
+    evidence: &application_ports::CommandExecutionEvidence,
+) -> Result<core::result::Result<ProfileLaunchProjection, ApplicationError>> {
+    let context = launch_context(env)?;
+    let device = authenticated_device(env)?.select_device(selected_device.clone());
+    let authorization = device_job_authorization(env)?;
+    if authorization
+        .admit_profile_device(
+            actor,
+            profile_id,
+            selected_device,
+            UnixMillis::new(Date::now().as_millis()),
+        )
+        .await
+        .is_err()
+    {
+        return Ok(Err(ApplicationError::new(
+            ProblemCode::DependencyUnavailable,
+        )));
+    }
+    let preconditions = device_execution_preconditions(env)?;
+    let target = match authorize_profile_launch(
+        actor,
+        role,
+        profile_id,
         &context,
         &device,
         &authorization,
@@ -87,21 +130,17 @@ async fn issue_for_operator(
     .await
     {
         Ok(value) => value,
-        Err(error) => return application_failure(actor.correlation_id().as_str(), error),
+        Err(error) => return Ok(Err(error)),
     };
-
     let authority = launch_authority(env)?;
-    let issued = match issue_profile_launch_authority(actor, &target, &evidence, &authority).await {
+    let issued = match issue_profile_launch_authority(actor, &target, evidence, &authority).await {
         Ok(value) => value,
-        Err(error) => return application_failure(actor.correlation_id().as_str(), error),
+        Err(error) => return Ok(Err(error)),
     };
-    let mut response = Response::from_json(&ProfileLaunchProjection {
+    Ok(Ok(ProfileLaunchProjection {
         launch_uri: format!("profilebridge://claim/{}", issued.claim_code()),
         expires_at_ms: issued.expires_at().value(),
-    })?;
-    response.headers_mut().set("cache-control", "no-store")?;
-    response.headers_mut().set("pragma", "no-cache")?;
-    Ok(response)
+    }))
 }
 
 async fn redeem_from_bridge(request: &mut Request, env: &Env) -> Result<Response> {
@@ -122,7 +161,7 @@ async fn redeem_from_bridge(request: &mut Request, env: &Env) -> Result<Response
     let memberships = D1ActiveMembership::new(env.d1(D1_CATALOG_BINDING)?);
     let authority = launch_authority(env)?;
     let context = launch_context(env)?;
-    let device = authenticated_device(env)?;
+    let device = authenticated_device(env)?.select_device(machine_binding.device_id().clone());
     let authorization = device_job_authorization(env)?;
     let preconditions = device_execution_preconditions(env)?;
     let now = UnixMillis::new(Date::now().as_millis());
@@ -207,10 +246,15 @@ async fn redeem_from_bridge(request: &mut Request, env: &Env) -> Result<Response
     Ok(response)
 }
 
-fn application_failure(correlation_id: &str, error: ApplicationError) -> Result<Response> {
+pub(crate) fn application_failure(
+    correlation_id: &str,
+    error: ApplicationError,
+) -> Result<Response> {
     match error.code() {
         ProblemCode::NotFound | ProblemCode::Forbidden => neutral_not_found(correlation_id),
-        ProblemCode::InvalidRequest => invalid_request(correlation_id),
+        ProblemCode::InvalidRequest => {
+            problem(correlation_id, 400, "invalid_request", "Invalid Request")
+        }
         ProblemCode::InvalidState => problem(correlation_id, 409, "invalid_state", "Invalid State"),
         ProblemCode::VersionConflict => {
             problem(correlation_id, 409, "version_conflict", "Version Conflict")
@@ -239,23 +283,30 @@ fn application_failure(correlation_id: &str, error: ApplicationError) -> Result<
     }
 }
 
-fn invalid_request(correlation_id: &str) -> Result<Response> {
-    problem(correlation_id, 400, "invalid_request", "Invalid Request")
-}
-
 #[cfg(test)]
 mod tests {
-    use super::ProfileLaunchCommandEvidence;
+    use super::ProfileLaunchIntentProjectionV2;
 
     #[test]
-    fn launch_command_evidence_contains_no_device_selection()
+    fn browser_intent_contains_no_device_generation_or_launch_credential()
     -> Result<(), Box<dyn std::error::Error>> {
-        let value = serde_json::to_value(ProfileLaunchCommandEvidence {
-            profile_id: "profile_01JLAUNCH",
+        let value = serde_json::to_value(ProfileLaunchIntentProjectionV2 {
+            schema_version: 2,
+            launch_uri:
+                "profilebridge://open/v1/tenant_01JLAUNCH/actor_01JLAUNCH/profile_01JLAUNCH/1"
+                    .to_owned(),
         })?;
-        assert_eq!(value["profileId"], "profile_01JLAUNCH");
+        assert_eq!(value["schemaVersion"], 2);
         assert!(value.get("deviceId").is_none());
         assert!(value.get("generationId").is_none());
+        assert!(value.get("claimCode").is_none());
+        assert!(value.get("expiresAtMs").is_none());
+        assert!(
+            !value["launchUri"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("claim")
+        );
         Ok(())
     }
 }
