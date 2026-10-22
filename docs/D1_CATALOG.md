@@ -142,6 +142,22 @@ through a separate bounded current contract naming its real consumer or durable
 obligation, supported versions/window, owner, tests and retirement condition.
 Historical implementation alone never creates that obligation.
 
+### 5.2 Target identity and observed runtime context
+
+The requested target must match the full current canonical migration history and policy. Observed
+current/known-good runtime manifests are facts about execution pre-state, not alternative targets.
+An actually deployed Catalog runtime may predate a newly appended migration. Its history digest is
+accepted as context only when it matches the exact canonical migration bytes through its declared
+supported maximum, or the full current history. Component, policy and the entire schema window must
+also validate. The original manifest bytes and digest are never rewritten.
+
+The filesystem/canonical-identity adapter admits a typed runtime context before pure planning; raw
+target contracts cannot acquire this admission. Unknown/changed history, unsupported windows and
+policy/component drift fail closed. This does not create a historical remediation target, broaden
+runtime support, satisfy CONTRACT preconditions, authorize fail-forward/rollback or permit migration.
+Existing separate CONTRACT preparation, recovery, sealed authorization and executor guards remain
+required after context admission.
+
 ## 6. Permanent Migration Operations Contract
 
 The accepted TX-1 through TX-7 result is permanent architecture meaning, not a

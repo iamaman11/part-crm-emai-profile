@@ -161,6 +161,195 @@ fn copy_directory(source: &Path, target: &Path) -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
+#[test]
+fn deployed_runtime_prefix_is_context_only_and_retains_all_migration_gates()
+-> Result<(), Box<dyn Error>> {
+    use opsctl::d1::{D1Action, D1RunRequest, run};
+
+    let fixture = TempRepository::copy_from(&repo_root(), "observed-runtime-context")?;
+    let root = fixture.root();
+    let projection: Value = serde_json::from_str(&repository_projection(root)?)?;
+    let catalog = component(&projection, "catalog")?;
+    let (identity, _) = executable_identity_from_projection(root, catalog)?;
+    let old_digest = identity_digest(&identity[..35])?;
+    // Exact immutable F54 manifest evidence, not a rewritten CURRENT history digest.
+    assert_eq!(
+        old_digest,
+        "f8915315dfacefaba7d122f7e79634a8c49f75993bc49b4fef8522ac470a68ae"
+    );
+    let current = json!({"schema_contract": {
+        "database_component": "catalog",
+        "target_schema_revision": DEVICE_APPLICATION_AUTHORITY_REVISION,
+        "supported_schema_min": DEVICE_APPLICATION_AUTHORITY_REVISION,
+        "supported_schema_max": SUCCESSOR_CONTRACT_REVISION,
+        "migration_history_digest": old_digest,
+        "compatibility_policy_digest": catalog["compatibility_policy_digest"],
+    }});
+    let target = json!({"schema_contract": catalog["release_schema_contract"]});
+    let current_path = root.join("observed-runtime.json");
+    let target_path = root.join("target.json");
+    let ledger_path = root.join("ledger.json");
+    let preconditions_path = root.join("preconditions.json");
+    fs::write(&current_path, serde_json::to_vec(&current)?)?;
+    fs::write(&target_path, serde_json::to_vec(&target)?)?;
+    fs::write(
+        &ledger_path,
+        serde_json::to_vec(
+            &json!({"rows": identity[..34].iter().map(|item| json!({"name": item["name"]})).collect::<Vec<_>>()}),
+        )?,
+    )?;
+    fs::write(
+        &preconditions_path,
+        r#"{"component":"catalog","completed":[]}"#,
+    )?;
+    let original = fs::read(&current_path)?;
+
+    let invoke = |release: &Path, current: &Path| -> Result<Value, Box<dyn Error>> {
+        let output = run(D1RunRequest {
+            root,
+            action: D1Action::Plan,
+            component: "catalog",
+            ledger_json: &ledger_path,
+            release_manifest: Some(release),
+            current_manifest: Some(current),
+            known_good_manifest: Some(current),
+            preconditions_json: Some(&preconditions_path),
+        })?;
+        Ok(serde_json::from_str(&output)?)
+    };
+    let plan = invoke(&target_path, &current_path)?;
+    assert_eq!(plan["decision"], "CONTRACT_BLOCKED");
+    assert_eq!(plan["allowed"], false);
+    assert_eq!(plan["target_revision"], INITIAL_GENERATION_REVISION);
+    assert_eq!(
+        plan["planned_migrations"],
+        json!([SUCCESSOR_CONTRACT_REVISION, INITIAL_GENERATION_REVISION])
+    );
+    assert_eq!(
+        plan["planned_migration_contracts"][0]["rollout_order"],
+        "SEPARATE_CONTRACT_RELEASE"
+    );
+    assert_eq!(
+        plan["planned_migration_contracts"][0]["fail_forward_required"],
+        true
+    );
+    assert!(
+        plan["reason_codes"][0]
+            .as_str()
+            .is_some_and(|reason| reason.starts_with("CONTRACT_PRECONDITION_MISSING:"))
+    );
+
+    // The existing real Prepare adapter must retain this owner verdict rather than emit a command error.
+    let prepared = root.join("prepare.json");
+    let result = std::process::Command::new("python")
+        .arg(repo_root().join("scripts/d1-prepare.py"))
+        .args(["prepare", "--root"])
+        .arg(repo_root())
+        .arg("--opsctl")
+        .arg(env!("CARGO_BIN_EXE_opsctl"))
+        .args(["--component", "catalog", "--ledger-json"])
+        .arg(&ledger_path)
+        .arg("--release-manifest")
+        .arg(&target_path)
+        .arg("--current-manifest")
+        .arg(&current_path)
+        .arg("--known-good-manifest")
+        .arg(&current_path)
+        .arg("--preconditions-json")
+        .arg(&preconditions_path)
+        .arg("--output")
+        .arg(&prepared)
+        .output()?;
+    assert_eq!(
+        result.status.code(),
+        Some(3),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    let prepare: Value = serde_json::from_slice(&fs::read(prepared)?)?;
+    assert_eq!(prepare["status"], "PREPARE_BLOCKED");
+    assert_eq!(prepare["plan"], plan);
+    assert_eq!(
+        prepare["compatibility"]["runtime_compatibility"]["compatible"],
+        false
+    );
+    assert_eq!(prepare["provider_mutation_executed"], false);
+
+    fs::write(
+        &preconditions_path,
+        r#"{"component":"catalog","completed":["server_owned_payload_fingerprint_active","request_digest_readers_writers_retired"]}"#,
+    )?;
+    let fail_forward = invoke(&target_path, &current_path)?;
+    assert_eq!(fail_forward["allowed"], false);
+    assert_eq!(fail_forward["decision"], "FAIL_FORWARD_REQUIRED");
+    assert_eq!(
+        fail_forward["reason_codes"],
+        json!(["KNOWN_GOOD_INCOMPATIBLE_AFTER_MIGRATION"])
+    );
+
+    for (field, invalid) in [
+        ("migration_history_digest", json!("0".repeat(64))),
+        ("supported_schema_max", json!(INITIAL_GENERATION_REVISION)),
+        ("supported_schema_min", json!(SUCCESSOR_CONTRACT_REVISION)),
+        ("database_component", json!("resolver")),
+        ("compatibility_policy_digest", json!("0".repeat(64))),
+    ] {
+        let mut changed = current.clone();
+        changed["schema_contract"][field] = invalid;
+        fs::write(&current_path, serde_json::to_vec(&changed)?)?;
+        assert!(
+            invoke(&target_path, &current_path).is_err(),
+            "invalid runtime context accepted: {field}"
+        );
+    }
+    fs::write(&current_path, &original)?;
+    assert!(
+        invoke(&current_path, &current_path).is_err(),
+        "a proved runtime context cannot become the target"
+    );
+
+    fs::write(
+        &ledger_path,
+        serde_json::to_vec(&json!({"rows": [{"name":"unknown.sql"}]}))?,
+    )?;
+    let diverged = invoke(&target_path, &current_path)?;
+    assert_eq!(diverged["decision"], "RECOVERY_REQUIRED");
+    assert_eq!(diverged["allowed"], false);
+    fs::write(
+        &ledger_path,
+        serde_json::to_vec(
+            &json!({"rows": identity.iter().map(|item| json!({"name": item["name"]})).collect::<Vec<_>>()}),
+        )?,
+    )?;
+    assert_eq!(invoke(&target_path, &target_path)?["allowed"], true);
+
+    // Even a semantically harmless change to a prefix file invalidates its exact historical identity.
+    let migration = root
+        .join("migrations/d1-successor-v2")
+        .join(DEVICE_APPLICATION_AUTHORITY_REVISION);
+    let mut bytes = fs::read(&migration)?;
+    bytes.extend_from_slice(b"\n-- changed prefix bytes\n");
+    fs::write(migration, bytes)?;
+    let changed_projection: Value = serde_json::from_str(&repository_projection(root)?)?;
+    let changed_catalog = component(&changed_projection, "catalog")?;
+    fs::write(
+        &target_path,
+        serde_json::to_vec(
+            &json!({"schema_contract": changed_catalog["release_schema_contract"]}),
+        )?,
+    )?;
+    assert!(
+        invoke(&target_path, &current_path).is_err(),
+        "altered prefix bytes accepted"
+    );
+    assert_eq!(
+        fs::read(current_path)?,
+        original,
+        "context input must never be normalized or rewritten"
+    );
+    Ok(())
+}
+
 fn cargo_manifests(root: &Path, relative: &str) -> Result<Vec<PathBuf>, Box<dyn Error>> {
     let mut manifests = Vec::new();
     let base = root.join(relative);

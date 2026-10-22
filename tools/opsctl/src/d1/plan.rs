@@ -1,5 +1,6 @@
 use super::compatibility::{
-    runtime_supports_index, runtime_supports_remote, validate_release_contract,
+    RuntimeSchemaContext, runtime_supports_index, runtime_supports_remote,
+    validate_release_contract,
 };
 use super::model::{
     ComponentAuthority, D1Action, D1Error, Decision, Evaluation, LedgerState, MigrationClass,
@@ -14,8 +15,8 @@ pub(super) fn evaluate(
     authority: &ComponentAuthority,
     remote_names: &[String],
     target: Option<&ReleaseSchemaContract>,
-    current: Option<&ReleaseSchemaContract>,
-    known_good: Option<&ReleaseSchemaContract>,
+    current: Option<&RuntimeSchemaContext>,
+    known_good: Option<&RuntimeSchemaContext>,
     preconditions: &Preconditions,
 ) -> Result<Evaluation, D1Error> {
     let base_state = classify_prefix(remote_names, &authority.ordered_history);
@@ -62,12 +63,8 @@ pub(super) fn evaluate(
     };
 
     validate_release_contract(authority, target)?;
-    if let Some(value) = current {
-        validate_release_contract(authority, value)?;
-    }
-    if let Some(value) = known_good {
-        validate_release_contract(authority, value)?;
-    }
+    let current = current.map(RuntimeSchemaContext::schema);
+    let known_good = known_good.map(RuntimeSchemaContext::schema);
 
     let target_index = revision_index(&authority.ordered_history, &target.target_schema_revision)?;
     let minimum = revision_index(&authority.ordered_history, &target.supported_schema_min)?;

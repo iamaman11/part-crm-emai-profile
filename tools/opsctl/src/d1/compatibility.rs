@@ -1,6 +1,25 @@
 use super::model::{ComponentAuthority, D1Error, Evaluation, ReleaseSchemaContract};
 use super::status::revision_index;
 
+/// A runtime fact admitted against a proved canonical history, never a deployment target.
+pub(super) struct RuntimeSchemaContext {
+    schema: ReleaseSchemaContract,
+}
+
+impl RuntimeSchemaContext {
+    pub(super) fn new(
+        history: &ComponentAuthority,
+        schema: ReleaseSchemaContract,
+    ) -> Result<Self, D1Error> {
+        validate_release_contract(history, &schema)?;
+        Ok(Self { schema })
+    }
+
+    pub(super) fn schema(&self) -> &ReleaseSchemaContract {
+        &self.schema
+    }
+}
+
 pub(super) struct RuntimeCompatibility {
     pub(super) compatible: bool,
     pub(super) reason_codes: Vec<String>,

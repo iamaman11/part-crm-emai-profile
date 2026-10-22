@@ -1,6 +1,8 @@
 use super::catalog_legacy;
+use super::compatibility::RuntimeSchemaContext;
 use super::model::{
-    self, ComponentAuthority, D1Error, MigrationClass, MigrationContract, RolloutOrder,
+    self, ComponentAuthority, D1Error, MigrationClass, MigrationContract, ReleaseSchemaContract,
+    RolloutOrder,
 };
 use crate::canonical::{canonical_json, canonical_pretty_json, sha256_hex};
 use serde_json::{Value, json};
@@ -363,6 +365,43 @@ pub(crate) fn component_authority(
         return Ok(CatalogSuccessor::load(root)?.authority);
     }
     predecessor::component_authority(root, component)
+}
+
+/// Admit immutable observed Catalog runtime metadata using exact current migration bytes.
+/// The prefix view is context-only: target admission continues to use the full current authority.
+pub(super) fn observed_runtime_context(
+    root: &Path,
+    component: &str,
+    schema: ReleaseSchemaContract,
+) -> Result<RuntimeSchemaContext, D1Error> {
+    if component != "catalog" {
+        return RuntimeSchemaContext::new(&component_authority(root, component)?, schema);
+    }
+    let mut catalog = CatalogSuccessor::load(root)?;
+    if schema.migration_history_digest != catalog.authority.history_digest {
+        let count = super::status::revision_index(
+            &catalog.authority.ordered_history,
+            &schema.supported_schema_max,
+        )? + 1;
+        if count < catalog.authority.historical_len {
+            return Err(D1Error::new(
+                "observed runtime history prefix predates the current Catalog lineage boundary",
+            ));
+        }
+        let digest = successor_history_digest(
+            root,
+            &catalog.authority.ordered_history[..count],
+            &catalog.migration_source_roots[..count],
+        )?;
+        catalog.authority.ordered_history.truncate(count);
+        catalog
+            .authority
+            .post_epoch
+            .truncate(count - catalog.authority.historical_len);
+        catalog.authority.current_repository_revision = schema.supported_schema_max.clone();
+        catalog.authority.history_digest = digest;
+    }
+    RuntimeSchemaContext::new(&catalog.authority, schema)
 }
 
 pub(crate) fn release_contract(root: &Path, component: &str) -> Result<Value, D1Error> {
