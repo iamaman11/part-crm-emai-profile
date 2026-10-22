@@ -74,7 +74,9 @@ const MANIFEST_NAME: &str = "delivery-manifest.json";
 const SIGNATURE_NAME: &str = "delivery-signature.p7s";
 const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0400;
 const SCRATCH_ATTEMPTS: usize = 32;
-const VERIFICATION_PROCESS_TIMEOUT: Duration = Duration::from_secs(30);
+// Hosted Windows process controls take about 24 seconds even for a malformed CMS.
+// Allow cold/loaded PowerShell + .NET startup while retaining a hard verification deadline.
+const VERIFICATION_PROCESS_TIMEOUT: Duration = Duration::from_secs(60);
 const VERIFICATION_PROCESS_POLL_INTERVAL: Duration = Duration::from_millis(25);
 static SCRATCH_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 

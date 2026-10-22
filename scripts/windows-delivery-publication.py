@@ -17,12 +17,10 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
-import os
 import re
 import shutil
 import subprocess
 import tempfile
-import time
 from pathlib import Path
 from typing import Any, Callable
 
@@ -366,46 +364,7 @@ def installer_smoke_test(bridge: Path, compiler: Path) -> None:
         captured = raw_log.decode("utf-16" if raw_log.startswith(b"\xff\xfe") else "utf-8-sig")
         if (executed.returncode == 0 or 'Preparation(Policy(SignatureInvalid))' not in captured
                 or 'BRIDGE_INSTALLATION_ADMISSION_REJECTED' not in captured):
-            # Temporary, failure-only hosted-Windows diagnosis. Neither control can satisfy
-            # the wizard gate; all inputs are the same public synthetic fixture above.
-            print(f"Original wizard failure: exit={executed.returncode}\n{captured}", flush=True)
-            diagnostics = []
-            try:
-                direct = subprocess.run([str(source / "profile-bridge.exe"), "--delivery-prepare",
-                                         str(source), str(root / "diagnostic-installation")],
-                                        capture_output=True, text=True, timeout=45)
-                diagnostics.append(f"direct GUI control: exit={direct.returncode}\n{direct.stdout}\n{direct.stderr}")
-            except subprocess.TimeoutExpired:
-                diagnostics.append("direct GUI control: timeout45")
-            owner = template.parent.parent.parent / "apps/profile-bridge/src/windows_delivery_signature.rs"
-            script = owner.read_text(encoding="utf-8").split('const VERIFY_SCRIPT: &str = r#"', 1)[1].split('"#;', 1)[0]
-            script = script.replace("    Add-Type -AssemblyName System.Security",
-                                    "    [Console]::Error.WriteLine('CMS_PROBE_BEFORE_ADD_TYPE')\n"
-                                    "    Add-Type -AssemblyName System.Security\n"
-                                    "    [Console]::Error.WriteLine('CMS_PROBE_AFTER_ADD_TYPE')")
-            script = script.replace("    $cms.Decode($signature)",
-                                    "    [Console]::Error.WriteLine('CMS_PROBE_BEFORE_DECODE')\n"
-                                    "    $cms.Decode($signature)")
-            script = script.replace("catch {", "catch {\n    [Console]::Error.WriteLine($_.Exception.GetType().FullName)")
-            probe_script = root / "diagnostic-verifier.ps1"
-            probe_script.write_text(script, encoding="utf-8")
-            (root / "diagnostic-signature.p7s").write_bytes(bytes.fromhex("3000"))
-            started = time.monotonic()
-            try:
-                probe = subprocess.run([
-                    str(Path(os.environ["SystemRoot"]) / "System32/WindowsPowerShell/v1.0/powershell.exe"),
-                    "-NoLogo", "-NoProfile", "-NonInteractive", "-File", str(probe_script),
-                    "-ManifestPath", str(manifest_path), "-SignaturePath", str(root / "diagnostic-signature.p7s"),
-                    "-ExpectedCertificateSha256", "a" * 64,
-                ], env={key: os.environ[key] for key in ("SystemRoot", "WINDIR") if key in os.environ},
-                    stdin=subprocess.DEVNULL, capture_output=True, text=True,
-                    creationflags=subprocess.CREATE_NO_WINDOW, timeout=35)
-                diagnostics.append(f"platform control: exit={probe.returncode}, seconds={time.monotonic()-started:.2f}\n"
-                                   f"{probe.stdout[-4096:]}\n{probe.stderr[-4096:]}")
-            except subprocess.TimeoutExpired as error:
-                diagnostics.append(f"platform control: timeout35; stdout={error.stdout!r}; stderr={error.stderr!r}")
-            fail(f"unsigned fixture did not stop at actual native CMS admission: exit={executed.returncode}\n{captured}\n"
-                 + "\n".join(diagnostics))
+            fail(f"unsigned fixture did not stop at actual native CMS admission: exit={executed.returncode}\n{captured}")
         if ((installation / "connection.json").exists()
                 or any((installation / "releases").iterdir())):
             fail("rejected installer published settings or staged a candidate")
