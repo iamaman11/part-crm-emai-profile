@@ -165,23 +165,6 @@ mod p3_fixture {
         }
     }
 
-    struct FixedObservation(browser_execution_domain::NetworkIdentityObservation);
-
-    impl crate::browser_preflight::BrowserRuntimeObservationPort for FixedObservation {
-        type Error = bridge_domain::BridgePortError;
-
-        fn observe(
-            &mut self,
-            _workspace: &GenerationWorkspace,
-            _device_id: &DeviceId,
-        ) -> Result<crate::browser_preflight::BrowserRuntimeObservation, Self::Error> {
-            Ok(crate::browser_preflight::BrowserRuntimeObservation::new(
-                self.0.clone(),
-                false,
-            ))
-        }
-    }
-
     fn real_runtime_requested() -> bool {
         std::env::var("AR10_REAL_CAMOUFOX").as_deref() == Ok("1")
     }
@@ -393,33 +376,6 @@ mod p3_fixture {
         Ok(binding)
     }
 
-    fn portable_network_policy() -> Result<
-        (
-            browser_execution_domain::NetworkIdentityPolicy,
-            browser_execution_domain::NetworkIdentityObservation,
-        ),
-        Box<dyn std::error::Error>,
-    > {
-        Ok((
-            browser_execution_domain::NetworkIdentityPolicy::new(
-                Some("PL".to_owned()),
-                Some("Mazowieckie".to_owned()),
-                Some("Europe/Warsaw".to_owned()),
-                [browser_execution_domain::NetworkClass::Mobile],
-                [5617],
-                Some("s0-portable-local-evidence".to_owned()),
-            )?,
-            browser_execution_domain::NetworkIdentityObservation::new(
-                "PL",
-                "Mazowieckie",
-                "Europe/Warsaw",
-                browser_execution_domain::NetworkClass::Mobile,
-                5617,
-                "s0-portable-local-evidence",
-            )?,
-        ))
-    }
-
     #[test]
     fn real_cookie_local_storage_and_indexed_db_survive_authoritative_p3_reopen()
     -> Result<(), Box<dyn std::error::Error>> {
@@ -455,13 +411,9 @@ mod p3_fixture {
         let runtime_generations = Rc::new(RefCell::new(Vec::new()));
         let enrollment = ControlPlaneEnrollment::new(transport.clone());
         let coordinator = ControlPlaneCoordinator::new(transport.clone());
-        let (network_policy, network_observation) = portable_network_policy()?;
         let runtime_binding = crate::camouhost_process::RuntimeBindingSlot::new();
-        let browser_preflight = crate::shipping_preflight::ShippingBrowserLaunchPreflight::new(
-            network_policy,
-            FixedObservation(network_observation),
-            runtime_binding.clone(),
-        );
+        let browser_preflight =
+            crate::shipping_preflight::ShippingBrowserLaunchPreflight::new(runtime_binding.clone());
         let managed_config = crate::camouhost_process::ManagedCamouhostConfig::new(
             paths.python.clone(),
             paths.runtime_root.clone(),

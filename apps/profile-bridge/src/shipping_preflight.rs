@@ -3,14 +3,12 @@ mod camoufox_identity;
 pub use camoufox_identity::profile_stable_identity_from_config_bytes;
 
 use crate::browser_execution::{BrowserLaunchBlocker, load_materialization_binding};
-use crate::browser_preflight::{
-    BrowserRuntimeObservation, BrowserRuntimeObservationPort, classify_browser_launch_blocker,
-};
+use crate::browser_preflight::classify_browser_launch_blocker;
 use crate::camouhost_process::{RuntimeBindingBrowserLaunchPreflight, RuntimeBindingSlot};
 use crate::local_profile::GenerationWorkspace;
 use crate::operator_flow::{BrowserLaunchPreflightPort, OperationalRejectionReason};
 use crate::runtime_bundle::ApprovedRuntimeBundle;
-use browser_execution_domain::NetworkIdentityPolicy;
+use crate::shipping_network::GenerationNetworkEvidence;
 use camoufox_identity::{CamoufoxIdentityProjectionError, verify_materialized_camoufox_identity};
 use profile_platform_primitives::{DeviceId, GenerationId, ProfileId, TenantId};
 use std::path::Path;
@@ -18,31 +16,20 @@ use std::path::Path;
 /// Shipping adapter that resolves the exact generation binding only after redemption has selected
 /// the server-authorized workspace. Policy/evaluation remain owned by the existing browser
 /// preflight; this adapter only bridges the late-bound filesystem identity into that owner.
-pub struct ShippingBrowserLaunchPreflight<O> {
-    network_policy: NetworkIdentityPolicy,
-    observations: O,
+pub struct ShippingBrowserLaunchPreflight {
     runtime_binding_slot: RuntimeBindingSlot,
 }
 
-impl<O> ShippingBrowserLaunchPreflight<O> {
+impl ShippingBrowserLaunchPreflight {
     #[must_use]
-    pub const fn new(
-        network_policy: NetworkIdentityPolicy,
-        observations: O,
-        runtime_binding_slot: RuntimeBindingSlot,
-    ) -> Self {
+    pub const fn new(runtime_binding_slot: RuntimeBindingSlot) -> Self {
         Self {
-            network_policy,
-            observations,
             runtime_binding_slot,
         }
     }
 }
 
-impl<O> BrowserLaunchPreflightPort for ShippingBrowserLaunchPreflight<O>
-where
-    O: BrowserRuntimeObservationPort,
-{
+impl BrowserLaunchPreflightPort for ShippingBrowserLaunchPreflight {
     type Error = BrowserLaunchBlocker;
 
     fn operational_rejection_reason(error: &Self::Error) -> OperationalRejectionReason {
@@ -65,10 +52,12 @@ where
         )?;
         verify_materialized_camoufox_identity(workspace.path(), expected.browser_identity())
             .map_err(map_identity_projection_error)?;
+        let observations = GenerationNetworkEvidence::open(workspace)
+            .map_err(|_| BrowserLaunchBlocker::InvalidMaterializationEvidence)?;
         let mut inner = RuntimeBindingBrowserLaunchPreflight::new(
             expected,
-            self.network_policy.clone(),
-            BorrowedObservation(&mut self.observations),
+            observations.policy(),
+            observations,
             self.runtime_binding_slot.clone(),
         );
         inner.evaluate_before_launch(workspace, device_id, workspace_epoch, runtime_bundle)
@@ -120,23 +109,6 @@ fn workspace_identity(path: &Path) -> Result<WorkspaceIdentity, BrowserLaunchBlo
         generation_id: GenerationId::parse(generation.to_owned())
             .map_err(|_| BrowserLaunchBlocker::InvalidMaterializationEvidence)?,
     })
-}
-
-struct BorrowedObservation<'a, O>(&'a mut O);
-
-impl<O> BrowserRuntimeObservationPort for BorrowedObservation<'_, O>
-where
-    O: BrowserRuntimeObservationPort,
-{
-    type Error = O::Error;
-
-    fn observe(
-        &mut self,
-        workspace: &GenerationWorkspace,
-        device_id: &DeviceId,
-    ) -> Result<BrowserRuntimeObservation, Self::Error> {
-        self.0.observe(workspace, device_id)
-    }
 }
 
 #[cfg(test)]

@@ -1,12 +1,8 @@
 #![forbid(unsafe_code)]
 
 use bridge_domain::{BridgePortError, CamouhostMessage, CamouhostPort};
-use browser_execution_domain::{
-    BrowserIdentityManifest, MaterializationBinding, NetworkClass, NetworkIdentityObservation,
-    NetworkIdentityPolicy,
-};
+use browser_execution_domain::{BrowserIdentityManifest, MaterializationBinding};
 use profile_bridge::browser_execution::persist_materialization_binding;
-use profile_bridge::browser_preflight::{BrowserRuntimeObservation, BrowserRuntimeObservationPort};
 use profile_bridge::camouhost_process::{
     ManagedCamouhostConfig, ManagedCamouhostProcess, RuntimeBindingSlot, RuntimeDisplayMode,
 };
@@ -36,20 +32,6 @@ const LOWER_HEX: &[u8; 16] = b"0123456789abcdef";
 const MAX_DIAGNOSTIC_SYMLINKS: usize = 32;
 const CONFIG_NAME: &str = "camoufox-config.json";
 const MANAGED_COLD_LAUNCH_ATTEMPTS: usize = 3;
-
-struct FixedObservation(NetworkIdentityObservation);
-
-impl BrowserRuntimeObservationPort for FixedObservation {
-    type Error = BridgePortError;
-
-    fn observe(
-        &mut self,
-        _workspace: &profile_bridge::local_profile::GenerationWorkspace,
-        _device_id: &DeviceId,
-    ) -> Result<BrowserRuntimeObservation, Self::Error> {
-        Ok(BrowserRuntimeObservation::new(self.0.clone(), false))
-    }
-}
 
 struct StageTracingCamouhost<C> {
     inner: C,
@@ -301,28 +283,8 @@ fn run_managed_cold_launch_cycle() -> Result<(), Box<dyn std::error::Error>> {
     )?;
     persist_materialization_binding(&workspace, &binding)?;
 
-    let network_policy = NetworkIdentityPolicy::new(
-        Some("PL".to_owned()),
-        Some("Mazowieckie".to_owned()),
-        Some("Europe/Warsaw".to_owned()),
-        [NetworkClass::Mobile],
-        [5617],
-        Some("ar10-local-evidence".to_owned()),
-    )?;
-    let observation = NetworkIdentityObservation::new(
-        "PL",
-        "Mazowieckie",
-        "Europe/Warsaw",
-        NetworkClass::Mobile,
-        5617,
-        "ar10-local-evidence",
-    )?;
     let slot = RuntimeBindingSlot::new();
-    let mut preflight = ShippingBrowserLaunchPreflight::new(
-        network_policy,
-        FixedObservation(observation),
-        slot.clone(),
-    );
+    let mut preflight = ShippingBrowserLaunchPreflight::new(slot.clone());
     preflight.evaluate_before_launch(&workspace, &device, 9, &bundle)?;
 
     let config = ManagedCamouhostConfig::new(python, runtime_root, display_mode, None, None)?;

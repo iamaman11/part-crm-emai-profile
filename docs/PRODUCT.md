@@ -84,6 +84,9 @@ managed login
 - `Client 1 -> 0..N Profiles`, `Profile -> 0..1 Client`;
 - assignment не выдаёт ACL; видимость и launch требуют отдельной server authorization;
 - один active writer на Profile;
+- обычный Profile по умолчанию использует подключение компьютера без обязательных proxy,
+  ограничений страны/ASN/типа сети и ручных файлов настройки; дополнительные сетевые ограничения
+  принадлежат конкретному Profile и не могут исчезнуть при ошибке чтения или отсутствии измерения;
 - локальный workspace не является canonical backup;
 - `Saved` существует только после exact verification successor generation и authoritative commit;
 - hard profile purge не входит в первый release без отдельного product/legal решения.

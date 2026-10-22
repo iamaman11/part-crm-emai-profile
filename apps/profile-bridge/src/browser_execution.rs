@@ -122,7 +122,7 @@ pub fn evaluate_browser_launch(
     expected_workspace_epoch: u64,
     expected: &MaterializationBinding,
     network_policy: &NetworkIdentityPolicy,
-    network_observation: &NetworkIdentityObservation,
+    network_observation: Option<&NetworkIdentityObservation>,
     supervised_writer_active: bool,
 ) -> Result<(), BrowserLaunchBlocker> {
     verify_bridge_lock(workspace, expected_device_id, expected_workspace_epoch)?;
@@ -469,7 +469,7 @@ mod tests {
             1,
             &binding,
             &policy("route-a")?,
-            &observation("route-a")?,
+            Some(&observation("route-a")?),
             false,
         )?;
 
@@ -484,7 +484,7 @@ mod tests {
             1,
             &binding,
             &policy("route-a")?,
-            &observation("route-a")?,
+            Some(&observation("route-a")?),
             false,
         )?;
 
@@ -496,7 +496,7 @@ mod tests {
                 1,
                 &binding,
                 &policy("route-a")?,
-                &observation("route-a")?,
+                Some(&observation("route-a")?),
                 false,
             ),
             Err(BrowserLaunchBlocker::MaterializationStale)
@@ -538,6 +538,97 @@ mod tests {
     }
 
     #[test]
+    fn direct_connection_keeps_writer_and_identity_checks() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let root_path = root_path("direct-network")?;
+        let root = MaterializationRoot::open_or_create(&root_path)?;
+        let tenant = TenantId::parse("tenant_01JNETWORK")?;
+        let profile = ProfileId::parse("profile_01JNETWORK")?;
+        let generation = GenerationId::parse("generation_01JNETWORK")?;
+        let device = DeviceId::parse("device_01JNETWORK")?;
+        let workspace = root.create_generation(&tenant, &profile, &generation)?;
+        let lock = BridgeWorkspaceLock::acquire(&workspace, &device, 1)?;
+        let binding = MaterializationBinding::new(
+            tenant,
+            profile,
+            generation,
+            "c".repeat(64),
+            workspace.materialization_inventory_digest()?,
+            identity()?,
+        )?;
+        persist_materialization_binding(&workspace, &binding)?;
+        let direct = NetworkIdentityPolicy::direct();
+        evaluate_browser_launch(&workspace, &device, 1, &binding, &direct, None, false)?;
+        assert_eq!(
+            evaluate_browser_launch(
+                &workspace,
+                &DeviceId::parse("device_FOREIGN")?,
+                1,
+                &binding,
+                &direct,
+                None,
+                false,
+            ),
+            Err(BrowserLaunchBlocker::RecoveryRequired)
+        );
+        assert_eq!(
+            evaluate_browser_launch(&workspace, &device, 1, &binding, &direct, None, true),
+            Err(BrowserLaunchBlocker::ProfileBusy)
+        );
+        fs::write(
+            workspace.path().join("prefs.js"),
+            b"changed immutable input",
+        )?;
+        assert_eq!(
+            evaluate_browser_launch(&workspace, &device, 1, &binding, &direct, None, false),
+            Err(BrowserLaunchBlocker::MaterializationStale)
+        );
+        lock.release()?;
+        remove_test_root(&root_path)?;
+        Ok(())
+    }
+
+    #[test]
+    fn deleting_a_bound_policy_cannot_downgrade_to_direct() -> Result<(), Box<dyn std::error::Error>>
+    {
+        use crate::shipping_network::{GenerationNetworkEvidence, PROFILE_NETWORK_POLICY_FILE};
+        let root_path = root_path("network-policy-removal")?;
+        let root = MaterializationRoot::open_or_create(&root_path)?;
+        let tenant = TenantId::parse("tenant_01JNETWORK")?;
+        let profile = ProfileId::parse("profile_01JNETWORK")?;
+        let generation = GenerationId::parse("generation_01JNETWORK")?;
+        let device = DeviceId::parse("device_01JNETWORK")?;
+        let workspace = root.create_generation(&tenant, &profile, &generation)?;
+        let policy_path = workspace.path().join(PROFILE_NETWORK_POLICY_FILE);
+        fs::write(&policy_path, br#"{"schema":"profile-bridge-network-policy-v1","country":"PL","region":null,"timezone":null,"allowedNetworkClasses":["mobile"],"allowedAsns":[5617],"requiredRouteIdentity":null}"#)?;
+        let lock = BridgeWorkspaceLock::acquire(&workspace, &device, 1)?;
+        let binding = MaterializationBinding::new(
+            tenant,
+            profile,
+            generation,
+            "c".repeat(64),
+            workspace.materialization_inventory_digest()?,
+            identity()?,
+        )?;
+        persist_materialization_binding(&workspace, &binding)?;
+        let restricted = GenerationNetworkEvidence::open(&workspace)?.policy();
+        assert_eq!(
+            evaluate_browser_launch(&workspace, &device, 1, &binding, &restricted, None, false),
+            Err(BrowserLaunchBlocker::NetworkPolicyMismatch)
+        );
+        fs::remove_file(policy_path)?;
+        let direct = GenerationNetworkEvidence::open(&workspace)?.policy();
+        assert!(!direct.requires_observation());
+        assert_eq!(
+            evaluate_browser_launch(&workspace, &device, 1, &binding, &direct, None, false),
+            Err(BrowserLaunchBlocker::MaterializationStale)
+        );
+        lock.release()?;
+        remove_test_root(&root_path)?;
+        Ok(())
+    }
+
+    #[test]
     fn browser_lock_is_never_deleted_and_requires_recovery()
     -> Result<(), Box<dyn std::error::Error>> {
         let root_path = root_path("browser-lock")?;
@@ -565,7 +656,7 @@ mod tests {
                 1,
                 &binding,
                 &policy("route-a")?,
-                &observation("route-a")?,
+                Some(&observation("route-a")?),
                 false,
             ),
             Err(BrowserLaunchBlocker::RecoveryRequired)
@@ -602,7 +693,7 @@ mod tests {
                 1,
                 &binding,
                 &policy("route-a")?,
-                &observation("route-b")?,
+                Some(&observation("route-b")?),
                 false,
             ),
             Err(BrowserLaunchBlocker::RetryableNetworkRouteChurn)
@@ -641,7 +732,7 @@ mod tests {
                 8,
                 &binding,
                 &policy("route-a")?,
-                &observation("route-a")?,
+                Some(&observation("route-a")?),
                 false,
             ),
             Err(BrowserLaunchBlocker::RecoveryRequired)
@@ -653,7 +744,7 @@ mod tests {
                 7,
                 &binding,
                 &policy("route-a")?,
-                &observation("route-a")?,
+                Some(&observation("route-a")?),
                 false,
             ),
             Err(BrowserLaunchBlocker::RecoveryRequired)

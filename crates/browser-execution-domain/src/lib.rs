@@ -222,6 +222,11 @@ pub enum NetworkClass {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct NetworkIdentityPolicy {
+    constraints: Option<NetworkIdentityConstraints>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct NetworkIdentityConstraints {
     country: Option<String>,
     region: Option<String>,
     timezone: Option<String>,
@@ -231,6 +236,18 @@ pub struct NetworkIdentityPolicy {
 }
 
 impl NetworkIdentityPolicy {
+    /// An explicit ordinary connection has no geographical or network-class restriction.
+    /// This is never inferred from a failed or incomplete restricted-policy observation.
+    #[must_use]
+    pub const fn direct() -> Self {
+        Self { constraints: None }
+    }
+
+    #[must_use]
+    pub const fn requires_observation(&self) -> bool {
+        self.constraints.is_some()
+    }
+
     pub fn new(
         country: Option<String>,
         region: Option<String>,
@@ -260,38 +277,49 @@ impl NetworkIdentityPolicy {
             return Err(BrowserExecutionError::InvalidNetworkPolicy);
         }
         Ok(Self {
-            country,
-            region,
-            timezone,
-            allowed_network_classes,
-            allowed_asns,
-            required_route_identity,
+            constraints: Some(NetworkIdentityConstraints {
+                country,
+                region,
+                timezone,
+                allowed_network_classes,
+                allowed_asns,
+                required_route_identity,
+            }),
         })
     }
 
     #[must_use]
-    pub fn evaluate(&self, observation: &NetworkIdentityObservation) -> NetworkIdentityDecision {
-        if self
+    pub fn evaluate(
+        &self,
+        observation: Option<&NetworkIdentityObservation>,
+    ) -> NetworkIdentityDecision {
+        let Some(policy) = &self.constraints else {
+            return NetworkIdentityDecision::Accepted;
+        };
+        let Some(observation) = observation else {
+            return NetworkIdentityDecision::OperatorRemediationRequired;
+        };
+        if policy
             .country
             .as_deref()
             .is_some_and(|expected| expected != observation.country)
-            || self
+            || policy
                 .region
                 .as_deref()
                 .is_some_and(|expected| expected != observation.region)
-            || self
+            || policy
                 .timezone
                 .as_deref()
                 .is_some_and(|expected| expected != observation.timezone)
-            || !self
+            || !policy
                 .allowed_network_classes
                 .contains(&observation.network_class)
-            || (!self.allowed_asns.is_empty() && !self.allowed_asns.contains(&observation.asn))
+            || (!policy.allowed_asns.is_empty() && !policy.allowed_asns.contains(&observation.asn))
         {
             return NetworkIdentityDecision::OperatorRemediationRequired;
         }
 
-        if self
+        if policy
             .required_route_identity
             .as_deref()
             .is_some_and(|expected| expected != observation.route_identity)
@@ -586,6 +614,28 @@ mod tests {
     }
 
     #[test]
+    fn direct_is_explicit_and_missing_observation_never_satisfies_restrictions()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let direct = NetworkIdentityPolicy::direct();
+        assert!(!direct.requires_observation());
+        assert_eq!(direct.evaluate(None), NetworkIdentityDecision::Accepted);
+        let restricted = NetworkIdentityPolicy::new(
+            Some("PL".to_owned()),
+            None,
+            None,
+            [NetworkClass::Mobile],
+            [5617],
+            None,
+        )?;
+        assert!(restricted.requires_observation());
+        assert_eq!(
+            restricted.evaluate(None),
+            NetworkIdentityDecision::OperatorRemediationRequired
+        );
+        Ok(())
+    }
+
+    #[test]
     fn network_policy_classifies_route_churn_separately_from_policy_mismatch()
     -> Result<(), Box<dyn std::error::Error>> {
         let policy = NetworkIdentityPolicy::new(
@@ -605,7 +655,7 @@ mod tests {
             "route-a",
         )?;
         assert_eq!(
-            policy.evaluate(&accepted),
+            policy.evaluate(Some(&accepted)),
             NetworkIdentityDecision::Accepted
         );
 
@@ -618,7 +668,7 @@ mod tests {
             "route-b",
         )?;
         assert_eq!(
-            policy.evaluate(&churn),
+            policy.evaluate(Some(&churn)),
             NetworkIdentityDecision::RetryableRouteChurn
         );
 
@@ -631,7 +681,7 @@ mod tests {
             "route-a",
         )?;
         assert_eq!(
-            policy.evaluate(&wrong_region),
+            policy.evaluate(Some(&wrong_region)),
             NetworkIdentityDecision::OperatorRemediationRequired
         );
         Ok(())

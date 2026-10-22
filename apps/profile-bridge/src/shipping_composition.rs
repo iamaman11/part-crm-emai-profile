@@ -13,6 +13,7 @@ pub enum ShippingDeliveryCommand {
 pub enum ShippingCompositionError {
     UnsupportedPlatform,
     Configuration,
+    ExternalNetworkConfiguration,
     Clock,
     ControlPlane,
     DeliveryHealth,
@@ -29,6 +30,7 @@ impl core::fmt::Display for ShippingCompositionError {
         formatter.write_str(match self {
             Self::UnsupportedPlatform => "shipping Profile Bridge requires Windows",
             Self::Configuration => "shipping Profile Bridge configuration is invalid",
+            Self::ExternalNetworkConfiguration => "external manual network settings require repair",
             Self::Clock => "shipping Profile Bridge clock is unavailable",
             Self::ControlPlane => "shipping Profile Bridge control-plane lease state is invalid",
             Self::DeliveryHealth => {
@@ -124,7 +126,6 @@ mod windows {
     use crate::shipping_control_plane::{
         ControlPlaneCoordinator, ControlPlaneEnrollment, ControlPlaneLeaseTiming,
     };
-    use crate::shipping_network::FilesystemNetworkEvidence;
     use crate::shipping_preflight::ShippingBrowserLaunchPreflight;
     use crate::windows_delivery_handoff::{
         DeliveryHandoffCoordinator, DeliveryHandoffRestartDisposition,
@@ -151,27 +152,26 @@ mod windows {
         device_application_binding_path: PathBuf,
         control_plane_origin: String,
         materialization_root: PathBuf,
-        network_policy_path: PathBuf,
-        proxy_config_path: Option<PathBuf>,
     }
 
     impl ShippingConfig {
         fn from_installation() -> Result<Self, ShippingCompositionError> {
+            // Never silently discard restrictions left by a previous manual setup.
+            // New installations select network behavior from the authenticated generation.
+            if env::var_os(NETWORK_POLICY_PATH_ENV).is_some()
+                || env::var_os(PROXY_CONFIG_PATH_ENV).is_some()
+            {
+                return Err(ShippingCompositionError::ExternalNetworkConfiguration);
+            }
             let connection = crate::installed_connection::InstalledConnection::open_current()
                 .map_err(ShippingCompositionError::InstalledConnection)?;
             let device_application_binding_path = connection.binding_path();
             let control_plane_origin = connection.origin().as_str().to_owned();
             let materialization_root = materialization_root_path()?;
-            let network_policy_path = absolute_path(required_env(NETWORK_POLICY_PATH_ENV)?)?;
-            let proxy_config_path = optional_env(PROXY_CONFIG_PATH_ENV)?
-                .map(absolute_path)
-                .transpose()?;
             Ok(Self {
                 device_application_binding_path,
                 control_plane_origin,
                 materialization_root,
-                network_policy_path,
-                proxy_config_path,
             })
         }
     }
@@ -209,21 +209,15 @@ mod windows {
         let materialization_root =
             MaterializationRoot::open_or_create(&config.materialization_root)
                 .map_err(|_| ShippingCompositionError::Configuration)?;
-        let network_evidence = FilesystemNetworkEvidence::open(&config.network_policy_path)
-            .map_err(|_| ShippingCompositionError::Configuration)?;
         let runtime_binding = RuntimeBindingSlot::new();
-        let browser_preflight = ShippingBrowserLaunchPreflight::new(
-            network_evidence.policy(),
-            network_evidence,
-            runtime_binding.clone(),
-        );
+        let browser_preflight = ShippingBrowserLaunchPreflight::new(runtime_binding.clone());
         let python_executable = runtime_root.join(PACKAGED_PYTHON_EXECUTABLE);
         let camouhost_config = ManagedCamouhostConfig::new(
             python_executable,
             runtime_root,
             RuntimeDisplayMode::Headful,
             None,
-            config.proxy_config_path,
+            None,
         )
         .map_err(|_| ShippingCompositionError::Configuration)?;
         let (process, camouhost) = ManagedCamouhostProcess::pair(camouhost_config, runtime_binding);
@@ -444,32 +438,6 @@ mod windows {
             .checked_add(delay)
             .map(UnixMillis::new)
             .ok_or(ShippingCompositionError::Clock)
-    }
-
-    fn required_env(name: &str) -> Result<String, ShippingCompositionError> {
-        let value = env::var(name).map_err(|_| ShippingCompositionError::Configuration)?;
-        if value.is_empty() || value.contains('\0') {
-            return Err(ShippingCompositionError::Configuration);
-        }
-        Ok(value)
-    }
-
-    fn optional_env(name: &str) -> Result<Option<String>, ShippingCompositionError> {
-        match env::var(name) {
-            Ok(value) if value.is_empty() => Ok(None),
-            Ok(value) if value.contains('\0') => Err(ShippingCompositionError::Configuration),
-            Ok(value) => Ok(Some(value)),
-            Err(env::VarError::NotPresent) => Ok(None),
-            Err(env::VarError::NotUnicode(_)) => Err(ShippingCompositionError::Configuration),
-        }
-    }
-
-    fn absolute_path(value: String) -> Result<PathBuf, ShippingCompositionError> {
-        let path = PathBuf::from(value);
-        if !path.is_absolute() {
-            return Err(ShippingCompositionError::Configuration);
-        }
-        Ok(path)
     }
 
     fn now() -> Result<UnixMillis, ShippingCompositionError> {
