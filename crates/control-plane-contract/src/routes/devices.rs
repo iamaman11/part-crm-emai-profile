@@ -3,6 +3,9 @@ use crate::RouteClass;
 #[must_use]
 pub(super) fn classify(method: &str, segments: &[&str]) -> Option<RouteClass> {
     match segments {
+        ["api", "v1", "tenants", _, "devices", "installer"] if method == "GET" => {
+            Some(RouteClass::DeviceInstallerApi)
+        }
         ["api", "v1", "tenants", _, "devices", _, "registration"] if method == "GET" => {
             Some(RouteClass::DeviceRegistrationApi)
         }
@@ -69,6 +72,21 @@ pub(super) fn classify(method: &str, segments: &[&str]) -> Option<RouteClass> {
 #[cfg(test)]
 mod tests {
     use crate::{RouteClass, classify_route, is_authenticated_api};
+
+    #[test]
+    fn installer_is_only_an_authenticated_read() {
+        let path = "/api/v1/tenants/tenant_01JTEST/devices/installer";
+        assert_eq!(classify_route("GET", path), RouteClass::DeviceInstallerApi);
+        assert!(is_authenticated_api(RouteClass::DeviceInstallerApi));
+        assert_eq!(
+            classify_route("POST", path),
+            RouteClass::DynamicRouteNotFound
+        );
+        assert_eq!(
+            classify_route("GET", &format!("{path}/latest")),
+            RouteClass::DynamicRouteNotFound
+        );
+    }
 
     #[test]
     fn registration_is_an_authenticated_read_not_a_machine_enrollment_route() {

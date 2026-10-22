@@ -16,11 +16,12 @@ const CREATE_FIXTURE_SCRIPT: &str = r#"param(
     [Parameter(Mandatory=$true)][string]$ManifestPath,
     [Parameter(Mandatory=$true)][string]$SignaturePath,
     [Parameter(Mandatory=$true)][string]$PinPath,
-    [Parameter(Mandatory=$true)][string]$CertificatePath
+    [Parameter(Mandatory=$true)][string]$CertificatePath,
+    [Parameter(Mandatory=$true)][string]$SigningAdapter
 )
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.Security
-$rsa = [System.Security.Cryptography.RSA]::Create(2048)
+$rsa = [System.Security.Cryptography.RSA]::Create(3072)
 try {
     $subject = [System.Security.Cryptography.X509Certificates.X500DistinguishedName]::new(
         "CN=Profile Bridge S0 CI " + [Guid]::NewGuid().ToString()
@@ -48,23 +49,20 @@ try {
             $certificate.Export([System.Security.Cryptography.X509Certificates.X509ContentType]::Cert)
         )
 
-        $manifest = [System.IO.File]::ReadAllBytes($ManifestPath)
-        $contentInfo = [System.Security.Cryptography.Pkcs.ContentInfo]::new($manifest)
-        $cms = [System.Security.Cryptography.Pkcs.SignedCms]::new($contentInfo, $true)
-        $signer = [System.Security.Cryptography.Pkcs.CmsSigner]::new($certificate)
-        $signer.IncludeOption = [System.Security.Cryptography.X509Certificates.X509IncludeOption]::EndCertOnly
-        $cms.ComputeSignature($signer)
-        [System.IO.File]::WriteAllBytes($SignaturePath, $cms.Encode())
-
-        $sha256 = [System.Security.Cryptography.SHA256]::Create()
-        try {
-            $pin = [System.BitConverter]::ToString(
-                $sha256.ComputeHash($certificate.RawData)
-            ).Replace('-', '').ToLowerInvariant()
+        # Exercise the real CI signing adapter, then the real native verifier in Rust.
+        $env:PROFILE_BRIDGE_DELIVERY_PFX_BASE64 = [Convert]::ToBase64String(
+            $certificate.Export([System.Security.Cryptography.X509Certificates.X509ContentType]::Pfx, '')
+        )
+        & $SigningAdapter -ManifestPath $ManifestPath -OutputPath ($SignaturePath + '.json') -PublicMetadataPath ($PinPath + '.json')
+        $wire = Get-Content -Raw ($SignaturePath + '.json') | ConvertFrom-Json
+        $public = Get-Content -Raw ($PinPath + '.json') | ConvertFrom-Json
+        if ($wire.key_id -cne $public.key_id -or $wire.key_id.Length -gt 64) { throw 'invalid key ID' }
+        $signature = [byte[]]::new($wire.cms_der_hex.Length / 2)
+        for ($index = 0; $index -lt $signature.Length; $index++) {
+            $signature[$index] = [Convert]::ToByte($wire.cms_der_hex.Substring(2 * $index, 2), 16)
         }
-        finally {
-            $sha256.Dispose()
-        }
+        [System.IO.File]::WriteAllBytes($SignaturePath, $signature)
+        $pin = $public.certificate_sha256
         [System.IO.File]::WriteAllText($PinPath, $pin)
     }
     finally {
@@ -78,24 +76,6 @@ finally {
 
 const ACCEPTANCE_PROCESS_TIMEOUT: Duration = Duration::from_secs(120);
 const ACCEPTANCE_PROCESS_POLL_INTERVAL: Duration = Duration::from_millis(25);
-const PRODUCTION_SCRIPT_PREFIX: &str = "const VERIFY_SCRIPT: &str = r#\"";
-const PRODUCTION_SCRIPT_SUFFIX: &str = "\"#;";
-const PARAMETER_ANCHOR: &str =
-    "    [Parameter(Mandatory=$true)][string]$ExpectedCertificateSha256\n)";
-const PARAMETER_REPLACEMENT: &str = "    [Parameter(Mandatory=$true)][string]$ExpectedCertificateSha256,\n    [Parameter(Mandatory=$true)][string]$CustomRootPath\n)";
-const CHAIN_ANCHOR: &str =
-    "    $chain = [System.Security.Cryptography.X509Certificates.X509Chain]::new()\n    try {\n";
-const CHAIN_REPLACEMENT: &str = "    $customRoot = [System.Security.Cryptography.X509Certificates.X509Certificate2]::new($CustomRootPath)\n    $chain = [System.Security.Cryptography.X509Certificates.X509Chain]::new()\n    try {\n        [void]$chain.ChainPolicy.ExtraStore.Add($customRoot)\n";
-const FLAGS_ANCHOR: &str = "        $chain.ChainPolicy.VerificationFlags = [System.Security.Cryptography.X509Certificates.X509VerificationFlags]::NoFlag";
-const FLAGS_REPLACEMENT: &str = "        $chain.ChainPolicy.VerificationFlags = [System.Security.Cryptography.X509Certificates.X509VerificationFlags]::AllowUnknownCertificateAuthority";
-const BUILD_ANCHOR: &str = "        if (-not $chain.Build($certificate)) { exit 23 }";
-const BUILD_REPLACEMENT: &str = r#"        if (-not $chain.Build($certificate)) { exit 23 }
-        if ($chain.ChainElements.Count -lt 1) { exit 23 }
-        $chainRoot = $chain.ChainElements[$chain.ChainElements.Count - 1].Certificate
-        if ([Convert]::ToBase64String($chainRoot.RawData) -cne [Convert]::ToBase64String($customRoot.RawData)) { exit 23 }"#;
-const FINALLY_ANCHOR: &str = "    finally {\n        $chain.Dispose()\n    }";
-const FINALLY_REPLACEMENT: &str =
-    "    finally {\n        $chain.Dispose()\n        $customRoot.Dispose()\n    }";
 static TEST_COUNTER: AtomicU64 = AtomicU64::new(1);
 
 type TestResult = Result<(), Box<dyn std::error::Error>>;
@@ -123,7 +103,6 @@ impl Drop for TestDirectory {
 struct SigningFixture {
     signature: Vec<u8>,
     certificate_sha256: String,
-    certificate_path: PathBuf,
 }
 
 impl SigningFixture {
@@ -136,6 +115,8 @@ impl SigningFixture {
         fs::write(&manifest_path, manifest)?;
         fs::write(&create_script, CREATE_FIXTURE_SCRIPT.as_bytes())?;
 
+        let signing_adapter =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../scripts/windows-delivery-sign.ps1");
         run_powershell(
             &create_script,
             &[
@@ -143,6 +124,7 @@ impl SigningFixture {
                 ("-SignaturePath", signature_path.as_path()),
                 ("-PinPath", pin_path.as_path()),
                 ("-CertificatePath", certificate_path.as_path()),
+                ("-SigningAdapter", signing_adapter.as_path()),
             ],
         )?;
 
@@ -162,114 +144,8 @@ impl SigningFixture {
         Ok(Self {
             signature,
             certificate_sha256,
-            certificate_path,
         })
     }
-}
-
-fn production_verify_script() -> Result<String, io::Error> {
-    let source_path = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("src")
-        .join("windows_delivery_signature.rs");
-    let source = fs::read_to_string(source_path)?.replace("\r\n", "\n");
-    let start = source
-        .find(PRODUCTION_SCRIPT_PREFIX)
-        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "VERIFY_SCRIPT owner missing"))?;
-    let body_start = start + PRODUCTION_SCRIPT_PREFIX.len();
-    let tail = &source[body_start..];
-    let body_end = tail.find(PRODUCTION_SCRIPT_SUFFIX).ok_or_else(|| {
-        io::Error::new(
-            io::ErrorKind::InvalidData,
-            "VERIFY_SCRIPT terminator missing",
-        )
-    })?;
-    if tail[body_end + PRODUCTION_SCRIPT_SUFFIX.len()..].contains(PRODUCTION_SCRIPT_PREFIX) {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "VERIFY_SCRIPT owner is ambiguous",
-        ));
-    }
-    Ok(tail[..body_end].to_owned())
-}
-
-fn isolated_trust_verify_script() -> Result<String, io::Error> {
-    let script = production_verify_script()?;
-    if !script.contains("X509RevocationMode]::NoCheck")
-        || script.contains("X509RevocationMode]::Online")
-        || script.contains("UrlRetrievalTimeout")
-    {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "production verifier must keep app-owned revocation offline and deterministic",
-        ));
-    }
-    let script = replace_exactly_once(&script, PARAMETER_ANCHOR, PARAMETER_REPLACEMENT)?;
-    let script = replace_exactly_once(&script, CHAIN_ANCHOR, CHAIN_REPLACEMENT)?;
-    let script = replace_exactly_once(&script, FLAGS_ANCHOR, FLAGS_REPLACEMENT)?;
-    let script = replace_exactly_once(&script, BUILD_ANCHOR, BUILD_REPLACEMENT)?;
-    replace_exactly_once(&script, FINALLY_ANCHOR, FINALLY_REPLACEMENT)
-}
-
-fn replace_exactly_once(input: &str, anchor: &str, replacement: &str) -> Result<String, io::Error> {
-    let start = input.find(anchor).ok_or_else(|| {
-        io::Error::new(
-            io::ErrorKind::InvalidData,
-            "production verifier anchor missing",
-        )
-    })?;
-    if input[start + anchor.len()..].contains(anchor) {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "production verifier anchor is ambiguous",
-        ));
-    }
-    let mut output = String::with_capacity(input.len() - anchor.len() + replacement.len());
-    output.push_str(&input[..start]);
-    output.push_str(replacement);
-    output.push_str(&input[start + anchor.len()..]);
-    Ok(output)
-}
-
-fn run_isolated_trust_verifier(
-    directory: &Path,
-    label: &str,
-    manifest: &[u8],
-    signature: &[u8],
-    expected_certificate_sha256: &str,
-    custom_root_path: &Path,
-) -> Result<i32, Box<dyn std::error::Error>> {
-    let script_path = directory.join(format!("verify-{label}.ps1"));
-    let manifest_path = directory.join(format!("manifest-{label}.bin"));
-    let signature_path = directory.join(format!("signature-{label}.p7s"));
-    fs::write(&script_path, isolated_trust_verify_script()?.as_bytes())?;
-    fs::write(&manifest_path, manifest)?;
-    fs::write(&signature_path, signature)?;
-
-    let executable = powershell_executable()?;
-    let mut command = Command::new(executable);
-    command
-        .env_clear()
-        .args(["-NoLogo", "-NoProfile", "-NonInteractive", "-File"])
-        .arg(&script_path)
-        .arg("-ManifestPath")
-        .arg(&manifest_path)
-        .arg("-SignaturePath")
-        .arg(&signature_path)
-        .arg("-ExpectedCertificateSha256")
-        .arg(expected_certificate_sha256)
-        .arg("-CustomRootPath")
-        .arg(custom_root_path);
-    inherit_system_environment(&mut command);
-    let mut child = command
-        .stdin(Stdio::null())
-        .stdout(Stdio::inherit())
-        .stderr(Stdio::inherit())
-        .spawn()?;
-    let status = wait_for_powershell_process(&mut child)?;
-    let code = status
-        .code()
-        .ok_or_else(|| io::Error::other("isolated CMS verifier exited without a code"))?;
-    Ok(code)
 }
 
 fn run_powershell(
@@ -345,43 +221,22 @@ fn inherit_system_environment(command: &mut Command) {
 }
 
 #[test]
-fn production_script_accepts_isolated_test_trust_without_system_trust_fallback() -> TestResult {
+fn production_verifier_accepts_only_exact_pinned_application_signature() -> TestResult {
     let directory = TestDirectory::create()?;
-    let manifest = br#"{"kind":"S0_CMS_ACCEPTANCE","sequence":1}"#;
+    let manifest = br#"{"kind":"CMS_ACCEPTANCE","sequence":1}"#;
     let fixture = SigningFixture::create(&directory.0, manifest)?;
-
-    let exact_code = run_isolated_trust_verifier(
-        &directory.0,
-        "exact",
-        manifest,
+    let mut verifier = WindowsCmsSignatureVerifier::from_system(directory.0.clone())?;
+    assert!(verifier.verify_cms(manifest, &fixture.signature, &fixture.certificate_sha256)?);
+    assert!(!verifier.verify_cms(
+        br#"{"kind":"CMS_ACCEPTANCE","sequence":2}"#,
         &fixture.signature,
         &fixture.certificate_sha256,
-        &fixture.certificate_path,
-    )?;
-    let tampered_code = run_isolated_trust_verifier(
-        &directory.0,
-        "tampered",
-        br#"{"kind":"S0_CMS_ACCEPTANCE","sequence":2}"#,
-        &fixture.signature,
-        &fixture.certificate_sha256,
-        &fixture.certificate_path,
-    )?;
-    let wrong_pin_code = run_isolated_trust_verifier(
-        &directory.0,
-        "wrong-pin",
-        manifest,
-        &fixture.signature,
-        &"b".repeat(64),
-        &fixture.certificate_path,
-    )?;
-
-    let mut system_verifier = WindowsCmsSignatureVerifier::from_system(directory.0.clone())?;
-    let system_trust_result =
-        system_verifier.verify_cms(manifest, &fixture.signature, &fixture.certificate_sha256)?;
-
-    assert_eq!(exact_code, 0);
-    assert_eq!(tampered_code, 24);
-    assert_eq!(wrong_pin_code, 22);
-    assert!(!system_trust_result);
+    )?);
+    assert!(!verifier.verify_cms(manifest, &fixture.signature, &"b".repeat(64))?);
+    let mut tampered = fixture.signature.clone();
+    let last = tampered.len() - 1;
+    tampered[last] ^= 1;
+    assert!(!verifier.verify_cms(manifest, &tampered, &fixture.certificate_sha256)?);
+    assert!(!verifier.verify_cms(manifest, b"unsigned", &fixture.certificate_sha256)?);
     Ok(())
 }

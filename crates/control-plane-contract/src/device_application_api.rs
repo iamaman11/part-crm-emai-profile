@@ -14,6 +14,17 @@ pub const DEVICE_SESSION_COLLECTION_PATH_TEMPLATE: &str =
 pub const DEVICE_REGISTRATION_PATH_TEMPLATE: &str =
     "/api/v1/tenants/{tenantId}/devices/{deviceId}/registration";
 
+pub const DEVICE_INSTALLER_PATH_TEMPLATE: &str = "/api/v1/tenants/{tenantId}/devices/installer";
+
+/// Exact deployed release download; never a mutable latest/source-main selection.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DeviceInstallerProjectionV1 {
+    pub schema_version: u8,
+    pub release_set_id: String,
+    pub download_url: String,
+}
+
 pub const DEVICE_APPLICATION_SESSION_HEADER: &str = "X-Device-Application-Session";
 pub const DEVICE_REQUEST_PROOF_EXPIRES_HEADER: &str = "X-Device-Request-Proof-Expires-Ms";
 pub const DEVICE_REQUEST_PROOF_SIGNATURE_HEADER: &str = "X-Device-Request-Proof-Signature";
@@ -150,6 +161,18 @@ pub enum DeviceRegistrationStatus {
 pub fn registration_openapi_fragment() -> Value {
     json!({
         "paths": {
+            DEVICE_INSTALLER_PATH_TEMPLATE: {
+                "get": {
+                    "operationId": "getDeviceInstaller",
+                    "security": [{"cloudflareAccessJwt": []}],
+                    "parameters": [tenant_path_parameter(), correlation_header()],
+                    "responses": {
+                        "200": json_response("DeviceInstallerProjectionV1"),
+                        "404": {"$ref": "#/components/responses/NeutralNotFound"},
+                        "503": {"$ref": "#/components/responses/InternalFailure"}
+                    }
+                }
+            },
             DEVICE_REGISTRATION_PATH_TEMPLATE: {
                 "get": {
                     "operationId": "getDeviceRegistration",
@@ -166,6 +189,15 @@ pub fn registration_openapi_fragment() -> Value {
         },
         "components": {
             "schemas": {
+                "DeviceInstallerProjectionV1": {
+                    "type": "object", "additionalProperties": false,
+                    "required": ["schemaVersion", "releaseSetId", "downloadUrl"],
+                    "properties": {
+                        "schemaVersion": {"type": "integer", "const": 1},
+                        "releaseSetId": {"type": "string", "pattern": "^release-set-v3-sha256-[0-9a-f]{64}$"},
+                        "downloadUrl": {"type": "string", "maxLength": 256}
+                    }
+                },
                 "DeviceRegistrationProjection": {
                     "type": "object", "additionalProperties": false,
                     "required": ["tenantId", "actorId", "deviceId", "bindingVersion", "status"],

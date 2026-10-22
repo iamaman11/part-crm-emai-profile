@@ -28,6 +28,40 @@ const TOKEN_BYTES: usize = OPAQUE_TOKEN_HEX_LENGTH / 2;
 const P256_SIGNATURE_BYTES: usize = P256_SIGNATURE_P1363_HEX_LENGTH / 2;
 const P256_SPKI_DER_BYTES: usize = P256_SPKI_DER_HEX_LENGTH / 2;
 
+/// Human-only metadata query; no device or runtime readiness is granted by downloading.
+pub(crate) async fn installer(
+    request: &Request,
+    env: &Env,
+    context: &crate::capability_gate::RuntimeCapabilityContext,
+) -> Result<Response> {
+    let Some(tenant_id) = path_tenant_id(request) else {
+        return neutral_not_found(&correlation_hint(request));
+    };
+    let Some(actor) = resolve_active_request_actor(request, env, Some(tenant_id.as_str())).await?
+    else {
+        return neutral_not_found(&correlation_hint(request));
+    };
+    let Some(release_set_id) = context.windows_installer_release_set() else {
+        return problem(
+            actor.actor().correlation_id().as_str(),
+            503,
+            "internal_failure",
+            "Windows installer unavailable",
+        );
+    };
+    let mut response = Response::from_json(
+        &control_plane_contract::device_application_api::DeviceInstallerProjectionV1 {
+            schema_version: 1,
+            release_set_id: release_set_id.to_owned(),
+            download_url: format!(
+                "https://github.com/iamaman11/part-crm-emai-profile/releases/download/{release_set_id}/ProfileBridgeSetup.exe"
+            ),
+        },
+    )?;
+    response.headers_mut().set("Cache-Control", "no-store")?;
+    Ok(response)
+}
+
 pub async fn dispatch(route: RouteClass, request: &mut Request, env: &Env) -> Result<Response> {
     match route {
         RouteClass::DeviceRegistrationApi => registration::get_registration(request, env).await,

@@ -37,6 +37,7 @@ pub enum RouteClass {
     DeviceBindingResourceApi,
     DeviceBindingRevokeApi,
     DeviceRegistrationApi,
+    DeviceInstallerApi,
     DevicePairingCollectionApi,
     DevicePairingAuthorizationApi,
     DevicePairingCompletionApi,

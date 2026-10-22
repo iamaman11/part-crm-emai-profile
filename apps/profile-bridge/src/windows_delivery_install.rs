@@ -1,5 +1,5 @@
 //! Installer composition only. Delivery policy, extraction, journal and first-install eligibility
-//! remain in their existing owners. The wizard supplies public bootstrap data from its signed payload.
+//! remain in their existing owners. The wizard supplies public bootstrap data from the immutable installer payload delivered by the canonical HTTPS app.
 
 use crate::installed_connection::InstalledConnectionError;
 use crate::windows_delivery_coordinator::WindowsDeliveryCoordinatorError;

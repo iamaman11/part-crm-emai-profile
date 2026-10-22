@@ -106,6 +106,7 @@ export function ClientProfilesPanel({
         and assignment never grant profile access. Launch authorization, device selection and generation
         selection remain server-owned.
       </p>
+      <p>First time on this Windows computer? <a href={`/devices?tenant=${encodeURIComponent(tenantId)}`}>Install and connect Profile Bridge</a> once, then launch any profile you can operate.</p>
       <StatusMessage
         state={
           profiles.error

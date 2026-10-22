@@ -17,6 +17,7 @@ const RELEASE_SET_V3_PREFIX: &str = "release-set-v3-sha256-";
 #[derive(Clone, Debug)]
 pub struct RuntimeCapabilityContext {
     profile: EffectiveProfile,
+    windows_installer_release_set: Option<String>,
 }
 
 impl RuntimeCapabilityContext {
@@ -43,7 +44,23 @@ impl RuntimeCapabilityContext {
             )?,
         };
         let profile = admit(request).map_err(policy_error)?;
-        Ok(Self { profile })
+        // The observation was validated above against environment, profile and exact digest.
+        // Retain its release locator instead of creating another runtime configuration authority.
+        // Initial installer publications are staging-only and embed the staging origin.
+        let windows_installer_release_set = (environment == CanonicalEnvironment::Staging)
+            .then_some(target_authorization.as_deref())
+            .flatten()
+            .and_then(|observation| observation.rsplit('|').next())
+            .map(str::to_owned);
+        Ok(Self {
+            profile,
+            windows_installer_release_set,
+        })
+    }
+
+    #[must_use]
+    pub fn windows_installer_release_set(&self) -> Option<&str> {
+        self.windows_installer_release_set.as_deref()
     }
 
     #[must_use]
@@ -149,6 +166,7 @@ pub fn route_surface(route: RouteClass, path: &str) -> Option<RuntimeSurface> {
         | RouteClass::DeviceBindingResourceApi
         | RouteClass::DeviceBindingRevokeApi
         | RouteClass::DeviceRegistrationApi
+        | RouteClass::DeviceInstallerApi
         | RouteClass::DevicePairingCollectionApi
         | RouteClass::DevicePairingAuthorizationApi
         | RouteClass::DevicePairingCompletionApi
@@ -391,6 +409,7 @@ mod tests {
     fn surface_admission_uses_effective_profile_for_queue_and_schedule()
     -> Result<(), Box<dyn std::error::Error>> {
         let context = RuntimeCapabilityContext {
+            windows_installer_release_set: None,
             profile: effective_profile(
                 ProfileId::RehearsalCoreV2,
                 CanonicalEnvironment::Rehearsal,

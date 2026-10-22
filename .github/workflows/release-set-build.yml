@@ -325,12 +325,14 @@ jobs:
           retention-days: 7
 
   assemble-publish:
-    name: Finalize and publish durable immutable Release Set v3
+    name: Finalize exact Release Set v3 publication inputs
     needs: [cloud-components, profile-bridge, runtime-bundle]
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
       contents: write
+    outputs:
+      release_id: ${{ steps.release-set.outputs.release_id }}
     env:
       SOURCE_SHA: ${{ github.sha }}
       GH_TOKEN: ${{ github.token }}
@@ -534,41 +536,6 @@ jobs:
             echo "accepted_source_evidence=$policy_dir/accepted-source-evidence.json"
           } >> "$GITHUB_OUTPUT"
 
-      - name: Publish once or prove byte-identical replay
-        env:
-          RELEASE_DIR: ${{ steps.release-set.outputs.release_dir }}
-          RELEASE_ID: ${{ steps.release-set.outputs.release_id }}
-        run: |
-          set -euo pipefail
-          asset_dir="$RUNNER_TEMP/release-assets"
-          mkdir -p "$asset_dir"
-          cp "$RELEASE_DIR/release-set.json" "$asset_dir/release-set.json"
-          cp "$RELEASE_DIR/capability-policy-v1.json" "$asset_dir/capability-policy-v1.json"
-          cp "$RELEASE_DIR/components/"* "$asset_dir/"
-          cp "$RELEASE_DIR/windows/windows-sbom-v1.json" "$asset_dir/windows-sbom-v1.json"
-          cp "$RELEASE_DIR/windows/windows-provenance-v1.json" "$asset_dir/windows-provenance-v1.json"
-          cp "$RELEASE_DIR/windows-delivery-manifest.json" "$asset_dir/windows-delivery-manifest.json"
-          test "$(find "$asset_dir" -maxdepth 1 -type f | wc -l)" -eq 8
-
-          python -m py_compile scripts/github-release-publication.py
-          python scripts/github-release-publication.py self-test
-          echo "Publishing aggregate $RELEASE_ID without duplicating the heavy runtime component."
-          python scripts/github-release-publication.py publish \
-            --repository "$GITHUB_REPOSITORY" \
-            --release-id "$RELEASE_ID" \
-            --target "$SOURCE_SHA" \
-            --title "$RELEASE_ID" \
-            --notes "Immutable Release Set v3 built once from accepted main $SOURCE_SHA." \
-            --asset "$asset_dir/release-set.json" \
-            --asset "$asset_dir/capability-policy-v1.json" \
-            --asset "$asset_dir/control-plane.tar" \
-            --asset "$asset_dir/secret-resolver.tar" \
-            --asset "$asset_dir/profile-bridge.zip" \
-            --asset "$asset_dir/windows-sbom-v1.json" \
-            --asset "$asset_dir/windows-provenance-v1.json" \
-            --asset "$asset_dir/windows-delivery-manifest.json"
-          echo "Aggregate Release Set publication completed or exact replay proved: $RELEASE_ID"
-
       - name: Upload metadata-only CI evidence
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
@@ -580,5 +547,114 @@ jobs:
             ${{ steps.release-set.outputs.release_dir }}/windows/windows-provenance-v1.json
             ${{ steps.release-set.outputs.release_dir }}/windows-delivery-manifest.json
             ${{ steps.release-set.outputs.accepted_source_evidence }}
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Transport exact publication inputs to the Windows packaging job
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: release-set-publication-inputs-${{ github.sha }}
+          path: ${{ steps.release-set.outputs.release_dir }}/
+          if-no-files-found: error
+          retention-days: 7
+
+  publish-windows-installer:
+    name: Package signed delivery and publish one complete immutable Release Set
+    needs: assemble-publish
+    runs-on: windows-latest
+    timeout-minutes: 20
+    environment: staging
+    permissions:
+      contents: write
+    env:
+      SOURCE_SHA: ${{ github.sha }}
+      RELEASE_ID: ${{ needs.assemble-publish.outputs.release_id }}
+      GH_TOKEN: ${{ github.token }}
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - name: Checkout exact accepted-main source
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Download exact assembled publication inputs
+        uses: actions/download-artifact@70fc10c6e5e1ce46ad2ea6f2b72d43f7d47b13c3
+        with:
+          name: release-set-publication-inputs-${{ github.sha }}
+          path: artifacts/release-set
+
+      - name: Verify exact source and component before resolving signing key
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          if ($env:GITHUB_EVENT_NAME -ne 'push' -or $env:GITHUB_REF -ne 'refs/heads/main' -or
+              $env:GITHUB_REPOSITORY -ne 'iamaman11/part-crm-emai-profile' -or
+              (& git rev-parse HEAD) -ne $env:SOURCE_SHA) { throw 'Accepted-main source fence failed' }
+          $release = Get-Content -Raw artifacts/release-set/release-set.json | ConvertFrom-Json
+          if ($release.source.commit_sha -ne $env:SOURCE_SHA -or $release.source.accepted_main -ne $true -or
+              $release.release_set_id -cne $env:RELEASE_ID -or
+              $env:RELEASE_ID -cnotmatch '^release-set-v3-sha256-[0-9a-f]{64}$') { throw 'Release Set fence failed' }
+          if (@(Get-ChildItem artifacts/release-set -File -Recurse).Count -ne 8) { throw 'Assembled inventory mismatch' }
+          python scripts/windows-delivery-publication.py installer-component --release-set artifacts/release-set/release-set.json --bridge-archive artifacts/release-set/components/profile-bridge.zip --output "$env:RUNNER_TEMP/profile-bridge.exe"
+
+      - name: Sign exact delivery manifest with the application integrity key
+        env:
+          PROFILE_BRIDGE_DELIVERY_PFX_BASE64: ${{ secrets.PROFILE_BRIDGE_DELIVERY_PFX_BASE64 }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          & ./scripts/windows-delivery-sign.ps1 -ManifestPath artifacts/release-set/windows-delivery-manifest.json -OutputPath artifacts/release-set/windows-delivery-signature.json -PublicMetadataPath "$env:RUNNER_TEMP/delivery-signer-public.json"
+
+      - name: Compile ordinary per-user Windows installer
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          $public = Get-Content -Raw "$env:RUNNER_TEMP/delivery-signer-public.json" | ConvertFrom-Json
+          $source = "$env:RUNNER_TEMP/installer-source"
+          python scripts/windows-delivery-publication.py installer-source --manifest artifacts/release-set/windows-delivery-manifest.json --signature artifacts/release-set/windows-delivery-signature.json --bridge "$env:RUNNER_TEMP/profile-bridge.exe" --origin https://staging.alegria.by --signer-key-id $public.key_id --certificate-sha256 $public.certificate_sha256 --output "$source"
+          $compiler = Join-Path ${env:ProgramFiles(x86)} 'Inno Setup 6/ISCC.exe'
+          if (-not (Test-Path -LiteralPath $compiler -PathType Leaf)) { throw 'Inno Setup 6 is unavailable' }
+          & $compiler /Qp "/DInstallerInputDirectory=$source" "/DInstallerOutputDirectory=$env:RUNNER_TEMP/installer-output" packaging/windows/profile-bridge.iss
+          Copy-Item "$env:RUNNER_TEMP/installer-output/ProfileBridgeSetup.exe" artifacts/release-set/ProfileBridgeSetup.exe
+
+      - name: Publish once or prove byte-identical replay
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          $assetRoot = "$env:RUNNER_TEMP/release-assets"
+          New-Item -ItemType Directory -Path $assetRoot | Out-Null
+          $files = @(Get-ChildItem artifacts/release-set -File -Recurse)
+          if ($files.Count -ne 10) { throw 'Complete Release Set inventory mismatch' }
+          foreach ($file in $files) {
+            $target = Join-Path $assetRoot $file.Name
+            if (Test-Path -LiteralPath $target) { throw 'Duplicate release asset name' }
+            Copy-Item -LiteralPath $file.FullName -Destination $target
+          }
+          $assets = @()
+          $expectedNames = @(
+            'release-set.json', 'capability-policy-v1.json', 'control-plane.tar', 'secret-resolver.tar',
+            'profile-bridge.zip', 'windows-sbom-v1.json', 'windows-provenance-v1.json',
+            'windows-delivery-manifest.json', 'windows-delivery-signature.json', 'ProfileBridgeSetup.exe'
+          )
+          foreach ($name in $expectedNames) {
+            $file = Get-Item -LiteralPath (Join-Path $assetRoot $name) -ErrorAction Stop
+            $assets += @('--asset', $file.FullName)
+          }
+          python scripts/github-release-publication.py publish --repository $env:GITHUB_REPOSITORY --release-id $env:RELEASE_ID --target $env:SOURCE_SHA --title $env:RELEASE_ID --notes "Immutable Release Set v3 from accepted main $env:SOURCE_SHA; application-signed delivery, initial unsigned Windows installer for staging." @assets
+
+      - name: Upload metadata-only CI evidence
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: windows-installer-evidence-${{ needs.assemble-publish.outputs.release_id }}
+          path: |
+            artifacts/release-set/release-set.json
+            artifacts/release-set/capability-policy-v1.json
+            artifacts/release-set/windows/windows-sbom-v1.json
+            artifacts/release-set/windows/windows-provenance-v1.json
+            artifacts/release-set/windows-delivery-manifest.json
+            artifacts/release-set/windows-delivery-signature.json
           if-no-files-found: error
           retention-days: 30

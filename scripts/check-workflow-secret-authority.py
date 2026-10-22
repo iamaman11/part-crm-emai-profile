@@ -13,6 +13,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 BASE_AUTHORITY = Path("architecture/credential-authority-ar8b.json")
 AR11_EXTENSION = Path("architecture/credential-authority-ar11-extension.json")
+CURRENT_AUTHORITY = Path("architecture/credential-authority.json")
+CURRENT_OVERLAY = Path("architecture/credential-authority-ar11.json")
 SECRET_RE = re.compile(r"\$\{\{\s*secrets\.([A-Z][A-Z0-9_]*)")
 JOB_RE = re.compile(r"^  ([A-Za-z0-9_-]+):\s*(?:#.*)?$")
 JOB_FIELD_RE = re.compile(r"^    ([A-Za-z0-9_-]+):\s*(.*?)\s*(?:#.*)?$")
@@ -81,7 +83,30 @@ def load_authorities(root: Path) -> tuple[list[dict], dict]:
         raise ValueError("AR-11 credential extension must remain metadata-only and non-competing")
     if extension.get("production_mutation") is not False:
         raise ValueError("AR-11 credential extension must keep production_mutation=false")
-    return [base, extension], extension
+    # New credentials belong to the existing current composition root, not another card in
+    # the retained AR-11 workflow-capability extension. Keep its accepted consumer extensions,
+    # and project only bindings not already described there from the current metadata owner.
+    composition = load_json(root, CURRENT_AUTHORITY)
+    if (composition.get("kind") != "CURRENT_CREDENTIAL_AUTHORITY"
+            or composition.get("status") != "current"
+            or composition.get("registry_overlay_sources") != [CURRENT_OVERLAY.as_posix()]):
+        raise ValueError("current credential composition root drifted")
+    current = load_json(root, CURRENT_OVERLAY)
+    if (current.get("kind") != "CURRENT_CREDENTIAL_REGISTRY_OVERLAY"
+            or current.get("status") != "current" or current.get("metadata_only") is not True
+            or current.get("base_registry") != BASE_AUTHORITY.as_posix()
+            or current.get("production_mutation") is not False):
+        raise ValueError("current credential overlay identity drifted")
+    known_names = {
+        binding.get("name")
+        for authority in [base, extension]
+        for credential in authority.get("credentials", [])
+        for binding in credential.get("bindings", [])
+    }
+    additions = [credential for credential in current.get("credentials", [])
+                 if any(binding.get("name") not in known_names
+                        for binding in credential.get("bindings", []))]
+    return [base, extension, {"credentials": additions}], extension
 
 
 def canonical_workflows(root: Path) -> list[str]:
@@ -657,6 +682,21 @@ def self_test() -> bool:
         (root / ".github/workflows").mkdir(parents=True)
         (root / BASE_AUTHORITY).write_text(json.dumps(base), encoding="utf-8")
         (root / AR11_EXTENSION).write_text(json.dumps(extension), encoding="utf-8")
+        (root / CURRENT_AUTHORITY).write_text(json.dumps({
+            "kind": "CURRENT_CREDENTIAL_AUTHORITY", "status": "current",
+            "registry_overlay_sources": [CURRENT_OVERLAY.as_posix()],
+        }), encoding="utf-8")
+        (root / CURRENT_OVERLAY).write_text(json.dumps({
+            "kind": "CURRENT_CREDENTIAL_REGISTRY_OVERLAY", "status": "current", "metadata_only": True,
+            "base_registry": BASE_AUTHORITY.as_posix(), "production_mutation": False,
+            "credentials": [{"id": "current.integrity", "consumers": [".github/workflows/current.yml"],
+                "environment_scope": {"kind": "environment", "environments": ["staging"]},
+                "bindings": [{"surface": "github_environment_secret", "name": "CURRENT_INTEGRITY_KEY",
+                    "environments": ["staging"], "required_usage": True}]}],
+        }), encoding="utf-8")
+        current_workflow = root / ".github/workflows/current.yml"
+        current_source = "jobs:\n  sign:\n    environment: staging\n    steps:\n      - env:\n          KEY: ${{ secrets.CURRENT_INTEGRITY_KEY }}\n"
+        current_workflow.write_text(current_source, encoding="utf-8")
         workflow = root / ".github/workflows/ok.yml"
         dynamic = root / ".github/workflows/dynamic.yml"
         workflow.write_text(
@@ -666,6 +706,11 @@ def self_test() -> bool:
         dynamic.write_text(dynamic_ok, encoding="utf-8")
         if validate(root):
             return False
+
+        current_workflow.write_text(current_source.replace("environment: staging", "environment: production"), encoding="utf-8")
+        if not has_error(root, "wrong secret environment"):
+            return False
+        current_workflow.write_text(current_source, encoding="utf-8")
 
         dynamic.write_text(dynamic_ok.replace("    needs: authorize\n", "    # needs: authorize\n"), encoding="utf-8")
         if not has_error(root, "must depend on pre-Environment guard job"):

@@ -255,9 +255,10 @@ def validate_overlay(value: dict[str, Any]) -> None:
     expected_ids = {
         "cloudflare.release-observation-api",
         "cloudflare.staging-zero-trust-observation-api",
+        "windows.staging-delivery-integrity",
     }
     if set(by_id) != expected_ids:
-        raise ValueError("AR-11 credential overlay must own exactly the two bounded read-only observation credentials")
+        raise ValueError("current credential overlay must own exactly the two observation credentials and staging delivery integrity key")
 
     observation = by_id["cloudflare.release-observation-api"]
     if (
@@ -310,6 +311,29 @@ def validate_overlay(value: dict[str, Any]) -> None:
         raise ValueError("V2 Zero Trust observation credential binding drifted")
     if zero_trust.get("environment_scope") != {"kind": "environment", "environments": ["staging"]}:
         raise ValueError("V2 Zero Trust observation credential must remain staging-only")
+
+
+    signing = by_id["windows.staging-delivery-integrity"]
+    if (
+        signing.get("class") != "APPLICATION_RELEASE_INTEGRITY_SIGNING_KEY"
+        or signing.get("provider_system") != "LOCAL_APPLICATION_CRYPTOGRAPHY"
+        or signing.get("owner") != ".github/workflows/release-set-build.yml"
+        or signing.get("consumers") != [".github/workflows/release-set-build.yml"]
+        or signing.get("environment_scope") != {"kind": "environment", "environments": ["staging"]}
+        or signing.get("bindings") != [{
+            "surface": "github_environment_secret", "name": "PROFILE_BRIDGE_DELIVERY_PFX_BASE64",
+            "environments": ["staging"], "required_usage": True,
+        }]
+        or signing.get("automation_class") != "PROTECTED_ACCEPTED_MAIN_RELEASE_SIGNING"
+        or signing.get("provider_capability") != "SIGN_EXACT_DETACHED_CMS_ONLY"
+        or signing.get("max_active_lifetime") != "P6M"
+        or signing.get("externally_issued") is not False
+        or signing.get("os_verified_publisher_identity") is not False
+        or signing.get("production_authorized") is not False
+        or signing.get("mutation_allowed") is not False
+        or signing.get("plaintext_readback") is not False
+    ):
+        raise ValueError("application delivery integrity credential identity/scope/lifetime drifted")
 
 
 def compose_registry(base: dict[str, Any], overlay: dict[str, Any]) -> dict[str, Any]:
@@ -649,6 +673,22 @@ def negative_self_test(state: State, root: Path = ROOT) -> None:
         pass
     else:
         raise AssertionError("AR-8D successor provenance fixture unexpectedly passed")
+
+    for field, invalid in [
+        ("max_active_lifetime", "P1Y"),
+        ("environment_scope", {"kind": "environment", "environments": ["production"]}),
+        ("os_verified_publisher_identity", True),
+        ("consumers", [".github/workflows/untrusted.yml"]),
+    ]:
+        bad_signing = copy.deepcopy(state.overlay)
+        signing = next(item for item in bad_signing["credentials"] if item["id"] == "windows.staging-delivery-integrity")
+        signing[field] = invalid
+        try:
+            validate_overlay(bad_signing)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(f"application integrity {field} drift fixture unexpectedly passed")
 
     plaintext = copy.deepcopy(state.registry)
     plaintext["credentials"][0]["value"] = "forbidden"
