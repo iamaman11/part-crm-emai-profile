@@ -167,12 +167,15 @@ pub fn openapi_fragment() -> Value {
 }
 
 fn list_operation(operation_id: &str, response_schema: &str, resource_id: Option<&str>) -> Value {
-    let mut parameters = vec![json!({
-        "name": "tenantId",
-        "in": "path",
-        "required": true,
-        "schema": {"type": "string"}
-    })];
+    let mut parameters = vec![
+        json!({"$ref": "#/components/parameters/CorrelationHeader"}),
+        json!({
+            "name": "tenantId",
+            "in": "path",
+            "required": true,
+            "schema": {"type": "string"}
+        }),
+    ];
     if let Some(resource_id) = resource_id {
         parameters.push(json!({
             "name": resource_id,
