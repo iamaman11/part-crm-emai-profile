@@ -1,5 +1,44 @@
-use super::model::{ComponentAuthority, D1Error, ReleaseSchemaContract};
+use super::model::{ComponentAuthority, D1Error, Evaluation, ReleaseSchemaContract};
 use super::status::revision_index;
+
+pub(super) struct RuntimeCompatibility {
+    pub(super) compatible: bool,
+    pub(super) reason_codes: Vec<String>,
+    pub(super) required_steps: Vec<String>,
+}
+
+/// Migration eligibility is not evidence that the candidate can run on the observed schema.
+/// Keep the migration verdict intact for prepare/executor callers and evaluate runtime admission
+/// against the same native schema window used by D1 planning.
+pub(super) fn runtime_compatibility(
+    authority: &ComponentAuthority,
+    contract: &ReleaseSchemaContract,
+    remote_count: usize,
+    evaluation: &Evaluation,
+) -> Result<RuntimeCompatibility, D1Error> {
+    if !evaluation.allowed {
+        return Ok(RuntimeCompatibility {
+            compatible: false,
+            reason_codes: evaluation.reason_codes.clone(),
+            required_steps: Vec::new(),
+        });
+    }
+    if runtime_supports_remote(authority, contract, remote_count)? {
+        return Ok(RuntimeCompatibility {
+            compatible: true,
+            reason_codes: Vec::new(),
+            required_steps: Vec::new(),
+        });
+    }
+    Ok(RuntimeCompatibility {
+        compatible: false,
+        reason_codes: vec!["RUNTIME_SCHEMA_MIGRATION_REQUIRED".to_owned()],
+        required_steps: vec![format!(
+            "Prepare {} D1 convergence to {} through its existing migration owner, preserving the planned migration contracts and separate authorization; then rerun read-only promotion preflight.",
+            authority.component_id, contract.target_schema_revision
+        )],
+    })
+}
 
 pub(super) fn validate_release_contract(
     authority: &ComponentAuthority,

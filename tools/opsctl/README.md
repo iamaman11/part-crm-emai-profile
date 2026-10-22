@@ -60,6 +60,13 @@ Important distinctions:
   clock/source identity where required.
 - `d1` consumes saved Wrangler/provider observations and repository contracts; it never applies a
   migration.
+  `d1 compatibility` output v2 preserves `allowed` as migration eligibility and separately reports
+  `runtime_compatibility` for the candidate's supported schema window. A known migration prefix can
+  be eligible for preparation while the candidate runtime remains blocked. Release/promotion callers
+  consume the native runtime verdict and retain its reason, required steps and planned migration
+  contracts; they reject v1 evidence rather than treating migration eligibility as deployment READY.
+  Migration prepare/executor callers continue to use the unchanged migration verdict. Other D1
+  command outputs remain v1.
 - `release finalize` writes canonical machine output to stdout from explicit packaging observations;
   `inspect`, `verify` and `compatibility` remain local policy/artifact verification.
 - `promotion plan`, `preflight` and `verify` evaluate saved snapshots/evidence. They do not deploy,

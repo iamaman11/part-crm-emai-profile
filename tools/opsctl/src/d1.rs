@@ -176,7 +176,25 @@ pub fn run(request: D1RunRequest<'_>) -> Result<String, D1Error> {
         known_good.as_ref(),
         &preconditions,
     )?;
-    serialize_evaluation(&authority, request.action, evaluation)
+    let runtime_compatibility = if request.action == D1Action::Compatibility {
+        let contract = target
+            .as_ref()
+            .ok_or_else(|| D1Error::new("d1 compatibility requires a release schema contract"))?;
+        Some(compatibility::runtime_compatibility(
+            &authority,
+            contract,
+            remote_names.len(),
+            &evaluation,
+        )?)
+    } else {
+        None
+    };
+    serialize_evaluation(
+        &authority,
+        request.action,
+        evaluation,
+        runtime_compatibility,
+    )
 }
 
 pub fn current_reconstruction_plan(
@@ -469,6 +487,7 @@ fn serialize_evaluation(
     authority: &model::ComponentAuthority,
     action: D1Action,
     evaluation: Evaluation,
+    runtime_compatibility: Option<compatibility::RuntimeCompatibility>,
 ) -> Result<String, D1Error> {
     let planned_contracts = evaluation
         .planned_contracts
@@ -506,6 +525,14 @@ fn serialize_evaluation(
     });
     if action == D1Action::Plan {
         output["transaction_policy"] = transaction_policy::ordinary_projection();
+    }
+    if let Some(runtime) = runtime_compatibility {
+        output["schema_version"] = json!(2);
+        output["runtime_compatibility"] = json!({
+            "compatible": runtime.compatible,
+            "reason_codes": runtime.reason_codes,
+            "required_steps": runtime.required_steps,
+        });
     }
     serde_json::to_string(&output)
         .map(|value| value + "\n")
