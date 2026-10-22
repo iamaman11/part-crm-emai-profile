@@ -26,8 +26,8 @@ use std::process::Child;
 #[cfg(any(windows, test))]
 use std::process::Command;
 
-#[cfg(any(windows, test))]
 mod first_install;
+pub(crate) use first_install::first_installation_candidate;
 
 const PROFILE_BRIDGE_DIRECTORY: &str = "profile-bridge";
 const PROFILE_BRIDGE_EXECUTABLE: &str = "profile-bridge.exe";

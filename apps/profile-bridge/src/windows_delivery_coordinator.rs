@@ -27,6 +27,54 @@ pub struct WindowsDeliveryCoordinator<'a> {
 }
 
 impl<'a> WindowsDeliveryCoordinator<'a> {
+    /// Installer preparation never restages an active release or rewrites its arrival/health history.
+    pub fn prepare_first_installation<V, F, R>(
+        &mut self,
+        manifest_bytes: &[u8],
+        signature_bytes: &[u8],
+        trust: &TrustedSignerSet,
+        verifier: &mut V,
+        fetcher: &mut F,
+        archive_reader: &mut R,
+    ) -> Result<PreparedWindowsDelivery, WindowsDeliveryCoordinatorError>
+    where
+        V: DetachedSignatureVerifier,
+        F: DeliveryAssetFetcher,
+        R: DeliveryArchiveReader,
+    {
+        let active = crate::windows_delivery_handoff::first_installation_candidate(
+            self.state_store.state(),
+            self.state_store.handoff(),
+        )
+        .map_err(WindowsDeliveryCoordinatorError::FirstInstallation)?;
+        let Some(active) = active else {
+            return self.prepare(
+                manifest_bytes,
+                signature_bytes,
+                trust,
+                verifier,
+                fetcher,
+                archive_reader,
+            );
+        };
+        let candidate = verify_delivery_candidate(
+            manifest_bytes,
+            signature_bytes,
+            trust,
+            Some(&AcceptedDeliveryFloor::from_identity(&active)),
+            verifier,
+        )
+        .map_err(WindowsDeliveryCoordinatorError::Policy)?;
+        if candidate.identity() != active {
+            return Err(WindowsDeliveryCoordinatorError::FirstInstallation(
+                crate::windows_delivery_handoff::DeliveryHandoffError::FirstInstallationConflict,
+            ));
+        }
+        let staged = reopen_staged_delivery(self.staging_root, &active)
+            .map_err(WindowsDeliveryCoordinatorError::Staging)?;
+        Ok(PreparedWindowsDelivery { candidate, staged })
+    }
+
     #[must_use]
     pub const fn new(
         download_root: &'a DeliveryDownloadRoot,
@@ -139,6 +187,7 @@ fn highest_accepted_identity(state: &DeliveryState) -> Option<&DeliveryIdentity>
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum WindowsDeliveryCoordinatorError {
+    FirstInstallation(crate::windows_delivery_handoff::DeliveryHandoffError),
     Policy(DeliveryPolicyError),
     Download(DeliveryDownloadError),
     Staging(DeliveryStagingError),
@@ -150,6 +199,9 @@ pub enum WindowsDeliveryCoordinatorError {
 impl fmt::Display for WindowsDeliveryCoordinatorError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::FirstInstallation(error) => {
+                write!(formatter, "Windows installer state rejected: {error}")
+            }
             Self::Policy(error) => {
                 write!(formatter, "Windows delivery candidate rejected: {error}")
             }
@@ -405,6 +457,79 @@ mod tests {
             let _ = write!(&mut encoded, "{byte:02x}");
         }
         encoded
+    }
+
+    #[test]
+    fn installer_retry_preserves_arrival_and_health_without_restaging_or_download() -> TestResult {
+        use crate::local_profile::{DeliveryActivationGuard, MaterializationRoot};
+        use crate::windows_delivery_handoff::DeliveryHandoffCoordinator;
+        let directory = TestDirectory::create("installer-retry")?;
+        let (downloads, releases, mut store) = roots(&directory)?;
+        let (manifest, signature) = signed_candidate(1)?;
+        let trust = trust()?;
+        let mut verifier = AcceptVerifier;
+        let mut fetcher = FakeFetcher::default();
+        let mut reader = FakeArchiveReader::healthy();
+        let prepared = WindowsDeliveryCoordinator::new(&downloads, &releases, &mut store)
+            .prepare_first_installation(
+                &manifest,
+                &signature,
+                &trust,
+                &mut verifier,
+                &mut fetcher,
+                &mut reader,
+            )?;
+        let workspace = MaterializationRoot::open_or_create(directory.join("profiles"))?;
+        let guard = DeliveryActivationGuard::acquire(&workspace)?;
+        DeliveryHandoffCoordinator::new(releases.clone(), directory.join("state"))
+            .complete_first_installation(
+                &guard,
+                prepared
+                    .staged()
+                    .profile_bridge_root()
+                    .join("profile-bridge.exe"),
+            )?;
+        store = DeliveryStateStore::open(directory.join("state"))?;
+        for healthy in [false, true] {
+            if healthy {
+                let mut next = store.state().clone();
+                next.start_health_attempt(&prepared.candidate().identity(), 1)?;
+                next.confirm_health()?;
+                store.persist_preserving_handoff(&next)?;
+            }
+            let revision = store.revision();
+            let handoff = store.handoff().cloned();
+            WindowsDeliveryCoordinator::new(&downloads, &releases, &mut store)
+                .prepare_first_installation(
+                    &manifest,
+                    &signature,
+                    &trust,
+                    &mut verifier,
+                    &mut fetcher,
+                    &mut reader,
+                )?;
+            assert_eq!(store.revision(), revision);
+            assert_eq!(store.handoff(), handoff.as_ref());
+            assert!(store.state().staged().is_none());
+            assert_eq!(fetcher.calls.len(), 2);
+        }
+        let (other_manifest, other_signature) = signed_candidate(2)?;
+        let before = store.clone();
+        assert!(matches!(
+            WindowsDeliveryCoordinator::new(&downloads, &releases, &mut store)
+                .prepare_first_installation(
+                    &other_manifest,
+                    &other_signature,
+                    &trust,
+                    &mut verifier,
+                    &mut fetcher,
+                    &mut reader
+                ),
+            Err(WindowsDeliveryCoordinatorError::FirstInstallation(_))
+        ));
+        assert_eq!(store, before);
+        assert_eq!(fetcher.calls.len(), 2);
+        Ok(())
     }
 
     #[test]

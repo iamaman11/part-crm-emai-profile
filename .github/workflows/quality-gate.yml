@@ -555,6 +555,17 @@ jobs:
       - name: Build release Profile Bridge executable
         run: cargo build --locked --release -p profile-bridge
 
+      - name: Compile actual per-user installer and prove native signature rejection
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          $compiler = Join-Path ${env:ProgramFiles(x86)} 'Inno Setup 6\ISCC.exe'
+          if (-not (Test-Path -LiteralPath $compiler -PathType Leaf)) {
+            throw 'Hosted Windows image is missing the Inno Setup build tool'
+          }
+          python scripts/windows-delivery-publication.py installer-smoke-test --bridge target/release/profile-bridge.exe --compiler "$compiler"
+
       - name: Verify Windows Profile Bridge artifact
         shell: pwsh
         run: |

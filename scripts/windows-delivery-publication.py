@@ -5,6 +5,11 @@ Release Set v3 remains the candidate/publication owner. This adapter has no sign
 provider mutation, updater, activation or browser authority. It only validates the exact
 Release Set/component/evidence observations and emits the byte shape owned by the Profile
 Bridge Windows delivery contract.
+
+It also renders the signed installer payload inputs without granting admission.
+The installer-smoke-test command compiles and executes an isolated unsigned wizard
+fixture that must fail the real native CMS gate; it has no provider, credential or
+system certificate-trust mutation authority.
 """
 
 from __future__ import annotations
@@ -13,6 +18,8 @@ import argparse
 import hashlib
 import json
 import re
+import shutil
+import subprocess
 import tempfile
 from pathlib import Path
 from typing import Any, Callable
@@ -260,6 +267,41 @@ def write_new(path: Path, data: bytes) -> None:
     path.write_bytes(data)
 
 
+def render_installer_source(
+    *, manifest_path: Path, signature_path: Path, bridge_path: Path,
+    origin: str, signer_key_id: str, certificate_sha256: str, output: Path,
+) -> None:
+    """Render build inputs, not an admission verdict. Native Bridge verifies the signed delivery.
+
+    The bootstrap trust anchor and origin must be inside the publisher-signed installer payload.
+    They are never downloaded as mutable policy or accepted from a custom-protocol URL.
+    """
+    manifest, manifest_bytes = load_json(manifest_path, "Windows delivery manifest", 1024 * 1024)
+    _, signature_bytes = load_json(signature_path, "Windows delivery signature", 2 * 1024 * 1024 + 4096)
+    release_id = prefixed_digest(manifest.get("release_set_id"), RELEASE_SET_PREFIX, "Release Set ID")
+    # Encoding fence for compiler/Pascal literals; URL/trust admission remains native-owned.
+    for value in (origin, signer_key_id, certificate_sha256):
+        if not value or any(character in value for character in ('"', "'", "\r", "\n", "\0", "{", "}")):
+            fail("installer literal cannot be encoded safely")
+    if bridge_path.is_symlink() or not bridge_path.is_file() or bridge_path.stat().st_size <= 0:
+        fail("installer Bridge must be a regular non-empty file")
+    if output.exists():
+        fail("installer source output already exists")
+    output.mkdir(parents=True)
+    write_new(output / "windows-delivery-manifest.json", manifest_bytes)
+    write_new(output / "windows-delivery-signature.json", signature_bytes)
+    write_new(output / "installation.json", json.dumps({
+        "schema_version": 1, "kind": "WINDOWS_PROFILE_BRIDGE_INSTALLATION",
+        "control_plane_origin": origin, "signer_key_id": signer_key_id,
+        "signer_certificate_sha256": certificate_sha256,
+    }, separators=(",", ":")).encode())
+    write_new(output / "installer-inputs.iss", (
+        f'#define ReleaseSetId "{release_id}"\n'
+        f'#define ControlPlaneOrigin "{origin}"\n'
+    ).encode("utf-8"))
+    shutil.copyfile(bridge_path, output / "profile-bridge.exe")
+
+
 def expect_failure(action: Callable[[], None], marker: str) -> None:
     try:
         action()
@@ -268,6 +310,65 @@ def expect_failure(action: Callable[[], None], marker: str) -> None:
             fail(f"negative self-test expected {marker!r}, observed {error}")
     else:
         fail(f"negative self-test unexpectedly passed: {marker}")
+
+
+def installer_smoke_test(bridge: Path, compiler: Path) -> None:
+    """Compile the actual wizard and prove native CMS rejection before its registry/install phase.
+
+    This unsigned fixture is never a published installer or a trust fallback. No signing key,
+    certificate enrollment, provider access or system trust changes are used by this proof.
+    """
+    with tempfile.TemporaryDirectory(prefix="bridge-installer-smoke-") as temporary:
+        root = Path(temporary)
+        manifest = {
+            "schema_version": 1, "kind": "WINDOWS_PROFILE_BRIDGE_DELIVERY",
+            "release_set_id": RELEASE_SET_PREFIX + "2" * 64, "sequence": 1,
+            "source_commit_sha": "1" * 40,
+            "components": {key: {
+                "release_id": prefix + "3" * 64, "artifact_sha256": "4" * 64,
+                "artifact_size_bytes": 1, "component_manifest_sha256": "5" * 64,
+            } for key, prefix in (("profile_bridge", BRIDGE_PREFIX), ("runtime_bundle", RUNTIME_PREFIX))},
+            "evidence": {"sbom_sha256": "6" * 64, "provenance_sha256": "7" * 64},
+            "compatibility": {"profile_bridge_protocol_version": 1, "camouhost_ipc_version": 3,
+                              "runtime_bundle_version": "3.0.0"},
+        }
+        manifest_path = root / "manifest.json"
+        manifest_path.write_text(json.dumps(manifest, separators=(",", ":")), encoding="utf-8")
+        signature = root / "signature.json"
+        signature.write_text(json.dumps({"schema_version": 1, "kind": "WINDOWS_PROFILE_BRIDGE_DELIVERY_CMS",
+                                        "key_id": "fixture-active", "cms_der_hex": "3000"}), encoding="utf-8")
+        source = root / "source"
+        render_installer_source(manifest_path=manifest_path, signature_path=signature, bridge_path=bridge,
+                                origin="https://control.example.com", signer_key_id="fixture-active",
+                                certificate_sha256="a" * 64, output=source)
+        template = Path(__file__).resolve().parent.parent / "packaging/windows/profile-bridge.iss"
+        output = root / "output"
+        arguments = [str(compiler), "/Qp", f"/DInstallerInputDirectory={source}",
+                     f"/DInstallerOutputDirectory={output}", str(template)]
+        # Production compilation must not silently produce an unsigned user installer.
+        unsigned = subprocess.run(arguments, capture_output=True, text=True, timeout=120)
+        signing_diagnostic = (unsigned.stdout + unsigned.stderr).lower()
+        compiled = subprocess.run(arguments[:-1] + ["/DInstallerTestFixture=1", str(template)],
+                                  capture_output=True, text=True, timeout=120)
+        if compiled.returncode != 0:
+            fail(f"installer fixture compiler failed: {compiled.stdout}\n{compiled.stderr}")
+        if unsigned.returncode == 0 or 'directive "signtool" is invalid' not in signing_diagnostic:
+            fail(f"production installer did not reject missing publisher signing tool: {unsigned.stdout}\n{unsigned.stderr}")
+        installer = output / "UNSIGNED-CI-FIXTURE-ProfileBridgeSetup.exe"
+        log = root / "setup.log"
+        installation = root / "installation"
+        executed = subprocess.run([str(installer), "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART",
+                                   f"/DIR={installation}", f"/LOG={log}"],
+                                  capture_output=True, timeout=120)
+        raw_log = log.read_bytes() if log.exists() else b""
+        captured = raw_log.decode("utf-16" if raw_log.startswith(b"\xff\xfe") else "utf-8-sig")
+        if (executed.returncode == 0 or 'Preparation(Policy(SignatureInvalid))' not in captured
+                or 'BRIDGE_INSTALLATION_ADMISSION_REJECTED' not in captured):
+            fail(f"unsigned fixture did not stop at actual native CMS admission: exit={executed.returncode}\n{captured}")
+        if ((installation / "connection.json").exists()
+                or any((installation / "releases").iterdir())):
+            fail("rejected installer published settings or staged a candidate")
+    print("Actual Windows installer compiled; missing signing configuration and native CMS rejection proved.")
 
 
 def self_test() -> None:
@@ -361,6 +462,24 @@ def self_test() -> None:
         if first != second:
             fail("delivery manifest projection is not deterministic")
         rendered = json.loads(first)
+        manifest_path = root / "fixture-delivery.json"
+        manifest_path.write_bytes(first)
+        signature_path = root / "fixture-signature.json"
+        signature_path.write_bytes(b'{}')
+        bridge_path = root / "fixture-bridge.exe"
+        bridge_path.write_bytes(b"fixture-only-not-an-executable")
+        installer_source = root / "installer-source"
+        render_installer_source(manifest_path=manifest_path, signature_path=signature_path,
+                                bridge_path=bridge_path, origin="https://control.example.com",
+                                signer_key_id="fixture-active", certificate_sha256="a" * 64,
+                                output=installer_source)
+        if ((installer_source / "windows-delivery-manifest.json").read_bytes() != first
+                or json.loads((installer_source / "installation.json").read_bytes())["control_plane_origin"] != "https://control.example.com"):
+            fail("installer build input projection changed native contract bytes")
+        expect_failure(lambda: render_installer_source(
+            manifest_path=manifest_path, signature_path=signature_path, bridge_path=bridge_path,
+            origin='https://control.example.com"\n#define Injected', signer_key_id="fixture-active",
+            certificate_sha256="a" * 64, output=root / "injected-output"), "cannot be encoded safely")
         if (
             rendered["release_set_id"] != release_set_id
             or rendered["components"]["profile_bridge"]["release_id"] != bridge_id
@@ -394,6 +513,17 @@ def parser() -> argparse.ArgumentParser:
     manifest.add_argument("--sequence", type=int, required=True)
     manifest.add_argument("--output", type=Path, required=True)
     commands.add_parser("self-test")
+    installer = commands.add_parser("installer-source")
+    installer.add_argument("--manifest", type=Path, required=True)
+    installer.add_argument("--signature", type=Path, required=True)
+    installer.add_argument("--bridge", type=Path, required=True)
+    installer.add_argument("--origin", required=True)
+    installer.add_argument("--signer-key-id", required=True)
+    installer.add_argument("--certificate-sha256", required=True)
+    installer.add_argument("--output", type=Path, required=True)
+    smoke = commands.add_parser("installer-smoke-test")
+    smoke.add_argument("--bridge", type=Path, required=True)
+    smoke.add_argument("--compiler", type=Path, required=True)
     return result
 
 
@@ -412,6 +542,14 @@ def main() -> int:
                     sequence=args.sequence,
                 ),
             )
+        elif args.command == "installer-source":
+            render_installer_source(
+                manifest_path=args.manifest, signature_path=args.signature, bridge_path=args.bridge,
+                origin=args.origin, signer_key_id=args.signer_key_id,
+                certificate_sha256=args.certificate_sha256, output=args.output,
+            )
+        elif args.command == "installer-smoke-test":
+            installer_smoke_test(args.bridge.resolve(), args.compiler.resolve())
         else:
             fail(f"unsupported command: {args.command}")
         return 0

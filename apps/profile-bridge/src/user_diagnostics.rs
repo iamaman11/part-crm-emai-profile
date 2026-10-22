@@ -7,6 +7,7 @@ use crate::shipping_composition::ShippingCompositionError;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum UserDiagnostic {
+    Installation(crate::windows_delivery_install::NativeInstallerError),
     StartFromApplication,
     InvalidHandoff,
     Pairing(DevicePairingBootstrapError),
@@ -18,6 +19,33 @@ impl UserDiagnostic {
     pub const fn code(self) -> &'static str {
         use DevicePairingBootstrapError as Pairing;
         match self {
+            Self::Installation(error) => {
+                use crate::windows_delivery_coordinator::WindowsDeliveryCoordinatorError as Preparation;
+                use crate::windows_delivery_install::NativeInstallerError as Install;
+                match error {
+                    Install::UnsupportedPlatform => "BRIDGE_WINDOWS_REQUIRED",
+                    Install::InvalidBundle | Install::InputIo => {
+                        "BRIDGE_INSTALLATION_PACKAGE_INVALID"
+                    }
+                    Install::StateStore(_) => "BRIDGE_INSTALLATION_STATE_INVALID",
+                    Install::Preparation(Preparation::Policy(_)) => {
+                        "BRIDGE_INSTALLATION_ADMISSION_REJECTED"
+                    }
+                    Install::Preparation(Preparation::FirstInstallation(_)) => {
+                        "BRIDGE_INSTALLATION_CONFLICT"
+                    }
+                    Install::Preparation(Preparation::Download(_)) => {
+                        "BRIDGE_INSTALLATION_DOWNLOAD_FAILED"
+                    }
+                    Install::Preparation(
+                        Preparation::Staging(_) | Preparation::StageIdentityMismatch,
+                    ) => "BRIDGE_INSTALLATION_FILES_INVALID",
+                    Install::InstalledConnection(
+                        crate::installed_connection::InstalledConnectionError::Conflict,
+                    ) => "BRIDGE_CONNECTION_CONFLICT",
+                    _ => "BRIDGE_INSTALLATION_INCOMPLETE",
+                }
+            }
             Self::StartFromApplication => "BRIDGE_OPEN_FROM_APPLICATION",
             Self::InvalidHandoff => "BRIDGE_INVALID_HANDOFF",
             Self::Pairing(error) => match error {
@@ -78,6 +106,9 @@ impl UserDiagnostic {
         use DevicePairingBootstrapError as Pairing;
         use ShippingCompositionError as Launch;
         match self {
+            Self::Installation(_) => {
+                "Profile Bridge installation could not be completed. Review the diagnostic code in setup and try again from the application. Keep existing device and profile files; do not reset installation state manually."
+            }
             Self::StartFromApplication => {
                 "Open Profile Operations in your browser and choose a profile or Connect this computer. Profile Bridge starts from the application."
             }
