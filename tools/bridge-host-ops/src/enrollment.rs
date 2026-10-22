@@ -664,6 +664,7 @@ try {
         $parameters.KeyCreationOptions = [System.Security.Cryptography.CngKeyCreationOptions]::MachineKey
         $parameters.ExportPolicy = [System.Security.Cryptography.CngExportPolicies]::None
         $parameters.KeyUsage = [System.Security.Cryptography.CngKeyUsages]::Signing
+        $parameters.Parameters.Add([System.Security.Cryptography.CngProperty]::new('Length', [BitConverter]::GetBytes([int]2048), [System.Security.Cryptography.CngPropertyOptions]::None))
         $key = [System.Security.Cryptography.CngKey]::Create([System.Security.Cryptography.CngAlgorithm]::Rsa, $keyName, $parameters)
         $created = $true
     }
