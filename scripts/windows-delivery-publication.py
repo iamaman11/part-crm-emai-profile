@@ -336,7 +336,7 @@ def installer_smoke_test(bridge: Path, compiler: Path) -> None:
         manifest_path.write_text(json.dumps(manifest, separators=(",", ":")), encoding="utf-8")
         signature = root / "signature.json"
         signature.write_text(json.dumps({"schema_version": 1, "kind": "WINDOWS_PROFILE_BRIDGE_DELIVERY_CMS",
-                                        "key_id": "fixture-active", "cms_der_hex": "00"}), encoding="utf-8")
+                                        "key_id": "fixture-active", "cms_der_hex": "3000"}), encoding="utf-8")
         source = root / "source"
         render_installer_source(manifest_path=manifest_path, signature_path=signature, bridge_path=bridge,
                                 origin="https://control.example.com", signer_key_id="fixture-active",
@@ -347,8 +347,9 @@ def installer_smoke_test(bridge: Path, compiler: Path) -> None:
                      f"/DInstallerOutputDirectory={output}", str(template)]
         # Production compilation must not silently produce an unsigned user installer.
         unsigned = subprocess.run(arguments, capture_output=True, text=True, timeout=120)
-        if unsigned.returncode == 0:
-            fail("production installer compiled without configured publisher signing tool")
+        signing_diagnostic = (unsigned.stdout + unsigned.stderr).lower()
+        if unsigned.returncode == 0 or "publisher" not in signing_diagnostic or "sign" not in signing_diagnostic:
+            fail(f"production installer did not reject missing publisher signing tool: {unsigned.stdout}\n{unsigned.stderr}")
         compiled = subprocess.run(arguments[:-1] + ["/DInstallerTestFixture=1", str(template)],
                                   capture_output=True, text=True, timeout=120)
         if compiled.returncode != 0:

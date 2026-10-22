@@ -6,6 +6,7 @@ use std::env;
 use std::fmt;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
+use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -130,6 +131,7 @@ impl WindowsCmsSignatureVerifier {
         }
 
         let mut command = Command::new(&self.powershell_executable);
+        command.creation_flags(0x0800_0000); // CREATE_NO_WINDOW: setup owns the visible UI.
         command
             .env_clear()
             .args(["-NoLogo", "-NoProfile", "-NonInteractive", "-File"])

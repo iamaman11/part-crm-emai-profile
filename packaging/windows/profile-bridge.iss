@@ -10,7 +10,7 @@
 #ifndef InstallerOutputDirectory
   #error InstallerOutputDirectory is required
 #endif
-#include "{#InstallerInputDirectory}\installer-inputs.iss"
+#include AddBackslash(InstallerInputDirectory) + "installer-inputs.iss"
 
 [Setup]
 AppId=Alegria.ProfileBridge
