@@ -21,6 +21,7 @@ ROOT = Path(__file__).resolve().parents[1]
 CLIENT_REGISTRY_OPENAPI_PATH = ROOT / "openapi" / "v1" / "fragments" / "client-registry.json"
 QUERY_MAIL_OPENAPI_PATH = ROOT / "openapi" / "v1" / "fragments" / "query-mail.json"
 OPERATOR_QUERY_OPENAPI_PATH = ROOT / "openapi" / "v1" / "fragments" / "operator-query.json"
+DEVICE_REGISTRATION_OPENAPI_PATH = ROOT / "openapi" / "v1" / "fragments" / "device-registration.json"
 
 
 def run_export(bin_name: str, *arguments: str) -> dict[str, Any]:
@@ -102,6 +103,7 @@ def main() -> int:
     compatibility_registry = run_export("export_client_registry", "compatibility")
     query_mail = run_export("export_query_mail")
     operator_query = run_export("export_operator_query")
+    device_registration = run_export("export_openapi", "device-registration")
 
     results = [
         check_or_write(
@@ -111,6 +113,7 @@ def main() -> int:
         ),
         check_or_write(QUERY_MAIL_OPENAPI_PATH, compact_json(query_mail), args.check),
         check_or_write(OPERATOR_QUERY_OPENAPI_PATH, compact_json(operator_query), args.check),
+        check_or_write(DEVICE_REGISTRATION_OPENAPI_PATH, compact_json(device_registration), args.check),
     ]
     if not all(results):
         return 1

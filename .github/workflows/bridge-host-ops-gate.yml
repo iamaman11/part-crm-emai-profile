@@ -67,6 +67,7 @@ jobs:
       - name: Compile and test native Windows host and CNG device PoP adapters
         shell: pwsh
         run: |
+          $PSNativeCommandUseErrorActionPreference = $true
           cargo fmt --manifest-path platform/windows-device-key/Cargo.toml --all -- --check
           cargo clippy --locked --manifest-path platform/windows-device-key/Cargo.toml --all-targets -- -D warnings
           cargo test --locked --manifest-path platform/windows-device-key/Cargo.toml

@@ -28,6 +28,7 @@ pub mod shipping_generation_save;
 pub mod shipping_generation_successor_control;
 pub mod shipping_network;
 pub mod shipping_preflight;
+pub mod user_diagnostics;
 pub mod windows_delivery;
 pub mod windows_delivery_archive;
 pub mod windows_delivery_coordinator;

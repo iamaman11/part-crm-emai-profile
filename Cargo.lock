@@ -750,6 +750,7 @@ dependencies = [
  "serde_json",
  "session-domain",
  "sha2",
+ "windows-desktop-ui",
  "windows-device-key",
  "zeroize",
 ]
@@ -1161,6 +1162,10 @@ dependencies = [
  "js-sys",
  "wasm-bindgen",
 ]
+
+[[package]]
+name = "windows-desktop-ui"
+version = "0.1.0"
 
 [[package]]
 name = "windows-device-key"

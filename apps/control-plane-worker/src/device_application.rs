@@ -19,6 +19,8 @@ use worker::wasm_bindgen::JsCast;
 use worker::web_sys::WorkerGlobalScope;
 use worker::{Date, Env, Error, Request, Response, Result};
 
+mod registration;
+
 const PAIRING_TTL_MS: u64 = 300_000;
 const CHALLENGE_TTL_MS: u64 = 60_000;
 const SESSION_TTL_MS: u64 = 600_000;
@@ -28,6 +30,7 @@ const P256_SPKI_DER_BYTES: usize = P256_SPKI_DER_HEX_LENGTH / 2;
 
 pub async fn dispatch(route: RouteClass, request: &mut Request, env: &Env) -> Result<Response> {
     match route {
+        RouteClass::DeviceRegistrationApi => registration::get_registration(request, env).await,
         RouteClass::DevicePairingCollectionApi => create_pairing(request, env).await,
         RouteClass::DevicePairingAuthorizationApi => authorize_pairing(request, env).await,
         RouteClass::DevicePairingCompletionApi => complete_pairing(request, env).await,

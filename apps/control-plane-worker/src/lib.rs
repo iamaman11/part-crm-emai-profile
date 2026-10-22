@@ -109,6 +109,7 @@ pub async fn main(mut request: Request, env: Env, _context: Context) -> Result<R
             tenant_contexts_response(&request, &env).await
         }
         RouteClass::DevicePairingCollectionApi
+        | RouteClass::DeviceRegistrationApi
         | RouteClass::DevicePairingAuthorizationApi
         | RouteClass::DevicePairingCompletionApi
         | RouteClass::DeviceSessionChallengeApi
