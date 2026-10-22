@@ -14,8 +14,12 @@ use profile_bridge::user_diagnostics::UserDiagnostic;
 use profile_bridge::windows_delivery_handoff::{
     FIRST_INSTALL_ARGUMENT, HANDOFF_ACTIVATE_ARGUMENT, HANDOFF_ARRIVAL_ARGUMENT,
 };
+use profile_bridge::windows_delivery_install::{
+    NativeInstallerError, PREPARE_INSTALL_ARGUMENT, run_install_preparation,
+};
 use std::env;
 use std::fmt;
+use std::path::PathBuf;
 use std::process::ExitCode;
 use zeroize::Zeroizing;
 
@@ -35,6 +39,23 @@ where
     I: IntoIterator<Item = String>,
 {
     match parse_command(arguments)? {
+        BridgeCommand::PrepareInstallation(bundle, root) => {
+            let result = run_install_preparation(&bundle, &root);
+            // Capture the complete typed verdict for setup before enforcing the exit gate.
+            // Human diagnostics stay separate and contain no paths or installer inputs.
+            println!(
+                "{}",
+                serde_json::json!({
+                    "schema_version": 1,
+                    "kind": "WINDOWS_PROFILE_BRIDGE_INSTALLATION_PREPARATION_OUTCOME",
+                    "result": if result.is_ok() { "PREPARED" } else { "FAILED" },
+                    "owner_verdict": result.err().map(|error| format!("{error:?}")),
+                    "activation_performed": false,
+                    "health_verified": false,
+                })
+            );
+            result.map_err(BridgeCliError::InstallationFailed)
+        }
         BridgeCommand::Claim(claim) => run_claim(&claim).map_err(BridgeCliError::LaunchFailed),
         BridgeCommand::PairingStart(uri) => {
             run_pairing_start(&uri).map_err(BridgeCliError::PairingFailed)
@@ -58,6 +79,7 @@ where
 }
 
 enum BridgeCommand {
+    PrepareInstallation(PathBuf, PathBuf),
     Claim(ClaimUri),
     PairingStart(DevicePairingStartUri),
     PairingComplete(DevicePairingCompleteUri),
@@ -77,16 +99,35 @@ where
             .next()
             .ok_or(BridgeCliError::MissingLaunchArgument)?,
     );
+    if argument.as_str() == PREPARE_INSTALL_ARGUMENT {
+        let bundle = PathBuf::from(
+            arguments
+                .next()
+                .ok_or(BridgeCliError::InvalidInstallationArgument)?,
+        );
+        let root = PathBuf::from(
+            arguments
+                .next()
+                .ok_or(BridgeCliError::InvalidInstallationArgument)?,
+        );
+        if arguments.next().is_some() {
+            return Err(BridgeCliError::UnexpectedArgument);
+        }
+        if !bundle.is_absolute() || !root.is_absolute() {
+            return Err(BridgeCliError::InvalidInstallationArgument);
+        }
+        return Ok(BridgeCommand::PrepareInstallation(bundle, root));
+    }
     if argument.as_str() == FIRST_INSTALL_ARGUMENT {
         let origin = arguments
             .next()
-            .ok_or(BridgeCliError::InvalidInstallationOrigin)?;
+            .ok_or(BridgeCliError::InvalidInstallationArgument)?;
         if arguments.next().is_some() {
             return Err(BridgeCliError::UnexpectedArgument);
         }
         return ControlPlaneOrigin::parse(origin)
             .map(BridgeCommand::DeliveryInstallStaged)
-            .map_err(|_| BridgeCliError::InvalidInstallationOrigin);
+            .map_err(|_| BridgeCliError::InvalidInstallationArgument);
     }
     if arguments.next().is_some() {
         return Err(BridgeCliError::UnexpectedArgument);
@@ -110,11 +151,12 @@ where
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum BridgeCliError {
+    InstallationFailed(NativeInstallerError),
     MissingLaunchArgument,
     UnexpectedArgument,
     InvalidClaimUri,
     InvalidPairingUri,
-    InvalidInstallationOrigin,
+    InvalidInstallationArgument,
     LaunchFailed(ShippingCompositionError),
     PairingFailed(DevicePairingBootstrapError),
     DeliveryFailed(ShippingCompositionError),
@@ -123,11 +165,12 @@ enum BridgeCliError {
 impl BridgeCliError {
     const fn diagnostic(self) -> UserDiagnostic {
         match self {
+            Self::InstallationFailed(error) => UserDiagnostic::Installation(error),
             Self::MissingLaunchArgument => UserDiagnostic::StartFromApplication,
             Self::UnexpectedArgument
             | Self::InvalidClaimUri
             | Self::InvalidPairingUri
-            | Self::InvalidInstallationOrigin => UserDiagnostic::InvalidHandoff,
+            | Self::InvalidInstallationArgument => UserDiagnostic::InvalidHandoff,
             Self::LaunchFailed(error) | Self::DeliveryFailed(error) => {
                 UserDiagnostic::Launch(error)
             }
@@ -199,6 +242,45 @@ mod tests {
     }
 
     #[test]
+    fn installer_preparation_requires_exactly_two_absolute_machine_paths()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let directory = std::env::temp_dir();
+        let bundle = directory
+            .join("installer-bundle")
+            .to_string_lossy()
+            .into_owned();
+        let root = directory
+            .join("installed-bridge")
+            .to_string_lossy()
+            .into_owned();
+        let prefix = [
+            "profile-bridge",
+            profile_bridge::windows_delivery_install::PREPARE_INSTALL_ARGUMENT,
+        ];
+        let mut valid = prefix.map(str::to_owned).to_vec();
+        valid.extend([bundle.clone(), root.clone()]);
+        assert!(matches!(
+            parse_command(valid)?,
+            BridgeCommand::PrepareInstallation(_, _)
+        ));
+        for suffix in [
+            vec![],
+            vec![bundle.clone()],
+            vec!["relative".to_owned(), root.clone()],
+            vec![
+                bundle,
+                root,
+                "profilebridge://claim/private-capability".to_owned(),
+            ],
+        ] {
+            let mut invalid = prefix.map(str::to_owned).to_vec();
+            invalid.extend(suffix);
+            assert!(parse_command(invalid).is_err());
+        }
+        Ok(())
+    }
+
+    #[test]
     fn installer_origin_is_explicit_and_cannot_be_a_handoff_uri() {
         for origin in [
             None,
@@ -215,7 +297,7 @@ mod tests {
             }
             assert_eq!(
                 parse_command(arguments).err(),
-                Some(BridgeCliError::InvalidInstallationOrigin)
+                Some(BridgeCliError::InvalidInstallationArgument)
             );
         }
     }

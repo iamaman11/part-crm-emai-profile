@@ -33,6 +33,8 @@ REQUIRED_MAIN_MARKERS = (
     "HANDOFF_ACTIVATE_ARGUMENT",
     "HANDOFF_ARRIVAL_ARGUMENT",
     "FIRST_INSTALL_ARGUMENT",
+    "PREPARE_INSTALL_ARGUMENT",
+    "run_install_preparation(&bundle, &root)",
     "DevicePairingStartUri::parse(value)",
     "DevicePairingCompleteUri::parse(value)",
     "run_pairing_start(&uri)",
@@ -266,10 +268,12 @@ def write_fixture(root: Path) -> None:
         "use profile_bridge::shipping_composition::run_claim;\n"
         "use profile_bridge::shipping_composition::{ShippingDeliveryCommand, run_delivery_command};\n"
         "use profile_bridge::installed_connection::ControlPlaneOrigin;\n"
+        "use profile_bridge::windows_delivery_install::{PREPARE_INSTALL_ARGUMENT, run_install_preparation};\n"
         "use profile_bridge::windows_delivery_handoff::{FIRST_INSTALL_ARGUMENT, HANDOFF_ACTIVATE_ARGUMENT, HANDOFF_ARRIVAL_ARGUMENT};\n"
         "fn run(argument: String) -> Result<(), ()> {\n"
         '    let origin = ControlPlaneOrigin::parse("https://control.example.com").map_err(|_| ())?;\n'
         "    match argument.as_str() {\n"
+        "        PREPARE_INSTALL_ARGUMENT => run_install_preparation(&bundle, &root).map_err(|_| ())?,\n"
         "        FIRST_INSTALL_ARGUMENT => run_delivery_command(ShippingDeliveryCommand::InstallStaged(origin)).map_err(|_| ())?,\n"
         "        HANDOFF_ACTIVATE_ARGUMENT => run_delivery_command(ShippingDeliveryCommand::ActivateStaged).map_err(|_| ())?,\n"
         "        HANDOFF_ARRIVAL_ARGUMENT => run_delivery_command(ShippingDeliveryCommand::HandoffArrived).map_err(|_| ())?,\n"
@@ -441,6 +445,13 @@ def self_test() -> None:
         main.write_text(safe_main, encoding="utf-8")
 
         main.write_text(
+            safe_main.replace("run_install_preparation(&bundle, &root).map_err(|_| ())?", "Ok(())?"),
+            encoding="utf-8",
+        )
+        expect_rejected(root, "missing native installer preparation delegation")
+        main.write_text(safe_main, encoding="utf-8")
+
+        main.write_text(
             safe_main.replace(
                 "run_delivery_command(ShippingDeliveryCommand::InstallStaged(origin)).map_err(|_| ())?",
                 "Ok(())?",
@@ -595,7 +606,7 @@ def main() -> int:
             validate(args.root.resolve())
             print(
                 "CAP-01 Profile Bridge keeps one real governed authoritative shipping composition; "
-                "the same installed Bridge delegates one normal claim path, two bounded device-pairing commands and bounded first-install/activation/arrival commands, "
+                "the same installed Bridge delegates one normal claim path, two bounded device-pairing commands and bounded preparation/first-install/activation/arrival commands, "
                 "the running Bridge is bound through a device-application session and persisted active delivery state to one exact staged runtime, "
                 "legacy Schannel/mTLS machine callers and caller-selected device identity are forbidden, "
                 "controlled close and canonical successor save are mandatory, caller-selected runtime predecessors are forbidden, "

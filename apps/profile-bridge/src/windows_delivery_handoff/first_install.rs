@@ -1,10 +1,63 @@
-use super::{
-    DeliveryActivationGuard, DeliveryActivationOutcome, DeliveryHandoffCoordinator,
-    DeliveryHandoffError, DeliveryHandoffEvidence, DeliveryHandoffKind, DeliveryHandoffOutcome,
-    canonical_regular_executable,
-};
+use super::{DeliveryHandoffError, DeliveryHandoffOutcome};
+#[cfg(any(windows, test))]
 use std::path::Path;
 
+/// The handoff owner alone decides whether setup is pristine or an exact first-install retry.
+pub(crate) fn first_installation_candidate(
+    state: &crate::windows_delivery::DeliveryState,
+    handoff: Option<&crate::windows_delivery_store::DeliveryHandoffEvidence>,
+) -> Result<Option<crate::windows_delivery::DeliveryIdentity>, DeliveryHandoffError> {
+    use crate::windows_delivery::DeliveryActivationOutcome;
+    use crate::windows_delivery_store::DeliveryHandoffKind;
+    state
+        .validate_persisted()
+        .map_err(DeliveryHandoffError::State)?;
+    if let Some(active) = state.active() {
+        // An installer restart can only acknowledge this exact completed first installation.
+        // It cannot reset an interrupted health attempt, recover a failure or replay an upgrade.
+        let arrived = handoff.is_some_and(|evidence| {
+            evidence.kind() == DeliveryHandoffKind::Activation
+                && evidence.outcome() == DeliveryHandoffOutcome::Arrived
+                && evidence.source_candidate() == active
+                && evidence.target() == active
+                && evidence.source_attempt() == 1
+        });
+        let retryable = state.activation_generation() == 1
+            && state.last_known_good().is_none()
+            && state.staged().is_none()
+            && state.last_failure().is_none()
+            && state.last_activation().is_some_and(|activation| {
+                activation.attempt == 1
+                    && activation.candidate == *active
+                    && matches!(
+                        activation.outcome,
+                        DeliveryActivationOutcome::PendingHealth
+                            | DeliveryActivationOutcome::Healthy
+                    )
+            });
+        if !arrived || !retryable {
+            return Err(DeliveryHandoffError::FirstInstallationConflict);
+        }
+        return Ok(Some(active.clone()));
+    }
+
+    if state.activation_generation() != 0
+        || state.last_known_good().is_some()
+        || state.last_activation().is_some()
+        || state.last_failure().is_some()
+        || handoff.is_some()
+    {
+        return Err(DeliveryHandoffError::FirstInstallationConflict);
+    }
+    Ok(None)
+}
+
+#[cfg(any(windows, test))]
+use super::{
+    DeliveryActivationGuard, DeliveryHandoffCoordinator, DeliveryHandoffEvidence,
+    canonical_regular_executable,
+};
+#[cfg(any(windows, test))]
 impl DeliveryHandoffCoordinator {
     /// Complete the first installation from the exact verified staged executable already running.
     ///
@@ -18,46 +71,8 @@ impl DeliveryHandoffCoordinator {
     ) -> Result<(), DeliveryHandoffError> {
         let mut store = self.open_store()?;
         let state = store.state();
-        state
-            .validate_persisted()
-            .map_err(DeliveryHandoffError::State)?;
-
-        if let Some(active) = state.active() {
-            // An installer restart can only acknowledge this exact completed first installation.
-            // It cannot reset an interrupted health attempt, recover a failure or replay an upgrade.
-            let arrived = store.handoff().is_some_and(|evidence| {
-                evidence.kind() == DeliveryHandoffKind::Activation
-                    && evidence.outcome() == DeliveryHandoffOutcome::Arrived
-                    && evidence.source_candidate() == active
-                    && evidence.target() == active
-                    && evidence.source_attempt() == 1
-            });
-            let retryable = state.activation_generation() == 1
-                && state.last_known_good().is_none()
-                && state.staged().is_none()
-                && state.last_failure().is_none()
-                && state.last_activation().is_some_and(|activation| {
-                    activation.attempt == 1
-                        && activation.candidate == *active
-                        && matches!(
-                            activation.outcome,
-                            DeliveryActivationOutcome::PendingHealth
-                                | DeliveryActivationOutcome::Healthy
-                        )
-                });
-            if !arrived || !retryable {
-                return Err(DeliveryHandoffError::FirstInstallationConflict);
-            }
-            return self.verify_current_identity(active, current_executable.as_ref());
-        }
-
-        if state.activation_generation() != 0
-            || state.last_known_good().is_some()
-            || state.last_activation().is_some()
-            || state.last_failure().is_some()
-            || store.handoff().is_some()
-        {
-            return Err(DeliveryHandoffError::FirstInstallationConflict);
+        if let Some(active) = first_installation_candidate(state, store.handoff())? {
+            return self.verify_current_identity(&active, current_executable.as_ref());
         }
         let identity = state
             .staged()

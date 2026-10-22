@@ -37,6 +37,27 @@ fn standalone_start_returns_to_the_application_without_cli_configuration_instruc
     Ok(())
 }
 
+#[test]
+fn preparation_captures_its_typed_owner_failure_without_disclosing_paths()
+-> Result<(), Box<dyn std::error::Error>> {
+    let private_path =
+        std::env::temp_dir().join(format!("DO_NOT_LEAK_INSTALL_PATH-{}", std::process::id()));
+    assert!(!private_path.exists());
+    let path = private_path.to_str().ok_or("non UTF8 temporary path")?;
+    let output = captured(&["--delivery-prepare", path, path])?;
+    assert_eq!(output.status.code(), Some(2));
+    let outcome: serde_json::Value = serde_json::from_slice(&output.stdout)?;
+    assert_eq!(outcome["schema_version"], 1);
+    assert_eq!(outcome["result"], "FAILED");
+    assert_eq!(outcome["activation_performed"], false);
+    assert_eq!(outcome["health_verified"], false);
+    assert!(outcome["owner_verdict"].as_str().is_some());
+    assert!(!String::from_utf8(output.stdout)?.contains("DO_NOT_LEAK"));
+    assert!(!String::from_utf8(output.stderr)?.contains("DO_NOT_LEAK"));
+    assert!(!private_path.exists());
+    Ok(())
+}
+
 #[cfg(windows)]
 #[test]
 fn fresh_machine_pairing_fails_before_key_or_network_effects_with_a_setup_diagnosis()
