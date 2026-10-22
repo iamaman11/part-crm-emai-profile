@@ -620,7 +620,7 @@ jobs:
           & $compiler /Qp "/DInstallerInputDirectory=$source" "/DInstallerOutputDirectory=$env:RUNNER_TEMP/installer-output" packaging/windows/profile-bridge.iss
           Copy-Item "$env:RUNNER_TEMP/installer-output/ProfileBridgeSetup.exe" artifacts/release-set/ProfileBridgeSetup.exe
 
-      - name: Publish all assets once or prove byte-identical replay
+      - name: Publish once or prove byte-identical replay
         run: |
           $ErrorActionPreference = 'Stop'
           $PSNativeCommandUseErrorActionPreference = $true
@@ -634,7 +634,13 @@ jobs:
             Copy-Item -LiteralPath $file.FullName -Destination $target
           }
           $assets = @()
-          foreach ($file in Get-ChildItem -LiteralPath $assetRoot -File | Sort-Object Name) {
+          $expectedNames = @(
+            'release-set.json', 'capability-policy-v1.json', 'control-plane.tar', 'secret-resolver.tar',
+            'profile-bridge.zip', 'windows-sbom-v1.json', 'windows-provenance-v1.json',
+            'windows-delivery-manifest.json', 'windows-delivery-signature.json', 'ProfileBridgeSetup.exe'
+          )
+          foreach ($name in $expectedNames) {
+            $file = Get-Item -LiteralPath (Join-Path $assetRoot $name) -ErrorAction Stop
             $assets += @('--asset', $file.FullName)
           }
           python scripts/github-release-publication.py publish --repository $env:GITHUB_REPOSITORY --release-id $env:RELEASE_ID --target $env:SOURCE_SHA --title $env:RELEASE_ID --notes "Immutable Release Set v3 from accepted main $env:SOURCE_SHA; application-signed delivery, initial unsigned Windows installer for staging." @assets

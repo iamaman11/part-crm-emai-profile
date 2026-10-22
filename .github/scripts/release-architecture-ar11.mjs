@@ -197,8 +197,7 @@ function validateComponentOwners(authority) {
   }
 }
 
-function validatePublicationWiring(authority) {
-  const workflow = fs.readFileSync(releaseBuildWorkflowPath, 'utf8');
+function validatePublicationWiring(authority, workflow = fs.readFileSync(releaseBuildWorkflowPath, 'utf8')) {
   for (const marker of [
     'capability-policy-manifest',
     'capability-policy-v1.json',
@@ -207,7 +206,6 @@ function validatePublicationWiring(authority) {
     '.path == "capability-policy-v1.json"',
     '.kind == "capability-policy"',
     'cp "$capability_policy_json" "$release_dir/capability-policy-v1.json"',
-    'cp "$RELEASE_DIR/capability-policy-v1.json" "$asset_dir/capability-policy-v1.json"',
     'runtime-component-observation.json',
     'runtime-release-probe.json',
     'group: release-set-build-main',
@@ -223,9 +221,47 @@ function validatePublicationWiring(authority) {
   ]) {
     if (!workflow.includes(marker)) fail(`Release Set build workflow lacks required publication wiring: ${marker}`);
   }
+  // The same protected workflow assembles on Linux and finalizes/publishes once on Windows.
+  // The OS installer may be unsigned; the application integrity CMS is never optional.
+  const publisherParts = workflow.split('\n  publish-windows-installer:\n');
+  if (publisherParts.length !== 2) fail('exactly one final Windows aggregate publisher is required');
+  const publisher = publisherParts[1];
+  for (const marker of [
+    '    needs: assemble-publish',
+    '    runs-on: windows-latest',
+    '    environment: staging',
+    'name: release-set-publication-inputs-${{ github.sha }}',
+    'python scripts/windows-delivery-publication.py installer-component',
+    '          PROFILE_BRIDGE_DELIVERY_PFX_BASE64: ${{ secrets.PROFILE_BRIDGE_DELIVERY_PFX_BASE64 }}',
+    '& ./scripts/windows-delivery-sign.ps1 -ManifestPath artifacts/release-set/windows-delivery-manifest.json',
+    'python scripts/windows-delivery-publication.py installer-source',
+    '--origin https://staging.alegria.by',
+    'packaging/windows/profile-bridge.iss',
+    '$files.Count -ne 10',
+    "'release-set.json', 'capability-policy-v1.json', 'control-plane.tar', 'secret-resolver.tar'",
+    "'profile-bridge.zip', 'windows-sbom-v1.json', 'windows-provenance-v1.json'",
+    "'windows-delivery-manifest.json', 'windows-delivery-signature.json', 'ProfileBridgeSetup.exe'",
+    'foreach ($name in $expectedNames)',
+    'Get-Item -LiteralPath (Join-Path $assetRoot $name) -ErrorAction Stop',
+    'python scripts/github-release-publication.py publish',
+  ]) {
+    if (!publisher.includes(marker)) fail(`complete signed Windows publication wiring is missing: ${marker}`);
+  }
+  if (publisher.indexOf('windows-delivery-sign.ps1') >= publisher.indexOf('github-release-publication.py publish')) {
+    fail('delivery signature must exist before aggregate publication');
+  }
+  if ((workflow.match(/secrets\.PROFILE_BRIDGE_DELIVERY_PFX_BASE64/g) || []).length !== 1) {
+    fail('application signing key must be exposed to exactly one staging signing step');
+  }
+  if (!workflow.includes('on:\n  push:\n    branches:\n      - main\n') || workflow.includes('  pull_request:')) {
+    fail('signing/publication workflow must remain accepted-main push only');
+  }
+  if (publisherParts[0].includes('secrets.PROFILE_BRIDGE_DELIVERY_PFX_BASE64')) {
+    fail('assembly/component jobs must not receive the application signing key');
+  }
   const jobCount = (marker) => workflow.split(marker).length - 1;
   if (jobCount('\n  runtime-bundle:\n') !== 1 || jobCount('\n  assemble-publish:\n') !== 1) {
-    fail('Release Set build workflow must contain exactly one runtime owner and one aggregate publisher');
+    fail('Release Set build workflow must contain exactly one runtime owner and one aggregate assembler');
   }
   if (jobCount('python scripts/github-release-publication.py publish') !== 2) {
     fail('runtime component and aggregate Release Set must share exactly one publication primitive');
@@ -283,6 +319,20 @@ function selfTest(authority) {
     rejected = true;
   }
   if (!rejected) fail('forbidden core provider binding fixture was accepted');
+  const workflow = fs.readFileSync(releaseBuildWorkflowPath, 'utf8');
+  for (const [label, damaged] of [
+    ['missing signature asset', workflow.replace("'windows-delivery-signature.json', ", '')],
+    ['missing installer asset', workflow.replace(", 'ProfileBridgeSetup.exe'", '')],
+    ['wrong signing environment', workflow.replace('    environment: staging', '    environment: production')],
+    ['unbound assembly', workflow.replace('    needs: assemble-publish', '    needs: cloud-components')],
+    ['key in job environment', workflow.replace('          PROFILE_BRIDGE_DELIVERY_PFX_BASE64:', '      PROFILE_BRIDGE_DELIVERY_PFX_BASE64:')],
+    ['missing signing adapter', workflow.replace('& ./scripts/windows-delivery-sign.ps1', '& ./scripts/unsigned-placeholder.ps1')],
+  ]) {
+    rejected = false;
+    try { validatePublicationWiring(authority, damaged); } catch { rejected = true; }
+    if (!rejected) fail(`${label} publication fixture was accepted`);
+  }
+
 }
 
 const authority = loadJson(authorityPath);

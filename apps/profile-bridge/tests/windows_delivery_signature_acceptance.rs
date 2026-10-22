@@ -16,11 +16,12 @@ const CREATE_FIXTURE_SCRIPT: &str = r#"param(
     [Parameter(Mandatory=$true)][string]$ManifestPath,
     [Parameter(Mandatory=$true)][string]$SignaturePath,
     [Parameter(Mandatory=$true)][string]$PinPath,
-    [Parameter(Mandatory=$true)][string]$CertificatePath
+    [Parameter(Mandatory=$true)][string]$CertificatePath,
+    [Parameter(Mandatory=$true)][string]$SigningAdapter
 )
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.Security
-$rsa = [System.Security.Cryptography.RSA]::Create(2048)
+$rsa = [System.Security.Cryptography.RSA]::Create(3072)
 try {
     $subject = [System.Security.Cryptography.X509Certificates.X500DistinguishedName]::new(
         "CN=Profile Bridge S0 CI " + [Guid]::NewGuid().ToString()
@@ -48,24 +49,20 @@ try {
             $certificate.Export([System.Security.Cryptography.X509Certificates.X509ContentType]::Cert)
         )
 
-        $manifest = [System.IO.File]::ReadAllBytes($ManifestPath)
-        $contentInfo = [System.Security.Cryptography.Pkcs.ContentInfo]::new($manifest)
-        $cms = [System.Security.Cryptography.Pkcs.SignedCms]::new($contentInfo, $true)
-        $signer = [System.Security.Cryptography.Pkcs.CmsSigner]::new($certificate)
-        $signer.IncludeOption = [System.Security.Cryptography.X509Certificates.X509IncludeOption]::EndCertOnly
-        $signer.DigestAlgorithm = [System.Security.Cryptography.Oid]::new('2.16.840.1.101.3.4.2.1')
-        $cms.ComputeSignature($signer)
-        [System.IO.File]::WriteAllBytes($SignaturePath, $cms.Encode())
-
-        $sha256 = [System.Security.Cryptography.SHA256]::Create()
-        try {
-            $pin = [System.BitConverter]::ToString(
-                $sha256.ComputeHash($certificate.RawData)
-            ).Replace('-', '').ToLowerInvariant()
+        # Exercise the real CI signing adapter, then the real native verifier in Rust.
+        $env:PROFILE_BRIDGE_DELIVERY_PFX_BASE64 = [Convert]::ToBase64String(
+            $certificate.Export([System.Security.Cryptography.X509Certificates.X509ContentType]::Pfx, '')
+        )
+        & $SigningAdapter -ManifestPath $ManifestPath -OutputPath ($SignaturePath + '.json') -PublicMetadataPath ($PinPath + '.json')
+        $wire = Get-Content -Raw ($SignaturePath + '.json') | ConvertFrom-Json
+        $public = Get-Content -Raw ($PinPath + '.json') | ConvertFrom-Json
+        if ($wire.key_id -cne $public.key_id -or $wire.key_id.Length -gt 64) { throw 'invalid key ID' }
+        $signature = [byte[]]::new($wire.cms_der_hex.Length / 2)
+        for ($index = 0; $index -lt $signature.Length; $index++) {
+            $signature[$index] = [Convert]::ToByte($wire.cms_der_hex.Substring(2 * $index, 2), 16)
         }
-        finally {
-            $sha256.Dispose()
-        }
+        [System.IO.File]::WriteAllBytes($SignaturePath, $signature)
+        $pin = $public.certificate_sha256
         [System.IO.File]::WriteAllText($PinPath, $pin)
     }
     finally {
@@ -118,6 +115,8 @@ impl SigningFixture {
         fs::write(&manifest_path, manifest)?;
         fs::write(&create_script, CREATE_FIXTURE_SCRIPT.as_bytes())?;
 
+        let signing_adapter =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../scripts/windows-delivery-sign.ps1");
         run_powershell(
             &create_script,
             &[
@@ -125,6 +124,7 @@ impl SigningFixture {
                 ("-SignaturePath", signature_path.as_path()),
                 ("-PinPath", pin_path.as_path()),
                 ("-CertificatePath", certificate_path.as_path()),
+                ("-SigningAdapter", signing_adapter.as_path()),
             ],
         )?;
 
