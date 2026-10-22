@@ -8,6 +8,7 @@ use application_ports::identity_governance::{
     IdentityReplayReceipt,
 };
 use identity_access_domain::MembershipRole;
+use identity_access_domain::lifecycle::InitialOwnerPolicy;
 use profile_platform_primitives::{
     ActorId, AggregateVersion, CorrelationId, IdentityId, InvitationId, TenantScope,
 };
@@ -24,6 +25,7 @@ pub struct ExecuteOwnerBootstrapCommand {
     identity_id: IdentityId,
     tenant_display_name: String,
     evidence: CommandExecutionEvidence,
+    initial_owner_policy: InitialOwnerPolicy,
 }
 
 impl ExecuteOwnerBootstrapCommand {
@@ -33,12 +35,14 @@ impl ExecuteOwnerBootstrapCommand {
         identity_id: IdentityId,
         tenant_display_name: impl Into<String>,
         evidence: CommandExecutionEvidence,
+        initial_owner_policy: InitialOwnerPolicy,
     ) -> Self {
         Self {
             actor_id,
             identity_id,
             tenant_display_name: tenant_display_name.into(),
             evidence,
+            initial_owner_policy,
         }
     }
 }
@@ -105,6 +109,9 @@ pub async fn execute_owner_bootstrap<P: IdentityCeremonyApplicationPort>(
     port: &P,
     command: ExecuteOwnerBootstrapCommand,
 ) -> Result<IdentityCeremonyOutcome, IdentityGovernanceOperationError> {
+    if !command.initial_owner_policy.allows(identity.contact_hint()) {
+        return Err(IdentityGovernanceOperationError::NotFound);
+    }
     if let Some(existing) = port
         .find_active_identity_binding(&scope, &identity, &correlation_id)
         .await
@@ -130,7 +137,10 @@ pub async fn execute_owner_bootstrap<P: IdentityCeremonyApplicationPort>(
         .tenant_identity_boundary(&scope)
         .await
         .map_err(map_port_error)?;
-    if boundary.membership_count() != 0 || boundary.active_owner_count() != 0 {
+    if boundary.membership_count() != 0
+        || boundary.active_owner_count() != 0
+        || boundary.organization_count() != 0
+    {
         return Err(IdentityGovernanceOperationError::Conflict);
     }
 

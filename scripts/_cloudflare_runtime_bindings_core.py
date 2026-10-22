@@ -45,6 +45,7 @@ SOURCE_CONSTANTS = {
         "MAILBOX_SECRET_RESOLVER_BINDING",
     ),
     "access_issuer": ("apps/control-plane-worker/src/access_session.rs", "ACCESS_ISSUER_VAR"),
+    "initial_owner_email": ("apps/control-plane-worker/src/identity.rs", "INITIAL_OWNER_EMAIL_VAR"),
     "access_audience": (
         "apps/control-plane-worker/src/access_session.rs",
         "ACCESS_AUDIENCE_VAR",
@@ -301,6 +302,7 @@ def validate_config(
     expected_vars = {
         source["access_issuer"],
         source["access_audience"],
+        source["initial_owner_email"],
         source["r2_account_id"],
         source["r2_bucket_name"],
         source["canonical_environment"],

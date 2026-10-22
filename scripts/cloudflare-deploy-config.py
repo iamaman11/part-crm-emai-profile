@@ -81,6 +81,7 @@ REQUIRED_CORE_SECRETS = [
 EXPECTED_VARS = {
     "ACCESS_ISSUER",
     "ACCESS_AUDIENCE",
+    "INITIAL_OWNER_EMAIL",
     "R2_GENERATION_ACCOUNT_ID",
     "R2_GENERATION_BUCKET_NAME",
     "CANONICAL_ENVIRONMENT",
@@ -201,6 +202,7 @@ def validate_environment_template(environment: str, config: dict[str, object]) -
     expected_variable_tokens = {
         "ACCESS_ISSUER": f"${{{prefix}_ACCESS_ISSUER}}",
         "ACCESS_AUDIENCE": f"${{{prefix}_ACCESS_AUDIENCE}}",
+        "INITIAL_OWNER_EMAIL": f"${{{prefix}_INITIAL_OWNER_EMAIL}}",
         "R2_GENERATION_ACCOUNT_ID": f"${{{prefix}_ACCOUNT_ID}}",
         "R2_GENERATION_BUCKET_NAME": f"${{{prefix}_R2_BUCKET_NAME}}",
     }
@@ -279,9 +281,9 @@ def validate_environment_template(environment: str, config: dict[str, object]) -
 
 def validate_manifest(environment: str, manifest: object, *, fixture: bool = False) -> dict[str, str]:
     document = require_object(manifest, f"{environment} manifest")
-    if set(document) != MANIFEST_FIELDS:
+    if not MANIFEST_FIELDS <= set(document) or set(document) - MANIFEST_FIELDS - {"initial_owner_email"}:
         missing = sorted(MANIFEST_FIELDS - set(document))
-        extra = sorted(set(document) - MANIFEST_FIELDS)
+        extra = sorted(set(document) - MANIFEST_FIELDS - {"initial_owner_email"})
         raise ConfigError(f"{environment} manifest fields mismatch: missing={missing}, extra={extra}")
     values = {key: string(document[key], f"{environment}.{key}") for key in MANIFEST_FIELDS}
     for key, value in values.items():
@@ -290,6 +292,14 @@ def validate_manifest(environment: str, manifest: object, *, fixture: bool = Fal
             raise ConfigError(f"{environment}.{key} contains a forbidden placeholder")
         if not fixture and ("example" in lowered or lowered.endswith(".test")):
             raise ConfigError(f"{environment}.{key} looks like fixture/example data")
+
+    initial_owner_email = document.get("initial_owner_email", "")
+    if not isinstance(initial_owner_email, str) or len(initial_owner_email) > 254 or any(
+        ord(character) < 32 or ord(character) == 127 for character in initial_owner_email
+    ):
+        raise ConfigError(f"{environment}.initial_owner_email must be a bounded single-line string")
+    # Empty configuration disables initial setup; runtime identity policy owns admission.
+    values["initial_owner_email"] = initial_owner_email
 
     for key in (
         "worker_name",
@@ -351,6 +361,7 @@ def token_map(environment: str, manifest: dict[str, str]) -> dict[str, str]:
         "CUSTOM_DOMAIN": "custom_domain",
         "ACCESS_ISSUER": "access_issuer",
         "ACCESS_AUDIENCE": "access_audience",
+        "INITIAL_OWNER_EMAIL": "initial_owner_email",
         "D1_DATABASE_NAME": "d1_database_name",
         "D1_DATABASE_ID": "d1_database_id",
         "R2_BUCKET_NAME": "r2_bucket_name",
@@ -433,6 +444,15 @@ def self_test() -> None:
         raise ConfigError("Core render unexpectedly includes mailbox-secret-resolver service binding")
     if "${" in json.dumps(rendered):
         raise ConfigError("positive render fixture retained a placeholder")
+    if staging_vars["INITIAL_OWNER_EMAIL"] != "" or production_vars["INITIAL_OWNER_EMAIL"] != "":
+        raise ConfigError("initial setup must remain disabled when no owner is configured")
+    configured_owner = copy.deepcopy(staging)
+    configured_owner["initial_owner_email"] = "owner@staging.invalid"
+    configured = render(configured_owner, production, fixture=True)
+    if configured["env"]["staging"]["vars"]["INITIAL_OWNER_EMAIL"] != "owner@staging.invalid":
+        raise ConfigError("explicit initial owner was not transported to the selected target")
+    if configured["env"]["production"]["vars"]["INITIAL_OWNER_EMAIL"] != "":
+        raise ConfigError("staging initial owner leaked into production configuration")
 
     negative_cases: list[tuple[str, dict[str, str], dict[str, str]]] = []
     missing = copy.deepcopy(staging)
@@ -450,6 +470,9 @@ def self_test() -> None:
     unexpected = copy.deepcopy(staging)
     unexpected["unexpected_secret"] = "forbidden"
     negative_cases.append(("unexpected manifest field", unexpected, production))
+    invalid_owner = copy.deepcopy(staging)
+    invalid_owner["initial_owner_email"] = "owner@staging.invalid\nsecond-value"
+    negative_cases.append(("multiline initial owner", invalid_owner, production))
 
     for label, candidate_staging, candidate_production in negative_cases:
         try:

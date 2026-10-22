@@ -49,6 +49,14 @@ pub struct TenantContextProjection {
 #[serde(rename_all = "camelCase")]
 pub struct TenantContextsProjection {
     pub tenants: Vec<TenantContextProjection>,
+    #[serde(default)]
+    pub can_bootstrap_owner: bool,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct OwnerBootstrapRequest {
+    pub tenant_display_name: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -318,7 +326,10 @@ pub fn openapi_document() -> Value {
                 "TenantContextsProjection": {
                     "type": "object", "additionalProperties": false,
                     "required": ["tenants"],
-                    "properties": {"tenants": {"type": "array", "items": schema_ref("TenantContextProjection")}}
+                    "properties": {
+                        "tenants": {"type": "array", "items": schema_ref("TenantContextProjection")},
+                        "canBootstrapOwner": {"type": "boolean"}
+                    }
                 },
                 "MutationReceipt": {
                     "type": "object", "additionalProperties": false,

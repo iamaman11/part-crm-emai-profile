@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import re
 import sqlite3
 from pathlib import Path
 
@@ -421,6 +422,8 @@ def main() -> int:
     parser.add_argument("--negative-fixture", type=Path)
     args = parser.parse_args()
 
+    test_initial_owner_atomic_envelope()
+
     connection = open_database()
     try:
         seed(connection)
@@ -434,6 +437,56 @@ def main() -> int:
 
     print("Step 4 identity, owner-transfer and ACL invariants passed.")
     return 0
+
+
+def test_initial_owner_atomic_envelope() -> None:
+    """Prove the actual adapter SQL rolls back a failed envelope and rejects a racing first owner."""
+    source = (ROOT / "crates/cloudflare-adapters/src/d1_identity_acl.rs").read_text(encoding="utf-8")
+    statements = dict(re.findall(r'const (\w+): &str = r#"(.*?)"#;', source, re.S))
+    boundary_match = re.search(r'pub async fn tenant_boundary\(.*?r#"(.*?)"#', source, re.S)
+    assert boundary_match is not None
+    tenant, actor, identity = "tenant_initial_owner", "actor_initial_owner", "identity_initial_owner"
+    for fail_outbox in (False, True):
+        connection = open_database()
+        commands = [
+            ("OWNER_BOOTSTRAP_TENANT", (tenant, "Initial organization", 100, 100)),
+            ("IDENTITY_CREATE", (identity, "verified-initial-owner", "owner@initial.invalid", 100)),
+            ("OWNER_BOOTSTRAP_MEMBERSHIP", (tenant, actor, identity, 100, 100)),
+            ("IDEMPOTENCY_CREATE", (tenant, actor, "idem_initial_owner", "tenant.owner_bootstrap", "a" * 64, "bootstrapped", tenant, 100, 1000)),
+            ("AUDIT_CREATE", (tenant, "audit_initial_owner", "corr_initial_owner", actor, "tenant.owner_bootstrap", "tenant", tenant, "bootstrapped", 100)),
+            ("OUTBOX_CREATE", (tenant, "outbox_initial_owner", "tenant", tenant, 0 if fail_outbox else 1, "tenant.owner_bootstrapped.v1", "{}", 100)),
+        ]
+        tables = ["tenants", "identities", "memberships", "idempotency_records", "audit_events", "outbox_events"]
+        try:
+            try:
+                with connection:
+                    for name, parameters in commands:
+                        connection.execute(statements[name], parameters)
+            except sqlite3.IntegrityError as error:
+                if not fail_outbox or "CHECK constraint failed" not in str(error):
+                    raise
+            else:
+                if fail_outbox:
+                    raise AssertionError("invalid outbox unexpectedly committed an initial owner")
+            expected = 0 if fail_outbox else 1
+            assert [connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0] for table in tables] == [expected] * 6
+            if not fail_outbox:
+                other_boundary = connection.execute(boundary_match.group(1), ("tenant_other_empty",)).fetchone()
+                assert dict(other_boundary) == {"membership_count": 0, "active_owner_count": 0, "organization_count": 1}
+                # Both callers could have observed an empty boundary. Stable server IDs
+                # make the second atomic transaction conflict without a second owner.
+                try:
+                    with connection:
+                        for name, parameters in commands:
+                            connection.execute(statements[name], parameters)
+                except sqlite3.IntegrityError as error:
+                    assert "UNIQUE constraint failed" in str(error)
+                else:
+                    raise AssertionError("duplicate initial owner unexpectedly committed")
+                assert connection.execute("SELECT COUNT(*) FROM memberships WHERE role='TENANT_OWNER'").fetchone()[0] == 1
+            assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
+        finally:
+            connection.close()
 
 
 if __name__ == "__main__":

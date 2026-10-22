@@ -80,14 +80,28 @@ pub async fn tenant_contexts_response(request: &Request, env: &Env) -> Result<Re
         Ok(database) => database,
         Err(_) => return dependency_unavailable(correlation_id.as_str()),
     };
-    let contexts = match D1IdentityAclRepository::new(database)
-        .active_tenant_contexts(&identity)
-        .await
-    {
+    let repository = D1IdentityAclRepository::new(database);
+    let contexts = match repository.active_tenant_contexts(&identity).await {
         Ok(contexts) => contexts,
         Err(error) => return tenant_context_repository_failure(correlation_id.as_str(), error),
     };
+    let can_bootstrap_owner = if contexts.is_empty()
+        && crate::identity::initial_owner_policy(env).allows(identity.contact_hint())
+    {
+        let scope = crate::identity::initial_organization_scope(env)?;
+        match repository.tenant_boundary(&scope).await {
+            Ok(boundary) => {
+                boundary.membership_count == 0
+                    && boundary.active_owner_count == 0
+                    && boundary.organization_count == 0
+            }
+            Err(error) => return tenant_context_repository_failure(correlation_id.as_str(), error),
+        }
+    } else {
+        false
+    };
     Response::from_json(&TenantContextsProjection {
+        can_bootstrap_owner,
         tenants: contexts
             .into_iter()
             .map(|context| TenantContextProjection {
@@ -179,7 +193,7 @@ pub async fn verify_request_identity(
     }))
 }
 
-async fn verify_human_identity(
+pub(crate) async fn verify_human_identity(
     request: &Request,
     env: &Env,
 ) -> Result<Option<(VerifiedExternalIdentity, CorrelationId)>> {

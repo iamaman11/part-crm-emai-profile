@@ -6,8 +6,10 @@ interface TenantContextValue {
   tenantId: string;
   contexts: TenantContextsProjection['tenants'];
   state: 'loading' | 'error' | 'empty' | 'selecting' | 'ready';
+  canBootstrapOwner: boolean;
   selectTenant: (tenantId: string) => void;
   retry: () => void;
+  refresh: () => Promise<void>;
 }
 
 type TenantContextsLoader = (signal?: AbortSignal) => Promise<TenantContextsProjection>;
@@ -50,6 +52,7 @@ export function TenantProvider({
     tenantId,
     contexts,
     state,
+    canBootstrapOwner: query.data?.canBootstrapOwner === true,
     selectTenant: (next) => {
       if (!contexts.some((context) => context.tenantId === next)) return;
       const url = new URL(window.location.href);
@@ -58,6 +61,7 @@ export function TenantProvider({
       setTenantState(next);
     },
     retry: () => { void query.refetch(); },
+    refresh: async () => { await query.refetch({ throwOnError: true }); },
   }), [tenantId, contexts, state, query]);
   return <TenantContext.Provider value={value}>{children}</TenantContext.Provider>;
 }

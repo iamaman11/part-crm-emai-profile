@@ -40,7 +40,7 @@ impl FakePort {
     fn new() -> Self {
         Self {
             binding: RefCell::new(None),
-            boundary: Cell::new(TenantIdentityBoundary::new(0, 0)),
+            boundary: Cell::new(TenantIdentityBoundary::new(0, 0, 0)),
             replay: RefCell::new(Vec::new()),
             replay_calls: Cell::new(0),
             bootstrap_calls: Cell::new(0),
@@ -117,7 +117,10 @@ fn correlation_id() -> Result<CorrelationId, Box<dyn std::error::Error>> {
 }
 
 fn identity() -> VerifiedIdentitySnapshot {
-    VerifiedIdentitySnapshot::new("subject-01JCEREMONY", Some("contact-hint".to_owned()))
+    VerifiedIdentitySnapshot::new(
+        "subject-01JCEREMONY",
+        Some("owner@example.invalid".to_owned()),
+    )
 }
 
 fn actor_id() -> Result<ActorId, Box<dyn std::error::Error>> {
@@ -141,7 +144,49 @@ fn bootstrap_command() -> Result<ExecuteOwnerBootstrapCommand, Box<dyn std::erro
         IdentityId::parse("identity_01JCEREMONY")?,
         "Ceremony Tenant",
         evidence()?,
+        identity_access_domain::lifecycle::InitialOwnerPolicy::new(Some("owner@example.invalid")),
     ))
+}
+
+#[test]
+fn owner_setup_rejects_unapproved_or_missing_contact_before_any_write()
+-> Result<(), Box<dyn std::error::Error>> {
+    for contact in [None, Some("other@example.invalid")] {
+        let port = FakePort::new();
+        let result = block_on(execute_owner_bootstrap(
+            scope()?,
+            correlation_id()?,
+            VerifiedIdentitySnapshot::new("other-subject", contact.map(str::to_owned)),
+            &port,
+            bootstrap_command()?,
+        ));
+        assert!(matches!(
+            result,
+            Err(IdentityGovernanceOperationError::NotFound)
+        ));
+        assert_eq!(port.bootstrap_calls.get(), 0);
+        assert_eq!(port.replay_calls.get(), 0);
+    }
+    let port = FakePort::new();
+    let command = ExecuteOwnerBootstrapCommand::new(
+        actor_id()?,
+        IdentityId::parse("identity_01JCEREMONY")?,
+        "Organization",
+        evidence()?,
+        identity_access_domain::lifecycle::InitialOwnerPolicy::new(None),
+    );
+    assert!(matches!(
+        block_on(execute_owner_bootstrap(
+            scope()?,
+            correlation_id()?,
+            identity(),
+            &port,
+            command
+        )),
+        Err(IdentityGovernanceOperationError::NotFound)
+    ));
+    assert_eq!(port.bootstrap_calls.get(), 0);
+    Ok(())
 }
 
 fn accept_command() -> Result<ExecuteInvitationAcceptCommand, Box<dyn std::error::Error>> {
@@ -151,6 +196,37 @@ fn accept_command() -> Result<ExecuteInvitationAcceptCommand, Box<dyn std::error
         InvitationId::parse("invitation_01JCEREMONY")?,
         evidence()?,
     ))
+}
+
+#[test]
+fn approved_first_owner_creates_once_and_existing_other_organization_blocks_setup()
+-> Result<(), Box<dyn std::error::Error>> {
+    let port = FakePort::new();
+    let result = block_on(execute_owner_bootstrap(
+        scope()?,
+        correlation_id()?,
+        identity(),
+        &port,
+        bootstrap_command()?,
+    ))?;
+    assert_eq!(result.result_code(), "bootstrapped");
+    assert_eq!(result.resource_id(), scope()?.tenant_id().as_str());
+    assert_eq!(port.bootstrap_calls.get(), 1);
+
+    let occupied = FakePort::new();
+    occupied.boundary.set(TenantIdentityBoundary::new(0, 0, 1));
+    assert_eq!(
+        block_on(execute_owner_bootstrap(
+            scope()?,
+            correlation_id()?,
+            identity(),
+            &occupied,
+            bootstrap_command()?,
+        )),
+        Err(IdentityGovernanceOperationError::Conflict)
+    );
+    assert_eq!(occupied.bootstrap_calls.get(), 0);
+    Ok(())
 }
 
 #[test]
@@ -206,7 +282,7 @@ fn existing_owner_exact_bootstrap_replay_skips_write() -> Result<(), Box<dyn std
 fn occupied_tenant_boundary_stops_bootstrap_before_write() -> Result<(), Box<dyn std::error::Error>>
 {
     let port = FakePort::new();
-    port.boundary.set(TenantIdentityBoundary::new(1, 1));
+    port.boundary.set(TenantIdentityBoundary::new(1, 1, 1));
     assert_eq!(
         block_on(execute_owner_bootstrap(
             scope()?,

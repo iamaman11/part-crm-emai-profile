@@ -1,7 +1,7 @@
 import { Link, Outlet, createRootRoute, createRoute, createRouter } from '@tanstack/react-router';
 import { CapabilityBoundary, useCapabilities } from './CapabilityContext';
-import { TenantChooser } from './TenantContext';
-import { createAccessRoute } from '../features/access';
+import { TenantChooser, useTenant } from './TenantContext';
+import { createAccessRoute, OrganizationSetup } from '../features/access';
 import { createAuditRoute } from '../features/audit';
 import { createClientsRoutes } from '../features/clients';
 import { createDevicesRoute } from '../features/devices';
@@ -13,6 +13,7 @@ import { NetworkStatusBanner } from '../shared/ui/NetworkStatusBanner';
 
 function Shell() {
   const { enabled, profileId } = useCapabilities();
+  const { state } = useTenant();
   return (
     <div className="app-shell">
       <header className="app-header">
@@ -26,14 +27,18 @@ function Shell() {
       <NetworkStatusBanner />
       <nav className="primary-nav" aria-label="Primary navigation">
         <Link to="/" activeOptions={{ exact: true }}>Dashboard</Link>
-        {enabled('clients') ? <Link to="/clients">Clients</Link> : null}
-        {enabled('browser_profiles') ? <Link to="/profiles">Profiles</Link> : null}
-        {enabled('identity') ? <Link to="/users">Users & access</Link> : null}
-        {enabled('mailbox_admin') ? <Link to="/mailboxes">Mailboxes</Link> : null}
-        <Link to="/sessions">Sessions</Link>
-        {enabled('profile_runtime') ? <Link to="/devices">Devices</Link> : null}
-        <Link to="/audit">Audit</Link>
-        <Link to="/settings">Settings</Link>
+        {state === 'ready' ? (
+          <>
+            {enabled('clients') ? <Link to="/clients">Clients</Link> : null}
+            {enabled('browser_profiles') ? <Link to="/profiles">Profiles</Link> : null}
+            {enabled('identity') ? <Link to="/users">Users & access</Link> : null}
+            {enabled('mailbox_admin') ? <Link to="/mailboxes">Mailboxes</Link> : null}
+            <Link to="/sessions">Sessions</Link>
+            {enabled('profile_runtime') ? <Link to="/devices">Devices</Link> : null}
+            <Link to="/audit">Audit</Link>
+            <Link to="/settings">Settings</Link>
+          </>
+        ) : null}
       </nav>
       <main id="main-content"><Outlet /></main>
       <footer>
@@ -45,6 +50,8 @@ function Shell() {
 
 function Dashboard() {
   const { enabled } = useCapabilities();
+  const { state } = useTenant();
+  if (state !== 'ready') return <OrganizationSetup />;
   return (
     <div className="page-stack">
       <section className="hero panel">

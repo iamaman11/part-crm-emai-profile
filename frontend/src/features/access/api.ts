@@ -1,6 +1,6 @@
 import {
   acceptTenantInvitation as acceptTenantInvitationOperation,
-  bootstrapTenantOwner as bootstrapTenantOwnerOperation,
+  bootstrapInitialOrganization as bootstrapInitialOrganizationOperation,
   createTenantInvitation as createTenantInvitationOperation,
   listMembers as listMembersOperation,
   transferTenantOwner as transferTenantOwnerOperation,
@@ -9,12 +9,10 @@ import {
 import type { MemberListPageDto } from '../../shared/api/generated/operations';
 
 export function bootstrapOwner(
-  tenantId: string,
-  input: { actorId: string; identityId: string; tenantDisplayName: string },
+  input: { tenantDisplayName: string },
   idempotencyKey: string,
 ) {
-  return bootstrapTenantOwnerOperation({
-    tenantId,
+  return bootstrapInitialOrganizationOperation({
     body: input,
     idempotencyKey,
   });

@@ -3,7 +3,7 @@ use crate::RouteClass;
 #[must_use]
 pub(super) fn classify(method: &str, segments: &[&str]) -> Option<RouteClass> {
     match segments {
-        ["api", "v1", "tenants", _, "owner", "bootstrap"] if method == "POST" => {
+        ["api", "v1", "session", "organization"] if method == "POST" => {
             Some(RouteClass::OwnerBootstrapApi)
         }
         ["api", "v1", "tenants", _, "owner", "transfer"] if method == "POST" => {
@@ -35,6 +35,33 @@ pub(super) fn classify(method: &str, segments: &[&str]) -> Option<RouteClass> {
 mod tests {
     use super::classify;
     use crate::RouteClass;
+
+    #[test]
+    fn initial_setup_uses_one_identity_owned_route_without_caller_owned_ids() {
+        let path = ["api", "v1", "session", "organization"];
+        assert_eq!(classify("POST", &path), Some(RouteClass::OwnerBootstrapApi));
+        for method in ["GET", "PUT", "PATCH", "DELETE"] {
+            assert_eq!(classify(method, &path), None);
+        }
+        assert_eq!(
+            classify(
+                "POST",
+                &[
+                    "api",
+                    "v1",
+                    "tenants",
+                    "tenant_legacy",
+                    "owner",
+                    "bootstrap"
+                ]
+            ),
+            None
+        );
+        assert_eq!(
+            classify("POST", &["api", "v1", "session", "organization", "extra"]),
+            None
+        );
+    }
 
     #[test]
     fn device_binding_governance_is_exact_and_fail_closed() {

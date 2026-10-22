@@ -56,14 +56,20 @@ impl ActiveIdentityBinding {
 pub struct TenantIdentityBoundary {
     membership_count: u64,
     active_owner_count: u64,
+    organization_count: u64,
 }
 
 impl TenantIdentityBoundary {
     #[must_use]
-    pub const fn new(membership_count: u64, active_owner_count: u64) -> Self {
+    pub const fn new(
+        membership_count: u64,
+        active_owner_count: u64,
+        organization_count: u64,
+    ) -> Self {
         Self {
             membership_count,
             active_owner_count,
+            organization_count,
         }
     }
 
@@ -75,6 +81,11 @@ impl TenantIdentityBoundary {
     #[must_use]
     pub const fn active_owner_count(self) -> u64 {
         self.active_owner_count
+    }
+
+    #[must_use]
+    pub const fn organization_count(self) -> u64 {
+        self.organization_count
     }
 }
 

@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Browser Profile Control Plane API",
-    "version": "1.0.0",
+    "version": "1.1.0",
     "description": "Versioned control-plane contracts for health, authenticated tenant identity, clients, profiles and explicit ACL management."
   },
   "servers": [
@@ -116,62 +116,6 @@
           },
           "503": {
             "$ref": "#/components/responses/InternalFailure"
-          }
-        }
-      }
-    },
-    "/api/v1/tenants/{tenantId}/owner/bootstrap": {
-      "post": {
-        "operationId": "bootstrapTenantOwner",
-        "security": [
-          {
-            "cloudflareAccessJwt": []
-          }
-        ],
-        "parameters": [
-          {
-            "$ref": "#/components/parameters/TenantPath"
-          },
-          {
-            "$ref": "#/components/parameters/CorrelationHeader"
-          },
-          {
-            "$ref": "#/components/parameters/IdempotencyHeader"
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/OwnerBootstrapRequest"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "Existing idempotent owner bootstrap result",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MutationReceipt"
-                }
-              }
-            }
-          },
-          "201": {
-            "description": "Owner bootstrapped for an empty tenant boundary",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MutationReceipt"
-                }
-              }
-            }
-          },
-          "409": {
-            "$ref": "#/components/responses/Conflict"
           }
         }
       }
@@ -749,6 +693,78 @@
           }
         }
       }
+    },
+    "/api/v1/session/organization": {
+      "post": {
+        "operationId": "bootstrapInitialOrganization",
+        "security": [
+          {
+            "cloudflareAccessJwt": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/CorrelationHeader"
+          },
+          {
+            "$ref": "#/components/parameters/IdempotencyHeader"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OwnerBootstrapRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Existing idempotent owner bootstrap result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MutationReceipt"
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "Owner bootstrapped for an empty tenant boundary",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MutationReceipt"
+                }
+              }
+            }
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "400": {
+            "description": "Invalid organization setup request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/NeutralNotFound"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalFailure"
+          },
+          "503": {
+            "$ref": "#/components/responses/InternalFailure"
+          }
+        }
+      }
     }
   },
   "components": {
@@ -973,6 +989,10 @@
             "items": {
               "$ref": "#/components/schemas/TenantContextProjection"
             }
+          },
+          "canBootstrapOwner": {
+            "type": "boolean",
+            "description": "The verified identity is explicitly eligible to initialize the empty initial organization."
           }
         }
       },
@@ -1020,17 +1040,9 @@
         "type": "object",
         "additionalProperties": false,
         "required": [
-          "actorId",
-          "identityId",
           "tenantDisplayName"
         ],
         "properties": {
-          "actorId": {
-            "$ref": "#/components/schemas/OpaqueId"
-          },
-          "identityId": {
-            "$ref": "#/components/schemas/OpaqueId"
-          },
           "tenantDisplayName": {
             "type": "string",
             "minLength": 1,
