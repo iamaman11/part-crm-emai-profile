@@ -2,9 +2,9 @@
 
 use bridge_domain::ClaimUri;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ShippingDeliveryCommand {
-    InstallStaged,
+    InstallStaged(crate::installed_connection::ControlPlaneOrigin),
     ActivateStaged,
     HandoffArrived,
 }
@@ -18,6 +18,7 @@ pub enum ShippingCompositionError {
     DeliveryHealth,
     DeliveryHandoff,
     FirstInstallation(crate::windows_delivery_handoff::DeliveryHandoffError),
+    InstalledConnection(crate::installed_connection::InstalledConnectionError),
     DeliveryRecoveryRequired,
     Operator,
     CommittedRecoveryRequired,
@@ -35,6 +36,7 @@ impl core::fmt::Display for ShippingCompositionError {
             }
             Self::DeliveryHandoff => "shipping Profile Bridge delivery handoff failed closed",
             Self::FirstInstallation(_) => "Profile Bridge first installation failed closed",
+            Self::InstalledConnection(_) => "Profile Bridge installed connection is invalid",
             Self::DeliveryRecoveryRequired => {
                 "shipping Profile Bridge delivery recovery is required"
             }
@@ -140,9 +142,6 @@ mod windows {
     use std::thread;
     use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-    const DEVICE_APPLICATION_BINDING_PATH_ENV: &str =
-        "PROFILE_BRIDGE_DEVICE_APPLICATION_BINDING_PATH";
-    const CONTROL_PLANE_ORIGIN_ENV: &str = "PROFILE_BRIDGE_CONTROL_PLANE_ORIGIN";
     const NETWORK_POLICY_PATH_ENV: &str = "PROFILE_BRIDGE_NETWORK_POLICY_PATH";
     const PROXY_CONFIG_PATH_ENV: &str = "PROFILE_BRIDGE_PROXY_CONFIG_PATH";
     const PACKAGED_PYTHON_EXECUTABLE: &str = "python/python.exe";
@@ -157,10 +156,11 @@ mod windows {
     }
 
     impl ShippingConfig {
-        fn from_environment() -> Result<Self, ShippingCompositionError> {
-            let device_application_binding_path =
-                absolute_path(required_env(DEVICE_APPLICATION_BINDING_PATH_ENV)?)?;
-            let control_plane_origin = required_env(CONTROL_PLANE_ORIGIN_ENV)?;
+        fn from_installation() -> Result<Self, ShippingCompositionError> {
+            let connection = crate::installed_connection::InstalledConnection::open_current()
+                .map_err(ShippingCompositionError::InstalledConnection)?;
+            let device_application_binding_path = connection.binding_path();
+            let control_plane_origin = connection.origin().as_str().to_owned();
             let materialization_root = materialization_root_path()?;
             let network_policy_path = absolute_path(required_env(NETWORK_POLICY_PATH_ENV)?)?;
             let proxy_config_path = optional_env(PROXY_CONFIG_PATH_ENV)?
@@ -181,7 +181,7 @@ mod windows {
             return Ok(());
         }
 
-        let config = ShippingConfig::from_environment()?;
+        let config = ShippingConfig::from_installation()?;
         let active_delivery = ActiveWindowsDeliveryRuntime::resolve_current()
             .map_err(|_| ShippingCompositionError::Configuration)?;
         let pending_health = active_delivery.pending_health_confirmation();
@@ -330,8 +330,8 @@ mod windows {
     pub fn run_delivery_command(
         command: ShippingDeliveryCommand,
     ) -> Result<(), ShippingCompositionError> {
-        let map_handoff_error = |error| match command {
-            ShippingDeliveryCommand::InstallStaged => {
+        let map_handoff_error = |error| match &command {
+            ShippingDeliveryCommand::InstallStaged(_) => {
                 ShippingCompositionError::FirstInstallation(error)
             }
             _ => ShippingCompositionError::DeliveryHandoff,
@@ -345,9 +345,17 @@ mod windows {
             )
         })?;
         match command {
-            ShippingDeliveryCommand::InstallStaged => coordinator
-                .complete_first_installation(&guard, &current_executable)
-                .map_err(ShippingCompositionError::FirstInstallation)?,
+            ShippingDeliveryCommand::InstallStaged(origin) => {
+                let connection =
+                    crate::installed_connection::InstalledConnection::prepare(&coordinator, origin)
+                        .map_err(ShippingCompositionError::InstalledConnection)?;
+                coordinator
+                    .complete_first_installation(&guard, &current_executable)
+                    .map_err(ShippingCompositionError::FirstInstallation)?;
+                connection
+                    .persist()
+                    .map_err(ShippingCompositionError::InstalledConnection)?;
+            }
             ShippingDeliveryCommand::ActivateStaged => coordinator
                 .start_activation(&guard, std::process::id(), &current_executable)
                 .map_err(|_| ShippingCompositionError::DeliveryHandoff)?,

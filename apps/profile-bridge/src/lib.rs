@@ -18,6 +18,7 @@ pub mod dirty_generation_publish;
 pub mod fake_mail_query;
 pub mod generation_reopen;
 mod generation_snapshot;
+pub mod installed_connection;
 pub mod launch_binding;
 pub mod local_profile;
 pub mod operator_flow;
