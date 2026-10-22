@@ -4,6 +4,7 @@ use bridge_domain::ClaimUri;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ShippingDeliveryCommand {
+    InstallStaged,
     ActivateStaged,
     HandoffArrived,
 }
@@ -16,6 +17,7 @@ pub enum ShippingCompositionError {
     ControlPlane,
     DeliveryHealth,
     DeliveryHandoff,
+    FirstInstallation(crate::windows_delivery_handoff::DeliveryHandoffError),
     DeliveryRecoveryRequired,
     Operator,
     CommittedRecoveryRequired,
@@ -32,6 +34,7 @@ impl core::fmt::Display for ShippingCompositionError {
                 "shipping Profile Bridge candidate health could not be confirmed"
             }
             Self::DeliveryHandoff => "shipping Profile Bridge delivery handoff failed closed",
+            Self::FirstInstallation(_) => "Profile Bridge first installation failed closed",
             Self::DeliveryRecoveryRequired => {
                 "shipping Profile Bridge delivery recovery is required"
             }
@@ -140,7 +143,6 @@ mod windows {
     const DEVICE_APPLICATION_BINDING_PATH_ENV: &str =
         "PROFILE_BRIDGE_DEVICE_APPLICATION_BINDING_PATH";
     const CONTROL_PLANE_ORIGIN_ENV: &str = "PROFILE_BRIDGE_CONTROL_PLANE_ORIGIN";
-    const MATERIALIZATION_ROOT_ENV: &str = "PROFILE_BRIDGE_MATERIALIZATION_ROOT";
     const NETWORK_POLICY_PATH_ENV: &str = "PROFILE_BRIDGE_NETWORK_POLICY_PATH";
     const PROXY_CONFIG_PATH_ENV: &str = "PROFILE_BRIDGE_PROXY_CONFIG_PATH";
     const PACKAGED_PYTHON_EXECUTABLE: &str = "python/python.exe";
@@ -328,11 +330,24 @@ mod windows {
     pub fn run_delivery_command(
         command: ShippingDeliveryCommand,
     ) -> Result<(), ShippingCompositionError> {
-        let (coordinator, current_executable) = delivery_process_context()?;
-        let materialization_root = delivery_materialization_root()?;
-        let guard = DeliveryActivationGuard::acquire(&materialization_root)
-            .map_err(|_| ShippingCompositionError::DeliveryHandoff)?;
+        let map_handoff_error = |error| match command {
+            ShippingDeliveryCommand::InstallStaged => {
+                ShippingCompositionError::FirstInstallation(error)
+            }
+            _ => ShippingCompositionError::DeliveryHandoff,
+        };
+        let (coordinator, current_executable) =
+            delivery_process_context().map_err(map_handoff_error)?;
+        let materialization_root = delivery_materialization_root(&coordinator)?;
+        let guard = DeliveryActivationGuard::acquire(&materialization_root).map_err(|_| {
+            map_handoff_error(
+                crate::windows_delivery_handoff::DeliveryHandoffError::ActivationGuardUnavailable,
+            )
+        })?;
         match command {
+            ShippingDeliveryCommand::InstallStaged => coordinator
+                .complete_first_installation(&guard, &current_executable)
+                .map_err(ShippingCompositionError::FirstInstallation)?,
             ShippingDeliveryCommand::ActivateStaged => coordinator
                 .start_activation(&guard, std::process::id(), &current_executable)
                 .map_err(|_| ShippingCompositionError::DeliveryHandoff)?,
@@ -345,14 +360,15 @@ mod windows {
     }
 
     fn recover_delivery_before_claim() -> Result<bool, ShippingCompositionError> {
-        let (coordinator, current_executable) = delivery_process_context()?;
+        let (coordinator, current_executable) =
+            delivery_process_context().map_err(|_| ShippingCompositionError::DeliveryHandoff)?;
         if !coordinator
             .restart_recovery_pending()
             .map_err(|_| ShippingCompositionError::DeliveryHandoff)?
         {
             return Ok(false);
         }
-        let materialization_root = delivery_materialization_root()?;
+        let materialization_root = delivery_materialization_root(&coordinator)?;
         let guard = DeliveryActivationGuard::acquire(&materialization_root)
             .map_err(|_| ShippingCompositionError::DeliveryHandoff)?;
         match coordinator
@@ -370,22 +386,33 @@ mod windows {
         }
     }
 
-    fn delivery_process_context()
-    -> Result<(DeliveryHandoffCoordinator, PathBuf), ShippingCompositionError> {
-        let current_executable =
-            env::current_exe().map_err(|_| ShippingCompositionError::DeliveryHandoff)?;
-        let coordinator = DeliveryHandoffCoordinator::from_current_executable(&current_executable)
-            .map_err(|_| ShippingCompositionError::DeliveryHandoff)?;
+    fn delivery_process_context() -> Result<
+        (DeliveryHandoffCoordinator, PathBuf),
+        crate::windows_delivery_handoff::DeliveryHandoffError,
+    > {
+        let current_executable = env::current_exe().map_err(|_| {
+            crate::windows_delivery_handoff::DeliveryHandoffError::InvalidCurrentProcess
+        })?;
+        let coordinator = DeliveryHandoffCoordinator::from_current_executable(&current_executable)?;
         Ok((coordinator, current_executable))
     }
 
-    fn delivery_materialization_root() -> Result<MaterializationRoot, ShippingCompositionError> {
-        MaterializationRoot::open_or_create(materialization_root_path()?)
+    fn delivery_materialization_root(
+        coordinator: &DeliveryHandoffCoordinator,
+    ) -> Result<MaterializationRoot, ShippingCompositionError> {
+        let path = coordinator
+            .installed_profile_root()
+            .map_err(|_| ShippingCompositionError::Configuration)?;
+        MaterializationRoot::open_or_create(path)
             .map_err(|_| ShippingCompositionError::Configuration)
     }
 
     fn materialization_root_path() -> Result<PathBuf, ShippingCompositionError> {
-        absolute_path(required_env(MATERIALIZATION_ROOT_ENV)?)
+        let (coordinator, _) =
+            delivery_process_context().map_err(|_| ShippingCompositionError::Configuration)?;
+        coordinator
+            .installed_profile_root()
+            .map_err(|_| ShippingCompositionError::Configuration)
     }
 
     fn hold_activation_guard_until_process_exit(guard: DeliveryActivationGuard) {
@@ -450,11 +477,11 @@ mod windows {
 #[cfg(test)]
 mod tests {
     use super::{
-        ConfirmedSaveTrigger, ShippingCompositionError, ShippingDeliveryCommand,
-        confirmed_save_trigger, run_after_delivery_health_start,
+        ConfirmedSaveTrigger, ShippingCompositionError, confirmed_save_trigger,
+        run_after_delivery_health_start,
     };
     #[cfg(not(windows))]
-    use super::{run_claim, run_delivery_command};
+    use super::{ShippingDeliveryCommand, run_claim, run_delivery_command};
     #[cfg(not(windows))]
     use bridge_domain::ClaimUri;
     use std::cell::Cell;

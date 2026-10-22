@@ -42,6 +42,18 @@ impl UserDiagnostic {
                 ShippingCompositionError::ControlPlane => "BRIDGE_SESSION_NOT_AUTHORIZED",
                 ShippingCompositionError::DeliveryHealth => "BRIDGE_RUNTIME_NOT_READY",
                 ShippingCompositionError::DeliveryHandoff => "BRIDGE_UPDATE_INTERRUPTED",
+                ShippingCompositionError::FirstInstallation(error) => {
+                    use crate::windows_delivery_handoff::DeliveryHandoffError as Install;
+                    match error {
+                        Install::FirstInstallationConflict => "BRIDGE_INSTALLATION_CONFLICT",
+                        Install::NoStagedTarget => "BRIDGE_INSTALLATION_NOT_PREPARED",
+                        Install::InvalidTarget
+                        | Install::InvalidInstalledLayout
+                        | Install::CurrentExecutableMismatch
+                        | Install::Staging(_) => "BRIDGE_INSTALLATION_FILES_INVALID",
+                        _ => "BRIDGE_INSTALLATION_INCOMPLETE",
+                    }
+                }
                 ShippingCompositionError::DeliveryRecoveryRequired => {
                     "BRIDGE_UPDATE_RECOVERY_REQUIRED"
                 }
@@ -112,6 +124,9 @@ impl UserDiagnostic {
             }
             Self::Launch(Launch::DeliveryHandoff | Launch::DeliveryRecoveryRequired) => {
                 "The browser component update needs recovery. Return to computer setup in the application. Do not remove local profile files."
+            }
+            Self::Launch(Launch::FirstInstallation(_)) => {
+                "Profile Bridge installation could not be completed. Return to computer setup in the application and review the diagnostic code. Keep existing profile files until recovery is confirmed."
             }
             Self::Launch(Launch::Operator) => {
                 "The profile operation did not complete. Return to the application and check session and save status. Keep local profile files until recovery is confirmed."
