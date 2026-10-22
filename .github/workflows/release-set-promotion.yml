@@ -369,11 +369,11 @@ jobs:
             echo "infra_boundary=D1_COMPATIBILITY" >&3
             exit 0
           fi
-          if ! jq -e '.schema_version == 1 and .command == "d1 compatibility" and .component == "catalog" and .mode == "read-only" and .mutation_executed == false and (.allowed | type == "boolean") and (.reason_codes | type == "array")' "$RUNNER_TEMP/catalog-d1-compatibility.json" >/dev/null; then
+          if ! jq -e '.schema_version == 2 and .command == "d1 compatibility" and .component == "catalog" and .mode == "read-only" and .mutation_executed == false and (.allowed | type == "boolean") and (.reason_codes | type == "array") and (.runtime_compatibility.compatible | type == "boolean") and (.runtime_compatibility.reason_codes | type == "array") and (.runtime_compatibility.required_steps | type == "array")' "$RUNNER_TEMP/catalog-d1-compatibility.json" >/dev/null; then
             echo "infra_boundary=D1_COMPATIBILITY" >&3
             exit 0
           fi
-          if ! jq -e '.allowed == true' "$RUNNER_TEMP/catalog-d1-compatibility.json" >/dev/null; then
+          if ! jq -e '.allowed == true and .runtime_compatibility.compatible == true' "$RUNNER_TEMP/catalog-d1-compatibility.json" >/dev/null; then
             exit 0
           fi
 

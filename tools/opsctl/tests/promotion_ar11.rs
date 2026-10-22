@@ -355,3 +355,163 @@ fn stale_expected_current_is_rejected_before_plan_creation()
     assert!(result.is_err());
     Ok(())
 }
+
+#[test]
+fn real_d1_verdict_survives_release_projection_and_terminal_promotion()
+-> Result<(), Box<dyn std::error::Error>> {
+    let root = repo_root();
+    let target = release_set()?;
+    let projection: Value = serde_json::from_str(&opsctl::d1::repository_projection(&root)?)?;
+    let catalog = projection["components"]
+        .as_array()
+        .ok_or("components missing")?
+        .iter()
+        .find(|item| item["component_id"] == "catalog")
+        .ok_or("catalog missing")?;
+    let sources = catalog["executable_migration_sources"]
+        .as_array()
+        .ok_or("migration sources missing")?;
+    let nonce = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)?
+        .as_nanos();
+    let scratch = std::env::temp_dir().join(format!(
+        "opsctl-promotion-d1-{}-{nonce}",
+        std::process::id()
+    ));
+    fs::create_dir(&scratch)?;
+    let result = (|| -> Result<(), Box<dyn std::error::Error>> {
+        let manifest = scratch.join("release.json");
+        let ledger = scratch.join("ledger.json");
+        let native_path = scratch.join("d1.json");
+        fs::write(
+            &manifest,
+            serde_json::to_vec(&json!({"schema_contract": d1_schema(&projection, "catalog")?}))?,
+        )?;
+        for (revision, expected) in [
+            ("0034_device_application_authority.sql", false),
+            ("0036_profile_generation_initialization.sql", true),
+        ] {
+            let count = sources
+                .iter()
+                .position(|source| source["migration_file"] == revision)
+                .ok_or("revision missing")?
+                + 1;
+            let rows = sources[..count]
+                .iter()
+                .map(|source| json!({"name":source["migration_file"]}))
+                .collect::<Vec<_>>();
+            fs::write(&ledger, serde_json::to_vec(&json!({"rows":rows}))?)?;
+            let output = std::process::Command::new(env!("CARGO_BIN_EXE_opsctl"))
+                .arg("--root")
+                .arg(&root)
+                .args([
+                    "d1",
+                    "compatibility",
+                    "--component",
+                    "catalog",
+                    "--ledger-json",
+                ])
+                .arg(&ledger)
+                .arg("--release-manifest")
+                .arg(&manifest)
+                .output()?;
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            fs::write(&native_path, &output.stdout)?;
+            let native: Value = serde_json::from_slice(&output.stdout)?;
+            assert_eq!(native["schema_version"], 2);
+            assert_eq!(
+                native["allowed"], true,
+                "migration preparation remains eligible"
+            );
+            assert_eq!(native["runtime_compatibility"]["compatible"], expected);
+
+            // Use the unchanged real transport/composition functions, never a rewritten policy fixture.
+            let output = std::process::Command::new("python")
+                .arg("-c").arg(r#"
+import json, runpy, sys
+from pathlib import Path
+root, native, release_id = Path(sys.argv[1]), Path(sys.argv[2]), sys.argv[3]
+adapter = runpy.run_path(str(root / 'scripts/release-compat-evidence-ar11.py'))
+terminal = runpy.run_path(str(root / 'scripts/promotion-operational-outcome-ar11.py'))
+values = terminal['fixture_inputs']()
+values['d1'] = json.loads(native.read_text(encoding='utf-8'))
+print(json.dumps({'evidence': adapter['build'](release_id, native, None, None), 'outcome': terminal['fixture_compose'](values)}))
+"#).arg(&root).arg(&native_path).arg(target.release_set_id()).output()?;
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            let composed: Value = serde_json::from_slice(&output.stdout)?;
+            let evidence =
+                CompatibilityEvidence::parse_json(&serde_json::to_string(&composed["evidence"])?)?;
+            let mut snapshot = converged_snapshot("staging", "rehearsal-core-v2", &target)?;
+            snapshot.catalog_schema_revision = Some(revision.to_owned());
+            let plan = build(PlanRequest {
+                root: &root,
+                source_root: &root,
+                target: &target,
+                target_profile_id: "rehearsal-core-v2",
+                environment: "staging",
+                snapshot: &snapshot,
+                compatibility_evidence: &evidence,
+                current_release: Some(&target),
+                expected_current_release_set_id: Some(target.release_set_id()),
+            })?;
+            let readiness = preflight(PreflightRequest {
+                root: &root,
+                source_root: &root,
+                target: &target,
+                target_profile_id: "rehearsal-core-v2",
+                environment: "staging",
+                snapshot: &snapshot,
+                compatibility_evidence: &evidence,
+                current_release: Some(&target),
+                known_good_release: Some(&target),
+                expected_current_release_set_id: Some(target.release_set_id()),
+            })?;
+            assert_eq!(readiness.ready, expected);
+            if expected {
+                assert_eq!(plan.decision, "NO_CHANGE");
+                assert_eq!(composed["outcome"]["status"], "READ_ONLY_READY");
+            } else {
+                assert_eq!(plan.decision, "BLOCKED");
+                assert!(
+                    plan.blockers
+                        .iter()
+                        .any(|code| code == "SCHEMA_INCOMPATIBLE")
+                );
+                assert_eq!(composed["outcome"]["status"], "BLOCKED");
+                assert_eq!(
+                    composed["outcome"]["owner_reason_code"],
+                    "RUNTIME_SCHEMA_MIGRATION_REQUIRED"
+                );
+                assert_eq!(composed["outcome"]["owner_diagnostic"], native);
+                assert_eq!(
+                    native["planned_migrations"],
+                    json!([
+                        "0035_pas2_payload_fingerprint_contract.sql",
+                        "0036_profile_generation_initialization.sql"
+                    ])
+                );
+                assert_eq!(
+                    native["planned_migration_contracts"][0]["rollout_order"],
+                    "SEPARATE_CONTRACT_RELEASE"
+                );
+                assert_eq!(
+                    native["planned_migration_contracts"][0]["destructive"],
+                    true
+                );
+            }
+            assert_eq!(composed["outcome"]["provider_mutation_executed"], false);
+            assert_eq!(composed["outcome"]["production_mutation_executed"], false);
+        }
+        Ok(())
+    })();
+    fs::remove_dir_all(scratch)?;
+    result
+}

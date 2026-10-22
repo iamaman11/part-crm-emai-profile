@@ -13,6 +13,7 @@ import hashlib
 import json
 import re
 import sys
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -57,7 +58,7 @@ def d1_dimension(path: Path | None, component: str) -> dict[str, str]:
         }
     value = load_json(path, f"{component} D1 compatibility output")
     if (
-        value.get("schema_version") != 1
+        value.get("schema_version") != 2
         or value.get("command") != "d1 compatibility"
         or value.get("component") != component
         or value.get("mode") != "read-only"
@@ -65,8 +66,20 @@ def d1_dimension(path: Path | None, component: str) -> dict[str, str]:
         or not isinstance(value.get("allowed"), bool)
     ):
         fail(f"{component} D1 evidence is not native opsctl compatibility output")
+    runtime = value.get("runtime_compatibility")
+    if (
+        not isinstance(runtime, dict)
+        or not isinstance(runtime.get("compatible"), bool)
+        or not isinstance(runtime.get("reason_codes"), list)
+        or any(not isinstance(reason, str) or not reason for reason in runtime["reason_codes"])
+        or not isinstance(runtime.get("required_steps"), list)
+        or any(not isinstance(step, str) or not step for step in runtime["required_steps"])
+        or (not runtime["compatible"] and not runtime["reason_codes"])
+        or (runtime["compatible"] and not value["allowed"])
+    ):
+        fail(f"{component} D1 runtime compatibility verdict is missing or invalid")
     return {
-        "decision": "COMPATIBLE" if value["allowed"] else "INCOMPATIBLE",
+        "decision": "COMPATIBLE" if runtime["compatible"] else "INCOMPATIBLE",
         "evidence_sha256": sha256_file(path),
         "policy_source": "opsctl.d1.compatibility",
     }
@@ -128,6 +141,32 @@ def self_test() -> None:
         validate_target_id(current)
     except EvidenceError as error:
         fail(f"current Release Set v3 target identity unexpectedly rejected: {error}")
+    with tempfile.TemporaryDirectory() as directory:
+        path = Path(directory) / "d1.json"
+        value = {
+            "schema_version": 2, "command": "d1 compatibility", "component": "catalog",
+            "mode": "read-only", "mutation_executed": False, "allowed": True,
+            "decision": "MIGRATION_REQUIRED",
+            "runtime_compatibility": {"compatible": False, "reason_codes": ["RUNTIME_SCHEMA_MIGRATION_REQUIRED"], "required_steps": []},
+        }
+        path.write_text(json.dumps(value), encoding="utf-8")
+        assert d1_dimension(path, "catalog")["decision"] == "INCOMPATIBLE"
+        value["runtime_compatibility"] = {"compatible": True, "reason_codes": [], "required_steps": []}
+        path.write_text(json.dumps(value), encoding="utf-8")
+        assert d1_dimension(path, "catalog")["decision"] == "COMPATIBLE"
+        for invalid in [
+            {**value, "schema_version": 1},
+            {**value, "runtime_compatibility": {}},
+            {**value, "runtime_compatibility": {"compatible": False, "reason_codes": [], "required_steps": []}},
+            {**value, "runtime_compatibility": {"compatible": True, "reason_codes": []}},
+            {**value, "allowed": False},
+        ]:
+            path.write_text(json.dumps(invalid), encoding="utf-8")
+            try:
+                d1_dimension(path, "catalog")
+            except EvidenceError:
+                continue
+            fail("old, missing or contradictory D1 runtime evidence unexpectedly accepted")
     print("AR-11 compatibility evidence v2 adapter self-test passed.")
 
 

@@ -2,6 +2,7 @@ use super::{
     ComponentAuthority, D1Action, D1Error, Decision, LedgerState, MigrationClass,
     MigrationContract, Preconditions, ReleaseSchemaContract, RolloutOrder,
 };
+use crate::d1::compatibility::runtime_compatibility;
 use crate::d1::plan::evaluate;
 use crate::d1::status::classify_prefix;
 use std::collections::HashSet;
@@ -188,6 +189,93 @@ fn historical_plan_is_visible_but_fail_closed() -> Result<(), D1Error> {
         result.reason_codes,
         vec!["HISTORICAL_COMPATIBILITY_UNKNOWN"]
     );
+    Ok(())
+}
+
+#[test]
+fn migration_eligibility_does_not_admit_an_unsupported_runtime() -> Result<(), D1Error> {
+    let authority = transition_authority(vec![
+        migration(
+            "0002_contract.sql",
+            MigrationClass::Contract,
+            RolloutOrder::SeparateContractRelease,
+            true,
+            &["old_readers_retired"],
+        ),
+        migration(
+            "0003_initialization.sql",
+            MigrationClass::Expand,
+            RolloutOrder::MigrateBeforeCode,
+            false,
+            &[],
+        ),
+    ]);
+    for (minimum, remote_count, expected) in [
+        ("0003_initialization.sql", 1, false),
+        ("0003_initialization.sql", 3, true),
+        ("0001_base.sql", 1, true),
+        ("0001_base.sql", 0, false),
+    ] {
+        let target = contract(
+            "resolver",
+            "0003_initialization.sql",
+            minimum,
+            "0003_initialization.sql",
+            "transition-history",
+        );
+        let evaluation = evaluate(
+            D1Action::Compatibility,
+            &authority,
+            &authority.ordered_history[..remote_count],
+            Some(&target),
+            None,
+            None,
+            &Preconditions::default(),
+        )?;
+        assert!(
+            evaluation.allowed,
+            "migration eligibility remains unchanged"
+        );
+        let runtime = runtime_compatibility(&authority, &target, remote_count, &evaluation)?;
+        assert_eq!(runtime.compatible, expected);
+        if !expected {
+            assert_eq!(
+                runtime.reason_codes,
+                vec!["RUNTIME_SCHEMA_MIGRATION_REQUIRED"]
+            );
+            assert_eq!(runtime.required_steps.len(), 1);
+        }
+        if remote_count == 1 {
+            assert_eq!(
+                evaluation.planned_migrations,
+                vec!["0002_contract.sql", "0003_initialization.sql"]
+            );
+            assert_eq!(
+                evaluation.planned_contracts[0].rollout_order,
+                RolloutOrder::SeparateContractRelease
+            );
+            assert!(evaluation.planned_contracts[0].destructive);
+        }
+    }
+    let target = contract(
+        "resolver",
+        "0003_initialization.sql",
+        "0001_base.sql",
+        "0003_initialization.sql",
+        "transition-history",
+    );
+    let evaluation = evaluate(
+        D1Action::Compatibility,
+        &authority,
+        &["unknown.sql".to_owned()],
+        Some(&target),
+        None,
+        None,
+        &Preconditions::default(),
+    )?;
+    let runtime = runtime_compatibility(&authority, &target, 1, &evaluation)?;
+    assert!(!evaluation.allowed && !runtime.compatible);
+    assert_eq!(runtime.reason_codes, evaluation.reason_codes);
     Ok(())
 }
 

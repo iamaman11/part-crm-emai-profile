@@ -67,8 +67,9 @@ def string_list(value: Any) -> list[str] | None:
 
 def valid_d1(value: dict[str, Any]) -> bool:
     reasons = string_list(value.get("reason_codes"))
+    runtime = value.get("runtime_compatibility")
     return (
-        value.get("schema_version") == 1
+        value.get("schema_version") == 2
         and value.get("command") == "d1 compatibility"
         and value.get("component") == "catalog"
         and value.get("mode") == "read-only"
@@ -76,6 +77,12 @@ def valid_d1(value: dict[str, Any]) -> bool:
         and isinstance(value.get("allowed"), bool)
         and reasons is not None
         and (value["allowed"] or bool(reasons))
+        and isinstance(runtime, dict)
+        and isinstance(runtime.get("compatible"), bool)
+        and string_list(runtime.get("reason_codes")) is not None
+        and (runtime["compatible"] or bool(runtime["reason_codes"]))
+        and string_list(runtime.get("required_steps")) is not None
+        and (not runtime["compatible"] or value["allowed"])
     )
 
 
@@ -269,15 +276,15 @@ def compose(
 
     if d1 is None or not valid_d1(d1):
         return infrastructure_failure(base, "D1_COMPATIBILITY", states["d1"])
-    if not d1["allowed"]:
+    if not d1["allowed"] or not d1["runtime_compatibility"]["compatible"]:
         return owner_blocked(
             base,
             phase="D1_COMPATIBILITY",
             owner="opsctl.d1.compatibility",
-            owner_contract="d1 compatibility/v1",
-            reasons=d1["reason_codes"],
+            owner_contract="d1 compatibility/v2",
+            reasons=d1["reason_codes"] if not d1["allowed"] else d1["runtime_compatibility"]["reason_codes"],
             diagnostic=d1,
-            required_actions=[],
+            required_actions=d1["runtime_compatibility"]["required_steps"],
         )
 
     if release is None or not valid_release(release):
@@ -707,13 +714,14 @@ def fixture_inputs() -> dict[str, dict[str, Any]]:
     promotion_id = "b" * 64
     return {
         "d1": {
-            "schema_version": 1,
+            "schema_version": 2,
             "command": "d1 compatibility",
             "component": "catalog",
             "mode": "read-only",
             "mutation_executed": False,
             "allowed": True,
             "reason_codes": [],
+            "runtime_compatibility": {"compatible": True, "reason_codes": [], "required_steps": []},
         },
         "release": {
             "schema_version": 2,
@@ -847,12 +855,40 @@ def self_test() -> None:
     values = {key: dict(value) for key, value in base.items()}
     values["d1"]["allowed"] = False
     values["d1"]["reason_codes"] = ["REMOTE_SCHEMA_OUTSIDE_RELEASE_WINDOW", "MIGRATION_LINEAGE_UNKNOWN"]
+    values["d1"]["runtime_compatibility"] = {"compatible": False, "reason_codes": values["d1"]["reason_codes"], "required_steps": []}
     outcome = fixture_compose(values)
     assert outcome["status"] == "BLOCKED" and outcome["phase"] == "D1_COMPATIBILITY"
     assert outcome["owner_reason_code"] == "REMOTE_SCHEMA_OUTSIDE_RELEASE_WINDOW"
     assert outcome["owner_reason_codes"] == ["REMOTE_SCHEMA_OUTSIDE_RELEASE_WINDOW", "MIGRATION_LINEAGE_UNKNOWN"]
     assert outcome["owner_required_actions"] == []
     assert_zero_effect(outcome)
+
+    # Even a green downstream preflight must not override the native D1 runtime blocker.
+    values = {key: dict(value) for key, value in base.items()}
+    values["d1"]["decision"] = "MIGRATION_REQUIRED"
+    values["d1"]["planned_migrations"] = ["0035_contract.sql", "0036_initialization.sql"]
+    values["d1"]["runtime_compatibility"] = {
+        "compatible": False,
+        "reason_codes": ["RUNTIME_SCHEMA_MIGRATION_REQUIRED"],
+        "required_steps": ["Prepare D1 convergence through its existing migration owner, then rerun read-only preflight."],
+    }
+    outcome = fixture_compose(values)
+    assert outcome["status"] == "BLOCKED" and outcome["phase"] == "D1_COMPATIBILITY"
+    assert outcome["owner_contract"] == "d1 compatibility/v2"
+    assert outcome["owner_reason_code"] == "RUNTIME_SCHEMA_MIGRATION_REQUIRED"
+    assert outcome["owner_diagnostic"] == values["d1"]
+    assert outcome["owner_required_actions"] == values["d1"]["runtime_compatibility"]["required_steps"]
+    assert_zero_effect(outcome)
+    for invalid in [
+        {**base["d1"], "schema_version": 1},
+        {**base["d1"], "runtime_compatibility": {}},
+        {**base["d1"], "runtime_compatibility": {"compatible": False, "reason_codes": [], "required_steps": []}},
+    ]:
+        values["d1"] = invalid
+        outcome = fixture_compose(values)
+        assert outcome["status"] == "INFRASTRUCTURE_FAILURE"
+        assert outcome["phase"] == "D1_COMPATIBILITY" and outcome["owner_reason_code"] is None
+        assert_zero_effect(outcome)
 
     values = {key: dict(value) for key, value in base.items()}
     values["release"]["compatible"] = False
