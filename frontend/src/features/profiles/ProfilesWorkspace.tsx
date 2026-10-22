@@ -141,8 +141,8 @@ export function ProfilesWorkspace({
           <p>The selected profile is not visible to the active actor.</p>
         )}
         {profile && <>
-          <button type="button" disabled={launch.isPending || !['DRAFT', 'READY'].includes(profile.status)} onClick={() => launch.mutate()}>{launch.isPending ? 'Opening…' : 'Open browser'}</button>
-          <StatusMessage state={launch.error ?? (launch.isPending ? 'Preparing and opening your profile…' : null)} />
+          <button type="button" disabled={launch.isPending || !['DRAFT', 'READY'].includes(profile.status)} onClick={() => launch.mutate()}>{launch.isPending ? 'Openingâ€¦' : 'Open browser'}</button>
+          <StatusMessage state={launch.error ?? (launch.isPending ? 'Preparing and opening your profileâ€¦' : null)} />
         </>}
         {profile && (
           <dl className="projection">

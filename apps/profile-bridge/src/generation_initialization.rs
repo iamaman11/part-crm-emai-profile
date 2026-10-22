@@ -106,7 +106,7 @@ fn decode<D: serde::de::DeserializeOwned>(
 }
 
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn initialize<
+pub fn initialize<
     T: MachineHttpPort,
     U: SignedGenerationObjectPutPort,
     B: RuntimeBundleSelectionPort,
@@ -127,6 +127,10 @@ where
         &ApprovedRuntimeBundle,
     ) -> Result<BrowserIdentityManifest, InitialProfileError>,
 {
+    if actor.actor_id() != &intent.actor_id || actor.tenant_scope().tenant_id() != &intent.tenant_id
+    {
+        return Err(InitialProfileError::Authorization);
+    }
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_err(|_| InitialProfileError::Authorization)?

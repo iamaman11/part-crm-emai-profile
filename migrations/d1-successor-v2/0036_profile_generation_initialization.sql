@@ -30,13 +30,17 @@ BEGIN
         WHERE member.tenant_id = NEW.tenant_id AND member.actor_id = NEW.command_actor_id
           AND member.status = 'ACTIVE' AND binding.status = 'ACTIVE'
           AND binding.device_id = NEW.initial_device_id
-          AND profile.profile_id = NEW.profile_id AND profile.status = 'DRAFT'
-          AND profile.active_generation_id IS NULL AND profile.version = NEW.initial_expected_profile_version
+          AND profile.profile_id = NEW.profile_id
           AND (member.role = 'TENANT_OWNER' OR (member.role = 'MEMBER' AND EXISTS (
               SELECT 1 FROM profile_grants AS grant
               WHERE grant.tenant_id = member.tenant_id AND grant.actor_id = member.actor_id
                 AND grant.profile_id = profile.profile_id AND grant.role = 'PROFILE_OPERATOR'
           )))
+    );
+    SELECT RAISE(ABORT, 'profile_generation_initialization_state_mismatch')
+    WHERE NEW.initial_device_id IS NOT NULL AND NOT EXISTS (
+        SELECT 1 FROM browser_profiles WHERE tenant_id = NEW.tenant_id AND profile_id = NEW.profile_id
+          AND status = 'DRAFT' AND active_generation_id IS NULL AND version = NEW.initial_expected_profile_version
     );
     SELECT RAISE(ABORT, 'profile_generation_register_profile_missing')
     WHERE NOT EXISTS (

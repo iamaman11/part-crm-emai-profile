@@ -278,23 +278,30 @@ fn application_failure(correlation_id: &str, error: ApplicationError) -> Result<
     }
 }
 
-fn invalid_request(correlation_id: &str) -> Result<Response> {
-    problem(correlation_id, 400, "invalid_request", "Invalid Request")
-}
-
 #[cfg(test)]
 mod tests {
-    use super::ProfileLaunchCommandEvidence;
+    use super::ProfileLaunchIntentProjectionV2;
 
     #[test]
-    fn launch_command_evidence_contains_no_device_selection()
+    fn browser_intent_contains_no_device_generation_or_launch_credential()
     -> Result<(), Box<dyn std::error::Error>> {
-        let value = serde_json::to_value(ProfileLaunchCommandEvidence {
-            profile_id: "profile_01JLAUNCH",
+        let value = serde_json::to_value(ProfileLaunchIntentProjectionV2 {
+            schema_version: 2,
+            launch_uri:
+                "profilebridge://open/v1/tenant_01JLAUNCH/actor_01JLAUNCH/profile_01JLAUNCH/1"
+                    .to_owned(),
         })?;
-        assert_eq!(value["profileId"], "profile_01JLAUNCH");
+        assert_eq!(value["schemaVersion"], 2);
         assert!(value.get("deviceId").is_none());
         assert!(value.get("generationId").is_none());
+        assert!(value.get("claimCode").is_none());
+        assert!(value.get("expiresAtMs").is_none());
+        assert!(
+            !value["launchUri"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("claim")
+        );
         Ok(())
     }
 }
