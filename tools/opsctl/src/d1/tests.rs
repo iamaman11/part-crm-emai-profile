@@ -2,10 +2,36 @@ use super::{
     ComponentAuthority, D1Action, D1Error, Decision, LedgerState, MigrationClass,
     MigrationContract, Preconditions, ReleaseSchemaContract, RolloutOrder,
 };
-use crate::d1::compatibility::runtime_compatibility;
-use crate::d1::plan::evaluate;
+use crate::d1::compatibility::{RuntimeSchemaContext, runtime_compatibility};
 use crate::d1::status::classify_prefix;
 use std::collections::HashSet;
+
+// Existing pure-policy fixtures use contracts bound to their own synthetic current authority.
+fn evaluate(
+    action: D1Action,
+    authority: &ComponentAuthority,
+    remote_names: &[String],
+    target: Option<&ReleaseSchemaContract>,
+    current: Option<&ReleaseSchemaContract>,
+    known_good: Option<&ReleaseSchemaContract>,
+    preconditions: &Preconditions,
+) -> Result<super::Evaluation, D1Error> {
+    let current = current
+        .map(|schema| RuntimeSchemaContext::new(authority, schema.clone()))
+        .transpose()?;
+    let known_good = known_good
+        .map(|schema| RuntimeSchemaContext::new(authority, schema.clone()))
+        .transpose()?;
+    crate::d1::plan::evaluate(
+        action,
+        authority,
+        remote_names,
+        target,
+        current.as_ref(),
+        known_good.as_ref(),
+        preconditions,
+    )
+}
 
 fn historical_authority() -> ComponentAuthority {
     ComponentAuthority {

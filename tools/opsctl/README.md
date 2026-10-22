@@ -67,6 +67,10 @@ Important distinctions:
   contracts; they reject v1 evidence rather than treating migration eligibility as deployment READY.
   Migration prepare/executor callers continue to use the unchanged migration verdict. Other D1
   command outputs remain v1.
+  Current/known-good runtime contexts have a separate typed admission: an observed Catalog manifest
+  can bind the exact canonical prefix ending at its supported maximum without being mistaken for a
+  new target. Its original digest remains unchanged. Target validation still requires full current
+  history; migration, CONTRACT and recovery decisions still belong to the existing D1 planner.
 - `release finalize` writes canonical machine output to stdout from explicit packaging observations;
   `inspect`, `verify` and `compatibility` remain local policy/artifact verification.
 - `promotion plan`, `preflight` and `verify` evaluate saved snapshots/evidence. They do not deploy,

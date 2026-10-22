@@ -43,7 +43,8 @@ mod verify;
 
 use crate::canonical::{canonical_json, sha256_hex};
 use authority::{load_preconditions, load_release_contract, load_wrangler_ledger};
-use catalog::component_authority;
+use catalog::{component_authority, observed_runtime_context};
+use compatibility::RuntimeSchemaContext;
 use contract_transition::{ContractTransitionInput, ContractTransitionVerificationInput};
 use model::{Evaluation, Preconditions, ReleaseSchemaContract};
 use plan::evaluate;
@@ -148,18 +149,16 @@ pub fn run(request: D1RunRequest<'_>) -> Result<String, D1Error> {
         request.action.requires_release_manifest(),
         request.action.name(),
     )?;
-    let current = load_optional_release(
+    let current = load_optional_runtime_context(
         request.root,
         request.current_manifest,
         request.component,
-        false,
         request.action.name(),
     )?;
-    let known_good = load_optional_release(
+    let known_good = load_optional_runtime_context(
         request.root,
         request.known_good_manifest,
         request.component,
-        false,
         request.action.name(),
     )?;
     let preconditions = match request.preconditions_json {
@@ -481,6 +480,17 @@ fn load_optional_release(
         ))),
         None => Ok(None),
     }
+}
+
+fn load_optional_runtime_context(
+    root: &Path,
+    path: Option<&Path>,
+    component: &str,
+    action: &str,
+) -> Result<Option<RuntimeSchemaContext>, D1Error> {
+    load_optional_release(root, path, component, false, action)?
+        .map(|schema| observed_runtime_context(root, component, schema))
+        .transpose()
 }
 
 fn serialize_evaluation(
