@@ -164,6 +164,7 @@ impl IdempotencyReplay {
 pub struct TenantBoundaryRow {
     pub membership_count: u64,
     pub active_owner_count: u64,
+    pub organization_count: u64,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -397,7 +398,8 @@ impl D1IdentityAclRepository {
                 COALESCE(SUM(CASE
                     WHEN role = 'TENANT_OWNER' AND status = 'ACTIVE' THEN 1
                     ELSE 0
-                END), 0) AS active_owner_count
+                END), 0) AS active_owner_count,
+                (SELECT COUNT(*) FROM tenants) AS organization_count
             FROM memberships
             WHERE tenant_id = ?
             "#,
@@ -410,6 +412,7 @@ impl D1IdentityAclRepository {
         Ok(TenantBoundaryRow {
             membership_count: non_negative_u64(row.membership_count)?,
             active_owner_count: non_negative_u64(row.active_owner_count)?,
+            organization_count: non_negative_u64(row.organization_count)?,
         })
     }
 
@@ -585,6 +588,7 @@ struct ActiveTenantContextRow {
 struct BoundaryDatabaseRow {
     membership_count: i64,
     active_owner_count: i64,
+    organization_count: i64,
 }
 
 #[derive(Deserialize)]

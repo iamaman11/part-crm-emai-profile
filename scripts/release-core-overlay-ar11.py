@@ -14,6 +14,7 @@ import json
 import os
 import re
 import sys
+import tempfile
 from pathlib import Path
 from urllib.parse import urlparse
 from typing import Any
@@ -85,6 +86,10 @@ def control_manifest(document: dict[str, Any], environment: str) -> dict[str, st
         field: bounded(candidate[field], f"control_plane.{field}")
         for field in REQUIRED_CONTROL_FIELDS
     }
+    owner = candidate.get("initial_owner_email", "")
+    if not isinstance(owner, str) or len(owner) > 254 or any(ord(ch) < 32 or ord(ch) == 127 for ch in owner):
+        fail("control_plane.initial_owner_email must be a bounded single-line string")
+    result["initial_owner_email"] = owner
     for field in (
         "worker_name",
         "d1_database_name",
@@ -183,6 +188,7 @@ def render(
         "${STAGING_CUSTOM_DOMAIN}": manifest["custom_domain"],
         "${STAGING_ACCESS_ISSUER}": manifest["access_issuer"],
         "${STAGING_ACCESS_AUDIENCE}": manifest["access_audience"],
+        "${STAGING_INITIAL_OWNER_EMAIL}": manifest["initial_owner_email"],
         "${STAGING_D1_DATABASE_NAME}": manifest["d1_database_name"],
         "${STAGING_D1_DATABASE_ID}": manifest["d1_database_id"],
         "${STAGING_R2_BUCKET_NAME}": manifest["r2_bucket_name"],
@@ -277,6 +283,44 @@ def self_test() -> None:
         pass
     else:
         fail("non-v3 Release Set target unexpectedly passed")
+
+    # Exercise the actual no-rebuild renderer so setup authorization survives the
+    # same target-config path used by canonical promotion, without provider effects.
+    manifest = {
+        "worker_name": "profile-staging", "account_id": "c" * 32,
+        "custom_domain": "staging.example.invalid",
+        "access_issuer": "https://team.cloudflareaccess.com", "access_audience": "d" * 32,
+        "d1_database_name": "catalog-staging", "d1_database_id": "11111111-1111-1111-1111-111111111111",
+        "r2_bucket_name": "profiles-staging", "integration_events_queue": "events-staging",
+    }
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        (root / "worker/worker").mkdir(parents=True)
+        (root / "worker/worker/shim.mjs").write_text("// immutable test entrypoint\n", encoding="utf-8")
+        (root / "frontend").mkdir()
+        (root / "frontend/index.html").write_text("<!doctype html>", encoding="utf-8")
+        manifest_path = root / "manifest.json"
+        previous = os.environ.get("RELEASE_SET_ID")
+        os.environ["RELEASE_SET_ID"] = release_set_id
+        try:
+            for index, contact in enumerate([None, "owner@staging.invalid"]):
+                candidate = dict(manifest)
+                if contact is not None:
+                    candidate["initial_owner_email"] = contact
+                manifest_path.write_text(json.dumps({"control_plane": candidate}), encoding="utf-8")
+                output = root / f"overlay-{index}.json"
+                render(source_config=Path(__file__).resolve().parents[1] / "deploy/cloudflare/wrangler.jsonc",
+                       release_root=root, deploy_manifest=manifest_path, environment="staging", output=output)
+                observed = json.loads(output.read_text(encoding="utf-8"))
+                if observed["env"]["staging"]["vars"]["INITIAL_OWNER_EMAIL"] != (contact or ""):
+                    fail("initial owner configuration was lost during canonical Core rendering")
+                if set(observed["env"]) != {"staging"} or "build" in observed:
+                    fail("setup configuration expanded the promotion target/build scope")
+        finally:
+            if previous is None:
+                os.environ.pop("RELEASE_SET_ID", None)
+            else:
+                os.environ["RELEASE_SET_ID"] = previous
 
     print("AR-11 Core no-rebuild overlay self-test passed.")
 

@@ -1,15 +1,19 @@
 use crate::access_session::{
     correlation_hint, membership_role, neutral_not_found, problem, resolve_active_request_actor,
-    verify_request_identity,
+    verify_human_identity, verify_request_identity,
 };
 use crate::command_evidence;
 use crate::composition::{identity_ceremony_application, identity_governance_application};
 use application_ports::identity_ceremonies::VerifiedIdentitySnapshot;
 use control_plane_contract::RouteClass;
+use control_plane_contract::public_api::OwnerBootstrapRequest;
+use identity_access_domain::lifecycle::InitialOwnerPolicy;
 use profile_platform_primitives::{
-    ActorContext, ActorId, AggregateVersion, IdentityId, InvitationId, UnixMillis,
+    ActorContext, ActorId, AggregateVersion, IdentityId, InvitationId, TenantId, TenantScope,
+    UnixMillis,
 };
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use use_cases_identity::identity_ceremonies::{
     ExecuteInvitationAcceptCommand, ExecuteOwnerBootstrapCommand, IdentityCeremonyOutcome,
     execute_invitation_accept, execute_owner_bootstrap,
@@ -19,7 +23,41 @@ use use_cases_identity::identity_governance::{
     IdentityGovernanceOperationError, IdentityMutationOutcome, authorize_identity_governance,
     execute_invitation_create, execute_membership_status, execute_owner_transfer,
 };
-use worker::{Env, Request, Response, Result};
+use worker::{Env, Error, Request, Response, Result};
+
+const INITIAL_OWNER_EMAIL_VAR: &str = "INITIAL_OWNER_EMAIL";
+
+pub(crate) fn initial_owner_policy(env: &Env) -> InitialOwnerPolicy {
+    let contact = env
+        .var(INITIAL_OWNER_EMAIL_VAR)
+        .ok()
+        .map(|value| value.to_string());
+    InitialOwnerPolicy::new(contact.as_deref())
+}
+
+fn bootstrap_identifier(kind: &str, values: &[&str]) -> String {
+    let mut hash = Sha256::new();
+    hash.update(b"part-crm:initial-organization:v1");
+    for value in core::iter::once(&kind).chain(values.iter()) {
+        hash.update(value.len().to_string().as_bytes());
+        hash.update(b":");
+        hash.update(value.as_bytes());
+    }
+    let digest: String = hash
+        .finalize()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    format!("{kind}_{digest}")
+}
+
+pub(crate) fn initial_organization_scope(env: &Env) -> Result<TenantScope> {
+    let issuer = env.var("ACCESS_ISSUER")?.to_string();
+    let audience = env.var("ACCESS_AUDIENCE")?.to_string();
+    TenantId::parse(bootstrap_identifier("tenant", &[&issuer, &audience]))
+        .map(TenantScope::new)
+        .map_err(|_| Error::RustError("initial organization identity is invalid".to_owned()))
+}
 
 pub async fn dispatch(route: RouteClass, request: &mut Request, env: &Env) -> Result<Response> {
     let path = request.path();
@@ -31,7 +69,7 @@ pub async fn dispatch(route: RouteClass, request: &mut Request, env: &Env) -> Re
     let tenant_id = segments.get(3).copied().unwrap_or_default();
 
     match route {
-        RouteClass::OwnerBootstrapApi => bootstrap_owner(request, env, tenant_id).await,
+        RouteClass::OwnerBootstrapApi => bootstrap_owner(request, env).await,
         RouteClass::OwnerTransferApi => transfer_owner(request, env, tenant_id).await,
         RouteClass::InvitationCollectionApi => create_invitation(request, env, tenant_id).await,
         RouteClass::InvitationAcceptApi => {
@@ -46,40 +84,51 @@ pub async fn dispatch(route: RouteClass, request: &mut Request, env: &Env) -> Re
     }
 }
 
-async fn bootstrap_owner(request: &mut Request, env: &Env, tenant_id: &str) -> Result<Response> {
-    let Some(verified) = verify_request_identity(request, env, Some(tenant_id)).await? else {
+async fn bootstrap_owner(request: &mut Request, env: &Env) -> Result<Response> {
+    let Some((identity, correlation)) = verify_human_identity(request, env).await? else {
         return neutral_not_found(&correlation_hint(request));
     };
-    let correlation_id = verified.correlation_id().as_str();
-    let body = match request.json::<OwnerBootstrapRequest>().await {
+    let correlation_id = correlation.as_str();
+    let policy = initial_owner_policy(env);
+    if !policy.allows(identity.contact_hint()) {
+        return neutral_not_found(correlation_id);
+    }
+    let mut body = match request.json::<OwnerBootstrapRequest>().await {
         Ok(value) => value,
         Err(_) => return invalid_request(correlation_id),
     };
-    let actor_id = match ActorId::parse(body.actor_id.clone()) {
+    body.tenant_display_name = body.tenant_display_name.trim().to_owned();
+    if body.tenant_display_name.is_empty() || body.tenant_display_name.chars().count() > 200 {
+        return invalid_request(correlation_id);
+    }
+    let scope = initial_organization_scope(env)?;
+    let actor_id = match ActorId::parse(bootstrap_identifier(
+        "actor",
+        &[scope.tenant_id().as_str(), identity.subject()],
+    )) {
         Ok(value) => value,
         Err(_) => return invalid_request(correlation_id),
     };
-    let identity_id = match IdentityId::parse(body.identity_id.clone()) {
+    let identity_id = match IdentityId::parse(bootstrap_identifier(
+        "identity",
+        &[scope.tenant_id().as_str(), identity.subject()],
+    )) {
         Ok(value) => value,
         Err(_) => return invalid_request(correlation_id),
     };
-    let evidence_actor = ActorContext::new(
-        verified.scope().clone(),
-        actor_id.clone(),
-        verified.correlation_id().clone(),
-    );
+    let evidence_actor = ActorContext::new(scope.clone(), actor_id.clone(), correlation.clone());
     let evidence = match command_evidence::from_request(request, &evidence_actor, &body) {
         Ok(value) => value,
         Err(_) => return invalid_request(correlation_id),
     };
     let snapshot = VerifiedIdentitySnapshot::new(
-        verified.identity().subject(),
-        verified.identity().contact_hint().map(str::to_owned),
+        identity.subject(),
+        identity.contact_hint().map(str::to_owned),
     );
-    let application = identity_ceremony_application(env, verified.identity().clone())?;
+    let application = identity_ceremony_application(env, identity)?;
     match execute_owner_bootstrap(
-        verified.scope().clone(),
-        verified.correlation_id().clone(),
+        scope,
+        correlation.clone(),
         snapshot,
         &application,
         ExecuteOwnerBootstrapCommand::new(
@@ -87,6 +136,7 @@ async fn bootstrap_owner(request: &mut Request, env: &Env, tenant_id: &str) -> R
             identity_id,
             body.tenant_display_name,
             evidence,
+            policy,
         ),
     )
     .await
@@ -355,14 +405,6 @@ fn ceremony_receipt(outcome: &IdentityCeremonyOutcome, status: u16) -> Result<Re
 
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct OwnerBootstrapRequest {
-    actor_id: String,
-    identity_id: String,
-    tenant_display_name: String,
-}
-
-#[derive(Deserialize, Serialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct OwnerTransferRequest {
     next_owner_actor_id: String,
     current_owner_version: u64,
@@ -395,6 +437,45 @@ struct MembershipStatusRequest {
 #[cfg(test)]
 mod tests {
     use super::{InvitationCreateRequest, MembershipStatusRequest, MutationReceipt};
+
+    #[test]
+    fn setup_identifiers_are_stable_target_bound_and_unambiguous() {
+        use super::bootstrap_identifier;
+        let target = bootstrap_identifier("tenant", &["issuer", "audience"]);
+        assert_eq!(
+            target,
+            bootstrap_identifier("tenant", &["issuer", "audience"])
+        );
+        assert_ne!(
+            target,
+            bootstrap_identifier("tenant", &["issuer", "other-audience"])
+        );
+        assert_ne!(
+            bootstrap_identifier("actor", &[&target, "subject"]),
+            bootstrap_identifier("identity", &[&target, "subject"])
+        );
+        assert_ne!(
+            bootstrap_identifier("actor", &["ab", "c"]),
+            bootstrap_identifier("actor", &["a", "bc"])
+        );
+        assert!(profile_platform_primitives::TenantId::parse(target).is_ok());
+    }
+
+    #[test]
+    fn setup_request_rejects_client_supplied_identity_or_tenant_fields() {
+        use control_plane_contract::public_api::OwnerBootstrapRequest;
+        assert!(
+            serde_json::from_str::<OwnerBootstrapRequest>(
+                r#"{"tenantDisplayName":"Organization"}"#
+            )
+            .is_ok()
+        );
+        for field in ["tenantId", "actorId", "identityId", "email", "role"] {
+            let value =
+                format!(r#"{{"tenantDisplayName":"Organization","{field}":"caller-controlled"}}"#);
+            assert!(serde_json::from_str::<OwnerBootstrapRequest>(&value).is_err());
+        }
+    }
 
     #[test]
     fn transport_models_are_strict_and_reject_legacy_request_digest()

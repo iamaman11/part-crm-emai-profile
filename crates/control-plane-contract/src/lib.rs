@@ -185,7 +185,7 @@ mod tests {
             ),
             (
                 "POST",
-                "/api/v1/tenants/tenant_01/owner/bootstrap",
+                "/api/v1/session/organization",
                 RouteClass::OwnerBootstrapApi,
             ),
             (

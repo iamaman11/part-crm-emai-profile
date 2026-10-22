@@ -2,6 +2,84 @@ use super::{Membership, MembershipRole, MembershipStatus};
 use core::fmt;
 use profile_platform_primitives::{ActorContext, ActorId, CorrelationId, TenantScope};
 
+/// Explicit deployment policy for the first owner; Access login alone is insufficient.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct InitialOwnerPolicy {
+    contact: Option<String>,
+}
+
+impl InitialOwnerPolicy {
+    #[must_use]
+    pub fn new(configured_contact: Option<&str>) -> Self {
+        Self {
+            contact: configured_contact.and_then(normalized_owner_contact),
+        }
+    }
+
+    #[must_use]
+    pub fn allows(&self, verified_contact: Option<&str>) -> bool {
+        let Some(expected) = self.contact.as_ref() else {
+            return false;
+        };
+        verified_contact
+            .and_then(normalized_owner_contact)
+            .is_some_and(|actual| &actual == expected)
+    }
+}
+
+fn normalized_owner_contact(value: &str) -> Option<String> {
+    let value = value.trim();
+    if value.is_empty()
+        || value.len() > 254
+        || !value.is_ascii()
+        || value
+            .bytes()
+            .any(|byte| byte.is_ascii_whitespace() || byte.is_ascii_control())
+    {
+        return None;
+    }
+    let (local, domain) = value.split_once('@')?;
+    if local.is_empty() || domain.is_empty() || domain.contains('@') {
+        return None;
+    }
+    Some(value.to_ascii_lowercase())
+}
+
+#[cfg(test)]
+mod initial_owner_policy_tests {
+    use super::InitialOwnerPolicy;
+
+    #[test]
+    fn initial_owner_requires_explicit_matching_verified_contact() {
+        let policy = InitialOwnerPolicy::new(Some(" Owner@Example.invalid "));
+        assert!(policy.allows(Some("owner@example.invalid")));
+        assert!(!policy.allows(Some("other@example.invalid")));
+        assert!(!policy.allows(None));
+        assert!(!policy.allows(Some("owner+other@example.invalid")));
+        assert!(!policy.allows(Some("owner@example.invalid.other")));
+    }
+
+    #[test]
+    fn missing_or_malformed_policy_and_claim_disable_setup() {
+        for contact in [
+            None,
+            Some(""),
+            Some("*"),
+            Some("owner"),
+            Some("@example.invalid"),
+            Some("owner@"),
+            Some("a@@b"),
+            Some("owner @example.invalid"),
+        ] {
+            assert!(!InitialOwnerPolicy::new(contact).allows(Some("owner@example.invalid")));
+        }
+        let policy = InitialOwnerPolicy::new(Some("owner@example.invalid"));
+        for contact in ["", "*", "owner", "owner@", "owner @example.invalid"] {
+            assert!(!policy.allows(Some(contact)));
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct TenantBoundarySummary {
     membership_count: u64,

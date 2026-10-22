@@ -89,7 +89,11 @@ impl IdentityCeremonyApplicationPort for D1IdentityCeremonyApplicationRepository
             .tenant_boundary(scope)
             .await
             .map(|boundary| {
-                TenantIdentityBoundary::new(boundary.membership_count, boundary.active_owner_count)
+                TenantIdentityBoundary::new(
+                    boundary.membership_count,
+                    boundary.active_owner_count,
+                    boundary.organization_count,
+                )
             })
             .map_err(map_identity_dependency_error)
     }
