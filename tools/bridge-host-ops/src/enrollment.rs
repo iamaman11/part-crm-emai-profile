@@ -701,7 +701,8 @@ function Convert-HexToBytes([string]$hex) {
     if ([string]::IsNullOrEmpty($hex) -or ($hex.Length % 2) -ne 0 -or $hex -notmatch '^[0-9a-f]+$') { throw 'invalid certificate hex' }
     $bytes = New-Object byte[] ($hex.Length / 2)
     for ($index = 0; $index -lt $bytes.Length; $index++) { $bytes[$index] = [Convert]::ToByte($hex.Substring($index * 2, 2), 16) }
-    return $bytes
+    # Keep byte[] as one pipeline value so X509Certificate2 selects the DER overload, not a path.
+    return ,$bytes
 }
 $keyName = 'part-crm-bridge-' + $env:BRIDGE_HOST_OPS_DEVICE_ID
 $provider = [System.Security.Cryptography.CngProvider]::MicrosoftSoftwareKeyStorageProvider
