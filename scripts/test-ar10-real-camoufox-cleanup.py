@@ -11,13 +11,17 @@ independent observation-surface failure.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import importlib.util
+import io
 import json
 import os
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
-from types import ModuleType
+from types import ModuleType, SimpleNamespace
+from unittest.mock import Mock, patch
 
 IPC_VERSION = "3"
 SESSION = "session_01JAV2CLEANUP"
@@ -217,7 +221,139 @@ def prove_immediate_relaunch_after_cleanup(
     assert_writer_quiescent(runtime, root, "post-launch EOF")
 
 
+def prove_failure_observation_contract() -> None:
+    """Cheap fault injection for the same runtime/proof owners used below with real browsers."""
+    source_root = Path(__file__).resolve().parents[1]
+    runtime = load_runtime(source_root / "runtime/camouhost/real.py")
+    proof = load_runtime(source_root / "scripts/test-ar10-real-camoufox.py")
+    timeout = type("TimeoutError", (Exception,), {})("secret-url-key-profile-content")
+    frames = [f"hello|{IPC_VERSION}", f"launch|{SESSION}", f"observe_browser_visible|{SESSION}",
+              f"admit_navigation|{SESSION}|unused", f"close|{SESSION}"]
+    for phase, failure_method, frame_count, exit_code, cleanup_failure in (
+        ("success", None, 5, 0, False),
+        ("launch", "launch_verified_context", 2, 5, False),
+        ("browser_visible", "browser_visible_observation", 3, 5, False),
+        ("navigation", "admit_navigation", 4, 5, False),
+        ("close", "close_context", 5, 6, False),
+        ("browser_visible", "browser_visible_observation", 3, 5, True),
+    ):
+        stdout = io.TextIOWrapper(io.BytesIO(), encoding="utf-8")
+        stderr = io.StringIO()
+        close = Mock(side_effect=OSError("secret-cleanup-path") if cleanup_failure else None)
+        mocks = {
+            "load_runtime_lock": Mock(return_value=({}, "0" * 64)),
+            "verify_python_components": Mock(),
+            "resolve_profile_root": Mock(return_value=source_root),
+            "firefox_writer_active": Mock(return_value=False),
+            "load_generation_config": Mock(return_value=({}, "0" * 64)),
+            "launch_verified_context": Mock(return_value=(object(), SimpleNamespace(pages=[object()]))),
+            "install_controlled_close_observation": Mock(return_value={}),
+            "browser_visible_observation": Mock(return_value={}),
+            "emit_browser_visible": Mock(),
+            "decode_navigation_target": Mock(return_value="http://127.0.0.1/"),
+            "admit_navigation": Mock(),
+            "close_context": close,
+        }
+        if failure_method is not None:
+            mocks[failure_method] = Mock(side_effect=timeout)
+        if failure_method == "close_context":
+            close = mocks[failure_method]
+        with patch.multiple(runtime, **mocks), patch.dict(os.environ, {
+            runtime.EXPECTED_PROBE_SHA256_ENV: "0" * 64,
+        }), patch.object(sys, "stdin", io.StringIO("\n".join(frames[:frame_count]) + "\n")), \
+                contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+            result = runtime.run_ipc()
+        assert result == exit_code, (phase, result)
+        if phase == "success":
+            assert stdout.buffer.getvalue().decode("ascii").splitlines()[-1] == f"closed|{SESSION}|true"
+            assert stderr.getvalue() == ""
+            close.assert_called_once()
+            continue
+        expected_failure = f"closed|{SESSION}|false" if phase == "close" else "error|runtime"
+        assert stdout.buffer.getvalue().decode("ascii").splitlines()[-1] == expected_failure
+        assert f"camouhost_failure phase={phase} category=timeout\n" in stderr.getvalue()
+        assert "secret" not in stderr.getvalue()
+        assert (close.call_count == 0) == (phase == "launch")
+        if cleanup_failure:
+            assert "camouhost_failure phase=cleanup category=io\n" in stderr.getvalue()
+
+    stderr = io.StringIO()
+    with contextlib.redirect_stderr(stderr):
+        runtime.report_runtime_failure("secret-path", runtime.RuntimeContractError("secret-key"))
+    assert stderr.getvalue() == "camouhost_failure phase=unknown category=contract\n"
+
+    # Exercise the actual cold-launch harness against a child that releases ownership on EOF.
+    # The early assertion must remain primary, with the child's exit and cleanup captured first.
+    child = """import sys
+for raw in sys.stdin:
+    if raw.startswith('hello|'):
+        print('hello_ack|3', flush=True)
+    elif raw.startswith('launch|'):
+        print('ready|session_01JAR10REALCAMOUFOX', flush=True)
+print('camouhost_failure phase=browser_visible category=timeout', file=sys.stderr, flush=True)
+print('fixture_cleanup_complete', file=sys.stderr, flush=True)
+sys.exit(5)
+"""
+    popen = subprocess.Popen
+    primary = AssertionError("original browser-visible failure")
+    spawned = []
+
+    def start_child(*_args, **kwargs):
+        process = popen([sys.executable, "-c", child], **kwargs)
+        spawned.append(process)
+        return process
+
+    with patch.object(proof, "base_env", return_value=os.environ.copy()), \
+            patch.object(proof.subprocess, "Popen", side_effect=start_child), \
+            patch.object(proof, "complete_pre_navigation_protocol", side_effect=primary):
+        try:
+            proof.run_cold_launch(source_root, {}, "http://127.0.0.1/")
+        except AssertionError as observed:
+            assert observed is primary
+            note = "\n".join(observed.__notes__)
+            assert "rc=5 cleanup=eof_exit" in note
+            assert "fixture_cleanup_complete" in note
+            assert "phase=browser_visible category=timeout" in note
+        else:
+            raise AssertionError("early runtime failure became success")
+    assert spawned[0].returncode == 5
+
+    # A child that cannot clean up remains a failure; bounded kill cannot replace its cause.
+    stuck = Mock(stdin=io.StringIO(), stdout=io.StringIO(), returncode=None)
+    stuck.poll.side_effect = lambda: stuck.returncode
+    stuck.wait.side_effect = [subprocess.TimeoutExpired("fixture", 60), -9]
+    stuck.kill.side_effect = lambda: setattr(stuck, "returncode", -9)
+    primary = AssertionError("original stuck runtime failure")
+    with patch.object(proof, "base_env", return_value={}), \
+            patch.object(proof.subprocess, "Popen", return_value=stuck), \
+            patch.object(proof, "exchange", side_effect=primary):
+        try:
+            proof.run_cold_launch(source_root, {}, "http://127.0.0.1/")
+        except AssertionError as observed:
+            assert observed is primary
+            assert "cleanup=forced_kill" in "\n".join(observed.__notes__)
+            stuck.kill.assert_called_once()
+        else:
+            raise AssertionError("forced termination became success")
+
+    primary = AssertionError("original workspace runtime failure")
+    temporary = SimpleNamespace(name=str(source_root), cleanup=Mock(side_effect=OSError("db")))
+    with patch.object(proof.tempfile, "TemporaryDirectory", return_value=temporary):
+        try:
+            with proof.cold_launch_workspace():
+                raise primary
+        except AssertionError as observed:
+            assert observed is primary
+            assert "workspace cleanup failed separately: OSError" in "\n".join(observed.__notes__)
+        else:
+            raise AssertionError("workspace cleanup replaced the original failure")
+
+
 def main() -> int:
+    prove_failure_observation_contract()
+    if sys.argv[1:] == ["--self-test"]:
+        print("Camouhost failure phase, primary outcome and bounded cleanup proof passed.")
+        return 0
     args = parse_args()
     python = require_regular(args.python, "Python runtime")
     camouhost = require_regular(args.camouhost, "Camouhost runtime")
