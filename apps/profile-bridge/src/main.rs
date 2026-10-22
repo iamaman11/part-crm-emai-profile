@@ -2,11 +2,14 @@
 
 use bridge_domain::ClaimUri;
 use profile_bridge::device_pairing::{
-    DevicePairingCompleteUri, DevicePairingStartUri, PAIRING_COMPLETE_URI_PREFIX,
-    PAIRING_START_URI_PREFIX, run_pairing_complete, run_pairing_start,
+    DevicePairingBootstrapError, DevicePairingCompleteUri, DevicePairingStartUri,
+    PAIRING_COMPLETE_URI_PREFIX, PAIRING_START_URI_PREFIX, run_pairing_complete, run_pairing_start,
 };
 use profile_bridge::shipping_composition::run_claim;
-use profile_bridge::shipping_composition::{ShippingDeliveryCommand, run_delivery_command};
+use profile_bridge::shipping_composition::{
+    ShippingCompositionError, ShippingDeliveryCommand, run_delivery_command,
+};
+use profile_bridge::user_diagnostics::UserDiagnostic;
 use profile_bridge::windows_delivery_handoff::{
     HANDOFF_ACTIVATE_ARGUMENT, HANDOFF_ARRIVAL_ARGUMENT,
 };
@@ -20,6 +23,7 @@ fn main() -> ExitCode {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
             eprintln!("{error}");
+            error.diagnostic().show_desktop();
             ExitCode::from(2)
         }
     }
@@ -30,20 +34,20 @@ where
     I: IntoIterator<Item = String>,
 {
     match parse_command(arguments)? {
-        BridgeCommand::Claim(claim) => run_claim(&claim).map_err(|_| BridgeCliError::LaunchFailed),
+        BridgeCommand::Claim(claim) => run_claim(&claim).map_err(BridgeCliError::LaunchFailed),
         BridgeCommand::PairingStart(uri) => {
-            run_pairing_start(&uri).map_err(|_| BridgeCliError::PairingFailed)
+            run_pairing_start(&uri).map_err(BridgeCliError::PairingFailed)
         }
         BridgeCommand::PairingComplete(uri) => {
-            run_pairing_complete(&uri).map_err(|_| BridgeCliError::PairingFailed)
+            run_pairing_complete(&uri).map_err(BridgeCliError::PairingFailed)
         }
         BridgeCommand::DeliveryActivateStaged => {
             run_delivery_command(ShippingDeliveryCommand::ActivateStaged)
-                .map_err(|_| BridgeCliError::DeliveryFailed)
+                .map_err(BridgeCliError::DeliveryFailed)
         }
         BridgeCommand::DeliveryHandoffArrived => {
             run_delivery_command(ShippingDeliveryCommand::HandoffArrived)
-                .map_err(|_| BridgeCliError::DeliveryFailed)
+                .map_err(BridgeCliError::DeliveryFailed)
         }
     }
 }
@@ -93,24 +97,30 @@ enum BridgeCliError {
     UnexpectedArgument,
     InvalidClaimUri,
     InvalidPairingUri,
-    LaunchFailed,
-    PairingFailed,
-    DeliveryFailed,
+    LaunchFailed(ShippingCompositionError),
+    PairingFailed(DevicePairingBootstrapError),
+    DeliveryFailed(ShippingCompositionError),
+}
+
+impl BridgeCliError {
+    const fn diagnostic(self) -> UserDiagnostic {
+        match self {
+            Self::MissingLaunchArgument => UserDiagnostic::StartFromApplication,
+            Self::UnexpectedArgument | Self::InvalidClaimUri | Self::InvalidPairingUri => {
+                UserDiagnostic::InvalidHandoff
+            }
+            Self::LaunchFailed(error) | Self::DeliveryFailed(error) => {
+                UserDiagnostic::Launch(error)
+            }
+            Self::PairingFailed(error) => UserDiagnostic::Pairing(error),
+        }
+    }
 }
 
 impl fmt::Display for BridgeCliError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(match self {
-            Self::MissingLaunchArgument => {
-                "a single Profile Bridge launch URI or delivery command is required"
-            }
-            Self::UnexpectedArgument => "unexpected additional argument",
-            Self::InvalidClaimUri => "claim URI is invalid",
-            Self::InvalidPairingUri => "device pairing URI is invalid",
-            Self::LaunchFailed => "authorized Profile Bridge launch failed closed",
-            Self::PairingFailed => "device pairing failed closed",
-            Self::DeliveryFailed => "Profile Bridge delivery handoff failed closed",
-        })
+        let diagnosis = self.diagnostic();
+        write!(formatter, "{}: {}", diagnosis.code(), diagnosis.message())
     }
 }
 
@@ -162,12 +172,9 @@ mod tests {
         let debug = format!("{complete:?}");
         assert!(!debug.contains(&pairing));
         assert!(!debug.contains(&challenge));
-        assert!(!BridgeCliError::PairingFailed.to_string().contains(&pairing));
-        assert!(
-            !BridgeCliError::PairingFailed
-                .to_string()
-                .contains(&challenge)
-        );
+        let error = BridgeCliError::PairingFailed(super::DevicePairingBootstrapError::Rejected);
+        assert!(!error.to_string().contains(&pairing));
+        assert!(!error.to_string().contains(&challenge));
         Ok(())
     }
 
@@ -221,9 +228,13 @@ mod tests {
                 .to_string()
                 .contains("secret")
         );
-        assert!(!BridgeCliError::LaunchFailed.to_string().contains("claim_"));
         assert!(
-            !BridgeCliError::DeliveryFailed
+            !BridgeCliError::LaunchFailed(super::ShippingCompositionError::Operator)
+                .to_string()
+                .contains("claim_")
+        );
+        assert!(
+            !BridgeCliError::DeliveryFailed(super::ShippingCompositionError::DeliveryHandoff)
                 .to_string()
                 .contains("claim_")
         );

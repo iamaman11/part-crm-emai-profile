@@ -149,14 +149,36 @@ impl std::error::Error for DevicePairingUriError {}
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DevicePairingBootstrapError {
     UnsupportedPlatform,
-    Failed,
+    Configuration,
+    ExistingBinding,
+    Clock,
+    ChallengeExpired,
+    DeviceKey,
+    Transport,
+    Rejected,
+    InvalidResponse,
+    BindingStorage,
+    BrowserOpen,
+    ConnectedBrowserReturn,
+    CleanupRequired,
 }
 
 impl fmt::Display for DevicePairingBootstrapError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(match self {
             Self::UnsupportedPlatform => "device pairing bootstrap requires Windows",
-            Self::Failed => "device pairing bootstrap failed closed",
+            Self::Configuration => "device pairing installation configuration is unavailable",
+            Self::ExistingBinding => "device pairing binding already exists",
+            Self::Clock => "device pairing clock is unavailable",
+            Self::ChallengeExpired => "device pairing challenge expired",
+            Self::DeviceKey => "device pairing key is unavailable",
+            Self::Transport => "device pairing service is unreachable",
+            Self::Rejected => "device pairing request was rejected",
+            Self::InvalidResponse => "device pairing response failed validation",
+            Self::BindingStorage => "device pairing binding could not be saved",
+            Self::BrowserOpen => "device pairing browser authorization could not be opened",
+            Self::ConnectedBrowserReturn => "device pairing saved but browser return failed",
+            Self::CleanupRequired => "device pairing cleanup requires attention",
         })
     }
 }
@@ -166,8 +188,7 @@ impl std::error::Error for DevicePairingBootstrapError {}
 pub fn run_pairing_start(uri: &DevicePairingStartUri) -> Result<(), DevicePairingBootstrapError> {
     #[cfg(windows)]
     {
-        return crate::windows_device_pairing::run_start(uri)
-            .map_err(|_| DevicePairingBootstrapError::Failed);
+        return crate::windows_device_pairing::run_start(uri);
     }
     #[cfg(not(windows))]
     {
@@ -181,8 +202,7 @@ pub fn run_pairing_complete(
 ) -> Result<(), DevicePairingBootstrapError> {
     #[cfg(windows)]
     {
-        return crate::windows_device_pairing::run_complete(uri)
-            .map_err(|_| DevicePairingBootstrapError::Failed);
+        return crate::windows_device_pairing::run_complete(uri);
     }
     #[cfg(not(windows))]
     {

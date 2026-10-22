@@ -1,7 +1,9 @@
 #![cfg(windows)]
 #![forbid(unsafe_code)]
 
-use crate::device_pairing::{DevicePairingCompleteUri, DevicePairingStartUri};
+use crate::device_pairing::{
+    DevicePairingBootstrapError as PairingError, DevicePairingCompleteUri, DevicePairingStartUri,
+};
 use crate::windows_device_application::WindowsDeviceApplicationBinding;
 use bridge_domain::BridgePortError;
 use control_plane_contract::device_application_api::{
@@ -57,20 +59,19 @@ struct BindingDocument<'a> {
     device_id: &'a str,
 }
 
-pub fn run_start(uri: &DevicePairingStartUri) -> Result<(), BridgePortError> {
-    let config = BootstrapConfig::from_environment()?;
+pub fn run_start(uri: &DevicePairingStartUri) -> Result<(), PairingError> {
+    let config = BootstrapConfig::from_environment().map_err(|_| PairingError::Configuration)?;
     require_binding_absent(&config.binding_path)?;
 
-    let key_name = key_name(uri.device_id())?;
-    let key =
-        PersistedP256Key::open_or_create(&key_name).map_err(|_| BridgePortError::Unavailable)?;
+    let key_name = key_name(uri.device_id()).map_err(|_| PairingError::DeviceKey)?;
+    let key = PersistedP256Key::open_or_create(&key_name).map_err(|_| PairingError::DeviceKey)?;
     key.require_non_exportable()
-        .map_err(|_| BridgePortError::InvalidResponse)?;
+        .map_err(|_| PairingError::DeviceKey)?;
     let created_key = key.disposition() == KeyDisposition::Created;
 
     let result = start_with_key(uri, &config, &key);
-    if result.is_err() && created_key {
-        let _ = key.delete();
+    if result.is_err() && created_key && key.delete().is_err() {
+        return Err(PairingError::CleanupRequired);
     }
     result
 }
@@ -79,36 +80,43 @@ fn start_with_key(
     uri: &DevicePairingStartUri,
     config: &BootstrapConfig,
     key: &PersistedP256Key,
-) -> Result<(), BridgePortError> {
+) -> Result<(), PairingError> {
     let spki = key
         .public_key_spki_der()
-        .map_err(|_| BridgePortError::Unavailable)?;
+        .map_err(|_| PairingError::DeviceKey)?;
     let public_key_hex = hex_encode(&spki);
     let request = PairingCreateRequest {
         device_id: uri.device_id().as_str(),
         public_key_spki_der_hex: &public_key_hex,
     };
-    let mut body = serde_json::to_vec(&request).map_err(|_| BridgePortError::InvalidResponse)?;
+    let mut body =
+        Zeroizing::new(serde_json::to_vec(&request).map_err(|_| PairingError::InvalidResponse)?);
     let path = tenant_path(DEVICE_PAIRING_COLLECTION_PATH_TEMPLATE, uri.tenant_id());
-    let response = post_json(&config.origin, &path, &next_correlation_id()?, &body);
+    let response = post_json(
+        &config.origin,
+        &path,
+        &next_correlation_id().map_err(|_| PairingError::Clock)?,
+        &body,
+    );
     body.zeroize();
-    let mut response = response?;
+    let mut response = response.map_err(|_| PairingError::Transport)?;
     if response.status != 201 {
         response.body.zeroize();
-        return Err(BridgePortError::InvalidResponse);
+        return Err(PairingError::Rejected);
     }
-    let projection = parse_json_response::<DevicePairingCreateProjection>(&mut response)?;
-    if !valid_lower_hex(&projection.pairing_token, OPAQUE_TOKEN_HEX_LENGTH) {
-        return Err(BridgePortError::InvalidResponse);
+    let projection = parse_json_response::<DevicePairingCreateProjection>(&mut response)
+        .map_err(|_| PairingError::InvalidResponse)?;
+    let pairing_token = Zeroizing::new(projection.pairing_token);
+    if !valid_lower_hex(&pairing_token, OPAQUE_TOKEN_HEX_LENGTH) {
+        return Err(PairingError::InvalidResponse);
     }
-    let observed_at = now()?;
+    let observed_at = now().map_err(|_| PairingError::Clock)?;
     let expires_at = UnixMillis::new(projection.expires_at_ms);
     if expires_at <= observed_at
         || expires_at.value().saturating_sub(observed_at.value()) > PAIRING_MAX_LIFETIME_MS
     {
-        return Err(BridgePortError::InvalidResponse);
+        return Err(PairingError::InvalidResponse);
     }
-    let pairing_token = Zeroizing::new(projection.pairing_token);
     let authorization_url = Zeroizing::new(format!(
         "{}/devices?tenant={}#pairing={}&device={}",
         config.origin,
@@ -116,32 +124,31 @@ fn start_with_key(
         pairing_token.as_str(),
         uri.device_id().as_str()
     ));
-    open_default_browser(authorization_url.as_str())
+    open_default_browser(authorization_url.as_str()).map_err(|_| PairingError::BrowserOpen)
 }
 
-pub fn run_complete(uri: &DevicePairingCompleteUri) -> Result<(), BridgePortError> {
-    let config = BootstrapConfig::from_environment()?;
+pub fn run_complete(uri: &DevicePairingCompleteUri) -> Result<(), PairingError> {
+    let config = BootstrapConfig::from_environment().map_err(|_| PairingError::Configuration)?;
     require_binding_absent(&config.binding_path)?;
 
-    let observed_at = now()?;
+    let observed_at = now().map_err(|_| PairingError::Clock)?;
     if uri.expires_at() <= observed_at
         || uri.expires_at().value().saturating_sub(observed_at.value()) > CHALLENGE_MAX_LIFETIME_MS
     {
-        return Err(BridgePortError::InvalidResponse);
+        return Err(PairingError::ChallengeExpired);
     }
 
-    let key_name = key_name(uri.device_id())?;
-    let key =
-        PersistedP256Key::open_or_create(&key_name).map_err(|_| BridgePortError::Unavailable)?;
+    let key_name = key_name(uri.device_id()).map_err(|_| PairingError::DeviceKey)?;
+    let key = PersistedP256Key::open_or_create(&key_name).map_err(|_| PairingError::DeviceKey)?;
     if key.disposition() == KeyDisposition::Created {
-        let _ = key.delete();
-        return Err(BridgePortError::InvalidResponse);
+        key.delete().map_err(|_| PairingError::CleanupRequired)?;
+        return Err(PairingError::DeviceKey);
     }
     key.require_non_exportable()
-        .map_err(|_| BridgePortError::InvalidResponse)?;
+        .map_err(|_| PairingError::DeviceKey)?;
 
     let nonce =
-        decode_exact_lower_hex::<32>(uri.nonce_hex()).ok_or(BridgePortError::InvalidResponse)?;
+        decode_exact_lower_hex::<32>(uri.nonce_hex()).ok_or(PairingError::InvalidResponse)?;
     let message = device_proof_message_v1(
         uri.tenant_id(),
         uri.actor_id(),
@@ -149,53 +156,61 @@ pub fn run_complete(uri: &DevicePairingCompleteUri) -> Result<(), BridgePortErro
         &nonce,
         uri.expires_at(),
     )
-    .map_err(|_| BridgePortError::InvalidResponse)?;
+    .map_err(|_| PairingError::InvalidResponse)?;
     let signature = key
         .sign_sha256_message(&message)
-        .map_err(|_| BridgePortError::Unavailable)?;
+        .map_err(|_| PairingError::DeviceKey)?;
     let signature_hex = hex_encode(&signature);
     let request = PairingCompleteRequest {
         pairing_token: uri.pairing_token_for_transport(),
         challenge_token: uri.challenge_token_for_transport(),
         signature_p1363_hex: &signature_hex,
     };
-    let mut body = serde_json::to_vec(&request).map_err(|_| BridgePortError::InvalidResponse)?;
+    let mut body =
+        Zeroizing::new(serde_json::to_vec(&request).map_err(|_| PairingError::InvalidResponse)?);
     let path = tenant_path(DEVICE_PAIRING_COMPLETION_PATH_TEMPLATE, uri.tenant_id());
-    let response = post_json(&config.origin, &path, &next_correlation_id()?, &body);
+    let response = post_json(
+        &config.origin,
+        &path,
+        &next_correlation_id().map_err(|_| PairingError::Clock)?,
+        &body,
+    );
     body.zeroize();
-    let mut response = response?;
+    let mut response = response.map_err(|_| PairingError::Transport)?;
     if response.status != 201 {
         response.body.zeroize();
-        return Err(BridgePortError::InvalidResponse);
+        return Err(PairingError::Rejected);
     }
-    let projection = parse_json_response::<DeviceApplicationSessionProjection>(&mut response)?;
+    let projection = parse_json_response::<DeviceApplicationSessionProjection>(&mut response)
+        .map_err(|_| PairingError::InvalidResponse)?;
+    let session_token = Zeroizing::new(projection.session_token);
     if projection.actor_id != uri.actor_id().as_str()
         || projection.device_id != uri.device_id().as_str()
-        || !valid_lower_hex(&projection.session_token, OPAQUE_TOKEN_HEX_LENGTH)
+        || !valid_lower_hex(&session_token, OPAQUE_TOKEN_HEX_LENGTH)
     {
-        return Err(BridgePortError::InvalidResponse);
+        return Err(PairingError::InvalidResponse);
     }
-    let session_token = Zeroizing::new(projection.session_token);
     let session_expires_at = UnixMillis::new(projection.expires_at_ms);
-    let observed_at = now()?;
+    let observed_at = now().map_err(|_| PairingError::Clock)?;
     if session_expires_at <= observed_at
         || session_expires_at
             .value()
             .saturating_sub(observed_at.value())
             > SESSION_MAX_LIFETIME_MS
     {
-        return Err(BridgePortError::InvalidResponse);
+        return Err(PairingError::InvalidResponse);
     }
     drop(session_token);
 
-    persist_binding(&config.binding_path, uri)?;
-    let binding = WindowsDeviceApplicationBinding::open(&config.binding_path)?;
+    persist_binding(&config.binding_path, uri).map_err(|_| PairingError::BindingStorage)?;
+    let binding = WindowsDeviceApplicationBinding::open(&config.binding_path)
+        .map_err(|_| PairingError::BindingStorage)?;
     if binding.tenant_id() != uri.tenant_id()
         || binding.actor_id() != uri.actor_id()
         || binding.device_id() != uri.device_id()
     {
-        let _ = fs::remove_file(&config.binding_path);
-        return Err(BridgePortError::InvalidResponse);
+        fs::remove_file(&config.binding_path).map_err(|_| PairingError::CleanupRequired)?;
+        return Err(PairingError::BindingStorage);
     }
 
     let success_url = format!(
@@ -204,8 +219,7 @@ pub fn run_complete(uri: &DevicePairingCompleteUri) -> Result<(), BridgePortErro
         uri.tenant_id().as_str(),
         uri.device_id().as_str()
     );
-    let _ = open_default_browser(&success_url);
-    Ok(())
+    open_default_browser(&success_url).map_err(|_| PairingError::ConnectedBrowserReturn)
 }
 
 struct BootstrapConfig {
@@ -323,7 +337,7 @@ fn open_default_browser(url: &str) -> Result<(), BridgePortError> {
 }
 
 fn persist_binding(path: &Path, uri: &DevicePairingCompleteUri) -> Result<(), BridgePortError> {
-    require_binding_absent(path)?;
+    require_binding_absent(path).map_err(|_| BridgePortError::Unavailable)?;
     let document = BindingDocument {
         tenant_id: uri.tenant_id().as_str(),
         actor_id: uri.actor_id().as_str(),
@@ -353,19 +367,19 @@ fn persist_binding(path: &Path, uri: &DevicePairingCompleteUri) -> Result<(), Br
     result
 }
 
-fn require_binding_absent(path: &Path) -> Result<(), BridgePortError> {
+fn require_binding_absent(path: &Path) -> Result<(), PairingError> {
     if !path.is_absolute() {
-        return Err(BridgePortError::InvalidResponse);
+        return Err(PairingError::Configuration);
     }
     match fs::symlink_metadata(path) {
-        Ok(_) => return Err(BridgePortError::InvalidResponse),
+        Ok(_) => return Err(PairingError::ExistingBinding),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-        Err(_) => return Err(BridgePortError::Unavailable),
+        Err(_) => return Err(PairingError::BindingStorage),
     }
-    let parent = path.parent().ok_or(BridgePortError::InvalidResponse)?;
-    let metadata = fs::symlink_metadata(parent).map_err(|_| BridgePortError::Unavailable)?;
+    let parent = path.parent().ok_or(PairingError::Configuration)?;
+    let metadata = fs::symlink_metadata(parent).map_err(|_| PairingError::BindingStorage)?;
     if metadata.file_type().is_symlink() || !metadata.is_dir() {
-        return Err(BridgePortError::InvalidResponse);
+        return Err(PairingError::Configuration);
     }
     Ok(())
 }
@@ -536,7 +550,7 @@ mod tests {
         parse_json_response, persist_binding, require_binding_absent, valid_direct_https_url,
         validate_https_origin,
     };
-    use crate::device_pairing::DevicePairingCompleteUri;
+    use crate::device_pairing::{DevicePairingBootstrapError, DevicePairingCompleteUri};
     use std::fs;
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicU64, Ordering};
@@ -630,10 +644,29 @@ mod tests {
         let sentinel = b"preexisting-binding-owned-elsewhere";
         fs::write(&path, sentinel)?;
 
-        assert!(require_binding_absent(&path).is_err());
+        assert_eq!(
+            require_binding_absent(&path),
+            Err(DevicePairingBootstrapError::ExistingBinding)
+        );
         assert!(persist_binding(&path, &uri).is_err());
         assert_eq!(fs::read(&path)?, sentinel);
 
+        fs::remove_dir_all(root)?;
+        Ok(())
+    }
+
+    #[test]
+    fn missing_setup_directory_is_not_reported_as_an_existing_connection()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let root = temp_root("missing-setup")?;
+        assert_eq!(
+            require_binding_absent(&root.join("missing-directory").join("binding.json")),
+            Err(DevicePairingBootstrapError::BindingStorage)
+        );
+        assert_eq!(
+            require_binding_absent(std::path::Path::new("relative-binding.json")),
+            Err(DevicePairingBootstrapError::Configuration)
+        );
         fs::remove_dir_all(root)?;
         Ok(())
     }
