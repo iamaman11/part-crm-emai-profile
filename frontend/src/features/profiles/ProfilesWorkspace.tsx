@@ -1,6 +1,6 @@
 import { openBrowserProfile } from './api';
 import { newIdempotencyKey } from '../../shared/api/idempotency';
-import { useMutation } from '@tanstack/react-query';
+import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useState, type FormEvent } from 'react';
 import { useTenant } from '../../app/TenantContext';
 import {
@@ -39,6 +39,7 @@ export function ProfilesWorkspace({
   onProfileSelected: (profileId: string) => void;
 }) {
   const { tenantId } = useTenant();
+  const cache = useQueryClient();
   const [profileId, setProfileId] = useState(selectedProfileId ?? '');
   const [profile, setProfile] = useState<ProfileProjection | null>(null);
   const [generationId, setGenerationId] = useState('');
@@ -52,6 +53,7 @@ export function ProfilesWorkspace({
   });
   const create = useLogicalCommandMutation((id: string, idempotencyKey) => createProfile(tenantId, id, idempotencyKey), {
     onSuccess: (receipt) => {
+      void cache.invalidateQueries({ queryKey: ['operator-query', tenantId, 'profiles'] });
       if (receipt?.resourceId) onProfileSelected(receipt.resourceId);
     },
   });
@@ -123,8 +125,9 @@ export function ProfilesWorkspace({
   return (
     <div className="workspace-grid">
       <section className="panel">
-        <span className="eyebrow">Visible resource lookup</span>
+        <span className="eyebrow">Browser profile</span>
         <h2>Profile</h2>
+        <details><summary>Find a profile by identifier</summary>
         <form
           className="stack-form"
           onSubmit={(event) => {
@@ -134,8 +137,9 @@ export function ProfilesWorkspace({
         >
           <label htmlFor="profile-lookup-id">Profile ID</label>
           <input id="profile-lookup-id" name="profileId" placeholder="profile_..." required disabled={!enabled} />
-          <button type="submit" disabled={!enabled || lookup.isPending}>Open profile</button>
+          <button type="submit" disabled={!enabled || lookup.isPending}>Find profile</button>
         </form>
+        </details>
         <StatusMessage state={lookup.error ?? (lookup.isPending ? 'Loading profile…' : null)} />
         {selectedProfileId && !lookup.isPending && !profile && !lookup.error && (
           <p>The selected profile is not visible to the active actor.</p>
@@ -155,9 +159,9 @@ export function ProfilesWorkspace({
       </section>
 
       <section className="panel">
-        <span className="eyebrow">Member self-service · explicit creator grant</span>
+        <span className="eyebrow">New browser profile</span>
         <h2>Create profile</h2>
-        <p>Active members may create a profile. Access is granted only to the creator; client assignment does not grant profile access.</p>
+        <p>Create a profile, then choose Open browser. The application prepares the browser state and saves changes when you close it.</p>
         <form className="stack-form" onSubmit={(event) => {
           event.preventDefault();
           create.mutate(field(new FormData(event.currentTarget), 'profileId') || `profile_${globalThis.crypto.randomUUID().replaceAll('-', '')}`);
