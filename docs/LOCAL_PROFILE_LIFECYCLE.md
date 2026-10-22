@@ -208,7 +208,7 @@ adapter does not consult Windows CA trust, mutate certificate stores or enroll a
 
 `scripts/windows-delivery-sign.ps1` is a CI-only cryptographic effect adapter, called only by the
 accepted-main protected publication job. The staging signing key is injected solely into its step,
-imported with EphemeralKeySet, never logged or written to disk; the one-year credential is persisted
+imported with EphemeralKeySet, never logged or written to disk; the six-calendar-month credential is persisted
 in Vault before GitHub binding. Missing/expired key or failed signature stops publication. No CMS
 fallback exists. Future signer rotation remains an explicit `TrustedSignerSet` operation, not an
 implicit download of new trust. This adapter grants no candidate adoption or provider deployment.

@@ -20,7 +20,8 @@ try {
         $pfx, '', [System.Security.Cryptography.X509Certificates.X509KeyStorageFlags]::EphemeralKeySet
     )
     if (-not $certificate.HasPrivateKey -or $certificate.NotBefore.ToUniversalTime() -gt [DateTime]::UtcNow -or
-        $certificate.NotAfter.ToUniversalTime() -le [DateTime]::UtcNow) { throw 'unavailable key' }
+        $certificate.NotAfter.ToUniversalTime() -le [DateTime]::UtcNow -or
+        $certificate.NotAfter.ToUniversalTime() -gt $certificate.NotBefore.ToUniversalTime().AddMonths(6)) { throw 'unavailable key' }
     $rsa = [System.Security.Cryptography.X509Certificates.RSACertificateExtensions]::GetRSAPrivateKey($certificate)
     if ($null -eq $rsa -or $rsa.KeySize -lt 3072) { throw 'invalid key' }
     $rsa.Dispose()

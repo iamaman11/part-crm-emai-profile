@@ -53,7 +53,23 @@ try {
         '-PublicMetadataPath', ('"' + "$root/missing-public.json" + '"')
     )
     if ($process.ExitCode -eq 0 -or (Test-Path "$root/missing.json")) { throw 'Missing key accepted' }
-    Write-Host 'Exact CMS signing, deterministic replay, tamper rejection and missing-key rejection proved.'
+    $tooLong = $request.CreateSelfSigned([DateTimeOffset]::UtcNow.AddMinutes(-1), [DateTimeOffset]::UtcNow.AddMonths(7))
+    try {
+        $env:PROFILE_BRIDGE_DELIVERY_PFX_BASE64 = [Convert]::ToBase64String(
+            $tooLong.Export([System.Security.Cryptography.X509Certificates.X509ContentType]::Pfx, '')
+        )
+        $process = Start-Process -FilePath (Get-Process -Id $PID).Path -WindowStyle Hidden -Wait -PassThru -ArgumentList @(
+            '-NoLogo', '-NoProfile', '-NonInteractive', '-File',
+            ('"' + "$PSScriptRoot/../scripts/windows-delivery-sign.ps1" + '"'),
+            '-ManifestPath', ('"' + $manifest + '"'), '-OutputPath', ('"' + "$root/missing.json" + '"'),
+            '-PublicMetadataPath', ('"' + "$root/missing-public.json" + '"')
+        )
+        if ($process.ExitCode -eq 0 -or (Test-Path "$root/missing.json")) { throw 'Overlong signing lifetime accepted' }
+    } finally {
+        Remove-Item Env:PROFILE_BRIDGE_DELIVERY_PFX_BASE64 -ErrorAction SilentlyContinue
+        $tooLong.Dispose()
+    }
+    Write-Host 'Exact CMS signing, deterministic replay, tamper/missing-key/overlong-lifetime rejection proved.'
 } finally {
     Remove-Item Env:PROFILE_BRIDGE_DELIVERY_PFX_BASE64 -ErrorAction SilentlyContinue
     if ($null -ne $cert) { $cert.Dispose() }
