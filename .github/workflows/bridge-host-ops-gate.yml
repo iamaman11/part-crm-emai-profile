@@ -34,15 +34,12 @@ jobs:
       - name: Show pinned toolchain
         run: rustup show active-toolchain
 
-      - name: Verify host-operations policy and secret boundary
+      - name: Verify native device-key adapter and current device policy
         run: |
           cargo fmt --manifest-path platform/windows-device-key/Cargo.toml --all -- --check
           cargo clippy --locked --manifest-path platform/windows-device-key/Cargo.toml --all-targets -- -D warnings
           cargo test --locked --manifest-path platform/windows-device-key/Cargo.toml
-          cargo fmt --manifest-path tools/bridge-host-ops/Cargo.toml --all -- --check
-          cargo clippy --locked --manifest-path tools/bridge-host-ops/Cargo.toml --all-targets -- -D warnings
-          cargo test --locked --manifest-path tools/bridge-host-ops/Cargo.toml
-          cargo run --locked --quiet --manifest-path tools/bridge-host-ops/Cargo.toml -- self-test | python -m json.tool >/dev/null
+          cargo test --locked -p device-domain
 
   windows-compile:
     name: Bridge Host Ops Windows Compile
@@ -64,15 +61,11 @@ jobs:
         shell: pwsh
         run: rustup show active-toolchain
 
-      - name: Compile and test native Windows host and CNG device PoP adapters
+      - name: Prove native Windows CNG device proof through Profile Bridge
         shell: pwsh
         run: |
           $PSNativeCommandUseErrorActionPreference = $true
           cargo fmt --manifest-path platform/windows-device-key/Cargo.toml --all -- --check
           cargo clippy --locked --manifest-path platform/windows-device-key/Cargo.toml --all-targets -- -D warnings
           cargo test --locked --manifest-path platform/windows-device-key/Cargo.toml
-          cargo fmt --manifest-path tools/bridge-host-ops/Cargo.toml --all -- --check
-          cargo clippy --locked --manifest-path tools/bridge-host-ops/Cargo.toml --all-targets -- -D warnings
-          cargo test --locked --manifest-path tools/bridge-host-ops/Cargo.toml
-          cargo build --locked --release --manifest-path tools/bridge-host-ops/Cargo.toml
-          cargo run --locked --quiet --manifest-path tools/bridge-host-ops/Cargo.toml -- self-test | ConvertFrom-Json | Out-Null
+          cargo test --locked -p profile-bridge --test windows_device_pop
