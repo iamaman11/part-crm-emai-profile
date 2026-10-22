@@ -348,12 +348,12 @@ def installer_smoke_test(bridge: Path, compiler: Path) -> None:
         # Production compilation must not silently produce an unsigned user installer.
         unsigned = subprocess.run(arguments, capture_output=True, text=True, timeout=120)
         signing_diagnostic = (unsigned.stdout + unsigned.stderr).lower()
-        if unsigned.returncode == 0 or "publisher" not in signing_diagnostic or "sign" not in signing_diagnostic:
-            fail(f"production installer did not reject missing publisher signing tool: {unsigned.stdout}\n{unsigned.stderr}")
         compiled = subprocess.run(arguments[:-1] + ["/DInstallerTestFixture=1", str(template)],
                                   capture_output=True, text=True, timeout=120)
         if compiled.returncode != 0:
             fail(f"installer fixture compiler failed: {compiled.stdout}\n{compiled.stderr}")
+        if unsigned.returncode == 0 or 'directive "signtool" is invalid' not in signing_diagnostic:
+            fail(f"production installer did not reject missing publisher signing tool: {unsigned.stdout}\n{unsigned.stderr}")
         installer = output / "UNSIGNED-CI-FIXTURE-ProfileBridgeSetup.exe"
         log = root / "setup.log"
         installation = root / "installation"

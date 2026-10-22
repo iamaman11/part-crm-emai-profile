@@ -1,4 +1,5 @@
 #![forbid(unsafe_code)]
+#![cfg_attr(windows, windows_subsystem = "windows")]
 
 use bridge_domain::ClaimUri;
 use profile_bridge::device_pairing::{
