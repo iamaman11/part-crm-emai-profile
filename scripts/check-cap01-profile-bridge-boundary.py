@@ -41,7 +41,7 @@ REQUIRED_MAIN_MARKERS = (
     "run_claim(&claim)",
     "run_delivery_command(ShippingDeliveryCommand::ActivateStaged)",
     "run_delivery_command(ShippingDeliveryCommand::HandoffArrived)",
-    "run_delivery_command(ShippingDeliveryCommand::InstallStaged)",
+    "run_delivery_command(ShippingDeliveryCommand::InstallStaged(origin))",
 )
 
 REQUIRED_COMPOSITION_MARKERS = (
@@ -265,10 +265,12 @@ def write_fixture(root: Path) -> None:
         "use profile_bridge::device_pairing::{DevicePairingCompleteUri, DevicePairingStartUri, PAIRING_COMPLETE_URI_PREFIX, PAIRING_START_URI_PREFIX, run_pairing_complete, run_pairing_start};\n"
         "use profile_bridge::shipping_composition::run_claim;\n"
         "use profile_bridge::shipping_composition::{ShippingDeliveryCommand, run_delivery_command};\n"
+        "use profile_bridge::installed_connection::ControlPlaneOrigin;\n"
         "use profile_bridge::windows_delivery_handoff::{FIRST_INSTALL_ARGUMENT, HANDOFF_ACTIVATE_ARGUMENT, HANDOFF_ARRIVAL_ARGUMENT};\n"
         "fn run(argument: String) -> Result<(), ()> {\n"
+        '    let origin = ControlPlaneOrigin::parse("https://control.example.com").map_err(|_| ())?;\n'
         "    match argument.as_str() {\n"
-        "        FIRST_INSTALL_ARGUMENT => run_delivery_command(ShippingDeliveryCommand::InstallStaged).map_err(|_| ())?,\n"
+        "        FIRST_INSTALL_ARGUMENT => run_delivery_command(ShippingDeliveryCommand::InstallStaged(origin)).map_err(|_| ())?,\n"
         "        HANDOFF_ACTIVATE_ARGUMENT => run_delivery_command(ShippingDeliveryCommand::ActivateStaged).map_err(|_| ())?,\n"
         "        HANDOFF_ARRIVAL_ARGUMENT => run_delivery_command(ShippingDeliveryCommand::HandoffArrived).map_err(|_| ())?,\n"
         "        value if value.starts_with(PAIRING_START_URI_PREFIX) => {\n"
@@ -440,7 +442,7 @@ def self_test() -> None:
 
         main.write_text(
             safe_main.replace(
-                "run_delivery_command(ShippingDeliveryCommand::InstallStaged).map_err(|_| ())?",
+                "run_delivery_command(ShippingDeliveryCommand::InstallStaged(origin)).map_err(|_| ())?",
                 "Ok(())?",
             ),
             encoding="utf-8",

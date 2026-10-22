@@ -5,6 +5,7 @@ use profile_bridge::device_pairing::{
     DevicePairingBootstrapError, DevicePairingCompleteUri, DevicePairingStartUri,
     PAIRING_COMPLETE_URI_PREFIX, PAIRING_START_URI_PREFIX, run_pairing_complete, run_pairing_start,
 };
+use profile_bridge::installed_connection::ControlPlaneOrigin;
 use profile_bridge::shipping_composition::run_claim;
 use profile_bridge::shipping_composition::{
     ShippingCompositionError, ShippingDeliveryCommand, run_delivery_command,
@@ -45,8 +46,8 @@ where
             run_delivery_command(ShippingDeliveryCommand::ActivateStaged)
                 .map_err(BridgeCliError::DeliveryFailed)
         }
-        BridgeCommand::DeliveryInstallStaged => {
-            run_delivery_command(ShippingDeliveryCommand::InstallStaged)
+        BridgeCommand::DeliveryInstallStaged(origin) => {
+            run_delivery_command(ShippingDeliveryCommand::InstallStaged(origin))
                 .map_err(BridgeCliError::DeliveryFailed)
         }
         BridgeCommand::DeliveryHandoffArrived => {
@@ -61,7 +62,7 @@ enum BridgeCommand {
     PairingStart(DevicePairingStartUri),
     PairingComplete(DevicePairingCompleteUri),
     DeliveryActivateStaged,
-    DeliveryInstallStaged,
+    DeliveryInstallStaged(ControlPlaneOrigin),
     DeliveryHandoffArrived,
 }
 
@@ -76,11 +77,21 @@ where
             .next()
             .ok_or(BridgeCliError::MissingLaunchArgument)?,
     );
+    if argument.as_str() == FIRST_INSTALL_ARGUMENT {
+        let origin = arguments
+            .next()
+            .ok_or(BridgeCliError::InvalidInstallationOrigin)?;
+        if arguments.next().is_some() {
+            return Err(BridgeCliError::UnexpectedArgument);
+        }
+        return ControlPlaneOrigin::parse(origin)
+            .map(BridgeCommand::DeliveryInstallStaged)
+            .map_err(|_| BridgeCliError::InvalidInstallationOrigin);
+    }
     if arguments.next().is_some() {
         return Err(BridgeCliError::UnexpectedArgument);
     }
     match argument.as_str() {
-        FIRST_INSTALL_ARGUMENT => Ok(BridgeCommand::DeliveryInstallStaged),
         HANDOFF_ACTIVATE_ARGUMENT => Ok(BridgeCommand::DeliveryActivateStaged),
         HANDOFF_ARRIVAL_ARGUMENT => Ok(BridgeCommand::DeliveryHandoffArrived),
         value if value.starts_with(PAIRING_START_URI_PREFIX) => DevicePairingStartUri::parse(value)
@@ -103,6 +114,7 @@ enum BridgeCliError {
     UnexpectedArgument,
     InvalidClaimUri,
     InvalidPairingUri,
+    InvalidInstallationOrigin,
     LaunchFailed(ShippingCompositionError),
     PairingFailed(DevicePairingBootstrapError),
     DeliveryFailed(ShippingCompositionError),
@@ -112,9 +124,10 @@ impl BridgeCliError {
     const fn diagnostic(self) -> UserDiagnostic {
         match self {
             Self::MissingLaunchArgument => UserDiagnostic::StartFromApplication,
-            Self::UnexpectedArgument | Self::InvalidClaimUri | Self::InvalidPairingUri => {
-                UserDiagnostic::InvalidHandoff
-            }
+            Self::UnexpectedArgument
+            | Self::InvalidClaimUri
+            | Self::InvalidPairingUri
+            | Self::InvalidInstallationOrigin => UserDiagnostic::InvalidHandoff,
             Self::LaunchFailed(error) | Self::DeliveryFailed(error) => {
                 UserDiagnostic::Launch(error)
             }
@@ -186,19 +199,43 @@ mod tests {
     }
 
     #[test]
+    fn installer_origin_is_explicit_and_cannot_be_a_handoff_uri() {
+        for origin in [
+            None,
+            Some("http://control.example.com"),
+            Some("profilebridge://claim/private_capability"),
+            Some("https://control.example.com/path"),
+        ] {
+            let mut arguments = vec![
+                "profile-bridge".to_owned(),
+                FIRST_INSTALL_ARGUMENT.to_owned(),
+            ];
+            if let Some(value) = origin {
+                arguments.push(value.to_owned());
+            }
+            assert_eq!(
+                parse_command(arguments).err(),
+                Some(BridgeCliError::InvalidInstallationOrigin)
+            );
+        }
+    }
+
+    #[test]
     fn delivery_commands_are_bounded_and_carry_no_claim() -> Result<(), Box<dyn std::error::Error>>
     {
         assert!(matches!(
             parse_command([
                 "profile-bridge".to_owned(),
-                FIRST_INSTALL_ARGUMENT.to_owned()
+                FIRST_INSTALL_ARGUMENT.to_owned(),
+                "https://control.example.com".to_owned()
             ])?,
-            BridgeCommand::DeliveryInstallStaged
+            BridgeCommand::DeliveryInstallStaged(_)
         ));
         assert_eq!(
             parse_command([
                 "profile-bridge".to_owned(),
                 FIRST_INSTALL_ARGUMENT.to_owned(),
+                "https://control.example.com".to_owned(),
                 "profilebridge://claim/claim_01JBRIDGE_FEASIBILITY".to_owned(),
             ])
             .err(),

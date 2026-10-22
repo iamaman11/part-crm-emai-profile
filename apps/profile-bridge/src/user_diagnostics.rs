@@ -54,6 +54,14 @@ impl UserDiagnostic {
                         _ => "BRIDGE_INSTALLATION_INCOMPLETE",
                     }
                 }
+                ShippingCompositionError::InstalledConnection(error) => {
+                    use crate::installed_connection::InstalledConnectionError as Connection;
+                    match error {
+                        Connection::Conflict => "BRIDGE_CONNECTION_CONFLICT",
+                        Connection::InvalidRecord => "BRIDGE_CONNECTION_INVALID",
+                        Connection::Storage | Connection::Layout(_) => "BRIDGE_SETUP_INCOMPLETE",
+                    }
+                }
                 ShippingCompositionError::DeliveryRecoveryRequired => {
                     "BRIDGE_UPDATE_RECOVERY_REQUIRED"
                 }
@@ -127,6 +135,9 @@ impl UserDiagnostic {
             }
             Self::Launch(Launch::FirstInstallation(_)) => {
                 "Profile Bridge installation could not be completed. Return to computer setup in the application and review the diagnostic code. Keep existing profile files until recovery is confirmed."
+            }
+            Self::Launch(Launch::InstalledConnection(_)) => {
+                "Profile Bridge connection settings need repair. Return to computer setup in the application. Keep existing device and profile files; setup must not silently switch the connected server."
             }
             Self::Launch(Launch::Operator) => {
                 "The profile operation did not complete. Return to the application and check session and save status. Keep local profile files until recovery is confirmed."

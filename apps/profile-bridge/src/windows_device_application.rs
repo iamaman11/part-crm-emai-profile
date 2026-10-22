@@ -200,7 +200,7 @@ impl WindowsApplicationSessionHttp {
         session: SharedSession,
     ) -> Result<Self, BridgePortError> {
         let origin = origin.into();
-        validate_https_origin(&origin)?;
+        crate::installed_connection::ControlPlaneOrigin::parse(origin.as_str())?;
         let curl_executable = system_curl_executable()?;
         require_curl_variable_support(&curl_executable)?;
         Ok(Self {
@@ -556,23 +556,6 @@ fn inherit_windows_system_root(command: &mut Command) {
     }
 }
 
-fn validate_https_origin(origin: &str) -> Result<(), BridgePortError> {
-    let host = origin
-        .strip_prefix("https://")
-        .ok_or(BridgePortError::InvalidResponse)?;
-    if host.is_empty()
-        || host.len() > 253
-        || host.contains(['/', '?', '#', '@', '\\'])
-        || host.chars().any(char::is_whitespace)
-        || !host.bytes().all(|byte| {
-            byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b':' | b'[' | b']')
-        })
-    {
-        return Err(BridgePortError::InvalidResponse);
-    }
-    Ok(())
-}
-
 fn valid_route_path(path: &str) -> bool {
     path.starts_with('/')
         && path.len() <= 512
@@ -668,10 +651,7 @@ fn validate_regular_absolute_file(
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        curl_version_supports_variables, decode_exact_lower_hex, valid_lower_hex_exact,
-        validate_https_origin,
-    };
+    use super::{curl_version_supports_variables, decode_exact_lower_hex, valid_lower_hex_exact};
 
     #[test]
     fn curl_secret_expansion_requires_version_that_supports_variables() {
@@ -685,8 +665,14 @@ mod tests {
 
     #[test]
     fn admission_transport_is_strict_about_origin_and_hex() {
-        assert!(validate_https_origin("https://control.example.com").is_ok());
-        assert!(validate_https_origin("http://control.example.com").is_err());
+        assert!(
+            crate::installed_connection::ControlPlaneOrigin::parse("https://control.example.com")
+                .is_ok()
+        );
+        assert!(
+            crate::installed_connection::ControlPlaneOrigin::parse("http://control.example.com")
+                .is_err()
+        );
         assert!(valid_lower_hex_exact(&"ab".repeat(32), 64));
         assert!(!valid_lower_hex_exact(&"AB".repeat(32), 64));
         assert!(decode_exact_lower_hex::<64>(&"ab".repeat(64)).is_some());

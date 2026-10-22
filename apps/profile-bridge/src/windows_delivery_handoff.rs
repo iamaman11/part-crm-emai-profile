@@ -221,6 +221,10 @@ pub struct DeliveryHandoffCoordinator {
 impl DeliveryHandoffCoordinator {
     /// All shipping activation and profile operations use the same installed workspace boundary.
     pub fn installed_profile_root(&self) -> Result<PathBuf, DeliveryHandoffError> {
+        Ok(self.installed_root()?.join("profiles"))
+    }
+
+    pub fn installed_root(&self) -> Result<&Path, DeliveryHandoffError> {
         let root = self
             .staging_root
             .path()
@@ -229,7 +233,7 @@ impl DeliveryHandoffCoordinator {
         if self.state_root != root.join(STATE_DIRECTORY) {
             return Err(DeliveryHandoffError::InvalidInstalledLayout);
         }
-        Ok(root.join("profiles"))
+        Ok(root)
     }
 
     #[must_use]

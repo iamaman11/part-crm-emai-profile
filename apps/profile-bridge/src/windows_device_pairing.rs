@@ -4,6 +4,7 @@
 use crate::device_pairing::{
     DevicePairingBootstrapError as PairingError, DevicePairingCompleteUri, DevicePairingStartUri,
 };
+use crate::installed_connection::InstalledConnection;
 use crate::windows_device_application::WindowsDeviceApplicationBinding;
 use bridge_domain::BridgePortError;
 use control_plane_contract::device_application_api::{
@@ -23,8 +24,6 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use windows_device_key::{KeyDisposition, PersistedP256Key};
 use zeroize::{Zeroize, Zeroizing};
 
-const DEVICE_APPLICATION_BINDING_PATH_ENV: &str = "PROFILE_BRIDGE_DEVICE_APPLICATION_BINDING_PATH";
-const CONTROL_PLANE_ORIGIN_ENV: &str = "PROFILE_BRIDGE_CONTROL_PLANE_ORIGIN";
 const MAX_CONTROL_PLANE_RESPONSE_BYTES: usize = 65_536;
 const MAX_BINDING_BYTES: u64 = 4_096;
 const CURL_CONNECT_TIMEOUT_SECONDS: &str = "10";
@@ -60,8 +59,8 @@ struct BindingDocument<'a> {
 }
 
 pub fn run_start(uri: &DevicePairingStartUri) -> Result<(), PairingError> {
-    let config = BootstrapConfig::from_environment().map_err(|_| PairingError::Configuration)?;
-    require_binding_absent(&config.binding_path)?;
+    let config = InstalledConnection::open_current().map_err(|_| PairingError::Configuration)?;
+    require_binding_absent(&config.binding_path())?;
 
     let key_name = key_name(uri.device_id()).map_err(|_| PairingError::DeviceKey)?;
     let key = PersistedP256Key::open_or_create(&key_name).map_err(|_| PairingError::DeviceKey)?;
@@ -78,7 +77,7 @@ pub fn run_start(uri: &DevicePairingStartUri) -> Result<(), PairingError> {
 
 fn start_with_key(
     uri: &DevicePairingStartUri,
-    config: &BootstrapConfig,
+    config: &InstalledConnection,
     key: &PersistedP256Key,
 ) -> Result<(), PairingError> {
     let spki = key
@@ -93,7 +92,7 @@ fn start_with_key(
         Zeroizing::new(serde_json::to_vec(&request).map_err(|_| PairingError::InvalidResponse)?);
     let path = tenant_path(DEVICE_PAIRING_COLLECTION_PATH_TEMPLATE, uri.tenant_id());
     let response = post_json(
-        &config.origin,
+        config.origin().as_str(),
         &path,
         &next_correlation_id().map_err(|_| PairingError::Clock)?,
         &body,
@@ -119,7 +118,7 @@ fn start_with_key(
     }
     let authorization_url = Zeroizing::new(format!(
         "{}/devices?tenant={}#pairing={}&device={}",
-        config.origin,
+        config.origin().as_str(),
         uri.tenant_id().as_str(),
         pairing_token.as_str(),
         uri.device_id().as_str()
@@ -128,8 +127,8 @@ fn start_with_key(
 }
 
 pub fn run_complete(uri: &DevicePairingCompleteUri) -> Result<(), PairingError> {
-    let config = BootstrapConfig::from_environment().map_err(|_| PairingError::Configuration)?;
-    require_binding_absent(&config.binding_path)?;
+    let config = InstalledConnection::open_current().map_err(|_| PairingError::Configuration)?;
+    require_binding_absent(&config.binding_path())?;
 
     let observed_at = now().map_err(|_| PairingError::Clock)?;
     if uri.expires_at() <= observed_at
@@ -170,7 +169,7 @@ pub fn run_complete(uri: &DevicePairingCompleteUri) -> Result<(), PairingError> 
         Zeroizing::new(serde_json::to_vec(&request).map_err(|_| PairingError::InvalidResponse)?);
     let path = tenant_path(DEVICE_PAIRING_COMPLETION_PATH_TEMPLATE, uri.tenant_id());
     let response = post_json(
-        &config.origin,
+        config.origin().as_str(),
         &path,
         &next_correlation_id().map_err(|_| PairingError::Clock)?,
         &body,
@@ -202,45 +201,24 @@ pub fn run_complete(uri: &DevicePairingCompleteUri) -> Result<(), PairingError> 
     }
     drop(session_token);
 
-    persist_binding(&config.binding_path, uri).map_err(|_| PairingError::BindingStorage)?;
-    let binding = WindowsDeviceApplicationBinding::open(&config.binding_path)
+    persist_binding(&config.binding_path(), uri).map_err(|_| PairingError::BindingStorage)?;
+    let binding = WindowsDeviceApplicationBinding::open(&config.binding_path())
         .map_err(|_| PairingError::BindingStorage)?;
     if binding.tenant_id() != uri.tenant_id()
         || binding.actor_id() != uri.actor_id()
         || binding.device_id() != uri.device_id()
     {
-        fs::remove_file(&config.binding_path).map_err(|_| PairingError::CleanupRequired)?;
+        fs::remove_file(config.binding_path()).map_err(|_| PairingError::CleanupRequired)?;
         return Err(PairingError::BindingStorage);
     }
 
     let success_url = format!(
         "{}/devices?tenant={}#connected={}",
-        config.origin,
+        config.origin().as_str(),
         uri.tenant_id().as_str(),
         uri.device_id().as_str()
     );
     open_default_browser(&success_url).map_err(|_| PairingError::ConnectedBrowserReturn)
-}
-
-struct BootstrapConfig {
-    binding_path: PathBuf,
-    origin: String,
-}
-
-impl BootstrapConfig {
-    fn from_environment() -> Result<Self, BridgePortError> {
-        let binding_path = env::var_os(DEVICE_APPLICATION_BINDING_PATH_ENV)
-            .map(PathBuf::from)
-            .filter(|path| path.is_absolute())
-            .ok_or(BridgePortError::InvalidResponse)?;
-        let origin =
-            env::var(CONTROL_PLANE_ORIGIN_ENV).map_err(|_| BridgePortError::Unavailable)?;
-        validate_https_origin(&origin)?;
-        Ok(Self {
-            binding_path,
-            origin,
-        })
-    }
 }
 
 struct HttpResponse {
@@ -435,23 +413,6 @@ fn inherit_windows_system_root(command: &mut Command) {
     }
 }
 
-fn validate_https_origin(origin: &str) -> Result<(), BridgePortError> {
-    let host = origin
-        .strip_prefix("https://")
-        .ok_or(BridgePortError::InvalidResponse)?;
-    if host.is_empty()
-        || host.len() > 253
-        || host.contains(['/', '?', '#', '@', '\\'])
-        || host.chars().any(char::is_whitespace)
-        || !host.bytes().all(|byte| {
-            byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b':' | b'[' | b']')
-        })
-    {
-        return Err(BridgePortError::InvalidResponse);
-    }
-    Ok(())
-}
-
 fn valid_route_path(path: &str) -> bool {
     path.starts_with('/')
         && path.len() <= 512
@@ -548,7 +509,6 @@ mod tests {
     use super::{
         DevicePairingCreateProjection, HttpResponse, WindowsDeviceApplicationBinding,
         parse_json_response, persist_binding, require_binding_absent, valid_direct_https_url,
-        validate_https_origin,
     };
     use crate::device_pairing::{DevicePairingBootstrapError, DevicePairingCompleteUri};
     use std::fs;
@@ -583,8 +543,14 @@ mod tests {
 
     #[test]
     fn pairing_browser_urls_require_direct_https() {
-        assert!(validate_https_origin("https://control.example.com").is_ok());
-        assert!(validate_https_origin("http://control.example.com").is_err());
+        assert!(
+            crate::installed_connection::ControlPlaneOrigin::parse("https://control.example.com")
+                .is_ok()
+        );
+        assert!(
+            crate::installed_connection::ControlPlaneOrigin::parse("http://control.example.com")
+                .is_err()
+        );
         assert!(valid_direct_https_url(
             "https://control.example.com/devices?tenant=tenant_01JPAIR#connected=device_01JPAIR"
         ));
