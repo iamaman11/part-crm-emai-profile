@@ -1127,6 +1127,24 @@ def valid_frame(raw: str) -> bool:
     )
 
 
+def report_runtime_failure(phase: str, error: BaseException) -> None:
+    """Report only closed diagnostic categories; exception text may contain profile data."""
+    if phase not in {"launch", "browser_visible", "navigation", "close", "cleanup"}:
+        phase = "unknown"
+    if isinstance(error, RuntimeContractError):
+        category = "contract"
+    elif isinstance(error, TimeoutError) or type(error).__name__ == "TimeoutError":
+        # Playwright's TimeoutError is not the builtin TimeoutError.
+        category = "timeout"
+    elif isinstance(error, OSError):
+        category = "io"
+    elif type(error).__name__ == "TargetClosedError":
+        category = "browser_closed"
+    else:
+        category = "unexpected"
+    print(f"camouhost_failure phase={phase} category={category}", file=sys.stderr, flush=True)
+
+
 def run_ipc() -> int:
     try:
         lock, _ = load_runtime_lock()
@@ -1172,7 +1190,8 @@ def run_ipc() -> int:
                 try:
                     manager, context = launch_verified_context(lock, root, config, expected_probe)
                     close_observation = install_controlled_close_observation(context)
-                except BaseException:
+                except BaseException as error:
+                    report_runtime_failure("launch", error)
                     emit("error|runtime")
                     return 5
                 active_session = parts[1]
@@ -1192,7 +1211,8 @@ def run_ipc() -> int:
                 try:
                     page = context.pages[0] if context.pages else context.new_page()
                     payload = browser_visible_observation(page, config)
-                except BaseException:
+                except BaseException as error:
+                    report_runtime_failure("browser_visible", error)
                     emit("error|runtime")
                     return 5
                 browser_visible_observed = True
@@ -1212,7 +1232,8 @@ def run_ipc() -> int:
                 try:
                     target = decode_navigation_target(parts[2])
                     admit_navigation(context, target)
-                except BaseException:
+                except BaseException as error:
+                    report_runtime_failure("navigation", error)
                     emit("error|runtime")
                     return 5
                 navigation_admitted = True
@@ -1243,7 +1264,8 @@ def run_ipc() -> int:
             ):
                 try:
                     close_context(manager, context, root)
-                except BaseException:
+                except BaseException as error:
+                    report_runtime_failure("close", error)
                     emit(f"closed|{active_session}|false")
                     return 6
                 manager = None
@@ -1257,8 +1279,10 @@ def run_ipc() -> int:
         return 3 if negotiated or active_session is not None else 0
     finally:
         if manager is not None and context is not None:
-            with contextlib.suppress(BaseException):
+            try:
                 close_context(manager, context, root)
+            except BaseException as error:
+                report_runtime_failure("cleanup", error)
 
 
 def main() -> int:

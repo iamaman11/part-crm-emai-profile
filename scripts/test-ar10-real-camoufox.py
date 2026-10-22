@@ -8,6 +8,7 @@ hosts remain external evidence.
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import os
@@ -18,6 +19,7 @@ import tempfile
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from typing import BinaryIO, Iterator
 
 ROOT = Path(__file__).resolve().parents[1]
 CAMOUHOST = ROOT / "runtime/camouhost/real.py"
@@ -334,16 +336,27 @@ def prove_managed_environment_boundary(base: Path) -> None:
 
 
 def run_cold_launch(root: Path, report: dict[str, str], url: str) -> None:
+    # A file avoids a full stderr pipe blocking runtime-owned browser cleanup. Read only
+    # a bounded tail after process exit; do not block on stderr while the child is alive.
+    with tempfile.TemporaryFile() as diagnostics:
+        run_cold_launch_observed(root, report, url, diagnostics)
+
+
+def run_cold_launch_observed(
+    root: Path, report: dict[str, str], url: str, diagnostics: BinaryIO
+) -> None:
     process = subprocess.Popen(
         [sys.executable, str(CAMOUHOST)],
         cwd=ROOT,
         env=base_env(root, report),
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        stderr=diagnostics,
         text=True,
         bufsize=1,
     )
+    primary = None
+    cleanup = "normal_exit"
     try:
         assert exchange(process, f"hello|{IPC_VERSION}") == f"hello_ack|{IPC_VERSION}"
         assert exchange(process, f"launch|{SESSION}") == f"ready|{SESSION}"
@@ -351,12 +364,63 @@ def run_cold_launch(root: Path, report: dict[str, str], url: str) -> None:
         assert exchange(process, f"close|{SESSION}") == f"closed|{SESSION}|true"
         returncode = process.wait(timeout=60)
         if returncode != 0:
-            stderr = process.stderr.read()[-2000:] if process.stderr is not None else ""
-            raise AssertionError(f"Camouhost clean close returned {returncode}: {stderr}")
+            raise AssertionError(f"Camouhost clean close returned {returncode}")
+    except BaseException as error:
+        primary = error
     finally:
         if process.poll() is None:
-            process.kill()
-            process.wait(timeout=30)
+            # EOF lets run_ipc finish its finally block even before navigation admission.
+            # Sending `close` here is invalid in some of the failed protocol states.
+            cleanup = "eof_exit"
+            try:
+                if process.stdin is not None:
+                    process.stdin.close()
+            except (BrokenPipeError, OSError):
+                pass
+            try:
+                process.wait(timeout=60)
+            except subprocess.TimeoutExpired:
+                cleanup = "forced_kill"
+                try:
+                    process.kill()
+                    process.wait(timeout=30)
+                except (OSError, subprocess.TimeoutExpired):
+                    cleanup = "forced_kill_failed"
+        for pipe in (process.stdin, process.stdout):
+            if pipe is not None:
+                try:
+                    pipe.close()
+                except OSError:
+                    cleanup += "_pipe_close_failed"
+        try:
+            diagnostics.flush()
+            diagnostics.seek(0, os.SEEK_END)
+            diagnostics.seek(max(0, diagnostics.tell() - 4096))
+            tail = diagnostics.read().decode("utf-8", errors="replace")
+        except OSError:
+            tail = "diagnostic_capture_failed"
+            cleanup += "_diagnostic_capture_failed"
+        evidence = f"Camouhost rc={process.poll()} cleanup={cleanup}; stderr_tail={tail!r}"
+    if primary is not None:
+        primary.add_note(evidence)
+        raise primary
+    if cleanup != "normal_exit":
+        raise AssertionError(evidence)
+
+
+@contextlib.contextmanager
+def cold_launch_workspace() -> Iterator[Path]:
+    temporary = tempfile.TemporaryDirectory(prefix="ar10-real-camoufox-")
+    try:
+        yield Path(temporary.name)
+    except BaseException as primary:
+        try:
+            temporary.cleanup()
+        except OSError as cleanup:
+            primary.add_note(f"Camoufox workspace cleanup failed separately: {type(cleanup).__name__}")
+        raise
+    else:
+        temporary.cleanup()
 
 
 def expect_prelaunch_identity_rejection(root: Path, report: dict[str, str]) -> None:
@@ -413,8 +477,7 @@ def main() -> int:
     thread.start()
     url = f"http://127.0.0.1:{server.server_address[1]}/"
     try:
-        with tempfile.TemporaryDirectory(prefix="ar10-real-camoufox-") as temporary:
-            base = Path(temporary)
+        with cold_launch_workspace() as base:
             expect_materialization_requires_bridge_lock(base / "generation-unowned")
             first_root = base / "generation-a"
             second_root = base / "generation-b"
