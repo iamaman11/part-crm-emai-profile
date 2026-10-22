@@ -6,6 +6,7 @@ import {
   authorizeDevicePairing,
   getAuthenticatedDevicePairingSession,
   getDeviceRegistration,
+  getDeviceInstaller,
 } from './api';
 import { DevicePairingPanel } from './DevicePairingPanel';
 
@@ -13,6 +14,7 @@ vi.mock('./api', () => ({
   authorizeDevicePairing: vi.fn(),
   getAuthenticatedDevicePairingSession: vi.fn(),
   getDeviceRegistration: vi.fn(),
+  getDeviceInstaller: vi.fn(),
 }));
 
 const mockedAuthorizeDevicePairing = vi.mocked(authorizeDevicePairing);
@@ -53,7 +55,28 @@ function authenticatedSession() {
 describe('DevicePairingPanel', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    const releaseSetId = `release-set-v3-sha256-${'a'.repeat(64)}`;
+    vi.mocked(getDeviceInstaller).mockResolvedValue({
+      schemaVersion: 1, releaseSetId,
+      downloadUrl: `https://github.com/iamaman11/part-crm-emai-profile/releases/download/${releaseSetId}/ProfileBridgeSetup.exe`,
+    });
     window.history.replaceState(null, '', '/devices?tenant=tenant_01JTEST');
+  });
+
+  it('offers the exact deployed installer and keeps installation distinct from registration', async () => {
+    renderPanel();
+    const link = await screen.findByRole('link', { name: 'Install for Windows' });
+    expect(link.getAttribute('href')).toContain(`release-set-v3-sha256-${'a'.repeat(64)}/ProfileBridgeSetup.exe`);
+    expect(screen.queryByText('Device registration confirmed')).toBeNull();
+    expect(mockedGetDeviceRegistration).not.toHaveBeenCalled();
+  });
+
+  it('offers retry without an installer link when metadata is unavailable', async () => {
+    vi.mocked(getDeviceInstaller).mockRejectedValue(new Error('Installer unavailable'));
+    renderPanel();
+    expect(await screen.findByRole('button', { name: 'Try loading installer again' })).toBeTruthy();
+    expect(screen.queryByRole('link', { name: 'Install for Windows' })).toBeNull();
+    expect(await screen.findByRole('link', { name: 'Connect this computer' })).toBeTruthy();
   });
 
   it('starts pairing with only safe tenant and browser-generated device identity', async () => {

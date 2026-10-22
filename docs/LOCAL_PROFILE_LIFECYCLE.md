@@ -185,3 +185,42 @@ Repository and protected CI prove the boundary at multiple tiers:
 These are repository/candidate proofs. Trusted installer/signing/distribution/updater/rollback and exact
 environment authorization remain separately owned later release stages; their absence may not be hidden
 by claiming repository tests are Production evidence.
+
+## Windows first installation and delivery integrity
+
+The existing Release Set Build is the sole publication owner. Assembly emits the exact eight
+aggregate inputs; its final Windows job adds detached CMS and `ProfileBridgeSetup.exe` **before**
+publishing the complete ten-asset immutable release. Heavy runtime components are reused by exact
+content identity. Partial installer/signature pairs fail materialization; historical deployed
+aggregates remain readable for known-good evidence without being upgraded to installer proof.
+
+For initial staging installations the OS installer is intentionally unsigned. The user accepted
+possible Windows warning/blocking; no paid subscription, certificate/root-store import, certificate
+user enrollment or security-setting override is part of the path. Initial bootstrap authenticity
+comes from the canonical HTTPS application and protected GitHub immutable publication. This does
+not provide Windows verified-publisher identity or promise installation on every Windows policy.
+
+Application delivery integrity remains mandatory: exact manifest bytes, one CMS SHA-256 signature,
+exact pinned certificate and Rust `TrustedSignerSet` admission/rotation/revocation, sequence/replay
+floors, checked component digests, archive admission and guarded activation. This application key
+is separate from the user's non-exportable CNG device key and Cloudflare human identity. The CMS
+adapter does not consult Windows CA trust, mutate certificate stores or enroll a machine certificate.
+
+`scripts/windows-delivery-sign.ps1` is a CI-only cryptographic effect adapter, called only by the
+accepted-main protected publication job. The staging signing key is injected solely into its step,
+imported with EphemeralKeySet, never logged or written to disk; the one-year credential is persisted
+in Vault before GitHub binding. Missing/expired key or failed signature stops publication. No CMS
+fallback exists. Future signer rotation remains an explicit `TrustedSignerSet` operation, not an
+implicit download of new trust. This adapter grants no candidate adoption or provider deployment.
+
+`scripts/windows-delivery-publication.py` remains a deterministic renderer/transport adapter. Its
+installer-component consumer checks the exact Release Set archive size/hash, closed two-file ZIP
+inventory and component-manifest source/digest before extracting the bounded executable. Filesystem
+and child-process effects belong only to rendering and isolated synthetic compiler/native proofs;
+there is no network, credential, runtime-policy or provider mutation authority. Native delivery
+owners still decide admission. These are durable consumers, not a transitional parallel installer.
+
+Local/hosted tests prove real pinned CMS acceptance and tamper/unknown-key/unsigned rejection,
+repeatable signing, production wizard compilation without an OS signing service and native rejection
+before registry/installation effects. They do not substitute for clean-Windows hosted B7 installation,
+connection, first generation, launch, save and reopen.

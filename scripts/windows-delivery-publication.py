@@ -21,6 +21,7 @@ import re
 import shutil
 import subprocess
 import tempfile
+import zipfile
 from pathlib import Path
 from typing import Any, Callable
 
@@ -273,7 +274,8 @@ def render_installer_source(
 ) -> None:
     """Render build inputs, not an admission verdict. Native Bridge verifies the signed delivery.
 
-    The bootstrap trust anchor and origin must be inside the publisher-signed installer payload.
+    The bootstrap trust anchor and origin are embedded in the exact immutable installer payload.
+    Initial authenticity comes from the canonical HTTPS app and protected Release Set publication.
     They are never downloaded as mutable policy or accepted from a custom-protocol URL.
     """
     manifest, manifest_bytes = load_json(manifest_path, "Windows delivery manifest", 1024 * 1024)
@@ -300,6 +302,32 @@ def render_installer_source(
         f'#define ControlPlaneOrigin "{origin}"\n'
     ).encode("utf-8"))
     shutil.copyfile(bridge_path, output / "profile-bridge.exe")
+
+
+def extract_installer_bridge(release_set_path: Path, bridge_archive: Path, output: Path) -> None:
+    """Transport adapter: extract only the exact accepted Release Set Bridge executable."""
+    release, _ = load_json(release_set_path, "Release Set", MAX_RELEASE_SET_BYTES)
+    component = object_field(object_field(release, "components", "Release Set"), "profile_bridge", "components")
+    if bridge_archive.is_symlink() or not bridge_archive.is_file():
+        fail("Bridge archive must be a regular file")
+    raw = bridge_archive.read_bytes()
+    if (len(raw) != component.get("artifact_size_bytes")
+            or sha256_bytes(raw) != component.get("artifact_sha256")):
+        fail("Bridge archive does not match the exact Release Set")
+    with zipfile.ZipFile(bridge_archive) as archive:
+        if sorted(archive.namelist()) != ["profile-bridge-manifest.json", "profile-bridge.exe"]:
+            fail("Bridge archive inventory mismatch")
+        metadata_raw = archive.read("profile-bridge-manifest.json")
+        if sha256_bytes(metadata_raw) != component.get("component_manifest_sha256"):
+            fail("Bridge component manifest digest mismatch")
+        metadata = json.loads(metadata_raw)
+        if (metadata.get("source_commit_sha") != release.get("source", {}).get("commit_sha")
+                or metadata.get("release_id") != component.get("release_id")):
+            fail("Bridge component source or release mismatch")
+        executable = archive.getinfo("profile-bridge.exe")
+        if executable.file_size <= 0 or executable.file_size > 128 * 1024 * 1024:
+            fail("Bridge executable size is invalid")
+        write_new(output, archive.read(executable))
 
 
 def expect_failure(action: Callable[[], None], marker: str) -> None:
@@ -345,15 +373,14 @@ def installer_smoke_test(bridge: Path, compiler: Path) -> None:
         output = root / "output"
         arguments = [str(compiler), "/Qp", f"/DInstallerInputDirectory={source}",
                      f"/DInstallerOutputDirectory={output}", str(template)]
-        # Production compilation must not silently produce an unsigned user installer.
+        # Both ordinary and fixture wizards must compile without an OS publisher subscription.
         unsigned = subprocess.run(arguments, capture_output=True, text=True, timeout=120)
-        signing_diagnostic = (unsigned.stdout + unsigned.stderr).lower()
         compiled = subprocess.run(arguments[:-1] + ["/DInstallerTestFixture=1", str(template)],
                                   capture_output=True, text=True, timeout=120)
         if compiled.returncode != 0:
             fail(f"installer fixture compiler failed: {compiled.stdout}\n{compiled.stderr}")
-        if unsigned.returncode == 0 or 'directive "signtool" is invalid' not in signing_diagnostic:
-            fail(f"production installer did not reject missing publisher signing tool: {unsigned.stdout}\n{unsigned.stderr}")
+        if unsigned.returncode != 0 or not (output / "ProfileBridgeSetup.exe").is_file():
+            fail(f"ordinary installer compilation failed: {unsigned.stdout}\n{unsigned.stderr}")
         installer = output / "UNSIGNED-CI-FIXTURE-ProfileBridgeSetup.exe"
         log = root / "setup.log"
         installation = root / "installation"
@@ -368,7 +395,7 @@ def installer_smoke_test(bridge: Path, compiler: Path) -> None:
         if ((installation / "connection.json").exists()
                 or any((installation / "releases").iterdir())):
             fail("rejected installer published settings or staged a candidate")
-    print("Actual Windows installer compiled; missing signing configuration and native CMS rejection proved.")
+    print("Actual Windows installer compiled; subscription-free compilation and native CMS rejection proved.")
 
 
 def self_test() -> None:
@@ -521,6 +548,10 @@ def parser() -> argparse.ArgumentParser:
     installer.add_argument("--signer-key-id", required=True)
     installer.add_argument("--certificate-sha256", required=True)
     installer.add_argument("--output", type=Path, required=True)
+    component = commands.add_parser("installer-component")
+    component.add_argument("--release-set", type=Path, required=True)
+    component.add_argument("--bridge-archive", type=Path, required=True)
+    component.add_argument("--output", type=Path, required=True)
     smoke = commands.add_parser("installer-smoke-test")
     smoke.add_argument("--bridge", type=Path, required=True)
     smoke.add_argument("--compiler", type=Path, required=True)
@@ -548,6 +579,8 @@ def main() -> int:
                 origin=args.origin, signer_key_id=args.signer_key_id,
                 certificate_sha256=args.certificate_sha256, output=args.output,
             )
+        elif args.command == "installer-component":
+            extract_installer_bridge(args.release_set, args.bridge_archive, args.output)
         elif args.command == "installer-smoke-test":
             installer_smoke_test(args.bridge.resolve(), args.compiler.resolve())
         else:

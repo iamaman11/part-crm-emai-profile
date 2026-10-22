@@ -96,11 +96,20 @@ read correspondence.
 
 ### First Run
 
-1. Owner входит через Cloudflare Access approved IdP или email OTP.
-2. UI проверяет наличие Profile Bridge.
-3. Guided flow скачивает signed installer и enroll-ит device.
-4. Doctor показывает Bridge/runtime/network readiness без раскрытия fingerprint
-   secrets.
+1. Пользователь входит через Cloudflare Access approved IdP или email OTP и выбирает организацию.
+2. На новом Windows открывает в приложении `Devices` → `Install for Windows`.
+   Единственный active-membership-protected read возвращает ссылку на установщик **развёрнутого**
+   Release Set из уже проверенного target authorization observation; отсутствующее наблюдение — отказ,
+   без fallback на `latest` или новый `main`. Первые установщики предназначены только для staging.
+3. Существующий per-user мастер устанавливает Bridge и проверенный browser runtime, регистрирует
+   `profilebridge://` и возвращает в приложение. Начальный установщик не имеет подтверждённого
+   Windows-издателя: возможны предупреждение или блокировка ОС. Пользователь не импортирует
+   сертификаты, не меняет настройки безопасности и не запускает отдельные команды.
+4. `Connect this computer` запускает существующий CNG pairing. Cloudflare подтверждает человека,
+   backend проверяет proof владения локальным ключом и подтверждает ACTIVE регистрацию.
+   Установка и browser callback сами по себе не означают регистрацию или runtime readiness.
+5. Следующие открытия используют существующую CNG device session без повторного обычного входа.
+   Отзыв доступа/устройства и истечение полномочий продолжают проверяться backend.
 
 ### Create Profile
 

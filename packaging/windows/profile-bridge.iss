@@ -1,7 +1,6 @@
-﻿; Windows wizard/effect adapter only. Native Bridge owns delivery admission, download, staging,
-; first activation and settings. Production builds require the publisher signing tool configured
-; in ISCC (/Spublisher=...). InstallerTestFixture produces an explicitly unsigned CI artifact;
-; it does not change any native CMS verification or runtime policy.
+; Per-user Windows wizard. Native Bridge owns CMS admission, download, staging and activation.
+; Initial installations intentionally have no verified OS publisher. The embedded application
+; integrity signature stays mandatory; no certificate/root import or security override is used.
 ; Inno APIs: https://jrsoftware.org/ishelp/topic_isxfunc_execandcaptureoutput.htm
 
 #ifndef InstallerInputDirectory
@@ -35,9 +34,8 @@ OutputDir={#InstallerOutputDirectory}
 OutputBaseFilename=UNSIGNED-CI-FIXTURE-ProfileBridgeSetup
 SignedUninstaller=no
 #else
-OutputBaseFilename=ProfileBridgeSetup-{#ReleaseSetId}
-SignTool=publisher
-SignedUninstaller=yes
+OutputBaseFilename=ProfileBridgeSetup
+SignedUninstaller=no
 #endif
 UninstallDisplayIcon={app}\releases\{#ReleaseSetId}\profile-bridge\profile-bridge.exe
 
@@ -46,10 +44,10 @@ Name: "ru"; MessagesFile: "compiler:Languages\Russian.isl"
 Name: "en"; MessagesFile: "compiler:Default.isl"
 
 [Files]
-Source: "{#InstallerInputDirectory}\profile-bridge.exe"; Flags: dontcopy
-Source: "{#InstallerInputDirectory}\installation.json"; Flags: dontcopy
-Source: "{#InstallerInputDirectory}\windows-delivery-manifest.json"; Flags: dontcopy
-Source: "{#InstallerInputDirectory}\windows-delivery-signature.json"; Flags: dontcopy
+Source: "{#InstallerInputDirectory}\profile-bridge.exe"; Flags: dontcopy notimestamp
+Source: "{#InstallerInputDirectory}\installation.json"; Flags: dontcopy notimestamp
+Source: "{#InstallerInputDirectory}\windows-delivery-manifest.json"; Flags: dontcopy notimestamp
+Source: "{#InstallerInputDirectory}\windows-delivery-signature.json"; Flags: dontcopy notimestamp
 
 [Registry]
 Root: HKCU; Subkey: "Software\Classes\profilebridge"; ValueType: string; ValueName: ""; ValueData: "URL:Profile Bridge"; Flags: uninsdeletekey

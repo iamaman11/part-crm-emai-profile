@@ -141,6 +141,16 @@ materialize() {
         else
           flat_expected_count=9
         fi
+        # Historical deployed aggregates have no installer. New publications include the
+        # signature and ordinary wizard together; a partial pair or extra asset fails closed.
+        local has_signature=0 has_installer=0
+        test ! -e "$asset_root/windows-delivery-signature.json" || has_signature=1
+        test ! -e "$asset_root/ProfileBridgeSetup.exe" || has_installer=1
+        test "$has_signature" -eq "$has_installer" || fail "Windows installer publication is partial"
+        if [ "$has_installer" -eq 1 ]; then
+          expected+=(windows-delivery-signature.json ProfileBridgeSetup.exe)
+          flat_expected_count=$((flat_expected_count + 2))
+        fi
         materialized_expected_count=8
       elif [ "$has_capability" -eq 1 ]; then
         profile=historical-v3-capability
@@ -266,6 +276,15 @@ self_test() {
   test -f "$root/v3-current-root/windows/windows-sbom-v1.json"
   test -f "$root/v3-current-root/windows/windows-provenance-v1.json"
   test ! -e "$root/v3-current-root/windows-delivery-manifest.json"
+
+  cp -R "$root/v3-current" "$root/v3-installer"
+  printf 'signed-delivery-fixture' > "$root/v3-installer/windows-delivery-signature.json"
+  printf 'installer-fixture' > "$root/v3-installer/ProfileBridgeSetup.exe"
+  materialize current-v3 "$v3" "$root/v3-installer" "$root/v3-installer-root"
+  rm "$root/v3-installer/windows-delivery-signature.json"
+  if ( materialize current-v3 "$v3" "$root/v3-installer" "$root/should-fail-partial-installer" ) >/dev/null 2>&1; then
+    fail "partial installer publication unexpectedly passed"
+  fi
 
   local external_runtime="runtime-bundle-v3-sha256-$(printf '8%.0s' {1..64})"
   cp -R "$root/v3-current" "$root/v3-external"

@@ -13,11 +13,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::thread;
 use std::time::{Duration, Instant};
 
-const VERIFY_SCRIPT: &str = r#"param(
-    [Parameter(Mandatory=$true)][string]$ManifestPath,
-    [Parameter(Mandatory=$true)][string]$SignaturePath,
-    [Parameter(Mandatory=$true)][string]$ExpectedCertificateSha256
-)
+const VERIFY_SCRIPT: &str = r#"$ManifestPath = $env:BRIDGE_CMS_MANIFEST
+$SignaturePath = $env:BRIDGE_CMS_SIGNATURE
+$ExpectedCertificateSha256 = $env:BRIDGE_CMS_CERTIFICATE_SHA256
 $ErrorActionPreference = 'Stop'
 try {
     Add-Type -AssemblyName System.Security
@@ -43,22 +41,10 @@ try {
     }
     if ($certificateSha256 -cne $ExpectedCertificateSha256) { exit 22 }
 
-    $chain = [System.Security.Cryptography.X509Certificates.X509Chain]::new()
-    try {
-        # Candidate signer admission/revocation is owned by the Rust TrustedSignerSet before this
-        # adapter is called. The platform adapter therefore proves the local Windows trust chain
-        # and Code Signing EKU without introducing mutable online CRL authority.
-        $chain.ChainPolicy.RevocationMode = [System.Security.Cryptography.X509Certificates.X509RevocationMode]::NoCheck
-        $chain.ChainPolicy.RevocationFlag = [System.Security.Cryptography.X509Certificates.X509RevocationFlag]::ExcludeRoot
-        $chain.ChainPolicy.VerificationFlags = [System.Security.Cryptography.X509Certificates.X509VerificationFlags]::NoFlag
-        [void]$chain.ChainPolicy.ApplicationPolicy.Add(
-            [System.Security.Cryptography.Oid]::new('1.3.6.1.5.5.7.3.3')
-        )
-        if (-not $chain.Build($certificate)) { exit 23 }
-    }
-    finally {
-        $chain.Dispose()
-    }
+    # This is the application's exact pinned release-integrity key, not OS publisher identity.
+    # Rust TrustedSignerSet owns admission/rotation/revocation before this adapter runs.
+    # Never consult or modify Windows root stores, online CAs, CRLs or certificate enrollment.
+    if ($signer.DigestAlgorithm.Value -cne '2.16.840.1.101.3.4.2.1') { exit 23 }
     exit 0
 }
 catch [System.Security.Cryptography.CryptographicException] {
@@ -69,7 +55,6 @@ catch {
 }
 "#;
 
-const SCRIPT_NAME: &str = "verify-delivery-cms.ps1";
 const MANIFEST_NAME: &str = "delivery-manifest.json";
 const SIGNATURE_NAME: &str = "delivery-signature.p7s";
 const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0400;
@@ -136,14 +121,16 @@ impl WindowsCmsSignatureVerifier {
         command.creation_flags(0x0800_0000); // CREATE_NO_WINDOW: setup owns the visible UI.
         command
             .env_clear()
-            .args(["-NoLogo", "-NoProfile", "-NonInteractive", "-File"])
-            .arg(scratch.script_path())
-            .arg("-ManifestPath")
-            .arg(scratch.manifest_path())
-            .arg("-SignaturePath")
-            .arg(scratch.signature_path())
-            .arg("-ExpectedCertificateSha256")
-            .arg(expected_certificate_sha256)
+            .args([
+                "-NoLogo",
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                VERIFY_SCRIPT,
+            ])
+            .env("BRIDGE_CMS_MANIFEST", scratch.manifest_path())
+            .env("BRIDGE_CMS_SIGNATURE", scratch.signature_path())
+            .env("BRIDGE_CMS_CERTIFICATE_SHA256", expected_certificate_sha256)
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null());
@@ -226,14 +213,9 @@ impl VerificationScratch {
         manifest_bytes: &[u8],
         cms_der: &[u8],
     ) -> Result<(), WindowsCmsVerifierError> {
-        write_new_synced(&self.script_path(), VERIFY_SCRIPT.as_bytes())?;
         write_new_synced(&self.manifest_path(), manifest_bytes)?;
         write_new_synced(&self.signature_path(), cms_der)?;
         Ok(())
-    }
-
-    fn script_path(&self) -> PathBuf {
-        self.directory.join(SCRIPT_NAME)
     }
 
     fn manifest_path(&self) -> PathBuf {
@@ -246,11 +228,7 @@ impl VerificationScratch {
 
     fn cleanup(self) -> Result<(), WindowsCmsVerifierError> {
         validate_directory(&self.directory).map_err(|_| WindowsCmsVerifierError::ScratchIo)?;
-        for path in [
-            self.script_path(),
-            self.manifest_path(),
-            self.signature_path(),
-        ] {
+        for path in [self.manifest_path(), self.signature_path()] {
             match fs::symlink_metadata(&path) {
                 Ok(metadata) => {
                     if metadata_is_link_or_reparse(&metadata) || !metadata.is_file() {
@@ -444,15 +422,6 @@ mod tests {
         assert!(!verifier.verify_cms(b"manifest", b"not-cms", "ABC")?);
         assert!(fs::read_dir(&directory.0)?.next().is_none());
         Ok(())
-    }
-
-    #[test]
-    fn production_chain_policy_is_local_and_app_revocation_owned() {
-        assert!(VERIFY_SCRIPT.contains("X509RevocationMode]::NoCheck"));
-        assert!(!VERIFY_SCRIPT.contains("X509RevocationMode]::Online"));
-        assert!(!VERIFY_SCRIPT.contains("UrlRetrievalTimeout"));
-        assert!(VERIFY_SCRIPT.contains("X509VerificationFlags]::NoFlag"));
-        assert!(VERIFY_SCRIPT.contains("1.3.6.1.5.5.7.3.3"));
     }
 
     #[test]

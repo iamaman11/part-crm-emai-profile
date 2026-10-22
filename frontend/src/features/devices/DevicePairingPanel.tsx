@@ -6,6 +6,7 @@ import {
   authorizeDevicePairing,
   getAuthenticatedDevicePairingSession,
   getDeviceRegistration,
+  getDeviceInstaller,
 } from './api';
 
 const OPAQUE_ID_PATTERN = /^[A-Za-z0-9_-]{8,96}$/;
@@ -97,6 +98,25 @@ function RegistrationConfirmation({ tenantId, deviceId }: { tenantId: string; de
       <button type="button" disabled={checking} onClick={() => void registration.refetch()}>
         {checking ? 'Checking…' : 'Check again'}
       </button>
+    </section>
+  );
+}
+
+function InstallBridge({ tenantId }: { tenantId: string }) {
+  const installer = useQuery({
+    queryKey: ['device-installer', tenantId],
+    queryFn: ({ signal }) => getDeviceInstaller(tenantId, signal),
+    retry: false,
+    staleTime: 0,
+  });
+  return (
+    <section aria-label="Install Profile Bridge">
+      <h4>First time on this Windows computer?</h4>
+      <p>Install Profile Bridge once. Setup downloads and verifies the browser component, then returns here to connect this computer.</p>
+      {installer.data ? <a href={installer.data.downloadUrl}>Install for Windows</a> : null}
+      <p>The first release has no verified Windows publisher. Windows may warn or block installation.</p>
+      <StatusMessage state={installer.error ?? (installer.isPending ? 'Loading Windows installer…' : null)} />
+      {installer.error ? <button type="button" onClick={() => void installer.refetch()}>Try loading installer again</button> : null}
     </section>
   );
 }
@@ -200,9 +220,8 @@ export function DevicePairingPanel() {
     <section className="panel" aria-label="Connect this computer">
       <span className="eyebrow">Profile Bridge</span>
       <h3>Connect this computer</h3>
-      <p>
-        Start a one-time browser pairing. The device private key remains non-exportable on this Windows computer.
-      </p>
+      <InstallBridge tenantId={tenantId} />
+      <p>Already installed? Connect once to use your profiles on this computer.</p>
       <a href={startUri}>Connect this computer</a>
       <StatusMessage state={status} />
     </section>
