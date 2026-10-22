@@ -249,7 +249,9 @@ async fn redeem_from_bridge(request: &mut Request, env: &Env) -> Result<Response
 fn application_failure(correlation_id: &str, error: ApplicationError) -> Result<Response> {
     match error.code() {
         ProblemCode::NotFound | ProblemCode::Forbidden => neutral_not_found(correlation_id),
-        ProblemCode::InvalidRequest => invalid_request(correlation_id),
+        ProblemCode::InvalidRequest => {
+            problem(correlation_id, 400, "invalid_request", "Invalid Request")
+        }
         ProblemCode::InvalidState => problem(correlation_id, 409, "invalid_state", "Invalid State"),
         ProblemCode::VersionConflict => {
             problem(correlation_id, 409, "version_conflict", "Version Conflict")
