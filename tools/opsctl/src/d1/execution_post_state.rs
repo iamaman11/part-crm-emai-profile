@@ -1,8 +1,6 @@
 use super::execution_control::{ExecutionEventKind, ExecutionReceipt, serialize_execution_receipt};
 use super::model::{D1Error, GateResult};
-use super::transaction::{
-    ProviderObservationInput, TargetIdentity, TransactionPhase, TransactionProjection,
-};
+use super::transaction::{ProviderObservationInput, TargetIdentity, TransactionProjection};
 use super::transaction_integrity::revalidate_transaction_projection;
 use crate::canonical::canonical_json;
 use serde::{Deserialize, Serialize};
@@ -39,6 +37,28 @@ pub struct ExecutionPostStateVerification {
     pub post_observation_source: String,
     pub post_observed_at_unix_seconds: i64,
     pub evaluated_at_unix_seconds: i64,
+}
+
+/// Verify the exact sealed effect boundary without inventing a synthetic runtime manifest.
+pub fn verify_migration_ledger(
+    transaction: &TransactionProjection,
+    observed: &[String],
+) -> Result<(), D1Error> {
+    revalidate_transaction_projection(transaction)?;
+    let mut expected = transaction.provider_observation.remote_migrations.clone();
+    expected.extend(
+        transaction
+            .transaction_plan
+            .planned_migrations
+            .iter()
+            .map(|m| m.migration_file.clone()),
+    );
+    if observed != expected {
+        return Err(D1Error::new(
+            "post-migration ledger differs from the exact sealed predecessor plus planned effect",
+        ));
+    }
+    Ok(())
 }
 
 pub fn verify_execution_post_state(
@@ -78,9 +98,9 @@ pub fn verify_execution_post_state(
 
     let plan = &transaction.transaction_plan;
     let predecessor = &transaction.provider_observation;
-    if receipt.phase != TransactionPhase::Ordinary {
+    if receipt.phase != plan.phase {
         return Err(D1Error::new(
-            "post-state verification requires an ORDINARY execution receipt",
+            "post-state verification requires the exact prepared transaction phase",
         ));
     }
     if receipt.target != plan.target || predecessor.target != plan.target {

@@ -152,6 +152,7 @@ struct RepositoryIdentity {
     schema_target: String,
     supported_schema_min: String,
     supported_schema_max: String,
+    executable_history: Vec<String>,
 }
 
 pub fn build_transaction_projection(
@@ -186,7 +187,7 @@ pub fn build_transaction_projection(
         freshness_max_age_seconds: transaction_input.freshness_max_age_seconds,
         predecessor_ledger_sha256: transaction_input.predecessor_ledger_sha256,
         planned_migrations: transaction_input.planned_migrations,
-        schema_target: repository.schema_target,
+        schema_target: required_str_from_map(plan, "target_revision")?.to_owned(),
         supported_schema_min: repository.supported_schema_min,
         supported_schema_max: repository.supported_schema_max,
         precondition_evidence_refs: transaction_input.precondition_evidence_refs,
@@ -383,11 +384,59 @@ fn repository_identity(
         .get("release_schema_contract")
         .and_then(Value::as_object)
         .ok_or_else(|| D1Error::new("component projection is missing release_schema_contract"))?;
+    if plan.get("schema_version").and_then(Value::as_u64) == Some(2) {
+        let supplied = plan
+            .get("planned_migration_contracts")
+            .and_then(Value::as_array)
+            .ok_or_else(|| D1Error::new("staged plan lacks migration contracts"))?;
+        let canonical = authority
+            .get("post_epoch_migration_contracts")
+            .and_then(Value::as_array)
+            .ok_or_else(|| {
+                D1Error::new("CURRENT repository projection lacks typed migration contracts")
+            })?;
+        let names = expected_planned_migrations(plan)?;
+        let expected = names
+            .iter()
+            .map(|name| {
+                canonical
+                    .iter()
+                    .find(|c| {
+                        c.get("migration_file").and_then(Value::as_str) == Some(name.as_str())
+                    })
+                    .ok_or_else(|| {
+                        D1Error::new("staged migration contract is not owned by CURRENT repository")
+                    })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        if supplied.iter().collect::<Vec<_>>() != expected {
+            return Err(D1Error::new(
+                "staged plan migration contracts differ from CURRENT owner metadata",
+            ));
+        }
+    }
     let history_digest = required_str(authority, "history_digest")?.to_owned();
     let policy_digest = required_str(authority, "compatibility_policy_digest")?.to_owned();
     validate_sha256(&history_digest, "repository history_digest")?;
     validate_sha256(&policy_digest, "repository compatibility_policy_digest")?;
+    let executable_history = if plan.get("schema_version").and_then(Value::as_u64) == Some(2) {
+        authority
+            .get("executable_migration_sources")
+            .and_then(Value::as_array)
+            .ok_or_else(|| D1Error::new("CURRENT stage is missing canonical executable history"))?
+            .iter()
+            .map(|m| {
+                m.get("migration_file")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned)
+                    .ok_or_else(|| D1Error::new("CURRENT executable migration name is invalid"))
+            })
+            .collect::<Result<Vec<_>, _>>()?
+    } else {
+        Vec::new()
+    };
     Ok(RepositoryIdentity {
+        executable_history,
         repository_identity_sha256,
         component: component.to_owned(),
         history_digest,
@@ -408,11 +457,6 @@ fn validate_transaction_input(
         return Err(D1Error::new(format!(
             "transaction input schema_version must be {TRANSACTION_SCHEMA_VERSION}"
         )));
-    }
-    if input.phase != TransactionPhase::Ordinary {
-        return Err(D1Error::new(
-            "ordinary PREPARE_READY input cannot be sealed as a CONTRACT transaction",
-        ));
     }
     validate_target(&input.target)?;
     if input.target != observation.target {
@@ -449,7 +493,11 @@ fn validate_transaction_input(
             "PREPARE_READY history_digest drifted from typed repository authority",
         ));
     }
-    if required_str_from_map(plan, "target_revision")? != repository.schema_target {
+    let desired_target = plan
+        .get("desired_target_revision")
+        .and_then(Value::as_str)
+        .unwrap_or(required_str_from_map(plan, "target_revision")?);
+    if desired_target != repository.schema_target {
         return Err(D1Error::new(
             "PREPARE_READY target_revision drifted from typed release schema authority",
         ));
@@ -460,12 +508,30 @@ fn validate_transaction_input(
         ));
     }
     let expected = expected_planned_migrations(plan)?;
-    validate_wrangler_pending_scope(
-        &observation.wrangler_pending_migrations,
-        &expected,
-        &repository.schema_target,
-        &repository.supported_schema_max,
-    )?;
+    if plan.get("schema_version").and_then(Value::as_u64) == Some(2) {
+        let count = observation.remote_migrations.len();
+        if repository.executable_history.get(..count)
+            != Some(observation.remote_migrations.as_slice())
+            || repository.executable_history.get(count..)
+                != Some(observation.wrangler_pending_migrations.as_slice())
+            || plan.get("pending_migrations_to_desired_target")
+                != Some(&serde_json::json!(observation.wrangler_pending_migrations))
+            || !observation
+                .wrangler_pending_migrations
+                .starts_with(&expected)
+        {
+            return Err(D1Error::new(
+                "CURRENT stage pending scope differs from the exact canonical observed suffix",
+            ));
+        }
+    } else {
+        validate_wrangler_pending_scope(
+            &observation.wrangler_pending_migrations,
+            &expected,
+            required_str_from_map(plan, "target_revision")?,
+            &repository.supported_schema_max,
+        )?;
+    }
     let supplied = input
         .planned_migrations
         .iter()
@@ -497,6 +563,35 @@ fn validate_transaction_input(
                 "precondition_evidence_refs must not contain duplicates",
             ));
         }
+    }
+    if let Some(evidence) = plan.get("transition_evidence") {
+        if input.expected_post_state.get("stage_plan") != Some(&Value::Object(plan.clone()))
+            || input.expected_post_state.get("revision") != plan.get("target_revision")
+            || evidence
+                .pointer("/deployment/release_set_id")
+                .and_then(Value::as_str)
+                != observation.deployment_identity.as_deref()
+            || evidence
+                .get("observed_at_unix_seconds")
+                .and_then(Value::as_i64)
+                != Some(observation.observed_at_unix_seconds)
+            || evidence.get("target_source_sha").and_then(Value::as_str)
+                != Some(input.source_sha.as_str())
+            || evidence
+                .get("target_release_set_id")
+                .and_then(Value::as_str)
+                != Some(input.release_candidate_id.as_str())
+            || evidence.get("ledger_sha256").and_then(Value::as_str)
+                != Some(observation.remote_ledger_sha256.as_str())
+        {
+            return Err(D1Error::new(
+                "staged transaction must bind the exact native plan, deployed observation and CURRENT candidate",
+            ));
+        }
+    } else if input.phase != TransactionPhase::Ordinary {
+        return Err(D1Error::new(
+            "a CONTRACT transaction requires a versioned native stage plan",
+        ));
     }
     if !input.expected_post_state.is_object() {
         return Err(D1Error::new("expected_post_state must be a JSON object"));

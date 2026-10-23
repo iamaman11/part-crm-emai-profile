@@ -15,7 +15,7 @@ pub fn build_transaction_projection(
     transaction_value: &Value,
     release_manifest_raw: &[u8],
 ) -> Result<TransactionProjection, D1Error> {
-    super::transaction_policy::validate_ordinary_transaction_binding(prepare, transaction_value)?;
+    super::transaction_policy::validate_transaction_policy_binding(prepare, transaction_value)?;
     verify_release_manifest_binding(prepare, transaction_value, release_manifest_raw)?;
     super::transaction_core::build_transaction_projection(
         prepare,
@@ -39,6 +39,19 @@ fn verify_release_manifest_binding(
     })?;
     if !release_manifest.is_object() {
         return Err(D1Error::new("release manifest must be one JSON object"));
+    }
+
+    if let Some(expected) = prepare
+        .pointer("/plan/transition_evidence/target_manifest_sha256")
+        .and_then(Value::as_str)
+    {
+        let canonical =
+            crate::canonical::canonical_json(&release_manifest).map_err(D1Error::new)?;
+        if sha256_hex(canonical.as_bytes()) != expected {
+            return Err(D1Error::new(
+                "CURRENT staged plan target manifest identity differs from the exact prepared target artifact",
+            ));
+        }
     }
 
     let component = prepare

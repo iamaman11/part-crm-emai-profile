@@ -42,11 +42,8 @@ TYPED_OWNER_ANCHORS: dict[str, tuple[str, tuple[str, ...]]] = {
         ("fn contract_requires_typed_preconditions",),
     ),
     "contract_exact_successor": (
-        "tools/opsctl/src/d1/contract_transition.rs",
-        (
-            'const RECOVERY_STRATEGY: &str = "FAIL_FORWARD_ONLY"',
-            "fn post_contract_verification_requires_exactly_one_contract_step",
-        ),
+        "tools/opsctl/tests/d1_contract_transition.rs",
+        ("fn actual_deployed_context_traverses_separate_sealed_contract_and_current_expand_with_data_preserved",),
     ),
     "transaction_observation_plan_target_drift": (
         "tools/opsctl/src/d1/transaction.rs",
@@ -219,6 +216,7 @@ class Harness:
                 "--lib",
             ]
         )
+        self.run(["cargo", "test", "--locked", "--manifest-path", "tools/opsctl/Cargo.toml", "--test", "d1_contract_transition"])
         for scenario_id, (relative_path, anchors) in TYPED_OWNER_ANCHORS.items():
             self.record(
                 scenario_id,

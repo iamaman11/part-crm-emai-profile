@@ -71,6 +71,11 @@ Important distinctions:
   can bind the exact canonical prefix ending at its supported maximum without being mistaken for a
   new target. Its original digest remains unchanged. Target validation still requires full current
   history; migration, CONTRACT and recovery decisions still belong to the existing D1 planner.
+  An explicit v2 CURRENT-transition observation in the preconditions input admits separately sealed
+  CONTRACT and subsequent additive forward stages through the same native plan/Prepare/executor path.
+  The desired release and next effect boundary remain distinct. Original deployed manifest/source,
+  schema support, exact SQL, forward recovery, fresh authorization and post-ledger verification are bound;
+  the old unsealed `d1-contract-transition` example/executor alternative is retired.
 - `release finalize` writes canonical machine output to stdout from explicit packaging observations;
   `inspect`, `verify` and `compatibility` remain local policy/artifact verification.
 - `promotion plan`, `preflight` and `verify` evaluate saved snapshots/evidence. They do not deploy,

@@ -1,6 +1,6 @@
 name: Protected D1 Migration Executor
 
-run-name: D1 authorization=${{ inputs.authorization_digest || inputs.expected_release_set_id || inputs.restore_authorization_comment_id || 'none' }}
+run-name: D1 authorization=${{ inputs.authorization_digest || inputs.restore_authorization_comment_id || 'none' }}
 
 on:
   workflow_dispatch:
@@ -61,22 +61,9 @@ on:
         required: true
         type: string
       preconditions_json:
-        description: Ordinary D1 preconditions or exact Phase-C contract-transition evidence
+        description: Exact native D1 preconditions or versioned CURRENT transition observation
         required: false
         default: '{}'
-        type: string
-      transition_mode:
-        description: D1 transition mode
-        required: false
-        default: ordinary
-        type: choice
-        options:
-          - ordinary
-          - contract
-      expected_release_set_id:
-        description: Exact deployed Release Set identity; required for contract mode
-        required: false
-        default: ''
         type: string
       prepared_transaction_run_id:
         description: Exact successful D1 Migration Prepare run carrying the immutable transaction or reconstruction
@@ -134,8 +121,6 @@ jobs:
       TARGET_ENVIRONMENT: ${{ inputs.environment }}
       COMPONENT: ${{ inputs.component }}
       DATABASE_ID: ${{ inputs.database_id }}
-      TRANSITION_MODE: ${{ inputs.transition_mode }}
-      EXPECTED_RELEASE_SET_ID: ${{ inputs.expected_release_set_id }}
       PREPARED_TRANSACTION_RUN_ID: ${{ inputs.prepared_transaction_run_id }}
       PREPARED_TRANSACTION_RUN_ATTEMPT: ${{ inputs.prepared_transaction_run_attempt }}
       TRANSACTION_ID: ${{ inputs.transaction_id }}
@@ -152,15 +137,12 @@ jobs:
           test "$OPERATION_MODE" = migration || test "$OPERATION_MODE" = reconstruction
           if [ "$OPERATION_MODE" = reconstruction ]; then
             test "$COMPONENT" = catalog
-            test "$TRANSITION_MODE" = ordinary
           else
             test "$COMPONENT" = "catalog" || test "$COMPONENT" = "resolver"
-            test "$TRANSITION_MODE" = "ordinary" || test "$TRANSITION_MODE" = "contract"
           fi
           test "$MUTATION_AUTHORIZED" = "true"
           test -n "$SOURCE_SHA"
           test -n "$DATABASE_ID"
-          if [ "$TRANSITION_MODE" = ordinary ]; then
             test "$GITHUB_RUN_ATTEMPT" = "1"
             test "$CONFIRMATION" = "$SOURCE_SHA:$TARGET_ENVIRONMENT:$COMPONENT:$DATABASE_ID"
             [[ "$PREPARED_TRANSACTION_RUN_ID" =~ ^[0-9]+$ ]]
@@ -168,15 +150,8 @@ jobs:
             [[ "$TRANSACTION_ID" =~ ^[0-9a-f]{64}$ ]]
             [[ "$AUTHORIZATION_DIGEST" =~ ^[0-9a-f]{64}$ ]]
             test -n "$TRANSACTION_AUTHORIZATION_JSON"
-          else
-            test "$OPERATION_MODE" = migration
-            test "$COMPONENT" = "catalog"
-            test -n "$EXPECTED_RELEASE_SET_ID"
-            test "$CONFIRMATION" = "$SOURCE_SHA:$TARGET_ENVIRONMENT:$COMPONENT:$DATABASE_ID:contract:$EXPECTED_RELEASE_SET_ID"
-          fi
 
       - name: Bind ordinary authorization to immutable GitHub provenance
-        if: inputs.transition_mode == 'ordinary'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -322,8 +297,6 @@ jobs:
       CURRENT_RELEASE_MANIFEST_JSON: ${{ inputs.current_release_manifest_json }}
       KNOWN_GOOD_RELEASE_MANIFEST_JSON: ${{ inputs.known_good_release_manifest_json }}
       PRECONDITIONS_JSON: ${{ inputs.preconditions_json }}
-      TRANSITION_MODE: ${{ inputs.transition_mode }}
-      EXPECTED_RELEASE_SET_ID: ${{ inputs.expected_release_set_id }}
       PREPARED_TRANSACTION_RUN_ID: ${{ inputs.prepared_transaction_run_id }}
       PREPARED_TRANSACTION_RUN_ATTEMPT: ${{ inputs.prepared_transaction_run_attempt }}
       TRANSACTION_ID: ${{ inputs.transaction_id }}
@@ -340,11 +313,9 @@ jobs:
           test "$GITHUB_SHA" = "$SOURCE_SHA"
           test "$TARGET_ENVIRONMENT" = "staging"
           test "$COMPONENT" = "catalog" || test "$COMPONENT" = "resolver"
-          test "$TRANSITION_MODE" = "ordinary" || test "$TRANSITION_MODE" = "contract"
           test "$MUTATION_AUTHORIZED" = "true"
           test -n "$CLOUDFLARE_ACCOUNT_ID"
           test "$CLOUDFLARE_ACCOUNT_ID" = "${{ inputs.account_id }}"
-          if [ "$TRANSITION_MODE" = ordinary ]; then
             test "$GITHUB_RUN_ATTEMPT" = "1"
             test "$CONFIRMATION" = "$SOURCE_SHA:$TARGET_ENVIRONMENT:$COMPONENT:$DATABASE_ID"
             [[ "$PREPARED_TRANSACTION_RUN_ID" =~ ^[0-9]+$ ]]
@@ -352,11 +323,6 @@ jobs:
             [[ "$TRANSACTION_ID" =~ ^[0-9a-f]{64}$ ]]
             [[ "$AUTHORIZATION_DIGEST" =~ ^[0-9a-f]{64}$ ]]
             test -n "$TRANSACTION_AUTHORIZATION_JSON"
-          else
-            test "$COMPONENT" = catalog
-            test -n "$EXPECTED_RELEASE_SET_ID"
-            test "$CONFIRMATION" = "$SOURCE_SHA:$TARGET_ENVIRONMENT:$COMPONENT:$DATABASE_ID:contract:$EXPECTED_RELEASE_SET_ID"
-          fi
 
       - name: Checkout exact accepted-main source
         uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
@@ -393,7 +359,6 @@ jobs:
           env -u CLOUDFLARE_API_TOKEN -u CLOUDFLARE_ACCOUNT_ID cargo build --locked --manifest-path tools/opsctl/Cargo.toml --example d1-execution-control
 
       - name: Load immutable prepared transaction and verify typed executor admission
-        if: inputs.transition_mode == 'ordinary'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -429,7 +394,7 @@ jobs:
               --expected-account-id "$CLOUDFLARE_ACCOUNT_ID" \
               --expected-database-name "$DATABASE_NAME" \
               --expected-database-id "$DATABASE_ID" \
-              --expected-phase ORDINARY \
+              --expected-phase "$(jq -er '.transaction_plan.phase' artifacts/d1-migration/transaction.json)" \
               > artifacts/d1-migration/executor-admission.json
           jq -e \
             --arg transaction_id "$TRANSACTION_ID" \
@@ -437,11 +402,12 @@ jobs:
             --arg source "$SOURCE_SHA" \
             --arg tree "$tree_sha" \
             --arg component "$COMPONENT" \
-            '.schema_version == 1 and .status == "EXECUTOR_ADMISSION_VERIFIED" and .mode == "read-only" and .authorization_consumed == false and .mutation_executed == false and .provider_mutation_executed == false and .transaction_id == $transaction_id and .authorization_digest == $authorization_digest and .source_sha == $source and .tree_sha == $tree and .phase == "ORDINARY" and (.execution_plan | .schema_version == 1 and .command == "d1 plan" and .mode == "read-only" and .mutation_executed == false and .component == $component and .allowed == true and (.apply_required == ((.planned_migrations | length) > 0)) and (.planned_migrations | type == "array") and (.planned_migration_digests | type == "array") and ((.planned_migration_digests | length) == (.planned_migrations | length)))' \
+            --arg phase "$(jq -er '.transaction_plan.phase' artifacts/d1-migration/transaction.json)" \
+            '.schema_version == 1 and .status == "EXECUTOR_ADMISSION_VERIFIED" and .mode == "read-only" and .authorization_consumed == false and .mutation_executed == false and .provider_mutation_executed == false and .transaction_id == $transaction_id and .authorization_digest == $authorization_digest and .source_sha == $source and .tree_sha == $tree and .phase == $phase and (.execution_plan | .schema_version == 1 and .command == "d1 plan" and .mode == "read-only" and .mutation_executed == false and .component == $component and .allowed == true and (.apply_required == ((.planned_migrations | length) > 0)) and (.planned_migrations | type == "array") and (.planned_migration_digests | type == "array") and ((.planned_migration_digests | length) == (.planned_migrations | length)))' \
             artifacts/d1-migration/executor-admission.json >/dev/null
 
       - name: Persist typed executor admission evidence
-        if: always() && inputs.transition_mode == 'ordinary' && hashFiles('artifacts/d1-migration/executor-admission.json') != ''
+        if: always() && hashFiles('artifacts/d1-migration/executor-admission.json') != ''
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: d1-executor-admission-${{ inputs.authorization_digest }}-${{ github.run_id }}-${{ github.run_attempt }}
@@ -450,7 +416,6 @@ jobs:
           retention-days: 30
 
       - name: Prove ordinary transaction authorization has not been consumed
-        if: inputs.transition_mode == 'ordinary'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -501,7 +466,6 @@ jobs:
           PY
 
       - name: Consume ordinary transaction authorization
-        if: inputs.transition_mode == 'ordinary'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: d1-authorization-consumption-${{ inputs.authorization_digest }}-${{ github.run_id }}-${{ github.run_attempt }}
@@ -519,7 +483,7 @@ jobs:
           import time
           from pathlib import Path
 
-          ordinary = os.environ['TRANSITION_MODE'] == 'ordinary'
+          phase = json.loads(Path('artifacts/d1-migration/transaction.json').read_text())['transaction_plan']['phase']
           value = {
               'schema_version': 1,
               'target': {
@@ -528,10 +492,10 @@ jobs:
                   'database_name': os.environ['DATABASE_NAME'],
                   'database_id': os.environ['DATABASE_ID'],
               },
-              'phase': 'ORDINARY' if ordinary else 'CONTRACT',
-              'operation_identity': os.environ['TRANSACTION_ID'] if ordinary else os.environ['EXPECTED_RELEASE_SET_ID'],
-              'transaction_id': os.environ['TRANSACTION_ID'] if ordinary else None,
-              'authorization_digest': os.environ['AUTHORIZATION_DIGEST'] if ordinary else None,
+              'phase': phase,
+              'operation_identity': os.environ['TRANSACTION_ID'],
+              'transaction_id': os.environ['TRANSACTION_ID'],
+              'authorization_digest': os.environ['AUTHORIZATION_DIGEST'],
               'source_sha': os.environ['SOURCE_SHA'],
               'executor_run_id': int(os.environ['GITHUB_RUN_ID']),
               'fence_epoch': int(os.environ['GITHUB_RUN_NUMBER']),
@@ -547,11 +511,7 @@ jobs:
               --input artifacts/d1-migration/target-fence-input.json \
               > artifacts/d1-migration/target-fence-lease.json
           operation_identity="$TRANSACTION_ID"
-          expected_phase=ORDINARY
-          if [ "$TRANSITION_MODE" = contract ]; then
-            operation_identity="$EXPECTED_RELEASE_SET_ID"
-            expected_phase=CONTRACT
-          fi
+          expected_phase="$(jq -er ".transaction_plan.phase" artifacts/d1-migration/transaction.json)"
           jq -e \
             --arg environment "$TARGET_ENVIRONMENT" \
             --arg account_id "$CLOUDFLARE_ACCOUNT_ID" \
@@ -564,15 +524,11 @@ jobs:
             --argjson fence_epoch "$GITHUB_RUN_NUMBER" \
             '.schema_version == 1 and .status == "TARGET_FENCE_ACQUIRED" and .target.environment == $environment and .target.account_id == $account_id and .target.database_name == $database_name and .target.database_id == $database_id and .phase == $phase and .operation_identity == $operation_identity and .source_sha == $source_sha and .executor_run_id == $executor_run_id and .fence_epoch == $fence_epoch and .run_attempt == 1 and (.fence_id | test("^[0-9a-f]{64}$"))' \
             artifacts/d1-migration/target-fence-lease.json >/dev/null
-          if [ "$TRANSITION_MODE" = ordinary ]; then
             jq -e \
               --arg transaction_id "$TRANSACTION_ID" \
               --arg authorization_digest "$AUTHORIZATION_DIGEST" \
               '.transaction_id == $transaction_id and .authorization_digest == $authorization_digest' \
               artifacts/d1-migration/target-fence-lease.json >/dev/null
-          else
-            jq -e '.transaction_id == null and .authorization_digest == null' artifacts/d1-migration/target-fence-lease.json >/dev/null
-          fi
 
       - name: Acquire durable target fence
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
@@ -592,13 +548,8 @@ jobs:
 
           root = Path('artifacts/d1-migration')
           lease = json.loads((root / 'target-fence-lease.json').read_text(encoding='utf-8'))
-          if os.environ['TRANSITION_MODE'] == 'ordinary':
-              transaction = json.loads((root / 'transaction.json').read_text(encoding='utf-8'))
-              recovery = transaction.get('transaction_plan', {}).get('recovery_strategy')
-              if not isinstance(recovery, str) or not recovery:
-                  raise SystemExit('ordinary transaction must project transaction_plan.recovery_strategy')
-          else:
-              recovery = 'FAIL_FORWARD_ONLY'
+          transaction = json.loads((root / 'transaction.json').read_text(encoding='utf-8'))
+          recovery = transaction['transaction_plan']['recovery_strategy']
           seed = {
               'schema_version': 1,
               'target': lease['target'],
@@ -678,8 +629,7 @@ jobs:
               'component': os.environ['COMPONENT'],
               'database_name': os.environ['DATABASE_NAME'],
               'database_id': os.environ['DATABASE_ID'],
-              'transition_mode': os.environ['TRANSITION_MODE'],
-              'expected_release_set_id': os.environ['EXPECTED_RELEASE_SET_ID'] or None,
+              'phase': json.loads((out / 'transaction.json').read_text())['transaction_plan']['phase'],
               'transaction_id': os.environ['TRANSACTION_ID'] or None,
               'authorization_digest': os.environ['AUTHORIZATION_DIGEST'] or None,
               'prepared_transaction_run_id': os.environ['PREPARED_TRANSACTION_RUN_ID'] or None,
@@ -738,44 +688,18 @@ jobs:
             --component "$COMPONENT" --ledger-json artifacts/d1-migration/ledger-before.json \
             > artifacts/d1-migration/status-before.json
 
-      - name: Consume sealed ordinary plan and run fresh compatibility or contract gates
+      - name: Consume the sealed phase plan and run fresh migration compatibility gates
         id: policy
         run: |
           set -euo pipefail
           diagnostics="artifacts/d1-migration/d1-gate-diagnostics.jsonl"
           : > "$diagnostics"
 
-          if [ "$TRANSITION_MODE" = ordinary ]; then
             jq -e \
               --arg component "$COMPONENT" \
               '.status == "EXECUTOR_ADMISSION_VERIFIED" and (.execution_plan | .schema_version == 1 and .command == "d1 plan" and .mode == "read-only" and .mutation_executed == false and .component == $component and .allowed == true and (.apply_required == ((.planned_migrations | length) > 0)) and (.planned_migrations | type == "array") and (.planned_migration_digests | type == "array") and ((.planned_migration_digests | length) == (.planned_migrations | length)))' \
               artifacts/d1-migration/executor-admission.json >/dev/null
             jq '.execution_plan' artifacts/d1-migration/executor-admission.json > artifacts/d1-migration/plan.json
-          else
-            set +e
-            evaluated_at="$(date -u +%s)"
-            env -u CLOUDFLARE_API_TOKEN -u CLOUDFLARE_ACCOUNT_ID cargo run --locked --quiet \
-              --manifest-path tools/opsctl/Cargo.toml --example d1-contract-transition -- \
-              --root . \
-              --ledger-json artifacts/d1-migration/ledger-before.json \
-              --release-manifest artifacts/d1-migration/target-release.json \
-              --evidence-json artifacts/d1-migration/preconditions.json \
-              --evaluated-at-unix-seconds "$evaluated_at" \
-              --expected-source-sha "$SOURCE_SHA" \
-              --expected-release-set-id "$EXPECTED_RELEASE_SET_ID" \
-              > artifacts/d1-migration/plan.json
-            plan_rc=$?
-            set -e
-            if [ "$plan_rc" -ne 0 ]; then
-              python scripts/d1-gate-diagnostics.py record \
-                --diagnostics "$diagnostics" \
-                --gate contract-transition-plan-command \
-                --reason-code D1_CONTRACT_TRANSITION_PLAN_COMMAND_FAILED \
-                --exit-code "$plan_rc" \
-                --detail 'credential-free contract-transition plan command returned non-zero'
-              exit "$plan_rc"
-            fi
-          fi
 
           set +e
           env -u CLOUDFLARE_API_TOKEN -u CLOUDFLARE_ACCOUNT_ID cargo run --locked --quiet --manifest-path tools/opsctl/Cargo.toml -- --root . d1 compatibility \
@@ -814,16 +738,13 @@ jobs:
         run: |
           set -euo pipefail
           digest_args=()
-          if [ "$TRANSITION_MODE" = ordinary ]; then
             digest_args+=(--require-plan-digests)
-          fi
           python scripts/d1-executor-plan.py materialize \
             --repo-root . \
             --repository artifacts/d1-migration/repository.json \
             --plan artifacts/d1-migration/plan.json \
             --ledger artifacts/d1-migration/ledger-before.json \
             --component "$COMPONENT" \
-            --mode "$TRANSITION_MODE" \
             --output-dir artifacts/d1-migration/migrations-bounded \
             --expected-pending artifacts/d1-migration/expected-pending.json \
             --normalized-ledger artifacts/d1-migration/ledger-before-names.json \
@@ -930,9 +851,6 @@ jobs:
               > artifacts/d1-migration/target-fence-verification.json
           fence_id="$(jq -r '.fence_id' artifacts/d1-migration/target-fence-lease.json)"
           operation_identity="$TRANSACTION_ID"
-          if [ "$TRANSITION_MODE" = contract ]; then
-            operation_identity="$EXPECTED_RELEASE_SET_ID"
-          fi
           jq -e \
             --arg fence_id "$fence_id" \
             --arg environment "$TARGET_ENVIRONMENT" \
@@ -1005,6 +923,41 @@ jobs:
           python scripts/d1-executor-plan.py verify-pending \
             --expected artifacts/d1-migration/expected-pending.json \
             --wrangler-output artifacts/d1-migration/wrangler-pending-fence.txt
+
+      - name: Revalidate sealed stage deployment and exact authorization before mutation
+        if: steps.policy.outputs.apply_required == 'true'
+        env:
+          CLOUDFLARE_OBSERVE_API_TOKEN: ${{ secrets.CLOUDFLARE_OBSERVE_API_TOKEN }}
+        run: |
+          set -euo pipefail
+          root=artifacts/d1-migration
+          if jq -e '.transaction_plan.expected_post_state.stage_plan != null' "$root/transaction.json" >/dev/null; then
+            test -n "$CLOUDFLARE_OBSERVE_API_TOKEN"
+            worker_name="$(jq -er '.transaction_plan.expected_post_state.stage_plan.transition_evidence.deployment.worker_name' "$root/transaction.json")"
+            curl --fail --silent --show-error \
+              -H "Authorization: Bearer $CLOUDFLARE_OBSERVE_API_TOKEN" \
+              "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/workers/scripts/$worker_name/deployments" \
+              > "$root/worker-deployments-fence.json"
+            jq -e '.success == true and (.result.deployments | length) > 0' "$root/worker-deployments-fence.json" >/dev/null
+            jq '.result.deployments[0]' "$root/worker-deployments-fence.json" > "$root/worker-deployment-fence.json"
+            python scripts/deployment-identity-ar11.py --status "$root/worker-deployment-fence.json" --output "$root/worker-identity-fence.json"
+            jq '.transaction_plan.expected_post_state.stage_plan' "$root/transaction.json" > "$root/sealed-stage.json"
+            python scripts/d1-prepare.py verify-deployment --plan "$root/sealed-stage.json" \
+              --deployment "$root/worker-deployment-fence.json" --identity "$root/worker-identity-fence.json" > "$root/prewrite-deployment-verification.json"
+          fi
+          tree_sha="$(git rev-parse 'HEAD^{tree}')"
+          env -u CLOUDFLARE_API_TOKEN -u CLOUDFLARE_OBSERVE_API_TOKEN -u CLOUDFLARE_ACCOUNT_ID \
+            tools/opsctl/target/debug/examples/d1-executor-admission \
+              --transaction-json "$root/transaction.json" --authorization-json "$root/transaction-authorization.json" \
+              --evaluated-at-unix-seconds "$(date -u +%s)" --expected-transaction-id "$TRANSACTION_ID" \
+              --expected-source-sha "$SOURCE_SHA" --expected-tree-sha "$tree_sha" \
+              --expected-environment "$TARGET_ENVIRONMENT" --expected-account-id "$CLOUDFLARE_ACCOUNT_ID" \
+              --expected-database-name "$DATABASE_NAME" --expected-database-id "$DATABASE_ID" \
+              --expected-phase "$(jq -er '.transaction_plan.phase' "$root/transaction.json")" \
+              > "$root/prewrite-admission.json"
+          jq -e --slurpfile original "$root/executor-admission.json" \
+            '.execution_plan == $original[0].execution_plan and .transaction_id == $original[0].transaction_id and .authorization_digest == $original[0].authorization_digest' \
+            "$root/prewrite-admission.json" >/dev/null
 
       - name: Verify deploy credential readiness before migration effect
         if: steps.policy.outputs.apply_required == 'true'
@@ -1147,33 +1100,15 @@ jobs:
           mv artifacts/d1-migration/execution-receipt.next.json artifacts/d1-migration/execution-receipt.json
           jq -e '.events[-1].kind == "POST_OBSERVED"' artifacts/d1-migration/execution-receipt.json >/dev/null
 
-      - name: Require exact target through credential-free opsctl verify
+      - name: Require exact sealed effect through credential-free D1 post-verification
         run: |
           set -euo pipefail
-          if [ "$TRANSITION_MODE" = ordinary ]; then
-            env -u CLOUDFLARE_API_TOKEN -u CLOUDFLARE_ACCOUNT_ID cargo run --locked --quiet --manifest-path tools/opsctl/Cargo.toml -- --root . d1 verify \
-              --component "$COMPONENT" \
-              --ledger-json artifacts/d1-migration/ledger-after.json \
-              --release-manifest artifacts/d1-migration/target-release.json \
+          env -u CLOUDFLARE_API_TOKEN -u CLOUDFLARE_ACCOUNT_ID \
+            tools/opsctl/target/debug/examples/d1-execution-control verify-ledger \
+              --input artifacts/d1-migration/transaction.json \
+              --observation artifacts/d1-migration/ledger-after-names.json \
               > artifacts/d1-migration/verify.json
-            jq -e '.ledger_state == "EXACT" and .decision == "SAFE" and .allowed == true and .mutation_executed == false' \
-              artifacts/d1-migration/verify.json >/dev/null
-          else
-            evaluated_at="$(date -u +%s)"
-            env -u CLOUDFLARE_API_TOKEN -u CLOUDFLARE_ACCOUNT_ID cargo run --locked --quiet \
-              --manifest-path tools/opsctl/Cargo.toml --example d1-contract-transition -- \
-              --root . \
-              --ledger-json artifacts/d1-migration/ledger-before.json \
-              --post-ledger-json artifacts/d1-migration/ledger-after.json \
-              --release-manifest artifacts/d1-migration/target-release.json \
-              --evidence-json artifacts/d1-migration/preconditions.json \
-              --evaluated-at-unix-seconds "$evaluated_at" \
-              --expected-source-sha "$SOURCE_SHA" \
-              --expected-release-set-id "$EXPECTED_RELEASE_SET_ID" \
-              > artifacts/d1-migration/verify.json
-            jq -e '.command == "d1 contract-transition verify" and .predecessor_ledger_state == "EXACT" and .ledger_state == "EXACT" and .decision == "SAFE" and .predecessor_revision == "0031_device_binding_governance.sql" and .remote_revision == "0032_pas2_payload_fingerprint_contract.sql" and .runtime_target_revision == "0031_device_binding_governance.sql" and .supported_schema_min == "0031_device_binding_governance.sql" and .supported_schema_max == "0032_pas2_payload_fingerprint_contract.sql" and .transition_migrations == ["0032_pas2_payload_fingerprint_contract.sql"] and .planned_migrations == [] and .recovery_strategy == "FAIL_FORWARD_ONLY" and .allowed == true and .mutation_executed == false' \
-              artifacts/d1-migration/verify.json >/dev/null
-          fi
+          jq -e '.status == "VERIFIED" and .mutation_executed == false' artifacts/d1-migration/verify.json >/dev/null
 
       - name: Verify post-apply database invariants with observe credential
         env:
@@ -1267,6 +1202,21 @@ jobs:
         with:
           name: d1-execution-receipt-${{ github.run_number }}-${{ github.run_id }}-${{ github.run_attempt }}-terminal
           path: artifacts/d1-migration/execution-receipt.json
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Persist metadata-only native D1 gate evidence
+        if: always() && hashFiles('artifacts/d1-migration/executor-admission.json') != ''
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: d1-native-gates-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            artifacts/d1-migration/executor-admission.json
+            artifacts/d1-migration/plan.json
+            artifacts/d1-migration/compatibility.json
+            artifacts/d1-migration/verify.json
+            artifacts/d1-migration/prewrite-admission.json
+            artifacts/d1-migration/prewrite-deployment-verification.json
           if-no-files-found: error
           retention-days: 30
 

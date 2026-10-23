@@ -2,7 +2,7 @@
 """Materialize exactly the admitted D1 plan for the protected Wrangler executor.
 
 This adapter owns no migration policy. It proves that the fresh remote ledger still equals
-the sealed predecessor for an admitted ordinary transaction, that the already-evaluated
+the sealed predecessor for an admitted sealed transaction, that the already-evaluated
 plan is the exact contiguous suffix of the typed repository projection, that authorized
 SQL content digests still match, and that Wrangler observes the same pending set.
 """
@@ -142,12 +142,11 @@ def source_inventory(repo_root: Path, component: dict[str, Any]) -> list[tuple[s
     return inventory
 
 
-def planned_names(plan: Any, mode: str, component: str) -> list[str]:
+def planned_names(plan: Any, component: str) -> list[str]:
     if not isinstance(plan, dict):
         fail("native D1 plan must be one object")
-    expected_command = "d1 plan" if mode == "ordinary" else "d1 contract-transition"
-    if plan.get("schema_version") != 1 or plan.get("command") != expected_command:
-        fail(f"native D1 plan command must be {expected_command!r}")
+    if plan.get("schema_version") != 1 or plan.get("command") != "d1 plan":
+        fail("executor requires the single sealed native D1 execution plan")
     if plan.get("mode") != "read-only" or plan.get("mutation_executed") is not False:
         fail("native D1 plan lost the read-only effect boundary")
     if plan.get("component") != component or plan.get("allowed") is not True:
@@ -158,10 +157,6 @@ def planned_names(plan: Any, mode: str, component: str) -> list[str]:
     names = [migration_name(value, "planned migration") for value in values]
     if len(names) != len(set(names)):
         fail("native D1 plan contains duplicate migrations")
-    if mode == "ordinary" and CONTRACT_REVISION in names:
-        fail("ordinary d1 plan must never authorize the separate fail-forward CONTRACT")
-    if mode == "contract" and (component != "catalog" or names != [CONTRACT_REVISION]):
-        fail("contract-transition must authorize exactly the sole Catalog 0035 CONTRACT")
     return names
 
 
@@ -219,7 +214,6 @@ def materialize(
     plan_path: Path,
     ledger_path: Path,
     component_id: str,
-    mode: str,
     output_dir: Path,
     expected_pending_path: Path,
     normalized_ledger_path: Path,
@@ -234,7 +228,7 @@ def materialize(
     component = component_projection(repository, component_id)
     inventory = source_inventory(repo_root, component)
     canonical = [name for name, _ in inventory]
-    planned = planned_names(plan, mode, component_id)
+    planned = planned_names(plan, component_id)
     digests = planned_digests(plan, planned, require_plan_digests)
     predecessor = sealed_predecessor(plan, require_sealed_predecessor or require_plan_digests)
     if remote != canonical[: len(remote)]:
@@ -274,8 +268,6 @@ def materialize(
     observed = sorted(path.name for path in output_dir.glob("*.sql"))
     if observed != sorted(bounded):
         fail(f"bounded migration directory drifted: expected={sorted(bounded)}, observed={observed}")
-    if component_id == "catalog" and mode == "ordinary" and (output_dir / CONTRACT_REVISION).exists():
-        fail("ordinary Catalog materialization leaked the trailing 0035 CONTRACT")
     write_json(expected_pending_path, planned)
     write_json(normalized_ledger_path, remote)
 
@@ -352,7 +344,6 @@ def self_test() -> None:
             root / "plan.json",
             root / "ledger.json",
             "catalog",
-            "ordinary",
             root / "bounded",
             root / "expected.json",
             root / "ledger-names.json",
@@ -365,13 +356,13 @@ def self_test() -> None:
         verify_pending(root / "expected.json", root / "wrangler.txt")
 
         leaked = dict(ordinary_plan)
-        leaked["planned_migrations"] = ["0002_expand.sql", CONTRACT_REVISION]
+        leaked["planned_migrations"] = ["0002_expand.sql", "0002_expand.sql"]
         try:
-            planned_names(leaked, "ordinary", "catalog")
+            planned_names(leaked, "catalog")
         except PlanAdapterError:
             pass
         else:
-            fail("self-test accepted CONTRACT leakage through ordinary d1 plan")
+            fail("self-test accepted duplicate migrations in a sealed execution plan")
 
         missing_digest = dict(ordinary_plan)
         missing_digest.pop("planned_migration_digests")
@@ -383,7 +374,6 @@ def self_test() -> None:
                 root / "missing-digest.json",
                 root / "ledger.json",
                 "catalog",
-                "ordinary",
                 root / "missing-digest-bounded",
                 root / "missing-digest-expected.json",
                 root / "missing-digest-ledger.json",
@@ -407,7 +397,6 @@ def self_test() -> None:
                 root / "wrong-digest.json",
                 root / "ledger.json",
                 "catalog",
-                "ordinary",
                 root / "wrong-digest-bounded",
                 root / "wrong-digest-expected.json",
                 root / "wrong-digest-ledger.json",
@@ -430,7 +419,6 @@ def self_test() -> None:
                 root / "missing-predecessor.json",
                 root / "ledger.json",
                 "catalog",
-                "ordinary",
                 root / "missing-predecessor-bounded",
                 root / "missing-predecessor-expected.json",
                 root / "missing-predecessor-ledger.json",
@@ -458,7 +446,6 @@ def self_test() -> None:
                 root / "no-op.json",
                 root / "drifted-ledger.json",
                 "catalog",
-                "ordinary",
                 root / "drifted-no-op-bounded",
                 root / "drifted-no-op-expected.json",
                 root / "drifted-no-op-ledger.json",
@@ -489,7 +476,6 @@ def parser() -> argparse.ArgumentParser:
     materialize_parser.add_argument("--plan", type=Path, required=True)
     materialize_parser.add_argument("--ledger", type=Path, required=True)
     materialize_parser.add_argument("--component", choices=("catalog", "resolver"), required=True)
-    materialize_parser.add_argument("--mode", choices=("ordinary", "contract"), required=True)
     materialize_parser.add_argument("--output-dir", type=Path, required=True)
     materialize_parser.add_argument("--expected-pending", type=Path, required=True)
     materialize_parser.add_argument("--normalized-ledger", type=Path, required=True)
@@ -515,7 +501,6 @@ def main() -> int:
                 args.plan,
                 args.ledger,
                 args.component,
-                args.mode,
                 args.output_dir,
                 args.expected_pending,
                 args.normalized_ledger,

@@ -318,10 +318,13 @@ def _build_operator_inputs(
     runtime = runtime_context.get("schema_contract")
     if not isinstance(runtime, dict):
         raise ValueError("runtime context is missing schema_contract")
-    current_manifest = {"schema_contract": runtime}
-    known_good_manifest = {"schema_contract": runtime}
+    current_manifest = runtime_context.get("deployed_manifest", {"schema_contract": runtime})
+    known_good_manifest = current_manifest
     ledger = [{"results": [{"id": index + 1, "name": name} for index, name in enumerate(remote_names)], "success": True}]
-    preconditions = {"component": component, "completed": []}
+    preconditions = plan.get("transition_evidence", {"component": component, "completed": []})
+    post_state = {"revision": target_revision}
+    if "transition_evidence" in plan:
+        post_state["stage_plan"] = plan
     transaction_input = {
         "schema_version": 1,
         "transaction_kind": transaction_kind,
@@ -336,7 +339,7 @@ def _build_operator_inputs(
         "freshness_max_age_seconds": freshness_seconds,
         "precondition_evidence_refs": [evidence_ref],
         "recovery_strategy": recovery_strategy,
-        "expected_post_state": {"revision": target_revision},
+        "expected_post_state": post_state,
     }
     inputs = {
         "source_sha": source_sha,
@@ -568,6 +571,61 @@ def command_self_test(_: argparse.Namespace) -> int:
     return 0
 
 
+def _deployment_fields(value: dict[str, Any]) -> dict[str, Any]:
+    # Facts only. Version count, percentages and admissibility belong to native D1 policy.
+    return {"deployment_id": value.get("id"), "versions": [
+        {"version_id": item.get("version_id"), "percentage": item.get("percentage")}
+        for item in value.get("versions", [])
+    ]}
+
+
+def command_transition_evidence(args: argparse.Namespace) -> int:
+    import time
+    context = _load_object_file(Path(args.runtime_context), "runtime context")
+    observation = _load_object_file(Path(args.observation), "provider observation")["provider_observation_input"]
+    current = context["deployed_manifest"]
+    target = _load_object_file(Path(args.release_manifest), "target manifest")
+    repository = _load_object_file(Path(args.repository_json), "repository projection")
+    evidence = {
+        "schema_version": 2, "kind": "D1_CURRENT_TRANSITION_EVIDENCE", "component": args.component,
+        "environment": observation["target"]["environment"],
+        "observed_at_unix_seconds": observation["observed_at_unix_seconds"],
+        "evaluated_at_unix_seconds": int(time.time()),
+        "current_manifest_sha256": hashlib.sha256(_compact(current).encode()).hexdigest(),
+        "target_manifest_sha256": hashlib.sha256(_compact(target).encode()).hexdigest(),
+        "repository_identity_sha256": repository["repository_identity_sha256"],
+        "ledger_sha256": observation["remote_ledger_sha256"],
+        "first_deployment_observed_at_unix_seconds": context["first_deployment_observed_at_unix_seconds"],
+        "deployment_observed_at_unix_seconds": context["deployment_observed_at_unix_seconds"],
+        "deployment_before": {"source_sha": context["deployed_release_source_sha"],
+            "release_set_id": context["deployed_release_set_id"], "worker_name": context["worker_name"],
+            **_deployment_fields(context["deployment_snapshot_before"])},
+        "deployment": {"source_sha": context["deployed_release_source_sha"],
+            "release_set_id": context["deployment_identity_after"]["release_set_id"], "worker_name": context["worker_name"],
+            **_deployment_fields(context["deployment_snapshot"])},
+        "target_source_sha": target["source"]["commit_sha"],
+        "target_release_set_id": args.release_id,
+    }
+    Path(args.output).write_text(json.dumps(evidence, sort_keys=True, indent=2) + "\n", encoding="utf-8")
+    return 0
+
+
+def command_verify_deployment(args: argparse.Namespace) -> int:
+    plan = _load_object_file(Path(args.plan), "sealed native stage plan")
+    if "transition_evidence" not in plan:
+        return 0
+    expected = plan["transition_evidence"]["deployment"]
+    actual = _deployment_fields(_load_object_file(Path(args.deployment), "fresh deployment"))
+    identity = _load_object_file(Path(args.identity), "fresh deployment identity")
+    matched = actual == {key: expected[key] for key in actual} and identity.get("release_set_id") == expected["release_set_id"]
+    print(json.dumps({"schema_version": 1, "kind": "D1_PREWRITE_DEPLOYMENT_OBSERVATION_CHECK",
+        "origin": "adapter_exact_fact_comparison", "policy_verdict": None, "matched": matched,
+        "provider_mutation_executed": False, "observed_deployment_id": actual["deployment_id"],
+        "observed_release_set_id": identity.get("release_set_id")}, sort_keys=True))
+    return 0 if matched else 2
+
+
+
 def parser() -> argparse.ArgumentParser:
     root = argparse.ArgumentParser(description=__doc__)
     sub = root.add_subparsers(dest="command", required=True)
@@ -598,6 +656,15 @@ def parser() -> argparse.ArgumentParser:
     operator_input.add_argument("--evidence-ref", required=True)
     operator_input.add_argument("--output", required=True)
     operator_input.set_defaults(func=command_operator_input)
+
+    transition = sub.add_parser("transition-evidence", help="copy exact observed CURRENT transition facts for native admission")
+    for name in ("runtime-context", "observation", "release-manifest", "repository-json", "release-id", "component", "output"):
+        transition.add_argument("--" + name, required=True)
+    transition.set_defaults(func=command_transition_evidence)
+    verify = sub.add_parser("verify-deployment", help="compare sealed and fresh deployment facts before a staged write")
+    for name in ("plan", "deployment", "identity"):
+        verify.add_argument("--" + name, required=True)
+    verify.set_defaults(func=command_verify_deployment)
 
     self_test = sub.add_parser("self-test", help="run dependency-free prepare fixtures")
     self_test.set_defaults(func=command_self_test)
