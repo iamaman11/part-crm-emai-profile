@@ -142,6 +142,29 @@ through a separate bounded current contract naming its real consumer or durable
 obligation, supported versions/window, owner, tests and retirement condition.
 Historical implementation alone never creates that obligation.
 
+### Empty databases and existing databases
+
+An empty Catalog database receives one CURRENT baseline from the existing
+`cloudflare-d1-bootstrap.py build` adapter. Verified native D1 source identities
+are evaluated offline; only final table, index and trigger definitions plus the
+exact canonical ledger are emitted to the target. Old `ALTER`/`DROP` transitions
+are not replayed on a fresh provider database. The generated SQL is a build output,
+not a second tracked schema authority. The current schema has no seed rows; an
+unexpected populated source table fails rather than silently losing seed data.
+
+The same adapter owns `build`, `verify`, `check` and its failure fixtures. CI no
+longer executes the retired historical bootstrap or revalidates an old hosted
+ceremony to admit a CURRENT build. Historical evidence stays passive provenance.
+The reconstruction adapter copies the same CURRENT native migration inventory
+used by its sealed ledger, including successor sources; it never selects legacy
+SQL by directory existence.
+
+Existing nonempty databases keep ordinary governed migrations. Baseline import
+rejects a nonempty target and replay before creating application objects. Schema,
+foreign keys, indexes, triggers, ledger and integrity must match canonical
+sequential migration results on SQLite and pinned local Wrangler. This source
+refactoring does not authorize replacing, resetting or restoring an existing DB.
+
 ### 5.2 Target identity and observed runtime context
 
 The requested target must match the full current canonical migration history and policy. Observed
