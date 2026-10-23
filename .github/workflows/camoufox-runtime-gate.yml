@@ -367,6 +367,13 @@ jobs:
         if: needs.scope.outputs.heavy == 'true'
         run: python scripts/test-ar10-firefox-writer-locks.py
 
+      - name: Prove configured Windows speech voices reach a stable browser-visible snapshot
+        if: needs.scope.outputs.heavy == 'true'
+        shell: pwsh
+        run: |
+          $runtimeRoot = Join-Path $env:RUNNER_TEMP 'camouhost-runtime'
+          & (Join-Path $runtimeRoot 'python\python.exe') -B scripts/diagnose-s0-speech-voices.py --camouhost (Join-Path $runtimeRoot 'camouhost\real.py') --runtime-lock (Join-Path $runtimeRoot 'camouhost\runtime-lock.json') --headless false
+
       - name: Prove current packaged runtime is accepted by the shipping Bridge reader
         if: needs.scope.outputs.heavy == 'true'
         shell: pwsh
@@ -404,13 +411,6 @@ jobs:
         run: |
           $runtimeRoot = Join-Path $env:RUNNER_TEMP 'camouhost-runtime'
           python scripts/test-s0-browser-visible-audio-fonts.py --python (Join-Path $runtimeRoot 'python\python.exe') --camouhost (Join-Path $runtimeRoot 'camouhost\real.py') --runtime-lock (Join-Path $runtimeRoot 'camouhost\runtime-lock.json') --headless false
-
-      - name: Prove configured Windows speech voices reach a stable browser-visible snapshot
-        if: needs.scope.outputs.heavy == 'true'
-        shell: pwsh
-        run: |
-          $runtimeRoot = Join-Path $env:RUNNER_TEMP 'camouhost-runtime'
-          & (Join-Path $runtimeRoot 'python\python.exe') scripts/diagnose-s0-speech-voices.py --camouhost (Join-Path $runtimeRoot 'camouhost\real.py') --runtime-lock (Join-Path $runtimeRoot 'camouhost\runtime-lock.json') --headless false
 
       - name: Prove clean-host Windows authoritative P3 browser-state portability
         if: needs.scope.outputs.heavy == 'true'

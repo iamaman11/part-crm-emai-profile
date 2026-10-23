@@ -156,12 +156,18 @@ def main() -> int:
             raise RuntimeError("speech voice diagnostic snapshot is invalid")
         observed = snapshot["voices"]
         equal = sorted_rows(observed) == sorted_rows(expected)
+        fields_equal = {
+            field: sorted(row[field] for row in observed)
+            == sorted(row[field] for row in expected)
+            for field in ("language", "name", "voice_uri", "local_service", "is_default")
+        }
         canonical_line(
             "S0_SPEECH_VOICE_OBSERVATION",
             {
                 "after_ms": snapshot.get("after_ms"),
                 "count": len(observed),
                 "equal": equal,
+                "fields_equal": fields_equal,
                 "event_count": snapshot.get("event_count"),
             },
         )
