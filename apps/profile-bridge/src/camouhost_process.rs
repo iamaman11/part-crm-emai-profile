@@ -423,6 +423,7 @@ impl ManagedCamouhostProcess {
         let python_executable = self.config.python_executable.clone();
         let mut command = Command::new(&python_executable);
         command
+            .arg("-B")
             .arg(&entrypoint)
             .current_dir(&self.config.runtime_root)
             .env_clear()
@@ -897,7 +898,14 @@ fn verify_file_digest(path: &Path, expected: &str) -> Result<(), BridgePortError
 }
 
 fn inherit_runtime_environment(command: &mut Command) {
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(0x0800_0000); // Hide Python's console; Camoufox owns its window.
+    }
     for key in [
+        "ALLUSERSPROFILE",
+        "APPDATA",
         "DBUS_SESSION_BUS_ADDRESS",
         "DISPLAY",
         "GDK_BACKEND",
@@ -907,8 +915,10 @@ fn inherit_runtime_environment(command: &mut Command) {
         "LOCALAPPDATA",
         "LOGNAME",
         "PATH",
+        "PROGRAMDATA",
         "SHELL",
-        "SystemRoot",
+        "SYSTEMDRIVE",
+        "SYSTEMROOT",
         "TEMP",
         "TMP",
         "TMPDIR",
@@ -955,6 +965,35 @@ mod tests {
     use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
     struct FixedObservation(NetworkIdentityObservation);
+
+    #[cfg(windows)]
+    #[test]
+    fn managed_environment_preserves_windows_system_directories()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let mut command = std::process::Command::new("not-executed");
+        command.env_clear();
+        super::inherit_runtime_environment(&mut command);
+        for name in [
+            "SYSTEMDRIVE",
+            "SYSTEMROOT",
+            "WINDIR",
+            "PROGRAMDATA",
+            "ALLUSERSPROFILE",
+            "APPDATA",
+        ] {
+            let expected = std::env::var_os(name).ok_or("Windows system directory is missing")?;
+            let forwarded = command
+                .get_envs()
+                .find(|(key, _)| key.to_string_lossy().eq_ignore_ascii_case(name))
+                .and_then(|(_, value)| value);
+            assert_eq!(forwarded, Some(expected.as_os_str()), "{name}");
+        }
+        assert!(command.get_envs().all(|(key, _)| !matches!(
+            key.to_str(),
+            Some("CLOUDFLARE_API_TOKEN" | "HTTP_PROXY" | "CAMOU_CONFIG_1")
+        )));
+        Ok(())
+    }
 
     impl BrowserRuntimeObservationPort for FixedObservation {
         type Error = BridgePortError;

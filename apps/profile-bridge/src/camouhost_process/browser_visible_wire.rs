@@ -108,6 +108,15 @@ pub(super) fn verify_browser_visible_payload(
         .compare_browser_visible(&observation, &mut Sha256Adapter)
         .map_err(|mismatch| {
             eprintln!("CAMOUHOST_BROWSER_VISIBLE_MISMATCH={mismatch:?}");
+            let (status, count) = match &observation.locale.speech_voices {
+                SpeechVoicesObservation::Available(voices) => ("available", voices.len()),
+                SpeechVoicesObservation::NotApplicable => ("not_applicable", 0),
+                SpeechVoicesObservation::Unavailable => ("unavailable", 0),
+            };
+            eprintln!(
+                "CAMOUHOST_SPEECH_OBSERVATION=status:{status};count:{count};configured:{}",
+                expected.locale().speech_voices_sha256().is_some()
+            );
             BrowserVisibleWireError::IdentityMismatch
         })?;
     host_runtime_evidence(&observation)

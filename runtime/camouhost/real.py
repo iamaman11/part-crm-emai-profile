@@ -220,29 +220,10 @@ async (request) => {
   const collectVoices = async () => {
     if (!request.voices_applicable) return {status: 'not_applicable'};
     if (!('speechSynthesis' in window)) return {status: 'unavailable'};
-    // Gecko publishes the configured voice registry asynchronously. A first read may be
-    // empty or may expose a transient non-final registry, so readiness cannot be inferred
-    // from `length > 0`. Observe changes and require a stable post-change snapshot. If the
-    // event was emitted before this page installed its listener, use only the final bounded
-    // deadline snapshot. Rust remains the sole semantic equality owner.
-    const deadline = Date.now() + 2000;
-    let changed = false;
-    let wake = null;
-    const onChanged = () => {
-      changed = true;
-      if (wake) {
-        const resolve = wake;
-        wake = null;
-        resolve();
-      }
-    };
-    const waitForChangeOrPoll = () => new Promise((resolve) => {
-      wake = resolve;
-      setTimeout(() => {
-        if (wake === resolve) wake = null;
-        resolve();
-      }, 100);
-    });
+    // Gecko initializes this registry asynchronously, especially on cold Windows hosts.
+    // Collect a complete, settled snapshot within the native observation deadline.
+    // A timeout still returns the actual values; only Rust can admit the identity.
+    const deadline = performance.now() + 10000;
     const normalizeVoices = (voices) => voices.map((voice) => ({
       language: voice.lang,
       name: voice.name,
@@ -252,20 +233,20 @@ async (request) => {
     }));
     let voices = [];
     let prior = null;
-    speechSynthesis.addEventListener('voiceschanged', onChanged);
-    try {
-      while (Date.now() < deadline) {
-        voices = speechSynthesis.getVoices();
-        const snapshot = voices.length === 0 ? null : JSON.stringify(normalizeVoices(voices));
-        if (changed && snapshot !== null && snapshot === prior) break;
-        prior = snapshot;
-        await waitForChangeOrPoll();
-      }
+    let stableSince = performance.now();
+    while (performance.now() < deadline) {
       voices = speechSynthesis.getVoices();
-    } finally {
-      speechSynthesis.removeEventListener('voiceschanged', onChanged);
-      wake = null;
+      const snapshot = voices.length > 0 && voices.length === request.voice_count
+        ? JSON.stringify(normalizeVoices(voices)) : null;
+      const now = performance.now();
+      if (snapshot !== null && snapshot === prior && now - stableSince >= 500) break;
+      if (snapshot !== prior) {
+        prior = snapshot;
+        stableSince = now;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 100));
     }
+    voices = speechSynthesis.getVoices();
     if (voices.length === 0) return {status: 'unavailable'};
     return {
       status: 'available',
@@ -348,7 +329,12 @@ def load_canonical_json(
 
 
 def browser_environment() -> dict[str, str]:
+    # Windows expands known-folder registry paths through these OS directory variables.
+    # Missing SYSTEMDRIVE can create a literal %SystemDrive% tree in the working directory.
+    # Windows os.environ iteration uses uppercase keys; credentials remain excluded.
     allowed = {
+        "ALLUSERSPROFILE",
+        "APPDATA",
         "DBUS_SESSION_BUS_ADDRESS",
         "DISPLAY",
         "GDK_BACKEND",
@@ -358,13 +344,17 @@ def browser_environment() -> dict[str, str]:
         "LOCALAPPDATA",
         "LOGNAME",
         "PATH",
+        "PROGRAMDATA",
         "SHELL",
+        "SYSTEMDRIVE",
+        "SYSTEMROOT",
         "TEMP",
         "TMP",
         "TMPDIR",
         "USER",
         "USERPROFILE",
         "WAYLAND_DISPLAY",
+        "WINDIR",
         "WSL_DISTRO_NAME",
         "WSL_INTEROP",
         "XDG_CACHE_HOME",
@@ -585,6 +575,7 @@ def browser_visible_probe_request(config: dict[str, Any]) -> dict[str, Any]:
         },
         "fonts": copy.deepcopy(fonts),
         "voices_applicable": "voices" in config,
+        "voice_count": len(config.get("voices", [])),
     }
 
 
@@ -1127,21 +1118,24 @@ def valid_frame(raw: str) -> bool:
     )
 
 
+def runtime_failure_category(error: BaseException) -> str:
+    if isinstance(error, RuntimeContractError):
+        return "contract"
+    elif isinstance(error, TimeoutError) or type(error).__name__ == "TimeoutError":
+        # Playwright's TimeoutError is not the builtin TimeoutError.
+        return "timeout"
+    elif isinstance(error, OSError):
+        return "io"
+    elif type(error).__name__ == "TargetClosedError":
+        return "browser_closed"
+    return "unexpected"
+
+
 def report_runtime_failure(phase: str, error: BaseException) -> None:
     """Report only closed diagnostic categories; exception text may contain profile data."""
     if phase not in {"launch", "browser_visible", "navigation", "close", "cleanup"}:
         phase = "unknown"
-    if isinstance(error, RuntimeContractError):
-        category = "contract"
-    elif isinstance(error, TimeoutError) or type(error).__name__ == "TimeoutError":
-        # Playwright's TimeoutError is not the builtin TimeoutError.
-        category = "timeout"
-    elif isinstance(error, OSError):
-        category = "io"
-    elif type(error).__name__ == "TargetClosedError":
-        category = "browser_closed"
-    else:
-        category = "unexpected"
+    category = runtime_failure_category(error)
     print(f"camouhost_failure phase={phase} category={category}", file=sys.stderr, flush=True)
 
 
@@ -1288,23 +1282,17 @@ def run_ipc() -> int:
 def main() -> int:
     if len(sys.argv) == 3 and sys.argv[1] == "--materialize-identity":
         try:
-            report = materialize_candidate_identity(Path(sys.argv[2]))
-        except RuntimeContractError as error:
-            print(f"candidate identity materialization failed: {error}", file=sys.stderr)
-            return 7
-        except importlib.metadata.PackageNotFoundError:
-            print(
-                "candidate identity materialization failed: package_metadata_unavailable",
-                file=sys.stderr,
-            )
-            return 7
-        except OSError as error:
-            errno = error.errno if isinstance(error.errno, int) else "none"
-            print(
-                "candidate identity materialization failed: "
-                f"os_error={type(error).__name__} errno={errno}",
-                file=sys.stderr,
-            )
+            with contextlib.redirect_stdout(sys.stderr):
+                report = materialize_candidate_identity(Path(sys.argv[2]))
+        except Exception as error:
+            line = 0
+            traceback = error.__traceback__
+            while traceback is not None:
+                if traceback.tb_frame.f_code.co_filename == __file__:
+                    line = traceback.tb_lineno
+                traceback = traceback.tb_next
+            failure = {"category": runtime_failure_category(error), "line": line}
+            print(json.dumps({"failure": failure}, separators=(",", ":")), flush=True)
             return 7
         print(json.dumps(report, ensure_ascii=True, separators=(",", ":"), sort_keys=True))
         return 0

@@ -344,6 +344,7 @@ jobs:
           path: artifacts/camoufox-candidate
 
       - name: Materialize exact clean-host Windows runtime from verified candidate
+        id: windows-runtime
         if: needs.scope.outputs.heavy == 'true'
         shell: pwsh
         run: |
@@ -367,6 +368,30 @@ jobs:
         if: needs.scope.outputs.heavy == 'true'
         run: python scripts/test-ar10-firefox-writer-locks.py
 
+      - name: Prove current packaged runtime is accepted by the shipping Bridge reader
+        if: needs.scope.outputs.heavy == 'true'
+        shell: pwsh
+        run: |
+          $runtimeRoot = Join-Path $env:RUNNER_TEMP 'camouhost-runtime'
+          python scripts/camouhost-runtime-package.py package --runtime-root "$runtimeRoot" --archive "$env:RUNNER_TEMP/selector-runtime.tar" --manifest "$runtimeRoot/runtime-manifest.json"
+          if ($LASTEXITCODE -ne 0) { throw 'current runtime packaging failed' }
+          $env:PACKAGED_WINDOWS_RUNTIME_ROOT = $runtimeRoot
+          cargo test --locked --release -p profile-bridge --test real_camoufox_runtime published_windows_runtime_is_consumed_by_shipping_selector -- --exact --nocapture
+          if ($LASTEXITCODE -ne 0) { throw 'shipping runtime selector rejected published contract' }
+          $env:AR10_REAL_CAMOUFOX = '1'
+          $env:AR10_PYTHON = Join-Path $runtimeRoot 'python\python.exe'
+          $env:AR10_RUNTIME_ROOT = $runtimeRoot
+          $env:AR10_REAL_CAMOUFOX_HEADLESS = 'false'
+          cargo test --locked --release -p profile-bridge --test real_camoufox_runtime bridge_preflight_launches_real_camoufox_through_managed_ipc -- --exact --nocapture
+          if ($LASTEXITCODE -ne 0) { throw 'packaged first-open and managed browser launch failed' }
+
+      - name: Prove configured Windows speech voices reach a stable browser-visible snapshot
+        if: ${{ !cancelled() && needs.scope.outputs.heavy == 'true' && steps.windows-runtime.outcome == 'success' }}
+        shell: pwsh
+        run: |
+          $runtimeRoot = Join-Path $env:RUNNER_TEMP 'camouhost-runtime'
+          & (Join-Path $runtimeRoot 'python\python.exe') -B scripts/diagnose-s0-speech-voices.py --camouhost (Join-Path $runtimeRoot 'camouhost\real.py') --runtime-lock (Join-Path $runtimeRoot 'camouhost\runtime-lock.json') --headless false
+
       - name: Prove packaged Windows post-launch failure cleanup and immediate relaunch
         if: needs.scope.outputs.heavy == 'true'
         shell: pwsh
@@ -387,13 +412,6 @@ jobs:
         run: |
           $runtimeRoot = Join-Path $env:RUNNER_TEMP 'camouhost-runtime'
           python scripts/test-s0-browser-visible-audio-fonts.py --python (Join-Path $runtimeRoot 'python\python.exe') --camouhost (Join-Path $runtimeRoot 'camouhost\real.py') --runtime-lock (Join-Path $runtimeRoot 'camouhost\runtime-lock.json') --headless false
-
-      - name: Prove configured Windows speech voices reach a stable browser-visible snapshot
-        if: needs.scope.outputs.heavy == 'true'
-        shell: pwsh
-        run: |
-          $runtimeRoot = Join-Path $env:RUNNER_TEMP 'camouhost-runtime'
-          & (Join-Path $runtimeRoot 'python\python.exe') scripts/diagnose-s0-speech-voices.py --camouhost (Join-Path $runtimeRoot 'camouhost\real.py') --runtime-lock (Join-Path $runtimeRoot 'camouhost\runtime-lock.json') --headless false
 
       - name: Prove clean-host Windows authoritative P3 browser-state portability
         if: needs.scope.outputs.heavy == 'true'

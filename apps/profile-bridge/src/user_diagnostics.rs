@@ -70,6 +70,9 @@ impl UserDiagnostic {
                     "BRIDGE_MANUAL_NETWORK_SETTINGS"
                 }
                 ShippingCompositionError::Initialization(error) => match error {
+                    crate::generation_initialization::InitialProfileError::RuntimeBundle => {
+                        "BRIDGE_RUNTIME_BUNDLE_INVALID"
+                    }
                     crate::generation_initialization::InitialProfileError::Runtime => {
                         "BRIDGE_FIRST_OPEN_RUNTIME_FAILED"
                     }
@@ -189,6 +192,16 @@ impl UserDiagnostic {
             Self::Launch(Launch::InstalledConnection(_)) => {
                 "Profile Bridge connection settings need repair. Return to computer setup in the application. Keep existing device and profile files; setup must not silently switch the connected server."
             }
+            Self::Launch(Launch::Initialization(
+                crate::generation_initialization::InitialProfileError::RuntimeBundle,
+            )) => {
+                "The installed browser package could not be verified. Update Profile Bridge from Install for Windows in the application. Reconnecting this computer will not repair the package. Keep existing device and profile files."
+            }
+            Self::Launch(Launch::Initialization(
+                crate::generation_initialization::InitialProfileError::Runtime,
+            )) => {
+                "The verified browser package could not prepare the initial browser state. Keep this computer connected and preserve local profile files. Report this diagnostic code; do not reconnect or reset the profile."
+            }
             Self::Launch(Launch::Initialization(_)) => {
                 "The profile could not open. Return to the application to check access, connection and session status, then try Open again. Keep local profile files; a failed request is not proof of a saved copy."
             }
@@ -217,6 +230,25 @@ impl UserDiagnostic {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn invalid_package_and_first_identity_failure_have_distinct_actionable_codes() {
+        use crate::generation_initialization::InitialProfileError;
+        let package = UserDiagnostic::Launch(ShippingCompositionError::Initialization(
+            InitialProfileError::RuntimeBundle,
+        ));
+        let identity = UserDiagnostic::Launch(ShippingCompositionError::Initialization(
+            InitialProfileError::Runtime,
+        ));
+        assert_eq!(package.code(), "BRIDGE_RUNTIME_BUNDLE_INVALID");
+        assert_eq!(identity.code(), "BRIDGE_FIRST_OPEN_RUNTIME_FAILED");
+        assert!(
+            package
+                .message()
+                .contains("Reconnecting this computer will not repair")
+        );
+        assert!(identity.message().contains("do not reconnect or reset"));
+    }
 
     #[test]
     fn incomplete_setup_and_lost_browser_return_are_distinct() {

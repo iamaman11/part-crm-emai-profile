@@ -226,6 +226,23 @@ def prove_failure_observation_contract() -> None:
     source_root = Path(__file__).resolve().parents[1]
     runtime = load_runtime(source_root / "runtime/camouhost/real.py")
     proof = load_runtime(source_root / "scripts/test-ar10-real-camoufox.py")
+    proof.prove_managed_environment_projection(runtime)
+    for error, category in (
+        (runtime.RuntimeContractError("secret-config-path"), "contract"),
+        (OSError("secret-config-path"), "io"),
+        (type("TargetClosedError", (Exception,), {})("secret-config-path"), "browser_closed"),
+    ):
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+        with patch.object(sys, "argv", ["real.py", "--materialize-identity", "unused"]), \
+                patch.object(runtime, "materialize_candidate_identity", side_effect=error), \
+                contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+            result = runtime.main()
+        report = json.loads(stdout.getvalue())
+        assert result == 7 and report["failure"]["category"] == category
+        assert isinstance(report["failure"]["line"], int)
+        assert len(stdout.getvalue().splitlines()) == 1
+        assert "secret" not in stdout.getvalue() + stderr.getvalue()
     timeout = type("TimeoutError", (Exception,), {})("secret-url-key-profile-content")
     frames = [f"hello|{IPC_VERSION}", f"launch|{SESSION}", f"observe_browser_visible|{SESSION}",
               f"admit_navigation|{SESSION}|unused", f"close|{SESSION}"]

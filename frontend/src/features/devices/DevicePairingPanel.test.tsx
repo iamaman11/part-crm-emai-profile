@@ -158,7 +158,7 @@ describe('DevicePairingPanel', () => {
 
     expect(await screen.findByText('Device registration confirmed')).toBeTruthy();
     expect(screen.getByText('device_01JTEST')).toBeTruthy();
-    expect(screen.getByText(/Browser components still need a readiness check/)).toBeTruthy();
+    expect(screen.getByText(/Go to Profiles and choose Open browser/)).toBeTruthy();
     expect(mockedGetDeviceRegistration).toHaveBeenCalledWith('tenant_01JTEST', 'device_01JTEST', expect.any(AbortSignal));
     expect(mockedAuthorizeDevicePairing).not.toHaveBeenCalled();
   });

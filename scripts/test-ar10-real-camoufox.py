@@ -19,7 +19,9 @@ import tempfile
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from types import ModuleType
 from typing import BinaryIO, Iterator
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 CAMOUHOST = ROOT / "runtime/camouhost/real.py"
@@ -28,30 +30,6 @@ SESSION = "session_01JAR10REALCAMOUFOX"
 IPC_VERSION = "3"
 HEADLESS_MODE_ENV = "AR10_REAL_CAMOUFOX_HEADLESS"
 BRIDGE_LOCK_CONTENT = "profile-platform-bridge-lock-v1\ndevice_01JAR10REALCAMOUFOX\n1\n"
-MANAGED_PARENT_ENV = {
-    "DBUS_SESSION_BUS_ADDRESS",
-    "DISPLAY",
-    "GDK_BACKEND",
-    "HOME",
-    "LANG",
-    "LC_ALL",
-    "LOCALAPPDATA",
-    "LOGNAME",
-    "PATH",
-    "SHELL",
-    "TEMP",
-    "TMP",
-    "TMPDIR",
-    "USER",
-    "USERPROFILE",
-    "WAYLAND_DISPLAY",
-    "WSL_DISTRO_NAME",
-    "WSL_INTEROP",
-    "XDG_CACHE_HOME",
-    "XDG_CONFIG_HOME",
-    "XDG_RUNTIME_DIR",
-}
-
 PAGE = b"""<!doctype html><meta charset='utf-8'><script>
 const hadStorage = localStorage.getItem('ar10-marker') === 'persisted';
 const hadCookie = document.cookie.includes('ar10-marker=persisted');
@@ -112,31 +90,6 @@ def requested_headless_mode() -> str:
 
 def base_env(root: Path, report: dict[str, str]) -> dict[str, str]:
     env = os.environ.copy()
-    env.update(
-        {
-            "CAMOUHOST_PROFILE_ROOT": str(root),
-            "CAMOUHOST_RUNTIME_LOCK": str(RUNTIME_LOCK),
-            "CAMOUHOST_EXPECTED_RUNTIME_LOCK_SHA256": report["runtime_lock_sha256"],
-            "CAMOUHOST_EXPECTED_CONFIG_SHA256": report["fingerprint_config_sha256"],
-            "CAMOUHOST_EXPECTED_PROBE_SHA256": report["profile_stable_probe_sha256"],
-            "CAMOUHOST_HEADLESS_MODE": requested_headless_mode(),
-            "PYTHONUNBUFFERED": "1",
-        }
-    )
-    return env
-
-
-def managed_env(
-    root: Path,
-    report: dict[str, str],
-    *,
-    sanitized: bool,
-) -> dict[str, str]:
-    env = (
-        {key: os.environ[key] for key in MANAGED_PARENT_ENV if key in os.environ}
-        if sanitized
-        else os.environ.copy()
-    )
     env.update(
         {
             "CAMOUHOST_PROFILE_ROOT": str(root),
@@ -273,66 +226,23 @@ def complete_pre_navigation_protocol(
     admit_navigation(process, url)
 
 
-def launch_probe(
-    root: Path,
-    report: dict[str, str],
-    *,
-    sanitized: bool,
-    cwd: Path,
-) -> tuple[str, int, str]:
-    process = subprocess.Popen(
-        [sys.executable, str(CAMOUHOST)],
-        cwd=cwd,
-        env=managed_env(root, report, sanitized=sanitized),
-        stdin=subprocess.PIPE,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        bufsize=1,
-    )
-    try:
-        hello = exchange(process, f"hello|{IPC_VERSION}")
-        if hello != f"hello_ack|{IPC_VERSION}":
-            return hello, process.wait(timeout=30), ""
-        launch = exchange(process, f"launch|{SESSION}")
-        if launch == f"ready|{SESSION}":
-            complete_pre_navigation_protocol(process, None)
-            close = exchange(process, f"close|{SESSION}")
-            returncode = process.wait(timeout=60)
-            stderr = process.stderr.read()[-1000:] if process.stderr is not None else ""
-            return f"{launch};{close}", returncode, stderr
-        returncode = process.wait(timeout=60)
-        stderr = process.stderr.read()[-1000:] if process.stderr is not None else ""
-        return launch, returncode, stderr
-    finally:
-        if process.poll() is None:
-            process.kill()
-            process.wait(timeout=30)
-
-
-def prove_managed_environment_boundary(base: Path) -> None:
-    cases = [
-        ("sanitized_repo_cwd", True, ROOT),
-        ("full_runtime_cwd", False, ROOT / "runtime"),
-        ("exact_managed", True, ROOT / "runtime"),
-    ]
-    outcomes: dict[str, tuple[str, int, str]] = {}
-    for label, sanitized, cwd in cases:
-        root = base / f"generation-{label}"
-        report = materialize(root)
-        outcomes[label] = launch_probe(root, report, sanitized=sanitized, cwd=cwd)
-
-    expected_prefix = f"ready|{SESSION};closed|{SESSION}|true"
-    exact = outcomes["exact_managed"]
-    if exact[0] != expected_prefix or exact[1] != 0:
-        compact = {
-            label: {"frame": frame, "rc": rc, "stderr": stderr}
-            for label, (frame, rc, stderr) in outcomes.items()
-        }
-        raise AssertionError(
-            "managed sanitized launch differs from direct runtime; differential="
-            + json.dumps(compact, ensure_ascii=True, sort_keys=True)
-        )
+def prove_managed_environment_projection(runtime: ModuleType) -> None:
+    expected = {
+        "SYSTEMDRIVE": "C:",
+        "SYSTEMROOT": r"C:\Windows",
+        "WINDIR": r"C:\Windows",
+        "PROGRAMDATA": r"C:\ProgramData",
+        "ALLUSERSPROFILE": r"C:\ProgramData",
+        "APPDATA": r"C:\Users\Test\AppData\Roaming",
+        "LOCALAPPDATA": r"C:\Users\Test\AppData\Local",
+    }
+    injected = {
+        "CLOUDFLARE_API_TOKEN": "must-not-cross",
+        "HTTP_PROXY": "must-not-cross",
+        "CAMOU_CONFIG_1": "must-not-cross",
+    }
+    with patch.dict(os.environ, expected | injected, clear=True):
+        assert runtime.browser_environment() == expected
 
 
 def run_cold_launch(root: Path, report: dict[str, str], url: str) -> None:
@@ -516,11 +426,10 @@ def main() -> int:
             assert_clean_launch_lock_state(second_root)
             expect_prelaunch_identity_rejection(first_root, first)
             expect_probe_digest_non_authoritative(first_root, first)
-            prove_managed_environment_boundary(base)
 
         print(
             "AR-10 real Camoufox cold-launch, identity, Bridge ownership, "
-            "typed admission authority, managed environment and persistence evidence passed."
+            "typed admission authority and persistence evidence passed."
         )
         return 0
     finally:
