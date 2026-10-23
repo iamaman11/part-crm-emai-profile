@@ -2,8 +2,8 @@ use super::{DeliveryHandoffError, DeliveryHandoffOutcome};
 #[cfg(any(windows, test))]
 use std::path::Path;
 
-/// The handoff owner alone decides whether setup is pristine or an exact first-install retry.
-pub(crate) fn first_installation_candidate(
+/// Admit pristine setup or an arrived installation whose health is pending or confirmed.
+pub(crate) fn installation_candidate(
     state: &crate::windows_delivery::DeliveryState,
     handoff: Option<&crate::windows_delivery_store::DeliveryHandoffEvidence>,
 ) -> Result<Option<crate::windows_delivery::DeliveryIdentity>, DeliveryHandoffError> {
@@ -13,21 +13,17 @@ pub(crate) fn first_installation_candidate(
         .validate_persisted()
         .map_err(DeliveryHandoffError::State)?;
     if let Some(active) = state.active() {
-        // An installer restart can only acknowledge this exact completed first installation.
-        // It cannot reset an interrupted health attempt, recover a failure or replay an upgrade.
+        // Setup cannot replace a process transfer or an interrupted runtime health attempt.
         let arrived = handoff.is_some_and(|evidence| {
             evidence.kind() == DeliveryHandoffKind::Activation
                 && evidence.outcome() == DeliveryHandoffOutcome::Arrived
                 && evidence.source_candidate() == active
                 && evidence.target() == active
-                && evidence.source_attempt() == 1
+                && evidence.source_attempt() == state.activation_generation()
         });
-        let retryable = state.activation_generation() == 1
-            && state.last_known_good().is_none()
-            && state.staged().is_none()
-            && state.last_failure().is_none()
+        let installable = state.last_failure().is_none()
             && state.last_activation().is_some_and(|activation| {
-                activation.attempt == 1
+                activation.attempt == state.activation_generation()
                     && activation.candidate == *active
                     && matches!(
                         activation.outcome,
@@ -35,7 +31,7 @@ pub(crate) fn first_installation_candidate(
                             | DeliveryActivationOutcome::Healthy
                     )
             });
-        if !arrived || !retryable {
+        if !arrived || !installable {
             return Err(DeliveryHandoffError::FirstInstallationConflict);
         }
         return Ok(Some(active.clone()));
@@ -59,19 +55,22 @@ use super::{
 };
 #[cfg(any(windows, test))]
 impl DeliveryHandoffCoordinator {
-    /// Complete the first installation from the exact verified staged executable already running.
+    /// Complete setup from the exact verified staged executable already running under quiescence.
     ///
-    /// There is no previous process/release to impersonate or transfer from. The existing journal
+    /// The installer starts the actual target, without impersonating an old process. The journal
     /// atomically records activation and this actual target's arrival. Runtime health remains pending
     /// until the normal shipping preflight confirms it. No rollback source is invented.
-    pub fn complete_first_installation(
+    pub fn complete_installation(
         &self,
         guard: &DeliveryActivationGuard,
         current_executable: impl AsRef<Path>,
     ) -> Result<(), DeliveryHandoffError> {
         let mut store = self.open_store()?;
         let state = store.state();
-        if let Some(active) = first_installation_candidate(state, store.handoff())? {
+        let active = installation_candidate(state, store.handoff())?;
+        if let Some(active) = active
+            && state.staged().is_none()
+        {
             return self.verify_current_identity(&active, current_executable.as_ref());
         }
         let identity = state

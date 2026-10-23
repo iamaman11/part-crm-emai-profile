@@ -27,8 +27,8 @@ pub struct WindowsDeliveryCoordinator<'a> {
 }
 
 impl<'a> WindowsDeliveryCoordinator<'a> {
-    /// Installer preparation never restages an active release or rewrites its arrival/health history.
-    pub fn prepare_first_installation<V, F, R>(
+    /// Prepare a normal installation/update, or reopen an exact installed retry without restaging.
+    pub fn prepare_installation<V, F, R>(
         &mut self,
         manifest_bytes: &[u8],
         signature_bytes: &[u8],
@@ -42,7 +42,7 @@ impl<'a> WindowsDeliveryCoordinator<'a> {
         F: DeliveryAssetFetcher,
         R: DeliveryArchiveReader,
     {
-        let active = crate::windows_delivery_handoff::first_installation_candidate(
+        let active = crate::windows_delivery_handoff::installation_candidate(
             self.state_store.state(),
             self.state_store.handoff(),
         )
@@ -61,14 +61,19 @@ impl<'a> WindowsDeliveryCoordinator<'a> {
             manifest_bytes,
             signature_bytes,
             trust,
-            Some(&AcceptedDeliveryFloor::from_identity(&active)),
+            accepted_floor(self.state_store.state()).as_ref(),
             verifier,
         )
         .map_err(WindowsDeliveryCoordinatorError::Policy)?;
         if candidate.identity() != active {
-            return Err(WindowsDeliveryCoordinatorError::FirstInstallation(
-                crate::windows_delivery_handoff::DeliveryHandoffError::FirstInstallationConflict,
-            ));
+            return self.prepare(
+                manifest_bytes,
+                signature_bytes,
+                trust,
+                verifier,
+                fetcher,
+                archive_reader,
+            );
         }
         let staged = reopen_staged_delivery(self.staging_root, &active)
             .map_err(WindowsDeliveryCoordinatorError::Staging)?;
@@ -145,7 +150,7 @@ impl<'a> WindowsDeliveryCoordinator<'a> {
             .map_err(WindowsDeliveryCoordinatorError::State)?;
         if &next_state != self.state_store.state() {
             self.state_store
-                .persist(&next_state)
+                .persist_preserving_handoff(&next_state)
                 .map_err(WindowsDeliveryCoordinatorError::Store)?;
         }
 
@@ -471,7 +476,7 @@ mod tests {
         let mut fetcher = FakeFetcher::default();
         let mut reader = FakeArchiveReader::healthy();
         let prepared = WindowsDeliveryCoordinator::new(&downloads, &releases, &mut store)
-            .prepare_first_installation(
+            .prepare_installation(
                 &manifest,
                 &signature,
                 &trust,
@@ -482,7 +487,7 @@ mod tests {
         let workspace = MaterializationRoot::open_or_create(directory.join("profiles"))?;
         let guard = DeliveryActivationGuard::acquire(&workspace)?;
         DeliveryHandoffCoordinator::new(releases.clone(), directory.join("state"))
-            .complete_first_installation(
+            .complete_installation(
                 &guard,
                 prepared
                     .staged()
@@ -500,7 +505,7 @@ mod tests {
             let revision = store.revision();
             let handoff = store.handoff().cloned();
             WindowsDeliveryCoordinator::new(&downloads, &releases, &mut store)
-                .prepare_first_installation(
+                .prepare_installation(
                     &manifest,
                     &signature,
                     &trust,
@@ -515,20 +520,51 @@ mod tests {
         }
         let (other_manifest, other_signature) = signed_candidate(2)?;
         let before = store.clone();
-        assert!(matches!(
+        let update = WindowsDeliveryCoordinator::new(&downloads, &releases, &mut store)
+            .prepare_installation(
+                &other_manifest,
+                &other_signature,
+                &trust,
+                &mut verifier,
+                &mut fetcher,
+                &mut reader,
+            )?;
+        assert_eq!(store.state().active(), before.state().active());
+        assert_eq!(store.handoff(), before.handoff());
+        assert_eq!(store.state().staged(), Some(&update.candidate().identity()));
+        // This fixture's newer manifest reuses both exact component artifacts.
+        assert_eq!(fetcher.calls.len(), 2);
+        let staged_update = store.clone();
+        assert_eq!(
             WindowsDeliveryCoordinator::new(&downloads, &releases, &mut store)
-                .prepare_first_installation(
-                    &other_manifest,
-                    &other_signature,
+                .prepare_installation(
+                    &manifest,
+                    &signature,
                     &trust,
                     &mut verifier,
                     &mut fetcher,
-                    &mut reader
+                    &mut reader,
                 ),
-            Err(WindowsDeliveryCoordinatorError::FirstInstallation(_))
-        ));
-        assert_eq!(store, before);
+            Err(WindowsDeliveryCoordinatorError::Policy(
+                DeliveryPolicyError::DowngradeRejected
+            ))
+        );
+        assert_eq!(store, staged_update);
         assert_eq!(fetcher.calls.len(), 2);
+        DeliveryHandoffCoordinator::new(releases, directory.join("state")).complete_installation(
+            &guard,
+            update
+                .staged()
+                .profile_bridge_root()
+                .join("profile-bridge.exe"),
+        )?;
+        let installed = DeliveryStateStore::open(directory.join("state"))?;
+        assert_eq!(
+            installed.state().active(),
+            Some(&update.candidate().identity())
+        );
+        assert_eq!(installed.state().last_known_good(), before.state().active());
+        assert!(!installed.state().active_health_confirmed());
         Ok(())
     }
 

@@ -445,7 +445,7 @@ mod windows {
                     crate::installed_connection::InstalledConnection::prepare(&coordinator, origin)
                         .map_err(ShippingCompositionError::InstalledConnection)?;
                 coordinator
-                    .complete_first_installation(&guard, &current_executable)
+                    .complete_installation(&guard, &current_executable)
                     .map_err(ShippingCompositionError::FirstInstallation)?;
                 connection
                     .persist()

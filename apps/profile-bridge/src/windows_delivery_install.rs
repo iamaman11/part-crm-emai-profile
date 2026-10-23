@@ -1,4 +1,4 @@
-//! Installer composition only. Delivery policy, extraction, journal and first-install eligibility
+//! Installer composition only. Delivery policy, extraction, journal and installation eligibility
 //! remain in their existing owners. The wizard supplies public bootstrap data from the immutable installer payload delivered by the canonical HTTPS app.
 
 use crate::installed_connection::InstalledConnectionError;
@@ -76,7 +76,7 @@ mod windows {
             .map_err(|_| NativeInstallerError::PlatformUnavailable)?;
         let mut reader = WindowsDeliveryArchiveReader::new();
         let prepared = WindowsDeliveryCoordinator::new(&downloads, &staging, &mut store)
-            .prepare_first_installation(
+            .prepare_installation(
                 &bundle.manifest,
                 &bundle.signature,
                 &bundle.trust,

@@ -27,7 +27,7 @@ use std::process::Child;
 use std::process::Command;
 
 mod first_install;
-pub(crate) use first_install::first_installation_candidate;
+pub(crate) use first_install::installation_candidate;
 
 const PROFILE_BRIDGE_DIRECTORY: &str = "profile-bridge";
 const PROFILE_BRIDGE_EXECUTABLE: &str = "profile-bridge.exe";
