@@ -72,6 +72,8 @@ en.InstallationFailed=Installation could not finish. Check the message below, th
 ru.InstallationFailed=Не удалось завершить установку. Проверьте сообщение ниже и повторите установку. Если ошибка повторяется, сохраните журнал установки.
 
 [Code]
+const
+  DirectoryPrefix = 'PROFILE_BRIDGE_PREPARED_DIRECTORY_V1=';
 var
   BridgeOutputError: Boolean;
   BridgeLastLine: String;
@@ -98,8 +100,6 @@ begin
 end;
 
 procedure CaptureBridgeOutput(const S: String; const Error, FirstLine: Boolean);
-const
-  DirectoryPrefix = 'PROFILE_BRIDGE_PREPARED_DIRECTORY_V1=';
 var
   Directory: String;
 begin
