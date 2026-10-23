@@ -273,6 +273,20 @@ fn actual_deployed_context_traverses_separate_sealed_contract_and_current_expand
             ],
         )?;
         let inputs: Value = serde_json::from_slice(&fs::read(dir.join("inputs.json"))?)?;
+        assert_eq!(inputs["inputs"]["repository_projection_json"], "{}");
+        let dispatch = json!({"ref":"main","inputs":inputs["inputs"]});
+        assert!(serde_json::to_vec(&dispatch)?.len() <= 65535);
+        let generated = Command::new(&native)
+            .arg("--root")
+            .arg(&root)
+            .args(["d1", "repository"])
+            .output()?;
+        assert!(
+            generated.status.success(),
+            "native Prepare repository derivation failed"
+        );
+        let prepared_repository: Value = serde_json::from_slice(&generated.stdout)?;
+        assert_eq!(prepared_repository, repository);
         let decode = |k: &str| -> Result<Value, Box<dyn Error>> {
             Ok(serde_json::from_str(
                 inputs["inputs"][k]
@@ -284,7 +298,7 @@ fn actual_deployed_context_traverses_separate_sealed_contract_and_current_expand
         let tx = build_transaction_projection(
             &prepared,
             &decode("provider_observation_json")?,
-            &repository,
+            &prepared_repository,
             &tx_input,
             &fs::read(dir.join("target.json"))?,
         )?;

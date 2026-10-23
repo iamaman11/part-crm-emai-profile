@@ -201,6 +201,10 @@ failures remain explicitly non-policy observations; they never fabricate a nativ
 Post-state receipt verification consumes fresh provider facts independently of admission for another
 migration: old-code incompatibility after the final stage cannot hide the completed SQL effect.
 New preparation still stops on the native blocked verdict; facts alone never authorize another effect.
+The standard operator does not transport a second copy of the native repository projection through
+GitHub dispatch inputs. Prepare derives an omitted projection from its exact checked-out source with
+the same `opsctl d1 repository` owner before sealing. Immutable runtime manifests and observation
+evidence remain complete; excessive dispatch growth fails explicitly before HTTP transport.
 
 ## 6. Permanent Migration Operations Contract
 

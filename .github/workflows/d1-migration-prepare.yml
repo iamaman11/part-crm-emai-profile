@@ -65,8 +65,9 @@ on:
         required: true
         type: string
       repository_projection_json:
-        description: Strict typed D1 repository projection JSON from its natural owner
-        required: true
+        description: Native D1 repository projection; empty object derives it from exact checked-out source
+        required: false
+        default: '{}'
         type: string
       transaction_input_json:
         description: Strict TransactionIdentityInput JSON for an ordinary future transaction
@@ -238,6 +239,15 @@ jobs:
             cargo build --locked --manifest-path tools/opsctl/Cargo.toml --example d1-transaction-plan
           env -u CLOUDFLARE_API_TOKEN -u CLOUDFLARE_ACCOUNT_ID \
             cargo build --locked --manifest-path tools/opsctl/Cargo.toml --example d1-current-reconstruction-plan
+
+      - name: Derive omitted native repository projection from exact source
+        run: |
+          set -euo pipefail
+          if jq -e 'type == "object" and length == 0' artifacts/d1-prepare/repository-projection.json >/dev/null; then
+            env -u CLOUDFLARE_API_TOKEN -u CLOUDFLARE_ACCOUNT_ID \
+              tools/opsctl/target/debug/opsctl --root . d1 repository \
+              > artifacts/d1-prepare/repository-projection.json
+          fi
 
       - name: Prepare ordinary migration before any mutation authorization
         id: prepare

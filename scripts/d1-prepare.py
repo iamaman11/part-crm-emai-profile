@@ -350,9 +350,12 @@ def _build_operator_inputs(
         "known_good_release_manifest_json": _compact(known_good_manifest),
         "preconditions_json": _compact(preconditions),
         "provider_observation_json": _compact(observation),
-        "repository_projection_json": _compact(repository),
+        # Prepare regenerates this native projection from its exact source checkout.
+        # It is not immutable external evidence and must not consume dispatch capacity.
+        "repository_projection_json": "{}",
         "transaction_input_json": _compact(transaction_input),
     }
+    _check_dispatch_size(inputs)
     return {
         "schema_version": 1,
         "command": "d1 operator-input",
@@ -363,6 +366,12 @@ def _build_operator_inputs(
         "component": component,
         "inputs": inputs,
     }
+
+
+def _check_dispatch_size(inputs: dict[str, str]) -> None:
+    size = len(_compact({"ref": "main", "inputs": inputs}).encode("utf-8"))
+    if size > 65535:
+        raise ValueError(f"GitHub workflow dispatch exceeds its transport limit: {size} bytes > 65535; no evidence was truncated")
 
 
 def command_operator_input(args: argparse.Namespace) -> int:
@@ -511,6 +520,14 @@ def command_self_test(_: argparse.Namespace) -> int:
         assert projection["command"] == "d1 operator-input"
         assert projection["mutation_executed"] is False
         assert projection["authorization_consumed"] is False
+        assert projection["inputs"]["repository_projection_json"] == "{}"
+        _check_dispatch_size(projection["inputs"])
+        try:
+            _check_dispatch_size({"oversized": "x" * 65535})
+        except ValueError as exc:
+            assert "transport limit" in str(exc)
+        else:
+            raise AssertionError("oversized GitHub dispatch unexpectedly passed")
         tx_input = json.loads(projection["inputs"]["transaction_input_json"])
         assert tx_input["planned_migrations"][0]["migration_file"] == "0042_dynamic_operator_fixture.sql"
         assert tx_input["expected_post_state"] == {"revision": "0042_dynamic_operator_fixture.sql"}
