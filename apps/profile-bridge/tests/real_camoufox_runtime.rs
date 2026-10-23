@@ -138,14 +138,16 @@ fn approved_runtime(
         use profile_bridge::runtime_bundle::FilesystemRuntimeBundleSelection;
         use profile_platform_primitives::{ActorContext, ActorId, CorrelationId, TenantScope};
         let actor = ActorContext::new(
-            TenantScope::new(TenantId::parse("tenant_01JAR10REAL")?),
+            TenantScope::new(TenantId::parse(
+                "tenant_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            )?),
             ActorId::parse("actor_01JAR10REAL")?,
             CorrelationId::parse("corr_01JAR10REAL")?,
         );
         let mut selector = FilesystemRuntimeBundleSelection::open(runtime_root)?;
         Ok(selector.select_bundle(
             &actor,
-            &ProfileId::parse("profile_01JAR10REAL")?,
+            &ProfileId::parse("profile_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")?,
             &GenerationId::parse("generation_01JAR10REAL")?,
         )?)
     }
@@ -249,7 +251,7 @@ impl profile_bridge::shipping_control_plane::MachineHttpPort for InitialControl 
                     if actual_metadata != metadata_digest || sha256_hex(&object.container) != container_digest || u64::try_from(object.container.len()).ok() != Some(container_bytes) || inspected.metadata().base_generation_id().is_some() { return Err(error()); }
                     let generation = object.generation.as_ref().ok_or_else(error)?;
                     let dek = encrypted_generation_domain::GenerationDek::new(encrypted_generation_domain::KeyId::parse("profile-generation-root-v1-2").map_err(|_| error())?, [0xab; 32]);
-                    let opened = encrypted_generation_domain::open_generation_expected(&object.container, &dek, &TenantId::parse("tenant_01JAR10REAL").map_err(|_| error())?, &ProfileId::parse("profile_01JAR10REAL").map_err(|_| error())?, generation).map_err(|_| error())?;
+                    let opened = encrypted_generation_domain::open_generation_expected(&object.container, &dek, &TenantId::parse("tenant_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa").map_err(|_| error())?, &ProfileId::parse("profile_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb").map_err(|_| error())?, generation).map_err(|_| error())?;
                     if !opened.plaintext().starts_with(b"BPGW0001") { return Err(error()); }
                     object.verified = true;
                     serde_json::to_vec(&BridgeGenerationUploadCapabilityResponse::verified())
@@ -303,8 +305,9 @@ fn run_managed_cold_launch_cycle() -> Result<(), Box<dyn std::error::Error>> {
     let runtime_root = PathBuf::from(env::var(RUNTIME_ROOT_ENV)?).canonicalize()?;
     let root_path = root_path()?;
     let root = MaterializationRoot::open_or_create(&root_path)?;
-    let tenant = TenantId::parse("tenant_01JAR10REAL")?;
-    let profile = ProfileId::parse("profile_01JAR10REAL")?;
+    let tenant =
+        TenantId::parse("tenant_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")?;
+    let profile = ProfileId::parse("profile_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")?;
     let device = DeviceId::parse("device_01JAR10REAL")?;
     let headless = env::var(HEADLESS_ENV).unwrap_or_else(|_| "virtual".to_owned());
     let display_mode = match headless.as_str() {
@@ -322,7 +325,7 @@ fn run_managed_cold_launch_cycle() -> Result<(), Box<dyn std::error::Error>> {
         None,
     )?;
     let intent = profile_bridge::generation_initialization::InitialProfileOpen::parse(
-        "profilebridge://open/v1/tenant_01JAR10REAL/actor_01JAR10REAL/profile_01JAR10REAL/1",
+        "profilebridge://open/v1/tenant_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/actor_01JAR10REAL/profile_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb/1",
     )?;
     let actor = profile_platform_primitives::ActorContext::new(
         profile_platform_primitives::TenantScope::new(tenant.clone()),

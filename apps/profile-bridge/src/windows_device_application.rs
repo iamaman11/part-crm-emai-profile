@@ -346,7 +346,7 @@ impl WindowsApplicationSessionHttp {
         if !valid_route_path(path) || matches!(method, MachineHttpMethod::Get) != body.is_none() {
             return Err(BridgePortError::InvalidResponse);
         }
-        let mut command = Command::new(&self.curl_executable);
+        let mut command = crate::windows_native::background_command(&self.curl_executable);
         command
             .env_clear()
             .arg("--silent")
@@ -507,7 +507,7 @@ fn now() -> Result<UnixMillis, BridgePortError> {
 }
 
 fn require_curl_variable_support(curl: &Path) -> Result<(), BridgePortError> {
-    let output = Command::new(curl)
+    let output = crate::windows_native::background_command(curl)
         .arg("--version")
         .stdin(Stdio::null())
         .stderr(Stdio::null())

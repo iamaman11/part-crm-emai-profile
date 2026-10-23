@@ -6,7 +6,7 @@ use std::collections::HashSet;
 use std::fmt;
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 pub(crate) const WORKSPACE_SNAPSHOT_MAGIC: &[u8; 8] = b"BPGW0001";
@@ -193,7 +193,12 @@ fn materialize_into_staging(
     verify_materialized_snapshot(&staging, entries)?;
     before_publish(&staging)?;
 
-    let final_path = authoritative_generation_path(root, tenant_id, profile_id, generation_id);
+    let final_path = root
+        .prepare_generation_path(tenant_id, profile_id, generation_id)
+        .map_err(|error| match error {
+            LocalProfileError::TargetAlreadyExists => GenerationSnapshotError::TargetAlreadyExists,
+            error => GenerationSnapshotError::Local(error),
+        })?;
     if fs::symlink_metadata(&final_path).is_ok() {
         return Err(GenerationSnapshotError::TargetAlreadyExists);
     }
@@ -286,18 +291,6 @@ fn ensure_descendant_directories(
         }
     }
     Ok(())
-}
-
-fn authoritative_generation_path(
-    root: &MaterializationRoot,
-    tenant_id: &TenantId,
-    profile_id: &ProfileId,
-    generation_id: &GenerationId,
-) -> PathBuf {
-    root.path()
-        .join(tenant_id.as_str())
-        .join(profile_id.as_str())
-        .join(generation_id.as_str())
 }
 
 fn remove_owned_staging(path: &Path) {

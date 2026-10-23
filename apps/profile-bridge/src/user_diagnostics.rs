@@ -184,7 +184,7 @@ impl UserDiagnostic {
                 "The installed browser components have not passed their readiness check. Return to computer setup in the application. The profile has not been opened."
             }
             Self::Launch(Launch::DeliveryHandoff | Launch::DeliveryRecoveryRequired) => {
-                "The browser component update needs recovery. Return to computer setup in the application. Do not remove local profile files."
+                "The installed browser update has not completed its readiness check. Update Profile Bridge from Install for Windows in the application when a newer repair is available. Keep this computer connected and preserve local profile files; reconnecting will not repair the browser update."
             }
             Self::Launch(Launch::FirstInstallation(_)) => {
                 "Profile Bridge installation could not be completed. Return to computer setup in the application and review the diagnostic code. Keep existing profile files until recovery is confirmed."

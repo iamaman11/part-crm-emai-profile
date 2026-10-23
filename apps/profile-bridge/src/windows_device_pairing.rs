@@ -275,7 +275,7 @@ fn post_json(
         return Err(BridgePortError::InvalidResponse);
     }
     let curl = system_executable("curl.exe")?;
-    let mut command = Command::new(curl);
+    let mut command = crate::windows_native::background_command(curl);
     command
         .env_clear()
         .arg("--silent")

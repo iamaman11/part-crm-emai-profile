@@ -1,5 +1,6 @@
 use super::LocalProfileError;
 use profile_platform_primitives::{DeviceId, GenerationId, ProfileId, TenantId};
+use sha2::{Digest, Sha256};
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
@@ -72,18 +73,44 @@ impl MaterializationRoot {
         profile_id: &ProfileId,
         generation_id: &GenerationId,
     ) -> Result<GenerationWorkspace, LocalProfileError> {
-        let tenant_path = ensure_directory(&self.canonical_path, tenant_id.as_str())?;
-        let profile_path = ensure_directory(&tenant_path, profile_id.as_str())?;
-        let generation_path = profile_path.join(generation_id.as_str());
-        if generation_path.exists() {
-            return Err(LocalProfileError::TargetAlreadyExists);
-        }
+        let generation_path = self.prepare_generation_path(tenant_id, profile_id, generation_id)?;
         fs::create_dir(&generation_path)?;
         write_new_text(
             &generation_path.join(GENERATION_MARKER),
             GENERATION_MARKER_CONTENT,
         )?;
-        GenerationWorkspace::open(generation_path)
+        GenerationWorkspace::open(generation_path, tenant_id, profile_id, generation_id)
+    }
+
+    pub(crate) fn prepare_generation_path(
+        &self,
+        tenant_id: &TenantId,
+        profile_id: &ProfileId,
+        generation_id: &GenerationId,
+    ) -> Result<PathBuf, LocalProfileError> {
+        if self
+            .existing_generation_path(tenant_id, profile_id, generation_id)?
+            .is_some()
+        {
+            return Err(LocalProfileError::TargetAlreadyExists);
+        }
+        let generation_path = self.generation_path(tenant_id, profile_id, generation_id);
+        let mut parent = self.canonical_path.clone();
+        for component in generation_path
+            .strip_prefix(&self.canonical_path)
+            .map_err(|_| LocalProfileError::UnsafeRelativePath)?
+            .components()
+            .take(2)
+        {
+            parent = ensure_directory(
+                &parent,
+                component
+                    .as_os_str()
+                    .to_str()
+                    .ok_or(LocalProfileError::UnsafeRelativePath)?,
+            )?;
+        }
+        Ok(generation_path)
     }
 
     pub fn open_generation(
@@ -92,9 +119,89 @@ impl MaterializationRoot {
         profile_id: &ProfileId,
         generation_id: &GenerationId,
     ) -> Result<GenerationWorkspace, LocalProfileError> {
-        let tenant_path = open_directory(&self.canonical_path, tenant_id.as_str())?;
-        let profile_path = open_directory(&tenant_path, profile_id.as_str())?;
-        GenerationWorkspace::open(profile_path.join(generation_id.as_str()))
+        let path = self
+            .existing_generation_path(tenant_id, profile_id, generation_id)?
+            .ok_or(LocalProfileError::Io(std::io::ErrorKind::NotFound))?;
+        GenerationWorkspace::open(path, tenant_id, profile_id, generation_id)
+    }
+
+    /// Physical cache placement is independent of opaque ID lengths. Full scoped identity is
+    /// hashed without truncation; three directory levels preserve the root admission boundary.
+    pub(crate) fn generation_path(
+        &self,
+        tenant: &TenantId,
+        profile: &ProfileId,
+        generation: &GenerationId,
+    ) -> PathBuf {
+        let mut digest = Sha256::new();
+        digest.update(b"profile-platform/workspace-scope/v2\0");
+        for id in [tenant.as_str(), profile.as_str()] {
+            digest.update(id.as_bytes());
+            digest.update([0]);
+        }
+        let scope: String = digest
+            .finalize()
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect();
+        let mut digest = Sha256::new();
+        digest.update(b"profile-platform/workspace-generation/v2\0");
+        digest.update(generation.as_str().as_bytes());
+        let generation: String = digest
+            .finalize()
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect();
+        self.canonical_path
+            .join(&scope[..32])
+            .join(&scope[32..])
+            .join(generation)
+    }
+
+    fn existing_generation_path(
+        &self,
+        tenant: &TenantId,
+        profile: &ProfileId,
+        generation: &GenerationId,
+    ) -> Result<Option<PathBuf>, LocalProfileError> {
+        let current = self.generation_path(tenant, profile, generation);
+        // Validate each existing ancestor, including when the leaf has not been created yet.
+        let mut parent = self.canonical_path.clone();
+        for component in current
+            .strip_prefix(&self.canonical_path)
+            .map_err(|_| LocalProfileError::UnsafeRelativePath)?
+            .components()
+            .take(2)
+        {
+            let value = component
+                .as_os_str()
+                .to_str()
+                .ok_or(LocalProfileError::UnsafeRelativePath)?;
+            match open_directory(&parent, value) {
+                Ok(path) => parent = path,
+                Err(LocalProfileError::Io(std::io::ErrorKind::NotFound)) => break,
+                Err(error) => return Err(error),
+            }
+        }
+        match fs::symlink_metadata(&current) {
+            Ok(_) => return Ok(Some(current)),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error.into()),
+        }
+        // Existing user/recovery data has a durable obligation. Lookup only: every new write
+        // uses the compact layout, and an old generation must never be silently shadowed.
+        let legacy = (|| {
+            let tenant = open_directory(&self.canonical_path, tenant.as_str())?;
+            let profile = open_directory(&tenant, profile.as_str())?;
+            let path = profile.join(generation.as_str());
+            fs::symlink_metadata(&path)?;
+            Ok(path)
+        })();
+        match legacy {
+            Ok(path) => Ok(Some(path)),
+            Err(LocalProfileError::Io(std::io::ErrorKind::NotFound)) => Ok(None),
+            Err(error) => Err(error),
+        }
     }
 
     /// Remove an invalid post-commit local candidate from its canonical generation path.
@@ -111,9 +218,12 @@ impl MaterializationRoot {
         profile_id: &ProfileId,
         generation_id: &GenerationId,
     ) -> Result<(), LocalProfileError> {
-        let tenant_path = open_directory(&self.canonical_path, tenant_id.as_str())?;
-        let profile_path = open_directory(&tenant_path, profile_id.as_str())?;
-        let generation_path = profile_path.join(generation_id.as_str());
+        let generation_path = self
+            .existing_generation_path(tenant_id, profile_id, generation_id)?
+            .ok_or(LocalProfileError::Io(std::io::ErrorKind::NotFound))?;
+        let profile_path = generation_path
+            .parent()
+            .ok_or(LocalProfileError::UnsafeRelativePath)?;
         let metadata = fs::symlink_metadata(&generation_path)?;
         if metadata.file_type().is_symlink() {
             return Err(LocalProfileError::SymbolicLinkRejected);
@@ -146,10 +256,18 @@ impl MaterializationRoot {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct GenerationWorkspace {
     canonical_path: PathBuf,
+    tenant_id: TenantId,
+    profile_id: ProfileId,
+    generation_id: GenerationId,
 }
 
 impl GenerationWorkspace {
-    fn open(path: PathBuf) -> Result<Self, LocalProfileError> {
+    fn open(
+        path: PathBuf,
+        tenant: &TenantId,
+        profile: &ProfileId,
+        generation: &GenerationId,
+    ) -> Result<Self, LocalProfileError> {
         let metadata = fs::symlink_metadata(&path)?;
         if metadata.file_type().is_symlink() {
             return Err(LocalProfileError::SymbolicLinkRejected);
@@ -166,7 +284,25 @@ impl GenerationWorkspace {
         }
         Ok(Self {
             canonical_path: fs::canonicalize(path)?,
+            tenant_id: tenant.clone(),
+            profile_id: profile.clone(),
+            generation_id: generation.clone(),
         })
+    }
+
+    #[must_use]
+    pub const fn tenant_id(&self) -> &TenantId {
+        &self.tenant_id
+    }
+
+    #[must_use]
+    pub const fn profile_id(&self) -> &ProfileId {
+        &self.profile_id
+    }
+
+    #[must_use]
+    pub const fn generation_id(&self) -> &GenerationId {
+        &self.generation_id
     }
 
     #[must_use]

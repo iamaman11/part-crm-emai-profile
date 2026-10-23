@@ -18,6 +18,13 @@ const CURL_CONNECT_TIMEOUT_SECONDS: &str = "10";
 const CURL_GENERATION_TOTAL_TIMEOUT_SECONDS: &str = "120";
 const HTTP_STATUS_MARKER: &[u8] = b"\nPROFILE_BRIDGE_HTTP_STATUS:";
 
+pub(crate) fn background_command(executable: impl AsRef<OsStr>) -> Command {
+    use std::os::windows::process::CommandExt;
+    let mut command = Command::new(executable);
+    command.creation_flags(0x0800_0000); // CREATE_NO_WINDOW; helpers have no user interface.
+    command
+}
+
 #[must_use]
 pub fn encode_wide_argument(value: &OsStr) -> Vec<u16> {
     value.encode_wide().chain(iter::once(0)).collect()
@@ -73,7 +80,7 @@ impl SignedGenerationObjectGetPort for WindowsSignedGenerationObjectGet {
         {
             return Err(BridgePortError::InvalidResponse);
         }
-        let mut command = Command::new(&self.curl_executable);
+        let mut command = background_command(&self.curl_executable);
         command
             .env_clear()
             .arg("--silent")
@@ -182,6 +189,20 @@ fn validate_regular_absolute_file(path: &Path) -> Result<(), BridgePortError> {
 mod tests {
     use super::{encode_wide_argument, valid_direct_https_url};
     use std::ffi::OsStr;
+
+    #[test]
+    fn background_helpers_have_no_windows_console() -> Result<(), Box<dyn std::error::Error>> {
+        let powershell =
+            std::path::PathBuf::from(std::env::var_os("SystemRoot").ok_or("SystemRoot")?)
+                .join("System32/WindowsPowerShell/v1.0/powershell.exe");
+        let output = super::background_command(powershell)
+            .args(["-NoLogo", "-NoProfile", "-NonInteractive", "-Command",
+                "Add-Type -Name Native -Namespace BridgeConsoleTest -MemberDefinition '[System.Runtime.InteropServices.DllImport(\"kernel32.dll\")] public static extern System.IntPtr GetConsoleWindow();'; [Console]::Write([BridgeConsoleTest.Native]::GetConsoleWindow().ToInt64())"])
+            .output()?;
+        assert!(output.status.success());
+        assert_eq!(output.stdout, b"0");
+        Ok(())
+    }
 
     #[test]
     fn windows_argument_encoding_is_nul_terminated_without_unsafe_code() {

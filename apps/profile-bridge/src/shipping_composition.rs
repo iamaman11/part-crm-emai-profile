@@ -202,8 +202,10 @@ mod windows {
             return Ok(());
         }
         let config = ShippingConfig::from_installation()?;
-        let active = ActiveWindowsDeliveryRuntime::resolve_current()
-            .map_err(|_| ShippingCompositionError::Configuration)?;
+        let active = ActiveWindowsDeliveryRuntime::resolve_current().map_err(|error| {
+            eprintln!("BRIDGE_DELIVERY_RUNTIME_FAILURE={error:?}");
+            ShippingCompositionError::DeliveryRecoveryRequired
+        })?;
         let pending_health = active.pending_health_confirmation();
         let runtime_root = active.runtime_root().to_path_buf();
         let mut bundles = active.into_bundle_selection();
@@ -283,8 +285,10 @@ mod windows {
         }
 
         let config = ShippingConfig::from_installation()?;
-        let active_delivery = ActiveWindowsDeliveryRuntime::resolve_current()
-            .map_err(|_| ShippingCompositionError::Configuration)?;
+        let active_delivery = ActiveWindowsDeliveryRuntime::resolve_current().map_err(|error| {
+            eprintln!("BRIDGE_DELIVERY_RUNTIME_FAILURE={error:?}");
+            ShippingCompositionError::DeliveryRecoveryRequired
+        })?;
         let pending_health = active_delivery.pending_health_confirmation();
         let runtime_root = active_delivery.runtime_root().to_path_buf();
         let runtime_bundles = active_delivery.into_bundle_selection();

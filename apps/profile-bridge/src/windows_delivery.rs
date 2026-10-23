@@ -555,7 +555,11 @@ impl DeliveryState {
         if self.active.is_some()
             && !self.active_health_confirmed
             && !self.last_activation.as_ref().is_some_and(|activation| {
-                activation.outcome == DeliveryActivationOutcome::PendingHealth
+                matches!(
+                    activation.outcome,
+                    DeliveryActivationOutcome::PendingHealth
+                        | DeliveryActivationOutcome::HealthAttemptStarted
+                )
             })
         {
             self.staged = Some(staged);
@@ -568,7 +572,7 @@ impl DeliveryState {
         if self.active_health_confirmed {
             self.last_known_good = self.active.take();
         } else {
-            // A signed newer repair may supersede a runtime that never began health checking.
+            // A signed newer repair may supersede an unconfirmed runtime only while quiescent.
             // Preserve the actual confirmed fallback; the unconfirmed runtime never becomes LKG.
             self.active = None;
         }
@@ -1097,7 +1101,9 @@ mod tests {
         let first = verify(&manifest(1, 'a'), &trust, None)?;
         let second = verify(&manifest(2, 'b'), &trust, None)?;
         let third = verify(&manifest(3, 'c'), &trust, None)?;
-        for healthy_first in [false, true] {
+        for (healthy_first, started_second) in
+            [(false, false), (false, true), (true, false), (true, true)]
+        {
             let mut state = DeliveryState::default();
             state.stage(&first)?;
             state.activate_staged(true)?;
@@ -1110,7 +1116,14 @@ mod tests {
             assert_eq!(state.active(), Some(&second.identity()));
             let fallback = healthy_first.then(|| first.identity());
             assert_eq!(state.last_known_good(), fallback.as_ref());
+            if started_second {
+                state.start_health_attempt(&second.identity(), 2)?;
+            }
             state.stage(&third)?;
+            assert_eq!(
+                state.activate_staged(false),
+                Err(DeliveryStateError::ActiveRuntime)
+            );
             state.activate_staged(true)?;
             assert_eq!(state.active(), Some(&third.identity()));
             assert_eq!(state.last_known_good(), fallback.as_ref());
@@ -1158,8 +1171,8 @@ mod tests {
 
         state.stage(&second)?;
         assert_eq!(
-            state.activate_staged(true),
-            Err(DeliveryStateError::HealthPending)
+            state.activate_staged(false),
+            Err(DeliveryStateError::ActiveRuntime)
         );
         assert_eq!(state.staged(), Some(&second.identity()));
         assert!(state.last_known_good().is_none());

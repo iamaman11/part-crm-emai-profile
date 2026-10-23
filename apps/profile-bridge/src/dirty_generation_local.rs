@@ -17,11 +17,7 @@ impl CommittedDirtyGeneration {
         let published = self.published();
         let expected_container_bytes = u64::try_from(prepared.sealed().container().len())
             .map_err(|_| LocalProfileError::InventorySizeOverflow)?;
-        let candidate_workspace_name = prepared
-            .candidate_workspace()
-            .path()
-            .file_name()
-            .and_then(|value| value.to_str());
+        let workspace = prepared.candidate_workspace();
 
         if base.generation_id() != base_generation_id
             || published.generation_id() != metadata.generation_id()
@@ -29,7 +25,9 @@ impl CommittedDirtyGeneration {
             || published.metadata_digest() != prepared.metadata_digest()
             || published.container_digest() != prepared.container_digest()
             || published.container_bytes() != expected_container_bytes
-            || candidate_workspace_name != Some(metadata.generation_id().as_str())
+            || workspace.generation_id() != metadata.generation_id()
+            || workspace.tenant_id() != metadata.tenant_id()
+            || workspace.profile_id() != metadata.profile_id()
         {
             return Err(LocalProfileError::InvalidTransition);
         }

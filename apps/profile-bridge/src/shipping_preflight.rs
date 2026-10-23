@@ -10,8 +10,7 @@ use crate::operator_flow::{BrowserLaunchPreflightPort, OperationalRejectionReaso
 use crate::runtime_bundle::ApprovedRuntimeBundle;
 use crate::shipping_network::GenerationNetworkEvidence;
 use camoufox_identity::{CamoufoxIdentityProjectionError, verify_materialized_camoufox_identity};
-use profile_platform_primitives::{DeviceId, GenerationId, ProfileId, TenantId};
-use std::path::Path;
+use profile_platform_primitives::DeviceId;
 
 /// Shipping adapter that resolves the exact generation binding only after redemption has selected
 /// the server-authorized workspace. Policy/evaluation remain owned by the existing browser
@@ -43,12 +42,11 @@ impl BrowserLaunchPreflightPort for ShippingBrowserLaunchPreflight {
         workspace_epoch: u64,
         runtime_bundle: &ApprovedRuntimeBundle,
     ) -> Result<(), Self::Error> {
-        let identity = workspace_identity(workspace.path())?;
         let expected = load_materialization_binding(
             workspace,
-            &identity.tenant_id,
-            &identity.profile_id,
-            &identity.generation_id,
+            workspace.tenant_id(),
+            workspace.profile_id(),
+            workspace.generation_id(),
         )?;
         verify_materialized_camoufox_identity(workspace.path(), expected.browser_identity())
             .map_err(map_identity_projection_error)?;
@@ -75,45 +73,8 @@ fn map_identity_projection_error(error: CamoufoxIdentityProjectionError) -> Brow
     }
 }
 
-struct WorkspaceIdentity {
-    tenant_id: TenantId,
-    profile_id: ProfileId,
-    generation_id: GenerationId,
-}
-
-fn workspace_identity(path: &Path) -> Result<WorkspaceIdentity, BrowserLaunchBlocker> {
-    let generation = path
-        .file_name()
-        .and_then(|value| value.to_str())
-        .ok_or(BrowserLaunchBlocker::InvalidMaterializationEvidence)?;
-    let profile_path = path
-        .parent()
-        .ok_or(BrowserLaunchBlocker::InvalidMaterializationEvidence)?;
-    let profile = profile_path
-        .file_name()
-        .and_then(|value| value.to_str())
-        .ok_or(BrowserLaunchBlocker::InvalidMaterializationEvidence)?;
-    let tenant_path = profile_path
-        .parent()
-        .ok_or(BrowserLaunchBlocker::InvalidMaterializationEvidence)?;
-    let tenant = tenant_path
-        .file_name()
-        .and_then(|value| value.to_str())
-        .ok_or(BrowserLaunchBlocker::InvalidMaterializationEvidence)?;
-
-    Ok(WorkspaceIdentity {
-        tenant_id: TenantId::parse(tenant.to_owned())
-            .map_err(|_| BrowserLaunchBlocker::InvalidMaterializationEvidence)?,
-        profile_id: ProfileId::parse(profile.to_owned())
-            .map_err(|_| BrowserLaunchBlocker::InvalidMaterializationEvidence)?,
-        generation_id: GenerationId::parse(generation.to_owned())
-            .map_err(|_| BrowserLaunchBlocker::InvalidMaterializationEvidence)?,
-    })
-}
-
 #[cfg(test)]
 mod tests {
-    use super::workspace_identity;
     use crate::local_profile::MaterializationRoot;
     use profile_platform_primitives::{GenerationId, ProfileId, TenantId};
     use std::path::PathBuf;
@@ -137,10 +98,9 @@ mod tests {
         let generation = GenerationId::parse("generation_01JSHIPPINGPREFLIGHT")?;
         let workspace = root.create_generation(&tenant, &profile, &generation)?;
 
-        let identity = workspace_identity(workspace.path())?;
-        assert_eq!(identity.tenant_id, tenant);
-        assert_eq!(identity.profile_id, profile);
-        assert_eq!(identity.generation_id, generation);
+        assert_eq!(workspace.tenant_id(), &tenant);
+        assert_eq!(workspace.profile_id(), &profile);
+        assert_eq!(workspace.generation_id(), &generation);
 
         std::fs::remove_dir_all(root_path)?;
         Ok(())
