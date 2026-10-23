@@ -102,6 +102,7 @@ jobs:
               'canonical_prefix_matrix_resolver',
               'clean_bootstrap_and_replay_catalog',
               'clean_bootstrap_and_replay_resolver',
+              'existing_catalog_like_reparse',
               'future_migration_append_catalog',
               'future_migration_append_resolver',
               'partial_prefix_failure',

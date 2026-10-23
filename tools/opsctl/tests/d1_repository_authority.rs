@@ -171,13 +171,45 @@ fn deployed_runtime_prefix_is_context_only_and_retains_all_migration_gates()
     let projection: Value = serde_json::from_str(&repository_projection(root)?)?;
     let catalog = component(&projection, "catalog")?;
     let (identity, _) = executable_identity_from_projection(root, catalog)?;
-    let old_digest = identity_digest(&identity[..35])?;
+    let mut original_identity = identity[..35].to_vec();
+    let original_contract = fs::read(
+        root.join("migrations/d1-successor")
+            .join(PREDECESSOR_CONTRACT_REVISION),
+    )?;
+    original_identity[34]["sha256"] = json!(sha256_hex(&original_contract));
+    let old_digest = identity_digest(&original_identity)?;
     // Exact immutable F54 manifest evidence, not a rewritten CURRENT history digest.
     assert_eq!(
         old_digest,
         "f8915315dfacefaba7d122f7e79634a8c49f75993bc49b4fef8522ac470a68ae"
     );
-    let current = json!({"schema_contract": {
+    let original_files = original_identity
+        .iter()
+        .enumerate()
+        .map(|(index, m)| -> Result<Value, Box<dyn Error>> {
+            let name = m["name"]
+                .as_str()
+                .ok_or("missing original migration name")?;
+            let size = if index == 34 {
+                original_contract.len() as u64
+            } else {
+                let sources = catalog["executable_migration_sources"]
+                    .as_array()
+                    .ok_or("missing source projection")?;
+                fs::metadata(
+                    root.join(
+                        sources[index]["source_root"]
+                            .as_str()
+                            .ok_or("missing source root")?,
+                    )
+                    .join(name),
+                )?
+                .len()
+            };
+            Ok(json!({"path":format!("migrations/d1/{name}"),"sha256":m["sha256"],"size":size}))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let current = json!({"migrations":{"files":original_files},"schema_contract": {
         "database_component": "catalog",
         "target_schema_revision": DEVICE_APPLICATION_AUTHORITY_REVISION,
         "supported_schema_min": DEVICE_APPLICATION_AUTHORITY_REVISION,
@@ -584,10 +616,19 @@ fn legacy_and_successor_pas2_revisions_have_distinct_governed_roles() -> Result<
         current_successor_files[3]["name"],
         SUCCESSOR_CONTRACT_REVISION
     );
-    assert_eq!(
+    assert_ne!(
         predecessor_successor_files[1]["sha256"],
         current_successor_files[3]["sha256"]
     );
+    let original_contract = fs::read(
+        root.join("migrations/d1-successor")
+            .join(PREDECESSOR_CONTRACT_REVISION),
+    )?;
+    let corrected_contract = fs::read(
+        root.join("migrations/d1-successor-v2")
+            .join(SUCCESSOR_CONTRACT_REVISION),
+    )?;
+    assert!(corrected_contract.ends_with(&original_contract));
 
     assert_eq!(catalog["migration_count"], 36);
     assert_eq!(catalog["post_epoch_migration_count"], 10);

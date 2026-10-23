@@ -26,6 +26,8 @@ mod plan;
 mod reconstruction;
 #[path = "d1/rollback_schema_tests.rs"]
 mod rollback_schema_tests;
+#[path = "d1/runtime_manifest.rs"]
+mod runtime_manifest;
 #[path = "d1/status.rs"]
 mod status;
 #[path = "d1/transaction_api.rs"]
@@ -474,7 +476,11 @@ fn load_optional_runtime_context(
     action: &str,
 ) -> Result<Option<RuntimeSchemaContext>, D1Error> {
     load_optional_release(root, path, component, false, action)?
-        .map(|schema| observed_runtime_context(root, component, schema))
+        .zip(path)
+        .map(|(schema, path)| {
+            let manifest = read_json(&resolve_input(root, path), "observed runtime manifest")?;
+            observed_runtime_context(root, component, schema, &manifest)
+        })
         .transpose()
 }
 
