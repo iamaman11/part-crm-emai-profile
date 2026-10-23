@@ -395,9 +395,11 @@ fn read_expected_runtime_file(
         || !metadata.is_file()
         || metadata.len() != expected.size_bytes
     {
+        eprintln!("RUNTIME_BUNDLE_FILE_MISMATCH=metadata;component_path={relative:?}");
         return Err(RuntimeBundleSelectionError::InvalidRuntime);
     }
     if sha256_regular_file(&path, expected.size_bytes)? != expected.sha256 {
+        eprintln!("RUNTIME_BUNDLE_FILE_MISMATCH=digest;component_path={relative:?}");
         return Err(RuntimeBundleSelectionError::InvalidRuntime);
     }
     Ok(RuntimeFile {
@@ -482,6 +484,23 @@ fn validate_runtime_tree(
     let mut observed_directories = HashSet::new();
     collect_runtime_tree(root, root, &mut observed_files, &mut observed_directories)?;
     if &observed_files != expected_files || &observed_directories != expected_directories {
+        for (category, observed, expected) in [
+            ("file", &observed_files, expected_files),
+            ("directory", &observed_directories, expected_directories),
+        ] {
+            for (kind, paths) in [
+                ("unexpected", observed.difference(expected)),
+                ("missing", expected.difference(observed)),
+            ] {
+                for path in paths.take(4) {
+                    if BundleRelativePath::parse(path).is_ok() {
+                        eprintln!(
+                            "RUNTIME_BUNDLE_TREE_MISMATCH={kind}_{category};component_path={path:?}"
+                        );
+                    }
+                }
+            }
+        }
         return Err(RuntimeBundleSelectionError::InvalidRuntime);
     }
     Ok(())
