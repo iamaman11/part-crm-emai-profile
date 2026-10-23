@@ -141,12 +141,10 @@ pub fn prepare_dirty_generation_candidate<K: GenerationSealingMaterialPort>(
     if base_generation_id == candidate_generation_id {
         return Err(DirtyGenerationError::CandidateMatchesBase);
     }
-    let source_name = source_workspace
-        .path()
-        .file_name()
-        .and_then(|value| value.to_str())
-        .ok_or(DirtyGenerationError::IdentityMismatch)?;
-    if source_name != base_generation_id.as_str() {
+    if source_workspace.generation_id() != base_generation_id
+        || source_workspace.tenant_id() != tenant_id
+        || source_workspace.profile_id() != profile_id
+    {
         return Err(DirtyGenerationError::IdentityMismatch);
     }
 

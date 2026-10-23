@@ -43,7 +43,7 @@ const CURRENT_EXECUTABLE_ENV: &str = "PART_CRM_DELIVERY_HANDOFF_CURRENT";
 #[cfg(any(windows, test))]
 const TARGET_EXECUTABLE_ENV: &str = "PART_CRM_DELIVERY_HANDOFF_TARGET";
 #[cfg(any(windows, test))]
-const POWERSHELL_HANDOFF: &str = "$ErrorActionPreference='Stop'; $pidToWait=[uint32]$env:PART_CRM_DELIVERY_HANDOFF_PARENT_PID; $expectedCurrent=$env:PART_CRM_DELIVERY_HANDOFF_CURRENT; if ([string]::IsNullOrWhiteSpace($expectedCurrent)) { exit 20 }; try { $parent=Get-Process -Id $pidToWait -ErrorAction Stop } catch { exit 21 }; try { $actualCurrent=[IO.Path]::GetFullPath($parent.Path); $expectedCurrent=[IO.Path]::GetFullPath($expectedCurrent) } catch { exit 22 }; if ($actualCurrent -ine $expectedCurrent) { exit 23 }; $parent.WaitForExit(); $target=$env:PART_CRM_DELIVERY_HANDOFF_TARGET; if ([string]::IsNullOrWhiteSpace($target)) { exit 24 }; $child=Start-Process -FilePath $target -ArgumentList '--delivery-handoff-arrived' -PassThru; if ($null -eq $child) { exit 25 }";
+const POWERSHELL_HANDOFF: &str = "$ErrorActionPreference='Stop'; $pidToWait=[uint32]$env:PART_CRM_DELIVERY_HANDOFF_PARENT_PID; $expectedCurrent=$env:PART_CRM_DELIVERY_HANDOFF_CURRENT; if ([string]::IsNullOrWhiteSpace($expectedCurrent)) { exit 20 }; try { $parent=Get-Process -Id $pidToWait -ErrorAction Stop } catch { exit 21 }; try { $actualCurrent=[IO.Path]::GetFullPath($parent.Path); $expectedCurrent=[IO.Path]::GetFullPath($expectedCurrent) } catch { exit 22 }; if ($actualCurrent -ine $expectedCurrent) { exit 23 }; $parent.WaitForExit(); $target=$env:PART_CRM_DELIVERY_HANDOFF_TARGET; if ([string]::IsNullOrWhiteSpace($target)) { exit 24 }; $child=Start-Process -FilePath $target -ArgumentList '--delivery-handoff-arrived' -WindowStyle Hidden -PassThru; if ($null -eq $child) { exit 25 }";
 
 /// Exact filesystem/process identity already selected by the Windows delivery owner.
 ///
@@ -181,6 +181,11 @@ impl OneShotDeliveryHandoff {
     #[cfg(any(windows, test))]
     fn windows_helper_command(&self) -> Command {
         let mut command = Command::new("powershell.exe");
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            command.creation_flags(0x0800_0000);
+        }
         command
             .args([
                 "-NoLogo",

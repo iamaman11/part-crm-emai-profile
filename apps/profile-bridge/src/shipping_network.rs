@@ -2,7 +2,7 @@ use crate::browser_preflight::{BrowserRuntimeObservation, BrowserRuntimeObservat
 use crate::local_profile::GenerationWorkspace;
 use bridge_domain::BridgePortError;
 use browser_execution_domain::{NetworkClass, NetworkIdentityObservation, NetworkIdentityPolicy};
-use profile_platform_primitives::{DeviceId, GenerationId};
+use profile_platform_primitives::DeviceId;
 use serde::Deserialize;
 use std::fs::{self, File};
 use std::io::Read;
@@ -110,13 +110,7 @@ impl BrowserRuntimeObservationPort for GenerationNetworkEvidence {
                 false,
             ));
         }
-        let generation_value = workspace
-            .path()
-            .file_name()
-            .and_then(|value| value.to_str())
-            .ok_or(BridgePortError::InvalidResponse)?;
-        let generation_id = GenerationId::parse(generation_value.to_owned())
-            .map_err(|_| BridgePortError::InvalidResponse)?;
+        let generation_id = workspace.generation_id();
         let parent = workspace
             .path()
             .parent()

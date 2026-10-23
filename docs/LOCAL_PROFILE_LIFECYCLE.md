@@ -41,11 +41,23 @@ explicit test-only feature and must remain production-unreachable.
 A local root must be absolute, must be a real directory rather than a symbolic link, and must contain the
 owned root marker. A non-empty unmarked directory is rejected rather than silently adopted.
 
-Generation paths are composed only from opaque typed tenant, Profile and generation IDs:
+New generation paths use full SHA-256 digests: a domain-separated, NUL-delimited tenant/Profile
+scope and a domain-separated generation ID. The scope is split into two directories:
 
 ```text
-<marked-root>/<tenant-id>/<profile-id>/<generation-id>/
+<marked-root>/<scope[0..32]>/<scope[32..64]>/<generation-digest>/
 ```
+
+This keeps browser paths short regardless of ID lengths; full IDs still own server, snapshot and
+authorization identity. The validated workspace carries those typed IDs from its root owner;
+preflight, network and save consumers never reconstruct identity from directory names.
+Snapshot publication uses the same path owner and preserves the profile parent of existing sidecars.
+There are no junctions,
+short-name aliases or truncated identity hashes. The three-level depth preserves root-scoped writer
+admission and update quiescence. Existing ID-shaped directories contain persisted user/recovery data:
+lookup may read them only when no compact target exists; new creation rejects an existing legacy
+target instead of shadowing it. No automatic move/delete occurs. This read-only predecessor is retired
+only after those directories have been explicitly recovered/migrated or removed by their data owner.
 
 Each generation carries the expected owned marker. Existing unexpected targets, symlinked path
 components, missing markers and marker mismatch fail closed. Email addresses and user-selected labels

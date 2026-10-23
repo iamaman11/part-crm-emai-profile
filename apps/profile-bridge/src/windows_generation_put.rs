@@ -75,7 +75,7 @@ impl SignedGenerationObjectPutPort for WindowsSignedGenerationObjectPut {
             }
         }
 
-        let mut command = Command::new(&self.curl_executable);
+        let mut command = crate::windows_native::background_command(&self.curl_executable);
         command
             .env_clear()
             .arg("--silent")

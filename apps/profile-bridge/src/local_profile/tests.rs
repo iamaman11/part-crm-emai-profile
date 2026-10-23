@@ -34,9 +34,80 @@ fn materialization_root_builds_opaque_generation_paths() -> Result<(), Box<dyn s
     let generation_id = GenerationId::parse("generation_01JSTEP8A")?;
     let workspace = root.create_generation(&tenant_id, &profile_id, &generation_id)?;
     assert!(workspace.path().starts_with(root.path()));
-    assert!(workspace.path().ends_with(generation_id.as_str()));
+    let relative = workspace.path().strip_prefix(root.path())?;
+    assert_eq!(relative.components().count(), 3);
+    assert_eq!(relative.to_string_lossy().len(), 130);
     assert!(!workspace.path().to_string_lossy().contains('@'));
     fs::remove_dir_all(root_path)?;
+    Ok(())
+}
+
+#[test]
+fn compact_workspace_binds_every_id_and_preserves_existing_user_directories()
+-> Result<(), Box<dyn std::error::Error>> {
+    let path = test_root("compact")?;
+    let root = MaterializationRoot::open_or_create(&path)?;
+    let tenant = TenantId::parse(format!("tenant_{}", "a".repeat(64)))?;
+    let profile = ProfileId::parse(format!("profile_{}", "b".repeat(32)))?;
+    let generation = GenerationId::parse(format!("generation_{}", "c".repeat(64)))?;
+    let workspace = root.create_generation(&tenant, &profile, &generation)?;
+    assert_eq!(
+        workspace
+            .path()
+            .strip_prefix(root.path())?
+            .to_string_lossy()
+            .len(),
+        130
+    );
+    assert_eq!(
+        root.open_generation(&tenant, &profile, &generation)?,
+        workspace
+    );
+    for (other_tenant, other_profile, other_generation) in [
+        (
+            TenantId::parse("tenant_different")?,
+            profile.clone(),
+            generation.clone(),
+        ),
+        (
+            tenant.clone(),
+            ProfileId::parse("profile_different")?,
+            generation.clone(),
+        ),
+        (
+            tenant.clone(),
+            profile.clone(),
+            GenerationId::parse("generation_different")?,
+        ),
+    ] {
+        let other = root.create_generation(&other_tenant, &other_profile, &other_generation)?;
+        assert_ne!(other.path(), workspace.path());
+        if other_tenant == tenant && other_profile == profile {
+            assert_eq!(other.path().parent(), workspace.path().parent());
+        }
+    }
+    let legacy_id = GenerationId::parse("generation_existing_user_data")?;
+    let legacy = root
+        .path()
+        .join(tenant.as_str())
+        .join(profile.as_str())
+        .join(legacy_id.as_str());
+    fs::create_dir_all(&legacy)?;
+    fs::write(
+        legacy.join(".profile-generation"),
+        "profile-platform-generation-v1\n",
+    )?;
+    fs::write(legacy.join("unsaved.bin"), b"preserve")?;
+    assert_eq!(
+        root.open_generation(&tenant, &profile, &legacy_id)?.path(),
+        legacy
+    );
+    assert_eq!(
+        root.create_generation(&tenant, &profile, &legacy_id),
+        Err(LocalProfileError::TargetAlreadyExists)
+    );
+    assert_eq!(fs::read(legacy.join("unsaved.bin"))?, b"preserve");
+    fs::remove_dir_all(path)?;
     Ok(())
 }
 

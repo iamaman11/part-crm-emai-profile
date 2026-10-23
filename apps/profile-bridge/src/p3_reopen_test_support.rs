@@ -639,12 +639,7 @@ impl BrowserLaunchPreflightPort for RecordingPreflight {
         if device_id.as_str() != DEVICE {
             return Err(BridgePortError::InvalidResponse);
         }
-        let generation = workspace
-            .path()
-            .file_name()
-            .and_then(|value| value.to_str())
-            .ok_or(BridgePortError::InvalidResponse)?
-            .to_owned();
+        let generation = workspace.generation_id().as_str().to_owned();
         let prefs = fs::read(workspace.path().join("prefs.js"))
             .map_err(|_| BridgePortError::Unavailable)?;
         self.observations.borrow_mut().push((generation, prefs));

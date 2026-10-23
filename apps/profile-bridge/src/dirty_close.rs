@@ -229,12 +229,9 @@ fn committed_matches_retained(
         && committed.metadata_digest() == prepared.metadata_digest()
         && committed.container_digest() == prepared.container_digest()
         && Some(committed.container_bytes()) == expected_container_bytes
-        && prepared
-            .candidate_workspace()
-            .path()
-            .file_name()
-            .and_then(|value| value.to_str())
-            == Some(committed.generation_id().as_str())
+        && prepared.candidate_workspace().generation_id() == committed.generation_id()
+        && prepared.candidate_workspace().tenant_id() == metadata.tenant_id()
+        && prepared.candidate_workspace().profile_id() == metadata.profile_id()
 }
 
 fn rematerialization_outcome(
