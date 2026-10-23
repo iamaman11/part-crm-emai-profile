@@ -369,7 +369,8 @@ def _build_operator_inputs(
 
 
 def _check_dispatch_size(inputs: dict[str, str]) -> None:
-    size = len(_compact({"ref": "main", "inputs": inputs}).encode("utf-8"))
+    # Match the actual standard operator's api_post serializer, including Unicode escapes.
+    size = len(json.dumps({"ref": "main", "inputs": inputs}, sort_keys=True, separators=(",", ":")).encode("utf-8"))
     if size > 65535:
         raise ValueError(f"GitHub workflow dispatch exceeds its transport limit: {size} bytes > 65535; no evidence was truncated")
 
@@ -528,6 +529,12 @@ def command_self_test(_: argparse.Namespace) -> int:
             assert "transport limit" in str(exc)
         else:
             raise AssertionError("oversized GitHub dispatch unexpectedly passed")
+        try:
+            _check_dispatch_size({"unicode": "\u0430" * 12000})
+        except ValueError as exc:
+            assert "transport limit" in str(exc)
+        else:
+            raise AssertionError("escaped Unicode dispatch unexpectedly passed")
         tx_input = json.loads(projection["inputs"]["transaction_input_json"])
         assert tx_input["planned_migrations"][0]["migration_file"] == "0042_dynamic_operator_fixture.sql"
         assert tx_input["expected_post_state"] == {"revision": "0042_dynamic_operator_fixture.sql"}
