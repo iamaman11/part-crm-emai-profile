@@ -107,6 +107,43 @@ def sorted_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     )
 
 
+def prove_delayed_voice_collection(
+    page: Any, camouhost: ModuleType, config: dict[str, Any], expected: list[dict[str, Any]]
+) -> None:
+    for mode in ("empty", "partial"):
+        page.evaluate(
+            r"""(mode) => {
+              const synthesis = window.speechSynthesis;
+              if (Object.hasOwn(synthesis, 'getVoices')) throw new Error('unexpected own getter');
+              const original = synthesis.getVoices.bind(synthesis);
+              let started = null;
+              Object.defineProperty(synthesis, 'getVoices', {configurable: true, value: () => {
+                const voices = original();
+                const now = performance.now();
+                if (started === null) started = now;
+                if (now - started < 2500) {
+                  return mode === 'empty' ? [] : voices.slice(0, Math.max(1, voices.length >> 1));
+                }
+                return voices;
+              }});
+            }""",
+            mode,
+        )
+        try:
+            observation = json.loads(camouhost.browser_visible_observation(page, config))
+            speech = observation["speech_voices"]
+            observed = speech.get("voices", [])
+            equal = speech["status"] == "available" and sorted_rows(observed) == sorted_rows(expected)
+            canonical_line(
+                "S0_SPEECH_READINESS_OBSERVATION",
+                {"case": mode, "count": len(observed), "equal": equal},
+            )
+            if not equal:
+                raise RuntimeError("delayed speech registry was not collected exactly")
+        finally:
+            page.evaluate("() => { delete window.speechSynthesis.getVoices; }")
+
+
 def main() -> int:
     args = parse_args()
     runtime_lock = args.runtime_lock.resolve(strict=True)
@@ -142,44 +179,45 @@ def main() -> int:
             )
             page = context.pages[0] if context.pages else context.new_page()
             snapshots = page.evaluate(VOICE_PROBE, [250, 500, 750, 1500, 3000, 4000])
+            if not isinstance(snapshots, list):
+                raise RuntimeError("speech voice diagnostic snapshots are invalid")
+            canonical_line("S0_SPEECH_VOICE_EXPECTED", {"count": len(expected)})
+            final_equal = False
+            for snapshot in snapshots:
+                if not isinstance(snapshot, dict) or not isinstance(snapshot.get("voices"), list):
+                    raise RuntimeError("speech voice diagnostic snapshot is invalid")
+                observed = snapshot["voices"]
+                equal = sorted_rows(observed) == sorted_rows(expected)
+                fields_equal = {
+                    field: sorted(row[field] for row in observed)
+                    == sorted(row[field] for row in expected)
+                    for field in ("language", "name", "voice_uri", "local_service", "is_default")
+                }
+                canonical_line(
+                    "S0_SPEECH_VOICE_OBSERVATION",
+                    {
+                        "after_ms": snapshot.get("after_ms"),
+                        "count": len(observed),
+                        "equal": equal,
+                        "fields_equal": fields_equal,
+                        "event_count": snapshot.get("event_count"),
+                    },
+                )
+                final_equal = equal
+            canonical_line(
+                "S0_SPEECH_VOICE_SUMMARY",
+                {
+                    "expected_count": len(expected),
+                    "final_equal": final_equal,
+                    "snapshot_count": len(snapshots),
+                },
+            )
+            prove_delayed_voice_collection(page, camouhost, config, expected)
         finally:
             if manager is not None and context is not None:
                 with contextlib.suppress(BaseException):
                     camouhost.close_context(manager, context, root)
 
-    if not isinstance(snapshots, list):
-        raise RuntimeError("speech voice diagnostic snapshots are invalid")
-    canonical_line("S0_SPEECH_VOICE_EXPECTED", {"count": len(expected)})
-    final_equal = False
-    for snapshot in snapshots:
-        if not isinstance(snapshot, dict) or not isinstance(snapshot.get("voices"), list):
-            raise RuntimeError("speech voice diagnostic snapshot is invalid")
-        observed = snapshot["voices"]
-        equal = sorted_rows(observed) == sorted_rows(expected)
-        fields_equal = {
-            field: sorted(row[field] for row in observed)
-            == sorted(row[field] for row in expected)
-            for field in ("language", "name", "voice_uri", "local_service", "is_default")
-        }
-        canonical_line(
-            "S0_SPEECH_VOICE_OBSERVATION",
-            {
-                "after_ms": snapshot.get("after_ms"),
-                "count": len(observed),
-                "equal": equal,
-                "fields_equal": fields_equal,
-                "event_count": snapshot.get("event_count"),
-            },
-        )
-        final_equal = equal
-    canonical_line(
-        "S0_SPEECH_VOICE_SUMMARY",
-        {
-            "expected_count": len(expected),
-            "final_equal": final_equal,
-            "snapshot_count": len(snapshots),
-        },
-    )
     return 0 if expected and final_equal else 1
 
 

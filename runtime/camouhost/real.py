@@ -220,29 +220,10 @@ async (request) => {
   const collectVoices = async () => {
     if (!request.voices_applicable) return {status: 'not_applicable'};
     if (!('speechSynthesis' in window)) return {status: 'unavailable'};
-    // Gecko publishes the configured voice registry asynchronously. A first read may be
-    // empty or may expose a transient non-final registry, so readiness cannot be inferred
-    // from `length > 0`. Observe changes and require a stable post-change snapshot. If the
-    // event was emitted before this page installed its listener, use only the final bounded
-    // deadline snapshot. Rust remains the sole semantic equality owner.
-    const deadline = Date.now() + 2000;
-    let changed = false;
-    let wake = null;
-    const onChanged = () => {
-      changed = true;
-      if (wake) {
-        const resolve = wake;
-        wake = null;
-        resolve();
-      }
-    };
-    const waitForChangeOrPoll = () => new Promise((resolve) => {
-      wake = resolve;
-      setTimeout(() => {
-        if (wake === resolve) wake = null;
-        resolve();
-      }, 100);
-    });
+    // Gecko initializes this registry asynchronously, especially on cold Windows hosts.
+    // Collect a complete, settled snapshot within the native observation deadline.
+    // A timeout still returns the actual values; only Rust can admit the identity.
+    const deadline = performance.now() + 10000;
     const normalizeVoices = (voices) => voices.map((voice) => ({
       language: voice.lang,
       name: voice.name,
@@ -252,20 +233,20 @@ async (request) => {
     }));
     let voices = [];
     let prior = null;
-    speechSynthesis.addEventListener('voiceschanged', onChanged);
-    try {
-      while (Date.now() < deadline) {
-        voices = speechSynthesis.getVoices();
-        const snapshot = voices.length === 0 ? null : JSON.stringify(normalizeVoices(voices));
-        if (changed && snapshot !== null && snapshot === prior) break;
-        prior = snapshot;
-        await waitForChangeOrPoll();
-      }
+    let stableSince = performance.now();
+    while (performance.now() < deadline) {
       voices = speechSynthesis.getVoices();
-    } finally {
-      speechSynthesis.removeEventListener('voiceschanged', onChanged);
-      wake = null;
+      const snapshot = voices.length > 0 && voices.length === request.voice_count
+        ? JSON.stringify(normalizeVoices(voices)) : null;
+      const now = performance.now();
+      if (snapshot !== null && snapshot === prior && now - stableSince >= 500) break;
+      if (snapshot !== prior) {
+        prior = snapshot;
+        stableSince = now;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 100));
     }
+    voices = speechSynthesis.getVoices();
     if (voices.length === 0) return {status: 'unavailable'};
     return {
       status: 'available',
@@ -594,6 +575,7 @@ def browser_visible_probe_request(config: dict[str, Any]) -> dict[str, Any]:
         },
         "fonts": copy.deepcopy(fonts),
         "voices_applicable": "voices" in config,
+        "voice_count": len(config.get("voices", [])),
     }
 
 
