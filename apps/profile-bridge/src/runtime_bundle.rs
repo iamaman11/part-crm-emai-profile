@@ -428,7 +428,8 @@ fn sha256_regular_file(
     let mut file =
         fs::File::open(path).map_err(|_| RuntimeBundleSelectionError::MissingRuntimeFile)?;
     let mut digest = Sha256::new();
-    let mut buffer = [0_u8; 1024 * 1024];
+    // Verification also runs on the Windows executable's 1 MiB main-thread stack.
+    let mut buffer = vec![0_u8; 64 * 1024];
     let mut observed = 0_u64;
     loop {
         let read = file
@@ -743,7 +744,7 @@ mod tests {
         RuntimeSessionOrchestrator, SHIPPING_BROWSER_EXECUTABLE, SHIPPING_COMPONENT_KIND,
         SHIPPING_COMPONENT_PLATFORM, SHIPPING_COMPONENT_RELEASE_PREFIX,
         SHIPPING_COMPONENT_SCHEMA_VERSION, SHIPPING_ENTRYPOINT, SHIPPING_PYTHON_EXECUTABLE,
-        SHIPPING_RESOLVED_RUNTIME, SHIPPING_RUNTIME_LOCK, sha256_hex,
+        SHIPPING_RESOLVED_RUNTIME, SHIPPING_RUNTIME_LOCK, sha256_hex, sha256_regular_file,
     };
     use crate::operator_flow::RuntimeBundleSelectionPort;
     use crate::{FakeCamouhost, FakeProcessControl, ProcessAction};
@@ -889,6 +890,36 @@ mod tests {
     }
 
     #[test]
+    fn runtime_hashing_fits_the_windows_main_thread_stack() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let root = runtime_root("windows-stack")?;
+        fs::create_dir_all(&root)?;
+        let path = root.join("runtime.bin");
+        let content: Vec<u8> = (0..2 * 1024 * 1024 + 37)
+            .map(|index| (index % 251) as u8)
+            .collect();
+        fs::write(&path, &content)?;
+        let expected = sha256_hex(&content);
+        let size = u64::try_from(content.len())?;
+        // The installed Windows PE reserves 1 MiB; libtest's larger stack hid the crash.
+        let verification = std::thread::Builder::new()
+            .name("windows-launch-stack".to_owned())
+            .stack_size(1024 * 1024)
+            .spawn(move || {
+                assert_eq!(sha256_regular_file(&path, size), Ok(expected));
+                for wrong_size in [size - 1, size + 1] {
+                    assert_eq!(
+                        sha256_regular_file(&path, wrong_size),
+                        Err(RuntimeBundleSelectionError::InvalidRuntime)
+                    );
+                }
+            })?;
+        assert!(verification.join().is_ok());
+        fs::remove_dir_all(root)?;
+        Ok(())
+    }
+
+    #[test]
     fn filesystem_selector_binds_entire_packaged_runtime_and_rejects_tamper()
     -> Result<(), Box<dyn std::error::Error>> {
         let root_path = runtime_root("exact")?;
@@ -899,6 +930,14 @@ mod tests {
         assert_eq!(first.manifest().runtime_version(), "2.0.0");
         assert_eq!(first.manifest().entrypoint().as_str(), SHIPPING_ENTRYPOINT);
         assert!(first.inventory().entries().len() >= 5);
+
+        let browser = root_path.join(SHIPPING_BROWSER_EXECUTABLE);
+        fs::write(&browser, b"Browser")?;
+        assert_eq!(
+            select(&mut selector),
+            Err(RuntimeBundleSelectionError::InvalidRuntime)
+        );
+        fs::write(&browser, b"browser")?;
 
         fs::write(
             root_path.join("camouhost/runtime-lock.json"),

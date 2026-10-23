@@ -552,7 +552,12 @@ impl DeliveryState {
         if self.active.as_ref() == Some(&staged) {
             return Ok(());
         }
-        if self.active.is_some() && !self.active_health_confirmed {
+        if self.active.is_some()
+            && !self.active_health_confirmed
+            && !self.last_activation.as_ref().is_some_and(|activation| {
+                activation.outcome == DeliveryActivationOutcome::PendingHealth
+            })
+        {
             self.staged = Some(staged);
             return Err(DeliveryStateError::HealthPending);
         }
@@ -563,6 +568,8 @@ impl DeliveryState {
         if self.active_health_confirmed {
             self.last_known_good = self.active.take();
         } else {
+            // A signed newer repair may supersede a runtime that never began health checking.
+            // Preserve the actual confirmed fallback; the unconfirmed runtime never becomes LKG.
             self.active = None;
         }
         self.active = Some(staged.clone());
@@ -1081,6 +1088,36 @@ mod tests {
             verify(&manifest(7, 'b'), &trust, Some(&floor)),
             Err(DeliveryPolicyError::ReplayConflict)
         );
+        Ok(())
+    }
+
+    #[test]
+    fn newer_pending_repair_preserves_only_the_confirmed_fallback() -> TestResult {
+        let trust = trust()?;
+        let first = verify(&manifest(1, 'a'), &trust, None)?;
+        let second = verify(&manifest(2, 'b'), &trust, None)?;
+        let third = verify(&manifest(3, 'c'), &trust, None)?;
+        for healthy_first in [false, true] {
+            let mut state = DeliveryState::default();
+            state.stage(&first)?;
+            state.activate_staged(true)?;
+            if healthy_first {
+                state.start_health_attempt(&first.identity(), 1)?;
+                state.confirm_health()?;
+            }
+            state.stage(&second)?;
+            state.activate_staged(true)?;
+            assert_eq!(state.active(), Some(&second.identity()));
+            let fallback = healthy_first.then(|| first.identity());
+            assert_eq!(state.last_known_good(), fallback.as_ref());
+            state.stage(&third)?;
+            state.activate_staged(true)?;
+            assert_eq!(state.active(), Some(&third.identity()));
+            assert_eq!(state.last_known_good(), fallback.as_ref());
+            assert!(!state.active_health_confirmed());
+            assert_eq!(state.activation_generation(), 3);
+            state.validate_persisted()?;
+        }
         Ok(())
     }
 

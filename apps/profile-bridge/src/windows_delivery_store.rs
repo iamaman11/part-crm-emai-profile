@@ -139,7 +139,6 @@ impl DeliveryHandoffEvidence {
                     .ok_or(DeliveryStateStoreError::HandoffEvidence)?;
                 if self.source_candidate != self.target
                     || state.active() != Some(&self.target)
-                    || state.staged().is_some()
                     || state.activation_generation() != self.source_attempt
                     || activation.attempt != self.source_attempt
                     || activation.candidate != self.target

@@ -14,7 +14,7 @@ fn an_empty_store_without_a_verified_staged_candidate_is_not_installed() -> Test
     let guard = DeliveryActivationGuard::acquire(&materialization)?;
     let coordinator = DeliveryHandoffCoordinator::new(staging, &state_root);
     assert_eq!(
-        coordinator.complete_first_installation(&guard, directory.0.join("absent.exe")),
+        coordinator.complete_installation(&guard, directory.0.join("absent.exe")),
         Err(DeliveryHandoffError::NoStagedTarget)
     );
     let after = DeliveryStateStore::open(&state_root)?;
@@ -39,7 +39,7 @@ fn first_installation_records_actual_target_arrival_with_health_still_pending() 
     );
     assert!(!scheduled.get());
 
-    coordinator.complete_first_installation(&guard, &fixture.first_executable)?;
+    coordinator.complete_installation(&guard, &fixture.first_executable)?;
     let reopened = DeliveryStateStore::open(&fixture.state_root)?;
     assert_eq!(reopened.state().active(), Some(&fixture.first));
     assert!(reopened.state().staged().is_none());
@@ -62,7 +62,7 @@ fn exact_pending_and_healthy_install_retries_append_no_journal_snapshot() -> Tes
     let fixture = first_install_prepared_fixture("first-install-retry")?;
     let coordinator = DeliveryHandoffCoordinator::new(fixture.staging.clone(), &fixture.state_root);
     let guard = DeliveryActivationGuard::acquire(&fixture.materialization)?;
-    coordinator.complete_first_installation(&guard, &fixture.first_executable)?;
+    coordinator.complete_installation(&guard, &fixture.first_executable)?;
     for healthy in [false, true] {
         if healthy {
             let mut store = DeliveryStateStore::open(&fixture.state_root)?;
@@ -73,7 +73,7 @@ fn exact_pending_and_healthy_install_retries_append_no_journal_snapshot() -> Tes
         }
         let before = DeliveryStateStore::open(&fixture.state_root)?;
         let count = fs::read_dir(&fixture.state_root)?.count();
-        coordinator.complete_first_installation(&guard, &fixture.first_executable)?;
+        coordinator.complete_installation(&guard, &fixture.first_executable)?;
         let after = DeliveryStateStore::open(&fixture.state_root)?;
         assert_eq!(after.state(), before.state());
         assert_eq!(after.handoff(), before.handoff());
@@ -87,13 +87,13 @@ fn first_installation_cannot_reset_an_interrupted_runtime_health_attempt() -> Te
     let fixture = first_install_prepared_fixture("first-install-interrupted-health")?;
     let coordinator = DeliveryHandoffCoordinator::new(fixture.staging.clone(), &fixture.state_root);
     let guard = DeliveryActivationGuard::acquire(&fixture.materialization)?;
-    coordinator.complete_first_installation(&guard, &fixture.first_executable)?;
+    coordinator.complete_installation(&guard, &fixture.first_executable)?;
     let mut store = DeliveryStateStore::open(&fixture.state_root)?;
     let mut next = store.state().clone();
     next.start_health_attempt(&fixture.first, 1)?;
     store.persist_preserving_handoff(&next)?;
     assert_eq!(
-        coordinator.complete_first_installation(&guard, &fixture.first_executable),
+        coordinator.complete_installation(&guard, &fixture.first_executable),
         Err(DeliveryHandoffError::FirstInstallationConflict)
     );
     assert_eq!(
@@ -120,14 +120,76 @@ fn a_different_or_tampered_executable_never_publishes_first_activation() -> Test
             fs::write(&path, b"unrelated-bridge")?;
             path
         };
-        assert!(
-            coordinator
-                .complete_first_installation(&guard, &current)
-                .is_err()
-        );
+        assert!(coordinator.complete_installation(&guard, &current).is_err());
         let after = DeliveryStateStore::open(&fixture.state_root)?;
         assert_eq!(after.state(), before.state());
         assert_eq!(after.handoff(), before.handoff());
+    }
+    Ok(())
+}
+
+#[test]
+fn ordinary_installer_updates_pending_or_healthy_installation_without_resetting_data() -> TestResult
+{
+    for healthy in [false, true] {
+        let fixture = first_install_prepared_fixture("installer-update")?;
+        let coordinator =
+            DeliveryHandoffCoordinator::new(fixture.staging.clone(), &fixture.state_root);
+        let guard = DeliveryActivationGuard::acquire(&fixture.materialization)?;
+        coordinator.complete_installation(&guard, &fixture.first_executable)?;
+        let connection = fixture._directory.0.join("device-application-binding.json");
+        let profile = fixture._directory.0.join("profiles/user-data");
+        fs::write(&connection, b"existing-device-binding")?;
+        fs::write(&profile, b"existing-profile-state")?;
+        let mut store = DeliveryStateStore::open(&fixture.state_root)?;
+        let mut state = store.state().clone();
+        if healthy {
+            state.start_health_attempt(&fixture.first, 1)?;
+            state.confirm_health()?;
+        }
+        let (candidate, bridge, runtime) = candidate(&fixture._directory.0, 2, '2')?;
+        let stage = stage_verified_delivery(
+            &fixture.staging,
+            &candidate,
+            &bridge,
+            &runtime,
+            &mut MemoryArchiveReader::for_release("second"),
+        )?;
+        state.stage(&candidate)?;
+        store.persist_preserving_handoff(&state)?;
+        let before = DeliveryStateStore::open(&fixture.state_root)?;
+        assert!(
+            coordinator
+                .complete_installation(&guard, &fixture.first_executable)
+                .is_err()
+        );
+        assert_eq!(
+            DeliveryStateStore::open(&fixture.state_root)?.state(),
+            before.state()
+        );
+        coordinator.complete_installation(
+            &guard,
+            stage.profile_bridge_root().join(PROFILE_BRIDGE_EXECUTABLE),
+        )?;
+        let installed = DeliveryStateStore::open(&fixture.state_root)?;
+        assert_eq!(installed.state().active(), Some(&candidate.identity()));
+        let fallback = healthy.then_some(fixture.first.clone());
+        assert_eq!(installed.state().last_known_good(), fallback.as_ref());
+        assert!(!installed.state().active_health_confirmed());
+        assert_eq!(installed.state().activation_generation(), 2);
+        let arrival = installed.handoff().ok_or("missing upgrade arrival")?;
+        assert_eq!(arrival.outcome(), DeliveryHandoffOutcome::Arrived);
+        assert_eq!(arrival.target(), &candidate.identity());
+        coordinator.complete_installation(
+            &guard,
+            stage.profile_bridge_root().join(PROFILE_BRIDGE_EXECUTABLE),
+        )?;
+        assert_eq!(
+            DeliveryStateStore::open(&fixture.state_root)?.revision(),
+            installed.revision()
+        );
+        assert_eq!(fs::read(&connection)?, b"existing-device-binding");
+        assert_eq!(fs::read(&profile)?, b"existing-profile-state");
     }
     Ok(())
 }
@@ -148,7 +210,7 @@ fn first_installation_cannot_replace_update_or_recovery_history() -> TestResult 
         let guard = DeliveryActivationGuard::acquire(&fixture.materialization)?;
         let before = DeliveryStateStore::open(&fixture.state_root)?;
         assert_eq!(
-            coordinator.complete_first_installation(&guard, &fixture.second_executable),
+            coordinator.complete_installation(&guard, &fixture.second_executable),
             Err(DeliveryHandoffError::FirstInstallationConflict)
         );
         let after = DeliveryStateStore::open(&fixture.state_root)?;
@@ -165,7 +227,7 @@ fn first_installation_cannot_complete_an_unfinished_process_transfer() -> TestRe
     let guard = DeliveryActivationGuard::acquire(&fixture.materialization)?;
     let before = DeliveryStateStore::open(&fixture.state_root)?;
     assert_eq!(
-        coordinator.complete_first_installation(&guard, &fixture.first_executable),
+        coordinator.complete_installation(&guard, &fixture.first_executable),
         Err(DeliveryHandoffError::FirstInstallationConflict)
     );
     let after = DeliveryStateStore::open(&fixture.state_root)?;
