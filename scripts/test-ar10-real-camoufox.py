@@ -19,7 +19,9 @@ import tempfile
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from types import ModuleType
 from typing import BinaryIO, Iterator
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 CAMOUHOST = ROOT / "runtime/camouhost/real.py"
@@ -29,6 +31,8 @@ IPC_VERSION = "3"
 HEADLESS_MODE_ENV = "AR10_REAL_CAMOUFOX_HEADLESS"
 BRIDGE_LOCK_CONTENT = "profile-platform-bridge-lock-v1\ndevice_01JAR10REALCAMOUFOX\n1\n"
 MANAGED_PARENT_ENV = {
+    "ALLUSERSPROFILE",
+    "APPDATA",
     "DBUS_SESSION_BUS_ADDRESS",
     "DISPLAY",
     "GDK_BACKEND",
@@ -38,13 +42,17 @@ MANAGED_PARENT_ENV = {
     "LOCALAPPDATA",
     "LOGNAME",
     "PATH",
+    "PROGRAMDATA",
     "SHELL",
+    "SYSTEMDRIVE",
+    "SYSTEMROOT",
     "TEMP",
     "TMP",
     "TMPDIR",
     "USER",
     "USERPROFILE",
     "WAYLAND_DISPLAY",
+    "WINDIR",
     "WSL_DISTRO_NAME",
     "WSL_INTEROP",
     "XDG_CACHE_HOME",
@@ -308,6 +316,25 @@ def launch_probe(
         if process.poll() is None:
             process.kill()
             process.wait(timeout=30)
+
+
+def prove_managed_environment_projection(runtime: ModuleType) -> None:
+    expected = {
+        "SYSTEMDRIVE": "C:",
+        "SYSTEMROOT": r"C:\Windows",
+        "WINDIR": r"C:\Windows",
+        "PROGRAMDATA": r"C:\ProgramData",
+        "ALLUSERSPROFILE": r"C:\ProgramData",
+        "APPDATA": r"C:\Users\Test\AppData\Roaming",
+        "LOCALAPPDATA": r"C:\Users\Test\AppData\Local",
+    }
+    injected = {
+        "CLOUDFLARE_API_TOKEN": "must-not-cross",
+        "HTTP_PROXY": "must-not-cross",
+        "CAMOU_CONFIG_1": "must-not-cross",
+    }
+    with patch.dict(os.environ, expected | injected, clear=True):
+        assert runtime.browser_environment() == expected
 
 
 def prove_managed_environment_boundary(base: Path) -> None:

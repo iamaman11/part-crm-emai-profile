@@ -226,6 +226,7 @@ def prove_failure_observation_contract() -> None:
     source_root = Path(__file__).resolve().parents[1]
     runtime = load_runtime(source_root / "runtime/camouhost/real.py")
     proof = load_runtime(source_root / "scripts/test-ar10-real-camoufox.py")
+    proof.prove_managed_environment_projection(runtime)
     timeout = type("TimeoutError", (Exception,), {})("secret-url-key-profile-content")
     frames = [f"hello|{IPC_VERSION}", f"launch|{SESSION}", f"observe_browser_visible|{SESSION}",
               f"admit_navigation|{SESSION}|unused", f"close|{SESSION}"]

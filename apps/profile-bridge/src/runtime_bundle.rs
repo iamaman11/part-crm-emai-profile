@@ -408,11 +408,9 @@ fn read_expected_runtime_file(
         || !metadata.is_file()
         || metadata.len() != expected.size_bytes
     {
-        eprintln!("RUNTIME_BUNDLE_FILE_MISMATCH=metadata;component_path={relative:?}");
         return Err(RuntimeBundleSelectionError::InvalidRuntime);
     }
     if sha256_regular_file(&path, expected.size_bytes)? != expected.sha256 {
-        eprintln!("RUNTIME_BUNDLE_FILE_MISMATCH=digest;component_path={relative:?}");
         return Err(RuntimeBundleSelectionError::InvalidRuntime);
     }
     Ok(RuntimeFile {

@@ -348,7 +348,12 @@ def load_canonical_json(
 
 
 def browser_environment() -> dict[str, str]:
+    # Windows expands known-folder registry paths through these OS directory variables.
+    # Missing SYSTEMDRIVE can create a literal %SystemDrive% tree in the working directory.
+    # Windows os.environ iteration uses uppercase keys; credentials remain excluded.
     allowed = {
+        "ALLUSERSPROFILE",
+        "APPDATA",
         "DBUS_SESSION_BUS_ADDRESS",
         "DISPLAY",
         "GDK_BACKEND",
@@ -358,13 +363,17 @@ def browser_environment() -> dict[str, str]:
         "LOCALAPPDATA",
         "LOGNAME",
         "PATH",
+        "PROGRAMDATA",
         "SHELL",
+        "SYSTEMDRIVE",
+        "SYSTEMROOT",
         "TEMP",
         "TMP",
         "TMPDIR",
         "USER",
         "USERPROFILE",
         "WAYLAND_DISPLAY",
+        "WINDIR",
         "WSL_DISTRO_NAME",
         "WSL_INTEROP",
         "XDG_CACHE_HOME",
