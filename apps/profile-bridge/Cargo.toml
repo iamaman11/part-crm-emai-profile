@@ -58,6 +58,7 @@ zeroize.workspace = true
 [target.'cfg(windows)'.dependencies]
 windows-device-key = { path = "../../platform/windows-device-key" }
 windows-desktop-ui = { path = "../../platform/windows-desktop-ui" }
+windows-delivery-signature = { path = "../../platform/windows-delivery-signature" }
 
 [lints]
 workspace = true

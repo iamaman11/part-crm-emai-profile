@@ -543,7 +543,6 @@ jobs:
           cargo test --locked --workspace --all-targets
           --exclude browser-profile-control-plane-worker
           --exclude cloudflare-adapters
-          -- --skip production_verifier_accepts_only_exact_pinned_application_signature
 
       - name: Verify AR-6 opsctl quality on Windows
         shell: pwsh

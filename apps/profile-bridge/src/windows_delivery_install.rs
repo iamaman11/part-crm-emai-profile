@@ -69,8 +69,7 @@ mod windows {
         let handoff = DeliveryHandoffCoordinator::new(staging.clone(), &state_root);
         InstalledConnection::prepare(&handoff, bundle.origin)
             .map_err(NativeInstallerError::InstalledConnection)?;
-        let mut verifier = WindowsCmsSignatureVerifier::from_system(downloads.path().to_path_buf())
-            .map_err(|_| NativeInstallerError::PlatformUnavailable)?;
+        let mut verifier = WindowsCmsSignatureVerifier;
         let mut fetcher = WindowsReleaseAssetFetcher::from_system()
             .map_err(|_| NativeInstallerError::PlatformUnavailable)?;
         let mut reader = WindowsDeliveryArchiveReader::new();
