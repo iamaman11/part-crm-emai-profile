@@ -37,7 +37,6 @@ SignedUninstaller=no
 OutputBaseFilename=ProfileBridgeSetup
 SignedUninstaller=no
 #endif
-UninstallDisplayIcon={app}\releases\{#ReleaseSetId}\profile-bridge\profile-bridge.exe
 
 [Languages]
 Name: "ru"; MessagesFile: "compiler:Languages\Russian.isl"
@@ -52,7 +51,7 @@ Source: "{#InstallerInputDirectory}\windows-delivery-signature.json"; Flags: don
 [Registry]
 Root: HKCU; Subkey: "Software\Classes\profilebridge"; ValueType: string; ValueName: ""; ValueData: "URL:Profile Bridge"; Flags: uninsdeletekey
 Root: HKCU; Subkey: "Software\Classes\profilebridge"; ValueType: string; ValueName: "URL Protocol"; ValueData: ""
-Root: HKCU; Subkey: "Software\Classes\profilebridge\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\releases\{#ReleaseSetId}\profile-bridge\profile-bridge.exe"" ""%1"""
+Root: HKCU; Subkey: "Software\Classes\profilebridge\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{code:InstalledBridgePath}"" ""%1"""
 
 [Run]
 Filename: "{#ControlPlaneOrigin}/devices"; Description: "{cm:OpenApplication}"; Flags: shellexec postinstall skipifsilent nowait
@@ -76,11 +75,44 @@ ru.InstallationFailed=Не удалось завершить установку.
 var
   BridgeOutputError: Boolean;
   BridgeLastLine: String;
+  PreparedDirectory: String;
+
+function SafePreparedDirectory(const Value: String): Boolean;
+var
+  Index: Integer;
+begin
+  Result := False;
+  if (Length(Value) < 1) or (Length(Value) > 128) then exit;
+  for Index := 1 to Length(Value) do
+    if not (((Value[Index] >= 'a') and (Value[Index] <= 'z')) or
+            ((Value[Index] >= '0') and (Value[Index] <= '9')) or
+            (Value[Index] = '-')) then exit;
+  Result := True;
+end;
+
+function InstalledBridgePath(Param: String): String;
+begin
+  if not SafePreparedDirectory(PreparedDirectory) then
+    RaiseException('BRIDGE_INSTALLATION_OUTPUT_UNAVAILABLE');
+  Result := ExpandConstant('{app}\releases\') + PreparedDirectory + '\profile-bridge\profile-bridge.exe';
+end;
 
 procedure CaptureBridgeOutput(const S: String; const Error, FirstLine: Boolean);
+const
+  DirectoryPrefix = 'PROFILE_BRIDGE_PREPARED_DIRECTORY_V1=';
+var
+  Directory: String;
 begin
   { Preserve native diagnostics as they arrive, before enforcing any exit gate. }
   Log(S);
+  if not Error and (Pos(DirectoryPrefix, S) = 1) then begin
+    Directory := Copy(S, Length(DirectoryPrefix) + 1, Length(S));
+    if not SafePreparedDirectory(Directory) or (PreparedDirectory <> '') then
+      BridgeOutputError := True
+    else
+      PreparedDirectory := Directory;
+    exit;
+  end;
   if Error then
     BridgeOutputError := True
   else if Trim(S) <> '' then
@@ -131,6 +163,7 @@ var
 begin
   NeedsRestart := False;
   Result := '';
+  PreparedDirectory := '';
   Progress := CreateOutputMarqueeProgressPage(CustomMessage('PreparingTitle'),
     CustomMessage('PreparingDescription'));
   Progress.SetText(CustomMessage('InstallingBrowser'), '');
@@ -143,9 +176,11 @@ begin
     ExtractTemporaryFile('windows-delivery-signature.json');
     Result := RunBridge(ExpandConstant('{tmp}\profile-bridge.exe'),
       '--delivery-prepare ' + QuoteArgument(ExpandConstant('{tmp}')) + ' ' + QuoteArgument(ExpandConstant('{app}')));
+    if (Result = '') and (PreparedDirectory = '') then
+      Result := 'BRIDGE_INSTALLATION_OUTPUT_UNAVAILABLE';
     if Result = '' then begin
       Progress.SetText(CustomMessage('FinishingInstallation'), '');
-      Target := ExpandConstant('{app}\releases\{#ReleaseSetId}\profile-bridge\profile-bridge.exe');
+      Target := InstalledBridgePath('');
       Result := RunBridge(Target, '--delivery-install-staged ' + QuoteArgument('{#ControlPlaneOrigin}'));
     end;
   finally

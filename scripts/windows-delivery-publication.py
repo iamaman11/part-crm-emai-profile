@@ -280,7 +280,7 @@ def render_installer_source(
     """
     manifest, manifest_bytes = load_json(manifest_path, "Windows delivery manifest", 1024 * 1024)
     _, signature_bytes = load_json(signature_path, "Windows delivery signature", 2 * 1024 * 1024 + 4096)
-    release_id = prefixed_digest(manifest.get("release_set_id"), RELEASE_SET_PREFIX, "Release Set ID")
+    prefixed_digest(manifest.get("release_set_id"), RELEASE_SET_PREFIX, "Release Set ID")
     # Encoding fence for compiler/Pascal literals; URL/trust admission remains native-owned.
     for value in (origin, signer_key_id, certificate_sha256):
         if not value or any(character in value for character in ('"', "'", "\r", "\n", "\0", "{", "}")):
@@ -298,7 +298,6 @@ def render_installer_source(
         "signer_certificate_sha256": certificate_sha256,
     }, separators=(",", ":")).encode())
     write_new(output / "installer-inputs.iss", (
-        f'#define ReleaseSetId "{release_id}"\n'
         f'#define ControlPlaneOrigin "{origin}"\n'
     ).encode("utf-8"))
     shutil.copyfile(bridge_path, output / "profile-bridge.exe")
@@ -396,6 +395,15 @@ begin
   if Observed <> 'BRIDGE_TEST_REJECTED' then RaiseException('native failure changed: ' + Observed);
   Observed := RunBridge(ExpandConstant('{tmp}\missing-bridge.exe'), '');
   if Observed <> 'BRIDGE_INSTALLATION_PROCESS_UNAVAILABLE' then RaiseException('launch failure accepted');
+  PreparedDirectory := '';
+  Observed := RunBridge(ExpandConstant('{cmd}'), '/D /C "echo PROFILE_BRIDGE_PREPARED_DIRECTORY_V1=release-fixture&exit /b 0"');
+  if (Observed <> '') or (PreparedDirectory <> 'release-fixture') then RaiseException('native directory locator lost');
+  PreparedDirectory := '';
+  Observed := RunBridge(ExpandConstant('{cmd}'), '/D /C "echo PROFILE_BRIDGE_PREPARED_DIRECTORY_V1=..\escape&exit /b 0"');
+  if Observed <> 'BRIDGE_INSTALLATION_OUTPUT_UNAVAILABLE' then RaiseException('unsafe directory locator accepted');
+  PreparedDirectory := '';
+  Observed := RunBridge(ExpandConstant('{cmd}'), '/D /C "echo PROFILE_BRIDGE_PREPARED_DIRECTORY_V1=release-one&echo PROFILE_BRIDGE_PREPARED_DIRECTORY_V1=release-two&exit /b 0"');
+  if Observed <> 'BRIDGE_INSTALLATION_OUTPUT_UNAVAILABLE' then RaiseException('ambiguous directory locator accepted');
   Log('INSTALLER_PROCESS_ADAPTER_PROOF_PASS');
   Result := False; { A proof process never proceeds to installation. }
 end;
