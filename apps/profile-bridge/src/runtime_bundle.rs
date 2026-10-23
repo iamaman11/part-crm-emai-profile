@@ -149,8 +149,12 @@ impl FilesystemRuntimeBundleSelection {
     }
 
     fn load_bundle(&self) -> Result<ApprovedRuntimeBundle, RuntimeBundleSelectionError> {
-        let packaged = read_packaged_manifest(&self.runtime_root)?;
-        validate_packaged_manifest(&packaged)?;
+        let packaged = read_packaged_manifest(&self.runtime_root).inspect_err(|error| {
+            eprintln!("RUNTIME_BUNDLE_VALIDATION=manifest_read;error={error:?}");
+        })?;
+        validate_packaged_manifest(&packaged).inspect_err(|error| {
+            eprintln!("RUNTIME_BUNDLE_VALIDATION=manifest_identity;error={error:?}");
+        })?;
 
         let mut expected_files = HashSet::new();
         expected_files.insert(SHIPPING_COMPONENT_MANIFEST.to_owned());
@@ -165,7 +169,13 @@ impl FilesystemRuntimeBundleSelection {
             if total_bytes > MAX_RUNTIME_BYTES {
                 return Err(RuntimeBundleSelectionError::InvalidRuntime);
             }
-            let runtime_file = read_expected_runtime_file(&self.runtime_root, expected)?;
+            let runtime_file = read_expected_runtime_file(&self.runtime_root, expected)
+                .inspect_err(|error| {
+                    eprintln!(
+                        "RUNTIME_BUNDLE_VALIDATION=file;component_path={:?};error={error:?}",
+                        expected.path
+                    );
+                })?;
             add_expected_directories(&expected.path, &mut expected_directories)?;
             if !expected_files.insert(expected.path.clone()) {
                 return Err(RuntimeBundleSelectionError::InvalidRuntime);
@@ -186,7 +196,10 @@ impl FilesystemRuntimeBundleSelection {
                 return Err(RuntimeBundleSelectionError::InvalidRuntime);
             }
         }
-        validate_runtime_tree(&self.runtime_root, &expected_files, &expected_directories)?;
+        validate_runtime_tree(&self.runtime_root, &expected_files, &expected_directories)
+            .inspect_err(|error| {
+                eprintln!("RUNTIME_BUNDLE_VALIDATION=tree;error={error:?}");
+            })?;
 
         // The v3 external file-set digest binds the producer's exact order (Windows paths
         // are case-insensitive). Normalize only the internal inventory after verification.
@@ -493,7 +506,7 @@ fn validate_runtime_tree(
                 ("missing", expected.difference(observed)),
             ] {
                 for path in paths.take(4) {
-                    if BundleRelativePath::parse(path).is_ok() {
+                    if path.len() <= MAX_SOURCE_PATH_BYTES {
                         eprintln!(
                             "RUNTIME_BUNDLE_TREE_MISMATCH={kind}_{category};component_path={path:?}"
                         );
