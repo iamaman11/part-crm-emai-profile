@@ -433,6 +433,7 @@ jobs:
           jq -e '.success == true and (.errors | length) == 0 and (.result.deployments | type == "array") and (.result.deployments | length) > 0' "$raw/deployments-api.json" >/dev/null
           jq '.result.deployments[0]' "$raw/current-deployment.json" > /dev/null 2>&1 || true
           jq '.result.deployments[0]' "$raw/deployments-api.json" > "$raw/current-deployment.json"
+          date -u +%s > "$raw/deployment-first-observed-at.txt"
           python scripts/deployment-identity-ar11.py \
             --status "$raw/current-deployment.json" \
             --output "$raw/current-deployment-identity.json"
@@ -681,11 +682,24 @@ jobs:
             '.schema_version == 1 and .kind == "D1_CURRENT_TARGET_OBSERVATION" and .source_sha == env.SOURCE_SHA and .environment == "staging" and .component == "catalog" and .provider_observation_input.target.database_name == env.TARGET_NAME and .provider_observation_input.target.database_id == env.TARGET_ID and .provider_observation_input.target.environment == "staging" and (.provider_observation_input.wrangler_pending_migrations | type == "array") and .provider_observation_input.wrangler_pending_migrations == .provider_diagnostics.provider_pending_migrations and (.current_deployed_release_set_id | test("^release-set-v(2|3)-sha256-[0-9a-f]{64}$")) and (.current_deployed_source_sha | test("^[0-9a-f]{40}$")) and .provider_observation_input.time_travel_bookmark_capable == true and .provider_diagnostics.schema_version == 1 and .provider_diagnostics.read_contract.kind == "D1_CLOUDFLARE_READ_CONTRACT_V1" and .provider_diagnostics.read_contract.query_mutation_proof.ledger_table_changed_db == false and .provider_diagnostics.read_contract.query_mutation_proof.ledger_changed_db == false and .provider_diagnostics.read_contract.query_mutation_proof.foreign_key_changed_db == false and .provider_diagnostics.read_contract.query_mutation_proof.quick_check_changed_db == false and .provider_mutation == false and .d1_mutation == false and .production_mutation == false' \
             "$evidence/provider-observation.json" >/dev/null
 
+          if [ "$OPERATION_MODE" != reconstruction ]; then
+            first_observed="$(cat "$raw/deployment-first-observed-at.txt")"
+            elapsed="$(( $(date -u +%s) - first_observed ))"
+            if [ "$elapsed" -lt 30 ]; then sleep "$((30 - elapsed))"; fi
+            curl --fail --silent --show-error -H "Authorization: Bearer $CLOUDFLARE_OBSERVE_API_TOKEN" \
+              "https://api.cloudflare.com/client/v4/accounts/$account_id/workers/scripts/$worker_name/deployments" > "$raw/deployments-after-api.json"
+            jq -e '.success == true and (.result.deployments | length) > 0' "$raw/deployments-after-api.json" >/dev/null
+            jq '.result.deployments[0]' "$raw/deployments-after-api.json" > "$raw/current-deployment-after.json"
+            date -u +%s > "$raw/deployment-second-observed-at.txt"
+            python scripts/deployment-identity-ar11.py --status "$raw/current-deployment-after.json" --output "$raw/current-deployment-after-identity.json"
+          fi
+
           {
             echo "CURRENT_TARGET_NAME=$target_name"
             echo "CURRENT_TARGET_ID=$target_id"
             echo "CURRENT_DEPLOYED_RELEASE_SET_ID=$current_release_set_id"
             echo "CURRENT_DEPLOYED_SOURCE_SHA=$current_release_source_sha"
+            echo "CURRENT_WORKER_NAME=$worker_name"
           } >> "$GITHUB_ENV"
 
       - name: Publish secret-free exact Time Travel lookup
@@ -932,6 +946,8 @@ jobs:
           printf '%s\n' "$target_release" > "$evidence/target-release-set-id.txt"
 
           "$opsctl" --root . d1 repository > "$root/d1-repository.json"
+          export D1_DEPLOYMENT_SNAPSHOT="$RUNNER_TEMP/d1-current-target-observation/current-deployment-after.json"
+          export D1_DEPLOYMENT_RAW="$RUNNER_TEMP/d1-current-target-observation"
           python - \
             "$root/d1-repository.json" "$root/target-manifest.json" "$root/current-deployed-manifest.json" \
             "$root/current-runtime-manifest.json" "$root/known-good-runtime-manifest.json" \
@@ -965,11 +981,20 @@ jobs:
                   raise SystemExit(f'target Release Set schema contract drifted from typed D1 release authority: {field}')
           if deployed.get('database_component') != component_id:
               raise SystemExit('deployed Release Set component drifted')
-          manifest = {'schema_contract': deployed}
+          manifest = json.load(open(deployed_path, encoding='utf-8'))
           for output in (current_output, known_output):
               with open(output, 'w', encoding='utf-8') as handle:
                   json.dump(manifest, handle, sort_keys=True, indent=2)
                   handle.write('\n')
+          def snapshot(name):
+              path = os.path.join(os.environ['D1_DEPLOYMENT_RAW'], name)
+              if not os.path.isfile(path):
+                  return None
+              value = json.load(open(path, encoding='utf-8'))
+              return {'id': value.get('id'), 'versions': [
+                  {'version_id': item.get('version_id'), 'percentage': item.get('percentage')}
+                  for item in value.get('versions', [])
+              ]}
           evidence = {
               'schema_version': 1,
               'kind': 'D1_DEPLOYED_RUNTIME_CONTEXT',
@@ -979,6 +1004,13 @@ jobs:
               'deployed_release_source_sha': os.environ['CURRENT_DEPLOYED_SOURCE_SHA'],
               'deployed_release_target_revision': deployed.get('target_schema_revision'),
               'schema_contract': deployed,
+              'deployed_manifest': manifest,
+              'worker_name': os.environ['CURRENT_WORKER_NAME'],
+              'deployment_snapshot': snapshot('current-deployment-after.json'),
+              'deployment_snapshot_before': snapshot('current-deployment.json'),
+              'deployment_identity_after': (json.load(open(os.path.join(os.environ['D1_DEPLOYMENT_RAW'], 'current-deployment-after-identity.json'), encoding='utf-8')) if os.path.isfile(os.environ['D1_DEPLOYMENT_SNAPSHOT']) else None),
+              'first_deployment_observed_at_unix_seconds': (int(open(os.path.join(os.environ['D1_DEPLOYMENT_RAW'], 'deployment-first-observed-at.txt')).read()) if os.path.isfile(os.environ['D1_DEPLOYMENT_SNAPSHOT']) else None),
+              'deployment_observed_at_unix_seconds': (int(open(os.path.join(os.environ['D1_DEPLOYMENT_RAW'], 'deployment-second-observed-at.txt')).read()) if os.path.isfile(os.environ['D1_DEPLOYMENT_SNAPSHOT']) else None),
               'release_schema_contract': release,
               'provider_mutation': False,
               'd1_mutation': False,
@@ -1012,11 +1044,15 @@ jobs:
               json.dump(payload, handle, sort_keys=True, indent=2)
               handle.write('\n')
           PY
-          printf '{"component":"%s","completed":[]}\n' "$D1_COMPONENT" > "$root/preconditions.json"
+
 
           cp "$observation" "$evidence/provider-observation.json"
           cp "$inventory" "$evidence/database-inventory.json"
           if [ "$OPERATION_MODE" != reconstruction ]; then
+          python scripts/d1-prepare.py transition-evidence \
+            --runtime-context "$evidence/runtime-context.json" --observation "$observation" \
+            --release-manifest "$root/target-manifest.json" --repository-json "$root/d1-repository.json" \
+            --release-id "$target_release" --component "$D1_COMPONENT" --output "$root/preconditions.json"
           set +e
           python scripts/d1-prepare.py prepare \
             --opsctl "$opsctl" \

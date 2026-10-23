@@ -33,8 +33,6 @@ REASON_CODES = {
     "D1_COMPATIBILITY_OUTPUT_INVALID",
     "D1_COMPATIBILITY_DENIED",
     "D1_ROLLBACK_POLICY_BLOCKED",
-    "D1_CONTRACT_PLAN_MIGRATION_MISMATCH",
-    "D1_CONTRACT_RECOVERY_STRATEGY_MISMATCH",
 }
 
 
@@ -80,20 +78,6 @@ def evaluate_policy(plan_path: Path, compatibility_path: Path) -> bool:
             "D1_ROLLBACK_POLICY_BLOCKED",
             f"decision={_bounded_scalar(decision)}",
         )
-
-    if plan.get("command") == "d1 contract-transition":
-        if plan.get("planned_migrations") != ["0032_pas2_payload_fingerprint_contract.sql"]:
-            raise DiagnosticFailure(
-                "contract-policy",
-                "D1_CONTRACT_PLAN_MIGRATION_MISMATCH",
-                "contract transition is not the exact sole 0032 migration",
-            )
-        if plan.get("recovery_strategy") != "FAIL_FORWARD_ONLY":
-            raise DiagnosticFailure(
-                "contract-policy",
-                "D1_CONTRACT_RECOVERY_STRATEGY_MISMATCH",
-                f"recovery_strategy={_bounded_scalar(plan.get('recovery_strategy'))}",
-            )
 
     if plan.get("allowed") is not True:
         raise DiagnosticFailure(
@@ -226,28 +210,6 @@ def command_self_test(_: argparse.Namespace) -> int:
             (
                 "D1_ROLLBACK_POLICY_BLOCKED",
                 {**good_plan, "allowed": False, "decision": "FAIL_FORWARD_REQUIRED"},
-                good_compatibility,
-            ),
-            (
-                "D1_CONTRACT_PLAN_MIGRATION_MISMATCH",
-                {
-                    **good_plan,
-                    "allowed": False,
-                    "command": "d1 contract-transition",
-                    "planned_migrations": ["0031_device_binding_governance.sql"],
-                    "recovery_strategy": "FAIL_FORWARD_ONLY",
-                },
-                good_compatibility,
-            ),
-            (
-                "D1_CONTRACT_RECOVERY_STRATEGY_MISMATCH",
-                {
-                    **good_plan,
-                    "allowed": False,
-                    "command": "d1 contract-transition",
-                    "planned_migrations": ["0032_pas2_payload_fingerprint_contract.sql"],
-                    "recovery_strategy": "RESTORE",
-                },
                 good_compatibility,
             ),
         ]

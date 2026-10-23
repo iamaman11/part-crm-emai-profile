@@ -8,7 +8,6 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 
 const EXECUTION_CONTROL_SCHEMA_VERSION: u64 = 1;
-const RELEASE_SET_PREFIX: &str = "release-set-v3-sha256-";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -667,34 +666,19 @@ fn validate_operation_binding(
     transaction_id: Option<&str>,
     authorization_digest: Option<&str>,
 ) -> Result<(), D1Error> {
-    match phase {
-        TransactionPhase::Ordinary => {
-            let transaction_id = transaction_id
-                .ok_or_else(|| D1Error::new("ordinary target fence requires transaction_id"))?;
-            let authorization_digest = authorization_digest.ok_or_else(|| {
-                D1Error::new("ordinary target fence requires authorization_digest")
-            })?;
-            validate_sha256(transaction_id, "transaction_id")?;
-            validate_sha256(authorization_digest, "authorization_digest")?;
-            if operation_identity != transaction_id {
-                return Err(D1Error::new(
-                    "ordinary operation_identity must exactly equal transaction_id",
-                ));
-            }
-        }
-        TransactionPhase::Contract => {
-            if transaction_id.is_some() || authorization_digest.is_some() {
-                return Err(D1Error::new(
-                    "separately governed CONTRACT fence must not masquerade as ordinary transaction authorization",
-                ));
-            }
-            let digest = operation_identity.strip_prefix(RELEASE_SET_PREFIX).ok_or_else(|| {
-                D1Error::new(format!(
-                    "CONTRACT operation_identity must be an exact {RELEASE_SET_PREFIX}<sha256> Release Set identity"
-                ))
-            })?;
-            validate_sha256(digest, "CONTRACT operation_identity digest")?;
-        }
+    let _ = phase;
+    let transaction_id = transaction_id.ok_or_else(|| {
+        D1Error::new("target fence requires sealed transaction_id for every phase")
+    })?;
+    let authorization_digest = authorization_digest.ok_or_else(|| {
+        D1Error::new("target fence requires exact authorization_digest for every phase")
+    })?;
+    validate_sha256(transaction_id, "transaction_id")?;
+    validate_sha256(authorization_digest, "authorization_digest")?;
+    if operation_identity != transaction_id {
+        return Err(D1Error::new(
+            "operation_identity must exactly equal the sealed transaction_id",
+        ));
     }
     Ok(())
 }
@@ -1062,23 +1046,15 @@ mod tests {
     }
 
     #[test]
-    fn contract_fence_keeps_separate_authority_shape() -> Result<(), D1Error> {
-        let release_id = format!("{RELEASE_SET_PREFIX}{}", "44".repeat(32));
-        let lease = acquire_target_fence(TargetFenceLeaseInput {
-            schema_version: 1,
-            target: target("db-1"),
-            phase: TransactionPhase::Contract,
-            operation_identity: release_id,
-            transaction_id: None,
-            authorization_digest: None,
-            source_sha: "33".repeat(20),
-            executor_run_id: 100,
-            fence_epoch: 50,
-            run_attempt: 1,
-            acquired_at_unix_seconds: T0,
-        })?;
-        assert_eq!(lease.phase, TransactionPhase::Contract);
-        assert!(lease.transaction_id.is_none());
+    fn contract_fence_requires_the_same_exact_transaction_authority() -> Result<(), D1Error> {
+        let mut input = ordinary_input(7, "db-1");
+        input.phase = TransactionPhase::Contract;
+        assert_eq!(
+            acquire_target_fence(input.clone())?.phase,
+            TransactionPhase::Contract
+        );
+        input.transaction_id = None;
+        assert!(acquire_target_fence(input).is_err());
         Ok(())
     }
 }

@@ -1,377 +1,582 @@
 use opsctl::canonical::{canonical_json, sha256_hex};
+use opsctl::d1::execution_control::{
+    ExecutionEventInput, ExecutionEventKind, ExecutionReceiptSeed, TargetFenceLeaseInput,
+    acquire_target_fence, append_execution_event, initialize_execution_receipt,
+};
+use opsctl::d1::executor_admission::{ExecutorAdmissionExpectation, bind_executor_admission};
+use opsctl::d1::transaction::{
+    ProviderObservationInput, TransactionPhase, build_transaction_projection,
+};
 use opsctl::d1::{
-    D1ContractTransitionRequest, D1ContractTransitionVerificationRequest, contract_transition,
-    contract_transition_verify, repository_projection,
+    D1Action, D1RunRequest, repository_projection, run, verify_execution_post_state,
+    verify_migration_ledger,
 };
 use serde_json::{Value, json};
-use std::error::Error;
-use std::fs;
-use std::path::{Path, PathBuf};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::{
+    error::Error,
+    fs,
+    path::{Path, PathBuf},
+    process::Command,
+    time::{SystemTime, UNIX_EPOCH},
+};
 
-const PREDECESSOR_REVISION: &str = "0034_device_application_authority.sql";
-const CONTRACT_REVISION: &str = "0035_pas2_payload_fingerprint_contract.sql";
-
-fn repo_root() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
-}
-
-struct TempDirectory {
-    path: PathBuf,
-}
-
-impl TempDirectory {
-    fn new() -> Result<Self, Box<dyn Error>> {
-        let nonce = SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos();
-        let path = std::env::temp_dir().join(format!(
-            "opsctl-d1-contract-transition-{}-{nonce}",
-            std::process::id()
-        ));
-        fs::create_dir_all(&path)?;
-        Ok(Self { path })
-    }
-
-    fn path(&self, name: &str) -> PathBuf {
-        self.path.join(name)
-    }
-}
-
-impl Drop for TempDirectory {
+const F54: &str =
+    "release-set-v3-sha256-f54bc16cc657f32d86a5647dc8173d8495a9dc1483283b96fa3908ccc6c9cb30";
+const SOURCE: &str = "f086a72fabe632b2d63bd6e4f9e7679189ae8226";
+const TARGET: &str =
+    "release-set-v3-sha256-d1789e36c690480c61721d8d34bc1e27c97d58ffbdb15a61303369b4bf274ec5";
+struct Scratch(PathBuf);
+impl Drop for Scratch {
     fn drop(&mut self) {
-        let _ = fs::remove_dir_all(&self.path);
+        let _ = fs::remove_dir_all(&self.0);
     }
 }
-
-fn write_json(path: &Path, value: &Value) -> Result<(), Box<dyn Error>> {
-    fs::write(path, serde_json::to_vec_pretty(value)?)?;
+fn write(path: &Path, value: &Value) -> Result<(), Box<dyn Error>> {
+    fs::write(path, serde_json::to_string_pretty(value)? + "\n")?;
     Ok(())
 }
-
-fn canonical_sha256(value: &Value) -> Result<String, Box<dyn Error>> {
-    Ok(sha256_hex(canonical_json(value)?.as_bytes()))
+fn python(root: &Path, args: &[&str]) -> Result<(), Box<dyn Error>> {
+    let output = Command::new("python")
+        .arg("-X")
+        .arg("utf8")
+        .env_remove("CLOUDFLARE_API_TOKEN")
+        .env_remove("CLOUDFLARE_OBSERVE_API_TOKEN")
+        .env_remove("CLOUDFLARE_ACCOUNT_ID")
+        .args(args)
+        .current_dir(root)
+        .output()?;
+    if !output.status.success() {
+        return Err(format!(
+            "Python adapter failed: {}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        )
+        .into());
+    }
+    Ok(())
 }
-
-fn catalog(projection: &Value) -> Result<&Value, Box<dyn Error>> {
-    projection["components"]
-        .as_array()
-        .and_then(|components| {
-            components
-                .iter()
-                .find(|component| component["component_id"] == "catalog")
-        })
-        .ok_or_else(|| "typed Catalog projection is missing".into())
+fn strpath(p: &Path) -> Result<&str, Box<dyn Error>> {
+    p.to_str().ok_or_else(|| "test path is not UTF8".into())
 }
-
-fn ledger(names: &[String]) -> Value {
-    json!({
-        "rows": names
-            .iter()
-            .enumerate()
-            .map(|(index, name)| json!({"id": index + 1, "name": name}))
-            .collect::<Vec<_>>()
-    })
+fn canonical_digest(v: &Value) -> Result<String, Box<dyn Error>> {
+    Ok(sha256_hex(canonical_json(v)?.as_bytes()))
+}
+fn plan(root: &Path, dir: &Path) -> Result<Value, Box<dyn Error>> {
+    let text = run(D1RunRequest {
+        root,
+        action: D1Action::Plan,
+        component: "catalog",
+        ledger_json: &dir.join("ledger.json"),
+        release_manifest: Some(&dir.join("target.json")),
+        current_manifest: Some(&dir.join("current.json")),
+        known_good_manifest: Some(&dir.join("current.json")),
+        preconditions_json: Some(&dir.join("preconditions.json")),
+    })?;
+    Ok(serde_json::from_str(&text)?)
 }
 
 #[test]
-fn public_contract_transition_enforces_exact_fail_closed_matrix_and_post_verify()
+fn actual_deployed_context_traverses_separate_sealed_contract_and_current_expand_with_data_preserved()
 -> Result<(), Box<dyn Error>> {
-    let root = repo_root();
-    let projection: Value = serde_json::from_str(&repository_projection(&root)?)?;
-    let catalog = catalog(&projection)?;
-    let sources = catalog["executable_migration_sources"]
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let nonce = SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos();
+    let scratch =
+        Scratch(std::env::temp_dir().join(format!("d1-staged-{}-{nonce}", std::process::id())));
+    let dir = &scratch.0;
+    fs::create_dir_all(dir)?;
+    let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs() as i64;
+    let repository: Value = serde_json::from_str(&repository_projection(&root)?)?;
+    let catalog = repository["components"]
         .as_array()
-        .ok_or("Catalog executable migration sources are missing")?;
-    let names = sources
+        .ok_or("repository components are missing")?
         .iter()
-        .map(|source| {
-            source["migration_file"]
+        .find(|c| c["component_id"] == "catalog")
+        .ok_or("Catalog component is missing")?;
+    let history = catalog["executable_migration_sources"]
+        .as_array()
+        .ok_or("Catalog migration sources are missing")?
+        .iter()
+        .map(|m| {
+            m["migration_file"]
                 .as_str()
                 .map(str::to_owned)
-                .ok_or("Catalog migration filename is missing")
+                .ok_or("migration name is missing")
         })
         .collect::<Result<Vec<_>, _>>()?;
-    assert_eq!(names.len(), 36);
-    assert_eq!(names[33], PREDECESSOR_REVISION);
-    assert_eq!(names[34], CONTRACT_REVISION);
-
-    let predecessor_ledger = ledger(&names[..34]);
-    let multiple_pending_ledger = ledger(&names[..33]);
-    let post_ledger = ledger(&names[..35]);
-    // This operation still proves only0034 ->0035. Its synthetic running-runtime fixture must
-    // support that exact window; the new0036-only application is not predecessor evidence.
-    let mut predecessor_runtime_contract = catalog["release_schema_contract"].clone();
-    assert_eq!(
-        predecessor_runtime_contract["target_schema_revision"],
-        "0036_profile_generation_initialization.sql"
-    );
-    predecessor_runtime_contract["target_schema_revision"] = json!(PREDECESSOR_REVISION);
-    predecessor_runtime_contract["supported_schema_min"] = json!(PREDECESSOR_REVISION);
-    predecessor_runtime_contract["supported_schema_max"] = json!(CONTRACT_REVISION);
-    let release_manifest = json!({"schema_contract": predecessor_runtime_contract});
-    let repository_identity_sha256 = projection["repository_identity_sha256"]
-        .as_str()
-        .ok_or("repository identity is missing")?
-        .to_owned();
-    let release_manifest_sha256 = canonical_sha256(&release_manifest)?;
-    let predecessor_ledger_sha256 = canonical_sha256(&predecessor_ledger)?;
-    let source_sha = "e".repeat(40);
-    let release_set_id = format!("release-set-v3-sha256-{}", "d".repeat(64));
-    let evidence = json!({
-        "schema_version": 1,
-        "kind": "D1_CONTRACT_TRANSITION_EVIDENCE",
-        "environment": "staging",
-        "component": "catalog",
-        "predecessor_revision": PREDECESSOR_REVISION,
-        "contract_revision": CONTRACT_REVISION,
-        "recovery_strategy": "FAIL_FORWARD_ONLY",
-        "release_manifest_sha256": release_manifest_sha256,
-        "repository_identity_sha256": repository_identity_sha256,
-        "ledger_sha256": predecessor_ledger_sha256,
-        "observed_at_unix_seconds": 100,
-        "deployment": {
-            "active_version_ids": ["worker-version-1"],
-            "quiescent": true,
-            "release_set_id": release_set_id.clone(),
-            "single_version": true,
-            "source_sha": source_sha.clone(),
-            "traffic_percent": 100.0
-        },
-        "preconditions": {
-            "request_digest_readers_writers_retired": true,
-            "server_owned_payload_fingerprint_active": true
+    assert_eq!(history.len(), 36);
+    let target = json!({"source":{"authority":"accepted-main","repository":"iamaman11/part-crm-emai-profile","ref":"refs/heads/main","event":"push","commit_sha":SOURCE},"schema_contract":catalog["release_schema_contract"]});
+    let mut current = target.clone();
+    current["source"]["commit_sha"] = json!("fd6c29cc403053f10d9716ff7ad616887ab9850e");
+    current["schema_contract"]["target_schema_revision"] = json!(history[33]);
+    current["schema_contract"]["supported_schema_min"] = json!(history[33]);
+    current["schema_contract"]["supported_schema_max"] = json!(history[34]);
+    current["schema_contract"]["migration_history_digest"] =
+        json!("f8915315dfacefaba7d122f7e79634a8c49f75993bc49b4fef8522ac470a68ae");
+    write(&dir.join("target.json"), &target)?;
+    write(&dir.join("current.json"), &current)?;
+    write(&dir.join("repository.json"), &repository)?;
+    let current_bytes = fs::read(dir.join("current.json"))?;
+    let native = PathBuf::from(env!("CARGO_BIN_EXE_opsctl"));
+    let context = json!({"schema_contract":current["schema_contract"],"worker_name":"worker-1","deployed_manifest":current,
+        "deployed_release_source_sha":current["source"]["commit_sha"],"deployed_release_set_id":F54,
+        "first_deployment_observed_at_unix_seconds":now-40,"deployment_observed_at_unix_seconds":now,
+        "deployment_identity_after":{"release_set_id":F54},
+        "deployment_snapshot_before":{"id":"11111111-1111-4111-8111-111111111111","versions":[{"version_id":"22222222-2222-4222-8222-222222222222","percentage":100.0}]},
+        "deployment_snapshot":{"id":"11111111-1111-4111-8111-111111111111","versions":[{"version_id":"22222222-2222-4222-8222-222222222222","percentage":100.0}]}});
+    write(&dir.join("runtime-context.json"), &context)?;
+    let mut prior_authorization: Option<Value> = None;
+    for count in [34, 35] {
+        let ledger = json!([{"success":true,"results":history[..count].iter().enumerate().map(|(i,n)|json!({"id":i+1,"name":n})).collect::<Vec<_>>()}]);
+        write(&dir.join("ledger.json"), &ledger)?;
+        let observed = json!({"schema_version":1,"target":{"environment":"staging","account_id":"account-1","database_name":"isolated-local-test","database_id":"database-1"},
+            "observed_at_unix_seconds":now,"observation_source":"fixture:exact-provider","remote_ledger_sha256":canonical_digest(&json!({"remote_migrations":history[..count]}))?,
+            "remote_migrations":history[..count],"wrangler_pending_migrations":history[count..],"deployment_identity":F54,"time_travel_bookmark_capable":true});
+        write(
+            &dir.join("provider-observation.json"),
+            &json!({"provider_observation_input":observed}),
+        )?;
+        python(
+            &root,
+            &[
+                "scripts/d1-prepare.py",
+                "transition-evidence",
+                "--runtime-context",
+                strpath(&dir.join("runtime-context.json"))?,
+                "--observation",
+                strpath(&dir.join("provider-observation.json"))?,
+                "--release-manifest",
+                strpath(&dir.join("target.json"))?,
+                "--repository-json",
+                strpath(&dir.join("repository.json"))?,
+                "--release-id",
+                TARGET,
+                "--component",
+                "catalog",
+                "--output",
+                strpath(&dir.join("preconditions.json"))?,
+            ],
+        )?;
+        let native_plan = plan(&root, dir)?;
+        assert_eq!(native_plan["planned_migrations"], json!([history[count]]));
+        assert_eq!(native_plan["target_revision"], history[count]);
+        assert_eq!(native_plan["desired_target_revision"], history[35]);
+        write(&dir.join("native-stage.json"), &native_plan)?;
+        write(
+            &dir.join("deployment-snapshot.json"),
+            &context["deployment_snapshot"],
+        )?;
+        write(
+            &dir.join("deployment-identity.json"),
+            &json!({"release_set_id":F54}),
+        )?;
+        python(
+            &root,
+            &[
+                "scripts/d1-prepare.py",
+                "verify-deployment",
+                "--plan",
+                strpath(&dir.join("native-stage.json"))?,
+                "--deployment",
+                strpath(&dir.join("deployment-snapshot.json"))?,
+                "--identity",
+                strpath(&dir.join("deployment-identity.json"))?,
+            ],
+        )?;
+        let mut changed_deployment = context["deployment_snapshot"].clone();
+        changed_deployment["id"] = json!("33333333-3333-4333-8333-333333333333");
+        write(&dir.join("deployment-snapshot.json"), &changed_deployment)?;
+        let rejected = Command::new("python")
+            .arg(root.join("scripts/d1-prepare.py"))
+            .args(["verify-deployment", "--plan"])
+            .arg(dir.join("native-stage.json"))
+            .arg("--deployment")
+            .arg(dir.join("deployment-snapshot.json"))
+            .arg("--identity")
+            .arg(dir.join("deployment-identity.json"))
+            .env_remove("CLOUDFLARE_API_TOKEN")
+            .env_remove("CLOUDFLARE_OBSERVE_API_TOKEN")
+            .env_remove("CLOUDFLARE_ACCOUNT_ID")
+            .output()?;
+        assert_eq!(rejected.status.code(), Some(2));
+        let comparison: Value = serde_json::from_slice(&rejected.stdout)?;
+        assert_eq!(comparison["matched"], false);
+        assert_eq!(comparison["policy_verdict"], Value::Null);
+        let phase = if count == 34 {
+            TransactionPhase::Contract
+        } else {
+            TransactionPhase::Ordinary
+        };
+        assert_eq!(native_plan["transaction_policy"]["phase"], json!(phase));
+        assert_eq!(
+            native_plan["transaction_policy"]["recovery_strategy"],
+            if count == 34 {
+                "FAIL_FORWARD_ONLY"
+            } else {
+                "ROLL_FORWARD"
+            }
+        );
+        assert_eq!(native_plan["rollback_context_complete"], false);
+        python(
+            &root,
+            &[
+                "scripts/d1-prepare.py",
+                "prepare",
+                "--root",
+                strpath(&root)?,
+                "--opsctl",
+                strpath(&native)?,
+                "--component",
+                "catalog",
+                "--ledger-json",
+                strpath(&dir.join("ledger.json"))?,
+                "--release-manifest",
+                strpath(&dir.join("target.json"))?,
+                "--current-manifest",
+                strpath(&dir.join("current.json"))?,
+                "--known-good-manifest",
+                strpath(&dir.join("current.json"))?,
+                "--preconditions-json",
+                strpath(&dir.join("preconditions.json"))?,
+                "--output",
+                strpath(&dir.join("prepare.json"))?,
+            ],
+        )?;
+        let prepared: Value = serde_json::from_slice(&fs::read(dir.join("prepare.json"))?)?;
+        assert_eq!(prepared["status"], "PREPARE_READY");
+        assert_eq!(
+            prepared["compatibility"]["runtime_compatibility"]["compatible"],
+            false
+        );
+        python(
+            &root,
+            &[
+                "scripts/d1-prepare.py",
+                "operator-input",
+                "--root",
+                strpath(&root)?,
+                "--opsctl",
+                strpath(&native)?,
+                "--preflight-dir",
+                strpath(dir)?,
+                "--source-sha",
+                SOURCE,
+                "--tree-sha",
+                &"a".repeat(40),
+                "--release-id",
+                TARGET,
+                "--release-manifest",
+                strpath(&dir.join("target.json"))?,
+                "--evidence-ref",
+                "fixture:current-observation",
+                "--output",
+                strpath(&dir.join("inputs.json"))?,
+            ],
+        )?;
+        let inputs: Value = serde_json::from_slice(&fs::read(dir.join("inputs.json"))?)?;
+        let decode = |k: &str| -> Result<Value, Box<dyn Error>> {
+            Ok(serde_json::from_str(
+                inputs["inputs"][k]
+                    .as_str()
+                    .ok_or("operator input field is missing")?,
+            )?)
+        };
+        let tx_input = decode("transaction_input_json")?;
+        let tx = build_transaction_projection(
+            &prepared,
+            &decode("provider_observation_json")?,
+            &repository,
+            &tx_input,
+            &fs::read(dir.join("target.json"))?,
+        )?;
+        assert_eq!(tx.transaction_plan.phase, phase);
+        assert_eq!(tx.transaction_plan.schema_target, history[count]);
+        let auth = json!({"schema_version":1,"transaction_id":tx.transaction_id,"target":tx.transaction_plan.target,"phase":phase,
+            "authorized_provider_effects":tx.transaction_plan.allowed_provider_effects,"issued_at_unix_seconds":now,"expires_at_unix_seconds":now+800,
+            "observation_fresh_until_unix_seconds":now+900,"authorization_reference":"fixture:exact-human-authorization"});
+        let expect = ExecutorAdmissionExpectation {
+            transaction_id: tx.transaction_id.clone(),
+            source_sha: SOURCE.to_owned(),
+            tree_sha: "a".repeat(40),
+            component: "catalog".into(),
+            target: tx.transaction_plan.target.clone(),
+            phase,
+        };
+        let admission = bind_executor_admission(&tx, &auth, now + 1, &expect)?;
+        if let Some(prior) = &prior_authorization {
+            assert!(bind_executor_admission(&tx, prior, now + 1, &expect).is_err());
         }
-    });
+        prior_authorization = Some(auth.clone());
+        let mut wrong_stop = prepared.clone();
+        wrong_stop["plan"]["target_revision"] = json!(history[if count == 34 { 35 } else { 34 }]);
+        let mut wrong_stop_input = tx_input.clone();
+        wrong_stop_input["expected_post_state"]["revision"] =
+            wrong_stop["plan"]["target_revision"].clone();
+        wrong_stop_input["expected_post_state"]["stage_plan"] = wrong_stop["plan"].clone();
+        assert!(
+            build_transaction_projection(
+                &wrong_stop,
+                &decode("provider_observation_json")?,
+                &repository,
+                &wrong_stop_input,
+                &fs::read(dir.join("target.json"))?
+            )
+            .is_err()
+        );
+        let mut substituted_phase = tx_input.clone();
+        substituted_phase["phase"] = json!(if phase == TransactionPhase::Contract {
+            "ORDINARY"
+        } else {
+            "CONTRACT"
+        });
+        assert!(
+            build_transaction_projection(
+                &prepared,
+                &decode("provider_observation_json")?,
+                &repository,
+                &substituted_phase,
+                &fs::read(dir.join("target.json"))?
+            )
+            .is_err()
+        );
+        let mut downgraded = prepared.clone();
+        downgraded["plan"]["transaction_policy"] = json!({"schema_version":1,"transaction_kind":"D1_MIGRATION","phase":"ORDINARY","observation_freshness_max_age_seconds":3600,"recovery_strategy":"NOOP_RETRY"});
+        let mut ungoverned = tx_input.clone();
+        ungoverned["phase"] = json!("ORDINARY");
+        ungoverned["recovery_strategy"] = json!("NOOP_RETRY");
+        ungoverned["freshness_max_age_seconds"] = json!(3600);
+        assert!(
+            build_transaction_projection(
+                &downgraded,
+                &decode("provider_observation_json")?,
+                &repository,
+                &ungoverned,
+                &fs::read(dir.join("target.json"))?
+            )
+            .is_err()
+        );
 
-    let temp = TempDirectory::new()?;
-    let predecessor_path = temp.path("predecessor-ledger.json");
-    let multiple_pending_path = temp.path("multiple-pending-ledger.json");
-    let post_path = temp.path("post-ledger.json");
-    let release_path = temp.path("release.json");
-    let evidence_path = temp.path("evidence.json");
-    write_json(&predecessor_path, &predecessor_ledger)?;
-    write_json(&multiple_pending_path, &multiple_pending_ledger)?;
-    write_json(&post_path, &post_ledger)?;
-    write_json(&release_path, &release_manifest)?;
-    write_json(&evidence_path, &evidence)?;
-
-    let initialization_runtime_path = temp.path("initialization-runtime.json");
-    write_json(
-        &initialization_runtime_path,
-        &json!({"schema_contract": catalog["release_schema_contract"].clone()}),
+        let phase_dir = dir.join(count.to_string());
+        fs::create_dir(&phase_dir)?;
+        write(
+            &phase_dir.join("plan.json"),
+            &serde_json::to_value(&admission.execution_plan)?,
+        )?;
+        python(
+            &root,
+            &[
+                "scripts/d1-executor-plan.py",
+                "materialize",
+                "--repo-root",
+                strpath(&root)?,
+                "--repository",
+                strpath(&dir.join("repository.json"))?,
+                "--plan",
+                strpath(&phase_dir.join("plan.json"))?,
+                "--ledger",
+                strpath(&dir.join("ledger.json"))?,
+                "--component",
+                "catalog",
+                "--output-dir",
+                strpath(&phase_dir.join("bounded"))?,
+                "--expected-pending",
+                strpath(&phase_dir.join("expected.json"))?,
+                "--normalized-ledger",
+                strpath(&phase_dir.join("ledger.json"))?,
+                "--require-plan-digests",
+            ],
+        )?;
+        let lease = acquire_target_fence(TargetFenceLeaseInput {
+            schema_version: 1,
+            target: expect.target.clone(),
+            phase,
+            operation_identity: tx.transaction_id.clone(),
+            transaction_id: Some(tx.transaction_id.clone()),
+            authorization_digest: Some(admission.authorization_digest.clone()),
+            source_sha: SOURCE.into(),
+            executor_run_id: count as u64,
+            fence_epoch: count as u64,
+            run_attempt: 1,
+            acquired_at_unix_seconds: now + 1,
+        })?;
+        let mut receipt = initialize_execution_receipt(
+            ExecutionReceiptSeed {
+                schema_version: 1,
+                target: expect.target.clone(),
+                phase,
+                operation_identity: tx.transaction_id.clone(),
+                transaction_id: Some(tx.transaction_id.clone()),
+                authorization_digest: Some(admission.authorization_digest.clone()),
+                source_sha: SOURCE.into(),
+                recovery_strategy: tx.transaction_plan.recovery_strategy,
+                fence: lease,
+            },
+            now + 1,
+            now + 1,
+        )?;
+        for kind in [
+            ExecutionEventKind::PrewriteFencePass,
+            ExecutionEventKind::MutationStarted,
+        ] {
+            receipt = append_execution_event(
+                &receipt,
+                ExecutionEventInput {
+                    kind,
+                    occurred_at_unix_seconds: now + 2,
+                    migration_id: None,
+                },
+            )?;
+        }
+        let failed = append_execution_event(
+            &receipt,
+            ExecutionEventInput {
+                kind: ExecutionEventKind::RecoveryRequired,
+                occurred_at_unix_seconds: now + 2,
+                migration_id: None,
+            },
+        )?;
+        let unchanged: ProviderObservationInput = serde_json::from_value(observed.clone())?;
+        let mut fresh_unchanged = unchanged.clone();
+        fresh_unchanged.observed_at_unix_seconds = now + 3;
+        assert!(
+            !verify_execution_post_state(&tx, &failed, &fresh_unchanged, now + 3)?
+                .expected_post_state_reached
+        );
+        // The actual SQL is applied only to a disposable SQLite database; provider credentials are absent.
+        python(
+            &root,
+            &[
+                "-c",
+                SQL_PROOF,
+                strpath(&root)?,
+                strpath(dir)?,
+                strpath(&phase_dir.join("bounded"))?,
+                &count.to_string(),
+            ],
+        )?;
+        receipt = append_execution_event(
+            &receipt,
+            ExecutionEventInput {
+                kind: ExecutionEventKind::MigrationApplied,
+                occurred_at_unix_seconds: now + 3,
+                migration_id: Some(history[count].clone()),
+            },
+        )?;
+        let actual_ledger: Vec<String> =
+            serde_json::from_slice(&fs::read(dir.join("observed-ledger.json"))?)?;
+        assert_eq!(actual_ledger, history[..count + 1]);
+        verify_migration_ledger(&tx, &actual_ledger)?;
+        assert!(verify_migration_ledger(&tx, &history[..count]).is_err());
+        for kind in [
+            ExecutionEventKind::PostObserved,
+            ExecutionEventKind::Verified,
+            ExecutionEventKind::Completed,
+        ] {
+            receipt = append_execution_event(
+                &receipt,
+                ExecutionEventInput {
+                    kind,
+                    occurred_at_unix_seconds: now + 4,
+                    migration_id: None,
+                },
+            )?;
+        }
+        let mut post: ProviderObservationInput = serde_json::from_value(observed)?;
+        post.observed_at_unix_seconds = now + 5;
+        post.remote_migrations = actual_ledger;
+        post.wrangler_pending_migrations = history[count + 1..].to_vec();
+        post.remote_ledger_sha256 =
+            canonical_digest(&json!({"remote_migrations":post.remote_migrations}))?;
+        assert!(
+            verify_execution_post_state(&tx, &receipt, &post, now + 5)?.expected_post_state_reached
+        );
+        // Replayed/altered authority, phase, recovery, source and plan must not admit a second effect.
+        let mut bad_auth = auth.clone();
+        bad_auth["transaction_id"] = json!("0".repeat(64));
+        assert!(bind_executor_admission(&tx, &bad_auth, now + 1, &expect).is_err());
+        assert!(bind_executor_admission(&tx, &auth, now + 901, &expect).is_err());
+        for field in ["phase", "recovery_strategy", "source_sha"] {
+            let mut altered = tx_input.clone();
+            altered[field] = json!("FORGED");
+            assert!(
+                build_transaction_projection(
+                    &prepared,
+                    &decode("provider_observation_json")?,
+                    &repository,
+                    &altered,
+                    &fs::read(dir.join("target.json"))?
+                )
+                .is_err()
+            );
+        }
+        let original_evidence: Value =
+            serde_json::from_slice(&fs::read(dir.join("preconditions.json"))?)?;
+        for path in [
+            "current_manifest_sha256",
+            "target_manifest_sha256",
+            "repository_identity_sha256",
+            "ledger_sha256",
+            "target_source_sha",
+        ] {
+            let mut changed = original_evidence.clone();
+            changed[path] = json!("0".repeat(64));
+            write(&dir.join("preconditions.json"), &changed)?;
+            assert!(plan(&root, dir).is_err(), "forged {path}");
+        }
+        let mut mixed = original_evidence.clone();
+        mixed["deployment"]["versions"] =
+            json!([{"version_id":"one","percentage":50},{"version_id":"two","percentage":50}]);
+        write(&dir.join("preconditions.json"), &mixed)?;
+        assert!(plan(&root, dir).is_err());
+        let mut stale = original_evidence.clone();
+        stale["evaluated_at_unix_seconds"] = json!(now + 901);
+        write(&dir.join("preconditions.json"), &stale)?;
+        assert!(plan(&root, dir).is_err());
+        write(&dir.join("preconditions.json"), &original_evidence)?;
+    }
+    assert_eq!(fs::read(dir.join("current.json"))?, current_bytes);
+    write(
+        &dir.join("ledger.json"),
+        &json!({"rows":history.iter().enumerate().map(|(i,n)|json!({"id":i+1,"name":n})).collect::<Vec<_>>()}),
     )?;
-    let incompatible = contract_transition(D1ContractTransitionRequest {
+    let compatible: Value = serde_json::from_str(&run(D1RunRequest {
         root: &root,
-        ledger_json: &predecessor_path,
-        release_manifest: &initialization_runtime_path,
-        evidence_json: &evidence_path,
-        evaluated_at_unix_seconds: 101,
-        expected_source_sha: &source_sha,
-        expected_release_set_id: &release_set_id,
-    })
-    .err()
-    .ok_or("0036-only runtime incorrectly proved pre-contract compatibility")?;
-    assert!(
-        incompatible
-            .to_string()
-            .contains("release schema window must be exact")
-    );
-
-    let planned = contract_transition(D1ContractTransitionRequest {
-        root: &root,
-        ledger_json: &predecessor_path,
-        release_manifest: &release_path,
-        evidence_json: &evidence_path,
-        evaluated_at_unix_seconds: 101,
-        expected_source_sha: &source_sha,
-        expected_release_set_id: &release_set_id,
-    })?;
-    let planned: Value = serde_json::from_str(&planned)?;
-    assert_eq!(planned["command"], "d1 contract-transition");
-    assert_eq!(planned["decision"], "MIGRATION_REQUIRED");
-    assert_eq!(planned["remote_revision"], PREDECESSOR_REVISION);
-    assert_eq!(planned["target_revision"], CONTRACT_REVISION);
-    assert_eq!(planned["planned_migrations"], json!([CONTRACT_REVISION]));
-    assert_eq!(planned["recovery_strategy"], "FAIL_FORWARD_ONLY");
-    assert_eq!(planned["allowed"], true);
-    assert_eq!(planned["mutation_executed"], false);
-
-    let multiple_pending = match contract_transition(D1ContractTransitionRequest {
-        root: &root,
-        ledger_json: &multiple_pending_path,
-        release_manifest: &release_path,
-        evidence_json: &evidence_path,
-        evaluated_at_unix_seconds: 101,
-        expected_source_sha: &source_sha,
-        expected_release_set_id: &release_set_id,
-    }) {
-        Ok(_) => {
-            return Err(
-                "wrong predecessor with multiple pending migrations unexpectedly passed".into(),
-            );
-        }
-        Err(error) => error,
-    };
-    assert!(
-        multiple_pending
-            .to_string()
-            .contains("exact canonical prefix through device-application 0034")
-    );
-
-    let mut split_evidence = evidence.clone();
-    split_evidence["deployment"]["single_version"] = json!(false);
-    let split_path = temp.path("split-evidence.json");
-    write_json(&split_path, &split_evidence)?;
-    let split = match contract_transition(D1ContractTransitionRequest {
-        root: &root,
-        ledger_json: &predecessor_path,
-        release_manifest: &release_path,
-        evidence_json: &split_path,
-        evaluated_at_unix_seconds: 101,
-        expected_source_sha: &source_sha,
-        expected_release_set_id: &release_set_id,
-    }) {
-        Ok(_) => return Err("split deployment evidence unexpectedly passed".into()),
-        Err(error) => error,
-    };
-    assert!(
-        split
-            .to_string()
-            .contains("deployment.single_version must be true")
-    );
-
-    let mut missing_recovery = evidence.clone();
-    missing_recovery
-        .as_object_mut()
-        .ok_or("evidence fixture must be an object")?
-        .remove("recovery_strategy");
-    let missing_recovery_path = temp.path("missing-recovery-evidence.json");
-    write_json(&missing_recovery_path, &missing_recovery)?;
-    let missing_recovery = match contract_transition(D1ContractTransitionRequest {
-        root: &root,
-        ledger_json: &predecessor_path,
-        release_manifest: &release_path,
-        evidence_json: &missing_recovery_path,
-        evaluated_at_unix_seconds: 101,
-        expected_source_sha: &source_sha,
-        expected_release_set_id: &release_set_id,
-    }) {
-        Ok(_) => return Err("missing recovery strategy unexpectedly passed".into()),
-        Err(error) => error,
-    };
-    assert!(
-        missing_recovery
-            .to_string()
-            .contains("exact governed schema")
-    );
-
-    let mut incomplete_preconditions = evidence.clone();
-    incomplete_preconditions["preconditions"]
-        .as_object_mut()
-        .ok_or("preconditions fixture must be an object")?
-        .remove("server_owned_payload_fingerprint_active");
-    let incomplete_preconditions_path = temp.path("incomplete-preconditions-evidence.json");
-    write_json(&incomplete_preconditions_path, &incomplete_preconditions)?;
-    let incomplete = match contract_transition(D1ContractTransitionRequest {
-        root: &root,
-        ledger_json: &predecessor_path,
-        release_manifest: &release_path,
-        evidence_json: &incomplete_preconditions_path,
-        evaluated_at_unix_seconds: 101,
-        expected_source_sha: &source_sha,
-        expected_release_set_id: &release_set_id,
-    }) {
-        Ok(_) => return Err("incomplete contract preconditions unexpectedly passed".into()),
-        Err(error) => error,
-    };
-    assert!(incomplete.to_string().contains("exact governed schema"));
-
-    let mismatched_source = "f".repeat(40);
-    let identity_mismatch = match contract_transition(D1ContractTransitionRequest {
-        root: &root,
-        ledger_json: &predecessor_path,
-        release_manifest: &release_path,
-        evidence_json: &evidence_path,
-        evaluated_at_unix_seconds: 101,
-        expected_source_sha: &mismatched_source,
-        expected_release_set_id: &release_set_id,
-    }) {
-        Ok(_) => return Err("source identity mismatch unexpectedly passed".into()),
-        Err(error) => error,
-    };
-    assert!(
-        identity_mismatch
-            .to_string()
-            .contains("source SHA does not match the exact expected accepted source")
-    );
-
-    let output = contract_transition_verify(D1ContractTransitionVerificationRequest {
-        root: &root,
-        predecessor_ledger_json: &predecessor_path,
-        ledger_json: &post_path,
-        release_manifest: &release_path,
-        evidence_json: &evidence_path,
-        evaluated_at_unix_seconds: 101,
-        expected_source_sha: &source_sha,
-        expected_release_set_id: &release_set_id,
-    })?;
-    let verified: Value = serde_json::from_str(&output)?;
-    let beyond_contract_path = temp.path("beyond-contract-ledger.json");
-    write_json(&beyond_contract_path, &ledger(&names))?;
-    let beyond_contract = contract_transition_verify(D1ContractTransitionVerificationRequest {
-        root: &root,
-        predecessor_ledger_json: &predecessor_path,
-        ledger_json: &beyond_contract_path,
-        release_manifest: &release_path,
-        evidence_json: &evidence_path,
-        evaluated_at_unix_seconds: 101,
-        expected_source_sha: &source_sha,
-        expected_release_set_id: &release_set_id,
-    })
-    .err()
-    .ok_or("0035 transition incorrectly accepted an extra0036 effect")?;
-    assert!(
-        beyond_contract
-            .to_string()
-            .contains("exactly one canonical")
-    );
-    assert_eq!(verified["command"], "d1 contract-transition verify");
-    assert_eq!(verified["decision"], "SAFE");
-    assert_eq!(verified["predecessor_revision"], PREDECESSOR_REVISION);
-    assert_eq!(verified["remote_revision"], CONTRACT_REVISION);
-    assert_eq!(verified["runtime_target_revision"], PREDECESSOR_REVISION);
-    assert_eq!(verified["supported_schema_min"], PREDECESSOR_REVISION);
-    assert_eq!(verified["supported_schema_max"], CONTRACT_REVISION);
-    assert_eq!(
-        verified["transition_migrations"],
-        json!([CONTRACT_REVISION])
-    );
-    assert_eq!(verified["planned_migrations"], json!([]));
-    assert_eq!(verified["recovery_strategy"], "FAIL_FORWARD_ONLY");
-    assert_eq!(verified["allowed"], true);
-    assert_eq!(verified["mutation_executed"], false);
-
-    let unchanged = match contract_transition_verify(D1ContractTransitionVerificationRequest {
-        root: &root,
-        predecessor_ledger_json: &predecessor_path,
-        ledger_json: &predecessor_path,
-        release_manifest: &release_path,
-        evidence_json: &evidence_path,
-        evaluated_at_unix_seconds: 101,
-        expected_source_sha: &source_sha,
-        expected_release_set_id: &release_set_id,
-    }) {
-        Ok(_) => {
-            return Err(
-                "unchanged device-application-0034 ledger unexpectedly passed post-contract verification"
-                    .into(),
-            );
-        }
-        Err(error) => error,
-    };
-    assert!(
-        unchanged
-            .to_string()
-            .contains("exactly one canonical device-application-0034 -> PAS2-0035 transition")
-    );
+        action: D1Action::Compatibility,
+        component: "catalog",
+        ledger_json: &dir.join("ledger.json"),
+        release_manifest: Some(&dir.join("target.json")),
+        current_manifest: None,
+        known_good_manifest: None,
+        preconditions_json: None,
+    })?)?;
+    assert_eq!(compatible["runtime_compatibility"]["compatible"], true);
     Ok(())
 }
+
+const SQL_PROOF: &str = r#"
+import sys,json,sqlite3,pathlib,runpy
+root,scratch,bounded,count=pathlib.Path(sys.argv[1]),pathlib.Path(sys.argv[2]),pathlib.Path(sys.argv[3]),int(sys.argv[4])
+dbfile=scratch/'catalog.sqlite';initial=not dbfile.exists();db=sqlite3.connect(dbfile);db.execute('PRAGMA foreign_keys=ON')
+repository=json.loads((scratch/'repository.json').read_text())
+catalog=next(c for c in repository['components'] if c['component_id']=='catalog')
+sources=catalog['executable_migration_sources']
+def snapshot():
+ return {table:db.execute('SELECT * FROM '+table+' ORDER BY 1,2').fetchall() for table in ['tenants','memberships','clients','browser_profiles']}
+if initial:
+ db.execute('CREATE TABLE d1_migrations(id INTEGER PRIMARY KEY,name TEXT NOT NULL UNIQUE)')
+ for i,m in enumerate(sources[:34]):
+  db.executescript((root/m['source_root']/m['migration_file']).read_text())
+  db.execute('INSERT INTO d1_migrations(id,name) VALUES(?,?)',(i+1,m['migration_file']))
+ db.commit()
+ runpy.run_path(str(root/'scripts/test-d1-schema.py'))['seed_catalog'](db)
+ (scratch/'before.json').write_text(json.dumps(snapshot(),sort_keys=True))
+for m in sources[count:count+1]:
+ db.executescript((bounded/m['migration_file']).read_text())
+ db.execute('INSERT INTO d1_migrations(id,name) VALUES(?,?)',(count+1,m['migration_file']))
+(scratch/'observed-ledger.json').write_text(json.dumps([r[0] for r in db.execute('SELECT name FROM d1_migrations ORDER BY id')]))
+assert json.loads((scratch/'before.json').read_text())==json.loads(json.dumps(snapshot()))
+assert db.execute('PRAGMA foreign_key_check').fetchall()==[]
+assert db.execute('PRAGMA quick_check').fetchone()==('ok',)
+assert 'request_digest' not in [r[1] for r in db.execute('PRAGMA table_info(idempotency_records)')]
+if count==35:assert 'initial_device_id' in [r[1] for r in db.execute('PRAGMA table_info(profile_generation_register_commands)')]
+db.commit();db.close()
+"#;

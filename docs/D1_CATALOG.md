@@ -158,6 +158,39 @@ runtime support, satisfy CONTRACT preconditions, authorize fail-forward/rollback
 Existing separate CONTRACT preparation, recovery, sealed authorization and executor guards remain
 required after context admission.
 
+### 5.3 Explicit CURRENT forward stages
+
+A release may require a separate CONTRACT followed by an additive migration before its code can run.
+`d1 plan` accepts a closed v2 `D1_CURRENT_TRANSITION_EVIDENCE` in the existing preconditions input for
+this procedure. It binds the original deployed and CURRENT target manifests separately, their source
+SHAs, immutable Release Set identities, canonical repository/ledger identity, and two equal single-version
+100-percent deployment observations30..300 seconds apart, fresh within900 seconds. The full CURRENT release remains the desired target. The native
+owner selects and seals only the next effect boundary; an intermediate schema is not an older release
+selected as remediation.
+
+For the PAS2 CONTRACT, readiness comes from the authenticated immutable deployed release's explicit
+schema support through that CONTRACT: its publisher promises server-owned payload fingerprints and
+retirement of request-digest readers/writers. The observer does not manufacture completed prerequisite
+booleans. An undeclared schema window, unknown prerequisite, changed bytes/source, mixed deployment
+or stale observation is rejected. This relies on the existing accepted-main Release Set publication
+and exact component-manifest verification; an arbitrary local manifest is not hosted deployment evidence.
+
+The CONTRACT is its own single-migration `CONTRACT / FAIL_FORWARD_ONLY` transaction. Only a fresh real
+post-observation can prepare the following additive `ORDINARY / ROLL_FORWARD` transaction. A future
+predecessor is never presented as observed fact. Forward recovery explicitly forbids claiming that the
+old runtime supports the new schema or that code rollback is safe. Candidate runtime admission remains
+false until the database satisfies the candidate's original immutable schema window.
+
+Both stages use the same Prepare, exact authorization, sealed executor admission, durable fence, receipt
+and post-state verification. There is no unsealed CONTRACT executor alternative. The executor consumes
+the exact prepared SQL digests and phase, rechecks the observed deployment and authorization immediately
+before a write, and verifies the exact predecessor plus planned effect rather than constructing a fake
+runtime manifest. Source/CI or `PREPARE_READY` never grants provider mutation authority. The ordinary
+operator remains zero-input; machine-known phase/evidence/identities stay machine-owned.
+Native plan, compatibility, prewrite and post-verification outputs are retained on success and failure
+in one metadata-only gate artifact linked by the terminal operator outcome. Adapter fact-comparison
+failures remain explicitly non-policy observations; they never fabricate a native D1 verdict.
+
 ## 6. Permanent Migration Operations Contract
 
 The accepted TX-1 through TX-7 result is permanent architecture meaning, not a

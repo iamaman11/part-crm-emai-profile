@@ -888,8 +888,8 @@ jobs:
                   'target_release_manifest_json': compact(inputs['target-release.json']),
                   'current_release_manifest_json': compact(inputs['current-release.json']),
                   'known_good_release_manifest_json': compact(inputs['known-good-release.json']),
-                  'preconditions_json': compact(inputs['preconditions.json']), 'transition_mode': 'ordinary',
-                  'expected_release_set_id': '', 'prepared_transaction_run_id': str(candidate['run_id']),
+                  'preconditions_json': compact(inputs['preconditions.json']),
+                  'prepared_transaction_run_id': str(candidate['run_id']),
                   'prepared_transaction_run_attempt': str(candidate['run_attempt']), 'transaction_id': tx['transaction_id'],
                   'authorization_digest': authorization['authorization_digest'],
                   'transaction_authorization_json': authorization['authorization_json'], 'mutation_authorized': True,
@@ -925,7 +925,7 @@ jobs:
                               or admission.get('tree_sha') != current_tree()
                               or admission.get('component') != verification['component']
                               or admission.get('target') != target
-                              or admission.get('phase') != 'ORDINARY'
+                              or admission.get('phase') != tx['transaction_plan']['phase']
                               or admission.get('authorization_consumed') is not False
                               or admission.get('mutation_executed') is not False
                               or admission.get('provider_mutation_executed') is not False):
@@ -965,8 +965,8 @@ jobs:
                   raise SystemExit('terminal execution receipt schema drifted')
               if receipt.get('target') != target:
                   raise SystemExit('terminal execution receipt target does not match prepared transaction')
-              if receipt.get('phase') != 'ORDINARY':
-                  raise SystemExit('terminal execution receipt phase is not ORDINARY')
+              if receipt.get('phase') != tx['transaction_plan']['phase']:
+                  raise SystemExit('terminal execution receipt phase differs from the prepared transaction')
               if receipt.get('operation_identity') != tx['transaction_id'] or receipt.get('transaction_id') != tx['transaction_id']:
                   raise SystemExit('terminal execution receipt transaction identity mismatch')
               if receipt.get('authorization_digest') != authorization['authorization_digest']:
@@ -1015,7 +1015,6 @@ jobs:
                       'component': verification['component'],
                       'database_name': target['database_name'],
                       'database_id': target['database_id'],
-                      'transition_mode': 'ordinary',
                       'transaction_id': tx['transaction_id'],
                       'authorization_digest': authorization['authorization_digest'],
                       'prepared_transaction_run_id': str(candidate['run_id']),
@@ -1033,7 +1032,9 @@ jobs:
               elif run.get('conclusion') == 'success':
                   raise SystemExit(f'{terminal} receipt disagrees with successful executor conclusion')
 
+              native_gates = require_artifact(run_id, f'd1-native-gates-{run_id}-{run_attempt}')
               return {
+                  'native_gate_evidence_ref': f"github-actions:run:{run_id}:attempt:{run_attempt}:artifact:{native_gates['id']}",
                   'state': terminal,
                   'executor_run_id': run_id,
                   'executor_run_number': run_number,
@@ -1300,6 +1301,7 @@ jobs:
               'receipt': f"github-actions:run:{result['executor_run_id']}:artifact:{result['receipt_artifact_id']}:receipt:{result['receipt_id']}",
               'post_state': f"github-actions:run:{post_state['observation_run_id']}:attempt:{post_state['observation_run_attempt']}:artifact:{post_state['observation_artifact_id']}:sha256:{post_state['verification_sha256']}",
           }
+          evidence_refs['native_gates'] = result['native_gate_evidence_ref']
           if result['evidence_artifact_id'] is not None:
               evidence_refs['execution_evidence'] = f"github-actions:run:{result['executor_run_id']}:artifact:{result['evidence_artifact_id']}:sha256:{result['evidence_sha256']}"
           if result['state'] == 'COMPLETED':

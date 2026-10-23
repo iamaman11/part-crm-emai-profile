@@ -45,7 +45,7 @@ use crate::canonical::{canonical_json, sha256_hex};
 use authority::{load_preconditions, load_release_contract, load_wrangler_ledger};
 use catalog::{component_authority, observed_runtime_context};
 use compatibility::RuntimeSchemaContext;
-use contract_transition::{ContractTransitionInput, ContractTransitionVerificationInput};
+use contract_transition::{CurrentTransitionInput, TransitionEvidence};
 use model::{Evaluation, Preconditions, ReleaseSchemaContract};
 use plan::evaluate;
 use serde_json::{Value, json};
@@ -55,6 +55,7 @@ use util::{read_json, resolve_input};
 pub use execution_post_state::{
     ExecutionPostStateDisposition, ExecutionPostStateVerification,
     serialize_execution_post_state_verification, verify_execution_post_state,
+    verify_migration_ledger,
 };
 pub use model::{D1Action, D1Error, D1RunRequest};
 pub use reconstruction::D1CurrentReconstructionPlanRequest;
@@ -117,27 +118,6 @@ impl D1RollbackSchemaVerdict {
     }
 }
 
-pub struct D1ContractTransitionRequest<'a> {
-    pub root: &'a Path,
-    pub ledger_json: &'a Path,
-    pub release_manifest: &'a Path,
-    pub evidence_json: &'a Path,
-    pub evaluated_at_unix_seconds: i64,
-    pub expected_source_sha: &'a str,
-    pub expected_release_set_id: &'a str,
-}
-
-pub struct D1ContractTransitionVerificationRequest<'a> {
-    pub root: &'a Path,
-    pub predecessor_ledger_json: &'a Path,
-    pub ledger_json: &'a Path,
-    pub release_manifest: &'a Path,
-    pub evidence_json: &'a Path,
-    pub evaluated_at_unix_seconds: i64,
-    pub expected_source_sha: &'a str,
-    pub expected_release_set_id: &'a str,
-}
-
 pub fn run(request: D1RunRequest<'_>) -> Result<String, D1Error> {
     let authority = component_authority(request.root, request.component)?;
     let ledger_path = resolve_input(request.root, request.ledger_json);
@@ -161,6 +141,80 @@ pub fn run(request: D1RunRequest<'_>) -> Result<String, D1Error> {
         request.component,
         request.action.name(),
     )?;
+    if request.action == D1Action::Plan
+        && let Some(path) = request.preconditions_json
+    {
+        let evidence_value = read_json(&resolve_input(request.root, path), "D1 preconditions")?;
+        if evidence_value.get("kind").and_then(Value::as_str)
+            == Some("D1_CURRENT_TRANSITION_EVIDENCE")
+        {
+            let evidence: TransitionEvidence = serde_json::from_value(evidence_value)
+                .map_err(|e| D1Error::new(format!("CURRENT transition evidence schema: {e}")))?;
+            let current_path = request
+                .current_manifest
+                .ok_or_else(|| D1Error::new("CURRENT transition requires deployed manifest"))?;
+            let target_path = request
+                .release_manifest
+                .ok_or_else(|| D1Error::new("CURRENT transition requires target manifest"))?;
+            let current_value = read_json(
+                &resolve_input(request.root, current_path),
+                "deployed manifest",
+            )?;
+            let target_value =
+                read_json(&resolve_input(request.root, target_path), "target manifest")?;
+            let manifest_source = |v: &Value| -> Result<String, D1Error> {
+                let source = v.get("source").ok_or_else(|| {
+                    D1Error::new(
+                        "CURRENT transition requires original accepted-main manifest source",
+                    )
+                })?;
+                if source.get("authority").and_then(Value::as_str) != Some("accepted-main")
+                    || source.get("repository").and_then(Value::as_str)
+                        != Some("iamaman11/part-crm-emai-profile")
+                    || source.get("ref").and_then(Value::as_str) != Some("refs/heads/main")
+                    || source.get("event").and_then(Value::as_str) != Some("push")
+                {
+                    return Err(D1Error::new(
+                        "CURRENT transition manifest is not published accepted-main source",
+                    ));
+                }
+                source
+                    .get("commit_sha")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned)
+                    .ok_or_else(|| D1Error::new("CURRENT transition manifest lacks source SHA"))
+            };
+            return contract_transition::evaluate(CurrentTransitionInput {
+                authority: &authority,
+                remote_names: &remote_names,
+                current: current
+                    .as_ref()
+                    .ok_or_else(|| D1Error::new("missing deployed runtime context"))?,
+                target: target
+                    .as_ref()
+                    .ok_or_else(|| D1Error::new("missing CURRENT target"))?,
+                evidence: &evidence,
+                current_manifest_sha256: &sha256_hex(
+                    canonical_json(&current_value)
+                        .map_err(D1Error::new)?
+                        .as_bytes(),
+                ),
+                target_manifest_sha256: &sha256_hex(
+                    canonical_json(&target_value)
+                        .map_err(D1Error::new)?
+                        .as_bytes(),
+                ),
+                repository_identity_sha256: &catalog::repository_identity_sha256(request.root)?,
+                ledger_sha256: &sha256_hex(
+                    canonical_json(&json!({"remote_migrations":remote_names}))
+                        .map_err(D1Error::new)?
+                        .as_bytes(),
+                ),
+                current_source_sha: &manifest_source(&current_value)?,
+                target_source_sha: &manifest_source(&target_value)?,
+            });
+        }
+    }
     let preconditions = match request.preconditions_json {
         Some(path) => load_preconditions(&resolve_input(request.root, path), request.component)?,
         None => Preconditions::default(),
@@ -200,75 +254,6 @@ pub fn current_reconstruction_plan(
     request: D1CurrentReconstructionPlanRequest<'_>,
 ) -> Result<String, D1Error> {
     reconstruction::plan(request)
-}
-
-pub fn contract_transition(request: D1ContractTransitionRequest<'_>) -> Result<String, D1Error> {
-    let authority = component_authority(request.root, "catalog")?;
-    let ledger_path = resolve_input(request.root, request.ledger_json);
-    let release_path = resolve_input(request.root, request.release_manifest);
-    let evidence_path = resolve_input(request.root, request.evidence_json);
-    let remote_names = load_wrangler_ledger(&ledger_path)?;
-    let release = load_release_contract(&release_path, "catalog")?;
-    let ledger_value = read_json(&ledger_path, "D1 contract-transition ledger")?;
-    let release_value = read_json(&release_path, "D1 contract-transition release manifest")?;
-    let evidence = read_json(&evidence_path, "D1 contract-transition evidence")?;
-    let canonical_ledger = canonical_json(&ledger_value).map_err(D1Error::new)?;
-    let canonical_release = canonical_json(&release_value).map_err(D1Error::new)?;
-    let ledger_sha256 = sha256_hex(canonical_ledger.as_bytes());
-    let release_manifest_sha256 = sha256_hex(canonical_release.as_bytes());
-    let repository_identity_sha256 = catalog::repository_identity_sha256(request.root)?;
-
-    contract_transition::evaluate(ContractTransitionInput {
-        authority: &authority,
-        remote_names: &remote_names,
-        release: &release,
-        evidence: &evidence,
-        evaluated_at_unix_seconds: request.evaluated_at_unix_seconds,
-        expected_source_sha: request.expected_source_sha,
-        expected_release_set_id: request.expected_release_set_id,
-        release_manifest_sha256: &release_manifest_sha256,
-        repository_identity_sha256: &repository_identity_sha256,
-        ledger_sha256: &ledger_sha256,
-    })
-}
-
-pub fn contract_transition_verify(
-    request: D1ContractTransitionVerificationRequest<'_>,
-) -> Result<String, D1Error> {
-    let authority = component_authority(request.root, "catalog")?;
-    let predecessor_ledger_path = resolve_input(request.root, request.predecessor_ledger_json);
-    let ledger_path = resolve_input(request.root, request.ledger_json);
-    let release_path = resolve_input(request.root, request.release_manifest);
-    let evidence_path = resolve_input(request.root, request.evidence_json);
-    let predecessor_remote_names = load_wrangler_ledger(&predecessor_ledger_path)?;
-    let remote_names = load_wrangler_ledger(&ledger_path)?;
-    let release = load_release_contract(&release_path, "catalog")?;
-    let predecessor_ledger_value = read_json(
-        &predecessor_ledger_path,
-        "D1 contract-transition predecessor ledger",
-    )?;
-    let release_value = read_json(&release_path, "D1 contract-transition release manifest")?;
-    let evidence = read_json(&evidence_path, "D1 contract-transition evidence")?;
-    let canonical_predecessor_ledger =
-        canonical_json(&predecessor_ledger_value).map_err(D1Error::new)?;
-    let canonical_release = canonical_json(&release_value).map_err(D1Error::new)?;
-    let predecessor_ledger_sha256 = sha256_hex(canonical_predecessor_ledger.as_bytes());
-    let release_manifest_sha256 = sha256_hex(canonical_release.as_bytes());
-    let repository_identity_sha256 = catalog::repository_identity_sha256(request.root)?;
-
-    contract_transition::verify_post_transition(ContractTransitionVerificationInput {
-        authority: &authority,
-        predecessor_remote_names: &predecessor_remote_names,
-        remote_names: &remote_names,
-        release: &release,
-        evidence: &evidence,
-        evaluated_at_unix_seconds: request.evaluated_at_unix_seconds,
-        expected_source_sha: request.expected_source_sha,
-        expected_release_set_id: request.expected_release_set_id,
-        release_manifest_sha256: &release_manifest_sha256,
-        repository_identity_sha256: &repository_identity_sha256,
-        predecessor_ledger_sha256: &predecessor_ledger_sha256,
-    })
 }
 
 pub fn repository_projection(root: &std::path::Path) -> Result<String, D1Error> {

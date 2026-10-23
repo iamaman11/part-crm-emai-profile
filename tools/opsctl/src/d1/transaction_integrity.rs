@@ -61,9 +61,54 @@ pub fn revalidate_transaction_projection(
             "prepared transaction kind must be D1_MIGRATION",
         ));
     }
-    if plan.phase != TransactionPhase::Ordinary {
+    if let Some(stage) = plan.expected_post_state.get("stage_plan") {
+        let policy = super::transaction_policy::staged_policy(stage)?;
+        if serde_json::to_value(plan.phase).map_err(|e| D1Error::new(e.to_string()))?
+            != policy["phase"]
+            || serde_json::to_value(plan.recovery_strategy)
+                .map_err(|e| D1Error::new(e.to_string()))?
+                != policy["recovery_strategy"]
+            || Some(plan.freshness_max_age_seconds)
+                != policy
+                    .get("observation_freshness_max_age_seconds")
+                    .and_then(serde_json::Value::as_u64)
+            || stage.get("transaction_policy") != Some(&policy)
+            || plan
+                .expected_post_state
+                .get("revision")
+                .and_then(serde_json::Value::as_str)
+                != Some(plan.schema_target.as_str())
+            || stage
+                .get("target_revision")
+                .and_then(serde_json::Value::as_str)
+                != Some(plan.schema_target.as_str())
+            || stage.get("planned_migrations")
+                != Some(&serde_json::json!(
+                    plan.planned_migrations
+                        .iter()
+                        .map(|m| &m.migration_file)
+                        .collect::<Vec<_>>()
+                ))
+            || stage
+                .pointer("/transition_evidence/deployment/release_set_id")
+                .and_then(serde_json::Value::as_str)
+                != observation.deployment_identity.as_deref()
+            || stage
+                .pointer("/transition_evidence/target_source_sha")
+                .and_then(serde_json::Value::as_str)
+                != Some(plan.source_sha.as_str())
+            || stage
+                .pointer("/transition_evidence/target_release_set_id")
+                .and_then(serde_json::Value::as_str)
+                != Some(plan.release_candidate_id.as_str())
+        {
+            return Err(D1Error::new(
+                "sealed CURRENT stage phase/recovery/plan/identity drifted",
+            ));
+        }
+    } else if plan.phase != TransactionPhase::Ordinary {
         return Err(D1Error::new(
-            "prepared PREPARE_READY transaction phase must remain ORDINARY",
+            "CONTRACT transaction requires its sealed native CURRENT stage plan",
         ));
     }
 
@@ -174,12 +219,32 @@ pub fn revalidate_transaction_projection(
         .iter()
         .map(|migration| migration.migration_file.clone())
         .collect::<Vec<_>>();
-    validate_wrangler_pending_scope(
-        &observation.wrangler_pending_migrations,
-        &planned_names,
-        &plan.schema_target,
-        &plan.supported_schema_max,
-    )?;
+    if let Some(stage) = plan.expected_post_state.get("stage_plan") {
+        if stage.get("pending_migrations_to_desired_target")
+            != Some(&serde_json::json!(observation.wrangler_pending_migrations))
+            || !observation
+                .wrangler_pending_migrations
+                .starts_with(&planned_names)
+            || observation
+                .wrangler_pending_migrations
+                .last()
+                .map(String::as_str)
+                != stage
+                    .get("desired_target_revision")
+                    .and_then(serde_json::Value::as_str)
+        {
+            return Err(D1Error::new(
+                "sealed CURRENT stage lost its full canonical pending scope",
+            ));
+        }
+    } else {
+        validate_wrangler_pending_scope(
+            &observation.wrangler_pending_migrations,
+            &planned_names,
+            &plan.schema_target,
+            &plan.supported_schema_max,
+        )?;
+    }
     validate_unique_strings(
         &plan.precondition_evidence_refs,
         "transaction precondition_evidence_refs",

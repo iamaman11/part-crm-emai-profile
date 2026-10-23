@@ -12,7 +12,10 @@ use opsctl::d1::execution_control::{
     serialize_target_fence_verification, verify_target_fence,
 };
 use opsctl::d1::transaction::{ProviderObservationInput, TransactionProjection};
-use opsctl::d1::{serialize_execution_post_state_verification, verify_execution_post_state};
+use opsctl::d1::{
+    serialize_execution_post_state_verification, verify_execution_post_state,
+    verify_migration_ledger,
+};
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 use std::env;
@@ -29,6 +32,7 @@ enum Command {
     AppendReceipt,
     InspectReceipt,
     VerifyPostState,
+    VerifyLedger,
 }
 
 impl Command {
@@ -40,6 +44,7 @@ impl Command {
             "append-receipt" => Ok(Self::AppendReceipt),
             "inspect-receipt" => Ok(Self::InspectReceipt),
             "verify-post-state" => Ok(Self::VerifyPostState),
+            "verify-ledger" => Ok(Self::VerifyLedger),
             _ => Err(format!("unsupported d1 execution-control command: {value}").into()),
         }
     }
@@ -367,6 +372,40 @@ fn verify_post_state(args: Args) -> Result<String, Box<dyn Error>> {
     }
 }
 
+fn verify_ledger(args: Args) -> Result<String, Box<dyn Error>> {
+    reject_reconstruction(&args, "verify-ledger")?;
+    reject_present(&args.lease, "--lease", "verify-ledger")?;
+    reject_present(&args.seed, "--seed", "verify-ledger")?;
+    reject_present(&args.receipt, "--receipt", "verify-ledger")?;
+    reject_present(&args.event, "--event", "verify-ledger")?;
+    reject_present(
+        &args.prepared_at_unix_seconds,
+        "--prepared-at-unix-seconds",
+        "verify-ledger",
+    )?;
+    reject_present(
+        &args.authorized_at_unix_seconds,
+        "--authorized-at-unix-seconds",
+        "verify-ledger",
+    )?;
+    reject_evaluated_at(&args, "verify-ledger")?;
+    let transaction: TransactionProjection =
+        read_typed(required(args.input, "--input")?, "prepared transaction")?;
+    let observed: Vec<String> = read_typed(
+        required(args.observation, "--observation")?,
+        "normalized post ledger",
+    )?;
+    if let Err(error) = verify_migration_ledger(&transaction, &observed) {
+        println!("{}", canonical_json(error.gate_result_json())?);
+        return Err(error.into());
+    }
+    Ok(canonical_json(
+        &serde_json::json!({"schema_version":1,"status":"VERIFIED","mode":"read-only",
+        "mutation_executed":false,"transaction_id":transaction.transaction_id,"phase":transaction.transaction_plan.phase,
+        "remote_revision":observed.last(),"target_revision":transaction.transaction_plan.schema_target}),
+    )?)
+}
+
 fn main() -> Result<(), Box<dyn Error>> {
     let (command, args) = parse_args()?;
     let output = match command {
@@ -376,6 +415,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         Command::AppendReceipt => append(args)?,
         Command::InspectReceipt => inspect(args)?,
         Command::VerifyPostState => verify_post_state(args)?,
+        Command::VerifyLedger => verify_ledger(args)?,
     };
     println!("{output}");
     Ok(())

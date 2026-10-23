@@ -199,6 +199,12 @@ impl CatalogSuccessor {
                 "superseded_contract_revision": PREDECESSOR_CONTRACT_REVISION,
             },
             "post_epoch_migration_count": self.authority.ordered_history.len() - self.authority.historical_len,
+            "post_epoch_migration_contracts": self.authority.post_epoch.iter().map(|m| json!({
+                "migration_file":m.migration_file,"migration_class":m.migration_class.as_str(),
+                "rollout_order":m.rollout_order.as_str(),"fail_forward_required":m.fail_forward_required,
+                "destructive":m.destructive,"code_rollback_allowed":m.code_rollback_allowed,
+                "contract_preconditions":m.contract_preconditions,
+            })).collect::<Vec<_>>(),
         })
     }
 

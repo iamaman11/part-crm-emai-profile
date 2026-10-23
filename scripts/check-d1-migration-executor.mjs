@@ -16,7 +16,8 @@ const EXECUTION_CONTROL = 'tools/opsctl/src/d1/execution_control.rs';
 const EXECUTION_CONTROL_EXAMPLE = 'tools/opsctl/examples/d1-execution-control.rs';
 const DIAGNOSTICS_HELPER = 'scripts/d1-gate-diagnostics.py';
 const CONTRACT_TRANSITION = 'tools/opsctl/src/d1/contract_transition.rs';
-const CONTRACT_EXAMPLE = 'tools/opsctl/examples/d1-contract-transition.rs';
+const POST_STATE_OWNER = 'tools/opsctl/src/d1/execution_post_state.rs';
+const TRANSITION_TEST = 'tools/opsctl/tests/d1_contract_transition.rs';
 const PROMOTION = '.github/workflows/release-set-promotion.yml';
 const WORKFLOWS = '.github/workflows';
 const PINNED_WRANGLER = 'wrangler@4.94.0';
@@ -31,8 +32,9 @@ const RESTORE_MUTATION_STARTED_STEP = 'Persist restore MUTATION_STARTED receipt'
 const DEPLOY_ACCOUNT_VERIFY_ENDPOINT = 'https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/tokens/verify';
 const DEPLOY_USER_VERIFY_ENDPOINT = 'https://api.cloudflare.com/client/v4/user/tokens/verify';
 const ORDINARY_CONFIRMATION = 'test "$CONFIRMATION" = "$SOURCE_SHA:$TARGET_ENVIRONMENT:$COMPONENT:$DATABASE_ID"';
-const CONTRACT_CONFIRMATION = 'test "$CONFIRMATION" = "$SOURCE_SHA:$TARGET_ENVIRONMENT:$COMPONENT:$DATABASE_ID:contract:$EXPECTED_RELEASE_SET_ID"';
-const POST_CONTRACT_LEDGER = '--post-ledger-json artifacts/d1-migration/ledger-after.json';
+
+const SEALED_POST_LEDGER = '--observation artifacts/d1-migration/ledger-after-names.json';
+const PREWRITE_STAGE_STEP = 'Revalidate sealed stage deployment and exact authorization before mutation';
 const DIAGNOSTICS_PATH = 'artifacts/d1-migration/d1-gate-diagnostics.jsonl';
 const SEALED_PLAN_EXTRACTION = "jq '.execution_plan' artifacts/d1-migration/executor-admission.json > artifacts/d1-migration/plan.json";
 const AUTH_DIGEST_MARKER = "hashlib.sha256(raw.encode('utf-8')).hexdigest()";
@@ -77,8 +79,6 @@ const DIAGNOSTIC_REASON_CODES = [
   'D1_COMPATIBILITY_OUTPUT_INVALID',
   'D1_COMPATIBILITY_DENIED',
   'D1_ROLLBACK_POLICY_BLOCKED',
-  'D1_CONTRACT_PLAN_MIGRATION_MISMATCH',
-  'D1_CONTRACT_RECOVERY_STRATEGY_MISMATCH',
 ];
 
 function fail(message) {
@@ -171,6 +171,17 @@ function validateSharedMutationGroup(executorText, promotionText) {
   }
 }
 
+function validateExecutorCaller(executorText, operatorText) {
+  const header = executorText.split('\npermissions:', 1)[0];
+  const declared = new Set([...header.matchAll(/^ {6}([a-z0-9_]+):$/gm)].map(match => match[1]));
+  const dispatcher = operatorText.split('\n          def dispatch_executor(', 2)[1]?.split('\n          def ', 1)[0];
+  const payload = dispatcher?.split("'inputs': {", 2)[1]?.split('}}', 1)[0];
+  if (!payload || declared.size === 0) fail('D1 operator/executor transport declaration is missing');
+  for (const match of payload.matchAll(/'([a-z0-9_]+)'\s*:/g)) {
+    if (!declared.has(match[1])) fail(`D1 operator dispatches an undeclared executor input: ${match[1]}`);
+  }
+}
+
 async function validateExecutor(text, root = ROOT) {
   const promotionText = await readFile(path.join(root, PROMOTION), 'utf8');
   const adapterText = await readFile(path.join(root, ADAPTER), 'utf8');
@@ -180,7 +191,10 @@ async function validateExecutor(text, root = ROOT) {
   const executionControlExampleText = await readFile(path.join(root, EXECUTION_CONTROL_EXAMPLE), 'utf8');
   const diagnosticsText = await readFile(path.join(root, DIAGNOSTICS_HELPER), 'utf8');
   const contractText = await readFile(path.join(root, CONTRACT_TRANSITION), 'utf8');
-  const contractExampleText = await readFile(path.join(root, CONTRACT_EXAMPLE), 'utf8');
+  const postStateText = await readFile(path.join(root, POST_STATE_OWNER), 'utf8');
+  const transitionTestText = await readFile(path.join(root, TRANSITION_TEST), 'utf8');
+  const operatorText = await readFile(path.join(root, '.github/workflows/d1-operator.yml'), 'utf8');
+  validateExecutorCaller(text, operatorText);
   const workflows = await workflowPaths(root);
   validateSharedMutationGroup(text, promotionText);
 
@@ -201,10 +215,10 @@ async function validateExecutor(text, root = ROOT) {
     'actions/runs/$run_id/jobs?per_page=100', 'test "$consumed" -eq 0',
     CONSUMPTION_ARTIFACT, 'AUTHORIZATION_CONSUMPTION_READY',
     '.authorization_digest == $authorization_digest',
-    ORDINARY_CONFIRMATION, CONTRACT_CONFIRMATION,
-    'transition_mode:', 'expected_release_set_id:', "'migrations_dir': 'migrations-bounded'", 'd1 repository',
+    ORDINARY_CONFIRMATION,
+    "'migrations_dir': 'migrations-bounded'", 'd1 repository',
     'd1 info', 'SELECT id, name FROM d1_migrations ORDER BY id', 'd1 status', 'd1 plan',
-    '--example d1-contract-transition', 'FAIL_FORWARD_ONLY', 'd1 compatibility',
+    'd1 compatibility', PREWRITE_STAGE_STEP, 'd1-prepare.py verify-deployment', 'prewrite-admission.json',
     'executor-admission.json', '.execution_plan', 'planned_migration_digests', SEALED_PLAN_EXTRACTION,
     'd1-executor-plan.py materialize', '--require-plan-digests', 'expected-pending.json', 'ledger-before-names.json',
     'd1 migrations list', 'd1-executor-plan.py verify-pending', 'd1 time-travel info',
@@ -237,8 +251,7 @@ async function validateExecutor(text, root = ROOT) {
     'ledger-fence-names.json',
     'cmp --silent artifacts/d1-migration/ledger-before-names.json artifacts/d1-migration/ledger-fence-names.json',
     'wrangler-pending-fence.txt', 'd1 migrations apply', 'expected-after.json', 'ledger-after-names.json',
-    'd1 verify', POST_CONTRACT_LEDGER, 'd1 contract-transition verify', 'predecessor_ledger_state',
-    'runtime_target_revision', 'transition_migrations',
+    'd1-execution-control verify-ledger', SEALED_POST_LEDGER, '.status == "VERIFIED"',
     'PRAGMA foreign_key_check', 'PRAGMA quick_check', 'quick-check.json',
     "'target_fence': load('target-fence-lease.json')", "'target_fence_verification': load('target-fence-verification.json')",
     "provider_mutation_executed': bool(plan.get('planned_migrations'))", "automatic_restore_executed': False",
@@ -275,9 +288,6 @@ async function validateExecutor(text, root = ROOT) {
   if (occurrenceCount(text, ORDINARY_CONFIRMATION) !== 3) {
     fail(`staging D1 mutation confirmation must be enforced in the shared pre-Environment gate and both typed mutation jobs; observed=${occurrenceCount(text, ORDINARY_CONFIRMATION)}`);
   }
-  if (occurrenceCount(text, CONTRACT_CONFIRMATION) !== 2) {
-    fail(`contract mutation confirmation must be enforced exactly twice; observed=${occurrenceCount(text, CONTRACT_CONFIRMATION)}`);
-  }
   if (workflows.includes(LEGACY_V2_ONE_CLICK)) {
     fail('superseded V2 one-click executor caller must remain retired');
   }
@@ -298,8 +308,7 @@ async function validateExecutor(text, root = ROOT) {
   for (const marker of [
     'native D1 plan', 'typed repository projection', 'remote ledger is not an exact prefix',
     'migrations/d1-successor-v2',
-    'ordinary d1 plan must never authorize the separate fail-forward CONTRACT',
-    'contract-transition must authorize exactly the sole Catalog 0035 CONTRACT',
+    'executor requires the single sealed native D1 execution plan',
     'Wrangler pending list differs from native planned_migrations',
     'authorized ordinary execution plan must contain planned_migration_digests',
     'planned_migration_digests cardinality must exactly match planned_migrations',
@@ -342,17 +351,20 @@ async function validateExecutor(text, root = ROOT) {
     if (!executionControlExampleText.includes(marker)) fail(`headless execution-control adapter lost marker: ${marker}`);
   }
   for (const marker of [
-    'verify_post_transition',
-    'post-contract verification requires exactly one canonical device-application-0034 -> PAS2-0035 transition',
-    'd1 contract-transition verify',
-    'EXACT_0034_DEVICE_APPLICATION_PREDECESSOR',
-    'EXACT_ONE_STEP_0035_CONTRACT',
-    'RUNTIME_WINDOW_0034_0035_VERIFIED',
+    'D1_CURRENT_TRANSITION_EVIDENCE', 'runtime_supports_index', 'SeparateContractRelease',
+    'pending[..1]', 'FAIL_FORWARD_ONLY', 'ROLL_FORWARD', 'desired_target_revision',
+    '30..=300', 'e.deployment != e.deployment_before', 'MAX_EVIDENCE_AGE_SECONDS',
   ]) {
-    if (!contractText.includes(marker)) fail(`typed contract-transition lost post-CONTRACT invariant: ${marker}`);
+    if (!contractText.includes(marker)) fail(`typed CURRENT transition lost native phase/readiness invariant: ${marker}`);
   }
-  for (const marker of ['--post-ledger-json', 'contract_transition_verify']) {
-    if (!contractExampleText.includes(marker)) fail(`contract-transition entrypoint lost post-CONTRACT route: ${marker}`);
+  for (const marker of ['verify_migration_ledger', 'predecessor', 'planned_migrations', 'observed != expected']) {
+    if (!postStateText.includes(marker)) fail(`native sealed post-ledger verification lost invariant: ${marker}`);
+  }
+  if (!transitionTestText.includes('actual_deployed_context_traverses_separate_sealed_contract_and_current_expand_with_data_preserved')) {
+    fail('CURRENT phase path requires the complete exact-context positive/negative/SQL integration proof');
+  }
+  for (const retired of ['--example d1-contract-transition', 'inputs.expected_release_set_id', 'transition_mode:', 'inputs.transition_mode', '"$TRANSITION_MODE" = contract']) {
+    if (text.includes(retired)) fail(`retired unsealed CONTRACT path must remain unreachable: ${retired}`);
   }
 
   if (/create\s+table\s+[^\n;]*(?:d1|migration)[^\n;]*lock/is.test(text)) {
@@ -372,7 +384,7 @@ async function validateExecutor(text, root = ROOT) {
   if (authorizeBody.includes('CLOUDFLARE_API_TOKEN')) fail('preflight authorization job must not receive provider credentials');
   for (const marker of [
     'test "$TARGET_ENVIRONMENT" = "staging"', 'test "$COMPONENT" = "catalog" || test "$COMPONENT" = "resolver"',
-    'test "$MUTATION_AUTHORIZED" = "true"', 'test "$COMPONENT" = "catalog"', 'test -n "$EXPECTED_RELEASE_SET_ID"',
+    'test "$MUTATION_AUTHORIZED" = "true"',
     AUTH_PROVENANCE_STEP, AUTH_DIGEST_MARKER, 'D1_TRANSACTION_AUTHORIZATION_V1',
     "comment.get('author_association') != 'OWNER'", 'display_title',
   ]) {
@@ -443,7 +455,7 @@ async function validateExecutor(text, root = ROOT) {
   const receiptInitIndex = text.indexOf(`\n      - name: ${RECEIPT_INIT_STEP}`);
   const receiptInitialMarkerIndex = text.indexOf(`\n      - name: ${RECEIPT_INITIAL_MARKER_STEP}`);
   const metadataIndex = text.indexOf('Materialize exact metadata inputs and bounded provider config');
-  const policyIndex = text.indexOf('Consume sealed ordinary plan and run fresh compatibility or contract gates');
+  const policyIndex = text.indexOf('Consume the sealed phase plan and run fresh migration compatibility gates');
   const diagnosticUploadIndex = text.indexOf('Upload metadata-only D1 gate diagnostics on policy failure');
   const materializeIndex = text.indexOf('Materialize exactly authorized planned_migrations from typed successor projection');
   const firstPendingIndex = text.indexOf('Compare Wrangler pending list to exact authorized plan with observe credential');
@@ -451,6 +463,16 @@ async function validateExecutor(text, root = ROOT) {
   const receiptPrewriteIndex = text.indexOf(`\n      - name: ${RECEIPT_PREWRITE_STEP}`);
   const preapplyObserveIndex = text.indexOf(`\n      - name: ${PREAPPLY_OBSERVE_STEP}`);
   const migrationReadinessIndex = text.indexOf(`\n      - name: ${MIGRATION_DEPLOY_READINESS_STEP}`);
+  const stagedPrewriteIndex = text.indexOf(`\n      - name: ${PREWRITE_STAGE_STEP}`);
+  if (stagedPrewriteIndex <= preapplyObserveIndex || stagedPrewriteIndex >= migrationReadinessIndex) {
+    fail('sealed phase deployment/authorization fence must follow fresh ledger observation and precede mutation readiness/effect');
+  }
+  const stagedPrewriteBody = stepBody(text, PREWRITE_STAGE_STEP);
+  for (const marker of ['d1-prepare.py verify-deployment', 'd1-executor-admission',
+    '--authorization-json "$root/transaction-authorization.json"', '--evaluated-at-unix-seconds "$(date -u +%s)"',
+    '> "$root/prewrite-admission.json"', '.execution_plan == $original[0].execution_plan']) {
+    if (!stagedPrewriteBody.includes(marker)) fail(`sealed phase prewrite fence lost exact proof: ${marker}`);
+  }
   const receiptMutationStartedIndex = text.indexOf(`\n      - name: ${RECEIPT_MUTATION_STARTED_STEP}`);
   const receiptMutationMarkerIndex = text.indexOf(`\n      - name: ${RECEIPT_MUTATION_MARKER_STEP}`);
   const applyStepIndex = text.indexOf(`\n      - name: ${APPLY_STEP}`);
@@ -458,12 +480,23 @@ async function validateExecutor(text, root = ROOT) {
   const receiptAppliedMarkerIndex = text.indexOf(`\n      - name: ${RECEIPT_APPLIED_MARKER_STEP}`);
   const rereadIndex = text.indexOf(`\n      - name: ${REREAD_STEP}`);
   const receiptPostObservedIndex = text.indexOf(`\n      - name: ${RECEIPT_POST_OBSERVED_STEP}`);
-  const postVerifyIndex = text.indexOf('Require exact target through credential-free opsctl verify');
+  const postVerifyIndex = text.indexOf('Require exact sealed effect through credential-free D1 post-verification');
   const postInvariantIndex = text.indexOf(POST_INVARIANT_STEP, postVerifyIndex);
   const receiptCompleteIndex = text.indexOf(`\n      - name: ${RECEIPT_COMPLETE_STEP}`);
   const receiptTerminalizeIndex = text.indexOf(`\n      - name: ${RECEIPT_TERMINALIZE_STEP}`);
   const receiptTerminalMarkerIndex = text.indexOf(`\n      - name: ${RECEIPT_TERMINAL_MARKER_STEP}`);
   const evidenceIndex = text.indexOf('Build metadata-only migration evidence');
+  const nativeGateIndex = text.indexOf('Persist metadata-only native D1 gate evidence');
+  if (nativeGateIndex <= receiptTerminalMarkerIndex || nativeGateIndex >= evidenceIndex) {
+    fail('native owner outputs must survive both success and failure after terminal receipt capture');
+  }
+  const nativeGateBody = stepBody(text, 'Persist metadata-only native D1 gate evidence');
+  for (const marker of ["if: always()", 'd1-native-gates-${{ github.run_id }}-${{ github.run_attempt }}',
+    'artifacts/d1-migration/plan.json', 'artifacts/d1-migration/compatibility.json', 'artifacts/d1-migration/verify.json',
+    'artifacts/d1-migration/prewrite-admission.json', 'artifacts/d1-migration/prewrite-deployment-verification.json']) {
+    if (!nativeGateBody.includes(marker)) fail(`native gate capture lost lossless metadata evidence: ${marker}`);
+  }
+
   const observeIndex = text.indexOf(OBSERVE_REF);
   const deployIndex = text.indexOf(DEPLOY_REF);
   if (!(provenanceIndex >= 0
@@ -578,8 +611,8 @@ async function validateExecutor(text, root = ROOT) {
 
   const receiptInitBody = stepBody(text, RECEIPT_INIT_STEP);
   for (const marker of [
-    'execution-receipt-seed.json', "transaction_plan', {}).get('recovery_strategy')",
-    "recovery = 'FAIL_FORWARD_ONLY'", 'd1-execution-control initialize-receipt',
+    'execution-receipt-seed.json', "transaction['transaction_plan']['recovery_strategy']",
+    'd1-execution-control initialize-receipt',
     '--prepared-at-unix-seconds', '--authorized-at-unix-seconds', RECEIPT,
     '.events[0].kind == "PREPARED"', '.events[1].kind == "AUTHORIZED"',
   ]) {
@@ -727,10 +760,9 @@ async function validateExecutor(text, root = ROOT) {
   }
   const postVerifyBody = text.slice(postVerifyIndex, postInvariantIndex);
   for (const marker of [
-    POST_CONTRACT_LEDGER, 'd1 contract-transition verify', 'predecessor_ledger_state',
-    'runtime_target_revision', 'supported_schema_max', 'transition_migrations',
+    SEALED_POST_LEDGER, 'd1-execution-control verify-ledger', '--input artifacts/d1-migration/transaction.json', '.status == "VERIFIED"',
   ]) {
-    if (!postVerifyBody.includes(marker)) fail(`post-CONTRACT verification lost required typed proof: ${marker}`);
+    if (!postVerifyBody.includes(marker)) fail(`sealed phase verification lost required typed proof: ${marker}`);
   }
 
   const postInvariantBody = stepBody(text, POST_INVARIANT_STEP);
@@ -843,8 +875,11 @@ async function selfTest(text) {
     ['raw legacy Catalog execution root', "'migrations_dir': 'migrations-bounded'", "'migrations_dir': '../../migrations/d1'"],
     ['missing normalized ledger fence', 'cmp --silent artifacts/d1-migration/ledger-before-names.json artifacts/d1-migration/ledger-fence-names.json', '# removed-ledger-fence'],
     ['missing Wrangler pending fence', 'd1-executor-plan.py verify-pending', 'd1-executor-plan.py removed-pending-check'],
-    ['missing contract confirmation binding', CONTRACT_CONFIRMATION, 'test -n "$CONFIRMATION"'],
-    ['missing typed post-contract ledger proof', POST_CONTRACT_LEDGER, '--removed-post-ledger-json'],
+    ['missing exact effect confirmation binding', ORDINARY_CONFIRMATION, 'test -n "$CONFIRMATION"'],
+    ['missing typed sealed post-ledger proof', SEALED_POST_LEDGER, '--removed-sealed-post-ledger'],
+    ['missing failure-safe native verdict capture', 'name: Persist metadata-only native D1 gate evidence\n        if: always()', 'name: Persist metadata-only native D1 gate evidence\n        if: success()'],
+    ['missing staged deployment fence', 'd1-prepare.py verify-deployment', 'd1-prepare.py removed-deployment-check'],
+    ['missing prewrite authorization revalidation', 'prewrite-admission.json', 'removed-prewrite-admission.json'],
     ['missing compatibility command diagnostic', 'D1_COMPATIBILITY_COMMAND_FAILED', 'D1_REMOVED_COMPATIBILITY_COMMAND_DIAGNOSTIC'],
     ['missing sealed ordinary plan extraction', SEALED_PLAN_EXTRACTION, '# removed-sealed-plan-extraction'],
     ['missing authorized migration digest enforcement', '--require-plan-digests', '--removed-require-plan-digests'],
@@ -939,7 +974,13 @@ async function selfTest(text) {
     'second remote apply',
     `${text}\n# npx --yes ${PINNED_WRANGLER} d1 migrations apply X --remote --experimental-provision=false --experimental-auto-create=false\n`,
   );
-  console.log('Protected D1 executor typed-admission, durable target fence, append-only ExecutionReceipt ordering/durability, observe-only preapply revalidation, token-owner-neutral deploy-credential READY before MUTATION_STARTED, fail-closed terminalization, sealed-plan, exact-prestate, D1-supported quick-check diagnostics, evidence v3, post-CONTRACT and one-owner negative fixtures passed.');
+  const operatorText = await readFile(path.join(ROOT, '.github/workflows/d1-operator.yml'), 'utf8');
+  const extraInput = replaceFixture('retired executor input in operator', operatorText,
+    "'inputs': {", "'inputs': {\n                  'expected_release_set_id': '',");
+  let extraInputRejected = false;
+  try { validateExecutorCaller(text, extraInput); } catch { extraInputRejected = true; }
+  if (!extraInputRejected) fail('undeclared executor input in the actual operator caller fixture unexpectedly passed');
+  console.log('Protected D1 executor typed-admission, durable target fence, append-only ExecutionReceipt ordering/durability, observe-only preapply revalidation, token-owner-neutral deploy-credential READY before MUTATION_STARTED, fail-closed terminalization, sealed-plan, exact-prestate, D1-supported quick-check diagnostics, evidence v3, sealed phase and one-owner negative fixtures passed.');
 }
 
 async function main() {
@@ -950,7 +991,7 @@ async function main() {
   }
   if (process.argv.length > 2) fail(`unknown arguments: ${process.argv.slice(2).join(' ')}`);
   await validateExecutor(text, ROOT);
-  console.log('Protected D1 executor contract passed: workflow-dispatch-only, immutable OWNER authorization provenance, typed admission before one-shot consumption, target-scoped typed fence, append-only ExecutionReceipt, observe-only preapply revalidation, token-owner-neutral deploy-credential READY before MUTATION_STARTED/effect, mechanically known applied events, D1-supported fail-closed post-verify diagnostics, evidence v3, fail-closed terminal receipt, exact sealed plan/prestate, typed post-CONTRACT verification, one remote apply owner, no automatic restore or provisioning.');
+  console.log('Protected D1 executor contract passed: workflow-dispatch-only, immutable OWNER authorization provenance, typed admission before one-shot consumption, target-scoped typed fence, append-only ExecutionReceipt, observe-only preapply revalidation, token-owner-neutral deploy-credential READY before MUTATION_STARTED/effect, mechanically known applied events, D1-supported fail-closed post-verify diagnostics, evidence v3, fail-closed terminal receipt, exact sealed plan/prestate, typed sealed phase verification, one remote apply owner, no automatic restore or provisioning.');
 }
 
 main().catch((error) => {
