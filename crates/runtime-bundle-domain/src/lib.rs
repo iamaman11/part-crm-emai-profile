@@ -353,7 +353,7 @@ fn validate_path(value: &str) -> Result<(), BundlePathError> {
 }
 
 fn valid_path_byte(byte: u8) -> bool {
-    byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-')
+    byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-' | b' ' | b',')
 }
 
 fn windows_reserved(value: &str) -> bool {
@@ -404,6 +404,12 @@ mod tests {
         let path = BundleRelativePath::parse("camouhost/main.py")?;
         assert_eq!(path.as_str(), "camouhost/main.py");
         assert_eq!(path.case_folded(), "camouhost/main.py");
+        for font in [
+            "browser/fonts/Arial Bold.ttf",
+            "browser/fonts/Tahoma,Regular.ttf",
+        ] {
+            assert_eq!(BundleRelativePath::parse(font)?.as_str(), font);
+        }
         Ok(())
     }
 
@@ -421,6 +427,13 @@ mod tests {
             "camouhost/com1.txt",
             "camouhost/trailing.",
             "camouhost/trailing ",
+            "browser/fonts/C:/font.ttf",
+            "browser/fonts/font:stream",
+            "browser/fonts/CON.ttf",
+            "browser/fonts/Arial\".ttf",
+            "browser/fonts/*.ttf",
+            "browser/fonts/?.ttf",
+            "browser/fonts/bad\n.ttf",
         ];
         for value in invalid {
             assert!(

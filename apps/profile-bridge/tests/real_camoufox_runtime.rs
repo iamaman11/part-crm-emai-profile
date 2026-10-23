@@ -10,6 +10,7 @@ use profile_bridge::operator_flow::BrowserLaunchPreflightPort;
 use profile_bridge::runtime_bundle::{ApprovedRuntimeBundle, RuntimeSessionOrchestrator};
 use profile_bridge::shipping_preflight::ShippingBrowserLaunchPreflight;
 use profile_platform_primitives::{DeviceId, GenerationId, ProfileId, SessionId, TenantId};
+#[cfg(not(windows))]
 use runtime_bundle_domain::{
     BundleRelativePath, InventoryEntry, RuntimeInventory, RuntimeManifest, RuntimePlatform,
     Sha256Digest,
@@ -26,6 +27,30 @@ const RUNTIME_ROOT_ENV: &str = "AR10_RUNTIME_ROOT";
 const HEADLESS_ENV: &str = "AR10_REAL_CAMOUFOX_HEADLESS";
 const LOWER_HEX: &[u8; 16] = b"0123456789abcdef";
 const MANAGED_COLD_LAUNCH_ATTEMPTS: usize = 3;
+
+#[test]
+fn published_windows_runtime_is_consumed_by_shipping_selector()
+-> Result<(), Box<dyn std::error::Error>> {
+    use profile_bridge::operator_flow::RuntimeBundleSelectionPort;
+    use profile_bridge::runtime_bundle::FilesystemRuntimeBundleSelection;
+    use profile_platform_primitives::{ActorContext, ActorId, CorrelationId, TenantScope};
+    let Some(root) = env::var_os("PACKAGED_WINDOWS_RUNTIME_ROOT") else {
+        return Ok(());
+    };
+    let actor = ActorContext::new(
+        TenantScope::new(TenantId::parse("tenant_packaged_runtime")?),
+        ActorId::parse("actor_packaged_runtime")?,
+        CorrelationId::parse("corr_packaged_runtime")?,
+    );
+    let mut selector = FilesystemRuntimeBundleSelection::open(PathBuf::from(root))?;
+    let bundle = selector.select_bundle(
+        &actor,
+        &ProfileId::parse("profile_packaged_runtime")?,
+        &GenerationId::parse("generation_packaged_runtime")?,
+    )?;
+    assert!(bundle.inventory().entries().len() >= 5);
+    Ok(())
+}
 
 struct StageTracingCamouhost<C> {
     inner: C,
@@ -79,6 +104,7 @@ fn sha256_hex(bytes: &[u8]) -> String {
     encoded
 }
 
+#[cfg(not(windows))]
 fn digest_file(path: &Path) -> Result<(u64, String), Box<dyn std::error::Error>> {
     let metadata = fs::symlink_metadata(path)?;
     if metadata.file_type().is_symlink() || !metadata.is_file() {
@@ -88,6 +114,7 @@ fn digest_file(path: &Path) -> Result<(u64, String), Box<dyn std::error::Error>>
     Ok((metadata.len(), sha256_hex(&bytes)))
 }
 
+#[cfg(not(windows))]
 fn inventory_digest(entries: &[(String, u64, String)]) -> String {
     let mut canonical = String::from("[");
     for (index, (path, length, sha256)) in entries.iter().enumerate() {
@@ -105,47 +132,67 @@ fn inventory_digest(entries: &[(String, u64, String)]) -> String {
 fn approved_runtime(
     runtime_root: &Path,
 ) -> Result<ApprovedRuntimeBundle, Box<dyn std::error::Error>> {
-    let real_path = runtime_root.join("camouhost/real.py");
-    let lock_path = runtime_root.join("camouhost/runtime-lock.json");
-    let (real_length, real_sha256) = digest_file(&real_path)?;
-    let (lock_length, lock_sha256) = digest_file(&lock_path)?;
-    let entries = [
-        (
-            "camouhost/real.py".to_owned(),
-            real_length,
-            real_sha256.clone(),
-        ),
-        (
-            "camouhost/runtime-lock.json".to_owned(),
-            lock_length,
-            lock_sha256.clone(),
-        ),
-    ];
-    let inventory_sha256 = inventory_digest(&entries);
-    let manifest = RuntimeManifest::new(
-        "2.0.0",
-        "3.12",
-        RuntimePlatform::WindowsX86_64,
-        BundleRelativePath::parse("camouhost/real.py")?,
-        Sha256Digest::parse(inventory_sha256.clone())?,
-    )?;
-    let inventory = RuntimeInventory::new([
-        InventoryEntry::new(
+    #[cfg(windows)]
+    {
+        use profile_bridge::operator_flow::RuntimeBundleSelectionPort;
+        use profile_bridge::runtime_bundle::FilesystemRuntimeBundleSelection;
+        use profile_platform_primitives::{ActorContext, ActorId, CorrelationId, TenantScope};
+        let actor = ActorContext::new(
+            TenantScope::new(TenantId::parse("tenant_01JAR10REAL")?),
+            ActorId::parse("actor_01JAR10REAL")?,
+            CorrelationId::parse("corr_01JAR10REAL")?,
+        );
+        let mut selector = FilesystemRuntimeBundleSelection::open(runtime_root)?;
+        Ok(selector.select_bundle(
+            &actor,
+            &ProfileId::parse("profile_01JAR10REAL")?,
+            &GenerationId::parse("generation_01JAR10REAL")?,
+        )?)
+    }
+    #[cfg(not(windows))]
+    {
+        let real_path = runtime_root.join("camouhost/real.py");
+        let lock_path = runtime_root.join("camouhost/runtime-lock.json");
+        let (real_length, real_sha256) = digest_file(&real_path)?;
+        let (lock_length, lock_sha256) = digest_file(&lock_path)?;
+        let entries = [
+            (
+                "camouhost/real.py".to_owned(),
+                real_length,
+                real_sha256.clone(),
+            ),
+            (
+                "camouhost/runtime-lock.json".to_owned(),
+                lock_length,
+                lock_sha256.clone(),
+            ),
+        ];
+        let inventory_sha256 = inventory_digest(&entries);
+        let manifest = RuntimeManifest::new(
+            "2.0.0",
+            "3.12",
+            RuntimePlatform::WindowsX86_64,
             BundleRelativePath::parse("camouhost/real.py")?,
-            real_length,
-            Sha256Digest::parse(real_sha256)?,
-        ),
-        InventoryEntry::new(
-            BundleRelativePath::parse("camouhost/runtime-lock.json")?,
-            lock_length,
-            Sha256Digest::parse(lock_sha256)?,
-        ),
-    ])?;
-    Ok(ApprovedRuntimeBundle::validate(
-        manifest,
-        inventory,
-        &Sha256Digest::parse(inventory_sha256)?,
-    )?)
+            Sha256Digest::parse(inventory_sha256.clone())?,
+        )?;
+        let inventory = RuntimeInventory::new([
+            InventoryEntry::new(
+                BundleRelativePath::parse("camouhost/real.py")?,
+                real_length,
+                Sha256Digest::parse(real_sha256)?,
+            ),
+            InventoryEntry::new(
+                BundleRelativePath::parse("camouhost/runtime-lock.json")?,
+                lock_length,
+                Sha256Digest::parse(lock_sha256)?,
+            ),
+        ])?;
+        Ok(ApprovedRuntimeBundle::validate(
+            manifest,
+            inventory,
+            &Sha256Digest::parse(inventory_sha256)?,
+        )?)
+    }
 }
 
 fn root_path() -> Result<PathBuf, Box<dyn std::error::Error>> {
@@ -326,6 +373,12 @@ fn run_managed_cold_launch_cycle() -> Result<(), Box<dyn std::error::Error>> {
     let session = SessionId::parse("session_01JAR10REAL")?;
     RuntimeSessionOrchestrator::launch(&bundle, &session, &mut process, &mut camouhost)?;
     RuntimeSessionOrchestrator::close(&bundle, &session, &mut process, &mut camouhost)?;
+
+    #[cfg(windows)]
+    assert_eq!(
+        approved_runtime(&PathBuf::from(env::var(RUNTIME_ROOT_ENV)?))?,
+        bundle
+    );
 
     lock.release()?;
     fs::remove_dir_all(&root_path)?;

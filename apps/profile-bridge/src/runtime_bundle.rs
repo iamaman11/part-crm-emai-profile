@@ -22,10 +22,10 @@ const SHIPPING_BROWSER_EXECUTABLE: &str = "browser/camoufox.exe";
 const SHIPPING_PYTHON_EXECUTABLE: &str = "python/python.exe";
 const SHIPPING_RESOLVED_RUNTIME: &str = "camouhost/resolved-runtime.json";
 const SHIPPING_COMPONENT_MANIFEST: &str = "runtime-manifest.json";
-const SHIPPING_COMPONENT_SCHEMA_VERSION: u32 = 2;
+const SHIPPING_COMPONENT_SCHEMA_VERSION: u32 = 3;
 const SHIPPING_COMPONENT_KIND: &str = "CAMOUFOX_WINDOWS_RUNTIME_COMPONENT";
 const SHIPPING_COMPONENT_PLATFORM: &str = "windows-x86_64";
-const SHIPPING_COMPONENT_RELEASE_PREFIX: &str = "runtime-bundle-v2-sha256-";
+const SHIPPING_COMPONENT_RELEASE_PREFIX: &str = "runtime-bundle-v3-sha256-";
 const MAX_RUNTIME_MANIFEST_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_RUNTIME_FILE_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 const MAX_RUNTIME_FILES: usize = 500_000;
@@ -116,7 +116,6 @@ struct PackagedRuntimeManifest {
     schema_version: u32,
     kind: String,
     platform: String,
-    source_commit_sha: String,
     source_inputs: PackagedFileSet,
     files: PackagedFileSet,
     entrypoints: PackagedEntrypoints,
@@ -158,12 +157,7 @@ impl FilesystemRuntimeBundleSelection {
         let mut expected_directories = HashSet::new();
         let mut runtime_files = Vec::with_capacity(packaged.files.files.len());
         let mut total_bytes = 0_u64;
-        let mut previous_path: Option<&str> = None;
         for expected in &packaged.files.files {
-            if previous_path.is_some_and(|previous| previous >= expected.path.as_str()) {
-                return Err(RuntimeBundleSelectionError::InvalidRuntime);
-            }
-            previous_path = Some(&expected.path);
             validate_runtime_file_identity(expected)?;
             total_bytes = total_bytes
                 .checked_add(expected.size_bytes)
@@ -194,6 +188,9 @@ impl FilesystemRuntimeBundleSelection {
         }
         validate_runtime_tree(&self.runtime_root, &expected_files, &expected_directories)?;
 
+        // The v3 external file-set digest binds the producer's exact order (Windows paths
+        // are case-insensitive). Normalize only the internal inventory after verification.
+        runtime_files.sort_by(|left, right| left.path.cmp(&right.path));
         let calculated_inventory_sha256 = inventory_digest(&runtime_files)?;
         let manifest = RuntimeManifest::new(
             SHIPPING_RUNTIME_VERSION,
@@ -272,20 +269,12 @@ fn read_packaged_manifest(
     let bytes = fs::read(&path).map_err(|_| RuntimeBundleSelectionError::MissingRuntimeFile)?;
     let manifest: PackagedRuntimeManifest =
         serde_json::from_slice(&bytes).map_err(|_| RuntimeBundleSelectionError::InvalidRuntime)?;
-    let mut identity: serde_json::Value =
-        serde_json::from_slice(&bytes).map_err(|_| RuntimeBundleSelectionError::InvalidRuntime)?;
-    let release_id = identity
-        .as_object_mut()
-        .and_then(|value| value.remove("release_id"))
-        .and_then(|value| value.as_str().map(str::to_owned))
-        .ok_or(RuntimeBundleSelectionError::InvalidRuntime)?;
-    let identity_bytes =
-        serde_json::to_vec(&identity).map_err(|_| RuntimeBundleSelectionError::InvalidRuntime)?;
+    // V3 identity belongs to canonical source inputs; installed file inventory is verified below.
     let expected_release_id = format!(
         "{SHIPPING_COMPONENT_RELEASE_PREFIX}{}",
-        sha256_hex(&identity_bytes)
+        manifest.source_inputs.sha256
     );
-    if release_id != manifest.release_id || release_id != expected_release_id {
+    if manifest.release_id != expected_release_id {
         return Err(RuntimeBundleSelectionError::InvalidRuntime);
     }
     Ok(manifest)
@@ -297,7 +286,6 @@ fn validate_packaged_manifest(
     if manifest.schema_version != SHIPPING_COMPONENT_SCHEMA_VERSION
         || manifest.kind != SHIPPING_COMPONENT_KIND
         || manifest.platform != SHIPPING_COMPONENT_PLATFORM
-        || !is_lower_hex(&manifest.source_commit_sha, 40)
         || !manifest
             .release_id
             .strip_prefix(SHIPPING_COMPONENT_RELEASE_PREFIX)
@@ -342,13 +330,12 @@ fn validate_runtime_identity_set(
     {
         return Err(RuntimeBundleSelectionError::InvalidRuntime);
     }
-    let mut previous: Option<&str> = None;
+    let mut paths = HashSet::new();
     for file in &identity.files {
         validate_runtime_file_identity(file)?;
-        if previous.is_some_and(|value| value >= file.path.as_str()) {
+        if !paths.insert(file.path.to_ascii_lowercase()) {
             return Err(RuntimeBundleSelectionError::InvalidRuntime);
         }
-        previous = Some(&file.path);
     }
     validate_file_set_digest(identity)
 }
@@ -832,6 +819,8 @@ mod tests {
     fn write_packaged_runtime(root: &Path) -> Result<(), Box<dyn std::error::Error>> {
         let fixtures = [
             (SHIPPING_BROWSER_EXECUTABLE, b"browser".as_slice()),
+            ("browser/fonts/alpha.ttf", b"font-a".as_slice()),
+            ("browser/fonts/Zeta, Regular.ttf", b"font-z".as_slice()),
             (SHIPPING_ENTRYPOINT, b"print('real')\n".as_slice()),
             (SHIPPING_RESOLVED_RUNTIME, b"{}\n".as_slice()),
             (
@@ -853,7 +842,7 @@ mod tests {
                 size_bytes: u64::try_from(content.len())?,
             });
         }
-        files.sort_by(|left, right| left.path.cmp(&right.path));
+        files.sort_by_key(|entry| entry.path.to_ascii_lowercase());
         let files_sha = sha256_hex(&serde_json::to_vec(&files)?);
         let source_files = vec![PackagedFileIdentity {
             path: "runtime/camouhost/runtime-lock.json".to_owned(),
@@ -865,8 +854,7 @@ mod tests {
             "schema_version": SHIPPING_COMPONENT_SCHEMA_VERSION,
             "kind": SHIPPING_COMPONENT_KIND,
             "platform": SHIPPING_COMPONENT_PLATFORM,
-            "source_commit_sha": "1".repeat(40),
-            "source_inputs": {"files": source_files, "sha256": source_sha},
+            "source_inputs": {"files": source_files, "sha256": source_sha.clone()},
             "files": {"files": files, "sha256": files_sha},
             "entrypoints": {
                 "browser": SHIPPING_BROWSER_EXECUTABLE,
@@ -875,10 +863,7 @@ mod tests {
                 "runtime_lock": SHIPPING_RUNTIME_LOCK,
             },
         });
-        let release_id = format!(
-            "{SHIPPING_COMPONENT_RELEASE_PREFIX}{}",
-            sha256_hex(&serde_json::to_vec(&payload)?)
-        );
+        let release_id = format!("{SHIPPING_COMPONENT_RELEASE_PREFIX}{}", source_sha);
         let Value::Object(ref mut object) = payload else {
             return Err("manifest payload is not an object".into());
         };
@@ -886,6 +871,49 @@ mod tests {
         let mut bytes = serde_json::to_vec_pretty(&payload)?;
         bytes.push(b'\n');
         fs::write(root.join("runtime-manifest.json"), bytes)?;
+        Ok(())
+    }
+
+    #[test]
+    fn selector_rejects_obsolete_schema_and_substituted_v3_identity()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let root = runtime_root("manifest-v3")?;
+        fs::create_dir_all(&root)?;
+        write_packaged_runtime(&root)?;
+        let path = root.join("runtime-manifest.json");
+        let original: Value = serde_json::from_slice(&fs::read(&path)?)?;
+        for mutation in [
+            "schema",
+            "source-field",
+            "source-digest",
+            "release-id",
+            "inventory-digest",
+        ] {
+            let mut changed = original.clone();
+            match mutation {
+                "schema" => changed["schema_version"] = json!(2),
+                "source-field" => changed["source_commit_sha"] = json!("1".repeat(40)),
+                "source-digest" => changed["source_inputs"]["sha256"] = json!("f".repeat(64)),
+                "release-id" => {
+                    changed["release_id"] =
+                        json!(format!("runtime-bundle-v3-sha256-{}", "f".repeat(64)))
+                }
+                _ => changed["files"]["sha256"] = json!("f".repeat(64)),
+            }
+            fs::write(&path, serde_json::to_vec(&changed)?)?;
+            assert_eq!(
+                FilesystemRuntimeBundleSelection::open(&root)?.load_bundle(),
+                Err(RuntimeBundleSelectionError::InvalidRuntime),
+                "{mutation}"
+            );
+        }
+        fs::write(&path, serde_json::to_vec(&original)?)?;
+        assert!(
+            FilesystemRuntimeBundleSelection::open(&root)?
+                .load_bundle()
+                .is_ok()
+        );
+        fs::remove_dir_all(root)?;
         Ok(())
     }
 

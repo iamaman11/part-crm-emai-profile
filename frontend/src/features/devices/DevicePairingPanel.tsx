@@ -89,7 +89,7 @@ function RegistrationConfirmation({ tenantId, deviceId }: { tenantId: string; de
       <span className="eyebrow">Profile Bridge</span>
       <h3>{checking ? 'Checking device registration' : confirmed ? 'Device registration confirmed' : 'Device registration not confirmed'}</h3>
       {confirmed ? (
-        <p>This device is registered to your account. Browser components still need a readiness check before profiles can open.</p>
+        <p>This computer is connected. Go to Profiles and choose Open browser. The application checks browser components during launch.</p>
       ) : (
         <p>The browser return alone does not confirm a connection. Check registration with the application before continuing.</p>
       )}
@@ -221,7 +221,7 @@ export function DevicePairingPanel() {
       <span className="eyebrow">Profile Bridge</span>
       <h3>Connect this computer</h3>
       <InstallBridge tenantId={tenantId} />
-      <p>Already installed? Connect once to use your profiles on this computer.</p>
+      <p>Connect once after installation. Already connected? Go to Profiles and choose Open browser. This button can also check your existing connection.</p>
       <a href={startUri}>Connect this computer</a>
       <StatusMessage state={status} />
     </section>

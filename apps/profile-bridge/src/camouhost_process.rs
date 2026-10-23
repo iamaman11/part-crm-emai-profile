@@ -423,6 +423,7 @@ impl ManagedCamouhostProcess {
         let python_executable = self.config.python_executable.clone();
         let mut command = Command::new(&python_executable);
         command
+            .arg("-B")
             .arg(&entrypoint)
             .current_dir(&self.config.runtime_root)
             .env_clear()
@@ -897,6 +898,11 @@ fn verify_file_digest(path: &Path, expected: &str) -> Result<(), BridgePortError
 }
 
 fn inherit_runtime_environment(command: &mut Command) {
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(0x0800_0000); // Hide Python's console; Camoufox owns its window.
+    }
     for key in [
         "DBUS_SESSION_BUS_ADDRESS",
         "DISPLAY",

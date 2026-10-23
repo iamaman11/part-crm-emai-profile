@@ -68,6 +68,7 @@ impl InitialProfileOpen {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum InitialProfileError {
     Authorization,
+    RuntimeBundle,
     Runtime,
     Snapshot,
     Encryption,
@@ -175,7 +176,7 @@ where
     }
     let bundle = bundles
         .select_bundle(actor, &intent.profile_id, &generation)
-        .map_err(|_| InitialProfileError::Runtime)?;
+        .map_err(|_| InitialProfileError::RuntimeBundle)?;
     let workspace = root
         .create_generation(&intent.tenant_id, &intent.profile_id, &generation)
         .map_err(|_| InitialProfileError::Snapshot)?;

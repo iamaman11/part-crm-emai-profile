@@ -60,6 +60,15 @@ struct BindingDocument<'a> {
 
 pub fn run_start(uri: &DevicePairingStartUri) -> Result<(), PairingError> {
     let config = InstalledConnection::open_current().map_err(|_| PairingError::Configuration)?;
+    if let Some(url) = existing_binding_return(
+        &config.binding_path(),
+        config.origin().as_str(),
+        uri.tenant_id(),
+    )? {
+        // The existing browser projection checks ACTIVE registration for the signed-in actor.
+        // Local binding presence does not grant authorization or claim runtime readiness.
+        return open_default_browser(&url).map_err(|_| PairingError::ConnectedBrowserReturn);
+    }
     require_binding_absent(&config.binding_path())?;
 
     let key_name = key_name(uri.device_id()).map_err(|_| PairingError::DeviceKey)?;
@@ -73,6 +82,28 @@ pub fn run_start(uri: &DevicePairingStartUri) -> Result<(), PairingError> {
         return Err(PairingError::CleanupRequired);
     }
     result
+}
+
+fn existing_binding_return(
+    path: &Path,
+    origin: &str,
+    tenant: &TenantId,
+) -> Result<Option<String>, PairingError> {
+    match fs::symlink_metadata(path) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(_) => return Err(PairingError::BindingStorage),
+        Ok(_) => {}
+    }
+    let binding =
+        WindowsDeviceApplicationBinding::open(path).map_err(|_| PairingError::BindingStorage)?;
+    if binding.tenant_id() != tenant {
+        return Err(PairingError::ExistingBinding);
+    }
+    Ok(Some(format!(
+        "{origin}/devices?tenant={}#connected={}",
+        tenant.as_str(),
+        binding.device_id().as_str()
+    )))
 }
 
 fn start_with_key(
@@ -617,6 +648,35 @@ mod tests {
         assert!(persist_binding(&path, &uri).is_err());
         assert_eq!(fs::read(&path)?, sentinel);
 
+        fs::remove_dir_all(root)?;
+        Ok(())
+    }
+
+    #[test]
+    fn existing_connection_returns_stored_device_without_repairing_or_rebinding()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let root = temp_root("existing-return")?;
+        let path = root.join("binding.json");
+        let uri = completion_uri()?;
+        assert_eq!(
+            super::existing_binding_return(&path, "https://control.example.com", uri.tenant_id())?,
+            None
+        );
+        persist_binding(&path, &uri)?;
+        let before = fs::read(&path)?;
+        assert_eq!(super::existing_binding_return(&path, "https://control.example.com", uri.tenant_id())?, Some("https://control.example.com/devices?tenant=tenant_01JPAIR#connected=device_01JPAIR".to_owned()));
+        let foreign = profile_platform_primitives::TenantId::parse("tenant_another")?;
+        assert_eq!(
+            super::existing_binding_return(&path, "https://control.example.com", &foreign),
+            Err(DevicePairingBootstrapError::ExistingBinding)
+        );
+        assert_eq!(fs::read(&path)?, before);
+        fs::write(&path, b"corrupt")?;
+        assert_eq!(
+            super::existing_binding_return(&path, "https://control.example.com", uri.tenant_id()),
+            Err(DevicePairingBootstrapError::BindingStorage)
+        );
+        assert_eq!(fs::read(&path)?, b"corrupt");
         fs::remove_dir_all(root)?;
         Ok(())
     }

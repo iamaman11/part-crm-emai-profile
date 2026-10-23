@@ -53,6 +53,7 @@ impl ManagedCamouhostConfig {
         }
         let mut command = Command::new(&self.python_executable);
         command
+            .arg("-B")
             .arg(&entrypoint)
             .arg("--materialize-identity")
             .arg(workspace.path())
