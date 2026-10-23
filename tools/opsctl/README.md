@@ -80,6 +80,13 @@ Important distinctions:
   `inspect`, `verify` and `compatibility` remain local policy/artifact verification.
 - `promotion plan`, `preflight` and `verify` evaluate saved snapshots/evidence. They do not deploy,
   promote or roll back anything.
+  `promotion preflight` output v2 records the native recovery strategy. An exact CURRENT staging
+  target on its canonical observed Catalog schema may require `CURRENT_FORWARD_ONLY` when the
+  actually deployed original release cannot run that schema. Its rollback diagnostic remains
+  `INCOMPATIBLE`; the manifest is never widened. Unknown state, unrelated rollback failures,
+  noncanonical targets and Production keep their strict blockers. Existing READY evidence binds
+  the choice unchanged through authorization. Failed/ambiguous attempts require fresh observation
+  and separate exact recovery authorization; no automatic retry or previous-code rollback is added.
 
 There are no placeholder command families. An unrecognized command fails closed; future functionality
 is added only with an owning consumer, invariant and accepted bounded transaction.

@@ -205,6 +205,10 @@ exact pinned certificate and Rust `TrustedSignerSet` admission/rotation/revocati
 floors, checked component digests, archive admission and guarded activation. This application key
 is separate from the user's non-exportable CNG device key and Cloudflare human identity. The CMS
 adapter does not consult Windows CA trust, mutate certificate stores or enroll a machine certificate.
+Verification calls Windows Crypt32 directly through the isolated native platform adapter. It starts
+no PowerShell process and creates no signature scratch files. Exactly one signer, SHA-256 and the
+application-admitted certificate pin remain mandatory; malformed, tampered, weak-digest and multiple-
+signer inputs fail closed. PowerShell signing remains confined to CI and ephemeral test-fixture creation.
 
 `scripts/windows-delivery-sign.ps1` is a CI-only cryptographic effect adapter, called only by the
 accepted-main protected publication job. The staging signing key is injected solely into its step,

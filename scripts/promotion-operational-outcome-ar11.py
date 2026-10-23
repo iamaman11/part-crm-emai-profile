@@ -128,8 +128,9 @@ def valid_preflight(value: dict[str, Any]) -> bool:
     decision = value.get("decision")
     rollback_compatibility = value.get("rollback_compatibility")
     return (
-        value.get("schema_version") == 1
+        value.get("schema_version") == 2
         and value.get("command") == "promotion.preflight"
+        and value.get("recovery_strategy") in {"VERIFIED_ROLLBACK", "CURRENT_FORWARD_ONLY", "FRESH_BASELINE"}
         and isinstance(ready, bool)
         and decision in {"READY", "BLOCKED"}
         and ready == (decision == "READY")
@@ -148,6 +149,7 @@ def valid_ready(value: dict[str, Any], source_sha: str, release_set_id: str) -> 
     return (
         value.get("schema_version") == 1
         and value.get("kind") == "AR11_READY_TO_MUTATE"
+        and value.get("recovery_strategy") in {"VERIFIED_ROLLBACK", "CURRENT_FORWARD_ONLY", "FRESH_BASELINE"}
         and value.get("ready") is True
         and value.get("source_sha") == source_sha
         and value.get("release_set_id") == release_set_id
@@ -166,7 +168,7 @@ def first(values: list[str]) -> str | None:
 def preflight_required_actions(preflight: dict[str, Any]) -> list[str]:
     actions: list[str] = []
     rollback_remediation = preflight["rollback_diagnostic"]["remediation"]
-    if rollback_remediation != "NONE":
+    if rollback_remediation != "NONE" and any(code.startswith("ROLLBACK_") for code in preflight["blockers"]):
         actions.append(rollback_remediation)
     for action in preflight["required_steps"]:
         if action not in actions:
@@ -343,13 +345,14 @@ def compose(
             base,
             phase="PROMOTION_PREFLIGHT",
             owner="opsctl.promotion.preflight",
-            owner_contract="promotion.preflight/v1",
+            owner_contract="promotion.preflight/v2",
             reasons=preflight["blockers"],
             diagnostic=preflight,
             required_actions=preflight_required_actions(preflight),
         )
 
-    if ready is None or not valid_ready(ready, source_sha, release_set_id):
+    if (ready is None or not valid_ready(ready, source_sha, release_set_id)
+            or ready.get("recovery_strategy") != preflight["recovery_strategy"]):
         return infrastructure_failure(base, "READ_ONLY_READY_EVIDENCE", states["ready"])
     base["promotion_id"] = ready["promotion_id"]
     return {
@@ -358,7 +361,7 @@ def compose(
         "phase": "AUTHORIZATION_BOUNDARY",
         "failed_gate": None,
         "owner": "opsctl.promotion.preflight",
-        "owner_contract": "promotion.preflight/v1",
+        "owner_contract": "promotion.preflight/v2",
         "owner_reason_code": "READY",
         "owner_reason_codes": ["READY"],
         "owner_required_actions": [],
@@ -741,8 +744,9 @@ def fixture_inputs() -> dict[str, dict[str, Any]]:
             "mutation_executed": False,
         },
         "preflight": {
-            "schema_version": 1,
+            "schema_version": 2,
             "command": "promotion.preflight",
+            "recovery_strategy": "VERIFIED_ROLLBACK",
             "decision": "READY",
             "ready": True,
             "promotion_id": promotion_id,
@@ -762,6 +766,7 @@ def fixture_inputs() -> dict[str, dict[str, Any]]:
         "ready": {
             "schema_version": 1,
             "kind": "AR11_READY_TO_MUTATE",
+            "recovery_strategy": "VERIFIED_ROLLBACK",
             "ready": True,
             "source_sha": "a" * 40,
             "release_set_id": "release-set-v3-sha256-" + "c" * 64,
@@ -845,6 +850,21 @@ def cli_file_boundary_case(values: dict[str, dict[str, Any]]) -> dict[str, Any]:
 
 def self_test() -> None:
     base = fixture_inputs()
+    for invalid in [
+        {**base["preflight"], "schema_version": 1},
+        {**base["preflight"], "recovery_strategy": None},
+        {**base["preflight"], "recovery_strategy": "CALLER_BYPASS"},
+    ]:
+        values = {key: dict(value) for key, value in base.items()}
+        values["preflight"] = invalid
+        outcome = fixture_compose(values)
+        assert outcome["status"] == "INFRASTRUCTURE_FAILURE" and outcome["phase"] == "PROMOTION_PREFLIGHT"
+        assert_zero_effect(outcome)
+    values = {key: dict(value) for key, value in base.items()}
+    values["ready"]["recovery_strategy"] = "CURRENT_FORWARD_ONLY"
+    outcome = fixture_compose(values)
+    assert outcome["status"] == "INFRASTRUCTURE_FAILURE" and outcome["phase"] == "READ_ONLY_READY_EVIDENCE"
+    assert_zero_effect(outcome)
 
     outcome = fixture_compose(base)
     assert outcome["status"] == "READ_ONLY_READY"

@@ -36,6 +36,24 @@ pub enum RollbackDecision {
     NotApplicable,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PromotionRecoveryStrategy {
+    VerifiedRollback,
+    CurrentForwardOnly,
+    FreshBaseline,
+}
+
+impl PromotionRecoveryStrategy {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::VerifiedRollback => "VERIFIED_ROLLBACK",
+            Self::CurrentForwardOnly => "CURRENT_FORWARD_ONLY",
+            Self::FreshBaseline => "FRESH_BASELINE",
+        }
+    }
+}
+
 impl RollbackDecision {
     #[must_use]
     pub const fn as_str(self) -> &'static str {
@@ -130,6 +148,7 @@ pub struct PreflightResult {
     pub required_steps: Vec<String>,
     pub rollback_compatibility: String,
     pub rollback_diagnostic: RollbackDiagnostic,
+    pub recovery_strategy: PromotionRecoveryStrategy,
 }
 
 impl PreflightResult {
@@ -141,7 +160,7 @@ impl PreflightResult {
         environment: &str,
     ) -> Value {
         json!({
-            "schema_version": 1,
+            "schema_version": 2,
             "command": "promotion.preflight",
             "decision": if self.ready { "READY" } else { "BLOCKED" },
             "ready": self.ready,
@@ -151,6 +170,7 @@ impl PreflightResult {
             "target_capability_profile_id": target_profile_id,
             "rollback_compatibility": self.rollback_compatibility,
             "rollback_diagnostic": self.rollback_diagnostic.machine_json(),
+            "recovery_strategy": self.recovery_strategy.as_str(),
             "blockers": self.blockers,
             "warnings": self.warnings,
             "required_steps": self.required_steps,
@@ -234,6 +254,11 @@ fn preflight_from_plan(
         ));
     }
 
+    let mut recovery_strategy = if request.snapshot.release_set_id.is_some() {
+        PromotionRecoveryStrategy::VerifiedRollback
+    } else {
+        PromotionRecoveryStrategy::FreshBaseline
+    };
     let rollback_diagnostic = if request.snapshot.release_set_id.is_some() {
         match (request.current_release, request.known_good_release) {
             (Some(_), Some(known_good)) => {
@@ -245,17 +270,30 @@ fn preflight_from_plan(
                     plan.closure.required_resources.contains("resolver_d1"),
                     request.environment == "production",
                 );
-                match diagnostic.decision {
-                    RollbackDecision::Compatible => {}
-                    RollbackDecision::Incompatible => {
-                        blockers.push("ROLLBACK_INCOMPATIBLE".to_owned());
+                if plan.compatibility.compatible
+                    && staging_current_forward_recovery(
+                        &request,
+                        &diagnostic,
+                        plan.closure.required_resources.contains("resolver_d1"),
+                    )?
+                {
+                    recovery_strategy = PromotionRecoveryStrategy::CurrentForwardOnly;
+                    warnings.push(
+                        "previous code is Catalog-incompatible; staging recovery may only converge to this exact verified CURRENT target, with fresh authorization after any failed or ambiguous attempt; previous-code rollback is forbidden".to_owned(),
+                    );
+                } else {
+                    match diagnostic.decision {
+                        RollbackDecision::Compatible => {}
+                        RollbackDecision::Incompatible => {
+                            blockers.push("ROLLBACK_INCOMPATIBLE".to_owned());
+                        }
+                        RollbackDecision::Unknown => {
+                            blockers.push("ROLLBACK_COMPATIBILITY_UNKNOWN".to_owned());
+                        }
+                        RollbackDecision::NotApplicable => unreachable!(
+                            "rollback candidate evaluation is only called for an existing deployment"
+                        ),
                     }
-                    RollbackDecision::Unknown => {
-                        blockers.push("ROLLBACK_COMPATIBILITY_UNKNOWN".to_owned());
-                    }
-                    RollbackDecision::NotApplicable => unreachable!(
-                        "rollback candidate evaluation is only called for an existing deployment"
-                    ),
                 }
                 diagnostic
             }
@@ -322,7 +360,54 @@ fn preflight_from_plan(
         required_steps,
         rollback_compatibility,
         rollback_diagnostic,
+        recovery_strategy,
     })
+}
+
+/// A current staging update must not acquire an obligation to run obsolete code.
+/// This never widens the previous manifest or changes its rollback verdict. Production,
+/// unknown observations and every non-Catalog rollback failure keep their strict gates.
+fn staging_current_forward_recovery(
+    request: &PreflightRequest<'_>,
+    diagnostic: &RollbackDiagnostic,
+    resolver_required: bool,
+) -> Result<bool, ReleaseModelError> {
+    if request.environment != "staging"
+        || diagnostic.decision != RollbackDecision::Incompatible
+        || diagnostic.reason_code != "CATALOG_SCHEMA_UNSUPPORTED"
+    {
+        return Ok(false);
+    }
+    let (Some(current), Some(previous)) = (request.current_release, request.known_good_release)
+    else {
+        return Ok(false);
+    };
+    if Some(current.release_set_id()) != request.snapshot.release_set_id.as_deref()
+        || previous.release_set_id() != current.release_set_id()
+        || current.release_set_id() == request.target.release_set_id()
+        || evaluate_non_catalog_rollback(
+            previous.semantic(),
+            request.snapshot,
+            resolver_required,
+            false,
+        )
+        .decision
+            != RollbackDecision::Compatible
+    {
+        return Ok(false);
+    }
+    let canonical = crate::d1::release_schema_identity(request.root, "catalog")
+        .map_err(|error| ReleaseModelError::new(error.to_string()))?;
+    let target = &request.target.semantic().schemas.catalog;
+    Ok(target.database_component == canonical.database_component
+        && target.target_schema_revision == canonical.target_schema_revision
+        && target.supported_schema_min == canonical.supported_schema_min
+        && target.supported_schema_max == canonical.supported_schema_max
+        && target.migration_history_digest == canonical.migration_history_digest
+        && target.compatibility_policy_digest == canonical.compatibility_policy_digest
+        && request.snapshot.catalog_schema_revision.as_deref()
+            == Some(canonical.target_schema_revision.as_str())
+        && request.snapshot.catalog_ledger_sha256.is_some())
 }
 
 /// Evaluate whether an immutable previously verified Release Set can run against the
@@ -377,6 +462,20 @@ fn evaluate_rollback_candidate_diagnostic(
         }
     }
 
+    evaluate_non_catalog_rollback(
+        known_good,
+        snapshot,
+        resolver_required,
+        windows_delivery_required,
+    )
+}
+
+fn evaluate_non_catalog_rollback(
+    known_good: &crate::release::document::ReleaseCompatibilityView,
+    snapshot: &DeploymentSnapshot,
+    resolver_required: bool,
+    windows_delivery_required: bool,
+) -> RollbackDiagnostic {
     if resolver_required {
         let Some(resolver_revision) = snapshot.resolver_schema_revision.as_deref() else {
             return RollbackDiagnostic::unknown(
@@ -569,8 +668,8 @@ fn difference(left: &BTreeSet<String>, right: &BTreeSet<String>) -> Vec<String> 
 #[cfg(test)]
 mod tests {
     use super::{
-        PreflightResult, RollbackDiagnostic, evaluate_rollback_candidate,
-        evaluate_rollback_candidate_diagnostic,
+        PreflightResult, PromotionRecoveryStrategy, RollbackDiagnostic,
+        evaluate_rollback_candidate, evaluate_rollback_candidate_diagnostic,
     };
     use crate::promotion::snapshot::DeploymentSnapshot;
     use crate::release::digest::{canonical_json, sha256_hex};
@@ -885,6 +984,7 @@ mod tests {
             warnings: Vec::new(),
             required_steps: Vec::new(),
             rollback_compatibility: "INCOMPATIBLE".to_owned(),
+            recovery_strategy: PromotionRecoveryStrategy::VerifiedRollback,
             rollback_diagnostic: RollbackDiagnostic::incompatible(
                 "CATALOG_SCHEMA_UNSUPPORTED",
                 "rollback cannot run against the observed Catalog schema",

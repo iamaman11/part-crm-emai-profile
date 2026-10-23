@@ -303,6 +303,213 @@ fn converged_staging_plan_is_no_change_and_preflight_ready()
 }
 
 #[test]
+fn staging_current_target_has_forward_recovery_after_the_actual_f54_schema_window()
+-> Result<(), Box<dyn std::error::Error>> {
+    let root = repo_root();
+    let target = release_set()?;
+    let mut prior = target.current_v3()?.clone();
+    // Original published F54 schema identity; never widen its immutable runtime window.
+    prior.schemas.catalog.target_schema_revision = "0034_device_application_authority.sql".into();
+    prior.schemas.catalog.supported_schema_min = "0034_device_application_authority.sql".into();
+    prior.schemas.catalog.supported_schema_max =
+        "0035_pas2_payload_fingerprint_contract.sql".into();
+    prior.schemas.catalog.migration_history_digest =
+        "f8915315dfacefaba7d122f7e79634a8c49f75993bc49b4fef8522ac470a68ae".into();
+    prior.schemas.catalog.compatibility_policy_digest =
+        "7d84cba14dbff39b9ee52ed81d9855089089363600938fa1f6791503c9903047".into();
+    let rendered = render_release_set_v3(&prior)?;
+    let original = rendered.canonical_document_bytes.clone();
+    let current = LoadedReleaseSet::parse(&original)?;
+    let mut snapshot = converged_snapshot("staging", "rehearsal-core-v2", &current)?;
+    snapshot.catalog_schema_revision = Some(
+        target
+            .semantic()
+            .schemas
+            .catalog
+            .target_schema_revision
+            .clone(),
+    );
+    let compatibility = evidence(target.release_set_id(), "UNKNOWN")?;
+    let result = preflight(PreflightRequest {
+        root: &root,
+        source_root: &root,
+        target: &target,
+        target_profile_id: "rehearsal-core-v2",
+        environment: "staging",
+        snapshot: &snapshot,
+        compatibility_evidence: &compatibility,
+        current_release: Some(&current),
+        known_good_release: Some(&current),
+        expected_current_release_set_id: Some(current.release_set_id()),
+    })?;
+    assert!(
+        result.ready,
+        "current forward handoff blocked: {:?}",
+        result.blockers
+    );
+    assert_eq!(result.rollback_compatibility, "INCOMPATIBLE");
+    assert_eq!(
+        result.rollback_diagnostic.reason_code,
+        "CATALOG_SCHEMA_UNSUPPORTED"
+    );
+    assert_eq!(result.recovery_strategy.as_str(), "CURRENT_FORWARD_ONLY");
+    let machine = result.machine_json(target.release_set_id(), "rehearsal-core-v2", "staging");
+    assert_eq!(machine["schema_version"], 2);
+    let python = if cfg!(windows) { "python" } else { "python3" };
+    let output = std::process::Command::new(python)
+        .arg("-c")
+        .arg(
+            r#"import json,runpy,sys
+from pathlib import Path
+owner=runpy.run_path(str(Path(sys.argv[1])/'scripts/promotion-operational-outcome-ar11.py'))
+values=owner['fixture_inputs']()
+values['preflight']=json.loads(sys.argv[2])
+values['ready']['recovery_strategy']=values['preflight']['recovery_strategy']
+outcome=owner['fixture_compose'](values)
+assert outcome['status']=='READ_ONLY_READY', outcome
+assert outcome['owner_contract']=='promotion.preflight/v2'
+assert outcome['owner_diagnostic']==values['preflight']
+assert outcome['owner_diagnostic']['rollback_compatibility']=='INCOMPATIBLE'
+print(json.dumps(outcome))"#,
+        )
+        .arg(&root)
+        .arg(serde_json::to_string(&machine)?)
+        .output()?;
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    // Unknown state, missing immutable provenance, and the Production boundary stay closed.
+    for missing in [
+        "revision",
+        "current",
+        "previous",
+        "binding",
+        "ledger",
+        "other-revision",
+        "protocol",
+        "protocol-mismatch",
+        "contracts",
+        "contracts-mismatch",
+    ] {
+        let mut observed = snapshot.clone();
+        if missing == "revision" {
+            observed.catalog_schema_revision = None;
+        }
+        if missing == "binding" {
+            observed.logical_bindings.clear();
+        }
+        if missing == "ledger" {
+            observed.catalog_ledger_sha256 = None;
+        }
+        if missing == "other-revision" {
+            observed.catalog_schema_revision = Some("unknown.sql".into());
+        }
+        if missing == "protocol" {
+            observed.camouhost_ipc_version = None;
+        }
+        if missing == "protocol-mismatch" {
+            observed.camouhost_ipc_version = Some(u64::MAX);
+        }
+        if missing == "contracts" {
+            observed.contracts_sha256 = None;
+        }
+        if missing == "contracts-mismatch" {
+            observed.contracts_sha256 = Some("0".repeat(64));
+        }
+        let blocked = preflight(PreflightRequest {
+            root: &root,
+            source_root: &root,
+            target: &target,
+            target_profile_id: "rehearsal-core-v2",
+            environment: "staging",
+            snapshot: &observed,
+            compatibility_evidence: &compatibility,
+            current_release: if missing == "current" {
+                None
+            } else {
+                Some(&current)
+            },
+            known_good_release: if missing == "previous" {
+                None
+            } else {
+                Some(&current)
+            },
+            expected_current_release_set_id: Some(current.release_set_id()),
+        })?;
+        assert!(!blocked.ready, "unknown {missing} acquired readiness");
+    }
+    // An independently compatible known-good artifact uses the original rollback policy.
+    let verified_rollback = preflight(PreflightRequest {
+        root: &root,
+        source_root: &root,
+        target: &target,
+        target_profile_id: "rehearsal-core-v2",
+        environment: "staging",
+        snapshot: &snapshot,
+        compatibility_evidence: &compatibility,
+        current_release: Some(&current),
+        known_good_release: Some(&target),
+        expected_current_release_set_id: Some(current.release_set_id()),
+    })?;
+    assert_eq!(
+        verified_rollback.recovery_strategy.as_str(),
+        "VERIFIED_ROLLBACK"
+    );
+    assert_eq!(verified_rollback.rollback_compatibility, "COMPATIBLE");
+    let mut altered = target.current_v3()?.clone();
+    altered.schemas.catalog.migration_history_digest = "0".repeat(64);
+    let altered_bytes = render_release_set_v3(&altered)?.canonical_document_bytes;
+    let altered = LoadedReleaseSet::parse(&altered_bytes)?;
+    let altered_evidence = evidence(altered.release_set_id(), "UNKNOWN")?;
+    let rejected = preflight(PreflightRequest {
+        root: &root,
+        source_root: &root,
+        target: &altered,
+        target_profile_id: "rehearsal-core-v2",
+        environment: "staging",
+        snapshot: &snapshot,
+        compatibility_evidence: &altered_evidence,
+        current_release: Some(&current),
+        known_good_release: Some(&current),
+        expected_current_release_set_id: Some(current.release_set_id()),
+    });
+    assert!(
+        !rejected.is_ok_and(|value| value.ready),
+        "substituted target lineage acquired readiness"
+    );
+    let mut production = converged_snapshot("production", "production-core-v2", &current)?;
+    production.catalog_schema_revision = snapshot.catalog_schema_revision.clone();
+    let production_evidence = evidence(target.release_set_id(), "COMPATIBLE")?;
+    let blocked = preflight(PreflightRequest {
+        root: &root,
+        source_root: &root,
+        target: &target,
+        target_profile_id: "production-core-v2",
+        environment: "production",
+        snapshot: &production,
+        compatibility_evidence: &production_evidence,
+        current_release: Some(&current),
+        known_good_release: Some(&current),
+        expected_current_release_set_id: Some(current.release_set_id()),
+    })?;
+    assert!(
+        !blocked.ready
+            && blocked
+                .blockers
+                .iter()
+                .any(|reason| reason == "ROLLBACK_INCOMPATIBLE")
+    );
+    assert_eq!(blocked.recovery_strategy.as_str(), "VERIFIED_ROLLBACK");
+    assert_eq!(
+        render_release_set_v3(current.current_v3()?)?.canonical_document_bytes,
+        original
+    );
+    Ok(())
+}
+
+#[test]
 fn production_remains_blocked_even_with_compatible_saved_evidence()
 -> Result<(), Box<dyn std::error::Error>> {
     let root = repo_root();

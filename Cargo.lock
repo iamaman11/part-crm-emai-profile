@@ -750,6 +750,7 @@ dependencies = [
  "serde_json",
  "session-domain",
  "sha2",
+ "windows-delivery-signature",
  "windows-desktop-ui",
  "windows-device-key",
  "zeroize",
@@ -1161,6 +1162,13 @@ checksum = "8622dcb61c0bcc9fffa6938bed81210af2da9a7e4a1a834b2e37a59b6dfb6141"
 dependencies = [
  "js-sys",
  "wasm-bindgen",
+]
+
+[[package]]
+name = "windows-delivery-signature"
+version = "0.1.0"
+dependencies = [
+ "sha2",
 ]
 
 [[package]]

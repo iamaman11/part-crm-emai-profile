@@ -309,6 +309,9 @@ function promotionErrors(promotion) {
     '.admission_mode == $mode',
     'promotion plan',
     'promotion preflight',
+    '.schema_version == 2 and .command == "promotion.preflight"',
+    'recovery_strategy:$recovery_strategy',
+    '--arg recovery_strategy "$(jq -er',
     'Prove bounded Worker and D1 quiescence',
     'sleep 30',
     'cmp --silent "$RUNNER_TEMP/worker-binding-before.json" "$RUNNER_TEMP/worker-binding-after.json"',
@@ -363,6 +366,9 @@ function promotionErrors(promotion) {
     'READY_EVIDENCE_SHA256',
     "WORKER_PROMOTION_AUTHORIZATION_V2",
     'Download and verify exact prior READY_TO_MUTATE authority',
+    'native_recovery="$(jq -er',
+    '.recovery_strategy == $recovery',
+    "jq -er '.promotion_preflight_sha256'",
     'gh run download "$READY_RUN_ID"',
     'target_capability_profile_id',
     'expected_current_capability_profile_id',
@@ -583,6 +589,14 @@ function validateAll({ build, promotion, camoufox, camoufoxClassifier, authority
 
 function selfTest(files) {
   void AR11_N24_CERTIFICATION_LOCATOR;
+  const missingRecovery = files.promotion.replace('.recovery_strategy == $recovery', 'true');
+  if (!promotionErrors(missingRecovery).some((error) => error.includes('authorized READY binder'))) {
+    throw new Error('missing native recovery binding fixture passed');
+  }
+  const missingRecoveryProjection = files.promotion.replace('recovery_strategy:$recovery_strategy', 'recovery_strategy:null');
+  if (!promotionErrors(missingRecoveryProjection).some((error) => error.includes('pre-authorization READY proof'))) {
+    throw new Error('missing native recovery projection fixture passed');
+  }
   const badSecret = files.promotion.replace('secret list --format json', 'secret list --name "$worker_name" --format json');
   if (secretObservationErrors(jobBlock(badSecret, 'preflight-ready'), 'fixture').length === 0) {
     throw new Error('redundant Worker-name secret observation fixture passed');
@@ -686,7 +700,7 @@ function selfTest(files) {
   if (!promotionErrors(weakManualSuccess).some((error) => error.includes('manual terminal outcome'))) {
     throw new Error('manual success-without-COMPLETED fixture unexpectedly passed');
   }
-  const legacyFixture = legacyAuthorityErrors((candidate) => candidate.endsWith(LEGACY_FILES[0]));
+  const legacyFixture = legacyAuthorityErrors((candidate) => candidate === path.join(ROOT, LEGACY_FILES[0]));
   if (legacyFixture.length !== 1 || !legacyFixture[0].includes('legacy D3 operational authority must be retired after Rust cutover')) {
     throw new Error('retired D3 operational authority restoration fixture passed');
   }

@@ -64,6 +64,21 @@ try {
         [System.IO.File]::WriteAllBytes($SignaturePath, $signature)
         $pin = $public.certificate_sha256
         [System.IO.File]::WriteAllText($PinPath, $pin)
+        # Different signer counts and digest algorithms must remain rejected by the native adapter.
+        $content = [System.Security.Cryptography.Pkcs.ContentInfo]::new(
+            [System.IO.File]::ReadAllBytes($ManifestPath)
+        )
+        $signer = [System.Security.Cryptography.Pkcs.CmsSigner]::new($certificate)
+        $signer.IncludeOption = [System.Security.Cryptography.X509Certificates.X509IncludeOption]::EndCertOnly
+        $signer.DigestAlgorithm = [System.Security.Cryptography.Oid]::new('1.3.14.3.2.26')
+        $weak = [System.Security.Cryptography.Pkcs.SignedCms]::new($content, $true)
+        $weak.ComputeSignature($signer)
+        [System.IO.File]::WriteAllBytes(($SignaturePath + '.sha1'), $weak.Encode())
+        $signer.DigestAlgorithm = [System.Security.Cryptography.Oid]::new('2.16.840.1.101.3.4.2.1')
+        $multiple = [System.Security.Cryptography.Pkcs.SignedCms]::new($content, $true)
+        $multiple.ComputeSignature($signer)
+        $multiple.ComputeSignature($signer)
+        [System.IO.File]::WriteAllBytes(($SignaturePath + '.multiple'), $multiple.Encode())
     }
     finally {
         $certificate.Dispose()
@@ -103,6 +118,8 @@ impl Drop for TestDirectory {
 struct SigningFixture {
     signature: Vec<u8>,
     certificate_sha256: String,
+    sha1_signature: Vec<u8>,
+    multiple_signatures: Vec<u8>,
 }
 
 impl SigningFixture {
@@ -129,6 +146,8 @@ impl SigningFixture {
         )?;
 
         let signature = fs::read(&signature_path)?;
+        let sha1_signature = fs::read(directory.join("fixture-signature.p7s.sha1"))?;
+        let multiple_signatures = fs::read(directory.join("fixture-signature.p7s.multiple"))?;
         let certificate_sha256 = fs::read_to_string(&pin_path)?;
         if signature.is_empty()
             || certificate_sha256.len() != 64
@@ -144,6 +163,8 @@ impl SigningFixture {
         Ok(Self {
             signature,
             certificate_sha256,
+            sha1_signature,
+            multiple_signatures,
         })
     }
 }
@@ -225,7 +246,7 @@ fn production_verifier_accepts_only_exact_pinned_application_signature() -> Test
     let directory = TestDirectory::create()?;
     let manifest = br#"{"kind":"CMS_ACCEPTANCE","sequence":1}"#;
     let fixture = SigningFixture::create(&directory.0, manifest)?;
-    let mut verifier = WindowsCmsSignatureVerifier::from_system(directory.0.clone())?;
+    let mut verifier = WindowsCmsSignatureVerifier;
     assert!(verifier.verify_cms(manifest, &fixture.signature, &fixture.certificate_sha256)?);
     assert!(!verifier.verify_cms(
         br#"{"kind":"CMS_ACCEPTANCE","sequence":2}"#,
@@ -238,5 +259,16 @@ fn production_verifier_accepts_only_exact_pinned_application_signature() -> Test
     tampered[last] ^= 1;
     assert!(!verifier.verify_cms(manifest, &tampered, &fixture.certificate_sha256)?);
     assert!(!verifier.verify_cms(manifest, b"unsigned", &fixture.certificate_sha256)?);
+    assert!(!verifier.verify_cms(
+        manifest,
+        &fixture.sha1_signature,
+        &fixture.certificate_sha256
+    )?);
+    assert!(!verifier.verify_cms(
+        manifest,
+        &fixture.multiple_signatures,
+        &fixture.certificate_sha256
+    )?);
+    assert!(!verifier.verify_cms(manifest, &[0x30, 0], &fixture.certificate_sha256)?);
     Ok(())
 }
