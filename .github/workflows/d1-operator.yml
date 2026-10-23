@@ -142,6 +142,131 @@ jobs:
           for index, block in enumerate(blocks, start=1):
               body = block.split(terminator, 1)[0]
               ast.parse(textwrap.dedent(body), filename=f'd1-operator-inline-{index}.py')
+
+          # Execute the actual caller functions; string-presence checks cannot prove transport.
+          import hashlib, io, json, re, tarfile, tempfile, time
+          operator = ast.parse(textwrap.dedent(blocks[-1].split(terminator, 1)[0]))
+          selected = {'TypedStop', 'latest_executor_epoch', 'transaction_artifact',
+                      'resolve_transaction_state', 'extract_target_manifest', 'build_prepare_payload'}
+          definitions = [node for node in operator.body
+                         if isinstance(node, (ast.FunctionDef, ast.ClassDef)) and node.name in selected]
+          assert len(definitions) == len(selected)
+          bindings = dict(Path=Path, hashlib=hashlib, json=json, re=re, tarfile=tarfile,
+                          tempfile=tempfile, time=time, SOURCE='a' * 40, REPO='owner/repository',
+                          PREPARE_WORKFLOW='prepare', EXECUTOR_WORKFLOW='executor', OPSCTL='offline-owner')
+          exec(compile(ast.Module(body=definitions, type_ignores=[]), 'actual-d1-operator', 'exec'), bindings)
+          transaction_id = 'b' * 64
+          run = {'id': 7, 'run_attempt': 1, 'head_sha': 'c' * 40, 'created_at': 10,
+                 'event': 'workflow_dispatch', 'status': 'completed', 'conclusion': 'success'}
+          artifact = {'name': 'd1-transaction-catalog-7-1', 'expired': False}
+          fixture_artifacts = []
+          fixture_executors = []
+          calls = []
+          reason = ['SOURCE_TREE_TRANSACTION_DRIFT']
+          bindings['epoch'] = int
+          bindings['workflow_runs'] = lambda workflow, *args: [run] if workflow == 'prepare' else fixture_executors
+          bindings['artifacts'] = lambda run_id: fixture_artifacts
+          bindings['executor_input_artifact'] = lambda *args: {'name': 'sealed-inputs'}
+          def download_fixture(run_id, name, directory):
+              Path(directory, 'transaction.json').write_text(json.dumps({'transaction_id': transaction_id}), encoding='utf-8')
+              return True
+          bindings['download'] = download_fixture
+          def verification_fixture(path, now):
+              calls.append('verify')
+              raise bindings['TypedStop'](None, 'native source drift',
+                                          owner_diagnostic={'reason_code': reason[0]})
+          bindings['verify_transaction'] = verification_fixture
+          def must_stop(action, expected):
+              try:
+                  action()
+              except SystemExit as error:
+                  assert expected in str(error), (expected, str(error))
+              else:
+                  raise AssertionError('actual operator unexpectedly accepted: ' + expected)
+          resolve = bindings['resolve_transaction_state']
+          # No immutable transaction remains: an old workflow success is provenance, not live state.
+          assert resolve() == {'fresh': None, 'barrier': None}
+          fixture_artifacts[:] = [dict(artifact, expired=True)]
+          assert resolve() == {'fresh': None, 'barrier': None}
+          # Missing current-source or ambiguous retained evidence must still fail closed.
+          run['head_sha'] = bindings['SOURCE']
+          fixture_artifacts[:] = []
+          must_stop(resolve, 'missing/ambiguous transaction artifact')
+          fixture_artifacts[:] = [dict(artifact, expired=True)]
+          must_stop(resolve, 'missing/ambiguous transaction artifact')
+          run['head_sha'] = None
+          fixture_artifacts[:] = []
+          must_stop(resolve, 'missing/ambiguous transaction artifact')
+          run['head_sha'] = 'c' * 40
+          fixture_artifacts[:] = [{'name': 'unrelated-retained-evidence', 'expired': False}]
+          must_stop(resolve, 'missing/ambiguous transaction artifact')
+          fixture_artifacts[:] = [artifact, dict(artifact)]
+          must_stop(resolve, 'missing/ambiguous transaction artifact')
+          # A retained predecessor from another source still reaches its typed refresh barrier.
+          fixture_artifacts[:] = [artifact]
+          state = resolve()
+          assert state['fresh'] is None and state['barrier']['barrier_cause'] == 'SOURCE_TREE_TRANSACTION_DRIFT'
+          assert state['barrier']['transaction']['transaction_id'] == transaction_id and calls == ['verify']
+          run['head_sha'] = bindings['SOURCE']
+          reason[0] = 'STALE_OBSERVATION'
+          state = resolve()
+          assert state['barrier']['barrier_cause'] == 'STALE_OBSERVATION' and calls == ['verify', 'verify']
+          fixture_executors[:] = [{'event': 'workflow_dispatch', 'path': '.github/workflows/d1-migration-executor.yml', 'created_at': 11}]
+          state = resolve()
+          assert state['barrier']['barrier_cause'] == 'EXECUTOR_ATTEMPT_AFTER_PREPARE' and calls == ['verify', 'verify']
+
+          with tempfile.TemporaryDirectory(prefix='operator-transport-proof-') as temporary:
+              root = Path(temporary)
+              manifest_raw = json.dumps({'schema_contract': {
+                  'database_component': 'catalog', 'target_schema_revision': 'current.sql'}}).encode()
+              release_source = [bindings['SOURCE']]
+              corrupt_archive = [False]
+              observed_plan = {'component': 'catalog', 'target_revision': 'current.sql'}
+              (root / 'target-release-set-id.txt').write_text('immutable-release', encoding='utf-8')
+              observed = {'directory': root, 'run': {'id': 1}, 'attempt': 1, 'job_id': 2, 'artifact_id': 3}
+              bindings['current_tree'] = lambda: 'd' * 40
+              def prepare_fixture():
+                  (root / 'prepare.json').write_text(json.dumps({'status': 'PREPARE_READY', 'plan': observed_plan}), encoding='utf-8')
+              def shell_fixture(args, **kwargs):
+                  if args[:3] == ['gh', 'release', 'download']:
+                      destination = Path(args[args.index('--dir') + 1])
+                      archive = destination / 'control-plane.tar'
+                      with tarfile.open(archive, 'w') as handle:
+                          member = tarfile.TarInfo('release-manifest.json')
+                          member.size = len(manifest_raw)
+                          handle.addfile(member, io.BytesIO(manifest_raw))
+                      component = {'artifact_sha256': hashlib.sha256(archive.read_bytes()).hexdigest(),
+                                   'component_manifest_sha256': hashlib.sha256(manifest_raw).hexdigest()}
+                      if corrupt_archive[0]:
+                          component['artifact_sha256'] = '0' * 64
+                      (destination / 'release-set.json').write_text(json.dumps({
+                          'schema_version': 3, 'release_set_id': 'immutable-release',
+                          'source': {'repository': bindings['REPO'], 'commit_sha': release_source[0], 'accepted_main': True},
+                          'components': {'control_plane': component}}), encoding='utf-8')
+                  else:
+                      assert args[:3] == ['python', 'scripts/d1-prepare.py', 'operator-input']
+                      assert Path(args[args.index('--release-manifest') + 1]).read_bytes() == manifest_raw
+                      projection = {'command': 'd1 operator-input', 'mode': 'read-only',
+                                    'inputs': dict(component='catalog', source_sha=bindings['SOURCE'])}
+                      Path(args[args.index('--output') + 1]).write_text(json.dumps(projection), encoding='utf-8')
+              bindings['shell'] = shell_fixture
+              prepare_fixture()
+              assert bindings['build_prepare_payload'](observed)['inputs']['source_sha'] == bindings['SOURCE']
+              observed_plan.update(target_revision='separate-contract.sql', desired_target_revision='current.sql')
+              prepare_fixture()
+              assert bindings['build_prepare_payload'](observed)['inputs']['component'] == 'catalog'
+              assert observed_plan['target_revision'] == 'separate-contract.sql'
+              observed_plan['desired_target_revision'] = 'other.sql'
+              prepare_fixture()
+              must_stop(lambda: bindings['build_prepare_payload'](observed), 'component/revision')
+              observed_plan['desired_target_revision'] = 'current.sql'
+              prepare_fixture()
+              release_source[0] = 'e' * 40
+              must_stop(lambda: bindings['build_prepare_payload'](observed), 'exact accepted main')
+              release_source[0] = bindings['SOURCE']
+              corrupt_archive[0] = True
+              must_stop(lambda: bindings['build_prepare_payload'](observed), 'archive digest mismatch')
+          print('Actual operator discovery and ordinary/staged manifest transport: positive and negative proof PASS')
           PY
 
       - name: Exercise typed transaction, admission, execution-control, and outcome adapters
@@ -519,6 +644,14 @@ jobs:
                       names = [item.get('name') for item in run_artifacts if isinstance(item.get('name'), str)]
                       if any(name.startswith('d1-reconstruction-') for name in names):
                           continue
+                      # Another source's absent/expired workflow output is history, not a transaction.
+                      # Retained evidence and current-source omissions still require exact reconciliation.
+                      historical_source = run.get('head_sha')
+                      if (isinstance(historical_source, str)
+                              and re.fullmatch(r'[0-9a-f]{40}', historical_source)
+                              and historical_source != SOURCE
+                              and (not run_artifacts or all(item.get('expired') is True for item in run_artifacts))):
+                          continue
                       raise SystemExit(f"successful ordinary Prepare run {run['id']} missing/ambiguous transaction artifact")
                   prepare_epoch = epoch(run['created_at'])
                   with tempfile.TemporaryDirectory(prefix='d1-transaction-') as directory:
@@ -706,10 +839,13 @@ jobs:
               target_revision = plan.get('target_revision')
               if prepare.get('status') != 'PREPARE_READY' or component not in {'catalog', 'resolver'} or not isinstance(target_revision, str):
                   raise SystemExit('observation preflight prepare identity is invalid')
+              desired_revision = plan.get('desired_target_revision', target_revision)
+              if not isinstance(desired_revision, str) or not desired_revision:
+                  raise SystemExit('observation preflight desired release revision is invalid')
               release_id = (directory / 'target-release-set-id.txt').read_text(encoding='utf-8').strip()
               evidence_ref = f"github-actions:run:{observed['run']['id']}:attempt:{observed['attempt']}:job:{observed['job_id']}:artifact:{observed['artifact_id']}"
               with tempfile.TemporaryDirectory(prefix='d1-release-') as release_dir:
-                  raw = extract_target_manifest(release_id, release_dir, component, target_revision)
+                  raw = extract_target_manifest(release_id, release_dir, component, desired_revision)
                   manifest_path = Path(release_dir) / 'operator-target-release.json'
                   manifest_path.write_bytes(raw)
                   output_path = Path(release_dir) / 'operator-input.json'
