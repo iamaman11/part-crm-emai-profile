@@ -181,6 +181,14 @@ predecessor is never presented as observed fact. Forward recovery explicitly for
 old runtime supports the new schema or that code rollback is safe. Candidate runtime admission remains
 false until the database satisfies the candidate's original immutable schema window.
 
+The subsequent staging Worker publication consumes the same full CURRENT target. Native Release
+preflight v2 can select `CURRENT_FORWARD_ONLY` for the exact canonical target after the observed
+Catalog reaches it, while preserving the original deployed release's `INCOMPATIBLE` rollback verdict.
+The existing READY artifact binds that recovery choice; it does not claim the previous code is safe.
+Unknown state, noncanonical targets, unrelated rollback failures and Production remain blocked.
+No migration completion grants Worker/retry/recovery authority: each exact effect retains its existing
+separate authorization and provider fence.
+
 Both stages use the same Prepare, exact authorization, sealed executor admission, durable fence, receipt
 and post-state verification. There is no unsealed CONTRACT executor alternative. The executor consumes
 the exact prepared SQL digests and phase, rechecks the observed deployment and authorization immediately
@@ -190,6 +198,9 @@ operator remains zero-input; machine-known phase/evidence/identities stay machin
 Native plan, compatibility, prewrite and post-verification outputs are retained on success and failure
 in one metadata-only gate artifact linked by the terminal operator outcome. Adapter fact-comparison
 failures remain explicitly non-policy observations; they never fabricate a native D1 verdict.
+Post-state receipt verification consumes fresh provider facts independently of admission for another
+migration: old-code incompatibility after the final stage cannot hide the completed SQL effect.
+New preparation still stops on the native blocked verdict; facts alone never authorize another effect.
 
 ## 6. Permanent Migration Operations Contract
 

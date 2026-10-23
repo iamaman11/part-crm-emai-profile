@@ -147,7 +147,8 @@ jobs:
           import hashlib, io, json, re, tarfile, tempfile, time
           operator = ast.parse(textwrap.dedent(blocks[-1].split(terminator, 1)[0]))
           selected = {'TypedStop', 'latest_executor_epoch', 'transaction_artifact',
-                      'resolve_transaction_state', 'extract_target_manifest', 'build_prepare_payload'}
+                      'resolve_transaction_state', 'extract_target_manifest', 'build_prepare_payload',
+                      'collect_observation', 'fresh_observation'}
           definitions = [node for node in operator.body
                          if isinstance(node, (ast.FunctionDef, ast.ClassDef)) and node.name in selected]
           assert len(definitions) == len(selected)
@@ -267,6 +268,34 @@ jobs:
               corrupt_archive[0] = True
               must_stop(lambda: bindings['build_prepare_payload'](observed), 'archive digest mismatch')
           print('Actual operator discovery and ordinary/staged manifest transport: positive and negative proof PASS')
+          # Post-state facts must reach native receipt verification even when old code no longer
+          # supports the new schema. New migration preparation still consumes the blocked verdict.
+          bindings['OBSERVE_WORKFLOW'] = 'observer'
+          bindings['api_post'] = lambda *args: None
+          bindings['wait_for_dispatched_run'] = lambda *args: {'id': 1, 'run_attempt': 1}
+          bindings['artifact_exact'] = lambda *args: {'id': 2}
+          bindings['gh_json'] = lambda *args: {'jobs': [{'id': 3,
+              'name': 'Isolated D1 target hosted observation and preflight', 'conclusion': 'success'}]}
+          gate = {'reason_code': 'OLD_RUNTIME_OUTSIDE_WINDOW'}
+          def blocked_observation_fixture(run_id, name, directory):
+              files = {'database-inventory.json': {}, 'runtime-context.json': {},
+                       'provider-observation.json': {'provider_observation_input': {'remote_migrations': ['current.sql']}},
+                       'prepare.json': {'status': 'PREPARE_BLOCKED', 'gate_results': [gate]},
+                       'summary.json': {'source_sha': bindings['SOURCE'], 'status': 'PREPARE_BLOCKED', 'gate_results': [gate]}}
+              for name, value in files.items():
+                  Path(directory, name).write_text(json.dumps(value), encoding='utf-8')
+              Path(directory, 'target-release-set-id.txt').write_text('immutable-release', encoding='utf-8')
+              return True
+          bindings['download'] = blocked_observation_fixture
+          facts = bindings['collect_observation']()
+          assert json.loads((facts['directory'] / 'provider-observation.json').read_text())['provider_observation_input']['remote_migrations'] == ['current.sql']
+          try:
+              bindings['fresh_observation']()
+          except bindings['TypedStop'] as stop:
+              assert stop.kind == 'PREPARE_BLOCKED' and stop.owner_diagnostic == gate
+          else:
+              raise AssertionError('blocked preparation acquired new transaction admission')
+          print('Actual post-state facts and blocked new-prepare separation PASS')
           PY
 
       - name: Exercise typed transaction, admission, execution-control, and outcome adapters
@@ -736,7 +765,7 @@ jobs:
                   time.sleep(10)
               raise SystemExit('timed out waiting for exact sole executor attempt')
 
-          def fresh_observation():
+          def collect_observation():
               start = int(time.time())
               api_post(f'repos/{REPO}/actions/workflows/{OBSERVE_WORKFLOW}/dispatches', {'ref': 'main'})
               run = wait_for_dispatched_run(OBSERVE_WORKFLOW, start, 1800)
@@ -761,6 +790,16 @@ jobs:
               preflight_ref = f"github-actions:run:{run['id']}:attempt:{attempt}:artifact:{artifact['id']}"
               if summary.get('source_sha') != SOURCE:
                   raise SystemExit('fresh observation preflight source identity drifted')
+              return {'run': run, 'attempt': attempt, 'job_id': int(hosted[0]['id']),
+                      'artifact_id': int(artifact['id']), 'directory': directory,
+                      'preflight_ref': preflight_ref}
+
+          def fresh_observation():
+              observed_result = collect_observation()
+              directory = observed_result['directory']
+              preflight_ref = observed_result['preflight_ref']
+              summary = json.loads((directory / 'summary.json').read_text(encoding='utf-8'))
+              prepare = json.loads((directory / 'prepare.json').read_text(encoding='utf-8'))
               if summary.get('status') == 'PREPARE_BLOCKED':
                   gates = prepare.get('gate_results')
                   if (prepare.get('status') != 'PREPARE_BLOCKED'
@@ -798,9 +837,7 @@ jobs:
                       'fresh provider observation expired before Prepare construction',
                       evidence_refs={'observation': preflight_ref},
                   )
-              return {'run': run, 'attempt': attempt, 'job_id': int(hosted[0]['id']),
-                      'artifact_id': int(artifact['id']), 'directory': directory,
-                      'planned_migrations': planned, 'preflight_ref': preflight_ref}
+              return {**observed_result, 'planned_migrations': planned}
 
           def extract_target_manifest(release_id, destination, component, target_revision):
               destination = Path(destination)
@@ -1185,7 +1222,7 @@ jobs:
               }
 
           def reconcile_post_state(candidate, result):
-              observed = fresh_observation()
+              observed = collect_observation()
               observation_path = observed['directory'] / 'provider-observation.json'
               observation_raw = observation_path.read_bytes()
               observation_doc = json.loads(observation_raw)
