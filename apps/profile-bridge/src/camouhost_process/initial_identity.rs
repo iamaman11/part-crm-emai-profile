@@ -3,7 +3,16 @@ use super::*;
 use crate::shipping_preflight::profile_stable_identity_from_config_bytes;
 use browser_execution_domain::BrowserIdentityManifest;
 use serde::Deserialize;
-use std::io::Read;
+use std::io::{BufRead, BufReader, Read};
+
+fn read_initial_report(reader: impl Read) -> std::io::Result<Vec<u8>> {
+    let mut bytes = Vec::new();
+    BufReader::new(reader.take(8193)).read_until(b'\n', &mut bytes)?;
+    if bytes.len() > 8192 || bytes.last() != Some(&b'\n') {
+        return Err(std::io::ErrorKind::InvalidData.into());
+    }
+    Ok(bytes)
+}
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -12,6 +21,29 @@ struct InitialReport {
     fingerprint_policy_version: String,
     profile_stable_probe_sha256: String,
     runtime_lock_sha256: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct InitialFailureReport {
+    failure: InitialFailure,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct InitialFailure {
+    category: FailureCategory,
+    line: u32,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum FailureCategory {
+    Contract,
+    Timeout,
+    Io,
+    BrowserClosed,
+    Unexpected,
 }
 
 struct InitialChild(Child);
@@ -72,51 +104,97 @@ impl ManagedCamouhostConfig {
             .stdout(Stdio::piped())
             .stderr(Stdio::null());
         inherit_runtime_environment(&mut command);
-        let mut child = InitialChild(command.spawn().map_err(|_| BridgePortError::Unavailable)?);
+        let mut child = InitialChild(command.spawn().map_err(|error| {
+            eprintln!("INITIAL_IDENTITY_FAILURE=spawn;category={:?}", error.kind());
+            BridgePortError::Unavailable
+        })?);
         let stdout = child.0.stdout.take().ok_or(BridgePortError::Unavailable)?;
         let (sender, receiver) = mpsc::sync_channel(1);
         thread::spawn(move || {
-            let mut bytes = Vec::new();
-            let result = stdout.take(8193).read_to_end(&mut bytes).map(|_| bytes);
-            let _ = sender.send(result);
+            let _ = sender.send(read_initial_report(stdout));
         });
         let started = Instant::now();
-        loop {
-            match child
-                .0
-                .try_wait()
-                .map_err(|_| BridgePortError::Unavailable)?
-            {
-                Some(status) if status.success() => break,
-                Some(_) => return Err(BridgePortError::InvalidResponse),
+        let status = loop {
+            match child.0.try_wait().map_err(|error| {
+                eprintln!(
+                    "INITIAL_IDENTITY_FAILURE=child_wait;category={:?}",
+                    error.kind()
+                );
+                BridgePortError::Unavailable
+            })? {
+                Some(status) => {
+                    if !status.success() {
+                        eprintln!(
+                            "INITIAL_IDENTITY_FAILURE=child_exit;code={:?}",
+                            status.code()
+                        );
+                    }
+                    break status;
+                }
                 None if started.elapsed() >= Duration::from_secs(180) => {
+                    eprintln!("INITIAL_IDENTITY_FAILURE=child_timeout");
                     return Err(BridgePortError::Unavailable);
                 }
                 None => thread::sleep(PROCESS_POLL_INTERVAL),
             }
-        }
+        };
         let bytes = receiver
             .recv_timeout(Duration::from_secs(2))
-            .map_err(|_| BridgePortError::Unavailable)?
-            .map_err(|_| BridgePortError::Unavailable)?;
-        if bytes.len() > 8192 {
+            .map_err(|error| {
+                eprintln!("INITIAL_IDENTITY_FAILURE=report_receive;category={error:?}");
+                BridgePortError::Unavailable
+            })?
+            .map_err(|error| {
+                eprintln!(
+                    "INITIAL_IDENTITY_FAILURE=report_read;category={:?}",
+                    error.kind()
+                );
+                if error.kind() == std::io::ErrorKind::InvalidData {
+                    BridgePortError::InvalidResponse
+                } else {
+                    BridgePortError::Unavailable
+                }
+            })?;
+        if !status.success() {
+            if let Ok(report) = serde_json::from_slice::<InitialFailureReport>(&bytes) {
+                eprintln!(
+                    "INITIAL_IDENTITY_FAILURE=child_report;category={:?};runtime_source_line={}",
+                    report.failure.category, report.failure.line
+                );
+            }
             return Err(BridgePortError::InvalidResponse);
         }
-        let report: InitialReport =
-            serde_json::from_slice(&bytes).map_err(|_| BridgePortError::InvalidResponse)?;
+        let report: InitialReport = serde_json::from_slice(&bytes).map_err(|error| {
+            eprintln!(
+                "INITIAL_IDENTITY_FAILURE=report_json;category={:?}",
+                error.classify()
+            );
+            BridgePortError::InvalidResponse
+        })?;
         if report.runtime_lock_sha256 != lock_digest
             || report.fingerprint_policy_version != "profile-stability-v1"
         {
+            eprintln!("INITIAL_IDENTITY_FAILURE=report_identity");
             return Err(BridgePortError::InvalidResponse);
         }
         verify_file_digest(
             &workspace.path().join(CONFIG_NAME),
             &report.fingerprint_config_sha256,
-        )?;
-        let config = fs::read(workspace.path().join(CONFIG_NAME))
-            .map_err(|_| BridgePortError::Unavailable)?;
-        let stable = profile_stable_identity_from_config_bytes(&config)
-            .map_err(|_| BridgePortError::InvalidResponse)?;
+        )
+        .inspect_err(|error| {
+            eprintln!("INITIAL_IDENTITY_FAILURE=config_integrity;category={error:?}");
+        })?;
+        let config = fs::read(workspace.path().join(CONFIG_NAME)).map_err(|error| {
+            eprintln!(
+                "INITIAL_IDENTITY_FAILURE=config_read;category={:?}",
+                error.kind()
+            );
+            BridgePortError::Unavailable
+        })?;
+        let stable = profile_stable_identity_from_config_bytes(&config).map_err(|error| {
+            eprintln!("INITIAL_IDENTITY_FAILURE=config_projection;category={error:?}");
+            BridgePortError::InvalidResponse
+        })?;
         BrowserIdentityManifest::new(
             IDENTITY_COMPATIBILITY_VERSION,
             report.fingerprint_policy_version,
@@ -129,6 +207,46 @@ impl ManagedCamouhostConfig {
             report.fingerprint_config_sha256,
             stable,
         )
-        .map_err(|_| BridgePortError::InvalidResponse)
+        .map_err(|error| {
+            eprintln!("INITIAL_IDENTITY_FAILURE=identity_manifest;category={error:?}");
+            BridgePortError::InvalidResponse
+        })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::read_initial_report;
+    use std::io::{Cursor, ErrorKind, Read};
+
+    struct OpenStream(Cursor<&'static [u8]>);
+    impl Read for OpenStream {
+        fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+            let count = self.0.read(buffer)?;
+            if count == 0 {
+                return Err(ErrorKind::WouldBlock.into());
+            }
+            Ok(count)
+        }
+    }
+
+    #[test]
+    fn complete_report_does_not_require_descendant_pipe_eof() -> std::io::Result<()> {
+        let frame = b"{\"report\":true}\n";
+        assert_eq!(
+            read_initial_report(OpenStream(Cursor::new(frame.as_slice())))?,
+            frame
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn incomplete_and_oversized_report_frames_are_rejected() {
+        for frame in [b"{}".to_vec(), vec![b'x'; 8193]] {
+            assert!(matches!(
+                read_initial_report(Cursor::new(frame)),
+                Err(error) if error.kind() == ErrorKind::InvalidData
+            ));
+        }
     }
 }

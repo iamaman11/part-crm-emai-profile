@@ -1118,21 +1118,24 @@ def valid_frame(raw: str) -> bool:
     )
 
 
+def runtime_failure_category(error: BaseException) -> str:
+    if isinstance(error, RuntimeContractError):
+        return "contract"
+    elif isinstance(error, TimeoutError) or type(error).__name__ == "TimeoutError":
+        # Playwright's TimeoutError is not the builtin TimeoutError.
+        return "timeout"
+    elif isinstance(error, OSError):
+        return "io"
+    elif type(error).__name__ == "TargetClosedError":
+        return "browser_closed"
+    return "unexpected"
+
+
 def report_runtime_failure(phase: str, error: BaseException) -> None:
     """Report only closed diagnostic categories; exception text may contain profile data."""
     if phase not in {"launch", "browser_visible", "navigation", "close", "cleanup"}:
         phase = "unknown"
-    if isinstance(error, RuntimeContractError):
-        category = "contract"
-    elif isinstance(error, TimeoutError) or type(error).__name__ == "TimeoutError":
-        # Playwright's TimeoutError is not the builtin TimeoutError.
-        category = "timeout"
-    elif isinstance(error, OSError):
-        category = "io"
-    elif type(error).__name__ == "TargetClosedError":
-        category = "browser_closed"
-    else:
-        category = "unexpected"
+    category = runtime_failure_category(error)
     print(f"camouhost_failure phase={phase} category={category}", file=sys.stderr, flush=True)
 
 
@@ -1279,23 +1282,17 @@ def run_ipc() -> int:
 def main() -> int:
     if len(sys.argv) == 3 and sys.argv[1] == "--materialize-identity":
         try:
-            report = materialize_candidate_identity(Path(sys.argv[2]))
-        except RuntimeContractError as error:
-            print(f"candidate identity materialization failed: {error}", file=sys.stderr)
-            return 7
-        except importlib.metadata.PackageNotFoundError:
-            print(
-                "candidate identity materialization failed: package_metadata_unavailable",
-                file=sys.stderr,
-            )
-            return 7
-        except OSError as error:
-            errno = error.errno if isinstance(error.errno, int) else "none"
-            print(
-                "candidate identity materialization failed: "
-                f"os_error={type(error).__name__} errno={errno}",
-                file=sys.stderr,
-            )
+            with contextlib.redirect_stdout(sys.stderr):
+                report = materialize_candidate_identity(Path(sys.argv[2]))
+        except Exception as error:
+            line = 0
+            traceback = error.__traceback__
+            while traceback is not None:
+                if traceback.tb_frame.f_code.co_filename == __file__:
+                    line = traceback.tb_lineno
+                traceback = traceback.tb_next
+            failure = {"category": runtime_failure_category(error), "line": line}
+            print(json.dumps({"failure": failure}, separators=(",", ":")), flush=True)
             return 7
         print(json.dumps(report, ensure_ascii=True, separators=(",", ":"), sort_keys=True))
         return 0
