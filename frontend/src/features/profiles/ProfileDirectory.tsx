@@ -53,7 +53,7 @@ export function ProfileDirectory({
                   <td>{profile.version}</td>
                   <td>
                     <button type="button" onClick={() => onSelect(profile.profileId)}>
-                      {profile.profileId === selectedProfileId ? 'Opened' : 'Open'}
+                      {profile.profileId === selectedProfileId ? 'Selected' : 'View details'}
                     </button>
                   </td>
                 </tr>
