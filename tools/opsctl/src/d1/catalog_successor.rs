@@ -373,12 +373,13 @@ pub(crate) fn component_authority(
     predecessor::component_authority(root, component)
 }
 
-/// Admit immutable observed Catalog runtime metadata using exact current migration bytes.
+/// Admit an original Catalog runtime against its unchanged compiled schema prefix.
 /// The prefix view is context-only: target admission continues to use the full current authority.
 pub(super) fn observed_runtime_context(
     root: &Path,
     component: &str,
     schema: ReleaseSchemaContract,
+    manifest: &Value,
 ) -> Result<RuntimeSchemaContext, D1Error> {
     if component != "catalog" {
         return RuntimeSchemaContext::new(&component_authority(root, component)?, schema);
@@ -394,11 +395,20 @@ pub(super) fn observed_runtime_context(
                 "observed runtime history prefix predates the current Catalog lineage boundary",
             ));
         }
-        let digest = successor_history_digest(
+        let mut digest = successor_history_digest(
             root,
             &catalog.authority.ordered_history[..count],
             &catalog.migration_source_roots[..count],
         )?;
+        if digest != schema.migration_history_digest {
+            digest = super::runtime_manifest::original_runtime_history(
+                root,
+                manifest,
+                &schema,
+                &catalog.authority.ordered_history[..count],
+                &catalog.migration_source_roots[..count],
+            )?;
+        }
         catalog.authority.ordered_history.truncate(count);
         catalog
             .authority
@@ -644,9 +654,11 @@ fn validate_deferred_contract_copy(root: &Path) -> Result<(), D1Error> {
         root,
         &format!("{CURRENT_SUCCESSOR_ROOT}/{SUCCESSOR_CONTRACT_REVISION}"),
     )?;
-    if predecessor != current {
+    // CURRENT may repair prerequisites before the still-unapplied CONTRACT,
+    // while its accepted data transformation remains byte-for-byte unchanged.
+    if !current.ends_with(&predecessor) {
         return Err(D1Error::new(
-            "Catalog successor-v2 must preserve the accepted PAS-2 CONTRACT bytes while deferring its revision",
+            "Catalog successor-v2 must preserve the accepted PAS-2 CONTRACT body as an exact suffix",
         ));
     }
     Ok(())

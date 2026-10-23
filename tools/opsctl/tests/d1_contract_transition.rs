@@ -112,6 +112,19 @@ fn actual_deployed_context_traverses_separate_sealed_contract_and_current_expand
     current["schema_contract"]["supported_schema_max"] = json!(history[34]);
     current["schema_contract"]["migration_history_digest"] =
         json!("f8915315dfacefaba7d122f7e79634a8c49f75993bc49b4fef8522ac470a68ae");
+    let original_files = catalog["executable_migration_sources"]
+        .as_array().ok_or("missing source projection")?[..35]
+        .iter().map(|m| -> Result<Value, Box<dyn Error>> {
+            let name = m["migration_file"].as_str().ok_or("missing migration name")?;
+            let path = if name == history[34] {
+                root.join("migrations/d1-successor/0032_pas2_payload_fingerprint_contract.sql")
+            } else {
+                root.join(m["source_root"].as_str().ok_or("missing source root")?).join(name)
+            };
+            let bytes = fs::read(path)?;
+            Ok(json!({"path":format!("migrations/d1/{name}"),"sha256":sha256_hex(&bytes),"size":bytes.len()}))
+        }).collect::<Result<Vec<_>, _>>()?;
+    current["migrations"] = json!({"files":original_files});
     write(&dir.join("target.json"), &target)?;
     write(&dir.join("current.json"), &current)?;
     write(&dir.join("repository.json"), &repository)?;
@@ -524,6 +537,48 @@ fn actual_deployed_context_traverses_separate_sealed_contract_and_current_expand
         }
         let original_evidence: Value =
             serde_json::from_slice(&fs::read(dir.join("preconditions.json"))?)?;
+        for damage in ["missing_files", "future_digest", "compiled_prefix"] {
+            let mut changed = current.clone();
+            match damage {
+                "missing_files" => {
+                    changed
+                        .as_object_mut()
+                        .ok_or("current object")?
+                        .remove("migrations");
+                }
+                "future_digest" => {
+                    changed["migrations"]["files"][34]["sha256"] = json!("a".repeat(64))
+                }
+                _ => {
+                    changed["migrations"]["files"][33]["sha256"] = json!("a".repeat(64));
+                    let identity = changed["migrations"]["files"]
+                        .as_array()
+                        .ok_or("files")?
+                        .iter()
+                        .enumerate()
+                        .map(|(index, m)| json!({"name":history[index],"sha256":m["sha256"]}))
+                        .collect::<Vec<_>>();
+                    changed["schema_contract"]["migration_history_digest"] =
+                        json!(canonical_digest(&json!(identity))?);
+                }
+            }
+            write(&dir.join("current.json"), &changed)?;
+            let error = plan(&root, dir)
+                .err()
+                .ok_or("damaged runtime evidence was accepted")?;
+            let expected = match damage {
+                "missing_files" => "original runtime migration file evidence is missing",
+                "future_digest" => {
+                    "original runtime migration history digest does not match its files"
+                }
+                _ => "original runtime compiled migration prefix has changed",
+            };
+            assert!(
+                error.to_string().contains(expected),
+                "wrong owner diagnostic for {damage}: {error}"
+            );
+        }
+        write(&dir.join("current.json"), &current)?;
         for path in [
             "current_manifest_sha256",
             "target_manifest_sha256",
@@ -583,6 +638,19 @@ if initial:
  db.commit()
  runpy.run_path(str(root/'scripts/test-d1-schema.py'))['seed_catalog'](db)
  (scratch/'before.json').write_text(json.dumps(snapshot(),sort_keys=True))
+db.execute('PRAGMA case_sensitive_like=OFF')
+if count==34:
+ try:
+  db.executescript((root/'migrations/d1-successor/0032_pas2_payload_fingerprint_contract.sql').read_text())
+  raise AssertionError('original CONTRACT unexpectedly accepted the D1 LIKE registration')
+ except sqlite3.OperationalError as error:
+  assert 'non-deterministic functions prohibited in partial index WHERE clauses' in str(error),str(error)
+ # A failed ALTER invalidates SQLite's cached schema. A fresh connection is
+ # required to inspect rollback before reproducing the connection setup again.
+ db.close();db=sqlite3.connect(dbfile);db.execute('PRAGMA foreign_keys=ON')
+ # The first ALTER failed atomically, and the corrected SQL must retain all rows.
+ assert db.execute("SELECT count(*) FROM sqlite_master WHERE name='idempotency_records_pas2_contract_legacy'").fetchone()==(0,)
+ db.execute('PRAGMA case_sensitive_like=OFF')
 for m in sources[count:count+1]:
  db.executescript((bounded/m['migration_file']).read_text())
  db.execute('INSERT INTO d1_migrations(id,name) VALUES(?,?)',(count+1,m['migration_file']))
@@ -592,5 +660,30 @@ assert db.execute('PRAGMA foreign_key_check').fetchall()==[]
 assert db.execute('PRAGMA quick_check').fetchone()==('ok',)
 assert 'request_digest' not in [r[1] for r in db.execute('PRAGMA table_info(idempotency_records)')]
 if count==35:assert 'initial_device_id' in [r[1] for r in db.execute('PRAGMA table_info(profile_generation_register_commands)')]
+if count==34:
+ # Retain both ACTIVE uniqueness boundaries and the original LIKE wildcard /
+ # ASCII case-folding behavior; inactive rows remain independent.
+ examples=['mtls_cert_sha256:a','MTLS_CERT_SHA256:a','mtlsXcertYsha256:a','mtls_cert_sha256:',
+           'p256_spki_der:a','P256_SPKI_DER:a','p256XspkiYder:a','other:a','p256_spki_der','']
+ for name,old_pattern in [('device_actor_bindings_one_active_certificate','mtls_cert_sha256:%'),
+                          ('device_actor_bindings_one_active_p256_key','p256_spki_der:%')]:
+  sql=db.execute('SELECT sql FROM sqlite_master WHERE name=?',(name,)).fetchone()[0]
+  predicate=sql.split('WHERE ',1)[1]
+  guard=sqlite3.connect(':memory:')
+  guard.execute('CREATE TABLE probe(status TEXT,evidence_reference TEXT)')
+  guard.execute('CREATE UNIQUE INDEX probe_guard ON probe(evidence_reference) WHERE '+predicate)
+  for text in examples:
+   expected=guard.execute('SELECT ? LIKE ?',(text,old_pattern)).fetchone()[0]
+   actual=guard.execute('SELECT '+predicate+' FROM (SELECT ? AS status,? AS evidence_reference)',('ACTIVE',text)).fetchone()[0]
+   assert expected==actual,(name,text,expected,actual)
+   guard.execute('DELETE FROM probe')
+   guard.execute('INSERT INTO probe VALUES(?,?)',('ACTIVE',text))
+   try:
+    guard.execute('INSERT INTO probe VALUES(?,?)',('ACTIVE',text))
+    assert not expected,(name,text,'ACTIVE duplicate admitted')
+   except sqlite3.IntegrityError:
+    assert expected,(name,text,'unrelated duplicate rejected')
+   guard.execute('INSERT INTO probe VALUES(?,?)',('REVOKED',text))
+  guard.close()
 db.commit();db.close()
 "#;

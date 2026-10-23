@@ -456,6 +456,46 @@ class Harness:
                 migration_count=len(expected),
             )
 
+    def prove_existing_catalog_like_reparse(self, projection: dict[str, Any]) -> None:
+        sources = self.catalog_sources(projection)
+        case, config, state, binding, prefix = self.prepare_case(
+            "catalog-existing-like-reparse", "catalog", sources[:34]
+        )
+        self.apply(binding, config, state)
+        original = self.root / "migrations/d1-successor/0032_pas2_payload_fingerprint_contract.sql"
+        probe = case / "original-contract.sql"
+        probe.write_text("PRAGMA case_sensitive_like=OFF;\n" + original.read_text(encoding="utf-8"), encoding="utf-8")
+        failed = self.wrangler(
+            "d1", "execute", binding, "--local", "--config", self.relative(config),
+            "--persist-to", self.relative(state), "--file", self.relative(probe),
+            "--experimental-provision=false", "--experimental-auto-create=false", expect_success=False,
+        )
+        if "non-deterministic functions prohibited in partial index WHERE clauses" not in failed.stdout + failed.stderr:
+            raise HarnessError("original CONTRACT did not reproduce the actual D1 LIKE-index failure")
+        before = self.execute(binding, config, state, "SELECT id, name FROM d1_migrations ORDER BY id")
+        if self.ledger_names(before) != prefix:
+            raise HarnessError("failed original CONTRACT changed the local D1 ledger")
+        residue = self.execute(binding, config, state,
+                               "SELECT count(*) AS residue FROM sqlite_master WHERE name='idempotency_records_pas2_contract_legacy'")
+        if residue[0]["results"] != [{"residue": 0}]:
+            raise HarnessError("failed original first ALTER left schema residue")
+        for name, source in sources[34:]:
+            # Test connection setup precedes the exact canonical SQL bytes. It is
+            # fixture state, never part of the hosted executor/provider plan.
+            (case / "migrations" / name).write_text(
+                "PRAGMA case_sensitive_like=OFF;\n" + source.read_text(encoding="utf-8"), encoding="utf-8"
+            )
+            self.apply(binding, config, state)
+        after = self.execute(binding, config, state, "SELECT id, name FROM d1_migrations ORDER BY id")
+        if self.ledger_names(after) != [name for name, _ in sources]:
+            raise HarnessError("corrected split CONTRACT/initialization did not reach exact CURRENT ledger")
+        fk = self.execute(binding, config, state, "PRAGMA foreign_key_check")
+        integrity = self.execute(binding, config, state, "PRAGMA quick_check")
+        if fk[0]["results"] or integrity[0]["results"] != [{"quick_check": "ok"}]:
+            raise HarnessError("corrected D1 connection reparse broke integrity or foreign keys")
+        self.record("existing_catalog_like_reparse", "pinned local Wrangler + canonical SQL", "local-physical",
+                    original_contract_rejected=True, separate_stages=[35, 36], integrity_verified=True)
+
     def prove_future_append(self, projection: dict[str, Any]) -> None:
         cases = [
             (
@@ -638,6 +678,7 @@ class Harness:
         histories = self.histories(projection)
         self.prove_every_canonical_prefix(histories)
         self.prove_bootstrap_and_replay(projection)
+        self.prove_existing_catalog_like_reparse(projection)
         self.prove_future_append(projection)
         self.prove_partial_failure_and_continuation()
         self.write_report()

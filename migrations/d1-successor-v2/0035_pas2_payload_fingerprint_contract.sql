@@ -1,3 +1,15 @@
+-- Rebuild both retained uniqueness guards before any table rename. D1 can
+-- re-register LIKE as non-deterministic; lower + GLOB keeps the original
+-- ASCII case-insensitive LIKE semantics (_ = ?, % = *) without that function.
+DROP INDEX device_actor_bindings_one_active_certificate;
+DROP INDEX device_actor_bindings_one_active_p256_key;
+CREATE UNIQUE INDEX device_actor_bindings_one_active_certificate
+    ON device_actor_bindings(evidence_reference)
+    WHERE status = 'ACTIVE' AND lower(evidence_reference) GLOB 'mtls?cert?sha256:*';
+CREATE UNIQUE INDEX device_actor_bindings_one_active_p256_key
+    ON device_actor_bindings(evidence_reference)
+    WHERE status = 'ACTIVE' AND lower(evidence_reference) GLOB 'p256?spki?der:*';
+
 -- PAS-2 Transaction D: retire the transitional request_digest column after the
 -- successor runtime is proven active and all legacy readers/writers are retired.
 --

@@ -195,6 +195,21 @@ the exact prepared SQL digests and phase, rechecks the observed deployment and a
 before a write, and verifies the exact predecessor plus planned effect rather than constructing a fake
 runtime manifest. Source/CI or `PREPARE_READY` never grants provider mutation authority. The ordinary
 operator remains zero-input; machine-known phase/evidence/identities stay machine-owned.
+
+The unapplied CONTRACT rebuilds both retained device-evidence partial indexes before its first table
+rename. Deterministic `lower(...) GLOB` predicates preserve the original ASCII case-insensitive `LIKE`
+wildcard behavior and ACTIVE uniqueness without depending on the connection's LIKE registration.
+The accepted PAS-2 transformation remains an exact unchanged suffix; applied migrations and frozen
+predecessors are never rewritten. Existing D1 regression proof reproduces the rejected predecessor
+and the corrected separate stages with `case_sensitive_like=OFF` on pinned local Wrangler.
+
+An observed runtime manifest may contain future migration files that were never part of its compiled
+schema target. Its original complete file inventory must reproduce its original history digest, and
+every file through its compiled target must match CURRENT bytes and sizes. Its advertised future
+files remain original evidence, not replacement SQL or a deployment target. A missing inventory,
+tampered digest or changed compiled prefix fails closed. The full CURRENT manifest/history still owns
+target admission and the newly sealed SQL plan; no original manifest or schema window is rewritten.
+
 Native plan, compatibility, prewrite and post-verification outputs are retained on success and failure
 in one metadata-only gate artifact linked by the terminal operator outcome. Adapter fact-comparison
 failures remain explicitly non-policy observations; they never fabricate a native D1 verdict.
