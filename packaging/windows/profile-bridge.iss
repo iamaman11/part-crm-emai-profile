@@ -1,7 +1,7 @@
 ; Per-user Windows wizard. Native Bridge owns CMS admission, download, staging and activation.
 ; Initial installations intentionally have no verified OS publisher. The embedded application
 ; integrity signature stays mandatory; no certificate/root import or security override is used.
-; Inno APIs: https://jrsoftware.org/ishelp/topic_isxfunc_execandcaptureoutput.htm
+; Inno APIs: https://jrsoftware.org/ishelp/topic_isxfunc_execandlogoutput.htm
 
 #ifndef InstallerInputDirectory
   #error InstallerInputDirectory is required
@@ -63,7 +63,30 @@ ru.OpenApplication=Открыть Profile Operations
 en.InstallingBrowser=Installing and verifying the browser component. The first installation can take several minutes.
 ru.InstallingBrowser=Загрузка и проверка браузера. Первая установка может занять несколько минут.
 
+en.PreparingTitle=Preparing Profile Bridge
+en.PreparingDescription=Downloading, unpacking and verifying the browser component.
+ru.PreparingTitle=Подготовка Profile Bridge
+ru.PreparingDescription=Загрузка, распаковка и проверка браузера.
+en.FinishingInstallation=Finishing installation and checking the installed components.
+ru.FinishingInstallation=Завершение установки и проверка установленных компонентов.
+en.InstallationFailed=Installation could not finish. Check the message below, then retry this installer. Keep the setup log if the problem repeats.
+ru.InstallationFailed=Не удалось завершить установку. Проверьте сообщение ниже и повторите установку. Если ошибка повторяется, сохраните журнал установки.
+
 [Code]
+var
+  BridgeOutputError: Boolean;
+  BridgeLastLine: String;
+
+procedure CaptureBridgeOutput(const S: String; const Error, FirstLine: Boolean);
+begin
+  { Preserve native diagnostics as they arrive, before enforcing any exit gate. }
+  Log(S);
+  if Error then
+    BridgeOutputError := True
+  else if Trim(S) <> '' then
+    BridgeLastLine := Trim(S);
+end;
+
 function QuoteArgument(const Value: String): String;
 begin
   Result := '"' + Value + '"';
@@ -72,29 +95,30 @@ end;
 function RunBridge(const Filename, Parameters: String): String;
 var
   Started: Boolean;
-  Code, Index: Integer;
-  Output: TExecOutput;
+  Code: Integer;
 begin
   Result := '';
+  BridgeOutputError := False;
+  BridgeLastLine := '';
+  Code := -1;
   try
-    Started := ExecAndCaptureOutput(Filename, Parameters, '', SW_SHOWNORMAL,
-      ewWaitUntilTerminated, Code, Output);
+    Started := ExecAndLogOutput(Filename, Parameters, '', SW_SHOWNORMAL,
+      ewWaitUntilTerminated, Code, @CaptureBridgeOutput);
   except
     Result := 'BRIDGE_INSTALLATION_PROCESS_UNAVAILABLE';
     exit;
   end;
-  { Capture the native owner's complete safe diagnostics BEFORE enforcing the exit gate. }
-  for Index := 0 to GetArrayLength(Output.StdOut) - 1 do
-    Log(Output.StdOut[Index]);
-  for Index := 0 to GetArrayLength(Output.StdErr) - 1 do
-    Log(Output.StdErr[Index]);
-  if not Started or Output.Error then begin
+  if not Started then begin
+    Result := 'BRIDGE_INSTALLATION_PROCESS_UNAVAILABLE';
+    exit;
+  end;
+  if BridgeOutputError then begin
     Result := 'BRIDGE_INSTALLATION_OUTPUT_UNAVAILABLE';
     exit;
   end;
   if Code <> 0 then begin
-    if GetArrayLength(Output.StdErr) > 0 then
-      Result := Output.StdErr[GetArrayLength(Output.StdErr) - 1]
+    if BridgeLastLine <> '' then
+      Result := BridgeLastLine
     else
       Result := 'BRIDGE_INSTALLATION_PROCESS_FAILED';
   end;
@@ -103,18 +127,32 @@ end;
 function PrepareToInstall(var NeedsRestart: Boolean): String;
 var
   Target: String;
+  Progress: TOutputMarqueeProgressWizardPage;
 begin
   NeedsRestart := False;
-  WizardForm.PreparingLabel.Caption := CustomMessage('InstallingBrowser');
-  ExtractTemporaryFile('profile-bridge.exe');
-  ExtractTemporaryFile('installation.json');
-  ExtractTemporaryFile('windows-delivery-manifest.json');
-  ExtractTemporaryFile('windows-delivery-signature.json');
-  Result := RunBridge(ExpandConstant('{tmp}\profile-bridge.exe'),
-    '--delivery-prepare ' + QuoteArgument(ExpandConstant('{tmp}')) + ' ' + QuoteArgument(ExpandConstant('{app}')));
-  if Result <> '' then exit;
-  Target := ExpandConstant('{app}\releases\{#ReleaseSetId}\profile-bridge\profile-bridge.exe');
-  Result := RunBridge(Target, '--delivery-install-staged ' + QuoteArgument('{#ControlPlaneOrigin}'));
+  Result := '';
+  Progress := CreateOutputMarqueeProgressPage(CustomMessage('PreparingTitle'),
+    CustomMessage('PreparingDescription'));
+  Progress.SetText(CustomMessage('InstallingBrowser'), '');
+  Progress.Show;
+  try
+    Progress.Animate;
+    ExtractTemporaryFile('profile-bridge.exe');
+    ExtractTemporaryFile('installation.json');
+    ExtractTemporaryFile('windows-delivery-manifest.json');
+    ExtractTemporaryFile('windows-delivery-signature.json');
+    Result := RunBridge(ExpandConstant('{tmp}\profile-bridge.exe'),
+      '--delivery-prepare ' + QuoteArgument(ExpandConstant('{tmp}')) + ' ' + QuoteArgument(ExpandConstant('{app}')));
+    if Result = '' then begin
+      Progress.SetText(CustomMessage('FinishingInstallation'), '');
+      Target := ExpandConstant('{app}\releases\{#ReleaseSetId}\profile-bridge\profile-bridge.exe');
+      Result := RunBridge(Target, '--delivery-install-staged ' + QuoteArgument('{#ControlPlaneOrigin}'));
+    end;
+  finally
+    Progress.Hide;
+  end;
+  if Result <> '' then
+    Result := CustomMessage('InstallationFailed') + #13#10 + Result;
 end;
 
 { No delete/reset entries: uninstall removes the protocol and wizard registration, preserving
