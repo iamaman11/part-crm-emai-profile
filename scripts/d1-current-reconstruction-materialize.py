@@ -297,9 +297,10 @@ def write_exact(path: Path, payload: bytes) -> None:
     path.write_bytes(payload)
 
 
-def materialize_wrangler_migration_inventory(bootstrap: ModuleType, output_root: Path) -> list[str]:
-    source_dir = Path(bootstrap.MIGRATIONS_DIR)
-    migrations = bootstrap.validated_migrations(source_dir)
+def materialize_wrangler_migration_inventory(
+    bootstrap: ModuleType, repository: dict[str, Any], output_root: Path
+) -> list[str]:
+    construction, migrations = bootstrap.validate_current_fresh_zero_projection(repository, ROOT)
     target_dir = output_root / "migrations"
     if target_dir.exists():
         if target_dir.is_symlink() or not target_dir.is_dir():
@@ -309,13 +310,14 @@ def materialize_wrangler_migration_inventory(bootstrap: ModuleType, output_root:
     else:
         target_dir.mkdir(parents=True)
     names: list[str] = []
-    for source in migrations:
+    for entry, source in zip(construction["migration_sources"], migrations, strict=True):
         payload = source.read_bytes()
-        target = target_dir / source.name
+        name = entry["migration_file"]
+        target = target_dir / name
         write_exact(target, payload)
         if target.read_bytes() != payload:
             fail(f"Wrangler migration materialization drifted: {source.name}")
-        names.append(source.name)
+        names.append(name)
     return names
 
 
@@ -329,7 +331,9 @@ def materialize(reconstruction_path: Path, output_sql: Path, output_metadata: Pa
     payload_sha256 = sha256_bytes(payload)
     if convergence.get("bootstrap_sha256") != payload_sha256:
         fail("CURRENT bootstrap bytes differ from convergence proof identity")
-    wrangler_inventory = materialize_wrangler_migration_inventory(bootstrap, output_sql.parent)
+    wrangler_inventory = materialize_wrangler_migration_inventory(bootstrap, repository, output_sql.parent)
+    if wrangler_inventory != binding["expected_ledger_migrations"]:
+        fail("Wrangler inventory differs from the sealed CURRENT ledger")
     metadata = {
         "schema_version": 1,
         "kind": "D1_CURRENT_RECONSTRUCTION_MATERIALIZATION",
@@ -426,14 +430,14 @@ def self_test() -> None:
     if binding["expected_ledger_migrations"][-1] != binding["target_schema_revision"]:
         fail("self-test CURRENT ledger does not terminate at target revision")
 
-    expected_inventory = [path.name for path in bootstrap.validated_migrations(bootstrap.MIGRATIONS_DIR)]
+    construction, sources = bootstrap.validate_current_fresh_zero_projection(repository, ROOT)
+    expected_inventory = [entry["migration_file"] for entry in construction["migration_sources"]]
     with tempfile.TemporaryDirectory(prefix="d1-reconstruction-wrangler-") as temp_dir:
         output_root = Path(temp_dir)
-        actual_inventory = materialize_wrangler_migration_inventory(bootstrap, output_root)
+        actual_inventory = materialize_wrangler_migration_inventory(bootstrap, repository, output_root)
         if actual_inventory != expected_inventory:
             fail("self-test Wrangler migration inventory differs from canonical Catalog migrations")
-        for name in actual_inventory:
-            source = Path(bootstrap.MIGRATIONS_DIR) / name
+        for name, source in zip(actual_inventory, sources, strict=True):
             target = output_root / "migrations" / name
             if sha256_bytes(source.read_bytes()) != sha256_bytes(target.read_bytes()):
                 fail(f"self-test Wrangler migration bytes drifted: {name}")

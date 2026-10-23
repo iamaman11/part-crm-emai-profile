@@ -193,8 +193,6 @@ jobs:
           python scripts/cloudflare-d1-bootstrap.py build
           python scripts/cloudflare-d1-bootstrap.py verify \
             --file artifacts/cloudflare-d1-bootstrap/bootstrap.sql
-          python scripts/cloudflare-d1-bootstrap.py verify-evidence \
-            --file docs/evidence/2026-08-14-pre2j-d3a-empty-d1-bootstrap.json
           test -z "$(git ls-files -- artifacts/cloudflare-d1-bootstrap/bootstrap.sql)"
           git check-ignore -q artifacts/cloudflare-d1-bootstrap/bootstrap.sql
           git check-ignore -q .wrangler/probe

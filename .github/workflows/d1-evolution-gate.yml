@@ -103,6 +103,7 @@ jobs:
               'clean_bootstrap_and_replay_catalog',
               'clean_bootstrap_and_replay_resolver',
               'existing_catalog_like_reparse',
+              'current_empty_baseline',
               'future_migration_append_catalog',
               'future_migration_append_resolver',
               'partial_prefix_failure',

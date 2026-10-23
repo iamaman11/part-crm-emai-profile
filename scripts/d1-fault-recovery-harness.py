@@ -496,6 +496,46 @@ class Harness:
         self.record("existing_catalog_like_reparse", "pinned local Wrangler + canonical SQL", "local-physical",
                     original_contract_rejected=True, separate_stages=[35, 36], integrity_verified=True)
 
+    def prove_current_empty_baseline(self, projection: dict[str, Any]) -> None:
+        case, config, state, binding, expected = self.prepare_case(
+            "catalog-current-empty-baseline", "catalog", self.catalog_sources(projection)
+        )
+        baseline = case / "baseline.sql"
+        self.run(["python", "scripts/cloudflare-d1-bootstrap.py", "build", "--output", str(baseline)])
+        self.wrangler("d1", "execute", binding, "--local", "--config", self.relative(config),
+                      "--persist-to", self.relative(state), "--file", self.relative(baseline),
+                      "--experimental-provision=false", "--experimental-auto-create=false")
+        ledger = self.execute(binding, config, state, "SELECT id,name FROM d1_migrations ORDER BY id")
+        if self.ledger_names(ledger) != expected:
+            raise HarnessError("CURRENT baseline did not create the exact canonical D1 ledger")
+        before = self.execute(binding, config, state, "SELECT type,name,tbl_name,sql FROM sqlite_master ORDER BY type,name")
+        self.wrangler("d1", "execute", binding, "--local", "--config", self.relative(config),
+                      "--persist-to", self.relative(state), "--file", self.relative(baseline),
+                      "--experimental-provision=false", "--experimental-auto-create=false", expect_success=False)
+        after = self.execute(binding, config, state, "SELECT type,name,tbl_name,sql FROM sqlite_master ORDER BY type,name")
+        if before[0]["results"] != after[0]["results"]:
+            raise HarnessError("rejected CURRENT baseline replay changed D1 schema")
+        if self.execute(binding, config, state, "PRAGMA foreign_key_check")[0]["results"]:
+            raise HarnessError("CURRENT D1 baseline has invalid foreign keys")
+        if self.execute(binding, config, state, "PRAGMA quick_check")[0]["results"] != [{"quick_check": "ok"}]:
+            raise HarnessError("CURRENT D1 baseline failed integrity verification")
+        _, reference_config, reference_state, reference_binding, _ = self.prepare_case(
+            "catalog-baseline-reference", "catalog", self.catalog_sources(projection)
+        )
+        self.apply(reference_binding, reference_config, reference_state)
+        metadata_query = ("SELECT type,name,tbl_name,sql FROM sqlite_master WHERE name NOT GLOB 'sqlite_*' "
+                          "AND name NOT GLOB '_cf_*' AND name <> 'd1_migrations' ORDER BY type,name")
+        reference = self.execute(reference_binding, reference_config, reference_state, metadata_query)
+        baseline_schema = self.execute(binding, config, state, metadata_query)
+        if reference[0]["results"] != baseline_schema[0]["results"]:
+            raise HarnessError("CURRENT baseline differs from canonical migration schema on pinned D1 engine")
+        self.apply(binding, config, state)  # Canonical migration replay must be a no-op after baseline.
+        if self.ledger_names(self.execute(binding, config, state, "SELECT id,name FROM d1_migrations ORDER BY id")) != expected:
+            raise HarnessError("ordinary migration replay changed the baseline ledger")
+        self.record("current_empty_baseline", "pinned local Wrangler + CURRENT bootstrap", "local-physical",
+                    migration_count=len(expected), replay_rejected=True, ordinary_migrations_noop=True,
+                    canonical_migration_schema_equal=True)
+
     def prove_future_append(self, projection: dict[str, Any]) -> None:
         cases = [
             (
@@ -679,6 +719,7 @@ class Harness:
         self.prove_every_canonical_prefix(histories)
         self.prove_bootstrap_and_replay(projection)
         self.prove_existing_catalog_like_reparse(projection)
+        self.prove_current_empty_baseline(projection)
         self.prove_future_append(projection)
         self.prove_partial_failure_and_continuation()
         self.write_report()
