@@ -280,7 +280,7 @@ def render_installer_source(
     """
     manifest, manifest_bytes = load_json(manifest_path, "Windows delivery manifest", 1024 * 1024)
     _, signature_bytes = load_json(signature_path, "Windows delivery signature", 2 * 1024 * 1024 + 4096)
-    release_id = prefixed_digest(manifest.get("release_set_id"), RELEASE_SET_PREFIX, "Release Set ID")
+    prefixed_digest(manifest.get("release_set_id"), RELEASE_SET_PREFIX, "Release Set ID")
     # Encoding fence for compiler/Pascal literals; URL/trust admission remains native-owned.
     for value in (origin, signer_key_id, certificate_sha256):
         if not value or any(character in value for character in ('"', "'", "\r", "\n", "\0", "{", "}")):
@@ -298,7 +298,6 @@ def render_installer_source(
         "signer_certificate_sha256": certificate_sha256,
     }, separators=(",", ":")).encode())
     write_new(output / "installer-inputs.iss", (
-        f'#define ReleaseSetId "{release_id}"\n'
         f'#define ControlPlaneOrigin "{origin}"\n'
     ).encode("utf-8"))
     shutil.copyfile(bridge_path, output / "profile-bridge.exe")
@@ -371,6 +370,55 @@ def installer_smoke_test(bridge: Path, compiler: Path) -> None:
                                 certificate_sha256="a" * 64, output=source)
         template = Path(__file__).resolve().parent.parent / "packaging/windows/profile-bridge.iss"
         output = root / "output"
+        # Compile the shipping process adapter itself, without product files, registry or trust
+        # effects. Both zero-exit shapes matter: preparation writes stdout; activation can be quiet.
+        adapter = template.read_text(encoding="utf-8").split("[Code]\n", 1)[1].split(
+            "function PrepareToInstall", 1
+        )[0]
+        probe = root / "process-probe.iss"
+        probe.write_text(
+            "[Setup]\nAppName=Installer process proof\nAppVersion=1\n"
+            "DefaultDirName={tmp}\\unused-installer-proof\nCreateAppDir=no\n"
+            "Uninstallable=no\nPrivilegesRequired=lowest\nSetupLogging=yes\n"
+            f"OutputDir={output}\nOutputBaseFilename=process-probe\n[Code]\n" + adapter + r'''
+function InitializeSetup: Boolean;
+var
+  Observed: String;
+begin
+  Observed := RunBridge(ExpandConstant('{cmd}'), '/D /C "echo PREPARED & exit /b 0"');
+  if Observed <> '' then RaiseException('stdout success rejected: ' + Observed);
+  Observed := RunBridge(ExpandConstant('{cmd}'), '/D /C exit /b 0');
+  if Observed <> '' then RaiseException('quiet success rejected: ' + Observed);
+  Observed := RunBridge(ExpandConstant('{cmd}'), '/D /C "echo harmless diagnostic 1>&2 & exit /b 0"');
+  if Observed <> '' then RaiseException('stderr success rejected: ' + Observed);
+  Observed := RunBridge(ExpandConstant('{cmd}'), '/D /C "echo BRIDGE_TEST_REJECTED 1>&2 & exit /b 2"');
+  if Observed <> 'BRIDGE_TEST_REJECTED' then RaiseException('native failure changed: ' + Observed);
+  Observed := RunBridge(ExpandConstant('{tmp}\missing-bridge.exe'), '');
+  if Observed <> 'BRIDGE_INSTALLATION_PROCESS_UNAVAILABLE' then RaiseException('launch failure accepted');
+  PreparedDirectory := '';
+  Observed := RunBridge(ExpandConstant('{cmd}'), '/D /C "echo PROFILE_BRIDGE_PREPARED_DIRECTORY_V1=release-fixture&exit /b 0"');
+  if (Observed <> '') or (PreparedDirectory <> 'release-fixture') then RaiseException('native directory locator lost');
+  PreparedDirectory := '';
+  Observed := RunBridge(ExpandConstant('{cmd}'), '/D /C "echo PROFILE_BRIDGE_PREPARED_DIRECTORY_V1=..\escape&exit /b 0"');
+  if Observed <> 'BRIDGE_INSTALLATION_OUTPUT_UNAVAILABLE' then RaiseException('unsafe directory locator accepted');
+  PreparedDirectory := '';
+  Observed := RunBridge(ExpandConstant('{cmd}'), '/D /C "echo PROFILE_BRIDGE_PREPARED_DIRECTORY_V1=release-one&echo PROFILE_BRIDGE_PREPARED_DIRECTORY_V1=release-two&exit /b 0"');
+  if Observed <> 'BRIDGE_INSTALLATION_OUTPUT_UNAVAILABLE' then RaiseException('ambiguous directory locator accepted');
+  Log('INSTALLER_PROCESS_ADAPTER_PROOF_PASS');
+  Result := False; { A proof process never proceeds to installation. }
+end;
+''', encoding="utf-8", newline="\n")
+        compiled_probe = subprocess.run([str(compiler), "/Qp", str(probe)],
+                                        capture_output=True, text=True, timeout=120)
+        if compiled_probe.returncode != 0:
+            fail(f"installer process proof compiler failed: {compiled_probe.stdout}\n{compiled_probe.stderr}")
+        probe_log = root / "process-probe.log"
+        subprocess.run([str(output / "process-probe.exe"), "/VERYSILENT", "/SUPPRESSMSGBOXES",
+                        "/NORESTART", f"/LOG={probe_log}"], capture_output=True, timeout=120)
+        raw_probe = probe_log.read_bytes() if probe_log.exists() else b""
+        captured_probe = raw_probe.decode("utf-16" if raw_probe.startswith(b"\xff\xfe") else "utf-8-sig")
+        if "INSTALLER_PROCESS_ADAPTER_PROOF_PASS" not in captured_probe:
+            fail(f"actual installer process adapter failed positive/negative proof:\n{captured_probe}")
         arguments = [str(compiler), "/Qp", f"/DInstallerInputDirectory={source}",
                      f"/DInstallerOutputDirectory={output}", str(template)]
         # Both ordinary and fixture wizards must compile without an OS publisher subscription.
@@ -395,7 +443,7 @@ def installer_smoke_test(bridge: Path, compiler: Path) -> None:
         if ((installation / "connection.json").exists()
                 or any((installation / "releases").iterdir())):
             fail("rejected installer published settings or staged a candidate")
-    print("Actual Windows installer compiled; subscription-free compilation and native CMS rejection proved.")
+    print("Actual Windows installer compiled; process success/failure capture and native CMS rejection proved.")
 
 
 def self_test() -> None:

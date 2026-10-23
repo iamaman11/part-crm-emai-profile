@@ -17,7 +17,8 @@ use profile_bridge::windows_delivery_handoff::{
     FIRST_INSTALL_ARGUMENT, HANDOFF_ACTIVATE_ARGUMENT, HANDOFF_ARRIVAL_ARGUMENT,
 };
 use profile_bridge::windows_delivery_install::{
-    NativeInstallerError, PREPARE_INSTALL_ARGUMENT, run_install_preparation,
+    NativeInstallerError, PREPARE_INSTALL_ARGUMENT, PREPARED_DIRECTORY_PREFIX,
+    run_install_preparation,
 };
 use std::env;
 use std::fmt;
@@ -43,6 +44,9 @@ where
     match parse_command(arguments)? {
         BridgeCommand::PrepareInstallation(bundle, root) => {
             let result = run_install_preparation(&bundle, &root);
+            if let Ok(directory) = &result {
+                println!("{PREPARED_DIRECTORY_PREFIX}{directory}");
+            }
             // Capture the complete typed verdict for setup before enforcing the exit gate.
             // Human diagnostics stay separate and contain no paths or installer inputs.
             println!(
@@ -51,12 +55,14 @@ where
                     "schema_version": 1,
                     "kind": "WINDOWS_PROFILE_BRIDGE_INSTALLATION_PREPARATION_OUTCOME",
                     "result": if result.is_ok() { "PREPARED" } else { "FAILED" },
-                    "owner_verdict": result.err().map(|error| format!("{error:?}")),
+                    "owner_verdict": result.as_ref().err().map(|error| format!("{error:?}")),
                     "activation_performed": false,
                     "health_verified": false,
                 })
             );
-            result.map_err(BridgeCliError::InstallationFailed)
+            result
+                .map(|_| ())
+                .map_err(BridgeCliError::InstallationFailed)
         }
         BridgeCommand::InitialProfile(intent) => {
             profile_bridge::shipping_composition::run_initial_profile(&intent)

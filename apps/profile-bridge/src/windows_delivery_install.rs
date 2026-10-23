@@ -10,11 +10,13 @@ use std::path::Path;
 mod bundle;
 
 pub const PREPARE_INSTALL_ARGUMENT: &str = "--delivery-prepare";
+/// Versioned installer-only locator; the native staging owner chooses the directory.
+pub const PREPARED_DIRECTORY_PREFIX: &str = "PROFILE_BRIDGE_PREPARED_DIRECTORY_V1=";
 
 pub fn run_install_preparation(
     bundle: &Path,
     installation_root: &Path,
-) -> Result<(), NativeInstallerError> {
+) -> Result<String, NativeInstallerError> {
     #[cfg(windows)]
     {
         windows::prepare(bundle, installation_root)
@@ -43,7 +45,7 @@ mod windows {
     use crate::windows_delivery_store::DeliveryStateStore;
     use std::{fs, io, path::Path};
 
-    pub(super) fn prepare(bundle_path: &Path, root: &Path) -> Result<(), NativeInstallerError> {
+    pub(super) fn prepare(bundle_path: &Path, root: &Path) -> Result<String, NativeInstallerError> {
         let bundle = InstallBundle::open(bundle_path)?;
         validate_directory_tree(root, true)?;
         fs::create_dir_all(root).map_err(|_| NativeInstallerError::Filesystem)?;
@@ -73,7 +75,7 @@ mod windows {
         let mut fetcher = WindowsReleaseAssetFetcher::from_system()
             .map_err(|_| NativeInstallerError::PlatformUnavailable)?;
         let mut reader = WindowsDeliveryArchiveReader::new();
-        WindowsDeliveryCoordinator::new(&downloads, &staging, &mut store)
+        let prepared = WindowsDeliveryCoordinator::new(&downloads, &staging, &mut store)
             .prepare_first_installation(
                 &bundle.manifest,
                 &bundle.signature,
@@ -85,7 +87,13 @@ mod windows {
             .map_err(NativeInstallerError::Preparation)?;
         // This command deliberately does not activate another process or claim runtime health.
         // The wizard next starts the exact staged executable with --delivery-install-staged.
-        Ok(())
+        prepared
+            .staged()
+            .path()
+            .file_name()
+            .and_then(|name| name.to_str())
+            .map(str::to_owned)
+            .ok_or(NativeInstallerError::Filesystem)
     }
 }
 
