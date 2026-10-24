@@ -167,6 +167,7 @@ pub enum OperatorFailureStage {
     DeviceAuthentication,
     Enrollment,
     RuntimeBundle,
+    DeliveryHealthStart,
     CoordinatorClaim,
     CoordinatorHeartbeat,
     LeaseValidation,
@@ -432,6 +433,27 @@ where
         C: GenerationReopenControlPort,
         Dl: GenerationObjectDownloadPort,
     {
+        self.open_authoritative_with_runtime_health(
+            claim, root, downloader, now, || Ok(()),
+        )
+    }
+
+    /// Installed delivery may durably begin its one-time health attempt exactly when the
+    /// verified profile is ready to start the real managed runtime. A profile/cache/network
+    /// refusal before this callback must not consume the installation's health attempt.
+    pub fn open_authoritative_with_runtime_health<Dl, H>(
+        &mut self,
+        claim: &ClaimUri,
+        root: &MaterializationRoot,
+        downloader: &mut Dl,
+        now: UnixMillis,
+        before_runtime_start: H,
+    ) -> Result<(), OperatorFlowError>
+    where
+        C: GenerationReopenControlPort,
+        Dl: GenerationObjectDownloadPort,
+        H: FnMut() -> Result<(), ()>,
+    {
         self.open_with_materialization(
             claim,
             root,
@@ -446,6 +468,7 @@ where
                     downloader,
                 )
             },
+            before_runtime_start,
         )
     }
 
@@ -463,15 +486,17 @@ where
             root,
             now,
             |_coordinator, _tenant_id, _profile_id, _generation_id| Ok(()),
+            || Ok(()),
         )
     }
 
-    fn open_with_materialization<F>(
+    fn open_with_materialization<F, H>(
         &mut self,
         claim: &ClaimUri,
         root: &MaterializationRoot,
         now: UnixMillis,
         mut ensure_materialized: F,
+        mut before_runtime_start: H,
     ) -> Result<(), OperatorFlowError>
     where
         F: FnMut(
@@ -480,6 +505,7 @@ where
             &ProfileId,
             &GenerationId,
         ) -> Result<(), AuthoritativeGenerationMaterializationError>,
+        H: FnMut() -> Result<(), ()>,
     {
         if self.cleanup_blocked {
             return Err(OperatorFlowError::CleanupRequired);
@@ -584,6 +610,15 @@ where
                 ));
             }
         };
+        // Only this exact boundary may consume pending delivery health. The runtime has
+        // not been spawned or allowed to mutate the workspace at this point.
+        if before_runtime_start().is_err() {
+            return Err(self.fail_with_lock_before_use(
+                OperatorFailureStage::DeliveryHealthStart,
+                lease,
+                workspace_lock,
+            ));
+        }
         let mut local_record = LocalGenerationRecord::new(
             enrollment.generation_id().clone(),
             inventory.total_bytes(),

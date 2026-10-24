@@ -258,6 +258,7 @@ const fn operator_code(error: crate::operator_flow::OperatorFlowError) -> &'stat
             Some(Stage::DeviceAuthentication) => "BRIDGE_DEVICE_AUTHENTICATION_FAILED",
             Some(Stage::Enrollment) => "BRIDGE_LAUNCH_REDEMPTION_FAILED",
             Some(Stage::RuntimeBundle) => "BRIDGE_RUNTIME_BUNDLE_INVALID",
+            Some(Stage::DeliveryHealthStart) => "BRIDGE_RUNTIME_HEALTH_START_FAILED",
             Some(Stage::CoordinatorClaim) => "BRIDGE_COORDINATOR_CLAIM_FAILED",
             Some(Stage::CoordinatorHeartbeat) => "BRIDGE_COORDINATOR_HEARTBEAT_FAILED",
             Some(Stage::LeaseValidation) => "BRIDGE_LEASE_VALIDATION_FAILED",

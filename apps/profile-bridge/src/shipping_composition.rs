@@ -76,21 +76,6 @@ fn confirmed_save_trigger<E>(observation: Result<bool, E>) -> Result<ConfirmedSa
     })
 }
 
-#[cfg(any(windows, test))]
-fn run_after_delivery_health_start<P, S, E, Start, Run>(
-    pending: Option<P>,
-    start: Start,
-    run: Run,
-) -> Result<Option<S>, E>
-where
-    Start: FnOnce(P) -> Result<S, E>,
-    Run: FnOnce() -> Result<(), E>,
-{
-    let started = pending.map(start).transpose()?;
-    run()?;
-    Ok(started)
-}
-
 pub fn run_claim(claim: &ClaimUri) -> Result<(), ShippingCompositionError> {
     #[cfg(windows)]
     {
@@ -135,7 +120,7 @@ pub fn run_delivery_command(
 mod windows {
     use super::{
         ConfirmedSaveTrigger, ShippingCompositionError, ShippingDeliveryCommand,
-        confirmed_save_trigger, run_after_delivery_health_start,
+        confirmed_save_trigger,
     };
     use crate::camouhost_process::{
         ManagedCamouhostConfig, ManagedCamouhostProcess, RuntimeBindingSlot, RuntimeDisplayMode,
@@ -344,24 +329,25 @@ mod windows {
             camouhost,
         );
         let opened_at = now()?;
-        let started_health = run_after_delivery_health_start(
-            pending_health,
-            |confirmation| {
-                confirmation
-                    .start_before_runtime_health()
-                    .map_err(|_| ShippingCompositionError::DeliveryHealth)
-            },
-            || {
-                operator
-                    .open_authoritative(
-                        claim,
-                        &materialization_root,
-                        &mut generation_downloader,
-                        opened_at,
-                    )
-                    .map_err(ShippingCompositionError::Operator)
-            },
-        )?;
+        let mut pending_health = pending_health;
+        let mut started_health = None;
+        operator
+            .open_authoritative_with_runtime_health(
+                claim,
+                &materialization_root,
+                &mut generation_downloader,
+                opened_at,
+                || {
+                    started_health = pending_health
+                        .take()
+                        .map(|confirmation| {
+                            confirmation.start_before_runtime_health().map_err(|_| ())
+                        })
+                        .transpose()?;
+                    Ok(())
+                },
+            )
+            .map_err(ShippingCompositionError::Operator)?;
 
         if let Some(confirmation) = started_health
             && confirmation.confirm_after_runtime_ready().is_err()
@@ -589,40 +575,6 @@ mod tests {
                 bridge_domain::BridgePortError::Unavailable,
             ))
         );
-    }
-
-    #[test]
-    fn runtime_health_never_starts_when_durable_attempt_start_fails() {
-        let runtime_started = Cell::new(false);
-        let result: Result<Option<()>, ShippingCompositionError> = run_after_delivery_health_start(
-            Some(()),
-            |_| Err(ShippingCompositionError::DeliveryHealth),
-            || {
-                runtime_started.set(true);
-                Ok(())
-            },
-        );
-        assert_eq!(result, Err(ShippingCompositionError::DeliveryHealth));
-        assert!(!runtime_started.get());
-    }
-
-    #[test]
-    fn durable_attempt_start_precedes_runtime_health_execution() {
-        let health_started = Cell::new(false);
-        let runtime_observed_started = Cell::new(false);
-        let result: Result<Option<()>, ShippingCompositionError> = run_after_delivery_health_start(
-            Some(()),
-            |_| {
-                health_started.set(true);
-                Ok(())
-            },
-            || {
-                runtime_observed_started.set(health_started.get());
-                Ok(())
-            },
-        );
-        assert_eq!(result, Ok(Some(())));
-        assert!(runtime_observed_started.get());
     }
 
     #[cfg(not(windows))]
