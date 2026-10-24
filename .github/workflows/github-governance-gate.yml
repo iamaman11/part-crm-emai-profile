@@ -255,6 +255,7 @@ jobs:
             printf '{}\n' > "$RUNNER_TEMP/ar11-observe-current-deployment.json"
           fi
           python scripts/deployment-identity-ar11.py \
+            --observe-version --account-id "$account_id" --worker-name "$worker_name" --token-env CLOUDFLARE_OBSERVE_API_TOKEN \
             --status "$RUNNER_TEMP/ar11-observe-current-deployment.json" \
             --output "$RUNNER_TEMP/ar11-observe-current-identity.json"
           workers_current_release_set_id="$(jq -r '.release_set_id // "NONE"' "$RUNNER_TEMP/ar11-observe-current-identity.json")"

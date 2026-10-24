@@ -940,7 +940,7 @@ jobs:
               > "$root/worker-deployments-fence.json"
             jq -e '.success == true and (.result.deployments | length) > 0' "$root/worker-deployments-fence.json" >/dev/null
             jq '.result.deployments[0]' "$root/worker-deployments-fence.json" > "$root/worker-deployment-fence.json"
-            python scripts/deployment-identity-ar11.py --status "$root/worker-deployment-fence.json" --output "$root/worker-identity-fence.json"
+            python scripts/deployment-identity-ar11.py --observe-version --account-id "$CLOUDFLARE_ACCOUNT_ID" --worker-name "$worker_name" --token-env CLOUDFLARE_OBSERVE_API_TOKEN --status "$root/worker-deployment-fence.json" --output "$root/worker-identity-fence.json"
             jq '.transaction_plan.expected_post_state.stage_plan' "$root/transaction.json" > "$root/sealed-stage.json"
             python scripts/d1-prepare.py verify-deployment --plan "$root/sealed-stage.json" \
               --deployment "$root/worker-deployment-fence.json" --identity "$root/worker-identity-fence.json" > "$root/prewrite-deployment-verification.json"
