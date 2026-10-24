@@ -2013,7 +2013,10 @@ mod tests {
         #[cfg(windows)]
         let _live_parent_lock = {
             use std::os::windows::fs::OpenOptionsExt;
-            fs::OpenOptions::new().read(true).share_mode(0).open(&lock_path)?
+            fs::OpenOptions::new()
+                .read(true)
+                .share_mode(0)
+                .open(&lock_path)?
         };
         let mut operator = ProfileBridgeOperator::new(
             FakeDeviceIdentity::new(fixture.device_id.clone()),
