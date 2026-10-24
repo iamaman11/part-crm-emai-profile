@@ -85,11 +85,14 @@ where
         Ok(workspace) => {
             match load_materialization_binding(&workspace, tenant_id, profile_id, generation_id) {
                 Ok(binding) => {
-                    if workspace.materialization_inventory_digest()
+                    if workspace
+                        .materialization_inventory_digest()
                         .map_err(|_| AuthoritativeGenerationMaterializationError::Local)?
                         != binding.materialized_inventory_digest()
                     {
-                        return Err(AuthoritativeGenerationMaterializationError::InvalidLocalEvidence);
+                        return Err(
+                            AuthoritativeGenerationMaterializationError::InvalidLocalEvidence,
+                        );
                     }
                     return Ok(());
                 }
@@ -99,7 +102,9 @@ where
                 Err(BrowserLaunchBlocker::LocalProfile(_)) => {
                     return Err(AuthoritativeGenerationMaterializationError::Local);
                 }
-                Err(_) => return Err(AuthoritativeGenerationMaterializationError::InvalidLocalEvidence),
+                Err(_) => {
+                    return Err(AuthoritativeGenerationMaterializationError::InvalidLocalEvidence);
+                }
             }
         }
         Err(LocalProfileError::Io(std::io::ErrorKind::NotFound)) => None,
@@ -160,15 +165,21 @@ where
             if !matches!(browser_writer_locks_absent(&workspace), Ok(true)) {
                 return Err(AuthoritativeGenerationMaterializationError::IncompleteLocalEvidence);
             }
-            verify_workspace_matches_snapshot(&workspace, opened.plaintext())
-                .map_err(|_| AuthoritativeGenerationMaterializationError::IncompleteLocalEvidence)?;
+            verify_workspace_matches_snapshot(&workspace, opened.plaintext()).map_err(|_| {
+                AuthoritativeGenerationMaterializationError::IncompleteLocalEvidence
+            })?;
             restore_materialization_binding_after_authoritative_open(
-                &workspace, tenant_id, profile_id, generation_id, &source_container_sha256,
+                &workspace,
+                tenant_id,
+                profile_id,
+                generation_id,
+                &source_container_sha256,
             )
             .map_err(|_| AuthoritativeGenerationMaterializationError::InvalidLocalEvidence)?;
             Ok(())
         })();
-        let released = lock.release()
+        let released = lock
+            .release()
             .map_err(|_| AuthoritativeGenerationMaterializationError::InvalidLocalEvidence);
         restored?;
         released?;
@@ -491,31 +502,51 @@ mod tests {
     -> Result<(), Box<dyn std::error::Error>> {
         let fixture = Fixture::new()?;
         let workspace = fixture.root.create_generation(
-            &fixture.tenant_id, &fixture.profile_id, &fixture.generation_id,
+            &fixture.tenant_id,
+            &fixture.profile_id,
+            &fixture.generation_id,
         )?;
-        fs::write(workspace.path().join(BROWSER_IDENTITY_RECORD_FILE),
-            &fixture.browser_identity_record)?;
-        fs::write(workspace.path().join("camoufox-config.json"), &fixture.config_bytes)?;
+        fs::write(
+            workspace.path().join(BROWSER_IDENTITY_RECORD_FILE),
+            &fixture.browser_identity_record,
+        )?;
+        fs::write(
+            workspace.path().join("camoufox-config.json"),
+            &fixture.config_bytes,
+        )?;
         fs::write(workspace.path().join("prefs.js"), b"authoritative-prefs")?;
         fs::create_dir_all(workspace.path().join("user_data/storage"))?;
-        fs::write(workspace.path().join("user_data/storage/state.bin"), b"authoritative-state")?;
+        fs::write(
+            workspace.path().join("user_data/storage/state.bin"),
+            b"authoritative-state",
+        )?;
         let mut control = fixture.control();
         let mut downloader = FakeDownloader {
-            container: fixture.container.clone(), calls: 0,
+            container: fixture.container.clone(),
+            calls: 0,
         };
         for _ in 0..2 {
             ensure_authoritative_generation(
-                &fixture.root, &fixture.tenant_id, &fixture.profile_id,
-                &fixture.generation_id, &DeviceId::parse("device_authgen_test")?,
-                1, &mut control, &mut downloader,
+                &fixture.root,
+                &fixture.tenant_id,
+                &fixture.profile_id,
+                &fixture.generation_id,
+                &DeviceId::parse("device_authgen_test")?,
+                1,
+                &mut control,
+                &mut downloader,
             )?;
         }
         assert_eq!(downloader.calls, 1);
         assert_eq!(control.opening_calls, 1);
         assert_eq!(
             load_materialization_binding(
-                &workspace, &fixture.tenant_id, &fixture.profile_id, &fixture.generation_id,
-            )?.source_container_sha256(),
+                &workspace,
+                &fixture.tenant_id,
+                &fixture.profile_id,
+                &fixture.generation_id,
+            )?
+            .source_container_sha256(),
             encode_sha256(fixture.container_digest)
         );
         fixture.cleanup();
