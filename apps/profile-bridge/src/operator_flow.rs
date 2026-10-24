@@ -2040,6 +2040,10 @@ mod tests {
         assert_eq!(operator.coordinator().closed, 1);
         assert_eq!(operator.coordinator().clean_closed, 0);
         assert!(operator.process().actions().is_empty());
+        // On Windows our test-owned exclusive handle must be released before reading
+        // the file contents; no production code ever removes or changes the Firefox file.
+        #[cfg(windows)]
+        drop(_live_parent_lock);
         assert_eq!(
             fs::read(workspace.path().join("user_data/parent.lock"))?,
             b"foreign-writer"
