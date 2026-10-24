@@ -547,9 +547,7 @@ mod windows {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        ConfirmedSaveTrigger, ShippingCompositionError, confirmed_save_trigger,
-    };
+    use super::{ConfirmedSaveTrigger, ShippingCompositionError, confirmed_save_trigger};
     #[cfg(not(windows))]
     use super::{ShippingDeliveryCommand, run_claim, run_delivery_command};
     #[cfg(not(windows))]
