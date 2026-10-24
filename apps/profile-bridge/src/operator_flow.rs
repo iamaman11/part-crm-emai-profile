@@ -1,8 +1,8 @@
 use crate::ProcessControlPort;
-use crate::browser_execution::browser_writer_locks_absent;
 use crate::authoritative_generation::{
     AuthoritativeGenerationMaterializationError, ensure_authoritative_generation,
 };
+use crate::browser_execution::browser_writer_locks_absent;
 #[cfg(any(test, feature = "synthetic-test-bin"))]
 use crate::browser_mail_query::BrowserMailExecutionProof;
 #[cfg(any(test, feature = "synthetic-test-bin"))]
@@ -308,7 +308,9 @@ impl OperatorFlowError {
             Self::Stage(stage) | Self::Runtime { stage, .. } | Self::Terminal { stage, .. } => {
                 Some(*stage)
             }
-            Self::AuthoritativeGeneration { .. } => Some(OperatorFailureStage::AuthoritativeGeneration),
+            Self::AuthoritativeGeneration { .. } => {
+                Some(OperatorFailureStage::AuthoritativeGeneration)
+            }
             Self::Preflight { .. } => Some(OperatorFailureStage::BrowserPreflight),
         }
     }
@@ -321,7 +323,8 @@ impl fmt::Display for OperatorFlowError {
             Self::CleanupRequired => formatter.write_str("previous operator cleanup is unresolved"),
             Self::Stage(stage) => write!(formatter, "operator flow failed at {stage:?}"),
             Self::AuthoritativeGeneration { reason, cleanup } => write!(
-                formatter, "authoritative generation preparation failed: {reason}; cleanup={cleanup:?}"
+                formatter,
+                "authoritative generation preparation failed: {reason}; cleanup={cleanup:?}"
             ),
             Self::Preflight {
                 reason,
@@ -433,9 +436,7 @@ where
         C: GenerationReopenControlPort,
         Dl: GenerationObjectDownloadPort,
     {
-        self.open_authoritative_with_runtime_health(
-            claim, root, downloader, now, || Ok(()),
-        )
+        self.open_authoritative_with_runtime_health(claim, root, downloader, now, || Ok(()))
     }
 
     /// Installed delivery may durably begin its one-time health attempt exactly when the
@@ -562,7 +563,9 @@ where
             // The authoritative owner reason must survive coordinator cleanup.
             let coordinator_lease = self.coordinator.close_lease(&lease).is_err();
             let cleanup = CleanupFailures {
-                process: false, workspace_lock: false, coordinator_lease,
+                process: false,
+                workspace_lock: false,
+                coordinator_lease,
             };
             if cleanup.any() {
                 self.cleanup_blocked = true;
@@ -597,7 +600,10 @@ where
         ) {
             let reason = B::operational_rejection_reason(&error);
             return Err(self.fail_preflight_with_lock_before_use(
-                reason, lease, workspace_lock, &workspace,
+                reason,
+                lease,
+                workspace_lock,
+                &workspace,
             ));
         }
         let inventory = match workspace.inventory() {
@@ -1017,7 +1023,8 @@ where
         // Preflight precedes begin_use/spawn. An unknown lock, writer/recovery verdict or
         // unsuccessful local lock release rules out clean cancellation.
         let absent = !matches!(
-            reason, OperationalRejectionReason::ProfileBusy | OperationalRejectionReason::RecoveryRequired
+            reason,
+            OperationalRejectionReason::ProfileBusy | OperationalRejectionReason::RecoveryRequired
         ) && matches!(browser_writer_locks_absent(workspace), Ok(true));
         let workspace_lock_failed = workspace_lock.release().is_err();
         let coordinator_lease = if absent && !workspace_lock_failed {

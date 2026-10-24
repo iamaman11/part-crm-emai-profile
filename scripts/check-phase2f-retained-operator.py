@@ -114,12 +114,26 @@ def failures_for_sources(
         )
 
     authoritative_flow = function_body(production, AUTHORITATIVE_OPEN)
-    delegate = authoritative_flow.find("self.open_with_materialization(")
-    rematerialize = authoritative_flow.find("ensure_authoritative_generation(")
-    if min(delegate, rematerialize) < 0 or delegate >= rematerialize:
-        failures.append(
-            "production launch must delegate to the single launch body with authoritative generation rematerialization"
+    # The installed delivery-health witness now wraps, but cannot replace, the single
+    # authoritative owner path. Both wrapper -> health boundary and boundary -> real
+    # materialization -> one launch body must be present.
+    if "self.open_authoritative_with_runtime_health(" in authoritative_flow:
+        health_flow = function_body(
+            production, "pub fn open_authoritative_with_runtime_health"
         )
+        delegate = health_flow.find("self.open_with_materialization(")
+        rematerialize = health_flow.find("ensure_authoritative_generation(")
+        if min(delegate, rematerialize) < 0 or delegate >= rematerialize:
+            failures.append(
+                "runtime health boundary must delegate to the single authoritative launch body"
+            )
+    else:
+        delegate = authoritative_flow.find("self.open_with_materialization(")
+        rematerialize = authoritative_flow.find("ensure_authoritative_generation(")
+        if min(delegate, rematerialize) < 0 or delegate >= rematerialize:
+            failures.append(
+                "production launch must delegate to the single launch body with authoritative generation rematerialization"
+            )
 
     close_flow = function_body(production, "pub fn close(")
     runtime_close = close_flow.find("RuntimeSessionOrchestrator::close(")
