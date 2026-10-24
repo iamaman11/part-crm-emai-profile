@@ -253,12 +253,29 @@ def validate_overlay(value: dict[str, Any]) -> None:
             raise ValueError("AR-11 credential overlay has invalid/duplicate credential identity")
         by_id[logical_id] = credential
     expected_ids = {
+        "cloudflare.profile-generation-root-keyring",
         "cloudflare.release-observation-api",
         "cloudflare.staging-zero-trust-observation-api",
         "windows.staging-delivery-integrity",
     }
     if set(by_id) != expected_ids:
-        raise ValueError("current credential overlay must own exactly the two observation credentials and staging delivery integrity key")
+        raise ValueError("current credential overlay identities drifted")
+
+    generation_keyring = by_id["cloudflare.profile-generation-root-keyring"]
+    if (
+        generation_keyring.get("class") != "ENCRYPTION_KEYRING"
+        or generation_keyring.get("owner") != "crates/cloudflare-adapters/src/generation_keyring.rs"
+        or generation_keyring.get("environment_scope") != {
+            "kind": "environment", "environments": ["staging", "production"]
+        }
+        or generation_keyring.get("bindings") != [{
+            "surface": "cloudflare_worker_secret",
+            "name": "PROFILE_GENERATION_ROOT_KEYRING",
+            "environments": ["staging", "production"],
+        }]
+        or generation_keyring.get("externally_issued") is not False
+    ):
+        raise ValueError("generation root keyring owner/binding/scope drifted")
 
     observation = by_id["cloudflare.release-observation-api"]
     if (
@@ -563,6 +580,24 @@ def validate_repository(root: Path = ROOT) -> State:
 
 
 def negative_self_test(state: State, root: Path = ROOT) -> None:
+    for field, invalid in [
+        ("owner", "unowned"),
+        ("bindings", []),
+        ("environment_scope", {"kind": "environment", "environments": ["production"]}),
+    ]:
+        bad_generation_keyring = copy.deepcopy(state.overlay)
+        keyring = next(
+            item for item in bad_generation_keyring["credentials"]
+            if item["id"] == "cloudflare.profile-generation-root-keyring"
+        )
+        keyring[field] = invalid
+        try:
+            validate_overlay(bad_generation_keyring)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(f"generation root keyring {field} drift unexpectedly passed")
+
     def reject(
         label: str,
         registry: dict[str, Any],
