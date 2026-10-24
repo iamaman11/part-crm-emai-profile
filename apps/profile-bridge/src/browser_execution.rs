@@ -343,21 +343,24 @@ fn observed_browser_writer_locks(
     workspace: &GenerationWorkspace,
 ) -> Result<(bool, bool), BrowserLaunchBlocker> {
     let root = workspace.path();
-    let mut parent_lock = path_present(&root.join(FIREFOX_PARENT_LOCK_FILE))?;
-    let mut lock = path_present(&root.join(FIREFOX_LOCK_FILE))?;
-    // Windows is the production shipping OS. Its user_data/parent.lock is a real
-    // file-handle lock, so we can distinguish stale files from live ownership.
-    // On other platforms the existing root-level fail-closed protocol is retained;
-    // Unix .parentlock symlinks need a separate process-liveness witness.
+    let parent_lock = path_present(&root.join(FIREFOX_PARENT_LOCK_FILE))?;
+    let lock = path_present(&root.join(FIREFOX_LOCK_FILE))?;
+    // Windows is the production shipping OS: its user_data/parent.lock is a real
+    // OS file-handle lock. Other platforms retain the prior root-level protocol;
+    // Unix .parentlock symlinks need separate process-liveness proof.
     #[cfg(windows)]
     {
         let browser_data = root.join(FIREFOX_USER_DATA_DIRECTORY);
-        parent_lock = parent_lock
+        let parent_lock = parent_lock
             || path_present(&browser_data.join(FIREFOX_PARENT_LOCK_FILE))?
             || windows_parent_lock_active(&browser_data.join(FIREFOX_WINDOWS_PARENT_LOCK_FILE))?;
-        lock = lock || path_present(&browser_data.join(FIREFOX_LOCK_FILE))?;
+        let lock = lock || path_present(&browser_data.join(FIREFOX_LOCK_FILE))?;
+        Ok((parent_lock, lock))
     }
-    Ok((parent_lock, lock))
+    #[cfg(not(windows))]
+    {
+        Ok((parent_lock, lock))
+    }
 }
 
 /// Negative browser-writer evidence for a locally held Bridge lock before runtime spawn.
