@@ -207,6 +207,22 @@ impl UserDiagnostic {
             Self::Launch(Launch::Initialization(_)) => {
                 "The profile could not open. Return to the application to check access, connection and session status, then try Open again. Keep local profile files; a failed request is not proof of a saved copy."
             }
+            Self::Launch(Launch::Operator(
+                crate::operator_flow::OperatorFlowError::AuthoritativeGeneration {
+                    reason: crate::authoritative_generation::AuthoritativeGenerationMaterializationError::IncompleteLocalEvidence,
+                    ..
+                },
+            )) => {
+                "The local profile copy is incomplete or differs from the verified cloud copy. Its existing data has been preserved. Return to Profile Operations to review recovery status; do not delete profile files or reconnect this computer."
+            }
+            Self::Launch(Launch::Operator(
+                crate::operator_flow::OperatorFlowError::AuthoritativeGeneration {
+                    reason: crate::authoritative_generation::AuthoritativeGenerationMaterializationError::InvalidLocalEvidence,
+                    ..
+                },
+            )) => {
+                "The local profile evidence does not match the selected verified generation. The application preserved existing data and refused an unsafe launch. Review recovery status in Profile Operations; do not replace the local files manually."
+            }
             Self::Launch(
                 Launch::Operator(_) | Launch::ActiveSessionMissing | Launch::CloseObservation(_),
             ) => {

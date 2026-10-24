@@ -1837,6 +1837,95 @@ mod tests {
     }
 
     #[test]
+    fn preflight_refusal_does_not_consume_pending_runtime_health()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let fixture = Fixture::new()?;
+        let mut operator = ProfileBridgeOperator::new(
+            FakeDeviceIdentity::new(fixture.device_id.clone()),
+            FakeDeviceKeyStore::default(),
+            FakeDeviceAuthentication { allow: true },
+            fixture.enrollment()?,
+            fixture.coordinator(),
+            FakeRuntimeBundles {
+                bundle: approved_bundle()?,
+                allow: true,
+            },
+            FakeBrowserPreflight {
+                allow: false,
+                calls: 0,
+            },
+            FakeProcessControl::default(),
+            FakeCamouhost::default(),
+        );
+        let mut started_health = false;
+        let result = operator.open_with_materialization(
+            &fixture.claim_uri,
+            &fixture.root,
+            UnixMillis::new(10),
+            |_coordinator, _tenant, _profile, _generation, _device, _epoch| Ok(()),
+            || {
+                started_health = true;
+                Ok(())
+            },
+        );
+        assert!(matches!(result, Err(OperatorFlowError::Preflight { .. })));
+        assert!(!started_health);
+        assert!(operator.process().actions().is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn runtime_health_witness_runs_before_the_first_managed_spawn()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let fixture = Fixture::new()?;
+        let mut operator = operator(&fixture, FakeCamouhost::default())?;
+        let mut started_health = false;
+        operator.open_with_materialization(
+            &fixture.claim_uri,
+            &fixture.root,
+            UnixMillis::new(10),
+            |_coordinator, _tenant, _profile, _generation, _device, _epoch| Ok(()),
+            || {
+                started_health = true;
+                Ok(())
+            },
+        )?;
+        assert!(started_health);
+        assert_eq!(
+            operator.process().actions(),
+            [ProcessAction::Spawn(fixture.lease.session_id().clone())]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn durable_health_start_failure_prevents_browser_spawn()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let fixture = Fixture::new()?;
+        let mut operator = operator(&fixture, FakeCamouhost::default())?;
+        let mut start_attempts = 0;
+        let error = operator.open_with_materialization(
+            &fixture.claim_uri,
+            &fixture.root,
+            UnixMillis::new(10),
+            |_coordinator, _tenant, _profile, _generation, _device, _epoch| Ok(()),
+            || {
+                start_attempts += 1;
+                Err(())
+            },
+        );
+        assert_eq!(
+            error,
+            Err(OperatorFlowError::Stage(
+                OperatorFailureStage::DeliveryHealthStart
+            ))
+        );
+        assert_eq!(start_attempts, 1);
+        assert!(operator.process().actions().is_empty());
+        Ok(())
+    }
+
+    #[test]
     fn browser_preflight_failure_prevents_runtime_spawn_and_releases_ownership()
     -> Result<(), Box<dyn std::error::Error>> {
         let fixture = Fixture::new()?;
