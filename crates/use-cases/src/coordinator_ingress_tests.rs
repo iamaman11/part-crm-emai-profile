@@ -39,6 +39,7 @@ struct FakePort {
     project_calls: Cell<u32>,
     fencing_calls: Cell<u32>,
     outbox_calls: Cell<u32>,
+    projection_error: Cell<Option<CoordinatorIngressPortErrorClass>>,
     runtime_error:
         Cell<Option<application_ports::coordinator_ingress::CoordinatorIngressPortErrorClass>>,
 }
@@ -52,6 +53,7 @@ impl FakePort {
             project_calls: Cell::new(0),
             fencing_calls: Cell::new(0),
             outbox_calls: Cell::new(0),
+            projection_error: Cell::new(None),
             runtime_error: Cell::new(None),
         }
     }
@@ -151,6 +153,9 @@ impl CoordinatorIngressApplicationPort for FakePort {
         _projected_at: UnixMillis,
     ) -> Result<(), CoordinatorIngressPortError> {
         self.project_calls.set(self.project_calls.get() + 1);
+        if let Some(class) = self.projection_error.get() {
+            return Err(CoordinatorIngressPortError::new(class));
+        }
         Ok(())
     }
 }
@@ -225,7 +230,8 @@ fn missing_or_non_live_profile_stops_before_runtime() -> Result<(), Box<dyn std:
 }
 
 #[test]
-fn snapshot_runtime_result_is_projected_after_success() -> Result<(), Box<dyn std::error::Error>> {
+fn snapshot_reads_authority_without_claiming_command_sequence()
+-> Result<(), Box<dyn std::error::Error>> {
     let port = FakePort::new(Some(CoordinatorProfileAccess::new("READY", true)));
     let access = prepared_access(&port, MembershipRole::Member)?;
     block_on(execute_prepared_coordinator_ingress(
@@ -237,8 +243,68 @@ fn snapshot_runtime_result_is_projected_after_success() -> Result<(), Box<dyn st
         CoordinatorIngressRequest::Snapshot,
     ))?;
     assert_eq!(port.snapshot_calls.get(), 1);
+    assert_eq!(port.execute_calls.get(), 0);
+    assert_eq!(port.fencing_calls.get(), 0);
+    assert_eq!(port.outbox_calls.get(), 0);
+    assert_eq!(port.project_calls.get(), 0);
+    Ok(())
+}
+
+#[test]
+fn read_after_command_does_not_collide_with_its_projection()
+-> Result<(), Box<dyn std::error::Error>> {
+    let port = FakePort::new(Some(CoordinatorProfileAccess::new("READY", true)));
+    let access = prepared_access(&port, MembershipRole::Member)?;
+    block_on(execute_prepared_coordinator_ingress(
+        &actor()?,
+        MembershipRole::Member,
+        &access,
+        &port,
+        &clock(),
+        CoordinatorIngressRequest::Command(envelope_input(
+            CoordinatorCommandInput::IssueLaunchIntent {
+                launch_intent_id: LaunchIntentId::parse("launch_01JCOORDINGRESS")?,
+                device_id: DeviceId::parse("device_01JCOORDINGRESS")?,
+                expires_in_ms: 30_000,
+            },
+        )?),
+    ))?;
+    assert_eq!(port.project_calls.get(), 1);
+    // The command already owns this sequence. A second projection would conflict in D1.
+    port.projection_error
+        .set(Some(CoordinatorIngressPortErrorClass::IntegrityFailure));
+    for _ in 0..2 {
+        let observed = block_on(execute_prepared_coordinator_ingress(
+            &actor()?,
+            MembershipRole::Member,
+            &access,
+            &port,
+            &clock(),
+            CoordinatorIngressRequest::Snapshot,
+        ))?;
+        assert_eq!(observed.outcome(), CoordinatorRuntimeOutcome::Snapshot);
+    }
+    assert_eq!(port.snapshot_calls.get(), 2);
     assert_eq!(port.outbox_calls.get(), 1);
     assert_eq!(port.project_calls.get(), 1);
+    // Real commands still fail closed when their own projection cannot be recorded.
+    assert_eq!(
+        block_on(execute_prepared_coordinator_ingress(
+            &actor()?,
+            MembershipRole::Member,
+            &access,
+            &port,
+            &clock(),
+            CoordinatorIngressRequest::Command(envelope_input(CoordinatorCommandInput::Claim {
+                launch_intent_id: LaunchIntentId::parse("launch_01JCOORDINGRESS")?,
+                device_id: DeviceId::parse("device_01JCOORDINGRESS")?,
+                session_id: SessionId::parse("session_01JCOORDINGRESS")?,
+            })?),
+        )),
+        Err(CoordinatorIngressOperationError::IntegrityFailure)
+    );
+    assert_eq!(port.project_calls.get(), 2);
+    assert_eq!(port.fencing_calls.get(), 1);
     Ok(())
 }
 

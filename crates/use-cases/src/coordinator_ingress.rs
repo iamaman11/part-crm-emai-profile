@@ -140,10 +140,14 @@ pub async fn execute_prepared_coordinator_ingress<
 ) -> Result<CoordinatorRuntimeResult, CoordinatorIngressOperationError> {
     let profile_id = access.profile_id();
     let result = match request {
-        CoordinatorIngressRequest::Snapshot => port
-            .snapshot(actor.tenant_scope(), profile_id)
-            .await
-            .map_err(map_port_error)?,
+        CoordinatorIngressRequest::Snapshot => {
+            // A read observes the current sequence; it cannot claim that sequence as a new
+            // command/outbox event with a different outcome from the transition just observed.
+            return port
+                .snapshot(actor.tenant_scope(), profile_id)
+                .await
+                .map_err(map_port_error);
+        }
         CoordinatorIngressRequest::Command(command) => {
             if matches!(command.command, CoordinatorCommandInput::MarkRecovered)
                 && role != MembershipRole::TenantOwner
