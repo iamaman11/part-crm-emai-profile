@@ -30,6 +30,10 @@ fn main() -> ExitCode {
     match run(env::args()) {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
+            if let BridgeCliError::LaunchFailed(ShippingCompositionError::Operator(owner)) = error {
+                // This closed typed outcome contains no claims, paths, credentials or profile data.
+                eprintln!("BRIDGE_OPERATOR_OUTCOME={owner:?}");
+            }
             eprintln!("{error}");
             error.diagnostic().show_desktop();
             ExitCode::from(2)
@@ -387,9 +391,13 @@ mod tests {
                 .contains("secret")
         );
         assert!(
-            !BridgeCliError::LaunchFailed(super::ShippingCompositionError::Operator)
-                .to_string()
-                .contains("claim_")
+            !BridgeCliError::LaunchFailed(super::ShippingCompositionError::Operator(
+                profile_bridge::operator_flow::OperatorFlowError::Stage(
+                    profile_bridge::operator_flow::OperatorFailureStage::CoordinatorClaim,
+                ),
+            ))
+            .to_string()
+            .contains("claim_")
         );
         assert!(
             !BridgeCliError::DeliveryFailed(super::ShippingCompositionError::DeliveryHandoff)

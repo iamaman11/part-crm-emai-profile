@@ -9,7 +9,6 @@ use crate::windows_delivery_staging::{DeliveryStagingRoot, reopen_staged_deliver
 use crate::windows_delivery_store::{
     DeliveryHandoffKind, DeliveryHandoffOutcome, DeliveryStateStore,
 };
-use profile_platform_primitives::{ActorContext, GenerationId, ProfileId};
 use serde_json::Value;
 use std::fmt;
 use std::fs;
@@ -320,14 +319,9 @@ impl DeliveryBoundRuntimeBundleSelection {
 impl RuntimeBundleSelectionPort for DeliveryBoundRuntimeBundleSelection {
     type Error = RuntimeBundleSelectionError;
 
-    fn select_bundle(
-        &mut self,
-        actor: &ActorContext,
-        profile_id: &ProfileId,
-        generation_id: &GenerationId,
-    ) -> Result<ApprovedRuntimeBundle, Self::Error> {
+    fn select_bundle(&mut self) -> Result<ApprovedRuntimeBundle, Self::Error> {
         verify_embedded_release_id(self.inner.runtime_root(), &self.expected_release_id)?;
-        let bundle = self.inner.select_bundle(actor, profile_id, generation_id)?;
+        let bundle = self.inner.select_bundle()?;
         verify_embedded_release_id(self.inner.runtime_root(), &self.expected_release_id)?;
         Ok(bundle)
     }

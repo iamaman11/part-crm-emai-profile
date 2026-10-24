@@ -408,7 +408,6 @@ mod p3_fixture {
         let transport = BackendMachineHttp {
             state: Rc::clone(&state),
         };
-        let runtime_generations = Rc::new(RefCell::new(Vec::new()));
         let enrollment = ControlPlaneEnrollment::new(transport.clone());
         let coordinator = ControlPlaneCoordinator::new(transport.clone());
         let runtime_binding = crate::camouhost_process::RuntimeBindingSlot::new();
@@ -431,10 +430,7 @@ mod p3_fixture {
             DeviceAuthentication,
             enrollment,
             coordinator,
-            RecordingBundles {
-                bundle,
-                generations: Rc::clone(&runtime_generations),
-            },
+            TestRuntimeBundle { bundle },
             browser_preflight,
             process,
             camouhost,
@@ -505,10 +501,6 @@ mod p3_fixture {
         assert!(capability < get);
         assert!(get < opening);
         assert!(events.iter().all(|event| !event.contains("device-job")));
-        assert_eq!(
-            runtime_generations.borrow().as_slice(),
-            [BASE_GENERATION, successor.as_str()]
-        );
 
         operator.abort(UnixMillis::new(50))?;
         eprintln!(

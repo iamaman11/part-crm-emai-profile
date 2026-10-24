@@ -175,7 +175,7 @@ where
         _ => return Err(InitialProfileError::Authorization),
     }
     let bundle = bundles
-        .select_bundle(actor, &intent.profile_id, &generation)
+        .select_bundle()
         .map_err(|_| InitialProfileError::RuntimeBundle)?;
     let workspace = root
         .create_generation(&intent.tenant_id, &intent.profile_id, &generation)
@@ -350,12 +350,7 @@ mod tests {
         struct NoBundle;
         impl RuntimeBundleSelectionPort for NoBundle {
             type Error = ();
-            fn select_bundle(
-                &mut self,
-                _: &ActorContext,
-                _: &ProfileId,
-                _: &GenerationId,
-            ) -> Result<ApprovedRuntimeBundle, ()> {
+            fn select_bundle(&mut self) -> Result<ApprovedRuntimeBundle, ()> {
                 Err(())
             }
         }

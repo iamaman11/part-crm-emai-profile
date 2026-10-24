@@ -21,7 +21,9 @@ pub enum ShippingCompositionError {
     FirstInstallation(crate::windows_delivery_handoff::DeliveryHandoffError),
     InstalledConnection(crate::installed_connection::InstalledConnectionError),
     DeliveryRecoveryRequired,
-    Operator,
+    Operator(crate::operator_flow::OperatorFlowError),
+    ActiveSessionMissing,
+    CloseObservation(bridge_domain::BridgePortError),
     CommittedRecoveryRequired,
     Initialization(crate::generation_initialization::InitialProfileError),
 }
@@ -43,7 +45,9 @@ impl core::fmt::Display for ShippingCompositionError {
             Self::DeliveryRecoveryRequired => {
                 "shipping Profile Bridge delivery recovery is required"
             }
-            Self::Operator => "shipping Profile Bridge operator flow failed",
+            Self::Operator(_) => "shipping Profile Bridge operator flow failed",
+            Self::ActiveSessionMissing => "shipping Profile Bridge active session is missing",
+            Self::CloseObservation(_) => "shipping Profile Bridge close observation failed",
             Self::Initialization(_) => "profile first-open preparation failed",
             Self::CommittedRecoveryRequired => {
                 "generation successor committed but local recovery is required"
@@ -355,7 +359,7 @@ mod windows {
                         &mut generation_downloader,
                         opened_at,
                     )
-                    .map_err(|_| ShippingCompositionError::Operator)
+                    .map_err(ShippingCompositionError::Operator)
             },
         )?;
 
@@ -379,16 +383,16 @@ mod windows {
             let session_id = operator
                 .active_session_id()
                 .cloned()
-                .ok_or(ShippingCompositionError::Operator)?;
+                .ok_or(ShippingCompositionError::ActiveSessionMissing)?;
             let save_trigger = confirmed_save_trigger(
                 close_observer
                     .observe_controlled_close(&session_id)
-                    .map_err(|_| ShippingCompositionError::Operator),
+                    .map_err(ShippingCompositionError::CloseObservation),
             )?;
             if save_trigger == ConfirmedSaveTrigger::BeginConfirmedSave {
                 operator
                     .close(now()?)
-                    .map_err(|_| ShippingCompositionError::Operator)?;
+                    .map_err(ShippingCompositionError::Operator)?;
                 let completion = operator
                     .save_retained_successor(
                         &materialization_root,
@@ -396,7 +400,7 @@ mod windows {
                         &mut generation_uploader,
                         now()?,
                     )
-                    .map_err(|_| ShippingCompositionError::Operator)?;
+                    .map_err(ShippingCompositionError::Operator)?;
                 if completion.is_saved() {
                     return Ok(());
                 }
@@ -406,7 +410,7 @@ mod windows {
             if observed_at >= next_heartbeat_deadline {
                 operator
                     .heartbeat(observed_at)
-                    .map_err(|_| ShippingCompositionError::Operator)?;
+                    .map_err(ShippingCompositionError::Operator)?;
                 next_heartbeat_deadline = next_heartbeat_at(
                     operator
                         .coordinator()
@@ -578,8 +582,12 @@ mod tests {
             Ok(ConfirmedSaveTrigger::BeginConfirmedSave)
         );
         assert_eq!(
-            confirmed_save_trigger(Err(ShippingCompositionError::Operator)),
-            Err(ShippingCompositionError::Operator)
+            confirmed_save_trigger(Err(ShippingCompositionError::CloseObservation(
+                bridge_domain::BridgePortError::Unavailable,
+            ))),
+            Err(ShippingCompositionError::CloseObservation(
+                bridge_domain::BridgePortError::Unavailable,
+            ))
         );
     }
 

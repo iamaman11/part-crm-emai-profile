@@ -58,12 +58,7 @@ pub trait EnrollmentPort {
 pub trait RuntimeBundleSelectionPort {
     type Error;
 
-    fn select_bundle(
-        &mut self,
-        actor: &ActorContext,
-        profile_id: &ProfileId,
-        generation_id: &GenerationId,
-    ) -> Result<ApprovedRuntimeBundle, Self::Error>;
+    fn select_bundle(&mut self) -> Result<ApprovedRuntimeBundle, Self::Error>;
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -480,6 +475,12 @@ where
         }
         self.last_terminal = None;
 
+        // Verify installed bytes before creating any short-lived authenticated launch intent.
+        // Exact generation/runtime compatibility is still enforced by browser_preflight below.
+        let runtime_bundle = self
+            .runtime_bundles
+            .select_bundle()
+            .map_err(|_| OperatorFlowError::Stage(OperatorFailureStage::RuntimeBundle))?;
         let device_id = self
             .device_identity
             .device_id()
@@ -495,14 +496,6 @@ where
             .enrollment
             .redeem_claim(claim, &device_id, now)
             .map_err(|_| OperatorFlowError::Stage(OperatorFailureStage::Enrollment))?;
-        let runtime_bundle = self
-            .runtime_bundles
-            .select_bundle(
-                enrollment.actor(),
-                enrollment.profile_id(),
-                enrollment.generation_id(),
-            )
-            .map_err(|_| OperatorFlowError::Stage(OperatorFailureStage::RuntimeBundle))?;
         let lease = self
             .coordinator
             .claim_launch_intent(
@@ -1253,12 +1246,7 @@ mod tests {
     impl RuntimeBundleSelectionPort for FakeRuntimeBundles {
         type Error = BridgePortError;
 
-        fn select_bundle(
-            &mut self,
-            _actor: &ActorContext,
-            _profile_id: &ProfileId,
-            _generation_id: &GenerationId,
-        ) -> Result<ApprovedRuntimeBundle, Self::Error> {
+        fn select_bundle(&mut self) -> Result<ApprovedRuntimeBundle, Self::Error> {
             if self.allow {
                 Ok(self.bundle.clone())
             } else {
@@ -1623,6 +1611,35 @@ mod tests {
                 ProcessAction::Spawn(fixture.lease.session_id().clone()),
                 ProcessAction::ForceTerminate(fixture.lease.session_id().clone()),
             ]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn rejected_runtime_does_not_consume_the_launch_claim() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let fixture = Fixture::new()?;
+        let mut operator = operator(&fixture, FakeCamouhost::default())?;
+        operator.runtime_bundles.allow = false;
+        assert_eq!(
+            operator.open(&fixture.claim_uri, &fixture.root, UnixMillis::new(10)),
+            Err(OperatorFlowError::Stage(
+                OperatorFailureStage::RuntimeBundle
+            ))
+        );
+        assert_eq!(operator.coordinator().claimed, 0);
+        assert!(operator.process().actions().is_empty());
+        // This must still be a first redemption, not ReplayRejected after failed local work.
+        assert!(
+            operator
+                .enrollment
+                .claim
+                .redeem(
+                    fixture.claim_uri.claim_code(),
+                    &fixture.device_id,
+                    UnixMillis::new(11),
+                )
+                .is_ok()
         );
         Ok(())
     }
