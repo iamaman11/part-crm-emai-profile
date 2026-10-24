@@ -163,9 +163,23 @@ pub enum BrowserVisibleMismatch {
 }
 
 impl ProfileStableIdentity {
-    /// Compare one pre-navigation browser-visible observation with the generation-owned identity.
+    /// Assess ordinary profile launch, keeping browser identity distinct from fingerprint fidelity.
     ///
-    /// This is the semantic admission owner for Profile-Stable browser fields. Runtime adapters
+    /// A different browser/OS identity is rejected. Host-dependent browser surfaces are diagnostic:
+    /// `Ok(Some(reason))` allows ordinary launch but explicitly does not prove fingerprint equality.
+    /// Runtime/config/data integrity, access and single-writer ownership are enforced by their owners.
+    pub fn assess_profile_launch<D: BrowserVisibleSha256Port>(
+        &self,
+        observation: &BrowserVisibleObservation,
+        digester: &mut D,
+    ) -> Result<Option<BrowserVisibleMismatch>, BrowserVisibleMismatch> {
+        self.compare_browser_os(&observation.browser_os)?;
+        Ok(self.compare_environment(observation, digester).err())
+    }
+
+    /// Strict fingerprint comparison for diagnostics/certification, not ordinary launch admission.
+    ///
+    /// This is the semantic comparison owner for Profile-Stable browser fields. Runtime adapters
     /// collect typed values and provide the SHA-256 primitive only; aggregate probe/config hashes
     /// cannot replace this verdict or choose another canonicalization.
     pub fn compare_browser_visible<D: BrowserVisibleSha256Port>(
@@ -174,6 +188,14 @@ impl ProfileStableIdentity {
         digester: &mut D,
     ) -> Result<(), BrowserVisibleMismatch> {
         self.compare_browser_os(&observation.browser_os)?;
+        self.compare_environment(observation, digester)
+    }
+
+    fn compare_environment<D: BrowserVisibleSha256Port>(
+        &self,
+        observation: &BrowserVisibleObservation,
+        digester: &mut D,
+    ) -> Result<(), BrowserVisibleMismatch> {
         self.compare_hardware(&observation.hardware)?;
         self.compare_display(observation.display)?;
         self.compare_graphics(&observation.graphics, digester)?;
@@ -974,6 +996,10 @@ mod tests {
             expected.compare_browser_visible(&observation, &mut TestSha256),
             Ok(())
         );
+        assert_eq!(
+            expected.assess_profile_launch(&observation, &mut TestSha256),
+            Ok(None)
+        );
         Ok(())
     }
 
@@ -1077,6 +1103,16 @@ mod tests {
         let cases = [
             {
                 let mut value = observation.clone();
+                value.browser_os.user_agent = "Mozilla/5.0 Firefox/151.0".to_owned();
+                (value, BrowserVisibleMismatch::UserAgent)
+            },
+            {
+                let mut value = observation.clone();
+                value.browser_os.platform = "Linux x86_64".to_owned();
+                (value, BrowserVisibleMismatch::Platform)
+            },
+            {
+                let mut value = observation.clone();
                 value.browser_os.oscpu = Observed::Available("Linux x86_64".to_owned());
                 (value, BrowserVisibleMismatch::Oscpu)
             },
@@ -1089,6 +1125,11 @@ mod tests {
                 let mut value = observation.clone();
                 value.display.device_pixel_ratio_milli = 1250;
                 (value, BrowserVisibleMismatch::DevicePixelRatio)
+            },
+            {
+                let mut value = observation.clone();
+                value.graphics.webgl_vendor = Observed::Available("Other Vendor".to_owned());
+                (value, BrowserVisibleMismatch::WebGlVendor)
             },
             {
                 let mut value = observation.clone();
@@ -1125,6 +1166,14 @@ mod tests {
                 expected.compare_browser_visible(&value, &mut TestSha256),
                 Err(mismatch)
             );
+            let launch = expected.assess_profile_launch(&value, &mut TestSha256);
+            match mismatch {
+                BrowserVisibleMismatch::UserAgent
+                | BrowserVisibleMismatch::BrowserMajor
+                | BrowserVisibleMismatch::Platform
+                | BrowserVisibleMismatch::Oscpu => assert_eq!(launch, Err(mismatch)),
+                _ => assert_eq!(launch, Ok(Some(mismatch))),
+            }
         }
         Ok(())
     }

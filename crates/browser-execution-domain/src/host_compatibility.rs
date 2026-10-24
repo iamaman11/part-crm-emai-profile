@@ -31,6 +31,7 @@ pub enum HostExecutionMode {
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub enum HostGraphicsBackend {
+    Unavailable,
     WebGl,
     WebGl2,
     WebGlAndWebGl2,
@@ -185,7 +186,12 @@ impl HostCompatibilityPolicy {
             [HostArchitecture::X86_64],
             [HostRuntimeClass::PackagedCamoufox],
             [HostExecutionMode::Headful],
-            [HostGraphicsBackend::WebGlAndWebGl2],
+            [
+                HostGraphicsBackend::Unavailable,
+                HostGraphicsBackend::WebGl,
+                HostGraphicsBackend::WebGl2,
+                HostGraphicsBackend::WebGlAndWebGl2,
+            ],
         )
     }
 
@@ -195,7 +201,12 @@ impl HostCompatibilityPolicy {
             [HostArchitecture::X86_64],
             [HostRuntimeClass::RepositoryPinnedCamoufox],
             [HostExecutionMode::Headful],
-            [HostGraphicsBackend::WebGlAndWebGl2],
+            [
+                HostGraphicsBackend::Unavailable,
+                HostGraphicsBackend::WebGl,
+                HostGraphicsBackend::WebGl2,
+                HostGraphicsBackend::WebGlAndWebGl2,
+            ],
         )
     }
 
@@ -371,7 +382,7 @@ mod tests {
     }
 
     #[test]
-    fn runtime_surface_failure_is_incompatible_not_identity_migration()
+    fn ordinary_profile_launch_does_not_require_a_particular_webgl_backend()
     -> Result<(), Box<dyn std::error::Error>> {
         let policy = HostCompatibilityPolicy::windows_first_release_headful()?;
         let observation = HostCompatibilityObservation::prelaunch(
@@ -381,12 +392,30 @@ mod tests {
             HostExecutionMode::Headful,
             1_800_000_000_000,
             true,
-        )
-        .with_runtime_evidence(true, display(), HostGraphicsBackend::WebGl);
-        assert_eq!(
-            policy.evaluate(&observation),
-            HostCompatibilityDecision::IncompatibleHost
         );
+        for graphics in [
+            HostGraphicsBackend::Unavailable,
+            HostGraphicsBackend::WebGl,
+            HostGraphicsBackend::WebGl2,
+            HostGraphicsBackend::WebGlAndWebGl2,
+        ] {
+            assert_eq!(
+                policy.evaluate(&observation.clone().with_runtime_evidence(
+                    true,
+                    display(),
+                    graphics
+                )),
+                HostCompatibilityDecision::Accepted
+            );
+            assert_eq!(
+                policy.evaluate(&observation.clone().with_runtime_evidence(
+                    false,
+                    display(),
+                    graphics
+                )),
+                HostCompatibilityDecision::IncompatibleHost
+            );
+        }
         Ok(())
     }
 }

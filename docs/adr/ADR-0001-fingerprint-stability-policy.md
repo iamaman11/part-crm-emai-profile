@@ -3,6 +3,7 @@
 **Статус:** accepted
 **Дата:** 2026-08-05
 **Cross-device clarification:** 2026-08-31
+**Ordinary profile launch clarification:** 2026-10-24
 **Решение требуется до:** включения генерации production-профилей
 
 ## Контекст
@@ -40,8 +41,9 @@ profile generation:
 - touch/device capability model;
 - profile-level BrowserForge config signature.
 
-Изменение profile-stable значения требует создания нового generation и
-повторной сертификации. In-place mutation запрещена.
+Изменение сохранённого profile-stable значения требует создания нового generation;
+для fingerprint-сертификации требуется повторная проверка. In-place mutation запрещена.
+Различие наблюдаемого значения на host не изменяет сохранённую конфигурацию само по себе.
 
 ### 2. Origin-Deterministic
 
@@ -103,15 +105,17 @@ Session-dynamic signals контролируются диапазонами и c
 Цель платформы — не привязать browser profile к одному физическому компьютеру и
 не решать drift запретом второго устройства. Один и тот же подтвержденный
 `profile generation` должен воспроизводиться на другом авторизованном supported
-Windows device через тот же pinned Camoufox runtime, если runtime способен
-представить сохраненную browser-visible identity независимо от физических
-характеристик нового host.
+Windows device через тот же pinned Camoufox runtime и сохранённую конфигурацию.
+Полное равенство всех наблюдаемых fingerprint-полей не является условием обычного
+открытия Profile первого release.
 
 **Нормальный продуктовый результат — успешный перенос и запуск на другом
-совместимом устройстве.** Fail-closed отказ существует только для необъяснимого
-drift или доказанной неспособности конкретного runtime/host воспроизвести
-принятый контракт; он не является целью или основным способом обеспечить
-стабильность.
+совместимом устройстве.** Camoufox отвечает за исполнение браузера, применение
+конфигурации и фактические возможности своих API. Приложение отвечает за точный
+runtime/config, актуальное состояние профиля, доступ, single-writer и подтверждённое
+сохранение. Оно не добавляет собственные подмены WebGL/fonts/voices и не обещает
+устранить ограничения Camoufox. Ошибка целостности или доступа блокирует запуск;
+допустимое отличие fingerprint остаётся диагностикой.
 
 Binding target:
 
@@ -124,7 +128,7 @@ server-selected exact generation
 -> host/runtime compatibility admission
 -> Camoufox masking/virtualization
 -> typed browser-visible observation
--> exact policy comparison
+-> browser/OS identity admission + environment difference diagnostics
 -> navigation allowed
 ```
 
@@ -132,11 +136,17 @@ server-selected exact generation
 audio devices или другое host-состояние не получают права молча переписать
 identity существующего generation. Приоритет реализации:
 
-1. воспроизвести сохраненное значение средствами Camoufox/config/runtime masking;
-2. проверить фактически наблюдаемое browser-visible значение до пользовательской
-   навигации;
-3. только если pinned runtime доказанно не умеет безопасно представить требуемую
-   identity на данном host, вернуть явный incompatible-host/recovery outcome.
+1. передать Camoufox точную сохранённую конфигурацию без регенерации fingerprint;
+2. проверить browser/OS identity до навигации: UA, browser major, platform и oscpu;
+3. различия hardware, display/DPR, GPU/WebGL, fonts, locale и speech voices
+   записать как типизированную диагностику без raw fingerprint значений и разрешить
+   обычный запуск. Это не verdict полного совпадения или fingerprint certification.
+
+WebGL1, WebGL2, оба или явно наблюдаемое отсутствие обоих допустимы для обычного
+профиля. Приложение не требует определённого GPU и не меняет конфигурацию ради
+успешного сравнения. Невалидное или отсутствующее runtime evidence остаётся ошибкой.
+Strict typed comparison сохраняет все несовпадения для диагностики/сертификации,
+но не используется как универсальное veto обычного открытия.
 
 `IncompatibleHost` — fail-closed граница безопасности, а не штатная стратегия
 переносимости. Supported Windows acceptance должен стремиться доказать успешный
@@ -181,13 +191,14 @@ Aggregate probe SHA также является evidence и не заменяе�
 ### Host compatibility не является browser identity
 
 Физический host проверяется отдельным compatibility admission. Минимально
-значимы supported Windows/runtime class, architecture, display/DPI environment,
-graphics backend, execution/display mode, clock sanity и необходимые
-filesystem/process capabilities.
+значимы supported Windows/runtime class, architecture, пригодная display environment,
+execution/display mode, clock sanity и необходимые filesystem/process capabilities.
+Наблюдаемая GPU-модель и наличие WebGL не являются обязательными для обычного запуска.
 
 Host observation не должен попадать в generation как новая identity только
 потому, что профиль открылся на другом ПК. Если физический host отличается, но
-Camoufox воспроизводит ту же browser-visible identity, запуск совместим.
+сохранённые runtime/config и обязательная browser/OS identity проверены, обычный
+запуск совместим. Различия остальных наблюдений не дают fingerprint certification PASS.
 
 Запрещено:
 
@@ -262,6 +273,10 @@ controlled migration:
 
 ## Certification Gates
 
+Эти gates проверяют отдельное утверждение о fingerprint, а не являются обязательной
+процедурой каждого обычного открытия Profile. Product scope и первый release определяет
+`docs/PRODUCT.md`; источник строгой fingerprint-проверки остаётся тем же typed domain owner.
+
 ### Intra-Profile Consistency
 
 - не менее 10 холодных запусков;
@@ -279,8 +294,9 @@ controlled migration:
 2. сохранить browser state marker и exact generation identity;
 3. восстановить тот же encrypted generation на независимо авторизованном Host B;
 4. использовать тот же exact accepted runtime/config identity;
-5. доказать совпадение typed Profile-Stable browser-visible vector до
-   пользовательской навигации;
+5. для обычной profile-state portability проверить browser/OS identity и записать
+   остальные typed differences до навигации; полное совпадение Profile-Stable vector
+   требуется только для отдельного утверждения о fingerprint equivalence;
 6. доказать восстановление persistent cookie/localStorage и применимого
    generation state;
 7. отдельно доказать network-bound coherence для route, выбранного на Host B.
@@ -339,9 +355,9 @@ Production-порядок:
   identity на другом compatible device;
 - отделять host compatibility и network identity от browser identity;
 - привязать изменения к generation и runtime bundle;
-- проверять typed browser-visible consistency автоматически до навигации;
-- блокировать только unexplained drift или доказанно несовместимый host, не
-  запрещая cross-device запуск как продуктовую модель.
+- проверять browser/OS identity до навигации, остальные typed differences диагностировать;
+- блокировать нарушения целостности, доступа, writer ownership и обязательной runtime/host
+  совместимости; допустимые различия fingerprint не запрещают обычный cross-device запуск.
 
 Не решаемой является только абсолютная гарантия «никогда не будет обнаружен».
 Такую гарантию нельзя достоверно дать ни для Camoufox, ни для физического
