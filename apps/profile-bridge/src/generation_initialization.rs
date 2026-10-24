@@ -597,7 +597,10 @@ mod tests {
             &mut ReplayTransport,
             &mut NoUpload,
         )?;
-        assert!(replay.as_str().starts_with("profilebridge://claim/"));
+        assert_eq!(
+            replay,
+            ClaimUri::parse("profilebridge://claim/claim_ready_0123456789abcdef0123456789")?,
+        );
         assert!(workspace.path().exists());
         fs::remove_dir_all(&root_path)?;
         Ok(())
