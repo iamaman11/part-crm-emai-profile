@@ -20,6 +20,7 @@ pub enum AuthoritativeGenerationMaterializationError {
     Local,
     IncompleteLocalEvidence,
     InvalidLocalEvidence,
+    LocalAccessDenied,
     ControlPlane,
     Download,
     DescriptorMismatch,
@@ -38,6 +39,7 @@ impl core::fmt::Display for AuthoritativeGenerationMaterializationError {
                 "existing local generation is incomplete; retain bytes for recovery"
             }
             Self::InvalidLocalEvidence => "existing local generation evidence is invalid",
+            Self::LocalAccessDenied => "local generation evidence cannot be accessed",
             Self::ControlPlane => "authoritative generation control-plane request failed",
             Self::Download => "authoritative generation object download failed",
             Self::DescriptorMismatch => "download capability does not name the requested authority",
@@ -102,6 +104,11 @@ where
                 Err(BrowserLaunchBlocker::LocalProfile(LocalProfileError::Io(
                     std::io::ErrorKind::NotFound,
                 ))) => Some(workspace),
+                Err(BrowserLaunchBlocker::LocalProfile(LocalProfileError::Io(
+                    std::io::ErrorKind::PermissionDenied,
+                ))) => {
+                    return Err(AuthoritativeGenerationMaterializationError::LocalAccessDenied);
+                }
                 Err(BrowserLaunchBlocker::LocalProfile(_)) => {
                     return Err(AuthoritativeGenerationMaterializationError::Local);
                 }
