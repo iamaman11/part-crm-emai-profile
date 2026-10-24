@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import { readFile } from 'node:fs/promises';
+import { execFileSync } from 'node:child_process';
 import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
@@ -206,37 +207,13 @@ function validateLifecycle(authority) {
   return errors;
 }
 
-function validateWranglerClassification(authority, controlConfig, resolverConfig) {
-  const errors = [];
-  const classified = new Set();
-  for (const credential of authority?.credentials ?? []) {
-    for (const binding of credential?.bindings ?? []) {
-      if (binding?.surface === 'cloudflare_worker_secret' && typeof binding?.name === 'string') {
-        classified.add(binding.name);
-      }
-    }
-  }
-  for (const [label, config] of [['control-plane', controlConfig], ['resolver', resolverConfig]]) {
-    for (const environment of ['staging', 'production']) {
-      const required = config?.env?.[environment]?.secrets?.required;
-      if (!Array.isArray(required) || required.some((value) => typeof value !== 'string')) {
-        errors.push(`${label} ${environment} must declare secrets.required`);
-        continue;
-      }
-      if (new Set(required).size !== required.length) errors.push(`${label} ${environment} secrets.required contains duplicates`);
-      for (const name of required) {
-        if (!classified.has(name)) errors.push(`${label} ${environment} required Worker secret ${name} is not classified by the credential authority`);
-      }
-    }
-  }
-  return errors;
-}
-
 async function validateAll(root, authorityOverride = null) {
   const authority = authorityOverride ?? await loadJson(root, AUTHORITY_RELATIVE);
-  const controlConfig = await loadJson(root, CONTROL_CONFIG_RELATIVE);
-  const resolverConfig = await loadJson(root, RESOLVER_CONFIG_RELATIVE);
-  return [...validateLifecycle(authority), ...validateWranglerClassification(authority, controlConfig, resolverConfig)];
+  // Current binding classification belongs to the existing composition owner, not immutable AR-8B.
+  execFileSync(process.platform === 'win32' ? 'python' : 'python3',
+    [path.join(root, 'scripts/credential_authority.py'), '--root', root],
+    { cwd: root, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
+  return validateLifecycle(authority);
 }
 
 function report(errors) {

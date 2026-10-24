@@ -54,6 +54,14 @@ SOURCE_CONSTANTS = {
         "apps/control-plane-worker/src/composition.rs",
         "CLIENT_CONTACT_PROTECTION_KEYRING_BINDING",
     ),
+    "generation_keyring": (
+        "apps/control-plane-worker/src/composition.rs",
+        "GENERATION_ROOT_KEYRING_BINDING",
+    ),
+    "profile_launch_claim_key": (
+        "apps/control-plane-worker/src/profiles/profile_launch_composition.rs",
+        "PROFILE_LAUNCH_CLAIM_KEY",
+    ),
     "mailbox_resolver_caller_auth": (
         "crates/cloudflare-adapters/src/resolver_request.rs",
         "CALLER_AUTH_SECRET",
@@ -311,6 +319,8 @@ def validate_config(
     }
     expected_core_secrets = {
         source["contact_keyring"],
+        source["generation_keyring"],
+        source["profile_launch_claim_key"],
         source["r2_access_key_id"],
         source["r2_secret_access_key"],
     }
@@ -376,6 +386,20 @@ def main() -> int:
         profiles = release_profiles()
         document = object_value(json.loads(CONFIG.read_text(encoding="utf-8")), "wrangler config")
         validate_config(document, source, profiles)
+
+        for environment in ("staging", "production"):
+            for credential in ("generation_keyring", "profile_launch_claim_key"):
+                missing = copy.deepcopy(document)
+                required = missing["env"][environment]["secrets"]["required"]
+                required.remove(source[credential])
+                try:
+                    validate_config(missing, source, profiles)
+                except BindingInventoryError:
+                    pass
+                else:
+                    raise BindingInventoryError(
+                        f"{environment} missing {credential} unexpectedly passed"
+                    )
 
         tampered = copy.deepcopy(document)
         production = object_value(object_value(tampered["env"], "env")["production"], "production")
