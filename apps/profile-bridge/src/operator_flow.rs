@@ -1035,12 +1035,7 @@ where
             reason,
             OperationalRejectionReason::ProfileBusy | OperationalRejectionReason::RecoveryRequired
         );
-        let cleanup = self.cleanup_before_browser_use(
-            &lease,
-            workspace_lock,
-            workspace,
-            eligible,
-        );
+        let cleanup = self.cleanup_before_browser_use(&lease, workspace_lock, workspace, eligible);
         OperatorFlowError::Preflight {
             reason,
             local_state: LocalGenerationState::MaterializedClean,
@@ -1055,12 +1050,7 @@ where
         workspace_lock: BridgeWorkspaceLock,
         workspace: &GenerationWorkspace,
     ) -> OperatorFlowError {
-        let cleanup = self.cleanup_before_browser_use(
-            &lease,
-            workspace_lock,
-            workspace,
-            true,
-        );
+        let cleanup = self.cleanup_before_browser_use(&lease, workspace_lock, workspace, true);
         if cleanup.any() {
             OperatorFlowError::Terminal {
                 stage,
@@ -2036,7 +2026,10 @@ mod tests {
         assert_eq!(operator.coordinator().closed, 1);
         assert_eq!(operator.coordinator().clean_closed, 0);
         assert!(operator.process().actions().is_empty());
-        assert_eq!(fs::read(workspace.path().join(".parentlock"))?, b"foreign-writer");
+        assert_eq!(
+            fs::read(workspace.path().join(".parentlock"))?,
+            b"foreign-writer"
+        );
         Ok(())
     }
 
