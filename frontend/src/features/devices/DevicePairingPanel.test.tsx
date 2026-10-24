@@ -65,7 +65,7 @@ describe('DevicePairingPanel', () => {
 
   it('offers the exact deployed installer and keeps installation distinct from registration', async () => {
     renderPanel();
-    const link = await screen.findByRole('link', { name: 'Install for Windows' });
+    const link = await screen.findByRole('link', { name: 'Install or update for Windows' });
     expect(link.getAttribute('href')).toContain(`release-set-v3-sha256-${'a'.repeat(64)}/ProfileBridgeSetup.exe`);
     expect(screen.queryByText('Device registration confirmed')).toBeNull();
     expect(mockedGetDeviceRegistration).not.toHaveBeenCalled();
@@ -75,7 +75,7 @@ describe('DevicePairingPanel', () => {
     vi.mocked(getDeviceInstaller).mockRejectedValue(new Error('Installer unavailable'));
     renderPanel();
     expect(await screen.findByRole('button', { name: 'Try loading installer again' })).toBeTruthy();
-    expect(screen.queryByRole('link', { name: 'Install for Windows' })).toBeNull();
+    expect(screen.queryByRole('link', { name: 'Install or update for Windows' })).toBeNull();
     expect(await screen.findByRole('link', { name: 'Connect this computer' })).toBeTruthy();
   });
 
@@ -159,6 +159,9 @@ describe('DevicePairingPanel', () => {
     expect(await screen.findByText('Device registration confirmed')).toBeTruthy();
     expect(screen.getByText('device_01JTEST')).toBeTruthy();
     expect(screen.getByText(/Go to Profiles and choose Open browser/)).toBeTruthy();
+    const installer = await screen.findByRole('link', { name: 'Install or update for Windows' });
+    expect(installer.getAttribute('href')).toContain(`release-set-v3-sha256-${'a'.repeat(64)}/ProfileBridgeSetup.exe`);
+    expect(screen.queryByRole('link', { name: 'Connect this computer' })).toBeNull();
     expect(mockedGetDeviceRegistration).toHaveBeenCalledWith('tenant_01JTEST', 'device_01JTEST', expect.any(AbortSignal));
     expect(mockedAuthorizeDevicePairing).not.toHaveBeenCalled();
   });

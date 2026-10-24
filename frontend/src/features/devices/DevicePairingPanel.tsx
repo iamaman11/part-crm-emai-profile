@@ -111,9 +111,9 @@ function InstallBridge({ tenantId }: { tenantId: string }) {
   });
   return (
     <section aria-label="Install Profile Bridge">
-      <h4>First time on this Windows computer?</h4>
-      <p>Install Profile Bridge once. Setup downloads and verifies the browser component, then returns here to connect this computer.</p>
-      {installer.data ? <a href={installer.data.downloadUrl}>Install for Windows</a> : null}
+      <h4>Install or update Profile Bridge</h4>
+      <p>Set up a new computer or update an existing installation. Setup keeps your connection and profile data.</p>
+      {installer.data ? <a href={installer.data.downloadUrl}>Install or update for Windows</a> : null}
       <p>The first release has no verified Windows publisher. Windows may warn or block installation.</p>
       <StatusMessage state={installer.error ?? (installer.isPending ? 'Loading Windows installer…' : null)} />
       {installer.error ? <button type="button" onClick={() => void installer.refetch()}>Try loading installer again</button> : null}
@@ -139,7 +139,12 @@ export function DevicePairingPanel() {
     return <StatusMessage state="The device pairing callback is invalid." />;
   }
   if (fragment.kind === 'connected') {
-    return <RegistrationConfirmation tenantId={tenantId} deviceId={fragment.deviceId} />;
+    return (
+      <>
+        <RegistrationConfirmation tenantId={tenantId} deviceId={fragment.deviceId} />
+        <InstallBridge tenantId={tenantId} />
+      </>
+    );
   }
 
   const startUri = `profilebridge://pair/start/${tenantId}/${deviceId}`;
