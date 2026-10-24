@@ -341,7 +341,10 @@ mod tests {
             (Reason::LocalAccessDenied, "BRIDGE_LOCAL_CACHE_INACCESSIBLE"),
             (Reason::Download, "BRIDGE_GENERATION_DOWNLOAD_FAILED"),
             (Reason::ControlPlane, "BRIDGE_SERVICE_UNREACHABLE"),
-            (Reason::MetadataMismatch, "BRIDGE_GENERATION_INTEGRITY_FAILED"),
+            (
+                Reason::MetadataMismatch,
+                "BRIDGE_GENERATION_INTEGRITY_FAILED",
+            ),
         ];
         for (reason, expected) in cases {
             let diagnostic = UserDiagnostic::Launch(ShippingCompositionError::Operator(
