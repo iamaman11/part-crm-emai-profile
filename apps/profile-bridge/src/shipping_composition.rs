@@ -549,13 +549,11 @@ mod windows {
 mod tests {
     use super::{
         ConfirmedSaveTrigger, ShippingCompositionError, confirmed_save_trigger,
-        run_after_delivery_health_start,
     };
     #[cfg(not(windows))]
     use super::{ShippingDeliveryCommand, run_claim, run_delivery_command};
     #[cfg(not(windows))]
     use bridge_domain::ClaimUri;
-    use std::cell::Cell;
 
     #[test]
     fn confirmed_save_requires_positive_controlled_close_witness() {
