@@ -619,7 +619,7 @@ where
                     OperatorFailureStage::LocalWorkspace,
                     lease,
                     workspace_lock,
-                &workspace,
+                    &workspace,
                 ));
             }
         };
@@ -630,7 +630,7 @@ where
                 OperatorFailureStage::DeliveryHealthStart,
                 lease,
                 workspace_lock,
-            &workspace,
+                &workspace,
             ));
         }
         let mut local_record = LocalGenerationRecord::new(
@@ -643,7 +643,7 @@ where
                 OperatorFailureStage::LocalLifecycle,
                 lease,
                 workspace_lock,
-            &workspace,
+                &workspace,
             ));
         }
 
@@ -1036,7 +1036,10 @@ where
             OperationalRejectionReason::ProfileBusy | OperationalRejectionReason::RecoveryRequired
         );
         let cleanup = self.cleanup_before_browser_use(
-            &lease, workspace_lock, workspace, eligible,
+            &lease,
+            workspace_lock,
+            workspace,
+            eligible,
         );
         OperatorFlowError::Preflight {
             reason,
@@ -1053,7 +1056,10 @@ where
         workspace: &GenerationWorkspace,
     ) -> OperatorFlowError {
         let cleanup = self.cleanup_before_browser_use(
-            &lease, workspace_lock, workspace, true,
+            &lease,
+            workspace_lock,
+            workspace,
+            true,
         );
         if cleanup.any() {
             OperatorFlowError::Terminal {
