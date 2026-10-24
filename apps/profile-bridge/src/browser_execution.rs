@@ -344,7 +344,7 @@ fn observed_browser_writer_locks(
     let browser_data = root.join(FIREFOX_USER_DATA_DIRECTORY);
     let parent_lock = path_present(&root.join(FIREFOX_PARENT_LOCK_FILE))?
         || path_present(&browser_data.join(FIREFOX_PARENT_LOCK_FILE))?
-        || path_present(&browser_data.join(FIREFOX_WINDOWS_PARENT_LOCK_FILE))?;
+        || windows_parent_lock_active(&browser_data.join(FIREFOX_WINDOWS_PARENT_LOCK_FILE))?;
     let lock = path_present(&root.join(FIREFOX_LOCK_FILE))?
         || path_present(&browser_data.join(FIREFOX_LOCK_FILE))?;
     Ok((parent_lock, lock))
@@ -356,6 +356,38 @@ pub(crate) fn browser_writer_locks_absent(
 ) -> Result<bool, BrowserLaunchBlocker> {
     let (parent_lock, lock) = observed_browser_writer_locks(workspace)?;
     Ok(!parent_lock && !lock)
+}
+
+/// Windows Firefox may retain parent.lock after the owning process exits.
+/// An exclusive read-only open proves no active Windows file-handle ownership.
+/// Unreadable/locked evidence never authorizes Clean.
+fn windows_parent_lock_active(path: &Path) -> Result<bool, BrowserLaunchBlocker> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) => {
+            if metadata.file_type().is_symlink() || !metadata.is_file() {
+                return Ok(true);
+            }
+            #[cfg(windows)]
+            {
+                use std::os::windows::fs::OpenOptionsExt;
+                match OpenOptions::new().read(true).share_mode(0).open(path) {
+                    Ok(handle) => {
+                        drop(handle);
+                        Ok(false)
+                    }
+                    Err(error) if matches!(error.raw_os_error(), Some(5 | 32 | 33)) => Ok(true),
+                    Err(error) => Err(LocalProfileError::from(error).into()),
+                }
+            }
+            #[cfg(not(windows))]
+            {
+                // Windows sharing-mode evidence cannot be proved on other hosts.
+                Ok(true)
+            }
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(LocalProfileError::from(error).into()),
+    }
 }
 
 fn path_present(path: &Path) -> Result<bool, BrowserLaunchBlocker> {
@@ -656,6 +688,33 @@ mod tests {
             Err(BrowserLaunchBlocker::MaterializationStale)
         );
         lock.release()?;
+        remove_test_root(&root_path)?;
+        Ok(())
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_parent_lock_requires_live_exclusive_file_handle_to_block()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use std::os::windows::fs::OpenOptionsExt;
+        let root_path = root_path("windows-parent-lock")?;
+        let root = MaterializationRoot::open_or_create(&root_path)?;
+        let tenant = TenantId::parse("tenant_01JWINDOWSLOCK")?;
+        let profile = ProfileId::parse("profile_01JWINDOWSLOCK")?;
+        let generation = GenerationId::parse("generation_01JWINDOWSLOCK")?;
+        let workspace = root.create_generation(&tenant, &profile, &generation)?;
+        fs::create_dir_all(workspace.path().join("user_data"))?;
+        let path = workspace.path().join("user_data/parent.lock");
+        fs::write(&path, b"leftover-windows-lock-file")?;
+        assert!(super::browser_writer_locks_absent(&workspace)?);
+        {
+            let _active_handle = fs::OpenOptions::new()
+                .read(true)
+                .share_mode(0)
+                .open(&path)?;
+            assert!(!super::browser_writer_locks_absent(&workspace)?);
+        }
+        assert!(super::browser_writer_locks_absent(&workspace)?);
         remove_test_root(&root_path)?;
         Ok(())
     }

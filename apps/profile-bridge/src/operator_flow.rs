@@ -2006,6 +2006,16 @@ mod tests {
             workspace.path().join("user_data/parent.lock"),
             b"foreign-writer",
         )?;
+        // A leftover Windows filename alone is not a live writer. Hold an exclusive
+        // OS handle to model the actively locked Firefox parent.lock.
+        #[cfg(windows)]
+        let _live_parent_lock = {
+            use std::os::windows::fs::OpenOptionsExt;
+            fs::OpenOptions::new()
+                .read(true)
+                .share_mode(0)
+                .open(workspace.path().join("user_data/parent.lock"))?
+        };
         let mut operator = ProfileBridgeOperator::new(
             FakeDeviceIdentity::new(fixture.device_id.clone()),
             FakeDeviceKeyStore::default(),
