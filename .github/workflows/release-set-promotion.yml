@@ -253,7 +253,7 @@ jobs:
           test "$http_code" = 200
           jq -e '.success == true and (.errors | length) == 0 and (.result.deployments | type == "array") and (.result.deployments | length) > 0' "$RUNNER_TEMP/deployments-before-api.json" >/dev/null
           jq '.result.deployments[0]' "$RUNNER_TEMP/deployments-before-api.json" > "$RUNNER_TEMP/current-deployment.json"
-          python scripts/deployment-identity-ar11.py --status "$RUNNER_TEMP/current-deployment.json" --output "$RUNNER_TEMP/current-identity.json"
+          python scripts/deployment-identity-ar11.py --observe-version --account-id "$account_id" --worker-name "$worker_name" --token-env CLOUDFLARE_API_TOKEN --status "$RUNNER_TEMP/current-deployment.json" --output "$RUNNER_TEMP/current-identity.json"
           current_id="$(jq -er '.release_set_id | select(type == "string")' "$RUNNER_TEMP/current-identity.json")"
           current_profile="$(jq -er '.capability_profile_id | select(type == "string" and length > 0)' "$RUNNER_TEMP/current-identity.json")"
           [[ "$current_id" =~ ^release-set-v(2|3)-sha256-[0-9a-f]{64}$ ]]
@@ -294,7 +294,7 @@ jobs:
           open(output, 'a', encoding='utf-8').write('\n')
           PY
           d1_head="$(jq -er '.[-1]' "$RUNNER_TEMP/d1-names-before.json")"
-          jq -S '{release_set_id,capability_profile_id}' "$RUNNER_TEMP/current-identity.json" > "$RUNNER_TEMP/worker-binding-before.json"
+          jq -S --slurpfile observed "$RUNNER_TEMP/current-deployment.json" '{release_set_id,capability_profile_id,deployment_id:$observed[0].id,versions:$observed[0].versions,script_etag:$observed[0].current_version.resources.script.etag}' "$RUNNER_TEMP/current-identity.json" > "$RUNNER_TEMP/worker-binding-before.json"
           {
             echo "current_id=$current_id"
             echo "current_profile=$current_profile"
@@ -462,8 +462,8 @@ jobs:
             "https://api.cloudflare.com/client/v4/accounts/$account_id/workers/scripts/$worker_name/deployments")"
           test "$http_code" = 200
           jq '.result.deployments[0]' "$RUNNER_TEMP/deployments-after-api.json" > "$RUNNER_TEMP/deployment-after.json"
-          python scripts/deployment-identity-ar11.py --status "$RUNNER_TEMP/deployment-after.json" --output "$RUNNER_TEMP/identity-after.json"
-          jq -S '{release_set_id,capability_profile_id}' "$RUNNER_TEMP/identity-after.json" > "$RUNNER_TEMP/worker-binding-after.json"
+          python scripts/deployment-identity-ar11.py --observe-version --account-id "$account_id" --worker-name "$worker_name" --token-env CLOUDFLARE_API_TOKEN --status "$RUNNER_TEMP/deployment-after.json" --output "$RUNNER_TEMP/identity-after.json"
+          jq -S --slurpfile observed "$RUNNER_TEMP/deployment-after.json" '{release_set_id,capability_profile_id,deployment_id:$observed[0].id,versions:$observed[0].versions,script_etag:$observed[0].current_version.resources.script.etag}' "$RUNNER_TEMP/identity-after.json" > "$RUNNER_TEMP/worker-binding-after.json"
           cmp --silent "$RUNNER_TEMP/worker-binding-before.json" "$RUNNER_TEMP/worker-binding-after.json"
           npx --yes wrangler@4.94.0 d1 execute CATALOG_DB --remote \
             --command 'SELECT name FROM d1_migrations ORDER BY name' --json \
@@ -1023,7 +1023,7 @@ jobs:
             exit 1
           fi
           jq '.result.deployments[0]' "$RUNNER_TEMP/mutation-current-api.json" > "$RUNNER_TEMP/mutation-current-deployment.json"
-          if ! python scripts/deployment-identity-ar11.py --status "$RUNNER_TEMP/mutation-current-deployment.json" --output "$RUNNER_TEMP/mutation-current-identity.json"; then
+          if ! python scripts/deployment-identity-ar11.py --observe-version --account-id "$account_id" --worker-name "$worker_name" --token-env CLOUDFLARE_API_TOKEN --status "$RUNNER_TEMP/mutation-current-deployment.json" --output "$RUNNER_TEMP/mutation-current-identity.json"; then
             deployment_read=failure
             exit 1
           fi
@@ -1204,6 +1204,7 @@ jobs:
           npx --yes wrangler@4.94.0 queues info "$queue_name" --config "$WRANGLER_CONFIG" --env staging >/dev/null
           jq -n --arg name "$queue_name" '{name:$name}' > "$RUNNER_TEMP/post-queue-info.json"
           npx --yes wrangler@4.94.0 secret list --format json --config "$WRANGLER_CONFIG" --env staging > "$RUNNER_TEMP/post-secret-list.json"
+          python scripts/deployment-identity-ar11.py --observe-version --account-id "$account_id" --worker-name "$worker_name" --token-env CLOUDFLARE_API_TOKEN --status "$RUNNER_TEMP/post-deployment.json" --output "$RUNNER_TEMP/post-identity.json"
           python scripts/deployment-snapshot-ar11.py --environment staging --collected-at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --deployment-status "$RUNNER_TEMP/post-deployment.json" --catalog-ledger "$RUNNER_TEMP/post-catalog-ledger.json" --r2-list "$RUNNER_TEMP/post-r2-info.json" --queue-list "$RUNNER_TEMP/post-queue-info.json" --secret-list "$RUNNER_TEMP/post-secret-list.json" --rendered-config "$WRANGLER_CONFIG" --deploy-manifest "$DEPLOY_MANIFEST" --current-release-set "$RUNNER_TEMP/ready/release-set.json" --output "$RUNNER_TEMP/post-snapshot.json"
           cargo run --locked --quiet --manifest-path tools/opsctl/Cargo.toml -- --root . promotion verify --release-set "$RUNNER_TEMP/ready/release-set.json" --source-root . --profile "$TARGET_PROFILE" --environment staging --snapshot "$RUNNER_TEMP/post-snapshot.json" --evidence-json "$RUNNER_TEMP/ready/compatibility-evidence.json" > "$RUNNER_TEMP/promotion-verify.json"
           jq -e '.schema_version == 1 and .command == "promotion.verify" and (.decision == "VERIFIED" or .decision == "DRIFTED" or .decision == "INCOMPLETE" or .decision == "UNKNOWN") and (.verified | type == "boolean") and (.blockers | type == "array") and .mutation_executed == false' "$RUNNER_TEMP/promotion-verify.json" >/dev/null
