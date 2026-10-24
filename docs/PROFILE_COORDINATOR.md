@@ -135,6 +135,11 @@ conflicting command outcomes or projection bytes still fail closed. A snapshot d
 the D1 projection has caught up with an alarm or an interrupted projection write. Historical snapshot
 rows remain immutable evidence and require no schema migration or data reset.
 
+The snapshot response sets `replayed=true` to report that this observation appended no command.
+Bridge accepts that read marker while checking the exact snapshot identity, version/sequence and
+idle state without an active writer. It does not treat the snapshot as lease authority: the following
+Claim must still return a fresh, non-replayed response with the exact session/device/epoch/fence.
+
 ## Authorization
 
 Coordinator ownership is not application authorization. Profile ACL, membership and device trust remain
