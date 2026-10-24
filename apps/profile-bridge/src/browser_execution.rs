@@ -15,8 +15,10 @@ const MATERIALIZATION_SCHEMA: &str = "profile-platform-materialization-v2";
 const BRIDGE_LOCK_FILE: &str = ".profile-platform.lock";
 const BRIDGE_LOCK_SCHEMA: &str = "profile-platform-bridge-lock-v1";
 const FIREFOX_PARENT_LOCK_FILE: &str = ".parentlock";
+#[cfg(windows)]
 const FIREFOX_WINDOWS_PARENT_LOCK_FILE: &str = "parent.lock";
 const FIREFOX_LOCK_FILE: &str = "lock";
+#[cfg(windows)]
 const FIREFOX_USER_DATA_DIRECTORY: &str = "user_data";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -341,12 +343,20 @@ fn observed_browser_writer_locks(
     workspace: &GenerationWorkspace,
 ) -> Result<(bool, bool), BrowserLaunchBlocker> {
     let root = workspace.path();
-    let browser_data = root.join(FIREFOX_USER_DATA_DIRECTORY);
-    let parent_lock = path_present(&root.join(FIREFOX_PARENT_LOCK_FILE))?
-        || path_present(&browser_data.join(FIREFOX_PARENT_LOCK_FILE))?
-        || windows_parent_lock_active(&browser_data.join(FIREFOX_WINDOWS_PARENT_LOCK_FILE))?;
-    let lock = path_present(&root.join(FIREFOX_LOCK_FILE))?
-        || path_present(&browser_data.join(FIREFOX_LOCK_FILE))?;
+    let mut parent_lock = path_present(&root.join(FIREFOX_PARENT_LOCK_FILE))?;
+    let mut lock = path_present(&root.join(FIREFOX_LOCK_FILE))?;
+    // Windows is the production shipping OS. Its user_data/parent.lock is a real
+    // file-handle lock, so we can distinguish stale files from live ownership.
+    // On other platforms the existing root-level fail-closed protocol is retained;
+    // Unix .parentlock symlinks need a separate process-liveness witness.
+    #[cfg(windows)]
+    {
+        let browser_data = root.join(FIREFOX_USER_DATA_DIRECTORY);
+        parent_lock = parent_lock
+            || path_present(&browser_data.join(FIREFOX_PARENT_LOCK_FILE))?
+            || windows_parent_lock_active(&browser_data.join(FIREFOX_WINDOWS_PARENT_LOCK_FILE))?;
+        lock = lock || path_present(&browser_data.join(FIREFOX_LOCK_FILE))?;
+    }
     Ok((parent_lock, lock))
 }
 
@@ -361,28 +371,21 @@ pub(crate) fn browser_writer_locks_absent(
 /// Windows Firefox may retain parent.lock after the owning process exits.
 /// An exclusive read-only open proves no active Windows file-handle ownership.
 /// Unreadable/locked evidence never authorizes Clean.
+#[cfg(windows)]
 fn windows_parent_lock_active(path: &Path) -> Result<bool, BrowserLaunchBlocker> {
+    use std::os::windows::fs::OpenOptionsExt;
     match fs::symlink_metadata(path) {
         Ok(metadata) => {
             if metadata.file_type().is_symlink() || !metadata.is_file() {
                 return Ok(true);
             }
-            #[cfg(windows)]
-            {
-                use std::os::windows::fs::OpenOptionsExt;
-                match OpenOptions::new().read(true).share_mode(0).open(path) {
-                    Ok(handle) => {
-                        drop(handle);
-                        Ok(false)
-                    }
-                    Err(error) if matches!(error.raw_os_error(), Some(5 | 32 | 33)) => Ok(true),
-                    Err(error) => Err(LocalProfileError::from(error).into()),
+            match OpenOptions::new().read(true).share_mode(0).open(path) {
+                Ok(handle) => {
+                    drop(handle);
+                    Ok(false)
                 }
-            }
-            #[cfg(not(windows))]
-            {
-                // Windows sharing-mode evidence cannot be proved on other hosts.
-                Ok(true)
+                Err(error) if matches!(error.raw_os_error(), Some(5 | 32 | 33)) => Ok(true),
+                Err(error) => Err(LocalProfileError::from(error).into()),
             }
         }
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),

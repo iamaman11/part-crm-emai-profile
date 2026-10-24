@@ -2001,20 +2001,19 @@ mod tests {
             &fixture.profile_id,
             &fixture.generation_id,
         )?;
-        fs::create_dir_all(workspace.path().join("user_data"))?;
-        fs::write(
-            workspace.path().join("user_data/parent.lock"),
-            b"foreign-writer",
-        )?;
-        // A leftover Windows filename alone is not a live writer. Hold an exclusive
-        // OS handle to model the actively locked Firefox parent.lock.
+        #[cfg(windows)]
+        let lock_path = {
+            fs::create_dir_all(workspace.path().join("user_data"))?;
+            workspace.path().join("user_data/parent.lock")
+        };
+        #[cfg(not(windows))]
+        let lock_path = workspace.path().join(".parentlock");
+        fs::write(&lock_path, b"foreign-writer")?;
+        // On Windows hold the OS handle, not merely a stale name.
         #[cfg(windows)]
         let _live_parent_lock = {
             use std::os::windows::fs::OpenOptionsExt;
-            fs::OpenOptions::new()
-                .read(true)
-                .share_mode(0)
-                .open(workspace.path().join("user_data/parent.lock"))?
+            fs::OpenOptions::new().read(true).share_mode(0).open(&lock_path)?
         };
         let mut operator = ProfileBridgeOperator::new(
             FakeDeviceIdentity::new(fixture.device_id.clone()),
@@ -2040,14 +2039,9 @@ mod tests {
         assert_eq!(operator.coordinator().closed, 1);
         assert_eq!(operator.coordinator().clean_closed, 0);
         assert!(operator.process().actions().is_empty());
-        // On Windows our test-owned exclusive handle must be released before reading
-        // the file contents; no production code ever removes or changes the Firefox file.
         #[cfg(windows)]
         drop(_live_parent_lock);
-        assert_eq!(
-            fs::read(workspace.path().join("user_data/parent.lock"))?,
-            b"foreign-writer"
-        );
+        assert_eq!(fs::read(&lock_path)?, b"foreign-writer");
         Ok(())
     }
 
