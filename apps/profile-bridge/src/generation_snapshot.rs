@@ -573,6 +573,16 @@ mod tests {
                 .open_generation(&fixture.tenant_id, &fixture.profile_id, &target_id)
                 .is_err()
         );
+        // A failed pre-publish callback did not expose a canonical generation or
+        // poison a later exact retry: only this owned staging directory is discarded.
+        let reopened = materialize_workspace_snapshot(
+            &fixture.root,
+            &fixture.tenant_id,
+            &fixture.profile_id,
+            &target_id,
+            &raw_snapshot(&[("prefs.js", b"new")]),
+        )?;
+        assert_eq!(fs::read(reopened.path().join("prefs.js"))?, b"new");
         fixture.cleanup();
         Ok(())
     }

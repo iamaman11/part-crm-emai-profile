@@ -1369,6 +1369,20 @@ mod tests {
             }
         ));
 
+        // Stale epoch must be rejected before sending any release, including Clean.
+        let (mut stale, current_lease) = coordinator(CoordinatorStatusDto::Idle)?;
+        let forged_epoch = ProfileLease::issue(
+            current_lease.tenant_id().clone(),
+            current_lease.profile_id().clone(),
+            current_lease.session_id().clone(),
+            current_lease.device_id().clone(),
+            current_lease.epoch() + 1,
+            current_lease.fencing_token().clone(),
+        )?;
+        assert!(stale.close_without_browser_use(&forged_epoch).is_err());
+        assert!(stale.cursor.is_some());
+        assert!(stale.transport.requests.is_empty());
+
         let (mut generic, generic_lease) = coordinator(CoordinatorStatusDto::Uncertain)?;
         generic.close_lease(&generic_lease)?;
         assert!(generic.cursor.is_none());
