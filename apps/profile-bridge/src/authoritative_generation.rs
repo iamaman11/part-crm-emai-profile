@@ -487,6 +487,42 @@ mod tests {
     }
 
     #[test]
+    fn exact_verified_cloud_bytes_recover_missing_sidecar_then_reuse_cache()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let fixture = Fixture::new()?;
+        let workspace = fixture.root.create_generation(
+            &fixture.tenant_id, &fixture.profile_id, &fixture.generation_id,
+        )?;
+        fs::write(workspace.path().join(BROWSER_IDENTITY_RECORD_FILE),
+            &fixture.browser_identity_record)?;
+        fs::write(workspace.path().join("camoufox-config.json"), &fixture.config_bytes)?;
+        fs::write(workspace.path().join("prefs.js"), b"authoritative-prefs")?;
+        fs::create_dir_all(workspace.path().join("user_data/storage"))?;
+        fs::write(workspace.path().join("user_data/storage/state.bin"), b"authoritative-state")?;
+        let mut control = fixture.control();
+        let mut downloader = FakeDownloader {
+            container: fixture.container.clone(), calls: 0,
+        };
+        for _ in 0..2 {
+            ensure_authoritative_generation(
+                &fixture.root, &fixture.tenant_id, &fixture.profile_id,
+                &fixture.generation_id, &DeviceId::parse("device_authgen_test")?,
+                1, &mut control, &mut downloader,
+            )?;
+        }
+        assert_eq!(downloader.calls, 1);
+        assert_eq!(control.opening_calls, 1);
+        assert_eq!(
+            load_materialization_binding(
+                &workspace, &fixture.tenant_id, &fixture.profile_id, &fixture.generation_id,
+            )?.source_container_sha256(),
+            encode_sha256(fixture.container_digest)
+        );
+        fixture.cleanup();
+        Ok(())
+    }
+
+    #[test]
     fn corrupt_existing_binding_cannot_enable_reuse_or_delete_data()
     -> Result<(), Box<dyn std::error::Error>> {
         let fixture = Fixture::new()?;
