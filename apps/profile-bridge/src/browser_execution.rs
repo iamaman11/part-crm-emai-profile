@@ -15,7 +15,9 @@ const MATERIALIZATION_SCHEMA: &str = "profile-platform-materialization-v2";
 const BRIDGE_LOCK_FILE: &str = ".profile-platform.lock";
 const BRIDGE_LOCK_SCHEMA: &str = "profile-platform-bridge-lock-v1";
 const FIREFOX_PARENT_LOCK_FILE: &str = ".parentlock";
+const FIREFOX_WINDOWS_PARENT_LOCK_FILE: &str = "parent.lock";
 const FIREFOX_LOCK_FILE: &str = "lock";
+const FIREFOX_USER_DATA_DIRECTORY: &str = "user_data";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum BrowserLaunchBlocker {
@@ -147,10 +149,11 @@ pub fn evaluate_browser_launch(
         return Err(BrowserLaunchBlocker::MaterializationStale);
     }
 
+    let (parent_lock, lock) = observed_browser_writer_locks(workspace)?;
     let writer = BrowserWriterObservation::new(
         false,
-        path_present(&workspace.path().join(FIREFOX_PARENT_LOCK_FILE))?,
-        path_present(&workspace.path().join(FIREFOX_LOCK_FILE))?,
+        parent_lock,
+        lock,
         supervised_writer_active,
     );
     match writer.classify() {
@@ -336,14 +339,28 @@ fn read_regular_file(path: &Path) -> Result<String, BrowserLaunchBlocker> {
         .map_err(Into::into)
 }
 
-/// Negative browser-writer evidence for a locally held Bridge lock *before* any runtime spawn.
+/// One lock interpretation for preflight and evidenced pre-writer cancellation.
+/// Firefox uses the user_data profile directory, including Windows parent.lock.
+/// Retain support for legacy workspace-root locks; neither path is ever deleted.
+fn observed_browser_writer_locks(
+    workspace: &GenerationWorkspace,
+) -> Result<(bool, bool), BrowserLaunchBlocker> {
+    let root = workspace.path();
+    let browser_data = root.join(FIREFOX_USER_DATA_DIRECTORY);
+    let parent_lock = path_present(&root.join(FIREFOX_PARENT_LOCK_FILE))?
+        || path_present(&browser_data.join(FIREFOX_PARENT_LOCK_FILE))?
+        || path_present(&browser_data.join(FIREFOX_WINDOWS_PARENT_LOCK_FILE))?;
+    let lock = path_present(&root.join(FIREFOX_LOCK_FILE))?
+        || path_present(&browser_data.join(FIREFOX_LOCK_FILE))?;
+    Ok((parent_lock, lock))
+}
+
+/// Negative browser-writer evidence for a locally held Bridge lock before runtime spawn.
 pub(crate) fn browser_writer_locks_absent(
     workspace: &GenerationWorkspace,
 ) -> Result<bool, BrowserLaunchBlocker> {
-    Ok(
-        !path_present(&workspace.path().join(FIREFOX_PARENT_LOCK_FILE))?
-            && !path_present(&workspace.path().join(FIREFOX_LOCK_FILE))?,
-    )
+    let (parent_lock, lock) = observed_browser_writer_locks(workspace)?;
+    Ok(!parent_lock && !lock)
 }
 
 fn path_present(path: &Path) -> Result<bool, BrowserLaunchBlocker> {

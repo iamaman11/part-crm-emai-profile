@@ -2001,7 +2001,8 @@ mod tests {
             &fixture.profile_id,
             &fixture.generation_id,
         )?;
-        fs::write(workspace.path().join(".parentlock"), b"foreign-writer")?;
+        fs::create_dir_all(workspace.path().join("user_data"))?;
+        fs::write(workspace.path().join("user_data/parent.lock"), b"foreign-writer")?;
         let mut operator = ProfileBridgeOperator::new(
             FakeDeviceIdentity::new(fixture.device_id.clone()),
             FakeDeviceKeyStore::default(),
@@ -2027,7 +2028,7 @@ mod tests {
         assert_eq!(operator.coordinator().clean_closed, 0);
         assert!(operator.process().actions().is_empty());
         assert_eq!(
-            fs::read(workspace.path().join(".parentlock"))?,
+            fs::read(workspace.path().join("user_data/parent.lock"))?,
             b"foreign-writer"
         );
         Ok(())
