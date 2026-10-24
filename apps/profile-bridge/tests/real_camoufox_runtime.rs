@@ -33,21 +33,11 @@ fn published_windows_runtime_is_consumed_by_shipping_selector()
 -> Result<(), Box<dyn std::error::Error>> {
     use profile_bridge::operator_flow::RuntimeBundleSelectionPort;
     use profile_bridge::runtime_bundle::FilesystemRuntimeBundleSelection;
-    use profile_platform_primitives::{ActorContext, ActorId, CorrelationId, TenantScope};
     let Some(root) = env::var_os("PACKAGED_WINDOWS_RUNTIME_ROOT") else {
         return Ok(());
     };
-    let actor = ActorContext::new(
-        TenantScope::new(TenantId::parse("tenant_packaged_runtime")?),
-        ActorId::parse("actor_packaged_runtime")?,
-        CorrelationId::parse("corr_packaged_runtime")?,
-    );
     let mut selector = FilesystemRuntimeBundleSelection::open(PathBuf::from(root))?;
-    let bundle = selector.select_bundle(
-        &actor,
-        &ProfileId::parse("profile_packaged_runtime")?,
-        &GenerationId::parse("generation_packaged_runtime")?,
-    )?;
+    let bundle = selector.select_bundle()?;
     assert!(bundle.inventory().entries().len() >= 5);
     Ok(())
 }
@@ -136,20 +126,8 @@ fn approved_runtime(
     {
         use profile_bridge::operator_flow::RuntimeBundleSelectionPort;
         use profile_bridge::runtime_bundle::FilesystemRuntimeBundleSelection;
-        use profile_platform_primitives::{ActorContext, ActorId, CorrelationId, TenantScope};
-        let actor = ActorContext::new(
-            TenantScope::new(TenantId::parse(
-                "tenant_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-            )?),
-            ActorId::parse("actor_01JAR10REAL")?,
-            CorrelationId::parse("corr_01JAR10REAL")?,
-        );
         let mut selector = FilesystemRuntimeBundleSelection::open(runtime_root)?;
-        Ok(selector.select_bundle(
-            &actor,
-            &ProfileId::parse("profile_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")?,
-            &GenerationId::parse("generation_01JAR10REAL")?,
-        )?)
+        Ok(selector.select_bundle()?)
     }
     #[cfg(not(windows))]
     {
@@ -290,12 +268,7 @@ impl profile_bridge::shipping_generation_save::SignedGenerationObjectPutPort for
 struct InitialBundle(ApprovedRuntimeBundle);
 impl profile_bridge::operator_flow::RuntimeBundleSelectionPort for InitialBundle {
     type Error = BridgePortError;
-    fn select_bundle(
-        &mut self,
-        _: &profile_platform_primitives::ActorContext,
-        _: &ProfileId,
-        _: &GenerationId,
-    ) -> Result<ApprovedRuntimeBundle, Self::Error> {
+    fn select_bundle(&mut self) -> Result<ApprovedRuntimeBundle, Self::Error> {
         Ok(self.0.clone())
     }
 }

@@ -598,26 +598,14 @@ impl DeviceAuthenticationPort for DeviceAuthentication {
     }
 }
 
-struct RecordingBundles {
+struct TestRuntimeBundle {
     bundle: ApprovedRuntimeBundle,
-    generations: Rc<RefCell<Vec<String>>>,
 }
 
-impl RuntimeBundleSelectionPort for RecordingBundles {
+impl RuntimeBundleSelectionPort for TestRuntimeBundle {
     type Error = BridgePortError;
 
-    fn select_bundle(
-        &mut self,
-        _actor: &profile_platform_primitives::ActorContext,
-        profile_id: &ProfileId,
-        generation_id: &GenerationId,
-    ) -> Result<ApprovedRuntimeBundle, Self::Error> {
-        if profile_id.as_str() != PROFILE {
-            return Err(BridgePortError::InvalidResponse);
-        }
-        self.generations
-            .borrow_mut()
-            .push(generation_id.as_str().to_owned());
+    fn select_bundle(&mut self) -> Result<ApprovedRuntimeBundle, Self::Error> {
         Ok(self.bundle.clone())
     }
 }
@@ -742,7 +730,6 @@ fn canonical_save_then_local_loss_reopens_server_selected_successor()
     let transport = BackendMachineHttp {
         state: Rc::clone(&state),
     };
-    let runtime_generations = Rc::new(RefCell::new(Vec::new()));
     let preflight: PreflightObservations = Rc::new(RefCell::new(Vec::new()));
     let enrollment = ControlPlaneEnrollment::new(transport.clone());
     let coordinator = ControlPlaneCoordinator::new(transport.clone());
@@ -752,10 +739,7 @@ fn canonical_save_then_local_loss_reopens_server_selected_successor()
         DeviceAuthentication,
         enrollment,
         coordinator,
-        RecordingBundles {
-            bundle,
-            generations: Rc::clone(&runtime_generations),
-        },
+        TestRuntimeBundle { bundle },
         RecordingPreflight {
             observations: Rc::clone(&preflight),
         },
@@ -820,10 +804,6 @@ fn canonical_save_then_local_loss_reopens_server_selected_successor()
         b"mutated-after-launch"
     );
 
-    assert_eq!(
-        runtime_generations.borrow().as_slice(),
-        [BASE_GENERATION, successor.as_str()]
-    );
     let observations = preflight.borrow();
     assert_eq!(observations.len(), 2);
     assert_eq!(observations[0].0, BASE_GENERATION);

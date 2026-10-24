@@ -84,6 +84,12 @@ A shipping launch does not approve arbitrary local runtime bytes merely because 
 The selected local runtime manifest/inventory must match the authoritative browser materialization
 identity for the exact redeemed generation before process start.
 
+The installed runtime inventory is fully verified before device authentication and launch-claim
+redemption, so this filesystem work does not consume the short coordinator launch-intent lifetime.
+Runtime selection is independent of actor/Profile/generation; their exact compatibility binding is
+still enforced by the preflight below. A rejected runtime cannot consume the claim, acquire a lease
+or start the browser. Claim/session lifetimes and replay protection are unchanged.
+
 The accepted preflight binds at least:
 
 - exact tenant/Profile/generation workspace identity;
@@ -109,6 +115,10 @@ requirements remain enforced. Strict fingerprint comparison remains available fo
 
 `ProfileBridgeOperator` is the local runtime orchestration owner. The shipping composition creates the
 concrete adapters and calls it; `main.rs` does not duplicate its lifecycle algorithm.
+
+Shipping composition preserves the typed operator failure through the CLI. Safe user diagnostic
+codes identify the failed phase; closed owner outcomes preserve cleanup/recovery details without raw
+claims, profile data or local paths. Close-observation failure never fabricates a controlled close.
 
 While a browser is active:
 

@@ -112,7 +112,9 @@ impl UserDiagnostic {
                 ShippingCompositionError::DeliveryRecoveryRequired => {
                     "BRIDGE_UPDATE_RECOVERY_REQUIRED"
                 }
-                ShippingCompositionError::Operator => "BRIDGE_PROFILE_OPERATION_FAILED",
+                ShippingCompositionError::Operator(error) => operator_code(error),
+                ShippingCompositionError::ActiveSessionMissing => "BRIDGE_ACTIVE_SESSION_MISSING",
+                ShippingCompositionError::CloseObservation(_) => "BRIDGE_CLOSE_OBSERVATION_FAILED",
                 ShippingCompositionError::CommittedRecoveryRequired => {
                     "BRIDGE_SAVED_LOCAL_RECOVERY_REQUIRED"
                 }
@@ -205,7 +207,9 @@ impl UserDiagnostic {
             Self::Launch(Launch::Initialization(_)) => {
                 "The profile could not open. Return to the application to check access, connection and session status, then try Open again. Keep local profile files; a failed request is not proof of a saved copy."
             }
-            Self::Launch(Launch::Operator) => {
+            Self::Launch(
+                Launch::Operator(_) | Launch::ActiveSessionMissing | Launch::CloseObservation(_),
+            ) => {
                 "The profile operation did not complete. Return to the application and check session and save status. Keep local profile files until recovery is confirmed."
             }
             Self::Launch(Launch::CommittedRecoveryRequired) => {
@@ -227,9 +231,53 @@ impl UserDiagnostic {
     }
 }
 
+const fn operator_code(error: crate::operator_flow::OperatorFlowError) -> &'static str {
+    use crate::operator_flow::{OperatorFailureStage as Stage, OperatorFlowError as Error};
+    match error {
+        Error::Busy => "BRIDGE_PROFILE_BUSY",
+        Error::CleanupRequired => "BRIDGE_CLEANUP_REQUIRED",
+        _ => match error.stage() {
+            Some(Stage::DeviceIdentity) => "BRIDGE_DEVICE_IDENTITY_FAILED",
+            Some(Stage::DeviceKey) => "BRIDGE_DEVICE_KEY_UNAVAILABLE",
+            Some(Stage::DeviceAuthentication) => "BRIDGE_DEVICE_AUTHENTICATION_FAILED",
+            Some(Stage::Enrollment) => "BRIDGE_LAUNCH_REDEMPTION_FAILED",
+            Some(Stage::RuntimeBundle) => "BRIDGE_RUNTIME_BUNDLE_INVALID",
+            Some(Stage::CoordinatorClaim) => "BRIDGE_COORDINATOR_CLAIM_FAILED",
+            Some(Stage::CoordinatorHeartbeat) => "BRIDGE_COORDINATOR_HEARTBEAT_FAILED",
+            Some(Stage::LeaseValidation) => "BRIDGE_LEASE_VALIDATION_FAILED",
+            Some(Stage::AuthoritativeGeneration) => "BRIDGE_GENERATION_RESTORE_FAILED",
+            Some(Stage::LocalWorkspace) => "BRIDGE_LOCAL_WORKSPACE_FAILED",
+            Some(Stage::BrowserPreflight) => "BRIDGE_BROWSER_PREFLIGHT_FAILED",
+            Some(Stage::LocalLifecycle) => "BRIDGE_LOCAL_LIFECYCLE_FAILED",
+            Some(Stage::RuntimeLaunch) => "BRIDGE_RUNTIME_LAUNCH_FAILED",
+            Some(Stage::RuntimeClose) => "BRIDGE_RUNTIME_CLOSE_FAILED",
+            Some(Stage::GenerationSave) => "BRIDGE_GENERATION_SAVE_FAILED",
+            Some(Stage::RuntimeAbort) => "BRIDGE_RUNTIME_ABORT_FAILED",
+            None => "BRIDGE_PROFILE_OPERATION_FAILED",
+        },
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn operator_stage_is_preserved_in_safe_user_code() {
+        use crate::operator_flow::{OperatorFailureStage, OperatorFlowError};
+        let owner = OperatorFlowError::Stage(OperatorFailureStage::CoordinatorClaim);
+        let projected = ShippingCompositionError::Operator(owner);
+        let diagnostic = UserDiagnostic::Launch(projected);
+        assert_eq!(diagnostic.code(), "BRIDGE_COORDINATOR_CLAIM_FAILED");
+        assert!(diagnostic.message().contains("Keep local profile files"));
+        assert_ne!(
+            diagnostic.code(),
+            UserDiagnostic::Launch(ShippingCompositionError::CloseObservation(
+                bridge_domain::BridgePortError::Unavailable
+            ),)
+            .code()
+        );
+    }
 
     #[test]
     fn invalid_package_and_first_identity_failure_have_distinct_actionable_codes() {

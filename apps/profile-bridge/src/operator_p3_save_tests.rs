@@ -155,12 +155,7 @@ struct FakeRuntimeBundles {
 impl RuntimeBundleSelectionPort for FakeRuntimeBundles {
     type Error = BridgePortError;
 
-    fn select_bundle(
-        &mut self,
-        _actor: &ActorContext,
-        _profile_id: &ProfileId,
-        _generation_id: &GenerationId,
-    ) -> Result<ApprovedRuntimeBundle, Self::Error> {
+    fn select_bundle(&mut self) -> Result<ApprovedRuntimeBundle, Self::Error> {
         Ok(self.bundle.clone())
     }
 }

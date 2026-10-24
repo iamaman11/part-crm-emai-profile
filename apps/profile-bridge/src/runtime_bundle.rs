@@ -1,7 +1,7 @@
 use crate::ProcessControlPort;
 use crate::operator_flow::RuntimeBundleSelectionPort;
 use bridge_domain::{BridgePortError, CAMOUHOST_IPC_VERSION, CamouhostMessage, CamouhostPort};
-use profile_platform_primitives::{ActorContext, GenerationId, ProfileId, SessionId};
+use profile_platform_primitives::SessionId;
 use runtime_bundle_domain::{
     BundleRelativePath, InventoryEntry, InventoryError, RuntimeInventory, RuntimeManifest,
     RuntimeManifestError, RuntimePlatform, Sha256Digest,
@@ -225,12 +225,7 @@ impl FilesystemRuntimeBundleSelection {
 impl RuntimeBundleSelectionPort for FilesystemRuntimeBundleSelection {
     type Error = RuntimeBundleSelectionError;
 
-    fn select_bundle(
-        &mut self,
-        _actor: &ActorContext,
-        _profile_id: &ProfileId,
-        _generation_id: &GenerationId,
-    ) -> Result<ApprovedRuntimeBundle, Self::Error> {
+    fn select_bundle(&mut self) -> Result<ApprovedRuntimeBundle, Self::Error> {
         self.load_bundle()
     }
 }
@@ -766,10 +761,7 @@ mod tests {
     use crate::operator_flow::RuntimeBundleSelectionPort;
     use crate::{FakeCamouhost, FakeProcessControl, ProcessAction};
     use bridge_domain::{BridgePortError, CamouhostMessage, CamouhostPort};
-    use profile_platform_primitives::{
-        ActorContext, ActorId, CorrelationId, GenerationId, ProfileId, SessionId, TenantId,
-        TenantScope,
-    };
+    use profile_platform_primitives::SessionId;
     use runtime_bundle_domain::{
         BundleRelativePath, InventoryEntry, InventoryError, RuntimeInventory, RuntimeManifest,
         RuntimeManifestError, RuntimePlatform, Sha256Digest,
@@ -826,24 +818,10 @@ mod tests {
         )))
     }
 
-    fn actor() -> Result<ActorContext, Box<dyn std::error::Error>> {
-        Ok(ActorContext::new(
-            TenantScope::new(TenantId::parse("tenant_01JRUNTIMESELECT")?),
-            ActorId::parse("actor_01JRUNTIMESELECT")?,
-            CorrelationId::parse("corr_01JRUNTIMESELECT")?,
-        ))
-    }
-
     fn select(
         selector: &mut FilesystemRuntimeBundleSelection,
     ) -> Result<ApprovedRuntimeBundle, RuntimeBundleSelectionError> {
-        selector.select_bundle(
-            &actor().map_err(|_| RuntimeBundleSelectionError::InvalidRuntime)?,
-            &ProfileId::parse("profile_01JRUNTIMESELECT")
-                .map_err(|_| RuntimeBundleSelectionError::InvalidRuntime)?,
-            &GenerationId::parse("generation_01JRUNTIMESELECT")
-                .map_err(|_| RuntimeBundleSelectionError::InvalidRuntime)?,
-        )
+        selector.select_bundle()
     }
 
     fn write_packaged_runtime(root: &Path) -> Result<(), Box<dyn std::error::Error>> {
