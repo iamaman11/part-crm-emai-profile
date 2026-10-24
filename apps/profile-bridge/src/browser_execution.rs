@@ -368,7 +368,26 @@ pub(crate) fn browser_writer_locks_absent(
     workspace: &GenerationWorkspace,
 ) -> Result<bool, BrowserLaunchBlocker> {
     let (parent_lock, lock) = observed_browser_writer_locks(workspace)?;
-    Ok(!parent_lock && !lock)
+    if parent_lock || lock {
+        return Ok(false);
+    }
+    #[cfg(not(windows))]
+    {
+        // Camouhost alone can distinguish stale Unix fcntl marker files from
+        // active writers before launch. The stricter coordinator Clean proof
+        // cannot borrow that future check: ANY unknown marker forbids Clean.
+        let data = workspace.path().join(FIREFOX_USER_DATA_DIRECTORY);
+        for marker in [
+            FIREFOX_PARENT_LOCK_FILE,
+            FIREFOX_WINDOWS_PARENT_LOCK_FILE,
+            FIREFOX_LOCK_FILE,
+        ] {
+            if path_present(&data.join(marker))? {
+                return Ok(false);
+            }
+        }
+    }
+    Ok(true)
 }
 
 /// Windows Firefox may retain parent.lock after the owning process exits.
@@ -694,6 +713,28 @@ mod tests {
             Err(BrowserLaunchBlocker::MaterializationStale)
         );
         lock.release()?;
+        remove_test_root(&root_path)?;
+        Ok(())
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn unix_unknown_firefox_marker_never_authorizes_clean_release()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let root_path = root_path("unix-marker-clean");
+        let root_path = root_path?;
+        let root = MaterializationRoot::open_or_create(&root_path)?;
+        let tenant = TenantId::parse("tenant_01JUNIXCLEAN")?;
+        let profile = ProfileId::parse("profile_01JUNIXCLEAN")?;
+        let generation = GenerationId::parse("generation_01JUNIXCLEAN")?;
+        let workspace = root.create_generation(&tenant, &profile, &generation)?;
+        fs::create_dir_all(workspace.path().join("user_data"))?;
+        fs::write(workspace.path().join("user_data/.parentlock"), b"leftover")?;
+        assert!(!super::browser_writer_locks_absent(&workspace)?);
+        assert_eq!(
+            fs::read(workspace.path().join("user_data/.parentlock"))?,
+            b"leftover"
+        );
         remove_test_root(&root_path)?;
         Ok(())
     }
