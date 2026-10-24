@@ -15,10 +15,8 @@ const MATERIALIZATION_SCHEMA: &str = "profile-platform-materialization-v2";
 const BRIDGE_LOCK_FILE: &str = ".profile-platform.lock";
 const BRIDGE_LOCK_SCHEMA: &str = "profile-platform-bridge-lock-v1";
 const FIREFOX_PARENT_LOCK_FILE: &str = ".parentlock";
-#[cfg(windows)]
 const FIREFOX_WINDOWS_PARENT_LOCK_FILE: &str = "parent.lock";
 const FIREFOX_LOCK_FILE: &str = "lock";
-#[cfg(windows)]
 const FIREFOX_USER_DATA_DIRECTORY: &str = "user_data";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
