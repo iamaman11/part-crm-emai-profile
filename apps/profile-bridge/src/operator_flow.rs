@@ -2002,7 +2002,10 @@ mod tests {
             &fixture.generation_id,
         )?;
         fs::create_dir_all(workspace.path().join("user_data"))?;
-        fs::write(workspace.path().join("user_data/parent.lock"), b"foreign-writer")?;
+        fs::write(
+            workspace.path().join("user_data/parent.lock"),
+            b"foreign-writer",
+        )?;
         let mut operator = ProfileBridgeOperator::new(
             FakeDeviceIdentity::new(fixture.device_id.clone()),
             FakeDeviceKeyStore::default(),
