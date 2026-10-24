@@ -253,6 +253,7 @@ def validate_overlay(value: dict[str, Any]) -> None:
             raise ValueError("AR-11 credential overlay has invalid/duplicate credential identity")
         by_id[logical_id] = credential
     expected_ids = {
+        "cloudflare.profile-launch-claim-key",
         "cloudflare.profile-generation-root-keyring",
         "cloudflare.release-observation-api",
         "cloudflare.staging-zero-trust-observation-api",
@@ -260,6 +261,22 @@ def validate_overlay(value: dict[str, Any]) -> None:
     }
     if set(by_id) != expected_ids:
         raise ValueError("current credential overlay identities drifted")
+
+    claim_key = by_id["cloudflare.profile-launch-claim-key"]
+    if (
+        claim_key.get("class") != "APPLICATION_HMAC_KEY"
+        or claim_key.get("owner") != "crates/cloudflare-adapters/src/d1_profile_launch_authority.rs"
+        or claim_key.get("environment_scope") != {
+            "kind": "environment", "environments": ["staging", "production"]
+        }
+        or claim_key.get("bindings") != [{
+            "surface": "cloudflare_worker_secret",
+            "name": "PROFILE_LAUNCH_CLAIM_KEY",
+            "environments": ["staging", "production"],
+        }]
+        or claim_key.get("externally_issued") is not False
+    ):
+        raise ValueError("profile launch claim key owner/binding/scope drifted")
 
     generation_keyring = by_id["cloudflare.profile-generation-root-keyring"]
     if (
@@ -580,23 +597,24 @@ def validate_repository(root: Path = ROOT) -> State:
 
 
 def negative_self_test(state: State, root: Path = ROOT) -> None:
-    for field, invalid in [
-        ("owner", "unowned"),
-        ("bindings", []),
-        ("environment_scope", {"kind": "environment", "environments": ["production"]}),
-    ]:
-        bad_generation_keyring = copy.deepcopy(state.overlay)
-        keyring = next(
-            item for item in bad_generation_keyring["credentials"]
-            if item["id"] == "cloudflare.profile-generation-root-keyring"
-        )
-        keyring[field] = invalid
-        try:
-            validate_overlay(bad_generation_keyring)
-        except ValueError:
-            pass
-        else:
-            raise AssertionError(f"generation root keyring {field} drift unexpectedly passed")
+    for credential_id in ("cloudflare.profile-generation-root-keyring", "cloudflare.profile-launch-claim-key"):
+        for field, invalid in [
+            ("owner", "unowned"),
+            ("bindings", []),
+            ("environment_scope", {"kind": "environment", "environments": ["production"]}),
+        ]:
+            bad_generation_keyring = copy.deepcopy(state.overlay)
+            keyring = next(
+                item for item in bad_generation_keyring["credentials"]
+                if item["id"] == credential_id
+            )
+            keyring[field] = invalid
+            try:
+                validate_overlay(bad_generation_keyring)
+            except ValueError:
+                pass
+            else:
+                raise AssertionError(f"generation root keyring {field} drift unexpectedly passed")
 
     def reject(
         label: str,

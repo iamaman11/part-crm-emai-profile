@@ -138,3 +138,9 @@ observation never fabricates its presence or reads its value. Its strict version
 derivation remain owned by `cloudflare-adapters::generation_keyring` and Worker composition. Missing
 or invalid material fails closed. An existing root key must be preserved for existing generations;
 credential provisioning is separately authorized and is never a browser/device setup step.
+
+The same Core deployment closure also requires `PROFILE_LAUNCH_CLAIM_KEY`, owned by the existing
+profile launch authority. Initialization commits the verified first generation before issuing its
+launch claim. Claim issuance failure does not undo that confirmed generation; the next ordinary open
+uses the READY path. Generation encryption and launch claims use distinct keys and cannot substitute
+for each other. Both prerequisites must be provisioned before first-open readiness is asserted.

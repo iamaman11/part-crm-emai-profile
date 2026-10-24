@@ -275,6 +275,12 @@ mod tests {
                     .contains("PROFILE_GENERATION_ROOT_KEYRING"),
                 "{profile} omitted the generation encryption prerequisite"
             );
+            assert!(
+                closure
+                    .required_credentials
+                    .contains("PROFILE_LAUNCH_CLAIM_KEY"),
+                "{profile} omitted the launch claim prerequisite"
+            );
         }
         Ok(())
     }

@@ -58,6 +58,10 @@ SOURCE_CONSTANTS = {
         "apps/control-plane-worker/src/composition.rs",
         "GENERATION_ROOT_KEYRING_BINDING",
     ),
+    "profile_launch_claim_key": (
+        "apps/control-plane-worker/src/profiles/profile_launch_composition.rs",
+        "PROFILE_LAUNCH_CLAIM_KEY",
+    ),
     "mailbox_resolver_caller_auth": (
         "crates/cloudflare-adapters/src/resolver_request.rs",
         "CALLER_AUTH_SECRET",
@@ -316,6 +320,7 @@ def validate_config(
     expected_core_secrets = {
         source["contact_keyring"],
         source["generation_keyring"],
+        source["profile_launch_claim_key"],
         source["r2_access_key_id"],
         source["r2_secret_access_key"],
     }
@@ -383,17 +388,18 @@ def main() -> int:
         validate_config(document, source, profiles)
 
         for environment in ("staging", "production"):
-            missing_keyring = copy.deepcopy(document)
-            required = missing_keyring["env"][environment]["secrets"]["required"]
-            required.remove(source["generation_keyring"])
-            try:
-                validate_config(missing_keyring, source, profiles)
-            except BindingInventoryError:
-                pass
-            else:
-                raise BindingInventoryError(
-                    f"{environment} missing generation keyring unexpectedly passed"
-                )
+            for credential in ("generation_keyring", "profile_launch_claim_key"):
+                missing = copy.deepcopy(document)
+                required = missing["env"][environment]["secrets"]["required"]
+                required.remove(source[credential])
+                try:
+                    validate_config(missing, source, profiles)
+                except BindingInventoryError:
+                    pass
+                else:
+                    raise BindingInventoryError(
+                        f"{environment} missing {credential} unexpectedly passed"
+                    )
 
         tampered = copy.deepcopy(document)
         production = object_value(object_value(tampered["env"], "env")["production"], "production")
