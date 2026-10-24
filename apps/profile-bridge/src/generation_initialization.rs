@@ -405,8 +405,8 @@ mod tests {
         use control_plane_contract::profile_generation_api::BridgeGenerationUploadCapabilityResponse;
         use profile_platform_primitives::{ActorId, TenantScope};
         use runtime_bundle_domain::{
-            BundleRelativePath, InventoryEntry, RuntimeInventory, RuntimeManifest,
-            RuntimePlatform, Sha256Digest,
+            BundleRelativePath, InventoryEntry, RuntimeInventory, RuntimeManifest, RuntimePlatform,
+            Sha256Digest,
         };
         use std::fs;
         use std::path::PathBuf;
@@ -417,8 +417,11 @@ mod tests {
             let entry = BundleRelativePath::parse("camouhost/main.py")?;
             Ok(ApprovedRuntimeBundle::validate(
                 RuntimeManifest::new(
-                    "0.1.0", "3.12", RuntimePlatform::WindowsX86_64,
-                    entry.clone(), a.clone(),
+                    "0.1.0",
+                    "3.12",
+                    RuntimePlatform::WindowsX86_64,
+                    entry.clone(),
+                    a.clone(),
                 )?,
                 RuntimeInventory::new([InventoryEntry::new(entry, 10, b)])?,
                 &a,
@@ -459,10 +462,12 @@ mod tests {
                 _: &CorrelationId,
                 body: Option<&[u8]>,
             ) -> Result<MachineHttpResponse, ()> {
-                let request: Request =
-                    serde_json::from_slice(body.ok_or(())?).map_err(|_| ())?;
+                let request: Request = serde_json::from_slice(body.ok_or(())?).map_err(|_| ())?;
                 let value = match request {
-                    Request::Prepare { generation_id, expected_profile_version } => {
+                    Request::Prepare {
+                        generation_id,
+                        expected_profile_version,
+                    } => {
                         self.committed_generation = Some(generation_id.clone());
                         serde_json::json!({
                             "state": "initialize",
@@ -470,18 +475,24 @@ mod tests {
                             "expectedProfileVersion": expected_profile_version,
                         })
                     }
-                    Request::SealingMaterial { .. } => serde_json::to_value(
-                        BridgeGenerationSealingMaterialResponse::new(
+                    Request::SealingMaterial { .. } => {
+                        serde_json::to_value(BridgeGenerationSealingMaterialResponse::new(
                             "profile-generation-root-v1-7",
                             "37".repeat(32),
                             "71".repeat(16),
                             GENERATION_SEALING_CHUNK_BYTES,
-                        ),
-                    ).map_err(|_| ())?,
-                    Request::UploadCapability { .. } => serde_json::to_value(
-                        BridgeGenerationUploadCapabilityResponse::verified(),
-                    ).map_err(|_| ())?,
-                    Request::Commit { generation_id, expected_profile_version, .. } => {
+                        ))
+                        .map_err(|_| ())?
+                    }
+                    Request::UploadCapability { .. } => {
+                        serde_json::to_value(BridgeGenerationUploadCapabilityResponse::verified())
+                            .map_err(|_| ())?
+                    }
+                    Request::Commit {
+                        generation_id,
+                        expected_profile_version,
+                        ..
+                    } => {
                         self.commit_count += 1;
                         serde_json::json!({
                             "generationId": generation_id,
@@ -495,7 +506,8 @@ mod tests {
                     }
                 };
                 Ok(MachineHttpResponse::new(
-                    200, serde_json::to_vec(&value).map_err(|_| ())?,
+                    200,
+                    serde_json::to_vec(&value).map_err(|_| ())?,
                 ))
             }
         }
@@ -541,23 +553,33 @@ mod tests {
         let mut bundle_owner = Bundle(bundle()?);
         let mut transport = CommittingTransport::default();
         let result = initialize(
-            &intent, &actor, &device, &root,
+            &intent,
+            &actor,
+            &device,
+            &root,
             |workspace, _bundle| {
                 let config = b"{\"postCommitFixture\":true}";
                 fs::write(workspace.path().join("camoufox-config.json"), config)
                     .map_err(|_| InitialProfileError::Snapshot)?;
                 // Simulate host-local sidecar write conflict after the server commit.
-                let sidecar = workspace.path().parent()
+                let sidecar = workspace
+                    .path()
+                    .parent()
                     .ok_or(InitialProfileError::Snapshot)?
-                    .join(format!(".{}.materialization", workspace.generation_id().as_str()));
+                    .join(format!(
+                        ".{}.materialization",
+                        workspace.generation_id().as_str()
+                    ));
                 fs::write(sidecar, b"existing-uncertain-local-evidence")
                     .map_err(|_| InitialProfileError::Snapshot)?;
                 let sha: [u8; 32] = Sha256::digest(config).into();
                 browser_identity_fixture(
-                    "2.0.0", "a".repeat(64),
+                    "2.0.0",
+                    "a".repeat(64),
                     &format!("profile-stability-v1-probe-{}", "b".repeat(64)),
                     hex(&sha),
-                ).map_err(|_| InitialProfileError::Snapshot)
+                )
+                .map_err(|_| InitialProfileError::Snapshot)
             },
             &mut bundle_owner,
             &mut transport,
@@ -566,18 +588,23 @@ mod tests {
         assert_eq!(result, Err(InitialProfileError::SavedRecovery));
         assert_eq!(transport.commit_count, 1);
         let generation = GenerationId::parse(
-            transport.committed_generation.ok_or("missing committed generation")?,
+            transport
+                .committed_generation
+                .ok_or("missing committed generation")?,
         )?;
-        let workspace = root.open_generation(
-            &intent.tenant_id, &intent.profile_id, &generation,
-        )?;
+        let workspace = root.open_generation(&intent.tenant_id, &intent.profile_id, &generation)?;
         assert_eq!(
             fs::read(workspace.path().join("camoufox-config.json"))?,
             b"{\"postCommitFixture\":true}"
         );
         assert_eq!(
-            fs::read(workspace.path().parent().ok_or("no parent")?
-                .join(format!(".{}.materialization", generation.as_str())))?,
+            fs::read(
+                workspace
+                    .path()
+                    .parent()
+                    .ok_or("no parent")?
+                    .join(format!(".{}.materialization", generation.as_str()))
+            )?,
             b"existing-uncertain-local-evidence",
         );
 
@@ -591,7 +618,10 @@ mod tests {
             }
         }
         let replay = initialize(
-            &intent, &actor, &device, &root,
+            &intent,
+            &actor,
+            &device,
+            &root,
             |_, _| Err(InitialProfileError::Runtime),
             &mut NoBundle,
             &mut ReplayTransport,
