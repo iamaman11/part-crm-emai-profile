@@ -393,6 +393,217 @@ mod tests {
         Ok(())
     }
     #[test]
+    fn committed_initial_generation_retains_local_bytes_after_binding_failure_and_replays_launch()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use crate::runtime_bundle::ApprovedRuntimeBundle;
+        use crate::shipping_control_plane::MachineHttpResponse;
+        use crate::shipping_generation_save::SignedGenerationUploadCapability;
+        use crate::test_support::browser_identity_fixture;
+        use control_plane_contract::generation_key_api::{
+            BridgeGenerationSealingMaterialResponse, GENERATION_SEALING_CHUNK_BYTES,
+        };
+        use control_plane_contract::profile_generation_api::BridgeGenerationUploadCapabilityResponse;
+        use profile_platform_primitives::{ActorId, TenantScope};
+        use runtime_bundle_domain::{
+            BundleRelativePath, InventoryEntry, RuntimeInventory, RuntimeManifest,
+            RuntimePlatform, Sha256Digest,
+        };
+        use std::fs;
+        use std::path::PathBuf;
+
+        fn bundle() -> Result<ApprovedRuntimeBundle, Box<dyn std::error::Error>> {
+            let a = Sha256Digest::parse("a".repeat(64))?;
+            let b = Sha256Digest::parse("b".repeat(64))?;
+            let entry = BundleRelativePath::parse("camouhost/main.py")?;
+            Ok(ApprovedRuntimeBundle::validate(
+                RuntimeManifest::new(
+                    "0.1.0", "3.12", RuntimePlatform::WindowsX86_64,
+                    entry.clone(), a.clone(),
+                )?,
+                RuntimeInventory::new([InventoryEntry::new(entry, 10, b)])?,
+                &a,
+            )?)
+        }
+
+        struct Bundle(ApprovedRuntimeBundle);
+        impl RuntimeBundleSelectionPort for Bundle {
+            type Error = ();
+            fn select_bundle(&mut self) -> Result<ApprovedRuntimeBundle, ()> {
+                Ok(self.0.clone())
+            }
+        }
+
+        struct NoUpload;
+        impl SignedGenerationObjectPutPort for NoUpload {
+            type Error = ();
+            fn put_exact(
+                &mut self,
+                _: &SignedGenerationUploadCapability,
+                _: &[u8],
+            ) -> Result<(), ()> {
+                Err(())
+            }
+        }
+
+        #[derive(Default)]
+        struct CommittingTransport {
+            committed_generation: Option<String>,
+            commit_count: u64,
+        }
+        impl MachineHttpPort for CommittingTransport {
+            type Error = ();
+            fn request(
+                &mut self,
+                _: MachineHttpMethod,
+                _: &str,
+                _: &CorrelationId,
+                body: Option<&[u8]>,
+            ) -> Result<MachineHttpResponse, ()> {
+                let request: Request =
+                    serde_json::from_slice(body.ok_or(())?).map_err(|_| ())?;
+                let value = match request {
+                    Request::Prepare { generation_id, expected_profile_version } => {
+                        self.committed_generation = Some(generation_id.clone());
+                        serde_json::json!({
+                            "state": "initialize",
+                            "generationId": generation_id,
+                            "expectedProfileVersion": expected_profile_version,
+                        })
+                    }
+                    Request::SealingMaterial { .. } => serde_json::to_value(
+                        BridgeGenerationSealingMaterialResponse::new(
+                            "profile-generation-root-v1-7",
+                            "37".repeat(32),
+                            "71".repeat(16),
+                            GENERATION_SEALING_CHUNK_BYTES,
+                        ),
+                    ).map_err(|_| ())?,
+                    Request::UploadCapability { .. } => serde_json::to_value(
+                        BridgeGenerationUploadCapabilityResponse::verified(),
+                    ).map_err(|_| ())?,
+                    Request::Commit { generation_id, expected_profile_version, .. } => {
+                        self.commit_count += 1;
+                        serde_json::json!({
+                            "generationId": generation_id,
+                            "profileVersion": expected_profile_version + 1,
+                            "replayed": false,
+                            "launch": {
+                                "launchUri": "profilebridge://claim/claim_ready_0123456789abcdef0123456789",
+                                "expiresAtMs": 1000,
+                            },
+                        })
+                    }
+                };
+                Ok(MachineHttpResponse::new(
+                    200, serde_json::to_vec(&value).map_err(|_| ())?,
+                ))
+            }
+        }
+
+        struct ReplayTransport;
+        impl MachineHttpPort for ReplayTransport {
+            type Error = ();
+            fn request(
+                &mut self,
+                _: MachineHttpMethod,
+                _: &str,
+                _: &CorrelationId,
+                body: Option<&[u8]>,
+            ) -> Result<MachineHttpResponse, ()> {
+                if !matches!(
+                    serde_json::from_slice::<Request>(body.ok_or(())?).map_err(|_| ())?,
+                    Request::Prepare { .. },
+                ) {
+                    return Err(());
+                }
+                Ok(MachineHttpResponse::new(
+                    200,
+                    br#"{"state":"launch","launch":{"launchUri":"profilebridge://claim/claim_ready_0123456789abcdef0123456789","expiresAtMs":1000}}"#.to_vec(),
+                ))
+            }
+        }
+
+        let intent = InitialProfileOpen::parse(
+            "profilebridge://open/v1/tenant_initial_retain/actor_initial_retain/profile_initial_retain/1",
+        )?;
+        let actor = ActorContext::new(
+            TenantScope::new(intent.tenant_id.clone()),
+            ActorId::parse("actor_initial_retain")?,
+            CorrelationId::parse("corr_initial_retain")?,
+        );
+        let device = DeviceId::parse("device_initial_retain")?;
+        let root_path: PathBuf = std::env::temp_dir().join(format!(
+            "bridge-initial-commit-preservation-{}-{}",
+            std::process::id(),
+            SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos(),
+        ));
+        let root = MaterializationRoot::open_or_create(&root_path)?;
+        let mut bundle_owner = Bundle(bundle()?);
+        let mut transport = CommittingTransport::default();
+        let result = initialize(
+            &intent, &actor, &device, &root,
+            |workspace, _bundle| {
+                let config = b"{\"postCommitFixture\":true}";
+                fs::write(workspace.path().join("camoufox-config.json"), config)
+                    .map_err(|_| InitialProfileError::Snapshot)?;
+                // Simulate host-local sidecar write conflict after the server commit.
+                let sidecar = workspace.path().parent()
+                    .ok_or(InitialProfileError::Snapshot)?
+                    .join(format!(".{}.materialization", workspace.generation_id().as_str()));
+                fs::write(sidecar, b"existing-uncertain-local-evidence")
+                    .map_err(|_| InitialProfileError::Snapshot)?;
+                let sha: [u8; 32] = Sha256::digest(config).into();
+                browser_identity_fixture(
+                    "2.0.0", "a".repeat(64),
+                    &format!("profile-stability-v1-probe-{}", "b".repeat(64)),
+                    hex(&sha),
+                ).map_err(|_| InitialProfileError::Snapshot)
+            },
+            &mut bundle_owner,
+            &mut transport,
+            &mut NoUpload,
+        );
+        assert_eq!(result, Err(InitialProfileError::SavedRecovery));
+        assert_eq!(transport.commit_count, 1);
+        let generation = GenerationId::parse(
+            transport.committed_generation.ok_or("missing committed generation")?,
+        )?;
+        let workspace = root.open_generation(
+            &intent.tenant_id, &intent.profile_id, &generation,
+        )?;
+        assert_eq!(
+            fs::read(workspace.path().join("camoufox-config.json"))?,
+            b"{\"postCommitFixture\":true}"
+        );
+        assert_eq!(
+            fs::read(workspace.path().parent().ok_or("no parent")?
+                .join(format!(".{}.materialization", generation.as_str())))?,
+            b"existing-uncertain-local-evidence",
+        );
+
+        // A second app request resolves the server's already committed launch; no bundle,
+        // new local initial generation or second cloud commit is ever prepared.
+        struct NoBundle;
+        impl RuntimeBundleSelectionPort for NoBundle {
+            type Error = ();
+            fn select_bundle(&mut self) -> Result<ApprovedRuntimeBundle, ()> {
+                Err(())
+            }
+        }
+        let replay = initialize(
+            &intent, &actor, &device, &root,
+            |_, _| Err(InitialProfileError::Runtime),
+            &mut NoBundle,
+            &mut ReplayTransport,
+            &mut NoUpload,
+        )?;
+        assert!(replay.as_str().starts_with("profilebridge://claim/"));
+        assert!(workspace.path().exists());
+        fs::remove_dir_all(&root_path)?;
+        Ok(())
+    }
+
+    #[test]
     fn first_open_uri_has_only_typed_locators_and_a_canonical_version() {
         assert!(
             InitialProfileOpen::parse("profilebridge://open/v1/tenant_123/actor_123/profile_123/1")
