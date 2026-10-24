@@ -626,7 +626,8 @@ mod tests {
             &mut NoBundle,
             &mut ReplayTransport,
             &mut NoUpload,
-        )?;
+        )
+        .map_err(|_| std::io::Error::other("replayed committed launch was rejected"))?;
         assert_eq!(
             replay,
             ClaimUri::parse("profilebridge://claim/claim_ready_0123456789abcdef0123456789")?,
