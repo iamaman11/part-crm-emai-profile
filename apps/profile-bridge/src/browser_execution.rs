@@ -150,12 +150,7 @@ pub fn evaluate_browser_launch(
     }
 
     let (parent_lock, lock) = observed_browser_writer_locks(workspace)?;
-    let writer = BrowserWriterObservation::new(
-        false,
-        parent_lock,
-        lock,
-        supervised_writer_active,
-    );
+    let writer = BrowserWriterObservation::new(false, parent_lock, lock, supervised_writer_active);
     match writer.classify() {
         BrowserWriterDecision::Ready => {}
         BrowserWriterDecision::ProfileBusy => return Err(BrowserLaunchBlocker::ProfileBusy),
