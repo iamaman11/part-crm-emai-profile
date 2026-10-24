@@ -120,8 +120,13 @@ impl<'a> WindowsDeliveryCoordinator<'a> {
         fetcher: &mut F,
         archive_reader: &mut R,
     ) -> Result<PreparedWindowsDelivery, WindowsDeliveryCoordinatorError> {
-        let artifacts = download_verified_delivery(self.download_root, &candidate, fetcher)
-            .map_err(WindowsDeliveryCoordinatorError::Download)?;
+        let artifacts = download_verified_delivery(
+            self.download_root,
+            &candidate,
+            self.state_store.state().active(),
+            fetcher,
+        )
+        .map_err(WindowsDeliveryCoordinatorError::Download)?;
         let staged = stage_verified_delivery(
             self.staging_root,
             &candidate,
@@ -512,6 +517,9 @@ mod tests {
             assert_eq!(fetcher.calls.len(), 2);
         }
         let (other_manifest, other_signature) = signed_candidate(2)?;
+        let mut other: WindowsDeliveryManifest = serde_json::from_slice(&other_manifest)?;
+        other.release_set_id = format!("release-set-v3-sha256-{}", "2".repeat(64));
+        let other_manifest = serde_json::to_vec(&other)?;
         let before = store.clone();
         let update = WindowsDeliveryCoordinator::new(&downloads, &releases, &mut store)
             .prepare_installation(
@@ -525,8 +533,8 @@ mod tests {
         assert_eq!(store.state().active(), before.state().active());
         assert_eq!(store.handoff(), before.handoff());
         assert_eq!(store.state().staged(), Some(&update.candidate().identity()));
-        // This fixture's newer manifest reuses both exact component artifacts.
-        assert_eq!(fetcher.calls.len(), 2);
+        // A genuinely different Release Set fetches its Bridge but shares the exact runtime.
+        assert_eq!(fetcher.calls.len(), 3);
         let staged_update = store.clone();
         assert_eq!(
             WindowsDeliveryCoordinator::new(&downloads, &releases, &mut store)
@@ -543,7 +551,7 @@ mod tests {
             ))
         );
         assert_eq!(store, staged_update);
-        assert_eq!(fetcher.calls.len(), 2);
+        assert_eq!(fetcher.calls.len(), 3);
         DeliveryHandoffCoordinator::new(releases, directory.join("state")).complete_installation(
             &guard,
             update

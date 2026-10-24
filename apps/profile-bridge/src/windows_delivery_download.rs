@@ -1,6 +1,8 @@
 #![forbid(unsafe_code)]
 
-use crate::windows_delivery::{VerifiedDeliveryCandidate, WindowsDeliveryComponent};
+use crate::windows_delivery::{
+    DeliveryIdentity, VerifiedDeliveryCandidate, WindowsDeliveryComponent,
+};
 use sha2::{Digest, Sha256};
 use std::fmt;
 use std::fs::{self, File, Metadata, OpenOptions};
@@ -22,7 +24,6 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 const RELEASE_SET_PREFIX: &str = "release-set-v3-sha256-";
-#[cfg(any(test, windows))]
 const RUNTIME_BUNDLE_PREFIX: &str = "runtime-bundle-v3-sha256-";
 const PROFILE_BRIDGE_ASSET: &str = "profile-bridge.zip";
 const RUNTIME_BUNDLE_ASSET: &str = "runtime-bundle.tar";
@@ -193,6 +194,7 @@ impl DownloadedDeliveryArtifacts {
 pub fn download_verified_delivery<F: DeliveryAssetFetcher>(
     root: &DeliveryDownloadRoot,
     candidate: &VerifiedDeliveryCandidate,
+    active: Option<&DeliveryIdentity>,
     fetcher: &mut F,
 ) -> Result<DownloadedDeliveryArtifacts, DeliveryDownloadError> {
     validate_directory_path(root.path())?;
@@ -202,6 +204,10 @@ pub fn download_verified_delivery<F: DeliveryAssetFetcher>(
     }
     validate_component_bounds(&manifest.components.profile_bridge)?;
     validate_component_bounds(&manifest.components.runtime_bundle)?;
+    let runtime = &manifest.components.runtime_bundle;
+    if !prefixed_sha256(&runtime.release_id, RUNTIME_BUNDLE_PREFIX) {
+        return Err(DeliveryDownloadError::InvalidCandidate);
+    }
 
     let release_directory = root.path().join(&manifest.release_set_id);
     ensure_directory(&release_directory)?;
@@ -210,13 +216,29 @@ pub fn download_verified_delivery<F: DeliveryAssetFetcher>(
         &manifest.release_set_id,
         PROFILE_BRIDGE_ASSET,
         &manifest.components.profile_bridge,
+        None,
         fetcher,
     )?;
+    // Runtime bytes have their own immutable component identity. A Bridge-only update must not
+    // key the same large archive by another whole Release Set and download it again.
+    let runtime_directory = root.path().join(&runtime.release_id);
+    ensure_directory(&runtime_directory)?;
+    let active_archive = active
+        .filter(|identity| {
+            identity.runtime_bundle_release_id == runtime.release_id
+                && prefixed_sha256(&identity.release_set_id, RELEASE_SET_PREFIX)
+        })
+        .map(|identity| {
+            root.path()
+                .join(&identity.release_set_id)
+                .join(RUNTIME_BUNDLE_ASSET)
+        });
     let runtime_bundle = materialize_asset(
-        &release_directory,
-        &manifest.components.runtime_bundle.release_id,
+        &runtime_directory,
+        &runtime.release_id,
         RUNTIME_BUNDLE_ASSET,
-        &manifest.components.runtime_bundle,
+        runtime,
+        active_archive.as_deref(),
         fetcher,
     )?;
     Ok(DownloadedDeliveryArtifacts {
@@ -242,6 +264,7 @@ fn materialize_asset<F: DeliveryAssetFetcher>(
     release_set_id: &str,
     asset_name: &'static str,
     component: &WindowsDeliveryComponent,
+    active_archive: Option<&Path>,
     fetcher: &mut F,
 ) -> Result<PathBuf, DeliveryDownloadError> {
     let final_path = release_directory.join(asset_name);
@@ -266,14 +289,16 @@ fn materialize_asset<F: DeliveryAssetFetcher>(
         Err(error) if error.kind() == io::ErrorKind::NotFound => {}
         Err(_) => return Err(DeliveryDownloadError::Io),
     }
-    if fetcher
-        .fetch_release_asset(
-            release_set_id,
-            asset_name,
-            &pending_path,
-            component.artifact_size_bytes,
-        )
-        .is_err()
+    let seeded = seed_active_archive(active_archive, &pending_path, component)?;
+    if !seeded
+        && fetcher
+            .fetch_release_asset(
+                release_set_id,
+                asset_name,
+                &pending_path,
+                component.artifact_size_bytes,
+            )
+            .is_err()
     {
         cleanup_pending(&pending_path)?;
         return Err(DeliveryDownloadError::FetchFailed);
@@ -321,6 +346,39 @@ fn materialize_asset<F: DeliveryAssetFetcher>(
             Err(DeliveryDownloadError::Io)
         }
     }
+}
+
+fn seed_active_archive(
+    source: Option<&Path>,
+    pending: &Path,
+    component: &WindowsDeliveryComponent,
+) -> Result<bool, DeliveryDownloadError> {
+    let Some(source) = source else {
+        return Ok(false);
+    };
+    let parent = source.parent().ok_or(DeliveryDownloadError::InvalidRoot)?;
+    let parent_metadata = match fs::symlink_metadata(parent) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(false),
+        Err(_) => return Err(DeliveryDownloadError::Io),
+    };
+    validate_directory_metadata(&parent_metadata)?;
+    match fs::symlink_metadata(source) {
+        Ok(_) => {}
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(false),
+        Err(_) => return Err(DeliveryDownloadError::Io),
+    }
+    if !verify_file_identity(
+        source,
+        component.artifact_size_bytes,
+        &component.artifact_sha256,
+    )? {
+        return Ok(false);
+    }
+    // Only the named active cache is eligible, never a history scan or a source of authority.
+    // Existing pending-file verification and create-only publication still check these bytes.
+    fs::hard_link(source, pending).map_err(|_| DeliveryDownloadError::Io)?;
+    Ok(true)
 }
 
 fn pending_path(directory: &Path, asset_name: &str) -> PathBuf {
@@ -786,13 +844,14 @@ mod tests {
     fn candidate(
         bridge: &[u8],
         runtime: &[u8],
+        release_hex: char,
     ) -> Result<VerifiedDeliveryCandidate, Box<dyn std::error::Error>> {
         let bridge_sha = sha256_hex(bridge);
         let runtime_sha = sha256_hex(runtime);
         let manifest = WindowsDeliveryManifest {
             schema_version: 1,
             kind: "WINDOWS_PROFILE_BRIDGE_DELIVERY".to_owned(),
-            release_set_id: format!("{RELEASE_SET_PREFIX}{}", "a".repeat(64)),
+            release_set_id: format!("{RELEASE_SET_PREFIX}{}", release_hex.to_string().repeat(64)),
             sequence: 1,
             source_commit_sha: "1".repeat(40),
             components: WindowsDeliveryComponents {
@@ -803,7 +862,7 @@ mod tests {
                     component_manifest_sha256: "c".repeat(64),
                 },
                 runtime_bundle: WindowsDeliveryComponent {
-                    release_id: format!("runtime-bundle-v3-sha256-{}", "d".repeat(64)),
+                    release_id: format!("{RUNTIME_BUNDLE_PREFIX}{runtime_sha}"),
                     artifact_sha256: runtime_sha,
                     artifact_size_bytes: u64::try_from(runtime.len())?,
                     component_manifest_sha256: "e".repeat(64),
@@ -848,13 +907,13 @@ mod tests {
         let root = DeliveryDownloadRoot::open_or_create(directory.0.join("cache"))?;
         let bridge = b"bridge-archive";
         let runtime = b"runtime-archive";
-        let candidate = candidate(bridge, runtime)?;
+        let candidate = candidate(bridge, runtime, 'a')?;
         let mut fetcher = FakeFetcher {
             bridge: bridge.to_vec(),
             runtime: runtime.to_vec(),
             calls: Vec::new(),
         };
-        let first = download_verified_delivery(&root, &candidate, &mut fetcher)?;
+        let first = download_verified_delivery(&root, &candidate, None, &mut fetcher)?;
         assert_eq!(fs::read(first.profile_bridge())?, bridge);
         assert_eq!(fs::read(first.runtime_bundle())?, runtime);
         assert_eq!(
@@ -876,8 +935,203 @@ mod tests {
             ]
         );
 
-        let second = download_verified_delivery(&root, &candidate, &mut RejectingFetcher)?;
+        let second = download_verified_delivery(&root, &candidate, None, &mut RejectingFetcher)?;
         assert_eq!(second, first);
+        Ok(())
+    }
+
+    #[test]
+    fn different_release_sets_share_runtime_and_fetch_only_new_bridge() -> TestResult {
+        let directory = TestDirectory::create("component-reuse")?;
+        let root = DeliveryDownloadRoot::open_or_create(directory.0.join("cache"))?;
+        let original = candidate(b"old-bridge", b"same-runtime", 'a')?;
+        let update = candidate(b"new-bridge", b"same-runtime", 'b')?;
+        let mut fetcher = FakeFetcher {
+            bridge: b"old-bridge".to_vec(),
+            runtime: b"same-runtime".to_vec(),
+            calls: Vec::new(),
+        };
+        let first = download_verified_delivery(&root, &original, None, &mut fetcher)?;
+        fetcher.bridge = b"new-bridge".to_vec();
+        let second =
+            download_verified_delivery(&root, &update, Some(&original.identity()), &mut fetcher)?;
+        assert_ne!(
+            original.identity().release_set_id,
+            update.identity().release_set_id
+        );
+        assert_eq!(first.runtime_bundle(), second.runtime_bundle());
+        assert_eq!(fs::read(second.profile_bridge())?, b"new-bridge");
+        assert_eq!(fetcher.calls.len(), 3);
+        assert_eq!(
+            fetcher.calls[2],
+            (
+                update.manifest().release_set_id.clone(),
+                PROFILE_BRIDGE_ASSET.to_owned()
+            )
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn named_active_archive_seeds_component_cache_without_network() -> TestResult {
+        let directory = TestDirectory::create("active-reuse")?;
+        let root = DeliveryDownloadRoot::open_or_create(directory.0.join("cache"))?;
+        let active = candidate(b"old-bridge", b"same-runtime", 'a')?;
+        let update = candidate(b"new-bridge", b"same-runtime", 'b')?;
+        let old = root.path().join(&active.manifest().release_set_id);
+        fs::create_dir(&old)?;
+        fs::write(old.join(RUNTIME_BUNDLE_ASSET), b"same-runtime")?;
+        let new = root.path().join(&update.manifest().release_set_id);
+        fs::create_dir(&new)?;
+        fs::write(new.join(PROFILE_BRIDGE_ASSET), b"new-bridge")?;
+        let artifacts = download_verified_delivery(
+            &root,
+            &update,
+            Some(&active.identity()),
+            &mut RejectingFetcher,
+        )?;
+        assert_eq!(
+            artifacts.runtime_bundle().parent(),
+            Some(
+                root.path()
+                    .join(&update.manifest().components.runtime_bundle.release_id)
+                    .as_path()
+            )
+        );
+        assert_eq!(fs::read(artifacts.runtime_bundle())?, b"same-runtime");
+        assert_eq!(fs::read(old.join(RUNTIME_BUNDLE_ASSET))?, b"same-runtime");
+        Ok(())
+    }
+
+    #[test]
+    fn missing_corrupt_or_different_active_runtime_requires_exact_fetch() -> TestResult {
+        for case in ["missing", "corrupt", "different"] {
+            let directory = TestDirectory::create(case)?;
+            let root = DeliveryDownloadRoot::open_or_create(directory.0.join("cache"))?;
+            let active = candidate(b"old-bridge", b"old-runtime", 'a')?;
+            let update = candidate(
+                b"new-bridge",
+                if case == "different" {
+                    b"new-runtime"
+                } else {
+                    b"old-runtime"
+                },
+                'b',
+            )?;
+            let old = root.path().join(&active.manifest().release_set_id);
+            fs::create_dir(&old)?;
+            if case != "missing" {
+                fs::write(
+                    old.join(RUNTIME_BUNDLE_ASSET),
+                    if case == "corrupt" {
+                        b"bad-runtime"
+                    } else {
+                        b"old-runtime"
+                    },
+                )?;
+            }
+            let new = root.path().join(&update.manifest().release_set_id);
+            fs::create_dir(&new)?;
+            fs::write(new.join(PROFILE_BRIDGE_ASSET), b"new-bridge")?;
+            assert_eq!(
+                download_verified_delivery(
+                    &root,
+                    &update,
+                    Some(&active.identity()),
+                    &mut RejectingFetcher
+                ),
+                Err(DeliveryDownloadError::FetchFailed)
+            );
+            let expected = if case == "different" {
+                b"new-runtime"
+            } else {
+                b"old-runtime"
+            };
+            let mut fetcher = FakeFetcher {
+                bridge: b"new-bridge".to_vec(),
+                runtime: expected.to_vec(),
+                calls: Vec::new(),
+            };
+            let artifacts =
+                download_verified_delivery(&root, &update, Some(&active.identity()), &mut fetcher)?;
+            assert_eq!(fs::read(artifacts.runtime_bundle())?, expected);
+            assert_eq!(
+                fetcher.calls,
+                [(
+                    update
+                        .manifest()
+                        .components
+                        .runtime_bundle
+                        .release_id
+                        .clone(),
+                    RUNTIME_BUNDLE_ASSET.to_owned()
+                )]
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn conflicting_component_cache_is_preserved_and_rejected() -> TestResult {
+        let directory = TestDirectory::create("component-conflict")?;
+        let root = DeliveryDownloadRoot::open_or_create(directory.0.join("cache"))?;
+        let update = candidate(b"new-bridge", b"same-runtime", 'b')?;
+        let new = root.path().join(&update.manifest().release_set_id);
+        fs::create_dir(&new)?;
+        fs::write(new.join(PROFILE_BRIDGE_ASSET), b"new-bridge")?;
+        let runtime = root
+            .path()
+            .join(&update.manifest().components.runtime_bundle.release_id);
+        fs::create_dir(&runtime)?;
+        fs::write(runtime.join(RUNTIME_BUNDLE_ASSET), b"corrupt")?;
+        assert_eq!(
+            download_verified_delivery(&root, &update, None, &mut RejectingFetcher),
+            Err(DeliveryDownloadError::ExistingArtifactMismatch)
+        );
+        assert_eq!(fs::read(runtime.join(RUNTIME_BUNDLE_ASSET))?, b"corrupt");
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn linked_active_cache_cannot_seed_admitted_bytes() -> TestResult {
+        use std::os::unix::fs::symlink;
+        for linked_parent in [false, true] {
+            let directory = TestDirectory::create("active-link")?;
+            let root = DeliveryDownloadRoot::open_or_create(directory.0.join("cache"))?;
+            let active = candidate(b"old-bridge", b"same-runtime", 'a')?;
+            let update = candidate(b"new-bridge", b"same-runtime", 'b')?;
+            let outside = directory.0.join("outside-cache");
+            fs::create_dir(&outside)?;
+            fs::write(outside.join(RUNTIME_BUNDLE_ASSET), b"same-runtime")?;
+            let old = root.path().join(&active.manifest().release_set_id);
+            if linked_parent {
+                symlink(&outside, &old)?;
+            } else {
+                fs::create_dir(&old)?;
+                symlink(
+                    outside.join(RUNTIME_BUNDLE_ASSET),
+                    old.join(RUNTIME_BUNDLE_ASSET),
+                )?;
+            }
+            let new = root.path().join(&update.manifest().release_set_id);
+            fs::create_dir(&new)?;
+            fs::write(new.join(PROFILE_BRIDGE_ASSET), b"new-bridge")?;
+            let expected = if linked_parent {
+                DeliveryDownloadError::InvalidRoot
+            } else {
+                DeliveryDownloadError::FetchFailed
+            };
+            assert_eq!(
+                download_verified_delivery(
+                    &root,
+                    &update,
+                    Some(&active.identity()),
+                    &mut RejectingFetcher
+                ),
+                Err(expected)
+            );
+        }
         Ok(())
     }
 
@@ -885,14 +1139,14 @@ mod tests {
     fn downloaded_identity_mismatch_is_removed_and_fails_closed() -> TestResult {
         let directory = TestDirectory::create("mismatch")?;
         let root = DeliveryDownloadRoot::open_or_create(directory.0.join("cache"))?;
-        let candidate = candidate(b"expected-bridge", b"expected-runtime")?;
+        let candidate = candidate(b"expected-bridge", b"expected-runtime", 'a')?;
         let mut fetcher = FakeFetcher {
             bridge: b"wrong-bridge".to_vec(),
             runtime: b"expected-runtime".to_vec(),
             calls: Vec::new(),
         };
         assert_eq!(
-            download_verified_delivery(&root, &candidate, &mut fetcher),
+            download_verified_delivery(&root, &candidate, None, &mut fetcher),
             Err(DeliveryDownloadError::ArtifactIdentityMismatch)
         );
         let release_directory = root.path().join(&candidate.manifest().release_set_id);
@@ -905,12 +1159,12 @@ mod tests {
     fn conflicting_existing_cache_is_never_overwritten() -> TestResult {
         let directory = TestDirectory::create("conflict")?;
         let root = DeliveryDownloadRoot::open_or_create(directory.0.join("cache"))?;
-        let candidate = candidate(b"expected-bridge", b"expected-runtime")?;
+        let candidate = candidate(b"expected-bridge", b"expected-runtime", 'a')?;
         let release_directory = root.path().join(&candidate.manifest().release_set_id);
         fs::create_dir(&release_directory)?;
         fs::write(release_directory.join(PROFILE_BRIDGE_ASSET), b"corrupt")?;
         assert_eq!(
-            download_verified_delivery(&root, &candidate, &mut RejectingFetcher),
+            download_verified_delivery(&root, &candidate, None, &mut RejectingFetcher),
             Err(DeliveryDownloadError::ExistingArtifactMismatch)
         );
         assert_eq!(
