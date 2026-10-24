@@ -125,6 +125,15 @@ Certification, audit, updater, notification или recovery infrastructure мо�
 implementation detail только в объёме, необходимом перечисленным гарантиям. Это не превращает
 соответствующий полный пользовательский feature в scope первого release.
 
+Обычное открытие Profile не требует полной fingerprint-сертификации. Camoufox исполняет браузер
+и применяет сохранённую конфигурацию; приложение отвечает за её точность, актуальную generation,
+доступ, единственного writer и подтверждённое сохранение. Наблюдаемые различия hardware, экрана/DPR,
+WebGL, fonts, locale и speech voices диагностируются без запрета обычного запуска и без обещания
+полного совпадения fingerprint. Отсутствие WebGL само по себе допустимо. Неверная browser/OS identity,
+повреждённые данные или runtime, отсутствие доступа и потеря writer ownership остаются блокерами.
+Приложение не переписывает сохранённый fingerprint под компьютер и не исправляет ограничения Camoufox
+собственными подменами браузерных API.
+
 Добавление второй независимой organization/tenant в product UX требует отдельного isolation/product
 решения; существующие tenant-safe boundaries при этом не ослабляются.
 

@@ -61,7 +61,9 @@ struct WireScreen {
 struct WireGraphics {
     vendor: Option<String>,
     renderer: Option<String>,
+    #[serde(deserialize_with = "Option::deserialize")]
     webgl: Option<WireGraphicsContext>,
+    #[serde(deserialize_with = "Option::deserialize")]
     webgl2: Option<WireGraphicsContext>,
 }
 
@@ -104,21 +106,17 @@ pub(super) fn verify_browser_visible_payload(
     payload: &[u8],
 ) -> Result<HostRuntimeEvidence, BrowserVisibleWireError> {
     let observation = parse_browser_visible_payload(payload)?;
-    expected
-        .compare_browser_visible(&observation, &mut Sha256Adapter)
+    let difference = expected
+        .assess_profile_launch(&observation, &mut Sha256Adapter)
         .map_err(|mismatch| {
             eprintln!("CAMOUHOST_BROWSER_VISIBLE_MISMATCH={mismatch:?}");
-            let (status, count) = match &observation.locale.speech_voices {
-                SpeechVoicesObservation::Available(voices) => ("available", voices.len()),
-                SpeechVoicesObservation::NotApplicable => ("not_applicable", 0),
-                SpeechVoicesObservation::Unavailable => ("unavailable", 0),
-            };
-            eprintln!(
-                "CAMOUHOST_SPEECH_OBSERVATION=status:{status};count:{count};configured:{}",
-                expected.locale().speech_voices_sha256().is_some()
-            );
             BrowserVisibleWireError::IdentityMismatch
         })?;
+    if let Some(reason) = difference {
+        eprintln!(
+            "CAMOUHOST_BROWSER_VISIBLE_DIFFERENCE={reason:?};PROFILE_LAUNCH=ALLOWED;FINGERPRINT_MATCH=false"
+        );
+    }
     host_runtime_evidence(&observation)
 }
 
@@ -132,9 +130,7 @@ fn host_runtime_evidence(
         (Observed::Available(_), Observed::Available(_)) => HostGraphicsBackend::WebGlAndWebGl2,
         (Observed::Available(_), Observed::Unavailable) => HostGraphicsBackend::WebGl,
         (Observed::Unavailable, Observed::Available(_)) => HostGraphicsBackend::WebGl2,
-        (Observed::Unavailable, Observed::Unavailable) => {
-            return Err(BrowserVisibleWireError::InvalidPayload);
-        }
+        (Observed::Unavailable, Observed::Unavailable) => HostGraphicsBackend::Unavailable,
     };
     let display = observation.display;
     Ok(HostRuntimeEvidence {
@@ -318,8 +314,7 @@ fn dpr_milli(value: f64) -> Result<u32, BrowserVisibleWireError> {
     let milli = value * 1000.0;
     if !value.is_finite()
         || !milli.is_finite()
-        || milli <= 0.0
-        || (milli.round() - milli).abs() > f64::EPSILON
+        || milli.round() <= 0.0
         || milli > f64::from(u32::MAX)
     {
         return Err(BrowserVisibleWireError::InvalidPayload);
@@ -339,7 +334,9 @@ impl BrowserVisibleSha256Port for Sha256Adapter {
 
 #[cfg(test)]
 mod tests {
-    use super::{BrowserVisibleWireError, parse_browser_visible_payload};
+    use super::{
+        BrowserVisibleWireError, parse_browser_visible_payload, verify_browser_visible_payload,
+    };
     use browser_execution_domain::browser_visible_observation::{
         BrowserVisibleSha256Port, Observed, SpeechVoicesObservation,
     };
@@ -376,7 +373,8 @@ mod tests {
     }
 
     #[test]
-    fn unknown_or_non_integral_dpr_fails_closed() {
+    fn unknown_fields_fail_closed_and_fractional_dpr_is_normalized()
+    -> Result<(), Box<dyn std::error::Error>> {
         let unknown = MATCHING_PAYLOAD.replace(
             "\"user_agent\":\"Mozilla/5.0 Firefox/152.0\"",
             "\"user_agent\":\"Mozilla/5.0 Firefox/152.0\",\"unexpected\":true",
@@ -385,14 +383,84 @@ mod tests {
             parse_browser_visible_payload(unknown.as_bytes()),
             Err(BrowserVisibleWireError::InvalidPayload)
         );
-        let bad_dpr = MATCHING_PAYLOAD.replace(
+        let fractional_dpr = MATCHING_PAYLOAD.replace(
             "\"device_pixel_ratio\":1.0",
-            "\"device_pixel_ratio\":1.0005",
+            "\"device_pixel_ratio\":1.3333333333333333",
         );
         assert_eq!(
-            parse_browser_visible_payload(bad_dpr.as_bytes()),
+            parse_browser_visible_payload(fractional_dpr.as_bytes())
+                .map_err(|_| "fractional DPR should parse")?
+                .display
+                .device_pixel_ratio_milli,
+            1333
+        );
+        for value in [0.0, -1.0, 0.0001, f64::NAN, f64::INFINITY, f64::MAX] {
+            assert_eq!(
+                super::dpr_milli(value),
+                Err(BrowserVisibleWireError::InvalidPayload)
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn ordinary_launch_allows_observed_gpu_difference_but_rejects_wrong_browser()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let identity = crate::test_support::browser_identity_fixture(
+            "runtime",
+            "1".repeat(64),
+            "fixture",
+            "2".repeat(64),
+        )?;
+        // The fixture expects NVIDIA; a different observed vendor is not a launch veto.
+        assert!(
+            verify_browser_visible_payload(
+                identity.profile_stable_identity(),
+                MATCHING_PAYLOAD.as_bytes()
+            )
+            .is_ok()
+        );
+        let mut payload: serde_json::Value = serde_json::from_str(MATCHING_PAYLOAD)?;
+        payload["graphics"] = serde_json::json!({
+            "vendor":null, "renderer":null, "webgl":null, "webgl2":null,
+        });
+        let unavailable = serde_json::to_vec(&payload)?;
+        let observation = parse_browser_visible_payload(&unavailable)
+            .map_err(|_| "explicitly unavailable WebGL should parse")?;
+        assert_eq!(
+            super::host_runtime_evidence(&observation).map(|value| value.graphics_backend),
+            Ok(browser_execution_domain::host_compatibility::HostGraphicsBackend::Unavailable)
+        );
+        assert!(
+            verify_browser_visible_payload(identity.profile_stable_identity(), &unavailable)
+                .is_ok()
+        );
+        let mut missing_context = payload.clone();
+        missing_context["graphics"]
+            .as_object_mut()
+            .ok_or("graphics object expected")?
+            .remove("webgl2");
+        assert_eq!(
+            parse_browser_visible_payload(&serde_json::to_vec(&missing_context)?),
             Err(BrowserVisibleWireError::InvalidPayload)
         );
+        payload["user_agent"] = serde_json::json!("Mozilla/5.0 Firefox/151.0");
+        assert_eq!(
+            verify_browser_visible_payload(
+                identity.profile_stable_identity(),
+                &serde_json::to_vec(&payload)?
+            ),
+            Err(BrowserVisibleWireError::IdentityMismatch)
+        );
+        payload
+            .as_object_mut()
+            .ok_or("object expected")?
+            .remove("graphics");
+        assert_eq!(
+            parse_browser_visible_payload(&serde_json::to_vec(&payload)?),
+            Err(BrowserVisibleWireError::InvalidPayload)
+        );
+        Ok(())
     }
 
     #[test]

@@ -97,6 +97,14 @@ The accepted preflight binds at least:
 Any missing, stale or mismatched binding fails before real browser launch. Runtime/process configuration
 is an outer adapter concern and may not weaken the materialization identity comparison.
 
+Exact saved configuration and runtime integrity are distinct from complete observed fingerprint
+equality. Before navigation, the existing typed domain owner rejects a wrong browser/OS identity.
+Differences in hardware, display/DPR, WebGL capabilities, fonts, locale or speech voices are diagnostic
+for ordinary profile launch; they neither rewrite saved identity nor certify fingerprint equality.
+An explicitly observed lack of WebGL is permitted; missing or malformed observation is not evidence
+of a compatible runtime. The supported headful platform, usable display/process/filesystem and clock
+requirements remain enforced. Strict fingerprint comparison remains available for certification.
+
 ## 6. Runtime Supervision And Coordinator Heartbeat
 
 `ProfileBridgeOperator` is the local runtime orchestration owner. The shipping composition creates the
