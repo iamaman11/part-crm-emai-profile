@@ -442,18 +442,18 @@ where
     /// Installed delivery may durably begin its one-time health attempt exactly when the
     /// verified profile is ready to start the real managed runtime. A profile/cache/network
     /// refusal before this callback must not consume the installation's health attempt.
-    pub fn open_authoritative_with_runtime_health<Dl, H>(
+    pub fn open_authoritative_with_runtime_health<Dl, BeforeRuntime>(
         &mut self,
         claim: &ClaimUri,
         root: &MaterializationRoot,
         downloader: &mut Dl,
         now: UnixMillis,
-        before_runtime_start: H,
+        before_runtime_start: BeforeRuntime,
     ) -> Result<(), OperatorFlowError>
     where
         C: GenerationReopenControlPort,
         Dl: GenerationObjectDownloadPort,
-        H: FnMut() -> Result<(), ()>,
+        BeforeRuntime: FnMut() -> Result<(), ()>,
     {
         self.open_with_materialization(
             claim,
@@ -493,13 +493,13 @@ where
         )
     }
 
-    fn open_with_materialization<F, H>(
+    fn open_with_materialization<F, BeforeRuntime>(
         &mut self,
         claim: &ClaimUri,
         root: &MaterializationRoot,
         now: UnixMillis,
         mut ensure_materialized: F,
-        mut before_runtime_start: H,
+        mut before_runtime_start: BeforeRuntime,
     ) -> Result<(), OperatorFlowError>
     where
         F: FnMut(
@@ -510,7 +510,7 @@ where
             &DeviceId,
             u64,
         ) -> Result<(), AuthoritativeGenerationMaterializationError>,
-        H: FnMut() -> Result<(), ()>,
+        BeforeRuntime: FnMut() -> Result<(), ()>,
     {
         if self.cleanup_blocked {
             return Err(OperatorFlowError::CleanupRequired);
