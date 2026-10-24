@@ -67,6 +67,9 @@ impl std::error::Error for AuthoritativeGenerationMaterializationError {}
 /// snapshot and its host-local materialization evidence is prepared before the canonical generation
 /// path is published, so a successful authoritative reopen never exposes a generation without the
 /// identity evidence required by shipping preflight.
+// The exact tenant/profile/generation and current device/epoch are independent ownership
+// witnesses; bundling them into an unvalidated request would obscure the trust boundary.
+#[allow(clippy::too_many_arguments)]
 pub fn ensure_authoritative_generation<C, D>(
     root: &MaterializationRoot,
     tenant_id: &TenantId,
