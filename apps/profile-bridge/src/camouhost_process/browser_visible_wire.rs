@@ -61,7 +61,9 @@ struct WireScreen {
 struct WireGraphics {
     vendor: Option<String>,
     renderer: Option<String>,
+    #[serde(deserialize_with = "Option::deserialize")]
     webgl: Option<WireGraphicsContext>,
+    #[serde(deserialize_with = "Option::deserialize")]
     webgl2: Option<WireGraphicsContext>,
 }
 
@@ -432,6 +434,15 @@ mod tests {
         assert!(
             verify_browser_visible_payload(identity.profile_stable_identity(), &unavailable)
                 .is_ok()
+        );
+        let mut missing_context = payload.clone();
+        missing_context["graphics"]
+            .as_object_mut()
+            .ok_or("graphics object expected")?
+            .remove("webgl2");
+        assert_eq!(
+            parse_browser_visible_payload(&serde_json::to_vec(&missing_context)?),
+            Err(BrowserVisibleWireError::InvalidPayload)
         );
         payload["user_agent"] = serde_json::json!("Mozilla/5.0 Firefox/151.0");
         assert_eq!(
