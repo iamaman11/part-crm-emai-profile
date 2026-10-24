@@ -299,6 +299,7 @@ pub trait CoordinatorIngressApplicationPort {
 
     fn new_outbox_event_id(&self) -> Result<OutboxEventId, CoordinatorIngressPortError>;
 
+    /// Observe authoritative coordinator state without writing projection commands or outbox events.
     async fn snapshot(
         &self,
         scope: &TenantScope,
@@ -312,6 +313,7 @@ pub trait CoordinatorIngressApplicationPort {
         envelope: &CoordinatorCommandEnvelope,
     ) -> Result<CoordinatorRuntimeResult, CoordinatorIngressPortError>;
 
+    /// Project an executed or replayed command. A snapshot is an observation, not a command result.
     async fn project(
         &self,
         scope: &TenantScope,

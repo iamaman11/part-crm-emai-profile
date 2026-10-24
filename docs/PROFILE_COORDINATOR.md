@@ -78,7 +78,8 @@ The shipping Profile Bridge uses the canonical machine route:
 
 This route is not authenticated by a retained browser credential. Before coordinator payload semantics
 are trusted, the Worker resolves the Bridge machine through the dedicated machine perimeter and the
-existing device-principal owner using edge-verified mTLS certificate identity.
+existing device-principal owner using a revocable device-bound application session and fresh
+request proof from the registered non-exportable Windows CNG key.
 
 Machine ingress is deliberately narrower:
 
@@ -126,6 +127,13 @@ comparing object sequence/version with projected sequence/version, and repair is
 
 The implementation **must not claim atomicity across Durable Objects and D1**. It preserves replayable
 object evidence, idempotent projection writes and explicit reconciliation state instead.
+
+An ordinary snapshot reads the authoritative Durable Object and performs no D1 projection-command or
+outbox write. Its sequence belongs to the transition being observed, not to a new `snapshot` command.
+Command execution and exact command replay retain the existing idempotent D1 projection/outbox path;
+conflicting command outcomes or projection bytes still fail closed. A snapshot does not certify that
+the D1 projection has caught up with an alarm or an interrupted projection write. Historical snapshot
+rows remain immutable evidence and require no schema migration or data reset.
 
 ## Authorization
 
