@@ -336,6 +336,14 @@ fn read_regular_file(path: &Path) -> Result<String, BrowserLaunchBlocker> {
         .map_err(Into::into)
 }
 
+/// Negative browser-writer evidence for a locally held Bridge lock *before* any runtime spawn.
+pub(crate) fn browser_writer_locks_absent(
+    workspace: &GenerationWorkspace,
+) -> Result<bool, BrowserLaunchBlocker> {
+    Ok(!path_present(&workspace.path().join(FIREFOX_PARENT_LOCK_FILE))?
+        && !path_present(&workspace.path().join(FIREFOX_LOCK_FILE))?)
+}
+
 fn path_present(path: &Path) -> Result<bool, BrowserLaunchBlocker> {
     match fs::symlink_metadata(path) {
         Ok(_) => Ok(true),

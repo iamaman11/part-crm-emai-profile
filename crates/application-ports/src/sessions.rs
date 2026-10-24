@@ -14,6 +14,13 @@ pub trait ProfileCoordinatorPort {
 
     fn close_lease(&mut self, lease: &ProfileLease) -> Result<(), Self::Error>;
 
+    /// Clean cancellation is allowed only before this session could have started a browser,
+    /// with exact own lease/fence and proven local lock cleanup. Implementations without a
+    /// distinct evidenced release remain fail-closed through generic uncertain release.
+    fn close_without_browser_use(&mut self, lease: &ProfileLease) -> Result<(), Self::Error> {
+        self.close_lease(lease)
+    }
+
     /// Release coordinator ownership after an exactly verified successor has already become the
     /// authoritative backend generation. Generic abort/error cleanup remains `close_lease`; a
     /// shipping coordinator may strengthen this operation to a clean release because confirmed

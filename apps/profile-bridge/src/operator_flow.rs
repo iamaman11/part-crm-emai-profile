@@ -1,4 +1,5 @@
 use crate::ProcessControlPort;
+use crate::browser_execution::browser_writer_locks_absent;
 use crate::authoritative_generation::{
     AuthoritativeGenerationMaterializationError, ensure_authoritative_generation,
 };
@@ -569,7 +570,9 @@ where
             &runtime_bundle,
         ) {
             let reason = B::operational_rejection_reason(&error);
-            return Err(self.fail_preflight_with_lock_before_use(reason, lease, workspace_lock));
+            return Err(self.fail_preflight_with_lock_before_use(
+                reason, lease, workspace_lock, &workspace,
+            ));
         }
         let inventory = match workspace.inventory() {
             Ok(value) => value,
@@ -974,9 +977,19 @@ where
         reason: OperationalRejectionReason,
         lease: ProfileLease,
         workspace_lock: BridgeWorkspaceLock,
+        workspace: &GenerationWorkspace,
     ) -> OperatorFlowError {
+        // Preflight precedes begin_use/spawn. An unknown lock, writer/recovery verdict or
+        // unsuccessful local lock release rules out clean cancellation.
+        let absent = !matches!(
+            reason, OperationalRejectionReason::ProfileBusy | OperationalRejectionReason::RecoveryRequired
+        ) && matches!(browser_writer_locks_absent(workspace), Ok(true));
         let workspace_lock_failed = workspace_lock.release().is_err();
-        let coordinator_lease = self.coordinator.close_lease(&lease).is_err();
+        let coordinator_lease = if absent && !workspace_lock_failed {
+            self.coordinator.close_without_browser_use(&lease).is_err()
+        } else {
+            self.coordinator.close_lease(&lease).is_err()
+        };
         let cleanup = CleanupFailures {
             process: false,
             workspace_lock: workspace_lock_failed,

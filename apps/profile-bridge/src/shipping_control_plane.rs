@@ -404,6 +404,12 @@ where
         self.release_lease(lease, CoordinatorReleaseDispositionDto::Uncertain)
     }
 
+    fn close_without_browser_use(&mut self, lease: &ProfileLease) -> Result<(), Self::Error> {
+        // Same exact cursor/version/sequence/session/epoch/fence checks as all releases.
+        // The operator may call this only after local no-writer and lock-release proof.
+        self.release_lease(lease, CoordinatorReleaseDispositionDto::Clean)
+    }
+
     fn close_confirmed_save(&mut self, lease: &ProfileLease) -> Result<(), Self::Error> {
         self.release_lease(lease, CoordinatorReleaseDispositionDto::Clean)
     }
