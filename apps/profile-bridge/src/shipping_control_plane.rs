@@ -795,8 +795,9 @@ fn validate_snapshot(
     tenant_id: &TenantId,
     profile_id: &ProfileId,
 ) -> Result<(), ShippingControlPlaneError> {
+    // A GET observes existing state, so the server marks it replayed/non-appending.
+    // Only a fresh Claim response below can establish lease ownership.
     if response.outcome != CoordinatorOutcomeDto::Snapshot
-        || response.replayed
         || response.version == 0
         || response.projection.tenant_id != tenant_id.as_str()
         || response.projection.profile_id != profile_id.as_str()
@@ -987,6 +988,7 @@ mod tests {
         ControlPlaneCoordinator, ControlPlaneEnrollment, ControlPlaneLeaseTiming,
         CoordinatorCursor, MAX_SEALING_MATERIAL_RESPONSE_BYTES, MachineHttpMethod, MachineHttpPort,
         MachineHttpResponse, ShippingControlPlaneError, lease_timing, valid_signed_r2_get_url,
+        validate_active_projection, validate_snapshot,
     };
     use crate::dirty_generation::GenerationSealingMaterialPort;
     use crate::generation_reopen::GenerationReopenControlPort;
@@ -1117,6 +1119,106 @@ mod tests {
                 )
                 .map(|_| ())
         }
+    }
+
+    #[test]
+    fn read_snapshot_replay_flag_never_substitutes_for_fresh_claim()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let tenant_id = TenantId::parse("tenant_snapshot_01")?;
+        let profile_id = ProfileId::parse("profile_snapshot_01")?;
+        let device_id = DeviceId::parse("device_snapshot_01")?;
+        let session_id = SessionId::parse("session_snapshot_01")?;
+        let snapshot = CoordinatorResponseDto {
+            outcome: CoordinatorOutcomeDto::Snapshot,
+            version: 12,
+            sequence: 11,
+            replayed: true,
+            fencing_token: None,
+            epoch: None,
+            projection: CoordinatorProjectionDto {
+                tenant_id: tenant_id.as_str().to_owned(),
+                profile_id: profile_id.as_str().to_owned(),
+                status: CoordinatorStatusDto::Idle,
+                version: 12,
+                sequence: 11,
+                next_epoch: 0,
+                active_session_id: None,
+                active_device_id: None,
+                active_epoch: None,
+                idle_expires_at_ms: None,
+                hard_expires_at_ms: None,
+                drain_deadline_ms: None,
+                pending_launch_intent_id: Some("launch_snapshot_01".to_owned()),
+                pending_intent_expires_at_ms: Some(30_000),
+            },
+        };
+        for replayed in [false, true] {
+            let mut observed = snapshot.clone();
+            observed.replayed = replayed;
+            validate_snapshot(&observed, &tenant_id, &profile_id)?;
+        }
+
+        let unsafe_snapshots: &[fn(&mut CoordinatorResponseDto)] = &[
+            |value| value.outcome = CoordinatorOutcomeDto::LeaseClaimed,
+            |value| value.projection.tenant_id = "tenant_other".to_owned(),
+            |value| value.projection.profile_id = "profile_other".to_owned(),
+            |value| value.version = 0,
+            |value| value.projection.version += 1,
+            |value| value.projection.sequence += 1,
+            |value| value.projection.status = CoordinatorStatusDto::Active,
+            |value| value.projection.status = CoordinatorStatusDto::Draining,
+            |value| value.projection.status = CoordinatorStatusDto::Dirty,
+            |value| value.projection.status = CoordinatorStatusDto::Uncertain,
+            |value| value.projection.active_session_id = Some("session_other".to_owned()),
+            |value| value.projection.active_device_id = Some("device_other".to_owned()),
+            |value| value.projection.active_epoch = Some(1),
+            |value| value.epoch = Some(1),
+            |value| value.fencing_token = Some("fence_other".to_owned()),
+        ];
+        for mutate in unsafe_snapshots {
+            let mut observed = snapshot.clone();
+            mutate(&mut observed);
+            assert_eq!(
+                validate_snapshot(&observed, &tenant_id, &profile_id),
+                Err(ShippingControlPlaneError::InvalidResponse)
+            );
+        }
+
+        let mut claimed = snapshot;
+        claimed.outcome = CoordinatorOutcomeDto::LeaseClaimed;
+        claimed.version += 1;
+        claimed.sequence += 1;
+        claimed.projection.version = claimed.version;
+        claimed.projection.sequence = claimed.sequence;
+        claimed.projection.status = CoordinatorStatusDto::Active;
+        claimed.projection.active_session_id = Some(session_id.as_str().to_owned());
+        claimed.projection.active_device_id = Some(device_id.as_str().to_owned());
+        claimed.projection.active_epoch = Some(1);
+        claimed.projection.next_epoch = 2;
+        claimed.projection.idle_expires_at_ms = Some(30_000);
+        claimed.projection.hard_expires_at_ms = Some(900_000);
+        claimed.projection.pending_launch_intent_id = None;
+        claimed.projection.pending_intent_expires_at_ms = None;
+        claimed.fencing_token = Some("fence_snapshot_01".to_owned());
+        claimed.epoch = Some(1);
+        for replayed in [false, true] {
+            claimed.replayed = replayed;
+            let result = validate_active_projection(
+                &claimed,
+                CoordinatorOutcomeDto::LeaseClaimed,
+                &tenant_id,
+                &profile_id,
+                &device_id,
+                &session_id,
+                12,
+            );
+            if replayed {
+                assert_eq!(result, Err(ShippingControlPlaneError::InvalidResponse));
+            } else {
+                assert_eq!(result?.0, 1);
+            }
+        }
+        Ok(())
     }
 
     #[test]

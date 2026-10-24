@@ -43,7 +43,8 @@ impl MachineHttpPort for OpeningMaterialTransport {
                 outcome: CoordinatorOutcomeDto::Snapshot,
                 version: 11,
                 sequence: 13,
-                replayed: false,
+                // The deployed coordinator marks a read-only snapshot as non-appending.
+                replayed: true,
                 fencing_token: None,
                 epoch: None,
                 projection: CoordinatorProjectionDto {
