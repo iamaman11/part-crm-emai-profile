@@ -1,19 +1,26 @@
-use crate::browser_execution::restore_materialization_binding_after_authoritative_open;
+use crate::browser_execution::{
+    BrowserLaunchBlocker, browser_writer_locks_absent, load_materialization_binding,
+    restore_materialization_binding_after_authoritative_open,
+};
 use crate::generation_reopen::{GenerationObjectDownloadPort, GenerationReopenControlPort};
 use crate::generation_snapshot::{
     GenerationSnapshotError, materialize_workspace_snapshot_with_pre_publish,
+    verify_workspace_matches_snapshot,
 };
-use crate::local_profile::{LocalProfileError, MaterializationRoot};
+use crate::local_profile::{BridgeWorkspaceLock, LocalProfileError, MaterializationRoot};
 use encrypted_generation_domain::{
     canonical_generation_object_key, inspect_generation_metadata_prelude, open_generation_expected,
 };
-use profile_platform_primitives::{GenerationId, ProfileId, TenantId};
+use profile_platform_primitives::{DeviceId, GenerationId, ProfileId, TenantId};
 
 const LOWER_HEX: &[u8; 16] = b"0123456789abcdef";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum AuthoritativeGenerationMaterializationError {
     Local,
+    IncompleteLocalEvidence,
+    InvalidLocalEvidence,
+    LocalAccessDenied,
     ControlPlane,
     Download,
     DescriptorMismatch,
@@ -28,6 +35,11 @@ impl core::fmt::Display for AuthoritativeGenerationMaterializationError {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter.write_str(match self {
             Self::Local => "authoritative local generation lookup failed",
+            Self::IncompleteLocalEvidence => {
+                "existing local generation is incomplete; retain bytes for recovery"
+            }
+            Self::InvalidLocalEvidence => "existing local generation evidence is invalid",
+            Self::LocalAccessDenied => "local generation evidence cannot be accessed",
             Self::ControlPlane => "authoritative generation control-plane request failed",
             Self::Download => "authoritative generation object download failed",
             Self::DescriptorMismatch => "download capability does not name the requested authority",
@@ -57,11 +69,16 @@ impl std::error::Error for AuthoritativeGenerationMaterializationError {}
 /// snapshot and its host-local materialization evidence is prepared before the canonical generation
 /// path is published, so a successful authoritative reopen never exposes a generation without the
 /// identity evidence required by shipping preflight.
+// The exact tenant/profile/generation and current device/epoch are independent ownership
+// witnesses; bundling them into an unvalidated request would obscure the trust boundary.
+#[allow(clippy::too_many_arguments)]
 pub fn ensure_authoritative_generation<C, D>(
     root: &MaterializationRoot,
     tenant_id: &TenantId,
     profile_id: &ProfileId,
     generation_id: &GenerationId,
+    device_id: &DeviceId,
+    workspace_epoch: u64,
     control: &mut C,
     downloader: &mut D,
 ) -> Result<(), AuthoritativeGenerationMaterializationError>
@@ -69,11 +86,40 @@ where
     C: GenerationReopenControlPort,
     D: GenerationObjectDownloadPort,
 {
-    match root.open_generation(tenant_id, profile_id, generation_id) {
-        Ok(_) => return Ok(()),
-        Err(LocalProfileError::Io(std::io::ErrorKind::NotFound)) => {}
+    let incomplete_local = match root.open_generation(tenant_id, profile_id, generation_id) {
+        Ok(workspace) => {
+            match load_materialization_binding(&workspace, tenant_id, profile_id, generation_id) {
+                Ok(binding) => {
+                    if workspace
+                        .materialization_inventory_digest()
+                        .map_err(|_| AuthoritativeGenerationMaterializationError::Local)?
+                        != binding.materialized_inventory_digest()
+                    {
+                        return Err(
+                            AuthoritativeGenerationMaterializationError::InvalidLocalEvidence,
+                        );
+                    }
+                    return Ok(());
+                }
+                Err(BrowserLaunchBlocker::LocalProfile(LocalProfileError::Io(
+                    std::io::ErrorKind::NotFound,
+                ))) => Some(workspace),
+                Err(BrowserLaunchBlocker::LocalProfile(LocalProfileError::Io(
+                    std::io::ErrorKind::PermissionDenied,
+                ))) => {
+                    return Err(AuthoritativeGenerationMaterializationError::LocalAccessDenied);
+                }
+                Err(BrowserLaunchBlocker::LocalProfile(_)) => {
+                    return Err(AuthoritativeGenerationMaterializationError::Local);
+                }
+                Err(_) => {
+                    return Err(AuthoritativeGenerationMaterializationError::InvalidLocalEvidence);
+                }
+            }
+        }
+        Err(LocalProfileError::Io(std::io::ErrorKind::NotFound)) => None,
         Err(_) => return Err(AuthoritativeGenerationMaterializationError::Local),
-    }
+    };
 
     let capability = control
         .download_capability(tenant_id, profile_id)
@@ -120,6 +166,35 @@ where
         generation_id,
     )
     .map_err(|_| AuthoritativeGenerationMaterializationError::Decryption)?;
+    if let Some(workspace) = incomplete_local {
+        // The caller holds the precise coordinator lease. Take this device's local lock
+        // and compare ALL workspace bytes, including mutable user_data, with cloud truth.
+        let lock = BridgeWorkspaceLock::acquire(&workspace, device_id, workspace_epoch)
+            .map_err(|_| AuthoritativeGenerationMaterializationError::IncompleteLocalEvidence)?;
+        let restored = (|| {
+            if !matches!(browser_writer_locks_absent(&workspace), Ok(true)) {
+                return Err(AuthoritativeGenerationMaterializationError::IncompleteLocalEvidence);
+            }
+            verify_workspace_matches_snapshot(&workspace, opened.plaintext()).map_err(|_| {
+                AuthoritativeGenerationMaterializationError::IncompleteLocalEvidence
+            })?;
+            restore_materialization_binding_after_authoritative_open(
+                &workspace,
+                tenant_id,
+                profile_id,
+                generation_id,
+                &source_container_sha256,
+            )
+            .map_err(|_| AuthoritativeGenerationMaterializationError::InvalidLocalEvidence)?;
+            Ok(())
+        })();
+        let released = lock
+            .release()
+            .map_err(|_| AuthoritativeGenerationMaterializationError::InvalidLocalEvidence);
+        restored?;
+        released?;
+        return Ok(());
+    }
     materialize_workspace_snapshot_with_pre_publish(
         root,
         tenant_id,
@@ -174,7 +249,7 @@ mod tests {
         GenerationDek, GenerationIdentity, GenerationMetadata, KeyId, NoncePrefix,
         canonical_generation_object_key, seal_generation,
     };
-    use profile_platform_primitives::{GenerationId, ProfileId, TenantId};
+    use profile_platform_primitives::{DeviceId, GenerationId, ProfileId, TenantId};
     use sha2::{Digest, Sha256};
     use std::fs;
     use std::path::PathBuf;
@@ -383,6 +458,158 @@ mod tests {
     }
 
     #[test]
+    fn directory_without_binding_is_not_reusable_and_is_preserved()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let fixture = Fixture::new()?;
+        let workspace = fixture.root.create_generation(
+            &fixture.tenant_id,
+            &fixture.profile_id,
+            &fixture.generation_id,
+        )?;
+        fs::write(
+            workspace.path().join(BROWSER_IDENTITY_RECORD_FILE),
+            &fixture.browser_identity_record,
+        )?;
+        fs::write(
+            workspace.path().join("camoufox-config.json"),
+            &fixture.config_bytes,
+        )?;
+        fs::create_dir_all(workspace.path().join("user_data/storage"))?;
+        fs::write(
+            workspace.path().join("user_data/storage/state.bin"),
+            b"retain-me",
+        )?;
+        let mut control = fixture.control();
+        let mut downloader = FakeDownloader {
+            container: fixture.container.clone(),
+            calls: 0,
+        };
+        assert_eq!(
+            ensure_authoritative_generation(
+                &fixture.root,
+                &fixture.tenant_id,
+                &fixture.profile_id,
+                &fixture.generation_id,
+                &DeviceId::parse("device_authgen_test")?,
+                1,
+                &mut control,
+                &mut downloader,
+            ),
+            Err(AuthoritativeGenerationMaterializationError::IncompleteLocalEvidence)
+        );
+        assert_eq!(downloader.calls, 1);
+        assert_eq!(control.opening_calls, 1);
+        assert_eq!(
+            fs::read(workspace.path().join("user_data/storage/state.bin"))?,
+            b"retain-me"
+        );
+        fixture.cleanup();
+        Ok(())
+    }
+
+    #[test]
+    fn exact_verified_cloud_bytes_recover_missing_sidecar_then_reuse_cache()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let fixture = Fixture::new()?;
+        let workspace = fixture.root.create_generation(
+            &fixture.tenant_id,
+            &fixture.profile_id,
+            &fixture.generation_id,
+        )?;
+        fs::write(
+            workspace.path().join(BROWSER_IDENTITY_RECORD_FILE),
+            &fixture.browser_identity_record,
+        )?;
+        fs::write(
+            workspace.path().join("camoufox-config.json"),
+            &fixture.config_bytes,
+        )?;
+        fs::write(workspace.path().join("prefs.js"), b"authoritative-prefs")?;
+        fs::create_dir_all(workspace.path().join("user_data/storage"))?;
+        fs::write(
+            workspace.path().join("user_data/storage/state.bin"),
+            b"authoritative-state",
+        )?;
+        let mut control = fixture.control();
+        let mut downloader = FakeDownloader {
+            container: fixture.container.clone(),
+            calls: 0,
+        };
+        for _ in 0..2 {
+            ensure_authoritative_generation(
+                &fixture.root,
+                &fixture.tenant_id,
+                &fixture.profile_id,
+                &fixture.generation_id,
+                &DeviceId::parse("device_authgen_test")?,
+                1,
+                &mut control,
+                &mut downloader,
+            )?;
+        }
+        assert_eq!(downloader.calls, 1);
+        assert_eq!(control.opening_calls, 1);
+        assert_eq!(
+            load_materialization_binding(
+                &workspace,
+                &fixture.tenant_id,
+                &fixture.profile_id,
+                &fixture.generation_id,
+            )?
+            .source_container_sha256(),
+            encode_sha256(fixture.container_digest)
+        );
+        fixture.cleanup();
+        Ok(())
+    }
+
+    #[test]
+    fn corrupt_existing_binding_cannot_enable_reuse_or_delete_data()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let fixture = Fixture::new()?;
+        let workspace = fixture.root.create_generation(
+            &fixture.tenant_id,
+            &fixture.profile_id,
+            &fixture.generation_id,
+        )?;
+        fs::write(
+            workspace.path().join(BROWSER_IDENTITY_RECORD_FILE),
+            &fixture.browser_identity_record,
+        )?;
+        let sidecar = workspace
+            .path()
+            .parent()
+            .ok_or("missing parent")?
+            .join(format!(
+                ".{}.materialization",
+                fixture.generation_id.as_str()
+            ));
+        fs::write(&sidecar, b"invalid-evidence")?;
+        let mut control = fixture.control();
+        let mut downloader = FakeDownloader {
+            container: fixture.container.clone(),
+            calls: 0,
+        };
+        assert_eq!(
+            ensure_authoritative_generation(
+                &fixture.root,
+                &fixture.tenant_id,
+                &fixture.profile_id,
+                &fixture.generation_id,
+                &DeviceId::parse("device_authgen_test")?,
+                1,
+                &mut control,
+                &mut downloader,
+            ),
+            Err(AuthoritativeGenerationMaterializationError::InvalidLocalEvidence)
+        );
+        assert_eq!(downloader.calls, 0);
+        assert!(workspace.path().exists());
+        fixture.cleanup();
+        Ok(())
+    }
+
+    #[test]
     fn missing_local_authority_restores_same_browser_identity_before_publish()
     -> Result<(), Box<dyn std::error::Error>> {
         let fixture = Fixture::new()?;
@@ -396,6 +623,8 @@ mod tests {
             &fixture.tenant_id,
             &fixture.profile_id,
             &fixture.generation_id,
+            &DeviceId::parse("device_authgen_test")?,
+            1,
             &mut control,
             &mut downloader,
         )?;
@@ -405,6 +634,8 @@ mod tests {
             &fixture.tenant_id,
             &fixture.profile_id,
             &fixture.generation_id,
+            &DeviceId::parse("device_authgen_test")?,
+            1,
             &mut control,
             &mut downloader,
         )?;
@@ -466,6 +697,8 @@ mod tests {
                 &fixture.tenant_id,
                 &fixture.profile_id,
                 &fixture.generation_id,
+                &DeviceId::parse("device_authgen_test")?,
+                1,
                 &mut control,
                 &mut downloader,
             ),
@@ -503,6 +736,8 @@ mod tests {
                 &fixture.tenant_id,
                 &fixture.profile_id,
                 &fixture.generation_id,
+                &DeviceId::parse("device_authgen_test")?,
+                1,
                 &mut control,
                 &mut downloader,
             ),
@@ -539,6 +774,8 @@ mod tests {
                 &fixture.tenant_id,
                 &fixture.profile_id,
                 &fixture.generation_id,
+                &DeviceId::parse("device_authgen_test")?,
+                1,
                 &mut control,
                 &mut downloader,
             ),

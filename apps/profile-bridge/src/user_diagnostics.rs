@@ -207,6 +207,30 @@ impl UserDiagnostic {
             Self::Launch(Launch::Initialization(_)) => {
                 "The profile could not open. Return to the application to check access, connection and session status, then try Open again. Keep local profile files; a failed request is not proof of a saved copy."
             }
+            Self::Launch(Launch::Operator(
+                crate::operator_flow::OperatorFlowError::AuthoritativeGeneration {
+                    reason: crate::authoritative_generation::AuthoritativeGenerationMaterializationError::IncompleteLocalEvidence,
+                    ..
+                },
+            )) => {
+                "The local profile copy is incomplete or differs from the verified cloud copy. Its existing data has been preserved. Return to Profile Operations to review recovery status; do not delete profile files or reconnect this computer."
+            }
+            Self::Launch(Launch::Operator(
+                crate::operator_flow::OperatorFlowError::AuthoritativeGeneration {
+                    reason: crate::authoritative_generation::AuthoritativeGenerationMaterializationError::InvalidLocalEvidence,
+                    ..
+                },
+            )) => {
+                "The local profile evidence does not match the selected verified generation. The application preserved existing data and refused an unsafe launch. Review recovery status in Profile Operations; do not replace the local files manually."
+            }
+            Self::Launch(Launch::Operator(
+                crate::operator_flow::OperatorFlowError::AuthoritativeGeneration {
+                    reason: crate::authoritative_generation::AuthoritativeGenerationMaterializationError::LocalAccessDenied,
+                    ..
+                },
+            )) => {
+                "Windows denied access to the local profile evidence. Existing files were preserved. Check Windows file access and the connected device status from Profile Operations; do not delete or replace the profile."
+            }
             Self::Launch(
                 Launch::Operator(_) | Launch::ActiveSessionMissing | Launch::CloseObservation(_),
             ) => {
@@ -236,12 +260,48 @@ const fn operator_code(error: crate::operator_flow::OperatorFlowError) -> &'stat
     match error {
         Error::Busy => "BRIDGE_PROFILE_BUSY",
         Error::CleanupRequired => "BRIDGE_CLEANUP_REQUIRED",
+        Error::AuthoritativeGeneration {
+            reason: crate::authoritative_generation::AuthoritativeGenerationMaterializationError::IncompleteLocalEvidence,
+            ..
+        } => "BRIDGE_LOCAL_CACHE_INCOMPLETE",
+        Error::AuthoritativeGeneration {
+            reason: crate::authoritative_generation::AuthoritativeGenerationMaterializationError::InvalidLocalEvidence,
+            ..
+        } => "BRIDGE_LOCAL_CACHE_INTEGRITY_FAILED",
+        Error::AuthoritativeGeneration {
+            reason: crate::authoritative_generation::AuthoritativeGenerationMaterializationError::LocalAccessDenied,
+            ..
+        } => "BRIDGE_LOCAL_CACHE_INACCESSIBLE",
+        Error::AuthoritativeGeneration {
+            reason: crate::authoritative_generation::AuthoritativeGenerationMaterializationError::Download,
+            ..
+        } => "BRIDGE_GENERATION_DOWNLOAD_FAILED",
+        Error::AuthoritativeGeneration {
+            reason: crate::authoritative_generation::AuthoritativeGenerationMaterializationError::ControlPlane,
+            ..
+        } => "BRIDGE_SERVICE_UNREACHABLE",
+        Error::AuthoritativeGeneration {
+            reason: crate::authoritative_generation::AuthoritativeGenerationMaterializationError::DescriptorMismatch
+                | crate::authoritative_generation::AuthoritativeGenerationMaterializationError::MetadataMismatch
+                | crate::authoritative_generation::AuthoritativeGenerationMaterializationError::OpeningMaterialMismatch
+                | crate::authoritative_generation::AuthoritativeGenerationMaterializationError::Decryption,
+            ..
+        } => "BRIDGE_GENERATION_INTEGRITY_FAILED",
+        Error::Preflight {
+            reason: crate::operator_flow::OperationalRejectionReason::LocalCacheIncomplete,
+            ..
+        } => "BRIDGE_LOCAL_CACHE_INCOMPLETE",
+        Error::Preflight {
+            reason: crate::operator_flow::OperationalRejectionReason::LocalCacheInaccessible,
+            ..
+        } => "BRIDGE_LOCAL_CACHE_INACCESSIBLE",
         _ => match error.stage() {
             Some(Stage::DeviceIdentity) => "BRIDGE_DEVICE_IDENTITY_FAILED",
             Some(Stage::DeviceKey) => "BRIDGE_DEVICE_KEY_UNAVAILABLE",
             Some(Stage::DeviceAuthentication) => "BRIDGE_DEVICE_AUTHENTICATION_FAILED",
             Some(Stage::Enrollment) => "BRIDGE_LAUNCH_REDEMPTION_FAILED",
             Some(Stage::RuntimeBundle) => "BRIDGE_RUNTIME_BUNDLE_INVALID",
+            Some(Stage::DeliveryHealthStart) => "BRIDGE_RUNTIME_HEALTH_START_FAILED",
             Some(Stage::CoordinatorClaim) => "BRIDGE_COORDINATOR_CLAIM_FAILED",
             Some(Stage::CoordinatorHeartbeat) => "BRIDGE_COORDINATOR_HEARTBEAT_FAILED",
             Some(Stage::LeaseValidation) => "BRIDGE_LEASE_VALIDATION_FAILED",
@@ -261,6 +321,42 @@ const fn operator_code(error: crate::operator_flow::OperatorFlowError) -> &'stat
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn incomplete_cache_error_keeps_owner_diagnostic_code() {
+        use crate::operator_flow::{CleanupFailures, OperatorFlowError};
+        let error = OperatorFlowError::AuthoritativeGeneration {
+            reason: crate::authoritative_generation::AuthoritativeGenerationMaterializationError::IncompleteLocalEvidence,
+            cleanup: CleanupFailures::none(),
+        };
+        let diagnostic = UserDiagnostic::Launch(ShippingCompositionError::Operator(error));
+        assert_eq!(diagnostic.code(), "BRIDGE_LOCAL_CACHE_INCOMPLETE");
+    }
+
+    #[test]
+    fn authoritative_error_codes_preserve_known_causes_without_sensitive_details() {
+        use crate::authoritative_generation::AuthoritativeGenerationMaterializationError as Reason;
+        use crate::operator_flow::{CleanupFailures, OperatorFlowError};
+        let cases = [
+            (Reason::LocalAccessDenied, "BRIDGE_LOCAL_CACHE_INACCESSIBLE"),
+            (Reason::Download, "BRIDGE_GENERATION_DOWNLOAD_FAILED"),
+            (Reason::ControlPlane, "BRIDGE_SERVICE_UNREACHABLE"),
+            (
+                Reason::MetadataMismatch,
+                "BRIDGE_GENERATION_INTEGRITY_FAILED",
+            ),
+        ];
+        for (reason, expected) in cases {
+            let diagnostic = UserDiagnostic::Launch(ShippingCompositionError::Operator(
+                OperatorFlowError::AuthoritativeGeneration {
+                    reason,
+                    cleanup: CleanupFailures::none(),
+                },
+            ));
+            assert_eq!(diagnostic.code(), expected);
+            assert!(!diagnostic.message().contains("tenant_id="));
+        }
+    }
 
     #[test]
     fn operator_stage_is_preserved_in_safe_user_code() {

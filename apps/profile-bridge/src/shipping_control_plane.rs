@@ -404,6 +404,12 @@ where
         self.release_lease(lease, CoordinatorReleaseDispositionDto::Uncertain)
     }
 
+    fn close_without_browser_use(&mut self, lease: &ProfileLease) -> Result<(), Self::Error> {
+        // Same exact cursor/version/sequence/session/epoch/fence checks as all releases.
+        // The operator may call this only after local no-writer and lock-release proof.
+        self.release_lease(lease, CoordinatorReleaseDispositionDto::Clean)
+    }
+
     fn close_confirmed_save(&mut self, lease: &ProfileLease) -> Result<(), Self::Error> {
         self.release_lease(lease, CoordinatorReleaseDispositionDto::Clean)
     }
@@ -1348,6 +1354,34 @@ mod tests {
                 ..
             }
         ));
+
+        let (mut cancelled, cancelled_lease) = coordinator(CoordinatorStatusDto::Idle)?;
+        cancelled.close_without_browser_use(&cancelled_lease)?;
+        assert!(cancelled.cursor.is_none());
+        let cancelled_request = serde_json::from_slice::<CoordinatorCommandRequestDto>(
+            &cancelled.transport.requests[0].2,
+        )?;
+        assert!(matches!(
+            cancelled_request.command,
+            CoordinatorCommandDto::Release {
+                disposition: CoordinatorReleaseDispositionDto::Clean,
+                ..
+            }
+        ));
+
+        // Stale epoch must be rejected before sending any release, including Clean.
+        let (mut stale, current_lease) = coordinator(CoordinatorStatusDto::Idle)?;
+        let forged_epoch = ProfileLease::issue(
+            current_lease.tenant_id().clone(),
+            current_lease.profile_id().clone(),
+            current_lease.session_id().clone(),
+            current_lease.device_id().clone(),
+            current_lease.epoch() + 1,
+            current_lease.fencing_token().clone(),
+        )?;
+        assert!(stale.close_without_browser_use(&forged_epoch).is_err());
+        assert!(stale.cursor.is_some());
+        assert!(stale.transport.requests.is_empty());
 
         let (mut generic, generic_lease) = coordinator(CoordinatorStatusDto::Uncertain)?;
         generic.close_lease(&generic_lease)?;

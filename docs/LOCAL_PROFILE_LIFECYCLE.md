@@ -258,3 +258,37 @@ Local/hosted tests prove real pinned CMS acceptance and tamper/unknown-key/unsig
 repeatable signing, production wizard compilation without an OS signing service and native rejection
 before registry/installation effects. They do not substitute for clean-Windows hosted B7 installation,
 connection, first generation, launch, save and reopen.
+
+## V2.3E / #802: authoritative local readiness and saved bytes
+
+A directory or generation marker alone is never reusable proof. The single authoritative-open
+owner checks the host-local materialization binding (typed tenant, Profile, selected generation,
+portable browser identity and immutable-input inventory). For a verified existing binding with
+matching digest, reopening the **server-selected** generation is a cache reuse and does not
+download the object. A different cached generation, regardless of mtime, is not selected.
+
+A missing binding on an existing generation is **not** permission to delete or adopt data.
+With the currently claimed coordinator lease and exact local device/epoch lock, the existing owner
+requests the exact current VERIFIED server descriptor and decrypts its authenticated object.
+Recovery of host-local binding is permitted only when a full byte-for-byte comparison, including
+mutable `user_data`, succeeds with no Firefox writer lock. Diverging local bytes and uncertain
+locks are retained and produce a typed recovery refusal. Malformed/foreign binding evidence is
+not silently repaired. A missing canonical generation is materialized only through the existing
+staged snapshot owner with portable identity and sidecar evidence prepared before publication.
+A pre-publish failure never makes the canonical path Ready; an exact retry remains supported.
+
+Initial generation cloud commit precedes local binding persistence. Once the server has
+confirmed its immutable generation, an error writing the local binding or releasing the Bridge
+lock must **retain** the canonical workspace and never run destructive rematerialization cleanup.
+The next authorized open still resolves the authoritative generation from the server.
+
+Delivery health is an installation/activation fact, not a profile outcome. Existing-profile
+launches start the durable attempt at the managed-runtime boundary **after** profile/cache/network
+preflight and **before** the first possible runtime spawn. First-generation preparation uses the
+same installed runtime owner around identity materialization. Pre-runtime profile refusal must
+not consume PendingHealth; an attempt already marked HealthAttemptStarted cannot be silently
+declared Healthy. Actual spawn/IPC failure remains recovery.
+
+No new state database, status service, source of identity, schema or user-access bypass is added.
+This section describes the source contract; CI and hosted runtime tests are not a claim of
+installed Windows save/reopen success.

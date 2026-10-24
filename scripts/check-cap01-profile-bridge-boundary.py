@@ -61,7 +61,7 @@ REQUIRED_COMPOSITION_MARKERS = (
     "ManagedCamouhostProcess::pair(",
     ".close_observer()",
     "ProfileBridgeOperator::new(",
-    ".open_authoritative(",
+    ".open_authoritative_with_runtime_health(",
     ".observe_controlled_close(&session_id)",
     ".close(now()?)",
     ".save_retained_successor(",
@@ -310,7 +310,7 @@ def write_fixture(root: Path) -> None:
         "// ManagedCamouhostProcess::pair(\n"
         "// .close_observer()\n"
         "// ProfileBridgeOperator::new(\n"
-        "// .open_authoritative(\n"
+        "// .open_authoritative_with_runtime_health(\n"
         "// .observe_controlled_close(&session_id)\n"
         "// .close(now()?)\n"
         "// .save_retained_successor(\n"
@@ -506,7 +506,7 @@ def self_test() -> None:
         composition.write_text(safe_composition, encoding="utf-8")
 
         composition.write_text(
-            safe_composition.replace("// .open_authoritative(\n", "// .open(\n"),
+            safe_composition.replace("// .open_authoritative_with_runtime_health(\n", "// .open(\n"),
             encoding="utf-8",
         )
         expect_rejected(root, "shipping local-only open predecessor")

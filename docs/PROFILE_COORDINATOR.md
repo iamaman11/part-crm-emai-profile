@@ -167,3 +167,25 @@ Repository acceptance requires positive and negative proof for:
 
 Remote environment admission and Production authorization remain separate later-stage evidence. Green
 repository CI proves only the exact source candidate on which it ran.
+
+## V2.3E / #802: evidenced no-writer cancellation
+
+The native operator has one distinguished `close_without_browser_use` port operation.
+Its **default implementation remains generic Uncertain**, so adapters that cannot prove the
+difference fail closed. The shipping adapter emits existing `ReleaseDisposition::Clean` only
+for the current matched coordinator cursor (tenant, Profile, device, session, epoch, fence,
+sequence, expected version). It is not a new recovery ingress or a Save operation.
+
+The operator may invoke this operation only before an attempted managed runtime spawn, after
+acquiring and successfully releasing its exact Bridge lock, and after observing no pre-existing
+Firefox writer artifacts. Preflight evidence saying ProfileBusy/RecoveryRequired disqualifies
+Clean. Unreadable lock state or foreign writer, failed local lock cleanup, changed lease/fence,
+unknown remote release response, and every post-spawn failure remain Uncertain/recovery. A
+successful Bridge-lock removal alone is not proof of saved browser data. Full controlled save
+still requires verified upload + authoritative server commit before clean release.
+
+The historical Bridge 519 persisted `HealthAttemptStarted` and coordinator `Uncertain`
+are **not** evidence of clean cancellation. They need exact independently verified owner
+recovery; absence of a process or a newer executable version is insufficient. No manual
+journal mutation, lease reset, R2 replacement, deletion of profile bytes or replayed claim
+is authorized by this source change.

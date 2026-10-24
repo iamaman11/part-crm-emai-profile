@@ -106,6 +106,12 @@ pub(crate) fn classify_browser_launch_blocker(
         BrowserLaunchBlocker::RetryableNetworkRouteChurn => {
             OperationalRejectionReason::RetryableNetworkRouteChurn
         }
+        BrowserLaunchBlocker::LocalProfile(crate::local_profile::LocalProfileError::Io(
+            std::io::ErrorKind::NotFound,
+        )) => OperationalRejectionReason::LocalCacheIncomplete,
+        BrowserLaunchBlocker::LocalProfile(crate::local_profile::LocalProfileError::Io(
+            std::io::ErrorKind::PermissionDenied,
+        )) => OperationalRejectionReason::LocalCacheInaccessible,
         BrowserLaunchBlocker::LocalProfile(_) => {
             OperationalRejectionReason::FilesystemProcessCapabilityUnavailable
         }

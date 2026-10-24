@@ -1,5 +1,8 @@
 use crate::ProcessControlPort;
-use crate::authoritative_generation::ensure_authoritative_generation;
+use crate::authoritative_generation::{
+    AuthoritativeGenerationMaterializationError, ensure_authoritative_generation,
+};
+use crate::browser_execution::browser_writer_locks_absent;
 #[cfg(any(test, feature = "synthetic-test-bin"))]
 use crate::browser_mail_query::BrowserMailExecutionProof;
 #[cfg(any(test, feature = "synthetic-test-bin"))]
@@ -70,6 +73,8 @@ pub enum OperationalRejectionReason {
     ProfileBusy,
     RecoveryRequired,
     RetryableNetworkRouteChurn,
+    LocalCacheIncomplete,
+    LocalCacheInaccessible,
     FilesystemProcessCapabilityUnavailable,
 }
 
@@ -84,6 +89,8 @@ impl OperationalRejectionReason {
             Self::ProfileBusy => "profile_busy",
             Self::RecoveryRequired => "recovery_required",
             Self::RetryableNetworkRouteChurn => "retryable_network_route_churn",
+            Self::LocalCacheIncomplete => "local_cache_incomplete",
+            Self::LocalCacheInaccessible => "local_cache_inaccessible",
             Self::FilesystemProcessCapabilityUnavailable => {
                 "filesystem_process_capability_unavailable"
             }
@@ -160,6 +167,7 @@ pub enum OperatorFailureStage {
     DeviceAuthentication,
     Enrollment,
     RuntimeBundle,
+    DeliveryHealthStart,
     CoordinatorClaim,
     CoordinatorHeartbeat,
     LeaseValidation,
@@ -271,6 +279,10 @@ pub enum OperatorFlowError {
     Busy,
     CleanupRequired,
     Stage(OperatorFailureStage),
+    AuthoritativeGeneration {
+        reason: AuthoritativeGenerationMaterializationError,
+        cleanup: CleanupFailures,
+    },
     Preflight {
         reason: OperationalRejectionReason,
         local_state: LocalGenerationState,
@@ -296,6 +308,9 @@ impl OperatorFlowError {
             Self::Stage(stage) | Self::Runtime { stage, .. } | Self::Terminal { stage, .. } => {
                 Some(*stage)
             }
+            Self::AuthoritativeGeneration { .. } => {
+                Some(OperatorFailureStage::AuthoritativeGeneration)
+            }
             Self::Preflight { .. } => Some(OperatorFailureStage::BrowserPreflight),
         }
     }
@@ -307,6 +322,10 @@ impl fmt::Display for OperatorFlowError {
             Self::Busy => formatter.write_str("an operator session is already active"),
             Self::CleanupRequired => formatter.write_str("previous operator cleanup is unresolved"),
             Self::Stage(stage) => write!(formatter, "operator flow failed at {stage:?}"),
+            Self::AuthoritativeGeneration { reason, cleanup } => write!(
+                formatter,
+                "authoritative generation preparation failed: {reason}; cleanup={cleanup:?}"
+            ),
             Self::Preflight {
                 reason,
                 local_state,
@@ -417,21 +436,42 @@ where
         C: GenerationReopenControlPort,
         Dl: GenerationObjectDownloadPort,
     {
+        self.open_authoritative_with_runtime_health(claim, root, downloader, now, || Ok(()))
+    }
+
+    /// Installed delivery may durably begin its one-time health attempt exactly when the
+    /// verified profile is ready to start the real managed runtime. A profile/cache/network
+    /// refusal before this callback must not consume the installation's health attempt.
+    pub fn open_authoritative_with_runtime_health<Dl, BeforeRuntime>(
+        &mut self,
+        claim: &ClaimUri,
+        root: &MaterializationRoot,
+        downloader: &mut Dl,
+        now: UnixMillis,
+        before_runtime_start: BeforeRuntime,
+    ) -> Result<(), OperatorFlowError>
+    where
+        C: GenerationReopenControlPort,
+        Dl: GenerationObjectDownloadPort,
+        BeforeRuntime: FnMut() -> Result<(), ()>,
+    {
         self.open_with_materialization(
             claim,
             root,
             now,
-            |coordinator, tenant_id, profile_id, generation_id| {
+            |coordinator, tenant_id, profile_id, generation_id, device_id, epoch| {
                 ensure_authoritative_generation(
                     root,
                     tenant_id,
                     profile_id,
                     generation_id,
+                    device_id,
+                    epoch,
                     coordinator,
                     downloader,
                 )
-                .map_err(|_| ())
             },
+            before_runtime_start,
         )
     }
 
@@ -448,16 +488,18 @@ where
             claim,
             root,
             now,
-            |_coordinator, _tenant_id, _profile_id, _generation_id| Ok(()),
+            |_coordinator, _tenant_id, _profile_id, _generation_id, _device_id, _epoch| Ok(()),
+            || Ok(()),
         )
     }
 
-    fn open_with_materialization<F>(
+    fn open_with_materialization<F, BeforeRuntime>(
         &mut self,
         claim: &ClaimUri,
         root: &MaterializationRoot,
         now: UnixMillis,
         mut ensure_materialized: F,
+        mut before_runtime_start: BeforeRuntime,
     ) -> Result<(), OperatorFlowError>
     where
         F: FnMut(
@@ -465,7 +507,10 @@ where
             &profile_platform_primitives::TenantId,
             &ProfileId,
             &GenerationId,
-        ) -> Result<(), ()>,
+            &DeviceId,
+            u64,
+        ) -> Result<(), AuthoritativeGenerationMaterializationError>,
+        BeforeRuntime: FnMut() -> Result<(), ()>,
     {
         if self.cleanup_blocked {
             return Err(OperatorFlowError::CleanupRequired);
@@ -513,17 +558,25 @@ where
             return Err(self.fail_before_local_use(OperatorFailureStage::LeaseValidation, lease));
         }
 
-        if ensure_materialized(
+        if let Err(reason) = ensure_materialized(
             &mut self.coordinator,
             enrollment.actor().tenant_scope().tenant_id(),
             enrollment.profile_id(),
             enrollment.generation_id(),
-        )
-        .is_err()
-        {
-            return Err(
-                self.fail_before_local_use(OperatorFailureStage::AuthoritativeGeneration, lease)
-            );
+            &device_id,
+            lease.epoch(),
+        ) {
+            // The authoritative owner reason must survive coordinator cleanup.
+            let coordinator_lease = self.coordinator.close_lease(&lease).is_err();
+            let cleanup = CleanupFailures {
+                process: false,
+                workspace_lock: false,
+                coordinator_lease,
+            };
+            if cleanup.any() {
+                self.cleanup_blocked = true;
+            }
+            return Err(OperatorFlowError::AuthoritativeGeneration { reason, cleanup });
         }
 
         let workspace = match root.open_generation(
@@ -552,7 +605,12 @@ where
             &runtime_bundle,
         ) {
             let reason = B::operational_rejection_reason(&error);
-            return Err(self.fail_preflight_with_lock_before_use(reason, lease, workspace_lock));
+            return Err(self.fail_preflight_with_lock_before_use(
+                reason,
+                lease,
+                workspace_lock,
+                &workspace,
+            ));
         }
         let inventory = match workspace.inventory() {
             Ok(value) => value,
@@ -561,9 +619,20 @@ where
                     OperatorFailureStage::LocalWorkspace,
                     lease,
                     workspace_lock,
+                    &workspace,
                 ));
             }
         };
+        // Only this exact boundary may consume pending delivery health. The runtime has
+        // not been spawned or allowed to mutate the workspace at this point.
+        if before_runtime_start().is_err() {
+            return Err(self.fail_with_lock_before_use(
+                OperatorFailureStage::DeliveryHealthStart,
+                lease,
+                workspace_lock,
+                &workspace,
+            ));
+        }
         let mut local_record = LocalGenerationRecord::new(
             enrollment.generation_id().clone(),
             inventory.total_bytes(),
@@ -574,6 +643,7 @@ where
                 OperatorFailureStage::LocalLifecycle,
                 lease,
                 workspace_lock,
+                &workspace,
             ));
         }
 
@@ -957,17 +1027,15 @@ where
         reason: OperationalRejectionReason,
         lease: ProfileLease,
         workspace_lock: BridgeWorkspaceLock,
+        workspace: &GenerationWorkspace,
     ) -> OperatorFlowError {
-        let workspace_lock_failed = workspace_lock.release().is_err();
-        let coordinator_lease = self.coordinator.close_lease(&lease).is_err();
-        let cleanup = CleanupFailures {
-            process: false,
-            workspace_lock: workspace_lock_failed,
-            coordinator_lease,
-        };
-        if cleanup.any() {
-            self.cleanup_blocked = true;
-        }
+        // Preflight precedes begin_use/spawn. An unknown lock, writer/recovery verdict or
+        // unsuccessful local lock release rules out clean cancellation.
+        let eligible = !matches!(
+            reason,
+            OperationalRejectionReason::ProfileBusy | OperationalRejectionReason::RecoveryRequired
+        );
+        let cleanup = self.cleanup_before_browser_use(&lease, workspace_lock, workspace, eligible);
         OperatorFlowError::Preflight {
             reason,
             local_state: LocalGenerationState::MaterializedClean,
@@ -980,16 +1048,10 @@ where
         stage: OperatorFailureStage,
         lease: ProfileLease,
         workspace_lock: BridgeWorkspaceLock,
+        workspace: &GenerationWorkspace,
     ) -> OperatorFlowError {
-        let workspace_lock_failed = workspace_lock.release().is_err();
-        let coordinator_lease = self.coordinator.close_lease(&lease).is_err();
-        let cleanup = CleanupFailures {
-            process: false,
-            workspace_lock: workspace_lock_failed,
-            coordinator_lease,
-        };
+        let cleanup = self.cleanup_before_browser_use(&lease, workspace_lock, workspace, true);
         if cleanup.any() {
-            self.cleanup_blocked = true;
             OperatorFlowError::Terminal {
                 stage,
                 local_state: LocalGenerationState::MaterializedClean,
@@ -998,6 +1060,33 @@ where
         } else {
             OperatorFlowError::Stage(stage)
         }
+    }
+
+    fn cleanup_before_browser_use(
+        &mut self,
+        lease: &ProfileLease,
+        workspace_lock: BridgeWorkspaceLock,
+        workspace: &GenerationWorkspace,
+        eligible: bool,
+    ) -> CleanupFailures {
+        // Caller owns this exact Bridge lock; no managed runtime spawn has been tried.
+        // Unknown/foreign Firefox locks or failed local cleanup forbid Clean.
+        let no_writer = eligible && matches!(browser_writer_locks_absent(workspace), Ok(true));
+        let workspace_lock_failed = workspace_lock.release().is_err();
+        let coordinator_lease = if no_writer && !workspace_lock_failed {
+            self.coordinator.close_without_browser_use(lease).is_err()
+        } else {
+            self.coordinator.close_lease(lease).is_err()
+        };
+        let cleanup = CleanupFailures {
+            process: false,
+            workspace_lock: workspace_lock_failed,
+            coordinator_lease,
+        };
+        if cleanup.any() {
+            self.cleanup_blocked = true;
+        }
+        cleanup
     }
 
     fn fail_active_runtime(
@@ -1196,6 +1285,7 @@ mod tests {
         claimed: u64,
         heartbeats: u64,
         closed: u64,
+        clean_closed: u64,
     }
 
     impl ProfileCoordinatorPort for FakeCoordinator {
@@ -1218,6 +1308,16 @@ mod tests {
 
         fn close_lease(&mut self, _lease: &ProfileLease) -> Result<(), Self::Error> {
             self.closed += 1;
+            if self.close_fail {
+                Err(BridgePortError::Unavailable)
+            } else {
+                Ok(())
+            }
+        }
+
+        fn close_without_browser_use(&mut self, _lease: &ProfileLease) -> Result<(), Self::Error> {
+            self.closed += 1;
+            self.clean_closed += 1;
             if self.close_fail {
                 Err(BridgePortError::Unavailable)
             } else {
@@ -1432,6 +1532,7 @@ mod tests {
                 claimed: 0,
                 heartbeats: 0,
                 closed: 0,
+                clean_closed: 0,
             }
         }
     }
@@ -1759,6 +1860,96 @@ mod tests {
     }
 
     #[test]
+    fn preflight_refusal_does_not_consume_pending_runtime_health()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let fixture = Fixture::new()?;
+        let mut operator = ProfileBridgeOperator::new(
+            FakeDeviceIdentity::new(fixture.device_id.clone()),
+            FakeDeviceKeyStore::default(),
+            FakeDeviceAuthentication { allow: true },
+            fixture.enrollment()?,
+            fixture.coordinator(),
+            FakeRuntimeBundles {
+                bundle: approved_bundle()?,
+                allow: true,
+            },
+            FakeBrowserPreflight {
+                allow: false,
+                calls: 0,
+            },
+            FakeProcessControl::default(),
+            FakeCamouhost::default(),
+        );
+        let mut started_health = false;
+        let result = operator.open_with_materialization(
+            &fixture.claim_uri,
+            &fixture.root,
+            UnixMillis::new(10),
+            |_coordinator, _tenant, _profile, _generation, _device, _epoch| Ok(()),
+            || {
+                started_health = true;
+                Ok(())
+            },
+        );
+        assert!(matches!(result, Err(OperatorFlowError::Preflight { .. })));
+        assert!(!started_health);
+        assert!(operator.process().actions().is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn runtime_health_witness_runs_before_the_first_managed_spawn()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let fixture = Fixture::new()?;
+        let mut operator = operator(&fixture, FakeCamouhost::default())?;
+        let mut started_health = false;
+        operator.open_with_materialization(
+            &fixture.claim_uri,
+            &fixture.root,
+            UnixMillis::new(10),
+            |_coordinator, _tenant, _profile, _generation, _device, _epoch| Ok(()),
+            || {
+                started_health = true;
+                Ok(())
+            },
+        )?;
+        assert!(started_health);
+        assert_eq!(
+            operator.process().actions(),
+            [ProcessAction::Spawn(fixture.lease.session_id().clone())]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn durable_health_start_failure_prevents_browser_spawn()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let fixture = Fixture::new()?;
+        let mut operator = operator(&fixture, FakeCamouhost::default())?;
+        let mut start_attempts = 0;
+        let error = operator.open_with_materialization(
+            &fixture.claim_uri,
+            &fixture.root,
+            UnixMillis::new(10),
+            |_coordinator, _tenant, _profile, _generation, _device, _epoch| Ok(()),
+            || {
+                start_attempts += 1;
+                Err(())
+            },
+        );
+        assert_eq!(
+            error,
+            Err(OperatorFlowError::Stage(
+                OperatorFailureStage::DeliveryHealthStart
+            ))
+        );
+        assert_eq!(start_attempts, 1);
+        assert_eq!(operator.coordinator().clean_closed, 1);
+        assert!(operator.process().actions().is_empty());
+        Ok(())
+    }
+
+    #[test]
     fn browser_preflight_failure_prevents_runtime_spawn_and_releases_ownership()
     -> Result<(), Box<dyn std::error::Error>> {
         let fixture = Fixture::new()?;
@@ -1788,6 +1979,7 @@ mod tests {
             })
         );
         assert_eq!(operator.coordinator().closed, 1);
+        assert_eq!(operator.coordinator().clean_closed, 1);
         assert!(operator.process().actions().is_empty());
         let workspace = fixture.root.open_generation(
             fixture.actor.tenant_scope().tenant_id(),
@@ -1797,6 +1989,62 @@ mod tests {
         let lock =
             BridgeWorkspaceLock::acquire(&workspace, &fixture.device_id, fixture.lease.epoch())?;
         lock.release()?;
+        Ok(())
+    }
+
+    #[test]
+    fn existing_firefox_writer_lock_blocks_clean_preflight_cancellation()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let fixture = Fixture::new()?;
+        let workspace = fixture.root.open_generation(
+            fixture.actor.tenant_scope().tenant_id(),
+            &fixture.profile_id,
+            &fixture.generation_id,
+        )?;
+        #[cfg(windows)]
+        let lock_path = {
+            fs::create_dir_all(workspace.path().join("user_data"))?;
+            workspace.path().join("user_data/parent.lock")
+        };
+        #[cfg(not(windows))]
+        let lock_path = workspace.path().join(".parentlock");
+        fs::write(&lock_path, b"foreign-writer")?;
+        // On Windows hold the OS handle, not merely a stale name.
+        #[cfg(windows)]
+        let _live_parent_lock = {
+            use std::os::windows::fs::OpenOptionsExt;
+            fs::OpenOptions::new()
+                .read(true)
+                .share_mode(0)
+                .open(&lock_path)?
+        };
+        let mut operator = ProfileBridgeOperator::new(
+            FakeDeviceIdentity::new(fixture.device_id.clone()),
+            FakeDeviceKeyStore::default(),
+            FakeDeviceAuthentication { allow: true },
+            fixture.enrollment()?,
+            fixture.coordinator(),
+            FakeRuntimeBundles {
+                bundle: approved_bundle()?,
+                allow: true,
+            },
+            FakeBrowserPreflight {
+                allow: false,
+                calls: 0,
+            },
+            FakeProcessControl::default(),
+            FakeCamouhost::default(),
+        );
+        assert!(matches!(
+            operator.open(&fixture.claim_uri, &fixture.root, UnixMillis::new(10)),
+            Err(OperatorFlowError::Preflight { .. })
+        ));
+        assert_eq!(operator.coordinator().closed, 1);
+        assert_eq!(operator.coordinator().clean_closed, 0);
+        assert!(operator.process().actions().is_empty());
+        #[cfg(windows)]
+        drop(_live_parent_lock);
+        assert_eq!(fs::read(&lock_path)?, b"foreign-writer");
         Ok(())
     }
 
