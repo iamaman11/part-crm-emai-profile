@@ -1,5 +1,7 @@
 use crate::ProcessControlPort;
-use crate::authoritative_generation::ensure_authoritative_generation;
+use crate::authoritative_generation::{
+    AuthoritativeGenerationMaterializationError, ensure_authoritative_generation,
+};
 #[cfg(any(test, feature = "synthetic-test-bin"))]
 use crate::browser_mail_query::BrowserMailExecutionProof;
 #[cfg(any(test, feature = "synthetic-test-bin"))]
@@ -70,6 +72,8 @@ pub enum OperationalRejectionReason {
     ProfileBusy,
     RecoveryRequired,
     RetryableNetworkRouteChurn,
+    LocalCacheIncomplete,
+    LocalCacheInaccessible,
     FilesystemProcessCapabilityUnavailable,
 }
 
@@ -84,6 +88,8 @@ impl OperationalRejectionReason {
             Self::ProfileBusy => "profile_busy",
             Self::RecoveryRequired => "recovery_required",
             Self::RetryableNetworkRouteChurn => "retryable_network_route_churn",
+            Self::LocalCacheIncomplete => "local_cache_incomplete",
+            Self::LocalCacheInaccessible => "local_cache_inaccessible",
             Self::FilesystemProcessCapabilityUnavailable => {
                 "filesystem_process_capability_unavailable"
             }
@@ -271,6 +277,10 @@ pub enum OperatorFlowError {
     Busy,
     CleanupRequired,
     Stage(OperatorFailureStage),
+    AuthoritativeGeneration {
+        reason: AuthoritativeGenerationMaterializationError,
+        cleanup: CleanupFailures,
+    },
     Preflight {
         reason: OperationalRejectionReason,
         local_state: LocalGenerationState,
@@ -296,6 +306,7 @@ impl OperatorFlowError {
             Self::Stage(stage) | Self::Runtime { stage, .. } | Self::Terminal { stage, .. } => {
                 Some(*stage)
             }
+            Self::AuthoritativeGeneration { .. } => Some(OperatorFailureStage::AuthoritativeGeneration),
             Self::Preflight { .. } => Some(OperatorFailureStage::BrowserPreflight),
         }
     }
@@ -307,6 +318,9 @@ impl fmt::Display for OperatorFlowError {
             Self::Busy => formatter.write_str("an operator session is already active"),
             Self::CleanupRequired => formatter.write_str("previous operator cleanup is unresolved"),
             Self::Stage(stage) => write!(formatter, "operator flow failed at {stage:?}"),
+            Self::AuthoritativeGeneration { reason, cleanup } => write!(
+                formatter, "authoritative generation preparation failed: {reason}; cleanup={cleanup:?}"
+            ),
             Self::Preflight {
                 reason,
                 local_state,
@@ -430,7 +444,6 @@ where
                     coordinator,
                     downloader,
                 )
-                .map_err(|_| ())
             },
         )
     }
@@ -465,7 +478,7 @@ where
             &profile_platform_primitives::TenantId,
             &ProfileId,
             &GenerationId,
-        ) -> Result<(), ()>,
+        ) -> Result<(), AuthoritativeGenerationMaterializationError>,
     {
         if self.cleanup_blocked {
             return Err(OperatorFlowError::CleanupRequired);
@@ -513,17 +526,21 @@ where
             return Err(self.fail_before_local_use(OperatorFailureStage::LeaseValidation, lease));
         }
 
-        if ensure_materialized(
+        if let Err(reason) = ensure_materialized(
             &mut self.coordinator,
             enrollment.actor().tenant_scope().tenant_id(),
             enrollment.profile_id(),
             enrollment.generation_id(),
-        )
-        .is_err()
-        {
-            return Err(
-                self.fail_before_local_use(OperatorFailureStage::AuthoritativeGeneration, lease)
-            );
+        ) {
+            // The authoritative owner reason must survive coordinator cleanup.
+            let coordinator_lease = self.coordinator.close_lease(&lease).is_err();
+            let cleanup = CleanupFailures {
+                process: false, workspace_lock: false, coordinator_lease,
+            };
+            if cleanup.any() {
+                self.cleanup_blocked = true;
+            }
+            return Err(OperatorFlowError::AuthoritativeGeneration { reason, cleanup });
         }
 
         let workspace = match root.open_generation(

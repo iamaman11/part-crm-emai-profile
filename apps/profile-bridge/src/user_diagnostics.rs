@@ -236,6 +236,22 @@ const fn operator_code(error: crate::operator_flow::OperatorFlowError) -> &'stat
     match error {
         Error::Busy => "BRIDGE_PROFILE_BUSY",
         Error::CleanupRequired => "BRIDGE_CLEANUP_REQUIRED",
+        Error::AuthoritativeGeneration {
+            reason: crate::authoritative_generation::AuthoritativeGenerationMaterializationError::IncompleteLocalEvidence,
+            ..
+        } => "BRIDGE_LOCAL_CACHE_INCOMPLETE",
+        Error::AuthoritativeGeneration {
+            reason: crate::authoritative_generation::AuthoritativeGenerationMaterializationError::InvalidLocalEvidence,
+            ..
+        } => "BRIDGE_LOCAL_CACHE_INTEGRITY_FAILED",
+        Error::Preflight {
+            reason: crate::operator_flow::OperationalRejectionReason::LocalCacheIncomplete,
+            ..
+        } => "BRIDGE_LOCAL_CACHE_INCOMPLETE",
+        Error::Preflight {
+            reason: crate::operator_flow::OperationalRejectionReason::LocalCacheInaccessible,
+            ..
+        } => "BRIDGE_LOCAL_CACHE_INACCESSIBLE",
         _ => match error.stage() {
             Some(Stage::DeviceIdentity) => "BRIDGE_DEVICE_IDENTITY_FAILED",
             Some(Stage::DeviceKey) => "BRIDGE_DEVICE_KEY_UNAVAILABLE",
@@ -261,6 +277,17 @@ const fn operator_code(error: crate::operator_flow::OperatorFlowError) -> &'stat
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn incomplete_cache_error_keeps_owner_diagnostic_code() {
+        use crate::operator_flow::{CleanupFailures, OperatorFlowError};
+        let error = OperatorFlowError::AuthoritativeGeneration {
+            reason: crate::authoritative_generation::AuthoritativeGenerationMaterializationError::IncompleteLocalEvidence,
+            cleanup: CleanupFailures::none(),
+        };
+        let diagnostic = UserDiagnostic::Launch(ShippingCompositionError::Operator(error));
+        assert_eq!(diagnostic.code(), "BRIDGE_LOCAL_CACHE_INCOMPLETE");
+    }
 
     #[test]
     fn operator_stage_is_preserved_in_safe_user_code() {

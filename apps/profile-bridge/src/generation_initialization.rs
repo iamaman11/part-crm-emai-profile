@@ -307,11 +307,8 @@ where
     })();
     let released = writer.release();
     if committed && (result.is_err() || released.is_err()) {
-        let _ = root.reject_generation_for_rematerialization(
-            &intent.tenant_id,
-            &intent.profile_id,
-            &generation,
-        );
+        // Cloud commit is authoritative, and local cleanup/binding persistence can fail later.
+        // Retain local bytes and ambiguous locks for evidenced recovery, never delete them.
         return Err(InitialProfileError::SavedRecovery);
     }
     if released.is_err() {
