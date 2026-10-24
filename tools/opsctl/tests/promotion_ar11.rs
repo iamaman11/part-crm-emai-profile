@@ -299,6 +299,31 @@ fn converged_staging_plan_is_no_change_and_preflight_ready()
         expected_current_release_set_id: Some(target.release_set_id()),
     })?;
     assert!(result.ready, "staging blockers: {:?}", result.blockers);
+    let mut missing_keyring = snapshot.clone();
+    assert!(
+        missing_keyring
+            .logical_credentials
+            .remove("PROFILE_GENERATION_ROOT_KEYRING")
+    );
+    let blocked = preflight(PreflightRequest {
+        root: &root,
+        source_root: &root,
+        target: &target,
+        target_profile_id: "rehearsal-core-v2",
+        environment: "staging",
+        snapshot: &missing_keyring,
+        compatibility_evidence: &compatibility,
+        current_release: Some(&target),
+        known_good_release: Some(&target),
+        expected_current_release_set_id: Some(target.release_set_id()),
+    })?;
+    assert!(!blocked.ready);
+    assert!(
+        blocked
+            .blockers
+            .iter()
+            .any(|code| code == "REQUIRED_CREDENTIAL_METADATA_NOT_READY")
+    );
     Ok(())
 }
 

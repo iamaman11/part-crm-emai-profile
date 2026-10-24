@@ -49,6 +49,7 @@
       "secrets": {
         "required": [
           "CLIENT_CONTACT_PROTECTION_KEYRING",
+          "PROFILE_GENERATION_ROOT_KEYRING",
           "R2_GENERATION_ACCESS_KEY_ID",
           "R2_GENERATION_SECRET_ACCESS_KEY"
         ]
@@ -116,6 +117,7 @@
       "secrets": {
         "required": [
           "CLIENT_CONTACT_PROTECTION_KEYRING",
+          "PROFILE_GENERATION_ROOT_KEYRING",
           "R2_GENERATION_ACCESS_KEY_ID",
           "R2_GENERATION_SECRET_ACCESS_KEY"
         ]

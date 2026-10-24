@@ -257,6 +257,29 @@ mod tests {
     use std::path::PathBuf;
 
     #[test]
+    fn generation_runtime_requires_root_keyring_in_core_and_inherited_closures()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+        for profile in [
+            "rehearsal-core-v2",
+            "production-core-v2",
+            "rehearsal-core-v1",
+            "production-core-v1",
+            "production-mailbox-admin-v1",
+            "production-mailbox-jobs-v1",
+        ] {
+            let closure = load_closure(&root, profile)?;
+            assert!(
+                closure
+                    .required_credentials
+                    .contains("PROFILE_GENERATION_ROOT_KEYRING"),
+                "{profile} omitted the generation encryption prerequisite"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
     fn production_core_closure_excludes_mail_operational_dependencies()
     -> Result<(), Box<dyn std::error::Error>> {
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");

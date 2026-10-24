@@ -30,6 +30,7 @@ CORE_BINDINGS = {
 }
 CORE_SECRET_CREDENTIALS = {
     "CLIENT_CONTACT_PROTECTION_KEYRING",
+    "PROFILE_GENERATION_ROOT_KEYRING",
     "R2_GENERATION_ACCESS_KEY_ID",
     "R2_GENERATION_SECRET_ACCESS_KEY",
 }
@@ -429,6 +430,11 @@ def native_inspection_fixture(schema_version: int, release_set_id: str) -> dict[
 
 
 def self_test() -> None:
+    generation_keyring = "PROFILE_GENERATION_ROOT_KEYRING"
+    if secret_names([{"name": generation_keyring, "type": "secret_text"}]) != {generation_keyring}:
+        fail("generation keyring provider observation was discarded")
+    if generation_keyring in secret_names([{"name": "CLIENT_CONTACT_PROTECTION_KEYRING"}]):
+        fail("missing generation keyring credential was fabricated")
     v2 = "release-set-v2-sha256-" + "a" * 64
     v3 = "release-set-v3-sha256-" + "b" * 64
     for release_id, profile in (
