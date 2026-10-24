@@ -1355,6 +1355,20 @@ mod tests {
             }
         ));
 
+        let (mut cancelled, cancelled_lease) = coordinator(CoordinatorStatusDto::Idle)?;
+        cancelled.close_without_browser_use(&cancelled_lease)?;
+        assert!(cancelled.cursor.is_none());
+        let cancelled_request = serde_json::from_slice::<CoordinatorCommandRequestDto>(
+            &cancelled.transport.requests[0].2,
+        )?;
+        assert!(matches!(
+            cancelled_request.command,
+            CoordinatorCommandDto::Release {
+                disposition: CoordinatorReleaseDispositionDto::Clean,
+                ..
+            }
+        ));
+
         let (mut generic, generic_lease) = coordinator(CoordinatorStatusDto::Uncertain)?;
         generic.close_lease(&generic_lease)?;
         assert!(generic.cursor.is_none());

@@ -619,6 +619,7 @@ where
                     OperatorFailureStage::LocalWorkspace,
                     lease,
                     workspace_lock,
+                &workspace,
                 ));
             }
         };
@@ -629,6 +630,7 @@ where
                 OperatorFailureStage::DeliveryHealthStart,
                 lease,
                 workspace_lock,
+            &workspace,
             ));
         }
         let mut local_record = LocalGenerationRecord::new(
@@ -641,6 +643,7 @@ where
                 OperatorFailureStage::LocalLifecycle,
                 lease,
                 workspace_lock,
+            &workspace,
             ));
         }
 
@@ -1028,24 +1031,13 @@ where
     ) -> OperatorFlowError {
         // Preflight precedes begin_use/spawn. An unknown lock, writer/recovery verdict or
         // unsuccessful local lock release rules out clean cancellation.
-        let absent = !matches!(
+        let eligible = !matches!(
             reason,
             OperationalRejectionReason::ProfileBusy | OperationalRejectionReason::RecoveryRequired
-        ) && matches!(browser_writer_locks_absent(workspace), Ok(true));
-        let workspace_lock_failed = workspace_lock.release().is_err();
-        let coordinator_lease = if absent && !workspace_lock_failed {
-            self.coordinator.close_without_browser_use(&lease).is_err()
-        } else {
-            self.coordinator.close_lease(&lease).is_err()
-        };
-        let cleanup = CleanupFailures {
-            process: false,
-            workspace_lock: workspace_lock_failed,
-            coordinator_lease,
-        };
-        if cleanup.any() {
-            self.cleanup_blocked = true;
-        }
+        );
+        let cleanup = self.cleanup_before_browser_use(
+            &lease, workspace_lock, workspace, eligible,
+        );
         OperatorFlowError::Preflight {
             reason,
             local_state: LocalGenerationState::MaterializedClean,
@@ -1058,16 +1050,12 @@ where
         stage: OperatorFailureStage,
         lease: ProfileLease,
         workspace_lock: BridgeWorkspaceLock,
+        workspace: &GenerationWorkspace,
     ) -> OperatorFlowError {
-        let workspace_lock_failed = workspace_lock.release().is_err();
-        let coordinator_lease = self.coordinator.close_lease(&lease).is_err();
-        let cleanup = CleanupFailures {
-            process: false,
-            workspace_lock: workspace_lock_failed,
-            coordinator_lease,
-        };
+        let cleanup = self.cleanup_before_browser_use(
+            &lease, workspace_lock, workspace, true,
+        );
         if cleanup.any() {
-            self.cleanup_blocked = true;
             OperatorFlowError::Terminal {
                 stage,
                 local_state: LocalGenerationState::MaterializedClean,
@@ -1076,6 +1064,33 @@ where
         } else {
             OperatorFlowError::Stage(stage)
         }
+    }
+
+    fn cleanup_before_browser_use(
+        &mut self,
+        lease: &ProfileLease,
+        workspace_lock: BridgeWorkspaceLock,
+        workspace: &GenerationWorkspace,
+        eligible: bool,
+    ) -> CleanupFailures {
+        // Caller owns this exact Bridge lock; no managed runtime spawn has been tried.
+        // Unknown/foreign Firefox locks or failed local cleanup forbid Clean.
+        let no_writer = eligible && matches!(browser_writer_locks_absent(workspace), Ok(true));
+        let workspace_lock_failed = workspace_lock.release().is_err();
+        let coordinator_lease = if no_writer && !workspace_lock_failed {
+            self.coordinator.close_without_browser_use(lease).is_err()
+        } else {
+            self.coordinator.close_lease(lease).is_err()
+        };
+        let cleanup = CleanupFailures {
+            process: false,
+            workspace_lock: workspace_lock_failed,
+            coordinator_lease,
+        };
+        if cleanup.any() {
+            self.cleanup_blocked = true;
+        }
+        cleanup
     }
 
     fn fail_active_runtime(
@@ -1274,6 +1289,7 @@ mod tests {
         claimed: u64,
         heartbeats: u64,
         closed: u64,
+        clean_closed: u64,
     }
 
     impl ProfileCoordinatorPort for FakeCoordinator {
@@ -1296,6 +1312,16 @@ mod tests {
 
         fn close_lease(&mut self, _lease: &ProfileLease) -> Result<(), Self::Error> {
             self.closed += 1;
+            if self.close_fail {
+                Err(BridgePortError::Unavailable)
+            } else {
+                Ok(())
+            }
+        }
+
+        fn close_without_browser_use(&mut self, _lease: &ProfileLease) -> Result<(), Self::Error> {
+            self.closed += 1;
+            self.clean_closed += 1;
             if self.close_fail {
                 Err(BridgePortError::Unavailable)
             } else {
@@ -1510,6 +1536,7 @@ mod tests {
                 claimed: 0,
                 heartbeats: 0,
                 closed: 0,
+                clean_closed: 0,
             }
         }
     }
@@ -1921,6 +1948,7 @@ mod tests {
             ))
         );
         assert_eq!(start_attempts, 1);
+        assert_eq!(operator.coordinator().clean_closed, 1);
         assert!(operator.process().actions().is_empty());
         Ok(())
     }
@@ -1955,6 +1983,7 @@ mod tests {
             })
         );
         assert_eq!(operator.coordinator().closed, 1);
+        assert_eq!(operator.coordinator().clean_closed, 1);
         assert!(operator.process().actions().is_empty());
         let workspace = fixture.root.open_generation(
             fixture.actor.tenant_scope().tenant_id(),
@@ -1964,6 +1993,44 @@ mod tests {
         let lock =
             BridgeWorkspaceLock::acquire(&workspace, &fixture.device_id, fixture.lease.epoch())?;
         lock.release()?;
+        Ok(())
+    }
+
+    #[test]
+    fn existing_firefox_writer_lock_blocks_clean_preflight_cancellation()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let fixture = Fixture::new()?;
+        let workspace = fixture.root.open_generation(
+            fixture.actor.tenant_scope().tenant_id(),
+            &fixture.profile_id,
+            &fixture.generation_id,
+        )?;
+        fs::write(workspace.path().join(".parentlock"), b"foreign-writer")?;
+        let mut operator = ProfileBridgeOperator::new(
+            FakeDeviceIdentity::new(fixture.device_id.clone()),
+            FakeDeviceKeyStore::default(),
+            FakeDeviceAuthentication { allow: true },
+            fixture.enrollment()?,
+            fixture.coordinator(),
+            FakeRuntimeBundles {
+                bundle: approved_bundle()?,
+                allow: true,
+            },
+            FakeBrowserPreflight {
+                allow: false,
+                calls: 0,
+            },
+            FakeProcessControl::default(),
+            FakeCamouhost::default(),
+        );
+        assert!(matches!(
+            operator.open(&fixture.claim_uri, &fixture.root, UnixMillis::new(10)),
+            Err(OperatorFlowError::Preflight { .. })
+        ));
+        assert_eq!(operator.coordinator().closed, 1);
+        assert_eq!(operator.coordinator().clean_closed, 0);
+        assert!(operator.process().actions().is_empty());
+        assert_eq!(fs::read(workspace.path().join(".parentlock"))?, b"foreign-writer");
         Ok(())
     }
 
