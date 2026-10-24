@@ -230,6 +230,16 @@ fn create_staging_workspace(
     Err(GenerationSnapshotError::TargetAlreadyExists)
 }
 
+/// Exact full-byte comparison with server-authenticated workspace, including user_data.
+/// Immutable inventory alone cannot prove absence of unsaved browser state.
+pub(crate) fn verify_workspace_matches_snapshot(
+    workspace: &GenerationWorkspace,
+    snapshot: &[u8],
+) -> Result<(), GenerationSnapshotError> {
+    let entries = parse_workspace_snapshot(snapshot)?;
+    verify_materialized_snapshot(workspace, &entries)
+}
+
 fn verify_materialized_snapshot(
     workspace: &GenerationWorkspace,
     expected: &[SnapshotEntry<'_>],

@@ -459,12 +459,14 @@ where
             claim,
             root,
             now,
-            |coordinator, tenant_id, profile_id, generation_id| {
+            |coordinator, tenant_id, profile_id, generation_id, device_id, epoch| {
                 ensure_authoritative_generation(
                     root,
                     tenant_id,
                     profile_id,
                     generation_id,
+                    device_id,
+                    epoch,
                     coordinator,
                     downloader,
                 )
@@ -486,7 +488,7 @@ where
             claim,
             root,
             now,
-            |_coordinator, _tenant_id, _profile_id, _generation_id| Ok(()),
+            |_coordinator, _tenant_id, _profile_id, _generation_id, _device_id, _epoch| Ok(()),
             || Ok(()),
         )
     }
@@ -505,6 +507,8 @@ where
             &profile_platform_primitives::TenantId,
             &ProfileId,
             &GenerationId,
+            &DeviceId,
+            u64,
         ) -> Result<(), AuthoritativeGenerationMaterializationError>,
         H: FnMut() -> Result<(), ()>,
     {
@@ -559,6 +563,8 @@ where
             enrollment.actor().tenant_scope().tenant_id(),
             enrollment.profile_id(),
             enrollment.generation_id(),
+            &device_id,
+            lease.epoch(),
         ) {
             // The authoritative owner reason must survive coordinator cleanup.
             let coordinator_lease = self.coordinator.close_lease(&lease).is_err();

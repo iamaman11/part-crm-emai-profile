@@ -223,7 +223,11 @@ def self_test(root: Path) -> list[str]:
 
     fixture = operator.replace("ensure_authoritative_generation(", "removed_rematerialization(", 1)
     rejected = failures_for_sources(fixture, unit_test, acceptance_test, synthetic)
-    if not any("authoritative generation rematerialization" in failure for failure in rejected):
+    if not any(
+        "authoritative generation rematerialization" in failure
+        or "single authoritative launch body" in failure
+        for failure in rejected
+    ):
         return ["retained-operator missing authoritative rematerialization fixture unexpectedly passed"]
 
     fixture = operator.replace(RETAINED_HANDOFF, "RetainedDirtyClose::removed_handoff(", 1)

@@ -1,16 +1,17 @@
 use crate::browser_execution::{
-    BrowserLaunchBlocker, load_materialization_binding,
+    BrowserLaunchBlocker, browser_writer_locks_absent, load_materialization_binding,
     restore_materialization_binding_after_authoritative_open,
 };
 use crate::generation_reopen::{GenerationObjectDownloadPort, GenerationReopenControlPort};
 use crate::generation_snapshot::{
     GenerationSnapshotError, materialize_workspace_snapshot_with_pre_publish,
+    verify_workspace_matches_snapshot,
 };
-use crate::local_profile::{LocalProfileError, MaterializationRoot};
+use crate::local_profile::{BridgeWorkspaceLock, LocalProfileError, MaterializationRoot};
 use encrypted_generation_domain::{
     canonical_generation_object_key, inspect_generation_metadata_prelude, open_generation_expected,
 };
-use profile_platform_primitives::{GenerationId, ProfileId, TenantId};
+use profile_platform_primitives::{DeviceId, GenerationId, ProfileId, TenantId};
 
 const LOWER_HEX: &[u8; 16] = b"0123456789abcdef";
 
@@ -71,6 +72,8 @@ pub fn ensure_authoritative_generation<C, D>(
     tenant_id: &TenantId,
     profile_id: &ProfileId,
     generation_id: &GenerationId,
+    device_id: &DeviceId,
+    workspace_epoch: u64,
     control: &mut C,
     downloader: &mut D,
 ) -> Result<(), AuthoritativeGenerationMaterializationError>
@@ -78,33 +81,30 @@ where
     C: GenerationReopenControlPort,
     D: GenerationObjectDownloadPort,
 {
-    match root.open_generation(tenant_id, profile_id, generation_id) {
+    let incomplete_local = match root.open_generation(tenant_id, profile_id, generation_id) {
         Ok(workspace) => {
-            // A directory and generation marker are not evidence of a reusable copy.
-            // Do not replace unknown or possibly dirty bytes to obtain a green launch.
-            let binding =
-                load_materialization_binding(&workspace, tenant_id, profile_id, generation_id)
-                    .map_err(|error| match error {
-                        BrowserLaunchBlocker::LocalProfile(LocalProfileError::Io(
-                            std::io::ErrorKind::NotFound,
-                        )) => AuthoritativeGenerationMaterializationError::IncompleteLocalEvidence,
-                        BrowserLaunchBlocker::LocalProfile(_) => {
-                            AuthoritativeGenerationMaterializationError::Local
-                        }
-                        _ => AuthoritativeGenerationMaterializationError::InvalidLocalEvidence,
-                    })?;
-            if workspace
-                .materialization_inventory_digest()
-                .map_err(|_| AuthoritativeGenerationMaterializationError::Local)?
-                != binding.materialized_inventory_digest()
-            {
-                return Err(AuthoritativeGenerationMaterializationError::InvalidLocalEvidence);
+            match load_materialization_binding(&workspace, tenant_id, profile_id, generation_id) {
+                Ok(binding) => {
+                    if workspace.materialization_inventory_digest()
+                        .map_err(|_| AuthoritativeGenerationMaterializationError::Local)?
+                        != binding.materialized_inventory_digest()
+                    {
+                        return Err(AuthoritativeGenerationMaterializationError::InvalidLocalEvidence);
+                    }
+                    return Ok(());
+                }
+                Err(BrowserLaunchBlocker::LocalProfile(LocalProfileError::Io(
+                    std::io::ErrorKind::NotFound,
+                ))) => Some(workspace),
+                Err(BrowserLaunchBlocker::LocalProfile(_)) => {
+                    return Err(AuthoritativeGenerationMaterializationError::Local);
+                }
+                Err(_) => return Err(AuthoritativeGenerationMaterializationError::InvalidLocalEvidence),
             }
-            return Ok(());
         }
-        Err(LocalProfileError::Io(std::io::ErrorKind::NotFound)) => {}
+        Err(LocalProfileError::Io(std::io::ErrorKind::NotFound)) => None,
         Err(_) => return Err(AuthoritativeGenerationMaterializationError::Local),
-    }
+    };
 
     let capability = control
         .download_capability(tenant_id, profile_id)
@@ -151,6 +151,29 @@ where
         generation_id,
     )
     .map_err(|_| AuthoritativeGenerationMaterializationError::Decryption)?;
+    if let Some(workspace) = incomplete_local {
+        // The caller holds the precise coordinator lease. Take this device's local lock
+        // and compare ALL workspace bytes, including mutable user_data, with cloud truth.
+        let lock = BridgeWorkspaceLock::acquire(&workspace, device_id, workspace_epoch)
+            .map_err(|_| AuthoritativeGenerationMaterializationError::IncompleteLocalEvidence)?;
+        let restored = (|| {
+            if !matches!(browser_writer_locks_absent(&workspace), Ok(true)) {
+                return Err(AuthoritativeGenerationMaterializationError::IncompleteLocalEvidence);
+            }
+            verify_workspace_matches_snapshot(&workspace, opened.plaintext())
+                .map_err(|_| AuthoritativeGenerationMaterializationError::IncompleteLocalEvidence)?;
+            restore_materialization_binding_after_authoritative_open(
+                &workspace, tenant_id, profile_id, generation_id, &source_container_sha256,
+            )
+            .map_err(|_| AuthoritativeGenerationMaterializationError::InvalidLocalEvidence)?;
+            Ok(())
+        })();
+        let released = lock.release()
+            .map_err(|_| AuthoritativeGenerationMaterializationError::InvalidLocalEvidence);
+        restored?;
+        released?;
+        return Ok(());
+    }
     materialize_workspace_snapshot_with_pre_publish(
         root,
         tenant_id,
@@ -205,7 +228,7 @@ mod tests {
         GenerationDek, GenerationIdentity, GenerationMetadata, KeyId, NoncePrefix,
         canonical_generation_object_key, seal_generation,
     };
-    use profile_platform_primitives::{GenerationId, ProfileId, TenantId};
+    use profile_platform_primitives::{DeviceId, GenerationId, ProfileId, TenantId};
     use sha2::{Digest, Sha256};
     use std::fs;
     use std::path::PathBuf;
@@ -446,13 +469,15 @@ mod tests {
                 &fixture.tenant_id,
                 &fixture.profile_id,
                 &fixture.generation_id,
+                &DeviceId::parse("device_authgen_test")?,
+                1,
                 &mut control,
                 &mut downloader,
             ),
             Err(AuthoritativeGenerationMaterializationError::IncompleteLocalEvidence)
         );
-        assert_eq!(downloader.calls, 0);
-        assert_eq!(control.opening_calls, 0);
+        assert_eq!(downloader.calls, 1);
+        assert_eq!(control.opening_calls, 1);
         assert_eq!(
             fs::read(workspace.path().join("user_data/storage/state.bin"))?,
             b"retain-me"
@@ -494,6 +519,8 @@ mod tests {
                 &fixture.tenant_id,
                 &fixture.profile_id,
                 &fixture.generation_id,
+                &DeviceId::parse("device_authgen_test")?,
+                1,
                 &mut control,
                 &mut downloader,
             ),
@@ -519,6 +546,8 @@ mod tests {
             &fixture.tenant_id,
             &fixture.profile_id,
             &fixture.generation_id,
+            &DeviceId::parse("device_authgen_test")?,
+            1,
             &mut control,
             &mut downloader,
         )?;
@@ -528,6 +557,8 @@ mod tests {
             &fixture.tenant_id,
             &fixture.profile_id,
             &fixture.generation_id,
+            &DeviceId::parse("device_authgen_test")?,
+            1,
             &mut control,
             &mut downloader,
         )?;
@@ -589,6 +620,8 @@ mod tests {
                 &fixture.tenant_id,
                 &fixture.profile_id,
                 &fixture.generation_id,
+                &DeviceId::parse("device_authgen_test")?,
+                1,
                 &mut control,
                 &mut downloader,
             ),
@@ -626,6 +659,8 @@ mod tests {
                 &fixture.tenant_id,
                 &fixture.profile_id,
                 &fixture.generation_id,
+                &DeviceId::parse("device_authgen_test")?,
+                1,
                 &mut control,
                 &mut downloader,
             ),
@@ -662,6 +697,8 @@ mod tests {
                 &fixture.tenant_id,
                 &fixture.profile_id,
                 &fixture.generation_id,
+                &DeviceId::parse("device_authgen_test")?,
+                1,
                 &mut control,
                 &mut downloader,
             ),
