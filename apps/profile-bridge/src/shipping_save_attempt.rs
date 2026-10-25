@@ -876,8 +876,14 @@ pub(crate) fn classify_scoped_pending_save_evidence(
                 || intent.epoch == 0
                 || intent.session_fingerprint.len() != 64
                 || intent.fencing_fingerprint.len() != 64
-                || !intent.session_fingerprint.bytes().all(|byte| byte.is_ascii_hexdigit())
-                || !intent.fencing_fingerprint.bytes().all(|byte| byte.is_ascii_hexdigit())
+                || !intent
+                    .session_fingerprint
+                    .bytes()
+                    .all(|byte| byte.is_ascii_hexdigit())
+                || !intent
+                    .fencing_fingerprint
+                    .bytes()
+                    .all(|byte| byte.is_ascii_hexdigit())
             {
                 return Err(SaveAttemptEvidenceError::Invalid);
             }

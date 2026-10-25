@@ -14,11 +14,11 @@ use crate::shipping_generation_save::{
     GenerationUploadAuthorization, SignedGenerationUploadCapability,
 };
 use crate::shipping_save_attempt::{
-    ReadOnlySaveAttempt, ScopedPendingSaveEvidence, classify_scoped_pending_save_evidence,
-    discover_unresolved_exact_save_attempt, inspect_exact_save_attempt,
+    ReadOnlySaveAttempt, discover_unresolved_exact_save_attempt, inspect_exact_save_attempt,
 };
 #[cfg(any(windows, test))]
 use crate::shipping_save_attempt::{
+    ScopedPendingSaveEvidence, classify_scoped_pending_save_evidence,
     retire_active_exact_attempt_after_restart, retire_matching_local_unsynced_after_restart,
 };
 use control_plane_contract::profile_generation_api::{
@@ -780,19 +780,26 @@ mod tests {
         let source = root.open_generation(&fixture.tenant, &fixture.profile, &fixture.base)?;
         let original = std::fs::read(source.path().join("prefs.js"))?;
         persist_local_unsynced_intent(&root, &source, &fixture.lease)?;
-        assert!(discover_unresolved_exact_save_attempt(
-            &root, &fixture.tenant, &fixture.profile,
-        ).is_err());
+        assert!(
+            discover_unresolved_exact_save_attempt(&root, &fixture.tenant, &fixture.profile,)
+                .is_err()
+        );
         let fresh = ProfileLease::issue(
-            fixture.tenant.clone(), fixture.profile.clone(),
+            fixture.tenant.clone(),
+            fixture.profile.clone(),
             SessionId::parse("session_lone_local_unsynced")?,
-            fixture.lease.device_id().clone(), fixture.lease.epoch() + 1,
+            fixture.lease.device_id().clone(),
+            fixture.lease.epoch() + 1,
             FencingToken::parse("fence_lone_local_unsynced")?,
         )?;
         let mut transport = Transport::default();
         let disposition = complete_active_exact_after_restart(
-            &root, &fixture.tenant, &fixture.profile, &fixture.base,
-            &fresh, &mut transport,
+            &root,
+            &fixture.tenant,
+            &fixture.profile,
+            &fixture.base,
+            &fresh,
+            &mut transport,
         );
         assert_eq!(
             disposition,
@@ -801,24 +808,33 @@ mod tests {
         assert!(transport.paths.is_empty());
         assert_eq!(std::fs::read(source.path().join("prefs.js"))?, original);
         assert!(has_unresolved_save_attempt_for_profile(
-            &root, &fixture.tenant, &fixture.profile,
+            &root,
+            &fixture.tenant,
+            &fixture.profile,
         )?);
         // A stale epoch or an unrelated selected base never makes the
         // offline source an authorized fresh writer or allows N+2.
         let mut denied_transport = Transport::default();
         assert_eq!(
             complete_active_exact_after_restart(
-                &root, &fixture.tenant, &fixture.profile, &fixture.base,
-                &fixture.lease, &mut denied_transport,
+                &root,
+                &fixture.tenant,
+                &fixture.profile,
+                &fixture.base,
+                &fixture.lease,
+                &mut denied_transport,
             ),
             Err(RestartExactLocalCompletionError::WriterOrLockUnresolved),
         );
         assert!(denied_transport.paths.is_empty());
         assert_eq!(
             complete_active_exact_after_restart(
-                &root, &fixture.tenant, &fixture.profile,
+                &root,
+                &fixture.tenant,
+                &fixture.profile,
                 fixture.prepared.candidate_workspace().generation_id(),
-                &fresh, &mut denied_transport,
+                &fresh,
+                &mut denied_transport,
             ),
             Ok(RestartExactLocalCompletion::ServerSelectedDifferentGeneration),
         );
@@ -833,24 +849,35 @@ mod tests {
         let root = MaterializationRoot::open_or_create(&fixture.root_path)?;
         let source = root.open_generation(&fixture.tenant, &fixture.profile, &fixture.base)?;
         persist_local_unsynced_intent(&root, &source, &fixture.lease)?;
-        std::fs::write(source.path().join("prefs.js"), b"changed-without-checkpoint")?;
+        std::fs::write(
+            source.path().join("prefs.js"),
+            b"changed-without-checkpoint",
+        )?;
         let fresh = ProfileLease::issue(
-            fixture.tenant.clone(), fixture.profile.clone(),
+            fixture.tenant.clone(),
+            fixture.profile.clone(),
             SessionId::parse("session_lone_tampered")?,
-            fixture.lease.device_id().clone(), fixture.lease.epoch() + 1,
+            fixture.lease.device_id().clone(),
+            fixture.lease.epoch() + 1,
             FencingToken::parse("fence_lone_tampered")?,
         )?;
         let mut transport = Transport::default();
         assert_eq!(
             complete_active_exact_after_restart(
-                &root, &fixture.tenant, &fixture.profile,
-                &fixture.base, &fresh, &mut transport,
+                &root,
+                &fixture.tenant,
+                &fixture.profile,
+                &fixture.base,
+                &fresh,
+                &mut transport,
             ),
             Err(RestartExactLocalCompletionError::LocalEvidenceChanged),
         );
         assert!(transport.paths.is_empty());
         assert!(has_unresolved_save_attempt_for_profile(
-            &root, &fixture.tenant, &fixture.profile,
+            &root,
+            &fixture.tenant,
+            &fixture.profile,
         )?);
         assert_eq!(
             std::fs::read(source.path().join("prefs.js"))?,
