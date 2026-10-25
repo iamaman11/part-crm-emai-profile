@@ -872,8 +872,7 @@ where
         ))?;
         if recovered.ciphertext() != prepared.sealed().container()
             || recovered.container_digest() != prepared.container_digest()
-            || recovered.original_session() != lease.session_id().as_str()
-            || recovered.original_fencing() != lease.fencing_token().as_str()
+            || !recovered.matches_original_lease(&lease)
         {
             return Err(OperatorFlowError::Stage(
                 OperatorFailureStage::GenerationSave,
