@@ -1640,9 +1640,7 @@ mod tests {
         use crate::generation_reopen::GenerationObjectDownloadError;
         for create_during_attempt in [false, true] {
             let mut fixture = Fixture::new()?;
-            fixture.generation_id = GenerationId::parse(
-                "generation_get_read_no_local_writer",
-            )?;
+            fixture.generation_id = GenerationId::parse("generation_get_read_no_local_writer")?;
             let root = &fixture.root;
             let mut operator = operator(&fixture, FakeCamouhost::default())?;
             let mut runtime_health_started = false;
@@ -1655,11 +1653,13 @@ mod tests {
                         root.create_generation(tenant, profile, generation)
                             .expect("simulated concurrent writer changes workspace");
                     }
-                    Err(AuthoritativeGenerationMaterializationError::ReadBeforeLocalUse(
-                        AuthoritativeGenerationPreWriteError::Download(
-                            GenerationObjectDownloadError::Transport,
+                    Err(
+                        AuthoritativeGenerationMaterializationError::ReadBeforeLocalUse(
+                            AuthoritativeGenerationPreWriteError::Download(
+                                GenerationObjectDownloadError::Transport,
+                            ),
                         ),
-                    ))
+                    )
                 },
                 || {
                     runtime_health_started = true;
