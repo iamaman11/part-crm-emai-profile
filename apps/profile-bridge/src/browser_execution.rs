@@ -470,7 +470,8 @@ fn map_execution_error(_error: BrowserExecutionError) -> BrowserLaunchBlocker {
 mod tests {
     use super::{
         BROWSER_IDENTITY_RECORD_FILE, BrowserLaunchBlocker, evaluate_browser_launch,
-        load_materialization_binding, persist_materialization_binding,
+        load_materialization_binding, persist_browser_identity, persist_committed_successor_binding,
+        persist_materialization_binding,
     };
     use crate::local_profile::{BridgeWorkspaceLock, MaterializationRoot};
     use crate::test_support::remove_test_root;
@@ -553,6 +554,50 @@ mod tests {
             5617,
             route,
         )?)
+    }
+
+    #[test]
+    fn committed_successor_binding_requires_original_identity_and_rejects_conflicting_rewrite()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let root_path = root_path("committed-binding-fail-closed")?;
+        let root = MaterializationRoot::open_or_create(&root_path)?;
+        let tenant = TenantId::parse("tenant_01JCOMMITTEDBIND")?;
+        let profile = ProfileId::parse("profile_01JCOMMITTEDBIND")?;
+        let generation = GenerationId::parse("generation_01JCOMMITTEDBIND")?;
+        let workspace = root.create_generation(&tenant, &profile, &generation)?;
+        let prefs = workspace.path().join("prefs.js");
+        fs::write(&prefs, b"browser-retained-bytes")?;
+
+        // A copied directory without the actual generation-owned identity is not ready.
+        assert!(persist_committed_successor_binding(
+            &workspace, &tenant, &profile, &generation, &"a".repeat(64),
+        ).is_err());
+        assert_eq!(fs::read(&prefs)?, b"browser-retained-bytes");
+        assert!(load_materialization_binding(&workspace, &tenant, &profile, &generation).is_err());
+
+        persist_browser_identity(&workspace, &identity()?)?;
+        persist_committed_successor_binding(
+            &workspace, &tenant, &profile, &generation, &"a".repeat(64),
+        )?;
+        let original = load_materialization_binding(&workspace, &tenant, &profile, &generation)?;
+        assert_eq!(original.source_container_sha256(), "a".repeat(64));
+        // Exact idempotent replay is safe; different immutable object identity cannot rewrite it.
+        persist_committed_successor_binding(
+            &workspace, &tenant, &profile, &generation, &"a".repeat(64),
+        )?;
+        assert_eq!(
+            persist_committed_successor_binding(
+                &workspace, &tenant, &profile, &generation, &"b".repeat(64),
+            ),
+            Err(BrowserLaunchBlocker::MaterializationStale)
+        );
+        assert_eq!(
+            load_materialization_binding(&workspace, &tenant, &profile, &generation)?,
+            original
+        );
+        assert_eq!(fs::read(&prefs)?, b"browser-retained-bytes");
+        remove_test_root(&root_path)?;
+        Ok(())
     }
 
     #[test]
