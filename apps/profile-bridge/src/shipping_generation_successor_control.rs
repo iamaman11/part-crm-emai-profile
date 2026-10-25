@@ -754,6 +754,121 @@ mod tests {
     }
 
     #[test]
+    fn crash_with_local_intent_and_exact_checkpoint_resumes_active_exact_without_new_put()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let fixture = Fixture::new()?;
+        let root = MaterializationRoot::open_or_create(&fixture.root_path)?;
+        let source = root.open_generation(&fixture.tenant, &fixture.profile, &fixture.base)?;
+        let original = std::fs::read(source.path().join("prefs.js"))?;
+        persist_local_unsynced_intent(&root, &source, &fixture.lease)?;
+        persist_exact_save_attempt(&root, &source, &fixture.prepared, &fixture.lease)?;
+        // Simulate process death EXACTLY between checkpoint hardlink and
+        // small intent retirement: two valid files belong to one attempt.
+        let successor = fixture.prepared.candidate_workspace().generation_id();
+        let checkpoint = discover_unresolved_exact_save_attempt(
+            &root, &fixture.tenant, &fixture.profile,
+        )?.ok_or("matching exact pair not discoverable")?;
+        assert_eq!(checkpoint.successor_id(), successor.as_str());
+        assert!(has_unresolved_save_attempt_for_profile(
+            &root, &fixture.tenant, &fixture.profile,
+        )?);
+
+        let fresh = ProfileLease::issue(
+            fixture.tenant.clone(),
+            fixture.profile.clone(),
+            SessionId::parse("session_fresh_crash_pair")?,
+            fixture.lease.device_id().clone(),
+            fixture.lease.epoch() + 1,
+            FencingToken::parse("fence_fresh_crash_pair")?,
+        )?;
+        let mut transport = Transport {
+            responses: VecDeque::from([MachineHttpResponse::new(
+                200,
+                br#"{"activeExact":true}"#.to_vec(),
+            )]),
+            paths: Vec::new(),
+        };
+        assert_eq!(
+            complete_active_exact_after_restart(
+                &root, &fixture.tenant, &fixture.profile, successor,
+                &fresh, &mut transport,
+            ),
+            Ok(RestartExactLocalCompletion::ActiveExactLocalReady),
+        );
+        assert_eq!(transport.paths.len(), 1);
+        assert!(transport.paths[0].ends_with("/generation-successor/observe"));
+        assert!(!has_unresolved_save_attempt_for_profile(
+            &root, &fixture.tenant, &fixture.profile,
+        )?);
+        assert_eq!(std::fs::read(source.path().join("prefs.js"))?, original);
+        let bound = load_materialization_binding(
+            fixture.prepared.candidate_workspace(), &fixture.tenant, &fixture.profile, successor,
+        )?;
+        assert_eq!(bound.source_container_sha256(), checkpoint.container_digest());
+        Ok(())
+    }
+
+    #[test]
+    fn crash_pair_refuses_foreign_intent_and_pending_stage_before_server_effect()
+    -> Result<(), Box<dyn std::error::Error>> {
+        for tamper in ["mismatched_intent", "extra_pending"] {
+            let fixture = Fixture::new()?;
+            let root = MaterializationRoot::open_or_create(&fixture.root_path)?;
+            let source = root.open_generation(&fixture.tenant, &fixture.profile, &fixture.base)?;
+            let bytes_before = std::fs::read(source.path().join("prefs.js"))?;
+            persist_local_unsynced_intent(&root, &source, &fixture.lease)?;
+            persist_exact_save_attempt(&root, &source, &fixture.prepared, &fixture.lease)?;
+            let marker = std::fs::read_dir(root.path())?
+                .filter_map(Result::ok)
+                .map(|entry| entry.path())
+                .find(|path| path.file_name().is_some_and(|name| {
+                    name.to_string_lossy().ends_with("-local-unsynced-v1.intent")
+                }))
+                .ok_or("missing durable local intent")?;
+            if tamper == "mismatched_intent" {
+                let mut value: serde_json::Value =
+                    serde_json::from_slice(&std::fs::read(&marker)?)?;
+                value["epoch"] = serde_json::json!(fixture.lease.epoch() + 5);
+                std::fs::write(&marker, serde_json::to_vec(&value)?)?;
+            } else {
+                let extra = root.path().join(format!(
+                    "{}.pending-foreign",
+                    marker.file_name().ok_or("intent filename")?
+                        .to_string_lossy()
+                        .trim_end_matches("-local-unsynced-v1.intent")
+                ));
+                std::fs::write(extra, b"unexpected-third-save-evidence")?;
+            }
+            assert!(discover_unresolved_exact_save_attempt(
+                &root, &fixture.tenant, &fixture.profile,
+            ).is_err());
+            let fresh = ProfileLease::issue(
+                fixture.tenant.clone(),
+                fixture.profile.clone(),
+                SessionId::parse("session_crash_negative")?,
+                fixture.lease.device_id().clone(),
+                fixture.lease.epoch() + 1,
+                FencingToken::parse("fence_crash_negative")?,
+            )?;
+            let mut network = Transport::default();
+            assert_eq!(
+                complete_active_exact_after_restart(
+                    &root, &fixture.tenant, &fixture.profile,
+                    fixture.prepared.candidate_workspace().generation_id(),
+                    &fresh, &mut network,
+                ),
+                Err(RestartExactLocalCompletionError::LocalEvidenceChanged),
+            );
+            assert!(network.paths.is_empty());
+            assert!(has_unresolved_save_attempt_for_profile(
+                &root, &fixture.tenant, &fixture.profile,
+            )?);
+            assert_eq!(std::fs::read(source.path().join("prefs.js"))?, bytes_before);
+        }
+        Ok(())
+    }
+
+    #[test]
     fn changed_source_cannot_retire_local_unsynced_intent() -> Result<(), Box<dyn std::error::Error>>
     {
         let fixture = Fixture::new()?;
