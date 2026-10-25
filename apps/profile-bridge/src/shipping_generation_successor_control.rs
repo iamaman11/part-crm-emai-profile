@@ -13,12 +13,12 @@ use crate::shipping_generation_save::{
     GenerationSuccessorCommitOutcome, GenerationSuccessorControlPort,
     GenerationUploadAuthorization, SignedGenerationUploadCapability,
 };
+use crate::shipping_save_attempt::{
+    ReadOnlySaveAttempt, discover_unresolved_exact_save_attempt, inspect_exact_save_attempt,
+};
 #[cfg(any(windows, test))]
 use crate::shipping_save_attempt::{
     retire_active_exact_attempt_after_restart, retire_matching_local_unsynced_after_restart,
-};
-use crate::shipping_save_attempt::{
-    ReadOnlySaveAttempt, discover_unresolved_exact_save_attempt, inspect_exact_save_attempt,
 };
 use control_plane_contract::profile_generation_api::{
     BRIDGE_PROFILE_GENERATION_COMMIT_PATH_TEMPLATE,
@@ -328,10 +328,8 @@ pub(crate) fn complete_active_exact_after_restart<T: MachineHttpPort>(
         // discoverer under this fresh OS admission; D1 ACTIVE_EXACT is proved.
         // Retire the small intent first, keeping the complete checkpoint
         // throughout binding, lock release and final exact retirement.
-        retire_matching_local_unsynced_after_restart(
-            root, tenant_id, profile_id, &verified,
-        )
-        .map_err(|_| RestartExactLocalCompletionError::LocalEvidenceChanged)?;
+        retire_matching_local_unsynced_after_restart(root, tenant_id, profile_id, &verified)
+            .map_err(|_| RestartExactLocalCompletionError::LocalEvidenceChanged)?;
         persist_committed_successor_binding(
             &candidate,
             tenant_id,
@@ -765,12 +763,14 @@ mod tests {
         // Simulate process death EXACTLY between checkpoint hardlink and
         // small intent retirement: two valid files belong to one attempt.
         let successor = fixture.prepared.candidate_workspace().generation_id();
-        let checkpoint = discover_unresolved_exact_save_attempt(
-            &root, &fixture.tenant, &fixture.profile,
-        )?.ok_or("matching exact pair not discoverable")?;
+        let checkpoint =
+            discover_unresolved_exact_save_attempt(&root, &fixture.tenant, &fixture.profile)?
+                .ok_or("matching exact pair not discoverable")?;
         assert_eq!(checkpoint.successor_id(), successor.as_str());
         assert!(has_unresolved_save_attempt_for_profile(
-            &root, &fixture.tenant, &fixture.profile,
+            &root,
+            &fixture.tenant,
+            &fixture.profile,
         )?);
 
         let fresh = ProfileLease::issue(
@@ -790,21 +790,33 @@ mod tests {
         };
         assert_eq!(
             complete_active_exact_after_restart(
-                &root, &fixture.tenant, &fixture.profile, successor,
-                &fresh, &mut transport,
+                &root,
+                &fixture.tenant,
+                &fixture.profile,
+                successor,
+                &fresh,
+                &mut transport,
             ),
             Ok(RestartExactLocalCompletion::ActiveExactLocalReady),
         );
         assert_eq!(transport.paths.len(), 1);
         assert!(transport.paths[0].ends_with("/generation-successor/observe"));
         assert!(!has_unresolved_save_attempt_for_profile(
-            &root, &fixture.tenant, &fixture.profile,
+            &root,
+            &fixture.tenant,
+            &fixture.profile,
         )?);
         assert_eq!(std::fs::read(source.path().join("prefs.js"))?, original);
         let bound = load_materialization_binding(
-            fixture.prepared.candidate_workspace(), &fixture.tenant, &fixture.profile, successor,
+            fixture.prepared.candidate_workspace(),
+            &fixture.tenant,
+            &fixture.profile,
+            successor,
         )?;
-        assert_eq!(bound.source_container_sha256(), checkpoint.container_digest());
+        assert_eq!(
+            bound.source_container_sha256(),
+            checkpoint.container_digest()
+        );
         Ok(())
     }
 
@@ -821,9 +833,12 @@ mod tests {
             let marker = std::fs::read_dir(root.path())?
                 .filter_map(Result::ok)
                 .map(|entry| entry.path())
-                .find(|path| path.file_name().is_some_and(|name| {
-                    name.to_string_lossy().ends_with("-local-unsynced-v1.intent")
-                }))
+                .find(|path| {
+                    path.file_name().is_some_and(|name| {
+                        name.to_string_lossy()
+                            .ends_with("-local-unsynced-v1.intent")
+                    })
+                })
                 .ok_or("missing durable local intent")?;
             if tamper == "mismatched_intent" {
                 let mut value: serde_json::Value =
@@ -833,15 +848,18 @@ mod tests {
             } else {
                 let extra = root.path().join(format!(
                     "{}.pending-foreign",
-                    marker.file_name().ok_or("intent filename")?
+                    marker
+                        .file_name()
+                        .ok_or("intent filename")?
                         .to_string_lossy()
                         .trim_end_matches("-local-unsynced-v1.intent")
                 ));
                 std::fs::write(extra, b"unexpected-third-save-evidence")?;
             }
-            assert!(discover_unresolved_exact_save_attempt(
-                &root, &fixture.tenant, &fixture.profile,
-            ).is_err());
+            assert!(
+                discover_unresolved_exact_save_attempt(&root, &fixture.tenant, &fixture.profile,)
+                    .is_err()
+            );
             let fresh = ProfileLease::issue(
                 fixture.tenant.clone(),
                 fixture.profile.clone(),
@@ -853,15 +871,20 @@ mod tests {
             let mut network = Transport::default();
             assert_eq!(
                 complete_active_exact_after_restart(
-                    &root, &fixture.tenant, &fixture.profile,
+                    &root,
+                    &fixture.tenant,
+                    &fixture.profile,
                     fixture.prepared.candidate_workspace().generation_id(),
-                    &fresh, &mut network,
+                    &fresh,
+                    &mut network,
                 ),
                 Err(RestartExactLocalCompletionError::LocalEvidenceChanged),
             );
             assert!(network.paths.is_empty());
             assert!(has_unresolved_save_attempt_for_profile(
-                &root, &fixture.tenant, &fixture.profile,
+                &root,
+                &fixture.tenant,
+                &fixture.profile,
             )?);
             assert_eq!(std::fs::read(source.path().join("prefs.js"))?, bytes_before);
         }
