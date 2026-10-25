@@ -493,7 +493,7 @@ where
                 )
             },
             before_runtime_start,
-            |_tenant, _profile| {},
+            |_tenant, _profile, _selected, _lease| false,
         )
     }
 
@@ -520,7 +520,7 @@ where
         Dl: GenerationObjectDownloadPort,
         Dl::Error: Into<GenerationObjectDownloadError>,
         BeforeRuntime: FnMut() -> Result<(), ()>,
-        ObservePending: FnMut(&profile_platform_primitives::TenantId, &ProfileId),
+        ObservePending: FnMut(&profile_platform_primitives::TenantId, &ProfileId, &GenerationId, &ProfileLease) -> bool,
     {
         self.open_with_materialization(
             claim,
@@ -558,7 +558,7 @@ where
             now,
             |_coordinator, _tenant_id, _profile_id, _generation_id, _device_id, _epoch| Ok(()),
             || Ok(()),
-            |_tenant, _profile| {},
+            |_tenant, _profile, _selected, _lease| false,
         )
     }
 
@@ -581,7 +581,7 @@ where
             u64,
         ) -> Result<(), AuthoritativeGenerationMaterializationError>,
         BeforeRuntime: FnMut() -> Result<(), ()>,
-        ObservePending: FnMut(&profile_platform_primitives::TenantId, &ProfileId),
+        ObservePending: FnMut(&profile_platform_primitives::TenantId, &ProfileId, &GenerationId, &ProfileLease) -> bool,
     {
         if self.cleanup_blocked {
             return Err(OperatorFlowError::CleanupRequired);
@@ -646,11 +646,30 @@ where
             // checked. Reconcile the exact server pointer READ-ONLY; an HTTP
             // miss, uncertain reply or commit observation is not enough to
             // declare local successor ready or re-enter the old writer fence.
-            observe_pending(
+            let recovered = observe_pending(
                 enrollment.actor().tenant_scope().tenant_id(),
                 enrollment.profile_id(),
+                enrollment.generation_id(),
+                &lease,
             );
-            return Err(self.fail_before_local_use(OperatorFailureStage::GenerationSave, lease));
+            // A recovery callback never overrides the conservative guard.
+            // Only the specific fully completed checkpoint may disappear; a
+            // torn sibling, unsafe writer or failed local binding still blocks.
+            if !recovered
+                || !matches!(
+                    has_unresolved_save_attempt_for_profile(
+                        root,
+                        enrollment.actor().tenant_scope().tenant_id(),
+                        enrollment.profile_id(),
+                    ),
+                    Ok(false)
+                )
+            {
+                return Err(self.fail_before_local_use(
+                    OperatorFailureStage::GenerationSave,
+                    lease,
+                ));
+            }
         }
 
         if let Err(reason) = ensure_materialized(
@@ -1828,7 +1847,7 @@ mod tests {
                 runtime_health_started = true;
                 Ok(())
             },
-            |_tenant, _profile| {},
+            |_tenant, _profile, _selected, _lease| false,
         );
         assert!(matches!(
             result,
@@ -1876,7 +1895,7 @@ mod tests {
                     runtime_health_started = true;
                     Ok(())
                 },
-                |_tenant, _profile| {},
+                |_tenant, _profile, _selected, _lease| false,
             );
             assert!(matches!(
                 result,
@@ -1919,7 +1938,7 @@ mod tests {
                     )
                 },
                 || Ok(()),
-                |_tenant, _profile| {},
+                |_tenant, _profile, _selected, _lease| false,
             );
             assert!(matches!(
                 result,
@@ -1948,7 +1967,7 @@ mod tests {
                 ))
             },
             || Ok(()),
-            |_tenant, _profile| {},
+            |_tenant, _profile, _selected, _lease| false,
         );
         assert!(matches!(
             result,
@@ -2215,10 +2234,13 @@ mod tests {
                     runtime_starts.set(runtime_starts.get() + 1);
                     Ok(())
                 },
-                |actual_tenant, actual_profile| {
+                |actual_tenant, actual_profile, selected_generation, fresh_lease| {
                     assert_eq!(actual_tenant.as_str(), tenant);
                     assert_eq!(actual_profile.as_str(), profile);
+                    assert_eq!(selected_generation, &fixture.generation_id);
+                    assert_eq!(fresh_lease.device_id(), &fixture.device_id);
                     observed.set(observed.get() + 1);
+                    false
                 },
             ),
             Err(OperatorFlowError::Stage(
@@ -2253,7 +2275,10 @@ mod tests {
                     unauthorized_starts.set(unauthorized_starts.get() + 1);
                     Ok(())
                 },
-                |_tenant, _profile| unauthorized_observations.set(1),
+                |_tenant, _profile, _selected, _lease| {
+                    unauthorized_observations.set(1);
+                    false
+                },
             ),
             Err(OperatorFlowError::Stage(
                 OperatorFailureStage::CoordinatorClaim
@@ -2441,7 +2466,7 @@ mod tests {
                 started_health = true;
                 Ok(())
             },
-            |_tenant, _profile| {},
+            |_tenant, _profile, _selected, _lease| false,
         );
         assert!(matches!(result, Err(OperatorFlowError::Preflight { .. })));
         assert!(!started_health);
@@ -2464,7 +2489,7 @@ mod tests {
                 started_health = true;
                 Ok(())
             },
-            |_tenant, _profile| {},
+            |_tenant, _profile, _selected, _lease| false,
         )?;
         assert!(started_health);
         assert_eq!(
@@ -2489,7 +2514,7 @@ mod tests {
                 start_attempts += 1;
                 Err(())
             },
-            |_tenant, _profile| {},
+            |_tenant, _profile, _selected, _lease| false,
         );
         assert_eq!(
             error,
