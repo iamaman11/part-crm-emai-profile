@@ -135,7 +135,32 @@ def load_lock(path: Path) -> dict[str, Any]:
     return value
 
 
-def download_exact(url: str, expected_sha256: str, target: Path) -> None:
+def download_exact(url: str, expected_sha256: str, target: Path, cache: Path | None = None) -> None:
+    """Restore/download an exact locked public distribution, never trust a cache hit.
+
+    The optional CI cache contains ONLY original public ZIP/wheel bytes indexed
+    by their locked digest, not a built/interpreted browser runtime or authority.
+    The release path (cache=None) retains the original fresh-download behavior.
+    """
+    if SHA256_RE.fullmatch(expected_sha256) is None:
+        fail("distribution expected SHA-256 is invalid")
+    cached = None
+    if cache is not None:
+        if cache.is_symlink():
+            fail("distribution cache directory is a symlink")
+        cache.mkdir(parents=True, exist_ok=True)
+        if not cache.is_dir():
+            fail("distribution cache root is not a directory")
+        cached = cache / f"{expected_sha256}.blob"
+        if cached.exists() or cached.is_symlink():
+            if cached.stat().st_size == 0 or cached.stat().st_size > MAX_DOWNLOAD_BYTES or sha256_file(cached) != expected_sha256:
+                fail("cached distribution SHA-256 mismatch: fail closed without network fallback")
+            with cached.open("rb") as source, target.open("xb") as output:
+                shutil.copyfileobj(source, output, CHUNK_BYTES)
+            if sha256_file(target) != expected_sha256:
+                fail("cached distribution changed during copy")
+            return
+
     request = urllib.request.Request(url, headers={"User-Agent": "profile-bridge-release-build/1"})
     digest = hashlib.sha256(); total = 0
     try:
@@ -152,6 +177,27 @@ def download_exact(url: str, expected_sha256: str, target: Path) -> None:
         raise RuntimeBuildError("distribution download failed") from error
     if total == 0 or digest.hexdigest() != expected_sha256:
         fail("distribution download digest mismatch")
+
+    if cached is not None:
+        # Publish only fully verified bytes; no replacement of any prior cache.
+        # A crash before the hardlink leaves a .pending entry which is NOT
+        # treated as cache authority. The next job still verifies every hit.
+        with tempfile.NamedTemporaryFile(prefix=".pending-", dir=cache, delete=False) as staged:
+            staged_path = Path(staged.name)
+            with target.open("rb") as source:
+                shutil.copyfileobj(source, staged, CHUNK_BYTES)
+            staged.flush()
+            os.fsync(staged.fileno())
+        try:
+            if sha256_file(staged_path) != expected_sha256:
+                fail("distribution cache staging changed")
+            try:
+                os.link(staged_path, cached)
+            except FileExistsError:
+                if sha256_file(cached) != expected_sha256:
+                    fail("concurrent distribution cache mismatch")
+        finally:
+            staged_path.unlink(missing_ok=True)
 
 
 def safe_member_path(name: str) -> PurePosixPath:
@@ -212,14 +258,14 @@ def rewrite_embedded_python_path(root: Path) -> None:
     path.write_text("python312.zip\n.\nLib\\site-packages\nimport site\n", encoding="utf-8", newline="\n")
 
 
-def install_python_components(build_python: Path, lock: dict[str, Any], python_root: Path) -> None:
+def install_python_components(build_python: Path, lock: dict[str, Any], python_root: Path, distribution_cache: Path | None = None) -> None:
     packages = validate_python_packages(lock["windows_distribution"]["python"], lock["components"])
     site = python_root / "Lib/site-packages"; site.mkdir(parents=True, exist_ok=False)
     with tempfile.TemporaryDirectory(prefix="camouhost-wheels-") as directory:
         wheels: list[str] = []
         for row in packages:
             target = Path(directory) / row["filename"]
-            download_exact(row["url"], row["sha256"], target); wheels.append(str(target))
+            download_exact(row["url"], row["sha256"], target, distribution_cache); wheels.append(str(target))
         command = [str(build_python), "-m", "pip", "install", "--disable-pip-version-check", "--no-cache-dir", "--no-compile", "--no-deps", "--no-index", "--no-warn-script-location", "--target", str(site), *wheels]
         if subprocess.run(command, cwd=ROOT, check=False).returncode != 0: fail("exact locked Python wheel installation failed")
 
@@ -255,7 +301,7 @@ def verify_runtime_tree(output: Path, lock: dict[str, Any], candidate_provenance
     return {"schema_version":1,"kind":"CAMOUHOST_WINDOWS_RESOLVED_RUNTIME","components":observed,"browser_candidate_sha256":candidate_provenance["artifact_sha256"],"browser_candidate_provenance_sha256":hashlib.sha256(canonical(candidate_provenance)).hexdigest(),"files":len(inventory),"inventory_sha256":hashlib.sha256(canonical(inventory)).hexdigest(),"total_size_bytes":total}
 
 
-def materialize(*, runtime_lock: Path, patch_lock: Path, runtime_source: Path, browser_candidate: Path, browser_provenance: Path, build_source_commit: str, output: Path, build_python: Path) -> None:
+def materialize(*, runtime_lock: Path, patch_lock: Path, runtime_source: Path, browser_candidate: Path, browser_provenance: Path, build_source_commit: str, output: Path, build_python: Path, distribution_cache: Path | None = None) -> None:
     if os.name != "nt": fail("Windows runtime materialization requires Windows")
     if output.exists() or output.is_symlink(): fail("runtime output must not already exist")
     if runtime_source.is_symlink() or not runtime_source.is_file(): fail("real Camouhost source missing/not regular")
@@ -265,13 +311,13 @@ def materialize(*, runtime_lock: Path, patch_lock: Path, runtime_source: Path, b
     with tempfile.TemporaryDirectory(prefix="camouhost-windows-build-") as directory:
         temp=Path(directory); python_archive=temp/"python.zip"
         python_lock=lock["windows_distribution"]["python"]
-        download_exact(python_lock["artifact_url"], python_lock["artifact_sha256"], python_archive)
+        download_exact(python_lock["artifact_url"], python_lock["artifact_sha256"], python_archive, distribution_cache)
         output.mkdir(parents=True, exist_ok=False)
         try:
             extract_exact_zip(python_archive, output/"python")
             extract_exact_zip(browser_candidate, output/"browser")
             rewrite_embedded_python_path(output/"python")
-            install_python_components(build_python, lock, output/"python")
+            install_python_components(build_python, lock, output/"python", distribution_cache)
             camouhost=output/"camouhost"; camouhost.mkdir()
             shutil.copyfile(runtime_source, camouhost/"real.py"); shutil.copyfile(runtime_lock, camouhost/"runtime-lock.json")
             (camouhost/"browser-candidate-provenance.json").write_bytes(canonical(provenance))
@@ -296,6 +342,26 @@ def self_test() -> None:
             try: extract_exact_zip(bad,root/(name+".out"))
             except RuntimeBuildError: pass
             else: fail("unsafe ZIP negative self-test unexpectedly passed")
+    # Cache hits cannot grant trust or bypass an exact digest. No network
+    # needed to prove a valid hit, nor to reject a corrupted prior cache.
+    with tempfile.TemporaryDirectory(prefix="camouhost-locked-cache-test-") as directory:
+        cache = Path(directory) / "distributions"
+        cache.mkdir()
+        data = b"immutable-locked-wheel-bytes"
+        digest = hashlib.sha256(data).hexdigest()
+        (cache / f"{digest}.blob").write_bytes(data)
+        first = Path(directory) / "restored.whl"
+        download_exact("https://invalid.example/no-download", digest, first, cache)
+        if first.read_bytes() != data:
+            fail("verified distribution cache hit did not preserve bytes")
+        (cache / f"{digest}.blob").write_bytes(b"corrupt-cache-entry")
+        try:
+            download_exact("https://invalid.example/unsafe-fallback", digest, Path(directory)/"must-not-exist.whl", cache)
+        except RuntimeBuildError:
+            if (Path(directory)/"must-not-exist.whl").exists():
+                fail("cache corruption produced a target artifact")
+        else:
+            fail("corrupt cache hit bypassed SHA-256")
     print("Windows Camouhost runtime materializer self-test passed.")
 
 
@@ -303,7 +369,7 @@ def parser() -> argparse.ArgumentParser:
     result=argparse.ArgumentParser(); commands=result.add_subparsers(dest="command",required=True)
     build=commands.add_parser("build")
     build.add_argument("--runtime-lock",type=Path,default=DEFAULT_LOCK); build.add_argument("--patch-lock",type=Path,default=DEFAULT_PATCH_LOCK); build.add_argument("--runtime-source",type=Path,default=DEFAULT_RUNTIME_SOURCE)
-    build.add_argument("--browser-candidate",type=Path,required=True); build.add_argument("--browser-provenance",type=Path,required=True); build.add_argument("--build-source-commit",required=True); build.add_argument("--output",type=Path,required=True); build.add_argument("--build-python",type=Path,required=True)
+    build.add_argument("--browser-candidate",type=Path,required=True); build.add_argument("--browser-provenance",type=Path,required=True); build.add_argument("--build-source-commit",required=True); build.add_argument("--output",type=Path,required=True); build.add_argument("--build-python",type=Path,required=True); build.add_argument("--distribution-cache",type=Path,default=None)
     commands.add_parser("self-test"); return result
 
 
@@ -311,7 +377,7 @@ def main() -> int:
     args=parser().parse_args()
     try:
         if args.command=="self-test": self_test()
-        else: materialize(runtime_lock=args.runtime_lock,patch_lock=args.patch_lock,runtime_source=args.runtime_source,browser_candidate=args.browser_candidate,browser_provenance=args.browser_provenance,build_source_commit=args.build_source_commit,output=args.output,build_python=args.build_python)
+        else: materialize(runtime_lock=args.runtime_lock,patch_lock=args.patch_lock,runtime_source=args.runtime_source,browser_candidate=args.browser_candidate,browser_provenance=args.browser_provenance,build_source_commit=args.build_source_commit,output=args.output,build_python=args.build_python,distribution_cache=args.distribution_cache)
         return 0
     except (RuntimeBuildError,OSError,subprocess.SubprocessError) as error:
         print(f"Windows runtime build error: {error}",file=sys.stderr); return 1
