@@ -17,8 +17,8 @@ use application_ports::profile_generation_successor::{
     ProfileGenerationCommitWitness, ProfileGenerationSuccessorCommitErrorClass,
     ProfileGenerationSuccessorCommitOutcome, ProfileGenerationSuccessorCommitPort,
     ProfileGenerationSuccessorCommitRequest, ProfileGenerationSuccessorObservationPort,
-    ProfileGenerationSuccessorVersionPort,
-    ProfileGenerationWriterAuthorityPort, ProfileGenerationWriterAuthorityRequest,
+    ProfileGenerationSuccessorVersionPort, ProfileGenerationWriterAuthorityPort,
+    ProfileGenerationWriterAuthorityRequest,
 };
 use application_ports::{
     DeviceExecutionBlocker, DeviceExecutionPreconditionPort, DeviceExecutionReadiness,
@@ -424,7 +424,10 @@ async fn dispatch_successor_observation(
     actor: &ActorContext,
     device_id: &DeviceId,
 ) -> Result<Response> {
-    let body = match request.json::<BridgeGenerationSuccessorObserveRequest>().await {
+    let body = match request
+        .json::<BridgeGenerationSuccessorObserveRequest>()
+        .await
+    {
         Ok(value) => value,
         Err(_) => return invalid_request(actor.correlation_id().as_str()),
     };
@@ -481,9 +484,8 @@ async fn dispatch_successor_observation(
         Ok(value) => value,
         Err(error) => return successor_failure(actor.correlation_id().as_str(), error.class()),
     };
-    let mut response = Response::from_json(&BridgeGenerationSuccessorObserveResponse {
-        active_exact,
-    })?;
+    let mut response =
+        Response::from_json(&BridgeGenerationSuccessorObserveResponse { active_exact })?;
     response.headers_mut().set("cache-control", "no-store")?;
     response.headers_mut().set("pragma", "no-cache")?;
     Ok(response)
