@@ -397,6 +397,49 @@ pub(crate) fn retire_fully_saved_attempt(
     Ok(())
 }
 
+/// Retire only the same completed exact save after the existing D1 owner
+/// confirmed ACTIVE_EXACT, the Bridge identity/binding owner accepted N+1,
+/// and its fresh OS workspace lock was released. This method grants nothing.
+pub(crate) fn retire_active_exact_attempt_after_restart(
+    root: &MaterializationRoot,
+    tenant: &TenantId,
+    profile: &ProfileId,
+    observed: &ReadOnlySaveAttempt,
+) -> Result<(), SaveAttemptEvidenceError> {
+    if observed.header.tenant != tenant.as_str()
+        || observed.header.profile != profile.as_str()
+    {
+        return Err(SaveAttemptEvidenceError::Invalid);
+    }
+    let successor = GenerationId::parse(observed.successor_id())
+        .map_err(|_| SaveAttemptEvidenceError::Invalid)?;
+    // Revalidate original browser bytes and original immutable ciphertext
+    // AFTER the local binding write; do not trust just its existence.
+    let rechecked = inspect_exact_save_attempt(root, tenant, profile, &successor)?
+        .ok_or(SaveAttemptEvidenceError::Changed)?;
+    if rechecked.header != observed.header || rechecked.ciphertext != observed.ciphertext {
+        return Err(SaveAttemptEvidenceError::Changed);
+    }
+    let candidate = root
+        .open_generation(tenant, profile, &successor)
+        .map_err(|_| SaveAttemptEvidenceError::Changed)?;
+    let binding = crate::browser_execution::load_materialization_binding(
+        &candidate, tenant, profile, &successor,
+    )
+    .map_err(|_| SaveAttemptEvidenceError::Changed)?;
+    if binding.source_container_sha256() != observed.container_digest()
+        || candidate
+            .materialization_inventory_digest()
+            .map_err(|_| SaveAttemptEvidenceError::Changed)?
+            != binding.materialized_inventory_digest()
+    {
+        return Err(SaveAttemptEvidenceError::Changed);
+    }
+    // A failed removal retains the checkpoint and blocks launch as before.
+    fs::remove_file(attempt_path(root, tenant, profile, &successor))?;
+    Ok(())
+}
+
 /// Conservative startup guard. A crash can happen before, during or after
 /// publication of an exact attempt. Both canonical and pending stage files
 /// block a fresh browser launch for that *same Profile* until the original
