@@ -810,21 +810,52 @@ where
         };
 
         let mut control = ControlPlaneGenerationSuccessor::new(transport, &mut self.coordinator);
-        let prepared = prepare_retained_generation_successor(
-            &base_record,
-            &workspace,
-            root,
-            lease.tenant_id(),
-            lease.profile_id(),
-            &lease,
-            &mut control,
-        )
-        .map_err(|_| OperatorFlowError::Stage(OperatorFailureStage::GenerationSave))?;
+        if self
+            .retained_dirty
+            .as_ref()
+            .is_some_and(|retained| retained.prepared_successor().is_none())
+        {
+            let prepared = prepare_retained_generation_successor(
+                &base_record,
+                &workspace,
+                root,
+                lease.tenant_id(),
+                lease.profile_id(),
+                &lease,
+                &mut control,
+            )
+            .map_err(|_| OperatorFlowError::Stage(OperatorFailureStage::GenerationSave))?;
+            self.retained_dirty
+                .as_mut()
+                .ok_or(OperatorFlowError::Stage(
+                    OperatorFailureStage::GenerationSave,
+                ))?
+                .remember_prepared_successor(prepared)
+                .map_err(|_| OperatorFlowError::Stage(OperatorFailureStage::GenerationSave))?;
+        }
+
+        // No re-seal/re-key/new candidate on an ordinary retry after PUT/verify/
+        // commit response loss. A different candidate or changed browser bytes
+        // invalidate this attempt rather than causing a destructive rebuild.
+        let prepared = self
+            .retained_dirty
+            .as_ref()
+            .and_then(RetainedDirtyClose::prepared_successor)
+            .ok_or(OperatorFlowError::Stage(
+                OperatorFailureStage::GenerationSave,
+            ))?;
+        if workspace.inventory().ok().as_ref() != Some(prepared.candidate_inventory())
+            || prepared.candidate_workspace().inventory().ok().as_ref()
+                != Some(prepared.candidate_inventory())
+        {
+            return Err(OperatorFlowError::Stage(OperatorFailureStage::GenerationSave));
+        }
+
         let committed = publish_verify_and_commit_successor(
             lease.tenant_id(),
             lease.profile_id(),
             base_record.generation_id(),
-            &prepared,
+            prepared,
             &lease,
             &mut control,
             upload,
@@ -836,6 +867,11 @@ where
             let retained = self
                 .retained_dirty
                 .as_mut()
+                .ok_or(OperatorFlowError::Stage(
+                    OperatorFailureStage::GenerationSave,
+                ))?;
+            let prepared = retained
+                .take_prepared_successor()
                 .ok_or(OperatorFlowError::Stage(
                     OperatorFailureStage::GenerationSave,
                 ))?;
