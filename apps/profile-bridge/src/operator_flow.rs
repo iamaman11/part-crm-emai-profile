@@ -848,7 +848,9 @@ where
             || prepared.candidate_workspace().inventory().ok().as_ref()
                 != Some(prepared.candidate_inventory())
         {
-            return Err(OperatorFlowError::Stage(OperatorFailureStage::GenerationSave));
+            return Err(OperatorFlowError::Stage(
+                OperatorFailureStage::GenerationSave,
+            ));
         }
 
         let committed = publish_verify_and_commit_successor(
