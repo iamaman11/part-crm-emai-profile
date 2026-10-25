@@ -1,9 +1,12 @@
+use application_ports::generation_objects::GenerationObjectDescriptor;
 use application_ports::profile_generation_successor::{
     ProfileGenerationSuccessorCommitError, ProfileGenerationSuccessorCommitErrorClass,
     ProfileGenerationSuccessorCommitOutcome, ProfileGenerationSuccessorCommitPort,
-    ProfileGenerationSuccessorCommitRequest,
+    ProfileGenerationSuccessorCommitRequest, ProfileGenerationSuccessorObservationPort,
 };
-use profile_platform_primitives::{ActorContext, FencingToken, TenantId};
+use profile_platform_primitives::{
+    ActorContext, DeviceId, FencingToken, GenerationId, ProfileId, TenantId,
+};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use worker::d1::D1Database;
@@ -87,14 +90,15 @@ impl D1ProfileGenerationSuccessorCommitJournal {
     async fn load(
         &self,
         tenant_id: &TenantId,
-        request: &ProfileGenerationSuccessorCommitRequest,
+        profile_id: &ProfileId,
+        base_generation_id: &GenerationId,
     ) -> Result<Option<SuccessorRow>, ProfileGenerationSuccessorCommitError> {
         query!(
             &self.database,
             LOAD_SUCCESSOR,
             tenant_id.as_str(),
-            request.profile_id().as_str(),
-            request.base_generation_id().as_str(),
+            profile_id.as_str(),
+            base_generation_id.as_str(),
         )
         .map_err(|_| dependency_failure())?
         .first::<SuccessorRow>(None)
@@ -111,7 +115,11 @@ impl D1ProfileGenerationSuccessorCommitJournal {
         validate_request(actor, request)?;
         let token_digest = fencing_token_digest(request.coordinator().fencing_token());
 
-        if let Some(row) = self.load(actor.tenant_scope().tenant_id(), request).await? {
+        if let Some(row) = self.load(
+            actor.tenant_scope().tenant_id(),
+            request.profile_id(),
+            request.base_generation_id(),
+        ).await? {
             return classify_existing(&row, actor, request, &token_digest);
         }
 
@@ -151,7 +159,11 @@ impl D1ProfileGenerationSuccessorCommitJournal {
         match insert {
             Ok(Some(_)) => {
                 let row = self
-                    .load(actor.tenant_scope().tenant_id(), request)
+                    .load(
+                        actor.tenant_scope().tenant_id(),
+                        request.profile_id(),
+                        request.base_generation_id(),
+                    )
                     .await?
                     .ok_or_else(integrity_failure)?;
                 if exact_row(&row, actor, request, &token_digest) && committed_state_is_exact(&row)
@@ -163,7 +175,11 @@ impl D1ProfileGenerationSuccessorCommitJournal {
             }
             Ok(None) => Err(integrity_failure()),
             Err(error) => {
-                if let Some(row) = self.load(actor.tenant_scope().tenant_id(), request).await? {
+                if let Some(row) = self.load(
+            actor.tenant_scope().tenant_id(),
+            request.profile_id(),
+            request.base_generation_id(),
+        ).await? {
                     return classify_existing(&row, actor, request, &token_digest);
                 }
                 Err(classify_insert_failure(&error.to_string()))
@@ -180,6 +196,55 @@ impl ProfileGenerationSuccessorCommitPort for D1ProfileGenerationSuccessorCommit
     ) -> Result<ProfileGenerationSuccessorCommitOutcome, ProfileGenerationSuccessorCommitError>
     {
         self.apply_interactive(actor, request).await
+    }
+}
+
+/// Exact read-only reconciliation after an unknown response or Bridge crash.
+///
+/// Positive means the original journal row belongs to the current actor and
+/// device and its immutable object remains the active VERIFIED generation.
+/// Never replays the expired original session/fence or writes D1.
+impl ProfileGenerationSuccessorObservationPort for D1ProfileGenerationSuccessorCommitJournal {
+    async fn exact_successor_is_committed_active(
+        &self,
+        actor: &ActorContext,
+        device_id: &DeviceId,
+        profile_id: &ProfileId,
+        base_generation_id: &GenerationId,
+        object: &GenerationObjectDescriptor,
+    ) -> Result<bool, ProfileGenerationSuccessorCommitError> {
+        if object.profile_id() != profile_id
+            || object.generation_id() == base_generation_id
+            || object.object_key()
+                != format!(
+                    "tenants/{}/profiles/{}/generations/{}.bpgc",
+                    actor.tenant_scope().tenant_id().as_str(),
+                    profile_id.as_str(),
+                    object.generation_id().as_str(),
+                )
+            || object.container_bytes() == 0
+            || !is_sha256_hex(object.metadata_digest())
+            || !is_sha256_hex(object.container_digest())
+        {
+            return Err(integrity_failure());
+        }
+        let Some(row) = self
+            .load(actor.tenant_scope().tenant_id(), profile_id, base_generation_id)
+            .await?
+        else {
+            return Ok(false);
+        };
+        Ok(row.authority_kind == "INTERACTIVE_LAUNCH"
+            && row.command_actor_id == actor.actor_id().as_str()
+            && row.device_id == device_id.as_str()
+            && row.profile_id == profile_id.as_str()
+            && row.base_generation_id == base_generation_id.as_str()
+            && row.generation_id == object.generation_id().as_str()
+            && row.object_key == object.object_key()
+            && row.metadata_digest == object.metadata_digest()
+            && row.container_digest == object.container_digest()
+            && i64_matches_u64(row.container_bytes, object.container_bytes())
+            && committed_state_is_exact(&row))
     }
 }
 
