@@ -1097,13 +1097,14 @@ mod tests {
             Some("lease_conflict")
         );
         // The existing generation-reopen owner also emits a precise generation conflict.
-        let not_verified = serde_json::to_vec(&control_plane_contract::public_api::ProblemPayload {
-            problem_type: "urn:part-crm:problem:internal-failure".to_owned(),
-            title: "Generation Not Verified".to_owned(),
-            status: 409,
-            code: "generation_not_verified".to_owned(),
-            correlation_id: request_id.as_str().to_owned(),
-        })?;
+        let not_verified =
+            serde_json::to_vec(&control_plane_contract::public_api::ProblemPayload {
+                problem_type: "urn:part-crm:problem:internal-failure".to_owned(),
+                title: "Generation Not Verified".to_owned(),
+                status: 409,
+                code: "generation_not_verified".to_owned(),
+                correlation_id: request_id.as_str().to_owned(),
+            })?;
         assert_eq!(
             safe_reopen_problem_code(&MachineHttpResponse::new(409, not_verified), &request_id),
             Some("generation_not_verified")
