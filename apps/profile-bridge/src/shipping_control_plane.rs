@@ -1140,6 +1140,27 @@ mod tests {
     }
 
     #[test]
+    fn reopen_control_port_preserves_authenticated_owner_error_categories() {
+        use crate::generation_reopen::GenerationReopenControlError as Reopen;
+        assert_eq!(
+            Reopen::from(ShippingControlPlaneError::Transport),
+            Reopen::Transport
+        );
+        assert_eq!(
+            Reopen::from(ShippingControlPlaneError::HttpStatus),
+            Reopen::HttpStatus
+        );
+        assert_eq!(
+            Reopen::from(ShippingControlPlaneError::InvalidResponse),
+            Reopen::InvalidResponse
+        );
+        assert_eq!(
+            Reopen::from(ShippingControlPlaneError::Clock),
+            Reopen::Clock
+        );
+    }
+
+    #[test]
     fn read_snapshot_replay_flag_never_substitutes_for_fresh_claim()
     -> Result<(), Box<dyn std::error::Error>> {
         let tenant_id = TenantId::parse("tenant_snapshot_01")?;
