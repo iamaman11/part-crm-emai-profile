@@ -43,6 +43,28 @@ A retained compatibility path requires a named current consumer or explicit dura
 
 An older AR implementation must conform to the current architecture, not the reverse. Still-valid AR guarantees remain mandatory; obsolete JSON/Python/Node/registry/table mechanisms may and should retire once callers and unique current invariants are zero.
 
+## 0.1. Universal local browser resilience requirement
+
+Profile-related changes MUST preserve the accepted product invariant:
+**native Firefox/Camoufox local crash resilience is the baseline; encrypted
+cloud synchronization is additive**. Browser-owned SQLite/WAL/session files
+are working state, not disposable cloud-cache scratch files. A loss of
+Bridge/Windows/network must never silently delete/overwrite that state;
+uncertain cloud transaction must never be treated as `Saved`, `Clean`
+or grounds to reopen a stale remote copy. A transient transport failure
+does not by itself prove coordinator revocation. A truly revoked fence
+still forbids privileged writes and parallel writers; unknown authority
+must preserve bytes while refusing unsafe promotion/open.
+
+Natural technical owner: [LOCAL_PROFILE_LIFECYCLE.md](LOCAL_PROFILE_LIFECYCLE.md),
+section 1.1; product acceptance owner: [PRODUCT.md](PRODUCT.md), section 2.1.
+Do not create parallel policy services or a second crash-recovery engine.
+A new full-profile checkpoint, state machine, blocking guard, clone or
+forced browser termination requires evidence that it improves the
+ordinary Windows crash/reopen outcome without expanding security authority.
+Exact Windows device parity and cross-device conflict tests are release
+evidence; CI-only proofs are not a substitute.
+
 ## 1. Single semantic owner
 
 Every current semantic fact has exactly one natural owner.
