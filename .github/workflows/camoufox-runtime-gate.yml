@@ -104,15 +104,32 @@ jobs:
           print(f'PROVENANCE_ASSET=camoufox-{target}.provenance.json')
           PY
 
-      - name: Resolve exact candidate from durable publication authority
+      # A verified published browser archive is an immutable input shared
+      # across Draft pushes. The exact patch-lock hash scopes both targets;
+      # never use prefix restore keys or cross-source fallback. Cache contents
+      # are NOT trust/evidence: SHA-256 and provenance are reverified below.
+      - name: Restore exact immutable Camoufox candidate (speed only)
+        id: candidate-cache
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0, immutable SHA
+        with:
+          path: artifacts/camoufox-candidate
+          key: s0-camoufox-published-v1-${{ runner.os }}-${{ matrix.target }}-${{ hashFiles('runtime/camouhost/camoufox-patch-lock.json') }}
+
+      - name: Download published candidate only when exact cache absent
+        if: steps.candidate-cache.outputs.cache-hit != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
-          TARGET: ${{ matrix.target }}
         run: |
           set -euo pipefail
           rm -rf artifacts/camoufox-candidate
           mkdir -p artifacts/camoufox-candidate
           gh release download "$RELEASE_ID" --repo "$GITHUB_REPOSITORY" --dir artifacts/camoufox-candidate --pattern "$ARCHIVE_ASSET" --pattern "$PROVENANCE_ASSET"
+
+      - name: ALWAYS verify cached or downloaded Camoufox candidate identity
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          set -euo pipefail
           archive="artifacts/camoufox-candidate/${ARCHIVE_ASSET}"
           provenance="artifacts/camoufox-candidate/${PROVENANCE_ASSET}"
           test -f "$archive" && test -f "$provenance"
