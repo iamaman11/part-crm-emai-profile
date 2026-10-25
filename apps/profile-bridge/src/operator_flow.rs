@@ -2200,15 +2200,21 @@ mod tests {
 
         let mut owner = operator(&fixture, FakeCamouhost::default())?;
         let observed = Cell::new(0_u32);
+        let materializations = Cell::new(0_u32);
+        let runtime_starts = Cell::new(0_u32);
         assert_eq!(
             owner.open_with_materialization(
                 &fixture.claim_uri,
                 &fixture.root,
                 UnixMillis::new(10),
                 |_coordinator, _tenant, _profile, _generation, _device, _epoch| {
-                    panic!("pending save must stop materialization")
+                    materializations.set(materializations.get() + 1);
+                    Ok(())
                 },
-                || panic!("pending save must stop browser startup"),
+                || {
+                    runtime_starts.set(runtime_starts.get() + 1);
+                    Ok(())
+                },
                 |actual_tenant, actual_profile| {
                     assert_eq!(actual_tenant.as_str(), tenant);
                     assert_eq!(actual_profile.as_str(), profile);
@@ -2220,6 +2226,8 @@ mod tests {
             ))
         );
         assert_eq!(observed.get(), 1);
+        assert_eq!(materializations.get(), 0);
+        assert_eq!(runtime_starts.get(), 0);
         assert_eq!(owner.coordinator().claimed, 1);
         assert_eq!(owner.coordinator().closed, 1);
         assert!(owner.process().actions().is_empty());
@@ -2230,15 +2238,21 @@ mod tests {
         let mut rejected = operator(&fixture, FakeCamouhost::default())?;
         rejected.coordinator.claim_fail = true;
         let unauthorized_observations = Cell::new(0_u32);
+        let unauthorized_materializations = Cell::new(0_u32);
+        let unauthorized_starts = Cell::new(0_u32);
         assert_eq!(
             rejected.open_with_materialization(
                 &fixture.claim_uri,
                 &fixture.root,
                 UnixMillis::new(11),
                 |_coordinator, _tenant, _profile, _generation, _device, _epoch| {
-                    panic!("unauthorized launch must not materialize")
+                    unauthorized_materializations.set(unauthorized_materializations.get() + 1);
+                    Ok(())
                 },
-                || panic!("unauthorized launch must not start a browser"),
+                || {
+                    unauthorized_starts.set(unauthorized_starts.get() + 1);
+                    Ok(())
+                },
                 |_tenant, _profile| unauthorized_observations.set(1),
             ),
             Err(OperatorFlowError::Stage(
@@ -2246,6 +2260,8 @@ mod tests {
             ))
         );
         assert_eq!(unauthorized_observations.get(), 0);
+        assert_eq!(unauthorized_materializations.get(), 0);
+        assert_eq!(unauthorized_starts.get(), 0);
         assert!(rejected.process().actions().is_empty());
         assert_eq!(fs::read(&pending)?, b"torn-attempt");
         Ok(())
