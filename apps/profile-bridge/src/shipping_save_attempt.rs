@@ -62,6 +62,10 @@ struct AttemptHeader {
     successor: String,
     session_fingerprint: String,
     fencing_fingerprint: String,
+    /// Original-device fingerprint; legacy records may be inspected but
+    /// cannot authorize an authenticated cross-session cloud retry.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    device_fingerprint: Option<String>,
     epoch: u64,
     source_inventory: u64,
     candidate_inventory: u64,
@@ -84,6 +88,13 @@ impl ReadOnlySaveAttempt {
     #[must_use]
     pub(crate) fn prior_epoch(&self) -> u64 {
         self.header.epoch
+    }
+
+    #[cfg(any(windows, test))]
+    #[must_use]
+    pub(crate) fn matches_fresh_device(&self, lease: &ProfileLease) -> bool {
+        let digest = credential_fingerprint(b"device", lease.device_id().as_str());
+        self.header.device_fingerprint.as_deref() == Some(digest.as_str())
     }
 
     #[must_use]
@@ -147,6 +158,10 @@ struct LocalUnsyncedIntent {
     epoch: u64,
     session_fingerprint: String,
     fencing_fingerprint: String,
+    /// Original-device fingerprint; legacy records may be inspected but
+    /// cannot authorize an authenticated cross-session cloud retry.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    device_fingerprint: Option<String>,
     source_inventory: u64,
     source_bytes: u64,
 }
@@ -179,6 +194,7 @@ pub(crate) fn persist_local_unsynced_intent(
         epoch: lease.epoch(),
         session_fingerprint: credential_fingerprint(b"session", lease.session_id().as_str()),
         fencing_fingerprint: credential_fingerprint(b"fencing", lease.fencing_token().as_str()),
+        device_fingerprint: Some(credential_fingerprint(b"device", lease.device_id().as_str())),
         source_inventory: inventory.inventory_digest(),
         source_bytes: inventory.total_bytes(),
     };
@@ -288,6 +304,9 @@ pub(crate) fn retire_local_unsynced_after_exact_checkpoint(
             != credential_fingerprint(b"session", lease.session_id().as_str())
         || intent.fencing_fingerprint
             != credential_fingerprint(b"fencing", lease.fencing_token().as_str())
+        || intent.device_fingerprint.as_deref()
+            != Some(credential_fingerprint(b"device", lease.device_id().as_str()).as_str())
+        || checkpoint.header.device_fingerprint != intent.device_fingerprint
         || intent.source_inventory != inventory.inventory_digest()
         || intent.source_bytes != inventory.total_bytes()
         || checkpoint.header.tenant != intent.tenant
@@ -330,6 +349,7 @@ fn matching_local_unsynced_for_exact(
         || exact.header.epoch != intent.epoch
         || exact.header.session_fingerprint != intent.session_fingerprint
         || exact.header.fencing_fingerprint != intent.fencing_fingerprint
+        || exact.header.device_fingerprint != intent.device_fingerprint
         || exact.header.source_inventory != intent.source_inventory
         || exact.header.candidate_bytes != intent.source_bytes
     {
@@ -441,6 +461,7 @@ pub(crate) fn persist_exact_save_attempt(
         successor: candidate.generation_id().as_str().to_owned(),
         session_fingerprint: credential_fingerprint(b"session", lease.session_id().as_str()),
         fencing_fingerprint: credential_fingerprint(b"fencing", lease.fencing_token().as_str()),
+        device_fingerprint: Some(credential_fingerprint(b"device", lease.device_id().as_str())),
         epoch: lease.epoch(),
         source_inventory: source_inventory.inventory_digest(),
         candidate_inventory: candidate_inventory.inventory_digest(),
@@ -679,6 +700,8 @@ pub(crate) fn retire_fully_saved_attempt(
             != credential_fingerprint(b"session", lease.session_id().as_str())
         || header.fencing_fingerprint
             != credential_fingerprint(b"fencing", lease.fencing_token().as_str())
+        || header.device_fingerprint.as_deref()
+            != Some(credential_fingerprint(b"device", lease.device_id().as_str()).as_str())
         || header.object_key != committed.object_key()
         || header.metadata_digest != committed.metadata_digest()
         || header.container_digest != committed.container_digest()
@@ -1134,6 +1157,7 @@ mod local_unsynced_publication_tests {
             epoch: 4,
             session_fingerprint: "a".repeat(64),
             fencing_fingerprint: "b".repeat(64),
+            device_fingerprint: Some("c".repeat(64)),
             source_inventory: 42,
             source_bytes: 11,
         };

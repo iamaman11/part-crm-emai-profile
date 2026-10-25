@@ -11,8 +11,10 @@ use crate::shipping_control_plane::{
 };
 use crate::shipping_generation_save::{
     GenerationSuccessorCommitOutcome, GenerationSuccessorControlPort,
-    GenerationUploadAuthorization, SignedGenerationObjectPutPort, SignedGenerationUploadCapability,
+    GenerationUploadAuthorization, SignedGenerationUploadCapability,
 };
+#[cfg(any(windows, test))]
+use crate::shipping_generation_save::SignedGenerationObjectPutPort;
 use crate::shipping_save_attempt::{
     ReadOnlySaveAttempt, discover_unresolved_exact_save_attempt, inspect_exact_save_attempt,
 };
@@ -309,7 +311,9 @@ pub(crate) fn complete_active_exact_after_restart<T: MachineHttpPort>(
         if attempt.base_generation_id() != selected_generation.as_str() {
             return Ok(RestartExactLocalCompletion::ServerSelectedDifferentGeneration);
         }
-        if fresh_lease.epoch() <= attempt.prior_epoch() {
+        if fresh_lease.epoch() <= attempt.prior_epoch()
+            || !attempt.matches_fresh_device(fresh_lease)
+        {
             return Err(RestartExactLocalCompletionError::WriterOrLockUnresolved);
         }
         let verdict =
@@ -429,6 +433,7 @@ where
         .ok_or(RestartExactLocalCompletionError::LocalEvidenceChanged)?;
     if original.base_generation_id() != selected_generation.as_str()
         || fresh_lease.epoch() <= original.prior_epoch()
+        || !original.matches_fresh_device(fresh_lease)
     {
         return Err(RestartExactLocalCompletionError::WriterOrLockUnresolved);
     }
@@ -1754,6 +1759,26 @@ mod tests {
             Err(RestartExactLocalCompletionError::WriterOrLockUnresolved),
         );
         assert!(stale.paths.is_empty());
+        let foreign = ProfileLease::issue(
+            fixture.tenant.clone(),
+            fixture.profile.clone(),
+            SessionId::parse("session_retry_foreign_device")?,
+            DeviceId::parse("device_retry_foreign_device")?,
+            fresh.epoch() + 1,
+            FencingToken::parse("fence_retry_foreign_device")?,
+        )?;
+        let mut no_network = Transport::default();
+        assert_eq!(
+            super::resume_exact_successor_under_fresh_lease(
+                &root, &fixture.tenant, &fixture.profile, &fixture.base,
+                &foreign, &mut no_network, &mut uploader,
+            ),
+            Err(RestartExactLocalCompletionError::WriterOrLockUnresolved),
+        );
+        assert!(no_network.paths.is_empty());
+        assert!(has_unresolved_save_attempt_for_profile(
+            &root, &fixture.tenant, &fixture.profile,
+        )?);
         Ok(())
     }
 
