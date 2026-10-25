@@ -222,8 +222,20 @@ where
     if lease.tenant_id() != tenant_id || lease.profile_id() != profile_id {
         return Err(ShippingGenerationSaveError::InvalidRetainedAuthority);
     }
-    let candidate_generation_id = successor_generation_id_for_lease(lease)
-        .map_err(|_| ShippingGenerationSaveError::CandidateIdentity)?;
+    // A durable LOCAL_UNSYNCED marker is the canonical attempt identity
+    // on the shipping close AND on renewed-lease recovery. Test-only paths
+    // lacking any pending evidence retain the original deterministic lease ID.
+    // Corrupt/staged evidence never triggers a silent fallback to another N+1.
+    let candidate_generation_id =
+        match crate::shipping_save_attempt::original_local_unsynced_successor(
+            root, source_workspace, lease,
+        )
+        .map_err(|_| ShippingGenerationSaveError::CandidateIdentity)?
+        {
+            Some(generation_id) => generation_id,
+            None => successor_generation_id_for_lease(lease)
+                .map_err(|_| ShippingGenerationSaveError::CandidateIdentity)?,
+        };
     if base_record.generation_id() == &candidate_generation_id {
         return Err(ShippingGenerationSaveError::InvalidRetainedAuthority);
     }
@@ -568,6 +580,71 @@ mod tests {
         fn drop(&mut self) {
             let _ = crate::test_support::remove_test_root(&self.root_path);
         }
+    }
+
+    #[test]
+    fn initial_close_and_crash_recovery_use_the_same_exact_successor()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let fixture = Fixture::new("original-equals-recovery")?;
+        let source = fixture.source_workspace()?;
+        crate::shipping_save_attempt::persist_local_unsynced_intent(
+            &fixture.root, &source, &fixture.lease,
+        )?;
+        let renewed = ProfileLease::issue(
+            fixture.tenant.clone(),
+            fixture.profile.clone(),
+            SessionId::parse("session_following_power_cut")?,
+            fixture.lease.device_id().clone(),
+            fixture.lease.epoch() + 1,
+            FencingToken::parse("fence_following_power_cut")?,
+        )?;
+        let expected = crate::shipping_save_attempt::deterministic_lone_unsynced_successor(
+            &fixture.root, &fixture.tenant, &fixture.profile, &fixture.base, &renewed,
+        )?.ok_or("missing candidate")?;
+        let mut control = Control {
+            events: Rc::new(RefCell::new(Vec::new())),
+            verified: false,
+            commit: GenerationSuccessorCommitOutcome::Activated,
+        };
+        let prepared = prepare_retained_generation_successor(
+            &fixture.record, &source, &fixture.root,
+            &fixture.tenant, &fixture.profile, &fixture.lease, &mut control,
+        )?;
+        assert_eq!(prepared.candidate_workspace().generation_id(), &expected);
+        assert_eq!(
+            crate::shipping_save_attempt::deterministic_lone_unsynced_successor(
+                &fixture.root, &fixture.tenant, &fixture.profile,
+                &fixture.base, &renewed,
+            )?,
+            Some(expected),
+        );
+        assert_eq!(std::fs::read(source.path().join("prefs.js"))?, b"save");
+        Ok(())
+    }
+
+    #[test]
+    fn changed_native_source_after_close_cannot_choose_another_generation()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let fixture = Fixture::new("changed-source")?;
+        let source = fixture.source_workspace()?;
+        crate::shipping_save_attempt::persist_local_unsynced_intent(
+            &fixture.root, &source, &fixture.lease,
+        )?;
+        std::fs::write(source.path().join("prefs.js"), b"native-file-mutated")?;
+        let mut control = Control {
+            events: Rc::new(RefCell::new(Vec::new())),
+            verified: false,
+            commit: GenerationSuccessorCommitOutcome::Activated,
+        };
+        assert!(matches!(
+            prepare_retained_generation_successor(
+                &fixture.record, &source, &fixture.root, &fixture.tenant,
+                &fixture.profile, &fixture.lease, &mut control,
+            ),
+            Err(ShippingGenerationSaveError::CandidateIdentity),
+        ));
+        assert_eq!(std::fs::read(source.path().join("prefs.js"))?, b"native-file-mutated");
+        Ok(())
     }
 
     #[test]

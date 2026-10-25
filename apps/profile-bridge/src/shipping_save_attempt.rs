@@ -452,6 +452,50 @@ pub(crate) fn local_unsynced_matches_fresh_lease(
         && intent.device_fingerprint.as_deref() == Some(device_digest.as_str()))
 }
 
+/// At the FIRST controlled close derive the same immutable N+1 as all later
+/// renewed-lease recovery attempts. A crash after clone creation but before
+/// checkpoint publication must NEVER change the candidate ID.
+pub(crate) fn original_local_unsynced_successor(
+    root: &MaterializationRoot,
+    source: &GenerationWorkspace,
+    lease: &ProfileLease,
+) -> Result<Option<GenerationId>, SaveAttemptEvidenceError> {
+    let tenant = lease.tenant_id();
+    let profile = lease.profile_id();
+    let intent = match read_local_unsynced(&local_unsynced_path(root, tenant, profile)) {
+        Ok(value) => value,
+        Err(SaveAttemptEvidenceError::Io(std::io::ErrorKind::NotFound)) => {
+            return if has_unresolved_save_attempt_for_profile(root, tenant, profile)? {
+                Err(SaveAttemptEvidenceError::Changed)
+            } else {
+                Ok(None)
+            };
+        }
+        Err(error) => return Err(error),
+    };
+    let inventory = source
+        .inventory()
+        .map_err(|_| SaveAttemptEvidenceError::Changed)?;
+    if intent.schema != "bridge-p3-local-unsynced-v1"
+        || intent.tenant != tenant.as_str()
+        || intent.profile != profile.as_str()
+        || intent.base_generation != source.generation_id().as_str()
+        || intent.epoch != lease.epoch()
+        || intent.epoch == 0
+        || intent.session_fingerprint
+            != credential_fingerprint(b"session", lease.session_id().as_str())
+        || intent.fencing_fingerprint
+            != credential_fingerprint(b"fencing", lease.fencing_token().as_str())
+        || intent.device_fingerprint.as_deref()
+            != Some(credential_fingerprint(b"device", lease.device_id().as_str()).as_str())
+        || intent.source_inventory != inventory.inventory_digest()
+        || intent.source_bytes != inventory.total_bytes()
+    {
+        return Err(SaveAttemptEvidenceError::Changed);
+    }
+    Ok(Some(deterministic_lone_successor(&intent)?))
+}
+
 /// The generation is fixed by original immutable local-close evidence,
 /// NOT by a subsequently renewed session/fence. Repeated authorized startups
 /// can never silently choose N+2 after a partly created N+1.

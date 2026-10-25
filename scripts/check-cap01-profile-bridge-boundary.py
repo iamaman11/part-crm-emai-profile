@@ -63,8 +63,10 @@ REQUIRED_COMPOSITION_MARKERS = (
     "ManagedCamouhostProcess::pair(",
     ".close_observer()",
     "ProfileBridgeOperator::new(",
-    ".open_authoritative_with_runtime_health_and_pending_observation(",
+    ".open_authoritative_with_runtime_health_and_pending_recovery(",
     "complete_active_exact_after_restart(",
+    "resume_exact_successor_under_fresh_lease(",
+    "resume_lone_local_unsynced_under_fresh_lease(",
     ".observe_controlled_close(&session_id)",
     ".close_with_durable_local_intent(&materialization_root, now()?)",
     ".save_retained_successor(",
@@ -79,6 +81,11 @@ REQUIRED_COMPOSITION_MARKERS = (
 # Marker checks supplement Rust owner tests; they cannot grant an effect.
 REQUIRED_RECOVERY_OWNER_MARKERS = (
     "fn complete_active_exact_after_restart<",
+    "fn resume_exact_successor_under_fresh_lease<",
+    "fn resume_lone_local_unsynced_under_fresh_lease<",
+    "deterministic_lone_unsynced_successor(",
+    "persist_exact_save_attempt_from_lone_intent(",
+    "request_local_unsynced_retry_decision(",
     "fresh_lease.tenant_id() != tenant_id",
     "fresh_lease.profile_id() != profile_id",
     "attempt.successor_id() != selected_generation.as_str()",
@@ -350,8 +357,10 @@ def write_fixture(root: Path) -> None:
         "// ManagedCamouhostProcess::pair(\n"
         "// .close_observer()\n"
         "// ProfileBridgeOperator::new(\n"
-        "// .open_authoritative_with_runtime_health_and_pending_observation(\n"
+        "// .open_authoritative_with_runtime_health_and_pending_recovery(\n"
         "// complete_active_exact_after_restart(\n"
+        "// resume_exact_successor_under_fresh_lease(\n"
+        "// resume_lone_local_unsynced_under_fresh_lease(\n"
         "// .observe_controlled_close(&session_id)\n"
         "// .close_with_durable_local_intent(&materialization_root, now()?)\n"
         "// .save_retained_successor(\n"
@@ -562,7 +571,7 @@ def self_test() -> None:
 
         composition.write_text(
             safe_composition.replace(
-                "// .open_authoritative_with_runtime_health_and_pending_observation(\n",
+                "// .open_authoritative_with_runtime_health_and_pending_recovery(\n",
                 "// .open(\n",
             ),
             encoding="utf-8",
@@ -572,7 +581,7 @@ def self_test() -> None:
 
         composition.write_text(
             safe_composition.replace(
-                "// .open_authoritative_with_runtime_health_and_pending_observation(\n",
+                "// .open_authoritative_with_runtime_health_and_pending_recovery(\n",
                 "// .open_authoritative_with_runtime_health(\n",
             ),
             encoding="utf-8",
@@ -586,6 +595,36 @@ def self_test() -> None:
         )
         expect_rejected(root, "shipping launch does not invoke owned postcommit exact observation")
         composition.write_text(safe_composition, encoding="utf-8")
+
+        composition.write_text(
+            safe_composition.replace(
+                "// resume_lone_local_unsynced_under_fresh_lease(\n",
+                "",
+            ),
+            encoding="utf-8",
+        )
+        expect_rejected(root, "missing lone LOCAL_UNSYNCED first-sealing path")
+        composition.write_text(safe_composition, encoding="utf-8")
+
+        composition.write_text(
+            safe_composition.replace(
+                "// resume_exact_successor_under_fresh_lease(\n",
+                "",
+            ),
+            encoding="utf-8",
+        )
+        expect_rejected(root, "missing exact sealed successor retry path")
+        composition.write_text(safe_composition, encoding="utf-8")
+
+        recovery.write_text(
+            safe_recovery.replace(
+                "// persist_exact_save_attempt_from_lone_intent(\n",
+                "",
+            ),
+            encoding="utf-8",
+        )
+        expect_rejected(root, "missing durably published first sealed checkpoint")
+        recovery.write_text(safe_recovery, encoding="utf-8")
 
         recovery.write_text(
             safe_recovery.replace("// persist_committed_successor_binding(\n", ""),
