@@ -12,6 +12,79 @@ for Profile Bridge.
 It does not own Profile ACL, server device authorization, coordinator state, cloud generation commit or
 Release/Capability admission. Those concerns are composed through their natural owners.
 
+## 1.1. Permanent local-first crash-resilience invariant (accepted 2026-10-25)
+
+**Local Firefox/Camoufox crash resilience is the baseline product property; encrypted cloud
+synchronization is an additive, independently recoverable layer.** A managed browser Profile
+must not become less durable or ordinarily less recoverable on the same Windows device solely
+because Bridge, the coordinator, the network, or the cloud-save transport failed.
+
+This is a **mandatory prospective invariant**, not a statement that the current shipped
+Bridge already conforms. Native Firefox/SQLite session/WAL recovery is the first owned,
+safe recovery mechanism for an interrupted local writer. The Bridge MUST:
+
+- Retain the same working `user_data` bytes, including browser-managed SQLite/WAL,
+  IndexedDB, extension state, session files and original runtime locks, across OS shutdown,
+  Bridge crash, browser crash, and uncertain network/cloud save. No startup, updater, cache
+  sweeper, re-materializer or retry may silently delete, overwrite, reset or declare that
+  working state clean. Fresh on-disk evidence belongs to the local profile owner, not
+  the R2 object or a hash alone.
+- On next launch on the **same Windows device**, distinguish *crashed process* from
+  *active writer* using native OS handle/process evidence; obtain fresh, currently
+  authorized Profile/tenant/device access and current coordinator ownership before
+  resuming normal browser execution. Reuse the original local working state **only**
+  after checking that there is no incompatible newer cloud generation or competing
+  writer and that runtime/profile identity and policy are compatible. Do not simply
+  re-download the old remote generation onto unsynced local data.
+- Reuse the browser's native crash recovery against that retained working directory
+  whenever an authorized restart is safe. Clone/isolate only for destructive repair,
+  forensic investigation or migration; clone-only is **not** a mandate to replace the
+  everyday working profile with a fresh copy after every crash.
+- Treat a transient heartbeat timeout/dependency outage as `AUTHORITY_UNKNOWN`, **not**
+  affirmative lease revocation or safe `CLEAN`. Preserve process/user-state
+  evidence. If the coordinator cannot prove exclusive authorization, do not issue
+  remote commits or falsely grant a new writer; use an explicitly tested
+  bounded authority-loss response that maximizes local state preservation.
+  A positively revoked/stale/expired fence forbids further privileged writes;
+  graceful quiescence should be preferred when safe, with forced termination only
+  for evidenced security/process-safety necessity. No unchecked offline lease
+  extension, duplicate writers, hidden reconciliation, or stale token reuse.
+- Separate `LOCAL_WORKING` (local browser data remains recoverable),
+  `LOCAL_UNSYNCED` (local changes not yet cloud-confirmed),
+  `CLOUD_VERIFIED` (authenticated immutable generation committed) and
+  `RECOVERY_OR_CONFLICT` (cannot yet safely reopen/publish). These are distinct
+  facts, not automatic state aliases. `Saved` requires the accepted exact
+  authoritative cloud commit; a cloud hash or local snapshot alone cannot prove
+  Firefox browser usability (`WORKING`).
+- Make the cloud operation bounded and independent of browsing: after a verified
+  quiescent snapshot boundary, stream the profile in bounded memory into an immutable
+  encrypted generation, exact-verify its storage object, CAS the active cloud
+  pointer and retain recoverable N-1 with separately restorable keys. Large
+  256/512 MiB profiles, quotas, 100 sequential saves and 100 profiles are
+  acceptance requirements; the current 64 MiB full-RAM snapshot is not a
+  compliant design.
+- Retain original/uncertain local bytes until a safe, user-visible recovery or
+  conflict decision is established; clean-cache/quota reclamation may touch only
+  *proven* expendable copies, never a sole local working copy or unverified attempt.
+
+**Conflict/authority boundary:** local availability is not blanket permission to start
+a revoked user/device or an indefinitely offline profile. Availability can be
+`RECOVERY_OR_CONFLICT` with data retained if a fresh authorization or single-writer
+proof cannot be obtained. Cross-device conflict must be preserved as two durable
+branches, not automatically merged SQLite or silently overwritten. This invariant
+changes the *reliability target*, not the accepted ACL/CNG, fencing, CAS, identity,
+provider-effect, or Production authorization owner.
+
+**Required executable parity:** actual installed Windows, real pinned Camoufox, with
+stable profile identity and fixture hashes: normal GUI close, Windows shutdown with
+browser still open, unexpected power loss, abrupt browser/Bridge termination,
+network outage/timeout and restoration, ambiguous PUT/commit response, exact
+same-device recovery, cross-device concurrency, cold N-1/key restore, 256/512 MiB
+SQLite/WAL/IndexedDB profile, 100 saves and 100 profiles. Record whether original
+working bytes survive, whether normal browser recovery reopens correctly, cloud
+truth, recovery steps, memory/disk overhead and any contradictory writer authority.
+Green repository CI or a verified cloud object does not replace this proof.
+
 ## 2. Shipping Launch Ordering
 
 The shipping Bridge reaches local mutation only after the remote launch authority has been redeemed and
@@ -125,8 +198,15 @@ While a browser is active:
 1. the supervised process must still belong to the exact active session;
 2. the Bridge heartbeats the exact coordinator lease/session/epoch/fence;
 3. heartbeat success preserves ownership;
-4. process loss or heartbeat/fence loss force-terminates the runtime and enters recovery/terminal cleanup;
-5. the browser never continues running after distributed ownership is lost.
+4. an independently evidenced local process crash preserves working Profile files and
+   records recovery, without deleting native Firefox WAL/session data;
+5. transport timeout/dependency failure alone does not prove fence revocation: it
+   enters explicit uncertain-authority handling, preserves local bytes, forbids
+   unproven cloud commit and does not claim a Clean release;
+6. proven lease revocation/expiry/loss of exclusive writer authority requires a bounded,
+   state-preserving stop/quiescence with no further unauthorized writes and no
+   second writer; the current blanket force-terminate-on-heartbeat-error path must
+   be replaced and validated before this contract is accepted in shipping.
 
 A failed force termination, local-lock release or coordinator release is retained as explicit cleanup
 failure and blocks new ownership until recovered.
@@ -168,14 +248,24 @@ successor is uploaded, exactly verified and authoritatively committed, or until 
 outcome is recorded. The confirmed-save/reopen semantics are owned by the subsequent save/reopen
 application transaction, not by launch admission itself.
 
-## 9. Clone-Only Recovery
+## 9. Local crash recovery and clone-only destructive repair
 
-Recovery never mutates the source generation in place merely to obtain a launchable workspace. A fresh
-recovery clone records the source inventory, copies only accepted entries and proves source/clone
-integrity under the owned recovery contract.
+An interrupted Firefox writer does not automatically mean its local working profile is
+corrupt. Before any repair or replacement, preserve its original bytes and prove the
+old process has exited, current device/user/tenant rights are valid, there is no
+competing writer or unhandled remote successor, and the pinned runtime can safely
+attempt Firefox's normal SQLite/WAL/session recovery on the same working directory.
 
-Browser database semantic repair, when required, executes only on an isolated recovery candidate and
-must not silently rewrite the last confirmed generation.
+**Clone-only applies to destructive repair/migration/forensics**, not to every ordinary
+same-device crash restart. If repair is needed, a fresh recovery clone records
+source inventory, copies accepted entries and proves source/clone integrity. Browser
+database semantic repair only runs on the isolated candidate, never silently changes
+the last confirmed cloud generation or destroys unsynced local work.
+
+When authorization, cloud predecessor/successor or ownership is unresolved, the local
+bytes stay available for controlled recovery but a normal browser writer is **blocked**
+until the correct authority can be established. This is a known usability gap in
+current shipping code, not permission to bypass existing fences.
 
 ## 10. Forgotten-Window And Quota Policy
 
