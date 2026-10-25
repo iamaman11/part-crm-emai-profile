@@ -1222,8 +1222,7 @@ mod tests {
     use super::{
         AuthoritativeGenerationMaterializationError, BrowserLaunchPreflightPort,
         DeviceAuthenticationPort, EnrollmentPort, OperationalRejectionReason, OperatorEnrollment,
-        OperatorFailureStage, OperatorFlowError,
-        ProfileBridgeOperator, RuntimeBundleSelectionPort,
+        OperatorFailureStage, OperatorFlowError, ProfileBridgeOperator, RuntimeBundleSelectionPort,
     };
     use crate::local_profile::{
         BridgeWorkspaceLock, GenerationWorkspace, LocalGenerationState, LocalProfileError,
