@@ -1647,8 +1647,7 @@ mod tests {
                 UnixMillis::new(10),
                 |_coordinator, tenant, profile, generation, _device, _epoch| {
                     if create_during_attempt {
-                        root.create_generation(tenant, profile, generation)
-                            .expect("fault-injected foreign workspace");
+                        assert!(root.create_generation(tenant, profile, generation).is_ok());
                     }
                     Err(
                         AuthoritativeGenerationMaterializationError::ControlPlaneBeforeLocalUse(
