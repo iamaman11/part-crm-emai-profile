@@ -529,8 +529,23 @@ mod tests {
                 .root
                 .create_generation(&fixture.tenant_id, &fixture.profile_id, &source_id)?;
         fs::create_dir_all(source.path().join("storage/default"))?;
+        fs::create_dir_all(source.path().join("user_data/storage/default"))?;
         fs::write(source.path().join("prefs.js"), b"prefs")?;
         fs::write(source.path().join("storage/default/state.bin"), b"state")?;
+        // Full N and LKG snapshots must carry both the pinned Camoufox identity
+        // and the actual Firefox database/WAL state. A lock artifact is not data.
+        fs::write(source.path().join("camoufox-config.json"), b"stable-fingerprint")?;
+        fs::write(
+            source.path().join(".profile-browser-identity-v1"),
+            b"stable-identity-manifest",
+        )?;
+        fs::write(source.path().join("user_data/cookies.sqlite"), b"cookies-db")?;
+        fs::write(source.path().join("user_data/cookies.sqlite-wal"), b"cookies-wal")?;
+        fs::write(
+            source.path().join("user_data/storage/default/indexeddb"),
+            b"indexed-db",
+        )?;
+        fs::write(source.path().join("user_data/parent.lock"), b"stale-os-lock")?;
         let inventory = source.inventory()?;
         let snapshot = encode_workspace_snapshot(&source, &inventory)?;
         let target = materialize_workspace_snapshot(
@@ -546,6 +561,16 @@ mod tests {
             fs::read(target.path().join("storage/default/state.bin"))?,
             b"state"
         );
+        for (relative, expected) in [
+            ("camoufox-config.json", b"stable-fingerprint".as_slice()),
+            (".profile-browser-identity-v1", b"stable-identity-manifest".as_slice()),
+            ("user_data/cookies.sqlite", b"cookies-db".as_slice()),
+            ("user_data/cookies.sqlite-wal", b"cookies-wal".as_slice()),
+            ("user_data/storage/default/indexeddb", b"indexed-db".as_slice()),
+        ] {
+            assert_eq!(fs::read(target.path().join(relative))?, expected);
+        }
+        assert!(!target.path().join("user_data/parent.lock").exists());
         fixture.cleanup();
         Ok(())
     }
