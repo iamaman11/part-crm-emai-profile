@@ -194,7 +194,10 @@ pub(crate) fn persist_local_unsynced_intent(
         epoch: lease.epoch(),
         session_fingerprint: credential_fingerprint(b"session", lease.session_id().as_str()),
         fencing_fingerprint: credential_fingerprint(b"fencing", lease.fencing_token().as_str()),
-        device_fingerprint: Some(credential_fingerprint(b"device", lease.device_id().as_str())),
+        device_fingerprint: Some(credential_fingerprint(
+            b"device",
+            lease.device_id().as_str(),
+        )),
         source_inventory: inventory.inventory_digest(),
         source_bytes: inventory.total_bytes(),
     };
@@ -461,7 +464,10 @@ pub(crate) fn persist_exact_save_attempt(
         successor: candidate.generation_id().as_str().to_owned(),
         session_fingerprint: credential_fingerprint(b"session", lease.session_id().as_str()),
         fencing_fingerprint: credential_fingerprint(b"fencing", lease.fencing_token().as_str()),
-        device_fingerprint: Some(credential_fingerprint(b"device", lease.device_id().as_str())),
+        device_fingerprint: Some(credential_fingerprint(
+            b"device",
+            lease.device_id().as_str(),
+        )),
         epoch: lease.epoch(),
         source_inventory: source_inventory.inventory_digest(),
         candidate_inventory: candidate_inventory.inventory_digest(),

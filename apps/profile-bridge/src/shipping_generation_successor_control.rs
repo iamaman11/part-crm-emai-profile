@@ -9,12 +9,12 @@ use crate::local_profile::{BridgeWorkspaceLock, LocalProfileError};
 use crate::shipping_control_plane::{
     MachineHttpMethod, MachineHttpPort, ShippingControlPlaneError,
 };
+#[cfg(any(windows, test))]
+use crate::shipping_generation_save::SignedGenerationObjectPutPort;
 use crate::shipping_generation_save::{
     GenerationSuccessorCommitOutcome, GenerationSuccessorControlPort,
     GenerationUploadAuthorization, SignedGenerationUploadCapability,
 };
-#[cfg(any(windows, test))]
-use crate::shipping_generation_save::SignedGenerationObjectPutPort;
 use crate::shipping_save_attempt::{
     ReadOnlySaveAttempt, discover_unresolved_exact_save_attempt, inspect_exact_save_attempt,
 };
@@ -1770,14 +1770,21 @@ mod tests {
         let mut no_network = Transport::default();
         assert_eq!(
             super::resume_exact_successor_under_fresh_lease(
-                &root, &fixture.tenant, &fixture.profile, &fixture.base,
-                &foreign, &mut no_network, &mut uploader,
+                &root,
+                &fixture.tenant,
+                &fixture.profile,
+                &fixture.base,
+                &foreign,
+                &mut no_network,
+                &mut uploader,
             ),
             Err(RestartExactLocalCompletionError::WriterOrLockUnresolved),
         );
         assert!(no_network.paths.is_empty());
         assert!(has_unresolved_save_attempt_for_profile(
-            &root, &fixture.tenant, &fixture.profile,
+            &root,
+            &fixture.tenant,
+            &fixture.profile,
         )?);
         Ok(())
     }
