@@ -66,18 +66,24 @@ impl core::fmt::Display for AuthoritativeGenerationMaterializationError {
             }
             Self::Download(_) => "authoritative generation object download failed",
             Self::ReadBeforeLocalUse(reason) => match reason {
-                AuthoritativeGenerationPreWriteError::DescriptorMismatch =>
-                    "download capability does not name the requested authority",
-                AuthoritativeGenerationPreWriteError::Download(_) =>
-                    "authoritative generation object download failed",
-                AuthoritativeGenerationPreWriteError::MetadataMismatch =>
-                    "encrypted generation metadata does not match server authority",
-                AuthoritativeGenerationPreWriteError::OpeningControl(_) =>
-                    "authoritative generation opening request failed",
-                AuthoritativeGenerationPreWriteError::OpeningMaterialMismatch =>
-                    "opening material does not match the authenticated encrypted metadata",
-                AuthoritativeGenerationPreWriteError::Decryption =>
-                    "authoritative generation decryption failed",
+                AuthoritativeGenerationPreWriteError::DescriptorMismatch => {
+                    "download capability does not name the requested authority"
+                }
+                AuthoritativeGenerationPreWriteError::Download(_) => {
+                    "authoritative generation object download failed"
+                }
+                AuthoritativeGenerationPreWriteError::MetadataMismatch => {
+                    "encrypted generation metadata does not match server authority"
+                }
+                AuthoritativeGenerationPreWriteError::OpeningControl(_) => {
+                    "authoritative generation opening request failed"
+                }
+                AuthoritativeGenerationPreWriteError::OpeningMaterialMismatch => {
+                    "opening material does not match the authenticated encrypted metadata"
+                }
+                AuthoritativeGenerationPreWriteError::Decryption => {
+                    "authoritative generation decryption failed"
+                }
             },
             Self::DescriptorMismatch => "download capability does not name the requested authority",
             Self::MetadataMismatch => {
@@ -102,7 +108,10 @@ impl AuthoritativeGenerationMaterializationError {
     /// only when the initial exact workspace was absent. Caller must recheck exact absence.
     #[must_use]
     pub const fn proves_no_local_write_and_absent_workspace(self) -> bool {
-        matches!(self, Self::ControlPlaneBeforeLocalUse(_) | Self::ReadBeforeLocalUse(_))
+        matches!(
+            self,
+            Self::ControlPlaneBeforeLocalUse(_) | Self::ReadBeforeLocalUse(_)
+        )
     }
 }
 
@@ -190,18 +199,24 @@ where
             AuthoritativeGenerationMaterializationError::ReadBeforeLocalUse(reason)
         } else {
             match reason {
-                AuthoritativeGenerationPreWriteError::DescriptorMismatch =>
-                    AuthoritativeGenerationMaterializationError::DescriptorMismatch,
-                AuthoritativeGenerationPreWriteError::Download(reason) =>
-                    AuthoritativeGenerationMaterializationError::Download(reason),
-                AuthoritativeGenerationPreWriteError::MetadataMismatch =>
-                    AuthoritativeGenerationMaterializationError::MetadataMismatch,
-                AuthoritativeGenerationPreWriteError::OpeningControl(reason) =>
-                    AuthoritativeGenerationMaterializationError::ControlPlane(reason),
-                AuthoritativeGenerationPreWriteError::OpeningMaterialMismatch =>
-                    AuthoritativeGenerationMaterializationError::OpeningMaterialMismatch,
-                AuthoritativeGenerationPreWriteError::Decryption =>
-                    AuthoritativeGenerationMaterializationError::Decryption,
+                AuthoritativeGenerationPreWriteError::DescriptorMismatch => {
+                    AuthoritativeGenerationMaterializationError::DescriptorMismatch
+                }
+                AuthoritativeGenerationPreWriteError::Download(reason) => {
+                    AuthoritativeGenerationMaterializationError::Download(reason)
+                }
+                AuthoritativeGenerationPreWriteError::MetadataMismatch => {
+                    AuthoritativeGenerationMaterializationError::MetadataMismatch
+                }
+                AuthoritativeGenerationPreWriteError::OpeningControl(reason) => {
+                    AuthoritativeGenerationMaterializationError::ControlPlane(reason)
+                }
+                AuthoritativeGenerationPreWriteError::OpeningMaterialMismatch => {
+                    AuthoritativeGenerationMaterializationError::OpeningMaterialMismatch
+                }
+                AuthoritativeGenerationPreWriteError::Decryption => {
+                    AuthoritativeGenerationMaterializationError::Decryption
+                }
             }
         }
     };
@@ -211,13 +226,17 @@ where
         || capability.container_bytes() == 0
         || capability.expires_seconds() == 0
     {
-        return Err(prewrite_refusal(AuthoritativeGenerationPreWriteError::DescriptorMismatch));
+        return Err(prewrite_refusal(
+            AuthoritativeGenerationPreWriteError::DescriptorMismatch,
+        ));
     }
     let source_container_sha256 = encode_sha256(capability.container_digest());
 
     let container = downloader
         .download_generation_object(&capability)
-        .map_err(|error| prewrite_refusal(AuthoritativeGenerationPreWriteError::Download(error.into())))?;
+        .map_err(|error| {
+            prewrite_refusal(AuthoritativeGenerationPreWriteError::Download(error.into()))
+        })?;
     let inspected = inspect_generation_metadata_prelude(&container)
         .map_err(|_| prewrite_refusal(AuthoritativeGenerationPreWriteError::MetadataMismatch))?;
     let metadata = inspected.metadata();
@@ -227,16 +246,24 @@ where
         || metadata.object_key() != expected_object_key
         || inspected.metadata_digest().bytes() != capability.metadata_digest()
     {
-        return Err(prewrite_refusal(AuthoritativeGenerationPreWriteError::MetadataMismatch));
+        return Err(prewrite_refusal(
+            AuthoritativeGenerationPreWriteError::MetadataMismatch,
+        ));
     }
     let metadata_prelude = container
         .get(..inspected.prelude_bytes())
         .ok_or_else(|| prewrite_refusal(AuthoritativeGenerationPreWriteError::MetadataMismatch))?;
     let opening_key = control
         .opening_material(tenant_id, profile_id, metadata_prelude)
-        .map_err(|error| prewrite_refusal(AuthoritativeGenerationPreWriteError::OpeningControl(error.into())))?;
+        .map_err(|error| {
+            prewrite_refusal(AuthoritativeGenerationPreWriteError::OpeningControl(
+                error.into(),
+            ))
+        })?;
     if opening_key.key_id() != metadata.key_id() {
-        return Err(prewrite_refusal(AuthoritativeGenerationPreWriteError::OpeningMaterialMismatch));
+        return Err(prewrite_refusal(
+            AuthoritativeGenerationPreWriteError::OpeningMaterialMismatch,
+        ));
     }
 
     let opened = open_generation_expected(
@@ -322,8 +349,7 @@ mod tests {
     use crate::browser_execution::{load_materialization_binding, persist_materialization_binding};
     use crate::generation_reopen::{
         GenerationDownloadCapability, GenerationObjectDownloadError, GenerationObjectDownloadPort,
-        GenerationReopenControlError,
-        GenerationReopenControlPort,
+        GenerationReopenControlError, GenerationReopenControlPort,
     };
     use crate::generation_snapshot::encode_workspace_snapshot;
     use crate::local_profile::{BROWSER_IDENTITY_RECORD_FILE, MaterializationRoot};
@@ -582,7 +608,8 @@ mod tests {
                 1,
                 &mut control,
                 &mut DisconnectedObjectGet(reason),
-            ).expect_err("object GET failed before local write");
+            )
+            .expect_err("object GET failed before local write");
             assert_eq!(
                 error,
                 AuthoritativeGenerationMaterializationError::ReadBeforeLocalUse(
@@ -635,7 +662,8 @@ mod tests {
             1,
             &mut control,
             &mut DisconnectedObjectGet,
-        ).expect_err("incomplete workspace retained");
+        )
+        .expect_err("incomplete workspace retained");
         assert_eq!(
             error,
             AuthoritativeGenerationMaterializationError::Download(
@@ -727,7 +755,7 @@ mod tests {
     }
 
     #[test]
-    fn opening_material_invalid_response_is_typed_and_cannot_claim_clean_release()
+    fn opening_material_invalid_response_is_typed_and_preserves_no_use_without_workspace()
     -> Result<(), Box<dyn std::error::Error>> {
         let fixture = Fixture::new()?;
         let mut control = fixture.control();
@@ -747,8 +775,8 @@ mod tests {
                 &mut control,
                 &mut downloader,
             ),
-            Err(AuthoritativeGenerationMaterializationError::ControlPlane(
-                GenerationReopenControlError::InvalidResponse
+            Err(AuthoritativeGenerationMaterializationError::ReadBeforeLocalUse(
+                AuthoritativeGenerationPreWriteError::OpeningControl(GenerationReopenControlError::InvalidResponse)
             ))
         );
         assert_eq!(downloader.calls, 1);
@@ -1041,9 +1069,11 @@ mod tests {
                 &mut control,
                 &mut downloader,
             ),
-            Err(AuthoritativeGenerationMaterializationError::ReadBeforeLocalUse(
-                AuthoritativeGenerationPreWriteError::MetadataMismatch,
-            ))
+            Err(
+                AuthoritativeGenerationMaterializationError::ReadBeforeLocalUse(
+                    AuthoritativeGenerationPreWriteError::MetadataMismatch,
+                )
+            )
         );
         assert_eq!(control.opening_calls, 0);
         assert!(
@@ -1081,9 +1111,11 @@ mod tests {
                 &mut control,
                 &mut downloader,
             ),
-            Err(AuthoritativeGenerationMaterializationError::ReadBeforeLocalUse(
-                AuthoritativeGenerationPreWriteError::DescriptorMismatch,
-            ))
+            Err(
+                AuthoritativeGenerationMaterializationError::ReadBeforeLocalUse(
+                    AuthoritativeGenerationPreWriteError::DescriptorMismatch,
+                )
+            )
         );
         assert_eq!(downloader.calls, 0);
         assert_eq!(control.opening_calls, 0);
