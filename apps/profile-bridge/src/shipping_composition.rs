@@ -135,7 +135,10 @@ mod windows {
     use crate::shipping_control_plane::{
         ControlPlaneCoordinator, ControlPlaneEnrollment, ControlPlaneLeaseTiming,
     };
-    use crate::shipping_generation_successor_control::observe_discovered_successor_after_restart;
+    use crate::shipping_generation_successor_control::{
+        RestartExactCommitObservation, RestartExactLocalCompletion,
+        complete_active_exact_after_restart,
+    };
     use crate::shipping_preflight::ShippingBrowserLaunchPreflight;
     use crate::user_diagnostics::PendingSaveReadOnlyDiagnosis;
     use crate::windows_delivery_handoff::{
@@ -354,25 +357,61 @@ mod windows {
                         .transpose()?;
                     Ok(())
                 },
-                |tenant, profile| {
-                    // Only after fresh device/CNG auth, enrollment and exact
-                    // coordinator lease. No use of the previous fencing token;
-                    // never auto-PUT/commit without new authorized recovery.
-                    let diagnosis = PendingSaveReadOnlyDiagnosis::from_observation(
-                        observe_discovered_successor_after_restart(
-                            &materialization_root,
-                            tenant,
-                            profile,
-                            &mut recovery_observation_transport,
-                        ),
-                    );
-                    // Static, redacted facts + a non-executable suggested step.
-                    // The launch guard remains authoritative and fail-closed.
-                    eprintln!(
-                        "{};NEXT_SAFE_STEP={}",
-                        diagnosis.code(),
-                        diagnosis.next_safe_step()
-                    );
+                |tenant, profile, selected_generation, fresh_lease| {
+                    // The existing operator already proved fresh CNG/ACL,
+                    // tenant/Profile enrollment and exclusive coordinator
+                    // writer claim. Only exact ACTIVE_EXACT may repair an
+                    // unchanged N+1 binding; never PUT/commit with old fence.
+                    match complete_active_exact_after_restart(
+                        &materialization_root,
+                        tenant,
+                        profile,
+                        selected_generation,
+                        fresh_lease,
+                        &mut recovery_observation_transport,
+                    ) {
+                        Ok(RestartExactLocalCompletion::ActiveExactLocalReady) => {
+                            eprintln!(
+                                "P3_RECOVERY=ACTIVE_EXACT_LOCAL_READY;NEXT_SAFE_STEP=CONTINUE_OPEN"
+                            );
+                            true
+                        }
+                        Ok(RestartExactLocalCompletion::NotActiveExact) => {
+                            let diagnosis = PendingSaveReadOnlyDiagnosis::from_observation(
+                                Ok(RestartExactCommitObservation::NotActiveExact),
+                            );
+                            eprintln!(
+                                "{};NEXT_SAFE_STEP={}",
+                                diagnosis.code(),
+                                diagnosis.next_safe_step()
+                            );
+                            false
+                        }
+                        Ok(RestartExactLocalCompletion::NoCanonicalCheckpoint) => {
+                            let diagnosis = PendingSaveReadOnlyDiagnosis::from_observation(
+                                Ok(RestartExactCommitObservation::NoCanonicalCheckpoint),
+                            );
+                            eprintln!(
+                                "{};NEXT_SAFE_STEP={}",
+                                diagnosis.code(),
+                                diagnosis.next_safe_step()
+                            );
+                            false
+                        }
+                        Ok(RestartExactLocalCompletion::ServerSelectedDifferentGeneration) => {
+                            eprintln!(
+                                "P3_RECOVERY=CONFLICT;NEXT_SAFE_STEP=REQUIRE_CURRENT_SERVER_GENERATION"
+                            );
+                            false
+                        }
+                        Err(error) => {
+                            eprintln!(
+                                "P3_RECOVERY={};NEXT_SAFE_STEP=RETRY_OWNED_RECOVERY",
+                                error.code()
+                            );
+                            false
+                        }
+                    }
                 },
             )
             .map_err(ShippingCompositionError::Operator)?;
