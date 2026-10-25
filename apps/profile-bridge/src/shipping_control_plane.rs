@@ -478,6 +478,10 @@ where
         current.timing = timing;
         Ok(())
     }
+
+    fn heartbeat_transport_uncertain(&self, error: &Self::Error) -> bool {
+        matches!(error, ShippingControlPlaneError::Transport)
+    }
 }
 
 impl<T> GenerationSealingMaterialPort for ControlPlaneCoordinator<T>
