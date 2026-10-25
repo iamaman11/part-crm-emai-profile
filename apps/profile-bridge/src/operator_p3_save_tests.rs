@@ -580,6 +580,17 @@ fn canonical_operator_save_retries_same_successor_after_upload_failure()
         UnixMillis::new(40),
     )?;
     assert!(completion.is_saved());
+    // Full commit + local readiness + releases retire only the exact
+    // ciphertext checkpoint, preventing growth on repeated ordinary saves.
+    assert!(
+        inspect_exact_save_attempt(
+            &fixture.root,
+            fixture.actor.tenant_scope().tenant_id(),
+            &fixture.profile_id,
+            &candidate,
+        )?
+        .is_none()
+    );
     assert!(matches!(
         completion.local().local_outcome(),
         DirtyCloseLocalOutcome::CandidateAccepted(record)
@@ -1158,6 +1169,22 @@ fn canonical_postcommit_candidate_mutation_preserves_bytes_for_owned_recovery()
     assert_eq!(
         fs::read(retained.path().join("late-postcommit-mutation"))?,
         b"changed-after-server-commit"
+    );
+    // A committed-but-unknown local candidate must keep its encrypted
+    // checkpoint: there is no proof this local browser state is usable.
+    assert!(matches!(
+        inspect_exact_save_attempt(
+            &fixture.root,
+            fixture.actor.tenant_scope().tenant_id(),
+            &fixture.profile_id,
+            completion.committed().generation_id(),
+        ),
+        Err(SaveAttemptEvidenceError::Changed)
+    ));
+    assert!(
+        fs::read_dir(fixture.root.path())?
+            .filter_map(Result::ok)
+            .any(|entry| entry.file_name().to_string_lossy().starts_with(".profile-save-attempt-v1-"))
     );
     assert!(
         crate::browser_execution::load_materialization_binding(
