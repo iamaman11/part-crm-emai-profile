@@ -1,4 +1,4 @@
-use crate::browser_execution::persist_materialization_binding;
+use crate::browser_execution::{load_materialization_binding, persist_materialization_binding};
 use crate::generation_reopen::{
     SignedGenerationObjectGetPort, SignedGenerationObjectGetResponse,
     VerifiedGenerationObjectDownloader,
@@ -691,6 +691,18 @@ fn event_index(events: &[String], prefix: &str) -> Result<usize, Box<dyn std::er
 #[test]
 fn canonical_save_then_local_loss_reopens_server_selected_successor()
 -> Result<(), Box<dyn std::error::Error>> {
+    run_canonical_saved_successor_reopen(true)
+}
+
+#[test]
+fn canonical_save_then_local_reuse_skips_cloud_download()
+-> Result<(), Box<dyn std::error::Error>> {
+    run_canonical_saved_successor_reopen(false)
+}
+
+fn run_canonical_saved_successor_reopen(
+    remove_local_successor: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
     let counter = TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
     let root_path = std::env::temp_dir().join(format!(
         "profile-bridge-p3-reopen-e2e-{}-{counter}",
@@ -779,6 +791,20 @@ fn canonical_save_then_local_loss_reopens_server_selected_successor()
     assert!(completion.is_saved());
     let successor = completion.committed().generation_id().clone();
     assert_ne!(successor, base_generation);
+    // Installed Bridge522 regression: the real next-launch readiness owner must accept
+    // the saved candidate before any fake rematerialization can supply a binding.
+    let accepted_workspace = root.open_generation(&tenant_id, &profile_id, &successor)?;
+    let ready = load_materialization_binding(
+        &accepted_workspace, &tenant_id, &profile_id, &successor,
+    )?;
+    assert_eq!(
+        ready.source_container_sha256(),
+        completion.committed().container_digest()
+    );
+    assert_eq!(
+        ready.materialized_inventory_digest(),
+        accepted_workspace.materialization_inventory_digest()?
+    );
     {
         let backend = state.borrow();
         assert_eq!(backend.active_generation, successor);
@@ -786,11 +812,13 @@ fn canonical_save_then_local_loss_reopens_server_selected_successor()
         assert!(backend.committed_successor.is_some());
     }
 
-    root.reject_generation_for_rematerialization(&tenant_id, &profile_id, &successor)?;
-    assert!(
-        root.open_generation(&tenant_id, &profile_id, &successor)
-            .is_err()
-    );
+    if remove_local_successor {
+        root.reject_generation_for_rematerialization(&tenant_id, &profile_id, &successor)?;
+        assert!(
+            root.open_generation(&tenant_id, &profile_id, &successor)
+                .is_err()
+        );
+    }
 
     let second_claim = ClaimUri::parse("profilebridge://claim/claim_p3_reopen_e2e_second_000002")?;
     operator.open_authoritative(&second_claim, &root, &mut downloader, UnixMillis::new(40))?;
@@ -822,14 +850,24 @@ fn canonical_save_then_local_loss_reopens_server_selected_successor()
         .nth(1)
         .map(|(index, _)| index)
         .ok_or("missing second redemption")?;
-    let capability = event_index(&events, "download-capability:")?;
-    let get = event_index(&events, "get:")?;
-    let opening = event_index(&events, "opening-material:")?;
     assert!(commit < clean_release);
     assert!(clean_release < second_redeem);
-    assert!(second_redeem < capability);
-    assert!(capability < get);
-    assert!(get < opening);
+    if remove_local_successor {
+        let capability = event_index(&events, "download-capability:")?;
+        let get = event_index(&events, "get:")?;
+        let opening = event_index(&events, "opening-material:")?;
+        assert!(second_redeem < capability);
+        assert!(capability < get);
+        assert!(get < opening);
+    } else {
+        // Normal same-device reopen must use the exact committed local candidate and
+        // never consult the signed-download capability, immutable object GET, or DEK.
+        assert!(!events.iter().any(|event| {
+            event.starts_with("download-capability:")
+                || event.starts_with("get:")
+                || event.starts_with("opening-material:")
+        }));
+    }
     assert!(events.iter().all(|event| !event.contains("device-job")));
 
     operator.abort(UnixMillis::new(50))?;
