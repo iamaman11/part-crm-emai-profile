@@ -298,7 +298,7 @@ fn read_local_unsynced(path: &PathBuf) -> Result<LocalUnsyncedIntent, SaveAttemp
     {
         return Err(SaveAttemptEvidenceError::Invalid);
     }
-    let mut file = File::open(path)?;
+    let file = File::open(path)?;
     let mut bytes = Vec::new();
     file.take((MAX_LOCAL_UNSYNCED_BYTES as u64) + 1)
         .read_to_end(&mut bytes)?;
