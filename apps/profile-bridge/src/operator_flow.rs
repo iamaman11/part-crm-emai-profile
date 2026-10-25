@@ -2021,6 +2021,45 @@ mod tests {
     }
 
     #[test]
+    fn shipping_controlled_close_preserves_wal_with_durable_offline_intent()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use crate::shipping_save_attempt::has_unresolved_save_attempt_for_profile;
+        let fixture = Fixture::new()?;
+        let mut owner = operator(&fixture, FakeCamouhost::default())?;
+        owner.open(&fixture.claim_uri, &fixture.root, UnixMillis::new(10))?;
+        let workspace = fixture.root.open_generation(
+            fixture.actor.tenant_scope().tenant_id(),
+            &fixture.profile_id,
+            &fixture.generation_id,
+        )?;
+        let wal = workspace.path().join("user_data/cookies.sqlite-wal");
+        fs::create_dir_all(wal.parent().ok_or("missing WAL parent")?)?;
+        fs::write(&wal, b"local-firefox-unsynced-wal")?;
+        owner.close_with_durable_local_intent(&fixture.root, UnixMillis::new(20))?;
+        assert!(owner.has_pending_dirty_close());
+        assert_eq!(fs::read(&wal)?, b"local-firefox-unsynced-wal");
+        assert!(has_unresolved_save_attempt_for_profile(
+            &fixture.root,
+            fixture.actor.tenant_scope().tenant_id(),
+            &fixture.profile_id,
+        )?);
+        // The old process has vanished; the checkpoint prefix remains at the
+        // canonical root, so a new process cannot silently use an old N
+        // and discard the just-closed unsynced WAL.
+        drop(owner);
+        let mut restarted = operator(&fixture, FakeCamouhost::default())?;
+        assert_eq!(
+            restarted.open(&fixture.claim_uri, &fixture.root, UnixMillis::new(21)),
+            Err(OperatorFlowError::Stage(OperatorFailureStage::GenerationSave)),
+        );
+        assert_eq!(restarted.coordinator().claimed, 1);
+        assert_eq!(restarted.coordinator().closed, 1);
+        assert!(restarted.process().actions().is_empty());
+        assert_eq!(fs::read(&wal)?, b"local-firefox-unsynced-wal");
+        Ok(())
+    }
+
+    #[test]
     fn composed_operator_close_retains_dirty_ownership_until_commit()
     -> Result<(), Box<dyn std::error::Error>> {
         let fixture = Fixture::new()?;
