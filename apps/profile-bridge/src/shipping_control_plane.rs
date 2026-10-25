@@ -269,6 +269,45 @@ where
         decode_coordinator_response(response)
     }
 
+    /// An idempotency replay confirms a historical command result, NOT
+    /// current writer ownership. Read the current authoritative DO state
+    /// before treating a lost heartbeat reply as renewed authority.
+    fn prove_replayed_heartbeat_is_still_current(
+        &mut self,
+        cursor: &CoordinatorCursor,
+        accepted: &CoordinatorResponseDto,
+    ) -> Result<(), ShippingControlPlaneError> {
+        let correlation_id = next_correlation_id()?;
+        let reply = self
+            .transport
+            .request(
+                MachineHttpMethod::Get,
+                &coordinator_path(&cursor.tenant_id, &cursor.profile_id),
+                &correlation_id,
+                None,
+            )
+            .map_err(|_| ShippingControlPlaneError::Transport)?;
+        let fresh = decode_coordinator_response(reply)?;
+        if fresh.outcome != CoordinatorOutcomeDto::Snapshot
+            || !fresh.replayed
+            || fresh.version != accepted.version
+            || fresh.sequence != accepted.sequence
+            || fresh.projection.status != CoordinatorStatusDto::Active
+            || fresh.projection.tenant_id != cursor.tenant_id.as_str()
+            || fresh.projection.profile_id != cursor.profile_id.as_str()
+            || fresh.projection.version != accepted.version
+            || fresh.projection.sequence != accepted.sequence
+            || fresh.projection.active_session_id.as_deref() != Some(cursor.session_id.as_str())
+            || fresh.projection.active_device_id.as_deref() != Some(cursor.device_id.as_str())
+            || fresh.projection.active_epoch != Some(cursor.epoch)
+            || fresh.projection.idle_expires_at_ms != accepted.projection.idle_expires_at_ms
+            || fresh.projection.hard_expires_at_ms != accepted.projection.hard_expires_at_ms
+        {
+            return Err(ShippingControlPlaneError::InvalidResponse);
+        }
+        Ok(())
+    }
+
     fn command(
         &mut self,
         tenant_id: &TenantId,
@@ -493,6 +532,9 @@ where
                 .is_some_and(|value| value != cursor.fencing_token.as_str())
         {
             return Err(Self::Error::InvalidResponse);
+        }
+        if pending && response.replayed {
+            self.prove_replayed_heartbeat_is_still_current(&cursor, &response)?;
         }
         let current = self.cursor.as_mut().ok_or(Self::Error::InvalidResponse)?;
         current.version = response.version;
