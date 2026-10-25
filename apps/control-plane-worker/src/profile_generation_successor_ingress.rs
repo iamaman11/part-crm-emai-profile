@@ -17,9 +17,8 @@ use application_ports::profile_generation_successor::{
     ProfileGenerationCommitWitness, ProfileGenerationSuccessorCommitErrorClass,
     ProfileGenerationSuccessorCommitOutcome, ProfileGenerationSuccessorCommitPort,
     ProfileGenerationSuccessorCommitRequest, ProfileGenerationSuccessorObservationPort,
-    ProfileGenerationSuccessorRetryDecisionPort,
-    ProfileGenerationSuccessorVersionPort, ProfileGenerationWriterAuthorityPort,
-    ProfileGenerationWriterAuthorityRequest,
+    ProfileGenerationSuccessorRetryDecisionPort, ProfileGenerationSuccessorVersionPort,
+    ProfileGenerationWriterAuthorityPort, ProfileGenerationWriterAuthorityRequest,
 };
 use application_ports::{
     DeviceExecutionBlocker, DeviceExecutionPreconditionPort, DeviceExecutionReadiness,
@@ -44,8 +43,8 @@ use control_plane_contract::profile_generation_api::{
     BridgeGenerationSuccessorCommitOutcomeDto, BridgeGenerationSuccessorCommitResponse,
     BridgeGenerationSuccessorObserveRequest, BridgeGenerationSuccessorObserveResponse,
     BridgeGenerationSuccessorRetryDecisionRequest, BridgeGenerationSuccessorRetryDecisionResponse,
-    BridgeGenerationSuccessorRetryVerdict,
-    BridgeGenerationUploadCapabilityResponse, BridgeProfileGenerationSuccessorRequest,
+    BridgeGenerationSuccessorRetryVerdict, BridgeGenerationUploadCapabilityResponse,
+    BridgeProfileGenerationSuccessorRequest,
 };
 use device_domain::DeviceJobTarget;
 use encrypted_generation_domain::{
@@ -518,7 +517,10 @@ async fn dispatch_successor_retry_decision(
     actor: &ActorContext,
     device_id: &DeviceId,
 ) -> Result<Response> {
-    let body = match request.json::<BridgeGenerationSuccessorRetryDecisionRequest>().await {
+    let body = match request
+        .json::<BridgeGenerationSuccessorRetryDecisionRequest>()
+        .await
+    {
         Ok(value) => value,
         Err(_) => return invalid_request(actor.correlation_id().as_str()),
     };
@@ -535,14 +537,17 @@ async fn dispatch_successor_retry_decision(
     ) else {
         return invalid_request(actor.correlation_id().as_str());
     };
-    if base == candidate || body.attempt.container_bytes == 0 || !descriptor_shape_is_canonical(
-        actor,
-        profile_id,
-        &candidate,
-        &body.attempt.object_key,
-        &body.attempt.metadata_digest,
-        &body.attempt.container_digest,
-    ) {
+    if base == candidate
+        || body.attempt.container_bytes == 0
+        || !descriptor_shape_is_canonical(
+            actor,
+            profile_id,
+            &candidate,
+            &body.attempt.object_key,
+            &body.attempt.metadata_digest,
+            &body.attempt.container_digest,
+        )
+    {
         return invalid_request(actor.correlation_id().as_str());
     }
     let target = DeviceJobTarget::new(
@@ -552,7 +557,10 @@ async fn dispatch_successor_retry_decision(
         base.clone(),
     );
     let preconditions = device_execution_preconditions(env)?;
-    match preconditions.evaluate_device_execution(actor, &target).await {
+    match preconditions
+        .evaluate_device_execution(actor, &target)
+        .await
+    {
         Ok(DeviceExecutionReadiness::Ready) => {}
         Ok(DeviceExecutionReadiness::Blocked(DeviceExecutionBlocker::DeviceUnauthorized)) => {
             return forbidden(actor.correlation_id().as_str());
@@ -576,16 +584,19 @@ async fn dispatch_successor_retry_decision(
         },
     }
     let authority = profile_generation_successor_commit(env);
-    if let Err(error) = authority.prove_profile_generation_writer_authority(
-        actor,
-        &ProfileGenerationWriterAuthorityRequest::new(
-            device_id.clone(),
-            profile_id.clone(),
-            session,
-            fencing_token,
-            body.coordinator_epoch,
-        ),
-    ).await {
+    if let Err(error) = authority
+        .prove_profile_generation_writer_authority(
+            actor,
+            &ProfileGenerationWriterAuthorityRequest::new(
+                device_id.clone(),
+                profile_id.clone(),
+                session,
+                fencing_token,
+                body.coordinator_epoch,
+            ),
+        )
+        .await
+    {
         return successor_failure(actor.correlation_id().as_str(), error.class());
     }
     let object = GenerationObjectDescriptor::new(
@@ -597,9 +608,10 @@ async fn dispatch_successor_retry_decision(
         body.attempt.container_bytes,
     );
     let decision = profile_generation_successor_observer(env)?;
-    let allowed = match decision.exact_unapplied_successor_is_retryable(
-        actor, profile_id, &base, &object,
-    ).await {
+    let allowed = match decision
+        .exact_unapplied_successor_is_retryable(actor, profile_id, &base, &object)
+        .await
+    {
         Ok(value) => value,
         Err(error) => return successor_failure(actor.correlation_id().as_str(), error.class()),
     };

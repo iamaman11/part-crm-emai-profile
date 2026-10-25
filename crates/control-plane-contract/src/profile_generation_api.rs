@@ -421,6 +421,7 @@ fn sha256_schema() -> Value {
 mod tests {
     use super::{
         BridgeGenerationSuccessorObserveRequest, BridgeGenerationSuccessorObserveResponse,
+        BridgeGenerationSuccessorRetryDecisionRequest, BridgeGenerationSuccessorRetryDecisionResponse,
         BridgeGenerationUploadCapabilityResponse, BridgeProfileGenerationSuccessorRequest,
         ProfileCreateRequest, ProfileGrantRequest, ProfileProjectionDto, ProfileStatusDto,
         RegisterGenerationRequest, openapi_fragment,
@@ -477,21 +478,43 @@ mod tests {
             "coordinatorFencingToken": "fence_fresh",
             "coordinatorEpoch": 4
         });
-        assert!(serde_json::from_value::<BridgeGenerationSuccessorRetryDecisionRequest>(request.clone()).is_ok());
-        for forbidden in ["expectedProfileVersion", "deviceId", "signedUploadUrl", "oldFence"] {
+        assert!(
+            serde_json::from_value::<BridgeGenerationSuccessorRetryDecisionRequest>(
+                request.clone()
+            )
+            .is_ok()
+        );
+        for forbidden in [
+            "expectedProfileVersion",
+            "deviceId",
+            "signedUploadUrl",
+            "oldFence",
+        ] {
             let mut invalid = request.clone();
             invalid[forbidden] = json!("untrusted");
-            assert!(serde_json::from_value::<BridgeGenerationSuccessorRetryDecisionRequest>(invalid).is_err());
+            assert!(
+                serde_json::from_value::<BridgeGenerationSuccessorRetryDecisionRequest>(invalid)
+                    .is_err()
+            );
         }
-        assert!(serde_json::from_value::<BridgeGenerationSuccessorRetryDecisionResponse>(json!({
-            "verdict": "NOT_APPLIED_RETRYABLE"
-        })).is_ok());
-        assert!(serde_json::from_value::<BridgeGenerationSuccessorRetryDecisionResponse>(json!({
-            "verdict": "NOT_APPLIED_RETRYABLE", "signedUploadUrl": "forbidden"
-        })).is_err());
-        assert!(serde_json::from_value::<BridgeGenerationSuccessorRetryDecisionResponse>(json!({
-            "verdict": "UNKNOWN"
-        })).is_err());
+        assert!(
+            serde_json::from_value::<BridgeGenerationSuccessorRetryDecisionResponse>(json!({
+                "verdict": "NOT_APPLIED_RETRYABLE"
+            }))
+            .is_ok()
+        );
+        assert!(
+            serde_json::from_value::<BridgeGenerationSuccessorRetryDecisionResponse>(json!({
+                "verdict": "NOT_APPLIED_RETRYABLE", "signedUploadUrl": "forbidden"
+            }))
+            .is_err()
+        );
+        assert!(
+            serde_json::from_value::<BridgeGenerationSuccessorRetryDecisionResponse>(json!({
+                "verdict": "UNKNOWN"
+            }))
+            .is_err()
+        );
     }
 
     #[test]
