@@ -360,9 +360,19 @@ fn persist_exact_text(path: &Path, content: &str) -> Result<(), BrowserLaunchBlo
         .file_name()
         .and_then(|value| value.to_str())
         .ok_or(BrowserLaunchBlocker::InvalidMaterializationEvidence)?;
+    // Browser identity is part of the encrypted workspace inventory. A crash before
+    // publication must not leave its incomplete staging text inside user-data snapshots.
+    // Both destinations have the same scoped profile directory as an existing owner.
+    let staging_parent = if file_name == BROWSER_IDENTITY_RECORD_FILE {
+        parent
+            .parent()
+            .ok_or(BrowserLaunchBlocker::InvalidMaterializationEvidence)?
+    } else {
+        parent
+    };
     for _ in 0..EXACT_TEXT_STAGE_ATTEMPTS {
         let sequence = EXACT_TEXT_STAGE_SEQUENCE.fetch_add(1, Ordering::Relaxed);
-        let staging = parent.join(format!(
+        let staging = staging_parent.join(format!(
             ".{file_name}.pending-{}-{sequence}",
             std::process::id()
         ));
@@ -616,8 +626,12 @@ mod tests {
         let generation = GenerationId::parse("generation_01JATOMICTEXT")?;
         let workspace = root.create_generation(&tenant, &profile, &generation)?;
         let canonical = workspace.path().join(BROWSER_IDENTITY_RECORD_FILE);
-        let partial = workspace.path().join(".interrupted-pending");
+        let profile_directory = workspace.path().parent().ok_or("missing profile directory")?;
+        let partial = profile_directory.join("..profile-browser-identity-v1.pending-interrupted");
         fs::write(&partial, b"truncated-record")?;
+        assert!(!workspace.inventory()?.entries().iter().any(|entry| {
+            entry.relative_path().contains(".pending-")
+        }));
         // Staging garbage is not allowed to impersonate the canonical record.
         assert!(!canonical.exists());
         persist_browser_identity(&workspace, &identity()?)?;
@@ -636,7 +650,7 @@ mod tests {
         assert_ne!(canonical_before, fs::read(&canonical)?);
         // No remaining .pending from a successful owned publish. A foreign
         // abandoned attempt is not deleted without an ownership witness.
-        let files = fs::read_dir(workspace.path())?
+        let files = fs::read_dir(profile_directory)?
             .map(|item| item.map(|item| item.file_name().to_string_lossy().to_string()))
             .collect::<Result<Vec<_>, _>>()?;
         assert!(
