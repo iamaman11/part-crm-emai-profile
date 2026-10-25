@@ -474,11 +474,24 @@ where
         Dl::Error: Into<GenerationObjectDownloadError>,
         BeforeRuntime: FnMut() -> Result<(), ()>,
     {
-        self.open_authoritative_with_runtime_health_and_pending_observation(
+        // Preserve the one accepted authoritative launch body. Pending-save
+        // observation is optional and never replaces its lease/admission checks.
+        self.open_with_materialization(
             claim,
             root,
-            downloader,
             now,
+            |coordinator, tenant_id, profile_id, generation_id, device_id, epoch| {
+                ensure_authoritative_generation(
+                    root,
+                    tenant_id,
+                    profile_id,
+                    generation_id,
+                    device_id,
+                    epoch,
+                    coordinator,
+                    downloader,
+                )
+            },
             before_runtime_start,
             |_tenant, _profile| {},
         )
@@ -507,8 +520,7 @@ where
         Dl: GenerationObjectDownloadPort,
         Dl::Error: Into<GenerationObjectDownloadError>,
         BeforeRuntime: FnMut() -> Result<(), ()>,
-        ObservePending:
-            FnMut(&profile_platform_primitives::TenantId, &ProfileId),
+        ObservePending: FnMut(&profile_platform_primitives::TenantId, &ProfileId),
     {
         self.open_with_materialization(
             claim,
