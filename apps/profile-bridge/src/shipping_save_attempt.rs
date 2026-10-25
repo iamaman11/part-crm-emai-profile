@@ -339,7 +339,7 @@ fn read_regular_bounded(path: &PathBuf) -> Result<Vec<u8>, SaveAttemptEvidenceEr
     if !meta.is_file() || meta.file_type().is_symlink() || meta.len() > MAX_RECORD_BYTES as u64 {
         return Err(SaveAttemptEvidenceError::Invalid);
     }
-    let mut file = File::open(path)?;
+    let file = File::open(path)?;
     let mut result = Vec::new();
     file.take((MAX_RECORD_BYTES as u64) + 1)
         .read_to_end(&mut result)?;
