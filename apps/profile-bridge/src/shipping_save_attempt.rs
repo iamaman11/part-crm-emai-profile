@@ -431,6 +431,99 @@ pub(crate) fn has_unresolved_save_attempt_for_profile(
     Ok(false)
 }
 
+/// Read-only, restart-safe discovery of the *one* canonical exact save attempt for
+/// this Profile. A checkpoint filename is not a capability: verify its bounded
+/// header, deterministic scoped name, ciphertext and BOTH local inventories
+/// through the original exact inspector before returning the evidence.
+/// Unknown staged/torn or competing records remain hard blockers; this
+/// function never gives permission to PUT/commit or to delete anything.
+pub(crate) fn discover_unresolved_exact_save_attempt(
+    root: &MaterializationRoot,
+    tenant: &TenantId,
+    profile: &ProfileId,
+) -> Result<Option<ReadOnlySaveAttempt>, SaveAttemptEvidenceError> {
+    let prefix = scope_file_prefix(tenant, profile);
+    let mut candidate = None;
+    let mut inspected = 0_usize;
+    for entry in fs::read_dir(root.path())? {
+        let entry = entry?;
+        inspected = inspected.saturating_add(1);
+        if inspected > 100_000 {
+            return Err(SaveAttemptEvidenceError::Unavailable);
+        }
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else {
+            // A non-UTF8 name cannot identify a trusted scoped attempt.
+            // The conservative startup guard remains authoritative.
+            continue;
+        };
+        if !name.starts_with(&prefix) {
+            continue;
+        }
+        if candidate.is_some() {
+            return Err(SaveAttemptEvidenceError::Invalid);
+        }
+
+        // Read only the tiny header here, not a second full ciphertext Vec.
+        // Interrupted .pending, names with an extra extension, tampered
+        // content, foreign generations and ambiguous siblings fail closed.
+        let path = entry.path();
+        let header = read_bounded_attempt_header(&path)?;
+        if header.schema != "bridge-p3-attempt-v1"
+            || header.tenant != tenant.as_str()
+            || header.profile != profile.as_str()
+        {
+            return Err(SaveAttemptEvidenceError::Invalid);
+        }
+        let generation = GenerationId::parse(header.successor)
+            .map_err(|_| SaveAttemptEvidenceError::Invalid)?;
+        if path != attempt_path(root, tenant, profile, &generation) {
+            return Err(SaveAttemptEvidenceError::Invalid);
+        }
+        candidate = Some(generation);
+    }
+    candidate
+        .map(|generation| {
+            inspect_exact_save_attempt(root, tenant, profile, &generation)?
+                .ok_or(SaveAttemptEvidenceError::Changed)
+        })
+        .transpose()
+}
+
+/// Header-only bounded read: discovery never loads the large sealed body
+/// merely to obtain the successor selector. Exact ciphertext verification
+/// remains the responsibility of inspect_exact_save_attempt.
+fn read_bounded_attempt_header(path: &PathBuf) -> Result<AttemptHeader, SaveAttemptEvidenceError> {
+    let metadata = fs::symlink_metadata(path)?;
+    if metadata.file_type().is_symlink()
+        || !metadata.is_file()
+        || metadata.len() <= 12
+        || metadata.len() > MAX_RECORD_BYTES as u64
+    {
+        return Err(SaveAttemptEvidenceError::Invalid);
+    }
+    let mut file = File::open(path)?;
+    let mut prefix = [0_u8; 12];
+    file.read_exact(&mut prefix)?;
+    if &prefix[..8] != MAGIC {
+        return Err(SaveAttemptEvidenceError::Invalid);
+    }
+    let length = u32::from_be_bytes(
+        prefix[8..12]
+            .try_into()
+            .map_err(|_| SaveAttemptEvidenceError::Invalid)?,
+    ) as usize;
+    if length == 0
+        || length > MAX_HEADER_BYTES
+        || metadata.len() <= 12 + length as u64
+    {
+        return Err(SaveAttemptEvidenceError::Invalid);
+    }
+    let mut header_bytes = vec![0_u8; length];
+    file.read_exact(&mut header_bytes)?;
+    serde_json::from_slice(&header_bytes).map_err(|_| SaveAttemptEvidenceError::Invalid)
+}
+
 fn scope_file_prefix(tenant: &TenantId, profile: &ProfileId) -> String {
     let mut sha = Sha256::new();
     sha.update(b"bridge-p3-save-attempt-profile-scope-v1\0");
