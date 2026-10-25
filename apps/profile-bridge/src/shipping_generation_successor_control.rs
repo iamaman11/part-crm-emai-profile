@@ -10,7 +10,7 @@ use crate::shipping_generation_save::{
     GenerationUploadAuthorization, SignedGenerationUploadCapability,
 };
 use crate::shipping_save_attempt::{
-    discover_unresolved_exact_save_attempt, inspect_exact_save_attempt,
+    ReadOnlySaveAttempt, discover_unresolved_exact_save_attempt, inspect_exact_save_attempt,
 };
 use control_plane_contract::profile_generation_api::{
     BRIDGE_PROFILE_GENERATION_COMMIT_PATH_TEMPLATE,
@@ -179,12 +179,7 @@ pub fn observe_discovered_successor_after_restart<T: MachineHttpPort>(
         .map_err(|_| ShippingControlPlaneError::InvalidResponse)?;
     match attempt {
         Some(attempt) => {
-            let successor = GenerationId::parse(attempt.successor_id().to_owned())
-                .map_err(|_| ShippingControlPlaneError::InvalidResponse)?;
-            observe_retained_successor_after_restart(
-                root, tenant_id, profile_id, &successor, transport,
-            )
-            .map(Some)
+            observe_verified_exact_attempt(tenant_id, profile_id, &attempt, transport).map(Some)
         }
         None => Ok(None),
     }
@@ -203,6 +198,18 @@ pub fn observe_retained_successor_after_restart<T: MachineHttpPort>(
     let attempt = inspect_exact_save_attempt(root, tenant_id, profile_id, successor_id)
         .map_err(|_| ShippingControlPlaneError::InvalidResponse)?
         .ok_or(ShippingControlPlaneError::InvalidResponse)?;
+    observe_verified_exact_attempt(tenant_id, profile_id, &attempt, transport)
+}
+
+/// One existing read-only control-plane observation, over *already validated*
+/// exact local attempt evidence. Neither the discovered path nor the explicit
+/// generation-ID entrypoint rereads/duplicates the full sealed record.
+fn observe_verified_exact_attempt<T: MachineHttpPort>(
+    tenant_id: &TenantId,
+    profile_id: &ProfileId,
+    attempt: &ReadOnlySaveAttempt,
+    transport: &mut T,
+) -> Result<bool, ShippingControlPlaneError> {
     let request = BridgeGenerationSuccessorObserveRequest {
         base_generation_id: attempt.base_generation_id().to_owned(),
         generation_id: attempt.successor_id().to_owned(),
