@@ -33,6 +33,17 @@ jobs:
       - name: Show pinned toolchain
         run: rustup show active-toolchain
 
+      # Classification is evidence for a future guarded TARGETED scheduler,
+      # NOT authorization to bypass any currently required check context.
+      - name: Classify exact PR impact (advisory only; all gates still run)
+        env:
+          CI_EVENT: ${{ github.event_name }}
+          CI_BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+          CI_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          python scripts/classify-ci-impact.py --self-test
+          python scripts/classify-ci-impact.py --event "$CI_EVENT" --base "$CI_BASE" --head "$CI_HEAD" --github-output "$GITHUB_OUTPUT"
+
       - name: Compile audit policy scripts
         run: |
           python -m py_compile scripts/test-profile-generation-state-guards.py
