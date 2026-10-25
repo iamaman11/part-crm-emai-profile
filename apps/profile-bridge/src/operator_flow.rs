@@ -494,7 +494,7 @@ where
                 )
             },
             before_runtime_start,
-            |_tenant, _profile, _selected, _lease| false,
+            |_coordinator, _tenant, _profile, _selected, _lease| false,
         )
     }
 
@@ -522,6 +522,7 @@ where
         Dl::Error: Into<GenerationObjectDownloadError>,
         BeforeRuntime: FnMut() -> Result<(), ()>,
         ObservePending: FnMut(
+            &mut C,
             &profile_platform_primitives::TenantId,
             &ProfileId,
             &GenerationId,
@@ -564,7 +565,7 @@ where
             now,
             |_coordinator, _tenant_id, _profile_id, _generation_id, _device_id, _epoch| Ok(()),
             || Ok(()),
-            |_tenant, _profile, _selected, _lease| false,
+            |_coordinator, _tenant, _profile, _selected, _lease| false,
         )
     }
 
@@ -588,6 +589,7 @@ where
         ) -> Result<(), AuthoritativeGenerationMaterializationError>,
         BeforeRuntime: FnMut() -> Result<(), ()>,
         ObservePending: FnMut(
+            &mut C,
             &profile_platform_primitives::TenantId,
             &ProfileId,
             &GenerationId,
@@ -658,6 +660,7 @@ where
             // miss, uncertain reply or commit observation is not enough to
             // declare local successor ready or re-enter the old writer fence.
             let recovered = observe_pending(
+                &mut self.coordinator,
                 enrollment.actor().tenant_scope().tenant_id(),
                 enrollment.profile_id(),
                 enrollment.generation_id(),
@@ -1889,7 +1892,7 @@ mod tests {
                 runtime_health_started = true;
                 Ok(())
             },
-            |_tenant, _profile, _selected, _lease| false,
+            |_coordinator, _tenant, _profile, _selected, _lease| false,
         );
         assert!(matches!(
             result,
@@ -1937,7 +1940,7 @@ mod tests {
                     runtime_health_started = true;
                     Ok(())
                 },
-                |_tenant, _profile, _selected, _lease| false,
+                |_coordinator, _tenant, _profile, _selected, _lease| false,
             );
             assert!(matches!(
                 result,
@@ -1980,7 +1983,7 @@ mod tests {
                     )
                 },
                 || Ok(()),
-                |_tenant, _profile, _selected, _lease| false,
+                |_coordinator, _tenant, _profile, _selected, _lease| false,
             );
             assert!(matches!(
                 result,
@@ -2009,7 +2012,7 @@ mod tests {
                 ))
             },
             || Ok(()),
-            |_tenant, _profile, _selected, _lease| false,
+            |_coordinator, _tenant, _profile, _selected, _lease| false,
         );
         assert!(matches!(
             result,
@@ -2358,7 +2361,7 @@ mod tests {
                     unauthorized_starts.set(unauthorized_starts.get() + 1);
                     Ok(())
                 },
-                |_tenant, _profile, _selected, _lease| {
+                |_coordinator, _tenant, _profile, _selected, _lease| {
                     unauthorized_observations.set(1);
                     false
                 },
@@ -2549,7 +2552,7 @@ mod tests {
                 started_health = true;
                 Ok(())
             },
-            |_tenant, _profile, _selected, _lease| false,
+            |_coordinator, _tenant, _profile, _selected, _lease| false,
         );
         assert!(matches!(result, Err(OperatorFlowError::Preflight { .. })));
         assert!(!started_health);
@@ -2572,7 +2575,7 @@ mod tests {
                 started_health = true;
                 Ok(())
             },
-            |_tenant, _profile, _selected, _lease| false,
+            |_coordinator, _tenant, _profile, _selected, _lease| false,
         )?;
         assert!(started_health);
         assert_eq!(
@@ -2597,7 +2600,7 @@ mod tests {
                 start_attempts += 1;
                 Err(())
             },
-            |_tenant, _profile, _selected, _lease| false,
+            |_coordinator, _tenant, _profile, _selected, _lease| false,
         );
         assert_eq!(
             error,

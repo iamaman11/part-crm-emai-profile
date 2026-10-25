@@ -77,6 +77,25 @@ impl LocalGenerationRecord {
         self.locked
     }
 
+    /// Reconstruct only the ephemeral in-memory DirtyLocal lifecycle after
+    /// native browser quiescence, verified original intent and fresh exclusive
+    /// admission. It neither restores an expired lease nor mutates disk state.
+    #[cfg(any(windows, test))]
+    pub(crate) fn from_verified_unsynced_close(
+        generation_id: GenerationId,
+        bytes: u64,
+        observed_at: UnixMillis,
+    ) -> Self {
+        Self {
+            generation_id,
+            state: LocalGenerationState::DirtyLocal,
+            bytes,
+            last_activity_at: observed_at,
+            session_started_at: None,
+            locked: true,
+        }
+    }
+
     pub fn set_locked(&mut self, locked: bool) -> Result<(), LocalProfileError> {
         if self.state == LocalGenerationState::Evicted && locked {
             return Err(LocalProfileError::InvalidTransition);
