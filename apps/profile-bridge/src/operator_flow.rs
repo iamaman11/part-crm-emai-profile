@@ -498,11 +498,12 @@ where
         )
     }
 
-    /// Observe an interrupted save automatically on the next freshly authorized
-    /// installed launch, BEFORE any workspace/browser use. The callback is
-    /// read-only and its verdict cannot release unknown bytes or authorize a
-    /// legacy PUT/commit. The existing unresolved-checkpoint guard remains.
-    pub fn open_authoritative_with_runtime_health_and_pending_observation<
+    /// Recover interrupted local generation evidence BEFORE browser use,
+    /// under the single existing freshly claimed coordinator writer. The
+    /// callback may first-seal the original N+1 or finish an exact checkpoint;
+    /// only a completed ACTIVE_EXACT binding may allow an ordinary Open.
+    /// The unresolved-checkpoint guard remains authoritative.
+    pub fn open_authoritative_with_runtime_health_and_pending_recovery<
         Dl,
         BeforeRuntime,
         ObservePending,

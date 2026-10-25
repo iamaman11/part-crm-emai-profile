@@ -616,7 +616,8 @@ where
         .map_err(|_| RestartExactLocalCompletionError::LocalEvidenceChanged)?
         .ok_or(RestartExactLocalCompletionError::LocalEvidenceChanged)?;
     if original.base_generation_id() != selected_generation.as_str()
-        || fresh_lease.epoch() <= original.prior_epoch()
+        || (fresh_lease.epoch() <= original.prior_epoch()
+            && !original.first_seal_under_current_lease(fresh_lease))
         || !original.matches_fresh_device(fresh_lease)
     {
         return Err(RestartExactLocalCompletionError::WriterOrLockUnresolved);

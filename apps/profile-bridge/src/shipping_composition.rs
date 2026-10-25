@@ -138,6 +138,7 @@ mod windows {
     use crate::shipping_generation_successor_control::{
         RestartExactCommitObservation, RestartExactLocalCompletion,
         complete_active_exact_after_restart, resume_exact_successor_under_fresh_lease,
+        resume_lone_local_unsynced_under_fresh_lease,
     };
     use crate::shipping_preflight::ShippingBrowserLaunchPreflight;
     use crate::user_diagnostics::PendingSaveReadOnlyDiagnosis;
@@ -343,7 +344,7 @@ mod windows {
         let mut pending_health = pending_health;
         let mut started_health = None;
         operator
-            .open_authoritative_with_runtime_health_and_pending_observation(
+            .open_authoritative_with_runtime_health_and_pending_recovery(
                 claim,
                 &materialization_root,
                 &mut generation_downloader,
@@ -357,7 +358,7 @@ mod windows {
                         .transpose()?;
                     Ok(())
                 },
-                |tenant, profile, selected_generation, fresh_lease| {
+                |live_coordinator, tenant, profile, selected_generation, fresh_lease| {
                     // The existing operator already proved fresh CNG/ACL,
                     // tenant/Profile enrollment and exclusive coordinator
                     // writer claim. Only exact ACTIVE_EXACT may repair an
@@ -425,9 +426,32 @@ mod windows {
                             false
                         }
                         Ok(RestartExactLocalCompletion::LocalUnsyncedAuthorizedAwaitingFirstSeal) => {
-                            eprintln!(
-                                "P3_RECOVERY=LOCAL_UNSYNCED_BASE_RETRYABLE;NEXT_SAFE_STEP=SEAL_FIRST_SUCCESSOR_UNDER_FRESH_AUTHORITY"
-                            );
+                            // The one current coordinator owns the new claimed
+                            // fence AND the generation sealing material cursor.
+                            // No second coordinator or persisting recovery SM.
+                            match resume_lone_local_unsynced_under_fresh_lease(
+                                &materialization_root,
+                                tenant,
+                                profile,
+                                selected_generation,
+                                fresh_lease,
+                                live_coordinator,
+                                &mut recovery_observation_transport,
+                                &mut generation_uploader,
+                            ) {
+                                Ok(true) => eprintln!(
+                                    "P3_RECOVERY=FIRST_SUCCESSOR_COMMITTED;NEXT_SAFE_STEP=FRESH_OPEN_ACTIVE_EXACT"
+                                ),
+                                Ok(false) => eprintln!(
+                                    "P3_RECOVERY=FIRST_SEAL_BLOCKED;NEXT_SAFE_STEP=PRESERVE_LOCAL_BYTES"
+                                ),
+                                Err(error) => eprintln!(
+                                    "P3_RECOVERY={};NEXT_SAFE_STEP=RETRY_OWNED_RECOVERY",
+                                    error.code()
+                                ),
+                            }
+                            // A successful N->N+1 commit invalidates this
+                            // original-N launch. No browser may open N.
                             false
                         }
                         Ok(RestartExactLocalCompletion::NoCanonicalCheckpoint) => {
