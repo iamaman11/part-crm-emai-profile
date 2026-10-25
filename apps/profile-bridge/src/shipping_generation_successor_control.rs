@@ -1,8 +1,11 @@
+#[cfg(any(windows, test))]
 use crate::browser_execution::{browser_writer_locks_absent, persist_committed_successor_binding};
 use crate::dirty_generation::{
     GenerationSealingMaterial, GenerationSealingMaterialPort, PreparedDirtyGeneration,
 };
-use crate::local_profile::{BridgeWorkspaceLock, LocalProfileError, MaterializationRoot};
+#[cfg(any(windows, test))]
+use crate::local_profile::{BridgeWorkspaceLock, LocalProfileError};
+use crate::local_profile::MaterializationRoot;
 use crate::shipping_control_plane::{
     MachineHttpMethod, MachineHttpPort, ShippingControlPlaneError,
 };
@@ -12,8 +15,9 @@ use crate::shipping_generation_save::{
 };
 use crate::shipping_save_attempt::{
     ReadOnlySaveAttempt, discover_unresolved_exact_save_attempt, inspect_exact_save_attempt,
-    retire_active_exact_attempt_after_restart,
 };
+#[cfg(any(windows, test))]
+use crate::shipping_save_attempt::retire_active_exact_attempt_after_restart;
 use control_plane_contract::profile_generation_api::{
     BRIDGE_PROFILE_GENERATION_COMMIT_PATH_TEMPLATE,
     BRIDGE_PROFILE_GENERATION_OBSERVE_PATH_TEMPLATE,
@@ -38,6 +42,7 @@ const MAX_UPLOAD_CAPABILITY_EXPIRES_SECONDS: u32 = 300;
 static SAVE_REQUEST_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 
 /// Evidence-driven post-commit local completion, never a new server write grant.
+#[cfg(any(windows, test))]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RestartExactLocalCompletion {
     NoCanonicalCheckpoint,
@@ -47,6 +52,7 @@ pub enum RestartExactLocalCompletion {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[cfg(any(windows, test))]
 pub enum RestartExactLocalCompletionError {
     LocalEvidenceChanged,
     WriterOrLockUnresolved,
@@ -54,6 +60,7 @@ pub enum RestartExactLocalCompletionError {
     ControlPlane(ShippingControlPlaneError),
 }
 
+#[cfg(any(windows, test))]
 impl RestartExactLocalCompletionError {
     #[must_use]
     pub const fn code(self) -> &'static str {
@@ -243,6 +250,7 @@ pub fn observe_discovered_successor_after_restart<T: MachineHttpPort>(
 /// current ACL/CNG authentication and a FRESH coordinator Profile writer claim.
 /// Never invoke PUT, D1 commit, rekey, cloud rollback or a second candidate.
 /// Unknown, mutated, foreign or native-writer-owned bytes remain untouched.
+#[cfg(any(windows, test))]
 pub(crate) fn complete_active_exact_after_restart<T: MachineHttpPort>(
     root: &MaterializationRoot,
     tenant_id: &TenantId,
@@ -297,29 +305,34 @@ pub(crate) fn complete_active_exact_after_restart<T: MachineHttpPort>(
             .map_err(|_| RestartExactLocalCompletionError::WriterOrLockUnresolved)?,
             Err(_) => return Err(RestartExactLocalCompletionError::WriterOrLockUnresolved),
         };
-    // The original checkpoint is revalidated UNDER the OS-owned admission
-    // before any new host-local identity binding is written.
-    let verified = discover_unresolved_exact_save_attempt(root, tenant_id, profile_id)
-        .map_err(|_| RestartExactLocalCompletionError::LocalEvidenceChanged)?
-        .ok_or(RestartExactLocalCompletionError::LocalEvidenceChanged)?;
-    if verified.successor_id() != attempt.successor_id()
-        || verified.container_digest() != attempt.container_digest()
-        || verified.ciphertext() != attempt.ciphertext()
-        || !matches!(browser_writer_locks_absent(&base), Ok(true))
-        || !matches!(browser_writer_locks_absent(&candidate), Ok(true))
-    {
-        return Err(RestartExactLocalCompletionError::LocalEvidenceChanged);
-    }
-    persist_committed_successor_binding(
-        &candidate,
-        tenant_id,
-        profile_id,
-        selected_generation,
-        verified.container_digest(),
-    )
-    .map_err(|_| RestartExactLocalCompletionError::BindingOrRetirementFailed)?;
+    // Always attempt to release the *new* owned marker even when evidence
+    // or binding validation fails. Failure keeps the durable checkpoint.
+    let local_result = (|| {
+        // Revalidate under the OS-backed admission before publishing.
+        let verified = discover_unresolved_exact_save_attempt(root, tenant_id, profile_id)
+            .map_err(|_| RestartExactLocalCompletionError::LocalEvidenceChanged)?
+            .ok_or(RestartExactLocalCompletionError::LocalEvidenceChanged)?;
+        if verified.successor_id() != attempt.successor_id()
+            || verified.container_digest() != attempt.container_digest()
+            || verified.ciphertext() != attempt.ciphertext()
+            || !matches!(browser_writer_locks_absent(&base), Ok(true))
+            || !matches!(browser_writer_locks_absent(&candidate), Ok(true))
+        {
+            return Err(RestartExactLocalCompletionError::LocalEvidenceChanged);
+        }
+        persist_committed_successor_binding(
+            &candidate,
+            tenant_id,
+            profile_id,
+            selected_generation,
+            verified.container_digest(),
+        )
+        .map_err(|_| RestartExactLocalCompletionError::BindingOrRetirementFailed)?;
+        Ok(verified)
+    })();
     lock.release()
         .map_err(|_| RestartExactLocalCompletionError::WriterOrLockUnresolved)?;
+    let verified = local_result?;
     retire_active_exact_attempt_after_restart(root, tenant_id, profile_id, &verified)
         .map_err(|_| RestartExactLocalCompletionError::BindingOrRetirementFailed)?;
     Ok(RestartExactLocalCompletion::ActiveExactLocalReady)

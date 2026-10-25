@@ -400,6 +400,7 @@ pub(crate) fn retire_fully_saved_attempt(
 /// Retire only the same completed exact save after the existing D1 owner
 /// confirmed ACTIVE_EXACT, the Bridge identity/binding owner accepted N+1,
 /// and its fresh OS workspace lock was released. This method grants nothing.
+#[cfg(any(windows, test))]
 pub(crate) fn retire_active_exact_attempt_after_restart(
     root: &MaterializationRoot,
     tenant: &TenantId,
