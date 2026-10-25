@@ -511,8 +511,10 @@ where
         };
         let response = match self.command(&cursor.tenant_id, &cursor.profile_id, &request) {
             Ok(response) => response,
-            Err(error @ (ShippingControlPlaneError::Transport
-            | ShippingControlPlaneError::HttpServerUncertain)) => {
+            Err(
+                error @ (ShippingControlPlaneError::Transport
+                | ShippingControlPlaneError::HttpServerUncertain),
+            ) => {
                 // Retain the EXACT command for one bounded retry. This also
                 // covers a 5xx returned after the coordinator applied the
                 // heartbeat: do not mint a new idempotency key or silently
@@ -1461,11 +1463,19 @@ mod tests {
                 ShippingControlPlaneError::HttpStatus
             };
             assert_eq!(coordinator.heartbeat_lease(&lease), Err(expected));
-            assert_eq!(coordinator.heartbeat_transport_uncertain(&expected), uncertain);
+            assert_eq!(
+                coordinator.heartbeat_transport_uncertain(&expected),
+                uncertain
+            );
             assert_eq!(coordinator.transport.requests.len(), 1);
             assert_eq!(coordinator.runtime_timing()?.idle_expires_at_ms(), 30_000);
             assert_eq!(
-                coordinator.cursor.as_ref().ok_or("missing cursor")?.pending_heartbeat.is_some(),
+                coordinator
+                    .cursor
+                    .as_ref()
+                    .ok_or("missing cursor")?
+                    .pending_heartbeat
+                    .is_some(),
                 uncertain
             );
             if uncertain {
@@ -1474,7 +1484,10 @@ mod tests {
                 assert_eq!(command.sequence, 11);
                 assert_eq!(command.expected_version, 22);
                 // There is no authority refresh or second idempotency key here.
-                assert!(matches!(command.command, CoordinatorCommandDto::Heartbeat { .. }));
+                assert!(matches!(
+                    command.command,
+                    CoordinatorCommandDto::Heartbeat { .. }
+                ));
             }
         }
         Ok(())
