@@ -813,7 +813,10 @@ fn run_canonical_saved_successor_reopen(
     }
 
     if remove_local_successor {
-        root.reject_generation_for_rematerialization(&tenant_id, &profile_id, &successor)?;
+        // Test fixture owns this disposable workspace. Production recovery never
+        // deletes an unresolved candidate to manufacture a cold-reopen test.
+        let disposable_candidate = root.open_generation(&tenant_id, &profile_id, &successor)?;
+        fs::remove_dir_all(disposable_candidate.path())?;
         assert!(
             root.open_generation(&tenant_id, &profile_id, &successor)
                 .is_err()
