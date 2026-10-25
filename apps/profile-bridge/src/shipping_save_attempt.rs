@@ -6,6 +6,7 @@
 //! using these exact bytes. Never remove an unknown record during cleanup.
 use crate::dirty_generation::PreparedDirtyGeneration;
 use crate::local_profile::{GenerationWorkspace, MaterializationRoot};
+use crate::shipping_generation_save::CommittedGenerationSuccessor;
 use encrypted_generation_domain::{
     MAX_GENERATION_CONTAINER_BYTES, inspect_generation_metadata_prelude,
 };
@@ -298,6 +299,56 @@ pub(crate) fn inspect_exact_save_attempt(
         header,
         ciphertext: payload.to_vec(),
     }))
+}
+
+/// Retire a *specific*, fully committed checkpoint after the caller has also
+/// proven accepted local launch readiness and both ownership releases.
+///
+/// Never sweep arbitrary attempt files. The caller must gate this method on
+/// DirtyCloseCompletion::is_fully_saved_locally(). A failed retirement retains
+/// evidence; it is never permission to discard/rebuild a candidate.
+pub(crate) fn retire_fully_saved_attempt(
+    root: &MaterializationRoot,
+    prepared: &PreparedDirtyGeneration,
+    committed: &CommittedGenerationSuccessor,
+    lease: &ProfileLease,
+) -> Result<(), SaveAttemptEvidenceError> {
+    let workspace = prepared.candidate_workspace();
+    if committed.generation_id() != workspace.generation_id()
+        || committed.object_key() != prepared.object_key()
+        || committed.metadata_digest() != prepared.metadata_digest()
+        || committed.container_digest() != prepared.container_digest()
+        || committed.container_bytes()
+            != u64::try_from(prepared.sealed().container().len())
+                .map_err(|_| SaveAttemptEvidenceError::Invalid)?
+        || workspace.tenant_id() != lease.tenant_id()
+        || workspace.profile_id() != lease.profile_id()
+    {
+        return Err(SaveAttemptEvidenceError::Invalid);
+    }
+    let recovered = inspect_exact_save_attempt(
+        root,
+        lease.tenant_id(),
+        lease.profile_id(),
+        committed.generation_id(),
+    )?
+    .ok_or(SaveAttemptEvidenceError::Unavailable)?;
+    if recovered.ciphertext() != prepared.sealed().container()
+        || recovered.container_digest() != committed.container_digest()
+        || !recovered.matches_original_lease(lease)
+    {
+        return Err(SaveAttemptEvidenceError::Changed);
+    }
+    let canonical = attempt_path(
+        root,
+        lease.tenant_id(),
+        lease.profile_id(),
+        committed.generation_id(),
+    );
+    // No fallback deletion if a concurrent operation removed/replaced it.
+    // In particular, never remove the candidate or the base profile data.
+    fs::remove_file(canonical)?;
+    Ok(())
 }
 
 fn attempt_path(
