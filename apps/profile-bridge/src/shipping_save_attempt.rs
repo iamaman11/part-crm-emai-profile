@@ -59,8 +59,8 @@ struct AttemptHeader {
     profile: String,
     base_generation: String,
     successor: String,
-    session: String,
-    fencing: String,
+    session_fingerprint: String,
+    fencing_fingerprint: String,
     epoch: u64,
     source_inventory: u64,
     candidate_inventory: u64,
@@ -89,14 +89,15 @@ impl ReadOnlySaveAttempt {
         &self.header.container_digest
     }
 
+    /// The original fencing token and session ID must never be saved verbatim
+    /// as reusable credentials or exposed through diagnostic records.
     #[must_use]
-    pub(crate) fn original_session(&self) -> &str {
-        &self.header.session
-    }
-
-    #[must_use]
-    pub(crate) fn original_fencing(&self) -> &str {
-        &self.header.fencing
+    pub(crate) fn matches_original_lease(&self, lease: &ProfileLease) -> bool {
+        self.header.session_fingerprint
+            == credential_fingerprint(b"session", lease.session_id().as_str())
+            && self.header.fencing_fingerprint
+                == credential_fingerprint(b"fencing", lease.fencing_token().as_str())
+            && self.header.epoch == lease.epoch()
     }
 }
 
@@ -140,8 +141,8 @@ pub(crate) fn persist_exact_save_attempt(
         profile: lease.profile_id().as_str().to_owned(),
         base_generation: source.generation_id().as_str().to_owned(),
         successor: candidate.generation_id().as_str().to_owned(),
-        session: lease.session_id().as_str().to_owned(),
-        fencing: lease.fencing_token().as_str().to_owned(),
+        session_fingerprint: credential_fingerprint(b"session", lease.session_id().as_str()),
+        fencing_fingerprint: credential_fingerprint(b"fencing", lease.fencing_token().as_str()),
         epoch: lease.epoch(),
         source_inventory: source_inventory.inventory_digest(),
         candidate_inventory: candidate_inventory.inventory_digest(),
@@ -245,8 +246,8 @@ pub(crate) fn inspect_exact_save_attempt(
         || header.successor != successor.as_str()
         || header.schema != "bridge-p3-attempt-v1"
         || header.base_generation == header.successor
-        || header.session.is_empty()
-        || header.fencing.is_empty()
+        || header.session_fingerprint.len() != 64
+        || header.fencing_fingerprint.len() != 64
         || header.epoch == 0
     {
         return Err(SaveAttemptEvidenceError::Invalid);
@@ -367,6 +368,16 @@ fn parse_record(bytes: &[u8]) -> Result<(AttemptHeader, &[u8]), SaveAttemptEvide
         return Err(SaveAttemptEvidenceError::Invalid);
     }
     Ok((header, ciphertext))
+}
+
+fn credential_fingerprint(kind: &[u8], value: &str) -> String {
+    let mut hash = Sha256::new();
+    hash.update(b"bridge-p3-ephemeral-owner-fingerprint-v1\0");
+    hash.update((kind.len() as u64).to_be_bytes());
+    hash.update(kind);
+    hash.update((value.len() as u64).to_be_bytes());
+    hash.update(value.as_bytes());
+    hex(&hash.finalize())
 }
 
 fn hex(bytes: &[u8]) -> String {
