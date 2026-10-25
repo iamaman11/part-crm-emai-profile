@@ -1634,6 +1634,54 @@ mod tests {
     }
 
     #[test]
+    fn object_get_refusal_cleanly_releases_only_if_exact_workspace_remains_absent()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use crate::authoritative_generation::AuthoritativeGenerationPreWriteError;
+        use crate::generation_reopen::GenerationObjectDownloadError;
+        for create_during_attempt in [false, true] {
+            let mut fixture = Fixture::new()?;
+            fixture.generation_id = GenerationId::parse(
+                "generation_get_read_no_local_writer",
+            )?;
+            let root = &fixture.root;
+            let mut operator = operator(&fixture, FakeCamouhost::default())?;
+            let mut runtime_health_started = false;
+            let result = operator.open_with_materialization(
+                &fixture.claim_uri,
+                root,
+                UnixMillis::new(10),
+                |_coordinator, tenant, profile, generation, _device, _epoch| {
+                    if create_during_attempt {
+                        root.create_generation(tenant, profile, generation)
+                            .expect("simulated concurrent writer changes workspace");
+                    }
+                    Err(AuthoritativeGenerationMaterializationError::ReadBeforeLocalUse(
+                        AuthoritativeGenerationPreWriteError::Download(
+                            GenerationObjectDownloadError::Transport,
+                        ),
+                    ))
+                },
+                || {
+                    runtime_health_started = true;
+                    Ok(())
+                },
+            );
+            assert!(matches!(
+                result,
+                Err(OperatorFlowError::AuthoritativeGeneration { .. })
+            ));
+            assert!(!runtime_health_started);
+            assert!(operator.process().actions().is_empty());
+            assert_eq!(operator.coordinator().closed, 1);
+            assert_eq!(
+                operator.coordinator().clean_closed,
+                u64::from(!create_during_attempt)
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
     fn ambiguous_or_new_local_workspace_refuses_clean_materialization_cancel()
     -> Result<(), Box<dyn std::error::Error>> {
         use crate::generation_reopen::GenerationReopenControlError;
