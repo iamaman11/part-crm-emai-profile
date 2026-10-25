@@ -3,7 +3,8 @@ use crate::browser_execution::{
     restore_materialization_binding_after_authoritative_open,
 };
 use crate::generation_reopen::{
-    GenerationObjectDownloadPort, GenerationReopenControlError, GenerationReopenControlPort,
+    GenerationObjectDownloadError, GenerationObjectDownloadPort, GenerationReopenControlError,
+    GenerationReopenControlPort,
 };
 use crate::generation_snapshot::{
     GenerationSnapshotError, materialize_workspace_snapshot_with_pre_publish,
@@ -17,6 +18,18 @@ use profile_platform_primitives::{DeviceId, GenerationId, ProfileId, TenantId};
 
 const LOWER_HEX: &[u8; 16] = b"0123456789abcdef";
 
+/// A proven read-only rejection before either workspace creation or a browser writer.
+/// It is not proof that the downloaded object was trustworthy or the launch is admissible.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AuthoritativeGenerationPreWriteError {
+    DescriptorMismatch,
+    Download(GenerationObjectDownloadError),
+    MetadataMismatch,
+    OpeningControl(GenerationReopenControlError),
+    OpeningMaterialMismatch,
+    Decryption,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum AuthoritativeGenerationMaterializationError {
     Local,
@@ -26,8 +39,11 @@ pub enum AuthoritativeGenerationMaterializationError {
     /// The remote read failed before any local workspace existed or local writer was attempted.
     /// The caller must independently reconfirm absence before a clean coordinator release.
     ControlPlaneBeforeLocalUse(GenerationReopenControlError),
+    /// Only emitted when the exact workspace was absent before all read-only operations.
+    /// Operator independently rechecks absence before requesting a clean no-use release.
+    ReadBeforeLocalUse(AuthoritativeGenerationPreWriteError),
     ControlPlane(GenerationReopenControlError),
-    Download,
+    Download(GenerationObjectDownloadError),
     DescriptorMismatch,
     MetadataMismatch,
     OpeningMaterialMismatch,
@@ -48,7 +64,21 @@ impl core::fmt::Display for AuthoritativeGenerationMaterializationError {
             Self::ControlPlaneBeforeLocalUse(_) | Self::ControlPlane(_) => {
                 "authoritative generation control-plane request failed"
             }
-            Self::Download => "authoritative generation object download failed",
+            Self::Download(_) => "authoritative generation object download failed",
+            Self::ReadBeforeLocalUse(reason) => match reason {
+                AuthoritativeGenerationPreWriteError::DescriptorMismatch =>
+                    "download capability does not name the requested authority",
+                AuthoritativeGenerationPreWriteError::Download(_) =>
+                    "authoritative generation object download failed",
+                AuthoritativeGenerationPreWriteError::MetadataMismatch =>
+                    "encrypted generation metadata does not match server authority",
+                AuthoritativeGenerationPreWriteError::OpeningControl(_) =>
+                    "authoritative generation opening request failed",
+                AuthoritativeGenerationPreWriteError::OpeningMaterialMismatch =>
+                    "opening material does not match the authenticated encrypted metadata",
+                AuthoritativeGenerationPreWriteError::Decryption =>
+                    "authoritative generation decryption failed",
+            },
             Self::DescriptorMismatch => "download capability does not name the requested authority",
             Self::MetadataMismatch => {
                 "encrypted generation metadata does not match server authority"
@@ -68,11 +98,11 @@ impl core::fmt::Display for AuthoritativeGenerationMaterializationError {
 impl std::error::Error for AuthoritativeGenerationMaterializationError {}
 
 impl AuthoritativeGenerationMaterializationError {
-    /// Only the read-only capability lookup with a missing local workspace may certify that the
-    /// materialization owner has performed no local writes. Caller must recheck exact absence.
+    /// All read-only refusals preceding the first local write may prove no materialization use
+    /// only when the initial exact workspace was absent. Caller must recheck exact absence.
     #[must_use]
     pub const fn proves_no_local_write_and_absent_workspace(self) -> bool {
-        matches!(self, Self::ControlPlaneBeforeLocalUse(_))
+        matches!(self, Self::ControlPlaneBeforeLocalUse(_) | Self::ReadBeforeLocalUse(_))
     }
 }
 
@@ -102,6 +132,7 @@ where
     C: GenerationReopenControlPort,
     <C as GenerationReopenControlPort>::Error: Into<GenerationReopenControlError>,
     D: GenerationObjectDownloadPort,
+    D::Error: Into<GenerationObjectDownloadError>,
 {
     let incomplete_local = match root.open_generation(tenant_id, profile_id, generation_id) {
         Ok(workspace) => {
@@ -151,21 +182,44 @@ where
                 AuthoritativeGenerationMaterializationError::ControlPlane(reason)
             }
         })?;
+    // The exact selected workspace was observed missing before any remote read. No local
+    // mutation takes place until materialize_workspace_snapshot_with_pre_publish below.
+    // Existing incomplete/dirty materialization never receives a clean no-use witness.
+    let prewrite_refusal = |reason: AuthoritativeGenerationPreWriteError| {
+        if incomplete_local.is_none() {
+            AuthoritativeGenerationMaterializationError::ReadBeforeLocalUse(reason)
+        } else {
+            match reason {
+                AuthoritativeGenerationPreWriteError::DescriptorMismatch =>
+                    AuthoritativeGenerationMaterializationError::DescriptorMismatch,
+                AuthoritativeGenerationPreWriteError::Download(reason) =>
+                    AuthoritativeGenerationMaterializationError::Download(reason),
+                AuthoritativeGenerationPreWriteError::MetadataMismatch =>
+                    AuthoritativeGenerationMaterializationError::MetadataMismatch,
+                AuthoritativeGenerationPreWriteError::OpeningControl(reason) =>
+                    AuthoritativeGenerationMaterializationError::ControlPlane(reason),
+                AuthoritativeGenerationPreWriteError::OpeningMaterialMismatch =>
+                    AuthoritativeGenerationMaterializationError::OpeningMaterialMismatch,
+                AuthoritativeGenerationPreWriteError::Decryption =>
+                    AuthoritativeGenerationMaterializationError::Decryption,
+            }
+        }
+    };
     let expected_object_key = canonical_generation_object_key(tenant_id, profile_id, generation_id);
     if capability.generation_id() != generation_id
         || capability.object_key() != expected_object_key
         || capability.container_bytes() == 0
         || capability.expires_seconds() == 0
     {
-        return Err(AuthoritativeGenerationMaterializationError::DescriptorMismatch);
+        return Err(prewrite_refusal(AuthoritativeGenerationPreWriteError::DescriptorMismatch));
     }
     let source_container_sha256 = encode_sha256(capability.container_digest());
 
     let container = downloader
         .download_generation_object(&capability)
-        .map_err(|_| AuthoritativeGenerationMaterializationError::Download)?;
+        .map_err(|error| prewrite_refusal(AuthoritativeGenerationPreWriteError::Download(error.into())))?;
     let inspected = inspect_generation_metadata_prelude(&container)
-        .map_err(|_| AuthoritativeGenerationMaterializationError::MetadataMismatch)?;
+        .map_err(|_| prewrite_refusal(AuthoritativeGenerationPreWriteError::MetadataMismatch))?;
     let metadata = inspected.metadata();
     if metadata.tenant_id() != tenant_id
         || metadata.profile_id() != profile_id
@@ -173,16 +227,16 @@ where
         || metadata.object_key() != expected_object_key
         || inspected.metadata_digest().bytes() != capability.metadata_digest()
     {
-        return Err(AuthoritativeGenerationMaterializationError::MetadataMismatch);
+        return Err(prewrite_refusal(AuthoritativeGenerationPreWriteError::MetadataMismatch));
     }
     let metadata_prelude = container
         .get(..inspected.prelude_bytes())
-        .ok_or(AuthoritativeGenerationMaterializationError::MetadataMismatch)?;
+        .ok_or_else(|| prewrite_refusal(AuthoritativeGenerationPreWriteError::MetadataMismatch))?;
     let opening_key = control
         .opening_material(tenant_id, profile_id, metadata_prelude)
-        .map_err(|error| AuthoritativeGenerationMaterializationError::ControlPlane(error.into()))?;
+        .map_err(|error| prewrite_refusal(AuthoritativeGenerationPreWriteError::OpeningControl(error.into())))?;
     if opening_key.key_id() != metadata.key_id() {
-        return Err(AuthoritativeGenerationMaterializationError::OpeningMaterialMismatch);
+        return Err(prewrite_refusal(AuthoritativeGenerationPreWriteError::OpeningMaterialMismatch));
     }
 
     let opened = open_generation_expected(
@@ -192,7 +246,7 @@ where
         profile_id,
         generation_id,
     )
-    .map_err(|_| AuthoritativeGenerationMaterializationError::Decryption)?;
+    .map_err(|_| prewrite_refusal(AuthoritativeGenerationPreWriteError::Decryption))?;
     if let Some(workspace) = incomplete_local {
         // The caller holds the precise coordinator lease. Take this device's local lock
         // and compare ALL workspace bytes, including mutable user_data, with cloud truth.
@@ -262,11 +316,13 @@ fn encode_sha256(digest: [u8; 32]) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        AuthoritativeGenerationMaterializationError, encode_sha256, ensure_authoritative_generation,
+        AuthoritativeGenerationMaterializationError, AuthoritativeGenerationPreWriteError,
+        encode_sha256, ensure_authoritative_generation,
     };
     use crate::browser_execution::{load_materialization_binding, persist_materialization_binding};
     use crate::generation_reopen::{
-        GenerationDownloadCapability, GenerationObjectDownloadPort, GenerationReopenControlError,
+        GenerationDownloadCapability, GenerationObjectDownloadError, GenerationObjectDownloadPort,
+        GenerationReopenControlError,
         GenerationReopenControlPort,
     };
     use crate::generation_snapshot::encode_workspace_snapshot;
@@ -478,7 +534,7 @@ mod tests {
     }
 
     impl GenerationObjectDownloadPort for FakeDownloader {
-        type Error = ();
+        type Error = GenerationObjectDownloadError;
 
         fn download_generation_object(
             &mut self,
@@ -488,11 +544,108 @@ mod tests {
             if digest != capability.container_digest()
                 || u64::try_from(self.container.len()).ok() != Some(capability.container_bytes())
             {
-                return Err(());
+                return Err(GenerationObjectDownloadError::DigestMismatch);
             }
             self.calls += 1;
             Ok(self.container.clone())
         }
+    }
+
+    #[test]
+    fn object_get_failure_before_any_workspace_keeps_typed_reason_and_no_use()
+    -> Result<(), Box<dyn std::error::Error>> {
+        struct DisconnectedObjectGet(GenerationObjectDownloadError);
+        impl GenerationObjectDownloadPort for DisconnectedObjectGet {
+            type Error = GenerationObjectDownloadError;
+            fn download_generation_object(
+                &mut self,
+                _: &GenerationDownloadCapability,
+            ) -> Result<Vec<u8>, Self::Error> {
+                Err(self.0)
+            }
+        }
+        for reason in [
+            GenerationObjectDownloadError::Transport,
+            GenerationObjectDownloadError::HttpStatus,
+            GenerationObjectDownloadError::SizeMismatch,
+            GenerationObjectDownloadError::DigestMismatch,
+            GenerationObjectDownloadError::InvalidCapability,
+        ] {
+            let fixture = Fixture::new()?;
+            let mut control = fixture.control();
+            let error = ensure_authoritative_generation(
+                &fixture.root,
+                &fixture.tenant_id,
+                &fixture.profile_id,
+                &fixture.generation_id,
+                &DeviceId::parse("device_read_only_get")?,
+                1,
+                &mut control,
+                &mut DisconnectedObjectGet(reason),
+            ).expect_err("object GET failed before local write");
+            assert_eq!(
+                error,
+                AuthoritativeGenerationMaterializationError::ReadBeforeLocalUse(
+                    AuthoritativeGenerationPreWriteError::Download(reason)
+                )
+            );
+            assert!(error.proves_no_local_write_and_absent_workspace());
+            assert!(matches!(
+                fixture.root.open_generation(
+                    &fixture.tenant_id,
+                    &fixture.profile_id,
+                    &fixture.generation_id,
+                ),
+                Err(crate::local_profile::LocalProfileError::Io(
+                    std::io::ErrorKind::NotFound
+                ))
+            ));
+            assert_eq!(control.opening_calls, 0);
+            fixture.cleanup();
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn object_get_failure_with_existing_workspace_never_claims_clean_no_use()
+    -> Result<(), Box<dyn std::error::Error>> {
+        struct DisconnectedObjectGet;
+        impl GenerationObjectDownloadPort for DisconnectedObjectGet {
+            type Error = GenerationObjectDownloadError;
+            fn download_generation_object(
+                &mut self,
+                _: &GenerationDownloadCapability,
+            ) -> Result<Vec<u8>, Self::Error> {
+                Err(GenerationObjectDownloadError::Transport)
+            }
+        }
+        let fixture = Fixture::new()?;
+        let _incomplete = fixture.root.create_generation(
+            &fixture.tenant_id,
+            &fixture.profile_id,
+            &fixture.generation_id,
+        )?;
+        let mut control = fixture.control();
+        let error = ensure_authoritative_generation(
+            &fixture.root,
+            &fixture.tenant_id,
+            &fixture.profile_id,
+            &fixture.generation_id,
+            &DeviceId::parse("device_incomplete_object_get")?,
+            1,
+            &mut control,
+            &mut DisconnectedObjectGet,
+        ).expect_err("incomplete workspace retained");
+        assert_eq!(
+            error,
+            AuthoritativeGenerationMaterializationError::Download(
+                GenerationObjectDownloadError::Transport
+            )
+        );
+        assert!(!error.proves_no_local_write_and_absent_workspace());
+        assert_eq!(control.opening_calls, 0);
+        fixture.cleanup();
+        Ok(())
     }
 
     #[test]
@@ -888,7 +1041,9 @@ mod tests {
                 &mut control,
                 &mut downloader,
             ),
-            Err(AuthoritativeGenerationMaterializationError::MetadataMismatch)
+            Err(AuthoritativeGenerationMaterializationError::ReadBeforeLocalUse(
+                AuthoritativeGenerationPreWriteError::MetadataMismatch,
+            ))
         );
         assert_eq!(control.opening_calls, 0);
         assert!(
@@ -926,7 +1081,9 @@ mod tests {
                 &mut control,
                 &mut downloader,
             ),
-            Err(AuthoritativeGenerationMaterializationError::DescriptorMismatch)
+            Err(AuthoritativeGenerationMaterializationError::ReadBeforeLocalUse(
+                AuthoritativeGenerationPreWriteError::DescriptorMismatch,
+            ))
         );
         assert_eq!(downloader.calls, 0);
         assert_eq!(control.opening_calls, 0);
