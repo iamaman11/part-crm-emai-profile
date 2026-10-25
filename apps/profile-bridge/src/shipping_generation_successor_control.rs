@@ -9,7 +9,9 @@ use crate::shipping_generation_save::{
     GenerationSuccessorCommitOutcome, GenerationSuccessorControlPort,
     GenerationUploadAuthorization, SignedGenerationUploadCapability,
 };
-use crate::shipping_save_attempt::inspect_exact_save_attempt;
+use crate::shipping_save_attempt::{
+    discover_unresolved_exact_save_attempt, inspect_exact_save_attempt,
+};
 use control_plane_contract::profile_generation_api::{
     BRIDGE_PROFILE_GENERATION_COMMIT_PATH_TEMPLATE,
     BRIDGE_PROFILE_GENERATION_OBSERVE_PATH_TEMPLATE,
@@ -159,6 +161,36 @@ where
                 GenerationSuccessorCommitOutcome::AlreadyActive
             }
         })
+    }
+}
+
+/// Discover one durable exact checkpoint without requiring a surviving in-memory
+/// successor/lease and observe the server's exact active-generation descriptor.
+/// Only the signed-in machine transport is used; this function NEVER replays the
+/// predecessor fence and NEVER uploads, commits, deletes or infers Saved. A
+/// false observation leaves the original bytes and pending attempt untouched.
+pub fn observe_discovered_successor_after_restart<T: MachineHttpPort>(
+    root: &MaterializationRoot,
+    tenant_id: &TenantId,
+    profile_id: &ProfileId,
+    transport: &mut T,
+) -> Result<Option<bool>, ShippingControlPlaneError> {
+    let attempt = discover_unresolved_exact_save_attempt(root, tenant_id, profile_id)
+        .map_err(|_| ShippingControlPlaneError::InvalidResponse)?;
+    match attempt {
+        Some(attempt) => {
+            let successor = GenerationId::parse(attempt.successor_id().to_owned())
+                .map_err(|_| ShippingControlPlaneError::InvalidResponse)?;
+            observe_retained_successor_after_restart(
+                root,
+                tenant_id,
+                profile_id,
+                &successor,
+                transport,
+            )
+            .map(Some)
+        }
+        None => Ok(None),
     }
 }
 
