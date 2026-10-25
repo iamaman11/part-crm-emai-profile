@@ -11,6 +11,9 @@ use crate::operator_flow::{
 };
 use crate::runtime_bundle::ApprovedRuntimeBundle;
 use crate::shipping_control_plane::{MachineHttpMethod, MachineHttpPort, MachineHttpResponse};
+use crate::shipping_save_attempt::{
+    SaveAttemptEvidenceError, inspect_exact_save_attempt,
+};
 use crate::shipping_generation_save::{
     SignedGenerationObjectPutPort, SignedGenerationUploadCapability,
 };
@@ -627,6 +630,155 @@ fn canonical_operator_save_retries_same_successor_after_upload_failure()
     ));
     assert_eq!(trace.paths.borrow().len(), requests_before_duplicate);
     assert_eq!(put_calls.get(), puts_before_duplicate);
+    Ok(())
+}
+
+#[test]
+fn canonical_save_checkpoint_survives_owner_process_loss_without_authorizing_publish()
+-> Result<(), Box<dyn std::error::Error>> {
+    let fixture = Fixture::new("checkpoint-restart")?;
+    let mut operator = fixture.operator()?;
+    fixture.open_mutate_and_close(&mut operator)?;
+    let trace = TransportTrace::default();
+    let put_calls = Rc::new(Cell::new(0));
+    let first = operator.save_retained_successor(
+        &fixture.root,
+        Transport::new([Ok(upload_required_response()?)], trace.clone()),
+        &mut Put {
+            fail: true,
+            calls: Rc::clone(&put_calls),
+        },
+        UnixMillis::new(30),
+    );
+    assert!(matches!(
+        first,
+        Err(OperatorFlowError::Stage(
+            OperatorFailureStage::GenerationSave
+        ))
+    ));
+    let candidate = GenerationId::parse(
+        trace
+            .generation_ids
+            .borrow()
+            .first()
+            .ok_or("missing attempted generation")?
+            .clone(),
+    )?;
+    let before = inspect_exact_save_attempt(
+        &fixture.root,
+        fixture.actor.tenant_scope().tenant_id(),
+        &fixture.profile_id,
+        &candidate,
+    )?
+    .ok_or("missing durable save attempt")?;
+    let expected_hash = before.container_digest().to_owned();
+    let expected_ciphertext = before.ciphertext().to_vec();
+    assert!(!expected_ciphertext.is_empty());
+    assert_eq!(before.original_session(), fixture.lease.session_id().as_str());
+    assert_eq!(before.original_fencing(), fixture.lease.fencing_token().as_str());
+    drop(operator);
+
+    // Fresh root handle, no RetainedDirtyClose or in-memory sealed generation.
+    // Inspection is local/read-only and must not perform HTTP PUT or commit.
+    let reopened_root = MaterializationRoot::open_or_create(&fixture.root_path)?;
+    let recovered = inspect_exact_save_attempt(
+        &reopened_root,
+        fixture.actor.tenant_scope().tenant_id(),
+        &fixture.profile_id,
+        &candidate,
+    )?
+    .ok_or("the exact attempt did not survive process loss")?;
+    assert_eq!(recovered.ciphertext(), expected_ciphertext);
+    assert_eq!(recovered.container_digest(), expected_hash);
+    assert_eq!(put_calls.get(), 1);
+    assert_eq!(trace.paths.borrow().len(), 1);
+    assert!(reopened_root.open_generation(
+        fixture.actor.tenant_scope().tenant_id(),
+        &fixture.profile_id,
+        &candidate,
+    ).is_ok());
+    Ok(())
+}
+
+#[test]
+fn canonical_save_refuses_tampered_checkpoint_before_any_retry_network_effect()
+-> Result<(), Box<dyn std::error::Error>> {
+    let fixture = Fixture::new("checkpoint-tampered")?;
+    let mut operator = fixture.operator()?;
+    fixture.open_mutate_and_close(&mut operator)?;
+    let trace = TransportTrace::default();
+    let put_calls = Rc::new(Cell::new(0));
+    let first = operator.save_retained_successor(
+        &fixture.root,
+        Transport::new([Ok(upload_required_response()?)], trace.clone()),
+        &mut Put {
+            fail: true,
+            calls: Rc::clone(&put_calls),
+        },
+        UnixMillis::new(30),
+    );
+    assert!(matches!(
+        first,
+        Err(OperatorFlowError::Stage(
+            OperatorFailureStage::GenerationSave
+        ))
+    ));
+    let candidate = GenerationId::parse(
+        trace
+            .generation_ids
+            .borrow()
+            .first()
+            .ok_or("missing attempted generation")?
+            .clone(),
+    )?;
+    let checkpoint = fs::read_dir(fixture.root.path())?
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .find(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| {
+                    name.starts_with(".profile-save-attempt-v1-")
+                        && name.ends_with(".bin")
+                })
+        })
+        .ok_or("checkpoint not published")?;
+    let mut original = fs::read(&checkpoint)?;
+    let final_byte = original.last_mut().ok_or("empty checkpoint")?;
+    *final_byte ^= 1;
+    fs::write(&checkpoint, &original)?;
+
+    assert!(matches!(
+        inspect_exact_save_attempt(
+            &fixture.root,
+            fixture.actor.tenant_scope().tenant_id(),
+            &fixture.profile_id,
+            &candidate,
+        ),
+        Err(SaveAttemptEvidenceError::Invalid)
+    ));
+    let calls_before = trace.paths.borrow().len();
+    let retry = operator.save_retained_successor(
+        &fixture.root,
+        Transport::new([], trace.clone()),
+        &mut Put {
+            fail: false,
+            calls: Rc::clone(&put_calls),
+        },
+        UnixMillis::new(40),
+    );
+    assert!(matches!(
+        retry,
+        Err(OperatorFlowError::Stage(
+            OperatorFailureStage::GenerationSave
+        ))
+    ));
+    assert_eq!(trace.paths.borrow().len(), calls_before);
+    assert_eq!(put_calls.get(), 1);
+    assert_eq!(operator.coordinator().closed, 0);
+    assert!(operator.has_pending_dirty_close());
+    fixture.assert_base_lock_held()?;
+    assert!(checkpoint.exists());
     Ok(())
 }
 
