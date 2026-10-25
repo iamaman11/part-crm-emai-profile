@@ -776,7 +776,9 @@ mod tests {
             &mut MalformedObjectGet,
         )
         .err()
-        .ok_or_else(|| std::io::Error::other("malformed encrypted object is rejected before publication"))?;
+        .ok_or_else(|| {
+            std::io::Error::other("malformed encrypted object is rejected before publication")
+        })?;
         assert_eq!(
             refusal,
             AuthoritativeGenerationMaterializationError::ReadBeforeLocalUse(
