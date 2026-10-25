@@ -87,6 +87,9 @@ impl UserDiagnostic {
                 },
                 ShippingCompositionError::Clock => "BRIDGE_CLOCK_UNAVAILABLE",
                 ShippingCompositionError::ControlPlane => "BRIDGE_SESSION_NOT_AUTHORIZED",
+                ShippingCompositionError::HeartbeatAuthorityUncertain => {
+                    "BRIDGE_HEARTBEAT_RECOVERY_REQUIRED"
+                },
                 ShippingCompositionError::DeliveryHealth => "BRIDGE_RUNTIME_NOT_READY",
                 ShippingCompositionError::DeliveryHandoff => "BRIDGE_UPDATE_INTERRUPTED",
                 ShippingCompositionError::FirstInstallation(error) => {
@@ -181,6 +184,9 @@ impl UserDiagnostic {
             }
             Self::Launch(Launch::ControlPlane) => {
                 "The profile session could not be authorized. Return to the application and check your access and the profile's current session."
+            }
+            Self::Launch(Launch::HeartbeatAuthorityUncertain) => {
+                "Connection to the session coordinator could not be confirmed. The browser was closed and its local changes were preserved, but cloud save has not been confirmed. Restore connectivity and review this profile's recovery status; do not delete or replace its files."
             }
             Self::Launch(Launch::DeliveryHealth) => {
                 "The installed browser components have not passed their readiness check. Return to computer setup in the application. The profile has not been opened."
