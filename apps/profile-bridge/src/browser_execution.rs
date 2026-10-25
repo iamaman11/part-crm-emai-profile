@@ -340,7 +340,7 @@ fn required<'a>(
 /// Publish immutable local readiness only after the complete record has been synced.
 /// Direct create-new on the canonical name could expose a torn sidecar after power loss;
 /// a retry would then see AlreadyExists and remain blocked with no usable evidence.
-/// A same-directory hard link is no-replace and never overwrites foreign/dirty evidence.
+/// A same-volume hard link is no-replace and never overwrites foreign/dirty evidence.
 fn persist_exact_text(path: &Path, content: &str) -> Result<(), BrowserLaunchBlocker> {
     match fs::symlink_metadata(path) {
         Ok(_) => {
