@@ -32,7 +32,8 @@ use crate::shipping_generation_save::{
 use crate::shipping_generation_successor_control::ControlPlaneGenerationSuccessor;
 use crate::shipping_save_attempt::{
     has_unresolved_save_attempt_for_profile, inspect_exact_save_attempt,
-    persist_exact_save_attempt, retire_fully_saved_attempt,
+    persist_exact_save_attempt, persist_local_unsynced_intent,
+    retire_fully_saved_attempt, retire_local_unsynced_after_exact_checkpoint,
 };
 #[cfg(any(test, feature = "synthetic-test-bin"))]
 use application_ports::generation_objects::{
@@ -925,6 +926,31 @@ where
         }
     }
 
+    /// Installed controlled-close boundary: after native Firefox has ceased
+    /// writing, persist minimal LOCAL_UNSYNCED evidence before cloud-dependent
+    /// generation sealing, upload or coordinator commit. The original retained
+    /// workspace lock and all original user_data bytes are left in place.
+    ///
+    /// A failed marker write stops cloud save and never declares Clean/Saved.
+    /// The ordinary synthetic close remains available only for its existing
+    /// targeted tests and does not create a second shipping entrypoint.
+    pub fn close_with_durable_local_intent(
+        &mut self,
+        root: &MaterializationRoot,
+        now: UnixMillis,
+    ) -> Result<(), OperatorFlowError> {
+        self.close(now)?;
+        let retained = self
+            .retained_dirty
+            .as_ref()
+            .ok_or(OperatorFlowError::Stage(OperatorFailureStage::GenerationSave))?;
+        let source = retained
+            .open_base_workspace(root)
+            .map_err(|_| OperatorFlowError::Stage(OperatorFailureStage::GenerationSave))?;
+        persist_local_unsynced_intent(root, &source, retained.lease())
+            .map_err(|_| OperatorFlowError::Stage(OperatorFailureStage::GenerationSave))
+    }
+
     /// Canonical ordinary P3 save. Pre-commit failures retain dirty local ownership and the exact
     /// coordinator lease for retry. Once `publish_verify_and_commit_successor` returns, N+1 is the
     /// backend authority permanently; local completion can require recovery but can never fall back
@@ -1029,6 +1055,15 @@ where
                 OperatorFailureStage::GenerationSave,
             ));
         }
+
+        // The complete sealed checkpoint is already crash-durable and
+        // independently verified. Retire only the matching tiny offline
+        // close intent before PUT: on a crash its full exact checkpoint
+        // remains the sole local unsynced proof, never missing evidence.
+        retire_local_unsynced_after_exact_checkpoint(
+            root, &workspace, &lease, &recovered,
+        )
+        .map_err(|_| OperatorFlowError::Stage(OperatorFailureStage::GenerationSave))?;
 
         let committed = publish_verify_and_commit_successor(
             lease.tenant_id(),
