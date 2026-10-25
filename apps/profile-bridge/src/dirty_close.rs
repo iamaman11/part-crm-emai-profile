@@ -1,7 +1,7 @@
+use crate::browser_execution::{BrowserLaunchBlocker, persist_committed_successor_binding};
 #[cfg(any(test, feature = "synthetic-test-bin"))]
 use crate::browser_mail_query::BrowserMailExecutionProof;
 use crate::dirty_generation::PreparedDirtyGeneration;
-use crate::browser_execution::{BrowserLaunchBlocker, persist_committed_successor_binding};
 #[cfg(any(test, feature = "synthetic-test-bin"))]
 use crate::dirty_generation_finalize::DirtyGenerationFinalizeError;
 #[cfg(any(test, feature = "synthetic-test-bin"))]
@@ -130,11 +130,13 @@ impl RetainedDirtyClose {
                     committed.generation_id(),
                     committed.container_digest(),
                 ) {
-                    Ok(()) => DirtyCloseLocalOutcome::CandidateAccepted(LocalGenerationRecord::new(
-                        committed.generation_id().clone(),
-                        inventory.total_bytes(),
-                        transition_at,
-                    )),
+                    Ok(()) => {
+                        DirtyCloseLocalOutcome::CandidateAccepted(LocalGenerationRecord::new(
+                            committed.generation_id().clone(),
+                            inventory.total_bytes(),
+                            transition_at,
+                        ))
+                    }
                     Err(reason) => DirtyCloseLocalOutcome::MaterializationBindingBlocked {
                         generation_id: committed.generation_id().clone(),
                         reason,
