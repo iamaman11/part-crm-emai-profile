@@ -518,10 +518,34 @@ mod tests {
         use crate::operator_flow::{CleanupFailures, OperatorFlowError};
         let cases = [
             (Reason::LocalAccessDenied, "BRIDGE_LOCAL_CACHE_INACCESSIBLE"),
-            (Reason::Download(crate::generation_reopen::GenerationObjectDownloadError::Transport), "BRIDGE_GENERATION_OBJECT_TRANSPORT_FAILED"),
-            (Reason::Download(crate::generation_reopen::GenerationObjectDownloadError::HttpStatus), "BRIDGE_GENERATION_OBJECT_HTTP_REJECTED"),
-            (Reason::ReadBeforeLocalUse(crate::authoritative_generation::AuthoritativeGenerationPreWriteError::Download(crate::generation_reopen::GenerationObjectDownloadError::Transport)), "BRIDGE_GENERATION_OBJECT_TRANSPORT_FAILED"),
-            (Reason::ReadBeforeLocalUse(crate::authoritative_generation::AuthoritativeGenerationPreWriteError::Download(crate::generation_reopen::GenerationObjectDownloadError::SizeMismatch)), "BRIDGE_GENERATION_INTEGRITY_FAILED"),
+            (
+                Reason::Download(
+                    crate::generation_reopen::GenerationObjectDownloadError::Transport,
+                ),
+                "BRIDGE_GENERATION_OBJECT_TRANSPORT_FAILED",
+            ),
+            (
+                Reason::Download(
+                    crate::generation_reopen::GenerationObjectDownloadError::HttpStatus,
+                ),
+                "BRIDGE_GENERATION_OBJECT_HTTP_REJECTED",
+            ),
+            (
+                Reason::ReadBeforeLocalUse(
+                    crate::authoritative_generation::AuthoritativeGenerationPreWriteError::Download(
+                        crate::generation_reopen::GenerationObjectDownloadError::Transport,
+                    ),
+                ),
+                "BRIDGE_GENERATION_OBJECT_TRANSPORT_FAILED",
+            ),
+            (
+                Reason::ReadBeforeLocalUse(
+                    crate::authoritative_generation::AuthoritativeGenerationPreWriteError::Download(
+                        crate::generation_reopen::GenerationObjectDownloadError::SizeMismatch,
+                    ),
+                ),
+                "BRIDGE_GENERATION_INTEGRITY_FAILED",
+            ),
             (
                 Reason::ControlPlane(
                     crate::generation_reopen::GenerationReopenControlError::Transport,
