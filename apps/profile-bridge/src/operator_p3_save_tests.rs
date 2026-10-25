@@ -672,14 +672,7 @@ fn canonical_save_checkpoint_survives_owner_process_loss_without_authorizing_pub
     let expected_hash = before.container_digest().to_owned();
     let expected_ciphertext = before.ciphertext().to_vec();
     assert!(!expected_ciphertext.is_empty());
-    assert_eq!(
-        before.original_session(),
-        fixture.lease.session_id().as_str()
-    );
-    assert_eq!(
-        before.original_fencing(),
-        fixture.lease.fencing_token().as_str()
-    );
+    assert!(before.matches_original_lease(&fixture.lease));
     drop(operator);
 
     // Fresh root handle, no RetainedDirtyClose or in-memory sealed generation.
