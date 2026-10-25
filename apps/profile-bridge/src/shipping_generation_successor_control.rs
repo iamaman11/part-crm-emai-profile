@@ -340,13 +340,17 @@ const fn control_error<S>(error: ShippingControlPlaneError) -> GenerationSuccess
 
 #[cfg(test)]
 mod tests {
-    use super::{ControlPlaneGenerationSuccessor, GenerationSuccessorControlError};
+    use super::{
+        ControlPlaneGenerationSuccessor, GenerationSuccessorControlError,
+        observe_retained_successor_after_restart,
+    };
     use crate::dirty_generation::{
         GenerationSealingMaterial, GenerationSealingMaterialPort,
         prepare_dirty_generation_candidate,
     };
     use crate::local_profile::{LocalGenerationRecord, MaterializationRoot};
     use crate::shipping_control_plane::{MachineHttpMethod, MachineHttpPort, MachineHttpResponse};
+    use crate::shipping_save_attempt::persist_exact_save_attempt;
     use crate::shipping_generation_save::{
         GenerationSuccessorCommitOutcome, GenerationSuccessorControlPort,
         GenerationUploadAuthorization,
@@ -545,4 +549,78 @@ mod tests {
         ));
         Ok(())
     }
+    #[test]
+    fn read_only_observe_recovers_exact_committed_answer_without_old_fencing_token()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let fixture = Fixture::new()?;
+        let root = MaterializationRoot::open_or_create(&fixture.root_path)?;
+        let source = root.open_generation(&fixture.tenant, &fixture.profile, &fixture.base)?;
+        persist_exact_save_attempt(&root, &source, &fixture.prepared, &fixture.lease)?;
+        let successor = fixture.prepared.candidate_workspace().generation_id();
+
+        let mut transport = Transport {
+            responses: VecDeque::from([MachineHttpResponse::new(
+                200,
+                br#"{"activeExact":true}"#.to_vec(),
+            )]),
+            paths: Vec::new(),
+        };
+        assert!(observe_retained_successor_after_restart(
+            &root,
+            &fixture.tenant,
+            &fixture.profile,
+            successor,
+            &mut transport,
+        )?);
+        assert_eq!(transport.paths.len(), 1);
+        assert!(transport.paths[0].ends_with("/generation-successor/observe"));
+        assert!(!transport.paths[0].ends_with("/commit"));
+
+        let mut uncertain = Transport {
+            responses: VecDeque::from([MachineHttpResponse::new(
+                200,
+                br#"{"activeExact":false}"#.to_vec(),
+            )]),
+            paths: Vec::new(),
+        };
+        assert!(!observe_retained_successor_after_restart(
+            &root,
+            &fixture.tenant,
+            &fixture.profile,
+            successor,
+            &mut uncertain,
+        )?);
+        assert_eq!(uncertain.paths.len(), 1);
+
+        let mut malformed = Transport {
+            responses: VecDeque::from([MachineHttpResponse::new(
+                200,
+                br#"{"activeExact":true,"untrustedField":1}"#.to_vec(),
+            )]),
+            paths: Vec::new(),
+        };
+        assert!(observe_retained_successor_after_restart(
+            &root,
+            &fixture.tenant,
+            &fixture.profile,
+            successor,
+            &mut malformed,
+        )
+        .is_err());
+
+        let mutated = fixture.prepared.candidate_workspace().path().join("prefs.js");
+        std::fs::write(mutated, b"mutated-after-checkpoint")?;
+        let mut never_network = Transport::default();
+        assert!(observe_retained_successor_after_restart(
+            &root,
+            &fixture.tenant,
+            &fixture.profile,
+            successor,
+            &mut never_network,
+        )
+        .is_err());
+        assert!(never_network.paths.is_empty());
+        Ok(())
+    }
+
 }
