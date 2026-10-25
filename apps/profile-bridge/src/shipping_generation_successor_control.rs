@@ -2,7 +2,6 @@ use crate::dirty_generation::{
     GenerationSealingMaterial, GenerationSealingMaterialPort, PreparedDirtyGeneration,
 };
 use crate::local_profile::MaterializationRoot;
-use crate::shipping_save_attempt::inspect_exact_save_attempt;
 use crate::shipping_control_plane::{
     MachineHttpMethod, MachineHttpPort, ShippingControlPlaneError,
 };
@@ -10,6 +9,7 @@ use crate::shipping_generation_save::{
     GenerationSuccessorCommitOutcome, GenerationSuccessorControlPort,
     GenerationUploadAuthorization, SignedGenerationUploadCapability,
 };
+use crate::shipping_save_attempt::inspect_exact_save_attempt;
 use control_plane_contract::profile_generation_api::{
     BRIDGE_PROFILE_GENERATION_COMMIT_PATH_TEMPLATE,
     BRIDGE_PROFILE_GENERATION_OBSERVE_PATH_TEMPLATE,
@@ -350,11 +350,11 @@ mod tests {
     };
     use crate::local_profile::{LocalGenerationRecord, MaterializationRoot};
     use crate::shipping_control_plane::{MachineHttpMethod, MachineHttpPort, MachineHttpResponse};
-    use crate::shipping_save_attempt::persist_exact_save_attempt;
     use crate::shipping_generation_save::{
         GenerationSuccessorCommitOutcome, GenerationSuccessorControlPort,
         GenerationUploadAuthorization,
     };
+    use crate::shipping_save_attempt::persist_exact_save_attempt;
     use bridge_domain::BridgePortError;
     use encrypted_generation_domain::{GenerationDek, KeyId, NoncePrefix};
     use profile_platform_primitives::{
@@ -599,28 +599,34 @@ mod tests {
             )]),
             paths: Vec::new(),
         };
-        assert!(observe_retained_successor_after_restart(
-            &root,
-            &fixture.tenant,
-            &fixture.profile,
-            successor,
-            &mut malformed,
-        )
-        .is_err());
+        assert!(
+            observe_retained_successor_after_restart(
+                &root,
+                &fixture.tenant,
+                &fixture.profile,
+                successor,
+                &mut malformed,
+            )
+            .is_err()
+        );
 
-        let mutated = fixture.prepared.candidate_workspace().path().join("prefs.js");
+        let mutated = fixture
+            .prepared
+            .candidate_workspace()
+            .path()
+            .join("prefs.js");
         std::fs::write(mutated, b"mutated-after-checkpoint")?;
         let mut never_network = Transport::default();
-        assert!(observe_retained_successor_after_restart(
-            &root,
-            &fixture.tenant,
-            &fixture.profile,
-            successor,
-            &mut never_network,
-        )
-        .is_err());
+        assert!(
+            observe_retained_successor_after_restart(
+                &root,
+                &fixture.tenant,
+                &fixture.profile,
+                successor,
+                &mut never_network,
+            )
+            .is_err()
+        );
         assert!(never_network.paths.is_empty());
         Ok(())
-    }
-
-}
+    }}
