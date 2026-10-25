@@ -122,8 +122,12 @@ pub(crate) fn persist_exact_save_attempt(
     {
         return Err(SaveAttemptEvidenceError::Invalid);
     }
-    let source_inventory = source.inventory().map_err(|_| SaveAttemptEvidenceError::Changed)?;
-    let candidate_inventory = candidate.inventory().map_err(|_| SaveAttemptEvidenceError::Changed)?;
+    let source_inventory = source
+        .inventory()
+        .map_err(|_| SaveAttemptEvidenceError::Changed)?;
+    let candidate_inventory = candidate
+        .inventory()
+        .map_err(|_| SaveAttemptEvidenceError::Changed)?;
     if source_inventory != *prepared.candidate_inventory()
         || candidate_inventory != *prepared.candidate_inventory()
     {
@@ -148,7 +152,8 @@ pub(crate) fn persist_exact_save_attempt(
         container_bytes: u64::try_from(ciphertext.len())
             .map_err(|_| SaveAttemptEvidenceError::Invalid)?,
     };
-    let header_bytes = serde_json::to_vec(&header).map_err(|_| SaveAttemptEvidenceError::Invalid)?;
+    let header_bytes =
+        serde_json::to_vec(&header).map_err(|_| SaveAttemptEvidenceError::Invalid)?;
     let size = 12_usize
         .checked_add(header_bytes.len())
         .and_then(|n| n.checked_add(ciphertext.len()))
@@ -162,7 +167,12 @@ pub(crate) fn persist_exact_save_attempt(
         return Err(SaveAttemptEvidenceError::Invalid);
     }
 
-    let canonical = attempt_path(root, candidate.tenant_id(), candidate.profile_id(), candidate.generation_id());
+    let canonical = attempt_path(
+        root,
+        candidate.tenant_id(),
+        candidate.profile_id(),
+        candidate.generation_id(),
+    );
     // Idempotence is only byte-for-byte: a different header, key, nonce or
     // ciphertext under the same deterministic attempt never gets overwritten.
     match fs::symlink_metadata(&canonical) {
@@ -246,7 +256,10 @@ pub(crate) fn inspect_exact_save_attempt(
     if prelude.metadata().tenant_id() != tenant
         || prelude.metadata().profile_id() != profile
         || prelude.metadata().generation_id() != successor
-        || prelude.metadata().base_generation_id().map(GenerationId::as_str)
+        || prelude
+            .metadata()
+            .base_generation_id()
+            .map(GenerationId::as_str)
             != Some(header.base_generation.as_str())
         || prelude.metadata().object_key() != header.object_key
         || hex(&prelude.metadata_digest().bytes()) != header.metadata_digest
@@ -259,7 +272,9 @@ pub(crate) fn inspect_exact_save_attempt(
     let candidate = root
         .open_generation(tenant, profile, successor)
         .map_err(|_| SaveAttemptEvidenceError::Changed)?;
-    let inventory = candidate.inventory().map_err(|_| SaveAttemptEvidenceError::Changed)?;
+    let inventory = candidate
+        .inventory()
+        .map_err(|_| SaveAttemptEvidenceError::Changed)?;
     if inventory.inventory_digest() != header.candidate_inventory
         || inventory.total_bytes() != header.candidate_bytes
     {
@@ -273,7 +288,8 @@ pub(crate) fn inspect_exact_save_attempt(
     if source
         .inventory()
         .map_err(|_| SaveAttemptEvidenceError::Changed)?
-        .inventory_digest() != header.source_inventory
+        .inventory_digest()
+        != header.source_inventory
     {
         return Err(SaveAttemptEvidenceError::Changed);
     }
@@ -295,7 +311,10 @@ fn attempt_path(
         sha.update((part.len() as u64).to_be_bytes());
         sha.update(part.as_bytes());
     }
-    root.path().join(format!(".profile-save-attempt-v1-{}.bin", hex(&sha.finalize())))
+    root.path().join(format!(
+        ".profile-save-attempt-v1-{}.bin",
+        hex(&sha.finalize())
+    ))
 }
 
 fn verify_existing_exact(
@@ -321,7 +340,8 @@ fn read_regular_bounded(path: &PathBuf) -> Result<Vec<u8>, SaveAttemptEvidenceEr
     }
     let mut file = File::open(path)?;
     let mut result = Vec::new();
-    file.take((MAX_RECORD_BYTES as u64) + 1).read_to_end(&mut result)?;
+    file.take((MAX_RECORD_BYTES as u64) + 1)
+        .read_to_end(&mut result)?;
     if result.len() > MAX_RECORD_BYTES {
         return Err(SaveAttemptEvidenceError::Invalid);
     }
@@ -333,7 +353,9 @@ fn parse_record(bytes: &[u8]) -> Result<(AttemptHeader, &[u8]), SaveAttemptEvide
         return Err(SaveAttemptEvidenceError::Invalid);
     }
     let len = u32::from_be_bytes(
-        bytes[8..12].try_into().map_err(|_| SaveAttemptEvidenceError::Invalid)?,
+        bytes[8..12]
+            .try_into()
+            .map_err(|_| SaveAttemptEvidenceError::Invalid)?,
     ) as usize;
     if len == 0 || len > MAX_HEADER_BYTES || len > bytes.len() - 12 {
         return Err(SaveAttemptEvidenceError::Invalid);
