@@ -468,7 +468,10 @@ mod p3_fixture {
 
         // Force the second launch to consume the exact committed encrypted object rather than any
         // locally retained successor workspace.
-        root.reject_generation_for_rematerialization(&tenant_id, &profile_id, &successor)?;
+        // This test exclusively owns a disposable local fixture. Shipping never
+        // discards an unresolved successor merely to force a fresh cloud read.
+        let disposable_successor = root.open_generation(&tenant_id, &profile_id, &successor)?;
+        std::fs::remove_dir_all(disposable_successor.path())?;
         assert!(
             root.open_generation(&tenant_id, &profile_id, &successor)
                 .is_err()
