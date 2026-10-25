@@ -18,6 +18,7 @@ use control_plane_contract::generation_reopen_api::{
     BridgeGenerationOpeningMaterialRequest, BridgeGenerationOpeningMaterialResponse,
     GENERATION_DOWNLOAD_CAPABILITY_MAX_EXPIRES_SECONDS,
 };
+use control_plane_contract::public_api::{ProblemPayload, problem_type_for_code};
 use control_plane_contract::profile_launch_api::{
     BRIDGE_PROFILE_COORDINATOR_PATH_TEMPLATE, BRIDGE_PROFILE_LAUNCH_REDEMPTION_PATH,
     BridgeProfileLaunchRedemptionProjection, BridgeProfileLaunchRedemptionRequest,
@@ -555,7 +556,7 @@ where
             )
             .map_err(|_| Self::Error::Transport);
         body.fill(0);
-        let mut response = decode_reopen_download_capability_response(response?)?;
+        let mut response = decode_reopen_download_capability_response(response?, &correlation_id)?;
 
         if response.method() != "GET"
             || response.container_bytes() == 0
@@ -673,10 +674,53 @@ fn decode_sealing_material_response(
     decoded.map_err(|_| ShippingControlPlaneError::InvalidResponse)
 }
 
+/// Only a bounded, recognized problem code matching this request is safe for installed
+/// diagnostic logs. Never emit an opaque server body, signed URL, or unvalidated text.
+fn safe_reopen_problem_code(
+    response: &MachineHttpResponse,
+    request_correlation_id: &CorrelationId,
+) -> Option<&'static str> {
+    if response.body().len() > 2048 {
+        return None;
+    }
+    let problem: ProblemPayload = serde_json::from_slice(response.body()).ok()?;
+    if problem.status != response.status()
+        || problem.correlation_id != request_correlation_id.as_str()
+    {
+        return None;
+    }
+    let code = match problem.code.as_str() {
+        "not_found" => "not_found",
+        "forbidden" => "forbidden",
+        "invalid_request" => "invalid_request",
+        "invalid_state" => "invalid_state",
+        "version_conflict" => "version_conflict",
+        "lease_conflict" => "lease_conflict",
+        "replay_rejected" => "replay_rejected",
+        "dependency_unavailable" => "dependency_unavailable",
+        "integrity_failure" => "integrity_failure",
+        "internal_failure" => "internal_failure",
+        "conflict" => "conflict",
+        _ => return None,
+    };
+    (problem.problem_type == problem_type_for_code(code)).then_some(code)
+}
+
 fn decode_reopen_download_capability_response(
     mut response: MachineHttpResponse,
+    request_correlation_id: &CorrelationId,
 ) -> Result<BridgeGenerationDownloadCapabilityResponse, ShippingControlPlaneError> {
     if !(200..=299).contains(&response.status()) {
+        let code = safe_reopen_problem_code(&response, request_correlation_id)
+            .unwrap_or("unclassified");
+        // Safe witness for the operator's existing terminal stream only. The body (potential
+        // secrets/URLs/untrusted text) is never logged, and still zeroized before returning.
+        eprintln!(
+            "BRIDGE_REOPEN_DOWNLOAD_REFUSAL status={} code={} correlation={}",
+            response.status(),
+            code,
+            request_correlation_id.as_str()
+        );
         response.body.fill(0);
         return Err(ShippingControlPlaneError::HttpStatus);
     }
@@ -1003,6 +1047,7 @@ pub(crate) fn sealing_material_from_response(
 #[cfg(test)]
 mod tests {
     use super::{
+        safe_reopen_problem_code,
         ControlPlaneCoordinator, ControlPlaneEnrollment, ControlPlaneLeaseTiming,
         CoordinatorCursor, MAX_SEALING_MATERIAL_RESPONSE_BYTES, MachineHttpMethod, MachineHttpPort,
         MachineHttpResponse, ShippingControlPlaneError, lease_timing, valid_signed_r2_get_url,
@@ -1034,6 +1079,39 @@ mod tests {
     };
     use session_domain::ProfileLease;
     use std::collections::VecDeque;
+
+    #[test]
+    fn download_refusal_evidence_is_bounded_and_contains_only_trusted_problem_fields()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let request_id = CorrelationId::parse("corr_reopen_refusal_01")?;
+        let known = serde_json::to_vec(&control_plane_contract::public_api::ProblemPayload {
+            problem_type: "urn:part-crm:problem:lease-conflict".to_owned(),
+            title: "Lease Conflict".to_owned(),
+            status: 409,
+            code: "lease_conflict".to_owned(),
+            correlation_id: request_id.as_str().to_owned(),
+        })?;
+        let response = MachineHttpResponse::new(409, known.clone());
+        assert_eq!(
+            safe_reopen_problem_code(&response, &request_id),
+            Some("lease_conflict")
+        );
+        assert!(safe_reopen_problem_code(
+            &MachineHttpResponse::new(403, known),
+            &request_id,
+        ).is_none());
+        let foreign = CorrelationId::parse("corr_other_reopen_refusal_01")?;
+        assert!(safe_reopen_problem_code(&response, &foreign).is_none());
+        assert!(safe_reopen_problem_code(
+            &MachineHttpResponse::new(409, b"SECRET=presigned-url".to_vec()),
+            &request_id,
+        ).is_none());
+        assert!(safe_reopen_problem_code(
+            &MachineHttpResponse::new(409, vec![b'X'; 2049]),
+            &request_id,
+        ).is_none());
+        Ok(())
+    }
 
     #[derive(Default)]
     struct FakeMachineHttp {
