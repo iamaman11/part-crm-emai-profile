@@ -29,6 +29,13 @@ jobs:
           EXPECTED_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: python -c "import os, subprocess; actual = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(); expected = os.environ['EXPECTED_SOURCE_SHA']; assert actual == expected, f'expected {expected}, got {actual}'"
 
+      # Build cache is never a substitute for exact-head tests or an
+      # independently validated platform/security gate outcome.
+      - name: Restore pinned Rust build cache
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
+        with:
+          shared-key: profile-bridge-ci-v1
+
       - name: Compile Step 10 policy
         run: python -m py_compile scripts/check-step10-certification.py
 
@@ -78,6 +85,13 @@ jobs:
         env:
           EXPECTED_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: python -c "import os, subprocess; actual = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(); expected = os.environ['EXPECTED_SOURCE_SHA']; assert actual == expected, f'expected {expected}, got {actual}'"
+
+      # Build cache is never a substitute for exact-head tests or an
+      # independently validated platform/security gate outcome.
+      - name: Restore pinned Rust build cache
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
+        with:
+          shared-key: profile-bridge-ci-v1
 
       - name: Test certification matrix and update contracts
         run: cargo test --locked -p certification-domain
