@@ -286,6 +286,9 @@ impl OperatorGenerationSaveCompletion {
 pub enum OperatorFlowError {
     Busy,
     CleanupRequired,
+    /// The HTTP effect/response is uncertain; the last confirmed coordinator
+    /// deadline has not been extended. Caller must retry or quiesce before it.
+    HeartbeatTransportUncertain,
     Stage(OperatorFailureStage),
     AuthoritativeGeneration {
         reason: AuthoritativeGenerationMaterializationError,
@@ -313,6 +316,7 @@ impl OperatorFlowError {
     pub const fn stage(&self) -> Option<OperatorFailureStage> {
         match self {
             Self::Busy | Self::CleanupRequired => None,
+            Self::HeartbeatTransportUncertain => Some(OperatorFailureStage::CoordinatorHeartbeat),
             Self::Stage(stage) | Self::Runtime { stage, .. } | Self::Terminal { stage, .. } => {
                 Some(*stage)
             }
@@ -329,6 +333,9 @@ impl fmt::Display for OperatorFlowError {
         match self {
             Self::Busy => formatter.write_str("an operator session is already active"),
             Self::CleanupRequired => formatter.write_str("previous operator cleanup is unresolved"),
+            Self::HeartbeatTransportUncertain => {
+                formatter.write_str("coordinator heartbeat transport result is uncertain")
+            },
             Self::Stage(stage) => write!(formatter, "operator flow failed at {stage:?}"),
             Self::AuthoritativeGeneration { reason, cleanup } => write!(
                 formatter,
@@ -734,10 +741,21 @@ where
         if !matches!(self.process.is_running(lease.session_id()), Ok(true)) {
             return Err(self.fail_active_runtime(OperatorFailureStage::RuntimeAbort, now));
         }
-        if self.coordinator.heartbeat_lease(&lease).is_ok() {
-            return Ok(());
+        match self.coordinator.heartbeat_lease(&lease) {
+            Ok(()) => Ok(()),
+            // No coordinator acknowledgment, no extension of authority. The
+            // shipping owner may make one bounded retry strictly before the
+            // previously confirmed lease deadline, never publish or claim Saved.
+            Err(error) if self.coordinator.heartbeat_transport_uncertain(&error) => {
+                Err(OperatorFlowError::HeartbeatTransportUncertain)
+            }
+            // Explicit HTTP rejection, malformed authority or unknown port
+            // failures are NOT proof that we may retain a browser writer.
+            Err(_) => Err(self.fail_active_runtime(
+                OperatorFailureStage::CoordinatorHeartbeat,
+                now,
+            )),
         }
-        Err(self.fail_active_runtime(OperatorFailureStage::CoordinatorHeartbeat, now))
     }
 
     pub fn close(&mut self, now: UnixMillis) -> Result<(), OperatorFlowError> {
