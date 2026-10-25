@@ -869,7 +869,9 @@ fn profile_discovery_rejects_pending_sibling_without_erasing_exact_checkpoint()
         .find(|path| {
             path.file_name()
                 .and_then(|name| name.to_str())
-                .is_some_and(|name| name.starts_with(".profile-save-attempt-v1-") && name.ends_with(".bin"))
+                .is_some_and(|name| {
+                    name.starts_with(".profile-save-attempt-v1-") && name.ends_with(".bin")
+                })
         })
         .ok_or("missing scoped checkpoint")?;
     // Torn in-flight stage, even alongside a valid canonical record, cannot
@@ -886,7 +888,10 @@ fn profile_discovery_rejects_pending_sibling_without_erasing_exact_checkpoint()
         &fixture.profile_id,
     )?);
     assert!(pending.exists());
-    assert!(inspect_exact_save_attempt(&fixture.root, tenant, &fixture.profile_id, &candidate)?.is_some());
+    assert!(
+        inspect_exact_save_attempt(&fixture.root, tenant, &fixture.profile_id, &candidate)?
+            .is_some()
+    );
     assert_eq!(transport.paths.borrow().len(), 1);
     Ok(())
 }
