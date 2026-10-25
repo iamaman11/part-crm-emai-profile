@@ -374,8 +374,8 @@ mod tests {
     }
 
     #[test]
-    fn interrupted_reclaim_refuses_native_firefox_writer()
-    -> Result<(), Box<dyn std::error::Error>> {
+    fn interrupted_reclaim_refuses_native_firefox_writer() -> Result<(), Box<dyn std::error::Error>>
+    {
         let (_test_root, _root, workspace, device) = fixture("firefox-still-live")?;
         let user_data = workspace.path().join("user_data");
         fs::create_dir(&user_data)?;
@@ -403,5 +403,4 @@ mod tests {
         drop(writer);
         Ok(())
     }
-
 }
