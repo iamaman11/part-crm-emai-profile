@@ -234,11 +234,48 @@ impl UserDiagnostic {
             Self::Launch(Launch::Operator(
                 crate::operator_flow::OperatorFlowError::AuthoritativeGeneration {
                     reason:
+                        crate::authoritative_generation::AuthoritativeGenerationMaterializationError::Download(
+                            crate::generation_reopen::GenerationObjectDownloadError::Transport,
+                        )
+                        | crate::authoritative_generation::AuthoritativeGenerationMaterializationError::ReadBeforeLocalUse(
+                            crate::authoritative_generation::AuthoritativeGenerationPreWriteError::Download(
+                                crate::generation_reopen::GenerationObjectDownloadError::Transport,
+                            ),
+                        ),
+                    ..
+                },
+            )) => {
+                "The encrypted profile object could not be downloaded because its network request failed. Preserve local files and retry from Profile Operations when connectivity is restored."
+            }
+            Self::Launch(Launch::Operator(
+                crate::operator_flow::OperatorFlowError::AuthoritativeGeneration {
+                    reason:
+                        crate::authoritative_generation::AuthoritativeGenerationMaterializationError::Download(
+                            crate::generation_reopen::GenerationObjectDownloadError::HttpStatus,
+                        )
+                        | crate::authoritative_generation::AuthoritativeGenerationMaterializationError::ReadBeforeLocalUse(
+                            crate::authoritative_generation::AuthoritativeGenerationPreWriteError::Download(
+                                crate::generation_reopen::GenerationObjectDownloadError::HttpStatus,
+                            ),
+                        ),
+                    ..
+                },
+            )) => {
+                "The encrypted profile object request was rejected or could not be completed by storage. Check Profile Operations; do not assume the entire service is unreachable."
+            }
+            Self::Launch(Launch::Operator(
+                crate::operator_flow::OperatorFlowError::AuthoritativeGeneration {
+                    reason:
                         crate::authoritative_generation::AuthoritativeGenerationMaterializationError::ControlPlane(
                             crate::generation_reopen::GenerationReopenControlError::Transport,
                         )
                         | crate::authoritative_generation::AuthoritativeGenerationMaterializationError::ControlPlaneBeforeLocalUse(
                             crate::generation_reopen::GenerationReopenControlError::Transport,
+                        )
+                        | crate::authoritative_generation::AuthoritativeGenerationMaterializationError::ReadBeforeLocalUse(
+                            crate::authoritative_generation::AuthoritativeGenerationPreWriteError::OpeningControl(
+                                crate::generation_reopen::GenerationReopenControlError::Transport,
+                            ),
                         ),
                     ..
                 },
@@ -253,6 +290,11 @@ impl UserDiagnostic {
                         )
                         | crate::authoritative_generation::AuthoritativeGenerationMaterializationError::ControlPlaneBeforeLocalUse(
                             crate::generation_reopen::GenerationReopenControlError::HttpStatus,
+                        )
+                        | crate::authoritative_generation::AuthoritativeGenerationMaterializationError::ReadBeforeLocalUse(
+                            crate::authoritative_generation::AuthoritativeGenerationPreWriteError::OpeningControl(
+                                crate::generation_reopen::GenerationReopenControlError::HttpStatus,
+                            ),
                         ),
                     ..
                 },
@@ -267,6 +309,11 @@ impl UserDiagnostic {
                         )
                         | crate::authoritative_generation::AuthoritativeGenerationMaterializationError::ControlPlaneBeforeLocalUse(
                             crate::generation_reopen::GenerationReopenControlError::InvalidResponse,
+                        )
+                        | crate::authoritative_generation::AuthoritativeGenerationMaterializationError::ReadBeforeLocalUse(
+                            crate::authoritative_generation::AuthoritativeGenerationPreWriteError::OpeningControl(
+                                crate::generation_reopen::GenerationReopenControlError::InvalidResponse,
+                            ),
                         ),
                     ..
                 },
@@ -315,9 +362,37 @@ const fn operator_code(error: crate::operator_flow::OperatorFlowError) -> &'stat
             ..
         } => "BRIDGE_LOCAL_CACHE_INACCESSIBLE",
         Error::AuthoritativeGeneration {
-            reason: crate::authoritative_generation::AuthoritativeGenerationMaterializationError::Download,
+            reason:
+                crate::authoritative_generation::AuthoritativeGenerationMaterializationError::Download(
+                    crate::generation_reopen::GenerationObjectDownloadError::Transport,
+                )
+                | crate::authoritative_generation::AuthoritativeGenerationMaterializationError::ReadBeforeLocalUse(
+                    crate::authoritative_generation::AuthoritativeGenerationPreWriteError::Download(
+                        crate::generation_reopen::GenerationObjectDownloadError::Transport,
+                    ),
+                ),
             ..
-        } => "BRIDGE_GENERATION_DOWNLOAD_FAILED",
+        } => "BRIDGE_GENERATION_OBJECT_TRANSPORT_FAILED",
+        Error::AuthoritativeGeneration {
+            reason:
+                crate::authoritative_generation::AuthoritativeGenerationMaterializationError::Download(
+                    crate::generation_reopen::GenerationObjectDownloadError::HttpStatus,
+                )
+                | crate::authoritative_generation::AuthoritativeGenerationMaterializationError::ReadBeforeLocalUse(
+                    crate::authoritative_generation::AuthoritativeGenerationPreWriteError::Download(
+                        crate::generation_reopen::GenerationObjectDownloadError::HttpStatus,
+                    ),
+                ),
+            ..
+        } => "BRIDGE_GENERATION_OBJECT_HTTP_REJECTED",
+        Error::AuthoritativeGeneration {
+            reason:
+                crate::authoritative_generation::AuthoritativeGenerationMaterializationError::Download(_)
+                | crate::authoritative_generation::AuthoritativeGenerationMaterializationError::ReadBeforeLocalUse(
+                    crate::authoritative_generation::AuthoritativeGenerationPreWriteError::Download(_),
+                ),
+            ..
+        } => "BRIDGE_GENERATION_INTEGRITY_FAILED",
         Error::AuthoritativeGeneration {
             reason:
                 crate::authoritative_generation::AuthoritativeGenerationMaterializationError::ControlPlane(
@@ -325,6 +400,11 @@ const fn operator_code(error: crate::operator_flow::OperatorFlowError) -> &'stat
                 )
                 | crate::authoritative_generation::AuthoritativeGenerationMaterializationError::ControlPlaneBeforeLocalUse(
                     crate::generation_reopen::GenerationReopenControlError::Transport,
+                )
+                | crate::authoritative_generation::AuthoritativeGenerationMaterializationError::ReadBeforeLocalUse(
+                    crate::authoritative_generation::AuthoritativeGenerationPreWriteError::OpeningControl(
+                        crate::generation_reopen::GenerationReopenControlError::Transport,
+                    ),
                 ),
             ..
         } => "BRIDGE_SERVICE_UNREACHABLE",
@@ -335,6 +415,11 @@ const fn operator_code(error: crate::operator_flow::OperatorFlowError) -> &'stat
                 )
                 | crate::authoritative_generation::AuthoritativeGenerationMaterializationError::ControlPlaneBeforeLocalUse(
                     crate::generation_reopen::GenerationReopenControlError::HttpStatus,
+                )
+                | crate::authoritative_generation::AuthoritativeGenerationMaterializationError::ReadBeforeLocalUse(
+                    crate::authoritative_generation::AuthoritativeGenerationPreWriteError::OpeningControl(
+                        crate::generation_reopen::GenerationReopenControlError::HttpStatus,
+                    ),
                 ),
             ..
         } => "BRIDGE_GENERATION_REQUEST_REJECTED",
@@ -345,6 +430,11 @@ const fn operator_code(error: crate::operator_flow::OperatorFlowError) -> &'stat
                 )
                 | crate::authoritative_generation::AuthoritativeGenerationMaterializationError::ControlPlaneBeforeLocalUse(
                     crate::generation_reopen::GenerationReopenControlError::InvalidResponse,
+                )
+                | crate::authoritative_generation::AuthoritativeGenerationMaterializationError::ReadBeforeLocalUse(
+                    crate::authoritative_generation::AuthoritativeGenerationPreWriteError::OpeningControl(
+                        crate::generation_reopen::GenerationReopenControlError::InvalidResponse,
+                    ),
                 ),
             ..
         } => "BRIDGE_GENERATION_RESPONSE_INVALID",
@@ -355,6 +445,11 @@ const fn operator_code(error: crate::operator_flow::OperatorFlowError) -> &'stat
                 )
                 | crate::authoritative_generation::AuthoritativeGenerationMaterializationError::ControlPlaneBeforeLocalUse(
                     crate::generation_reopen::GenerationReopenControlError::Clock,
+                )
+                | crate::authoritative_generation::AuthoritativeGenerationMaterializationError::ReadBeforeLocalUse(
+                    crate::authoritative_generation::AuthoritativeGenerationPreWriteError::OpeningControl(
+                        crate::generation_reopen::GenerationReopenControlError::Clock,
+                    ),
                 ),
             ..
         } => "BRIDGE_CLOCK_UNAVAILABLE",
@@ -362,7 +457,13 @@ const fn operator_code(error: crate::operator_flow::OperatorFlowError) -> &'stat
             reason: crate::authoritative_generation::AuthoritativeGenerationMaterializationError::DescriptorMismatch
                 | crate::authoritative_generation::AuthoritativeGenerationMaterializationError::MetadataMismatch
                 | crate::authoritative_generation::AuthoritativeGenerationMaterializationError::OpeningMaterialMismatch
-                | crate::authoritative_generation::AuthoritativeGenerationMaterializationError::Decryption,
+                | crate::authoritative_generation::AuthoritativeGenerationMaterializationError::Decryption
+                | crate::authoritative_generation::AuthoritativeGenerationMaterializationError::ReadBeforeLocalUse(
+                    crate::authoritative_generation::AuthoritativeGenerationPreWriteError::DescriptorMismatch
+                    | crate::authoritative_generation::AuthoritativeGenerationPreWriteError::MetadataMismatch
+                    | crate::authoritative_generation::AuthoritativeGenerationPreWriteError::OpeningMaterialMismatch
+                    | crate::authoritative_generation::AuthoritativeGenerationPreWriteError::Decryption,
+                ),
             ..
         } => "BRIDGE_GENERATION_INTEGRITY_FAILED",
         Error::Preflight {
@@ -417,7 +518,10 @@ mod tests {
         use crate::operator_flow::{CleanupFailures, OperatorFlowError};
         let cases = [
             (Reason::LocalAccessDenied, "BRIDGE_LOCAL_CACHE_INACCESSIBLE"),
-            (Reason::Download, "BRIDGE_GENERATION_DOWNLOAD_FAILED"),
+            (Reason::Download(crate::generation_reopen::GenerationObjectDownloadError::Transport), "BRIDGE_GENERATION_OBJECT_TRANSPORT_FAILED"),
+            (Reason::Download(crate::generation_reopen::GenerationObjectDownloadError::HttpStatus), "BRIDGE_GENERATION_OBJECT_HTTP_REJECTED"),
+            (Reason::ReadBeforeLocalUse(crate::authoritative_generation::AuthoritativeGenerationPreWriteError::Download(crate::generation_reopen::GenerationObjectDownloadError::Transport)), "BRIDGE_GENERATION_OBJECT_TRANSPORT_FAILED"),
+            (Reason::ReadBeforeLocalUse(crate::authoritative_generation::AuthoritativeGenerationPreWriteError::Download(crate::generation_reopen::GenerationObjectDownloadError::SizeMismatch)), "BRIDGE_GENERATION_INTEGRITY_FAILED"),
             (
                 Reason::ControlPlane(
                     crate::generation_reopen::GenerationReopenControlError::Transport,
