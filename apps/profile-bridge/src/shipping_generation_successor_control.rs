@@ -1,6 +1,8 @@
 use crate::dirty_generation::{
     GenerationSealingMaterial, GenerationSealingMaterialPort, PreparedDirtyGeneration,
 };
+use crate::local_profile::MaterializationRoot;
+use crate::shipping_save_attempt::inspect_exact_save_attempt;
 use crate::shipping_control_plane::{
     MachineHttpMethod, MachineHttpPort, ShippingControlPlaneError,
 };
@@ -10,8 +12,10 @@ use crate::shipping_generation_save::{
 };
 use control_plane_contract::profile_generation_api::{
     BRIDGE_PROFILE_GENERATION_COMMIT_PATH_TEMPLATE,
+    BRIDGE_PROFILE_GENERATION_OBSERVE_PATH_TEMPLATE,
     BRIDGE_PROFILE_GENERATION_UPLOAD_CAPABILITY_PATH_TEMPLATE,
     BridgeGenerationSuccessorCommitOutcomeDto, BridgeGenerationSuccessorCommitResponse,
+    BridgeGenerationSuccessorObserveRequest, BridgeGenerationSuccessorObserveResponse,
     BridgeGenerationUploadCapabilityResponse, BridgeProfileGenerationSuccessorRequest,
 };
 use profile_platform_primitives::{CorrelationId, GenerationId, ProfileId, TenantId};
@@ -21,6 +25,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 const MAX_UPLOAD_CAPABILITY_RESPONSE_BYTES: usize = 16_384;
 const MAX_COMMIT_RESPONSE_BYTES: usize = 1_024;
+const MAX_OBSERVE_RESPONSE_BYTES: usize = 256;
 const MAX_SIGNED_UPLOAD_URL_BYTES: usize = 8_192;
 const MAX_SIGNED_UPLOAD_HEADERS: usize = 16;
 const MAX_SIGNED_UPLOAD_HEADER_NAME_BYTES: usize = 128;
@@ -155,6 +160,45 @@ where
             }
         })
     }
+}
+
+/// Read-only server probe from crash checkpoint after a lost response.
+/// Requires fresh machine CNG authentication via the transport. Never submits
+/// the old fence, mutates the Profile, or grants permission to repeat PUT.
+pub(crate) fn observe_retained_successor_after_restart<T: MachineHttpPort>(
+    root: &MaterializationRoot,
+    tenant_id: &TenantId,
+    profile_id: &ProfileId,
+    successor_id: &GenerationId,
+    transport: &mut T,
+) -> Result<bool, ShippingControlPlaneError> {
+    let attempt = inspect_exact_save_attempt(root, tenant_id, profile_id, successor_id)
+        .map_err(|_| ShippingControlPlaneError::InvalidResponse)?
+        .ok_or(ShippingControlPlaneError::InvalidResponse)?;
+    let request = BridgeGenerationSuccessorObserveRequest {
+        base_generation_id: attempt.base_generation_id().to_owned(),
+        generation_id: attempt.successor_id().to_owned(),
+        object_key: attempt.object_key().to_owned(),
+        metadata_digest: attempt.metadata_digest().to_owned(),
+        container_digest: attempt.container_digest().to_owned(),
+        container_bytes: attempt.container_bytes(),
+    };
+    let response = post_json::<T, core::convert::Infallible, _>(
+        transport,
+        &successor_path(
+            BRIDGE_PROFILE_GENERATION_OBSERVE_PATH_TEMPLATE,
+            tenant_id,
+            profile_id,
+        ),
+        &request,
+    )
+    .map_err(|_| ShippingControlPlaneError::Transport)?;
+    if response.len() > MAX_OBSERVE_RESPONSE_BYTES {
+        return Err(ShippingControlPlaneError::InvalidResponse);
+    }
+    let result = serde_json::from_slice::<BridgeGenerationSuccessorObserveResponse>(&response)
+        .map_err(|_| ShippingControlPlaneError::InvalidResponse)?;
+    Ok(result.active_exact)
 }
 
 fn successor_request<S>(
