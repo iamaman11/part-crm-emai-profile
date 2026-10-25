@@ -463,7 +463,7 @@ mod windows {
             )?;
             if save_trigger == ConfirmedSaveTrigger::BeginConfirmedSave {
                 operator
-                    .close(now()?)
+                    .close_with_durable_local_intent(&materialization_root, now()?)
                     .map_err(ShippingCompositionError::Operator)?;
                 // An unknown heartbeat response is not an acknowledged fence.
                 // Retain the closed local working profile; do not attempt an
@@ -502,7 +502,7 @@ mod windows {
                             // Two consecutive unacknowledged transport effects:
                             // stop normal work without falsely marking Clean/Saved.
                             operator
-                                .close(observed_at)
+                                .close_with_durable_local_intent(&materialization_root, observed_at)
                                 .map_err(ShippingCompositionError::Operator)?;
                             return Err(ShippingCompositionError::HeartbeatAuthorityUncertain);
                         }
@@ -511,7 +511,7 @@ mod windows {
                             observed_at,
                         ) else {
                             operator
-                                .close(observed_at)
+                                .close_with_durable_local_intent(&materialization_root, observed_at)
                                 .map_err(ShippingCompositionError::Operator)?;
                             return Err(ShippingCompositionError::HeartbeatAuthorityUncertain);
                         };
