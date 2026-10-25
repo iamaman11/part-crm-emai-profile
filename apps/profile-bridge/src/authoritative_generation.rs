@@ -677,6 +677,122 @@ mod tests {
     }
 
     #[test]
+    fn all_read_only_verification_failures_keep_exact_no_use_evidence()
+    -> Result<(), Box<dyn std::error::Error>> {
+        // These are distinct failure paths before the first workspace or writer exists.
+        // A clean coordinator cancellation must never admit any of the invalid objects.
+        for (name, expected) in [
+            (
+                "wrong_key_id",
+                AuthoritativeGenerationPreWriteError::OpeningMaterialMismatch,
+            ),
+            ("bad_decryption_key", AuthoritativeGenerationPreWriteError::Decryption),
+            (
+                "opening_http_refusal",
+                AuthoritativeGenerationPreWriteError::OpeningControl(
+                    GenerationReopenControlError::HttpStatus,
+                ),
+            ),
+        ] {
+            let fixture = Fixture::new()?;
+            let mut control = fixture.control();
+            match name {
+                "wrong_key_id" => {
+                    control.key_id = KeyId::parse("profile-generation-root-v1-8")?;
+                }
+                "bad_decryption_key" => control.key_bytes[0] ^= 0x01,
+                "opening_http_refusal" => {
+                    control.opening_error = Some(GenerationReopenControlError::HttpStatus);
+                }
+                _ => unreachable!("closed test fixture name"),
+            }
+            let mut downloader = FakeDownloader {
+                container: fixture.container.clone(),
+                calls: 0,
+            };
+            let refusal = ensure_authoritative_generation(
+                &fixture.root,
+                &fixture.tenant_id,
+                &fixture.profile_id,
+                &fixture.generation_id,
+                &DeviceId::parse("device_prewrite_verify_failure")?,
+                1,
+                &mut control,
+                &mut downloader,
+            )
+            .expect_err("invalid generation cannot publish");
+            assert_eq!(
+                refusal,
+                AuthoritativeGenerationMaterializationError::ReadBeforeLocalUse(expected),
+            );
+            assert!(refusal.proves_no_local_write_and_absent_workspace());
+            assert!(matches!(
+                fixture.root.open_generation(
+                    &fixture.tenant_id,
+                    &fixture.profile_id,
+                    &fixture.generation_id,
+                ),
+                Err(crate::local_profile::LocalProfileError::Io(
+                    std::io::ErrorKind::NotFound
+                ))
+            ));
+            assert_eq!(downloader.calls, 1);
+            fixture.cleanup();
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn malformed_object_bytes_before_workspace_do_not_publish_or_request_key()
+    -> Result<(), Box<dyn std::error::Error>> {
+        // The verifier is an independent narrow owner. A malformed object in a
+        // unit-injected raw port is never mistaken for locally dirty data or accepted.
+        struct MalformedObjectGet;
+        impl GenerationObjectDownloadPort for MalformedObjectGet {
+            type Error = GenerationObjectDownloadError;
+            fn download_generation_object(
+                &mut self,
+                _: &GenerationDownloadCapability,
+            ) -> Result<Vec<u8>, Self::Error> {
+                Ok(vec![0; 24])
+            }
+        }
+        let fixture = Fixture::new()?;
+        let mut control = fixture.control();
+        let refusal = ensure_authoritative_generation(
+            &fixture.root,
+            &fixture.tenant_id,
+            &fixture.profile_id,
+            &fixture.generation_id,
+            &DeviceId::parse("device_malformed_object_read")?,
+            1,
+            &mut control,
+            &mut MalformedObjectGet,
+        )
+        .expect_err("malformed encrypted object is rejected before publication");
+        assert_eq!(
+            refusal,
+            AuthoritativeGenerationMaterializationError::ReadBeforeLocalUse(
+                AuthoritativeGenerationPreWriteError::MetadataMismatch,
+            )
+        );
+        assert_eq!(control.opening_calls, 0);
+        assert!(refusal.proves_no_local_write_and_absent_workspace());
+        assert!(matches!(
+            fixture.root.open_generation(
+                &fixture.tenant_id,
+                &fixture.profile_id,
+                &fixture.generation_id,
+            ),
+            Err(crate::local_profile::LocalProfileError::Io(
+                std::io::ErrorKind::NotFound
+            ))
+        ));
+        fixture.cleanup();
+        Ok(())
+    }
+
+    #[test]
     fn remote_read_refusal_distinguishes_absent_and_incomplete_local_evidence()
     -> Result<(), Box<dyn std::error::Error>> {
         for reason in [
