@@ -66,7 +66,7 @@ REQUIRED_COMPOSITION_MARKERS = (
     ".open_authoritative_with_runtime_health_and_pending_observation(",
     "complete_active_exact_after_restart(",
     ".observe_controlled_close(&session_id)",
-    ".close(now()?)",
+    ".close_with_durable_local_intent(&materialization_root, now()?)",
     ".save_retained_successor(",
     ".runtime_timing()",
     ".heartbeat(observed_at)",
@@ -92,6 +92,8 @@ REQUIRED_RECOVERY_OWNER_MARKERS = (
 REQUIRED_OPERATOR_RECOVERY_MARKERS = (
     "has_unresolved_save_attempt_for_profile(",
     "let recovered = observe_pending(",
+    "persist_local_unsynced_intent(root, &source, retained.lease())",
+    "retire_local_unsynced_after_exact_checkpoint(",
     "if !recovered",
     "return Err(self.fail_before_local_use(",
 )
@@ -269,7 +271,7 @@ def validate(root: Path) -> None:
             fail(f"active delivery runtime contains forbidden alternate/effect marker: {marker}")
 
     close_observe = composition.find(".observe_controlled_close(&session_id)")
-    mutating_close = composition.find(".close(now()?)")
+    mutating_close = composition.find(".close_with_durable_local_intent(&materialization_root, now()?)")
     save = composition.find(".save_retained_successor(")
     if min(close_observe, mutating_close, save) < 0 or not close_observe < mutating_close < save:
         fail("shipping controlled-close witness must precede the sole mutating close and canonical save")
@@ -351,7 +353,7 @@ def write_fixture(root: Path) -> None:
         "// .open_authoritative_with_runtime_health_and_pending_observation(\n"
         "// complete_active_exact_after_restart(\n"
         "// .observe_controlled_close(&session_id)\n"
-        "// .close(now()?)\n"
+        "// .close_with_durable_local_intent(&materialization_root, now()?)\n"
         "// .save_retained_successor(\n"
         "// .runtime_timing()\n"
         "// .heartbeat(observed_at)\n"
@@ -611,6 +613,15 @@ def self_test() -> None:
             encoding="utf-8",
         )
         expect_rejected(root, "shipping save without controlled-close witness")
+        composition.write_text(safe_composition, encoding="utf-8")
+
+        composition.write_text(
+            safe_composition.replace(
+                "// .close_with_durable_local_intent(&materialization_root, now()?)\n", "",
+            ),
+            encoding="utf-8",
+        )
+        expect_rejected(root, "shipping save cannot bypass pre-cloud durable local intent")
         composition.write_text(safe_composition, encoding="utf-8")
 
         composition.write_text(
