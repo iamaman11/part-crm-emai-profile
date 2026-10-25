@@ -4,6 +4,66 @@
 
 use crate::device_pairing::DevicePairingBootstrapError;
 use crate::shipping_composition::ShippingCompositionError;
+use crate::shipping_control_plane::ShippingControlPlaneError;
+use crate::shipping_generation_successor_control::RestartExactCommitObservation;
+
+/// Read-only projection of existing exact checkpoint / authoritative observe
+/// facts. Never persists a parallel profile state, creates an authorization,
+/// changes a file, or permits a network write.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum PendingSaveReadOnlyDiagnosis {
+    ServerActiveExactLocalUnresolved,
+    ServerNotActiveExactRetryUnresolved,
+    CanonicalCheckpointNotFound,
+    UnknownPreserveBytes,
+}
+
+impl PendingSaveReadOnlyDiagnosis {
+    pub(crate) fn from_observation(
+        observed: Result<RestartExactCommitObservation, ShippingControlPlaneError>,
+    ) -> Self {
+        match observed {
+            Ok(RestartExactCommitObservation::ActiveExact) => {
+                Self::ServerActiveExactLocalUnresolved
+            }
+            Ok(RestartExactCommitObservation::NotActiveExact) => {
+                Self::ServerNotActiveExactRetryUnresolved
+            }
+            Ok(RestartExactCommitObservation::NoCanonicalCheckpoint) => {
+                Self::CanonicalCheckpointNotFound
+            }
+            Err(_) => Self::UnknownPreserveBytes,
+        }
+    }
+
+    #[must_use]
+    pub(crate) const fn code(self) -> &'static str {
+        match self {
+            Self::ServerActiveExactLocalUnresolved => {
+                "P3_RECOVERY_OBSERVATION=ACTIVE_EXACT;LOCAL_READINESS=UNRESOLVED"
+            }
+            Self::ServerNotActiveExactRetryUnresolved => {
+                "P3_RECOVERY_OBSERVATION=NOT_ACTIVE_EXACT;RETRY_AUTHORITY=UNRESOLVED"
+            }
+            Self::CanonicalCheckpointNotFound => {
+                "P3_RECOVERY_OBSERVATION=NO_CANONICAL_CHECKPOINT"
+            }
+            Self::UnknownPreserveBytes => "P3_RECOVERY_OBSERVATION=UNKNOWN;BYTES_RETAINED",
+        }
+    }
+
+    /// Safe diagnostic recommendation, NEVER an executable transition or
+    /// grant. Existing Bridge / Coordinator / D1 owners must still prove it.
+    #[must_use]
+    pub(crate) const fn next_safe_step(self) -> &'static str {
+        match self {
+            Self::ServerActiveExactLocalUnresolved => "VERIFY_OWNED_LOCAL_COMPLETION",
+            Self::ServerNotActiveExactRetryUnresolved => "REQUIRE_FRESH_SERVER_RETRY_DECISION",
+            Self::CanonicalCheckpointNotFound => "RECHECK_PENDING_LOCAL_EVIDENCE",
+            Self::UnknownPreserveBytes => "RETRY_READ_ONLY_OBSERVATION",
+        }
+    }
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum UserDiagnostic {
@@ -506,6 +566,45 @@ const fn operator_code(error: crate::operator_flow::OperatorFlowError) -> &'stat
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pending_save_observation_is_only_read_only_evidence_and_never_retry_authority() {
+        let cases = [
+            (
+                Ok(RestartExactCommitObservation::ActiveExact),
+                "P3_RECOVERY_OBSERVATION=ACTIVE_EXACT;LOCAL_READINESS=UNRESOLVED",
+                "VERIFY_OWNED_LOCAL_COMPLETION",
+            ),
+            (
+                Ok(RestartExactCommitObservation::NotActiveExact),
+                "P3_RECOVERY_OBSERVATION=NOT_ACTIVE_EXACT;RETRY_AUTHORITY=UNRESOLVED",
+                "REQUIRE_FRESH_SERVER_RETRY_DECISION",
+            ),
+            (
+                Ok(RestartExactCommitObservation::NoCanonicalCheckpoint),
+                "P3_RECOVERY_OBSERVATION=NO_CANONICAL_CHECKPOINT",
+                "RECHECK_PENDING_LOCAL_EVIDENCE",
+            ),
+            (
+                Err(ShippingControlPlaneError::HttpServerUncertain),
+                "P3_RECOVERY_OBSERVATION=UNKNOWN;BYTES_RETAINED",
+                "RETRY_READ_ONLY_OBSERVATION",
+            ),
+            (
+                Err(ShippingControlPlaneError::HttpStatus),
+                "P3_RECOVERY_OBSERVATION=UNKNOWN;BYTES_RETAINED",
+                "RETRY_READ_ONLY_OBSERVATION",
+            ),
+        ];
+        for (observed, expected_code, expected_step) in cases {
+            let diagnostic = PendingSaveReadOnlyDiagnosis::from_observation(observed);
+            assert_eq!(diagnostic.code(), expected_code);
+            assert_eq!(diagnostic.next_safe_step(), expected_step);
+            assert!(!diagnostic.next_safe_step().contains("UPLOAD"));
+            assert!(!diagnostic.next_safe_step().contains("COMMIT"));
+            assert!(!diagnostic.next_safe_step().contains("CLOUD_SAVED"));
+        }
+    }
 
     #[test]
     fn incomplete_cache_error_keeps_owner_diagnostic_code() {

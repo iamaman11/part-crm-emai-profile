@@ -136,6 +136,7 @@ mod windows {
         ControlPlaneCoordinator, ControlPlaneEnrollment, ControlPlaneLeaseTiming,
     };
     use crate::shipping_generation_successor_control::observe_discovered_successor_after_restart;
+    use crate::user_diagnostics::PendingSaveReadOnlyDiagnosis;
     use crate::shipping_preflight::ShippingBrowserLaunchPreflight;
     use crate::windows_delivery_handoff::{
         DeliveryHandoffCoordinator, DeliveryHandoffRestartDisposition,
@@ -357,21 +358,21 @@ mod windows {
                     // Only after fresh device/CNG auth, enrollment and exact
                     // coordinator lease. No use of the previous fencing token;
                     // never auto-PUT/commit without new authorized recovery.
-                    match observe_discovered_successor_after_restart(
-                        &materialization_root,
-                        tenant,
-                        profile,
-                        &mut recovery_observation_transport,
-                    ) {
-                        Ok(Some(true)) => eprintln!(
-                            "P3_RECOVERY_OBSERVATION=ACTIVE_EXACT;LOCAL_READINESS=UNRESOLVED"
+                    let diagnosis = PendingSaveReadOnlyDiagnosis::from_observation(
+                        observe_discovered_successor_after_restart(
+                            &materialization_root,
+                            tenant,
+                            profile,
+                            &mut recovery_observation_transport,
                         ),
-                        Ok(Some(false)) => eprintln!(
-                            "P3_RECOVERY_OBSERVATION=NOT_ACTIVE_EXACT;RETRY_AUTHORITY=UNRESOLVED"
-                        ),
-                        Ok(None) => eprintln!("P3_RECOVERY_OBSERVATION=NO_CANONICAL_CHECKPOINT"),
-                        Err(_) => eprintln!("P3_RECOVERY_OBSERVATION=UNKNOWN;BYTES_RETAINED"),
-                    }
+                    );
+                    // Static, redacted facts + a non-executable suggested step.
+                    // The launch guard remains authoritative and fail-closed.
+                    eprintln!(
+                        "{};NEXT_SAFE_STEP={}",
+                        diagnosis.code(),
+                        diagnosis.next_safe_step()
+                    );
                 },
             )
             .map_err(ShippingCompositionError::Operator)?;

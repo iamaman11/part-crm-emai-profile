@@ -35,6 +35,22 @@ const MAX_SIGNED_UPLOAD_HEADER_VALUE_BYTES: usize = 1_024;
 const MAX_UPLOAD_CAPABILITY_EXPIRES_SECONDS: u32 = 300;
 static SAVE_REQUEST_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 
+/// Read-only evidence about the exact retained save attempt after restart.
+/// No variant is a retry capability, a new lease, local browser readiness,
+/// or a claim that `CLOUD_SAVED` has been reached.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RestartExactCommitObservation {
+    /// No canonical exact checkpoint was discovered. This does NOT overrule
+    /// the independent conservative guard for torn/pending siblings.
+    NoCanonicalCheckpoint,
+    /// Exact immutable successor is authoritative ACTIVE in D1/R2. Local
+    /// readiness, owned cleanup and checkpoint retirement are still required.
+    ActiveExact,
+    /// NOT ACTIVE_EXACT: may mean a foreign/newer pointer, a changed record
+    /// or an unapplied attempt. NEVER treat this as retry authorization.
+    NotActiveExact,
+}
+
 #[derive(Debug, Eq, PartialEq)]
 pub enum GenerationSuccessorControlError<S> {
     Sealing(S),
@@ -168,20 +184,27 @@ where
 /// successor/lease and observe the server's exact active-generation descriptor.
 /// Only the signed-in machine transport is used; this function NEVER replays the
 /// predecessor fence and NEVER uploads, commits, deletes or infers Saved. A
-/// false observation leaves the original bytes and pending attempt untouched.
+/// a NOT ACTIVE_EXACT observation leaves original bytes and attempt untouched.
+/// This result cannot authorize a retry; server-positive authorization must be
+/// implemented separately in the existing D1 owner before any resume/commit.
 pub fn observe_discovered_successor_after_restart<T: MachineHttpPort>(
     root: &MaterializationRoot,
     tenant_id: &TenantId,
     profile_id: &ProfileId,
     transport: &mut T,
-) -> Result<Option<bool>, ShippingControlPlaneError> {
+) -> Result<RestartExactCommitObservation, ShippingControlPlaneError> {
     let attempt = discover_unresolved_exact_save_attempt(root, tenant_id, profile_id)
         .map_err(|_| ShippingControlPlaneError::InvalidResponse)?;
     match attempt {
-        Some(attempt) => {
-            observe_verified_exact_attempt(tenant_id, profile_id, &attempt, transport).map(Some)
-        }
-        None => Ok(None),
+        Some(attempt) => observe_verified_exact_attempt(tenant_id, profile_id, &attempt, transport)
+            .map(|active| {
+                if active {
+                    RestartExactCommitObservation::ActiveExact
+                } else {
+                    RestartExactCommitObservation::NotActiveExact
+                }
+            }),
+        None => Ok(RestartExactCommitObservation::NoCanonicalCheckpoint),
     }
 }
 
@@ -388,7 +411,8 @@ const fn control_error<S>(error: ShippingControlPlaneError) -> GenerationSuccess
 mod tests {
     use super::{
         ControlPlaneGenerationSuccessor, GenerationSuccessorControlError,
-        observe_discovered_successor_after_restart, observe_retained_successor_after_restart,
+        RestartExactCommitObservation, observe_discovered_successor_after_restart,
+        observe_retained_successor_after_restart,
     };
     use crate::dirty_generation::{
         GenerationSealingMaterial, GenerationSealingMaterialPort,
@@ -641,7 +665,7 @@ mod tests {
                 &fixture.profile,
                 &mut discovered,
             )?,
-            Some(true)
+            RestartExactCommitObservation::ActiveExact
         );
         assert_eq!(discovered.paths.len(), 1);
         assert!(discovered.paths[0].ends_with("/generation-successor/observe"));
@@ -653,9 +677,30 @@ mod tests {
                 &ProfileId::parse("profile_unrelated_pending_recovery")?,
                 &mut unrelated,
             )?,
-            None
+            RestartExactCommitObservation::NoCanonicalCheckpoint
         );
         assert!(unrelated.paths.is_empty());
+
+        // A negative exact-pointer observation is NOT proof of an unapplied
+        // command and NEVER permits a blind retry using the old fencing token.
+        let mut not_active = Transport {
+            responses: VecDeque::from([MachineHttpResponse::new(
+                200,
+                br#"{"activeExact":false}"#.to_vec(),
+            )]),
+            paths: Vec::new(),
+        };
+        assert_eq!(
+            observe_discovered_successor_after_restart(
+                &root,
+                &fixture.tenant,
+                &fixture.profile,
+                &mut not_active,
+            )?,
+            RestartExactCommitObservation::NotActiveExact
+        );
+        assert_eq!(not_active.paths.len(), 1);
+        assert!(not_active.paths[0].ends_with("/generation-successor/observe"));
 
         let mut uncertain = Transport {
             responses: VecDeque::from([MachineHttpResponse::new(
