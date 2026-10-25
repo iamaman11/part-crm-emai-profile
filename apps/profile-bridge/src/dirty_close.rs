@@ -87,12 +87,12 @@ impl RetainedDirtyClose {
     ///
     /// The backend commit is already authoritative when this method is entered. Therefore the old
     /// base is made superseded before candidate validation and is never restored. A changed or
-    /// missing candidate is removed from its canonical N+1 path when possible so the next ordinary
-    /// P2 launch must rematerialize the server-selected N+1. Workspace/coordinator release are
-    /// attempted independently; failure of either is reported but never rolls the backend back.
+    /// missing candidate is never fabricated as ready, but any retained bytes remain in place for
+    /// exact owned recovery; ordinary P2 launch cannot reuse it without exact binding/inventory.
+    /// Workspace/coordinator release are attempted independently and never roll the backend back.
     pub fn complete_committed_successor<P>(
         &mut self,
-        root: &MaterializationRoot,
+        _root: &MaterializationRoot,
         prepared: &PreparedDirtyGeneration,
         committed: &CommittedGenerationSuccessor,
         coordinator: &mut P,
@@ -143,12 +143,17 @@ impl RetainedDirtyClose {
                     },
                 }
             }
-            Ok(_) | Err(_) => rematerialization_outcome(
-                root,
-                self.lease.tenant_id(),
-                self.lease.profile_id(),
-                committed.generation_id(),
-            ),
+            // The authoritative commit cannot undo post-snapshot browser writes. Removing
+            // N+1 here would silently destroy those retained bytes. Preserve the exact
+            // workspace for owned reconciliation, but never publish local launch readiness.
+            Ok(_) => DirtyCloseLocalOutcome::MaterializationBindingBlocked {
+                generation_id: committed.generation_id().clone(),
+                reason: BrowserLaunchBlocker::RecoveryRequired,
+            },
+            Err(error) => DirtyCloseLocalOutcome::MaterializationBindingBlocked {
+                generation_id: committed.generation_id().clone(),
+                reason: BrowserLaunchBlocker::LocalProfile(error),
+            },
         };
 
         let physical_workspace_lock_released = self
@@ -250,23 +255,6 @@ fn committed_matches_retained(
         && prepared.candidate_workspace().generation_id() == committed.generation_id()
         && prepared.candidate_workspace().tenant_id() == metadata.tenant_id()
         && prepared.candidate_workspace().profile_id() == metadata.profile_id()
-}
-
-fn rematerialization_outcome(
-    root: &MaterializationRoot,
-    tenant_id: &profile_platform_primitives::TenantId,
-    profile_id: &profile_platform_primitives::ProfileId,
-    generation_id: &GenerationId,
-) -> DirtyCloseLocalOutcome {
-    match root.reject_generation_for_rematerialization(tenant_id, profile_id, generation_id) {
-        Ok(()) | Err(LocalProfileError::Io(std::io::ErrorKind::NotFound)) => {
-            DirtyCloseLocalOutcome::RematerializeRequired(generation_id.clone())
-        }
-        Err(error) => DirtyCloseLocalOutcome::RematerializationBlocked {
-            generation_id: generation_id.clone(),
-            error,
-        },
-    }
 }
 
 #[cfg(any(test, feature = "synthetic-test-bin"))]
