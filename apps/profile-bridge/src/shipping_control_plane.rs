@@ -1242,6 +1242,8 @@ mod tests {
     struct LostHeartbeatResponseTransport {
         requests: Vec<Vec<u8>>,
         replay: Option<MachineHttpResponse>,
+        snapshot: Option<MachineHttpResponse>,
+        snapshot_reads: u64,
     }
 
     impl MachineHttpPort for LostHeartbeatResponseTransport {
@@ -1254,6 +1256,11 @@ mod tests {
             _correlation_id: &CorrelationId,
             body: Option<&[u8]>,
         ) -> Result<MachineHttpResponse, Self::Error> {
+            if method == MachineHttpMethod::Get {
+                assert!(body.is_none());
+                self.snapshot_reads += 1;
+                return self.snapshot.take().ok_or(());
+            }
             assert_eq!(method, MachineHttpMethod::PostJson);
             self.requests.push(body.ok_or(())?.to_vec());
             if self.requests.len() == 1 {
@@ -1282,9 +1289,7 @@ mod tests {
             7,
             fencing.clone(),
         )?;
-        let replay = MachineHttpResponse::new(
-            200,
-            serde_json::to_vec(&CoordinatorResponseDto {
+        let original = CoordinatorResponseDto {
                 outcome: CoordinatorOutcomeDto::HeartbeatAccepted,
                 version: 12,
                 sequence: 14,
@@ -1307,12 +1312,19 @@ mod tests {
                     pending_launch_intent_id: None,
                     pending_intent_expires_at_ms: None,
                 },
-            })?,
-        );
+            };
+        let replay = MachineHttpResponse::new(200, serde_json::to_vec(&original)?);
+        let mut fresh = original;
+        fresh.outcome = CoordinatorOutcomeDto::Snapshot;
+        fresh.fencing_token = None;
+        fresh.epoch = None;
+        let snapshot = MachineHttpResponse::new(200, serde_json::to_vec(&fresh)?);
         let mut coordinator = ControlPlaneCoordinator {
             transport: LostHeartbeatResponseTransport {
                 requests: Vec::new(),
                 replay: Some(replay),
+                snapshot: Some(snapshot),
+                snapshot_reads: 0,
             },
             cursor: Some(CoordinatorCursor {
                 tenant_id,
@@ -1346,6 +1358,7 @@ mod tests {
         assert_eq!(coordinator.runtime_timing()?.idle_expires_at_ms(), 30_000);
         coordinator.heartbeat_lease(&lease)?;
         assert_eq!(coordinator.transport.requests.len(), 2);
+        assert_eq!(coordinator.transport.snapshot_reads, 1);
         assert_eq!(
             coordinator.transport.requests[0],
             coordinator.transport.requests[1]
