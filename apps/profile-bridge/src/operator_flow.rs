@@ -1650,8 +1650,10 @@ mod tests {
                 UnixMillis::new(10),
                 |_coordinator, tenant, profile, generation, _device, _epoch| {
                     if create_during_attempt {
-                        root.create_generation(tenant, profile, generation)
-                            .expect("simulated concurrent writer changes workspace");
+                        assert!(
+                            root.create_generation(tenant, profile, generation).is_ok(),
+                            "simulated concurrent writer changes workspace"
+                        );
                     }
                     Err(
                         AuthoritativeGenerationMaterializationError::ReadBeforeLocalUse(
