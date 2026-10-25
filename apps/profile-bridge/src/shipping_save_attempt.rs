@@ -406,9 +406,7 @@ pub(crate) fn retire_active_exact_attempt_after_restart(
     profile: &ProfileId,
     observed: &ReadOnlySaveAttempt,
 ) -> Result<(), SaveAttemptEvidenceError> {
-    if observed.header.tenant != tenant.as_str()
-        || observed.header.profile != profile.as_str()
-    {
+    if observed.header.tenant != tenant.as_str() || observed.header.profile != profile.as_str() {
         return Err(SaveAttemptEvidenceError::Invalid);
     }
     let successor = GenerationId::parse(observed.successor_id())

@@ -273,9 +273,11 @@ pub(crate) fn complete_active_exact_after_restart<T: MachineHttpPort>(
 
     let base_generation = GenerationId::parse(attempt.base_generation_id())
         .map_err(|_| RestartExactLocalCompletionError::LocalEvidenceChanged)?;
-    let base = root.open_generation(tenant_id, profile_id, &base_generation)
+    let base = root
+        .open_generation(tenant_id, profile_id, &base_generation)
         .map_err(|_| RestartExactLocalCompletionError::LocalEvidenceChanged)?;
-    let candidate = root.open_generation(tenant_id, profile_id, selected_generation)
+    let candidate = root
+        .open_generation(tenant_id, profile_id, selected_generation)
         .map_err(|_| RestartExactLocalCompletionError::LocalEvidenceChanged)?;
     if !matches!(browser_writer_locks_absent(&base), Ok(true))
         || !matches!(browser_writer_locks_absent(&candidate), Ok(true))
@@ -284,16 +286,17 @@ pub(crate) fn complete_active_exact_after_restart<T: MachineHttpPort>(
     }
     // Existing root-wide OS admission and same-device interrupted-lock path.
     // Do not remove browser parent.lock, previous content or another writer.
-    let lock = match BridgeWorkspaceLock::acquire(
-        &base, fresh_lease.device_id(), fresh_lease.epoch(),
-    ) {
-        Ok(value) => value,
-        Err(LocalProfileError::LockBusy) => BridgeWorkspaceLock::recover_interrupted_launch(
-            &base, fresh_lease.device_id(), fresh_lease.epoch(),
-        )
-        .map_err(|_| RestartExactLocalCompletionError::WriterOrLockUnresolved)?,
-        Err(_) => return Err(RestartExactLocalCompletionError::WriterOrLockUnresolved),
-    };
+    let lock =
+        match BridgeWorkspaceLock::acquire(&base, fresh_lease.device_id(), fresh_lease.epoch()) {
+            Ok(value) => value,
+            Err(LocalProfileError::LockBusy) => BridgeWorkspaceLock::recover_interrupted_launch(
+                &base,
+                fresh_lease.device_id(),
+                fresh_lease.epoch(),
+            )
+            .map_err(|_| RestartExactLocalCompletionError::WriterOrLockUnresolved)?,
+            Err(_) => return Err(RestartExactLocalCompletionError::WriterOrLockUnresolved),
+        };
     // The original checkpoint is revalidated UNDER the OS-owned admission
     // before any new host-local identity binding is written.
     let verified = discover_unresolved_exact_save_attempt(root, tenant_id, profile_id)
@@ -308,8 +311,11 @@ pub(crate) fn complete_active_exact_after_restart<T: MachineHttpPort>(
         return Err(RestartExactLocalCompletionError::LocalEvidenceChanged);
     }
     persist_committed_successor_binding(
-        &candidate, tenant_id, profile_id,
-        selected_generation, verified.container_digest(),
+        &candidate,
+        tenant_id,
+        profile_id,
+        selected_generation,
+        verified.container_digest(),
     )
     .map_err(|_| RestartExactLocalCompletionError::BindingOrRetirementFailed)?;
     lock.release()
@@ -526,11 +532,11 @@ mod tests {
         RestartExactLocalCompletionError, complete_active_exact_after_restart,
         observe_discovered_successor_after_restart, observe_retained_successor_after_restart,
     };
+    use crate::browser_execution::load_materialization_binding;
     use crate::dirty_generation::{
         GenerationSealingMaterial, GenerationSealingMaterialPort,
         prepare_dirty_generation_candidate,
     };
-    use crate::browser_execution::load_materialization_binding;
     use crate::local_profile::{BridgeWorkspaceLock, LocalGenerationRecord, MaterializationRoot};
     use crate::shipping_control_plane::{
         MachineHttpMethod, MachineHttpPort, MachineHttpResponse, ShippingControlPlaneError,
@@ -729,7 +735,9 @@ mod tests {
         // Windows/Bridge crash leaves a persistent old device marker but no
         // live root admission. Recovery must prove fresh epoch and same writer.
         let old = BridgeWorkspaceLock::acquire(
-            &source, fixture.lease.device_id(), fixture.lease.epoch(),
+            &source,
+            fixture.lease.device_id(),
+            fixture.lease.epoch(),
         )?;
         drop(old);
         let new_lease = ProfileLease::issue(
@@ -742,14 +750,19 @@ mod tests {
         )?;
         let mut transport = Transport {
             responses: VecDeque::from([MachineHttpResponse::new(
-                200, br#"{"activeExact":true}"#.to_vec(),
+                200,
+                br#"{"activeExact":true}"#.to_vec(),
             )]),
             paths: Vec::new(),
         };
         assert_eq!(
             complete_active_exact_after_restart(
-                &root, &fixture.tenant, &fixture.profile,
-                successor, &new_lease, &mut transport,
+                &root,
+                &fixture.tenant,
+                &fixture.profile,
+                successor,
+                &new_lease,
+                &mut transport,
             ),
             Ok(RestartExactLocalCompletion::ActiveExactLocalReady),
         );
@@ -757,25 +770,40 @@ mod tests {
         assert!(transport.paths[0].ends_with("/generation-successor/observe"));
         let bound = load_materialization_binding(
             fixture.prepared.candidate_workspace(),
-            &fixture.tenant, &fixture.profile, successor,
+            &fixture.tenant,
+            &fixture.profile,
+            successor,
         )?;
         assert_eq!(
-            bound.source_container_sha256(), fixture.prepared.container_digest(),
+            bound.source_container_sha256(),
+            fixture.prepared.container_digest(),
         );
         assert!(!has_unresolved_save_attempt_for_profile(
-            &root, &fixture.tenant, &fixture.profile,
+            &root,
+            &fixture.tenant,
+            &fixture.profile,
         )?);
         assert!(!source.path().join(".profile-platform.lock").exists());
         assert_eq!(std::fs::read(source.path().join("prefs.js"))?, b"save");
         assert_eq!(
-            std::fs::read(fixture.prepared.candidate_workspace().path().join("prefs.js"))?,
+            std::fs::read(
+                fixture
+                    .prepared
+                    .candidate_workspace()
+                    .path()
+                    .join("prefs.js")
+            )?,
             b"save",
         );
         let mut no_network = Transport::default();
         assert_eq!(
             complete_active_exact_after_restart(
-                &root, &fixture.tenant, &fixture.profile,
-                successor, &new_lease, &mut no_network,
+                &root,
+                &fixture.tenant,
+                &fixture.profile,
+                successor,
+                &new_lease,
+                &mut no_network,
             ),
             Ok(RestartExactLocalCompletion::NoCanonicalCheckpoint),
         );
@@ -795,55 +823,82 @@ mod tests {
             fixture.tenant.clone(),
             fixture.profile.clone(),
             SessionId::parse("session_fresh_negative_recovery")?,
-            fixture.lease.device_id().clone(), fixture.lease.epoch() + 1,
+            fixture.lease.device_id().clone(),
+            fixture.lease.epoch() + 1,
             FencingToken::parse("fence_fresh_negative_recovery")?,
         )?;
         let mut no_network = Transport::default();
         assert_eq!(
             complete_active_exact_after_restart(
-                &root, &fixture.tenant, &fixture.profile,
-                &fixture.base, &fresh, &mut no_network,
+                &root,
+                &fixture.tenant,
+                &fixture.profile,
+                &fixture.base,
+                &fresh,
+                &mut no_network,
             ),
             Ok(RestartExactLocalCompletion::ServerSelectedDifferentGeneration),
         );
         assert!(no_network.paths.is_empty());
         let mut not_active = Transport {
             responses: VecDeque::from([MachineHttpResponse::new(
-                200, br#"{"activeExact":false}"#.to_vec(),
+                200,
+                br#"{"activeExact":false}"#.to_vec(),
             )]),
             paths: Vec::new(),
         };
         assert_eq!(
             complete_active_exact_after_restart(
-                &root, &fixture.tenant, &fixture.profile,
-                successor, &fresh, &mut not_active,
+                &root,
+                &fixture.tenant,
+                &fixture.profile,
+                successor,
+                &fresh,
+                &mut not_active,
             ),
             Ok(RestartExactLocalCompletion::NotActiveExact),
         );
         assert_eq!(not_active.paths.len(), 1);
         assert!(has_unresolved_save_attempt_for_profile(
-            &root, &fixture.tenant, &fixture.profile,
+            &root,
+            &fixture.tenant,
+            &fixture.profile,
         )?);
-        assert!(load_materialization_binding(
-            fixture.prepared.candidate_workspace(),
-            &fixture.tenant, &fixture.profile, successor,
-        ).is_err());
+        assert!(
+            load_materialization_binding(
+                fixture.prepared.candidate_workspace(),
+                &fixture.tenant,
+                &fixture.profile,
+                successor,
+            )
+            .is_err()
+        );
 
         std::fs::write(
-            fixture.prepared.candidate_workspace().path().join("prefs.js"),
+            fixture
+                .prepared
+                .candidate_workspace()
+                .path()
+                .join("prefs.js"),
             b"mutated-browser-after-seal",
         )?;
         let mut must_not_observe = Transport::default();
         assert_eq!(
             complete_active_exact_after_restart(
-                &root, &fixture.tenant, &fixture.profile,
-                successor, &fresh, &mut must_not_observe,
+                &root,
+                &fixture.tenant,
+                &fixture.profile,
+                successor,
+                &fresh,
+                &mut must_not_observe,
             ),
             Err(RestartExactLocalCompletionError::LocalEvidenceChanged),
         );
         assert!(must_not_observe.paths.is_empty());
         assert!(has_unresolved_save_attempt_for_profile(
-            &root, &fixture.tenant, &fixture.profile,
+            &root,
+            &fixture.tenant,
+            &fixture.profile,
         )?);
         Ok(())
     }

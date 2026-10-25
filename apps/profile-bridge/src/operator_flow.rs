@@ -520,7 +520,12 @@ where
         Dl: GenerationObjectDownloadPort,
         Dl::Error: Into<GenerationObjectDownloadError>,
         BeforeRuntime: FnMut() -> Result<(), ()>,
-        ObservePending: FnMut(&profile_platform_primitives::TenantId, &ProfileId, &GenerationId, &ProfileLease) -> bool,
+        ObservePending: FnMut(
+            &profile_platform_primitives::TenantId,
+            &ProfileId,
+            &GenerationId,
+            &ProfileLease,
+        ) -> bool,
     {
         self.open_with_materialization(
             claim,
@@ -581,7 +586,12 @@ where
             u64,
         ) -> Result<(), AuthoritativeGenerationMaterializationError>,
         BeforeRuntime: FnMut() -> Result<(), ()>,
-        ObservePending: FnMut(&profile_platform_primitives::TenantId, &ProfileId, &GenerationId, &ProfileLease) -> bool,
+        ObservePending: FnMut(
+            &profile_platform_primitives::TenantId,
+            &ProfileId,
+            &GenerationId,
+            &ProfileLease,
+        ) -> bool,
     {
         if self.cleanup_blocked {
             return Err(OperatorFlowError::CleanupRequired);
@@ -665,10 +675,7 @@ where
                     Ok(false)
                 )
             {
-                return Err(self.fail_before_local_use(
-                    OperatorFailureStage::GenerationSave,
-                    lease,
-                ));
+                return Err(self.fail_before_local_use(OperatorFailureStage::GenerationSave, lease));
             }
         }
 
