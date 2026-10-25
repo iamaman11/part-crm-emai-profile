@@ -2,9 +2,7 @@ use crate::dirty_generation::{
     DirtyGenerationError, GenerationSealingMaterialPort, PreparedDirtyGeneration,
     prepare_dirty_generation_candidate,
 };
-use crate::local_profile::{
-    GenerationWorkspace, LocalGenerationRecord, MaterializationRoot,
-};
+use crate::local_profile::{GenerationWorkspace, LocalGenerationRecord, MaterializationRoot};
 use profile_platform_primitives::{GenerationId, ProfileId, TenantId};
 use session_domain::ProfileLease;
 use sha2::{Digest, Sha256};
@@ -631,14 +629,21 @@ mod tests {
                 DirtyGenerationError::Local(LocalProfileError::TargetAlreadyExists)
             ))
         ));
-        assert_eq!(first.sealed().metadata().generation_id(), &candidate_generation_id);
-        assert_eq!(std::fs::read(&irreplaceable)?, b"last-uncommitted-browser-writes");
+        assert_eq!(
+            first.sealed().metadata().generation_id(),
+            &candidate_generation_id
+        );
+        assert_eq!(
+            std::fs::read(&irreplaceable)?,
+            b"last-uncommitted-browser-writes"
+        );
         assert_eq!(first.candidate_workspace().inventory()?, original_inventory);
-        assert!(fixture.root.open_generation(
-            &fixture.tenant,
-            &fixture.profile,
-            &candidate_generation_id,
-        ).is_ok());
+        assert!(
+            fixture
+                .root
+                .open_generation(&fixture.tenant, &fixture.profile, &candidate_generation_id,)
+                .is_ok()
+        );
         Ok(())
     }
 
@@ -701,18 +706,31 @@ mod tests {
         };
         let source = fixture.source_workspace()?;
         let first = prepare_retained_generation_successor(
-            &fixture.record, &source, &fixture.root, &fixture.tenant,
-            &fixture.profile, &fixture.lease, &mut control,
+            &fixture.record,
+            &source,
+            &fixture.root,
+            &fixture.tenant,
+            &fixture.profile,
+            &fixture.lease,
+            &mut control,
         )?;
         let candidate = first.candidate_workspace().path();
         let recovery = candidate.join("user_data");
         std::fs::create_dir(&recovery)?;
-        std::fs::write(recovery.join("cookies.sqlite"), b"retained-unknown-cookie-bytes")?;
+        std::fs::write(
+            recovery.join("cookies.sqlite"),
+            b"retained-unknown-cookie-bytes",
+        )?;
         std::fs::remove_file(candidate.join(".profile-generation"))?;
 
         let retry = prepare_retained_generation_successor(
-            &fixture.record, &source, &fixture.root, &fixture.tenant,
-            &fixture.profile, &fixture.lease, &mut control,
+            &fixture.record,
+            &source,
+            &fixture.root,
+            &fixture.tenant,
+            &fixture.profile,
+            &fixture.lease,
+            &mut control,
         );
         assert!(matches!(
             retry,
