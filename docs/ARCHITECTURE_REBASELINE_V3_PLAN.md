@@ -110,6 +110,35 @@ unsynced/unknown/only-copy/LKG bytes and old decryption keys until exact
 evidence permits no-replace, crash-safe, idempotent cleanup. Never destroy
 recoverability merely to enforce a physical two-copy cap.
 
+### Accepted #802/#806 delivery batching: THREE completed code slices + ONE release acceptance
+
+**Decision 2026-10-25: ACCEPTED; execution batching only.** Do not
+introduce a new CAP stage, issue, controller, database, SM, daemon, credential
+owner or acceptance authority. #802 is the one normative product contract;
+Draft PR #806 implements it. #584 still owns B7 installed acceptance,
+#266 remains the CURRENT-only pointer and **this document** continues to
+own the ordered execution program. The existing P0-A…F and S01–S17,
+R01–R20, W01–W08, WP1–WP6, G1–G8 remain mandatory, including negative
+security, crash and loss-of-authority tests; batching never waives a gate.
+
+| Delivery slice (finish one real end-to-end behavior) | Existing scope brought together | Completion criteria / evidence required |
+| --- | --- | --- |
+| **K1 — local-first durable Save / Recovery, P0** | P0-A/B, save/recovery portion of P0-C, P0-E owner evidence | Native Firefox/Camoufox working directory and original cookies/WAL/IndexedDB/identity survive power loss, close while offline, broken seal/PUT, lost commit reply, lease expiry and restart. Controlled-close records minimal durable LOCAL_UNSYNCED before dependent cloud work; running Bridge resumes on reconnect, otherwise next authorized launch; existing D1 owner supplies affirmative NOT_APPLIED_RETRYABLE for the SAME attempt under fresh ACL/lease/fence. ACTIVE_EXACT performs only exact local completion; UNKNOWN/CONFLICT preserves all bytes and fences unsafe use. No N+2, stale-fence PUT, duplicate writer, phantom Saved, mandatory clone or second state store. Proof includes real fault injection at each transition and composed operator/server tests, not just an observer. |
+| **K2 — scalable encrypted generations + one working backup** | streaming portion P0-C, P0-D, storage portion P0-F | 256/512 MiB actual user-data roundtrip through bounded-memory snapshot/encrypt/PUT/download/verify/open; no permanent 64MiB limit and no per-save runaway full memory or disk copies. One cloud current N plus at most one *independently decrypted and real-browser-WORKING* LKG at SETTLED points with viable key/runtime; preserve extra evidence while dirty/unknown. Prove 100 sequential saves, 100 Profiles, key rotation/cold restore, safe no-replace prune with interruption; no only-copy deletion. |
+| **K3 — truthful UX, diagnostics + integrated resilience tests** | P0-E/F, all product-level and negative tests not already gated in K1/K2 | Owner-derived, read-only status projection only; simple Open → Close UX; Saved only after cloud active+local ready+owned releases+checkpoint retirement. Redacted stable diagnosis/next safe step; no raw IDs or manual journal/DB repair. Complete traceable S01–S17, R01–R20, WP1–WP6, ordinary >15min/8h sessions, sleep/revoke/second writer, 100-save retention and regression/fault-injection evidence, and no hidden test-only bypass. |
+| **Final acceptance — NOT a fourth code slice** | Existing G1–G8, W01–W08, B7/B8/B10 | Exact-head required CI (no pending/fail and conditional skip never claimed as a run test), full diff/security review, guarded merge and accepted main, immutable signed Windows installer/release identity, individually authorized staging effect with post-effect verification, actual installed Windows/Camoufox cold read/save/reopen and W01–W08. Only exact evidence permits closure of #802 and PR #806. |
+
+**Execution efficiency contract:** each large K slice must have a pre-agreed bounded
+write-set, natural owner, exact evidence/transition matrix, affected callers,
+rollback/fail-closed disposition and independently runnable positive+negative
+tests. Inside each K slice use small reviewable commits and the cheapest
+relevant gates; run the full required exact-head CI at the integrated K-slice
+boundary and before guarded merge, not per trivial formatting commit. Never
+use bigger slices as permission to merge an untested giant change or hide
+missing provider/Windows evidence. Failed acceptance stays in the owning
+K slice and is re-tested; do not create new workstreams or report partial
+implementation as K PASS.
+
 **Existing V2/#802 execution order and proof, not parallel projects:**
 
 1. **P0-A — local crash recovery first.** Reconcile surviving per-generation
