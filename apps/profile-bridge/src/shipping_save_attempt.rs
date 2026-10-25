@@ -326,25 +326,43 @@ pub(crate) fn retire_fully_saved_attempt(
     {
         return Err(SaveAttemptEvidenceError::Invalid);
     }
-    let recovered = inspect_exact_save_attempt(
-        root,
-        lease.tenant_id(),
-        lease.profile_id(),
-        committed.generation_id(),
-    )?
-    .ok_or(SaveAttemptEvidenceError::Unavailable)?;
-    if recovered.ciphertext() != prepared.sealed().container()
-        || recovered.container_digest() != committed.container_digest()
-        || !recovered.matches_original_lease(lease)
-    {
-        return Err(SaveAttemptEvidenceError::Changed);
-    }
     let canonical = attempt_path(
         root,
         lease.tenant_id(),
         lease.profile_id(),
         committed.generation_id(),
     );
+    // Completion has published an immutable local binding sidecar, so the
+    // current candidate inventory intentionally differs from the pre-commit
+    // inventory in the original checkpoint. Compare the original encrypted
+    // payload and exact descriptors, not the post-commit workspace inventory.
+    let record = read_regular_bounded(&canonical)?;
+    let (header, container) = parse_record(&record)?;
+    if header.tenant != lease.tenant_id().as_str()
+        || header.profile != lease.profile_id().as_str()
+        || header.base_generation
+            != prepared
+                .sealed()
+                .metadata()
+                .base_generation_id()
+                .ok_or(SaveAttemptEvidenceError::Invalid)?
+                .as_str()
+        || header.successor != committed.generation_id().as_str()
+        || header.epoch != lease.epoch()
+        || header.session_fingerprint
+            != credential_fingerprint(b"session", lease.session_id().as_str())
+        || header.fencing_fingerprint
+            != credential_fingerprint(b"fencing", lease.fencing_token().as_str())
+        || header.object_key != committed.object_key()
+        || header.metadata_digest != committed.metadata_digest()
+        || header.container_digest != committed.container_digest()
+        || header.container_bytes != committed.container_bytes()
+        || header.candidate_inventory != prepared.candidate_inventory().inventory_digest()
+        || header.candidate_bytes != prepared.candidate_inventory().total_bytes()
+        || container != prepared.sealed().container()
+    {
+        return Err(SaveAttemptEvidenceError::Changed);
+    }
     // No fallback deletion if a concurrent operation removed/replaced it.
     // In particular, never remove the candidate or the base profile data.
     fs::remove_file(canonical)?;
