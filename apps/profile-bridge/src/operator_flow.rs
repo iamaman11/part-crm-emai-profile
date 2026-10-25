@@ -1826,7 +1826,7 @@ mod tests {
                 runtime_health_started = true;
                 Ok(())
             },
-                    |_tenant, _profile| {},
+            |_tenant, _profile| {},
         );
         assert!(matches!(
             result,
@@ -1874,7 +1874,7 @@ mod tests {
                     runtime_health_started = true;
                     Ok(())
                 },
-                            |_tenant, _profile| {},
+                |_tenant, _profile| {},
             );
             assert!(matches!(
                 result,
@@ -1917,7 +1917,7 @@ mod tests {
                     )
                 },
                 || Ok(()),
-                            |_tenant, _profile| {},
+                |_tenant, _profile| {},
             );
             assert!(matches!(
                 result,
@@ -1946,7 +1946,7 @@ mod tests {
                 ))
             },
             || Ok(()),
-                    |_tenant, _profile| {},
+            |_tenant, _profile| {},
         );
         assert!(matches!(
             result,
@@ -2346,7 +2346,7 @@ mod tests {
                 started_health = true;
                 Ok(())
             },
-                    |_tenant, _profile| {},
+            |_tenant, _profile| {},
         );
         assert!(matches!(result, Err(OperatorFlowError::Preflight { .. })));
         assert!(!started_health);
@@ -2369,7 +2369,7 @@ mod tests {
                 started_health = true;
                 Ok(())
             },
-                    |_tenant, _profile| {},
+            |_tenant, _profile| {},
         )?;
         assert!(started_health);
         assert_eq!(
@@ -2394,7 +2394,7 @@ mod tests {
                 start_attempts += 1;
                 Err(())
             },
-                    |_tenant, _profile| {},
+            |_tenant, _profile| {},
         );
         assert_eq!(
             error,
