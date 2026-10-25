@@ -473,6 +473,17 @@ pub(crate) fn original_local_unsynced_successor(
         }
         Err(error) => return Err(error),
     };
+    // A canonical intent alongside a torn stage or competing exact attempt
+    // is NOT a clean new-save permission. Refuse a new candidate early.
+    if !matches!(
+        classify_scoped_pending_save_evidence(root, tenant, profile),
+        Ok(ScopedPendingSaveEvidence::LocalUnsynced {
+            base_generation,
+            prior_epoch,
+        }) if base_generation == *source.generation_id() && prior_epoch == lease.epoch()
+    ) {
+        return Err(SaveAttemptEvidenceError::Changed);
+    }
     let inventory = source
         .inventory()
         .map_err(|_| SaveAttemptEvidenceError::Changed)?;

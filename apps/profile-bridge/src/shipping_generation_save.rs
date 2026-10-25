@@ -675,6 +675,50 @@ mod tests {
     }
 
     #[test]
+    fn torn_scoped_sibling_blocks_new_candidate_and_preserves_working_bytes()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let fixture = Fixture::new("torn-sibling")?;
+        let source = fixture.source_workspace()?;
+        crate::shipping_save_attempt::persist_local_unsynced_intent(
+            &fixture.root,
+            &source,
+            &fixture.lease,
+        )?;
+        let marker = std::fs::read_dir(fixture.root.path())?
+            .filter_map(Result::ok)
+            .find_map(|entry| {
+                let name = entry.file_name().into_string().ok()?;
+                name.ends_with("-local-unsynced-v1.intent").then_some(name)
+            })
+            .ok_or("missing marker")?;
+        let scope = marker
+            .strip_suffix("-local-unsynced-v1.intent")
+            .ok_or("unscoped marker")?;
+        let pending = fixture.root.path().join(format!("{scope}.pending-unverified"));
+        std::fs::write(&pending, b"interrupted save")?;
+        let mut control = Control {
+            events: Rc::new(RefCell::new(Vec::new())),
+            verified: false,
+            commit: GenerationSuccessorCommitOutcome::Activated,
+        };
+        assert!(matches!(
+            prepare_retained_generation_successor(
+                &fixture.record,
+                &source,
+                &fixture.root,
+                &fixture.tenant,
+                &fixture.profile,
+                &fixture.lease,
+                &mut control,
+            ),
+            Err(ShippingGenerationSaveError::CandidateIdentity),
+        ));
+        assert!(pending.exists());
+        assert_eq!(std::fs::read(source.path().join("prefs.js"))?, b"save");
+        Ok(())
+    }
+
+    #[test]
     fn signed_upload_capability_redacts_debug_and_preserves_canonical_utf8()
     -> Result<(), Box<dyn std::error::Error>> {
         let capability = SignedGenerationUploadCapability::new(
