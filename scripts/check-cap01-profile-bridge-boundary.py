@@ -10,6 +10,8 @@ from pathlib import Path
 
 PRODUCTION_MAIN = Path("apps/profile-bridge/src/main.rs")
 PRODUCTION_COMPOSITION = Path("apps/profile-bridge/src/shipping_composition.rs")
+PRODUCTION_RECOVERY_OWNER = Path("apps/profile-bridge/src/shipping_generation_successor_control.rs")
+PRODUCTION_OPERATOR = Path("apps/profile-bridge/src/operator_flow.rs")
 ACTIVE_DELIVERY_RUNTIME = Path("apps/profile-bridge/src/windows_delivery_runtime.rs")
 MANIFEST = Path("apps/profile-bridge/Cargo.toml")
 AUX_BIN_ROOT = Path("apps/profile-bridge/src/bin")
@@ -62,7 +64,7 @@ REQUIRED_COMPOSITION_MARKERS = (
     ".close_observer()",
     "ProfileBridgeOperator::new(",
     ".open_authoritative_with_runtime_health_and_pending_observation(",
-    "observe_discovered_successor_after_restart(",
+    "complete_active_exact_after_restart(",
     ".observe_controlled_close(&session_id)",
     ".close(now()?)",
     ".save_retained_successor(",
@@ -71,6 +73,27 @@ REQUIRED_COMPOSITION_MARKERS = (
     "RuntimeDisplayMode::Headful",
     "ShippingCompositionError::CommittedRecoveryRequired",
     "Err(ShippingCompositionError::UnsupportedPlatform)",
+)
+
+# Post-commit recovery must stay INSIDE the existing authenticated operator.
+# Marker checks supplement Rust owner tests; they cannot grant an effect.
+REQUIRED_RECOVERY_OWNER_MARKERS = (
+    "fn complete_active_exact_after_restart<",
+    "fresh_lease.tenant_id() != tenant_id",
+    "fresh_lease.profile_id() != profile_id",
+    "attempt.successor_id() != selected_generation.as_str()",
+    "observe_verified_exact_attempt(",
+    "browser_writer_locks_absent(&base)",
+    "browser_writer_locks_absent(&candidate)",
+    "BridgeWorkspaceLock::recover_interrupted_launch(",
+    "persist_committed_successor_binding(",
+    "retire_active_exact_attempt_after_restart(",
+)
+REQUIRED_OPERATOR_RECOVERY_MARKERS = (
+    "has_unresolved_save_attempt_for_profile(",
+    "let recovered = observe_pending(",
+    "if !recovered",
+    "return Err(self.fail_before_local_use(",
 )
 
 REQUIRED_ACTIVE_DELIVERY_MARKERS = (
@@ -188,6 +211,8 @@ def validate(root: Path) -> None:
     main_path = root / PRODUCTION_MAIN
     composition_path = root / PRODUCTION_COMPOSITION
     active_delivery_path = root / ACTIVE_DELIVERY_RUNTIME
+    recovery_path = root / PRODUCTION_RECOVERY_OWNER
+    operator_path = root / PRODUCTION_OPERATOR
     manifest_path = root / MANIFEST
     if not main_path.is_file():
         fail(f"missing production entrypoint: {PRODUCTION_MAIN}")
@@ -197,6 +222,9 @@ def validate(root: Path) -> None:
         fail(f"missing production composition: {PRODUCTION_COMPOSITION}")
     if composition_path.is_symlink():
         fail(f"production composition must not be a symlink: {PRODUCTION_COMPOSITION}")
+    for guarded in (recovery_path, operator_path):
+        if not guarded.is_file() or guarded.is_symlink():
+            fail(f"missing or unsafe Profile Bridge recovery owner: {guarded}")
     if not active_delivery_path.is_file():
         fail(f"missing active delivery runtime owner: {ACTIVE_DELIVERY_RUNTIME}")
     if active_delivery_path.is_symlink():
@@ -222,6 +250,15 @@ def validate(root: Path) -> None:
     for marker in FORBIDDEN_COMPOSITION_MARKERS:
         if marker in composition:
             fail(f"shipping composition contains forbidden alternate/effect marker: {marker}")
+
+    recovery = recovery_path.read_text(encoding="utf-8").replace("\r\n", "\n")
+    for marker in REQUIRED_RECOVERY_OWNER_MARKERS:
+        if marker not in recovery:
+            fail(f"exact postcommit recovery owner marker missing: {marker}")
+    operator = operator_path.read_text(encoding="utf-8").replace("\r\n", "\n")
+    for marker in REQUIRED_OPERATOR_RECOVERY_MARKERS:
+        if marker not in operator:
+            fail(f"postcommit continuation guard missing: {marker}")
 
     active_delivery = active_delivery_path.read_text(encoding="utf-8").replace("\r\n", "\n")
     for marker in REQUIRED_ACTIVE_DELIVERY_MARKERS:
@@ -312,7 +349,7 @@ def write_fixture(root: Path) -> None:
         "// .close_observer()\n"
         "// ProfileBridgeOperator::new(\n"
         "// .open_authoritative_with_runtime_health_and_pending_observation(\n"
-        "// observe_discovered_successor_after_restart(\n"
+        "// complete_active_exact_after_restart(\n"
         "// .observe_controlled_close(&session_id)\n"
         "// .close(now()?)\n"
         "// .save_retained_successor(\n"
@@ -321,6 +358,16 @@ def write_fixture(root: Path) -> None:
         "// RuntimeDisplayMode::Headful\n"
         "// ShippingCompositionError::CommittedRecoveryRequired\n"
         "// Err(ShippingCompositionError::UnsupportedPlatform)\n",
+        encoding="utf-8",
+    )
+    recovery = root / PRODUCTION_RECOVERY_OWNER
+    recovery.write_text(
+        "".join(f"// {marker}\n" for marker in REQUIRED_RECOVERY_OWNER_MARKERS),
+        encoding="utf-8",
+    )
+    operator = root / PRODUCTION_OPERATOR
+    operator.write_text(
+        "".join(f"// {marker}\n" for marker in REQUIRED_OPERATOR_RECOVERY_MARKERS),
         encoding="utf-8",
     )
     active_delivery = root / ACTIVE_DELIVERY_RUNTIME
@@ -391,6 +438,10 @@ def self_test() -> None:
         safe_composition = composition.read_text(encoding="utf-8")
         active_delivery = root / ACTIVE_DELIVERY_RUNTIME
         safe_active_delivery = active_delivery.read_text(encoding="utf-8")
+        recovery = root / PRODUCTION_RECOVERY_OWNER
+        safe_recovery = recovery.read_text(encoding="utf-8")
+        operator = root / PRODUCTION_OPERATOR
+        safe_operator = operator.read_text(encoding="utf-8")
 
         main.write_text(
             safe_main + "use profile_bridge::operator_flow::ProfileBridgeOperator;\n",
@@ -528,11 +579,32 @@ def self_test() -> None:
         composition.write_text(safe_composition, encoding="utf-8")
 
         composition.write_text(
-            safe_composition.replace("// observe_discovered_successor_after_restart(\n", ""),
+            safe_composition.replace("// complete_active_exact_after_restart(\n", ""),
             encoding="utf-8",
         )
-        expect_rejected(root, "shipping launch has no exact server-pointer observation")
+        expect_rejected(root, "shipping launch does not invoke owned postcommit exact observation")
         composition.write_text(safe_composition, encoding="utf-8")
+
+        recovery.write_text(
+            safe_recovery.replace("// persist_committed_successor_binding(\n", ""),
+            encoding="utf-8",
+        )
+        expect_rejected(root, "local recovery cannot skip exact committed binding owner")
+        recovery.write_text(safe_recovery, encoding="utf-8")
+
+        recovery.write_text(
+            safe_recovery.replace("// retire_active_exact_attempt_after_restart(\n", ""),
+            encoding="utf-8",
+        )
+        expect_rejected(root, "local recovery cannot skip exact checkpoint retirement")
+        recovery.write_text(safe_recovery, encoding="utf-8")
+
+        operator.write_text(
+            safe_operator.replace("// if !recovered\n", ""),
+            encoding="utf-8",
+        )
+        expect_rejected(root, "operator cannot bypass remaining pending-evidence guard")
+        operator.write_text(safe_operator, encoding="utf-8")
 
         composition.write_text(
             safe_composition.replace("// .observe_controlled_close(&session_id)\n", ""),
