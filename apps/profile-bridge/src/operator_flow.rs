@@ -2181,7 +2181,7 @@ mod tests {
         let tenant = fixture.actor.tenant_scope().tenant_id().as_str();
         let profile = fixture.profile_id.as_str();
         let mut hash = Sha256::new();
-        hash.update(b"bridge-p3-save-attempt-profile-scope-v1\\0");
+        hash.update(b"bridge-p3-save-attempt-profile-scope-v1\0");
         for part in [tenant, profile] {
             hash.update((part.len() as u64).to_be_bytes());
             hash.update(part.as_bytes());
@@ -2194,10 +2194,10 @@ mod tests {
         ));
         fs::write(&pending, b"torn-attempt")?;
 
-        let mut operator = operator(&fixture, FakeCamouhost::default())?;
+        let mut owner = operator(&fixture, FakeCamouhost::default())?;
         let observed = Cell::new(0_u32);
         assert_eq!(
-            operator.open_with_materialization(
+            owner.open_with_materialization(
                 &fixture.claim_uri,
                 &fixture.root,
                 UnixMillis::new(10),
@@ -2214,9 +2214,9 @@ mod tests {
             Err(OperatorFlowError::Stage(OperatorFailureStage::GenerationSave))
         );
         assert_eq!(observed.get(), 1);
-        assert_eq!(operator.coordinator().claimed, 1);
-        assert_eq!(operator.coordinator().closed, 1);
-        assert!(operator.process().actions().is_empty());
+        assert_eq!(owner.coordinator().claimed, 1);
+        assert_eq!(owner.coordinator().closed, 1);
+        assert!(owner.process().actions().is_empty());
         assert_eq!(fs::read(&pending)?, b"torn-attempt");
 
         // The same torn evidence never triggers observation or browser use
