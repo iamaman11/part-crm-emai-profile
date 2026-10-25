@@ -470,8 +470,8 @@ fn map_execution_error(_error: BrowserExecutionError) -> BrowserLaunchBlocker {
 mod tests {
     use super::{
         BROWSER_IDENTITY_RECORD_FILE, BrowserLaunchBlocker, evaluate_browser_launch,
-        load_materialization_binding, persist_browser_identity, persist_committed_successor_binding,
-        persist_materialization_binding,
+        load_materialization_binding, persist_browser_identity,
+        persist_committed_successor_binding, persist_materialization_binding,
     };
     use crate::local_profile::{BridgeWorkspaceLock, MaterializationRoot};
     use crate::test_support::remove_test_root;
@@ -569,25 +569,44 @@ mod tests {
         fs::write(&prefs, b"browser-retained-bytes")?;
 
         // A copied directory without the actual generation-owned identity is not ready.
-        assert!(persist_committed_successor_binding(
-            &workspace, &tenant, &profile, &generation, &"a".repeat(64),
-        ).is_err());
+        assert!(
+            persist_committed_successor_binding(
+                &workspace,
+                &tenant,
+                &profile,
+                &generation,
+                &"a".repeat(64),
+            )
+            .is_err()
+        );
         assert_eq!(fs::read(&prefs)?, b"browser-retained-bytes");
         assert!(load_materialization_binding(&workspace, &tenant, &profile, &generation).is_err());
 
         persist_browser_identity(&workspace, &identity()?)?;
         persist_committed_successor_binding(
-            &workspace, &tenant, &profile, &generation, &"a".repeat(64),
+            &workspace,
+            &tenant,
+            &profile,
+            &generation,
+            &"a".repeat(64),
         )?;
         let original = load_materialization_binding(&workspace, &tenant, &profile, &generation)?;
         assert_eq!(original.source_container_sha256(), "a".repeat(64));
         // Exact idempotent replay is safe; different immutable object identity cannot rewrite it.
         persist_committed_successor_binding(
-            &workspace, &tenant, &profile, &generation, &"a".repeat(64),
+            &workspace,
+            &tenant,
+            &profile,
+            &generation,
+            &"a".repeat(64),
         )?;
         assert_eq!(
             persist_committed_successor_binding(
-                &workspace, &tenant, &profile, &generation, &"b".repeat(64),
+                &workspace,
+                &tenant,
+                &profile,
+                &generation,
+                &"b".repeat(64),
             ),
             Err(BrowserLaunchBlocker::MaterializationStale)
         );
