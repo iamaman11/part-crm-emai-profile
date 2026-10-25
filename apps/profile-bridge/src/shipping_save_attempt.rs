@@ -74,6 +74,18 @@ struct AttemptHeader {
     metadata_digest: String,
     container_digest: String,
     container_bytes: u64,
+    /// A first sealed checkpoint made from an older lone LOCAL_UNSYNCED
+    /// under a NEW writer lease. Not a reusable original fence.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    recovered_lone_origin: Option<RecoveredLoneOrigin>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RecoveredLoneOrigin {
+    epoch: u64,
+    session_fingerprint: String,
+    fencing_fingerprint: String,
 }
 
 /// A verified *local copy* of encrypted bytes, not proof of a server commit or
@@ -342,6 +354,18 @@ fn matching_local_unsynced_for_exact(
         Err(SaveAttemptEvidenceError::Io(std::io::ErrorKind::NotFound)) => return Ok(false),
         Err(error) => return Err(error),
     };
+    let originally_sealed = exact.header.recovered_lone_origin.is_none()
+        && exact.header.epoch == intent.epoch
+        && exact.header.session_fingerprint == intent.session_fingerprint
+        && exact.header.fencing_fingerprint == intent.fencing_fingerprint;
+    let recovered_seal = exact.header.recovered_lone_origin.as_ref().is_some_and(|origin| {
+        origin.epoch == intent.epoch
+            && origin.session_fingerprint == intent.session_fingerprint
+            && origin.fencing_fingerprint == intent.fencing_fingerprint
+            && exact.header.epoch > origin.epoch
+            && deterministic_lone_successor(&intent)
+                .is_ok_and(|candidate| candidate.as_str() == exact.successor_id())
+    });
     if intent.schema != "bridge-p3-local-unsynced-v1"
         || intent.tenant != tenant.as_str()
         || intent.profile != profile.as_str()
@@ -349,9 +373,7 @@ fn matching_local_unsynced_for_exact(
         || exact.header.tenant != intent.tenant
         || exact.header.profile != intent.profile
         || exact.header.base_generation != intent.base_generation
-        || exact.header.epoch != intent.epoch
-        || exact.header.session_fingerprint != intent.session_fingerprint
-        || exact.header.fencing_fingerprint != intent.fencing_fingerprint
+        || !(originally_sealed || recovered_seal)
         || exact.header.device_fingerprint != intent.device_fingerprint
         || exact.header.source_inventory != intent.source_inventory
         || exact.header.candidate_bytes != intent.source_bytes
@@ -418,6 +440,46 @@ pub(crate) fn local_unsynced_matches_fresh_lease(
         && intent.device_fingerprint.as_deref() == Some(device_digest.as_str()))
 }
 
+/// The generation is fixed by original immutable local-close evidence,
+/// NOT by a subsequently renewed session/fence. Repeated authorized startups
+/// can never silently choose N+2 after a partly created N+1.
+#[cfg(any(windows, test))]
+pub(crate) fn deterministic_lone_unsynced_successor(
+    root: &MaterializationRoot,
+    tenant: &TenantId,
+    profile: &ProfileId,
+    base: &GenerationId,
+    fresh_lease: &ProfileLease,
+) -> Result<Option<GenerationId>, SaveAttemptEvidenceError> {
+    if !local_unsynced_matches_fresh_lease(root, tenant, profile, base, fresh_lease)? {
+        return Ok(None);
+    }
+    let intent = read_local_unsynced(&local_unsynced_path(root, tenant, profile))?;
+    Ok(Some(deterministic_lone_successor(&intent)?))
+}
+
+fn deterministic_lone_successor(
+    intent: &LocalUnsyncedIntent,
+) -> Result<GenerationId, SaveAttemptEvidenceError> {
+    let mut hash = Sha256::new();
+    hash.update(b"bridge-p3-original-lone-intent-successor-v1");
+    for value in [
+        intent.tenant.as_bytes(),
+        intent.profile.as_bytes(),
+        intent.base_generation.as_bytes(),
+        intent.session_fingerprint.as_bytes(),
+        intent.fencing_fingerprint.as_bytes(),
+    ] {
+        hash.update((value.len() as u64).to_be_bytes());
+        hash.update(value);
+    }
+    hash.update(intent.epoch.to_be_bytes());
+    hash.update(intent.source_inventory.to_be_bytes());
+    hash.update(intent.source_bytes.to_be_bytes());
+    GenerationId::parse(format!("generation_{}", hex(&hash.finalize())))
+        .map_err(|_| SaveAttemptEvidenceError::Invalid)
+}
+
 fn local_unsynced_path(
     root: &MaterializationRoot,
     tenant: &TenantId,
@@ -456,6 +518,54 @@ pub(crate) fn persist_exact_save_attempt(
     source: &GenerationWorkspace,
     prepared: &PreparedDirtyGeneration,
     lease: &ProfileLease,
+) -> Result<(), SaveAttemptEvidenceError> {
+    persist_exact_save_attempt_with_origin(root, source, prepared, lease, None)
+}
+
+/// First checkpoint from a preexisting local-close intent after a fresh writer
+/// has revalidated the native inventory and the deterministic N+1. The old
+/// intent stays until authoritative ACTIVE_EXACT local completion; a crash
+/// after fsync therefore leaves BOTH correctly paired records.
+#[cfg(any(windows, test))]
+pub(crate) fn persist_exact_save_attempt_from_lone_intent(
+    root: &MaterializationRoot,
+    source: &GenerationWorkspace,
+    prepared: &PreparedDirtyGeneration,
+    fresh_lease: &ProfileLease,
+) -> Result<(), SaveAttemptEvidenceError> {
+    let tenant = fresh_lease.tenant_id();
+    let profile = fresh_lease.profile_id();
+    let candidate = deterministic_lone_unsynced_successor(
+        root, tenant, profile, source.generation_id(), fresh_lease,
+    )?
+    .ok_or(SaveAttemptEvidenceError::Changed)?;
+    if &candidate != prepared.candidate_workspace().generation_id() {
+        return Err(SaveAttemptEvidenceError::Changed);
+    }
+    let intent = read_local_unsynced(&local_unsynced_path(root, tenant, profile))?;
+    let inventory = source.inventory().map_err(|_| SaveAttemptEvidenceError::Changed)?;
+    if inventory.inventory_digest() != intent.source_inventory
+        || inventory.total_bytes() != intent.source_bytes
+        || intent.device_fingerprint.as_deref() != Some(
+            credential_fingerprint(b"device", fresh_lease.device_id().as_str()).as_str(),
+        )
+    {
+        return Err(SaveAttemptEvidenceError::Changed);
+    }
+    let origin = RecoveredLoneOrigin {
+        epoch: intent.epoch,
+        session_fingerprint: intent.session_fingerprint,
+        fencing_fingerprint: intent.fencing_fingerprint,
+    };
+    persist_exact_save_attempt_with_origin(root, source, prepared, fresh_lease, Some(origin))
+}
+
+fn persist_exact_save_attempt_with_origin(
+    root: &MaterializationRoot,
+    source: &GenerationWorkspace,
+    prepared: &PreparedDirtyGeneration,
+    lease: &ProfileLease,
+    recovered_lone_origin: Option<RecoveredLoneOrigin>,
 ) -> Result<(), SaveAttemptEvidenceError> {
     let candidate = prepared.candidate_workspace();
     let metadata = prepared.sealed().metadata();
@@ -503,6 +613,7 @@ pub(crate) fn persist_exact_save_attempt(
         container_digest: prepared.container_digest().to_owned(),
         container_bytes: u64::try_from(ciphertext.len())
             .map_err(|_| SaveAttemptEvidenceError::Invalid)?,
+        recovered_lone_origin,
     };
     let header_bytes =
         serde_json::to_vec(&header).map_err(|_| SaveAttemptEvidenceError::Invalid)?;
@@ -629,6 +740,12 @@ pub(crate) fn inspect_exact_save_attempt(
         || header.session_fingerprint.len() != 64
         || header.fencing_fingerprint.len() != 64
         || header.epoch == 0
+        || header.recovered_lone_origin.as_ref().is_some_and(|origin| {
+            origin.epoch == 0
+                || origin.epoch >= header.epoch
+                || origin.session_fingerprint.len() != 64
+                || origin.fencing_fingerprint.len() != 64
+        })
     {
         return Err(SaveAttemptEvidenceError::Invalid);
     }
