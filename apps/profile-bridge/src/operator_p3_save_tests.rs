@@ -781,10 +781,7 @@ fn torn_scoped_checkpoint_filename_still_blocks_stale_browser_reopen()
     fixture.open_mutate_and_close(&mut owner)?;
     let first = owner.save_retained_successor(
         &fixture.root,
-        Transport::new(
-            [Ok(upload_required_response()?)],
-            TransportTrace::default(),
-        ),
+        Transport::new([Ok(upload_required_response()?)], TransportTrace::default()),
         &mut Put {
             fail: true,
             calls: Rc::new(Cell::new(0)),
@@ -798,7 +795,9 @@ fn torn_scoped_checkpoint_filename_still_blocks_stale_browser_reopen()
         .find(|path| {
             path.file_name()
                 .and_then(|name| name.to_str())
-                .is_some_and(|name| name.starts_with(".profile-save-attempt-v1-") && name.ends_with(".bin"))
+                .is_some_and(|name| {
+                    name.starts_with(".profile-save-attempt-v1-") && name.ends_with(".bin")
+                })
         })
         .ok_or("missing attempted encrypted checkpoint")?;
     let malformed_name = checkpoint.with_extension("bin.torn");
@@ -1294,7 +1293,10 @@ fn canonical_postcommit_candidate_mutation_preserves_bytes_for_owned_recovery()
     assert!(
         fs::read_dir(fixture.root.path())?
             .filter_map(Result::ok)
-            .any(|entry| entry.file_name().to_string_lossy().starts_with(".profile-save-attempt-v1-"))
+            .any(|entry| entry
+                .file_name()
+                .to_string_lossy()
+                .starts_with(".profile-save-attempt-v1-"))
     );
     assert!(
         crate::browser_execution::load_materialization_binding(
