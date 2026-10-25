@@ -135,8 +135,14 @@ pub fn prepare_dirty_generation_candidate<K: GenerationSealingMaterialPort>(
     keys: &mut K,
 ) -> Result<PreparedDirtyGeneration, DirtyGenerationError> {
     prepare_dirty_generation_candidate_inner(
-        local_record, source_workspace, root, tenant_id, profile_id,
-        candidate_generation_id, keys, false,
+        local_record,
+        source_workspace,
+        root,
+        tenant_id,
+        profile_id,
+        candidate_generation_id,
+        keys,
+        false,
     )
 }
 
@@ -155,8 +161,14 @@ pub(crate) fn prepare_recovered_local_unsynced_candidate<K: GenerationSealingMat
     keys: &mut K,
 ) -> Result<PreparedDirtyGeneration, DirtyGenerationError> {
     prepare_dirty_generation_candidate_inner(
-        local_record, source_workspace, root, tenant_id, profile_id,
-        candidate_generation_id, keys, true,
+        local_record,
+        source_workspace,
+        root,
+        tenant_id,
+        profile_id,
+        candidate_generation_id,
+        keys,
+        true,
     )
 }
 
@@ -198,9 +210,7 @@ fn prepare_dirty_generation_candidate_inner<K: GenerationSealingMaterialPort>(
             // No replacement, repair, unlink or second candidate is permitted.
             // Any torn/different Firefox file leaves the old LOCAL_UNSYNCED
             // evidence untouched and blocks this attempt.
-            let existing = root.open_generation(
-                tenant_id, profile_id, candidate_generation_id,
-            )?;
+            let existing = root.open_generation(tenant_id, profile_id, candidate_generation_id)?;
             let original_inventory = source_workspace.inventory()?;
             if existing.inventory()? != original_inventory {
                 return Err(DirtyGenerationError::SourceChanged);

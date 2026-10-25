@@ -366,14 +366,18 @@ fn matching_local_unsynced_for_exact(
         && exact.header.epoch == intent.epoch
         && exact.header.session_fingerprint == intent.session_fingerprint
         && exact.header.fencing_fingerprint == intent.fencing_fingerprint;
-    let recovered_seal = exact.header.recovered_lone_origin.as_ref().is_some_and(|origin| {
-        origin.epoch == intent.epoch
-            && origin.session_fingerprint == intent.session_fingerprint
-            && origin.fencing_fingerprint == intent.fencing_fingerprint
-            && exact.header.epoch > origin.epoch
-            && deterministic_lone_successor(&intent)
-                .is_ok_and(|candidate| candidate.as_str() == exact.successor_id())
-    });
+    let recovered_seal = exact
+        .header
+        .recovered_lone_origin
+        .as_ref()
+        .is_some_and(|origin| {
+            origin.epoch == intent.epoch
+                && origin.session_fingerprint == intent.session_fingerprint
+                && origin.fencing_fingerprint == intent.fencing_fingerprint
+                && exact.header.epoch > origin.epoch
+                && deterministic_lone_successor(&intent)
+                    .is_ok_and(|candidate| candidate.as_str() == exact.successor_id())
+        });
     if intent.schema != "bridge-p3-local-unsynced-v1"
         || intent.tenant != tenant.as_str()
         || intent.profile != profile.as_str()
@@ -544,19 +548,24 @@ pub(crate) fn persist_exact_save_attempt_from_lone_intent(
     let tenant = fresh_lease.tenant_id();
     let profile = fresh_lease.profile_id();
     let candidate = deterministic_lone_unsynced_successor(
-        root, tenant, profile, source.generation_id(), fresh_lease,
+        root,
+        tenant,
+        profile,
+        source.generation_id(),
+        fresh_lease,
     )?
     .ok_or(SaveAttemptEvidenceError::Changed)?;
     if &candidate != prepared.candidate_workspace().generation_id() {
         return Err(SaveAttemptEvidenceError::Changed);
     }
     let intent = read_local_unsynced(&local_unsynced_path(root, tenant, profile))?;
-    let inventory = source.inventory().map_err(|_| SaveAttemptEvidenceError::Changed)?;
+    let inventory = source
+        .inventory()
+        .map_err(|_| SaveAttemptEvidenceError::Changed)?;
     if inventory.inventory_digest() != intent.source_inventory
         || inventory.total_bytes() != intent.source_bytes
-        || intent.device_fingerprint.as_deref() != Some(
-            credential_fingerprint(b"device", fresh_lease.device_id().as_str()).as_str(),
-        )
+        || intent.device_fingerprint.as_deref()
+            != Some(credential_fingerprint(b"device", fresh_lease.device_id().as_str()).as_str())
     {
         return Err(SaveAttemptEvidenceError::Changed);
     }
