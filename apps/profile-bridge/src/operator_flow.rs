@@ -474,6 +474,42 @@ where
         Dl::Error: Into<GenerationObjectDownloadError>,
         BeforeRuntime: FnMut() -> Result<(), ()>,
     {
+        self.open_authoritative_with_runtime_health_and_pending_observation(
+            claim,
+            root,
+            downloader,
+            now,
+            before_runtime_start,
+            |_tenant, _profile| {},
+        )
+    }
+
+    /// Observe an interrupted save automatically on the next freshly authorized
+    /// installed launch, BEFORE any workspace/browser use. The callback is
+    /// read-only and its verdict cannot release unknown bytes or authorize a
+    /// legacy PUT/commit. The existing unresolved-checkpoint guard remains.
+    pub fn open_authoritative_with_runtime_health_and_pending_observation<
+        Dl,
+        BeforeRuntime,
+        ObservePending,
+    >(
+        &mut self,
+        claim: &ClaimUri,
+        root: &MaterializationRoot,
+        downloader: &mut Dl,
+        now: UnixMillis,
+        before_runtime_start: BeforeRuntime,
+        observe_pending: ObservePending,
+    ) -> Result<(), OperatorFlowError>
+    where
+        C: GenerationReopenControlPort,
+        <C as GenerationReopenControlPort>::Error: Into<GenerationReopenControlError>,
+        Dl: GenerationObjectDownloadPort,
+        Dl::Error: Into<GenerationObjectDownloadError>,
+        BeforeRuntime: FnMut() -> Result<(), ()>,
+        ObservePending:
+            FnMut(&profile_platform_primitives::TenantId, &ProfileId),
+    {
         self.open_with_materialization(
             claim,
             root,
@@ -491,6 +527,7 @@ where
                 )
             },
             before_runtime_start,
+            observe_pending,
         )
     }
 
@@ -509,16 +546,18 @@ where
             now,
             |_coordinator, _tenant_id, _profile_id, _generation_id, _device_id, _epoch| Ok(()),
             || Ok(()),
+            |_tenant, _profile| {},
         )
     }
 
-    fn open_with_materialization<F, BeforeRuntime>(
+    fn open_with_materialization<F, BeforeRuntime, ObservePending>(
         &mut self,
         claim: &ClaimUri,
         root: &MaterializationRoot,
         now: UnixMillis,
         mut ensure_materialized: F,
         mut before_runtime_start: BeforeRuntime,
+        mut observe_pending: ObservePending,
     ) -> Result<(), OperatorFlowError>
     where
         F: FnMut(
@@ -530,6 +569,7 @@ where
             u64,
         ) -> Result<(), AuthoritativeGenerationMaterializationError>,
         BeforeRuntime: FnMut() -> Result<(), ()>,
+        ObservePending: FnMut(&profile_platform_primitives::TenantId, &ProfileId),
     {
         if self.cleanup_blocked {
             return Err(OperatorFlowError::CleanupRequired);
@@ -590,6 +630,14 @@ where
             ),
             Ok(false)
         ) {
+            // Freshly authenticated device/enrollment and lease have been
+            // checked. Reconcile the exact server pointer READ-ONLY; an HTTP
+            // miss, uncertain reply or commit observation is not enough to
+            // declare local successor ready or re-enter the old writer fence.
+            observe_pending(
+                enrollment.actor().tenant_scope().tenant_id(),
+                enrollment.profile_id(),
+            );
             return Err(self.fail_before_local_use(OperatorFailureStage::GenerationSave, lease));
         }
 
