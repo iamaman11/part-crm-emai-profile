@@ -383,10 +383,12 @@ mod windows {
             // A loop delayed past the confirmed lease deadline must not
             // publish under a stale fence even if the browser just closed.
             if observed_at.value() >= timing.idle_expires_at_ms().min(timing.hard_expires_at_ms()) {
-                operator
-                    .close(observed_at)
-                    .map_err(ShippingCompositionError::Operator)?;
-                return Err(ShippingCompositionError::HeartbeatAuthorityUncertain);
+                // Unlike a transport timeout, this deadline is known to
+                // have expired. Immediately fence the writer; do not spend a
+                // graceful shutdown interval writing without coordinator authority.
+                return Err(ShippingCompositionError::Operator(
+                    operator.stop_after_confirmed_lease_expiry(observed_at),
+                ));
             }
             let session_id = operator
                 .active_session_id()
