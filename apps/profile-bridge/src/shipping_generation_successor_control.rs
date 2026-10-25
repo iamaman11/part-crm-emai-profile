@@ -11,8 +11,7 @@ use crate::shipping_control_plane::{
 };
 use crate::shipping_generation_save::{
     GenerationSuccessorCommitOutcome, GenerationSuccessorControlPort,
-    GenerationUploadAuthorization, SignedGenerationObjectPutPort,
-    SignedGenerationUploadCapability,
+    GenerationUploadAuthorization, SignedGenerationObjectPutPort, SignedGenerationUploadCapability,
 };
 use crate::shipping_save_attempt::{
     ReadOnlySaveAttempt, discover_unresolved_exact_save_attempt, inspect_exact_save_attempt,
@@ -446,20 +445,17 @@ where
     {
         return Err(RestartExactLocalCompletionError::WriterOrLockUnresolved);
     }
-    let lock = match BridgeWorkspaceLock::acquire(
-        &source,
-        fresh_lease.device_id(),
-        fresh_lease.epoch(),
-    ) {
-        Ok(lock) => lock,
-        Err(LocalProfileError::LockBusy) => BridgeWorkspaceLock::recover_interrupted_launch(
-            &source,
-            fresh_lease.device_id(),
-            fresh_lease.epoch(),
-        )
-        .map_err(|_| RestartExactLocalCompletionError::WriterOrLockUnresolved)?,
-        Err(_) => return Err(RestartExactLocalCompletionError::WriterOrLockUnresolved),
-    };
+    let lock =
+        match BridgeWorkspaceLock::acquire(&source, fresh_lease.device_id(), fresh_lease.epoch()) {
+            Ok(lock) => lock,
+            Err(LocalProfileError::LockBusy) => BridgeWorkspaceLock::recover_interrupted_launch(
+                &source,
+                fresh_lease.device_id(),
+                fresh_lease.epoch(),
+            )
+            .map_err(|_| RestartExactLocalCompletionError::WriterOrLockUnresolved)?,
+            Err(_) => return Err(RestartExactLocalCompletionError::WriterOrLockUnresolved),
+        };
     let result = (|| {
         // No cloud effect may be based on pre-lock evidence alone.
         let exact = discover_unresolved_exact_save_attempt(root, tenant_id, profile_id)
@@ -476,14 +472,8 @@ where
         {
             return Err(RestartExactLocalCompletionError::LocalEvidenceChanged);
         }
-        if request_fresh_retry_decision(
-            tenant_id,
-            profile_id,
-            &exact,
-            fresh_lease,
-            transport,
-        )
-        .map_err(RestartExactLocalCompletionError::ControlPlane)?
+        if request_fresh_retry_decision(tenant_id, profile_id, &exact, fresh_lease, transport)
+            .map_err(RestartExactLocalCompletionError::ControlPlane)?
             != BridgeGenerationSuccessorRetryVerdict::NotAppliedRetryable
         {
             return Ok(false);
@@ -520,20 +510,21 @@ where
                     ShippingControlPlaneError::InvalidResponse,
                 ));
             }
-            let decoded = serde_json::from_slice::<BridgeGenerationUploadCapabilityResponse>(
-                &bytes,
-            )
-            .map_err(|_| RestartExactLocalCompletionError::ControlPlane(
-                ShippingControlPlaneError::InvalidResponse,
-            ))?;
-            decode_upload_authorization::<core::convert::Infallible>(decoded).map_err(
-                |error| match error {
+            let decoded =
+                serde_json::from_slice::<BridgeGenerationUploadCapabilityResponse>(&bytes)
+                    .map_err(|_| {
+                        RestartExactLocalCompletionError::ControlPlane(
+                            ShippingControlPlaneError::InvalidResponse,
+                        )
+                    })?;
+            decode_upload_authorization::<core::convert::Infallible>(decoded).map_err(|error| {
+                match error {
                     GenerationSuccessorControlError::ControlPlane(reason) => {
                         RestartExactLocalCompletionError::ControlPlane(reason)
                     }
                     GenerationSuccessorControlError::Sealing(never) => match never {},
-                },
-            )
+                }
+            })
         };
         match authorization(transport)? {
             GenerationUploadAuthorization::Verified => {}
@@ -541,7 +532,10 @@ where
                 upload
                     .put_exact(&capability, exact.ciphertext())
                     .map_err(|_| RestartExactLocalCompletionError::UploadOrCommitUncertain)?;
-                if !matches!(authorization(transport)?, GenerationUploadAuthorization::Verified) {
+                if !matches!(
+                    authorization(transport)?,
+                    GenerationUploadAuthorization::Verified
+                ) {
                     return Err(RestartExactLocalCompletionError::UploadOrCommitUncertain);
                 }
             }
@@ -571,9 +565,11 @@ where
         let committed = serde_json::from_slice::<BridgeGenerationSuccessorCommitResponse>(
             &response,
         )
-        .map_err(|_| RestartExactLocalCompletionError::ControlPlane(
-            ShippingControlPlaneError::InvalidResponse,
-        ))?;
+        .map_err(|_| {
+            RestartExactLocalCompletionError::ControlPlane(
+                ShippingControlPlaneError::InvalidResponse,
+            )
+        })?;
         match committed.outcome {
             BridgeGenerationSuccessorCommitOutcomeDto::Activated
             | BridgeGenerationSuccessorCommitOutcomeDto::AlreadyActive => Ok(true),
@@ -1697,8 +1693,13 @@ mod tests {
         };
         assert_eq!(
             super::resume_exact_successor_under_fresh_lease(
-                &root, &fixture.tenant, &fixture.profile, &fixture.base,
-                &fresh, &mut denied, &mut uploader,
+                &root,
+                &fixture.tenant,
+                &fixture.profile,
+                &fixture.base,
+                &fresh,
+                &mut denied,
+                &mut uploader,
             ),
             Ok(false),
         );
@@ -1720,8 +1721,13 @@ mod tests {
         };
         assert_eq!(
             super::resume_exact_successor_under_fresh_lease(
-                &root, &fixture.tenant, &fixture.profile, &fixture.base,
-                &fresh, &mut lost_commit, &mut uploader,
+                &root,
+                &fixture.tenant,
+                &fixture.profile,
+                &fixture.base,
+                &fresh,
+                &mut lost_commit,
+                &mut uploader,
             ),
             Err(RestartExactLocalCompletionError::ControlPlane(
                 ShippingControlPlaneError::HttpServerUncertain,
@@ -1730,13 +1736,20 @@ mod tests {
         assert_eq!(lost_commit.paths.len(), 3);
         assert_eq!(uploader.calls, 0);
         assert!(has_unresolved_save_attempt_for_profile(
-            &root, &fixture.tenant, &fixture.profile,
+            &root,
+            &fixture.tenant,
+            &fixture.profile,
         )?);
         let mut stale = Transport::default();
         assert_eq!(
             super::resume_exact_successor_under_fresh_lease(
-                &root, &fixture.tenant, &fixture.profile, &fixture.base,
-                &fixture.lease, &mut stale, &mut uploader,
+                &root,
+                &fixture.tenant,
+                &fixture.profile,
+                &fixture.base,
+                &fixture.lease,
+                &mut stale,
+                &mut uploader,
             ),
             Err(RestartExactLocalCompletionError::WriterOrLockUnresolved),
         );
