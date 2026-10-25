@@ -710,49 +710,66 @@ mod tests {
         // lease, inventory and local browser working bytes.
         persist_local_unsynced_intent(&root, &source, &fixture.lease)?;
         assert!(has_unresolved_save_attempt_for_profile(
-            &root, &fixture.tenant, &fixture.profile,
+            &root,
+            &fixture.tenant,
+            &fixture.profile,
         )?);
-        assert!(discover_unresolved_exact_save_attempt(
-            &root, &fixture.tenant, &fixture.profile,
-        ).is_err());
+        assert!(
+            discover_unresolved_exact_save_attempt(&root, &fixture.tenant, &fixture.profile,)
+                .is_err()
+        );
         persist_exact_save_attempt(&root, &source, &fixture.prepared, &fixture.lease)?;
         let checkpoint = inspect_exact_save_attempt(
-            &root, &fixture.tenant, &fixture.profile,
+            &root,
+            &fixture.tenant,
+            &fixture.profile,
             fixture.prepared.candidate_workspace().generation_id(),
-        )?.ok_or("missing exact sealed checkpoint")?;
-        retire_local_unsynced_after_exact_checkpoint(
-            &root, &source, &fixture.lease, &checkpoint,
-        )?;
+        )?
+        .ok_or("missing exact sealed checkpoint")?;
+        retire_local_unsynced_after_exact_checkpoint(&root, &source, &fixture.lease, &checkpoint)?;
         // The small intent is gone; the full ciphertext checkpoint is NOT
         // retired, so lost PUT/commit still blocks unsafe future Open.
-        let discovered = discover_unresolved_exact_save_attempt(
-            &root, &fixture.tenant, &fixture.profile,
-        )?.ok_or("checkpoint unexpectedly retired")?;
+        let discovered =
+            discover_unresolved_exact_save_attempt(&root, &fixture.tenant, &fixture.profile)?
+                .ok_or("checkpoint unexpectedly retired")?;
         assert_eq!(discovered.ciphertext(), checkpoint.ciphertext());
         assert!(has_unresolved_save_attempt_for_profile(
-            &root, &fixture.tenant, &fixture.profile,
+            &root,
+            &fixture.tenant,
+            &fixture.profile,
         )?);
         Ok(())
     }
 
     #[test]
-    fn changed_source_cannot_retire_local_unsynced_intent()
-    -> Result<(), Box<dyn std::error::Error>> {
+    fn changed_source_cannot_retire_local_unsynced_intent() -> Result<(), Box<dyn std::error::Error>>
+    {
         let fixture = Fixture::new()?;
         let root = MaterializationRoot::open_or_create(&fixture.root_path)?;
         let source = root.open_generation(&fixture.tenant, &fixture.profile, &fixture.base)?;
         persist_local_unsynced_intent(&root, &source, &fixture.lease)?;
         persist_exact_save_attempt(&root, &source, &fixture.prepared, &fixture.lease)?;
         let checkpoint = inspect_exact_save_attempt(
-            &root, &fixture.tenant, &fixture.profile,
+            &root,
+            &fixture.tenant,
+            &fixture.profile,
             fixture.prepared.candidate_workspace().generation_id(),
-        )?.ok_or("missing checkpoint")?;
+        )?
+        .ok_or("missing checkpoint")?;
         std::fs::write(source.path().join("prefs.js"), b"modified-after-close")?;
-        assert!(retire_local_unsynced_after_exact_checkpoint(
-            &root, &source, &fixture.lease, &checkpoint,
-        ).is_err());
+        assert!(
+            retire_local_unsynced_after_exact_checkpoint(
+                &root,
+                &source,
+                &fixture.lease,
+                &checkpoint,
+            )
+            .is_err()
+        );
         assert!(has_unresolved_save_attempt_for_profile(
-            &root, &fixture.tenant, &fixture.profile,
+            &root,
+            &fixture.tenant,
+            &fixture.profile,
         )?);
         assert_eq!(
             std::fs::read(source.path().join("prefs.js"))?,

@@ -32,8 +32,8 @@ use crate::shipping_generation_save::{
 use crate::shipping_generation_successor_control::ControlPlaneGenerationSuccessor;
 use crate::shipping_save_attempt::{
     has_unresolved_save_attempt_for_profile, inspect_exact_save_attempt,
-    persist_exact_save_attempt, persist_local_unsynced_intent,
-    retire_fully_saved_attempt, retire_local_unsynced_after_exact_checkpoint,
+    persist_exact_save_attempt, persist_local_unsynced_intent, retire_fully_saved_attempt,
+    retire_local_unsynced_after_exact_checkpoint,
 };
 #[cfg(any(test, feature = "synthetic-test-bin"))]
 use application_ports::generation_objects::{
@@ -943,7 +943,9 @@ where
         let retained = self
             .retained_dirty
             .as_ref()
-            .ok_or(OperatorFlowError::Stage(OperatorFailureStage::GenerationSave))?;
+            .ok_or(OperatorFlowError::Stage(
+                OperatorFailureStage::GenerationSave,
+            ))?;
         let source = retained
             .open_base_workspace(root)
             .map_err(|_| OperatorFlowError::Stage(OperatorFailureStage::GenerationSave))?;
@@ -1060,10 +1062,8 @@ where
         // independently verified. Retire only the matching tiny offline
         // close intent before PUT: on a crash its full exact checkpoint
         // remains the sole local unsynced proof, never missing evidence.
-        retire_local_unsynced_after_exact_checkpoint(
-            root, &workspace, &lease, &recovered,
-        )
-        .map_err(|_| OperatorFlowError::Stage(OperatorFailureStage::GenerationSave))?;
+        retire_local_unsynced_after_exact_checkpoint(root, &workspace, &lease, &recovered)
+            .map_err(|_| OperatorFlowError::Stage(OperatorFailureStage::GenerationSave))?;
 
         let committed = publish_verify_and_commit_successor(
             lease.tenant_id(),
@@ -2050,7 +2050,9 @@ mod tests {
         let mut restarted = operator(&fixture, FakeCamouhost::default())?;
         assert_eq!(
             restarted.open(&fixture.claim_uri, &fixture.root, UnixMillis::new(21)),
-            Err(OperatorFlowError::Stage(OperatorFailureStage::GenerationSave)),
+            Err(OperatorFlowError::Stage(
+                OperatorFailureStage::GenerationSave
+            )),
         );
         assert_eq!(restarted.coordinator().claimed, 1);
         assert_eq!(restarted.coordinator().closed, 1);
