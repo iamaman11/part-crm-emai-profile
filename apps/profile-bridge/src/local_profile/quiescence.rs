@@ -34,6 +34,51 @@ impl BridgeWorkspaceLock {
         })
     }
 
+    /// Same-device recovery after an interrupted Bridge. The caller must have already
+    /// redeemed fresh device/ACL and exact coordinator generation/lease authority.
+    /// Root-wide exclusive OS admission excludes *all* live cooperative Bridge writers
+    /// and Windows delivery activation until the new per-generation marker is created.
+    pub(crate) fn recover_interrupted_launch(
+        workspace: &GenerationWorkspace,
+        device_id: &DeviceId,
+        fresh_epoch: u64,
+    ) -> Result<Self, LocalProfileError> {
+        let root = workspace_root(workspace)?;
+        let exclusive = open_root_marker(root)?;
+        exclusive.try_lock().map_err(map_try_lock_error)?;
+
+        // A stale Windows parent.lock file is permitted only when its actual OS handle
+        // is free. On other platforms, uncertain Firefox markers remain fail-closed.
+        // This checks the original working directory, never a replacement clone.
+        if !matches!(
+            crate::browser_execution::browser_writer_locks_absent(workspace),
+            Ok(true)
+        ) {
+            return Err(LocalProfileError::LockBusy);
+        }
+
+        let inner = filesystem::BridgeWorkspaceLock::replace_interrupted(
+            workspace,
+            device_id,
+            fresh_epoch,
+        )?;
+        drop(exclusive);
+
+        // The newly established marker blocks delivery activation while we switch
+        // from exclusive crash reconciliation to ordinary shared writer admission.
+        let admission = open_root_marker(root)?;
+        if let Err(error) = admission.try_lock_shared() {
+            // A concurrent updater won admission first. Release our new marker;
+            // never start the browser while that updater owns the root.
+            inner.release()?;
+            return Err(map_try_lock_error(error));
+        }
+        Ok(Self {
+            inner,
+            _admission: admission,
+        })
+    }
+
     pub fn release(self) -> Result<(), LocalProfileError> {
         let Self {
             inner,
