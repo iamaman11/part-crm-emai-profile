@@ -30,6 +30,7 @@ use crate::shipping_generation_save::{
     prepare_retained_generation_successor, publish_verify_and_commit_successor,
 };
 use crate::shipping_generation_successor_control::ControlPlaneGenerationSuccessor;
+use crate::shipping_save_attempt::{inspect_exact_save_attempt, persist_exact_save_attempt};
 #[cfg(any(test, feature = "synthetic-test-bin"))]
 use application_ports::generation_objects::{
     GenerationObjectExactVerifyPort, GenerationObjectUploadPort,
@@ -847,6 +848,30 @@ where
         if workspace.inventory().ok().as_ref() != Some(prepared.candidate_inventory())
             || prepared.candidate_workspace().inventory().ok().as_ref()
                 != Some(prepared.candidate_inventory())
+        {
+            return Err(OperatorFlowError::Stage(
+                OperatorFailureStage::GenerationSave,
+            ));
+        }
+
+        // Crash-surviving ciphertext and exact attempt identity must be
+        // published and re-read BEFORE the first network upload or commit.
+        // A conflicting/torn checkpoint is a hard stop; no local bytes are
+        // cleaned, no old generation is invalidated, no cloud effect is made.
+        persist_exact_save_attempt(root, &workspace, prepared, &lease)
+            .map_err(|_| OperatorFlowError::Stage(OperatorFailureStage::GenerationSave))?;
+        let recovered = inspect_exact_save_attempt(
+            root,
+            lease.tenant_id(),
+            lease.profile_id(),
+            prepared.candidate_workspace().generation_id(),
+        )
+        .map_err(|_| OperatorFlowError::Stage(OperatorFailureStage::GenerationSave))?
+        .ok_or(OperatorFlowError::Stage(OperatorFailureStage::GenerationSave))?;
+        if recovered.ciphertext() != prepared.sealed().container()
+            || recovered.container_digest() != prepared.container_digest()
+            || recovered.original_session() != lease.session_id().as_str()
+            || recovered.original_fencing() != lease.fencing_token().as_str()
         {
             return Err(OperatorFlowError::Stage(
                 OperatorFailureStage::GenerationSave,
