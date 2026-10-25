@@ -629,4 +629,5 @@ mod tests {
         );
         assert!(never_network.paths.is_empty());
         Ok(())
-    }}
+     }
+}
