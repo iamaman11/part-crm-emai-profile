@@ -84,6 +84,7 @@ struct FakeCoordinator {
     expected_launch_intent_id: LaunchIntentId,
     claimed: u64,
     closed: u64,
+    sealing_requests: u64,
     close_fail: bool,
 }
 
@@ -131,6 +132,7 @@ impl GenerationSealingMaterialPort for FakeCoordinator {
         _generation_id: &GenerationId,
         _plaintext_digest: [u8; 32],
     ) -> Result<GenerationSealingMaterial, Self::Error> {
+        self.sealing_requests += 1;
         if tenant_id != self.lease.tenant_id()
             || profile_id != self.lease.profile_id()
             || base_generation_id.as_str().is_empty()
@@ -377,6 +379,7 @@ impl Fixture {
             expected_launch_intent_id: self.launch_intent_id.clone(),
             claimed: 0,
             closed: 0,
+            sealing_requests: 0,
             close_fail: false,
         }
     }
@@ -536,6 +539,7 @@ fn canonical_operator_save_retries_same_successor_after_upload_failure()
     );
     assert_eq!(operator.coordinator().closed, 0);
     assert_eq!(put_calls.get(), 1);
+    assert_eq!(operator.coordinator().sealing_requests, 1);
     assert_eq!(trace.paths.borrow().len(), 1);
     assert!(!trace.paths.borrow()[0].ends_with("/commit"));
     fixture.assert_base_lock_held()?;
@@ -582,6 +586,7 @@ fn canonical_operator_save_retries_same_successor_after_upload_failure()
     ));
     assert!(!operator.has_pending_dirty_close());
     assert_eq!(operator.coordinator().closed, 1);
+    assert_eq!(operator.coordinator().sealing_requests, 1);
     assert_eq!(put_calls.get(), 2);
     assert!(
         trace
@@ -713,6 +718,7 @@ fn canonical_operator_lost_commit_response_reuses_verified_original_without_seco
         Err(OperatorFlowError::Stage(OperatorFailureStage::GenerationSave))
     ));
     assert_eq!(put_calls.get(), 1);
+    assert_eq!(operator.coordinator().sealing_requests, 1);
     let candidate = trace.generation_ids.borrow().first().ok_or("missing candidate")?.clone();
     let completion = operator.save_retained_successor(
         &fixture.root,
@@ -731,6 +737,7 @@ fn canonical_operator_lost_commit_response_reuses_verified_original_without_seco
     )?;
     assert!(completion.is_saved());
     assert_eq!(put_calls.get(), 1);
+    assert_eq!(operator.coordinator().sealing_requests, 1);
     assert!(trace.generation_ids.borrow().iter().all(|id| id == &candidate));
     assert_eq!(completion.committed().generation_id().as_str(), candidate);
     assert!(!operator.has_pending_dirty_close());
