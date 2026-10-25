@@ -21,6 +21,7 @@ use crate::shipping_save_attempt::{
 #[cfg(any(windows, test))]
 use crate::shipping_save_attempt::{
     ScopedPendingSaveEvidence, classify_scoped_pending_save_evidence,
+    local_unsynced_matches_fresh_lease,
     retire_active_exact_attempt_after_restart, retire_matching_local_unsynced_after_restart,
 };
 use control_plane_contract::profile_generation_api::{
@@ -33,7 +34,9 @@ use control_plane_contract::profile_generation_api::{
 };
 #[cfg(any(windows, test))]
 use control_plane_contract::profile_generation_api::{
+    BRIDGE_PROFILE_GENERATION_LOCAL_UNSYNCED_RETRY_DECISION_PATH_TEMPLATE,
     BRIDGE_PROFILE_GENERATION_RETRY_DECISION_PATH_TEMPLATE,
+    BridgeGenerationLocalUnsyncedRetryDecisionRequest,
     BridgeGenerationSuccessorRetryDecisionRequest, BridgeGenerationSuccessorRetryDecisionResponse,
     BridgeGenerationSuccessorRetryVerdict,
 };
@@ -59,7 +62,7 @@ pub enum RestartExactLocalCompletion {
     NoCanonicalCheckpoint,
     /// Verified local source exists, but no cloud effect has been proved.
     /// Requires a *new* D1 affirmative decision and fresh writer fence.
-    LocalUnsyncedRequiresFreshRetryDecision,
+    LocalUnsyncedAuthorizedAwaitingFirstSeal,
     NotActiveExact,
     /// D1 positively proved nonapplication; exact same-attempt resume is still pending.
     RetryDecisionConfirmedAwaitingResumption,
@@ -301,9 +304,34 @@ pub(crate) fn complete_active_exact_after_restart<T: MachineHttpPort>(
             if &base_generation != selected_generation {
                 return Ok(RestartExactLocalCompletion::ServerSelectedDifferentGeneration);
             }
-            // No PUT, no commit, no fabricated N+1. The existing D1 owner
-            // still has to prove NOT_APPLIED_RETRYABLE under a fresh fence.
-            return Ok(RestartExactLocalCompletion::LocalUnsyncedRequiresFreshRetryDecision);
+            if !local_unsynced_matches_fresh_lease(
+                root,
+                tenant_id,
+                profile_id,
+                &base_generation,
+                fresh_lease,
+            )
+            .map_err(|_| RestartExactLocalCompletionError::LocalEvidenceChanged)?
+            {
+                return Err(RestartExactLocalCompletionError::WriterOrLockUnresolved);
+            }
+            let verdict = request_local_unsynced_retry_decision(
+                tenant_id,
+                profile_id,
+                &base_generation,
+                fresh_lease,
+                transport,
+            )
+            .map_err(RestartExactLocalCompletionError::ControlPlane)?;
+            // No N+1 or PUT exists: original native bytes and intent remain.
+            return Ok(match verdict {
+                BridgeGenerationSuccessorRetryVerdict::NotAppliedRetryable => {
+                    RestartExactLocalCompletion::LocalUnsyncedAuthorizedAwaitingFirstSeal
+                }
+                BridgeGenerationSuccessorRetryVerdict::Blocked => {
+                    RestartExactLocalCompletion::RetryDecisionBlocked
+                }
+            });
         }
         ScopedPendingSaveEvidence::Exact(attempt) => *attempt,
     };
@@ -583,6 +611,42 @@ where
     lock.release()
         .map_err(|_| RestartExactLocalCompletionError::WriterOrLockUnresolved)?;
     result
+}
+
+/// D1-positive base-only proof for a lone LOCAL_UNSYNCED native close.
+#[cfg(any(windows, test))]
+fn request_local_unsynced_retry_decision<T: MachineHttpPort>(
+    tenant_id: &TenantId,
+    profile_id: &ProfileId,
+    base: &GenerationId,
+    fresh_lease: &ProfileLease,
+    transport: &mut T,
+) -> Result<BridgeGenerationSuccessorRetryVerdict, ShippingControlPlaneError> {
+    let request = BridgeGenerationLocalUnsyncedRetryDecisionRequest {
+        base_generation_id: base.as_str().to_owned(),
+        coordinator_session_id: fresh_lease.session_id().as_str().to_owned(),
+        coordinator_fencing_token: fresh_lease.fencing_token().as_str().to_owned(),
+        coordinator_epoch: fresh_lease.epoch(),
+    };
+    let response = post_json::<T, core::convert::Infallible, _>(
+        transport,
+        &successor_path(
+            BRIDGE_PROFILE_GENERATION_LOCAL_UNSYNCED_RETRY_DECISION_PATH_TEMPLATE,
+            tenant_id,
+            profile_id,
+        ),
+        &request,
+    )
+    .map_err(|error| match error {
+        GenerationSuccessorControlError::ControlPlane(reason) => reason,
+        GenerationSuccessorControlError::Sealing(never) => match never {},
+    })?;
+    if response.len() > MAX_OBSERVE_RESPONSE_BYTES {
+        return Err(ShippingControlPlaneError::InvalidResponse);
+    }
+    let result = serde_json::from_slice::<BridgeGenerationSuccessorRetryDecisionResponse>(&response)
+        .map_err(|_| ShippingControlPlaneError::InvalidResponse)?;
+    Ok(result.verdict)
 }
 
 /// Typed server-positive eligibility for the exact original sealed attempt.
@@ -1053,7 +1117,13 @@ mod tests {
             fixture.lease.epoch() + 1,
             FencingToken::parse("fence_lone_local_unsynced")?,
         )?;
-        let mut transport = Transport::default();
+        let mut transport = Transport {
+            responses: VecDeque::from([MachineHttpResponse::new(
+                200,
+                br#"{"verdict":"NOT_APPLIED_RETRYABLE"}"#.to_vec(),
+            )]),
+            paths: Vec::new(),
+        };
         let disposition = complete_active_exact_after_restart(
             &root,
             &fixture.tenant,
@@ -1064,14 +1134,51 @@ mod tests {
         );
         assert_eq!(
             disposition,
-            Ok(RestartExactLocalCompletion::LocalUnsyncedRequiresFreshRetryDecision),
+            Ok(RestartExactLocalCompletion::LocalUnsyncedAuthorizedAwaitingFirstSeal),
         );
-        assert!(transport.paths.is_empty());
+        assert_eq!(transport.paths.len(), 1);
+        assert!(transport.paths[0].ends_with("/generation-successor/local-unsynced/retry-decision"));
         assert_eq!(std::fs::read(source.path().join("prefs.js"))?, original);
         assert!(has_unresolved_save_attempt_for_profile(
             &root,
             &fixture.tenant,
             &fixture.profile,
+        )?);
+        // D1 may explicitly refuse the same locally intact source.
+        let mut denied = Transport {
+            responses: VecDeque::from([MachineHttpResponse::new(
+                200,
+                br#"{"verdict":"BLOCKED"}"#.to_vec(),
+            )]),
+            paths: Vec::new(),
+        };
+        assert_eq!(
+            complete_active_exact_after_restart(
+                &root, &fixture.tenant, &fixture.profile,
+                &fixture.base, &fresh, &mut denied,
+            ),
+            Ok(RestartExactLocalCompletion::RetryDecisionBlocked),
+        );
+        assert_eq!(denied.paths.len(), 1);
+        let foreign_device = ProfileLease::issue(
+            fixture.tenant.clone(),
+            fixture.profile.clone(),
+            SessionId::parse("session_lone_foreign")?,
+            DeviceId::parse("device_lone_foreign")?,
+            fresh.epoch() + 1,
+            FencingToken::parse("fence_lone_foreign")?,
+        )?;
+        let mut no_network = Transport::default();
+        assert_eq!(
+            complete_active_exact_after_restart(
+                &root, &fixture.tenant, &fixture.profile,
+                &fixture.base, &foreign_device, &mut no_network,
+            ),
+            Err(RestartExactLocalCompletionError::WriterOrLockUnresolved),
+        );
+        assert!(no_network.paths.is_empty());
+        assert!(has_unresolved_save_attempt_for_profile(
+            &root, &fixture.tenant, &fixture.profile,
         )?);
         // A stale epoch or an unrelated selected base never makes the
         // offline source an authorized fresh writer or allows N+2.

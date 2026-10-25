@@ -424,12 +424,9 @@ mod windows {
                             );
                             false
                         }
-                        Ok(RestartExactLocalCompletion::LocalUnsyncedRequiresFreshRetryDecision) => {
-                            let diagnosis = PendingSaveReadOnlyDiagnosis::local_unsynced();
+                        Ok(RestartExactLocalCompletion::LocalUnsyncedAuthorizedAwaitingFirstSeal) => {
                             eprintln!(
-                                "{};NEXT_SAFE_STEP={}",
-                                diagnosis.code(),
-                                diagnosis.next_safe_step()
+                                "P3_RECOVERY=LOCAL_UNSYNCED_BASE_RETRYABLE;NEXT_SAFE_STEP=SEAL_FIRST_SUCCESSOR_UNDER_FRESH_AUTHORITY"
                             );
                             false
                         }

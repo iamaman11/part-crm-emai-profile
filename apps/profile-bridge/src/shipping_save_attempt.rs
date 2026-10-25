@@ -392,6 +392,32 @@ pub(crate) fn retire_matching_local_unsynced_after_restart(
     Ok(())
 }
 
+/// Read-only original-device provenance proof for an unsealed local close.
+/// The previous session/fence is never recoverable or re-authorized.
+#[cfg(any(windows, test))]
+pub(crate) fn local_unsynced_matches_fresh_lease(
+    root: &MaterializationRoot,
+    tenant: &TenantId,
+    profile: &ProfileId,
+    base: &GenerationId,
+    fresh_lease: &ProfileLease,
+) -> Result<bool, SaveAttemptEvidenceError> {
+    let intent = read_local_unsynced(&local_unsynced_path(root, tenant, profile))?;
+    if intent.schema != "bridge-p3-local-unsynced-v1"
+        || intent.tenant != tenant.as_str()
+        || intent.profile != profile.as_str()
+        || intent.base_generation != base.as_str()
+        || intent.epoch == 0
+    {
+        return Err(SaveAttemptEvidenceError::Changed);
+    }
+    let device_digest = credential_fingerprint(b"device", fresh_lease.device_id().as_str());
+    Ok(fresh_lease.tenant_id() == tenant
+        && fresh_lease.profile_id() == profile
+        && fresh_lease.epoch() > intent.epoch
+        && intent.device_fingerprint.as_deref() == Some(device_digest.as_str()))
+}
+
 fn local_unsynced_path(
     root: &MaterializationRoot,
     tenant: &TenantId,
