@@ -375,6 +375,19 @@ mod windows {
         let mut heartbeat_retry_used = false;
         loop {
             let observed_at = now()?;
+            let timing = operator
+                .coordinator()
+                .runtime_timing()
+                .map_err(|_| ShippingCompositionError::ControlPlane)?;
+            // Check BEFORE controlled-close observation or any save attempt.
+            // A loop delayed past the confirmed lease deadline must not
+            // publish under a stale fence even if the browser just closed.
+            if observed_at.value() >= timing.idle_expires_at_ms().min(timing.hard_expires_at_ms()) {
+                operator
+                    .close(observed_at)
+                    .map_err(ShippingCompositionError::Operator)?;
+                return Err(ShippingCompositionError::HeartbeatAuthorityUncertain);
+            }
             let session_id = operator
                 .active_session_id()
                 .cloned()
@@ -408,18 +421,6 @@ mod windows {
                 return Err(ShippingCompositionError::CommittedRecoveryRequired);
             }
 
-            let timing = operator
-                .coordinator()
-                .runtime_timing()
-                .map_err(|_| ShippingCompositionError::ControlPlane)?;
-            // Never keep the browser writer beyond the last server-confirmed
-            // idle/hard expiry, even if a scheduler or HTTP call was delayed.
-            if observed_at.value() >= timing.idle_expires_at_ms().min(timing.hard_expires_at_ms()) {
-                operator
-                    .close(observed_at)
-                    .map_err(ShippingCompositionError::Operator)?;
-                return Err(ShippingCompositionError::HeartbeatAuthorityUncertain);
-            }
             if observed_at >= next_heartbeat_deadline {
                 match operator.heartbeat(observed_at) {
                     Ok(()) => {
@@ -441,7 +442,10 @@ mod windows {
                                 .map_err(ShippingCompositionError::Operator)?;
                             return Err(ShippingCompositionError::HeartbeatAuthorityUncertain);
                         }
-                        let Some(retry_at) = bounded_heartbeat_retry_at(timing, observed_at) else {
+                        let Some(retry_at) = bounded_heartbeat_retry_at(
+                            timing.idle_expires_at_ms().min(timing.hard_expires_at_ms()),
+                            observed_at,
+                        ) else {
                             operator
                                 .close(observed_at)
                                 .map_err(ShippingCompositionError::Operator)?;
@@ -586,10 +590,9 @@ mod windows {
     // Retry at most once, and strictly before the last confirmed deadline.
     // No old lease/fence authority is extended by the passage of time.
     fn bounded_heartbeat_retry_at(
-        timing: ControlPlaneLeaseTiming,
+        expiry: u64,
         observed_at: UnixMillis,
     ) -> Option<UnixMillis> {
-        let expiry = timing.idle_expires_at_ms().min(timing.hard_expires_at_ms());
         let remaining = expiry.checked_sub(observed_at.value())?;
         if remaining <= 1 {
             return None;
@@ -600,6 +603,36 @@ mod windows {
             .checked_add(delay)
             .filter(|next| *next < expiry)
             .map(UnixMillis::new)
+    }
+
+    #[cfg(test)]
+    mod heartbeat_safety_tests {
+        use super::bounded_heartbeat_retry_at;
+        use profile_platform_primitives::UnixMillis;
+
+        #[test]
+        fn retry_is_at_most_one_second_and_never_reaches_lease_deadline() {
+            assert_eq!(
+                bounded_heartbeat_retry_at(60_000, UnixMillis::new(10_000)),
+                Some(UnixMillis::new(11_000))
+            );
+            assert_eq!(
+                bounded_heartbeat_retry_at(60_000, UnixMillis::new(59_900)),
+                Some(UnixMillis::new(59_950))
+            );
+            assert_eq!(
+                bounded_heartbeat_retry_at(60_000, UnixMillis::new(59_999)),
+                None
+            );
+            assert_eq!(
+                bounded_heartbeat_retry_at(60_000, UnixMillis::new(60_000)),
+                None
+            );
+            assert_eq!(
+                bounded_heartbeat_retry_at(60_000, UnixMillis::new(60_001)),
+                None
+            );
+        }
     }
 
     fn now() -> Result<UnixMillis, ShippingCompositionError> {
