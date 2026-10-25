@@ -787,7 +787,7 @@ fn canonical_operator_already_active_replay_is_terminal_same_successor()
 }
 
 #[test]
-fn canonical_postcommit_candidate_mutation_requires_rematerialization_without_fallback()
+fn canonical_postcommit_candidate_mutation_preserves_bytes_for_owned_recovery()
 -> Result<(), Box<dyn std::error::Error>> {
     let fixture = Fixture::new("postcommit-candidate-mutation")?;
     let mut operator = fixture.operator()?;
@@ -832,13 +832,15 @@ fn canonical_postcommit_candidate_mutation_requires_rematerialization_without_fa
     assert!(!completion.is_saved());
     assert!(matches!(
         completion.local().local_outcome(),
-        DirtyCloseLocalOutcome::RematerializeRequired(generation_id)
-            if generation_id == completion.committed().generation_id()
+        DirtyCloseLocalOutcome::MaterializationBindingBlocked {
+            generation_id,
+            reason: crate::browser_execution::BrowserLaunchBlocker::RecoveryRequired,
+        } if generation_id == completion.committed().generation_id()
     ));
     assert!(completion.local().workspace_lock_released());
     assert!(completion.local().coordinator_lease_released());
     assert!(!operator.has_pending_dirty_close());
-    assert!(!operator.cleanup_blocked());
+    assert!(operator.cleanup_blocked());
     assert_eq!(operator.coordinator().closed, 1);
     let terminal = operator.last_terminal().ok_or("missing terminal record")?;
     assert_eq!(
@@ -850,14 +852,21 @@ fn canonical_postcommit_candidate_mutation_requires_rematerialization_without_fa
         LocalGenerationState::SupersededEvictable
     );
     assert!(!terminal.cleanup_failures().any());
-    assert!(matches!(
-        fixture.root.open_generation(
-            fixture.actor.tenant_scope().tenant_id(),
-            &fixture.profile_id,
-            completion.committed().generation_id(),
-        ),
-        Err(LocalProfileError::Io(std::io::ErrorKind::NotFound))
-    ));
+    let retained = fixture.root.open_generation(
+        fixture.actor.tenant_scope().tenant_id(),
+        &fixture.profile_id,
+        completion.committed().generation_id(),
+    )?;
+    assert_eq!(
+        fs::read(retained.path().join("late-postcommit-mutation"))?,
+        b"changed-after-server-commit"
+    );
+    assert!(crate::browser_execution::load_materialization_binding(
+        &retained,
+        fixture.actor.tenant_scope().tenant_id(),
+        &fixture.profile_id,
+        completion.committed().generation_id(),
+    ).is_err());
     Ok(())
 }
 
@@ -972,7 +981,7 @@ fn canonical_postcommit_coordinator_release_failure_is_recovery_required_without
 }
 
 #[test]
-fn canonical_postcommit_writer_owned_candidate_blocks_rematerialization_fail_closed()
+fn canonical_postcommit_writer_owned_candidate_retained_and_blocks_readiness()
 -> Result<(), Box<dyn std::error::Error>> {
     let fixture = Fixture::new("postcommit-rematerialization-blocked")?;
     let mut operator = fixture.operator()?;
@@ -1024,9 +1033,9 @@ fn canonical_postcommit_writer_owned_candidate_blocks_rematerialization_fail_clo
     assert!(!completion.is_saved());
     assert!(matches!(
         completion.local().local_outcome(),
-        DirtyCloseLocalOutcome::RematerializationBlocked {
+        DirtyCloseLocalOutcome::MaterializationBindingBlocked {
             generation_id,
-            error: LocalProfileError::LockBusy,
+            reason: crate::browser_execution::BrowserLaunchBlocker::RecoveryRequired,
         } if generation_id == completion.committed().generation_id()
     ));
     assert!(completion.local().workspace_lock_released());
@@ -1044,6 +1053,15 @@ fn canonical_postcommit_writer_owned_candidate_blocks_rematerialization_fail_clo
         LocalGenerationState::SupersededEvictable
     );
     assert!(!terminal.cleanup_failures().any());
+    let retained = fixture.root.open_generation(
+        fixture.actor.tenant_scope().tenant_id(),
+        &fixture.profile_id,
+        completion.committed().generation_id(),
+    )?;
+    assert_eq!(
+        fs::read(retained.path().join("late-postcommit-mutation"))?,
+        b"changed-after-server-commit"
+    );
     let lock = candidate_lock
         .borrow_mut()
         .take()
