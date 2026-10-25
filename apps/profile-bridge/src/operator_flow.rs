@@ -2211,7 +2211,9 @@ mod tests {
                     observed.set(observed.get() + 1);
                 },
             ),
-            Err(OperatorFlowError::Stage(OperatorFailureStage::GenerationSave))
+            Err(OperatorFlowError::Stage(
+                OperatorFailureStage::GenerationSave
+            ))
         );
         assert_eq!(observed.get(), 1);
         assert_eq!(owner.coordinator().claimed, 1);
