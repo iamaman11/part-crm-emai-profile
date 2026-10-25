@@ -475,8 +475,8 @@ pub(crate) fn discover_unresolved_exact_save_attempt(
         {
             return Err(SaveAttemptEvidenceError::Invalid);
         }
-        let generation = GenerationId::parse(header.successor)
-            .map_err(|_| SaveAttemptEvidenceError::Invalid)?;
+        let generation =
+            GenerationId::parse(header.successor).map_err(|_| SaveAttemptEvidenceError::Invalid)?;
         if path != attempt_path(root, tenant, profile, &generation) {
             return Err(SaveAttemptEvidenceError::Invalid);
         }
@@ -513,10 +513,7 @@ fn read_bounded_attempt_header(path: &PathBuf) -> Result<AttemptHeader, SaveAtte
             .try_into()
             .map_err(|_| SaveAttemptEvidenceError::Invalid)?,
     ) as usize;
-    if length == 0
-        || length > MAX_HEADER_BYTES
-        || metadata.len() <= 12 + length as u64
-    {
+    if length == 0 || length > MAX_HEADER_BYTES || metadata.len() <= 12 + length as u64 {
         return Err(SaveAttemptEvidenceError::Invalid);
     }
     let mut header_bytes = vec![0_u8; length];
