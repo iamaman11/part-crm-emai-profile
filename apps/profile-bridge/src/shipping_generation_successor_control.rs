@@ -385,7 +385,7 @@ const fn control_error<S>(error: ShippingControlPlaneError) -> GenerationSuccess
 mod tests {
     use super::{
         ControlPlaneGenerationSuccessor, GenerationSuccessorControlError,
-        observe_retained_successor_after_restart,
+        observe_discovered_successor_after_restart, observe_retained_successor_after_restart,
     };
     use crate::dirty_generation::{
         GenerationSealingMaterial, GenerationSealingMaterialPort,
@@ -620,6 +620,39 @@ mod tests {
         assert_eq!(transport.paths.len(), 1);
         assert!(transport.paths[0].ends_with("/generation-successor/observe"));
         assert!(!transport.paths[0].ends_with("/commit"));
+
+        // No one supplied the successor ID or the former lease after restart.
+        // The discovered local exact checkpoint produces only ONE read-only
+        // server observe; it must not repeat the old fence or any cloud PUT.
+        let mut discovered = Transport {
+            responses: VecDeque::from([MachineHttpResponse::new(
+                200,
+                br#"{"activeExact":true}"#.to_vec(),
+            )]),
+            paths: Vec::new(),
+        };
+        assert_eq!(
+            observe_discovered_successor_after_restart(
+                &root,
+                &fixture.tenant,
+                &fixture.profile,
+                &mut discovered,
+            )?,
+            Some(true)
+        );
+        assert_eq!(discovered.paths.len(), 1);
+        assert!(discovered.paths[0].ends_with("/generation-successor/observe"));
+        let mut unrelated = Transport::default();
+        assert_eq!(
+            observe_discovered_successor_after_restart(
+                &root,
+                &fixture.tenant,
+                &ProfileId::parse("profile_unrelated_pending_recovery")?,
+                &mut unrelated,
+            )?,
+            None
+        );
+        assert!(unrelated.paths.is_empty());
 
         let mut uncertain = Transport {
             responses: VecDeque::from([MachineHttpResponse::new(
