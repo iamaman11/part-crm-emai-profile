@@ -653,10 +653,12 @@ mod tests {
         let files = fs::read_dir(profile_directory)?
             .map(|item| item.map(|item| item.file_name().to_string_lossy().to_string()))
             .collect::<Result<Vec<_>, _>>()?;
-        assert!(
-            !files
+        assert_eq!(
+            files
                 .iter()
-                .any(|name| name.starts_with("..profile-browser-identity-v1.pending-"))
+                .filter(|name| name.starts_with("..profile-browser-identity-v1.pending-"))
+                .count(),
+            1
         );
         assert!(partial.exists());
         remove_test_root(&root_path)?;
