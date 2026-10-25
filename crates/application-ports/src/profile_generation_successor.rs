@@ -330,6 +330,15 @@ pub trait ProfileGenerationSuccessorRetryDecisionPort {
         base_generation_id: &GenerationId,
         object: &GenerationObjectDescriptor,
     ) -> impl Future<Output = Result<bool, ProfileGenerationSuccessorCommitError>>;
+
+    /// Pre-sealing readiness for the same verified original N; no N+1 object
+    /// or candidate exists yet. Caller already proved current ACL and fence.
+    fn unsealed_local_unsynced_is_retryable(
+        &self,
+        actor: &ActorContext,
+        profile_id: &ProfileId,
+        base_generation_id: &GenerationId,
+    ) -> impl Future<Output = Result<bool, ProfileGenerationSuccessorCommitError>>;
 }
 
 /// Read-only reconciliation of an exact, previously attempted interactive save.

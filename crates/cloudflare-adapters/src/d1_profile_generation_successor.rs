@@ -85,6 +85,30 @@ SELECT EXISTS (
 ) AS allowed
 "#;
 
+/// Single D1 read: original N is still verified and selected, no successor
+/// command was applied. No candidate identity is fabricated for lone intent.
+const LOAD_UNSEALED_LOCAL_UNSYNCED_RETRY_DECISION: &str = r#"
+SELECT EXISTS (
+    SELECT 1 FROM browser_profiles AS profile
+    JOIN profile_generations AS base
+      ON base.tenant_id = profile.tenant_id
+     AND base.profile_id = profile.profile_id
+     AND base.generation_id = profile.active_generation_id
+    WHERE profile.tenant_id = ?
+      AND profile.profile_id = ?
+      AND profile.status = 'READY'
+      AND profile.active_generation_id = ?
+      AND base.status = 'VERIFIED'
+      AND base.verification_reference IS NOT NULL
+      AND NOT EXISTS (
+          SELECT 1 FROM profile_generation_successor_commands AS command
+          WHERE command.tenant_id = profile.tenant_id
+            AND command.profile_id = profile.profile_id
+            AND command.base_generation_id = ?
+      )
+) AS allowed
+"#;
+
 #[derive(Deserialize)]
 struct UnappliedRetryDecisionRow {
     allowed: i64,
@@ -330,6 +354,32 @@ impl ProfileGenerationSuccessorRetryDecisionPort for D1ProfileGenerationSuccesso
         .map_err(|_| dependency_failure())?
         .ok_or_else(integrity_failure)?;
         match result.allowed {
+            0 => Ok(false),
+            1 => Ok(true),
+            _ => Err(integrity_failure()),
+        }
+    }
+
+    async fn unsealed_local_unsynced_is_retryable(
+        &self,
+        actor: &ActorContext,
+        profile_id: &ProfileId,
+        base_generation_id: &GenerationId,
+    ) -> Result<bool, ProfileGenerationSuccessorCommitError> {
+        let row = query!(
+            &self.database,
+            LOAD_UNSEALED_LOCAL_UNSYNCED_RETRY_DECISION,
+            actor.tenant_scope().tenant_id().as_str(),
+            profile_id.as_str(),
+            base_generation_id.as_str(),
+            base_generation_id.as_str(),
+        )
+        .map_err(|_| dependency_failure())?
+        .first::<UnappliedRetryDecisionRow>(None)
+        .await
+        .map_err(|_| dependency_failure())?
+        .ok_or_else(integrity_failure)?;
+        match row.allowed {
             0 => Ok(false),
             1 => Ok(true),
             _ => Err(integrity_failure()),
@@ -594,6 +644,18 @@ mod tests {
         ActorContext, ActorId, AggregateVersion, CorrelationId, DeviceId, FencingToken,
         GenerationId, ProfileId, SessionId, TenantId, TenantScope, UnixMillis,
     };
+
+    #[test]
+    fn lone_unsynced_base_read_requires_selected_verified_pointer_and_no_journal() {
+        let sql = super::LOAD_UNSEALED_LOCAL_UNSYNCED_RETRY_DECISION;
+        assert!(sql.contains("profile.active_generation_id = ?"));
+        assert!(sql.contains("profile.status = 'READY'"));
+        assert!(sql.contains("base.status = 'VERIFIED'"));
+        assert!(sql.contains("base.verification_reference IS NOT NULL"));
+        assert!(sql.contains("NOT EXISTS"));
+        assert!(sql.contains("command.base_generation_id = ?"));
+        assert!(!sql.contains("candidate.generation_id"));
+    }
 
     #[test]
     fn retry_decision_requires_exact_base_and_unapplied_journal() {

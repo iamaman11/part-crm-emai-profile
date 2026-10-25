@@ -40,6 +40,7 @@ use control_plane_contract::generation_reopen_api::{
     GENERATION_DOWNLOAD_CAPABILITY_MAX_EXPIRES_SECONDS,
 };
 use control_plane_contract::profile_generation_api::{
+    BridgeGenerationLocalUnsyncedRetryDecisionRequest,
     BridgeGenerationSuccessorCommitOutcomeDto, BridgeGenerationSuccessorCommitResponse,
     BridgeGenerationSuccessorObserveRequest, BridgeGenerationSuccessorObserveResponse,
     BridgeGenerationSuccessorRetryDecisionRequest, BridgeGenerationSuccessorRetryDecisionResponse,
@@ -70,6 +71,7 @@ pub(crate) enum BridgeGenerationMachineOperation {
     Commit,
     Observe,
     RetryDecision,
+    LocalUnsyncedRetryDecision,
     DownloadCapability,
     OpeningMaterial,
 }
@@ -151,6 +153,17 @@ pub(crate) fn operation(path: &str, method: Method) -> Option<BridgeGenerationMa
             _,
             "profiles",
             _,
+            "generation-successor",
+            "local-unsynced",
+            "retry-decision",
+        ] => Some(BridgeGenerationMachineOperation::LocalUnsyncedRetryDecision),
+        [
+            "bridge",
+            "v1",
+            "tenants",
+            _,
+            "profiles",
+            _,
             "generation-reopen",
             "download-capability",
         ] => Some(BridgeGenerationMachineOperation::DownloadCapability),
@@ -192,8 +205,20 @@ pub(crate) async fn dispatch_authorized(
     if operation == BridgeGenerationMachineOperation::Observe {
         return dispatch_successor_observation(request, env, profile_id, actor, device_id).await;
     }
-    if operation == BridgeGenerationMachineOperation::RetryDecision {
-        return dispatch_successor_retry_decision(request, env, profile_id, actor, device_id).await;
+    if matches!(
+        operation,
+        BridgeGenerationMachineOperation::RetryDecision
+            | BridgeGenerationMachineOperation::LocalUnsyncedRetryDecision
+    ) {
+        return dispatch_successor_retry_decision(
+            request,
+            env,
+            profile_id,
+            actor,
+            device_id,
+            operation == BridgeGenerationMachineOperation::LocalUnsyncedRetryDecision,
+        )
+        .await;
     }
 
     let body = match request
@@ -288,7 +313,8 @@ pub(crate) async fn dispatch_authorized(
         | BridgeGenerationMachineOperation::DownloadCapability
         | BridgeGenerationMachineOperation::OpeningMaterial
         | BridgeGenerationMachineOperation::Observe
-        | BridgeGenerationMachineOperation::RetryDecision => {
+        | BridgeGenerationMachineOperation::RetryDecision
+        | BridgeGenerationMachineOperation::LocalUnsyncedRetryDecision => {
             unreachable!("handled before successor DTO")
         }
         BridgeGenerationMachineOperation::UploadCapability => {
@@ -516,40 +542,75 @@ async fn dispatch_successor_retry_decision(
     profile_id: &ProfileId,
     actor: &ActorContext,
     device_id: &DeviceId,
+    local_unsynced: bool,
 ) -> Result<Response> {
-    let body = match request
-        .json::<BridgeGenerationSuccessorRetryDecisionRequest>()
-        .await
-    {
-        Ok(value) => value,
-        Err(_) => return invalid_request(actor.correlation_id().as_str()),
-    };
-    let Ok(base) = GenerationId::parse(body.attempt.base_generation_id) else {
-        return invalid_request(actor.correlation_id().as_str());
-    };
-    let Ok(candidate) = GenerationId::parse(body.attempt.generation_id) else {
-        return invalid_request(actor.correlation_id().as_str());
-    };
-    let Some((session, fencing_token)) = reopen_witness(
-        &body.coordinator_session_id,
-        &body.coordinator_fencing_token,
-        body.coordinator_epoch,
-    ) else {
-        return invalid_request(actor.correlation_id().as_str());
-    };
-    if base == candidate
-        || body.attempt.container_bytes == 0
-        || !descriptor_shape_is_canonical(
-            actor,
-            profile_id,
-            &candidate,
-            &body.attempt.object_key,
-            &body.attempt.metadata_digest,
-            &body.attempt.container_digest,
+    // Two STRICT DTOs share the same current ACL, exclusive fresh coordinator
+    // witness and the same D1 lifecycle owner; no write is authorized here.
+    let (base_raw, attempt, session_raw, fence_raw, epoch) = if local_unsynced {
+        let body = match request
+            .json::<BridgeGenerationLocalUnsyncedRetryDecisionRequest>()
+            .await
+        {
+            Ok(value) => value,
+            Err(_) => return invalid_request(actor.correlation_id().as_str()),
+        };
+        (
+            body.base_generation_id,
+            None,
+            body.coordinator_session_id,
+            body.coordinator_fencing_token,
+            body.coordinator_epoch,
         )
-    {
+    } else {
+        let body = match request
+            .json::<BridgeGenerationSuccessorRetryDecisionRequest>()
+            .await
+        {
+            Ok(value) => value,
+            Err(_) => return invalid_request(actor.correlation_id().as_str()),
+        };
+        (
+            body.attempt.base_generation_id.clone(),
+            Some(body.attempt),
+            body.coordinator_session_id,
+            body.coordinator_fencing_token,
+            body.coordinator_epoch,
+        )
+    };
+    let Ok(base) = GenerationId::parse(base_raw) else {
         return invalid_request(actor.correlation_id().as_str());
-    }
+    };
+    let Some((session, fencing_token)) = reopen_witness(&session_raw, &fence_raw, epoch) else {
+        return invalid_request(actor.correlation_id().as_str());
+    };
+    let object = if let Some(attempt) = attempt {
+        let Ok(candidate) = GenerationId::parse(attempt.generation_id) else {
+            return invalid_request(actor.correlation_id().as_str());
+        };
+        if base == candidate
+            || attempt.container_bytes == 0
+            || !descriptor_shape_is_canonical(
+                actor,
+                profile_id,
+                &candidate,
+                &attempt.object_key,
+                &attempt.metadata_digest,
+                &attempt.container_digest,
+            )
+        {
+            return invalid_request(actor.correlation_id().as_str());
+        }
+        Some(GenerationObjectDescriptor::new(
+            profile_id.clone(),
+            candidate,
+            attempt.object_key,
+            attempt.metadata_digest,
+            attempt.container_digest,
+            attempt.container_bytes,
+        ))
+    } else {
+        None
+    };
     let target = DeviceJobTarget::new(
         actor.tenant_scope().tenant_id().clone(),
         device_id.clone(),
@@ -557,10 +618,7 @@ async fn dispatch_successor_retry_decision(
         base.clone(),
     );
     let preconditions = device_execution_preconditions(env)?;
-    match preconditions
-        .evaluate_device_execution(actor, &target)
-        .await
-    {
+    match preconditions.evaluate_device_execution(actor, &target).await {
         Ok(DeviceExecutionReadiness::Ready) => {}
         Ok(DeviceExecutionReadiness::Blocked(DeviceExecutionBlocker::DeviceUnauthorized)) => {
             return forbidden(actor.correlation_id().as_str());
@@ -592,26 +650,27 @@ async fn dispatch_successor_retry_decision(
                 profile_id.clone(),
                 session,
                 fencing_token,
-                body.coordinator_epoch,
+                epoch,
             ),
         )
         .await
     {
         return successor_failure(actor.correlation_id().as_str(), error.class());
     }
-    let object = GenerationObjectDescriptor::new(
-        profile_id.clone(),
-        candidate,
-        body.attempt.object_key,
-        body.attempt.metadata_digest,
-        body.attempt.container_digest,
-        body.attempt.container_bytes,
-    );
     let decision = profile_generation_successor_observer(env)?;
-    let allowed = match decision
-        .exact_unapplied_successor_is_retryable(actor, profile_id, &base, &object)
-        .await
-    {
+    let verdict = match object.as_ref() {
+        Some(object) => {
+            decision
+                .exact_unapplied_successor_is_retryable(actor, profile_id, &base, object)
+                .await
+        }
+        None => {
+            decision
+                .unsealed_local_unsynced_is_retryable(actor, profile_id, &base)
+                .await
+        }
+    };
+    let allowed = match verdict {
         Ok(value) => value,
         Err(error) => return successor_failure(actor.correlation_id().as_str(), error.class()),
     };
@@ -1300,6 +1359,13 @@ mod tests {
                 Method::Post,
             ),
             Some(BridgeGenerationMachineOperation::RetryDecision)
+        );
+        assert_eq!(
+            operation(
+                "/bridge/v1/tenants/tenant_01/profiles/profile_01/generation-successor/local-unsynced/retry-decision",
+                Method::Post,
+            ),
+            Some(BridgeGenerationMachineOperation::LocalUnsyncedRetryDecision)
         );
         assert_eq!(
             operation(
