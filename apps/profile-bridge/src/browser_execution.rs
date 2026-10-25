@@ -626,12 +626,19 @@ mod tests {
         let generation = GenerationId::parse("generation_01JATOMICTEXT")?;
         let workspace = root.create_generation(&tenant, &profile, &generation)?;
         let canonical = workspace.path().join(BROWSER_IDENTITY_RECORD_FILE);
-        let profile_directory = workspace.path().parent().ok_or("missing profile directory")?;
+        let profile_directory = workspace
+            .path()
+            .parent()
+            .ok_or("missing profile directory")?;
         let partial = profile_directory.join("..profile-browser-identity-v1.pending-interrupted");
         fs::write(&partial, b"truncated-record")?;
-        assert!(!workspace.inventory()?.entries().iter().any(|entry| {
-            entry.relative_path().contains(".pending-")
-        }));
+        assert!(
+            !workspace
+                .inventory()?
+                .entries()
+                .iter()
+                .any(|entry| { entry.relative_path().contains(".pending-") })
+        );
         // Staging garbage is not allowed to impersonate the canonical record.
         assert!(!canonical.exists());
         persist_browser_identity(&workspace, &identity()?)?;
