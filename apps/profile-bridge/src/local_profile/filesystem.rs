@@ -365,6 +365,43 @@ impl BridgeWorkspaceLock {
         })
     }
 
+    /// May be called only while the root's OS admission lock is held *exclusively*,
+    /// after the operator obtained a fresh coordinator claim for this exact device
+    /// and generation, and proved that no native Firefox writer still owns user_data.
+    /// The persistent marker is crash evidence, not proof of a surviving OS writer.
+    pub(super) fn replace_interrupted(
+        workspace: &GenerationWorkspace,
+        device_id: &DeviceId,
+        fresh_epoch: u64,
+    ) -> Result<Self, LocalProfileError> {
+        let lock_path = workspace.path().join(BRIDGE_LOCK_FILE);
+        let metadata = fs::symlink_metadata(&lock_path)?;
+        if metadata.file_type().is_symlink() || !metadata.is_file() {
+            return Err(LocalProfileError::LockBusy);
+        }
+        if metadata.len() > 512 || fresh_epoch <= 1 {
+            return Err(LocalProfileError::LockBusy);
+        }
+        let previous = read_control_text(&lock_path)?;
+        let owner_prefix = format!("profile-platform-bridge-lock-v1\n{}\n", device_id.as_str());
+        let previous_epoch = previous
+            .strip_prefix(&owner_prefix)
+            .and_then(|suffix| suffix.strip_suffix('\n'))
+            .and_then(|value| value.parse::<u64>().ok())
+            .ok_or(LocalProfileError::LockBusy)?;
+        if previous_epoch == 0 || previous_epoch >= fresh_epoch {
+            return Err(LocalProfileError::LockBusy);
+        }
+        // There is no live Bridge admission handle (the caller has the exclusive OS root
+        // lock) or live Firefox writer (caller preflight). Recheck immediately before
+        // unlink; never remove the directory, cookies, WAL, or identity sidecars.
+        if read_control_text(&lock_path)? != previous {
+            return Err(LocalProfileError::LockBusy);
+        }
+        fs::remove_file(&lock_path)?;
+        Self::acquire(workspace, device_id, fresh_epoch)
+    }
+
     pub fn release(self) -> Result<(), LocalProfileError> {
         if read_control_text(&self.lock_path)? != self.ownership {
             return Err(LocalProfileError::LockOwnershipMismatch);
