@@ -694,6 +694,7 @@ fn safe_reopen_problem_code(
         "forbidden" => "forbidden",
         "invalid_request" => "invalid_request",
         "invalid_state" => "invalid_state",
+        "generation_not_verified" => "generation_not_verified",
         "version_conflict" => "version_conflict",
         "lease_conflict" => "lease_conflict",
         "replay_rejected" => "replay_rejected",
@@ -1094,6 +1095,18 @@ mod tests {
         assert_eq!(
             safe_reopen_problem_code(&response, &request_id),
             Some("lease_conflict")
+        );
+        // The existing generation-reopen owner also emits a precise generation conflict.
+        let not_verified = serde_json::to_vec(&control_plane_contract::public_api::ProblemPayload {
+            problem_type: "urn:part-crm:problem:internal-failure".to_owned(),
+            title: "Generation Not Verified".to_owned(),
+            status: 409,
+            code: "generation_not_verified".to_owned(),
+            correlation_id: request_id.as_str().to_owned(),
+        })?;
+        assert_eq!(
+            safe_reopen_problem_code(&MachineHttpResponse::new(409, not_verified), &request_id),
+            Some("generation_not_verified")
         );
         let wrong_status = MachineHttpResponse::new(403, known);
         assert_eq!(safe_reopen_problem_code(&wrong_status, &request_id), None);
