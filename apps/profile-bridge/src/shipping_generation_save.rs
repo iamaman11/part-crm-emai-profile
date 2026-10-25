@@ -3,7 +3,7 @@ use crate::dirty_generation::{
     prepare_dirty_generation_candidate,
 };
 use crate::local_profile::{
-    GenerationWorkspace, LocalGenerationRecord, LocalProfileError, MaterializationRoot,
+    GenerationWorkspace, LocalGenerationRecord, MaterializationRoot,
 };
 use profile_platform_primitives::{GenerationId, ProfileId, TenantId};
 use session_domain::ProfileLease;
@@ -230,19 +230,16 @@ where
         return Err(ShippingGenerationSaveError::InvalidRetainedAuthority);
     }
 
-    match root.reject_generation_for_rematerialization(
-        tenant_id,
-        profile_id,
-        &candidate_generation_id,
-    ) {
-        Ok(()) | Err(LocalProfileError::Io(std::io::ErrorKind::NotFound)) => {}
-        Err(error) => {
-            return Err(ShippingGenerationSaveError::Prepare(
-                DirtyGenerationError::Local(error),
-            ));
-        }
-    }
-
+    // The same deterministic candidate can survive an interrupted upload or a
+    // committed cloud successor whose HTTP reply was lost. Never delete or
+    // rematerialize its local bytes merely because the current process is
+    // retrying. Recovery must reconcile the original attempt with the
+    // authoritative server record before it may reuse this generation ID.
+    //
+    // RecoveryClone::create fails closed with TargetAlreadyExists if those
+    // bytes already exist, including an invalid/incomplete generation marker.
+    // This deliberately preserves the unresolved candidate until a durable
+    // exact-attempt resume path can prove what is safe to publish.
     prepare_dirty_generation_candidate(
         base_record,
         source_workspace,
@@ -592,7 +589,7 @@ mod tests {
     }
 
     #[test]
-    fn retained_retry_rebuilds_only_the_exact_deterministic_candidate()
+    fn retained_retry_preserves_existing_candidate_pending_exact_reconciliation()
     -> Result<(), Box<dyn std::error::Error>> {
         let fixture = Fixture::new("retry")?;
         let events = Rc::new(RefCell::new(Vec::new()));
@@ -612,12 +609,13 @@ mod tests {
             &mut control,
         )?;
         let candidate_generation_id = first.sealed().metadata().generation_id().clone();
-        std::fs::write(
-            first.candidate_workspace().path().join("retry-residue"),
-            b"stale-precommit-candidate",
-        )?;
+        let user_data = first.candidate_workspace().path().join("user_data");
+        std::fs::create_dir(&user_data)?;
+        let irreplaceable = user_data.join("site-storage.sqlite-wal");
+        std::fs::write(&irreplaceable, b"last-uncommitted-browser-writes")?;
+        let original_inventory = first.candidate_workspace().inventory()?;
 
-        let second = prepare_retained_generation_successor(
+        let retry = prepare_retained_generation_successor(
             &fixture.record,
             &source,
             &fixture.root,
@@ -625,23 +623,22 @@ mod tests {
             &fixture.profile,
             &fixture.lease,
             &mut control,
-        )?;
+        );
 
-        assert_eq!(
-            second.sealed().metadata().generation_id(),
-            &candidate_generation_id
-        );
-        assert!(
-            !second
-                .candidate_workspace()
-                .path()
-                .join("retry-residue")
-                .exists()
-        );
-        assert_eq!(
-            second.candidate_workspace().inventory()?,
-            *second.candidate_inventory()
-        );
+        assert!(matches!(
+            retry,
+            Err(ShippingGenerationSaveError::Prepare(
+                DirtyGenerationError::Local(LocalProfileError::TargetAlreadyExists)
+            ))
+        ));
+        assert_eq!(first.sealed().metadata().generation_id(), &candidate_generation_id);
+        assert_eq!(std::fs::read(&irreplaceable)?, b"last-uncommitted-browser-writes");
+        assert_eq!(first.candidate_workspace().inventory()?, original_inventory);
+        assert!(fixture.root.open_generation(
+            &fixture.tenant,
+            &fixture.profile,
+            &candidate_generation_id,
+        ).is_ok());
         Ok(())
     }
 
@@ -683,11 +680,51 @@ mod tests {
         assert!(matches!(
             retry,
             Err(ShippingGenerationSaveError::Prepare(
-                DirtyGenerationError::Local(LocalProfileError::LockBusy)
+                DirtyGenerationError::Local(LocalProfileError::TargetAlreadyExists)
             ))
         ));
 
+        assert!(first.candidate_workspace().path().exists());
         lock.release()?;
+        Ok(())
+    }
+
+    #[test]
+    fn existing_candidate_with_torn_marker_cannot_be_rewritten_during_retry()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let fixture = Fixture::new("retry-torn-marker")?;
+        let events = Rc::new(RefCell::new(Vec::new()));
+        let mut control = Control {
+            events,
+            verified: false,
+            commit: GenerationSuccessorCommitOutcome::Activated,
+        };
+        let source = fixture.source_workspace()?;
+        let first = prepare_retained_generation_successor(
+            &fixture.record, &source, &fixture.root, &fixture.tenant,
+            &fixture.profile, &fixture.lease, &mut control,
+        )?;
+        let candidate = first.candidate_workspace().path();
+        let recovery = candidate.join("user_data");
+        std::fs::create_dir(&recovery)?;
+        std::fs::write(recovery.join("cookies.sqlite"), b"retained-unknown-cookie-bytes")?;
+        std::fs::remove_file(candidate.join(".profile-generation"))?;
+
+        let retry = prepare_retained_generation_successor(
+            &fixture.record, &source, &fixture.root, &fixture.tenant,
+            &fixture.profile, &fixture.lease, &mut control,
+        );
+        assert!(matches!(
+            retry,
+            Err(ShippingGenerationSaveError::Prepare(
+                DirtyGenerationError::Local(LocalProfileError::TargetAlreadyExists)
+            ))
+        ));
+        assert_eq!(
+            std::fs::read(recovery.join("cookies.sqlite"))?,
+            b"retained-unknown-cookie-bytes"
+        );
+        assert!(!candidate.join(".profile-generation").exists());
         Ok(())
     }
 
