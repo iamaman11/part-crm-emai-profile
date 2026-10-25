@@ -947,3 +947,70 @@ fn hex(bytes: &[u8]) -> String {
     }
     out
 }
+
+#[cfg(test)]
+mod local_unsynced_publication_tests {
+    use super::{
+        LocalUnsyncedIntent, STAGE_SEQUENCE, SaveAttemptEvidenceError,
+        finish_local_unsynced_publication,
+    };
+    use std::fs::{self, File};
+    use std::io::{Error, ErrorKind, Write};
+    use std::sync::atomic::Ordering;
+
+    #[test]
+    fn refused_hardlink_keeps_the_only_fsynced_local_intent()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let dir = std::env::temp_dir().join(format!(
+            "bridge-local-unsynced-publish-{}-{}",
+            std::process::id(),
+            STAGE_SEQUENCE.fetch_add(1, Ordering::Relaxed),
+        ));
+        fs::create_dir_all(&dir)?;
+        let stage = dir.join(".profile-save-attempt-v1-abc.pending-local-unsynced");
+        let canonical = dir.join(".profile-save-attempt-v1-abc-local-unsynced-v1.intent");
+        let intent = LocalUnsyncedIntent {
+            schema: "bridge-p3-local-unsynced-v1".to_owned(),
+            tenant: "test_tenant".to_owned(),
+            profile: "test_profile".to_owned(),
+            base_generation: "test_generation".to_owned(),
+            epoch: 4,
+            session_fingerprint: "a".repeat(64),
+            fencing_fingerprint: "b".repeat(64),
+            source_inventory: 42,
+            source_bytes: 11,
+        };
+        let serialized = serde_json::to_vec(&intent)?;
+        let mut f = File::create(&stage)?;
+        f.write_all(&serialized)?;
+        f.sync_all()?;
+        drop(f);
+        assert_eq!(
+            finish_local_unsynced_publication(
+                &stage,
+                &canonical,
+                &intent,
+                Err(Error::from(ErrorKind::PermissionDenied)),
+            ),
+            Err(SaveAttemptEvidenceError::Io(ErrorKind::PermissionDenied)),
+        );
+        assert_eq!(fs::read(&stage)?, serialized);
+        assert!(!canonical.exists());
+        // A corrupt preexisting canonical cannot silently take the place of
+        // the only valid staged intent. Both must remain blocking evidence.
+        fs::write(&canonical, b"foreign-or-torn")?;
+        assert_eq!(
+            finish_local_unsynced_publication(
+                &stage,
+                &canonical,
+                &intent,
+                Err(Error::from(ErrorKind::AlreadyExists)),
+            ),
+            Err(SaveAttemptEvidenceError::Invalid),
+        );
+        assert_eq!(fs::read(&stage)?, serialized);
+        assert_eq!(fs::read(&canonical)?, b"foreign-or-torn");
+        fs::remove_dir_all(dir)?;
+        Ok(())
+    }
+}
