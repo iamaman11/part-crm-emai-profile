@@ -522,7 +522,9 @@ mod tests {
             );
             assert_eq!(
                 refusal,
-                Err(AuthoritativeGenerationMaterializationError::ControlPlaneBeforeLocalUse(reason))
+                Err(
+                    AuthoritativeGenerationMaterializationError::ControlPlaneBeforeLocalUse(reason)
+                )
             );
             assert!(matches!(
                 fixture.root.open_generation(
@@ -530,7 +532,9 @@ mod tests {
                     &fixture.profile_id,
                     &fixture.generation_id,
                 ),
-                Err(crate::local_profile::LocalProfileError::Io(std::io::ErrorKind::NotFound))
+                Err(crate::local_profile::LocalProfileError::Io(
+                    std::io::ErrorKind::NotFound
+                ))
             ));
             assert_eq!(downloader.calls, 0);
             assert_eq!(control.opening_calls, 0);
