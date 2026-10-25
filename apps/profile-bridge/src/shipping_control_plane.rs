@@ -1385,10 +1385,8 @@ mod tests {
         // writer has taken over. Exact idempotency alone must never validate
         // the *current* authority without a fresh read-only coordinator proof.
         fresh.projection.active_session_id = Some("session_foreign_heartbeat".to_owned());
-        coordinator.transport.snapshot = Some(MachineHttpResponse::new(
-            200,
-            serde_json::to_vec(&fresh)?,
-        ));
+        coordinator.transport.snapshot =
+            Some(MachineHttpResponse::new(200, serde_json::to_vec(&fresh)?));
         let cursor = coordinator.cursor.as_ref().ok_or("missing cursor")?.clone();
         assert_eq!(
             coordinator.prove_replayed_heartbeat_is_still_current(&cursor, &original),
