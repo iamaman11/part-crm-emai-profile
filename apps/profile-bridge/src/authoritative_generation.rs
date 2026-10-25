@@ -775,9 +775,13 @@ mod tests {
                 &mut control,
                 &mut downloader,
             ),
-            Err(AuthoritativeGenerationMaterializationError::ReadBeforeLocalUse(
-                AuthoritativeGenerationPreWriteError::OpeningControl(GenerationReopenControlError::InvalidResponse)
-            ))
+            Err(
+                AuthoritativeGenerationMaterializationError::ReadBeforeLocalUse(
+                    AuthoritativeGenerationPreWriteError::OpeningControl(
+                        GenerationReopenControlError::InvalidResponse
+                    )
+                )
+            )
         );
         assert_eq!(downloader.calls, 1);
         assert_eq!(control.opening_calls, 0);
