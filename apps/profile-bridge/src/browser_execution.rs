@@ -128,6 +128,47 @@ pub fn restore_materialization_binding_after_authoritative_open(
     Ok(binding)
 }
 
+/// Publish host-local readiness for a successor only after the exact sealed object was
+/// verified and committed by the existing save owner. The generation-owned identity must
+/// already be present and canonical: unlike initial materialization, this path must never
+/// synthesize or replace browser data after the authoritative commit.
+pub(crate) fn persist_committed_successor_binding(
+    workspace: &GenerationWorkspace,
+    tenant_id: &TenantId,
+    profile_id: &ProfileId,
+    generation_id: &GenerationId,
+    committed_container_sha256: &str,
+) -> Result<(), BrowserLaunchBlocker> {
+    if workspace.tenant_id() != tenant_id
+        || workspace.profile_id() != profile_id
+        || workspace.generation_id() != generation_id
+    {
+        return Err(BrowserLaunchBlocker::MaterializationStale);
+    }
+    let identity_record = read_regular_file(&browser_identity_record_path(workspace))?;
+    let identity = BrowserIdentityManifest::from_canonical_record(&identity_record)
+        .map_err(map_execution_error)?;
+    if identity.to_canonical_record() != identity_record {
+        return Err(BrowserLaunchBlocker::InvalidMaterializationEvidence);
+    }
+    let binding = MaterializationBinding::new(
+        tenant_id.clone(),
+        profile_id.clone(),
+        generation_id.clone(),
+        committed_container_sha256,
+        workspace.materialization_inventory_digest()?,
+        identity,
+    )
+    .map_err(map_execution_error)?;
+    // Existing create-new/idempotent-exact sidecar owner rejects a conflicting binding.
+    // If writing fails, no locally ready outcome may be reported by the save caller.
+    persist_materialization_binding(workspace, &binding)?;
+    if load_materialization_binding(workspace, tenant_id, profile_id, generation_id)? != binding {
+        return Err(BrowserLaunchBlocker::MaterializationStale);
+    }
+    Ok(())
+}
+
 pub fn evaluate_browser_launch(
     workspace: &GenerationWorkspace,
     expected_device_id: &DeviceId,
