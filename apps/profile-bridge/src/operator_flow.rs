@@ -14,7 +14,8 @@ use crate::dirty_generation::PreparedDirtyGeneration;
 #[cfg(any(test, feature = "synthetic-test-bin"))]
 use crate::dirty_generation_finalize::DirtyGenerationCommitClientPort;
 use crate::generation_reopen::{
-    GenerationObjectDownloadPort, GenerationReopenControlError, GenerationReopenControlPort,
+    GenerationObjectDownloadError, GenerationObjectDownloadPort, GenerationReopenControlError,
+    GenerationReopenControlPort,
 };
 use crate::local_profile::{
     BridgeWorkspaceLock, GenerationWorkspace, LocalGenerationRecord, LocalGenerationState,
@@ -438,6 +439,7 @@ where
         C: GenerationReopenControlPort,
         <C as GenerationReopenControlPort>::Error: Into<GenerationReopenControlError>,
         Dl: GenerationObjectDownloadPort,
+        Dl::Error: Into<GenerationObjectDownloadError>,
     {
         self.open_authoritative_with_runtime_health(claim, root, downloader, now, || Ok(()))
     }
@@ -457,6 +459,7 @@ where
         C: GenerationReopenControlPort,
         <C as GenerationReopenControlPort>::Error: Into<GenerationReopenControlError>,
         Dl: GenerationObjectDownloadPort,
+        Dl::Error: Into<GenerationObjectDownloadError>,
         BeforeRuntime: FnMut() -> Result<(), ()>,
     {
         self.open_with_materialization(
@@ -570,10 +573,10 @@ where
             &device_id,
             lease.epoch(),
         ) {
-            // The existing owner can certify no local write only for a failed authenticated
-            // capability read when the selected workspace was absent. Verify exact absence
-            // again here before requesting the typed no-browser-use release. Any new directory,
-            // dirty/unknown evidence, permission failure, or non-read error remains Uncertain.
+            // The natural materialization owner certifies no writes only for a failed read
+            // before workspace creation. Verify exact absence again before requesting the
+            // typed no-browser-use release. Any new directory, dirty/unknown evidence,
+            // failed cleanup, stale fence or potential writer remains Uncertain.
             let clean_no_use = reason.proves_no_local_write_and_absent_workspace()
                 && matches!(
                     root.open_generation(
@@ -1627,6 +1630,56 @@ mod tests {
         assert_eq!(operator.coordinator().closed, 1);
         assert_eq!(operator.coordinator().clean_closed, 1);
         assert!(!operator.cleanup_blocked());
+        Ok(())
+    }
+
+    #[test]
+    fn object_get_refusal_cleanly_releases_only_if_exact_workspace_remains_absent()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use crate::authoritative_generation::AuthoritativeGenerationPreWriteError;
+        use crate::generation_reopen::GenerationObjectDownloadError;
+        for create_during_attempt in [false, true] {
+            let mut fixture = Fixture::new()?;
+            fixture.generation_id = GenerationId::parse("generation_get_read_no_local_writer")?;
+            let root = &fixture.root;
+            let mut operator = operator(&fixture, FakeCamouhost::default())?;
+            let mut runtime_health_started = false;
+            let result = operator.open_with_materialization(
+                &fixture.claim_uri,
+                root,
+                UnixMillis::new(10),
+                |_coordinator, tenant, profile, generation, _device, _epoch| {
+                    if create_during_attempt {
+                        assert!(
+                            root.create_generation(tenant, profile, generation).is_ok(),
+                            "simulated concurrent writer changes workspace"
+                        );
+                    }
+                    Err(
+                        AuthoritativeGenerationMaterializationError::ReadBeforeLocalUse(
+                            AuthoritativeGenerationPreWriteError::Download(
+                                GenerationObjectDownloadError::Transport,
+                            ),
+                        ),
+                    )
+                },
+                || {
+                    runtime_health_started = true;
+                    Ok(())
+                },
+            );
+            assert!(matches!(
+                result,
+                Err(OperatorFlowError::AuthoritativeGeneration { .. })
+            ));
+            assert!(!runtime_health_started);
+            assert!(operator.process().actions().is_empty());
+            assert_eq!(operator.coordinator().closed, 1);
+            assert_eq!(
+                operator.coordinator().clean_closed,
+                u64::from(!create_during_attempt)
+            );
+        }
         Ok(())
     }
 

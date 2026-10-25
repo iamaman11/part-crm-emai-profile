@@ -1042,6 +1042,28 @@ def controlled_close_candidate(state: dict[str, Any] | None) -> bool:
     return bool(tracked) and tracked == state["closed_pages"]
 
 
+def observe_controlled_close(context: Any, state: dict[str, Any] | None) -> bool:
+    """Service the sync Playwright event dispatcher before evaluating close callbacks.
+
+    The shipping IPC reader blocks on stdin between observations. Playwright sync callbacks
+    require a yielding sync API call; inspecting sets/context.pages alone never dispatches
+    an external GUI WM_CLOSE. A bounded page wait is observation-only (no page/context
+    teardown) and lets normal page-close/crash events reach the registered witnesses.
+    """
+    if state is None:
+        return False
+    try:
+        context.wait_for_event("page", timeout=100)
+    except Exception as error:
+        # A timer expiry is normal when no new window opened. An expected browser close
+        # can reject the pending wait after delivering page-close callbacks. All other
+        # failures may be ignored ONLY if the positive non-crashed witness already exists;
+        # a disappearing process without close callbacks is still an IPC/runtime failure.
+        if type(error).__name__ != "TimeoutError" and not controlled_close_candidate(state):
+            raise
+    return controlled_close_candidate(state)
+
+
 def materialize_candidate_identity(root: Path) -> dict[str, str]:
     """Create exact generation identity once under an already acquired Bridge writer lock."""
     from camoufox.fingerprints import generate_fingerprint
@@ -1243,7 +1265,12 @@ def run_ipc() -> int:
                 and context is not None
                 and navigation_admitted
             ):
-                controlled = controlled_close_candidate(close_observation)
+                try:
+                    controlled = observe_controlled_close(context, close_observation)
+                except BaseException as error:
+                    report_runtime_failure("close", error)
+                    emit("error|runtime")
+                    return 5
                 emit(f"close_observed|{active_session}|{'true' if controlled else 'false'}")
                 continue
 

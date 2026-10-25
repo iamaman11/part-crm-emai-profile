@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import ctypes
 import importlib.util
 import io
 import json
@@ -19,6 +20,9 @@ import os
 import subprocess
 import sys
 import tempfile
+import threading
+import time
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
 from unittest.mock import Mock, patch
@@ -51,6 +55,67 @@ def load_runtime(camouhost: Path) -> ModuleType:
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
+
+def prove_controlled_close_dispatch_contract(runtime: ModuleType) -> None:
+    """Regression: stdin observer must pump real registered callbacks, not infer process death."""
+
+    class Page:
+        def __init__(self) -> None:
+            self.listeners: dict[str, object] = {}
+
+        def on(self, name: str, listener: object) -> None:
+            self.listeners[name] = listener
+
+        def fire(self, name: str) -> None:
+            self.listeners[name](self)
+
+    class Context:
+        def __init__(self, pages: list[Page]) -> None:
+            self.pages = pages
+            self.listeners: dict[str, object] = {}
+            self.next_observation = lambda: None
+            self.pumps = 0
+
+        def on(self, name: str, listener: object) -> None:
+            self.listeners[name] = listener
+
+        def wait_for_event(self, event: str, timeout: int) -> None:
+            assert event == "page" and 0 < timeout <= 250
+            self.pumps += 1
+            self.next_observation()
+            raise TimeoutError("expected bounded callback dispatch")
+
+    first, second = Page(), Page()
+    context = Context([first, second])
+    witness = runtime.install_controlled_close_observation(context)
+    assert not runtime.observe_controlled_close(context, witness)
+    context.next_observation = lambda: first.fire("close")
+    assert not runtime.observe_controlled_close(context, witness)
+    context.next_observation = lambda: second.fire("close")
+    assert runtime.observe_controlled_close(context, witness)
+    assert context.pumps == 3
+
+    crashed = Page()
+    context = Context([crashed])
+    witness = runtime.install_controlled_close_observation(context)
+    context.next_observation = lambda: (crashed.fire("crash"), crashed.fire("close"))
+    assert not runtime.observe_controlled_close(context, witness)
+
+    unexpected = Page()
+    context = Context([unexpected])
+    witness = runtime.install_controlled_close_observation(context)
+
+    def disconnect_without_close() -> None:
+        raise RuntimeError("no page close witness")
+
+    context.next_observation = disconnect_without_close
+    try:
+        runtime.observe_controlled_close(context, witness)
+    except RuntimeError:
+        pass
+    else:
+        raise AssertionError("browser disconnection without callback became controlled close")
 
 
 def runtime_env(runtime_lock: Path, headless: str) -> dict[str, str]:
@@ -221,10 +286,141 @@ def prove_immediate_relaunch_after_cleanup(
     assert_writer_quiescent(runtime, root, "post-launch EOF")
 
 
+def prove_external_windows_gui_close(
+    python: Path,
+    camouhost: Path,
+    env: dict[str, str],
+    runtime: ModuleType,
+    root: Path,
+) -> None:
+    """Post WM_CLOSE to a unique real top-level browser window, never call Playwright close.
+
+    This is a hosted Windows fixture with a disposable profile; it does not simulate
+    server-side save/commit or replace installed-device B7 evidence.
+    """
+    if os.name != "nt":
+        return
+
+    title = f"AR10 External Controlled Close {os.getpid()}"
+    content = (f"<html><head><title>{title}</title></head>"
+               "<body>Close this disposable Camoufox test window</body></html>").encode("utf-8")
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self) -> None:  # noqa: N802
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(content)))
+            self.end_headers()
+            self.wfile.write(content)
+
+        def log_message(self, _format: str, *_args: object) -> None:
+            pass
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    server_thread = threading.Thread(target=server.serve_forever, daemon=True)
+    server_thread.start()
+    process = start_runtime(python, camouhost, env)
+
+    from ctypes import wintypes
+
+    user32 = ctypes.WinDLL("user32", use_last_error=True)
+    enum_windows = user32.EnumWindows
+    enum_windows.argtypes = [ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM),
+                             wintypes.LPARAM]
+    enum_windows.restype = wintypes.BOOL
+    get_text_length = user32.GetWindowTextLengthW
+    get_text_length.argtypes = [wintypes.HWND]
+    get_text_length.restype = ctypes.c_int
+    get_text = user32.GetWindowTextW
+    get_text.argtypes = [wintypes.HWND, wintypes.LPWSTR, ctypes.c_int]
+    get_text.restype = ctypes.c_int
+    visible = user32.IsWindowVisible
+    visible.argtypes = [wintypes.HWND]
+    visible.restype = wintypes.BOOL
+    post_message = user32.PostMessageW
+    post_message.argtypes = [wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM]
+    post_message.restype = wintypes.BOOL
+
+    def matching_windows() -> list[int]:
+        found: list[int] = []
+
+        @ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+        def visit(handle: int, _user_data: int) -> bool:
+            if not visible(handle):
+                return True
+            count = get_text_length(handle)
+            if count == 0:
+                return True
+            buffer = ctypes.create_unicode_buffer(count + 1)
+            if get_text(handle, buffer, len(buffer)) > 0 and title in buffer.value:
+                found.append(handle)
+            return True
+
+        if not enum_windows(visit, 0):
+            raise AssertionError("could not enumerate real Windows browser windows")
+        return found
+
+    normal_close_proved = False
+    try:
+        if exchange(process, f"hello|{IPC_VERSION}") != f"hello_ack|{IPC_VERSION}":
+            raise AssertionError("managed IPC negotiation failed")
+        if exchange(process, f"launch|{SESSION}") != f"ready|{SESSION}":
+            raise AssertionError("packaged Camoufox launch did not reach ready")
+        response = exchange(process, f"observe_browser_visible|{SESSION}")
+        if not response.startswith(f"browser_visible|{SESSION}|"):
+            raise AssertionError("real pre-navigation browser visibility proof failed")
+        url = f"http://127.0.0.1:{server.server_port}/"
+        if exchange(process, f"admit_navigation|{SESSION}|{url.encode('utf-8').hex()}") != (
+            f"navigation_admitted|{SESSION}"
+        ):
+            raise AssertionError("test navigation admission failed")
+        if exchange(process, f"observe_close|{SESSION}") != f"close_observed|{SESSION}|false":
+            raise AssertionError("open browser falsely reported a controlled close")
+
+        deadline = time.monotonic() + 30
+        handles: list[int] = []
+        while time.monotonic() < deadline:
+            handles = matching_windows()
+            if handles:
+                break
+            time.sleep(0.2)
+        if len(handles) != 1:
+            raise AssertionError("no unique, real disposable browser window identified")
+        if not post_message(handles[0], 0x0010, 0, 0):
+            raise AssertionError("external WM_CLOSE dispatch failed")
+
+        deadline = time.monotonic() + 20
+        while time.monotonic() < deadline:
+            response = exchange(process, f"observe_close|{SESSION}")
+            if response == f"close_observed|{SESSION}|true":
+                normal_close_proved = True
+                break
+            if response != f"close_observed|{SESSION}|false":
+                raise AssertionError(f"unexpected GUI-close IPC result: {response[:120]!r}")
+            time.sleep(0.2)
+        if not normal_close_proved:
+            raise AssertionError("external WM_CLOSE did not produce positive callback witness")
+        if exchange(process, f"close|{SESSION}") != f"closed|{SESSION}|true":
+            raise AssertionError("controlled close did not release the real browser writer")
+        if process.wait(timeout=90) != 0:
+            raise AssertionError("real Camouhost controlled close exited with failure")
+    finally:
+        server.shutdown()
+        server.server_close()
+        server_thread.join(timeout=5)
+        if process.poll() is None:
+            process.kill()
+            process.wait(timeout=30)
+    if not normal_close_proved:
+        raise AssertionError("external GUI close was never observed")
+    assert_writer_quiescent(runtime, root, "external native WM_CLOSE")
+
+
 def prove_failure_observation_contract() -> None:
     """Cheap fault injection for the same runtime/proof owners used below with real browsers."""
     source_root = Path(__file__).resolve().parents[1]
     runtime = load_runtime(source_root / "runtime/camouhost/real.py")
+    prove_controlled_close_dispatch_contract(runtime)
     proof = load_runtime(source_root / "scripts/test-ar10-real-camoufox.py")
     proof.prove_managed_environment_projection(runtime)
     for error, category in (
@@ -384,9 +580,11 @@ def main() -> int:
 
         prove_protocol_failure_cleanup(python, camouhost, env, runtime, root)
         prove_immediate_relaunch_after_cleanup(python, camouhost, env, runtime, root)
+        if os.name == "nt" and args.headless == "false":
+            prove_external_windows_gui_close(python, camouhost, env, runtime, root)
 
     print(
-        "AR-10 real Camoufox post-launch protocol/EOF cleanup and immediate relaunch evidence passed."
+        "AR-10 real Camoufox post-launch cleanup, immediate relaunch and external Windows GUI-close evidence passed."
     )
     return 0
 
