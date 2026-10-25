@@ -694,7 +694,10 @@ mod tests {
         let scope = marker
             .strip_suffix("-local-unsynced-v1.intent")
             .ok_or("unscoped marker")?;
-        let pending = fixture.root.path().join(format!("{scope}.pending-unverified"));
+        let pending = fixture
+            .root
+            .path()
+            .join(format!("{scope}.pending-unverified"));
         std::fs::write(&pending, b"interrupted save")?;
         let mut control = Control {
             events: Rc::new(RefCell::new(Vec::new())),
