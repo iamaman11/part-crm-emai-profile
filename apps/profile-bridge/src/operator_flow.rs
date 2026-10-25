@@ -31,7 +31,8 @@ use crate::shipping_generation_save::{
 };
 use crate::shipping_generation_successor_control::ControlPlaneGenerationSuccessor;
 use crate::shipping_save_attempt::{
-    inspect_exact_save_attempt, persist_exact_save_attempt, retire_fully_saved_attempt,
+    has_unresolved_save_attempt_for_profile, inspect_exact_save_attempt,
+    persist_exact_save_attempt, retire_fully_saved_attempt,
 };
 #[cfg(any(test, feature = "synthetic-test-bin"))]
 use application_ports::generation_objects::{
@@ -567,6 +568,22 @@ where
             || lease.device_id() != &device_id
         {
             return Err(self.fail_before_local_use(OperatorFailureStage::LeaseValidation, lease));
+        }
+
+        // Any surviving exact save or interrupted checkpoint stage is unresolved
+        // recovery evidence. Even if the old cloud pointer is still accessible,
+        // launching it as a clean browser could discard newer local SQLite/WAL.
+        // Do not consume the browser/runtime path or start a download. The
+        // coordinator lease is conservatively closed, never marked Clean.
+        if !matches!(
+            has_unresolved_save_attempt_for_profile(
+                root,
+                enrollment.actor().tenant_scope().tenant_id(),
+                enrollment.profile_id(),
+            ),
+            Ok(false)
+        ) {
+            return Err(self.fail_before_local_use(OperatorFailureStage::GenerationSave, lease));
         }
 
         if let Err(reason) = ensure_materialized(
