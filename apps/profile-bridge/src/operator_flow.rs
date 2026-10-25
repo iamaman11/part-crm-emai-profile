@@ -1607,16 +1607,21 @@ mod tests {
             &fixture.root,
             UnixMillis::new(10),
             |_coordinator, _tenant, _profile, _generation, _device, _epoch| {
-                Err(AuthoritativeGenerationMaterializationError::ControlPlaneBeforeLocalUse(
-                    GenerationReopenControlError::Transport,
-                ))
+                Err(
+                    AuthoritativeGenerationMaterializationError::ControlPlaneBeforeLocalUse(
+                        GenerationReopenControlError::Transport,
+                    ),
+                )
             },
             || {
                 runtime_health_started = true;
                 Ok(())
             },
         );
-        assert!(matches!(result, Err(OperatorFlowError::AuthoritativeGeneration { .. })));
+        assert!(matches!(
+            result,
+            Err(OperatorFlowError::AuthoritativeGeneration { .. })
+        ));
         assert!(!runtime_health_started);
         assert!(operator.process().actions().is_empty());
         assert_eq!(operator.coordinator().closed, 1);
@@ -1645,13 +1650,18 @@ mod tests {
                         root.create_generation(tenant, profile, generation)
                             .expect("fault-injected foreign workspace");
                     }
-                    Err(AuthoritativeGenerationMaterializationError::ControlPlaneBeforeLocalUse(
-                        GenerationReopenControlError::HttpStatus,
-                    ))
+                    Err(
+                        AuthoritativeGenerationMaterializationError::ControlPlaneBeforeLocalUse(
+                            GenerationReopenControlError::HttpStatus,
+                        ),
+                    )
                 },
                 || Ok(()),
             );
-            assert!(matches!(result, Err(OperatorFlowError::AuthoritativeGeneration { .. })));
+            assert!(matches!(
+                result,
+                Err(OperatorFlowError::AuthoritativeGeneration { .. })
+            ));
             assert_eq!(operator.coordinator().closed, 1);
             assert_eq!(operator.coordinator().clean_closed, 0);
             assert!(operator.process().actions().is_empty());
@@ -1660,8 +1670,7 @@ mod tests {
     }
 
     #[test]
-    fn unproven_missing_cache_refusal_stays_uncertain()
-    -> Result<(), Box<dyn std::error::Error>> {
+    fn unproven_missing_cache_refusal_stays_uncertain() -> Result<(), Box<dyn std::error::Error>> {
         use crate::generation_reopen::GenerationReopenControlError;
         let mut fixture = Fixture::new()?;
         fixture.generation_id = GenerationId::parse("generation_unknown_absent")?;
@@ -1677,7 +1686,10 @@ mod tests {
             },
             || Ok(()),
         );
-        assert!(matches!(result, Err(OperatorFlowError::AuthoritativeGeneration { .. })));
+        assert!(matches!(
+            result,
+            Err(OperatorFlowError::AuthoritativeGeneration { .. })
+        ));
         assert_eq!(operator.coordinator().closed, 1);
         assert_eq!(operator.coordinator().clean_closed, 0);
         Ok(())
