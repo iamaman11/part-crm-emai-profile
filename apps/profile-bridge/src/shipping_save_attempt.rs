@@ -771,11 +771,39 @@ pub(crate) fn has_unresolved_save_attempt_for_profile(
 /// through the original exact inspector before returning the evidence.
 /// Unknown staged/torn or competing records remain hard blockers; this
 /// function never gives permission to PUT/commit or to delete anything.
+/// Transient, read-only classification by the existing Bridge save owner.
+/// Neither a verified lone intent nor an exact checkpoint authorizes cloud
+/// PUT/commit, release of a writer, or deletion of original Firefox data.
+pub(crate) enum ScopedPendingSaveEvidence {
+    None,
+    LocalUnsynced {
+        base_generation: GenerationId,
+        prior_epoch: u64,
+    },
+    Exact(ReadOnlySaveAttempt),
+}
+
+/// Keep the original exact-only API fail-closed: callers that cannot
+/// handle a lone LOCAL_UNSYNCED never silently mistake it for no evidence.
 pub(crate) fn discover_unresolved_exact_save_attempt(
     root: &MaterializationRoot,
     tenant: &TenantId,
     profile: &ProfileId,
 ) -> Result<Option<ReadOnlySaveAttempt>, SaveAttemptEvidenceError> {
+    match classify_scoped_pending_save_evidence(root, tenant, profile)? {
+        ScopedPendingSaveEvidence::None => Ok(None),
+        ScopedPendingSaveEvidence::Exact(attempt) => Ok(Some(attempt)),
+        ScopedPendingSaveEvidence::LocalUnsynced { .. } => Err(SaveAttemptEvidenceError::Changed),
+    }
+}
+
+/// Scope-aware post-crash diagnosis; reads original native inventory without
+/// recovering an expired lease, inventing N+1, or writing anything to disk.
+pub(crate) fn classify_scoped_pending_save_evidence(
+    root: &MaterializationRoot,
+    tenant: &TenantId,
+    profile: &ProfileId,
+) -> Result<ScopedPendingSaveEvidence, SaveAttemptEvidenceError> {
     let prefix = scope_file_prefix(tenant, profile);
     let marker = local_unsynced_path(root, tenant, profile);
     let mut candidate = None;
@@ -832,16 +860,50 @@ pub(crate) fn discover_unresolved_exact_save_attempt(
                 .ok_or(SaveAttemptEvidenceError::Changed)
         })
         .transpose()?;
-    // A lone LOCAL_UNSYNCED marker is still a hard blocker until the
-    // authorized owner can create/recover its exact candidate. A valid pair
-    // is recoverable but NEVER silently considered Saved.
+    // A valid lone intent is diagnostic evidence, NOT a saved checkpoint.
+    // Source bytes/WAL and original browser identity must still match the
+    // precise closed inventory; a forged or stale file remains UNKNOWN.
     if has_local_intent {
-        let exact = exact.as_ref().ok_or(SaveAttemptEvidenceError::Changed)?;
-        if !matching_local_unsynced_for_exact(root, tenant, profile, exact)? {
-            return Err(SaveAttemptEvidenceError::Changed);
+        if let Some(attempt) = exact.as_ref() {
+            if !matching_local_unsynced_for_exact(root, tenant, profile, attempt)? {
+                return Err(SaveAttemptEvidenceError::Changed);
+            }
+        } else {
+            let intent = read_local_unsynced(&marker)?;
+            if intent.schema != "bridge-p3-local-unsynced-v1"
+                || intent.tenant != tenant.as_str()
+                || intent.profile != profile.as_str()
+                || intent.epoch == 0
+                || intent.session_fingerprint.len() != 64
+                || intent.fencing_fingerprint.len() != 64
+                || !intent.session_fingerprint.bytes().all(|byte| byte.is_ascii_hexdigit())
+                || !intent.fencing_fingerprint.bytes().all(|byte| byte.is_ascii_hexdigit())
+            {
+                return Err(SaveAttemptEvidenceError::Invalid);
+            }
+            let base_generation = GenerationId::parse(intent.base_generation)
+                .map_err(|_| SaveAttemptEvidenceError::Invalid)?;
+            let source = root
+                .open_generation(tenant, profile, &base_generation)
+                .map_err(|_| SaveAttemptEvidenceError::Changed)?;
+            let inventory = source
+                .inventory()
+                .map_err(|_| SaveAttemptEvidenceError::Changed)?;
+            if inventory.inventory_digest() != intent.source_inventory
+                || inventory.total_bytes() != intent.source_bytes
+            {
+                return Err(SaveAttemptEvidenceError::Changed);
+            }
+            return Ok(ScopedPendingSaveEvidence::LocalUnsynced {
+                base_generation,
+                prior_epoch: intent.epoch,
+            });
         }
     }
-    Ok(exact)
+    Ok(match exact {
+        Some(attempt) => ScopedPendingSaveEvidence::Exact(attempt),
+        None => ScopedPendingSaveEvidence::None,
+    })
 }
 
 /// Header-only bounded read: discovery never loads the large sealed body

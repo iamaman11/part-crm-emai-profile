@@ -14,7 +14,8 @@ use crate::shipping_generation_save::{
     GenerationUploadAuthorization, SignedGenerationUploadCapability,
 };
 use crate::shipping_save_attempt::{
-    ReadOnlySaveAttempt, discover_unresolved_exact_save_attempt, inspect_exact_save_attempt,
+    ReadOnlySaveAttempt, ScopedPendingSaveEvidence, classify_scoped_pending_save_evidence,
+    discover_unresolved_exact_save_attempt, inspect_exact_save_attempt,
 };
 #[cfg(any(windows, test))]
 use crate::shipping_save_attempt::{
@@ -48,6 +49,9 @@ static SAVE_REQUEST_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RestartExactLocalCompletion {
     NoCanonicalCheckpoint,
+    /// Verified local source exists, but no cloud effect has been proved.
+    /// Requires a *new* D1 affirmative decision and fresh writer fence.
+    LocalUnsyncedRequiresFreshRetryDecision,
     NotActiveExact,
     ServerSelectedDifferentGeneration,
     ActiveExactLocalReady,
@@ -267,10 +271,27 @@ pub(crate) fn complete_active_exact_after_restart<T: MachineHttpPort>(
     {
         return Err(RestartExactLocalCompletionError::WriterOrLockUnresolved);
     }
-    let attempt = discover_unresolved_exact_save_attempt(root, tenant_id, profile_id)
+    let pending = classify_scoped_pending_save_evidence(root, tenant_id, profile_id)
         .map_err(|_| RestartExactLocalCompletionError::LocalEvidenceChanged)?;
-    let Some(attempt) = attempt else {
-        return Ok(RestartExactLocalCompletion::NoCanonicalCheckpoint);
+    let attempt = match pending {
+        ScopedPendingSaveEvidence::None => {
+            return Ok(RestartExactLocalCompletion::NoCanonicalCheckpoint);
+        }
+        ScopedPendingSaveEvidence::LocalUnsynced {
+            base_generation,
+            prior_epoch,
+        } => {
+            if fresh_lease.epoch() <= prior_epoch {
+                return Err(RestartExactLocalCompletionError::WriterOrLockUnresolved);
+            }
+            if &base_generation != selected_generation {
+                return Ok(RestartExactLocalCompletion::ServerSelectedDifferentGeneration);
+            }
+            // No PUT, no commit, no fabricated N+1. The existing D1 owner
+            // still has to prove NOT_APPLIED_RETRYABLE under a fresh fence.
+            return Ok(RestartExactLocalCompletion::LocalUnsyncedRequiresFreshRetryDecision);
+        }
+        ScopedPendingSaveEvidence::Exact(attempt) => attempt,
     };
     if attempt.successor_id() != selected_generation.as_str() {
         return Ok(RestartExactLocalCompletion::ServerSelectedDifferentGeneration);
@@ -748,6 +769,93 @@ mod tests {
             &fixture.tenant,
             &fixture.profile,
         )?);
+        Ok(())
+    }
+
+    #[test]
+    fn lone_local_unsynced_is_verified_but_never_grants_cloud_retry()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let fixture = Fixture::new()?;
+        let root = MaterializationRoot::open_or_create(&fixture.root_path)?;
+        let source = root.open_generation(&fixture.tenant, &fixture.profile, &fixture.base)?;
+        let original = std::fs::read(source.path().join("prefs.js"))?;
+        persist_local_unsynced_intent(&root, &source, &fixture.lease)?;
+        assert!(discover_unresolved_exact_save_attempt(
+            &root, &fixture.tenant, &fixture.profile,
+        ).is_err());
+        let fresh = ProfileLease::issue(
+            fixture.tenant.clone(), fixture.profile.clone(),
+            SessionId::parse("session_lone_local_unsynced")?,
+            fixture.lease.device_id().clone(), fixture.lease.epoch() + 1,
+            FencingToken::parse("fence_lone_local_unsynced")?,
+        )?;
+        let mut transport = Transport::default();
+        let disposition = complete_active_exact_after_restart(
+            &root, &fixture.tenant, &fixture.profile, &fixture.base,
+            &fresh, &mut transport,
+        );
+        assert_eq!(
+            disposition,
+            Ok(RestartExactLocalCompletion::LocalUnsyncedRequiresFreshRetryDecision),
+        );
+        assert!(transport.paths.is_empty());
+        assert_eq!(std::fs::read(source.path().join("prefs.js"))?, original);
+        assert!(has_unresolved_save_attempt_for_profile(
+            &root, &fixture.tenant, &fixture.profile,
+        )?);
+        // A stale epoch or an unrelated selected base never makes the
+        // offline source an authorized fresh writer or allows N+2.
+        let mut denied_transport = Transport::default();
+        assert_eq!(
+            complete_active_exact_after_restart(
+                &root, &fixture.tenant, &fixture.profile, &fixture.base,
+                &fixture.lease, &mut denied_transport,
+            ),
+            Err(RestartExactLocalCompletionError::WriterOrLockUnresolved),
+        );
+        assert!(denied_transport.paths.is_empty());
+        assert_eq!(
+            complete_active_exact_after_restart(
+                &root, &fixture.tenant, &fixture.profile,
+                fixture.prepared.candidate_workspace().generation_id(),
+                &fresh, &mut denied_transport,
+            ),
+            Ok(RestartExactLocalCompletion::ServerSelectedDifferentGeneration),
+        );
+        assert!(denied_transport.paths.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn tampered_lone_local_unsynced_preserves_native_bytes_and_blocks_recovery()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let fixture = Fixture::new()?;
+        let root = MaterializationRoot::open_or_create(&fixture.root_path)?;
+        let source = root.open_generation(&fixture.tenant, &fixture.profile, &fixture.base)?;
+        persist_local_unsynced_intent(&root, &source, &fixture.lease)?;
+        std::fs::write(source.path().join("prefs.js"), b"changed-without-checkpoint")?;
+        let fresh = ProfileLease::issue(
+            fixture.tenant.clone(), fixture.profile.clone(),
+            SessionId::parse("session_lone_tampered")?,
+            fixture.lease.device_id().clone(), fixture.lease.epoch() + 1,
+            FencingToken::parse("fence_lone_tampered")?,
+        )?;
+        let mut transport = Transport::default();
+        assert_eq!(
+            complete_active_exact_after_restart(
+                &root, &fixture.tenant, &fixture.profile,
+                &fixture.base, &fresh, &mut transport,
+            ),
+            Err(RestartExactLocalCompletionError::LocalEvidenceChanged),
+        );
+        assert!(transport.paths.is_empty());
+        assert!(has_unresolved_save_attempt_for_profile(
+            &root, &fixture.tenant, &fixture.profile,
+        )?);
+        assert_eq!(
+            std::fs::read(source.path().join("prefs.js"))?,
+            b"changed-without-checkpoint",
+        );
         Ok(())
     }
 

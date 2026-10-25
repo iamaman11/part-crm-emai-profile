@@ -387,6 +387,15 @@ mod windows {
                             );
                             false
                         }
+                        Ok(RestartExactLocalCompletion::LocalUnsyncedRequiresFreshRetryDecision) => {
+                            let diagnosis = PendingSaveReadOnlyDiagnosis::local_unsynced();
+                            eprintln!(
+                                "{};NEXT_SAFE_STEP={}",
+                                diagnosis.code(),
+                                diagnosis.next_safe_step()
+                            );
+                            false
+                        }
                         Ok(RestartExactLocalCompletion::NoCanonicalCheckpoint) => {
                             let diagnosis = PendingSaveReadOnlyDiagnosis::from_observation(
                                 Ok(RestartExactCommitObservation::NoCanonicalCheckpoint),

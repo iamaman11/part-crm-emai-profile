@@ -18,11 +18,17 @@ pub(crate) enum PendingSaveReadOnlyDiagnosis {
     ServerActiveExactLocalUnresolved,
     ServerNotActiveExactRetryUnresolved,
     CanonicalCheckpointNotFound,
+    LocalUnsyncedAwaitingServerDecision,
     UnknownPreserveBytes,
 }
 
 #[cfg(any(windows, test))]
 impl PendingSaveReadOnlyDiagnosis {
+    /// Read-only, locally validated offline close; never a retry grant.
+    pub(crate) const fn local_unsynced() -> Self {
+        Self::LocalUnsyncedAwaitingServerDecision
+    }
+
     pub(crate) fn from_observation(
         observed: Result<RestartExactCommitObservation, ShippingControlPlaneError>,
     ) -> Self {
@@ -50,6 +56,9 @@ impl PendingSaveReadOnlyDiagnosis {
                 "P3_RECOVERY_OBSERVATION=NOT_ACTIVE_EXACT;RETRY_AUTHORITY=UNRESOLVED"
             }
             Self::CanonicalCheckpointNotFound => "P3_RECOVERY_OBSERVATION=NO_CANONICAL_CHECKPOINT",
+            Self::LocalUnsyncedAwaitingServerDecision => {
+                "P3_RECOVERY=LOCAL_UNSYNCED_VERIFIED;CLOUD_SAVE=NOT_CONFIRMED"
+            }
             Self::UnknownPreserveBytes => "P3_RECOVERY_OBSERVATION=UNKNOWN;BYTES_RETAINED",
         }
     }
@@ -62,6 +71,7 @@ impl PendingSaveReadOnlyDiagnosis {
             Self::ServerActiveExactLocalUnresolved => "VERIFY_OWNED_LOCAL_COMPLETION",
             Self::ServerNotActiveExactRetryUnresolved => "REQUIRE_FRESH_SERVER_RETRY_DECISION",
             Self::CanonicalCheckpointNotFound => "RECHECK_PENDING_LOCAL_EVIDENCE",
+            Self::LocalUnsyncedAwaitingServerDecision => "REQUIRE_FRESH_SERVER_RETRY_DECISION",
             Self::UnknownPreserveBytes => "RETRY_READ_ONLY_OBSERVATION",
         }
     }

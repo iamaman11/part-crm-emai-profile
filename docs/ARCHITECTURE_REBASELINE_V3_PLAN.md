@@ -110,6 +110,28 @@ unsynced/unknown/only-copy/LKG bytes and old decryption keys until exact
 evidence permits no-replace, crash-safe, idempotent cleanup. Never destroy
 recoverability merely to enforce a physical two-copy cap.
 
+### Integrated delivery decision (2026-10-26): one Draft branch, batched CI
+
+**Accepted by product owner:** keep ALL K1+K2+K3 source in the *same*
+existing Draft #806 branch, not separate sibling PRs or a second persisted
+state machine. Minimize redundant GitHub Actions by integrating reviewed
+related edits before remote push; prefer narrowly scoped local/cheap tests
+while coding and one full exact-head GitHub CI per complete integration
+candidate. However do not defer all verification to one massive unreviewable
+commit: check file contracts, negative security paths and source shape before
+batching. On any CI failure group fixes by underlying cause; rerun full
+exact-head gates for the final candidate.
+
+**No release authority conveyed by this decision:** the three code slices
+are still individually required to be complete end-to-end; K1 includes D1
+positive fresh-fence NOT_APPLIED_RETRYABLE and durable offline-to-online
+resume, K2 includes bounded streaming 256/512MiB and independently WORKING
+LKG with safe keys and pruning, K3 includes truthful ordinary UX and complete
+fault/negative matrices. A single green CI is not Windows/staging B7 proof.
+If an incomplete slice can only be blocked safely, do not ship that Draft
+intermediate as a user-facing release. Protected main, D1/R2 effects and
+installed Windows remain outside the Draft implementation authorization.
+
 ### Accepted #802/#806 delivery batching: THREE completed code slices + ONE release acceptance
 
 **Decision 2026-10-25: ACCEPTED; execution batching only.** Do not
