@@ -2,7 +2,9 @@ use crate::browser_execution::{
     BrowserLaunchBlocker, browser_writer_locks_absent, load_materialization_binding,
     restore_materialization_binding_after_authoritative_open,
 };
-use crate::generation_reopen::{GenerationObjectDownloadPort, GenerationReopenControlPort};
+use crate::generation_reopen::{
+    GenerationObjectDownloadPort, GenerationReopenControlError, GenerationReopenControlPort,
+};
 use crate::generation_snapshot::{
     GenerationSnapshotError, materialize_workspace_snapshot_with_pre_publish,
     verify_workspace_matches_snapshot,
@@ -21,7 +23,10 @@ pub enum AuthoritativeGenerationMaterializationError {
     IncompleteLocalEvidence,
     InvalidLocalEvidence,
     LocalAccessDenied,
-    ControlPlane,
+    /// The remote read failed before any local workspace existed or local writer was attempted.
+    /// The caller must independently reconfirm absence before a clean coordinator release.
+    ControlPlaneBeforeLocalUse(GenerationReopenControlError),
+    ControlPlane(GenerationReopenControlError),
     Download,
     DescriptorMismatch,
     MetadataMismatch,
@@ -40,7 +45,9 @@ impl core::fmt::Display for AuthoritativeGenerationMaterializationError {
             }
             Self::InvalidLocalEvidence => "existing local generation evidence is invalid",
             Self::LocalAccessDenied => "local generation evidence cannot be accessed",
-            Self::ControlPlane => "authoritative generation control-plane request failed",
+            Self::ControlPlaneBeforeLocalUse(_) | Self::ControlPlane(_) => {
+                "authoritative generation control-plane request failed"
+            }
             Self::Download => "authoritative generation object download failed",
             Self::DescriptorMismatch => "download capability does not name the requested authority",
             Self::MetadataMismatch => {
@@ -59,6 +66,15 @@ impl core::fmt::Display for AuthoritativeGenerationMaterializationError {
 }
 
 impl std::error::Error for AuthoritativeGenerationMaterializationError {}
+
+impl AuthoritativeGenerationMaterializationError {
+    /// Only the read-only capability lookup with a missing local workspace may certify that the
+    /// materialization owner has performed no local writes. Caller must recheck exact absence.
+    #[must_use]
+    pub const fn proves_no_local_write_and_absent_workspace(self) -> bool {
+        matches!(self, Self::ControlPlaneBeforeLocalUse(_))
+    }
+}
 
 /// Ensures that the exact generation already selected by the P2 server-side launch authority is
 /// locally materialized. Local absence is never authority to choose another generation: the only
@@ -84,6 +100,7 @@ pub fn ensure_authoritative_generation<C, D>(
 ) -> Result<(), AuthoritativeGenerationMaterializationError>
 where
     C: GenerationReopenControlPort,
+    <C as GenerationReopenControlPort>::Error: Into<GenerationReopenControlError>,
     D: GenerationObjectDownloadPort,
 {
     let incomplete_local = match root.open_generation(tenant_id, profile_id, generation_id) {
@@ -123,7 +140,17 @@ where
 
     let capability = control
         .download_capability(tenant_id, profile_id)
-        .map_err(|_| AuthoritativeGenerationMaterializationError::ControlPlane)?;
+        .map_err(|error| {
+            let reason = error.into();
+            if incomplete_local.is_none() {
+                // No workspace, lock, materialization or runtime path has been entered.
+                // A second exact local lookup at the caller is still required for Clean.
+                AuthoritativeGenerationMaterializationError::ControlPlaneBeforeLocalUse(reason)
+            } else {
+                // Existing incomplete/dirty bytes disallow a clean cancellation.
+                AuthoritativeGenerationMaterializationError::ControlPlane(reason)
+            }
+        })?;
     let expected_object_key = canonical_generation_object_key(tenant_id, profile_id, generation_id);
     if capability.generation_id() != generation_id
         || capability.object_key() != expected_object_key
@@ -153,7 +180,7 @@ where
         .ok_or(AuthoritativeGenerationMaterializationError::MetadataMismatch)?;
     let opening_key = control
         .opening_material(tenant_id, profile_id, metadata_prelude)
-        .map_err(|_| AuthoritativeGenerationMaterializationError::ControlPlane)?;
+        .map_err(|error| AuthoritativeGenerationMaterializationError::ControlPlane(error.into()))?;
     if opening_key.key_id() != metadata.key_id() {
         return Err(AuthoritativeGenerationMaterializationError::OpeningMaterialMismatch);
     }
@@ -239,7 +266,8 @@ mod tests {
     };
     use crate::browser_execution::{load_materialization_binding, persist_materialization_binding};
     use crate::generation_reopen::{
-        GenerationDownloadCapability, GenerationObjectDownloadPort, GenerationReopenControlPort,
+        GenerationDownloadCapability, GenerationObjectDownloadPort, GenerationReopenControlError,
+        GenerationReopenControlPort,
     };
     use crate::generation_snapshot::encode_workspace_snapshot;
     use crate::local_profile::{BROWSER_IDENTITY_RECORD_FILE, MaterializationRoot};
@@ -377,6 +405,8 @@ mod tests {
                 key_id: self.key_id.clone(),
                 key_bytes: self.key_bytes,
                 opening_calls: 0,
+                capability_error: None,
+                opening_error: None,
             }
         }
 
@@ -396,18 +426,23 @@ mod tests {
         key_id: KeyId,
         key_bytes: [u8; 32],
         opening_calls: u64,
+        capability_error: Option<GenerationReopenControlError>,
+        opening_error: Option<GenerationReopenControlError>,
     }
 
     impl GenerationReopenControlPort for FakeControl {
-        type Error = ();
+        type Error = GenerationReopenControlError;
 
         fn download_capability(
             &mut self,
             tenant_id: &TenantId,
             profile_id: &ProfileId,
         ) -> Result<GenerationDownloadCapability, Self::Error> {
+            if let Some(reason) = self.capability_error {
+                return Err(reason);
+            }
             if tenant_id != &self.tenant_id || profile_id != &self.profile_id {
-                return Err(());
+                return Err(GenerationReopenControlError::InvalidResponse);
             }
             Ok(GenerationDownloadCapability::new(
                 self.generation_id.clone(),
@@ -426,8 +461,11 @@ mod tests {
             profile_id: &ProfileId,
             _metadata_prelude: &[u8],
         ) -> Result<GenerationDek, Self::Error> {
+            if let Some(reason) = self.opening_error {
+                return Err(reason);
+            }
             if tenant_id != &self.tenant_id || profile_id != &self.profile_id {
-                return Err(());
+                return Err(GenerationReopenControlError::InvalidResponse);
             }
             self.opening_calls += 1;
             Ok(GenerationDek::new(self.key_id.clone(), self.key_bytes))
@@ -455,6 +493,115 @@ mod tests {
             self.calls += 1;
             Ok(self.container.clone())
         }
+    }
+
+    #[test]
+    fn remote_read_refusal_distinguishes_absent_and_incomplete_local_evidence()
+    -> Result<(), Box<dyn std::error::Error>> {
+        for reason in [
+            GenerationReopenControlError::Transport,
+            GenerationReopenControlError::HttpStatus,
+            GenerationReopenControlError::InvalidResponse,
+        ] {
+            let fixture = Fixture::new()?;
+            let mut control = fixture.control();
+            control.capability_error = Some(reason);
+            let mut downloader = FakeDownloader {
+                container: fixture.container.clone(),
+                calls: 0,
+            };
+            let refusal = ensure_authoritative_generation(
+                &fixture.root,
+                &fixture.tenant_id,
+                &fixture.profile_id,
+                &fixture.generation_id,
+                &DeviceId::parse("device_remote_read_failure")?,
+                1,
+                &mut control,
+                &mut downloader,
+            );
+            assert_eq!(
+                refusal,
+                Err(
+                    AuthoritativeGenerationMaterializationError::ControlPlaneBeforeLocalUse(reason)
+                )
+            );
+            assert!(matches!(
+                fixture.root.open_generation(
+                    &fixture.tenant_id,
+                    &fixture.profile_id,
+                    &fixture.generation_id,
+                ),
+                Err(crate::local_profile::LocalProfileError::Io(
+                    std::io::ErrorKind::NotFound
+                ))
+            ));
+            assert_eq!(downloader.calls, 0);
+            assert_eq!(control.opening_calls, 0);
+            fixture.cleanup();
+        }
+
+        let fixture = Fixture::new()?;
+        let workspace = fixture.root.create_generation(
+            &fixture.tenant_id,
+            &fixture.profile_id,
+            &fixture.generation_id,
+        )?;
+        let mut control = fixture.control();
+        control.capability_error = Some(GenerationReopenControlError::HttpStatus);
+        let mut downloader = FakeDownloader {
+            container: fixture.container.clone(),
+            calls: 0,
+        };
+        assert_eq!(
+            ensure_authoritative_generation(
+                &fixture.root,
+                &fixture.tenant_id,
+                &fixture.profile_id,
+                &fixture.generation_id,
+                &DeviceId::parse("device_local_evidence_failure")?,
+                1,
+                &mut control,
+                &mut downloader,
+            ),
+            Err(AuthoritativeGenerationMaterializationError::ControlPlane(
+                GenerationReopenControlError::HttpStatus
+            ))
+        );
+        assert!(workspace.path().exists());
+        fixture.cleanup();
+        Ok(())
+    }
+
+    #[test]
+    fn opening_material_invalid_response_is_typed_and_cannot_claim_clean_release()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let fixture = Fixture::new()?;
+        let mut control = fixture.control();
+        control.opening_error = Some(GenerationReopenControlError::InvalidResponse);
+        let mut downloader = FakeDownloader {
+            container: fixture.container.clone(),
+            calls: 0,
+        };
+        assert_eq!(
+            ensure_authoritative_generation(
+                &fixture.root,
+                &fixture.tenant_id,
+                &fixture.profile_id,
+                &fixture.generation_id,
+                &DeviceId::parse("device_opening_reject")?,
+                1,
+                &mut control,
+                &mut downloader,
+            ),
+            Err(AuthoritativeGenerationMaterializationError::ControlPlane(
+                GenerationReopenControlError::InvalidResponse
+            ))
+        );
+        assert_eq!(downloader.calls, 1);
+        assert_eq!(control.opening_calls, 0);
+        fixture.cleanup();
+        Ok(())
     }
 
     #[test]

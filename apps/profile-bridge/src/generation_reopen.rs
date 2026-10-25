@@ -96,6 +96,15 @@ impl Drop for GenerationDownloadCapability {
     }
 }
 
+/// Lossless, safe classification from the existing authenticated control-plane owner.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum GenerationReopenControlError {
+    Transport,
+    HttpStatus,
+    InvalidResponse,
+    Clock,
+}
+
 /// Control-plane half of authoritative reopen. Implementations must use the current live
 /// coordinator witness and must not accept caller-selected generation/key/digest authority.
 pub trait GenerationReopenControlPort {
