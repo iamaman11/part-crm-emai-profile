@@ -867,7 +867,9 @@ where
             prepared.candidate_workspace().generation_id(),
         )
         .map_err(|_| OperatorFlowError::Stage(OperatorFailureStage::GenerationSave))?
-        .ok_or(OperatorFlowError::Stage(OperatorFailureStage::GenerationSave))?;
+        .ok_or(OperatorFlowError::Stage(
+            OperatorFailureStage::GenerationSave,
+        ))?;
         if recovered.ciphertext() != prepared.sealed().container()
             || recovered.container_digest() != prepared.container_digest()
             || recovered.original_session() != lease.session_id().as_str()
