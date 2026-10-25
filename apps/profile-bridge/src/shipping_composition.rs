@@ -589,10 +589,7 @@ mod windows {
 
     // Retry at most once, and strictly before the last confirmed deadline.
     // No old lease/fence authority is extended by the passage of time.
-    fn bounded_heartbeat_retry_at(
-        expiry: u64,
-        observed_at: UnixMillis,
-    ) -> Option<UnixMillis> {
+    fn bounded_heartbeat_retry_at(expiry: u64, observed_at: UnixMillis) -> Option<UnixMillis> {
         let remaining = expiry.checked_sub(observed_at.value())?;
         if remaining <= 1 {
             return None;
