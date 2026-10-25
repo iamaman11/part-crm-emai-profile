@@ -61,7 +61,8 @@ REQUIRED_COMPOSITION_MARKERS = (
     "ManagedCamouhostProcess::pair(",
     ".close_observer()",
     "ProfileBridgeOperator::new(",
-    ".open_authoritative_with_runtime_health(",
+    ".open_authoritative_with_runtime_health_and_pending_observation(",
+    "observe_discovered_successor_after_restart(",
     ".observe_controlled_close(&session_id)",
     ".close(now()?)",
     ".save_retained_successor(",
@@ -310,7 +311,8 @@ def write_fixture(root: Path) -> None:
         "// ManagedCamouhostProcess::pair(\n"
         "// .close_observer()\n"
         "// ProfileBridgeOperator::new(\n"
-        "// .open_authoritative_with_runtime_health(\n"
+        "// .open_authoritative_with_runtime_health_and_pending_observation(\n"
+        "// observe_discovered_successor_after_restart(\n"
         "// .observe_controlled_close(&session_id)\n"
         "// .close(now()?)\n"
         "// .save_retained_successor(\n"
@@ -506,10 +508,30 @@ def self_test() -> None:
         composition.write_text(safe_composition, encoding="utf-8")
 
         composition.write_text(
-            safe_composition.replace("// .open_authoritative_with_runtime_health(\n", "// .open(\n"),
+            safe_composition.replace(
+                "// .open_authoritative_with_runtime_health_and_pending_observation(\n",
+                "// .open(\n",
+            ),
             encoding="utf-8",
         )
         expect_rejected(root, "shipping local-only open predecessor")
+        composition.write_text(safe_composition, encoding="utf-8")
+
+        composition.write_text(
+            safe_composition.replace(
+                "// .open_authoritative_with_runtime_health_and_pending_observation(\n",
+                "// .open_authoritative_with_runtime_health(\n",
+            ),
+            encoding="utf-8",
+        )
+        expect_rejected(root, "shipping launch skips exact pending-save observation")
+        composition.write_text(safe_composition, encoding="utf-8")
+
+        composition.write_text(
+            safe_composition.replace("// observe_discovered_successor_after_restart(\n", ""),
+            encoding="utf-8",
+        )
+        expect_rejected(root, "shipping launch has no exact server-pointer observation")
         composition.write_text(safe_composition, encoding="utf-8")
 
         composition.write_text(
