@@ -580,6 +580,20 @@ mod tests {
     use super::*;
 
     #[test]
+    fn verified_offline_intent_diagnosis_never_claims_cloud_saved() {
+        let status = PendingSaveReadOnlyDiagnosis::local_unsynced();
+        assert_eq!(
+            status.code(),
+            "P3_RECOVERY=LOCAL_UNSYNCED_VERIFIED;CLOUD_SAVE=NOT_CONFIRMED"
+        );
+        assert_eq!(
+            status.next_safe_step(),
+            "REQUIRE_FRESH_SERVER_RETRY_DECISION"
+        );
+        assert!(!status.code().contains("CLOUD_SAVED"));
+    }
+
+    #[test]
     fn pending_save_observation_is_only_read_only_evidence_and_never_retry_authority() {
         let cases = [
             (

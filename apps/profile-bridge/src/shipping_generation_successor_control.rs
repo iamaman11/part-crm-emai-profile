@@ -291,7 +291,7 @@ pub(crate) fn complete_active_exact_after_restart<T: MachineHttpPort>(
             // still has to prove NOT_APPLIED_RETRYABLE under a fresh fence.
             return Ok(RestartExactLocalCompletion::LocalUnsyncedRequiresFreshRetryDecision);
         }
-        ScopedPendingSaveEvidence::Exact(attempt) => attempt,
+        ScopedPendingSaveEvidence::Exact(attempt) => *attempt,
     };
     if attempt.successor_id() != selected_generation.as_str() {
         return Ok(RestartExactLocalCompletion::ServerSelectedDifferentGeneration);

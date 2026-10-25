@@ -780,7 +780,7 @@ pub(crate) enum ScopedPendingSaveEvidence {
         base_generation: GenerationId,
         prior_epoch: u64,
     },
-    Exact(ReadOnlySaveAttempt),
+    Exact(Box<ReadOnlySaveAttempt>),
 }
 
 /// Keep the original exact-only API fail-closed: callers that cannot
@@ -792,8 +792,16 @@ pub(crate) fn discover_unresolved_exact_save_attempt(
 ) -> Result<Option<ReadOnlySaveAttempt>, SaveAttemptEvidenceError> {
     match classify_scoped_pending_save_evidence(root, tenant, profile)? {
         ScopedPendingSaveEvidence::None => Ok(None),
-        ScopedPendingSaveEvidence::Exact(attempt) => Ok(Some(attempt)),
-        ScopedPendingSaveEvidence::LocalUnsynced { .. } => Err(SaveAttemptEvidenceError::Changed),
+        ScopedPendingSaveEvidence::Exact(attempt) => Ok(Some(*attempt)),
+        ScopedPendingSaveEvidence::LocalUnsynced {
+            base_generation,
+            prior_epoch,
+        } => {
+            // Read both fields even in non-Windows shipping builds; this
+            // exact-only API intentionally refuses any lone local intent.
+            let _ = (base_generation, prior_epoch);
+            Err(SaveAttemptEvidenceError::Changed)
+        },
     }
 }
 
@@ -907,7 +915,7 @@ pub(crate) fn classify_scoped_pending_save_evidence(
         }
     }
     Ok(match exact {
-        Some(attempt) => ScopedPendingSaveEvidence::Exact(attempt),
+        Some(attempt) => ScopedPendingSaveEvidence::Exact(Box::new(attempt)),
         None => ScopedPendingSaveEvidence::None,
     })
 }
