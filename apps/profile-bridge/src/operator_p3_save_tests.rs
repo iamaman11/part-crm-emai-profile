@@ -1,3 +1,4 @@
+use crate::browser_execution::persist_browser_identity;
 use crate::dirty_close::DirtyCloseLocalOutcome;
 use crate::dirty_generation::{GenerationSealingMaterial, GenerationSealingMaterialPort};
 use crate::local_profile::{
@@ -14,6 +15,7 @@ use crate::shipping_generation_save::{
     SignedGenerationObjectPutPort, SignedGenerationUploadCapability,
 };
 use crate::{FakeCamouhost, FakeDeviceIdentity, FakeDeviceKeyStore, FakeProcessControl};
+use crate::test_support::browser_identity_fixture;
 use application_ports::ProfileCoordinatorPort;
 use bridge_domain::{BridgePortError, ClaimCode, ClaimUri, EnrollmentClaim};
 use control_plane_contract::profile_generation_api::{
@@ -311,6 +313,17 @@ impl Fixture {
         let device_id = DeviceId::parse(format!("device_p3_save_{counter}"))?;
         let workspace = root.create_generation(&tenant_id, &profile_id, &generation_id)?;
         fs::write(workspace.path().join("prefs.js"), b"base")?;
+        // This synthetic fixture must contain the same generation-owned identity that the
+        // shipping first-open owner supplies before a real save/reopen. A fake preflight
+        // alone is not evidence that a committed successor can be launched again.
+        let bundle = approved_bundle()?;
+        let identity = browser_identity_fixture(
+            bundle.manifest().runtime_version(),
+            bundle.manifest().inventory_sha256().as_str(),
+            "profile-stability-v1-probe-p3-save",
+            "f".repeat(64),
+        )?;
+        persist_browser_identity(&workspace, &identity)?;
         let actor = ActorContext::new(
             TenantScope::new(tenant_id.clone()),
             ActorId::parse(format!("actor_p3_save_{counter}"))?,
