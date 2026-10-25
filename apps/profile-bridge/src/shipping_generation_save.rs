@@ -228,7 +228,9 @@ where
     // Corrupt/staged evidence never triggers a silent fallback to another N+1.
     let candidate_generation_id =
         match crate::shipping_save_attempt::original_local_unsynced_successor(
-            root, source_workspace, lease,
+            root,
+            source_workspace,
+            lease,
         )
         .map_err(|_| ShippingGenerationSaveError::CandidateIdentity)?
         {
@@ -588,7 +590,9 @@ mod tests {
         let fixture = Fixture::new("original-equals-recovery")?;
         let source = fixture.source_workspace()?;
         crate::shipping_save_attempt::persist_local_unsynced_intent(
-            &fixture.root, &source, &fixture.lease,
+            &fixture.root,
+            &source,
+            &fixture.lease,
         )?;
         let renewed = ProfileLease::issue(
             fixture.tenant.clone(),
@@ -599,22 +603,35 @@ mod tests {
             FencingToken::parse("fence_following_power_cut")?,
         )?;
         let expected = crate::shipping_save_attempt::deterministic_lone_unsynced_successor(
-            &fixture.root, &fixture.tenant, &fixture.profile, &fixture.base, &renewed,
-        )?.ok_or("missing candidate")?;
+            &fixture.root,
+            &fixture.tenant,
+            &fixture.profile,
+            &fixture.base,
+            &renewed,
+        )?
+        .ok_or("missing candidate")?;
         let mut control = Control {
             events: Rc::new(RefCell::new(Vec::new())),
             verified: false,
             commit: GenerationSuccessorCommitOutcome::Activated,
         };
         let prepared = prepare_retained_generation_successor(
-            &fixture.record, &source, &fixture.root,
-            &fixture.tenant, &fixture.profile, &fixture.lease, &mut control,
+            &fixture.record,
+            &source,
+            &fixture.root,
+            &fixture.tenant,
+            &fixture.profile,
+            &fixture.lease,
+            &mut control,
         )?;
         assert_eq!(prepared.candidate_workspace().generation_id(), &expected);
         assert_eq!(
             crate::shipping_save_attempt::deterministic_lone_unsynced_successor(
-                &fixture.root, &fixture.tenant, &fixture.profile,
-                &fixture.base, &renewed,
+                &fixture.root,
+                &fixture.tenant,
+                &fixture.profile,
+                &fixture.base,
+                &renewed,
             )?,
             Some(expected),
         );
@@ -628,7 +645,9 @@ mod tests {
         let fixture = Fixture::new("changed-source")?;
         let source = fixture.source_workspace()?;
         crate::shipping_save_attempt::persist_local_unsynced_intent(
-            &fixture.root, &source, &fixture.lease,
+            &fixture.root,
+            &source,
+            &fixture.lease,
         )?;
         std::fs::write(source.path().join("prefs.js"), b"native-file-mutated")?;
         let mut control = Control {
@@ -638,12 +657,20 @@ mod tests {
         };
         assert!(matches!(
             prepare_retained_generation_successor(
-                &fixture.record, &source, &fixture.root, &fixture.tenant,
-                &fixture.profile, &fixture.lease, &mut control,
+                &fixture.record,
+                &source,
+                &fixture.root,
+                &fixture.tenant,
+                &fixture.profile,
+                &fixture.lease,
+                &mut control,
             ),
             Err(ShippingGenerationSaveError::CandidateIdentity),
         ));
-        assert_eq!(std::fs::read(source.path().join("prefs.js"))?, b"native-file-mutated");
+        assert_eq!(
+            std::fs::read(source.path().join("prefs.js"))?,
+            b"native-file-mutated"
+        );
         Ok(())
     }
 
