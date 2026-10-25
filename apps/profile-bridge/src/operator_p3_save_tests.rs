@@ -649,10 +649,17 @@ fn canonical_operator_retry_refuses_changed_candidate_and_preserves_unknown_byte
     );
     assert!(matches!(
         first,
-        Err(OperatorFlowError::Stage(OperatorFailureStage::GenerationSave))
+        Err(OperatorFlowError::Stage(
+            OperatorFailureStage::GenerationSave
+        ))
     ));
     let candidate = GenerationId::parse(
-        trace.generation_ids.borrow().first().ok_or("missing candidate")?.clone(),
+        trace
+            .generation_ids
+            .borrow()
+            .first()
+            .ok_or("missing candidate")?
+            .clone(),
     )?;
     let workspace = fixture.root.open_generation(
         fixture.actor.tenant_scope().tenant_id(),
@@ -661,7 +668,10 @@ fn canonical_operator_retry_refuses_changed_candidate_and_preserves_unknown_byte
     )?;
     let unknown = workspace.path().join("user_data");
     fs::create_dir(&unknown)?;
-    fs::write(unknown.join("cookies.sqlite-wal"), b"unaccounted-local-writes")?;
+    fs::write(
+        unknown.join("cookies.sqlite-wal"),
+        b"unaccounted-local-writes",
+    )?;
     let observed_requests = trace.paths.borrow().len();
 
     let retry = operator.save_retained_successor(
@@ -675,7 +685,9 @@ fn canonical_operator_retry_refuses_changed_candidate_and_preserves_unknown_byte
     );
     assert!(matches!(
         retry,
-        Err(OperatorFlowError::Stage(OperatorFailureStage::GenerationSave))
+        Err(OperatorFlowError::Stage(
+            OperatorFailureStage::GenerationSave
+        ))
     ));
     assert_eq!(trace.paths.borrow().len(), observed_requests);
     assert_eq!(put_calls.get(), 1);
@@ -715,17 +727,26 @@ fn canonical_operator_lost_commit_response_reuses_verified_original_without_seco
     );
     assert!(matches!(
         first,
-        Err(OperatorFlowError::Stage(OperatorFailureStage::GenerationSave))
+        Err(OperatorFlowError::Stage(
+            OperatorFailureStage::GenerationSave
+        ))
     ));
     assert_eq!(put_calls.get(), 1);
     assert_eq!(operator.coordinator().sealing_requests, 1);
-    let candidate = trace.generation_ids.borrow().first().ok_or("missing candidate")?.clone();
+    let candidate = trace
+        .generation_ids
+        .borrow()
+        .first()
+        .ok_or("missing candidate")?
+        .clone();
     let completion = operator.save_retained_successor(
         &fixture.root,
         Transport::new(
             [
                 Ok(verified_response()?),
-                Ok(commit_response(BridgeGenerationSuccessorCommitOutcomeDto::AlreadyActive)?),
+                Ok(commit_response(
+                    BridgeGenerationSuccessorCommitOutcomeDto::AlreadyActive,
+                )?),
             ],
             trace.clone(),
         ),
@@ -738,7 +759,13 @@ fn canonical_operator_lost_commit_response_reuses_verified_original_without_seco
     assert!(completion.is_saved());
     assert_eq!(put_calls.get(), 1);
     assert_eq!(operator.coordinator().sealing_requests, 1);
-    assert!(trace.generation_ids.borrow().iter().all(|id| id == &candidate));
+    assert!(
+        trace
+            .generation_ids
+            .borrow()
+            .iter()
+            .all(|id| id == &candidate)
+    );
     assert_eq!(completion.committed().generation_id().as_str(), candidate);
     assert!(!operator.has_pending_dirty_close());
     assert_eq!(operator.coordinator().closed, 1);
