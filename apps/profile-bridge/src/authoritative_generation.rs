@@ -686,7 +686,10 @@ mod tests {
                 "wrong_key_id",
                 AuthoritativeGenerationPreWriteError::OpeningMaterialMismatch,
             ),
-            ("bad_decryption_key", AuthoritativeGenerationPreWriteError::Decryption),
+            (
+                "bad_decryption_key",
+                AuthoritativeGenerationPreWriteError::Decryption,
+            ),
             (
                 "opening_http_refusal",
                 AuthoritativeGenerationPreWriteError::OpeningControl(
