@@ -18,6 +18,31 @@ pub const BRIDGE_PROFILE_GENERATION_UPLOAD_CAPABILITY_PATH_TEMPLATE: &str =
     "/bridge/v1/tenants/{tenantId}/profiles/{profileId}/generation-successor/upload-capability";
 pub const BRIDGE_PROFILE_GENERATION_COMMIT_PATH_TEMPLATE: &str =
     "/bridge/v1/tenants/{tenantId}/profiles/{profileId}/generation-successor/commit";
+pub const BRIDGE_PROFILE_GENERATION_OBSERVE_PATH_TEMPLATE: &str =
+    "/bridge/v1/tenants/{tenantId}/profiles/{profileId}/generation-successor/observe";
+
+/// Machine-authenticated, read-only exact successor reconciliation. No
+/// credential, lease/fencing token, signed URL or optimistic write version is
+/// supplied by the client. Server compares the existing D1 commit journal
+/// against the live Profile pointer and current actor/device authorization.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct BridgeGenerationSuccessorObserveRequest {
+    pub base_generation_id: String,
+    pub generation_id: String,
+    pub object_key: String,
+    pub metadata_digest: String,
+    pub container_digest: String,
+    pub container_bytes: u64,
+}
+
+/// `activeExact` proves only a D1 commit already completed. It never proves
+/// browser usability nor grants permission to finalize local state.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct BridgeGenerationSuccessorObserveResponse {
+    pub active_exact: bool,
+}
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
