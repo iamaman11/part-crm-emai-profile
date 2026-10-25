@@ -3,9 +3,9 @@ use crate::browser_execution::{browser_writer_locks_absent, persist_committed_su
 use crate::dirty_generation::{
     GenerationSealingMaterial, GenerationSealingMaterialPort, PreparedDirtyGeneration,
 };
+use crate::local_profile::MaterializationRoot;
 #[cfg(any(windows, test))]
 use crate::local_profile::{BridgeWorkspaceLock, LocalProfileError};
-use crate::local_profile::MaterializationRoot;
 use crate::shipping_control_plane::{
     MachineHttpMethod, MachineHttpPort, ShippingControlPlaneError,
 };
@@ -13,11 +13,11 @@ use crate::shipping_generation_save::{
     GenerationSuccessorCommitOutcome, GenerationSuccessorControlPort,
     GenerationUploadAuthorization, SignedGenerationUploadCapability,
 };
+#[cfg(any(windows, test))]
+use crate::shipping_save_attempt::retire_active_exact_attempt_after_restart;
 use crate::shipping_save_attempt::{
     ReadOnlySaveAttempt, discover_unresolved_exact_save_attempt, inspect_exact_save_attempt,
 };
-#[cfg(any(windows, test))]
-use crate::shipping_save_attempt::retire_active_exact_attempt_after_restart;
 use control_plane_contract::profile_generation_api::{
     BRIDGE_PROFILE_GENERATION_COMMIT_PATH_TEMPLATE,
     BRIDGE_PROFILE_GENERATION_OBSERVE_PATH_TEMPLATE,
@@ -924,7 +924,11 @@ mod tests {
         let source = root.open_generation(&fixture.tenant, &fixture.profile, &fixture.base)?;
         persist_exact_save_attempt(&root, &source, &fixture.prepared, &fixture.lease)?;
         let successor = fixture.prepared.candidate_workspace().generation_id();
-        let parent = fixture.prepared.candidate_workspace().path().parent()
+        let parent = fixture
+            .prepared
+            .candidate_workspace()
+            .path()
+            .parent()
             .ok_or("candidate parent missing")?;
         let foreign = parent.join(format!(".{}.materialization", successor.as_str()));
         std::fs::write(&foreign, b"foreign-materialization-must-not-be-overwritten")?;
@@ -956,7 +960,9 @@ mod tests {
         );
         assert_eq!(transport.paths.len(), 1);
         assert!(has_unresolved_save_attempt_for_profile(
-            &root, &fixture.tenant, &fixture.profile,
+            &root,
+            &fixture.tenant,
+            &fixture.profile,
         )?);
         assert_eq!(
             std::fs::read(&foreign)?,
@@ -964,7 +970,13 @@ mod tests {
         );
         assert!(!source.path().join(".profile-platform.lock").exists());
         assert_eq!(
-            std::fs::read(fixture.prepared.candidate_workspace().path().join("prefs.js"))?,
+            std::fs::read(
+                fixture
+                    .prepared
+                    .candidate_workspace()
+                    .path()
+                    .join("prefs.js")
+            )?,
             b"save",
         );
         Ok(())
