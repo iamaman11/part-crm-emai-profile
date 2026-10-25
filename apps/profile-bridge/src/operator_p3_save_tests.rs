@@ -15,7 +15,8 @@ use crate::shipping_generation_save::{
     SignedGenerationObjectPutPort, SignedGenerationUploadCapability,
 };
 use crate::shipping_save_attempt::{
-    SaveAttemptEvidenceError, has_unresolved_save_attempt_for_profile, inspect_exact_save_attempt,
+    SaveAttemptEvidenceError, discover_unresolved_exact_save_attempt,
+    has_unresolved_save_attempt_for_profile, inspect_exact_save_attempt,
 };
 use crate::test_support::browser_identity_fixture;
 use crate::{FakeCamouhost, FakeDeviceIdentity, FakeDeviceKeyStore, FakeProcessControl};
@@ -700,6 +701,18 @@ fn canonical_save_checkpoint_survives_owner_process_loss_without_authorizing_pub
     .ok_or("the exact attempt did not survive process loss")?;
     assert_eq!(recovered.ciphertext(), expected_ciphertext);
     assert_eq!(recovered.container_digest(), expected_hash);
+    // After total process loss, discover the successor without an in-memory
+    // lease or a caller-supplied generation ID; do not send any HTTP effect.
+    let discovered = discover_unresolved_exact_save_attempt(
+        &reopened_root,
+        fixture.actor.tenant_scope().tenant_id(),
+        &fixture.profile_id,
+    )?
+    .ok_or("crash-surviving exact successor not discovered")?;
+    assert_eq!(discovered.successor_id(), candidate.as_str());
+    assert_eq!(discovered.container_digest(), expected_hash);
+    assert_eq!(discovered.ciphertext(), expected_ciphertext);
+    assert!(discovered.matches_original_lease(&fixture.lease));
     assert_eq!(put_calls.get(), 1);
     assert_eq!(trace.paths.borrow().len(), 1);
     assert!(
@@ -817,7 +830,64 @@ fn torn_scoped_checkpoint_filename_still_blocks_stale_browser_reopen()
         ))
     ));
     assert!(malformed_name.exists());
+    assert!(matches!(
+        discover_unresolved_exact_save_attempt(
+            &fixture.root,
+            fixture.actor.tenant_scope().tenant_id(),
+            &fixture.profile_id,
+        ),
+        Err(SaveAttemptEvidenceError::Invalid)
+    ));
     assert_eq!(fresh.coordinator().closed, 1);
+    Ok(())
+}
+
+#[test]
+fn profile_discovery_rejects_pending_sibling_without_erasing_exact_checkpoint()
+-> Result<(), Box<dyn std::error::Error>> {
+    let fixture = Fixture::new("checkpoint-pending-sibling")?;
+    let mut operator = fixture.operator()?;
+    fixture.open_mutate_and_close(&mut operator)?;
+    let transport = TransportTrace::default();
+    let failed = operator.save_retained_successor(
+        &fixture.root,
+        Transport::new([Ok(upload_required_response()?)], transport.clone()),
+        &mut Put {
+            fail: true,
+            calls: Rc::new(Cell::new(0)),
+        },
+        UnixMillis::new(30),
+    );
+    assert!(failed.is_err());
+    let tenant = fixture.actor.tenant_scope().tenant_id();
+    let one = discover_unresolved_exact_save_attempt(&fixture.root, tenant, &fixture.profile_id)?
+        .ok_or("expected valid checkpoint before introducing competing evidence")?;
+    let candidate = GenerationId::parse(one.successor_id().to_owned())?;
+    let canonical = fs::read_dir(fixture.root.path())?
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .find(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.starts_with(".profile-save-attempt-v1-") && name.ends_with(".bin"))
+        })
+        .ok_or("missing scoped checkpoint")?;
+    // Torn in-flight stage, even alongside a valid canonical record, cannot
+    // be silently ignored, replaced, removed or mistaken for fresh authority.
+    let pending = canonical.with_extension("bin.pending-unknown");
+    fs::write(&pending, b"torn-stage")?;
+    assert!(matches!(
+        discover_unresolved_exact_save_attempt(&fixture.root, tenant, &fixture.profile_id),
+        Err(SaveAttemptEvidenceError::Invalid)
+    ));
+    assert!(has_unresolved_save_attempt_for_profile(
+        &fixture.root,
+        tenant,
+        &fixture.profile_id,
+    )?);
+    assert!(pending.exists());
+    assert!(inspect_exact_save_attempt(&fixture.root, tenant, &fixture.profile_id, &candidate)?.is_some());
+    assert_eq!(transport.paths.borrow().len(), 1);
     Ok(())
 }
 
