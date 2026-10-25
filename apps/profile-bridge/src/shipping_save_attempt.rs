@@ -90,6 +90,31 @@ impl ReadOnlySaveAttempt {
         &self.header.container_digest
     }
 
+    #[must_use]
+    pub(crate) fn base_generation_id(&self) -> &str {
+        &self.header.base_generation
+    }
+
+    #[must_use]
+    pub(crate) fn successor_id(&self) -> &str {
+        &self.header.successor
+    }
+
+    #[must_use]
+    pub(crate) fn object_key(&self) -> &str {
+        &self.header.object_key
+    }
+
+    #[must_use]
+    pub(crate) fn metadata_digest(&self) -> &str {
+        &self.header.metadata_digest
+    }
+
+    #[must_use]
+    pub(crate) fn container_bytes(&self) -> u64 {
+        self.header.container_bytes
+    }
+
     /// The original fencing token and session ID must never be saved verbatim
     /// as reusable credentials or exposed through diagnostic records.
     #[must_use]
