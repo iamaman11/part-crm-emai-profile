@@ -134,6 +134,43 @@ pub fn prepare_dirty_generation_candidate<K: GenerationSealingMaterialPort>(
     candidate_generation_id: &GenerationId,
     keys: &mut K,
 ) -> Result<PreparedDirtyGeneration, DirtyGenerationError> {
+    prepare_dirty_generation_candidate_inner(
+        local_record, source_workspace, root, tenant_id, profile_id,
+        candidate_generation_id, keys, false,
+    )
+}
+
+/// A verified, deterministic N+1 already created before a power cut can be
+/// reused ONLY for the ORIGINAL lone LOCAL_UNSYNCED candidate. Normal saves
+/// retain create-new semantics and never silently accept a preexisting clone.
+#[cfg(any(windows, test))]
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn prepare_recovered_local_unsynced_candidate<K: GenerationSealingMaterialPort>(
+    local_record: &LocalGenerationRecord,
+    source_workspace: &GenerationWorkspace,
+    root: &MaterializationRoot,
+    tenant_id: &TenantId,
+    profile_id: &ProfileId,
+    candidate_generation_id: &GenerationId,
+    keys: &mut K,
+) -> Result<PreparedDirtyGeneration, DirtyGenerationError> {
+    prepare_dirty_generation_candidate_inner(
+        local_record, source_workspace, root, tenant_id, profile_id,
+        candidate_generation_id, keys, true,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn prepare_dirty_generation_candidate_inner<K: GenerationSealingMaterialPort>(
+    local_record: &LocalGenerationRecord,
+    source_workspace: &GenerationWorkspace,
+    root: &MaterializationRoot,
+    tenant_id: &TenantId,
+    profile_id: &ProfileId,
+    candidate_generation_id: &GenerationId,
+    keys: &mut K,
+    allow_preexisting_verified_clone: bool,
+) -> Result<PreparedDirtyGeneration, DirtyGenerationError> {
     if local_record.state() != LocalGenerationState::DirtyLocal || !local_record.is_locked() {
         return Err(DirtyGenerationError::InvalidState);
     }
@@ -148,17 +185,35 @@ pub fn prepare_dirty_generation_candidate<K: GenerationSealingMaterialPort>(
         return Err(DirtyGenerationError::IdentityMismatch);
     }
 
-    let clone = RecoveryClone::create(
+    let (candidate_workspace, candidate_inventory) = match RecoveryClone::create(
         source_workspace,
         root,
         tenant_id,
         profile_id,
         candidate_generation_id,
-    )?;
-    let candidate_inventory = clone.verify_clone_only()?;
-    let snapshot = encode_workspace_snapshot(clone.workspace(), &candidate_inventory)
+    ) {
+        Ok(clone) => (clone.workspace().clone(), clone.verify_clone_only()?),
+        Err(LocalProfileError::TargetAlreadyExists) if allow_preexisting_verified_clone => {
+            // A complete clone may survive a crash BEFORE sealed checkpoint fsync.
+            // No replacement, repair, unlink or second candidate is permitted.
+            // Any torn/different Firefox file leaves the old LOCAL_UNSYNCED
+            // evidence untouched and blocks this attempt.
+            let existing = root.open_generation(
+                tenant_id, profile_id, candidate_generation_id,
+            )?;
+            let original_inventory = source_workspace.inventory()?;
+            if existing.inventory()? != original_inventory {
+                return Err(DirtyGenerationError::SourceChanged);
+            }
+            (existing, original_inventory)
+        }
+        Err(error) => return Err(DirtyGenerationError::Local(error)),
+    };
+    let snapshot = encode_workspace_snapshot(&candidate_workspace, &candidate_inventory)
         .map_err(map_snapshot_encode_error)?;
-    if clone.verify_clone_only()? != candidate_inventory {
+    if candidate_workspace.inventory()? != candidate_inventory
+        || source_workspace.inventory()? != candidate_inventory
+    {
         return Err(DirtyGenerationError::SourceChanged);
     }
     let plaintext_digest = PlaintextDigest::calculate(&snapshot).bytes();
@@ -191,7 +246,7 @@ pub fn prepare_dirty_generation_candidate<K: GenerationSealingMaterialPort>(
     let container_digest = digest_hex(sealed.container_digest().bytes());
 
     Ok(PreparedDirtyGeneration {
-        candidate_workspace: clone.workspace().clone(),
+        candidate_workspace,
         candidate_inventory,
         sealed,
         metadata_digest,
