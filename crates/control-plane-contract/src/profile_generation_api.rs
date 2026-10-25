@@ -421,10 +421,10 @@ fn sha256_schema() -> Value {
 mod tests {
     use super::{
         BridgeGenerationSuccessorObserveRequest, BridgeGenerationSuccessorObserveResponse,
-        BridgeGenerationSuccessorRetryDecisionRequest, BridgeGenerationSuccessorRetryDecisionResponse,
-        BridgeGenerationUploadCapabilityResponse, BridgeProfileGenerationSuccessorRequest,
-        ProfileCreateRequest, ProfileGrantRequest, ProfileProjectionDto, ProfileStatusDto,
-        RegisterGenerationRequest, openapi_fragment,
+        BridgeGenerationSuccessorRetryDecisionRequest,
+        BridgeGenerationSuccessorRetryDecisionResponse, BridgeGenerationUploadCapabilityResponse,
+        BridgeProfileGenerationSuccessorRequest, ProfileCreateRequest, ProfileGrantRequest,
+        ProfileProjectionDto, ProfileStatusDto, RegisterGenerationRequest, openapi_fragment,
     };
     use serde_json::{Value, json};
 

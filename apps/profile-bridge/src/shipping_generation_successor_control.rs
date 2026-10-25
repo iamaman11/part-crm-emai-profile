@@ -29,7 +29,8 @@ use control_plane_contract::profile_generation_api::{
     BridgeGenerationSuccessorCommitOutcomeDto, BridgeGenerationSuccessorCommitResponse,
     BridgeGenerationSuccessorObserveRequest, BridgeGenerationSuccessorObserveResponse,
     BridgeGenerationSuccessorRetryDecisionRequest, BridgeGenerationSuccessorRetryDecisionResponse,
-    BridgeGenerationSuccessorRetryVerdict, BridgeGenerationUploadCapabilityResponse, BridgeProfileGenerationSuccessorRequest,
+    BridgeGenerationSuccessorRetryVerdict, BridgeGenerationUploadCapabilityResponse,
+    BridgeProfileGenerationSuccessorRequest,
 };
 use profile_platform_primitives::{CorrelationId, GenerationId, ProfileId, TenantId};
 use session_domain::ProfileLease;
@@ -305,10 +306,9 @@ pub(crate) fn complete_active_exact_after_restart<T: MachineHttpPort>(
         if fresh_lease.epoch() <= attempt.prior_epoch() {
             return Err(RestartExactLocalCompletionError::WriterOrLockUnresolved);
         }
-        let verdict = request_fresh_retry_decision(
-            tenant_id, profile_id, &attempt, fresh_lease, transport,
-        )
-        .map_err(RestartExactLocalCompletionError::ControlPlane)?;
+        let verdict =
+            request_fresh_retry_decision(tenant_id, profile_id, &attempt, fresh_lease, transport)
+                .map_err(RestartExactLocalCompletionError::ControlPlane)?;
         return Ok(match verdict {
             BridgeGenerationSuccessorRetryVerdict::NotAppliedRetryable => {
                 RestartExactLocalCompletion::RetryDecisionConfirmedAwaitingResumption
@@ -418,7 +418,8 @@ fn request_fresh_retry_decision<T: MachineHttpPort>(
         transport,
         &successor_path(
             BRIDGE_PROFILE_GENERATION_RETRY_DECISION_PATH_TEMPLATE,
-            tenant_id, profile_id,
+            tenant_id,
+            profile_id,
         ),
         &request,
     )
@@ -429,8 +430,9 @@ fn request_fresh_retry_decision<T: MachineHttpPort>(
     if response.len() > MAX_OBSERVE_RESPONSE_BYTES {
         return Err(ShippingControlPlaneError::InvalidResponse);
     }
-    let result = serde_json::from_slice::<BridgeGenerationSuccessorRetryDecisionResponse>(&response)
-        .map_err(|_| ShippingControlPlaneError::InvalidResponse)?;
+    let result =
+        serde_json::from_slice::<BridgeGenerationSuccessorRetryDecisionResponse>(&response)
+            .map_err(|_| ShippingControlPlaneError::InvalidResponse)?;
     Ok(result.verdict)
 }
 
@@ -1274,14 +1276,19 @@ mod tests {
         let original = std::fs::read(source.path().join("prefs.js"))?;
         let mut blocked = Transport {
             responses: VecDeque::from([MachineHttpResponse::new(
-                200, br#"{"verdict":"BLOCKED"}"#.to_vec(),
+                200,
+                br#"{"verdict":"BLOCKED"}"#.to_vec(),
             )]),
             paths: Vec::new(),
         };
         assert_eq!(
             complete_active_exact_after_restart(
-                &root, &fixture.tenant, &fixture.profile, &fixture.base,
-                &fresh, &mut blocked,
+                &root,
+                &fixture.tenant,
+                &fixture.profile,
+                &fixture.base,
+                &fresh,
+                &mut blocked,
             ),
             Ok(RestartExactLocalCompletion::RetryDecisionBlocked),
         );
@@ -1289,14 +1296,19 @@ mod tests {
         assert!(blocked.paths[0].ends_with("/generation-successor/retry-decision"));
         let mut permitted = Transport {
             responses: VecDeque::from([MachineHttpResponse::new(
-                200, br#"{"verdict":"NOT_APPLIED_RETRYABLE"}"#.to_vec(),
+                200,
+                br#"{"verdict":"NOT_APPLIED_RETRYABLE"}"#.to_vec(),
             )]),
             paths: Vec::new(),
         };
         assert_eq!(
             complete_active_exact_after_restart(
-                &root, &fixture.tenant, &fixture.profile, &fixture.base,
-                &fresh, &mut permitted,
+                &root,
+                &fixture.tenant,
+                &fixture.profile,
+                &fixture.base,
+                &fresh,
+                &mut permitted,
             ),
             Ok(RestartExactLocalCompletion::RetryDecisionConfirmedAwaitingResumption),
         );
@@ -1304,13 +1316,19 @@ mod tests {
         assert!(permitted.paths[0].ends_with("/generation-successor/retry-decision"));
         assert_eq!(std::fs::read(source.path().join("prefs.js"))?, original);
         assert!(has_unresolved_save_attempt_for_profile(
-            &root, &fixture.tenant, &fixture.profile,
+            &root,
+            &fixture.tenant,
+            &fixture.profile,
         )?);
         let mut stale = Transport::default();
         assert_eq!(
             complete_active_exact_after_restart(
-                &root, &fixture.tenant, &fixture.profile, &fixture.base,
-                &fixture.lease, &mut stale,
+                &root,
+                &fixture.tenant,
+                &fixture.profile,
+                &fixture.base,
+                &fixture.lease,
+                &mut stale,
             ),
             Err(RestartExactLocalCompletionError::WriterOrLockUnresolved),
         );
