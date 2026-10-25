@@ -165,7 +165,7 @@ where
 /// Read-only server probe from crash checkpoint after a lost response.
 /// Requires fresh machine CNG authentication via the transport. Never submits
 /// the old fence, mutates the Profile, or grants permission to repeat PUT.
-pub(crate) fn observe_retained_successor_after_restart<T: MachineHttpPort>(
+pub fn observe_retained_successor_after_restart<T: MachineHttpPort>(
     root: &MaterializationRoot,
     tenant_id: &TenantId,
     profile_id: &ProfileId,
