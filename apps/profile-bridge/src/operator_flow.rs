@@ -13,7 +13,9 @@ use crate::dirty_generation::GenerationSealingMaterialPort;
 use crate::dirty_generation::PreparedDirtyGeneration;
 #[cfg(any(test, feature = "synthetic-test-bin"))]
 use crate::dirty_generation_finalize::DirtyGenerationCommitClientPort;
-use crate::generation_reopen::{GenerationObjectDownloadPort, GenerationReopenControlPort};
+use crate::generation_reopen::{
+    GenerationObjectDownloadPort, GenerationReopenControlError, GenerationReopenControlPort,
+};
 use crate::local_profile::{
     BridgeWorkspaceLock, GenerationWorkspace, LocalGenerationRecord, LocalGenerationState,
     LocalProfileError, MaterializationRoot,
@@ -434,6 +436,7 @@ where
     ) -> Result<(), OperatorFlowError>
     where
         C: GenerationReopenControlPort,
+        <C as GenerationReopenControlPort>::Error: Into<GenerationReopenControlError>,
         Dl: GenerationObjectDownloadPort,
     {
         self.open_authoritative_with_runtime_health(claim, root, downloader, now, || Ok(()))
@@ -452,6 +455,7 @@ where
     ) -> Result<(), OperatorFlowError>
     where
         C: GenerationReopenControlPort,
+        <C as GenerationReopenControlPort>::Error: Into<GenerationReopenControlError>,
         Dl: GenerationObjectDownloadPort,
         BeforeRuntime: FnMut() -> Result<(), ()>,
     {
@@ -566,8 +570,24 @@ where
             &device_id,
             lease.epoch(),
         ) {
-            // The authoritative owner reason must survive coordinator cleanup.
-            let coordinator_lease = self.coordinator.close_lease(&lease).is_err();
+            // The existing owner can certify no local write only for a failed authenticated
+            // capability read when the selected workspace was absent. Verify exact absence
+            // again here before requesting the typed no-browser-use release. Any new directory,
+            // dirty/unknown evidence, permission failure, or non-read error remains Uncertain.
+            let clean_no_use = reason.proves_no_local_write_and_absent_workspace()
+                && matches!(
+                    root.open_generation(
+                        enrollment.actor().tenant_scope().tenant_id(),
+                        enrollment.profile_id(),
+                        enrollment.generation_id(),
+                    ),
+                    Err(LocalProfileError::Io(std::io::ErrorKind::NotFound))
+                );
+            let coordinator_lease = if clean_no_use {
+                self.coordinator.close_without_browser_use(&lease).is_err()
+            } else {
+                self.coordinator.close_lease(&lease).is_err()
+            };
             let cleanup = CleanupFailures {
                 process: false,
                 workspace_lock: false,
@@ -1564,6 +1584,103 @@ mod tests {
             FakeProcessControl::default(),
             camouhost,
         ))
+    }
+
+    #[test]
+    fn missing_cache_control_read_refusal_cleanly_releases_without_runtime()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use crate::generation_reopen::GenerationReopenControlError;
+        let mut fixture = Fixture::new()?;
+        fixture.generation_id = GenerationId::parse("generation_audit_absent")?;
+        assert!(matches!(
+            fixture.root.open_generation(
+                fixture.actor.tenant_scope().tenant_id(),
+                &fixture.profile_id,
+                &fixture.generation_id,
+            ),
+            Err(LocalProfileError::Io(std::io::ErrorKind::NotFound))
+        ));
+        let mut operator = operator(&fixture, FakeCamouhost::default())?;
+        let mut runtime_health_started = false;
+        let result = operator.open_with_materialization(
+            &fixture.claim_uri,
+            &fixture.root,
+            UnixMillis::new(10),
+            |_coordinator, _tenant, _profile, _generation, _device, _epoch| {
+                Err(AuthoritativeGenerationMaterializationError::ControlPlaneBeforeLocalUse(
+                    GenerationReopenControlError::Transport,
+                ))
+            },
+            || {
+                runtime_health_started = true;
+                Ok(())
+            },
+        );
+        assert!(matches!(result, Err(OperatorFlowError::AuthoritativeGeneration { .. })));
+        assert!(!runtime_health_started);
+        assert!(operator.process().actions().is_empty());
+        assert_eq!(operator.coordinator().closed, 1);
+        assert_eq!(operator.coordinator().clean_closed, 1);
+        assert!(!operator.cleanup_blocked());
+        Ok(())
+    }
+
+    #[test]
+    fn ambiguous_or_new_local_workspace_refuses_clean_materialization_cancel()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use crate::generation_reopen::GenerationReopenControlError;
+        for create_during_attempt in [false, true] {
+            let mut fixture = Fixture::new()?;
+            if create_during_attempt {
+                fixture.generation_id = GenerationId::parse("generation_raced_workspace")?;
+            }
+            let root = &fixture.root;
+            let mut operator = operator(&fixture, FakeCamouhost::default())?;
+            let result = operator.open_with_materialization(
+                &fixture.claim_uri,
+                root,
+                UnixMillis::new(10),
+                |_coordinator, tenant, profile, generation, _device, _epoch| {
+                    if create_during_attempt {
+                        root.create_generation(tenant, profile, generation)
+                            .expect("fault-injected foreign workspace");
+                    }
+                    Err(AuthoritativeGenerationMaterializationError::ControlPlaneBeforeLocalUse(
+                        GenerationReopenControlError::HttpStatus,
+                    ))
+                },
+                || Ok(()),
+            );
+            assert!(matches!(result, Err(OperatorFlowError::AuthoritativeGeneration { .. })));
+            assert_eq!(operator.coordinator().closed, 1);
+            assert_eq!(operator.coordinator().clean_closed, 0);
+            assert!(operator.process().actions().is_empty());
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn unproven_missing_cache_refusal_stays_uncertain()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use crate::generation_reopen::GenerationReopenControlError;
+        let mut fixture = Fixture::new()?;
+        fixture.generation_id = GenerationId::parse("generation_unknown_absent")?;
+        let mut operator = operator(&fixture, FakeCamouhost::default())?;
+        let result = operator.open_with_materialization(
+            &fixture.claim_uri,
+            &fixture.root,
+            UnixMillis::new(10),
+            |_coordinator, _tenant, _profile, _generation, _device, _epoch| {
+                Err(AuthoritativeGenerationMaterializationError::ControlPlane(
+                    GenerationReopenControlError::InvalidResponse,
+                ))
+            },
+            || Ok(()),
+        );
+        assert!(matches!(result, Err(OperatorFlowError::AuthoritativeGeneration { .. })));
+        assert_eq!(operator.coordinator().closed, 1);
+        assert_eq!(operator.coordinator().clean_closed, 0);
+        Ok(())
     }
 
     #[test]
