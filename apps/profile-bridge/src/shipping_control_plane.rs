@@ -1196,7 +1196,6 @@ mod tests {
         }
     }
 
-
     #[derive(Default)]
     struct LostHeartbeatResponseTransport {
         requests: Vec<Vec<u8>>,
@@ -1214,8 +1213,7 @@ mod tests {
             body: Option<&[u8]>,
         ) -> Result<MachineHttpResponse, Self::Error> {
             assert_eq!(method, MachineHttpMethod::PostJson);
-            self.requests
-                .push(body.ok_or(())?.to_vec());
+            self.requests.push(body.ok_or(())?.to_vec());
             if self.requests.len() == 1 {
                 // The server has accepted the command but the HTTP reply
                 // vanishes before Bridge receives it.
@@ -1294,7 +1292,14 @@ mod tests {
             coordinator.heartbeat_lease(&lease),
             Err(ShippingControlPlaneError::Transport)
         );
-        assert!(coordinator.cursor.as_ref().ok_or("missing cursor")?.pending_heartbeat.is_some());
+        assert!(
+            coordinator
+                .cursor
+                .as_ref()
+                .ok_or("missing cursor")?
+                .pending_heartbeat
+                .is_some()
+        );
         // The original coordinator expiry remains untouched after the loss.
         assert_eq!(coordinator.runtime_timing()?.idle_expires_at_ms(), 30_000);
         coordinator.heartbeat_lease(&lease)?;
@@ -1307,8 +1312,18 @@ mod tests {
             serde_json::from_slice(&coordinator.transport.requests[0])?;
         assert_eq!(actual.expected_version, 11);
         assert_eq!(actual.sequence, 14);
-        assert!(matches!(actual.command, CoordinatorCommandDto::Heartbeat { .. }));
-        assert!(coordinator.cursor.as_ref().ok_or("missing cursor")?.pending_heartbeat.is_none());
+        assert!(matches!(
+            actual.command,
+            CoordinatorCommandDto::Heartbeat { .. }
+        ));
+        assert!(
+            coordinator
+                .cursor
+                .as_ref()
+                .ok_or("missing cursor")?
+                .pending_heartbeat
+                .is_none()
+        );
         assert_eq!(coordinator.runtime_timing()?.idle_expires_at_ms(), 60_000);
         Ok(())
     }
