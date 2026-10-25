@@ -502,20 +502,46 @@ pub(crate) fn persist_exact_save_attempt(
         .and_then(|_| file.sync_all());
     drop(file);
     if let Err(error) = write_result {
-        let _ = fs::remove_file(&path);
+        // Do not delete the only scoped indication of an interrupted
+        // checkpoint write. This may be torn evidence, NEVER an authority
+        // to retry; fresh startup must fence the original Firefox bytes.
         return Err(error.into());
     }
 
-    // Hardlink publishes complete synced bytes without replacing another
-    // actor's existing record, on Windows and POSIX same-volume filesystems.
-    let publication = fs::hard_link(&path, &canonical);
-    // Failed stage cleanup is an explicit save failure. Unknown files stay
-    // untouched; no broad orphan sweeper is allowed here.
-    fs::remove_file(&path)?;
+    // Publish synced bytes without replacing an existing checkpoint.
+    // On failure the staged ciphertext is the only durable local evidence;
+    // never unlink it before the canonical checkpoint has been verified.
+    finish_exact_checkpoint_publication(
+        &path,
+        &canonical,
+        &header_bytes,
+        ciphertext,
+        fs::hard_link(&path, &canonical),
+    )
+}
+
+/// Fail-closed no-replace checkpoint publication, in the existing Bridge
+/// save-attempt owner (not another state machine or a cleanup service).
+/// Neither a rejected link nor a mismatched canonical file may erase the
+/// only fsynced exact candidate. A remaining pending sibling blocks Open.
+fn finish_exact_checkpoint_publication(
+    stage: &PathBuf,
+    canonical: &PathBuf,
+    header_bytes: &[u8],
+    ciphertext: &[u8],
+    publication: std::io::Result<()>,
+) -> Result<(), SaveAttemptEvidenceError> {
     match publication {
-        Ok(()) => Ok(()),
+        Ok(()) => {
+            fs::remove_file(stage)?;
+            Ok(())
+        }
         Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
-            verify_existing_exact(&canonical, &header_bytes, ciphertext)
+            verify_existing_exact(canonical, header_bytes, ciphertext)?;
+            // Only a byte-identical full checkpoint can substitute the
+            // staged candidate, otherwise retain both as conflict evidence.
+            fs::remove_file(stage)?;
+            Ok(())
         }
         Err(error) => Err(error.into()),
     }
@@ -952,11 +978,60 @@ fn hex(bytes: &[u8]) -> String {
 mod local_unsynced_publication_tests {
     use super::{
         LocalUnsyncedIntent, STAGE_SEQUENCE, SaveAttemptEvidenceError,
-        finish_local_unsynced_publication,
+        finish_exact_checkpoint_publication, finish_local_unsynced_publication,
     };
     use std::fs::{self, File};
     use std::io::{Error, ErrorKind, Write};
     use std::sync::atomic::Ordering;
+
+    #[test]
+    fn refused_exact_checkpoint_hardlink_preserves_fsynced_ciphertext()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let dir = std::env::temp_dir().join(format!(
+            "bridge-exact-checkpoint-publish-{}-{}",
+            std::process::id(),
+            STAGE_SEQUENCE.fetch_add(1, Ordering::Relaxed),
+        ));
+        fs::create_dir_all(&dir)?;
+        let stage = dir.join(".profile-save-attempt-v1-abc.pending-checkpoint");
+        let canonical = dir.join(".profile-save-attempt-v1-abc-checkpoint.bin");
+        let serialized = b"original-fsynced-encrypted-attempt";
+        let mut file = File::create(&stage)?;
+        file.write_all(serialized)?;
+        file.sync_all()?;
+        drop(file);
+
+        assert_eq!(
+            finish_exact_checkpoint_publication(
+                &stage,
+                &canonical,
+                b"original-header",
+                b"original-ciphertext",
+                Err(Error::from(ErrorKind::PermissionDenied)),
+            ),
+            Err(SaveAttemptEvidenceError::Io(ErrorKind::PermissionDenied)),
+        );
+        assert_eq!(fs::read(&stage)?, serialized);
+        assert!(!canonical.exists());
+
+        // An incompatible canonical checkpoint is not an excuse to unlink
+        // the only complete staged ciphertext. Neither file is trusted.
+        fs::write(&canonical, b"foreign-or-torn")?;
+        assert_eq!(
+            finish_exact_checkpoint_publication(
+                &stage,
+                &canonical,
+                b"original-header",
+                b"original-ciphertext",
+                Err(Error::from(ErrorKind::AlreadyExists)),
+            ),
+            Err(SaveAttemptEvidenceError::Invalid),
+        );
+        assert_eq!(fs::read(&stage)?, serialized);
+        assert_eq!(fs::read(&canonical)?, b"foreign-or-torn");
+        fs::remove_dir_all(dir)?;
+        Ok(())
+    }
 
     #[test]
     fn refused_hardlink_keeps_the_only_fsynced_local_intent()
