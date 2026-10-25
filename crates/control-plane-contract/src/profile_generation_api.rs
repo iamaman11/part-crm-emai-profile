@@ -462,8 +462,7 @@ mod tests {
             let mut invalid = exact.clone();
             invalid[forbidden] = json!("untrusted");
             assert!(
-                serde_json::from_value::<BridgeGenerationSuccessorObserveRequest>(invalid)
-                    .is_err()
+                serde_json::from_value::<BridgeGenerationSuccessorObserveRequest>(invalid).is_err()
             );
         }
         assert!(
