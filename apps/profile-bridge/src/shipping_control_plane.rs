@@ -1261,6 +1261,7 @@ mod tests {
     #[derive(Default)]
     struct LostHeartbeatResponseTransport {
         requests: Vec<Vec<u8>>,
+        first_response: Option<MachineHttpResponse>,
         replay: Option<MachineHttpResponse>,
         snapshot: Option<MachineHttpResponse>,
         snapshot_reads: u64,
@@ -1284,9 +1285,9 @@ mod tests {
             assert_eq!(method, MachineHttpMethod::PostJson);
             self.requests.push(body.ok_or(())?.to_vec());
             if self.requests.len() == 1 {
-                // The server has accepted the command but the HTTP reply
-                // vanishes before Bridge receives it.
-                Err(())
+                // Either transport dropped the first reply, or an upstream
+                // timeout/throttle/5xx was received after a possible commit.
+                self.first_response.take().ok_or(())
             } else {
                 self.replay.take().ok_or(())
             }
@@ -1339,80 +1340,88 @@ mod tests {
         fresh.fencing_token = None;
         fresh.epoch = None;
         let snapshot = MachineHttpResponse::new(200, serde_json::to_vec(&fresh)?);
-        let mut coordinator = ControlPlaneCoordinator {
-            transport: LostHeartbeatResponseTransport {
-                requests: Vec::new(),
-                replay: Some(replay),
-                snapshot: Some(snapshot),
-                snapshot_reads: 0,
-            },
-            cursor: Some(CoordinatorCursor {
-                tenant_id,
-                profile_id,
-                device_id,
-                session_id,
-                epoch: 7,
-                fencing_token: fencing,
-                version: 11,
-                sequence: 13,
-                timing: ControlPlaneLeaseTiming {
-                    idle_expires_at_ms: 30_000,
-                    hard_expires_at_ms: 900_000,
+        // All these first-call outcomes share the same idempotent recovery
+        // path. No initial result extends the confirmed lease.
+        for initial_status in [None, Some(408), Some(429), Some(503)] {
+            let mut coordinator = ControlPlaneCoordinator {
+                transport: LostHeartbeatResponseTransport {
+                    requests: Vec::new(),
+                    first_response: initial_status
+                        .map(|status| MachineHttpResponse::new(status, Vec::new())),
+                    replay: Some(replay.clone()),
+                    snapshot: Some(snapshot.clone()),
+                    snapshot_reads: 0,
                 },
-                pending_heartbeat: None,
-            }),
-        };
-        assert_eq!(
-            coordinator.heartbeat_lease(&lease),
-            Err(ShippingControlPlaneError::Transport)
-        );
-        assert!(
-            coordinator
-                .cursor
-                .as_ref()
-                .ok_or("missing cursor")?
-                .pending_heartbeat
-                .is_some()
-        );
-        // The original coordinator expiry remains untouched after the loss.
-        assert_eq!(coordinator.runtime_timing()?.idle_expires_at_ms(), 30_000);
-        coordinator.heartbeat_lease(&lease)?;
-        assert_eq!(coordinator.transport.requests.len(), 2);
-        assert_eq!(coordinator.transport.snapshot_reads, 1);
-        assert_eq!(
-            coordinator.transport.requests[0],
-            coordinator.transport.requests[1]
-        );
-        let actual: CoordinatorCommandRequestDto =
-            serde_json::from_slice(&coordinator.transport.requests[0])?;
-        assert_eq!(actual.expected_version, 11);
-        assert_eq!(actual.sequence, 14);
-        assert!(matches!(
-            actual.command,
-            CoordinatorCommandDto::Heartbeat { .. }
-        ));
-        assert!(
-            coordinator
-                .cursor
-                .as_ref()
-                .ok_or("missing cursor")?
-                .pending_heartbeat
-                .is_none()
-        );
-        assert_eq!(coordinator.runtime_timing()?.idle_expires_at_ms(), 60_000);
+                cursor: Some(CoordinatorCursor {
+                    tenant_id: tenant_id.clone(),
+                    profile_id: profile_id.clone(),
+                    device_id: device_id.clone(),
+                    session_id: session_id.clone(),
+                    epoch: 7,
+                    fencing_token: fencing.clone(),
+                    version: 11,
+                    sequence: 13,
+                    timing: ControlPlaneLeaseTiming {
+                        idle_expires_at_ms: 30_000,
+                        hard_expires_at_ms: 900_000,
+                    },
+                    pending_heartbeat: None,
+                }),
+            };
+            let first_error = if initial_status.is_some() {
+                ShippingControlPlaneError::HttpServerUncertain
+            } else {
+                ShippingControlPlaneError::Transport
+            };
+            assert_eq!(coordinator.heartbeat_lease(&lease), Err(first_error));
+            assert!(coordinator.heartbeat_transport_uncertain(&first_error));
+            assert!(
+                coordinator
+                    .cursor
+                    .as_ref()
+                    .ok_or("missing cursor")?
+                    .pending_heartbeat
+                    .is_some()
+            );
+            assert_eq!(coordinator.runtime_timing()?.idle_expires_at_ms(), 30_000);
+            coordinator.heartbeat_lease(&lease)?;
+            assert_eq!(coordinator.transport.requests.len(), 2);
+            assert_eq!(coordinator.transport.snapshot_reads, 1);
+            assert_eq!(
+                coordinator.transport.requests[0],
+                coordinator.transport.requests[1]
+            );
+            let actual: CoordinatorCommandRequestDto =
+                serde_json::from_slice(&coordinator.transport.requests[0])?;
+            assert_eq!(actual.expected_version, 11);
+            assert_eq!(actual.sequence, 14);
+            assert!(matches!(
+                actual.command,
+                CoordinatorCommandDto::Heartbeat { .. }
+            ));
+            assert!(
+                coordinator
+                    .cursor
+                    .as_ref()
+                    .ok_or("missing cursor")?
+                    .pending_heartbeat
+                    .is_none()
+            );
+            assert_eq!(coordinator.runtime_timing()?.idle_expires_at_ms(), 60_000);
 
-        // A historical successful heartbeat can be replayed after another
-        // writer has taken over. Exact idempotency alone must never validate
-        // the *current* authority without a fresh read-only coordinator proof.
-        fresh.projection.active_session_id = Some("session_foreign_heartbeat".to_owned());
-        coordinator.transport.snapshot =
-            Some(MachineHttpResponse::new(200, serde_json::to_vec(&fresh)?));
-        let cursor = coordinator.cursor.as_ref().ok_or("missing cursor")?.clone();
-        assert_eq!(
-            coordinator.prove_replayed_heartbeat_is_still_current(&cursor, &original),
-            Err(ShippingControlPlaneError::InvalidResponse)
-        );
-        assert_eq!(coordinator.transport.snapshot_reads, 2);
+            // A historical successful heartbeat may replay AFTER a foreign
+            // writer takes over; the fresh coordinator read must reject it.
+            let mut foreign = fresh.clone();
+            foreign.projection.active_session_id = Some("session_foreign_heartbeat".to_owned());
+            coordinator.transport.snapshot =
+                Some(MachineHttpResponse::new(200, serde_json::to_vec(&foreign)?));
+            let cursor = coordinator.cursor.as_ref().ok_or("missing cursor")?.clone();
+            assert_eq!(
+                coordinator.prove_replayed_heartbeat_is_still_current(&cursor, &original),
+                Err(ShippingControlPlaneError::InvalidResponse)
+            );
+            assert_eq!(coordinator.transport.snapshot_reads, 2);
+        }
         Ok(())
     }
 
