@@ -1290,29 +1290,29 @@ mod tests {
             fencing.clone(),
         )?;
         let original = CoordinatorResponseDto {
-                outcome: CoordinatorOutcomeDto::HeartbeatAccepted,
+            outcome: CoordinatorOutcomeDto::HeartbeatAccepted,
+            version: 12,
+            sequence: 14,
+            replayed: true,
+            fencing_token: Some(fencing.as_str().to_owned()),
+            epoch: Some(7),
+            projection: CoordinatorProjectionDto {
+                tenant_id: tenant_id.as_str().to_owned(),
+                profile_id: profile_id.as_str().to_owned(),
+                status: CoordinatorStatusDto::Active,
                 version: 12,
                 sequence: 14,
-                replayed: true,
-                fencing_token: Some(fencing.as_str().to_owned()),
-                epoch: Some(7),
-                projection: CoordinatorProjectionDto {
-                    tenant_id: tenant_id.as_str().to_owned(),
-                    profile_id: profile_id.as_str().to_owned(),
-                    status: CoordinatorStatusDto::Active,
-                    version: 12,
-                    sequence: 14,
-                    next_epoch: 8,
-                    active_session_id: Some(session_id.as_str().to_owned()),
-                    active_device_id: Some(device_id.as_str().to_owned()),
-                    active_epoch: Some(7),
-                    idle_expires_at_ms: Some(60_000),
-                    hard_expires_at_ms: Some(900_000),
-                    drain_deadline_ms: None,
-                    pending_launch_intent_id: None,
-                    pending_intent_expires_at_ms: None,
-                },
-            };
+                next_epoch: 8,
+                active_session_id: Some(session_id.as_str().to_owned()),
+                active_device_id: Some(device_id.as_str().to_owned()),
+                active_epoch: Some(7),
+                idle_expires_at_ms: Some(60_000),
+                hard_expires_at_ms: Some(900_000),
+                drain_deadline_ms: None,
+                pending_launch_intent_id: None,
+                pending_intent_expires_at_ms: None,
+            },
+        };
         let replay = MachineHttpResponse::new(200, serde_json::to_vec(&original)?);
         let mut fresh = original.clone();
         fresh.outcome = CoordinatorOutcomeDto::Snapshot;
