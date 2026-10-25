@@ -221,6 +221,9 @@ struct CoordinatorCursor {
     version: u64,
     sequence: u64,
     timing: ControlPlaneLeaseTiming,
+    // One exact idempotent command may have reached DO while its HTTP reply
+    // was lost. Never mint a second heartbeat key/sequence during retry.
+    pending_heartbeat: Option<CoordinatorCommandRequestDto>,
 }
 
 pub struct ControlPlaneCoordinator<T> {
@@ -379,6 +382,7 @@ where
             device_id,
             &session_id,
             sequence,
+            false,
         )?;
         if response.epoch != Some(epoch) {
             return Err(Self::Error::InvalidResponse);
@@ -409,6 +413,7 @@ where
             version: response.version,
             sequence: response.sequence,
             timing,
+            pending_heartbeat: None,
         });
         Ok(lease)
     }
@@ -439,21 +444,37 @@ where
             .filter(|value| cursor_matches_lease(value, lease))
             .cloned()
             .ok_or(Self::Error::InvalidResponse)?;
-        let sequence = cursor
-            .sequence
-            .checked_add(1)
-            .ok_or(Self::Error::InvalidResponse)?;
-        let request = CoordinatorCommandRequestDto {
-            idempotency_key: next_idempotency_key()?.as_str().to_owned(),
-            sequence,
-            expected_version: cursor.version,
-            command: CoordinatorCommandDto::Heartbeat {
-                session_id: cursor.session_id.as_str().to_owned(),
-                epoch: cursor.epoch,
-                fencing_token: cursor.fencing_token.as_str().to_owned(),
-            },
+        let pending = cursor.pending_heartbeat.is_some();
+        let request = if let Some(unknown) = cursor.pending_heartbeat.clone() {
+            unknown
+        } else {
+            let sequence = cursor
+                .sequence
+                .checked_add(1)
+                .ok_or(Self::Error::InvalidResponse)?;
+            CoordinatorCommandRequestDto {
+                idempotency_key: next_idempotency_key()?.as_str().to_owned(),
+                sequence,
+                expected_version: cursor.version,
+                command: CoordinatorCommandDto::Heartbeat {
+                    session_id: cursor.session_id.as_str().to_owned(),
+                    epoch: cursor.epoch,
+                    fencing_token: cursor.fencing_token.as_str().to_owned(),
+                },
+            }
         };
-        let response = self.command(&cursor.tenant_id, &cursor.profile_id, &request)?;
+        let response = match self.command(&cursor.tenant_id, &cursor.profile_id, &request) {
+            Ok(response) => response,
+            Err(ShippingControlPlaneError::Transport) => {
+                // Retain this exact command for the ONLY bounded caller retry.
+                // The server may already have applied it before the response
+                // was lost. A new idempotency key would produce false conflict.
+                let current = self.cursor.as_mut().ok_or(Self::Error::InvalidResponse)?;
+                current.pending_heartbeat = Some(request);
+                return Err(ShippingControlPlaneError::Transport);
+            }
+            Err(error) => return Err(error),
+        };
         let (epoch, timing) = validate_active_projection(
             &response,
             CoordinatorOutcomeDto::HeartbeatAccepted,
@@ -461,7 +482,8 @@ where
             &cursor.profile_id,
             &cursor.device_id,
             &cursor.session_id,
-            sequence,
+            request.sequence,
+            pending,
         )?;
         if epoch != cursor.epoch
             || response.epoch.is_some_and(|value| value != cursor.epoch)
@@ -476,6 +498,7 @@ where
         current.version = response.version;
         current.sequence = response.sequence;
         current.timing = timing;
+        current.pending_heartbeat = None;
         Ok(())
     }
 
@@ -891,9 +914,10 @@ fn validate_active_projection(
     device_id: &DeviceId,
     session_id: &SessionId,
     expected_sequence: u64,
+    allow_exact_idempotent_replay: bool,
 ) -> Result<(u64, ControlPlaneLeaseTiming), ShippingControlPlaneError> {
     if response.outcome != expected_outcome
-        || response.replayed
+        || (response.replayed && !allow_exact_idempotent_replay)
         || response.sequence != expected_sequence
         || response.version == 0
         || response.projection.tenant_id != tenant_id.as_str()
