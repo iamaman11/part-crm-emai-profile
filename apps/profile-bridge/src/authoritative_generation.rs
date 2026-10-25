@@ -609,7 +609,8 @@ mod tests {
                 &mut control,
                 &mut DisconnectedObjectGet(reason),
             )
-            .expect_err("object GET failed before local write");
+            .err()
+            .ok_or_else(|| std::io::Error::other("object GET failed before local write"))?;
             assert_eq!(
                 error,
                 AuthoritativeGenerationMaterializationError::ReadBeforeLocalUse(
@@ -663,7 +664,8 @@ mod tests {
             &mut control,
             &mut DisconnectedObjectGet,
         )
-        .expect_err("incomplete workspace retained");
+        .err()
+        .ok_or_else(|| std::io::Error::other("incomplete workspace retained"))?;
         assert_eq!(
             error,
             AuthoritativeGenerationMaterializationError::Download(
@@ -723,7 +725,8 @@ mod tests {
                 &mut control,
                 &mut downloader,
             )
-            .expect_err("invalid generation cannot publish");
+            .err()
+            .ok_or_else(|| std::io::Error::other("invalid generation cannot publish"))?;
             assert_eq!(
                 refusal,
                 AuthoritativeGenerationMaterializationError::ReadBeforeLocalUse(expected),
@@ -772,7 +775,8 @@ mod tests {
             &mut control,
             &mut MalformedObjectGet,
         )
-        .expect_err("malformed encrypted object is rejected before publication");
+        .err()
+        .ok_or_else(|| std::io::Error::other("malformed encrypted object is rejected before publication"))?;
         assert_eq!(
             refusal,
             AuthoritativeGenerationMaterializationError::ReadBeforeLocalUse(
