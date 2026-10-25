@@ -14,8 +14,8 @@ use crate::shipping_control_plane::{MachineHttpMethod, MachineHttpPort, MachineH
 use crate::shipping_generation_save::{
     SignedGenerationObjectPutPort, SignedGenerationUploadCapability,
 };
-use crate::{FakeCamouhost, FakeDeviceIdentity, FakeDeviceKeyStore, FakeProcessControl};
 use crate::test_support::browser_identity_fixture;
+use crate::{FakeCamouhost, FakeDeviceIdentity, FakeDeviceKeyStore, FakeProcessControl};
 use application_ports::ProfileCoordinatorPort;
 use bridge_domain::{BridgePortError, ClaimCode, ClaimUri, EnrollmentClaim};
 use control_plane_contract::profile_generation_api::{
