@@ -405,6 +405,8 @@ mod tests {
                 key_id: self.key_id.clone(),
                 key_bytes: self.key_bytes,
                 opening_calls: 0,
+                capability_error: None,
+                opening_error: None,
             }
         }
 
@@ -424,6 +426,8 @@ mod tests {
         key_id: KeyId,
         key_bytes: [u8; 32],
         opening_calls: u64,
+        capability_error: Option<GenerationReopenControlError>,
+        opening_error: Option<GenerationReopenControlError>,
     }
 
     impl GenerationReopenControlPort for FakeControl {
@@ -434,6 +438,9 @@ mod tests {
             tenant_id: &TenantId,
             profile_id: &ProfileId,
         ) -> Result<GenerationDownloadCapability, Self::Error> {
+            if let Some(reason) = self.capability_error {
+                return Err(reason);
+            }
             if tenant_id != &self.tenant_id || profile_id != &self.profile_id {
                 return Err(GenerationReopenControlError::InvalidResponse);
             }
@@ -454,6 +461,9 @@ mod tests {
             profile_id: &ProfileId,
             _metadata_prelude: &[u8],
         ) -> Result<GenerationDek, Self::Error> {
+            if let Some(reason) = self.opening_error {
+                return Err(reason);
+            }
             if tenant_id != &self.tenant_id || profile_id != &self.profile_id {
                 return Err(GenerationReopenControlError::InvalidResponse);
             }
@@ -483,6 +493,111 @@ mod tests {
             self.calls += 1;
             Ok(self.container.clone())
         }
+    }
+
+    #[test]
+    fn remote_read_refusal_distinguishes_absent_and_incomplete_local_evidence()
+    -> Result<(), Box<dyn std::error::Error>> {
+        for reason in [
+            GenerationReopenControlError::Transport,
+            GenerationReopenControlError::HttpStatus,
+            GenerationReopenControlError::InvalidResponse,
+        ] {
+            let fixture = Fixture::new()?;
+            let mut control = fixture.control();
+            control.capability_error = Some(reason);
+            let mut downloader = FakeDownloader {
+                container: fixture.container.clone(),
+                calls: 0,
+            };
+            let refusal = ensure_authoritative_generation(
+                &fixture.root,
+                &fixture.tenant_id,
+                &fixture.profile_id,
+                &fixture.generation_id,
+                &DeviceId::parse("device_remote_read_failure")?,
+                1,
+                &mut control,
+                &mut downloader,
+            );
+            assert_eq!(
+                refusal,
+                Err(AuthoritativeGenerationMaterializationError::ControlPlaneBeforeLocalUse(reason))
+            );
+            assert!(matches!(
+                fixture.root.open_generation(
+                    &fixture.tenant_id,
+                    &fixture.profile_id,
+                    &fixture.generation_id,
+                ),
+                Err(crate::local_profile::LocalProfileError::Io(std::io::ErrorKind::NotFound))
+            ));
+            assert_eq!(downloader.calls, 0);
+            assert_eq!(control.opening_calls, 0);
+            fixture.cleanup();
+        }
+
+        let fixture = Fixture::new()?;
+        let workspace = fixture.root.create_generation(
+            &fixture.tenant_id,
+            &fixture.profile_id,
+            &fixture.generation_id,
+        )?;
+        let mut control = fixture.control();
+        control.capability_error = Some(GenerationReopenControlError::HttpStatus);
+        let mut downloader = FakeDownloader {
+            container: fixture.container.clone(),
+            calls: 0,
+        };
+        assert_eq!(
+            ensure_authoritative_generation(
+                &fixture.root,
+                &fixture.tenant_id,
+                &fixture.profile_id,
+                &fixture.generation_id,
+                &DeviceId::parse("device_local_evidence_failure")?,
+                1,
+                &mut control,
+                &mut downloader,
+            ),
+            Err(AuthoritativeGenerationMaterializationError::ControlPlane(
+                GenerationReopenControlError::HttpStatus
+            ))
+        );
+        assert!(workspace.path().exists());
+        fixture.cleanup();
+        Ok(())
+    }
+
+    #[test]
+    fn opening_material_invalid_response_is_typed_and_cannot_claim_clean_release()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let fixture = Fixture::new()?;
+        let mut control = fixture.control();
+        control.opening_error = Some(GenerationReopenControlError::InvalidResponse);
+        let mut downloader = FakeDownloader {
+            container: fixture.container.clone(),
+            calls: 0,
+        };
+        assert_eq!(
+            ensure_authoritative_generation(
+                &fixture.root,
+                &fixture.tenant_id,
+                &fixture.profile_id,
+                &fixture.generation_id,
+                &DeviceId::parse("device_opening_reject")?,
+                1,
+                &mut control,
+                &mut downloader,
+            ),
+            Err(AuthoritativeGenerationMaterializationError::ControlPlane(
+                GenerationReopenControlError::InvalidResponse
+            ))
+        );
+        assert_eq!(downloader.calls, 1);
+        assert_eq!(control.opening_calls, 0);
+        fixture.cleanup();
+        Ok(())
     }
 
     #[test]
