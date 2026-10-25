@@ -193,6 +193,55 @@ Shipping composition preserves the typed operator failure through the CLI. Safe 
 codes identify the failed phase; closed owner outcomes preserve cleanup/recovery details without raw
 claims, profile data or local paths. Close-observation failure never fabricates a controlled close.
 
+
+**Accepted separation of responsibilities — lease != save trigger (2026-10-25):**
+
+1. Coordinator heartbeat is a minimal, bounded, server-authoritative renewal of
+   the **currently active** device/session/epoch/fence and single-writer lease.
+   Its only outcomes are confirmed renewal, confirmed refusal/loss, or
+   transport/dependency uncertainty. It is neither a browser-close observer,
+   a profile-dirty signal, nor permission to publish an otherwise unverified
+   generation. Do not introduce per-file/polling cloud sync or duplicate leases.
+2. Bridge independently supervises the controlled native Firefox process. A
+   witnessed normal close is the **automatic** save trigger: quiesce and
+   confirm all Firefox writers/locks are gone, retain the same working
+   `user_data` and durable unsynced intent, then perform encrypted generation
+   upload, storage verification, authoritative CAS/commit, and truthful status.
+   The entire save must still have **fresh** allowed ownership/effect authority.
+   Do not wait for a heartbeat tick to notice close, and do not equate a
+   completed close with `Saved`.
+3. Unexpected browser/Bridge exit, Windows shutdown or sudden power loss is
+   **not** a controlled-close witness and cannot guarantee immediate cloud
+   upload. The original local working bytes, Firefox WAL/session state and
+   unsynced/recovery evidence survive; on restart, fresh process/lock, device,
+   ACL, coordinator, active-generation and conflict checks decide whether
+   same-directory native Firefox recovery or an authorized deferred save can
+   proceed. No fresh cloud download may overwrite unsynced local state.
+4. During transient coordinator timeouts or HTTP 5xx, do not assert a revoke,
+   invent a successful renewal, change the expiry, or discard local bytes.
+   Permit at most a **bounded** same-idempotency retry before an
+   `AUTHORITY_UNKNOWN` quiescence/recovery boundary; no unproven remote
+   publication or second writer. An explicit 401/403/409, confirmed fence
+   replacement/revoke, or passed authoritative expiry requires stop/fencing,
+   with safe graceful close where possible. A browser close during uncertain
+   authority retains unsynced files rather than performing a speculative save.
+5. The UI must distinguish browser closed, locally recoverable/unsynced,
+   cloud-verified saved, and recovery/conflict; heartbeat acknowledgements,
+   HTTP request completion and local checkpoint existence are **not** `Saved`
+   proof. Remote N-1 and independently recoverable keys remain required.
+
+**Required regression proof:** independently simulate normal close with
+healthy lease (single upload/commit and truthful `Saved`), long live browsing
+with many heartbeats but no close (no save), close racing with uncertain
+heartbeat (no stale publish; local bytes retained), short transport flap and
+5xx (same command/idempotency retry, no fabricated renewal), explicit
+401/403/409/stale fence/two-device contest (no unauthorized writes), Windows
+shutdown/kill/crash (native same-directory recovery after fresh authorization,
+no deleted WAL/SQLite), and a lost upload/commit response (exact authorized
+reconciliation, no duplicate generation and no false `Saved`). Deterministic
+unit/integration tests are necessary; installed Windows and current authorized
+staging proof remain mandatory to close #802.
+
 While a browser is active:
 
 1. the supervised process must still belong to the exact active session;
