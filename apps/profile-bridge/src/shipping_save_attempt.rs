@@ -38,6 +38,19 @@ impl From<std::io::Error> for SaveAttemptEvidenceError {
     }
 }
 
+impl std::fmt::Display for SaveAttemptEvidenceError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Io(kind) => write!(formatter, "save-attempt local I/O failure: {kind:?}"),
+            Self::Invalid => formatter.write_str("save-attempt evidence is invalid"),
+            Self::Changed => formatter.write_str("save-attempt workspace or bytes changed"),
+            Self::Unavailable => formatter.write_str("save-attempt atomic staging unavailable"),
+        }
+    }
+}
+
+impl std::error::Error for SaveAttemptEvidenceError {}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct AttemptHeader {
