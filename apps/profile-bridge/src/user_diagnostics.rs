@@ -419,23 +419,33 @@ mod tests {
             (Reason::LocalAccessDenied, "BRIDGE_LOCAL_CACHE_INACCESSIBLE"),
             (Reason::Download, "BRIDGE_GENERATION_DOWNLOAD_FAILED"),
             (
-                Reason::ControlPlane(crate::generation_reopen::GenerationReopenControlError::Transport),
+                Reason::ControlPlane(
+                    crate::generation_reopen::GenerationReopenControlError::Transport,
+                ),
                 "BRIDGE_SERVICE_UNREACHABLE",
             ),
             (
-                Reason::ControlPlane(crate::generation_reopen::GenerationReopenControlError::HttpStatus),
+                Reason::ControlPlane(
+                    crate::generation_reopen::GenerationReopenControlError::HttpStatus,
+                ),
                 "BRIDGE_GENERATION_REQUEST_REJECTED",
             ),
             (
-                Reason::ControlPlane(crate::generation_reopen::GenerationReopenControlError::InvalidResponse),
+                Reason::ControlPlane(
+                    crate::generation_reopen::GenerationReopenControlError::InvalidResponse,
+                ),
                 "BRIDGE_GENERATION_RESPONSE_INVALID",
             ),
             (
-                Reason::ControlPlaneBeforeLocalUse(crate::generation_reopen::GenerationReopenControlError::HttpStatus),
+                Reason::ControlPlaneBeforeLocalUse(
+                    crate::generation_reopen::GenerationReopenControlError::HttpStatus,
+                ),
                 "BRIDGE_GENERATION_REQUEST_REJECTED",
             ),
             (
-                Reason::ControlPlaneBeforeLocalUse(crate::generation_reopen::GenerationReopenControlError::InvalidResponse),
+                Reason::ControlPlaneBeforeLocalUse(
+                    crate::generation_reopen::GenerationReopenControlError::InvalidResponse,
+                ),
                 "BRIDGE_GENERATION_RESPONSE_INVALID",
             ),
             (
