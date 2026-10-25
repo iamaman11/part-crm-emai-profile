@@ -14,7 +14,9 @@ use crate::shipping_control_plane::{MachineHttpMethod, MachineHttpPort, MachineH
 use crate::shipping_generation_save::{
     SignedGenerationObjectPutPort, SignedGenerationUploadCapability,
 };
-use crate::shipping_save_attempt::{SaveAttemptEvidenceError, inspect_exact_save_attempt};
+use crate::shipping_save_attempt::{
+    SaveAttemptEvidenceError, has_unresolved_save_attempt_for_profile, inspect_exact_save_attempt,
+};
 use crate::test_support::browser_identity_fixture;
 use crate::{FakeCamouhost, FakeDeviceIdentity, FakeDeviceKeyStore, FakeProcessControl};
 use application_ports::ProfileCoordinatorPort;
@@ -709,6 +711,114 @@ fn canonical_save_checkpoint_survives_owner_process_loss_without_authorizing_pub
             )
             .is_ok()
     );
+    Ok(())
+}
+
+#[test]
+fn crashed_save_checkpoint_blocks_fresh_launch_only_for_affected_profile()
+-> Result<(), Box<dyn std::error::Error>> {
+    let fixture = Fixture::new("crashed-save-fresh-open")?;
+    let mut owner = fixture.operator()?;
+    fixture.open_mutate_and_close(&mut owner)?;
+    let trace = TransportTrace::default();
+    let puts = Rc::new(Cell::new(0));
+    let failed = owner.save_retained_successor(
+        &fixture.root,
+        Transport::new([Ok(upload_required_response()?)], trace.clone()),
+        &mut Put {
+            fail: true,
+            calls: Rc::clone(&puts),
+        },
+        UnixMillis::new(30),
+    );
+    assert!(matches!(
+        failed,
+        Err(OperatorFlowError::Stage(
+            OperatorFailureStage::GenerationSave
+        ))
+    ));
+    let tenant = fixture.actor.tenant_scope().tenant_id();
+    assert!(has_unresolved_save_attempt_for_profile(
+        &fixture.root,
+        tenant,
+        &fixture.profile_id,
+    )?);
+    assert!(!has_unresolved_save_attempt_for_profile(
+        &fixture.root,
+        tenant,
+        &ProfileId::parse("profile_unrelated_crash_guard")?,
+    )?);
+    drop(owner);
+
+    // Even after losing the exact in-process lease and prepared data, a new
+    // operator must not open the stale predecessor as a Clean browser.
+    let mut fresh = fixture.operator()?;
+    let result = fresh.open(&fixture.claim_uri, &fixture.root, UnixMillis::new(40));
+    assert!(matches!(
+        result,
+        Err(OperatorFlowError::Stage(
+            OperatorFailureStage::GenerationSave
+        ))
+    ));
+    assert_eq!(fresh.coordinator().claimed, 1);
+    assert_eq!(fresh.coordinator().closed, 1);
+    assert_eq!(fresh.active_local_state(), None);
+    assert_eq!(puts.get(), 1);
+    assert_eq!(trace.paths.borrow().len(), 1);
+    assert!(has_unresolved_save_attempt_for_profile(
+        &fixture.root,
+        tenant,
+        &fixture.profile_id,
+    )?);
+    Ok(())
+}
+
+#[test]
+fn torn_scoped_checkpoint_filename_still_blocks_stale_browser_reopen()
+-> Result<(), Box<dyn std::error::Error>> {
+    let fixture = Fixture::new("torn-checkpoint-name")?;
+    let mut owner = fixture.operator()?;
+    fixture.open_mutate_and_close(&mut owner)?;
+    let first = owner.save_retained_successor(
+        &fixture.root,
+        Transport::new(
+            [Ok(upload_required_response()?)],
+            TransportTrace::default(),
+        ),
+        &mut Put {
+            fail: true,
+            calls: Rc::new(Cell::new(0)),
+        },
+        UnixMillis::new(30),
+    );
+    assert!(first.is_err());
+    let checkpoint = fs::read_dir(fixture.root.path())?
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .find(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.starts_with(".profile-save-attempt-v1-") && name.ends_with(".bin"))
+        })
+        .ok_or("missing attempted encrypted checkpoint")?;
+    let malformed_name = checkpoint.with_extension("bin.torn");
+    fs::rename(&checkpoint, &malformed_name)?;
+    drop(owner);
+    assert!(has_unresolved_save_attempt_for_profile(
+        &fixture.root,
+        fixture.actor.tenant_scope().tenant_id(),
+        &fixture.profile_id,
+    )?);
+
+    let mut fresh = fixture.operator()?;
+    assert!(matches!(
+        fresh.open(&fixture.claim_uri, &fixture.root, UnixMillis::new(40)),
+        Err(OperatorFlowError::Stage(
+            OperatorFailureStage::GenerationSave
+        ))
+    ));
+    assert!(malformed_name.exists());
+    assert_eq!(fresh.coordinator().closed, 1);
     Ok(())
 }
 
