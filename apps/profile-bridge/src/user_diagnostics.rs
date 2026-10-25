@@ -89,7 +89,7 @@ impl UserDiagnostic {
                 ShippingCompositionError::ControlPlane => "BRIDGE_SESSION_NOT_AUTHORIZED",
                 ShippingCompositionError::HeartbeatAuthorityUncertain => {
                     "BRIDGE_HEARTBEAT_RECOVERY_REQUIRED"
-                },
+                }
                 ShippingCompositionError::DeliveryHealth => "BRIDGE_RUNTIME_NOT_READY",
                 ShippingCompositionError::DeliveryHandoff => "BRIDGE_UPDATE_INTERRUPTED",
                 ShippingCompositionError::FirstInstallation(error) => {
