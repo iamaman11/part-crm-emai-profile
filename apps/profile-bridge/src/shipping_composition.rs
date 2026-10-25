@@ -137,7 +137,7 @@ mod windows {
     };
     use crate::shipping_generation_successor_control::{
         RestartExactCommitObservation, RestartExactLocalCompletion,
-        complete_active_exact_after_restart,
+        complete_active_exact_after_restart, resume_exact_successor_under_fresh_lease,
     };
     use crate::shipping_preflight::ShippingBrowserLaunchPreflight;
     use crate::user_diagnostics::PendingSaveReadOnlyDiagnosis;
@@ -377,7 +377,36 @@ mod windows {
                             true
                         }
                         Ok(RestartExactLocalCompletion::RetryDecisionConfirmedAwaitingResumption) => {
-                            eprintln!("P3_RECOVERY=NOT_APPLIED_RETRYABLE;NEXT_SAFE_STEP=RESUME_EXACT_ATTEMPT_WITH_FRESH_FENCE");
+                            // The fresh lease selected N, not N+1. Even if
+                            // replay commits successfully, this launch must
+                            // NOT open N. A new claim selects and completes
+                            // the authoritative exact N+1 on the next Open.
+                            match resume_exact_successor_under_fresh_lease(
+                                &materialization_root,
+                                tenant,
+                                profile,
+                                selected_generation,
+                                fresh_lease,
+                                &mut recovery_observation_transport,
+                                &mut generation_uploader,
+                            ) {
+                                Ok(true) => {
+                                    eprintln!(
+                                        "P3_RECOVERY=RETRY_COMMITTED;NEXT_SAFE_STEP=FRESH_OPEN_ACTIVE_EXACT"
+                                    );
+                                }
+                                Ok(false) => {
+                                    eprintln!(
+                                        "P3_RECOVERY=RETRY_BLOCKED;NEXT_SAFE_STEP=PRESERVE_LOCAL_BYTES"
+                                    );
+                                }
+                                Err(error) => {
+                                    eprintln!(
+                                        "P3_RECOVERY={};NEXT_SAFE_STEP=RETRY_OWNED_RECOVERY",
+                                        error.code()
+                                    );
+                                }
+                            }
                             false
                         }
                         Ok(RestartExactLocalCompletion::RetryDecisionBlocked) => {

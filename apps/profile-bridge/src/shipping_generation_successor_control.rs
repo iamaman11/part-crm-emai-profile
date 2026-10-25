@@ -11,7 +11,8 @@ use crate::shipping_control_plane::{
 };
 use crate::shipping_generation_save::{
     GenerationSuccessorCommitOutcome, GenerationSuccessorControlPort,
-    GenerationUploadAuthorization, SignedGenerationUploadCapability,
+    GenerationUploadAuthorization, SignedGenerationObjectPutPort,
+    SignedGenerationUploadCapability,
 };
 use crate::shipping_save_attempt::{
     ReadOnlySaveAttempt, discover_unresolved_exact_save_attempt, inspect_exact_save_attempt,
@@ -72,6 +73,8 @@ pub enum RestartExactLocalCompletionError {
     LocalEvidenceChanged,
     WriterOrLockUnresolved,
     BindingOrRetirementFailed,
+    /// Signed PUT or commit outcome is uncertain; never discard original bytes.
+    UploadOrCommitUncertain,
     ControlPlane(ShippingControlPlaneError),
 }
 
@@ -83,6 +86,7 @@ impl RestartExactLocalCompletionError {
             Self::LocalEvidenceChanged => "P3_RECOVERY_LOCAL_EVIDENCE_CHANGED",
             Self::WriterOrLockUnresolved => "P3_RECOVERY_WRITER_UNRESOLVED",
             Self::BindingOrRetirementFailed => "P3_RECOVERY_LOCAL_COMPLETION_BLOCKED",
+            Self::UploadOrCommitUncertain => "P3_RECOVERY_UPLOAD_OR_COMMIT_UNCERTAIN",
             Self::ControlPlane(_) => "P3_RECOVERY_CLOUD_OBSERVATION_FAILED",
         }
     }
@@ -392,6 +396,192 @@ pub(crate) fn complete_active_exact_after_restart<T: MachineHttpPort>(
     retire_active_exact_attempt_after_restart(root, tenant_id, profile_id, &verified)
         .map_err(|_| RestartExactLocalCompletionError::BindingOrRetirementFailed)?;
     Ok(RestartExactLocalCompletion::ActiveExactLocalReady)
+}
+
+/// Resume ONLY the original unchanged N+1 ciphertext under a fresh writer.
+/// The D1-positive retry decision is re-checked while the existing Bridge OS
+/// workspace admission is held. Upload and commit perform their independent
+/// live ACL/fence/CAS validation. Even after a successful commit, the original
+/// checkpoint is retained; a NEW server-selected N+1 claim must complete
+/// ACTIVE_EXACT local binding before any browser Open or Saved is allowed.
+/// Never reconstruct a candidate, reuse an old fence or return a signed URL.
+#[cfg(any(windows, test))]
+pub(crate) fn resume_exact_successor_under_fresh_lease<T, U>(
+    root: &MaterializationRoot,
+    tenant_id: &TenantId,
+    profile_id: &ProfileId,
+    selected_generation: &GenerationId,
+    fresh_lease: &ProfileLease,
+    transport: &mut T,
+    upload: &mut U,
+) -> Result<bool, RestartExactLocalCompletionError>
+where
+    T: MachineHttpPort,
+    U: SignedGenerationObjectPutPort,
+{
+    if fresh_lease.tenant_id() != tenant_id
+        || fresh_lease.profile_id() != profile_id
+        || fresh_lease.epoch() == 0
+    {
+        return Err(RestartExactLocalCompletionError::WriterOrLockUnresolved);
+    }
+    let original = discover_unresolved_exact_save_attempt(root, tenant_id, profile_id)
+        .map_err(|_| RestartExactLocalCompletionError::LocalEvidenceChanged)?
+        .ok_or(RestartExactLocalCompletionError::LocalEvidenceChanged)?;
+    if original.base_generation_id() != selected_generation.as_str()
+        || fresh_lease.epoch() <= original.prior_epoch()
+    {
+        return Err(RestartExactLocalCompletionError::WriterOrLockUnresolved);
+    }
+    let source = root
+        .open_generation(tenant_id, profile_id, selected_generation)
+        .map_err(|_| RestartExactLocalCompletionError::LocalEvidenceChanged)?;
+    let candidate_id = GenerationId::parse(original.successor_id())
+        .map_err(|_| RestartExactLocalCompletionError::LocalEvidenceChanged)?;
+    let candidate = root
+        .open_generation(tenant_id, profile_id, &candidate_id)
+        .map_err(|_| RestartExactLocalCompletionError::LocalEvidenceChanged)?;
+    if !matches!(browser_writer_locks_absent(&source), Ok(true))
+        || !matches!(browser_writer_locks_absent(&candidate), Ok(true))
+    {
+        return Err(RestartExactLocalCompletionError::WriterOrLockUnresolved);
+    }
+    let lock = match BridgeWorkspaceLock::acquire(
+        &source,
+        fresh_lease.device_id(),
+        fresh_lease.epoch(),
+    ) {
+        Ok(lock) => lock,
+        Err(LocalProfileError::LockBusy) => BridgeWorkspaceLock::recover_interrupted_launch(
+            &source,
+            fresh_lease.device_id(),
+            fresh_lease.epoch(),
+        )
+        .map_err(|_| RestartExactLocalCompletionError::WriterOrLockUnresolved)?,
+        Err(_) => return Err(RestartExactLocalCompletionError::WriterOrLockUnresolved),
+    };
+    let result = (|| {
+        // No cloud effect may be based on pre-lock evidence alone.
+        let exact = discover_unresolved_exact_save_attempt(root, tenant_id, profile_id)
+            .map_err(|_| RestartExactLocalCompletionError::LocalEvidenceChanged)?
+            .ok_or(RestartExactLocalCompletionError::LocalEvidenceChanged)?;
+        if exact.base_generation_id() != original.base_generation_id()
+            || exact.successor_id() != original.successor_id()
+            || exact.object_key() != original.object_key()
+            || exact.metadata_digest() != original.metadata_digest()
+            || exact.container_digest() != original.container_digest()
+            || exact.ciphertext() != original.ciphertext()
+            || !matches!(browser_writer_locks_absent(&source), Ok(true))
+            || !matches!(browser_writer_locks_absent(&candidate), Ok(true))
+        {
+            return Err(RestartExactLocalCompletionError::LocalEvidenceChanged);
+        }
+        if request_fresh_retry_decision(
+            tenant_id,
+            profile_id,
+            &exact,
+            fresh_lease,
+            transport,
+        )
+        .map_err(RestartExactLocalCompletionError::ControlPlane)?
+            != BridgeGenerationSuccessorRetryVerdict::NotAppliedRetryable
+        {
+            return Ok(false);
+        }
+        let request = BridgeProfileGenerationSuccessorRequest::new(
+            exact.base_generation_id(),
+            exact.successor_id(),
+            exact.object_key(),
+            exact.metadata_digest(),
+            exact.container_digest(),
+            exact.container_bytes(),
+            fresh_lease.session_id().as_str(),
+            fresh_lease.fencing_token().as_str(),
+            fresh_lease.epoch(),
+        );
+        let authorization = |transport: &mut T| {
+            let bytes = post_json::<T, core::convert::Infallible, _>(
+                transport,
+                &successor_path(
+                    BRIDGE_PROFILE_GENERATION_UPLOAD_CAPABILITY_PATH_TEMPLATE,
+                    tenant_id,
+                    profile_id,
+                ),
+                &request,
+            )
+            .map_err(|error| match error {
+                GenerationSuccessorControlError::ControlPlane(reason) => {
+                    RestartExactLocalCompletionError::ControlPlane(reason)
+                }
+                GenerationSuccessorControlError::Sealing(never) => match never {},
+            })?;
+            if bytes.len() > MAX_UPLOAD_CAPABILITY_RESPONSE_BYTES {
+                return Err(RestartExactLocalCompletionError::ControlPlane(
+                    ShippingControlPlaneError::InvalidResponse,
+                ));
+            }
+            let decoded = serde_json::from_slice::<BridgeGenerationUploadCapabilityResponse>(
+                &bytes,
+            )
+            .map_err(|_| RestartExactLocalCompletionError::ControlPlane(
+                ShippingControlPlaneError::InvalidResponse,
+            ))?;
+            decode_upload_authorization::<core::convert::Infallible>(decoded).map_err(
+                |error| match error {
+                    GenerationSuccessorControlError::ControlPlane(reason) => {
+                        RestartExactLocalCompletionError::ControlPlane(reason)
+                    }
+                    GenerationSuccessorControlError::Sealing(never) => match never {},
+                },
+            )
+        };
+        match authorization(transport)? {
+            GenerationUploadAuthorization::Verified => {}
+            GenerationUploadAuthorization::UploadRequired(capability) => {
+                upload
+                    .put_exact(&capability, exact.ciphertext())
+                    .map_err(|_| RestartExactLocalCompletionError::UploadOrCommitUncertain)?;
+                if !matches!(authorization(transport)?, GenerationUploadAuthorization::Verified) {
+                    return Err(RestartExactLocalCompletionError::UploadOrCommitUncertain);
+                }
+            }
+        }
+        // Existing Worker independently rechecks the exact uploaded R2
+        // descriptor and fresh coordinator fence before its atomic D1 commit.
+        let response = post_json::<T, core::convert::Infallible, _>(
+            transport,
+            &successor_path(
+                BRIDGE_PROFILE_GENERATION_COMMIT_PATH_TEMPLATE,
+                tenant_id,
+                profile_id,
+            ),
+            &request,
+        )
+        .map_err(|error| match error {
+            GenerationSuccessorControlError::ControlPlane(reason) => {
+                RestartExactLocalCompletionError::ControlPlane(reason)
+            }
+            GenerationSuccessorControlError::Sealing(never) => match never {},
+        })?;
+        if response.len() > MAX_COMMIT_RESPONSE_BYTES {
+            return Err(RestartExactLocalCompletionError::ControlPlane(
+                ShippingControlPlaneError::InvalidResponse,
+            ));
+        }
+        let committed = serde_json::from_slice::<BridgeGenerationSuccessorCommitResponse>(
+            &response,
+        )
+        .map_err(|_| RestartExactLocalCompletionError::ControlPlane(
+            ShippingControlPlaneError::InvalidResponse,
+        ))?;
+        match committed.outcome {
+            BridgeGenerationSuccessorCommitOutcomeDto::Activated
+            | BridgeGenerationSuccessorCommitOutcomeDto::AlreadyActive => Ok(true),
+        }
+    })();
+    lock.release()
+        .map_err(|_| RestartExactLocalCompletionError::WriterOrLockUnresolved)?;
+    result
 }
 
 /// Typed server-positive eligibility for the exact original sealed attempt.
@@ -1396,6 +1586,161 @@ mod tests {
             &fixture.tenant,
             &fixture.profile,
         )?);
+        Ok(())
+    }
+
+    #[derive(Default)]
+    struct RecoveryPut {
+        calls: usize,
+        exact_bytes: Vec<u8>,
+    }
+
+    impl crate::shipping_generation_save::SignedGenerationObjectPutPort for RecoveryPut {
+        type Error = BridgePortError;
+
+        fn put_exact(
+            &mut self,
+            _capability: &crate::shipping_generation_save::SignedGenerationUploadCapability,
+            ciphertext: &[u8],
+        ) -> Result<(), Self::Error> {
+            self.calls += 1;
+            self.exact_bytes = ciphertext.to_vec();
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn fresh_retry_resumes_exact_ciphertext_and_retains_checkpoint_until_active_exact()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let fixture = Fixture::new()?;
+        let root = MaterializationRoot::open_or_create(&fixture.root_path)?;
+        let source = root.open_generation(&fixture.tenant, &fixture.profile, &fixture.base)?;
+        persist_exact_save_attempt(&root, &source, &fixture.prepared, &fixture.lease)?;
+        let expected = fixture.prepared.sealed().container();
+        let fresh = ProfileLease::issue(
+            fixture.tenant.clone(),
+            fixture.profile.clone(),
+            SessionId::parse("session_retry_fresh_authorized")?,
+            fixture.lease.device_id().clone(),
+            fixture.lease.epoch() + 1,
+            FencingToken::parse("fence_retry_fresh_authorized")?,
+        )?;
+        let mut put = RecoveryPut::default();
+        let mut transport = Transport {
+            responses: VecDeque::from([
+                MachineHttpResponse::new(
+                    200,
+                    br#"{"verdict":"NOT_APPLIED_RETRYABLE"}"#.to_vec(),
+                ),
+                MachineHttpResponse::new(
+                    200,
+                    br#"{"state":"uploadRequired","method":"PUT","url":"https://r2.example.test/exact","headers":[{"name":"x-amz-date","value":"20261026T000000Z"}],"expiresSeconds":120}"#.to_vec(),
+                ),
+                MachineHttpResponse::new(
+                    200,
+                    br#"{"state":"verified","method":null,"url":null,"headers":[],"expiresSeconds":null}"#.to_vec(),
+                ),
+                MachineHttpResponse::new(200, br#"{"outcome":"ACTIVATED"}"#.to_vec()),
+            ]),
+            paths: Vec::new(),
+        };
+        assert_eq!(
+            super::resume_exact_successor_under_fresh_lease(
+                &root,
+                &fixture.tenant,
+                &fixture.profile,
+                &fixture.base,
+                &fresh,
+                &mut transport,
+                &mut put,
+            ),
+            Ok(true),
+        );
+        assert_eq!(put.calls, 1);
+        assert_eq!(put.exact_bytes, expected);
+        assert_eq!(transport.paths.len(), 4);
+        assert!(transport.paths[0].ends_with("/generation-successor/retry-decision"));
+        assert!(transport.paths[1].ends_with("/generation-successor/upload-capability"));
+        assert!(transport.paths[2].ends_with("/generation-successor/upload-capability"));
+        assert!(transport.paths[3].ends_with("/generation-successor/commit"));
+        assert!(has_unresolved_save_attempt_for_profile(
+            &root,
+            &fixture.tenant,
+            &fixture.profile,
+        )?);
+        assert_eq!(std::fs::read(source.path().join("prefs.js"))?, b"save");
+        Ok(())
+    }
+
+    #[test]
+    fn rejected_or_uncertain_retry_does_not_put_commit_or_remove_checkpoint()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let fixture = Fixture::new()?;
+        let root = MaterializationRoot::open_or_create(&fixture.root_path)?;
+        let source = root.open_generation(&fixture.tenant, &fixture.profile, &fixture.base)?;
+        persist_exact_save_attempt(&root, &source, &fixture.prepared, &fixture.lease)?;
+        let fresh = ProfileLease::issue(
+            fixture.tenant.clone(),
+            fixture.profile.clone(),
+            SessionId::parse("session_retry_rejected")?,
+            fixture.lease.device_id().clone(),
+            fixture.lease.epoch() + 1,
+            FencingToken::parse("fence_retry_rejected")?,
+        )?;
+        let mut uploader = RecoveryPut::default();
+        let mut denied = Transport {
+            responses: VecDeque::from([MachineHttpResponse::new(
+                200,
+                br#"{"verdict":"BLOCKED"}"#.to_vec(),
+            )]),
+            paths: Vec::new(),
+        };
+        assert_eq!(
+            super::resume_exact_successor_under_fresh_lease(
+                &root, &fixture.tenant, &fixture.profile, &fixture.base,
+                &fresh, &mut denied, &mut uploader,
+            ),
+            Ok(false),
+        );
+        assert_eq!(denied.paths.len(), 1);
+        assert_eq!(uploader.calls, 0);
+        let mut lost_commit = Transport {
+            responses: VecDeque::from([
+                MachineHttpResponse::new(
+                    200,
+                    br#"{"verdict":"NOT_APPLIED_RETRYABLE"}"#.to_vec(),
+                ),
+                MachineHttpResponse::new(
+                    200,
+                    br#"{"state":"verified","method":null,"url":null,"headers":[],"expiresSeconds":null}"#.to_vec(),
+                ),
+                MachineHttpResponse::new(503, Vec::new()),
+            ]),
+            paths: Vec::new(),
+        };
+        assert_eq!(
+            super::resume_exact_successor_under_fresh_lease(
+                &root, &fixture.tenant, &fixture.profile, &fixture.base,
+                &fresh, &mut lost_commit, &mut uploader,
+            ),
+            Err(RestartExactLocalCompletionError::ControlPlane(
+                ShippingControlPlaneError::HttpServerUncertain,
+            )),
+        );
+        assert_eq!(lost_commit.paths.len(), 3);
+        assert_eq!(uploader.calls, 0);
+        assert!(has_unresolved_save_attempt_for_profile(
+            &root, &fixture.tenant, &fixture.profile,
+        )?);
+        let mut stale = Transport::default();
+        assert_eq!(
+            super::resume_exact_successor_under_fresh_lease(
+                &root, &fixture.tenant, &fixture.profile, &fixture.base,
+                &fixture.lease, &mut stale, &mut uploader,
+            ),
+            Err(RestartExactLocalCompletionError::WriterOrLockUnresolved),
+        );
+        assert!(stale.paths.is_empty());
         Ok(())
     }
 
