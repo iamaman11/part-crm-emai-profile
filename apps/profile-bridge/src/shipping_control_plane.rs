@@ -1223,6 +1223,7 @@ mod tests {
                     idle_expires_at_ms: 30_000,
                     hard_expires_at_ms: 900_000,
                 },
+                pending_heartbeat: None,
             };
             Ok(Self {
                 coordinator: ControlPlaneCoordinator {
@@ -1363,6 +1364,7 @@ mod tests {
                 &device_id,
                 &session_id,
                 12,
+                false,
             );
             if replayed {
                 assert_eq!(result, Err(ShippingControlPlaneError::InvalidResponse));
@@ -1481,6 +1483,7 @@ mod tests {
                             idle_expires_at_ms: 30_000,
                             hard_expires_at_ms: 900_000,
                         },
+                        pending_heartbeat: None,
                     }),
                 },
                 lease,
