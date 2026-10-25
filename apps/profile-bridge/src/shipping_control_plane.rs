@@ -18,11 +18,11 @@ use control_plane_contract::generation_reopen_api::{
     BridgeGenerationOpeningMaterialRequest, BridgeGenerationOpeningMaterialResponse,
     GENERATION_DOWNLOAD_CAPABILITY_MAX_EXPIRES_SECONDS,
 };
-use control_plane_contract::public_api::{ProblemPayload, problem_type_for_code};
 use control_plane_contract::profile_launch_api::{
     BRIDGE_PROFILE_COORDINATOR_PATH_TEMPLATE, BRIDGE_PROFILE_LAUNCH_REDEMPTION_PATH,
     BridgeProfileLaunchRedemptionProjection, BridgeProfileLaunchRedemptionRequest,
 };
+use control_plane_contract::public_api::{ProblemPayload, problem_type_for_code};
 use encrypted_generation_domain::{
     GenerationDek, GenerationRootKeyVersion, KeyId, MAX_GENERATION_CONTAINER_BYTES,
     MAX_GENERATION_METADATA_PRELUDE_BYTES, NoncePrefix, canonical_generation_object_key,
@@ -711,8 +711,8 @@ fn decode_reopen_download_capability_response(
     request_correlation_id: &CorrelationId,
 ) -> Result<BridgeGenerationDownloadCapabilityResponse, ShippingControlPlaneError> {
     if !(200..=299).contains(&response.status()) {
-        let code = safe_reopen_problem_code(&response, request_correlation_id)
-            .unwrap_or("unclassified");
+        let code =
+            safe_reopen_problem_code(&response, request_correlation_id).unwrap_or("unclassified");
         // Safe witness for the operator's existing terminal stream only. The body (potential
         // secrets/URLs/untrusted text) is never logged, and still zeroized before returning.
         eprintln!(
@@ -1047,11 +1047,10 @@ pub(crate) fn sealing_material_from_response(
 #[cfg(test)]
 mod tests {
     use super::{
-        safe_reopen_problem_code,
         ControlPlaneCoordinator, ControlPlaneEnrollment, ControlPlaneLeaseTiming,
         CoordinatorCursor, MAX_SEALING_MATERIAL_RESPONSE_BYTES, MachineHttpMethod, MachineHttpPort,
-        MachineHttpResponse, ShippingControlPlaneError, lease_timing, valid_signed_r2_get_url,
-        validate_active_projection, validate_snapshot,
+        MachineHttpResponse, ShippingControlPlaneError, lease_timing, safe_reopen_problem_code,
+        valid_signed_r2_get_url, validate_active_projection, validate_snapshot,
     };
     use crate::dirty_generation::GenerationSealingMaterialPort;
     use crate::generation_reopen::GenerationReopenControlPort;
@@ -1096,20 +1095,14 @@ mod tests {
             safe_reopen_problem_code(&response, &request_id),
             Some("lease_conflict")
         );
-        assert!(safe_reopen_problem_code(
-            &MachineHttpResponse::new(403, known),
-            &request_id,
-        ).is_none());
+        let wrong_status = MachineHttpResponse::new(403, known);
+        assert_eq!(safe_reopen_problem_code(&wrong_status, &request_id), None);
         let foreign = CorrelationId::parse("corr_other_reopen_refusal_01")?;
-        assert!(safe_reopen_problem_code(&response, &foreign).is_none());
-        assert!(safe_reopen_problem_code(
-            &MachineHttpResponse::new(409, b"SECRET=presigned-url".to_vec()),
-            &request_id,
-        ).is_none());
-        assert!(safe_reopen_problem_code(
-            &MachineHttpResponse::new(409, vec![b'X'; 2049]),
-            &request_id,
-        ).is_none());
+        assert_eq!(safe_reopen_problem_code(&response, &foreign), None);
+        let secret_body = MachineHttpResponse::new(409, b"SECRET=presigned-url".to_vec());
+        assert_eq!(safe_reopen_problem_code(&secret_body, &request_id), None);
+        let oversized_body = MachineHttpResponse::new(409, vec![b'X'; 2049]);
+        assert_eq!(safe_reopen_problem_code(&oversized_body, &request_id), None);
         Ok(())
     }
 
