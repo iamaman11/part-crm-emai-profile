@@ -14,7 +14,8 @@ use crate::dirty_generation::PreparedDirtyGeneration;
 #[cfg(any(test, feature = "synthetic-test-bin"))]
 use crate::dirty_generation_finalize::DirtyGenerationCommitClientPort;
 use crate::generation_reopen::{
-    GenerationObjectDownloadPort, GenerationReopenControlError, GenerationReopenControlPort,
+    GenerationObjectDownloadError, GenerationObjectDownloadPort, GenerationReopenControlError,
+    GenerationReopenControlPort,
 };
 use crate::local_profile::{
     BridgeWorkspaceLock, GenerationWorkspace, LocalGenerationRecord, LocalGenerationState,
@@ -438,6 +439,7 @@ where
         C: GenerationReopenControlPort,
         <C as GenerationReopenControlPort>::Error: Into<GenerationReopenControlError>,
         Dl: GenerationObjectDownloadPort,
+        Dl::Error: Into<GenerationObjectDownloadError>,
     {
         self.open_authoritative_with_runtime_health(claim, root, downloader, now, || Ok(()))
     }
@@ -457,6 +459,7 @@ where
         C: GenerationReopenControlPort,
         <C as GenerationReopenControlPort>::Error: Into<GenerationReopenControlError>,
         Dl: GenerationObjectDownloadPort,
+        Dl::Error: Into<GenerationObjectDownloadError>,
         BeforeRuntime: FnMut() -> Result<(), ()>,
     {
         self.open_with_materialization(
@@ -570,10 +573,10 @@ where
             &device_id,
             lease.epoch(),
         ) {
-            // The existing owner can certify no local write only for a failed authenticated
-            // capability read when the selected workspace was absent. Verify exact absence
-            // again here before requesting the typed no-browser-use release. Any new directory,
-            // dirty/unknown evidence, permission failure, or non-read error remains Uncertain.
+            // The natural materialization owner certifies no writes only for a failed read
+            // before workspace creation. Verify exact absence again before requesting the
+            // typed no-browser-use release. Any new directory, dirty/unknown evidence,
+            // failed cleanup, stale fence or potential writer remains Uncertain.
             let clean_no_use = reason.proves_no_local_write_and_absent_workspace()
                 && matches!(
                     root.open_generation(
