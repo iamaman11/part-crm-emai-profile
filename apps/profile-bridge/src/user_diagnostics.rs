@@ -45,9 +45,7 @@ impl PendingSaveReadOnlyDiagnosis {
             Self::ServerNotActiveExactRetryUnresolved => {
                 "P3_RECOVERY_OBSERVATION=NOT_ACTIVE_EXACT;RETRY_AUTHORITY=UNRESOLVED"
             }
-            Self::CanonicalCheckpointNotFound => {
-                "P3_RECOVERY_OBSERVATION=NO_CANONICAL_CHECKPOINT"
-            }
+            Self::CanonicalCheckpointNotFound => "P3_RECOVERY_OBSERVATION=NO_CANONICAL_CHECKPOINT",
             Self::UnknownPreserveBytes => "P3_RECOVERY_OBSERVATION=UNKNOWN;BYTES_RETAINED",
         }
     }

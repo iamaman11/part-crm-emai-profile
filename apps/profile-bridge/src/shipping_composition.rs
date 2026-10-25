@@ -136,8 +136,8 @@ mod windows {
         ControlPlaneCoordinator, ControlPlaneEnrollment, ControlPlaneLeaseTiming,
     };
     use crate::shipping_generation_successor_control::observe_discovered_successor_after_restart;
-    use crate::user_diagnostics::PendingSaveReadOnlyDiagnosis;
     use crate::shipping_preflight::ShippingBrowserLaunchPreflight;
+    use crate::user_diagnostics::PendingSaveReadOnlyDiagnosis;
     use crate::windows_delivery_handoff::{
         DeliveryHandoffCoordinator, DeliveryHandoffRestartDisposition,
     };
