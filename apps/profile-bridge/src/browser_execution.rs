@@ -366,12 +366,18 @@ fn persist_exact_text(path: &Path, content: &str) -> Result<(), BrowserLaunchBlo
             ".{file_name}.pending-{}-{sequence}",
             std::process::id()
         ));
-        let mut file = match OpenOptions::new().write(true).create_new(true).open(&staging) {
+        let mut file = match OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&staging)
+        {
             Ok(file) => file,
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
             Err(error) => return Err(LocalProfileError::from(error).into()),
         };
-        let write_result = file.write_all(content.as_bytes()).and_then(|()| file.sync_all());
+        let write_result = file
+            .write_all(content.as_bytes())
+            .and_then(|()| file.sync_all());
         drop(file);
         if let Err(error) = write_result {
             // This name belongs to this exact create-new attempt. Never touch the target.
@@ -615,7 +621,10 @@ mod tests {
         // Staging garbage is not allowed to impersonate the canonical record.
         assert!(!canonical.exists());
         persist_browser_identity(&workspace, &identity()?)?;
-        assert_eq!(fs::read_to_string(&canonical)?, identity()?.to_canonical_record());
+        assert_eq!(
+            fs::read_to_string(&canonical)?,
+            identity()?.to_canonical_record()
+        );
         persist_browser_identity(&workspace, &identity()?)?;
         let canonical_before = fs::read(&canonical)?;
         fs::write(&canonical, b"corrupt-existing-evidence")?;
@@ -630,7 +639,11 @@ mod tests {
         let files = fs::read_dir(workspace.path())?
             .map(|item| item.map(|item| item.file_name().to_string_lossy().to_string()))
             .collect::<Result<Vec<_>, _>>()?;
-        assert!(!files.iter().any(|name| name.starts_with(".profile-browser-identity-v1.pending-")));
+        assert!(
+            !files
+                .iter()
+                .any(|name| name.starts_with("..profile-browser-identity-v1.pending-"))
+        );
         assert!(partial.exists());
         remove_test_root(&root_path)?;
         Ok(())
