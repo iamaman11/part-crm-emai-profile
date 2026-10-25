@@ -757,6 +757,17 @@ where
         }
     }
 
+    /// Only the shipping owner may call this after local monotonic observation
+    /// passes the last *server-confirmed* idle/hard deadline. Unlike temporary
+    /// transport uncertainty, positively expired writer authority demands
+    /// immediate process fencing, with all native browser bytes retained.
+    pub fn stop_after_confirmed_lease_expiry(
+        &mut self,
+        now: UnixMillis,
+    ) -> OperatorFlowError {
+        self.fail_active_runtime(OperatorFailureStage::CoordinatorHeartbeat, now)
+    }
+
     pub fn close(&mut self, now: UnixMillis) -> Result<(), OperatorFlowError> {
         if self.retained_dirty.is_some() {
             return Err(OperatorFlowError::Busy);
