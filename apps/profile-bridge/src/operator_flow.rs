@@ -2193,10 +2193,9 @@ mod tests {
             .iter()
             .map(|byte| format!("{byte:02x}"))
             .collect::<String>();
-        let pending = fixture
-            .root
-            .path()
-            .join(format!(".profile-save-attempt-v1-{fingerprint}-untrusted.pending"));
+        let pending = fixture.root.path().join(format!(
+            ".profile-save-attempt-v1-{fingerprint}-untrusted.pending"
+        ));
         fs::write(&pending, b"torn-attempt")?;
 
         let mut owner = operator(&fixture, FakeCamouhost::default())?;
