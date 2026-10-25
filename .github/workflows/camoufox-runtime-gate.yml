@@ -360,6 +360,15 @@ jobs:
           name: s0-camoufox-windows-${{ github.event.pull_request.head.sha || github.sha }}
           path: artifacts/camoufox-candidate
 
+      # Cache only raw PUBLIC locked Python distribution + wheels, never
+      # an installed browser/runtime tree or a reusable profile. On every hit
+      # the Windows materializer re-hashes each blob against runtime-lock.json.
+      - name: Restore locked Windows distributions (speed only)
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: artifacts/camouhost-locked-distributions
+          key: s0-camouhost-windows-distributions-v1-${{ runner.os }}-${{ hashFiles('runtime/camouhost/runtime-lock.json', 'scripts/camouhost-runtime-build-windows.py') }}
+
       - name: Materialize exact clean-host Windows runtime from verified candidate
         id: windows-runtime
         if: needs.scope.outputs.heavy == 'true'
@@ -372,7 +381,7 @@ jobs:
           python -m py_compile scripts/camouhost-runtime-build-windows.py scripts/verify-camoufox-patched-candidate.py
           python scripts/verify-camoufox-patched-candidate.py --self-test
           python scripts/camouhost-runtime-build-windows.py self-test
-          python scripts/camouhost-runtime-build-windows.py build --runtime-lock runtime/camouhost/runtime-lock.json --patch-lock runtime/camouhost/camoufox-patch-lock.json --runtime-source runtime/camouhost/real.py --browser-candidate artifacts/camoufox-candidate/camoufox-windows.x86_64.zip --browser-provenance artifacts/camoufox-candidate/camoufox-windows.provenance.json --build-source-commit "$candidateBuildSha" --output "$runtimeRoot" --build-python "$buildPython"
+          python scripts/camouhost-runtime-build-windows.py build --runtime-lock runtime/camouhost/runtime-lock.json --patch-lock runtime/camouhost/camoufox-patch-lock.json --runtime-source runtime/camouhost/real.py --browser-candidate artifacts/camoufox-candidate/camoufox-windows.x86_64.zip --browser-provenance artifacts/camoufox-candidate/camoufox-windows.provenance.json --build-source-commit "$candidateBuildSha" --output "$runtimeRoot" --build-python "$buildPython" --distribution-cache "artifacts/camouhost-locked-distributions"
           if (-not (Test-Path -LiteralPath (Join-Path $runtimeRoot 'python\python.exe') -PathType Leaf)) { throw 'embedded Python missing' }
           if (-not (Test-Path -LiteralPath (Join-Path $runtimeRoot 'browser\camoufox.exe') -PathType Leaf)) { throw 'packaged Camoufox missing' }
           if (-not (Test-Path -LiteralPath (Join-Path $runtimeRoot 'camouhost\browser-candidate-provenance.json') -PathType Leaf)) { throw 'browser candidate provenance missing' }
