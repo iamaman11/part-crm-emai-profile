@@ -1084,7 +1084,7 @@ mod tests {
     use crate::dirty_generation::GenerationSealingMaterialPort;
     use crate::generation_reopen::GenerationReopenControlPort;
     use crate::operator_flow::EnrollmentPort;
-    use application_ports::ProfileCoordinatorPort;
+    use application_ports::{ProfileCoordinatorPort, ProfileCoordinatorRuntimePort};
     use bridge_domain::ClaimUri;
     use control_plane_contract::coordinator_api::{
         CoordinatorCommandDto, CoordinatorCommandRequestDto, CoordinatorOutcomeDto,
@@ -1194,6 +1194,123 @@ mod tests {
             ));
             self.responses.pop_front().ok_or(())
         }
+    }
+
+
+    #[derive(Default)]
+    struct LostHeartbeatResponseTransport {
+        requests: Vec<Vec<u8>>,
+        replay: Option<MachineHttpResponse>,
+    }
+
+    impl MachineHttpPort for LostHeartbeatResponseTransport {
+        type Error = ();
+
+        fn request(
+            &mut self,
+            method: MachineHttpMethod,
+            _path: &str,
+            _correlation_id: &CorrelationId,
+            body: Option<&[u8]>,
+        ) -> Result<MachineHttpResponse, Self::Error> {
+            assert_eq!(method, MachineHttpMethod::PostJson);
+            self.requests
+                .push(body.ok_or(())?.to_vec());
+            if self.requests.len() == 1 {
+                // The server has accepted the command but the HTTP reply
+                // vanishes before Bridge receives it.
+                Err(())
+            } else {
+                self.replay.take().ok_or(())
+            }
+        }
+    }
+
+    #[test]
+    fn lost_heartbeat_reply_reuses_exact_idempotency_and_accepts_only_own_replay()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let tenant_id = TenantId::parse("tenant_heartbeat_exact_01")?;
+        let profile_id = ProfileId::parse("profile_heartbeat_exact_01")?;
+        let device_id = DeviceId::parse("device_heartbeat_exact_01")?;
+        let session_id = SessionId::parse("session_heartbeat_exact_01")?;
+        let fencing = FencingToken::parse("fence_heartbeat_exact_01")?;
+        let lease = ProfileLease::issue(
+            tenant_id.clone(),
+            profile_id.clone(),
+            session_id.clone(),
+            device_id.clone(),
+            7,
+            fencing.clone(),
+        )?;
+        let replay = MachineHttpResponse::new(
+            200,
+            serde_json::to_vec(&CoordinatorResponseDto {
+                outcome: CoordinatorOutcomeDto::HeartbeatAccepted,
+                version: 12,
+                sequence: 14,
+                replayed: true,
+                fencing_token: Some(fencing.as_str().to_owned()),
+                epoch: Some(7),
+                projection: CoordinatorProjectionDto {
+                    tenant_id: tenant_id.as_str().to_owned(),
+                    profile_id: profile_id.as_str().to_owned(),
+                    status: CoordinatorStatusDto::Active,
+                    version: 12,
+                    sequence: 14,
+                    next_epoch: 8,
+                    active_session_id: Some(session_id.as_str().to_owned()),
+                    active_device_id: Some(device_id.as_str().to_owned()),
+                    active_epoch: Some(7),
+                    idle_expires_at_ms: Some(60_000),
+                    hard_expires_at_ms: Some(900_000),
+                    drain_deadline_ms: None,
+                    pending_launch_intent_id: None,
+                    pending_intent_expires_at_ms: None,
+                },
+            })?,
+        );
+        let mut coordinator = ControlPlaneCoordinator {
+            transport: LostHeartbeatResponseTransport {
+                requests: Vec::new(),
+                replay: Some(replay),
+            },
+            cursor: Some(CoordinatorCursor {
+                tenant_id,
+                profile_id,
+                device_id,
+                session_id,
+                epoch: 7,
+                fencing_token: fencing,
+                version: 11,
+                sequence: 13,
+                timing: ControlPlaneLeaseTiming {
+                    idle_expires_at_ms: 30_000,
+                    hard_expires_at_ms: 900_000,
+                },
+                pending_heartbeat: None,
+            }),
+        };
+        assert_eq!(
+            coordinator.heartbeat_lease(&lease),
+            Err(ShippingControlPlaneError::Transport)
+        );
+        assert!(coordinator.cursor.as_ref().ok_or("missing cursor")?.pending_heartbeat.is_some());
+        // The original coordinator expiry remains untouched after the loss.
+        assert_eq!(coordinator.runtime_timing()?.idle_expires_at_ms(), 30_000);
+        coordinator.heartbeat_lease(&lease)?;
+        assert_eq!(coordinator.transport.requests.len(), 2);
+        assert_eq!(
+            coordinator.transport.requests[0],
+            coordinator.transport.requests[1]
+        );
+        let actual: CoordinatorCommandRequestDto =
+            serde_json::from_slice(&coordinator.transport.requests[0])?;
+        assert_eq!(actual.expected_version, 11);
+        assert_eq!(actual.sequence, 14);
+        assert!(matches!(actual.command, CoordinatorCommandDto::Heartbeat { .. }));
+        assert!(coordinator.cursor.as_ref().ok_or("missing cursor")?.pending_heartbeat.is_none());
+        assert_eq!(coordinator.runtime_timing()?.idle_expires_at_ms(), 60_000);
+        Ok(())
     }
 
     struct SealingFixture {
