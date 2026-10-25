@@ -25,6 +25,7 @@ pub enum ShippingCompositionError {
     ActiveSessionMissing,
     CloseObservation(bridge_domain::BridgePortError),
     CommittedRecoveryRequired,
+    HeartbeatAuthorityUncertain,
     Initialization(crate::generation_initialization::InitialProfileError),
 }
 
@@ -49,6 +50,9 @@ impl core::fmt::Display for ShippingCompositionError {
             Self::ActiveSessionMissing => "shipping Profile Bridge active session is missing",
             Self::CloseObservation(_) => "shipping Profile Bridge close observation failed",
             Self::Initialization(_) => "profile first-open preparation failed",
+            Self::HeartbeatAuthorityUncertain => {
+                "browser closed safely: coordinator heartbeat was not confirmed; local data retained for recovery"
+            },
             Self::CommittedRecoveryRequired => {
                 "generation successor committed but local recovery is required"
             }
@@ -152,6 +156,7 @@ mod windows {
     const PROXY_CONFIG_PATH_ENV: &str = "PROFILE_BRIDGE_PROXY_CONFIG_PATH";
     const PACKAGED_PYTHON_EXECUTABLE: &str = "python/python.exe";
     const CONTROLLED_CLOSE_POLL_MS: u64 = 250;
+    const HEARTBEAT_TRANSPORT_RETRY_MS: u64 = 1_000;
 
     struct ShippingConfig {
         device_application_binding_path: PathBuf,
@@ -364,6 +369,10 @@ mod windows {
                 .map_err(|_| ShippingCompositionError::ControlPlane)?,
             now()?,
         )?;
+        // An unanswered heartbeat does not refresh the coordinator deadline.
+        // We allow at most ONE narrow transport-only retry before gracefully
+        // quiescing the local browser and preserving its native WAL/session data.
+        let mut heartbeat_retry_used = false;
         loop {
             let observed_at = now()?;
             let session_id = operator
@@ -379,6 +388,12 @@ mod windows {
                 operator
                     .close(now()?)
                     .map_err(ShippingCompositionError::Operator)?;
+                // An unknown heartbeat response is not an acknowledged fence.
+                // Retain the closed local working profile; do not attempt an
+                // upload/commit using a possibly revoked writer session.
+                if heartbeat_retry_used {
+                    return Err(ShippingCompositionError::HeartbeatAuthorityUncertain);
+                }
                 let completion = operator
                     .save_retained_successor(
                         &materialization_root,
@@ -393,17 +408,50 @@ mod windows {
                 return Err(ShippingCompositionError::CommittedRecoveryRequired);
             }
 
-            if observed_at >= next_heartbeat_deadline {
+            let timing = operator
+                .coordinator()
+                .runtime_timing()
+                .map_err(|_| ShippingCompositionError::ControlPlane)?;
+            // Never keep the browser writer beyond the last server-confirmed
+            // idle/hard expiry, even if a scheduler or HTTP call was delayed.
+            if observed_at.value() >= timing.idle_expires_at_ms().min(timing.hard_expires_at_ms()) {
                 operator
-                    .heartbeat(observed_at)
+                    .close(observed_at)
                     .map_err(ShippingCompositionError::Operator)?;
-                next_heartbeat_deadline = next_heartbeat_at(
-                    operator
-                        .coordinator()
-                        .runtime_timing()
-                        .map_err(|_| ShippingCompositionError::ControlPlane)?,
-                    observed_at,
-                )?;
+                return Err(ShippingCompositionError::HeartbeatAuthorityUncertain);
+            }
+            if observed_at >= next_heartbeat_deadline {
+                match operator.heartbeat(observed_at) {
+                    Ok(()) => {
+                        heartbeat_retry_used = false;
+                        next_heartbeat_deadline = next_heartbeat_at(
+                            operator
+                                .coordinator()
+                                .runtime_timing()
+                                .map_err(|_| ShippingCompositionError::ControlPlane)?,
+                            observed_at,
+                        )?;
+                    }
+                    Err(crate::operator_flow::OperatorFlowError::HeartbeatTransportUncertain) => {
+                        if heartbeat_retry_used {
+                            // Two consecutive unacknowledged transport effects:
+                            // stop normal work without falsely marking Clean/Saved.
+                            operator
+                                .close(observed_at)
+                                .map_err(ShippingCompositionError::Operator)?;
+                            return Err(ShippingCompositionError::HeartbeatAuthorityUncertain);
+                        }
+                        let Some(retry_at) = bounded_heartbeat_retry_at(timing, observed_at) else {
+                            operator
+                                .close(observed_at)
+                                .map_err(ShippingCompositionError::Operator)?;
+                            return Err(ShippingCompositionError::HeartbeatAuthorityUncertain);
+                        };
+                        heartbeat_retry_used = true;
+                        next_heartbeat_deadline = retry_at;
+                    }
+                    Err(error) => return Err(ShippingCompositionError::Operator(error)),
+                }
             }
 
             let until_heartbeat = next_heartbeat_deadline
@@ -533,6 +581,25 @@ mod windows {
             .checked_add(delay)
             .map(UnixMillis::new)
             .ok_or(ShippingCompositionError::Clock)
+    }
+
+    // Retry at most once, and strictly before the last confirmed deadline.
+    // No old lease/fence authority is extended by the passage of time.
+    fn bounded_heartbeat_retry_at(
+        timing: ControlPlaneLeaseTiming,
+        observed_at: UnixMillis,
+    ) -> Option<UnixMillis> {
+        let expiry = timing.idle_expires_at_ms().min(timing.hard_expires_at_ms());
+        let remaining = expiry.checked_sub(observed_at.value())?;
+        if remaining <= 1 {
+            return None;
+        }
+        let delay = HEARTBEAT_TRANSPORT_RETRY_MS.min(remaining / 2).max(1);
+        observed_at
+            .value()
+            .checked_add(delay)
+            .filter(|next| *next < expiry)
+            .map(UnixMillis::new)
     }
 
     fn now() -> Result<UnixMillis, ShippingCompositionError> {
