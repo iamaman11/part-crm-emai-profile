@@ -880,9 +880,10 @@ where
             workspace_lock: !completion.workspace_lock_released(),
             coordinator_lease: !completion.coordinator_lease_released(),
         };
-        let rematerialization_blocked = matches!(
+        let local_readiness_blocked = matches!(
             completion.local_outcome(),
             DirtyCloseLocalOutcome::RematerializationBlocked { .. }
+                | DirtyCloseLocalOutcome::MaterializationBindingBlocked { .. }
         );
         self.retained_dirty = None;
         self.last_terminal = Some(OperatorTerminalRecord {
@@ -891,7 +892,7 @@ where
             local_state,
             cleanup_failures: cleanup,
         });
-        if cleanup.any() || rematerialization_blocked {
+        if cleanup.any() || local_readiness_blocked {
             self.cleanup_blocked = true;
         }
 
