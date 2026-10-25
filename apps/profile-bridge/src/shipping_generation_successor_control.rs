@@ -917,6 +917,60 @@ mod tests {
     }
 
     #[test]
+    fn active_exact_foreign_binding_retains_checkpoint_and_releases_owned_lock()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let fixture = Fixture::new()?;
+        let root = MaterializationRoot::open_or_create(&fixture.root_path)?;
+        let source = root.open_generation(&fixture.tenant, &fixture.profile, &fixture.base)?;
+        persist_exact_save_attempt(&root, &source, &fixture.prepared, &fixture.lease)?;
+        let successor = fixture.prepared.candidate_workspace().generation_id();
+        let parent = fixture.prepared.candidate_workspace().path().parent()
+            .ok_or("candidate parent missing")?;
+        let foreign = parent.join(format!(".{}.materialization", successor.as_str()));
+        std::fs::write(&foreign, b"foreign-materialization-must-not-be-overwritten")?;
+        let current = ProfileLease::issue(
+            fixture.tenant.clone(),
+            fixture.profile.clone(),
+            SessionId::parse("session_conflicting_binding")?,
+            fixture.lease.device_id().clone(),
+            fixture.lease.epoch() + 1,
+            FencingToken::parse("fence_conflicting_binding")?,
+        )?;
+        let mut transport = Transport {
+            responses: VecDeque::from([MachineHttpResponse::new(
+                200,
+                br#"{"activeExact":true}"#.to_vec(),
+            )]),
+            paths: Vec::new(),
+        };
+        assert_eq!(
+            complete_active_exact_after_restart(
+                &root,
+                &fixture.tenant,
+                &fixture.profile,
+                successor,
+                &current,
+                &mut transport,
+            ),
+            Err(RestartExactLocalCompletionError::BindingOrRetirementFailed),
+        );
+        assert_eq!(transport.paths.len(), 1);
+        assert!(has_unresolved_save_attempt_for_profile(
+            &root, &fixture.tenant, &fixture.profile,
+        )?);
+        assert_eq!(
+            std::fs::read(&foreign)?,
+            b"foreign-materialization-must-not-be-overwritten",
+        );
+        assert!(!source.path().join(".profile-platform.lock").exists());
+        assert_eq!(
+            std::fs::read(fixture.prepared.candidate_workspace().path().join("prefs.js"))?,
+            b"save",
+        );
+        Ok(())
+    }
+
+    #[test]
     fn malformed_upload_capability_fails_closed() -> Result<(), Box<dyn std::error::Error>> {
         let fixture = Fixture::new()?;
         let transport = Transport {
