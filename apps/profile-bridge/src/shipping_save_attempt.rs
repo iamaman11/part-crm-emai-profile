@@ -80,6 +80,7 @@ pub(crate) struct ReadOnlySaveAttempt {
 }
 
 impl ReadOnlySaveAttempt {
+    #[cfg(any(windows, test))]
     #[must_use]
     pub(crate) fn prior_epoch(&self) -> u64 {
         self.header.epoch

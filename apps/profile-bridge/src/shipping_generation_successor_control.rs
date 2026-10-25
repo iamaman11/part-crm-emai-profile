@@ -24,13 +24,16 @@ use crate::shipping_save_attempt::{
 use control_plane_contract::profile_generation_api::{
     BRIDGE_PROFILE_GENERATION_COMMIT_PATH_TEMPLATE,
     BRIDGE_PROFILE_GENERATION_OBSERVE_PATH_TEMPLATE,
-    BRIDGE_PROFILE_GENERATION_RETRY_DECISION_PATH_TEMPLATE,
     BRIDGE_PROFILE_GENERATION_UPLOAD_CAPABILITY_PATH_TEMPLATE,
     BridgeGenerationSuccessorCommitOutcomeDto, BridgeGenerationSuccessorCommitResponse,
     BridgeGenerationSuccessorObserveRequest, BridgeGenerationSuccessorObserveResponse,
+    BridgeGenerationUploadCapabilityResponse, BridgeProfileGenerationSuccessorRequest,
+};
+#[cfg(any(windows, test))]
+use control_plane_contract::profile_generation_api::{
+    BRIDGE_PROFILE_GENERATION_RETRY_DECISION_PATH_TEMPLATE,
     BridgeGenerationSuccessorRetryDecisionRequest, BridgeGenerationSuccessorRetryDecisionResponse,
-    BridgeGenerationSuccessorRetryVerdict, BridgeGenerationUploadCapabilityResponse,
-    BridgeProfileGenerationSuccessorRequest,
+    BridgeGenerationSuccessorRetryVerdict,
 };
 use profile_platform_primitives::{CorrelationId, GenerationId, ProfileId, TenantId};
 use session_domain::ProfileLease;
