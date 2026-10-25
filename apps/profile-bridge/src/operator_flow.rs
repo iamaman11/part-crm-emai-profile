@@ -335,7 +335,7 @@ impl fmt::Display for OperatorFlowError {
             Self::CleanupRequired => formatter.write_str("previous operator cleanup is unresolved"),
             Self::HeartbeatTransportUncertain => {
                 formatter.write_str("coordinator heartbeat transport result is uncertain")
-            },
+            }
             Self::Stage(stage) => write!(formatter, "operator flow failed at {stage:?}"),
             Self::AuthoritativeGeneration { reason, cleanup } => write!(
                 formatter,
@@ -751,10 +751,9 @@ where
             }
             // Explicit HTTP rejection, malformed authority or unknown port
             // failures are NOT proof that we may retain a browser writer.
-            Err(_) => Err(self.fail_active_runtime(
-                OperatorFailureStage::CoordinatorHeartbeat,
-                now,
-            )),
+            Err(_) => {
+                Err(self.fail_active_runtime(OperatorFailureStage::CoordinatorHeartbeat, now))
+            }
         }
     }
 
@@ -2009,7 +2008,10 @@ mod tests {
             operator.active_session_id(),
             Some(fixture.lease.session_id())
         );
-        assert_eq!(operator.active_local_state(), Some(LocalGenerationState::InUse));
+        assert_eq!(
+            operator.active_local_state(),
+            Some(LocalGenerationState::InUse)
+        );
         assert_eq!(operator.coordinator().closed, 0);
         assert!(operator.last_terminal().is_none());
         assert_eq!(
