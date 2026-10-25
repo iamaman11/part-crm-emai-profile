@@ -1417,6 +1417,7 @@ mod tests {
         expected_launch_intent_id: LaunchIntentId,
         claim_fail: bool,
         heartbeat_fail: bool,
+        heartbeat_transport_uncertain: bool,
         close_fail: bool,
         claimed: u64,
         heartbeats: u64,
@@ -1470,6 +1471,10 @@ mod tests {
             } else {
                 Ok(())
             }
+        }
+
+        fn heartbeat_transport_uncertain(&self, _error: &Self::Error) -> bool {
+            self.heartbeat_transport_uncertain
         }
     }
 
@@ -1664,6 +1669,7 @@ mod tests {
                 expected_launch_intent_id: self.launch_intent_id.clone(),
                 claim_fail: false,
                 heartbeat_fail: false,
+                heartbeat_transport_uncertain: false,
                 close_fail: false,
                 claimed: 0,
                 heartbeats: 0,
@@ -1958,6 +1964,68 @@ mod tests {
                 ProcessAction::ForceTerminate(fixture.lease.session_id().clone()),
             ]
         );
+        Ok(())
+    }
+
+    #[test]
+    fn transient_heartbeat_transport_failure_preserves_native_working_browser_and_allows_reconfirmation()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let fixture = Fixture::new()?;
+        let mut coordinator = fixture.coordinator();
+        coordinator.heartbeat_fail = true;
+        coordinator.heartbeat_transport_uncertain = true;
+        let mut operator = ProfileBridgeOperator::new(
+            FakeDeviceIdentity::new(fixture.device_id.clone()),
+            FakeDeviceKeyStore::default(),
+            FakeDeviceAuthentication { allow: true },
+            fixture.enrollment()?,
+            coordinator,
+            FakeRuntimeBundles {
+                bundle: approved_bundle()?,
+                allow: true,
+            },
+            FakeBrowserPreflight {
+                allow: true,
+                calls: 0,
+            },
+            FakeProcessControl::default(),
+            FakeCamouhost::default(),
+        );
+        operator.open(&fixture.claim_uri, &fixture.root, UnixMillis::new(10))?;
+        let working = fixture.root.open_generation(
+            fixture.actor.tenant_scope().tenant_id(),
+            &fixture.profile_id,
+            &fixture.generation_id,
+        )?;
+        let wal = working.path().join("user_data").join("cookies.sqlite-wal");
+        fs::create_dir_all(wal.parent().ok_or("no WAL parent")?)?;
+        fs::write(&wal, b"native-unsynced-wal-original")?;
+
+        assert_eq!(
+            operator.heartbeat(UnixMillis::new(11)),
+            Err(OperatorFlowError::HeartbeatTransportUncertain)
+        );
+        assert_eq!(
+            operator.active_session_id(),
+            Some(fixture.lease.session_id())
+        );
+        assert_eq!(operator.active_local_state(), Some(LocalGenerationState::InUse));
+        assert_eq!(operator.coordinator().closed, 0);
+        assert!(operator.last_terminal().is_none());
+        assert_eq!(
+            operator.process().actions(),
+            [ProcessAction::Spawn(fixture.lease.session_id().clone())]
+        );
+        assert_eq!(fs::read(&wal)?, b"native-unsynced-wal-original");
+
+        operator.coordinator.heartbeat_fail = false;
+        operator.heartbeat(UnixMillis::new(12))?;
+        assert_eq!(operator.coordinator().heartbeats, 2);
+        assert_eq!(operator.coordinator().closed, 0);
+        assert_eq!(fs::read(&wal)?, b"native-unsynced-wal-original");
+        operator.close(UnixMillis::new(13))?;
+        assert!(operator.has_pending_dirty_close());
+        assert_eq!(fs::read(&wal)?, b"native-unsynced-wal-original");
         Ok(())
     }
 
