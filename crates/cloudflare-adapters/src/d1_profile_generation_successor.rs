@@ -244,18 +244,39 @@ impl ProfileGenerationSuccessorObservationPort for D1ProfileGenerationSuccessorC
         else {
             return Ok(false);
         };
-        Ok(row.authority_kind == "INTERACTIVE_LAUNCH"
-            && row.command_actor_id == actor.actor_id().as_str()
-            && row.device_id == device_id.as_str()
-            && row.profile_id == profile_id.as_str()
-            && row.base_generation_id == base_generation_id.as_str()
-            && row.generation_id == object.generation_id().as_str()
-            && row.object_key == object.object_key()
-            && row.metadata_digest == object.metadata_digest()
-            && row.container_digest == object.container_digest()
-            && i64_matches_u64(row.container_bytes, object.container_bytes())
-            && committed_state_is_exact(&row))
+        Ok(observed_successor_is_exact(
+            &row,
+            actor,
+            device_id,
+            profile_id,
+            base_generation_id,
+            object,
+        ))
     }
+}
+
+/// Shares the same VERIFIED active pointer proof as idempotent commit, but
+/// checks only immutable journal fields and *current* caller identity.
+/// No persisted original lease token is ever required.
+fn observed_successor_is_exact(
+    row: &SuccessorRow,
+    actor: &ActorContext,
+    device_id: &DeviceId,
+    profile_id: &ProfileId,
+    base_generation_id: &GenerationId,
+    object: &GenerationObjectDescriptor,
+) -> bool {
+    row.authority_kind == "INTERACTIVE_LAUNCH"
+        && row.command_actor_id == actor.actor_id().as_str()
+        && row.device_id == device_id.as_str()
+        && row.profile_id == profile_id.as_str()
+        && row.base_generation_id == base_generation_id.as_str()
+        && row.generation_id == object.generation_id().as_str()
+        && row.object_key == object.object_key()
+        && row.metadata_digest == object.metadata_digest()
+        && row.container_digest == object.container_digest()
+        && i64_matches_u64(row.container_bytes, object.container_bytes())
+        && committed_state_is_exact(row)
 }
 
 #[derive(Deserialize)]
@@ -482,7 +503,7 @@ const fn dependency_failure() -> ProfileGenerationSuccessorCommitError {
 
 #[cfg(test)]
 mod tests {
-    use super::{is_sha256_hex, validate_request};
+    use super::{SuccessorRow, is_sha256_hex, observed_successor_is_exact, validate_request};
     use application_ports::generation_objects::GenerationObjectDescriptor;
     use application_ports::profile_generation_successor::{
         ProfileGenerationCommitWitness, ProfileGenerationSuccessorCommitRequest,
@@ -491,6 +512,96 @@ mod tests {
         ActorContext, ActorId, AggregateVersion, CorrelationId, DeviceId, FencingToken,
         GenerationId, ProfileId, SessionId, TenantId, TenantScope, UnixMillis,
     };
+
+    #[test]
+    fn read_only_observer_needs_exact_actor_device_descriptor_and_verified_pointer()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let tenant = TenantId::parse("tenant_observer_01")?;
+        let profile = ProfileId::parse("profile_observer_01")?;
+        let base = GenerationId::parse("generation_observer_base_01")?;
+        let successor = GenerationId::parse("generation_observer_next_01")?;
+        let device = DeviceId::parse("device_observer_01")?;
+        let actor = ActorContext::new(
+            TenantScope::new(tenant.clone()),
+            ActorId::parse("actor_observer_01")?,
+            CorrelationId::parse("corr_observer_01")?,
+        );
+        let object = GenerationObjectDescriptor::new(
+            profile.clone(),
+            successor.clone(),
+            format!(
+                "tenants/{}/profiles/{}/generations/{}.bpgc",
+                tenant.as_str(),
+                profile.as_str(),
+                successor.as_str(),
+            ),
+            "a".repeat(64),
+            "b".repeat(64),
+            4096,
+        );
+        let mut row = SuccessorRow {
+            command_actor_id: actor.actor_id().as_str().to_owned(),
+            device_id: device.as_str().to_owned(),
+            authority_kind: "INTERACTIVE_LAUNCH".to_owned(),
+            profile_id: profile.as_str().to_owned(),
+            base_generation_id: base.as_str().to_owned(),
+            generation_id: successor.as_str().to_owned(),
+            object_key: object.object_key().to_owned(),
+            metadata_digest: object.metadata_digest().to_owned(),
+            container_digest: object.container_digest().to_owned(),
+            container_bytes: 4096,
+            expected_profile_version: 7,
+            coordinator_session_id: "session_observer_01".to_owned(),
+            coordinator_fencing_token_digest: "f".repeat(64),
+            coordinator_epoch: 3,
+            coordinator_version: 11,
+            coordinator_sequence: 10,
+            executed_at_ms: 100,
+            active_generation_id: Some(successor.as_str().to_owned()),
+            profile_status: Some("READY".to_owned()),
+            profile_version: Some(8),
+            generation_status: Some("VERIFIED".to_owned()),
+            generation_version: Some(2),
+            generation_object_key: Some(object.object_key().to_owned()),
+            generation_metadata_digest: Some(object.metadata_digest().to_owned()),
+            generation_container_digest: Some(object.container_digest().to_owned()),
+            verification_reference: Some(format!("r2sha256:{}", object.container_digest())),
+        };
+        assert!(observed_successor_is_exact(
+            &row, &actor, &device, &profile, &base, &object,
+        ));
+        assert!(!observed_successor_is_exact(
+            &row,
+            &actor,
+            &DeviceId::parse("device_foreign_observer_01")?,
+            &profile,
+            &base,
+            &object,
+        ));
+        let foreign = ActorContext::new(
+            TenantScope::new(tenant),
+            ActorId::parse("actor_foreign_observer_01")?,
+            CorrelationId::parse("corr_foreign_observer_01")?,
+        );
+        assert!(!observed_successor_is_exact(
+            &row, &foreign, &device, &profile, &base, &object,
+        ));
+        row.container_digest = "c".repeat(64);
+        assert!(!observed_successor_is_exact(
+            &row, &actor, &device, &profile, &base, &object,
+        ));
+        row.container_digest = object.container_digest().to_owned();
+        row.profile_status = Some("IN_USE".to_owned());
+        assert!(!observed_successor_is_exact(
+            &row, &actor, &device, &profile, &base, &object,
+        ));
+        row.profile_status = Some("READY".to_owned());
+        row.generation_status = Some("QUARANTINED".to_owned());
+        assert!(!observed_successor_is_exact(
+            &row, &actor, &device, &profile, &base, &object,
+        ));
+        Ok(())
+    }
 
     #[test]
     fn request_requires_exact_successor_and_coordinator_shape()
