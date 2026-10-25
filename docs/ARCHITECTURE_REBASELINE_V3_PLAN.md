@@ -67,31 +67,84 @@ Binding rules:
    CURRENT; CURRENT stage Issues own only their stage scope/evidence; closed/reference Issues are
    provenance. None may become a second roadmap.
 
-### V2 / #802 product-reliability sequencing constraint (2026-10-25)
+### V2 / #802 product-reliability sequencing constraint — final accepted local-first policy (2026-10-25)
 
-V2's accepted B7 positive journey now explicitly includes the permanent
-[local-first Windows Firefox crash-resilience invariant](LOCAL_PROFILE_LIFECYCLE.md#11-permanent-local-first-crash-resilience-invariant-accepted-2026-10-25).
-This is **a DoD refinement within the already-current V2 / #802**, not
-an additional CAP stage or parallel execution roadmap.
+**Owner decision ACCEPTED, runtime NOT YET ACCEPTED.** V2/B7 already owns this
+refinement in [#802](https://github.com/iamaman11/part-crm-emai-profile/issues/802).
+It does not insert a new CAP stage, new CURRENT Issue or new independent
+architecture/program authority. [#266](https://github.com/iamaman11/part-crm-emai-profile/issues/266)
+retains the live stage pointer; #584 retains V2 acceptance ownership.
 
-The CURRENT stage owner (#584) and live pointer (#266) select the
-bounded implementation and checkpoint. Before B7 can pass, source must
-prove same-device crash recovery and safe non-destructive preservation
-through Windows shutdown/power loss, browser/Bridge crash, temporary
-network loss, and lost save responses, while retaining single-writer
-CAS/fencing/ACL, remote N-1 and independently recoverable keys. Prove
-that normal transient heartbeat failure is not indiscriminately
-classified as positive revocation; support practical 256/512 MiB
-profiles without a 64 MiB full-RAM blocker; test 100 consecutive saves
-and 100 profiles. Installed Windows + exact provider staging evidence
-is still required separately from green PR CI.
+**Final application rule:** native Firefox has one persistent local working
+`user_data` (cookies, SQLite/WAL, session, IndexedDB and extensions).
+Neither loss of Bridge/Windows/network nor an unknown cloud commit may erase
+or replace it. Under *freshly proven* ACL/device/CNG, exact current generation,
+exclusive coordinator lease/fence, compatible runtime/identity and OS process/
+writer-lock evidence, Bridge permits Firefox's same-directory native recovery.
+Without permission or without proof of no other writer, retain all bytes and
+report `RECOVERY_OR_CONFLICT`; do not promise unconditionally offline opening
+or recovery from the destruction of every copy/key.
 
-The remediation should **prefer replacing obsolete duplication and
-blocking ceremonies over layering yet another state machine**:
-native Firefox recovery -> minimal durable local sync intent -> bounded
-immutable encrypted stream -> authenticated exact verify/CAS -> N-1.
-No silent cloud rollback, stale fence replay, forged `Saved`, locally
-invented remote authority or manual destructive cache reset.
+**Responsibility split:** heartbeat renews exclusive writer authority only;
+controlled native Firefox close independently triggers the save. Bridge and
+the existing save/reopen owners persist minimal `LOCAL_UNSYNCED` intent
+without taking mandatory extra full working-directory clones. After network
+recovery *while the app is running* or on the next authorized application
+start if it exited, the same existing owner must automatically reconcile the
+exact pending upload/commit before any additional candidate is created.
+Unknown HTTP results never authorize stale fencing, blind N+2, `Clean` or
+`Saved`. An app that is not running has no instant reconnect guarantee;
+do not add a background daemon merely to make that claim.
+
+**Steady-state full-generation budget:** in cloud storage each Profile may
+retain one current immutable encrypted N and **at most one** independent,
+decryption-key-available and real-browser-proven WORKING/LKG reserve. The
+reserve may be N-k, not necessarily N−1; a VERIFIED hash alone is not WORKING.
+Both full objects must include all applicable cookies, SQLite/WAL,
+IndexedDB, extensions, sessions and settings. Locally retain one primary
+working directory, not per-save full clones or permanent sealed buffers.
+Durable journal/audit *metadata* may persist separately. During a dirty,
+lost-response, conflicted or interrupted-prune transaction, additional
+full objects/workspaces may **temporarily** be necessary: protect all
+unsynced/unknown/only-copy/LKG bytes and old decryption keys until exact
+evidence permits no-replace, crash-safe, idempotent cleanup. Never destroy
+recoverability merely to enforce a physical two-copy cap.
+
+**Existing V2/#802 execution order and proof, not parallel projects:**
+
+1. **P0-A — local crash recovery first.** Reconcile surviving per-generation
+   Bridge lock files after verified OS-handle/process quiescence, fresh
+   authorization and single-writer proof; preserve same-directory Firefox
+   state and pinned immutable identity. `materialization_inventory_digest`
+   already excludes mutable `user_data/**` and must **not** be weakened.
+2. **P0-B — narrow heartbeat authority correctness.** Preserve confirmed
+   reject vs transport/408/429/5xx uncertainty, exact bounded retry and
+   no unauthorized second writer; no browser snapshot on heartbeat.
+3. **P0-C — auto-resume + large-profile save.** Wire ordinary controlled-close
+   and authorized reconnect/next-start exact attempt reconciliation through
+   the existing save owner. Replace clone + 64 MiB plaintext + extra full
+   sealed copies with bounded memory/storage streaming, preserving durable
+   partial-transaction evidence, verified R2 and CAS/D1.
+4. **P0-D — bounded backup and cleanup.** Record last demonstrated WORKING
+   generation and retain its independently decryptable object/key. After
+   safe promotion/retention checks, prune only proven expendable full local
+   and cloud generations, without rewriting append-only audit or silently
+   rolling back pointers. Reconcile interrupted prune and prove new-machine
+   key restore/cross-device conflicts.
+5. **P0-E/F — normal UX and final proof.** Display distinct local-working,
+   local-unsynced, syncing, cloud-saved and blocked/conflict states. Test
+   installed Windows shutdown/Bridge kill/WAL recovery; offline-close →
+   reconnect→one commit; lost PUT/commit reply; ACL revoke and two devices;
+   256/512 MiB; 100 sequential saves and 100 Profiles. At settled points
+   inspect **both** full R2 objects and on-disk copies (at most N+LKG in
+   steady state). Exact-head full CI, clean-host installed Camoufox and
+   separately authorized provider staging all remain mandatory.
+
+Preserve the existing G1–G8 guarded source/release/staging/evidence process.
+Production is not authorized by this policy. Simplify within existing
+Firefox/Bridge/coordinator/local-profile/generation/R2-D1 semantic owners;
+do not introduce another sync service, heartbeat worker, state store,
+recovery state machine or blanket timeout-based deletion.
 
 ## 3. Binding execution order
 
