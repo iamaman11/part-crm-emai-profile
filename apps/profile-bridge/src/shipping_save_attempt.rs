@@ -127,6 +127,187 @@ impl ReadOnlySaveAttempt {
     }
 }
 
+/// Minimal LOCAL_UNSYNCED *evidence*, not another save authority or a
+/// separately snapshotted generation. This small same-root record is durable
+/// BEFORE any network-dependent sealed candidate work. The original Firefox
+/// working bytes remain in their original generation directory.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct LocalUnsyncedIntent {
+    schema: String,
+    tenant: String,
+    profile: String,
+    base_generation: String,
+    epoch: u64,
+    session_fingerprint: String,
+    fencing_fingerprint: String,
+    source_inventory: u64,
+    source_bytes: u64,
+}
+
+const MAX_LOCAL_UNSYNCED_BYTES: usize = 2_048;
+
+/// Called only by the existing operator after the native browser has closed
+/// and while its original Bridge workspace lock is retained. Never stores
+/// an expired lease token, cookies, credentials, or a full workspace clone.
+/// A canonical different/torn/foreign file remains a hard blocker.
+pub(crate) fn persist_local_unsynced_intent(
+    root: &MaterializationRoot,
+    source: &GenerationWorkspace,
+    lease: &ProfileLease,
+) -> Result<(), SaveAttemptEvidenceError> {
+    if source.tenant_id() != lease.tenant_id()
+        || source.profile_id() != lease.profile_id()
+        || lease.epoch() == 0
+    {
+        return Err(SaveAttemptEvidenceError::Invalid);
+    }
+    let inventory = source
+        .inventory()
+        .map_err(|_| SaveAttemptEvidenceError::Changed)?;
+    let intent = LocalUnsyncedIntent {
+        schema: "bridge-p3-local-unsynced-v1".to_owned(),
+        tenant: lease.tenant_id().as_str().to_owned(),
+        profile: lease.profile_id().as_str().to_owned(),
+        base_generation: source.generation_id().as_str().to_owned(),
+        epoch: lease.epoch(),
+        session_fingerprint: credential_fingerprint(b"session", lease.session_id().as_str()),
+        fencing_fingerprint: credential_fingerprint(b"fencing", lease.fencing_token().as_str()),
+        source_inventory: inventory.inventory_digest(),
+        source_bytes: inventory.total_bytes(),
+    };
+    let bytes = serde_json::to_vec(&intent).map_err(|_| SaveAttemptEvidenceError::Invalid)?;
+    if bytes.is_empty() || bytes.len() > MAX_LOCAL_UNSYNCED_BYTES {
+        return Err(SaveAttemptEvidenceError::Invalid);
+    }
+    let canonical = local_unsynced_path(root, lease.tenant_id(), lease.profile_id());
+    match fs::symlink_metadata(&canonical) {
+        Ok(_) => {
+            if read_local_unsynced(&canonical)? == intent {
+                return Ok(());
+            }
+            return Err(SaveAttemptEvidenceError::Changed);
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error.into()),
+    }
+
+    let mut stage = None;
+    for _ in 0..STAGE_TRIES {
+        let seq = STAGE_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+        let path = root.path().join(format!(
+            "{}.pending-local-unsynced-{}-{seq}",
+            scope_file_prefix(lease.tenant_id(), lease.profile_id()),
+            std::process::id()
+        ));
+        match OpenOptions::new().create_new(true).write(true).open(&path) {
+            Ok(file) => {
+                stage = Some((path, file));
+                break;
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(error) => return Err(error.into()),
+        }
+    }
+    let (stage_path, mut file) = stage.ok_or(SaveAttemptEvidenceError::Unavailable)?;
+    let written = file.write_all(&bytes).and_then(|_| file.sync_all());
+    drop(file);
+    if let Err(error) = written {
+        // A torn staged record remains scoped blocking evidence. No browser
+        // bytes, native WAL, identity, or unrelated Profile are touched.
+        return Err(error.into());
+    }
+    let published = fs::hard_link(&stage_path, &canonical);
+    // A crash here leaves a scoped pending marker, which cannot be mistaken
+    // for a completed intent or bypass the next-start recovery guard.
+    fs::remove_file(&stage_path)?;
+    match published {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+            if read_local_unsynced(&canonical)? == intent {
+                Ok(())
+            } else {
+                Err(SaveAttemptEvidenceError::Changed)
+            }
+        }
+        Err(error) => Err(error.into()),
+    }
+}
+
+/// Retire the small local-close intent only AFTER the entire exact encrypted
+/// candidate and its immutable checkpoint are independently verified on disk.
+/// From then on that canonical checkpoint is the sole unresolved-save evidence.
+/// This never retires the ciphertext checkpoint or grants any cloud write.
+pub(crate) fn retire_local_unsynced_after_exact_checkpoint(
+    root: &MaterializationRoot,
+    source: &GenerationWorkspace,
+    lease: &ProfileLease,
+    checkpoint: &ReadOnlySaveAttempt,
+) -> Result<(), SaveAttemptEvidenceError> {
+    let path = local_unsynced_path(root, lease.tenant_id(), lease.profile_id());
+    let intent = match read_local_unsynced(&path) {
+        Ok(value) => value,
+        Err(SaveAttemptEvidenceError::Io(std::io::ErrorKind::NotFound)) => return Ok(()),
+        Err(error) => return Err(error),
+    };
+    let inventory = source
+        .inventory()
+        .map_err(|_| SaveAttemptEvidenceError::Changed)?;
+    if intent.schema != "bridge-p3-local-unsynced-v1"
+        || intent.tenant != lease.tenant_id().as_str()
+        || intent.profile != lease.profile_id().as_str()
+        || intent.base_generation != source.generation_id().as_str()
+        || intent.epoch != lease.epoch()
+        || intent.session_fingerprint
+            != credential_fingerprint(b"session", lease.session_id().as_str())
+        || intent.fencing_fingerprint
+            != credential_fingerprint(b"fencing", lease.fencing_token().as_str())
+        || intent.source_inventory != inventory.inventory_digest()
+        || intent.source_bytes != inventory.total_bytes()
+        || checkpoint.header.tenant != intent.tenant
+        || checkpoint.header.profile != intent.profile
+        || checkpoint.header.base_generation != intent.base_generation
+        || checkpoint.header.source_inventory != intent.source_inventory
+        || checkpoint.header.candidate_bytes != intent.source_bytes
+        || !checkpoint.matches_original_lease(lease)
+    {
+        return Err(SaveAttemptEvidenceError::Changed);
+    }
+    // No sweep. If deletion fails, fail closed and keep both records.
+    fs::remove_file(path)?;
+    Ok(())
+}
+
+fn local_unsynced_path(
+    root: &MaterializationRoot,
+    tenant: &TenantId,
+    profile: &ProfileId,
+) -> PathBuf {
+    root.path().join(format!(
+        "{}-local-unsynced-v1.intent",
+        scope_file_prefix(tenant, profile)
+    ))
+}
+
+fn read_local_unsynced(path: &PathBuf) -> Result<LocalUnsyncedIntent, SaveAttemptEvidenceError> {
+    let meta = fs::symlink_metadata(path)?;
+    if meta.file_type().is_symlink()
+        || !meta.is_file()
+        || meta.len() == 0
+        || meta.len() > MAX_LOCAL_UNSYNCED_BYTES as u64
+    {
+        return Err(SaveAttemptEvidenceError::Invalid);
+    }
+    let mut file = File::open(path)?;
+    let mut bytes = Vec::new();
+    file.take((MAX_LOCAL_UNSYNCED_BYTES as u64) + 1)
+        .read_to_end(&mut bytes)?;
+    if bytes.is_empty() || bytes.len() > MAX_LOCAL_UNSYNCED_BYTES {
+        return Err(SaveAttemptEvidenceError::Invalid);
+    }
+    serde_json::from_slice(&bytes).map_err(|_| SaveAttemptEvidenceError::Invalid)
+}
+
 /// No-replace, fsynced publication outside the generation workspace/snapshot.
 /// A pre-existing different record (including corrupted/truncated/symlink)
 /// permanently blocks this ordinary save attempt, without deleting any bytes.
