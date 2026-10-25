@@ -30,7 +30,9 @@ use crate::shipping_generation_save::{
     prepare_retained_generation_successor, publish_verify_and_commit_successor,
 };
 use crate::shipping_generation_successor_control::ControlPlaneGenerationSuccessor;
-use crate::shipping_save_attempt::{inspect_exact_save_attempt, persist_exact_save_attempt};
+use crate::shipping_save_attempt::{
+    inspect_exact_save_attempt, persist_exact_save_attempt, retire_fully_saved_attempt,
+};
 #[cfg(any(test, feature = "synthetic-test-bin"))]
 use application_ports::generation_objects::{
     GenerationObjectExactVerifyPort, GenerationObjectUploadPort,
@@ -257,6 +259,7 @@ impl OperatorTerminalRecord {
 pub struct OperatorGenerationSaveCompletion {
     committed: CommittedGenerationSuccessor,
     local: DirtyCloseCompletion,
+    checkpoint_retired: bool,
 }
 
 impl OperatorGenerationSaveCompletion {
@@ -274,7 +277,7 @@ impl OperatorGenerationSaveCompletion {
     /// candidate to remain locally accepted and both retained ownership layers to be released.
     #[must_use]
     pub fn is_saved(&self) -> bool {
-        self.local.is_fully_saved_locally()
+        self.local.is_fully_saved_locally() && self.checkpoint_retired
     }
 }
 
@@ -891,7 +894,7 @@ where
         .map_err(|_| OperatorFlowError::Stage(OperatorFailureStage::GenerationSave))?;
         drop(control);
 
-        let (completion, session_id, local_state) = {
+        let (completion, session_id, local_state, checkpoint_retired) = {
             let retained = self
                 .retained_dirty
                 .as_mut()
@@ -911,8 +914,17 @@ where
                 &mut self.coordinator,
                 now,
             );
+            // Retire ONLY after the canonical server commit, exact local
+            // readiness publication and both writer/lease releases succeed.
+            // Failure preserves the checkpoint and blocks claiming Saved.
+            // Neither dirty/unknown nor locally blocked generations are
+            // eligible for checkpoint deletion.
+            let checkpoint_retired = completion.as_ref().is_ok_and(|outcome| {
+                outcome.is_fully_saved_locally()
+                    && retire_fully_saved_attempt(root, &prepared, &committed, &lease).is_ok()
+            });
             let local_state = retained.base_record().state();
-            (completion, session_id, local_state)
+            (completion, session_id, local_state, checkpoint_retired)
         };
 
         let completion = match completion {
@@ -956,13 +968,14 @@ where
             local_state,
             cleanup_failures: cleanup,
         });
-        if cleanup.any() || local_readiness_blocked {
+        if cleanup.any() || local_readiness_blocked || !checkpoint_retired {
             self.cleanup_blocked = true;
         }
 
         Ok(OperatorGenerationSaveCompletion {
             committed,
             local: completion,
+            checkpoint_retired,
         })
     }
 
