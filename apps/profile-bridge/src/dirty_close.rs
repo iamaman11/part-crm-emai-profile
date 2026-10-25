@@ -24,11 +24,26 @@ use profile_platform_primitives::{GenerationId, UnixMillis};
 use session_domain::ProfileLease;
 use std::fmt;
 
-#[derive(Debug)]
 pub struct RetainedDirtyClose {
     lease: ProfileLease,
     workspace_lock: Option<BridgeWorkspaceLock>,
     base: LocalGenerationRecord,
+    // In-process exact retry authority. It is deliberately not a new durable
+    // state store: after process loss a separate authenticated reconciliation
+    // is required before the on-disk candidate can be trusted or discarded.
+    pending_prepared: Option<PreparedDirtyGeneration>,
+}
+
+impl fmt::Debug for RetainedDirtyClose {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("RetainedDirtyClose")
+            .field("lease", &self.lease)
+            .field("workspace_lock_held", &self.workspace_lock.is_some())
+            .field("base", &self.base)
+            .field("has_pending_prepared", &self.pending_prepared.is_some())
+            .finish()
+    }
 }
 
 impl RetainedDirtyClose {
@@ -46,6 +61,7 @@ impl RetainedDirtyClose {
             lease,
             workspace_lock: Some(workspace_lock),
             base,
+            pending_prepared: None,
         })
     }
 
@@ -62,6 +78,35 @@ impl RetainedDirtyClose {
     #[must_use]
     pub const fn holds_workspace_lock(&self) -> bool {
         self.workspace_lock.is_some()
+    }
+
+    #[must_use]
+    pub(crate) fn prepared_successor(&self) -> Option<&PreparedDirtyGeneration> {
+        self.pending_prepared.as_ref()
+    }
+
+    pub(crate) fn remember_prepared_successor(
+        &mut self,
+        prepared: PreparedDirtyGeneration,
+    ) -> Result<(), LocalProfileError> {
+        let metadata = prepared.sealed().metadata();
+        if self.pending_prepared.is_some()
+            || self.workspace_lock.is_none()
+            || self.base.state() != LocalGenerationState::DirtyLocal
+            || !self.base.is_locked()
+            || metadata.tenant_id() != self.lease.tenant_id()
+            || metadata.profile_id() != self.lease.profile_id()
+            || metadata.base_generation_id() != Some(self.base.generation_id())
+            || prepared.candidate_workspace().generation_id() != metadata.generation_id()
+        {
+            return Err(LocalProfileError::InvalidTransition);
+        }
+        self.pending_prepared = Some(prepared);
+        Ok(())
+    }
+
+    pub(crate) fn take_prepared_successor(&mut self) -> Option<PreparedDirtyGeneration> {
+        self.pending_prepared.take()
     }
 
     pub fn open_base_workspace(
