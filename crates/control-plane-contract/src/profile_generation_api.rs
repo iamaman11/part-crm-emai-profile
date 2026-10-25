@@ -22,8 +22,7 @@ pub const BRIDGE_PROFILE_GENERATION_OBSERVE_PATH_TEMPLATE: &str =
     "/bridge/v1/tenants/{tenantId}/profiles/{profileId}/generation-successor/observe";
 pub const BRIDGE_PROFILE_GENERATION_RETRY_DECISION_PATH_TEMPLATE: &str =
     "/bridge/v1/tenants/{tenantId}/profiles/{profileId}/generation-successor/retry-decision";
-pub const BRIDGE_PROFILE_GENERATION_LOCAL_UNSYNCED_RETRY_DECISION_PATH_TEMPLATE: &str =
-    "/bridge/v1/tenants/{tenantId}/profiles/{profileId}/generation-successor/local-unsynced/retry-decision";
+pub const BRIDGE_PROFILE_GENERATION_LOCAL_UNSYNCED_RETRY_DECISION_PATH_TEMPLATE: &str = "/bridge/v1/tenants/{tenantId}/profiles/{profileId}/generation-successor/local-unsynced/retry-decision";
 
 /// Machine-authenticated, read-only exact successor reconciliation. No
 /// credential, lease/fencing token, signed URL or optimistic write version is
@@ -433,9 +432,8 @@ fn sha256_schema() -> Value {
 #[cfg(test)]
 mod tests {
     use super::{
-        BridgeGenerationSuccessorObserveRequest, BridgeGenerationSuccessorObserveResponse,
-        BridgeGenerationLocalUnsyncedRetryDecisionRequest,
-        BridgeGenerationSuccessorRetryDecisionRequest,
+        BridgeGenerationLocalUnsyncedRetryDecisionRequest, BridgeGenerationSuccessorObserveRequest,
+        BridgeGenerationSuccessorObserveResponse, BridgeGenerationSuccessorRetryDecisionRequest,
         BridgeGenerationSuccessorRetryDecisionResponse, BridgeGenerationUploadCapabilityResponse,
         BridgeProfileGenerationSuccessorRequest, ProfileCreateRequest, ProfileGrantRequest,
         ProfileProjectionDto, ProfileStatusDto, RegisterGenerationRequest, openapi_fragment,
@@ -485,15 +483,27 @@ mod tests {
             "coordinatorFencingToken": "fence_current",
             "coordinatorEpoch": 8
         });
-        assert!(serde_json::from_value::<BridgeGenerationLocalUnsyncedRetryDecisionRequest>(
-            body.clone()
-        ).is_ok());
-        for field in ["generationId", "objectKey", "containerDigest", "oldFence", "deviceId"] {
+        assert!(
+            serde_json::from_value::<BridgeGenerationLocalUnsyncedRetryDecisionRequest>(
+                body.clone()
+            )
+            .is_ok()
+        );
+        for field in [
+            "generationId",
+            "objectKey",
+            "containerDigest",
+            "oldFence",
+            "deviceId",
+        ] {
             let mut foreign = body.clone();
             foreign[field] = json!("forbidden");
-            assert!(serde_json::from_value::<BridgeGenerationLocalUnsyncedRetryDecisionRequest>(
-                foreign
-            ).is_err());
+            assert!(
+                serde_json::from_value::<BridgeGenerationLocalUnsyncedRetryDecisionRequest>(
+                    foreign
+                )
+                .is_err()
+            );
         }
     }
 

@@ -40,12 +40,11 @@ use control_plane_contract::generation_reopen_api::{
     GENERATION_DOWNLOAD_CAPABILITY_MAX_EXPIRES_SECONDS,
 };
 use control_plane_contract::profile_generation_api::{
-    BridgeGenerationLocalUnsyncedRetryDecisionRequest,
-    BridgeGenerationSuccessorCommitOutcomeDto, BridgeGenerationSuccessorCommitResponse,
-    BridgeGenerationSuccessorObserveRequest, BridgeGenerationSuccessorObserveResponse,
-    BridgeGenerationSuccessorRetryDecisionRequest, BridgeGenerationSuccessorRetryDecisionResponse,
-    BridgeGenerationSuccessorRetryVerdict, BridgeGenerationUploadCapabilityResponse,
-    BridgeProfileGenerationSuccessorRequest,
+    BridgeGenerationLocalUnsyncedRetryDecisionRequest, BridgeGenerationSuccessorCommitOutcomeDto,
+    BridgeGenerationSuccessorCommitResponse, BridgeGenerationSuccessorObserveRequest,
+    BridgeGenerationSuccessorObserveResponse, BridgeGenerationSuccessorRetryDecisionRequest,
+    BridgeGenerationSuccessorRetryDecisionResponse, BridgeGenerationSuccessorRetryVerdict,
+    BridgeGenerationUploadCapabilityResponse, BridgeProfileGenerationSuccessorRequest,
 };
 use device_domain::DeviceJobTarget;
 use encrypted_generation_domain::{
@@ -618,7 +617,10 @@ async fn dispatch_successor_retry_decision(
         base.clone(),
     );
     let preconditions = device_execution_preconditions(env)?;
-    match preconditions.evaluate_device_execution(actor, &target).await {
+    match preconditions
+        .evaluate_device_execution(actor, &target)
+        .await
+    {
         Ok(DeviceExecutionReadiness::Ready) => {}
         Ok(DeviceExecutionReadiness::Blocked(DeviceExecutionBlocker::DeviceUnauthorized)) => {
             return forbidden(actor.correlation_id().as_str());

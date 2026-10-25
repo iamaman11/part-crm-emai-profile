@@ -21,8 +21,8 @@ use crate::shipping_save_attempt::{
 #[cfg(any(windows, test))]
 use crate::shipping_save_attempt::{
     ScopedPendingSaveEvidence, classify_scoped_pending_save_evidence,
-    local_unsynced_matches_fresh_lease,
-    retire_active_exact_attempt_after_restart, retire_matching_local_unsynced_after_restart,
+    local_unsynced_matches_fresh_lease, retire_active_exact_attempt_after_restart,
+    retire_matching_local_unsynced_after_restart,
 };
 use control_plane_contract::profile_generation_api::{
     BRIDGE_PROFILE_GENERATION_COMMIT_PATH_TEMPLATE,
@@ -644,8 +644,9 @@ fn request_local_unsynced_retry_decision<T: MachineHttpPort>(
     if response.len() > MAX_OBSERVE_RESPONSE_BYTES {
         return Err(ShippingControlPlaneError::InvalidResponse);
     }
-    let result = serde_json::from_slice::<BridgeGenerationSuccessorRetryDecisionResponse>(&response)
-        .map_err(|_| ShippingControlPlaneError::InvalidResponse)?;
+    let result =
+        serde_json::from_slice::<BridgeGenerationSuccessorRetryDecisionResponse>(&response)
+            .map_err(|_| ShippingControlPlaneError::InvalidResponse)?;
     Ok(result.verdict)
 }
 
@@ -1137,7 +1138,9 @@ mod tests {
             Ok(RestartExactLocalCompletion::LocalUnsyncedAuthorizedAwaitingFirstSeal),
         );
         assert_eq!(transport.paths.len(), 1);
-        assert!(transport.paths[0].ends_with("/generation-successor/local-unsynced/retry-decision"));
+        assert!(
+            transport.paths[0].ends_with("/generation-successor/local-unsynced/retry-decision")
+        );
         assert_eq!(std::fs::read(source.path().join("prefs.js"))?, original);
         assert!(has_unresolved_save_attempt_for_profile(
             &root,
@@ -1154,8 +1157,12 @@ mod tests {
         };
         assert_eq!(
             complete_active_exact_after_restart(
-                &root, &fixture.tenant, &fixture.profile,
-                &fixture.base, &fresh, &mut denied,
+                &root,
+                &fixture.tenant,
+                &fixture.profile,
+                &fixture.base,
+                &fresh,
+                &mut denied,
             ),
             Ok(RestartExactLocalCompletion::RetryDecisionBlocked),
         );
@@ -1171,14 +1178,20 @@ mod tests {
         let mut no_network = Transport::default();
         assert_eq!(
             complete_active_exact_after_restart(
-                &root, &fixture.tenant, &fixture.profile,
-                &fixture.base, &foreign_device, &mut no_network,
+                &root,
+                &fixture.tenant,
+                &fixture.profile,
+                &fixture.base,
+                &foreign_device,
+                &mut no_network,
             ),
             Err(RestartExactLocalCompletionError::WriterOrLockUnresolved),
         );
         assert!(no_network.paths.is_empty());
         assert!(has_unresolved_save_attempt_for_profile(
-            &root, &fixture.tenant, &fixture.profile,
+            &root,
+            &fixture.tenant,
+            &fixture.profile,
         )?);
         // A stale epoch or an unrelated selected base never makes the
         // offline source an authorized fresh writer or allows N+2.
