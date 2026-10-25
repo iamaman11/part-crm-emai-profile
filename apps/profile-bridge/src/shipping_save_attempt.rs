@@ -186,8 +186,11 @@ pub(crate) fn persist_exact_save_attempt(
     let mut staged = None;
     for _ in 0..STAGE_TRIES {
         let sequence = STAGE_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+        // Scope the pending staging name as well: an interrupted file write
+        // must block only its own Profile on a subsequent Bridge launch.
         let path = root.path().join(format!(
-            ".profile-save-attempt-v1.pending-{}-{sequence}",
+            "{}.pending-{}-{sequence}",
+            scope_file_prefix(lease.tenant_id(), lease.profile_id()),
             std::process::id()
         ));
         match OpenOptions::new().create_new(true).write(true).open(&path) {
@@ -369,6 +372,50 @@ pub(crate) fn retire_fully_saved_attempt(
     Ok(())
 }
 
+/// Conservative startup guard. A crash can happen before, during or after
+/// publication of an exact attempt. Both canonical and pending stage files
+/// block a fresh browser launch for that *same Profile* until the original
+/// attempt is reconciled by the authoritative recovery owner.
+///
+/// The filename is a one-way tenant/Profile scope fingerprint, so a damaged
+/// file does not become invisible simply because its JSON header is torn.
+/// This is a read-only check; it neither trusts the file nor grants a lease.
+pub(crate) fn has_unresolved_save_attempt_for_profile(
+    root: &MaterializationRoot,
+    tenant: &TenantId,
+    profile: &ProfileId,
+) -> Result<bool, SaveAttemptEvidenceError> {
+    let prefix = scope_file_prefix(tenant, profile);
+    let mut inspected = 0_usize;
+    for entry in fs::read_dir(root.path())? {
+        let entry = entry?;
+        inspected = inspected.saturating_add(1);
+        if inspected > 100_000 {
+            return Err(SaveAttemptEvidenceError::Unavailable);
+        }
+        let name = entry.file_name();
+        if name
+            .to_str()
+            .is_some_and(|value| value.starts_with(&prefix))
+        {
+            // Do not require an intact filename extension. A corrupted,
+            // truncated, symbolic or staged name must not evade the guard.
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+fn scope_file_prefix(tenant: &TenantId, profile: &ProfileId) -> String {
+    let mut sha = Sha256::new();
+    sha.update(b"bridge-p3-save-attempt-profile-scope-v1\0");
+    for part in [tenant.as_str(), profile.as_str()] {
+        sha.update((part.len() as u64).to_be_bytes());
+        sha.update(part.as_bytes());
+    }
+    format!(".profile-save-attempt-v1-{}", hex(&sha.finalize()))
+}
+
 fn attempt_path(
     root: &MaterializationRoot,
     tenant: &TenantId,
@@ -376,13 +423,12 @@ fn attempt_path(
     successor: &GenerationId,
 ) -> PathBuf {
     let mut sha = Sha256::new();
-    sha.update(b"bridge-p3-save-attempt-path-v1\0");
-    for part in [tenant.as_str(), profile.as_str(), successor.as_str()] {
-        sha.update((part.len() as u64).to_be_bytes());
-        sha.update(part.as_bytes());
-    }
+    sha.update(b"bridge-p3-save-attempt-successor-v1\0");
+    sha.update((successor.as_str().len() as u64).to_be_bytes());
+    sha.update(successor.as_str().as_bytes());
     root.path().join(format!(
-        ".profile-save-attempt-v1-{}.bin",
+        "{}-{}.bin",
+        scope_file_prefix(tenant, profile),
         hex(&sha.finalize())
     ))
 }
