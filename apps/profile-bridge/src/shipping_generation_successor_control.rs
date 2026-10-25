@@ -246,6 +246,12 @@ where
         .map_err(|_| control_error(ShippingControlPlaneError::Transport));
     encoded.fill(0);
     let response = response?;
+    if matches!(response.status(), 408 | 429) || (500..=599).contains(&response.status()) {
+        // Commit or capability effects may be ambiguous. Preserve exact
+        // persisted attempt identity; never treat this as authority to retry
+        // an upload/commit or to label the browser profile Saved.
+        return Err(control_error(ShippingControlPlaneError::HttpServerUncertain));
+    }
     if !(200..300).contains(&response.status()) {
         return Err(control_error(ShippingControlPlaneError::HttpStatus));
     }
@@ -618,7 +624,7 @@ mod tests {
         // A failed authoritative read never grants a publish/reopen outcome.
         // Preserve its error category: an explicit server refusal is not a
         // dropped response and must not be misreported as retryable transport.
-        for status in [401, 403, 409, 500] {
+        for status in [401, 403, 409, 408, 429, 500, 502, 503, 504] {
             let mut rejected = Transport {
                 responses: VecDeque::from([MachineHttpResponse::new(status, Vec::new())]),
                 paths: Vec::new(),
@@ -631,7 +637,11 @@ mod tests {
                     successor,
                     &mut rejected,
                 ),
-                Err(ShippingControlPlaneError::HttpStatus)
+                Err(if matches!(status, 408 | 429) || status >= 500 {
+                    ShippingControlPlaneError::HttpServerUncertain
+                } else {
+                    ShippingControlPlaneError::HttpStatus
+                })
             );
             assert_eq!(rejected.paths.len(), 1);
         }
