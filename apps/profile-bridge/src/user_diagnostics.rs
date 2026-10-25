@@ -231,6 +231,48 @@ impl UserDiagnostic {
             )) => {
                 "Windows denied access to the local profile evidence. Existing files were preserved. Check Windows file access and the connected device status from Profile Operations; do not delete or replace the profile."
             }
+            Self::Launch(Launch::Operator(
+                crate::operator_flow::OperatorFlowError::AuthoritativeGeneration {
+                    reason:
+                        crate::authoritative_generation::AuthoritativeGenerationMaterializationError::ControlPlane(
+                            crate::generation_reopen::GenerationReopenControlError::Transport,
+                        )
+                        | crate::authoritative_generation::AuthoritativeGenerationMaterializationError::ControlPlaneBeforeLocalUse(
+                            crate::generation_reopen::GenerationReopenControlError::Transport,
+                        ),
+                    ..
+                },
+            )) => {
+                "The application could not be reached while retrieving the verified profile generation. Check your connection and return to Profile Operations; local profile files were preserved."
+            }
+            Self::Launch(Launch::Operator(
+                crate::operator_flow::OperatorFlowError::AuthoritativeGeneration {
+                    reason:
+                        crate::authoritative_generation::AuthoritativeGenerationMaterializationError::ControlPlane(
+                            crate::generation_reopen::GenerationReopenControlError::HttpStatus,
+                        )
+                        | crate::authoritative_generation::AuthoritativeGenerationMaterializationError::ControlPlaneBeforeLocalUse(
+                            crate::generation_reopen::GenerationReopenControlError::HttpStatus,
+                        ),
+                    ..
+                },
+            )) => {
+                "The application rejected the profile generation request. Check the current access and session in Profile Operations. Do not delete local data or assume the service is offline."
+            }
+            Self::Launch(Launch::Operator(
+                crate::operator_flow::OperatorFlowError::AuthoritativeGeneration {
+                    reason:
+                        crate::authoritative_generation::AuthoritativeGenerationMaterializationError::ControlPlane(
+                            crate::generation_reopen::GenerationReopenControlError::InvalidResponse,
+                        )
+                        | crate::authoritative_generation::AuthoritativeGenerationMaterializationError::ControlPlaneBeforeLocalUse(
+                            crate::generation_reopen::GenerationReopenControlError::InvalidResponse,
+                        ),
+                    ..
+                },
+            )) => {
+                "The profile generation response could not be verified. The profile was not opened; return to Profile Operations and preserve existing files."
+            }
             Self::Launch(
                 Launch::Operator(_) | Launch::ActiveSessionMissing | Launch::CloseObservation(_),
             ) => {
@@ -277,9 +319,45 @@ const fn operator_code(error: crate::operator_flow::OperatorFlowError) -> &'stat
             ..
         } => "BRIDGE_GENERATION_DOWNLOAD_FAILED",
         Error::AuthoritativeGeneration {
-            reason: crate::authoritative_generation::AuthoritativeGenerationMaterializationError::ControlPlane,
+            reason:
+                crate::authoritative_generation::AuthoritativeGenerationMaterializationError::ControlPlane(
+                    crate::generation_reopen::GenerationReopenControlError::Transport,
+                )
+                | crate::authoritative_generation::AuthoritativeGenerationMaterializationError::ControlPlaneBeforeLocalUse(
+                    crate::generation_reopen::GenerationReopenControlError::Transport,
+                ),
             ..
         } => "BRIDGE_SERVICE_UNREACHABLE",
+        Error::AuthoritativeGeneration {
+            reason:
+                crate::authoritative_generation::AuthoritativeGenerationMaterializationError::ControlPlane(
+                    crate::generation_reopen::GenerationReopenControlError::HttpStatus,
+                )
+                | crate::authoritative_generation::AuthoritativeGenerationMaterializationError::ControlPlaneBeforeLocalUse(
+                    crate::generation_reopen::GenerationReopenControlError::HttpStatus,
+                ),
+            ..
+        } => "BRIDGE_GENERATION_REQUEST_REJECTED",
+        Error::AuthoritativeGeneration {
+            reason:
+                crate::authoritative_generation::AuthoritativeGenerationMaterializationError::ControlPlane(
+                    crate::generation_reopen::GenerationReopenControlError::InvalidResponse,
+                )
+                | crate::authoritative_generation::AuthoritativeGenerationMaterializationError::ControlPlaneBeforeLocalUse(
+                    crate::generation_reopen::GenerationReopenControlError::InvalidResponse,
+                ),
+            ..
+        } => "BRIDGE_GENERATION_RESPONSE_INVALID",
+        Error::AuthoritativeGeneration {
+            reason:
+                crate::authoritative_generation::AuthoritativeGenerationMaterializationError::ControlPlane(
+                    crate::generation_reopen::GenerationReopenControlError::Clock,
+                )
+                | crate::authoritative_generation::AuthoritativeGenerationMaterializationError::ControlPlaneBeforeLocalUse(
+                    crate::generation_reopen::GenerationReopenControlError::Clock,
+                ),
+            ..
+        } => "BRIDGE_CLOCK_UNAVAILABLE",
         Error::AuthoritativeGeneration {
             reason: crate::authoritative_generation::AuthoritativeGenerationMaterializationError::DescriptorMismatch
                 | crate::authoritative_generation::AuthoritativeGenerationMaterializationError::MetadataMismatch
@@ -340,7 +418,26 @@ mod tests {
         let cases = [
             (Reason::LocalAccessDenied, "BRIDGE_LOCAL_CACHE_INACCESSIBLE"),
             (Reason::Download, "BRIDGE_GENERATION_DOWNLOAD_FAILED"),
-            (Reason::ControlPlane, "BRIDGE_SERVICE_UNREACHABLE"),
+            (
+                Reason::ControlPlane(crate::generation_reopen::GenerationReopenControlError::Transport),
+                "BRIDGE_SERVICE_UNREACHABLE",
+            ),
+            (
+                Reason::ControlPlane(crate::generation_reopen::GenerationReopenControlError::HttpStatus),
+                "BRIDGE_GENERATION_REQUEST_REJECTED",
+            ),
+            (
+                Reason::ControlPlane(crate::generation_reopen::GenerationReopenControlError::InvalidResponse),
+                "BRIDGE_GENERATION_RESPONSE_INVALID",
+            ),
+            (
+                Reason::ControlPlaneBeforeLocalUse(crate::generation_reopen::GenerationReopenControlError::HttpStatus),
+                "BRIDGE_GENERATION_REQUEST_REJECTED",
+            ),
+            (
+                Reason::ControlPlaneBeforeLocalUse(crate::generation_reopen::GenerationReopenControlError::InvalidResponse),
+                "BRIDGE_GENERATION_RESPONSE_INVALID",
+            ),
             (
                 Reason::MetadataMismatch,
                 "BRIDGE_GENERATION_INTEGRITY_FAILED",
@@ -355,6 +452,7 @@ mod tests {
             ));
             assert_eq!(diagnostic.code(), expected);
             assert!(!diagnostic.message().contains("tenant_id="));
+            assert!(!diagnostic.message().contains("response body"));
         }
     }
 
