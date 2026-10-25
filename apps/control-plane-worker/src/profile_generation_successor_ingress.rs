@@ -5,6 +5,7 @@ use crate::composition::{
     device_execution_preconditions, device_job_authorization,
     generation_download_capability_signer, generation_object_verifier, generation_root_keyring,
     generation_upload_capability_signer, profile_generation_successor_commit,
+    profile_generation_successor_observer,
 };
 use application_ports::device_jobs::{DeviceJobAuthorizationPort, DeviceJobCapability};
 use application_ports::generation_objects::{
@@ -15,7 +16,8 @@ use application_ports::generations::GenerationPortErrorClass;
 use application_ports::profile_generation_successor::{
     ProfileGenerationCommitWitness, ProfileGenerationSuccessorCommitErrorClass,
     ProfileGenerationSuccessorCommitOutcome, ProfileGenerationSuccessorCommitPort,
-    ProfileGenerationSuccessorCommitRequest, ProfileGenerationSuccessorVersionPort,
+    ProfileGenerationSuccessorCommitRequest, ProfileGenerationSuccessorObservationPort,
+    ProfileGenerationSuccessorVersionPort,
     ProfileGenerationWriterAuthorityPort, ProfileGenerationWriterAuthorityRequest,
 };
 use application_ports::{
@@ -39,6 +41,7 @@ use control_plane_contract::generation_reopen_api::{
 };
 use control_plane_contract::profile_generation_api::{
     BridgeGenerationSuccessorCommitOutcomeDto, BridgeGenerationSuccessorCommitResponse,
+    BridgeGenerationSuccessorObserveRequest, BridgeGenerationSuccessorObserveResponse,
     BridgeGenerationUploadCapabilityResponse, BridgeProfileGenerationSuccessorRequest,
 };
 use device_domain::DeviceJobTarget;
@@ -63,6 +66,7 @@ pub(crate) enum BridgeGenerationMachineOperation {
     SealingMaterial,
     UploadCapability,
     Commit,
+    Observe,
     DownloadCapability,
     OpeningMaterial,
 }
@@ -124,6 +128,16 @@ pub(crate) fn operation(path: &str, method: Method) -> Option<BridgeGenerationMa
             _,
             "profiles",
             _,
+            "generation-successor",
+            "observe",
+        ] => Some(BridgeGenerationMachineOperation::Observe),
+        [
+            "bridge",
+            "v1",
+            "tenants",
+            _,
+            "profiles",
+            _,
             "generation-reopen",
             "download-capability",
         ] => Some(BridgeGenerationMachineOperation::DownloadCapability),
@@ -161,6 +175,9 @@ pub(crate) async fn dispatch_authorized(
     }
     if operation == BridgeGenerationMachineOperation::OpeningMaterial {
         return dispatch_opening_material(request, env, profile_id, actor, device_id).await;
+    }
+    if operation == BridgeGenerationMachineOperation::Observe {
+        return dispatch_successor_observation(request, env, profile_id, actor, device_id).await;
     }
 
     let body = match request
@@ -253,7 +270,8 @@ pub(crate) async fn dispatch_authorized(
         BridgeGenerationMachineOperation::Initialize
         | BridgeGenerationMachineOperation::SealingMaterial
         | BridgeGenerationMachineOperation::DownloadCapability
-        | BridgeGenerationMachineOperation::OpeningMaterial => {
+        | BridgeGenerationMachineOperation::OpeningMaterial
+        | BridgeGenerationMachineOperation::Observe => {
             unreachable!("handled before successor DTO")
         }
         BridgeGenerationMachineOperation::UploadCapability => {
@@ -392,6 +410,83 @@ pub(crate) async fn dispatch_authorized(
             })
         }
     }
+}
+
+/// Observe already-applied D1 commit without replaying the original
+/// (potentially expired) coordinator lease/fence or issuing any cloud write.
+/// The caller must prove a *fresh* machine session and current Profile Operate
+/// ACL through the outer ingress, and must still retain current device/base
+/// authorization. "false" is not permission to re-upload or recreate.
+async fn dispatch_successor_observation(
+    request: &mut Request,
+    env: &Env,
+    profile_id: &ProfileId,
+    actor: &ActorContext,
+    device_id: &DeviceId,
+) -> Result<Response> {
+    let body = match request.json::<BridgeGenerationSuccessorObserveRequest>().await {
+        Ok(value) => value,
+        Err(_) => return invalid_request(actor.correlation_id().as_str()),
+    };
+    let Ok(base) = GenerationId::parse(body.base_generation_id) else {
+        return invalid_request(actor.correlation_id().as_str());
+    };
+    let Ok(successor) = GenerationId::parse(body.generation_id) else {
+        return invalid_request(actor.correlation_id().as_str());
+    };
+    if base == successor
+        || body.container_bytes == 0
+        || !descriptor_shape_is_canonical(
+            actor,
+            profile_id,
+            &successor,
+            &body.object_key,
+            &body.metadata_digest,
+            &body.container_digest,
+        )
+    {
+        return invalid_request(actor.correlation_id().as_str());
+    }
+    let target = DeviceJobTarget::new(
+        actor.tenant_scope().tenant_id().clone(),
+        device_id.clone(),
+        profile_id.clone(),
+        base.clone(),
+    );
+    match device_authorized(env, actor, &target).await {
+        Ok(true) => {}
+        Ok(false) | Err(DeviceJobPortErrorClass::AuthenticationFailed) => {
+            return forbidden(actor.correlation_id().as_str());
+        }
+        Err(DeviceJobPortErrorClass::IntegrityFailure) => {
+            return integrity_failure(actor.correlation_id().as_str());
+        }
+        Err(DeviceJobPortErrorClass::DependencyUnavailable) => {
+            return dependency(actor.correlation_id().as_str());
+        }
+    }
+    let object = GenerationObjectDescriptor::new(
+        profile_id.clone(),
+        successor,
+        body.object_key,
+        body.metadata_digest,
+        body.container_digest,
+        body.container_bytes,
+    );
+    let observer = profile_generation_successor_observer(env)?;
+    let active_exact = match observer
+        .exact_successor_is_committed_active(actor, device_id, profile_id, &base, &object)
+        .await
+    {
+        Ok(value) => value,
+        Err(error) => return successor_failure(actor.correlation_id().as_str(), error.class()),
+    };
+    let mut response = Response::from_json(&BridgeGenerationSuccessorObserveResponse {
+        active_exact,
+    })?;
+    response.headers_mut().set("cache-control", "no-store")?;
+    response.headers_mut().set("pragma", "no-cache")?;
+    Ok(response)
 }
 
 async fn dispatch_download_capability(
@@ -1053,6 +1148,13 @@ mod tests {
                 Method::Post,
             ),
             Some(BridgeGenerationMachineOperation::Commit)
+        );
+        assert_eq!(
+            operation(
+                "/bridge/v1/tenants/tenant_01/profiles/profile_01/generation-successor/observe",
+                Method::Post,
+            ),
+            Some(BridgeGenerationMachineOperation::Observe)
         );
         assert_eq!(
             operation(
