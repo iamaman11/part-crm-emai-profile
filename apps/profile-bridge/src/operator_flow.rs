@@ -2321,7 +2321,11 @@ mod tests {
                     runtime_starts.set(runtime_starts.get() + 1);
                     Ok(())
                 },
-                |_live_coordinator, actual_tenant, actual_profile, selected_generation, fresh_lease| {
+                |_live_coordinator,
+                 actual_tenant,
+                 actual_profile,
+                 selected_generation,
+                 fresh_lease| {
                     assert_eq!(actual_tenant.as_str(), tenant);
                     assert_eq!(actual_profile.as_str(), profile);
                     assert_eq!(selected_generation, &fixture.generation_id);
