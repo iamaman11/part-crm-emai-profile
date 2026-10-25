@@ -32,4 +32,12 @@ pub trait ProfileCoordinatorPort {
 
 pub trait ProfileCoordinatorRuntimePort: ProfileCoordinatorPort {
     fn heartbeat_lease(&mut self, lease: &ProfileLease) -> Result<(), Self::Error>;
+
+    /// Narrow transport uncertainty, NOT a new lease, heartbeat success or
+    /// evidence that the coordinator has not revoked this session. Only the
+    /// concrete coordinator can classify its transport result. Default stays
+    /// fail-closed for every other implementation.
+    fn heartbeat_transport_uncertain(&self, _error: &Self::Error) -> bool {
+        false
+    }
 }
