@@ -801,7 +801,7 @@ pub(crate) fn discover_unresolved_exact_save_attempt(
             // exact-only API intentionally refuses any lone local intent.
             let _ = (base_generation, prior_epoch);
             Err(SaveAttemptEvidenceError::Changed)
-        },
+        }
     }
 }
 
