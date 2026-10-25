@@ -861,12 +861,15 @@ fn canonical_postcommit_candidate_mutation_preserves_bytes_for_owned_recovery()
         fs::read(retained.path().join("late-postcommit-mutation"))?,
         b"changed-after-server-commit"
     );
-    assert!(crate::browser_execution::load_materialization_binding(
-        &retained,
-        fixture.actor.tenant_scope().tenant_id(),
-        &fixture.profile_id,
-        completion.committed().generation_id(),
-    ).is_err());
+    assert!(
+        crate::browser_execution::load_materialization_binding(
+            &retained,
+            fixture.actor.tenant_scope().tenant_id(),
+            &fixture.profile_id,
+            completion.committed().generation_id(),
+        )
+        .is_err()
+    );
     Ok(())
 }
 
