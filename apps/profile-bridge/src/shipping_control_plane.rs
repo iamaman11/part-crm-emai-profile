@@ -90,6 +90,9 @@ pub trait MachineHttpPort {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ShippingControlPlaneError {
     Transport,
+    // The server returned 5xx after a state-changing coordinator request.
+    // Its effect may have applied; this is NOT a fresh lease or a 4xx rejection.
+    HttpServerUncertain,
     HttpStatus,
     InvalidResponse,
     Clock,
@@ -99,6 +102,9 @@ impl core::fmt::Display for ShippingControlPlaneError {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter.write_str(match self {
             Self::Transport => "machine-authenticated control-plane transport failed",
+            Self::HttpServerUncertain => {
+                "coordinator server response is uncertain; previous authority was not extended"
+            }
             Self::HttpStatus => "machine-authenticated control-plane request was rejected",
             Self::InvalidResponse => "machine-authenticated control-plane response was invalid",
             Self::Clock => "machine control-plane request identity could not be created",
@@ -113,6 +119,7 @@ impl From<ShippingControlPlaneError> for crate::generation_reopen::GenerationReo
         use crate::generation_reopen::GenerationReopenControlError as Reopen;
         match reason {
             ShippingControlPlaneError::Transport => Reopen::Transport,
+            ShippingControlPlaneError::HttpServerUncertain => Reopen::HttpStatus,
             ShippingControlPlaneError::HttpStatus => Reopen::HttpStatus,
             ShippingControlPlaneError::InvalidResponse => Reopen::InvalidResponse,
             ShippingControlPlaneError::Clock => Reopen::Clock,
@@ -504,13 +511,15 @@ where
         };
         let response = match self.command(&cursor.tenant_id, &cursor.profile_id, &request) {
             Ok(response) => response,
-            Err(ShippingControlPlaneError::Transport) => {
-                // Retain this exact command for the ONLY bounded caller retry.
-                // The server may already have applied it before the response
-                // was lost. A new idempotency key would produce false conflict.
+            Err(error @ (ShippingControlPlaneError::Transport
+            | ShippingControlPlaneError::HttpServerUncertain)) => {
+                // Retain the EXACT command for one bounded retry. This also
+                // covers a 5xx returned after the coordinator applied the
+                // heartbeat: do not mint a new idempotency key or silently
+                // extend the last confirmed lease.
                 let current = self.cursor.as_mut().ok_or(Self::Error::InvalidResponse)?;
                 current.pending_heartbeat = Some(request);
-                return Err(ShippingControlPlaneError::Transport);
+                return Err(error);
             }
             Err(error) => return Err(error),
         };
@@ -545,7 +554,10 @@ where
     }
 
     fn heartbeat_transport_uncertain(&self, error: &Self::Error) -> bool {
-        matches!(error, ShippingControlPlaneError::Transport)
+        matches!(
+            error,
+            ShippingControlPlaneError::Transport | ShippingControlPlaneError::HttpServerUncertain
+        )
     }
 }
 
@@ -910,6 +922,11 @@ fn accepted_response(
 ) -> Result<MachineHttpResponse, ShippingControlPlaneError> {
     if (200..=299).contains(&response.status()) {
         Ok(response)
+    } else if (500..=599).contains(&response.status()) {
+        // A state-changing command might have committed before a gateway/
+        // backend error. Retain the same idempotency cursor for read/replay.
+        // This changes only coordinator semantics; explicit 4xx remain final.
+        Err(ShippingControlPlaneError::HttpServerUncertain)
     } else {
         Err(ShippingControlPlaneError::HttpStatus)
     }
@@ -1393,6 +1410,73 @@ mod tests {
             Err(ShippingControlPlaneError::InvalidResponse)
         );
         assert_eq!(coordinator.transport.snapshot_reads, 2);
+        Ok(())
+    }
+
+    #[test]
+    fn coordinator_5xx_retains_exact_heartbeat_cursor_while_explicit_4xx_refusal_does_not()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let tenant = TenantId::parse("tenant_heartbeat_status_01")?;
+        let profile = ProfileId::parse("profile_heartbeat_status_01")?;
+        let device = DeviceId::parse("device_heartbeat_status_01")?;
+        let session = SessionId::parse("session_heartbeat_status_01")?;
+        let fencing = FencingToken::parse("fence_heartbeat_status_01")?;
+        let lease = ProfileLease::issue(
+            tenant.clone(),
+            profile.clone(),
+            session.clone(),
+            device.clone(),
+            9,
+            fencing.clone(),
+        )?;
+        for status in [500, 502, 503, 504, 401, 403, 409] {
+            let mut coordinator = ControlPlaneCoordinator {
+                transport: SealingMachineHttp {
+                    responses: VecDeque::from([MachineHttpResponse::new(
+                        status,
+                        b"untrusted server response".to_vec(),
+                    )]),
+                    requests: Vec::new(),
+                },
+                cursor: Some(CoordinatorCursor {
+                    tenant_id: tenant.clone(),
+                    profile_id: profile.clone(),
+                    device_id: device.clone(),
+                    session_id: session.clone(),
+                    epoch: 9,
+                    fencing_token: fencing.clone(),
+                    version: 22,
+                    sequence: 10,
+                    timing: ControlPlaneLeaseTiming {
+                        idle_expires_at_ms: 30_000,
+                        hard_expires_at_ms: 900_000,
+                    },
+                    pending_heartbeat: None,
+                }),
+            };
+            let uncertain = status >= 500;
+            let expected = if uncertain {
+                ShippingControlPlaneError::HttpServerUncertain
+            } else {
+                ShippingControlPlaneError::HttpStatus
+            };
+            assert_eq!(coordinator.heartbeat_lease(&lease), Err(expected));
+            assert_eq!(coordinator.heartbeat_transport_uncertain(&expected), uncertain);
+            assert_eq!(coordinator.transport.requests.len(), 1);
+            assert_eq!(coordinator.runtime_timing()?.idle_expires_at_ms(), 30_000);
+            assert_eq!(
+                coordinator.cursor.as_ref().ok_or("missing cursor")?.pending_heartbeat.is_some(),
+                uncertain
+            );
+            if uncertain {
+                let command: CoordinatorCommandRequestDto =
+                    serde_json::from_slice(&coordinator.transport.requests[0].2)?;
+                assert_eq!(command.sequence, 11);
+                assert_eq!(command.expected_version, 22);
+                // There is no authority refresh or second idempotency key here.
+                assert!(matches!(command.command, CoordinatorCommandDto::Heartbeat { .. }));
+            }
+        }
         Ok(())
     }
 
