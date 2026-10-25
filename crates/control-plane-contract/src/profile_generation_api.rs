@@ -394,6 +394,7 @@ fn sha256_schema() -> Value {
 #[cfg(test)]
 mod tests {
     use super::{
+        BridgeGenerationSuccessorObserveRequest, BridgeGenerationSuccessorObserveResponse,
         BridgeGenerationUploadCapabilityResponse, BridgeProfileGenerationSuccessorRequest,
         ProfileCreateRequest, ProfileGrantRequest, ProfileProjectionDto, ProfileStatusDto,
         RegisterGenerationRequest, openapi_fragment,
@@ -433,6 +434,51 @@ mod tests {
         assert!(serde_json::from_str::<RegisterGenerationRequest>(valid).is_ok());
         let legacy = r#"{"generationId":"generation_01JTEST","objectKey":"profiles/v1/generation.enc","metadataDigest":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","containerDigest":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","requestDigest":"legacy"}"#;
         assert!(serde_json::from_str::<RegisterGenerationRequest>(legacy).is_err());
+    }
+
+    #[test]
+    fn successor_observation_does_not_accept_fence_session_or_server_write_authority() {
+        let exact = json!({
+            "baseGenerationId": "generation_bridge_base_01",
+            "generationId": "generation_bridge_next_01",
+            "objectKey": "tenants/tenant_bridge_01/profiles/profile_bridge_01/generations/generation_bridge_next_01.bpgc",
+            "metadataDigest": "a".repeat(64),
+            "containerDigest": "b".repeat(64),
+            "containerBytes": 4096
+        });
+        assert!(
+            serde_json::from_value::<BridgeGenerationSuccessorObserveRequest>(exact.clone())
+                .is_ok()
+        );
+        for forbidden in [
+            "coordinatorSessionId",
+            "coordinatorFencingToken",
+            "coordinatorEpoch",
+            "expectedProfileVersion",
+            "actorId",
+            "deviceId",
+            "signedUploadUrl",
+        ] {
+            let mut invalid = exact.clone();
+            invalid[forbidden] = json!("untrusted");
+            assert!(
+                serde_json::from_value::<BridgeGenerationSuccessorObserveRequest>(invalid)
+                    .is_err()
+            );
+        }
+        assert!(
+            serde_json::from_value::<BridgeGenerationSuccessorObserveResponse>(json!({
+                "activeExact": true
+            }))
+            .is_ok()
+        );
+        assert!(
+            serde_json::from_value::<BridgeGenerationSuccessorObserveResponse>(json!({
+                "activeExact": true,
+                "accessToken": "do-not-return"
+            }))
+            .is_err()
+        );
     }
 
     #[test]
