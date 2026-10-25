@@ -85,6 +85,55 @@ working bytes survive, whether normal browser recovery reopens correctly, cloud
 truth, recovery steps, memory/disk overhead and any contradictory writer authority.
 Green repository CI or a verified cloud object does not replace this proof.
 
+## 1.2. Accepted offline/online and two-full-generation retention contract (2026-10-25)
+
+This prospective contract refines the same Profile lifecycle; compliance of the
+current shipping code is **OPEN** until code and installed-Windows evidence prove it.
+
+- **Single local authority for the bytes:** persistent original `user_data` is
+  mutable Firefox-owned working data, not a disposable cache or a reason to
+  reject `materialization_inventory_digest` merely for changed SQLite/WAL.
+  That digest already excludes `user_data/**`; retain its immutable-material
+  check and independently validate pinned browser identity. A surviving
+  `.profile-platform.lock` after Bridge death is unresolved evidence, not a
+  permanent user-visible brick and not permission to unlink on a timer.
+  Reconcile after fresh rights, coordinator writer proof, native OS handles/
+  processes and the existing local lock owner; never admit a second writer.
+- **One automatic save path:** witnessed normal browser close → durable
+  unsynced intent → bounded encrypted upload → exact R2 verification →
+  authorized D1/CAS commit. When network is lost, retain original files and
+  the exact attempt. On recovery while the application is alive, or on the
+  *next application start* when it was not alive, the same existing owner
+  automatically performs read-only exact commit observation before any
+  authorized continuation. No new candidate, key, blind PUT or commit is
+  invented after an unknown response. A stopped application cannot act on
+  reconnect until it is launched; do not add a second background sync agent.
+- **Steady-state retention:** no more than current encrypted cloud generation
+  plus **one independently decryptable/browser-proven WORKING LKG** per
+  Profile; LKG may be N-k rather than chronological N−1. Full snapshots
+  include cookies, WAL, IndexedDB, extension state, sessions and settings.
+  One principal local working directory remains; all normal superseded
+  snapshots, temporary plaintext/sealed staging and unneeded R2 full
+  objects are eventually reclaimed by current generation/local-profile
+  owners using verified references and keys. Auditable *metadata* can
+  remain without keeping corresponding redundant encrypted full objects.
+- **Safety exception to quotas:** while a save, recovery, conflict or prune
+  effect is pending/uncertain, preserve all dirty, only-copy, current and
+  last-working full objects and needed root-key versions. A strict two-file
+  deletion rule must never destroy data in order to meet the normal budget.
+  Cleanup is no-replace, crash-safe, retried and idempotent only after proving
+  the exact objects expendable; never silently roll back the server pointer.
+
+**Required tests:** offline controlled close → local unsynced → network
+return → automatic exactly-one authorized cloud commit; app restart after
+lost PUT/commit HTTP response → read-only exact observation before retry;
+Bridge/Windows crash with persistent lock → same original Firefox directory
+after fresh single-writer proof; active foreign writer/revoked ACL → bytes
+retained but no launch; repeated 100 saves → settled full R2 copies
+at most N+LKG, no old local full clones, last-good key restorable;
+interrupted cleanup protects originals; 256/512 MiB snapshots retain
+full browser state with bounded RAM, disk and retries.
+
 ## 2. Shipping Launch Ordering
 
 The shipping Bridge reaches local mutation only after the remote launch authority has been redeemed and
