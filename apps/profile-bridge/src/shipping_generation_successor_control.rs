@@ -250,7 +250,9 @@ where
         // Commit or capability effects may be ambiguous. Preserve exact
         // persisted attempt identity; never treat this as authority to retry
         // an upload/commit or to label the browser profile Saved.
-        return Err(control_error(ShippingControlPlaneError::HttpServerUncertain));
+        return Err(control_error(
+            ShippingControlPlaneError::HttpServerUncertain,
+        ));
     }
     if !(200..300).contains(&response.status()) {
         return Err(control_error(ShippingControlPlaneError::HttpStatus));
