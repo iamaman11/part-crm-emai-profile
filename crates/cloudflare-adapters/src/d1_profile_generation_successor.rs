@@ -115,11 +115,14 @@ impl D1ProfileGenerationSuccessorCommitJournal {
         validate_request(actor, request)?;
         let token_digest = fencing_token_digest(request.coordinator().fencing_token());
 
-        if let Some(row) = self.load(
-            actor.tenant_scope().tenant_id(),
-            request.profile_id(),
-            request.base_generation_id(),
-        ).await? {
+        if let Some(row) = self
+            .load(
+                actor.tenant_scope().tenant_id(),
+                request.profile_id(),
+                request.base_generation_id(),
+            )
+            .await?
+        {
             return classify_existing(&row, actor, request, &token_digest);
         }
 
@@ -175,11 +178,14 @@ impl D1ProfileGenerationSuccessorCommitJournal {
             }
             Ok(None) => Err(integrity_failure()),
             Err(error) => {
-                if let Some(row) = self.load(
-            actor.tenant_scope().tenant_id(),
-            request.profile_id(),
-            request.base_generation_id(),
-        ).await? {
+                if let Some(row) = self
+                    .load(
+                        actor.tenant_scope().tenant_id(),
+                        request.profile_id(),
+                        request.base_generation_id(),
+                    )
+                    .await?
+                {
                     return classify_existing(&row, actor, request, &token_digest);
                 }
                 Err(classify_insert_failure(&error.to_string()))
@@ -229,7 +235,11 @@ impl ProfileGenerationSuccessorObservationPort for D1ProfileGenerationSuccessorC
             return Err(integrity_failure());
         }
         let Some(row) = self
-            .load(actor.tenant_scope().tenant_id(), profile_id, base_generation_id)
+            .load(
+                actor.tenant_scope().tenant_id(),
+                profile_id,
+                base_generation_id,
+            )
             .await?
         else {
             return Ok(false);
