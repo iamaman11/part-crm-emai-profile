@@ -192,7 +192,10 @@ pub fn observe_retained_successor_after_restart<T: MachineHttpPort>(
         ),
         &request,
     )
-    .map_err(|_| ShippingControlPlaneError::Transport)?;
+    .map_err(|error| match error {
+        GenerationSuccessorControlError::ControlPlane(reason) => reason,
+        GenerationSuccessorControlError::Sealing(never) => match never {},
+    })?;
     if response.len() > MAX_OBSERVE_RESPONSE_BYTES {
         return Err(ShippingControlPlaneError::InvalidResponse);
     }
@@ -349,7 +352,9 @@ mod tests {
         prepare_dirty_generation_candidate,
     };
     use crate::local_profile::{LocalGenerationRecord, MaterializationRoot};
-    use crate::shipping_control_plane::{MachineHttpMethod, MachineHttpPort, MachineHttpResponse};
+    use crate::shipping_control_plane::{
+        MachineHttpMethod, MachineHttpPort, MachineHttpResponse, ShippingControlPlaneError,
+    };
     use crate::shipping_generation_save::{
         GenerationSuccessorCommitOutcome, GenerationSuccessorControlPort,
         GenerationUploadAuthorization,
@@ -609,6 +614,39 @@ mod tests {
             )
             .is_err()
         );
+
+        // A failed authoritative read never grants a publish/reopen outcome.
+        // Preserve its error category: an explicit server refusal is not a
+        // dropped response and must not be misreported as retryable transport.
+        for status in [401, 403, 409, 500] {
+            let mut rejected = Transport {
+                responses: VecDeque::from([MachineHttpResponse::new(status, Vec::new())]),
+                paths: Vec::new(),
+            };
+            assert_eq!(
+                observe_retained_successor_after_restart(
+                    &root,
+                    &fixture.tenant,
+                    &fixture.profile,
+                    successor,
+                    &mut rejected,
+                ),
+                Err(ShippingControlPlaneError::HttpStatus)
+            );
+            assert_eq!(rejected.paths.len(), 1);
+        }
+        let mut unavailable = Transport::default();
+        assert_eq!(
+            observe_retained_successor_after_restart(
+                &root,
+                &fixture.tenant,
+                &fixture.profile,
+                successor,
+                &mut unavailable,
+            ),
+            Err(ShippingControlPlaneError::Transport)
+        );
+        assert_eq!(unavailable.paths.len(), 1);
 
         let mutated = fixture
             .prepared
