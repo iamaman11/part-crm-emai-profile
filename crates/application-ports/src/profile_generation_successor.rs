@@ -319,6 +319,19 @@ pub trait ProfileGenerationSuccessorCommitPort {
     >;
 }
 
+/// Pure D1 nonapplication proof. Caller MUST first prove current actor/device
+/// ACL and a fresh exclusive coordinator lease. A positive observation is
+/// not a PUT capability: upload/commit must recheck the new fence and CAS.
+pub trait ProfileGenerationSuccessorRetryDecisionPort {
+    fn exact_unapplied_successor_is_retryable(
+        &self,
+        actor: &ActorContext,
+        profile_id: &ProfileId,
+        base_generation_id: &GenerationId,
+        object: &GenerationObjectDescriptor,
+    ) -> impl Future<Output = Result<bool, ProfileGenerationSuccessorCommitError>>;
+}
+
 /// Read-only reconciliation of an exact, previously attempted interactive save.
 ///
 /// This capability cannot sign an upload, mutate a Profile, or extend a lease.

@@ -3,6 +3,7 @@ use application_ports::profile_generation_successor::{
     ProfileGenerationSuccessorCommitError, ProfileGenerationSuccessorCommitErrorClass,
     ProfileGenerationSuccessorCommitOutcome, ProfileGenerationSuccessorCommitPort,
     ProfileGenerationSuccessorCommitRequest, ProfileGenerationSuccessorObservationPort,
+    ProfileGenerationSuccessorRetryDecisionPort,
 };
 use profile_platform_primitives::{
     ActorContext, DeviceId, FencingToken, GenerationId, ProfileId, TenantId,
@@ -52,6 +53,42 @@ WHERE command.tenant_id = ?
   AND command.profile_id = ?
   AND command.base_generation_id = ?
 "#;
+
+/// One consistent D1 read: original verified base is still selected,
+/// no journal row (including foreign or disputed) exists for this base,
+/// and no generation with this candidate ID was previously registered.
+const LOAD_UNAPPLIED_RETRY_DECISION: &str = r#"
+SELECT EXISTS (
+    SELECT 1 FROM browser_profiles AS profile
+    JOIN profile_generations AS base
+      ON base.tenant_id = profile.tenant_id
+     AND base.profile_id = profile.profile_id
+     AND base.generation_id = profile.active_generation_id
+    WHERE profile.tenant_id = ?
+      AND profile.profile_id = ?
+      AND profile.status = 'READY'
+      AND profile.active_generation_id = ?
+      AND base.status = 'VERIFIED'
+      AND base.verification_reference IS NOT NULL
+      AND NOT EXISTS (
+          SELECT 1 FROM profile_generation_successor_commands AS command
+          WHERE command.tenant_id = profile.tenant_id
+            AND command.profile_id = profile.profile_id
+            AND command.base_generation_id = ?
+      )
+      AND NOT EXISTS (
+          SELECT 1 FROM profile_generations AS candidate
+          WHERE candidate.tenant_id = profile.tenant_id
+            AND candidate.profile_id = profile.profile_id
+            AND candidate.generation_id = ?
+      )
+) AS allowed
+"#;
+
+#[derive(Deserialize)]
+struct UnappliedRetryDecisionRow {
+    allowed: i64,
+}
 
 const INSERT_INTERACTIVE_SUCCESSOR: &str = r#"
 INSERT INTO profile_generation_successor_commands (
@@ -252,6 +289,51 @@ impl ProfileGenerationSuccessorObservationPort for D1ProfileGenerationSuccessorC
             base_generation_id,
             object,
         ))
+    }
+}
+
+impl ProfileGenerationSuccessorRetryDecisionPort for D1ProfileGenerationSuccessorCommitJournal {
+    async fn exact_unapplied_successor_is_retryable(
+        &self,
+        actor: &ActorContext,
+        profile_id: &ProfileId,
+        base_generation_id: &GenerationId,
+        object: &GenerationObjectDescriptor,
+    ) -> Result<bool, ProfileGenerationSuccessorCommitError> {
+        if object.profile_id() != profile_id
+            || object.generation_id() == base_generation_id
+            || object.object_key()
+                != format!(
+                    "tenants/{}/profiles/{}/generations/{}.bpgc",
+                    actor.tenant_scope().tenant_id().as_str(),
+                    profile_id.as_str(),
+                    object.generation_id().as_str(),
+                )
+            || object.container_bytes() == 0
+            || !is_sha256_hex(object.metadata_digest())
+            || !is_sha256_hex(object.container_digest())
+        {
+            return Err(integrity_failure());
+        }
+        let result = query!(
+            &self.database,
+            LOAD_UNAPPLIED_RETRY_DECISION,
+            actor.tenant_scope().tenant_id().as_str(),
+            profile_id.as_str(),
+            base_generation_id.as_str(),
+            base_generation_id.as_str(),
+            object.generation_id().as_str(),
+        )
+        .map_err(|_| dependency_failure())?
+        .first::<UnappliedRetryDecisionRow>(None)
+        .await
+        .map_err(|_| dependency_failure())?
+        .ok_or_else(integrity_failure)?;
+        match result.allowed {
+            0 => Ok(false),
+            1 => Ok(true),
+            _ => Err(integrity_failure()),
+        }
     }
 }
 
@@ -512,6 +594,19 @@ mod tests {
         ActorContext, ActorId, AggregateVersion, CorrelationId, DeviceId, FencingToken,
         GenerationId, ProfileId, SessionId, TenantId, TenantScope, UnixMillis,
     };
+
+    #[test]
+    fn retry_decision_requires_exact_base_and_unapplied_journal() {
+        let statement = super::LOAD_UNAPPLIED_RETRY_DECISION;
+        assert!(statement.contains("profile.active_generation_id = ?"));
+        assert!(statement.contains("profile.status = 'READY'"));
+        assert!(statement.contains("base.status = 'VERIFIED'"));
+        assert!(statement.contains("base.verification_reference IS NOT NULL"));
+        assert!(statement.contains("profile_generation_successor_commands AS command"));
+        assert!(statement.contains("command.base_generation_id = ?"));
+        assert!(statement.contains("profile_generations AS candidate"));
+        assert!(statement.contains("candidate.generation_id = ?"));
+    }
 
     #[test]
     fn read_only_observer_needs_exact_actor_device_descriptor_and_verified_pointer()

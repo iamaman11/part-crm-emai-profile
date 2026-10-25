@@ -17,6 +17,7 @@ use application_ports::profile_generation_successor::{
     ProfileGenerationCommitWitness, ProfileGenerationSuccessorCommitErrorClass,
     ProfileGenerationSuccessorCommitOutcome, ProfileGenerationSuccessorCommitPort,
     ProfileGenerationSuccessorCommitRequest, ProfileGenerationSuccessorObservationPort,
+    ProfileGenerationSuccessorRetryDecisionPort,
     ProfileGenerationSuccessorVersionPort, ProfileGenerationWriterAuthorityPort,
     ProfileGenerationWriterAuthorityRequest,
 };
@@ -42,6 +43,8 @@ use control_plane_contract::generation_reopen_api::{
 use control_plane_contract::profile_generation_api::{
     BridgeGenerationSuccessorCommitOutcomeDto, BridgeGenerationSuccessorCommitResponse,
     BridgeGenerationSuccessorObserveRequest, BridgeGenerationSuccessorObserveResponse,
+    BridgeGenerationSuccessorRetryDecisionRequest, BridgeGenerationSuccessorRetryDecisionResponse,
+    BridgeGenerationSuccessorRetryVerdict,
     BridgeGenerationUploadCapabilityResponse, BridgeProfileGenerationSuccessorRequest,
 };
 use device_domain::DeviceJobTarget;
@@ -67,6 +70,7 @@ pub(crate) enum BridgeGenerationMachineOperation {
     UploadCapability,
     Commit,
     Observe,
+    RetryDecision,
     DownloadCapability,
     OpeningMaterial,
 }
@@ -138,6 +142,16 @@ pub(crate) fn operation(path: &str, method: Method) -> Option<BridgeGenerationMa
             _,
             "profiles",
             _,
+            "generation-successor",
+            "retry-decision",
+        ] => Some(BridgeGenerationMachineOperation::RetryDecision),
+        [
+            "bridge",
+            "v1",
+            "tenants",
+            _,
+            "profiles",
+            _,
             "generation-reopen",
             "download-capability",
         ] => Some(BridgeGenerationMachineOperation::DownloadCapability),
@@ -178,6 +192,9 @@ pub(crate) async fn dispatch_authorized(
     }
     if operation == BridgeGenerationMachineOperation::Observe {
         return dispatch_successor_observation(request, env, profile_id, actor, device_id).await;
+    }
+    if operation == BridgeGenerationMachineOperation::RetryDecision {
+        return dispatch_successor_retry_decision(request, env, profile_id, actor, device_id).await;
     }
 
     let body = match request
@@ -271,7 +288,8 @@ pub(crate) async fn dispatch_authorized(
         | BridgeGenerationMachineOperation::SealingMaterial
         | BridgeGenerationMachineOperation::DownloadCapability
         | BridgeGenerationMachineOperation::OpeningMaterial
-        | BridgeGenerationMachineOperation::Observe => {
+        | BridgeGenerationMachineOperation::Observe
+        | BridgeGenerationMachineOperation::RetryDecision => {
             unreachable!("handled before successor DTO")
         }
         BridgeGenerationMachineOperation::UploadCapability => {
@@ -486,6 +504,112 @@ async fn dispatch_successor_observation(
     };
     let mut response =
         Response::from_json(&BridgeGenerationSuccessorObserveResponse { active_exact })?;
+    response.headers_mut().set("cache-control", "no-store")?;
+    response.headers_mut().set("pragma", "no-cache")?;
+    Ok(response)
+}
+
+/// Fresh coordinator + current ACL precede a single D1 nonapplication read.
+/// No R2 PUT, commit, signed URL, or old-fence replay is performed here.
+async fn dispatch_successor_retry_decision(
+    request: &mut Request,
+    env: &Env,
+    profile_id: &ProfileId,
+    actor: &ActorContext,
+    device_id: &DeviceId,
+) -> Result<Response> {
+    let body = match request.json::<BridgeGenerationSuccessorRetryDecisionRequest>().await {
+        Ok(value) => value,
+        Err(_) => return invalid_request(actor.correlation_id().as_str()),
+    };
+    let Ok(base) = GenerationId::parse(body.attempt.base_generation_id) else {
+        return invalid_request(actor.correlation_id().as_str());
+    };
+    let Ok(candidate) = GenerationId::parse(body.attempt.generation_id) else {
+        return invalid_request(actor.correlation_id().as_str());
+    };
+    let Some((session, fencing_token)) = reopen_witness(
+        &body.coordinator_session_id,
+        &body.coordinator_fencing_token,
+        body.coordinator_epoch,
+    ) else {
+        return invalid_request(actor.correlation_id().as_str());
+    };
+    if base == candidate || body.attempt.container_bytes == 0 || !descriptor_shape_is_canonical(
+        actor,
+        profile_id,
+        &candidate,
+        &body.attempt.object_key,
+        &body.attempt.metadata_digest,
+        &body.attempt.container_digest,
+    ) {
+        return invalid_request(actor.correlation_id().as_str());
+    }
+    let target = DeviceJobTarget::new(
+        actor.tenant_scope().tenant_id().clone(),
+        device_id.clone(),
+        profile_id.clone(),
+        base.clone(),
+    );
+    let preconditions = device_execution_preconditions(env)?;
+    match preconditions.evaluate_device_execution(actor, &target).await {
+        Ok(DeviceExecutionReadiness::Ready) => {}
+        Ok(DeviceExecutionReadiness::Blocked(DeviceExecutionBlocker::DeviceUnauthorized)) => {
+            return forbidden(actor.correlation_id().as_str());
+        }
+        Ok(DeviceExecutionReadiness::Blocked(DeviceExecutionBlocker::GenerationInactive)) => {
+            return version_conflict(actor.correlation_id().as_str());
+        }
+        Ok(DeviceExecutionReadiness::Blocked(DeviceExecutionBlocker::CertificationIncomplete)) => {
+            return verification_conflict(actor.correlation_id().as_str());
+        }
+        Err(error) => match error.class() {
+            DeviceJobPortErrorClass::AuthenticationFailed => {
+                return forbidden(actor.correlation_id().as_str());
+            }
+            DeviceJobPortErrorClass::IntegrityFailure => {
+                return integrity_failure(actor.correlation_id().as_str());
+            }
+            DeviceJobPortErrorClass::DependencyUnavailable => {
+                return dependency(actor.correlation_id().as_str());
+            }
+        },
+    }
+    let authority = profile_generation_successor_commit(env);
+    if let Err(error) = authority.prove_profile_generation_writer_authority(
+        actor,
+        &ProfileGenerationWriterAuthorityRequest::new(
+            device_id.clone(),
+            profile_id.clone(),
+            session,
+            fencing_token,
+            body.coordinator_epoch,
+        ),
+    ).await {
+        return successor_failure(actor.correlation_id().as_str(), error.class());
+    }
+    let object = GenerationObjectDescriptor::new(
+        profile_id.clone(),
+        candidate,
+        body.attempt.object_key,
+        body.attempt.metadata_digest,
+        body.attempt.container_digest,
+        body.attempt.container_bytes,
+    );
+    let decision = profile_generation_successor_observer(env)?;
+    let allowed = match decision.exact_unapplied_successor_is_retryable(
+        actor, profile_id, &base, &object,
+    ).await {
+        Ok(value) => value,
+        Err(error) => return successor_failure(actor.correlation_id().as_str(), error.class()),
+    };
+    let mut response = Response::from_json(&BridgeGenerationSuccessorRetryDecisionResponse {
+        verdict: if allowed {
+            BridgeGenerationSuccessorRetryVerdict::NotAppliedRetryable
+        } else {
+            BridgeGenerationSuccessorRetryVerdict::Blocked
+        },
+    })?;
     response.headers_mut().set("cache-control", "no-store")?;
     response.headers_mut().set("pragma", "no-cache")?;
     Ok(response)
@@ -1157,6 +1281,13 @@ mod tests {
                 Method::Post,
             ),
             Some(BridgeGenerationMachineOperation::Observe)
+        );
+        assert_eq!(
+            operation(
+                "/bridge/v1/tenants/tenant_01/profiles/profile_01/generation-successor/retry-decision",
+                Method::Post,
+            ),
+            Some(BridgeGenerationMachineOperation::RetryDecision)
         );
         assert_eq!(
             operation(

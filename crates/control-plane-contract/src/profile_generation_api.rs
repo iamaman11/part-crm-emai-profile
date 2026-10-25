@@ -20,6 +20,8 @@ pub const BRIDGE_PROFILE_GENERATION_COMMIT_PATH_TEMPLATE: &str =
     "/bridge/v1/tenants/{tenantId}/profiles/{profileId}/generation-successor/commit";
 pub const BRIDGE_PROFILE_GENERATION_OBSERVE_PATH_TEMPLATE: &str =
     "/bridge/v1/tenants/{tenantId}/profiles/{profileId}/generation-successor/observe";
+pub const BRIDGE_PROFILE_GENERATION_RETRY_DECISION_PATH_TEMPLATE: &str =
+    "/bridge/v1/tenants/{tenantId}/profiles/{profileId}/generation-successor/retry-decision";
 
 /// Machine-authenticated, read-only exact successor reconciliation. No
 /// credential, lease/fencing token, signed URL or optimistic write version is
@@ -42,6 +44,30 @@ pub struct BridgeGenerationSuccessorObserveRequest {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct BridgeGenerationSuccessorObserveResponse {
     pub active_exact: bool,
+}
+
+/// A fresh writer may ask for one exact unapplied-attempt verdict. This is
+/// read-only eligibility, never an upload grant or replayable old fence.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct BridgeGenerationSuccessorRetryDecisionRequest {
+    pub attempt: BridgeGenerationSuccessorObserveRequest,
+    pub coordinator_session_id: String,
+    pub coordinator_fencing_token: String,
+    pub coordinator_epoch: u64,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum BridgeGenerationSuccessorRetryVerdict {
+    NotAppliedRetryable,
+    Blocked,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct BridgeGenerationSuccessorRetryDecisionResponse {
+    pub verdict: BridgeGenerationSuccessorRetryVerdict,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -434,6 +460,38 @@ mod tests {
         assert!(serde_json::from_str::<RegisterGenerationRequest>(valid).is_ok());
         let legacy = r#"{"generationId":"generation_01JTEST","objectKey":"profiles/v1/generation.enc","metadataDigest":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","containerDigest":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","requestDigest":"legacy"}"#;
         assert!(serde_json::from_str::<RegisterGenerationRequest>(legacy).is_err());
+    }
+
+    #[test]
+    fn retry_decision_requires_fresh_witness_and_never_returns_upload_authority() {
+        let request = json!({
+            "attempt": {
+                "baseGenerationId": "generation_base",
+                "generationId": "generation_next",
+                "objectKey": "tenants/t/profiles/p/generations/generation_next.bpgc",
+                "metadataDigest": "a".repeat(64),
+                "containerDigest": "b".repeat(64),
+                "containerBytes": 1024
+            },
+            "coordinatorSessionId": "session_fresh",
+            "coordinatorFencingToken": "fence_fresh",
+            "coordinatorEpoch": 4
+        });
+        assert!(serde_json::from_value::<BridgeGenerationSuccessorRetryDecisionRequest>(request.clone()).is_ok());
+        for forbidden in ["expectedProfileVersion", "deviceId", "signedUploadUrl", "oldFence"] {
+            let mut invalid = request.clone();
+            invalid[forbidden] = json!("untrusted");
+            assert!(serde_json::from_value::<BridgeGenerationSuccessorRetryDecisionRequest>(invalid).is_err());
+        }
+        assert!(serde_json::from_value::<BridgeGenerationSuccessorRetryDecisionResponse>(json!({
+            "verdict": "NOT_APPLIED_RETRYABLE"
+        })).is_ok());
+        assert!(serde_json::from_value::<BridgeGenerationSuccessorRetryDecisionResponse>(json!({
+            "verdict": "NOT_APPLIED_RETRYABLE", "signedUploadUrl": "forbidden"
+        })).is_err());
+        assert!(serde_json::from_value::<BridgeGenerationSuccessorRetryDecisionResponse>(json!({
+            "verdict": "UNKNOWN"
+        })).is_err());
     }
 
     #[test]
