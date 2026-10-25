@@ -2188,10 +2188,15 @@ mod tests {
         }
         // An interrupted/staged checkpoint must be noticed even if its bytes
         // are torn and unfit for any cloud operation.
-        let pending = fixture.root.path().join(format!(
-            ".profile-save-attempt-v1-{:x}-untrusted.pending",
-            hash.finalize()
-        ));
+        let fingerprint = hash
+            .finalize()
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>();
+        let pending = fixture
+            .root
+            .path()
+            .join(format!(".profile-save-attempt-v1-{fingerprint}-untrusted.pending"));
         fs::write(&pending, b"torn-attempt")?;
 
         let mut owner = operator(&fixture, FakeCamouhost::default())?;
