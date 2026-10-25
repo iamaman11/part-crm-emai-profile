@@ -1449,6 +1449,8 @@ mod tests {
         Sha256Digest,
     };
     use session_domain::ProfileLease;
+    use sha2::{Digest, Sha256};
+    use std::cell::Cell;
     use std::fs;
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicU64, Ordering};
@@ -2169,6 +2171,77 @@ mod tests {
                 ProcessAction::ForceTerminate(fixture.lease.session_id().clone()),
             ]
         );
+        Ok(())
+    }
+
+    #[test]
+    fn pending_attempt_observation_requires_fresh_lease_and_never_starts_browser()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let fixture = Fixture::new()?;
+        let tenant = fixture.actor.tenant_scope().tenant_id().as_str();
+        let profile = fixture.profile_id.as_str();
+        let mut hash = Sha256::new();
+        hash.update(b"bridge-p3-save-attempt-profile-scope-v1\\0");
+        for part in [tenant, profile] {
+            hash.update((part.len() as u64).to_be_bytes());
+            hash.update(part.as_bytes());
+        }
+        // An interrupted/staged checkpoint must be noticed even if its bytes
+        // are torn and unfit for any cloud operation.
+        let pending = fixture.root.path().join(format!(
+            ".profile-save-attempt-v1-{:x}-untrusted.pending",
+            hash.finalize()
+        ));
+        fs::write(&pending, b"torn-attempt")?;
+
+        let mut operator = operator(&fixture, FakeCamouhost::default())?;
+        let observed = Cell::new(0_u32);
+        assert_eq!(
+            operator.open_with_materialization(
+                &fixture.claim_uri,
+                &fixture.root,
+                UnixMillis::new(10),
+                |_coordinator, _tenant, _profile, _generation, _device, _epoch| {
+                    panic!("pending save must stop materialization")
+                },
+                || panic!("pending save must stop browser startup"),
+                |actual_tenant, actual_profile| {
+                    assert_eq!(actual_tenant.as_str(), tenant);
+                    assert_eq!(actual_profile.as_str(), profile);
+                    observed.set(observed.get() + 1);
+                },
+            ),
+            Err(OperatorFlowError::Stage(OperatorFailureStage::GenerationSave))
+        );
+        assert_eq!(observed.get(), 1);
+        assert_eq!(operator.coordinator().claimed, 1);
+        assert_eq!(operator.coordinator().closed, 1);
+        assert!(operator.process().actions().is_empty());
+        assert_eq!(fs::read(&pending)?, b"torn-attempt");
+
+        // The same torn evidence never triggers observation or browser use
+        // if the coordinator refused a fresh launch claim.
+        let mut rejected = operator(&fixture, FakeCamouhost::default())?;
+        rejected.coordinator.claim_fail = true;
+        let unauthorized_observations = Cell::new(0_u32);
+        assert_eq!(
+            rejected.open_with_materialization(
+                &fixture.claim_uri,
+                &fixture.root,
+                UnixMillis::new(11),
+                |_coordinator, _tenant, _profile, _generation, _device, _epoch| {
+                    panic!("unauthorized launch must not materialize")
+                },
+                || panic!("unauthorized launch must not start a browser"),
+                |_tenant, _profile| unauthorized_observations.set(1),
+            ),
+            Err(OperatorFlowError::Stage(
+                OperatorFailureStage::CoordinatorClaim
+            ))
+        );
+        assert_eq!(unauthorized_observations.get(), 0);
+        assert!(rejected.process().actions().is_empty());
+        assert_eq!(fs::read(&pending)?, b"torn-attempt");
         Ok(())
     }
 
