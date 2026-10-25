@@ -1314,7 +1314,7 @@ mod tests {
                 },
             };
         let replay = MachineHttpResponse::new(200, serde_json::to_vec(&original)?);
-        let mut fresh = original;
+        let mut fresh = original.clone();
         fresh.outcome = CoordinatorOutcomeDto::Snapshot;
         fresh.fencing_token = None;
         fresh.epoch = None;
@@ -1380,6 +1380,21 @@ mod tests {
                 .is_none()
         );
         assert_eq!(coordinator.runtime_timing()?.idle_expires_at_ms(), 60_000);
+
+        // A historical successful heartbeat can be replayed after another
+        // writer has taken over. Exact idempotency alone must never validate
+        // the *current* authority without a fresh read-only coordinator proof.
+        fresh.projection.active_session_id = Some("session_foreign_heartbeat".to_owned());
+        coordinator.transport.snapshot = Some(MachineHttpResponse::new(
+            200,
+            serde_json::to_vec(&fresh)?,
+        ));
+        let cursor = coordinator.cursor.as_ref().ok_or("missing cursor")?.clone();
+        assert_eq!(
+            coordinator.prove_replayed_heartbeat_is_still_current(&cursor, &original),
+            Err(ShippingControlPlaneError::InvalidResponse)
+        );
+        assert_eq!(coordinator.transport.snapshot_reads, 2);
         Ok(())
     }
 
