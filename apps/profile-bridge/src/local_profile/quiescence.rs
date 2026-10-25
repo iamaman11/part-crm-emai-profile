@@ -291,6 +291,10 @@ mod tests {
         let identity = workspace.path().join(".profile-browser-identity-v1");
         fs::write(&cookies, b"original-cookie-db")?;
         fs::write(&wal, b"uncheckpointed-wal")?;
+        // Firefox on Windows can leave parent.lock on disk after power loss.
+        // A *free* kernel file handle is not an active native browser writer.
+        #[cfg(windows)]
+        fs::write(user_data.join("parent.lock"), b"stale-native-parent-lock")?;
         fs::write(&fingerprint, b"pinned-config")?;
         fs::write(&identity, b"pinned-identity")?;
 
