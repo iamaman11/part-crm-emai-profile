@@ -11,12 +11,10 @@ use crate::operator_flow::{
 };
 use crate::runtime_bundle::ApprovedRuntimeBundle;
 use crate::shipping_control_plane::{MachineHttpMethod, MachineHttpPort, MachineHttpResponse};
-use crate::shipping_save_attempt::{
-    SaveAttemptEvidenceError, inspect_exact_save_attempt,
-};
 use crate::shipping_generation_save::{
     SignedGenerationObjectPutPort, SignedGenerationUploadCapability,
 };
+use crate::shipping_save_attempt::{SaveAttemptEvidenceError, inspect_exact_save_attempt};
 use crate::test_support::browser_identity_fixture;
 use crate::{FakeCamouhost, FakeDeviceIdentity, FakeDeviceKeyStore, FakeProcessControl};
 use application_ports::ProfileCoordinatorPort;
@@ -674,8 +672,14 @@ fn canonical_save_checkpoint_survives_owner_process_loss_without_authorizing_pub
     let expected_hash = before.container_digest().to_owned();
     let expected_ciphertext = before.ciphertext().to_vec();
     assert!(!expected_ciphertext.is_empty());
-    assert_eq!(before.original_session(), fixture.lease.session_id().as_str());
-    assert_eq!(before.original_fencing(), fixture.lease.fencing_token().as_str());
+    assert_eq!(
+        before.original_session(),
+        fixture.lease.session_id().as_str()
+    );
+    assert_eq!(
+        before.original_fencing(),
+        fixture.lease.fencing_token().as_str()
+    );
     drop(operator);
 
     // Fresh root handle, no RetainedDirtyClose or in-memory sealed generation.
@@ -692,11 +696,15 @@ fn canonical_save_checkpoint_survives_owner_process_loss_without_authorizing_pub
     assert_eq!(recovered.container_digest(), expected_hash);
     assert_eq!(put_calls.get(), 1);
     assert_eq!(trace.paths.borrow().len(), 1);
-    assert!(reopened_root.open_generation(
-        fixture.actor.tenant_scope().tenant_id(),
-        &fixture.profile_id,
-        &candidate,
-    ).is_ok());
+    assert!(
+        reopened_root
+            .open_generation(
+                fixture.actor.tenant_scope().tenant_id(),
+                &fixture.profile_id,
+                &candidate,
+            )
+            .is_ok()
+    );
     Ok(())
 }
 
@@ -738,8 +746,7 @@ fn canonical_save_refuses_tampered_checkpoint_before_any_retry_network_effect()
             path.file_name()
                 .and_then(|name| name.to_str())
                 .is_some_and(|name| {
-                    name.starts_with(".profile-save-attempt-v1-")
-                        && name.ends_with(".bin")
+                    name.starts_with(".profile-save-attempt-v1-") && name.ends_with(".bin")
                 })
         })
         .ok_or("checkpoint not published")?;
