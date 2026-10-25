@@ -1441,7 +1441,9 @@ mod tests {
             9,
             fencing.clone(),
         )?;
-        for status in [408, 429, 500, 502, 503, 504, 400, 401, 403, 404, 409, 410, 422] {
+        for status in [
+            408, 429, 500, 502, 503, 504, 400, 401, 403, 404, 409, 410, 422,
+        ] {
             let mut coordinator = ControlPlaneCoordinator {
                 transport: SealingMachineHttp {
                     responses: VecDeque::from([MachineHttpResponse::new(
