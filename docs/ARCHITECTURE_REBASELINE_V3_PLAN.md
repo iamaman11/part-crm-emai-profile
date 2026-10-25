@@ -67,6 +67,32 @@ Binding rules:
    CURRENT; CURRENT stage Issues own only their stage scope/evidence; closed/reference Issues are
    provenance. None may become a second roadmap.
 
+### V2 / #802 product-reliability sequencing constraint (2026-10-25)
+
+V2's accepted B7 positive journey now explicitly includes the permanent
+[local-first Windows Firefox crash-resilience invariant](LOCAL_PROFILE_LIFECYCLE.md#11-permanent-local-first-crash-resilience-invariant-accepted-2026-10-25).
+This is **a DoD refinement within the already-current V2 / #802**, not
+an additional CAP stage or parallel execution roadmap.
+
+The CURRENT stage owner (#584) and live pointer (#266) select the
+bounded implementation and checkpoint. Before B7 can pass, source must
+prove same-device crash recovery and safe non-destructive preservation
+through Windows shutdown/power loss, browser/Bridge crash, temporary
+network loss, and lost save responses, while retaining single-writer
+CAS/fencing/ACL, remote N-1 and independently recoverable keys. Prove
+that normal transient heartbeat failure is not indiscriminately
+classified as positive revocation; support practical 256/512 MiB
+profiles without a 64 MiB full-RAM blocker; test 100 consecutive saves
+and 100 profiles. Installed Windows + exact provider staging evidence
+is still required separately from green PR CI.
+
+The remediation should **prefer replacing obsolete duplication and
+blocking ceremonies over layering yet another state machine**:
+native Firefox recovery -> minimal durable local sync intent -> bounded
+immutable encrypted stream -> authenticated exact verify/CAS -> N-1.
+No silent cloud rollback, stale fence replay, forged `Saved`, locally
+invented remote authority or manual destructive cache reset.
+
 ## 3. Binding execution order
 
 The table below is the accepted top-level sequence and the sole authority for future-stage order. A
