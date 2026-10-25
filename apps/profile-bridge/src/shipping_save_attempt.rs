@@ -81,6 +81,11 @@ pub(crate) struct ReadOnlySaveAttempt {
 
 impl ReadOnlySaveAttempt {
     #[must_use]
+    pub(crate) fn prior_epoch(&self) -> u64 {
+        self.header.epoch
+    }
+
+    #[must_use]
     pub(crate) fn ciphertext(&self) -> &[u8] {
         &self.ciphertext
     }

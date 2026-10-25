@@ -376,6 +376,14 @@ mod windows {
                             );
                             true
                         }
+                        Ok(RestartExactLocalCompletion::RetryDecisionConfirmedAwaitingResumption) => {
+                            eprintln!("P3_RECOVERY=NOT_APPLIED_RETRYABLE;NEXT_SAFE_STEP=RESUME_EXACT_ATTEMPT_WITH_FRESH_FENCE");
+                            false
+                        }
+                        Ok(RestartExactLocalCompletion::RetryDecisionBlocked) => {
+                            eprintln!("P3_RECOVERY=RETRY_BLOCKED;NEXT_SAFE_STEP=PRESERVE_LOCAL_BYTES");
+                            false
+                        }
                         Ok(RestartExactLocalCompletion::NotActiveExact) => {
                             let diagnosis = PendingSaveReadOnlyDiagnosis::from_observation(
                                 Ok(RestartExactCommitObservation::NotActiveExact),

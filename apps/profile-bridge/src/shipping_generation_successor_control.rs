@@ -24,10 +24,12 @@ use crate::shipping_save_attempt::{
 use control_plane_contract::profile_generation_api::{
     BRIDGE_PROFILE_GENERATION_COMMIT_PATH_TEMPLATE,
     BRIDGE_PROFILE_GENERATION_OBSERVE_PATH_TEMPLATE,
+    BRIDGE_PROFILE_GENERATION_RETRY_DECISION_PATH_TEMPLATE,
     BRIDGE_PROFILE_GENERATION_UPLOAD_CAPABILITY_PATH_TEMPLATE,
     BridgeGenerationSuccessorCommitOutcomeDto, BridgeGenerationSuccessorCommitResponse,
     BridgeGenerationSuccessorObserveRequest, BridgeGenerationSuccessorObserveResponse,
-    BridgeGenerationUploadCapabilityResponse, BridgeProfileGenerationSuccessorRequest,
+    BridgeGenerationSuccessorRetryDecisionRequest, BridgeGenerationSuccessorRetryDecisionResponse,
+    BridgeGenerationSuccessorRetryVerdict, BridgeGenerationUploadCapabilityResponse, BridgeProfileGenerationSuccessorRequest,
 };
 use profile_platform_primitives::{CorrelationId, GenerationId, ProfileId, TenantId};
 use session_domain::ProfileLease;
@@ -53,6 +55,9 @@ pub enum RestartExactLocalCompletion {
     /// Requires a *new* D1 affirmative decision and fresh writer fence.
     LocalUnsyncedRequiresFreshRetryDecision,
     NotActiveExact,
+    /// D1 positively proved nonapplication; exact same-attempt resume is still pending.
+    RetryDecisionConfirmedAwaitingResumption,
+    RetryDecisionBlocked,
     ServerSelectedDifferentGeneration,
     ActiveExactLocalReady,
 }
@@ -294,7 +299,24 @@ pub(crate) fn complete_active_exact_after_restart<T: MachineHttpPort>(
         ScopedPendingSaveEvidence::Exact(attempt) => *attempt,
     };
     if attempt.successor_id() != selected_generation.as_str() {
-        return Ok(RestartExactLocalCompletion::ServerSelectedDifferentGeneration);
+        if attempt.base_generation_id() != selected_generation.as_str() {
+            return Ok(RestartExactLocalCompletion::ServerSelectedDifferentGeneration);
+        }
+        if fresh_lease.epoch() <= attempt.prior_epoch() {
+            return Err(RestartExactLocalCompletionError::WriterOrLockUnresolved);
+        }
+        let verdict = request_fresh_retry_decision(
+            tenant_id, profile_id, &attempt, fresh_lease, transport,
+        )
+        .map_err(RestartExactLocalCompletionError::ControlPlane)?;
+        return Ok(match verdict {
+            BridgeGenerationSuccessorRetryVerdict::NotAppliedRetryable => {
+                RestartExactLocalCompletion::RetryDecisionConfirmedAwaitingResumption
+            }
+            BridgeGenerationSuccessorRetryVerdict::Blocked => {
+                RestartExactLocalCompletion::RetryDecisionBlocked
+            }
+        });
     }
     let active = observe_verified_exact_attempt(tenant_id, profile_id, &attempt, transport)
         .map_err(RestartExactLocalCompletionError::ControlPlane)?;
@@ -367,6 +389,49 @@ pub(crate) fn complete_active_exact_after_restart<T: MachineHttpPort>(
     retire_active_exact_attempt_after_restart(root, tenant_id, profile_id, &verified)
         .map_err(|_| RestartExactLocalCompletionError::BindingOrRetirementFailed)?;
     Ok(RestartExactLocalCompletion::ActiveExactLocalReady)
+}
+
+/// Typed server-positive eligibility for the exact original sealed attempt.
+/// Caller has a freshly claimed selected base. No PUT, commit or cleanup.
+#[cfg(any(windows, test))]
+fn request_fresh_retry_decision<T: MachineHttpPort>(
+    tenant_id: &TenantId,
+    profile_id: &ProfileId,
+    attempt: &ReadOnlySaveAttempt,
+    fresh_lease: &ProfileLease,
+    transport: &mut T,
+) -> Result<BridgeGenerationSuccessorRetryVerdict, ShippingControlPlaneError> {
+    let request = BridgeGenerationSuccessorRetryDecisionRequest {
+        attempt: BridgeGenerationSuccessorObserveRequest {
+            base_generation_id: attempt.base_generation_id().to_owned(),
+            generation_id: attempt.successor_id().to_owned(),
+            object_key: attempt.object_key().to_owned(),
+            metadata_digest: attempt.metadata_digest().to_owned(),
+            container_digest: attempt.container_digest().to_owned(),
+            container_bytes: attempt.container_bytes(),
+        },
+        coordinator_session_id: fresh_lease.session_id().as_str().to_owned(),
+        coordinator_fencing_token: fresh_lease.fencing_token().as_str().to_owned(),
+        coordinator_epoch: fresh_lease.epoch(),
+    };
+    let response = post_json::<T, core::convert::Infallible, _>(
+        transport,
+        &successor_path(
+            BRIDGE_PROFILE_GENERATION_RETRY_DECISION_PATH_TEMPLATE,
+            tenant_id, profile_id,
+        ),
+        &request,
+    )
+    .map_err(|error| match error {
+        GenerationSuccessorControlError::ControlPlane(reason) => reason,
+        GenerationSuccessorControlError::Sealing(never) => match never {},
+    })?;
+    if response.len() > MAX_OBSERVE_RESPONSE_BYTES {
+        return Err(ShippingControlPlaneError::InvalidResponse);
+    }
+    let result = serde_json::from_slice::<BridgeGenerationSuccessorRetryDecisionResponse>(&response)
+        .map_err(|_| ShippingControlPlaneError::InvalidResponse)?;
+    Ok(result.verdict)
 }
 
 /// Read-only server probe from crash checkpoint after a lost response.
@@ -1206,19 +1271,50 @@ mod tests {
             fixture.lease.epoch() + 1,
             FencingToken::parse("fence_fresh_negative_recovery")?,
         )?;
-        let mut no_network = Transport::default();
+        let original = std::fs::read(source.path().join("prefs.js"))?;
+        let mut blocked = Transport {
+            responses: VecDeque::from([MachineHttpResponse::new(
+                200, br#"{"verdict":"BLOCKED"}"#.to_vec(),
+            )]),
+            paths: Vec::new(),
+        };
         assert_eq!(
             complete_active_exact_after_restart(
-                &root,
-                &fixture.tenant,
-                &fixture.profile,
-                &fixture.base,
-                &fresh,
-                &mut no_network,
+                &root, &fixture.tenant, &fixture.profile, &fixture.base,
+                &fresh, &mut blocked,
             ),
-            Ok(RestartExactLocalCompletion::ServerSelectedDifferentGeneration),
+            Ok(RestartExactLocalCompletion::RetryDecisionBlocked),
         );
-        assert!(no_network.paths.is_empty());
+        assert_eq!(blocked.paths.len(), 1);
+        assert!(blocked.paths[0].ends_with("/generation-successor/retry-decision"));
+        let mut permitted = Transport {
+            responses: VecDeque::from([MachineHttpResponse::new(
+                200, br#"{"verdict":"NOT_APPLIED_RETRYABLE"}"#.to_vec(),
+            )]),
+            paths: Vec::new(),
+        };
+        assert_eq!(
+            complete_active_exact_after_restart(
+                &root, &fixture.tenant, &fixture.profile, &fixture.base,
+                &fresh, &mut permitted,
+            ),
+            Ok(RestartExactLocalCompletion::RetryDecisionConfirmedAwaitingResumption),
+        );
+        assert_eq!(permitted.paths.len(), 1);
+        assert!(permitted.paths[0].ends_with("/generation-successor/retry-decision"));
+        assert_eq!(std::fs::read(source.path().join("prefs.js"))?, original);
+        assert!(has_unresolved_save_attempt_for_profile(
+            &root, &fixture.tenant, &fixture.profile,
+        )?);
+        let mut stale = Transport::default();
+        assert_eq!(
+            complete_active_exact_after_restart(
+                &root, &fixture.tenant, &fixture.profile, &fixture.base,
+                &fixture.lease, &mut stale,
+            ),
+            Err(RestartExactLocalCompletionError::WriterOrLockUnresolved),
+        );
+        assert!(stale.paths.is_empty());
         let mut not_active = Transport {
             responses: VecDeque::from([MachineHttpResponse::new(
                 200,
