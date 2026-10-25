@@ -90,8 +90,8 @@ pub trait MachineHttpPort {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ShippingControlPlaneError {
     Transport,
-    // The server returned 5xx after a state-changing coordinator request.
-    // Its effect may have applied; this is NOT a fresh lease or a 4xx rejection.
+    // The server returned 408/429/5xx after a state-changing coordinator request.
+    // Its effect may have applied; this is NOT a renewed lease or an ACL refusal.
     HttpServerUncertain,
     HttpStatus,
     InvalidResponse,
@@ -103,7 +103,7 @@ impl core::fmt::Display for ShippingControlPlaneError {
         formatter.write_str(match self {
             Self::Transport => "machine-authenticated control-plane transport failed",
             Self::HttpServerUncertain => {
-                "coordinator server response is uncertain; previous authority was not extended"
+                "coordinator timeout, throttle or server response is uncertain; previous authority was not extended"
             }
             Self::HttpStatus => "machine-authenticated control-plane request was rejected",
             Self::InvalidResponse => "machine-authenticated control-plane response was invalid",
@@ -516,8 +516,8 @@ where
                 | ShippingControlPlaneError::HttpServerUncertain),
             ) => {
                 // Retain the EXACT command for one bounded retry. This also
-                // covers a 5xx returned after the coordinator applied the
-                // heartbeat: do not mint a new idempotency key or silently
+                // covers HTTP 408/429/5xx returned after a command might have
+                // applied: do not mint a new idempotency key or silently
                 // extend the last confirmed lease.
                 let current = self.cursor.as_mut().ok_or(Self::Error::InvalidResponse)?;
                 current.pending_heartbeat = Some(request);
@@ -924,10 +924,11 @@ fn accepted_response(
 ) -> Result<MachineHttpResponse, ShippingControlPlaneError> {
     if (200..=299).contains(&response.status()) {
         Ok(response)
-    } else if (500..=599).contains(&response.status()) {
-        // A state-changing command might have committed before a gateway/
-        // backend error. Retain the same idempotency cursor for read/replay.
-        // This changes only coordinator semantics; explicit 4xx remain final.
+    } else if matches!(response.status(), 408 | 429) || (500..=599).contains(&response.status()) {
+        // A state-changing command might have committed before a timeout,
+        // throttle or backend error. Retain the same idempotency cursor for
+        // read/replay. ACL refusals (401/403), stale fencing (409) and other
+        // definitive 4xx never extend the lease and are not retried.
         Err(ShippingControlPlaneError::HttpServerUncertain)
     } else {
         Err(ShippingControlPlaneError::HttpStatus)
@@ -1416,7 +1417,7 @@ mod tests {
     }
 
     #[test]
-    fn coordinator_5xx_retains_exact_heartbeat_cursor_while_explicit_4xx_refusal_does_not()
+    fn coordinator_timeout_throttle_and_5xx_retain_exact_heartbeat_cursor_but_refusals_do_not()
     -> Result<(), Box<dyn std::error::Error>> {
         let tenant = TenantId::parse("tenant_heartbeat_status_01")?;
         let profile = ProfileId::parse("profile_heartbeat_status_01")?;
@@ -1431,7 +1432,7 @@ mod tests {
             9,
             fencing.clone(),
         )?;
-        for status in [500, 502, 503, 504, 401, 403, 409] {
+        for status in [408, 429, 500, 502, 503, 504, 400, 401, 403, 404, 409, 410, 422] {
             let mut coordinator = ControlPlaneCoordinator {
                 transport: SealingMachineHttp {
                     responses: VecDeque::from([MachineHttpResponse::new(
@@ -1456,7 +1457,7 @@ mod tests {
                     pending_heartbeat: None,
                 }),
             };
-            let uncertain = status >= 500;
+            let uncertain = matches!(status, 408 | 429) || status >= 500;
             let expected = if uncertain {
                 ShippingControlPlaneError::HttpServerUncertain
             } else {
