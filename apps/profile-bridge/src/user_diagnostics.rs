@@ -4,12 +4,15 @@
 
 use crate::device_pairing::DevicePairingBootstrapError;
 use crate::shipping_composition::ShippingCompositionError;
+#[cfg(any(windows, test))]
 use crate::shipping_control_plane::ShippingControlPlaneError;
+#[cfg(any(windows, test))]
 use crate::shipping_generation_successor_control::RestartExactCommitObservation;
 
 /// Read-only projection of existing exact checkpoint / authoritative observe
 /// facts. Never persists a parallel profile state, creates an authorization,
 /// changes a file, or permits a network write.
+#[cfg(any(windows, test))]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum PendingSaveReadOnlyDiagnosis {
     ServerActiveExactLocalUnresolved,
@@ -18,6 +21,7 @@ pub(crate) enum PendingSaveReadOnlyDiagnosis {
     UnknownPreserveBytes,
 }
 
+#[cfg(any(windows, test))]
 impl PendingSaveReadOnlyDiagnosis {
     pub(crate) fn from_observation(
         observed: Result<RestartExactCommitObservation, ShippingControlPlaneError>,
