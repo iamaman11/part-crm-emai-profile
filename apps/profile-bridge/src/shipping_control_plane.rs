@@ -107,6 +107,18 @@ impl core::fmt::Display for ShippingControlPlaneError {
 
 impl std::error::Error for ShippingControlPlaneError {}
 
+impl From<ShippingControlPlaneError> for crate::generation_reopen::GenerationReopenControlError {
+    fn from(reason: ShippingControlPlaneError) -> Self {
+        use crate::generation_reopen::GenerationReopenControlError as Reopen;
+        match reason {
+            ShippingControlPlaneError::Transport => Reopen::Transport,
+            ShippingControlPlaneError::HttpStatus => Reopen::HttpStatus,
+            ShippingControlPlaneError::InvalidResponse => Reopen::InvalidResponse,
+            ShippingControlPlaneError::Clock => Reopen::Clock,
+        }
+    }
+}
+
 pub struct ControlPlaneEnrollment<T> {
     transport: T,
 }
