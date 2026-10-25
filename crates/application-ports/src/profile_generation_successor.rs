@@ -318,3 +318,21 @@ pub trait ProfileGenerationSuccessorCommitPort {
         >,
     >;
 }
+
+/// Read-only reconciliation of an exact, previously attempted interactive save.
+///
+/// This capability cannot sign an upload, mutate a Profile, or extend a lease.
+/// The caller authenticates the *current* actor/device and checks current
+/// Profile Operate permissions before asking the D1 journal if this immutable
+/// descriptor was already committed and is still the active VERIFIED pointer.
+/// An expired original fencing token is neither requested nor resurrected.
+pub trait ProfileGenerationSuccessorObservationPort {
+    fn exact_successor_is_committed_active(
+        &self,
+        actor: &ActorContext,
+        device_id: &DeviceId,
+        profile_id: &ProfileId,
+        base_generation_id: &GenerationId,
+        object: &GenerationObjectDescriptor,
+    ) -> impl Future<Output = Result<bool, ProfileGenerationSuccessorCommitError>>;
+}
