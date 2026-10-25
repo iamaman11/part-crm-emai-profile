@@ -3,9 +3,13 @@ use crate::browser_execution::{browser_writer_locks_absent, persist_committed_su
 use crate::dirty_generation::{
     GenerationSealingMaterial, GenerationSealingMaterialPort, PreparedDirtyGeneration,
 };
+#[cfg(any(windows, test))]
+use crate::dirty_generation::prepare_recovered_local_unsynced_candidate;
 use crate::local_profile::MaterializationRoot;
 #[cfg(any(windows, test))]
-use crate::local_profile::{BridgeWorkspaceLock, LocalProfileError};
+use crate::local_profile::{
+    BridgeWorkspaceLock, LocalGenerationRecord, LocalProfileError,
+};
 use crate::shipping_control_plane::{
     MachineHttpMethod, MachineHttpPort, ShippingControlPlaneError,
 };
@@ -21,7 +25,8 @@ use crate::shipping_save_attempt::{
 #[cfg(any(windows, test))]
 use crate::shipping_save_attempt::{
     ScopedPendingSaveEvidence, classify_scoped_pending_save_evidence,
-    local_unsynced_matches_fresh_lease, retire_active_exact_attempt_after_restart,
+    deterministic_lone_unsynced_successor, local_unsynced_matches_fresh_lease,
+    persist_exact_save_attempt_from_lone_intent, retire_active_exact_attempt_after_restart,
     retire_matching_local_unsynced_after_restart,
 };
 use control_plane_contract::profile_generation_api::{
@@ -41,6 +46,8 @@ use control_plane_contract::profile_generation_api::{
     BridgeGenerationSuccessorRetryVerdict,
 };
 use profile_platform_primitives::{CorrelationId, GenerationId, ProfileId, TenantId};
+#[cfg(any(windows, test))]
+use profile_platform_primitives::UnixMillis;
 use session_domain::ProfileLease;
 use std::fmt;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -427,6 +434,155 @@ pub(crate) fn complete_active_exact_after_restart<T: MachineHttpPort>(
     retire_active_exact_attempt_after_restart(root, tenant_id, profile_id, &verified)
         .map_err(|_| RestartExactLocalCompletionError::BindingOrRetirementFailed)?;
     Ok(RestartExactLocalCompletion::ActiveExactLocalReady)
+}
+
+/// First-seal the ONE original locally durable, unsealed close only after a
+/// fresh same-device D1-positive base proof. An interrupted complete clone may
+/// be reused only if its exact original native inventory still matches.
+/// Never delete an incomplete clone, invent N+2, replay old fence or start a
+/// browser. The resulting checkpoint keeps original intent provenance so a
+/// second power cut can safely resume the same N+1 through the existing
+/// exact-checkpoint owner. This uses the CURRENT coordinator as sealer.
+#[cfg(any(windows, test))]
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn resume_lone_local_unsynced_under_fresh_lease<T, U, K>(
+    root: &MaterializationRoot,
+    tenant_id: &TenantId,
+    profile_id: &ProfileId,
+    selected_generation: &GenerationId,
+    fresh_lease: &ProfileLease,
+    sealer: &mut K,
+    transport: &mut T,
+    upload: &mut U,
+) -> Result<bool, RestartExactLocalCompletionError>
+where
+    T: MachineHttpPort,
+    U: SignedGenerationObjectPutPort,
+    K: GenerationSealingMaterialPort,
+{
+    let selected = classify_scoped_pending_save_evidence(root, tenant_id, profile_id)
+        .map_err(|_| RestartExactLocalCompletionError::LocalEvidenceChanged)?;
+    let ScopedPendingSaveEvidence::LocalUnsynced {
+        base_generation,
+        prior_epoch,
+    } = selected
+    else {
+        return Err(RestartExactLocalCompletionError::LocalEvidenceChanged);
+    };
+    if base_generation != *selected_generation
+        || fresh_lease.tenant_id() != tenant_id
+        || fresh_lease.profile_id() != profile_id
+        || fresh_lease.epoch() <= prior_epoch
+    {
+        return Err(RestartExactLocalCompletionError::WriterOrLockUnresolved);
+    }
+    let candidate_id = deterministic_lone_unsynced_successor(
+        root, tenant_id, profile_id, selected_generation, fresh_lease,
+    )
+    .map_err(|_| RestartExactLocalCompletionError::LocalEvidenceChanged)?
+    .ok_or(RestartExactLocalCompletionError::WriterOrLockUnresolved)?;
+    let source = root
+        .open_generation(tenant_id, profile_id, selected_generation)
+        .map_err(|_| RestartExactLocalCompletionError::LocalEvidenceChanged)?;
+    if !matches!(browser_writer_locks_absent(&source), Ok(true)) {
+        return Err(RestartExactLocalCompletionError::WriterOrLockUnresolved);
+    }
+    let lock = match BridgeWorkspaceLock::acquire(
+        &source,
+        fresh_lease.device_id(),
+        fresh_lease.epoch(),
+    ) {
+        Ok(lock) => lock,
+        Err(LocalProfileError::LockBusy) => BridgeWorkspaceLock::recover_interrupted_launch(
+            &source,
+            fresh_lease.device_id(),
+            fresh_lease.epoch(),
+        )
+        .map_err(|_| RestartExactLocalCompletionError::WriterOrLockUnresolved)?,
+        Err(_) => return Err(RestartExactLocalCompletionError::WriterOrLockUnresolved),
+    };
+    let result = (|| {
+        // A stale D1 read or pre-lock native inventory is never a write grant.
+        // Reinspect exact scoped evidence under the existing OS admission.
+        if !matches!(
+            classify_scoped_pending_save_evidence(root, tenant_id, profile_id),
+            Ok(ScopedPendingSaveEvidence::LocalUnsynced {
+                base_generation: ref base,
+                prior_epoch: previous
+            }) if base == selected_generation && previous == prior_epoch
+        ) || !matches!(browser_writer_locks_absent(&source), Ok(true))
+            || deterministic_lone_unsynced_successor(
+                root, tenant_id, profile_id, selected_generation, fresh_lease,
+            )
+            .ok()
+            .flatten()
+            .as_ref()
+                != Some(&candidate_id)
+        {
+            return Err(RestartExactLocalCompletionError::LocalEvidenceChanged);
+        }
+        if request_local_unsynced_retry_decision(
+            tenant_id, profile_id, selected_generation, fresh_lease, transport,
+        )
+        .map_err(RestartExactLocalCompletionError::ControlPlane)?
+            != BridgeGenerationSuccessorRetryVerdict::NotAppliedRetryable
+        {
+            return Ok(false);
+        }
+        let inventory = source
+            .inventory()
+            .map_err(|_| RestartExactLocalCompletionError::LocalEvidenceChanged)?;
+        let record = LocalGenerationRecord::from_verified_unsynced_close(
+            selected_generation.clone(),
+            inventory.total_bytes(),
+            UnixMillis::new(0),
+        );
+        let prepared = prepare_recovered_local_unsynced_candidate(
+            &record,
+            &source,
+            root,
+            tenant_id,
+            profile_id,
+            &candidate_id,
+            sealer,
+        )
+        .map_err(|_| RestartExactLocalCompletionError::LocalEvidenceChanged)?;
+        // Fsynced, no-replace exact checkpoint with ORIGINAL intent lineage.
+        // No network PUT or commit can precede this durable publication.
+        persist_exact_save_attempt_from_lone_intent(
+            root, &source, &prepared, fresh_lease,
+        )
+        .map_err(|_| RestartExactLocalCompletionError::LocalEvidenceChanged)?;
+        let verified = discover_unresolved_exact_save_attempt(root, tenant_id, profile_id)
+            .map_err(|_| RestartExactLocalCompletionError::LocalEvidenceChanged)?
+            .ok_or(RestartExactLocalCompletionError::LocalEvidenceChanged)?;
+        if verified.successor_id() != candidate_id.as_str()
+            || verified.ciphertext() != prepared.sealed().container()
+            || verified.container_digest() != prepared.container_digest()
+        {
+            return Err(RestartExactLocalCompletionError::LocalEvidenceChanged);
+        }
+        Ok(true)
+    })();
+    // Never retain a synthetic writer marker across a failure. If releasing
+    // its exact ownership fails, checkpoint/intent remain a hard blocker.
+    lock.release()
+        .map_err(|_| RestartExactLocalCompletionError::WriterOrLockUnresolved)?;
+    if !result? {
+        return Ok(false);
+    }
+    // Perform ordinary freshly fenced upload and atomic D1 commit through the
+    // EXISTING exact-checkpoint owner (which takes its own OS admission).
+    // The source-N launch still remains blocked until next ACTIVE_EXACT claim.
+    resume_exact_successor_under_fresh_lease(
+        root,
+        tenant_id,
+        profile_id,
+        selected_generation,
+        fresh_lease,
+        transport,
+        upload,
+    )
 }
 
 /// Resume ONLY the original unchanged N+1 ciphertext under a fresh writer.
