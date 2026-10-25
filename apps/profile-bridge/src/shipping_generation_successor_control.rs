@@ -182,11 +182,7 @@ pub fn observe_discovered_successor_after_restart<T: MachineHttpPort>(
             let successor = GenerationId::parse(attempt.successor_id().to_owned())
                 .map_err(|_| ShippingControlPlaneError::InvalidResponse)?;
             observe_retained_successor_after_restart(
-                root,
-                tenant_id,
-                profile_id,
-                &successor,
-                transport,
+                root, tenant_id, profile_id, &successor, transport,
             )
             .map(Some)
         }
