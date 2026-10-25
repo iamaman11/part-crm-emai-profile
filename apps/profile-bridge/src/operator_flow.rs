@@ -1220,8 +1220,9 @@ impl From<LocalProfileError> for OperatorFlowError {
 #[cfg(test)]
 mod tests {
     use super::{
-        BrowserLaunchPreflightPort, DeviceAuthenticationPort, EnrollmentPort,
-        OperationalRejectionReason, OperatorEnrollment, OperatorFailureStage, OperatorFlowError,
+        AuthoritativeGenerationMaterializationError, BrowserLaunchPreflightPort,
+        DeviceAuthenticationPort, EnrollmentPort, OperationalRejectionReason, OperatorEnrollment,
+        OperatorFailureStage, OperatorFlowError,
         ProfileBridgeOperator, RuntimeBundleSelectionPort,
     };
     use crate::local_profile::{
