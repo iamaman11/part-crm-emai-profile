@@ -341,10 +341,10 @@ fn required<'a>(
 /// Direct create-new on the canonical name could expose a torn sidecar after power loss;
 /// a retry would then see AlreadyExists and remain blocked with no usable evidence.
 /// A same-volume hard link is no-replace and never overwrites foreign/dirty evidence.
-fn persist_exact_text(path: &Path, content: &str) -> Result<(), BrowserLaunchBlocker> {
-    match fs::symlink_metadata(path) {
+fn persist_exact_text(canonical_path: &Path, content: &str) -> Result<(), BrowserLaunchBlocker> {
+    match fs::symlink_metadata(canonical_path) {
         Ok(_) => {
-            return if read_regular_file(path)? == content {
+            return if read_regular_file(canonical_path)? == content {
                 Ok(())
             } else {
                 Err(BrowserLaunchBlocker::MaterializationStale)
@@ -353,10 +353,10 @@ fn persist_exact_text(path: &Path, content: &str) -> Result<(), BrowserLaunchBlo
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
         Err(error) => return Err(LocalProfileError::from(error).into()),
     }
-    let parent = path
+    let parent = canonical_path
         .parent()
         .ok_or(BrowserLaunchBlocker::InvalidMaterializationEvidence)?;
-    let file_name = path
+    let file_name = canonical_path
         .file_name()
         .and_then(|value| value.to_str())
         .ok_or(BrowserLaunchBlocker::InvalidMaterializationEvidence)?;
@@ -394,7 +394,7 @@ fn persist_exact_text(path: &Path, content: &str) -> Result<(), BrowserLaunchBlo
             let _ = fs::remove_file(&staging);
             return Err(LocalProfileError::from(error).into());
         }
-        let published = fs::hard_link(&staging, path);
+        let published = fs::hard_link(&staging, canonical_path);
         // The hard link, once created, owns the complete fsynced bytes. Failure to
         // remove this exact staging name is a cleanup failure, not permission to
         // silently declare local readiness and accumulate unbounded staged files.
@@ -402,7 +402,7 @@ fn persist_exact_text(path: &Path, content: &str) -> Result<(), BrowserLaunchBlo
         match published {
             Ok(()) => return Ok(()),
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
-                return if read_regular_file(path)? == content {
+                return if read_regular_file(canonical_path)? == content {
                     Ok(())
                 } else {
                     Err(BrowserLaunchBlocker::MaterializationStale)
