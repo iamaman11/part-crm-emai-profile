@@ -553,10 +553,8 @@ fn canonical_operator_save_retries_same_successor_after_upload_failure()
         &fixture.profile_id,
         &candidate,
     )?;
-    fs::write(
-        stale_candidate.path().join("retry-residue"),
-        b"stale-precommit-candidate",
-    )?;
+    let original_inventory = stale_candidate.inventory()?;
+    let original_path = stale_candidate.path().to_path_buf();
 
     let completion = operator.save_retained_successor(
         &fixture.root,
@@ -592,12 +590,13 @@ fn canonical_operator_save_retries_same_successor_after_upload_failure()
             .iter()
             .all(|generation_id| generation_id == candidate.as_str())
     );
-    let rebuilt_candidate = fixture.root.open_generation(
+    let retained_candidate = fixture.root.open_generation(
         fixture.actor.tenant_scope().tenant_id(),
         &fixture.profile_id,
         &candidate,
     )?;
-    assert!(!rebuilt_candidate.path().join("retry-residue").exists());
+    assert_eq!(retained_candidate.path(), original_path);
+    assert_eq!(retained_candidate.inventory()?, original_inventory);
 
     let base_workspace = fixture.base_workspace()?;
     let released =
@@ -623,6 +622,119 @@ fn canonical_operator_save_retries_same_successor_after_upload_failure()
     ));
     assert_eq!(trace.paths.borrow().len(), requests_before_duplicate);
     assert_eq!(put_calls.get(), puts_before_duplicate);
+    Ok(())
+}
+
+#[test]
+fn canonical_operator_retry_refuses_changed_candidate_and_preserves_unknown_bytes()
+-> Result<(), Box<dyn std::error::Error>> {
+    let fixture = Fixture::new("retry-mutated")?;
+    let mut operator = fixture.operator()?;
+    fixture.open_mutate_and_close(&mut operator)?;
+    let trace = TransportTrace::default();
+    let put_calls = Rc::new(Cell::new(0));
+    let first = operator.save_retained_successor(
+        &fixture.root,
+        Transport::new([Ok(upload_required_response()?)], trace.clone()),
+        &mut Put {
+            fail: true,
+            calls: Rc::clone(&put_calls),
+        },
+        UnixMillis::new(30),
+    );
+    assert!(matches!(
+        first,
+        Err(OperatorFlowError::Stage(OperatorFailureStage::GenerationSave))
+    ));
+    let candidate = GenerationId::parse(
+        trace.generation_ids.borrow().first().ok_or("missing candidate")?.clone(),
+    )?;
+    let workspace = fixture.root.open_generation(
+        fixture.actor.tenant_scope().tenant_id(),
+        &fixture.profile_id,
+        &candidate,
+    )?;
+    let unknown = workspace.path().join("user_data");
+    fs::create_dir(&unknown)?;
+    fs::write(unknown.join("cookies.sqlite-wal"), b"unaccounted-local-writes")?;
+    let observed_requests = trace.paths.borrow().len();
+
+    let retry = operator.save_retained_successor(
+        &fixture.root,
+        Transport::new([], trace.clone()),
+        &mut Put {
+            fail: false,
+            calls: Rc::clone(&put_calls),
+        },
+        UnixMillis::new(40),
+    );
+    assert!(matches!(
+        retry,
+        Err(OperatorFlowError::Stage(OperatorFailureStage::GenerationSave))
+    ));
+    assert_eq!(trace.paths.borrow().len(), observed_requests);
+    assert_eq!(put_calls.get(), 1);
+    assert_eq!(
+        fs::read(unknown.join("cookies.sqlite-wal"))?,
+        b"unaccounted-local-writes"
+    );
+    assert!(operator.has_pending_dirty_close());
+    assert_eq!(operator.coordinator().closed, 0);
+    fixture.assert_base_lock_held()?;
+    Ok(())
+}
+
+#[test]
+fn canonical_operator_lost_commit_response_reuses_verified_original_without_second_put()
+-> Result<(), Box<dyn std::error::Error>> {
+    let fixture = Fixture::new("commit-lost-then-reconciled")?;
+    let mut operator = fixture.operator()?;
+    fixture.open_mutate_and_close(&mut operator)?;
+    let trace = TransportTrace::default();
+    let put_calls = Rc::new(Cell::new(0));
+    let first = operator.save_retained_successor(
+        &fixture.root,
+        Transport::new(
+            [
+                Ok(upload_required_response()?),
+                Ok(verified_response()?),
+                Err(BridgePortError::Unavailable),
+            ],
+            trace.clone(),
+        ),
+        &mut Put {
+            fail: false,
+            calls: Rc::clone(&put_calls),
+        },
+        UnixMillis::new(30),
+    );
+    assert!(matches!(
+        first,
+        Err(OperatorFlowError::Stage(OperatorFailureStage::GenerationSave))
+    ));
+    assert_eq!(put_calls.get(), 1);
+    let candidate = trace.generation_ids.borrow().first().ok_or("missing candidate")?.clone();
+    let completion = operator.save_retained_successor(
+        &fixture.root,
+        Transport::new(
+            [
+                Ok(verified_response()?),
+                Ok(commit_response(BridgeGenerationSuccessorCommitOutcomeDto::AlreadyActive)?),
+            ],
+            trace.clone(),
+        ),
+        &mut Put {
+            fail: false,
+            calls: Rc::clone(&put_calls),
+        },
+        UnixMillis::new(40),
+    )?;
+    assert!(completion.is_saved());
+    assert_eq!(put_calls.get(), 1);
+    assert!(trace.generation_ids.borrow().iter().all(|id| id == &candidate));
+    assert_eq!(completion.committed().generation_id().as_str(), candidate);
+    assert!(!operator.has_pending_dirty_close());
+    assert_eq!(operator.coordinator().closed, 1);
     Ok(())
 }
 
