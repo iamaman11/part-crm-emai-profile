@@ -1,6 +1,7 @@
 #[cfg(any(test, feature = "synthetic-test-bin"))]
 use crate::browser_mail_query::BrowserMailExecutionProof;
 use crate::dirty_generation::PreparedDirtyGeneration;
+use crate::browser_execution::{BrowserLaunchBlocker, persist_committed_successor_binding};
 #[cfg(any(test, feature = "synthetic-test-bin"))]
 use crate::dirty_generation_finalize::DirtyGenerationFinalizeError;
 #[cfg(any(test, feature = "synthetic-test-bin"))]
@@ -119,11 +120,26 @@ impl RetainedDirtyClose {
 
         let local_outcome = match prepared.candidate_workspace().inventory() {
             Ok(inventory) if inventory == *prepared.candidate_inventory() => {
-                DirtyCloseLocalOutcome::CandidateAccepted(LocalGenerationRecord::new(
-                    committed.generation_id().clone(),
-                    inventory.total_bytes(),
-                    transition_at,
-                ))
+                // This is the same exact candidate whose immutable container was accepted by
+                // the backend. A committed cloud generation is not locally ready until the
+                // existing next-launch binding owner can read its exact identity/inventory.
+                match persist_committed_successor_binding(
+                    prepared.candidate_workspace(),
+                    self.lease.tenant_id(),
+                    self.lease.profile_id(),
+                    committed.generation_id(),
+                    committed.container_digest(),
+                ) {
+                    Ok(()) => DirtyCloseLocalOutcome::CandidateAccepted(LocalGenerationRecord::new(
+                        committed.generation_id().clone(),
+                        inventory.total_bytes(),
+                        transition_at,
+                    )),
+                    Err(reason) => DirtyCloseLocalOutcome::MaterializationBindingBlocked {
+                        generation_id: committed.generation_id().clone(),
+                        reason,
+                    },
+                }
             }
             Ok(_) | Err(_) => rematerialization_outcome(
                 root,
@@ -265,6 +281,12 @@ fn same_lease(left: &ProfileLease, right: &ProfileLease) -> bool {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum DirtyCloseLocalOutcome {
     CandidateAccepted(LocalGenerationRecord),
+    /// Cloud commit succeeded, but the existing local readiness contract did not.
+    /// Keep both retained base and candidate bytes for owned recovery, never claim Saved.
+    MaterializationBindingBlocked {
+        generation_id: GenerationId,
+        reason: BrowserLaunchBlocker,
+    },
     RematerializeRequired(GenerationId),
     RematerializationBlocked {
         generation_id: GenerationId,
