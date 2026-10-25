@@ -2067,6 +2067,168 @@ mod tests {
     }
 
     #[test]
+    fn fresh_lone_intent_first_seals_then_commit_and_next_claim_finishes_active_exact()
+    -> Result<(), Box<dyn std::error::Error>> {
+        for existing_clone in [false, true] {
+            let fixture = Fixture::new()?;
+            let root = MaterializationRoot::open_or_create(&fixture.root_path)?;
+            let source = root.open_generation(&fixture.tenant, &fixture.profile, &fixture.base)?;
+            persist_local_unsynced_intent(&root, &source, &fixture.lease)?;
+            let fresh = ProfileLease::issue(
+                fixture.tenant.clone(),
+                fixture.profile.clone(),
+                SessionId::parse("session_reseal_fresh")?,
+                fixture.lease.device_id().clone(),
+                fixture.lease.epoch() + 1,
+                FencingToken::parse("fence_reseal_fresh")?,
+            )?;
+            let candidate = crate::shipping_save_attempt::deterministic_lone_unsynced_successor(
+                &root, &fixture.tenant, &fixture.profile, &fixture.base, &fresh,
+            )?
+            .ok_or("missing deterministic candidate")?;
+            if existing_clone {
+                let precrash = crate::local_profile::RecoveryClone::create(
+                    &source, &root, &fixture.tenant, &fixture.profile, &candidate,
+                )?;
+                assert_eq!(precrash.verify_clone_only()?, source.inventory()?);
+            }
+            let renewed = ProfileLease::issue(
+                fixture.tenant.clone(),
+                fixture.profile.clone(),
+                SessionId::parse("session_reseal_after_another_crash")?,
+                fixture.lease.device_id().clone(),
+                fixture.lease.epoch() + 2,
+                FencingToken::parse("fence_reseal_after_another_crash")?,
+            )?;
+            assert_eq!(
+                crate::shipping_save_attempt::deterministic_lone_unsynced_successor(
+                    &root, &fixture.tenant, &fixture.profile, &fixture.base, &renewed,
+                )?,
+                Some(candidate.clone()),
+                "interrupted clone may never cause N+2",
+            );
+            let mut network = Transport {
+                responses: VecDeque::from([
+                    MachineHttpResponse::new(
+                        200, br#"{"verdict":"NOT_APPLIED_RETRYABLE"}"#.to_vec(),
+                    ),
+                    MachineHttpResponse::new(
+                        200, br#"{"verdict":"NOT_APPLIED_RETRYABLE"}"#.to_vec(),
+                    ),
+                    MachineHttpResponse::new(
+                        200,
+                        br#"{"state":"verified","method":null,"url":null,"headers":[],"expiresSeconds":null}"#.to_vec(),
+                    ),
+                    MachineHttpResponse::new(
+                        200, br#"{"outcome":"ACTIVATED"}"#.to_vec(),
+                    ),
+                ]),
+                paths: Vec::new(),
+            };
+            let mut sealer = Sealer;
+            let mut upload = RecoveryPut::default();
+            assert_eq!(
+                super::resume_lone_local_unsynced_under_fresh_lease(
+                    &root, &fixture.tenant, &fixture.profile, &fixture.base,
+                    &fresh, &mut sealer, &mut network, &mut upload,
+                ),
+                Ok(true),
+            );
+            assert_eq!(network.paths.len(), 4);
+            assert!(network.paths[0].ends_with("/generation-successor/local-unsynced/retry-decision"));
+            assert!(network.paths[1].ends_with("/generation-successor/retry-decision"));
+            assert!(network.paths[3].ends_with("/generation-successor/commit"));
+            assert_eq!(upload.calls, 0);
+            assert!(has_unresolved_save_attempt_for_profile(
+                &root, &fixture.tenant, &fixture.profile,
+            )?);
+            let exact = discover_unresolved_exact_save_attempt(
+                &root, &fixture.tenant, &fixture.profile,
+            )?
+            .ok_or("sealed checkpoint was not preserved")?;
+            assert_eq!(exact.successor_id(), candidate.as_str());
+            assert_eq!(std::fs::read(source.path().join("prefs.js"))?, b"save");
+            let mut active = Transport {
+                responses: VecDeque::from([
+                    MachineHttpResponse::new(200, br#"{"activeExact":true}"#.to_vec()),
+                ]),
+                paths: Vec::new(),
+            };
+            assert_eq!(
+                complete_active_exact_after_restart(
+                    &root, &fixture.tenant, &fixture.profile, &candidate,
+                    &renewed, &mut active,
+                ),
+                Ok(RestartExactLocalCompletion::ActiveExactLocalReady),
+            );
+            assert!(!has_unresolved_save_attempt_for_profile(
+                &root, &fixture.tenant, &fixture.profile,
+            )?);
+            let candidate_workspace = root.open_generation(
+                &fixture.tenant, &fixture.profile, &candidate,
+            )?;
+            assert_eq!(std::fs::read(candidate_workspace.path().join("prefs.js"))?, b"save");
+            let binding = load_materialization_binding(
+                &candidate_workspace, &fixture.tenant, &fixture.profile, &candidate,
+            )?;
+            assert_eq!(binding.source_container_sha256(), exact.container_digest());
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn partial_or_mutated_interrupted_lone_clone_never_seals_or_uploads()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let fixture = Fixture::new()?;
+        let root = MaterializationRoot::open_or_create(&fixture.root_path)?;
+        let source = root.open_generation(&fixture.tenant, &fixture.profile, &fixture.base)?;
+        persist_local_unsynced_intent(&root, &source, &fixture.lease)?;
+        let fresh = ProfileLease::issue(
+            fixture.tenant.clone(),
+            fixture.profile.clone(),
+            SessionId::parse("session_partial_clone_retry")?,
+            fixture.lease.device_id().clone(),
+            fixture.lease.epoch() + 1,
+            FencingToken::parse("fence_partial_clone_retry")?,
+        )?;
+        let candidate = crate::shipping_save_attempt::deterministic_lone_unsynced_successor(
+            &root, &fixture.tenant, &fixture.profile, &fixture.base, &fresh,
+        )?
+        .ok_or("candidate missing")?;
+        let incomplete = root.create_generation(&fixture.tenant, &fixture.profile, &candidate)?;
+        std::fs::write(incomplete.path().join("prefs.js"), b"malformed-staged-native-file")?;
+        let untouched = std::fs::read(incomplete.path().join("prefs.js"))?;
+        let mut network = Transport {
+            responses: VecDeque::from([
+                MachineHttpResponse::new(
+                    200, br#"{"verdict":"NOT_APPLIED_RETRYABLE"}"#.to_vec(),
+                ),
+            ]),
+            paths: Vec::new(),
+        };
+        let mut sealer = Sealer;
+        let mut upload = RecoveryPut::default();
+        assert_eq!(
+            super::resume_lone_local_unsynced_under_fresh_lease(
+                &root, &fixture.tenant, &fixture.profile, &fixture.base,
+                &fresh, &mut sealer, &mut network, &mut upload,
+            ),
+            Err(RestartExactLocalCompletionError::LocalEvidenceChanged),
+        );
+        assert_eq!(network.paths.len(), 1);
+        assert_eq!(upload.calls, 0);
+        assert_eq!(std::fs::read(incomplete.path().join("prefs.js"))?, untouched);
+        assert_eq!(std::fs::read(source.path().join("prefs.js"))?, b"save");
+        assert!(has_unresolved_save_attempt_for_profile(
+            &root, &fixture.tenant, &fixture.profile,
+        )?);
+        assert!(discover_unresolved_exact_save_attempt(
+            &root, &fixture.tenant, &fixture.profile,
+        ).is_err());
+        Ok(())
+    }
+
+    #[test]
     fn active_exact_foreign_binding_retains_checkpoint_and_releases_owned_lock()
     -> Result<(), Box<dyn std::error::Error>> {
         let fixture = Fixture::new()?;
