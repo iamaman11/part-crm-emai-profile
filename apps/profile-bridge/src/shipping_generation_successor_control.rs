@@ -14,7 +14,9 @@ use crate::shipping_generation_save::{
     GenerationUploadAuthorization, SignedGenerationUploadCapability,
 };
 #[cfg(any(windows, test))]
-use crate::shipping_save_attempt::retire_active_exact_attempt_after_restart;
+use crate::shipping_save_attempt::{
+    retire_active_exact_attempt_after_restart, retire_matching_local_unsynced_after_restart,
+};
 use crate::shipping_save_attempt::{
     ReadOnlySaveAttempt, discover_unresolved_exact_save_attempt, inspect_exact_save_attempt,
 };
@@ -320,6 +322,16 @@ pub(crate) fn complete_active_exact_after_restart<T: MachineHttpPort>(
         {
             return Err(RestartExactLocalCompletionError::LocalEvidenceChanged);
         }
+        // A crash after publishing the immutable ciphertext checkpoint but
+        // before retiring LOCAL_UNSYNCED may leave BOTH exact original records.
+        // The original source/old-lease fingerprints were checked by the
+        // discoverer under this fresh OS admission; D1 ACTIVE_EXACT is proved.
+        // Retire the small intent first, keeping the complete checkpoint
+        // throughout binding, lock release and final exact retirement.
+        retire_matching_local_unsynced_after_restart(
+            root, tenant_id, profile_id, &verified,
+        )
+        .map_err(|_| RestartExactLocalCompletionError::LocalEvidenceChanged)?;
         persist_committed_successor_binding(
             &candidate,
             tenant_id,
