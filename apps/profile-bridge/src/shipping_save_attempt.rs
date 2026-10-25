@@ -217,19 +217,39 @@ pub(crate) fn persist_local_unsynced_intent(
         // bytes, native WAL, identity, or unrelated Profile are touched.
         return Err(error.into());
     }
-    let published = fs::hard_link(&stage_path, &canonical);
-    // A crash here leaves a scoped pending marker, which cannot be mistaken
-    // for a completed intent or bypass the next-start recovery guard.
-    fs::remove_file(&stage_path)?;
-    match published {
-        Ok(()) => Ok(()),
-        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
-            if read_local_unsynced(&canonical)? == intent {
-                Ok(())
-            } else {
-                Err(SaveAttemptEvidenceError::Changed)
-            }
+    finish_local_unsynced_publication(
+        &stage_path,
+        &canonical,
+        &intent,
+        fs::hard_link(&stage_path, &canonical),
+    )
+}
+
+/// Never unlink the last fsynced local-save evidence if the no-replace
+/// publication fails. A .pending-local-unsynced record is a hard blocker on
+/// restart, not an authority to open N or retry a cloud effect.
+fn finish_local_unsynced_publication(
+    stage: &PathBuf,
+    canonical: &PathBuf,
+    intent: &LocalUnsyncedIntent,
+    publication: std::io::Result<()>,
+) -> Result<(), SaveAttemptEvidenceError> {
+    match publication {
+        Ok(()) => {
+            fs::remove_file(stage)?;
+            Ok(())
         }
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+            if read_local_unsynced(canonical)? != *intent {
+                return Err(SaveAttemptEvidenceError::Changed);
+            }
+            // A byte-identical canonical marker already provides the
+            // durable intent. Failure to unlink stage remains fail-closed.
+            fs::remove_file(stage)?;
+            Ok(())
+        }
+        // The staged marker is the ONLY durable local intent here. Preserve
+        // it even on permissions, volume, antivirus or power-loss errors.
         Err(error) => Err(error.into()),
     }
 }
@@ -275,6 +295,71 @@ pub(crate) fn retire_local_unsynced_after_exact_checkpoint(
     }
     // No sweep. If deletion fails, fail closed and keep both records.
     fs::remove_file(path)?;
+    Ok(())
+}
+
+/// A crash between the complete exact checkpoint hardlink and small intent
+/// retirement legitimately leaves TWO records for the SAME attempt. This
+/// proves an exact pairing without a surviving old lease or replayable token.
+/// It NEVER implies D1 ACTIVE, network retry permission, or browser readiness.
+fn matching_local_unsynced_for_exact(
+    root: &MaterializationRoot,
+    tenant: &TenantId,
+    profile: &ProfileId,
+    exact: &ReadOnlySaveAttempt,
+) -> Result<bool, SaveAttemptEvidenceError> {
+    let marker = local_unsynced_path(root, tenant, profile);
+    let intent = match read_local_unsynced(&marker) {
+        Ok(intent) => intent,
+        Err(SaveAttemptEvidenceError::Io(std::io::ErrorKind::NotFound)) => return Ok(false),
+        Err(error) => return Err(error),
+    };
+    if intent.schema != "bridge-p3-local-unsynced-v1"
+        || intent.tenant != tenant.as_str()
+        || intent.profile != profile.as_str()
+        || exact.header.schema != "bridge-p3-attempt-v1"
+        || exact.header.tenant != intent.tenant
+        || exact.header.profile != intent.profile
+        || exact.header.base_generation != intent.base_generation
+        || exact.header.epoch != intent.epoch
+        || exact.header.session_fingerprint != intent.session_fingerprint
+        || exact.header.fencing_fingerprint != intent.fencing_fingerprint
+        || exact.header.source_inventory != intent.source_inventory
+        || exact.header.candidate_bytes != intent.source_bytes
+    {
+        return Err(SaveAttemptEvidenceError::Changed);
+    }
+    let base_id = GenerationId::parse(intent.base_generation)
+        .map_err(|_| SaveAttemptEvidenceError::Invalid)?;
+    let source = root
+        .open_generation(tenant, profile, &base_id)
+        .map_err(|_| SaveAttemptEvidenceError::Changed)?;
+    let inventory = source
+        .inventory()
+        .map_err(|_| SaveAttemptEvidenceError::Changed)?;
+    if inventory.inventory_digest() != intent.source_inventory
+        || inventory.total_bytes() != intent.source_bytes
+    {
+        return Err(SaveAttemptEvidenceError::Changed);
+    }
+    Ok(true)
+}
+
+/// The existing exact checkpoint has already been checked under the fresh
+/// native writer/Bridge root admission after affirmative D1 ACTIVE_EXACT.
+/// Retire only its matching predecessor intent; never touch Firefox files
+/// or the complete ciphertext checkpoint needed after a further crash.
+#[cfg(any(windows, test))]
+pub(crate) fn retire_matching_local_unsynced_after_restart(
+    root: &MaterializationRoot,
+    tenant: &TenantId,
+    profile: &ProfileId,
+    exact: &ReadOnlySaveAttempt,
+) -> Result<(), SaveAttemptEvidenceError> {
+    if !matching_local_unsynced_for_exact(root, tenant, profile, exact)? {
+        return Ok(());
+    }
+    fs::remove_file(local_unsynced_path(root, tenant, profile))?;
     Ok(())
 }
 
@@ -666,7 +751,9 @@ pub(crate) fn discover_unresolved_exact_save_attempt(
     profile: &ProfileId,
 ) -> Result<Option<ReadOnlySaveAttempt>, SaveAttemptEvidenceError> {
     let prefix = scope_file_prefix(tenant, profile);
+    let marker = local_unsynced_path(root, tenant, profile);
     let mut candidate = None;
+    let mut has_local_intent = false;
     let mut inspected = 0_usize;
     for entry in fs::read_dir(root.path())? {
         let entry = entry?;
@@ -676,21 +763,29 @@ pub(crate) fn discover_unresolved_exact_save_attempt(
         }
         let name = entry.file_name();
         let Some(name) = name.to_str() else {
-            // A non-UTF8 name cannot identify a trusted scoped attempt.
-            // The conservative startup guard remains authoritative.
+            // Unknown non-UTF8 names cannot be treated as a trusted attempt.
             continue;
         };
         if !name.starts_with(&prefix) {
+            continue;
+        }
+        let path = entry.path();
+        if path == marker {
+            // A single small LOCAL_UNSYNCED marker may accompany only the
+            // single canonical exact checkpoint of the original attempt.
+            // Check the contents AFTER inspecting the full exact checkpoint.
+            if has_local_intent {
+                return Err(SaveAttemptEvidenceError::Invalid);
+            }
+            has_local_intent = true;
             continue;
         }
         if candidate.is_some() {
             return Err(SaveAttemptEvidenceError::Invalid);
         }
 
-        // Read only the tiny header here, not a second full ciphertext Vec.
-        // Interrupted .pending, names with an extra extension, tampered
-        // content, foreign generations and ambiguous siblings fail closed.
-        let path = entry.path();
+        // Every unknown/torn .pending stage, foreign sibling or extra
+        // extension is a blocker, NOT a second candidate or authority.
         let header = read_bounded_attempt_header(&path)?;
         if header.schema != "bridge-p3-attempt-v1"
             || header.tenant != tenant.as_str()
@@ -705,12 +800,22 @@ pub(crate) fn discover_unresolved_exact_save_attempt(
         }
         candidate = Some(generation);
     }
-    candidate
+    let exact = candidate
         .map(|generation| {
             inspect_exact_save_attempt(root, tenant, profile, &generation)?
                 .ok_or(SaveAttemptEvidenceError::Changed)
         })
-        .transpose()
+        .transpose()?;
+    // A lone LOCAL_UNSYNCED marker is still a hard blocker until the
+    // authorized owner can create/recover its exact candidate. A valid pair
+    // is recoverable but NEVER silently considered Saved.
+    if has_local_intent {
+        let exact = exact.as_ref().ok_or(SaveAttemptEvidenceError::Changed)?;
+        if !matching_local_unsynced_for_exact(root, tenant, profile, exact)? {
+            return Err(SaveAttemptEvidenceError::Changed);
+        }
+    }
+    Ok(exact)
 }
 
 /// Header-only bounded read: discovery never loads the large sealed body
