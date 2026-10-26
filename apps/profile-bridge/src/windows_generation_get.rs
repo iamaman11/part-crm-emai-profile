@@ -29,7 +29,9 @@ pub struct WindowsSignedGenerationObjectGet {
 
 impl WindowsSignedGenerationObjectGet {
     pub fn from_system() -> Result<Self, BridgePortError> {
-        Ok(Self { curl_executable: system_curl_executable()? })
+        Ok(Self {
+            curl_executable: system_curl_executable()?,
+        })
     }
 }
 
@@ -42,7 +44,8 @@ impl SignedGenerationObjectStreamGetPort for WindowsSignedGenerationObjectGet {
         max_bytes: u64,
         sink: &mut dyn Write,
     ) -> Result<u16, Self::Error> {
-        if max_bytes == 0 || max_bytes > MAX_STREAM_CONTAINER_BYTES
+        if max_bytes == 0
+            || max_bytes > MAX_STREAM_CONTAINER_BYTES
             || !valid_signed_r2_url(signed_url)
         {
             return Err(BridgePortError::InvalidResponse);
@@ -50,15 +53,24 @@ impl SignedGenerationObjectStreamGetPort for WindowsSignedGenerationObjectGet {
         let mut cmd: Command = crate::windows_native::background_command(&self.curl_executable);
         cmd.env_clear()
             .arg("--silent")
-            .arg("--proto").arg("=https")
-            .arg("--max-redirs").arg("0")
-            .arg("--connect-timeout").arg(CURL_CONNECT_TIMEOUT_SECONDS)
-            .arg("--max-time").arg(CURL_GET_TOTAL_TIMEOUT_SECONDS)
-            .arg("--max-filesize").arg(max_bytes.to_string())
-            .arg("--noproxy").arg("*")
-            .arg("--request").arg("GET")
-            .arg("--url").arg(signed_url)
-            .arg("--output").arg("-")
+            .arg("--proto")
+            .arg("=https")
+            .arg("--max-redirs")
+            .arg("0")
+            .arg("--connect-timeout")
+            .arg(CURL_CONNECT_TIMEOUT_SECONDS)
+            .arg("--max-time")
+            .arg(CURL_GET_TOTAL_TIMEOUT_SECONDS)
+            .arg("--max-filesize")
+            .arg(max_bytes.to_string())
+            .arg("--noproxy")
+            .arg("*")
+            .arg("--request")
+            .arg("GET")
+            .arg("--url")
+            .arg(signed_url)
+            .arg("--output")
+            .arg("-")
             // Only the exact three-digit status travels on stderr, never
             // mingled with the binary container on stdout.
             .arg("--write-out")
@@ -73,14 +85,20 @@ impl SignedGenerationObjectStreamGetPort for WindowsSignedGenerationObjectGet {
             let mut read_total = 0_u64;
             let mut buffer = [0_u8; 65_536];
             loop {
-                let count = stdout.read(&mut buffer).map_err(|_| BridgePortError::Unavailable)?;
-                if count == 0 { break; }
-                read_total = read_total.checked_add(count as u64)
+                let count = stdout
+                    .read(&mut buffer)
+                    .map_err(|_| BridgePortError::Unavailable)?;
+                if count == 0 {
+                    break;
+                }
+                read_total = read_total
+                    .checked_add(count as u64)
                     .ok_or(BridgePortError::InvalidResponse)?;
                 if read_total > max_bytes {
                     return Err(BridgePortError::InvalidResponse);
                 }
-                sink.write_all(&buffer[..count]).map_err(|_| BridgePortError::InvalidResponse)?;
+                sink.write_all(&buffer[..count])
+                    .map_err(|_| BridgePortError::InvalidResponse)?;
             }
             Ok(())
         })();
@@ -89,7 +107,9 @@ impl SignedGenerationObjectStreamGetPort for WindowsSignedGenerationObjectGet {
             let _ = child.wait();
             return Err(error);
         }
-        let output = child.wait_with_output().map_err(|_| BridgePortError::Unavailable)?;
+        let output = child
+            .wait_with_output()
+            .map_err(|_| BridgePortError::Unavailable)?;
         if !output.status.success() || !output.stdout.is_empty() {
             return Err(BridgePortError::Unavailable);
         }
@@ -98,9 +118,7 @@ impl SignedGenerationObjectStreamGetPort for WindowsSignedGenerationObjectGet {
 }
 
 fn decode_exact_get_status(stderr: &[u8]) -> Result<u16, BridgePortError> {
-    if !stderr.starts_with(HTTP_STATUS_MARKER)
-        || stderr.len() != HTTP_STATUS_MARKER.len() + 3
-    {
+    if !stderr.starts_with(HTTP_STATUS_MARKER) || stderr.len() != HTTP_STATUS_MARKER.len() + 3 {
         return Err(BridgePortError::InvalidResponse);
     }
     let digits = &stderr[HTTP_STATUS_MARKER.len()..];

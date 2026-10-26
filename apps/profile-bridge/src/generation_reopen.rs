@@ -1,8 +1,8 @@
+use crate::generation_object_spool::VerifiedGenerationObjectFile;
+use encrypted_generation_domain::MAX_STREAM_CONTAINER_BYTES;
 use encrypted_generation_domain::{GenerationDek, MAX_GENERATION_CONTAINER_BYTES};
 use profile_platform_primitives::{GenerationId, ProfileId, TenantId};
 use sha2::{Digest, Sha256};
-use encrypted_generation_domain::MAX_STREAM_CONTAINER_BYTES;
-use crate::generation_object_spool::VerifiedGenerationObjectFile;
 use std::fs::{self, OpenOptions};
 use std::io::{self, Write};
 use std::path::Path;
@@ -256,7 +256,6 @@ where
     }
 }
 
-
 /// A single already-signed HTTPS R2 GET that writes its response incrementally
 /// to an UNPUBLISHED sink. A 200 response alone is never cloud/open proof.
 /// The effect must not follow redirects, retry or select an object URL.
@@ -295,9 +294,12 @@ struct BoundedGenerationGetWriter<'a> {
 
 impl Write for BoundedGenerationGetWriter<'_> {
     fn write(&mut self, value: &[u8]) -> io::Result<usize> {
-        let next = self.written.checked_add(value.len() as u64).ok_or_else(|| {
-            io::Error::new(io::ErrorKind::InvalidData, "generation GET length overflow")
-        })?;
+        let next = self
+            .written
+            .checked_add(value.len() as u64)
+            .ok_or_else(|| {
+                io::Error::new(io::ErrorKind::InvalidData, "generation GET length overflow")
+            })?;
         if next > self.expected_bytes {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
@@ -326,18 +328,21 @@ impl<T: SignedGenerationObjectStreamGetPort> VerifiedGenerationObjectStreamDownl
         destination: &Path,
     ) -> Result<VerifiedGenerationObjectFile, GenerationObjectDownloadError> {
         if !destination.is_absolute()
-            || !destination.file_name().and_then(|name| name.to_str()).is_some_and(
-                |name| name.starts_with(".pending-") && name.len() <= 128
-            )
+            || !destination
+                .file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.starts_with(".pending-") && name.len() <= 128)
             || capability.container_bytes() == 0
             || capability.container_bytes() > MAX_STREAM_CONTAINER_BYTES
             || !(1..=300).contains(&capability.expires_seconds())
         {
             return Err(GenerationObjectDownloadError::InvalidCapability);
         }
-        let parent = destination.parent().ok_or(GenerationObjectDownloadError::InvalidCapability)?;
-        let metadata = fs::symlink_metadata(parent)
-            .map_err(|_| GenerationObjectDownloadError::Transport)?;
+        let parent = destination
+            .parent()
+            .ok_or(GenerationObjectDownloadError::InvalidCapability)?;
+        let metadata =
+            fs::symlink_metadata(parent).map_err(|_| GenerationObjectDownloadError::Transport)?;
         if !metadata.is_dir() || metadata.file_type().is_symlink() {
             return Err(GenerationObjectDownloadError::InvalidCapability);
         }
@@ -355,7 +360,8 @@ impl<T: SignedGenerationObjectStreamGetPort> VerifiedGenerationObjectStreamDownl
             written: 0,
             hasher: Sha256::new(),
         };
-        let status = self.transport
+        let status = self
+            .transport
             .get_exact_stream(url, capability.container_bytes(), &mut writer)
             .map_err(|_| GenerationObjectDownloadError::Transport)?;
         if status != 200 {
@@ -368,7 +374,9 @@ impl<T: SignedGenerationObjectStreamGetPort> VerifiedGenerationObjectStreamDownl
         if digest != capability.container_digest() {
             return Err(GenerationObjectDownloadError::DigestMismatch);
         }
-        output.sync_all().map_err(|_| GenerationObjectDownloadError::Transport)?;
+        output
+            .sync_all()
+            .map_err(|_| GenerationObjectDownloadError::Transport)?;
         drop(output);
         VerifiedGenerationObjectFile::open(
             destination,
@@ -476,14 +484,20 @@ mod tests {
         let mut total = 0_u64;
         loop {
             let count = spool.reader().read(&mut buffer)?;
-            if count == 0 { break; }
+            if count == 0 {
+                break;
+            }
             assert!(buffer[..count].iter().all(|byte| *byte == 0x72));
             total += count as u64;
         }
         assert_eq!(total, len);
         spool.recheck_and_rewind()?;
         // A crash/retry can never silently replace the first pending file.
-        assert!(download.download_to_new_pending_file(&capability, &path).is_err());
+        assert!(
+            download
+                .download_to_new_pending_file(&capability, &path)
+                .is_err()
+        );
         drop(spool);
         std::fs::remove_dir_all(dir)?;
         Ok(())
@@ -506,17 +520,65 @@ mod tests {
         let len = 131_077_u64;
         let capability = stream_capability(len, 0x42)?;
         for (index, simulated, expected) in [
-            (0, StreamGet { status: 302, bytes: len, byte: 0x42, fail_after: None }, Error::HttpStatus),
-            (1, StreamGet { status: 200, bytes: len - 1, byte: 0x42, fail_after: None }, Error::SizeMismatch),
-            (2, StreamGet { status: 200, bytes: len, byte: 0x43, fail_after: None }, Error::DigestMismatch),
-            (3, StreamGet { status: 200, bytes: len + 1, byte: 0x42, fail_after: None }, Error::Transport),
-            (4, StreamGet { status: 200, bytes: len, byte: 0x42, fail_after: Some(65_536) }, Error::Transport),
+            (
+                0,
+                StreamGet {
+                    status: 302,
+                    bytes: len,
+                    byte: 0x42,
+                    fail_after: None,
+                },
+                Error::HttpStatus,
+            ),
+            (
+                1,
+                StreamGet {
+                    status: 200,
+                    bytes: len - 1,
+                    byte: 0x42,
+                    fail_after: None,
+                },
+                Error::SizeMismatch,
+            ),
+            (
+                2,
+                StreamGet {
+                    status: 200,
+                    bytes: len,
+                    byte: 0x43,
+                    fail_after: None,
+                },
+                Error::DigestMismatch,
+            ),
+            (
+                3,
+                StreamGet {
+                    status: 200,
+                    bytes: len + 1,
+                    byte: 0x42,
+                    fail_after: None,
+                },
+                Error::Transport,
+            ),
+            (
+                4,
+                StreamGet {
+                    status: 200,
+                    bytes: len,
+                    byte: 0x42,
+                    fail_after: Some(65_536),
+                },
+                Error::Transport,
+            ),
         ] {
             let path = dir.join(format!(".pending-untrusted-{index}"));
             let mut downloader = VerifiedGenerationObjectStreamDownloader::new(simulated);
             let outcome = downloader.download_to_new_pending_file(&capability, &path);
             assert!(matches!(outcome, Err(reason) if reason == expected));
-            assert!(path.exists(), "partial network data must not be quietly published");
+            assert!(
+                path.exists(),
+                "partial network data must not be quietly published"
+            );
         }
         assert!(!dir.join("generation_stream_get_descriptor").exists());
         std::fs::remove_dir_all(dir)?;

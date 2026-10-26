@@ -68,9 +68,9 @@ pub mod windows_device_application;
 #[cfg(windows)]
 mod windows_device_pairing;
 #[cfg(windows)]
-pub mod windows_generation_put;
-#[cfg(windows)]
 pub mod windows_generation_get;
+#[cfg(windows)]
+pub mod windows_generation_put;
 #[cfg(windows)]
 pub mod windows_native;
 
