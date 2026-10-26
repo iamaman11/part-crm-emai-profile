@@ -13,6 +13,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 pub(crate) const WORKSPACE_SNAPSHOT_MAGIC: &[u8; 8] = b"BPGW0001";
 pub(crate) const MAX_WORKSPACE_SNAPSHOT_BYTES: usize = 67_108_864;
 /// Streaming-only BPGW0001 size; legacy Vec API remains capped at 64 MiB.
+#[allow(dead_code)] // K2 production streaming adapter is not yet active.
 pub(crate) const MAX_STREAM_WORKSPACE_SNAPSHOT_BYTES: u64 = 536_870_912;
 const MAX_SNAPSHOT_FILES: usize = 100_000;
 const MAX_RELATIVE_PATH_BYTES: usize = 512;
@@ -55,6 +56,7 @@ impl From<LocalProfileError> for GenerationSnapshotError {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[allow(dead_code)] // K2 production streaming adapter is not yet active.
 pub(crate) struct StreamedWorkspaceSnapshot {
     pub(crate) plaintext_bytes: u64,
     pub(crate) plaintext_digest: [u8; 32],
@@ -63,6 +65,7 @@ pub(crate) struct StreamedWorkspaceSnapshot {
 /// Canonical BPGW0001, but no complete Firefox file or profile is held in
 /// memory. Writes to an UNPUBLISHED output: caller must fsync/no-replace
 /// and publish only after success and exact source inventory revalidation.
+#[allow(dead_code)] // K2 production streaming adapter is not yet active.
 pub(crate) fn encode_workspace_snapshot_streaming(
     workspace: &GenerationWorkspace,
     expected_inventory: &GenerationInventory,
@@ -130,6 +133,7 @@ pub(crate) fn encode_workspace_snapshot_streaming(
     })
 }
 
+#[allow(dead_code)]
 fn write_stream_piece(
     output: &mut impl Write,
     digest: &mut Sha256,
@@ -637,10 +641,8 @@ mod tests {
             let report = encode_workspace_snapshot_streaming(&source, &inventory, &mut output)?;
             assert_eq!(legacy, output);
             assert_eq!(report.plaintext_bytes, output.len() as u64);
-            assert_eq!(
-                report.plaintext_digest,
-                sha2::Sha256::digest(&legacy).into()
-            );
+            let expected: [u8; 32] = sha2::Sha256::digest(&legacy).into();
+            assert_eq!(report.plaintext_digest, expected);
             Ok::<(), Box<dyn std::error::Error>>(())
         })();
         fixture.cleanup();
