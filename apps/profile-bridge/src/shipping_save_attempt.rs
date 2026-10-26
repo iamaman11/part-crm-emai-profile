@@ -1065,8 +1065,8 @@ pub(crate) fn retire_fully_saved_streaming_attempt(
         )
         .map_err(|_| SaveAttemptEvidenceError::Invalid)?;
     }
-    let header_bytes = serde_json::to_vec(&checkpoint.header)
-        .map_err(|_| SaveAttemptEvidenceError::Invalid)?;
+    let header_bytes =
+        serde_json::to_vec(&checkpoint.header).map_err(|_| SaveAttemptEvidenceError::Invalid)?;
     let mut reopened = VerifiedGenerationObjectFile::open_checkpoint_payload(
         &canonical,
         12 + header_bytes.len() as u64,

@@ -17,29 +17,18 @@ use crate::generation_reopen::{
     GenerationObjectDownloadError, GenerationObjectDownloadPort, GenerationReopenControlError,
     GenerationReopenControlPort,
 };
+#[cfg(any(windows, test))]
+use crate::local_profile::RecoveryClone;
 use crate::local_profile::{
     BridgeWorkspaceLock, GenerationWorkspace, LocalGenerationRecord, LocalGenerationState,
     LocalProfileError, MaterializationRoot,
-};
-#[cfg(any(windows, test))]
-use crate::local_profile::RecoveryClone;
-#[cfg(any(windows, test))]
-use crate::shipping_generation_save::SignedGenerationObjectStreamPutPort;
-#[cfg(any(windows, test))]
-use crate::shipping_generation_successor_control::{
-    RestartExactLocalCompletionError, publish_streamed_exact_under_writer,
-};
-#[cfg(any(windows, test))]
-use crate::shipping_save_attempt::{
-    ScopedPendingSaveEvidence, classify_scoped_pending_save_evidence,
-    discover_unresolved_streaming_exact_save_attempt, original_local_unsynced_successor,
-    persist_streaming_exact_save_attempt_from_native, retire_fully_saved_streaming_attempt,
-    retire_local_unsynced_after_streamed_checkpoint,
 };
 use crate::runtime_bundle::{
     ApprovedRuntimeBundle, RuntimeLaunchError, RuntimeSessionOrchestrator,
 };
 use crate::shipping_control_plane::{MachineHttpPort, ShippingControlPlaneError};
+#[cfg(any(windows, test))]
+use crate::shipping_generation_save::SignedGenerationObjectStreamPutPort;
 use crate::shipping_generation_save::{
     CommittedGenerationSuccessor, ShippingGenerationSaveError, SignedGenerationObjectPutPort,
     prepare_retained_generation_successor, publish_verify_and_commit_successor,
@@ -47,10 +36,21 @@ use crate::shipping_generation_save::{
 use crate::shipping_generation_successor_control::{
     ControlPlaneGenerationSuccessor, GenerationSuccessorControlError,
 };
+#[cfg(any(windows, test))]
+use crate::shipping_generation_successor_control::{
+    RestartExactLocalCompletionError, publish_streamed_exact_under_writer,
+};
 use crate::shipping_save_attempt::{
     SaveAttemptEvidenceError, has_unresolved_save_attempt_for_profile, inspect_exact_save_attempt,
     persist_exact_save_attempt, persist_local_unsynced_intent, retire_fully_saved_attempt,
     retire_local_unsynced_after_exact_checkpoint,
+};
+#[cfg(any(windows, test))]
+use crate::shipping_save_attempt::{
+    ScopedPendingSaveEvidence, classify_scoped_pending_save_evidence,
+    discover_unresolved_streaming_exact_save_attempt, original_local_unsynced_successor,
+    persist_streaming_exact_save_attempt_from_native, retire_fully_saved_streaming_attempt,
+    retire_local_unsynced_after_streamed_checkpoint,
 };
 #[cfg(any(test, feature = "synthetic-test-bin"))]
 use application_ports::generation_objects::{
@@ -1415,7 +1415,9 @@ where
             let retained = self
                 .retained_dirty
                 .as_ref()
-                .ok_or(OperatorFlowError::Stage(OperatorFailureStage::GenerationSave))?;
+                .ok_or(OperatorFlowError::Stage(
+                    OperatorFailureStage::GenerationSave,
+                ))?;
             let source = retained.open_base_workspace(root).map_err(|_| {
                 OperatorFlowError::GenerationSave {
                     reason: GenerationSaveFailureReason::LocalSource,
@@ -1436,13 +1438,17 @@ where
             match discover_unresolved_streaming_exact_save_attempt(root, tenant, profile) {
                 Ok(Some(_)) => true,
                 Ok(None) => false,
-                Err(_) if matches!(
-                    classify_scoped_pending_save_evidence(root, tenant, profile),
-                    Ok(ScopedPendingSaveEvidence::LocalUnsynced {
-                        ref base_generation,
-                        ..
-                    }) if base_generation == base_record.generation_id()
-                ) => false,
+                Err(_)
+                    if matches!(
+                        classify_scoped_pending_save_evidence(root, tenant, profile),
+                        Ok(ScopedPendingSaveEvidence::LocalUnsynced {
+                            ref base_generation,
+                            ..
+                        }) if base_generation == base_record.generation_id()
+                    ) =>
+                {
+                    false
+                }
                 Err(source) => {
                     return Err(OperatorFlowError::GenerationSave {
                         reason: save_checkpoint_read_reason(source),
@@ -1450,30 +1456,26 @@ where
                 }
             };
         if !has_checkpoint {
-                let candidate_id = original_local_unsynced_successor(root, &workspace, &lease)
-                    .map_err(|source| OperatorFlowError::GenerationSave {
-                        reason: save_checkpoint_read_reason(source),
-                    })?
-                    .ok_or(OperatorFlowError::GenerationSave {
-                        reason: GenerationSaveFailureReason::CandidateIdentity,
-                    })?;
-                if candidate_id == *base_record.generation_id() {
-                    return Err(OperatorFlowError::GenerationSave {
-                        reason: GenerationSaveFailureReason::CandidateIdentity,
-                    });
-                }
-                let source_inventory = workspace.inventory().map_err(|_| {
-                    OperatorFlowError::GenerationSave {
-                        reason: GenerationSaveFailureReason::NativeSourceChanged,
-                    }
+            let candidate_id = original_local_unsynced_successor(root, &workspace, &lease)
+                .map_err(|source| OperatorFlowError::GenerationSave {
+                    reason: save_checkpoint_read_reason(source),
+                })?
+                .ok_or(OperatorFlowError::GenerationSave {
+                    reason: GenerationSaveFailureReason::CandidateIdentity,
                 })?;
-                let candidate = match RecoveryClone::create(
-                    &workspace,
-                    root,
-                    tenant,
-                    profile,
-                    &candidate_id,
-                ) {
+            if candidate_id == *base_record.generation_id() {
+                return Err(OperatorFlowError::GenerationSave {
+                    reason: GenerationSaveFailureReason::CandidateIdentity,
+                });
+            }
+            let source_inventory =
+                workspace
+                    .inventory()
+                    .map_err(|_| OperatorFlowError::GenerationSave {
+                        reason: GenerationSaveFailureReason::NativeSourceChanged,
+                    })?;
+            let candidate =
+                match RecoveryClone::create(&workspace, root, tenant, profile, &candidate_id) {
                     Ok(clone) => {
                         let inventory = clone.verify_clone_only().map_err(|_| {
                             OperatorFlowError::GenerationSave {
@@ -1508,16 +1510,16 @@ where
                         });
                     }
                 };
-                persist_streaming_exact_save_attempt_from_native(
-                    root,
-                    &workspace,
-                    &candidate,
-                    &lease,
-                    &mut self.coordinator,
-                )
-                .map_err(|source| OperatorFlowError::GenerationSave {
-                    reason: save_checkpoint_reason(source),
-                })?;
+            persist_streaming_exact_save_attempt_from_native(
+                root,
+                &workspace,
+                &candidate,
+                &lease,
+                &mut self.coordinator,
+            )
+            .map_err(|source| OperatorFlowError::GenerationSave {
+                reason: save_checkpoint_reason(source),
+            })?;
         }
         let mut exact = discover_unresolved_streaming_exact_save_attempt(root, tenant, profile)
             .map_err(|source| OperatorFlowError::GenerationSave {
@@ -1539,25 +1541,27 @@ where
                 reason: GenerationSaveFailureReason::CandidateIdentity,
             }
         })?;
-        let candidate = root.open_generation(tenant, profile, &candidate_id).map_err(|_| {
-            OperatorFlowError::GenerationSave {
+        let candidate = root
+            .open_generation(tenant, profile, &candidate_id)
+            .map_err(|_| OperatorFlowError::GenerationSave {
                 reason: GenerationSaveFailureReason::LocalPreparation,
-            }
-        })?;
-        let snapshot_inventory = candidate.inventory().map_err(|_| {
-            OperatorFlowError::GenerationSave {
-                reason: GenerationSaveFailureReason::NativeSourceChanged,
-            }
-        })?;
+            })?;
+        let snapshot_inventory =
+            candidate
+                .inventory()
+                .map_err(|_| OperatorFlowError::GenerationSave {
+                    reason: GenerationSaveFailureReason::NativeSourceChanged,
+                })?;
         if workspace.inventory().ok().as_ref() != Some(&snapshot_inventory) {
             return Err(OperatorFlowError::GenerationSave {
                 reason: GenerationSaveFailureReason::NativeSourceChanged,
             });
         }
-        retire_local_unsynced_after_streamed_checkpoint(root, &workspace, &lease, &exact)
-            .map_err(|_| OperatorFlowError::GenerationSave {
+        retire_local_unsynced_after_streamed_checkpoint(root, &workspace, &lease, &exact).map_err(
+            |_| OperatorFlowError::GenerationSave {
                 reason: GenerationSaveFailureReason::CheckpointRetirement,
-            })?;
+            },
+        )?;
 
         let committed = publish_streamed_exact_under_writer(
             tenant,
@@ -1593,9 +1597,7 @@ where
                     ShippingControlPlaneError::InvalidResponse => {
                         GenerationSaveFailureReason::ControlInvalidResponse
                     }
-                    ShippingControlPlaneError::Clock => {
-                        GenerationSaveFailureReason::ControlClock
-                    }
+                    ShippingControlPlaneError::Clock => GenerationSaveFailureReason::ControlClock,
                 },
             };
             OperatorFlowError::GenerationSave { reason }
@@ -1610,7 +1612,9 @@ where
             let retained = self
                 .retained_dirty
                 .as_mut()
-                .ok_or(OperatorFlowError::Stage(OperatorFailureStage::GenerationSave))?;
+                .ok_or(OperatorFlowError::Stage(
+                    OperatorFailureStage::GenerationSave,
+                ))?;
             let session_id = retained.lease().session_id().clone();
             let completion = retained.complete_committed_streamed_successor(
                 &candidate,
@@ -1622,11 +1626,7 @@ where
             let checkpoint_retired = completion.as_ref().is_ok_and(|outcome| {
                 outcome.is_fully_saved_locally()
                     && retire_fully_saved_streaming_attempt(
-                        root,
-                        &mut exact,
-                        &candidate,
-                        &committed,
-                        &lease,
+                        root, &mut exact, &candidate, &committed, &lease,
                     )
                     .is_ok()
             });
