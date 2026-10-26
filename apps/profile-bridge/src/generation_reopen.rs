@@ -477,7 +477,7 @@ mod tests {
     use super::{
         GenerationDownloadCapability, GenerationObjectDownloadError, GenerationObjectDownloadPort,
         SignedGenerationObjectGetPort, SignedGenerationObjectGetResponse,
-        VerifiedGenerationObjectDownloader,
+        VerifiedGenerationObjectDownloader, VerifiedGenerationObjectStreamDownloader,
     };
     use profile_platform_primitives::GenerationId;
     use sha2::{Digest, Sha256};
