@@ -174,7 +174,11 @@ struct BackendState {
     launch_count: u64,
     pending_successor: Option<BridgeProfileGenerationSuccessorRequest>,
     committed_successor: Option<BridgeProfileGenerationSuccessorRequest>,
+    // Fixture-only immutable object history. The committed object stays
+    // intact while a different successor's PUT/commit is unresolved.
+    pending_object: Option<Vec<u8>>,
     object: Option<Vec<u8>>,
+    retained_object: Option<(BridgeProfileGenerationSuccessorRequest, Vec<u8>)>,
     events: Vec<String>,
 }
 
@@ -192,7 +196,9 @@ impl BackendState {
             launch_count: 0,
             pending_successor: None,
             committed_successor: None,
+            pending_object: None,
             object: None,
+            retained_object: None,
             events: Vec::new(),
         })
     }
@@ -378,9 +384,8 @@ impl BackendState {
             || attempt.container_bytes == 0
             || attempt.metadata_digest.len() != 64
             || attempt.container_digest.len() != 64
-            || self.committed_successor.is_some()
             || self.pending_successor.is_some()
-            || self.object.is_some()
+            || self.pending_object.is_some()
         {
             return Err(BridgePortError::InvalidResponse);
         }
@@ -404,7 +409,7 @@ impl BackendState {
             return Err(BridgePortError::InvalidResponse);
         }
         self.pending_successor = Some(request.clone());
-        let verified = self.object.as_ref().is_some_and(|object| {
+        let verified = self.pending_object.as_ref().is_some_and(|object| {
             u64::try_from(object.len()).ok() == Some(request.container_bytes())
                 && lower_hex(&Sha256::digest(object)) == request.container_digest()
         });
@@ -431,7 +436,7 @@ impl BackendState {
             return Err(BridgePortError::InvalidResponse);
         }
         let object = self
-            .object
+            .pending_object
             .as_ref()
             .ok_or(BridgePortError::InvalidResponse)?;
         if u64::try_from(object.len()).ok() != Some(request.container_bytes())
@@ -439,8 +444,16 @@ impl BackendState {
         {
             return Err(BridgePortError::InvalidResponse);
         }
-        self.active_generation = GenerationId::parse(request.generation_id().to_owned())
+        let successor = GenerationId::parse(request.generation_id().to_owned())
             .map_err(|_| BridgePortError::InvalidResponse)?;
+        if let (Some(previous), Some(previous_object)) =
+            (self.committed_successor.take(), self.object.take())
+        {
+            self.retained_object = Some((previous, previous_object));
+        }
+        self.object = self.pending_object.take();
+        self.pending_successor = None;
+        self.active_generation = successor;
         self.committed_successor = Some(request.clone());
         self.events
             .push(format!("commit:{}", request.generation_id()));
@@ -595,7 +608,7 @@ impl SignedGenerationObjectPutPort for BackendPut {
             return Err(BridgePortError::InvalidResponse);
         }
         let pending_generation = pending.generation_id().to_owned();
-        state.object = Some(container.to_vec());
+        state.pending_object = Some(container.to_vec());
         state.events.push(format!("put:{pending_generation}"));
         Ok(())
     }
