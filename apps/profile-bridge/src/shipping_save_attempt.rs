@@ -5,13 +5,13 @@
 //! Recovery must obtain a fresh authoritative, ACL/fencing-safe decision before
 //! using these exact bytes. Never remove an unknown record during cleanup.
 use crate::dirty_generation::{GenerationSealingMaterialPort, PreparedDirtyGeneration};
-use crate::generation_snapshot::WorkspaceSnapshotReader;
 use crate::generation_object_spool::VerifiedGenerationObjectFile;
+use crate::generation_snapshot::WorkspaceSnapshotReader;
 use crate::local_profile::{GenerationWorkspace, MaterializationRoot};
 use crate::shipping_generation_save::CommittedGenerationSuccessor;
 use encrypted_generation_domain::{
-    MAX_GENERATION_CONTAINER_BYTES, MAX_GENERATION_METADATA_PRELUDE_BYTES,
-    MAX_STREAM_CONTAINER_BYTES, GenerationIdentity, GenerationMetadata, StreamingGenerationReport,
+    GenerationIdentity, GenerationMetadata, MAX_GENERATION_CONTAINER_BYTES,
+    MAX_GENERATION_METADATA_PRELUDE_BYTES, MAX_STREAM_CONTAINER_BYTES, StreamingGenerationReport,
     inspect_generation_metadata_prelude, seal_generation_streaming,
 };
 use profile_platform_primitives::{GenerationId, ProfileId, TenantId};
@@ -1251,17 +1251,15 @@ pub(crate) fn persist_streaming_exact_save_attempt(
         report.container_digest().bytes(),
     )
     .map_err(|_| SaveAttemptEvidenceError::Changed)?;
-    persist_streaming_checkpoint_with_writer(
-        root, source, candidate, report, lease, |output| {
-            let copied = std::io::copy(
-                &mut input.reader().take(report.container_bytes()), output,
-            )?;
-            if copied != report.container_bytes() {
-                return Err(SaveAttemptEvidenceError::Changed);
-            }
-            input.recheck_and_rewind().map_err(|_| SaveAttemptEvidenceError::Changed)
-        },
-    )
+    persist_streaming_checkpoint_with_writer(root, source, candidate, report, lease, |output| {
+        let copied = std::io::copy(&mut input.reader().take(report.container_bytes()), output)?;
+        if copied != report.container_bytes() {
+            return Err(SaveAttemptEvidenceError::Changed);
+        }
+        input
+            .recheck_and_rewind()
+            .map_err(|_| SaveAttemptEvidenceError::Changed)
+    })
 }
 
 /// Direct native Firefox -> EXACT encrypted BPAT checkpoint. No plaintext
@@ -1294,15 +1292,24 @@ pub(crate) fn persist_streaming_exact_save_attempt_from_native<K: GenerationSeal
     }
     // Existing checkpoint never triggers new key/nonce material or overwrites.
     let target = attempt_path(
-        root, lease.tenant_id(), lease.profile_id(), candidate.generation_id(),
+        root,
+        lease.tenant_id(),
+        lease.profile_id(),
+        candidate.generation_id(),
     );
     match fs::symlink_metadata(&target) {
         Ok(_) => return Err(SaveAttemptEvidenceError::Changed),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
         Err(error) => return Err(error.into()),
     }
-    let inventory = source.inventory().map_err(|_| SaveAttemptEvidenceError::Changed)?;
-    if candidate.inventory().map_err(|_| SaveAttemptEvidenceError::Changed)? != inventory {
+    let inventory = source
+        .inventory()
+        .map_err(|_| SaveAttemptEvidenceError::Changed)?;
+    if candidate
+        .inventory()
+        .map_err(|_| SaveAttemptEvidenceError::Changed)?
+        != inventory
+    {
         return Err(SaveAttemptEvidenceError::Changed);
     }
     let mut reader = WorkspaceSnapshotReader::new(candidate, &inventory)
@@ -1312,21 +1319,35 @@ pub(crate) fn persist_streaming_exact_save_attempt_from_native<K: GenerationSeal
     let mut buffer = [0_u8; 65_536];
     let mut counted = 0_u64;
     loop {
-        let count = reader.read(&mut buffer).map_err(|_| SaveAttemptEvidenceError::Changed)?;
-        if count == 0 { break; }
-        counted = counted.checked_add(count as u64).ok_or(SaveAttemptEvidenceError::Invalid)?;
+        let count = reader
+            .read(&mut buffer)
+            .map_err(|_| SaveAttemptEvidenceError::Changed)?;
+        if count == 0 {
+            break;
+        }
+        counted = counted
+            .checked_add(count as u64)
+            .ok_or(SaveAttemptEvidenceError::Invalid)?;
         digest.update(&buffer[..count]);
     }
     if counted != expected_bytes
-        || source.inventory().map_err(|_| SaveAttemptEvidenceError::Changed)? != inventory
+        || source
+            .inventory()
+            .map_err(|_| SaveAttemptEvidenceError::Changed)?
+            != inventory
     {
         return Err(SaveAttemptEvidenceError::Changed);
     }
     let measured_digest: [u8; 32] = digest.finalize().into();
-    let material = sealer.material_for(
-        lease.tenant_id(), lease.profile_id(),
-        source.generation_id(), candidate.generation_id(), measured_digest,
-    ).map_err(|_| SaveAttemptEvidenceError::Unavailable)?;
+    let material = sealer
+        .material_for(
+            lease.tenant_id(),
+            lease.profile_id(),
+            source.generation_id(),
+            candidate.generation_id(),
+            measured_digest,
+        )
+        .map_err(|_| SaveAttemptEvidenceError::Unavailable)?;
     let (key, nonce, chunk_size) = material.into_parts();
     // The first pass is bound to the original DEK request. Neither a
     // changed key-owner source nor a subsequent same-size edit can change
@@ -1335,32 +1356,43 @@ pub(crate) fn persist_streaming_exact_save_attempt_from_native<K: GenerationSeal
         .map_err(|_| SaveAttemptEvidenceError::Changed)?;
     let metadata = GenerationMetadata::for_prehashed_stream(
         GenerationIdentity::new(
-            lease.tenant_id().clone(), lease.profile_id().clone(),
-            candidate.generation_id().clone(), Some(source.generation_id().clone()),
+            lease.tenant_id().clone(),
+            lease.profile_id().clone(),
+            candidate.generation_id().clone(),
+            Some(source.generation_id().clone()),
         ),
-        key.key_id().clone(), nonce, chunk_size, expected_bytes, measured_digest,
-    ).map_err(|_| SaveAttemptEvidenceError::Invalid)?;
-    let expected = seal_generation_streaming(
-        &metadata, &key, &mut comparison, &mut std::io::sink(),
-    ).map_err(|_| SaveAttemptEvidenceError::Changed)?;
-    if source.inventory().map_err(|_| SaveAttemptEvidenceError::Changed)? != inventory {
+        key.key_id().clone(),
+        nonce,
+        chunk_size,
+        expected_bytes,
+        measured_digest,
+    )
+    .map_err(|_| SaveAttemptEvidenceError::Invalid)?;
+    let expected =
+        seal_generation_streaming(&metadata, &key, &mut comparison, &mut std::io::sink())
+            .map_err(|_| SaveAttemptEvidenceError::Changed)?;
+    if source
+        .inventory()
+        .map_err(|_| SaveAttemptEvidenceError::Changed)?
+        != inventory
+    {
         return Err(SaveAttemptEvidenceError::Changed);
     }
-    persist_streaming_checkpoint_with_writer(
-        root, source, candidate, &expected, lease, |output| {
-            let mut actual_reader = WorkspaceSnapshotReader::new(candidate, &inventory)
-                .map_err(|_| SaveAttemptEvidenceError::Changed)?;
-            let actual = seal_generation_streaming(
-                &metadata, &key, &mut actual_reader, output,
-            ).map_err(|_| SaveAttemptEvidenceError::Changed)?;
-            if actual != expected
-                || source.inventory().map_err(|_| SaveAttemptEvidenceError::Changed)? != inventory
-            {
-                return Err(SaveAttemptEvidenceError::Changed);
-            }
-            Ok(())
-        },
-    )
+    persist_streaming_checkpoint_with_writer(root, source, candidate, &expected, lease, |output| {
+        let mut actual_reader = WorkspaceSnapshotReader::new(candidate, &inventory)
+            .map_err(|_| SaveAttemptEvidenceError::Changed)?;
+        let actual = seal_generation_streaming(&metadata, &key, &mut actual_reader, output)
+            .map_err(|_| SaveAttemptEvidenceError::Changed)?;
+        if actual != expected
+            || source
+                .inventory()
+                .map_err(|_| SaveAttemptEvidenceError::Changed)?
+                != inventory
+        {
+            return Err(SaveAttemptEvidenceError::Changed);
+        }
+        Ok(())
+    })
 }
 
 fn streaming_checkpoint_header(
@@ -1785,9 +1817,7 @@ mod direct_native_checkpoint_tests {
         SaveAttemptEvidenceError, attempt_path, inspect_streaming_exact_save_attempt,
         persist_streaming_exact_save_attempt_from_native,
     };
-    use crate::dirty_generation::{
-        GenerationSealingMaterial, GenerationSealingMaterialPort,
-    };
+    use crate::dirty_generation::{GenerationSealingMaterial, GenerationSealingMaterialPort};
     use crate::local_profile::{GenerationWorkspace, MaterializationRoot};
     use encrypted_generation_domain::{
         GenerationDek, KeyId, NoncePrefix, open_generation_streaming,
@@ -1820,8 +1850,7 @@ mod direct_native_checkpoint_tests {
         ) -> Result<GenerationSealingMaterial, Self::Error> {
             self.calls += 1;
             if let Some(path) = self.mutate.as_ref() {
-                fs::write(path, b"mutated same-length Firefox WAL")
-                    .map_err(|_| ())?;
+                fs::write(path, b"mutated same-length Firefox WAL").map_err(|_| ())?;
             }
             Ok(GenerationSealingMaterial::new(
                 GenerationDek::new(
@@ -1848,7 +1877,8 @@ mod direct_native_checkpoint_tests {
         fn new() -> Result<Self, Box<dyn std::error::Error>> {
             let seq = NEXT.fetch_add(1, Ordering::Relaxed);
             let path = std::env::temp_dir().join(format!(
-                "bridge-k2-direct-checkpoint-{}-{seq}", std::process::id(),
+                "bridge-k2-direct-checkpoint-{}-{seq}",
+                std::process::id(),
             ));
             let tenant = TenantId::parse(format!("tenant_k2_direct_{seq}"))?;
             let profile = ProfileId::parse(format!("profile_k2_direct_{seq}"))?;
@@ -1856,7 +1886,8 @@ mod direct_native_checkpoint_tests {
                 root: MaterializationRoot::open_or_create(path.clone())?,
                 path,
                 lease: ProfileLease::issue(
-                    tenant.clone(), profile.clone(),
+                    tenant.clone(),
+                    profile.clone(),
                     SessionId::parse(format!("session_k2_direct_{seq}"))?,
                     DeviceId::parse(format!("device_k2_direct_{seq}"))?,
                     7,
@@ -1869,9 +1900,16 @@ mod direct_native_checkpoint_tests {
             })
         }
 
-        fn native(&self) -> Result<(GenerationWorkspace, GenerationWorkspace), Box<dyn std::error::Error>> {
-            let source = self.root.create_generation(&self.tenant, &self.profile, &self.n)?;
-            let candidate = self.root.create_generation(&self.tenant, &self.profile, &self.next)?;
+        fn native(
+            &self,
+        ) -> Result<(GenerationWorkspace, GenerationWorkspace), Box<dyn std::error::Error>>
+        {
+            let source = self
+                .root
+                .create_generation(&self.tenant, &self.profile, &self.n)?;
+            let candidate = self
+                .root
+                .create_generation(&self.tenant, &self.profile, &self.next)?;
             for workspace in [&source, &candidate] {
                 let dir = workspace.path().join("user_data");
                 fs::create_dir_all(&dir)?;
@@ -1894,44 +1932,68 @@ mod direct_native_checkpoint_tests {
     -> Result<(), Box<dyn std::error::Error>> {
         let fixture = Fixture::new()?;
         let (source, candidate) = fixture.native()?;
-        let mut keys = Keys { calls: 0, mutate: None };
+        let mut keys = Keys {
+            calls: 0,
+            mutate: None,
+        };
         persist_streaming_exact_save_attempt_from_native(
-            &fixture.root, &source, &candidate, &fixture.lease, &mut keys,
+            &fixture.root,
+            &source,
+            &candidate,
+            &fixture.lease,
+            &mut keys,
         )?;
         assert_eq!(keys.calls, 1);
         let mut exact = inspect_streaming_exact_save_attempt(
-            &fixture.root, &fixture.tenant, &fixture.profile, &fixture.next,
-        )?.ok_or("missing direct checkpoint")?;
+            &fixture.root,
+            &fixture.tenant,
+            &fixture.profile,
+            &fixture.next,
+        )?
+        .ok_or("missing direct checkpoint")?;
         assert!(exact.original_lease(&fixture.lease));
         assert!(exact.original_device(&fixture.lease));
         assert!(exact.container_bytes() > 2_400_109);
-        let key = GenerationDek::new(
-            KeyId::parse("native_direct_checkpoint_key_01")?, [0x39; 32],
-        );
-        let report = open_generation_streaming(
-            exact.ciphertext().reader(), &key, &mut std::io::sink(),
-        )?;
+        let key = GenerationDek::new(KeyId::parse("native_direct_checkpoint_key_01")?, [0x39; 32]);
+        let report =
+            open_generation_streaming(exact.ciphertext().reader(), &key, &mut std::io::sink())?;
         assert_eq!(report.metadata().generation_id(), &fixture.next);
         assert_eq!(report.metadata().base_generation_id(), Some(&fixture.n));
         exact.ciphertext().recheck_and_rewind()?;
 
         let canonical = attempt_path(
-            &fixture.root, &fixture.tenant, &fixture.profile, &fixture.next,
+            &fixture.root,
+            &fixture.tenant,
+            &fixture.profile,
+            &fixture.next,
         );
         assert!(canonical.exists());
         for entry in fs::read_dir(fixture.root.path())? {
             let name = entry?.file_name().to_string_lossy().into_owned();
-            assert!(!name.contains(".pending-"), "successful attempt left a torn stage");
+            assert!(
+                !name.contains(".pending-"),
+                "successful attempt left a torn stage"
+            );
             assert!(!name.ends_with(".bpgc"), "no secondary ciphertext spool");
         }
         assert_eq!(
             persist_streaming_exact_save_attempt_from_native(
-                &fixture.root, &source, &candidate, &fixture.lease, &mut keys,
+                &fixture.root,
+                &source,
+                &candidate,
+                &fixture.lease,
+                &mut keys,
             ),
             Err(SaveAttemptEvidenceError::Changed),
         );
-        assert_eq!(keys.calls, 1, "no fresh nonce/key on duplicate exact attempt");
-        assert_eq!(fs::read(source.path().join("prefs.js"))?, b"native preferences");
+        assert_eq!(
+            keys.calls, 1,
+            "no fresh nonce/key on duplicate exact attempt"
+        );
+        assert_eq!(
+            fs::read(source.path().join("prefs.js"))?,
+            b"native preferences"
+        );
         assert_eq!(source.inventory()?, candidate.inventory()?);
         Ok(())
     }
@@ -1948,15 +2010,28 @@ mod direct_native_checkpoint_tests {
         };
         assert_eq!(
             persist_streaming_exact_save_attempt_from_native(
-                &fixture.root, &source, &candidate, &fixture.lease, &mut keys,
+                &fixture.root,
+                &source,
+                &candidate,
+                &fixture.lease,
+                &mut keys,
             ),
             Err(SaveAttemptEvidenceError::Changed),
         );
         assert_eq!(keys.calls, 1);
-        assert!(!attempt_path(
-            &fixture.root, &fixture.tenant, &fixture.profile, &fixture.next,
-        ).exists());
-        assert_eq!(fs::read(source.path().join("prefs.js"))?, b"native preferences");
+        assert!(
+            !attempt_path(
+                &fixture.root,
+                &fixture.tenant,
+                &fixture.profile,
+                &fixture.next,
+            )
+            .exists()
+        );
+        assert_eq!(
+            fs::read(source.path().join("prefs.js"))?,
+            b"native preferences"
+        );
         assert_eq!(fs::read(changed)?, b"mutated same-length Firefox WAL");
         Ok(())
     }
