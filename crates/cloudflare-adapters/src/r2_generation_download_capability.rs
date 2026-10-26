@@ -1,9 +1,7 @@
 use application_ports::generation_objects::GenerationObjectDescriptor;
 use control_plane_contract::generation_reopen_api::GENERATION_DOWNLOAD_CAPABILITY_MAX_EXPIRES_SECONDS;
 use core::fmt;
-use encrypted_generation_domain::{
-    MAX_STREAM_CONTAINER_BYTES, canonical_generation_object_key,
-};
+use encrypted_generation_domain::{MAX_STREAM_CONTAINER_BYTES, canonical_generation_object_key};
 use profile_platform_primitives::TenantScope;
 use sha2::{Digest, Sha256};
 use zeroize::Zeroize;
