@@ -528,9 +528,8 @@ struct ActiveOperatorSession {
     runtime_bundle: ApprovedRuntimeBundle,
 }
 
-
-/* A transient, read-only observation from the ONE operator owner. Not a
-   persisted ProfileStatus, permission, cloud fact, or second state machine. */
+/// A transient, read-only observation from the ONE operator owner. Not a
+/// persisted ProfileStatus, permission, cloud fact, or second state machine.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct OperatorDiagnosticFacts {
     pub(crate) active_local: Option<LocalGenerationState>,

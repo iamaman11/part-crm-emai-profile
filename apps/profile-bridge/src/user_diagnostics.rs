@@ -31,20 +31,20 @@ impl ReadOnlyProfileDiagnosis {
     /// No information about CURRENT remote authority follows merely from
     /// holding the native operator's previous lease or a local file lock.
     #[must_use]
-    pub(crate) fn from_operator(
-        facts: crate::operator_flow::OperatorDiagnosticFacts,
-    ) -> Self {
+    pub(crate) fn from_operator(facts: crate::operator_flow::OperatorDiagnosticFacts) -> Self {
         use crate::local_profile::LocalGenerationState;
         let local = match (facts.active_local, facts.retained_local) {
             (_, Some(LocalGenerationState::DirtyLocal)) => "DIRTY_BYTES_RETAINED",
-            (_, Some(LocalGenerationState::RecoveryRequired | LocalGenerationState::Quarantined)) => {
-                "RECOVERY_REQUIRED"
-            }
+            (
+                _,
+                Some(LocalGenerationState::RecoveryRequired | LocalGenerationState::Quarantined),
+            ) => "RECOVERY_REQUIRED",
             (_, Some(_)) => "RETAINED_STATE_UNPROVEN",
             (Some(LocalGenerationState::InUse), None) => "IN_USE_OBSERVED",
-            (Some(LocalGenerationState::RecoveryRequired | LocalGenerationState::Quarantined), None) => {
-                "RECOVERY_REQUIRED"
-            }
+            (
+                Some(LocalGenerationState::RecoveryRequired | LocalGenerationState::Quarantined),
+                None,
+            ) => "RECOVERY_REQUIRED",
             (Some(_), None) => "LOCAL_STATE_OBSERVED",
             (None, None) => "UNKNOWN",
         };
@@ -142,7 +142,7 @@ impl ReadOnlyProfileDiagnosis {
                     diagnosis.next_safe_step = "FRESH_AUTHORIZED_EXACT_RECONCILIATION";
                 } else {
                     diagnosis.cloud = if matches!(
-                        reason,
+                        *reason,
                         crate::operator_flow::GenerationSaveFailureReason::ControlRejected
                     ) {
                         "CURRENT_REQUEST_REJECTED"
@@ -993,7 +993,6 @@ mod tests {
         assert!(saved.message().contains("readiness has not been confirmed"));
     }
 
-
     #[test]
     fn profile_owner_projection_never_turns_local_or_prepared_into_cloud_saved() {
         use crate::local_profile::LocalGenerationState;
@@ -1025,18 +1024,22 @@ mod tests {
         );
         assert_eq!(network.state(), "CLOUD_OUTCOME_UNCONFIRMED");
         assert!(network.redacted_record().contains("CLOUD=EFFECT_UNKNOWN"));
-        assert!(network
-            .redacted_record()
-            .contains("FRESH_AUTHORIZED_EXACT_RECONCILIATION"));
+        assert!(
+            network
+                .redacted_record()
+                .contains("FRESH_AUTHORIZED_EXACT_RECONCILIATION")
+        );
         let denied = ReadOnlyProfileDiagnosis::after_save(
             facts,
             &Err(OperatorFlowError::GenerationSave {
                 reason: Reason::ControlRejected,
             }),
         );
-        assert!(denied
-            .redacted_record()
-            .contains("CLOUD=CURRENT_REQUEST_REJECTED"));
+        assert!(
+            denied
+                .redacted_record()
+                .contains("CLOUD=CURRENT_REQUEST_REJECTED")
+        );
         assert!(!denied.redacted_record().contains("EFFECT_UNKNOWN"));
         let corrupt = ReadOnlyProfileDiagnosis::after_save(
             facts,
@@ -1044,8 +1047,16 @@ mod tests {
                 reason: Reason::CheckpointIntegrity,
             }),
         );
-        assert!(corrupt.redacted_record().contains("PRESERVE_BYTES_CHECK_CAUSE"));
-        assert!(!corrupt.redacted_record().contains("FRESH_AUTHORIZED_EXACT_RECONCILIATION"));
+        assert!(
+            corrupt
+                .redacted_record()
+                .contains("PRESERVE_BYTES_CHECK_CAUSE")
+        );
+        assert!(
+            !corrupt
+                .redacted_record()
+                .contains("FRESH_AUTHORIZED_EXACT_RECONCILIATION")
+        );
     }
 
     #[test]
@@ -1060,10 +1071,15 @@ mod tests {
             candidate_prepared: false,
             cleanup_blocked: false,
         };
-        assert_eq!(ReadOnlyProfileDiagnosis::from_operator(missing).state(), "UNKNOWN");
+        assert_eq!(
+            ReadOnlyProfileDiagnosis::from_operator(missing).state(),
+            "UNKNOWN"
+        );
         let failed = ReadOnlyProfileDiagnosis::after_save(
             missing,
-            &Err(OperatorFlowError::Stage(OperatorFailureStage::GenerationSave)),
+            &Err(OperatorFlowError::Stage(
+                OperatorFailureStage::GenerationSave,
+            )),
         );
         assert_eq!(failed.state(), "BLOCKED_CAUSE_UNRESOLVED");
         assert!(failed.redacted_record().contains("LOCAL=UNKNOWN"));

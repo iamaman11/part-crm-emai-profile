@@ -538,8 +538,10 @@ mod windows {
                     .map_err(ShippingCompositionError::Operator)?;
                 eprintln!(
                     "{}",
-                    ReadOnlyProfileDiagnosis::after_durable_local_close(operator.diagnostic_facts())
-                        .redacted_record()
+                    ReadOnlyProfileDiagnosis::after_durable_local_close(
+                        operator.diagnostic_facts()
+                    )
+                    .redacted_record()
                 );
                 // An unknown heartbeat response is not an acknowledged fence.
                 // Retain the closed local working profile; do not attempt an
