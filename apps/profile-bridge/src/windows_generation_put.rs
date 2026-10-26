@@ -2,14 +2,18 @@
 #![forbid(unsafe_code)]
 
 use crate::shipping_generation_save::{
-    SignedGenerationObjectPutPort, SignedGenerationUploadCapability,
+    SignedGenerationObjectPutPort, SignedGenerationObjectStreamPutPort,
+    SignedGenerationUploadCapability,
 };
+use crate::generation_object_spool::VerifiedGenerationObjectFile;
 use bridge_domain::BridgePortError;
-use encrypted_generation_domain::MAX_GENERATION_CONTAINER_BYTES;
+use encrypted_generation_domain::{
+    MAX_GENERATION_CONTAINER_BYTES, MAX_STREAM_CONTAINER_BYTES,
+};
 use std::collections::BTreeSet;
 use std::env;
 use std::fs;
-use std::io::Write;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 
@@ -51,6 +55,36 @@ impl SignedGenerationObjectPutPort for WindowsSignedGenerationObjectPut {
         container: &[u8],
     ) -> Result<(), Self::Error> {
         if container.is_empty() || container.len() > MAX_GENERATION_CONTAINER_BYTES {
+            return Err(BridgePortError::InvalidResponse);
+        }
+        self.put_bounded_source(capability, &mut container.as_ref(), container.len() as u64)
+    }
+}
+
+impl SignedGenerationObjectStreamPutPort for WindowsSignedGenerationObjectPut {
+    fn put_verified_stream(
+        &mut self,
+        capability: &SignedGenerationUploadCapability,
+        object: &mut VerifiedGenerationObjectFile,
+    ) -> Result<(), Self::Error> {
+        object.recheck_and_rewind().map_err(|_| BridgePortError::InvalidResponse)?;
+        let expected = object.expected_bytes();
+        let result = self.put_bounded_source(capability, object.reader(), expected);
+        // Always re-read the exact open handle after a network effect.
+        // A file mutation while uploading forbids returning success/commit.
+        object.recheck_and_rewind().map_err(|_| BridgePortError::InvalidResponse)?;
+        result
+    }
+}
+
+impl WindowsSignedGenerationObjectPut {
+    fn put_bounded_source<R: Read>(
+        &mut self,
+        capability: &SignedGenerationUploadCapability,
+        source: &mut R,
+        expected_bytes: u64,
+    ) -> Result<(), BridgePortError> {
+        if expected_bytes == 0 || expected_bytes > MAX_STREAM_CONTAINER_BYTES {
             return Err(BridgePortError::InvalidResponse);
         }
         let signed_url = capability
@@ -109,15 +143,28 @@ impl SignedGenerationObjectPutPort for WindowsSignedGenerationObjectPut {
         inherit_windows_system_root(&mut command);
 
         let mut child = command.spawn().map_err(|_| BridgePortError::Unavailable)?;
-        child
-            .stdin
-            .take()
-            .ok_or(BridgePortError::Unavailable)?
-            .write_all(container)
-            .map_err(|_| BridgePortError::Unavailable)?;
-        let output = child
-            .wait_with_output()
-            .map_err(|_| BridgePortError::Unavailable)?;
+        // Preserve bounded RAM for 512 MiB spools. A short read, extra
+        // trailing byte, or changed source is NOT a successful PUT.
+        let mut upload = || -> Result<(), BridgePortError> {
+            let mut stdin = child.stdin.take().ok_or(BridgePortError::Unavailable)?;
+            let copied = std::io::copy(&mut source.take(expected_bytes), &mut stdin)
+                .map_err(|_| BridgePortError::Unavailable)?;
+            if copied != expected_bytes {
+                return Err(BridgePortError::InvalidResponse);
+            }
+            drop(stdin); // curl needs EOF before writing its HTTP status.
+            let mut trailing = [0_u8; 1];
+            if source.read(&mut trailing).map_err(|_| BridgePortError::Unavailable)? != 0 {
+                return Err(BridgePortError::InvalidResponse);
+            }
+            Ok(())
+        };
+        if let Err(error) = upload() {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(error);
+        }
+        let output = child.wait_with_output().map_err(|_| BridgePortError::Unavailable)?;
         let (status, body) = decode_curl_http_output(output)?;
         if !(200..300).contains(&status) || !body.is_empty() {
             return Err(BridgePortError::InvalidResponse);
