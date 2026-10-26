@@ -3,7 +3,8 @@ use super::{
     GenerationDek, GenerationIdentity, GenerationMetadata, KeyId,
     MAX_GENERATION_METADATA_PRELUDE_BYTES, NoncePrefix, PlaintextDigest, PublishResult,
     inspect_generation_metadata_prelude, open_generation, open_generation_expected,
-    seal_generation,
+    seal_generation, seal_generation_streaming, open_generation_streaming,
+    StreamingGenerationError, MAX_STREAM_PLAINTEXT_BYTES,
 };
 use profile_platform_primitives::{GenerationId, ProfileId, TenantId, UnixMillis};
 
@@ -91,6 +92,130 @@ fn canonical_metadata_prelude_inspection_is_bounded_and_prefix_exact()
         ),
         Err(EncryptedGenerationError::InvalidContainer)
     );
+    Ok(())
+}
+
+
+/// BPGC0001 is not a new cloud wire format: bounded stream seal MUST produce
+/// the identical signed ciphertext descriptor as legacy all-memory sealing.
+#[test]
+fn streamed_wire_is_byte_identical_and_reopen_checks_digest_and_final_tag()
+-> Result<(), Box<dyn std::error::Error>> {
+    for length in [0, 1, 1_024, 1_025, 4_096, 33_007] {
+        let plaintext = (0..length)
+            .map(|offset| (offset % 251) as u8)
+            .collect::<Vec<_>>();
+        let metadata = metadata("generation_streamed_same_wire", 0x49, &plaintext)?;
+        let old = seal_generation(&metadata, &key(0x4a)?, &plaintext)?;
+        let mut streamed = Vec::new();
+        let report = seal_generation_streaming(
+            &metadata, &key(0x4a)?, &mut plaintext.as_slice(), &mut streamed,
+        )?;
+        assert_eq!(streamed, old.container());
+        assert_eq!(report.metadata(), &metadata);
+        assert_eq!(report.metadata_digest(), old.metadata_digest());
+        assert_eq!(report.container_digest(), old.container_digest());
+        assert_eq!(report.container_bytes(), streamed.len() as u64);
+        let mut reopened = Vec::new();
+        let opened = open_generation_streaming(
+            &mut streamed.as_slice(), &key(0x4a)?, &mut reopened,
+        )?;
+        assert_eq!(reopened, plaintext);
+        assert_eq!(opened, report);
+    }
+    Ok(())
+}
+
+#[test]
+fn streamed_open_refuses_truncation_tampering_foreign_key_and_trailing_data()
+-> Result<(), Box<dyn std::error::Error>> {
+    let plaintext = vec![0x5c; 6_789];
+    let metadata = metadata("generation_streamed_reject", 0x61, &plaintext)?;
+    let original = seal_generation(&metadata, &key(0x77)?, &plaintext)?.into_container();
+    let mut changes = Vec::new();
+    changes.push(original[..original.len()-1].to_vec());
+    let mut tag = original.clone();
+    let last = tag.len()-1;
+    tag[last] ^= 0x01;
+    changes.push(tag);
+    let mut chunk = original.clone();
+    chunk[110] ^= 0x01;
+    changes.push(chunk);
+    let mut extra = original.clone();
+    extra.push(0x00);
+    changes.push(extra);
+    for bad in changes {
+        let mut unpublished = Vec::new();
+        assert!(open_generation_streaming(
+            &mut bad.as_slice(), &key(0x77)?, &mut unpublished,
+        ).is_err());
+    }
+    let mut unpublished = Vec::new();
+    assert!(open_generation_streaming(
+        &mut original.as_slice(), &key(0x78)?, &mut unpublished,
+    ).is_err());
+    Ok(())
+}
+
+#[test]
+fn streamed_seal_refuses_source_change_even_if_first_pass_digest_was_valid()
+-> Result<(), Box<dyn std::error::Error>> {
+    let original = vec![3_u8; 8_193];
+    let metadata = metadata("generation_streamed_source_change", 0x52, &original)?;
+    let mut altered = original.clone();
+    altered[8_000] ^= 1;
+    let mut unpublished = Vec::new();
+    assert!(matches!(
+        seal_generation_streaming(
+            &metadata, &key(0x74)?, &mut altered.as_slice(), &mut unpublished,
+        ),
+        Err(StreamingGenerationError::Crypto(EncryptedGenerationError::MetadataMismatch))
+    ));
+    let mut short = &original[..original.len()-1];
+    assert!(matches!(
+        seal_generation_streaming(&metadata, &key(0x74)?, &mut short, &mut Vec::new()),
+        Err(StreamingGenerationError::Io(_))
+    ));
+    let mut larger = original.clone();
+    larger.push(0);
+    assert!(matches!(
+        seal_generation_streaming(
+            &metadata, &key(0x74)?, &mut larger.as_slice(), &mut Vec::new(),
+        ),
+        Err(StreamingGenerationError::Crypto(EncryptedGenerationError::MetadataMismatch))
+    ));
+    Ok(())
+}
+
+#[test]
+fn metadata_reader_accepts_stream_only_sizes_without_allocating_payload()
+-> Result<(), Box<dyn std::error::Error>> {
+    let (tenant, profile, generation) = ids("generation_streaming_over_old_cap")?;
+    let total = 67_108_864_u64 + 1;
+    let mut data = std::io::repeat(0x33).take(total);
+    let built = GenerationMetadata::for_reader(
+        GenerationIdentity::new(tenant, profile, generation, None),
+        key_id()?, NoncePrefix::new([0x25; 16]), 65_536, &mut data,
+    )?;
+    assert_eq!(built.plaintext_bytes(), total);
+    assert!(built.canonical_digest().is_ok());
+    // Legacy in-memory API retains the old bound and cannot accidentally
+    // decode into a 512 MiB Vec when it sees streaming metadata.
+    let mut sealed = Vec::new();
+    let mut input = std::io::repeat(0x33).take(total);
+    let summary = seal_generation_streaming(&built, &key(0x22)?, &mut input, &mut sealed)?;
+    assert!(summary.container_bytes() > total);
+    assert_eq!(
+        open_generation(&sealed, &key(0x22)?),
+        Err(EncryptedGenerationError::PlaintextTooLarge),
+    );
+    let mut sink = std::io::sink();
+    assert_eq!(
+        open_generation_streaming(&mut sealed.as_slice(), &key(0x22)?, &mut sink)?
+            .metadata().plaintext_bytes(),
+        total,
+    );
+    assert_eq!(MAX_STREAM_PLAINTEXT_BYTES, 536_870_912);
     Ok(())
 }
 
