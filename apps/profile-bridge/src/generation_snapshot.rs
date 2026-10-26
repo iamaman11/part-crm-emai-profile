@@ -88,11 +88,16 @@ pub(crate) fn encode_workspace_snapshot_streaming(
         }
         previous = Some(relative);
         let name = relative.as_bytes();
-        let name_length = u16::try_from(name.len())
-            .map_err(|_| GenerationSnapshotError::SnapshotTooLarge)?;
+        let name_length =
+            u16::try_from(name.len()).map_err(|_| GenerationSnapshotError::SnapshotTooLarge)?;
         write_stream_piece(output, &mut digest, &mut length, &name_length.to_be_bytes())?;
         write_stream_piece(output, &mut digest, &mut length, name)?;
-        write_stream_piece(output, &mut digest, &mut length, &entry.bytes().to_be_bytes())?;
+        write_stream_piece(
+            output,
+            &mut digest,
+            &mut length,
+            &entry.bytes().to_be_bytes(),
+        )?;
         let full = workspace.path().join(relative);
         let metadata = fs::symlink_metadata(&full).map_err(LocalProfileError::from)?;
         if metadata.file_type().is_symlink()
@@ -106,12 +111,17 @@ pub(crate) fn encode_workspace_snapshot_streaming(
         while remaining > 0 {
             let take = usize::try_from(remaining.min(buffer.len() as u64))
                 .map_err(|_| GenerationSnapshotError::SnapshotTooLarge)?;
-            file.read_exact(&mut buffer[..take]).map_err(LocalProfileError::from)?;
+            file.read_exact(&mut buffer[..take])
+                .map_err(LocalProfileError::from)?;
             write_stream_piece(output, &mut digest, &mut length, &buffer[..take])?;
             remaining -= take as u64;
         }
     }
-    if workspace.inventory().map_err(GenerationSnapshotError::Local)? != *expected_inventory {
+    if workspace
+        .inventory()
+        .map_err(GenerationSnapshotError::Local)?
+        != *expected_inventory
+    {
         return Err(GenerationSnapshotError::SourceChanged);
     }
     Ok(StreamedWorkspaceSnapshot {
@@ -126,7 +136,8 @@ fn write_stream_piece(
     length: &mut u64,
     piece: &[u8],
 ) -> Result<(), GenerationSnapshotError> {
-    let next = length.checked_add(piece.len() as u64)
+    let next = length
+        .checked_add(piece.len() as u64)
         .ok_or(GenerationSnapshotError::SnapshotTooLarge)?;
     if next > MAX_STREAM_WORKSPACE_SNAPSHOT_BYTES {
         return Err(GenerationSnapshotError::SnapshotTooLarge);
@@ -553,15 +564,14 @@ fn checked_extend(output: &mut Vec<u8>, bytes: &[u8]) -> Result<(), GenerationSn
 mod tests {
     use super::{
         GenerationSnapshotError, WORKSPACE_SNAPSHOT_MAGIC, encode_workspace_snapshot,
-        encode_workspace_snapshot_streaming,
-        materialize_workspace_snapshot, materialize_workspace_snapshot_with_pre_publish,
-        parse_workspace_snapshot,
+        encode_workspace_snapshot_streaming, materialize_workspace_snapshot,
+        materialize_workspace_snapshot_with_pre_publish, parse_workspace_snapshot,
     };
     use crate::local_profile::MaterializationRoot;
     use profile_platform_primitives::{GenerationId, ProfileId, TenantId};
+    use sha2::Digest;
     use std::fs;
     use std::path::PathBuf;
-    use sha2::Digest;
     use std::sync::atomic::{AtomicU64, Ordering};
 
     static TEMP_COUNTER: AtomicU64 = AtomicU64::new(1);
@@ -613,7 +623,9 @@ mod tests {
         let result = (|| {
             let generation = GenerationId::parse("generation_streaming_snapshot")?;
             let source = fixture.root.create_generation(
-                &fixture.tenant_id, &fixture.profile_id, &generation,
+                &fixture.tenant_id,
+                &fixture.profile_id,
+                &generation,
             )?;
             fs::write(source.path().join("prefs.js"), b"user_pref('a', true);")?;
             let directory = source.path().join("user_data");
@@ -622,12 +634,13 @@ mod tests {
             let inventory = source.inventory()?;
             let legacy = encode_workspace_snapshot(&source, &inventory)?;
             let mut output = Vec::new();
-            let report = encode_workspace_snapshot_streaming(
-                &source, &inventory, &mut output,
-            )?;
+            let report = encode_workspace_snapshot_streaming(&source, &inventory, &mut output)?;
             assert_eq!(legacy, output);
             assert_eq!(report.plaintext_bytes, output.len() as u64);
-            assert_eq!(report.plaintext_digest, sha2::Sha256::digest(&legacy).into());
+            assert_eq!(
+                report.plaintext_digest,
+                sha2::Sha256::digest(&legacy).into()
+            );
             Ok::<(), Box<dyn std::error::Error>>(())
         })();
         fixture.cleanup();
@@ -646,9 +659,10 @@ mod tests {
         let result = (|| {
             let base = GenerationId::parse("generation_streamed_snapshot_base")?;
             let next = GenerationId::parse("generation_streamed_snapshot_next")?;
-            let source = fixture.root.create_generation(
-                &fixture.tenant_id, &fixture.profile_id, &base,
-            )?;
+            let source =
+                fixture
+                    .root
+                    .create_generation(&fixture.tenant_id, &fixture.profile_id, &base)?;
             fs::write(source.path().join("prefs.js"), b"immutable Firefox prefs")?;
             let directory = source.path().join("user_data");
             fs::create_dir_all(&directory)?;
@@ -657,35 +671,45 @@ mod tests {
             let snapshot_path = fixture.root.path().join("k2-snapshot-test.bin");
             let container_path = fixture.root.path().join("k2-container-test.bin");
             let reopened_path = fixture.root.path().join("k2-reopened-test.bin");
-            let mut snapshot = fs::OpenOptions::new().create_new(true)
-                .write(true).read(true).open(&snapshot_path)?;
+            let mut snapshot = fs::OpenOptions::new()
+                .create_new(true)
+                .write(true)
+                .read(true)
+                .open(&snapshot_path)?;
             let report = encode_workspace_snapshot_streaming(&source, &inventory, &mut snapshot)?;
             snapshot.sync_all()?;
             snapshot.seek(SeekFrom::Start(0))?;
             let identity = GenerationIdentity::new(
-                fixture.tenant_id.clone(), fixture.profile_id.clone(), next,
+                fixture.tenant_id.clone(),
+                fixture.profile_id.clone(),
+                next,
                 Some(base),
             );
             let key = GenerationDek::new(KeyId::parse("streaming-snapshot-key")?, [0x21; 32]);
             let nonce = NoncePrefix::new([0x2a; 16]);
             let metadata = GenerationMetadata::for_reader(
-                identity, key.key_id().clone(), nonce, 65_536, &mut snapshot,
+                identity,
+                key.key_id().clone(),
+                nonce,
+                65_536,
+                &mut snapshot,
             )?;
             assert_eq!(report.plaintext_bytes, metadata.plaintext_bytes());
-            assert_eq!(
-                report.plaintext_digest,
-                metadata.plaintext_digest().bytes(),
-            );
+            assert_eq!(report.plaintext_digest, metadata.plaintext_digest().bytes(),);
             snapshot.seek(SeekFrom::Start(0))?;
-            let mut container = fs::OpenOptions::new().create_new(true)
-                .write(true).read(true).open(&container_path)?;
-            let sealed = seal_generation_streaming(
-                &metadata, &key, &mut snapshot, &mut container,
-            )?;
+            let mut container = fs::OpenOptions::new()
+                .create_new(true)
+                .write(true)
+                .read(true)
+                .open(&container_path)?;
+            let sealed = seal_generation_streaming(&metadata, &key, &mut snapshot, &mut container)?;
             container.sync_all()?;
             container.seek(SeekFrom::Start(0))?;
-            let mut reopened = fs::OpenOptions::new().create_new(true)
-                .write(true).read(true).open(&reopened_path)?;
+            let mut reopened = fs::OpenOptions::new()
+                .create_new(true)
+                .write(true)
+                .read(true)
+                .open(&reopened_path)?;
             let opened = open_generation_streaming(&mut container, &key, &mut reopened)?;
             reopened.sync_all()?;
             assert_eq!(opened, sealed);
@@ -717,21 +741,23 @@ mod tests {
         let result = (|| {
             let generation = GenerationId::parse("generation_streaming_bounded_failure")?;
             let source = fixture.root.create_generation(
-                &fixture.tenant_id, &fixture.profile_id, &generation,
+                &fixture.tenant_id,
+                &fixture.profile_id,
+                &generation,
             )?;
             let native = source.path().join("prefs.js");
             fs::write(&native, b"first-native-close")?;
             let previous = source.inventory()?;
             fs::write(&native, b"changed-after-close")?;
-            assert!(encode_workspace_snapshot_streaming(
-                &source, &previous, &mut Vec::new(),
-            ).is_err());
+            assert!(
+                encode_workspace_snapshot_streaming(&source, &previous, &mut Vec::new(),).is_err()
+            );
             let current = source.inventory()?;
             let mut tiny = [0_u8; 4];
             let mut no_space = std::io::Cursor::new(&mut tiny[..]);
-            assert!(encode_workspace_snapshot_streaming(
-                &source, &current, &mut no_space,
-            ).is_err());
+            assert!(
+                encode_workspace_snapshot_streaming(&source, &current, &mut no_space,).is_err()
+            );
             assert_eq!(fs::read(&native)?, b"changed-after-close");
             Ok::<(), Box<dyn std::error::Error>>(())
         })();

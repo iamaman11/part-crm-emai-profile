@@ -7,11 +7,11 @@ mod lifecycle;
 pub use container::{
     ContainerDigest, GenerationDek, GenerationIdentity, GenerationMetadata,
     InspectedGenerationMetadataPrelude, KeyId, MAX_GENERATION_METADATA_PRELUDE_BYTES,
-    MetadataDigest, NoncePrefix, OpenedGeneration, PlaintextDigest, SealedGeneration,
-    inspect_generation_metadata_prelude, open_generation, open_generation_expected,
-    seal_generation, seal_generation_streaming, open_generation_streaming,
-    StreamingGenerationError, StreamingGenerationReport,
-    MAX_STREAM_PLAINTEXT_BYTES, MAX_STREAM_CONTAINER_BYTES,
+    MAX_STREAM_CONTAINER_BYTES, MAX_STREAM_PLAINTEXT_BYTES, MetadataDigest, NoncePrefix,
+    OpenedGeneration, PlaintextDigest, SealedGeneration, StreamingGenerationError,
+    StreamingGenerationReport, inspect_generation_metadata_prelude, open_generation,
+    open_generation_expected, open_generation_streaming, seal_generation,
+    seal_generation_streaming,
 };
 pub use key_derivation::{
     DerivedGenerationMaterial, GenerationKeyDerivationContext, GenerationKeyDerivationError,

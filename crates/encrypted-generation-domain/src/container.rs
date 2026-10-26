@@ -3,8 +3,8 @@ use chacha20poly1305::aead::{Aead, KeyInit, Payload};
 use chacha20poly1305::{XChaCha20Poly1305, XNonce};
 use profile_platform_primitives::{GenerationId, ProfileId, TenantId};
 use sha2::{Digest, Sha256};
-use zeroize::{Zeroize, Zeroizing};
 use std::io::{Read, Write};
+use zeroize::{Zeroize, Zeroizing};
 
 const MAGIC: [u8; 8] = *b"BPGC0001";
 const ALGORITHM_ID: u16 = 1;
@@ -248,7 +248,10 @@ impl GenerationMetadata {
                 break;
             }
             plaintext_bytes = plaintext_bytes
-                .checked_add(u64::try_from(count).map_err(|_| EncryptedGenerationError::PlaintextTooLarge)?)
+                .checked_add(
+                    u64::try_from(count)
+                        .map_err(|_| EncryptedGenerationError::PlaintextTooLarge)?,
+                )
                 .ok_or(EncryptedGenerationError::PlaintextTooLarge)?;
             if plaintext_bytes > MAX_STREAM_PLAINTEXT_BYTES {
                 return Err(EncryptedGenerationError::PlaintextTooLarge.into());
@@ -256,7 +259,10 @@ impl GenerationMetadata {
             digest.update(&buffer[..count]);
         }
         let GenerationIdentity {
-            tenant_id, profile_id, generation_id, base_generation_id,
+            tenant_id,
+            profile_id,
+            generation_id,
+            base_generation_id,
         } = identity;
         Ok(Self {
             tenant_id,
@@ -343,9 +349,7 @@ impl GenerationMetadata {
 
     fn encode(&self) -> Result<Vec<u8>, EncryptedGenerationError> {
         validate_chunk_size(self.chunk_size)?;
-        if self.plaintext_bytes
-            > MAX_STREAM_PLAINTEXT_BYTES
-        {
+        if self.plaintext_bytes > MAX_STREAM_PLAINTEXT_BYTES {
             return Err(EncryptedGenerationError::PlaintextTooLarge);
         }
         let mut output = Vec::with_capacity(512);
@@ -400,9 +404,7 @@ impl GenerationMetadata {
         let chunk_size = cursor.read_u32()?;
         validate_chunk_size(chunk_size)?;
         let plaintext_bytes = cursor.read_u64()?;
-        if plaintext_bytes
-            > MAX_STREAM_PLAINTEXT_BYTES
-        {
+        if plaintext_bytes > MAX_STREAM_PLAINTEXT_BYTES {
             return Err(EncryptedGenerationError::PlaintextTooLarge);
         }
         let plaintext_digest = {
@@ -762,10 +764,14 @@ impl std::fmt::Display for StreamingGenerationError {
 }
 impl std::error::Error for StreamingGenerationError {}
 impl From<std::io::Error> for StreamingGenerationError {
-    fn from(error: std::io::Error) -> Self { Self::Io(error) }
+    fn from(error: std::io::Error) -> Self {
+        Self::Io(error)
+    }
 }
 impl From<EncryptedGenerationError> for StreamingGenerationError {
-    fn from(error: EncryptedGenerationError) -> Self { Self::Crypto(error) }
+    fn from(error: EncryptedGenerationError) -> Self {
+        Self::Crypto(error)
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -778,13 +784,21 @@ pub struct StreamingGenerationReport {
 
 impl StreamingGenerationReport {
     #[must_use]
-    pub const fn metadata(&self) -> &GenerationMetadata { &self.metadata }
+    pub const fn metadata(&self) -> &GenerationMetadata {
+        &self.metadata
+    }
     #[must_use]
-    pub const fn metadata_digest(&self) -> MetadataDigest { self.metadata_digest }
+    pub const fn metadata_digest(&self) -> MetadataDigest {
+        self.metadata_digest
+    }
     #[must_use]
-    pub const fn container_digest(&self) -> ContainerDigest { self.container_digest }
+    pub const fn container_digest(&self) -> ContainerDigest {
+        self.container_digest
+    }
     #[must_use]
-    pub const fn container_bytes(&self) -> u64 { self.container_bytes }
+    pub const fn container_bytes(&self) -> u64 {
+        self.container_bytes
+    }
 }
 
 /// Exact BPGC0001 format, byte-identical to seal_generation, but only one
@@ -808,8 +822,14 @@ pub fn seal_generation_streaming(
     let mut bytes = 0_u64;
     let mut hashed = Sha256::new();
     stream_write(sink, &mut hashed, &mut bytes, &MAGIC)?;
-    stream_write(sink, &mut hashed, &mut bytes, &u32::try_from(metadata_bytes.len())
-        .map_err(|_| EncryptedGenerationError::InvalidContainer)?.to_be_bytes())?;
+    stream_write(
+        sink,
+        &mut hashed,
+        &mut bytes,
+        &u32::try_from(metadata_bytes.len())
+            .map_err(|_| EncryptedGenerationError::InvalidContainer)?
+            .to_be_bytes(),
+    )?;
     stream_write(sink, &mut hashed, &mut bytes, &metadata_bytes)?;
     let chunk_size = usize::try_from(metadata.chunk_size())
         .map_err(|_| EncryptedGenerationError::InvalidChunkSize)?;
@@ -822,21 +842,35 @@ pub fn seal_generation_streaming(
             .map_err(|_| EncryptedGenerationError::PlaintextTooLarge)?;
         source.read_exact(&mut buffer[..count])?;
         original_hash.update(&buffer[..count]);
-        let length = u32::try_from(count).map_err(|_| EncryptedGenerationError::PlaintextTooLarge)?;
+        let length =
+            u32::try_from(count).map_err(|_| EncryptedGenerationError::PlaintextTooLarge)?;
         let aad = record_aad(metadata_digest, RECORD_CHUNK, index, length);
         let nonce_bytes = metadata.nonce_prefix().nonce_for(index);
-        let ciphertext = cipher.encrypt(&nonce_from_bytes(&nonce_bytes)?, Payload {
-            msg: &buffer[..count],
-            aad: &aad,
-        }).map_err(|_| EncryptedGenerationError::AuthenticationFailed)?;
+        let ciphertext = cipher
+            .encrypt(
+                &nonce_from_bytes(&nonce_bytes)?,
+                Payload {
+                    msg: &buffer[..count],
+                    aad: &aad,
+                },
+            )
+            .map_err(|_| EncryptedGenerationError::AuthenticationFailed)?;
         stream_write(sink, &mut hashed, &mut bytes, &[RECORD_CHUNK])?;
         stream_write(sink, &mut hashed, &mut bytes, &index.to_be_bytes())?;
         stream_write(sink, &mut hashed, &mut bytes, &length.to_be_bytes())?;
-        stream_write(sink, &mut hashed, &mut bytes, &u32::try_from(ciphertext.len())
-            .map_err(|_| EncryptedGenerationError::PlaintextTooLarge)?.to_be_bytes())?;
+        stream_write(
+            sink,
+            &mut hashed,
+            &mut bytes,
+            &u32::try_from(ciphertext.len())
+                .map_err(|_| EncryptedGenerationError::PlaintextTooLarge)?
+                .to_be_bytes(),
+        )?;
         stream_write(sink, &mut hashed, &mut bytes, &ciphertext)?;
         remaining -= count as u64;
-        index = index.checked_add(1).ok_or(EncryptedGenerationError::PlaintextTooLarge)?;
+        index = index
+            .checked_add(1)
+            .ok_or(EncryptedGenerationError::PlaintextTooLarge)?;
     }
     // Refuse appended bytes, or a modified source since the first digest pass.
     let mut trailing = [0_u8; 1];
@@ -847,15 +881,26 @@ pub fn seal_generation_streaming(
     }
     let aad = record_aad(metadata_digest, RECORD_FINAL, index, 0);
     let nonce_bytes = metadata.nonce_prefix().nonce_for(index);
-    let final_tag = cipher.encrypt(&nonce_from_bytes(&nonce_bytes)?, Payload {
-        msg: &[],
-        aad: &aad,
-    }).map_err(|_| EncryptedGenerationError::AuthenticationFailed)?;
+    let final_tag = cipher
+        .encrypt(
+            &nonce_from_bytes(&nonce_bytes)?,
+            Payload {
+                msg: &[],
+                aad: &aad,
+            },
+        )
+        .map_err(|_| EncryptedGenerationError::AuthenticationFailed)?;
     stream_write(sink, &mut hashed, &mut bytes, &[RECORD_FINAL])?;
     stream_write(sink, &mut hashed, &mut bytes, &index.to_be_bytes())?;
     stream_write(sink, &mut hashed, &mut bytes, &0_u32.to_be_bytes())?;
-    stream_write(sink, &mut hashed, &mut bytes, &u32::try_from(final_tag.len())
-        .map_err(|_| EncryptedGenerationError::InvalidContainer)?.to_be_bytes())?;
+    stream_write(
+        sink,
+        &mut hashed,
+        &mut bytes,
+        &u32::try_from(final_tag.len())
+            .map_err(|_| EncryptedGenerationError::InvalidContainer)?
+            .to_be_bytes(),
+    )?;
     stream_write(sink, &mut hashed, &mut bytes, &final_tag)?;
     Ok(StreamingGenerationReport {
         metadata: metadata.clone(),
@@ -880,8 +925,11 @@ pub fn open_generation_streaming(
     if prefix[..8] != MAGIC {
         return Err(EncryptedGenerationError::InvalidContainer.into());
     }
-    let meta_len = u32::from_be_bytes(prefix[8..12].try_into()
-        .map_err(|_| EncryptedGenerationError::InvalidContainer)?) as usize;
+    let meta_len = u32::from_be_bytes(
+        prefix[8..12]
+            .try_into()
+            .map_err(|_| EncryptedGenerationError::InvalidContainer)?,
+    ) as usize;
     if meta_len == 0 || meta_len > MAX_METADATA_BYTES {
         return Err(EncryptedGenerationError::InvalidContainer.into());
     }
@@ -900,19 +948,29 @@ pub fn open_generation_streaming(
         let mut header = [0_u8; 17];
         stream_read(source, &mut hashed, &mut bytes, &mut header)?;
         let kind = header[0];
-        let record_index = u64::from_be_bytes(header[1..9].try_into()
-            .map_err(|_| EncryptedGenerationError::InvalidContainer)?);
-        let plain_len = u32::from_be_bytes(header[9..13].try_into()
-            .map_err(|_| EncryptedGenerationError::InvalidContainer)?);
-        let cipher_len = u32::from_be_bytes(header[13..17].try_into()
-            .map_err(|_| EncryptedGenerationError::InvalidContainer)?) as usize;
+        let record_index = u64::from_be_bytes(
+            header[1..9]
+                .try_into()
+                .map_err(|_| EncryptedGenerationError::InvalidContainer)?,
+        );
+        let plain_len = u32::from_be_bytes(
+            header[9..13]
+                .try_into()
+                .map_err(|_| EncryptedGenerationError::InvalidContainer)?,
+        );
+        let cipher_len = u32::from_be_bytes(
+            header[13..17]
+                .try_into()
+                .map_err(|_| EncryptedGenerationError::InvalidContainer)?,
+        ) as usize;
         if record_index != index {
             return Err(EncryptedGenerationError::InvalidContainer.into());
         }
         if !matches!(kind, RECORD_CHUNK | RECORD_FINAL)
-            || (kind == RECORD_CHUNK && (plain_len == 0
-                || plain_len > metadata.chunk_size()
-                || cipher_len != plain_len as usize + TAG_BYTES))
+            || (kind == RECORD_CHUNK
+                && (plain_len == 0
+                    || plain_len > metadata.chunk_size()
+                    || cipher_len != plain_len as usize + TAG_BYTES))
             || (kind == RECORD_FINAL && (plain_len != 0 || cipher_len != TAG_BYTES))
         {
             return Err(EncryptedGenerationError::InvalidContainer.into());
@@ -921,12 +979,20 @@ pub fn open_generation_streaming(
         stream_read(source, &mut hashed, &mut bytes, &mut ciphertext)?;
         let aad = record_aad(metadata_digest, kind, index, plain_len);
         let nonce_bytes = metadata.nonce_prefix().nonce_for(index);
-        let opened = Zeroizing::new(cipher.decrypt(&nonce_from_bytes(&nonce_bytes)?, Payload {
-            msg: &ciphertext,
-            aad: &aad,
-        }).map_err(|_| EncryptedGenerationError::AuthenticationFailed)?);
+        let opened = Zeroizing::new(
+            cipher
+                .decrypt(
+                    &nonce_from_bytes(&nonce_bytes)?,
+                    Payload {
+                        msg: &ciphertext,
+                        aad: &aad,
+                    },
+                )
+                .map_err(|_| EncryptedGenerationError::AuthenticationFailed)?,
+        );
         if kind == RECORD_FINAL {
-            if !opened.is_empty() || plain_bytes != metadata.plaintext_bytes()
+            if !opened.is_empty()
+                || plain_bytes != metadata.plaintext_bytes()
                 || PlaintextDigest(plain_hash.finalize().into()) != metadata.plaintext_digest()
             {
                 return Err(EncryptedGenerationError::DigestMismatch.into());
@@ -945,21 +1011,28 @@ pub fn open_generation_streaming(
         if opened.len() != plain_len as usize {
             return Err(EncryptedGenerationError::InvalidContainer.into());
         }
-        plain_bytes = plain_bytes.checked_add(plain_len as u64)
+        plain_bytes = plain_bytes
+            .checked_add(plain_len as u64)
             .ok_or(EncryptedGenerationError::PlaintextTooLarge)?;
         if plain_bytes > metadata.plaintext_bytes() || plain_bytes > MAX_STREAM_PLAINTEXT_BYTES {
             return Err(EncryptedGenerationError::PlaintextTooLarge.into());
         }
         plain_hash.update(&opened);
         sink.write_all(&opened)?;
-        index = index.checked_add(1).ok_or(EncryptedGenerationError::InvalidContainer)?;
+        index = index
+            .checked_add(1)
+            .ok_or(EncryptedGenerationError::InvalidContainer)?;
     }
 }
 
 fn stream_write(
-    sink: &mut impl Write, hasher: &mut Sha256, bytes: &mut u64, data: &[u8],
+    sink: &mut impl Write,
+    hasher: &mut Sha256,
+    bytes: &mut u64,
+    data: &[u8],
 ) -> Result<(), StreamingGenerationError> {
-    let next = bytes.checked_add(data.len() as u64)
+    let next = bytes
+        .checked_add(data.len() as u64)
         .ok_or(EncryptedGenerationError::PlaintextTooLarge)?;
     if next > MAX_STREAM_CONTAINER_BYTES {
         return Err(EncryptedGenerationError::PlaintextTooLarge.into());
@@ -971,9 +1044,13 @@ fn stream_write(
 }
 
 fn stream_read(
-    source: &mut impl Read, hasher: &mut Sha256, bytes: &mut u64, data: &mut [u8],
+    source: &mut impl Read,
+    hasher: &mut Sha256,
+    bytes: &mut u64,
+    data: &mut [u8],
 ) -> Result<(), StreamingGenerationError> {
-    let next = bytes.checked_add(data.len() as u64)
+    let next = bytes
+        .checked_add(data.len() as u64)
         .ok_or(EncryptedGenerationError::PlaintextTooLarge)?;
     if next > MAX_STREAM_CONTAINER_BYTES {
         return Err(EncryptedGenerationError::PlaintextTooLarge.into());
