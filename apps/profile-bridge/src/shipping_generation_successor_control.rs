@@ -18,8 +18,9 @@ use crate::shipping_generation_save::{
     GenerationUploadAuthorization, SignedGenerationUploadCapability,
 };
 use crate::shipping_save_attempt::{
-    ReadOnlySaveAttempt, ReadOnlyStreamedSaveAttempt,
-    discover_unresolved_streaming_exact_save_attempt, inspect_streaming_exact_save_attempt,
+    ReadOnlySaveAttempt, ReadOnlyStreamedSaveAttempt, discover_unresolved_exact_save_attempt,
+    discover_unresolved_streaming_exact_save_attempt, inspect_exact_save_attempt,
+    inspect_streaming_exact_save_attempt,
 };
 #[cfg(any(windows, test))]
 use crate::shipping_save_attempt::{
@@ -263,14 +264,16 @@ pub fn observe_discovered_successor_after_restart<T: MachineHttpPort>(
     let attempt = discover_unresolved_streaming_exact_save_attempt(root, tenant_id, profile_id)
         .map_err(|_| ShippingControlPlaneError::InvalidResponse)?;
     match attempt {
-        Some(attempt) => observe_verified_streamed_attempt(tenant_id, profile_id, &attempt, transport)
-            .map(|active| {
-                if active {
-                    RestartExactCommitObservation::ActiveExact
-                } else {
-                    RestartExactCommitObservation::NotActiveExact
-                }
-            }),
+        Some(attempt) => observe_verified_streamed_attempt(
+            tenant_id, profile_id, &attempt, transport,
+        )
+        .map(|active| {
+            if active {
+                RestartExactCommitObservation::ActiveExact
+            } else {
+                RestartExactCommitObservation::NotActiveExact
+            }
+        }),
         None => Ok(RestartExactCommitObservation::NoCanonicalCheckpoint),
     }
 }
