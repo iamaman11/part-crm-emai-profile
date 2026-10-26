@@ -588,7 +588,9 @@ mod windows {
                             match operator.reprove_retained_save_writer() {
                                 Ok(()) => {}
                                 Err(OperatorFlowError::HeartbeatTransportUncertain) => continue,
-                                Err(error) => return Err(ShippingCompositionError::Operator(error)),
+                                Err(error) => {
+                                    return Err(ShippingCompositionError::Operator(error));
+                                }
                             }
                             let timing = operator
                                 .coordinator()
@@ -638,14 +640,18 @@ mod windows {
                             ) {
                                 Ok(completion) if completion.is_saved() => return Ok(()),
                                 Ok(_) => {
-                                    return Err(ShippingCompositionError::CommittedRecoveryRequired);
+                                    return Err(
+                                        ShippingCompositionError::CommittedRecoveryRequired,
+                                    );
                                 }
-                                Err(OperatorFlowError::Stage(OperatorFailureStage::GenerationSave))
-                                    if operator.has_pending_dirty_close() =>
-                                {
+                                Err(OperatorFlowError::Stage(
+                                    OperatorFailureStage::GenerationSave,
+                                )) if operator.has_pending_dirty_close() => {
                                     continue;
                                 }
-                                Err(error) => return Err(ShippingCompositionError::Operator(error)),
+                                Err(error) => {
+                                    return Err(ShippingCompositionError::Operator(error));
+                                }
                             }
                         }
                         eprintln!(
@@ -860,19 +866,29 @@ mod windows {
         #[test]
         fn live_save_reconnect_requires_positive_deadline_margin() {
             assert!(safe_reconnect_writer_window(
-                60_000, 120_000, UnixMillis::new(1_000),
+                60_000,
+                120_000,
+                UnixMillis::new(1_000),
             ));
             assert!(!safe_reconnect_writer_window(
-                60_000, 120_000, UnixMillis::new(55_000),
+                60_000,
+                120_000,
+                UnixMillis::new(55_000),
             ));
             assert!(!safe_reconnect_writer_window(
-                60_000, 120_000, UnixMillis::new(60_000),
+                60_000,
+                120_000,
+                UnixMillis::new(60_000),
             ));
             assert!(!safe_reconnect_writer_window(
-                60_000, 120_000, UnixMillis::new(u64::MAX),
+                60_000,
+                120_000,
+                UnixMillis::new(u64::MAX),
             ));
             assert!(!safe_reconnect_writer_window(
-                80_000, 60_000, UnixMillis::new(56_000),
+                80_000,
+                60_000,
+                UnixMillis::new(56_000),
             ));
         }
 

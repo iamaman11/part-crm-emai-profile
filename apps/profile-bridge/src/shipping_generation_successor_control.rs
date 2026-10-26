@@ -792,16 +792,15 @@ pub(crate) fn confirm_retained_exact_retry_nonapplication<T: MachineHttpPort>(
     let exact = discover_unresolved_exact_save_attempt(root, tenant, profile)
         .map_err(|_| RestartExactLocalCompletionError::LocalEvidenceChanged)?
         .ok_or(RestartExactLocalCompletionError::LocalEvidenceChanged)?;
-    if !exact.matches_original_lease(original_lease)
-        || !exact.matches_fresh_device(original_lease)
+    if !exact.matches_original_lease(original_lease) || !exact.matches_fresh_device(original_lease)
     {
         return Err(RestartExactLocalCompletionError::LocalEvidenceChanged);
     }
-    Ok(request_fresh_retry_decision(
-        tenant, profile, &exact, original_lease, transport,
+    Ok(
+        request_fresh_retry_decision(tenant, profile, &exact, original_lease, transport)
+            .map_err(RestartExactLocalCompletionError::ControlPlane)?
+            == BridgeGenerationSuccessorRetryVerdict::NotAppliedRetryable,
     )
-    .map_err(RestartExactLocalCompletionError::ControlPlane)?
-        == BridgeGenerationSuccessorRetryVerdict::NotAppliedRetryable)
 }
 
 /// D1-positive base-only proof for a lone LOCAL_UNSYNCED native close.
@@ -1932,7 +1931,9 @@ mod tests {
         let mut no_network = Transport::default();
         assert_eq!(
             super::confirm_retained_exact_retry_nonapplication(
-                &root, &fixture.lease, &mut no_network,
+                &root,
+                &fixture.lease,
+                &mut no_network,
             ),
             Err(RestartExactLocalCompletionError::LocalEvidenceChanged),
         );
@@ -1947,32 +1948,31 @@ mod tests {
                 &fixture.tenant,
                 &fixture.profile,
                 fixture.prepared.candidate_workspace().generation_id(),
-            )?.ok_or("missing exact checkpoint")?,
+            )?
+            .ok_or("missing exact checkpoint")?,
         )?;
         let mut allowed = Transport {
             responses: VecDeque::from([MachineHttpResponse::new(
-                200, br#"{"verdict":"NOT_APPLIED_RETRYABLE"}"#.to_vec(),
+                200,
+                br#"{"verdict":"NOT_APPLIED_RETRYABLE"}"#.to_vec(),
             )]),
             paths: Vec::new(),
         };
         assert_eq!(
-            super::confirm_retained_exact_retry_nonapplication(
-                &root, &fixture.lease, &mut allowed,
-            ),
+            super::confirm_retained_exact_retry_nonapplication(&root, &fixture.lease, &mut allowed,),
             Ok(true),
         );
         assert_eq!(allowed.paths.len(), 1);
         assert!(allowed.paths[0].ends_with("/generation-successor/retry-decision"));
         let mut blocked = Transport {
             responses: VecDeque::from([MachineHttpResponse::new(
-                200, br#"{"verdict":"BLOCKED"}"#.to_vec(),
+                200,
+                br#"{"verdict":"BLOCKED"}"#.to_vec(),
             )]),
             paths: Vec::new(),
         };
         assert_eq!(
-            super::confirm_retained_exact_retry_nonapplication(
-                &root, &fixture.lease, &mut blocked,
-            ),
+            super::confirm_retained_exact_retry_nonapplication(&root, &fixture.lease, &mut blocked,),
             Ok(false),
         );
         let foreign = ProfileLease::issue(
@@ -1986,13 +1986,17 @@ mod tests {
         let mut foreign_transport = Transport::default();
         assert_eq!(
             super::confirm_retained_exact_retry_nonapplication(
-                &root, &foreign, &mut foreign_transport,
+                &root,
+                &foreign,
+                &mut foreign_transport,
             ),
             Err(RestartExactLocalCompletionError::LocalEvidenceChanged),
         );
         assert!(foreign_transport.paths.is_empty());
         assert!(has_unresolved_save_attempt_for_profile(
-            &root, &fixture.tenant, &fixture.profile,
+            &root,
+            &fixture.tenant,
+            &fixture.profile,
         )?);
         Ok(())
     }
