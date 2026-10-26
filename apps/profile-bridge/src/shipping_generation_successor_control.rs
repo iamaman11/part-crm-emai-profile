@@ -775,6 +775,35 @@ where
     result
 }
 
+/// A controlled close still held by the ORIGINAL process may retry the
+/// EXACT checkpoint only after a separately accepted current-session DO
+/// heartbeat and this affirmative D1 nonapplication response. Unlike a
+/// process-restart path this does NOT mint a new lease; the caller MUST
+/// separately verify the current coordinator deadline immediately before PUT.
+/// False/unknown/changed checkpoint never grants upload, commit or Saved.
+#[cfg(any(windows, test))]
+pub(crate) fn confirm_retained_exact_retry_nonapplication<T: MachineHttpPort>(
+    root: &MaterializationRoot,
+    original_lease: &ProfileLease,
+    transport: &mut T,
+) -> Result<bool, RestartExactLocalCompletionError> {
+    let tenant = original_lease.tenant_id();
+    let profile = original_lease.profile_id();
+    let exact = discover_unresolved_exact_save_attempt(root, tenant, profile)
+        .map_err(|_| RestartExactLocalCompletionError::LocalEvidenceChanged)?
+        .ok_or(RestartExactLocalCompletionError::LocalEvidenceChanged)?;
+    if !exact.matches_original_lease(original_lease)
+        || !exact.matches_fresh_device(original_lease)
+    {
+        return Err(RestartExactLocalCompletionError::LocalEvidenceChanged);
+    }
+    Ok(request_fresh_retry_decision(
+        tenant, profile, &exact, original_lease, transport,
+    )
+    .map_err(RestartExactLocalCompletionError::ControlPlane)?
+        == BridgeGenerationSuccessorRetryVerdict::NotAppliedRetryable)
+}
+
 /// D1-positive base-only proof for a lone LOCAL_UNSYNCED native close.
 #[cfg(any(windows, test))]
 fn request_local_unsynced_retry_decision<T: MachineHttpPort>(
@@ -1890,6 +1919,82 @@ mod tests {
             self.exact_bytes = ciphertext.to_vec();
             Ok(())
         }
+    }
+
+    #[test]
+    fn retained_live_retry_requires_exact_original_provenance_and_d1_positive()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let fixture = Fixture::new()?;
+        let root = MaterializationRoot::open_or_create(&fixture.root_path)?;
+        let source = root.open_generation(&fixture.tenant, &fixture.profile, &fixture.base)?;
+        // Lone intent is NOT an uploaded exact N+1.
+        persist_local_unsynced_intent(&root, &source, &fixture.lease)?;
+        let mut no_network = Transport::default();
+        assert_eq!(
+            super::confirm_retained_exact_retry_nonapplication(
+                &root, &fixture.lease, &mut no_network,
+            ),
+            Err(RestartExactLocalCompletionError::LocalEvidenceChanged),
+        );
+        assert!(no_network.paths.is_empty());
+        persist_exact_save_attempt(&root, &source, &fixture.prepared, &fixture.lease)?;
+        retire_local_unsynced_after_exact_checkpoint(
+            &root,
+            &source,
+            &fixture.lease,
+            &inspect_exact_save_attempt(
+                &root,
+                &fixture.tenant,
+                &fixture.profile,
+                fixture.prepared.candidate_workspace().generation_id(),
+            )?.ok_or("missing exact checkpoint")?,
+        )?;
+        let mut allowed = Transport {
+            responses: VecDeque::from([MachineHttpResponse::new(
+                200, br#"{"verdict":"NOT_APPLIED_RETRYABLE"}"#.to_vec(),
+            )]),
+            paths: Vec::new(),
+        };
+        assert_eq!(
+            super::confirm_retained_exact_retry_nonapplication(
+                &root, &fixture.lease, &mut allowed,
+            ),
+            Ok(true),
+        );
+        assert_eq!(allowed.paths.len(), 1);
+        assert!(allowed.paths[0].ends_with("/generation-successor/retry-decision"));
+        let mut blocked = Transport {
+            responses: VecDeque::from([MachineHttpResponse::new(
+                200, br#"{"verdict":"BLOCKED"}"#.to_vec(),
+            )]),
+            paths: Vec::new(),
+        };
+        assert_eq!(
+            super::confirm_retained_exact_retry_nonapplication(
+                &root, &fixture.lease, &mut blocked,
+            ),
+            Ok(false),
+        );
+        let foreign = ProfileLease::issue(
+            fixture.tenant.clone(),
+            fixture.profile.clone(),
+            SessionId::parse("session_forged_lost_writer")?,
+            fixture.lease.device_id().clone(),
+            fixture.lease.epoch() + 1,
+            FencingToken::parse("fence_forged_lost_writer")?,
+        )?;
+        let mut foreign_transport = Transport::default();
+        assert_eq!(
+            super::confirm_retained_exact_retry_nonapplication(
+                &root, &foreign, &mut foreign_transport,
+            ),
+            Err(RestartExactLocalCompletionError::LocalEvidenceChanged),
+        );
+        assert!(foreign_transport.paths.is_empty());
+        assert!(has_unresolved_save_attempt_for_profile(
+            &root, &fixture.tenant, &fixture.profile,
+        )?);
+        Ok(())
     }
 
     #[test]

@@ -868,6 +868,36 @@ where
         }
     }
 
+    /// A clean native Firefox close retains the original exclusive workspace
+    /// and the LIVE coordinator session. Reconfirm that exact session with
+    /// the authoritative DO before retrying ANY failed exact cloud effect.
+    /// This never reopens the browser, renews from a timeout, or mints a fence.
+    /// An unacknowledged response leaves all native data and intent untouched.
+    pub fn reprove_retained_save_writer(&mut self) -> Result<(), OperatorFlowError>
+    where
+        C: ProfileCoordinatorRuntimePort,
+    {
+        if self.cleanup_blocked || self.active.is_some() {
+            return Err(OperatorFlowError::CleanupRequired);
+        }
+        let lease = self
+            .retained_dirty
+            .as_ref()
+            .map(|retained| retained.lease().clone())
+            .ok_or(OperatorFlowError::Stage(
+                OperatorFailureStage::GenerationSave,
+            ))?;
+        match self.coordinator.heartbeat_lease(&lease) {
+            Ok(()) => Ok(()),
+            Err(error) if self.coordinator.heartbeat_transport_uncertain(&error) => {
+                Err(OperatorFlowError::HeartbeatTransportUncertain)
+            }
+            Err(_) => Err(OperatorFlowError::Stage(
+                OperatorFailureStage::CoordinatorHeartbeat,
+            )),
+        }
+    }
+
     /// Only the shipping owner may call this after local monotonic observation
     /// passes the last *server-confirmed* idle/hard deadline. Unlike temporary
     /// transport uncertainty, positively expired writer authority demands
@@ -1255,6 +1285,12 @@ where
     #[must_use]
     pub fn has_pending_dirty_close(&self) -> bool {
         self.retained_dirty.is_some()
+    }
+
+    /// Original closed writer context, descriptive only. This MUST be
+    /// re-proved by the server before any retry and NEVER outlive its expiry.
+    pub fn retained_save_lease(&self) -> Option<&ProfileLease> {
+        self.retained_dirty.as_ref().map(RetainedDirtyClose::lease)
     }
 
     #[must_use]
@@ -2062,6 +2098,46 @@ mod tests {
         assert_eq!(restarted.coordinator().closed, 1);
         assert!(restarted.process().actions().is_empty());
         assert_eq!(fs::read(&wal)?, b"local-firefox-unsynced-wal");
+        Ok(())
+    }
+
+    #[test]
+    fn retained_native_close_reproves_same_live_writer_without_browser_restart()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let fixture = Fixture::new()?;
+        let mut owner = operator(&fixture, FakeCamouhost::default())?;
+        owner.open(&fixture.claim_uri, &fixture.root, UnixMillis::new(10))?;
+        owner.close_with_durable_local_intent(&fixture.root, UnixMillis::new(20))?;
+        assert_eq!(owner.retained_save_lease(), Some(&fixture.lease));
+        let original = fixture.root.open_generation(
+            fixture.actor.tenant_scope().tenant_id(),
+            &fixture.profile_id,
+            &fixture.generation_id,
+        )?;
+        let before = original.inventory()?;
+        owner.reprove_retained_save_writer()?;
+        assert_eq!(owner.coordinator().heartbeats, 1);
+        assert_eq!(owner.coordinator().claimed, 1);
+        assert_eq!(owner.coordinator().closed, 0);
+        assert!(owner.has_pending_dirty_close());
+        assert_eq!(original.inventory()?, before);
+        owner.coordinator.heartbeat_fail = true;
+        owner.coordinator.heartbeat_transport_uncertain = true;
+        assert_eq!(
+            owner.reprove_retained_save_writer(),
+            Err(OperatorFlowError::HeartbeatTransportUncertain),
+        );
+        assert!(owner.has_pending_dirty_close());
+        assert_eq!(original.inventory()?, before);
+        owner.coordinator.heartbeat_transport_uncertain = false;
+        assert_eq!(
+            owner.reprove_retained_save_writer(),
+            Err(OperatorFlowError::Stage(
+                OperatorFailureStage::CoordinatorHeartbeat
+            )),
+        );
+        assert_eq!(owner.coordinator().claimed, 1);
+        assert_eq!(original.inventory()?, before);
         Ok(())
     }
 
