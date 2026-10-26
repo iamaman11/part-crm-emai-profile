@@ -381,9 +381,7 @@ fn matching_local_unsynced_for_header(
         && header.epoch == intent.epoch
         && header.session_fingerprint == intent.session_fingerprint
         && header.fencing_fingerprint == intent.fencing_fingerprint;
-    let recovered_seal = exact
-        .header
-        .recovered_lone_origin
+    let recovered_seal = header.recovered_lone_origin
         .as_ref()
         .is_some_and(|origin| {
             origin.epoch == intent.epoch
@@ -2064,7 +2062,10 @@ mod direct_native_checkpoint_tests {
             &fixture.profile,
         )
         .is_err());
-        assert_eq!(fs::read(source.path().join("prefs.js"))?, b"native preferences");
+        assert_eq!(
+            fs::read(source.path().join("prefs.js"))?,
+            b"native preferences"
+        );
         Ok(())
     }
 
