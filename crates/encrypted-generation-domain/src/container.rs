@@ -234,6 +234,41 @@ impl GenerationMetadata {
         })
     }
 
+    /// An inventory-verified first pass may already know the exact canonical
+    /// BPGW digest/length before DEK selection. Sealing MUST still re-read
+    /// the native source and check this digest; this constructor alone never
+    /// authenticates filesystem bytes or grants authority to publish.
+    pub fn for_prehashed_stream(
+        identity: GenerationIdentity,
+        key_id: KeyId,
+        nonce_prefix: NoncePrefix,
+        chunk_size: u32,
+        plaintext_bytes: u64,
+        plaintext_digest: [u8; 32],
+    ) -> Result<Self, EncryptedGenerationError> {
+        validate_chunk_size(chunk_size)?;
+        if plaintext_bytes > MAX_STREAM_PLAINTEXT_BYTES {
+            return Err(EncryptedGenerationError::PlaintextTooLarge);
+        }
+        let GenerationIdentity {
+            tenant_id,
+            profile_id,
+            generation_id,
+            base_generation_id,
+        } = identity;
+        Ok(Self {
+            tenant_id,
+            profile_id,
+            generation_id,
+            base_generation_id,
+            key_id,
+            nonce_prefix,
+            chunk_size,
+            plaintext_bytes,
+            plaintext_digest: PlaintextDigest(plaintext_digest),
+        })
+    }
+
     /// Streaming first-pass SHA-256. The caller must use an immutable,
     /// checked source for both this pass and the subsequent seal operation.
     pub fn for_reader(
