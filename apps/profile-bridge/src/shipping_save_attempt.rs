@@ -362,16 +362,25 @@ fn matching_local_unsynced_for_exact(
     profile: &ProfileId,
     exact: &ReadOnlySaveAttempt,
 ) -> Result<bool, SaveAttemptEvidenceError> {
+    matching_local_unsynced_for_header(root, tenant, profile, &exact.header)
+}
+
+fn matching_local_unsynced_for_header(
+    root: &MaterializationRoot,
+    tenant: &TenantId,
+    profile: &ProfileId,
+    header: &AttemptHeader,
+) -> Result<bool, SaveAttemptEvidenceError> {
     let marker = local_unsynced_path(root, tenant, profile);
     let intent = match read_local_unsynced(&marker) {
         Ok(intent) => intent,
         Err(SaveAttemptEvidenceError::Io(std::io::ErrorKind::NotFound)) => return Ok(false),
         Err(error) => return Err(error),
     };
-    let originally_sealed = exact.header.recovered_lone_origin.is_none()
-        && exact.header.epoch == intent.epoch
-        && exact.header.session_fingerprint == intent.session_fingerprint
-        && exact.header.fencing_fingerprint == intent.fencing_fingerprint;
+    let originally_sealed = header.recovered_lone_origin.is_none()
+        && header.epoch == intent.epoch
+        && header.session_fingerprint == intent.session_fingerprint
+        && header.fencing_fingerprint == intent.fencing_fingerprint;
     let recovered_seal = exact
         .header
         .recovered_lone_origin
@@ -380,21 +389,21 @@ fn matching_local_unsynced_for_exact(
             origin.epoch == intent.epoch
                 && origin.session_fingerprint == intent.session_fingerprint
                 && origin.fencing_fingerprint == intent.fencing_fingerprint
-                && exact.header.epoch > origin.epoch
+                && header.epoch > origin.epoch
                 && deterministic_lone_successor(&intent)
-                    .is_ok_and(|candidate| candidate.as_str() == exact.successor_id())
+                    .is_ok_and(|candidate| candidate.as_str() == header.successor.as_str())
         });
     if intent.schema != "bridge-p3-local-unsynced-v1"
         || intent.tenant != tenant.as_str()
         || intent.profile != profile.as_str()
-        || exact.header.schema != "bridge-p3-attempt-v1"
-        || exact.header.tenant != intent.tenant
-        || exact.header.profile != intent.profile
-        || exact.header.base_generation != intent.base_generation
+        || header.schema != "bridge-p3-attempt-v1"
+        || header.tenant != intent.tenant
+        || header.profile != intent.profile
+        || header.base_generation != intent.base_generation
         || !(originally_sealed || recovered_seal)
-        || exact.header.device_fingerprint != intent.device_fingerprint
-        || exact.header.source_inventory != intent.source_inventory
-        || exact.header.candidate_bytes != intent.source_bytes
+        || header.device_fingerprint != intent.device_fingerprint
+        || header.source_inventory != intent.source_inventory
+        || header.candidate_bytes != intent.source_bytes
     {
         return Err(SaveAttemptEvidenceError::Changed);
     }
@@ -1063,11 +1072,13 @@ pub(crate) fn discover_unresolved_exact_save_attempt(
 
 /// Scope-aware post-crash diagnosis; reads original native inventory without
 /// recovering an expired lease, inventing N+1, or writing anything to disk.
-pub(crate) fn classify_scoped_pending_save_evidence(
+/// Shared scoped admission for existing and streamed BPAT inspectors.
+/// A second, foreign or torn sibling blocks both; never repair it implicitly.
+fn scan_scoped_pending_candidate(
     root: &MaterializationRoot,
     tenant: &TenantId,
     profile: &ProfileId,
-) -> Result<ScopedPendingSaveEvidence, SaveAttemptEvidenceError> {
+) -> Result<(Option<GenerationId>, bool), SaveAttemptEvidenceError> {
     let prefix = scope_file_prefix(tenant, profile);
     let marker = local_unsynced_path(root, tenant, profile);
     let mut candidate = None;
@@ -1118,6 +1129,16 @@ pub(crate) fn classify_scoped_pending_save_evidence(
         }
         candidate = Some(generation);
     }
+    Ok((candidate, has_local_intent))
+}
+
+pub(crate) fn classify_scoped_pending_save_evidence(
+    root: &MaterializationRoot,
+    tenant: &TenantId,
+    profile: &ProfileId,
+) -> Result<ScopedPendingSaveEvidence, SaveAttemptEvidenceError> {
+    let (candidate, has_local_intent) = scan_scoped_pending_candidate(root, tenant, profile)?;
+    let marker = local_unsynced_path(root, tenant, profile);
     let exact = candidate
         .map(|generation| {
             inspect_exact_save_attempt(root, tenant, profile, &generation)?
@@ -1174,6 +1195,26 @@ pub(crate) fn classify_scoped_pending_save_evidence(
         Some(attempt) => ScopedPendingSaveEvidence::Exact(Box::new(attempt)),
         None => ScopedPendingSaveEvidence::None,
     })
+}
+
+/// Find the same single durable BPAT without allocating its ciphertext.
+/// Observation is read-only: no fresh lease, PUT, or commit is granted.
+#[allow(dead_code)] // Used by K2 streaming cutover.
+pub(crate) fn discover_unresolved_streaming_exact_save_attempt(
+    root: &MaterializationRoot,
+    tenant: &TenantId,
+    profile: &ProfileId,
+) -> Result<Option<ReadOnlyStreamedSaveAttempt>, SaveAttemptEvidenceError> {
+    let (candidate, has_local_intent) = scan_scoped_pending_candidate(root, tenant, profile)?;
+    let Some(successor) = candidate else {
+        return if has_local_intent { Err(SaveAttemptEvidenceError::Changed) } else { Ok(None) };
+    };
+    let exact = inspect_streaming_exact_save_attempt(root, tenant, profile, &successor)?
+        .ok_or(SaveAttemptEvidenceError::Changed)?;
+    if has_local_intent && !matching_local_unsynced_for_header(root, tenant, profile, &exact.header)? {
+        return Err(SaveAttemptEvidenceError::Changed);
+    }
+    Ok(Some(exact))
 }
 
 /// Header-only bounded read: discovery never loads the large sealed body
