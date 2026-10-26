@@ -115,14 +115,6 @@ impl ReadOnlySaveAttempt {
         self.header.device_fingerprint.as_deref() == Some(digest.as_str())
     }
 
-    /// Only a first checkpoint sealed FROM an older local intent may use
-    /// the same freshly claimed writer during its initial upload. Ordinary
-    /// crash replay still requires a STRICTLY newer lease.
-    #[cfg(any(windows, test))]
-    pub(crate) fn first_seal_under_current_lease(&self, lease: &ProfileLease) -> bool {
-        self.header.recovered_lone_origin.is_some() && self.matches_original_lease(lease)
-    }
-
     #[must_use]
     pub(crate) fn ciphertext(&self) -> &[u8] {
         &self.ciphertext
