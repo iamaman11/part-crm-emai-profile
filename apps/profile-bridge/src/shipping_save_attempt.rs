@@ -1070,8 +1070,6 @@ pub(crate) fn discover_unresolved_exact_save_attempt(
     }
 }
 
-/// Scope-aware post-crash diagnosis; reads original native inventory without
-/// recovering an expired lease, inventing N+1, or writing anything to disk.
 /// Shared scoped admission for existing and streamed BPAT inspectors.
 /// A second, foreign or torn sibling blocks both; never repair it implicitly.
 fn scan_scoped_pending_candidate(
@@ -1132,6 +1130,8 @@ fn scan_scoped_pending_candidate(
     Ok((candidate, has_local_intent))
 }
 
+/// Scope-aware post-crash diagnosis; reads original native inventory without
+/// recovering an expired lease, inventing N+1, or writing anything to disk.
 pub(crate) fn classify_scoped_pending_save_evidence(
     root: &MaterializationRoot,
     tenant: &TenantId,
@@ -1207,11 +1207,17 @@ pub(crate) fn discover_unresolved_streaming_exact_save_attempt(
 ) -> Result<Option<ReadOnlyStreamedSaveAttempt>, SaveAttemptEvidenceError> {
     let (candidate, has_local_intent) = scan_scoped_pending_candidate(root, tenant, profile)?;
     let Some(successor) = candidate else {
-        return if has_local_intent { Err(SaveAttemptEvidenceError::Changed) } else { Ok(None) };
+        return if has_local_intent {
+            Err(SaveAttemptEvidenceError::Changed)
+        } else {
+            Ok(None)
+        };
     };
     let exact = inspect_streaming_exact_save_attempt(root, tenant, profile, &successor)?
         .ok_or(SaveAttemptEvidenceError::Changed)?;
-    if has_local_intent && !matching_local_unsynced_for_header(root, tenant, profile, &exact.header)? {
+    if has_local_intent
+        && !matching_local_unsynced_for_header(root, tenant, profile, &exact.header)?
+    {
         return Err(SaveAttemptEvidenceError::Changed);
     }
     Ok(Some(exact))
@@ -1622,6 +1628,12 @@ pub(crate) fn inspect_streaming_exact_save_attempt(
         || header.base_generation == header.successor
         || header.session_fingerprint.len() != 64
         || header.fencing_fingerprint.len() != 64
+        || header.recovered_lone_origin.as_ref().is_some_and(|origin| {
+            origin.epoch == 0
+                || origin.epoch >= header.epoch
+                || origin.session_fingerprint.len() != 64
+                || origin.fencing_fingerprint.len() != 64
+        })
     {
         return Err(SaveAttemptEvidenceError::Invalid);
     }
@@ -1849,7 +1861,8 @@ fn hex(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod direct_native_checkpoint_tests {
     use super::{
-        SaveAttemptEvidenceError, attempt_path, inspect_streaming_exact_save_attempt,
+        SaveAttemptEvidenceError, attempt_path, discover_unresolved_streaming_exact_save_attempt,
+        inspect_streaming_exact_save_attempt, persist_local_unsynced_intent,
         persist_streaming_exact_save_attempt_from_native,
     };
     use crate::dirty_generation::{GenerationSealingMaterial, GenerationSealingMaterialPort};
@@ -1971,6 +1984,7 @@ mod direct_native_checkpoint_tests {
             calls: 0,
             mutate: None,
         };
+        persist_local_unsynced_intent(&fixture.root, &source, &fixture.lease)?;
         persist_streaming_exact_save_attempt_from_native(
             &fixture.root,
             &source,
@@ -1979,6 +1993,15 @@ mod direct_native_checkpoint_tests {
             &mut keys,
         )?;
         assert_eq!(keys.calls, 1);
+        let discovered = discover_unresolved_streaming_exact_save_attempt(
+            &fixture.root,
+            &fixture.tenant,
+            &fixture.profile,
+        )?
+        .ok_or("missing scoped streaming checkpoint")?;
+        assert_eq!(discovered.original_epoch(), fixture.lease.epoch());
+        assert!(discovered.original_device(&fixture.lease));
+        drop(discovered);
         let mut exact = inspect_streaming_exact_save_attempt(
             &fixture.root,
             &fixture.tenant,
@@ -2030,6 +2053,18 @@ mod direct_native_checkpoint_tests {
             b"native preferences"
         );
         assert_eq!(source.inventory()?, candidate.inventory()?);
+        let sibling = fixture.root.path().join(format!(
+            "{}.pending-foreign",
+            super::scope_file_prefix(&fixture.tenant, &fixture.profile),
+        ));
+        fs::write(&sibling, b"torn foreign checkpoint")?;
+        assert!(discover_unresolved_streaming_exact_save_attempt(
+            &fixture.root,
+            &fixture.tenant,
+            &fixture.profile,
+        )
+        .is_err());
+        assert_eq!(fs::read(source.path().join("prefs.js"))?, b"native preferences");
         Ok(())
     }
 
