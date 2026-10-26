@@ -2,8 +2,8 @@ use crate::dirty_generation::{
     DirtyGenerationError, GenerationSealingMaterialPort, PreparedDirtyGeneration,
     prepare_dirty_generation_candidate,
 };
-use crate::local_profile::{GenerationWorkspace, LocalGenerationRecord, MaterializationRoot};
 use crate::generation_object_spool::VerifiedGenerationObjectFile;
+use crate::local_profile::{GenerationWorkspace, LocalGenerationRecord, MaterializationRoot};
 use profile_platform_primitives::{GenerationId, ProfileId, TenantId};
 use session_domain::ProfileLease;
 use sha2::{Digest, Sha256};

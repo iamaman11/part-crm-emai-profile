@@ -1,15 +1,13 @@
 #![cfg(windows)]
 #![forbid(unsafe_code)]
 
+use crate::generation_object_spool::VerifiedGenerationObjectFile;
 use crate::shipping_generation_save::{
     SignedGenerationObjectPutPort, SignedGenerationObjectStreamPutPort,
     SignedGenerationUploadCapability,
 };
-use crate::generation_object_spool::VerifiedGenerationObjectFile;
 use bridge_domain::BridgePortError;
-use encrypted_generation_domain::{
-    MAX_GENERATION_CONTAINER_BYTES, MAX_STREAM_CONTAINER_BYTES,
-};
+use encrypted_generation_domain::{MAX_GENERATION_CONTAINER_BYTES, MAX_STREAM_CONTAINER_BYTES};
 use std::collections::BTreeSet;
 use std::env;
 use std::fs;
@@ -68,12 +66,16 @@ impl SignedGenerationObjectStreamPutPort for WindowsSignedGenerationObjectPut {
         capability: &SignedGenerationUploadCapability,
         object: &mut VerifiedGenerationObjectFile,
     ) -> Result<(), Self::Error> {
-        object.recheck_and_rewind().map_err(|_| BridgePortError::InvalidResponse)?;
+        object
+            .recheck_and_rewind()
+            .map_err(|_| BridgePortError::InvalidResponse)?;
         let expected = object.expected_bytes();
         let result = self.put_bounded_source(capability, object.reader(), expected);
         // Always re-read the exact open handle after a network effect.
         // A file mutation while uploading forbids returning success/commit.
-        object.recheck_and_rewind().map_err(|_| BridgePortError::InvalidResponse)?;
+        object
+            .recheck_and_rewind()
+            .map_err(|_| BridgePortError::InvalidResponse)?;
         result
     }
 }
@@ -148,17 +150,18 @@ impl WindowsSignedGenerationObjectPut {
         // trailing byte, or changed source is NOT a successful PUT.
         let result = (|| -> Result<(), BridgePortError> {
             let mut stdin = child.stdin.take().ok_or(BridgePortError::Unavailable)?;
-            let copied = std::io::copy(
-                &mut (&mut *source).take(expected_bytes),
-                &mut stdin,
-            )
-            .map_err(|_| BridgePortError::Unavailable)?;
+            let copied = std::io::copy(&mut (&mut *source).take(expected_bytes), &mut stdin)
+                .map_err(|_| BridgePortError::Unavailable)?;
             if copied != expected_bytes {
                 return Err(BridgePortError::InvalidResponse);
             }
             drop(stdin); // curl needs EOF before writing its HTTP status.
             let mut trailing = [0_u8; 1];
-            if source.read(&mut trailing).map_err(|_| BridgePortError::Unavailable)? != 0 {
+            if source
+                .read(&mut trailing)
+                .map_err(|_| BridgePortError::Unavailable)?
+                != 0
+            {
                 return Err(BridgePortError::InvalidResponse);
             }
             Ok(())
@@ -168,7 +171,9 @@ impl WindowsSignedGenerationObjectPut {
             let _ = child.wait();
             return Err(error);
         }
-        let output = child.wait_with_output().map_err(|_| BridgePortError::Unavailable)?;
+        let output = child
+            .wait_with_output()
+            .map_err(|_| BridgePortError::Unavailable)?;
         let (status, body) = decode_curl_http_output(output)?;
         if !(200..300).contains(&status) || !body.is_empty() {
             return Err(BridgePortError::InvalidResponse);
