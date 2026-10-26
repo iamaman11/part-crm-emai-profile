@@ -284,8 +284,13 @@ mod tests {
         let prelude = sealed.read_descriptor_verified_metadata_prelude()?;
         let inspected = encrypted_generation_domain::inspect_generation_metadata_prelude(&prelude)?;
         assert_eq!(inspected.metadata_digest(), report.metadata_digest());
-        assert_eq!(inspected.metadata().generation_id(), metadata.generation_id());
-        assert!(prelude.len() <= encrypted_generation_domain::MAX_GENERATION_METADATA_PRELUDE_BYTES);
+        assert_eq!(
+            inspected.metadata().generation_id(),
+            metadata.generation_id()
+        );
+        assert!(
+            prelude.len() <= encrypted_generation_domain::MAX_GENERATION_METADATA_PRELUDE_BYTES
+        );
         let mut sink = std::io::sink();
         let opened = open_generation_streaming(sealed.reader(), &key, &mut sink)?;
         assert_eq!(opened, report);
@@ -299,13 +304,19 @@ mod tests {
     }
 
     #[test]
-    fn descriptor_verified_prelude_rejects_untrusted_header_without_opening_a_key()
-    -> io::Result<()> {
+    fn descriptor_verified_prelude_rejects_untrusted_header_without_opening_a_key() -> io::Result<()>
+    {
         let fixture = Fixture::new()?;
         let path = fixture.path();
         for (case, header) in [
-            (0, [b'X', b'P', b'G', b'C', b'0', b'0', b'0', b'1', 0, 0, 0, 1]),
-            (1, [b'B', b'P', b'G', b'C', b'0', b'0', b'0', b'1', 0, 0, 16, 1]),
+            (
+                0,
+                [b'X', b'P', b'G', b'C', b'0', b'0', b'0', b'1', 0, 0, 0, 1],
+            ),
+            (
+                1,
+                [b'B', b'P', b'G', b'C', b'0', b'0', b'0', b'1', 0, 0, 16, 1],
+            ),
         ] {
             if case != 0 {
                 fs::remove_file(&path)?;
