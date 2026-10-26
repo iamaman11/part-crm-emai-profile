@@ -456,7 +456,18 @@ mod p3_fixture {
         let mut put = BackendPut {
             state: Rc::clone(&state),
         };
+        // Real installed Windows builds prove the shipping stream path. Linux
+        // integration compilation remains on the test-only predecessor: the
+        // production streaming operator method is intentionally Windows-only.
+        #[cfg(windows)]
         let completion = operator.save_retained_successor_streaming(
+            &root,
+            transport.clone(),
+            &mut put,
+            UnixMillis::new(30),
+        )?;
+        #[cfg(not(windows))]
+        let completion = operator.save_retained_successor(
             &root,
             transport.clone(),
             &mut put,
@@ -494,10 +505,14 @@ mod p3_fixture {
         );
 
         let events = state.borrow().events.clone();
-        let retry = event_index(&events, "retry:nonapplied:")?;
-        let put = event_index(&events, "put:")?;
+        #[cfg(windows)]
+        {
+            let retry = event_index(&events, "retry:nonapplied:")?;
+            let put = event_index(&events, "put:")?;
+            let commit = event_index(&events, "commit:")?;
+            assert!(retry < put && put < commit);
+        }
         let commit = event_index(&events, "commit:")?;
-        assert!(retry < put && put < commit);
         let clean_release = event_index(&events, "coordinator:release:Clean")?;
         let capability = event_index(&events, "download-capability:")?;
         let get = event_index(&events, "get:")?;
