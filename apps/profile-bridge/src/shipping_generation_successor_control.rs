@@ -2502,8 +2502,7 @@ mod tests {
         // The third case is above the former 64 MiB in-memory limit. It
         // proves the actual K1 post-crash first-seal/retry/binding path uses
         // the disk-backed BPAT, not merely the ordinary K2 Save happy path.
-        for (existing_clone, large_native_profile) in
-            [(false, false), (true, false), (true, true)]
+        for (existing_clone, large_native_profile) in [(false, false), (true, false), (true, true)]
         {
             let fixture = Fixture::new()?;
             let root = MaterializationRoot::open_or_create(&fixture.root_path)?;
@@ -2653,7 +2652,9 @@ mod tests {
             if large_native_profile {
                 assert_eq!(
                     std::fs::metadata(
-                        candidate_workspace.path().join("user_data/cookies.sqlite-wal")
+                        candidate_workspace
+                            .path()
+                            .join("user_data/cookies.sqlite-wal")
                     )?
                     .len(),
                     65 * 1024 * 1024,
