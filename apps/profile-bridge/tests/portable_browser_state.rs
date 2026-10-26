@@ -674,8 +674,58 @@ mod p3_fixture {
             );
         }
         historical_operator.abort(UnixMillis::new(80))?;
+
+        // Negative WORKING/LKG admission: a successful older run is NOT a
+        // permanent recovery certificate. Removing the retained historical
+        // root key must reject a cold Open before the native browser starts.
+        // Reuse the exact same encrypted object, control-plane owner and
+        // Camoufox orchestration; only the disposable empty local root differs.
+        historical_state.borrow_mut().historical_root_available = false;
+        let missing_key_path = std::env::temp_dir().join(format!(
+            "profile-bridge-missing-old-root-{}-{counter}",
+            std::process::id()
+        ));
+        let _missing_key_cleanup = CleanupRoot(missing_key_path.clone());
+        let missing_key_root = MaterializationRoot::open_or_create(missing_key_path)?;
+        let missing_key_claim =
+            ClaimUri::parse("profilebridge://claim/claim_s0_missing_old_root_000004")?;
+        let failure = historical_operator.open_authoritative(
+            &missing_key_claim,
+            &missing_key_root,
+            &mut historical_download,
+            UnixMillis::new(90),
+        );
+        assert!(
+            matches!(
+                failure,
+                Err(crate::operator_flow::OperatorFlowError::AuthoritativeGeneration { .. })
+            ),
+            "a retained historical generation without its original root key must fail closed"
+        );
+        assert!(
+            missing_key_root
+                .open_generation(&tenant_id, &profile_id, &successor)
+                .is_err(),
+            "an incomplete historical generation cannot appear locally ready"
+        );
+        assert!(historical_operator.active_local_state().is_none());
+        assert_eq!(state.borrow().active_generation, current);
+        // The negative read-only attempt cannot invalidate either immutable
+        // object: the ciphertext bytes are still the same R2 fixture payload.
+        assert_eq!(
+            historical_state.borrow().object.as_deref(),
+            Some(
+                state
+                    .borrow()
+                    .retained_object
+                    .as_ref()
+                    .ok_or("historical encrypted object was unexpectedly lost")?
+                    .1
+                    .as_slice()
+            )
+        );
         eprintln!(
-            "S0_REAL_PORTABLE_BROWSER_STATE=PASSED;STREAMING_BPAT=1;MANAGED_PROCESS=1;MANAGED_IPC=1;COOKIE=1;LOCAL_STORAGE=1;INDEXED_DB=1;AUTHORITATIVE_RESTORE=1;IDENTITY_REUSED=1;HISTORICAL_NONCURRENT_COLD_CAMOUFOX=1;HISTORICAL_OLD_KEY=1;LIVE_LKG_CERTIFICATE=0"
+            "S0_REAL_PORTABLE_BROWSER_STATE=PASSED;STREAMING_BPAT=1;MANAGED_PROCESS=1;MANAGED_IPC=1;COOKIE=1;LOCAL_STORAGE=1;INDEXED_DB=1;AUTHORITATIVE_RESTORE=1;IDENTITY_REUSED=1;HISTORICAL_NONCURRENT_COLD_CAMOUFOX=1;HISTORICAL_OLD_KEY=1;HISTORICAL_MISSING_OLD_KEY_BLOCKED=1;LIVE_LKG_CERTIFICATE=0"
         );
         Ok(())
     }

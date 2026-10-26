@@ -180,6 +180,10 @@ struct BackendState {
     pending_object: Option<Vec<u8>>,
     object: Option<Vec<u8>>,
     retained_object: Option<(BridgeProfileGenerationSuccessorRequest, Vec<u8>)>,
+    // Fixture-only retained old-root outage. Production uses the existing
+    // authenticated keyring; a missing historical key must never silently
+    // fall back to the newest root or trigger a new browser writer.
+    historical_root_available: bool,
     events: Vec<String>,
 }
 
@@ -200,6 +204,7 @@ impl BackendState {
             pending_object: None,
             object: None,
             retained_object: None,
+            historical_root_available: true,
             events: Vec::new(),
         })
     }
@@ -537,7 +542,8 @@ impl BackendState {
         // Use only the key version authenticated in the old immutable
         // object's metadata. Never substitute the currently active root.
         let opening_key = match inspected.metadata().key_id().as_str() {
-            ROOT_KEY_ID => [7_u8; 32],
+            ROOT_KEY_ID if self.historical_root_available => [7_u8; 32],
+            ROOT_KEY_ID => return Err(BridgePortError::InvalidResponse),
             ROTATED_ROOT_KEY_ID => [9_u8; 32],
             _ => return Err(BridgePortError::InvalidResponse),
         };
