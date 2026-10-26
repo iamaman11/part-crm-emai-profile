@@ -70,6 +70,8 @@ mod windows_device_pairing;
 #[cfg(windows)]
 pub mod windows_generation_put;
 #[cfg(windows)]
+pub mod windows_generation_get;
+#[cfg(windows)]
 pub mod windows_native;
 
 use bridge_domain::BridgePortError;

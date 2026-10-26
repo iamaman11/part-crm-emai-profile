@@ -93,7 +93,7 @@ impl WindowsSignedGenerationObjectPut {
         let signed_url = capability
             .url()
             .map_err(|_| BridgePortError::InvalidResponse)?;
-        if !valid_signed_r2_put_url(signed_url) {
+        if !valid_signed_r2_url(signed_url) {
             return Err(BridgePortError::InvalidResponse);
         }
         let headers = capability
@@ -209,7 +209,7 @@ fn decode_curl_http_output(output: Output) -> Result<(u16, Vec<u8>), BridgePortE
     Ok((status, output.stdout[..marker].to_vec()))
 }
 
-fn valid_signed_r2_put_url(value: &str) -> bool {
+pub(crate) fn valid_signed_r2_url(value: &str) -> bool {
     if value.is_empty()
         || value.len() > MAX_SIGNED_GENERATION_URL_BYTES
         || value
@@ -271,14 +271,14 @@ fn valid_header_value(value: &str) -> bool {
             .any(|byte| byte == b'\r' || byte == b'\n' || byte == 0)
 }
 
-fn system_curl_executable() -> Result<PathBuf, BridgePortError> {
+pub(crate) fn system_curl_executable() -> Result<PathBuf, BridgePortError> {
     let system_root = env::var_os("SystemRoot").ok_or(BridgePortError::Unavailable)?;
     let curl_executable = PathBuf::from(system_root).join("System32").join("curl.exe");
     validate_regular_absolute_file(&curl_executable)?;
     Ok(curl_executable)
 }
 
-fn inherit_windows_system_root(command: &mut Command) {
+pub(crate) fn inherit_windows_system_root(command: &mut Command) {
     for key in ["SystemRoot", "WINDIR"] {
         if let Some(value) = env::var_os(key) {
             command.env(key, value);
@@ -299,12 +299,12 @@ fn validate_regular_absolute_file(path: &Path) -> Result<(), BridgePortError> {
 
 #[cfg(test)]
 mod tests {
-    use super::{valid_header_name, valid_header_value, valid_signed_r2_put_url};
+    use super::{valid_header_name, valid_header_value, valid_signed_r2_url};
 
     #[test]
     fn signed_put_url_requires_direct_canonical_r2_authority() {
         let good = "https://0123456789abcdef0123456789abcdef.r2.cloudflarestorage.com/profile-generations/tenants/tenant_01/profiles/profile_01/generations/generation_01.bpgc?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=access%2F20260830%2Fauto%2Fs3%2Faws4_request&X-Amz-Date=20260830T120000Z&X-Amz-Expires=300&X-Amz-SignedHeaders=content-type%3Bhost&X-Amz-Signature=abc";
-        assert!(valid_signed_r2_put_url(good));
+        assert!(valid_signed_r2_url(good));
         for bad in [
             good.replacen("https://", "http://", 1),
             good.replacen(".r2.cloudflarestorage.com", ".example.com", 1),
@@ -316,7 +316,7 @@ mod tests {
                 1,
             ),
         ] {
-            assert!(!valid_signed_r2_put_url(&bad));
+            assert!(!valid_signed_r2_url(&bad));
         }
     }
 
