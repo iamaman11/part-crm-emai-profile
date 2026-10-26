@@ -635,6 +635,82 @@ mod tests {
     }
 
     #[test]
+    fn workspace_snapshot_and_bpgc_container_round_trip_using_only_file_spools()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use encrypted_generation_domain::{
+            GenerationDek, GenerationIdentity, GenerationMetadata, KeyId, NoncePrefix,
+            open_generation_streaming, seal_generation_streaming,
+        };
+        use std::io::{Read, Seek, SeekFrom};
+        let fixture = Fixture::new()?;
+        let result = (|| {
+            let base = GenerationId::parse("generation_streamed_snapshot_base")?;
+            let next = GenerationId::parse("generation_streamed_snapshot_next")?;
+            let source = fixture.root.create_generation(
+                &fixture.tenant_id, &fixture.profile_id, &base,
+            )?;
+            fs::write(source.path().join("prefs.js"), b"immutable Firefox prefs")?;
+            let directory = source.path().join("user_data");
+            fs::create_dir_all(&directory)?;
+            fs::write(directory.join("cookies.sqlite-wal"), vec![0x4a; 3_700_016])?;
+            let inventory = source.inventory()?;
+            let snapshot_path = fixture.root.path().join("k2-snapshot-test.bin");
+            let container_path = fixture.root.path().join("k2-container-test.bin");
+            let reopened_path = fixture.root.path().join("k2-reopened-test.bin");
+            let mut snapshot = fs::OpenOptions::new().create_new(true)
+                .write(true).read(true).open(&snapshot_path)?;
+            let report = encode_workspace_snapshot_streaming(&source, &inventory, &mut snapshot)?;
+            snapshot.sync_all()?;
+            snapshot.seek(SeekFrom::Start(0))?;
+            let identity = GenerationIdentity::new(
+                fixture.tenant_id.clone(), fixture.profile_id.clone(), next,
+                Some(base),
+            );
+            let key = GenerationDek::new(KeyId::parse("streaming-snapshot-key")?, [0x21; 32]);
+            let nonce = NoncePrefix::new([0x2a; 16]);
+            let metadata = GenerationMetadata::for_reader(
+                identity, key.key_id().clone(), nonce, 65_536, &mut snapshot,
+            )?;
+            assert_eq!(report.plaintext_bytes, metadata.plaintext_bytes());
+            assert_eq!(
+                report.plaintext_digest,
+                metadata.plaintext_digest().bytes(),
+            );
+            snapshot.seek(SeekFrom::Start(0))?;
+            let mut container = fs::OpenOptions::new().create_new(true)
+                .write(true).read(true).open(&container_path)?;
+            let sealed = seal_generation_streaming(
+                &metadata, &key, &mut snapshot, &mut container,
+            )?;
+            container.sync_all()?;
+            container.seek(SeekFrom::Start(0))?;
+            let mut reopened = fs::OpenOptions::new().create_new(true)
+                .write(true).read(true).open(&reopened_path)?;
+            let opened = open_generation_streaming(&mut container, &key, &mut reopened)?;
+            reopened.sync_all()?;
+            assert_eq!(opened, sealed);
+            assert_eq!(reopened.metadata()?.len(), snapshot.metadata()?.len());
+            reopened.seek(SeekFrom::Start(0))?;
+            snapshot.seek(SeekFrom::Start(0))?;
+            let mut expected = [0_u8; 65_536];
+            let mut actual = [0_u8; 65_536];
+            loop {
+                let count = snapshot.read(&mut expected)?;
+                if count == 0 {
+                    assert_eq!(reopened.read(&mut actual)?, 0);
+                    break;
+                }
+                reopened.read_exact(&mut actual[..count])?;
+                assert_eq!(&expected[..count], &actual[..count]);
+            }
+            assert_eq!(source.inventory()?, inventory);
+            Ok::<(), Box<dyn std::error::Error>>(())
+        })();
+        fixture.cleanup();
+        result
+    }
+
+    #[test]
     fn streamed_snapshot_preserves_native_bytes_on_changed_file_and_failed_sink()
     -> Result<(), Box<dyn std::error::Error>> {
         let fixture = Fixture::new()?;

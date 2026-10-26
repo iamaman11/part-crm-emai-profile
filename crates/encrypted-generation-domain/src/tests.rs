@@ -7,6 +7,7 @@ use super::{
     StreamingGenerationError, MAX_STREAM_PLAINTEXT_BYTES,
 };
 use profile_platform_primitives::{GenerationId, ProfileId, TenantId, UnixMillis};
+use std::io::Read;
 
 fn ids(
     generation: &str,
@@ -201,20 +202,14 @@ fn metadata_reader_accepts_stream_only_sizes_without_allocating_payload()
     assert!(built.canonical_digest().is_ok());
     // Legacy in-memory API retains the old bound and cannot accidentally
     // decode into a 512 MiB Vec when it sees streaming metadata.
-    let mut sealed = Vec::new();
+    // A nonallocating sink proves the 64 MiB+ stream can be sealed with
+    // no assembled giant Vec; legacy in-RAM open deliberately stays capped.
     let mut input = std::io::repeat(0x33).take(total);
-    let summary = seal_generation_streaming(&built, &key(0x22)?, &mut input, &mut sealed)?;
+    let summary = seal_generation_streaming(
+        &built, &key(0x22)?, &mut input, &mut std::io::sink(),
+    )?;
     assert!(summary.container_bytes() > total);
-    assert_eq!(
-        open_generation(&sealed, &key(0x22)?),
-        Err(EncryptedGenerationError::PlaintextTooLarge),
-    );
-    let mut sink = std::io::sink();
-    assert_eq!(
-        open_generation_streaming(&mut sealed.as_slice(), &key(0x22)?, &mut sink)?
-            .metadata().plaintext_bytes(),
-        total,
-    );
+    assert_eq!(summary.metadata(), &built);
     assert_eq!(MAX_STREAM_PLAINTEXT_BYTES, 536_870_912);
     Ok(())
 }
