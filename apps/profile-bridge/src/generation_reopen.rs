@@ -785,10 +785,7 @@ mod tests {
     #[test]
     fn streamed_transport_legacy_incomplete_workspace_fallback_is_strictly_bounded()
     -> Result<(), Box<dyn std::error::Error>> {
-        let dir = std::env::temp_dir().join(format!(
-            "k2-legacy-fallback-{}",
-            std::process::id()
-        ));
+        let dir = std::env::temp_dir().join(format!("k2-legacy-fallback-{}", std::process::id()));
         // A missing fixture from a previous failed test must not be silently
         // overwritten. Distinct test components use distinct generation IDs.
         let file = dir.join("existing-ciphertext");
