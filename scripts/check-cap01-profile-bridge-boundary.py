@@ -71,7 +71,7 @@ REQUIRED_COMPOSITION_MARKERS = (
     ".reprove_retained_save_writer()",
     ".observe_controlled_close(&session_id)",
     ".close_with_durable_local_intent(&materialization_root, now()?)",
-    ".save_retained_successor(",
+    ".save_retained_successor_streaming(",
     ".runtime_timing()",
     ".heartbeat(observed_at)",
     "RuntimeDisplayMode::Headful",
@@ -145,6 +145,7 @@ FORBIDDEN_UNGOVERNED_EFFECT_MARKERS = (
 
 FORBIDDEN_COMPOSITION_MARKERS = (
     "CompositionUnavailable",
+    ".save_retained_successor(",
     "profile-bridge-synthetic",
     "FakeCamouhost",
     "FakeProcessControl",
@@ -281,9 +282,13 @@ def validate(root: Path) -> None:
 
     close_observe = composition.find(".observe_controlled_close(&session_id)")
     mutating_close = composition.find(".close_with_durable_local_intent(&materialization_root, now()?)")
-    save = composition.find(".save_retained_successor(")
-    if min(close_observe, mutating_close, save) < 0 or not close_observe < mutating_close < save:
-        fail("shipping controlled-close witness must precede the sole mutating close and canonical save")
+    save = composition.find(".save_retained_successor_streaming(")
+    if (
+        min(close_observe, mutating_close, save) < 0
+        or not close_observe < mutating_close < save
+        or composition.count(".save_retained_successor_streaming(") != 2
+    ):
+        fail("shipping controlled-close witness must precede canonical streaming save and same-attempt retry")
 
     manifest = tomllib.loads(manifest_path.read_text(encoding="utf-8"))
     validate_binary_inventory(manifest)
@@ -367,7 +372,7 @@ def write_fixture(root: Path) -> None:
         "// .reprove_retained_save_writer()\n"
         "// .observe_controlled_close(&session_id)\n"
         "// .close_with_durable_local_intent(&materialization_root, now()?)\n"
-        "// .save_retained_successor(\n"
+        "// .save_retained_successor_streaming(\n"
         "// .runtime_timing()\n"
         "// .heartbeat(observed_at)\n"
         "// RuntimeDisplayMode::Headful\n"
@@ -686,10 +691,20 @@ def self_test() -> None:
         composition.write_text(safe_composition, encoding="utf-8")
 
         composition.write_text(
-            safe_composition.replace("// .save_retained_successor(\n", ""),
+            safe_composition.replace("// .save_retained_successor_streaming(\n", ""),
             encoding="utf-8",
         )
         expect_rejected(root, "shipping close without canonical successor save")
+        composition.write_text(safe_composition, encoding="utf-8")
+
+        composition.write_text(
+            safe_composition.replace(
+                "// .save_retained_successor_streaming(\\n",
+                "// .save_retained_successor(\\n",
+            ),
+            encoding="utf-8",
+        )
+        expect_rejected(root, "in-memory predecessor cannot replace streaming production save")
         composition.write_text(safe_composition, encoding="utf-8")
 
         composition.write_text(

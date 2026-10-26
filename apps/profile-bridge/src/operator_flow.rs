@@ -29,20 +29,26 @@ use crate::runtime_bundle::{
 use crate::shipping_control_plane::{MachineHttpPort, ShippingControlPlaneError};
 #[cfg(any(windows, test))]
 use crate::shipping_generation_save::SignedGenerationObjectStreamPutPort;
+use crate::shipping_generation_save::{CommittedGenerationSuccessor, ShippingGenerationSaveError};
+#[cfg(any(test, feature = "synthetic-test-bin"))]
 use crate::shipping_generation_save::{
-    CommittedGenerationSuccessor, ShippingGenerationSaveError, SignedGenerationObjectPutPort,
-    prepare_retained_generation_successor, publish_verify_and_commit_successor,
+    SignedGenerationObjectPutPort, prepare_retained_generation_successor,
+    publish_verify_and_commit_successor,
 };
-use crate::shipping_generation_successor_control::{
-    ControlPlaneGenerationSuccessor, GenerationSuccessorControlError,
-};
+use crate::shipping_generation_successor_control::GenerationSuccessorControlError;
+#[cfg(any(test, feature = "synthetic-test-bin"))]
+use crate::shipping_generation_successor_control::ControlPlaneGenerationSuccessor;
 #[cfg(any(windows, test))]
 use crate::shipping_generation_successor_control::{
     RestartExactLocalCompletionError, publish_streamed_exact_under_writer,
 };
 use crate::shipping_save_attempt::{
-    SaveAttemptEvidenceError, has_unresolved_save_attempt_for_profile, inspect_exact_save_attempt,
-    persist_exact_save_attempt, persist_local_unsynced_intent, retire_fully_saved_attempt,
+    SaveAttemptEvidenceError, has_unresolved_save_attempt_for_profile,
+    persist_local_unsynced_intent,
+};
+#[cfg(any(test, feature = "synthetic-test-bin"))]
+use crate::shipping_save_attempt::{
+    inspect_exact_save_attempt, persist_exact_save_attempt, retire_fully_saved_attempt,
     retire_local_unsynced_after_exact_checkpoint,
 };
 #[cfg(any(windows, test))]
@@ -1167,10 +1173,9 @@ where
         })
     }
 
-    /// Canonical ordinary P3 save. Pre-commit failures retain dirty local ownership and the exact
-    /// coordinator lease for retry. Once `publish_verify_and_commit_successor` returns, N+1 is the
-    /// backend authority permanently; local completion can require recovery but can never fall back
-    /// to N or undo the commit.
+    /// Compatibility-only in-memory Save for synthetic/legacy tests.
+    /// Production Windows uses `save_retained_successor_streaming` only.
+    #[cfg(any(test, feature = "synthetic-test-bin"))]
     pub fn save_retained_successor<T, U>(
         &mut self,
         root: &MaterializationRoot,
