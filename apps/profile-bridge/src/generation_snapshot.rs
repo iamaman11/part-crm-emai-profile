@@ -1375,10 +1375,8 @@ mod tests {
                 drop(payload);
                 let inventory = source.inventory()?;
                 assert_eq!(inventory.total_bytes(), target);
-                let key = GenerationDek::new(
-                    KeyId::parse("k2_large_file_roundtrip_key")?,
-                    [0x73; 32],
-                );
+                let key =
+                    GenerationDek::new(KeyId::parse("k2_large_file_roundtrip_key")?, [0x73; 32]);
                 let mut prehash = WorkspaceSnapshotReader::new(&source, &inventory)?;
                 let metadata = GenerationMetadata::for_reader(
                     GenerationIdentity::new(
@@ -1399,12 +1397,8 @@ mod tests {
                     .write(true)
                     .open(&sealed_path)?;
                 let mut seal_reader = WorkspaceSnapshotReader::new(&source, &inventory)?;
-                let sealed = seal_generation_streaming(
-                    &metadata,
-                    &key,
-                    &mut seal_reader,
-                    &mut ciphertext,
-                )?;
+                let sealed =
+                    seal_generation_streaming(&metadata, &key, &mut seal_reader, &mut ciphertext)?;
                 ciphertext.sync_all()?;
                 assert_eq!(ciphertext.metadata()?.len(), sealed.container_bytes());
                 assert_eq!(source.inventory()?, inventory);
@@ -1447,7 +1441,9 @@ mod tests {
                     );
                 }
                 let mut restored_large = fs::File::open(
-                    restored.path().join("user_data/storage/default/large-content.bin"),
+                    restored
+                        .path()
+                        .join("user_data/storage/default/large-content.bin"),
                 )?;
                 use std::io::Read;
                 let mut head = [0_u8; 16];
