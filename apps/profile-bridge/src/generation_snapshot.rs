@@ -1318,6 +1318,159 @@ mod tests {
         result
     }
 
+    // Expensive cross-platform acceptance exercise. Run explicitly on CI machines
+    // with enough disk (it writes >= 1 GiB of actual encrypted and decrypted bytes).
+    // This is FILE streaming proof, not a claim of signed R2/D1 or a Firefox launch.
+    #[test]
+    #[ignore = "K2 large file acceptance: run explicitly with --ignored"]
+    fn k2_full_256_and_512_mib_file_streaming_encrypt_cold_restore()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use encrypted_generation_domain::{
+            GenerationDek, GenerationIdentity, GenerationMetadata, KeyId, NoncePrefix,
+            open_generation_streaming, seal_generation_streaming,
+        };
+        use std::io::{Seek, SeekFrom, Write};
+        use std::time::Instant;
+
+        for target_mib in [256_u64, 512] {
+            let fixture = Fixture::new()?;
+            let started = Instant::now();
+            let result = (|| {
+                let base = GenerationId::parse("generation_large_file_original")?;
+                let next = GenerationId::parse("generation_large_file_cold_reopen")?;
+                let source = fixture.root.create_generation(
+                    &fixture.tenant_id,
+                    &fixture.profile_id,
+                    &base,
+                )?;
+                // Include the browser-managed native paths and a large opaque
+                // storage payload. set_len intentionally avoids a 512 MiB Vec.
+                let user_data = source.path().join("user_data");
+                fs::create_dir_all(user_data.join("storage/default"))?;
+                fs::write(source.path().join("prefs.js"), b"user_pref('K2', true);")?;
+                fs::write(
+                    source.path().join("camoufox-config.json"),
+                    b"{\"browser\":\"camoufox\"}",
+                )?;
+                fs::write(user_data.join("cookies.sqlite-wal"), vec![0x57; 65_537])?;
+                fs::write(
+                    user_data.join("storage/default/indexeddb.sqlite"),
+                    vec![0x49; 131_075],
+                )?;
+                let small = source.inventory()?.total_bytes();
+                let target = target_mib * 1_048_576;
+                assert!(small < target);
+                let native = user_data.join("storage/default/large-content.bin");
+                let mut payload = fs::OpenOptions::new()
+                    .create_new(true)
+                    .write(true)
+                    .open(&native)?;
+                let payload_len = target - small;
+                payload.set_len(payload_len)?;
+                payload.seek(SeekFrom::Start(0))?;
+                payload.write_all(b"FIREFOX-K2-BEGIN")?;
+                payload.seek(SeekFrom::Start(payload_len - 16))?;
+                payload.write_all(b"FIREFOX-K2-FINAL")?;
+                payload.sync_all()?;
+                drop(payload);
+                let inventory = source.inventory()?;
+                assert_eq!(inventory.total_bytes(), target);
+                let key = GenerationDek::new(
+                    KeyId::parse("k2_large_file_roundtrip_key")?,
+                    [0x73; 32],
+                );
+                let mut prehash = WorkspaceSnapshotReader::new(&source, &inventory)?;
+                let metadata = GenerationMetadata::for_reader(
+                    GenerationIdentity::new(
+                        fixture.tenant_id.clone(),
+                        fixture.profile_id.clone(),
+                        next.clone(),
+                        Some(base),
+                    ),
+                    key.key_id().clone(),
+                    NoncePrefix::new([0x63; 16]),
+                    65_536,
+                    &mut prehash,
+                )?;
+                let sealed_path = fixture.root.path().join("k2-sealed.bpgc");
+                let mut ciphertext = fs::OpenOptions::new()
+                    .create_new(true)
+                    .read(true)
+                    .write(true)
+                    .open(&sealed_path)?;
+                let mut seal_reader = WorkspaceSnapshotReader::new(&source, &inventory)?;
+                let sealed = seal_generation_streaming(
+                    &metadata,
+                    &key,
+                    &mut seal_reader,
+                    &mut ciphertext,
+                )?;
+                ciphertext.sync_all()?;
+                assert_eq!(ciphertext.metadata()?.len(), sealed.container_bytes());
+                assert_eq!(source.inventory()?, inventory);
+                // Cold path consumes the immutable file as a Read stream,
+                // never copies its contents into a generation-sized Vec.
+                ciphertext.seek(SeekFrom::Start(0))?;
+                let mut plaintext = fs::OpenOptions::new()
+                    .create_new(true)
+                    .read(true)
+                    .write(true)
+                    .open(fixture.root.path().join("k2-cold-plaintext.bpgw"))?;
+                let opened = open_generation_streaming(&mut ciphertext, &key, &mut plaintext)?;
+                plaintext.sync_all()?;
+                assert_eq!(opened, sealed);
+                assert_eq!(plaintext.metadata()?.len(), metadata.plaintext_bytes());
+                plaintext.seek(SeekFrom::Start(0))?;
+                let restored = materialize_workspace_snapshot_streaming_with_pre_publish(
+                    &fixture.root,
+                    &fixture.tenant_id,
+                    &fixture.profile_id,
+                    &next,
+                    &mut plaintext,
+                    StreamedWorkspaceSnapshot {
+                        plaintext_bytes: opened.metadata().plaintext_bytes(),
+                        plaintext_digest: opened.metadata().plaintext_digest().bytes(),
+                    },
+                    |_| Ok(()),
+                )?;
+                assert_eq!(restored.inventory()?, inventory);
+                for path in [
+                    "prefs.js",
+                    "camoufox-config.json",
+                    "user_data/cookies.sqlite-wal",
+                    "user_data/storage/default/indexeddb.sqlite",
+                ] {
+                    assert_eq!(
+                        fs::read(restored.path().join(path))?,
+                        fs::read(source.path().join(path))?,
+                        "native file changed after cold restore: {path}",
+                    );
+                }
+                let mut restored_large = fs::File::open(
+                    restored.path().join("user_data/storage/default/large-content.bin"),
+                )?;
+                use std::io::Read;
+                let mut head = [0_u8; 16];
+                restored_large.read_exact(&mut head)?;
+                assert_eq!(&head[..16], b"FIREFOX-K2-BEGIN");
+                restored_large.seek(SeekFrom::Start(payload_len - 16))?;
+                restored_large.read_exact(&mut head)?;
+                assert_eq!(&head[..16], b"FIREFOX-K2-FINAL");
+                assert_eq!(restored_large.metadata()?.len(), payload_len);
+                eprintln!(
+                    "K2_DISK_STREAM size_mib={target_mib} native_bytes={target} plaintext_bytes={} ciphertext_bytes={} seconds={} file_spools=2",
+                    metadata.plaintext_bytes(),
+                    sealed.container_bytes(),
+                    started.elapsed().as_secs(),
+                );
+                Ok::<(), Box<dyn std::error::Error>>(())
+            })();
+            fixture.cleanup();
+            result?;
+        }
+        Ok(())
+    }
+
     #[test]
     fn streamed_materializer_refuses_trailing_corrupt_and_unsafe_native_restore()
     -> Result<(), Box<dyn std::error::Error>> {
