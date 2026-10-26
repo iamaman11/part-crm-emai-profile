@@ -67,6 +67,8 @@ REQUIRED_COMPOSITION_MARKERS = (
     "complete_active_exact_after_restart(",
     "resume_exact_successor_under_fresh_lease(",
     "resume_lone_local_unsynced_under_fresh_lease(",
+    "confirm_retained_exact_retry_nonapplication(",
+    ".reprove_retained_save_writer()",
     ".observe_controlled_close(&session_id)",
     ".close_with_durable_local_intent(&materialization_root, now()?)",
     ".save_retained_successor(",
@@ -361,6 +363,8 @@ def write_fixture(root: Path) -> None:
         "// complete_active_exact_after_restart(\n"
         "// resume_exact_successor_under_fresh_lease(\n"
         "// resume_lone_local_unsynced_under_fresh_lease(\n"
+        "// confirm_retained_exact_retry_nonapplication(\n"
+        "// .reprove_retained_save_writer()\n"
         "// .observe_controlled_close(&session_id)\n"
         "// .close_with_durable_local_intent(&materialization_root, now()?)\n"
         "// .save_retained_successor(\n"
@@ -614,6 +618,24 @@ def self_test() -> None:
             encoding="utf-8",
         )
         expect_rejected(root, "missing exact sealed successor retry path")
+        composition.write_text(safe_composition, encoding="utf-8")
+
+        composition.write_text(
+            safe_composition.replace(
+                "// confirm_retained_exact_retry_nonapplication(\n", "",
+            ),
+            encoding="utf-8",
+        )
+        expect_rejected(root, "live retry bypasses D1 nonapplication")
+        composition.write_text(safe_composition, encoding="utf-8")
+
+        composition.write_text(
+            safe_composition.replace(
+                "// .reprove_retained_save_writer()\n", "",
+            ),
+            encoding="utf-8",
+        )
+        expect_rejected(root, "live retry bypasses DO current writer proof")
         composition.write_text(safe_composition, encoding="utf-8")
 
         recovery.write_text(

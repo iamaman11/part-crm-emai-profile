@@ -131,14 +131,14 @@ mod windows {
     };
     use crate::generation_reopen::VerifiedGenerationObjectDownloader;
     use crate::local_profile::{DeliveryActivationGuard, MaterializationRoot};
-    use crate::operator_flow::ProfileBridgeOperator;
+    use crate::operator_flow::{OperatorFailureStage, OperatorFlowError, ProfileBridgeOperator};
     use crate::shipping_control_plane::{
         ControlPlaneCoordinator, ControlPlaneEnrollment, ControlPlaneLeaseTiming,
     };
     use crate::shipping_generation_successor_control::{
         RestartExactCommitObservation, RestartExactLocalCompletion,
-        complete_active_exact_after_restart, resume_exact_successor_under_fresh_lease,
-        resume_lone_local_unsynced_under_fresh_lease,
+        complete_active_exact_after_restart, confirm_retained_exact_retry_nonapplication,
+        resume_exact_successor_under_fresh_lease, resume_lone_local_unsynced_under_fresh_lease,
     };
     use crate::shipping_preflight::ShippingBrowserLaunchPreflight;
     use crate::user_diagnostics::PendingSaveReadOnlyDiagnosis;
@@ -163,6 +163,9 @@ mod windows {
     const PACKAGED_PYTHON_EXECUTABLE: &str = "python/python.exe";
     const CONTROLLED_CLOSE_POLL_MS: u64 = 250;
     const HEARTBEAT_TRANSPORT_RETRY_MS: u64 = 1_000;
+    const MAX_LIVE_SAVE_RECONNECT_ATTEMPTS: usize = 30;
+    const SAVE_RECONNECT_PAUSE_MS: u64 = 1_000;
+    const SAVE_RECONNECT_AUTHORITY_RESERVE_MS: u64 = 5_000;
 
     struct ShippingConfig {
         device_application_binding_path: PathBuf,
@@ -538,18 +541,120 @@ mod windows {
                 if heartbeat_retry_used {
                     return Err(ShippingCompositionError::HeartbeatAuthorityUncertain);
                 }
-                let completion = operator
-                    .save_retained_successor(
-                        &materialization_root,
-                        save_transport,
-                        &mut generation_uploader,
-                        now()?,
-                    )
-                    .map_err(ShippingCompositionError::Operator)?;
-                if completion.is_saved() {
-                    return Ok(());
+                let initial = operator.save_retained_successor(
+                    &materialization_root,
+                    save_transport.clone(),
+                    &mut generation_uploader,
+                    now()?,
+                );
+                match initial {
+                    Ok(completion) if completion.is_saved() => return Ok(()),
+                    Ok(_) => return Err(ShippingCompositionError::CommittedRecoveryRequired),
+                    Err(OperatorFlowError::Stage(OperatorFailureStage::GenerationSave))
+                        if operator.has_pending_dirty_close() =>
+                    {
+                        // Browser closed: WAL/native bytes and the original
+                        // workspace lock are retained. Do not start Firefox.
+                        // Retry ONLY the already-sealed exact checkpoint.
+                        // Both a current DO heartbeat AND affirmative D1
+                        // descriptor-level nonapplication are mandatory.
+                        eprintln!(
+                            "P3_RECOVERY=LOCAL_UNSYNCED;NEXT_SAFE_STEP=BOUNDED_LIVE_RECONNECT"
+                        );
+                        for _ in 0..MAX_LIVE_SAVE_RECONNECT_ATTEMPTS {
+                            let timing = operator
+                                .coordinator()
+                                .runtime_timing()
+                                .map_err(|_| ShippingCompositionError::ControlPlane)?;
+                            if !safe_reconnect_writer_window(
+                                timing.idle_expires_at_ms(),
+                                timing.hard_expires_at_ms(),
+                                now()?,
+                            ) {
+                                break;
+                            }
+                            thread::sleep(Duration::from_millis(SAVE_RECONNECT_PAUSE_MS));
+                            let timing = operator
+                                .coordinator()
+                                .runtime_timing()
+                                .map_err(|_| ShippingCompositionError::ControlPlane)?;
+                            if !safe_reconnect_writer_window(
+                                timing.idle_expires_at_ms(),
+                                timing.hard_expires_at_ms(),
+                                now()?,
+                            ) {
+                                break;
+                            }
+                            match operator.reprove_retained_save_writer() {
+                                Ok(()) => {}
+                                Err(OperatorFlowError::HeartbeatTransportUncertain) => continue,
+                                Err(error) => return Err(ShippingCompositionError::Operator(error)),
+                            }
+                            let timing = operator
+                                .coordinator()
+                                .runtime_timing()
+                                .map_err(|_| ShippingCompositionError::ControlPlane)?;
+                            if !safe_reconnect_writer_window(
+                                timing.idle_expires_at_ms(),
+                                timing.hard_expires_at_ms(),
+                                now()?,
+                            ) {
+                                break;
+                            }
+                            let original = operator
+                                .retained_save_lease()
+                                .cloned()
+                                .ok_or(ShippingCompositionError::CommittedRecoveryRequired)?;
+                            match confirm_retained_exact_retry_nonapplication(
+                                &materialization_root,
+                                &original,
+                                &mut recovery_observation_transport,
+                            ) {
+                                Ok(true) => {}
+                                Ok(false) => {
+                                    return Err(ShippingCompositionError::CommittedRecoveryRequired);
+                                }
+                                Err(crate::shipping_generation_successor_control::RestartExactLocalCompletionError::ControlPlane(_)) => continue,
+                                Err(_) => {
+                                    return Err(ShippingCompositionError::CommittedRecoveryRequired);
+                                }
+                            }
+                            let timing = operator
+                                .coordinator()
+                                .runtime_timing()
+                                .map_err(|_| ShippingCompositionError::ControlPlane)?;
+                            if !safe_reconnect_writer_window(
+                                timing.idle_expires_at_ms(),
+                                timing.hard_expires_at_ms(),
+                                now()?,
+                            ) {
+                                break;
+                            }
+                            match operator.save_retained_successor(
+                                &materialization_root,
+                                save_transport.clone(),
+                                &mut generation_uploader,
+                                now()?,
+                            ) {
+                                Ok(completion) if completion.is_saved() => return Ok(()),
+                                Ok(_) => {
+                                    return Err(ShippingCompositionError::CommittedRecoveryRequired);
+                                }
+                                Err(OperatorFlowError::Stage(OperatorFailureStage::GenerationSave))
+                                    if operator.has_pending_dirty_close() =>
+                                {
+                                    continue;
+                                }
+                                Err(error) => return Err(ShippingCompositionError::Operator(error)),
+                            }
+                        }
+                        eprintln!(
+                            "P3_RECOVERY=LOCAL_BYTES_RETAINED;NEXT_SAFE_STEP=FRESH_AUTHORIZED_OPEN"
+                        );
+                        return Err(ShippingCompositionError::CommittedRecoveryRequired);
+                    }
+                    Err(error) => return Err(ShippingCompositionError::Operator(error)),
                 }
-                return Err(ShippingCompositionError::CommittedRecoveryRequired);
             }
 
             if observed_at >= next_heartbeat_deadline {
@@ -718,6 +823,20 @@ mod windows {
             .ok_or(ShippingCompositionError::Clock)
     }
 
+    // This is only a server-CONFIRMED live writer's authority window.
+    // Wall-clock passage NEVER extends the DO fence, and no upload is
+    // started too near the hard/idle expiration.
+    fn safe_reconnect_writer_window(
+        idle_expires_at_ms: u64,
+        hard_expires_at_ms: u64,
+        observed_at: UnixMillis,
+    ) -> bool {
+        observed_at
+            .value()
+            .checked_add(SAVE_RECONNECT_AUTHORITY_RESERVE_MS)
+            .is_some_and(|finish_by| finish_by < idle_expires_at_ms.min(hard_expires_at_ms))
+    }
+
     // Retry at most once, and strictly before the last confirmed deadline.
     // No old lease/fence authority is extended by the passage of time.
     fn bounded_heartbeat_retry_at(expiry: u64, observed_at: UnixMillis) -> Option<UnixMillis> {
@@ -735,8 +854,27 @@ mod windows {
 
     #[cfg(test)]
     mod heartbeat_safety_tests {
-        use super::bounded_heartbeat_retry_at;
+        use super::{bounded_heartbeat_retry_at, safe_reconnect_writer_window};
         use profile_platform_primitives::UnixMillis;
+
+        #[test]
+        fn live_save_reconnect_requires_positive_deadline_margin() {
+            assert!(safe_reconnect_writer_window(
+                60_000, 120_000, UnixMillis::new(1_000),
+            ));
+            assert!(!safe_reconnect_writer_window(
+                60_000, 120_000, UnixMillis::new(55_000),
+            ));
+            assert!(!safe_reconnect_writer_window(
+                60_000, 120_000, UnixMillis::new(60_000),
+            ));
+            assert!(!safe_reconnect_writer_window(
+                60_000, 120_000, UnixMillis::new(u64::MAX),
+            ));
+            assert!(!safe_reconnect_writer_window(
+                80_000, 60_000, UnixMillis::new(56_000),
+            ));
+        }
 
         #[test]
         fn retry_is_at_most_one_second_and_never_reaches_lease_deadline() {
