@@ -2,6 +2,7 @@ use crate::local_profile::{
     GenerationInventory, GenerationWorkspace, LocalProfileError, MaterializationRoot,
 };
 use profile_platform_primitives::{GenerationId, ProfileId, TenantId};
+use sha2::{Digest, Sha256};
 use std::collections::HashSet;
 use std::fmt;
 use std::fs::{self, File, OpenOptions};
@@ -11,6 +12,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 pub(crate) const WORKSPACE_SNAPSHOT_MAGIC: &[u8; 8] = b"BPGW0001";
 pub(crate) const MAX_WORKSPACE_SNAPSHOT_BYTES: usize = 67_108_864;
+/// Streaming-only BPGW0001 size; legacy Vec API remains capped at 64 MiB.
+pub(crate) const MAX_STREAM_WORKSPACE_SNAPSHOT_BYTES: u64 = 536_870_912;
 const MAX_SNAPSHOT_FILES: usize = 100_000;
 const MAX_RELATIVE_PATH_BYTES: usize = 512;
 const STAGING_ATTEMPTS: usize = 32;
@@ -49,6 +52,89 @@ impl From<LocalProfileError> for GenerationSnapshotError {
     fn from(error: LocalProfileError) -> Self {
         Self::Local(error)
     }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct StreamedWorkspaceSnapshot {
+    pub(crate) plaintext_bytes: u64,
+    pub(crate) plaintext_digest: [u8; 32],
+}
+
+/// Canonical BPGW0001, but no complete Firefox file or profile is held in
+/// memory. Writes to an UNPUBLISHED output: caller must fsync/no-replace
+/// and publish only after success and exact source inventory revalidation.
+pub(crate) fn encode_workspace_snapshot_streaming(
+    workspace: &GenerationWorkspace,
+    expected_inventory: &GenerationInventory,
+    output: &mut impl Write,
+) -> Result<StreamedWorkspaceSnapshot, GenerationSnapshotError> {
+    if expected_inventory.entries().len() > MAX_SNAPSHOT_FILES {
+        return Err(GenerationSnapshotError::SnapshotTooLarge);
+    }
+    let count = u32::try_from(expected_inventory.entries().len())
+        .map_err(|_| GenerationSnapshotError::SnapshotTooLarge)?;
+    let mut length = 0_u64;
+    let mut digest = Sha256::new();
+    write_stream_piece(output, &mut digest, &mut length, WORKSPACE_SNAPSHOT_MAGIC)?;
+    write_stream_piece(output, &mut digest, &mut length, &count.to_be_bytes())?;
+    let mut previous: Option<&str> = None;
+    let mut seen = HashSet::new();
+    let mut buffer = [0_u8; 65_536];
+    for entry in expected_inventory.entries() {
+        let relative = entry.relative_path();
+        validate_windows_relative_path(relative)?;
+        if previous.is_some_and(|p| p >= relative) || !seen.insert(relative.to_lowercase()) {
+            return Err(GenerationSnapshotError::UnsafePath);
+        }
+        previous = Some(relative);
+        let name = relative.as_bytes();
+        let name_length = u16::try_from(name.len())
+            .map_err(|_| GenerationSnapshotError::SnapshotTooLarge)?;
+        write_stream_piece(output, &mut digest, &mut length, &name_length.to_be_bytes())?;
+        write_stream_piece(output, &mut digest, &mut length, name)?;
+        write_stream_piece(output, &mut digest, &mut length, &entry.bytes().to_be_bytes())?;
+        let full = workspace.path().join(relative);
+        let metadata = fs::symlink_metadata(&full).map_err(LocalProfileError::from)?;
+        if metadata.file_type().is_symlink()
+            || !metadata.is_file()
+            || metadata.len() != entry.bytes()
+        {
+            return Err(GenerationSnapshotError::SourceChanged);
+        }
+        let mut file = File::open(&full).map_err(LocalProfileError::from)?;
+        let mut remaining = entry.bytes();
+        while remaining > 0 {
+            let take = usize::try_from(remaining.min(buffer.len() as u64))
+                .map_err(|_| GenerationSnapshotError::SnapshotTooLarge)?;
+            file.read_exact(&mut buffer[..take]).map_err(LocalProfileError::from)?;
+            write_stream_piece(output, &mut digest, &mut length, &buffer[..take])?;
+            remaining -= take as u64;
+        }
+    }
+    if workspace.inventory().map_err(GenerationSnapshotError::Local)? != *expected_inventory {
+        return Err(GenerationSnapshotError::SourceChanged);
+    }
+    Ok(StreamedWorkspaceSnapshot {
+        plaintext_bytes: length,
+        plaintext_digest: digest.finalize().into(),
+    })
+}
+
+fn write_stream_piece(
+    output: &mut impl Write,
+    digest: &mut Sha256,
+    length: &mut u64,
+    piece: &[u8],
+) -> Result<(), GenerationSnapshotError> {
+    let next = length.checked_add(piece.len() as u64)
+        .ok_or(GenerationSnapshotError::SnapshotTooLarge)?;
+    if next > MAX_STREAM_WORKSPACE_SNAPSHOT_BYTES {
+        return Err(GenerationSnapshotError::SnapshotTooLarge);
+    }
+    output.write_all(piece).map_err(LocalProfileError::from)?;
+    digest.update(piece);
+    *length = next;
+    Ok(())
 }
 
 pub(crate) fn encode_workspace_snapshot(
@@ -467,6 +553,7 @@ fn checked_extend(output: &mut Vec<u8>, bytes: &[u8]) -> Result<(), GenerationSn
 mod tests {
     use super::{
         GenerationSnapshotError, WORKSPACE_SNAPSHOT_MAGIC, encode_workspace_snapshot,
+        encode_workspace_snapshot_streaming,
         materialize_workspace_snapshot, materialize_workspace_snapshot_with_pre_publish,
         parse_workspace_snapshot,
     };
@@ -474,6 +561,7 @@ mod tests {
     use profile_platform_primitives::{GenerationId, ProfileId, TenantId};
     use std::fs;
     use std::path::PathBuf;
+    use sha2::Digest;
     use std::sync::atomic::{AtomicU64, Ordering};
 
     static TEMP_COUNTER: AtomicU64 = AtomicU64::new(1);
@@ -516,6 +604,63 @@ mod tests {
             output.extend_from_slice(content);
         }
         output
+    }
+
+    #[test]
+    fn streamed_snapshot_is_byte_identical_and_digest_identical_to_legacy()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let fixture = Fixture::new()?;
+        let result = (|| {
+            let generation = GenerationId::parse("generation_streaming_snapshot")?;
+            let source = fixture.root.create_generation(
+                &fixture.tenant_id, &fixture.profile_id, &generation,
+            )?;
+            fs::write(source.path().join("prefs.js"), b"user_pref('a', true);")?;
+            let directory = source.path().join("user_data");
+            fs::create_dir_all(&directory)?;
+            fs::write(directory.join("cookies.sqlite-wal"), vec![0x8a; 180_093])?;
+            let inventory = source.inventory()?;
+            let legacy = encode_workspace_snapshot(&source, &inventory)?;
+            let mut output = Vec::new();
+            let report = encode_workspace_snapshot_streaming(
+                &source, &inventory, &mut output,
+            )?;
+            assert_eq!(legacy, output);
+            assert_eq!(report.plaintext_bytes, output.len() as u64);
+            assert_eq!(report.plaintext_digest, sha2::Sha256::digest(&legacy).into());
+            Ok::<(), Box<dyn std::error::Error>>(())
+        })();
+        fixture.cleanup();
+        result
+    }
+
+    #[test]
+    fn streamed_snapshot_preserves_native_bytes_on_changed_file_and_failed_sink()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let fixture = Fixture::new()?;
+        let result = (|| {
+            let generation = GenerationId::parse("generation_streaming_bounded_failure")?;
+            let source = fixture.root.create_generation(
+                &fixture.tenant_id, &fixture.profile_id, &generation,
+            )?;
+            let native = source.path().join("prefs.js");
+            fs::write(&native, b"first-native-close")?;
+            let previous = source.inventory()?;
+            fs::write(&native, b"changed-after-close")?;
+            assert!(encode_workspace_snapshot_streaming(
+                &source, &previous, &mut Vec::new(),
+            ).is_err());
+            let current = source.inventory()?;
+            let mut tiny = [0_u8; 4];
+            let mut no_space = std::io::Cursor::new(&mut tiny[..]);
+            assert!(encode_workspace_snapshot_streaming(
+                &source, &current, &mut no_space,
+            ).is_err());
+            assert_eq!(fs::read(&native)?, b"changed-after-close");
+            Ok::<(), Box<dyn std::error::Error>>(())
+        })();
+        fixture.cleanup();
+        result
     }
 
     #[test]
