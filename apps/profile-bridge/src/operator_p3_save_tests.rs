@@ -726,10 +726,21 @@ fn one_profile_completes_one_hundred_sequential_streaming_saves_without_n_plus_t
             &profile,
         )?);
         let successor = completed.committed().generation_id().clone();
-        assert!(seen.insert(successor.clone()), "no repeated N+1 or silent N+2");
-        let saved = fixture.root.open_generation(&tenant, &profile, &successor)?;
-        assert_eq!(fs::read(saved.path().join("prefs.js"))?, native_content.as_bytes());
-        assert_eq!(fs::read(workspace.path().join("prefs.js"))?, native_content.as_bytes());
+        assert!(
+            seen.insert(successor.clone()),
+            "no repeated N+1 or silent N+2"
+        );
+        let saved = fixture
+            .root
+            .open_generation(&tenant, &profile, &successor)?;
+        assert_eq!(
+            fs::read(saved.path().join("prefs.js"))?,
+            native_content.as_bytes()
+        );
+        assert_eq!(
+            fs::read(workspace.path().join("prefs.js"))?,
+            native_content.as_bytes()
+        );
 
         fixture.generation_id = successor;
         let epoch = fixture.lease.epoch() + 1;
@@ -742,11 +753,17 @@ fn one_profile_completes_one_hundred_sequential_streaming_saves_without_n_plus_t
             FencingToken::parse(format!("fence_p3_seq_{sequence:03}"))?,
         )?;
         fixture.launch_intent_id = LaunchIntentId::parse(format!("launch_p3_seq_{sequence:03}"))?;
-        fixture.claim_uri =
-            ClaimUri::parse(&format!("profilebridge://claim/claim_p3_seq_{sequence:024}"))?;
+        fixture.claim_uri = ClaimUri::parse(&format!(
+            "profilebridge://claim/claim_p3_seq_{sequence:024}"
+        ))?;
     }
     assert_eq!(seen.len(), 101);
-    assert!(fixture.root.open_generation(&tenant, &profile, &fixture.generation_id).is_ok());
+    assert!(
+        fixture
+            .root
+            .open_generation(&tenant, &profile, &fixture.generation_id)
+            .is_ok()
+    );
     Ok(())
 }
 
