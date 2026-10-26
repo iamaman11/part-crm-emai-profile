@@ -703,10 +703,7 @@ mod p3_fixture {
             None,
         )?;
         let (missing_process, missing_camouhost) =
-            crate::camouhost_process::ManagedCamouhostProcess::pair(
-                missing_config,
-                missing_slot,
-            );
+            crate::camouhost_process::ManagedCamouhostProcess::pair(missing_config, missing_slot);
         let mut missing_operator = ProfileBridgeOperator::new(
             FakeDeviceIdentity::new(DeviceId::parse(DEVICE)?),
             FakeDeviceKeyStore::default(),
@@ -754,7 +751,10 @@ mod p3_fixture {
                 "the negative run must reach actual historical old-key derivation, not fail at Coordinator admission"
             );
             assert!(
-                negative.events.iter().any(|event| event.starts_with("get:")),
+                negative
+                    .events
+                    .iter()
+                    .any(|event| event.starts_with("get:")),
                 "the negative run must read the retained immutable old object"
             );
         }
