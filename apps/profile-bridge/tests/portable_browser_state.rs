@@ -447,6 +447,12 @@ mod p3_fixture {
             operator.active_local_state(),
             Some(LocalGenerationState::InUse)
         );
+        // The installed controlled Close must durably pin the original
+        // LOCAL_UNSYNCED N+1 before the streaming upload starts. A plain
+        // synthetic close is not the Windows release Save entrypoint.
+        #[cfg(windows)]
+        operator.close_with_durable_local_intent(&root, UnixMillis::new(20))?;
+        #[cfg(not(windows))]
         operator.close(UnixMillis::new(20))?;
         assert_eq!(
             operator.pending_dirty_local_state(),
