@@ -668,6 +668,10 @@ mod tests {
         let pending = dir.join(".pending-network-ciphertext");
         let mut fetcher = VerifiedGenerationObjectStreamDownloader::new(StreamFileGet(original));
         let mut object = fetcher.download_to_new_pending_file(&capability, &pending)?;
+        let prelude = object.read_descriptor_verified_metadata_prelude()?;
+        let inspected = encrypted_generation_domain::inspect_generation_metadata_prelude(&prelude)?;
+        assert_eq!(inspected.metadata_digest(), expected.metadata_digest());
+        assert_eq!(inspected.metadata().generation_id(), &generation);
         let mut opened_count = 0_u64;
         struct CountSink<'a>(&'a mut u64);
         impl Write for CountSink<'_> {

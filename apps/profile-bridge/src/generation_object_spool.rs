@@ -3,7 +3,10 @@
 //! This is not another generation or authority. The existing save owner must
 //! persist the exact checkpoint and receive a fresh signed PUT capability
 //! before a network effect. Unknown/torn spool files are NEVER removed here.
-use encrypted_generation_domain::MAX_STREAM_CONTAINER_BYTES;
+use encrypted_generation_domain::{
+    MAX_GENERATION_METADATA_PRELUDE_BYTES, MAX_STREAM_CONTAINER_BYTES,
+    inspect_generation_metadata_prelude,
+};
 use sha2::{Digest, Sha256};
 use std::fs::{self, File};
 use std::io::{self, Read, Seek, SeekFrom};
@@ -83,6 +86,42 @@ impl VerifiedGenerationObjectFile {
     /// The open handle, not a reopened pathname, is the byte source for PUT.
     pub fn reader(&mut self) -> &mut File {
         &mut self.file
+    }
+
+    /// Read only the bounded BPGC metadata prelude after checking the entire
+    /// file against its original descriptor. The returned bytes can be sent to
+    /// the existing authenticated opening-material owner; this does NOT
+    /// establish AEAD validity, browser WORKING or launch authority.
+    ///
+    /// Never allocate a generation-sized Vec for a 256/512 MiB R2 object.
+    /// Recheck the same open file handle after parsing and rewind it for
+    /// the later authenticated streaming decrypt.
+    pub fn read_descriptor_verified_metadata_prelude(&mut self) -> io::Result<Vec<u8>> {
+        self.recheck_and_rewind()?;
+        let mut header = [0_u8; 12];
+        self.file.read_exact(&mut header)?;
+        if &header[..8] != b"BPGC0001" {
+            return Err(invalid_source());
+        }
+        let metadata_len =
+            u32::from_be_bytes([header[8], header[9], header[10], header[11]]) as usize;
+        if metadata_len == 0
+            || metadata_len > MAX_GENERATION_METADATA_PRELUDE_BYTES - header.len()
+            || (header.len() + metadata_len) as u64 > self.expected_bytes
+        {
+            return Err(invalid_source());
+        }
+        let mut prelude = Vec::with_capacity(header.len() + metadata_len);
+        prelude.extend_from_slice(&header);
+        prelude.resize(header.len() + metadata_len, 0);
+        self.file.read_exact(&mut prelude[header.len()..])?;
+        let inspected =
+            inspect_generation_metadata_prelude(&prelude).map_err(|_| invalid_source())?;
+        if inspected.prelude_bytes() != prelude.len() {
+            return Err(invalid_source());
+        }
+        self.recheck_and_rewind()?;
+        Ok(prelude)
     }
 
     /// May be called after every network effect. Exact digest/size must
@@ -242,6 +281,11 @@ mod tests {
             report.container_digest().bytes(),
         )?;
         assert_eq!(sealed.expected_bytes(), report.container_bytes());
+        let prelude = sealed.read_descriptor_verified_metadata_prelude()?;
+        let inspected = encrypted_generation_domain::inspect_generation_metadata_prelude(&prelude)?;
+        assert_eq!(inspected.metadata_digest(), report.metadata_digest());
+        assert_eq!(inspected.metadata().generation_id(), metadata.generation_id());
+        assert!(prelude.len() <= encrypted_generation_domain::MAX_GENERATION_METADATA_PRELUDE_BYTES);
         let mut sink = std::io::sink();
         let opened = open_generation_streaming(sealed.reader(), &key, &mut sink)?;
         assert_eq!(opened, report);
@@ -251,6 +295,30 @@ mod tests {
                 .is_err(),
             "foreign advertised digest cannot be replayed"
         );
+        Ok(())
+    }
+
+    #[test]
+    fn descriptor_verified_prelude_rejects_untrusted_header_without_opening_a_key()
+    -> io::Result<()> {
+        let fixture = Fixture::new()?;
+        let path = fixture.path();
+        for (case, header) in [
+            (0, [b'X', b'P', b'G', b'C', b'0', b'0', b'0', b'1', 0, 0, 0, 1]),
+            (1, [b'B', b'P', b'G', b'C', b'0', b'0', b'0', b'1', 0, 0, 16, 1]),
+        ] {
+            if case != 0 {
+                fs::remove_file(&path)?;
+            }
+            fs::write(&path, header)?;
+            let mut object = VerifiedGenerationObjectFile::open(
+                &path,
+                header.len() as u64,
+                fingerprint(&header),
+            )?;
+            assert!(object.read_descriptor_verified_metadata_prelude().is_err());
+            assert_eq!(fs::read(&path)?, header, "invalid evidence is retained");
+        }
         Ok(())
     }
 
