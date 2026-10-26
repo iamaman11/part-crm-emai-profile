@@ -373,6 +373,7 @@ def write_fixture(root: Path) -> None:
         "// .observe_controlled_close(&session_id)\n"
         "// .close_with_durable_local_intent(&materialization_root, now()?)\n"
         "// .save_retained_successor_streaming(\n"
+        "// .save_retained_successor_streaming(\n"
         "// .runtime_timing()\n"
         "// .heartbeat(observed_at)\n"
         "// RuntimeDisplayMode::Headful\n"
@@ -691,7 +692,7 @@ def self_test() -> None:
         composition.write_text(safe_composition, encoding="utf-8")
 
         composition.write_text(
-            safe_composition.replace("// .save_retained_successor_streaming(\n", ""),
+            safe_composition.replace("// .save_retained_successor_streaming(\n", "", 1),
             encoding="utf-8",
         )
         expect_rejected(root, "shipping close without canonical successor save")

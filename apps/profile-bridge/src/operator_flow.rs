@@ -30,12 +30,12 @@ use crate::shipping_control_plane::{MachineHttpPort, ShippingControlPlaneError};
 #[cfg(any(windows, test))]
 use crate::shipping_generation_save::SignedGenerationObjectStreamPutPort;
 use crate::shipping_generation_save::{CommittedGenerationSuccessor, ShippingGenerationSaveError};
-#[cfg(any(test, feature = "synthetic-test-bin"))]
+#[cfg(any(test, feature = "synthetic-test-bin", debug_assertions))]
 use crate::shipping_generation_save::{
     SignedGenerationObjectPutPort, prepare_retained_generation_successor,
     publish_verify_and_commit_successor,
 };
-#[cfg(any(test, feature = "synthetic-test-bin"))]
+#[cfg(any(test, feature = "synthetic-test-bin", debug_assertions))]
 use crate::shipping_generation_successor_control::ControlPlaneGenerationSuccessor;
 use crate::shipping_generation_successor_control::GenerationSuccessorControlError;
 #[cfg(any(windows, test))]
@@ -53,7 +53,7 @@ use crate::shipping_save_attempt::{
     persist_streaming_exact_save_attempt_from_native, retire_fully_saved_streaming_attempt,
     retire_local_unsynced_after_streamed_checkpoint,
 };
-#[cfg(any(test, feature = "synthetic-test-bin"))]
+#[cfg(any(test, feature = "synthetic-test-bin", debug_assertions))]
 use crate::shipping_save_attempt::{
     inspect_exact_save_attempt, persist_exact_save_attempt, retire_fully_saved_attempt,
     retire_local_unsynced_after_exact_checkpoint,
@@ -1173,9 +1173,9 @@ where
         })
     }
 
-    /// Compatibility-only in-memory Save for synthetic/legacy tests.
-    /// Production Windows uses `save_retained_successor_streaming` only.
-    #[cfg(any(test, feature = "synthetic-test-bin"))]
+    /// Legacy in-memory Save exists only in debug/test or explicitly synthetic builds.
+    /// Installed production release uses `save_retained_successor_streaming` only.
+    #[cfg(any(test, feature = "synthetic-test-bin", debug_assertions))]
     pub fn save_retained_successor<T, U>(
         &mut self,
         root: &MaterializationRoot,
