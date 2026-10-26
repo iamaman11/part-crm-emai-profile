@@ -2499,10 +2499,22 @@ mod tests {
     #[test]
     fn fresh_lone_intent_first_seals_then_commit_and_next_claim_finishes_active_exact()
     -> Result<(), Box<dyn std::error::Error>> {
-        for existing_clone in [false, true] {
+        // The third case is above the former 64 MiB in-memory limit. It
+        // proves the actual K1 post-crash first-seal/retry/binding path uses
+        // the disk-backed BPAT, not merely the ordinary K2 Save happy path.
+        for (existing_clone, large_native_profile) in
+            [(false, false), (true, false), (true, true)]
+        {
             let fixture = Fixture::new()?;
             let root = MaterializationRoot::open_or_create(&fixture.root_path)?;
             let source = root.open_generation(&fixture.tenant, &fixture.profile, &fixture.base)?;
+            if large_native_profile {
+                let native = source.path().join("user_data");
+                std::fs::create_dir_all(&native)?;
+                let wal = std::fs::File::create(native.join("cookies.sqlite-wal"))?;
+                wal.set_len(65 * 1024 * 1024)?;
+                wal.sync_all()?;
+            }
             persist_local_unsynced_intent(&root, &source, &fixture.lease)?;
             let fresh = ProfileLease::issue(
                 fixture.tenant.clone(),
@@ -2602,6 +2614,12 @@ mod tests {
             .ok_or("sealed streamed checkpoint was not preserved")?;
             assert!(exact.first_seal_under_current_lease(&fresh));
             assert_eq!(exact.successor_id(), candidate.as_str());
+            if large_native_profile {
+                assert!(
+                    exact.container_bytes() > 64 * 1024 * 1024,
+                    "recovered K1 checkpoint must contain the large native WAL"
+                );
+            }
             assert_eq!(std::fs::read(source.path().join("prefs.js"))?, b"save");
             let mut active = Transport {
                 responses: VecDeque::from([MachineHttpResponse::new(
@@ -2632,6 +2650,16 @@ mod tests {
                 std::fs::read(candidate_workspace.path().join("prefs.js"))?,
                 b"save"
             );
+            if large_native_profile {
+                assert_eq!(
+                    std::fs::metadata(
+                        candidate_workspace.path().join("user_data/cookies.sqlite-wal")
+                    )?
+                    .len(),
+                    65 * 1024 * 1024,
+                    "authorized ACTIVE_EXACT N+1 must retain every native WAL byte"
+                );
+            }
             let binding = load_materialization_binding(
                 &candidate_workspace,
                 &fixture.tenant,
