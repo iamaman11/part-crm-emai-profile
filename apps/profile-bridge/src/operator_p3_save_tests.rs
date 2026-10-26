@@ -13,11 +13,13 @@ use crate::operator_flow::{
 use crate::runtime_bundle::ApprovedRuntimeBundle;
 use crate::shipping_control_plane::{MachineHttpMethod, MachineHttpPort, MachineHttpResponse};
 use crate::shipping_generation_save::{
-    SignedGenerationObjectPutPort, SignedGenerationUploadCapability,
+    SignedGenerationObjectPutPort, SignedGenerationObjectStreamPutPort,
+    SignedGenerationUploadCapability,
 };
 use crate::shipping_save_attempt::{
     SaveAttemptEvidenceError, discover_unresolved_exact_save_attempt,
     has_unresolved_save_attempt_for_profile, inspect_exact_save_attempt,
+    persist_local_unsynced_intent,
 };
 use crate::test_support::browser_identity_fixture;
 use crate::{FakeCamouhost, FakeDeviceIdentity, FakeDeviceKeyStore, FakeProcessControl};
@@ -294,6 +296,64 @@ impl SignedGenerationObjectPutPort for Put {
     }
 }
 
+/// The installed streaming path uses a typed retry-decision JSON request
+/// before its ordinary signed PUT; fake responses never constitute D1 proof.
+struct StreamTransport {
+    responses: VecDeque<MachineHttpResponse>,
+    paths: Rc<RefCell<Vec<String>>>,
+}
+
+impl MachineHttpPort for StreamTransport {
+    type Error = BridgePortError;
+
+    fn request(
+        &mut self,
+        method: MachineHttpMethod,
+        path: &str,
+        _correlation_id: &CorrelationId,
+        body: Option<&[u8]>,
+    ) -> Result<MachineHttpResponse, Self::Error> {
+        if method != MachineHttpMethod::PostJson || body.is_none_or(<[u8]>::is_empty) {
+            return Err(BridgePortError::InvalidResponse);
+        }
+        self.paths.borrow_mut().push(path.to_owned());
+        self.responses
+            .pop_front()
+            .ok_or(BridgePortError::Unavailable)
+    }
+}
+
+impl SignedGenerationObjectStreamPutPort for Put {
+    fn put_verified_stream(
+        &mut self,
+        capability: &SignedGenerationUploadCapability,
+        file: &mut crate::generation_object_spool::VerifiedGenerationObjectFile,
+    ) -> Result<(), Self::Error> {
+        if capability
+            .url()
+            .map_err(|_| BridgePortError::InvalidResponse)?
+            .is_empty()
+        {
+            return Err(BridgePortError::InvalidResponse);
+        }
+        file.recheck_and_rewind()
+            .map_err(|_| BridgePortError::InvalidResponse)?;
+        self.calls.set(self.calls.get().saturating_add(1));
+        if self.fail {
+            return Err(BridgePortError::Unavailable);
+        }
+        let expected = file.expected_bytes();
+        let copied = std::io::copy(file.reader(), &mut std::io::sink())
+            .map_err(|_| BridgePortError::Unavailable)?;
+        if copied != expected {
+            return Err(BridgePortError::InvalidResponse);
+        }
+        file.recheck_and_rewind()
+            .map_err(|_| BridgePortError::InvalidResponse)?;
+        Ok(())
+    }
+}
+
 struct Fixture {
     root_path: PathBuf,
     root: MaterializationRoot,
@@ -505,6 +565,104 @@ fn commit_response(
         200,
         serde_json::to_vec(&BridgeGenerationSuccessorCommitResponse { outcome })?,
     ))
+}
+
+#[test]
+fn installed_streaming_close_commits_original_n_plus_one_and_retires_checkpoint()
+-> Result<(), Box<dyn std::error::Error>> {
+    let fixture = Fixture::new("stream-complete")?;
+    let mut operator = fixture.operator()?;
+    fixture.open_mutate_and_close(&mut operator)?;
+    persist_local_unsynced_intent(&fixture.root, &fixture.base_workspace()?, &fixture.lease)?;
+    let requests = Rc::new(RefCell::new(Vec::new()));
+    let puts = Rc::new(Cell::new(0));
+    let completion = operator.save_retained_successor_streaming(
+        &fixture.root,
+        StreamTransport {
+            responses: VecDeque::from([
+                MachineHttpResponse::new(
+                    200,
+                    br#"{"verdict":"NOT_APPLIED_RETRYABLE"}"#.to_vec(),
+                ),
+                upload_required_response()?,
+                verified_response()?,
+                commit_response(BridgeGenerationSuccessorCommitOutcomeDto::Activated)?,
+            ]),
+            paths: Rc::clone(&requests),
+        },
+        &mut Put {
+            fail: false,
+            calls: Rc::clone(&puts),
+        },
+        UnixMillis::new(30),
+    )?;
+    assert!(completion.is_saved());
+    assert_eq!(puts.get(), 1);
+    assert_eq!(operator.coordinator().sealing_requests, 1);
+    assert_eq!(operator.coordinator().closed, 1);
+    assert_eq!(requests.borrow().len(), 4);
+    assert!(requests.borrow()[0].ends_with("/generation-successor/retry-decision"));
+    assert!(requests.borrow()[1].ends_with("/generation-successor/upload-capability"));
+    assert!(requests.borrow()[2].ends_with("/generation-successor/upload-capability"));
+    assert!(requests.borrow()[3].ends_with("/generation-successor/commit"));
+    assert_eq!(fs::read(fixture.base_workspace()?.path().join("prefs.js"))?, b"mutated-after-launch");
+    let saved = fixture.root.open_generation(
+        fixture.actor.tenant_scope().tenant_id(),
+        &fixture.profile_id,
+        completion.committed().generation_id(),
+    )?;
+    assert_eq!(fs::read(saved.path().join("prefs.js"))?, b"mutated-after-launch");
+    assert!(!has_unresolved_save_attempt_for_profile(
+        &fixture.root,
+        fixture.actor.tenant_scope().tenant_id(),
+        &fixture.profile_id,
+    )?);
+    assert!(!operator.has_pending_dirty_close());
+    Ok(())
+}
+
+#[test]
+fn installed_streaming_close_rejects_d1_block_without_put_or_native_loss()
+-> Result<(), Box<dyn std::error::Error>> {
+    let fixture = Fixture::new("stream-blocked")?;
+    let mut operator = fixture.operator()?;
+    fixture.open_mutate_and_close(&mut operator)?;
+    persist_local_unsynced_intent(&fixture.root, &fixture.base_workspace()?, &fixture.lease)?;
+    let requests = Rc::new(RefCell::new(Vec::new()));
+    let puts = Rc::new(Cell::new(0));
+    let blocked = operator.save_retained_successor_streaming(
+        &fixture.root,
+        StreamTransport {
+            responses: VecDeque::from([MachineHttpResponse::new(
+                200,
+                br#"{"verdict":"BLOCKED"}"#.to_vec(),
+            )]),
+            paths: Rc::clone(&requests),
+        },
+        &mut Put {
+            fail: false,
+            calls: Rc::clone(&puts),
+        },
+        UnixMillis::new(30),
+    );
+    assert!(matches!(
+        blocked,
+        Err(OperatorFlowError::GenerationSave {
+            reason: GenerationSaveFailureReason::ControlRejected,
+        })
+    ));
+    assert_eq!(requests.borrow().len(), 1);
+    assert_eq!(puts.get(), 0);
+    assert_eq!(operator.coordinator().sealing_requests, 1);
+    assert!(operator.has_pending_dirty_close());
+    assert!(has_unresolved_save_attempt_for_profile(
+        &fixture.root,
+        fixture.actor.tenant_scope().tenant_id(),
+        &fixture.profile_id,
+    )?);
+    assert_eq!(fs::read(fixture.base_workspace()?.path().join("prefs.js"))?, b"mutated-after-launch");
+    fixture.assert_base_lock_held()?;
+    Ok(())
 }
 
 #[test]
