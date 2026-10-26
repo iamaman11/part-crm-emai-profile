@@ -551,11 +551,17 @@ mod windows {
                 match initial {
                     Ok(completion) if completion.is_saved() => return Ok(()),
                     Ok(_) => return Err(ShippingCompositionError::CommittedRecoveryRequired),
+                    Err(OperatorFlowError::GenerationSave { reason })
+                        if !reason.allows_bounded_cloud_reconcile() =>
+                    {
+                        return Err(ShippingCompositionError::Operator(
+                            OperatorFlowError::GenerationSave { reason },
+                        ));
+                    }
                     Err(
                         OperatorFlowError::Stage(OperatorFailureStage::GenerationSave)
                         | OperatorFlowError::GenerationSave { .. },
-                    ) if operator.has_pending_dirty_close() =>
-                    {
+                    ) if operator.has_pending_dirty_close() => {
                         // Browser closed: WAL/native bytes and the original
                         // workspace lock are retained. Do not start Firefox.
                         // Retry ONLY the already-sealed exact checkpoint.
@@ -646,6 +652,13 @@ mod windows {
                                     return Err(
                                         ShippingCompositionError::CommittedRecoveryRequired,
                                     );
+                                }
+                                Err(OperatorFlowError::GenerationSave { reason })
+                                    if !reason.allows_bounded_cloud_reconcile() =>
+                                {
+                                    return Err(ShippingCompositionError::Operator(
+                                        OperatorFlowError::GenerationSave { reason },
+                                    ));
                                 }
                                 Err(
                                     OperatorFlowError::Stage(OperatorFailureStage::GenerationSave)

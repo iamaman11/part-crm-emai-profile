@@ -814,20 +814,44 @@ mod tests {
     fn save_owner_causes_survive_projection_without_raw_server_or_browser_data() {
         use crate::operator_flow::{GenerationSaveFailureReason as Reason, OperatorFlowError};
         let cases = [
-            (Reason::ControlTransport, "BRIDGE_SAVE_CONTROL_TRANSPORT_UNKNOWN"),
-            (Reason::ControlEffectUncertain, "BRIDGE_SAVE_CONTROL_EFFECT_UNCERTAIN"),
+            (
+                Reason::ControlTransport,
+                "BRIDGE_SAVE_CONTROL_TRANSPORT_UNKNOWN",
+            ),
+            (
+                Reason::ControlEffectUncertain,
+                "BRIDGE_SAVE_CONTROL_EFFECT_UNCERTAIN",
+            ),
             (Reason::ControlRejected, "BRIDGE_SAVE_CONTROL_REJECTED"),
-            (Reason::UploadOutcomeUncertain, "BRIDGE_SAVE_UPLOAD_OUTCOME_UNCERTAIN"),
-            (Reason::CheckpointIntegrity, "BRIDGE_SAVE_CHECKPOINT_INTEGRITY_FAILED"),
+            (
+                Reason::UploadOutcomeUncertain,
+                "BRIDGE_SAVE_UPLOAD_OUTCOME_UNCERTAIN",
+            ),
+            (
+                Reason::CheckpointIntegrity,
+                "BRIDGE_SAVE_CHECKPOINT_INTEGRITY_FAILED",
+            ),
             (Reason::LocalIntentWrite, "BRIDGE_SAVE_LOCAL_INTENT_FAILED"),
             (Reason::SnapshotTooLarge, "BRIDGE_SAVE_SNAPSHOT_TOO_LARGE"),
-            (Reason::NativeSourceChanged, "BRIDGE_SAVE_NATIVE_SOURCE_CHANGED"),
-            (Reason::SealingMaterial, "BRIDGE_SAVE_SEALING_MATERIAL_UNAVAILABLE"),
-            (Reason::VerificationUnproven, "BRIDGE_SAVE_SERVER_VERIFY_NOT_PROVEN"),
+            (
+                Reason::NativeSourceChanged,
+                "BRIDGE_SAVE_NATIVE_SOURCE_CHANGED",
+            ),
+            (
+                Reason::SealingMaterial,
+                "BRIDGE_SAVE_SEALING_MATERIAL_UNAVAILABLE",
+            ),
+            (
+                Reason::VerificationUnproven,
+                "BRIDGE_SAVE_SERVER_VERIFY_NOT_PROVEN",
+            ),
         ];
         for (reason, code) in cases {
             let owned = OperatorFlowError::GenerationSave { reason };
-            assert_eq!(owned.stage(), Some(crate::operator_flow::OperatorFailureStage::GenerationSave));
+            assert_eq!(
+                owned.stage(),
+                Some(crate::operator_flow::OperatorFailureStage::GenerationSave)
+            );
             let diagnostic = UserDiagnostic::Launch(ShippingCompositionError::Operator(owned));
             assert_eq!(diagnostic.code(), code);
             assert!(!diagnostic.message().contains("http"));
@@ -837,12 +861,16 @@ mod tests {
             assert!(!diagnostic.message().contains("Saved in the cloud"));
         }
         let rejection = UserDiagnostic::Launch(ShippingCompositionError::Operator(
-            OperatorFlowError::GenerationSave { reason: Reason::ControlRejected },
+            OperatorFlowError::GenerationSave {
+                reason: Reason::ControlRejected,
+            },
         ));
         assert!(rejection.message().contains("server rejected"));
-        assert!(!rejection.message().contains("network outage"));
+        assert!(rejection.message().contains("not evidence of a network outage"));
         let uncertain = UserDiagnostic::Launch(ShippingCompositionError::Operator(
-            OperatorFlowError::GenerationSave { reason: Reason::UploadOutcomeUncertain },
+            OperatorFlowError::GenerationSave {
+                reason: Reason::UploadOutcomeUncertain,
+            },
         ));
         assert!(uncertain.message().contains("not confirmed"));
         assert!(uncertain.message().contains("exact save attempt"));

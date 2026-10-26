@@ -8,9 +8,9 @@ use crate::browser_mail_query::BrowserMailExecutionProof;
 #[cfg(any(test, feature = "synthetic-test-bin"))]
 use crate::dirty_close::RetainedDirtyCloseError;
 use crate::dirty_close::{DirtyCloseCompletion, DirtyCloseLocalOutcome, RetainedDirtyClose};
-use crate::dirty_generation::{DirtyGenerationError, GenerationSealingMaterialPort};
 #[cfg(any(test, feature = "synthetic-test-bin"))]
 use crate::dirty_generation::PreparedDirtyGeneration;
+use crate::dirty_generation::{DirtyGenerationError, GenerationSealingMaterialPort};
 #[cfg(any(test, feature = "synthetic-test-bin"))]
 use crate::dirty_generation_finalize::DirtyGenerationCommitClientPort;
 use crate::generation_reopen::{
@@ -33,9 +33,9 @@ use crate::shipping_generation_successor_control::{
     ControlPlaneGenerationSuccessor, GenerationSuccessorControlError,
 };
 use crate::shipping_save_attempt::{
-    has_unresolved_save_attempt_for_profile, inspect_exact_save_attempt,
+    SaveAttemptEvidenceError, has_unresolved_save_attempt_for_profile, inspect_exact_save_attempt,
     persist_exact_save_attempt, persist_local_unsynced_intent, retire_fully_saved_attempt,
-    retire_local_unsynced_after_exact_checkpoint, SaveAttemptEvidenceError,
+    retire_local_unsynced_after_exact_checkpoint,
 };
 #[cfg(any(test, feature = "synthetic-test-bin"))]
 use application_ports::generation_objects::{
@@ -286,7 +286,7 @@ impl OperatorGenerationSaveCompletion {
 }
 
 /// Read-only projection of the *existing* Save owners' typed failure.
-//// This is not a persisted phase, retry grant, cleanup policy, or second SM.
+/// This is not a persisted phase, retry grant, cleanup policy, or second SM.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum GenerationSaveFailureReason {
     OwnerState,
@@ -312,6 +312,20 @@ pub enum GenerationSaveFailureReason {
 }
 
 impl GenerationSaveFailureReason {
+    /// Only an ambiguous cloud interaction may enter the existing bounded
+    /// same-attempt reconnect loop. Local corruption and explicit rejection
+    /// are never "fixed" by another PUT.
+    #[must_use]
+    pub const fn allows_bounded_cloud_reconcile(self) -> bool {
+        matches!(
+            self,
+            Self::ControlTransport
+                | Self::ControlEffectUncertain
+                | Self::UploadOutcomeUncertain
+                | Self::VerificationUnproven
+        )
+    }
+
     /// Stable, redacted user/support code, never a storage key or raw HTTP.
     #[must_use]
     pub const fn code(self) -> &'static str {
@@ -365,8 +379,9 @@ fn save_generation_reason<S, U>(
         ShippingGenerationSaveError::CandidateIdentity => Reason::CandidateIdentity,
         ShippingGenerationSaveError::Prepare(error) => match error {
             DirtyGenerationError::InvalidState => Reason::OwnerState,
-            DirtyGenerationError::IdentityMismatch
-            | DirtyGenerationError::CandidateMatchesBase => Reason::CandidateIdentity,
+            DirtyGenerationError::IdentityMismatch | DirtyGenerationError::CandidateMatchesBase => {
+                Reason::CandidateIdentity
+            }
             DirtyGenerationError::SnapshotTooLarge => Reason::SnapshotTooLarge,
             DirtyGenerationError::SourceChanged => Reason::NativeSourceChanged,
             DirtyGenerationError::KeyUnavailable => Reason::SealingMaterial,
@@ -400,7 +415,9 @@ pub enum OperatorFlowError {
     /// deadline has not been extended. Caller must retry or quiesce before it.
     HeartbeatTransportUncertain,
     Stage(OperatorFailureStage),
-    GenerationSave { reason: GenerationSaveFailureReason },
+    GenerationSave {
+        reason: GenerationSaveFailureReason,
+    },
     AuthoritativeGeneration {
         reason: AuthoritativeGenerationMaterializationError,
         cleanup: CleanupFailures,
@@ -450,8 +467,12 @@ impl fmt::Display for OperatorFlowError {
             }
             Self::Stage(stage) => write!(formatter, "operator flow failed at {stage:?}"),
             Self::GenerationSave { reason } => {
-                write!(formatter, "operator generation save failed: {}", reason.code())
-            },
+                write!(
+                    formatter,
+                    "operator generation save failed: {}",
+                    reason.code()
+                )
+            }
             Self::AuthoritativeGeneration { reason, cleanup } => write!(
                 formatter,
                 "authoritative generation preparation failed: {reason}; cleanup={cleanup:?}"
@@ -1094,15 +1115,17 @@ where
             .ok_or(OperatorFlowError::Stage(
                 OperatorFailureStage::GenerationSave,
             ))?;
-        let source = retained
-            .open_base_workspace(root)
-            .map_err(|_| OperatorFlowError::GenerationSave {
-                reason: GenerationSaveFailureReason::LocalSource,
-            })?;
-        persist_local_unsynced_intent(root, &source, retained.lease())
-            .map_err(|_| OperatorFlowError::GenerationSave {
+        let source =
+            retained
+                .open_base_workspace(root)
+                .map_err(|_| OperatorFlowError::GenerationSave {
+                    reason: GenerationSaveFailureReason::LocalSource,
+                })?;
+        persist_local_unsynced_intent(root, &source, retained.lease()).map_err(|_| {
+            OperatorFlowError::GenerationSave {
                 reason: GenerationSaveFailureReason::LocalIntentWrite,
-            })
+            }
+        })
     }
 
     /// Canonical ordinary P3 save. Pre-commit failures retain dirty local ownership and the exact
@@ -1131,11 +1154,11 @@ where
                 .ok_or(OperatorFlowError::Stage(
                     OperatorFailureStage::GenerationSave,
                 ))?;
-            let workspace = retained
-                .open_base_workspace(root)
-                .map_err(|_| OperatorFlowError::GenerationSave {
+            let workspace = retained.open_base_workspace(root).map_err(|_| {
+                OperatorFlowError::GenerationSave {
                     reason: GenerationSaveFailureReason::LocalSource,
-                })?;
+                }
+            })?;
             (
                 retained.lease().clone(),
                 retained.base_record().clone(),
@@ -1195,10 +1218,11 @@ where
         // published and re-read BEFORE the first network upload or commit.
         // A conflicting/torn checkpoint is a hard stop; no local bytes are
         // cleaned, no old generation is invalidated, no cloud effect is made.
-        persist_exact_save_attempt(root, &workspace, prepared, &lease)
-            .map_err(|source| OperatorFlowError::GenerationSave {
+        persist_exact_save_attempt(root, &workspace, prepared, &lease).map_err(|source| {
+            OperatorFlowError::GenerationSave {
                 reason: save_checkpoint_reason(source),
-            })?;
+            }
+        })?;
         let recovered = inspect_exact_save_attempt(
             root,
             lease.tenant_id(),
@@ -1655,6 +1679,73 @@ impl From<LocalProfileError> for OperatorFlowError {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn save_owner_maps_control_and_local_causes_without_granting_retries() {
+        use super::{
+            GenerationSaveFailureReason as Reason, save_checkpoint_reason, save_control_reason,
+            save_generation_reason,
+        };
+        use crate::dirty_generation::DirtyGenerationError;
+        use crate::shipping_control_plane::ShippingControlPlaneError as Http;
+        use crate::shipping_generation_save::ShippingGenerationSaveError as Save;
+        use crate::shipping_generation_successor_control::GenerationSuccessorControlError as Control;
+        use crate::shipping_save_attempt::SaveAttemptEvidenceError as Evidence;
+        assert_eq!(
+            save_control_reason(Control::<()>::ControlPlane(Http::Transport)),
+            Reason::ControlTransport
+        );
+        assert_eq!(
+            save_control_reason(Control::<()>::ControlPlane(Http::HttpServerUncertain)),
+            Reason::ControlEffectUncertain
+        );
+        assert_eq!(
+            save_control_reason(Control::<()>::ControlPlane(Http::HttpStatus)),
+            Reason::ControlRejected
+        );
+        assert_eq!(
+            save_generation_reason(Save::<Control<()>, ()>::Prepare(
+                DirtyGenerationError::SourceChanged
+            )),
+            Reason::NativeSourceChanged
+        );
+        assert_eq!(
+            save_generation_reason(Save::<Control<()>, ()>::Prepare(
+                DirtyGenerationError::SnapshotTooLarge
+            )),
+            Reason::SnapshotTooLarge
+        );
+        assert_eq!(
+            save_generation_reason(Save::<Control<()>, ()>::Upload(())),
+            Reason::UploadOutcomeUncertain
+        );
+        assert_eq!(
+            save_checkpoint_reason(Evidence::Invalid),
+            Reason::CheckpointIntegrity
+        );
+        assert_eq!(
+            save_checkpoint_reason(Evidence::Io(std::io::ErrorKind::PermissionDenied)),
+            Reason::CheckpointWrite
+        );
+        for reason in [
+            Reason::ControlRejected,
+            Reason::NativeSourceChanged,
+            Reason::CheckpointIntegrity,
+            Reason::SealingMaterial,
+            Reason::SnapshotTooLarge,
+            Reason::ControlInvalidResponse,
+        ] {
+            assert!(!reason.allows_bounded_cloud_reconcile());
+        }
+        for reason in [
+            Reason::ControlTransport,
+            Reason::ControlEffectUncertain,
+            Reason::UploadOutcomeUncertain,
+            Reason::VerificationUnproven,
+        ] {
+            assert!(reason.allows_bounded_cloud_reconcile());
+        }
+    }
+
     use super::{
         AuthoritativeGenerationMaterializationError, BrowserLaunchPreflightPort,
         DeviceAuthenticationPort, EnrollmentPort, OperationalRejectionReason, OperatorEnrollment,
