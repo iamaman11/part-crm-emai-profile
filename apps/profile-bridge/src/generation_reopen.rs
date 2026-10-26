@@ -621,7 +621,8 @@ mod tests {
         use std::sync::atomic::{AtomicU64, Ordering};
         static NEXT: AtomicU64 = AtomicU64::new(1);
         let dir = std::env::temp_dir().join(format!(
-            "k2-stream-r2-bpgc-{}-{}", std::process::id(),
+            "k2-stream-r2-bpgc-{}-{}",
+            std::process::id(),
             NEXT.fetch_add(1, Ordering::Relaxed),
         ));
         std::fs::create_dir(&dir)?;
@@ -642,9 +643,13 @@ mod tests {
             &mut std::io::repeat(0x73).take(plaintext_bytes),
         )?;
         let mut source = std::fs::OpenOptions::new()
-            .write(true).create_new(true).open(&original)?;
+            .write(true)
+            .create_new(true)
+            .open(&original)?;
         let expected = seal_generation_streaming(
-            &metadata, &key, &mut std::io::repeat(0x73).take(plaintext_bytes),
+            &metadata,
+            &key,
+            &mut std::io::repeat(0x73).take(plaintext_bytes),
             &mut source,
         )?;
         source.flush()?;
@@ -670,9 +675,12 @@ mod tests {
                 *self.0 += bytes.len() as u64;
                 Ok(bytes.len())
             }
-            fn flush(&mut self) -> std::io::Result<()> { Ok(()) }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
         }
-        let reopened = open_generation_streaming(object.reader(), &key, &mut CountSink(&mut opened_count))?;
+        let reopened =
+            open_generation_streaming(object.reader(), &key, &mut CountSink(&mut opened_count))?;
         assert_eq!(reopened, expected);
         assert_eq!(opened_count, plaintext_bytes);
         object.recheck_and_rewind()?;

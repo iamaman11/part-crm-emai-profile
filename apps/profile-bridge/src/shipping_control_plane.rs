@@ -24,8 +24,8 @@ use control_plane_contract::profile_launch_api::{
 };
 use control_plane_contract::public_api::{ProblemPayload, problem_type_for_code};
 use encrypted_generation_domain::{
-    GenerationDek, GenerationRootKeyVersion, KeyId, MAX_STREAM_CONTAINER_BYTES,
-    MAX_GENERATION_METADATA_PRELUDE_BYTES, NoncePrefix, canonical_generation_object_key,
+    GenerationDek, GenerationRootKeyVersion, KeyId, MAX_GENERATION_METADATA_PRELUDE_BYTES,
+    MAX_STREAM_CONTAINER_BYTES, NoncePrefix, canonical_generation_object_key,
     inspect_generation_metadata_prelude,
 };
 use profile_platform_primitives::{
@@ -2034,19 +2034,28 @@ mod tests {
         let max = encrypted_generation_domain::MAX_STREAM_CONTAINER_BYTES;
         for (size, allowed) in [(max, true), (max + 1, false)] {
             let response = BridgeGenerationDownloadCapabilityResponse::new(
-                generation.as_str(), &object, "aa".repeat(32), "bb".repeat(32),
-                size, url, GENERATION_DOWNLOAD_CAPABILITY_MAX_EXPIRES_SECONDS,
+                generation.as_str(),
+                &object,
+                "aa".repeat(32),
+                "bb".repeat(32),
+                size,
+                url,
+                GENERATION_DOWNLOAD_CAPABILITY_MAX_EXPIRES_SECONDS,
             );
             let mut fixture = SealingFixture::new(MachineHttpResponse::new(
-                200, serde_json::to_vec(&response)?,
+                200,
+                serde_json::to_vec(&response)?,
             ))?;
-            let result = fixture.coordinator.download_capability(
-                &fixture.tenant_id, &fixture.profile_id,
-            );
+            let result = fixture
+                .coordinator
+                .download_capability(&fixture.tenant_id, &fixture.profile_id);
             if allowed {
                 assert_eq!(result?.container_bytes(), max);
             } else {
-                assert!(matches!(result, Err(ShippingControlPlaneError::InvalidResponse)));
+                assert!(matches!(
+                    result,
+                    Err(ShippingControlPlaneError::InvalidResponse)
+                ));
             }
         }
         Ok(())
