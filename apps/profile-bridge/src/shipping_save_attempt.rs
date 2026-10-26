@@ -1228,12 +1228,6 @@ impl ReadOnlyStreamedSaveAttempt {
     }
 }
 
-/// Existing BPAT0001 header+payload contract, now streaming from a sealed
-/// on-disk BPGC0001 source. A completed temp write is fsynced, re-verified
-/// by SHA-256 and published no-replace with the existing scoped attempt path.
-/// Errors KEEP uncertain stages and the original Firefox N/N+1 intact.
-/// This alone never uploads, commits, authorizes a lease or marks Saved.
-#[allow(dead_code)] // K2 shipping conversion is a separate activation gate.
 /// An existing sealed BPGC file may be copied into the original BPAT
 /// format, but this adapter does not create plaintext or secondary authority.
 #[allow(dead_code)] // K2 shipping rollout still gated.
