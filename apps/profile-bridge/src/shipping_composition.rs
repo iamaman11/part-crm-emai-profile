@@ -149,8 +149,8 @@ mod windows {
     use crate::windows_device_application::{
         WindowsDeviceApplication, WindowsDeviceApplicationBinding,
     };
-    use crate::windows_generation_put::WindowsSignedGenerationObjectPut;
     use crate::windows_generation_get::WindowsSignedGenerationObjectGet;
+    use crate::windows_generation_put::WindowsSignedGenerationObjectPut;
     use crate::windows_native::WindowsDeviceIdentity;
     use bridge_domain::ClaimUri;
     use profile_platform_primitives::UnixMillis;

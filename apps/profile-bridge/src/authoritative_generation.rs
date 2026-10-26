@@ -2,11 +2,11 @@ use crate::browser_execution::{
     BrowserLaunchBlocker, browser_writer_locks_absent, load_materialization_binding,
     restore_materialization_binding_after_authoritative_open,
 };
+use crate::generation_object_spool::VerifiedGenerationObjectFile;
 use crate::generation_reopen::{
     GenerationObjectDownloadError, GenerationObjectDownloadPort, GenerationReopenControlError,
     GenerationReopenControlPort,
 };
-use crate::generation_object_spool::VerifiedGenerationObjectFile;
 use crate::generation_snapshot::{
     GenerationSnapshotError, StreamedWorkspaceSnapshot,
     materialize_workspace_snapshot_streaming_with_pre_publish,
@@ -19,7 +19,7 @@ use encrypted_generation_domain::{
 };
 use profile_platform_primitives::{DeviceId, GenerationId, ProfileId, TenantId};
 use std::fs::{self, OpenOptions};
-use std::io::{Seek, SeekFrom, Write};
+use std::io::{Seek, SeekFrom};
 
 const LOWER_HEX: &[u8; 16] = b"0123456789abcdef";
 
@@ -246,10 +246,8 @@ where
         encode_sha256(capability.container_digest())
     ));
     let stream = if incomplete_local.is_none() {
-        downloader.download_generation_object_to_new_pending_file(
-            &capability,
-            &staged_ciphertext_path,
-        )
+        downloader
+            .download_generation_object_to_new_pending_file(&capability, &staged_ciphertext_path)
     } else {
         Ok(None)
     }
@@ -434,15 +432,12 @@ where
         .recheck_and_rewind()
         .map_err(|_| Error::ReadBeforeLocalUse(PreWrite::Decryption))?;
     plaintext.sync_all().map_err(|_| Error::Local)?;
-    if plaintext
-        .metadata()
-        .map_err(|_| Error::Local)?
-        .len()
-        != metadata.plaintext_bytes()
-    {
+    if plaintext.metadata().map_err(|_| Error::Local)?.len() != metadata.plaintext_bytes() {
         return Err(Error::ReadBeforeLocalUse(PreWrite::Decryption));
     }
-    plaintext.seek(SeekFrom::Start(0)).map_err(|_| Error::Local)?;
+    plaintext
+        .seek(SeekFrom::Start(0))
+        .map_err(|_| Error::Local)?;
     let digest = encode_sha256(capability.container_digest());
     let outcome = materialize_workspace_snapshot_streaming_with_pre_publish(
         root,
@@ -826,15 +821,30 @@ mod tests {
             fs::read(materialized.path().join(BROWSER_IDENTITY_RECORD_FILE))?,
             fixture.browser_identity_record
         );
-        assert!(load_materialization_binding(
-            &materialized,
-            &fixture.tenant_id,
-            &fixture.profile_id,
-            &fixture.generation_id
-        ).is_ok());
+        assert!(
+            load_materialization_binding(
+                &materialized,
+                &fixture.tenant_id,
+                &fixture.profile_id,
+                &fixture.generation_id
+            )
+            .is_ok()
+        );
         let digest = encode_sha256(fixture.container_digest);
-        assert!(!fixture.root.path().join(format!(".pending-r2-{digest}")).exists());
-        assert!(!fixture.root.path().join(format!(".pending-bpgw-{digest}")).exists());
+        assert!(
+            !fixture
+                .root
+                .path()
+                .join(format!(".pending-r2-{digest}"))
+                .exists()
+        );
+        assert!(
+            !fixture
+                .root
+                .path()
+                .join(format!(".pending-bpgw-{digest}"))
+                .exists()
+        );
         fixture.cleanup();
         Ok(())
     }
@@ -864,9 +874,11 @@ mod tests {
         );
         assert_eq!(
             outcome,
-            Err(AuthoritativeGenerationMaterializationError::ReadBeforeLocalUse(
-                AuthoritativeGenerationPreWriteError::Decryption
-            ))
+            Err(
+                AuthoritativeGenerationMaterializationError::ReadBeforeLocalUse(
+                    AuthoritativeGenerationPreWriteError::Decryption
+                )
+            )
         );
         assert_eq!(control.opening_calls, 1);
         assert_eq!(downloader.calls, 1);
@@ -876,12 +888,20 @@ mod tests {
                 &fixture.profile_id,
                 &fixture.generation_id
             ),
-            Err(crate::local_profile::LocalProfileError::Io(std::io::ErrorKind::NotFound))
+            Err(crate::local_profile::LocalProfileError::Io(
+                std::io::ErrorKind::NotFound
+            ))
         ));
-        assert!(fixture.root.path().join(format!(
-            ".pending-r2-{}",
-            encode_sha256(control.container_digest)
-        )).exists());
+        assert!(
+            fixture
+                .root
+                .path()
+                .join(format!(
+                    ".pending-r2-{}",
+                    encode_sha256(control.container_digest)
+                ))
+                .exists()
+        );
         fixture.cleanup();
         Ok(())
     }
