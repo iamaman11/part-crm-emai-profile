@@ -3,13 +3,13 @@ use application_ports::generation_objects::{
     VerifiedPredecessorObjectReferencePort,
 };
 use application_ports::generations::{GenerationPortError, GenerationPortErrorClass};
-use encrypted_generation_domain::canonical_generation_object_key;
 use application_ports::profile_generation_successor::{
     ProfileGenerationSuccessorCommitError, ProfileGenerationSuccessorCommitErrorClass,
     ProfileGenerationSuccessorCommitOutcome, ProfileGenerationSuccessorCommitPort,
     ProfileGenerationSuccessorCommitRequest, ProfileGenerationSuccessorObservationPort,
     ProfileGenerationSuccessorRetryDecisionPort,
 };
+use encrypted_generation_domain::canonical_generation_object_key;
 use profile_platform_primitives::{
     ActorContext, DeviceId, FencingToken, GenerationId, ProfileId, TenantId, TenantScope,
 };
