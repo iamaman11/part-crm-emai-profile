@@ -580,10 +580,7 @@ fn installed_streaming_close_commits_original_n_plus_one_and_retires_checkpoint(
         &fixture.root,
         StreamTransport {
             responses: VecDeque::from([
-                MachineHttpResponse::new(
-                    200,
-                    br#"{"verdict":"NOT_APPLIED_RETRYABLE"}"#.to_vec(),
-                ),
+                MachineHttpResponse::new(200, br#"{"verdict":"NOT_APPLIED_RETRYABLE"}"#.to_vec()),
                 upload_required_response()?,
                 verified_response()?,
                 commit_response(BridgeGenerationSuccessorCommitOutcomeDto::Activated)?,
@@ -605,13 +602,19 @@ fn installed_streaming_close_commits_original_n_plus_one_and_retires_checkpoint(
     assert!(requests.borrow()[1].ends_with("/generation-successor/upload-capability"));
     assert!(requests.borrow()[2].ends_with("/generation-successor/upload-capability"));
     assert!(requests.borrow()[3].ends_with("/generation-successor/commit"));
-    assert_eq!(fs::read(fixture.base_workspace()?.path().join("prefs.js"))?, b"mutated-after-launch");
+    assert_eq!(
+        fs::read(fixture.base_workspace()?.path().join("prefs.js"))?,
+        b"mutated-after-launch"
+    );
     let saved = fixture.root.open_generation(
         fixture.actor.tenant_scope().tenant_id(),
         &fixture.profile_id,
         completion.committed().generation_id(),
     )?;
-    assert_eq!(fs::read(saved.path().join("prefs.js"))?, b"mutated-after-launch");
+    assert_eq!(
+        fs::read(saved.path().join("prefs.js"))?,
+        b"mutated-after-launch"
+    );
     assert!(!has_unresolved_save_attempt_for_profile(
         &fixture.root,
         fixture.actor.tenant_scope().tenant_id(),
@@ -660,7 +663,10 @@ fn installed_streaming_close_rejects_d1_block_without_put_or_native_loss()
         fixture.actor.tenant_scope().tenant_id(),
         &fixture.profile_id,
     )?);
-    assert_eq!(fs::read(fixture.base_workspace()?.path().join("prefs.js"))?, b"mutated-after-launch");
+    assert_eq!(
+        fs::read(fixture.base_workspace()?.path().join("prefs.js"))?,
+        b"mutated-after-launch"
+    );
     fixture.assert_base_lock_held()?;
     Ok(())
 }
