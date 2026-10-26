@@ -312,9 +312,12 @@ fn quota_never_selects_dirty_recovery_in_use_or_locked_generation()
     let plan = QuotaPolicy::new(240)?.plan(&records)?;
     assert_eq!(plan.total_bytes(), 300);
     assert_eq!(plan.bytes_to_reclaim(), 60);
-    assert_eq!(plan.reclaimable_bytes(), 60);
-    assert!(plan.is_satisfied());
-    assert_eq!(plan.candidates(), [eligible.generation_id().clone()]);
+    // A synced/evictable lifecycle label is not independent WORKING/LKG
+    // evidence, so even the unlocked copy remains protected.
+    assert_eq!(plan.reclaimable_bytes(), 0);
+    assert!(!plan.is_satisfied());
+    assert!(plan.candidates().is_empty());
+    assert_eq!(eligible.state(), LocalGenerationState::SyncedEvictable);
     assert_eq!(records[0].state(), LocalGenerationState::DirtyLocal);
     assert_eq!(records[1].state(), LocalGenerationState::RecoveryRequired);
     assert_eq!(records[2].state(), LocalGenerationState::InUse);
