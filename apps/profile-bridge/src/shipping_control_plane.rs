@@ -24,7 +24,7 @@ use control_plane_contract::profile_launch_api::{
 };
 use control_plane_contract::public_api::{ProblemPayload, problem_type_for_code};
 use encrypted_generation_domain::{
-    GenerationDek, GenerationRootKeyVersion, KeyId, MAX_GENERATION_CONTAINER_BYTES,
+    GenerationDek, GenerationRootKeyVersion, KeyId, MAX_STREAM_CONTAINER_BYTES,
     MAX_GENERATION_METADATA_PRELUDE_BYTES, NoncePrefix, canonical_generation_object_key,
     inspect_generation_metadata_prelude,
 };
@@ -643,9 +643,11 @@ where
 
         if response.method() != "GET"
             || response.container_bytes() == 0
-            || response.container_bytes()
-                > u64::try_from(MAX_GENERATION_CONTAINER_BYTES)
-                    .map_err(|_| Self::Error::InvalidResponse)?
+            // Signed descriptor may describe a 608 MiB streamed BPGC.
+            // The legacy Vec downloader independently stays limited to
+            // MAX_GENERATION_CONTAINER_BYTES until a verified streaming
+            // reopen path has been selected.
+            || response.container_bytes() > MAX_STREAM_CONTAINER_BYTES
             || response.expires_seconds() == 0
             || response.expires_seconds() > GENERATION_DOWNLOAD_CAPABILITY_MAX_EXPIRES_SECONDS
         {
@@ -2018,6 +2020,35 @@ mod tests {
             fixture.request_material(),
             Err(ShippingControlPlaneError::HttpStatus)
         );
+        Ok(())
+    }
+
+    #[test]
+    fn signed_reopen_descriptor_admits_streamed_limit_but_never_overflow()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let tenant = TenantId::parse("tenant_sealing_adapter_01")?;
+        let profile = ProfileId::parse("profile_sealing_adapter_01")?;
+        let generation = GenerationId::parse("generation_sealing_next_01")?;
+        let object = canonical_generation_object_key(&tenant, &profile, &generation);
+        let url = "https://0123456789abcdef0123456789abcdef.r2.cloudflarestorage.com/profile-generations/tenants/tenant_sealing_adapter_01/profiles/profile_sealing_adapter_01/generations/generation_sealing_next_01.bpgc?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=access%2F20260830%2Fauto%2Fs3%2Faws4_request&X-Amz-Date=20260830T120000Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        let max = encrypted_generation_domain::MAX_STREAM_CONTAINER_BYTES;
+        for (size, allowed) in [(max, true), (max + 1, false)] {
+            let response = BridgeGenerationDownloadCapabilityResponse::new(
+                generation.as_str(), &object, "aa".repeat(32), "bb".repeat(32),
+                size, url, GENERATION_DOWNLOAD_CAPABILITY_MAX_EXPIRES_SECONDS,
+            );
+            let mut fixture = SealingFixture::new(MachineHttpResponse::new(
+                200, serde_json::to_vec(&response)?,
+            ))?;
+            let result = fixture.coordinator.download_capability(
+                &fixture.tenant_id, &fixture.profile_id,
+            );
+            if allowed {
+                assert_eq!(result?.container_bytes(), max);
+            } else {
+                assert!(matches!(result, Err(ShippingControlPlaneError::InvalidResponse)));
+            }
+        }
         Ok(())
     }
 
