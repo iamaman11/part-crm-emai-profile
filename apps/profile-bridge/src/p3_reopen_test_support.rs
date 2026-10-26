@@ -76,6 +76,7 @@ const ACTOR: &str = "actor_p3_reopen_e2e";
 const DEVICE: &str = "device_p3_reopen_e2e";
 const BASE_GENERATION: &str = "generation_p3_reopen_base";
 const ROOT_KEY_ID: &str = "profile-generation-root-v1-7";
+const ROTATED_ROOT_KEY_ID: &str = "profile-generation-root-v1-8";
 const SIGNED_UPLOAD_URL: &str = "https://example.invalid/p3-e2e-upload?signature=redacted";
 const SIGNED_DOWNLOAD_URL: &str = "https://0123456789abcdef0123456789abcdef.r2.cloudflarestorage.com/profile-generations/p3-e2e.bpgc?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=access%2F20260830%2Fauto%2Fs3%2Faws4_request&X-Amz-Date=20260830T120000Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
@@ -354,10 +355,17 @@ impl BackendState {
         }
         self.events
             .push(format!("seal:{}", request.generation_id()));
+        // The second real-browser Save exercises key rotation while the
+        // previous encrypted generation retains its historical opening key.
+        let (key_id, key_bytes, nonce_bytes) = if self.committed_successor.is_some() {
+            (ROTATED_ROOT_KEY_ID, [9_u8; 32], [10_u8; 16])
+        } else {
+            (ROOT_KEY_ID, [7_u8; 32], [8_u8; 16])
+        };
         json_response(&BridgeGenerationSealingMaterialResponse::new(
-            ROOT_KEY_ID,
-            lower_hex(&[7; 32]),
-            lower_hex(&[8; 16]),
+            key_id,
+            lower_hex(&key_bytes),
+            lower_hex(&nonce_bytes),
             GENERATION_SEALING_CHUNK_BYTES,
         ))
     }
@@ -526,9 +534,16 @@ impl BackendState {
             "opening-material:{}",
             self.active_generation.as_str()
         ));
+        // Use only the key version authenticated in the old immutable
+        // object's metadata. Never substitute the currently active root.
+        let opening_key = match inspected.metadata().key_id().as_str() {
+            ROOT_KEY_ID => [7_u8; 32],
+            ROTATED_ROOT_KEY_ID => [9_u8; 32],
+            _ => return Err(BridgePortError::InvalidResponse),
+        };
         json_response(&BridgeGenerationOpeningMaterialResponse::new(
-            ROOT_KEY_ID,
-            lower_hex(&[7; 32]),
+            inspected.metadata().key_id().as_str(),
+            lower_hex(&opening_key),
         ))
     }
 

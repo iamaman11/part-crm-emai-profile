@@ -553,6 +553,17 @@ mod p3_fixture {
         assert!(next.is_saved());
         let current = next.committed().generation_id().clone();
         assert_ne!(current, successor);
+        // CURRENT is encrypted with the rotated key. The previous version
+        // must still decrypt the historical object and launch Camoufox.
+        {
+            let backend = state.borrow();
+            let latest = backend
+                .object
+                .as_ref()
+                .ok_or("rotated current encrypted object missing")?;
+            let metadata = inspect_generation_metadata_prelude(latest)?;
+            assert_eq!(metadata.metadata().key_id().as_str(), ROTATED_ROOT_KEY_ID);
+        }
         let (historical_request, historical_container) = {
             let backend = state.borrow();
             assert_eq!(backend.active_generation, current);
@@ -563,6 +574,8 @@ mod p3_fixture {
             assert_eq!(request.generation_id(), successor.as_str());
             (request.clone(), bytes.clone())
         };
+        let historical_metadata = inspect_generation_metadata_prelude(&historical_container)?;
+        assert_eq!(historical_metadata.metadata().key_id().as_str(), ROOT_KEY_ID);
         // A physically separate disposable host root starts with NO local
         // profile bytes. The fixture's historical read-only authority serves
         // precisely the immutable old object, while live CURRENT remains N+2.
@@ -659,7 +672,7 @@ mod p3_fixture {
         }
         historical_operator.abort(UnixMillis::new(80))?;
         eprintln!(
-            "S0_REAL_PORTABLE_BROWSER_STATE=PASSED;STREAMING_BPAT=1;MANAGED_PROCESS=1;MANAGED_IPC=1;COOKIE=1;LOCAL_STORAGE=1;INDEXED_DB=1;AUTHORITATIVE_RESTORE=1;IDENTITY_REUSED=1;HISTORICAL_NONCURRENT_COLD_CAMOUFOX=1;LIVE_LKG_CERTIFICATE=0"
+            "S0_REAL_PORTABLE_BROWSER_STATE=PASSED;STREAMING_BPAT=1;MANAGED_PROCESS=1;MANAGED_IPC=1;COOKIE=1;LOCAL_STORAGE=1;INDEXED_DB=1;AUTHORITATIVE_RESTORE=1;IDENTITY_REUSED=1;HISTORICAL_NONCURRENT_COLD_CAMOUFOX=1;HISTORICAL_OLD_KEY=1;LIVE_LKG_CERTIFICATE=0"
         );
         Ok(())
     }
