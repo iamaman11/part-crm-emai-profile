@@ -1,7 +1,8 @@
 use super::{
     CloudGenerationRepository, CloudGenerationStatus, ContainerDigest, EncryptedGenerationError,
     GenerationDek, GenerationIdentity, GenerationMetadata, KeyId,
-    MAX_GENERATION_METADATA_PRELUDE_BYTES, MAX_STREAM_PLAINTEXT_BYTES, NoncePrefix,
+    MAX_GENERATION_METADATA_PRELUDE_BYTES, MAX_STREAM_CONTAINER_BYTES,
+    MAX_STREAM_PLAINTEXT_BYTES, NoncePrefix,
     PlaintextDigest, PublishResult, StreamingGenerationError, inspect_generation_metadata_prelude,
     open_generation, open_generation_expected, open_generation_streaming, seal_generation,
     seal_generation_streaming,
@@ -201,6 +202,25 @@ fn streamed_seal_refuses_source_change_even_if_first_pass_digest_was_valid()
 }
 
 #[test]
+fn encoded_512_mib_native_profile_and_min_chunk_framing_fit_stream_bounds() {
+    // BPGW0001: magic + count, then 2-byte path length, max 512-byte
+    // relative path, 8-byte size and contents for each of 100_000 files.
+    // Keep this proof in the crypto package too: changes to its bound must
+    // not silently invalidate real Firefox 512 MiB snapshots.
+    const RAW_512_MIB: u64 = 536_870_912;
+    const MAX_FILES: u64 = 100_000;
+    const PATH_AND_FILE_HEADER: u64 = 2 + 512 + 8;
+    const MIN_CHUNK_SIZE: u64 = 1_024;
+    const RECORD_OVERHEAD: u64 = 1 + 8 + 4 + 4 + 16;
+    let encoded = 12 + RAW_512_MIB + MAX_FILES * PATH_AND_FILE_HEADER;
+    assert!(encoded <= MAX_STREAM_PLAINTEXT_BYTES);
+    let max_records = MAX_STREAM_PLAINTEXT_BYTES.div_ceil(MIN_CHUNK_SIZE);
+    let worst_ciphertext = 12 + 4_096 + MAX_STREAM_PLAINTEXT_BYTES
+        + (max_records + 1) * RECORD_OVERHEAD;
+    assert!(worst_ciphertext <= MAX_STREAM_CONTAINER_BYTES);
+}
+
+#[test]
 fn metadata_reader_accepts_stream_only_sizes_without_allocating_payload()
 -> Result<(), Box<dyn std::error::Error>> {
     let (tenant, profile, generation) = ids("generation_streaming_over_old_cap")?;
@@ -223,7 +243,7 @@ fn metadata_reader_accepts_stream_only_sizes_without_allocating_payload()
     let summary = seal_generation_streaming(&built, &key(0x22)?, &mut input, &mut std::io::sink())?;
     assert!(summary.container_bytes() > total);
     assert_eq!(summary.metadata(), &built);
-    assert_eq!(MAX_STREAM_PLAINTEXT_BYTES, 536_870_912);
+    assert_eq!(MAX_STREAM_PLAINTEXT_BYTES, 603_979_776);
     Ok(())
 }
 

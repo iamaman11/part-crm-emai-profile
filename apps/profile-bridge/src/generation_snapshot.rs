@@ -12,9 +12,15 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 pub(crate) const WORKSPACE_SNAPSHOT_MAGIC: &[u8; 8] = b"BPGW0001";
 pub(crate) const MAX_WORKSPACE_SNAPSHOT_BYTES: usize = 67_108_864;
-/// Streaming-only BPGW0001 size; legacy Vec API remains capped at 64 MiB.
-#[allow(dead_code)] // K2 production streaming adapter is not yet active.
-pub(crate) const MAX_STREAM_WORKSPACE_SNAPSHOT_BYTES: u64 = 536_870_912;
+/// Maximum native Firefox bytes, separate from snapshot's framing overhead.
+#[allow(dead_code)] // K2 shipping integration is still gated.
+pub(crate) const MAX_STREAM_NATIVE_PROFILE_BYTES: u64 = 536_870_912; // 512 MiB
+/// The same encrypted-generation-domain bound applies to BPGW0001 encoded
+/// bytes, so no successful snapshot can later fail encryption from a smaller
+/// policy limit. Legacy Vec API remains capped at 64 MiB.
+#[allow(dead_code)] // K2 shipping integration is still gated.
+pub(crate) const MAX_STREAM_WORKSPACE_SNAPSHOT_BYTES: u64 =
+    encrypted_generation_domain::MAX_STREAM_PLAINTEXT_BYTES;
 const MAX_SNAPSHOT_FILES: usize = 100_000;
 const MAX_RELATIVE_PATH_BYTES: usize = 512;
 const STAGING_ATTEMPTS: usize = 32;
@@ -71,9 +77,11 @@ pub(crate) fn encode_workspace_snapshot_streaming(
     expected_inventory: &GenerationInventory,
     output: &mut impl Write,
 ) -> Result<StreamedWorkspaceSnapshot, GenerationSnapshotError> {
-    if expected_inventory.entries().len() > MAX_SNAPSHOT_FILES {
-        return Err(GenerationSnapshotError::SnapshotTooLarge);
-    }
+    // Check *native* size and the exact BPGW0001 wire size before writing
+    // a single byte to the unpublished spool. Metadata overhead from many
+    // tiny Firefox files must not disqualify an otherwise valid 512 MiB
+    // native profile, nor can a huge inventory fill disk before rejection.
+    let expected_length = encoded_stream_snapshot_size(expected_inventory)?;
     let count = u32::try_from(expected_inventory.entries().len())
         .map_err(|_| GenerationSnapshotError::SnapshotTooLarge)?;
     let mut length = 0_u64;
@@ -127,10 +135,43 @@ pub(crate) fn encode_workspace_snapshot_streaming(
     {
         return Err(GenerationSnapshotError::SourceChanged);
     }
+    if length != expected_length {
+        return Err(GenerationSnapshotError::SourceChanged);
+    }
     Ok(StreamedWorkspaceSnapshot {
         plaintext_bytes: length,
         plaintext_digest: digest.finalize().into(),
     })
+}
+
+/// Preflight against the same canonical BPGW0001 layout used by the actual
+/// stream. This avoids writing any staging bytes for oversized input while
+/// retaining 64 KiB bounded file reads for accepted profiles.
+#[allow(dead_code)] // K2 production streaming adapter is still gated.
+fn encoded_stream_snapshot_size(
+    inventory: &GenerationInventory,
+) -> Result<u64, GenerationSnapshotError> {
+    if inventory.entries().len() > MAX_SNAPSHOT_FILES
+        || inventory.total_bytes() > MAX_STREAM_NATIVE_PROFILE_BYTES
+    {
+        return Err(GenerationSnapshotError::SnapshotTooLarge);
+    }
+    let mut size = 12_u64; // BPGW0001 + u32 file count
+    for entry in inventory.entries() {
+        let path_len = entry.relative_path().len();
+        if path_len == 0 || path_len > MAX_RELATIVE_PATH_BYTES {
+            return Err(GenerationSnapshotError::UnsafePath);
+        }
+        // 2 bytes path length + path + 8 bytes file length + exact content.
+        size = size
+            .checked_add(2 + path_len as u64 + 8)
+            .and_then(|value| value.checked_add(entry.bytes()))
+            .ok_or(GenerationSnapshotError::SnapshotTooLarge)?;
+        if size > MAX_STREAM_WORKSPACE_SNAPSHOT_BYTES {
+            return Err(GenerationSnapshotError::SnapshotTooLarge);
+        }
+    }
+    Ok(size)
 }
 
 #[allow(dead_code)]

@@ -16,9 +16,14 @@ const NONCE_BYTES: usize = 24;
 const MIN_CHUNK_BYTES: u32 = 1_024;
 const MAX_CHUNK_BYTES: u32 = 1_048_576;
 const MAX_PLAINTEXT_BYTES: usize = 67_108_864;
-/// Streaming-only limit; old all-in-RAM APIs remain capped at 64 MiB.
-pub const MAX_STREAM_PLAINTEXT_BYTES: u64 = 536_870_912;
-pub const MAX_STREAM_CONTAINER_BYTES: u64 = 603_979_776;
+/// Streaming-only bound is on BPGW0001 *encoded* plaintext, NOT merely
+/// native user_data bytes. 512 MiB of Firefox files plus 100_000 paths of
+/// up to 512 UTF-8 bytes requires ~562 MiB before encryption. This bounded
+/// envelope covers that worst case without changing the old in-RAM 64 MiB
+/// APIs. The 608 MiB ciphertext limit also covers maximum record framing
+/// overhead at the smallest allowed 1 KiB AEAD chunk size.
+pub const MAX_STREAM_PLAINTEXT_BYTES: u64 = 603_979_776; // 576 MiB
+pub const MAX_STREAM_CONTAINER_BYTES: u64 = 637_534_208; // 608 MiB
 const MAX_CONTAINER_BYTES: usize = 83_886_080;
 const MAX_METADATA_BYTES: usize = 4_096;
 const MIN_KEY_ID_BYTES: usize = 8;
