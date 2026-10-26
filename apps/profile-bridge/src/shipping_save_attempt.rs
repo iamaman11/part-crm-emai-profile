@@ -1596,6 +1596,169 @@ fn hex(bytes: &[u8]) -> String {
 }
 
 #[cfg(test)]
+mod streaming_checkpoint_tests {
+    use super::{
+        SaveAttemptEvidenceError, attempt_path, inspect_streaming_exact_save_attempt,
+        persist_streaming_exact_save_attempt,
+    };
+    use crate::local_profile::MaterializationRoot;
+    use encrypted_generation_domain::{
+        GenerationDek, GenerationIdentity, GenerationMetadata, KeyId, NoncePrefix,
+        seal_generation_streaming,
+    };
+    use profile_platform_primitives::{
+        DeviceId, FencingToken, GenerationId, ProfileId, SessionId, TenantId,
+    };
+    use session_domain::ProfileLease;
+    use std::fs::{self, OpenOptions};
+    use std::io::{Read, Seek, SeekFrom, Write};
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static NEXT: AtomicU64 = AtomicU64::new(1);
+
+    #[test]
+    fn streamed_checkpoint_survives_restart_without_loading_ciphertext()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let id = NEXT.fetch_add(1, Ordering::Relaxed);
+        let path = std::env::temp_dir().join(format!(
+            "bridge-stream-attempt-{}-{id}", std::process::id(),
+        ));
+        let root = MaterializationRoot::open_or_create(path.clone())?;
+        let tenant = TenantId::parse(format!("tenant_streamed_attempt_{id}"))?;
+        let profile = ProfileId::parse(format!("profile_streamed_attempt_{id}"))?;
+        let n = GenerationId::parse(format!("generation_streamed_base_{id}"))?;
+        let next = GenerationId::parse(format!("generation_streamed_next_{id}"))?;
+        let source = root.create_generation(&tenant, &profile, &n)?;
+        let candidate = root.create_generation(&tenant, &profile, &next)?;
+        fs::write(source.path().join("prefs.js"), b"native Firefox cookie/WAL witness")?;
+        fs::write(candidate.path().join("prefs.js"), b"native Firefox cookie/WAL witness")?;
+        let lease = ProfileLease::issue(
+            tenant.clone(), profile.clone(),
+            SessionId::parse(format!("session_streamed_{id}"))?,
+            DeviceId::parse(format!("device_streamed_{id}"))?,
+            3,
+            FencingToken::parse(format!("fence_streamed_{id}"))?,
+        )?;
+        let sealed_path = path.join("local-sealed.bpgc");
+        let content_size = 1_500_031_u64;
+        let key = GenerationDek::new(
+            KeyId::parse("bridge_streaming_checkpoint_key_01")?,
+            [0x34; 32],
+        );
+        let metadata = GenerationMetadata::for_reader(
+            GenerationIdentity::new(
+                tenant.clone(), profile.clone(), next.clone(), Some(n.clone()),
+            ),
+            key.key_id().clone(), NoncePrefix::new([0x27; 16]), 65_536,
+            &mut std::io::repeat(0x5a).take(content_size),
+        )?;
+        let mut sealed = OpenOptions::new().create_new(true).write(true).open(&sealed_path)?;
+        let descriptor = seal_generation_streaming(
+            &metadata, &key, &mut std::io::repeat(0x5a).take(content_size),
+            &mut sealed,
+        )?;
+        sealed.sync_all()?;
+        drop(sealed);
+        persist_streaming_exact_save_attempt(
+            &root, &source, &candidate, &descriptor, &sealed_path, &lease,
+        )?;
+        // Retry of the exact immutable checkpoint is idempotent, never N+2.
+        persist_streaming_exact_save_attempt(
+            &root, &source, &candidate, &descriptor, &sealed_path, &lease,
+        )?;
+        let mut evidence = inspect_streaming_exact_save_attempt(
+            &root, &tenant, &profile, &next,
+        )?.ok_or("missing streaming checkpoint")?;
+        assert_eq!(evidence.original_epoch(), 3);
+        assert!(evidence.original_device(&lease));
+        assert!(evidence.original_lease(&lease));
+        assert_eq!(evidence.container_bytes(), descriptor.container_bytes());
+        assert_eq!(
+            evidence.container_digest(),
+            super::hex(&descriptor.container_digest().bytes()),
+        );
+        assert_eq!(evidence.object_key(), metadata.object_key());
+        let mut actual = std::io::sink();
+        let mut reader = evidence.ciphertext().reader();
+        assert_eq!(
+            std::io::copy(&mut reader, &mut actual)?,
+            descriptor.container_bytes(),
+        );
+        evidence.ciphertext().recheck_and_rewind()?;
+        let checkpoint = attempt_path(&root, &tenant, &profile, &next);
+        let previous_length = fs::metadata(&checkpoint)?.len();
+        let mut mutation = OpenOptions::new().write(true).open(&checkpoint)?;
+        mutation.seek(SeekFrom::Start(previous_length - 1))?;
+        mutation.write_all(&[0x7f])?;
+        mutation.sync_all()?;
+        assert!(inspect_streaming_exact_save_attempt(
+            &root, &tenant, &profile, &next,
+        ).is_err());
+        assert_eq!(
+            fs::read(source.path().join("prefs.js"))?,
+            b"native Firefox cookie/WAL witness",
+        );
+        assert!(checkpoint.exists(), "damaged evidence must never be deleted");
+        drop(evidence);
+        drop(mutation);
+        drop(root);
+        let _ = crate::test_support::remove_test_root(&path);
+        Ok(())
+    }
+
+    #[test]
+    fn streaming_checkpoint_rejects_foreign_identity_without_discarding_original()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let id = NEXT.fetch_add(1, Ordering::Relaxed);
+        let path = std::env::temp_dir().join(format!(
+            "bridge-stream-foreign-{}-{id}", std::process::id(),
+        ));
+        let root = MaterializationRoot::open_or_create(path.clone())?;
+        let tenant = TenantId::parse(format!("tenant_foreign_{id}"))?;
+        let profile = ProfileId::parse(format!("profile_foreign_{id}"))?;
+        let n = GenerationId::parse(format!("generation_foreign_n_{id}"))?;
+        let next = GenerationId::parse(format!("generation_foreign_next_{id}"))?;
+        let source = root.create_generation(&tenant, &profile, &n)?;
+        let candidate = root.create_generation(&tenant, &profile, &next)?;
+        fs::write(source.path().join("prefs.js"), b"first")?;
+        fs::write(candidate.path().join("prefs.js"), b"second")?;
+        let lease = ProfileLease::issue(
+            tenant.clone(), profile.clone(),
+            SessionId::parse(format!("session_foreign_{id}"))?,
+            DeviceId::parse(format!("device_foreign_{id}"))?,
+            3, FencingToken::parse(format!("fence_foreign_{id}"))?,
+        )?;
+        let key = GenerationDek::new(
+            KeyId::parse("bridge_streaming_checkpoint_key_02")?, [0x20; 32],
+        );
+        let metadata = GenerationMetadata::for_reader(
+            GenerationIdentity::new(
+                tenant.clone(), profile.clone(), next.clone(), Some(n.clone()),
+            ),
+            key.key_id().clone(), NoncePrefix::new([0x21; 16]), 65_536,
+            &mut b"ciphertext".as_slice(),
+        )?;
+        let sealed_path = path.join("foreign.bpgc");
+        let mut file = OpenOptions::new().create_new(true).write(true).open(&sealed_path)?;
+        let descriptor = seal_generation_streaming(
+            &metadata, &key, &mut b"ciphertext".as_slice(), &mut file,
+        )?;
+        file.sync_all()?;
+        drop(file);
+        assert_eq!(
+            persist_streaming_exact_save_attempt(
+                &root, &source, &candidate, &descriptor, &sealed_path, &lease,
+            ),
+            Err(SaveAttemptEvidenceError::Changed),
+        );
+        assert!(!attempt_path(&root, &tenant, &profile, &next).exists());
+        assert_eq!(fs::read(source.path().join("prefs.js"))?, b"first");
+        assert_eq!(fs::read(candidate.path().join("prefs.js"))?, b"second");
+        let _ = crate::test_support::remove_test_root(&path);
+        Ok(())
+    }
+}
+
+#[cfg(test)]
 mod local_unsynced_publication_tests {
     use super::{
         LocalUnsyncedIntent, STAGE_SEQUENCE, SaveAttemptEvidenceError,
