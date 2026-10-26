@@ -5,23 +5,28 @@
 //! Recovery must obtain a fresh authoritative, ACL/fencing-safe decision before
 //! using these exact bytes. Never remove an unknown record during cleanup.
 use crate::dirty_generation::PreparedDirtyGeneration;
+use crate::generation_object_spool::VerifiedGenerationObjectFile;
 use crate::local_profile::{GenerationWorkspace, MaterializationRoot};
 use crate::shipping_generation_save::CommittedGenerationSuccessor;
 use encrypted_generation_domain::{
-    MAX_GENERATION_CONTAINER_BYTES, inspect_generation_metadata_prelude,
+    MAX_GENERATION_CONTAINER_BYTES, MAX_STREAM_CONTAINER_BYTES,
+    MAX_GENERATION_METADATA_PRELUDE_BYTES, StreamingGenerationReport,
+    inspect_generation_metadata_prelude,
 };
 use profile_platform_primitives::{GenerationId, ProfileId, TenantId};
 use serde::{Deserialize, Serialize};
 use session_domain::ProfileLease;
 use sha2::{Digest, Sha256};
 use std::fs::{self, File, OpenOptions};
-use std::io::{Read, Write};
+use std::io::{Read, Seek, SeekFrom, Write};
+use std::path::Path;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 const MAGIC: &[u8; 8] = b"BPAT0001";
 const MAX_HEADER_BYTES: usize = 4_096;
 const MAX_RECORD_BYTES: usize = MAX_GENERATION_CONTAINER_BYTES + MAX_HEADER_BYTES + 12;
+const MAX_STREAM_RECORD_BYTES: u64 = MAX_STREAM_CONTAINER_BYTES + MAX_HEADER_BYTES as u64 + 12;
 const STAGE_TRIES: usize = 16;
 static STAGE_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 
@@ -1173,12 +1178,302 @@ pub(crate) fn classify_scoped_pending_save_evidence(
 /// Header-only bounded read: discovery never loads the large sealed body
 /// merely to obtain the successor selector. Exact ciphertext verification
 /// remains the responsibility of inspect_exact_save_attempt.
+/// Read-only evidence for a fsynced BPAT0001 checkpoint with a verified
+/// ciphertext RANGE in the very same file. This is not a new format, cloud
+/// permission, or second persistent generation.
+#[allow(dead_code)] // Activated only when the K2 shipping owner is switched.
+pub(crate) struct ReadOnlyStreamedSaveAttempt {
+    header: AttemptHeader,
+    ciphertext: VerifiedGenerationObjectFile,
+}
+
+#[allow(dead_code)]
+impl ReadOnlyStreamedSaveAttempt {
+    pub(crate) fn ciphertext(&mut self) -> &mut VerifiedGenerationObjectFile {
+        &mut self.ciphertext
+    }
+
+    pub(crate) fn original_epoch(&self) -> u64 {
+        self.header.epoch
+    }
+
+    pub(crate) fn original_device(&self, lease: &ProfileLease) -> bool {
+        self.header.device_fingerprint.as_deref()
+            == Some(credential_fingerprint(b"device", lease.device_id().as_str()).as_str())
+    }
+
+    pub(crate) fn original_lease(&self, lease: &ProfileLease) -> bool {
+        self.header.epoch == lease.epoch()
+            && self.header.session_fingerprint
+                == credential_fingerprint(b"session", lease.session_id().as_str())
+            && self.header.fencing_fingerprint
+                == credential_fingerprint(b"fencing", lease.fencing_token().as_str())
+    }
+
+    pub(crate) fn object_key(&self) -> &str {
+        &self.header.object_key
+    }
+
+    pub(crate) fn metadata_digest(&self) -> &str {
+        &self.header.metadata_digest
+    }
+
+    pub(crate) fn container_digest(&self) -> &str {
+        &self.header.container_digest
+    }
+
+    pub(crate) fn container_bytes(&self) -> u64 {
+        self.header.container_bytes
+    }
+}
+
+/// Existing BPAT0001 header+payload contract, now streaming from a sealed
+/// on-disk BPGC0001 source. A completed temp write is fsynced, re-verified
+/// by SHA-256 and published no-replace with the existing scoped attempt path.
+/// Errors KEEP uncertain stages and the original Firefox N/N+1 intact.
+/// This alone never uploads, commits, authorizes a lease or marks Saved.
+#[allow(dead_code)] // K2 shipping conversion is a separate activation gate.
+pub(crate) fn persist_streaming_exact_save_attempt(
+    root: &MaterializationRoot,
+    source: &GenerationWorkspace,
+    candidate: &GenerationWorkspace,
+    report: &StreamingGenerationReport,
+    sealed_file: &Path,
+    lease: &ProfileLease,
+) -> Result<(), SaveAttemptEvidenceError> {
+    let metadata = report.metadata();
+    if lease.tenant_id() != source.tenant_id()
+        || lease.profile_id() != source.profile_id()
+        || source.tenant_id() != candidate.tenant_id()
+        || source.profile_id() != candidate.profile_id()
+        || metadata.tenant_id() != source.tenant_id()
+        || metadata.profile_id() != source.profile_id()
+        || metadata.generation_id() != candidate.generation_id()
+        || metadata.base_generation_id() != Some(source.generation_id())
+        || source.generation_id() == candidate.generation_id()
+        || lease.epoch() == 0
+    {
+        return Err(SaveAttemptEvidenceError::Invalid);
+    }
+    let base_inventory = source.inventory()
+        .map_err(|_| SaveAttemptEvidenceError::Changed)?;
+    let candidate_inventory = candidate.inventory()
+        .map_err(|_| SaveAttemptEvidenceError::Changed)?;
+    if base_inventory != candidate_inventory {
+        return Err(SaveAttemptEvidenceError::Changed);
+    }
+    let header = AttemptHeader {
+        schema: "bridge-p3-attempt-v1".to_owned(),
+        tenant: lease.tenant_id().as_str().to_owned(),
+        profile: lease.profile_id().as_str().to_owned(),
+        base_generation: source.generation_id().as_str().to_owned(),
+        successor: candidate.generation_id().as_str().to_owned(),
+        session_fingerprint: credential_fingerprint(b"session", lease.session_id().as_str()),
+        fencing_fingerprint: credential_fingerprint(b"fencing", lease.fencing_token().as_str()),
+        device_fingerprint: Some(credential_fingerprint(b"device", lease.device_id().as_str())),
+        epoch: lease.epoch(),
+        source_inventory: base_inventory.inventory_digest(),
+        candidate_inventory: candidate_inventory.inventory_digest(),
+        candidate_bytes: candidate_inventory.total_bytes(),
+        object_key: metadata.object_key(),
+        metadata_digest: hex(&report.metadata_digest().bytes()),
+        container_digest: hex(&report.container_digest().bytes()),
+        container_bytes: report.container_bytes(),
+        recovered_lone_origin: None,
+    };
+    let header_bytes = serde_json::to_vec(&header)
+        .map_err(|_| SaveAttemptEvidenceError::Invalid)?;
+    if header_bytes.is_empty() || header_bytes.len() > MAX_HEADER_BYTES
+        || report.container_bytes() == 0
+        || report.container_bytes() > MAX_STREAM_CONTAINER_BYTES
+    {
+        return Err(SaveAttemptEvidenceError::Invalid);
+    }
+    let canonical = attempt_path(root, lease.tenant_id(), lease.profile_id(), candidate.generation_id());
+    match fs::symlink_metadata(&canonical) {
+        Ok(_) => {
+            let existing = inspect_streaming_exact_save_attempt(
+                root, lease.tenant_id(), lease.profile_id(), candidate.generation_id(),
+            )?.ok_or(SaveAttemptEvidenceError::Changed)?;
+            if existing.header == header {
+                return Ok(());
+            }
+            return Err(SaveAttemptEvidenceError::Changed);
+        }
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+        Err(err) => return Err(err.into()),
+    }
+    let mut input = VerifiedGenerationObjectFile::open(
+        sealed_file, report.container_bytes(), report.container_digest().bytes(),
+    ).map_err(|_| SaveAttemptEvidenceError::Changed)?;
+    let mut staged = None;
+    for _ in 0..STAGE_TRIES {
+        let sequence = STAGE_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+        let path = root.path().join(format!(
+            "{}.pending-{}-{sequence}",
+            scope_file_prefix(lease.tenant_id(), lease.profile_id()),
+            std::process::id(),
+        ));
+        match OpenOptions::new().create_new(true).write(true).open(&path) {
+            Ok(file) => { staged = Some((path, file)); break; }
+            Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(err) => return Err(err.into()),
+        }
+    }
+    let (stage, mut out) = staged.ok_or(SaveAttemptEvidenceError::Unavailable)?;
+    let write = (|| -> Result<(), SaveAttemptEvidenceError> {
+        out.write_all(MAGIC)?;
+        out.write_all(&(header_bytes.len() as u32).to_be_bytes())?;
+        out.write_all(&header_bytes)?;
+        let copied = std::io::copy(
+            &mut input.reader().take(report.container_bytes()), &mut out,
+        )?;
+        if copied != report.container_bytes() {
+            return Err(SaveAttemptEvidenceError::Changed);
+        }
+        input.recheck_and_rewind().map_err(|_| SaveAttemptEvidenceError::Changed)?;
+        out.sync_all()?;
+        Ok(())
+    })();
+    drop(out);
+    // A failed fsync/copy means stage is an authoritative BLOCKER, never a
+    // disposable tmp. Do not publish or remove it.
+    write?;
+    let mut verification = VerifiedGenerationObjectFile::open_checkpoint_payload(
+        &stage, 12 + header_bytes.len() as u64,
+        report.container_bytes(), report.container_digest().bytes(),
+    ).map_err(|_| SaveAttemptEvidenceError::Changed)?;
+    verification.recheck_and_rewind().map_err(|_| SaveAttemptEvidenceError::Changed)?;
+    match fs::hard_link(&stage, &canonical) {
+        Ok(()) => {
+            fs::remove_file(&stage)?;
+            Ok(())
+        }
+        Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {
+            let existing = inspect_streaming_exact_save_attempt(
+                root, lease.tenant_id(), lease.profile_id(), candidate.generation_id(),
+            )?.ok_or(SaveAttemptEvidenceError::Changed)?;
+            if existing.header != header {
+                return Err(SaveAttemptEvidenceError::Changed);
+            }
+            fs::remove_file(&stage)?;
+            Ok(())
+        }
+        Err(err) => Err(err.into()),
+    }
+}
+
+/// Read-only streaming inspector: same scoped BPAT0001 name, bounded JSON and
+/// BPGC0001 prelude, SHA-256 over the single embedded ciphertext payload,
+/// exact generation metadata and BOTH original local inventories. It loads
+/// no generation-sized Vec and grants absolutely no cloud authority.
+#[allow(dead_code)] // Enabled by the future K2 operator save/replay integration.
+pub(crate) fn inspect_streaming_exact_save_attempt(
+    root: &MaterializationRoot,
+    tenant: &TenantId,
+    profile: &ProfileId,
+    successor: &GenerationId,
+) -> Result<Option<ReadOnlyStreamedSaveAttempt>, SaveAttemptEvidenceError> {
+    let canonical = attempt_path(root, tenant, profile, successor);
+    let stat = match fs::symlink_metadata(&canonical) {
+        Ok(meta) => meta,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(err) => return Err(err.into()),
+    };
+    if !stat.is_file() || stat.file_type().is_symlink()
+        || stat.len() <= 12 || stat.len() > MAX_STREAM_RECORD_BYTES
+    {
+        return Err(SaveAttemptEvidenceError::Invalid);
+    }
+    let header = read_bounded_attempt_header(&canonical)?;
+    if header.schema != "bridge-p3-attempt-v1"
+        || header.tenant != tenant.as_str()
+        || header.profile != profile.as_str()
+        || header.successor != successor.as_str()
+        || header.epoch == 0
+        || header.base_generation == header.successor
+        || header.session_fingerprint.len() != 64
+        || header.fencing_fingerprint.len() != 64
+    {
+        return Err(SaveAttemptEvidenceError::Invalid);
+    }
+    let mut file = File::open(&canonical)?;
+    let mut prefix = [0_u8; 12];
+    file.read_exact(&mut prefix)?;
+    let header_len = u32::from_be_bytes(
+        prefix[8..12].try_into().map_err(|_| SaveAttemptEvidenceError::Invalid)?,
+    ) as u64;
+    let payload_offset = 12 + header_len;
+    if header_len == 0 || header_len > MAX_HEADER_BYTES as u64
+        || stat.len() != payload_offset.checked_add(header.container_bytes)
+            .ok_or(SaveAttemptEvidenceError::Invalid)?
+    {
+        return Err(SaveAttemptEvidenceError::Invalid);
+    }
+    let hash_bytes = header.container_digest.as_bytes();
+    if hash_bytes.len() != 64 || !hash_bytes.iter().all(|b| b.is_ascii_hexdigit()) {
+        return Err(SaveAttemptEvidenceError::Invalid);
+    }
+    let mut expected_sha = [0_u8; 32];
+    for (i, byte) in expected_sha.iter_mut().enumerate() {
+        *byte = u8::from_str_radix(&header.container_digest[i*2..i*2+2], 16)
+            .map_err(|_| SaveAttemptEvidenceError::Invalid)?;
+    }
+    let mut payload = VerifiedGenerationObjectFile::open_checkpoint_payload(
+        &canonical, payload_offset, header.container_bytes, expected_sha,
+    ).map_err(|_| SaveAttemptEvidenceError::Changed)?;
+    let mut bpgc_prefix = [0_u8; 12];
+    payload.reader().read_exact(&mut bpgc_prefix)?;
+    if &bpgc_prefix[..8] != b"BPGC0001" {
+        return Err(SaveAttemptEvidenceError::Invalid);
+    }
+    let metadata_len = u32::from_be_bytes(
+        bpgc_prefix[8..12].try_into().map_err(|_| SaveAttemptEvidenceError::Invalid)?,
+    ) as usize;
+    if metadata_len == 0 || metadata_len > MAX_GENERATION_METADATA_PRELUDE_BYTES - 12 {
+        return Err(SaveAttemptEvidenceError::Invalid);
+    }
+    let mut metadata_prefix = vec![0_u8; 12 + metadata_len];
+    metadata_prefix[..12].copy_from_slice(&bpgc_prefix);
+    payload.reader().read_exact(&mut metadata_prefix[12..])?;
+    let prelude = inspect_generation_metadata_prelude(&metadata_prefix)
+        .map_err(|_| SaveAttemptEvidenceError::Invalid)?;
+    if prelude.metadata().tenant_id() != tenant
+        || prelude.metadata().profile_id() != profile
+        || prelude.metadata().generation_id() != successor
+        || prelude.metadata().base_generation_id().map(GenerationId::as_str)
+            != Some(header.base_generation.as_str())
+        || prelude.metadata().object_key() != header.object_key
+        || hex(&prelude.metadata_digest().bytes()) != header.metadata_digest
+    {
+        return Err(SaveAttemptEvidenceError::Invalid);
+    }
+    payload.recheck_and_rewind().map_err(|_| SaveAttemptEvidenceError::Changed)?;
+    let base = GenerationId::parse(header.base_generation.clone())
+        .map_err(|_| SaveAttemptEvidenceError::Invalid)?;
+    let source = root.open_generation(tenant, profile, &base)
+        .map_err(|_| SaveAttemptEvidenceError::Changed)?;
+    let candidate = root.open_generation(tenant, profile, successor)
+        .map_err(|_| SaveAttemptEvidenceError::Changed)?;
+    let source_inventory = source.inventory()
+        .map_err(|_| SaveAttemptEvidenceError::Changed)?;
+    let candidate_inventory = candidate.inventory()
+        .map_err(|_| SaveAttemptEvidenceError::Changed)?;
+    if source_inventory.inventory_digest() != header.source_inventory
+        || candidate_inventory.inventory_digest() != header.candidate_inventory
+        || candidate_inventory.total_bytes() != header.candidate_bytes
+    {
+        return Err(SaveAttemptEvidenceError::Changed);
+    }
+    Ok(Some(ReadOnlyStreamedSaveAttempt { header, ciphertext: payload }))
+}
+
 fn read_bounded_attempt_header(path: &PathBuf) -> Result<AttemptHeader, SaveAttemptEvidenceError> {
     let metadata = fs::symlink_metadata(path)?;
     if metadata.file_type().is_symlink()
         || !metadata.is_file()
         || metadata.len() <= 12
-        || metadata.len() > MAX_RECORD_BYTES as u64
+        || metadata.len() > MAX_STREAM_RECORD_BYTES
     {
         return Err(SaveAttemptEvidenceError::Invalid);
     }
