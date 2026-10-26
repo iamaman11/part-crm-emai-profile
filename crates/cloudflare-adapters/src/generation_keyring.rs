@@ -299,4 +299,120 @@ mod tests {
         );
         Ok(())
     }
+    #[test]
+    fn historical_bpgc_still_decrypts_after_root_rotation_and_needs_the_old_root()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use encrypted_generation_domain::{
+            GenerationIdentity, GenerationMetadata, PlaintextDigest, open_generation_streaming,
+            seal_generation_streaming,
+        };
+
+        // A VERIFIED digest or a new active root does not make the old
+        // generation independently decryptable. The historical *exact* key
+        // version must survive until the real browser has proven WORKING.
+        let keyring = parse_serialized_keyring(valid_keyring())?;
+        let tenant = TenantId::parse("tenant_k2_historical_lkg")?;
+        let profile = ProfileId::parse("profile_k2_historical_lkg")?;
+        let generation = GenerationId::parse("generation_k2_historical_lkg")?;
+        let native_bytes = b"prefs.js\ncookies.sqlite-wal\nindexeddb\nhistorical-data";
+        let plaintext_digest = PlaintextDigest::calculate(native_bytes).bytes();
+        let old_key_id = KeyId::parse("profile-generation-root-v1-1")?;
+        assert_eq!(keyring.active_version(), GenerationRootKeyVersion::new(2)?);
+
+        let (old_dek, old_nonce) = keyring
+            .derive_for_key_id(
+                &old_key_id,
+                &tenant,
+                &profile,
+                &generation,
+                plaintext_digest,
+            )?
+            .into_parts();
+        let metadata = GenerationMetadata::for_plaintext(
+            GenerationIdentity::new(
+                tenant.clone(),
+                profile.clone(),
+                generation.clone(),
+                None,
+            ),
+            old_key_id.clone(),
+            old_nonce,
+            1024,
+            native_bytes,
+        )?;
+        let mut immutable_bpgc = Vec::new();
+        seal_generation_streaming(
+            &metadata,
+            &old_dek,
+            &mut native_bytes.as_slice(),
+            &mut immutable_bpgc,
+        )?;
+
+        // An incorrect current root must never silently substitute for the
+        // generation-bound historical DEK, even when the object bytes match.
+        let (new_dek, _) = keyring
+            .derive_active(&tenant, &profile, &generation, plaintext_digest)?
+            .into_parts();
+        let mut rejected = Vec::new();
+        assert!(
+            open_generation_streaming(
+                &mut immutable_bpgc.as_slice(),
+                &new_dek,
+                &mut rejected,
+            )
+            .is_err()
+        );
+        // Different profile scope also fails authentication with the old
+        // version: key presence alone is not sufficient restore evidence.
+        let different_profile = ProfileId::parse("profile_k2_wrong_scope")?;
+        let (wrong_scope_dek, _) = keyring
+            .derive_for_key_id(
+                &old_key_id,
+                &tenant,
+                &different_profile,
+                &generation,
+                plaintext_digest,
+            )?
+            .into_parts();
+        assert!(
+            open_generation_streaming(
+                &mut immutable_bpgc.as_slice(),
+                &wrong_scope_dek,
+                &mut Vec::new(),
+            )
+            .is_err()
+        );
+
+        let mut restored = Vec::new();
+        let report = open_generation_streaming(
+            &mut immutable_bpgc.as_slice(),
+            &old_dek,
+            &mut restored,
+        )?;
+        assert_eq!(restored, native_bytes);
+        assert_eq!(report.metadata().generation_id(), &generation);
+        assert_eq!(report.metadata().key_id(), &old_key_id);
+
+        // Losing version 1 while active version 2 is healthy must block LKG
+        // promotion and prune; never infer recoverability from key ID alone.
+        let only_current = format!(
+            "{{\"activeVersion\":2,\"keys\":[{{\"version\":2,\"keyHex\":\"{}\"}}]}}",
+            "22".repeat(32),
+        );
+        let keyring_without_old = parse_serialized_keyring(only_current)?;
+        assert_eq!(
+            keyring_without_old
+                .derive_for_key_id(
+                    &old_key_id,
+                    &tenant,
+                    &profile,
+                    &generation,
+                    plaintext_digest,
+                )
+                .err(),
+            Some(GenerationRootKeyringError::KeyUnavailable),
+        );
+        Ok(())
+    }
+
 }
