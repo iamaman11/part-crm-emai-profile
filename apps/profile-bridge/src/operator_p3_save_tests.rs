@@ -672,6 +672,85 @@ fn installed_streaming_close_rejects_d1_block_without_put_or_native_loss()
 }
 
 #[test]
+fn one_hundred_isolated_profiles_complete_one_streaming_save_each_without_cross_scope()
+-> Result<(), Box<dyn std::error::Error>> {
+    // Cross-profile load exercise: 100 independent profiles / 100 ordinary
+    // controlled-close saves. This is NOT 100 successive generations of one
+    // profile or independent cloud WORKING/LKG acceptance.
+    let mut fixtures = Vec::with_capacity(100);
+    let mut scopes = std::collections::HashSet::new();
+    for _ in 0..100 {
+        let fixture = Fixture::new("stream-100-profiles")?;
+        let tenant = fixture.actor.tenant_scope().tenant_id();
+        let scope = (tenant.as_str().to_owned(), fixture.profile_id.as_str().to_owned());
+        assert!(scopes.insert(scope));
+        let mut operator = fixture.operator()?;
+        fixture.open_mutate_and_close(&mut operator)?;
+        persist_local_unsynced_intent(&fixture.root, &fixture.base_workspace()?, &fixture.lease)?;
+        let paths = Rc::new(RefCell::new(Vec::new()));
+        let puts = Rc::new(Cell::new(0));
+        let completion = operator.save_retained_successor_streaming(
+            &fixture.root,
+            StreamTransport {
+                responses: VecDeque::from([
+                    MachineHttpResponse::new(
+                        200,
+                        br#"{"verdict":"NOT_APPLIED_RETRYABLE"}"#.to_vec(),
+                    ),
+                    upload_required_response()?,
+                    verified_response()?,
+                    commit_response(BridgeGenerationSuccessorCommitOutcomeDto::Activated)?,
+                ]),
+                paths: Rc::clone(&paths),
+            },
+            &mut Put {
+                fail: false,
+                calls: Rc::clone(&puts),
+            },
+            UnixMillis::new(30),
+        )?;
+        assert!(completion.is_saved());
+        assert_eq!(operator.coordinator().sealing_requests, 1);
+        assert_eq!(operator.coordinator().closed, 1);
+        assert_eq!(puts.get(), 1);
+        assert_eq!(paths.borrow().len(), 4);
+        let saved_generation = completion.committed().generation_id().clone();
+        let saved = fixture.root.open_generation(tenant, &fixture.profile_id, &saved_generation)?;
+        assert_eq!(
+            fs::read(saved.path().join("prefs.js"))?,
+            b"mutated-after-launch",
+        );
+        assert!(!has_unresolved_save_attempt_for_profile(
+            &fixture.root,
+            tenant,
+            &fixture.profile_id,
+        )?);
+        assert!(!operator.has_pending_dirty_close());
+        fixtures.push((fixture, saved_generation));
+    }
+    assert_eq!(scopes.len(), 100);
+    // Retain all roots throughout the loop: earlier generations cannot be
+    // mutated by later independent saves or polluted with another scope's BPAT.
+    for (fixture, generation) in &fixtures {
+        let workspace = fixture.root.open_generation(
+            fixture.actor.tenant_scope().tenant_id(),
+            &fixture.profile_id,
+            generation,
+        )?;
+        assert_eq!(
+            fs::read(workspace.path().join("prefs.js"))?,
+            b"mutated-after-launch",
+        );
+        assert!(!has_unresolved_save_attempt_for_profile(
+            &fixture.root,
+            fixture.actor.tenant_scope().tenant_id(),
+            &fixture.profile_id,
+        )?);
+    }
+    Ok(())
+}
+
+#[test]
 fn streaming_retry_after_failed_put_preserves_exact_n_plus_one()
 -> Result<(), Box<dyn std::error::Error>> {
     let fixture = Fixture::new("stream-put-retry")?;
