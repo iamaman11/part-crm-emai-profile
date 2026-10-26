@@ -1256,6 +1256,10 @@ impl ReadOnlyStreamedSaveAttempt {
         &self.header.successor
     }
 
+    pub(crate) fn first_seal_under_current_lease(&self, lease: &ProfileLease) -> bool {
+        self.header.recovered_lone_origin.is_some() && self.original_lease(lease)
+    }
+
     pub(crate) fn original_device(&self, lease: &ProfileLease) -> bool {
         self.header.device_fingerprint.as_deref()
             == Some(credential_fingerprint(b"device", lease.device_id().as_str()).as_str())

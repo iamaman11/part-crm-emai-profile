@@ -12,7 +12,7 @@ use crate::shipping_control_plane::{
     MachineHttpMethod, MachineHttpPort, ShippingControlPlaneError,
 };
 #[cfg(any(windows, test))]
-use crate::shipping_generation_save::SignedGenerationObjectPutPort;
+use crate::shipping_generation_save::SignedGenerationObjectStreamPutPort;
 use crate::shipping_generation_save::{
     GenerationSuccessorCommitOutcome, GenerationSuccessorControlPort,
     GenerationUploadAuthorization, SignedGenerationUploadCapability,
@@ -26,8 +26,9 @@ use crate::shipping_save_attempt::{
 #[cfg(any(windows, test))]
 use crate::shipping_save_attempt::{
     ScopedPendingSaveEvidence, classify_scoped_pending_save_evidence,
-    deterministic_lone_unsynced_successor, local_unsynced_matches_fresh_lease,
-    persist_exact_save_attempt_from_lone_intent, retire_active_exact_attempt_after_restart,
+    deterministic_lone_unsynced_successor, discover_unresolved_streaming_exact_save_attempt,
+    local_unsynced_matches_fresh_lease, persist_exact_save_attempt_from_lone_intent,
+    retire_active_exact_attempt_after_restart,
     retire_matching_local_unsynced_after_restart,
 };
 use control_plane_contract::profile_generation_api::{
@@ -460,7 +461,7 @@ pub(crate) fn resume_lone_local_unsynced_under_fresh_lease<T, U, K>(
 ) -> Result<bool, RestartExactLocalCompletionError>
 where
     T: MachineHttpPort,
-    U: SignedGenerationObjectPutPort,
+    U: SignedGenerationObjectStreamPutPort,
     K: GenerationSealingMaterialPort,
 {
     let selected = classify_scoped_pending_save_evidence(root, tenant_id, profile_id)
@@ -614,7 +615,7 @@ pub(crate) fn resume_exact_successor_under_fresh_lease<T, U>(
 ) -> Result<bool, RestartExactLocalCompletionError>
 where
     T: MachineHttpPort,
-    U: SignedGenerationObjectPutPort,
+    U: SignedGenerationObjectStreamPutPort,
 {
     if fresh_lease.tenant_id() != tenant_id
         || fresh_lease.profile_id() != profile_id
@@ -622,13 +623,13 @@ where
     {
         return Err(RestartExactLocalCompletionError::WriterOrLockUnresolved);
     }
-    let original = discover_unresolved_exact_save_attempt(root, tenant_id, profile_id)
+    let mut original = discover_unresolved_streaming_exact_save_attempt(root, tenant_id, profile_id)
         .map_err(|_| RestartExactLocalCompletionError::LocalEvidenceChanged)?
         .ok_or(RestartExactLocalCompletionError::LocalEvidenceChanged)?;
     if original.base_generation_id() != selected_generation.as_str()
-        || (fresh_lease.epoch() <= original.prior_epoch()
+        || (fresh_lease.epoch() <= original.original_epoch()
             && !original.first_seal_under_current_lease(fresh_lease))
-        || !original.matches_fresh_device(fresh_lease)
+        || !original.original_device(fresh_lease)
     {
         return Err(RestartExactLocalCompletionError::WriterOrLockUnresolved);
     }
@@ -658,7 +659,7 @@ where
         };
     let result = (|| {
         // No cloud effect may be based on pre-lock evidence alone.
-        let exact = discover_unresolved_exact_save_attempt(root, tenant_id, profile_id)
+        let mut exact = discover_unresolved_streaming_exact_save_attempt(root, tenant_id, profile_id)
             .map_err(|_| RestartExactLocalCompletionError::LocalEvidenceChanged)?
             .ok_or(RestartExactLocalCompletionError::LocalEvidenceChanged)?;
         if exact.base_generation_id() != original.base_generation_id()
@@ -666,13 +667,20 @@ where
             || exact.object_key() != original.object_key()
             || exact.metadata_digest() != original.metadata_digest()
             || exact.container_digest() != original.container_digest()
-            || exact.ciphertext() != original.ciphertext()
             || !matches!(browser_writer_locks_absent(&source), Ok(true))
             || !matches!(browser_writer_locks_absent(&candidate), Ok(true))
         {
             return Err(RestartExactLocalCompletionError::LocalEvidenceChanged);
         }
-        if request_fresh_retry_decision(tenant_id, profile_id, &exact, fresh_lease, transport)
+        // Both original file handles were independently SHA-256 verified
+        // under the current Bridge OS writer admission.
+        if original.ciphertext().recheck_and_rewind().is_err()
+            || exact.ciphertext().recheck_and_rewind().is_err()
+            || original.container_bytes() != exact.container_bytes()
+        {
+            return Err(RestartExactLocalCompletionError::LocalEvidenceChanged);
+        }
+        if request_fresh_retry_decision_streamed(tenant_id, profile_id, &exact, fresh_lease, transport)
             .map_err(RestartExactLocalCompletionError::ControlPlane)?
             != BridgeGenerationSuccessorRetryVerdict::NotAppliedRetryable
         {
@@ -730,7 +738,7 @@ where
             GenerationUploadAuthorization::Verified => {}
             GenerationUploadAuthorization::UploadRequired(capability) => {
                 upload
-                    .put_exact(&capability, exact.ciphertext())
+                    .put_verified_stream(&capability, exact.ciphertext())
                     .map_err(|_| RestartExactLocalCompletionError::UploadOrCommitUncertain)?;
                 if !matches!(
                     authorization(transport)?,
@@ -855,15 +863,48 @@ fn request_fresh_retry_decision<T: MachineHttpPort>(
     fresh_lease: &ProfileLease,
     transport: &mut T,
 ) -> Result<BridgeGenerationSuccessorRetryVerdict, ShippingControlPlaneError> {
-    let request = BridgeGenerationSuccessorRetryDecisionRequest {
-        attempt: BridgeGenerationSuccessorObserveRequest {
+    request_fresh_retry_decision_for_descriptor(
+        tenant_id, profile_id, BridgeGenerationSuccessorObserveRequest {
             base_generation_id: attempt.base_generation_id().to_owned(),
             generation_id: attempt.successor_id().to_owned(),
             object_key: attempt.object_key().to_owned(),
             metadata_digest: attempt.metadata_digest().to_owned(),
             container_digest: attempt.container_digest().to_owned(),
             container_bytes: attempt.container_bytes(),
-        },
+        }, fresh_lease, transport,
+    )
+}
+
+#[cfg(any(windows, test))]
+fn request_fresh_retry_decision_streamed<T: MachineHttpPort>(
+    tenant_id: &TenantId,
+    profile_id: &ProfileId,
+    attempt: &ReadOnlyStreamedSaveAttempt,
+    fresh_lease: &ProfileLease,
+    transport: &mut T,
+) -> Result<BridgeGenerationSuccessorRetryVerdict, ShippingControlPlaneError> {
+    request_fresh_retry_decision_for_descriptor(
+        tenant_id, profile_id, BridgeGenerationSuccessorObserveRequest {
+            base_generation_id: attempt.base_generation_id().to_owned(),
+            generation_id: attempt.successor_id().to_owned(),
+            object_key: attempt.object_key().to_owned(),
+            metadata_digest: attempt.metadata_digest().to_owned(),
+            container_digest: attempt.container_digest().to_owned(),
+            container_bytes: attempt.container_bytes(),
+        }, fresh_lease, transport,
+    )
+}
+
+#[cfg(any(windows, test))]
+fn request_fresh_retry_decision_for_descriptor<T: MachineHttpPort>(
+    tenant_id: &TenantId,
+    profile_id: &ProfileId,
+    attempt: BridgeGenerationSuccessorObserveRequest,
+    fresh_lease: &ProfileLease,
+    transport: &mut T,
+) -> Result<BridgeGenerationSuccessorRetryVerdict, ShippingControlPlaneError> {
+    let request = BridgeGenerationSuccessorRetryDecisionRequest {
+        attempt,
         coordinator_session_id: fresh_lease.session_id().as_str().to_owned(),
         coordinator_fencing_token: fresh_lease.fencing_token().as_str().to_owned(),
         coordinator_epoch: fresh_lease.epoch(),
@@ -1952,6 +1993,26 @@ mod tests {
         ) -> Result<(), Self::Error> {
             self.calls += 1;
             self.exact_bytes = ciphertext.to_vec();
+            Ok(())
+        }
+    }
+
+    impl crate::shipping_generation_save::SignedGenerationObjectStreamPutPort for RecoveryPut {
+        fn put_verified_stream(
+            &mut self,
+            _capability: &crate::shipping_generation_save::SignedGenerationUploadCapability,
+            object: &mut crate::generation_object_spool::VerifiedGenerationObjectFile,
+        ) -> Result<(), Self::Error> {
+            object
+                .recheck_and_rewind()
+                .map_err(|_| BridgePortError::InvalidResponse)?;
+            self.calls += 1;
+            self.exact_bytes.clear();
+            std::io::copy(object.reader(), &mut self.exact_bytes)
+                .map_err(|_| BridgePortError::Unavailable)?;
+            object
+                .recheck_and_rewind()
+                .map_err(|_| BridgePortError::InvalidResponse)?;
             Ok(())
         }
     }
