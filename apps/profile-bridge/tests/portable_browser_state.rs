@@ -640,17 +640,23 @@ mod p3_fixture {
             base_binding.browser_identity()
         );
         assert_eq!(state.borrow().active_generation, current);
-        let historical_events = &historical_state.borrow().events;
-        assert!(
-            historical_events
-                .iter()
-                .any(|event| event.starts_with("get:"))
-        );
-        assert!(
-            historical_events
-                .iter()
-                .any(|event| event.starts_with("opening-material:"))
-        );
+        {
+            // Drop the read-only fixture borrow BEFORE the owned abort/release
+            // path obtains mutable coordinator state. No invented second writer.
+            let historical_backend = historical_state.borrow();
+            assert!(
+                historical_backend
+                    .events
+                    .iter()
+                    .any(|event| event.starts_with("get:"))
+            );
+            assert!(
+                historical_backend
+                    .events
+                    .iter()
+                    .any(|event| event.starts_with("opening-material:"))
+            );
+        }
         historical_operator.abort(UnixMillis::new(80))?;
         eprintln!(
             "S0_REAL_PORTABLE_BROWSER_STATE=PASSED;STREAMING_BPAT=1;MANAGED_PROCESS=1;MANAGED_IPC=1;COOKIE=1;LOCAL_STORAGE=1;INDEXED_DB=1;AUTHORITATIVE_RESTORE=1;IDENTITY_REUSED=1;HISTORICAL_NONCURRENT_COLD_CAMOUFOX=1;LIVE_LKG_CERTIFICATE=0"
