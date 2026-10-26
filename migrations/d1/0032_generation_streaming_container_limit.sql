@@ -8,6 +8,17 @@
 -- Endpoints and file adapters remain independently capped at MAX_STREAM_CONTAINER_BYTES.
 -- No new paths that can delete cloud generations or root keys are introduced.
 
+-- SQLite reparses trigger programs after DROP TABLE. Temporarily detach the three
+-- existing catalog/pointer guards that reference the old successor table, and
+-- restore their byte-identical definitions after both journals are rebuilt.
+-- The D1 migration runs under its single exclusive schema-change transaction.
+DROP TRIGGER profile_generation_insert_requires_register_command;
+DROP TRIGGER profile_generation_transition_requires_command;
+DROP TRIGGER profile_generation_activation_requires_command;
+DROP TRIGGER device_generation_commit_command_apply;
+DROP TRIGGER profile_generation_successor_command_validate;
+DROP TRIGGER device_generation_commit_command_validate;
+
 CREATE TABLE profile_generation_successor_commands_k2 (
     tenant_id TEXT NOT NULL,
     profile_id TEXT NOT NULL,
@@ -553,4 +564,109 @@ END;
 
 -- A returned foreign-key violation is a hard failure in the accompanying
 -- migration test. No deletion/rewrite is permitted if historical rows differ.
+CREATE TRIGGER profile_generation_insert_requires_register_command
+BEFORE INSERT ON profile_generations
+FOR EACH ROW
+BEGIN
+    SELECT RAISE(ABORT, 'profile_generation_insert_not_governed')
+    WHERE NOT EXISTS (
+        SELECT 1 FROM profile_generation_register_commands
+        WHERE tenant_id = NEW.tenant_id
+          AND profile_id = NEW.profile_id
+          AND generation_id = NEW.generation_id
+          AND object_key = NEW.object_key
+          AND metadata_digest = NEW.metadata_digest
+          AND container_digest = NEW.container_digest
+          AND command_actor_id = NEW.registered_by_actor_id
+          AND executed_at_ms = NEW.created_at_ms
+    )
+    AND NOT EXISTS (
+        SELECT 1 FROM profile_generation_successor_commands
+        WHERE tenant_id = NEW.tenant_id
+          AND profile_id = NEW.profile_id
+          AND generation_id = NEW.generation_id
+          AND object_key = NEW.object_key
+          AND metadata_digest = NEW.metadata_digest
+          AND container_digest = NEW.container_digest
+          AND command_actor_id = NEW.registered_by_actor_id
+          AND executed_at_ms = NEW.created_at_ms
+    );
+END;
+
+CREATE TRIGGER profile_generation_transition_requires_command
+BEFORE UPDATE ON profile_generations
+FOR EACH ROW
+WHEN NEW.status <> OLD.status
+BEGIN
+    SELECT RAISE(ABORT, 'profile_generation_transition_not_governed')
+    WHERE NOT EXISTS (
+        SELECT 1 FROM profile_generation_verify_commands
+        WHERE tenant_id = OLD.tenant_id
+          AND profile_id = OLD.profile_id
+          AND generation_id = OLD.generation_id
+          AND expected_generation_version = OLD.version
+          AND verification_reference = NEW.verification_reference
+          AND command_actor_id = NEW.verified_by_actor_id
+          AND executed_at_ms = NEW.updated_at_ms
+          AND OLD.status = 'REGISTERED'
+          AND NEW.status = 'VERIFIED'
+          AND NEW.version = OLD.version + 1
+    )
+    AND NOT EXISTS (
+        SELECT 1 FROM profile_generation_quarantine_commands
+        WHERE tenant_id = OLD.tenant_id
+          AND profile_id = OLD.profile_id
+          AND generation_id = OLD.generation_id
+          AND expected_generation_version = OLD.version
+          AND command_actor_id = NEW.quarantined_by_actor_id
+          AND executed_at_ms = NEW.updated_at_ms
+          AND OLD.status IN ('REGISTERED', 'VERIFIED')
+          AND NEW.status = 'QUARANTINED'
+          AND NEW.version = OLD.version + 1
+    )
+    AND NOT EXISTS (
+        SELECT 1 FROM profile_generation_successor_commands
+        WHERE tenant_id = OLD.tenant_id
+          AND profile_id = OLD.profile_id
+          AND generation_id = OLD.generation_id
+          AND command_actor_id = NEW.verified_by_actor_id
+          AND NEW.verification_reference = 'r2sha256:' || container_digest
+          AND executed_at_ms = NEW.updated_at_ms
+          AND OLD.status = 'REGISTERED'
+          AND OLD.version = 1
+          AND NEW.status = 'VERIFIED'
+          AND NEW.version = 2
+    );
+END;
+
+CREATE TRIGGER profile_generation_activation_requires_command
+BEFORE UPDATE OF active_generation_id ON browser_profiles
+FOR EACH ROW
+WHEN NEW.active_generation_id IS NOT OLD.active_generation_id
+ AND NEW.active_generation_id IS NOT NULL
+BEGIN
+    SELECT RAISE(ABORT, 'profile_generation_activation_not_governed')
+    WHERE NOT EXISTS (
+        SELECT 1 FROM profile_generation_activate_commands
+        WHERE tenant_id = NEW.tenant_id
+          AND profile_id = NEW.profile_id
+          AND generation_id = NEW.active_generation_id
+          AND expected_profile_version = OLD.version
+          AND command_actor_id = NEW.updated_by_actor_id
+          AND executed_at_ms = NEW.updated_at_ms
+          AND NEW.version = OLD.version + 1
+    )
+    AND NOT EXISTS (
+        SELECT 1 FROM profile_generation_successor_commands
+        WHERE tenant_id = NEW.tenant_id
+          AND profile_id = NEW.profile_id
+          AND base_generation_id = OLD.active_generation_id
+          AND generation_id = NEW.active_generation_id
+          AND expected_profile_version = OLD.version
+          AND command_actor_id = NEW.updated_by_actor_id
+          AND executed_at_ms = NEW.updated_at_ms
+          AND NEW.version = OLD.version + 1
+    );
+END;
+
 PRAGMA foreign_key_check;

@@ -686,6 +686,7 @@ def test_direct_generation_mutations_remain_governed() -> None:
 def main() -> int:
     test_schema_is_metadata_only()
     test_exact_command_atomically_verifies_activates_and_succeeds_job()
+    test_512_mib_streamed_container_commits_with_original_governance()
     test_stale_claim_profile_and_malformed_rows_fail_closed()
     test_revoked_binding_and_authorization_fail_closed()
     test_stale_coordinator_witness_fails_closed()
