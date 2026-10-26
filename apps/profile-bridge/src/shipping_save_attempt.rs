@@ -1016,6 +1016,47 @@ pub(crate) fn retire_active_exact_attempt_after_restart(
     Ok(())
 }
 
+/// Retire only the original local intent paired with this independently
+/// inspected streaming BPAT after fresh D1 ACTIVE_EXACT and root admission.
+/// Never discard a foreign or torn marker, or any source browser bytes.
+#[cfg(any(windows, test))]
+pub(crate) fn retire_matching_streamed_local_unsynced_after_restart(
+    root: &MaterializationRoot,
+    tenant: &TenantId,
+    profile: &ProfileId,
+    checkpoint: &ReadOnlyStreamedSaveAttempt,
+) -> Result<(), SaveAttemptEvidenceError> {
+    if !matching_local_unsynced_for_header(root, tenant, profile, &checkpoint.header)? {
+        return Ok(());
+    }
+    fs::remove_file(local_unsynced_path(root, tenant, profile))?;
+    Ok(())
+}
+
+/// Retire the same large ciphertext after D1 ACTIVE_EXACT, exact local
+/// generation binding and release of the fresh OS writer admission.
+/// The candidate now contains its approved binding sidecar, so no reread of
+/// the *pre-binding* inventory is valid. Preserve BPAT if any proof fails.
+#[cfg(any(windows, test))]
+pub(crate) fn retire_active_streamed_attempt_after_restart(
+    root: &MaterializationRoot,
+    tenant: &TenantId,
+    profile: &ProfileId,
+    selected: &GenerationId,
+    checkpoint: &mut ReadOnlyStreamedSaveAttempt,
+) -> Result<(), SaveAttemptEvidenceError> {
+    if checkpoint.header.tenant != tenant.as_str()
+        || checkpoint.header.profile != profile.as_str()
+        || checkpoint.successor_id() != selected.as_str()
+    {
+        return Err(SaveAttemptEvidenceError::Invalid);
+    }
+    let candidate = root
+        .open_generation(tenant, profile, selected)
+        .map_err(|_| SaveAttemptEvidenceError::Changed)?;
+    retire_verified_streaming_binding(root, checkpoint, &candidate)
+}
+
 /// Physical retirement of a streamed BPAT only AFTER authoritative D1
 /// commit, native local binding, and BOTH release acknowledgements. A
 /// replaced, changed or uncertain file is left in place as recovery evidence.
@@ -1040,15 +1081,26 @@ pub(crate) fn retire_fully_saved_streaming_attempt(
     {
         return Err(SaveAttemptEvidenceError::Changed);
     }
+    retire_verified_streaming_binding(root, checkpoint, candidate)
+}
+
+#[cfg(any(windows, test))]
+fn retire_verified_streaming_binding(
+    root: &MaterializationRoot,
+    checkpoint: &mut ReadOnlyStreamedSaveAttempt,
+    candidate: &GenerationWorkspace,
+) -> Result<(), SaveAttemptEvidenceError> {
+    let checkpoint_tenant = candidate.tenant_id();
+    let checkpoint_profile = candidate.profile_id();
     checkpoint
         .ciphertext()
         .recheck_and_rewind()
         .map_err(|_| SaveAttemptEvidenceError::Changed)?;
     let canonical = attempt_path(
         root,
-        lease.tenant_id(),
-        lease.profile_id(),
-        committed.generation_id(),
+        checkpoint_tenant,
+        checkpoint_profile,
+        candidate.generation_id(),
     );
     let header = read_bounded_attempt_header(&canonical)?;
     if header != checkpoint.header {
@@ -1070,7 +1122,7 @@ pub(crate) fn retire_fully_saved_streaming_attempt(
     let mut reopened = VerifiedGenerationObjectFile::open_checkpoint_payload(
         &canonical,
         12 + header_bytes.len() as u64,
-        committed.container_bytes(),
+        checkpoint.container_bytes(),
         digest,
     )
     .map_err(|_| SaveAttemptEvidenceError::Changed)?;
@@ -1079,12 +1131,12 @@ pub(crate) fn retire_fully_saved_streaming_attempt(
         .map_err(|_| SaveAttemptEvidenceError::Changed)?;
     let binding = crate::browser_execution::load_materialization_binding(
         candidate,
-        lease.tenant_id(),
-        lease.profile_id(),
-        committed.generation_id(),
+        checkpoint_tenant,
+        checkpoint_profile,
+        candidate.generation_id(),
     )
     .map_err(|_| SaveAttemptEvidenceError::Changed)?;
-    if binding.source_container_sha256() != committed.container_digest()
+    if binding.source_container_sha256() != checkpoint.container_digest()
         || candidate
             .materialization_inventory_digest()
             .map_err(|_| SaveAttemptEvidenceError::Changed)?

@@ -30,7 +30,8 @@ use crate::shipping_save_attempt::{
     ScopedPendingSaveEvidence, classify_scoped_pending_save_evidence,
     deterministic_lone_unsynced_successor, local_unsynced_matches_fresh_lease,
     persist_exact_save_attempt_from_lone_intent, retire_active_exact_attempt_after_restart,
-    retire_matching_local_unsynced_after_restart,
+    retire_active_streamed_attempt_after_restart, retire_matching_local_unsynced_after_restart,
+    retire_matching_streamed_local_unsynced_after_restart,
 };
 use control_plane_contract::profile_generation_api::{
     BRIDGE_PROFILE_GENERATION_COMMIT_PATH_TEMPLATE,
@@ -300,8 +301,30 @@ pub(crate) fn complete_active_exact_after_restart<T: MachineHttpPort>(
     {
         return Err(RestartExactLocalCompletionError::WriterOrLockUnresolved);
     }
+    // Inspect the ONE canonical BPAT with bounded memory before the legacy
+    // lone-intent classifier: a 512 MiB verified checkpoint must not hit the
+    // old full-ciphertext 64 MiB read. This is still the SAME completion owner.
+    match discover_unresolved_streaming_exact_save_attempt(root, tenant_id, profile_id) {
+        Ok(Some(streamed)) => {
+            return complete_streamed_exact_under_fresh_claim(
+                root,
+                tenant_id,
+                profile_id,
+                selected_generation,
+                fresh_lease,
+                streamed,
+                transport,
+            );
+        }
+        Ok(None) | Err(_) => {}
+    }
     let pending = classify_scoped_pending_save_evidence(root, tenant_id, profile_id)
         .map_err(|_| RestartExactLocalCompletionError::LocalEvidenceChanged)?;
+    if matches!(pending, ScopedPendingSaveEvidence::Exact(_)) {
+        // A legacy Vec inspector may never overrule a failed streamed
+        // identity/digest/inventory check. Large BPATs must not allocate.
+        return Err(RestartExactLocalCompletionError::LocalEvidenceChanged);
+    }
     let attempt = match pending {
         ScopedPendingSaveEvidence::None => {
             return Ok(RestartExactLocalCompletion::NoCanonicalCheckpoint);
@@ -438,6 +461,118 @@ pub(crate) fn complete_active_exact_after_restart<T: MachineHttpPort>(
     let verified = local_result?;
     retire_active_exact_attempt_after_restart(root, tenant_id, profile_id, &verified)
         .map_err(|_| RestartExactLocalCompletionError::BindingOrRetirementFailed)?;
+    Ok(RestartExactLocalCompletion::ActiveExactLocalReady)
+}
+
+/// Bounded-memory implementation of the existing restart-completion owner.
+/// The server-selected generation, fresh CNG/ACL/coordinator claim, native
+/// OS admission and D1 ACTIVE_EXACT still decide whether Open is allowed.
+#[cfg(any(windows, test))]
+#[allow(clippy::too_many_arguments)]
+fn complete_streamed_exact_under_fresh_claim<T: MachineHttpPort>(
+    root: &MaterializationRoot,
+    tenant_id: &TenantId,
+    profile_id: &ProfileId,
+    selected: &GenerationId,
+    fresh_lease: &ProfileLease,
+    mut original: ReadOnlyStreamedSaveAttempt,
+    transport: &mut T,
+) -> Result<RestartExactLocalCompletion, RestartExactLocalCompletionError> {
+    if original.successor_id() != selected.as_str() {
+        if original.base_generation_id() != selected.as_str() {
+            return Ok(RestartExactLocalCompletion::ServerSelectedDifferentGeneration);
+        }
+        if fresh_lease.epoch() <= original.original_epoch()
+            || !original.original_device(fresh_lease)
+        {
+            return Err(RestartExactLocalCompletionError::WriterOrLockUnresolved);
+        }
+        return Ok(
+            match request_fresh_retry_decision_streamed(
+                tenant_id,
+                profile_id,
+                &original,
+                fresh_lease,
+                transport,
+            )
+            .map_err(RestartExactLocalCompletionError::ControlPlane)?
+            {
+                BridgeGenerationSuccessorRetryVerdict::NotAppliedRetryable => {
+                    RestartExactLocalCompletion::RetryDecisionConfirmedAwaitingResumption
+                }
+                BridgeGenerationSuccessorRetryVerdict::Blocked => {
+                    RestartExactLocalCompletion::RetryDecisionBlocked
+                }
+            },
+        );
+    }
+    if !observe_verified_streamed_attempt(tenant_id, profile_id, &original, transport)
+        .map_err(RestartExactLocalCompletionError::ControlPlane)?
+    {
+        return Ok(RestartExactLocalCompletion::NotActiveExact);
+    }
+    let base_id = GenerationId::parse(original.base_generation_id())
+        .map_err(|_| RestartExactLocalCompletionError::LocalEvidenceChanged)?;
+    let base = root
+        .open_generation(tenant_id, profile_id, &base_id)
+        .map_err(|_| RestartExactLocalCompletionError::LocalEvidenceChanged)?;
+    let candidate = root
+        .open_generation(tenant_id, profile_id, selected)
+        .map_err(|_| RestartExactLocalCompletionError::LocalEvidenceChanged)?;
+    if !matches!(browser_writer_locks_absent(&base), Ok(true))
+        || !matches!(browser_writer_locks_absent(&candidate), Ok(true))
+    {
+        return Err(RestartExactLocalCompletionError::WriterOrLockUnresolved);
+    }
+    let lock =
+        match BridgeWorkspaceLock::acquire(&base, fresh_lease.device_id(), fresh_lease.epoch()) {
+            Ok(value) => value,
+            Err(LocalProfileError::LockBusy) => BridgeWorkspaceLock::recover_interrupted_launch(
+                &base,
+                fresh_lease.device_id(),
+                fresh_lease.epoch(),
+            )
+            .map_err(|_| RestartExactLocalCompletionError::WriterOrLockUnresolved)?,
+            Err(_) => return Err(RestartExactLocalCompletionError::WriterOrLockUnresolved),
+        };
+    let local_result = (|| {
+        // Two separately opened verified handles prevent a pathname swap
+        // or mutation between pre-claim D1 observation and binding.
+        let mut exact = discover_unresolved_streaming_exact_save_attempt(
+            root, tenant_id, profile_id,
+        )
+        .map_err(|_| RestartExactLocalCompletionError::LocalEvidenceChanged)?
+        .ok_or(RestartExactLocalCompletionError::LocalEvidenceChanged)?;
+        if exact.successor_id() != original.successor_id()
+            || exact.base_generation_id() != original.base_generation_id()
+            || exact.object_key() != original.object_key()
+            || exact.metadata_digest() != original.metadata_digest()
+            || exact.container_digest() != original.container_digest()
+            || exact.container_bytes() != original.container_bytes()
+            || !matches!(browser_writer_locks_absent(&base), Ok(true))
+            || !matches!(browser_writer_locks_absent(&candidate), Ok(true))
+            || original.ciphertext().recheck_and_rewind().is_err()
+            || exact.ciphertext().recheck_and_rewind().is_err()
+        {
+            return Err(RestartExactLocalCompletionError::LocalEvidenceChanged);
+        }
+        retire_matching_streamed_local_unsynced_after_restart(
+            root, tenant_id, profile_id, &exact,
+        )
+        .map_err(|_| RestartExactLocalCompletionError::LocalEvidenceChanged)?;
+        persist_committed_successor_binding(
+            &candidate, tenant_id, profile_id, selected, exact.container_digest(),
+        )
+        .map_err(|_| RestartExactLocalCompletionError::BindingOrRetirementFailed)?;
+        Ok(exact)
+    })();
+    lock.release()
+        .map_err(|_| RestartExactLocalCompletionError::WriterOrLockUnresolved)?;
+    let mut verified = local_result?;
+    retire_active_streamed_attempt_after_restart(
+        root, tenant_id, profile_id, selected, &mut verified,
+    )
+    .map_err(|_| RestartExactLocalCompletionError::BindingOrRetirementFailed)?;
     Ok(RestartExactLocalCompletion::ActiveExactLocalReady)
 }
 
