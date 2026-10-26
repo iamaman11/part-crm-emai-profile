@@ -671,7 +671,10 @@ mod tests {
         let prelude = object.read_descriptor_verified_metadata_prelude()?;
         let inspected = encrypted_generation_domain::inspect_generation_metadata_prelude(&prelude)?;
         assert_eq!(inspected.metadata_digest(), expected.metadata_digest());
-        assert_eq!(inspected.metadata().generation_id(), capability.generation_id());
+        assert_eq!(
+            inspected.metadata().generation_id(),
+            capability.generation_id()
+        );
         let mut opened_count = 0_u64;
         struct CountSink<'a>(&'a mut u64);
         impl Write for CountSink<'_> {
