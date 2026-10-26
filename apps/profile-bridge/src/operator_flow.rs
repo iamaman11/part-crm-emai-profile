@@ -530,6 +530,7 @@ struct ActiveOperatorSession {
 
 /// A transient, read-only observation from the ONE operator owner. Not a
 /// persisted ProfileStatus, permission, cloud fact, or second state machine.
+#[cfg(any(windows, test))]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct OperatorDiagnosticFacts {
     pub(crate) active_local: Option<LocalGenerationState>,
@@ -1468,6 +1469,7 @@ where
 
     /// Observe existing local owner facts without I/O, lease refresh, or an
     /// assertion that the browser is still alive or cloud state is current.
+    #[cfg(any(windows, test))]
     #[must_use]
     pub(crate) fn diagnostic_facts(&self) -> OperatorDiagnosticFacts {
         OperatorDiagnosticFacts {
@@ -1717,6 +1719,20 @@ impl From<LocalProfileError> for OperatorFlowError {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn operator_evidence_is_read_only_and_does_not_infer_remote_writer_authority()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let fixture = Fixture::new()?;
+        let operator = operator(&fixture, FakeCamouhost::default())?;
+        let facts = operator.diagnostic_facts();
+        assert_eq!(facts.active_local, None);
+        assert_eq!(facts.retained_local, None);
+        assert!(!facts.candidate_prepared);
+        assert!(!facts.cleanup_blocked);
+        assert_eq!(operator.coordinator().claimed, 0);
+        Ok(())
+    }
+
     #[test]
     fn save_owner_maps_control_and_local_causes_without_granting_retries() {
         use super::{
