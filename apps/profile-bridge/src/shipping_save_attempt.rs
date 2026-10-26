@@ -18,7 +18,7 @@ use serde::{Deserialize, Serialize};
 use session_domain::ProfileLease;
 use sha2::{Digest, Sha256};
 use std::fs::{self, File, OpenOptions};
-use std::io::{Read, Seek, SeekFrom, Write};
+use std::io::{Read, Write};
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -1686,9 +1686,12 @@ mod streaming_checkpoint_tests {
         evidence.ciphertext().recheck_and_rewind()?;
         let checkpoint = attempt_path(&root, &tenant, &profile, &next);
         let previous_length = fs::metadata(&checkpoint)?.len();
-        let mut mutation = OpenOptions::new().write(true).open(&checkpoint)?;
+        let mut mutation = OpenOptions::new().read(true).write(true).open(&checkpoint)?;
         mutation.seek(SeekFrom::Start(previous_length - 1))?;
-        mutation.write_all(&[0x7f])?;
+        let mut last = [0_u8; 1];
+        mutation.read_exact(&mut last)?;
+        mutation.seek(SeekFrom::Start(previous_length - 1))?;
+        mutation.write_all(&[last[0] ^ 1])?;
         mutation.sync_all()?;
         assert!(inspect_streaming_exact_save_attempt(
             &root, &tenant, &profile, &next,
