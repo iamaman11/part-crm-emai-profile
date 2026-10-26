@@ -832,7 +832,7 @@ mod tests {
     use super::{
         GenerationSnapshotError, StreamedWorkspaceSnapshot, WORKSPACE_SNAPSHOT_MAGIC,
         encode_workspace_snapshot, encode_workspace_snapshot_streaming,
-        materialize_workspace_snapshot, materialize_workspace_snapshot_streaming_with_pre_publish,
+        encoded_stream_snapshot_size, materialize_workspace_snapshot, materialize_workspace_snapshot_streaming_with_pre_publish,
         materialize_workspace_snapshot_with_pre_publish, parse_workspace_snapshot,
     };
     use crate::local_profile::MaterializationRoot;
@@ -885,6 +885,23 @@ mod tests {
     }
 
     #[test]
+    fn full_512_mib_firefox_native_profile_fits_maximum_canonical_framing() {
+        let raw = 536_870_912_u64;
+        let max_file_count = 100_000_u64;
+        let max_path_bytes = 512_u64;
+        let encoded = 12 + raw + max_file_count * (2 + max_path_bytes + 8);
+        assert_eq!(super::MAX_STREAM_NATIVE_PROFILE_BYTES, raw);
+        assert_eq!(
+            super::MAX_STREAM_WORKSPACE_SNAPSHOT_BYTES,
+            encrypted_generation_domain::MAX_STREAM_PLAINTEXT_BYTES,
+        );
+        assert!(
+            encoded <= super::MAX_STREAM_WORKSPACE_SNAPSHOT_BYTES,
+            "512 MiB native profiles must not be rejected solely due to BPGW metadata",
+        );
+    }
+
+    #[test]
     fn streamed_snapshot_is_byte_identical_and_digest_identical_to_legacy()
     -> Result<(), Box<dyn std::error::Error>> {
         let fixture = Fixture::new()?;
@@ -903,6 +920,7 @@ mod tests {
             let legacy = encode_workspace_snapshot(&source, &inventory)?;
             let mut output = Vec::new();
             let report = encode_workspace_snapshot_streaming(&source, &inventory, &mut output)?;
+            assert_eq!(encoded_stream_snapshot_size(&inventory)?, output.len() as u64);
             assert_eq!(legacy, output);
             assert_eq!(report.plaintext_bytes, output.len() as u64);
             let expected: [u8; 32] = sha2::Sha256::digest(&legacy).into();
