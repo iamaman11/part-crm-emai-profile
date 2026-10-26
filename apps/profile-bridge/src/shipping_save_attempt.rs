@@ -624,22 +624,6 @@ pub(crate) fn persist_exact_save_attempt(
     persist_exact_save_attempt_with_origin(root, source, prepared, lease, None)
 }
 
-/// First checkpoint from a preexisting local-close intent after a fresh writer
-/// has revalidated the native inventory and the deterministic N+1. The old
-/// intent stays until authoritative ACTIVE_EXACT local completion; a crash
-/// after fsync therefore leaves BOTH correctly paired records.
-#[cfg(any(windows, test))]
-pub(crate) fn persist_exact_save_attempt_from_lone_intent(
-    root: &MaterializationRoot,
-    source: &GenerationWorkspace,
-    prepared: &PreparedDirtyGeneration,
-    fresh_lease: &ProfileLease,
-) -> Result<(), SaveAttemptEvidenceError> {
-    let origin =
-        verified_recovered_lone_origin(root, source, prepared.candidate_workspace(), fresh_lease)?;
-    persist_exact_save_attempt_with_origin(root, source, prepared, fresh_lease, Some(origin))
-}
-
 #[cfg(any(windows, test))]
 fn verified_recovered_lone_origin(
     root: &MaterializationRoot,

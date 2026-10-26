@@ -1401,8 +1401,9 @@ mod tests {
         GenerationUploadAuthorization,
     };
     use crate::shipping_save_attempt::{
-        discover_unresolved_exact_save_attempt, has_unresolved_save_attempt_for_profile,
-        inspect_exact_save_attempt, persist_exact_save_attempt, persist_local_unsynced_intent,
+        discover_unresolved_exact_save_attempt, discover_unresolved_streaming_exact_save_attempt,
+        has_unresolved_save_attempt_for_profile, inspect_exact_save_attempt,
+        persist_exact_save_attempt, persist_local_unsynced_intent,
         retire_local_unsynced_after_exact_checkpoint,
     };
     use bridge_domain::BridgePortError;
