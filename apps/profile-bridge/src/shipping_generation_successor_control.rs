@@ -538,11 +538,10 @@ fn complete_streamed_exact_under_fresh_claim<T: MachineHttpPort>(
     let local_result = (|| {
         // Two separately opened verified handles prevent a pathname swap
         // or mutation between pre-claim D1 observation and binding.
-        let mut exact = discover_unresolved_streaming_exact_save_attempt(
-            root, tenant_id, profile_id,
-        )
-        .map_err(|_| RestartExactLocalCompletionError::LocalEvidenceChanged)?
-        .ok_or(RestartExactLocalCompletionError::LocalEvidenceChanged)?;
+        let mut exact =
+            discover_unresolved_streaming_exact_save_attempt(root, tenant_id, profile_id)
+                .map_err(|_| RestartExactLocalCompletionError::LocalEvidenceChanged)?
+                .ok_or(RestartExactLocalCompletionError::LocalEvidenceChanged)?;
         if exact.successor_id() != original.successor_id()
             || exact.base_generation_id() != original.base_generation_id()
             || exact.object_key() != original.object_key()
@@ -556,12 +555,14 @@ fn complete_streamed_exact_under_fresh_claim<T: MachineHttpPort>(
         {
             return Err(RestartExactLocalCompletionError::LocalEvidenceChanged);
         }
-        retire_matching_streamed_local_unsynced_after_restart(
-            root, tenant_id, profile_id, &exact,
-        )
-        .map_err(|_| RestartExactLocalCompletionError::LocalEvidenceChanged)?;
+        retire_matching_streamed_local_unsynced_after_restart(root, tenant_id, profile_id, &exact)
+            .map_err(|_| RestartExactLocalCompletionError::LocalEvidenceChanged)?;
         persist_committed_successor_binding(
-            &candidate, tenant_id, profile_id, selected, exact.container_digest(),
+            &candidate,
+            tenant_id,
+            profile_id,
+            selected,
+            exact.container_digest(),
         )
         .map_err(|_| RestartExactLocalCompletionError::BindingOrRetirementFailed)?;
         Ok(exact)
@@ -570,7 +571,11 @@ fn complete_streamed_exact_under_fresh_claim<T: MachineHttpPort>(
         .map_err(|_| RestartExactLocalCompletionError::WriterOrLockUnresolved)?;
     let mut verified = local_result?;
     retire_active_streamed_attempt_after_restart(
-        root, tenant_id, profile_id, selected, &mut verified,
+        root,
+        tenant_id,
+        profile_id,
+        selected,
+        &mut verified,
     )
     .map_err(|_| RestartExactLocalCompletionError::BindingOrRetirementFailed)?;
     Ok(RestartExactLocalCompletion::ActiveExactLocalReady)
