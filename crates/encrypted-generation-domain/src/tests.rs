@@ -1,11 +1,10 @@
 use super::{
     CloudGenerationRepository, CloudGenerationStatus, ContainerDigest, EncryptedGenerationError,
     GenerationDek, GenerationIdentity, GenerationMetadata, KeyId,
-    MAX_GENERATION_METADATA_PRELUDE_BYTES, MAX_STREAM_CONTAINER_BYTES,
-    MAX_STREAM_PLAINTEXT_BYTES, NoncePrefix,
-    PlaintextDigest, PublishResult, StreamingGenerationError, inspect_generation_metadata_prelude,
-    open_generation, open_generation_expected, open_generation_streaming, seal_generation,
-    seal_generation_streaming,
+    MAX_GENERATION_METADATA_PRELUDE_BYTES, MAX_STREAM_CONTAINER_BYTES, MAX_STREAM_PLAINTEXT_BYTES,
+    NoncePrefix, PlaintextDigest, PublishResult, StreamingGenerationError,
+    inspect_generation_metadata_prelude, open_generation, open_generation_expected,
+    open_generation_streaming, seal_generation, seal_generation_streaming,
 };
 use profile_platform_primitives::{GenerationId, ProfileId, TenantId, UnixMillis};
 use std::io::Read;
@@ -215,8 +214,8 @@ fn encoded_512_mib_native_profile_and_min_chunk_framing_fit_stream_bounds() {
     let encoded = 12 + RAW_512_MIB + MAX_FILES * PATH_AND_FILE_HEADER;
     assert!(encoded <= MAX_STREAM_PLAINTEXT_BYTES);
     let max_records = MAX_STREAM_PLAINTEXT_BYTES.div_ceil(MIN_CHUNK_SIZE);
-    let worst_ciphertext = 12 + 4_096 + MAX_STREAM_PLAINTEXT_BYTES
-        + (max_records + 1) * RECORD_OVERHEAD;
+    let worst_ciphertext =
+        12 + 4_096 + MAX_STREAM_PLAINTEXT_BYTES + (max_records + 1) * RECORD_OVERHEAD;
     assert!(worst_ciphertext <= MAX_STREAM_CONTAINER_BYTES);
 }
 

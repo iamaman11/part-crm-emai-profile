@@ -204,9 +204,7 @@ impl<'a> WorkspaceSnapshotReader<'a> {
         for entry in inventory.entries() {
             let relative = entry.relative_path();
             validate_windows_relative_path(relative)?;
-            if previous.is_some_and(|p| p >= relative)
-                || !seen.insert(relative.to_lowercase())
-            {
+            if previous.is_some_and(|p| p >= relative) || !seen.insert(relative.to_lowercase()) {
                 return Err(GenerationSnapshotError::UnsafePath);
             }
             previous = Some(relative);
@@ -268,10 +266,9 @@ impl Read for WorkspaceSnapshotReader<'_> {
 
             if let Some(file) = self.current_file.as_mut() {
                 if self.remaining_file_bytes != 0 {
-                    let allowed = usize::try_from(
-                        self.remaining_file_bytes.min(output.len() as u64),
-                    )
-                    .map_err(|_| snapshot_reader_changed())?;
+                    let allowed =
+                        usize::try_from(self.remaining_file_bytes.min(output.len() as u64))
+                            .map_err(|_| snapshot_reader_changed())?;
                     let count = file.read(&mut output[..allowed])?;
                     if count == 0 {
                         return Err(snapshot_reader_changed());
@@ -303,8 +300,7 @@ impl Read for WorkspaceSnapshotReader<'_> {
                 self.current_file = Some(file);
                 self.remaining_file_bytes = entry.bytes();
                 let name = relative.as_bytes();
-                let name_len = u16::try_from(name.len())
-                    .map_err(|_| snapshot_reader_changed())?;
+                let name_len = u16::try_from(name.len()).map_err(|_| snapshot_reader_changed())?;
                 self.pending.extend_from_slice(&name_len.to_be_bytes());
                 self.pending.extend_from_slice(name);
                 self.pending.extend_from_slice(&entry.bytes().to_be_bytes());
@@ -991,10 +987,10 @@ fn checked_extend(output: &mut Vec<u8>, bytes: &[u8]) -> Result<(), GenerationSn
 #[cfg(test)]
 mod tests {
     use super::{
-        GenerationSnapshotError, StreamedWorkspaceSnapshot, WorkspaceSnapshotReader,
-        WORKSPACE_SNAPSHOT_MAGIC,
-        encode_workspace_snapshot, encode_workspace_snapshot_streaming,
-        encoded_stream_snapshot_size, materialize_workspace_snapshot, materialize_workspace_snapshot_streaming_with_pre_publish,
+        GenerationSnapshotError, StreamedWorkspaceSnapshot, WORKSPACE_SNAPSHOT_MAGIC,
+        WorkspaceSnapshotReader, encode_workspace_snapshot, encode_workspace_snapshot_streaming,
+        encoded_stream_snapshot_size, materialize_workspace_snapshot,
+        materialize_workspace_snapshot_streaming_with_pre_publish,
         materialize_workspace_snapshot_with_pre_publish, parse_workspace_snapshot,
     };
     use crate::local_profile::MaterializationRoot;
@@ -1075,9 +1071,10 @@ mod tests {
         let result = (|| {
             let base = GenerationId::parse("generation_direct_streaming_reader")?;
             let next = GenerationId::parse("generation_direct_streaming_successor")?;
-            let source = fixture.root.create_generation(
-                &fixture.tenant_id, &fixture.profile_id, &base,
-            )?;
+            let source =
+                fixture
+                    .root
+                    .create_generation(&fixture.tenant_id, &fixture.profile_id, &base)?;
             fs::write(source.path().join("prefs.js"), b"user_pref('local', true);")?;
             let directory = source.path().join("user_data");
             fs::create_dir_all(&directory)?;
@@ -1090,22 +1087,24 @@ mod tests {
             let key = GenerationDek::new(KeyId::parse("direct_streaming_reader_key")?, [0x7e; 32]);
             let metadata = GenerationMetadata::for_reader(
                 GenerationIdentity::new(
-                    fixture.tenant_id.clone(), fixture.profile_id.clone(),
-                    next, Some(base),
+                    fixture.tenant_id.clone(),
+                    fixture.profile_id.clone(),
+                    next,
+                    Some(base),
                 ),
-                key.key_id().clone(), NoncePrefix::new([0x54; 16]),
-                65_536, &mut digest_reader,
+                key.key_id().clone(),
+                NoncePrefix::new([0x54; 16]),
+                65_536,
+                &mut digest_reader,
             )?;
             let mut seal_reader = WorkspaceSnapshotReader::new(&source, &inventory)?;
             let mut encrypted = Vec::new();
-            let report = seal_generation_streaming(
-                &metadata, &key, &mut seal_reader, &mut encrypted,
-            )?;
+            let report =
+                seal_generation_streaming(&metadata, &key, &mut seal_reader, &mut encrypted)?;
             assert_eq!(report.container_bytes(), encrypted.len() as u64);
             let mut decrypted = Vec::new();
-            let opened = open_generation_streaming(
-                &mut encrypted.as_slice(), &key, &mut decrypted,
-            )?;
+            let opened =
+                open_generation_streaming(&mut encrypted.as_slice(), &key, &mut decrypted)?;
             assert_eq!(report, opened);
             assert_eq!(decrypted, canonical);
             let mut eof = [0_u8; 4];
@@ -1128,9 +1127,10 @@ mod tests {
         let result = (|| {
             let base = GenerationId::parse("generation_direct_changed_base")?;
             let next = GenerationId::parse("generation_direct_changed_next")?;
-            let source = fixture.root.create_generation(
-                &fixture.tenant_id, &fixture.profile_id, &base,
-            )?;
+            let source =
+                fixture
+                    .root
+                    .create_generation(&fixture.tenant_id, &fixture.profile_id, &base)?;
             let native = source.path().join("prefs.js");
             fs::write(&native, b"original Firefox native bytes")?;
             let before = source.inventory()?;
@@ -1138,22 +1138,35 @@ mod tests {
             let mut digest_reader = WorkspaceSnapshotReader::new(&source, &before)?;
             let metadata = GenerationMetadata::for_reader(
                 GenerationIdentity::new(
-                    fixture.tenant_id.clone(), fixture.profile_id.clone(),
-                    next.clone(), Some(base),
+                    fixture.tenant_id.clone(),
+                    fixture.profile_id.clone(),
+                    next.clone(),
+                    Some(base),
                 ),
-                key.key_id().clone(), NoncePrefix::new([0x32; 16]),
-                65_536, &mut digest_reader,
+                key.key_id().clone(),
+                NoncePrefix::new([0x32; 16]),
+                65_536,
+                &mut digest_reader,
             )?;
             fs::write(&native, b"modified Firefox native bytes")?;
             let mut seal_reader = WorkspaceSnapshotReader::new(&source, &before)?;
             let mut unpublishable_ciphertext = Vec::new();
-            assert!(seal_generation_streaming(
-                &metadata, &key, &mut seal_reader, &mut unpublishable_ciphertext,
-            ).is_err());
+            assert!(
+                seal_generation_streaming(
+                    &metadata,
+                    &key,
+                    &mut seal_reader,
+                    &mut unpublishable_ciphertext,
+                )
+                .is_err()
+            );
             assert_eq!(fs::read(&native)?, b"modified Firefox native bytes");
-            assert!(fixture.root.open_generation(
-                &fixture.tenant_id, &fixture.profile_id, &next,
-            ).is_err());
+            assert!(
+                fixture
+                    .root
+                    .open_generation(&fixture.tenant_id, &fixture.profile_id, &next,)
+                    .is_err()
+            );
             Ok::<(), Box<dyn std::error::Error>>(())
         })();
         fixture.cleanup();
@@ -1179,7 +1192,10 @@ mod tests {
             let legacy = encode_workspace_snapshot(&source, &inventory)?;
             let mut output = Vec::new();
             let report = encode_workspace_snapshot_streaming(&source, &inventory, &mut output)?;
-            assert_eq!(encoded_stream_snapshot_size(&inventory)?, output.len() as u64);
+            assert_eq!(
+                encoded_stream_snapshot_size(&inventory)?,
+                output.len() as u64
+            );
             assert_eq!(legacy, output);
             assert_eq!(report.plaintext_bytes, output.len() as u64);
             let expected: [u8; 32] = sha2::Sha256::digest(&legacy).into();
