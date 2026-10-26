@@ -1322,30 +1322,15 @@ pub(crate) fn persist_streaming_exact_save_attempt_from_native<K: GenerationSeal
     {
         return Err(SaveAttemptEvidenceError::Changed);
     }
+    let measured_digest: [u8; 32] = digest.finalize().into();
     let material = sealer.material_for(
         lease.tenant_id(), lease.profile_id(),
-        source.generation_id(), candidate.generation_id(), digest.finalize().into(),
+        source.generation_id(), candidate.generation_id(), measured_digest,
     ).map_err(|_| SaveAttemptEvidenceError::Unavailable)?;
     let (key, nonce, chunk_size) = material.into_parts();
-    // The digest is measured from actual native files rather than asserted
-    // from caller-owned metadata; the AEAD sealer will recompute it AGAIN.
-    let measured_digest = {
-        // The key owner may have made a change during material selection.
-        // Re-read through the same bounded canonical source to get a stable
-        // expected digest; subsequent source churn still fails the seal.
-        let mut proof = WorkspaceSnapshotReader::new(candidate, &inventory)
-            .map_err(|_| SaveAttemptEvidenceError::Changed)?;
-        let mut hasher = Sha256::new();
-        loop {
-            let count = proof.read(&mut buffer).map_err(|_| SaveAttemptEvidenceError::Changed)?;
-            if count == 0 { break; }
-            hasher.update(&buffer[..count]);
-        }
-        let digest: [u8; 32] = hasher.finalize().into();
-        digest
-    };
-    // A changed key-owner source cannot silently produce a second ciphertext.
-    // The key lookup's digest is re-used; any mismatch blocks publication.
+    // The first pass is bound to the original DEK request. Neither a
+    // changed key-owner source nor a subsequent same-size edit can change
+    // the ciphertext silently: both sealing passes authenticate this digest.
     let mut comparison = WorkspaceSnapshotReader::new(candidate, &inventory)
         .map_err(|_| SaveAttemptEvidenceError::Changed)?;
     let metadata = GenerationMetadata::for_prehashed_stream(
