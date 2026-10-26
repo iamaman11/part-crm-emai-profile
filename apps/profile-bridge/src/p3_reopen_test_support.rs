@@ -1,4 +1,5 @@
 use crate::browser_execution::{load_materialization_binding, persist_materialization_binding};
+use crate::generation_object_spool::VerifiedGenerationObjectFile;
 use crate::generation_reopen::{
     SignedGenerationObjectGetPort, SignedGenerationObjectGetResponse,
     VerifiedGenerationObjectDownloader,
@@ -14,7 +15,8 @@ use crate::shipping_control_plane::{
     MachineHttpResponse,
 };
 use crate::shipping_generation_save::{
-    SignedGenerationObjectPutPort, SignedGenerationUploadCapability,
+    SignedGenerationObjectPutPort, SignedGenerationObjectStreamPutPort,
+    SignedGenerationUploadCapability,
 };
 use crate::test_support::browser_identity_fixture;
 use crate::{FakeCamouhost, FakeDeviceIdentity, FakeDeviceKeyStore, FakeProcessControl};
@@ -36,7 +38,9 @@ use control_plane_contract::generation_reopen_api::{
 };
 use control_plane_contract::profile_generation_api::{
     BridgeGenerationSuccessorCommitOutcomeDto, BridgeGenerationSuccessorCommitResponse,
-    BridgeGenerationUploadCapabilityResponse, BridgeProfileGenerationSuccessorRequest,
+    BridgeGenerationSuccessorRetryDecisionRequest, BridgeGenerationSuccessorRetryDecisionResponse,
+    BridgeGenerationSuccessorRetryVerdict, BridgeGenerationUploadCapabilityResponse,
+    BridgeProfileGenerationSuccessorRequest,
 };
 use control_plane_contract::profile_launch_api::{
     BRIDGE_PROFILE_LAUNCH_REDEMPTION_PATH, BridgeProfileLaunchRedemptionProjection,
@@ -56,6 +60,7 @@ use serde::Serialize;
 use sha2::{Digest, Sha256};
 use std::cell::RefCell;
 use std::fs;
+use std::io::Read;
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -135,6 +140,9 @@ impl MachineHttpPort for BackendMachineHttp {
             return Err(BridgePortError::InvalidResponse);
         }
         let body = body.ok_or(BridgePortError::InvalidResponse)?;
+        if path.ends_with("/generation-successor/retry-decision") {
+            return state.retry_decision(body);
+        }
         if path.ends_with("/generation-successor/sealing-material") {
             return state.sealing_material(body);
         }
@@ -348,6 +356,44 @@ impl BackendState {
         ))
     }
 
+    fn retry_decision(&mut self, body: &[u8]) -> Result<MachineHttpResponse, BridgePortError> {
+        let request =
+            serde_json::from_slice::<BridgeGenerationSuccessorRetryDecisionRequest>(body)
+                .map_err(|_| BridgePortError::InvalidResponse)?;
+        self.check_witness(
+            &request.coordinator_session_id,
+            &request.coordinator_fencing_token,
+            request.coordinator_epoch,
+        )?;
+        let attempt = request.attempt;
+        let tenant = TenantId::parse(TENANT.to_owned())
+            .map_err(|_| BridgePortError::InvalidResponse)?;
+        let profile = ProfileId::parse(PROFILE.to_owned())
+            .map_err(|_| BridgePortError::InvalidResponse)?;
+        let generation = GenerationId::parse(attempt.generation_id.clone())
+            .map_err(|_| BridgePortError::InvalidResponse)?;
+        if attempt.base_generation_id != self.active_generation.as_str()
+            || attempt.generation_id == attempt.base_generation_id
+            || attempt.object_key != canonical_generation_object_key(&tenant, &profile, &generation)
+            || attempt.container_bytes == 0
+            || attempt.metadata_digest.len() != 64
+            || attempt.container_digest.len() != 64
+            || self.committed_successor.is_some()
+            || self.pending_successor.is_some()
+            || self.object.is_some()
+        {
+            return Err(BridgePortError::InvalidResponse);
+        }
+        // The fixture represents an independently verified D1 nonapplication
+        // observation. It never grants a stale fence, a signed PUT or a second
+        // successor. In production the same verdict comes from the D1 owner.
+        self.events
+            .push(format!("retry:nonapplied:{}", attempt.generation_id));
+        json_response(&BridgeGenerationSuccessorRetryDecisionResponse {
+            verdict: BridgeGenerationSuccessorRetryVerdict::NotAppliedRetryable,
+        })
+    }
+
     fn upload_capability(&mut self, body: &[u8]) -> Result<MachineHttpResponse, BridgePortError> {
         let request = serde_json::from_slice::<BridgeProfileGenerationSuccessorRequest>(body)
             .map_err(|_| BridgePortError::InvalidResponse)?;
@@ -552,6 +598,32 @@ impl SignedGenerationObjectPutPort for BackendPut {
         state.object = Some(container.to_vec());
         state.events.push(format!("put:{pending_generation}"));
         Ok(())
+    }
+}
+
+impl SignedGenerationObjectStreamPutPort for BackendPut {
+    fn put_verified_stream(
+        &mut self,
+        capability: &SignedGenerationUploadCapability,
+        object: &mut VerifiedGenerationObjectFile,
+    ) -> Result<(), Self::Error> {
+        object
+            .recheck_and_rewind()
+            .map_err(|_| BridgePortError::InvalidResponse)?;
+        // Test-only in-memory R2 substitute. Shipping's Windows adapter reads
+        // the same VerifiedGenerationObjectFile directly into curl stdin.
+        let mut captured = Vec::new();
+        object
+            .reader()
+            .read_to_end(&mut captured)
+            .map_err(|_| BridgePortError::InvalidResponse)?;
+        if u64::try_from(captured.len()).ok() != Some(object.expected_bytes()) {
+            return Err(BridgePortError::InvalidResponse);
+        }
+        object
+            .recheck_and_rewind()
+            .map_err(|_| BridgePortError::InvalidResponse)?;
+        self.put_exact(capability, &captured)
     }
 }
 

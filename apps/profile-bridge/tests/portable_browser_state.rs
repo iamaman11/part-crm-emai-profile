@@ -456,7 +456,7 @@ mod p3_fixture {
         let mut put = BackendPut {
             state: Rc::clone(&state),
         };
-        let completion = operator.save_retained_successor(
+        let completion = operator.save_retained_successor_streaming(
             &root,
             transport.clone(),
             &mut put,
@@ -494,7 +494,10 @@ mod p3_fixture {
         );
 
         let events = state.borrow().events.clone();
+        let retry = event_index(&events, "retry:nonapplied:")?;
+        let put = event_index(&events, "put:")?;
         let commit = event_index(&events, "commit:")?;
+        assert!(retry < put && put < commit);
         let clean_release = event_index(&events, "coordinator:release:Clean")?;
         let capability = event_index(&events, "download-capability:")?;
         let get = event_index(&events, "get:")?;
@@ -507,7 +510,7 @@ mod p3_fixture {
 
         operator.abort(UnixMillis::new(50))?;
         eprintln!(
-            "S0_REAL_PORTABLE_BROWSER_STATE=PASSED;MANAGED_PROCESS=1;MANAGED_IPC=1;COOKIE=1;LOCAL_STORAGE=1;INDEXED_DB=1;AUTHORITATIVE_RESTORE=1;IDENTITY_REUSED=1"
+            "S0_REAL_PORTABLE_BROWSER_STATE=PASSED;STREAMING_BPAT=1;MANAGED_PROCESS=1;MANAGED_IPC=1;COOKIE=1;LOCAL_STORAGE=1;INDEXED_DB=1;AUTHORITATIVE_RESTORE=1;IDENTITY_REUSED=1"
         );
         Ok(())
     }
