@@ -2673,6 +2673,201 @@ mod tests {
     }
 
     #[test]
+    fn lost_first_lone_commit_response_reuses_original_streamed_n_plus_one_after_restart()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let fixture = Fixture::new()?;
+        let root = MaterializationRoot::open_or_create(&fixture.root_path)?;
+        let source = root.open_generation(&fixture.tenant, &fixture.profile, &fixture.base)?;
+        persist_local_unsynced_intent(&root, &source, &fixture.lease)?;
+        let first = ProfileLease::issue(
+            fixture.tenant.clone(),
+            fixture.profile.clone(),
+            SessionId::parse("session_lone_first_lost_commit")?,
+            fixture.lease.device_id().clone(),
+            fixture.lease.epoch() + 1,
+            FencingToken::parse("fence_lone_first_lost_commit")?,
+        )?;
+        let candidate = crate::shipping_save_attempt::deterministic_lone_unsynced_successor(
+            &root,
+            &fixture.tenant,
+            &fixture.profile,
+            &fixture.base,
+            &first,
+        )?
+        .ok_or("original N+1 missing")?;
+        let mut first_network = Transport {
+            responses: VecDeque::from([
+                MachineHttpResponse::new(
+                    200,
+                    br#"{"verdict":"NOT_APPLIED_RETRYABLE"}"#.to_vec(),
+                ),
+                MachineHttpResponse::new(
+                    200,
+                    br#"{"verdict":"NOT_APPLIED_RETRYABLE"}"#.to_vec(),
+                ),
+                MachineHttpResponse::new(
+                    200,
+                    br#"{"state":"verified","method":null,"url":null,"headers":[],"expiresSeconds":null}"#.to_vec(),
+                ),
+                MachineHttpResponse::new(503, Vec::new()),
+            ]),
+            paths: Vec::new(),
+        };
+        let mut sealer = Sealer;
+        let mut put = RecoveryPut::default();
+        assert_eq!(
+            super::resume_lone_local_unsynced_under_fresh_lease(
+                &root,
+                &fixture.tenant,
+                &fixture.profile,
+                &fixture.base,
+                &first,
+                &mut sealer,
+                &mut first_network,
+                &mut put,
+            ),
+            Err(RestartExactLocalCompletionError::ControlPlane(
+                ShippingControlPlaneError::HttpServerUncertain,
+            )),
+        );
+        assert_eq!(first_network.paths.len(), 4);
+        assert_eq!(put.calls, 0);
+        let before = discover_unresolved_streaming_exact_save_attempt(
+            &root,
+            &fixture.tenant,
+            &fixture.profile,
+        )?
+        .ok_or("lost commit must retain fsynced BPAT")?;
+        assert!(before.first_seal_under_current_lease(&first));
+        assert_eq!(before.successor_id(), candidate.as_str());
+        let original_digest = before.container_digest().to_owned();
+        drop(before);
+        assert!(has_unresolved_save_attempt_for_profile(
+            &root,
+            &fixture.tenant,
+            &fixture.profile,
+        )?);
+
+        // Fresh coordinator authority is mandatory after another process
+        // restart; old lease cannot repeat PUT/commit or create N+2.
+        let renewed = ProfileLease::issue(
+            fixture.tenant.clone(),
+            fixture.profile.clone(),
+            SessionId::parse("session_lone_lost_commit_reauthorized")?,
+            fixture.lease.device_id().clone(),
+            first.epoch() + 1,
+            FencingToken::parse("fence_lone_lost_commit_reauthorized")?,
+        )?;
+        assert_eq!(
+            crate::shipping_save_attempt::deterministic_lone_unsynced_successor(
+                &root,
+                &fixture.tenant,
+                &fixture.profile,
+                &fixture.base,
+                &renewed,
+            )?,
+            Some(candidate.clone()),
+        );
+        let mut stale = Transport::default();
+        assert_eq!(
+            super::resume_exact_successor_under_fresh_lease(
+                &root,
+                &fixture.tenant,
+                &fixture.profile,
+                &fixture.base,
+                &fixture.lease,
+                &mut stale,
+                &mut put,
+            ),
+            Err(RestartExactLocalCompletionError::WriterOrLockUnresolved),
+        );
+        assert!(stale.paths.is_empty());
+
+        let mut retry = Transport {
+            responses: VecDeque::from([
+                MachineHttpResponse::new(
+                    200,
+                    br#"{"verdict":"NOT_APPLIED_RETRYABLE"}"#.to_vec(),
+                ),
+                MachineHttpResponse::new(
+                    200,
+                    br#"{"state":"verified","method":null,"url":null,"headers":[],"expiresSeconds":null}"#.to_vec(),
+                ),
+                MachineHttpResponse::new(
+                    200,
+                    br#"{"outcome":"ACTIVATED"}"#.to_vec(),
+                ),
+            ]),
+            paths: Vec::new(),
+        };
+        assert_eq!(
+            super::resume_exact_successor_under_fresh_lease(
+                &root,
+                &fixture.tenant,
+                &fixture.profile,
+                &fixture.base,
+                &renewed,
+                &mut retry,
+                &mut put,
+            ),
+            Ok(true),
+        );
+        assert_eq!(retry.paths.len(), 3);
+        assert_eq!(put.calls, 0);
+        let exact = discover_unresolved_streaming_exact_save_attempt(
+            &root,
+            &fixture.tenant,
+            &fixture.profile,
+        )?
+        .ok_or("original N+1 checkpoint lost on authorized retry")?;
+        assert_eq!(exact.successor_id(), candidate.as_str());
+        assert_eq!(exact.container_digest(), original_digest);
+        assert_eq!(std::fs::read(source.path().join("prefs.js"))?, b"save");
+
+        let active_lease = ProfileLease::issue(
+            fixture.tenant.clone(),
+            fixture.profile.clone(),
+            SessionId::parse("session_lone_lost_commit_active")?,
+            fixture.lease.device_id().clone(),
+            renewed.epoch() + 1,
+            FencingToken::parse("fence_lone_lost_commit_active")?,
+        )?;
+        let mut active = Transport {
+            responses: VecDeque::from([MachineHttpResponse::new(
+                200,
+                br#"{"activeExact":true}"#.to_vec(),
+            )]),
+            paths: Vec::new(),
+        };
+        assert_eq!(
+            complete_active_exact_after_restart(
+                &root,
+                &fixture.tenant,
+                &fixture.profile,
+                &candidate,
+                &active_lease,
+                &mut active,
+            ),
+            Ok(RestartExactLocalCompletion::ActiveExactLocalReady),
+        );
+        assert!(!has_unresolved_save_attempt_for_profile(
+            &root,
+            &fixture.tenant,
+            &fixture.profile,
+        )?);
+        let restored = root.open_generation(&fixture.tenant, &fixture.profile, &candidate)?;
+        assert_eq!(std::fs::read(restored.path().join("prefs.js"))?, b"save");
+        let binding = load_materialization_binding(
+            &restored,
+            &fixture.tenant,
+            &fixture.profile,
+            &candidate,
+        )?;
+        assert_eq!(binding.source_container_sha256(), original_digest);
+        Ok(())
+    }
+
+    #[test]
     fn partial_or_mutated_interrupted_lone_clone_never_seals_or_uploads()
     -> Result<(), Box<dyn std::error::Error>> {
         let fixture = Fixture::new()?;
