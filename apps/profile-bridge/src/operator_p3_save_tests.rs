@@ -672,6 +672,85 @@ fn installed_streaming_close_rejects_d1_block_without_put_or_native_loss()
 }
 
 #[test]
+fn one_profile_completes_one_hundred_sequential_streaming_saves_without_n_plus_two()
+-> Result<(), Box<dyn std::error::Error>> {
+    // Same physical profile, 100 distinct browser-close sessions and 100
+    // generations. Each session closes natively before its sole N+1 is sealed.
+    // The D1/R2 transport is deliberately synthetic; this is composed Bridge
+    // save-owner regression, NOT installed B7 or live-cloud acceptance.
+    let mut fixture = Fixture::new("stream-100-sequential")?;
+    let tenant = fixture.actor.tenant_scope().tenant_id().clone();
+    let profile = fixture.profile_id.clone();
+    let mut seen = std::collections::HashSet::new();
+    seen.insert(fixture.generation_id.clone());
+    for sequence in 0_u64..100 {
+        let mut operator = fixture.operator()?;
+        operator.open(&fixture.claim_uri, &fixture.root, UnixMillis::new(10))?;
+        let workspace = fixture.base_workspace()?;
+        let native_content = format!("native-firefox-save-{sequence:03}");
+        fs::write(workspace.path().join("prefs.js"), native_content.as_bytes())?;
+        operator.close(UnixMillis::new(20))?;
+        persist_local_unsynced_intent(&fixture.root, &workspace, &fixture.lease)?;
+
+        let requests = Rc::new(RefCell::new(Vec::new()));
+        let puts = Rc::new(Cell::new(0));
+        let completed = operator.save_retained_successor_streaming(
+            &fixture.root,
+            StreamTransport {
+                responses: VecDeque::from([
+                    MachineHttpResponse::new(
+                        200,
+                        br#"{"verdict":"NOT_APPLIED_RETRYABLE"}"#.to_vec(),
+                    ),
+                    upload_required_response()?,
+                    verified_response()?,
+                    commit_response(BridgeGenerationSuccessorCommitOutcomeDto::Activated)?,
+                ]),
+                paths: Rc::clone(&requests),
+            },
+            &mut Put {
+                fail: false,
+                calls: Rc::clone(&puts),
+            },
+            UnixMillis::new(30),
+        )?;
+        assert!(completed.is_saved());
+        assert_eq!(puts.get(), 1, "one immutable PUT per completed generation");
+        assert_eq!(requests.borrow().len(), 4);
+        assert_eq!(operator.coordinator().sealing_requests, 1);
+        assert_eq!(operator.coordinator().closed, 1);
+        assert!(!operator.has_pending_dirty_close());
+        assert!(!has_unresolved_save_attempt_for_profile(
+            &fixture.root,
+            &tenant,
+            &profile,
+        )?);
+        let successor = completed.committed().generation_id().clone();
+        assert!(seen.insert(successor.clone()), "no repeated N+1 or silent N+2");
+        let saved = fixture.root.open_generation(&tenant, &profile, &successor)?;
+        assert_eq!(fs::read(saved.path().join("prefs.js"))?, native_content.as_bytes());
+        assert_eq!(fs::read(workspace.path().join("prefs.js"))?, native_content.as_bytes());
+
+        fixture.generation_id = successor;
+        let epoch = fixture.lease.epoch() + 1;
+        fixture.lease = ProfileLease::issue(
+            tenant.clone(),
+            profile.clone(),
+            SessionId::parse(format!("session_p3_seq_{sequence:03}"))?,
+            fixture.device_id.clone(),
+            epoch,
+            FencingToken::parse(format!("fence_p3_seq_{sequence:03}"))?,
+        )?;
+        fixture.launch_intent_id = LaunchIntentId::parse(format!("launch_p3_seq_{sequence:03}"))?;
+        fixture.claim_uri =
+            ClaimUri::parse(&format!("profilebridge://claim/claim_p3_seq_{sequence:024}"))?;
+    }
+    assert_eq!(seen.len(), 101);
+    assert!(fixture.root.open_generation(&tenant, &profile, &fixture.generation_id).is_ok());
+    Ok(())
+}
+
+#[test]
 fn one_hundred_isolated_profiles_complete_one_streaming_save_each_without_cross_scope()
 -> Result<(), Box<dyn std::error::Error>> {
     // Cross-profile load exercise: 100 independent profiles / 100 ordinary
