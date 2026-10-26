@@ -991,7 +991,8 @@ fn checked_extend(output: &mut Vec<u8>, bytes: &[u8]) -> Result<(), GenerationSn
 #[cfg(test)]
 mod tests {
     use super::{
-        GenerationSnapshotError, StreamedWorkspaceSnapshot, WORKSPACE_SNAPSHOT_MAGIC,
+        GenerationSnapshotError, StreamedWorkspaceSnapshot, WorkspaceSnapshotReader,
+        WORKSPACE_SNAPSHOT_MAGIC,
         encode_workspace_snapshot, encode_workspace_snapshot_streaming,
         encoded_stream_snapshot_size, materialize_workspace_snapshot, materialize_workspace_snapshot_streaming_with_pre_publish,
         materialize_workspace_snapshot_with_pre_publish, parse_workspace_snapshot,
@@ -1060,6 +1061,103 @@ mod tests {
             encoded <= super::MAX_STREAM_WORKSPACE_SNAPSHOT_BYTES,
             "512 MiB native profiles must not be rejected solely due to BPGW metadata",
         );
+    }
+
+    #[test]
+    fn direct_two_pass_snapshot_reader_seals_original_firefox_without_plaintext_spool()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use encrypted_generation_domain::{
+            GenerationDek, GenerationIdentity, GenerationMetadata, KeyId, NoncePrefix,
+            open_generation_streaming, seal_generation_streaming,
+        };
+        use std::io::Read;
+        let fixture = Fixture::new()?;
+        let result = (|| {
+            let base = GenerationId::parse("generation_direct_streaming_reader")?;
+            let next = GenerationId::parse("generation_direct_streaming_successor")?;
+            let source = fixture.root.create_generation(
+                &fixture.tenant_id, &fixture.profile_id, &base,
+            )?;
+            fs::write(source.path().join("prefs.js"), b"user_pref('local', true);")?;
+            let directory = source.path().join("user_data");
+            fs::create_dir_all(&directory)?;
+            fs::write(directory.join("cookies.sqlite-wal"), vec![0x37; 177_013])?;
+            fs::write(directory.join("empty.sqlite"), b"")?;
+            let inventory = source.inventory()?;
+            let canonical = encode_workspace_snapshot(&source, &inventory)?;
+            let mut digest_reader = WorkspaceSnapshotReader::new(&source, &inventory)?;
+            assert_eq!(digest_reader.expected_bytes(), canonical.len() as u64);
+            let key = GenerationDek::new(KeyId::parse("direct_streaming_reader_key")?, [0x7e; 32]);
+            let metadata = GenerationMetadata::for_reader(
+                GenerationIdentity::new(
+                    fixture.tenant_id.clone(), fixture.profile_id.clone(),
+                    next, Some(base),
+                ),
+                key.key_id().clone(), NoncePrefix::new([0x54; 16]),
+                65_536, &mut digest_reader,
+            )?;
+            let mut seal_reader = WorkspaceSnapshotReader::new(&source, &inventory)?;
+            let mut encrypted = Vec::new();
+            let report = seal_generation_streaming(
+                &metadata, &key, &mut seal_reader, &mut encrypted,
+            )?;
+            assert_eq!(report.container_bytes(), encrypted.len() as u64);
+            let mut decrypted = Vec::new();
+            let opened = open_generation_streaming(
+                &mut encrypted.as_slice(), &key, &mut decrypted,
+            )?;
+            assert_eq!(report, opened);
+            assert_eq!(decrypted, canonical);
+            let mut eof = [0_u8; 4];
+            assert_eq!(seal_reader.read(&mut eof)?, 0);
+            assert_eq!(source.inventory()?, inventory);
+            Ok::<(), Box<dyn std::error::Error>>(())
+        })();
+        fixture.cleanup();
+        result
+    }
+
+    #[test]
+    fn native_mutation_between_streaming_passes_fails_closed_without_new_generation()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use encrypted_generation_domain::{
+            GenerationDek, GenerationIdentity, GenerationMetadata, KeyId, NoncePrefix,
+            seal_generation_streaming,
+        };
+        let fixture = Fixture::new()?;
+        let result = (|| {
+            let base = GenerationId::parse("generation_direct_changed_base")?;
+            let next = GenerationId::parse("generation_direct_changed_next")?;
+            let source = fixture.root.create_generation(
+                &fixture.tenant_id, &fixture.profile_id, &base,
+            )?;
+            let native = source.path().join("prefs.js");
+            fs::write(&native, b"original Firefox native bytes")?;
+            let before = source.inventory()?;
+            let key = GenerationDek::new(KeyId::parse("direct_streaming_changed_key")?, [0x5c; 32]);
+            let mut digest_reader = WorkspaceSnapshotReader::new(&source, &before)?;
+            let metadata = GenerationMetadata::for_reader(
+                GenerationIdentity::new(
+                    fixture.tenant_id.clone(), fixture.profile_id.clone(),
+                    next.clone(), Some(base),
+                ),
+                key.key_id().clone(), NoncePrefix::new([0x32; 16]),
+                65_536, &mut digest_reader,
+            )?;
+            fs::write(&native, b"modified Firefox native bytes")?;
+            let mut seal_reader = WorkspaceSnapshotReader::new(&source, &before)?;
+            let mut unpublishable_ciphertext = Vec::new();
+            assert!(seal_generation_streaming(
+                &metadata, &key, &mut seal_reader, &mut unpublishable_ciphertext,
+            ).is_err());
+            assert_eq!(fs::read(&native)?, b"modified Firefox native bytes");
+            assert!(fixture.root.open_generation(
+                &fixture.tenant_id, &fixture.profile_id, &next,
+            ).is_err());
+            Ok::<(), Box<dyn std::error::Error>>(())
+        })();
+        fixture.cleanup();
+        result
     }
 
     #[test]
