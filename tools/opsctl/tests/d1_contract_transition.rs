@@ -495,17 +495,20 @@ fn actual_deployed_context_traverses_separate_sealed_contract_and_current_expand
                 &count.to_string(),
             ],
         )?;
-        receipt = append_execution_event(
-            &receipt,
-            ExecutionEventInput {
-                kind: ExecutionEventKind::MigrationApplied,
-                occurred_at_unix_seconds: now + 3,
-                migration_id: Some(history[count].clone()),
-            },
-        )?;
+        let stage_len = if count == 35 { 2 } else { 1 };
+        for migration in &history[count..count + stage_len] {
+            receipt = append_execution_event(
+                &receipt,
+                ExecutionEventInput {
+                    kind: ExecutionEventKind::MigrationApplied,
+                    occurred_at_unix_seconds: now + 3,
+                    migration_id: Some(migration.clone()),
+                },
+            )?;
+        }
         let actual_ledger: Vec<String> =
             serde_json::from_slice(&fs::read(dir.join("observed-ledger.json"))?)?;
-        assert_eq!(actual_ledger, history[..count + 1]);
+        assert_eq!(actual_ledger, history[..count + stage_len]);
         verify_migration_ledger(&tx, &actual_ledger)?;
         assert!(verify_migration_ledger(&tx, &history[..count]).is_err());
         for kind in [
@@ -525,7 +528,7 @@ fn actual_deployed_context_traverses_separate_sealed_contract_and_current_expand
         let mut post: ProviderObservationInput = serde_json::from_value(observed)?;
         post.observed_at_unix_seconds = now + 5;
         post.remote_migrations = actual_ledger;
-        post.wrangler_pending_migrations = history[count + 1..].to_vec();
+        post.wrangler_pending_migrations = history[count + stage_len..].to_vec();
         post.remote_ledger_sha256 =
             canonical_digest(&json!({"remote_migrations":post.remote_migrations}))?;
         assert!(
@@ -666,9 +669,9 @@ if count==34:
  # The first ALTER failed atomically, and the corrected SQL must retain all rows.
  assert db.execute("SELECT count(*) FROM sqlite_master WHERE name='idempotency_records_pas2_contract_legacy'").fetchone()==(0,)
  db.execute('PRAGMA case_sensitive_like=OFF')
-for m in sources[count:count+1]:
+for i,m in enumerate(sources[count:count+(2 if count==35 else 1)],start=count):
  db.executescript((bounded/m['migration_file']).read_text())
- db.execute('INSERT INTO d1_migrations(id,name) VALUES(?,?)',(count+1,m['migration_file']))
+ db.execute('INSERT INTO d1_migrations(id,name) VALUES(?,?)',(i+1,m['migration_file']))
 (scratch/'observed-ledger.json').write_text(json.dumps([r[0] for r in db.execute('SELECT name FROM d1_migrations ORDER BY id')]))
 assert json.loads((scratch/'before.json').read_text())==json.loads(json.dumps(snapshot()))
 assert db.execute('PRAGMA foreign_key_check').fetchall()==[]
