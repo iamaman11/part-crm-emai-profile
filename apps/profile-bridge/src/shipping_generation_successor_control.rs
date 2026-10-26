@@ -17,9 +17,12 @@ use crate::shipping_generation_save::{
     GenerationSuccessorCommitOutcome, GenerationSuccessorControlPort,
     GenerationUploadAuthorization, SignedGenerationUploadCapability,
 };
+#[cfg(any(windows, test))]
 use crate::shipping_save_attempt::{
-    ReadOnlySaveAttempt, ReadOnlyStreamedSaveAttempt, discover_unresolved_exact_save_attempt,
-    discover_unresolved_streaming_exact_save_attempt, inspect_exact_save_attempt,
+    ReadOnlySaveAttempt, discover_unresolved_exact_save_attempt, inspect_exact_save_attempt,
+};
+use crate::shipping_save_attempt::{
+    ReadOnlyStreamedSaveAttempt, discover_unresolved_streaming_exact_save_attempt,
     inspect_streaming_exact_save_attempt,
 };
 #[cfg(any(windows, test))]
@@ -908,6 +911,7 @@ pub fn observe_retained_successor_after_restart<T: MachineHttpPort>(
 /// One existing read-only control-plane observation, over *already validated*
 /// exact local attempt evidence. Neither the discovered path nor the explicit
 /// generation-ID entrypoint rereads/duplicates the full sealed record.
+#[cfg(any(windows, test))]
 fn observe_verified_exact_attempt<T: MachineHttpPort>(
     tenant_id: &TenantId,
     profile_id: &ProfileId,

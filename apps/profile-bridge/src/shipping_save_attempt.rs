@@ -134,26 +134,31 @@ impl ReadOnlySaveAttempt {
     }
 
     #[must_use]
+    #[cfg(any(windows, test))]
     pub(crate) fn base_generation_id(&self) -> &str {
         &self.header.base_generation
     }
 
     #[must_use]
+    #[cfg(any(windows, test))]
     pub(crate) fn successor_id(&self) -> &str {
         &self.header.successor
     }
 
     #[must_use]
+    #[cfg(any(windows, test))]
     pub(crate) fn object_key(&self) -> &str {
         &self.header.object_key
     }
 
     #[must_use]
+    #[cfg(any(windows, test))]
     pub(crate) fn metadata_digest(&self) -> &str {
         &self.header.metadata_digest
     }
 
     #[must_use]
+    #[cfg(any(windows, test))]
     pub(crate) fn container_bytes(&self) -> u64 {
         self.header.container_bytes
     }
@@ -1041,11 +1046,13 @@ pub(crate) enum ScopedPendingSaveEvidence {
         base_generation: GenerationId,
         prior_epoch: u64,
     },
+    #[cfg_attr(not(any(windows, test)), allow(dead_code))]
     Exact(Box<ReadOnlySaveAttempt>),
 }
 
 /// Keep the original exact-only API fail-closed: callers that cannot
 /// handle a lone LOCAL_UNSYNCED never silently mistake it for no evidence.
+#[cfg(any(windows, test))]
 pub(crate) fn discover_unresolved_exact_save_attempt(
     root: &MaterializationRoot,
     tenant: &TenantId,
