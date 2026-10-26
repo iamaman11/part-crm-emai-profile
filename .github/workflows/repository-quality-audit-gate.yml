@@ -30,6 +30,15 @@ jobs:
           EXPECTED_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: python -c "import os, subprocess; actual = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(); expected = os.environ['EXPECTED_SOURCE_SHA']; assert actual == expected, f'expected {expected}, got {actual}'"
 
+      # This cache cannot satisfy an audit gate: every policy/Rust test still runs.
+      - name: Restore quality-audit Rust compilation cache
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2, immutable
+        with:
+          shared-key: quality-audit-v1
+          workspaces: |
+            . -> target
+            tools/opsctl -> target
+
       - name: Show pinned toolchain
         run: rustup show active-toolchain
 
