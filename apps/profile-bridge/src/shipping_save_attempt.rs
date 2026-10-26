@@ -9,9 +9,8 @@ use crate::generation_object_spool::VerifiedGenerationObjectFile;
 use crate::local_profile::{GenerationWorkspace, MaterializationRoot};
 use crate::shipping_generation_save::CommittedGenerationSuccessor;
 use encrypted_generation_domain::{
-    MAX_GENERATION_CONTAINER_BYTES, MAX_STREAM_CONTAINER_BYTES,
-    MAX_GENERATION_METADATA_PRELUDE_BYTES, StreamingGenerationReport,
-    inspect_generation_metadata_prelude,
+    MAX_GENERATION_CONTAINER_BYTES, MAX_GENERATION_METADATA_PRELUDE_BYTES,
+    MAX_STREAM_CONTAINER_BYTES, StreamingGenerationReport, inspect_generation_metadata_prelude,
 };
 use profile_platform_primitives::{GenerationId, ProfileId, TenantId};
 use serde::{Deserialize, Serialize};
@@ -1255,9 +1254,11 @@ pub(crate) fn persist_streaming_exact_save_attempt(
     {
         return Err(SaveAttemptEvidenceError::Invalid);
     }
-    let base_inventory = source.inventory()
+    let base_inventory = source
+        .inventory()
         .map_err(|_| SaveAttemptEvidenceError::Changed)?;
-    let candidate_inventory = candidate.inventory()
+    let candidate_inventory = candidate
+        .inventory()
         .map_err(|_| SaveAttemptEvidenceError::Changed)?;
     if base_inventory != candidate_inventory {
         return Err(SaveAttemptEvidenceError::Changed);
@@ -1270,7 +1271,10 @@ pub(crate) fn persist_streaming_exact_save_attempt(
         successor: candidate.generation_id().as_str().to_owned(),
         session_fingerprint: credential_fingerprint(b"session", lease.session_id().as_str()),
         fencing_fingerprint: credential_fingerprint(b"fencing", lease.fencing_token().as_str()),
-        device_fingerprint: Some(credential_fingerprint(b"device", lease.device_id().as_str())),
+        device_fingerprint: Some(credential_fingerprint(
+            b"device",
+            lease.device_id().as_str(),
+        )),
         epoch: lease.epoch(),
         source_inventory: base_inventory.inventory_digest(),
         candidate_inventory: candidate_inventory.inventory_digest(),
@@ -1281,20 +1285,30 @@ pub(crate) fn persist_streaming_exact_save_attempt(
         container_bytes: report.container_bytes(),
         recovered_lone_origin: None,
     };
-    let header_bytes = serde_json::to_vec(&header)
-        .map_err(|_| SaveAttemptEvidenceError::Invalid)?;
-    if header_bytes.is_empty() || header_bytes.len() > MAX_HEADER_BYTES
+    let header_bytes =
+        serde_json::to_vec(&header).map_err(|_| SaveAttemptEvidenceError::Invalid)?;
+    if header_bytes.is_empty()
+        || header_bytes.len() > MAX_HEADER_BYTES
         || report.container_bytes() == 0
         || report.container_bytes() > MAX_STREAM_CONTAINER_BYTES
     {
         return Err(SaveAttemptEvidenceError::Invalid);
     }
-    let canonical = attempt_path(root, lease.tenant_id(), lease.profile_id(), candidate.generation_id());
+    let canonical = attempt_path(
+        root,
+        lease.tenant_id(),
+        lease.profile_id(),
+        candidate.generation_id(),
+    );
     match fs::symlink_metadata(&canonical) {
         Ok(_) => {
             let existing = inspect_streaming_exact_save_attempt(
-                root, lease.tenant_id(), lease.profile_id(), candidate.generation_id(),
-            )?.ok_or(SaveAttemptEvidenceError::Changed)?;
+                root,
+                lease.tenant_id(),
+                lease.profile_id(),
+                candidate.generation_id(),
+            )?
+            .ok_or(SaveAttemptEvidenceError::Changed)?;
             if existing.header == header {
                 return Ok(());
             }
@@ -1304,8 +1318,11 @@ pub(crate) fn persist_streaming_exact_save_attempt(
         Err(err) => return Err(err.into()),
     }
     let mut input = VerifiedGenerationObjectFile::open(
-        sealed_file, report.container_bytes(), report.container_digest().bytes(),
-    ).map_err(|_| SaveAttemptEvidenceError::Changed)?;
+        sealed_file,
+        report.container_bytes(),
+        report.container_digest().bytes(),
+    )
+    .map_err(|_| SaveAttemptEvidenceError::Changed)?;
     let mut staged = None;
     for _ in 0..STAGE_TRIES {
         let sequence = STAGE_SEQUENCE.fetch_add(1, Ordering::Relaxed);
@@ -1315,7 +1332,10 @@ pub(crate) fn persist_streaming_exact_save_attempt(
             std::process::id(),
         ));
         match OpenOptions::new().create_new(true).write(true).open(&path) {
-            Ok(file) => { staged = Some((path, file)); break; }
+            Ok(file) => {
+                staged = Some((path, file));
+                break;
+            }
             Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {}
             Err(err) => return Err(err.into()),
         }
@@ -1325,13 +1345,13 @@ pub(crate) fn persist_streaming_exact_save_attempt(
         out.write_all(MAGIC)?;
         out.write_all(&(header_bytes.len() as u32).to_be_bytes())?;
         out.write_all(&header_bytes)?;
-        let copied = std::io::copy(
-            &mut input.reader().take(report.container_bytes()), &mut out,
-        )?;
+        let copied = std::io::copy(&mut input.reader().take(report.container_bytes()), &mut out)?;
         if copied != report.container_bytes() {
             return Err(SaveAttemptEvidenceError::Changed);
         }
-        input.recheck_and_rewind().map_err(|_| SaveAttemptEvidenceError::Changed)?;
+        input
+            .recheck_and_rewind()
+            .map_err(|_| SaveAttemptEvidenceError::Changed)?;
         out.sync_all()?;
         Ok(())
     })();
@@ -1340,10 +1360,15 @@ pub(crate) fn persist_streaming_exact_save_attempt(
     // disposable tmp. Do not publish or remove it.
     write?;
     let mut verification = VerifiedGenerationObjectFile::open_checkpoint_payload(
-        &stage, 12 + header_bytes.len() as u64,
-        report.container_bytes(), report.container_digest().bytes(),
-    ).map_err(|_| SaveAttemptEvidenceError::Changed)?;
-    verification.recheck_and_rewind().map_err(|_| SaveAttemptEvidenceError::Changed)?;
+        &stage,
+        12 + header_bytes.len() as u64,
+        report.container_bytes(),
+        report.container_digest().bytes(),
+    )
+    .map_err(|_| SaveAttemptEvidenceError::Changed)?;
+    verification
+        .recheck_and_rewind()
+        .map_err(|_| SaveAttemptEvidenceError::Changed)?;
     match fs::hard_link(&stage, &canonical) {
         Ok(()) => {
             fs::remove_file(&stage)?;
@@ -1351,8 +1376,12 @@ pub(crate) fn persist_streaming_exact_save_attempt(
         }
         Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {
             let existing = inspect_streaming_exact_save_attempt(
-                root, lease.tenant_id(), lease.profile_id(), candidate.generation_id(),
-            )?.ok_or(SaveAttemptEvidenceError::Changed)?;
+                root,
+                lease.tenant_id(),
+                lease.profile_id(),
+                candidate.generation_id(),
+            )?
+            .ok_or(SaveAttemptEvidenceError::Changed)?;
             if existing.header != header {
                 return Err(SaveAttemptEvidenceError::Changed);
             }
@@ -1380,8 +1409,10 @@ pub(crate) fn inspect_streaming_exact_save_attempt(
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(err) => return Err(err.into()),
     };
-    if !stat.is_file() || stat.file_type().is_symlink()
-        || stat.len() <= 12 || stat.len() > MAX_STREAM_RECORD_BYTES
+    if !stat.is_file()
+        || stat.file_type().is_symlink()
+        || stat.len() <= 12
+        || stat.len() > MAX_STREAM_RECORD_BYTES
     {
         return Err(SaveAttemptEvidenceError::Invalid);
     }
@@ -1401,12 +1432,17 @@ pub(crate) fn inspect_streaming_exact_save_attempt(
     let mut prefix = [0_u8; 12];
     file.read_exact(&mut prefix)?;
     let header_len = u32::from_be_bytes(
-        prefix[8..12].try_into().map_err(|_| SaveAttemptEvidenceError::Invalid)?,
+        prefix[8..12]
+            .try_into()
+            .map_err(|_| SaveAttemptEvidenceError::Invalid)?,
     ) as u64;
     let payload_offset = 12 + header_len;
-    if header_len == 0 || header_len > MAX_HEADER_BYTES as u64
-        || stat.len() != payload_offset.checked_add(header.container_bytes)
-            .ok_or(SaveAttemptEvidenceError::Invalid)?
+    if header_len == 0
+        || header_len > MAX_HEADER_BYTES as u64
+        || stat.len()
+            != payload_offset
+                .checked_add(header.container_bytes)
+                .ok_or(SaveAttemptEvidenceError::Invalid)?
     {
         return Err(SaveAttemptEvidenceError::Invalid);
     }
@@ -1416,19 +1452,25 @@ pub(crate) fn inspect_streaming_exact_save_attempt(
     }
     let mut expected_sha = [0_u8; 32];
     for (i, byte) in expected_sha.iter_mut().enumerate() {
-        *byte = u8::from_str_radix(&header.container_digest[i*2..i*2+2], 16)
+        *byte = u8::from_str_radix(&header.container_digest[i * 2..i * 2 + 2], 16)
             .map_err(|_| SaveAttemptEvidenceError::Invalid)?;
     }
     let mut payload = VerifiedGenerationObjectFile::open_checkpoint_payload(
-        &canonical, payload_offset, header.container_bytes, expected_sha,
-    ).map_err(|_| SaveAttemptEvidenceError::Changed)?;
+        &canonical,
+        payload_offset,
+        header.container_bytes,
+        expected_sha,
+    )
+    .map_err(|_| SaveAttemptEvidenceError::Changed)?;
     let mut bpgc_prefix = [0_u8; 12];
     payload.reader().read_exact(&mut bpgc_prefix)?;
     if &bpgc_prefix[..8] != b"BPGC0001" {
         return Err(SaveAttemptEvidenceError::Invalid);
     }
     let metadata_len = u32::from_be_bytes(
-        bpgc_prefix[8..12].try_into().map_err(|_| SaveAttemptEvidenceError::Invalid)?,
+        bpgc_prefix[8..12]
+            .try_into()
+            .map_err(|_| SaveAttemptEvidenceError::Invalid)?,
     ) as usize;
     if metadata_len == 0 || metadata_len > MAX_GENERATION_METADATA_PRELUDE_BYTES - 12 {
         return Err(SaveAttemptEvidenceError::Invalid);
@@ -1441,23 +1483,32 @@ pub(crate) fn inspect_streaming_exact_save_attempt(
     if prelude.metadata().tenant_id() != tenant
         || prelude.metadata().profile_id() != profile
         || prelude.metadata().generation_id() != successor
-        || prelude.metadata().base_generation_id().map(GenerationId::as_str)
+        || prelude
+            .metadata()
+            .base_generation_id()
+            .map(GenerationId::as_str)
             != Some(header.base_generation.as_str())
         || prelude.metadata().object_key() != header.object_key
         || hex(&prelude.metadata_digest().bytes()) != header.metadata_digest
     {
         return Err(SaveAttemptEvidenceError::Invalid);
     }
-    payload.recheck_and_rewind().map_err(|_| SaveAttemptEvidenceError::Changed)?;
+    payload
+        .recheck_and_rewind()
+        .map_err(|_| SaveAttemptEvidenceError::Changed)?;
     let base = GenerationId::parse(header.base_generation.clone())
         .map_err(|_| SaveAttemptEvidenceError::Invalid)?;
-    let source = root.open_generation(tenant, profile, &base)
+    let source = root
+        .open_generation(tenant, profile, &base)
         .map_err(|_| SaveAttemptEvidenceError::Changed)?;
-    let candidate = root.open_generation(tenant, profile, successor)
+    let candidate = root
+        .open_generation(tenant, profile, successor)
         .map_err(|_| SaveAttemptEvidenceError::Changed)?;
-    let source_inventory = source.inventory()
+    let source_inventory = source
+        .inventory()
         .map_err(|_| SaveAttemptEvidenceError::Changed)?;
-    let candidate_inventory = candidate.inventory()
+    let candidate_inventory = candidate
+        .inventory()
         .map_err(|_| SaveAttemptEvidenceError::Changed)?;
     if source_inventory.inventory_digest() != header.source_inventory
         || candidate_inventory.inventory_digest() != header.candidate_inventory
@@ -1465,7 +1516,10 @@ pub(crate) fn inspect_streaming_exact_save_attempt(
     {
         return Err(SaveAttemptEvidenceError::Changed);
     }
-    Ok(Some(ReadOnlyStreamedSaveAttempt { header, ciphertext: payload }))
+    Ok(Some(ReadOnlyStreamedSaveAttempt {
+        header,
+        ciphertext: payload,
+    }))
 }
 
 fn read_bounded_attempt_header(path: &PathBuf) -> Result<AttemptHeader, SaveAttemptEvidenceError> {
@@ -1619,9 +1673,8 @@ mod streaming_checkpoint_tests {
     fn streamed_checkpoint_survives_restart_without_loading_ciphertext()
     -> Result<(), Box<dyn std::error::Error>> {
         let id = NEXT.fetch_add(1, Ordering::Relaxed);
-        let path = std::env::temp_dir().join(format!(
-            "bridge-stream-attempt-{}-{id}", std::process::id(),
-        ));
+        let path = std::env::temp_dir()
+            .join(format!("bridge-stream-attempt-{}-{id}", std::process::id(),));
         let root = MaterializationRoot::open_or_create(path.clone())?;
         let tenant = TenantId::parse(format!("tenant_streamed_attempt_{id}"))?;
         let profile = ProfileId::parse(format!("profile_streamed_attempt_{id}"))?;
@@ -1629,10 +1682,17 @@ mod streaming_checkpoint_tests {
         let next = GenerationId::parse(format!("generation_streamed_next_{id}"))?;
         let source = root.create_generation(&tenant, &profile, &n)?;
         let candidate = root.create_generation(&tenant, &profile, &next)?;
-        fs::write(source.path().join("prefs.js"), b"native Firefox cookie/WAL witness")?;
-        fs::write(candidate.path().join("prefs.js"), b"native Firefox cookie/WAL witness")?;
+        fs::write(
+            source.path().join("prefs.js"),
+            b"native Firefox cookie/WAL witness",
+        )?;
+        fs::write(
+            candidate.path().join("prefs.js"),
+            b"native Firefox cookie/WAL witness",
+        )?;
         let lease = ProfileLease::issue(
-            tenant.clone(), profile.clone(),
+            tenant.clone(),
+            profile.clone(),
             SessionId::parse(format!("session_streamed_{id}"))?,
             DeviceId::parse(format!("device_streamed_{id}"))?,
             3,
@@ -1646,28 +1706,47 @@ mod streaming_checkpoint_tests {
         );
         let metadata = GenerationMetadata::for_reader(
             GenerationIdentity::new(
-                tenant.clone(), profile.clone(), next.clone(), Some(n.clone()),
+                tenant.clone(),
+                profile.clone(),
+                next.clone(),
+                Some(n.clone()),
             ),
-            key.key_id().clone(), NoncePrefix::new([0x27; 16]), 65_536,
+            key.key_id().clone(),
+            NoncePrefix::new([0x27; 16]),
+            65_536,
             &mut std::io::repeat(0x5a).take(content_size),
         )?;
-        let mut sealed = OpenOptions::new().create_new(true).write(true).open(&sealed_path)?;
+        let mut sealed = OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .open(&sealed_path)?;
         let descriptor = seal_generation_streaming(
-            &metadata, &key, &mut std::io::repeat(0x5a).take(content_size),
+            &metadata,
+            &key,
+            &mut std::io::repeat(0x5a).take(content_size),
             &mut sealed,
         )?;
         sealed.sync_all()?;
         drop(sealed);
         persist_streaming_exact_save_attempt(
-            &root, &source, &candidate, &descriptor, &sealed_path, &lease,
+            &root,
+            &source,
+            &candidate,
+            &descriptor,
+            &sealed_path,
+            &lease,
         )?;
         // Retry of the exact immutable checkpoint is idempotent, never N+2.
         persist_streaming_exact_save_attempt(
-            &root, &source, &candidate, &descriptor, &sealed_path, &lease,
+            &root,
+            &source,
+            &candidate,
+            &descriptor,
+            &sealed_path,
+            &lease,
         )?;
-        let mut evidence = inspect_streaming_exact_save_attempt(
-            &root, &tenant, &profile, &next,
-        )?.ok_or("missing streaming checkpoint")?;
+        let mut evidence = inspect_streaming_exact_save_attempt(&root, &tenant, &profile, &next)?
+            .ok_or("missing streaming checkpoint")?;
         assert_eq!(evidence.original_epoch(), 3);
         assert!(evidence.original_device(&lease));
         assert!(evidence.original_lease(&lease));
@@ -1686,21 +1765,25 @@ mod streaming_checkpoint_tests {
         evidence.ciphertext().recheck_and_rewind()?;
         let checkpoint = attempt_path(&root, &tenant, &profile, &next);
         let previous_length = fs::metadata(&checkpoint)?.len();
-        let mut mutation = OpenOptions::new().read(true).write(true).open(&checkpoint)?;
+        let mut mutation = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&checkpoint)?;
         mutation.seek(SeekFrom::Start(previous_length - 1))?;
         let mut last = [0_u8; 1];
         mutation.read_exact(&mut last)?;
         mutation.seek(SeekFrom::Start(previous_length - 1))?;
         mutation.write_all(&[last[0] ^ 1])?;
         mutation.sync_all()?;
-        assert!(inspect_streaming_exact_save_attempt(
-            &root, &tenant, &profile, &next,
-        ).is_err());
+        assert!(inspect_streaming_exact_save_attempt(&root, &tenant, &profile, &next,).is_err());
         assert_eq!(
             fs::read(source.path().join("prefs.js"))?,
             b"native Firefox cookie/WAL witness",
         );
-        assert!(checkpoint.exists(), "damaged evidence must never be deleted");
+        assert!(
+            checkpoint.exists(),
+            "damaged evidence must never be deleted"
+        );
         drop(evidence);
         drop(mutation);
         drop(root);
@@ -1712,9 +1795,8 @@ mod streaming_checkpoint_tests {
     fn streaming_checkpoint_rejects_foreign_identity_without_discarding_original()
     -> Result<(), Box<dyn std::error::Error>> {
         let id = NEXT.fetch_add(1, Ordering::Relaxed);
-        let path = std::env::temp_dir().join(format!(
-            "bridge-stream-foreign-{}-{id}", std::process::id(),
-        ));
+        let path = std::env::temp_dir()
+            .join(format!("bridge-stream-foreign-{}-{id}", std::process::id(),));
         let root = MaterializationRoot::open_or_create(path.clone())?;
         let tenant = TenantId::parse(format!("tenant_foreign_{id}"))?;
         let profile = ProfileId::parse(format!("profile_foreign_{id}"))?;
@@ -1725,31 +1807,46 @@ mod streaming_checkpoint_tests {
         fs::write(source.path().join("prefs.js"), b"first")?;
         fs::write(candidate.path().join("prefs.js"), b"second")?;
         let lease = ProfileLease::issue(
-            tenant.clone(), profile.clone(),
+            tenant.clone(),
+            profile.clone(),
             SessionId::parse(format!("session_foreign_{id}"))?,
             DeviceId::parse(format!("device_foreign_{id}"))?,
-            3, FencingToken::parse(format!("fence_foreign_{id}"))?,
+            3,
+            FencingToken::parse(format!("fence_foreign_{id}"))?,
         )?;
         let key = GenerationDek::new(
-            KeyId::parse("bridge_streaming_checkpoint_key_02")?, [0x20; 32],
+            KeyId::parse("bridge_streaming_checkpoint_key_02")?,
+            [0x20; 32],
         );
         let metadata = GenerationMetadata::for_reader(
             GenerationIdentity::new(
-                tenant.clone(), profile.clone(), next.clone(), Some(n.clone()),
+                tenant.clone(),
+                profile.clone(),
+                next.clone(),
+                Some(n.clone()),
             ),
-            key.key_id().clone(), NoncePrefix::new([0x21; 16]), 65_536,
+            key.key_id().clone(),
+            NoncePrefix::new([0x21; 16]),
+            65_536,
             &mut b"ciphertext".as_slice(),
         )?;
         let sealed_path = path.join("foreign.bpgc");
-        let mut file = OpenOptions::new().create_new(true).write(true).open(&sealed_path)?;
-        let descriptor = seal_generation_streaming(
-            &metadata, &key, &mut b"ciphertext".as_slice(), &mut file,
-        )?;
+        let mut file = OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .open(&sealed_path)?;
+        let descriptor =
+            seal_generation_streaming(&metadata, &key, &mut b"ciphertext".as_slice(), &mut file)?;
         file.sync_all()?;
         drop(file);
         assert_eq!(
             persist_streaming_exact_save_attempt(
-                &root, &source, &candidate, &descriptor, &sealed_path, &lease,
+                &root,
+                &source,
+                &candidate,
+                &descriptor,
+                &sealed_path,
+                &lease,
             ),
             Err(SaveAttemptEvidenceError::Changed),
         );

@@ -54,7 +54,10 @@ impl VerifiedGenerationObjectFile {
         let path_meta = fs::symlink_metadata(path)?;
         if path_meta.file_type().is_symlink()
             || !path_meta.is_file()
-            || path_meta.len() != payload_offset.checked_add(expected_bytes).ok_or_else(invalid_source)?
+            || path_meta.len()
+                != payload_offset
+                    .checked_add(expected_bytes)
+                    .ok_or_else(invalid_source)?
         {
             return Err(invalid_source());
         }
@@ -86,7 +89,10 @@ impl VerifiedGenerationObjectFile {
     /// still match; no cloud commit is allowed on failure.
     pub fn recheck_and_rewind(&mut self) -> io::Result<()> {
         if self.file.metadata()?.len()
-            != self.payload_offset.checked_add(self.expected_bytes).ok_or_else(invalid_source)?
+            != self
+                .payload_offset
+                .checked_add(self.expected_bytes)
+                .ok_or_else(invalid_source)?
         {
             return Err(invalid_source());
         }
@@ -286,7 +292,10 @@ mod tests {
         let path = fixture.path();
         let header = b"BPAT0001----serialized-original-metadata";
         let ciphertext = b"BPGC0001encrypted-specific-object";
-        let mut file = fs::OpenOptions::new().create_new(true).write(true).open(&path)?;
+        let mut file = fs::OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .open(&path)?;
         file.write_all(header)?;
         file.write_all(ciphertext)?;
         file.sync_all()?;
@@ -294,18 +303,33 @@ mod tests {
         let offset = header.len() as u64;
         let size = ciphertext.len() as u64;
         let mut exact = VerifiedGenerationObjectFile::open_checkpoint_payload(
-            &path, offset, size, fingerprint(ciphertext),
+            &path,
+            offset,
+            size,
+            fingerprint(ciphertext),
         )?;
         let mut copied = Vec::new();
         exact.reader().read_to_end(&mut copied)?;
         assert_eq!(copied, ciphertext);
         exact.recheck_and_rewind()?;
-        assert!(VerifiedGenerationObjectFile::open_checkpoint_payload(
-            &path, 11, size, fingerprint(ciphertext),
-        ).is_err());
-        assert!(VerifiedGenerationObjectFile::open_checkpoint_payload(
-            &path, offset + 1, size, fingerprint(ciphertext),
-        ).is_err());
+        assert!(
+            VerifiedGenerationObjectFile::open_checkpoint_payload(
+                &path,
+                11,
+                size,
+                fingerprint(ciphertext),
+            )
+            .is_err()
+        );
+        assert!(
+            VerifiedGenerationObjectFile::open_checkpoint_payload(
+                &path,
+                offset + 1,
+                size,
+                fingerprint(ciphertext),
+            )
+            .is_err()
+        );
         let mut changed = fs::OpenOptions::new().write(true).open(&path)?;
         changed.seek(SeekFrom::Start(offset))?;
         changed.write_all(b"XXXXXXXX")?;
