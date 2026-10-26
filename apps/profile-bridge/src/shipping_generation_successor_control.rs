@@ -28,8 +28,7 @@ use crate::shipping_save_attempt::{
     ScopedPendingSaveEvidence, classify_scoped_pending_save_evidence,
     deterministic_lone_unsynced_successor, discover_unresolved_streaming_exact_save_attempt,
     local_unsynced_matches_fresh_lease, persist_exact_save_attempt_from_lone_intent,
-    retire_active_exact_attempt_after_restart,
-    retire_matching_local_unsynced_after_restart,
+    retire_active_exact_attempt_after_restart, retire_matching_local_unsynced_after_restart,
 };
 use control_plane_contract::profile_generation_api::{
     BRIDGE_PROFILE_GENERATION_COMMIT_PATH_TEMPLATE,
@@ -623,9 +622,10 @@ where
     {
         return Err(RestartExactLocalCompletionError::WriterOrLockUnresolved);
     }
-    let mut original = discover_unresolved_streaming_exact_save_attempt(root, tenant_id, profile_id)
-        .map_err(|_| RestartExactLocalCompletionError::LocalEvidenceChanged)?
-        .ok_or(RestartExactLocalCompletionError::LocalEvidenceChanged)?;
+    let mut original =
+        discover_unresolved_streaming_exact_save_attempt(root, tenant_id, profile_id)
+            .map_err(|_| RestartExactLocalCompletionError::LocalEvidenceChanged)?
+            .ok_or(RestartExactLocalCompletionError::LocalEvidenceChanged)?;
     if original.base_generation_id() != selected_generation.as_str()
         || (fresh_lease.epoch() <= original.original_epoch()
             && !original.first_seal_under_current_lease(fresh_lease))
@@ -659,9 +659,10 @@ where
         };
     let result = (|| {
         // No cloud effect may be based on pre-lock evidence alone.
-        let mut exact = discover_unresolved_streaming_exact_save_attempt(root, tenant_id, profile_id)
-            .map_err(|_| RestartExactLocalCompletionError::LocalEvidenceChanged)?
-            .ok_or(RestartExactLocalCompletionError::LocalEvidenceChanged)?;
+        let mut exact =
+            discover_unresolved_streaming_exact_save_attempt(root, tenant_id, profile_id)
+                .map_err(|_| RestartExactLocalCompletionError::LocalEvidenceChanged)?
+                .ok_or(RestartExactLocalCompletionError::LocalEvidenceChanged)?;
         if exact.base_generation_id() != original.base_generation_id()
             || exact.successor_id() != original.successor_id()
             || exact.object_key() != original.object_key()
@@ -680,8 +681,14 @@ where
         {
             return Err(RestartExactLocalCompletionError::LocalEvidenceChanged);
         }
-        if request_fresh_retry_decision_streamed(tenant_id, profile_id, &exact, fresh_lease, transport)
-            .map_err(RestartExactLocalCompletionError::ControlPlane)?
+        if request_fresh_retry_decision_streamed(
+            tenant_id,
+            profile_id,
+            &exact,
+            fresh_lease,
+            transport,
+        )
+        .map_err(RestartExactLocalCompletionError::ControlPlane)?
             != BridgeGenerationSuccessorRetryVerdict::NotAppliedRetryable
         {
             return Ok(false);
@@ -864,14 +871,18 @@ fn request_fresh_retry_decision<T: MachineHttpPort>(
     transport: &mut T,
 ) -> Result<BridgeGenerationSuccessorRetryVerdict, ShippingControlPlaneError> {
     request_fresh_retry_decision_for_descriptor(
-        tenant_id, profile_id, BridgeGenerationSuccessorObserveRequest {
+        tenant_id,
+        profile_id,
+        BridgeGenerationSuccessorObserveRequest {
             base_generation_id: attempt.base_generation_id().to_owned(),
             generation_id: attempt.successor_id().to_owned(),
             object_key: attempt.object_key().to_owned(),
             metadata_digest: attempt.metadata_digest().to_owned(),
             container_digest: attempt.container_digest().to_owned(),
             container_bytes: attempt.container_bytes(),
-        }, fresh_lease, transport,
+        },
+        fresh_lease,
+        transport,
     )
 }
 
@@ -884,14 +895,18 @@ fn request_fresh_retry_decision_streamed<T: MachineHttpPort>(
     transport: &mut T,
 ) -> Result<BridgeGenerationSuccessorRetryVerdict, ShippingControlPlaneError> {
     request_fresh_retry_decision_for_descriptor(
-        tenant_id, profile_id, BridgeGenerationSuccessorObserveRequest {
+        tenant_id,
+        profile_id,
+        BridgeGenerationSuccessorObserveRequest {
             base_generation_id: attempt.base_generation_id().to_owned(),
             generation_id: attempt.successor_id().to_owned(),
             object_key: attempt.object_key().to_owned(),
             metadata_digest: attempt.metadata_digest().to_owned(),
             container_digest: attempt.container_digest().to_owned(),
             container_bytes: attempt.container_bytes(),
-        }, fresh_lease, transport,
+        },
+        fresh_lease,
+        transport,
     )
 }
 
