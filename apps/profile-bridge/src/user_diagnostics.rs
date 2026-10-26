@@ -185,6 +185,7 @@ impl ReadOnlyProfileDiagnosis {
         )
     }
 
+    #[cfg(test)]
     #[must_use]
     pub(crate) const fn state(self) -> &'static str {
         self.state
@@ -1011,6 +1012,7 @@ mod tests {
         assert!(b.contains("CLOUD=UNKNOWN"));
         assert!(b.contains("LKG=UNKNOWN"));
         assert!(b.contains("CHECKPOINT=PREPARED_NOT_DURABILITY_PROOF"));
+        assert!(b.len() <= 512);
         assert!(b.contains("HISTORICAL_LEASE_REPROOF_REQUIRED"));
         assert!(!b.contains("CLOUD_SAVED"));
         let closed = ReadOnlyProfileDiagnosis::after_durable_local_close(facts);
