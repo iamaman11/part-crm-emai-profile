@@ -4,13 +4,15 @@
 //! call PUT/commit after restart. Only the live retained owner can publish.
 //! Recovery must obtain a fresh authoritative, ACL/fencing-safe decision before
 //! using these exact bytes. Never remove an unknown record during cleanup.
-use crate::dirty_generation::PreparedDirtyGeneration;
+use crate::dirty_generation::{GenerationSealingMaterialPort, PreparedDirtyGeneration};
+use crate::generation_snapshot::WorkspaceSnapshotReader;
 use crate::generation_object_spool::VerifiedGenerationObjectFile;
 use crate::local_profile::{GenerationWorkspace, MaterializationRoot};
 use crate::shipping_generation_save::CommittedGenerationSuccessor;
 use encrypted_generation_domain::{
     MAX_GENERATION_CONTAINER_BYTES, MAX_GENERATION_METADATA_PRELUDE_BYTES,
-    MAX_STREAM_CONTAINER_BYTES, StreamingGenerationReport, inspect_generation_metadata_prelude,
+    MAX_STREAM_CONTAINER_BYTES, GenerationIdentity, GenerationMetadata, StreamingGenerationReport,
+    inspect_generation_metadata_prelude, seal_generation_streaming,
 };
 use profile_platform_primitives::{GenerationId, ProfileId, TenantId};
 use serde::{Deserialize, Serialize};
@@ -1232,6 +1234,9 @@ impl ReadOnlyStreamedSaveAttempt {
 /// Errors KEEP uncertain stages and the original Firefox N/N+1 intact.
 /// This alone never uploads, commits, authorizes a lease or marks Saved.
 #[allow(dead_code)] // K2 shipping conversion is a separate activation gate.
+/// An existing sealed BPGC file may be copied into the original BPAT
+/// format, but this adapter does not create plaintext or secondary authority.
+#[allow(dead_code)] // K2 shipping rollout still gated.
 pub(crate) fn persist_streaming_exact_save_attempt(
     root: &MaterializationRoot,
     source: &GenerationWorkspace,
@@ -1240,6 +1245,145 @@ pub(crate) fn persist_streaming_exact_save_attempt(
     sealed_file: &Path,
     lease: &ProfileLease,
 ) -> Result<(), SaveAttemptEvidenceError> {
+    let mut input = VerifiedGenerationObjectFile::open(
+        sealed_file,
+        report.container_bytes(),
+        report.container_digest().bytes(),
+    )
+    .map_err(|_| SaveAttemptEvidenceError::Changed)?;
+    persist_streaming_checkpoint_with_writer(
+        root, source, candidate, report, lease, |output| {
+            let copied = std::io::copy(
+                &mut input.reader().take(report.container_bytes()), output,
+            )?;
+            if copied != report.container_bytes() {
+                return Err(SaveAttemptEvidenceError::Changed);
+            }
+            input.recheck_and_rewind().map_err(|_| SaveAttemptEvidenceError::Changed)
+        },
+    )
+}
+
+/// Direct native Firefox -> EXACT encrypted BPAT checkpoint. No plaintext
+/// snapshot spool and no second ciphertext spool. Existing current writer
+/// authority/OS admission MUST be held by the caller; this only establishes
+/// local immutable evidence, never permission to upload or commit.
+///
+/// Pass 1 hashes the exact canonical BPGW reader before calling the key owner.
+/// Pass 2 seals to a nonallocating sink, computing the deterministic BPGC
+/// descriptor. Pass 3 writes *the same ciphertext* directly into an fsynced
+/// BPAT.pending stage. Digest/inventory verification and no-replace hardlink
+/// remain in the ONE existing checkpoint owner. A torn stage remains a hard
+/// blocker; no N+2 and no source-file modification occurs.
+#[allow(dead_code)] // Activated by the K2 shipping owner integration gate.
+pub(crate) fn persist_streaming_exact_save_attempt_from_native<K: GenerationSealingMaterialPort>(
+    root: &MaterializationRoot,
+    source: &GenerationWorkspace,
+    candidate: &GenerationWorkspace,
+    lease: &ProfileLease,
+    sealer: &mut K,
+) -> Result<(), SaveAttemptEvidenceError> {
+    if source.tenant_id() != lease.tenant_id()
+        || source.profile_id() != lease.profile_id()
+        || candidate.tenant_id() != lease.tenant_id()
+        || candidate.profile_id() != lease.profile_id()
+        || source.generation_id() == candidate.generation_id()
+        || lease.epoch() == 0
+    {
+        return Err(SaveAttemptEvidenceError::Invalid);
+    }
+    // Existing checkpoint never triggers new key/nonce material or overwrites.
+    let target = attempt_path(
+        root, lease.tenant_id(), lease.profile_id(), candidate.generation_id(),
+    );
+    match fs::symlink_metadata(&target) {
+        Ok(_) => return Err(SaveAttemptEvidenceError::Changed),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error.into()),
+    }
+    let inventory = source.inventory().map_err(|_| SaveAttemptEvidenceError::Changed)?;
+    if candidate.inventory().map_err(|_| SaveAttemptEvidenceError::Changed)? != inventory {
+        return Err(SaveAttemptEvidenceError::Changed);
+    }
+    let mut reader = WorkspaceSnapshotReader::new(candidate, &inventory)
+        .map_err(|_| SaveAttemptEvidenceError::Changed)?;
+    let expected_bytes = reader.expected_bytes();
+    let mut digest = Sha256::new();
+    let mut buffer = [0_u8; 65_536];
+    let mut counted = 0_u64;
+    loop {
+        let count = reader.read(&mut buffer).map_err(|_| SaveAttemptEvidenceError::Changed)?;
+        if count == 0 { break; }
+        counted = counted.checked_add(count as u64).ok_or(SaveAttemptEvidenceError::Invalid)?;
+        digest.update(&buffer[..count]);
+    }
+    if counted != expected_bytes
+        || source.inventory().map_err(|_| SaveAttemptEvidenceError::Changed)? != inventory
+    {
+        return Err(SaveAttemptEvidenceError::Changed);
+    }
+    let material = sealer.material_for(
+        lease.tenant_id(), lease.profile_id(),
+        source.generation_id(), candidate.generation_id(), digest.finalize().into(),
+    ).map_err(|_| SaveAttemptEvidenceError::Unavailable)?;
+    let (key, nonce, chunk_size) = material.into_parts();
+    // The digest is measured from actual native files rather than asserted
+    // from caller-owned metadata; the AEAD sealer will recompute it AGAIN.
+    let measured_digest = {
+        // The key owner may have made a change during material selection.
+        // Re-read through the same bounded canonical source to get a stable
+        // expected digest; subsequent source churn still fails the seal.
+        let mut proof = WorkspaceSnapshotReader::new(candidate, &inventory)
+            .map_err(|_| SaveAttemptEvidenceError::Changed)?;
+        let mut hasher = Sha256::new();
+        loop {
+            let count = proof.read(&mut buffer).map_err(|_| SaveAttemptEvidenceError::Changed)?;
+            if count == 0 { break; }
+            hasher.update(&buffer[..count]);
+        }
+        let digest: [u8; 32] = hasher.finalize().into();
+        digest
+    };
+    // A changed key-owner source cannot silently produce a second ciphertext.
+    // The key lookup's digest is re-used; any mismatch blocks publication.
+    let mut comparison = WorkspaceSnapshotReader::new(candidate, &inventory)
+        .map_err(|_| SaveAttemptEvidenceError::Changed)?;
+    let metadata = GenerationMetadata::for_prehashed_stream(
+        GenerationIdentity::new(
+            lease.tenant_id().clone(), lease.profile_id().clone(),
+            candidate.generation_id().clone(), Some(source.generation_id().clone()),
+        ),
+        key.key_id().clone(), nonce, chunk_size, expected_bytes, measured_digest,
+    ).map_err(|_| SaveAttemptEvidenceError::Invalid)?;
+    let expected = seal_generation_streaming(
+        &metadata, &key, &mut comparison, &mut std::io::sink(),
+    ).map_err(|_| SaveAttemptEvidenceError::Changed)?;
+    if source.inventory().map_err(|_| SaveAttemptEvidenceError::Changed)? != inventory {
+        return Err(SaveAttemptEvidenceError::Changed);
+    }
+    persist_streaming_checkpoint_with_writer(
+        root, source, candidate, &expected, lease, |output| {
+            let mut actual_reader = WorkspaceSnapshotReader::new(candidate, &inventory)
+                .map_err(|_| SaveAttemptEvidenceError::Changed)?;
+            let actual = seal_generation_streaming(
+                &metadata, &key, &mut actual_reader, output,
+            ).map_err(|_| SaveAttemptEvidenceError::Changed)?;
+            if actual != expected
+                || source.inventory().map_err(|_| SaveAttemptEvidenceError::Changed)? != inventory
+            {
+                return Err(SaveAttemptEvidenceError::Changed);
+            }
+            Ok(())
+        },
+    )
+}
+
+fn streaming_checkpoint_header(
+    source: &GenerationWorkspace,
+    candidate: &GenerationWorkspace,
+    report: &StreamingGenerationReport,
+    lease: &ProfileLease,
+) -> Result<AttemptHeader, SaveAttemptEvidenceError> {
     let metadata = report.metadata();
     if lease.tenant_id() != source.tenant_id()
         || lease.profile_id() != source.profile_id()
@@ -1285,6 +1429,19 @@ pub(crate) fn persist_streaming_exact_save_attempt(
         container_bytes: report.container_bytes(),
         recovered_lone_origin: None,
     };
+
+    Ok(header)
+}
+
+fn persist_streaming_checkpoint_with_writer(
+    root: &MaterializationRoot,
+    source: &GenerationWorkspace,
+    candidate: &GenerationWorkspace,
+    report: &StreamingGenerationReport,
+    lease: &ProfileLease,
+    write_ciphertext: impl FnOnce(&mut File) -> Result<(), SaveAttemptEvidenceError>,
+) -> Result<(), SaveAttemptEvidenceError> {
+    let header = streaming_checkpoint_header(source, candidate, report, lease)?;
     let header_bytes =
         serde_json::to_vec(&header).map_err(|_| SaveAttemptEvidenceError::Invalid)?;
     if header_bytes.is_empty()
@@ -1317,12 +1474,6 @@ pub(crate) fn persist_streaming_exact_save_attempt(
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
         Err(err) => return Err(err.into()),
     }
-    let mut input = VerifiedGenerationObjectFile::open(
-        sealed_file,
-        report.container_bytes(),
-        report.container_digest().bytes(),
-    )
-    .map_err(|_| SaveAttemptEvidenceError::Changed)?;
     let mut staged = None;
     for _ in 0..STAGE_TRIES {
         let sequence = STAGE_SEQUENCE.fetch_add(1, Ordering::Relaxed);
@@ -1345,13 +1496,7 @@ pub(crate) fn persist_streaming_exact_save_attempt(
         out.write_all(MAGIC)?;
         out.write_all(&(header_bytes.len() as u32).to_be_bytes())?;
         out.write_all(&header_bytes)?;
-        let copied = std::io::copy(&mut input.reader().take(report.container_bytes()), &mut out)?;
-        if copied != report.container_bytes() {
-            return Err(SaveAttemptEvidenceError::Changed);
-        }
-        input
-            .recheck_and_rewind()
-            .map_err(|_| SaveAttemptEvidenceError::Changed)?;
+        write_ciphertext(&mut out)?;
         out.sync_all()?;
         Ok(())
     })();
