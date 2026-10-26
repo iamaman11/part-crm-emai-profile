@@ -14,7 +14,7 @@ use crate::shipping_control_plane::{
 #[cfg(any(windows, test))]
 use crate::shipping_generation_save::SignedGenerationObjectStreamPutPort;
 use crate::shipping_generation_save::{
-    GenerationSuccessorCommitOutcome, GenerationSuccessorControlPort,
+    CommittedGenerationSuccessor, GenerationSuccessorCommitOutcome, GenerationSuccessorControlPort,
     GenerationUploadAuthorization, SignedGenerationUploadCapability,
 };
 #[cfg(any(windows, test))]
@@ -681,86 +681,83 @@ where
         {
             return Err(RestartExactLocalCompletionError::LocalEvidenceChanged);
         }
-        if request_fresh_retry_decision_streamed(
+        Ok(publish_streamed_exact_under_writer(
             tenant_id,
             profile_id,
-            &exact,
+            selected_generation,
+            &mut exact,
             fresh_lease,
             transport,
-        )
-        .map_err(RestartExactLocalCompletionError::ControlPlane)?
-            != BridgeGenerationSuccessorRetryVerdict::NotAppliedRetryable
-        {
-            return Ok(false);
-        }
-        let request = BridgeProfileGenerationSuccessorRequest::new(
-            exact.base_generation_id(),
-            exact.successor_id(),
-            exact.object_key(),
-            exact.metadata_digest(),
-            exact.container_digest(),
-            exact.container_bytes(),
-            fresh_lease.session_id().as_str(),
-            fresh_lease.fencing_token().as_str(),
-            fresh_lease.epoch(),
-        );
-        let authorization = |transport: &mut T| {
-            let bytes = post_json::<T, core::convert::Infallible, _>(
-                transport,
-                &successor_path(
-                    BRIDGE_PROFILE_GENERATION_UPLOAD_CAPABILITY_PATH_TEMPLATE,
-                    tenant_id,
-                    profile_id,
-                ),
-                &request,
-            )
-            .map_err(|error| match error {
-                GenerationSuccessorControlError::ControlPlane(reason) => {
-                    RestartExactLocalCompletionError::ControlPlane(reason)
-                }
-                GenerationSuccessorControlError::Sealing(never) => match never {},
-            })?;
-            if bytes.len() > MAX_UPLOAD_CAPABILITY_RESPONSE_BYTES {
-                return Err(RestartExactLocalCompletionError::ControlPlane(
-                    ShippingControlPlaneError::InvalidResponse,
-                ));
-            }
-            let decoded =
-                serde_json::from_slice::<BridgeGenerationUploadCapabilityResponse>(&bytes)
-                    .map_err(|_| {
-                        RestartExactLocalCompletionError::ControlPlane(
-                            ShippingControlPlaneError::InvalidResponse,
-                        )
-                    })?;
-            decode_upload_authorization::<core::convert::Infallible>(decoded).map_err(|error| {
-                match error {
-                    GenerationSuccessorControlError::ControlPlane(reason) => {
-                        RestartExactLocalCompletionError::ControlPlane(reason)
-                    }
-                    GenerationSuccessorControlError::Sealing(never) => match never {},
-                }
-            })
-        };
-        match authorization(transport)? {
-            GenerationUploadAuthorization::Verified => {}
-            GenerationUploadAuthorization::UploadRequired(capability) => {
-                upload
-                    .put_verified_stream(&capability, exact.ciphertext())
-                    .map_err(|_| RestartExactLocalCompletionError::UploadOrCommitUncertain)?;
-                if !matches!(
-                    authorization(transport)?,
-                    GenerationUploadAuthorization::Verified
-                ) {
-                    return Err(RestartExactLocalCompletionError::UploadOrCommitUncertain);
-                }
-            }
-        }
-        // Existing Worker independently rechecks the exact uploaded R2
-        // descriptor and fresh coordinator fence before its atomic D1 commit.
-        let response = post_json::<T, core::convert::Infallible, _>(
+            upload,
+        )?
+        .is_some())
+    })();
+    lock.release()
+        .map_err(|_| RestartExactLocalCompletionError::WriterOrLockUnresolved)?;
+    result
+}
+
+/// Upload and commit exactly the already verified BPAT ciphertext while the
+/// ONE existing Bridge writer admission is held. Neither this helper nor the
+/// D1 retry decision is a second lease or storage state machine. Current
+/// ACL/fence/pointer and independent R2 verification remain server-owned.
+#[cfg(any(windows, test))]
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn publish_streamed_exact_under_writer<T, U>(
+    tenant_id: &TenantId,
+    profile_id: &ProfileId,
+    selected_generation: &GenerationId,
+    exact: &mut ReadOnlyStreamedSaveAttempt,
+    fresh_lease: &ProfileLease,
+    transport: &mut T,
+    upload: &mut U,
+) -> Result<Option<CommittedGenerationSuccessor>, RestartExactLocalCompletionError>
+where
+    T: MachineHttpPort,
+    U: SignedGenerationObjectStreamPutPort,
+{
+    if fresh_lease.tenant_id() != tenant_id
+        || fresh_lease.profile_id() != profile_id
+        || fresh_lease.epoch() == 0
+        || exact.base_generation_id() != selected_generation.as_str()
+        || !exact.original_device(fresh_lease)
+        || (fresh_lease.epoch() < exact.original_epoch())
+        || (fresh_lease.epoch() == exact.original_epoch() && !exact.original_lease(fresh_lease))
+    {
+        return Err(RestartExactLocalCompletionError::WriterOrLockUnresolved);
+    }
+    exact
+        .ciphertext()
+        .recheck_and_rewind()
+        .map_err(|_| RestartExactLocalCompletionError::LocalEvidenceChanged)?;
+    if request_fresh_retry_decision_streamed(
+        tenant_id,
+        profile_id,
+        &exact,
+        fresh_lease,
+        transport,
+    )
+    .map_err(RestartExactLocalCompletionError::ControlPlane)?
+        != BridgeGenerationSuccessorRetryVerdict::NotAppliedRetryable
+    {
+        return Ok(None);
+    }
+    let request = BridgeProfileGenerationSuccessorRequest::new(
+        exact.base_generation_id(),
+        exact.successor_id(),
+        exact.object_key(),
+        exact.metadata_digest(),
+        exact.container_digest(),
+        exact.container_bytes(),
+        fresh_lease.session_id().as_str(),
+        fresh_lease.fencing_token().as_str(),
+        fresh_lease.epoch(),
+    );
+    let authorization = |transport: &mut T| {
+        let bytes = post_json::<T, core::convert::Infallible, _>(
             transport,
             &successor_path(
-                BRIDGE_PROFILE_GENERATION_COMMIT_PATH_TEMPLATE,
+                BRIDGE_PROFILE_GENERATION_UPLOAD_CAPABILITY_PATH_TEMPLATE,
                 tenant_id,
                 profile_id,
             ),
@@ -772,27 +769,93 @@ where
             }
             GenerationSuccessorControlError::Sealing(never) => match never {},
         })?;
-        if response.len() > MAX_COMMIT_RESPONSE_BYTES {
+        if bytes.len() > MAX_UPLOAD_CAPABILITY_RESPONSE_BYTES {
             return Err(RestartExactLocalCompletionError::ControlPlane(
                 ShippingControlPlaneError::InvalidResponse,
             ));
         }
-        let committed = serde_json::from_slice::<BridgeGenerationSuccessorCommitResponse>(
-            &response,
-        )
-        .map_err(|_| {
-            RestartExactLocalCompletionError::ControlPlane(
-                ShippingControlPlaneError::InvalidResponse,
-            )
-        })?;
-        match committed.outcome {
-            BridgeGenerationSuccessorCommitOutcomeDto::Activated
-            | BridgeGenerationSuccessorCommitOutcomeDto::AlreadyActive => Ok(true),
+        let decoded =
+            serde_json::from_slice::<BridgeGenerationUploadCapabilityResponse>(&bytes)
+                .map_err(|_| {
+                    RestartExactLocalCompletionError::ControlPlane(
+                        ShippingControlPlaneError::InvalidResponse,
+                    )
+                })?;
+        decode_upload_authorization::<core::convert::Infallible>(decoded).map_err(|error| {
+            match error {
+                GenerationSuccessorControlError::ControlPlane(reason) => {
+                    RestartExactLocalCompletionError::ControlPlane(reason)
+                }
+                GenerationSuccessorControlError::Sealing(never) => match never {},
+            }
+        })
+    };
+    match authorization(transport)? {
+        GenerationUploadAuthorization::Verified => {}
+        GenerationUploadAuthorization::UploadRequired(capability) => {
+            upload
+                .put_verified_stream(&capability, exact.ciphertext())
+                .map_err(|_| RestartExactLocalCompletionError::UploadOrCommitUncertain)?;
+            if !matches!(
+                authorization(transport)?,
+                GenerationUploadAuthorization::Verified
+            ) {
+                return Err(RestartExactLocalCompletionError::UploadOrCommitUncertain);
+            }
         }
-    })();
-    lock.release()
-        .map_err(|_| RestartExactLocalCompletionError::WriterOrLockUnresolved)?;
-    result
+    }
+    // Existing Worker independently rechecks the exact uploaded R2
+    // descriptor and fresh coordinator fence before its atomic D1 commit.
+    let response = post_json::<T, core::convert::Infallible, _>(
+        transport,
+        &successor_path(
+            BRIDGE_PROFILE_GENERATION_COMMIT_PATH_TEMPLATE,
+            tenant_id,
+            profile_id,
+        ),
+        &request,
+    )
+    .map_err(|error| match error {
+        GenerationSuccessorControlError::ControlPlane(reason) => {
+            RestartExactLocalCompletionError::ControlPlane(reason)
+        }
+        GenerationSuccessorControlError::Sealing(never) => match never {},
+    })?;
+    if response.len() > MAX_COMMIT_RESPONSE_BYTES {
+        return Err(RestartExactLocalCompletionError::ControlPlane(
+            ShippingControlPlaneError::InvalidResponse,
+        ));
+    }
+    let committed = serde_json::from_slice::<BridgeGenerationSuccessorCommitResponse>(
+        &response,
+    )
+    .map_err(|_| {
+        RestartExactLocalCompletionError::ControlPlane(
+            ShippingControlPlaneError::InvalidResponse,
+        )
+    })?;
+    exact
+        .ciphertext()
+        .recheck_and_rewind()
+        .map_err(|_| RestartExactLocalCompletionError::LocalEvidenceChanged)?;
+    let outcome = match committed.outcome {
+        BridgeGenerationSuccessorCommitOutcomeDto::Activated => {
+            GenerationSuccessorCommitOutcome::Activated
+        }
+        BridgeGenerationSuccessorCommitOutcomeDto::AlreadyActive => {
+            GenerationSuccessorCommitOutcome::AlreadyActive
+        }
+    };
+    CommittedGenerationSuccessor::confirmed_streamed(
+        exact.successor_id(),
+        exact.object_key(),
+        exact.metadata_digest(),
+        exact.container_digest(),
+        exact.container_bytes(),
+        outcome,
+    )
+    .map(Some)
+    .map_err(|_| RestartExactLocalCompletionError::LocalEvidenceChanged)
 }
 
 /// A controlled close still held by the ORIGINAL process may retry the

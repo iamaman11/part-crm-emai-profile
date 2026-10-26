@@ -183,6 +183,33 @@ impl CommittedGenerationSuccessor {
     pub const fn outcome(&self) -> GenerationSuccessorCommitOutcome {
         self.outcome
     }
+
+    /// Construct only after the existing Worker accepted the exact atomic D1
+    /// commit response. The immutable descriptor comes from the verified BPAT.
+    pub(crate) fn confirmed_streamed(
+        generation_id: &str,
+        object_key: &str,
+        metadata_digest: &str,
+        container_digest: &str,
+        container_bytes: u64,
+        outcome: GenerationSuccessorCommitOutcome,
+    ) -> Result<Self, ()> {
+        if object_key.is_empty()
+            || metadata_digest.len() != 64
+            || container_digest.len() != 64
+            || container_bytes == 0
+        {
+            return Err(());
+        }
+        Ok(Self {
+            generation_id: GenerationId::parse(generation_id).map_err(|_| ())?,
+            object_key: object_key.to_owned(),
+            metadata_digest: metadata_digest.to_owned(),
+            container_digest: container_digest.to_owned(),
+            container_bytes,
+            outcome,
+        })
+    }
 }
 
 #[derive(Debug, Eq, PartialEq)]
