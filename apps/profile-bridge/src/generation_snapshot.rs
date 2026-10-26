@@ -208,7 +208,6 @@ pub(crate) fn encode_workspace_snapshot(
     Ok(output)
 }
 
-
 #[derive(Clone)]
 struct StreamedSnapshotFile {
     relative_path: String,
@@ -307,21 +306,28 @@ fn materialize_stream_into_staging(
         let mut content_len = [0_u8; 8];
         read_stream_piece(source, &mut hash, &mut total, &mut content_len)?;
         let bytes = u64::from_be_bytes(content_len);
-        if total.checked_add(bytes).is_none_or(|sum| sum > expected.plaintext_bytes) {
+        if total
+            .checked_add(bytes)
+            .is_none_or(|sum| sum > expected.plaintext_bytes)
+        {
             return Err(GenerationSnapshotError::SnapshotTooLarge);
         }
         let target = staging_path.join(&relative);
         let parent = target.parent().ok_or(GenerationSnapshotError::UnsafePath)?;
         ensure_descendant_directories(staging_path, parent)?;
-        let mut file = OpenOptions::new().write(true).create_new(true)
-            .open(&target).map_err(LocalProfileError::from)?;
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&target)
+            .map_err(LocalProfileError::from)?;
         let mut remaining = bytes;
         let mut file_hash = Sha256::new();
         while remaining > 0 {
             let count = usize::try_from(remaining.min(buffer.len() as u64))
                 .map_err(|_| GenerationSnapshotError::SnapshotTooLarge)?;
             read_stream_piece(source, &mut hash, &mut total, &mut buffer[..count])?;
-            file.write_all(&buffer[..count]).map_err(LocalProfileError::from)?;
+            file.write_all(&buffer[..count])
+                .map_err(LocalProfileError::from)?;
             file_hash.update(&buffer[..count]);
             remaining -= count as u64;
         }
@@ -343,7 +349,8 @@ fn materialize_stream_into_staging(
     before_publish(&staging)?;
 
     // Identical no-replace atomic publish boundary to the in-memory reader.
-    let final_path = root.prepare_generation_path(tenant, profile, generation)
+    let final_path = root
+        .prepare_generation_path(tenant, profile, generation)
         .map_err(|error| match error {
             LocalProfileError::TargetAlreadyExists => GenerationSnapshotError::TargetAlreadyExists,
             error => GenerationSnapshotError::Local(error),
@@ -353,7 +360,8 @@ fn materialize_stream_into_staging(
     }
     fs::rename(staging_path, &final_path).map_err(LocalProfileError::from)?;
     drop(staging);
-    let workspace = root.open_generation(tenant, profile, generation)
+    let workspace = root
+        .open_generation(tenant, profile, generation)
         .map_err(GenerationSnapshotError::Local)?;
     verify_streamed_workspace(&workspace, &entries)?;
     Ok(workspace)
@@ -363,7 +371,9 @@ fn verify_streamed_workspace(
     workspace: &GenerationWorkspace,
     entries: &[StreamedSnapshotFile],
 ) -> Result<(), GenerationSnapshotError> {
-    let inventory = workspace.inventory().map_err(GenerationSnapshotError::Local)?;
+    let inventory = workspace
+        .inventory()
+        .map_err(GenerationSnapshotError::Local)?;
     if inventory.entries().len() != entries.len() {
         return Err(GenerationSnapshotError::SourceChanged);
     }
@@ -374,7 +384,8 @@ fn verify_streamed_workspace(
         }
         let path = workspace.path().join(&original.relative_path);
         let metadata = fs::symlink_metadata(&path).map_err(LocalProfileError::from)?;
-        if metadata.file_type().is_symlink() || !metadata.is_file()
+        if metadata.file_type().is_symlink()
+            || !metadata.is_file()
             || metadata.len() != original.bytes
         {
             return Err(GenerationSnapshotError::SourceChanged);
@@ -401,7 +412,8 @@ fn read_stream_piece(
     total: &mut u64,
     buffer: &mut [u8],
 ) -> Result<(), GenerationSnapshotError> {
-    let next = total.checked_add(buffer.len() as u64)
+    let next = total
+        .checked_add(buffer.len() as u64)
         .ok_or(GenerationSnapshotError::SnapshotTooLarge)?;
     if next > MAX_STREAM_WORKSPACE_SNAPSHOT_BYTES {
         return Err(GenerationSnapshotError::SnapshotTooLarge);
@@ -777,10 +789,9 @@ fn checked_extend(output: &mut Vec<u8>, bytes: &[u8]) -> Result<(), GenerationSn
 #[cfg(test)]
 mod tests {
     use super::{
-        GenerationSnapshotError, WORKSPACE_SNAPSHOT_MAGIC, encode_workspace_snapshot,
-        encode_workspace_snapshot_streaming,
-        materialize_workspace_snapshot_streaming_with_pre_publish,
-        StreamedWorkspaceSnapshot, materialize_workspace_snapshot,
+        GenerationSnapshotError, StreamedWorkspaceSnapshot, WORKSPACE_SNAPSHOT_MAGIC,
+        encode_workspace_snapshot, encode_workspace_snapshot_streaming,
+        materialize_workspace_snapshot, materialize_workspace_snapshot_streaming_with_pre_publish,
         materialize_workspace_snapshot_with_pre_publish, parse_workspace_snapshot,
     };
     use crate::local_profile::MaterializationRoot;
@@ -966,21 +977,28 @@ mod tests {
         result
     }
 
-
     #[test]
     fn streamed_materializer_refuses_trailing_corrupt_and_unsafe_native_restore()
     -> Result<(), Box<dyn std::error::Error>> {
         let fixture = Fixture::new()?;
         let result = (|| {
             let next = GenerationId::parse("generation_streamed_unpublished_unsafe")?;
-            let valid = raw_snapshot(&[("prefs.js", b"good"), ("user_data/cookies.sqlite-wal", b"wal")]);
+            let valid = raw_snapshot(&[
+                ("prefs.js", b"good"),
+                ("user_data/cookies.sqlite-wal", b"wal"),
+            ]);
             let proof = StreamedWorkspaceSnapshot {
                 plaintext_bytes: valid.len() as u64,
                 plaintext_digest: sha2::Sha256::digest(&valid).into(),
             };
             let materialized = materialize_workspace_snapshot_streaming_with_pre_publish(
-                &fixture.root, &fixture.tenant_id, &fixture.profile_id,
-                &next, &mut valid.as_slice(), proof, |_| Ok(()),
+                &fixture.root,
+                &fixture.tenant_id,
+                &fixture.profile_id,
+                &next,
+                &mut valid.as_slice(),
+                proof,
+                |_| Ok(()),
             )?;
             assert_eq!(fs::read(materialized.path().join("prefs.js"))?, b"good");
             assert_eq!(
@@ -989,34 +1007,62 @@ mod tests {
             );
             assert_eq!(
                 materialize_workspace_snapshot_streaming_with_pre_publish(
-                    &fixture.root, &fixture.tenant_id, &fixture.profile_id,
-                    &next, &mut valid.as_slice(), proof, |_| Ok(()),
-                ).err(),
+                    &fixture.root,
+                    &fixture.tenant_id,
+                    &fixture.profile_id,
+                    &next,
+                    &mut valid.as_slice(),
+                    proof,
+                    |_| Ok(()),
+                )
+                .err(),
                 Some(GenerationSnapshotError::TargetAlreadyExists),
             );
             let next = GenerationId::parse("generation_streamed_restore_trailing")?;
             let mut invalid = valid.clone();
             invalid.push(0x91);
-            assert!(materialize_workspace_snapshot_streaming_with_pre_publish(
-                &fixture.root, &fixture.tenant_id, &fixture.profile_id,
-                &next, &mut invalid.as_slice(), proof, |_| Ok(()),
-            ).is_err());
-            assert!(fixture.root.open_generation(
-                &fixture.tenant_id, &fixture.profile_id, &next,
-            ).is_err());
+            assert!(
+                materialize_workspace_snapshot_streaming_with_pre_publish(
+                    &fixture.root,
+                    &fixture.tenant_id,
+                    &fixture.profile_id,
+                    &next,
+                    &mut invalid.as_slice(),
+                    proof,
+                    |_| Ok(()),
+                )
+                .is_err()
+            );
+            assert!(
+                fixture
+                    .root
+                    .open_generation(&fixture.tenant_id, &fixture.profile_id, &next,)
+                    .is_err()
+            );
             let next = GenerationId::parse("generation_streamed_restore_escape")?;
             let unsafe_source = raw_snapshot(&[("../prefs.js", b"escape")]);
             let unsafe_proof = StreamedWorkspaceSnapshot {
                 plaintext_bytes: unsafe_source.len() as u64,
                 plaintext_digest: sha2::Sha256::digest(&unsafe_source).into(),
             };
-            assert!(materialize_workspace_snapshot_streaming_with_pre_publish(
-                &fixture.root, &fixture.tenant_id, &fixture.profile_id,
-                &next, &mut unsafe_source.as_slice(), unsafe_proof, |_| Ok(()),
-            ).is_err());
-            assert!(fixture.root.open_generation(
-                &fixture.tenant_id, &fixture.profile_id, &next,
-            ).is_err());
+            assert!(
+                materialize_workspace_snapshot_streaming_with_pre_publish(
+                    &fixture.root,
+                    &fixture.tenant_id,
+                    &fixture.profile_id,
+                    &next,
+                    &mut unsafe_source.as_slice(),
+                    unsafe_proof,
+                    |_| Ok(()),
+                )
+                .is_err()
+            );
+            assert!(
+                fixture
+                    .root
+                    .open_generation(&fixture.tenant_id, &fixture.profile_id, &next,)
+                    .is_err()
+            );
             Ok::<(), Box<dyn std::error::Error>>(())
         })();
         fixture.cleanup();
@@ -1035,18 +1081,31 @@ mod tests {
             };
             assert_eq!(
                 materialize_workspace_snapshot_streaming_with_pre_publish(
-                    &fixture.root, &fixture.tenant_id, &fixture.profile_id,
-                    &generation, &mut snapshot.as_slice(), expected,
+                    &fixture.root,
+                    &fixture.tenant_id,
+                    &fixture.profile_id,
+                    &generation,
+                    &mut snapshot.as_slice(),
+                    expected,
                     |_| Err(GenerationSnapshotError::PrePublish),
-                ).err(),
+                )
+                .err(),
                 Some(GenerationSnapshotError::PrePublish),
             );
-            assert!(fixture.root.open_generation(
-                &fixture.tenant_id, &fixture.profile_id, &generation,
-            ).is_err());
+            assert!(
+                fixture
+                    .root
+                    .open_generation(&fixture.tenant_id, &fixture.profile_id, &generation,)
+                    .is_err()
+            );
             let recovered = materialize_workspace_snapshot_streaming_with_pre_publish(
-                &fixture.root, &fixture.tenant_id, &fixture.profile_id,
-                &generation, &mut snapshot.as_slice(), expected, |_| Ok(()),
+                &fixture.root,
+                &fixture.tenant_id,
+                &fixture.profile_id,
+                &generation,
+                &mut snapshot.as_slice(),
+                expected,
+                |_| Ok(()),
             )?;
             assert_eq!(
                 fs::read(recovered.path().join("prefs.js"))?,
