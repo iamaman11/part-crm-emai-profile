@@ -174,6 +174,167 @@ fn encoded_stream_snapshot_size(
     Ok(size)
 }
 
+/// On-demand canonical BPGW0001 reader over the ORIGINAL closed Firefox
+/// files. No plaintext disk spool and no generation-sized in-memory buffer.
+/// Construct a fresh reader for the metadata digest pass and the exact seal
+/// pass; the sealing owner must hold the original device writer lock.
+#[allow(dead_code)] // Activated only with the K2 shipping cutover.
+pub(crate) struct WorkspaceSnapshotReader<'a> {
+    workspace: &'a GenerationWorkspace,
+    inventory: &'a GenerationInventory,
+    expected_bytes: u64,
+    emitted_bytes: u64,
+    pending: Vec<u8>,
+    pending_offset: usize,
+    next_entry: usize,
+    current_file: Option<File>,
+    remaining_file_bytes: u64,
+    verified_eof: bool,
+}
+
+#[allow(dead_code)] // The legacy 64 MiB shipping path has not switched yet.
+impl<'a> WorkspaceSnapshotReader<'a> {
+    pub(crate) fn new(
+        workspace: &'a GenerationWorkspace,
+        inventory: &'a GenerationInventory,
+    ) -> Result<Self, GenerationSnapshotError> {
+        let expected_bytes = encoded_stream_snapshot_size(inventory)?;
+        let mut previous: Option<&str> = None;
+        let mut seen = HashSet::new();
+        for entry in inventory.entries() {
+            let relative = entry.relative_path();
+            validate_windows_relative_path(relative)?;
+            if previous.is_some_and(|p| p >= relative)
+                || !seen.insert(relative.to_lowercase())
+            {
+                return Err(GenerationSnapshotError::UnsafePath);
+            }
+            previous = Some(relative);
+        }
+        let mut pending = Vec::with_capacity(12);
+        pending.extend_from_slice(WORKSPACE_SNAPSHOT_MAGIC);
+        let entries = u32::try_from(inventory.entries().len())
+            .map_err(|_| GenerationSnapshotError::SnapshotTooLarge)?;
+        pending.extend_from_slice(&entries.to_be_bytes());
+        Ok(Self {
+            workspace,
+            inventory,
+            expected_bytes,
+            emitted_bytes: 0,
+            pending,
+            pending_offset: 0,
+            next_entry: 0,
+            current_file: None,
+            remaining_file_bytes: 0,
+            verified_eof: false,
+        })
+    }
+
+    #[must_use]
+    pub(crate) const fn expected_bytes(&self) -> u64 {
+        self.expected_bytes
+    }
+
+    fn advance_written(&mut self, count: usize) -> std::io::Result<()> {
+        self.emitted_bytes = self
+            .emitted_bytes
+            .checked_add(count as u64)
+            .ok_or_else(snapshot_reader_changed)?;
+        if self.emitted_bytes > self.expected_bytes {
+            return Err(snapshot_reader_changed());
+        }
+        Ok(())
+    }
+}
+
+impl Read for WorkspaceSnapshotReader<'_> {
+    fn read(&mut self, output: &mut [u8]) -> std::io::Result<usize> {
+        if output.is_empty() {
+            return Ok(0);
+        }
+        loop {
+            if self.pending_offset < self.pending.len() {
+                let available = self.pending.len() - self.pending_offset;
+                let count = available.min(output.len());
+                output[..count].copy_from_slice(
+                    &self.pending[self.pending_offset..self.pending_offset + count],
+                );
+                self.pending_offset += count;
+                self.advance_written(count)?;
+                return Ok(count);
+            }
+            self.pending.clear();
+            self.pending_offset = 0;
+
+            if let Some(file) = self.current_file.as_mut() {
+                if self.remaining_file_bytes != 0 {
+                    let allowed = usize::try_from(
+                        self.remaining_file_bytes.min(output.len() as u64),
+                    )
+                    .map_err(|_| snapshot_reader_changed())?;
+                    let count = file.read(&mut output[..allowed])?;
+                    if count == 0 {
+                        return Err(snapshot_reader_changed());
+                    }
+                    self.remaining_file_bytes -= count as u64;
+                    self.advance_written(count)?;
+                    return Ok(count);
+                }
+                self.current_file = None;
+            }
+
+            if let Some(entry) = self.inventory.entries().get(self.next_entry) {
+                self.next_entry += 1;
+                let relative = entry.relative_path();
+                // The relative path has been checked before any bytes are
+                // exposed. Refuse a changed/symlink target on both passes.
+                let path = self.workspace.path().join(relative);
+                let metadata = fs::symlink_metadata(&path)?;
+                if metadata.file_type().is_symlink()
+                    || !metadata.is_file()
+                    || metadata.len() != entry.bytes()
+                {
+                    return Err(snapshot_reader_changed());
+                }
+                let file = File::open(&path)?;
+                if !file.metadata()?.is_file() || file.metadata()?.len() != entry.bytes() {
+                    return Err(snapshot_reader_changed());
+                }
+                self.current_file = Some(file);
+                self.remaining_file_bytes = entry.bytes();
+                let name = relative.as_bytes();
+                let name_len = u16::try_from(name.len())
+                    .map_err(|_| snapshot_reader_changed())?;
+                self.pending.extend_from_slice(&name_len.to_be_bytes());
+                self.pending.extend_from_slice(name);
+                self.pending.extend_from_slice(&entry.bytes().to_be_bytes());
+                continue;
+            }
+
+            if !self.verified_eof {
+                // Checking only the first inventory would miss mutation
+                // between the metadata pass and ciphertext sealing pass.
+                let current = self
+                    .workspace
+                    .inventory()
+                    .map_err(|_| snapshot_reader_changed())?;
+                if current != *self.inventory || self.emitted_bytes != self.expected_bytes {
+                    return Err(snapshot_reader_changed());
+                }
+                self.verified_eof = true;
+            }
+            return Ok(0);
+        }
+    }
+}
+
+fn snapshot_reader_changed() -> std::io::Error {
+    std::io::Error::new(
+        std::io::ErrorKind::InvalidData,
+        "Firefox snapshot source changed during streaming",
+    )
+}
+
 #[allow(dead_code)]
 fn write_stream_piece(
     output: &mut impl Write,
