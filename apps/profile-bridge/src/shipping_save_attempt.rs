@@ -635,9 +635,8 @@ pub(crate) fn persist_exact_save_attempt_from_lone_intent(
     prepared: &PreparedDirtyGeneration,
     fresh_lease: &ProfileLease,
 ) -> Result<(), SaveAttemptEvidenceError> {
-    let origin = verified_recovered_lone_origin(
-        root, source, prepared.candidate_workspace(), fresh_lease,
-    )?;
+    let origin =
+        verified_recovered_lone_origin(root, source, prepared.candidate_workspace(), fresh_lease)?;
     persist_exact_save_attempt_with_origin(root, source, prepared, fresh_lease, Some(origin))
 }
 
@@ -650,7 +649,7 @@ fn verified_recovered_lone_origin(
 ) -> Result<RecoveredLoneOrigin, SaveAttemptEvidenceError> {
     let tenant = fresh_lease.tenant_id();
     let profile = fresh_lease.profile_id();
-    let candidate = deterministic_lone_unsynced_successor(
+    let expected_candidate = deterministic_lone_unsynced_successor(
         root,
         tenant,
         profile,
@@ -658,7 +657,7 @@ fn verified_recovered_lone_origin(
         fresh_lease,
     )?
     .ok_or(SaveAttemptEvidenceError::Changed)?;
-    if &candidate != candidate.generation_id() {
+    if &expected_candidate != candidate.generation_id() {
         return Err(SaveAttemptEvidenceError::Changed);
     }
     let intent = read_local_unsynced(&local_unsynced_path(root, tenant, profile))?;
@@ -677,7 +676,6 @@ fn verified_recovered_lone_origin(
         session_fingerprint: intent.session_fingerprint,
         fencing_fingerprint: intent.fencing_fingerprint,
     })
- 
 }
 
 fn persist_exact_save_attempt_with_origin(
@@ -1471,15 +1469,23 @@ pub(crate) fn persist_streaming_exact_save_attempt(
         report.container_digest().bytes(),
     )
     .map_err(|_| SaveAttemptEvidenceError::Changed)?;
-    persist_streaming_checkpoint_with_writer(root, source, candidate, report, lease, None, |output| {
-        let copied = std::io::copy(&mut input.reader().take(report.container_bytes()), output)?;
-        if copied != report.container_bytes() {
-            return Err(SaveAttemptEvidenceError::Changed);
-        }
-        input
-            .recheck_and_rewind()
-            .map_err(|_| SaveAttemptEvidenceError::Changed)
-    })
+    persist_streaming_checkpoint_with_writer(
+        root,
+        source,
+        candidate,
+        report,
+        lease,
+        None,
+        |output| {
+            let copied = std::io::copy(&mut input.reader().take(report.container_bytes()), output)?;
+            if copied != report.container_bytes() {
+                return Err(SaveAttemptEvidenceError::Changed);
+            }
+            input
+                .recheck_and_rewind()
+                .map_err(|_| SaveAttemptEvidenceError::Changed)
+        },
+    )
 }
 
 /// Direct native Firefox -> EXACT encrypted BPAT checkpoint. No plaintext
@@ -1627,21 +1633,29 @@ fn persist_streaming_exact_save_attempt_from_native_with_origin<K: GenerationSea
     {
         return Err(SaveAttemptEvidenceError::Changed);
     }
-    persist_streaming_checkpoint_with_writer(root, source, candidate, &expected, lease, recovered_lone_origin, |output| {
-        let mut actual_reader = WorkspaceSnapshotReader::new(candidate, &inventory)
-            .map_err(|_| SaveAttemptEvidenceError::Changed)?;
-        let actual = seal_generation_streaming(&metadata, &key, &mut actual_reader, output)
-            .map_err(|_| SaveAttemptEvidenceError::Changed)?;
-        if actual != expected
-            || source
-                .inventory()
-                .map_err(|_| SaveAttemptEvidenceError::Changed)?
-                != inventory
-        {
-            return Err(SaveAttemptEvidenceError::Changed);
-        }
-        Ok(())
-    })
+    persist_streaming_checkpoint_with_writer(
+        root,
+        source,
+        candidate,
+        &expected,
+        lease,
+        recovered_lone_origin,
+        |output| {
+            let mut actual_reader = WorkspaceSnapshotReader::new(candidate, &inventory)
+                .map_err(|_| SaveAttemptEvidenceError::Changed)?;
+            let actual = seal_generation_streaming(&metadata, &key, &mut actual_reader, output)
+                .map_err(|_| SaveAttemptEvidenceError::Changed)?;
+            if actual != expected
+                || source
+                    .inventory()
+                    .map_err(|_| SaveAttemptEvidenceError::Changed)?
+                    != inventory
+            {
+                return Err(SaveAttemptEvidenceError::Changed);
+            }
+            Ok(())
+        },
+    )
 }
 
 fn streaming_checkpoint_header(
@@ -1709,7 +1723,8 @@ fn persist_streaming_checkpoint_with_writer(
     recovered_lone_origin: Option<RecoveredLoneOrigin>,
     write_ciphertext: impl FnOnce(&mut File) -> Result<(), SaveAttemptEvidenceError>,
 ) -> Result<(), SaveAttemptEvidenceError> {
-    let header = streaming_checkpoint_header(source, candidate, report, lease, recovered_lone_origin)?;
+    let header =
+        streaming_checkpoint_header(source, candidate, report, lease, recovered_lone_origin)?;
     let header_bytes =
         serde_json::to_vec(&header).map_err(|_| SaveAttemptEvidenceError::Invalid)?;
     if header_bytes.is_empty()
