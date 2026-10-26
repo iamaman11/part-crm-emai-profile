@@ -29,10 +29,10 @@ use crate::shipping_save_attempt::{
 use crate::shipping_save_attempt::{
     ScopedPendingSaveEvidence, classify_scoped_pending_save_evidence,
     deterministic_lone_unsynced_successor, local_unsynced_matches_fresh_lease,
+    persist_streaming_exact_save_attempt_from_lone_intent,
     retire_active_exact_attempt_after_restart, retire_active_streamed_attempt_after_restart,
     retire_matching_local_unsynced_after_restart,
     retire_matching_streamed_local_unsynced_after_restart,
-    persist_streaming_exact_save_attempt_from_lone_intent,
 };
 use control_plane_contract::profile_generation_api::{
     BRIDGE_PROFILE_GENERATION_COMMIT_PATH_TEMPLATE,
@@ -712,8 +712,8 @@ where
         .map_err(|_| RestartExactLocalCompletionError::LocalEvidenceChanged)?;
         let mut verified =
             discover_unresolved_streaming_exact_save_attempt(root, tenant_id, profile_id)
-        .map_err(|_| RestartExactLocalCompletionError::LocalEvidenceChanged)?
-        .ok_or(RestartExactLocalCompletionError::LocalEvidenceChanged)?;
+                .map_err(|_| RestartExactLocalCompletionError::LocalEvidenceChanged)?
+                .ok_or(RestartExactLocalCompletionError::LocalEvidenceChanged)?;
         if verified.successor_id() != candidate_id.as_str()
             || verified.base_generation_id() != selected_generation.as_str()
             || !verified.first_seal_under_current_lease(fresh_lease)

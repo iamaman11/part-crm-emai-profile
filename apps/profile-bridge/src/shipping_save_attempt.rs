@@ -1515,7 +1515,9 @@ pub(crate) fn persist_streaming_exact_save_attempt_from_native<K: GenerationSeal
 /// Fresh-authorized first seal of the *original* lone LOCAL_UNSYNCED N+1.
 /// The same fsynced BPAT checkpoint has a bounded header and on-disk ciphertext.
 #[cfg(any(windows, test))]
-pub(crate) fn persist_streaming_exact_save_attempt_from_lone_intent<K: GenerationSealingMaterialPort>(
+pub(crate) fn persist_streaming_exact_save_attempt_from_lone_intent<
+    K: GenerationSealingMaterialPort,
+>(
     root: &MaterializationRoot,
     source: &GenerationWorkspace,
     candidate: &GenerationWorkspace,
@@ -1524,11 +1526,18 @@ pub(crate) fn persist_streaming_exact_save_attempt_from_lone_intent<K: Generatio
 ) -> Result<(), SaveAttemptEvidenceError> {
     let origin = verified_recovered_lone_origin(root, source, candidate, lease)?;
     persist_streaming_exact_save_attempt_from_native_with_origin(
-        root, source, candidate, lease, sealer, Some(origin),
+        root,
+        source,
+        candidate,
+        lease,
+        sealer,
+        Some(origin),
     )
 }
 
-fn persist_streaming_exact_save_attempt_from_native_with_origin<K: GenerationSealingMaterialPort>(
+fn persist_streaming_exact_save_attempt_from_native_with_origin<
+    K: GenerationSealingMaterialPort,
+>(
     root: &MaterializationRoot,
     source: &GenerationWorkspace,
     candidate: &GenerationWorkspace,
