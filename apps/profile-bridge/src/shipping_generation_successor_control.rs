@@ -18,7 +18,8 @@ use crate::shipping_generation_save::{
     GenerationUploadAuthorization, SignedGenerationUploadCapability,
 };
 use crate::shipping_save_attempt::{
-    ReadOnlySaveAttempt, discover_unresolved_exact_save_attempt, inspect_exact_save_attempt,
+    ReadOnlySaveAttempt, ReadOnlyStreamedSaveAttempt,
+    discover_unresolved_streaming_exact_save_attempt, inspect_streaming_exact_save_attempt,
 };
 #[cfg(any(windows, test))]
 use crate::shipping_save_attempt::{
@@ -259,10 +260,10 @@ pub fn observe_discovered_successor_after_restart<T: MachineHttpPort>(
     profile_id: &ProfileId,
     transport: &mut T,
 ) -> Result<RestartExactCommitObservation, ShippingControlPlaneError> {
-    let attempt = discover_unresolved_exact_save_attempt(root, tenant_id, profile_id)
+    let attempt = discover_unresolved_streaming_exact_save_attempt(root, tenant_id, profile_id)
         .map_err(|_| ShippingControlPlaneError::InvalidResponse)?;
     match attempt {
-        Some(attempt) => observe_verified_exact_attempt(tenant_id, profile_id, &attempt, transport)
+        Some(attempt) => observe_verified_streamed_attempt(tenant_id, profile_id, &attempt, transport)
             .map(|active| {
                 if active {
                     RestartExactCommitObservation::ActiveExact
@@ -895,10 +896,10 @@ pub fn observe_retained_successor_after_restart<T: MachineHttpPort>(
     successor_id: &GenerationId,
     transport: &mut T,
 ) -> Result<bool, ShippingControlPlaneError> {
-    let attempt = inspect_exact_save_attempt(root, tenant_id, profile_id, successor_id)
+    let attempt = inspect_streaming_exact_save_attempt(root, tenant_id, profile_id, successor_id)
         .map_err(|_| ShippingControlPlaneError::InvalidResponse)?
         .ok_or(ShippingControlPlaneError::InvalidResponse)?;
-    observe_verified_exact_attempt(tenant_id, profile_id, &attempt, transport)
+    observe_verified_streamed_attempt(tenant_id, profile_id, &attempt, transport)
 }
 
 /// One existing read-only control-plane observation, over *already validated*
@@ -918,6 +919,36 @@ fn observe_verified_exact_attempt<T: MachineHttpPort>(
         container_digest: attempt.container_digest().to_owned(),
         container_bytes: attempt.container_bytes(),
     };
+    observe_exact_descriptor(tenant_id, profile_id, &request, transport)
+}
+
+/// The same typed observer accepts a verified file-backed BPAT descriptor:
+/// no generation-sized ciphertext allocation and no cloud write authority.
+fn observe_verified_streamed_attempt<T: MachineHttpPort>(
+    tenant_id: &TenantId,
+    profile_id: &ProfileId,
+    attempt: &ReadOnlyStreamedSaveAttempt,
+    transport: &mut T,
+) -> Result<bool, ShippingControlPlaneError> {
+    let request = BridgeGenerationSuccessorObserveRequest {
+        base_generation_id: attempt.base_generation_id().to_owned(),
+        generation_id: attempt.successor_id().to_owned(),
+        object_key: attempt.object_key().to_owned(),
+        metadata_digest: attempt.metadata_digest().to_owned(),
+        container_digest: attempt.container_digest().to_owned(),
+        container_bytes: attempt.container_bytes(),
+    };
+    observe_exact_descriptor(tenant_id, profile_id, &request, transport)
+}
+
+/// One existing D1 ACTIVE_EXACT query. Both inspectors must prove the
+/// ciphertext/local inventory *before* this read-only request is constructed.
+fn observe_exact_descriptor<T: MachineHttpPort>(
+    tenant_id: &TenantId,
+    profile_id: &ProfileId,
+    request: &BridgeGenerationSuccessorObserveRequest,
+    transport: &mut T,
+) -> Result<bool, ShippingControlPlaneError> {
     let response = post_json::<T, core::convert::Infallible, _>(
         transport,
         &successor_path(
@@ -925,7 +956,7 @@ fn observe_verified_exact_attempt<T: MachineHttpPort>(
             tenant_id,
             profile_id,
         ),
-        &request,
+        request,
     )
     .map_err(|error| match error {
         GenerationSuccessorControlError::ControlPlane(reason) => reason,

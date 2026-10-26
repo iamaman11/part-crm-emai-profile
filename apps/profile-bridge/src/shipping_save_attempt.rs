@@ -1241,6 +1241,14 @@ impl ReadOnlyStreamedSaveAttempt {
         self.header.epoch
     }
 
+    pub(crate) fn base_generation_id(&self) -> &str {
+        &self.header.base_generation
+    }
+
+    pub(crate) fn successor_id(&self) -> &str {
+        &self.header.successor
+    }
+
     pub(crate) fn original_device(&self, lease: &ProfileLease) -> bool {
         self.header.device_fingerprint.as_deref()
             == Some(credential_fingerprint(b"device", lease.device_id().as_str()).as_str())
