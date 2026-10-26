@@ -635,6 +635,19 @@ pub(crate) fn persist_exact_save_attempt_from_lone_intent(
     prepared: &PreparedDirtyGeneration,
     fresh_lease: &ProfileLease,
 ) -> Result<(), SaveAttemptEvidenceError> {
+    let origin = verified_recovered_lone_origin(
+        root, source, prepared.candidate_workspace(), fresh_lease,
+    )?;
+    persist_exact_save_attempt_with_origin(root, source, prepared, fresh_lease, Some(origin))
+}
+
+#[cfg(any(windows, test))]
+fn verified_recovered_lone_origin(
+    root: &MaterializationRoot,
+    source: &GenerationWorkspace,
+    candidate: &GenerationWorkspace,
+    fresh_lease: &ProfileLease,
+) -> Result<RecoveredLoneOrigin, SaveAttemptEvidenceError> {
     let tenant = fresh_lease.tenant_id();
     let profile = fresh_lease.profile_id();
     let candidate = deterministic_lone_unsynced_successor(
@@ -645,7 +658,7 @@ pub(crate) fn persist_exact_save_attempt_from_lone_intent(
         fresh_lease,
     )?
     .ok_or(SaveAttemptEvidenceError::Changed)?;
-    if &candidate != prepared.candidate_workspace().generation_id() {
+    if &candidate != candidate.generation_id() {
         return Err(SaveAttemptEvidenceError::Changed);
     }
     let intent = read_local_unsynced(&local_unsynced_path(root, tenant, profile))?;
@@ -659,12 +672,12 @@ pub(crate) fn persist_exact_save_attempt_from_lone_intent(
     {
         return Err(SaveAttemptEvidenceError::Changed);
     }
-    let origin = RecoveredLoneOrigin {
+    Ok(RecoveredLoneOrigin {
         epoch: intent.epoch,
         session_fingerprint: intent.session_fingerprint,
         fencing_fingerprint: intent.fencing_fingerprint,
-    };
-    persist_exact_save_attempt_with_origin(root, source, prepared, fresh_lease, Some(origin))
+    })
+ 
 }
 
 fn persist_exact_save_attempt_with_origin(
@@ -1458,7 +1471,7 @@ pub(crate) fn persist_streaming_exact_save_attempt(
         report.container_digest().bytes(),
     )
     .map_err(|_| SaveAttemptEvidenceError::Changed)?;
-    persist_streaming_checkpoint_with_writer(root, source, candidate, report, lease, |output| {
+    persist_streaming_checkpoint_with_writer(root, source, candidate, report, lease, None, |output| {
         let copied = std::io::copy(&mut input.reader().take(report.container_bytes()), output)?;
         if copied != report.container_bytes() {
             return Err(SaveAttemptEvidenceError::Changed);
@@ -1487,6 +1500,35 @@ pub(crate) fn persist_streaming_exact_save_attempt_from_native<K: GenerationSeal
     candidate: &GenerationWorkspace,
     lease: &ProfileLease,
     sealer: &mut K,
+) -> Result<(), SaveAttemptEvidenceError> {
+    persist_streaming_exact_save_attempt_from_native_with_origin(
+        root, source, candidate, lease, sealer, None,
+    )
+}
+
+/// Fresh-authorized first seal of the *original* lone LOCAL_UNSYNCED N+1.
+/// The same fsynced BPAT checkpoint has a bounded header and on-disk ciphertext.
+#[cfg(any(windows, test))]
+pub(crate) fn persist_streaming_exact_save_attempt_from_lone_intent<K: GenerationSealingMaterialPort>(
+    root: &MaterializationRoot,
+    source: &GenerationWorkspace,
+    candidate: &GenerationWorkspace,
+    lease: &ProfileLease,
+    sealer: &mut K,
+) -> Result<(), SaveAttemptEvidenceError> {
+    let origin = verified_recovered_lone_origin(root, source, candidate, lease)?;
+    persist_streaming_exact_save_attempt_from_native_with_origin(
+        root, source, candidate, lease, sealer, Some(origin),
+    )
+}
+
+fn persist_streaming_exact_save_attempt_from_native_with_origin<K: GenerationSealingMaterialPort>(
+    root: &MaterializationRoot,
+    source: &GenerationWorkspace,
+    candidate: &GenerationWorkspace,
+    lease: &ProfileLease,
+    sealer: &mut K,
+    recovered_lone_origin: Option<RecoveredLoneOrigin>,
 ) -> Result<(), SaveAttemptEvidenceError> {
     if source.tenant_id() != lease.tenant_id()
         || source.profile_id() != lease.profile_id()
@@ -1585,7 +1627,7 @@ pub(crate) fn persist_streaming_exact_save_attempt_from_native<K: GenerationSeal
     {
         return Err(SaveAttemptEvidenceError::Changed);
     }
-    persist_streaming_checkpoint_with_writer(root, source, candidate, &expected, lease, |output| {
+    persist_streaming_checkpoint_with_writer(root, source, candidate, &expected, lease, recovered_lone_origin, |output| {
         let mut actual_reader = WorkspaceSnapshotReader::new(candidate, &inventory)
             .map_err(|_| SaveAttemptEvidenceError::Changed)?;
         let actual = seal_generation_streaming(&metadata, &key, &mut actual_reader, output)
@@ -1607,6 +1649,7 @@ fn streaming_checkpoint_header(
     candidate: &GenerationWorkspace,
     report: &StreamingGenerationReport,
     lease: &ProfileLease,
+    recovered_lone_origin: Option<RecoveredLoneOrigin>,
 ) -> Result<AttemptHeader, SaveAttemptEvidenceError> {
     let metadata = report.metadata();
     if lease.tenant_id() != source.tenant_id()
@@ -1651,7 +1694,7 @@ fn streaming_checkpoint_header(
         metadata_digest: hex(&report.metadata_digest().bytes()),
         container_digest: hex(&report.container_digest().bytes()),
         container_bytes: report.container_bytes(),
-        recovered_lone_origin: None,
+        recovered_lone_origin,
     };
 
     Ok(header)
@@ -1663,9 +1706,10 @@ fn persist_streaming_checkpoint_with_writer(
     candidate: &GenerationWorkspace,
     report: &StreamingGenerationReport,
     lease: &ProfileLease,
+    recovered_lone_origin: Option<RecoveredLoneOrigin>,
     write_ciphertext: impl FnOnce(&mut File) -> Result<(), SaveAttemptEvidenceError>,
 ) -> Result<(), SaveAttemptEvidenceError> {
-    let header = streaming_checkpoint_header(source, candidate, report, lease)?;
+    let header = streaming_checkpoint_header(source, candidate, report, lease, recovered_lone_origin)?;
     let header_bytes =
         serde_json::to_vec(&header).map_err(|_| SaveAttemptEvidenceError::Invalid)?;
     if header_bytes.is_empty()

@@ -1,7 +1,7 @@
 #[cfg(any(windows, test))]
 use crate::browser_execution::{browser_writer_locks_absent, persist_committed_successor_binding};
 #[cfg(any(windows, test))]
-use crate::dirty_generation::prepare_recovered_local_unsynced_candidate;
+use crate::dirty_generation::recover_local_unsynced_native_clone;
 use crate::dirty_generation::{
     GenerationSealingMaterial, GenerationSealingMaterialPort, PreparedDirtyGeneration,
 };
@@ -29,7 +29,7 @@ use crate::shipping_save_attempt::{
 use crate::shipping_save_attempt::{
     ScopedPendingSaveEvidence, classify_scoped_pending_save_evidence,
     deterministic_lone_unsynced_successor, local_unsynced_matches_fresh_lease,
-    persist_exact_save_attempt_from_lone_intent, retire_active_exact_attempt_after_restart,
+    persist_streaming_exact_save_attempt_from_lone_intent, retire_active_exact_attempt_after_restart,
     retire_active_streamed_attempt_after_restart, retire_matching_local_unsynced_after_restart,
     retire_matching_streamed_local_unsynced_after_restart,
 };
@@ -690,26 +690,26 @@ where
             inventory.total_bytes(),
             UnixMillis::new(0),
         );
-        let prepared = prepare_recovered_local_unsynced_candidate(
-            &record,
-            &source,
-            root,
-            tenant_id,
-            profile_id,
-            &candidate_id,
-            sealer,
+        let candidate = recover_local_unsynced_native_clone(
+            &record, &source, root, tenant_id, profile_id, &candidate_id,
         )
         .map_err(|_| RestartExactLocalCompletionError::LocalEvidenceChanged)?;
-        // Fsynced, no-replace exact checkpoint with ORIGINAL intent lineage.
-        // No network PUT or commit can precede this durable publication.
-        persist_exact_save_attempt_from_lone_intent(root, &source, &prepared, fresh_lease)
-            .map_err(|_| RestartExactLocalCompletionError::LocalEvidenceChanged)?;
-        let verified = discover_unresolved_exact_save_attempt(root, tenant_id, profile_id)
-            .map_err(|_| RestartExactLocalCompletionError::LocalEvidenceChanged)?
-            .ok_or(RestartExactLocalCompletionError::LocalEvidenceChanged)?;
+        // First seal under CURRENT D1-positive lease. Original intent stays
+        // until ACTIVE_EXACT local completion; torn BPAT stage is a blocker.
+        persist_streaming_exact_save_attempt_from_lone_intent(
+            root, &source, &candidate, fresh_lease, sealer,
+        )
+        .map_err(|_| RestartExactLocalCompletionError::LocalEvidenceChanged)?;
+        let mut verified = discover_unresolved_streaming_exact_save_attempt(
+            root, tenant_id, profile_id,
+        )
+        .map_err(|_| RestartExactLocalCompletionError::LocalEvidenceChanged)?
+        .ok_or(RestartExactLocalCompletionError::LocalEvidenceChanged)?;
         if verified.successor_id() != candidate_id.as_str()
-            || verified.ciphertext() != prepared.sealed().container()
-            || verified.container_digest() != prepared.container_digest()
+            || verified.base_generation_id() != selected_generation.as_str()
+            || !verified.first_seal_under_current_lease(fresh_lease)
+            || !verified.original_device(fresh_lease)
+            || verified.ciphertext().recheck_and_rewind().is_err()
         {
             return Err(RestartExactLocalCompletionError::LocalEvidenceChanged);
         }
@@ -2584,9 +2584,11 @@ mod tests {
                 &fixture.tenant,
                 &fixture.profile,
             )?);
-            let exact =
-                discover_unresolved_exact_save_attempt(&root, &fixture.tenant, &fixture.profile)?
-                    .ok_or("sealed checkpoint was not preserved")?;
+            let exact = discover_unresolved_streaming_exact_save_attempt(
+                &root, &fixture.tenant, &fixture.profile,
+            )?
+            .ok_or("sealed streamed checkpoint was not preserved")?;
+            assert!(exact.first_seal_under_current_lease(&fresh));
             assert_eq!(exact.successor_id(), candidate.as_str());
             assert_eq!(std::fs::read(source.path().join("prefs.js"))?, b"save");
             let mut active = Transport {

@@ -172,17 +172,34 @@ pub(crate) fn prepare_recovered_local_unsynced_candidate<K: GenerationSealingMat
     )
 }
 
+#[cfg(any(windows, test))]
 #[allow(clippy::too_many_arguments)]
-fn prepare_dirty_generation_candidate_inner<K: GenerationSealingMaterialPort>(
+pub(crate) fn recover_local_unsynced_native_clone(
+    record: &LocalGenerationRecord,
+    source: &GenerationWorkspace,
+    root: &MaterializationRoot,
+    tenant: &TenantId,
+    profile: &ProfileId,
+    candidate: &GenerationId,
+) -> Result<GenerationWorkspace, DirtyGenerationError> {
+    let (workspace, _) = create_verified_native_candidate(
+        record, source, root, tenant, profile, candidate, true,
+    )?;
+    Ok(workspace)
+}
+
+/// Shared original native clone owner for small Save and large recovered Save.
+/// A crashed N+1 clone is reused only if its whole inventory is unchanged.
+#[allow(clippy::too_many_arguments)]
+fn create_verified_native_candidate(
     local_record: &LocalGenerationRecord,
     source_workspace: &GenerationWorkspace,
     root: &MaterializationRoot,
     tenant_id: &TenantId,
     profile_id: &ProfileId,
     candidate_generation_id: &GenerationId,
-    keys: &mut K,
     allow_preexisting_verified_clone: bool,
-) -> Result<PreparedDirtyGeneration, DirtyGenerationError> {
+) -> Result<(GenerationWorkspace, GenerationInventory), DirtyGenerationError> {
     if local_record.state() != LocalGenerationState::DirtyLocal || !local_record.is_locked() {
         return Err(DirtyGenerationError::InvalidState);
     }
@@ -219,6 +236,30 @@ fn prepare_dirty_generation_candidate_inner<K: GenerationSealingMaterialPort>(
         }
         Err(error) => return Err(DirtyGenerationError::Local(error)),
     };
+    if source_workspace.inventory()? != candidate_inventory
+        || candidate_workspace.inventory()? != candidate_inventory
+    {
+        return Err(DirtyGenerationError::SourceChanged);
+    }
+    Ok((candidate_workspace, candidate_inventory))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn prepare_dirty_generation_candidate_inner<K: GenerationSealingMaterialPort>(
+    local_record: &LocalGenerationRecord,
+    source_workspace: &GenerationWorkspace,
+    root: &MaterializationRoot,
+    tenant_id: &TenantId,
+    profile_id: &ProfileId,
+    candidate_generation_id: &GenerationId,
+    keys: &mut K,
+    allow_preexisting_verified_clone: bool,
+) -> Result<PreparedDirtyGeneration, DirtyGenerationError> {
+    let base_generation_id = local_record.generation_id();
+    let (candidate_workspace, candidate_inventory) = create_verified_native_candidate(
+        local_record, source_workspace, root, tenant_id, profile_id,
+        candidate_generation_id, allow_preexisting_verified_clone,
+    )?;
     let snapshot = encode_workspace_snapshot(&candidate_workspace, &candidate_inventory)
         .map_err(map_snapshot_encode_error)?;
     if candidate_workspace.inventory()? != candidate_inventory
