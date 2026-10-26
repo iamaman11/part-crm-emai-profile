@@ -417,6 +417,7 @@ impl UserDiagnostic {
                 | crate::operator_flow::GenerationSaveFailureReason::LocalSource
                 | crate::operator_flow::GenerationSaveFailureReason::LocalPreparation
                 | crate::operator_flow::GenerationSaveFailureReason::CheckpointWrite
+                | crate::operator_flow::GenerationSaveFailureReason::CheckpointRead
                 | crate::operator_flow::GenerationSaveFailureReason::CheckpointRetirement => {
                     "Windows could not durably complete the local save evidence or cleanup. Cloud completion is not established by this error. Check disk availability and access from Profile Operations; preserve the original profile and all recovery files."
                 }
@@ -832,6 +833,7 @@ mod tests {
                 "BRIDGE_SAVE_CHECKPOINT_INTEGRITY_FAILED",
             ),
             (Reason::LocalIntentWrite, "BRIDGE_SAVE_LOCAL_INTENT_FAILED"),
+            (Reason::CheckpointRead, "BRIDGE_SAVE_CHECKPOINT_READ_FAILED"),
             (Reason::SnapshotTooLarge, "BRIDGE_SAVE_SNAPSHOT_TOO_LARGE"),
             (
                 Reason::NativeSourceChanged,
@@ -866,7 +868,11 @@ mod tests {
             },
         ));
         assert!(rejection.message().contains("server rejected"));
-        assert!(rejection.message().contains("not evidence of a network outage"));
+        assert!(
+            rejection
+                .message()
+                .contains("not evidence of a network outage")
+        );
         let uncertain = UserDiagnostic::Launch(ShippingCompositionError::Operator(
             OperatorFlowError::GenerationSave {
                 reason: Reason::UploadOutcomeUncertain,

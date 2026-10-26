@@ -299,6 +299,7 @@ pub enum GenerationSaveFailureReason {
     Encryption,
     LocalPreparation,
     CheckpointWrite,
+    CheckpointRead,
     CheckpointIntegrity,
     CheckpointRetirement,
     ControlTransport,
@@ -340,6 +341,7 @@ impl GenerationSaveFailureReason {
             Self::Encryption => "BRIDGE_SAVE_ENCRYPTION_FAILED",
             Self::LocalPreparation => "BRIDGE_SAVE_LOCAL_PREPARATION_FAILED",
             Self::CheckpointWrite => "BRIDGE_SAVE_CHECKPOINT_WRITE_FAILED",
+            Self::CheckpointRead => "BRIDGE_SAVE_CHECKPOINT_READ_FAILED",
             Self::CheckpointIntegrity => "BRIDGE_SAVE_CHECKPOINT_INTEGRITY_FAILED",
             Self::CheckpointRetirement => "BRIDGE_SAVE_CHECKPOINT_RETIRE_FAILED",
             Self::ControlTransport => "BRIDGE_SAVE_CONTROL_TRANSPORT_UNKNOWN",
@@ -400,6 +402,17 @@ fn save_checkpoint_reason(source: SaveAttemptEvidenceError) -> GenerationSaveFai
     match source {
         SaveAttemptEvidenceError::Io(_) | SaveAttemptEvidenceError::Unavailable => {
             GenerationSaveFailureReason::CheckpointWrite
+        }
+        SaveAttemptEvidenceError::Invalid | SaveAttemptEvidenceError::Changed => {
+            GenerationSaveFailureReason::CheckpointIntegrity
+        }
+    }
+}
+
+fn save_checkpoint_read_reason(source: SaveAttemptEvidenceError) -> GenerationSaveFailureReason {
+    match source {
+        SaveAttemptEvidenceError::Io(_) | SaveAttemptEvidenceError::Unavailable => {
+            GenerationSaveFailureReason::CheckpointRead
         }
         SaveAttemptEvidenceError::Invalid | SaveAttemptEvidenceError::Changed => {
             GenerationSaveFailureReason::CheckpointIntegrity
@@ -1230,7 +1243,7 @@ where
             prepared.candidate_workspace().generation_id(),
         )
         .map_err(|source| OperatorFlowError::GenerationSave {
-            reason: save_checkpoint_reason(source),
+            reason: save_checkpoint_read_reason(source),
         })?
         .ok_or(OperatorFlowError::GenerationSave {
             reason: GenerationSaveFailureReason::CheckpointIntegrity,
@@ -1682,8 +1695,8 @@ mod tests {
     #[test]
     fn save_owner_maps_control_and_local_causes_without_granting_retries() {
         use super::{
-            GenerationSaveFailureReason as Reason, save_checkpoint_reason, save_control_reason,
-            save_generation_reason,
+            GenerationSaveFailureReason as Reason, save_checkpoint_read_reason,
+            save_checkpoint_reason, save_control_reason, save_generation_reason,
         };
         use crate::dirty_generation::DirtyGenerationError;
         use crate::shipping_control_plane::ShippingControlPlaneError as Http;
@@ -1725,6 +1738,10 @@ mod tests {
         assert_eq!(
             save_checkpoint_reason(Evidence::Io(std::io::ErrorKind::PermissionDenied)),
             Reason::CheckpointWrite
+        );
+        assert_eq!(
+            save_checkpoint_read_reason(Evidence::Io(std::io::ErrorKind::PermissionDenied)),
+            Reason::CheckpointRead
         );
         for reason in [
             Reason::ControlRejected,
