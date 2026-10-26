@@ -551,8 +551,10 @@ mod windows {
                 match initial {
                     Ok(completion) if completion.is_saved() => return Ok(()),
                     Ok(_) => return Err(ShippingCompositionError::CommittedRecoveryRequired),
-                    Err(OperatorFlowError::Stage(OperatorFailureStage::GenerationSave))
-                        if operator.has_pending_dirty_close() =>
+                    Err(
+                        OperatorFlowError::Stage(OperatorFailureStage::GenerationSave)
+                        | OperatorFlowError::GenerationSave { .. },
+                    ) if operator.has_pending_dirty_close() =>
                     {
                         // Browser closed: WAL/native bytes and the original
                         // workspace lock are retained. Do not start Firefox.
@@ -645,9 +647,10 @@ mod windows {
                                         ShippingCompositionError::CommittedRecoveryRequired,
                                     );
                                 }
-                                Err(OperatorFlowError::Stage(
-                                    OperatorFailureStage::GenerationSave,
-                                )) if operator.has_pending_dirty_close() => {
+                                Err(
+                                    OperatorFlowError::Stage(OperatorFailureStage::GenerationSave)
+                                    | OperatorFlowError::GenerationSave { .. },
+                                ) if operator.has_pending_dirty_close() => {
                                     continue;
                                 }
                                 Err(error) => {

@@ -8,7 +8,7 @@ use crate::browser_mail_query::BrowserMailExecutionProof;
 #[cfg(any(test, feature = "synthetic-test-bin"))]
 use crate::dirty_close::RetainedDirtyCloseError;
 use crate::dirty_close::{DirtyCloseCompletion, DirtyCloseLocalOutcome, RetainedDirtyClose};
-use crate::dirty_generation::GenerationSealingMaterialPort;
+use crate::dirty_generation::{DirtyGenerationError, GenerationSealingMaterialPort};
 #[cfg(any(test, feature = "synthetic-test-bin"))]
 use crate::dirty_generation::PreparedDirtyGeneration;
 #[cfg(any(test, feature = "synthetic-test-bin"))]
@@ -24,16 +24,18 @@ use crate::local_profile::{
 use crate::runtime_bundle::{
     ApprovedRuntimeBundle, RuntimeLaunchError, RuntimeSessionOrchestrator,
 };
-use crate::shipping_control_plane::MachineHttpPort;
+use crate::shipping_control_plane::{MachineHttpPort, ShippingControlPlaneError};
 use crate::shipping_generation_save::{
-    CommittedGenerationSuccessor, SignedGenerationObjectPutPort,
+    CommittedGenerationSuccessor, ShippingGenerationSaveError, SignedGenerationObjectPutPort,
     prepare_retained_generation_successor, publish_verify_and_commit_successor,
 };
-use crate::shipping_generation_successor_control::ControlPlaneGenerationSuccessor;
+use crate::shipping_generation_successor_control::{
+    ControlPlaneGenerationSuccessor, GenerationSuccessorControlError,
+};
 use crate::shipping_save_attempt::{
     has_unresolved_save_attempt_for_profile, inspect_exact_save_attempt,
     persist_exact_save_attempt, persist_local_unsynced_intent, retire_fully_saved_attempt,
-    retire_local_unsynced_after_exact_checkpoint,
+    retire_local_unsynced_after_exact_checkpoint, SaveAttemptEvidenceError,
 };
 #[cfg(any(test, feature = "synthetic-test-bin"))]
 use application_ports::generation_objects::{
@@ -283,6 +285,113 @@ impl OperatorGenerationSaveCompletion {
     }
 }
 
+/// Read-only projection of the *existing* Save owners' typed failure.
+//// This is not a persisted phase, retry grant, cleanup policy, or second SM.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum GenerationSaveFailureReason {
+    OwnerState,
+    LocalSource,
+    LocalIntentWrite,
+    CandidateIdentity,
+    NativeSourceChanged,
+    SnapshotTooLarge,
+    SealingMaterial,
+    Encryption,
+    LocalPreparation,
+    CheckpointWrite,
+    CheckpointIntegrity,
+    CheckpointRetirement,
+    ControlTransport,
+    ControlEffectUncertain,
+    ControlRejected,
+    ControlInvalidResponse,
+    ControlClock,
+    UploadOutcomeUncertain,
+    VerificationUnproven,
+    DescriptorMismatch,
+}
+
+impl GenerationSaveFailureReason {
+    /// Stable, redacted user/support code, never a storage key or raw HTTP.
+    #[must_use]
+    pub const fn code(self) -> &'static str {
+        match self {
+            Self::OwnerState => "BRIDGE_SAVE_OWNER_STATE_INVALID",
+            Self::LocalSource => "BRIDGE_SAVE_LOCAL_SOURCE_UNAVAILABLE",
+            Self::LocalIntentWrite => "BRIDGE_SAVE_LOCAL_INTENT_FAILED",
+            Self::CandidateIdentity => "BRIDGE_SAVE_CANDIDATE_IDENTITY_INVALID",
+            Self::NativeSourceChanged => "BRIDGE_SAVE_NATIVE_SOURCE_CHANGED",
+            Self::SnapshotTooLarge => "BRIDGE_SAVE_SNAPSHOT_TOO_LARGE",
+            Self::SealingMaterial => "BRIDGE_SAVE_SEALING_MATERIAL_UNAVAILABLE",
+            Self::Encryption => "BRIDGE_SAVE_ENCRYPTION_FAILED",
+            Self::LocalPreparation => "BRIDGE_SAVE_LOCAL_PREPARATION_FAILED",
+            Self::CheckpointWrite => "BRIDGE_SAVE_CHECKPOINT_WRITE_FAILED",
+            Self::CheckpointIntegrity => "BRIDGE_SAVE_CHECKPOINT_INTEGRITY_FAILED",
+            Self::CheckpointRetirement => "BRIDGE_SAVE_CHECKPOINT_RETIRE_FAILED",
+            Self::ControlTransport => "BRIDGE_SAVE_CONTROL_TRANSPORT_UNKNOWN",
+            Self::ControlEffectUncertain => "BRIDGE_SAVE_CONTROL_EFFECT_UNCERTAIN",
+            Self::ControlRejected => "BRIDGE_SAVE_CONTROL_REJECTED",
+            Self::ControlInvalidResponse => "BRIDGE_SAVE_CONTROL_RESPONSE_INVALID",
+            Self::ControlClock => "BRIDGE_SAVE_CONTROL_CLOCK_FAILED",
+            Self::UploadOutcomeUncertain => "BRIDGE_SAVE_UPLOAD_OUTCOME_UNCERTAIN",
+            Self::VerificationUnproven => "BRIDGE_SAVE_SERVER_VERIFY_NOT_PROVEN",
+            Self::DescriptorMismatch => "BRIDGE_SAVE_DESCRIPTOR_MISMATCH",
+        }
+    }
+}
+
+fn save_control_reason<S>(
+    source: GenerationSuccessorControlError<S>,
+) -> GenerationSaveFailureReason {
+    use GenerationSaveFailureReason as Reason;
+    match source {
+        GenerationSuccessorControlError::Sealing(_) => Reason::SealingMaterial,
+        GenerationSuccessorControlError::ControlPlane(error) => match error {
+            ShippingControlPlaneError::Transport => Reason::ControlTransport,
+            ShippingControlPlaneError::HttpServerUncertain => Reason::ControlEffectUncertain,
+            ShippingControlPlaneError::HttpStatus => Reason::ControlRejected,
+            ShippingControlPlaneError::InvalidResponse => Reason::ControlInvalidResponse,
+            ShippingControlPlaneError::Clock => Reason::ControlClock,
+        },
+    }
+}
+
+fn save_generation_reason<S, U>(
+    source: ShippingGenerationSaveError<GenerationSuccessorControlError<S>, U>,
+) -> GenerationSaveFailureReason {
+    use GenerationSaveFailureReason as Reason;
+    match source {
+        ShippingGenerationSaveError::InvalidRetainedAuthority => Reason::OwnerState,
+        ShippingGenerationSaveError::CandidateIdentity => Reason::CandidateIdentity,
+        ShippingGenerationSaveError::Prepare(error) => match error {
+            DirtyGenerationError::InvalidState => Reason::OwnerState,
+            DirtyGenerationError::IdentityMismatch
+            | DirtyGenerationError::CandidateMatchesBase => Reason::CandidateIdentity,
+            DirtyGenerationError::SnapshotTooLarge => Reason::SnapshotTooLarge,
+            DirtyGenerationError::SourceChanged => Reason::NativeSourceChanged,
+            DirtyGenerationError::KeyUnavailable => Reason::SealingMaterial,
+            DirtyGenerationError::EncryptionFailed => Reason::Encryption,
+            DirtyGenerationError::Local(_) => Reason::LocalPreparation,
+        },
+        ShippingGenerationSaveError::Control(source) => save_control_reason(source),
+        // A signed PUT error cannot tell whether the storage effect applied.
+        ShippingGenerationSaveError::Upload(_) => Reason::UploadOutcomeUncertain,
+        ShippingGenerationSaveError::VerificationNotProven => Reason::VerificationUnproven,
+        ShippingGenerationSaveError::DescriptorMismatch => Reason::DescriptorMismatch,
+    }
+}
+
+fn save_checkpoint_reason(source: SaveAttemptEvidenceError) -> GenerationSaveFailureReason {
+    match source {
+        SaveAttemptEvidenceError::Io(_) | SaveAttemptEvidenceError::Unavailable => {
+            GenerationSaveFailureReason::CheckpointWrite
+        }
+        SaveAttemptEvidenceError::Invalid | SaveAttemptEvidenceError::Changed => {
+            GenerationSaveFailureReason::CheckpointIntegrity
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum OperatorFlowError {
     Busy,
@@ -291,6 +400,7 @@ pub enum OperatorFlowError {
     /// deadline has not been extended. Caller must retry or quiesce before it.
     HeartbeatTransportUncertain,
     Stage(OperatorFailureStage),
+    GenerationSave { reason: GenerationSaveFailureReason },
     AuthoritativeGeneration {
         reason: AuthoritativeGenerationMaterializationError,
         cleanup: CleanupFailures,
@@ -317,6 +427,7 @@ impl OperatorFlowError {
     pub const fn stage(&self) -> Option<OperatorFailureStage> {
         match self {
             Self::Busy | Self::CleanupRequired => None,
+            Self::GenerationSave { .. } => Some(OperatorFailureStage::GenerationSave),
             Self::HeartbeatTransportUncertain => Some(OperatorFailureStage::CoordinatorHeartbeat),
             Self::Stage(stage) | Self::Runtime { stage, .. } | Self::Terminal { stage, .. } => {
                 Some(*stage)
@@ -338,6 +449,9 @@ impl fmt::Display for OperatorFlowError {
                 formatter.write_str("coordinator heartbeat transport result is uncertain")
             }
             Self::Stage(stage) => write!(formatter, "operator flow failed at {stage:?}"),
+            Self::GenerationSave { reason } => {
+                write!(formatter, "operator generation save failed: {}", reason.code())
+            },
             Self::AuthoritativeGeneration { reason, cleanup } => write!(
                 formatter,
                 "authoritative generation preparation failed: {reason}; cleanup={cleanup:?}"
@@ -982,9 +1096,13 @@ where
             ))?;
         let source = retained
             .open_base_workspace(root)
-            .map_err(|_| OperatorFlowError::Stage(OperatorFailureStage::GenerationSave))?;
+            .map_err(|_| OperatorFlowError::GenerationSave {
+                reason: GenerationSaveFailureReason::LocalSource,
+            })?;
         persist_local_unsynced_intent(root, &source, retained.lease())
-            .map_err(|_| OperatorFlowError::Stage(OperatorFailureStage::GenerationSave))
+            .map_err(|_| OperatorFlowError::GenerationSave {
+                reason: GenerationSaveFailureReason::LocalIntentWrite,
+            })
     }
 
     /// Canonical ordinary P3 save. Pre-commit failures retain dirty local ownership and the exact
@@ -1015,7 +1133,9 @@ where
                 ))?;
             let workspace = retained
                 .open_base_workspace(root)
-                .map_err(|_| OperatorFlowError::Stage(OperatorFailureStage::GenerationSave))?;
+                .map_err(|_| OperatorFlowError::GenerationSave {
+                    reason: GenerationSaveFailureReason::LocalSource,
+                })?;
             (
                 retained.lease().clone(),
                 retained.base_record().clone(),
@@ -1038,14 +1158,18 @@ where
                 &lease,
                 &mut control,
             )
-            .map_err(|_| OperatorFlowError::Stage(OperatorFailureStage::GenerationSave))?;
+            .map_err(|source| OperatorFlowError::GenerationSave {
+                reason: save_generation_reason(source),
+            })?;
             self.retained_dirty
                 .as_mut()
                 .ok_or(OperatorFlowError::Stage(
                     OperatorFailureStage::GenerationSave,
                 ))?
                 .remember_prepared_successor(prepared)
-                .map_err(|_| OperatorFlowError::Stage(OperatorFailureStage::GenerationSave))?;
+                .map_err(|_| OperatorFlowError::GenerationSave {
+                    reason: GenerationSaveFailureReason::OwnerState,
+                })?;
         }
 
         // No re-seal/re-key/new candidate on an ordinary retry after PUT/verify/
@@ -1062,9 +1186,9 @@ where
             || prepared.candidate_workspace().inventory().ok().as_ref()
                 != Some(prepared.candidate_inventory())
         {
-            return Err(OperatorFlowError::Stage(
-                OperatorFailureStage::GenerationSave,
-            ));
+            return Err(OperatorFlowError::GenerationSave {
+                reason: GenerationSaveFailureReason::NativeSourceChanged,
+            });
         }
 
         // Crash-surviving ciphertext and exact attempt identity must be
@@ -1072,24 +1196,28 @@ where
         // A conflicting/torn checkpoint is a hard stop; no local bytes are
         // cleaned, no old generation is invalidated, no cloud effect is made.
         persist_exact_save_attempt(root, &workspace, prepared, &lease)
-            .map_err(|_| OperatorFlowError::Stage(OperatorFailureStage::GenerationSave))?;
+            .map_err(|source| OperatorFlowError::GenerationSave {
+                reason: save_checkpoint_reason(source),
+            })?;
         let recovered = inspect_exact_save_attempt(
             root,
             lease.tenant_id(),
             lease.profile_id(),
             prepared.candidate_workspace().generation_id(),
         )
-        .map_err(|_| OperatorFlowError::Stage(OperatorFailureStage::GenerationSave))?
-        .ok_or(OperatorFlowError::Stage(
-            OperatorFailureStage::GenerationSave,
-        ))?;
+        .map_err(|source| OperatorFlowError::GenerationSave {
+            reason: save_checkpoint_reason(source),
+        })?
+        .ok_or(OperatorFlowError::GenerationSave {
+            reason: GenerationSaveFailureReason::CheckpointIntegrity,
+        })?;
         if recovered.ciphertext() != prepared.sealed().container()
             || recovered.container_digest() != prepared.container_digest()
             || !recovered.matches_original_lease(&lease)
         {
-            return Err(OperatorFlowError::Stage(
-                OperatorFailureStage::GenerationSave,
-            ));
+            return Err(OperatorFlowError::GenerationSave {
+                reason: GenerationSaveFailureReason::CheckpointIntegrity,
+            });
         }
 
         // The complete sealed checkpoint is already crash-durable and
@@ -1097,7 +1225,9 @@ where
         // close intent before PUT: on a crash its full exact checkpoint
         // remains the sole local unsynced proof, never missing evidence.
         retire_local_unsynced_after_exact_checkpoint(root, &workspace, &lease, &recovered)
-            .map_err(|_| OperatorFlowError::Stage(OperatorFailureStage::GenerationSave))?;
+            .map_err(|_| OperatorFlowError::GenerationSave {
+                reason: GenerationSaveFailureReason::CheckpointRetirement,
+            })?;
 
         let committed = publish_verify_and_commit_successor(
             lease.tenant_id(),
@@ -1108,7 +1238,9 @@ where
             &mut control,
             upload,
         )
-        .map_err(|_| OperatorFlowError::Stage(OperatorFailureStage::GenerationSave))?;
+        .map_err(|source| OperatorFlowError::GenerationSave {
+            reason: save_generation_reason(source),
+        })?;
         drop(control);
 
         let (completion, session_id, local_state, checkpoint_retired) = {

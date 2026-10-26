@@ -398,6 +398,44 @@ impl UserDiagnostic {
             )) => {
                 "The profile generation response could not be verified. The profile was not opened; return to Profile Operations and preserve existing files."
             }
+            Self::Launch(Launch::Operator(
+                crate::operator_flow::OperatorFlowError::GenerationSave { reason },
+            )) => match reason {
+                crate::operator_flow::GenerationSaveFailureReason::ControlTransport
+                | crate::operator_flow::GenerationSaveFailureReason::ControlEffectUncertain
+                | crate::operator_flow::GenerationSaveFailureReason::UploadOutcomeUncertain
+                | crate::operator_flow::GenerationSaveFailureReason::VerificationUnproven => {
+                    "The cloud save outcome is not confirmed. Original local profile bytes and the exact save attempt must be retained. Restore connectivity and use the authorized recovery path; never start a new save or delete files to resolve an uncertain reply."
+                }
+                crate::operator_flow::GenerationSaveFailureReason::ControlRejected => {
+                    "The server rejected this save request. Check Profile Operations for current access and session authority. This is not evidence of a network outage or cloud success. Keep the local profile and pending save bytes."
+                }
+                crate::operator_flow::GenerationSaveFailureReason::SnapshotTooLarge => {
+                    "The local browser profile exceeds this installed save implementation's size limit. Changes remain local, not cloud-saved. Update Profile Bridge when supported; do not delete cookies or profile files to reduce the size."
+                }
+                crate::operator_flow::GenerationSaveFailureReason::LocalIntentWrite
+                | crate::operator_flow::GenerationSaveFailureReason::LocalSource
+                | crate::operator_flow::GenerationSaveFailureReason::LocalPreparation
+                | crate::operator_flow::GenerationSaveFailureReason::CheckpointWrite
+                | crate::operator_flow::GenerationSaveFailureReason::CheckpointRetirement => {
+                    "Windows could not durably complete the local save evidence or cleanup. Cloud completion is not established by this error. Check disk availability and access from Profile Operations; preserve the original profile and all recovery files."
+                }
+                crate::operator_flow::GenerationSaveFailureReason::NativeSourceChanged
+                | crate::operator_flow::GenerationSaveFailureReason::CheckpointIntegrity
+                | crate::operator_flow::GenerationSaveFailureReason::CandidateIdentity
+                | crate::operator_flow::GenerationSaveFailureReason::DescriptorMismatch => {
+                    "The save identity, original browser bytes or encrypted checkpoint did not match expected evidence. Save was blocked to avoid overwriting user data. Use the supported recovery path; do not delete, rename or repair profile files manually."
+                }
+                crate::operator_flow::GenerationSaveFailureReason::SealingMaterial
+                | crate::operator_flow::GenerationSaveFailureReason::Encryption => {
+                    "The profile could not be safely encrypted for cloud save. Original browser data is retained; the cloud save is not confirmed. Check the connected computer and recovery status without resetting device keys."
+                }
+                crate::operator_flow::GenerationSaveFailureReason::ControlInvalidResponse
+                | crate::operator_flow::GenerationSaveFailureReason::ControlClock
+                | crate::operator_flow::GenerationSaveFailureReason::OwnerState => {
+                    "The save could not establish trustworthy operation or server-response evidence. Existing data is retained; no successful cloud save is claimed. Review Profile Operations before retrying."
+                }
+            },
             Self::Launch(
                 Launch::Operator(_) | Launch::ActiveSessionMissing | Launch::CloseObservation(_),
             ) => {
@@ -427,6 +465,7 @@ const fn operator_code(error: crate::operator_flow::OperatorFlowError) -> &'stat
     match error {
         Error::Busy => "BRIDGE_PROFILE_BUSY",
         Error::CleanupRequired => "BRIDGE_CLEANUP_REQUIRED",
+        Error::GenerationSave { reason } => reason.code(),
         Error::AuthoritativeGeneration {
             reason: crate::authoritative_generation::AuthoritativeGenerationMaterializationError::IncompleteLocalEvidence,
             ..
@@ -769,6 +808,48 @@ mod tests {
         assert_ne!(setup.code(), saved.code());
         assert!(saved.message().contains("was saved"));
         assert!(saved.message().contains("readiness has not been confirmed"));
+    }
+
+    #[test]
+    fn save_owner_causes_survive_projection_without_raw_server_or_browser_data() {
+        use crate::operator_flow::{GenerationSaveFailureReason as Reason, OperatorFlowError};
+        let cases = [
+            (Reason::ControlTransport, "BRIDGE_SAVE_CONTROL_TRANSPORT_UNKNOWN"),
+            (Reason::ControlEffectUncertain, "BRIDGE_SAVE_CONTROL_EFFECT_UNCERTAIN"),
+            (Reason::ControlRejected, "BRIDGE_SAVE_CONTROL_REJECTED"),
+            (Reason::UploadOutcomeUncertain, "BRIDGE_SAVE_UPLOAD_OUTCOME_UNCERTAIN"),
+            (Reason::CheckpointIntegrity, "BRIDGE_SAVE_CHECKPOINT_INTEGRITY_FAILED"),
+            (Reason::LocalIntentWrite, "BRIDGE_SAVE_LOCAL_INTENT_FAILED"),
+            (Reason::SnapshotTooLarge, "BRIDGE_SAVE_SNAPSHOT_TOO_LARGE"),
+            (Reason::NativeSourceChanged, "BRIDGE_SAVE_NATIVE_SOURCE_CHANGED"),
+            (Reason::SealingMaterial, "BRIDGE_SAVE_SEALING_MATERIAL_UNAVAILABLE"),
+            (Reason::VerificationUnproven, "BRIDGE_SAVE_SERVER_VERIFY_NOT_PROVEN"),
+        ];
+        for (reason, code) in cases {
+            let owned = OperatorFlowError::GenerationSave { reason };
+            assert_eq!(owned.stage(), Some(crate::operator_flow::OperatorFailureStage::GenerationSave));
+            let diagnostic = UserDiagnostic::Launch(ShippingCompositionError::Operator(owned));
+            assert_eq!(diagnostic.code(), code);
+            assert!(!diagnostic.message().contains("http"));
+            assert!(!diagnostic.message().contains("signed_url"));
+            assert!(!diagnostic.message().contains("tenant_id"));
+            assert!(!diagnostic.message().contains("password"));
+            assert!(!diagnostic.message().contains("Saved in the cloud"));
+        }
+        let rejection = UserDiagnostic::Launch(ShippingCompositionError::Operator(
+            OperatorFlowError::GenerationSave { reason: Reason::ControlRejected },
+        ));
+        assert!(rejection.message().contains("server rejected"));
+        assert!(!rejection.message().contains("network outage"));
+        let uncertain = UserDiagnostic::Launch(ShippingCompositionError::Operator(
+            OperatorFlowError::GenerationSave { reason: Reason::UploadOutcomeUncertain },
+        ));
+        assert!(uncertain.message().contains("not confirmed"));
+        assert!(uncertain.message().contains("exact save attempt"));
+        let old = UserDiagnostic::Launch(ShippingCompositionError::Operator(
+            OperatorFlowError::Stage(crate::operator_flow::OperatorFailureStage::GenerationSave),
+        ));
+        assert_eq!(old.code(), "BRIDGE_GENERATION_SAVE_FAILED");
     }
 
     #[test]
