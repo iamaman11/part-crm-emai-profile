@@ -675,12 +675,54 @@ mod p3_fixture {
         }
         historical_operator.abort(UnixMillis::new(80))?;
 
-        // Negative WORKING/LKG admission: a successful older run is NOT a
-        // permanent recovery certificate. Removing the retained historical
-        // root key must reject a cold Open before the native browser starts.
-        // Reuse the exact same encrypted object, control-plane owner and
-        // Camoufox orchestration; only the disposable empty local root differs.
-        historical_state.borrow_mut().historical_root_available = false;
+        // Negative WORKING/LKG admission: a previous successful browser
+        // run is not a permanent recovery certificate. Use a NEW disposable
+        // Coordinator and root, because the previous historical session was
+        // explicitly aborted and its correct UNCERTAIN owner must never be
+        // converted back to IDLE or reused as a clean lease.
+        let mut missing_backend = BackendState::new()?;
+        {
+            let historical = historical_state.borrow();
+            missing_backend.active_generation = successor.clone();
+            missing_backend.committed_successor = historical.committed_successor.clone();
+            missing_backend.object = historical.object.clone();
+        }
+        missing_backend.historical_root_available = false;
+        let missing_state = Rc::new(RefCell::new(missing_backend));
+        let missing_transport = BackendMachineHttp {
+            state: Rc::clone(&missing_state),
+        };
+        let missing_slot = crate::camouhost_process::RuntimeBindingSlot::new();
+        let missing_preflight =
+            crate::shipping_preflight::ShippingBrowserLaunchPreflight::new(missing_slot.clone());
+        let missing_config = crate::camouhost_process::ManagedCamouhostConfig::new(
+            paths.python.clone(),
+            paths.runtime_root.clone(),
+            paths.display_mode,
+            Some(origin.url()),
+            None,
+        )?;
+        let (missing_process, missing_camouhost) =
+            crate::camouhost_process::ManagedCamouhostProcess::pair(
+                missing_config,
+                missing_slot,
+            );
+        let mut missing_operator = ProfileBridgeOperator::new(
+            FakeDeviceIdentity::new(DeviceId::parse(DEVICE)?),
+            FakeDeviceKeyStore::default(),
+            DeviceAuthentication,
+            ControlPlaneEnrollment::new(missing_transport.clone()),
+            ControlPlaneCoordinator::new(missing_transport),
+            TestRuntimeBundle {
+                bundle: approved_real_bundle(&paths)?,
+            },
+            missing_preflight,
+            missing_process,
+            missing_camouhost,
+        );
+        let mut missing_download = VerifiedGenerationObjectDownloader::new(BackendGet {
+            state: Rc::clone(&missing_state),
+        });
         let missing_key_path = std::env::temp_dir().join(format!(
             "profile-bridge-missing-old-root-{}-{counter}",
             std::process::id()
@@ -689,10 +731,10 @@ mod p3_fixture {
         let missing_key_root = MaterializationRoot::open_or_create(missing_key_path)?;
         let missing_key_claim =
             ClaimUri::parse("profilebridge://claim/claim_s0_missing_old_root_000004")?;
-        let failure = historical_operator.open_authoritative(
+        let failure = missing_operator.open_authoritative(
             &missing_key_claim,
             &missing_key_root,
-            &mut historical_download,
+            &mut missing_download,
             UnixMillis::new(90),
         );
         assert!(
@@ -700,29 +742,36 @@ mod p3_fixture {
                 failure,
                 Err(crate::operator_flow::OperatorFlowError::AuthoritativeGeneration { .. })
             ),
-            "a retained historical generation without its original root key must fail closed"
+            "an independently admitted historical generation without its original root key must fail closed"
         );
+        {
+            let negative = missing_state.borrow();
+            assert!(
+                negative
+                    .events
+                    .iter()
+                    .any(|event| event.starts_with("opening-material:")),
+                "the negative run must reach actual historical old-key derivation, not fail at Coordinator admission"
+            );
+            assert!(
+                negative.events.iter().any(|event| event.starts_with("get:")),
+                "the negative run must read the retained immutable old object"
+            );
+        }
         assert!(
             missing_key_root
                 .open_generation(&tenant_id, &profile_id, &successor)
                 .is_err(),
             "an incomplete historical generation cannot appear locally ready"
         );
-        assert!(historical_operator.active_local_state().is_none());
+        assert!(missing_operator.active_local_state().is_none());
         assert_eq!(state.borrow().active_generation, current);
-        // The negative read-only attempt cannot invalidate either immutable
-        // object: the ciphertext bytes are still the same R2 fixture payload.
+        // The refused cold-open cannot invalidate the only usable backup:
+        // exact historical ciphertext remains in the original owner and
+        // the NEW read-only negative fixture.
         assert_eq!(
-            historical_state.borrow().object.as_deref(),
-            Some(
-                state
-                    .borrow()
-                    .retained_object
-                    .as_ref()
-                    .ok_or("historical encrypted object was unexpectedly lost")?
-                    .1
-                    .as_slice()
-            )
+            missing_state.borrow().object.as_deref(),
+            historical_state.borrow().object.as_deref()
         );
         eprintln!(
             "S0_REAL_PORTABLE_BROWSER_STATE=PASSED;STREAMING_BPAT=1;MANAGED_PROCESS=1;MANAGED_IPC=1;COOKIE=1;LOCAL_STORAGE=1;INDEXED_DB=1;AUTHORITATIVE_RESTORE=1;IDENTITY_REUSED=1;HISTORICAL_NONCURRENT_COLD_CAMOUFOX=1;HISTORICAL_OLD_KEY=1;HISTORICAL_MISSING_OLD_KEY_BLOCKED=1;LIVE_LKG_CERTIFICATE=0"
