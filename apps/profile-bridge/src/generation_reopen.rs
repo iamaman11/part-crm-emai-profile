@@ -585,6 +585,103 @@ mod tests {
         Ok(())
     }
 
+    struct StreamFileGet(std::path::PathBuf);
+
+    impl super::SignedGenerationObjectStreamGetPort for StreamFileGet {
+        type Error = std::io::Error;
+
+        fn get_exact_stream(
+            &mut self,
+            _signed_url: &str,
+            max_bytes: u64,
+            target: &mut dyn std::io::Write,
+        ) -> Result<u16, Self::Error> {
+            let mut source = std::fs::File::open(&self.0)?;
+            let copied = std::io::copy(&mut source, target)?;
+            if copied > max_bytes {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "over limit",
+                ));
+            }
+            Ok(200)
+        }
+    }
+
+    #[test]
+    fn verified_r2_file_stream_then_authenticated_bpgc_open_reuses_existing_format()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use super::VerifiedGenerationObjectStreamDownloader;
+        use encrypted_generation_domain::{
+            GenerationDek, GenerationIdentity, GenerationMetadata, KeyId, NoncePrefix,
+            open_generation_streaming, seal_generation_streaming,
+        };
+        use profile_platform_primitives::{ProfileId, TenantId};
+        use std::io::{Read, Write};
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static NEXT: AtomicU64 = AtomicU64::new(1);
+        let dir = std::env::temp_dir().join(format!(
+            "k2-stream-r2-bpgc-{}-{}", std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed),
+        ));
+        std::fs::create_dir(&dir)?;
+        let original = dir.join("already-sealed.bpgc");
+        let plaintext_bytes = 1_350_017_u64;
+        let key = GenerationDek::new(KeyId::parse("k2_verified_r2_stream_test_key")?, [0x35; 32]);
+        let generation = GenerationId::parse("generation_signed_verified_stream")?;
+        let metadata = GenerationMetadata::for_reader(
+            GenerationIdentity::new(
+                TenantId::parse("tenant_verified_stream")?,
+                ProfileId::parse("profile_verified_stream")?,
+                generation.clone(),
+                None,
+            ),
+            key.key_id().clone(),
+            NoncePrefix::new([0x42; 16]),
+            65_536,
+            &mut std::io::repeat(0x73).take(plaintext_bytes),
+        )?;
+        let mut source = std::fs::OpenOptions::new()
+            .write(true).create_new(true).open(&original)?;
+        let expected = seal_generation_streaming(
+            &metadata, &key, &mut std::io::repeat(0x73).take(plaintext_bytes),
+            &mut source,
+        )?;
+        source.flush()?;
+        source.sync_all()?;
+        drop(source);
+
+        let capability = GenerationDownloadCapability::new(
+            generation,
+            metadata.object_key(),
+            expected.metadata_digest().bytes(),
+            expected.container_digest().bytes(),
+            expected.container_bytes(),
+            "https://0123456789abcdef0123456789abcdef.r2.cloudflarestorage.com/bucket/object?X-Amz-Signature=SECRET".to_owned(),
+            120,
+        );
+        let pending = dir.join(".pending-network-ciphertext");
+        let mut fetcher = VerifiedGenerationObjectStreamDownloader::new(StreamFileGet(original));
+        let mut object = fetcher.download_to_new_pending_file(&capability, &pending)?;
+        let mut opened_count = 0_u64;
+        struct CountSink<'a>(&'a mut u64);
+        impl Write for CountSink<'_> {
+            fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+                *self.0 += bytes.len() as u64;
+                Ok(bytes.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> { Ok(()) }
+        }
+        let reopened = open_generation_streaming(object.reader(), &key, &mut CountSink(&mut opened_count))?;
+        assert_eq!(reopened, expected);
+        assert_eq!(opened_count, plaintext_bytes);
+        object.recheck_and_rewind()?;
+        assert_eq!(object.expected_bytes(), expected.container_bytes());
+        drop(object);
+        std::fs::remove_dir_all(dir)?;
+        Ok(())
+    }
+
     struct FakeGet {
         status: u16,
         body: Vec<u8>,
