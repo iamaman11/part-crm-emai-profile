@@ -1,4 +1,9 @@
-use application_ports::generation_objects::GenerationObjectDescriptor;
+use application_ports::generation_objects::{
+    GenerationObjectCatalogReference, GenerationObjectDescriptor,
+    VerifiedPredecessorObjectReferencePort,
+};
+use application_ports::generations::{GenerationPortError, GenerationPortErrorClass};
+use encrypted_generation_domain::canonical_generation_object_key;
 use application_ports::profile_generation_successor::{
     ProfileGenerationSuccessorCommitError, ProfileGenerationSuccessorCommitErrorClass,
     ProfileGenerationSuccessorCommitOutcome, ProfileGenerationSuccessorCommitPort,
@@ -6,12 +11,52 @@ use application_ports::profile_generation_successor::{
     ProfileGenerationSuccessorRetryDecisionPort,
 };
 use profile_platform_primitives::{
-    ActorContext, DeviceId, FencingToken, GenerationId, ProfileId, TenantId,
+    ActorContext, DeviceId, FencingToken, GenerationId, ProfileId, TenantId, TenantScope,
 };
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use worker::d1::D1Database;
 use worker::query;
+
+/// Strictly one journal-linked immediate predecessor. This is an immutable
+/// candidate descriptor, not a browser WORKING certificate or deletion grant.
+const LOAD_VERIFIED_PREDECESSOR_OF_ACTIVE: &str = r#"
+SELECT
+    base.generation_id,
+    base.object_key,
+    base.metadata_digest,
+    base.container_digest
+FROM browser_profiles AS profile
+JOIN profile_generations AS current
+  ON current.tenant_id = profile.tenant_id
+ AND current.profile_id = profile.profile_id
+ AND current.generation_id = profile.active_generation_id
+JOIN profile_generation_successor_commands AS command
+  ON command.tenant_id = profile.tenant_id
+ AND command.profile_id = profile.profile_id
+ AND command.generation_id = current.generation_id
+JOIN profile_generations AS base
+  ON base.tenant_id = command.tenant_id
+ AND base.profile_id = command.profile_id
+ AND base.generation_id = command.base_generation_id
+WHERE profile.tenant_id = ?
+  AND profile.profile_id = ?
+  AND profile.status = 'READY'
+  AND profile.active_generation_id = ?
+  AND current.status = 'VERIFIED'
+  AND current.verification_reference IS NOT NULL
+  AND base.status = 'VERIFIED'
+  AND base.verification_reference IS NOT NULL
+  AND base.generation_id <> current.generation_id
+"#;
+
+#[derive(Deserialize)]
+struct HistoricalPredecessorRow {
+    generation_id: String,
+    object_key: String,
+    metadata_digest: String,
+    container_digest: String,
+}
 
 const LOAD_SUCCESSOR: &str = r#"
 SELECT
@@ -253,6 +298,55 @@ impl D1ProfileGenerationSuccessorCommitJournal {
             }
         }
     }
+}
+
+impl VerifiedPredecessorObjectReferencePort for D1ProfileGenerationSuccessorCommitJournal {
+    async fn load_verified_predecessor_of_active(
+        &self,
+        scope: &TenantScope,
+        profile_id: &ProfileId,
+        current_generation_id: &GenerationId,
+    ) -> Result<Option<GenerationObjectCatalogReference>, GenerationPortError> {
+        let row = query!(
+            &self.database,
+            LOAD_VERIFIED_PREDECESSOR_OF_ACTIVE,
+            scope.tenant_id().as_str(),
+            profile_id.as_str(),
+            current_generation_id.as_str(),
+        )
+        .map_err(|_| historical_dependency_failure())?
+        .first::<HistoricalPredecessorRow>(None)
+        .await
+        .map_err(|_| historical_dependency_failure())?;
+        let Some(row) = row else {
+            return Ok(None);
+        };
+        let generation_id =
+            GenerationId::parse(row.generation_id).map_err(|_| historical_integrity_failure())?;
+        if generation_id == *current_generation_id
+            || row.object_key
+                != canonical_generation_object_key(scope.tenant_id(), profile_id, &generation_id)
+            || !is_sha256_hex(&row.metadata_digest)
+            || !is_sha256_hex(&row.container_digest)
+        {
+            return Err(historical_integrity_failure());
+        }
+        Ok(Some(GenerationObjectCatalogReference::new(
+            profile_id.clone(),
+            generation_id,
+            row.object_key,
+            row.metadata_digest,
+            row.container_digest,
+        )))
+    }
+}
+
+const fn historical_dependency_failure() -> GenerationPortError {
+    GenerationPortError::new(GenerationPortErrorClass::DependencyUnavailable)
+}
+
+const fn historical_integrity_failure() -> GenerationPortError {
+    GenerationPortError::new(GenerationPortErrorClass::IntegrityFailure)
 }
 
 impl ProfileGenerationSuccessorCommitPort for D1ProfileGenerationSuccessorCommitJournal {
@@ -644,6 +738,22 @@ mod tests {
         ActorContext, ActorId, AggregateVersion, CorrelationId, DeviceId, FencingToken,
         GenerationId, ProfileId, SessionId, TenantId, TenantScope, UnixMillis,
     };
+
+    #[test]
+    fn only_immediate_active_verified_predecessor_is_discoverable() {
+        let query = super::LOAD_VERIFIED_PREDECESSOR_OF_ACTIVE;
+        assert!(query.contains("profile.active_generation_id = ?"));
+        assert!(query.contains("profile.status = 'READY'"));
+        assert!(query.contains("current.status = 'VERIFIED'"));
+        assert!(query.contains("current.verification_reference IS NOT NULL"));
+        assert!(query.contains("base.status = 'VERIFIED'"));
+        assert!(query.contains("base.verification_reference IS NOT NULL"));
+        assert!(query.contains("command.generation_id = current.generation_id"));
+        assert!(query.contains("base.generation_id = command.base_generation_id"));
+        assert!(!query.contains("ORDER BY"));
+        assert!(!query.contains("DELETE "));
+        assert!(!query.contains("UPDATE "));
+    }
 
     #[test]
     fn lone_unsynced_base_read_requires_selected_verified_pointer_and_no_journal() {
