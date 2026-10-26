@@ -549,7 +549,7 @@ mod windows {
                 if heartbeat_retry_used {
                     return Err(ShippingCompositionError::HeartbeatAuthorityUncertain);
                 }
-                let initial = operator.save_retained_successor(
+                let initial = operator.save_retained_successor_streaming(
                     &materialization_root,
                     save_transport.clone(),
                     &mut generation_uploader,
@@ -653,7 +653,7 @@ mod windows {
                             ) {
                                 break;
                             }
-                            let attempt = operator.save_retained_successor(
+                            let attempt = operator.save_retained_successor_streaming(
                                 &materialization_root,
                                 save_transport.clone(),
                                 &mut generation_uploader,

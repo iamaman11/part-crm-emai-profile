@@ -21,6 +21,20 @@ use crate::local_profile::{
     BridgeWorkspaceLock, GenerationWorkspace, LocalGenerationRecord, LocalGenerationState,
     LocalProfileError, MaterializationRoot,
 };
+#[cfg(any(windows, test))]
+use crate::local_profile::RecoveryClone;
+#[cfg(any(windows, test))]
+use crate::shipping_generation_save::SignedGenerationObjectStreamPutPort;
+#[cfg(any(windows, test))]
+use crate::shipping_generation_successor_control::{
+    RestartExactLocalCompletionError, publish_streamed_exact_under_writer,
+};
+#[cfg(any(windows, test))]
+use crate::shipping_save_attempt::{
+    discover_unresolved_streaming_exact_save_attempt, original_local_unsynced_successor,
+    persist_streaming_exact_save_attempt_from_native,
+    retire_fully_saved_streaming_attempt, retire_local_unsynced_after_streamed_checkpoint,
+};
 use crate::runtime_bundle::{
     ApprovedRuntimeBundle, RuntimeLaunchError, RuntimeSessionOrchestrator,
 };
@@ -1369,6 +1383,290 @@ where
             self.cleanup_blocked = true;
         }
 
+        Ok(OperatorGenerationSaveCompletion {
+            committed,
+            local: completion,
+            checkpoint_retired,
+        })
+    }
+
+    /// Ordinary installed Windows close uses the SAME retained local writer and
+    /// coordinator, but seals its original Firefox files directly to a durable
+    /// BPAT instead of constructing a generation-sized plaintext/ciphertext Vec.
+    /// Retries reuse the exact saved attempt; no second save owner or N+2.
+    #[cfg(any(windows, test))]
+    pub fn save_retained_successor_streaming<T, U>(
+        &mut self,
+        root: &MaterializationRoot,
+        mut transport: T,
+        upload: &mut U,
+        now: UnixMillis,
+    ) -> Result<OperatorGenerationSaveCompletion, OperatorFlowError>
+    where
+        C: GenerationSealingMaterialPort,
+        T: MachineHttpPort,
+        U: SignedGenerationObjectStreamPutPort,
+    {
+        if self.cleanup_blocked {
+            return Err(OperatorFlowError::CleanupRequired);
+        }
+        let (lease, base_record, workspace) = {
+            let retained = self
+                .retained_dirty
+                .as_ref()
+                .ok_or(OperatorFlowError::Stage(OperatorFailureStage::GenerationSave))?;
+            let source = retained.open_base_workspace(root).map_err(|_| {
+                OperatorFlowError::GenerationSave {
+                    reason: GenerationSaveFailureReason::LocalSource,
+                }
+            })?;
+            (
+                retained.lease().clone(),
+                retained.base_record().clone(),
+                source,
+            )
+        };
+        let tenant = lease.tenant_id();
+        let profile = lease.profile_id();
+
+        // The first offline-close intent identifies EXACTLY ONE N+1. If a
+        // complete fsynced BPAT already exists, never reseal or regenerate it.
+        let existing = discover_unresolved_streaming_exact_save_attempt(root, tenant, profile);
+        match existing {
+            Ok(Some(_)) => {}
+            Ok(None) => {
+                let candidate_id = original_local_unsynced_successor(root, &workspace, &lease)
+                    .map_err(|source| OperatorFlowError::GenerationSave {
+                        reason: save_checkpoint_read_reason(source),
+                    })?
+                    .ok_or(OperatorFlowError::GenerationSave {
+                        reason: GenerationSaveFailureReason::CandidateIdentity,
+                    })?;
+                if candidate_id == *base_record.generation_id() {
+                    return Err(OperatorFlowError::GenerationSave {
+                        reason: GenerationSaveFailureReason::CandidateIdentity,
+                    });
+                }
+                let source_inventory = workspace.inventory().map_err(|_| {
+                    OperatorFlowError::GenerationSave {
+                        reason: GenerationSaveFailureReason::NativeSourceChanged,
+                    }
+                })?;
+                let candidate = match RecoveryClone::create(
+                    &workspace,
+                    root,
+                    tenant,
+                    profile,
+                    &candidate_id,
+                ) {
+                    Ok(clone) => {
+                        let inventory = clone.verify_clone_only().map_err(|_| {
+                            OperatorFlowError::GenerationSave {
+                                reason: GenerationSaveFailureReason::NativeSourceChanged,
+                            }
+                        })?;
+                        if inventory != source_inventory {
+                            return Err(OperatorFlowError::GenerationSave {
+                                reason: GenerationSaveFailureReason::NativeSourceChanged,
+                            });
+                        }
+                        clone.workspace().clone()
+                    }
+                    Err(LocalProfileError::TargetAlreadyExists) => {
+                        // A crash before BPAT fsync may have left the original
+                        // N+1 clone. Reuse only its exact unchanged native bytes.
+                        let candidate = root
+                            .open_generation(tenant, profile, &candidate_id)
+                            .map_err(|_| OperatorFlowError::GenerationSave {
+                                reason: GenerationSaveFailureReason::LocalPreparation,
+                            })?;
+                        if candidate.inventory().ok().as_ref() != Some(&source_inventory) {
+                            return Err(OperatorFlowError::GenerationSave {
+                                reason: GenerationSaveFailureReason::NativeSourceChanged,
+                            });
+                        }
+                        candidate
+                    }
+                    Err(_) => {
+                        return Err(OperatorFlowError::GenerationSave {
+                            reason: GenerationSaveFailureReason::LocalPreparation,
+                        });
+                    }
+                };
+                persist_streaming_exact_save_attempt_from_native(
+                    root,
+                    &workspace,
+                    &candidate,
+                    &lease,
+                    &mut self.coordinator,
+                )
+                .map_err(|source| OperatorFlowError::GenerationSave {
+                    reason: save_checkpoint_reason(source),
+                })?;
+            }
+            Err(source) => {
+                return Err(OperatorFlowError::GenerationSave {
+                    reason: save_checkpoint_read_reason(source),
+                });
+            }
+        }
+        let mut exact = discover_unresolved_streaming_exact_save_attempt(root, tenant, profile)
+            .map_err(|source| OperatorFlowError::GenerationSave {
+                reason: save_checkpoint_read_reason(source),
+            })?
+            .ok_or(OperatorFlowError::GenerationSave {
+                reason: GenerationSaveFailureReason::CheckpointIntegrity,
+            })?;
+        if !exact.original_lease(&lease)
+            || !exact.original_device(&lease)
+            || exact.base_generation_id() != base_record.generation_id().as_str()
+        {
+            return Err(OperatorFlowError::GenerationSave {
+                reason: GenerationSaveFailureReason::CheckpointIntegrity,
+            });
+        }
+        let candidate_id = GenerationId::parse(exact.successor_id()).map_err(|_| {
+            OperatorFlowError::GenerationSave {
+                reason: GenerationSaveFailureReason::CandidateIdentity,
+            }
+        })?;
+        let candidate = root.open_generation(tenant, profile, &candidate_id).map_err(|_| {
+            OperatorFlowError::GenerationSave {
+                reason: GenerationSaveFailureReason::LocalPreparation,
+            }
+        })?;
+        let snapshot_inventory = candidate.inventory().map_err(|_| {
+            OperatorFlowError::GenerationSave {
+                reason: GenerationSaveFailureReason::NativeSourceChanged,
+            }
+        })?;
+        if workspace.inventory().ok().as_ref() != Some(&snapshot_inventory) {
+            return Err(OperatorFlowError::GenerationSave {
+                reason: GenerationSaveFailureReason::NativeSourceChanged,
+            });
+        }
+        retire_local_unsynced_after_streamed_checkpoint(root, &workspace, &lease, &exact)
+            .map_err(|_| OperatorFlowError::GenerationSave {
+                reason: GenerationSaveFailureReason::CheckpointRetirement,
+            })?;
+
+        let committed = publish_streamed_exact_under_writer(
+            tenant,
+            profile,
+            base_record.generation_id(),
+            &mut exact,
+            &lease,
+            &mut transport,
+            upload,
+        )
+        .map_err(|error| {
+            let reason = match error {
+                RestartExactLocalCompletionError::LocalEvidenceChanged => {
+                    GenerationSaveFailureReason::CheckpointIntegrity
+                }
+                RestartExactLocalCompletionError::WriterOrLockUnresolved
+                | RestartExactLocalCompletionError::BindingOrRetirementFailed => {
+                    GenerationSaveFailureReason::OwnerState
+                }
+                RestartExactLocalCompletionError::UploadOrCommitUncertain => {
+                    GenerationSaveFailureReason::UploadOutcomeUncertain
+                }
+                RestartExactLocalCompletionError::ControlPlane(error) => match error {
+                    ShippingControlPlaneError::Transport => {
+                        GenerationSaveFailureReason::ControlTransport
+                    }
+                    ShippingControlPlaneError::HttpServerUncertain => {
+                        GenerationSaveFailureReason::ControlEffectUncertain
+                    }
+                    ShippingControlPlaneError::HttpStatus => {
+                        GenerationSaveFailureReason::ControlRejected
+                    }
+                    ShippingControlPlaneError::InvalidResponse => {
+                        GenerationSaveFailureReason::ControlInvalidResponse
+                    }
+                    ShippingControlPlaneError::Clock => {
+                        GenerationSaveFailureReason::ControlClock
+                    }
+                },
+            };
+            OperatorFlowError::GenerationSave { reason }
+        })?
+        .ok_or(OperatorFlowError::GenerationSave {
+            reason: GenerationSaveFailureReason::ControlRejected,
+        })?;
+
+        // Backend N+1 is authoritative now. Complete only the same native
+        // snapshot and its existing binding; never silently return to N.
+        let (completion, session_id, local_state, checkpoint_retired) = {
+            let retained = self
+                .retained_dirty
+                .as_mut()
+                .ok_or(OperatorFlowError::Stage(OperatorFailureStage::GenerationSave))?;
+            let session_id = retained.lease().session_id().clone();
+            let completion = retained.complete_committed_streamed_successor(
+                &candidate,
+                &snapshot_inventory,
+                &committed,
+                &mut self.coordinator,
+                now,
+            );
+            let checkpoint_retired = completion.as_ref().is_ok_and(|outcome| {
+                outcome.is_fully_saved_locally()
+                    && retire_fully_saved_streaming_attempt(
+                        root,
+                        &mut exact,
+                        &candidate,
+                        &committed,
+                        &lease,
+                    )
+                    .is_ok()
+            });
+            let local_state = retained.base_record().state();
+            (completion, session_id, local_state, checkpoint_retired)
+        };
+        let completion = match completion {
+            Ok(value) => value,
+            Err(_) => {
+                let cleanup = CleanupFailures {
+                    process: false,
+                    workspace_lock: true,
+                    coordinator_lease: true,
+                };
+                self.retained_dirty = None;
+                self.last_terminal = Some(OperatorTerminalRecord {
+                    session_id,
+                    generation_id: committed.generation_id().clone(),
+                    local_state,
+                    cleanup_failures: cleanup,
+                });
+                self.cleanup_blocked = true;
+                return Err(OperatorFlowError::Terminal {
+                    stage: OperatorFailureStage::GenerationSave,
+                    local_state,
+                    cleanup,
+                });
+            }
+        };
+        let cleanup = CleanupFailures {
+            process: false,
+            workspace_lock: !completion.workspace_lock_released(),
+            coordinator_lease: !completion.coordinator_lease_released(),
+        };
+        let local_readiness_blocked = matches!(
+            completion.local_outcome(),
+            DirtyCloseLocalOutcome::RematerializationBlocked { .. }
+                | DirtyCloseLocalOutcome::MaterializationBindingBlocked { .. }
+        );
+        self.retained_dirty = None;
+        self.last_terminal = Some(OperatorTerminalRecord {
+            session_id,
+            generation_id: committed.generation_id().clone(),
+            local_state,
+            cleanup_failures: cleanup,
+        });
+        if cleanup.any() || local_readiness_blocked || !checkpoint_retired {
+            self.cleanup_blocked = true;
+        }
         Ok(OperatorGenerationSaveCompletion {
             committed,
             local: completion,

@@ -9,8 +9,8 @@ use crate::dirty_generation_finalize::{
     DirtyGenerationCommitClientPort, publish_verify_and_commit_dirty_generation,
 };
 use crate::local_profile::{
-    BridgeWorkspaceLock, GenerationWorkspace, LocalGenerationRecord, LocalGenerationState,
-    LocalProfileError, MaterializationRoot,
+    BridgeWorkspaceLock, GenerationInventory, GenerationWorkspace, LocalGenerationRecord,
+    LocalGenerationState, LocalProfileError, MaterializationRoot,
 };
 use crate::shipping_generation_save::CommittedGenerationSuccessor;
 use application_ports::ProfileCoordinatorPort;
@@ -154,6 +154,42 @@ impl RetainedDirtyClose {
             return Err(CommittedDirtyCloseError::InvalidRetainedOwnership);
         }
 
+        self.complete_committed_streamed_successor(
+            prepared.candidate_workspace(),
+            prepared.candidate_inventory(),
+            committed,
+            coordinator,
+            now,
+        )
+    }
+
+    /// The same local completion owner accepts an independently validated
+    /// file-backed BPAT descriptor without allocating a sealed generation.
+    /// It never promotes local readiness unless N+1's original native
+    /// inventory still matches the exactly committed ciphertext.
+    pub(crate) fn complete_committed_streamed_successor<P>(
+        &mut self,
+        candidate: &GenerationWorkspace,
+        expected_inventory: &GenerationInventory,
+        committed: &CommittedGenerationSuccessor,
+        coordinator: &mut P,
+        now: UnixMillis,
+    ) -> Result<DirtyCloseCompletion, CommittedDirtyCloseError>
+    where
+        P: ProfileCoordinatorPort,
+    {
+        if self.workspace_lock.is_none()
+            || self.base.state() != LocalGenerationState::DirtyLocal
+            || !self.base.is_locked()
+            || candidate.generation_id() != committed.generation_id()
+            || candidate.tenant_id() != self.lease.tenant_id()
+            || candidate.profile_id() != self.lease.profile_id()
+            || candidate.generation_id() == self.base.generation_id()
+            || committed.container_bytes() == 0
+        {
+            return Err(CommittedDirtyCloseError::InvalidRetainedOwnership);
+        }
+
         let transition_at = if now < self.base.last_activity_at() {
             self.base.last_activity_at()
         } else {
@@ -163,13 +199,13 @@ impl RetainedDirtyClose {
             .mark_superseded(transition_at)
             .map_err(CommittedDirtyCloseError::Local)?;
 
-        let local_outcome = match prepared.candidate_workspace().inventory() {
-            Ok(inventory) if inventory == *prepared.candidate_inventory() => {
+        let local_outcome = match candidate.inventory() {
+            Ok(inventory) if inventory == *expected_inventory => {
                 // This is the same exact candidate whose immutable container was accepted by
                 // the backend. A committed cloud generation is not locally ready until the
                 // existing next-launch binding owner can read its exact identity/inventory.
                 match persist_committed_successor_binding(
-                    prepared.candidate_workspace(),
+                    candidate,
                     self.lease.tenant_id(),
                     self.lease.profile_id(),
                     committed.generation_id(),

@@ -312,6 +312,29 @@ pub(crate) fn retire_local_unsynced_after_exact_checkpoint(
     lease: &ProfileLease,
     checkpoint: &ReadOnlySaveAttempt,
 ) -> Result<(), SaveAttemptEvidenceError> {
+    retire_local_unsynced_after_header(root, source, lease, &checkpoint.header)
+}
+
+/// The same exact checkpoint/intent pairing, with no full-ciphertext read.
+#[cfg(any(windows, test))]
+pub(crate) fn retire_local_unsynced_after_streamed_checkpoint(
+    root: &MaterializationRoot,
+    source: &GenerationWorkspace,
+    lease: &ProfileLease,
+    checkpoint: &ReadOnlyStreamedSaveAttempt,
+) -> Result<(), SaveAttemptEvidenceError> {
+    if !checkpoint.original_lease(lease) || !checkpoint.original_device(lease) {
+        return Err(SaveAttemptEvidenceError::Changed);
+    }
+    retire_local_unsynced_after_header(root, source, lease, &checkpoint.header)
+}
+
+fn retire_local_unsynced_after_header(
+    root: &MaterializationRoot,
+    source: &GenerationWorkspace,
+    lease: &ProfileLease,
+    header: &AttemptHeader,
+) -> Result<(), SaveAttemptEvidenceError> {
     let path = local_unsynced_path(root, lease.tenant_id(), lease.profile_id());
     let intent = match read_local_unsynced(&path) {
         Ok(value) => value,
@@ -332,15 +355,19 @@ pub(crate) fn retire_local_unsynced_after_exact_checkpoint(
             != credential_fingerprint(b"fencing", lease.fencing_token().as_str())
         || intent.device_fingerprint.as_deref()
             != Some(credential_fingerprint(b"device", lease.device_id().as_str()).as_str())
-        || checkpoint.header.device_fingerprint != intent.device_fingerprint
+        || header.device_fingerprint != intent.device_fingerprint
         || intent.source_inventory != inventory.inventory_digest()
         || intent.source_bytes != inventory.total_bytes()
-        || checkpoint.header.tenant != intent.tenant
-        || checkpoint.header.profile != intent.profile
-        || checkpoint.header.base_generation != intent.base_generation
-        || checkpoint.header.source_inventory != intent.source_inventory
-        || checkpoint.header.candidate_bytes != intent.source_bytes
-        || !checkpoint.matches_original_lease(lease)
+        || header.tenant != intent.tenant
+        || header.profile != intent.profile
+        || header.base_generation != intent.base_generation
+        || header.source_inventory != intent.source_inventory
+        || header.candidate_bytes != intent.source_bytes
+        || header.epoch != lease.epoch()
+        || header.session_fingerprint
+            != credential_fingerprint(b"session", lease.session_id().as_str())
+        || header.fencing_fingerprint
+            != credential_fingerprint(b"fencing", lease.fencing_token().as_str())
     {
         return Err(SaveAttemptEvidenceError::Changed);
     }
@@ -986,6 +1013,86 @@ pub(crate) fn retire_active_exact_attempt_after_restart(
     }
     // A failed removal retains the checkpoint and blocks launch as before.
     fs::remove_file(attempt_path(root, tenant, profile, &successor))?;
+    Ok(())
+}
+
+/// Physical retirement of a streamed BPAT only AFTER authoritative D1
+/// commit, native local binding, and BOTH release acknowledgements. A
+/// replaced, changed or uncertain file is left in place as recovery evidence.
+#[cfg(any(windows, test))]
+pub(crate) fn retire_fully_saved_streaming_attempt(
+    root: &MaterializationRoot,
+    checkpoint: &mut ReadOnlyStreamedSaveAttempt,
+    candidate: &GenerationWorkspace,
+    committed: &CommittedGenerationSuccessor,
+    lease: &ProfileLease,
+) -> Result<(), SaveAttemptEvidenceError> {
+    if !checkpoint.original_lease(lease)
+        || !checkpoint.original_device(lease)
+        || checkpoint.successor_id() != committed.generation_id().as_str()
+        || checkpoint.object_key() != committed.object_key()
+        || checkpoint.metadata_digest() != committed.metadata_digest()
+        || checkpoint.container_digest() != committed.container_digest()
+        || checkpoint.container_bytes() != committed.container_bytes()
+        || candidate.generation_id() != committed.generation_id()
+        || candidate.tenant_id() != lease.tenant_id()
+        || candidate.profile_id() != lease.profile_id()
+    {
+        return Err(SaveAttemptEvidenceError::Changed);
+    }
+    checkpoint
+        .ciphertext()
+        .recheck_and_rewind()
+        .map_err(|_| SaveAttemptEvidenceError::Changed)?;
+    let canonical = attempt_path(
+        root,
+        lease.tenant_id(),
+        lease.profile_id(),
+        committed.generation_id(),
+    );
+    let header = read_bounded_attempt_header(&canonical)?;
+    if header != checkpoint.header {
+        return Err(SaveAttemptEvidenceError::Changed);
+    }
+    let mut digest = [0_u8; 32];
+    if checkpoint.header.container_digest.len() != 64 {
+        return Err(SaveAttemptEvidenceError::Invalid);
+    }
+    for (index, value) in digest.iter_mut().enumerate() {
+        *value = u8::from_str_radix(
+            &checkpoint.header.container_digest[index * 2..index * 2 + 2],
+            16,
+        )
+        .map_err(|_| SaveAttemptEvidenceError::Invalid)?;
+    }
+    let header_bytes = serde_json::to_vec(&checkpoint.header)
+        .map_err(|_| SaveAttemptEvidenceError::Invalid)?;
+    let mut reopened = VerifiedGenerationObjectFile::open_checkpoint_payload(
+        &canonical,
+        12 + header_bytes.len() as u64,
+        committed.container_bytes(),
+        digest,
+    )
+    .map_err(|_| SaveAttemptEvidenceError::Changed)?;
+    reopened
+        .recheck_and_rewind()
+        .map_err(|_| SaveAttemptEvidenceError::Changed)?;
+    let binding = crate::browser_execution::load_materialization_binding(
+        candidate,
+        lease.tenant_id(),
+        lease.profile_id(),
+        committed.generation_id(),
+    )
+    .map_err(|_| SaveAttemptEvidenceError::Changed)?;
+    if binding.source_container_sha256() != committed.container_digest()
+        || candidate
+            .materialization_inventory_digest()
+            .map_err(|_| SaveAttemptEvidenceError::Changed)?
+            != binding.materialized_inventory_digest()
+    {
+        return Err(SaveAttemptEvidenceError::Changed);
+    }
+    fs::remove_file(canonical)?;
     Ok(())
 }
 
