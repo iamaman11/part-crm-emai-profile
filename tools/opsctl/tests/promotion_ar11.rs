@@ -728,7 +728,8 @@ print(json.dumps({'evidence': adapter['build'](release_id, native, None, None), 
                     native["planned_migrations"],
                     json!([
                         "0035_pas2_payload_fingerprint_contract.sql",
-                        "0036_profile_generation_initialization.sql"
+                        "0036_profile_generation_initialization.sql",
+                        "0037_generation_streaming_container_limit.sql"
                     ])
                 );
                 assert_eq!(
