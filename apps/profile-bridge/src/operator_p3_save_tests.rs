@@ -965,9 +965,9 @@ fn canonical_save_refuses_tampered_checkpoint_before_any_retry_network_effect()
     );
     assert!(matches!(
         retry,
-        Err(OperatorFlowError::Stage(
-            OperatorFailureStage::GenerationSave
-        ))
+        Err(OperatorFlowError::GenerationSave {
+            reason: GenerationSaveFailureReason::CheckpointIntegrity,
+        })
     ));
     assert_eq!(trace.paths.borrow().len(), calls_before);
     assert_eq!(put_calls.get(), 1);
@@ -1033,9 +1033,9 @@ fn canonical_operator_retry_refuses_changed_candidate_and_preserves_unknown_byte
     );
     assert!(matches!(
         retry,
-        Err(OperatorFlowError::Stage(
-            OperatorFailureStage::GenerationSave
-        ))
+        Err(OperatorFlowError::GenerationSave {
+            reason: GenerationSaveFailureReason::NativeSourceChanged,
+        })
     ));
     assert_eq!(trace.paths.borrow().len(), observed_requests);
     assert_eq!(put_calls.get(), 1);
