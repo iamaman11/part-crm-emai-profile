@@ -31,9 +31,10 @@ use crate::shipping_generation_successor_control::{
 };
 #[cfg(any(windows, test))]
 use crate::shipping_save_attempt::{
+    ScopedPendingSaveEvidence, classify_scoped_pending_save_evidence,
     discover_unresolved_streaming_exact_save_attempt, original_local_unsynced_successor,
-    persist_streaming_exact_save_attempt_from_native,
-    retire_fully_saved_streaming_attempt, retire_local_unsynced_after_streamed_checkpoint,
+    persist_streaming_exact_save_attempt_from_native, retire_fully_saved_streaming_attempt,
+    retire_local_unsynced_after_streamed_checkpoint,
 };
 use crate::runtime_bundle::{
     ApprovedRuntimeBundle, RuntimeLaunchError, RuntimeSessionOrchestrator,
@@ -1431,10 +1432,24 @@ where
 
         // The first offline-close intent identifies EXACTLY ONE N+1. If a
         // complete fsynced BPAT already exists, never reseal or regenerate it.
-        let existing = discover_unresolved_streaming_exact_save_attempt(root, tenant, profile);
-        match existing {
-            Ok(Some(_)) => {}
-            Ok(None) => {
+        let has_checkpoint =
+            match discover_unresolved_streaming_exact_save_attempt(root, tenant, profile) {
+                Ok(Some(_)) => true,
+                Ok(None) => false,
+                Err(_) if matches!(
+                    classify_scoped_pending_save_evidence(root, tenant, profile),
+                    Ok(ScopedPendingSaveEvidence::LocalUnsynced {
+                        ref base_generation,
+                        ..
+                    }) if base_generation == base_record.generation_id()
+                ) => false,
+                Err(source) => {
+                    return Err(OperatorFlowError::GenerationSave {
+                        reason: save_checkpoint_read_reason(source),
+                    });
+                }
+            };
+        if !has_checkpoint {
                 let candidate_id = original_local_unsynced_successor(root, &workspace, &lease)
                     .map_err(|source| OperatorFlowError::GenerationSave {
                         reason: save_checkpoint_read_reason(source),
@@ -1503,12 +1518,6 @@ where
                 .map_err(|source| OperatorFlowError::GenerationSave {
                     reason: save_checkpoint_reason(source),
                 })?;
-            }
-            Err(source) => {
-                return Err(OperatorFlowError::GenerationSave {
-                    reason: save_checkpoint_read_reason(source),
-                });
-            }
         }
         let mut exact = discover_unresolved_streaming_exact_save_attempt(root, tenant, profile)
             .map_err(|source| OperatorFlowError::GenerationSave {
