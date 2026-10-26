@@ -186,6 +186,7 @@ impl CommittedGenerationSuccessor {
 
     /// Construct only after the existing Worker accepted the exact atomic D1
     /// commit response. The immutable descriptor comes from the verified BPAT.
+    #[cfg(any(windows, test))]
     pub(crate) fn confirmed_streamed(
         generation_id: &str,
         object_key: &str,

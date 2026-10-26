@@ -12,9 +12,11 @@ use crate::shipping_control_plane::{
     MachineHttpMethod, MachineHttpPort, ShippingControlPlaneError,
 };
 #[cfg(any(windows, test))]
-use crate::shipping_generation_save::SignedGenerationObjectStreamPutPort;
 use crate::shipping_generation_save::{
-    CommittedGenerationSuccessor, GenerationSuccessorCommitOutcome, GenerationSuccessorControlPort,
+    CommittedGenerationSuccessor, SignedGenerationObjectStreamPutPort,
+};
+use crate::shipping_generation_save::{
+    GenerationSuccessorCommitOutcome, GenerationSuccessorControlPort,
     GenerationUploadAuthorization, SignedGenerationUploadCapability,
 };
 #[cfg(any(windows, test))]
@@ -730,7 +732,7 @@ where
         .ciphertext()
         .recheck_and_rewind()
         .map_err(|_| RestartExactLocalCompletionError::LocalEvidenceChanged)?;
-    if request_fresh_retry_decision_streamed(tenant_id, profile_id, &exact, fresh_lease, transport)
+    if request_fresh_retry_decision_streamed(tenant_id, profile_id, exact, fresh_lease, transport)
         .map_err(RestartExactLocalCompletionError::ControlPlane)?
         != BridgeGenerationSuccessorRetryVerdict::NotAppliedRetryable
     {
