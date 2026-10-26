@@ -18,9 +18,7 @@ use crate::shipping_generation_save::{
     GenerationUploadAuthorization, SignedGenerationUploadCapability,
 };
 #[cfg(any(windows, test))]
-use crate::shipping_save_attempt::{
-    ReadOnlySaveAttempt, discover_unresolved_exact_save_attempt,
-};
+use crate::shipping_save_attempt::{ReadOnlySaveAttempt, discover_unresolved_exact_save_attempt};
 use crate::shipping_save_attempt::{
     ReadOnlyStreamedSaveAttempt, discover_unresolved_streaming_exact_save_attempt,
     inspect_streaming_exact_save_attempt,
