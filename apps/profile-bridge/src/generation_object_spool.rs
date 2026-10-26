@@ -35,7 +35,7 @@ impl VerifiedGenerationObjectFile {
         expected_bytes: u64,
         expected_sha256: [u8; 32],
     ) -> io::Result<Self> {
-        if offset < 12 || offset > 12 + 4_096 {
+        if !(12..=12 + 4_096).contains(&offset) {
             return Err(invalid_source());
         }
         Self::open_payload(path, offset, expected_bytes, expected_sha256)
