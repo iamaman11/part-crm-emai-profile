@@ -151,6 +151,52 @@ mod tests {
     }
 
     #[test]
+    fn encrypted_stream_seals_directly_to_verified_spool_without_ciphertext_vec()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use encrypted_generation_domain::{
+            GenerationDek, GenerationIdentity, GenerationMetadata, KeyId, NoncePrefix,
+            open_generation_streaming, seal_generation_streaming,
+        };
+        use profile_platform_primitives::{GenerationId, ProfileId, TenantId};
+        let fixture = Fixture::new()?;
+        let source_len = 2_400_017_u64;
+        let identity = GenerationIdentity::new(
+            TenantId::parse("tenant_01JSTREAMOBJECT")?,
+            ProfileId::parse("profile_01JSTREAMOBJECT")?,
+            GenerationId::parse("generation_01JSTREAMOBJECT")?,
+            None,
+        );
+        let key = GenerationDek::new(KeyId::parse("k2_stream_verified_object")?, [0x39; 32]);
+        let metadata = GenerationMetadata::for_reader(
+            identity, key.key_id().clone(), NoncePrefix::new([0x41; 16]),
+            65_536, &mut std::io::repeat(0xa7).take(source_len),
+        )?;
+        let path = fixture.path();
+        let mut sealed_file = fs::OpenOptions::new()
+            .write(true).read(true).create_new(true).open(&path)?;
+        let report = seal_generation_streaming(
+            &metadata, &key, &mut std::io::repeat(0xa7).take(source_len),
+            &mut sealed_file,
+        )?;
+        sealed_file.sync_all()?;
+        drop(sealed_file);
+        let mut sealed = VerifiedGenerationObjectFile::open(
+            &path,
+            report.container_bytes(),
+            report.container_digest().bytes(),
+        )?;
+        assert_eq!(sealed.expected_bytes(), report.container_bytes());
+        let mut sink = std::io::sink();
+        let opened = open_generation_streaming(sealed.reader(), &key, &mut sink)?;
+        assert_eq!(opened, report);
+        sealed.recheck_and_rewind()?;
+        assert!(VerifiedGenerationObjectFile::open(
+            &path, report.container_bytes(), [0x55; 32],
+        ).is_err(), "foreign advertised digest cannot be replayed");
+        Ok(())
+    }
+
+    #[test]
     fn rejects_missing_wrong_size_foreign_digest_directory_and_relative_path()
     -> io::Result<()> {
         let fixture = Fixture::new()?;
