@@ -1780,6 +1780,189 @@ fn hex(bytes: &[u8]) -> String {
 }
 
 #[cfg(test)]
+mod direct_native_checkpoint_tests {
+    use super::{
+        SaveAttemptEvidenceError, attempt_path, inspect_streaming_exact_save_attempt,
+        persist_streaming_exact_save_attempt_from_native,
+    };
+    use crate::dirty_generation::{
+        GenerationSealingMaterial, GenerationSealingMaterialPort,
+    };
+    use crate::local_profile::{GenerationWorkspace, MaterializationRoot};
+    use encrypted_generation_domain::{
+        GenerationDek, KeyId, NoncePrefix, open_generation_streaming,
+    };
+    use profile_platform_primitives::{
+        DeviceId, FencingToken, GenerationId, ProfileId, SessionId, TenantId,
+    };
+    use session_domain::ProfileLease;
+    use std::fs;
+    use std::path::PathBuf;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static NEXT: AtomicU64 = AtomicU64::new(1);
+
+    struct Keys {
+        calls: usize,
+        mutate: Option<PathBuf>,
+    }
+
+    impl GenerationSealingMaterialPort for Keys {
+        type Error = ();
+
+        fn material_for(
+            &mut self,
+            _tenant: &TenantId,
+            _profile: &ProfileId,
+            _base: &GenerationId,
+            _successor: &GenerationId,
+            _original_digest: [u8; 32],
+        ) -> Result<GenerationSealingMaterial, Self::Error> {
+            self.calls += 1;
+            if let Some(path) = self.mutate.as_ref() {
+                fs::write(path, b"mutated same-length Firefox WAL")
+                    .map_err(|_| ())?;
+            }
+            Ok(GenerationSealingMaterial::new(
+                GenerationDek::new(
+                    KeyId::parse("native_direct_checkpoint_key_01").map_err(|_| ())?,
+                    [0x39; 32],
+                ),
+                NoncePrefix::new([0x19; 16]),
+                65_536,
+            ))
+        }
+    }
+
+    struct Fixture {
+        path: PathBuf,
+        root: MaterializationRoot,
+        tenant: TenantId,
+        profile: ProfileId,
+        n: GenerationId,
+        next: GenerationId,
+        lease: ProfileLease,
+    }
+
+    impl Fixture {
+        fn new() -> Result<Self, Box<dyn std::error::Error>> {
+            let seq = NEXT.fetch_add(1, Ordering::Relaxed);
+            let path = std::env::temp_dir().join(format!(
+                "bridge-k2-direct-checkpoint-{}-{seq}", std::process::id(),
+            ));
+            let tenant = TenantId::parse(format!("tenant_k2_direct_{seq}"))?;
+            let profile = ProfileId::parse(format!("profile_k2_direct_{seq}"))?;
+            Ok(Self {
+                root: MaterializationRoot::open_or_create(path.clone())?,
+                path,
+                lease: ProfileLease::issue(
+                    tenant.clone(), profile.clone(),
+                    SessionId::parse(format!("session_k2_direct_{seq}"))?,
+                    DeviceId::parse(format!("device_k2_direct_{seq}"))?,
+                    7,
+                    FencingToken::parse(format!("fence_k2_direct_{seq}"))?,
+                )?,
+                tenant,
+                profile,
+                n: GenerationId::parse(format!("generation_k2_base_{seq}"))?,
+                next: GenerationId::parse(format!("generation_k2_next_{seq}"))?,
+            })
+        }
+
+        fn native(&self) -> Result<(GenerationWorkspace, GenerationWorkspace), Box<dyn std::error::Error>> {
+            let source = self.root.create_generation(&self.tenant, &self.profile, &self.n)?;
+            let candidate = self.root.create_generation(&self.tenant, &self.profile, &self.next)?;
+            for workspace in [&source, &candidate] {
+                let dir = workspace.path().join("user_data");
+                fs::create_dir_all(&dir)?;
+                fs::write(dir.join("cookies.sqlite-wal"), vec![0x46; 2_400_109])?;
+                fs::write(workspace.path().join("prefs.js"), b"native preferences")?;
+            }
+            assert_eq!(source.inventory()?, candidate.inventory()?);
+            Ok((source, candidate))
+        }
+    }
+
+    impl Drop for Fixture {
+        fn drop(&mut self) {
+            let _ = crate::test_support::remove_test_root(&self.path);
+        }
+    }
+
+    #[test]
+    fn direct_native_to_fsynced_bpat_is_authenticated_retryable_and_spool_free()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let fixture = Fixture::new()?;
+        let (source, candidate) = fixture.native()?;
+        let mut keys = Keys { calls: 0, mutate: None };
+        persist_streaming_exact_save_attempt_from_native(
+            &fixture.root, &source, &candidate, &fixture.lease, &mut keys,
+        )?;
+        assert_eq!(keys.calls, 1);
+        let mut exact = inspect_streaming_exact_save_attempt(
+            &fixture.root, &fixture.tenant, &fixture.profile, &fixture.next,
+        )?.ok_or("missing direct checkpoint")?;
+        assert!(exact.original_lease(&fixture.lease));
+        assert!(exact.original_device(&fixture.lease));
+        assert!(exact.container_bytes() > 2_400_109);
+        let key = GenerationDek::new(
+            KeyId::parse("native_direct_checkpoint_key_01")?, [0x39; 32],
+        );
+        let report = open_generation_streaming(
+            exact.ciphertext().reader(), &key, &mut std::io::sink(),
+        )?;
+        assert_eq!(report.metadata().generation_id(), &fixture.next);
+        assert_eq!(report.metadata().base_generation_id(), Some(&fixture.n));
+        exact.ciphertext().recheck_and_rewind()?;
+
+        let canonical = attempt_path(
+            &fixture.root, &fixture.tenant, &fixture.profile, &fixture.next,
+        );
+        assert!(canonical.exists());
+        for entry in fs::read_dir(fixture.root.path())? {
+            let name = entry?.file_name().to_string_lossy().into_owned();
+            assert!(!name.contains(".pending-"), "successful attempt left a torn stage");
+            assert!(!name.ends_with(".bpgc"), "no secondary ciphertext spool");
+        }
+        assert_eq!(
+            persist_streaming_exact_save_attempt_from_native(
+                &fixture.root, &source, &candidate, &fixture.lease, &mut keys,
+            ),
+            Err(SaveAttemptEvidenceError::Changed),
+        );
+        assert_eq!(keys.calls, 1, "no fresh nonce/key on duplicate exact attempt");
+        assert_eq!(fs::read(source.path().join("prefs.js"))?, b"native preferences");
+        assert_eq!(source.inventory()?, candidate.inventory()?);
+        Ok(())
+    }
+
+    #[test]
+    fn mutation_while_selecting_key_blocks_direct_checkpoint_and_preserves_native()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let fixture = Fixture::new()?;
+        let (source, candidate) = fixture.native()?;
+        let changed = candidate.path().join("prefs.js");
+        let mut keys = Keys {
+            calls: 0,
+            mutate: Some(changed.clone()),
+        };
+        assert_eq!(
+            persist_streaming_exact_save_attempt_from_native(
+                &fixture.root, &source, &candidate, &fixture.lease, &mut keys,
+            ),
+            Err(SaveAttemptEvidenceError::Changed),
+        );
+        assert_eq!(keys.calls, 1);
+        assert!(!attempt_path(
+            &fixture.root, &fixture.tenant, &fixture.profile, &fixture.next,
+        ).exists());
+        assert_eq!(fs::read(source.path().join("prefs.js"))?, b"native preferences");
+        assert_eq!(fs::read(changed)?, b"mutated same-length Firefox WAL");
+        Ok(())
+    }
+}
+
+#[cfg(test)]
 mod streaming_checkpoint_tests {
     use super::{
         SaveAttemptEvidenceError, attempt_path, inspect_streaming_exact_save_attempt,
