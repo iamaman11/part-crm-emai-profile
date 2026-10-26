@@ -154,10 +154,10 @@ mod tests {
         let mut changed = fs::OpenOptions::new().write(true).open(&path)?;
         changed.write_all(b"BPGC0001mutated-ciphertext")?;
         changed.sync_all()?;
-        assert_eq!(
-            spool.recheck_and_rewind().unwrap_err().kind(),
-            io::ErrorKind::InvalidData,
-        );
+        assert!(matches!(
+            spool.recheck_and_rewind(),
+            Err(ref error) if error.kind() == io::ErrorKind::InvalidData,
+        ));
         assert!(path.exists(), "uncertain ciphertext is never deleted");
         assert!(VerifiedGenerationObjectFile::open(
             &path, original.len() as u64, fingerprint(original),
