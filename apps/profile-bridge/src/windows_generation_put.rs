@@ -57,7 +57,8 @@ impl SignedGenerationObjectPutPort for WindowsSignedGenerationObjectPut {
         if container.is_empty() || container.len() > MAX_GENERATION_CONTAINER_BYTES {
             return Err(BridgePortError::InvalidResponse);
         }
-        self.put_bounded_source(capability, &mut container.as_ref(), container.len() as u64)
+        let mut reader = container;
+        self.put_bounded_source(capability, &mut reader, container.len() as u64)
     }
 }
 
@@ -145,10 +146,13 @@ impl WindowsSignedGenerationObjectPut {
         let mut child = command.spawn().map_err(|_| BridgePortError::Unavailable)?;
         // Preserve bounded RAM for 512 MiB spools. A short read, extra
         // trailing byte, or changed source is NOT a successful PUT.
-        let mut upload = || -> Result<(), BridgePortError> {
+        let result = (|| -> Result<(), BridgePortError> {
             let mut stdin = child.stdin.take().ok_or(BridgePortError::Unavailable)?;
-            let copied = std::io::copy(&mut source.take(expected_bytes), &mut stdin)
-                .map_err(|_| BridgePortError::Unavailable)?;
+            let copied = std::io::copy(
+                &mut (&mut *source).take(expected_bytes),
+                &mut stdin,
+            )
+            .map_err(|_| BridgePortError::Unavailable)?;
             if copied != expected_bytes {
                 return Err(BridgePortError::InvalidResponse);
             }
@@ -158,8 +162,8 @@ impl WindowsSignedGenerationObjectPut {
                 return Err(BridgePortError::InvalidResponse);
             }
             Ok(())
-        };
-        if let Err(error) = upload() {
+        })();
+        if let Err(error) = result {
             let _ = child.kill();
             let _ = child.wait();
             return Err(error);
