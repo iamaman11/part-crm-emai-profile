@@ -26,7 +26,7 @@ MAX_LOGICAL_PEAK_DISK = 2_304 * MIB  # 512 MiB native + ciphertext + BPGW + rest
 def compiled_library_test() -> Path:
     result = subprocess.run(
         [
-            "cargo", "test", "--locked", "-p", "profile-bridge", "--lib",
+            "cargo", "test", "--release", "--locked", "-p", "profile-bridge", "--lib",
             "--features", "synthetic-test-bin", "--no-run", "--message-format=json",
         ],
         check=True,
@@ -142,6 +142,7 @@ def main() -> int:
     elapsed = time.monotonic() - started
     print(
         f"K2_MEASURED_FILE_STREAM exact_test={TEST} source=256/512MiB"
+        f" rust_build_profile=release"
         f" peak_process_rss_bytes={peak_rss}"
         f" peak_fixture_logical_disk_bytes={peak_disk}"
         f" memory_samples={memory_samples} elapsed_seconds={elapsed:.1f}",
