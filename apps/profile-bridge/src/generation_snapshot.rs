@@ -942,6 +942,24 @@ mod tests {
                 assert_eq!(&expected[..count], &actual[..count]);
             }
             assert_eq!(source.inventory()?, inventory);
+            reopened.seek(SeekFrom::Start(0))?;
+            let restored = materialize_workspace_snapshot_streaming_with_pre_publish(
+                &fixture.root,
+                &fixture.tenant_id,
+                &fixture.profile_id,
+                opened.metadata().generation_id(),
+                &mut reopened,
+                StreamedWorkspaceSnapshot {
+                    plaintext_bytes: opened.metadata().plaintext_bytes(),
+                    plaintext_digest: opened.metadata().plaintext_digest().bytes(),
+                },
+                |_| Ok(()),
+            )?;
+            assert_eq!(restored.inventory()?, inventory);
+            assert_eq!(
+                fs::read(restored.path().join("user_data/cookies.sqlite-wal"))?,
+                vec![0x4a; 3_700_016],
+            );
             Ok::<(), Box<dyn std::error::Error>>(())
         })();
         fixture.cleanup();
@@ -1004,6 +1022,42 @@ mod tests {
         fixture.cleanup();
         result
     }
+    #[test]
+    fn stream_restore_pre_publish_failure_never_exposes_generation_and_is_retryable()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let fixture = Fixture::new()?;
+        let result = (|| {
+            let generation = GenerationId::parse("generation_unpublished_stream_crash")?;
+            let snapshot = raw_snapshot(&[("prefs.js", b"retained-firefox")]);
+            let expected = StreamedWorkspaceSnapshot {
+                plaintext_bytes: snapshot.len() as u64,
+                plaintext_digest: sha2::Sha256::digest(&snapshot).into(),
+            };
+            assert_eq!(
+                materialize_workspace_snapshot_streaming_with_pre_publish(
+                    &fixture.root, &fixture.tenant_id, &fixture.profile_id,
+                    &generation, &mut snapshot.as_slice(), expected,
+                    |_| Err(GenerationSnapshotError::PrePublish),
+                ).err(),
+                Some(GenerationSnapshotError::PrePublish),
+            );
+            assert!(fixture.root.open_generation(
+                &fixture.tenant_id, &fixture.profile_id, &generation,
+            ).is_err());
+            let recovered = materialize_workspace_snapshot_streaming_with_pre_publish(
+                &fixture.root, &fixture.tenant_id, &fixture.profile_id,
+                &generation, &mut snapshot.as_slice(), expected, |_| Ok(()),
+            )?;
+            assert_eq!(
+                fs::read(recovered.path().join("prefs.js"))?,
+                b"retained-firefox",
+            );
+            Ok::<(), Box<dyn std::error::Error>>(())
+        })();
+        fixture.cleanup();
+        result
+    }
+
     #[test]
     fn streamed_snapshot_preserves_native_bytes_on_changed_file_and_failed_sink()
     -> Result<(), Box<dyn std::error::Error>> {
