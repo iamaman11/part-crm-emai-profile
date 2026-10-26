@@ -35,9 +35,9 @@ use crate::shipping_generation_save::{
     SignedGenerationObjectPutPort, prepare_retained_generation_successor,
     publish_verify_and_commit_successor,
 };
-use crate::shipping_generation_successor_control::GenerationSuccessorControlError;
 #[cfg(any(test, feature = "synthetic-test-bin"))]
 use crate::shipping_generation_successor_control::ControlPlaneGenerationSuccessor;
+use crate::shipping_generation_successor_control::GenerationSuccessorControlError;
 #[cfg(any(windows, test))]
 use crate::shipping_generation_successor_control::{
     RestartExactLocalCompletionError, publish_streamed_exact_under_writer,
@@ -46,17 +46,17 @@ use crate::shipping_save_attempt::{
     SaveAttemptEvidenceError, has_unresolved_save_attempt_for_profile,
     persist_local_unsynced_intent,
 };
-#[cfg(any(test, feature = "synthetic-test-bin"))]
-use crate::shipping_save_attempt::{
-    inspect_exact_save_attempt, persist_exact_save_attempt, retire_fully_saved_attempt,
-    retire_local_unsynced_after_exact_checkpoint,
-};
 #[cfg(any(windows, test))]
 use crate::shipping_save_attempt::{
     ScopedPendingSaveEvidence, classify_scoped_pending_save_evidence,
     discover_unresolved_streaming_exact_save_attempt, original_local_unsynced_successor,
     persist_streaming_exact_save_attempt_from_native, retire_fully_saved_streaming_attempt,
     retire_local_unsynced_after_streamed_checkpoint,
+};
+#[cfg(any(test, feature = "synthetic-test-bin"))]
+use crate::shipping_save_attempt::{
+    inspect_exact_save_attempt, persist_exact_save_attempt, retire_fully_saved_attempt,
+    retire_local_unsynced_after_exact_checkpoint,
 };
 #[cfg(any(test, feature = "synthetic-test-bin"))]
 use application_ports::generation_objects::{
