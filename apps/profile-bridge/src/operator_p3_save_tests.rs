@@ -749,6 +749,99 @@ fn streaming_retry_after_failed_put_preserves_exact_n_plus_one()
 }
 
 #[test]
+fn streaming_lost_commit_response_never_invents_another_successor_or_blind_put()
+-> Result<(), Box<dyn std::error::Error>> {
+    let fixture = Fixture::new("stream-commit-unknown")?;
+    let mut operator = fixture.operator()?;
+    fixture.open_mutate_and_close(&mut operator)?;
+    persist_local_unsynced_intent(&fixture.root, &fixture.base_workspace()?, &fixture.lease)?;
+    let paths = Rc::new(RefCell::new(Vec::new()));
+    let puts = Rc::new(Cell::new(0));
+    // R2 accepted and the server independently verified the exact object,
+    // but the commit POST response was lost. It may already be ACTIVE_EXACT.
+    let first = operator.save_retained_successor_streaming(
+        &fixture.root,
+        StreamTransport {
+            responses: VecDeque::from([
+                MachineHttpResponse::new(200, br#"{"verdict":"NOT_APPLIED_RETRYABLE"}"#.to_vec()),
+                upload_required_response()?,
+                verified_response()?,
+            ]),
+            paths: Rc::clone(&paths),
+        },
+        &mut Put {
+            fail: false,
+            calls: Rc::clone(&puts),
+        },
+        UnixMillis::new(30),
+    );
+    assert!(matches!(
+        first,
+        Err(OperatorFlowError::GenerationSave {
+            reason: GenerationSaveFailureReason::ControlTransport,
+        })
+    ));
+    assert_eq!(puts.get(), 1);
+    assert_eq!(paths.borrow().len(), 4);
+    let tenant = fixture.actor.tenant_scope().tenant_id();
+    let checkpoint = discover_unresolved_streaming_exact_save_attempt(
+        &fixture.root,
+        tenant,
+        &fixture.profile_id,
+    )?
+    .ok_or("original streamed attempt is missing after unknown commit")?;
+    let successor = checkpoint.successor_id().to_owned();
+    let digest = checkpoint.container_digest().to_owned();
+    drop(checkpoint);
+    assert!(operator.has_pending_dirty_close());
+    fixture.assert_base_lock_held()?;
+    assert_eq!(operator.coordinator().sealing_requests, 1);
+
+    // A blocked fresh server nonapplication decision never licenses another
+    // signed PUT, new seal, local retirement or claim that N+1 was unsaved.
+    let second_paths = Rc::new(RefCell::new(Vec::new()));
+    let second = operator.save_retained_successor_streaming(
+        &fixture.root,
+        StreamTransport {
+            responses: VecDeque::from([MachineHttpResponse::new(
+                200,
+                br#"{"verdict":"BLOCKED"}"#.to_vec(),
+            )]),
+            paths: Rc::clone(&second_paths),
+        },
+        &mut Put {
+            fail: false,
+            calls: Rc::clone(&puts),
+        },
+        UnixMillis::new(40),
+    );
+    assert!(matches!(
+        second,
+        Err(OperatorFlowError::GenerationSave {
+            reason: GenerationSaveFailureReason::ControlRejected,
+        })
+    ));
+    assert_eq!(second_paths.borrow().len(), 1);
+    assert_eq!(puts.get(), 1);
+    assert_eq!(operator.coordinator().sealing_requests, 1);
+    let original = discover_unresolved_streaming_exact_save_attempt(
+        &fixture.root,
+        tenant,
+        &fixture.profile_id,
+    )?
+    .ok_or("original N+1 must survive a blocked lost-commit retry")?;
+    assert_eq!(original.successor_id(), successor);
+    assert_eq!(original.container_digest(), digest);
+    assert!(operator.has_pending_dirty_close());
+    fixture.assert_base_lock_held()?;
+    assert_eq!(
+        fs::read(fixture.base_workspace()?.path().join("prefs.js"))?,
+        b"mutated-after-launch"
+    );
+    Ok(())
+}
+
+#[test]
 fn streaming_retry_rejects_changed_native_bytes_without_network_or_n_plus_two()
 -> Result<(), Box<dyn std::error::Error>> {
     let fixture = Fixture::new("stream-mutated-retry")?;
