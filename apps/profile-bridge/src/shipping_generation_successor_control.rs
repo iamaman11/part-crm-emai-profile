@@ -304,19 +304,18 @@ pub(crate) fn complete_active_exact_after_restart<T: MachineHttpPort>(
     // Inspect the ONE canonical BPAT with bounded memory before the legacy
     // lone-intent classifier: a 512 MiB verified checkpoint must not hit the
     // old full-ciphertext 64 MiB read. This is still the SAME completion owner.
-    match discover_unresolved_streaming_exact_save_attempt(root, tenant_id, profile_id) {
-        Ok(Some(streamed)) => {
-            return complete_streamed_exact_under_fresh_claim(
-                root,
-                tenant_id,
-                profile_id,
-                selected_generation,
-                fresh_lease,
-                streamed,
-                transport,
-            );
-        }
-        Ok(None) | Err(_) => {}
+    if let Ok(Some(streamed)) =
+        discover_unresolved_streaming_exact_save_attempt(root, tenant_id, profile_id)
+    {
+        return complete_streamed_exact_under_fresh_claim(
+            root,
+            tenant_id,
+            profile_id,
+            selected_generation,
+            fresh_lease,
+            streamed,
+            transport,
+        );
     }
     let pending = classify_scoped_pending_save_evidence(root, tenant_id, profile_id)
         .map_err(|_| RestartExactLocalCompletionError::LocalEvidenceChanged)?;
