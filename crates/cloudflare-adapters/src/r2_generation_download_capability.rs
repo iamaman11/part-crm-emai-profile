@@ -2,7 +2,7 @@ use application_ports::generation_objects::GenerationObjectDescriptor;
 use control_plane_contract::generation_reopen_api::GENERATION_DOWNLOAD_CAPABILITY_MAX_EXPIRES_SECONDS;
 use core::fmt;
 use encrypted_generation_domain::{
-    MAX_GENERATION_CONTAINER_BYTES, canonical_generation_object_key,
+    MAX_STREAM_CONTAINER_BYTES, canonical_generation_object_key,
 };
 use profile_platform_primitives::TenantScope;
 use sha2::{Digest, Sha256};
@@ -225,11 +225,12 @@ fn validate_descriptor(
         descriptor.profile_id(),
         descriptor.generation_id(),
     );
-    let max_container_bytes = u64::try_from(MAX_GENERATION_CONTAINER_BYTES)
-        .map_err(|_| R2GenerationDownloadCapabilityError::InvalidDescriptor)?;
+    // Cold-reopen GET must accept the same bounded BPGC streamed by Windows
+    // PUT and D1 successor CAS. The old 80 MiB Vec-only limit would strand
+    // any valid 256/512 MiB cloud generation after Save.
     if descriptor.object_key() != canonical_key
         || descriptor.container_bytes() == 0
-        || descriptor.container_bytes() > max_container_bytes
+        || descriptor.container_bytes() > MAX_STREAM_CONTAINER_BYTES
         || !is_lower_hex_sha256(descriptor.metadata_digest())
         || !is_lower_hex_sha256(descriptor.container_digest())
     {
@@ -339,7 +340,7 @@ mod tests {
     use application_ports::generation_objects::GenerationObjectDescriptor;
     use control_plane_contract::generation_reopen_api::GENERATION_DOWNLOAD_CAPABILITY_MAX_EXPIRES_SECONDS;
     use encrypted_generation_domain::{
-        MAX_GENERATION_CONTAINER_BYTES, canonical_generation_object_key,
+        MAX_STREAM_CONTAINER_BYTES, canonical_generation_object_key,
     };
     use profile_platform_primitives::{GenerationId, ProfileId, TenantId, TenantScope};
 
@@ -423,6 +424,35 @@ mod tests {
     }
 
     #[test]
+    fn signing_512_mib_streaming_restore_capability_is_metadata_only()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let scope = TenantScope::new(TenantId::parse("tenant_download_capability_01")?);
+        let base = descriptor()?;
+        // Actual BPGC ciphertext size from the measured 512 MiB Windows seal.
+        // Issuing a capability must not fetch or buffer its encrypted bytes.
+        let large = GenerationObjectDescriptor::new(
+            base.profile_id().clone(),
+            base.generation_id().clone(),
+            base.object_key(),
+            base.metadata_digest(),
+            base.container_digest(),
+            537_141_721,
+        );
+        let signed = signer()?.sign_get(
+            &scope,
+            &large,
+            &R2GenerationDownloadSigningTime::parse("20260829T120000Z")?,
+            GENERATION_DOWNLOAD_CAPABILITY_MAX_EXPIRES_SECONDS,
+        )?;
+        assert!(signed.url().starts_with("https://"));
+        assert!(signed.url().contains("X-Amz-SignedHeaders=host"));
+        assert!(!format!("{signed:?}").contains("X-Amz-Signature"));
+        assert!(large.container_bytes() > 83_886_080);
+        assert!(large.container_bytes() <= MAX_STREAM_CONTAINER_BYTES);
+        Ok(())
+    }
+
+    #[test]
     fn signer_rejects_noncanonical_unbounded_or_expired_descriptor()
     -> Result<(), Box<dyn std::error::Error>> {
         let tenant_id = TenantId::parse("tenant_download_capability_01")?;
@@ -456,7 +486,7 @@ mod tests {
             object_key,
             "d".repeat(64),
             "e".repeat(64),
-            u64::try_from(MAX_GENERATION_CONTAINER_BYTES)? + 1,
+            MAX_STREAM_CONTAINER_BYTES + 1,
         );
         assert!(
             signer()?
