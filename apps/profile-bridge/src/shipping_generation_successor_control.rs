@@ -2857,12 +2857,8 @@ mod tests {
         )?);
         let restored = root.open_generation(&fixture.tenant, &fixture.profile, &candidate)?;
         assert_eq!(std::fs::read(restored.path().join("prefs.js"))?, b"save");
-        let binding = load_materialization_binding(
-            &restored,
-            &fixture.tenant,
-            &fixture.profile,
-            &candidate,
-        )?;
+        let binding =
+            load_materialization_binding(&restored, &fixture.tenant, &fixture.profile, &candidate)?;
         assert_eq!(binding.source_container_sha256(), original_digest);
         Ok(())
     }
