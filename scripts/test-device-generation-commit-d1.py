@@ -41,11 +41,13 @@ def migration_files() -> list[Path]:
     return files
 
 
-def database() -> sqlite3.Connection:
+def database(*, before_k2: bool = False) -> sqlite3.Connection:
     connection = sqlite3.connect(":memory:")
     connection.row_factory = sqlite3.Row
     connection.execute("PRAGMA foreign_keys = ON")
     for migration in migration_files():
+        if before_k2 and migration.name == "0032_generation_streaming_container_limit.sql":
+            break
         connection.executescript(migration.read_text(encoding="utf-8"))
     connection.commit()
     return connection
@@ -202,8 +204,8 @@ def project_coordinator(
     )
 
 
-def seed() -> sqlite3.Connection:
-    connection = database()
+def seed(*, before_k2: bool = False) -> sqlite3.Connection:
+    connection = database(before_k2=before_k2)
     connection.execute(
         """
         INSERT INTO tenants (
@@ -435,6 +437,63 @@ def test_exact_command_atomically_verifies_activates_and_succeeds_job() -> None:
         ):
             expect_integrity_error(lambda statement=statement: connection.execute(statement, (TENANT, JOB)))
             connection.rollback()
+    finally:
+        connection.close()
+
+
+def test_k2_80_mib_to_608_mib_migration_preserves_historical_commands() -> None:
+    # Populate a pre-K2 production-like schema with a successful device commit.
+    # Upgrading must not erase journal, pointer, writer governance or immutable
+    # object metadata. The 80 MiB old limit is expected until the migration.
+    connection = seed(before_k2=True)
+    try:
+        insert_device_commit(connection, command_values())
+        connection.commit()
+        existing = connection.execute(
+            "SELECT * FROM device_generation_commit_commands WHERE tenant_id = ? AND job_id = ?",
+            (TENANT, JOB),
+        ).fetchone()
+        assert existing is not None and existing["container_bytes"] == 4096
+        pointer = connection.execute(
+            "SELECT active_generation_id FROM browser_profiles WHERE tenant_id = ? AND profile_id = ?",
+            (TENANT, PROFILE),
+        ).fetchone()
+        assert pointer is not None and pointer[0] == CANDIDATE
+        connection.executescript(
+            (MIGRATIONS / "0032_generation_streaming_container_limit.sql").read_text(encoding="utf-8")
+        )
+        actual = connection.execute(
+            "SELECT * FROM device_generation_commit_commands WHERE tenant_id = ? AND job_id = ?",
+            (TENANT, JOB),
+        ).fetchone()
+        assert actual is not None and tuple(actual) == tuple(existing)
+        assert connection.execute(
+            "SELECT active_generation_id FROM browser_profiles WHERE tenant_id = ? AND profile_id = ?",
+            (TENANT, PROFILE),
+        ).fetchone()[0] == CANDIDATE
+        assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
+        assert connection.execute(
+            "SELECT COUNT(*) FROM profile_generation_successor_commands "
+            "WHERE tenant_id = ? AND profile_id = ?",
+            (TENANT, PROFILE),
+        ).fetchone()[0] == 1
+        for statement, params in (
+            (
+                "UPDATE device_generation_commit_commands SET container_bytes = 1 "
+                "WHERE tenant_id = ? AND job_id = ?",
+                (TENANT, JOB),
+            ),
+            (
+                "DELETE FROM profile_generation_successor_commands "
+                "WHERE tenant_id = ? AND profile_id = ?",
+                (TENANT, PROFILE),
+            ),
+        ):
+            expect_integrity_error(
+                lambda statement=statement, params=params: connection.execute(statement, params)
+            )
+            connection.rollback()
+        assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
     finally:
         connection.close()
 
@@ -686,6 +745,7 @@ def test_direct_generation_mutations_remain_governed() -> None:
 def main() -> int:
     test_schema_is_metadata_only()
     test_exact_command_atomically_verifies_activates_and_succeeds_job()
+    test_k2_80_mib_to_608_mib_migration_preserves_historical_commands()
     test_512_mib_streamed_container_commits_with_original_governance()
     test_stale_claim_profile_and_malformed_rows_fail_closed()
     test_revoked_binding_and_authorization_fail_closed()
