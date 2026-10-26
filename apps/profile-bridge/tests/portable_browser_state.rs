@@ -575,7 +575,10 @@ mod p3_fixture {
             (request.clone(), bytes.clone())
         };
         let historical_metadata = inspect_generation_metadata_prelude(&historical_container)?;
-        assert_eq!(historical_metadata.metadata().key_id().as_str(), ROOT_KEY_ID);
+        assert_eq!(
+            historical_metadata.metadata().key_id().as_str(),
+            ROOT_KEY_ID
+        );
         // A physically separate disposable host root starts with NO local
         // profile bytes. The fixture's historical read-only authority serves
         // precisely the immutable old object, while live CURRENT remains N+2.
