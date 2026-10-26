@@ -809,15 +809,15 @@ pub(crate) fn confirm_retained_exact_retry_nonapplication<T: MachineHttpPort>(
 ) -> Result<bool, RestartExactLocalCompletionError> {
     let tenant = original_lease.tenant_id();
     let profile = original_lease.profile_id();
-    let exact = discover_unresolved_exact_save_attempt(root, tenant, profile)
+    let exact = discover_unresolved_streaming_exact_save_attempt(root, tenant, profile)
         .map_err(|_| RestartExactLocalCompletionError::LocalEvidenceChanged)?
         .ok_or(RestartExactLocalCompletionError::LocalEvidenceChanged)?;
-    if !exact.matches_original_lease(original_lease) || !exact.matches_fresh_device(original_lease)
+    if !exact.original_lease(original_lease) || !exact.original_device(original_lease)
     {
         return Err(RestartExactLocalCompletionError::LocalEvidenceChanged);
     }
     Ok(
-        request_fresh_retry_decision(tenant, profile, &exact, original_lease, transport)
+        request_fresh_retry_decision_streamed(tenant, profile, &exact, original_lease, transport)
             .map_err(RestartExactLocalCompletionError::ControlPlane)?
             == BridgeGenerationSuccessorRetryVerdict::NotAppliedRetryable,
     )
