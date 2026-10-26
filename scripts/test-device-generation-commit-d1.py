@@ -439,6 +439,29 @@ def test_exact_command_atomically_verifies_activates_and_succeeds_job() -> None:
         connection.close()
 
 
+def test_512_mib_streamed_container_commits_with_original_governance() -> None:
+    # This is a real D1 command-limit test; no 512 MiB allocation is needed.
+    # The live Rust file-stream proof reports exactly this ciphertext size.
+    connection = seed()
+    try:
+        large = 537_141_721
+        insert_device_commit(connection, command_values(container_bytes=large))
+        row = connection.execute(
+            "SELECT container_bytes FROM device_generation_commit_commands WHERE tenant_id = ? AND job_id = ?",
+            (TENANT, JOB),
+        ).fetchone()
+        assert row is not None and row[0] == large
+        assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
+        expect_integrity_error(
+            lambda: connection.execute(
+                "DELETE FROM device_generation_commit_commands WHERE tenant_id = ? AND job_id = ?",
+                (TENANT, JOB),
+            )
+        )
+    finally:
+        connection.close()
+
+
 def test_stale_claim_profile_and_malformed_rows_fail_closed() -> None:
     cases = (
         command_values(claim_fence=2),
@@ -451,7 +474,7 @@ def test_stale_claim_profile_and_malformed_rows_fail_closed() -> None:
         command_values(metadata_digest="A" * 64),
         command_values(container_digest="g" * 64),
         command_values(container_bytes=0),
-        command_values(container_bytes=83_886_081),
+        command_values(container_bytes=637_534_209),
         command_values(coordinator_version=4, coordinator_sequence=2),
     )
     for values in cases:
