@@ -256,7 +256,11 @@ fn deployed_runtime_prefix_is_context_only_and_retains_all_migration_gates()
     assert_eq!(plan["target_revision"], STREAMING_GENERATION_REVISION);
     assert_eq!(
         plan["planned_migrations"],
-        json!([SUCCESSOR_CONTRACT_REVISION, INITIAL_GENERATION_REVISION, STREAMING_GENERATION_REVISION])
+        json!([
+            SUCCESSOR_CONTRACT_REVISION,
+            INITIAL_GENERATION_REVISION,
+            STREAMING_GENERATION_REVISION
+        ])
     );
     assert_eq!(
         plan["planned_migration_contracts"][0]["rollout_order"],

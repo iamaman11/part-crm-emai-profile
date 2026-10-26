@@ -331,7 +331,10 @@ fn actual_deployed_context_traverses_separate_sealed_contract_and_current_expand
         } else {
             &history[count]
         };
-        assert_eq!(tx.transaction_plan.schema_target, *expected_transaction_target);
+        assert_eq!(
+            tx.transaction_plan.schema_target,
+            *expected_transaction_target
+        );
         let auth = json!({"schema_version":1,"transaction_id":tx.transaction_id,"target":tx.transaction_plan.target,"phase":phase,
             "authorized_provider_effects":tx.transaction_plan.allowed_provider_effects,"issued_at_unix_seconds":now,"expires_at_unix_seconds":now+800,
             "observation_fresh_until_unix_seconds":now+900,"authorization_reference":"fixture:exact-human-authorization"});
