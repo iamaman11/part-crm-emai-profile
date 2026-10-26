@@ -513,6 +513,7 @@ mod tests {
     use profile_platform_primitives::{DeviceId, GenerationId, ProfileId, TenantId};
     use sha2::{Digest, Sha256};
     use std::fs;
+    use std::io::Write;
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -726,6 +727,163 @@ mod tests {
             self.calls += 1;
             Ok(self.container.clone())
         }
+    }
+
+    /// Exercise the real owner through the additive file path, never the
+    /// legacy Vec download. The source is a previously sealed BPGC container.
+    struct FakeStreamDownloader {
+        container: Vec<u8>,
+        calls: u64,
+    }
+
+    impl GenerationObjectDownloadPort for FakeStreamDownloader {
+        type Error = GenerationObjectDownloadError;
+
+        fn download_generation_object(
+            &mut self,
+            _capability: &GenerationDownloadCapability,
+        ) -> Result<Vec<u8>, Self::Error> {
+            Err(GenerationObjectDownloadError::InvalidCapability)
+        }
+
+        fn download_generation_object_to_new_pending_file(
+            &mut self,
+            capability: &GenerationDownloadCapability,
+            destination: &std::path::Path,
+        ) -> Result<Option<crate::generation_object_spool::VerifiedGenerationObjectFile>, Self::Error>
+        {
+            if u64::try_from(self.container.len()).ok() != Some(capability.container_bytes())
+                || <[u8; 32]>::from(Sha256::digest(&self.container))
+                    != capability.container_digest()
+            {
+                return Err(GenerationObjectDownloadError::DigestMismatch);
+            }
+            let mut output = fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(destination)
+                .map_err(|_| GenerationObjectDownloadError::Transport)?;
+            output
+                .write_all(&self.container)
+                .map_err(|_| GenerationObjectDownloadError::Transport)?;
+            output
+                .sync_all()
+                .map_err(|_| GenerationObjectDownloadError::Transport)?;
+            drop(output);
+            self.calls += 1;
+            let verified = crate::generation_object_spool::VerifiedGenerationObjectFile::open(
+                destination,
+                capability.container_bytes(),
+                capability.container_digest(),
+            )
+            .map_err(|_| GenerationObjectDownloadError::DigestMismatch)?;
+            Ok(Some(verified))
+        }
+    }
+
+    #[test]
+    fn cold_streamed_reopen_authenticates_before_materialization_and_reuses_binding()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let fixture = Fixture::new()?;
+        let mut control = fixture.control();
+        let mut downloader = FakeStreamDownloader {
+            container: fixture.container.clone(),
+            calls: 0,
+        };
+        let device = DeviceId::parse("device_authgen_streamed")?;
+        ensure_authoritative_generation(
+            &fixture.root,
+            &fixture.tenant_id,
+            &fixture.profile_id,
+            &fixture.generation_id,
+            &device,
+            3,
+            &mut control,
+            &mut downloader,
+        )?;
+        ensure_authoritative_generation(
+            &fixture.root,
+            &fixture.tenant_id,
+            &fixture.profile_id,
+            &fixture.generation_id,
+            &device,
+            4,
+            &mut control,
+            &mut downloader,
+        )?;
+        assert_eq!(downloader.calls, 1);
+        assert_eq!(control.opening_calls, 1);
+        let materialized = fixture.root.open_generation(
+            &fixture.tenant_id,
+            &fixture.profile_id,
+            &fixture.generation_id,
+        )?;
+        assert_eq!(
+            fs::read(materialized.path().join("user_data/storage/state.bin"))?,
+            b"authoritative-state"
+        );
+        assert_eq!(
+            fs::read(materialized.path().join(BROWSER_IDENTITY_RECORD_FILE))?,
+            fixture.browser_identity_record
+        );
+        assert!(load_materialization_binding(
+            &materialized,
+            &fixture.tenant_id,
+            &fixture.profile_id,
+            &fixture.generation_id
+        ).is_ok());
+        let digest = encode_sha256(fixture.container_digest);
+        assert!(!fixture.root.path().join(format!(".pending-r2-{digest}")).exists());
+        assert!(!fixture.root.path().join(format!(".pending-bpgw-{digest}")).exists());
+        fixture.cleanup();
+        Ok(())
+    }
+
+    #[test]
+    fn cold_streamed_reopen_rejects_tampered_aead_without_publishing_browser_files()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let fixture = Fixture::new()?;
+        let mut body = fixture.container.clone();
+        let last = body.len() - 1;
+        body[last] ^= 0x41;
+        let mut control = fixture.control();
+        control.container_digest = Sha256::digest(&body).into();
+        let mut downloader = FakeStreamDownloader {
+            container: body,
+            calls: 0,
+        };
+        let outcome = ensure_authoritative_generation(
+            &fixture.root,
+            &fixture.tenant_id,
+            &fixture.profile_id,
+            &fixture.generation_id,
+            &DeviceId::parse("device_authgen_streamed_reject")?,
+            3,
+            &mut control,
+            &mut downloader,
+        );
+        assert_eq!(
+            outcome,
+            Err(AuthoritativeGenerationMaterializationError::ReadBeforeLocalUse(
+                AuthoritativeGenerationPreWriteError::Decryption
+            ))
+        );
+        assert_eq!(control.opening_calls, 1);
+        assert_eq!(downloader.calls, 1);
+        assert!(matches!(
+            fixture.root.open_generation(
+                &fixture.tenant_id,
+                &fixture.profile_id,
+                &fixture.generation_id
+            ),
+            Err(crate::local_profile::LocalProfileError::Io(std::io::ErrorKind::NotFound))
+        ));
+        assert!(fixture.root.path().join(format!(
+            ".pending-r2-{}",
+            encode_sha256(control.container_digest)
+        )).exists());
+        fixture.cleanup();
+        Ok(())
     }
 
     #[test]
