@@ -3,6 +3,7 @@ use crate::dirty_generation::{
     prepare_dirty_generation_candidate,
 };
 use crate::local_profile::{GenerationWorkspace, LocalGenerationRecord, MaterializationRoot};
+use crate::generation_object_spool::VerifiedGenerationObjectFile;
 use profile_platform_primitives::{GenerationId, ProfileId, TenantId};
 use session_domain::ProfileLease;
 use sha2::{Digest, Sha256};
@@ -125,6 +126,20 @@ pub trait SignedGenerationObjectPutPort {
         &mut self,
         capability: &SignedGenerationUploadCapability,
         container: &[u8],
+    ) -> Result<(), Self::Error>;
+}
+
+/// Additive file-only R2 transport contract. Does not change the existing
+/// in-memory P3 upload. A caller must first durably publish and revalidate
+/// its original sealed checkpoint and obtain a fresh signed R2 capability.
+/// The adapter must stream exactly the authenticated spool bytes and refuse
+/// success if they changed before/after transfer. D1 verification + CAS
+/// commit remains owned by the existing successor control plane.
+pub trait SignedGenerationObjectStreamPutPort: SignedGenerationObjectPutPort {
+    fn put_verified_stream(
+        &mut self,
+        capability: &SignedGenerationUploadCapability,
+        object: &mut VerifiedGenerationObjectFile,
     ) -> Result<(), Self::Error>;
 }
 
