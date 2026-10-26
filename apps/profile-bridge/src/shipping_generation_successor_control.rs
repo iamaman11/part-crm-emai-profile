@@ -730,14 +730,8 @@ where
         .ciphertext()
         .recheck_and_rewind()
         .map_err(|_| RestartExactLocalCompletionError::LocalEvidenceChanged)?;
-    if request_fresh_retry_decision_streamed(
-        tenant_id,
-        profile_id,
-        &exact,
-        fresh_lease,
-        transport,
-    )
-    .map_err(RestartExactLocalCompletionError::ControlPlane)?
+    if request_fresh_retry_decision_streamed(tenant_id, profile_id, &exact, fresh_lease, transport)
+        .map_err(RestartExactLocalCompletionError::ControlPlane)?
         != BridgeGenerationSuccessorRetryVerdict::NotAppliedRetryable
     {
         return Ok(None);
@@ -774,13 +768,12 @@ where
                 ShippingControlPlaneError::InvalidResponse,
             ));
         }
-        let decoded =
-            serde_json::from_slice::<BridgeGenerationUploadCapabilityResponse>(&bytes)
-                .map_err(|_| {
-                    RestartExactLocalCompletionError::ControlPlane(
-                        ShippingControlPlaneError::InvalidResponse,
-                    )
-                })?;
+        let decoded = serde_json::from_slice::<BridgeGenerationUploadCapabilityResponse>(&bytes)
+            .map_err(|_| {
+                RestartExactLocalCompletionError::ControlPlane(
+                    ShippingControlPlaneError::InvalidResponse,
+                )
+            })?;
         decode_upload_authorization::<core::convert::Infallible>(decoded).map_err(|error| {
             match error {
                 GenerationSuccessorControlError::ControlPlane(reason) => {
@@ -826,14 +819,12 @@ where
             ShippingControlPlaneError::InvalidResponse,
         ));
     }
-    let committed = serde_json::from_slice::<BridgeGenerationSuccessorCommitResponse>(
-        &response,
-    )
-    .map_err(|_| {
-        RestartExactLocalCompletionError::ControlPlane(
-            ShippingControlPlaneError::InvalidResponse,
-        )
-    })?;
+    let committed = serde_json::from_slice::<BridgeGenerationSuccessorCommitResponse>(&response)
+        .map_err(|_| {
+            RestartExactLocalCompletionError::ControlPlane(
+                ShippingControlPlaneError::InvalidResponse,
+            )
+        })?;
     exact
         .ciphertext()
         .recheck_and_rewind()
@@ -875,8 +866,7 @@ pub(crate) fn confirm_retained_exact_retry_nonapplication<T: MachineHttpPort>(
     let exact = discover_unresolved_streaming_exact_save_attempt(root, tenant, profile)
         .map_err(|_| RestartExactLocalCompletionError::LocalEvidenceChanged)?
         .ok_or(RestartExactLocalCompletionError::LocalEvidenceChanged)?;
-    if !exact.original_lease(original_lease) || !exact.original_device(original_lease)
-    {
+    if !exact.original_lease(original_lease) || !exact.original_device(original_lease) {
         return Err(RestartExactLocalCompletionError::LocalEvidenceChanged);
     }
     Ok(
