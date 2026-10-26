@@ -301,11 +301,61 @@ impl<T: SignedGenerationObjectStreamGetPort> GenerationObjectDownloadPort
 
     fn download_generation_object(
         &mut self,
-        _capability: &GenerationDownloadCapability,
+        capability: &GenerationDownloadCapability,
     ) -> Result<Vec<u8>, Self::Error> {
-        // A previously incomplete local workspace must not be replaced by a
-        // cold remote read, and 512 MiB must never fall back to a Vec.
-        Err(GenerationObjectDownloadError::InvalidCapability)
+        // Narrow legacy compatibility for *already existing* local bytes
+        // missing only the host-local binding. A 512 MiB object is never
+        // allocated in memory. The existing authoritative owner must compare
+        // every native Firefox byte under its OS lock before repairing binding.
+        let expected = usize::try_from(capability.container_bytes())
+            .map_err(|_| GenerationObjectDownloadError::InvalidCapability)?;
+        if expected == 0 || expected > MAX_GENERATION_CONTAINER_BYTES {
+            return Err(GenerationObjectDownloadError::InvalidCapability);
+        }
+        let url = capability
+            .signed_url()
+            .ok_or(GenerationObjectDownloadError::InvalidCapability)?;
+        struct BoundedLegacyWriter {
+            bytes: Vec<u8>,
+            ceiling: usize,
+        }
+        impl Write for BoundedLegacyWriter {
+            fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+                let next = self.bytes.len().checked_add(bytes.len()).ok_or_else(|| {
+                    io::Error::new(io::ErrorKind::InvalidData, "generation object overflow")
+                })?;
+                if next > self.ceiling {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "generation object exceeded descriptor",
+                    ));
+                }
+                self.bytes.extend_from_slice(bytes);
+                Ok(bytes.len())
+            }
+
+            fn flush(&mut self) -> io::Result<()> {
+                Ok(())
+            }
+        }
+        let mut writer = BoundedLegacyWriter {
+            bytes: Vec::new(),
+            ceiling: expected,
+        };
+        let status = self
+            .transport
+            .get_exact_stream(url, capability.container_bytes(), &mut writer)
+            .map_err(|_| GenerationObjectDownloadError::Transport)?;
+        if status != 200 {
+            return Err(GenerationObjectDownloadError::HttpStatus);
+        }
+        if writer.bytes.len() != expected {
+            return Err(GenerationObjectDownloadError::SizeMismatch);
+        }
+        if <[u8; 32]>::from(Sha256::digest(&writer.bytes)) != capability.container_digest() {
+            return Err(GenerationObjectDownloadError::DigestMismatch);
+        }
+        Ok(writer.bytes)
     }
 
     fn download_generation_object_to_new_pending_file(
@@ -728,6 +778,49 @@ mod tests {
         object.recheck_and_rewind()?;
         assert_eq!(object.expected_bytes(), expected.container_bytes());
         drop(object);
+        std::fs::remove_dir_all(dir)?;
+        Ok(())
+    }
+
+    #[test]
+    fn streamed_transport_legacy_incomplete_workspace_fallback_is_strictly_bounded()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let dir = std::env::temp_dir().join(format!(
+            "k2-legacy-fallback-{}",
+            std::process::id()
+        ));
+        // A missing fixture from a previous failed test must not be silently
+        // overwritten. Distinct test components use distinct generation IDs.
+        let file = dir.join("existing-ciphertext");
+        std::fs::create_dir(&dir)?;
+        let data = b"bounded legacy encrypted bytes";
+        std::fs::write(&file, data)?;
+        let generation = GenerationId::parse("generation_legacy_stream_bridge")?;
+        let descriptor = GenerationDownloadCapability::new(
+            generation,
+            "tenants/t/profiles/p/generations/g.bpgc".to_owned(),
+            [0x77; 32],
+            Sha256::digest(data).into(),
+            data.len() as u64,
+            "https://0123456789abcdef0123456789abcdef.r2.cloudflarestorage.com/bucket/item?X-Amz-Signature=SECRET".to_owned(),
+            120,
+        );
+        let mut downloader = VerifiedGenerationObjectStreamDownloader::new(StreamFileGet(file));
+        let result = downloader.download_generation_object(&descriptor)?;
+        assert_eq!(result, data);
+        let oversized = GenerationDownloadCapability::new(
+            GenerationId::parse("generation_legacy_stream_too_large")?,
+            "tenants/t/profiles/p/generations/g.bpgc".to_owned(),
+            [0x77; 32],
+            [0x99; 32],
+            (encrypted_generation_domain::MAX_GENERATION_CONTAINER_BYTES + 1) as u64,
+            "https://0123456789abcdef0123456789abcdef.r2.cloudflarestorage.com/bucket/item?X-Amz-Signature=SECRET".to_owned(),
+            120,
+        );
+        assert!(matches!(
+            downloader.download_generation_object(&oversized),
+            Err(GenerationObjectDownloadError::InvalidCapability)
+        ));
         std::fs::remove_dir_all(dir)?;
         Ok(())
     }
