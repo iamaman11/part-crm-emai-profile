@@ -27,8 +27,8 @@ use crate::shipping_save_attempt::{
 use crate::shipping_save_attempt::{
     ScopedPendingSaveEvidence, classify_scoped_pending_save_evidence,
     deterministic_lone_unsynced_successor, local_unsynced_matches_fresh_lease,
-    persist_exact_save_attempt_from_lone_intent,
-    retire_active_exact_attempt_after_restart, retire_matching_local_unsynced_after_restart,
+    persist_exact_save_attempt_from_lone_intent, retire_active_exact_attempt_after_restart,
+    retire_matching_local_unsynced_after_restart,
 };
 use control_plane_contract::profile_generation_api::{
     BRIDGE_PROFILE_GENERATION_COMMIT_PATH_TEMPLATE,
