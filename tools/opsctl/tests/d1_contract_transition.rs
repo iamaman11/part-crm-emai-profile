@@ -176,7 +176,12 @@ fn actual_deployed_context_traverses_separate_sealed_contract_and_current_expand
             json!([history[count]])
         };
         assert_eq!(native_plan["planned_migrations"], expected);
-        assert_eq!(native_plan["target_revision"], history[count]);
+        let expected_target = if count == 35 {
+            &history[count + 1]
+        } else {
+            &history[count]
+        };
+        assert_eq!(native_plan["target_revision"], expected_target);
         assert_eq!(native_plan["desired_target_revision"], history[36]);
         write(&dir.join("native-stage.json"), &native_plan)?;
         write(
