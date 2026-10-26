@@ -624,7 +624,9 @@ fn orphan_plan_protects_current_and_rollback_generations() -> Result<(), Box<dyn
     assert_eq!(plan.reclaimable_bytes(), 0);
     // The orphan is not a proven deletion candidate just because it is old.
     assert_eq!(
-        repository.record(orphan.generation_id()).map(|r| r.status()),
+        repository
+            .record(orphan.generation_id())
+            .map(|r| r.status()),
         Some(CloudGenerationStatus::Verified)
     );
     Ok(())
@@ -652,7 +654,12 @@ fn one_hundred_successive_pointer_commits_cannot_implicitly_prune_unknown_lkg()
     // This is a 100-commit synthetic NO-PRUNE guard, not 100 live R2
     // uploads or a bounded physical-retention acceptance.
     assert_eq!(repository.pointer().version(), 100);
-    assert_eq!(repository.support_summary()?.render_metadata_only().contains("total_generations=100"), true);
+    assert!(
+        repository
+            .support_summary()?
+            .render_metadata_only()
+            .contains("total_generations=100")
+    );
     Ok(())
 }
 

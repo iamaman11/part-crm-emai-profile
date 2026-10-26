@@ -452,11 +452,9 @@ mod tests {
     -> Result<(), Box<dyn std::error::Error>> {
         let mut records = Vec::new();
         for cycle in 0..100_u64 {
-            let generation_id = GenerationId::parse(format!(
-                "generation_local_retention_{cycle:03}"
-            ))?;
-            let mut record =
-                LocalGenerationRecord::new(generation_id, 64, UnixMillis::new(1));
+            let generation_id =
+                GenerationId::parse(format!("generation_local_retention_{cycle:03}"))?;
+            let mut record = LocalGenerationRecord::new(generation_id, 64, UnixMillis::new(1));
             record.set_locked(true)?;
             record.begin_use(UnixMillis::new(2))?;
             record.graceful_close(UnixMillis::new(3))?;
