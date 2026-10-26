@@ -381,16 +381,14 @@ fn matching_local_unsynced_for_header(
         && header.epoch == intent.epoch
         && header.session_fingerprint == intent.session_fingerprint
         && header.fencing_fingerprint == intent.fencing_fingerprint;
-    let recovered_seal = header.recovered_lone_origin
-        .as_ref()
-        .is_some_and(|origin| {
-            origin.epoch == intent.epoch
-                && origin.session_fingerprint == intent.session_fingerprint
-                && origin.fencing_fingerprint == intent.fencing_fingerprint
-                && header.epoch > origin.epoch
-                && deterministic_lone_successor(&intent)
-                    .is_ok_and(|candidate| candidate.as_str() == header.successor.as_str())
-        });
+    let recovered_seal = header.recovered_lone_origin.as_ref().is_some_and(|origin| {
+        origin.epoch == intent.epoch
+            && origin.session_fingerprint == intent.session_fingerprint
+            && origin.fencing_fingerprint == intent.fencing_fingerprint
+            && header.epoch > origin.epoch
+            && deterministic_lone_successor(&intent)
+                .is_ok_and(|candidate| candidate.as_str() == header.successor.as_str())
+    });
     if intent.schema != "bridge-p3-local-unsynced-v1"
         || intent.tenant != tenant.as_str()
         || intent.profile != profile.as_str()
@@ -2056,12 +2054,14 @@ mod direct_native_checkpoint_tests {
             super::scope_file_prefix(&fixture.tenant, &fixture.profile),
         ));
         fs::write(&sibling, b"torn foreign checkpoint")?;
-        assert!(discover_unresolved_streaming_exact_save_attempt(
-            &fixture.root,
-            &fixture.tenant,
-            &fixture.profile,
-        )
-        .is_err());
+        assert!(
+            discover_unresolved_streaming_exact_save_attempt(
+                &fixture.root,
+                &fixture.tenant,
+                &fixture.profile,
+            )
+            .is_err()
+        );
         assert_eq!(
             fs::read(source.path().join("prefs.js"))?,
             b"native preferences"
