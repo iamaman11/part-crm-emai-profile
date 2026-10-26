@@ -6,9 +6,9 @@ use crate::local_profile::{
     MaterializationRoot,
 };
 use crate::operator_flow::{
-    BrowserLaunchPreflightPort, DeviceAuthenticationPort, EnrollmentPort, OperatorEnrollment,
-    GenerationSaveFailureReason, OperatorFailureStage, OperatorFlowError, ProfileBridgeOperator,
-    RuntimeBundleSelectionPort,
+    BrowserLaunchPreflightPort, DeviceAuthenticationPort, EnrollmentPort,
+    GenerationSaveFailureReason, OperatorEnrollment, OperatorFailureStage, OperatorFlowError,
+    ProfileBridgeOperator, RuntimeBundleSelectionPort,
 };
 use crate::runtime_bundle::ApprovedRuntimeBundle;
 use crate::shipping_control_plane::{MachineHttpMethod, MachineHttpPort, MachineHttpResponse};
