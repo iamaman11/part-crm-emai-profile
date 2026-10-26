@@ -82,141 +82,6 @@ CREATE INDEX profile_generation_successor_lookup
     ON profile_generation_successor_commands(
         tenant_id, profile_id, generation_id, executed_at_ms
     );
-CREATE TRIGGER profile_generation_successor_command_validate
-BEFORE INSERT ON profile_generation_successor_commands
-FOR EACH ROW
-BEGIN
-    SELECT RAISE(ABORT, 'profile_generation_successor_actor_inactive')
-    WHERE NOT EXISTS (
-        SELECT 1
-        FROM memberships
-        WHERE tenant_id = NEW.tenant_id
-          AND actor_id = NEW.command_actor_id
-          AND status = 'ACTIVE'
-    );
-
-    -- Interactive save must still have operator authority at the exact commit point. A device-job
-    -- caller has its own already-validated job capability and is linked below to that command row.
-    SELECT RAISE(ABORT, 'profile_generation_successor_profile_access_denied')
-    WHERE NEW.authority_kind = 'INTERACTIVE_LAUNCH'
-      AND NOT EXISTS (
-        SELECT 1
-        FROM memberships AS requester
-        WHERE requester.tenant_id = NEW.tenant_id
-          AND requester.actor_id = NEW.command_actor_id
-          AND requester.status = 'ACTIVE'
-          AND (
-              requester.role = 'TENANT_OWNER'
-              OR (
-                  requester.role = 'MEMBER'
-                  AND EXISTS (
-                      SELECT 1
-                      FROM profile_grants AS grant_row
-                      WHERE grant_row.tenant_id = NEW.tenant_id
-                        AND grant_row.actor_id = NEW.command_actor_id
-                        AND grant_row.profile_id = NEW.profile_id
-                        AND grant_row.role = 'PROFILE_OPERATOR'
-                  )
-              )
-          )
-    );
-
-    SELECT RAISE(ABORT, 'profile_generation_successor_device_binding_mismatch')
-    WHERE NOT EXISTS (
-        SELECT 1
-        FROM device_actor_bindings
-        WHERE tenant_id = NEW.tenant_id
-          AND actor_id = NEW.command_actor_id
-          AND device_id = NEW.device_id
-          AND status = 'ACTIVE'
-    );
-
-    SELECT RAISE(ABORT, 'profile_generation_successor_device_authorization_stale')
-    WHERE NOT EXISTS (
-        SELECT 1
-        FROM device_authorizations
-        WHERE tenant_id = NEW.tenant_id
-          AND device_id = NEW.device_id
-          AND profile_id = NEW.profile_id
-          AND generation_id = NEW.base_generation_id
-          AND status = 'ACTIVE'
-    );
-
-    SELECT RAISE(ABORT, 'profile_generation_successor_device_job_authority_missing')
-    WHERE NEW.authority_kind = 'DEVICE_JOB'
-      AND NOT EXISTS (
-        SELECT 1
-        FROM device_generation_commit_commands AS command
-        WHERE command.tenant_id = NEW.tenant_id
-          AND command.command_actor_id = NEW.command_actor_id
-          AND command.device_id = NEW.device_id
-          AND command.profile_id = NEW.profile_id
-          AND command.base_generation_id = NEW.base_generation_id
-          AND command.generation_id = NEW.generation_id
-          AND command.object_key = NEW.object_key
-          AND command.metadata_digest = NEW.metadata_digest
-          AND command.container_digest = NEW.container_digest
-          AND command.container_bytes = NEW.container_bytes
-          AND command.expected_profile_version = NEW.expected_profile_version
-          AND command.coordinator_session_id = NEW.coordinator_session_id
-          AND command.coordinator_fencing_token_digest = NEW.coordinator_fencing_token_digest
-          AND command.coordinator_epoch = NEW.coordinator_epoch
-          AND command.coordinator_version = NEW.coordinator_version
-          AND command.coordinator_sequence = NEW.coordinator_sequence
-          AND command.executed_at_ms = NEW.executed_at_ms
-    );
-
-    SELECT RAISE(ABORT, 'profile_generation_successor_base_generation_stale')
-    WHERE NOT EXISTS (
-        SELECT 1
-        FROM browser_profiles AS profile
-        JOIN profile_generations AS generation
-          ON generation.tenant_id = profile.tenant_id
-         AND generation.profile_id = profile.profile_id
-         AND generation.generation_id = profile.active_generation_id
-        WHERE profile.tenant_id = NEW.tenant_id
-          AND profile.profile_id = NEW.profile_id
-          AND profile.status = 'READY'
-          AND profile.version = NEW.expected_profile_version
-          AND profile.active_generation_id = NEW.base_generation_id
-          AND profile.updated_at_ms <= NEW.executed_at_ms
-          AND generation.status = 'VERIFIED'
-    );
-
-    SELECT RAISE(ABORT, 'profile_generation_successor_candidate_exists')
-    WHERE EXISTS (
-        SELECT 1
-        FROM profile_generations
-        WHERE tenant_id = NEW.tenant_id
-          AND profile_id = NEW.profile_id
-          AND generation_id = NEW.generation_id
-    );
-
-    -- The Durable Object is authoritative and validates the raw fencing token plus Claim journal
-    -- provenance. This D1 projection is the independent fail-closed witness used by the atomic
-    -- catalog transaction; raw fencing tokens are intentionally absent from D1.
-    SELECT RAISE(ABORT, 'profile_generation_successor_coordinator_stale')
-    WHERE NOT EXISTS (
-        SELECT 1
-        FROM profile_coordinator_projections
-        WHERE tenant_id = NEW.tenant_id
-          AND profile_id = NEW.profile_id
-          AND coordinator_status IN ('active', 'draining')
-          AND coordinator_version = NEW.coordinator_version
-          AND coordinator_sequence = NEW.coordinator_sequence
-          AND active_session_id = NEW.coordinator_session_id
-          AND active_device_id = NEW.device_id
-          AND active_epoch = NEW.coordinator_epoch
-          AND projected_at_ms <= NEW.executed_at_ms
-          AND idle_expires_at_ms > NEW.executed_at_ms
-          AND hard_expires_at_ms > NEW.executed_at_ms
-          AND (
-              coordinator_status <> 'draining'
-              OR drain_deadline_ms > NEW.executed_at_ms
-          )
-    );
-END;
-
 CREATE TRIGGER profile_generation_successor_command_apply
 AFTER INSERT ON profile_generation_successor_commands
 FOR EACH ROW
@@ -564,6 +429,141 @@ END;
 
 -- A returned foreign-key violation is a hard failure in the accompanying
 -- migration test. No deletion/rewrite is permitted if historical rows differ.
+CREATE TRIGGER profile_generation_successor_command_validate
+BEFORE INSERT ON profile_generation_successor_commands
+FOR EACH ROW
+BEGIN
+    SELECT RAISE(ABORT, 'profile_generation_successor_actor_inactive')
+    WHERE NOT EXISTS (
+        SELECT 1
+        FROM memberships
+        WHERE tenant_id = NEW.tenant_id
+          AND actor_id = NEW.command_actor_id
+          AND status = 'ACTIVE'
+    );
+
+    -- Interactive save must still have operator authority at the exact commit point. A device-job
+    -- caller has its own already-validated job capability and is linked below to that command row.
+    SELECT RAISE(ABORT, 'profile_generation_successor_profile_access_denied')
+    WHERE NEW.authority_kind = 'INTERACTIVE_LAUNCH'
+      AND NOT EXISTS (
+        SELECT 1
+        FROM memberships AS requester
+        WHERE requester.tenant_id = NEW.tenant_id
+          AND requester.actor_id = NEW.command_actor_id
+          AND requester.status = 'ACTIVE'
+          AND (
+              requester.role = 'TENANT_OWNER'
+              OR (
+                  requester.role = 'MEMBER'
+                  AND EXISTS (
+                      SELECT 1
+                      FROM profile_grants AS grant_row
+                      WHERE grant_row.tenant_id = NEW.tenant_id
+                        AND grant_row.actor_id = NEW.command_actor_id
+                        AND grant_row.profile_id = NEW.profile_id
+                        AND grant_row.role = 'PROFILE_OPERATOR'
+                  )
+              )
+          )
+    );
+
+    SELECT RAISE(ABORT, 'profile_generation_successor_device_binding_mismatch')
+    WHERE NOT EXISTS (
+        SELECT 1
+        FROM device_actor_bindings
+        WHERE tenant_id = NEW.tenant_id
+          AND actor_id = NEW.command_actor_id
+          AND device_id = NEW.device_id
+          AND status = 'ACTIVE'
+    );
+
+    SELECT RAISE(ABORT, 'profile_generation_successor_device_authorization_stale')
+    WHERE NOT EXISTS (
+        SELECT 1
+        FROM device_authorizations
+        WHERE tenant_id = NEW.tenant_id
+          AND device_id = NEW.device_id
+          AND profile_id = NEW.profile_id
+          AND generation_id = NEW.base_generation_id
+          AND status = 'ACTIVE'
+    );
+
+    SELECT RAISE(ABORT, 'profile_generation_successor_device_job_authority_missing')
+    WHERE NEW.authority_kind = 'DEVICE_JOB'
+      AND NOT EXISTS (
+        SELECT 1
+        FROM device_generation_commit_commands AS command
+        WHERE command.tenant_id = NEW.tenant_id
+          AND command.command_actor_id = NEW.command_actor_id
+          AND command.device_id = NEW.device_id
+          AND command.profile_id = NEW.profile_id
+          AND command.base_generation_id = NEW.base_generation_id
+          AND command.generation_id = NEW.generation_id
+          AND command.object_key = NEW.object_key
+          AND command.metadata_digest = NEW.metadata_digest
+          AND command.container_digest = NEW.container_digest
+          AND command.container_bytes = NEW.container_bytes
+          AND command.expected_profile_version = NEW.expected_profile_version
+          AND command.coordinator_session_id = NEW.coordinator_session_id
+          AND command.coordinator_fencing_token_digest = NEW.coordinator_fencing_token_digest
+          AND command.coordinator_epoch = NEW.coordinator_epoch
+          AND command.coordinator_version = NEW.coordinator_version
+          AND command.coordinator_sequence = NEW.coordinator_sequence
+          AND command.executed_at_ms = NEW.executed_at_ms
+    );
+
+    SELECT RAISE(ABORT, 'profile_generation_successor_base_generation_stale')
+    WHERE NOT EXISTS (
+        SELECT 1
+        FROM browser_profiles AS profile
+        JOIN profile_generations AS generation
+          ON generation.tenant_id = profile.tenant_id
+         AND generation.profile_id = profile.profile_id
+         AND generation.generation_id = profile.active_generation_id
+        WHERE profile.tenant_id = NEW.tenant_id
+          AND profile.profile_id = NEW.profile_id
+          AND profile.status = 'READY'
+          AND profile.version = NEW.expected_profile_version
+          AND profile.active_generation_id = NEW.base_generation_id
+          AND profile.updated_at_ms <= NEW.executed_at_ms
+          AND generation.status = 'VERIFIED'
+    );
+
+    SELECT RAISE(ABORT, 'profile_generation_successor_candidate_exists')
+    WHERE EXISTS (
+        SELECT 1
+        FROM profile_generations
+        WHERE tenant_id = NEW.tenant_id
+          AND profile_id = NEW.profile_id
+          AND generation_id = NEW.generation_id
+    );
+
+    -- The Durable Object is authoritative and validates the raw fencing token plus Claim journal
+    -- provenance. This D1 projection is the independent fail-closed witness used by the atomic
+    -- catalog transaction; raw fencing tokens are intentionally absent from D1.
+    SELECT RAISE(ABORT, 'profile_generation_successor_coordinator_stale')
+    WHERE NOT EXISTS (
+        SELECT 1
+        FROM profile_coordinator_projections
+        WHERE tenant_id = NEW.tenant_id
+          AND profile_id = NEW.profile_id
+          AND coordinator_status IN ('active', 'draining')
+          AND coordinator_version = NEW.coordinator_version
+          AND coordinator_sequence = NEW.coordinator_sequence
+          AND active_session_id = NEW.coordinator_session_id
+          AND active_device_id = NEW.device_id
+          AND active_epoch = NEW.coordinator_epoch
+          AND projected_at_ms <= NEW.executed_at_ms
+          AND idle_expires_at_ms > NEW.executed_at_ms
+          AND hard_expires_at_ms > NEW.executed_at_ms
+          AND (
+              coordinator_status <> 'draining'
+              OR drain_deadline_ms > NEW.executed_at_ms
+          )
+    );
+END;
+
 CREATE TRIGGER profile_generation_insert_requires_register_command
 BEFORE INSERT ON profile_generations
 FOR EACH ROW
