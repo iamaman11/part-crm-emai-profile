@@ -1,6 +1,11 @@
 use encrypted_generation_domain::{GenerationDek, MAX_GENERATION_CONTAINER_BYTES};
 use profile_platform_primitives::{GenerationId, ProfileId, TenantId};
 use sha2::{Digest, Sha256};
+use encrypted_generation_domain::MAX_STREAM_CONTAINER_BYTES;
+use crate::generation_object_spool::VerifiedGenerationObjectFile;
+use std::fs::{self, OpenOptions};
+use std::io::{self, Write};
+use std::path::Path;
 
 /// Server-selected immutable generation download capability.
 ///
@@ -248,6 +253,129 @@ where
             return Err(Self::Error::DigestMismatch);
         }
         Ok(body)
+    }
+}
+
+
+/// A single already-signed HTTPS R2 GET that writes its response incrementally
+/// to an UNPUBLISHED sink. A 200 response alone is never cloud/open proof.
+/// The effect must not follow redirects, retry or select an object URL.
+pub trait SignedGenerationObjectStreamGetPort {
+    type Error;
+
+    fn get_exact_stream(
+        &mut self,
+        signed_url: &str,
+        max_bytes: u64,
+        destination: &mut dyn Write,
+    ) -> Result<u16, Self::Error>;
+}
+
+/// A bounded authenticated ciphertext-spool downloader. No DEK, browser
+/// profile or server authority is created by this network effect.
+pub struct VerifiedGenerationObjectStreamDownloader<T> {
+    transport: T,
+}
+
+impl<T> VerifiedGenerationObjectStreamDownloader<T> {
+    #[must_use]
+    pub const fn new(transport: T) -> Self {
+        Self { transport }
+    }
+}
+
+/// Enforce the authoritative descriptor BEFORE an untrusted response can
+/// fill disk. Hash exactly the bytes written, never an untrusted Content-Length.
+struct BoundedGenerationGetWriter<'a> {
+    file: &'a mut std::fs::File,
+    expected_bytes: u64,
+    written: u64,
+    hasher: Sha256,
+}
+
+impl Write for BoundedGenerationGetWriter<'_> {
+    fn write(&mut self, value: &[u8]) -> io::Result<usize> {
+        let next = self.written.checked_add(value.len() as u64).ok_or_else(|| {
+            io::Error::new(io::ErrorKind::InvalidData, "generation GET length overflow")
+        })?;
+        if next > self.expected_bytes {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "generation GET exceeds original signed descriptor",
+            ));
+        }
+        self.file.write_all(value)?;
+        self.hasher.update(value);
+        self.written = next;
+        Ok(value.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.file.flush()
+    }
+}
+
+impl<T: SignedGenerationObjectStreamGetPort> VerifiedGenerationObjectStreamDownloader<T> {
+    /// Staging path must be absolute, on an existing trusted regular directory
+    /// and have a reserved .pending-* name. Create-new means even a failed
+    /// previous GET cannot silently be replaced. On every error staged bytes
+    /// remain unpublished, available for conservative crash diagnostics.
+    pub fn download_to_new_pending_file(
+        &mut self,
+        capability: &GenerationDownloadCapability,
+        destination: &Path,
+    ) -> Result<VerifiedGenerationObjectFile, GenerationObjectDownloadError> {
+        if !destination.is_absolute()
+            || !destination.file_name().and_then(|name| name.to_str()).is_some_and(
+                |name| name.starts_with(".pending-") && name.len() <= 128
+            )
+            || capability.container_bytes() == 0
+            || capability.container_bytes() > MAX_STREAM_CONTAINER_BYTES
+            || !(1..=300).contains(&capability.expires_seconds())
+        {
+            return Err(GenerationObjectDownloadError::InvalidCapability);
+        }
+        let parent = destination.parent().ok_or(GenerationObjectDownloadError::InvalidCapability)?;
+        let metadata = fs::symlink_metadata(parent)
+            .map_err(|_| GenerationObjectDownloadError::Transport)?;
+        if !metadata.is_dir() || metadata.file_type().is_symlink() {
+            return Err(GenerationObjectDownloadError::InvalidCapability);
+        }
+        let url = capability
+            .signed_url()
+            .ok_or(GenerationObjectDownloadError::InvalidCapability)?;
+        let mut output = OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .open(destination)
+            .map_err(|_| GenerationObjectDownloadError::Transport)?;
+        let mut writer = BoundedGenerationGetWriter {
+            file: &mut output,
+            expected_bytes: capability.container_bytes(),
+            written: 0,
+            hasher: Sha256::new(),
+        };
+        let status = self.transport
+            .get_exact_stream(url, capability.container_bytes(), &mut writer)
+            .map_err(|_| GenerationObjectDownloadError::Transport)?;
+        if status != 200 {
+            return Err(GenerationObjectDownloadError::HttpStatus);
+        }
+        if writer.written != capability.container_bytes() {
+            return Err(GenerationObjectDownloadError::SizeMismatch);
+        }
+        let digest: [u8; 32] = writer.hasher.finalize().into();
+        if digest != capability.container_digest() {
+            return Err(GenerationObjectDownloadError::DigestMismatch);
+        }
+        output.sync_all().map_err(|_| GenerationObjectDownloadError::Transport)?;
+        drop(output);
+        VerifiedGenerationObjectFile::open(
+            destination,
+            capability.container_bytes(),
+            capability.container_digest(),
+        )
+        .map_err(|_| GenerationObjectDownloadError::DigestMismatch)
     }
 }
 
