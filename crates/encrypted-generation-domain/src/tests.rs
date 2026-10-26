@@ -620,8 +620,39 @@ fn orphan_plan_protects_current_and_rollback_generations() -> Result<(), Box<dyn
     repository.commit_current(1, second.generation_id())?;
 
     let plan = repository.plan_orphans(UnixMillis::new(10))?;
-    assert_eq!(plan.generation_ids(), [orphan.generation_id().clone()]);
-    assert!(plan.reclaimable_bytes() > 0);
+    assert!(plan.generation_ids().is_empty());
+    assert_eq!(plan.reclaimable_bytes(), 0);
+    // The orphan is not a proven deletion candidate just because it is old.
+    assert_eq!(
+        repository.record(orphan.generation_id()).map(|r| r.status()),
+        Some(CloudGenerationStatus::Verified)
+    );
+    Ok(())
+}
+
+#[test]
+fn one_hundred_successive_pointer_commits_cannot_implicitly_prune_unknown_lkg()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut repository = CloudGenerationRepository::default();
+    for cycle in 0..100_u64 {
+        let generation_id = format!("generation_100_save_retention_{cycle:03}");
+        let plaintext = cycle.to_be_bytes();
+        let generation = metadata(&generation_id, cycle as u8, &plaintext)?;
+        repository.publish(
+            generation.clone(),
+            &key(0x65)?,
+            &plaintext,
+            UnixMillis::new(cycle + 1),
+        )?;
+        repository.commit_current(cycle, generation.generation_id())?;
+        let plan = repository.plan_orphans(UnixMillis::new(cycle + 1))?;
+        assert!(plan.generation_ids().is_empty());
+        assert_eq!(plan.reclaimable_bytes(), 0);
+    }
+    // This is a 100-commit synthetic NO-PRUNE guard, not 100 live R2
+    // uploads or a bounded physical-retention acceptance.
+    assert_eq!(repository.pointer().version(), 100);
+    assert_eq!(repository.support_summary()?.render_metadata_only().contains("total_generations=100"), true);
     Ok(())
 }
 
