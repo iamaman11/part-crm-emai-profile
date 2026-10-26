@@ -9,6 +9,188 @@ use crate::shipping_control_plane::ShippingControlPlaneError;
 #[cfg(any(windows, test))]
 use crate::shipping_generation_successor_control::RestartExactCommitObservation;
 
+/// Ephemeral, lossless-enough operator evidence for a short user/support
+/// status. Each field belongs to its original owner; no derived phase is
+/// persisted or allowed to authorize Open, upload, commit, or deletion.
+#[cfg(any(windows, test))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct ReadOnlyProfileDiagnosis {
+    local: &'static str,
+    writer: &'static str,
+    checkpoint: &'static str,
+    cloud: &'static str,
+    runtime: &'static str,
+    lkg: &'static str,
+    state: &'static str,
+    next_safe_step: &'static str,
+    cause: &'static str,
+}
+
+#[cfg(any(windows, test))]
+impl ReadOnlyProfileDiagnosis {
+    /// No information about CURRENT remote authority follows merely from
+    /// holding the native operator's previous lease or a local file lock.
+    #[must_use]
+    pub(crate) fn from_operator(
+        facts: crate::operator_flow::OperatorDiagnosticFacts,
+    ) -> Self {
+        use crate::local_profile::LocalGenerationState;
+        let local = match (facts.active_local, facts.retained_local) {
+            (_, Some(LocalGenerationState::DirtyLocal)) => "DIRTY_BYTES_RETAINED",
+            (_, Some(LocalGenerationState::RecoveryRequired | LocalGenerationState::Quarantined)) => {
+                "RECOVERY_REQUIRED"
+            }
+            (_, Some(_)) => "RETAINED_STATE_UNPROVEN",
+            (Some(LocalGenerationState::InUse), None) => "IN_USE_OBSERVED",
+            (Some(LocalGenerationState::RecoveryRequired | LocalGenerationState::Quarantined), None) => {
+                "RECOVERY_REQUIRED"
+            }
+            (Some(_), None) => "LOCAL_STATE_OBSERVED",
+            (None, None) => "UNKNOWN",
+        };
+        let writer = if facts.retained_local.is_some() {
+            "HISTORICAL_LEASE_REPROOF_REQUIRED"
+        } else if facts.active_local.is_some() {
+            "LOCAL_OWNER_OBSERVED_SERVER_FRESHNESS_UNKNOWN"
+        } else {
+            "UNKNOWN"
+        };
+        let checkpoint = if facts.candidate_prepared {
+            "PREPARED_NOT_DURABILITY_PROOF"
+        } else {
+            "UNKNOWN"
+        };
+        let runtime = if facts.active_local.is_some() {
+            "SESSION_OWNED_BROWSER_WORKING_UNPROVEN"
+        } else if facts.retained_local.is_some() {
+            "CLOSED_OR_RECOVERY_BROWSER_WORKING_UNPROVEN"
+        } else {
+            "UNKNOWN"
+        };
+        Self {
+            local,
+            writer,
+            checkpoint,
+            cloud: "UNKNOWN",
+            runtime,
+            lkg: "UNKNOWN",
+            state: if facts.cleanup_blocked {
+                "RECOVERY_REQUIRED"
+            } else if facts.retained_local.is_some() {
+                "LOCAL_BYTES_RETAINED"
+            } else {
+                "UNKNOWN"
+            },
+            next_safe_step: if facts.cleanup_blocked {
+                "OWNED_RECOVERY_ONLY"
+            } else if facts.retained_local.is_some() {
+                "REQUIRE_FRESH_SERVER_DECISION"
+            } else {
+                "CHECK_PROFILE_OPERATIONS"
+            },
+            cause: "NONE_PROVEN",
+        }
+    }
+
+    /// Called ONLY after controlled Close persisted its exact LOCAL_UNSYNCED
+    /// intent. The returned close result is the witness, not this projection.
+    #[must_use]
+    pub(crate) fn after_durable_local_close(
+        facts: crate::operator_flow::OperatorDiagnosticFacts,
+    ) -> Self {
+        let mut diagnosis = Self::from_operator(facts);
+        if diagnosis.local == "DIRTY_BYTES_RETAINED" && !facts.cleanup_blocked {
+            diagnosis.state = "LOCAL_UNSYNCED";
+            diagnosis.checkpoint = "DURABLE_LOCAL_INTENT_NOT_SEALED_PROOF";
+            diagnosis.cloud = "NOT_CONFIRMED";
+        }
+        diagnosis
+    }
+
+    /// The actual completed Save owner is the *only* positive CLOUD_SAVED
+    /// witness. A server commit without locally ready/released+retired exact
+    /// checkpoint MUST remain COMMITTED_LOCAL_RECOVERY, never Saved.
+    #[must_use]
+    pub(crate) fn after_save(
+        facts: crate::operator_flow::OperatorDiagnosticFacts,
+        result: &Result<
+            crate::operator_flow::OperatorGenerationSaveCompletion,
+            crate::operator_flow::OperatorFlowError,
+        >,
+    ) -> Self {
+        use crate::operator_flow::OperatorFlowError;
+        let mut diagnosis = Self::from_operator(facts);
+        match result {
+            Ok(completion) if completion.is_saved() && !facts.cleanup_blocked => {
+                diagnosis.local = "COMMITTED_LOCAL_READY";
+                diagnosis.writer = "OWNED_LAYERS_RELEASED";
+                diagnosis.checkpoint = "EXACT_RETIRED";
+                diagnosis.cloud = "COMMITTED_EXACT";
+                diagnosis.state = "CLOUD_SAVED";
+                diagnosis.next_safe_step = "NORMAL_NEXT_OPEN";
+            }
+            Ok(_) => {
+                diagnosis.cloud = "COMMITTED_EXACT";
+                diagnosis.state = "COMMITTED_LOCAL_RECOVERY";
+                diagnosis.next_safe_step = "OWNED_LOCAL_COMPLETION";
+            }
+            Err(OperatorFlowError::GenerationSave { reason }) => {
+                diagnosis.cause = reason.code();
+                if reason.allows_bounded_cloud_reconcile() {
+                    diagnosis.cloud = "EFFECT_UNKNOWN";
+                    diagnosis.state = "CLOUD_OUTCOME_UNCONFIRMED";
+                    diagnosis.next_safe_step = "FRESH_AUTHORIZED_EXACT_RECONCILIATION";
+                } else {
+                    diagnosis.cloud = if matches!(
+                        reason,
+                        crate::operator_flow::GenerationSaveFailureReason::ControlRejected
+                    ) {
+                        "CURRENT_REQUEST_REJECTED"
+                    } else {
+                        "NOT_CONFIRMED"
+                    };
+                    diagnosis.state = "BLOCKED_LOCAL_BYTES_RETAINED_OR_UNKNOWN";
+                    diagnosis.next_safe_step = "PRESERVE_BYTES_CHECK_CAUSE";
+                }
+            }
+            Err(OperatorFlowError::Stage(_)) => {
+                diagnosis.cloud = "UNKNOWN";
+                diagnosis.state = "BLOCKED_CAUSE_UNRESOLVED";
+                diagnosis.next_safe_step = "PRESERVE_BYTES_CHECK_CAUSE";
+                diagnosis.cause = "BRIDGE_STAGE_FAILURE_CAUSE_UNRESOLVED";
+            }
+            Err(_) => {
+                diagnosis.state = "RECOVERY_REQUIRED";
+                diagnosis.next_safe_step = "OWNED_RECOVERY_ONLY";
+            }
+        }
+        diagnosis
+    }
+
+    /// Allowlisted values only. No IDs, paths, profile content, HTTP payloads,
+    /// signed URLs, tokens or keys. Neither logs nor UI grant an action.
+    #[must_use]
+    pub(crate) fn redacted_record(self) -> String {
+        format!(
+            "P3_OWNER_DIAG={};LOCAL={};WRITER={};CHECKPOINT={};CLOUD={};RUNTIME={};LKG={};CAUSE={};NEXT_SAFE_STEP={}",
+            self.state,
+            self.local,
+            self.writer,
+            self.checkpoint,
+            self.cloud,
+            self.runtime,
+            self.lkg,
+            self.cause,
+            self.next_safe_step
+        )
+    }
+
+    #[must_use]
+    pub(crate) const fn state(self) -> &'static str {
+        self.state
+    }
+}
+
 /// Read-only projection of existing exact checkpoint / authoritative observe
 /// facts. Never persists a parallel profile state, creates an authorization,
 /// changes a file, or permits a network write.
@@ -809,6 +991,93 @@ mod tests {
         assert_ne!(setup.code(), saved.code());
         assert!(saved.message().contains("was saved"));
         assert!(saved.message().contains("readiness has not been confirmed"));
+    }
+
+
+    #[test]
+    fn profile_owner_projection_never_turns_local_or_prepared_into_cloud_saved() {
+        use crate::local_profile::LocalGenerationState;
+        use crate::operator_flow::{
+            GenerationSaveFailureReason as Reason, OperatorDiagnosticFacts, OperatorFlowError,
+        };
+        let facts = OperatorDiagnosticFacts {
+            active_local: None,
+            retained_local: Some(LocalGenerationState::DirtyLocal),
+            candidate_prepared: true,
+            cleanup_blocked: false,
+        };
+        let base = ReadOnlyProfileDiagnosis::from_operator(facts);
+        assert_eq!(base.state(), "LOCAL_BYTES_RETAINED");
+        let b = base.redacted_record();
+        assert!(b.contains("CLOUD=UNKNOWN"));
+        assert!(b.contains("LKG=UNKNOWN"));
+        assert!(b.contains("CHECKPOINT=PREPARED_NOT_DURABILITY_PROOF"));
+        assert!(b.contains("HISTORICAL_LEASE_REPROOF_REQUIRED"));
+        assert!(!b.contains("CLOUD_SAVED"));
+        let closed = ReadOnlyProfileDiagnosis::after_durable_local_close(facts);
+        assert_eq!(closed.state(), "LOCAL_UNSYNCED");
+        assert!(closed.redacted_record().contains("CLOUD=NOT_CONFIRMED"));
+        let network = ReadOnlyProfileDiagnosis::after_save(
+            facts,
+            &Err(OperatorFlowError::GenerationSave {
+                reason: Reason::UploadOutcomeUncertain,
+            }),
+        );
+        assert_eq!(network.state(), "CLOUD_OUTCOME_UNCONFIRMED");
+        assert!(network.redacted_record().contains("CLOUD=EFFECT_UNKNOWN"));
+        assert!(network
+            .redacted_record()
+            .contains("FRESH_AUTHORIZED_EXACT_RECONCILIATION"));
+        let denied = ReadOnlyProfileDiagnosis::after_save(
+            facts,
+            &Err(OperatorFlowError::GenerationSave {
+                reason: Reason::ControlRejected,
+            }),
+        );
+        assert!(denied
+            .redacted_record()
+            .contains("CLOUD=CURRENT_REQUEST_REJECTED"));
+        assert!(!denied.redacted_record().contains("EFFECT_UNKNOWN"));
+        let corrupt = ReadOnlyProfileDiagnosis::after_save(
+            facts,
+            &Err(OperatorFlowError::GenerationSave {
+                reason: Reason::CheckpointIntegrity,
+            }),
+        );
+        assert!(corrupt.redacted_record().contains("PRESERVE_BYTES_CHECK_CAUSE"));
+        assert!(!corrupt.redacted_record().contains("FRESH_AUTHORIZED_EXACT_RECONCILIATION"));
+    }
+
+    #[test]
+    fn profile_owner_projection_keeps_unknown_and_cleanup_conservative() {
+        use crate::local_profile::LocalGenerationState;
+        use crate::operator_flow::{
+            OperatorDiagnosticFacts, OperatorFailureStage, OperatorFlowError,
+        };
+        let missing = OperatorDiagnosticFacts {
+            active_local: None,
+            retained_local: None,
+            candidate_prepared: false,
+            cleanup_blocked: false,
+        };
+        assert_eq!(ReadOnlyProfileDiagnosis::from_operator(missing).state(), "UNKNOWN");
+        let failed = ReadOnlyProfileDiagnosis::after_save(
+            missing,
+            &Err(OperatorFlowError::Stage(OperatorFailureStage::GenerationSave)),
+        );
+        assert_eq!(failed.state(), "BLOCKED_CAUSE_UNRESOLVED");
+        assert!(failed.redacted_record().contains("LOCAL=UNKNOWN"));
+        assert!(failed.redacted_record().contains("LKG=UNKNOWN"));
+        let cleanup = OperatorDiagnosticFacts {
+            active_local: Some(LocalGenerationState::RecoveryRequired),
+            retained_local: None,
+            candidate_prepared: false,
+            cleanup_blocked: true,
+        };
+        let result = ReadOnlyProfileDiagnosis::from_operator(cleanup);
+        assert_eq!(result.state(), "RECOVERY_REQUIRED");
+        assert!(result.redacted_record().contains("OWNED_RECOVERY_ONLY"));
+        assert!(!result.redacted_record().contains("CLOUD_SAVED"));
     }
 
     #[test]

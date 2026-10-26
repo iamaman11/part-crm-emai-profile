@@ -141,7 +141,7 @@ mod windows {
         resume_exact_successor_under_fresh_lease, resume_lone_local_unsynced_under_fresh_lease,
     };
     use crate::shipping_preflight::ShippingBrowserLaunchPreflight;
-    use crate::user_diagnostics::PendingSaveReadOnlyDiagnosis;
+    use crate::user_diagnostics::{PendingSaveReadOnlyDiagnosis, ReadOnlyProfileDiagnosis};
     use crate::windows_delivery_handoff::{
         DeliveryHandoffCoordinator, DeliveryHandoffRestartDisposition,
     };
@@ -536,6 +536,11 @@ mod windows {
                 operator
                     .close_with_durable_local_intent(&materialization_root, now()?)
                     .map_err(ShippingCompositionError::Operator)?;
+                eprintln!(
+                    "{}",
+                    ReadOnlyProfileDiagnosis::after_durable_local_close(operator.diagnostic_facts())
+                        .redacted_record()
+                );
                 // An unknown heartbeat response is not an acknowledged fence.
                 // Retain the closed local working profile; do not attempt an
                 // upload/commit using a possibly revoked writer session.
@@ -547,6 +552,11 @@ mod windows {
                     save_transport.clone(),
                     &mut generation_uploader,
                     now()?,
+                );
+                eprintln!(
+                    "{}",
+                    ReadOnlyProfileDiagnosis::after_save(operator.diagnostic_facts(), &initial)
+                        .redacted_record()
                 );
                 match initial {
                     Ok(completion) if completion.is_saved() => return Ok(()),
@@ -641,12 +651,21 @@ mod windows {
                             ) {
                                 break;
                             }
-                            match operator.save_retained_successor(
+                            let attempt = operator.save_retained_successor(
                                 &materialization_root,
                                 save_transport.clone(),
                                 &mut generation_uploader,
                                 now()?,
-                            ) {
+                            );
+                            eprintln!(
+                                "{}",
+                                ReadOnlyProfileDiagnosis::after_save(
+                                    operator.diagnostic_facts(),
+                                    &attempt
+                                )
+                                .redacted_record()
+                            );
+                            match attempt {
                                 Ok(completion) if completion.is_saved() => return Ok(()),
                                 Ok(_) => {
                                     return Err(

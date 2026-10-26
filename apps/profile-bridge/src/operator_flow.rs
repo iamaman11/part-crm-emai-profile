@@ -528,6 +528,17 @@ struct ActiveOperatorSession {
     runtime_bundle: ApprovedRuntimeBundle,
 }
 
+
+/* A transient, read-only observation from the ONE operator owner. Not a
+   persisted ProfileStatus, permission, cloud fact, or second state machine. */
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct OperatorDiagnosticFacts {
+    pub(crate) active_local: Option<LocalGenerationState>,
+    pub(crate) retained_local: Option<LocalGenerationState>,
+    pub(crate) candidate_prepared: bool,
+    pub(crate) cleanup_blocked: bool,
+}
+
 pub struct ProfileBridgeOperator<D, K, A, E, C, R, B, P, H> {
     device_identity: D,
     device_keys: K,
@@ -1454,6 +1465,21 @@ where
     #[must_use]
     pub fn has_pending_dirty_close(&self) -> bool {
         self.retained_dirty.is_some()
+    }
+
+    /// Observe existing local owner facts without I/O, lease refresh, or an
+    /// assertion that the browser is still alive or cloud state is current.
+    #[must_use]
+    pub(crate) fn diagnostic_facts(&self) -> OperatorDiagnosticFacts {
+        OperatorDiagnosticFacts {
+            active_local: self.active_local_state(),
+            retained_local: self.pending_dirty_local_state(),
+            candidate_prepared: self
+                .retained_dirty
+                .as_ref()
+                .is_some_and(|dirty| dirty.prepared_successor().is_some()),
+            cleanup_blocked: self.cleanup_blocked,
+        }
     }
 
     /// Original closed writer context, descriptive only. This MUST be
