@@ -700,8 +700,8 @@ def self_test() -> None:
 
         composition.write_text(
             safe_composition.replace(
-                "// .save_retained_successor_streaming(\\n",
-                "// .save_retained_successor(\\n",
+                "// .save_retained_successor_streaming(\n",
+                "// .save_retained_successor(\n",
             ),
             encoding="utf-8",
         )
