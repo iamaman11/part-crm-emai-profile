@@ -706,7 +706,8 @@ fn streaming_retry_after_failed_put_preserves_exact_n_plus_one()
         &fixture.root,
         tenant,
         &fixture.profile_id,
-    )?.ok_or("streaming BPAT must survive failed signed PUT")?;
+    )?
+    .ok_or("streaming BPAT must survive failed signed PUT")?;
     let successor = original.successor_id().to_owned();
     let digest = original.container_digest().to_owned();
     drop(original);
@@ -740,7 +741,9 @@ fn streaming_retry_after_failed_put_preserves_exact_n_plus_one()
     assert_eq!(operator.coordinator().closed, 1);
     assert!(!operator.has_pending_dirty_close());
     assert!(!has_unresolved_save_attempt_for_profile(
-        &fixture.root, tenant, &fixture.profile_id,
+        &fixture.root,
+        tenant,
+        &fixture.profile_id,
     )?);
     Ok(())
 }
@@ -771,8 +774,11 @@ fn streaming_retry_rejects_changed_native_bytes_without_network_or_n_plus_two()
     assert!(first.is_err());
     let tenant = fixture.actor.tenant_scope().tenant_id();
     let original = discover_unresolved_streaming_exact_save_attempt(
-        &fixture.root, tenant, &fixture.profile_id,
-    )?.ok_or("original N+1 missing after uncertain PUT")?;
+        &fixture.root,
+        tenant,
+        &fixture.profile_id,
+    )?
+    .ok_or("original N+1 missing after uncertain PUT")?;
     let candidate = fixture.root.open_generation(
         tenant,
         &fixture.profile_id,
@@ -780,7 +786,10 @@ fn streaming_retry_rejects_changed_native_bytes_without_network_or_n_plus_two()
     )?;
     let originally_sealed = original.successor_id().to_owned();
     drop(original);
-    fs::write(candidate.path().join("prefs.js"), b"local unknown changed after failed PUT")?;
+    fs::write(
+        candidate.path().join("prefs.js"),
+        b"local unknown changed after failed PUT",
+    )?;
     let observed = Rc::new(RefCell::new(Vec::new()));
     let second = operator.save_retained_successor_streaming(
         &fixture.root,
@@ -795,7 +804,10 @@ fn streaming_retry_rejects_changed_native_bytes_without_network_or_n_plus_two()
         UnixMillis::new(40),
     );
     assert!(second.is_err());
-    assert!(observed.borrow().is_empty(), "changed native files must block before D1/R2");
+    assert!(
+        observed.borrow().is_empty(),
+        "changed native files must block before D1/R2"
+    );
     assert_eq!(puts.get(), 1);
     assert_eq!(operator.coordinator().sealing_requests, 1);
     assert!(operator.has_pending_dirty_close());
@@ -805,7 +817,9 @@ fn streaming_retry_rejects_changed_native_bytes_without_network_or_n_plus_two()
         b"local unknown changed after failed PUT"
     );
     assert!(has_unresolved_save_attempt_for_profile(
-        &fixture.root, tenant, &fixture.profile_id,
+        &fixture.root,
+        tenant,
+        &fixture.profile_id,
     )?);
     assert!(!originally_sealed.is_empty());
     Ok(())
