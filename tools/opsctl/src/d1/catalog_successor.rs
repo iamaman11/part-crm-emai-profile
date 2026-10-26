@@ -800,8 +800,8 @@ fn repository_identity_from_components(components: &[Value]) -> Result<String, D
 mod tests {
     use super::{
         BRIDGE_ENROLLMENT_REVISION, CURRENT_SUCCESSOR_ROOT, DEVICE_APPLICATION_AUTHORITY_REVISION,
-        INITIAL_GENERATION_REVISION, PREDECESSOR_SUCCESSOR_ROOT, PUBLIC_KEY_BINDING_REVISION,
-        STREAMING_GENERATION_REVISION, SUCCESSOR_CONTRACT_REVISION, component_authority, release_contract, repository_projection,
+        PREDECESSOR_SUCCESSOR_ROOT, PUBLIC_KEY_BINDING_REVISION, STREAMING_GENERATION_REVISION,
+        SUCCESSOR_CONTRACT_REVISION, component_authority, release_contract, repository_projection,
     };
     use serde_json::Value;
     use std::error::Error;
