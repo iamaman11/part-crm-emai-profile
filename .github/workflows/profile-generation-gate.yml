@@ -65,12 +65,14 @@ jobs:
           scripts/test-profile-generation-registry.py
           scripts/test-profile-generation-registry-edge-cases.py
           scripts/test-profile-generation-integrity-guards.py
+          scripts/test-k2-historical-predecessor-d1.py
 
       - name: Prove governed registry and activation
         run: |
           python scripts/test-profile-generation-registry.py
           python scripts/test-profile-generation-registry-edge-cases.py
           python scripts/test-profile-generation-integrity-guards.py
+          python scripts/test-k2-historical-predecessor-d1.py
 
       - name: Verify additive OpenAPI contract
         run: |
