@@ -208,6 +208,216 @@ pub(crate) fn encode_workspace_snapshot(
     Ok(output)
 }
 
+
+#[derive(Clone)]
+struct StreamedSnapshotFile {
+    relative_path: String,
+    bytes: u64,
+    digest: [u8; 32],
+}
+
+/// Reopen BPGW0001 from a VERIFIED DECRYPTED spool (never directly from an
+/// unauthenticated R2 stream). The caller passes the digest/length established
+/// by the authenticated BPGC0001 metadata. No generation path is made visible
+/// until all filenames, all content, strict EOF, SHA-256, and staged disk
+/// rereads agree. Never overwrite a current N or any previous LKG.
+#[allow(dead_code)] // K2 shipping download interface is still Vec-based.
+pub(crate) fn materialize_workspace_snapshot_streaming_with_pre_publish(
+    root: &MaterializationRoot,
+    tenant_id: &TenantId,
+    profile_id: &ProfileId,
+    generation_id: &GenerationId,
+    source: &mut impl Read,
+    expected: StreamedWorkspaceSnapshot,
+    mut before_publish: impl FnMut(&GenerationWorkspace) -> Result<(), GenerationSnapshotError>,
+) -> Result<GenerationWorkspace, GenerationSnapshotError> {
+    if expected.plaintext_bytes > MAX_STREAM_WORKSPACE_SNAPSHOT_BYTES {
+        return Err(GenerationSnapshotError::SnapshotTooLarge);
+    }
+    match root.open_generation(tenant_id, profile_id, generation_id) {
+        Ok(_) => return Err(GenerationSnapshotError::TargetAlreadyExists),
+        Err(LocalProfileError::Io(std::io::ErrorKind::NotFound)) => {}
+        Err(error) => return Err(GenerationSnapshotError::Local(error)),
+    }
+    let staged = create_staging_workspace(root, tenant_id, profile_id)?;
+    let staging_path = staged.path().to_path_buf();
+    let result = materialize_stream_into_staging(
+        root,
+        staged,
+        &staging_path,
+        tenant_id,
+        profile_id,
+        generation_id,
+        source,
+        expected,
+        &mut before_publish,
+    );
+    if result.is_err() {
+        remove_owned_staging(&staging_path);
+    }
+    result
+}
+
+#[allow(clippy::too_many_arguments)]
+fn materialize_stream_into_staging(
+    root: &MaterializationRoot,
+    staging: GenerationWorkspace,
+    staging_path: &Path,
+    tenant: &TenantId,
+    profile: &ProfileId,
+    generation: &GenerationId,
+    source: &mut impl Read,
+    expected: StreamedWorkspaceSnapshot,
+    before_publish: &mut impl FnMut(&GenerationWorkspace) -> Result<(), GenerationSnapshotError>,
+) -> Result<GenerationWorkspace, GenerationSnapshotError> {
+    let mut total = 0_u64;
+    let mut hash = Sha256::new();
+    let mut magic = [0_u8; 8];
+    read_stream_piece(source, &mut hash, &mut total, &mut magic)?;
+    if &magic != WORKSPACE_SNAPSHOT_MAGIC {
+        return Err(GenerationSnapshotError::InvalidFormat);
+    }
+    let mut count_bytes = [0_u8; 4];
+    read_stream_piece(source, &mut hash, &mut total, &mut count_bytes)?;
+    let count = u32::from_be_bytes(count_bytes) as usize;
+    if count > MAX_SNAPSHOT_FILES {
+        return Err(GenerationSnapshotError::SnapshotTooLarge);
+    }
+    let mut entries = Vec::with_capacity(count);
+    let mut seen = HashSet::new();
+    let mut buffer = [0_u8; 65_536];
+    let mut previous = String::new();
+    for _ in 0..count {
+        let mut length = [0_u8; 2];
+        read_stream_piece(source, &mut hash, &mut total, &mut length)?;
+        let path_len = u16::from_be_bytes(length) as usize;
+        if path_len == 0 || path_len > MAX_RELATIVE_PATH_BYTES {
+            return Err(GenerationSnapshotError::UnsafePath);
+        }
+        let mut path = vec![0_u8; path_len];
+        read_stream_piece(source, &mut hash, &mut total, &mut path)?;
+        let relative = String::from_utf8(path).map_err(|_| GenerationSnapshotError::UnsafePath)?;
+        validate_windows_relative_path(&relative)?;
+        if (!previous.is_empty() && previous.as_str() >= relative.as_str())
+            || !seen.insert(relative.to_lowercase())
+        {
+            return Err(GenerationSnapshotError::UnsafePath);
+        }
+        previous.clone_from(&relative);
+        let mut content_len = [0_u8; 8];
+        read_stream_piece(source, &mut hash, &mut total, &mut content_len)?;
+        let bytes = u64::from_be_bytes(content_len);
+        if total.checked_add(bytes).is_none_or(|sum| sum > expected.plaintext_bytes) {
+            return Err(GenerationSnapshotError::SnapshotTooLarge);
+        }
+        let target = staging_path.join(&relative);
+        let parent = target.parent().ok_or(GenerationSnapshotError::UnsafePath)?;
+        ensure_descendant_directories(staging_path, parent)?;
+        let mut file = OpenOptions::new().write(true).create_new(true)
+            .open(&target).map_err(LocalProfileError::from)?;
+        let mut remaining = bytes;
+        let mut file_hash = Sha256::new();
+        while remaining > 0 {
+            let count = usize::try_from(remaining.min(buffer.len() as u64))
+                .map_err(|_| GenerationSnapshotError::SnapshotTooLarge)?;
+            read_stream_piece(source, &mut hash, &mut total, &mut buffer[..count])?;
+            file.write_all(&buffer[..count]).map_err(LocalProfileError::from)?;
+            file_hash.update(&buffer[..count]);
+            remaining -= count as u64;
+        }
+        file.sync_all().map_err(LocalProfileError::from)?;
+        entries.push(StreamedSnapshotFile {
+            relative_path: relative,
+            bytes,
+            digest: file_hash.finalize().into(),
+        });
+    }
+    let mut eof = [0_u8; 1];
+    if source.read(&mut eof).map_err(LocalProfileError::from)? != 0
+        || total != expected.plaintext_bytes
+        || <[u8; 32]>::from(hash.finalize()) != expected.plaintext_digest
+    {
+        return Err(GenerationSnapshotError::InvalidFormat);
+    }
+    verify_streamed_workspace(&staging, &entries)?;
+    before_publish(&staging)?;
+
+    // Identical no-replace atomic publish boundary to the in-memory reader.
+    let final_path = root.prepare_generation_path(tenant, profile, generation)
+        .map_err(|error| match error {
+            LocalProfileError::TargetAlreadyExists => GenerationSnapshotError::TargetAlreadyExists,
+            error => GenerationSnapshotError::Local(error),
+        })?;
+    if fs::symlink_metadata(&final_path).is_ok() {
+        return Err(GenerationSnapshotError::TargetAlreadyExists);
+    }
+    fs::rename(staging_path, &final_path).map_err(LocalProfileError::from)?;
+    drop(staging);
+    let workspace = root.open_generation(tenant, profile, generation)
+        .map_err(GenerationSnapshotError::Local)?;
+    verify_streamed_workspace(&workspace, &entries)?;
+    Ok(workspace)
+}
+
+fn verify_streamed_workspace(
+    workspace: &GenerationWorkspace,
+    entries: &[StreamedSnapshotFile],
+) -> Result<(), GenerationSnapshotError> {
+    let inventory = workspace.inventory().map_err(GenerationSnapshotError::Local)?;
+    if inventory.entries().len() != entries.len() {
+        return Err(GenerationSnapshotError::SourceChanged);
+    }
+    let mut buffer = [0_u8; 65_536];
+    for (actual, original) in inventory.entries().iter().zip(entries) {
+        if actual.relative_path() != original.relative_path || actual.bytes() != original.bytes {
+            return Err(GenerationSnapshotError::SourceChanged);
+        }
+        let path = workspace.path().join(&original.relative_path);
+        let metadata = fs::symlink_metadata(&path).map_err(LocalProfileError::from)?;
+        if metadata.file_type().is_symlink() || !metadata.is_file()
+            || metadata.len() != original.bytes
+        {
+            return Err(GenerationSnapshotError::SourceChanged);
+        }
+        let mut file = File::open(&path).map_err(LocalProfileError::from)?;
+        let mut digest = Sha256::new();
+        loop {
+            let count = file.read(&mut buffer).map_err(LocalProfileError::from)?;
+            if count == 0 {
+                break;
+            }
+            digest.update(&buffer[..count]);
+        }
+        if <[u8; 32]>::from(digest.finalize()) != original.digest {
+            return Err(GenerationSnapshotError::SourceChanged);
+        }
+    }
+    Ok(())
+}
+
+fn read_stream_piece(
+    source: &mut impl Read,
+    hash: &mut Sha256,
+    total: &mut u64,
+    buffer: &mut [u8],
+) -> Result<(), GenerationSnapshotError> {
+    let next = total.checked_add(buffer.len() as u64)
+        .ok_or(GenerationSnapshotError::SnapshotTooLarge)?;
+    if next > MAX_STREAM_WORKSPACE_SNAPSHOT_BYTES {
+        return Err(GenerationSnapshotError::SnapshotTooLarge);
+    }
+    source.read_exact(buffer).map_err(|error| {
+        if error.kind() == std::io::ErrorKind::UnexpectedEof {
+            GenerationSnapshotError::InvalidFormat
+        } else {
+            GenerationSnapshotError::Local(error.into())
+        }
+    })?;
+    hash.update(buffer);
+    *total = next;
+    Ok(())
+}
+
 #[cfg(test)]
 pub(crate) fn materialize_workspace_snapshot(
     root: &MaterializationRoot,
@@ -568,7 +778,9 @@ fn checked_extend(output: &mut Vec<u8>, bytes: &[u8]) -> Result<(), GenerationSn
 mod tests {
     use super::{
         GenerationSnapshotError, WORKSPACE_SNAPSHOT_MAGIC, encode_workspace_snapshot,
-        encode_workspace_snapshot_streaming, materialize_workspace_snapshot,
+        encode_workspace_snapshot_streaming,
+        materialize_workspace_snapshot_streaming_with_pre_publish,
+        StreamedWorkspaceSnapshot, materialize_workspace_snapshot,
         materialize_workspace_snapshot_with_pre_publish, parse_workspace_snapshot,
     };
     use crate::local_profile::MaterializationRoot;
@@ -736,6 +948,62 @@ mod tests {
         result
     }
 
+
+    #[test]
+    fn streamed_materializer_refuses_trailing_corrupt_and_unsafe_native_restore()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let fixture = Fixture::new()?;
+        let result = (|| {
+            let next = GenerationId::parse("generation_streamed_unpublished_unsafe")?;
+            let valid = raw_snapshot(&[("prefs.js", b"good"), ("user_data/cookies.sqlite-wal", b"wal")]);
+            let proof = StreamedWorkspaceSnapshot {
+                plaintext_bytes: valid.len() as u64,
+                plaintext_digest: sha2::Sha256::digest(&valid).into(),
+            };
+            let materialized = materialize_workspace_snapshot_streaming_with_pre_publish(
+                &fixture.root, &fixture.tenant_id, &fixture.profile_id,
+                &next, &mut valid.as_slice(), proof, |_| Ok(()),
+            )?;
+            assert_eq!(fs::read(materialized.path().join("prefs.js"))?, b"good");
+            assert_eq!(
+                fs::read(materialized.path().join("user_data/cookies.sqlite-wal"))?,
+                b"wal",
+            );
+            assert_eq!(
+                materialize_workspace_snapshot_streaming_with_pre_publish(
+                    &fixture.root, &fixture.tenant_id, &fixture.profile_id,
+                    &next, &mut valid.as_slice(), proof, |_| Ok(()),
+                ).err(),
+                Some(GenerationSnapshotError::TargetAlreadyExists),
+            );
+            let next = GenerationId::parse("generation_streamed_restore_trailing")?;
+            let mut invalid = valid.clone();
+            invalid.push(0x91);
+            assert!(materialize_workspace_snapshot_streaming_with_pre_publish(
+                &fixture.root, &fixture.tenant_id, &fixture.profile_id,
+                &next, &mut invalid.as_slice(), proof, |_| Ok(()),
+            ).is_err());
+            assert!(fixture.root.open_generation(
+                &fixture.tenant_id, &fixture.profile_id, &next,
+            ).is_err());
+            let next = GenerationId::parse("generation_streamed_restore_escape")?;
+            let unsafe_source = raw_snapshot(&[("../prefs.js", b"escape")]);
+            let unsafe_proof = StreamedWorkspaceSnapshot {
+                plaintext_bytes: unsafe_source.len() as u64,
+                plaintext_digest: sha2::Sha256::digest(&unsafe_source).into(),
+            };
+            assert!(materialize_workspace_snapshot_streaming_with_pre_publish(
+                &fixture.root, &fixture.tenant_id, &fixture.profile_id,
+                &next, &mut unsafe_source.as_slice(), unsafe_proof, |_| Ok(()),
+            ).is_err());
+            assert!(fixture.root.open_generation(
+                &fixture.tenant_id, &fixture.profile_id, &next,
+            ).is_err());
+            Ok::<(), Box<dyn std::error::Error>>(())
+        })();
+        fixture.cleanup();
+        result
+    }
     #[test]
     fn streamed_snapshot_preserves_native_bytes_on_changed_file_and_failed_sink()
     -> Result<(), Box<dyn std::error::Error>> {
