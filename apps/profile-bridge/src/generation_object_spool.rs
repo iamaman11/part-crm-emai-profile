@@ -235,9 +235,10 @@ mod tests {
         ] {
             assert!(VerifiedGenerationObjectFile::open(&path, size, sha).is_err());
         }
-        assert!(VerifiedGenerationObjectFile::open(
-            &path, 9, fingerprint(b"immutable")
-        ).is_ok(), "the exact original file must be accepted");
+        assert!(
+            VerifiedGenerationObjectFile::open(&path, 9, fingerprint(b"immutable")).is_ok(),
+            "the exact original file must be accepted"
+        );
         assert!(
             VerifiedGenerationObjectFile::open(
                 Path::new("relative.bpgc"),
