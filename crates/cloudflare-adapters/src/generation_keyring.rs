@@ -329,12 +329,7 @@ mod tests {
             )?
             .into_parts();
         let metadata = GenerationMetadata::for_plaintext(
-            GenerationIdentity::new(
-                tenant.clone(),
-                profile.clone(),
-                generation.clone(),
-                None,
-            ),
+            GenerationIdentity::new(tenant.clone(), profile.clone(), generation.clone(), None),
             old_key_id.clone(),
             old_nonce,
             1024,
@@ -355,12 +350,8 @@ mod tests {
             .into_parts();
         let mut rejected = Vec::new();
         assert!(
-            open_generation_streaming(
-                &mut immutable_bpgc.as_slice(),
-                &new_dek,
-                &mut rejected,
-            )
-            .is_err()
+            open_generation_streaming(&mut immutable_bpgc.as_slice(), &new_dek, &mut rejected,)
+                .is_err()
         );
         // Different profile scope also fails authentication with the old
         // version: key presence alone is not sufficient restore evidence.
@@ -384,11 +375,8 @@ mod tests {
         );
 
         let mut restored = Vec::new();
-        let report = open_generation_streaming(
-            &mut immutable_bpgc.as_slice(),
-            &old_dek,
-            &mut restored,
-        )?;
+        let report =
+            open_generation_streaming(&mut immutable_bpgc.as_slice(), &old_dek, &mut restored)?;
         assert_eq!(restored, native_bytes);
         assert_eq!(report.metadata().generation_id(), &generation);
         assert_eq!(report.metadata().key_id(), &old_key_id);
@@ -414,5 +402,4 @@ mod tests {
         );
         Ok(())
     }
-
 }
