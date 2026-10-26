@@ -6,15 +6,20 @@ use crate::generation_reopen::{
     GenerationObjectDownloadError, GenerationObjectDownloadPort, GenerationReopenControlError,
     GenerationReopenControlPort,
 };
+use crate::generation_object_spool::VerifiedGenerationObjectFile;
 use crate::generation_snapshot::{
-    GenerationSnapshotError, materialize_workspace_snapshot_with_pre_publish,
-    verify_workspace_matches_snapshot,
+    GenerationSnapshotError, StreamedWorkspaceSnapshot,
+    materialize_workspace_snapshot_streaming_with_pre_publish,
+    materialize_workspace_snapshot_with_pre_publish, verify_workspace_matches_snapshot,
 };
 use crate::local_profile::{BridgeWorkspaceLock, LocalProfileError, MaterializationRoot};
 use encrypted_generation_domain::{
     canonical_generation_object_key, inspect_generation_metadata_prelude, open_generation_expected,
+    open_generation_streaming,
 };
 use profile_platform_primitives::{DeviceId, GenerationId, ProfileId, TenantId};
+use std::fs::{self, OpenOptions};
+use std::io::{Seek, SeekFrom, Write};
 
 const LOWER_HEX: &[u8; 16] = b"0123456789abcdef";
 
@@ -232,6 +237,38 @@ where
     }
     let source_container_sha256 = encode_sha256(capability.container_digest());
 
+    // The sole authoritative reopen owner selects the encrypted spool path.
+    // No caller controls the generation, object, digest, DEK or workspace.
+    // Same descriptor yields one deterministic no-replace pending file;
+    // interrupted/foreign evidence cannot silently be overwritten.
+    let staged_ciphertext_path = root.path().join(format!(
+        ".pending-r2-{}",
+        encode_sha256(capability.container_digest())
+    ));
+    let stream = if incomplete_local.is_none() {
+        downloader.download_generation_object_to_new_pending_file(
+            &capability,
+            &staged_ciphertext_path,
+        )
+    } else {
+        Ok(None)
+    }
+    .map_err(|error| {
+        prewrite_refusal(AuthoritativeGenerationPreWriteError::Download(error.into()))
+    })?;
+    if let Some(ciphertext) = stream {
+        return materialize_streamed_authoritative_generation(
+            root,
+            tenant_id,
+            profile_id,
+            generation_id,
+            control,
+            &capability,
+            ciphertext,
+            &staged_ciphertext_path,
+        );
+    }
+
     let container = downloader
         .download_generation_object(&capability)
         .map_err(|error| {
@@ -328,6 +365,120 @@ where
         }
         _ => AuthoritativeGenerationMaterializationError::Snapshot,
     })?;
+    Ok(())
+}
+
+/// Cold materialization only. A complete descriptor-verified ciphertext
+/// exists, but neither a metadata prelude nor an AEAD chunk alone can publish
+/// user_data. The decrypted BPGW file is an unpublished bounded scratch input;
+/// the ONE existing snapshot owner performs full-file checks and no-replace
+/// publication with generation-bound browser identity in pre-publish.
+#[allow(clippy::too_many_arguments)]
+fn materialize_streamed_authoritative_generation<C>(
+    root: &MaterializationRoot,
+    tenant_id: &TenantId,
+    profile_id: &ProfileId,
+    generation_id: &GenerationId,
+    control: &mut C,
+    capability: &crate::generation_reopen::GenerationDownloadCapability,
+    mut ciphertext: VerifiedGenerationObjectFile,
+    ciphertext_path: &std::path::Path,
+) -> Result<(), AuthoritativeGenerationMaterializationError>
+where
+    C: GenerationReopenControlPort,
+    C::Error: Into<GenerationReopenControlError>,
+{
+    use AuthoritativeGenerationMaterializationError as Error;
+    use AuthoritativeGenerationPreWriteError as PreWrite;
+    let prelude = ciphertext
+        .read_descriptor_verified_metadata_prelude()
+        .map_err(|_| Error::ReadBeforeLocalUse(PreWrite::MetadataMismatch))?;
+    let inspected = inspect_generation_metadata_prelude(&prelude)
+        .map_err(|_| Error::ReadBeforeLocalUse(PreWrite::MetadataMismatch))?;
+    let metadata = inspected.metadata();
+    if metadata.tenant_id() != tenant_id
+        || metadata.profile_id() != profile_id
+        || metadata.generation_id() != generation_id
+        || metadata.object_key()
+            != canonical_generation_object_key(tenant_id, profile_id, generation_id)
+        || inspected.metadata_digest().bytes() != capability.metadata_digest()
+    {
+        return Err(Error::ReadBeforeLocalUse(PreWrite::MetadataMismatch));
+    }
+    let key = control
+        .opening_material(tenant_id, profile_id, &prelude)
+        .map_err(|reason| Error::ReadBeforeLocalUse(PreWrite::OpeningControl(reason.into())))?;
+    if key.key_id() != metadata.key_id() {
+        return Err(Error::ReadBeforeLocalUse(PreWrite::OpeningMaterialMismatch));
+    }
+    let plaintext_path = root.path().join(format!(
+        ".pending-bpgw-{}",
+        encode_sha256(capability.container_digest())
+    ));
+    let mut plaintext = OpenOptions::new()
+        .create_new(true)
+        .read(true)
+        .write(true)
+        .open(&plaintext_path)
+        .map_err(|_| Error::Local)?;
+    let report = open_generation_streaming(ciphertext.reader(), &key, &mut plaintext)
+        .map_err(|_| Error::ReadBeforeLocalUse(PreWrite::Decryption))?;
+    if report.metadata() != metadata
+        || report.metadata_digest().bytes() != capability.metadata_digest()
+        || report.container_digest().bytes() != capability.container_digest()
+        || report.container_bytes() != capability.container_bytes()
+    {
+        return Err(Error::ReadBeforeLocalUse(PreWrite::Decryption));
+    }
+    ciphertext
+        .recheck_and_rewind()
+        .map_err(|_| Error::ReadBeforeLocalUse(PreWrite::Decryption))?;
+    plaintext.sync_all().map_err(|_| Error::Local)?;
+    if plaintext
+        .metadata()
+        .map_err(|_| Error::Local)?
+        .len()
+        != metadata.plaintext_bytes()
+    {
+        return Err(Error::ReadBeforeLocalUse(PreWrite::Decryption));
+    }
+    plaintext.seek(SeekFrom::Start(0)).map_err(|_| Error::Local)?;
+    let digest = encode_sha256(capability.container_digest());
+    let outcome = materialize_workspace_snapshot_streaming_with_pre_publish(
+        root,
+        tenant_id,
+        profile_id,
+        generation_id,
+        &mut plaintext,
+        StreamedWorkspaceSnapshot {
+            plaintext_bytes: metadata.plaintext_bytes(),
+            plaintext_digest: metadata.plaintext_digest().bytes(),
+        },
+        |workspace| {
+            restore_materialization_binding_after_authoritative_open(
+                workspace,
+                tenant_id,
+                profile_id,
+                generation_id,
+                &digest,
+            )
+            .map(|_| ())
+            .map_err(|_| GenerationSnapshotError::PrePublish)
+        },
+    )
+    .map_err(|error| match error {
+        GenerationSnapshotError::Local(_) => Error::Local,
+        GenerationSnapshotError::PrePublish => Error::BrowserIdentity,
+        _ => Error::Snapshot,
+    });
+    outcome?;
+    // Only after the full AEAD tag + BPGW + browser binding are verified and
+    // the canonical workspace is published may the two owned scratch files
+    // be retired. Failure to remove one prevents a false Clean terminal.
+    drop(plaintext);
+    drop(ciphertext);
+    fs::remove_file(&plaintext_path).map_err(|_| Error::Local)?;
+    fs::remove_file(ciphertext_path).map_err(|_| Error::Local)?;
     Ok(())
 }
 

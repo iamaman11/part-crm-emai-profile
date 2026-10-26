@@ -204,6 +204,17 @@ pub trait GenerationObjectDownloadPort {
         &mut self,
         capability: &GenerationDownloadCapability,
     ) -> Result<Vec<u8>, Self::Error>;
+
+    /// Additive spool path for cold 256/512 MiB restore. The default keeps
+    /// old small-object adapters and synthetic tests exactly as before.
+    /// Only the authoritative materialization owner supplies the pending path.
+    fn download_generation_object_to_new_pending_file(
+        &mut self,
+        _capability: &GenerationDownloadCapability,
+        _destination: &Path,
+    ) -> Result<Option<VerifiedGenerationObjectFile>, Self::Error> {
+        Ok(None)
+    }
 }
 
 pub struct VerifiedGenerationObjectDownloader<T> {
@@ -280,6 +291,30 @@ impl<T> VerifiedGenerationObjectStreamDownloader<T> {
     #[must_use]
     pub const fn new(transport: T) -> Self {
         Self { transport }
+    }
+}
+
+impl<T: SignedGenerationObjectStreamGetPort> GenerationObjectDownloadPort
+    for VerifiedGenerationObjectStreamDownloader<T>
+{
+    type Error = GenerationObjectDownloadError;
+
+    fn download_generation_object(
+        &mut self,
+        _capability: &GenerationDownloadCapability,
+    ) -> Result<Vec<u8>, Self::Error> {
+        // A previously incomplete local workspace must not be replaced by a
+        // cold remote read, and 512 MiB must never fall back to a Vec.
+        Err(GenerationObjectDownloadError::InvalidCapability)
+    }
+
+    fn download_generation_object_to_new_pending_file(
+        &mut self,
+        capability: &GenerationDownloadCapability,
+        destination: &Path,
+    ) -> Result<Option<VerifiedGenerationObjectFile>, Self::Error> {
+        self.download_to_new_pending_file(capability, destination)
+            .map(Some)
     }
 }
 

@@ -129,7 +129,7 @@ mod windows {
     use crate::camouhost_process::{
         ManagedCamouhostConfig, ManagedCamouhostProcess, RuntimeBindingSlot, RuntimeDisplayMode,
     };
-    use crate::generation_reopen::VerifiedGenerationObjectDownloader;
+    use crate::generation_reopen::VerifiedGenerationObjectStreamDownloader;
     use crate::local_profile::{DeliveryActivationGuard, MaterializationRoot};
     use crate::operator_flow::{OperatorFailureStage, OperatorFlowError, ProfileBridgeOperator};
     use crate::shipping_control_plane::{
@@ -150,7 +150,8 @@ mod windows {
         WindowsDeviceApplication, WindowsDeviceApplicationBinding,
     };
     use crate::windows_generation_put::WindowsSignedGenerationObjectPut;
-    use crate::windows_native::{WindowsDeviceIdentity, WindowsSignedGenerationObjectGet};
+    use crate::windows_generation_get::WindowsSignedGenerationObjectGet;
+    use crate::windows_native::WindowsDeviceIdentity;
     use bridge_domain::ClaimUri;
     use profile_platform_primitives::UnixMillis;
     use std::env;
@@ -309,7 +310,7 @@ mod windows {
         let signed_generation_get = WindowsSignedGenerationObjectGet::from_system()
             .map_err(|_| ShippingCompositionError::Configuration)?;
         let mut generation_downloader =
-            VerifiedGenerationObjectDownloader::new(signed_generation_get);
+            VerifiedGenerationObjectStreamDownloader::new(signed_generation_get);
         let mut generation_uploader = WindowsSignedGenerationObjectPut::from_system()
             .map_err(|_| ShippingCompositionError::Configuration)?;
 

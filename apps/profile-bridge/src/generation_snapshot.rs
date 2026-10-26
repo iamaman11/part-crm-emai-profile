@@ -481,6 +481,7 @@ fn materialize_stream_into_staging(
         return Err(GenerationSnapshotError::SnapshotTooLarge);
     }
     let mut entries = Vec::with_capacity(count);
+    let mut native_total = 0_u64;
     let mut seen = HashSet::new();
     let mut buffer = [0_u8; 65_536];
     let mut previous = String::new();
@@ -504,6 +505,12 @@ fn materialize_stream_into_staging(
         let mut content_len = [0_u8; 8];
         read_stream_piece(source, &mut hash, &mut total, &mut content_len)?;
         let bytes = u64::from_be_bytes(content_len);
+        native_total = native_total
+            .checked_add(bytes)
+            .ok_or(GenerationSnapshotError::SnapshotTooLarge)?;
+        if native_total > MAX_STREAM_NATIVE_PROFILE_BYTES {
+            return Err(GenerationSnapshotError::SnapshotTooLarge);
+        }
         if total
             .checked_add(bytes)
             .is_none_or(|sum| sum > expected.plaintext_bytes)
