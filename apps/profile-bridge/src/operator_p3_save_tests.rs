@@ -682,7 +682,10 @@ fn one_hundred_isolated_profiles_complete_one_streaming_save_each_without_cross_
     for _ in 0..100 {
         let fixture = Fixture::new("stream-100-profiles")?;
         let tenant = fixture.actor.tenant_scope().tenant_id();
-        let scope = (tenant.as_str().to_owned(), fixture.profile_id.as_str().to_owned());
+        let scope = (
+            tenant.as_str().to_owned(),
+            fixture.profile_id.as_str().to_owned(),
+        );
         assert!(scopes.insert(scope));
         let mut operator = fixture.operator()?;
         fixture.open_mutate_and_close(&mut operator)?;
@@ -715,7 +718,9 @@ fn one_hundred_isolated_profiles_complete_one_streaming_save_each_without_cross_
         assert_eq!(puts.get(), 1);
         assert_eq!(paths.borrow().len(), 4);
         let saved_generation = completion.committed().generation_id().clone();
-        let saved = fixture.root.open_generation(tenant, &fixture.profile_id, &saved_generation)?;
+        let saved = fixture
+            .root
+            .open_generation(tenant, &fixture.profile_id, &saved_generation)?;
         assert_eq!(
             fs::read(saved.path().join("prefs.js"))?,
             b"mutated-after-launch",
