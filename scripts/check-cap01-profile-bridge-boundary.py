@@ -86,7 +86,10 @@ REQUIRED_RECOVERY_OWNER_MARKERS = (
     "fn resume_exact_successor_under_fresh_lease<",
     "fn resume_lone_local_unsynced_under_fresh_lease<",
     "deterministic_lone_unsynced_successor(",
-    "persist_exact_save_attempt_from_lone_intent(",
+    "recover_local_unsynced_native_clone(",
+    "persist_streaming_exact_save_attempt_from_lone_intent(",
+    "discover_unresolved_streaming_exact_save_attempt(",
+    "verified.first_seal_under_current_lease(fresh_lease)",
     "request_local_unsynced_retry_decision(",
     "fresh_lease.tenant_id() != tenant_id",
     "fresh_lease.profile_id() != profile_id",
@@ -646,12 +649,26 @@ def self_test() -> None:
 
         recovery.write_text(
             safe_recovery.replace(
-                "// persist_exact_save_attempt_from_lone_intent(\n",
+                "// persist_streaming_exact_save_attempt_from_lone_intent(\n",
                 "",
             ),
             encoding="utf-8",
         )
-        expect_rejected(root, "missing durably published first sealed checkpoint")
+        expect_rejected(root, "missing durably published streamed first sealed checkpoint")
+        recovery.write_text(safe_recovery, encoding="utf-8")
+
+        recovery.write_text(
+            safe_recovery.replace("// recover_local_unsynced_native_clone(\n", ""),
+            encoding="utf-8",
+        )
+        expect_rejected(root, "recovered LOCAL_UNSYNCED loses verified native N+1 clone")
+        recovery.write_text(safe_recovery, encoding="utf-8")
+
+        recovery.write_text(
+            safe_recovery.replace("// verified.first_seal_under_current_lease(fresh_lease)\n", ""),
+            encoding="utf-8",
+        )
+        expect_rejected(root, "recovered streaming BPAT loses origin-fence verification")
         recovery.write_text(safe_recovery, encoding="utf-8")
 
         recovery.write_text(
