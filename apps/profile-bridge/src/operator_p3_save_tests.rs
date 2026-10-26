@@ -7,7 +7,8 @@ use crate::local_profile::{
 };
 use crate::operator_flow::{
     BrowserLaunchPreflightPort, DeviceAuthenticationPort, EnrollmentPort, OperatorEnrollment,
-    OperatorFailureStage, OperatorFlowError, ProfileBridgeOperator, RuntimeBundleSelectionPort,
+    GenerationSaveFailureReason, OperatorFailureStage, OperatorFlowError, ProfileBridgeOperator,
+    RuntimeBundleSelectionPort,
 };
 use crate::runtime_bundle::ApprovedRuntimeBundle;
 use crate::shipping_control_plane::{MachineHttpMethod, MachineHttpPort, MachineHttpResponse};
@@ -532,9 +533,9 @@ fn canonical_operator_save_retries_same_successor_after_upload_failure()
     );
     assert!(matches!(
         first,
-        Err(OperatorFlowError::Stage(
-            OperatorFailureStage::GenerationSave
-        ))
+        Err(OperatorFlowError::GenerationSave {
+            reason: GenerationSaveFailureReason::UploadOutcomeUncertain,
+        })
     ));
     assert!(operator.has_pending_dirty_close());
     assert_eq!(
@@ -664,9 +665,9 @@ fn canonical_save_checkpoint_survives_owner_process_loss_without_authorizing_pub
     );
     assert!(matches!(
         first,
-        Err(OperatorFlowError::Stage(
-            OperatorFailureStage::GenerationSave
-        ))
+        Err(OperatorFlowError::GenerationSave {
+            reason: GenerationSaveFailureReason::UploadOutcomeUncertain,
+        })
     ));
     let candidate = GenerationId::parse(
         trace
@@ -746,9 +747,9 @@ fn crashed_save_checkpoint_blocks_fresh_launch_only_for_affected_profile()
     );
     assert!(matches!(
         failed,
-        Err(OperatorFlowError::Stage(
-            OperatorFailureStage::GenerationSave
-        ))
+        Err(OperatorFlowError::GenerationSave {
+            reason: GenerationSaveFailureReason::UploadOutcomeUncertain,
+        })
     ));
     let tenant = fixture.actor.tenant_scope().tenant_id();
     assert!(has_unresolved_save_attempt_for_profile(
@@ -915,9 +916,9 @@ fn canonical_save_refuses_tampered_checkpoint_before_any_retry_network_effect()
     );
     assert!(matches!(
         first,
-        Err(OperatorFlowError::Stage(
-            OperatorFailureStage::GenerationSave
-        ))
+        Err(OperatorFlowError::GenerationSave {
+            reason: GenerationSaveFailureReason::UploadOutcomeUncertain,
+        })
     ));
     let candidate = GenerationId::parse(
         trace
@@ -996,9 +997,9 @@ fn canonical_operator_retry_refuses_changed_candidate_and_preserves_unknown_byte
     );
     assert!(matches!(
         first,
-        Err(OperatorFlowError::Stage(
-            OperatorFailureStage::GenerationSave
-        ))
+        Err(OperatorFlowError::GenerationSave {
+            reason: GenerationSaveFailureReason::UploadOutcomeUncertain,
+        })
     ));
     let candidate = GenerationId::parse(
         trace
@@ -1074,9 +1075,9 @@ fn canonical_operator_lost_commit_response_reuses_verified_original_without_seco
     );
     assert!(matches!(
         first,
-        Err(OperatorFlowError::Stage(
-            OperatorFailureStage::GenerationSave
-        ))
+        Err(OperatorFlowError::GenerationSave {
+            reason: GenerationSaveFailureReason::ControlTransport,
+        })
     ));
     assert_eq!(put_calls.get(), 1);
     assert_eq!(operator.coordinator().sealing_requests, 1);
@@ -1144,9 +1145,9 @@ fn canonical_operator_never_verified_cannot_commit_or_release()
     );
     assert!(matches!(
         result,
-        Err(OperatorFlowError::Stage(
-            OperatorFailureStage::GenerationSave
-        ))
+        Err(OperatorFlowError::GenerationSave {
+            reason: GenerationSaveFailureReason::VerificationUnproven,
+        })
     ));
     assert!(operator.has_pending_dirty_close());
     assert_eq!(operator.coordinator().closed, 0);
@@ -1186,9 +1187,9 @@ fn canonical_operator_commit_transport_failure_retains_precommit_ownership()
     );
     assert!(matches!(
         result,
-        Err(OperatorFlowError::Stage(
-            OperatorFailureStage::GenerationSave
-        ))
+        Err(OperatorFlowError::GenerationSave {
+            reason: GenerationSaveFailureReason::ControlTransport,
+        })
     ));
     assert!(operator.has_pending_dirty_close());
     assert_eq!(operator.coordinator().closed, 0);
@@ -1230,9 +1231,9 @@ fn canonical_operator_malformed_commit_response_retains_precommit_ownership()
     );
     assert!(matches!(
         result,
-        Err(OperatorFlowError::Stage(
-            OperatorFailureStage::GenerationSave
-        ))
+        Err(OperatorFlowError::GenerationSave {
+            reason: GenerationSaveFailureReason::ControlInvalidResponse,
+        })
     ));
     assert!(operator.has_pending_dirty_close());
     assert_eq!(operator.coordinator().closed, 0);
