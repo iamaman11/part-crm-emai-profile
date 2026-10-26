@@ -229,12 +229,15 @@ mod tests {
         fs::write(&path, b"immutable")?;
         for (size, sha) in [
             (0, fingerprint(b"immutable")),
-            (8, fingerprint(b"wrongone")),
-            (9, fingerprint(b"immutable")),
+            (9, fingerprint(b"wrongone")),
+            (10, fingerprint(b"immutable")),
             (MAX_STREAM_CONTAINER_BYTES + 1, fingerprint(b"immutable")),
         ] {
             assert!(VerifiedGenerationObjectFile::open(&path, size, sha).is_err());
         }
+        assert!(VerifiedGenerationObjectFile::open(
+            &path, 9, fingerprint(b"immutable")
+        ).is_ok(), "the exact original file must be accepted");
         assert!(
             VerifiedGenerationObjectFile::open(
                 Path::new("relative.bpgc"),
