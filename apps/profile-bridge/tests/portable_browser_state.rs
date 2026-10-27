@@ -599,7 +599,8 @@ mod p3_fixture {
             ClaimUri::parse("profilebridge://claim/claim_s0_historical_lkg_cold_000003")?;
         let probe_device_id = DeviceId::parse(DEVICE)?;
         let mut enrollment = ControlPlaneEnrollment::new(transport.clone());
-        let admitted = enrollment.redeem_claim(&fresh_claim, &probe_device_id, UnixMillis::new(70))?;
+        let admitted =
+            enrollment.redeem_claim(&fresh_claim, &probe_device_id, UnixMillis::new(70))?;
         assert_eq!(admitted.generation_id(), &current);
         let mut historical_control = ControlPlaneCoordinator::new(transport.clone());
         let lease = historical_control.claim_launch_intent(
