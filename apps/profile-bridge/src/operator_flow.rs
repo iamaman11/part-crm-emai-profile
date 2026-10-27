@@ -841,6 +841,23 @@ where
             &mut self.camouhost,
             observe_browser_state,
         );
+        // The original Coordinator/Bridge keep the same live fence until
+        // the D1 owner has durably acknowledged the real-browser proof.
+        // If unknown/rejected, release Uncertain and never claim WORKING.
+        let observed = match observed {
+            Ok(observation) => match self.coordinator.certify_verified_predecessor_working(
+                observation.tenant_id(),
+                observation.profile_id(),
+                observation.current_generation_id(),
+                observation.predecessor_generation_id(),
+                observation.opening_prelude(),
+                observation.runtime_inventory_sha256(),
+            ) {
+                Ok(true) => Ok(observation),
+                _ => Err(HistoricalColdProbeError::PostLaunchAuthorityUnconfirmed),
+            },
+            Err(error) => Err(error),
+        };
         let release_failed = if observed.is_ok() {
             self.coordinator
                 .close_verified_historical_probe(&lease)

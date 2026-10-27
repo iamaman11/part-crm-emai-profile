@@ -18,6 +18,7 @@ use control_plane_contract::generation_reopen_api::{
     BRIDGE_PROFILE_GENERATION_PREDECESSOR_OPENING_PATH_TEMPLATE,
     BridgeGenerationDownloadCapabilityRequest, BridgeGenerationDownloadCapabilityResponse,
     BridgeGenerationOpeningMaterialRequest, BridgeGenerationOpeningMaterialResponse,
+    BridgeGenerationWorkingProofRequest, BRIDGE_PROFILE_GENERATION_WORKING_PROOF_PATH_TEMPLATE,
     GENERATION_DOWNLOAD_CAPABILITY_MAX_EXPIRES_SECONDS,
 };
 use control_plane_contract::profile_launch_api::{
@@ -807,6 +808,59 @@ where
         self.opening_reopen_for_purpose(tenant_id, profile_id, metadata_prelude, true)
             .map(Some)
     }
+
+    fn certify_verified_predecessor_working(
+        &mut self,
+        tenant_id: &TenantId,
+        profile_id: &ProfileId,
+        current: &GenerationId,
+        historical: &GenerationId,
+        opening_prelude: &[u8],
+        runtime_inventory_sha256: &str,
+    ) -> Result<bool, Self::Error> {
+        let cursor = self.exact_reopen_cursor(tenant_id, profile_id)?;
+        if current == historical
+            || opening_prelude.is_empty()
+            || opening_prelude.len() > MAX_GENERATION_METADATA_PRELUDE_BYTES
+            || !is_lower_sha256(runtime_inventory_sha256)
+        {
+            return Err(ShippingControlPlaneError::InvalidResponse);
+        }
+        let inspected = inspect_generation_metadata_prelude(opening_prelude)
+            .map_err(|_| ShippingControlPlaneError::InvalidResponse)?;
+        if inspected.prelude_bytes() != opening_prelude.len()
+            || inspected.metadata().generation_id() != historical
+            || inspected.metadata().tenant_id() != tenant_id
+            || inspected.metadata().profile_id() != profile_id
+        {
+            return Err(ShippingControlPlaneError::InvalidResponse);
+        }
+        let request = BridgeGenerationWorkingProofRequest::new(
+            current.as_str(),
+            historical.as_str(),
+            encode_lower_hex(opening_prelude),
+            runtime_inventory_sha256,
+            cursor.session_id.as_str(),
+            cursor.fencing_token.as_str(),
+            cursor.epoch,
+        );
+        let body = serde_json::to_vec(&request)
+            .map_err(|_| ShippingControlPlaneError::InvalidResponse)?;
+        let response = self.transport.request(
+            MachineHttpMethod::PostJson,
+            &generation_reopen_path(
+                tenant_id,
+                profile_id,
+                BRIDGE_PROFILE_GENERATION_WORKING_PROOF_PATH_TEMPLATE,
+            ),
+            &next_correlation_id()?,
+            Some(&body),
+        ).map_err(|_| ShippingControlPlaneError::Transport)?;
+        let response = accepted_response(response)?;
+        let reply = serde_json::from_slice::<serde_json::Value>(response.body())
+            .map_err(|_| ShippingControlPlaneError::InvalidResponse)?;
+        Ok(reply.get("confirmed").and_then(serde_json::Value::as_bool) == Some(true))
+    }
 }
 
 struct SecretDek([u8; 32]);
@@ -937,6 +991,11 @@ const fn lower_hex_nibble(value: u8) -> Option<u8> {
         b'a'..=b'f' => Some(value - b'a' + 10),
         _ => None,
     }
+}
+
+fn is_lower_sha256(value: &str) -> bool {
+    value.len() == 64
+        && value.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
 }
 
 fn encode_lower_hex(bytes: &[u8]) -> String {

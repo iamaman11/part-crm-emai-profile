@@ -551,6 +551,8 @@ pub struct HistoricalColdProbeObservation {
     source_container_sha256: String,
     runtime_inventory_sha256: String,
     materialized_inventory_digest: u64,
+    /// Bounded original metadata, not a DEK or reusable bearer.
+    opening_prelude: Vec<u8>,
 }
 
 impl core::fmt::Debug for HistoricalColdProbeObservation {
@@ -602,6 +604,11 @@ impl HistoricalColdProbeObservation {
     #[must_use]
     pub const fn materialized_inventory_digest(&self) -> u64 {
         self.materialized_inventory_digest
+    }
+
+    #[must_use]
+    pub fn opening_prelude(&self) -> &[u8] {
+        &self.opening_prelude
     }
 }
 
@@ -814,6 +821,7 @@ where
                     .as_str()
                     .to_owned(),
                 materialized_inventory_digest: binding.materialized_inventory_digest(),
+                opening_prelude: historical_opening_prelude,
             })
         })();
         if historical_lock.release().is_err() {

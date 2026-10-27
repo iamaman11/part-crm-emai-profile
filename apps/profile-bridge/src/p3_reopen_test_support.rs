@@ -34,7 +34,7 @@ use control_plane_contract::generation_key_api::{
 use control_plane_contract::generation_reopen_api::{
     BridgeGenerationDownloadCapabilityRequest, BridgeGenerationDownloadCapabilityResponse,
     BridgeGenerationOpeningMaterialRequest, BridgeGenerationOpeningMaterialResponse,
-    GENERATION_DOWNLOAD_CAPABILITY_MAX_EXPIRES_SECONDS,
+    BridgeGenerationWorkingProofRequest, GENERATION_DOWNLOAD_CAPABILITY_MAX_EXPIRES_SECONDS,
 };
 use control_plane_contract::profile_generation_api::{
     BridgeGenerationSuccessorCommitOutcomeDto, BridgeGenerationSuccessorCommitResponse,
@@ -161,6 +161,9 @@ impl MachineHttpPort for BackendMachineHttp {
         if path.ends_with("/generation-working-candidate/opening-material") {
             return state.historical_opening_material(body);
         }
+        if path.ends_with("/generation-working-candidate/certify") {
+            return state.historical_working_proof(body);
+        }
         if path.ends_with("/generation-reopen/download-capability") {
             return state.download_capability(body);
         }
@@ -192,6 +195,7 @@ struct BackendState {
     // authenticated keyring; a missing historical key must never silently
     // fall back to the newest root or trigger a new browser writer.
     historical_root_available: bool,
+    historical_working_proof: Option<String>,
     /// Inject a stale D1/CURRENT read during the second (post-browser) check.
     /// The first read and real cold launch must have already succeeded.
     historical_recheck_rejected: bool,
@@ -217,6 +221,7 @@ impl BackendState {
             object: None,
             retained_object: None,
             historical_root_available: true,
+            historical_working_proof: None,
             historical_recheck_rejected: false,
             historical_capability_reads: 0,
             events: Vec::new(),
@@ -569,6 +574,44 @@ impl BackendState {
             inspected.metadata().key_id().as_str(),
             lower_hex(&key_bytes),
         ))
+    }
+
+    fn historical_working_proof(
+        &mut self,
+        body: &[u8],
+    ) -> Result<MachineHttpResponse, BridgePortError> {
+        let request = serde_json::from_slice::<BridgeGenerationWorkingProofRequest>(body)
+            .map_err(|_| BridgePortError::InvalidResponse)?;
+        self.check_witness(
+            request.coordinator_session_id(),
+            request.coordinator_fencing_token(),
+            request.coordinator_epoch(),
+        )?;
+        if !self.historical_root_available
+            || request.current_generation_id() != self.active_generation.as_str()
+            || request.current_generation_id() == request.predecessor_generation_id()
+            || request.runtime_inventory_sha256().len() != 64
+        {
+            return Err(BridgePortError::InvalidResponse);
+        }
+        let (previous, bytes) = self.retained_object
+            .as_ref()
+            .ok_or(BridgePortError::InvalidResponse)?;
+        let inspected = inspect_generation_metadata_prelude(bytes)
+            .map_err(|_| BridgePortError::InvalidResponse)?;
+        let prelude = bytes.get(..inspected.prelude_bytes())
+            .ok_or(BridgePortError::InvalidResponse)?;
+        if previous.generation_id() != request.predecessor_generation_id()
+            || request.metadata_prelude_hex() != lower_hex(prelude)
+            || inspected.metadata().key_id().as_str() != ROOT_KEY_ID
+            || self.object.is_none()
+        {
+            return Err(BridgePortError::InvalidResponse);
+        }
+        let previous_generation = previous.generation_id().to_owned();
+        self.historical_working_proof = Some(previous_generation.clone());
+        self.events.push(format!("historical-working-proof:{previous_generation}"));
+        json_response(&serde_json::json!({"confirmed": true}))
     }
 
     fn download_capability(&mut self, body: &[u8]) -> Result<MachineHttpResponse, BridgePortError> {

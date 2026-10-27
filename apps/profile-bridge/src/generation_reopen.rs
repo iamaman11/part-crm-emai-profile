@@ -147,6 +147,20 @@ pub trait GenerationReopenControlPort {
     ) -> Result<Option<GenerationDek>, Self::Error> {
         Ok(None)
     }
+
+    /// The server may persist a receipt ONLY for a completed real-browser
+    /// historical probe. Default mocks reject it; a hash is never authority.
+    fn certify_verified_predecessor_working(
+        &mut self,
+        _tenant_id: &TenantId,
+        _profile_id: &ProfileId,
+        _current: &GenerationId,
+        _historical: &GenerationId,
+        _opening_prelude: &[u8],
+        _runtime_inventory_sha256: &str,
+    ) -> Result<bool, Self::Error> {
+        Ok(false)
+    }
 }
 
 /// Response from the narrow exact-URL GET effect. Redirects are not represented as success: the
