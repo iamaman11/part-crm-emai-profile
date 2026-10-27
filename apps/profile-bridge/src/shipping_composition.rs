@@ -176,6 +176,7 @@ mod windows {
     use profile_platform_primitives::UnixMillis;
     use std::env;
     use std::fs;
+    use std::os::windows::fs::MetadataExt;
     use std::path::PathBuf;
     use std::thread;
     use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -396,9 +397,21 @@ mod windows {
         if operator.cleanup_blocked() {
             return Err(ShippingCompositionError::CommittedRecoveryRequired);
         }
-        // The probe slot was atomically created by THIS invocation. The
-        // normal CURRENT root is a disjoint sibling, never a deletion target.
-        // A crashed process cannot create a second slot on the next call.
+        // The probe slot was atomically created by THIS invocation. Before
+        // deleting even that disposable restore, reject a substituted Windows
+        // junction/reparse point or a changed canonical destination. Never
+        // traverse a foreign link into the real user-data directory.
+        const REPARSE_POINT: u32 = 0x0400;
+        let slot_metadata =
+            fs::symlink_metadata(&slot_path).map_err(|_| ShippingCompositionError::Configuration)?;
+        if !slot_metadata.is_dir()
+            || slot_metadata.file_attributes() & REPARSE_POINT != 0
+            || fs::canonicalize(&slot_path)
+                .map_err(|_| ShippingCompositionError::Configuration)?
+                != slot_path
+        {
+            return Err(ShippingCompositionError::Configuration);
+        }
         fs::remove_dir_all(&slot_path).map_err(|_| ShippingCompositionError::Configuration)?;
         let _observation = result.map_err(ShippingCompositionError::Operator)?;
         eprintln!(
