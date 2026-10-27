@@ -463,6 +463,10 @@ pub enum OperatorFlowError {
     /// deadline has not been extended. Caller must retry or quiesce before it.
     HeartbeatTransportUncertain,
     Stage(OperatorFailureStage),
+    /// Exact N+1 was confirmed committed, old N never launched, its canonical
+    /// checkpoint is still durable, and the unused claim was released cleanly.
+    /// A NEW authenticated launch must select N+1; the consumed N URI cannot.
+    FreshAuthorizedOpenRequired,
     GenerationSave {
         reason: GenerationSaveFailureReason,
     },
@@ -496,7 +500,9 @@ impl OperatorFlowError {
     pub const fn stage(&self) -> Option<OperatorFailureStage> {
         match self {
             Self::Busy | Self::CleanupRequired => None,
-            Self::GenerationSave { .. } => Some(OperatorFailureStage::GenerationSave),
+            Self::GenerationSave { .. } | Self::FreshAuthorizedOpenRequired => {
+                Some(OperatorFailureStage::GenerationSave)
+            },
             Self::HeartbeatTransportUncertain => Some(OperatorFailureStage::CoordinatorHeartbeat),
             Self::Stage(stage) | Self::Runtime { stage, .. } | Self::Terminal { stage, .. } => {
                 Some(*stage)
@@ -518,6 +524,9 @@ impl fmt::Display for OperatorFlowError {
                 formatter.write_str("coordinator heartbeat transport result is uncertain")
             }
             Self::Stage(stage) => write!(formatter, "operator flow failed at {stage:?}"),
+            Self::FreshAuthorizedOpenRequired => formatter.write_str(
+                "new server-authorized Open required for committed successor; old one-time claim cannot be reused",
+            ),
             Self::GenerationSave { reason } => {
                 write!(
                     formatter,
@@ -1015,9 +1024,7 @@ where
                     if self.coordinator.close_without_browser_use(&lease).is_ok() {
                         // The consumed claim cannot select N+1. The existing
                         // application launch owner must issue a NEW claim.
-                        return Err(OperatorFlowError::Stage(
-                            OperatorFailureStage::GenerationSave,
-                        ));
+                        return Err(OperatorFlowError::FreshAuthorizedOpenRequired);
                     }
                     self.cleanup_blocked = true;
                     return Err(OperatorFlowError::Terminal {

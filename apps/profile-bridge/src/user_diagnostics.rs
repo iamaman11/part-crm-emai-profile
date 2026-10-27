@@ -620,6 +620,11 @@ impl UserDiagnostic {
                     "The save could not establish trustworthy operation or server-response evidence. Existing data is retained; no successful cloud save is claimed. Review Profile Operations before retrying."
                 }
             },
+            Self::Launch(Launch::Operator(
+                crate::operator_flow::OperatorFlowError::FreshAuthorizedOpenRequired,
+            )) => {
+                "The previous local changes were committed, but this one-time launch selected the older browser generation and cannot open the newer one. Return to Profile Operations and choose Open again to request a fresh authorization. Do not reuse the old link or delete local profile files."
+            }
             Self::Launch(
                 Launch::Operator(_) | Launch::ActiveSessionMissing | Launch::CloseObservation(_),
             ) => {
@@ -650,6 +655,7 @@ const fn operator_code(error: crate::operator_flow::OperatorFlowError) -> &'stat
         Error::Busy => "BRIDGE_PROFILE_BUSY",
         Error::CleanupRequired => "BRIDGE_CLEANUP_REQUIRED",
         Error::GenerationSave { reason } => reason.code(),
+        Error::FreshAuthorizedOpenRequired => "BRIDGE_FRESH_AUTHORIZED_OPEN_REQUIRED",
         Error::AuthoritativeGeneration {
             reason: crate::authoritative_generation::AuthoritativeGenerationMaterializationError::IncompleteLocalEvidence,
             ..
@@ -1171,6 +1177,21 @@ mod tests {
             OperatorFlowError::Stage(crate::operator_flow::OperatorFailureStage::GenerationSave),
         ));
         assert_eq!(old.code(), "BRIDGE_GENERATION_SAVE_FAILED");
+    }
+
+    #[test]
+    fn committed_newer_generation_requires_fresh_claim_not_a_fake_saved_or_generic_failure() {
+        let outcome = crate::operator_flow::OperatorFlowError::FreshAuthorizedOpenRequired;
+        let diagnostic = UserDiagnostic::Launch(ShippingCompositionError::Operator(outcome));
+        assert_eq!(diagnostic.code(), "BRIDGE_FRESH_AUTHORIZED_OPEN_REQUIRED");
+        assert_eq!(
+            outcome.stage(),
+            Some(crate::operator_flow::OperatorFailureStage::GenerationSave)
+        );
+        assert!(diagnostic.message().contains("committed"));
+        assert!(diagnostic.message().contains("fresh authorization"));
+        assert!(diagnostic.message().contains("Do not reuse"));
+        assert!(!diagnostic.message().contains("saved failed"));
     }
 
     #[test]

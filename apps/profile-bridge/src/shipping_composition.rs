@@ -585,7 +585,7 @@ mod windows {
                             // The one current coordinator owns the new claimed
                             // fence AND the generation sealing material cursor.
                             // No second coordinator or persisting recovery SM.
-                            match resume_lone_local_unsynced_under_fresh_lease(
+                            let committed = match resume_lone_local_unsynced_under_fresh_lease(
                                 &materialization_root,
                                 tenant,
                                 profile,
@@ -595,20 +595,35 @@ mod windows {
                                 &mut recovery_observation_transport,
                                 &mut generation_uploader,
                             ) {
-                                Ok(true) => eprintln!(
-                                    "P3_RECOVERY=FIRST_SUCCESSOR_COMMITTED;NEXT_SAFE_STEP=FRESH_OPEN_ACTIVE_EXACT"
-                                ),
-                                Ok(false) => eprintln!(
-                                    "P3_RECOVERY=FIRST_SEAL_BLOCKED;NEXT_SAFE_STEP=PRESERVE_LOCAL_BYTES"
-                                ),
-                                Err(error) => eprintln!(
-                                    "P3_RECOVERY={};NEXT_SAFE_STEP=RETRY_OWNED_RECOVERY",
-                                    error.code()
-                                ),
+                                Ok(true) => {
+                                    eprintln!(
+                                        "P3_RECOVERY=FIRST_SUCCESSOR_COMMITTED;NEXT_SAFE_STEP=FRESH_OPEN_ACTIVE_EXACT"
+                                    );
+                                    true
+                                }
+                                Ok(false) => {
+                                    eprintln!(
+                                        "P3_RECOVERY=FIRST_SEAL_BLOCKED;NEXT_SAFE_STEP=PRESERVE_LOCAL_BYTES"
+                                    );
+                                    false
+                                }
+                                Err(error) => {
+                                    eprintln!(
+                                        "P3_RECOVERY={};NEXT_SAFE_STEP=RETRY_OWNED_RECOVERY",
+                                        error.code()
+                                    );
+                                    false
+                                }
+                            };
+                            // First-sealed LOCAL_UNSYNCED uses the same exact
+                            // checkpoint/Firefox-writer proofs as sealed BPAT.
+                            // Never open stale N, but don't strand a proved
+                            // committed N+1 behind Uncertain coordinator state.
+                            if committed {
+                                PendingSaveRecovery::CommittedNewerRequiresClaim
+                            } else {
+                                PendingSaveRecovery::Blocked
                             }
-                            // A successful N->N+1 commit invalidates this
-                            // original-N launch. No browser may open N.
-                            PendingSaveRecovery::Blocked
                         }
                         Ok(RestartExactLocalCompletion::NoCanonicalCheckpoint) => {
                             let diagnosis = PendingSaveReadOnlyDiagnosis::from_observation(
