@@ -59,6 +59,42 @@ use profile_platform_primitives::{
 use worker::{Date, Env, Method, Request, Response, Result};
 
 const UPLOAD_CAPABILITY_EXPIRES_SECONDS: u32 = 300;
+/// Release-owned policy: exact native Camoufox inventory SHA-256. At most two
+/// approved digests while migrating CURRENT and one retained LKG. Absent or
+/// malformed configuration blocks only new WORKING proof, never local Open.
+const PROFILE_GENERATION_APPROVED_RUNTIME_INVENTORIES_VAR: &str =
+    "PROFILE_GENERATION_APPROVED_RUNTIME_INVENTORIES";
+
+/// No best-effort prefix matching, unknown versions, arbitrary lists or
+/// whitespace: the deployment's exact approved runtime artifacts are the
+/// source of truth, not the untrusted client-supplied certificate digest.
+fn is_approved_working_runtime(observed: &str, configured: Option<&str>) -> bool {
+    if !lower_sha256(observed) {
+        return false;
+    }
+    let Some(allowed) = configured else {
+        return false;
+    };
+    if allowed.len() != 64 && allowed.len() != 129 {
+        return false;
+    }
+    let mut items = allowed.split(',');
+    let Some(first) = items.next() else { return false };
+    if !lower_sha256(first) {
+        return false;
+    }
+    let second = items.next();
+    if items.next().is_some() {
+        return false;
+    }
+    if let Some(other) = second {
+        if !lower_sha256(other) || first == other {
+            return false;
+        }
+    }
+    observed == first || second == Some(observed)
+}
+
 type UploadSigningTimeResult =
     core::result::Result<R2GenerationUploadSigningTime, R2GenerationUploadCapabilityError>;
 type DownloadSigningTimeResult =
@@ -777,8 +813,18 @@ async fn dispatch_working_proof(
         Ok(value) if value != current => value,
         _ => return invalid_request(actor.correlation_id().as_str()),
     };
-    if !lower_sha256(body.runtime_inventory_sha256()) {
-        return invalid_request(actor.correlation_id().as_str());
+    // A hash supplied by the Bridge is not runtime authorization. The
+    // approved manifest inventory comes from the existing release-controlled
+    // Wrangler configuration, not from this request or the D1 receipt.
+    let configured_runtime = env
+        .var(PROFILE_GENERATION_APPROVED_RUNTIME_INVENTORIES_VAR)
+        .ok()
+        .map(|value| value.to_string());
+    if !is_approved_working_runtime(
+        body.runtime_inventory_sha256(),
+        configured_runtime.as_deref(),
+    ) {
+        return verification_conflict(actor.correlation_id().as_str());
     }
     let (session, fence) = match reopen_witness(
         body.coordinator_session_id(),
@@ -1636,7 +1682,8 @@ fn dependency(correlation_id: &str) -> Result<Response> {
 mod tests {
     use super::{
         BridgeGenerationMachineOperation, decode_bounded_lower_hex, decode_lower_sha256,
-        descriptor_shape_is_canonical, operation, valid_stream_container_bytes,
+        descriptor_shape_is_canonical, is_approved_working_runtime, operation,
+        valid_stream_container_bytes,
     };
     use encrypted_generation_domain::canonical_generation_object_key;
     use profile_platform_primitives::{
@@ -1756,6 +1803,28 @@ mod tests {
         ] {
             assert_eq!(operation(path, method), None);
         }
+    }
+
+    #[test]
+    fn working_runtime_rejects_unpinned_or_malformed_inventory() {
+        let current = "a".repeat(64);
+        let old = "b".repeat(64);
+        let foreign = "c".repeat(64);
+        let approved = format!("{current},{old}");
+        assert!(is_approved_working_runtime(&current, Some(&approved)));
+        assert!(is_approved_working_runtime(&old, Some(&approved)));
+        assert!(is_approved_working_runtime(&current, Some(&current)));
+        assert!(!is_approved_working_runtime(&foreign, Some(&approved)));
+        assert!(!is_approved_working_runtime(&current, None));
+        assert!(!is_approved_working_runtime(&current, Some("")));
+        assert!(!is_approved_working_runtime(&current, Some(&format!("{current},"))));
+        assert!(!is_approved_working_runtime(&current, Some(&format!(",{current}"))));
+        assert!(!is_approved_working_runtime(&current, Some(&format!("{current},{current}"))));
+        assert!(!is_approved_working_runtime(&current, Some(&format!("{current}, {old}"))));
+        assert!(!is_approved_working_runtime(&current, Some(&format!("{current},{old},{foreign}"))));
+        assert!(!is_approved_working_runtime(&current, Some(&current.to_uppercase())));
+        assert!(!is_approved_working_runtime(&current.to_uppercase(), Some(&current)));
+        assert!(!is_approved_working_runtime(&current, Some(&format!("{current}x"))));
     }
 
     #[test]

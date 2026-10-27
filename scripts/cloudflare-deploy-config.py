@@ -53,6 +53,7 @@ MANIFEST_FIELDS = {
     "custom_domain",
     "access_issuer",
     "access_audience",
+    "approved_runtime_inventories",
     "d1_database_name",
     "d1_database_id",
     "r2_bucket_name",
@@ -89,6 +90,7 @@ EXPECTED_VARS = {
     "CANONICAL_ENVIRONMENT",
     "CAPABILITY_PROFILE_ID",
     "CAPABILITY_PROFILE_DIGEST",
+    "PROFILE_GENERATION_APPROVED_RUNTIME_INVENTORIES",
 }
 EXPECTED_D1 = {"CATALOG_DB"}
 EXPECTED_R2 = {"PROFILE_OBJECTS"}
@@ -102,6 +104,7 @@ D1_ID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{1
 ACCOUNT_ID = re.compile(r"^[0-9a-f]{32}$")
 AUDIENCE = re.compile(r"^[A-Za-z0-9_-]{16,128}$")
 SHA256 = re.compile(r"^[0-9a-f]{64}$")
+APPROVED_RUNTIME_INVENTORIES = re.compile(r"^[0-9a-f]{64}(?:,[0-9a-f]{64})?$")
 
 
 class ConfigError(ValueError):
@@ -207,6 +210,7 @@ def validate_environment_template(environment: str, config: dict[str, object]) -
         "INITIAL_OWNER_EMAIL": f"${{{prefix}_INITIAL_OWNER_EMAIL}}",
         "R2_GENERATION_ACCOUNT_ID": f"${{{prefix}_ACCOUNT_ID}}",
         "R2_GENERATION_BUCKET_NAME": f"${{{prefix}_R2_BUCKET_NAME}}",
+        "PROFILE_GENERATION_APPROVED_RUNTIME_INVENTORIES": f"${{{prefix}_APPROVED_RUNTIME_INVENTORIES}}",
     }
     for key, expected in expected_variable_tokens.items():
         if variables.get(key) != expected:
@@ -320,6 +324,11 @@ def validate_manifest(environment: str, manifest: object, *, fixture: bool = Fal
         raise ConfigError(f"{environment}.d1_database_id must be a UUID-shaped D1 identifier")
     if AUDIENCE.fullmatch(values["access_audience"]) is None:
         raise ConfigError(f"{environment}.access_audience has an invalid shape")
+    runtime_pins = values["approved_runtime_inventories"]
+    if APPROVED_RUNTIME_INVENTORIES.fullmatch(runtime_pins) is None:
+        raise ConfigError(f"{environment}.approved_runtime_inventories must name one or two exact inventory SHA-256s")
+    if "," in runtime_pins and runtime_pins.split(",")[0] == runtime_pins.split(",")[1]:
+        raise ConfigError(f"{environment}.approved_runtime_inventories contains a duplicate inventory")
 
     issuer = urlparse(values["access_issuer"])
     if issuer.scheme != "https" or not issuer.hostname or issuer.path not in ("", "/") or issuer.query or issuer.fragment:
@@ -363,6 +372,7 @@ def token_map(environment: str, manifest: dict[str, str]) -> dict[str, str]:
         "CUSTOM_DOMAIN": "custom_domain",
         "ACCESS_ISSUER": "access_issuer",
         "ACCESS_AUDIENCE": "access_audience",
+        "APPROVED_RUNTIME_INVENTORIES": "approved_runtime_inventories",
         "INITIAL_OWNER_EMAIL": "initial_owner_email",
         "D1_DATABASE_NAME": "d1_database_name",
         "D1_DATABASE_ID": "d1_database_id",
@@ -409,6 +419,7 @@ def fixture_manifest(environment: str) -> dict[str, str]:
         "custom_domain": f"{label}.crm.invalid",
         "access_issuer": f"https://{label}.cloudflareaccess.invalid",
         "access_audience": ("a" if staging else "b") * 32,
+        "approved_runtime_inventories": ("a" if staging else "b") * 64,
         "d1_database_name": f"profile-catalog-{label}",
         "d1_database_id": f"{digit * 8}-{digit * 4}-{digit * 4}-{digit * 4}-{digit * 12}",
         "r2_bucket_name": f"profile-objects-{label}",
@@ -436,6 +447,12 @@ def self_test() -> None:
         raise ConfigError("staging R2 account identity diverged from deploy account")
     if production_vars["R2_GENERATION_ACCOUNT_ID"] != production["account_id"]:
         raise ConfigError("production R2 account identity diverged from deploy account")
+    for environment, vars_, manifest in (
+        ("staging", staging_vars, staging),
+        ("production", production_vars, production),
+    ):
+        if vars_["PROFILE_GENERATION_APPROVED_RUNTIME_INVENTORIES"] != manifest["approved_runtime_inventories"]:
+            raise ConfigError(f"{environment} approved runtime policy diverged from controlled manifest")
     if "BRIDGE_ACCESS_AUDIENCE" in staging_vars or "BRIDGE_ACCESS_AUDIENCE" in production_vars:
         raise ConfigError("legacy Bridge Access audience must remain absent from application-session runtime")
     if staging_vars["CAPABILITY_PROFILE_ID"] != "rehearsal-core-v2":
