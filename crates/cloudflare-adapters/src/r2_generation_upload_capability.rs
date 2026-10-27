@@ -4,6 +4,7 @@ use crate::r2_generation_objects::{
 };
 use application_ports::generation_objects::GenerationObjectDescriptor;
 use core::fmt;
+use encrypted_generation_domain::MAX_STREAM_CONTAINER_BYTES;
 use profile_platform_primitives::TenantScope;
 use sha2::{Digest, Sha256};
 use zeroize::Zeroize;
@@ -286,6 +287,7 @@ fn validate_descriptor(
     );
     if descriptor.object_key() != canonical_key
         || descriptor.container_bytes() == 0
+        || descriptor.container_bytes() > MAX_STREAM_CONTAINER_BYTES
         || !is_lower_hex_sha256(descriptor.metadata_digest())
         || !is_lower_hex_sha256(descriptor.container_digest())
     {
@@ -435,7 +437,8 @@ const fn hex_lower_digit(value: u8) -> char {
 #[cfg(test)]
 mod tests {
     use super::{
-        R2GenerationUploadCapabilitySigner, R2GenerationUploadSigningTime, R2SigV4Credentials,
+        R2GenerationUploadCapabilityError, R2GenerationUploadCapabilitySigner,
+        R2GenerationUploadSigningTime, R2SigV4Credentials,
         hmac_sha256, uri_encode,
     };
     use application_ports::generation_objects::GenerationObjectDescriptor;
@@ -543,6 +546,34 @@ mod tests {
             assert!(!headers.iter().any(|(name, _)| name == forbidden));
         }
         assert_eq!(capability.expires_seconds(), 300);
+        Ok(())
+    }
+
+    #[test]
+    fn signed_r2_put_is_never_issued_for_uncommittable_stream_size()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use encrypted_generation_domain::MAX_STREAM_CONTAINER_BYTES;
+        let original = descriptor()?;
+        let make = |bytes| {
+            GenerationObjectDescriptor::new(
+                original.profile_id().clone(),
+                original.generation_id().clone(),
+                original.object_key(),
+                original.metadata_digest(),
+                original.container_digest(),
+                bytes,
+            )
+        };
+        let scope = TenantScope::new(TenantId::parse("tenant_upload_capability_01")?);
+        let at = R2GenerationUploadSigningTime::parse("20260810T120000Z")?;
+        let signer = signer()?;
+        assert!(signer.sign_put(&scope, &make(MAX_STREAM_CONTAINER_BYTES), &at, 300).is_ok());
+        for rejected in [0, MAX_STREAM_CONTAINER_BYTES + 1, u64::MAX] {
+            assert_eq!(
+                signer.sign_put(&scope, &make(rejected), &at, 300).err(),
+                Some(R2GenerationUploadCapabilityError::InvalidDescriptor)
+            );
+        }
         Ok(())
     }
 

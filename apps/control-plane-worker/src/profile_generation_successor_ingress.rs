@@ -51,6 +51,7 @@ use device_domain::DeviceJobTarget;
 use encrypted_generation_domain::{
     InspectedGenerationMetadataPrelude, MAX_GENERATION_METADATA_PRELUDE_BYTES,
     canonical_generation_object_key, inspect_generation_metadata_prelude,
+    MAX_STREAM_CONTAINER_BYTES,
 };
 use profile_platform_primitives::{
     ActorContext, DeviceId, FencingToken, GenerationId, ProfileId, SessionId, UnixMillis,
@@ -283,7 +284,7 @@ pub(crate) async fn dispatch_authorized(
         Err(_) => return invalid_request(actor.correlation_id().as_str()),
     };
     if generation_id == base_generation_id
-        || body.container_bytes() == 0
+        || !valid_stream_container_bytes(body.container_bytes())
         || body.coordinator_epoch() == 0
     {
         return invalid_request(actor.correlation_id().as_str());
@@ -1271,6 +1272,13 @@ async fn device_authorized(
         .map_err(|error| error.class())
 }
 
+/// Exact ingress size envelope must match both streaming crypto and D1
+/// journals BEFORE R2 signed PUT is issued. Rejecting only at commit would
+/// leave a verified but forever uncommittable orphan in R2.
+fn valid_stream_container_bytes(bytes: u64) -> bool {
+    (1..=MAX_STREAM_CONTAINER_BYTES).contains(&bytes)
+}
+
 fn descriptor_shape_is_canonical(
     actor: &ActorContext,
     profile_id: &ProfileId,
@@ -1492,7 +1500,7 @@ fn dependency(correlation_id: &str) -> Result<Response> {
 mod tests {
     use super::{
         BridgeGenerationMachineOperation, decode_bounded_lower_hex, decode_lower_sha256,
-        descriptor_shape_is_canonical, operation,
+        descriptor_shape_is_canonical, operation, valid_stream_container_bytes,
     };
     use encrypted_generation_domain::canonical_generation_object_key;
     use profile_platform_primitives::{
@@ -1629,6 +1637,17 @@ mod tests {
         assert_eq!(decode_bounded_lower_hex("0", 2), None);
         assert_eq!(decode_bounded_lower_hex("000000", 2), None);
         assert_eq!(decode_bounded_lower_hex("", 2), None);
+    }
+
+    #[test]
+    fn streaming_size_matches_crypto_and_d1_before_any_signed_put() {
+        use encrypted_generation_domain::MAX_STREAM_CONTAINER_BYTES;
+        assert!(!valid_stream_container_bytes(0));
+        assert!(valid_stream_container_bytes(1));
+        assert!(valid_stream_container_bytes(512 * 1024 * 1024 + 1024 * 1024));
+        assert!(valid_stream_container_bytes(MAX_STREAM_CONTAINER_BYTES));
+        assert!(!valid_stream_container_bytes(MAX_STREAM_CONTAINER_BYTES + 1));
+        assert!(!valid_stream_container_bytes(u64::MAX));
     }
 
     #[test]
