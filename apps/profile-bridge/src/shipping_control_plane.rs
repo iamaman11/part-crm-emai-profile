@@ -2181,6 +2181,58 @@ mod tests {
     }
 
     #[test]
+    fn historical_candidate_get_is_read_only_server_selected_and_fresh_fenced()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let tenant_id = TenantId::parse("tenant_sealing_adapter_01")?;
+        let profile_id = ProfileId::parse("profile_sealing_adapter_01")?;
+        let historical_id = GenerationId::parse("generation_old_cold_probe_01")?;
+        let key = canonical_generation_object_key(&tenant_id, &profile_id, &historical_id);
+        let signed_url = "https://0123456789abcdef0123456789abcdef.r2.cloudflarestorage.com/profile-generations/tenants/tenant_sealing_adapter_01/profiles/profile_sealing_adapter_01/generations/generation_old_cold_probe_01.bpgc?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=access%2F20260830%2Fauto%2Fs3%2Faws4_request&X-Amz-Date=20260830T120000Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        let response = BridgeGenerationDownloadCapabilityResponse::new(
+            historical_id.as_str(),
+            &key,
+            "aa".repeat(32),
+            "bb".repeat(32),
+            4096,
+            signed_url,
+            GENERATION_DOWNLOAD_CAPABILITY_MAX_EXPIRES_SECONDS,
+        );
+        let mut fixture = SealingFixture::new(MachineHttpResponse::new(
+            200,
+            serde_json::to_vec(&response)?,
+        ))?;
+        let candidate = fixture
+            .coordinator
+            .verified_predecessor_capability(&fixture.tenant_id, &fixture.profile_id)?
+            .ok_or("historical candidate missing")?;
+        assert_eq!(candidate.generation_id(), &historical_id);
+        assert_eq!(candidate.object_key(), key);
+        assert_eq!(candidate.container_digest(), [0xbb; 32]);
+        let (method, path, body) = &fixture.coordinator.transport.requests[0];
+        assert_eq!(*method, MachineHttpMethod::PostJson);
+        let expected_path =
+            control_plane_contract::generation_reopen_api::BRIDGE_PROFILE_GENERATION_PREDECESSOR_DOWNLOAD_PATH_TEMPLATE
+                .replace("{tenantId}", tenant_id.as_str())
+                .replace("{profileId}", profile_id.as_str());
+        assert_eq!(path, &expected_path);
+        let request = serde_json::from_slice::<BridgeGenerationDownloadCapabilityRequest>(body)?;
+        assert_eq!(request.coordinator_session_id(), "session_sealing_adapter_01");
+        assert_eq!(request.coordinator_fencing_token(), "fence_sealing_adapter_01");
+        assert_eq!(request.coordinator_epoch(), 7);
+        assert!(!String::from_utf8_lossy(body).contains("generationId"));
+        assert!(!String::from_utf8_lossy(body).contains("objectKey"));
+        assert!(!String::from_utf8_lossy(body).contains("keyId"));
+
+        let mut no_claim = ControlPlaneCoordinator::new(SealingMachineHttp::default());
+        assert!(matches!(
+            no_claim.verified_predecessor_capability(&tenant_id, &profile_id),
+            Err(ShippingControlPlaneError::InvalidResponse)
+        ));
+        assert!(no_claim.transport.requests.is_empty());
+        Ok(())
+    }
+
+    #[test]
     fn reopen_requires_exact_cursor_before_transport() -> Result<(), Box<dyn std::error::Error>> {
         let tenant_id = TenantId::parse("tenant_reopen_no_cursor_01")?;
         let profile_id = ProfileId::parse("profile_reopen_no_cursor_01")?;

@@ -358,6 +358,8 @@ pub(crate) async fn dispatch_authorized(
         | BridgeGenerationMachineOperation::SealingMaterial
         | BridgeGenerationMachineOperation::DownloadCapability
         | BridgeGenerationMachineOperation::OpeningMaterial
+        | BridgeGenerationMachineOperation::PredecessorDownloadCapability
+        | BridgeGenerationMachineOperation::PredecessorOpeningMaterial
         | BridgeGenerationMachineOperation::Observe
         | BridgeGenerationMachineOperation::RetryDecision
         | BridgeGenerationMachineOperation::LocalUnsyncedRetryDecision => {
