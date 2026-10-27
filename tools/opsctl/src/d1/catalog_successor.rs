@@ -33,13 +33,15 @@ const DEVICE_APPLICATION_AUTHORITY_REVISION: &str = "0034_device_application_aut
 const SUCCESSOR_CONTRACT_REVISION: &str = "0035_pas2_payload_fingerprint_contract.sql";
 const INITIAL_GENERATION_REVISION: &str = "0036_profile_generation_initialization.sql";
 const STREAMING_GENERATION_REVISION: &str = "0037_generation_streaming_container_limit.sql";
-const CURRENT_SUCCESSOR_FILES: [&str; 6] = [
+const WORKING_PROOF_REVISION: &str = "0038_profile_generation_working_proof.sql";
+const CURRENT_SUCCESSOR_FILES: [&str; 7] = [
     BRIDGE_ENROLLMENT_REVISION,
     PUBLIC_KEY_BINDING_REVISION,
     DEVICE_APPLICATION_AUTHORITY_REVISION,
     SUCCESSOR_CONTRACT_REVISION,
     INITIAL_GENERATION_REVISION,
     STREAMING_GENERATION_REVISION,
+    WORKING_PROOF_REVISION,
 ];
 
 #[derive(Debug, Clone)]
@@ -227,9 +229,9 @@ impl CatalogSuccessor {
             .ordered_history
             .last()
             .ok_or_else(|| D1Error::new("Catalog successor-v2 migration lineage is empty"))?;
-        if latest != STREAMING_GENERATION_REVISION {
+        if latest != WORKING_PROOF_REVISION {
             return Err(D1Error::new(
-                "Catalog streaming-generation runtime requires exact schema0037",
+                "Catalog working-proof runtime requires exact schema0038",
             ));
         }
         let target = latest;
