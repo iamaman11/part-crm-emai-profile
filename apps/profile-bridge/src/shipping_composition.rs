@@ -399,8 +399,7 @@ mod windows {
         // The probe slot was atomically created by THIS invocation. The
         // normal CURRENT root is a disjoint sibling, never a deletion target.
         // A crashed process cannot create a second slot on the next call.
-        fs::remove_dir_all(&slot_path)
-            .map_err(|_| ShippingCompositionError::Configuration)?;
+        fs::remove_dir_all(&slot_path).map_err(|_| ShippingCompositionError::Configuration)?;
         let _observation = result.map_err(ShippingCompositionError::Operator)?;
         eprintln!(
             "HISTORICAL_COLD_PROBE=BROWSER_IDENTITY_VERIFIED;WORKING_LKG_CERTIFICATE=0;R2_PRUNE_AUTHORITY=0"

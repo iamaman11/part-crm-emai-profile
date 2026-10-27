@@ -10,8 +10,8 @@ use profile_bridge::generation_initialization::{INITIAL_OPEN_URI_PREFIX, Initial
 use profile_bridge::installed_connection::ControlPlaneOrigin;
 use profile_bridge::shipping_composition::run_claim;
 use profile_bridge::shipping_composition::{
-    VERIFY_HISTORICAL_CANDIDATE_ARGUMENT, run_historical_candidate_probe,
-    ShippingCompositionError, ShippingDeliveryCommand, run_delivery_command,
+    ShippingCompositionError, ShippingDeliveryCommand, VERIFY_HISTORICAL_CANDIDATE_ARGUMENT,
+    run_delivery_command, run_historical_candidate_probe,
 };
 use profile_bridge::user_diagnostics::UserDiagnostic;
 use profile_bridge::windows_delivery_handoff::{
@@ -74,8 +74,9 @@ where
                 .map_err(BridgeCliError::LaunchFailed)
         }
         BridgeCommand::Claim(claim) => run_claim(&claim).map_err(BridgeCliError::LaunchFailed),
-        BridgeCommand::VerifyHistoricalCandidate(claim) => run_historical_candidate_probe(&claim)
-            .map_err(BridgeCliError::LaunchFailed),
+        BridgeCommand::VerifyHistoricalCandidate(claim) => {
+            run_historical_candidate_probe(&claim).map_err(BridgeCliError::LaunchFailed)
+        }
         BridgeCommand::PairingStart(uri) => {
             run_pairing_start(&uri).map_err(BridgeCliError::PairingFailed)
         }
@@ -140,11 +141,7 @@ where
         return Ok(BridgeCommand::PrepareInstallation(bundle, root));
     }
     if argument.as_str() == VERIFY_HISTORICAL_CANDIDATE_ARGUMENT {
-        let claim = Zeroizing::new(
-            arguments
-                .next()
-                .ok_or(BridgeCliError::InvalidClaimUri)?,
-        );
+        let claim = Zeroizing::new(arguments.next().ok_or(BridgeCliError::InvalidClaimUri)?);
         if arguments.next().is_some() {
             return Err(BridgeCliError::UnexpectedArgument);
         }
@@ -409,7 +406,11 @@ mod tests {
         ));
         for invalid in [
             vec![command[0].clone(), command[1].clone()],
-            vec![command[0].clone(), command[1].clone(), "not-a-claim".to_owned()],
+            vec![
+                command[0].clone(),
+                command[1].clone(),
+                "not-a-claim".to_owned(),
+            ],
             vec![
                 command[0].clone(),
                 command[1].clone(),
