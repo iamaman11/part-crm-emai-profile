@@ -709,10 +709,13 @@ mod p3_fixture {
                 2,
                 "historical R2 permission must be revalidated after the real browser has stopped"
             );
-            assert!(
+            assert_eq!(
                 events
                     .iter()
-                    .any(|e| e.starts_with("historical-opening-material:"))
+                    .filter(|e| e.starts_with("historical-opening-material:"))
+                    .count(),
+                2,
+                "old root must remain derivable after the real historical Camoufox closes"
             );
             assert!(!events.iter().any(|e| e.contains("historical-commit")));
             assert!(
@@ -798,6 +801,70 @@ mod p3_fixture {
         );
         state.borrow_mut().historical_capability_reads = 0;
         state.borrow_mut().historical_recheck_rejected = false;
+
+        // Even a correct real Camoufox cold launch is NOT a durable LKG if
+        // the old decryption root disappears before its post-close proof.
+        // This checks the existing opening-material owner, not a new SM.
+        let lost_after_launch_path = std::env::temp_dir().join(format!(
+            "profile-bridge-old-key-revoked-after-launch-{}-{counter}",
+            std::process::id()
+        ));
+        let _lost_cleanup = CleanupRoot(lost_after_launch_path.clone());
+        let lost_root = MaterializationRoot::open_or_create(lost_after_launch_path)?;
+        let lost_slot = crate::camouhost_process::RuntimeBindingSlot::new();
+        let mut lost_preflight =
+            crate::shipping_preflight::ShippingBrowserLaunchPreflight::new(lost_slot.clone());
+        let lost_config = crate::camouhost_process::ManagedCamouhostConfig::new(
+            paths.python.clone(),
+            paths.runtime_root.clone(),
+            paths.display_mode,
+            Some(origin.url()),
+            None,
+        )?;
+        let (mut lost_process, mut lost_camouhost) =
+            crate::camouhost_process::ManagedCamouhostProcess::pair(lost_config, lost_slot);
+        let mut lost_downloader = VerifiedGenerationObjectDownloader::new(BackendGet {
+            state: Rc::clone(&state),
+        });
+        let denied = crate::authoritative_generation::cold_launch_verified_predecessor_once(
+            &root,
+            &lost_root,
+            &current,
+            &lease,
+            &runtime,
+            &mut historical_control,
+            &mut lost_downloader,
+            &mut lost_preflight,
+            &mut lost_process,
+            &mut lost_camouhost,
+            &mut || {
+                origin.expect("verify", 5).map_err(|_| ())?;
+                state.borrow_mut().historical_root_available = false;
+                Ok(())
+            },
+        );
+        assert!(matches!(
+            denied,
+            Err(
+                crate::authoritative_generation::HistoricalColdProbeError::PostLaunchAuthorityUnconfirmed
+            )
+        ));
+        assert_eq!(state.borrow().active_generation, current);
+        assert_eq!(state.borrow().coordinator_status, CoordinatorStatusDto::Active);
+        assert!(
+            !original_current
+                .path()
+                .join(".profile-platform.lock")
+                .exists()
+        );
+        // On an uncertain proof, the disposable historical workspace is
+        // retained; neither a missing old key nor the new check grants prune.
+        assert!(
+            lost_root
+                .open_generation(&tenant_id, &profile_id, &successor)
+                .is_ok()
+        );
+        state.borrow_mut().historical_root_available = true;
 
         // Negative admission against the SAME unchanged CURRENT pointer and
         // coordinator: missing original root key must block before any browser
