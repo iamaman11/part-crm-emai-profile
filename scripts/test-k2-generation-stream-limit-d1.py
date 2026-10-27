@@ -116,7 +116,89 @@ def test_populated_predecessor_preserves_exact_commands() -> None:
         conn.close()
 
 
+def test_full_512_mib_successor_commit_and_oversize_rejection() -> None:
+    """Prove governed D1 N+1 accepts a real streaming *size*, not just DDL text.
+
+    Cloud R2 byte verification and Firefox decrypt/open are tested separately.
+    This test executes the actual migration-owned device/successor triggers;
+    the 512 MiB payload itself is never allocated here.
+    """
+    fixture = ROOT / "scripts/test-device-generation-commit-d1.py"
+    spec = importlib.util.spec_from_file_location("stream_device_fixture", fixture)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    full_stream_size = 512 * 1024 * 1024 + 1 * 1024 * 1024
+    upper_bound = 637_534_208
+
+    # A previous 80 MiB migration must reject rather than silently truncate
+    # a large ciphertext. The canonical 0037 migration then admits it.
+    conn = module.seed()
+    try:
+        base = conn.execute(
+            "SELECT active_generation_id FROM browser_profiles "
+            "WHERE tenant_id=? AND profile_id=?",
+            (module.TENANT, module.PROFILE),
+        ).fetchone()[0]
+        assert base == module.BASE
+        try:
+            module.insert_device_commit(
+                conn, module.command_values(container_bytes=full_stream_size)
+            )
+        except sqlite3.IntegrityError:
+            conn.rollback()
+        else:
+            raise AssertionError("unmigrated 80 MiB journal accepted 512 MiB N+1")
+        assert conn.execute(
+            "SELECT active_generation_id FROM browser_profiles "
+            "WHERE tenant_id=? AND profile_id=?",
+            (module.TENANT, module.PROFILE),
+        ).fetchone()[0] == base
+
+        apply(conn, K2)
+        module.insert_device_commit(
+            conn, module.command_values(container_bytes=full_stream_size)
+        )
+        conn.commit()
+        for table in (
+            "device_generation_commit_commands",
+            "profile_generation_successor_commands",
+        ):
+            assert conn.execute(
+                f"SELECT container_bytes FROM {table} WHERE tenant_id=?",
+                (module.TENANT,),
+            ).fetchone()[0] == full_stream_size
+        assert conn.execute(
+            "SELECT active_generation_id FROM browser_profiles "
+            "WHERE tenant_id=? AND profile_id=?",
+            (module.TENANT, module.PROFILE),
+        ).fetchone()[0] == module.CANDIDATE
+        assert_governed(conn)
+    finally:
+        conn.close()
+
+    # A fresh request larger than the streaming domain contract must be
+    # refused by the existing SQL owner without changing CURRENT or job.
+    conn = module.seed()
+    try:
+        apply(conn, K2)
+        baseline = module.catalog_snapshot(conn)
+        try:
+            module.insert_device_commit(
+                conn, module.command_values(container_bytes=upper_bound + 1)
+            )
+        except sqlite3.IntegrityError:
+            conn.rollback()
+        else:
+            raise AssertionError("D1 admitted ciphertext beyond the 608 MiB cap")
+        assert module.catalog_snapshot(conn) == baseline
+        assert_governed(conn)
+    finally:
+        conn.close()
+
+
 if __name__ == "__main__":
     test_exact_successor_v2_lineage()
     test_populated_predecessor_preserves_exact_commands()
-    print("K2 608MiB D1 successor-v2 schema and historical command preservation PASS")
+    test_full_512_mib_successor_commit_and_oversize_rejection()
+    print("K2 512MiB positive D1 commit, 608MiB upper bound and historical preservation PASS")
