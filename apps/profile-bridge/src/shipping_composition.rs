@@ -346,12 +346,6 @@ mod windows {
             .parent()
             .ok_or(ShippingCompositionError::Configuration)?;
         let slot_path = parent.join(HISTORICAL_PROBE_SLOT);
-        // No remove/reuse of an unknown prior slot; this also bounds crash
-        // residue to one historical full copy on the installed volume.
-        fs::create_dir(&slot_path).map_err(|_| ShippingCompositionError::Configuration)?;
-        let isolated = MaterializationRoot::open_or_create(&slot_path)
-            .map_err(|_| ShippingCompositionError::Configuration)?;
-
         let slot = RuntimeBindingSlot::new();
         let preflight = ShippingBrowserLaunchPreflight::new(slot.clone());
         let config = ManagedCamouhostConfig::new(
@@ -375,6 +369,20 @@ mod windows {
             process,
             camouhost,
         );
+        // Create the one protected slot only AFTER all fallible installed
+        // runtime/device/bootstrap construction. This avoids leaving a
+        // permanent blocker when configuration is rejected before any probe.
+        // Never remove/reuse unknown bytes after a prior crash.
+        fs::create_dir(&slot_path).map_err(|_| ShippingCompositionError::Configuration)?;
+        let isolated = match MaterializationRoot::open_or_create(&slot_path) {
+            Ok(root) => root,
+            Err(_) => {
+                // Only remove our still-empty directory; do not recursively
+                // delete an unverified profile or follow an injected link.
+                let _ = fs::remove_dir(&slot_path);
+                return Err(ShippingCompositionError::Configuration);
+            }
+        };
         let result = operator.probe_verified_predecessor_once(
             claim,
             &primary,
