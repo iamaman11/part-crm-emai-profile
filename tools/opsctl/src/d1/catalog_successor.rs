@@ -814,8 +814,8 @@ mod tests {
     use super::{
         BRIDGE_ENROLLMENT_REVISION, CURRENT_SUCCESSOR_ROOT, DEVICE_APPLICATION_AUTHORITY_REVISION,
         PREDECESSOR_SUCCESSOR_ROOT, PUBLIC_KEY_BINDING_REVISION, STREAMING_GENERATION_REVISION,
-        WORKING_PROOF_REVISION,
-        SUCCESSOR_CONTRACT_REVISION, component_authority, release_contract, repository_projection,
+        SUCCESSOR_CONTRACT_REVISION, WORKING_PROOF_REVISION, component_authority, release_contract,
+        repository_projection,
     };
     use serde_json::Value;
     use std::error::Error;
@@ -847,18 +847,9 @@ mod tests {
     #[test]
     fn release_window_requires_exact_initialization_schema() -> Result<(), Box<dyn Error>> {
         let contract = release_contract(&repository_root(), "catalog")?;
-        assert_eq!(
-            contract["target_schema_revision"],
-            WORKING_PROOF_REVISION
-        );
-        assert_eq!(
-            contract["supported_schema_min"],
-            WORKING_PROOF_REVISION
-        );
-        assert_eq!(
-            contract["supported_schema_max"],
-            WORKING_PROOF_REVISION
-        );
+        assert_eq!(contract["target_schema_revision"], WORKING_PROOF_REVISION);
+        assert_eq!(contract["supported_schema_min"], WORKING_PROOF_REVISION);
+        assert_eq!(contract["supported_schema_max"], WORKING_PROOF_REVISION);
         Ok(())
     }
 
