@@ -327,7 +327,7 @@ fn actual_deployed_context_traverses_separate_sealed_contract_and_current_expand
         )?;
         assert_eq!(tx.transaction_plan.phase, phase);
         let expected_transaction_target = if count == 35 {
-            &history[count + 1]
+            &history[count + 2]
         } else {
             &history[count]
         };
