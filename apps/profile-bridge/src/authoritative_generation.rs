@@ -392,6 +392,7 @@ where
     C::Error: Into<GenerationReopenControlError>,
     D: GenerationObjectDownloadPort,
     D::Error: Into<GenerationObjectDownloadError>,
+{
     let mut ignored_prelude = Vec::new();
     materialize_historical_with_opening_prelude(
         primary,
