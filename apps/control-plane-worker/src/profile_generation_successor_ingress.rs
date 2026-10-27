@@ -50,8 +50,8 @@ use control_plane_contract::profile_generation_api::{
 use device_domain::DeviceJobTarget;
 use encrypted_generation_domain::{
     InspectedGenerationMetadataPrelude, MAX_GENERATION_METADATA_PRELUDE_BYTES,
-    canonical_generation_object_key, inspect_generation_metadata_prelude,
-    MAX_STREAM_CONTAINER_BYTES,
+    MAX_STREAM_CONTAINER_BYTES, canonical_generation_object_key,
+    inspect_generation_metadata_prelude,
 };
 use profile_platform_primitives::{
     ActorContext, DeviceId, FencingToken, GenerationId, ProfileId, SessionId, UnixMillis,
@@ -1644,9 +1644,13 @@ mod tests {
         use encrypted_generation_domain::MAX_STREAM_CONTAINER_BYTES;
         assert!(!valid_stream_container_bytes(0));
         assert!(valid_stream_container_bytes(1));
-        assert!(valid_stream_container_bytes(512 * 1024 * 1024 + 1024 * 1024));
+        assert!(valid_stream_container_bytes(
+            512 * 1024 * 1024 + 1024 * 1024
+        ));
         assert!(valid_stream_container_bytes(MAX_STREAM_CONTAINER_BYTES));
-        assert!(!valid_stream_container_bytes(MAX_STREAM_CONTAINER_BYTES + 1));
+        assert!(!valid_stream_container_bytes(
+            MAX_STREAM_CONTAINER_BYTES + 1
+        ));
         assert!(!valid_stream_container_bytes(u64::MAX));
     }
 

@@ -438,8 +438,7 @@ const fn hex_lower_digit(value: u8) -> char {
 mod tests {
     use super::{
         R2GenerationUploadCapabilityError, R2GenerationUploadCapabilitySigner,
-        R2GenerationUploadSigningTime, R2SigV4Credentials,
-        hmac_sha256, uri_encode,
+        R2GenerationUploadSigningTime, R2SigV4Credentials, hmac_sha256, uri_encode,
     };
     use application_ports::generation_objects::GenerationObjectDescriptor;
     use profile_platform_primitives::{GenerationId, ProfileId, TenantId, TenantScope};
@@ -567,7 +566,11 @@ mod tests {
         let scope = TenantScope::new(TenantId::parse("tenant_upload_capability_01")?);
         let at = R2GenerationUploadSigningTime::parse("20260810T120000Z")?;
         let signer = signer()?;
-        assert!(signer.sign_put(&scope, &make(MAX_STREAM_CONTAINER_BYTES), &at, 300).is_ok());
+        assert!(
+            signer
+                .sign_put(&scope, &make(MAX_STREAM_CONTAINER_BYTES), &at, 300)
+                .is_ok()
+        );
         for rejected in [0, MAX_STREAM_CONTAINER_BYTES + 1, u64::MAX] {
             assert_eq!(
                 signer.sign_put(&scope, &make(rejected), &at, 300).err(),
