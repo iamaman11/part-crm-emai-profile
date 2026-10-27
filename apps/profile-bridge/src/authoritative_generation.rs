@@ -498,7 +498,7 @@ impl std::error::Error for HistoricalColdProbeError {}
 /// Exact, non-authoritative witness from one real historical cold probe.
 /// Not durable and never grants R2 deletion or a WORKING/LKG designation.
 /// A separate server owner must revalidate and durably certify live reserve.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Eq, PartialEq)]
 pub struct HistoricalColdProbeObservation {
     tenant_id: TenantId,
     profile_id: ProfileId,
@@ -507,6 +507,21 @@ pub struct HistoricalColdProbeObservation {
     source_container_sha256: String,
     runtime_inventory_sha256: String,
     materialized_inventory_digest: u64,
+}
+
+impl core::fmt::Debug for HistoricalColdProbeObservation {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter
+            .debug_struct("HistoricalColdProbeObservation")
+            .field("scope", &"[REDACTED]")
+            .field("current_generation", &"[REDACTED]")
+            .field("predecessor_generation", &"[REDACTED]")
+            .field("container_digest", &"[REDACTED]")
+            .field("runtime_digest", &"[REDACTED]")
+            .field("materialized_inventory_digest", &"[REDACTED]")
+            .field("authorization", &"NONE")
+            .finish()
+    }
 }
 
 impl HistoricalColdProbeObservation {

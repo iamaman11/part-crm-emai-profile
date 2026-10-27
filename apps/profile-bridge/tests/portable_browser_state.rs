@@ -665,6 +665,18 @@ mod p3_fixture {
             restored.source_container_sha256(),
             historical_binding.source_container_sha256()
         );
+        let redacted = format!("{restored:?}");
+        for private in [
+            tenant_id.as_str(),
+            profile_id.as_str(),
+            current.as_str(),
+            successor.as_str(),
+            restored.source_container_sha256(),
+            restored.runtime_inventory_sha256(),
+        ] {
+            assert!(!redacted.contains(private));
+        }
+        assert!(redacted.contains("authorization: \"NONE\""));
         assert_eq!(
             restored.materialized_inventory_digest(),
             historical_binding.materialized_inventory_digest()
