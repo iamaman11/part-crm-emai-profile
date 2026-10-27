@@ -455,18 +455,17 @@ impl D1ProfileGenerationSuccessorCommitJournal {
     }
 }
 
-impl VerifiedPredecessorObjectReferencePort for D1ProfileGenerationSuccessorCommitJournal {
-    async fn load_verified_predecessor_of_active(
+impl D1ProfileGenerationSuccessorCommitJournal {
+    /// The D1 owner alone loads the last actually browser-proven N-k, as
+    /// read-only retention evidence. It is NOT a fresh cold-probe candidate
+    /// and NEVER grants DELETE without fresh old-key/runtime/CURRENT checks.
+    pub async fn load_certified_working_reserve(
         &self,
         scope: &TenantScope,
         profile_id: &ProfileId,
         current_generation_id: &GenerationId,
     ) -> Result<Option<GenerationObjectCatalogReference>, GenerationPortError> {
-        // A previously certified N-k must not disappear merely because
-        // subsequent Saves made it older than the immediate predecessor.
-        // Without any working proof, admit ONLY CURRENT's exact journal base
-        // for the one-time cold Camoufox probe.
-        let working = query!(
+        let row = query!(
             &self.database,
             LOAD_CERTIFIED_WORKING_RESERVE,
             scope.tenant_id().as_str(),
@@ -477,42 +476,61 @@ impl VerifiedPredecessorObjectReferencePort for D1ProfileGenerationSuccessorComm
         .first::<HistoricalPredecessorRow>(None)
         .await
         .map_err(|_| historical_dependency_failure())?;
-        let row = if working.is_some() {
-            working
-        } else {
-            query!(
-                &self.database,
-                LOAD_VERIFIED_PREDECESSOR_OF_ACTIVE,
-                scope.tenant_id().as_str(),
-                profile_id.as_str(),
-                current_generation_id.as_str(),
-            )
-            .map_err(|_| historical_dependency_failure())?
-            .first::<HistoricalPredecessorRow>(None)
-            .await
-            .map_err(|_| historical_dependency_failure())?
-        };
-        let Some(row) = row else {
-            return Ok(None);
-        };
-        let generation_id =
-            GenerationId::parse(row.generation_id).map_err(|_| historical_integrity_failure())?;
-        if generation_id == *current_generation_id
-            || row.object_key
-                != canonical_generation_object_key(scope.tenant_id(), profile_id, &generation_id)
-            || !is_sha256_hex(&row.metadata_digest)
-            || !is_sha256_hex(&row.container_digest)
-        {
-            return Err(historical_integrity_failure());
-        }
-        Ok(Some(GenerationObjectCatalogReference::new(
-            profile_id.clone(),
-            generation_id,
-            row.object_key,
-            row.metadata_digest,
-            row.container_digest,
-        )))
+        historical_reference_from_row(row, scope, profile_id, current_generation_id)
     }
+}
+
+impl VerifiedPredecessorObjectReferencePort for D1ProfileGenerationSuccessorCommitJournal {
+    async fn load_verified_predecessor_of_active(
+        &self,
+        scope: &TenantScope,
+        profile_id: &ProfileId,
+        current_generation_id: &GenerationId,
+    ) -> Result<Option<GenerationObjectCatalogReference>, GenerationPortError> {
+        // Maintenance cold-probe selection ALWAYS follows CURRENT's exact
+        // journal predecessor. An older live LKG must not permanently block
+        // probing/promoting a newly saved successor after key/runtime rotation.
+        let row = query!(
+            &self.database,
+            LOAD_VERIFIED_PREDECESSOR_OF_ACTIVE,
+            scope.tenant_id().as_str(),
+            profile_id.as_str(),
+            current_generation_id.as_str(),
+        )
+        .map_err(|_| historical_dependency_failure())?
+        .first::<HistoricalPredecessorRow>(None)
+        .await
+        .map_err(|_| historical_dependency_failure())?;
+        historical_reference_from_row(row, scope, profile_id, current_generation_id)
+    }
+}
+
+fn historical_reference_from_row(
+    row: Option<HistoricalPredecessorRow>,
+    scope: &TenantScope,
+    profile_id: &ProfileId,
+    current_generation_id: &GenerationId,
+) -> Result<Option<GenerationObjectCatalogReference>, GenerationPortError> {
+    let Some(row) = row else {
+        return Ok(None);
+    };
+    let generation_id =
+        GenerationId::parse(row.generation_id).map_err(|_| historical_integrity_failure())?;
+    if generation_id == *current_generation_id
+        || row.object_key
+            != canonical_generation_object_key(scope.tenant_id(), profile_id, &generation_id)
+        || !is_sha256_hex(&row.metadata_digest)
+        || !is_sha256_hex(&row.container_digest)
+    {
+        return Err(historical_integrity_failure());
+    }
+    Ok(Some(GenerationObjectCatalogReference::new(
+        profile_id.clone(),
+        generation_id,
+        row.object_key,
+        row.metadata_digest,
+        row.container_digest,
+    )))
 }
 
 const fn historical_dependency_failure() -> GenerationPortError {
