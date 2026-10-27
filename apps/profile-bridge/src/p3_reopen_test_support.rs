@@ -1013,7 +1013,8 @@ fn one_hundred_sequential_streamed_saves_keep_current_local_profile_reopenable()
         current = next;
         expected = updated;
     }
-    let events = &state.borrow().events;
+    let backend = state.borrow();
+    let events = &backend.events;
     assert_eq!(events.iter().filter(|e| e.starts_with("commit:")).count(), 100);
     assert_eq!(events.iter().filter(|e| e.starts_with("put:")).count(), 100);
     assert_eq!(events.iter().filter(|e| e.as_str() == "coordinator:release:Clean").count(), 100);
