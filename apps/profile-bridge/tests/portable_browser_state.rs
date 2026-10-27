@@ -693,6 +693,62 @@ mod p3_fixture {
             assert!(!events.iter().any(|e| e.contains("historical-commit")));
         }
 
+        // A *real* historical Camoufox launch cannot certify WORKING if
+        // the authoritative D1 predecessor/current fence changes while the
+        // browser is running. Reject the second, post-close server read.
+        state.borrow_mut().historical_capability_reads = 0;
+        state.borrow_mut().historical_recheck_rejected = true;
+        let stale_path = std::env::temp_dir().join(format!(
+            "profile-bridge-stale-historical-recheck-{}-{counter}",
+            std::process::id()
+        ));
+        let _stale_cleanup = CleanupRoot(stale_path.clone());
+        let stale_root = MaterializationRoot::open_or_create(stale_path)?;
+        let stale_slot = crate::camouhost_process::RuntimeBindingSlot::new();
+        let mut stale_preflight =
+            crate::shipping_preflight::ShippingBrowserLaunchPreflight::new(stale_slot.clone());
+        let stale_config = crate::camouhost_process::ManagedCamouhostConfig::new(
+            paths.python.clone(),
+            paths.runtime_root.clone(),
+            paths.display_mode,
+            Some(origin.url()),
+            None,
+        )?;
+        let (mut stale_process, mut stale_camouhost) =
+            crate::camouhost_process::ManagedCamouhostProcess::pair(stale_config, stale_slot);
+        let mut stale_downloader = VerifiedGenerationObjectDownloader::new(BackendGet {
+            state: Rc::clone(&state),
+        });
+        let stale = crate::authoritative_generation::cold_launch_verified_predecessor_once(
+            &root,
+            &stale_root,
+            &current,
+            &lease,
+            &runtime,
+            &mut historical_control,
+            &mut stale_downloader,
+            &mut stale_preflight,
+            &mut stale_process,
+            &mut stale_camouhost,
+            &mut || origin.expect("verify", 4).map_err(|_| ()),
+        );
+        assert!(matches!(
+            stale,
+            Err(
+                crate::authoritative_generation::HistoricalColdProbeError::PostLaunchAuthorityUnconfirmed
+            )
+        ));
+        assert_eq!(state.borrow().historical_capability_reads, 2);
+        assert_eq!(state.borrow().active_generation, current);
+        assert!(
+            !original_current
+                .path()
+                .join(".profile-platform.lock")
+                .exists()
+        );
+        state.borrow_mut().historical_capability_reads = 0;
+        state.borrow_mut().historical_recheck_rejected = false;
+
         // Negative admission against the SAME unchanged CURRENT pointer and
         // coordinator: missing original root key must block before any browser
         // process is spawned, and cannot overwrite the proven prior cold copy.
@@ -756,7 +812,7 @@ mod p3_fixture {
         // released through its canonical coordinator owner.
         historical_control.close_lease(&lease)?;
         eprintln!(
-            "S0_REAL_PORTABLE_BROWSER_STATE=PASSED;STREAMING_BPAT=1;MANAGED_PROCESS=1;MANAGED_IPC=1;COOKIE=1;LOCAL_STORAGE=1;INDEXED_DB=1;AUTHORITATIVE_RESTORE=1;IDENTITY_REUSED=1;HISTORICAL_NONCURRENT_COLD_CAMOUFOX=1;HISTORICAL_OLD_KEY=1;HISTORICAL_MISSING_OLD_KEY_BLOCKED=1;HISTORICAL_CURRENT_POINTER_UNCHANGED=1;LIVE_LKG_CERTIFICATE=0"
+            "S0_REAL_PORTABLE_BROWSER_STATE=PASSED;STREAMING_BPAT=1;MANAGED_PROCESS=1;MANAGED_IPC=1;COOKIE=1;LOCAL_STORAGE=1;INDEXED_DB=1;AUTHORITATIVE_RESTORE=1;IDENTITY_REUSED=1;HISTORICAL_NONCURRENT_COLD_CAMOUFOX=1;HISTORICAL_OLD_KEY=1;HISTORICAL_MISSING_OLD_KEY_BLOCKED=1;HISTORICAL_CURRENT_POINTER_UNCHANGED=1;HISTORICAL_POST_LAUNCH_FENCE_RECHECK_BLOCKED=1;LIVE_LKG_CERTIFICATE=0"
         );
         Ok(())
     }

@@ -641,8 +641,7 @@ where
                         lease.profile_id(),
                         &historical_id,
                     )
-                || encode_sha256(confirmed.container_digest())
-                    != binding.source_container_sha256()
+                || encode_sha256(confirmed.container_digest()) != binding.source_container_sha256()
                 || !matches!(
                     crate::shipping_save_attempt::has_unresolved_save_attempt_for_profile(
                         primary,
