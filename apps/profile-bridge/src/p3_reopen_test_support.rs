@@ -987,7 +987,7 @@ fn one_hundred_sequential_streamed_saves_keep_current_local_profile_reopenable()
         assert_eq!(fs::read(workspace.path().join("prefs.js"))?, expected);
         let updated = format!("verified-sequential-save-{cycle:03}").into_bytes();
         fs::write(workspace.path().join("prefs.js"), &updated)?;
-        operator.close(UnixMillis::new(started + 10))?;
+        operator.close_with_durable_local_intent(&root, UnixMillis::new(started + 10))?;
         let completion = operator.save_retained_successor_streaming(
             &root,
             transport.clone(),
@@ -1016,7 +1016,7 @@ fn one_hundred_sequential_streamed_saves_keep_current_local_profile_reopenable()
     let events = &state.borrow().events;
     assert_eq!(events.iter().filter(|e| e.starts_with("commit:")).count(), 100);
     assert_eq!(events.iter().filter(|e| e.starts_with("put:")).count(), 100);
-    assert_eq!(events.iter().filter(|e| e == &&"coordinator:release:Clean".to_owned()).count(), 100);
+    assert_eq!(events.iter().filter(|e| e.as_str() == "coordinator:release:Clean").count(), 100);
     // Every next Open used the current local candidate, not an unnecessary
     // signed GET or a fallback to an older generation. This does NOT prove
     // live R2 object deletion or that a durable independent LKG exists.
