@@ -725,7 +725,8 @@ mod tests {
             calls: 0,
         };
         assert_eq!(
-            reauthorize_current_ready_generation(&intent, &actor, &device, &mut ready)?,
+            reauthorize_current_ready_generation(&intent, &actor, &device, &mut ready)
+                .map_err(|_| std::io::Error::other("fresh ready launch authorization failed"))?,
             ClaimUri::parse("profilebridge://claim/claim_fresh_0123456789abcdef0123456789")?
         );
         assert_eq!(ready.calls, 1);
