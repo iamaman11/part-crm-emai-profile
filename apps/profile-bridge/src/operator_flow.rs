@@ -820,7 +820,9 @@ where
             observe_browser_state,
         );
         let release_failed = if observed.is_ok() {
-            self.coordinator.close_verified_historical_probe(&lease).is_err()
+            self.coordinator
+                .close_verified_historical_probe(&lease)
+                .is_err()
         } else {
             self.coordinator.close_lease(&lease).is_err()
         };

@@ -35,10 +35,7 @@ pub trait ProfileCoordinatorPort {
     /// the historical R2/current authority was revalidated after stopping,
     /// and BOTH local locks were released. No ordinary failure/revocation
     /// may invoke this path. Other coordinators default to Uncertain.
-    fn close_verified_historical_probe(
-        &mut self,
-        lease: &ProfileLease,
-    ) -> Result<(), Self::Error> {
+    fn close_verified_historical_probe(&mut self, lease: &ProfileLease) -> Result<(), Self::Error> {
         self.close_lease(lease)
     }
 }
