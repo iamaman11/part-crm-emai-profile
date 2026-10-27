@@ -106,7 +106,15 @@ REQUIRED_OPERATOR_RECOVERY_MARKERS = (
     "let recovered = observe_pending(",
     "persist_local_unsynced_intent(root, &source, retained.lease())",
     "retire_local_unsynced_after_exact_checkpoint(",
-    "if !recovered",
+    // Only a fully retired ACTIVE_EXACT for the originally selected N may
+    // continue into the browser. A committed N+1 from a claim for N must
+    // exit for a NEW authorized launch, never silently reuse the old N.
+    "if recovered != PendingSaveRecovery::ReadySelected",
+    "if recovered == PendingSaveRecovery::CommittedNewerRequiresClaim",
+    "discover_unresolved_streaming_exact_save_attempt(",
+    "browser_writer_locks_absent(&base)",
+    "browser_writer_locks_absent(&candidate)",
+    "self.coordinator.close_without_browser_use(&lease)",
     "return Err(self.fail_before_local_use(",
 )
 
@@ -686,10 +694,39 @@ def self_test() -> None:
         recovery.write_text(safe_recovery, encoding="utf-8")
 
         operator.write_text(
-            safe_operator.replace("// if !recovered\n", ""),
+            safe_operator.replace(
+                "// if recovered != PendingSaveRecovery::ReadySelected\n", ""
+            ),
             encoding="utf-8",
         )
         expect_rejected(root, "operator cannot bypass remaining pending-evidence guard")
+        operator.write_text(safe_operator, encoding="utf-8")
+
+        operator.write_text(
+            safe_operator.replace(
+                "// if recovered == PendingSaveRecovery::CommittedNewerRequiresClaim\n", ""
+            ),
+            encoding="utf-8",
+        )
+        expect_rejected(root, "operator cannot conflate committed N+1 with selected N")
+        operator.write_text(safe_operator, encoding="utf-8")
+
+        operator.write_text(
+            safe_operator.replace(
+                "// self.coordinator.close_without_browser_use(&lease)\n", ""
+            ),
+            encoding="utf-8",
+        )
+        expect_rejected(root, "operator cannot abandon a proven unused coordinator lease")
+        operator.write_text(safe_operator, encoding="utf-8")
+
+        operator.write_text(
+            safe_operator.replace(
+                "// browser_writer_locks_absent(&candidate)\n", ""
+            ),
+            encoding="utf-8",
+        )
+        expect_rejected(root, "operator cannot declare Clean with unknown successor Firefox writer")
         operator.write_text(safe_operator, encoding="utf-8")
 
         composition.write_text(
