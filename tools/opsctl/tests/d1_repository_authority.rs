@@ -19,6 +19,7 @@ const DEVICE_APPLICATION_AUTHORITY_REVISION: &str = "0034_device_application_aut
 const SUCCESSOR_CONTRACT_REVISION: &str = "0035_pas2_payload_fingerprint_contract.sql";
 const INITIAL_GENERATION_REVISION: &str = "0036_profile_generation_initialization.sql";
 const STREAMING_GENERATION_REVISION: &str = "0037_generation_streaming_container_limit.sql";
+const WORKING_PROOF_REVISION: &str = "0038_profile_generation_working_proof.sql";
 
 fn repo_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
@@ -253,13 +254,14 @@ fn deployed_runtime_prefix_is_context_only_and_retains_all_migration_gates()
     let plan = invoke(&target_path, &current_path)?;
     assert_eq!(plan["decision"], "CONTRACT_BLOCKED");
     assert_eq!(plan["allowed"], false);
-    assert_eq!(plan["target_revision"], STREAMING_GENERATION_REVISION);
+    assert_eq!(plan["target_revision"], WORKING_PROOF_REVISION);
     assert_eq!(
         plan["planned_migrations"],
         json!([
             SUCCESSOR_CONTRACT_REVISION,
             INITIAL_GENERATION_REVISION,
-            STREAMING_GENERATION_REVISION
+            STREAMING_GENERATION_REVISION,
+            WORKING_PROOF_REVISION
         ])
     );
     assert_eq!(
@@ -426,7 +428,7 @@ fn frozen_epoch_and_current_projection_are_derived_from_real_sql_bytes()
         identity_digest(&catalog_legacy[..26])?,
         CATALOG_EPOCH_DIGEST
     );
-    assert_eq!(catalog_current.len(), 37);
+    assert_eq!(catalog_current.len(), 38);
     assert_eq!(catalog_current[26]["name"], SUCCESSOR_EXPAND_REVISION);
     assert_eq!(catalog_current[31]["name"], BRIDGE_ENROLLMENT_REVISION);
     assert_eq!(catalog_current[32]["name"], PUBLIC_KEY_BINDING_REVISION);
@@ -437,18 +439,19 @@ fn frozen_epoch_and_current_projection_are_derived_from_real_sql_bytes()
     assert_eq!(catalog_current[34]["name"], SUCCESSOR_CONTRACT_REVISION);
     assert_eq!(catalog_current[35]["name"], INITIAL_GENERATION_REVISION);
     assert_eq!(catalog_current[36]["name"], STREAMING_GENERATION_REVISION);
+    assert_eq!(catalog_current[37]["name"], WORKING_PROOF_REVISION);
     assert!(
         catalog_current
             .iter()
             .all(|entry| entry["name"] != LEGACY_PAS2_REVISION)
     );
-    assert_eq!(catalog["migration_count"], 37);
+    assert_eq!(catalog["migration_count"], 38);
     assert_eq!(
         catalog["current_repository_revision"],
-        STREAMING_GENERATION_REVISION
+        WORKING_PROOF_REVISION
     );
     assert_eq!(catalog["history_digest"], catalog_current_digest);
-    assert_eq!(catalog["post_epoch_migration_count"], 11);
+    assert_eq!(catalog["post_epoch_migration_count"], 12);
     assert_eq!(catalog["historical_epoch"]["migration_count"], 26);
     assert_eq!(
         catalog["historical_epoch"]["final_revision"],
@@ -636,14 +639,14 @@ fn legacy_and_successor_pas2_revisions_have_distinct_governed_roles() -> Result<
     )?;
     assert!(corrected_contract.ends_with(&original_contract));
 
-    assert_eq!(catalog["migration_count"], 37);
-    assert_eq!(catalog["post_epoch_migration_count"], 11);
+    assert_eq!(catalog["migration_count"], 38);
+    assert_eq!(catalog["post_epoch_migration_count"], 12);
     assert_eq!(
         catalog["current_repository_revision"],
-        STREAMING_GENERATION_REVISION
+        WORKING_PROOF_REVISION
     );
     assert_eq!(catalog["migration_lineage"], "catalog-successor-v2");
-    assert_eq!(sources.len(), 37);
+    assert_eq!(sources.len(), 38);
     assert_eq!(sources[26]["migration_file"], SUCCESSOR_EXPAND_REVISION);
     assert_eq!(sources[26]["source_root"], "migrations/d1-successor");
     assert_eq!(
@@ -666,6 +669,8 @@ fn legacy_and_successor_pas2_revisions_have_distinct_governed_roles() -> Result<
     assert_eq!(sources[35]["source_root"], "migrations/d1-successor-v2");
     assert_eq!(sources[36]["migration_file"], STREAMING_GENERATION_REVISION);
     assert_eq!(sources[36]["source_root"], "migrations/d1-successor-v2");
+    assert_eq!(sources[37]["migration_file"], WORKING_PROOF_REVISION);
+    assert_eq!(sources[37]["source_root"], "migrations/d1-successor-v2");
     assert!(
         sources
             .iter()
@@ -690,15 +695,15 @@ fn legacy_and_successor_pas2_revisions_have_distinct_governed_roles() -> Result<
     );
     assert_eq!(
         catalog["release_schema_contract"]["target_schema_revision"],
-        STREAMING_GENERATION_REVISION
+        WORKING_PROOF_REVISION
     );
     assert_eq!(
         catalog["release_schema_contract"]["supported_schema_min"],
-        STREAMING_GENERATION_REVISION
+        WORKING_PROOF_REVISION
     );
     assert_eq!(
         catalog["release_schema_contract"]["supported_schema_max"],
-        STREAMING_GENERATION_REVISION
+        WORKING_PROOF_REVISION
     );
     assert_eq!(
         catalog["pre_migration_runtime_schema_contract"]["supported_schema_max"],
