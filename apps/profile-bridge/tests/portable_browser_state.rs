@@ -850,7 +850,10 @@ mod p3_fixture {
             )
         ));
         assert_eq!(state.borrow().active_generation, current);
-        assert_eq!(state.borrow().coordinator_status, CoordinatorStatusDto::Active);
+        assert_eq!(
+            state.borrow().coordinator_status,
+            CoordinatorStatusDto::Active
+        );
         assert!(
             !original_current
                 .path()

@@ -490,7 +490,10 @@ where
     }
     // No historical opening material => no proof that the old root key
     // was ever available. Keep the original local bytes and refuse admission.
-    *opening_prelude = view.opening_prelude.take().ok_or(Error::InvalidLocalEvidence)?;
+    *opening_prelude = view
+        .opening_prelude
+        .take()
+        .ok_or(Error::InvalidLocalEvidence)?;
     Ok(predecessor_id)
 }
 
@@ -857,12 +860,14 @@ where
         metadata_prelude: &[u8],
     ) -> Result<encrypted_generation_domain::GenerationDek, Self::Error> {
         if metadata_prelude.is_empty()
-            || metadata_prelude.len() > encrypted_generation_domain::MAX_GENERATION_METADATA_PRELUDE_BYTES
+            || metadata_prelude.len()
+                > encrypted_generation_domain::MAX_GENERATION_METADATA_PRELUDE_BYTES
             || self.opening_prelude.is_some()
         {
             return Err(GenerationReopenControlError::InvalidResponse);
         }
-        let old_key = self.control
+        let old_key = self
+            .control
             .verified_predecessor_opening_material(tenant_id, profile_id, metadata_prelude)
             .map_err(Into::into)?
             .ok_or(GenerationReopenControlError::InvalidResponse)?;
