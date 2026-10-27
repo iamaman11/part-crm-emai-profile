@@ -2,6 +2,10 @@
 
 use bridge_domain::ClaimUri;
 
+/// Internal one-shot maintenance command, never a normal Profile Open.
+/// It requires a fresh ordinary device-bound one-time launch claim.
+pub const VERIFY_HISTORICAL_CANDIDATE_ARGUMENT: &str = "--verify-historical-candidate";
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ShippingDeliveryCommand {
     InstallStaged(crate::installed_connection::ControlPlaneOrigin),
@@ -92,6 +96,22 @@ pub fn run_claim(claim: &ClaimUri) -> Result<(), ShippingCompositionError> {
     }
 }
 
+/// One-shot read-only cloud recovery probe using the existing Windows
+/// device/Coordinator/managed browser owners. An observed browser identity
+/// is NOT a durable WORKING/LKG certificate or R2 prune grant; the normal
+/// user Open/Close path is never changed by this maintenance operation.
+pub fn run_historical_candidate_probe(claim: &ClaimUri) -> Result<(), ShippingCompositionError> {
+    #[cfg(windows)]
+    {
+        return windows::run_historical_candidate_probe(claim);
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = claim;
+        Err(ShippingCompositionError::UnsupportedPlatform)
+    }
+}
+
 pub fn run_initial_profile(
     intent: &crate::generation_initialization::InitialProfileOpen,
 ) -> Result<(), ShippingCompositionError> {
@@ -155,6 +175,7 @@ mod windows {
     use bridge_domain::ClaimUri;
     use profile_platform_primitives::UnixMillis;
     use std::env;
+    use std::fs;
     use std::path::PathBuf;
     use std::thread;
     use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -162,6 +183,10 @@ mod windows {
     const NETWORK_POLICY_PATH_ENV: &str = "PROFILE_BRIDGE_NETWORK_POLICY_PATH";
     const PROXY_CONFIG_PATH_ENV: &str = "PROFILE_BRIDGE_PROXY_CONFIG_PATH";
     const PACKAGED_PYTHON_EXECUTABLE: &str = "python/python.exe";
+    // Exactly one protected staging slot. A crashed/uncertain cold probe
+    // leaves this slot occupied rather than silently deleting a potentially
+    // still-running Firefox workspace or accumulating unlimited full clones.
+    const HISTORICAL_PROBE_SLOT: &str = ".profile-bridge-cold-candidate";
     const CONTROLLED_CLOSE_POLL_MS: u64 = 250;
     const HEARTBEAT_TRANSPORT_RETRY_MS: u64 = 1_000;
     const MAX_LIVE_SAVE_RECONNECT_ATTEMPTS: usize = 30;
@@ -281,6 +306,98 @@ mod windows {
         )
         .map_err(ShippingCompositionError::Initialization)?;
         run(&claim)
+    }
+
+    /// Maintenance-only, one real managed Camoufox in a fixed isolated slot.
+    /// The normal Open is never delayed or contingent on R2 availability.
+    /// A missing proof, stale lease, native writer, old key or probe-slot
+    /// collision fails closed without touching the authoritative CURRENT.
+    pub fn run_historical_candidate_probe(
+        claim: &ClaimUri,
+    ) -> Result<(), ShippingCompositionError> {
+        if recover_delivery_before_claim()? {
+            return Err(ShippingCompositionError::DeliveryRecoveryRequired);
+        }
+        let config = ShippingConfig::from_installation()?;
+        let delivery = ActiveWindowsDeliveryRuntime::resolve_current()
+            .map_err(|_| ShippingCompositionError::DeliveryRecoveryRequired)?;
+        if delivery.pending_health_confirmation().is_some() {
+            // Installing a new runtime is not a safe historical compatibility
+            // witness until its own delivery-health owner has confirmed it.
+            return Err(ShippingCompositionError::DeliveryRecoveryRequired);
+        }
+        let runtime_root = delivery.runtime_root().to_path_buf();
+        let bundles = delivery.into_bundle_selection();
+        let binding =
+            WindowsDeviceApplicationBinding::open(&config.device_application_binding_path)
+                .map_err(|_| ShippingCompositionError::Configuration)?;
+        let identity = WindowsDeviceIdentity::new(binding.device_id().clone());
+        let application =
+            WindowsDeviceApplication::from_system(config.control_plane_origin, binding)
+                .map_err(|_| ShippingCompositionError::Configuration)?;
+        let transport = application.transport();
+        let downloader = WindowsSignedGenerationObjectGet::from_system()
+            .map_err(|_| ShippingCompositionError::Configuration)?;
+        let mut downloader = VerifiedGenerationObjectStreamDownloader::new(downloader);
+        let primary = MaterializationRoot::open_or_create(&config.materialization_root)
+            .map_err(|_| ShippingCompositionError::Configuration)?;
+        let parent = primary
+            .path()
+            .parent()
+            .ok_or(ShippingCompositionError::Configuration)?;
+        let slot_path = parent.join(HISTORICAL_PROBE_SLOT);
+        // No remove/reuse of an unknown prior slot; this also bounds crash
+        // residue to one historical full copy on the installed volume.
+        fs::create_dir(&slot_path).map_err(|_| ShippingCompositionError::Configuration)?;
+        let isolated = MaterializationRoot::open_or_create(&slot_path)
+            .map_err(|_| ShippingCompositionError::Configuration)?;
+
+        let slot = RuntimeBindingSlot::new();
+        let preflight = ShippingBrowserLaunchPreflight::new(slot.clone());
+        let config = ManagedCamouhostConfig::new(
+            runtime_root.join(PACKAGED_PYTHON_EXECUTABLE),
+            runtime_root,
+            RuntimeDisplayMode::Headful,
+            None,
+            None,
+        )
+        .map_err(|_| ShippingCompositionError::Configuration)?;
+        let (process, camouhost) = ManagedCamouhostProcess::pair(config, slot);
+        let mut witness = camouhost.cold_probe_observer();
+        let mut operator = ProfileBridgeOperator::new(
+            identity,
+            application.clone(),
+            application,
+            ControlPlaneEnrollment::new(transport.clone()),
+            ControlPlaneCoordinator::new(transport),
+            bundles,
+            preflight,
+            process,
+            camouhost,
+        );
+        let result = operator.probe_verified_predecessor_once(
+            claim,
+            &primary,
+            &isolated,
+            &mut downloader,
+            now()?,
+            &mut || witness.observe_live().map_err(|_| ()),
+        );
+        // A failed/uncertain release or native cleanup is NOT a permission to
+        // remove the only evidence that may still be owned by the browser.
+        if operator.cleanup_blocked() {
+            return Err(ShippingCompositionError::CommittedRecoveryRequired);
+        }
+        // The probe slot was atomically created by THIS invocation. The
+        // normal CURRENT root is a disjoint sibling, never a deletion target.
+        // A crashed process cannot create a second slot on the next call.
+        fs::remove_dir_all(&slot_path)
+            .map_err(|_| ShippingCompositionError::Configuration)?;
+        let _observation = result.map_err(ShippingCompositionError::Operator)?;
+        eprintln!(
+            "HISTORICAL_COLD_PROBE=BROWSER_IDENTITY_VERIFIED;WORKING_LKG_CERTIFICATE=0;R2_PRUNE_AUTHORITY=0"
+        );
+        Ok(())
     }
 
     pub fn run(claim: &ClaimUri) -> Result<(), ShippingCompositionError> {
