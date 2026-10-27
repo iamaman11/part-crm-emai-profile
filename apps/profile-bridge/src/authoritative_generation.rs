@@ -700,7 +700,12 @@ where
                 .verified_predecessor_capability(lease.tenant_id(), lease.profile_id())
                 .map_err(|_| Error::PostLaunchAuthorityUnconfirmed)?
                 .ok_or(Error::PostLaunchAuthorityUnconfirmed)?;
-            if confirmed.generation_id() != &historical_id
+            // The real browser was closed, but a surviving or competing
+            // native Firefox writer means this is not a safely quiescent
+            // WORKING candidate. Never promote or erase those bytes.
+            if !matches!(browser_writer_locks_absent(&current), Ok(true))
+                || !matches!(browser_writer_locks_absent(&restored), Ok(true))
+                || confirmed.generation_id() != &historical_id
                 || confirmed.object_key()
                     != canonical_generation_object_key(
                         lease.tenant_id(),

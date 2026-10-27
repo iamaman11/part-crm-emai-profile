@@ -435,9 +435,27 @@ mod windows {
             now()?,
             &mut || witness.observe_live().map_err(|_| ()),
         );
-        // A failed/uncertain release or native cleanup is NOT a permission to
-        // remove the only evidence that may still be owned by the browser.
+        // Any probe error retains the entire isolated slot, including
+        // partial decryption, Firefox SQLite/WAL and unresolved writer state.
+        // The previous implementation removed this directory even for a
+        // failed probe when cleanup_blocked() happened to be false.
+        let observation = result.map_err(ShippingCompositionError::Operator)?;
         if operator.cleanup_blocked() {
+            return Err(ShippingCompositionError::CommittedRecoveryRequired);
+        }
+        let restored = isolated
+            .open_generation(
+                observation.tenant_id(),
+                observation.profile_id(),
+                observation.predecessor_generation_id(),
+            )
+            .map_err(|_| ShippingCompositionError::CommittedRecoveryRequired)?;
+        // The closed historical browser must leave no live native writer.
+        // Unknown/unreadable locks are never a deletion authorization.
+        if !matches!(
+            crate::browser_execution::browser_writer_locks_absent(&restored),
+            Ok(true)
+        ) {
             return Err(ShippingCompositionError::CommittedRecoveryRequired);
         }
         // The probe slot was atomically created by THIS invocation. Before
@@ -463,7 +481,6 @@ mod windows {
             return Err(ShippingCompositionError::Configuration);
         }
         fs::remove_dir_all(&slot_path).map_err(|_| ShippingCompositionError::Configuration)?;
-        let _observation = result.map_err(ShippingCompositionError::Operator)?;
         eprintln!(
             "HISTORICAL_COLD_PROBE=BROWSER_IDENTITY_VERIFIED;WORKING_LKG_CERTIFICATE=0;R2_PRUNE_AUTHORITY=0"
         );
