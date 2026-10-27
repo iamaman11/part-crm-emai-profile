@@ -486,17 +486,18 @@ mod windows {
                 // paths, not a canonical path against the user's original spelling.
                 // A substituted junction to another directory still cannot match
                 // the exact canonical child of the original parent.
-                let physical_parent =
-                    fs::canonicalize(parent).map_err(|_| ShippingCompositionError::Configuration)?;
-                let physical_slot =
-                    fs::canonicalize(&slot_path).map_err(|_| ShippingCompositionError::Configuration)?;
+                let physical_parent = fs::canonicalize(parent)
+                    .map_err(|_| ShippingCompositionError::Configuration)?;
+                let physical_slot = fs::canonicalize(&slot_path)
+                    .map_err(|_| ShippingCompositionError::Configuration)?;
                 if !slot_metadata.is_dir()
                     || slot_metadata.file_attributes() & REPARSE_POINT != 0
                     || physical_slot != physical_parent.join(HISTORICAL_PROBE_SLOT)
                 {
                     return Err(ShippingCompositionError::Configuration);
                 }
-                fs::remove_dir_all(&slot_path).map_err(|_| ShippingCompositionError::Configuration)?;
+                fs::remove_dir_all(&slot_path)
+                    .map_err(|_| ShippingCompositionError::Configuration)?;
                 Ok(())
             },
         )?;
@@ -1274,14 +1275,10 @@ mod tests {
             ShippingCompositionError::ControlPlane,
             ShippingCompositionError::Configuration,
         ] {
-            let result = retire_historical_probe_only_after_proof::<()>(
-                Err(failed),
-                |_| {
-                    calls.set(calls.get() + 1);
-                    std::fs::remove_dir_all(&slot)
-                        .map_err(|_| ShippingCompositionError::Configuration)
-                },
-            );
+            let result = retire_historical_probe_only_after_proof::<()>(Err(failed), |_| {
+                calls.set(calls.get() + 1);
+                std::fs::remove_dir_all(&slot).map_err(|_| ShippingCompositionError::Configuration)
+            });
             assert_eq!(result, Err(failed));
             assert_eq!(calls.get(), 0);
             assert_eq!(std::fs::read(&native_evidence)?, b"dirty-firefox-evidence");
@@ -1292,7 +1289,10 @@ mod tests {
             calls.set(calls.get() + 1);
             Err(ShippingCompositionError::CommittedRecoveryRequired)
         });
-        assert_eq!(denied, Err(ShippingCompositionError::CommittedRecoveryRequired));
+        assert_eq!(
+            denied,
+            Err(ShippingCompositionError::CommittedRecoveryRequired)
+        );
         assert_eq!(std::fs::read(&native_evidence)?, b"dirty-firefox-evidence");
         assert_eq!(calls.get(), 1);
         retire_historical_probe_only_after_proof(Ok(()), |_| {
