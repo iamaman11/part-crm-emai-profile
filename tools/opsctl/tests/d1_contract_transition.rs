@@ -171,13 +171,13 @@ fn actual_deployed_context_traverses_separate_sealed_contract_and_current_expand
         )?;
         let native_plan = plan(&root, dir)?;
         let expected = if count == 35 {
-            json!([history[count], history[count + 1]])
+            json!([history[count], history[count + 1], history[count + 2]])
         } else {
             json!([history[count]])
         };
         assert_eq!(native_plan["planned_migrations"], expected);
         let expected_target = if count == 35 {
-            &history[count + 1]
+            &history[count + 2]
         } else {
             &history[count]
         };
