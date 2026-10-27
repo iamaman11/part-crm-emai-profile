@@ -650,12 +650,11 @@ mod p3_fixture {
                 .as_str()
         );
         assert_eq!(state.borrow().active_generation, current);
-        let restored_workspace =
-            historical_root.open_generation(
-                &tenant_id,
-                &profile_id,
-                restored.predecessor_generation_id(),
-            )?;
+        let restored_workspace = historical_root.open_generation(
+            &tenant_id,
+            &profile_id,
+            restored.predecessor_generation_id(),
+        )?;
         let historical_binding = crate::browser_execution::load_materialization_binding(
             &restored_workspace,
             &tenant_id,

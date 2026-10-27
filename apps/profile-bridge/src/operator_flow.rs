@@ -1,8 +1,8 @@
 use crate::ProcessControlPort;
 use crate::authoritative_generation::{
     AuthoritativeGenerationMaterializationError, HistoricalColdProbeError,
-    HistoricalColdProbeObservation,
-    cold_launch_verified_predecessor_once, ensure_authoritative_generation,
+    HistoricalColdProbeObservation, cold_launch_verified_predecessor_once,
+    ensure_authoritative_generation,
 };
 use crate::browser_execution::browser_writer_locks_absent;
 #[cfg(any(test, feature = "synthetic-test-bin"))]
