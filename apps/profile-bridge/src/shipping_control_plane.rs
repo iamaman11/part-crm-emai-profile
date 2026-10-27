@@ -14,6 +14,8 @@ use control_plane_contract::generation_key_api::{
 use control_plane_contract::generation_reopen_api::{
     BRIDGE_PROFILE_GENERATION_DOWNLOAD_CAPABILITY_PATH_TEMPLATE,
     BRIDGE_PROFILE_GENERATION_OPENING_MATERIAL_PATH_TEMPLATE,
+    BRIDGE_PROFILE_GENERATION_PREDECESSOR_DOWNLOAD_PATH_TEMPLATE,
+    BRIDGE_PROFILE_GENERATION_PREDECESSOR_OPENING_PATH_TEMPLATE,
     BridgeGenerationDownloadCapabilityRequest, BridgeGenerationDownloadCapabilityResponse,
     BridgeGenerationOpeningMaterialRequest, BridgeGenerationOpeningMaterialResponse,
     GENERATION_DOWNLOAD_CAPABILITY_MAX_EXPIRES_SECONDS,
@@ -610,34 +612,41 @@ where
     }
 }
 
-impl<T> GenerationReopenControlPort for ControlPlaneCoordinator<T>
+impl<T> ControlPlaneCoordinator<T>
 where
     T: MachineHttpPort,
 {
-    type Error = ShippingControlPlaneError;
-
-    fn download_capability(
+    fn download_reopen_for_purpose(
         &mut self,
         tenant_id: &TenantId,
         profile_id: &ProfileId,
-    ) -> Result<GenerationDownloadCapability, Self::Error> {
+        historical: bool,
+    ) -> Result<GenerationDownloadCapability, ShippingControlPlaneError> {
         let cursor = self.exact_reopen_cursor(tenant_id, profile_id)?;
         let request = BridgeGenerationDownloadCapabilityRequest::new(
             cursor.session_id.as_str(),
             cursor.fencing_token.as_str(),
             cursor.epoch,
         );
-        let mut body = serde_json::to_vec(&request).map_err(|_| Self::Error::InvalidResponse)?;
+        let mut body = serde_json::to_vec(&request).map_err(|_| ShippingControlPlaneError::InvalidResponse)?;
         let correlation_id = next_correlation_id()?;
         let response = self
             .transport
             .request(
                 MachineHttpMethod::PostJson,
-                &generation_download_capability_path(tenant_id, profile_id),
+                &generation_reopen_path(
+                    tenant_id,
+                    profile_id,
+                    if historical {
+                        BRIDGE_PROFILE_GENERATION_PREDECESSOR_DOWNLOAD_PATH_TEMPLATE
+                    } else {
+                        BRIDGE_PROFILE_GENERATION_DOWNLOAD_CAPABILITY_PATH_TEMPLATE
+                    },
+                ),
                 &correlation_id,
                 Some(&body),
             )
-            .map_err(|_| Self::Error::Transport);
+            .map_err(|_| ShippingControlPlaneError::Transport);
         body.fill(0);
         let mut response = decode_reopen_download_capability_response(response?, &correlation_id)?;
 
@@ -651,18 +660,18 @@ where
             || response.expires_seconds() == 0
             || response.expires_seconds() > GENERATION_DOWNLOAD_CAPABILITY_MAX_EXPIRES_SECONDS
         {
-            return Err(Self::Error::InvalidResponse);
+            return Err(ShippingControlPlaneError::InvalidResponse);
         }
         let generation_id = GenerationId::parse(response.generation_id().to_owned())
-            .map_err(|_| Self::Error::InvalidResponse)?;
+            .map_err(|_| ShippingControlPlaneError::InvalidResponse)?;
         let canonical_key = canonical_generation_object_key(tenant_id, profile_id, &generation_id);
         if response.object_key() != canonical_key || !valid_signed_r2_get_url(response.url()) {
-            return Err(Self::Error::InvalidResponse);
+            return Err(ShippingControlPlaneError::InvalidResponse);
         }
         let metadata_digest = decode_lower_hex::<32>(response.metadata_digest())
-            .ok_or(Self::Error::InvalidResponse)?;
+            .ok_or(ShippingControlPlaneError::InvalidResponse)?;
         let container_digest = decode_lower_hex::<32>(response.container_digest())
-            .ok_or(Self::Error::InvalidResponse)?;
+            .ok_or(ShippingControlPlaneError::InvalidResponse)?;
         let container_bytes = response.container_bytes();
         let expires_seconds = response.expires_seconds();
         let signed_url = response.take_url();
@@ -678,20 +687,21 @@ where
         ))
     }
 
-    fn opening_material(
+    fn opening_reopen_for_purpose(
         &mut self,
         tenant_id: &TenantId,
         profile_id: &ProfileId,
         metadata_prelude: &[u8],
-    ) -> Result<GenerationDek, Self::Error> {
+        historical: bool,
+    ) -> Result<GenerationDek, ShippingControlPlaneError> {
         let cursor = self.exact_reopen_cursor(tenant_id, profile_id)?;
         if metadata_prelude.is_empty()
             || metadata_prelude.len() > MAX_GENERATION_METADATA_PRELUDE_BYTES
         {
-            return Err(Self::Error::InvalidResponse);
+            return Err(ShippingControlPlaneError::InvalidResponse);
         }
         let inspected = inspect_generation_metadata_prelude(metadata_prelude)
-            .map_err(|_| Self::Error::InvalidResponse)?;
+            .map_err(|_| ShippingControlPlaneError::InvalidResponse)?;
         if inspected.prelude_bytes() != metadata_prelude.len()
             || inspected.metadata().tenant_id() != tenant_id
             || inspected.metadata().profile_id() != profile_id
@@ -702,7 +712,7 @@ where
                     inspected.metadata().generation_id(),
                 )
         {
-            return Err(Self::Error::InvalidResponse);
+            return Err(ShippingControlPlaneError::InvalidResponse);
         }
 
         let request = BridgeGenerationOpeningMaterialRequest::new(
@@ -711,27 +721,78 @@ where
             cursor.fencing_token.as_str(),
             cursor.epoch,
         );
-        let mut body = serde_json::to_vec(&request).map_err(|_| Self::Error::InvalidResponse)?;
+        let mut body = serde_json::to_vec(&request).map_err(|_| ShippingControlPlaneError::InvalidResponse)?;
         let correlation_id = next_correlation_id()?;
         let response = self
             .transport
             .request(
                 MachineHttpMethod::PostJson,
-                &generation_opening_material_path(tenant_id, profile_id),
+                &generation_reopen_path(
+                    tenant_id,
+                    profile_id,
+                    if historical {
+                        BRIDGE_PROFILE_GENERATION_PREDECESSOR_OPENING_PATH_TEMPLATE
+                    } else {
+                        BRIDGE_PROFILE_GENERATION_OPENING_MATERIAL_PATH_TEMPLATE
+                    },
+                ),
                 &correlation_id,
                 Some(&body),
             )
-            .map_err(|_| Self::Error::Transport);
+            .map_err(|_| ShippingControlPlaneError::Transport);
         body.fill(0);
         let response = decode_reopen_opening_material_response(response?)?;
         let (key_id, dek_hex) = response.into_parts();
-        let key_id = KeyId::parse(key_id).map_err(|_| Self::Error::InvalidResponse)?;
-        GenerationRootKeyVersion::from_key_id(&key_id).map_err(|_| Self::Error::InvalidResponse)?;
+        let key_id = KeyId::parse(key_id).map_err(|_| ShippingControlPlaneError::InvalidResponse)?;
+        GenerationRootKeyVersion::from_key_id(&key_id).map_err(|_| ShippingControlPlaneError::InvalidResponse)?;
         if &key_id != inspected.metadata().key_id() {
-            return Err(Self::Error::InvalidResponse);
+            return Err(ShippingControlPlaneError::InvalidResponse);
         }
-        let dek = decode_secret_dek(dek_hex.as_str()).ok_or(Self::Error::InvalidResponse)?;
+        let dek = decode_secret_dek(dek_hex.as_str()).ok_or(ShippingControlPlaneError::InvalidResponse)?;
         Ok(GenerationDek::new(key_id, dek.0))
+    }
+}
+
+impl<T> GenerationReopenControlPort for ControlPlaneCoordinator<T>
+where
+    T: MachineHttpPort,
+{
+    type Error = ShippingControlPlaneError;
+
+    fn download_capability(
+        &mut self,
+        tenant_id: &TenantId,
+        profile_id: &ProfileId,
+    ) -> Result<GenerationDownloadCapability, Self::Error> {
+        self.download_reopen_for_purpose(tenant_id, profile_id, false)
+    }
+
+    fn opening_material(
+        &mut self,
+        tenant_id: &TenantId,
+        profile_id: &ProfileId,
+        metadata_prelude: &[u8],
+    ) -> Result<GenerationDek, Self::Error> {
+        self.opening_reopen_for_purpose(tenant_id, profile_id, metadata_prelude, false)
+    }
+
+    fn verified_predecessor_capability(
+        &mut self,
+        tenant_id: &TenantId,
+        profile_id: &ProfileId,
+    ) -> Result<Option<GenerationDownloadCapability>, Self::Error> {
+        self.download_reopen_for_purpose(tenant_id, profile_id, true)
+            .map(Some)
+    }
+
+    fn verified_predecessor_opening_material(
+        &mut self,
+        tenant_id: &TenantId,
+        profile_id: &ProfileId,
+        metadata_prelude: &[u8],
+    ) -> Result<Option<GenerationDek>, Self::Error> {
+        self.opening_reopen_for_purpose(tenant_id, profile_id, metadata_prelude, true)
+            .map(Some)
     }
 }
 
@@ -1078,14 +1139,12 @@ fn generation_sealing_material_path(tenant_id: &TenantId, profile_id: &ProfileId
         .replace("{profileId}", profile_id.as_str())
 }
 
-fn generation_download_capability_path(tenant_id: &TenantId, profile_id: &ProfileId) -> String {
-    BRIDGE_PROFILE_GENERATION_DOWNLOAD_CAPABILITY_PATH_TEMPLATE
-        .replace("{tenantId}", tenant_id.as_str())
-        .replace("{profileId}", profile_id.as_str())
-}
-
-fn generation_opening_material_path(tenant_id: &TenantId, profile_id: &ProfileId) -> String {
-    BRIDGE_PROFILE_GENERATION_OPENING_MATERIAL_PATH_TEMPLATE
+fn generation_reopen_path(
+    tenant_id: &TenantId,
+    profile_id: &ProfileId,
+    template: &str,
+) -> String {
+    template
         .replace("{tenantId}", tenant_id.as_str())
         .replace("{profileId}", profile_id.as_str())
 }

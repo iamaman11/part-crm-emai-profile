@@ -11,6 +11,7 @@ use application_ports::device_jobs::{DeviceJobAuthorizationPort, DeviceJobCapabi
 use application_ports::generation_objects::{
     ActiveGenerationObjectReferencePort, GenerationObjectDescriptor,
     GenerationObjectDescriptorReadPort, GenerationObjectDescriptorVerifyPort,
+    VerifiedPredecessorObjectReferencePort,
 };
 use application_ports::generations::GenerationPortErrorClass;
 use application_ports::profile_generation_successor::{
@@ -73,6 +74,8 @@ pub(crate) enum BridgeGenerationMachineOperation {
     LocalUnsyncedRetryDecision,
     DownloadCapability,
     OpeningMaterial,
+    PredecessorDownloadCapability,
+    PredecessorOpeningMaterial,
 }
 
 #[must_use]
@@ -176,6 +179,26 @@ pub(crate) fn operation(path: &str, method: Method) -> Option<BridgeGenerationMa
             "generation-reopen",
             "opening-material",
         ] => Some(BridgeGenerationMachineOperation::OpeningMaterial),
+        [
+            "bridge",
+            "v1",
+            "tenants",
+            _,
+            "profiles",
+            _,
+            "generation-working-candidate",
+            "download-capability",
+        ] => Some(BridgeGenerationMachineOperation::PredecessorDownloadCapability),
+        [
+            "bridge",
+            "v1",
+            "tenants",
+            _,
+            "profiles",
+            _,
+            "generation-working-candidate",
+            "opening-material",
+        ] => Some(BridgeGenerationMachineOperation::PredecessorOpeningMaterial),
         _ => None,
     }
 }
@@ -195,11 +218,35 @@ pub(crate) async fn dispatch_authorized(
     if operation == BridgeGenerationMachineOperation::SealingMaterial {
         return dispatch_sealing_material(request, env, profile_id, actor, device_id).await;
     }
-    if operation == BridgeGenerationMachineOperation::DownloadCapability {
-        return dispatch_download_capability(request, env, profile_id, actor, device_id).await;
+    if matches!(
+        operation,
+        BridgeGenerationMachineOperation::DownloadCapability
+            | BridgeGenerationMachineOperation::PredecessorDownloadCapability
+    ) {
+        return dispatch_download_capability(
+            request,
+            env,
+            profile_id,
+            actor,
+            device_id,
+            operation == BridgeGenerationMachineOperation::PredecessorDownloadCapability,
+        )
+        .await;
     }
-    if operation == BridgeGenerationMachineOperation::OpeningMaterial {
-        return dispatch_opening_material(request, env, profile_id, actor, device_id).await;
+    if matches!(
+        operation,
+        BridgeGenerationMachineOperation::OpeningMaterial
+            | BridgeGenerationMachineOperation::PredecessorOpeningMaterial
+    ) {
+        return dispatch_opening_material(
+            request,
+            env,
+            profile_id,
+            actor,
+            device_id,
+            operation == BridgeGenerationMachineOperation::PredecessorOpeningMaterial,
+        )
+        .await;
     }
     if operation == BridgeGenerationMachineOperation::Observe {
         return dispatch_successor_observation(request, env, profile_id, actor, device_id).await;
@@ -694,6 +741,7 @@ async fn dispatch_download_capability(
     profile_id: &ProfileId,
     actor: &ActorContext,
     device_id: &DeviceId,
+    historical: bool,
 ) -> Result<Response> {
     let body = match request
         .json::<BridgeGenerationDownloadCapabilityRequest>()
@@ -711,17 +759,30 @@ async fn dispatch_download_capability(
         None => return invalid_request(actor.correlation_id().as_str()),
     };
 
-    let (reference, descriptor) = match authoritative_reopen_descriptor(
-        env,
-        profile_id,
-        actor,
-        device_id,
-        session_id,
-        fencing_token,
-        body.coordinator_epoch(),
-    )
-    .await
-    {
+    let selected = if historical {
+        historical_predecessor_reopen_descriptor(
+            env,
+            profile_id,
+            actor,
+            device_id,
+            session_id,
+            fencing_token,
+            body.coordinator_epoch(),
+        )
+        .await
+    } else {
+        authoritative_reopen_descriptor(
+            env,
+            profile_id,
+            actor,
+            device_id,
+            session_id,
+            fencing_token,
+            body.coordinator_epoch(),
+        )
+        .await
+    };
+    let (reference, descriptor) = match selected {
         Ok(value) => value,
         Err(response) => return response,
     };
@@ -764,6 +825,7 @@ async fn dispatch_opening_material(
     profile_id: &ProfileId,
     actor: &ActorContext,
     device_id: &DeviceId,
+    historical: bool,
 ) -> Result<Response> {
     let body = match request
         .json::<BridgeGenerationOpeningMaterialRequest>()
@@ -792,17 +854,30 @@ async fn dispatch_opening_material(
         Ok(_) | Err(_) => return invalid_request(actor.correlation_id().as_str()),
     };
 
-    let (reference, descriptor) = match authoritative_reopen_descriptor(
-        env,
-        profile_id,
-        actor,
-        device_id,
-        session_id,
-        fencing_token,
-        body.coordinator_epoch(),
-    )
-    .await
-    {
+    let selected = if historical {
+        historical_predecessor_reopen_descriptor(
+            env,
+            profile_id,
+            actor,
+            device_id,
+            session_id,
+            fencing_token,
+            body.coordinator_epoch(),
+        )
+        .await
+    } else {
+        authoritative_reopen_descriptor(
+            env,
+            profile_id,
+            actor,
+            device_id,
+            session_id,
+            fencing_token,
+            body.coordinator_epoch(),
+        )
+        .await
+    };
+    let (reference, descriptor) = match selected {
         Ok(value) => value,
         Err(response) => return response,
     };
@@ -941,6 +1016,104 @@ async fn authoritative_reopen_descriptor(
         }
     };
     Ok((reference, descriptor))
+}
+
+/// The device only requests a read-only historical candidate, never selects an
+/// ID/key. The active-profile authorization is checked against CURRENT before
+/// D1 supplies exactly its journal-linked verified predecessor. Neither request
+/// is a WORKING admission or permission to prune any immutable R2 object.
+async fn historical_predecessor_reopen_descriptor(
+    env: &Env,
+    profile_id: &ProfileId,
+    actor: &ActorContext,
+    device_id: &DeviceId,
+    session_id: SessionId,
+    fencing_token: FencingToken,
+    coordinator_epoch: u64,
+) -> core::result::Result<
+    (
+        application_ports::generation_objects::GenerationObjectCatalogReference,
+        GenerationObjectDescriptor,
+    ),
+    Result<Response>,
+> {
+    let (current, _) = authoritative_reopen_descriptor(
+        env,
+        profile_id,
+        actor,
+        device_id,
+        session_id,
+        fencing_token,
+        coordinator_epoch,
+    )
+    .await?;
+    let observer = match profile_generation_successor_observer(env) {
+        Ok(value) => value,
+        Err(error) => return Err(Err(error)),
+    };
+    let predecessor = match observer
+        .load_verified_predecessor_of_active(
+            actor.tenant_scope(),
+            profile_id,
+            current.generation_id(),
+        )
+        .await
+    {
+        Ok(Some(value)) => value,
+        Ok(None) => return Err(verification_conflict(actor.correlation_id().as_str())),
+        Err(error) => {
+            return Err(object_verify_failure(
+                actor.correlation_id().as_str(),
+                error.class(),
+            ));
+        }
+    };
+    if predecessor.generation_id() == current.generation_id() {
+        return Err(integrity_failure(actor.correlation_id().as_str()));
+    }
+    let objects = match generation_object_verifier(env) {
+        Ok(value) => value,
+        Err(error) => return Err(Err(error)),
+    };
+    let descriptor = match objects
+        .load_generation_object_descriptor_exact(actor.tenant_scope(), &predecessor)
+        .await
+    {
+        Ok(Some(value)) => value,
+        Ok(None) => return Err(verification_conflict(actor.correlation_id().as_str())),
+        Err(error) => {
+            return Err(object_verify_failure(
+                actor.correlation_id().as_str(),
+                error.class(),
+            ));
+        }
+    };
+    if descriptor.generation_id() != predecessor.generation_id() {
+        return Err(integrity_failure(actor.correlation_id().as_str()));
+    }
+    // A concurrent pointer change never makes this stale historical grant
+    // silently valid. A later successor transaction must re-authorize.
+    let active = match device_execution_preconditions(env) {
+        Ok(value) => value,
+        Err(error) => return Err(Err(error)),
+    };
+    let fresh_current = match active
+        .load_active_verified_generation_object(actor.tenant_scope(), profile_id)
+        .await
+    {
+        Ok(Some(value)) => value,
+        Ok(None) => return Err(verification_conflict(actor.correlation_id().as_str())),
+        Err(error) => {
+            return Err(object_verify_failure(
+                actor.correlation_id().as_str(),
+                error.class(),
+            ));
+        }
+    };
+    if fresh_current != current {
+        return Err(version_conflict(actor.correlation_id().as_str()));
+    }
+    Ok((predecessor, descriptor))
 }
 
 fn reopen_witness(
@@ -1383,6 +1556,20 @@ mod tests {
             ),
             Some(BridgeGenerationMachineOperation::OpeningMaterial)
         );
+        assert_eq!(
+            operation(
+                "/bridge/v1/tenants/tenant_01/profiles/profile_01/generation-working-candidate/download-capability",
+                Method::Post,
+            ),
+            Some(BridgeGenerationMachineOperation::PredecessorDownloadCapability)
+        );
+        assert_eq!(
+            operation(
+                "/bridge/v1/tenants/tenant_01/profiles/profile_01/generation-working-candidate/opening-material",
+                Method::Post,
+            ),
+            Some(BridgeGenerationMachineOperation::PredecessorOpeningMaterial)
+        );
         for (method, path) in [
             (
                 Method::Get,
@@ -1395,6 +1582,14 @@ mod tests {
             (
                 Method::Get,
                 "/bridge/v1/tenants/tenant_01/profiles/profile_01/generation-reopen/opening-material",
+            ),
+            (
+                Method::Get,
+                "/bridge/v1/tenants/tenant_01/profiles/profile_01/generation-working-candidate/download-capability",
+            ),
+            (
+                Method::Get,
+                "/bridge/v1/tenants/tenant_01/profiles/profile_01/generation-working-candidate/opening-material",
             ),
             (
                 Method::Post,

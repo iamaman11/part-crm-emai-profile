@@ -6,6 +6,11 @@ pub const BRIDGE_PROFILE_GENERATION_DOWNLOAD_CAPABILITY_PATH_TEMPLATE: &str =
     "/bridge/v1/tenants/{tenantId}/profiles/{profileId}/generation-reopen/download-capability";
 pub const BRIDGE_PROFILE_GENERATION_OPENING_MATERIAL_PATH_TEMPLATE: &str =
     "/bridge/v1/tenants/{tenantId}/profiles/{profileId}/generation-reopen/opening-material";
+/// Read-only historical *candidate*, not a WORKING certificate or recovery grant.
+pub const BRIDGE_PROFILE_GENERATION_PREDECESSOR_DOWNLOAD_PATH_TEMPLATE: &str =
+    "/bridge/v1/tenants/{tenantId}/profiles/{profileId}/generation-working-candidate/download-capability";
+pub const BRIDGE_PROFILE_GENERATION_PREDECESSOR_OPENING_PATH_TEMPLATE: &str =
+    "/bridge/v1/tenants/{tenantId}/profiles/{profileId}/generation-working-candidate/opening-material";
 pub const GENERATION_DOWNLOAD_CAPABILITY_MAX_EXPIRES_SECONDS: u32 = 300;
 
 /// Machine request for authoritative reopen. Generation identity and object metadata are

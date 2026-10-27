@@ -127,6 +127,26 @@ pub trait GenerationReopenControlPort {
         profile_id: &ProfileId,
         metadata_prelude: &[u8],
     ) -> Result<GenerationDek, Self::Error>;
+
+    /// Optional historical read-only candidate. Never a WORKING certificate.
+    /// Existing mocks/implementations fail closed until they deliberately
+    /// implement this feature; normal CURRENT reopen stays unchanged.
+    fn verified_predecessor_capability(
+        &mut self,
+        _tenant_id: &TenantId,
+        _profile_id: &ProfileId,
+    ) -> Result<Option<GenerationDownloadCapability>, Self::Error> {
+        Ok(None)
+    }
+
+    fn verified_predecessor_opening_material(
+        &mut self,
+        _tenant_id: &TenantId,
+        _profile_id: &ProfileId,
+        _metadata_prelude: &[u8],
+    ) -> Result<Option<GenerationDek>, Self::Error> {
+        Ok(None)
+    }
 }
 
 /// Response from the narrow exact-URL GET effect. Redirects are not represented as success: the
