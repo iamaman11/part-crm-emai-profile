@@ -164,8 +164,9 @@ pub fn reauthorize_current_ready_generation<T: MachineHttpPort>(
 ) -> Result<ClaimUri, InitialProfileError> {
     let (_, response) = prepare_initial_or_ready_launch(intent, actor, device, transport)?;
     match response {
-        InitialGenerationPrepared::Launch { launch } => ClaimUri::parse(&launch.launch_uri)
-            .map_err(|_| InitialProfileError::Authorization),
+        InitialGenerationPrepared::Launch { launch } => {
+            ClaimUri::parse(&launch.launch_uri).map_err(|_| InitialProfileError::Authorization)
+        }
         InitialGenerationPrepared::Initialize { .. } => Err(InitialProfileError::Authorization),
     }
 }
@@ -192,8 +193,7 @@ where
         &ApprovedRuntimeBundle,
     ) -> Result<BrowserIdentityManifest, InitialProfileError>,
 {
-    let (generation, prepared) =
-        prepare_initial_or_ready_launch(intent, actor, device, transport)?;
+    let (generation, prepared) = prepare_initial_or_ready_launch(intent, actor, device, transport)?;
     let generation_id = generation.as_str().to_owned();
     let expected_profile_version = intent.expected_version;
     let path = format!(
@@ -720,13 +720,19 @@ mod tests {
             CorrelationId::parse("corr_new_ready_launch")?,
         );
         let device = DeviceId::parse("device_123")?;
-        let mut ready = Reply { ready: true, calls: 0 };
+        let mut ready = Reply {
+            ready: true,
+            calls: 0,
+        };
         assert_eq!(
             reauthorize_current_ready_generation(&intent, &actor, &device, &mut ready)?,
             ClaimUri::parse("profilebridge://claim/claim_fresh_0123456789abcdef0123456789")?
         );
         assert_eq!(ready.calls, 1);
-        let mut draft = Reply { ready: false, calls: 0 };
+        let mut draft = Reply {
+            ready: false,
+            calls: 0,
+        };
         assert_eq!(
             reauthorize_current_ready_generation(&intent, &actor, &device, &mut draft),
             Err(InitialProfileError::Authorization)

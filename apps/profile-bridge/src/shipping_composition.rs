@@ -1215,8 +1215,8 @@ mod tests {
     };
     #[cfg(not(windows))]
     use super::{ShippingDeliveryCommand, run_claim, run_delivery_command};
-    use bridge_domain::ClaimUri;
     use crate::operator_flow::OperatorFlowError;
+    use bridge_domain::ClaimUri;
     use std::cell::Cell;
 
     #[test]
