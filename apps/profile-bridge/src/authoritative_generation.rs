@@ -865,7 +865,9 @@ mod tests {
             profile_id: &ProfileId,
             prelude: &[u8],
         ) -> Result<Option<GenerationDek>, Self::Error> {
-            self.0.opening_material(tenant_id, profile_id, prelude).map(Some)
+            self.0
+                .opening_material(tenant_id, profile_id, prelude)
+                .map(Some)
         }
     }
 
@@ -971,12 +973,18 @@ mod tests {
         assert_eq!(historical, fixture.generation_id);
         assert_eq!(downloader.calls, 1);
         assert_eq!(control.0.opening_calls, 1);
-        assert!(fixture
-            .root
-            .open_generation(&fixture.tenant_id, &fixture.profile_id, &historical)
-            .is_err());
-        let restored = cold.open_generation(&fixture.tenant_id, &fixture.profile_id, &historical)?;
-        assert_eq!(fs::read(restored.path().join("prefs.js"))?, b"authoritative-prefs");
+        assert!(
+            fixture
+                .root
+                .open_generation(&fixture.tenant_id, &fixture.profile_id, &historical)
+                .is_err()
+        );
+        let restored =
+            cold.open_generation(&fixture.tenant_id, &fixture.profile_id, &historical)?;
+        assert_eq!(
+            fs::read(restored.path().join("prefs.js"))?,
+            b"authoritative-prefs"
+        );
         assert_eq!(
             fs::read(restored.path().join("user_data/storage/state.bin"))?,
             b"authoritative-state"
@@ -1024,32 +1032,47 @@ mod tests {
                 &mut control,
                 &mut downloader,
             ),
-            Err(AuthoritativeGenerationMaterializationError::ReadBeforeLocalUse(
-                AuthoritativeGenerationPreWriteError::DescriptorMismatch
-            ))
+            Err(
+                AuthoritativeGenerationMaterializationError::ReadBeforeLocalUse(
+                    AuthoritativeGenerationPreWriteError::DescriptorMismatch
+                )
+            )
         ));
         assert_eq!(downloader.calls, 0);
         control.0.key_bytes = [0_u8; 32];
         let current = GenerationId::parse("generation_historical_current_02")?;
-        assert!(materialize_verified_predecessor_for_cold_launch(
-            &fixture.root,
-            &cold,
-            &fixture.tenant_id,
-            &fixture.profile_id,
-            &current,
-            &device,
-            8,
-            &mut control,
-            &mut downloader,
-        )
-        .is_err());
-        assert!(cold
-            .open_generation(&fixture.tenant_id, &fixture.profile_id, &fixture.generation_id)
-            .is_err());
-        assert!(fixture
-            .root
-            .open_generation(&fixture.tenant_id, &fixture.profile_id, &fixture.generation_id)
-            .is_err());
+        assert!(
+            materialize_verified_predecessor_for_cold_launch(
+                &fixture.root,
+                &cold,
+                &fixture.tenant_id,
+                &fixture.profile_id,
+                &current,
+                &device,
+                8,
+                &mut control,
+                &mut downloader,
+            )
+            .is_err()
+        );
+        assert!(
+            cold.open_generation(
+                &fixture.tenant_id,
+                &fixture.profile_id,
+                &fixture.generation_id
+            )
+            .is_err()
+        );
+        assert!(
+            fixture
+                .root
+                .open_generation(
+                    &fixture.tenant_id,
+                    &fixture.profile_id,
+                    &fixture.generation_id
+                )
+                .is_err()
+        );
         fixture.cleanup();
         crate::test_support::remove_test_root(&path)?;
         Ok(())
