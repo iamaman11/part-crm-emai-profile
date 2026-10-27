@@ -582,30 +582,34 @@ mod p3_fixture {
         // Fresh CURRENT coordinator authority, immutable old R2 bytes and a
         // physically empty independent workspace. Unlike the old synthetic
         // acceptance this NEVER promotes the historical generation to CURRENT.
-        use application_ports::ProfileCoordinatorPort as _;
         use crate::operator_flow::EnrollmentPort as _;
+        use application_ports::ProfileCoordinatorPort as _;
         let historical_path = std::env::temp_dir().join(format!(
             "profile-bridge-historical-camoufox-{}-{counter}",
             std::process::id()
         ));
         let _historical_cleanup = CleanupRoot(historical_path.clone());
         let historical_root = MaterializationRoot::open_or_create(historical_path)?;
-        assert!(historical_root
-            .open_generation(&tenant_id, &profile_id, &successor)
-            .is_err());
+        assert!(
+            historical_root
+                .open_generation(&tenant_id, &profile_id, &successor)
+                .is_err()
+        );
         let fresh_claim =
             ClaimUri::parse("profilebridge://claim/claim_s0_historical_lkg_cold_000003")?;
+        let probe_device_id = DeviceId::parse(DEVICE)?;
         let mut enrollment = ControlPlaneEnrollment::new(transport.clone());
-        let admitted = enrollment.redeem_claim(&fresh_claim, &device_id, UnixMillis::new(70))?;
+        let admitted = enrollment.redeem_claim(&fresh_claim, &probe_device_id, UnixMillis::new(70))?;
         assert_eq!(admitted.generation_id(), &current);
         let mut historical_control = ControlPlaneCoordinator::new(transport.clone());
         let lease = historical_control.claim_launch_intent(
             admitted.actor(),
             admitted.profile_id(),
-            &device_id,
+            &probe_device_id,
             admitted.launch_intent_id(),
         )?;
-        assert_eq!(lease.generation_id(), &current);
+        assert_eq!(lease.profile_id(), &profile_id);
+        assert_eq!(lease.device_id(), &probe_device_id);
         let historical_slot = crate::camouhost_process::RuntimeBindingSlot::new();
         let mut historical_preflight =
             crate::shipping_preflight::ShippingBrowserLaunchPreflight::new(historical_slot.clone());
@@ -640,21 +644,39 @@ mod p3_fixture {
         assert_eq!(restored, successor);
         origin.expect("verify", 3)?;
         assert_eq!(state.borrow().active_generation, current);
-        let restored_workspace = historical_root.open_generation(&tenant_id, &profile_id, &restored)?;
+        let restored_workspace =
+            historical_root.open_generation(&tenant_id, &profile_id, &restored)?;
         let historical_binding = crate::browser_execution::load_materialization_binding(
             &restored_workspace,
             &tenant_id,
             &profile_id,
             &restored,
         )?;
-        assert_eq!(historical_binding.browser_identity(), base_binding.browser_identity());
+        assert_eq!(
+            historical_binding.browser_identity(),
+            base_binding.browser_identity()
+        );
         let original_current = root.open_generation(&tenant_id, &profile_id, &current)?;
-        assert!(!original_current.path().join(".profile-platform.lock").exists());
+        assert!(
+            !original_current
+                .path()
+                .join(".profile-platform.lock")
+                .exists()
+        );
         {
-            let events = &state.borrow().events;
-            assert!(events.iter().any(|e| e.starts_with("historical-download-capability:")));
+            let state_ref = state.borrow();
+            let events = &state_ref.events;
+            assert!(
+                events
+                    .iter()
+                    .any(|e| e.starts_with("historical-download-capability:"))
+            );
             assert!(events.iter().any(|e| e.starts_with("historical-get:")));
-            assert!(events.iter().any(|e| e.starts_with("historical-opening-material:")));
+            assert!(
+                events
+                    .iter()
+                    .any(|e| e.starts_with("historical-opening-material:"))
+            );
             assert!(!events.iter().any(|e| e.contains("historical-commit")));
         }
 
@@ -679,10 +701,7 @@ mod p3_fixture {
             None,
         )?;
         let (mut missing_process, mut missing_camouhost) =
-            crate::camouhost_process::ManagedCamouhostProcess::pair(
-                missing_config,
-                missing_slot,
-            );
+            crate::camouhost_process::ManagedCamouhostProcess::pair(missing_config, missing_slot);
         let mut missing_download = VerifiedGenerationObjectDownloader::new(BackendGet {
             state: Rc::clone(&state),
         });
@@ -702,11 +721,18 @@ mod p3_fixture {
             failure,
             Err(crate::authoritative_generation::HistoricalColdProbeError::Materialization(_))
         ));
-        assert!(missing_key_root
-            .open_generation(&tenant_id, &profile_id, &successor)
-            .is_err());
+        assert!(
+            missing_key_root
+                .open_generation(&tenant_id, &profile_id, &successor)
+                .is_err()
+        );
         assert_eq!(state.borrow().active_generation, current);
-        assert!(!original_current.path().join(".profile-platform.lock").exists());
+        assert!(
+            !original_current
+                .path()
+                .join(".profile-platform.lock")
+                .exists()
+        );
         assert_eq!(
             fs::read(restored_workspace.path().join("prefs.js"))?,
             b"portable-browser-state"

@@ -473,6 +473,21 @@ pub enum HistoricalColdProbeError {
     CleanupUncertain,
 }
 
+impl core::fmt::Display for HistoricalColdProbeError {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter.write_str(match self {
+            Self::CurrentNotQuiescent => "CURRENT is not quiescent or authorized for cold probe",
+            Self::Materialization(_) => "historical generation could not be restored",
+            Self::WorkspaceLock => "historical workspace lock is unavailable",
+            Self::Preflight => "historical browser preflight did not pass",
+            Self::Runtime => "historical browser did not launch and close cleanly",
+            Self::CleanupUncertain => "historical probe process or locks have uncertain cleanup",
+        })
+    }
+}
+
+impl std::error::Error for HistoricalColdProbeError {}
+
 #[allow(clippy::too_many_arguments)]
 pub fn cold_launch_verified_predecessor_once<C, D, B, P, H>(
     primary: &MaterializationRoot,
