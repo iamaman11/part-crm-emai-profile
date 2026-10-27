@@ -623,7 +623,8 @@ fn real_d1_verdict_survives_release_projection_and_terminal_promotion()
         for (revision, expected) in [
             ("0034_device_application_authority.sql", false),
             ("0036_profile_generation_initialization.sql", false),
-            ("0037_generation_streaming_container_limit.sql", true),
+            ("0037_generation_streaming_container_limit.sql", false),
+            ("0038_profile_generation_working_proof.sql", true),
         ] {
             let count = sources
                 .iter()
@@ -729,10 +730,16 @@ print(json.dumps({'evidence': adapter['build'](release_id, native, None, None), 
                     json!([
                         "0035_pas2_payload_fingerprint_contract.sql",
                         "0036_profile_generation_initialization.sql",
-                        "0037_generation_streaming_container_limit.sql"
+                        "0037_generation_streaming_container_limit.sql",
+                        "0038_profile_generation_working_proof.sql"
+                    ])
+                } else if revision == "0036_profile_generation_initialization.sql" {
+                    json!([
+                        "0037_generation_streaming_container_limit.sql",
+                        "0038_profile_generation_working_proof.sql"
                     ])
                 } else {
-                    json!(["0037_generation_streaming_container_limit.sql"])
+                    json!(["0038_profile_generation_working_proof.sql"])
                 };
                 assert_eq!(native["planned_migrations"], missing);
                 let behind_contract = revision == "0034_device_application_authority.sql";
