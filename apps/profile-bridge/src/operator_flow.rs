@@ -51,9 +51,8 @@ use crate::shipping_save_attempt::{
 #[cfg(any(windows, test))]
 use crate::shipping_save_attempt::{
     ScopedPendingSaveEvidence, classify_scoped_pending_save_evidence,
-    original_local_unsynced_successor,
-    persist_streaming_exact_save_attempt_from_native, retire_fully_saved_streaming_attempt,
-    retire_local_unsynced_after_streamed_checkpoint,
+    original_local_unsynced_successor, persist_streaming_exact_save_attempt_from_native,
+    retire_fully_saved_streaming_attempt, retire_local_unsynced_after_streamed_checkpoint,
 };
 #[cfg(any(test, feature = "synthetic-test-bin", debug_assertions))]
 use crate::shipping_save_attempt::{
@@ -100,7 +99,7 @@ pub trait RuntimeBundleSelectionPort {
 /// Ephemeral result from the existing, freshly authorized pending-Save owner.
 /// Neither a persisted phase nor independent permission to open a browser.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum PendingSaveRecovery {
+pub enum PendingSaveRecovery {
     /// The already-selected authoritative generation is locally ready.
     ReadySelected,
     /// Exact N+1 committed while this claim still selected N.
@@ -1016,7 +1015,9 @@ where
                     if self.coordinator.close_without_browser_use(&lease).is_ok() {
                         // The consumed claim cannot select N+1. The existing
                         // application launch owner must issue a NEW claim.
-                        return Err(OperatorFlowError::Stage(OperatorFailureStage::GenerationSave));
+                        return Err(OperatorFlowError::Stage(
+                            OperatorFailureStage::GenerationSave,
+                        ));
                     }
                     self.cleanup_blocked = true;
                     return Err(OperatorFlowError::Terminal {
