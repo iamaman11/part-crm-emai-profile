@@ -366,6 +366,131 @@ where
     Ok(())
 }
 
+/// Read-only historical candidate admission via the SAME snapshot and
+/// encrypted-generation owners as ordinary CURRENT reopen. The provider selects
+/// the immediate verified predecessor under a live CURRENT coordinator fence;
+/// the caller can neither choose an old generation nor supply an old DEK.
+///
+/// The isolated root must be independent of the native primary and initially
+/// contain no copy of the historical generation. This proves R2/old-key AEAD
+/// restore and canonical browser binding, NOT a real Camoufox WORKING launch,
+/// durable LKG certification or a safe-prune disposition.
+#[allow(clippy::too_many_arguments)]
+pub fn materialize_verified_predecessor_for_cold_launch<C, D>(
+    primary: &MaterializationRoot,
+    isolated: &MaterializationRoot,
+    tenant_id: &TenantId,
+    profile_id: &ProfileId,
+    current_id: &GenerationId,
+    device_id: &DeviceId,
+    workspace_epoch: u64,
+    control: &mut C,
+    downloader: &mut D,
+) -> Result<GenerationId, AuthoritativeGenerationMaterializationError>
+where
+    C: GenerationReopenControlPort,
+    C::Error: Into<GenerationReopenControlError>,
+    D: GenerationObjectDownloadPort,
+    D::Error: Into<GenerationObjectDownloadError>,
+{
+    use AuthoritativeGenerationMaterializationError as Error;
+    use AuthoritativeGenerationPreWriteError as PreWrite;
+    let primary_path = fs::canonicalize(primary.path()).map_err(|_| Error::Local)?;
+    let isolated_path = fs::canonicalize(isolated.path()).map_err(|_| Error::Local)?;
+    if primary_path.starts_with(&isolated_path) || isolated_path.starts_with(&primary_path) {
+        return Err(Error::InvalidLocalEvidence);
+    }
+    if workspace_epoch == 0 {
+        return Err(Error::InvalidLocalEvidence);
+    }
+    let capability = control
+        .verified_predecessor_capability(tenant_id, profile_id)
+        .map_err(|error| Error::ControlPlaneBeforeLocalUse(error.into()))?
+        .ok_or(Error::ReadBeforeLocalUse(PreWrite::DescriptorMismatch))?;
+    let predecessor_id = capability.generation_id().clone();
+    if &predecessor_id == current_id
+        || capability.object_key()
+            != canonical_generation_object_key(tenant_id, profile_id, &predecessor_id)
+    {
+        return Err(Error::ReadBeforeLocalUse(PreWrite::DescriptorMismatch));
+    }
+    // Never reuse a preexisting, potentially modified local cold-probe cache.
+    // No browser files have been touched in either root at this boundary.
+    if !matches!(
+        isolated.open_generation(tenant_id, profile_id, &predecessor_id),
+        Err(LocalProfileError::Io(std::io::ErrorKind::NotFound))
+    ) {
+        return Err(Error::InvalidLocalEvidence);
+    }
+    let expected_digest = encode_sha256(capability.container_digest());
+    let mut view = HistoricalCandidateReopen {
+        control,
+        one_time_capability: Some(capability),
+    };
+    ensure_authoritative_generation(
+        isolated,
+        tenant_id,
+        profile_id,
+        &predecessor_id,
+        device_id,
+        workspace_epoch,
+        &mut view,
+        downloader,
+    )?;
+    let recovered = isolated
+        .open_generation(tenant_id, profile_id, &predecessor_id)
+        .map_err(|_| Error::InvalidLocalEvidence)?;
+    let binding = load_materialization_binding(&recovered, tenant_id, profile_id, &predecessor_id)
+        .map_err(|_| Error::BrowserIdentity)?;
+    if binding.source_container_sha256() != expected_digest
+        || recovered
+            .materialization_inventory_digest()
+            .map_err(|_| Error::Local)?
+            != binding.materialized_inventory_digest()
+    {
+        return Err(Error::InvalidLocalEvidence);
+    }
+    Ok(predecessor_id)
+}
+
+/// One ephemeral read-only view: the server-issued predecessor GET bearer is
+/// consumed exactly once; opening material is reauthorized against the current
+/// D1 pointer and old metadata on its separate request. No second state owner.
+struct HistoricalCandidateReopen<'a, C> {
+    control: &'a mut C,
+    one_time_capability: Option<crate::generation_reopen::GenerationDownloadCapability>,
+}
+
+impl<C> GenerationReopenControlPort for HistoricalCandidateReopen<'_, C>
+where
+    C: GenerationReopenControlPort,
+    C::Error: Into<GenerationReopenControlError>,
+{
+    type Error = GenerationReopenControlError;
+
+    fn download_capability(
+        &mut self,
+        _tenant_id: &TenantId,
+        _profile_id: &ProfileId,
+    ) -> Result<crate::generation_reopen::GenerationDownloadCapability, Self::Error> {
+        self.one_time_capability
+            .take()
+            .ok_or(GenerationReopenControlError::InvalidResponse)
+    }
+
+    fn opening_material(
+        &mut self,
+        tenant_id: &TenantId,
+        profile_id: &ProfileId,
+        metadata_prelude: &[u8],
+    ) -> Result<encrypted_generation_domain::GenerationDek, Self::Error> {
+        self.control
+            .verified_predecessor_opening_material(tenant_id, profile_id, metadata_prelude)
+            .map_err(Into::into)?
+            .ok_or(GenerationReopenControlError::InvalidResponse)
+    }
+}
+
 /// Cold materialization only. A complete descriptor-verified ciphertext
 /// exists, but neither a metadata prelude nor an AEAD chunk alone can publish
 /// user_data. The decrypted BPGW file is an unpublished bounded scratch input;
@@ -491,6 +616,7 @@ mod tests {
     use super::{
         AuthoritativeGenerationMaterializationError, AuthoritativeGenerationPreWriteError,
         encode_sha256, ensure_authoritative_generation,
+        materialize_verified_predecessor_for_cold_launch,
     };
     use crate::browser_execution::{load_materialization_binding, persist_materialization_binding};
     use crate::generation_reopen::{
@@ -701,6 +827,48 @@ mod tests {
         }
     }
 
+    /// The CURRENT route deliberately cannot supply historical material.
+    /// Only the explicitly read-only predecessor callbacks may do so.
+    struct HistoricalFakeControl(FakeControl);
+
+    impl GenerationReopenControlPort for HistoricalFakeControl {
+        type Error = GenerationReopenControlError;
+
+        fn download_capability(
+            &mut self,
+            _tenant_id: &TenantId,
+            _profile_id: &ProfileId,
+        ) -> Result<GenerationDownloadCapability, Self::Error> {
+            Err(GenerationReopenControlError::InvalidResponse)
+        }
+
+        fn opening_material(
+            &mut self,
+            _tenant_id: &TenantId,
+            _profile_id: &ProfileId,
+            _metadata_prelude: &[u8],
+        ) -> Result<GenerationDek, Self::Error> {
+            Err(GenerationReopenControlError::InvalidResponse)
+        }
+
+        fn verified_predecessor_capability(
+            &mut self,
+            tenant_id: &TenantId,
+            profile_id: &ProfileId,
+        ) -> Result<Option<GenerationDownloadCapability>, Self::Error> {
+            self.0.download_capability(tenant_id, profile_id).map(Some)
+        }
+
+        fn verified_predecessor_opening_material(
+            &mut self,
+            tenant_id: &TenantId,
+            profile_id: &ProfileId,
+            prelude: &[u8],
+        ) -> Result<Option<GenerationDek>, Self::Error> {
+            self.0.opening_material(tenant_id, profile_id, prelude).map(Some)
+        }
+    }
+
     struct FakeDownloader {
         container: Vec<u8>,
         calls: u64,
@@ -774,6 +942,117 @@ mod tests {
             .map_err(|_| GenerationObjectDownloadError::DigestMismatch)?;
             Ok(Some(verified))
         }
+    }
+
+    #[test]
+    fn historical_old_key_is_streamed_into_independent_cold_workspace_without_current_change()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let fixture = Fixture::new()?;
+        let path = fixture.root_path.with_extension("isolated-historical");
+        let cold = MaterializationRoot::open_or_create(path.clone())?;
+        let selected_current = GenerationId::parse("generation_historical_current_01")?;
+        let device = DeviceId::parse("device_historical_cold_01")?;
+        let mut control = HistoricalFakeControl(fixture.control());
+        let mut downloader = FakeStreamDownloader {
+            container: fixture.container.clone(),
+            calls: 0,
+        };
+        let historical = materialize_verified_predecessor_for_cold_launch(
+            &fixture.root,
+            &cold,
+            &fixture.tenant_id,
+            &fixture.profile_id,
+            &selected_current,
+            &device,
+            7,
+            &mut control,
+            &mut downloader,
+        )?;
+        assert_eq!(historical, fixture.generation_id);
+        assert_eq!(downloader.calls, 1);
+        assert_eq!(control.0.opening_calls, 1);
+        assert!(fixture
+            .root
+            .open_generation(&fixture.tenant_id, &fixture.profile_id, &historical)
+            .is_err());
+        let restored = cold.open_generation(&fixture.tenant_id, &fixture.profile_id, &historical)?;
+        assert_eq!(fs::read(restored.path().join("prefs.js"))?, b"authoritative-prefs");
+        assert_eq!(
+            fs::read(restored.path().join("user_data/storage/state.bin"))?,
+            b"authoritative-state"
+        );
+        assert!(matches!(
+            materialize_verified_predecessor_for_cold_launch(
+                &fixture.root,
+                &cold,
+                &fixture.tenant_id,
+                &fixture.profile_id,
+                &selected_current,
+                &device,
+                8,
+                &mut control,
+                &mut downloader,
+            ),
+            Err(AuthoritativeGenerationMaterializationError::InvalidLocalEvidence)
+        ));
+        fixture.cleanup();
+        crate::test_support::remove_test_root(&path)?;
+        Ok(())
+    }
+
+    #[test]
+    fn historical_cold_probe_blocks_current_selection_and_absent_original_key()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let fixture = Fixture::new()?;
+        let path = fixture.root_path.with_extension("isolated-missing-key");
+        let cold = MaterializationRoot::open_or_create(path.clone())?;
+        let device = DeviceId::parse("device_historical_missing_key_01")?;
+        let mut control = HistoricalFakeControl(fixture.control());
+        let mut downloader = FakeStreamDownloader {
+            container: fixture.container.clone(),
+            calls: 0,
+        };
+        assert!(matches!(
+            materialize_verified_predecessor_for_cold_launch(
+                &fixture.root,
+                &cold,
+                &fixture.tenant_id,
+                &fixture.profile_id,
+                &fixture.generation_id,
+                &device,
+                7,
+                &mut control,
+                &mut downloader,
+            ),
+            Err(AuthoritativeGenerationMaterializationError::ReadBeforeLocalUse(
+                AuthoritativeGenerationPreWriteError::DescriptorMismatch
+            ))
+        ));
+        assert_eq!(downloader.calls, 0);
+        control.0.key_bytes = [0_u8; 32];
+        let current = GenerationId::parse("generation_historical_current_02")?;
+        assert!(materialize_verified_predecessor_for_cold_launch(
+            &fixture.root,
+            &cold,
+            &fixture.tenant_id,
+            &fixture.profile_id,
+            &current,
+            &device,
+            8,
+            &mut control,
+            &mut downloader,
+        )
+        .is_err());
+        assert!(cold
+            .open_generation(&fixture.tenant_id, &fixture.profile_id, &fixture.generation_id)
+            .is_err());
+        assert!(fixture
+            .root
+            .open_generation(&fixture.tenant_id, &fixture.profile_id, &fixture.generation_id)
+            .is_err());
+        fixture.cleanup();
+        crate::test_support::remove_test_root(&path)?;
+        Ok(())
     }
 
     #[test]
