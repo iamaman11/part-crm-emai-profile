@@ -915,6 +915,7 @@ fn canonical_save_then_local_reuse_skips_cloud_download()
     run_canonical_saved_successor_reopen(false)
 }
 
+#[cfg(windows)]
 /// K3 source/fixture proof, not a live-provider R2 retention or installed B7 verdict.
 /// Exercise the SAME streamed Save owner 100 times with one real filesystem root,
 /// a single coordinator and an in-memory machine/R2 fixture. Every reopen must
@@ -977,7 +978,7 @@ fn one_hundred_sequential_streamed_saves_keep_current_local_profile_reopenable()
     let mut expected = b"initial".to_vec();
 
     for cycle in 0..100_u64 {
-        let claim = ClaimUri::parse(format!(
+        let claim = ClaimUri::parse(&format!(
             "profilebridge://claim/claim_p3_100_streamed_{cycle:04}_0123456789abcdef"
         ))?;
         let started = 10 + cycle * 100;
