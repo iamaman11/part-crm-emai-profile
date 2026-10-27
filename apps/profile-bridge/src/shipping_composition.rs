@@ -188,6 +188,7 @@ mod windows {
     use super::{
         ConfirmedSaveTrigger, ShippingCompositionError, ShippingDeliveryCommand,
         confirmed_save_trigger, open_with_one_fresh_claim,
+        retire_historical_probe_only_after_proof,
     };
     use crate::camouhost_process::{
         ManagedCamouhostConfig, ManagedCamouhostProcess, RuntimeBindingSlot, RuntimeDisplayMode,
