@@ -479,6 +479,14 @@ where
     fn close_confirmed_save(&mut self, lease: &ProfileLease) -> Result<(), Self::Error> {
         self.release_lease(lease, CoordinatorReleaseDispositionDto::Clean)
     }
+
+    fn close_verified_historical_probe(&mut self, lease: &ProfileLease) -> Result<(), Self::Error> {
+        // This typed call is made only after the original CURRENT local
+        // bytes were never opened as a writer, the independent historical
+        // Camoufox was observed and cleanly stopped, post-launch D1/R2
+        // reauthorization passed and both native locks were released.
+        self.release_lease(lease, CoordinatorReleaseDispositionDto::Clean)
+    }
 }
 
 impl<T> ProfileCoordinatorRuntimePort for ControlPlaneCoordinator<T>
