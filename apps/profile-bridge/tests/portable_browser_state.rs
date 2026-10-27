@@ -717,6 +717,15 @@ mod p3_fixture {
                 2,
                 "old root must remain derivable after the real historical Camoufox closes"
             );
+            assert_eq!(
+                events.iter().filter(|e| e.starts_with("historical-working-proof:")).count(),
+                1,
+                "D1 receipt may be requested only after verified real browser stop"
+            );
+            assert_eq!(
+                state_ref.historical_working_proof.as_deref(),
+                Some(successor.as_str())
+            );
             assert!(!events.iter().any(|e| e.contains("historical-commit")));
             assert!(
                 events.iter().any(|e| e == "coordinator:release:Clean"),

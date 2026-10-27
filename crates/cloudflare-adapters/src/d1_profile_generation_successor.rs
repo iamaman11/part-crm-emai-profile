@@ -43,6 +43,43 @@ WHERE tenant_id = ? AND profile_id = ? AND generation_id = ?
   AND coordinator_session_id = ? AND coordinator_epoch = ?
 "#;
 
+/// Only an already recorded real-browser reserve is eligible after CURRENT
+/// advances. Receipt identity must still match immutable VERIFIED Catalog
+/// bytes. Its old key, R2 checksum and compatible runtime are rechecked on
+/// every actual cold GET; a receipt NEVER permits deletion by itself.
+const LOAD_CERTIFIED_WORKING_RESERVE: &str = r#"
+SELECT
+    reserve.generation_id,
+    reserve.object_key,
+    reserve.metadata_digest,
+    reserve.container_digest
+FROM browser_profiles AS profile
+JOIN profile_generations AS current
+  ON current.tenant_id = profile.tenant_id
+ AND current.profile_id = profile.profile_id
+ AND current.generation_id = profile.active_generation_id
+JOIN profile_generation_working_proofs AS proof
+  ON proof.tenant_id = profile.tenant_id
+ AND proof.profile_id = profile.profile_id
+JOIN profile_generations AS reserve
+  ON reserve.tenant_id = proof.tenant_id
+ AND reserve.profile_id = proof.profile_id
+ AND reserve.generation_id = proof.generation_id
+WHERE profile.tenant_id = ?
+  AND profile.profile_id = ?
+  AND profile.status = 'READY'
+  AND profile.active_generation_id = ?
+  AND current.status = 'VERIFIED'
+  AND current.verification_reference IS NOT NULL
+  AND reserve.status = 'VERIFIED'
+  AND reserve.verification_reference IS NOT NULL
+  AND reserve.generation_id <> current.generation_id
+  AND proof.metadata_digest = reserve.metadata_digest
+  AND proof.container_digest = reserve.container_digest
+ORDER BY proof.proven_at_ms DESC, proof.generation_id DESC
+LIMIT 1
+"#;
+
 const LOAD_VERIFIED_PREDECESSOR_OF_ACTIVE: &str = r#"
 SELECT
     base.generation_id,
@@ -425,9 +462,13 @@ impl VerifiedPredecessorObjectReferencePort for D1ProfileGenerationSuccessorComm
         profile_id: &ProfileId,
         current_generation_id: &GenerationId,
     ) -> Result<Option<GenerationObjectCatalogReference>, GenerationPortError> {
-        let row = query!(
+        // A previously certified N-k must not disappear merely because
+        // subsequent Saves made it older than the immediate predecessor.
+        // Without any working proof, admit ONLY CURRENT's exact journal base
+        // for the one-time cold Camoufox probe.
+        let working = query!(
             &self.database,
-            LOAD_VERIFIED_PREDECESSOR_OF_ACTIVE,
+            LOAD_CERTIFIED_WORKING_RESERVE,
             scope.tenant_id().as_str(),
             profile_id.as_str(),
             current_generation_id.as_str(),
@@ -436,6 +477,21 @@ impl VerifiedPredecessorObjectReferencePort for D1ProfileGenerationSuccessorComm
         .first::<HistoricalPredecessorRow>(None)
         .await
         .map_err(|_| historical_dependency_failure())?;
+        let row = if working.is_some() {
+            working
+        } else {
+            query!(
+                &self.database,
+                LOAD_VERIFIED_PREDECESSOR_OF_ACTIVE,
+                scope.tenant_id().as_str(),
+                profile_id.as_str(),
+                current_generation_id.as_str(),
+            )
+            .map_err(|_| historical_dependency_failure())?
+            .first::<HistoricalPredecessorRow>(None)
+            .await
+            .map_err(|_| historical_dependency_failure())?
+        };
         let Some(row) = row else {
             return Ok(None);
         };
@@ -856,6 +912,20 @@ mod tests {
         ActorContext, ActorId, AggregateVersion, CorrelationId, DeviceId, FencingToken,
         GenerationId, ProfileId, SessionId, TenantId, TenantScope, UnixMillis,
     };
+
+    #[test]
+    fn durable_working_read_selects_only_verified_receipts_not_generation_age() {
+        let query = super::LOAD_CERTIFIED_WORKING_RESERVE;
+        assert!(query.contains("profile_generation_working_proofs AS proof"));
+        assert!(query.contains("proof.generation_id"));
+        assert!(query.contains("proof.metadata_digest = reserve.metadata_digest"));
+        assert!(query.contains("proof.container_digest = reserve.container_digest"));
+        assert!(query.contains("profile.active_generation_id = ?"));
+        assert!(query.contains("reserve.status = 'VERIFIED'"));
+        assert!(query.contains("reserve.generation_id <> current.generation_id"));
+        assert!(!query.contains("DELETE "));
+        assert!(!query.contains("UPDATE "));
+    }
 
     #[test]
     fn only_immediate_active_verified_predecessor_is_discoverable() {

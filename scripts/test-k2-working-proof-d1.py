@@ -73,6 +73,23 @@ def main() -> int:
         insert(conn, fx)
         conn.commit()
         assert conn.execute("SELECT COUNT(*) FROM profile_generation_working_proofs").fetchone()[0] == 1
+        # Execute the exact Rust D1 loader SQL against the real governed
+        # fixture, never a test-only restatement or an age/N-1 heuristic.
+        import re
+        source = (ROOT / "crates/cloudflare-adapters/src/d1_profile_generation_successor.rs").read_text(encoding="utf-8")
+        match = re.search(
+            r'const LOAD_CERTIFIED_WORKING_RESERVE: &str = r#"(.*?)"#;',
+            source,
+            re.DOTALL,
+        )
+        assert match is not None
+        working_query = match.group(1)
+        def working(current: str):
+            return conn.execute(
+                working_query, (fx["TENANT"], fx["PROFILE"], current)
+            ).fetchone()
+        saved = working(fx["CANDIDATE"])
+        assert saved is not None and saved["generation_id"] == fx["BASE"]
         assert fx["catalog_snapshot"](conn) == baseline
         try:
             conn.execute("UPDATE profile_generation_working_proofs SET proven_at_ms=999")
@@ -93,6 +110,11 @@ def main() -> int:
         fx["owner_activate"](conn, fx["WINNER"], 3, 120)
         conn.commit()
         assert conn.execute("SELECT generation_id FROM profile_generation_working_proofs").fetchone()[0] == fx["BASE"]
+        # The CURRENT pointer now names an independently governed generation,
+        # yet the last browser-proven reserve remains N-k without inventing
+        # another cold-browser proof or changing existing catalog bytes.
+        selected = working(fx["WINNER"])
+        assert selected is not None and selected["generation_id"] == fx["BASE"]
         assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
         print("K2 governed, append-only historical proof persists across CURRENT changes; no prune PASS")
     finally:
