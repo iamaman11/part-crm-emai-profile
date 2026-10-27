@@ -495,6 +495,57 @@ impl core::fmt::Display for HistoricalColdProbeError {
 
 impl std::error::Error for HistoricalColdProbeError {}
 
+/// Exact, non-authoritative witness from one real historical cold probe.
+/// Not durable and never grants R2 deletion or a WORKING/LKG designation.
+/// A separate server owner must revalidate and durably certify live reserve.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct HistoricalColdProbeObservation {
+    tenant_id: TenantId,
+    profile_id: ProfileId,
+    current_generation_id: GenerationId,
+    predecessor_generation_id: GenerationId,
+    source_container_sha256: String,
+    runtime_inventory_sha256: String,
+    materialized_inventory_digest: u64,
+}
+
+impl HistoricalColdProbeObservation {
+    #[must_use]
+    pub const fn tenant_id(&self) -> &TenantId {
+        &self.tenant_id
+    }
+
+    #[must_use]
+    pub const fn profile_id(&self) -> &ProfileId {
+        &self.profile_id
+    }
+
+    #[must_use]
+    pub const fn current_generation_id(&self) -> &GenerationId {
+        &self.current_generation_id
+    }
+
+    #[must_use]
+    pub const fn predecessor_generation_id(&self) -> &GenerationId {
+        &self.predecessor_generation_id
+    }
+
+    #[must_use]
+    pub fn source_container_sha256(&self) -> &str {
+        &self.source_container_sha256
+    }
+
+    #[must_use]
+    pub fn runtime_inventory_sha256(&self) -> &str {
+        &self.runtime_inventory_sha256
+    }
+
+    #[must_use]
+    pub const fn materialized_inventory_digest(&self) -> u64 {
+        self.materialized_inventory_digest
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn cold_launch_verified_predecessor_once<C, D, B, P, H, V>(
     primary: &MaterializationRoot,
@@ -508,7 +559,7 @@ pub fn cold_launch_verified_predecessor_once<C, D, B, P, H, V>(
     process: &mut P,
     camouhost: &mut H,
     observe_browser_state: &mut V,
-) -> Result<GenerationId, HistoricalColdProbeError>
+) -> Result<HistoricalColdProbeObservation, HistoricalColdProbeError>
 where
     C: GenerationReopenControlPort,
     C::Error: Into<GenerationReopenControlError>,
@@ -653,7 +704,19 @@ where
             {
                 return Err(Error::PostLaunchAuthorityUnconfirmed);
             }
-            Ok(historical_id)
+            Ok(HistoricalColdProbeObservation {
+                tenant_id: lease.tenant_id().clone(),
+                profile_id: lease.profile_id().clone(),
+                current_generation_id: current_id.clone(),
+                predecessor_generation_id: historical_id,
+                source_container_sha256: binding.source_container_sha256().to_owned(),
+                runtime_inventory_sha256: runtime_bundle
+                    .manifest()
+                    .inventory_sha256()
+                    .as_str()
+                    .to_owned(),
+                materialized_inventory_digest: binding.materialized_inventory_digest(),
+            })
         })();
         if historical_lock.release().is_err() {
             return Err(Error::CleanupUncertain);

@@ -1,6 +1,7 @@
 use crate::ProcessControlPort;
 use crate::authoritative_generation::{
     AuthoritativeGenerationMaterializationError, HistoricalColdProbeError,
+    HistoricalColdProbeObservation,
     cold_launch_verified_predecessor_once, ensure_authoritative_generation,
 };
 use crate::browser_execution::browser_writer_locks_absent;
@@ -758,7 +759,7 @@ where
         downloader: &mut Dl,
         now: UnixMillis,
         observe_browser_state: &mut V,
-    ) -> Result<GenerationId, OperatorFlowError>
+    ) -> Result<HistoricalColdProbeObservation, OperatorFlowError>
     where
         C: GenerationReopenControlPort,
         <C as GenerationReopenControlPort>::Error: Into<GenerationReopenControlError>,
@@ -836,7 +837,7 @@ where
             self.cleanup_blocked = true;
         }
         match observed {
-            Ok(generation) if !release_failed => Ok(generation),
+            Ok(observation) if !release_failed => Ok(observation),
             Ok(_) => Err(OperatorFlowError::CleanupRequired),
             Err(reason) => Err(OperatorFlowError::HistoricalProbe { reason, cleanup }),
         }

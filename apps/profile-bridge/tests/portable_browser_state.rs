@@ -638,16 +638,38 @@ mod p3_fixture {
             UnixMillis::new(70),
             &mut || origin.expect("verify", 3).map_err(|_| ()),
         )?;
-        assert_eq!(restored, successor);
+        assert_eq!(restored.predecessor_generation_id(), &successor);
+        assert_eq!(restored.current_generation_id(), &current);
+        assert_eq!(restored.tenant_id(), &tenant_id);
+        assert_eq!(restored.profile_id(), &profile_id);
+        assert_eq!(
+            restored.runtime_inventory_sha256(),
+            approved_real_bundle(&paths)?
+                .manifest()
+                .inventory_sha256()
+                .as_str()
+        );
         assert_eq!(state.borrow().active_generation, current);
         let restored_workspace =
-            historical_root.open_generation(&tenant_id, &profile_id, &restored)?;
+            historical_root.open_generation(
+                &tenant_id,
+                &profile_id,
+                restored.predecessor_generation_id(),
+            )?;
         let historical_binding = crate::browser_execution::load_materialization_binding(
             &restored_workspace,
             &tenant_id,
             &profile_id,
-            &restored,
+            restored.predecessor_generation_id(),
         )?;
+        assert_eq!(
+            restored.source_container_sha256(),
+            historical_binding.source_container_sha256()
+        );
+        assert_eq!(
+            restored.materialized_inventory_digest(),
+            historical_binding.materialized_inventory_digest()
+        );
         assert_eq!(
             historical_binding.browser_identity(),
             base_binding.browser_identity()
