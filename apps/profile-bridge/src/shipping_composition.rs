@@ -112,6 +112,21 @@ where
     }
 }
 
+/// A disposable cold-probe workspace can be retired only after an
+/// independently positive managed-browser observation. In particular,
+/// cleanup is NEVER attempted on unknown/failed probe outcomes even when
+/// the generic operator cleanup flag happens to be clear. Caller-owned
+/// native-writer, immutable path and lease checks remain mandatory in retire.
+#[cfg(any(windows, test))]
+fn retire_historical_probe_only_after_proof<T>(
+    proof: Result<T, ShippingCompositionError>,
+    retire: impl FnOnce(&T) -> Result<(), ShippingCompositionError>,
+) -> Result<T, ShippingCompositionError> {
+    let observation = proof?;
+    retire(&observation)?;
+    Ok(observation)
+}
+
 pub fn run_claim(claim: &ClaimUri) -> Result<(), ShippingCompositionError> {
     #[cfg(windows)]
     {
@@ -435,52 +450,56 @@ mod windows {
             now()?,
             &mut || witness.observe_live().map_err(|_| ()),
         );
-        // Any probe error retains the entire isolated slot, including
-        // partial decryption, Firefox SQLite/WAL and unresolved writer state.
-        // The previous implementation removed this directory even for a
-        // failed probe when cleanup_blocked() happened to be false.
-        let observation = result.map_err(ShippingCompositionError::Operator)?;
-        if operator.cleanup_blocked() {
-            return Err(ShippingCompositionError::CommittedRecoveryRequired);
-        }
-        let restored = isolated
-            .open_generation(
-                observation.tenant_id(),
-                observation.profile_id(),
-                observation.predecessor_generation_id(),
-            )
-            .map_err(|_| ShippingCompositionError::CommittedRecoveryRequired)?;
-        // The closed historical browser must leave no live native writer.
-        // Unknown/unreadable locks are never a deletion authorization.
-        if !matches!(
-            crate::browser_execution::browser_writer_locks_absent(&restored),
-            Ok(true)
-        ) {
-            return Err(ShippingCompositionError::CommittedRecoveryRequired);
-        }
-        // The probe slot was atomically created by THIS invocation. Before
-        // deleting even that disposable restore, reject a substituted Windows
-        // junction/reparse point or a changed canonical destination. Never
-        // traverse a foreign link into the real user-data directory.
-        const REPARSE_POINT: u32 = 0x0400;
-        let slot_metadata = fs::symlink_metadata(&slot_path)
-            .map_err(|_| ShippingCompositionError::Configuration)?;
-        // On Windows, canonicalize may add the extended-length prefix
-        // (\\\\?\\) to an ordinary absolute path. Compare two canonical
-        // paths, not a canonical path against the user's original spelling.
-        // A substituted junction to another directory still cannot match
-        // the exact canonical child of the original parent.
-        let physical_parent =
-            fs::canonicalize(parent).map_err(|_| ShippingCompositionError::Configuration)?;
-        let physical_slot =
-            fs::canonicalize(&slot_path).map_err(|_| ShippingCompositionError::Configuration)?;
-        if !slot_metadata.is_dir()
-            || slot_metadata.file_attributes() & REPARSE_POINT != 0
-            || physical_slot != physical_parent.join(HISTORICAL_PROBE_SLOT)
-        {
-            return Err(ShippingCompositionError::Configuration);
-        }
-        fs::remove_dir_all(&slot_path).map_err(|_| ShippingCompositionError::Configuration)?;
+        retire_historical_probe_only_after_proof(
+            result.map_err(ShippingCompositionError::Operator),
+            |observation| {
+            // Called ONLY after a proved clean historical Camoufox run. Any
+            // uncertain/failing probe leaves all bytes and writer evidence in
+            // this slot even when the operator cleanup flag is false.
+            if operator.cleanup_blocked() {
+                return Err(ShippingCompositionError::CommittedRecoveryRequired);
+            }
+            let restored = isolated
+                .open_generation(
+                    observation.tenant_id(),
+                    observation.profile_id(),
+                    observation.predecessor_generation_id(),
+                )
+                .map_err(|_| ShippingCompositionError::CommittedRecoveryRequired)?;
+            // The closed historical browser must leave no live native writer.
+            // Unknown/unreadable locks are never a deletion authorization.
+            if !matches!(
+                crate::browser_execution::browser_writer_locks_absent(&restored),
+                Ok(true)
+            ) {
+                return Err(ShippingCompositionError::CommittedRecoveryRequired);
+            }
+            // The probe slot was atomically created by THIS invocation. Before
+            // deleting even that disposable restore, reject a substituted Windows
+            // junction/reparse point or a changed canonical destination. Never
+            // traverse a foreign link into the real user-data directory.
+            const REPARSE_POINT: u32 = 0x0400;
+            let slot_metadata = fs::symlink_metadata(&slot_path)
+                .map_err(|_| ShippingCompositionError::Configuration)?;
+            // On Windows, canonicalize may add the extended-length prefix
+            // (\\\\?\\) to an ordinary absolute path. Compare two canonical
+            // paths, not a canonical path against the user's original spelling.
+            // A substituted junction to another directory still cannot match
+            // the exact canonical child of the original parent.
+            let physical_parent =
+                fs::canonicalize(parent).map_err(|_| ShippingCompositionError::Configuration)?;
+            let physical_slot =
+                fs::canonicalize(&slot_path).map_err(|_| ShippingCompositionError::Configuration)?;
+            if !slot_metadata.is_dir()
+                || slot_metadata.file_attributes() & REPARSE_POINT != 0
+                || physical_slot != physical_parent.join(HISTORICAL_PROBE_SLOT)
+            {
+                return Err(ShippingCompositionError::Configuration);
+            }
+            fs::remove_dir_all(&slot_path).map_err(|_| ShippingCompositionError::Configuration)?;
+            Ok(())
+            },
+        )?;
         eprintln!(
             "HISTORICAL_COLD_PROBE=BROWSER_IDENTITY_VERIFIED;WORKING_LKG_CERTIFICATE=0;R2_PRUNE_AUTHORITY=0"
         );
@@ -1228,13 +1247,62 @@ mod windows {
 mod tests {
     use super::{
         ConfirmedSaveTrigger, ShippingCompositionError, confirmed_save_trigger,
-        open_with_one_fresh_claim,
+        open_with_one_fresh_claim, retire_historical_probe_only_after_proof,
     };
     #[cfg(not(windows))]
     use super::{ShippingDeliveryCommand, run_claim, run_delivery_command};
     use crate::operator_flow::OperatorFlowError;
     use bridge_domain::ClaimUri;
     use std::cell::Cell;
+
+    #[test]
+    fn failed_or_unknown_historical_probe_never_deletes_its_recovery_slot()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static SEQUENCE: AtomicU64 = AtomicU64::new(1);
+        let slot = std::env::temp_dir().join(format!(
+            "historical-probe-retention-{}-{}",
+            std::process::id(),
+            SEQUENCE.fetch_add(1, Ordering::Relaxed)
+        ));
+        std::fs::create_dir(&slot)?;
+        let native_evidence = slot.join("retained-user-data-marker");
+        std::fs::write(&native_evidence, b"dirty-firefox-evidence")?;
+        let calls = Cell::new(0);
+        for failed in [
+            ShippingCompositionError::CommittedRecoveryRequired,
+            ShippingCompositionError::ControlPlane,
+            ShippingCompositionError::Configuration,
+        ] {
+            let result = retire_historical_probe_only_after_proof::<()>(
+                Err(failed),
+                |_| {
+                    calls.set(calls.get() + 1);
+                    std::fs::remove_dir_all(&slot)
+                        .map_err(|_| ShippingCompositionError::Configuration)
+                },
+            );
+            assert_eq!(result, Err(failed));
+            assert_eq!(calls.get(), 0);
+            assert_eq!(std::fs::read(&native_evidence)?, b"dirty-firefox-evidence");
+        }
+        // A positive probe alone is not deletion authority: the retire
+        // closure must additionally prove writer, lease and exact path.
+        let denied = retire_historical_probe_only_after_proof(Ok(()), |_| {
+            calls.set(calls.get() + 1);
+            Err(ShippingCompositionError::CommittedRecoveryRequired)
+        });
+        assert_eq!(denied, Err(ShippingCompositionError::CommittedRecoveryRequired));
+        assert_eq!(std::fs::read(&native_evidence)?, b"dirty-firefox-evidence");
+        assert_eq!(calls.get(), 1);
+        retire_historical_probe_only_after_proof(Ok(()), |_| {
+            calls.set(calls.get() + 1);
+            std::fs::remove_dir_all(&slot).map_err(|_| ShippingCompositionError::Configuration)
+        })?;
+        assert_eq!(calls.get(), 2);
+        assert!(!slot.exists());
+        Ok(())
+    }
 
     #[test]
     fn committed_newer_generation_reopens_once_with_independent_claim()
