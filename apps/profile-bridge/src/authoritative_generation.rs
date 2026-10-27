@@ -459,16 +459,16 @@ where
 /// native writer. It uses the existing snapshot, preflight, lock and managed
 /// runtime owners rather than inventing a second browser lifecycle.
 ///
-/// Success proves an isolated old-key R2 materialization reached real
-/// managed Camoufox Ready/visible identity and then stopped cleanly.
-/// Browser cookies/IndexedDB must be checked separately by the acceptance
-/// origin; this is NOT a durable WORKING certificate or prune grant.
+/// Success requires the independent observer to check the live browser
+/// (including cookies/IndexedDB in acceptance), then a clean process stop.
+/// A passed one-time probe is NOT yet a durable WORKING certificate or prune grant.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum HistoricalColdProbeError {
     CurrentNotQuiescent,
     Materialization(AuthoritativeGenerationMaterializationError),
     WorkspaceLock,
     Preflight,
+    BrowserStateNotVerified,
     Runtime,
     CleanupUncertain,
 }
@@ -480,6 +480,7 @@ impl core::fmt::Display for HistoricalColdProbeError {
             Self::Materialization(_) => "historical generation could not be restored",
             Self::WorkspaceLock => "historical workspace lock is unavailable",
             Self::Preflight => "historical browser preflight did not pass",
+            Self::BrowserStateNotVerified => "historical browser state was not independently verified",
             Self::Runtime => "historical browser did not launch and close cleanly",
             Self::CleanupUncertain => "historical probe process or locks have uncertain cleanup",
         })
@@ -489,7 +490,7 @@ impl core::fmt::Display for HistoricalColdProbeError {
 impl std::error::Error for HistoricalColdProbeError {}
 
 #[allow(clippy::too_many_arguments)]
-pub fn cold_launch_verified_predecessor_once<C, D, B, P, H>(
+pub fn cold_launch_verified_predecessor_once<C, D, B, P, H, V>(
     primary: &MaterializationRoot,
     isolated: &MaterializationRoot,
     current_id: &GenerationId,
@@ -500,6 +501,7 @@ pub fn cold_launch_verified_predecessor_once<C, D, B, P, H>(
     preflight: &mut B,
     process: &mut P,
     camouhost: &mut H,
+    observe_browser_state: &mut V,
 ) -> Result<GenerationId, HistoricalColdProbeError>
 where
     C: GenerationReopenControlPort,
@@ -509,6 +511,7 @@ where
     B: crate::operator_flow::BrowserLaunchPreflightPort,
     P: crate::ProcessControlPort,
     H: bridge_domain::CamouhostPort,
+    V: FnMut() -> Result<(), ()>,
 {
     use HistoricalColdProbeError as Error;
 
@@ -583,6 +586,11 @@ where
                     Err(Error::CleanupUncertain)
                 };
             }
+            // A successful Ready only proves the managed browser launched.
+            // Give the existing acceptance observer a live page to inspect
+            // cookies, localStorage and IndexedDB *before* closing Camoufox.
+            // The observer never grants a writer or changes CURRENT.
+            let observed = observe_browser_state().map_err(|_| Error::BrowserStateNotVerified);
             if crate::runtime_bundle::RuntimeSessionOrchestrator::close(
                 runtime_bundle,
                 lease.session_id(),
@@ -597,6 +605,7 @@ where
                     Err(Error::CleanupUncertain)
                 };
             }
+            observed?;
             Ok(historical_id)
         })();
         if historical_lock.release().is_err() {

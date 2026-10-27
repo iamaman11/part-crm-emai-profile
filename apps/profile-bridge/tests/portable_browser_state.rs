@@ -645,9 +645,9 @@ mod p3_fixture {
             &mut historical_preflight,
             &mut historical_process,
             &mut historical_camouhost,
+            &mut || origin.expect("verify", 3).map_err(|_| ()),
         )?;
         assert_eq!(restored, successor);
-        origin.expect("verify", 3)?;
         assert_eq!(state.borrow().active_generation, current);
         let restored_workspace =
             historical_root.open_generation(&tenant_id, &profile_id, &restored)?;
@@ -721,6 +721,7 @@ mod p3_fixture {
             &mut missing_preflight,
             &mut missing_process,
             &mut missing_camouhost,
+            &mut || Err(()),
         );
         assert!(matches!(
             failure,
