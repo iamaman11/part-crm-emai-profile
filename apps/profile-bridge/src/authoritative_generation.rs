@@ -453,6 +453,134 @@ where
     Ok(predecessor_id)
 }
 
+/// One-shot historical Camoufox cold probe under an *already acquired*
+/// server-selected CURRENT coordinator lease. It never changes the selected
+/// generation or issues a Save/commit, and must not run alongside a CURRENT
+/// native writer. It uses the existing snapshot, preflight, lock and managed
+/// runtime owners rather than inventing a second browser lifecycle.
+///
+/// Success proves an isolated old-key R2 materialization reached real
+/// managed Camoufox Ready/visible identity and then stopped cleanly.
+/// Browser cookies/IndexedDB must be checked separately by the acceptance
+/// origin; this is NOT a durable WORKING certificate or prune grant.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum HistoricalColdProbeError {
+    CurrentNotQuiescent,
+    Materialization(AuthoritativeGenerationMaterializationError),
+    WorkspaceLock,
+    Preflight,
+    Runtime,
+    CleanupUncertain,
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn cold_launch_verified_predecessor_once<C, D, B, P, H>(
+    primary: &MaterializationRoot,
+    isolated: &MaterializationRoot,
+    current_id: &GenerationId,
+    lease: &session_domain::ProfileLease,
+    runtime_bundle: &crate::runtime_bundle::ApprovedRuntimeBundle,
+    control: &mut C,
+    downloader: &mut D,
+    preflight: &mut B,
+    process: &mut P,
+    camouhost: &mut H,
+) -> Result<GenerationId, HistoricalColdProbeError>
+where
+    C: GenerationReopenControlPort,
+    C::Error: Into<GenerationReopenControlError>,
+    D: GenerationObjectDownloadPort,
+    D::Error: Into<GenerationObjectDownloadError>,
+    B: crate::operator_flow::BrowserLaunchPreflightPort,
+    P: crate::ProcessControlPort,
+    H: bridge_domain::CamouhostPort,
+{
+    use HistoricalColdProbeError as Error;
+
+    // Only a fresh CURRENT claim from the original coordinator may authorize
+    // historical bytes. Never manufacture or reuse an old-generation lease.
+    if lease.epoch() == 0 || primary.path() == isolated.path() {
+        return Err(Error::CurrentNotQuiescent);
+    }
+    let current = primary
+        .open_generation(lease.tenant_id(), lease.profile_id(), current_id)
+        .map_err(|_| Error::CurrentNotQuiescent)?;
+    // Protect CURRENT with its ordinary Bridge lock for the whole probe:
+    // another live local session must not coexist with a historical browser.
+    let current_lock = BridgeWorkspaceLock::acquire(&current, lease.device_id(), lease.epoch())
+        .map_err(|_| Error::CurrentNotQuiescent)?;
+    let result = (|| {
+        if !matches!(browser_writer_locks_absent(&current), Ok(true)) {
+            return Err(Error::CurrentNotQuiescent);
+        }
+        let historical_id = materialize_verified_predecessor_for_cold_launch(
+            primary,
+            isolated,
+            lease.tenant_id(),
+            lease.profile_id(),
+            current_id,
+            lease.device_id(),
+            lease.epoch(),
+            control,
+            downloader,
+        )
+        .map_err(Error::Materialization)?;
+        let historical = isolated
+            .open_generation(lease.tenant_id(), lease.profile_id(), &historical_id)
+            .map_err(|_| Error::WorkspaceLock)?;
+        let historical_lock =
+            BridgeWorkspaceLock::acquire(&historical, lease.device_id(), lease.epoch())
+                .map_err(|_| Error::WorkspaceLock)?;
+        let outcome = (|| {
+            preflight
+                .evaluate_before_launch(
+                    &historical,
+                    lease.device_id(),
+                    lease.epoch(),
+                    runtime_bundle,
+                )
+                .map_err(|_| Error::Preflight)?;
+            if let Err(_source) = crate::runtime_bundle::RuntimeSessionOrchestrator::launch(
+                runtime_bundle,
+                lease.session_id(),
+                process,
+                camouhost,
+            ) {
+                // The orchestrator already rolls back on IPC failure; the
+                // extra fence covers its initial process-spawn failure case.
+                return if process.force_terminate(lease.session_id()).is_ok() {
+                    Err(Error::Runtime)
+                } else {
+                    Err(Error::CleanupUncertain)
+                };
+            }
+            if crate::runtime_bundle::RuntimeSessionOrchestrator::close(
+                runtime_bundle,
+                lease.session_id(),
+                process,
+                camouhost,
+            )
+            .is_err()
+            {
+                return if process.force_terminate(lease.session_id()).is_ok() {
+                    Err(Error::Runtime)
+                } else {
+                    Err(Error::CleanupUncertain)
+                };
+            }
+            Ok(historical_id)
+        })();
+        if historical_lock.release().is_err() {
+            return Err(Error::CleanupUncertain);
+        }
+        outcome
+    })();
+    if current_lock.release().is_err() {
+        return Err(Error::CleanupUncertain);
+    }
+    result
+}
+
 /// One ephemeral read-only view: the server-issued predecessor GET bearer is
 /// consumed exactly once; opening material is reauthorized against the current
 /// D1 pointer and old metadata on its separate request. No second state owner.
