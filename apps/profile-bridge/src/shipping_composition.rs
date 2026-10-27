@@ -151,7 +151,9 @@ mod windows {
     };
     use crate::generation_reopen::VerifiedGenerationObjectStreamDownloader;
     use crate::local_profile::{DeliveryActivationGuard, MaterializationRoot};
-    use crate::operator_flow::{OperatorFailureStage, OperatorFlowError, ProfileBridgeOperator};
+    use crate::operator_flow::{
+        OperatorFailureStage, OperatorFlowError, PendingSaveRecovery, ProfileBridgeOperator,
+    };
     use crate::shipping_control_plane::{
         ControlPlaneCoordinator, ControlPlaneEnrollment, ControlPlaneLeaseTiming,
     };
@@ -522,14 +524,14 @@ mod windows {
                             eprintln!(
                                 "P3_RECOVERY=ACTIVE_EXACT_LOCAL_READY;NEXT_SAFE_STEP=CONTINUE_OPEN"
                             );
-                            true
+                            PendingSaveRecovery::ReadySelected
                         }
                         Ok(RestartExactLocalCompletion::RetryDecisionConfirmedAwaitingResumption) => {
                             // The fresh lease selected N, not N+1. Even if
                             // replay commits successfully, this launch must
                             // NOT open N. A new claim selects and completes
                             // the authoritative exact N+1 on the next Open.
-                            match resume_exact_successor_under_fresh_lease(
+                            let committed = match resume_exact_successor_under_fresh_lease(
                                 &materialization_root,
                                 tenant,
                                 profile,
@@ -542,24 +544,31 @@ mod windows {
                                     eprintln!(
                                         "P3_RECOVERY=RETRY_COMMITTED;NEXT_SAFE_STEP=FRESH_OPEN_ACTIVE_EXACT"
                                     );
+                                    true
                                 }
                                 Ok(false) => {
                                     eprintln!(
                                         "P3_RECOVERY=RETRY_BLOCKED;NEXT_SAFE_STEP=PRESERVE_LOCAL_BYTES"
                                     );
+                                    false
                                 }
                                 Err(error) => {
                                     eprintln!(
                                         "P3_RECOVERY={};NEXT_SAFE_STEP=RETRY_OWNED_RECOVERY",
                                         error.code()
                                     );
+                                    false
                                 }
+                            };
+                            if committed {
+                                PendingSaveRecovery::CommittedNewerRequiresClaim
+                            } else {
+                                PendingSaveRecovery::Blocked
                             }
-                            false
                         }
                         Ok(RestartExactLocalCompletion::RetryDecisionBlocked) => {
                             eprintln!("P3_RECOVERY=RETRY_BLOCKED;NEXT_SAFE_STEP=PRESERVE_LOCAL_BYTES");
-                            false
+                            PendingSaveRecovery::Blocked
                         }
                         Ok(RestartExactLocalCompletion::NotActiveExact) => {
                             let diagnosis = PendingSaveReadOnlyDiagnosis::from_observation(
@@ -570,7 +579,7 @@ mod windows {
                                 diagnosis.code(),
                                 diagnosis.next_safe_step()
                             );
-                            false
+                            PendingSaveRecovery::Blocked
                         }
                         Ok(RestartExactLocalCompletion::LocalUnsyncedAuthorizedAwaitingFirstSeal) => {
                             // The one current coordinator owns the new claimed
@@ -599,7 +608,7 @@ mod windows {
                             }
                             // A successful N->N+1 commit invalidates this
                             // original-N launch. No browser may open N.
-                            false
+                            PendingSaveRecovery::Blocked
                         }
                         Ok(RestartExactLocalCompletion::NoCanonicalCheckpoint) => {
                             let diagnosis = PendingSaveReadOnlyDiagnosis::from_observation(
@@ -610,20 +619,20 @@ mod windows {
                                 diagnosis.code(),
                                 diagnosis.next_safe_step()
                             );
-                            false
+                            PendingSaveRecovery::Blocked
                         }
                         Ok(RestartExactLocalCompletion::ServerSelectedDifferentGeneration) => {
                             eprintln!(
                                 "P3_RECOVERY=CONFLICT;NEXT_SAFE_STEP=REQUIRE_CURRENT_SERVER_GENERATION"
                             );
-                            false
+                            PendingSaveRecovery::Blocked
                         }
                         Err(error) => {
                             eprintln!(
                                 "P3_RECOVERY={};NEXT_SAFE_STEP=RETRY_OWNED_RECOVERY",
                                 error.code()
                             );
-                            false
+                            PendingSaveRecovery::Blocked
                         }
                     }
                 },

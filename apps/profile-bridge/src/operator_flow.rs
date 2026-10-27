@@ -45,13 +45,13 @@ use crate::shipping_generation_successor_control::{
     RestartExactLocalCompletionError, publish_streamed_exact_under_writer,
 };
 use crate::shipping_save_attempt::{
-    SaveAttemptEvidenceError, has_unresolved_save_attempt_for_profile,
-    persist_local_unsynced_intent,
+    SaveAttemptEvidenceError, discover_unresolved_streaming_exact_save_attempt,
+    has_unresolved_save_attempt_for_profile, persist_local_unsynced_intent,
 };
 #[cfg(any(windows, test))]
 use crate::shipping_save_attempt::{
     ScopedPendingSaveEvidence, classify_scoped_pending_save_evidence,
-    discover_unresolved_streaming_exact_save_attempt, original_local_unsynced_successor,
+    original_local_unsynced_successor,
     persist_streaming_exact_save_attempt_from_native, retire_fully_saved_streaming_attempt,
     retire_local_unsynced_after_streamed_checkpoint,
 };
@@ -95,6 +95,19 @@ pub trait RuntimeBundleSelectionPort {
     type Error;
 
     fn select_bundle(&mut self) -> Result<ApprovedRuntimeBundle, Self::Error>;
+}
+
+/// Ephemeral result from the existing, freshly authorized pending-Save owner.
+/// Neither a persisted phase nor independent permission to open a browser.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum PendingSaveRecovery {
+    /// The already-selected authoritative generation is locally ready.
+    ReadySelected,
+    /// Exact N+1 committed while this claim still selected N.
+    /// Never launch N; release the unused claim only with fresh native proof.
+    CommittedNewerRequiresClaim,
+    /// Unknown, blocked, conflicting or incomplete recovery.
+    Blocked,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -684,7 +697,7 @@ where
                 )
             },
             before_runtime_start,
-            |_coordinator, _tenant, _profile, _selected, _lease| false,
+            |_coordinator, _tenant, _profile, _selected, _lease| PendingSaveRecovery::Blocked,
         )
     }
 
@@ -718,7 +731,7 @@ where
             &ProfileId,
             &GenerationId,
             &ProfileLease,
-        ) -> bool,
+        ) -> PendingSaveRecovery,
     {
         self.open_with_materialization(
             claim,
@@ -858,7 +871,7 @@ where
             now,
             |_coordinator, _tenant_id, _profile_id, _generation_id, _device_id, _epoch| Ok(()),
             || Ok(()),
-            |_coordinator, _tenant, _profile, _selected, _lease| false,
+            |_coordinator, _tenant, _profile, _selected, _lease| PendingSaveRecovery::Blocked,
         )
     }
 
@@ -887,7 +900,7 @@ where
             &ProfileId,
             &GenerationId,
             &ProfileLease,
-        ) -> bool,
+        ) -> PendingSaveRecovery,
     {
         if self.cleanup_blocked {
             return Err(OperatorFlowError::CleanupRequired);
@@ -959,10 +972,68 @@ where
                 enrollment.generation_id(),
                 &lease,
             );
+            // A successful exact N->N+1 retry cannot use this old N claim.
+            // Before permitting its normal replacement, prove the original
+            // browser never started, the exact pending ciphertext is intact,
+            // and BOTH native Firefox writers are absent after upload.
+            // This is NOT a Saved acknowledgement: the checkpoint survives
+            // for the next fresh, server-selected N+1 ACTIVE_EXACT completion.
+            if recovered == PendingSaveRecovery::CommittedNewerRequiresClaim {
+                let no_native_writer = discover_unresolved_streaming_exact_save_attempt(
+                    root,
+                    enrollment.actor().tenant_scope().tenant_id(),
+                    enrollment.profile_id(),
+                )
+                .ok()
+                .flatten()
+                .filter(|exact| exact.base_generation_id() == enrollment.generation_id().as_str())
+                .and_then(|exact| {
+                    let next = GenerationId::parse(exact.successor_id()).ok()?;
+                    if next == *enrollment.generation_id() {
+                        return None;
+                    }
+                    let base = root
+                        .open_generation(
+                            enrollment.actor().tenant_scope().tenant_id(),
+                            enrollment.profile_id(),
+                            enrollment.generation_id(),
+                        )
+                        .ok()?;
+                    let candidate = root
+                        .open_generation(
+                            enrollment.actor().tenant_scope().tenant_id(),
+                            enrollment.profile_id(),
+                            &next,
+                        )
+                        .ok()?;
+                    Some(
+                        matches!(browser_writer_locks_absent(&base), Ok(true))
+                            && matches!(browser_writer_locks_absent(&candidate), Ok(true)),
+                    )
+                })
+                .unwrap_or(false);
+                if no_native_writer {
+                    if self.coordinator.close_without_browser_use(&lease).is_ok() {
+                        // The consumed claim cannot select N+1. The existing
+                        // application launch owner must issue a NEW claim.
+                        return Err(OperatorFlowError::Stage(OperatorFailureStage::GenerationSave));
+                    }
+                    self.cleanup_blocked = true;
+                    return Err(OperatorFlowError::Terminal {
+                        stage: OperatorFailureStage::GenerationSave,
+                        local_state: LocalGenerationState::RecoveryRequired,
+                        cleanup: CleanupFailures {
+                            process: false,
+                            workspace_lock: false,
+                            coordinator_lease: true,
+                        },
+                    });
+                }
+            }
             // A recovery callback never overrides the conservative guard.
             // Only the specific fully completed checkpoint may disappear; a
             // torn sibling, unsafe writer or failed local binding still blocks.
-            if !recovered
+            if recovered != PendingSaveRecovery::ReadySelected
                 || !matches!(
                     has_unresolved_save_attempt_for_profile(
                         root,
@@ -2231,7 +2302,8 @@ mod tests {
     use super::{
         AuthoritativeGenerationMaterializationError, BrowserLaunchPreflightPort,
         DeviceAuthenticationPort, EnrollmentPort, OperationalRejectionReason, OperatorEnrollment,
-        OperatorFailureStage, OperatorFlowError, ProfileBridgeOperator, RuntimeBundleSelectionPort,
+        OperatorFailureStage, OperatorFlowError, PendingSaveRecovery, ProfileBridgeOperator,
+        RuntimeBundleSelectionPort,
     };
     use crate::local_profile::{
         BridgeWorkspaceLock, GenerationWorkspace, LocalGenerationState, LocalProfileError,
@@ -2634,7 +2706,7 @@ mod tests {
                 runtime_health_started = true;
                 Ok(())
             },
-            |_coordinator, _tenant, _profile, _selected, _lease| false,
+            |_coordinator, _tenant, _profile, _selected, _lease| PendingSaveRecovery::Blocked,
         );
         assert!(matches!(
             result,
@@ -2682,7 +2754,7 @@ mod tests {
                     runtime_health_started = true;
                     Ok(())
                 },
-                |_coordinator, _tenant, _profile, _selected, _lease| false,
+                |_coordinator, _tenant, _profile, _selected, _lease| PendingSaveRecovery::Blocked,
             );
             assert!(matches!(
                 result,
@@ -2725,7 +2797,7 @@ mod tests {
                     )
                 },
                 || Ok(()),
-                |_coordinator, _tenant, _profile, _selected, _lease| false,
+                |_coordinator, _tenant, _profile, _selected, _lease| PendingSaveRecovery::Blocked,
             );
             assert!(matches!(
                 result,
@@ -2754,7 +2826,7 @@ mod tests {
                 ))
             },
             || Ok(()),
-            |_coordinator, _tenant, _profile, _selected, _lease| false,
+            |_coordinator, _tenant, _profile, _selected, _lease| PendingSaveRecovery::Blocked,
         );
         assert!(matches!(
             result,
@@ -3112,7 +3184,7 @@ mod tests {
                     assert_eq!(selected_generation, &fixture.generation_id);
                     assert_eq!(fresh_lease.device_id(), &fixture.device_id);
                     observed.set(observed.get() + 1);
-                    false
+                    PendingSaveRecovery::CommittedNewerRequiresClaim
                 },
             ),
             Err(OperatorFlowError::Stage(
@@ -3124,6 +3196,8 @@ mod tests {
         assert_eq!(runtime_starts.get(), 0);
         assert_eq!(owner.coordinator().claimed, 1);
         assert_eq!(owner.coordinator().closed, 1);
+        // A forged success over torn evidence must NEVER release Clean.
+        assert_eq!(owner.coordinator().clean_closed, 0);
         assert!(owner.process().actions().is_empty());
         assert_eq!(fs::read(&pending)?, b"torn-attempt");
 
@@ -3149,7 +3223,7 @@ mod tests {
                 },
                 |_coordinator, _tenant, _profile, _selected, _lease| {
                     unauthorized_observations.set(1);
-                    false
+                    PendingSaveRecovery::Blocked
                 },
             ),
             Err(OperatorFlowError::Stage(
@@ -3338,7 +3412,7 @@ mod tests {
                 started_health = true;
                 Ok(())
             },
-            |_coordinator, _tenant, _profile, _selected, _lease| false,
+            |_coordinator, _tenant, _profile, _selected, _lease| PendingSaveRecovery::Blocked,
         );
         assert!(matches!(result, Err(OperatorFlowError::Preflight { .. })));
         assert!(!started_health);
@@ -3361,7 +3435,7 @@ mod tests {
                 started_health = true;
                 Ok(())
             },
-            |_coordinator, _tenant, _profile, _selected, _lease| false,
+            |_coordinator, _tenant, _profile, _selected, _lease| PendingSaveRecovery::Blocked,
         )?;
         assert!(started_health);
         assert_eq!(
@@ -3386,7 +3460,7 @@ mod tests {
                 start_attempts += 1;
                 Err(())
             },
-            |_coordinator, _tenant, _profile, _selected, _lease| false,
+            |_coordinator, _tenant, _profile, _selected, _lease| PendingSaveRecovery::Blocked,
         );
         assert_eq!(
             error,
