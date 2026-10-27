@@ -628,7 +628,8 @@ where
             cursor.fencing_token.as_str(),
             cursor.epoch,
         );
-        let mut body = serde_json::to_vec(&request).map_err(|_| ShippingControlPlaneError::InvalidResponse)?;
+        let mut body =
+            serde_json::to_vec(&request).map_err(|_| ShippingControlPlaneError::InvalidResponse)?;
         let correlation_id = next_correlation_id()?;
         let response = self
             .transport
@@ -721,7 +722,8 @@ where
             cursor.fencing_token.as_str(),
             cursor.epoch,
         );
-        let mut body = serde_json::to_vec(&request).map_err(|_| ShippingControlPlaneError::InvalidResponse)?;
+        let mut body =
+            serde_json::to_vec(&request).map_err(|_| ShippingControlPlaneError::InvalidResponse)?;
         let correlation_id = next_correlation_id()?;
         let response = self
             .transport
@@ -743,12 +745,15 @@ where
         body.fill(0);
         let response = decode_reopen_opening_material_response(response?)?;
         let (key_id, dek_hex) = response.into_parts();
-        let key_id = KeyId::parse(key_id).map_err(|_| ShippingControlPlaneError::InvalidResponse)?;
-        GenerationRootKeyVersion::from_key_id(&key_id).map_err(|_| ShippingControlPlaneError::InvalidResponse)?;
+        let key_id =
+            KeyId::parse(key_id).map_err(|_| ShippingControlPlaneError::InvalidResponse)?;
+        GenerationRootKeyVersion::from_key_id(&key_id)
+            .map_err(|_| ShippingControlPlaneError::InvalidResponse)?;
         if &key_id != inspected.metadata().key_id() {
             return Err(ShippingControlPlaneError::InvalidResponse);
         }
-        let dek = decode_secret_dek(dek_hex.as_str()).ok_or(ShippingControlPlaneError::InvalidResponse)?;
+        let dek = decode_secret_dek(dek_hex.as_str())
+            .ok_or(ShippingControlPlaneError::InvalidResponse)?;
         Ok(GenerationDek::new(key_id, dek.0))
     }
 }
@@ -1139,11 +1144,7 @@ fn generation_sealing_material_path(tenant_id: &TenantId, profile_id: &ProfileId
         .replace("{profileId}", profile_id.as_str())
 }
 
-fn generation_reopen_path(
-    tenant_id: &TenantId,
-    profile_id: &ProfileId,
-    template: &str,
-) -> String {
+fn generation_reopen_path(tenant_id: &TenantId, profile_id: &ProfileId, template: &str) -> String {
     template
         .replace("{tenantId}", tenant_id.as_str())
         .replace("{profileId}", profile_id.as_str())
