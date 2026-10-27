@@ -1183,6 +1183,7 @@ def run_ipc() -> int:
     close_observation: dict[str, Any] | None = None
     browser_visible_observed = False
     navigation_admitted = False
+    post_navigation_browser_visible_observed = False
 
     try:
         for raw in sys.stdin:
@@ -1221,17 +1222,35 @@ def run_ipc() -> int:
                 and parts[1] == active_session
                 and manager is not None
                 and context is not None
-                and not browser_visible_observed
-                and not navigation_admitted
+                and (
+                    (not browser_visible_observed and not navigation_admitted)
+                    or (
+                        browser_visible_observed
+                        and navigation_admitted
+                        and not post_navigation_browser_visible_observed
+                    )
+                )
             ):
                 try:
-                    page = context.pages[0] if context.pages else context.new_page()
+                    # The initial pre-navigation observation may create the
+                    # first page as before. A later live-session witness must
+                    # not create or resurrect a browser page: a user-closed
+                    # browser is not an independently working reserve.
+                    if context.pages:
+                        page = context.pages[0]
+                    elif not navigation_admitted:
+                        page = context.new_page()
+                    else:
+                        raise RuntimeContractError("post-navigation browser page is absent")
                     payload = browser_visible_observation(page, config)
                 except BaseException as error:
                     report_runtime_failure("browser_visible", error)
                     emit("error|runtime")
                     return 5
-                browser_visible_observed = True
+                if navigation_admitted:
+                    post_navigation_browser_visible_observed = True
+                else:
+                    browser_visible_observed = True
                 emit_browser_visible(active_session, payload)
                 continue
 
