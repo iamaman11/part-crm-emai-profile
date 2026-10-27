@@ -106,9 +106,9 @@ REQUIRED_OPERATOR_RECOVERY_MARKERS = (
     "let recovered = observe_pending(",
     "persist_local_unsynced_intent(root, &source, retained.lease())",
     "retire_local_unsynced_after_exact_checkpoint(",
-    // Only a fully retired ACTIVE_EXACT for the originally selected N may
-    // continue into the browser. A committed N+1 from a claim for N must
-    // exit for a NEW authorized launch, never silently reuse the old N.
+    # Only a fully retired ACTIVE_EXACT for the originally selected N may
+    # continue into the browser. A committed N+1 from a claim for N must
+    # exit for a NEW authorized launch, never silently reuse the old N.
     "if recovered != PendingSaveRecovery::ReadySelected",
     "if recovered == PendingSaveRecovery::CommittedNewerRequiresClaim",
     "discover_unresolved_streaming_exact_save_attempt(",
