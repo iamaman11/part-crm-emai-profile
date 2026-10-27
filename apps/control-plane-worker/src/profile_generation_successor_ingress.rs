@@ -38,7 +38,7 @@ use control_plane_contract::generation_key_api::{
 use control_plane_contract::generation_reopen_api::{
     BridgeGenerationDownloadCapabilityRequest, BridgeGenerationDownloadCapabilityResponse,
     BridgeGenerationOpeningMaterialRequest, BridgeGenerationOpeningMaterialResponse,
-    GENERATION_DOWNLOAD_CAPABILITY_MAX_EXPIRES_SECONDS,
+    BridgeGenerationWorkingProofRequest, GENERATION_DOWNLOAD_CAPABILITY_MAX_EXPIRES_SECONDS,
 };
 use control_plane_contract::profile_generation_api::{
     BridgeGenerationLocalUnsyncedRetryDecisionRequest, BridgeGenerationSuccessorCommitOutcomeDto,
@@ -77,6 +77,7 @@ pub(crate) enum BridgeGenerationMachineOperation {
     OpeningMaterial,
     PredecessorDownloadCapability,
     PredecessorOpeningMaterial,
+    PredecessorCertifyWorking,
 }
 
 #[must_use]
@@ -200,6 +201,16 @@ pub(crate) fn operation(path: &str, method: Method) -> Option<BridgeGenerationMa
             "generation-working-candidate",
             "opening-material",
         ] => Some(BridgeGenerationMachineOperation::PredecessorOpeningMaterial),
+        [
+            "bridge",
+            "v1",
+            "tenants",
+            _,
+            "profiles",
+            _,
+            "generation-working-candidate",
+            "certify",
+        ] => Some(BridgeGenerationMachineOperation::PredecessorCertifyWorking),
         _ => None,
     }
 }
@@ -218,6 +229,9 @@ pub(crate) async fn dispatch_authorized(
     }
     if operation == BridgeGenerationMachineOperation::SealingMaterial {
         return dispatch_sealing_material(request, env, profile_id, actor, device_id).await;
+    }
+    if operation == BridgeGenerationMachineOperation::PredecessorCertifyWorking {
+        return dispatch_working_proof(request, env, profile_id, actor, device_id).await;
     }
     if matches!(
         operation,
@@ -361,6 +375,7 @@ pub(crate) async fn dispatch_authorized(
         | BridgeGenerationMachineOperation::OpeningMaterial
         | BridgeGenerationMachineOperation::PredecessorDownloadCapability
         | BridgeGenerationMachineOperation::PredecessorOpeningMaterial
+        | BridgeGenerationMachineOperation::PredecessorCertifyWorking
         | BridgeGenerationMachineOperation::Observe
         | BridgeGenerationMachineOperation::RetryDecision
         | BridgeGenerationMachineOperation::LocalUnsyncedRetryDecision => {
@@ -736,6 +751,127 @@ async fn dispatch_successor_retry_decision(
     response.headers_mut().set("cache-control", "no-store")?;
     response.headers_mut().set("pragma", "no-cache")?;
     Ok(response)
+}
+
+/// The only write admission for a historical real-browser WORKING receipt.
+/// Bridge invokes it after successful managed Camoufox observation, clean
+/// browser stop, unchanged local bytes and post-launch old-key reproof.
+/// Server independently resolves CURRENT/journal/R2 and rederives the old root.
+/// The D1 receipt is durable evidence, NOT a standalone R2 prune permit.
+async fn dispatch_working_proof(
+    request: &mut Request,
+    env: &Env,
+    profile_id: &ProfileId,
+    actor: &ActorContext,
+    device_id: &DeviceId,
+) -> Result<Response> {
+    let body = match request.json::<BridgeGenerationWorkingProofRequest>().await {
+        Ok(value) => value,
+        Err(_) => return invalid_request(actor.correlation_id().as_str()),
+    };
+    let current = match GenerationId::parse(body.current_generation_id().to_owned()) {
+        Ok(value) => value,
+        Err(_) => return invalid_request(actor.correlation_id().as_str()),
+    };
+    let historical = match GenerationId::parse(body.predecessor_generation_id().to_owned()) {
+        Ok(value) if value != current => value,
+        _ => return invalid_request(actor.correlation_id().as_str()),
+    };
+    if !lower_sha256(body.runtime_inventory_sha256()) {
+        return invalid_request(actor.correlation_id().as_str());
+    }
+    let (session, fence) = match reopen_witness(
+        body.coordinator_session_id(),
+        body.coordinator_fencing_token(),
+        body.coordinator_epoch(),
+    ) {
+        Some(value) => value,
+        None => return invalid_request(actor.correlation_id().as_str()),
+    };
+    let prelude = match decode_bounded_lower_hex(
+        body.metadata_prelude_hex(),
+        MAX_GENERATION_METADATA_PRELUDE_BYTES,
+    ) {
+        Some(value) => value,
+        None => return invalid_request(actor.correlation_id().as_str()),
+    };
+    let inspected = match inspect_generation_metadata_prelude(&prelude) {
+        Ok(value) if value.prelude_bytes() == prelude.len() => value,
+        _ => return invalid_request(actor.correlation_id().as_str()),
+    };
+    let (reference, descriptor) = match historical_predecessor_reopen_descriptor(
+        env,
+        profile_id,
+        actor,
+        device_id,
+        session.clone(),
+        fence,
+        body.coordinator_epoch(),
+    )
+    .await
+    {
+        Ok(value) => value,
+        Err(error) => return error,
+    };
+    if reference.generation_id() != &historical
+        || !opening_metadata_matches_descriptor(actor, profile_id, &descriptor, &inspected)
+        || descriptor.generation_id() != &historical
+    {
+        return version_conflict(actor.correlation_id().as_str());
+    }
+    let active = device_execution_preconditions(env)?;
+    let actual_current = match active
+        .load_active_verified_generation_object(actor.tenant_scope(), profile_id)
+        .await
+    {
+        Ok(Some(value)) => value,
+        Ok(None) => return verification_conflict(actor.correlation_id().as_str()),
+        Err(error) => {
+            return object_verify_failure(actor.correlation_id().as_str(), error.class());
+        }
+    };
+    if actual_current.generation_id() != &current {
+        return version_conflict(actor.correlation_id().as_str());
+    }
+    let meta = inspected.metadata();
+    let keyring = match generation_root_keyring(env) {
+        Ok(value) => value,
+        Err(_) => return integrity_failure(actor.correlation_id().as_str()),
+    };
+    let old_key = match keyring.derive_for_key_id(
+        meta.key_id(),
+        actor.tenant_scope().tenant_id(),
+        profile_id,
+        &historical,
+        meta.plaintext_digest().bytes(),
+    ) {
+        Ok(value) => value,
+        Err(_) => return verification_conflict(actor.correlation_id().as_str()),
+    };
+    if old_key.key_id() != meta.key_id() || old_key.nonce_prefix() != meta.nonce_prefix() {
+        return integrity_failure(actor.correlation_id().as_str());
+    }
+    // Browser bytes, raw keys and private account material never enter D1.
+    let journal = profile_generation_successor_observer(env)?;
+    if let Err(error) = journal
+        .record_historical_working_proof(
+            actor,
+            profile_id,
+            &current,
+            &historical,
+            &descriptor,
+            meta.key_id().as_str(),
+            body.runtime_inventory_sha256(),
+            device_id,
+            &session,
+            body.coordinator_epoch(),
+            server_now(),
+        )
+        .await
+    {
+        return object_verify_failure(actor.correlation_id().as_str(), error.class());
+    }
+    machine_json(&serde_json::json!({"confirmed": true}))
 }
 
 async fn dispatch_download_capability(
