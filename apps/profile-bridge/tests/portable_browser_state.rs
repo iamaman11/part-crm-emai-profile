@@ -586,8 +586,6 @@ mod p3_fixture {
         // Fresh CURRENT coordinator authority, immutable old R2 bytes and a
         // physically empty independent workspace. Unlike the old synthetic
         // acceptance this NEVER promotes the historical generation to CURRENT.
-        use crate::operator_flow::EnrollmentPort as _;
-        use application_ports::ProfileCoordinatorPort as _;
         let historical_path = std::env::temp_dir().join(format!(
             "profile-bridge-historical-camoufox-{}-{counter}",
             std::process::id()
@@ -601,22 +599,8 @@ mod p3_fixture {
         );
         let fresh_claim =
             ClaimUri::parse("profilebridge://claim/claim_s0_historical_lkg_cold_000003")?;
-        let probe_device_id = DeviceId::parse(DEVICE)?;
-        let mut enrollment = ControlPlaneEnrollment::new(transport.clone());
-        let admitted =
-            enrollment.redeem_claim(&fresh_claim, &probe_device_id, UnixMillis::new(70))?;
-        assert_eq!(admitted.generation_id(), &current);
-        let mut historical_control = ControlPlaneCoordinator::new(transport.clone());
-        let lease = historical_control.claim_launch_intent(
-            admitted.actor(),
-            admitted.profile_id(),
-            &probe_device_id,
-            admitted.launch_intent_id(),
-        )?;
-        assert_eq!(lease.profile_id(), &profile_id);
-        assert_eq!(lease.device_id(), &probe_device_id);
         let historical_slot = crate::camouhost_process::RuntimeBindingSlot::new();
-        let mut historical_preflight =
+        let historical_preflight =
             crate::shipping_preflight::ShippingBrowserLaunchPreflight::new(historical_slot.clone());
         let historical_config = crate::camouhost_process::ManagedCamouhostConfig::new(
             paths.python.clone(),
@@ -625,26 +609,33 @@ mod p3_fixture {
             Some(origin.url()),
             None,
         )?;
-        let (mut historical_process, mut historical_camouhost) =
+        let (historical_process, historical_camouhost) =
             crate::camouhost_process::ManagedCamouhostProcess::pair(
                 historical_config,
                 historical_slot,
             );
+        let mut historical_operator = ProfileBridgeOperator::new(
+            FakeDeviceIdentity::new(DeviceId::parse(DEVICE)?),
+            FakeDeviceKeyStore::default(),
+            DeviceAuthentication,
+            ControlPlaneEnrollment::new(transport.clone()),
+            ControlPlaneCoordinator::new(transport.clone()),
+            TestRuntimeBundle {
+                bundle: approved_real_bundle(&paths)?,
+            },
+            historical_preflight,
+            historical_process,
+            historical_camouhost,
+        );
         let mut historical_download = VerifiedGenerationObjectDownloader::new(BackendGet {
             state: Rc::clone(&state),
         });
-        let runtime = approved_real_bundle(&paths)?;
-        let restored = crate::authoritative_generation::cold_launch_verified_predecessor_once(
+        let restored = historical_operator.probe_verified_predecessor_once(
+            &fresh_claim,
             &root,
             &historical_root,
-            &current,
-            &lease,
-            &runtime,
-            &mut historical_control,
             &mut historical_download,
-            &mut historical_preflight,
-            &mut historical_process,
-            &mut historical_camouhost,
+            UnixMillis::new(70),
             &mut || origin.expect("verify", 3).map_err(|_| ()),
         )?;
         assert_eq!(restored, successor);
@@ -691,7 +682,33 @@ mod p3_fixture {
                     .any(|e| e.starts_with("historical-opening-material:"))
             );
             assert!(!events.iter().any(|e| e.contains("historical-commit")));
+            assert!(
+                events.iter().any(|e| e == "coordinator:release:Clean"),
+                "the existing coordinator must release CURRENT cleanly only after verified historical stop"
+            );
         }
+
+        // Subsequent negative probes hold a NEW genuine CURRENT lease.
+        // The completed historical success never keeps a second writer.
+        use crate::operator_flow::EnrollmentPort as _;
+        use application_ports::ProfileCoordinatorPort as _;
+        let negative_claim =
+            ClaimUri::parse("profilebridge://claim/claim_s0_historical_failure_000004")?;
+        let probe_device_id = DeviceId::parse(DEVICE)?;
+        let mut enrollment = ControlPlaneEnrollment::new(transport.clone());
+        let admitted =
+            enrollment.redeem_claim(&negative_claim, &probe_device_id, UnixMillis::new(81))?;
+        assert_eq!(admitted.generation_id(), &current);
+        let mut historical_control = ControlPlaneCoordinator::new(transport.clone());
+        let lease = historical_control.claim_launch_intent(
+            admitted.actor(),
+            admitted.profile_id(),
+            &probe_device_id,
+            admitted.launch_intent_id(),
+        )?;
+        assert_eq!(lease.profile_id(), &profile_id);
+        assert_eq!(lease.device_id(), &probe_device_id);
+        let runtime = approved_real_bundle(&paths)?;
 
         // A *real* historical Camoufox launch cannot certify WORKING if
         // the authoritative D1 predecessor/current fence changes while the
