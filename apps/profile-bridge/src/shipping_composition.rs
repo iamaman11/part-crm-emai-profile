@@ -402,12 +402,11 @@ mod windows {
         // junction/reparse point or a changed canonical destination. Never
         // traverse a foreign link into the real user-data directory.
         const REPARSE_POINT: u32 = 0x0400;
-        let slot_metadata =
-            fs::symlink_metadata(&slot_path).map_err(|_| ShippingCompositionError::Configuration)?;
+        let slot_metadata = fs::symlink_metadata(&slot_path)
+            .map_err(|_| ShippingCompositionError::Configuration)?;
         if !slot_metadata.is_dir()
             || slot_metadata.file_attributes() & REPARSE_POINT != 0
-            || fs::canonicalize(&slot_path)
-                .map_err(|_| ShippingCompositionError::Configuration)?
+            || fs::canonicalize(&slot_path).map_err(|_| ShippingCompositionError::Configuration)?
                 != slot_path
         {
             return Err(ShippingCompositionError::Configuration);
