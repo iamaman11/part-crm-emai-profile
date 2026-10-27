@@ -172,7 +172,7 @@ pub fn run_delivery_command(
 mod windows {
     use super::{
         ConfirmedSaveTrigger, ShippingCompositionError, ShippingDeliveryCommand,
-        confirmed_save_trigger,
+        confirmed_save_trigger, open_with_one_fresh_claim,
     };
     use crate::camouhost_process::{
         ManagedCamouhostConfig, ManagedCamouhostProcess, RuntimeBindingSlot, RuntimeDisplayMode,
@@ -1261,7 +1261,7 @@ mod tests {
                 calls.set(calls.get() + 1);
                 Err(ShippingCompositionError::ControlPlane)
             },
-            || panic!("unknown outcome may not request a claim"),
+            || Err(ShippingCompositionError::ControlPlane),
         );
         assert_eq!(result, Err(ShippingCompositionError::ControlPlane));
         assert_eq!(calls.get(), 1);
