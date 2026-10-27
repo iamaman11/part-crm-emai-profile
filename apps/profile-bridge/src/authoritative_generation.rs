@@ -392,6 +392,42 @@ where
     C::Error: Into<GenerationReopenControlError>,
     D: GenerationObjectDownloadPort,
     D::Error: Into<GenerationObjectDownloadError>,
+    let mut ignored_prelude = Vec::new();
+    materialize_historical_with_opening_prelude(
+        primary,
+        isolated,
+        tenant_id,
+        profile_id,
+        current_id,
+        device_id,
+        workspace_epoch,
+        control,
+        downloader,
+        &mut ignored_prelude,
+    )
+}
+
+/// Reuses the same cold-open owner while retaining ONLY its bounded canonical
+/// metadata prelude for a post-browser old-key availability recheck.
+/// The immutable object and decrypted user_data are never copied here.
+#[allow(clippy::too_many_arguments)]
+fn materialize_historical_with_opening_prelude<C, D>(
+    primary: &MaterializationRoot,
+    isolated: &MaterializationRoot,
+    tenant_id: &TenantId,
+    profile_id: &ProfileId,
+    current_id: &GenerationId,
+    device_id: &DeviceId,
+    workspace_epoch: u64,
+    control: &mut C,
+    downloader: &mut D,
+    opening_prelude: &mut Vec<u8>,
+) -> Result<GenerationId, AuthoritativeGenerationMaterializationError>
+where
+    C: GenerationReopenControlPort,
+    C::Error: Into<GenerationReopenControlError>,
+    D: GenerationObjectDownloadPort,
+    D::Error: Into<GenerationObjectDownloadError>,
 {
     use AuthoritativeGenerationMaterializationError as Error;
     use AuthoritativeGenerationPreWriteError as PreWrite;
@@ -426,6 +462,7 @@ where
     let mut view = HistoricalCandidateReopen {
         control,
         one_time_capability: Some(capability),
+        opening_prelude: None,
     };
     ensure_authoritative_generation(
         isolated,
@@ -450,6 +487,9 @@ where
     {
         return Err(Error::InvalidLocalEvidence);
     }
+    // No historical opening material => no proof that the old root key
+    // was ever available. Keep the original local bytes and refuse admission.
+    *opening_prelude = view.opening_prelude.take().ok_or(Error::InvalidLocalEvidence)?;
     Ok(predecessor_id)
 }
 
@@ -617,7 +657,8 @@ where
         if !matches!(browser_writer_locks_absent(&current), Ok(true)) {
             return Err(Error::CurrentNotQuiescent);
         }
-        let historical_id = materialize_verified_predecessor_for_cold_launch(
+        let mut historical_opening_prelude = Vec::new();
+        let historical_id = materialize_historical_with_opening_prelude(
             primary,
             isolated,
             lease.tenant_id(),
@@ -627,6 +668,7 @@ where
             lease.epoch(),
             control,
             downloader,
+            &mut historical_opening_prelude,
         )
         .map_err(Error::Materialization)?;
         let historical = isolated
@@ -700,6 +742,28 @@ where
                 .verified_predecessor_capability(lease.tenant_id(), lease.profile_id())
                 .map_err(|_| Error::PostLaunchAuthorityUnconfirmed)?
                 .ok_or(Error::PostLaunchAuthorityUnconfirmed)?;
+            // A successful historical GET/decrypt before the browser launched
+            // does NOT prove that its old root key is still retained after
+            // Camoufox stopped. Recheck the SAME authenticated server-side
+            // keyring and exact original metadata prelude under the live
+            // CURRENT coordinator fence; never accept an ephemeral probe as
+            // durable WORKING if the key has since been withdrawn.
+            let inspected = inspect_generation_metadata_prelude(&historical_opening_prelude)
+                .map_err(|_| Error::PostLaunchAuthorityUnconfirmed)?;
+            if inspected.prelude_bytes() != historical_opening_prelude.len() {
+                return Err(Error::PostLaunchAuthorityUnconfirmed);
+            }
+            let available_old_key = control
+                .verified_predecessor_opening_material(
+                    lease.tenant_id(),
+                    lease.profile_id(),
+                    &historical_opening_prelude,
+                )
+                .map_err(|_| Error::PostLaunchAuthorityUnconfirmed)?
+                .ok_or(Error::PostLaunchAuthorityUnconfirmed)?;
+            if available_old_key.key_id() != inspected.metadata().key_id() {
+                return Err(Error::PostLaunchAuthorityUnconfirmed);
+            }
             // Shipping Windows verifies the native writer's actual OS lock
             // before accepting even a non-authoritative cold observation.
             // Unix Firefox may leave a stale .parentlock marker after the
@@ -765,6 +829,7 @@ where
 struct HistoricalCandidateReopen<'a, C> {
     control: &'a mut C,
     one_time_capability: Option<crate::generation_reopen::GenerationDownloadCapability>,
+    opening_prelude: Option<Vec<u8>>,
 }
 
 impl<C> GenerationReopenControlPort for HistoricalCandidateReopen<'_, C>
@@ -790,10 +855,18 @@ where
         profile_id: &ProfileId,
         metadata_prelude: &[u8],
     ) -> Result<encrypted_generation_domain::GenerationDek, Self::Error> {
-        self.control
+        if metadata_prelude.is_empty()
+            || metadata_prelude.len() > encrypted_generation_domain::MAX_GENERATION_METADATA_PRELUDE_BYTES
+            || self.opening_prelude.is_some()
+        {
+            return Err(GenerationReopenControlError::InvalidResponse);
+        }
+        let old_key = self.control
             .verified_predecessor_opening_material(tenant_id, profile_id, metadata_prelude)
             .map_err(Into::into)?
-            .ok_or(GenerationReopenControlError::InvalidResponse)
+            .ok_or(GenerationReopenControlError::InvalidResponse)?;
+        self.opening_prelude = Some(metadata_prelude.to_vec());
+        Ok(old_key)
     }
 }
 
