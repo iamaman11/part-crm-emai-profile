@@ -20,6 +20,29 @@ use worker::query;
 
 /// Strictly one journal-linked immediate predecessor. This is an immutable
 /// candidate descriptor, not a browser WORKING certificate or deletion grant.
+/// The only D1 write path for the browser-proven historical LKG receipt.
+/// A receipt is immutable metadata and NEVER an R2 delete permission.
+const INSERT_HISTORICAL_WORKING_PROOF: &str = r#"
+INSERT INTO profile_generation_working_proofs (
+    tenant_id, profile_id, generation_id, observed_current_generation_id,
+    metadata_digest, container_digest, root_key_id, runtime_inventory_sha256,
+    observed_by_actor_id, observed_by_device_id, coordinator_session_id,
+    coordinator_epoch, proven_at_ms
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT (tenant_id, profile_id, generation_id) DO NOTHING
+RETURNING generation_id
+"#;
+
+const LOAD_HISTORICAL_WORKING_PROOF: &str = r#"
+SELECT generation_id FROM profile_generation_working_proofs
+WHERE tenant_id = ? AND profile_id = ? AND generation_id = ?
+  AND observed_current_generation_id = ?
+  AND metadata_digest = ? AND container_digest = ?
+  AND root_key_id = ? AND runtime_inventory_sha256 = ?
+  AND observed_by_actor_id = ? AND observed_by_device_id = ?
+  AND coordinator_session_id = ? AND coordinator_epoch = ?
+"#;
+
 const LOAD_VERIFIED_PREDECESSOR_OF_ACTIVE: &str = r#"
 SELECT
     base.generation_id,
@@ -191,6 +214,82 @@ impl D1ProfileGenerationSuccessorCommitJournal {
     #[must_use]
     pub const fn new(database: D1Database) -> Self {
         Self { database }
+    }
+
+    /// The Worker has already proved a live DO lease/fence, exact R2 HEAD,
+    /// CURRENT, and rederived the *original* key from verified BPGC metadata.
+    /// D1 repeats catalog/ACL/device admission in its trigger transaction.
+    /// A lost response may replay the exact same receipt, not a conflicting one.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn record_historical_working_proof(
+        &self,
+        actor: &ActorContext,
+        profile_id: &ProfileId,
+        current: &GenerationId,
+        historical: &GenerationId,
+        descriptor: &GenerationObjectDescriptor,
+        root_key_id: &str,
+        runtime_inventory_sha256: &str,
+        device_id: &DeviceId,
+        session_id: &profile_platform_primitives::SessionId,
+        coordinator_epoch: u64,
+        now: profile_platform_primitives::UnixMillis,
+    ) -> Result<(), GenerationPortError> {
+        if historical == current
+            || descriptor.generation_id() != historical
+            || descriptor.profile_id() != profile_id
+        {
+            return Err(historical_integrity_failure());
+        }
+        let epoch = i64::try_from(coordinator_epoch).map_err(|_| historical_integrity_failure())?;
+        let at = i64::try_from(now.value()).map_err(|_| historical_integrity_failure())?;
+        let fields = (
+            actor.tenant_scope().tenant_id().as_str(),
+            profile_id.as_str(),
+            historical.as_str(),
+            current.as_str(),
+            descriptor.metadata_digest(),
+            descriptor.container_digest(),
+            root_key_id,
+            runtime_inventory_sha256,
+            actor.actor_id().as_str(),
+            device_id.as_str(),
+            session_id.as_str(),
+            epoch,
+        );
+        let inserted = query!(
+            &self.database,
+            INSERT_HISTORICAL_WORKING_PROOF,
+            fields.0, fields.1, fields.2, fields.3, fields.4,
+            fields.5, fields.6, fields.7, fields.8, fields.9,
+            fields.10, fields.11, at,
+        )
+        .map_err(|_| historical_dependency_failure())?
+        .first::<String>(Some("generation_id"))
+        .await;
+        match inserted {
+            Ok(Some(value)) if value == historical.as_str() => Ok(()),
+            Ok(None) | Err(_) => {
+                // Ambiguous database completion: accept ONLY the immutable,
+                // byte-for-byte same receipt; never overwrite a different proof.
+                let existing = query!(
+                    &self.database,
+                    LOAD_HISTORICAL_WORKING_PROOF,
+                    fields.0, fields.1, fields.2, fields.3, fields.4,
+                    fields.5, fields.6, fields.7, fields.8, fields.9,
+                    fields.10, fields.11,
+                )
+                .map_err(|_| historical_dependency_failure())?
+                .first::<String>(Some("generation_id"))
+                .await
+                .map_err(|_| historical_dependency_failure())?;
+                match existing {
+                    Some(value) if value == historical.as_str() => Ok(()),
+                    _ => Err(historical_integrity_failure()),
+                }
+            }
+            _ => Err(historical_integrity_failure()),
+        }
     }
 
     async fn load(
