@@ -2216,8 +2216,14 @@ mod tests {
                 .replace("{profileId}", profile_id.as_str());
         assert_eq!(path, &expected_path);
         let request = serde_json::from_slice::<BridgeGenerationDownloadCapabilityRequest>(body)?;
-        assert_eq!(request.coordinator_session_id(), "session_sealing_adapter_01");
-        assert_eq!(request.coordinator_fencing_token(), "fence_sealing_adapter_01");
+        assert_eq!(
+            request.coordinator_session_id(),
+            "session_sealing_adapter_01"
+        );
+        assert_eq!(
+            request.coordinator_fencing_token(),
+            "fence_sealing_adapter_01"
+        );
         assert_eq!(request.coordinator_epoch(), 7);
         assert!(!String::from_utf8_lossy(body).contains("generationId"));
         assert!(!String::from_utf8_lossy(body).contains("objectKey"));
