@@ -84,6 +84,34 @@ fn confirmed_save_trigger<E>(observation: Result<bool, E>) -> Result<ConfirmedSa
     })
 }
 
+/// One user-triggered Open may continue once after its local N->N+1
+/// recovery was proved committed and its unused Coordinator lease was
+/// released cleanly. The existing machine authority issues a fresh claim;
+/// no stale claim replay, hidden local grant, background daemon or loop.
+#[cfg(any(windows, test))]
+fn open_with_one_fresh_claim<Open, NewClaim>(
+    original: &ClaimUri,
+    mut open: Open,
+    new_claim: NewClaim,
+) -> Result<(), ShippingCompositionError>
+where
+    Open: FnMut(&ClaimUri) -> Result<(), ShippingCompositionError>,
+    NewClaim: FnOnce() -> Result<ClaimUri, ShippingCompositionError>,
+{
+    match open(original) {
+        Err(ShippingCompositionError::Operator(
+            crate::operator_flow::OperatorFlowError::FreshAuthorizedOpenRequired,
+        )) => {
+            let fresh = new_claim()?;
+            if &fresh == original {
+                return Err(ShippingCompositionError::ControlPlane);
+            }
+            open(&fresh)
+        }
+        outcome => outcome,
+    }
+}
+
 pub fn run_claim(claim: &ClaimUri) -> Result<(), ShippingCompositionError> {
     #[cfg(windows)]
     {
@@ -307,7 +335,21 @@ mod windows {
             &mut uploader,
         )
         .map_err(ShippingCompositionError::Initialization)?;
-        run(&claim)
+        open_with_one_fresh_claim(&claim, run, || {
+            // The browser may have remained open for hours. Never reuse the
+            // old machine session; reauthenticate the existing P-256 key.
+            application
+                .authenticate(&device, &key)
+                .map_err(|_| ShippingCompositionError::ControlPlane)?;
+            let mut fresh_transport = application.transport();
+            crate::generation_initialization::reauthorize_current_ready_generation(
+                intent,
+                &actor,
+                &device,
+                &mut fresh_transport,
+            )
+            .map_err(ShippingCompositionError::Initialization)
+        })
     }
 
     /// Maintenance-only, one real managed Camoufox in a fixed isolated slot.
@@ -1167,11 +1209,112 @@ mod windows {
 
 #[cfg(test)]
 mod tests {
-    use super::{ConfirmedSaveTrigger, ShippingCompositionError, confirmed_save_trigger};
+    use super::{
+        ConfirmedSaveTrigger, ShippingCompositionError, confirmed_save_trigger,
+        open_with_one_fresh_claim,
+    };
     #[cfg(not(windows))]
     use super::{ShippingDeliveryCommand, run_claim, run_delivery_command};
-    #[cfg(not(windows))]
     use bridge_domain::ClaimUri;
+    use crate::operator_flow::OperatorFlowError;
+    use std::cell::Cell;
+
+    #[test]
+    fn committed_newer_generation_reopens_once_with_independent_claim()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let old = ClaimUri::parse("profilebridge://claim/claim_original_0123456789abcdef")?;
+        let fresh = ClaimUri::parse("profilebridge://claim/claim_current_0123456789abcdef")?;
+        let calls = Cell::new(0);
+        let issued = Cell::new(0);
+        open_with_one_fresh_claim(
+            &old,
+            |claim| {
+                calls.set(calls.get() + 1);
+                if calls.get() == 1 {
+                    assert_eq!(claim, &old);
+                    Err(ShippingCompositionError::Operator(
+                        OperatorFlowError::FreshAuthorizedOpenRequired,
+                    ))
+                } else {
+                    assert_eq!(claim, &fresh);
+                    Ok(())
+                }
+            },
+            || {
+                issued.set(issued.get() + 1);
+                Ok(fresh.clone())
+            },
+        )?;
+        assert_eq!(calls.get(), 2);
+        assert_eq!(issued.get(), 1);
+        Ok(())
+    }
+
+    #[test]
+    fn reauthorization_is_never_started_for_other_failures_or_replayed_claims()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let original = ClaimUri::parse("profilebridge://claim/claim_original_0123456789abcdef")?;
+        let calls = Cell::new(0);
+        let result = open_with_one_fresh_claim(
+            &original,
+            |_| {
+                calls.set(calls.get() + 1);
+                Err(ShippingCompositionError::ControlPlane)
+            },
+            || panic!("unknown outcome may not request a claim"),
+        );
+        assert_eq!(result, Err(ShippingCompositionError::ControlPlane));
+        assert_eq!(calls.get(), 1);
+        let denied = ShippingCompositionError::Initialization(
+            crate::generation_initialization::InitialProfileError::Authorization,
+        );
+        assert_eq!(
+            open_with_one_fresh_claim(
+                &original,
+                |_| {
+                    calls.set(calls.get() + 1);
+                    Err(ShippingCompositionError::Operator(
+                        OperatorFlowError::FreshAuthorizedOpenRequired,
+                    ))
+                },
+                || Err(denied),
+            ),
+            Err(denied)
+        );
+        assert_eq!(calls.get(), 2);
+        assert_eq!(
+            open_with_one_fresh_claim(
+                &original,
+                |_| {
+                    calls.set(calls.get() + 1);
+                    Err(ShippingCompositionError::Operator(
+                        OperatorFlowError::FreshAuthorizedOpenRequired,
+                    ))
+                },
+                || Ok(original.clone()),
+            ),
+            Err(ShippingCompositionError::ControlPlane)
+        );
+        assert_eq!(calls.get(), 3);
+        let fresh = ClaimUri::parse("profilebridge://claim/claim_current_0123456789abcdef")?;
+        assert_eq!(
+            open_with_one_fresh_claim(
+                &original,
+                |_| {
+                    calls.set(calls.get() + 1);
+                    Err(ShippingCompositionError::Operator(
+                        OperatorFlowError::FreshAuthorizedOpenRequired,
+                    ))
+                },
+                || Ok(fresh),
+            ),
+            Err(ShippingCompositionError::Operator(
+                OperatorFlowError::FreshAuthorizedOpenRequired
+            ))
+        );
+        assert_eq!(calls.get(), 5);
+        Ok(())
+    }
 
     #[test]
     fn confirmed_save_requires_positive_controlled_close_witness() {

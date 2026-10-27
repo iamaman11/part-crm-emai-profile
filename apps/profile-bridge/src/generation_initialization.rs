@@ -106,28 +106,15 @@ fn decode<D: serde::de::DeserializeOwned>(
     serde_json::from_slice(response.body()).map_err(|_| InitialProfileError::Authorization)
 }
 
-#[allow(clippy::too_many_arguments)]
-pub fn initialize<
-    T: MachineHttpPort,
-    U: SignedGenerationObjectPutPort,
-    B: RuntimeBundleSelectionPort,
-    F,
->(
+/// Reuse the existing authenticated server Prepare owner for both DRAFT
+/// initialization and a NEW claim for server-selected READY. This stage
+/// cannot create local Firefox files or encrypted cloud generations.
+fn prepare_initial_or_ready_launch<T: MachineHttpPort>(
     intent: &InitialProfileOpen,
     actor: &ActorContext,
     device: &DeviceId,
-    root: &MaterializationRoot,
-    materialize: F,
-    bundles: &mut B,
     transport: &mut T,
-    uploader: &mut U,
-) -> Result<ClaimUri, InitialProfileError>
-where
-    F: FnOnce(
-        &GenerationWorkspace,
-        &ApprovedRuntimeBundle,
-    ) -> Result<BrowserIdentityManifest, InitialProfileError>,
-{
+) -> Result<(GenerationId, InitialGenerationPrepared), InitialProfileError> {
     if actor.actor_id() != &intent.actor_id || actor.tenant_scope().tenant_id() != &intent.tenant_id
     {
         return Err(InitialProfileError::Authorization);
@@ -163,6 +150,57 @@ where
             expected_profile_version,
         },
     )?)?;
+    Ok((generation, prepared))
+}
+
+/// Bounded continuation of the original user-triggered Open after exact
+/// N->N+1 recovery. Only an authenticated server READY/Launch verdict
+/// can issue a new claim; never enter DRAFT initialization or create N+2.
+pub fn reauthorize_current_ready_generation<T: MachineHttpPort>(
+    intent: &InitialProfileOpen,
+    actor: &ActorContext,
+    device: &DeviceId,
+    transport: &mut T,
+) -> Result<ClaimUri, InitialProfileError> {
+    let (_, response) = prepare_initial_or_ready_launch(intent, actor, device, transport)?;
+    match response {
+        InitialGenerationPrepared::Launch { launch } => ClaimUri::parse(&launch.launch_uri)
+            .map_err(|_| InitialProfileError::Authorization),
+        InitialGenerationPrepared::Initialize { .. } => Err(InitialProfileError::Authorization),
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn initialize<
+    T: MachineHttpPort,
+    U: SignedGenerationObjectPutPort,
+    B: RuntimeBundleSelectionPort,
+    F,
+>(
+    intent: &InitialProfileOpen,
+    actor: &ActorContext,
+    device: &DeviceId,
+    root: &MaterializationRoot,
+    materialize: F,
+    bundles: &mut B,
+    transport: &mut T,
+    uploader: &mut U,
+) -> Result<ClaimUri, InitialProfileError>
+where
+    F: FnOnce(
+        &GenerationWorkspace,
+        &ApprovedRuntimeBundle,
+    ) -> Result<BrowserIdentityManifest, InitialProfileError>,
+{
+    let (generation, prepared) =
+        prepare_initial_or_ready_launch(intent, actor, device, transport)?;
+    let generation_id = generation.as_str().to_owned();
+    let expected_profile_version = intent.expected_version;
+    let path = format!(
+        "/bridge/v1/tenants/{}/profiles/{}/generation-initialization",
+        intent.tenant_id.as_str(),
+        intent.profile_id.as_str()
+    );
     match prepared {
         InitialGenerationPrepared::Launch { launch } => {
             return ClaimUri::parse(&launch.launch_uri)
@@ -634,6 +672,66 @@ mod tests {
         );
         assert!(workspace.path().exists());
         fs::remove_dir_all(&root_path)?;
+        Ok(())
+    }
+
+    #[test]
+    fn ready_reauthorization_requests_one_new_server_claim_and_never_initializes()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use profile_platform_primitives::TenantScope;
+        struct Reply {
+            ready: bool,
+            calls: usize,
+        }
+        impl MachineHttpPort for Reply {
+            type Error = ();
+            fn request(
+                &mut self,
+                method: MachineHttpMethod,
+                path: &str,
+                _: &CorrelationId,
+                body: Option<&[u8]>,
+            ) -> Result<MachineHttpResponse, ()> {
+                assert_eq!(method, MachineHttpMethod::PostJson);
+                assert!(path.ends_with("/generation-initialization"));
+                assert!(matches!(
+                    serde_json::from_slice::<Request>(body.ok_or(())?).map_err(|_| ())?,
+                    Request::Prepare { .. }
+                ));
+                self.calls += 1;
+                let body = if self.ready {
+                    br#"{"state":"launch","launch":{"launchUri":"profilebridge://claim/claim_fresh_0123456789abcdef0123456789","expiresAtMs":1000}}"#.to_vec()
+                } else {
+                    serde_json::to_vec(&InitialGenerationPrepared::Initialize {
+                        generation_id: "generation_draft_not_allowed".to_owned(),
+                        expected_profile_version: 1,
+                    })
+                    .map_err(|_| ())?
+                };
+                Ok(MachineHttpResponse::new(200, body))
+            }
+        }
+        let intent = InitialProfileOpen::parse(
+            "profilebridge://open/v1/tenant_123/actor_123/profile_123/1",
+        )?;
+        let actor = ActorContext::new(
+            TenantScope::new(intent.tenant_id.clone()),
+            ActorId::parse("actor_123")?,
+            CorrelationId::parse("corr_new_ready_launch")?,
+        );
+        let device = DeviceId::parse("device_123")?;
+        let mut ready = Reply { ready: true, calls: 0 };
+        assert_eq!(
+            reauthorize_current_ready_generation(&intent, &actor, &device, &mut ready)?,
+            ClaimUri::parse("profilebridge://claim/claim_fresh_0123456789abcdef0123456789")?
+        );
+        assert_eq!(ready.calls, 1);
+        let mut draft = Reply { ready: false, calls: 0 };
+        assert_eq!(
+            reauthorize_current_ready_generation(&intent, &actor, &device, &mut draft),
+            Err(InitialProfileError::Authorization)
+        );
+        assert_eq!(draft.calls, 1);
         Ok(())
     }
 
