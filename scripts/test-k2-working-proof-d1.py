@@ -84,12 +84,14 @@ def main() -> int:
         )
         assert match is not None
         working_query = match.group(1)
-        def working(current: str):
+        def working(current: str, pinned_runtime: str = "e" * 64):
             return conn.execute(
-                working_query, (fx["TENANT"], fx["PROFILE"], current)
+                working_query, (fx["TENANT"], fx["PROFILE"], current, pinned_runtime)
             ).fetchone()
         saved = working(fx["CANDIDATE"])
         assert saved is not None and saved["generation_id"] == fx["BASE"]
+        assert working(fx["CANDIDATE"], "f" * 64) is None, "foreign runtime must never select WORKING"
+        assert working(fx["CANDIDATE"], "E" * 64) is None, "case mismatch must not bypass runtime pin"
         assert fx["catalog_snapshot"](conn) == baseline
         try:
             conn.execute("UPDATE profile_generation_working_proofs SET proven_at_ms=999")
@@ -115,6 +117,7 @@ def main() -> int:
         # another cold-browser proof or changing existing catalog bytes.
         selected = working(fx["WINNER"])
         assert selected is not None and selected["generation_id"] == fx["BASE"]
+        assert working(fx["WINNER"], "f" * 64) is None, "N-k still needs the exact retained runtime"
         assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
         print("K2 governed, append-only historical proof persists across CURRENT changes; no prune PASS")
     finally:

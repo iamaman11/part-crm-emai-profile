@@ -76,6 +76,7 @@ WHERE profile.tenant_id = ?
   AND reserve.generation_id <> current.generation_id
   AND proof.metadata_digest = reserve.metadata_digest
   AND proof.container_digest = reserve.container_digest
+  AND proof.runtime_inventory_sha256 = ?
 ORDER BY proof.proven_at_ms DESC, proof.generation_id DESC
 LIMIT 1
 "#;
@@ -464,13 +465,21 @@ impl D1ProfileGenerationSuccessorCommitJournal {
         scope: &TenantScope,
         profile_id: &ProfileId,
         current_generation_id: &GenerationId,
+        approved_runtime_inventory_sha256: &str,
     ) -> Result<Option<GenerationObjectCatalogReference>, GenerationPortError> {
+        // This is not an eligibility guess from historical generation age.
+        // The caller supplies an exact digest from the current release-owned
+        // allowlist, NEVER a value copied from the untrusted D1 receipt.
+        if !is_sha256_hex(approved_runtime_inventory_sha256) {
+            return Err(historical_integrity_failure());
+        }
         let row = query!(
             &self.database,
             LOAD_CERTIFIED_WORKING_RESERVE,
             scope.tenant_id().as_str(),
             profile_id.as_str(),
             current_generation_id.as_str(),
+            approved_runtime_inventory_sha256,
         )
         .map_err(|_| historical_dependency_failure())?
         .first::<HistoricalPredecessorRow>(None)
@@ -938,6 +947,7 @@ mod tests {
         assert!(query.contains("proof.generation_id"));
         assert!(query.contains("proof.metadata_digest = reserve.metadata_digest"));
         assert!(query.contains("proof.container_digest = reserve.container_digest"));
+        assert!(query.contains("proof.runtime_inventory_sha256 = ?"));
         assert!(query.contains("profile.active_generation_id = ?"));
         assert!(query.contains("reserve.status = 'VERIFIED'"));
         assert!(query.contains("reserve.generation_id <> current.generation_id"));
