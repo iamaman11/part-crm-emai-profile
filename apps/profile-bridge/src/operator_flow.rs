@@ -502,7 +502,7 @@ impl OperatorFlowError {
             Self::Busy | Self::CleanupRequired => None,
             Self::GenerationSave { .. } | Self::FreshAuthorizedOpenRequired => {
                 Some(OperatorFailureStage::GenerationSave)
-            },
+            }
             Self::HeartbeatTransportUncertain => Some(OperatorFailureStage::CoordinatorHeartbeat),
             Self::Stage(stage) | Self::Runtime { stage, .. } | Self::Terminal { stage, .. } => {
                 Some(*stage)
