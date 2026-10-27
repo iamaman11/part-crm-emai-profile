@@ -453,51 +453,51 @@ mod windows {
         retire_historical_probe_only_after_proof(
             result.map_err(ShippingCompositionError::Operator),
             |observation| {
-            // Called ONLY after a proved clean historical Camoufox run. Any
-            // uncertain/failing probe leaves all bytes and writer evidence in
-            // this slot even when the operator cleanup flag is false.
-            if operator.cleanup_blocked() {
-                return Err(ShippingCompositionError::CommittedRecoveryRequired);
-            }
-            let restored = isolated
-                .open_generation(
-                    observation.tenant_id(),
-                    observation.profile_id(),
-                    observation.predecessor_generation_id(),
-                )
-                .map_err(|_| ShippingCompositionError::CommittedRecoveryRequired)?;
-            // The closed historical browser must leave no live native writer.
-            // Unknown/unreadable locks are never a deletion authorization.
-            if !matches!(
-                crate::browser_execution::browser_writer_locks_absent(&restored),
-                Ok(true)
-            ) {
-                return Err(ShippingCompositionError::CommittedRecoveryRequired);
-            }
-            // The probe slot was atomically created by THIS invocation. Before
-            // deleting even that disposable restore, reject a substituted Windows
-            // junction/reparse point or a changed canonical destination. Never
-            // traverse a foreign link into the real user-data directory.
-            const REPARSE_POINT: u32 = 0x0400;
-            let slot_metadata = fs::symlink_metadata(&slot_path)
-                .map_err(|_| ShippingCompositionError::Configuration)?;
-            // On Windows, canonicalize may add the extended-length prefix
-            // (\\\\?\\) to an ordinary absolute path. Compare two canonical
-            // paths, not a canonical path against the user's original spelling.
-            // A substituted junction to another directory still cannot match
-            // the exact canonical child of the original parent.
-            let physical_parent =
-                fs::canonicalize(parent).map_err(|_| ShippingCompositionError::Configuration)?;
-            let physical_slot =
-                fs::canonicalize(&slot_path).map_err(|_| ShippingCompositionError::Configuration)?;
-            if !slot_metadata.is_dir()
-                || slot_metadata.file_attributes() & REPARSE_POINT != 0
-                || physical_slot != physical_parent.join(HISTORICAL_PROBE_SLOT)
-            {
-                return Err(ShippingCompositionError::Configuration);
-            }
-            fs::remove_dir_all(&slot_path).map_err(|_| ShippingCompositionError::Configuration)?;
-            Ok(())
+                // Called ONLY after a proved clean historical Camoufox run. Any
+                // uncertain/failing probe leaves all bytes and writer evidence in
+                // this slot even when the operator cleanup flag is false.
+                if operator.cleanup_blocked() {
+                    return Err(ShippingCompositionError::CommittedRecoveryRequired);
+                }
+                let restored = isolated
+                    .open_generation(
+                        observation.tenant_id(),
+                        observation.profile_id(),
+                        observation.predecessor_generation_id(),
+                    )
+                    .map_err(|_| ShippingCompositionError::CommittedRecoveryRequired)?;
+                // The closed historical browser must leave no live native writer.
+                // Unknown/unreadable locks are never a deletion authorization.
+                if !matches!(
+                    crate::browser_execution::browser_writer_locks_absent(&restored),
+                    Ok(true)
+                ) {
+                    return Err(ShippingCompositionError::CommittedRecoveryRequired);
+                }
+                // The probe slot was atomically created by THIS invocation. Before
+                // deleting even that disposable restore, reject a substituted Windows
+                // junction/reparse point or a changed canonical destination. Never
+                // traverse a foreign link into the real user-data directory.
+                const REPARSE_POINT: u32 = 0x0400;
+                let slot_metadata = fs::symlink_metadata(&slot_path)
+                    .map_err(|_| ShippingCompositionError::Configuration)?;
+                // On Windows, canonicalize may add the extended-length prefix
+                // (\\\\?\\) to an ordinary absolute path. Compare two canonical
+                // paths, not a canonical path against the user's original spelling.
+                // A substituted junction to another directory still cannot match
+                // the exact canonical child of the original parent.
+                let physical_parent =
+                    fs::canonicalize(parent).map_err(|_| ShippingCompositionError::Configuration)?;
+                let physical_slot =
+                    fs::canonicalize(&slot_path).map_err(|_| ShippingCompositionError::Configuration)?;
+                if !slot_metadata.is_dir()
+                    || slot_metadata.file_attributes() & REPARSE_POINT != 0
+                    || physical_slot != physical_parent.join(HISTORICAL_PROBE_SLOT)
+                {
+                    return Err(ShippingCompositionError::Configuration);
+                }
+                fs::remove_dir_all(&slot_path).map_err(|_| ShippingCompositionError::Configuration)?;
+                Ok(())
             },
         )?;
         eprintln!(
