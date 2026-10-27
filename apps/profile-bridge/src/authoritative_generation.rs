@@ -469,6 +469,7 @@ pub enum HistoricalColdProbeError {
     WorkspaceLock,
     Preflight,
     BrowserStateNotVerified,
+    PostLaunchAuthorityUnconfirmed,
     Runtime,
     CleanupUncertain,
 }
@@ -482,6 +483,9 @@ impl core::fmt::Display for HistoricalColdProbeError {
             Self::Preflight => "historical browser preflight did not pass",
             Self::BrowserStateNotVerified => {
                 "historical browser state was not independently verified"
+            }
+            Self::PostLaunchAuthorityUnconfirmed => {
+                "historical browser stopped but fresh CURRENT and reserve authority are unconfirmed"
             }
             Self::Runtime => "historical browser did not launch and close cleanly",
             Self::CleanupUncertain => "historical probe process or locks have uncertain cleanup",
@@ -608,6 +612,48 @@ where
                 };
             }
             observed?;
+            // The browser may outlive a previous coordinator fence, key
+            // authorization or D1 CURRENT pointer. A successful launch alone
+            // is never a current WORKING claim. Under both native locks and
+            // after clean browser stop, ask the server AGAIN: it must still
+            // select the identical journal-linked predecessor and ciphertext.
+            // Any expired cursor, revoke, changed pointer, R2 mismatch or
+            // unavailable provider is an UNCONFIRMED outcome, not permission
+            // to prune.
+            let restored = isolated
+                .open_generation(lease.tenant_id(), lease.profile_id(), &historical_id)
+                .map_err(|_| Error::PostLaunchAuthorityUnconfirmed)?;
+            let binding = load_materialization_binding(
+                &restored,
+                lease.tenant_id(),
+                lease.profile_id(),
+                &historical_id,
+            )
+            .map_err(|_| Error::PostLaunchAuthorityUnconfirmed)?;
+            let confirmed = control
+                .verified_predecessor_capability(lease.tenant_id(), lease.profile_id())
+                .map_err(|_| Error::PostLaunchAuthorityUnconfirmed)?
+                .ok_or(Error::PostLaunchAuthorityUnconfirmed)?;
+            if confirmed.generation_id() != &historical_id
+                || confirmed.object_key()
+                    != canonical_generation_object_key(
+                        lease.tenant_id(),
+                        lease.profile_id(),
+                        &historical_id,
+                    )
+                || encode_sha256(confirmed.container_digest())
+                    != binding.source_container_sha256()
+                || !matches!(
+                    crate::shipping_save_attempt::has_unresolved_save_attempt_for_profile(
+                        primary,
+                        lease.tenant_id(),
+                        lease.profile_id(),
+                    ),
+                    Ok(false)
+                )
+            {
+                return Err(Error::PostLaunchAuthorityUnconfirmed);
+            }
             Ok(historical_id)
         })();
         if historical_lock.release().is_err() {

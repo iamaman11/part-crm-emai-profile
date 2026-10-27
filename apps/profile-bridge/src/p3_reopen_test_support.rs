@@ -192,6 +192,10 @@ struct BackendState {
     // authenticated keyring; a missing historical key must never silently
     // fall back to the newest root or trigger a new browser writer.
     historical_root_available: bool,
+    /// Inject a stale D1/CURRENT read during the second (post-browser) check.
+    /// The first read and real cold launch must have already succeeded.
+    historical_recheck_rejected: bool,
+    historical_capability_reads: u32,
     events: Vec<String>,
 }
 
@@ -213,6 +217,8 @@ impl BackendState {
             object: None,
             retained_object: None,
             historical_root_available: true,
+            historical_recheck_rejected: false,
+            historical_capability_reads: 0,
             events: Vec::new(),
         })
     }
@@ -498,6 +504,10 @@ impl BackendState {
             request.coordinator_fencing_token(),
             request.coordinator_epoch(),
         )?;
+        self.historical_capability_reads = self.historical_capability_reads.saturating_add(1);
+        if self.historical_recheck_rejected && self.historical_capability_reads >= 2 {
+            return Err(BridgePortError::InvalidResponse);
+        }
         let (previous, bytes) = self.retained_object
             .as_ref()
             .ok_or(BridgePortError::InvalidResponse)?;

@@ -677,6 +677,14 @@ mod p3_fixture {
                     .any(|e| e.starts_with("historical-download-capability:"))
             );
             assert!(events.iter().any(|e| e.starts_with("historical-get:")));
+            assert_eq!(
+                events
+                    .iter()
+                    .filter(|e| e.starts_with("historical-download-capability:"))
+                    .count(),
+                2,
+                "historical R2 permission must be revalidated after the real browser has stopped"
+            );
             assert!(
                 events
                     .iter()
