@@ -190,7 +190,6 @@ mod windows {
     const HISTORICAL_PROBE_SLOT: &str = ".profile-bridge-cold-candidate";
     const CONTROLLED_CLOSE_POLL_MS: u64 = 250;
     const HEARTBEAT_TRANSPORT_RETRY_MS: u64 = 1_000;
-    const MAX_LIVE_SAVE_RECONNECT_ATTEMPTS: usize = 30;
     const SAVE_RECONNECT_PAUSE_MS: u64 = 1_000;
     const SAVE_RECONNECT_AUTHORITY_RESERVE_MS: u64 = 5_000;
 
@@ -726,7 +725,12 @@ mod windows {
                         eprintln!(
                             "P3_RECOVERY=LOCAL_UNSYNCED;NEXT_SAFE_STEP=BOUNDED_LIVE_RECONNECT"
                         );
-                        for _ in 0..MAX_LIVE_SAVE_RECONNECT_ATTEMPTS {
+                        // Do not abandon a recoverable Save after an arbitrary
+                        // 30 seconds. The current Coordinator's confirmed idle
+                        // and hard deadlines are the real upper bound. Every
+                        // network effect below re-proves the same writer and
+                        // exact D1 nonapplication before reusing N+1.
+                        loop {
                             let timing = operator
                                 .coordinator()
                                 .runtime_timing()
@@ -1071,6 +1075,34 @@ mod windows {
                 80_000,
                 60_000,
                 UnixMillis::new(56_000),
+            ));
+        }
+
+        #[test]
+        fn live_save_reconnect_outlasts_thirty_seconds_only_with_current_authority() {
+            // A brief outage that exceeds the previous 30 attempts must not
+            // strand the retained exact checkpoint when the writer is valid.
+            assert!(safe_reconnect_writer_window(
+                120_000,
+                180_000,
+                UnixMillis::new(35_000),
+            ));
+            assert!(safe_reconnect_writer_window(
+                120_000,
+                180_000,
+                UnixMillis::new(110_000),
+            ));
+            // Never continue at/inside the five-second reserve or after
+            // either independently enforced deadline.
+            assert!(!safe_reconnect_writer_window(
+                120_000,
+                180_000,
+                UnixMillis::new(115_000),
+            ));
+            assert!(!safe_reconnect_writer_window(
+                180_000,
+                120_000,
+                UnixMillis::new(115_000),
             ));
         }
 
