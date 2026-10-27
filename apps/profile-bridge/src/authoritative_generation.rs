@@ -700,12 +700,22 @@ where
                 .verified_predecessor_capability(lease.tenant_id(), lease.profile_id())
                 .map_err(|_| Error::PostLaunchAuthorityUnconfirmed)?
                 .ok_or(Error::PostLaunchAuthorityUnconfirmed)?;
-            // The real browser was closed, but a surviving or competing
-            // native Firefox writer means this is not a safely quiescent
-            // WORKING candidate. Never promote or erase those bytes.
+            // Shipping Windows verifies the native writer's actual OS lock
+            // before accepting even a non-authoritative cold observation.
+            // Unix Firefox may leave a stale .parentlock marker after the
+            // *managed process* closes cleanly: generic prelaunch/Clean
+            // admission intentionally rejects that marker, but it must not
+            // reject this read-only, never-prune Linux acceptance observation.
+            // RuntimeSessionOrchestrator::close above is still mandatory.
+            #[cfg(windows)]
             if !matches!(browser_writer_locks_absent(&current), Ok(true))
                 || !matches!(browser_writer_locks_absent(&restored), Ok(true))
-                || confirmed.generation_id() != &historical_id
+            {
+                return Err(Error::PostLaunchAuthorityUnconfirmed);
+            }
+            // Regardless of platform, the server must still independently
+            // select the exact immutable historical object after browser stop.
+            if confirmed.generation_id() != &historical_id
                 || confirmed.object_key()
                     != canonical_generation_object_key(
                         lease.tenant_id(),
