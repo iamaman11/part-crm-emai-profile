@@ -514,7 +514,21 @@ where
 
     // Only a fresh CURRENT claim from the original coordinator may authorize
     // historical bytes. Never manufacture or reuse an old-generation lease.
-    if lease.epoch() == 0 || primary.path() == isolated.path() {
+    if lease.epoch() == 0
+        || lease.status() != session_domain::LeaseStatus::Active
+        || primary.path() == isolated.path()
+        // An unresolved LOCAL_UNSYNCED/dirty Save keeps the native CURRENT
+        // primary and its original recovery owner ahead of all cloud work.
+        // Never interpret a historical browser launch as recovery of newer WAL.
+        || !matches!(
+            crate::shipping_save_attempt::has_unresolved_save_attempt_for_profile(
+                primary,
+                lease.tenant_id(),
+                lease.profile_id(),
+            ),
+            Ok(false)
+        )
+    {
         return Err(Error::CurrentNotQuiescent);
     }
     let current = primary

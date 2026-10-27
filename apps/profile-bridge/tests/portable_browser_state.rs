@@ -574,6 +574,10 @@ mod p3_fixture {
             assert_eq!(request.generation_id(), successor.as_str());
             (request.clone(), bytes.clone())
         };
+        assert_eq!(
+            historical_request.object_key(),
+            canonical_generation_object_key(&tenant_id, &profile_id, &successor)
+        );
         let historical_metadata = inspect_generation_metadata_prelude(&historical_container)?;
         assert_eq!(
             historical_metadata.metadata().key_id().as_str(),
