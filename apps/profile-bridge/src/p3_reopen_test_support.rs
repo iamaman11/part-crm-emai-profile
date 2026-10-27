@@ -915,6 +915,122 @@ fn canonical_save_then_local_reuse_skips_cloud_download()
     run_canonical_saved_successor_reopen(false)
 }
 
+/// K3 source/fixture proof, not a live-provider R2 retention or installed B7 verdict.
+/// Exercise the SAME streamed Save owner 100 times with one real filesystem root,
+/// a single coordinator and an in-memory machine/R2 fixture. Every reopen must
+/// select the previous committed generation and reuse verified native local bytes.
+#[test]
+fn one_hundred_sequential_streamed_saves_keep_current_local_profile_reopenable()
+-> Result<(), Box<dyn std::error::Error>> {
+    let counter = TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let root_path = std::env::temp_dir().join(format!(
+        "profile-bridge-p3-100-streamed-{}-{counter}",
+        std::process::id()
+    ));
+    let _cleanup = CleanupRoot(root_path.clone());
+    let root = MaterializationRoot::open_or_create(root_path)?;
+    let tenant = TenantId::parse(TENANT)?;
+    let profile = ProfileId::parse(PROFILE)?;
+    let device = DeviceId::parse(DEVICE)?;
+    let mut current = GenerationId::parse(BASE_GENERATION)?;
+    let base = root.create_generation(&tenant, &profile, &current)?;
+    fs::write(base.path().join("prefs.js"), b"initial")?;
+    let config = b"{}\n";
+    fs::write(base.path().join("camoufox-config.json"), config)?;
+    let bundle = approved_bundle()?;
+    let identity = browser_identity_fixture(
+        bundle.manifest().runtime_version(),
+        bundle.manifest().inventory_sha256().as_str(),
+        "profile-stability-v1-probe-p3-reopen-e2e",
+        lower_hex(&Sha256::digest(config)),
+    )?;
+    let binding = MaterializationBinding::new(
+        tenant.clone(),
+        profile.clone(),
+        current.clone(),
+        "c".repeat(64),
+        base.materialization_inventory_digest()?,
+        identity,
+    )?;
+    persist_materialization_binding(&base, &binding)?;
+
+    let state = Rc::new(RefCell::new(BackendState::new()?));
+    let transport = BackendMachineHttp { state: Rc::clone(&state) };
+    let preflights: PreflightObservations = Rc::new(RefCell::new(Vec::new()));
+    let mut operator = ProfileBridgeOperator::new(
+        FakeDeviceIdentity::new(device),
+        FakeDeviceKeyStore::default(),
+        DeviceAuthentication,
+        ControlPlaneEnrollment::new(transport.clone()),
+        ControlPlaneCoordinator::new(transport.clone()),
+        TestRuntimeBundle { bundle },
+        RecordingPreflight { observations: Rc::clone(&preflights) },
+        FakeProcessControl::default(),
+        FakeCamouhost::default(),
+    );
+    let mut downloader = VerifiedGenerationObjectDownloader::new(BackendGet {
+        state: Rc::clone(&state),
+    });
+    let mut put = BackendPut { state: Rc::clone(&state) };
+    let mut seen = std::collections::HashSet::new();
+    seen.insert(current.clone());
+    let mut expected = b"initial".to_vec();
+
+    for cycle in 0..100_u64 {
+        let claim = ClaimUri::parse(format!(
+            "profilebridge://claim/claim_p3_100_streamed_{cycle:04}_0123456789abcdef"
+        ))?;
+        let started = 10 + cycle * 100;
+        operator.open_authoritative(&claim, &root, &mut downloader, UnixMillis::new(started))?;
+        assert_eq!(operator.active_local_state(), Some(LocalGenerationState::InUse));
+        let workspace = root.open_generation(&tenant, &profile, &current)?;
+        assert_eq!(fs::read(workspace.path().join("prefs.js"))?, expected);
+        let updated = format!("verified-sequential-save-{cycle:03}").into_bytes();
+        fs::write(workspace.path().join("prefs.js"), &updated)?;
+        operator.close(UnixMillis::new(started + 10))?;
+        let completion = operator.save_retained_successor_streaming(
+            &root,
+            transport.clone(),
+            &mut put,
+            UnixMillis::new(started + 20),
+        )?;
+        assert!(completion.is_saved(), "save cycle {cycle} reported incomplete");
+        let next = completion.committed().generation_id().clone();
+        assert_ne!(current, next);
+        assert!(seen.insert(next.clone()), "duplicate successor on cycle {cycle}");
+        let accepted = root.open_generation(&tenant, &profile, &next)?;
+        let ready = load_materialization_binding(&accepted, &tenant, &profile, &next)?;
+        assert_eq!(ready.source_container_sha256(), completion.committed().container_digest());
+        assert_eq!(ready.materialized_inventory_digest(), accepted.materialization_inventory_digest()?);
+        assert_eq!(fs::read(accepted.path().join("prefs.js"))?, updated);
+        {
+            let backend = state.borrow();
+            assert_eq!(backend.active_generation, next);
+            assert_eq!(backend.coordinator_status, CoordinatorStatusDto::Idle);
+            assert!(backend.pending_object.is_none());
+            assert!(backend.pending_successor.is_none());
+        }
+        current = next;
+        expected = updated;
+    }
+    let events = &state.borrow().events;
+    assert_eq!(events.iter().filter(|e| e.starts_with("commit:")).count(), 100);
+    assert_eq!(events.iter().filter(|e| e.starts_with("put:")).count(), 100);
+    assert_eq!(events.iter().filter(|e| e == &&"coordinator:release:Clean".to_owned()).count(), 100);
+    // Every next Open used the current local candidate, not an unnecessary
+    // signed GET or a fallback to an older generation. This does NOT prove
+    // live R2 object deletion or that a durable independent LKG exists.
+    assert!(!events.iter().any(|e| {
+        e.starts_with("download-capability:")
+            || e.starts_with("get:")
+            || e.starts_with("opening-material:")
+    }));
+    let observations = preflights.borrow();
+    assert_eq!(observations.len(), 100);
+    assert_eq!(observations.last().map(|o| o.1.as_slice()), Some(b"verified-sequential-save-098".as_slice()));
+    Ok(())
+}
+
 fn run_canonical_saved_successor_reopen(
     remove_local_successor: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
