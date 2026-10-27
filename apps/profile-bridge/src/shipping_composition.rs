@@ -404,10 +404,18 @@ mod windows {
         const REPARSE_POINT: u32 = 0x0400;
         let slot_metadata = fs::symlink_metadata(&slot_path)
             .map_err(|_| ShippingCompositionError::Configuration)?;
+        // On Windows, canonicalize may add the extended-length prefix
+        // (\\\\?\\) to an ordinary absolute path. Compare two canonical
+        // paths, not a canonical path against the user's original spelling.
+        // A substituted junction to another directory still cannot match
+        // the exact canonical child of the original parent.
+        let physical_parent =
+            fs::canonicalize(parent).map_err(|_| ShippingCompositionError::Configuration)?;
+        let physical_slot =
+            fs::canonicalize(&slot_path).map_err(|_| ShippingCompositionError::Configuration)?;
         if !slot_metadata.is_dir()
             || slot_metadata.file_attributes() & REPARSE_POINT != 0
-            || fs::canonicalize(&slot_path).map_err(|_| ShippingCompositionError::Configuration)?
-                != slot_path
+            || physical_slot != physical_parent.join(HISTORICAL_PROBE_SLOT)
         {
             return Err(ShippingCompositionError::Configuration);
         }
