@@ -79,7 +79,9 @@ fn is_approved_working_runtime(observed: &str, configured: Option<&str>) -> bool
         return false;
     }
     let mut items = allowed.split(',');
-    let Some(first) = items.next() else { return false };
+    let Some(first) = items.next() else {
+        return false;
+    };
     if !lower_sha256(first) {
         return false;
     }
@@ -1817,14 +1819,38 @@ mod tests {
         assert!(!is_approved_working_runtime(&foreign, Some(&approved)));
         assert!(!is_approved_working_runtime(&current, None));
         assert!(!is_approved_working_runtime(&current, Some("")));
-        assert!(!is_approved_working_runtime(&current, Some(&format!("{current},"))));
-        assert!(!is_approved_working_runtime(&current, Some(&format!(",{current}"))));
-        assert!(!is_approved_working_runtime(&current, Some(&format!("{current},{current}"))));
-        assert!(!is_approved_working_runtime(&current, Some(&format!("{current}, {old}"))));
-        assert!(!is_approved_working_runtime(&current, Some(&format!("{current},{old},{foreign}"))));
-        assert!(!is_approved_working_runtime(&current, Some(&current.to_uppercase())));
-        assert!(!is_approved_working_runtime(&current.to_uppercase(), Some(&current)));
-        assert!(!is_approved_working_runtime(&current, Some(&format!("{current}x"))));
+        assert!(!is_approved_working_runtime(
+            &current,
+            Some(&format!("{current},"))
+        ));
+        assert!(!is_approved_working_runtime(
+            &current,
+            Some(&format!(",{current}"))
+        ));
+        assert!(!is_approved_working_runtime(
+            &current,
+            Some(&format!("{current},{current}"))
+        ));
+        assert!(!is_approved_working_runtime(
+            &current,
+            Some(&format!("{current}, {old}"))
+        ));
+        assert!(!is_approved_working_runtime(
+            &current,
+            Some(&format!("{current},{old},{foreign}"))
+        ));
+        assert!(!is_approved_working_runtime(
+            &current,
+            Some(&current.to_uppercase())
+        ));
+        assert!(!is_approved_working_runtime(
+            &current.to_uppercase(),
+            Some(&current)
+        ));
+        assert!(!is_approved_working_runtime(
+            &current,
+            Some(&format!("{current}x"))
+        ));
     }
 
     #[test]
