@@ -78,6 +78,8 @@ const BASE_GENERATION: &str = "generation_p3_reopen_base";
 const ROOT_KEY_ID: &str = "profile-generation-root-v1-7";
 const ROTATED_ROOT_KEY_ID: &str = "profile-generation-root-v1-8";
 const SIGNED_UPLOAD_URL: &str = "https://example.invalid/p3-e2e-upload?signature=redacted";
+// Synthetic signer keeps the read-only historical object distinct from CURRENT.
+const HISTORICAL_SIGNED_DOWNLOAD_URL: &str = "https://0123456789abcdef0123456789abcdef.r2.cloudflarestorage.com/profile-generations/p3-e2e-old.bpgc?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=access%2F20260830%2Fauto%2Fs3%2Faws4_request&X-Amz-Date=20260830T120000Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 const SIGNED_DOWNLOAD_URL: &str = "https://0123456789abcdef0123456789abcdef.r2.cloudflarestorage.com/profile-generations/p3-e2e.bpgc?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=access%2F20260830%2Fauto%2Fs3%2Faws4_request&X-Amz-Date=20260830T120000Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
 #[derive(Clone)]
@@ -152,6 +154,12 @@ impl MachineHttpPort for BackendMachineHttp {
         }
         if path.ends_with("/generation-successor/commit") {
             return state.commit_successor(body);
+        }
+        if path.ends_with("/generation-working-candidate/download-capability") {
+            return state.historical_download_capability(body);
+        }
+        if path.ends_with("/generation-working-candidate/opening-material") {
+            return state.historical_opening_material(body);
         }
         if path.ends_with("/generation-reopen/download-capability") {
             return state.download_capability(body);
@@ -475,6 +483,84 @@ impl BackendState {
         })
     }
 
+    /// Preserve the genuine CURRENT pointer. The fixture server, not the
+    /// request body, selects the journal-linked immediate VERIFIED predecessor.
+    /// The same current coordinator cursor is required for both historical
+    /// requests, matching the production worker's read-only admission.
+    fn historical_download_capability(
+        &mut self,
+        body: &[u8],
+    ) -> Result<MachineHttpResponse, BridgePortError> {
+        let request = serde_json::from_slice::<BridgeGenerationDownloadCapabilityRequest>(body)
+            .map_err(|_| BridgePortError::InvalidResponse)?;
+        self.check_witness(
+            request.coordinator_session_id(),
+            request.coordinator_fencing_token(),
+            request.coordinator_epoch(),
+        )?;
+        let (previous, bytes) = self.retained_object
+            .as_ref()
+            .ok_or(BridgePortError::InvalidResponse)?;
+        if previous.generation_id() == self.active_generation.as_str() || self.object.is_none() {
+            return Err(BridgePortError::InvalidResponse);
+        }
+        let metadata = inspect_generation_metadata_prelude(bytes)
+            .map_err(|_| BridgePortError::InvalidResponse)?;
+        if metadata.metadata().generation_id().as_str() != previous.generation_id() {
+            return Err(BridgePortError::InvalidResponse);
+        }
+        self.events.push(format!("historical-download-capability:{}", previous.generation_id()));
+        json_response(&BridgeGenerationDownloadCapabilityResponse::new(
+            previous.generation_id(),
+            previous.object_key(),
+            previous.metadata_digest(),
+            previous.container_digest(),
+            previous.container_bytes(),
+            HISTORICAL_SIGNED_DOWNLOAD_URL,
+            GENERATION_DOWNLOAD_CAPABILITY_MAX_EXPIRES_SECONDS,
+        ))
+    }
+
+    fn historical_opening_material(
+        &mut self,
+        body: &[u8],
+    ) -> Result<MachineHttpResponse, BridgePortError> {
+        let request = serde_json::from_slice::<BridgeGenerationOpeningMaterialRequest>(body)
+            .map_err(|_| BridgePortError::InvalidResponse)?;
+        self.check_witness(
+            request.coordinator_session_id(),
+            request.coordinator_fencing_token(),
+            request.coordinator_epoch(),
+        )?;
+        let (previous, bytes) = self.retained_object
+            .as_ref()
+            .ok_or(BridgePortError::InvalidResponse)?;
+        if previous.generation_id() == self.active_generation.as_str() || self.object.is_none() {
+            return Err(BridgePortError::InvalidResponse);
+        }
+        let inspected = inspect_generation_metadata_prelude(bytes)
+            .map_err(|_| BridgePortError::InvalidResponse)?;
+        let prelude = bytes.get(..inspected.prelude_bytes())
+            .ok_or(BridgePortError::InvalidResponse)?;
+        if request.metadata_prelude_hex() != lower_hex(prelude)
+            || inspected.metadata().generation_id().as_str() != previous.generation_id()
+            || inspected.metadata().object_key() != previous.object_key()
+        {
+            return Err(BridgePortError::InvalidResponse);
+        }
+        let key_bytes = match inspected.metadata().key_id().as_str() {
+            ROOT_KEY_ID if self.historical_root_available => [7_u8; 32],
+            ROOT_KEY_ID => return Err(BridgePortError::InvalidResponse),
+            ROTATED_ROOT_KEY_ID => [9_u8; 32],
+            _ => return Err(BridgePortError::InvalidResponse),
+        };
+        self.events.push(format!("historical-opening-material:{}", previous.generation_id()));
+        json_response(&BridgeGenerationOpeningMaterialResponse::new(
+            inspected.metadata().key_id().as_str(),
+            lower_hex(&key_bytes),
+        ))
+    }
+
     fn download_capability(&mut self, body: &[u8]) -> Result<MachineHttpResponse, BridgePortError> {
         let request = serde_json::from_slice::<BridgeGenerationDownloadCapabilityRequest>(body)
             .map_err(|_| BridgePortError::InvalidResponse)?;
@@ -673,19 +759,32 @@ impl SignedGenerationObjectGetPort for BackendGet {
         signed_url: &str,
         max_bytes: usize,
     ) -> Result<SignedGenerationObjectGetResponse, Self::Error> {
-        if signed_url != SIGNED_DOWNLOAD_URL {
-            return Err(BridgePortError::InvalidResponse);
-        }
         let mut state = self.state.borrow_mut();
-        let object = state
-            .object
-            .clone()
-            .ok_or(BridgePortError::InvalidResponse)?;
+        let (object, selected, historical) = if signed_url == HISTORICAL_SIGNED_DOWNLOAD_URL {
+            let (previous, bytes) = state.retained_object
+                .as_ref()
+                .ok_or(BridgePortError::InvalidResponse)?;
+            if previous.generation_id() == state.active_generation.as_str() {
+                return Err(BridgePortError::InvalidResponse);
+            }
+            (bytes.clone(), previous.generation_id().to_owned(), true)
+        } else if signed_url == SIGNED_DOWNLOAD_URL {
+            (
+                state.object.clone().ok_or(BridgePortError::InvalidResponse)?,
+                state.active_generation.as_str().to_owned(),
+                false,
+            )
+        } else {
+            return Err(BridgePortError::InvalidResponse);
+        };
         if object.len() != max_bytes {
             return Err(BridgePortError::InvalidResponse);
         }
-        let active = state.active_generation.as_str().to_owned();
-        state.events.push(format!("get:{active}"));
+        if historical {
+            state.events.push(format!("historical-get:{selected}"));
+        } else {
+            state.events.push(format!("get:{selected}"));
+        }
         Ok(SignedGenerationObjectGetResponse::new(200, object))
     }
 }

@@ -579,32 +579,35 @@ mod p3_fixture {
             historical_metadata.metadata().key_id().as_str(),
             ROOT_KEY_ID
         );
-        // A physically separate disposable host root starts with NO local
-        // profile bytes. The fixture's historical read-only authority serves
-        // precisely the immutable old object, while live CURRENT remains N+2.
-        // This is real-browser historical cold-launch evidence, NOT a
-        // production D1 WORKING/LKG certificate or prune authorization.
+        // Fresh CURRENT coordinator authority, immutable old R2 bytes and a
+        // physically empty independent workspace. Unlike the old synthetic
+        // acceptance this NEVER promotes the historical generation to CURRENT.
+        use application_ports::ProfileCoordinatorPort as _;
+        use crate::operator_flow::EnrollmentPort as _;
         let historical_path = std::env::temp_dir().join(format!(
             "profile-bridge-historical-camoufox-{}-{counter}",
             std::process::id()
         ));
         let _historical_cleanup = CleanupRoot(historical_path.clone());
         let historical_root = MaterializationRoot::open_or_create(historical_path)?;
-        assert!(
-            historical_root
-                .open_generation(&tenant_id, &profile_id, &successor)
-                .is_err()
-        );
-        let mut historical_backend = BackendState::new()?;
-        historical_backend.active_generation = successor.clone();
-        historical_backend.committed_successor = Some(historical_request);
-        historical_backend.object = Some(historical_container);
-        let historical_state = Rc::new(RefCell::new(historical_backend));
-        let historical_transport = BackendMachineHttp {
-            state: Rc::clone(&historical_state),
-        };
+        assert!(historical_root
+            .open_generation(&tenant_id, &profile_id, &successor)
+            .is_err());
+        let fresh_claim =
+            ClaimUri::parse("profilebridge://claim/claim_s0_historical_lkg_cold_000003")?;
+        let mut enrollment = ControlPlaneEnrollment::new(transport.clone());
+        let admitted = enrollment.redeem_claim(&fresh_claim, &device_id, UnixMillis::new(70))?;
+        assert_eq!(admitted.generation_id(), &current);
+        let mut historical_control = ControlPlaneCoordinator::new(transport.clone());
+        let lease = historical_control.claim_launch_intent(
+            admitted.actor(),
+            admitted.profile_id(),
+            &device_id,
+            admitted.launch_intent_id(),
+        )?;
+        assert_eq!(lease.generation_id(), &current);
         let historical_slot = crate::camouhost_process::RuntimeBindingSlot::new();
-        let historical_preflight =
+        let mut historical_preflight =
             crate::shipping_preflight::ShippingBrowserLaunchPreflight::new(historical_slot.clone());
         let historical_config = crate::camouhost_process::ManagedCamouhostConfig::new(
             paths.python.clone(),
@@ -613,87 +616,60 @@ mod p3_fixture {
             Some(origin.url()),
             None,
         )?;
-        let (historical_process, historical_camouhost) =
+        let (mut historical_process, mut historical_camouhost) =
             crate::camouhost_process::ManagedCamouhostProcess::pair(
                 historical_config,
                 historical_slot,
             );
-        let mut historical_operator = ProfileBridgeOperator::new(
-            FakeDeviceIdentity::new(DeviceId::parse(DEVICE)?),
-            FakeDeviceKeyStore::default(),
-            DeviceAuthentication,
-            ControlPlaneEnrollment::new(historical_transport.clone()),
-            ControlPlaneCoordinator::new(historical_transport),
-            TestRuntimeBundle {
-                bundle: approved_real_bundle(&paths)?,
-            },
-            historical_preflight,
-            historical_process,
-            historical_camouhost,
-        );
         let mut historical_download = VerifiedGenerationObjectDownloader::new(BackendGet {
-            state: Rc::clone(&historical_state),
+            state: Rc::clone(&state),
         });
-        let historical_claim =
-            ClaimUri::parse("profilebridge://claim/claim_s0_historical_lkg_cold_000003")?;
-        historical_operator.open_authoritative(
-            &historical_claim,
+        let runtime = approved_real_bundle(&paths)?;
+        let restored = crate::authoritative_generation::cold_launch_verified_predecessor_once(
+            &root,
             &historical_root,
+            &current,
+            &lease,
+            &runtime,
+            &mut historical_control,
             &mut historical_download,
-            UnixMillis::new(70),
+            &mut historical_preflight,
+            &mut historical_process,
+            &mut historical_camouhost,
         )?;
+        assert_eq!(restored, successor);
         origin.expect("verify", 3)?;
-        let historical_workspace =
-            historical_root.open_generation(&tenant_id, &profile_id, &successor)?;
+        assert_eq!(state.borrow().active_generation, current);
+        let restored_workspace = historical_root.open_generation(&tenant_id, &profile_id, &restored)?;
         let historical_binding = crate::browser_execution::load_materialization_binding(
-            &historical_workspace,
+            &restored_workspace,
             &tenant_id,
             &profile_id,
-            &successor,
+            &restored,
         )?;
-        assert_eq!(
-            historical_binding.browser_identity(),
-            base_binding.browser_identity()
-        );
-        assert_eq!(state.borrow().active_generation, current);
+        assert_eq!(historical_binding.browser_identity(), base_binding.browser_identity());
+        let original_current = root.open_generation(&tenant_id, &profile_id, &current)?;
+        assert!(!original_current.path().join(".profile-platform.lock").exists());
         {
-            // Drop the read-only fixture borrow BEFORE the owned abort/release
-            // path obtains mutable coordinator state. No invented second writer.
-            let historical_backend = historical_state.borrow();
-            assert!(
-                historical_backend
-                    .events
-                    .iter()
-                    .any(|event| event.starts_with("get:"))
-            );
-            assert!(
-                historical_backend
-                    .events
-                    .iter()
-                    .any(|event| event.starts_with("opening-material:"))
-            );
+            let events = &state.borrow().events;
+            assert!(events.iter().any(|e| e.starts_with("historical-download-capability:")));
+            assert!(events.iter().any(|e| e.starts_with("historical-get:")));
+            assert!(events.iter().any(|e| e.starts_with("historical-opening-material:")));
+            assert!(!events.iter().any(|e| e.contains("historical-commit")));
         }
-        historical_operator.abort(UnixMillis::new(80))?;
 
-        // Negative WORKING/LKG admission: a previous successful browser
-        // run is not a permanent recovery certificate. Use a NEW disposable
-        // Coordinator and root, because the previous historical session was
-        // explicitly aborted and its correct UNCERTAIN owner must never be
-        // converted back to IDLE or reused as a clean lease.
-        let mut missing_backend = BackendState::new()?;
-        {
-            let historical = historical_state.borrow();
-            missing_backend.active_generation = successor.clone();
-            missing_backend.committed_successor = historical.committed_successor.clone();
-            missing_backend.object = historical.object.clone();
-        }
-        missing_backend.historical_root_available = false;
-        let missing_state = Rc::new(RefCell::new(missing_backend));
-        let missing_transport = BackendMachineHttp {
-            state: Rc::clone(&missing_state),
-        };
+        // Negative admission against the SAME unchanged CURRENT pointer and
+        // coordinator: missing original root key must block before any browser
+        // process is spawned, and cannot overwrite the proven prior cold copy.
+        state.borrow_mut().historical_root_available = false;
+        let missing_key_path = std::env::temp_dir().join(format!(
+            "profile-bridge-missing-old-root-{}-{counter}",
+            std::process::id()
+        ));
+        let _missing_key_cleanup = CleanupRoot(missing_key_path.clone());
+        let missing_key_root = MaterializationRoot::open_or_create(missing_key_path)?;
         let missing_slot = crate::camouhost_process::RuntimeBindingSlot::new();
-        let missing_preflight =
+        let mut missing_preflight =
             crate::shipping_preflight::ShippingBrowserLaunchPreflight::new(missing_slot.clone());
         let missing_config = crate::camouhost_process::ManagedCamouhostConfig::new(
             paths.python.clone(),
@@ -702,79 +678,45 @@ mod p3_fixture {
             Some(origin.url()),
             None,
         )?;
-        let (missing_process, missing_camouhost) =
-            crate::camouhost_process::ManagedCamouhostProcess::pair(missing_config, missing_slot);
-        let mut missing_operator = ProfileBridgeOperator::new(
-            FakeDeviceIdentity::new(DeviceId::parse(DEVICE)?),
-            FakeDeviceKeyStore::default(),
-            DeviceAuthentication,
-            ControlPlaneEnrollment::new(missing_transport.clone()),
-            ControlPlaneCoordinator::new(missing_transport),
-            TestRuntimeBundle {
-                bundle: approved_real_bundle(&paths)?,
-            },
-            missing_preflight,
-            missing_process,
-            missing_camouhost,
-        );
+        let (mut missing_process, mut missing_camouhost) =
+            crate::camouhost_process::ManagedCamouhostProcess::pair(
+                missing_config,
+                missing_slot,
+            );
         let mut missing_download = VerifiedGenerationObjectDownloader::new(BackendGet {
-            state: Rc::clone(&missing_state),
+            state: Rc::clone(&state),
         });
-        let missing_key_path = std::env::temp_dir().join(format!(
-            "profile-bridge-missing-old-root-{}-{counter}",
-            std::process::id()
-        ));
-        let _missing_key_cleanup = CleanupRoot(missing_key_path.clone());
-        let missing_key_root = MaterializationRoot::open_or_create(missing_key_path)?;
-        let missing_key_claim =
-            ClaimUri::parse("profilebridge://claim/claim_s0_missing_old_root_000004")?;
-        let failure = missing_operator.open_authoritative(
-            &missing_key_claim,
+        let failure = crate::authoritative_generation::cold_launch_verified_predecessor_once(
+            &root,
             &missing_key_root,
+            &current,
+            &lease,
+            &runtime,
+            &mut historical_control,
             &mut missing_download,
-            UnixMillis::new(90),
+            &mut missing_preflight,
+            &mut missing_process,
+            &mut missing_camouhost,
         );
-        assert!(
-            matches!(
-                failure,
-                Err(crate::operator_flow::OperatorFlowError::AuthoritativeGeneration { .. })
-            ),
-            "an independently admitted historical generation without its original root key must fail closed"
-        );
-        {
-            let negative = missing_state.borrow();
-            assert!(
-                negative
-                    .events
-                    .iter()
-                    .any(|event| event.starts_with("opening-material:")),
-                "the negative run must reach actual historical old-key derivation, not fail at Coordinator admission"
-            );
-            assert!(
-                negative
-                    .events
-                    .iter()
-                    .any(|event| event.starts_with("get:")),
-                "the negative run must read the retained immutable old object"
-            );
-        }
-        assert!(
-            missing_key_root
-                .open_generation(&tenant_id, &profile_id, &successor)
-                .is_err(),
-            "an incomplete historical generation cannot appear locally ready"
-        );
-        assert!(missing_operator.active_local_state().is_none());
+        assert!(matches!(
+            failure,
+            Err(crate::authoritative_generation::HistoricalColdProbeError::Materialization(_))
+        ));
+        assert!(missing_key_root
+            .open_generation(&tenant_id, &profile_id, &successor)
+            .is_err());
         assert_eq!(state.borrow().active_generation, current);
-        // The refused cold-open cannot invalidate the only usable backup:
-        // exact historical ciphertext remains in the original owner and
-        // the NEW read-only negative fixture.
+        assert!(!original_current.path().join(".profile-platform.lock").exists());
         assert_eq!(
-            missing_state.borrow().object.as_deref(),
-            historical_state.borrow().object.as_deref()
+            fs::read(restored_workspace.path().join("prefs.js"))?,
+            b"portable-browser-state"
         );
+        state.borrow_mut().historical_root_available = true;
+        // No fake successor lease was minted. The original CURRENT lease is
+        // released through its canonical coordinator owner.
+        historical_control.close_lease(&lease)?;
         eprintln!(
-            "S0_REAL_PORTABLE_BROWSER_STATE=PASSED;STREAMING_BPAT=1;MANAGED_PROCESS=1;MANAGED_IPC=1;COOKIE=1;LOCAL_STORAGE=1;INDEXED_DB=1;AUTHORITATIVE_RESTORE=1;IDENTITY_REUSED=1;HISTORICAL_NONCURRENT_COLD_CAMOUFOX=1;HISTORICAL_OLD_KEY=1;HISTORICAL_MISSING_OLD_KEY_BLOCKED=1;LIVE_LKG_CERTIFICATE=0"
+            "S0_REAL_PORTABLE_BROWSER_STATE=PASSED;STREAMING_BPAT=1;MANAGED_PROCESS=1;MANAGED_IPC=1;COOKIE=1;LOCAL_STORAGE=1;INDEXED_DB=1;AUTHORITATIVE_RESTORE=1;IDENTITY_REUSED=1;HISTORICAL_NONCURRENT_COLD_CAMOUFOX=1;HISTORICAL_OLD_KEY=1;HISTORICAL_MISSING_OLD_KEY_BLOCKED=1;HISTORICAL_CURRENT_POINTER_UNCHANGED=1;LIVE_LKG_CERTIFICATE=0"
         );
         Ok(())
     }
