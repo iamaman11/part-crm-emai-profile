@@ -260,9 +260,19 @@ impl D1ProfileGenerationSuccessorCommitJournal {
         let inserted = query!(
             &self.database,
             INSERT_HISTORICAL_WORKING_PROOF,
-            fields.0, fields.1, fields.2, fields.3, fields.4,
-            fields.5, fields.6, fields.7, fields.8, fields.9,
-            fields.10, fields.11, at,
+            fields.0,
+            fields.1,
+            fields.2,
+            fields.3,
+            fields.4,
+            fields.5,
+            fields.6,
+            fields.7,
+            fields.8,
+            fields.9,
+            fields.10,
+            fields.11,
+            at,
         )
         .map_err(|_| historical_dependency_failure())?
         .first::<String>(Some("generation_id"))
@@ -275,9 +285,18 @@ impl D1ProfileGenerationSuccessorCommitJournal {
                 let existing = query!(
                     &self.database,
                     LOAD_HISTORICAL_WORKING_PROOF,
-                    fields.0, fields.1, fields.2, fields.3, fields.4,
-                    fields.5, fields.6, fields.7, fields.8, fields.9,
-                    fields.10, fields.11,
+                    fields.0,
+                    fields.1,
+                    fields.2,
+                    fields.3,
+                    fields.4,
+                    fields.5,
+                    fields.6,
+                    fields.7,
+                    fields.8,
+                    fields.9,
+                    fields.10,
+                    fields.11,
                 )
                 .map_err(|_| historical_dependency_failure())?
                 .first::<String>(Some("generation_id"))

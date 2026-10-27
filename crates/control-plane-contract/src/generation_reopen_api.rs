@@ -82,7 +82,6 @@ impl BridgeGenerationWorkingProofRequest {
     }
 }
 
-
 /// Machine request for authoritative reopen. Generation identity and object metadata are
 /// intentionally absent: the server re-reads the one active VERIFIED generation from Catalog.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]

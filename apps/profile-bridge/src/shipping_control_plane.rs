@@ -16,10 +16,10 @@ use control_plane_contract::generation_reopen_api::{
     BRIDGE_PROFILE_GENERATION_OPENING_MATERIAL_PATH_TEMPLATE,
     BRIDGE_PROFILE_GENERATION_PREDECESSOR_DOWNLOAD_PATH_TEMPLATE,
     BRIDGE_PROFILE_GENERATION_PREDECESSOR_OPENING_PATH_TEMPLATE,
+    BRIDGE_PROFILE_GENERATION_WORKING_PROOF_PATH_TEMPLATE,
     BridgeGenerationDownloadCapabilityRequest, BridgeGenerationDownloadCapabilityResponse,
     BridgeGenerationOpeningMaterialRequest, BridgeGenerationOpeningMaterialResponse,
-    BridgeGenerationWorkingProofRequest, BRIDGE_PROFILE_GENERATION_WORKING_PROOF_PATH_TEMPLATE,
-    GENERATION_DOWNLOAD_CAPABILITY_MAX_EXPIRES_SECONDS,
+    BridgeGenerationWorkingProofRequest, GENERATION_DOWNLOAD_CAPABILITY_MAX_EXPIRES_SECONDS,
 };
 use control_plane_contract::profile_launch_api::{
     BRIDGE_PROFILE_COORDINATOR_PATH_TEMPLATE, BRIDGE_PROFILE_LAUNCH_REDEMPTION_PATH,
@@ -844,18 +844,21 @@ where
             cursor.fencing_token.as_str(),
             cursor.epoch,
         );
-        let body = serde_json::to_vec(&request)
-            .map_err(|_| ShippingControlPlaneError::InvalidResponse)?;
-        let response = self.transport.request(
-            MachineHttpMethod::PostJson,
-            &generation_reopen_path(
-                tenant_id,
-                profile_id,
-                BRIDGE_PROFILE_GENERATION_WORKING_PROOF_PATH_TEMPLATE,
-            ),
-            &next_correlation_id()?,
-            Some(&body),
-        ).map_err(|_| ShippingControlPlaneError::Transport)?;
+        let body =
+            serde_json::to_vec(&request).map_err(|_| ShippingControlPlaneError::InvalidResponse)?;
+        let response = self
+            .transport
+            .request(
+                MachineHttpMethod::PostJson,
+                &generation_reopen_path(
+                    tenant_id,
+                    profile_id,
+                    BRIDGE_PROFILE_GENERATION_WORKING_PROOF_PATH_TEMPLATE,
+                ),
+                &next_correlation_id()?,
+                Some(&body),
+            )
+            .map_err(|_| ShippingControlPlaneError::Transport)?;
         let response = accepted_response(response)?;
         let reply = serde_json::from_slice::<serde_json::Value>(response.body())
             .map_err(|_| ShippingControlPlaneError::InvalidResponse)?;
@@ -995,7 +998,9 @@ const fn lower_hex_nibble(value: u8) -> Option<u8> {
 
 fn is_lower_sha256(value: &str) -> bool {
     value.len() == 64
-        && value.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+        && value
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
 }
 
 fn encode_lower_hex(bytes: &[u8]) -> String {
