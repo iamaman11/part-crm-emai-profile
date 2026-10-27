@@ -480,7 +480,9 @@ impl core::fmt::Display for HistoricalColdProbeError {
             Self::Materialization(_) => "historical generation could not be restored",
             Self::WorkspaceLock => "historical workspace lock is unavailable",
             Self::Preflight => "historical browser preflight did not pass",
-            Self::BrowserStateNotVerified => "historical browser state was not independently verified",
+            Self::BrowserStateNotVerified => {
+                "historical browser state was not independently verified"
+            }
             Self::Runtime => "historical browser did not launch and close cleanly",
             Self::CleanupUncertain => "historical probe process or locks have uncertain cleanup",
         })
