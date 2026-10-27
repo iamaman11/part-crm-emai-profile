@@ -156,6 +156,17 @@ impl CatalogSuccessor {
             code_rollback_allowed: true,
             contract_preconditions: Vec::new(),
         });
+        ordered_history.push(WORKING_PROOF_REVISION.to_owned());
+        migration_source_roots.push(CURRENT_SUCCESSOR_ROOT.to_owned());
+        post_epoch.push(MigrationContract {
+            migration_file: WORKING_PROOF_REVISION.to_owned(),
+            migration_class: MigrationClass::Expand,
+            rollout_order: RolloutOrder::MigrateBeforeCode,
+            fail_forward_required: false,
+            destructive: false,
+            code_rollback_allowed: true,
+            contract_preconditions: Vec::new(),
+        });
         validate_contiguous_history(&ordered_history, predecessor_authority.historical_len)?;
         let history_digest =
             successor_history_digest(root, &ordered_history, &migration_source_roots)?;
