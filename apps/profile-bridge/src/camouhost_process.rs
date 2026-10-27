@@ -347,7 +347,26 @@ pub struct ManagedCamouhostCloseObserver {
     shared: Arc<Mutex<ProcessState>>,
 }
 
+/// Existing managed IPC read-only witness: the live browser must return the
+/// same native, fingerprint-visible data already authenticated by Launch.
+/// This is only browser identity readiness, never private cookie/IndexedDB
+/// contents, a cloud WORKING certificate, or permission to prune R2.
+pub struct ManagedCamouhostColdProbeObserver {
+    shared: Arc<Mutex<ProcessState>>,
+    display_mode: RuntimeDisplayMode,
+}
+
 impl ManagedCamouhostIpc {
+    /// Independent live-browser observation. Share only the existing managed
+    /// process, no extra browser process or IPC state machine.
+    #[must_use]
+    pub fn cold_probe_observer(&self) -> ManagedCamouhostColdProbeObserver {
+        ManagedCamouhostColdProbeObserver {
+            shared: Arc::clone(&self.shared),
+            display_mode: self.display_mode,
+        }
+    }
+
     /// Read-only handle used by shipping orchestration to observe a user-controlled browser close.
     /// It shares the existing managed IPC and cannot perform the mutating close handshake.
     #[must_use]
@@ -355,6 +374,22 @@ impl ManagedCamouhostIpc {
         ManagedCamouhostCloseObserver {
             shared: Arc::clone(&self.shared),
         }
+    }
+}
+
+impl ManagedCamouhostColdProbeObserver {
+    pub fn observe_live(&mut self) -> Result<(), BridgePortError> {
+        let session = {
+            let state = self
+                .shared
+                .lock()
+                .map_err(|_| BridgePortError::Unavailable)?;
+            state
+                .active_session
+                .clone()
+                .ok_or(BridgePortError::InvalidResponse)?
+        };
+        verify_managed_browser_visible_identity(&self.shared, self.display_mode, &session)
     }
 }
 
@@ -578,25 +613,11 @@ impl CamouhostPort for ManagedCamouhostIpc {
     }
 }
 
-fn launch_with_browser_visible_admission(
+fn verify_managed_browser_visible_identity(
     shared: &Arc<Mutex<ProcessState>>,
     display_mode: RuntimeDisplayMode,
     session_id: &SessionId,
-) -> Result<CamouhostMessage, BridgePortError> {
-    let ready = exchange_shared(
-        shared,
-        &CamouhostMessage::Launch {
-            session_id: session_id.clone(),
-        },
-    )?;
-    if ready
-        != (CamouhostMessage::Ready {
-            session_id: session_id.clone(),
-        })
-    {
-        return Err(BridgePortError::InvalidResponse);
-    }
-
+) -> Result<(), BridgePortError> {
     let observation = exchange_shared(
         shared,
         &CamouhostMessage::ObserveBrowserVisible {
@@ -624,6 +645,30 @@ fn launch_with_browser_visible_admission(
     let host_runtime_evidence = verify_browser_visible_payload(&expected, &payload)
         .map_err(|_| BridgePortError::InvalidResponse)?;
     verify_host_compatibility(display_mode, host_runtime_evidence)?;
+
+    Ok(())
+}
+
+fn launch_with_browser_visible_admission(
+    shared: &Arc<Mutex<ProcessState>>,
+    display_mode: RuntimeDisplayMode,
+    session_id: &SessionId,
+) -> Result<CamouhostMessage, BridgePortError> {
+    let ready = exchange_shared(
+        shared,
+        &CamouhostMessage::Launch {
+            session_id: session_id.clone(),
+        },
+    )?;
+    if ready
+        != (CamouhostMessage::Ready {
+            session_id: session_id.clone(),
+        })
+    {
+        return Err(BridgePortError::InvalidResponse);
+    }
+
+    verify_managed_browser_visible_identity(shared, display_mode, session_id)?;
 
     let navigation_target = {
         let state = shared.lock().map_err(|_| BridgePortError::Unavailable)?;
