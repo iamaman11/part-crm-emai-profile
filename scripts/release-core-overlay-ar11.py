@@ -457,6 +457,8 @@ def self_test() -> None:
                     fail("initial owner configuration was lost during canonical Core rendering")
                 if observed["env"]["staging"]["vars"]["PROFILE_GENERATION_APPROVED_RUNTIME_INVENTORIES"] != expected_pin:
                     fail("staging WORKING runtime pin was lost during the canonical no-rebuild Core rendering")
+                if set(observed["env"]) != {"staging"} or "build" in observed:
+                    fail("setup configuration expanded the promotion target/build scope")
             mismatched = dict(manifest, approved_runtime_inventories="b" * 64)
             try:
                 control_manifest({"control_plane": mismatched}, "staging", runtime_digest=expected_pin)
@@ -473,8 +475,7 @@ def self_test() -> None:
                 pass
             else:
                 fail("tampered runtime manifest identity passed immutable verification")
-                if set(observed["env"]) != {"staging"} or "build" in observed:
-                    fail("setup configuration expanded the promotion target/build scope")
+
         finally:
             if previous is None:
                 os.environ.pop("RELEASE_SET_ID", None)
