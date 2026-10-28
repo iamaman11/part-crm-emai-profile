@@ -79,6 +79,7 @@ DIAGNOSTIC_PROBE = r"""
           const canvas = document.createElement('canvas');
           const gl = canvas.getContext(kind);
           if (!gl) return {available: false, rows: []};
+          if (!configured) throw new Error('WebGL2 context exists without generated fingerprint data');
           const rows = [];
           for (const [key, expected] of Object.entries(configured)) {
             const numericKey = Number(key);
@@ -188,6 +189,10 @@ def main() -> int:
         config_path = root / camouhost.CONFIG_NAME
         config = json.loads(config_path.read_text(encoding="utf-8"))
         os.environ[camouhost.EXPECTED_CONFIG_SHA256_ENV] = report["fingerprint_config_sha256"]
+        # The same owner that launches the browser also interprets the
+        # generator's WebGL2 capability. Diagnostics must never require a
+        # disabled/unconfigured context or fabricate a spoofed parameter map.
+        enabled_webgl2 = camouhost.generation_webgl2_enabled(config)
 
         lock, _ = camouhost.load_runtime_lock()
         manager: Any | None = None
@@ -204,7 +209,7 @@ def main() -> int:
                 DIAGNOSTIC_PROBE,
                 {
                     "webgl": config["webGl:parameters"],
-                    "webgl2": config["webGl2:parameters"],
+                    "webgl2": config["webGl2:parameters"] if enabled_webgl2 else None,
                 },
             )
         finally:
