@@ -565,6 +565,53 @@ def self_test() -> None:
                 pass
             else:
                 fail("unverified third-party runtime pin unexpectedly passed")
+            # Exercise the actual manual/post-deploy path with an independently
+            # hashed READY proof rather than fetching an older runtime in mutate.
+            verified_policy = expected_pin + "," + old_pin
+            ready_value = {
+                "kind": "AR11_READY_TO_MUTATE", "ready": True,
+                "source_sha": "1" * 40, "release_set_id": release_set_id,
+                "expected_current_release_set_id": previous_release_id,
+                "approved_runtime_inventories": verified_policy,
+                "runtime_policy_sha256": hashlib.sha256(verified_policy.encode()).hexdigest(),
+            }
+            ready_file = root / "ready-to-mutate.json"
+            ready_file.write_text(json.dumps(ready_value), encoding="utf-8")
+            old_ready_sha = os.environ.get("READY_EVIDENCE_SHA256")
+            old_git_sha = os.environ.get("GITHUB_SHA")
+            os.environ["READY_EVIDENCE_SHA256"] = hashlib.sha256(ready_file.read_bytes()).hexdigest()
+            os.environ["GITHUB_SHA"] = "1" * 40
+            try:
+                manifest_path.write_text(json.dumps({"control_plane": dict(manifest, approved_runtime_inventories=verified_policy)}), encoding="utf-8")
+                proof_output = root / "overlay-ready.json"
+                render(source_config=Path(__file__).resolve().parents[1] / "deploy/cloudflare/wrangler.jsonc",
+                       release_root=root, deploy_manifest=manifest_path,
+                       runtime_release_set=runtime_release_set, runtime_archive=runtime_archive,
+                       ready_policy_evidence=ready_file, expected_previous_release_set_id=previous_release_id,
+                       environment="staging", output=proof_output)
+                rendered = json.loads(proof_output.read_text(encoding="utf-8"))
+                if rendered["env"]["staging"]["vars"]["PROFILE_GENERATION_APPROVED_RUNTIME_INVENTORIES"] != verified_policy:
+                    fail("verified READY runtime policy was not reproduced at mutation boundary")
+                os.environ["READY_EVIDENCE_SHA256"] = "0" * 64
+                try:
+                    render(source_config=Path(__file__).resolve().parents[1] / "deploy/cloudflare/wrangler.jsonc",
+                           release_root=root, deploy_manifest=manifest_path,
+                           runtime_release_set=runtime_release_set, runtime_archive=runtime_archive,
+                           ready_policy_evidence=ready_file, expected_previous_release_set_id=previous_release_id,
+                           environment="staging", output=root / "overlay-unauthorized.json")
+                except OverlayError:
+                    pass
+                else:
+                    fail("unsealed READY runtime proof unexpectedly authorized")
+            finally:
+                if old_ready_sha is None:
+                    os.environ.pop("READY_EVIDENCE_SHA256", None)
+                else:
+                    os.environ["READY_EVIDENCE_SHA256"] = old_ready_sha
+                if old_git_sha is None:
+                    os.environ.pop("GITHUB_SHA", None)
+                else:
+                    os.environ["GITHUB_SHA"] = old_git_sha
             permitted = dict(manifest, approved_runtime_inventories=old_pin + "," + expected_pin)
             if control_manifest(
                 {"control_plane": permitted}, "staging",
