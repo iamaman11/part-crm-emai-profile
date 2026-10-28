@@ -826,10 +826,9 @@ fn repository_identity_from_components(components: &[Value]) -> Result<String, D
 mod tests {
     use super::{
         BRIDGE_ENROLLMENT_REVISION, CURRENT_SUCCESSOR_ROOT, DEVICE_APPLICATION_AUTHORITY_REVISION,
-        PREDECESSOR_SUCCESSOR_ROOT, PUBLIC_KEY_BINDING_REVISION, STREAMING_GENERATION_REVISION,
-        RETIREMENT_GUARD_REVISION, SUCCESSOR_CONTRACT_REVISION, WORKING_PROOF_REVISION,
-        component_authority, release_contract,
-        repository_projection,
+        PREDECESSOR_SUCCESSOR_ROOT, PUBLIC_KEY_BINDING_REVISION, RETIREMENT_GUARD_REVISION,
+        STREAMING_GENERATION_REVISION, SUCCESSOR_CONTRACT_REVISION, WORKING_PROOF_REVISION,
+        component_authority, release_contract, repository_projection,
     };
     use serde_json::Value;
     use std::error::Error;
@@ -861,7 +860,10 @@ mod tests {
     #[test]
     fn release_window_requires_exact_initialization_schema() -> Result<(), Box<dyn Error>> {
         let contract = release_contract(&repository_root(), "catalog")?;
-        assert_eq!(contract["target_schema_revision"], RETIREMENT_GUARD_REVISION);
+        assert_eq!(
+            contract["target_schema_revision"],
+            RETIREMENT_GUARD_REVISION
+        );
         assert_eq!(contract["supported_schema_min"], RETIREMENT_GUARD_REVISION);
         assert_eq!(contract["supported_schema_max"], RETIREMENT_GUARD_REVISION);
         Ok(())

@@ -612,7 +612,10 @@ fn legacy_and_successor_pas2_revisions_have_distinct_governed_roles() -> Result<
     );
     assert_eq!(current_successor_files.len(), 8);
     assert_eq!(current_successor_files[6]["name"], WORKING_PROOF_REVISION);
-    assert_eq!(current_successor_files[7]["name"], RETIREMENT_GUARD_REVISION);
+    assert_eq!(
+        current_successor_files[7]["name"],
+        RETIREMENT_GUARD_REVISION
+    );
     assert_eq!(
         current_successor_files[0]["name"],
         BRIDGE_ENROLLMENT_REVISION
