@@ -1,10 +1,9 @@
--- #802 K2: exact, append-only D1 retirement admission. NOT R2 deletion.
--- The local Firefox/Camoufox user_data remains primary. A server-side
--- catalog/WORKING snapshot CANNOT prove absence of offline LOCAL_UNSYNCED Save;
--- R2 DELETE therefore remains disabled until live Coordinator/Bridge checks
--- and durable, retryable exact-object effects are separately accepted.
--- A retired generation must never be reactivated by EITHER Catalog command
--- or the interactive successor journal, including after a lost response.
+-- #802 K2: exact D1 retirement admission and one-way R2 effect receipt.
+-- The local Firefox/Camoufox user_data remains primary and is NEVER an
+-- input to the R2 retention operation. CURRENT, the selected browser-proven
+-- LKG, and generations with live cloud grants/jobs cannot be retired.
+-- A retired generation cannot be reactivated or granted to a new device.
+-- Exactly one terminal deleted_at_ms is allowed after exact R2 absence.
 
 CREATE TABLE profile_generation_retirement_intents (
     tenant_id TEXT NOT NULL,
@@ -28,6 +27,7 @@ CREATE TABLE profile_generation_retirement_intents (
           AND coordinator_session_id NOT GLOB '*[^A-Za-z0-9_-]*'),
     coordinator_epoch INTEGER NOT NULL CHECK(coordinator_epoch > 0),
     admitted_at_ms INTEGER NOT NULL CHECK(admitted_at_ms >= 0),
+    deleted_at_ms INTEGER CHECK(deleted_at_ms IS NULL OR deleted_at_ms >= admitted_at_ms),
     PRIMARY KEY(tenant_id, profile_id, generation_id),
     CHECK(generation_id <> observed_current_generation_id),
     CHECK(generation_id <> retained_working_generation_id),
@@ -143,9 +143,29 @@ BEGIN
     );
 END;
 
+-- One terminal NULL -> deleted timestamp is permitted; all original
+-- authorization/identity fields remain immutable.
 CREATE TRIGGER profile_generation_retirement_append_only_update
 BEFORE UPDATE ON profile_generation_retirement_intents
-FOR EACH ROW BEGIN
+FOR EACH ROW WHEN NOT (
+    OLD.deleted_at_ms IS NULL
+    AND NEW.deleted_at_ms IS NOT NULL
+    AND NEW.tenant_id = OLD.tenant_id
+    AND NEW.profile_id = OLD.profile_id
+    AND NEW.generation_id = OLD.generation_id
+    AND NEW.observed_current_generation_id = OLD.observed_current_generation_id
+    AND NEW.retained_working_generation_id = OLD.retained_working_generation_id
+    AND NEW.expected_profile_version = OLD.expected_profile_version
+    AND NEW.object_key = OLD.object_key
+    AND NEW.metadata_digest = OLD.metadata_digest
+    AND NEW.container_digest = OLD.container_digest
+    AND NEW.approved_runtime_inventory_sha256 = OLD.approved_runtime_inventory_sha256
+    AND NEW.admitted_by_actor_id = OLD.admitted_by_actor_id
+    AND NEW.admitted_by_device_id = OLD.admitted_by_device_id
+    AND NEW.coordinator_session_id = OLD.coordinator_session_id
+    AND NEW.coordinator_epoch = OLD.coordinator_epoch
+    AND NEW.admitted_at_ms = OLD.admitted_at_ms
+) BEGIN
     SELECT RAISE(ABORT, 'retirement_append_only');
 END;
 CREATE TRIGGER profile_generation_retirement_append_only_delete
@@ -198,6 +218,40 @@ FOR EACH ROW WHEN EXISTS (
       AND retired.generation_id = NEW.generation_id
 ) BEGIN
     SELECT RAISE(ABORT, 'retired_generation_cannot_be_working');
+END;
+
+-- Never resurrect retired history by issuing a new device grant/job.
+CREATE TRIGGER profile_generation_retired_device_grant_forbidden
+BEFORE INSERT ON device_authorizations
+FOR EACH ROW WHEN EXISTS (
+    SELECT 1 FROM profile_generation_retirement_intents AS retired
+    WHERE retired.tenant_id = NEW.tenant_id
+      AND retired.profile_id = NEW.profile_id
+      AND retired.generation_id = NEW.generation_id
+) BEGIN
+    SELECT RAISE(ABORT, 'retired_generation_cannot_be_authorized');
+END;
+
+CREATE TRIGGER profile_generation_retired_device_regrant_forbidden
+BEFORE UPDATE OF status ON device_authorizations
+FOR EACH ROW WHEN NEW.status = 'ACTIVE' AND EXISTS (
+    SELECT 1 FROM profile_generation_retirement_intents AS retired
+    WHERE retired.tenant_id = NEW.tenant_id
+      AND retired.profile_id = NEW.profile_id
+      AND retired.generation_id = NEW.generation_id
+) BEGIN
+    SELECT RAISE(ABORT, 'retired_generation_cannot_be_authorized');
+END;
+
+CREATE TRIGGER profile_generation_retired_device_job_forbidden
+BEFORE INSERT ON device_jobs
+FOR EACH ROW WHEN EXISTS (
+    SELECT 1 FROM profile_generation_retirement_intents AS retired
+    WHERE retired.tenant_id = NEW.tenant_id
+      AND retired.profile_id = NEW.profile_id
+      AND retired.generation_id = NEW.generation_id
+) BEGIN
+    SELECT RAISE(ABORT, 'retired_generation_cannot_be_job_target');
 END;
 
 CREATE INDEX profile_generation_retirement_history

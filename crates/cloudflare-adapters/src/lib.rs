@@ -92,6 +92,7 @@ pub mod profile_coordinator;
 pub mod profile_generation_successor_runtime;
 pub mod r2_generation_download_capability;
 pub mod r2_generation_objects;
+pub mod r2_generation_retention;
 pub mod r2_generation_upload_capability;
 mod resolver_request;
 pub mod smtp_outbound_mail;

@@ -77,14 +77,19 @@ WHERE profile.tenant_id = ?
   AND proof.metadata_digest = reserve.metadata_digest
   AND proof.container_digest = reserve.container_digest
   AND proof.runtime_inventory_sha256 = ?
+  AND NOT EXISTS (
+      SELECT 1 FROM profile_generation_retirement_intents AS retired
+      WHERE retired.tenant_id = reserve.tenant_id
+        AND retired.profile_id = reserve.profile_id
+        AND retired.generation_id = reserve.generation_id
+  )
 ORDER BY proof.proven_at_ms DESC, proof.generation_id DESC
 LIMIT 1
 "#;
 
-/// At most one *unproven* historical catalog object is offered for
-/// read-only prune review. This projection is deliberately NOT a deletion
-/// permit: it cannot see offline local dirty state or pin the Coordinator
-/// across R2 effects. A recorded WORKING proof is never a review candidate.
+/// At most one unused historical catalog object is offered for retention
+/// review. It is NOT a DELETE permit. A previous WORKING proof can be
+/// retired after a newer independently checked LKG is selected.
 ///
 /// The selected reserve must be an exact browser-proven, released-runtime
 /// generation even when it is N-k instead of the immediately prior N-1.
@@ -119,6 +124,12 @@ WITH protected AS (
       AND proof.metadata_digest = reserved.metadata_digest
       AND proof.container_digest = reserved.container_digest
       AND proof.runtime_inventory_sha256 = ?
+      AND NOT EXISTS (
+          SELECT 1 FROM profile_generation_retirement_intents AS retired
+          WHERE retired.tenant_id = reserved.tenant_id
+            AND retired.profile_id = reserved.profile_id
+            AND retired.generation_id = reserved.generation_id
+      )
     ORDER BY proof.proven_at_ms DESC, proof.generation_id DESC
     LIMIT 1
 )
@@ -135,19 +146,13 @@ WHERE old.status = 'VERIFIED'
   AND old.verification_reference IS NOT NULL
   AND old.generation_id <> protected.active_generation_id
   AND old.generation_id <> protected.reserved_generation_id
-  -- Never select a previously demonstrated real-browser reserve for
-  -- deletion while its original root key/runtime may be the only fallback.
+  -- Historical WORKING receipts are not permanent keep-grants. The
+  -- current independently certified reserve is protected by the CTE.
   AND NOT EXISTS (
       SELECT 1 FROM profile_generation_retirement_intents AS retired
       WHERE retired.tenant_id = old.tenant_id
         AND retired.profile_id = old.profile_id
         AND retired.generation_id = old.generation_id
-  )
-  AND NOT EXISTS (
-      SELECT 1 FROM profile_generation_working_proofs AS past
-      WHERE past.tenant_id = old.tenant_id
-        AND past.profile_id = old.profile_id
-        AND past.generation_id = old.generation_id
   )
 ORDER BY old.created_at_ms ASC, old.generation_id ASC
 LIMIT 1
@@ -180,6 +185,37 @@ WHERE tenant_id = ? AND profile_id = ? AND generation_id = ?
   AND admitted_by_actor_id = ? AND admitted_by_device_id = ?
   AND coordinator_session_id = ? AND coordinator_epoch = ?
   AND admitted_at_ms = ?
+"#;
+
+const LOAD_RETENTION_PROFILE_VERSION: &str = r#"
+SELECT version FROM browser_profiles
+WHERE tenant_id = ? AND profile_id = ? AND status = 'READY'
+  AND active_generation_id = ?
+"#;
+
+const LOAD_PENDING_RETIREMENT: &str = r#"
+SELECT generation_id, object_key, metadata_digest, container_digest
+FROM profile_generation_retirement_intents
+WHERE tenant_id = ? AND profile_id = ? AND deleted_at_ms IS NULL
+  AND generation_id <> ? AND generation_id <> ?
+ORDER BY admitted_at_ms ASC, generation_id ASC
+LIMIT 1
+"#;
+
+const COMPLETE_RETIREMENT_EFFECT: &str = r#"
+UPDATE profile_generation_retirement_intents
+SET deleted_at_ms = ?
+WHERE tenant_id = ? AND profile_id = ? AND generation_id = ?
+  AND object_key = ? AND metadata_digest = ? AND container_digest = ?
+  AND deleted_at_ms IS NULL AND admitted_at_ms <= ?
+RETURNING generation_id
+"#;
+
+const LOAD_COMPLETED_RETIREMENT_EFFECT: &str = r#"
+SELECT generation_id FROM profile_generation_retirement_intents
+WHERE tenant_id = ? AND profile_id = ? AND generation_id = ?
+  AND object_key = ? AND metadata_digest = ? AND container_digest = ?
+  AND deleted_at_ms IS NOT NULL
 "#;
 
 const LOAD_VERIFIED_PREDECESSOR_OF_ACTIVE: &str = r#"
@@ -734,6 +770,111 @@ impl D1ProfileGenerationSuccessorCommitJournal {
         .map_err(|_| historical_dependency_failure())?;
         historical_reference_from_row(row, scope, profile_id, current_generation_id)
     }
+
+    /// CURRENT version for a single guarded retirement admission.
+    pub async fn load_retention_profile_version(
+        &self,
+        scope: &TenantScope,
+        profile_id: &ProfileId,
+        current: &GenerationId,
+    ) -> Result<Option<u64>, GenerationPortError> {
+        let version = query!(
+            &self.database,
+            LOAD_RETENTION_PROFILE_VERSION,
+            scope.tenant_id().as_str(),
+            profile_id.as_str(),
+            current.as_str(),
+        )
+        .map_err(|_| historical_dependency_failure())?
+        .first::<i64>(Some("version"))
+        .await
+        .map_err(|_| historical_dependency_failure())?;
+        version
+            .map(|v| u64::try_from(v).map_err(|_| historical_integrity_failure()))
+            .transpose()
+    }
+
+    /// Replay the oldest R2 DELETE that did not reach a durable completion
+    /// receipt. CURRENT and chosen WORKING are excluded.
+    pub async fn load_pending_retirement(
+        &self,
+        scope: &TenantScope,
+        profile_id: &ProfileId,
+        current: &GenerationId,
+        working: &GenerationId,
+    ) -> Result<Option<GenerationObjectCatalogReference>, GenerationPortError> {
+        let row = query!(
+            &self.database,
+            LOAD_PENDING_RETIREMENT,
+            scope.tenant_id().as_str(),
+            profile_id.as_str(),
+            current.as_str(),
+            working.as_str(),
+        )
+        .map_err(|_| historical_dependency_failure())?
+        .first::<HistoricalPredecessorRow>(None)
+        .await
+        .map_err(|_| historical_dependency_failure())?;
+        historical_reference_from_row(row, scope, profile_id, current)
+    }
+
+    /// One-way D1 confirmation after exact R2 HEAD observes absence.
+    pub async fn complete_retirement_effect(
+        &self,
+        scope: &TenantScope,
+        candidate: &GenerationObjectCatalogReference,
+        at: profile_platform_primitives::UnixMillis,
+    ) -> Result<(), GenerationPortError> {
+        let stamp = i64::try_from(at.value()).map_err(|_| historical_integrity_failure())?;
+        let fields = (
+            scope.tenant_id().as_str(),
+            candidate.profile_id().as_str(),
+            candidate.generation_id().as_str(),
+            candidate.object_key(),
+            candidate.metadata_digest(),
+            candidate.container_digest(),
+        );
+        let updated = query!(
+            &self.database,
+            COMPLETE_RETIREMENT_EFFECT,
+            stamp,
+            fields.0,
+            fields.1,
+            fields.2,
+            fields.3,
+            fields.4,
+            fields.5,
+            stamp,
+        )
+        .map_err(|_| historical_dependency_failure())?
+        .first::<String>(Some("generation_id"))
+        .await;
+        match updated {
+            Ok(Some(id)) if id == candidate.generation_id().as_str() => Ok(()),
+            Ok(None) | Err(_) => {
+                let previous = query!(
+                    &self.database,
+                    LOAD_COMPLETED_RETIREMENT_EFFECT,
+                    fields.0,
+                    fields.1,
+                    fields.2,
+                    fields.3,
+                    fields.4,
+                    fields.5,
+                )
+                .map_err(|_| historical_dependency_failure())?
+                .first::<String>(Some("generation_id"))
+                .await
+                .map_err(|_| historical_dependency_failure())?;
+                if previous.as_deref() == Some(candidate.generation_id().as_str()) {
+                    Ok(())
+                } else {
+                    Err(historical_integrity_failure())
+                }
+            }
+            _ => Err(historical_integrity_failure()),
+        }
+    }
 }
 
 impl VerifiedPredecessorObjectReferencePort for D1ProfileGenerationSuccessorCommitJournal {
@@ -1227,7 +1368,7 @@ mod tests {
         assert!(query.contains("old.generation_id <> protected.active_generation_id"));
         assert!(query.contains("old.generation_id <> protected.reserved_generation_id"));
         assert!(query.contains("NOT EXISTS"));
-        assert!(query.contains("profile_generation_working_proofs AS past"));
+        assert!(!query.contains("profile_generation_working_proofs AS past"));
         assert!(query.contains("profile_generation_retirement_intents AS retired"));
         assert!(!query.contains("DELETE "));
         assert!(!query.contains("UPDATE "));

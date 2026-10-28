@@ -3,7 +3,8 @@ mod initialization;
 use crate::access_session::problem;
 use crate::composition::{
     device_execution_preconditions, device_job_authorization,
-    generation_download_capability_signer, generation_object_verifier, generation_root_keyring,
+    generation_download_capability_signer, generation_object_retention, generation_object_verifier,
+    generation_root_keyring,
     generation_upload_capability_signer, profile_generation_successor_commit,
     profile_generation_successor_observer,
 };
@@ -269,7 +270,7 @@ pub(crate) async fn dispatch_authorized(
         return dispatch_sealing_material(request, env, profile_id, actor, device_id).await;
     }
     if operation == BridgeGenerationMachineOperation::PredecessorCertifyWorking {
-        return dispatch_working_proof(request, env, profile_id, actor, device_id).await;
+        return dispatch_working_proof(request, env, profile_id, actor, device_id, role).await;
     }
     if matches!(
         operation,
@@ -802,6 +803,7 @@ async fn dispatch_working_proof(
     profile_id: &ProfileId,
     actor: &ActorContext,
     device_id: &DeviceId,
+    role: identity_access_domain::MembershipRole,
 ) -> Result<Response> {
     let body = match request.json::<BridgeGenerationWorkingProofRequest>().await {
         Ok(value) => value,
@@ -919,7 +921,116 @@ async fn dispatch_working_proof(
     {
         return object_verify_failure(actor.correlation_id().as_str(), error.class());
     }
+    // A successful browser-proven LKG is the natural maintenance boundary.
+    // Prune is optional: never fail Open/Save because R2 housekeeping failed.
+    if role == identity_access_domain::MembershipRole::TenantOwner
+        && retire_one_old_generation(
+            env,
+            actor,
+            profile_id,
+            device_id,
+            &current,
+            body.runtime_inventory_sha256(),
+            &session,
+            body.coordinator_epoch(),
+        )
+        .await
+        .is_err()
+    {
+        worker::console_warn!("K2_PRUNE_PENDING: cloud recovery copies retained");
+    }
     machine_json(&serde_json::json!({"confirmed": true}))
+}
+
+/// Exactly one cloud-only retention effect per WORKING certification. Existing
+/// D1 owns the retirement receipt; the existing R2 bucket owns the DELETE.
+#[allow(clippy::too_many_arguments)]
+async fn retire_one_old_generation(
+    env: &Env,
+    actor: &ActorContext,
+    profile_id: &ProfileId,
+    device_id: &DeviceId,
+    current: &GenerationId,
+    runtime_inventory: &str,
+    session: &SessionId,
+    epoch: u64,
+) -> std::result::Result<(), ()> {
+    let scope = actor.tenant_scope();
+    let journal = profile_generation_successor_observer(env).map_err(|_| ())?;
+    let Some(working) = journal
+        .load_certified_working_reserve(scope, profile_id, current, runtime_inventory)
+        .await
+        .map_err(|_| ())?
+    else {
+        return Ok(());
+    };
+
+    let pending = journal
+        .load_pending_retirement(scope, profile_id, current, working.generation_id())
+        .await
+        .map_err(|_| ())?;
+    let candidate = if let Some(pending) = pending {
+        pending
+    } else {
+        let Some(candidate) = journal
+            .load_unproven_prune_review_candidate(
+                scope,
+                profile_id,
+                current,
+                runtime_inventory,
+            )
+            .await
+            .map_err(|_| ())?
+        else {
+            return Ok(());
+        };
+
+        // Before an irreversible retirement, verify the exact immutable R2
+        // object, including custom metadata and SHA-256, not its age or path.
+        let reader = generation_object_verifier(env).map_err(|_| ())?;
+        if reader
+            .load_generation_object_descriptor_exact(scope, &candidate)
+            .await
+            .map_err(|_| ())?
+            .is_none()
+        {
+            return Err(());
+        }
+        let Some(version) = journal
+            .load_retention_profile_version(scope, profile_id, current)
+            .await
+            .map_err(|_| ())?
+        else {
+            return Err(());
+        };
+        journal
+            .record_guarded_retirement_intent(
+                actor,
+                current,
+                working.generation_id(),
+                &candidate,
+                version,
+                runtime_inventory,
+                device_id,
+                session,
+                epoch,
+                server_now(),
+            )
+            .await
+            .map_err(|_| ())?;
+        candidate
+    };
+
+    generation_object_retention(env)
+        .map_err(|_| ())?
+        .delete_retired_exact(scope, &candidate)
+        .await
+        .map_err(|_| ())?;
+    journal
+        .complete_retirement_effect(scope, &candidate, server_now())
+        .await
+        .map_err(|_| ())?;
+    Ok(())
 }
 
 async fn dispatch_download_capability(

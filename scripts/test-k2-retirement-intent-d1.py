@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""#802 K2: D1 retire admission + no-reactivation proof. No R2 deletes."""
+"""#802 K2: exact D1 retirement and one-way R2 effect receipts."""
 from __future__ import annotations
 
 import re
@@ -209,6 +209,19 @@ def main() -> None:
         ).fetchone()
         assert saved["generation_id"] == FX["CANDIDATE"]
         refused(conn)  # Never admit a second command with a different witness.
+        # Regranting the retired generation is forbidden even after the
+        # original old-device authorization was revoked.
+        try:
+            conn.execute(
+                "UPDATE device_authorizations SET status='ACTIVE', "
+                "revoked_at_ms=NULL, updated_at_ms=150 "
+                "WHERE tenant_id=? AND profile_id=? AND generation_id=? AND device_id=?",
+                (FX["TENANT"], FX["PROFILE"], FX["CANDIDATE"], FX["DEVICE"]),
+            )
+        except sqlite3.IntegrityError:
+            conn.rollback()
+        else:
+            raise AssertionError("retired generation got a new ACTIVE grant")
         for statement in (
             "UPDATE profile_generation_retirement_intents SET admitted_at_ms=150",
             "DELETE FROM profile_generation_retirement_intents",
@@ -248,8 +261,46 @@ def main() -> None:
             "SELECT active_generation_id FROM browser_profiles WHERE tenant_id=? AND profile_id=?",
             (FX["TENANT"], FX["PROFILE"]),
         ).fetchone()[0] == FX["WINNER"]
+        # Exact lost-response replay: the one pending candidate is selected
+        # from production SQL, and only one NULL -> completed transition works.
+        def sql_constant(name: str) -> str:
+            match = re.search(
+                rf'const {name}: &str = r#"(.*?)"#;', source, re.DOTALL
+            )
+            assert match is not None, name
+            return match.group(1)
+
+        pending = sql_constant("LOAD_PENDING_RETIREMENT")
+        old = conn.execute(
+            pending, (FX["TENANT"], FX["PROFILE"], FX["WINNER"], FX["BASE"])
+        ).fetchone()
+        assert old is not None and old["generation_id"] == FX["CANDIDATE"]
+        assert conn.execute(
+            pending, (FX["TENANT"], FX["PROFILE"], FX["CANDIDATE"], FX["BASE"])
+        ).fetchone() is None, "CURRENT must never be selected"
+        finish = sql_constant("COMPLETE_RETIREMENT_EFFECT")
+        effect_fields = (
+            FX["TENANT"], FX["PROFILE"], FX["CANDIDATE"],
+            old["object_key"], old["metadata_digest"], old["container_digest"],
+        )
+        assert conn.execute(finish, (150, *effect_fields, 150)).fetchone()[0] == FX["CANDIDATE"]
+        assert conn.execute(finish, (151, *effect_fields, 151)).fetchone() is None
+        assert conn.execute(
+            sql_constant("LOAD_COMPLETED_RETIREMENT_EFFECT"), effect_fields
+        ).fetchone()[0] == FX["CANDIDATE"]
+        assert conn.execute(
+            pending, (FX["TENANT"], FX["PROFILE"], FX["WINNER"], FX["BASE"])
+        ).fetchone() is None, "completed deletion must not block next candidate"
+        try:
+            conn.execute(
+                "UPDATE profile_generation_retirement_intents SET deleted_at_ms=999"
+            )
+        except sqlite3.IntegrityError:
+            conn.rollback()
+        else:
+            raise AssertionError("retired R2 receipt accepted a second terminal change")
         assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
-        print("K2 retirement append-only and both reactivation routes fail closed; R2 DELETE=0 PASS")
+        print("K2 D1 retire/pending/final effect and no-reactivation PASS (R2 effect separate)")
     finally:
         conn.close()
 
