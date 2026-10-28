@@ -61,7 +61,6 @@ WHERE profile.tenant_id = ?1 AND profile.profile_id = ?3
 ON CONFLICT(tenant_id, device_id, profile_id, generation_id) DO NOTHING
 "#;
 
-
 /// Existing D1 authorization owner releases obsolete cloud grants.
 /// Old generations are already stale for Open; a pending device job keeps its
 /// grant, and hence its R2 recovery copy. No local Firefox files are touched.
