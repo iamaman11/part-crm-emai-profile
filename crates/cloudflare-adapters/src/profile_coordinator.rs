@@ -4,9 +4,9 @@ use profile_platform_primitives::{
 };
 use serde::{Deserialize, Serialize};
 use session_domain::coordinator::{
-    CoordinatorCommand, CoordinatorCommandEnvelope, CoordinatorConfig, CoordinatorDecision,
-    CoordinatorCheckpoint, CoordinatorError, CoordinatorLease, CoordinatorOutcome,
-    CoordinatorStatus, PendingLaunchIntent, ProfileCoordinatorState, ReleaseDisposition,
+    CoordinatorCheckpoint, CoordinatorCommand, CoordinatorCommandEnvelope, CoordinatorConfig,
+    CoordinatorDecision, CoordinatorError, CoordinatorLease, CoordinatorOutcome, CoordinatorStatus,
+    PendingLaunchIntent, ProfileCoordinatorState, ReleaseDisposition,
 };
 use std::fmt;
 
@@ -94,7 +94,10 @@ struct StoredCoordinatorCheckpoint {
 }
 
 impl StoredCoordinatorCheckpoint {
-    fn from_state(state: &ProfileCoordinatorState, last_claim: Option<StoredClaimIdentity>) -> Self {
+    fn from_state(
+        state: &ProfileCoordinatorState,
+        last_claim: Option<StoredClaimIdentity>,
+    ) -> Self {
         let value = state.checkpoint();
         let pending_intent = value.pending_intent.map(|p| StoredPendingIntent {
             launch_intent_id: p.launch_intent_id().as_str().to_owned(),
@@ -126,26 +129,33 @@ impl StoredCoordinatorCheckpoint {
     }
 
     fn into_domain(self) -> Result<CoordinatorCheckpoint, CoordinatorAdapterError> {
-        let pending_intent = self.pending_intent.map(|p| {
-            Ok::<_, CoordinatorAdapterError>(PendingLaunchIntent::restored(
-                LaunchIntentId::parse(p.launch_intent_id)?,
-                ActorId::parse(p.actor_id)?,
-                DeviceId::parse(p.device_id)?,
-                UnixMillis::new(p.expires_at_ms),
-            ))
-        }).transpose()?;
-        let active_lease = self.active_lease.map(|l| {
-            CoordinatorLease::restored(
-                SessionId::parse(l.session_id)?,
-                DeviceId::parse(l.device_id)?,
-                l.epoch,
-                FencingToken::parse(l.fencing_token)?,
-                UnixMillis::new(l.claimed_at_ms),
-                UnixMillis::new(l.last_heartbeat_at_ms),
-                UnixMillis::new(l.idle_expires_at_ms),
-                UnixMillis::new(l.hard_expires_at_ms),
-            ).map_err(CoordinatorAdapterError::from)
-        }).transpose()?;
+        let pending_intent = self
+            .pending_intent
+            .map(|p| {
+                Ok::<_, CoordinatorAdapterError>(PendingLaunchIntent::restored(
+                    LaunchIntentId::parse(p.launch_intent_id)?,
+                    ActorId::parse(p.actor_id)?,
+                    DeviceId::parse(p.device_id)?,
+                    UnixMillis::new(p.expires_at_ms),
+                ))
+            })
+            .transpose()?;
+        let active_lease = self
+            .active_lease
+            .map(|l| {
+                CoordinatorLease::restored(
+                    SessionId::parse(l.session_id)?,
+                    DeviceId::parse(l.device_id)?,
+                    l.epoch,
+                    FencingToken::parse(l.fencing_token)?,
+                    UnixMillis::new(l.claimed_at_ms),
+                    UnixMillis::new(l.last_heartbeat_at_ms),
+                    UnixMillis::new(l.idle_expires_at_ms),
+                    UnixMillis::new(l.hard_expires_at_ms),
+                )
+                .map_err(CoordinatorAdapterError::from)
+            })
+            .transpose()?;
         Ok(CoordinatorCheckpoint {
             version: AggregateVersion::new(self.version)?,
             sequence: self.sequence,
@@ -229,13 +239,22 @@ impl StoredCoordinatorDocument {
             self.drain_timeout_ms,
         )?;
         let mut state = self.checkpoint.clone().map_or_else(
-            || Ok(ProfileCoordinatorState::new(tenant_id.clone(), profile_id.clone(), config)),
-            |stored| ProfileCoordinatorState::restore_checkpoint(
-                tenant_id.clone(),
-                profile_id.clone(),
-                config,
-                stored.into_domain()?,
-            ).map_err(CoordinatorAdapterError::from),
+            || {
+                Ok(ProfileCoordinatorState::new(
+                    tenant_id.clone(),
+                    profile_id.clone(),
+                    config,
+                ))
+            },
+            |stored| {
+                ProfileCoordinatorState::restore_checkpoint(
+                    tenant_id.clone(),
+                    profile_id.clone(),
+                    config,
+                    stored.into_domain()?,
+                )
+                .map_err(CoordinatorAdapterError::from)
+            },
         )?;
         for envelope in &self.journal {
             state.apply(envelope.to_domain()?)?;
@@ -251,7 +270,9 @@ impl StoredCoordinatorDocument {
         let mut anchor = self.checkpoint.clone().map_or_else(
             || {
                 let config = CoordinatorConfig::new(
-                    self.idle_timeout_ms, self.hard_timeout_ms, self.drain_timeout_ms,
+                    self.idle_timeout_ms,
+                    self.hard_timeout_ms,
+                    self.drain_timeout_ms,
                 )?;
                 Ok(ProfileCoordinatorState::new(
                     TenantId::parse(self.tenant_id.clone())?,
@@ -261,22 +282,29 @@ impl StoredCoordinatorDocument {
             },
             |stored| {
                 let config = CoordinatorConfig::new(
-                    self.idle_timeout_ms, self.hard_timeout_ms, self.drain_timeout_ms,
+                    self.idle_timeout_ms,
+                    self.hard_timeout_ms,
+                    self.drain_timeout_ms,
                 )?;
                 ProfileCoordinatorState::restore_checkpoint(
                     TenantId::parse(self.tenant_id.clone())?,
                     ProfileId::parse(self.profile_id.clone())?,
                     config,
                     stored.into_domain()?,
-                ).map_err(CoordinatorAdapterError::from)
+                )
+                .map_err(CoordinatorAdapterError::from)
             },
         )?;
         let mut last_claim = self.checkpoint.as_ref().and_then(|p| p.last_claim.clone());
         for envelope in self.journal.iter().take(count) {
             anchor.apply(envelope.to_domain()?)?;
             if let StoredCoordinatorCommand::Claim {
-                actor_id, device_id, session_id, ..
-            } = &envelope.command {
+                actor_id,
+                device_id,
+                session_id,
+                ..
+            } = &envelope.command
+            {
                 last_claim = Some(StoredClaimIdentity {
                     actor_id: actor_id.clone(),
                     device_id: device_id.clone(),
@@ -297,7 +325,9 @@ impl StoredCoordinatorDocument {
             verified.apply(envelope.to_domain()?)?;
         }
         if verified.checkpoint() != expected {
-            return Err(CoordinatorAdapterError::Domain(CoordinatorError::InvalidCheckpoint));
+            return Err(CoordinatorAdapterError::Domain(
+                CoordinatorError::InvalidCheckpoint,
+            ));
         }
         self.checkpoint = Some(next);
         self.journal.drain(..count);
@@ -337,13 +367,15 @@ impl StoredCoordinatorDocument {
                 return Ok(stored_actor == actor_id.as_str() && stored_device == device_id.as_str());
             }
         }
-        Ok(self.checkpoint.as_ref().and_then(|cp| cp.last_claim.as_ref()).is_some_and(
-            |last| {
+        Ok(self
+            .checkpoint
+            .as_ref()
+            .and_then(|cp| cp.last_claim.as_ref())
+            .is_some_and(|last| {
                 last.actor_id == actor_id.as_str()
                     && last.device_id == device_id.as_str()
                     && last.session_id == session_id.as_str()
-            },
-        ))
+            }))
     }
 
     #[must_use]
@@ -836,7 +868,10 @@ mod tests {
             assert!(document.journal_len() < super::COMPACT_JOURNAL_AT);
         }
         assert_eq!(document.projection()?.sequence, 4_200);
-        assert_eq!(document.replay()?.active_lease().map(|l| l.epoch()), Some(1));
+        assert_eq!(
+            document.replay()?.active_lease().map(|l| l.epoch()),
+            Some(1)
+        );
         assert!(document.active_claim_matches(
             &ActorId::parse("actor_01JADAPTER")?,
             &DeviceId::parse("device_01JADAPTER")?,
@@ -849,14 +884,17 @@ mod tests {
         )?);
         let encoded = serde_json::to_vec(&document)?;
         let restored: StoredCoordinatorDocument = serde_json::from_slice(&encoded)?;
-        assert_eq!(restored.replay()?.checkpoint(), document.replay()?.checkpoint());
+        assert_eq!(
+            restored.replay()?.checkpoint(),
+            document.replay()?.checkpoint()
+        );
         assert_eq!(restored.journal_len(), document.journal_len());
         Ok(())
     }
 
     #[test]
-    fn old_document_without_checkpoint_remains_readable()
-    -> Result<(), Box<dyn std::error::Error>> {
+    fn old_document_without_checkpoint_remains_readable() -> Result<(), Box<dyn std::error::Error>>
+    {
         let original = document()?;
         let json = serde_json::to_string(&original)?;
         assert!(!json.contains("checkpoint"));
