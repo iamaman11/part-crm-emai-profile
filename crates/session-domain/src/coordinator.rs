@@ -625,12 +625,19 @@ impl ProfileCoordinatorState {
             return Ok(outcome);
         }
 
+        // Only an accepted heartbeat can extend the hard deadline. This is a
+        // rolling dead-man's switch, not a 15-minute limit on an actively used
+        // browser. Idle/hard expiry is checked above *before* either renewal.
+        // Authentication, current profile access and the exact fence are
+        // enforced by the existing Coordinator ingress and this state machine.
         let proposed_idle = add_millis(now, self.config.idle_timeout_ms)?;
+        let proposed_hard = add_millis(now, self.config.hard_timeout_ms)?;
         let lease = self
             .active_lease
             .as_mut()
             .ok_or(CoordinatorError::NoActiveLease)?;
         lease.last_heartbeat_at = now;
+        lease.hard_expires_at = proposed_hard;
         lease.idle_expires_at = proposed_idle.min(lease.hard_expires_at);
         Ok(CoordinatorOutcome::HeartbeatAccepted {
             idle_expires_at: lease.idle_expires_at,
@@ -1158,27 +1165,65 @@ mod tests {
     }
 
     #[test]
-    fn hard_ttl_caps_heartbeat_extension() -> Result<(), Box<dyn std::error::Error>> {
+    fn accepted_heartbeats_extend_hard_deadline_beyond_original_session_limit()
+    -> Result<(), Box<dyn std::error::Error>> {
         let mut state = coordinator_with_config(CoordinatorConfig::new(100, 100, 20)?)?;
         issue(&mut state, 1, 1, 10)?;
         claim(&mut state, 2, 2, 11, "fence_01JCOORDINATOR")?;
-        let heartbeat = state.apply(envelope(
-            "idem_heartbeat_01JCOORDINATOR",
+        // The original hard expiry was 111; a timely heartbeat moves it
+        // forward instead of closing a healthy browser after a fixed span.
+        for (sequence, at) in [(3, 105), (4, 195), (5, 285)] {
+            let heartbeat = state.apply(envelope(
+                &format!("idem_heartbeat_roll_{sequence}_01JCOORDINATOR"),
+                sequence,
+                sequence,
+                CoordinatorCommand::Heartbeat {
+                    session_id: SessionId::parse("session_01JCOORDINATOR")?,
+                    epoch: 1,
+                    fencing_token: FencingToken::parse("fence_01JCOORDINATOR")?,
+                    now: UnixMillis::new(at),
+                },
+            )?)?;
+            assert_eq!(
+                heartbeat.outcome(),
+                &CoordinatorOutcome::HeartbeatAccepted {
+                    idle_expires_at: UnixMillis::new(at + 100)
+                }
+            );
+            assert_eq!(
+                state.active_lease().map(CoordinatorLease::hard_expires_at),
+                Some(UnixMillis::new(at + 100))
+            );
+        }
+        assert_eq!(state.status(), CoordinatorStatus::Active);
+        Ok(())
+    }
+
+    #[test]
+    fn expired_heartbeat_never_renews_hard_deadline()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let mut state = coordinator_with_config(CoordinatorConfig::new(100, 100, 20)?)?;
+        issue(&mut state, 1, 1, 10)?;
+        claim(&mut state, 2, 2, 11, "fence_01JCOORDINATOR")?;
+        let late = state.apply(envelope(
+            "idem_heartbeat_too_late_01JCOORDINATOR",
             3,
             3,
             CoordinatorCommand::Heartbeat {
                 session_id: SessionId::parse("session_01JCOORDINATOR")?,
                 epoch: 1,
                 fencing_token: FencingToken::parse("fence_01JCOORDINATOR")?,
-                now: UnixMillis::new(105),
+                now: UnixMillis::new(111),
             },
         )?)?;
         assert_eq!(
-            heartbeat.outcome(),
-            &CoordinatorOutcome::HeartbeatAccepted {
-                idle_expires_at: UnixMillis::new(111)
+            late.outcome(),
+            &CoordinatorOutcome::TimedOut {
+                kind: TimeoutKind::Hard
             }
         );
+        assert_eq!(state.status(), CoordinatorStatus::Uncertain);
+        assert!(state.active_lease().is_none());
         Ok(())
     }
 }
