@@ -627,12 +627,10 @@ impl D1ProfileGenerationSuccessorCommitJournal {
         {
             return Err(historical_integrity_failure());
         }
-        let version = i64::try_from(expected_profile_version)
-            .map_err(|_| historical_integrity_failure())?;
-        let epoch = i64::try_from(coordinator_epoch)
-            .map_err(|_| historical_integrity_failure())?;
-        let at = i64::try_from(admitted_at.value())
-            .map_err(|_| historical_integrity_failure())?;
+        let version =
+            i64::try_from(expected_profile_version).map_err(|_| historical_integrity_failure())?;
+        let epoch = i64::try_from(coordinator_epoch).map_err(|_| historical_integrity_failure())?;
+        let at = i64::try_from(admitted_at.value()).map_err(|_| historical_integrity_failure())?;
         let fields = (
             actor.tenant_scope().tenant_id().as_str(),
             profile_id.as_str(),
@@ -1209,7 +1207,10 @@ mod tests {
             "coordinator_epoch = ?",
             "admitted_at_ms = ?",
         ] {
-            assert!(replay.contains(field), "lost retirement replay witness: {field}");
+            assert!(
+                replay.contains(field),
+                "lost retirement replay witness: {field}"
+            );
         }
         assert!(!insert.contains("DELETE "));
         assert!(!replay.contains("DELETE "));
